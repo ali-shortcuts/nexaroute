@@ -64,6 +64,9 @@ func main() {
 	if err := ensureConfig(*configPath); err != nil {
 		logger.Fatal(err)
 	}
+	if err := config.RemoveStaleBackup(*configPath); err != nil {
+		logger.Fatal(err)
+	}
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		logger.Fatal(err)
