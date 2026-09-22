@@ -356,7 +356,18 @@ func (c Config) RetryBackoff() time.Duration {
 	return time.Duration(c.Routing.RetryBackoffMS) * time.Millisecond
 }
 
+func RemoveStaleBackup(path string) error {
+	err := os.Remove(path + ".bak")
+	if err == nil || os.IsNotExist(err) {
+		return nil
+	}
+	return fmt.Errorf("remove stale config backup: %w", err)
+}
+
 func SaveAtomic(path string, c Config) error {
+	if err := RemoveStaleBackup(path); err != nil {
+		return err
+	}
 	c.ApplyDefaults()
 	if err := c.Validate(); err != nil {
 		return err
