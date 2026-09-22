@@ -108,5 +108,6 @@ func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
 }
 
 func sanitizeMetricLabel(s string) string {
-	return strings.ReplaceAll(strings.ReplaceAll(s, "\\", "_"), "\"", "_")
+	r := strings.NewReplacer("\\", "_", "\"", "_", "\n", "_", "\r", "_")
+	return r.Replace(s)
 }
