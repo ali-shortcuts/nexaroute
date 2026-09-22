@@ -124,7 +124,11 @@ func (r *Router) Candidates(req Requirement) []Scored {
 				continue
 			}
 			hs := r.health.Get(d.ID)
-			if hs.Status == health.Cooldown {
+			if cfg.Routing.Strategy == "ready_queue" {
+				if hs.Status != health.Healthy {
+					continue
+				}
+			} else if hs.Status == health.Cooldown {
 				continue
 			}
 			score := 100.0
