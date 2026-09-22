@@ -61,6 +61,7 @@ jobs:
           home="$(mktemp -d)"
           trap 'rm -rf "$tmp" "$home"' EXIT
           tar -C "$tmp" -xzf "dist/nexaroute-${GITHUB_REF_NAME}-linux.tar.gz"
+          "$tmp/nexaroute/scripts/smoke-local.sh"
           HOME="$home" "$tmp/nexaroute/install-user.sh"
           test -x "$home/.local/bin/nexaroute"
           "$home/.local/bin/nexaroute" -version | grep -F "NexaRoute v0.3"
