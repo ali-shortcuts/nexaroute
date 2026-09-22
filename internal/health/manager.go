@@ -182,6 +182,24 @@ func (m *Manager) RecordRecoveryFailure(id, reason string, latency time.Duration
 	m.states[id] = s
 }
 
+// EnterCooldown changes only the circuit state. It is used after the recovery
+// supervisor has already recorded its exact retry budget, so entering cooldown
+// does not manufacture an extra failure observation.
+func (m *Manager) EnterCooldown(id, reason string, d time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if d <= 0 {
+		d = m.cooldown
+	}
+	s := m.states[id]
+	s.Deployment = id
+	s.Status = Cooldown
+	s.LastChecked = time.Now()
+	s.LastError = reason
+	s.CooldownUntil = time.Now().Add(d)
+	m.states[id] = s
+}
+
 // ForceCooldown immediately removes a deployment from normal routing until the
 // supplied duration expires. It is used for explicit upstream signals such as
 // authentication, quota, and rate-limit failures where retrying the same
