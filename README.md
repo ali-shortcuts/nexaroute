@@ -1,6 +1,6 @@
-# Universal LLM Gateway — v0.3
+# NexaRoute — v0.3
 
-A self-hosted Go gateway for routing Anthropic-compatible and OpenAI-compatible clients across many LLM providers/models. The first target is **Claude Code -> ULG -> Chat2API / other OpenAI-compatible or Anthropic-compatible providers**.
+A self-hosted Go gateway for routing Anthropic-compatible and OpenAI-compatible clients across many LLM providers/models. The first target is **Claude Code -> NexaRoute -> Chat2API / other OpenAI-compatible or Anthropic-compatible providers**.
 
 This package intentionally stays named **v0.3** until the user validates it on the target Ubuntu machine. The code is runnable and heavily tested, but no software can honestly be guaranteed to contain zero bugs.
 
@@ -135,7 +135,7 @@ The dashboard includes:
 Unzip the package, then:
 
 ```bash
-cd universal-llm-gateway-v0.3
+cd nexaroute
 chmod +x install-user.sh
 ./install-user.sh
 ```
@@ -143,14 +143,14 @@ chmod +x install-user.sh
 This installs:
 
 ```text
-~/.local/bin/ulg
-~/.config/universal-llm-gateway/config.json
+~/.local/bin/nexaroute
+~/.config/nexaroute/config.json
 ```
 
 Run:
 
 ```bash
-~/.local/bin/ulg -config ~/.config/universal-llm-gateway/config.json
+~/.local/bin/nexaroute -config ~/.config/nexaroute/config.json
 ```
 
 Open:
@@ -196,7 +196,7 @@ If Chat2API does not expose a model-list endpoint, add model IDs manually.
 
 ## Claude Code connection
 
-Point Claude Code's Anthropic-compatible base URL at ULG, for example:
+Point Claude Code's Anthropic-compatible base URL at NexaRoute, for example:
 
 ```bash
 export ANTHROPIC_BASE_URL="http://127.0.0.1:8080"
@@ -205,7 +205,7 @@ export ANTHROPIC_MODEL="coding"
 claude
 ```
 
-`ANTHROPIC_MODEL` can be a real model ID, a configured alias such as `coding`, or `claude-auto`. Client auth credentials are not forwarded to an upstream provider; ULG applies each provider's own configured credential.
+`ANTHROPIC_MODEL` can be a real model ID, a configured alias such as `coding`, or `claude-auto`. Client auth credentials are not forwarded to an upstream provider; NexaRoute applies each provider's own configured credential.
 
 ## Build and verify from source
 
@@ -232,8 +232,8 @@ After `./install-user.sh`:
 
 ```bash
 ./scripts/install-systemd-user.sh
-systemctl --user enable --now ulg.service
-journalctl --user -u ulg.service -f
+systemctl --user enable --now nexaroute
+journalctl --user -u nexaroute -f
 ```
 
 ## Docker
@@ -241,10 +241,10 @@ journalctl --user -u ulg.service -f
 The image binds to `0.0.0.0:8080`. If the Web UI/admin API will be reached from outside loopback, configure an admin key:
 
 ```bash
-docker build -t ulg:0.3 .
+docker build -t nexaroute:0.3 .
 docker run --rm -p 8080:8080 \
-  -e ULG_ADMIN_KEY='replace-with-a-strong-random-secret' \
-  ulg:0.3
+  -e NEXAROUTE_ADMIN_KEY='replace-with-a-strong-random-secret' \
+  nexaroute:0.3
 ```
 
 Do not expose the admin UI directly to the public internet without TLS and additional perimeter controls.
@@ -268,14 +268,14 @@ before treating v0.3 as production infrastructure.
 
 ## Install from GitHub source
 
-After this repository is published at `ali-shortcuts/universal-llm-gateway`:
+Clone the current repository:
 
 ```bash
 git clone https://github.com/ali-shortcuts/nexaroute.git
-cd universal-llm-gateway
+cd nexaroute
 ./scripts/verify.sh
-go build -trimpath -o ulg ./cmd/gateway
-sudo install -m 755 ulg /usr/local/bin/ulg
+go build -trimpath -o nexaroute ./cmd/gateway
+sudo install -m 755 nexaroute /usr/local/bin/nexaroute
 ```
 
 The repository CI repeats formatting, tests, vet, race detection, and Linux amd64/arm64 builds on pushes and pull requests. Tagged releases build downloadable Linux binaries and SHA-256 checksums automatically.
