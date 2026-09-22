@@ -9,8 +9,6 @@ NEXAROUTE_ADMIN_KEY               override admin API key
 NEXAROUTE_ADMIN_BIND_LOCAL_ONLY   true/false override
 ```
 
-Legacy `ULG_*` environment names are still accepted for migration compatibility, but new deployments should use `NEXAROUTE_*`.
-
 ## Provider types
 
 ```text
