@@ -76,7 +76,8 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 		headerLatency := time.Since(start)
 		if e != nil {
 			lastErr = e.Error()
-			s.hm.RecordFailure(c.Deployment.ID, lastErr, headerLatency)
+			s.hm.Quarantine(c.Deployment.ID, lastErr, headerLatency)
+			s.probe.Recover(c.Deployment.ID)
 			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_fail", Deployment: c.Deployment.ID, Message: lastErr, LatencyMS: headerLatency.Milliseconds()})
 			if i+1 < max {
 				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "failover", Deployment: c.Deployment.ID, Message: "transport failure; trying " + candidates[i+1].Deployment.ID})
@@ -92,14 +93,9 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 			lastBody = b
 			lastContentType = resp.Header.Get("Content-Type")
 			lastErr = upstreamError(resp.StatusCode, b)
-			if hardCooldownStatus(resp.StatusCode) {
-				d := cfg.Cooldown()
-				if resp.StatusCode == 429 {
-					d = retryAfterDuration(resp.Header, time.Duration(cfg.Routing.MaxRetryAfterSeconds)*time.Second)
-				}
-				s.hm.ForceCooldown(c.Deployment.ID, lastErr, d)
-			} else {
-				s.hm.RecordFailure(c.Deployment.ID, lastErr, headerLatency)
+			if failoverEligible(resp.StatusCode) {
+				s.hm.Quarantine(c.Deployment.ID, lastErr, headerLatency)
+				s.probe.Recover(c.Deployment.ID)
 			}
 			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_fail", Deployment: c.Deployment.ID, Message: lastErr, LatencyMS: headerLatency.Milliseconds(), StatusCode: resp.StatusCode})
 			if failoverEligible(resp.StatusCode) && i+1 < max {
@@ -131,7 +127,8 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 		total := time.Since(start)
 		if e != nil {
 			lastErr = e.Error()
-			s.hm.RecordFailure(c.Deployment.ID, lastErr, total)
+			s.hm.Quarantine(c.Deployment.ID, lastErr, total)
+			s.probe.Recover(c.Deployment.ID)
 			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "stream_fail", Deployment: c.Deployment.ID, Message: lastErr, LatencyMS: total.Milliseconds(), StatusCode: resp.StatusCode})
 			return
 		}
