@@ -39,12 +39,14 @@ type RoutingConfig struct {
 }
 
 type ProbeConfig struct {
-	Enabled         bool `json:"enabled"`
-	OnStart         bool `json:"on_start"`
-	IntervalSeconds int  `json:"interval_seconds"`
-	TimeoutMS       int  `json:"timeout_ms"`
-	MaxTokens       int  `json:"max_tokens"`
-	Concurrency     int  `json:"concurrency"`
+	Enabled           bool `json:"enabled"`
+	OnStart           bool `json:"on_start"`
+	IntervalSeconds   int  `json:"interval_seconds"`
+	TimeoutMS         int  `json:"timeout_ms"`
+	MaxTokens         int  `json:"max_tokens"`
+	Concurrency       int  `json:"concurrency"`
+	RecoveryAttempts  int  `json:"recovery_attempts"`
+	RecoveryRetryMS   int  `json:"recovery_retry_ms"`
 }
 
 type CredentialConfig struct {
@@ -107,11 +109,11 @@ func Default() Config {
 		Listen: "127.0.0.1:8080",
 		Admin:  AdminConfig{BindLocalOnly: true},
 		Routing: RoutingConfig{
-			Strategy: "adaptive_round_robin", FallbackOnUnknownModel: true, MaxAttempts: 4, FailureThreshold: 5, CooldownSeconds: 3600,
+			Strategy: "ready_queue", FallbackOnUnknownModel: true, MaxAttempts: 4, FailureThreshold: 5, CooldownSeconds: 1800,
 			RequestTimeoutMS: 120000, LatencyWeight: 0.015, FailureWeight: 25,
 			RetryBackoffMS: 150, MaxRetryAfterSeconds: 60,
 		},
-		Probe: ProbeConfig{Enabled: true, OnStart: true, IntervalSeconds: 120, TimeoutMS: 8000, MaxTokens: 1, Concurrency: 16},
+		Probe: ProbeConfig{Enabled: true, OnStart: true, IntervalSeconds: 120, TimeoutMS: 8000, MaxTokens: 1, Concurrency: 16, RecoveryAttempts: 5, RecoveryRetryMS: 500},
 	}
 }
 
@@ -151,7 +153,7 @@ func (c *Config) ApplyDefaults() {
 		c.Listen = "127.0.0.1:8080"
 	}
 	if c.Routing.Strategy == "" {
-		c.Routing.Strategy = "adaptive_round_robin"
+		c.Routing.Strategy = "ready_queue"
 	}
 	if c.Routing.MaxAttempts <= 0 {
 		c.Routing.MaxAttempts = 4
@@ -160,7 +162,7 @@ func (c *Config) ApplyDefaults() {
 		c.Routing.FailureThreshold = 5
 	}
 	if c.Routing.CooldownSeconds <= 0 {
-		c.Routing.CooldownSeconds = 3600
+		c.Routing.CooldownSeconds = 1800
 	}
 	if c.Routing.RequestTimeoutMS <= 0 {
 		c.Routing.RequestTimeoutMS = 120000
@@ -188,6 +190,15 @@ func (c *Config) ApplyDefaults() {
 	}
 	if c.Probe.Concurrency <= 0 {
 		c.Probe.Concurrency = 16
+	}
+	if c.Probe.RecoveryAttempts <= 0 {
+		c.Probe.RecoveryAttempts = 5
+	}
+	if c.Probe.RecoveryRetryMS < 0 {
+		c.Probe.RecoveryRetryMS = 0
+	}
+	if c.Probe.RecoveryRetryMS == 0 {
+		c.Probe.RecoveryRetryMS = 500
 	}
 	for i := range c.Providers {
 		c.Providers[i].ApplyDefaults()
@@ -245,8 +256,8 @@ func (c Config) Validate() error {
 	if strings.TrimSpace(c.Listen) == "" {
 		return errors.New("listen is required")
 	}
-	if c.Routing.Strategy != "adaptive" && c.Routing.Strategy != "adaptive_round_robin" && c.Routing.Strategy != "priority" && c.Routing.Strategy != "round_robin" && c.Routing.Strategy != "least_latency" {
-		return errors.New("routing.strategy must be adaptive, adaptive_round_robin, priority, round_robin, or least_latency")
+	if c.Routing.Strategy != "ready_queue" && c.Routing.Strategy != "adaptive" && c.Routing.Strategy != "adaptive_round_robin" && c.Routing.Strategy != "priority" && c.Routing.Strategy != "round_robin" && c.Routing.Strategy != "least_latency" {
+		return errors.New("routing.strategy must be ready_queue, adaptive, adaptive_round_robin, priority, round_robin, or least_latency")
 	}
 	if c.Routing.MaxAttempts <= 0 {
 		return errors.New("routing.max_attempts must be > 0")
@@ -351,6 +362,9 @@ func (c Config) ProbeInterval() time.Duration {
 }
 func (c Config) ProbeTimeout() time.Duration {
 	return time.Duration(c.Probe.TimeoutMS) * time.Millisecond
+}
+func (c Config) ProbeRecoveryRetry() time.Duration {
+	return time.Duration(c.Probe.RecoveryRetryMS) * time.Millisecond
 }
 func (c Config) RetryBackoff() time.Duration {
 	return time.Duration(c.Routing.RetryBackoffMS) * time.Millisecond
