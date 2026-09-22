@@ -537,8 +537,8 @@ func TestReadyQueueEjectsFailedPrimaryAndUsesNextHealthyModel(t *testing.T) {
 	cfg.Routing.Strategy = "ready_queue"
 	cfg.Routing.MaxAttempts = 2
 	cfg.Providers = []config.ProviderConfig{
-		{ID: "primary", Name: "Primary", Type: "openai_compatible", BaseURL: primary.URL, AuthMode: "none", Enabled: true, Models: []config.ModelConfig{{ID: "m", Model: "primary", Aliases: []string{"auto"}, Enabled: true, Priority: 0, Weight: 2, Capabilities: config.Capabilities{Streaming: true}}},
-		{ID: "fallback", Name: "Fallback", Type: "openai_compatible", BaseURL: fallback.URL, AuthMode: "none", Enabled: true, Models: []config.ModelConfig{{ID: "m", Model: "fallback", Aliases: []string{"auto"}, Enabled: true, Priority: 10, Weight: 1, Capabilities: config.Capabilities{Streaming: true}}},
+		{ID: "primary", Name: "Primary", Type: "openai_compatible", BaseURL: primary.URL, AuthMode: "none", Enabled: true, Models: []config.ModelConfig{{ID: "m", Model: "primary", Aliases: []string{"auto"}, Enabled: true, Priority: 0, Weight: 2, Capabilities: config.Capabilities{Streaming: true}}}},
+		{ID: "fallback", Name: "Fallback", Type: "openai_compatible", BaseURL: fallback.URL, AuthMode: "none", Enabled: true, Models: []config.ModelConfig{{ID: "m", Model: "fallback", Aliases: []string{"auto"}, Enabled: true, Priority: 10, Weight: 1, Capabilities: config.Capabilities{Streaming: true}}}},
 	}
 	srv := testGateway(t, cfg)
 
