@@ -41,6 +41,9 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      - name: Web UI syntax
+        run: node --check internal/httpapi/web/app.js
+
       - name: Race detector
         run: go test -race -shuffle=on -count=1 ./...
 
@@ -49,11 +52,11 @@ jobs:
           CGO_ENABLED: 0
           GOOS: linux
           GOARCH: amd64
-        run: go build -trimpath -ldflags='-s -w' -o /tmp/ulg-linux-amd64 ./cmd/gateway
+        run: go build -trimpath -ldflags='-s -w' -o /tmp/nexaroute-linux-amd64 ./cmd/gateway
 
       - name: Linux arm64 build
         env:
           CGO_ENABLED: 0
           GOOS: linux
           GOARCH: arm64
-        run: go build -trimpath -ldflags='-s -w' -o /tmp/ulg-linux-arm64 ./cmd/gateway
+        run: go build -trimpath -ldflags='-s -w' -o /tmp/nexaroute-linux-arm64 ./cmd/gateway
