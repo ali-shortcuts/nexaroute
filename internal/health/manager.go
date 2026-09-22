@@ -52,6 +52,7 @@ func (m *Manager) Get(id string) State {
 	if s.Status == Cooldown && !s.CooldownUntil.IsZero() && time.Now().After(s.CooldownUntil) {
 		s.Status = HalfOpen
 		s.ConsecutiveFailures = 0
+		s.RecoveryFailures = 0
 		s.LastError = ""
 		s.CooldownUntil = time.Time{}
 		m.states[id] = s
@@ -157,7 +158,7 @@ func (m *Manager) Quarantine(id, reason string, latency time.Duration) {
 
 // RecordRecoveryFailure records a supervisor probe failure without entering
 // cooldown early. The recovery supervisor owns the exact retry budget and
-// calls ForceCooldown only after all configured recovery attempts fail.
+// enters cooldown only after all configured recovery attempts fail.
 func (m *Manager) RecordRecoveryFailure(id, reason string, latency time.Duration) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
