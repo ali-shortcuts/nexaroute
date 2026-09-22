@@ -1,3 +1,15 @@
+## v0.3 continuous ready-routing upgrade — 2026-09-22
+
+- Added `ready_queue` as the default routing strategy.
+- Only deployments that have passed a health probe are eligible for Claude traffic.
+- Startup now primes all enabled deployments before opening the HTTP listener.
+- The strongest configured healthy deployment stays first/sticky until it fails.
+- The first eligible routed failure immediately quarantines the deployment and removes it from the ready queue.
+- Added a dedicated per-deployment recovery supervisor: 5 probe attempts, immediate return on first success, then a 30-minute cooldown after five failed recovery probes.
+- After cooldown, recovery automatically starts again without waiting for Claude traffic.
+- Recovery and readiness probes share the configured probe-concurrency limit.
+- Added regression tests for 100-model readiness, sticky ordering, immediate ejection, five-attempt recovery, cooldown, and return-to-ready behavior.
+
 ## v0.3 final no-backup/runtime audit — 2026-09-22
 
 - Removed runtime `.bak` creation, rollback API/UI, stale backup copies, legacy `ULG_*` environment fallbacks, and the old configuration migration path.
