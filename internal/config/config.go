@@ -282,7 +282,7 @@ func (c Config) Validate() error {
 		}
 		if p.ProxyURL != "" {
 			u, err := url.Parse(p.ProxyURL)
-			if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+			if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 				return fmt.Errorf("provider %q has invalid proxy_url", p.ID)
 			}
 		}
