@@ -17,8 +17,8 @@ cleanup() {
 trap cleanup EXIT
 
 case "$(uname -m)" in
-  x86_64|amd64) BIN="$ROOT/bin/ulg-linux-amd64" ;;
-  aarch64|arm64) BIN="$ROOT/bin/ulg-linux-arm64" ;;
+  x86_64|amd64) BIN="$ROOT/bin/nexaroute-linux-amd64" ;;
+  aarch64|arm64) BIN="$ROOT/bin/nexaroute-linux-arm64" ;;
   *) echo "Unsupported architecture: $(uname -m)" >&2; exit 1 ;;
 esac
 
@@ -49,7 +49,7 @@ for _ in $(seq 1 80); do
     break
   fi
   if ! kill -0 "$PID" 2>/dev/null; then
-    echo "Gateway exited during startup:" >&2
+    echo "NexaRoute exited during startup:" >&2
     cat "$TMP/gateway.log" >&2
     exit 1
   fi
@@ -119,7 +119,7 @@ PY
 expect_status 200 "$(status DELETE "$BASE/admin/api/providers/smoke-openai")" "provider delete"
 
 if ! kill -0 "$PID" 2>/dev/null; then
-  echo "Gateway died during smoke test" >&2
+  echo "NexaRoute died during smoke test" >&2
   cat "$TMP/gateway.log" >&2
   exit 1
 fi
