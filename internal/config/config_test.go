@@ -79,3 +79,14 @@ func TestLoadAppliesRuntimeEnvironmentOverrides(t *testing.T) {
 		t.Fatalf("env overrides not applied: %+v", cfg)
 	}
 }
+
+func TestValidateRejectsProxyWithoutHost(t *testing.T) {
+	cfg := Default()
+	cfg.Providers = []ProviderConfig{{
+		ID: "p", Name: "P", Type: "openai_compatible",
+		BaseURL: "https://example.com", ProxyURL: "http:/missing-host",
+	}}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "proxy_url") {
+		t.Fatalf("proxy without host should fail validation, got %v", err)
+	}
+}
