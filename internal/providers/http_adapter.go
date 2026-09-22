@@ -22,6 +22,23 @@ type credentialState struct {
 	Key           string
 	Failures      int
 	CooldownUntil time.Time
+	LastStatus    int
+}
+
+type RetryAfterError struct {
+	Cause error
+	After time.Duration
+}
+
+func (e *RetryAfterError) Error() string { return e.Cause.Error() }
+func (e *RetryAfterError) Unwrap() error { return e.Cause }
+
+func RetryAfter(err error) (time.Duration, bool) {
+	var e *RetryAfterError
+	if errors.As(err, &e) && e.After > 0 {
+		return e.After, true
+	}
+	return 0, false
 }
 
 type httpAdapter struct {
@@ -144,7 +161,11 @@ func (a *httpAdapter) DoPath(ctx context.Context, method, path string, payload [
 	keys := a.availableCredentialIndexes()
 	if len(a.creds) > 0 && len(keys) == 0 {
 		release()
-		return nil, errors.New("all configured provider credentials are cooling down")
+		err := errors.New("all configured provider credentials are cooling down")
+		if d, ok := a.nextCredentialRetryAfter(); ok {
+			return nil, &RetryAfterError{Cause: err, After: d}
+		}
+		return nil, err
 	}
 	if len(keys) == 0 {
 		keys = []int{-1}
@@ -303,6 +324,7 @@ func (a *httpAdapter) markCredentialSuccess(i int) {
 	if i >= 0 && i < len(a.creds) {
 		a.creds[i].Failures = 0
 		a.creds[i].CooldownUntil = time.Time{}
+		a.creds[i].LastStatus = 0
 	}
 }
 func (a *httpAdapter) cooldownCredential(i, status int, retryAfter string) {
@@ -321,7 +343,30 @@ func (a *httpAdapter) cooldownCredential(i, status int, retryAfter string) {
 		d = 15 * time.Minute
 	}
 	a.creds[i].Failures++
+	a.creds[i].LastStatus = status
 	a.creds[i].CooldownUntil = time.Now().Add(d)
+}
+
+func (a *httpAdapter) nextCredentialRetryAfter() (time.Duration, bool) {
+	a.credMu.Lock()
+	defer a.credMu.Unlock()
+	now := time.Now()
+	var min time.Duration
+	found := false
+	for _, c := range a.creds {
+		if c.LastStatus != http.StatusTooManyRequests || c.CooldownUntil.IsZero() || !now.Before(c.CooldownUntil) {
+			continue
+		}
+		d := time.Until(c.CooldownUntil)
+		if d <= 0 {
+			continue
+		}
+		if !found || d < min {
+			min = d
+			found = true
+		}
+	}
+	return min, found
 }
 func (a *httpAdapter) safeSnippet(b []byte) string {
 	msg := strings.TrimSpace(string(b))
