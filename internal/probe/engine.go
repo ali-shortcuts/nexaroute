@@ -253,6 +253,7 @@ func (e *Engine) runOnce(ctx context.Context, force bool) Result {
 	defer e.runMu.Unlock()
 
 	cfg := e.current()
+	readySupervisor := cfg.Routing.Strategy == "ready_queue"
 	result := Result{}
 	if !force && !cfg.Probe.Enabled {
 		result.DurationMS = time.Since(start).Milliseconds()
@@ -304,7 +305,7 @@ func (e *Engine) runOnce(ctx context.Context, force bool) Result {
 	for _, job := range jobs {
 		d := job.d
 		result.Total++
-		if !force {
+		if !force && readySupervisor {
 			switch job.state.Status {
 			case health.Healthy:
 				result.SkippedReady++
@@ -322,7 +323,7 @@ func (e *Engine) runOnce(ctx context.Context, force bool) Result {
 			result.SkippedCooldown++
 			continue
 		}
-		if e.isRecovering(d.ID) {
+		if readySupervisor && e.isRecovering(d.ID) {
 			result.SkippedRecovery++
 			continue
 		}
@@ -347,11 +348,26 @@ func (e *Engine) runOnce(ctx context.Context, force bool) Result {
 			cancel()
 
 			if err != nil {
-				e.hm.Quarantine(d.ID, err.Error(), lat)
-				e.bus.Add(events.Event{Kind: "probe_quarantine", Deployment: d.ID, Message: err.Error(), LatencyMS: lat.Milliseconds(), StatusCode: status})
+				if readySupervisor {
+					e.hm.Quarantine(d.ID, err.Error(), lat)
+					e.bus.Add(events.Event{Kind: "probe_quarantine", Deployment: d.ID, Message: err.Error(), LatencyMS: lat.Milliseconds(), StatusCode: status})
+					resultMu.Lock()
+					failedIDs = append(failedIDs, d.ID)
+					resultMu.Unlock()
+				} else {
+					if status == 401 || status == 402 || status == 403 || status == 429 {
+						cooldown := cfg.Cooldown()
+						if status == 429 && cooldown > time.Minute {
+							cooldown = time.Minute
+						}
+						e.hm.ForceCooldown(d.ID, err.Error(), cooldown)
+					} else {
+						e.hm.RecordFailure(d.ID, err.Error(), lat)
+					}
+					e.bus.Add(events.Event{Kind: "probe_fail", Deployment: d.ID, Message: err.Error(), LatencyMS: lat.Milliseconds(), StatusCode: status})
+				}
 				resultMu.Lock()
 				result.Failed++
-				failedIDs = append(failedIDs, d.ID)
 				resultMu.Unlock()
 				return
 			}
@@ -366,8 +382,10 @@ func (e *Engine) runOnce(ctx context.Context, force bool) Result {
 	wg.Wait()
 	// Let every deployment receive its first health check before failed models
 	// consume probe capacity with recovery retries.
-	for _, id := range failedIDs {
-		e.Recover(id)
+	if readySupervisor {
+		for _, id := range failedIDs {
+			e.Recover(id)
+		}
 	}
 	result.DurationMS = time.Since(start).Milliseconds()
 	return result
@@ -383,6 +401,9 @@ func (e *Engine) recoverLoop(ctx context.Context, id string) {
 			return
 		}
 		cfg := e.current()
+		if cfg.Routing.Strategy != "ready_queue" {
+			return
+		}
 		d, a, ok := e.deployment(id)
 		if !ok {
 			return
