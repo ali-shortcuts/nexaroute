@@ -67,7 +67,7 @@ Version number intentionally remains **0.3** until the user validates this packa
 - Verification script with repeated/shuffled tests, race detector, fuzz checks, JavaScript syntax check and cross-builds.
 
 ## Repository hardening (same v0.3)
-- changed the Go module/import path to `github.com/ali-shortcuts/universal-llm-gateway`
+- changed the Go module/import path to `github.com/ali-shortcuts/nexaroute`
 - added GitHub Actions CI for formatting, repeated tests, vet, race detection, and Linux amd64/arm64 builds
 - added tag-based release workflow that publishes Linux binaries and SHA-256 checksums
 - added structured bug/feature issue templates with credential-redaction warnings

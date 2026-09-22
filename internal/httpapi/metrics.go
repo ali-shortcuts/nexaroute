@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/ali-shortcuts/universal-llm-gateway/internal/health"
+	"github.com/ali-shortcuts/nexaroute/internal/health"
 )
 
 func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {

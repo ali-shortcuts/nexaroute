@@ -10,10 +10,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ali-shortcuts/universal-llm-gateway/internal/core"
-	"github.com/ali-shortcuts/universal-llm-gateway/internal/events"
-	"github.com/ali-shortcuts/universal-llm-gateway/internal/router"
-	"github.com/ali-shortcuts/universal-llm-gateway/internal/translate"
+	"github.com/ali-shortcuts/nexaroute/internal/core"
+	"github.com/ali-shortcuts/nexaroute/internal/events"
+	"github.com/ali-shortcuts/nexaroute/internal/router"
+	"github.com/ali-shortcuts/nexaroute/internal/translate"
 )
 
 func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {

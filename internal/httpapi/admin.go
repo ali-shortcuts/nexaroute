@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ali-shortcuts/universal-llm-gateway/internal/config"
-	"github.com/ali-shortcuts/universal-llm-gateway/internal/providers"
+	"github.com/ali-shortcuts/nexaroute/internal/config"
+	"github.com/ali-shortcuts/nexaroute/internal/providers"
 )
 
 type providerForm struct {

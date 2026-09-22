@@ -12,13 +12,13 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/ali-shortcuts/universal-llm-gateway/internal/config"
-	"github.com/ali-shortcuts/universal-llm-gateway/internal/events"
-	"github.com/ali-shortcuts/universal-llm-gateway/internal/health"
-	"github.com/ali-shortcuts/universal-llm-gateway/internal/httpapi"
-	"github.com/ali-shortcuts/universal-llm-gateway/internal/probe"
-	"github.com/ali-shortcuts/universal-llm-gateway/internal/providers"
-	"github.com/ali-shortcuts/universal-llm-gateway/internal/router"
+	"github.com/ali-shortcuts/nexaroute/internal/config"
+	"github.com/ali-shortcuts/nexaroute/internal/events"
+	"github.com/ali-shortcuts/nexaroute/internal/health"
+	"github.com/ali-shortcuts/nexaroute/internal/httpapi"
+	"github.com/ali-shortcuts/nexaroute/internal/probe"
+	"github.com/ali-shortcuts/nexaroute/internal/providers"
+	"github.com/ali-shortcuts/nexaroute/internal/router"
 )
 
 const version = "0.3"

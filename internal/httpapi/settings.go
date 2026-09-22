@@ -1,7 +1,7 @@
 package httpapi
 
 import (
-	"github.com/ali-shortcuts/universal-llm-gateway/internal/config"
+	"github.com/ali-shortcuts/nexaroute/internal/config"
 	"net/http"
 )
 

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ali-shortcuts/universal-llm-gateway/internal/config"
+	"github.com/ali-shortcuts/nexaroute/internal/config"
 )
 
 func TestConfiguredCredentialOverridesStaleCustomAuthHeader(t *testing.T) {

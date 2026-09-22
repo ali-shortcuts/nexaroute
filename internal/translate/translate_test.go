@@ -2,7 +2,7 @@ package translate
 
 import (
 	"encoding/json"
-	"github.com/ali-shortcuts/universal-llm-gateway/internal/core"
+	"github.com/ali-shortcuts/nexaroute/internal/core"
 	"testing"
 )
 

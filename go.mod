@@ -1,3 +1,3 @@
-module github.com/ali-shortcuts/universal-llm-gateway
+module github.com/ali-shortcuts/nexaroute
 
 go 1.23

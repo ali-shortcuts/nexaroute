@@ -1,8 +1,8 @@
 package router
 
 import (
-	"github.com/ali-shortcuts/universal-llm-gateway/internal/config"
-	"github.com/ali-shortcuts/universal-llm-gateway/internal/health"
+	"github.com/ali-shortcuts/nexaroute/internal/config"
+	"github.com/ali-shortcuts/nexaroute/internal/health"
 	"testing"
 	"time"
 )

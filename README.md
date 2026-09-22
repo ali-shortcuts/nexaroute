@@ -271,7 +271,7 @@ before treating v0.3 as production infrastructure.
 After this repository is published at `ali-shortcuts/universal-llm-gateway`:
 
 ```bash
-git clone https://github.com/ali-shortcuts/universal-llm-gateway.git
+git clone https://github.com/ali-shortcuts/nexaroute.git
 cd universal-llm-gateway
 ./scripts/verify.sh
 go build -trimpath -o ulg ./cmd/gateway

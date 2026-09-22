@@ -7,8 +7,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/ali-shortcuts/universal-llm-gateway/internal/core"
-	"github.com/ali-shortcuts/universal-llm-gateway/internal/router"
+	"github.com/ali-shortcuts/nexaroute/internal/core"
+	"github.com/ali-shortcuts/nexaroute/internal/router"
 )
 
 // countTokens prefers a provider-native Anthropic-compatible token count when

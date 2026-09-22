@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/ali-shortcuts/universal-llm-gateway/internal/core"
+	"github.com/ali-shortcuts/nexaroute/internal/core"
 )
 
 func OpenAIToAnthropic(in core.OpenAIRequest, model string) (core.AnthropicRequest, error) {

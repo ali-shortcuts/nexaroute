@@ -164,7 +164,7 @@ Native OpenAI Responses, Gemini native `generateContent`, Bedrock/Vertex/Azure-s
 
 ## Repository-hardening verification — 2026-09-22
 
-The same v0.3 source tree was prepared for `github.com/ali-shortcuts/universal-llm-gateway` and reverified after the module/import-path change and GitHub CI additions.
+The same v0.3 source tree was prepared for `github.com/ali-shortcuts/nexaroute` and reverified after the module/import-path change and GitHub CI additions.
 
 Verified locally:
 - repeated shuffled Go tests: PASS

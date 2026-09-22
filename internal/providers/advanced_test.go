@@ -5,13 +5,13 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
-	"strings"
 	"testing"
 	"time"
 
-	"github.com/ali-shortcuts/universal-llm-gateway/internal/config"
+	"github.com/ali-shortcuts/nexaroute/internal/config"
 )
 
 func TestCredentialPoolFailsOverAndCoolsBadKey(t *testing.T) {

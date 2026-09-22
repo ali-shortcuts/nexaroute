@@ -13,27 +13,27 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/ali-shortcuts/universal-llm-gateway/internal/config"
-	"github.com/ali-shortcuts/universal-llm-gateway/internal/events"
-	"github.com/ali-shortcuts/universal-llm-gateway/internal/health"
-	"github.com/ali-shortcuts/universal-llm-gateway/internal/probe"
-	"github.com/ali-shortcuts/universal-llm-gateway/internal/providers"
-	"github.com/ali-shortcuts/universal-llm-gateway/internal/router"
+	"github.com/ali-shortcuts/nexaroute/internal/config"
+	"github.com/ali-shortcuts/nexaroute/internal/events"
+	"github.com/ali-shortcuts/nexaroute/internal/health"
+	"github.com/ali-shortcuts/nexaroute/internal/probe"
+	"github.com/ali-shortcuts/nexaroute/internal/providers"
+	"github.com/ali-shortcuts/nexaroute/internal/router"
 )
 
 //go:embed web/*
 var webFS embed.FS
 
 type Server struct {
-	runtimeMu  sync.RWMutex
-	cfg        config.Config
-	configPath string
-	reg        *providers.Registry
-	rt         *router.Router
-	hm         *health.Manager
-	bus        *events.Bus
-	probe      *probe.Engine
-	log        *log.Logger
+	runtimeMu    sync.RWMutex
+	cfg          config.Config
+	configPath   string
+	reg          *providers.Registry
+	rt           *router.Router
+	hm           *health.Manager
+	bus          *events.Bus
+	probe        *probe.Engine
+	log          *log.Logger
 	requestSeq   atomic.Uint64
 	requestTotal atomic.Uint64
 }
