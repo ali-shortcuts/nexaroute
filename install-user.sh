@@ -1,26 +1,55 @@
 #!/usr/bin/env bash
 set -euo pipefail
+
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-case "$(uname -m)" in
-  x86_64|amd64) BIN="$ROOT/bin/ulg-linux-amd64" ;;
-  aarch64|arm64) BIN="$ROOT/bin/ulg-linux-arm64" ;;
-  *) echo "Unsupported architecture: $(uname -m)" >&2; exit 1 ;;
+ARCH="$(uname -m)"
+case "$ARCH" in
+  x86_64|amd64) BUNDLED="$ROOT/bin/nexaroute-linux-amd64" ;;
+  aarch64|arm64) BUNDLED="$ROOT/bin/nexaroute-linux-arm64" ;;
+  *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;;
 esac
-[[ -x "$BIN" ]] || { echo "Missing prebuilt binary: $BIN" >&2; exit 1; }
-mkdir -p "$HOME/.local/bin" "$HOME/.config/universal-llm-gateway"
-install -m 0755 "$BIN" "$HOME/.local/bin/ulg"
-CFG="$HOME/.config/universal-llm-gateway/config.json"
-if [[ ! -f "$CFG" ]]; then
-  install -m 0600 "$ROOT/configs/config.example.json" "$CFG"
-  echo "Created config: $CFG"
+
+mkdir -p "$HOME/.local/bin" "$HOME/.config/nexaroute"
+
+TMP_BIN=""
+if [[ -x "$BUNDLED" ]]; then
+  SRC_BIN="$BUNDLED"
 else
+  command -v go >/dev/null 2>&1 || {
+    echo "No bundled NexaRoute binary was found and Go is not installed." >&2
+    echo "Install Go 1.23+ or use a release package containing a Linux binary." >&2
+    exit 1
+  }
+  TMP_BIN="$(mktemp)"
+  trap 'rm -f "$TMP_BIN"' EXIT
+  echo "Building NexaRoute v0.3 from source..."
+  (cd "$ROOT" && CGO_ENABLED=0 go build -trimpath -o "$TMP_BIN" ./cmd/gateway)
+  SRC_BIN="$TMP_BIN"
+fi
+
+install -m 0755 "$SRC_BIN" "$HOME/.local/bin/nexaroute"
+
+CFG="$HOME/.config/nexaroute/config.json"
+LEGACY_CFG="$HOME/.config/universal-llm-gateway/config.json"
+if [[ ! -f "$CFG" ]]; then
+  if [[ -f "$LEGACY_CFG" ]]; then
+    install -m 0600 "$LEGACY_CFG" "$CFG"
+    echo "Copied existing v0.3 configuration from: $LEGACY_CFG"
+  else
+    install -m 0600 "$ROOT/configs/config.example.json" "$CFG"
+    echo "Created config: $CFG"
+  fi
+else
+  chmod 600 "$CFG" || true
   echo "Kept existing config: $CFG"
 fi
+
 cat <<MSG
-Installed: $HOME/.local/bin/ulg
+Installed: $HOME/.local/bin/nexaroute
+Config:    $CFG
 
 Run:
-  $HOME/.local/bin/ulg -config "$CFG"
+  $HOME/.local/bin/nexaroute -config "$CFG"
 
 Dashboard:
   http://127.0.0.1:8080/
