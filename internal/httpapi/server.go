@@ -132,7 +132,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/admin/api/providers/", s.adminProviderByID)
 	mux.HandleFunc("/admin/api/provider-test", s.adminProviderTest)
 	mux.HandleFunc("/admin/api/provider-discover", s.adminProviderDiscover)
-	mux.HandleFunc("/admin/api/rollback", s.adminRollback)
 	mux.HandleFunc("/admin/api/settings", s.adminSettings)
 
 	sub, _ := fs.Sub(webFS, "web")
