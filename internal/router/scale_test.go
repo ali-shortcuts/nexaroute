@@ -19,6 +19,9 @@ func TestTwentyProvidersHundredModels(t *testing.T) {
 	}
 	h := health.New(4, time.Hour)
 	r := New(cfg, h)
+	for _, d := range r.All() {
+		h.RecordSuccess(d.ID, time.Millisecond)
+	}
 	c := r.Candidates(Requirement{Model: "auto", Streaming: true, Tools: true})
 	if len(c) != 100 {
 		t.Fatalf("want 100 candidates got %d", len(c))
