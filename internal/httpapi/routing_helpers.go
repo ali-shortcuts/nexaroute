@@ -2,8 +2,10 @@ package httpapi
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"net/http"
 	"strconv"
 	"strings"
@@ -12,6 +14,44 @@ import (
 
 	"github.com/ali-shortcuts/nexaroute/internal/config"
 )
+
+
+func routeContext(parent context.Context, streaming bool, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if streaming || timeout <= 0 {
+		return context.WithCancel(parent)
+	}
+	return context.WithTimeout(parent, timeout)
+}
+
+func gatewayDeadlineExceeded(routeCtx, clientCtx context.Context) bool {
+	return routeCtx.Err() == context.DeadlineExceeded && clientCtx.Err() == nil
+}
+
+func clientRequestGone(clientCtx context.Context) bool {
+	return clientCtx.Err() != nil
+}
+
+func jitteredRetryBackoff(base time.Duration, attempt int, requestID string) time.Duration {
+	if base <= 0 {
+		return 0
+	}
+	if attempt < 0 {
+		attempt = 0
+	}
+	if attempt > 6 {
+		attempt = 6
+	}
+	max := base << attempt
+	if max > 5*time.Second {
+		max = 5 * time.Second
+	}
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(requestID))
+	_, _ = h.Write([]byte{byte(attempt)})
+	// Full jitter in [0,max], deterministic for a request+attempt so tests and
+	// incident replay remain reproducible while concurrent clients desynchronize.
+	return time.Duration(h.Sum64()%uint64(max+1))
+}
 
 func patchJSONModel(raw []byte, model string) ([]byte, error) {
 	if !utf8.ValidString(model) {
