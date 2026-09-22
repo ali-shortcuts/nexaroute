@@ -1,10 +1,11 @@
 FROM golang:1.23-alpine AS build
 WORKDIR /src
 COPY . .
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/nexaroute ./cmd/nexaroute
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/nexaroute ./cmd/gateway
+
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/nexaroute /nexaroute
-COPY configs/config.example.json /config/config.json
+COPY --chown=65532:65532 configs/config.example.json /config/config.json
 ENV NEXAROUTE_LISTEN=0.0.0.0:8080 NEXAROUTE_ADMIN_BIND_LOCAL_ONLY=false
 EXPOSE 8080
 ENTRYPOINT ["/nexaroute","-config","/config/config.json"]
