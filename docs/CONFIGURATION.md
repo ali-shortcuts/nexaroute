@@ -86,6 +86,20 @@ Important controls:
 - `retry_backoff_ms`
 - `max_retry_after_seconds`
 
+
+### Ready-queue supervisor semantics
+
+With `routing.strategy = "ready_queue"`:
+
+- a deployment must pass a health probe before it can serve Claude traffic;
+- automatic background sweeps do **not** re-probe deployments already marked `healthy`;
+- the first eligible routed failure removes the deployment from the ready queue immediately;
+- the recovery supervisor owns retry/cooldown until the deployment proves healthy again;
+- changing provider Base URL, credentials, auth mode, proxy, endpoint paths, forwarded headers, or the upstream model ID invalidates the old health proof;
+- display-name-only changes do not unnecessarily invalidate a working deployment;
+- a temporary all-key `429` cooldown is a wait state and does not spend the five recovery attempts;
+- the explicit **Probe all models** action remains available when an operator intentionally wants a full retest.
+
 ## Probe settings
 
 Ready-queue recovery adds:
