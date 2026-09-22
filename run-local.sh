@@ -15,4 +15,5 @@ esac
 if [[ -n "$BIN" && -x "$BIN" ]]; then
   exec "$BIN" -config "$CFG"
 fi
+cd "$ROOT"
 exec go run ./cmd/gateway -config "$CFG"
