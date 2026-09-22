@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-CFG="${ULG_CONFIG:-$ROOT/config.local.json}"
+CFG="${NEXAROUTE_CONFIG:-${ULG_CONFIG:-$ROOT/config.local.json}}"
 if [[ ! -f "$CFG" ]]; then
   cp "$ROOT/configs/config.example.json" "$CFG"
   chmod 600 "$CFG"
   echo "Created $CFG"
 fi
 case "$(uname -m)" in
-  x86_64|amd64) BIN="$ROOT/bin/ulg-linux-amd64" ;;
-  aarch64|arm64) BIN="$ROOT/bin/ulg-linux-arm64" ;;
+  x86_64|amd64) BIN="$ROOT/bin/nexaroute-linux-amd64" ;;
+  aarch64|arm64) BIN="$ROOT/bin/nexaroute-linux-arm64" ;;
   *) BIN="" ;;
 esac
 if [[ -n "$BIN" && -x "$BIN" ]]; then
