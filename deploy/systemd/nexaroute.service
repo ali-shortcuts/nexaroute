@@ -1,0 +1,19 @@
+[Unit]
+Description=NexaRoute v0.3 Intelligent Multi-LLM Gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/nexaroute -config %h/.config/nexaroute/config.json
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.config/nexaroute
+Environment=NEXAROUTE_CONFIG=%h/.config/nexaroute/config.json
+
+[Install]
+WantedBy=default.target
