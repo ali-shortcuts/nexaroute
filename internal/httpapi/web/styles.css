@@ -4,3 +4,15 @@
 .ring.dense{height:680px}.ring.dense .node{width:88px;min-height:42px;padding:6px 7px;border-radius:10px}.ring.dense .node strong{font-size:8.5px}.ring.dense .node small{display:none}.ring.dense .node .badge{font-size:7px;margin-top:4px;padding:2px 5px}@media(max-width:900px){.ring.dense{height:620px}.ring.dense .node{width:76px}}
 
 .node.half_open{border-color:#5c4e8f}.status.half_open{color:#c9b8ff}
+
+.model-picker{grid-template-columns:1fr;max-height:420px}
+.model-option{display:grid;gap:8px;align-items:stretch}
+.model-option-head{display:flex;align-items:center;gap:8px;min-width:0}
+.model-option-head strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.model-meta-grid{display:grid;grid-template-columns:minmax(150px,1fr) 90px 90px;gap:7px}
+.model-meta-grid label{display:grid;gap:4px;color:var(--muted);font-size:8px}
+.model-meta-grid input{width:100%;border:1px solid #25364e;background:#07101b;color:#fff;border-radius:8px;padding:7px 8px}
+.model-cap-row{display:flex;flex-wrap:wrap;gap:10px;color:#b9c7d8;font-size:8px}
+.model-cap-row label{display:flex;align-items:center;gap:5px}
+.model-cap-row input,.model-select{accent-color:var(--cyan)}
+@media(max-width:650px){.model-meta-grid{grid-template-columns:1fr 1fr}.model-meta-grid label:first-child{grid-column:1/-1}}
