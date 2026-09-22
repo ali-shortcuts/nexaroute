@@ -64,6 +64,30 @@ func patchJSONModel(raw []byte, model string) ([]byte, error) {
 	return json.Marshal(obj)
 }
 
+func errorTypeForStatus(code int) string {
+	switch code {
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return "provider_auth_failed"
+	case http.StatusPaymentRequired:
+		return "provider_billing"
+	case http.StatusTooManyRequests:
+		return "provider_rate_limited"
+	case http.StatusRequestTimeout, http.StatusGatewayTimeout:
+		return "provider_timeout"
+	case http.StatusServiceUnavailable, 529:
+		return "provider_overloaded"
+	case http.StatusBadRequest, http.StatusUnprocessableEntity:
+		return "caller_invalid_request"
+	case http.StatusNotFound:
+		return "provider_request_rejected"
+	default:
+		if code >= 500 {
+			return "provider_server_error"
+		}
+		return "_OTHER"
+	}
+}
+
 func retryable(code int) bool {
 	return code == 408 || code == 409 || code == 425 || code == 429 || code == 500 || code == 502 || code == 503 || code == 504 || code == 529
 }
