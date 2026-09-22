@@ -95,6 +95,7 @@ The router:
 
 Supported strategies:
 
+- `ready_queue` (default): only verified `healthy` deployments are routable; deterministic priority/weight ordering keeps the strongest healthy deployment sticky until it fails
 - `adaptive_round_robin`: health/scoring plus rotation among healthy top candidates
 - `adaptive`: score by health, weight, priority, latency and failure history
 - `priority`: health tier first, then explicit priority
@@ -108,7 +109,7 @@ Default model/deployment policy:
 ```text
 unknown/degraded
     -> successes -> healthy
-    -> repeated failures -> cooldown
+    -> first routed failure -> quarantine -> recovery supervisor
 cooldown expiry
     -> half_open
 half_open success
@@ -117,7 +118,7 @@ half_open failure
     -> cooldown immediately
 ```
 
-Default threshold is five consecutive failures and default cooldown is one hour.
+Default ready-queue recovery is five supervisor probes. Any successful recovery probe immediately returns the deployment to `healthy`; five failed recovery probes enter a 30-minute cooldown, after which a fresh recovery cycle begins automatically.
 
 Pre-stream failover can occur on:
 
@@ -146,13 +147,16 @@ Each provider adapter has a bounded semaphore. Requests waiting on that semaphor
 
 ## Probe plane
 
-The probe engine executes tiny health requests with bounded concurrency.
+The probe engine executes tiny health requests with bounded concurrency. At startup it primes all enabled deployments before the HTTP listener opens, so Claude traffic only sees models that have already passed a health request.
 
 Defaults:
 
 - 1 output token
 - 8 second timeout
-- 16 concurrent probes
+- 16 concurrent probes by default
+- 5 recovery attempts by default
+- 500 ms delay between failed recovery probes
+- 30-minute default recovery cooldown
 - every 120 seconds
 
 Manual `Probe all models` uses the same engine and can wait for a structured result: total, passed, failed, cooldown-skipped and missing-skipped.
