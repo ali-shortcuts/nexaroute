@@ -224,3 +224,66 @@ func TestBackgroundSweepSkipsHealthyReadyModels(t *testing.T) {
 		t.Fatalf("healthy ready model was touched by supervisor: before=%v after=%v", before, after)
 	}
 }
+
+
+func TestBackgroundSweepAtScaleTouchesOnlyUnverifiedModels(t *testing.T) {
+	var calls atomic.Int32
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"c","choices":[{"message":{"role":"assistant","content":"OK"}}]}`))
+	}))
+	defer up.Close()
+
+	cfg := config.Default()
+	cfg.Probe.Enabled = true
+	cfg.Probe.OnStart = false
+	cfg.Probe.Concurrency = 16
+	cfg.Probe.TimeoutMS = 2000
+	for p := 0; p < 24; p++ {
+		pc := config.ProviderConfig{
+			ID: fmt.Sprintf("p%02d", p), Name: fmt.Sprintf("P%02d", p),
+			Type: "openai_compatible", BaseURL: up.URL, AuthMode: "none",
+			Enabled: true, MaxConcurrency: 32,
+		}
+		for m := 0; m < 5; m++ {
+			pc.Models = append(pc.Models, config.ModelConfig{
+				ID: fmt.Sprintf("m%d", m), Model: fmt.Sprintf("model-%02d-%d", p, m),
+				Enabled: true, Weight: 1, Capabilities: config.Capabilities{Streaming: true},
+			})
+		}
+		cfg.Providers = append(cfg.Providers, pc)
+	}
+	cfg.ApplyDefaults()
+
+	hm := health.New(cfg.Routing.FailureThreshold, cfg.Cooldown())
+	reg, err := providers.NewRegistry(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt := router.New(cfg, hm)
+	all := rt.All()
+	if len(all) != 120 {
+		t.Fatalf("deployments=%d want 120", len(all))
+	}
+	for i := 0; i < 100; i++ {
+		hm.RecordSuccess(all[i].ID, time.Millisecond)
+	}
+
+	e := New(cfg, reg, rt, hm, events.New(500))
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	res := e.runOnce(ctx, false)
+
+	if res.Total != 120 || res.Passed != 20 || res.SkippedReady != 100 || res.Failed != 0 {
+		t.Fatalf("unexpected selective sweep result: %+v", res)
+	}
+	if got := calls.Load(); got != 20 {
+		t.Fatalf("background sweep sent %d upstream probes; want exactly 20 unknown models", got)
+	}
+	for i := 0; i < 120; i++ {
+		if st := hm.Get(all[i].ID); st.Status != health.Healthy {
+			t.Fatalf("deployment %s status=%s want healthy", all[i].ID, st.Status)
+		}
+	}
+}
