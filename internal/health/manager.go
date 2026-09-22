@@ -222,6 +222,25 @@ func (m *Manager) ForceCooldown(id, reason string, d time.Duration) {
 	m.states[id] = s
 }
 
+// Invalidate removes any previous proof of health for a deployment. It is used
+// when the deployment/provider configuration changes under the same ID.
+func (m *Manager) Invalidate(id string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.states[id] = State{Deployment: id, Status: Unknown}
+}
+
+// Retain removes health state for deployments that no longer exist.
+func (m *Manager) Retain(valid map[string]struct{}) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for id := range m.states {
+		if _, ok := valid[id]; !ok {
+			delete(m.states, id)
+		}
+	}
+}
+
 // Configure updates circuit-breaker thresholds for future health transitions.
 // Existing counters are preserved across hot reloads.
 func (m *Manager) Configure(threshold int, cooldown time.Duration) {
