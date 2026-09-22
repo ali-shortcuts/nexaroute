@@ -250,6 +250,70 @@ func TestConfiguredForwardHeaderPassesThroughButClientAuthDoesNot(t *testing.T) 
 	}
 }
 
+
+func TestUpstreamErrorRedactsProviderCredential(t *testing.T) {
+	const secret = "super-secret-provider-key"
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer "+secret {
+			t.Errorf("upstream auth=%q", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":"credential super-secret-provider-key rejected"}`))
+	}))
+	defer up.Close()
+
+	cfg := config.Default()
+	cfg.Probe.Enabled = false
+	cfg.Providers = []config.ProviderConfig{{
+		ID: "p", Name: "P", Type: "openai_compatible", BaseURL: up.URL,
+		APIKey: secret, AuthMode: "bearer", Enabled: true,
+		Models: []config.ModelConfig{{ID: "m", Model: "up", Aliases: []string{"client"}, Enabled: true, Weight: 1}},
+	}}
+	srv := testGateway(t, cfg)
+	req := httptest.NewRequest("POST", "http://gateway/v1/chat/completions", strings.NewReader(`{"model":"client","messages":[{"role":"user","content":"hi"}]}`))
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	if strings.Contains(rr.Body.String(), secret) {
+		t.Fatalf("provider credential leaked in upstream error: %s", rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "[REDACTED]") {
+		t.Fatalf("expected redaction marker, body=%s", rr.Body.String())
+	}
+}
+
+func TestNativeProxyStripsSensitiveAndHopByHopResponseHeaders(t *testing.T) {
+	resp := &http.Response{
+		StatusCode: 200,
+		Header: http.Header{
+			"Content-Type":        []string{"application/json"},
+			"Set-Cookie":          []string{"session=upstream-secret"},
+			"Authorization":       []string{"Bearer upstream-secret"},
+			"X-Api-Key":           []string{"upstream-secret"},
+			"Connection":          []string{"keep-alive"},
+			"Keep-Alive":          []string{"timeout=5"},
+			"Proxy-Authenticate":  []string{"Basic realm=upstream"},
+			"X-Safe-Upstream":     []string{"ok"},
+		},
+		Body: io.NopCloser(strings.NewReader(`{"ok":true}`)),
+	}
+	rr := httptest.NewRecorder()
+	if err := proxyResponse(rr, resp); err != nil {
+		t.Fatal(err)
+	}
+	for _, h := range []string{"Set-Cookie", "Authorization", "X-Api-Key", "Connection", "Keep-Alive", "Proxy-Authenticate"} {
+		if got := rr.Header().Get(h); got != "" {
+			t.Fatalf("sensitive/hop-by-hop header %s leaked: %q", h, got)
+		}
+	}
+	if got := rr.Header().Get("X-Safe-Upstream"); got != "ok" {
+		t.Fatalf("safe upstream header missing: %q", got)
+	}
+}
+
 func TestNativeSSEProxyFlushes(t *testing.T) {
 	resp := &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"text/event-stream"}, "Content-Length": []string{"12"}}, Body: io.NopCloser(strings.NewReader("data: one\n\n"))}
 	rr := httptest.NewRecorder()
