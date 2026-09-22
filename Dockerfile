@@ -2,8 +2,9 @@ FROM golang:1.23-alpine AS build
 WORKDIR /src
 COPY . .
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/nexaroute ./cmd/gateway \
-    && mkdir -p /out/config \
-    && cp configs/config.example.json /out/config/config.json
+    && mkdir -m 0700 -p /out/config \
+    && cp configs/config.example.json /out/config/config.json \
+    && chmod 0600 /out/config/config.json
 
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/nexaroute /nexaroute
