@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -568,3 +569,133 @@ func TestReadyQueueEjectsFailedPrimaryAndUsesNextHealthyModel(t *testing.T) {
 		t.Fatalf("fallback calls=%d want 2", fallbackCalls.Load())
 	}
 }
+
+
+func TestClientCancellationDoesNotQuarantineHealthyReadyModel(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer up.Close()
+
+	cfg := config.Default()
+	cfg.Probe.Enabled = false
+	cfg.Routing.Strategy = "ready_queue"
+	cfg.Providers = []config.ProviderConfig{{ID: "p", Name: "P", Type: "openai_compatible", BaseURL: up.URL, AuthMode: "none", Enabled: true, Models: []config.ModelConfig{{ID: "m", Model: "m", Enabled: true, Weight: 1, Capabilities: config.Capabilities{Streaming: true}}}}}
+	srv := testGateway(t, cfg)
+	if st := srv.hm.Get("p/m"); st.Status != health.Healthy {
+		t.Fatalf("fixture not ready: %+v", st)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	req := httptest.NewRequest(http.MethodPost, "http://gateway/v1/chat/completions", strings.NewReader(`{"model":"m","messages":[{"role":"user","content":"hi"}]}`)).WithContext(ctx)
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+
+	if st := srv.hm.Get("p/m"); st.Status != health.Healthy {
+		t.Fatalf("client cancellation incorrectly damaged provider health: %+v", st)
+	}
+	if got := srv.bus.Counts()["client_disconnect"]; got != 1 {
+		t.Fatalf("client_disconnect events=%d want 1", got)
+	}
+}
+
+func TestRequestTimeoutIsTotalFailoverBudget(t *testing.T) {
+	var firstCalls atomic.Int32
+	var secondCalls atomic.Int32
+	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		firstCalls.Add(1)
+		<-r.Context().Done()
+	}))
+	defer first.Close()
+	second := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		secondCalls.Add(1)
+		<-r.Context().Done()
+	}))
+	defer second.Close()
+
+	cfg := config.Default()
+	cfg.Probe.Enabled = false
+	cfg.Routing.Strategy = "ready_queue"
+	cfg.Routing.MaxAttempts = 2
+	cfg.Routing.RequestTimeoutMS = 120
+	cfg.Providers = []config.ProviderConfig{
+		{ID: "a", Name: "A", Type: "openai_compatible", BaseURL: first.URL, AuthMode: "none", Enabled: true, Models: []config.ModelConfig{{ID: "m", Model: "a", Aliases: []string{"coding"}, Enabled: true, Priority: 0, Weight: 2}}},
+		{ID: "b", Name: "B", Type: "openai_compatible", BaseURL: second.URL, AuthMode: "none", Enabled: true, Models: []config.ModelConfig{{ID: "m", Model: "b", Aliases: []string{"coding"}, Enabled: true, Priority: 10, Weight: 1}}},
+	}
+	srv := testGateway(t, cfg)
+	start := time.Now()
+	req := httptest.NewRequest(http.MethodPost, "http://gateway/v1/chat/completions", strings.NewReader(`{"model":"coding","messages":[{"role":"user","content":"hi"}]}`))
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	elapsed := time.Since(start)
+
+	if rr.Code != http.StatusGatewayTimeout {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	if firstCalls.Load() != 1 || secondCalls.Load() != 0 {
+		t.Fatalf("timeout budget restarted across candidates: first=%d second=%d", firstCalls.Load(), secondCalls.Load())
+	}
+	if elapsed > 500*time.Millisecond {
+		t.Fatalf("request exceeded total failover budget by too much: %s", elapsed)
+	}
+}
+
+func TestHotReloadInvalidatesChangedProviderHealthProof(t *testing.T) {
+	up1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"a","choices":[]}`))
+	}))
+	defer up1.Close()
+	up2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"b","choices":[]}`))
+	}))
+	defer up2.Close()
+
+	cfg := config.Default()
+	cfg.Probe.Enabled = false
+	cfg.Routing.Strategy = "ready_queue"
+	cfg.Providers = []config.ProviderConfig{{ID: "p", Name: "P", Type: "openai_compatible", BaseURL: up1.URL, AuthMode: "none", Enabled: true, Models: []config.ModelConfig{{ID: "m", Model: "m", Enabled: true, Weight: 1}}}}
+	srv := testGateway(t, cfg)
+	if st := srv.hm.Get("p/m"); st.Status != health.Healthy {
+		t.Fatalf("fixture not healthy: %+v", st)
+	}
+
+	next := srv.currentConfig()
+	next.Providers[0].BaseURL = up2.URL
+	if err := srv.applyConfig(next); err != nil {
+		t.Fatal(err)
+	}
+	if st := srv.hm.Get("p/m"); st.Status != health.Unknown {
+		t.Fatalf("changed provider kept stale ready proof: %+v", st)
+	}
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "http://gateway/readyz", nil)
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("readyz status=%d want 503 after health invalidation, body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestTranslatedStreamsRequireTerminalSignal(t *testing.T) {
+	openAIResp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header: http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body: io.NopCloser(strings.NewReader("data: {\"choices\":[{\"delta\":{\"content\":\"partial\"},\"finish_reason\":null}]}\n\n")),
+	}
+	if err := streamOpenAIToAnthropic(httptest.NewRecorder(), openAIResp, "m"); !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("openai translated stream error=%v want unexpected EOF", err)
+	}
+
+	anthResp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header: http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body: io.NopCloser(strings.NewReader("data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"partial\"}}\n\n")),
+	}
+	if err := streamAnthropicToOpenAI(httptest.NewRecorder(), anthResp, "m"); !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("anthropic translated stream error=%v want unexpected EOF", err)
+	}
+}
+
