@@ -83,6 +83,10 @@ func main() {
 	srv := &http.Server{Addr: cfg.Listen, Handler: api.Handler(), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 180 * time.Second, MaxHeaderBytes: 1 << 20}
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
+	if cfg.Probe.Enabled && cfg.Probe.OnStart {
+		result := pe.Prime(ctx)
+		logger.Printf("startup_probe total=%d ready=%d failed=%d cooldown=%d duration_ms=%d", result.Total, result.Passed, result.Failed, result.SkippedCooldown, result.DurationMS)
+	}
 	go pe.Run(ctx)
 	go func() {
 		logger.Printf("version=%s config=%s listening=http://%s", version, *configPath, cfg.Listen)
