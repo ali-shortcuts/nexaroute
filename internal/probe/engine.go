@@ -295,6 +295,7 @@ func (e *Engine) runOnce(ctx context.Context, force bool) Result {
 
 	var wg sync.WaitGroup
 	var resultMu sync.Mutex
+	failedIDs := make([]string, 0)
 	for _, job := range jobs {
 		d := job.d
 		result.Total++
@@ -331,8 +332,8 @@ func (e *Engine) runOnce(ctx context.Context, force bool) Result {
 				e.bus.Add(events.Event{Kind: "probe_quarantine", Deployment: d.ID, Message: err.Error(), LatencyMS: lat.Milliseconds(), StatusCode: status})
 				resultMu.Lock()
 				result.Failed++
+				failedIDs = append(failedIDs, d.ID)
 				resultMu.Unlock()
-				e.Recover(d.ID)
 				return
 			}
 
@@ -344,6 +345,11 @@ func (e *Engine) runOnce(ctx context.Context, force bool) Result {
 		}(d, a)
 	}
 	wg.Wait()
+	// Let every deployment receive its first health check before failed models
+	// consume probe capacity with recovery retries.
+	for _, id := range failedIDs {
+		e.Recover(id)
+	}
 	result.DurationMS = time.Since(start).Milliseconds()
 	return result
 }
