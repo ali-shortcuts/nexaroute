@@ -272,3 +272,39 @@ func TestAllCoolingCredentialsAreNotReused(t *testing.T) {
 		t.Fatalf("cooling credential was reused; call count=%d", calls.Load())
 	}
 }
+
+func TestAllRateLimitedCredentialsExposeRetryAfter(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Retry-After", "1")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = io.WriteString(w, `{"error":"rate limited"}`)
+	}))
+	defer srv.Close()
+
+	p := config.ProviderConfig{ID: "p", Name: "p", Type: "openai_compatible", BaseURL: srv.URL, APIKey: "key", AuthMode: "bearer", Enabled: true}
+	a, err := newHTTPAdapter(p, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := a.Do(context.Background(), []byte(`{"model":"x","messages":[]}`), false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("status=%d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	_, err = a.Do(context.Background(), []byte(`{"model":"x","messages":[]}`), false, nil)
+	if err == nil {
+		t.Fatal("expected rate-limit cooldown error")
+	}
+	d, ok := RetryAfter(err)
+	if !ok {
+		t.Fatalf("expected RetryAfterError, got %T %v", err, err)
+	}
+	if d <= 0 || d > 1100*time.Millisecond {
+		t.Fatalf("retry-after=%s want about 1s", d)
+	}
+}
