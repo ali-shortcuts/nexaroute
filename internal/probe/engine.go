@@ -438,6 +438,23 @@ func (e *Engine) recoverLoop(ctx context.Context, id string) {
 				return
 			}
 
+			if wait, ok := providers.RetryAfter(err); ok {
+				maxWait := time.Duration(cfg.Routing.MaxRetryAfterSeconds) * time.Second
+				if maxWait > 0 && wait > maxWait {
+					wait = maxWait
+				}
+				e.bus.Add(events.Event{Kind: "recovery_deferred", Deployment: id, Message: fmt.Sprintf("credential rate-limit cooldown; retry after %s", wait), StatusCode: status})
+				attempt--
+				t := time.NewTimer(wait)
+				select {
+				case <-ctx.Done():
+					t.Stop()
+					return
+				case <-t.C:
+				}
+				continue
+			}
+
 			lastErr = err.Error()
 			e.hm.RecordRecoveryFailure(id, lastErr, lat)
 			e.bus.Add(events.Event{Kind: "recovery_fail", Deployment: id, Message: fmt.Sprintf("attempt %d/%d: %s", attempt, attempts, lastErr), LatencyMS: lat.Milliseconds(), StatusCode: status})
