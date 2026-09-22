@@ -1,3 +1,4 @@
+# Bootstrap after all archive chunks are present.
 name: Bootstrap source
 
 on:
