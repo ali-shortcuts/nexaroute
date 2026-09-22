@@ -147,7 +147,7 @@ Each provider adapter has a bounded semaphore. Requests waiting on that semaphor
 
 ## Probe plane
 
-The probe engine executes tiny health requests with bounded concurrency. Automatic background sweeps do not re-probe a deployment that is already `healthy`; they establish readiness for `unknown` deployments and ensure degraded/cooldown deployments have a recovery supervisor. A healthy deployment leaves the ready queue only after a real routed failure or after a hot-reload change invalidates its previous health proof. At startup it primes all enabled deployments before the HTTP listener opens, so Claude traffic only sees models that have already passed a health request.
+The probe engine executes tiny health requests with bounded concurrency. Under the default `ready_queue` strategy, automatic background sweeps do not re-probe a deployment that is already `healthy`; they establish readiness for `unknown` deployments and ensure degraded/cooldown deployments have a recovery supervisor. Legacy strategies such as `adaptive` retain their periodic health-probe semantics. A healthy deployment leaves the ready queue only after a real routed failure or after a hot-reload change invalidates its previous health proof. At startup it primes all enabled deployments before the HTTP listener opens, so Claude traffic only sees models that have already passed a health request.
 
 Defaults:
 
