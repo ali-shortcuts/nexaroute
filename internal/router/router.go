@@ -149,7 +149,16 @@ func (r *Router) Candidates(req Requirement) []Scored {
 	}
 
 	out := build(false)
-	if len(out) == 0 && cfg.Routing.FallbackOnUnknownModel && req.Model != "" && req.Model != "auto" && req.Model != "claude-auto" {
+	modelKnown := req.Model == "" || req.Model == "auto" || req.Model == "claude-auto"
+	if !modelKnown {
+		for _, d := range all {
+			if matchesModel(d, req.Model) {
+				modelKnown = true
+				break
+			}
+		}
+	}
+	if len(out) == 0 && !modelKnown && cfg.Routing.FallbackOnUnknownModel {
 		out = build(true)
 	}
 	if len(out) <= 1 {
