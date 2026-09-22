@@ -65,14 +65,17 @@ Implemented resilience:
 
 ### How the smart routing loop actually works
 
-The health loop is deliberately **event-driven + periodic**, not a wasteful sub-second broadcast to every model:
+The health loop is deliberately **event-driven + selective**, not a wasteful broadcast over models already proven healthy:
 
 - every real client request updates the selected deployment's health immediately;
-- background probes use a tiny request (`max_tokens=1` by default) to refresh idle deployments;
-- each periodic probe cycle revalidates the ready pool with bounded concurrency; failed deployments leave the ready queue immediately and move to the recovery supervisor;
-- cooldown deployments never receive Claude traffic; after their deadline the supervisor retries them and only a successful probe returns them to the ready queue;
-- candidate order combines configured model priority/weight, health state, EWMA response-header latency, and historical failure rate;
+- startup probes use a tiny request (`max_tokens=1` by default) to establish the initial ready queue;
+- automatic background sweeps probe only deployments that are not yet proven healthy;
+- a model already in the ready queue is not periodically re-probed; it stays ready until Claude traffic fails it or its provider/model identity changes;
+- failed/degraded/cooldown deployments are owned by dedicated recovery loops and never receive Claude traffic;
+- candidate order combines configured model priority/weight with the verified ready state; under `ready_queue`, the strongest configured healthy model stays sticky until it leaves Healthy;
 - recovery policy defaults to **5 supervisor attempts -> 1800-second cooldown**, with a 500 ms retry delay between failed recovery probes;
+- temporary all-key `429` cooldown waits do not consume the five-attempt recovery budget;
+- the explicit **Probe all models** admin action remains available when an operator intentionally wants to retest healthy models too;
 - a real Claude Code request tries candidates in routing order and fails over before client-visible response bytes are committed.
 - capability routing inspects the parsed request structure for images and reasoning controls, so words such as “image” in ordinary user text do not cause false capability requirements.
 
