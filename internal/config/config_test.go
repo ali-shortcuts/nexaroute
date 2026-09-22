@@ -90,3 +90,16 @@ func TestValidateRejectsProxyWithoutHost(t *testing.T) {
 		t.Fatalf("proxy without host should fail validation, got %v", err)
 	}
 }
+
+func TestReadyQueueRecoveryDefaults(t *testing.T) {
+	cfg := Default()
+	if cfg.Routing.Strategy != "ready_queue" {
+		t.Fatalf("strategy=%q want ready_queue", cfg.Routing.Strategy)
+	}
+	if cfg.Routing.CooldownSeconds != 1800 {
+		t.Fatalf("cooldown=%d want 1800", cfg.Routing.CooldownSeconds)
+	}
+	if cfg.Probe.RecoveryAttempts != 5 || cfg.Probe.RecoveryRetryMS != 500 {
+		t.Fatalf("unexpected recovery defaults: %+v", cfg.Probe)
+	}
+}
