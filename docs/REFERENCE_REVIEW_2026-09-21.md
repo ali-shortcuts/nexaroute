@@ -71,4 +71,4 @@ The provider editor should behave predictably:
 5. Model detection never removes manual-entry capability.
 6. Connection test happens before save when the user wants it, but save does not secretly rewrite auth.
 7. Provider updates hot-reload the active registry/router without process restart.
-8. Config writes are validated, atomic, and have one last-known-good rollback copy.
+8. Config writes are validated and atomic; NexaRoute does not create rollback or backup copies.
