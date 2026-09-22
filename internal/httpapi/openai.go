@@ -207,6 +207,7 @@ func streamAnthropicToOpenAI(w http.ResponseWriter, resp *http.Response, model s
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 64<<10), 8<<20)
 	finish := "stop"
+	terminal := false
 	completionID := uniqueStreamID("chatcmpl", requestID...)
 	toolIndex := map[int]int{}
 	nextTool := 0
@@ -252,6 +253,9 @@ func streamAnthropicToOpenAI(w http.ResponseWriter, resp *http.Response, model s
 		case "message_delta":
 			del, _ := env["delta"].(map[string]any)
 			sr, _ := del["stop_reason"].(string)
+			if sr != "" {
+				terminal = true
+			}
 			if sr == "tool_use" {
 				finish = "tool_calls"
 			} else if sr == "max_tokens" {
@@ -259,6 +263,8 @@ func streamAnthropicToOpenAI(w http.ResponseWriter, resp *http.Response, model s
 			} else if sr != "" {
 				finish = "stop"
 			}
+		case "message_stop":
+			terminal = true
 		case "error":
 			emit(map[string]any{"error": env["error"]})
 			return fmt.Errorf("anthropic stream error")
@@ -266,6 +272,9 @@ func streamAnthropicToOpenAI(w http.ResponseWriter, resp *http.Response, model s
 	}
 	if err := scanner.Err(); err != nil {
 		return err
+	}
+	if !terminal {
+		return io.ErrUnexpectedEOF
 	}
 	emit(map[string]any{"id": completionID, "object": "chat.completion.chunk", "model": model, "choices": []any{map[string]any{"index": 0, "delta": map[string]any{}, "finish_reason": finish}}})
 	fmt.Fprint(w, "data: [DONE]\n\n")
