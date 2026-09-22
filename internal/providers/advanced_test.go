@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"sync"
 	"sync/atomic"
+	"strings"
 	"testing"
 	"time"
 
@@ -160,5 +161,37 @@ func TestProviderConcurrencyHeldUntilResponseBodyClosed(t *testing.T) {
 		t.Fatalf("second request failed after release: %v", err)
 	case <-time.After(time.Second):
 		t.Fatal("second request did not proceed after first response body closed")
+	}
+}
+
+func TestAllCoolingCredentialsAreNotReused(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = io.WriteString(w, `{"error":"bad credential"}`)
+	}))
+	defer srv.Close()
+
+	p := config.ProviderConfig{ID: "p", Name: "p", Type: "openai_compatible", BaseURL: srv.URL, APIKey: "only-key", AuthMode: "bearer", Enabled: true, MaxConcurrency: 2}
+	a, err := newHTTPAdapter(p, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := a.Do(context.Background(), []byte(`{"model":"x","messages":[]}`), false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if calls.Load() != 1 {
+		t.Fatalf("first call count=%d want 1", calls.Load())
+	}
+
+	_, err = a.Do(context.Background(), []byte(`{"model":"x","messages":[]}`), false, nil)
+	if err == nil || !strings.Contains(err.Error(), "cooling down") {
+		t.Fatalf("expected cooling-down error, got %v", err)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("cooling credential was reused; call count=%d", calls.Load())
 	}
 }
