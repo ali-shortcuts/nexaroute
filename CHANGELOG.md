@@ -1,3 +1,15 @@
+## v0.3 supervisor/gateway hardening — 2026-09-22
+
+- Changed automatic background health sweeps so verified `healthy` ready-queue models are not periodically re-probed.
+- Healthy deployments now leave the ready queue only on a real routed failure or when a provider/model identity change invalidates the previous health proof.
+- Hot reload prunes deleted deployment health and invalidates stale health after Base URL, credentials, auth, proxy, endpoint path, forwarded-header, or upstream model changes.
+- `/readyz` now reports ready only when at least one verified healthy deployment exists under `ready_queue`.
+- Added total non-stream request budgets across failover attempts, deterministic exponential jitter, client-cancellation-neutral health handling, and translated-stream terminal validation.
+- Added temporary credential-rate-limit deferral so an all-key `429` wait does not consume the five recovery attempts.
+- Added normalized fault taxonomy and `nexaroute_errors_total{error_type=...}` metrics.
+- Fixed access-log status tracking after duplicate `WriteHeader` calls and implicit streaming flush.
+- Added regression tests covering supervisor selectivity, hot-reload health invalidation, client cancellation, total request timeout, incomplete streams, Retry-After credential cooldown, and status/error classification.
+
 ## v0.3 continuous ready-routing upgrade — 2026-09-22
 
 - Added `ready_queue` as the default routing strategy.
