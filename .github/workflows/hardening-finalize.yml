@@ -29,6 +29,9 @@ jobs:
         run: |
           set -euo pipefail
           while IFS= read -r f; do
+            case "$f" in
+              .github/workflows/*) continue ;;
+            esac
             sed -i 's#github.com/ali-shortcuts/universal-llm-gateway#github.com/ali-shortcuts/nexaroute#g' "$f"
           done < <(git grep -l 'github.com/ali-shortcuts/universal-llm-gateway' || true)
           gofmt -w cmd internal
