@@ -112,17 +112,14 @@ This specifically protects the Web UI behavior requested for editing an already-
 
 ## Installer check
 
-`install-user.sh` was executed against an isolated temporary HOME directory.
+The current CI executes `install-user.sh` against an isolated temporary HOME after building the Linux binaries.
 
-Verified:
+It verifies:
 
-- correct Linux amd64 binary installed to `~/.local/bin/ulg`
-- initial config installed to `~/.config/universal-llm-gateway/config.json`
+- `~/.local/bin/nexaroute` is installed and executable
+- `~/.config/nexaroute/config.json` is created
 - config file mode is `0600`
-- binary mode is `0755`
-- installed binary reports `Universal LLM Gateway v0.3`
-
-Result: **PASS**.
+- `nexaroute -version` reports `NexaRoute v0.3`
 
 ## Regression suites present in source
 
@@ -148,9 +145,9 @@ The Go tests include coverage for:
 - native SSE flushing
 - common model-list response shapes
 
-## Package integrity
+## Release artifacts and integrity
 
-The final ZIP is created only after the verification above. A SHA-256 digest is supplied next to the download so the archive can be checked after transfer.
+Source control does not keep stale binary checksums. Tagged releases build fresh Linux amd64/arm64 binaries and generate `dist/SHA256SUMS` from those exact artifacts before publishing them to GitHub Releases.
 
 ## What this report does not prove
 
