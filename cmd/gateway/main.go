@@ -87,7 +87,7 @@ func main() {
 		result := pe.Prime(ctx)
 		logger.Printf("startup_probe total=%d ready=%d failed=%d cooldown=%d duration_ms=%d", result.Total, result.Passed, result.Failed, result.SkippedCooldown, result.DurationMS)
 	}
-	go pe.Run(ctx)
+	pe.Start(ctx)
 	go func() {
 		logger.Printf("version=%s config=%s listening=http://%s", version, *configPath, cfg.Listen)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
