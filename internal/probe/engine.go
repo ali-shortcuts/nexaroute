@@ -435,7 +435,7 @@ func (e *Engine) recoverLoop(ctx context.Context, id string) {
 			lastErr = "recovery attempts exhausted"
 		}
 		cooldown := cfg.Cooldown()
-		e.hm.ForceCooldown(id, lastErr, cooldown)
+		e.hm.EnterCooldown(id, lastErr, cooldown)
 		e.bus.Add(events.Event{Kind: "recovery_cooldown", Deployment: id, Message: fmt.Sprintf("%d recovery attempts failed; retry after %s", attempts, cooldown), LatencyMS: lastLatency.Milliseconds(), StatusCode: lastStatus})
 
 		t := time.NewTimer(cooldown)
