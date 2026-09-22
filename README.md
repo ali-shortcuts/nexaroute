@@ -130,9 +130,9 @@ The dashboard includes:
 - runtime routing/probe settings
 - config rollback
 
-## Fastest Ubuntu test: use the included binary
+## Fastest Ubuntu test: use a release package
 
-Unzip the package, then:
+After downloading and extracting a tagged release package, run:
 
 ```bash
 cd nexaroute
