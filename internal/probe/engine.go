@@ -238,11 +238,10 @@ func (e *Engine) deployment(id string) (router.Deployment, providers.Adapter, bo
 	return router.Deployment{}, nil, false
 }
 
-// RunOnce performs one parallel background sweep. Healthy deployments are
-// continuously revalidated. Unknown deployments need one successful probe
-// before they enter the ready queue. A failed sweep probe immediately
-// quarantines the deployment and starts its dedicated five-attempt recovery
-// lifecycle.
+// RunOnce performs an explicit operator-requested sweep. Background supervisor
+// sweeps do not re-probe healthy ready models: only previously unverified
+// deployments are health-checked. Quarantined/cooldown deployments are owned by
+// their dedicated recovery loops.
 func (e *Engine) RunOnce(ctx context.Context) Result {
 	return e.runOnce(ctx, true)
 }
@@ -304,7 +303,21 @@ func (e *Engine) runOnce(ctx context.Context, force bool) Result {
 	for _, job := range jobs {
 		d := job.d
 		result.Total++
-		if job.state.Status == health.Cooldown {
+		if !force {
+			switch job.state.Status {
+			case health.Healthy:
+				result.SkippedReady++
+				continue
+			case health.Cooldown:
+				result.SkippedCooldown++
+				e.Recover(d.ID)
+				continue
+			case health.Degraded, health.HalfOpen:
+				result.SkippedRecovery++
+				e.Recover(d.ID)
+				continue
+			}
+		} else if job.state.Status == health.Cooldown {
 			result.SkippedCooldown++
 			continue
 		}
