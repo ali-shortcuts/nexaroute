@@ -74,7 +74,7 @@ Discovery parses several common result shapes, but model-list APIs are not stand
 
 ## State and HA
 
-Runtime and health state are single-process/in-memory. Provider configuration is persisted atomically to JSON with one `.bak` last-known-good copy. Distributed state, Redis/Postgres coordination, and multi-node breaker synchronization are not implemented.
+Runtime and health state are single-process/in-memory. Provider configuration is persisted atomically to the active JSON file without creating backup copies. Distributed state, Redis/Postgres coordination, and multi-node breaker synchronization are not implemented.
 
 
 ## Probe cadence and model quality
