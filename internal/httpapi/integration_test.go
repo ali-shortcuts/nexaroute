@@ -30,6 +30,11 @@ func testGateway(t *testing.T, cfg config.Config) *Server {
 		t.Fatal(err)
 	}
 	rt := router.New(cfg, hm)
+	if cfg.Routing.Strategy == "ready_queue" {
+		for _, d := range rt.All() {
+			hm.RecordSuccess(d.ID, time.Millisecond)
+		}
+	}
 	bus := events.New(100)
 	pe := probe.New(cfg, reg, rt, hm, bus)
 	return New(cfg, t.TempDir()+"/config.json", reg, rt, hm, bus, pe, log.New(io.Discard, "", 0))
