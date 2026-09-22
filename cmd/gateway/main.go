@@ -27,9 +27,6 @@ func defaultConfigPath() string {
 	if p := os.Getenv("NEXAROUTE_CONFIG"); p != "" {
 		return p
 	}
-	if p := os.Getenv("ULG_CONFIG"); p != "" {
-		return p
-	}
 	if _, err := os.Stat("config.json"); err == nil {
 		return "config.json"
 	}
