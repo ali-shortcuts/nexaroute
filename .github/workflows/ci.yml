@@ -47,3 +47,28 @@ jobs:
 
       - name: Docker build
         run: docker build --tag nexaroute-ci:0.3 .
+
+      - name: Docker runtime smoke test
+        shell: bash
+        run: |
+          set -euo pipefail
+          cid="$(docker run -d -p 18081:8080 -e NEXAROUTE_ADMIN_KEY=ci-admin nexaroute-ci:0.3)"
+          cleanup() { docker rm -f "$cid" >/dev/null 2>&1 || true; }
+          trap cleanup EXIT
+          for _ in $(seq 1 80); do
+            if curl -fsS http://127.0.0.1:18081/healthz >/dev/null 2>&1; then
+              break
+            fi
+            sleep 0.1
+          done
+          curl -fsS http://127.0.0.1:18081/healthz >/dev/null
+          body='{"provider":{"id":"docker-smoke","name":"Docker Smoke","type":"openai_compatible","base_url":"http://127.0.0.1:19999/v1","auth_mode":"none","enabled":false,"models":[{"id":"m1","model":"model-1","enabled":true,"priority":1,"weight":1,"capabilities":{"streaming":true,"tools":true,"vision":false,"reasoning":false}}]},"preserve_secret":false}'
+          code="$(curl -sS -o /tmp/docker-smoke.json -w '%{http_code}' \
+            -H 'x-admin-key: ci-admin' \
+            -H 'content-type: application/json' \
+            --data-binary "$body" \
+            http://127.0.0.1:18081/admin/api/providers)"
+          if [ "$code" != "201" ]; then
+            cat /tmp/docker-smoke.json
+            exit 1
+          fi
