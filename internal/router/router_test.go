@@ -12,6 +12,7 @@ func TestCandidatesExcludeCooldown(t *testing.T) {
 	cfg.Providers = []config.ProviderConfig{{ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "http://x", Enabled: true, Models: []config.ModelConfig{{ID: "a", Model: "a", Enabled: true, Weight: 1, Capabilities: config.Capabilities{Streaming: true, Tools: true}}, {ID: "b", Model: "b", Enabled: true, Weight: 1, Capabilities: config.Capabilities{Streaming: true, Tools: true}}}}}
 	h := health.New(1, time.Hour)
 	h.RecordFailure("p/a", "x", time.Millisecond)
+	h.RecordSuccess("p/b", time.Millisecond)
 	r := New(cfg, h)
 	c := r.Candidates(Requirement{Model: "auto", Tools: true, Streaming: true})
 	if len(c) != 1 || c[0].Deployment.ID != "p/b" {
@@ -39,7 +40,9 @@ func TestFallbackOnUnknownClientModel(t *testing.T) {
 	cfg := config.Default()
 	cfg.Routing.FallbackOnUnknownModel = true
 	cfg.Providers = []config.ProviderConfig{{ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "http://x", Enabled: true, Models: []config.ModelConfig{{ID: "m", Model: "deepseek-chat", Enabled: true, Weight: 1, Capabilities: config.Capabilities{Streaming: true}}}}}
-	r := New(cfg, health.New(4, time.Hour))
+	h := health.New(4, time.Hour)
+	r := New(cfg, h)
+	h.RecordSuccess("p/m", time.Millisecond)
 	got := r.Candidates(Requirement{Model: "claude-sonnet-custom", Streaming: true})
 	if len(got) != 1 || got[0].Deployment.Model != "deepseek-chat" {
 		t.Fatalf("unexpected fallback %#v", got)
@@ -123,7 +126,9 @@ func TestLeastLatencyPrefersMeasuredFastHealthy(t *testing.T) {
 func TestClaudeAutoMatchesAllDeployments(t *testing.T) {
 	cfg := config.Default()
 	cfg.Providers = []config.ProviderConfig{{ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "http://example.invalid", Enabled: true, Models: []config.ModelConfig{{ID: "m", Model: "m", Enabled: true, Weight: 1}}}}
-	r := New(cfg, health.New(4, time.Hour))
+	h := health.New(4, time.Hour)
+	r := New(cfg, h)
+	h.RecordSuccess("p/m", time.Millisecond)
 	if got := len(r.Candidates(Requirement{Model: "claude-auto"})); got != 1 {
 		t.Fatalf("claude-auto should match all; got %d", got)
 	}
@@ -203,5 +208,34 @@ func TestAdaptiveRoundRobinNeverPromotesDegradedHighWeightAheadOfHealthy(t *test
 		if len(got) != 2 || got[0].Deployment.ID != "p/healthy" {
 			t.Fatalf("degraded deployment outranked healthy deployment on iteration %d: %#v", i, got)
 		}
+	}
+}
+
+func TestReadyQueueRequiresSuccessfulHealthProofAndStaysSticky(t *testing.T) {
+	cfg := config.Default()
+	cfg.Routing.Strategy = "ready_queue"
+	cfg.Providers = []config.ProviderConfig{{ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "http://example.invalid", Enabled: true, Models: []config.ModelConfig{
+		{ID: "strong", Model: "strong", Aliases: []string{"coding"}, Enabled: true, Priority: 0, Weight: 2, Capabilities: config.Capabilities{Streaming: true}},
+		{ID: "weak", Model: "weak", Aliases: []string{"coding"}, Enabled: true, Priority: 10, Weight: 1, Capabilities: config.Capabilities{Streaming: true}},
+	}}}
+	h := health.New(5, 30*time.Minute)
+	r := New(cfg, h)
+
+	if got := r.Candidates(Requirement{Model: "coding", Streaming: true}); len(got) != 0 {
+		t.Fatalf("unprobed models must not enter ready queue: %#v", got)
+	}
+
+	h.RecordSuccess("p/strong", 100*time.Millisecond)
+	h.RecordSuccess("p/weak", 10*time.Millisecond)
+	first := r.Candidates(Requirement{Model: "coding", Streaming: true})
+	second := r.Candidates(Requirement{Model: "coding", Streaming: true})
+	if len(first) != 2 || len(second) != 2 || first[0].Deployment.ID != "p/strong" || second[0].Deployment.ID != "p/strong" {
+		t.Fatalf("ready queue must stay sticky on configured strongest model: first=%#v second=%#v", first, second)
+	}
+
+	h.Quarantine("p/strong", "request failed", time.Millisecond)
+	after := r.Candidates(Requirement{Model: "coding", Streaming: true})
+	if len(after) != 1 || after[0].Deployment.ID != "p/weak" {
+		t.Fatalf("quarantined first model must leave ready queue immediately: %#v", after)
 	}
 }

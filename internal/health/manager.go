@@ -27,6 +27,7 @@ type State struct {
 	LastFailure         time.Time `json:"last_failure"`
 	LastError           string    `json:"last_error,omitempty"`
 	CooldownUntil       time.Time `json:"cooldown_until,omitempty"`
+	RecoveryFailures    int       `json:"recovery_failures,omitempty"`
 }
 
 type Manager struct {
@@ -51,6 +52,7 @@ func (m *Manager) Get(id string) State {
 	if s.Status == Cooldown && !s.CooldownUntil.IsZero() && time.Now().After(s.CooldownUntil) {
 		s.Status = HalfOpen
 		s.ConsecutiveFailures = 0
+		s.RecoveryFailures = 0
 		s.LastError = ""
 		s.CooldownUntil = time.Time{}
 		m.states[id] = s
@@ -65,6 +67,7 @@ func (m *Manager) RecordSuccess(id string, latency time.Duration) {
 	s.Deployment = id
 	s.Successes++
 	s.ConsecutiveFailures = 0
+	s.RecoveryFailures = 0
 	s.Status = Healthy
 	s.LastChecked = time.Now()
 	s.LastSuccess = s.LastChecked
@@ -115,6 +118,7 @@ func (m *Manager) Snapshot() []State {
 		if s.Status == Cooldown && now.After(s.CooldownUntil) {
 			s.Status = HalfOpen
 			s.ConsecutiveFailures = 0
+			s.RecoveryFailures = 0
 			s.LastError = ""
 			s.CooldownUntil = time.Time{}
 			m.states[id] = s
@@ -122,6 +126,78 @@ func (m *Manager) Snapshot() []State {
 		out = append(out, s)
 	}
 	return out
+}
+
+// Quarantine removes a deployment from the ready pool immediately after a real
+// routed request or background health check fails. Recovery is then owned by
+// the probe supervisor rather than by user traffic.
+func (m *Manager) Quarantine(id, reason string, latency time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s := m.states[id]
+	s.Deployment = id
+	s.Failures++
+	s.ConsecutiveFailures++
+	s.RecoveryFailures = 0
+	s.Status = Degraded
+	s.LastChecked = time.Now()
+	s.LastFailure = s.LastChecked
+	s.LastError = reason
+	s.CooldownUntil = time.Time{}
+	ms := float64(latency.Milliseconds())
+	if ms > 0 {
+		if s.EWMALatencyMS == 0 {
+			s.EWMALatencyMS = ms
+		} else {
+			s.EWMALatencyMS = s.EWMALatencyMS*0.75 + ms*0.25
+		}
+	}
+	m.states[id] = s
+}
+
+// RecordRecoveryFailure records a supervisor probe failure without entering
+// cooldown early. The recovery supervisor owns the exact retry budget and
+// enters cooldown only after all configured recovery attempts fail.
+func (m *Manager) RecordRecoveryFailure(id, reason string, latency time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s := m.states[id]
+	s.Deployment = id
+	s.Failures++
+	s.ConsecutiveFailures++
+	s.RecoveryFailures++
+	s.Status = Degraded
+	s.LastChecked = time.Now()
+	s.LastFailure = s.LastChecked
+	s.LastError = reason
+	s.CooldownUntil = time.Time{}
+	ms := float64(latency.Milliseconds())
+	if ms > 0 {
+		if s.EWMALatencyMS == 0 {
+			s.EWMALatencyMS = ms
+		} else {
+			s.EWMALatencyMS = s.EWMALatencyMS*0.75 + ms*0.25
+		}
+	}
+	m.states[id] = s
+}
+
+// EnterCooldown changes only the circuit state. It is used after the recovery
+// supervisor has already recorded its exact retry budget, so entering cooldown
+// does not manufacture an extra failure observation.
+func (m *Manager) EnterCooldown(id, reason string, d time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if d <= 0 {
+		d = m.cooldown
+	}
+	s := m.states[id]
+	s.Deployment = id
+	s.Status = Cooldown
+	s.LastChecked = time.Now()
+	s.LastError = reason
+	s.CooldownUntil = time.Now().Add(d)
+	m.states[id] = s
 }
 
 // ForceCooldown immediately removes a deployment from normal routing until the

@@ -80,7 +80,12 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		headerLatency := time.Since(start)
 		if e != nil {
 			lastErr = e.Error()
-			s.hm.RecordFailure(c.Deployment.ID, lastErr, headerLatency)
+			if cfg.Routing.Strategy == "ready_queue" {
+				s.hm.Quarantine(c.Deployment.ID, lastErr, headerLatency)
+				s.probe.Recover(c.Deployment.ID)
+			} else {
+				s.hm.RecordFailure(c.Deployment.ID, lastErr, headerLatency)
+			}
 			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_fail", Deployment: c.Deployment.ID, Message: lastErr, LatencyMS: headerLatency.Milliseconds()})
 			if i+1 < max {
 				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "failover", Deployment: c.Deployment.ID, Message: "transport failure; trying " + candidates[i+1].Deployment.ID})
@@ -96,7 +101,12 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 			lastBody = b
 			lastContentType = resp.Header.Get("Content-Type")
 			lastErr = upstreamError(resp.StatusCode, b)
-			if hardCooldownStatus(resp.StatusCode) {
+			if cfg.Routing.Strategy == "ready_queue" {
+				if failoverEligible(resp.StatusCode) {
+					s.hm.Quarantine(c.Deployment.ID, lastErr, headerLatency)
+					s.probe.Recover(c.Deployment.ID)
+				}
+			} else if hardCooldownStatus(resp.StatusCode) {
 				d := cfg.Cooldown()
 				if resp.StatusCode == 429 {
 					d = retryAfterDuration(resp.Header, time.Duration(cfg.Routing.MaxRetryAfterSeconds)*time.Second)
@@ -136,7 +146,12 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		totalLatency := time.Since(start)
 		if e != nil {
 			lastErr = e.Error()
-			s.hm.RecordFailure(c.Deployment.ID, lastErr, totalLatency)
+			if cfg.Routing.Strategy == "ready_queue" {
+				s.hm.Quarantine(c.Deployment.ID, lastErr, totalLatency)
+				s.probe.Recover(c.Deployment.ID)
+			} else {
+				s.hm.RecordFailure(c.Deployment.ID, lastErr, totalLatency)
+			}
 			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "stream_fail", Deployment: c.Deployment.ID, Message: lastErr, LatencyMS: totalLatency.Milliseconds(), StatusCode: resp.StatusCode})
 			// Once a successful upstream response has begun, do not attempt fake mid-stream failover.
 			return

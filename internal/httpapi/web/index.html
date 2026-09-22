@@ -2,17 +2,17 @@
 <html lang="en">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Universal LLM Gateway</title><link rel="stylesheet" href="/styles.css">
+<title>NexaRoute</title><link rel="stylesheet" href="/styles.css">
 </head>
 <body>
 <div class="shell">
-<aside><div class="brand"><div class="logo">U</div><div><strong>Universal Gateway</strong><small>v0.3 • control plane</small></div></div>
+<aside><div class="brand"><div class="logo">N</div><div><strong>NexaRoute</strong><small>v0.3 • control plane</small></div></div>
 <nav><button class="active" data-tab="overview">Overview</button><button data-tab="providers">Providers</button><button data-tab="models">Models</button><button data-tab="events">Events</button><button data-tab="settings">Settings</button></nav><div class="sidefoot" id="apiState">● connecting</div></aside>
 <main>
-<header><div><h1 id="title">Routing Overview</h1><p>Adaptive multi-provider health, cooldown and failover control plane.</p></div><button id="probeBtn" class="btn secondary">Probe all models</button></header>
+<header><div><h1 id="title">Routing Overview</h1><p>Pre-verified ready queue, continuous health supervision and fast failover.</p></div><button id="probeBtn" class="btn secondary">Probe all models</button></header>
 <section id="overview" class="tab active">
 <div class="stats"><div><span>Deployments</span><b id="sDeploy">0</b></div><div><span>Healthy</span><b id="sHealthy">0</b></div><div><span>Cooldown</span><b id="sCooldown">0</b></div><div><span>Avg latency</span><b id="sLatency">—</b></div></div>
-<div class="panel topology"><div class="panelhead"><div><h2>Live model ring</h2><p>Models orbit the router; health and probes update automatically.</p></div><span class="live">LIVE</span></div><div id="ring" class="ring"><svg id="links"></svg><div class="core"><i></i><strong>ROUTER</strong><small id="routerStrategyLabel">adaptive</small></div></div></div>
+<div class="panel topology"><div class="panelhead"><div><h2>Live model ring</h2><p>Models orbit the router; health and probes update automatically.</p></div><span class="live">LIVE</span></div><div id="ring" class="ring"><svg id="links"></svg><div class="core"><i></i><strong>ROUTER</strong><small id="routerStrategyLabel">ready_queue</small></div></div></div>
 </section>
 <section id="providers" class="tab"><div class="panel"><div class="panelhead"><div><h2>Providers</h2><p>Add, test, save and edit providers without losing connection details.</p></div><button id="addProviderBtn" class="btn primary">+ Add provider</button></div><div id="providerGrid" class="provider-grid"></div></div></section>
 <section id="models" class="tab"><div class="panel"><div class="panelhead"><div><h2>Model deployments</h2><p>Routing health, latency and cooldown state.</p></div></div><div class="tablewrap"><table><thead><tr><th>Deployment</th><th>Provider</th><th>Model</th><th>Status</th><th>Latency</th><th>Failures</th></tr></thead><tbody id="modelRows"></tbody></table></div></div></section>
@@ -23,7 +23,7 @@
   <div class="settings-grid">
     <div class="form-section">
       <div class="section-kicker">Routing</div>
-      <label class="field"><span>Strategy</span><select id="rtStrategy"><option value="adaptive_round_robin">Adaptive round-robin</option><option value="adaptive">Adaptive</option><option value="priority">Priority</option><option value="round_robin">Round-robin</option><option value="least_latency">Least latency</option></select></label>
+      <label class="field"><span>Strategy</span><select id="rtStrategy"><option value="ready_queue">Ready queue — sticky strongest healthy</option><option value="adaptive_round_robin">Adaptive round-robin</option><option value="adaptive">Adaptive</option><option value="priority">Priority</option><option value="round_robin">Round-robin</option><option value="least_latency">Least latency</option></select></label>
       <label class="check-row"><input id="rtFallback" type="checkbox"><span>Fallback when requested model name is unknown</span></label>
       <div class="form-grid two"><label class="field"><span>Max attempts</span><input id="rtAttempts" type="number" min="1" max="32"></label><label class="field"><span>Failure threshold</span><input id="rtFailureThreshold" type="number" min="1" max="100"></label></div>
       <div class="form-grid two"><label class="field"><span>Cooldown seconds</span><input id="rtCooldown" type="number" min="1"></label><label class="field"><span>Request timeout (ms)</span><input id="rtTimeout" type="number" min="100"></label></div>
@@ -33,7 +33,7 @@
       <div class="section-kicker">Health probes</div>
       <div class="check-grid"><label class="check-row"><input id="prEnabled" type="checkbox"><span>Enable background probes</span></label><label class="check-row"><input id="prOnStart" type="checkbox"><span>Probe on startup</span></label></div>
       <div class="form-grid two"><label class="field"><span>Interval (sec)</span><input id="prInterval" type="number" min="1"></label><label class="field"><span>Timeout (ms)</span><input id="prTimeout" type="number" min="100"></label></div>
-      <div class="form-grid two"><label class="field"><span>Probe max tokens</span><input id="prTokens" type="number" min="1" max="64"></label><label class="field"><span>Probe concurrency</span><input id="prConcurrency" type="number" min="1" max="512"></label></div>
+      <div class="form-grid two"><label class="field"><span>Probe max tokens</span><input id="prTokens" type="number" min="1" max="64"></label><label class="field"><span>Probe concurrency</span><input id="prConcurrency" type="number" min="1" max="512"></label></div><div class="form-grid two"><label class="field"><span>Recovery attempts</span><input id="prRecoveryAttempts" type="number" min="1" max="20"></label><label class="field"><span>Recovery retry delay (ms)</span><input id="prRecoveryRetry" type="number" min="0"></label></div>
       <button id="saveRuntimeSettings" class="btn primary">Save runtime settings</button>
     </div>
   </div>

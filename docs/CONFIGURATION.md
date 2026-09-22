@@ -66,6 +66,7 @@ A client requesting `model: "coding"` receives the best eligible deployment acco
 Available strategies:
 
 ```text
+ready_queue
 adaptive_round_robin
 adaptive
 priority
@@ -77,8 +78,8 @@ Important controls:
 
 - `fallback_on_unknown_model`
 - `max_attempts`
-- `failure_threshold`
-- `cooldown_seconds`
+- `failure_threshold` (legacy/other routing strategies)
+- `cooldown_seconds` (default `1800` for ready-queue recovery)
 - `request_timeout_ms`
 - `latency_weight`
 - `failure_weight`
@@ -86,6 +87,15 @@ Important controls:
 - `max_retry_after_seconds`
 
 ## Probe settings
+
+Ready-queue recovery adds:
+
+- `recovery_attempts` — supervisor probes after a quarantined model fails; default `5`
+- `recovery_retry_ms` — delay between failed recovery probes; default `500`
+- a model returns to the ready queue immediately on the first successful recovery probe
+- after all recovery attempts fail, `routing.cooldown_seconds` is applied before the next recovery cycle
+
+
 
 Default behavior:
 

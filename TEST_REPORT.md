@@ -15,7 +15,7 @@ Bugs/weaknesses found and fixed without changing the version number:
 - **Round-robin health promotion:** plain round-robin previously rotated the entire candidate list and could eventually put a degraded model before healthy models. Rotation is now restricted to the best available health band.
 - **Streaming latency scoring:** successful requests previously learned latency from the entire completion duration. Long answers could look like a slow provider. Routing health now learns successful response-header latency while operational events may still record total request duration.
 - **Probe scheduling:** concurrent goroutine scheduling could ignore intended probe priority. Probe work is now submitted through a bounded priority queue: half-open -> unknown -> degraded -> healthy, stalest first.
-- **Requested breaker policy:** the default is now **5 consecutive failures -> 3600-second cooldown**. Expired deployments re-enter half-open and a half-open failure re-cools immediately.
+- **Requested breaker policy:** the default is now **ready-queue supervisor: 5 recovery probes -> 1800-second cooldown**. Expired deployments re-enter half-open and a half-open failure re-cools immediately.
 
 New regression coverage was added for each of the routing/concurrency issues above.
 
@@ -58,6 +58,21 @@ Fixed in this pass:
 - the v0.3 release workflow now builds and verifies an installable Linux archive in addition to individual binaries and checksums.
 
 Regression tests were added for these paths, including race-detector-sensitive cases. The repository CI gate also rejects tracked backup/legacy artifacts and runs shell syntax checks, Go formatting/tests/vet/race/fuzz checks, JavaScript syntax validation, Linux cross-builds, local runtime smoke tests, installer verification, Docker build, and Docker runtime persistence checks.
+
+## Continuous ready-routing verification target — 2026-09-22
+
+This upgrade changes the default routing lifecycle from request-time candidate rotation to a pre-verified ready queue:
+
+1. startup probes every enabled deployment before serving Claude traffic;
+2. only `healthy` deployments enter the ready queue;
+3. priority/weight ordering keeps the strongest configured healthy deployment first;
+4. the first eligible routed failure quarantines that deployment immediately;
+5. the supervisor probes the quarantined deployment up to five times;
+6. the first successful recovery probe returns it to the ready queue immediately;
+7. five failed recovery probes enter a 30-minute cooldown;
+8. after cooldown the supervisor starts a new recovery cycle automatically.
+
+Regression coverage was added for this lifecycle, including the 20-provider/100-model scale path and exact five-attempt recovery accounting.
 
 ## Toolchain
 

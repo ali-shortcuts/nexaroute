@@ -98,3 +98,29 @@ func TestSnapshotClearsStaleErrorWhenCooldownBecomesHalfOpen(t *testing.T) {
 		t.Fatalf("expired cooldown should be clean half-open state: %+v", snap[0])
 	}
 }
+
+func TestQuarantineImmediatelyLeavesReadyState(t *testing.T) {
+	m := New(5, 30*time.Minute)
+	m.RecordSuccess("p/m", 10*time.Millisecond)
+	m.Quarantine("p/m", "real request failed", 12*time.Millisecond)
+	st := m.Get("p/m")
+	if st.Status != Degraded {
+		t.Fatalf("status=%s want degraded quarantine", st.Status)
+	}
+	if st.RecoveryFailures != 0 {
+		t.Fatalf("new quarantine should start recovery budget at zero: %+v", st)
+	}
+}
+
+func TestFiveRecoveryFailuresThenEnterCooldownKeepsExactCount(t *testing.T) {
+	m := New(5, 30*time.Minute)
+	m.Quarantine("p/m", "real request failed", time.Millisecond)
+	for i := 0; i < 5; i++ {
+		m.RecordRecoveryFailure("p/m", "probe failed", time.Millisecond)
+	}
+	m.EnterCooldown("p/m", "recovery exhausted", 30*time.Minute)
+	st := m.Get("p/m")
+	if st.Status != Cooldown || st.RecoveryFailures != 5 {
+		t.Fatalf("unexpected cooldown state: %+v", st)
+	}
+}

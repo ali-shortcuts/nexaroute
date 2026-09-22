@@ -124,7 +124,11 @@ func (r *Router) Candidates(req Requirement) []Scored {
 				continue
 			}
 			hs := r.health.Get(d.ID)
-			if hs.Status == health.Cooldown {
+			if cfg.Routing.Strategy == "ready_queue" {
+				if hs.Status != health.Healthy {
+					continue
+				}
+			} else if hs.Status == health.Cooldown {
 				continue
 			}
 			score := 100.0
@@ -167,6 +171,20 @@ func (r *Router) Candidates(req Requirement) []Scored {
 
 	strategy := cfg.Routing.Strategy
 	switch strategy {
+	case "ready_queue":
+		// Deterministic, sticky ready queue: strongest configured healthy model
+		// stays first until it leaves Healthy. Priority/weight are static
+		// strength controls; ID is a stable tie-breaker so successful latency
+		// observations do not reshuffle the queue between Claude requests.
+		sort.SliceStable(out, func(i, j int) bool {
+			if out[i].Deployment.Priority != out[j].Deployment.Priority {
+				return out[i].Deployment.Priority < out[j].Deployment.Priority
+			}
+			if out[i].Deployment.Weight != out[j].Deployment.Weight {
+				return out[i].Deployment.Weight > out[j].Deployment.Weight
+			}
+			return out[i].Deployment.ID < out[j].Deployment.ID
+		})
 	case "priority":
 		sort.SliceStable(out, func(i, j int) bool {
 			ri, rj := healthRank(out[i].Health.Status), healthRank(out[j].Health.Status)
