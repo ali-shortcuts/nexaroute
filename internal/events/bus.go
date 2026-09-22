@@ -17,9 +17,9 @@ type Event struct {
 }
 
 type Bus struct {
-	mu     sync.RWMutex
-	max    int
-	items  []Event
+	mu          sync.RWMutex
+	max         int
+	items       []Event
 	counts      map[string]uint64
 	errorCounts map[string]uint64
 }
