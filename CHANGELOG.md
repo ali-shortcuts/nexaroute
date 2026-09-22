@@ -28,7 +28,7 @@ Version number intentionally remains **0.3** until the user validates this packa
 - Model discovery broadened to common object/array shapes plus manual model IDs.
 - Provider/model connection tests.
 - Hot provider registry/router reload after save.
-- Atomic config persistence, one `.bak`, and rollback UI/API.
+- Atomic config persistence using same-directory temporary files, fsync, and rename without backup copies.
 
 ### Routing / resilience
 
