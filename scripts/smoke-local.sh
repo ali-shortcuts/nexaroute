@@ -118,6 +118,16 @@ PY
 
 expect_status 200 "$(status DELETE "$BASE/admin/api/providers/smoke-openai")" "provider delete"
 
+if [[ -e "$TMP/config.json.bak" ]]; then
+  echo "FAIL backup file was created: $TMP/config.json.bak" >&2
+  exit 1
+fi
+if compgen -G "$TMP/.config.json.tmp-*" >/dev/null; then
+  echo "FAIL temporary config file leaked" >&2
+  exit 1
+fi
+echo "PASS backup-free atomic config persistence"
+
 if ! kill -0 "$PID" 2>/dev/null; then
   echo "NexaRoute died during smoke test" >&2
   cat "$TMP/gateway.log" >&2
