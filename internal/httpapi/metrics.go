@@ -65,6 +65,18 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "nexaroute_runtime_events_total{kind=%q} %d\n", sanitizeMetricLabel(k), counts[k])
 	}
 
+	fmt.Fprintln(w, "# HELP nexaroute_errors_total Normalized runtime failures by fault type.")
+	fmt.Fprintln(w, "# TYPE nexaroute_errors_total counter")
+	errorCounts := s.bus.ErrorCounts()
+	errorTypes := make([]string, 0, len(errorCounts))
+	for k := range errorCounts {
+		errorTypes = append(errorTypes, k)
+	}
+	sort.Strings(errorTypes)
+	for _, k := range errorTypes {
+		fmt.Fprintf(w, "nexaroute_errors_total{error_type=%q} %d\n", sanitizeMetricLabel(k), errorCounts[k])
+	}
+
 	fmt.Fprintln(w, "# HELP nexaroute_provider_active_requests Requests currently holding a provider concurrency slot.")
 	fmt.Fprintln(w, "# TYPE nexaroute_provider_active_requests gauge")
 	fmt.Fprintln(w, "# HELP nexaroute_provider_waiting_requests Requests waiting for a provider concurrency slot.")
