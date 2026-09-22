@@ -40,6 +40,8 @@ with open(dst, 'w', encoding='utf-8') as f:
     json.dump(cfg, f, indent=2)
 PY
 chmod 600 "$TMP/config.json"
+printf %s "stale backup must be removed" > "$TMP/config.json.bak"
+chmod 600 "$TMP/config.json.bak"
 
 "$BIN" -config "$TMP/config.json" >"$TMP/gateway.log" 2>&1 &
 PID=$!
