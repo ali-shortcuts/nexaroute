@@ -115,6 +115,7 @@ func (m *Manager) Snapshot() []State {
 		if s.Status == Cooldown && now.After(s.CooldownUntil) {
 			s.Status = HalfOpen
 			s.ConsecutiveFailures = 0
+			s.LastError = ""
 			s.CooldownUntil = time.Time{}
 			m.states[id] = s
 		}
@@ -128,11 +129,11 @@ func (m *Manager) Snapshot() []State {
 // authentication, quota, and rate-limit failures where retrying the same
 // deployment immediately would only waste latency and quota.
 func (m *Manager) ForceCooldown(id, reason string, d time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if d <= 0 {
 		d = m.cooldown
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
 	s := m.states[id]
 	s.Deployment = id
 	s.Failures++
