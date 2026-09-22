@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+echo '== go version =='
+go version
+
+echo '== formatting =='
+if out=$(gofmt -l .) && [[ -n "$out" ]]; then
+  echo "$out"
+  echo 'gofmt check failed' >&2
+  exit 1
+fi
+
+echo '== unit/integration tests =='
+go test -shuffle=on -count=10 ./...
+
+echo '== go vet =='
+go vet ./...
+
+echo '== race detector =='
+go test -race -shuffle=on -count=3 ./...
+
+if command -v node >/dev/null 2>&1; then
+  echo '== web ui javascript syntax =='
+  node --check internal/httpapi/web/app.js
+else
+  echo 'WARN: node not installed; skipping JavaScript syntax check' >&2
+fi
+
+echo '== short fuzz checks =='
+GOMAXPROCS=2 go test ./internal/httpapi -run='^$' -fuzz=FuzzPatchJSONModel -fuzztime=2s -parallel=2
+GOMAXPROCS=2 go test ./internal/core -run='^$' -fuzz=FuzzParseAnthContent -fuzztime=2s -parallel=2
+
+echo '== linux amd64 build =='
+mkdir -p bin
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags='-s -w' -o bin/ulg-linux-amd64 ./cmd/gateway
+
+echo '== linux arm64 build =='
+CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags='-s -w' -o bin/ulg-linux-arm64 ./cmd/gateway
+
+echo 'VERIFY PASS'

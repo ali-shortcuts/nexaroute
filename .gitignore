@@ -1,0 +1,8 @@
+/bin/
+.env
+config.local.json
+*.log
+.DS_Store
+/dist/
+coverage.out
+*.prof

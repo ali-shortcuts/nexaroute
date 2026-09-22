@@ -1,0 +1,92 @@
+{
+  "listen": "127.0.0.1:8080",
+  "admin": {
+    "bind_local_only": true,
+    "api_key": ""
+  },
+  "routing": {
+    "strategy": "adaptive_round_robin",
+    "fallback_on_unknown_model": true,
+    "max_attempts": 4,
+    "failure_threshold": 5,
+    "cooldown_seconds": 3600,
+    "request_timeout_ms": 120000,
+    "latency_weight": 0.015,
+    "failure_weight": 25,
+    "retry_backoff_ms": 150,
+    "max_retry_after_seconds": 60
+  },
+  "probe": {
+    "enabled": true,
+    "on_start": true,
+    "interval_seconds": 120,
+    "timeout_ms": 8000,
+    "max_tokens": 1,
+    "concurrency": 16
+  },
+  "providers": [
+    {
+      "id": "chat2api",
+      "name": "Chat2API",
+      "type": "openai_compatible",
+      "base_url": "http://127.0.0.1:5000/v1",
+      "api_key_env": "CHAT2API_KEY",
+      "credentials": [],
+      "auth_mode": "bearer",
+      "headers": {},
+      "forward_headers": [],
+      "proxy_url": "",
+      "chat_path": "/v1/chat/completions",
+      "messages_path": "/v1/messages",
+      "models_path": "/v1/models",
+      "count_tokens_path": "/v1/messages/count_tokens",
+      "max_concurrency": 32,
+      "stream_idle_timeout_seconds": 180,
+      "enabled": false,
+      "models": [
+        {
+          "id": "deepseek",
+          "model": "deepseek-chat",
+          "aliases": ["coding"],
+          "enabled": true,
+          "priority": 10,
+          "weight": 1.0,
+          "capabilities": {
+            "streaming": true,
+            "tools": true,
+            "vision": false,
+            "reasoning": false
+          }
+        }
+      ]
+    },
+    {
+      "id": "anthropic-direct",
+      "name": "Anthropic Direct",
+      "type": "anthropic_compatible",
+      "base_url": "https://api.anthropic.com",
+      "api_key_env": "ANTHROPIC_API_KEY",
+      "auth_mode": "x-api-key",
+      "forward_headers": ["anthropic-beta", "anthropic-version", "user-agent", "x-request-id"],
+      "max_concurrency": 32,
+      "stream_idle_timeout_seconds": 180,
+      "enabled": false,
+      "models": [
+        {
+          "id": "sonnet",
+          "model": "claude-sonnet-4-5",
+          "aliases": ["coding"],
+          "enabled": true,
+          "priority": 5,
+          "weight": 1.0,
+          "capabilities": {
+            "streaming": true,
+            "tools": true,
+            "vision": true,
+            "reasoning": true
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,400 @@
+package providers
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/ali-shortcuts/universal-llm-gateway/internal/config"
+)
+
+type credentialState struct {
+	Key           string
+	Failures      int
+	CooldownUntil time.Time
+}
+
+type httpAdapter struct {
+	p       config.ProviderConfig
+	c       *http.Client
+	streamC *http.Client
+	sem     chan struct{}
+	credMu  sync.Mutex
+	creds   []credentialState
+	rr      int
+}
+
+func newHTTPAdapter(p config.ProviderConfig, timeout time.Duration) (*httpAdapter, error) {
+	tr := &http.Transport{
+		MaxIdleConns: 256, MaxIdleConnsPerHost: 64, MaxConnsPerHost: 128,
+		IdleConnTimeout: 90 * time.Second, TLSHandshakeTimeout: 15 * time.Second,
+		ResponseHeaderTimeout: timeout, ExpectContinueTimeout: time.Second,
+		ForceAttemptHTTP2: true,
+	}
+	if p.ProxyURL != "" {
+		u, err := url.Parse(p.ProxyURL)
+		if err != nil {
+			return nil, fmt.Errorf("provider %s proxy: %w", p.ID, err)
+		}
+		tr.Proxy = http.ProxyURL(u)
+	}
+	mc := p.MaxConcurrency
+	if mc <= 0 {
+		mc = 32
+	}
+	a := &httpAdapter{p: p, c: &http.Client{Transport: tr, Timeout: timeout}, streamC: &http.Client{Transport: tr}, sem: make(chan struct{}, mc)}
+	for _, k := range p.ResolvedCredentials() {
+		a.creds = append(a.creds, credentialState{Key: k})
+	}
+	return a, nil
+}
+func (a *httpAdapter) ID() string   { return a.p.ID }
+func (a *httpAdapter) Kind() string { return a.p.Type }
+
+func endpoint(base, suffix string) string {
+	b := strings.TrimRight(base, "/")
+	if suffix == "" {
+		return b
+	}
+	if !strings.HasPrefix(suffix, "/") {
+		suffix = "/" + suffix
+	}
+	if strings.HasSuffix(b, suffix) {
+		return b
+	}
+	for _, known := range []string{"/v1/messages/count_tokens", "/v1/chat/completions", "/v1/messages", "/v1/responses", "/v1/models", "/models"} {
+		if strings.HasSuffix(b, known) {
+			b = strings.TrimSuffix(b, known)
+			break
+		}
+	}
+	if strings.HasSuffix(b, "/v1") && strings.HasPrefix(suffix, "/v1/") {
+		return b + strings.TrimPrefix(suffix, "/v1")
+	}
+	return b + suffix
+}
+
+func (a *httpAdapter) defaultPath() string {
+	if a.p.Type == "anthropic_compatible" {
+		return a.p.MessagesPath
+	}
+	return a.p.ChatPath
+}
+
+func (a *httpAdapter) Do(ctx context.Context, payload []byte, stream bool, forward http.Header) (*http.Response, error) {
+	return a.DoPath(ctx, http.MethodPost, a.defaultPath(), payload, stream, forward)
+}
+
+func (a *httpAdapter) CountTokens(ctx context.Context, payload []byte, forward http.Header) (*http.Response, error) {
+	return a.DoPath(ctx, http.MethodPost, a.p.CountTokensPath, payload, false, forward)
+}
+
+func (a *httpAdapter) DoPath(ctx context.Context, method, path string, payload []byte, stream bool, forward http.Header) (*http.Response, error) {
+	u := endpoint(a.p.BaseURL, path)
+	parsed, err := url.Parse(u)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return nil, fmt.Errorf("invalid endpoint %q", u)
+	}
+
+	select {
+	case a.sem <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	var releaseOnce sync.Once
+	release := func() {
+		releaseOnce.Do(func() { <-a.sem })
+	}
+
+	keys := a.availableCredentialIndexes()
+	if len(keys) == 0 {
+		keys = []int{-1}
+	}
+	var lastResp *http.Response
+	var lastErr error
+	for pos, idx := range keys {
+		reqCtx := ctx
+		var cancel context.CancelFunc
+		if stream {
+			reqCtx, cancel = context.WithCancel(ctx)
+		}
+		req, err := http.NewRequestWithContext(reqCtx, method, u, bytes.NewReader(payload))
+		if err != nil {
+			if cancel != nil {
+				cancel()
+			}
+			release()
+			return nil, err
+		}
+		if len(payload) > 0 {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		if stream {
+			req.Header.Set("Accept", "text/event-stream")
+		}
+		a.applyHeaders(req, forward)
+		if idx >= 0 {
+			a.applyAuthKey(req, a.credentialKey(idx))
+		} else {
+			a.applyAuthKey(req, "")
+		}
+		if a.p.Type == "anthropic_compatible" && req.Header.Get("anthropic-version") == "" {
+			req.Header.Set("anthropic-version", "2023-06-01")
+		}
+
+		client := a.c
+		if stream {
+			client = a.streamC
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			if cancel != nil {
+				cancel()
+			}
+			lastErr = err
+			continue
+		}
+		if stream && cancel != nil {
+			idle := time.Duration(a.p.StreamIdleTimeoutSeconds) * time.Second
+			if idle > 0 {
+				resp.Body = newIdleBody(resp.Body, idle, cancel)
+			} else {
+				resp.Body = &cancelOnCloseBody{ReadCloser: resp.Body, cancel: cancel}
+			}
+		}
+		lastResp = resp
+		if idx >= 0 && credentialRetryStatus(resp.StatusCode) && pos < len(keys)-1 {
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+			resp.Body.Close()
+			a.cooldownCredential(idx, resp.StatusCode, resp.Header.Get("Retry-After"))
+			lastErr = fmt.Errorf("credential rejected http %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+			continue
+		}
+		if idx >= 0 {
+			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+				a.markCredentialSuccess(idx)
+			} else if credentialRetryStatus(resp.StatusCode) {
+				a.cooldownCredential(idx, resp.StatusCode, resp.Header.Get("Retry-After"))
+			}
+		}
+		// Provider concurrency is an in-flight response limit, not merely a
+		// "wait for headers" limit. Hold the semaphore until the response body
+		// is consumed or closed (especially important for long-lived SSE).
+		resp.Body = &releaseOnDoneBody{ReadCloser: resp.Body, release: release}
+		return resp, nil
+	}
+	if lastResp != nil {
+		lastResp.Body = &releaseOnDoneBody{ReadCloser: lastResp.Body, release: release}
+		return lastResp, nil
+	}
+	release()
+	if lastErr == nil {
+		lastErr = errors.New("no usable credentials")
+	}
+	return nil, lastErr
+}
+
+func (a *httpAdapter) applyHeaders(req *http.Request, forward http.Header) {
+	for k, v := range a.p.Headers {
+		req.Header.Set(k, v)
+	}
+	allowed := map[string]bool{}
+	for _, h := range a.p.ForwardHeaders {
+		allowed[strings.ToLower(strings.TrimSpace(h))] = true
+	}
+	for k, vals := range forward {
+		lk := strings.ToLower(k)
+		if !allowed[lk] || lk == "authorization" || lk == "x-api-key" || lk == "x-admin-key" {
+			continue
+		}
+		req.Header.Del(k)
+		for _, v := range vals {
+			req.Header.Add(k, v)
+		}
+	}
+}
+func (a *httpAdapter) applyAuthKey(req *http.Request, key string) {
+	if a.p.AuthMode == "none" {
+		return
+	}
+	if key == "" {
+		key = a.p.ResolvedAPIKey()
+	}
+	if key == "" {
+		return
+	}
+	mode := a.p.AuthMode
+	if mode == "" {
+		if a.p.Type == "anthropic_compatible" {
+			mode = "x-api-key"
+		} else {
+			mode = "bearer"
+		}
+	}
+	if mode == "x-api-key" {
+		req.Header.Set("x-api-key", key)
+	} else {
+		req.Header.Set("Authorization", "Bearer "+key)
+	}
+}
+
+func (a *httpAdapter) availableCredentialIndexes() []int {
+	a.credMu.Lock()
+	defer a.credMu.Unlock()
+	if len(a.creds) == 0 {
+		return nil
+	}
+	now := time.Now()
+	out := make([]int, 0, len(a.creds))
+	start := a.rr % len(a.creds)
+	a.rr = (a.rr + 1) % len(a.creds)
+	for n := 0; n < len(a.creds); n++ {
+		i := (start + n) % len(a.creds)
+		if a.creds[i].CooldownUntil.IsZero() || now.After(a.creds[i].CooldownUntil) {
+			out = append(out, i)
+		}
+	}
+	return out
+}
+func (a *httpAdapter) credentialKey(i int) string {
+	a.credMu.Lock()
+	defer a.credMu.Unlock()
+	if i < 0 || i >= len(a.creds) {
+		return ""
+	}
+	return a.creds[i].Key
+}
+func (a *httpAdapter) markCredentialSuccess(i int) {
+	a.credMu.Lock()
+	defer a.credMu.Unlock()
+	if i >= 0 && i < len(a.creds) {
+		a.creds[i].Failures = 0
+		a.creds[i].CooldownUntil = time.Time{}
+	}
+}
+func (a *httpAdapter) cooldownCredential(i, status int, retryAfter string) {
+	a.credMu.Lock()
+	defer a.credMu.Unlock()
+	if i < 0 || i >= len(a.creds) {
+		return
+	}
+	d := 10 * time.Minute
+	switch status {
+	case 402:
+		d = time.Hour
+	case 429:
+		d = parseRetryAfter(retryAfter, 60*time.Second)
+	case 401, 403:
+		d = 15 * time.Minute
+	}
+	a.creds[i].Failures++
+	a.creds[i].CooldownUntil = time.Now().Add(d)
+}
+func credentialRetryStatus(code int) bool {
+	return code == 401 || code == 402 || code == 403 || code == 429
+}
+func parseRetryAfter(v string, fallback time.Duration) time.Duration {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return fallback
+	}
+	if s, err := strconv.Atoi(v); err == nil && s > 0 {
+		return time.Duration(s) * time.Second
+	}
+	if t, err := http.ParseTime(v); err == nil {
+		if d := time.Until(t); d > 0 {
+			return d
+		}
+	}
+	return fallback
+}
+
+func (a *httpAdapter) Probe(ctx context.Context, model string, maxTokens int) (time.Duration, int, error) {
+	if maxTokens < 1 {
+		maxTokens = 1
+	}
+	body := map[string]any{"model": model, "max_tokens": maxTokens, "messages": []map[string]any{{"role": "user", "content": "OK"}}, "stream": false}
+	b, _ := json.Marshal(body)
+	start := time.Now()
+	resp, err := a.Do(ctx, b, false, nil)
+	lat := time.Since(start)
+	if err != nil {
+		return lat, 0, err
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return lat, resp.StatusCode, fmt.Errorf("probe http %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
+	}
+	return lat, resp.StatusCode, nil
+}
+
+type releaseOnDoneBody struct {
+	io.ReadCloser
+	once    sync.Once
+	release func()
+}
+
+func (b *releaseOnDoneBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	if err == io.EOF {
+		b.once.Do(b.release)
+	}
+	return n, err
+}
+
+func (b *releaseOnDoneBody) Close() error {
+	err := b.ReadCloser.Close()
+	b.once.Do(b.release)
+	return err
+}
+
+type cancelOnCloseBody struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (b *cancelOnCloseBody) Close() error { err := b.ReadCloser.Close(); b.cancel(); return err }
+
+type idleBody struct {
+	rc     io.ReadCloser
+	timer  *time.Timer
+	idle   time.Duration
+	cancel context.CancelFunc
+	mu     sync.Mutex
+}
+
+func newIdleBody(rc io.ReadCloser, idle time.Duration, cancel context.CancelFunc) io.ReadCloser {
+	b := &idleBody{rc: rc, idle: idle, cancel: cancel}
+	b.timer = time.AfterFunc(idle, cancel)
+	return b
+}
+func (b *idleBody) Read(p []byte) (int, error) {
+	n, err := b.rc.Read(p)
+	if n > 0 {
+		b.mu.Lock()
+		if b.timer != nil {
+			b.timer.Reset(b.idle)
+		}
+		b.mu.Unlock()
+	}
+	return n, err
+}
+func (b *idleBody) Close() error {
+	b.mu.Lock()
+	if b.timer != nil {
+		b.timer.Stop()
+	}
+	b.mu.Unlock()
+	b.cancel()
+	return b.rc.Close()
+}

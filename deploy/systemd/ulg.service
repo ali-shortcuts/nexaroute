@@ -1,0 +1,17 @@
+[Unit]
+Description=Universal LLM Gateway v0.3
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/ulg -config %h/.config/universal-llm-gateway/config.json
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=%h/.config/universal-llm-gateway
+
+[Install]
+WantedBy=default.target
