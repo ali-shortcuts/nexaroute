@@ -146,7 +146,7 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 		s.requestTotal.Add(1)
 		rid := strings.TrimSpace(r.Header.Get("x-request-id"))
 		if rid == "" {
-			rid = fmt.Sprintf("ulg-%x-%x", time.Now().UnixNano(), s.requestSeq.Add(1))
+			rid = fmt.Sprintf("nexaroute-%x-%x", time.Now().UnixNano(), s.requestSeq.Add(1))
 			r.Header.Set("x-request-id", rid)
 		}
 		w.Header().Set("x-request-id", rid)

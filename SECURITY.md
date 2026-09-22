@@ -1,6 +1,6 @@
 # Security notes — v0.3
 
-ULG defaults to localhost and should stay there for first testing.
+NexaRoute defaults to localhost and should stay there for first testing.
 
 ## Implemented protections
 
@@ -26,14 +26,14 @@ The provider editor can reveal a resolved credential to an authorized local/admi
 
 Before exposing the UI/admin API beyond a trusted local machine:
 
-- set a strong `ULG_ADMIN_KEY` / `admin.api_key`;
+- set a strong `NEXAROUTE_ADMIN_KEY` / `admin.api_key`;
 - use TLS through a trusted reverse proxy;
 - restrict source networks/firewall rules;
 - do not publish the admin endpoint directly to the internet;
-- consider additional CSRF/RBAC/SSO controls outside ULG.
+- consider additional CSRF/RBAC/SSO controls outside NexaRoute.
 
 ## Base URLs and proxies
 
-The administrator can configure arbitrary HTTP(S) provider/proxy URLs. This is powerful and also means an authorized admin could intentionally point ULG at internal services. A strict SSRF allow/deny policy is not yet built in, so do not give admin access to untrusted users.
+The administrator can configure arbitrary HTTP(S) provider/proxy URLs. This is powerful and also means an authorized admin could intentionally point NexaRoute at internal services. A strict SSRF allow/deny policy is not yet built in, so do not give admin access to untrusted users.
 
 Do not insert unrelated browser-session tokens into provider configuration unless the target service explicitly supports that use and you accept the account/security implications.

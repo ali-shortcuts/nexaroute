@@ -6,13 +6,13 @@ The project remains **v0.3** until the user tests this exact package on the targ
 
 Must be proven on the user's machine:
 
-- ULG starts from the prebuilt Linux binary
+- NexaRoute starts from the prebuilt Linux binary
 - Web UI opens
 - Chat2API can be added and re-opened for editing without losing Base URL or credentials
 - Detect Models works where Chat2API exposes a model endpoint
 - manual model IDs work where discovery is unavailable
 - model tests and Probe All show health correctly
-- Claude Code can call ULG through `/v1/messages`
+- Claude Code can call NexaRoute through `/v1/messages`
 - a Chat2API/OpenAI-compatible model can complete a normal Claude Code text request
 - common Claude Code tool-use/tool-result cycle works
 - streaming works without malformed SSE

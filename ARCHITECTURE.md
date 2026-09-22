@@ -1,8 +1,8 @@
-# Universal LLM Gateway architecture — v0.3
+# NexaRoute architecture — v0.3
 
 ## Objective
 
-ULG v0.3 is a single-process Go gateway with an embedded Web UI. It accepts Anthropic-compatible and OpenAI-compatible client traffic, normalizes only when necessary, routes each request across eligible provider/model deployments, monitors health continuously, and hot-reloads provider configuration without restarting the process.
+NexaRoute v0.3 is a single-process Go gateway with an embedded Web UI. It accepts Anthropic-compatible and OpenAI-compatible client traffic, normalizes only when necessary, routes each request across eligible provider/model deployments, monitors health continuously, and hot-reloads provider configuration without restarting the process.
 
 The central design rule is separation of concerns:
 
@@ -126,7 +126,7 @@ Pre-stream failover can occur on:
 - 429 rate limits
 - retryable server/gateway errors
 
-`Retry-After` is honored up to the configured maximum. Once client-visible stream bytes have been committed, the request remains bound to that upstream; ULG does not fake mid-stream continuation on another model.
+`Retry-After` is honored up to the configured maximum. Once client-visible stream bytes have been committed, the request remains bound to that upstream; NexaRoute does not fake mid-stream continuation on another model.
 
 ## Credential pool
 
@@ -188,7 +188,7 @@ If the user does not change secret fields, the update sends `preserve_secret=tru
 
 ### Native same-protocol path
 
-When client and provider use the same protocol, ULG favors raw JSON/SSE passthrough and patches only the routed model ID where required. Unknown fields remain intact whenever possible.
+When client and provider use the same protocol, NexaRoute favors raw JSON/SSE passthrough and patches only the routed model ID where required. Unknown fields remain intact whenever possible.
 
 ### Anthropic -> OpenAI-compatible
 
@@ -200,7 +200,7 @@ The reverse translator covers common text/tools and streaming paths, but provide
 
 ### Anthropic token counting
 
-For an eligible Anthropic-compatible upstream, `/v1/messages/count_tokens` first calls that provider's native token-count endpoint. If no native path is usable, ULG returns a local conservative estimate with `estimated=true` rather than pretending it is exact.
+For an eligible Anthropic-compatible upstream, `/v1/messages/count_tokens` first calls that provider's native token-count endpoint. If no native path is usable, NexaRoute returns a local conservative estimate with `estimated=true` rather than pretending it is exact.
 
 ## SSE and cancellation
 

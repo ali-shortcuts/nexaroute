@@ -10,9 +10,9 @@ Useful patterns:
 - Provider-level advanced options and model connectivity checks.
 
 Pitfalls deliberately avoided:
-- A 2026 issue reported a UI/import path that persisted a placeholder Authorization value and overrode the real API key for OpenAI-compatible providers. ULG applies custom headers first and configured auth second, so an explicit API key wins unless `auth_mode=none`.
-- A 2026 issue reported deselected provider protocols being silently re-added on edit. ULG v0.3 does not auto-merge hidden protocol capabilities during provider edit; the selected provider type is stored as the user's explicit value.
-- A prior issue reported Claude Code launch not inheriting the gateway Base URL. ULG keeps client-launch integration outside the provider editor and documents the Base URL explicitly.
+- A 2026 issue reported a UI/import path that persisted a placeholder Authorization value and overrode the real API key for OpenAI-compatible providers. NexaRoute applies custom headers first and configured auth second, so an explicit API key wins unless `auth_mode=none`.
+- A 2026 issue reported deselected provider protocols being silently re-added on edit. NexaRoute v0.3 does not auto-merge hidden protocol capabilities during provider edit; the selected provider type is stored as the user's explicit value.
+- A prior issue reported Claude Code launch not inheriting the gateway Base URL. NexaRoute keeps client-launch integration outside the provider editor and documents the Base URL explicitly.
 
 References:
 - https://github.com/musistudio/claude-code-router/blob/main/docs/src/content/docs/en/configuration/providers.md
@@ -25,12 +25,12 @@ References:
 Useful patterns:
 - Provider-oriented dashboard and visible routing state.
 - Add-provider workflow with API type, Base URL, key, and model setup.
-- Model/fallback visualization inspired the ULG live model ring.
+- Model/fallback visualization inspired the NexaRoute live model ring.
 - Broad provider catalog demonstrates why a generic compatible-provider layer is preferable to hard-coding every brand.
 
 Pitfalls deliberately avoided:
 - Open issues show friction around custom providers, provider-account persistence, incomplete Base URL/API-type visibility, and orphaned model aliases after provider deletion.
-- ULG stores provider/model ownership directly in one config graph. Deleting a provider removes those model deployments from the active router immediately and does not maintain a separate alias table that can become orphaned.
+- NexaRoute stores provider/model ownership directly in one config graph. Deleting a provider removes those model deployments from the active router immediately and does not maintain a separate alias table that can become orphaned.
 
 References:
 - https://github.com/decolua/9router
@@ -46,14 +46,14 @@ Useful patterns:
 - Key rotation, fallback-chain, circuit-breaker, model discovery, dashboard and hot reload as mature target capabilities.
 - Clear separation of provider execution, protocol translation, routing and observability.
 
-ULG v0.3 does not copy its implementation. The project is used as a benchmark for features we should eventually match or exceed. Several of those features remain on our roadmap, especially key pools, budgets, exact token counting, broader provider types, metrics and persistent request history.
+NexaRoute v0.3 does not copy its implementation. The project is used as a benchmark for features we should eventually match or exceed. Several of those features remain on our roadmap, especially key pools, budgets, exact token counting, broader provider types, metrics and persistent request history.
 
 Reference:
 - https://github.com/Mukller/claude-code-gateway
 
 ## Claude Code gateway behavior
 
-Claude Code itself has had gateway-specific edge cases around model discovery and provider-mode resolution. ULG therefore treats Claude Code compatibility as a conformance target, not a one-time HTTP-shape conversion.
+Claude Code itself has had gateway-specific edge cases around model discovery and provider-mode resolution. NexaRoute therefore treats Claude Code compatibility as a conformance target, not a one-time HTTP-shape conversion.
 
 References:
 - https://github.com/anthropics/claude-code/issues/56675
@@ -61,7 +61,7 @@ References:
 - https://github.com/anthropics/claude-code/issues/84583
 - https://github.com/anthropics/claude-code/issues/77247
 
-## Design conclusion for ULG
+## Design conclusion for NexaRoute
 
 The provider editor should behave predictably:
 1. Saved Base URL remains visible on edit.

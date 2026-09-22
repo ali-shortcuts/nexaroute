@@ -3,11 +3,13 @@
 ## Runtime environment overrides
 
 ```text
-ULG_CONFIG                  config path used by the CLI default resolver
-ULG_LISTEN                  override listen address
-ULG_ADMIN_KEY               override admin API key
-ULG_ADMIN_BIND_LOCAL_ONLY   true/false override
+NEXAROUTE_CONFIG                  config path used by the CLI default resolver
+NEXAROUTE_LISTEN                  override listen address
+NEXAROUTE_ADMIN_KEY               override admin API key
+NEXAROUTE_ADMIN_BIND_LOCAL_ONLY   true/false override
 ```
+
+Legacy `ULG_*` environment names are still accepted for migration compatibility, but new deployments should use `NEXAROUTE_*`.
 
 ## Provider types
 

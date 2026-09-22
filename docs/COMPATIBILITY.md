@@ -18,7 +18,7 @@ Additional Anthropic behavior:
 The strongest intended v0.3 test path is:
 
 ```text
-Claude Code -> Anthropic /v1/messages -> ULG -> OpenAI-compatible Chat2API -> model
+Claude Code -> Anthropic /v1/messages -> NexaRoute -> OpenAI-compatible Chat2API -> model
 ```
 
 plus native Anthropic-compatible passthrough.

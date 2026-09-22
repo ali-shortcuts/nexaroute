@@ -1,6 +1,6 @@
 # Contributing
 
-ULG v0.3 is intentionally conservative while real Claude Code/provider compatibility is being validated.
+NexaRoute v0.3 is intentionally conservative while real Claude Code/provider compatibility is being validated.
 
 ## Before opening a PR
 
