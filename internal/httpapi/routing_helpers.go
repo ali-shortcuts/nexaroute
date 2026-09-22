@@ -15,7 +15,6 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/config"
 )
 
-
 func routeContext(parent context.Context, streaming bool, timeout time.Duration) (context.Context, context.CancelFunc) {
 	if streaming || timeout <= 0 {
 		return context.WithCancel(parent)
@@ -50,7 +49,7 @@ func jitteredRetryBackoff(base time.Duration, attempt int, requestID string) tim
 	_, _ = h.Write([]byte{byte(attempt)})
 	// Full jitter in [0,max], deterministic for a request+attempt so tests and
 	// incident replay remain reproducible while concurrent clients desynchronize.
-	return time.Duration(h.Sum64()%uint64(max+1))
+	return time.Duration(h.Sum64() % uint64(max+1))
 }
 
 func patchJSONModel(raw []byte, model string) ([]byte, error) {

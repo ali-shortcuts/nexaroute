@@ -224,4 +224,3 @@ func TestBackgroundSweepSkipsHealthyReadyModels(t *testing.T) {
 		t.Fatalf("healthy ready model was touched by supervisor: before=%v after=%v", before, after)
 	}
 }
-

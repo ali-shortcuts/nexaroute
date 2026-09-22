@@ -570,7 +570,6 @@ func TestReadyQueueEjectsFailedPrimaryAndUsesNextHealthyModel(t *testing.T) {
 	}
 }
 
-
 func TestClientCancellationDoesNotQuarantineHealthyReadyModel(t *testing.T) {
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		<-r.Context().Done()
@@ -682,8 +681,8 @@ func TestHotReloadInvalidatesChangedProviderHealthProof(t *testing.T) {
 func TestTranslatedStreamsRequireTerminalSignal(t *testing.T) {
 	openAIResp := &http.Response{
 		StatusCode: http.StatusOK,
-		Header: http.Header{"Content-Type": []string{"text/event-stream"}},
-		Body: io.NopCloser(strings.NewReader("data: {\"choices\":[{\"delta\":{\"content\":\"partial\"},\"finish_reason\":null}]}\n\n")),
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       io.NopCloser(strings.NewReader("data: {\"choices\":[{\"delta\":{\"content\":\"partial\"},\"finish_reason\":null}]}\n\n")),
 	}
 	if err := streamOpenAIToAnthropic(httptest.NewRecorder(), openAIResp, "m"); !errors.Is(err, io.ErrUnexpectedEOF) {
 		t.Fatalf("openai translated stream error=%v want unexpected EOF", err)
@@ -691,11 +690,10 @@ func TestTranslatedStreamsRequireTerminalSignal(t *testing.T) {
 
 	anthResp := &http.Response{
 		StatusCode: http.StatusOK,
-		Header: http.Header{"Content-Type": []string{"text/event-stream"}},
-		Body: io.NopCloser(strings.NewReader("data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"partial\"}}\n\n")),
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       io.NopCloser(strings.NewReader("data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"partial\"}}\n\n")),
 	}
 	if err := streamAnthropicToOpenAI(httptest.NewRecorder(), anthResp, "m"); !errors.Is(err, io.ErrUnexpectedEOF) {
 		t.Fatalf("anthropic translated stream error=%v want unexpected EOF", err)
 	}
 }
-
