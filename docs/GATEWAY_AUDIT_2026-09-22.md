@@ -56,7 +56,7 @@ This gives request-time routing a local, fast decision instead of blocking Claud
 
 ### 2. Healthy ready models are not periodically re-probed
 
-Background supervisor sweeps now skip deployments already marked `Healthy`.
+Under the default `ready_queue` strategy, background supervisor sweeps skip deployments already marked `Healthy`. Other explicitly selected legacy routing strategies retain their periodic probe semantics.
 
 A healthy model is reconsidered only when:
 
