@@ -274,24 +274,6 @@ func (s *Server) adminProviderDiscover(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"ok": true, "status_code": status, "models": models})
 }
 
-func (s *Server) adminRollback(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		errorJSON(w, 405, "method not allowed")
-		return
-	}
-	cfg, err := config.LoadBackup(s.configPath)
-	if err != nil {
-		errorJSON(w, 409, "no valid rollback backup: "+err.Error())
-		return
-	}
-	if err := s.applyConfig(cfg); err != nil {
-		errorJSON(w, 409, err.Error())
-		return
-	}
-	s.probe.Trigger()
-	writeJSON(w, 200, map[string]any{"rolled_back": true})
-}
-
 func providerSummary(p config.ProviderConfig) map[string]any {
 	models := make([]string, 0, len(p.Models))
 	for _, m := range p.Models {
