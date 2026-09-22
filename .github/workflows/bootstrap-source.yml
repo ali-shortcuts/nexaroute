@@ -3,7 +3,7 @@ name: Bootstrap source
 on:
   push:
     paths:
-      - '.bootstrap/final_12'
+      - '.bootstrap/final_08'
   workflow_dispatch:
 
 permissions:
@@ -21,15 +21,26 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cat .bootstrap/final_00 .bootstrap/final_01 .bootstrap/final_02 .bootstrap/final_03 \
-              .bootstrap/final_04 .bootstrap/final_05 .bootstrap/final_06 .bootstrap/final_07 \
-              .bootstrap/final_08 .bootstrap/final_09 .bootstrap/final_10 .bootstrap/final_11 \
-              .bootstrap/final_12 > /tmp/nexaroute-source.b64
+          cat .bootstrap/final_00 .bootstrap/final_01 .bootstrap/final_02 \
+              .bootstrap/final_03 .bootstrap/final_04 .bootstrap/final_05 \
+              .bootstrap/final_06 .bootstrap/final_07 .bootstrap/final_08 \
+              > /tmp/nexaroute-source.b64
           base64 -d /tmp/nexaroute-source.b64 > /tmp/nexaroute-source-v0.3.tar.xz
+          echo "a9bcd0e5db08027388f61c34183370ab5bfbd73ea4c27dc2e38f43a6bd3cc112  /tmp/nexaroute-source-v0.3.tar.xz" | sha256sum -c -
           xz -t /tmp/nexaroute-source-v0.3.tar.xz
           tar -xJf /tmp/nexaroute-source-v0.3.tar.xz -C .
           rm -rf .bootstrap
           rm -f .github/workflows/bootstrap-source.yml
+
+      - name: Verify source
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./...
+          go vet ./...
+          go test -race ./...
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o /tmp/nexaroute-linux-amd64 ./cmd/gateway
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -o /tmp/nexaroute-linux-arm64 ./cmd/gateway
 
       - name: Commit source tree
         shell: bash
