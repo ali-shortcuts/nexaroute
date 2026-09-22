@@ -179,3 +179,49 @@ func TestRunOncePrioritizesUnknownBeforeHealthyWhenConcurrencyOne(t *testing.T) 
 		t.Fatalf("probe priority order=%v, want unknown first", order)
 	}
 }
+
+func TestBackgroundSweepSkipsHealthyReadyModels(t *testing.T) {
+	var calls atomic.Int32
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"c","choices":[{"message":{"role":"assistant","content":"OK"}}]}`))
+	}))
+	defer up.Close()
+
+	cfg := config.Default()
+	cfg.Probe.Enabled = true
+	cfg.Probe.OnStart = false
+	cfg.Probe.Concurrency = 4
+	cfg.Providers = []config.ProviderConfig{{
+		ID: "p", Name: "P", Type: "openai_compatible", BaseURL: up.URL, AuthMode: "none", Enabled: true,
+		Models: []config.ModelConfig{
+			{ID: "ready", Model: "ready-model", Enabled: true, Weight: 1},
+			{ID: "new", Model: "new-model", Enabled: true, Weight: 1},
+		},
+	}}
+	cfg.ApplyDefaults()
+	hm := health.New(cfg.Routing.FailureThreshold, cfg.Cooldown())
+	hm.RecordSuccess("p/ready", 10*time.Millisecond)
+	before := hm.Get("p/ready").LastChecked
+
+	reg, err := providers.NewRegistry(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt := router.New(cfg, hm)
+	e := New(cfg, reg, rt, hm, events.New(20))
+	res := e.runOnce(context.Background(), false)
+
+	if res.Total != 2 || res.Passed != 1 || res.SkippedReady != 1 {
+		t.Fatalf("unexpected background result: %+v", res)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("background supervisor re-probed healthy ready model; calls=%d want 1", calls.Load())
+	}
+	after := hm.Get("p/ready").LastChecked
+	if !after.Equal(before) {
+		t.Fatalf("healthy ready model was touched by supervisor: before=%v after=%v", before, after)
+	}
+}
+
