@@ -7,8 +7,9 @@ import (
 	"testing"
 )
 
-func TestSaveAtomicModeAndRollbackBackup(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.json")
+func TestSaveAtomicModeAndNoBackup(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
 	cfg := Default()
 	if err := SaveAtomic(path, cfg); err != nil {
 		t.Fatal(err)
@@ -20,27 +21,27 @@ func TestSaveAtomicModeAndRollbackBackup(t *testing.T) {
 	if st.Mode().Perm() != 0o600 {
 		t.Fatalf("config mode=%#o want 0600", st.Mode().Perm())
 	}
-	first, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+
 	cfg.Routing.MaxAttempts = 9
 	if err := SaveAtomic(path, cfg); err != nil {
 		t.Fatal(err)
 	}
-	bak, err := os.ReadFile(path + ".bak")
+	if _, err := os.Stat(path + ".bak"); !os.IsNotExist(err) {
+		t.Fatalf("backup file must not be created; stat err=%v", err)
+	}
+	leftovers, err := filepath.Glob(filepath.Join(dir, ".config.json.tmp-*"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(bak) != string(first) {
-		t.Fatal("backup is not the previous known-good config")
+	if len(leftovers) != 0 {
+		t.Fatalf("temporary files leaked: %v", leftovers)
 	}
-	loaded, err := LoadBackup(path)
+	loaded, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.Routing.MaxAttempts == 9 {
-		t.Fatalf("backup unexpectedly contains newest config: %+v", loaded.Routing)
+	if loaded.Routing.MaxAttempts != 9 {
+		t.Fatalf("latest config was not persisted: %+v", loaded.Routing)
 	}
 }
 
@@ -64,9 +65,9 @@ func TestLoadAppliesRuntimeEnvironmentOverrides(t *testing.T) {
 	if err := SaveAtomic(path, Default()); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("ULG_LISTEN", "0.0.0.0:19000")
-	t.Setenv("ULG_ADMIN_KEY", "env-admin")
-	t.Setenv("ULG_ADMIN_BIND_LOCAL_ONLY", "false")
+	t.Setenv("NEXAROUTE_LISTEN", "0.0.0.0:19000")
+	t.Setenv("NEXAROUTE_ADMIN_KEY", "env-admin")
+	t.Setenv("NEXAROUTE_ADMIN_BIND_LOCAL_ONLY", "false")
 	cfg, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
