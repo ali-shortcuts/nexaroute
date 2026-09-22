@@ -36,3 +36,39 @@ func TestSanitizeMetricLabelRemovesLineBreaksAndEscapes(t *testing.T) {
 		t.Fatalf("metric label still contains unsafe characters: %q", got)
 	}
 }
+
+func TestStatusWriterKeepsFirstCommittedStatus(t *testing.T) {
+	rr := httptest.NewRecorder()
+	sw := &statusWriter{ResponseWriter: rr, status: http.StatusOK}
+	sw.WriteHeader(http.StatusCreated)
+	sw.WriteHeader(http.StatusInternalServerError)
+	if sw.status != http.StatusCreated || rr.Code != http.StatusCreated {
+		t.Fatalf("status writer drifted after second WriteHeader: status=%d recorder=%d", sw.status, rr.Code)
+	}
+}
+
+func TestStatusWriterFlushCommitsOK(t *testing.T) {
+	rr := httptest.NewRecorder()
+	sw := &statusWriter{ResponseWriter: rr, status: http.StatusOK}
+	sw.Flush()
+	sw.WriteHeader(http.StatusInternalServerError)
+	if sw.status != http.StatusOK || rr.Code != http.StatusOK {
+		t.Fatalf("flush did not lock implicit 200: status=%d recorder=%d", sw.status, rr.Code)
+	}
+}
+
+func TestErrorTypeForStatus(t *testing.T) {
+	cases := map[int]string{
+		http.StatusUnauthorized:       "provider_auth_failed",
+		http.StatusPaymentRequired:    "provider_billing",
+		http.StatusTooManyRequests:    "provider_rate_limited",
+		http.StatusServiceUnavailable: "provider_overloaded",
+		http.StatusGatewayTimeout:     "provider_timeout",
+		http.StatusBadRequest:         "caller_invalid_request",
+	}
+	for code, want := range cases {
+		if got := errorTypeForStatus(code); got != want {
+			t.Fatalf("status %d type=%q want=%q", code, got, want)
+		}
+	}
+}
