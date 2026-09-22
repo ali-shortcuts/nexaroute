@@ -9,9 +9,19 @@ import (
 	"github.com/ali-shortcuts/universal-llm-gateway/internal/config"
 )
 
+type ProviderStats struct {
+	ID                 string `json:"id"`
+	MaxConcurrency     int    `json:"max_concurrency"`
+	ActiveRequests     int64  `json:"active_requests"`
+	WaitingRequests    int64  `json:"waiting_requests"`
+	Credentials        int    `json:"credentials"`
+	CredentialsCooling int    `json:"credentials_cooling"`
+}
+
 type Adapter interface {
 	ID() string
 	Kind() string
+	Stats() ProviderStats
 	Do(ctx context.Context, payload []byte, stream bool, forward http.Header) (*http.Response, error)
 	DoPath(ctx context.Context, method, path string, payload []byte, stream bool, forward http.Header) (*http.Response, error)
 	CountTokens(ctx context.Context, payload []byte, forward http.Header) (*http.Response, error)
@@ -53,6 +63,20 @@ func (r *Registry) Get(id string) (Adapter, bool) {
 	defer r.mu.RUnlock()
 	a, ok := r.m[id]
 	return a, ok
+}
+
+func (r *Registry) Stats() []ProviderStats {
+	r.mu.RLock()
+	adapters := make([]Adapter, 0, len(r.m))
+	for _, a := range r.m {
+		adapters = append(adapters, a)
+	}
+	r.mu.RUnlock()
+	out := make([]ProviderStats, 0, len(adapters))
+	for _, a := range adapters {
+		out = append(out, a.Stats())
+	}
+	return out
 }
 func NewAdapter(p config.ProviderConfig, timeout time.Duration) (Adapter, error) {
 	p.ApplyDefaults()
