@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ali-shortcuts/universal-llm-gateway/internal/config"
@@ -31,6 +32,8 @@ type httpAdapter struct {
 	credMu  sync.Mutex
 	creds   []credentialState
 	rr      int
+	active  atomic.Int64
+	waiting atomic.Int64
 }
 
 func newHTTPAdapter(p config.ProviderConfig, timeout time.Duration) (*httpAdapter, error) {
@@ -59,6 +62,22 @@ func newHTTPAdapter(p config.ProviderConfig, timeout time.Duration) (*httpAdapte
 }
 func (a *httpAdapter) ID() string   { return a.p.ID }
 func (a *httpAdapter) Kind() string { return a.p.Type }
+func (a *httpAdapter) Stats() ProviderStats {
+	a.credMu.Lock()
+	defer a.credMu.Unlock()
+	now := time.Now()
+	cooling := 0
+	for _, c := range a.creds {
+		if !c.CooldownUntil.IsZero() && now.Before(c.CooldownUntil) {
+			cooling++
+		}
+	}
+	return ProviderStats{
+		ID: a.p.ID, MaxConcurrency: cap(a.sem),
+		ActiveRequests: a.active.Load(), WaitingRequests: a.waiting.Load(),
+		Credentials: len(a.creds), CredentialsCooling: cooling,
+	}
+}
 
 func endpoint(base, suffix string) string {
 	b := strings.TrimRight(base, "/")
@@ -105,17 +124,28 @@ func (a *httpAdapter) DoPath(ctx context.Context, method, path string, payload [
 		return nil, fmt.Errorf("invalid endpoint %q", u)
 	}
 
+	a.waiting.Add(1)
 	select {
 	case a.sem <- struct{}{}:
+		a.waiting.Add(-1)
+		a.active.Add(1)
 	case <-ctx.Done():
+		a.waiting.Add(-1)
 		return nil, ctx.Err()
 	}
 	var releaseOnce sync.Once
 	release := func() {
-		releaseOnce.Do(func() { <-a.sem })
+		releaseOnce.Do(func() {
+			a.active.Add(-1)
+			<-a.sem
+		})
 	}
 
 	keys := a.availableCredentialIndexes()
+	if len(a.creds) > 0 && len(keys) == 0 {
+		release()
+		return nil, errors.New("all configured provider credentials are cooling down")
+	}
 	if len(keys) == 0 {
 		keys = []int{-1}
 	}
@@ -176,7 +206,7 @@ func (a *httpAdapter) DoPath(ctx context.Context, method, path string, payload [
 			body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 			resp.Body.Close()
 			a.cooldownCredential(idx, resp.StatusCode, resp.Header.Get("Retry-After"))
-			lastErr = fmt.Errorf("credential rejected http %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+			lastErr = fmt.Errorf("credential rejected http %d: %s", resp.StatusCode, a.safeSnippet(body))
 			continue
 		}
 		if idx >= 0 {
@@ -299,6 +329,22 @@ func (a *httpAdapter) cooldownCredential(i, status int, retryAfter string) {
 	a.creds[i].Failures++
 	a.creds[i].CooldownUntil = time.Now().Add(d)
 }
+func (a *httpAdapter) safeSnippet(b []byte) string {
+	msg := strings.TrimSpace(string(b))
+	if len(msg) > 768 {
+		msg = msg[:768] + "…"
+	}
+	for _, c := range a.creds {
+		if c.Key != "" {
+			msg = strings.ReplaceAll(msg, c.Key, "[REDACTED]")
+		}
+	}
+	if k := a.p.ResolvedAPIKey(); k != "" {
+		msg = strings.ReplaceAll(msg, k, "[REDACTED]")
+	}
+	return msg
+}
+
 func credentialRetryStatus(code int) bool {
 	return code == 401 || code == 402 || code == 403 || code == 429
 }
@@ -333,7 +379,7 @@ func (a *httpAdapter) Probe(ctx context.Context, model string, maxTokens int) (t
 	defer resp.Body.Close()
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return lat, resp.StatusCode, fmt.Errorf("probe http %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
+		return lat, resp.StatusCode, fmt.Errorf("probe http %d: %s", resp.StatusCode, a.safeSnippet(data))
 	}
 	return lat, resp.StatusCode, nil
 }
