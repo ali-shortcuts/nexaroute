@@ -35,6 +35,8 @@ type Engine struct {
 
 	trigger chan struct{}
 	runMu   sync.Mutex
+	primeMu sync.Mutex
+	primed  bool
 
 	ctxMu  sync.RWMutex
 	runCtx context.Context
@@ -99,11 +101,25 @@ func (e *Engine) context() context.Context {
 	return e.runCtx
 }
 
+func (e *Engine) Prime(ctx context.Context) Result {
+	e.setRunContext(ctx)
+	e.primeMu.Lock()
+	e.primed = true
+	e.primeMu.Unlock()
+	return e.runOnce(ctx, true)
+}
+
+func (e *Engine) wasPrimed() bool {
+	e.primeMu.Lock()
+	defer e.primeMu.Unlock()
+	return e.primed
+}
+
 func (e *Engine) Run(ctx context.Context) {
 	e.setRunContext(ctx)
 	cfg := e.current()
-	if cfg.Probe.Enabled && cfg.Probe.OnStart {
-		go e.runOnce(ctx, false)
+	if cfg.Probe.Enabled && cfg.Probe.OnStart && !e.wasPrimed() {
+		e.runOnce(ctx, false)
 	}
 	for {
 		cfg = e.current()
