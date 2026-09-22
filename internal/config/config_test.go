@@ -22,6 +22,9 @@ func TestSaveAtomicModeAndNoBackup(t *testing.T) {
 		t.Fatalf("config mode=%#o want 0600", st.Mode().Perm())
 	}
 
+	if err := os.WriteFile(path+".bak", []byte("stale secret copy"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	cfg.Routing.MaxAttempts = 9
 	if err := SaveAtomic(path, cfg); err != nil {
 		t.Fatal(err)
