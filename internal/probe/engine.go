@@ -318,19 +318,19 @@ func (e *Engine) runOnce(ctx context.Context, force bool) Result {
 			continue
 		}
 
+		if !e.acquireProbe(ctx, cfg.Probe.Concurrency) {
+			resultMu.Lock()
+			result.Failed++
+			resultMu.Unlock()
+			continue
+		}
 		wg.Add(1)
 		go func(d router.Deployment, a providers.Adapter) {
 			defer wg.Done()
-			if !e.acquireProbe(ctx, cfg.Probe.Concurrency) {
-				resultMu.Lock()
-				result.Failed++
-				resultMu.Unlock()
-				return
-			}
+			defer e.releaseProbe()
 			pctx, cancel := context.WithTimeout(ctx, cfg.ProbeTimeout())
 			lat, status, err := a.Probe(pctx, d.Model, cfg.Probe.MaxTokens)
 			cancel()
-			e.releaseProbe()
 
 			if err != nil {
 				e.hm.Quarantine(d.ID, err.Error(), lat)
