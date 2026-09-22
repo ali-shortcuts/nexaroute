@@ -23,6 +23,10 @@ func (s *Server) countTokens(w http.ResponseWriter, r *http.Request) {
 	var in core.AnthropicRequest
 	raw, err := readJSON(r, &in)
 	if err != nil {
+		if _, ok := err.(*requestTooLargeError); ok {
+			anthropicErrorJSON(w, http.StatusRequestEntityTooLarge, err.Error())
+			return
+		}
 		anthropicErrorJSON(w, http.StatusBadRequest, "invalid json: "+err.Error())
 		return
 	}
