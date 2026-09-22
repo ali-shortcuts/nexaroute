@@ -79,6 +79,6 @@ Runtime and health state are single-process/in-memory. Provider configuration is
 
 ## Probe cadence and model quality
 
-Health probing is periodic and event-driven, not a sub-second broadcast to every configured model. The interval is configurable (minimum 1 second), and real traffic also updates health immediately. This avoids turning health checks into a quota/rate-limit attack against the configured providers.
+Health probing is selective and event-driven. Startup establishes readiness, background sweeps test only deployments that are not yet proven healthy, and failed deployments move into dedicated recovery loops. Healthy ready-queue deployments are not periodically re-probed; real Claude traffic is their health signal until a failure or configuration identity change ejects them. The interval remains configurable (minimum 1 second) for discovering new/unverified deployments without turning health checks into a quota/rate-limit attack.
 
 Micro-probes measure availability and latency. They do not measure model intelligence/answer quality. Model strength is expressed through configured deployment `priority` and `weight`; automatic quality benchmarking is outside the current v0.3 scope.
