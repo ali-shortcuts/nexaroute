@@ -109,7 +109,7 @@ func TestManualRunOnceWorksWhenBackgroundProbesDisabled(t *testing.T) {
 	}
 }
 
-func TestRunOnceAuthFailureImmediatelyCoolsDeployment(t *testing.T) {
+func TestRunOnceReadyQueueAuthFailureQuarantinesDeployment(t *testing.T) {
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
 		_, _ = w.Write([]byte(`{"error":"bad key"}`))
@@ -128,8 +128,8 @@ func TestRunOnceAuthFailureImmediatelyCoolsDeployment(t *testing.T) {
 	if res.Failed != 1 {
 		t.Fatalf("result=%+v", res)
 	}
-	if st := hm.Get("p/m"); st.Status != health.Cooldown {
-		t.Fatalf("status=%s want cooldown", st.Status)
+	if st := hm.Get("p/m"); st.Status != health.Degraded {
+		t.Fatalf("status=%s want degraded quarantine", st.Status)
 	}
 }
 
