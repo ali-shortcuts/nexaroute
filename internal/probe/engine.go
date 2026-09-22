@@ -115,6 +115,11 @@ func (e *Engine) wasPrimed() bool {
 	return e.primed
 }
 
+func (e *Engine) Start(ctx context.Context) {
+	e.setRunContext(ctx)
+	go e.Run(ctx)
+}
+
 func (e *Engine) Run(ctx context.Context) {
 	e.setRunContext(ctx)
 	cfg := e.current()
