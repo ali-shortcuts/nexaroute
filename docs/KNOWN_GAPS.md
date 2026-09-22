@@ -31,7 +31,7 @@ In particular:
 
 ## Token counting
 
-`POST /v1/messages/count_tokens` first tries the native token-count endpoint of an eligible Anthropic-compatible upstream. If no native count can be obtained, ULG returns a local estimate and explicitly includes `"estimated": true`.
+`POST /v1/messages/count_tokens` first tries the native token-count endpoint of an eligible Anthropic-compatible upstream. If no native count can be obtained, NexaRoute returns a local estimate and explicitly includes `"estimated": true`.
 
 The estimate is not a substitute for model-specific tokenization when exact billing/context calculations matter.
 
