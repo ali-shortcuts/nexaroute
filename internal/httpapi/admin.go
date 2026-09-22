@@ -383,6 +383,7 @@ func discoverModels(ctx context.Context, p config.ProviderConfig) ([]string, int
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 		resp.Body.Close()
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			b = redactProviderBody(p, b)
 			lastErr = fmt.Errorf("model discovery HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
 			continue
 		}
