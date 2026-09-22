@@ -14,7 +14,7 @@ Bugs/weaknesses found and fixed without changing the version number:
 - **Provider concurrency lifetime:** the semaphore previously released when HTTP response headers arrived. Long response bodies/SSE could therefore exceed `max_concurrency`. It is now held until the body reaches EOF or is closed.
 - **Round-robin health promotion:** plain round-robin previously rotated the entire candidate list and could eventually put a degraded model before healthy models. Rotation is now restricted to the best available health band.
 - **Streaming latency scoring:** successful requests previously learned latency from the entire completion duration. Long answers could look like a slow provider. Routing health now learns successful response-header latency while operational events may still record total request duration.
-- **Probe scheduling:** concurrent goroutine scheduling could ignore intended probe priority. Probe work is now submitted through a bounded priority queue: half-open -> unknown -> degraded -> healthy, stalest first.
+- **Probe scheduling:** manual/full sweeps preserve priority ordering with bounded concurrency. Automatic supervisor sweeps skip healthy ready models entirely and schedule only unknown or recovery-owned deployments.
 - **Requested breaker policy:** the default is now **ready-queue supervisor: 5 recovery probes -> 1800-second cooldown**. Expired deployments re-enter half-open and a half-open failure re-cools immediately.
 
 New regression coverage was added for each of the routing/concurrency issues above.
@@ -73,6 +73,24 @@ This upgrade changes the default routing lifecycle from request-time candidate r
 8. after cooldown the supervisor starts a new recovery cycle automatically.
 
 Regression coverage was added for this lifecycle, including the 20-provider/100-model scale path and exact five-attempt recovery accounting.
+
+## Supervisor selectivity and gateway-hardening audit — 2026-09-22
+
+The ready queue was tightened further after comparison against mature open-source gateway reliability patterns.
+
+Required invariants now covered by regression tests:
+
+- a healthy ready-queue model is skipped by automatic background supervisor sweeps;
+- an unknown/new deployment must pass a probe before becoming routable;
+- a real Claude failure ejects the deployment immediately and starts supervised recovery;
+- temporary all-key rate-limit cooldown waits do not consume the five recovery attempts;
+- provider/model identity changes invalidate stale health while cosmetic name-only reloads preserve valid health;
+- `/readyz` requires an actually healthy ready-queue deployment;
+- client cancellation does not poison provider health;
+- non-stream request timeout is a total routing/failover budget, not a fresh full timeout per candidate;
+- translated streams that end before a protocol terminal signal are failures, not successes;
+- normalized error classes are exported separately from generic event kinds;
+- access-log status reflects the first committed HTTP status.
 
 ## Toolchain
 
