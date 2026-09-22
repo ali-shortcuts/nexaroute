@@ -124,3 +124,25 @@ func TestFiveRecoveryFailuresThenEnterCooldownKeepsExactCount(t *testing.T) {
 		t.Fatalf("unexpected cooldown state: %+v", st)
 	}
 }
+
+func TestInvalidateAndRetainHealthProofs(t *testing.T) {
+	m := New(5, 30*time.Minute)
+	m.RecordSuccess("p/keep", time.Millisecond)
+	m.RecordSuccess("p/change", time.Millisecond)
+	m.RecordSuccess("p/remove", time.Millisecond)
+
+	m.Invalidate("p/change")
+	m.Retain(map[string]struct{}{"p/keep": {}, "p/change": {}})
+
+	if st := m.Get("p/keep"); st.Status != Healthy {
+		t.Fatalf("unchanged deployment lost health: %+v", st)
+	}
+	if st := m.Get("p/change"); st.Status != Unknown {
+		t.Fatalf("changed deployment kept stale health proof: %+v", st)
+	}
+	for _, st := range m.Snapshot() {
+		if st.Deployment == "p/remove" {
+			t.Fatalf("removed deployment health state was retained: %+v", st)
+		}
+	}
+}
