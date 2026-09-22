@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -132,23 +133,13 @@ func Load(path string) (Config, error) {
 }
 
 func (c *Config) ApplyEnvOverrides() {
-	// NEXAROUTE_* is the preferred namespace. ULG_* remains supported for
-	// backward compatibility with existing v0.3 deployments.
 	if v := strings.TrimSpace(os.Getenv("NEXAROUTE_LISTEN")); v != "" {
-		c.Listen = v
-	} else if v := strings.TrimSpace(os.Getenv("ULG_LISTEN")); v != "" {
 		c.Listen = v
 	}
 	if v, ok := os.LookupEnv("NEXAROUTE_ADMIN_KEY"); ok {
 		c.Admin.APIKey = v
-	} else if v, ok := os.LookupEnv("ULG_ADMIN_KEY"); ok {
-		c.Admin.APIKey = v
 	}
 	if v, ok := os.LookupEnv("NEXAROUTE_ADMIN_BIND_LOCAL_ONLY"); ok {
-		if b, err := strconv.ParseBool(strings.TrimSpace(v)); err == nil {
-			c.Admin.BindLocalOnly = b
-		}
-	} else if v, ok := os.LookupEnv("ULG_ADMIN_BIND_LOCAL_ONLY"); ok {
 		if b, err := strconv.ParseBool(strings.TrimSpace(v)); err == nil {
 			c.Admin.BindLocalOnly = b
 		}
@@ -291,7 +282,7 @@ func (c Config) Validate() error {
 		}
 		if p.ProxyURL != "" {
 			u, err := url.Parse(p.ProxyURL)
-			if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+			if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 				return fmt.Errorf("provider %q has invalid proxy_url", p.ID)
 			}
 		}
@@ -365,7 +356,18 @@ func (c Config) RetryBackoff() time.Duration {
 	return time.Duration(c.Routing.RetryBackoffMS) * time.Millisecond
 }
 
+func RemoveStaleBackup(path string) error {
+	err := os.Remove(path + ".bak")
+	if err == nil || os.IsNotExist(err) {
+		return nil
+	}
+	return fmt.Errorf("remove stale config backup: %w", err)
+}
+
 func SaveAtomic(path string, c Config) error {
+	if err := RemoveStaleBackup(path); err != nil {
+		return err
+	}
 	c.ApplyDefaults()
 	if err := c.Validate(); err != nil {
 		return err
@@ -374,20 +376,42 @@ func SaveAtomic(path string, c Config) error {
 	if err != nil {
 		return err
 	}
-	if old, err := os.ReadFile(path); err == nil {
-		_ = os.WriteFile(path+".bak", old, 0o600)
-	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, append(b, '\n'), 0o600); err != nil {
+
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
 		return err
 	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
+	tmpName := tmp.Name()
+	defer func() {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+	}()
+
+	if err := tmp.Chmod(0o600); err != nil {
 		return err
+	}
+	if _, err := tmp.Write(append(b, '\n')); err != nil {
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return err
+	}
+
+	// Best-effort directory sync makes the rename durable on filesystems that support it.
+	if d, err := os.Open(dir); err == nil {
+		_ = d.Sync()
+		_ = d.Close()
 	}
 	return nil
 }
-func LoadBackup(path string) (Config, error) { return Load(path + ".bak") }
+
 func (c Config) ProviderIndex(id string) int {
 	for i := range c.Providers {
 		if c.Providers[i].ID == id {

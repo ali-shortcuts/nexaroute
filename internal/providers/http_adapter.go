@@ -149,7 +149,6 @@ func (a *httpAdapter) DoPath(ctx context.Context, method, path string, payload [
 	if len(keys) == 0 {
 		keys = []int{-1}
 	}
-	var lastResp *http.Response
 	var lastErr error
 	for pos, idx := range keys {
 		reqCtx := ctx
@@ -201,7 +200,6 @@ func (a *httpAdapter) DoPath(ctx context.Context, method, path string, payload [
 				resp.Body = &cancelOnCloseBody{ReadCloser: resp.Body, cancel: cancel}
 			}
 		}
-		lastResp = resp
 		if idx >= 0 && credentialRetryStatus(resp.StatusCode) && pos < len(keys)-1 {
 			body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 			resp.Body.Close()
@@ -221,10 +219,6 @@ func (a *httpAdapter) DoPath(ctx context.Context, method, path string, payload [
 		// is consumed or closed (especially important for long-lived SSE).
 		resp.Body = &releaseOnDoneBody{ReadCloser: resp.Body, release: release}
 		return resp, nil
-	}
-	if lastResp != nil {
-		lastResp.Body = &releaseOnDoneBody{ReadCloser: lastResp.Body, release: release}
-		return lastResp, nil
 	}
 	release()
 	if lastErr == nil {
@@ -334,10 +328,16 @@ func (a *httpAdapter) safeSnippet(b []byte) string {
 	if len(msg) > 768 {
 		msg = msg[:768] + "…"
 	}
-	for _, c := range a.creds {
-		if c.Key != "" {
-			msg = strings.ReplaceAll(msg, c.Key, "[REDACTED]")
+	a.credMu.Lock()
+	keys := make([]string, 0, len(a.creds))
+	for i := range a.creds {
+		if a.creds[i].Key != "" {
+			keys = append(keys, a.creds[i].Key)
 		}
+	}
+	a.credMu.Unlock()
+	for _, key := range keys {
+		msg = strings.ReplaceAll(msg, key, "[REDACTED]")
 	}
 	if k := a.p.ResolvedAPIKey(); k != "" {
 		msg = strings.ReplaceAll(msg, k, "[REDACTED]")

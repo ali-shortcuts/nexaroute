@@ -34,6 +34,31 @@ Verification after these fixes:
 
 The full `verify.sh` run passed all deterministic/test/race/first-fuzz stages; the container command itself hit its outer execution timeout during the second short fuzz stage, so that second fuzz stage was immediately rerun separately and passed. This is recorded explicitly rather than hidden.
 
+## 2026-09-22 final no-backup and runtime bug audit
+
+A second repository-wide audit was performed after the initial routing hardening. This pass removed the remaining backup/rollback implementation and added regression coverage for additional runtime, security, packaging, and operational defects.
+
+Fixed in this pass:
+
+- configuration writes no longer create `config.json.bak`; stale backup files are deleted on startup, save, and user install;
+- configuration persistence now uses a unique same-directory temporary file, mode `0600`, file sync, atomic rename, directory sync where supported, and temporary-file cleanup;
+- rollback API/UI and legacy `ULG_*` runtime/config migration paths were removed;
+- credential-pool failover no longer risks returning a closed response from an earlier rejected credential after a later transport failure;
+- credential error redaction no longer races with credential cooldown state changes;
+- unknown-model fallback now applies only to genuinely unknown model names and cannot bypass cooldown or capability mismatch for a known model;
+- manual Probe All remains usable when periodic background probes are disabled;
+- health cooldown reconfiguration no longer races with forced cooldown, and expired cooldown state clears stale error text;
+- provider credentials are redacted from upstream and model-discovery error bodies before they can reach a client or UI;
+- native upstream response proxying strips sensitive and hop-by-hop headers, including upstream cookies and auth headers;
+- oversized Anthropic token-count requests return HTTP 413;
+- malformed proxy URLs without a host are rejected;
+- Prometheus label values sanitize line breaks;
+- local/dev launch scripts work independently of the caller's current directory, and the dev runner no longer edits the tracked example configuration;
+- installer and Docker configuration permissions were tightened;
+- the v0.3 release workflow now builds and verifies an installable Linux archive in addition to individual binaries and checksums.
+
+Regression tests were added for these paths, including race-detector-sensitive cases. The repository CI gate also rejects tracked backup/legacy artifacts and runs shell syntax checks, Go formatting/tests/vet/race/fuzz checks, JavaScript syntax validation, Linux cross-builds, local runtime smoke tests, installer verification, Docker build, and Docker runtime persistence checks.
+
 ## Toolchain
 
 ```text
@@ -51,6 +76,7 @@ Executed:
 The script performs:
 
 ```text
+shell-script syntax checks
 gofmt cleanliness check
 go test -shuffle=on -count=10 ./...
 go vet ./...
@@ -147,7 +173,7 @@ The Go tests include coverage for:
 
 ## Release artifacts and integrity
 
-Source control does not keep stale binary checksums. Tagged releases build fresh Linux amd64/arm64 binaries and generate `dist/SHA256SUMS` from those exact artifacts before publishing them to GitHub Releases.
+Source control does not keep stale binary checksums. The `v0.3` release workflow builds fresh Linux amd64/arm64 binaries plus an installable `nexaroute-v0.3-linux.tar.gz` package, smoke-tests the extracted package, verifies its installer, and generates `dist/SHA256SUMS` from those exact artifacts before publishing them to GitHub Releases.
 
 ## What this report does not prove
 

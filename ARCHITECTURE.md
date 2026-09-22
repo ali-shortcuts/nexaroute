@@ -166,15 +166,13 @@ Web UI editor
  -> Admin API
  -> parse + validate proposed config
  -> build provider registry as preflight
- -> atomic save (0600) + one last-known-good .bak
+ -> atomic save (0600) through a same-directory temporary file + fsync + rename
  -> short runtime write lock
  -> registry reload
  -> router reload
  -> health/probe settings reload
  -> release lock
 ```
-
-Rollback restores the single `.bak` configuration and hot-reloads it.
 
 ## Secret-preserving edit semantics
 

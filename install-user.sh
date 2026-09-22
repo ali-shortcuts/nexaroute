@@ -10,6 +10,7 @@ case "$ARCH" in
 esac
 
 mkdir -p "$HOME/.local/bin" "$HOME/.config/nexaroute"
+chmod 700 "$HOME/.config/nexaroute"
 
 TMP_BIN=""
 if [[ -x "$BUNDLED" ]]; then
@@ -30,19 +31,14 @@ fi
 install -m 0755 "$SRC_BIN" "$HOME/.local/bin/nexaroute"
 
 CFG="$HOME/.config/nexaroute/config.json"
-LEGACY_CFG="$HOME/.config/universal-llm-gateway/config.json"
 if [[ ! -f "$CFG" ]]; then
-  if [[ -f "$LEGACY_CFG" ]]; then
-    install -m 0600 "$LEGACY_CFG" "$CFG"
-    echo "Copied existing v0.3 configuration from: $LEGACY_CFG"
-  else
-    install -m 0600 "$ROOT/configs/config.example.json" "$CFG"
-    echo "Created config: $CFG"
-  fi
+  install -m 0600 "$ROOT/configs/config.example.json" "$CFG"
+  echo "Created config: $CFG"
 else
-  chmod 600 "$CFG" || true
+  chmod 600 "$CFG"
   echo "Kept existing config: $CFG"
 fi
+rm -f "$CFG.bak"
 
 cat <<MSG
 Installed: $HOME/.local/bin/nexaroute

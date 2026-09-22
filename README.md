@@ -128,7 +128,6 @@ The dashboard includes:
 - live event feed
 - manual probes
 - runtime routing/probe settings
-- config rollback
 
 ## Fastest Ubuntu test: use a release package
 

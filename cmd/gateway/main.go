@@ -27,9 +27,6 @@ func defaultConfigPath() string {
 	if p := os.Getenv("NEXAROUTE_CONFIG"); p != "" {
 		return p
 	}
-	if p := os.Getenv("ULG_CONFIG"); p != "" {
-		return p
-	}
 	if _, err := os.Stat("config.json"); err == nil {
 		return "config.json"
 	}
@@ -65,6 +62,9 @@ func main() {
 	}
 	logger := log.New(os.Stdout, "nexaroute ", log.LstdFlags|log.Lmicroseconds)
 	if err := ensureConfig(*configPath); err != nil {
+		logger.Fatal(err)
+	}
+	if err := config.RemoveStaleBackup(*configPath); err != nil {
 		logger.Fatal(err)
 	}
 	cfg, err := config.Load(*configPath)

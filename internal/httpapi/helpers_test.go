@@ -29,3 +29,10 @@ func TestReadJSONRejectsOversizedBody(t *testing.T) {
 		t.Fatalf("expected requestTooLargeError, got %T: %v", err, err)
 	}
 }
+
+func TestSanitizeMetricLabelRemovesLineBreaksAndEscapes(t *testing.T) {
+	got := sanitizeMetricLabel("provider\nname\rwith\\quote\"")
+	if strings.ContainsAny(got, "\n\r\\\"") {
+		t.Fatalf("metric label still contains unsafe characters: %q", got)
+	}
+}

@@ -1,6 +1,7 @@
 package health
 
 import (
+	"sync"
 	"testing"
 	"time"
 )
@@ -60,5 +61,40 @@ func TestFiveFailuresTriggerOneHourCooldown(t *testing.T) {
 	}
 	if st.CooldownUntil.Before(before) || st.CooldownUntil.After(after) {
 		t.Fatalf("unexpected cooldown deadline %v", st.CooldownUntil)
+	}
+}
+
+func TestForceCooldownConcurrentWithConfigure(t *testing.T) {
+	m := New(5, time.Second)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 1000; i++ {
+			m.Configure(1+(i%5), time.Duration(1+(i%3))*time.Second)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 1000; i++ {
+			m.ForceCooldown("p/m", "rate limited", 0)
+		}
+	}()
+	wg.Wait()
+	if st := m.Get("p/m"); st.Status != Cooldown {
+		t.Fatalf("status=%s want cooldown", st.Status)
+	}
+}
+
+func TestSnapshotClearsStaleErrorWhenCooldownBecomesHalfOpen(t *testing.T) {
+	m := New(1, time.Millisecond)
+	m.RecordFailure("p/m", "temporary failure", time.Millisecond)
+	time.Sleep(3 * time.Millisecond)
+	snap := m.Snapshot()
+	if len(snap) != 1 {
+		t.Fatalf("snapshot len=%d want 1", len(snap))
+	}
+	if snap[0].Status != HalfOpen || snap[0].LastError != "" {
+		t.Fatalf("expired cooldown should be clean half-open state: %+v", snap[0])
 	}
 }

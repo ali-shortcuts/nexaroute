@@ -75,6 +75,40 @@ func TestRunOnceTwentyProvidersHundredModels(t *testing.T) {
 	}
 }
 
+func TestManualRunOnceWorksWhenBackgroundProbesDisabled(t *testing.T) {
+	var calls atomic.Int32
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"c","choices":[{"message":{"role":"assistant","content":"OK"}}]}`))
+	}))
+	defer up.Close()
+
+	cfg := config.Default()
+	cfg.Probe.Enabled = false
+	cfg.Probe.OnStart = false
+	cfg.Providers = []config.ProviderConfig{{
+		ID: "p", Name: "P", Type: "openai_compatible", BaseURL: up.URL, AuthMode: "none", Enabled: true,
+		Models: []config.ModelConfig{{ID: "m", Model: "m", Enabled: true, Weight: 1}},
+	}}
+	cfg.ApplyDefaults()
+	hm := health.New(cfg.Routing.FailureThreshold, cfg.Cooldown())
+	reg, err := providers.NewRegistry(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt := router.New(cfg, hm)
+	e := New(cfg, reg, rt, hm, events.New(20))
+
+	res := e.RunOnce(context.Background())
+	if res.Total != 1 || res.Passed != 1 || res.Failed != 0 {
+		t.Fatalf("manual probe should run while background probes are disabled: %+v", res)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("manual probe calls=%d want 1", calls.Load())
+	}
+}
+
 func TestRunOnceAuthFailureImmediatelyCoolsDeployment(t *testing.T) {
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)

@@ -1,14 +1,14 @@
 let snap={deployments:[],health:[],events:[],config:{}}, providerSummaries=[];
 let editor={mode:'add',originalId:'',provider:null,detected:[],selected:new Set(),modelMeta:new Map(),secretDirty:false,secretSource:'none'};
 const $=q=>document.querySelector(q), $$=q=>[...document.querySelectorAll(q)];
-let adminKey=sessionStorage.getItem('ulg_admin_key')||'';
+let adminKey=sessionStorage.getItem('nexaroute_admin_key')||'';
 async function apiFetch(url,opt={}){
   opt={...opt,headers:{...(opt.headers||{})}};
   if(adminKey)opt.headers['x-admin-key']=adminKey;
   let r=await window.fetch(url,opt);
   if(r.status===401){
     const k=prompt('Admin API key required');
-    if(k!==null){adminKey=k.trim();sessionStorage.setItem('ulg_admin_key',adminKey);opt.headers['x-admin-key']=adminKey;r=await window.fetch(url,opt)}
+    if(k!==null){adminKey=k.trim();sessionStorage.setItem('nexaroute_admin_key',adminKey);opt.headers['x-admin-key']=adminKey;r=await window.fetch(url,opt)}
   }
   return r;
 }
@@ -19,8 +19,8 @@ function toast(m,bad=false){const t=$('#toast');t.textContent=m;t.className='toa
 
 $$('nav button').forEach(b=>b.onclick=()=>{$$('nav button').forEach(x=>x.classList.remove('active'));b.classList.add('active');$$('.tab').forEach(x=>x.classList.remove('active'));$('#'+b.dataset.tab).classList.add('active');$('#title').textContent=b.textContent==='Overview'?'Routing Overview':b.textContent;if(b.dataset.tab==='settings')fillRuntimeSettings()});
 $('#probeBtn').onclick=async()=>{try{$('#probeBtn').disabled=true;$('#probeBtn').textContent='Probing…';const d=await api('/admin/api/probe?wait=1',{method:'POST'});const r=d.result||{};toast(`Probe complete: ${r.passed||0}/${r.total||0} passed${r.skipped_cooldown?`, ${r.skipped_cooldown} cooldown`:''}`,!!r.failed);await refresh()}catch(e){toast(e.message,true)}finally{$('#probeBtn').disabled=false;$('#probeBtn').textContent='Probe all models'}};
-$('#adminKey').value=adminKey;$('#saveAdminKey').onclick=()=>{adminKey=$('#adminKey').value.trim();sessionStorage.setItem('ulg_admin_key',adminKey);toast('Admin key saved for this browser session')};
-$('#toggleAdminKey').onclick=()=>toggleSecret('#adminKey','#toggleAdminKey');$('#rollbackBtn').onclick=async()=>{if(!confirm('Rollback to the last known-good config?'))return;try{await api('/admin/api/rollback',{method:'POST'});toast('Config rolled back');await refresh()}catch(e){toast(e.message,true)}};
+$('#adminKey').value=adminKey;$('#saveAdminKey').onclick=()=>{adminKey=$('#adminKey').value.trim();sessionStorage.setItem('nexaroute_admin_key',adminKey);toast('Admin key saved for this browser session')};
+$('#toggleAdminKey').onclick=()=>toggleSecret('#adminKey','#toggleAdminKey');
 function intVal(id,fallback,min=0){const n=parseInt($(id).value,10);return Number.isFinite(n)?Math.max(min,n):fallback}
 function fillRuntimeSettings(){const r=snap.config?.routing||{},p=snap.config?.probe||{};$('#rtStrategy').value=r.strategy||'adaptive_round_robin';$('#rtFallback').checked=r.fallback_on_unknown_model!==false;$('#rtAttempts').value=r.max_attempts||4;$('#rtFailureThreshold').value=r.failure_threshold||5;$('#rtCooldown').value=r.cooldown_seconds||3600;$('#rtTimeout').value=r.request_timeout_ms||120000;$('#rtBackoff').value=Number.isFinite(r.retry_backoff_ms)?r.retry_backoff_ms:150;$('#rtRetryAfter').value=r.max_retry_after_seconds||60;$('#prEnabled').checked=p.enabled!==false;$('#prOnStart').checked=!!p.on_start;$('#prInterval').value=p.interval_seconds||120;$('#prTimeout').value=p.timeout_ms||8000;$('#prTokens').value=p.max_tokens||1;$('#prConcurrency').value=p.concurrency||16}
 $('#saveRuntimeSettings').onclick=async()=>{const old=snap.config||{},r=old.routing||{},p=old.probe||{};const body={routing:{...r,strategy:$('#rtStrategy').value,fallback_on_unknown_model:$('#rtFallback').checked,max_attempts:intVal('#rtAttempts',4,1),failure_threshold:intVal('#rtFailureThreshold',5,1),cooldown_seconds:intVal('#rtCooldown',3600,1),request_timeout_ms:intVal('#rtTimeout',120000,100),retry_backoff_ms:intVal('#rtBackoff',150,0),max_retry_after_seconds:intVal('#rtRetryAfter',60,1)},probe:{...p,enabled:$('#prEnabled').checked,on_start:$('#prOnStart').checked,interval_seconds:intVal('#prInterval',120,1),timeout_ms:intVal('#prTimeout',8000,100),max_tokens:intVal('#prTokens',1,1),concurrency:intVal('#prConcurrency',16,1)}};try{$('#saveRuntimeSettings').disabled=true;await api('/admin/api/settings',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});toast('Runtime settings saved and reloaded');await refresh();fillRuntimeSettings()}catch(e){toast(e.message,true)}finally{$('#saveRuntimeSettings').disabled=false}};

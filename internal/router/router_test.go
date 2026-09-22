@@ -46,6 +46,37 @@ func TestFallbackOnUnknownClientModel(t *testing.T) {
 	}
 }
 
+func TestFallbackDoesNotEscapeKnownUnavailableModel(t *testing.T) {
+	cfg := config.Default()
+	cfg.Routing.FallbackOnUnknownModel = true
+	cfg.Providers = []config.ProviderConfig{{ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "http://example.invalid", Enabled: true, Models: []config.ModelConfig{
+		{ID: "known", Model: "known-model", Enabled: true, Weight: 1, Capabilities: config.Capabilities{Streaming: true}},
+		{ID: "other", Model: "other-model", Enabled: true, Weight: 1, Capabilities: config.Capabilities{Streaming: true, Tools: true}},
+	}}}
+	h := health.New(1, time.Hour)
+	h.RecordFailure("p/known", "down", time.Millisecond)
+	r := New(cfg, h)
+
+	got := r.Candidates(Requirement{Model: "known-model", Streaming: true})
+	if len(got) != 0 {
+		t.Fatalf("known model in cooldown must not fall back to unrelated deployment: %#v", got)
+	}
+}
+
+func TestFallbackDoesNotBypassKnownModelCapabilities(t *testing.T) {
+	cfg := config.Default()
+	cfg.Routing.FallbackOnUnknownModel = true
+	cfg.Providers = []config.ProviderConfig{{ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "http://example.invalid", Enabled: true, Models: []config.ModelConfig{
+		{ID: "known", Model: "known-model", Enabled: true, Weight: 1, Capabilities: config.Capabilities{Streaming: true, Tools: false}},
+		{ID: "other", Model: "other-model", Enabled: true, Weight: 1, Capabilities: config.Capabilities{Streaming: true, Tools: true}},
+	}}}
+	r := New(cfg, health.New(4, time.Hour))
+	got := r.Candidates(Requirement{Model: "known-model", Streaming: true, Tools: true})
+	if len(got) != 0 {
+		t.Fatalf("known model capability mismatch must not route to unrelated model: %#v", got)
+	}
+}
+
 func TestRoundRobinRotatesAcrossHealthyCandidates(t *testing.T) {
 	cfg := config.Default()
 	cfg.Routing.Strategy = "round_robin"

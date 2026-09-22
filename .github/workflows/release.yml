@@ -3,7 +3,7 @@ name: Release build
 on:
   push:
     tags:
-      - 'v*'
+      - 'v0.3'
 
 permissions:
   contents: write
@@ -29,14 +29,45 @@ jobs:
       - name: Docker build
         run: docker build --tag nexaroute-release:${GITHUB_REF_NAME} .
 
-      - name: Build release artifacts
+      - name: Build release artifacts and installable package
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p dist
+          rm -rf dist/release-package
+          mkdir -p dist/release-package/nexaroute/{bin,configs,deploy/systemd,scripts}
+
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags='-s -w' -o dist/nexaroute-linux-amd64 ./cmd/gateway
           CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags='-s -w' -o dist/nexaroute-linux-arm64 ./cmd/gateway
-          (cd dist && sha256sum nexaroute-linux-* > SHA256SUMS)
+
+          install -m 0755 dist/nexaroute-linux-amd64 dist/release-package/nexaroute/bin/nexaroute-linux-amd64
+          install -m 0755 dist/nexaroute-linux-arm64 dist/release-package/nexaroute/bin/nexaroute-linux-arm64
+          install -m 0755 install-user.sh run-local.sh dist/release-package/nexaroute/
+          install -m 0755 scripts/install-systemd-user.sh scripts/smoke-local.sh dist/release-package/nexaroute/scripts/
+          install -m 0644 configs/config.example.json dist/release-package/nexaroute/configs/
+          install -m 0644 deploy/systemd/nexaroute.service dist/release-package/nexaroute/deploy/systemd/
+          install -m 0644 README.md LICENSE SECURITY.md dist/release-package/nexaroute/
+
+          tar -C dist/release-package -czf "dist/nexaroute-${GITHUB_REF_NAME}-linux.tar.gz" nexaroute
+          (
+            cd dist
+            sha256sum nexaroute-linux-amd64 nexaroute-linux-arm64 "nexaroute-${GITHUB_REF_NAME}-linux.tar.gz" > SHA256SUMS
+          )
+
+      - name: Verify packaged installer
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          home="$(mktemp -d)"
+          trap 'rm -rf "$tmp" "$home"' EXIT
+          tar -C "$tmp" -xzf "dist/nexaroute-${GITHUB_REF_NAME}-linux.tar.gz"
+          "$tmp/nexaroute/scripts/smoke-local.sh"
+          HOME="$home" "$tmp/nexaroute/install-user.sh"
+          test -x "$home/.local/bin/nexaroute"
+          "$home/.local/bin/nexaroute" -version | grep -F "NexaRoute v0.3"
+          test -f "$home/.config/nexaroute/config.json"
+          test "$(stat -c '%a' "$home/.config/nexaroute/config.json")" = "600"
+          test ! -e "$home/.config/nexaroute/config.json.bak"
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
@@ -44,5 +75,6 @@ jobs:
           files: |
             dist/nexaroute-linux-amd64
             dist/nexaroute-linux-arm64
+            dist/nexaroute-v0.3-linux.tar.gz
             dist/SHA256SUMS
           generate_release_notes: true
