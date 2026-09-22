@@ -54,8 +54,10 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 
 	for i := 0; i < max; i++ {
 		c := candidates[i]
+		s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_attempt", Deployment: c.Deployment.ID, Message: fmt.Sprintf("attempt=%d score=%.2f health=%s", i+1, c.Score, c.Health.Status)})
 		a, ok := adapters[c.Deployment.ProviderID]
 		if !ok {
+			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_skip", Deployment: c.Deployment.ID, Message: "provider adapter unavailable"})
 			continue
 		}
 		var payload []byte
@@ -80,6 +82,9 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 			lastErr = e.Error()
 			s.hm.RecordFailure(c.Deployment.ID, lastErr, headerLatency)
 			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_fail", Deployment: c.Deployment.ID, Message: lastErr, LatencyMS: headerLatency.Milliseconds()})
+			if i+1 < max {
+				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "failover", Deployment: c.Deployment.ID, Message: "transport failure; trying " + candidates[i+1].Deployment.ID})
+			}
 			s.retryPause(r, cfg, i, max)
 			continue
 		}
@@ -101,6 +106,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 			}
 			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_fail", Deployment: c.Deployment.ID, Message: lastErr, LatencyMS: headerLatency.Milliseconds(), StatusCode: resp.StatusCode})
 			if failoverEligible(resp.StatusCode) && i+1 < max {
+				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "failover", Deployment: c.Deployment.ID, Message: fmt.Sprintf("HTTP %d; trying %s", resp.StatusCode, candidates[i+1].Deployment.ID), StatusCode: resp.StatusCode})
 				s.retryPause(r, cfg, i, max)
 				continue
 			}
