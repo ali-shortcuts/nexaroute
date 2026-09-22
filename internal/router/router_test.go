@@ -211,7 +211,6 @@ func TestAdaptiveRoundRobinNeverPromotesDegradedHighWeightAheadOfHealthy(t *test
 	}
 }
 
-
 func TestReadyQueueRequiresSuccessfulHealthProofAndStaysSticky(t *testing.T) {
 	cfg := config.Default()
 	cfg.Routing.Strategy = "ready_queue"
@@ -240,4 +239,3 @@ func TestReadyQueueRequiresSuccessfulHealthProofAndStaysSticky(t *testing.T) {
 		t.Fatalf("quarantined first model must leave ready queue immediately: %#v", after)
 	}
 }
-

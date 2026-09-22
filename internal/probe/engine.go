@@ -16,13 +16,13 @@ import (
 )
 
 type Result struct {
-	Total            int   `json:"total"`
-	Passed           int   `json:"passed"`
-	Failed           int   `json:"failed"`
-	SkippedCooldown  int   `json:"skipped_cooldown"`
-	SkippedMissing   int   `json:"skipped_missing_adapter"`
-	SkippedRecovery  int   `json:"skipped_recovery"`
-	DurationMS       int64 `json:"duration_ms"`
+	Total           int   `json:"total"`
+	Passed          int   `json:"passed"`
+	Failed          int   `json:"failed"`
+	SkippedCooldown int   `json:"skipped_cooldown"`
+	SkippedMissing  int   `json:"skipped_missing_adapter"`
+	SkippedRecovery int   `json:"skipped_recovery"`
+	DurationMS      int64 `json:"duration_ms"`
 }
 
 type Engine struct {

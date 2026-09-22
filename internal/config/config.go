@@ -39,14 +39,14 @@ type RoutingConfig struct {
 }
 
 type ProbeConfig struct {
-	Enabled           bool `json:"enabled"`
-	OnStart           bool `json:"on_start"`
-	IntervalSeconds   int  `json:"interval_seconds"`
-	TimeoutMS         int  `json:"timeout_ms"`
-	MaxTokens         int  `json:"max_tokens"`
-	Concurrency       int  `json:"concurrency"`
-	RecoveryAttempts  int  `json:"recovery_attempts"`
-	RecoveryRetryMS   int  `json:"recovery_retry_ms"`
+	Enabled          bool `json:"enabled"`
+	OnStart          bool `json:"on_start"`
+	IntervalSeconds  int  `json:"interval_seconds"`
+	TimeoutMS        int  `json:"timeout_ms"`
+	MaxTokens        int  `json:"max_tokens"`
+	Concurrency      int  `json:"concurrency"`
+	RecoveryAttempts int  `json:"recovery_attempts"`
+	RecoveryRetryMS  int  `json:"recovery_retry_ms"`
 }
 
 type CredentialConfig struct {

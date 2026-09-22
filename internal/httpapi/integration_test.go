@@ -515,7 +515,6 @@ func TestConcurrentRequestsDuringHotReload(t *testing.T) {
 	wg.Wait()
 }
 
-
 func TestReadyQueueEjectsFailedPrimaryAndUsesNextHealthyModel(t *testing.T) {
 	var primaryCalls atomic.Int32
 	var fallbackCalls atomic.Int32
@@ -569,4 +568,3 @@ func TestReadyQueueEjectsFailedPrimaryAndUsesNextHealthyModel(t *testing.T) {
 		t.Fatalf("fallback calls=%d want 2", fallbackCalls.Load())
 	}
 }
-

@@ -128,7 +128,6 @@ func (m *Manager) Snapshot() []State {
 	return out
 }
 
-
 // Quarantine removes a deployment from the ready pool immediately after a real
 // routed request or background health check fails. Recovery is then owned by
 // the probe supervisor rather than by user traffic.
