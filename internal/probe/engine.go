@@ -22,6 +22,7 @@ type Result struct {
 	SkippedCooldown int   `json:"skipped_cooldown"`
 	SkippedMissing  int   `json:"skipped_missing_adapter"`
 	SkippedRecovery int   `json:"skipped_recovery"`
+	SkippedReady    int   `json:"skipped_ready"`
 	DurationMS      int64 `json:"duration_ms"`
 }
 
