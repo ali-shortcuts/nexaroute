@@ -154,7 +154,7 @@ Source control does not keep stale binary checksums. Tagged releases build fresh
 No finite test suite can honestly guarantee zero bugs, and no external provider account was contacted in this environment. The strongest remaining validation is the user's real Ubuntu path:
 
 ```text
-Claude Code -> v0.3 -> Chat2API -> selected real provider/model
+Claude Code -> NexaRoute v0.3 -> Chat2API -> selected real provider/model
 ```
 
 Native OpenAI Responses, Gemini native `generateContent`, Bedrock/Vertex/Azure-specialized semantics, distributed state, encrypted-at-rest vault integration, and full public-internet control-plane hardening are deliberately outside the current v0.3 protocol scope. They are documented in `docs/KNOWN_GAPS.md` rather than silently claimed as complete.
