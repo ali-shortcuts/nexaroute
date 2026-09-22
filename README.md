@@ -38,7 +38,7 @@ Routing is done per **deployment** (`provider/model`), not just per provider.
 
 Implemented strategies:
 
-- `adaptive_round_robin` (default)
+- `ready_queue` (default): only pre-verified healthy deployments are routable; the strongest configured healthy model stays first until it fails
 - `adaptive`
 - `priority`
 - `round_robin`
@@ -55,11 +55,11 @@ Implemented resilience:
 - failover on transport errors, selected 4xx provider/auth failures, `429`, and retryable `5xx`
 - `Retry-After` handling with a configurable cap
 - per-deployment circuit breaker
-- default policy: 5 consecutive failures -> 1 hour cooldown
+- first routed failure immediately quarantines that deployment; the recovery supervisor then probes it up to 5 times
 - half-open recovery after cooldown
-- immediate re-cooldown when a half-open deployment fails
+- if all 5 recovery probes fail, the deployment enters a 30-minute cooldown; after cooldown the supervisor automatically starts a fresh recovery cycle
 - credential-level rotation and cooldown independent of model-level health
-- bounded concurrent background micro-probes (default 1 output token), prioritized half-open/unknown/degraded before healthy deployments
+- startup readiness sweep probes every enabled deployment before the HTTP listener opens; successful models enter the ready queue immediately
 - manual **Probe all models** with pass/fail results
 
 
@@ -69,14 +69,14 @@ The health loop is deliberately **event-driven + periodic**, not a wasteful sub-
 
 - every real client request updates the selected deployment's health immediately;
 - background probes use a tiny request (`max_tokens=1` by default) to refresh idle deployments;
-- each probe cycle uses a bounded priority work queue: **half-open -> unknown -> degraded -> healthy**, oldest checks first;
-- cooldown deployments are excluded until their deadline, then re-enter as **half-open** and are tested before normal healthy models;
+- each periodic probe cycle revalidates the ready pool with bounded concurrency; failed deployments leave the ready queue immediately and move to the recovery supervisor;
+- cooldown deployments never receive Claude traffic; after their deadline the supervisor retries them and only a successful probe returns them to the ready queue;
 - candidate order combines configured model priority/weight, health state, EWMA response-header latency, and historical failure rate;
-- the default breaker is **5 consecutive failures -> 3600-second cooldown**;
+- recovery policy defaults to **5 supervisor attempts -> 1800-second cooldown**, with a 500 ms retry delay between failed recovery probes;
 - a real Claude Code request tries candidates in routing order and fails over before client-visible response bytes are committed.
 - capability routing inspects the parsed request structure for images and reasoning controls, so words such as “image” in ordinary user text do not cause false capability requirements.
 
-`probe.interval_seconds` is configurable down to 1 second, but continuously probing every model multiple times per second is intentionally not the default: with large provider pools it would burn quota, trigger rate limits, and make health worse rather than smarter.
+`probe.interval_seconds` is configurable down to 1 second. The router decision itself is local and fast; remote health checks still take normal network/provider latency. NexaRoute therefore keeps readiness warm in the background instead of blocking each Claude request on a new health check.
 
 Model **quality** is represented explicitly by configured `priority` and `weight`; a one-token health probe can prove availability/latency, but it cannot honestly measure which LLM is intellectually stronger.
 
