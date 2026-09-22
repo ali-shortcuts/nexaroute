@@ -64,7 +64,6 @@ func TestFiveFailuresTriggerOneHourCooldown(t *testing.T) {
 	}
 }
 
-
 func TestForceCooldownConcurrentWithConfigure(t *testing.T) {
 	m := New(5, time.Second)
 	var wg sync.WaitGroup
@@ -99,4 +98,3 @@ func TestSnapshotClearsStaleErrorWhenCooldownBecomesHalfOpen(t *testing.T) {
 		t.Fatalf("expired cooldown should be clean half-open state: %+v", snap[0])
 	}
 }
-

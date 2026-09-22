@@ -75,7 +75,6 @@ func TestRunOnceTwentyProvidersHundredModels(t *testing.T) {
 	}
 }
 
-
 func TestManualRunOnceWorksWhenBackgroundProbesDisabled(t *testing.T) {
 	var calls atomic.Int32
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

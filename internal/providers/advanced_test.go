@@ -52,7 +52,6 @@ func TestCredentialPoolFailsOverAndCoolsBadKey(t *testing.T) {
 	}
 }
 
-
 func TestCredentialFailoverReturnsFinalTransportErrorNotClosedPriorResponse(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Header.Get("Authorization") {
@@ -99,9 +98,9 @@ func TestCredentialFailoverReturnsFinalTransportErrorNotClosedPriorResponse(t *t
 func TestSafeSnippetConcurrentWithCredentialStateChanges(t *testing.T) {
 	p := config.ProviderConfig{
 		ID: "p", Name: "p", Type: "openai_compatible", BaseURL: "http://example.invalid",
-		APIKey: "secret-a",
+		APIKey:      "secret-a",
 		Credentials: []config.CredentialConfig{{Name: "b", APIKey: "secret-b", Enabled: true}},
-		AuthMode: "bearer", Enabled: true,
+		AuthMode:    "bearer", Enabled: true,
 	}
 	a, err := newHTTPAdapter(p, time.Second)
 	if err != nil {

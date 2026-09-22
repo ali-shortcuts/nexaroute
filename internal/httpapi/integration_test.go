@@ -250,7 +250,6 @@ func TestConfiguredForwardHeaderPassesThroughButClientAuthDoesNot(t *testing.T) 
 	}
 }
 
-
 func TestUpstreamErrorRedactsProviderCredential(t *testing.T) {
 	const secret = "super-secret-provider-key"
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -289,14 +288,14 @@ func TestNativeProxyStripsSensitiveAndHopByHopResponseHeaders(t *testing.T) {
 	resp := &http.Response{
 		StatusCode: 200,
 		Header: http.Header{
-			"Content-Type":        []string{"application/json"},
-			"Set-Cookie":          []string{"session=upstream-secret"},
-			"Authorization":       []string{"Bearer upstream-secret"},
-			"X-Api-Key":           []string{"upstream-secret"},
-			"Connection":          []string{"keep-alive"},
-			"Keep-Alive":          []string{"timeout=5"},
-			"Proxy-Authenticate":  []string{"Basic realm=upstream"},
-			"X-Safe-Upstream":     []string{"ok"},
+			"Content-Type":       []string{"application/json"},
+			"Set-Cookie":         []string{"session=upstream-secret"},
+			"Authorization":      []string{"Bearer upstream-secret"},
+			"X-Api-Key":          []string{"upstream-secret"},
+			"Connection":         []string{"keep-alive"},
+			"Keep-Alive":         []string{"timeout=5"},
+			"Proxy-Authenticate": []string{"Basic realm=upstream"},
+			"X-Safe-Upstream":    []string{"ok"},
 		},
 		Body: io.NopCloser(strings.NewReader(`{"ok":true}`)),
 	}

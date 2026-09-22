@@ -46,7 +46,6 @@ func TestFallbackOnUnknownClientModel(t *testing.T) {
 	}
 }
 
-
 func TestFallbackDoesNotEscapeKnownUnavailableModel(t *testing.T) {
 	cfg := config.Default()
 	cfg.Routing.FallbackOnUnknownModel = true
