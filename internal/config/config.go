@@ -132,13 +132,23 @@ func Load(path string) (Config, error) {
 }
 
 func (c *Config) ApplyEnvOverrides() {
-	if v := strings.TrimSpace(os.Getenv("ULG_LISTEN")); v != "" {
+	// NEXAROUTE_* is the preferred namespace. ULG_* remains supported for
+	// backward compatibility with existing v0.3 deployments.
+	if v := strings.TrimSpace(os.Getenv("NEXAROUTE_LISTEN")); v != "" {
+		c.Listen = v
+	} else if v := strings.TrimSpace(os.Getenv("ULG_LISTEN")); v != "" {
 		c.Listen = v
 	}
-	if v, ok := os.LookupEnv("ULG_ADMIN_KEY"); ok {
+	if v, ok := os.LookupEnv("NEXAROUTE_ADMIN_KEY"); ok {
+		c.Admin.APIKey = v
+	} else if v, ok := os.LookupEnv("ULG_ADMIN_KEY"); ok {
 		c.Admin.APIKey = v
 	}
-	if v, ok := os.LookupEnv("ULG_ADMIN_BIND_LOCAL_ONLY"); ok {
+	if v, ok := os.LookupEnv("NEXAROUTE_ADMIN_BIND_LOCAL_ONLY"); ok {
+		if b, err := strconv.ParseBool(strings.TrimSpace(v)); err == nil {
+			c.Admin.BindLocalOnly = b
+		}
+	} else if v, ok := os.LookupEnv("ULG_ADMIN_BIND_LOCAL_ONLY"); ok {
 		if b, err := strconv.ParseBool(strings.TrimSpace(v)); err == nil {
 			c.Admin.BindLocalOnly = b
 		}
