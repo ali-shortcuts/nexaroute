@@ -183,7 +183,13 @@ func proxyResponse(w http.ResponseWriter, resp *http.Response) error {
 	defer resp.Body.Close()
 	isSSE := strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream")
 	for k, vs := range resp.Header {
-		if strings.EqualFold(k, "Connection") || strings.EqualFold(k, "Transfer-Encoding") || (isSSE && strings.EqualFold(k, "Content-Length")) {
+		lk := strings.ToLower(strings.TrimSpace(k))
+		switch lk {
+		case "connection", "proxy-connection", "keep-alive", "transfer-encoding", "te", "trailer", "upgrade",
+			"proxy-authenticate", "proxy-authorization", "authorization", "x-api-key", "x-admin-key", "set-cookie":
+			continue
+		}
+		if isSSE && lk == "content-length" {
 			continue
 		}
 		for _, v := range vs {
