@@ -34,7 +34,8 @@ type Server struct {
 	bus        *events.Bus
 	probe      *probe.Engine
 	log        *log.Logger
-	requestSeq atomic.Uint64
+	requestSeq   atomic.Uint64
+	requestTotal atomic.Uint64
 }
 
 func New(cfg config.Config, configPath string, reg *providers.Registry, rt *router.Router, hm *health.Manager, bus *events.Bus, pe *probe.Engine, l *log.Logger) *Server {
@@ -142,6 +143,7 @@ func (s *Server) Handler() http.Handler {
 func (s *Server) middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
+		s.requestTotal.Add(1)
 		rid := strings.TrimSpace(r.Header.Get("x-request-id"))
 		if rid == "" {
 			rid = fmt.Sprintf("ulg-%x-%x", time.Now().UnixNano(), s.requestSeq.Add(1))
