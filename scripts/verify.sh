@@ -34,9 +34,9 @@ GOMAXPROCS=2 go test ./internal/core -run='^$' -fuzz=FuzzParseAnthContent -fuzzt
 
 echo '== linux amd64 build =='
 mkdir -p bin
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags='-s -w' -o bin/ulg-linux-amd64 ./cmd/gateway
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags='-s -w' -o bin/nexaroute-linux-amd64 ./cmd/gateway
 
 echo '== linux arm64 build =='
-CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags='-s -w' -o bin/ulg-linux-arm64 ./cmd/gateway
+CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags='-s -w' -o bin/nexaroute-linux-arm64 ./cmd/gateway
 
 echo 'VERIFY PASS'
