@@ -15,7 +15,7 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/router"
 )
 
-func recoveryFixture(t *testing.T, handler http.HandlerFunc, recoveryAttempts, cooldownSeconds int) (*Engine, *health.Manager, *router.Router, *atomic.Int32, context.CancelFunc) {
+func recoveryFixture(t *testing.T, handler http.HandlerFunc, recoveryAttempts, cooldownSeconds int) (*Engine, *health.Manager, *router.Router, *atomic.Int32, context.Context, context.CancelFunc) {
 	t.Helper()
 	var calls atomic.Int32
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -48,7 +48,7 @@ func recoveryFixture(t *testing.T, handler http.HandlerFunc, recoveryAttempts, c
 	rt := router.New(cfg, hm)
 	e := New(cfg, reg, rt, hm, events.New(100))
 	ctx, cancel := context.WithCancel(context.Background())
-	return e, hm, rt, &calls, cancel
+	return e, hm, rt, &calls, ctx, cancel
 }
 
 func waitForState(t *testing.T, hm *health.Manager, id string, wanted health.Status, timeout time.Duration) health.State {
@@ -68,7 +68,7 @@ func waitForState(t *testing.T, hm *health.Manager, id string, wanted health.Sta
 
 func TestSupervisorReturnsModelToReadyQueueOnFirstSuccessfulRecovery(t *testing.T) {
 	var upstreamCalls atomic.Int32
-	e, hm, rt, _, cancel := recoveryFixture(t, func(w http.ResponseWriter, r *http.Request) {
+	e, hm, rt, _, ctx, cancel := recoveryFixture(t, func(w http.ResponseWriter, r *http.Request) {
 		n := upstreamCalls.Add(1)
 		if n <= 3 {
 			w.WriteHeader(http.StatusServiceUnavailable)
@@ -80,7 +80,7 @@ func TestSupervisorReturnsModelToReadyQueueOnFirstSuccessfulRecovery(t *testing.
 	}, 5, 1800)
 	defer cancel()
 
-	res := e.Prime(context.Background())
+	res := e.Prime(ctx)
 	if res.Passed != 0 || res.Failed != 1 {
 		t.Fatalf("initial prime=%+v want first health check to fail", res)
 	}
@@ -98,13 +98,13 @@ func TestSupervisorReturnsModelToReadyQueueOnFirstSuccessfulRecovery(t *testing.
 }
 
 func TestSupervisorFiveFailuresEnterCooldownWithoutSixthFailure(t *testing.T) {
-	e, hm, rt, calls, cancel := recoveryFixture(t, func(w http.ResponseWriter, r *http.Request) {
+	e, hm, rt, calls, ctx, cancel := recoveryFixture(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		_, _ = w.Write([]byte(`{"error":"down"}`))
 	}, 5, 30)
 	defer cancel()
 
-	res := e.Prime(context.Background())
+	res := e.Prime(ctx)
 	if res.Failed != 1 {
 		t.Fatalf("initial prime=%+v want failure", res)
 	}
