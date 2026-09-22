@@ -1,3 +1,16 @@
+## v0.3 final no-backup/runtime audit — 2026-09-22
+
+- Removed runtime `.bak` creation, rollback API/UI, stale backup copies, legacy `ULG_*` environment fallbacks, and the old configuration migration path.
+- Hardened atomic configuration persistence with unique temporary files, `0600` permissions, fsync, rename, cleanup, and stale-backup deletion.
+- Fixed credential failover edge cases and a credential-state race detected by the race-sensitive audit.
+- Restricted unknown-model fallback so a known model's cooldown or capability mismatch cannot silently route to an unrelated model.
+- Fixed manual probing when background probing is disabled and tightened health-manager synchronization/state recovery.
+- Redacted provider credentials from upstream/model-discovery errors and stripped sensitive/hop-by-hop upstream response headers.
+- Fixed oversized count-token status handling, proxy URL host validation, and Prometheus label sanitization.
+- Hardened local/dev runners, installer permissions, Docker config permissions, and shell-script verification.
+- Added no-backup checks to unit tests, runtime smoke tests, installer tests, Docker runtime tests, and CI repository-cleanliness gates.
+- Changed the v0.3 release workflow to publish and verify an installable Linux tarball alongside binaries and checksums; tag publishing is restricted to `v0.3` while the binary version remains v0.3.
+
 
 ## v0.3 routing audit hardening — 2026-09-22
 
@@ -69,7 +82,7 @@ Version number intentionally remains **0.3** until the user validates this packa
 ## Repository hardening (same v0.3)
 - changed the Go module/import path to `github.com/ali-shortcuts/nexaroute`
 - added GitHub Actions CI for formatting, repeated tests, vet, race detection, and Linux amd64/arm64 builds
-- added tag-based release workflow that publishes Linux binaries and SHA-256 checksums
+- added a v0.3 release workflow that publishes Linux binaries, an installable Linux tarball, and SHA-256 checksums after package verification
 - added structured bug/feature issue templates with credential-redaction warnings
 - added root `SECURITY.md` and `CONTRIBUTING.md`
 - kept the application version at v0.3 pending real Ubuntu/provider validation
