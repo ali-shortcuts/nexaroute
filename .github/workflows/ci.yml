@@ -25,38 +25,25 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.23.x'
-          cache: true
+          cache: false
 
-      - name: Format check
+      - name: Full verification
+        run: ./scripts/verify.sh
+
+      - name: Local runtime smoke test
+        run: ./scripts/smoke-local.sh
+
+      - name: Installer smoke test
+        shell: bash
         run: |
-          out="$(gofmt -l cmd internal)"
-          if [ -n "$out" ]; then
-            echo "$out"
-            exit 1
-          fi
+          set -euo pipefail
+          tmp_home="$(mktemp -d)"
+          trap 'rm -rf "$tmp_home"' EXIT
+          HOME="$tmp_home" ./install-user.sh
+          test -x "$tmp_home/.local/bin/nexaroute"
+          "$tmp_home/.local/bin/nexaroute" -version | grep -F "NexaRoute v0.3"
+          test -f "$tmp_home/.config/nexaroute/config.json"
+          test "$(stat -c '%a' "$tmp_home/.config/nexaroute/config.json")" = "600"
 
-      - name: Unit and integration tests
-        run: go test -shuffle=on -count=3 ./...
-
-      - name: Vet
-        run: go vet ./...
-
-      - name: Web UI syntax
-        run: node --check internal/httpapi/web/app.js
-
-      - name: Race detector
-        run: go test -race -shuffle=on -count=1 ./...
-
-      - name: Linux amd64 build
-        env:
-          CGO_ENABLED: 0
-          GOOS: linux
-          GOARCH: amd64
-        run: go build -trimpath -ldflags='-s -w' -o /tmp/nexaroute-linux-amd64 ./cmd/gateway
-
-      - name: Linux arm64 build
-        env:
-          CGO_ENABLED: 0
-          GOOS: linux
-          GOARCH: arm64
-        run: go build -trimpath -ldflags='-s -w' -o /tmp/nexaroute-linux-arm64 ./cmd/gateway
+      - name: Docker build
+        run: docker build --tag nexaroute-ci:0.3 .
