@@ -5,11 +5,11 @@
     "api_key": ""
   },
   "routing": {
-    "strategy": "adaptive_round_robin",
+    "strategy": "ready_queue",
     "fallback_on_unknown_model": true,
     "max_attempts": 4,
     "failure_threshold": 5,
-    "cooldown_seconds": 3600,
+    "cooldown_seconds": 1800,
     "request_timeout_ms": 120000,
     "latency_weight": 0.015,
     "failure_weight": 25,
@@ -22,7 +22,9 @@
     "interval_seconds": 120,
     "timeout_ms": 8000,
     "max_tokens": 1,
-    "concurrency": 16
+    "concurrency": 16,
+    "recovery_attempts": 5,
+    "recovery_retry_ms": 500
   },
   "providers": [
     {
@@ -47,10 +49,12 @@
         {
           "id": "deepseek",
           "model": "deepseek-chat",
-          "aliases": ["coding"],
+          "aliases": [
+            "coding"
+          ],
           "enabled": true,
           "priority": 10,
-          "weight": 1.0,
+          "weight": 1,
           "capabilities": {
             "streaming": true,
             "tools": true,
@@ -67,7 +71,12 @@
       "base_url": "https://api.anthropic.com",
       "api_key_env": "ANTHROPIC_API_KEY",
       "auth_mode": "x-api-key",
-      "forward_headers": ["anthropic-beta", "anthropic-version", "user-agent", "x-request-id"],
+      "forward_headers": [
+        "anthropic-beta",
+        "anthropic-version",
+        "user-agent",
+        "x-request-id"
+      ],
       "max_concurrency": 32,
       "stream_idle_timeout_seconds": 180,
       "enabled": false,
@@ -75,10 +84,12 @@
         {
           "id": "sonnet",
           "model": "claude-sonnet-4-5",
-          "aliases": ["coding"],
+          "aliases": [
+            "coding"
+          ],
           "enabled": true,
           "priority": 5,
-          "weight": 1.0,
+          "weight": 1,
           "capabilities": {
             "streaming": true,
             "tools": true,
