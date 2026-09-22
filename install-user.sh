@@ -10,6 +10,7 @@ case "$ARCH" in
 esac
 
 mkdir -p "$HOME/.local/bin" "$HOME/.config/nexaroute"
+chmod 700 "$HOME/.config/nexaroute"
 
 TMP_BIN=""
 if [[ -x "$BUNDLED" ]]; then
@@ -34,7 +35,7 @@ if [[ ! -f "$CFG" ]]; then
   install -m 0600 "$ROOT/configs/config.example.json" "$CFG"
   echo "Created config: $CFG"
 else
-  chmod 600 "$CFG" || true
+  chmod 600 "$CFG"
   echo "Kept existing config: $CFG"
 fi
 rm -f "$CFG.bak"
