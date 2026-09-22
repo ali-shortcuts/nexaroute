@@ -24,6 +24,9 @@ import (
 const version = "0.3"
 
 func defaultConfigPath() string {
+	if p := os.Getenv("NEXAROUTE_CONFIG"); p != "" {
+		return p
+	}
 	if p := os.Getenv("ULG_CONFIG"); p != "" {
 		return p
 	}
@@ -57,10 +60,10 @@ func main() {
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
 	if *showVersion {
-		fmt.Println("Universal LLM Gateway v" + version)
+		fmt.Println("NexaRoute v" + version)
 		return
 	}
-	logger := log.New(os.Stdout, "gateway ", log.LstdFlags|log.Lmicroseconds)
+	logger := log.New(os.Stdout, "nexaroute ", log.LstdFlags|log.Lmicroseconds)
 	if err := ensureConfig(*configPath); err != nil {
 		logger.Fatal(err)
 	}
