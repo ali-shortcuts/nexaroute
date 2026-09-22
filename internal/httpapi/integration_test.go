@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -513,3 +514,59 @@ func TestConcurrentRequestsDuringHotReload(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+
+func TestReadyQueueEjectsFailedPrimaryAndUsesNextHealthyModel(t *testing.T) {
+	var primaryCalls atomic.Int32
+	var fallbackCalls atomic.Int32
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		primaryCalls.Add(1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"error":"primary down"}`))
+	}))
+	defer primary.Close()
+	fallback := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fallbackCalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"ok","object":"chat.completion","model":"fallback","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`))
+	}))
+	defer fallback.Close()
+
+	cfg := config.Default()
+	cfg.Probe.Enabled = false
+	cfg.Routing.Strategy = "ready_queue"
+	cfg.Routing.MaxAttempts = 2
+	cfg.Providers = []config.ProviderConfig{
+		{ID: "primary", Name: "Primary", Type: "openai_compatible", BaseURL: primary.URL, AuthMode: "none", Enabled: true, Models: []config.ModelConfig{{ID: "m", Model: "primary", Aliases: []string{"auto"}, Enabled: true, Priority: 0, Weight: 2, Capabilities: config.Capabilities{Streaming: true}}},
+		{ID: "fallback", Name: "Fallback", Type: "openai_compatible", BaseURL: fallback.URL, AuthMode: "none", Enabled: true, Models: []config.ModelConfig{{ID: "m", Model: "fallback", Aliases: []string{"auto"}, Enabled: true, Priority: 10, Weight: 1, Capabilities: config.Capabilities{Streaming: true}}},
+	}
+	srv := testGateway(t, cfg)
+
+	request := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "http://gateway/v1/chat/completions", strings.NewReader(`{"model":"auto","messages":[{"role":"user","content":"hi"}]}`))
+		rr := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rr, req)
+		return rr
+	}
+
+	if rr := request(); rr.Code != http.StatusOK {
+		t.Fatalf("first request status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	if primaryCalls.Load() != 1 || fallbackCalls.Load() != 1 {
+		t.Fatalf("first request calls primary=%d fallback=%d", primaryCalls.Load(), fallbackCalls.Load())
+	}
+	if st := srv.hm.Get("primary/m"); st.Status != health.Degraded {
+		t.Fatalf("failed primary must be quarantined immediately: %+v", st)
+	}
+
+	if rr := request(); rr.Code != http.StatusOK {
+		t.Fatalf("second request status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	if primaryCalls.Load() != 1 {
+		t.Fatalf("quarantined primary was retried by Claude traffic: calls=%d", primaryCalls.Load())
+	}
+	if fallbackCalls.Load() != 2 {
+		t.Fatalf("fallback calls=%d want 2", fallbackCalls.Load())
+	}
+}
+
