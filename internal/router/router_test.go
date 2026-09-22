@@ -138,3 +138,39 @@ func TestAdaptivePrefersConfiguredStrongHealthyDeployment(t *testing.T) {
 		t.Fatalf("adaptive routing did not preserve configured model strength: %#v", c)
 	}
 }
+
+func TestAdaptiveNeverPromotesDegradedHighWeightAheadOfHealthy(t *testing.T) {
+	cfg := config.Default()
+	cfg.Routing.Strategy = "adaptive"
+	cfg.Providers = []config.ProviderConfig{{ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "http://example.invalid", Enabled: true, Models: []config.ModelConfig{
+		{ID: "healthy", Model: "healthy", Aliases: []string{"coding"}, Enabled: true, Priority: 100, Weight: 1},
+		{ID: "degraded", Model: "degraded", Aliases: []string{"coding"}, Enabled: true, Priority: 0, Weight: 100},
+	}}}
+	h := health.New(5, time.Hour)
+	h.RecordSuccess("p/healthy", 200*time.Millisecond)
+	h.RecordFailure("p/degraded", "temporary", time.Millisecond)
+	r := New(cfg, h)
+	got := r.Candidates(Requirement{Model: "coding"})
+	if len(got) != 2 || got[0].Deployment.ID != "p/healthy" {
+		t.Fatalf("degraded deployment outranked healthy deployment: %#v", got)
+	}
+}
+
+func TestAdaptiveRoundRobinNeverPromotesDegradedHighWeightAheadOfHealthy(t *testing.T) {
+	cfg := config.Default()
+	cfg.Routing.Strategy = "adaptive_round_robin"
+	cfg.Providers = []config.ProviderConfig{{ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "http://example.invalid", Enabled: true, Models: []config.ModelConfig{
+		{ID: "healthy", Model: "healthy", Aliases: []string{"coding"}, Enabled: true, Priority: 100, Weight: 1},
+		{ID: "degraded", Model: "degraded", Aliases: []string{"coding"}, Enabled: true, Priority: 0, Weight: 100},
+	}}}
+	h := health.New(5, time.Hour)
+	h.RecordSuccess("p/healthy", 200*time.Millisecond)
+	h.RecordFailure("p/degraded", "temporary", time.Millisecond)
+	r := New(cfg, h)
+	for i := 0; i < 8; i++ {
+		got := r.Candidates(Requirement{Model: "coding"})
+		if len(got) != 2 || got[0].Deployment.ID != "p/healthy" {
+			t.Fatalf("degraded deployment outranked healthy deployment on iteration %d: %#v", i, got)
+		}
+	}
+}
