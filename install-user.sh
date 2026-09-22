@@ -37,6 +37,7 @@ else
   chmod 600 "$CFG" || true
   echo "Kept existing config: $CFG"
 fi
+rm -f "$CFG.bak"
 
 cat <<MSG
 Installed: $HOME/.local/bin/nexaroute
