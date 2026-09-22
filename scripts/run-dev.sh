@@ -7,4 +7,5 @@ if [[ ! -f "$CFG" ]]; then
   chmod 600 "$CFG"
   echo "Created $CFG"
 fi
+cd "$ROOT"
 exec go run ./cmd/gateway -config "$CFG"
