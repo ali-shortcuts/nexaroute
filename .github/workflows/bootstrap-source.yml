@@ -1,11 +1,9 @@
-# Bootstrap after all archive chunks are present.
 name: Bootstrap source
 
 on:
   push:
     paths:
-      - '.bootstrap/**'
-      - '.github/workflows/bootstrap-source.yml'
+      - '.bootstrap/final_12'
   workflow_dispatch:
 
 permissions:
@@ -19,50 +17,16 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Reconstruct and validate source archive
+      - name: Reconstruct source archive
         shell: bash
         run: |
           set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-          import base64, subprocess, sys
-
-          root = Path('.bootstrap')
-          before = ''.join((root / n).read_text() for n in [
-              'chunk01', 'chunk02_03', 'chunk04_05'
-          ])
-          middle = (root / 'chunk06_07').read_text()
-          after = ''.join((root / n).read_text() for n in [
-              'chunk08_09', 'chunk10_11', 'chunk12'
-          ])
-
-          alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
-          out = Path('/tmp/nexaroute-source-v0.3.tar.xz')
-          found = None
-
-          for pos in range(7596, 7605):
-              for ch in alphabet:
-                  text = before + middle[:pos] + ch + middle[pos:] + after
-                  if len(text) % 4:
-                      continue
-                  try:
-                      data = base64.b64decode(text, validate=True)
-                  except Exception:
-                      continue
-                  out.write_bytes(data)
-                  ok = subprocess.run(['xz', '-t', str(out)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                  if ok.returncode == 0:
-                      found = (pos, ch, len(text), len(data))
-                      break
-              if found:
-                  break
-
-          if not found:
-              print('Unable to reconstruct a valid XZ archive', file=sys.stderr)
-              sys.exit(1)
-
-          print(f'Repaired archive at position={found[0]} char={found[1]!r} base64_bytes={found[2]} archive_bytes={found[3]}')
-          PY
+          cat .bootstrap/final_00 .bootstrap/final_01 .bootstrap/final_02 .bootstrap/final_03 \
+              .bootstrap/final_04 .bootstrap/final_05 .bootstrap/final_06 .bootstrap/final_07 \
+              .bootstrap/final_08 .bootstrap/final_09 .bootstrap/final_10 .bootstrap/final_11 \
+              .bootstrap/final_12 > /tmp/nexaroute-source.b64
+          base64 -d /tmp/nexaroute-source.b64 > /tmp/nexaroute-source-v0.3.tar.xz
+          xz -t /tmp/nexaroute-source-v0.3.tar.xz
           tar -xJf /tmp/nexaroute-source-v0.3.tar.xz -C .
           rm -rf .bootstrap
           rm -f .github/workflows/bootstrap-source.yml
