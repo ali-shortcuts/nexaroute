@@ -13,7 +13,7 @@ func (s *Server) hello(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"name":    "Universal LLM Gateway",
+		"name":    "NexaRoute",
 		"version": gatewayVersion,
 		"go":      runtime.Version(),
 		"protocols": map[string]any{
