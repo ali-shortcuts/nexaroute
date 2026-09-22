@@ -122,3 +122,56 @@ func TestSupervisorFiveFailuresEnterCooldownWithoutSixthFailure(t *testing.T) {
 		t.Fatalf("cooldown model must not be routable: %#v", got)
 	}
 }
+
+func TestSupervisorDoesNotConsumeRecoveryBudgetWhileCredentialRateLimited(t *testing.T) {
+	var calls atomic.Int32
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := calls.Add(1)
+		if n == 1 {
+			w.Header().Set("Retry-After", "1")
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = w.Write([]byte(`{"error":"rate limited"}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"ok","choices":[{"message":{"role":"assistant","content":"OK"}}]}`))
+	}))
+	defer up.Close()
+
+	cfg := config.Default()
+	cfg.Routing.Strategy = "ready_queue"
+	cfg.Routing.MaxRetryAfterSeconds = 2
+	cfg.Probe.Enabled = true
+	cfg.Probe.OnStart = true
+	cfg.Probe.RecoveryAttempts = 5
+	cfg.Probe.RecoveryRetryMS = 5
+	cfg.Probe.TimeoutMS = 1000
+	cfg.Providers = []config.ProviderConfig{{
+		ID: "p", Name: "P", Type: "openai_compatible", BaseURL: up.URL,
+		APIKey: "k", AuthMode: "bearer", Enabled: true,
+		Models: []config.ModelConfig{{ID: "m", Model: "m", Enabled: true, Weight: 1}},
+	}}
+	cfg.ApplyDefaults()
+
+	hm := health.New(cfg.Routing.FailureThreshold, cfg.Cooldown())
+	reg, err := providers.NewRegistry(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt := router.New(cfg, hm)
+	e := New(cfg, reg, rt, hm, events.New(100))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	res := e.Prime(ctx)
+	if res.Failed != 1 {
+		t.Fatalf("prime=%+v want initial 429 failure", res)
+	}
+	st := waitForState(t, hm, "p/m", health.Healthy, 3*time.Second)
+	if st.RecoveryFailures != 0 {
+		t.Fatalf("rate-limit wait consumed recovery budget: %+v", st)
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("upstream calls=%d want initial 429 + one post-cooldown recovery", calls.Load())
+	}
+}
