@@ -53,7 +53,7 @@ func (e *Engine) Trigger() {
 func (e *Engine) Run(ctx context.Context) {
 	cfg := e.current()
 	if cfg.Probe.Enabled && cfg.Probe.OnStart {
-		go e.RunOnce(ctx)
+		go e.runOnce(ctx, false)
 	}
 	for {
 		cfg = e.current()
@@ -69,7 +69,7 @@ func (e *Engine) Run(ctx context.Context) {
 			}
 			return
 		case <-timer.C:
-			e.RunOnce(ctx)
+			e.runOnce(ctx, false)
 		case <-e.trigger:
 			if !timer.Stop() {
 				select {
@@ -77,7 +77,7 @@ func (e *Engine) Run(ctx context.Context) {
 				default:
 				}
 			}
-			e.RunOnce(ctx)
+			e.runOnce(ctx, false)
 		}
 	}
 }
@@ -86,13 +86,17 @@ func (e *Engine) Run(ctx context.Context) {
 // the configured probe concurrency. runMu prevents a manual probe and a
 // scheduled probe from doubling traffic at the same time.
 func (e *Engine) RunOnce(ctx context.Context) Result {
+	return e.runOnce(ctx, true)
+}
+
+func (e *Engine) runOnce(ctx context.Context, force bool) Result {
 	start := time.Now()
 	e.runMu.Lock()
 	defer e.runMu.Unlock()
 
 	cfg := e.current()
 	result := Result{}
-	if !cfg.Probe.Enabled {
+	if !force && !cfg.Probe.Enabled {
 		result.DurationMS = time.Since(start).Milliseconds()
 		return result
 	}
