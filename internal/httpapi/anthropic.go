@@ -46,6 +46,8 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 	if max > len(candidates) {
 		max = len(candidates)
 	}
+	routeCtx, routeCancel := routeContext(r.Context(), in.Stream, cfg.RequestTimeout())
+	defer routeCancel()
 	var lastErr string
 	var lastStatus int
 	var lastBody []byte
@@ -76,10 +78,24 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		}
 
 		start := time.Now()
-		resp, e := a.Do(r.Context(), payload, in.Stream, forward)
+		resp, e := a.Do(routeCtx, payload, in.Stream, forward)
 		headerLatency := time.Since(start)
 		if e != nil {
 			lastErr = e.Error()
+			if clientRequestGone(r.Context()) {
+				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "client_disconnect", Deployment: c.Deployment.ID, Message: r.Context().Err().Error(), LatencyMS: headerLatency.Milliseconds()})
+				return
+			}
+			if gatewayDeadlineExceeded(routeCtx, r.Context()) {
+				if cfg.Routing.Strategy == "ready_queue" {
+					s.hm.Quarantine(c.Deployment.ID, lastErr, headerLatency)
+					s.probe.Recover(c.Deployment.ID)
+				} else {
+					s.hm.RecordFailure(c.Deployment.ID, lastErr, headerLatency)
+				}
+				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_timeout", Deployment: c.Deployment.ID, Message: lastErr, LatencyMS: headerLatency.Milliseconds()})
+				break
+			}
 			if cfg.Routing.Strategy == "ready_queue" {
 				s.hm.Quarantine(c.Deployment.ID, lastErr, headerLatency)
 				s.probe.Recover(c.Deployment.ID)
@@ -90,7 +106,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 			if i+1 < max {
 				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "failover", Deployment: c.Deployment.ID, Message: "transport failure; trying " + candidates[i+1].Deployment.ID})
 			}
-			s.retryPause(r, cfg, i, max)
+			s.retryPause(routeCtx, r.Header.Get("x-request-id"), cfg, i, max)
 			continue
 		}
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -118,7 +134,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_fail", Deployment: c.Deployment.ID, Message: lastErr, LatencyMS: headerLatency.Milliseconds(), StatusCode: resp.StatusCode})
 			if failoverEligible(resp.StatusCode) && i+1 < max {
 				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "failover", Deployment: c.Deployment.ID, Message: fmt.Sprintf("HTTP %d; trying %s", resp.StatusCode, candidates[i+1].Deployment.ID), StatusCode: resp.StatusCode})
-				s.retryPause(r, cfg, i, max)
+				s.retryPause(routeCtx, r.Header.Get("x-request-id"), cfg, i, max)
 				continue
 			}
 			if c.Deployment.ProviderType == "anthropic_compatible" {
@@ -146,6 +162,10 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		totalLatency := time.Since(start)
 		if e != nil {
 			lastErr = e.Error()
+			if clientRequestGone(r.Context()) {
+				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "client_disconnect", Deployment: c.Deployment.ID, Message: r.Context().Err().Error(), LatencyMS: totalLatency.Milliseconds(), StatusCode: resp.StatusCode})
+				return
+			}
 			if cfg.Routing.Strategy == "ready_queue" {
 				s.hm.Quarantine(c.Deployment.ID, lastErr, totalLatency)
 				s.probe.Recover(c.Deployment.ID)
@@ -158,6 +178,13 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		}
 		s.hm.RecordSuccess(c.Deployment.ID, headerLatency)
 		s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_ok", Deployment: c.Deployment.ID, Message: "request completed", LatencyMS: totalLatency.Milliseconds(), StatusCode: resp.StatusCode})
+		return
+	}
+	if gatewayDeadlineExceeded(routeCtx, r.Context()) {
+		anthropicErrorJSON(w, http.StatusGatewayTimeout, "gateway request timeout")
+		return
+	}
+	if clientRequestGone(r.Context()) {
 		return
 	}
 	if lastStatus > 0 && len(lastBody) > 0 {
