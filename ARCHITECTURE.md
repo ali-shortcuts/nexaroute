@@ -147,7 +147,7 @@ Each provider adapter has a bounded semaphore. Requests waiting on that semaphor
 
 ## Probe plane
 
-The probe engine executes tiny health requests with bounded concurrency. At startup it primes all enabled deployments before the HTTP listener opens, so Claude traffic only sees models that have already passed a health request.
+The probe engine executes tiny health requests with bounded concurrency. Automatic background sweeps do not re-probe a deployment that is already `healthy`; they establish readiness for `unknown` deployments and ensure degraded/cooldown deployments have a recovery supervisor. A healthy deployment leaves the ready queue only after a real routed failure or after a hot-reload change invalidates its previous health proof. At startup it primes all enabled deployments before the HTTP listener opens, so Claude traffic only sees models that have already passed a health request.
 
 Defaults:
 
@@ -159,7 +159,7 @@ Defaults:
 - 30-minute default recovery cooldown
 - every 120 seconds
 
-Manual `Probe all models` uses the same engine and can wait for a structured result: total, passed, failed, cooldown-skipped and missing-skipped.
+Manual `Probe all models` is the intentional exception: it can explicitly retest healthy deployments and returns a structured result including total, passed, failed, ready-skipped, cooldown-skipped, recovery-skipped and missing-adapter counts.
 
 Authentication/quota/rate-limit failures can immediately cool a deployment instead of spending several normal user requests discovering the same failure.
 
