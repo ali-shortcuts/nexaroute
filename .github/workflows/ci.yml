@@ -31,56 +31,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          bad_files="$(git ls-files | grep -Ei '(^|/)(backup|backups|old|legacy)(/|$)|\.bak$|\.orig$|\.rej$|~
-      - name: Local runtime smoke test
-        run: ./scripts/smoke-local.sh
-
-      - name: Installer smoke test
-        shell: bash
-        run: |
-          set -euo pipefail
-          tmp_home="$(mktemp -d)"
-          trap 'rm -rf "$tmp_home"' EXIT
-          HOME="$tmp_home" ./install-user.sh
-          test -x "$tmp_home/.local/bin/nexaroute"
-          "$tmp_home/.local/bin/nexaroute" -version | grep -F "NexaRoute v0.3"
-          test -f "$tmp_home/.config/nexaroute/config.json"
-          test "$(stat -c '%a' "$tmp_home/.config/nexaroute/config.json")" = "600"
-
-      - name: Docker build
-        run: docker build --tag nexaroute-ci:0.3 .
-
-      - name: Docker runtime smoke test
-        shell: bash
-        run: |
-          set -euo pipefail
-          cid="$(docker run -d -p 18081:8080 -e NEXAROUTE_ADMIN_KEY=ci-admin nexaroute-ci:0.3)"
-          cleanup() { docker rm -f "$cid" >/dev/null 2>&1 || true; }
-          trap cleanup EXIT
-          for _ in $(seq 1 80); do
-            if curl -fsS http://127.0.0.1:18081/healthz >/dev/null 2>&1; then
-              break
-            fi
-            sleep 0.1
-          done
-          curl -fsS http://127.0.0.1:18081/healthz >/dev/null
-          body='{"provider":{"id":"docker-smoke","name":"Docker Smoke","type":"openai_compatible","base_url":"http://127.0.0.1:19999/v1","auth_mode":"none","enabled":false,"models":[{"id":"m1","model":"model-1","enabled":true,"priority":1,"weight":1,"capabilities":{"streaming":true,"tools":true,"vision":false,"reasoning":false}}]},"preserve_secret":false}'
-          code="$(curl -sS -o /tmp/docker-smoke.json -w '%{http_code}' \
-            -H 'x-admin-key: ci-admin' \
-            -H 'content-type: application/json' \
-            --data-binary "$body" \
-            http://127.0.0.1:18081/admin/api/providers)"
-          if [ "$code" != "201" ]; then
-            cat /tmp/docker-smoke.json
-            exit 1
-          fi
- || true)"
+          bad_files="$(git ls-files | grep -Ei '(^|/)(backup|backups|old|legacy)(/|$)|\.bak$|\.orig$|\.rej$|~$' || true)"
           if [ -n "$bad_files" ]; then
             echo "Forbidden backup/legacy artifacts:"
             echo "$bad_files"
             exit 1
           fi
-          if git grep -nE 'LoadBackup|adminRollback|/admin/api/rollback|rollbackBtn|ulg_admin_key|ULG_CONFIG|ULG_LISTEN|ULG_ADMIN_KEY|ULG_ADMIN_BIND_LOCAL_ONLY|universal-llm-gateway|\.bak' -- . ':!CHANGELOG.md'; then
+          if git grep -nE 'LoadBackup|adminRollback|/admin/api/rollback|rollbackBtn|ulg_admin_key|ULG_CONFIG|ULG_LISTEN|ULG_ADMIN_KEY|ULG_ADMIN_BIND_LOCAL_ONLY|universal-llm-gateway' -- . ':(exclude).github/workflows/ci.yml'; then
             echo "Forbidden backup/legacy identifiers remain in active source/docs."
             exit 1
           fi
@@ -102,6 +59,7 @@ jobs:
           "$tmp_home/.local/bin/nexaroute" -version | grep -F "NexaRoute v0.3"
           test -f "$tmp_home/.config/nexaroute/config.json"
           test "$(stat -c '%a' "$tmp_home/.config/nexaroute/config.json")" = "600"
+          test ! -e "$tmp_home/.config/nexaroute/config.json.bak"
 
       - name: Docker build
         run: docker build --tag nexaroute-ci:0.3 .
@@ -111,7 +69,10 @@ jobs:
         run: |
           set -euo pipefail
           cid="$(docker run -d -p 18081:8080 -e NEXAROUTE_ADMIN_KEY=ci-admin nexaroute-ci:0.3)"
-          cleanup() { docker rm -f "$cid" >/dev/null 2>&1 || true; }
+          cleanup() {
+            docker rm -f "$cid" >/dev/null 2>&1 || true
+            rm -f /tmp/nexaroute-docker-backup-check
+          }
           trap cleanup EXIT
           for _ in $(seq 1 80); do
             if curl -fsS http://127.0.0.1:18081/healthz >/dev/null 2>&1; then
@@ -128,5 +89,9 @@ jobs:
             http://127.0.0.1:18081/admin/api/providers)"
           if [ "$code" != "201" ]; then
             cat /tmp/docker-smoke.json
+            exit 1
+          fi
+          if docker cp "$cid:/config/config.json.bak" /tmp/nexaroute-docker-backup-check >/dev/null 2>&1; then
+            echo "Docker runtime created a forbidden config backup."
             exit 1
           fi
