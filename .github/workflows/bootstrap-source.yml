@@ -3,7 +3,7 @@ name: Bootstrap source
 on:
   push:
     paths:
-      - '.bootstrap/publish_12'
+      - '.bootstrap/bundle_06'
   workflow_dispatch:
 
 permissions:
@@ -17,21 +17,13 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: false
-        continue-on-error: true
-
       - name: Reconstruct source archive
         shell: bash
         run: |
           set -euo pipefail
-          cat .bootstrap/publish_00 .bootstrap/publish_01 .bootstrap/publish_02 \
-              .bootstrap/publish_03 .bootstrap/publish_04 .bootstrap/publish_05 \
-              .bootstrap/publish_06 .bootstrap/publish_07 .bootstrap/publish_08 \
-              .bootstrap/publish_09 .bootstrap/publish_10 .bootstrap/publish_11 \
-              .bootstrap/publish_12 > /tmp/nexaroute-source.b64
+          cat .bootstrap/bundle_00 .bootstrap/bundle_01 .bootstrap/bundle_02 \
+              .bootstrap/bundle_03 .bootstrap/bundle_04 .bootstrap/bundle_05 \
+              .bootstrap/bundle_06 > /tmp/nexaroute-source.b64
           base64 -d /tmp/nexaroute-source.b64 > /tmp/nexaroute-source-v0.3.tar.xz
           echo "e3022ee185cdad85b30996d9abaef108747a220b17bed0317ea174ba1f0b6d7f  /tmp/nexaroute-source-v0.3.tar.xz" | sha256sum -c -
           xz -t /tmp/nexaroute-source-v0.3.tar.xz
