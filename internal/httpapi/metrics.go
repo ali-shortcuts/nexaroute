@@ -95,13 +95,25 @@ func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	usable := 0
+	cfg := s.currentConfig()
 	for _, d := range ds {
-		if s.hm.Get(d.ID).Status != health.Cooldown {
+		st := s.hm.Get(d.ID).Status
+		if cfg.Routing.Strategy == "ready_queue" {
+			if st == health.Healthy {
+				usable++
+			}
+			continue
+		}
+		if st != health.Cooldown {
 			usable++
 		}
 	}
 	if usable == 0 {
-		errorJSON(w, 503, "all model deployments are in cooldown")
+		if cfg.Routing.Strategy == "ready_queue" {
+			errorJSON(w, 503, "no verified healthy model deployments in ready queue")
+		} else {
+			errorJSON(w, 503, "no usable model deployments")
+		}
 		return
 	}
 	writeJSON(w, 200, map[string]any{"ok": true, "deployments": len(ds), "usable": usable})
