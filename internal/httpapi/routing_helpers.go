@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -8,6 +9,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/ali-shortcuts/nexaroute/internal/config"
 )
 
 func patchJSONModel(raw []byte, model string) ([]byte, error) {
@@ -55,6 +58,24 @@ func retryAfterDuration(h http.Header, max time.Duration) time.Duration {
 		d = max
 	}
 	return d
+}
+
+func redactProviderBody(p config.ProviderConfig, b []byte) []byte {
+	out := append([]byte(nil), b...)
+	for _, key := range p.ResolvedCredentials() {
+		if key == "" {
+			continue
+		}
+		out = bytes.ReplaceAll(out, []byte(key), []byte("[REDACTED]"))
+	}
+	return out
+}
+
+func redactProviderSecrets(cfg config.Config, providerID string, b []byte) []byte {
+	if i := cfg.ProviderIndex(providerID); i >= 0 {
+		return redactProviderBody(cfg.Providers[i], b)
+	}
+	return append([]byte(nil), b...)
 }
 
 func upstreamError(status int, b []byte) string {
