@@ -212,7 +212,13 @@ func (r *Router) Candidates(req Requirement) []Scored {
 			}
 		}
 	case "adaptive_round_robin":
-		sort.SliceStable(out, func(i, j int) bool { return out[i].Score > out[j].Score })
+		sort.SliceStable(out, func(i, j int) bool {
+			ri, rj := healthRank(out[i].Health.Status), healthRank(out[j].Health.Status)
+			if ri != rj {
+				return ri < rj
+			}
+			return out[i].Score > out[j].Score
+		})
 		window := 1
 		best := out[0].Score
 		for window < len(out) && window < 32 && out[window].Score >= best-15 && out[window].Health.Status != health.Degraded {
@@ -226,7 +232,13 @@ func (r *Router) Candidates(req Requirement) []Scored {
 			}
 		}
 	default: // adaptive
-		sort.SliceStable(out, func(i, j int) bool { return out[i].Score > out[j].Score })
+		sort.SliceStable(out, func(i, j int) bool {
+			ri, rj := healthRank(out[i].Health.Status), healthRank(out[j].Health.Status)
+			if ri != rj {
+				return ri < rj
+			}
+			return out[i].Score > out[j].Score
+		})
 	}
 	return out
 }
