@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -197,11 +198,11 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 	anthropicErrorJSON(w, 502, "all candidate deployments failed: "+lastErr)
 }
 
-func (s *Server) retryPause(r *http.Request, cfg interface{ RetryBackoff() time.Duration }, i, max int) {
+func (s *Server) retryPause(ctx context.Context, requestID string, cfg interface{ RetryBackoff() time.Duration }, i, max int) {
 	if i+1 >= max {
 		return
 	}
-	d := cfg.RetryBackoff()
+	d := jitteredRetryBackoff(cfg.RetryBackoff(), i, requestID)
 	if d <= 0 {
 		return
 	}
@@ -209,7 +210,7 @@ func (s *Server) retryPause(r *http.Request, cfg interface{ RetryBackoff() time.
 	defer t.Stop()
 	select {
 	case <-t.C:
-	case <-r.Context().Done():
+	case <-ctx.Done():
 	}
 }
 
@@ -297,6 +298,7 @@ func streamOpenAIToAnthropic(w http.ResponseWriter, resp *http.Response, model s
 	textIndex := -1
 	textStarted := false
 	finish := "end_turn"
+	terminal := false
 	tools := map[int]*openAIToolStreamState{}
 	startText := func() {
 		if textStarted {
@@ -337,6 +339,7 @@ func streamOpenAIToAnthropic(w http.ResponseWriter, resp *http.Response, model s
 			continue
 		}
 		if d == "[DONE]" {
+			terminal = true
 			break
 		}
 		var raw map[string]any
@@ -389,6 +392,7 @@ func streamOpenAIToAnthropic(w http.ResponseWriter, resp *http.Response, model s
 			startTool(st)
 		}
 		if ch.FinishReason != nil {
+			terminal = true
 			switch *ch.FinishReason {
 			case "tool_calls":
 				finish = "tool_use"
@@ -401,6 +405,11 @@ func streamOpenAIToAnthropic(w http.ResponseWriter, resp *http.Response, model s
 	}
 	if err := scanner.Err(); err != nil {
 		emit("error", map[string]any{"type": "error", "error": map[string]any{"type": "api_error", "message": err.Error()}})
+		return err
+	}
+	if !terminal {
+		err := io.ErrUnexpectedEOF
+		emit("error", map[string]any{"type": "error", "error": map[string]any{"type": "api_error", "message": "upstream stream ended before completion"}})
 		return err
 	}
 	if textStarted {
