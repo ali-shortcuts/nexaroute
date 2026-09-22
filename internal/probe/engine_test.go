@@ -286,3 +286,37 @@ func TestBackgroundSweepAtScaleTouchesOnlyUnverifiedModels(t *testing.T) {
 		}
 	}
 }
+
+func TestLegacyAdaptiveBackgroundSweepStillReprobesHealthyModels(t *testing.T) {
+	var calls atomic.Int32
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"c","choices":[{"message":{"role":"assistant","content":"OK"}}]}`))
+	}))
+	defer up.Close()
+
+	cfg := config.Default()
+	cfg.Routing.Strategy = "adaptive"
+	cfg.Probe.Enabled = true
+	cfg.Probe.OnStart = false
+	cfg.Providers = []config.ProviderConfig{{
+		ID: "p", Name: "P", Type: "openai_compatible", BaseURL: up.URL,
+		AuthMode: "none", Enabled: true,
+		Models: []config.ModelConfig{{ID: "m", Model: "m", Enabled: true, Weight: 1}},
+	}}
+	cfg.ApplyDefaults()
+	hm := health.New(cfg.Routing.FailureThreshold, cfg.Cooldown())
+	hm.RecordSuccess("p/m", time.Millisecond)
+	reg, err := providers.NewRegistry(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt := router.New(cfg, hm)
+	e := New(cfg, reg, rt, hm, events.New(20))
+	res := e.runOnce(context.Background(), false)
+
+	if res.Passed != 1 || res.SkippedReady != 0 || calls.Load() != 1 {
+		t.Fatalf("legacy adaptive health semantics changed: result=%+v calls=%d", res, calls.Load())
+	}
+}
