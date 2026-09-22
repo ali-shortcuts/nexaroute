@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -68,6 +69,54 @@ func cloneConfig(in config.Config) config.Config {
 	return out
 }
 
+func providerProbeIdentityEqual(a, b config.ProviderConfig) bool {
+	return a.Type == b.Type &&
+		a.BaseURL == b.BaseURL &&
+		a.APIKey == b.APIKey &&
+		a.APIKeyEnv == b.APIKeyEnv &&
+		reflect.DeepEqual(a.Credentials, b.Credentials) &&
+		a.AuthMode == b.AuthMode &&
+		reflect.DeepEqual(a.Headers, b.Headers) &&
+		reflect.DeepEqual(a.ForwardHeaders, b.ForwardHeaders) &&
+		a.ProxyURL == b.ProxyURL &&
+		a.ChatPath == b.ChatPath &&
+		a.MessagesPath == b.MessagesPath &&
+		a.ModelsPath == b.ModelsPath &&
+		a.CountTokensPath == b.CountTokensPath &&
+		a.Enabled == b.Enabled
+}
+
+func changedDeploymentIDs(oldCfg, newCfg config.Config) map[string]struct{} {
+	changed := map[string]struct{}{}
+	oldProviders := map[string]config.ProviderConfig{}
+	for _, p := range oldCfg.Providers {
+		oldProviders[p.ID] = p
+	}
+	for _, np := range newCfg.Providers {
+		if !np.Enabled {
+			continue
+		}
+		op, ok := oldProviders[np.ID]
+		providerChanged := !ok || !providerProbeIdentityEqual(op, np)
+		oldModels := map[string]config.ModelConfig{}
+		if ok {
+			for _, m := range op.Models {
+				oldModels[m.ID] = m
+			}
+		}
+		for _, nm := range np.Models {
+			if !nm.Enabled {
+				continue
+			}
+			om, existed := oldModels[nm.ID]
+			if providerChanged || !existed || !om.Enabled || om.Model != nm.Model {
+				changed[np.ID+"/"+nm.ID] = struct{}{}
+			}
+		}
+	}
+	return changed
+}
+
 // applyConfig validates and persists first, then swaps the in-memory provider
 // registry/router under one short lock. Existing Adapter pointers already taken
 // by in-flight requests remain valid after the registry map is replaced.
@@ -84,13 +133,24 @@ func (s *Server) applyConfig(cfg config.Config) error {
 	}
 	s.runtimeMu.Lock()
 	defer s.runtimeMu.Unlock()
+	oldCfg := s.cfg
 	if err := s.reg.Reload(cfg); err != nil {
 		return err
 	}
 	s.rt.Reload(cfg)
 	s.hm.Configure(cfg.Routing.FailureThreshold, cfg.Cooldown())
-	s.probe.Reload(cfg)
+
+	valid := map[string]struct{}{}
+	for _, d := range s.rt.All() {
+		valid[d.ID] = struct{}{}
+	}
+	s.hm.Retain(valid)
+	for id := range changedDeploymentIDs(oldCfg, cfg) {
+		s.hm.Invalidate(id)
+	}
+
 	s.cfg = cfg
+	s.probe.Reload(cfg)
 	return nil
 }
 
