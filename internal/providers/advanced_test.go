@@ -52,6 +52,84 @@ func TestCredentialPoolFailsOverAndCoolsBadKey(t *testing.T) {
 	}
 }
 
+
+func TestCredentialFailoverReturnsFinalTransportErrorNotClosedPriorResponse(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Header.Get("Authorization") {
+		case "Bearer bad":
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = io.WriteString(w, `{"error":"bad"}`)
+		case "Bearer drop":
+			hj, ok := w.(http.Hijacker)
+			if !ok {
+				t.Error("server does not support hijacking")
+				return
+			}
+			conn, _, err := hj.Hijack()
+			if err != nil {
+				t.Errorf("hijack: %v", err)
+				return
+			}
+			_ = conn.Close()
+		default:
+			t.Errorf("unexpected credential %q", r.Header.Get("Authorization"))
+		}
+	}))
+	defer srv.Close()
+
+	p := config.ProviderConfig{
+		ID: "p", Name: "p", Type: "openai_compatible", BaseURL: srv.URL,
+		APIKey: "bad", Credentials: []config.CredentialConfig{{Name: "drop", APIKey: "drop", Enabled: true}},
+		AuthMode: "bearer", Enabled: true, MaxConcurrency: 2,
+	}
+	a, err := newHTTPAdapter(p, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := a.Do(context.Background(), []byte(`{"model":"x","messages":[]}`), false, nil)
+	if resp != nil {
+		resp.Body.Close()
+		t.Fatalf("expected no response after final transport error, got status %d", resp.StatusCode)
+	}
+	if err == nil {
+		t.Fatal("expected final transport error")
+	}
+}
+
+func TestSafeSnippetConcurrentWithCredentialStateChanges(t *testing.T) {
+	p := config.ProviderConfig{
+		ID: "p", Name: "p", Type: "openai_compatible", BaseURL: "http://example.invalid",
+		APIKey: "secret-a",
+		Credentials: []config.CredentialConfig{{Name: "b", APIKey: "secret-b", Enabled: true}},
+		AuthMode: "bearer", Enabled: true,
+	}
+	a, err := newHTTPAdapter(p, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 1000; i++ {
+			got := a.safeSnippet([]byte("secret-a secret-b provider error"))
+			if strings.Contains(got, "secret-a") || strings.Contains(got, "secret-b") {
+				t.Errorf("credential leaked from safeSnippet: %q", got)
+				return
+			}
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 1000; i++ {
+			a.cooldownCredential(i%2, http.StatusUnauthorized, "")
+			a.markCredentialSuccess(i % 2)
+		}
+	}()
+	wg.Wait()
+}
+
 func TestForwardHeaderAllowlistDoesNotLeakClientAuth(t *testing.T) {
 	var beta, auth string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
