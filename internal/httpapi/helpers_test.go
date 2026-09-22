@@ -73,3 +73,10 @@ func TestErrorTypeForStatus(t *testing.T) {
 		}
 	}
 }
+
+func TestJitteredRetryBackoffCapsHugeDurationsWithoutOverflow(t *testing.T) {
+	got := jitteredRetryBackoff(time.Duration(1<<62), 6, "req")
+	if got < 0 || got > 5*time.Second {
+		t.Fatalf("backoff=%s outside safe cap", got)
+	}
+}
