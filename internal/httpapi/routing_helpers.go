@@ -40,9 +40,20 @@ func jitteredRetryBackoff(base time.Duration, attempt int, requestID string) tim
 	if attempt > 6 {
 		attempt = 6
 	}
-	max := base << attempt
-	if max > 5*time.Second {
-		max = 5 * time.Second
+	const capDelay = 5 * time.Second
+	if base > capDelay {
+		base = capDelay
+	}
+	max := base
+	for n := 0; n < attempt && max < capDelay; n++ {
+		if max > capDelay/2 {
+			max = capDelay
+			break
+		}
+		max *= 2
+	}
+	if max > capDelay {
+		max = capDelay
 	}
 	h := fnv.New64a()
 	_, _ = h.Write([]byte(requestID))
