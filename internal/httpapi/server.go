@@ -66,7 +66,11 @@ func cloneConfig(in config.Config) config.Config {
 		}
 		out.Providers[i].Models = append([]config.ModelConfig(nil), in.Providers[i].Models...)
 		out.Providers[i].Credentials = append([]config.CredentialConfig(nil), in.Providers[i].Credentials...)
-		out.Providers[i].ForwardHeaders = append([]string(nil), in.Providers[i].ForwardHeaders...)
+		if in.Providers[i].ForwardHeaders != nil {
+			out.Providers[i].ForwardHeaders = append([]string{}, in.Providers[i].ForwardHeaders...)
+		} else {
+			out.Providers[i].ForwardHeaders = nil
+		}
 		for j := range out.Providers[i].Models {
 			out.Providers[i].Models[j].Aliases = append([]string(nil), in.Providers[i].Models[j].Aliases...)
 		}

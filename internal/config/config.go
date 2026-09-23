@@ -326,7 +326,7 @@ func (p *ProviderConfig) ApplyDefaults() {
 	if p.StreamIdleTimeoutSeconds == 0 {
 		p.StreamIdleTimeoutSeconds = 180
 	}
-	if len(p.ForwardHeaders) == 0 && p.Type == "anthropic_compatible" {
+	if p.ForwardHeaders == nil && p.Type == "anthropic_compatible" {
 		p.ForwardHeaders = []string{"anthropic-beta", "anthropic-version", "user-agent"}
 	}
 	for i := range p.Credentials {

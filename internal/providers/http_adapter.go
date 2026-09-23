@@ -51,11 +51,19 @@ type httpAdapter struct {
 	creds          []credentialState
 	rr             uint64
 	forwardAllowed map[string]struct{}
+	retryAfterCap  time.Duration
 	active         atomic.Int64
 	waiting        atomic.Int64
 }
 
 func newHTTPAdapter(p config.ProviderConfig, timeout time.Duration) (*httpAdapter, error) {
+	return newHTTPAdapterWithRetryCap(p, timeout, 60*time.Second)
+}
+
+func newHTTPAdapterWithRetryCap(p config.ProviderConfig, timeout, retryAfterCap time.Duration) (*httpAdapter, error) {
+	if retryAfterCap <= 0 {
+		retryAfterCap = 60 * time.Second
+	}
 	mc := p.MaxConcurrency
 	if mc <= 0 {
 		mc = 32
@@ -90,6 +98,7 @@ func newHTTPAdapter(p config.ProviderConfig, timeout time.Duration) (*httpAdapte
 	a := &httpAdapter{
 		p: p, c: &http.Client{Transport: tr, Timeout: timeout}, streamC: &http.Client{Transport: tr},
 		sem: make(chan struct{}, mc), forwardAllowed: make(map[string]struct{}, len(p.ForwardHeaders)),
+		retryAfterCap: retryAfterCap,
 	}
 	for _, h := range p.ForwardHeaders {
 		h = strings.ToLower(strings.TrimSpace(h))
@@ -461,7 +470,7 @@ func (a *httpAdapter) cooldownCredential(i, status int, retryAfter string) {
 	case 402:
 		d = time.Hour
 	case 429:
-		d = parseRetryAfter(retryAfter, 60*time.Second)
+		d = parseRetryAfterBounded(retryAfter, 60*time.Second, a.retryAfterCap)
 	case 401, 403:
 		d = 15 * time.Minute
 	}
@@ -516,16 +525,29 @@ func (a *httpAdapter) safeSnippet(b []byte) string {
 func credentialRetryStatus(code int) bool {
 	return code == 401 || code == 402 || code == 403 || code == 429
 }
-func parseRetryAfter(v string, fallback time.Duration) time.Duration {
+func parseRetryAfterBounded(v string, fallback, cap time.Duration) time.Duration {
+	if cap <= 0 {
+		cap = 60 * time.Second
+	}
+	if fallback <= 0 || fallback > cap {
+		fallback = cap
+	}
 	v = strings.TrimSpace(v)
 	if v == "" {
 		return fallback
 	}
-	if s, err := strconv.Atoi(v); err == nil && s > 0 {
-		return time.Duration(s) * time.Second
+	if seconds, err := strconv.ParseInt(v, 10, 64); err == nil && seconds > 0 {
+		maxSeconds := int64(cap / time.Second)
+		if maxSeconds < 1 || seconds >= maxSeconds {
+			return cap
+		}
+		return time.Duration(seconds) * time.Second
 	}
 	if t, err := http.ParseTime(v); err == nil {
 		if d := time.Until(t); d > 0 {
+			if d > cap {
+				return cap
+			}
 			return d
 		}
 	}
@@ -600,8 +622,15 @@ func (a *httpAdapter) validateProbeResponse(data []byte) error {
 		if err := json.Unmarshal(raw, &choices); err != nil {
 			return fmt.Errorf("probe returned invalid OpenAI choices: %w", err)
 		}
-		if len(choices) == 0 || choices[0]["message"] == nil {
+		if len(choices) == 0 || len(choices[0]["message"]) == 0 {
 			return errors.New("probe returned an invalid OpenAI chat-completion envelope")
+		}
+		var message map[string]json.RawMessage
+		if err := json.Unmarshal(choices[0]["message"], &message); err != nil || message == nil {
+			if err != nil {
+				return fmt.Errorf("probe returned an invalid OpenAI message object: %w", err)
+			}
+			return errors.New("probe returned an invalid OpenAI message object")
 		}
 	}
 	return nil

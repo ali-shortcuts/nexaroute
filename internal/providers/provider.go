@@ -67,7 +67,7 @@ func (r *Registry) Prepare(cfg config.Config, rebuild map[string]struct{}) (*Reg
 				}
 			}
 		}
-		a, err := NewAdapter(p, cfg.RequestTimeout())
+		a, err := NewAdapterWithRetryAfterCap(p, cfg.RequestTimeout(), time.Duration(cfg.Routing.MaxRetryAfterSeconds)*time.Second)
 		if err != nil {
 			return nil, err
 		}
@@ -138,9 +138,13 @@ func (r *Registry) Stats() []ProviderStats {
 	return out
 }
 func NewAdapter(p config.ProviderConfig, timeout time.Duration) (Adapter, error) {
+	return NewAdapterWithRetryAfterCap(p, timeout, 60*time.Second)
+}
+
+func NewAdapterWithRetryAfterCap(p config.ProviderConfig, timeout, retryAfterCap time.Duration) (Adapter, error) {
 	p.ApplyDefaults()
 	if err := config.ValidateProviderConfig(p); err != nil {
 		return nil, err
 	}
-	return newHTTPAdapter(p, timeout)
+	return newHTTPAdapterWithRetryCap(p, timeout, retryAfterCap)
 }
