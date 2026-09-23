@@ -150,13 +150,6 @@ func redactProviderBody(p config.ProviderConfig, b []byte) []byte {
 	return out
 }
 
-func redactProviderSecrets(cfg config.Config, providerID string, b []byte) []byte {
-	if i := cfg.ProviderIndex(providerID); i >= 0 {
-		return redactProviderBody(cfg.Providers[i], b)
-	}
-	return append([]byte(nil), b...)
-}
-
 func upstreamError(status int, b []byte) string {
 	msg := strings.TrimSpace(string(b))
 	if len(msg) > 1024 {
