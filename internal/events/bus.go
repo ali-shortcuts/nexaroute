@@ -17,13 +17,13 @@ type Event struct {
 }
 
 const (
-	maxCounterKeys       = 256
-	maxEventRequestID    = 128
-	maxEventKind         = 128
-	maxEventDeployment   = 512
-	maxEventMessage      = 4096
-	maxEventErrorType    = 128
-	counterOverflowKey   = "__other__"
+	maxCounterKeys     = 256
+	maxEventRequestID  = 128
+	maxEventKind       = 128
+	maxEventDeployment = 512
+	maxEventMessage    = 4096
+	maxEventErrorType  = 128
+	counterOverflowKey = "__other__"
 )
 
 func boundedString(s string, max int) string {
