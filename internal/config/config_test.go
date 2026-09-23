@@ -209,6 +209,8 @@ func TestNegativeValuesAreRejectedInsteadOfDefaulted(t *testing.T) {
 		{"session ttl", func(c *Config) { c.Routing.SessionTTLSeconds = -1 }},
 		{"probe concurrency", func(c *Config) { c.Probe.Concurrency = -1 }},
 		{"probe timeout", func(c *Config) { c.Probe.TimeoutMS = -1 }},
+		{"retry backoff", func(c *Config) { c.Routing.RetryBackoffMS = -1 }},
+		{"recovery retry", func(c *Config) { c.Probe.RecoveryRetryMS = -1 }},
 		{"provider concurrency", func(c *Config) {
 			c.Providers = []ProviderConfig{{
 				ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "https://example.com",
@@ -231,5 +233,27 @@ func TestNegativeValuesAreRejectedInsteadOfDefaulted(t *testing.T) {
 				t.Fatal("negative value should be rejected, not silently defaulted")
 			}
 		})
+	}
+}
+
+func TestExplicitZeroRoutingWeightsAndRetryDelaysArePreserved(t *testing.T) {
+	cfg := Default()
+	cfg.Routing.LatencyWeight = 0
+	cfg.Routing.FailureWeight = 0
+	cfg.Routing.CapacityWeight = 0
+	cfg.Routing.RetryBackoffMS = 0
+	cfg.Probe.RecoveryRetryMS = 0
+
+	cfg.ApplyDefaults()
+
+	if cfg.Routing.LatencyWeight != 0 ||
+		cfg.Routing.FailureWeight != 0 ||
+		cfg.Routing.CapacityWeight != 0 ||
+		cfg.Routing.RetryBackoffMS != 0 ||
+		cfg.Probe.RecoveryRetryMS != 0 {
+		t.Fatalf("explicit zero values were overwritten: routing=%+v probe=%+v", cfg.Routing, cfg.Probe)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("explicit zero weights/delays should validate: %v", err)
 	}
 }
