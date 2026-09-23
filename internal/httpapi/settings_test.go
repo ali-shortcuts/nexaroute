@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/ali-shortcuts/nexaroute/internal/config"
@@ -119,13 +120,16 @@ func testConfigPath(t *testing.T, s *Server) string {
 }
 
 func TestAdminProviderTestSavedModeIncludesDisabledModels(t *testing.T) {
+	var mu sync.Mutex
 	var tested []string
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Model string `json:"model"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
+		mu.Lock()
 		tested = append(tested, body.Model)
+		mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"id": "c1", "object": "chat.completion",

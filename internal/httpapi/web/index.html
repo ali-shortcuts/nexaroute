@@ -7,7 +7,7 @@
 <body>
 <div class="shell">
 <aside><div class="brand"><div class="logo">N</div><div><strong>NexaRoute</strong><small>v0.3 • control plane</small></div></div>
-<nav><button class="active" data-tab="overview">Overview</button><button data-tab="providers">Providers</button><button data-tab="models">Models</button><button data-tab="health">Health</button><button data-tab="events">Events</button><button data-tab="cli">CLI Tools</button><button data-tab="settings">Settings</button></nav><div class="sidefoot" id="apiState">● connecting</div></aside>
+<nav><button class="active" data-tab="overview">Overview</button><button data-tab="providers">Providers</button><button data-tab="models">Models</button><button data-tab="health">Health</button><button data-tab="events">Events</button><button data-tab="usage">Usage</button><button data-tab="keys">Access Keys</button><button data-tab="cli">CLI Tools</button><button data-tab="settings">Settings</button></nav><div class="sidefoot" id="apiState">● connecting</div></aside>
 <main>
 <header><div><h1 id="title">Routing Overview</h1><p>Ready Mesh: verified health, session affinity, capacity-aware routing and supervised recovery.</p></div><button id="probeBtn" class="btn secondary">Probe all models</button></header>
 <section id="overview" class="tab active">
@@ -21,6 +21,18 @@
 <div class="panel"><div class="panelhead"><div><h2>Capability evidence</h2><p>Scoped circuit health for streaming, tools, vision and reasoning.</p></div></div><div id="scopeHealthList" class="scope-health"></div></div>
 </div></section>
 <section id="events" class="tab"><div class="panel"><div class="panelhead"><div><h2>Live events</h2><p>Probe, routing, failover and recovery activity.</p></div></div><div id="eventList" class="events"></div></div></section>
+<section id="usage" class="tab"><div class="panel"><div class="panelhead"><div><h2>Usage &amp; cost</h2><p>Live in-process accounting since gateway start. Cost is estimated from configured pricing (Settings → Pricing).</p></div><button id="usageResetBtn" class="btn danger-ghost">Reset counters</button></div>
+<div class="stats usage-stats"><div><span>Requests</span><b id="uRequests">0</b></div><div><span>Input tokens</span><b id="uInTok">0</b></div><div><span>Output tokens</span><b id="uOutTok">0</b></div><div><span>Est. cost</span><b id="uCost">$0.00</b></div></div>
+<div class="usage-grid">
+<div class="tablewrap"><h3>By provider</h3><table><thead><tr><th>Deployment</th><th>Requests</th><th>In tokens</th><th>Out tokens</th><th>Est. cost</th></tr></thead><tbody id="usageProviderRows"></tbody></table></div>
+<div class="tablewrap"><h3>By client key</h3><table><thead><tr><th>Key</th><th>Requests</th><th>In tokens</th><th>Out tokens</th><th>Est. cost</th></tr></thead><tbody id="usageKeyRows"></tbody></table></div>
+</div></div></section>
+<section id="keys" class="tab"><div class="panel"><div class="panelhead"><div><h2>Access keys</h2><p>Virtual client keys for the data plane (/v1/*). Clients send them as <code>Authorization: Bearer …</code> or <code>x-api-key</code>.</p></div><span class="live" id="keyReqState">…</span></div>
+<label class="check-row" style="margin:8px 0 14px"><input id="ckRequired" type="checkbox"><span>Require a client key on /v1/messages, /v1/chat/completions and count_tokens</span></label>
+<div class="manual-row" style="max-width:520px"><input id="newKeyName" placeholder="Key name (e.g. laptop, ci-bot)"><button id="createKeyBtn" class="btn primary" type="button">Generate key</button></div>
+<div class="tablewrap"><table><thead><tr><th>Name</th><th>Key</th><th>Enabled</th><th>Requests</th><th></th></tr></thead><tbody id="keyRows"></tbody></table></div>
+<p class="hint" style="margin-top:10px">Turning the requirement on with zero enabled keys is rejected by design — generate a key first. The admin API and Web UI are unaffected.</p>
+</div></section>
 <section id="cli" class="tab"><div class="panel cli-panel"><div class="panelhead"><div><h2>CLI Tools</h2><p>Point coding agents at NexaRoute; Ready Mesh handles the upstream pool.</p></div></div><div class="cli-grid">
 <div class="cli-card"><h3>Claude Code / Anthropic</h3><p>Use the local Messages endpoint.</p><pre>ANTHROPIC_BASE_URL=http://127.0.0.1:8080
 ANTHROPIC_API_KEY=local-placeholder</pre><small>The placeholder key is only for clients that require a non-empty value.</small></div>

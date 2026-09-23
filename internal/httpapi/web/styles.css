@@ -29,3 +29,8 @@
 .model-test-out.fail{color:var(--bad)}
 .picker-actions{display:flex;gap:6px;align-items:center}
 .row-act{padding:4px 10px;font-size:9px;border-radius:8px}
+.usage-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px}
+.usage-grid h3{margin:0 0 8px;font-size:11px;color:var(--muted)}
+.usage-stats{grid-template-columns:repeat(4,1fr)}
+.keyval{font-family:monospace;font-size:9px;background:#060d16;border:1px solid #17263a;border-radius:7px;padding:4px 7px}
+@media(max-width:850px){.usage-grid{grid-template-columns:1fr}.usage-stats{grid-template-columns:1fr 1fr}}

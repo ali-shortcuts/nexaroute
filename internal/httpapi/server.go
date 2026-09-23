@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"crypto/subtle"
 	"embed"
 	"fmt"
@@ -22,30 +23,44 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/probe"
 	"github.com/ali-shortcuts/nexaroute/internal/providers"
 	"github.com/ali-shortcuts/nexaroute/internal/router"
+	"github.com/ali-shortcuts/nexaroute/internal/usage"
 )
 
 //go:embed web/*
 var webFS embed.FS
 
 type Server struct {
-	applyMu         sync.Mutex
-	runtimeMu       sync.RWMutex
-	cfg             config.Config
-	configPath      string
-	reg             *providers.Registry
-	rt              *router.Router
-	hm              *health.Manager
-	bus             *events.Bus
-	probe           *probe.Engine
-	log             *log.Logger
-	requestSeq      atomic.Uint64
-	requestTotal    atomic.Uint64
-	inflight        atomic.Int64
-	overloadRejects atomic.Uint64
+	applyMu           sync.Mutex
+	runtimeMu         sync.RWMutex
+	cfg               config.Config
+	configPath        string
+	reg               *providers.Registry
+	rt                *router.Router
+	hm                *health.Manager
+	bus               *events.Bus
+	probe             *probe.Engine
+	log               *log.Logger
+	usage             *usage.Tracker
+	requestSeq        atomic.Uint64
+	requestTotal      atomic.Uint64
+	inflight          atomic.Int64
+	overloadRejects   atomic.Uint64
+	clientAuthRejects atomic.Uint64
+}
+
+type clientKeyNameKey struct{}
+
+// clientKeyName returns the authenticated virtual client key name for a
+// request, or "local" when client auth is disabled.
+func clientKeyName(r *http.Request) string {
+	if v, ok := r.Context().Value(clientKeyNameKey{}).(string); ok && v != "" {
+		return v
+	}
+	return "local"
 }
 
 func New(cfg config.Config, configPath string, reg *providers.Registry, rt *router.Router, hm *health.Manager, bus *events.Bus, pe *probe.Engine, l *log.Logger) *Server {
-	return &Server{cfg: cfg, configPath: configPath, reg: reg, rt: rt, hm: hm, bus: bus, probe: pe, log: l}
+	return &Server{cfg: cfg, configPath: configPath, reg: reg, rt: rt, hm: hm, bus: bus, probe: pe, log: l, usage: usage.New()}
 }
 
 func (s *Server) currentConfig() config.Config {
@@ -87,6 +102,16 @@ func cloneConfig(in config.Config) config.Config {
 			out.Providers[i].Models[j].Aliases = append([]string(nil), in.Providers[i].Models[j].Aliases...)
 		}
 	}
+	// Deep-copy the newer reference-typed sections so a rejected mutation can
+	// never leak into the live config through shared backing arrays.
+	out.ClientAuth.Keys = append([]config.ClientKey(nil), in.ClientAuth.Keys...)
+	if in.Pricing != nil {
+		out.Pricing = make(map[string]config.PriceConfig, len(in.Pricing))
+		for k, v := range in.Pricing {
+			out.Pricing[k] = v
+		}
+	}
+	out.Guardrails.BlockedPatterns = append([]string(nil), in.Guardrails.BlockedPatterns...)
 	return out
 }
 
@@ -311,6 +336,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/admin/api/provider-test", s.adminProviderTest)
 	mux.HandleFunc("/admin/api/provider-discover", s.adminProviderDiscover)
 	mux.HandleFunc("/admin/api/settings", s.adminSettings)
+	mux.HandleFunc("/admin/api/client-keys", s.adminClientKeys)
+	mux.HandleFunc("/admin/api/client-keys/", s.adminClientKeys)
+	mux.HandleFunc("/admin/api/client-auth-required", s.adminClientAuthRequired)
+	mux.HandleFunc("/admin/api/usage", s.adminUsage)
+	mux.HandleFunc("/admin/api/usage/reset", s.adminUsage)
 
 	sub, _ := fs.Sub(webFS, "web")
 	mux.Handle("/", http.FileServer(http.FS(sub)))
@@ -443,6 +473,17 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 			}
 		}
 		if isDataPlaneRequest(r) {
+			if s.clientAuthRequired() {
+				name, ok := s.authorizeClientKey(r)
+				if !ok {
+					s.clientAuthRejects.Add(1)
+					s.bus.Add(events.Event{RequestID: rid, Kind: "client_auth_rejected", Message: "missing or invalid client key", ErrorType: "unauthorized"})
+					s.rejectUnauthorized(sw, r)
+					return
+				}
+				r = r.WithContext(context.WithValue(r.Context(), clientKeyNameKey{}, name))
+				s.usage.RecordKeyRequest(name)
+			}
 			if !s.tryAcquireDataPlane() {
 				s.rejectOverloaded(sw, r, rid)
 				return
