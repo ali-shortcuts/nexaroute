@@ -26,6 +26,7 @@ import (
 var webFS embed.FS
 
 type Server struct {
+	applyMu      sync.Mutex
 	runtimeMu    sync.RWMutex
 	cfg          config.Config
 	configPath   string
@@ -86,6 +87,31 @@ func providerProbeIdentityEqual(a, b config.ProviderConfig) bool {
 		a.Enabled == b.Enabled
 }
 
+func providerAdapterIdentityEqual(a, b config.ProviderConfig) bool {
+	return providerProbeIdentityEqual(a, b) &&
+		a.MaxConcurrency == b.MaxConcurrency &&
+		a.StreamIdleTimeoutSeconds == b.StreamIdleTimeoutSeconds
+}
+
+func changedProviderAdapterIDs(oldCfg, newCfg config.Config) map[string]struct{} {
+	changed := map[string]struct{}{}
+	oldProviders := make(map[string]config.ProviderConfig, len(oldCfg.Providers))
+	for _, p := range oldCfg.Providers {
+		oldProviders[p.ID] = p
+	}
+	timeoutChanged := oldCfg.Routing.RequestTimeoutMS != newCfg.Routing.RequestTimeoutMS
+	for _, np := range newCfg.Providers {
+		if !np.Enabled {
+			continue
+		}
+		op, ok := oldProviders[np.ID]
+		if timeoutChanged || !ok || !op.Enabled || !providerAdapterIdentityEqual(op, np) {
+			changed[np.ID] = struct{}{}
+		}
+	}
+	return changed
+}
+
 func changedDeploymentIDs(oldCfg, newCfg config.Config) map[string]struct{} {
 	changed := map[string]struct{}{}
 	oldProviders := map[string]config.ProviderConfig{}
@@ -121,22 +147,33 @@ func changedDeploymentIDs(oldCfg, newCfg config.Config) map[string]struct{} {
 // registry/router under one short lock. Existing Adapter pointers already taken
 // by in-flight requests remain valid after the registry map is replaced.
 func (s *Server) applyConfig(cfg config.Config) error {
+	// Serialize control-plane mutations from validation through durable write and
+	// runtime swap. This prevents concurrent admin updates from racing on stale
+	// snapshots or leaving disk and memory at different revisions.
+	s.applyMu.Lock()
+	defer s.applyMu.Unlock()
+
+	cfg.ApplyDefaults()
 	if err := cfg.Validate(); err != nil {
 		return err
 	}
-	// Build once before touching disk to catch future adapter-construction errors.
-	if _, err := providers.NewRegistry(cfg); err != nil {
+	oldCfg := s.currentConfig()
+	rebuild := changedProviderAdapterIDs(oldCfg, cfg)
+
+	// Prepare the complete next registry before touching disk. Unchanged
+	// providers reuse their live adapters, preserving HTTP connection pools and
+	// credential cooldown/load state across routing-only or probe-only edits.
+	nextReg, err := s.reg.Prepare(cfg, rebuild)
+	if err != nil {
 		return err
 	}
 	if err := config.SaveAtomic(s.configPath, cfg); err != nil {
 		return err
 	}
+
 	s.runtimeMu.Lock()
 	defer s.runtimeMu.Unlock()
-	oldCfg := s.cfg
-	if err := s.reg.Reload(cfg); err != nil {
-		return err
-	}
+	s.reg.Replace(nextReg)
 	s.rt.Reload(cfg)
 	s.hm.ConfigureAdvanced(
 		cfg.Routing.FailureThreshold,
