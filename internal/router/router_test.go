@@ -239,3 +239,33 @@ func TestReadyQueueRequiresSuccessfulHealthProofAndStaysSticky(t *testing.T) {
 		t.Fatalf("quarantined first model must leave ready queue immediately: %#v", after)
 	}
 }
+
+func TestReadyMeshP2CPrefersUnsaturatedProvider(t *testing.T) {
+	cfg:=config.Default(); cfg.Routing.Strategy="ready_mesh"; cfg.Routing.P2CWindow=2
+	cfg.Providers=[]config.ProviderConfig{
+		{ID:"busy",Name:"Busy",Type:"openai_compatible",BaseURL:"http://x",Enabled:true,Models:[]config.ModelConfig{{ID:"m",Model:"m1",Enabled:true,Priority:0,Weight:1}}},
+		{ID:"free",Name:"Free",Type:"openai_compatible",BaseURL:"http://y",Enabled:true,Models:[]config.ModelConfig{{ID:"m",Model:"m2",Enabled:true,Priority:0,Weight:1}}},
+	}
+	h:=health.New(5,time.Hour); h.RecordSuccess("busy/m",10*time.Millisecond); h.RecordSuccess("free/m",10*time.Millisecond); r:=New(cfg,h)
+	got:=r.Candidates(Requirement{Model:"auto",SelectionKey:"req",ProviderLoad:map[string]ProviderLoad{"busy":{Active:32,Waiting:8,Limit:32},"free":{Active:1,Limit:32}}})
+	if len(got)!=2||got[0].Deployment.ProviderID!="free"{t.Fatalf("ready mesh did not avoid saturation: %#v",got)}
+}
+
+func TestReadyMeshSessionAffinityPinsAfterSuccess(t *testing.T) {
+	cfg:=config.Default(); cfg.Routing.Strategy="ready_mesh"; cfg.Routing.SessionAffinity=true
+	cfg.Providers=[]config.ProviderConfig{{ID:"p",Name:"P",Type:"openai_compatible",BaseURL:"http://x",Enabled:true,Models:[]config.ModelConfig{{ID:"a",Model:"a",Enabled:true,Weight:1},{ID:"b",Model:"b",Enabled:true,Weight:1}}}}
+	h:=health.New(5,time.Hour); h.RecordSuccess("p/a",10*time.Millisecond); h.RecordSuccess("p/b",10*time.Millisecond); r:=New(cfg,h)
+	req:=Requirement{Model:"auto",SessionKey:"claude-session",SelectionKey:"first"}; first:=r.Candidates(req); if len(first)!=2{t.Fatalf("want 2")}
+	r.ObserveSession(req,first[0].Deployment.ID); req.SelectionKey="different"; second:=r.Candidates(req); if second[0].Deployment.ID!=first[0].Deployment.ID{t.Fatalf("session moved")}
+}
+
+func TestReadyMeshCapabilityCooldownIsScoped(t *testing.T) {
+	cfg:=config.Default(); cfg.Routing.Strategy="ready_mesh"; cfg.Providers=[]config.ProviderConfig{{ID:"p",Name:"P",Type:"openai_compatible",BaseURL:"http://x",Enabled:true,Models:[]config.ModelConfig{{ID:"a",Model:"a",Enabled:true,Weight:1,Capabilities:config.Capabilities{Streaming:true}},{ID:"b",Model:"b",Enabled:true,Weight:1,Capabilities:config.Capabilities{Streaming:true}}}}}
+	h:=health.New(5,time.Hour); h.ConfigureAdvanced(5,time.Hour,2,time.Hour); h.RecordSuccess("p/a",time.Millisecond);h.RecordSuccess("p/b",time.Millisecond);h.RecordScopeFailure("p/a",[]string{"streaming"},"x");h.RecordScopeFailure("p/a",[]string{"streaming"},"x")
+	r:=New(cfg,h); stream:=r.Candidates(Requirement{Model:"auto",Streaming:true});if len(stream)!=1||stream[0].Deployment.ID!="p/b"{t.Fatalf("bad scoped filter %#v",stream)};if plain:=r.Candidates(Requirement{Model:"auto"});len(plain)!=2{t.Fatalf("global poisoned %#v",plain)}
+}
+
+func TestEligibleRejectsCandidateAfterQuarantine(t *testing.T) {
+	cfg:=config.Default(); cfg.Routing.Strategy="ready_mesh";cfg.Providers=[]config.ProviderConfig{{ID:"p",Name:"P",Type:"openai_compatible",BaseURL:"http://x",Enabled:true,Models:[]config.ModelConfig{{ID:"m",Model:"m",Enabled:true}}}}
+	h:=health.New(5,time.Hour);h.RecordSuccess("p/m",time.Millisecond);r:=New(cfg,h);if _,ok:=r.Eligible("p/m",Requirement{Model:"auto"});!ok{t.Fatal("healthy ineligible")};h.Quarantine("p/m","x",time.Millisecond);if _,ok:=r.Eligible("p/m",Requirement{Model:"auto"});ok{t.Fatal("stale candidate eligible")}
+}

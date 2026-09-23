@@ -26,16 +26,22 @@ type AdminConfig struct {
 }
 
 type RoutingConfig struct {
-	Strategy               string  `json:"strategy"`
-	FallbackOnUnknownModel bool    `json:"fallback_on_unknown_model"`
-	MaxAttempts            int     `json:"max_attempts"`
-	FailureThreshold       int     `json:"failure_threshold"`
-	CooldownSeconds        int     `json:"cooldown_seconds"`
-	RequestTimeoutMS       int     `json:"request_timeout_ms"`
-	LatencyWeight          float64 `json:"latency_weight"`
-	FailureWeight          float64 `json:"failure_weight"`
-	RetryBackoffMS         int     `json:"retry_backoff_ms"`
-	MaxRetryAfterSeconds   int     `json:"max_retry_after_seconds"`
+	Strategy                   string  `json:"strategy"`
+	FallbackOnUnknownModel     bool    `json:"fallback_on_unknown_model"`
+	SessionAffinity            bool    `json:"session_affinity"`
+	SessionTTLSeconds          int     `json:"session_ttl_seconds"`
+	P2CWindow                  int     `json:"p2c_window"`
+	MaxAttempts                int     `json:"max_attempts"`
+	FailureThreshold           int     `json:"failure_threshold"`
+	CooldownSeconds            int     `json:"cooldown_seconds"`
+	CapabilityFailureThreshold int     `json:"capability_failure_threshold"`
+	CapabilityCooldownSeconds  int     `json:"capability_cooldown_seconds"`
+	RequestTimeoutMS           int     `json:"request_timeout_ms"`
+	LatencyWeight              float64 `json:"latency_weight"`
+	FailureWeight              float64 `json:"failure_weight"`
+	CapacityWeight             float64 `json:"capacity_weight"`
+	RetryBackoffMS             int     `json:"retry_backoff_ms"`
+	MaxRetryAfterSeconds       int     `json:"max_retry_after_seconds"`
 }
 
 type ProbeConfig struct {
@@ -110,8 +116,10 @@ func Default() Config {
 		Listen: "127.0.0.1:8080",
 		Admin:  AdminConfig{BindLocalOnly: true},
 		Routing: RoutingConfig{
-			Strategy: "ready_queue", FallbackOnUnknownModel: true, MaxAttempts: 4, FailureThreshold: 5, CooldownSeconds: 1800,
-			RequestTimeoutMS: 120000, LatencyWeight: 0.015, FailureWeight: 25,
+			Strategy: "ready_mesh", FallbackOnUnknownModel: true, SessionAffinity: true, SessionTTLSeconds: 3600, P2CWindow: 8,
+			MaxAttempts: 4, FailureThreshold: 5, CooldownSeconds: 1800,
+			CapabilityFailureThreshold: 2, CapabilityCooldownSeconds: 300,
+			RequestTimeoutMS: 120000, LatencyWeight: 0.015, FailureWeight: 25, CapacityWeight: 35,
 			RetryBackoffMS: 150, MaxRetryAfterSeconds: 60,
 		},
 		Probe: ProbeConfig{Enabled: true, OnStart: true, IntervalSeconds: 120, ReadyLeaseSeconds: 300, TimeoutMS: 8000, MaxTokens: 1, Concurrency: 16, RecoveryAttempts: 5, RecoveryRetryMS: 500},
@@ -154,7 +162,13 @@ func (c *Config) ApplyDefaults() {
 		c.Listen = "127.0.0.1:8080"
 	}
 	if c.Routing.Strategy == "" {
-		c.Routing.Strategy = "ready_queue"
+		c.Routing.Strategy = "ready_mesh"
+	}
+	if c.Routing.SessionTTLSeconds <= 0 {
+		c.Routing.SessionTTLSeconds = 3600
+	}
+	if c.Routing.P2CWindow <= 0 {
+		c.Routing.P2CWindow = 8
 	}
 	if c.Routing.MaxAttempts <= 0 {
 		c.Routing.MaxAttempts = 4
@@ -165,6 +179,12 @@ func (c *Config) ApplyDefaults() {
 	if c.Routing.CooldownSeconds <= 0 {
 		c.Routing.CooldownSeconds = 1800
 	}
+	if c.Routing.CapabilityFailureThreshold <= 0 {
+		c.Routing.CapabilityFailureThreshold = 2
+	}
+	if c.Routing.CapabilityCooldownSeconds <= 0 {
+		c.Routing.CapabilityCooldownSeconds = 300
+	}
 	if c.Routing.RequestTimeoutMS <= 0 {
 		c.Routing.RequestTimeoutMS = 120000
 	}
@@ -173,6 +193,9 @@ func (c *Config) ApplyDefaults() {
 	}
 	if c.Routing.FailureWeight == 0 {
 		c.Routing.FailureWeight = 25
+	}
+	if c.Routing.CapacityWeight == 0 {
+		c.Routing.CapacityWeight = 35
 	}
 	if c.Routing.RetryBackoffMS < 0 {
 		c.Routing.RetryBackoffMS = 0
@@ -260,8 +283,8 @@ func (c Config) Validate() error {
 	if strings.TrimSpace(c.Listen) == "" {
 		return errors.New("listen is required")
 	}
-	if c.Routing.Strategy != "ready_queue" && c.Routing.Strategy != "adaptive" && c.Routing.Strategy != "adaptive_round_robin" && c.Routing.Strategy != "priority" && c.Routing.Strategy != "round_robin" && c.Routing.Strategy != "least_latency" {
-		return errors.New("routing.strategy must be ready_queue, adaptive, adaptive_round_robin, priority, round_robin, or least_latency")
+	if c.Routing.Strategy != "ready_mesh" && c.Routing.Strategy != "ready_queue" && c.Routing.Strategy != "adaptive" && c.Routing.Strategy != "adaptive_round_robin" && c.Routing.Strategy != "priority" && c.Routing.Strategy != "round_robin" && c.Routing.Strategy != "least_latency" {
+		return errors.New("routing.strategy must be ready_mesh, ready_queue, adaptive, adaptive_round_robin, priority, round_robin, or least_latency")
 	}
 	if c.Routing.MaxAttempts <= 0 {
 		return errors.New("routing.max_attempts must be > 0")

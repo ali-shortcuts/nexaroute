@@ -49,7 +49,7 @@ func TestSaveAtomicModeAndNoBackup(t *testing.T) {
 }
 
 func TestRoutingStrategiesValidate(t *testing.T) {
-	for _, strategy := range []string{"ready_queue", "adaptive", "adaptive_round_robin", "priority", "round_robin", "least_latency"} {
+	for _, strategy := range []string{"ready_mesh", "ready_queue", "adaptive", "adaptive_round_robin", "priority", "round_robin", "least_latency"} {
 		cfg := Default()
 		cfg.Routing.Strategy = strategy
 		if err := cfg.Validate(); err != nil {
@@ -91,10 +91,16 @@ func TestValidateRejectsProxyWithoutHost(t *testing.T) {
 	}
 }
 
-func TestReadyQueueRecoveryDefaults(t *testing.T) {
+func TestReadyMeshRecoveryDefaults(t *testing.T) {
 	cfg := Default()
-	if cfg.Routing.Strategy != "ready_queue" {
-		t.Fatalf("strategy=%q want ready_queue", cfg.Routing.Strategy)
+	if cfg.Routing.Strategy != "ready_mesh" {
+		t.Fatalf("strategy=%q want ready_mesh", cfg.Routing.Strategy)
+	}
+	if !cfg.Routing.SessionAffinity || cfg.Routing.SessionTTLSeconds != 3600 || cfg.Routing.P2CWindow != 8 {
+		t.Fatalf("unexpected ready mesh defaults: %+v", cfg.Routing)
+	}
+	if cfg.Routing.CapabilityFailureThreshold != 2 || cfg.Routing.CapabilityCooldownSeconds != 300 {
+		t.Fatalf("unexpected capability defaults: %+v", cfg.Routing)
 	}
 	if cfg.Routing.CooldownSeconds != 1800 {
 		t.Fatalf("cooldown=%d want 1800", cfg.Routing.CooldownSeconds)

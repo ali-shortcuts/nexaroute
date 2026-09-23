@@ -261,7 +261,7 @@ func (e *Engine) runOnce(ctx context.Context, force bool) Result {
 	defer e.runMu.Unlock()
 
 	cfg := e.current()
-	readySupervisor := cfg.Routing.Strategy == "ready_queue"
+	readySupervisor := router.IsReadyStrategy(cfg.Routing.Strategy)
 	readyLease := cfg.ProbeReadyLease()
 	sweepNow := time.Now()
 	result := Result{}
@@ -413,7 +413,7 @@ func (e *Engine) recoverLoop(ctx context.Context, id string) {
 			return
 		}
 		cfg := e.current()
-		if cfg.Routing.Strategy != "ready_queue" {
+		if !router.IsReadyStrategy(cfg.Routing.Strategy) {
 			return
 		}
 		d, a, ok := e.deployment(id)

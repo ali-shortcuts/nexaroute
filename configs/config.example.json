@@ -5,14 +5,20 @@
     "api_key": ""
   },
   "routing": {
-    "strategy": "ready_queue",
+    "strategy": "ready_mesh",
     "fallback_on_unknown_model": true,
+    "session_affinity": true,
+    "session_ttl_seconds": 3600,
+    "p2c_window": 8,
     "max_attempts": 4,
     "failure_threshold": 5,
     "cooldown_seconds": 1800,
+    "capability_failure_threshold": 2,
+    "capability_cooldown_seconds": 300,
     "request_timeout_ms": 120000,
     "latency_weight": 0.015,
     "failure_weight": 25,
+    "capacity_weight": 35,
     "retry_backoff_ms": 150,
     "max_retry_after_seconds": 60
   },
