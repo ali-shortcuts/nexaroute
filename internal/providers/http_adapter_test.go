@@ -96,7 +96,7 @@ func TestCredentialP2CSkipsCoolingKey(t *testing.T) {
 type terminalErrorBody struct{}
 
 func (terminalErrorBody) Read([]byte) (int, error) { return 0, errors.New("terminal read failure") }
-func (terminalErrorBody) Close() error              { return nil }
+func (terminalErrorBody) Close() error             { return nil }
 
 func TestReleaseOnDoneBodyReleasesOnTerminalReadError(t *testing.T) {
 	released := 0
