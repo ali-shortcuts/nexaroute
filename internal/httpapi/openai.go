@@ -34,8 +34,13 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 400, "model and messages are required")
 		return
 	}
-	req := router.Requirement{Model: in.Model, Tools: len(in.Tools) > 0, Vision: hasVisionOpenAI(raw), Streaming: in.Stream, Reasoning: hasReasoningOpenAI(raw)}
-	req = s.prepareRequirement(req, r, raw)
+	inspection := inspectRequestJSON(raw, "image_url", []string{"reasoning_effort", "reasoning"})
+	if inspection.TooComplex {
+		errorJSON(w, http.StatusBadRequest, "request JSON structure is too complex")
+		return
+	}
+	req := router.Requirement{Model: in.Model, Tools: len(in.Tools) > 0, Vision: inspection.Vision, Streaming: in.Stream, Reasoning: inspection.Reasoning}
+	req = s.prepareRequirement(req, r, inspection.BodySessionKey)
 	cfg, candidates := s.routeSnapshot(req)
 	if len(candidates) == 0 {
 		errorJSON(w, 503, "no compatible healthy deployment")
@@ -152,7 +157,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 		} else {
 			defer resp.Body.Close()
 			var an core.AnthResponse
-			if e = json.NewDecoder(resp.Body).Decode(&an); e == nil {
+			if e = decodeJSONLimited(resp.Body, &an); e == nil {
 				writeJSON(w, 200, translate.AnthropicResponseToOpenAI(an, in.Model))
 			}
 		}
