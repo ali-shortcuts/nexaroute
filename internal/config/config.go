@@ -624,7 +624,7 @@ func (c Config) ProviderIndex(id string) int {
 	}
 	return -1
 }
-, '%', '&', '\'', '*', '+', '-', '.', '^', '_', '`', '|', '~':
+, '%', '&', '\'', '*', '+', '-', '.', '^', '_', 0x60, '|', '~':
 			continue
 		default:
 			return false
