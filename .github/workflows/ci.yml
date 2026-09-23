@@ -45,6 +45,9 @@ jobs:
       - name: Full verification
         run: ./scripts/verify.sh
 
+      - name: Bounded stress checks
+        run: ./scripts/stress.sh
+
       - name: Local runtime smoke test
         run: ./scripts/smoke-local.sh
 
