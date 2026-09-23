@@ -321,3 +321,30 @@ func TestCapabilityDetectionUsesTopLevelReasoningAndMessageVision(t *testing.T) 
 		t.Fatalf("real protocol controls should be detected: %+v", got)
 	}
 }
+
+func TestTranslatedStreamsRejectMalformedSSEJSON(t *testing.T) {
+	t.Run("openai to anthropic", func(t *testing.T) {
+		rr := httptest.NewRecorder()
+		resp := &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body:       io.NopCloser(strings.NewReader("data: {bad}\n\n")),
+		}
+		err := streamOpenAIToAnthropic(rr, resp, "m")
+		if err == nil || !strings.Contains(err.Error(), "invalid OpenAI SSE JSON") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+	t.Run("anthropic to openai", func(t *testing.T) {
+		rr := httptest.NewRecorder()
+		resp := &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body:       io.NopCloser(strings.NewReader("data: {bad}\n\n")),
+		}
+		err := streamAnthropicToOpenAI(rr, resp, "m")
+		if err == nil || !strings.Contains(err.Error(), "invalid Anthropic SSE JSON") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+}
