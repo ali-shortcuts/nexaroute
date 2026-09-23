@@ -14,6 +14,8 @@ ProtectSystem=strict
 ProtectHome=read-only
 ReadWritePaths=%h/.config/nexaroute
 Environment=NEXAROUTE_CONFIG=%h/.config/nexaroute/config.json
+LogRateLimitIntervalSec=1min
+LogRateLimitBurst=30
 
 [Install]
 WantedBy=default.target

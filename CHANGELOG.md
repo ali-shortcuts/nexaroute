@@ -42,7 +42,9 @@ This file describes the current supported v0.3 state only. Superseded interim im
 - Local provider/model IDs are constrained to unambiguous safe identifiers.
 - HTTP header names/values and endpoint paths are validated before runtime.
 - The Web UI wires all Ready Mesh/probe controls, including session affinity, ready lease, P2C window, capability circuit settings and global admission.
-- The event feed uses a bounded ring buffer.
+- The event feed uses a bounded ring buffer with bounded event fields and bounded dynamic counter-key maps.
+- Operational logs self-rotate with fixed disk retention; successful access lines are sampled by default and console output is storm-limited.
+- Recovery scheduling uses a fixed worker pool and bounded queue; long cooldowns no longer hold one sleeping goroutine per failed deployment.
 
 ## Startup and probing
 

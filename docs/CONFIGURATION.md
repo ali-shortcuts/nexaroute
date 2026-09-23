@@ -7,7 +7,27 @@ NEXAROUTE_CONFIG                  config path used by the CLI default resolver
 NEXAROUTE_LISTEN                  override listen address
 NEXAROUTE_ADMIN_KEY               override admin API key
 NEXAROUTE_ADMIN_BIND_LOCAL_ONLY   true/false override
+NEXAROUTE_LOG_FILE                override bounded log path; "off" disables the app-owned file sink
 ```
+
+## Bounded logging and long-running stability
+
+NexaRoute owns a rotating operational log by default. With `logging.file = "auto"`, the log is placed beside the active config file as `nexaroute.log`.
+
+Default retention:
+
+- `max_size_mb: 32` per file;
+- `max_backups: 3`;
+- current file plus three backups = approximately **128 MB maximum app-owned log storage**;
+- old numeric backups beyond retention are deleted automatically on startup/rotation;
+- log files are created with mode `0600`;
+- `access_mode: "sampled"` logs errors and slow non-streaming requests, while ordinary successful requests are sampled every 1000 requests;
+- long-lived SSE responses are not misclassified as "slow" merely because the stream stays open;
+- console/journald output is rate-limited to `console_max_lines_per_minute: 30` by default.
+
+Available `access_mode` values are `off`, `errors`, `sampled`, and `all`. Setting `max_backups: 0` keeps only the current bounded log file. Setting `console_max_lines_per_minute: 0` disables console mirroring. Logging sink/rotation changes take effect after restart; routing/probe settings remain hot-reloadable.
+
+The in-memory event feed is independently bounded: it keeps only the newest ring of events, truncates oversized event fields, and caps dynamic event/error counter keys. It cannot grow indefinitely with uptime.
 
 ## Provider types
 

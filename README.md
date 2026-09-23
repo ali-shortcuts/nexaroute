@@ -61,6 +61,8 @@ Implemented resilience:
 - if all 5 recovery probes fail, the deployment enters a 30-minute cooldown; after cooldown the supervisor automatically starts a fresh recovery cycle
 - credential-level power-of-two load balancing plus independent per-key cooldown, so busy or failing keys are not selected blindly
 - bounded global data-plane admission (`max_inflight_requests`, default 128) rejects excess work with 503/Retry-After while health, readiness, metrics and Admin diagnostics remain responsive
+- self-rotating operational logs (32 MB × current + 3 backups by default), sampled access logging, console storm limiting, and bounded in-memory event/counter state prevent log/RAM growth with long uptime
+- recovery uses a fixed 64-worker queue instead of one long-lived goroutine per failed deployment, so mass provider failure does not create thousands of sleeping recovery stacks
 - environment-backed credential rotation is detected during hot reload; only providers whose resolved credentials or transport identity changed are rebuilt
 - the HTTP listener opens immediately for liveness/UI observability, then the startup readiness sweep probes every enabled deployment; `/readyz` and ready-mesh routing remain unready until successful models enter the ready queue
 - manual **Probe all models** with pass/fail results

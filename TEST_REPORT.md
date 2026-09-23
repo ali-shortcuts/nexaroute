@@ -39,7 +39,10 @@ This document describes the current verification contract, not historical CI sna
 - config resource limits and invalid negative values;
 - request-ID sanitization and header validation;
 - secret redaction across credential rotation;
-- embedded Web UI control wiring.
+- embedded Web UI control wiring;
+- rotating log disk bounds, backup cleanup and console rate limiting;
+- concurrent event/session flood bounds;
+- bounded recovery-queue behavior and worker retry recovery.
 
 ## Release rule
 

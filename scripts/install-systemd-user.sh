@@ -10,6 +10,11 @@ Installed the NexaRoute user service definition but did not enable/start it auto
 After configuring providers:
   systemctl --user enable --now nexaroute
 
-View logs:
+Detailed bounded application log:
+  tail -F "$HOME/.config/nexaroute/nexaroute.log"
+
+Rate-limited service console:
   journalctl --user -u nexaroute -f
+
+The default application log automatically rotates at 32 MB and keeps three backups.
 MSG
