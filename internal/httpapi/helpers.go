@@ -70,6 +70,31 @@ func decodeJSONLimited(r io.Reader, dst any) error {
 	return nil
 }
 
+func normalizeRequestID(v string) string {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return ""
+	}
+	const max = 128
+	var b strings.Builder
+	b.Grow(min(len(v), max))
+	for _, r := range v {
+		if b.Len() >= max {
+			break
+		}
+		switch {
+		case r >= 'a' && r <= 'z',
+			r >= 'A' && r <= 'Z',
+			r >= '0' && r <= '9',
+			r == '-', r == '_', r == '.', r == ':':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('_')
+		}
+	}
+	return strings.Trim(b.String(), "_")
+}
+
 func anthropicErrorJSON(w http.ResponseWriter, code int, msg string) {
 	typ := "api_error"
 	switch code {
