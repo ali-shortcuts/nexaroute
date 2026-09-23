@@ -211,10 +211,29 @@ func (m *Manager) RecordFailure(id, errMsg string, latency time.Duration) {
 }
 
 func (m *Manager) Snapshot() []State {
+	now := time.Now()
+	m.mu.RLock()
+	needsWrite := false
+	for _, s := range m.states {
+		if stateNeedsNormalization(s, now) {
+			needsWrite = true
+			break
+		}
+	}
+	if !needsWrite {
+		out := make([]State, 0, len(m.states))
+		for _, s := range m.states {
+			out = append(out, cloneState(s))
+		}
+		m.mu.RUnlock()
+		return out
+	}
+	m.mu.RUnlock()
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	out := make([]State, 0, len(m.states))
-	now := time.Now()
+	now = time.Now()
 	for id, s := range m.states {
 		s = normalizeScopes(normalizeGlobal(s, now), now)
 		m.states[id] = s

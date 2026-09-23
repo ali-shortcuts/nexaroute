@@ -166,3 +166,19 @@ func TestCapabilityCooldownDoesNotPoisonGlobalHealth(t *testing.T) {
 		t.Fatal("unrelated scope was poisoned")
 	}
 }
+
+func TestSnapshotNormalizesExpiredCooldowns(t *testing.T) {
+	m := New(1, 20*time.Millisecond)
+	m.ForceCooldown("d", "x", 20*time.Millisecond)
+	time.Sleep(30 * time.Millisecond)
+	snap := m.Snapshot()
+	if len(snap) != 1 {
+		t.Fatalf("snapshot len=%d want 1", len(snap))
+	}
+	if snap[0].Status != HalfOpen {
+		t.Fatalf("expired cooldown status=%s want %s", snap[0].Status, HalfOpen)
+	}
+	if got := m.Get("d").Status; got != HalfOpen {
+		t.Fatalf("normalized state not persisted: %s", got)
+	}
+}
