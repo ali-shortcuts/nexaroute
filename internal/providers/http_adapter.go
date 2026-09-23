@@ -21,6 +21,7 @@ import (
 type credentialState struct {
 	Key           string
 	Failures      int
+	Active        int64
 	CooldownUntil time.Time
 	LastStatus    int
 }
@@ -162,20 +163,34 @@ func (a *httpAdapter) DoPath(ctx context.Context, method, path string, payload [
 		})
 	}
 
-	keys := a.availableCredentialIndexes()
-	if len(a.creds) > 0 && len(keys) == 0 {
-		release()
-		err := errors.New("all configured provider credentials are cooling down")
-		if d, ok := a.nextCredentialRetryAfter(); ok {
-			return nil, &RetryAfterError{Cause: err, After: d}
-		}
-		return nil, err
-	}
-	if len(keys) == 0 {
-		keys = []int{-1}
-	}
 	var lastErr error
-	for pos, idx := range keys {
+	attempted := map[int]bool{}
+	maxCredentialAttempts := len(a.creds)
+	if maxCredentialAttempts == 0 {
+		maxCredentialAttempts = 1
+	}
+	for len(attempted) < maxCredentialAttempts {
+		idx := -1
+		key := ""
+		if len(a.creds) > 0 {
+			var ok bool
+			idx, key, ok = a.reserveCredential(attempted)
+			if !ok {
+				if len(attempted) == 0 {
+					release()
+					err := errors.New("all configured provider credentials are cooling down")
+					if d, retryOK := a.nextCredentialRetryAfter(); retryOK {
+						return nil, &RetryAfterError{Cause: err, After: d}
+					}
+					return nil, err
+				}
+				break
+			}
+			attempted[idx] = true
+		} else {
+			attempted[-1] = true
+		}
+
 		reqCtx := ctx
 		var cancel context.CancelFunc
 		if stream {
@@ -186,6 +201,7 @@ func (a *httpAdapter) DoPath(ctx context.Context, method, path string, payload [
 			if cancel != nil {
 				cancel()
 			}
+			a.releaseCredential(idx)
 			release()
 			return nil, err
 		}
@@ -196,11 +212,7 @@ func (a *httpAdapter) DoPath(ctx context.Context, method, path string, payload [
 			req.Header.Set("Accept", "text/event-stream")
 		}
 		a.applyHeaders(req, forward)
-		if idx >= 0 {
-			a.applyAuthKey(req, a.credentialKey(idx))
-		} else {
-			a.applyAuthKey(req, "")
-		}
+		a.applyAuthKey(req, key)
 		if a.p.Type == "anthropic_compatible" && req.Header.Get("anthropic-version") == "" {
 			req.Header.Set("anthropic-version", "2023-06-01")
 		}
@@ -214,6 +226,7 @@ func (a *httpAdapter) DoPath(ctx context.Context, method, path string, payload [
 			if cancel != nil {
 				cancel()
 			}
+			a.releaseCredential(idx)
 			lastErr = err
 			continue
 		}
@@ -225,24 +238,26 @@ func (a *httpAdapter) DoPath(ctx context.Context, method, path string, payload [
 				resp.Body = &cancelOnCloseBody{ReadCloser: resp.Body, cancel: cancel}
 			}
 		}
-		if idx >= 0 && credentialRetryStatus(resp.StatusCode) && pos < len(keys)-1 {
-			body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-			resp.Body.Close()
+		if idx >= 0 && credentialRetryStatus(resp.StatusCode) {
 			a.cooldownCredential(idx, resp.StatusCode, resp.Header.Get("Retry-After"))
-			lastErr = fmt.Errorf("credential rejected http %d: %s", resp.StatusCode, a.safeSnippet(body))
-			continue
-		}
-		if idx >= 0 {
-			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-				a.markCredentialSuccess(idx)
-			} else if credentialRetryStatus(resp.StatusCode) {
-				a.cooldownCredential(idx, resp.StatusCode, resp.Header.Get("Retry-After"))
+			if a.hasAvailableCredential(attempted) {
+				body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+				resp.Body.Close()
+				a.releaseCredential(idx)
+				lastErr = fmt.Errorf("credential rejected http %d: %s", resp.StatusCode, a.safeSnippet(body))
+				continue
 			}
+		} else if idx >= 0 && resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			a.markCredentialSuccess(idx)
 		}
-		// Provider concurrency is an in-flight response limit, not merely a
-		// "wait for headers" limit. Hold the semaphore until the response body
-		// is consumed or closed (especially important for long-lived SSE).
-		resp.Body = &releaseOnDoneBody{ReadCloser: resp.Body, release: release}
+
+		// Provider and credential capacity both stay reserved until the body is
+		// fully consumed or closed. This makes key-level load balancing reflect
+		// long-lived SSE streams instead of only time-to-first-byte.
+		resp.Body = &releaseOnDoneBody{ReadCloser: resp.Body, release: func() {
+			a.releaseCredential(idx)
+			release()
+		}}
 		return resp, nil
 	}
 	release()
@@ -296,31 +311,79 @@ func (a *httpAdapter) applyAuthKey(req *http.Request, key string) {
 	}
 }
 
-func (a *httpAdapter) availableCredentialIndexes() []int {
+func (a *httpAdapter) reserveCredential(excluded map[int]bool) (int, string, bool) {
 	a.credMu.Lock()
 	defer a.credMu.Unlock()
-	if len(a.creds) == 0 {
-		return nil
-	}
 	now := time.Now()
-	out := make([]int, 0, len(a.creds))
-	start := a.rr % len(a.creds)
-	a.rr = (a.rr + 1) % len(a.creds)
-	for n := 0; n < len(a.creds); n++ {
-		i := (start + n) % len(a.creds)
+	available := make([]int, 0, len(a.creds))
+	for i := range a.creds {
+		if excluded[i] {
+			continue
+		}
 		if a.creds[i].CooldownUntil.IsZero() || now.After(a.creds[i].CooldownUntil) {
-			out = append(out, i)
+			available = append(available, i)
 		}
 	}
-	return out
+	if len(available) == 0 {
+		return 0, "", false
+	}
+	chosen := available[0]
+	if len(available) > 1 {
+		aPos := a.rr % len(available)
+		bPos := (a.rr*7 + 1) % len(available)
+		if bPos == aPos {
+			bPos = (bPos + 1) % len(available)
+		}
+		first := available[aPos]
+		second := available[bPos]
+		if credentialLessLoaded(a.creds[second], a.creds[first]) {
+			chosen = second
+		} else {
+			chosen = first
+		}
+	}
+	a.rr++
+	a.creds[chosen].Active++
+	return chosen, a.creds[chosen].Key, true
 }
-func (a *httpAdapter) credentialKey(i int) string {
+
+func credentialLessLoaded(a, b credentialState) bool {
+	if a.Active != b.Active {
+		return a.Active < b.Active
+	}
+	if a.Failures != b.Failures {
+		return a.Failures < b.Failures
+	}
+	return a.LastStatus == 0 && b.LastStatus != 0
+}
+
+func (a *httpAdapter) hasAvailableCredential(excluded map[int]bool) bool {
 	a.credMu.Lock()
 	defer a.credMu.Unlock()
-	if i < 0 || i >= len(a.creds) {
-		return ""
+	now := time.Now()
+	for i := range a.creds {
+		if excluded[i] {
+			continue
+		}
+		if a.creds[i].CooldownUntil.IsZero() || now.After(a.creds[i].CooldownUntil) {
+			return true
+		}
 	}
-	return a.creds[i].Key
+	return false
+}
+
+func (a *httpAdapter) releaseCredential(i int) {
+	if i < 0 {
+		return
+	}
+	a.credMu.Lock()
+	defer a.credMu.Unlock()
+	if i >= len(a.creds) {
+		return
+	}
+	if a.creds[i].Active > 0 {
+		a.creds[i].Active--
+	}
 }
 func (a *httpAdapter) markCredentialSuccess(i int) {
 	a.credMu.Lock()
