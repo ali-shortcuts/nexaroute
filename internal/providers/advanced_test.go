@@ -384,3 +384,37 @@ func TestTransportErrorDoesNotFanOutAcrossCredentialPool(t *testing.T) {
 		t.Fatalf("provider capacity leaked after transport error: %+v", st)
 	}
 }
+
+type idleCloseTrackingTransport struct {
+	closed atomic.Bool
+}
+
+func (t *idleCloseTrackingTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(`{"choices":[]}`)),
+	}, nil
+}
+
+func (t *idleCloseTrackingTransport) CloseIdleConnections() {
+	t.closed.Store(true)
+}
+
+func TestHTTPAdapterCloseIdleConnectionsReachesTransport(t *testing.T) {
+	p := config.ProviderConfig{
+		ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "http://example.invalid",
+		AuthMode: "none", Enabled: true, MaxConcurrency: 1,
+	}
+	a, err := newHTTPAdapter(p, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr := &idleCloseTrackingTransport{}
+	a.c.Transport = tr
+	a.streamC.Transport = tr
+	a.CloseIdleConnections()
+	if !tr.closed.Load() {
+		t.Fatal("adapter did not close idle transport connections")
+	}
+}

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -1012,5 +1013,96 @@ func TestReasoningWithoutNativeProtocolCandidateIsUnavailable(t *testing.T) {
 	}
 	if calls.Load() != 0 {
 		t.Fatalf("cross-protocol provider received reasoning request: %d", calls.Load())
+	}
+}
+
+func TestHotReloadClosesIdlePoolOfRebuiltAdapter(t *testing.T) {
+	var idleSeen atomic.Bool
+	var closedCount atomic.Int32
+	up1 := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`)
+	}))
+	up1.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		switch state {
+		case http.StateIdle:
+			idleSeen.Store(true)
+		case http.StateClosed:
+			closedCount.Add(1)
+		}
+	}
+	up1.Start()
+	defer up1.Close()
+
+	up2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`)
+	}))
+	defer up2.Close()
+
+	cfg := config.Default()
+	cfg.Probe.Enabled = false
+	cfg.Providers = []config.ProviderConfig{{
+		ID: "p", Name: "P", Type: "openai_compatible", BaseURL: up1.URL,
+		AuthMode: "none", Enabled: true, MaxConcurrency: 2,
+		Models: []config.ModelConfig{{ID: "m", Model: "m", Enabled: true, Weight: 1}},
+	}}
+	s := testGateway(t, cfg)
+	oldAdapter, ok := s.reg.Get("p")
+	if !ok {
+		t.Fatal("missing provider adapter")
+	}
+	resp, err := oldAdapter.Do(context.Background(), []byte(`{"model":"m","messages":[]}`), false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+
+	deadline := time.Now().Add(time.Second)
+	for !idleSeen.Load() && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !idleSeen.Load() {
+		t.Fatal("upstream connection never became idle")
+	}
+
+	next := s.currentConfig()
+	next.Providers[0].BaseURL = up2.URL
+	if err := s.applyConfig(next); err != nil {
+		t.Fatal(err)
+	}
+
+	deadline = time.Now().Add(time.Second)
+	for closedCount.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if closedCount.Load() == 0 {
+		t.Fatal("hot reload left the retired adapter idle connection open")
+	}
+	newAdapter, _ := s.reg.Get("p")
+	if newAdapter == oldAdapter {
+		t.Fatal("provider identity change reused the old adapter")
+	}
+}
+
+func TestRoutingOnlyReloadKeepsExistingAdapterPool(t *testing.T) {
+	cfg := config.Default()
+	cfg.Probe.Enabled = false
+	cfg.Providers = []config.ProviderConfig{{
+		ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "http://example.invalid",
+		AuthMode: "none", Enabled: true, MaxConcurrency: 2,
+		Models: []config.ModelConfig{{ID: "m", Model: "m", Enabled: true, Weight: 1}},
+	}}
+	s := testGateway(t, cfg)
+	before, _ := s.reg.Get("p")
+	next := s.currentConfig()
+	next.Routing.CapacityWeight += 1
+	if err := s.applyConfig(next); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := s.reg.Get("p")
+	if before != after {
+		t.Fatal("routing-only reload rebuilt provider adapter instead of reusing its pool")
 	}
 }
