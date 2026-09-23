@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -110,6 +112,19 @@ type Capabilities struct {
 	Vision    bool `json:"vision"`
 	Reasoning bool `json:"reasoning"`
 }
+
+const (
+	maxProviders             = 512
+	maxModelsPerProvider     = 4096
+	maxCredentialsPerProvider = 256
+	maxProviderHeaders       = 128
+	maxProviderConcurrency   = 4096
+	maxProbeConcurrency      = 1024
+	maxRoutingAttempts       = 64
+	maxProbeTokens           = 64
+	maxStringIDBytes         = 256
+	maxURLBytes              = 4096
+)
 
 func Default() Config {
 	return Config{
@@ -283,26 +298,83 @@ func (c Config) Validate() error {
 	if strings.TrimSpace(c.Listen) == "" {
 		return errors.New("listen is required")
 	}
+	if _, _, err := net.SplitHostPort(c.Listen); err != nil {
+		return fmt.Errorf("listen must be host:port: %w", err)
+	}
+	if len(c.Providers) > maxProviders {
+		return fmt.Errorf("providers exceeds safe limit %d", maxProviders)
+	}
 	if c.Routing.Strategy != "ready_mesh" && c.Routing.Strategy != "ready_queue" && c.Routing.Strategy != "adaptive" && c.Routing.Strategy != "adaptive_round_robin" && c.Routing.Strategy != "priority" && c.Routing.Strategy != "round_robin" && c.Routing.Strategy != "least_latency" {
 		return errors.New("routing.strategy must be ready_mesh, ready_queue, adaptive, adaptive_round_robin, priority, round_robin, or least_latency")
 	}
-	if c.Routing.MaxAttempts <= 0 {
-		return errors.New("routing.max_attempts must be > 0")
+	if c.Routing.MaxAttempts <= 0 || c.Routing.MaxAttempts > maxRoutingAttempts {
+		return fmt.Errorf("routing.max_attempts must be between 1 and %d", maxRoutingAttempts)
 	}
-	if c.Routing.FailureThreshold <= 0 {
-		return errors.New("routing.failure_threshold must be > 0")
+	if c.Routing.SessionTTLSeconds > 30*24*60*60 {
+		return errors.New("routing.session_ttl_seconds must be <= 2592000")
 	}
-	if c.Routing.CooldownSeconds < 1 {
-		return errors.New("routing.cooldown_seconds must be > 0")
+	if c.Routing.P2CWindow > maxModelsPerProvider {
+		return fmt.Errorf("routing.p2c_window must be <= %d", maxModelsPerProvider)
 	}
-	if c.Routing.RequestTimeoutMS < 100 {
-		return errors.New("routing.request_timeout_ms must be >= 100")
+	if c.Routing.FailureThreshold <= 0 || c.Routing.FailureThreshold > 1000 {
+		return errors.New("routing.failure_threshold must be between 1 and 1000")
+	}
+	if c.Routing.CapabilityFailureThreshold <= 0 || c.Routing.CapabilityFailureThreshold > 1000 {
+		return errors.New("routing.capability_failure_threshold must be between 1 and 1000")
+	}
+	if c.Routing.CooldownSeconds < 1 || c.Routing.CooldownSeconds > 7*24*60*60 {
+		return errors.New("routing.cooldown_seconds must be between 1 and 604800")
+	}
+	if c.Routing.CapabilityCooldownSeconds < 1 || c.Routing.CapabilityCooldownSeconds > 7*24*60*60 {
+		return errors.New("routing.capability_cooldown_seconds must be between 1 and 604800")
+	}
+	if c.Routing.RequestTimeoutMS < 100 || c.Routing.RequestTimeoutMS > 30*60*1000 {
+		return errors.New("routing.request_timeout_ms must be between 100 and 1800000")
+	}
+	if c.Routing.RetryBackoffMS < 0 || c.Routing.RetryBackoffMS > 60000 {
+		return errors.New("routing.retry_backoff_ms must be between 0 and 60000")
+	}
+	if c.Routing.MaxRetryAfterSeconds < 1 || c.Routing.MaxRetryAfterSeconds > 86400 {
+		return errors.New("routing.max_retry_after_seconds must be between 1 and 86400")
+	}
+	for name, v := range map[string]float64{
+		"routing.latency_weight": c.Routing.LatencyWeight,
+		"routing.failure_weight": c.Routing.FailureWeight,
+		"routing.capacity_weight": c.Routing.CapacityWeight,
+	} {
+		if math.IsNaN(v) || math.IsInf(v, 0) || v < 0 || v > 1_000_000 {
+			return fmt.Errorf("%s must be finite and between 0 and 1000000", name)
+		}
+	}
+	if c.Probe.IntervalSeconds < 1 || c.Probe.IntervalSeconds > 86400 {
+		return errors.New("probe.interval_seconds must be between 1 and 86400")
+	}
+	if c.Probe.ReadyLeaseSeconds < 1 || c.Probe.ReadyLeaseSeconds > 7*24*60*60 {
+		return errors.New("probe.ready_lease_seconds must be between 1 and 604800")
+	}
+	if c.Probe.TimeoutMS < 100 || c.Probe.TimeoutMS > 300000 {
+		return errors.New("probe.timeout_ms must be between 100 and 300000")
+	}
+	if c.Probe.MaxTokens < 1 || c.Probe.MaxTokens > maxProbeTokens {
+		return fmt.Errorf("probe.max_tokens must be between 1 and %d", maxProbeTokens)
+	}
+	if c.Probe.Concurrency < 1 || c.Probe.Concurrency > maxProbeConcurrency {
+		return fmt.Errorf("probe.concurrency must be between 1 and %d", maxProbeConcurrency)
+	}
+	if c.Probe.RecoveryAttempts < 1 || c.Probe.RecoveryAttempts > 100 {
+		return errors.New("probe.recovery_attempts must be between 1 and 100")
+	}
+	if c.Probe.RecoveryRetryMS < 0 || c.Probe.RecoveryRetryMS > 60000 {
+		return errors.New("probe.recovery_retry_ms must be between 0 and 60000")
 	}
 	seenP := map[string]bool{}
 	seenD := map[string]bool{}
 	for i, p := range c.Providers {
 		if p.ID == "" {
 			return fmt.Errorf("providers[%d].id is required", i)
+		}
+		if len(p.ID) > maxStringIDBytes || len(p.Name) > 1024 {
+			return fmt.Errorf("provider %q id/name is too long", p.ID)
 		}
 		if seenP[p.ID] {
 			return fmt.Errorf("duplicate provider id %q", p.ID)
@@ -313,6 +385,18 @@ func (c Config) Validate() error {
 		}
 		if p.BaseURL == "" {
 			return fmt.Errorf("provider %q base_url is required", p.ID)
+		}
+		if len(p.BaseURL) > maxURLBytes || len(p.ProxyURL) > maxURLBytes {
+			return fmt.Errorf("provider %q URL is too long", p.ID)
+		}
+		if len(p.Models) > maxModelsPerProvider {
+			return fmt.Errorf("provider %q models exceeds safe limit %d", p.ID, maxModelsPerProvider)
+		}
+		if len(p.Credentials) > maxCredentialsPerProvider {
+			return fmt.Errorf("provider %q credentials exceeds safe limit %d", p.ID, maxCredentialsPerProvider)
+		}
+		if len(p.Headers) > maxProviderHeaders || len(p.ForwardHeaders) > maxProviderHeaders {
+			return fmt.Errorf("provider %q headers exceeds safe limit %d", p.ID, maxProviderHeaders)
 		}
 		u, err := url.Parse(p.BaseURL)
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
@@ -327,15 +411,36 @@ func (c Config) Validate() error {
 		if p.AuthMode != "" && p.AuthMode != "bearer" && p.AuthMode != "x-api-key" && p.AuthMode != "none" {
 			return fmt.Errorf("provider %q has unsupported auth_mode %q", p.ID, p.AuthMode)
 		}
-		if p.MaxConcurrency < 0 {
-			return fmt.Errorf("provider %q max_concurrency must be >= 0", p.ID)
+		if p.MaxConcurrency < 1 || p.MaxConcurrency > maxProviderConcurrency {
+			return fmt.Errorf("provider %q max_concurrency must be between 1 and %d", p.ID, maxProviderConcurrency)
 		}
-		if p.StreamIdleTimeoutSeconds < 0 {
-			return fmt.Errorf("provider %q stream_idle_timeout_seconds must be >= 0", p.ID)
+		if p.StreamIdleTimeoutSeconds < 1 || p.StreamIdleTimeoutSeconds > 24*60*60 {
+			return fmt.Errorf("provider %q stream_idle_timeout_seconds must be between 1 and 86400", p.ID)
+		}
+		for k, v := range p.Headers {
+			if strings.TrimSpace(k) == "" || len(k) > 256 || len(v) > 8192 || strings.ContainsAny(k, "\r\n") || strings.ContainsAny(v, "\r\n") {
+				return fmt.Errorf("provider %q has invalid custom header", p.ID)
+			}
+		}
+		for _, h := range p.ForwardHeaders {
+			if strings.TrimSpace(h) == "" || len(h) > 256 || strings.ContainsAny(h, "\r\n") {
+				return fmt.Errorf("provider %q has invalid forward header", p.ID)
+			}
 		}
 		for j, m := range p.Models {
 			if m.ID == "" {
 				return fmt.Errorf("provider %q model[%d].id is required", p.ID, j)
+			}
+			if len(m.ID) > maxStringIDBytes || len(m.Model) > 1024 || len(m.Aliases) > 128 {
+				return fmt.Errorf("provider %q model[%d] identifiers/aliases exceed safe limits", p.ID, j)
+			}
+			for _, alias := range m.Aliases {
+				if len(alias) > maxStringIDBytes {
+					return fmt.Errorf("deployment %q alias is too long", p.ID+"/"+m.ID)
+				}
+			}
+			if math.IsNaN(m.Weight) || math.IsInf(m.Weight, 0) || m.Weight <= 0 || m.Weight > 1_000_000 {
+				return fmt.Errorf("deployment %q weight must be finite and between 0 and 1000000", p.ID+"/"+m.ID)
 			}
 			key := p.ID + "/" + m.ID
 			if seenD[key] {
