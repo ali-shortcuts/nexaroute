@@ -9,7 +9,10 @@ import (
 	"time"
 )
 
-const maxJSONBodyBytes = 16 << 20
+const (
+	maxJSONBodyBytes     = 16 << 20
+	maxUpstreamJSONBytes = 32 << 20
+)
 
 func readJSON(r *http.Request, dst any) ([]byte, error) {
 	b, err := io.ReadAll(io.LimitReader(r.Body, maxJSONBodyBytes+1))
@@ -39,73 +42,32 @@ func errorJSON(w http.ResponseWriter, code int, msg string) {
 	writeJSON(w, code, map[string]any{"error": map[string]any{"type": "gateway_error", "message": msg}})
 }
 func hasVisionAnth(raw []byte) bool {
-	return containsJSONType(raw, "image")
+	return inspectRequestJSON(raw, "image", nil).Vision
 }
 func hasVisionOpenAI(raw []byte) bool {
-	return containsJSONType(raw, "image_url")
+	return inspectRequestJSON(raw, "image_url", nil).Vision
 }
 
 func hasReasoningAnth(raw []byte) bool {
-	var v any
-	if json.Unmarshal(raw, &v) != nil {
-		return false
-	}
-	return containsKey(v, "thinking") || containsKey(v, "reasoning")
+	return inspectRequestJSON(raw, "", []string{"thinking", "reasoning"}).Reasoning
 }
 
 func hasReasoningOpenAI(raw []byte) bool {
-	var v any
-	if json.Unmarshal(raw, &v) != nil {
-		return false
-	}
-	return containsKey(v, "reasoning_effort") || containsKey(v, "reasoning")
+	return inspectRequestJSON(raw, "", []string{"reasoning_effort", "reasoning"}).Reasoning
 }
 
-func containsJSONType(raw []byte, wanted string) bool {
-	var v any
-	if json.Unmarshal(raw, &v) != nil {
-		return false
+func decodeJSONLimited(r io.Reader, dst any) error {
+	b, err := io.ReadAll(io.LimitReader(r, maxUpstreamJSONBytes+1))
+	if err != nil {
+		return err
 	}
-	return containsType(v, wanted)
-}
-
-func containsType(v any, wanted string) bool {
-	switch x := v.(type) {
-	case map[string]any:
-		if typ, ok := x["type"].(string); ok && strings.EqualFold(typ, wanted) {
-			return true
-		}
-		for _, child := range x {
-			if containsType(child, wanted) {
-				return true
-			}
-		}
-	case []any:
-		for _, child := range x {
-			if containsType(child, wanted) {
-				return true
-			}
-		}
+	if len(b) > maxUpstreamJSONBytes {
+		return fmt.Errorf("upstream JSON response exceeds %d bytes", maxUpstreamJSONBytes)
 	}
-	return false
-}
-
-func containsKey(v any, wanted string) bool {
-	switch x := v.(type) {
-	case map[string]any:
-		for key, child := range x {
-			if strings.EqualFold(key, wanted) || containsKey(child, wanted) {
-				return true
-			}
-		}
-	case []any:
-		for _, child := range x {
-			if containsKey(child, wanted) {
-				return true
-			}
-		}
+	if err := json.Unmarshal(b, dst); err != nil {
+		return err
 	}
-	return false
+	return nil
 }
 
 func anthropicErrorJSON(w http.ResponseWriter, code int, msg string) {
