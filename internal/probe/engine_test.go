@@ -577,3 +577,106 @@ func TestStaleQueuedRecoveryTaskCannotActOnNewGeneration(t *testing.T) {
 		t.Fatal("stale task cleared the newer recovery generation")
 	}
 }
+
+func TestRunOnceParentCancellationDoesNotQuarantineDeployment(t *testing.T) {
+	started := make(chan struct{})
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-started:
+		default:
+			close(started)
+		}
+		<-r.Context().Done()
+	}))
+	defer up.Close()
+
+	cfg := config.Default()
+	cfg.Probe.Enabled = true
+	cfg.Probe.OnStart = false
+	cfg.Probe.TimeoutMS = 5000
+	cfg.Providers = []config.ProviderConfig{{
+		ID: "p", Name: "P", Type: "openai_compatible", BaseURL: up.URL, AuthMode: "none", Enabled: true,
+		Models: []config.ModelConfig{{ID: "m", Model: "m", Enabled: true, Weight: 1}},
+	}}
+	cfg.ApplyDefaults()
+	hm := health.New(cfg.Routing.FailureThreshold, cfg.Cooldown())
+	reg, err := providers.NewRegistry(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt := router.New(cfg, hm)
+	e := New(cfg, reg, rt, hm, events.New(20))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan Result, 1)
+	go func() { done <- e.RunOnce(ctx) }()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("probe did not start")
+	}
+	cancel()
+
+	select {
+	case res := <-done:
+		if res.Failed != 0 || res.Canceled != 1 {
+			t.Fatalf("canceled sweep result=%+v", res)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("canceled sweep did not return")
+	}
+	if st := hm.Get("p/m"); st.Status != health.Unknown {
+		t.Fatalf("caller cancellation changed provider health: %+v", st)
+	}
+}
+
+func TestRecoveryParentCancellationDoesNotRecordSyntheticFailure(t *testing.T) {
+	started := make(chan struct{})
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-started:
+		default:
+			close(started)
+		}
+		<-r.Context().Done()
+	}))
+	defer up.Close()
+
+	cfg := config.Default()
+	cfg.Probe.Enabled = true
+	cfg.Probe.OnStart = false
+	cfg.Probe.TimeoutMS = 5000
+	cfg.Providers = []config.ProviderConfig{{
+		ID: "p", Name: "P", Type: "openai_compatible", BaseURL: up.URL, AuthMode: "none", Enabled: true,
+		Models: []config.ModelConfig{{ID: "m", Model: "m", Enabled: true, Weight: 1}},
+	}}
+	cfg.ApplyDefaults()
+	hm := health.New(cfg.Routing.FailureThreshold, cfg.Cooldown())
+	hm.Quarantine("p/m", "real failure", time.Millisecond)
+	before := hm.Get("p/m")
+	reg, err := providers.NewRegistry(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt := router.New(cfg, hm)
+	e := New(cfg, reg, rt, hm, events.New(20))
+	ctx, cancel := context.WithCancel(context.Background())
+	e.Start(ctx)
+	e.Recover("p/m")
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		cancel()
+		t.Fatal("recovery probe did not start")
+	}
+	cancel()
+	deadline := time.Now().Add(2 * time.Second)
+	for e.isRecovering("p/m") && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	after := hm.Get("p/m")
+	if after.Status != before.Status || after.RecoveryFailures != before.RecoveryFailures {
+		t.Fatalf("shutdown cancellation mutated health: before=%+v after=%+v", before, after)
+	}
+}

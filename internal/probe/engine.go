@@ -23,6 +23,7 @@ type Result struct {
 	SkippedMissing  int   `json:"skipped_missing_adapter"`
 	SkippedRecovery int   `json:"skipped_recovery"`
 	SkippedReady    int   `json:"skipped_ready"`
+	Canceled        int   `json:"canceled,omitempty"`
 	DurationMS      int64 `json:"duration_ms"`
 }
 
@@ -430,6 +431,10 @@ func (e *Engine) processRecoveryTask(ctx context.Context, task recoveryTask) {
 	cancel()
 	e.releaseProbe()
 
+	if ctx.Err() != nil {
+		e.clearRecoveryTask(task)
+		return
+	}
 	if err == nil {
 		e.hm.RecordSuccess(task.id, lat)
 		e.bus.Add(events.Event{Kind: "recovery_ready", Deployment: task.id, Message: fmt.Sprintf("recovered on attempt %d/%d", task.attempt, attempts), LatencyMS: lat.Milliseconds(), StatusCode: status})
@@ -544,6 +549,7 @@ func (e *Engine) runOnce(ctx context.Context, force bool) Result {
 	for _, d := range e.rt.All() {
 		jobs = append(jobs, probeJob{d: d, state: e.hm.Get(d.ID)})
 	}
+	result.Total = len(jobs)
 	probeRank := func(st health.Status) int {
 		switch st {
 		case health.HalfOpen:
@@ -578,9 +584,8 @@ func (e *Engine) runOnce(ctx context.Context, force bool) Result {
 	var wg sync.WaitGroup
 	var resultMu sync.Mutex
 	failedIDs := make([]string, 0)
-	for _, job := range jobs {
+	for idx, job := range jobs {
 		d := job.d
-		result.Total++
 		if !force && readySupervisor {
 			switch job.state.Status {
 			case health.Healthy:
@@ -612,6 +617,12 @@ func (e *Engine) runOnce(ctx context.Context, force bool) Result {
 		}
 
 		if !e.acquireProbe(ctx, cfg.Probe.Concurrency) {
+			if ctx.Err() != nil {
+				resultMu.Lock()
+				result.Canceled += len(jobs) - idx
+				resultMu.Unlock()
+				break
+			}
 			resultMu.Lock()
 			result.Failed++
 			resultMu.Unlock()
@@ -626,6 +637,12 @@ func (e *Engine) runOnce(ctx context.Context, force bool) Result {
 			cancel()
 
 			if err != nil {
+				if ctx.Err() != nil {
+					resultMu.Lock()
+					result.Canceled++
+					resultMu.Unlock()
+					return
+				}
 				if readySupervisor {
 					e.hm.Quarantine(d.ID, err.Error(), lat)
 					e.bus.Add(events.Event{Kind: "probe_quarantine", Deployment: d.ID, Message: err.Error(), LatencyMS: lat.Milliseconds(), StatusCode: status})
