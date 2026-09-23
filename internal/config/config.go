@@ -338,8 +338,8 @@ func (c Config) Validate() error {
 		return errors.New("routing.max_retry_after_seconds must be between 1 and 86400")
 	}
 	for name, v := range map[string]float64{
-		"routing.latency_weight": c.Routing.LatencyWeight,
-		"routing.failure_weight": c.Routing.FailureWeight,
+		"routing.latency_weight":  c.Routing.LatencyWeight,
+		"routing.failure_weight":  c.Routing.FailureWeight,
 		"routing.capacity_weight": c.Routing.CapacityWeight,
 	} {
 		if math.IsNaN(v) || math.IsInf(v, 0) || v < 0 || v > 1_000_000 {
