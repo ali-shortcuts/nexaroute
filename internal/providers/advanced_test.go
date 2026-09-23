@@ -2,6 +2,7 @@ package providers
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -340,5 +341,46 @@ func TestRedactBodyCoversAdapterSnapshotAndRotatedEnvCredential(t *testing.T) {
 	}
 	if !strings.Contains(got, "public") {
 		t.Fatalf("non-secret content was unexpectedly removed: %q", got)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestTransportErrorDoesNotFanOutAcrossCredentialPool(t *testing.T) {
+	p := config.ProviderConfig{
+		ID: "p", Name: "p", Type: "openai_compatible", BaseURL: "http://example.invalid",
+		APIKey: "key-a",
+		Credentials: []config.CredentialConfig{
+			{Name: "b", APIKey: "key-b", Enabled: true},
+			{Name: "c", APIKey: "key-c", Enabled: true},
+		},
+		AuthMode: "bearer", Enabled: true, MaxConcurrency: 2,
+	}
+	a, err := newHTTPAdapter(p, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var calls atomic.Int32
+	a.c.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		calls.Add(1)
+		return nil, errors.New("network unavailable")
+	})
+
+	resp, err := a.Do(context.Background(), []byte(`{"model":"x","messages":[]}`), false, nil)
+	if resp != nil {
+		resp.Body.Close()
+		t.Fatalf("unexpected response: %v", resp.Status)
+	}
+	if err == nil {
+		t.Fatal("expected transport error")
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("transport failure fanned out across credentials: calls=%d want 1", got)
+	}
+	st := a.Stats()
+	if st.ActiveRequests != 0 || st.WaitingRequests != 0 {
+		t.Fatalf("provider capacity leaked after transport error: %+v", st)
 	}
 }

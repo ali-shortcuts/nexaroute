@@ -296,8 +296,8 @@ func (a *httpAdapter) DoPath(ctx context.Context, method, path string, payload [
 				cancel()
 			}
 			a.releaseCredential(idx)
-			lastErr = err
-			continue
+			release()
+			return nil, err
 		}
 		if stream && cancel != nil {
 			idle := time.Duration(a.p.StreamIdleTimeoutSeconds) * time.Second
