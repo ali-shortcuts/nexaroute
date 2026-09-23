@@ -268,18 +268,6 @@ func (c *Config) ApplyDefaults() {
 	if c.Routing.RequestTimeoutMS == 0 {
 		c.Routing.RequestTimeoutMS = 120000
 	}
-	if c.Routing.LatencyWeight == 0 {
-		c.Routing.LatencyWeight = 0.015
-	}
-	if c.Routing.FailureWeight == 0 {
-		c.Routing.FailureWeight = 25
-	}
-	if c.Routing.CapacityWeight == 0 {
-		c.Routing.CapacityWeight = 35
-	}
-	if c.Routing.RetryBackoffMS < 0 {
-		c.Routing.RetryBackoffMS = 0
-	}
 	if c.Routing.MaxRetryAfterSeconds == 0 {
 		c.Routing.MaxRetryAfterSeconds = 60
 	}
@@ -300,12 +288,6 @@ func (c *Config) ApplyDefaults() {
 	}
 	if c.Probe.RecoveryAttempts == 0 {
 		c.Probe.RecoveryAttempts = 5
-	}
-	if c.Probe.RecoveryRetryMS < 0 {
-		c.Probe.RecoveryRetryMS = 0
-	}
-	if c.Probe.RecoveryRetryMS == 0 {
-		c.Probe.RecoveryRetryMS = 500
 	}
 	for i := range c.Providers {
 		c.Providers[i].ApplyDefaults()
