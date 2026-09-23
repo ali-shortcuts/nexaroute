@@ -240,7 +240,6 @@ func (w *RateLimitedWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-
 // FanoutWriter attempts every configured sink even if an earlier sink fails.
 // This keeps stderr/journald available when the rotating file hits a runtime
 // filesystem error (for example disk-full or permission changes).
