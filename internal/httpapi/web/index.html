@@ -79,6 +79,12 @@ OPENAI_API_KEY=local-placeholder</pre><small>Aliases such as auto/coding can map
       <label class="field"><span>Listen address <small>(read-only — set via config file or NEXAROUTE_LISTEN)</small></span><input id="adListen" readonly></label>
       <p class="hint">Environment variables NEXAROUTE_ADMIN_KEY / NEXAROUTE_ADMIN_BIND_LOCAL_ONLY override these values on restart.</p>
     </div>
+    <div class="form-section">
+      <div class="section-kicker">Pricing &amp; guardrails</div>
+      <label class="field"><span>Pricing <small>(JSON: "deployment-id" or "model" or "*" → USD per 1M tokens)</small></span><textarea id="prPricing" rows="4" spellcheck="false" placeholder='{"*":{"input_per_m":0.5,"output_per_m":1.5},"mock/mock-model":{"input_per_m":0.1,"output_per_m":0.4}}'></textarea><em>Drives the estimated cost in the Usage tab. Unlisted deployments cost $0.</em></label>
+      <div class="form-grid two"><label class="field"><span>Max prompt chars <small>(0 = off)</small></span><input id="grMaxChars" type="number" min="0" max="67108864"></label><label class="field switch-field"><span>Block empty messages</span><input id="grBlockEmpty" type="checkbox"></label></div>
+      <label class="field"><span>Blocked prompt patterns <small>(one regex per line, case-insensitive)</small></span><textarea id="grPatterns" rows="3" spellcheck="false" placeholder="INTERNAL_TOKEN=[A-Za-z0-9._-]+&#10;sk-[a-zA-Z0-9]{20,}"></textarea></label>
+    </div>
   </div>
   <div class="settings-actions"><button id="saveRuntimeSettings" class="btn primary">Save settings</button><span class="hint">Applied hot — no restart needed.</span></div>
   <details class="raw-config"><summary>Current config snapshot</summary><pre id="settingsJson"></pre></details>

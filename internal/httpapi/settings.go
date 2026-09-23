@@ -8,11 +8,13 @@ import (
 )
 
 type settingsForm struct {
-	Routing config.RoutingConfig `json:"routing"`
-	Probe   config.ProbeConfig   `json:"probe"`
-	Logging config.LoggingConfig `json:"logging"`
-	Admin   config.AdminConfig   `json:"admin"`
-	Listen  string               `json:"listen"`
+	Routing    config.RoutingConfig          `json:"routing"`
+	Probe      config.ProbeConfig            `json:"probe"`
+	Logging    config.LoggingConfig          `json:"logging"`
+	Admin      config.AdminConfig            `json:"admin"`
+	Pricing    map[string]config.PriceConfig `json:"pricing"`
+	Guardrails config.GuardrailsConfig       `json:"guardrails"`
+	Listen     string                        `json:"listen"`
 }
 
 func (s *Server) adminSettings(w http.ResponseWriter, r *http.Request) {
@@ -21,11 +23,13 @@ func (s *Server) adminSettings(w http.ResponseWriter, r *http.Request) {
 		routingCfg, probeCfg := s.runtimeSettingsSnapshot()
 		cfg := s.currentConfig()
 		writeJSON(w, 200, settingsForm{
-			Routing: routingCfg,
-			Probe:   probeCfg,
-			Logging: cfg.Logging,
-			Admin:   cfg.Admin,
-			Listen:  cfg.Listen,
+			Routing:    routingCfg,
+			Probe:      probeCfg,
+			Logging:    cfg.Logging,
+			Admin:      cfg.Admin,
+			Pricing:    cfg.Pricing,
+			Guardrails: cfg.Guardrails,
+			Listen:     cfg.Listen,
 		})
 	case http.MethodPut:
 		var in settingsForm
@@ -42,6 +46,8 @@ func (s *Server) adminSettings(w http.ResponseWriter, r *http.Request) {
 			cfg.Probe = in.Probe
 			cfg.Logging = in.Logging
 			cfg.Admin = in.Admin
+			cfg.Pricing = in.Pricing
+			cfg.Guardrails = in.Guardrails
 			cfg.ApplyDefaults()
 			return nil
 		})
@@ -56,6 +62,7 @@ func (s *Server) adminSettings(w http.ResponseWriter, r *http.Request) {
 			"probe":   cfg.Probe,
 			"logging": cfg.Logging,
 			"admin":   config.AdminConfig{BindLocalOnly: cfg.Admin.BindLocalOnly},
+			"pricing": cfg.Pricing,
 			"listen":  cfg.Listen,
 		})
 	default:

@@ -339,6 +339,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/admin/api/client-keys", s.adminClientKeys)
 	mux.HandleFunc("/admin/api/client-keys/", s.adminClientKeys)
 	mux.HandleFunc("/admin/api/client-auth-required", s.adminClientAuthRequired)
+	mux.HandleFunc("/admin/api/guardrails/test", s.adminGuardrailsTest)
 	mux.HandleFunc("/admin/api/usage", s.adminUsage)
 	mux.HandleFunc("/admin/api/usage/reset", s.adminUsage)
 
@@ -482,7 +483,6 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 					return
 				}
 				r = r.WithContext(context.WithValue(r.Context(), clientKeyNameKey{}, name))
-				s.usage.RecordKeyRequest(name)
 			}
 			if !s.tryAcquireDataPlane() {
 				s.rejectOverloaded(sw, r, rid)

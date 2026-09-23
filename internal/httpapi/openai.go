@@ -34,6 +34,10 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 400, "model and messages are required")
 		return
 	}
+	if v := s.guardrailProblem(raw); v != nil {
+		s.rejectGuardrail(w, r, r.Header.Get("x-request-id"), v)
+		return
+	}
 	inspection := inspectRequestJSON(raw, "image_url", []string{"reasoning_effort", "reasoning"})
 	if inspection.TooComplex {
 		errorJSON(w, http.StatusBadRequest, "request JSON structure is too complex")
@@ -85,6 +89,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 		}
 		attempts++
 		attemptIndex := attempts - 1
+		recordUsage := s.usageRecorder(r, c.Deployment.ID)
 		s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_attempt", Deployment: c.Deployment.ID, Message: fmt.Sprintf("attempt=%d score=%.2f health=%s pressure=%.3f", attempts, c.Score, c.Health.Status, c.CapacityPressure)})
 		start := time.Now()
 		resp, e := a.Do(routeCtx, payload, in.Stream, forward)
@@ -158,12 +163,15 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Gateway-Upstream-Model", c.Deployment.Model)
 		if c.Deployment.ProviderType == "openai_compatible" {
 			if in.Stream {
-				e = proxyNativeSSE(w, resp, "openai")
+				e = proxyNativeSSE(w, resp, "openai", recordUsage)
 			} else {
-				e = proxyValidatedJSONResponse(w, resp, validateOpenAIResponseJSON)
+				e = s.proxyValidatedJSONWithUsage(w, resp, validateOpenAIResponseJSON, func(b []byte) {
+					inTok, outTok := usageFromEnvelope("openai", b)
+					recordUsage(inTok, outTok)
+				})
 			}
 		} else if in.Stream {
-			e = streamAnthropicToOpenAI(w, resp, in.Model, r.Header.Get("x-request-id"))
+			e = streamAnthropicToOpenAI(w, resp, in.Model, recordUsage, r.Header.Get("x-request-id"))
 		} else {
 			var an core.AnthResponse
 			e = decodeValidatedJSONLimited(resp.Body, &an, validateAnthropicResponseJSON)
@@ -234,7 +242,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 	errorJSON(w, 502, "all candidate deployments failed: "+lastErr)
 }
 
-func streamAnthropicToOpenAI(w http.ResponseWriter, resp *http.Response, model string, requestID ...string) error {
+func streamAnthropicToOpenAI(w http.ResponseWriter, resp *http.Response, model string, recordUsage func(in, out int64), requestID ...string) error {
 	defer resp.Body.Close()
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -259,6 +267,7 @@ func streamAnthropicToOpenAI(w http.ResponseWriter, resp *http.Response, model s
 	scanner.Buffer(make([]byte, 64<<10), 8<<20)
 	finish := "stop"
 	terminal := false
+	var usageIn, usageOut int64
 	completionID := uniqueStreamID("chatcmpl", requestID...)
 	toolIndex := map[int]int{}
 	nextTool := 0
@@ -276,6 +285,17 @@ func streamAnthropicToOpenAI(w http.ResponseWriter, resp *http.Response, model s
 			return fmt.Errorf("invalid Anthropic SSE JSON: %w", err)
 		}
 		typ, _ := env["type"].(string)
+		if typ == "message_start" || typ == "message_delta" {
+			if ub, err := json.Marshal(env); err == nil {
+				ui, uo := usageFromEnvelope("anthropic", ub)
+				if ui > 0 {
+					usageIn = ui
+				}
+				if uo > 0 {
+					usageOut = uo
+				}
+			}
+		}
 		switch typ {
 		case "content_block_start":
 			ai, _ := numberInt(env["index"])
@@ -342,6 +362,9 @@ func streamAnthropicToOpenAI(w http.ResponseWriter, resp *http.Response, model s
 	}
 	if fl != nil {
 		fl.Flush()
+	}
+	if recordUsage != nil {
+		recordUsage(usageIn, usageOut)
 	}
 	return nil
 }

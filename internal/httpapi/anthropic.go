@@ -37,6 +37,10 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		anthropicErrorJSON(w, 400, "model and messages are required")
 		return
 	}
+	if v := s.guardrailProblem(raw); v != nil {
+		s.rejectGuardrail(w, r, r.Header.Get("x-request-id"), v)
+		return
+	}
 
 	inspection := inspectRequestJSON(raw, "image", []string{"thinking", "reasoning"})
 	if inspection.TooComplex {
@@ -91,6 +95,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 
 		attempts++
 		attemptIndex := attempts - 1
+		recordUsage := s.usageRecorder(r, c.Deployment.ID)
 		s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_attempt", Deployment: c.Deployment.ID, Message: fmt.Sprintf("attempt=%d score=%.2f health=%s pressure=%.3f", attempts, c.Score, c.Health.Status, c.CapacityPressure)})
 		start := time.Now()
 		resp, e := a.Do(routeCtx, payload, in.Stream, forward)
@@ -165,12 +170,15 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Gateway-Upstream-Model", c.Deployment.Model)
 		if c.Deployment.ProviderType == "anthropic_compatible" {
 			if in.Stream {
-				e = proxyNativeSSE(w, resp, "anthropic")
+				e = proxyNativeSSE(w, resp, "anthropic", recordUsage)
 			} else {
-				e = proxyValidatedJSONResponse(w, resp, validateAnthropicResponseJSON)
+				e = s.proxyValidatedJSONWithUsage(w, resp, validateAnthropicResponseJSON, func(b []byte) {
+					inTok, outTok := usageFromEnvelope("anthropic", b)
+					recordUsage(inTok, outTok)
+				})
 			}
 		} else if in.Stream {
-			e = streamOpenAIToAnthropic(w, resp, in.Model, r.Header.Get("x-request-id"))
+			e = streamOpenAIToAnthropic(w, resp, in.Model, recordUsage, r.Header.Get("x-request-id"))
 		} else {
 			var o core.OpenAIResponse
 			e = decodeValidatedJSONLimited(resp.Body, &o, validateOpenAIResponseJSON)
@@ -180,6 +188,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 				translated, e = translate.OpenAIResponseToAnthropic(o, in.Model)
 				if e == nil {
 					writeJSON(w, 200, translated)
+					recordUsage(int64(o.Usage.PromptTokens), int64(o.Usage.CompletionTokens))
 				}
 			}
 		}
@@ -352,6 +361,8 @@ type nativeSSETracker struct {
 	protocol string
 	line     []byte
 	terminal bool
+	inTok    int64
+	outTok   int64
 }
 
 const maxNativeSSELineBytes = 8 << 20
@@ -411,6 +422,19 @@ func (t *nativeSSETracker) processLine() error {
 				return fmt.Errorf("invalid OpenAI SSE choices: %w", err)
 			}
 		}
+		if raw := env["usage"]; len(raw) > 0 {
+			var u struct {
+				PromptTokens     int64 `json:"prompt_tokens"`
+				CompletionTokens int64 `json:"completion_tokens"`
+			}
+			_ = json.Unmarshal(raw, &u)
+			if u.PromptTokens > 0 {
+				t.inTok = u.PromptTokens
+			}
+			if u.CompletionTokens > 0 {
+				t.outTok = u.CompletionTokens
+			}
+		}
 		for _, choice := range choices {
 			if len(choice.FinishReason) == 0 || string(choice.FinishReason) == "null" {
 				continue
@@ -433,12 +457,28 @@ func (t *nativeSSETracker) processLine() error {
 		if typ == "error" {
 			return fmt.Errorf("anthropic SSE error event")
 		}
+		if typ == "message_start" {
+			var start struct {
+				Message struct {
+					Usage struct {
+						InputTokens int64 `json:"input_tokens"`
+					} `json:"usage"`
+				} `json:"message"`
+			}
+			if raw := env["message"]; len(raw) > 0 {
+				_ = json.Unmarshal(raw, &start.Message)
+				t.inTok = start.Message.Usage.InputTokens
+			}
+		}
 		if typ == "message_stop" {
 			t.terminal = true
 		}
 		if typ == "message_delta" {
 			var delta struct {
 				StopReason *string `json:"stop_reason"`
+				Usage      struct {
+					OutputTokens int64 `json:"output_tokens"`
+				} `json:"usage"`
 			}
 			if raw := env["delta"]; len(raw) > 0 {
 				if err := json.Unmarshal(raw, &delta); err != nil {
@@ -446,6 +486,15 @@ func (t *nativeSSETracker) processLine() error {
 				}
 				if delta.StopReason != nil && *delta.StopReason != "" {
 					t.terminal = true
+				}
+			}
+			if raw := env["usage"]; len(raw) > 0 {
+				var u struct {
+					OutputTokens int64 `json:"output_tokens"`
+				}
+				_ = json.Unmarshal(raw, &u)
+				if u.OutputTokens > 0 {
+					t.outTok = u.OutputTokens
 				}
 			}
 		}
@@ -468,7 +517,7 @@ func (t *nativeSSETracker) finish() error {
 	return nil
 }
 
-func proxyNativeSSE(w http.ResponseWriter, resp *http.Response, protocol string) error {
+func proxyNativeSSE(w http.ResponseWriter, resp *http.Response, protocol string, recordUsage func(in, out int64)) error {
 	defer resp.Body.Close()
 	if !strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
 		return fmt.Errorf("expected text/event-stream from %s upstream", protocol)
@@ -493,7 +542,13 @@ func proxyNativeSSE(w http.ResponseWriter, resp *http.Response, protocol string)
 		}
 		if err != nil {
 			if err == io.EOF {
-				return tracker.finish()
+				if ferr := tracker.finish(); ferr != nil {
+					return ferr
+				}
+				if recordUsage != nil {
+					recordUsage(tracker.inTok, tracker.outTok)
+				}
+				return nil
 			}
 			return err
 		}
@@ -507,7 +562,7 @@ type openAIToolStreamState struct {
 	pending   strings.Builder
 }
 
-func streamOpenAIToAnthropic(w http.ResponseWriter, resp *http.Response, model string, requestID ...string) error {
+func streamOpenAIToAnthropic(w http.ResponseWriter, resp *http.Response, model string, recordUsage func(in, out int64), requestID ...string) error {
 	defer resp.Body.Close()
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -536,6 +591,7 @@ func streamOpenAIToAnthropic(w http.ResponseWriter, resp *http.Response, model s
 
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 64<<10), 8<<20)
+	var usageIn, usageOut int64
 	nextIndex := 0
 	textIndex := -1
 	textStarted := false
@@ -587,6 +643,17 @@ func streamOpenAIToAnthropic(w http.ResponseWriter, resp *http.Response, model s
 		var raw map[string]any
 		if err := json.Unmarshal([]byte(d), &raw); err != nil {
 			return fmt.Errorf("invalid OpenAI SSE JSON: %w", err)
+		}
+		if u, ok := raw["usage"]; ok {
+			if ub, err := json.Marshal(u); err == nil {
+				ui, uo := usageFromEnvelope("openai", ub)
+				if ui > 0 {
+					usageIn = ui
+				}
+				if uo > 0 {
+					usageOut = uo
+				}
+			}
 		}
 		if er, ok := raw["error"]; ok {
 			emit("error", map[string]any{"type": "error", "error": er})
@@ -686,6 +753,9 @@ func streamOpenAIToAnthropic(w http.ResponseWriter, resp *http.Response, model s
 	emit("message_stop", map[string]any{"type": "message_stop"})
 	if writeErr != nil {
 		return writeErr
+	}
+	if recordUsage != nil {
+		recordUsage(usageIn, usageOut)
 	}
 	return nil
 }

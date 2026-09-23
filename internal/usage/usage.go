@@ -60,19 +60,6 @@ func (t *Tracker) RecordRequest(providerID, keyName string, inputTokens, outputT
 	}
 }
 
-// RecordKeyRequest counts an authorized data-plane admission even when token
-// usage cannot be parsed from the response.
-func (t *Tracker) RecordKeyRequest(keyName string) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.total.Requests++
-	if keyName != "" {
-		e := t.byKey[keyName]
-		e.Requests++
-		t.byKey[keyName] = e
-	}
-}
-
 func (t *Tracker) Snapshot() Snapshot {
 	t.mu.RLock()
 	defer t.mu.RUnlock()

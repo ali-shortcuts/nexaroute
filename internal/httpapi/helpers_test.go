@@ -165,7 +165,7 @@ func TestTranslatedStreamsStopOnClientWriteFailure(t *testing.T) {
 			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
 			Body:       io.NopCloser(strings.NewReader("data: [DONE]\n\n")),
 		}
-		if err := streamOpenAIToAnthropic(w, resp, "m"); err == nil || !strings.Contains(err.Error(), "client write failed") {
+		if err := streamOpenAIToAnthropic(w, resp, "m", nil); err == nil || !strings.Contains(err.Error(), "client write failed") {
 			t.Fatalf("unexpected stream error: %v", err)
 		}
 	})
@@ -176,7 +176,7 @@ func TestTranslatedStreamsStopOnClientWriteFailure(t *testing.T) {
 			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
 			Body:       io.NopCloser(strings.NewReader("data: {\"type\":\"message_stop\"}\n\n")),
 		}
-		if err := streamAnthropicToOpenAI(w, resp, "m"); err == nil || !strings.Contains(err.Error(), "client write failed") {
+		if err := streamAnthropicToOpenAI(w, resp, "m", nil); err == nil || !strings.Contains(err.Error(), "client write failed") {
 			t.Fatalf("unexpected stream error: %v", err)
 		}
 	})
@@ -331,7 +331,7 @@ func TestTranslatedStreamsRejectMalformedSSEJSON(t *testing.T) {
 			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
 			Body:       io.NopCloser(strings.NewReader("data: {bad}\n\n")),
 		}
-		err := streamOpenAIToAnthropic(rr, resp, "m")
+		err := streamOpenAIToAnthropic(rr, resp, "m", nil)
 		if err == nil || !strings.Contains(err.Error(), "invalid OpenAI SSE JSON") {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -343,7 +343,7 @@ func TestTranslatedStreamsRejectMalformedSSEJSON(t *testing.T) {
 			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
 			Body:       io.NopCloser(strings.NewReader("data: {bad}\n\n")),
 		}
-		err := streamAnthropicToOpenAI(rr, resp, "m")
+		err := streamAnthropicToOpenAI(rr, resp, "m", nil)
 		if err == nil || !strings.Contains(err.Error(), "invalid Anthropic SSE JSON") {
 			t.Fatalf("unexpected error: %v", err)
 		}
