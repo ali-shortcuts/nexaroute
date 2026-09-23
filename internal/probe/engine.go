@@ -156,13 +156,20 @@ func (e *Engine) wasPrimed() bool {
 	return e.primed
 }
 
-func (e *Engine) Start(ctx context.Context) {
-	e.setRunContext(ctx)
+func (e *Engine) startRecoveryWorkers(ctx context.Context) {
+	if ctx == nil || ctx.Err() != nil {
+		return
+	}
 	e.recoveryWorkers.Do(func() {
 		for i := 0; i < recoveryWorkerCount; i++ {
 			go e.recoveryWorker(ctx)
 		}
 	})
+}
+
+func (e *Engine) Start(ctx context.Context) {
+	e.setRunContext(ctx)
+	e.startRecoveryWorkers(ctx)
 	go e.Run(ctx)
 }
 
@@ -218,6 +225,7 @@ func (e *Engine) Recover(id string) {
 	if ctx == nil || ctx.Err() != nil {
 		return
 	}
+	e.startRecoveryWorkers(ctx)
 	e.recoveryMu.Lock()
 	if e.recovering[id] {
 		e.recoveryMu.Unlock()
