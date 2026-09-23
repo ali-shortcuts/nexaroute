@@ -39,6 +39,7 @@ type Requirement struct {
 	SessionKey                          string
 	SelectionKey                        string
 	ProviderLoad                        map[string]ProviderLoad
+	LoadForProvider                     func(string) ProviderLoad
 }
 
 func (r Requirement) Scopes() []string {
@@ -201,7 +202,11 @@ func (r *Router) scored(d Deployment, hs health.State, req Requirement, cfg conf
 	case health.Degraded:
 		score -= 20
 	}
-	pressure := capacityPressure(req.ProviderLoad[d.ProviderID])
+	load := req.ProviderLoad[d.ProviderID]
+	if req.LoadForProvider != nil {
+		load = req.LoadForProvider(d.ProviderID)
+	}
+	pressure := capacityPressure(load)
 	score += d.Weight*10 - float64(d.Priority)*3 - hs.EWMALatencyMS*cfg.Routing.LatencyWeight - pressure*cfg.Routing.CapacityWeight
 	total := hs.Successes + hs.Failures
 	if total > 0 {

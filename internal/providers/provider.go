@@ -102,6 +102,16 @@ func (r *Registry) Get(id string) (Adapter, bool) {
 	return a, ok
 }
 
+func (r *Registry) Stat(id string) (ProviderStats, bool) {
+	r.mu.RLock()
+	a, ok := r.m[id]
+	r.mu.RUnlock()
+	if !ok {
+		return ProviderStats{}, false
+	}
+	return a.Stats(), true
+}
+
 func (r *Registry) Stats() []ProviderStats {
 	r.mu.RLock()
 	adapters := make([]Adapter, 0, len(r.m))

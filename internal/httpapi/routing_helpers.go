@@ -13,7 +13,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/ali-shortcuts/nexaroute/internal/config"
-	"github.com/ali-shortcuts/nexaroute/internal/providers"
 	"github.com/ali-shortcuts/nexaroute/internal/router"
 )
 
@@ -69,11 +68,15 @@ func patchJSONModel(raw []byte, model string) ([]byte, error) {
 	if !utf8.ValidString(model) {
 		return nil, fmt.Errorf("model id is not valid UTF-8")
 	}
-	var obj map[string]any
+	var obj map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &obj); err != nil {
 		return nil, err
 	}
-	obj["model"] = model
+	modelJSON, err := json.Marshal(model)
+	if err != nil {
+		return nil, err
+	}
+	obj["model"] = modelJSON
 	return json.Marshal(obj)
 }
 
@@ -162,26 +165,24 @@ func upstreamError(status int, b []byte) string {
 	return fmt.Sprintf("upstream %d: %s", status, msg)
 }
 
-func copySelectedRequestHeaders(r *http.Request) http.Header {
-	h := make(http.Header)
-	// Copy non-sensitive client headers into an intermediate set. The provider
-	// adapter still applies its explicit ForwardHeaders allowlist, so a provider
-	// only receives headers the user chose to forward. Keeping the broader set
-	// here allows provider-specific Anthropic beta/version headers and custom
-	// compatibility headers without hard-coding every future header name.
-	blocked := map[string]bool{
-		"authorization": true, "proxy-authorization": true, "x-api-key": true,
-		"x-admin-key": true, "cookie": true, "set-cookie": true, "connection": true,
-		"proxy-connection": true, "transfer-encoding": true, "content-length": true,
-		"host": true,
+func blockedClientForwardHeader(k string) bool {
+	switch strings.ToLower(strings.TrimSpace(k)) {
+	case "authorization", "proxy-authorization", "x-api-key", "x-admin-key",
+		"cookie", "set-cookie", "connection", "proxy-connection",
+		"transfer-encoding", "content-length", "host":
+		return true
+	default:
+		return false
 	}
+}
+
+func copySelectedRequestHeaders(r *http.Request) http.Header {
+	h := make(http.Header, len(r.Header))
 	for k, vals := range r.Header {
-		if blocked[strings.ToLower(strings.TrimSpace(k))] {
+		if blockedClientForwardHeader(k) {
 			continue
 		}
-		for _, v := range vals {
-			h.Add(k, v)
-		}
+		h[k] = append([]string(nil), vals...)
 	}
 	return h
 }
@@ -287,22 +288,27 @@ func sessionKeyFromRequest(r *http.Request, raw []byte) string {
 	return sessionKeyFromRequestParts(r, inspection.BodySessionKey)
 }
 
-func providerLoadSnapshot(stats []providers.ProviderStats) map[string]router.ProviderLoad {
-	out := make(map[string]router.ProviderLoad, len(stats))
-	for _, st := range stats {
-		out[st.ID] = router.ProviderLoad{
+func (s *Server) prepareRequirement(req router.Requirement, r *http.Request, bodySessionKey string) router.Requirement {
+	req.SessionKey = sessionKeyFromRequestParts(r, bodySessionKey)
+	req.SelectionKey = r.Header.Get("x-request-id")
+	cache := make(map[string]router.ProviderLoad, 4)
+	req.LoadForProvider = func(id string) router.ProviderLoad {
+		if load, ok := cache[id]; ok {
+			return load
+		}
+		st, ok := s.reg.Stat(id)
+		if !ok {
+			cache[id] = router.ProviderLoad{}
+			return router.ProviderLoad{}
+		}
+		load := router.ProviderLoad{
 			Active:  st.ActiveRequests,
 			Waiting: st.WaitingRequests,
 			Limit:   st.MaxConcurrency,
 		}
+		cache[id] = load
+		return load
 	}
-	return out
-}
-
-func (s *Server) prepareRequirement(req router.Requirement, r *http.Request, bodySessionKey string) router.Requirement {
-	req.SessionKey = sessionKeyFromRequestParts(r, bodySessionKey)
-	req.SelectionKey = r.Header.Get("x-request-id")
-	req.ProviderLoad = providerLoadSnapshot(s.reg.Stats())
 	return req
 }
 
