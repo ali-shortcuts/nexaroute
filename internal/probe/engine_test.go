@@ -225,6 +225,26 @@ func TestBackgroundSweepSkipsHealthyReadyModels(t *testing.T) {
 	}
 }
 
+func TestReadyLeaseExpiry(t *testing.T) {
+	now := time.Now()
+	lease := 5 * time.Minute
+
+	fresh := health.State{Status: health.Healthy, LastChecked: now.Add(-30 * time.Second)}
+	if readyLeaseExpired(fresh, now, lease) {
+		t.Fatal("fresh health proof must not be re-probed")
+	}
+
+	stale := health.State{Status: health.Healthy, LastChecked: now.Add(-6 * time.Minute)}
+	if !readyLeaseExpired(stale, now, lease) {
+		t.Fatal("idle stale health proof must be revalidated")
+	}
+
+	missingTimestamp := health.State{Status: health.Healthy}
+	if !readyLeaseExpired(missingTimestamp, now, lease) {
+		t.Fatal("missing health timestamp must be treated as expired")
+	}
+}
+
 func TestBackgroundSweepAtScaleTouchesOnlyUnverifiedModels(t *testing.T) {
 	var calls atomic.Int32
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

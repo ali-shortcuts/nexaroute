@@ -69,8 +69,9 @@ The health loop is deliberately **event-driven + selective**, not a wasteful bro
 
 - every real client request updates the selected deployment's health immediately;
 - startup probes use a tiny request (`max_tokens=1` by default) to establish the initial ready queue;
-- automatic background sweeps probe only deployments that are not yet proven healthy;
-- a model already in the ready queue is not periodically re-probed; it stays ready until Claude traffic fails it or its provider/model identity changes;
+- automatic background sweeps probe new/unverified deployments and revalidate only healthy deployments whose ready-health lease has expired;
+- every successful real Claude request refreshes that deployment's health lease, so actively used ready models normally receive no synthetic probe;
+- an idle ready model is micro-probed after the lease expires, preventing a long-unused fallback from remaining falsely healthy forever;
 - failed/degraded/cooldown deployments are owned by dedicated recovery loops and never receive Claude traffic;
 - candidate order combines configured model priority/weight with the verified ready state; under `ready_queue`, the strongest configured healthy model stays sticky until it leaves Healthy;
 - recovery policy defaults to **5 supervisor attempts -> 1800-second cooldown**, with a 500 ms retry delay between failed recovery probes;
@@ -79,7 +80,7 @@ The health loop is deliberately **event-driven + selective**, not a wasteful bro
 - a real Claude Code request tries candidates in routing order and fails over before client-visible response bytes are committed.
 - capability routing inspects the parsed request structure for images and reasoning controls, so words such as “image” in ordinary user text do not cause false capability requirements.
 
-`probe.interval_seconds` is configurable down to 1 second. The router decision itself is local and fast; remote health checks still take normal network/provider latency. NexaRoute therefore keeps readiness warm in the background instead of blocking each Claude request on a new health check.
+`probe.interval_seconds` is configurable down to 1 second. `probe.ready_lease_seconds` defaults to 300 seconds: real successful Claude traffic renews that lease, while an idle ready fallback is micro-probed after the lease expires. The router decision itself is local and fast; remote health checks still take normal network/provider latency. NexaRoute therefore keeps readiness warm in the background without repeatedly probing active models or blocking each Claude request on a new health check.
 
 Model **quality** is represented explicitly by configured `priority` and `weight`; a one-token health probe can prove availability/latency, but it cannot honestly measure which LLM is intellectually stronger.
 

@@ -39,10 +39,11 @@ type RoutingConfig struct {
 }
 
 type ProbeConfig struct {
-	Enabled          bool `json:"enabled"`
-	OnStart          bool `json:"on_start"`
-	IntervalSeconds  int  `json:"interval_seconds"`
-	TimeoutMS        int  `json:"timeout_ms"`
+	Enabled           bool `json:"enabled"`
+	OnStart           bool `json:"on_start"`
+	IntervalSeconds   int  `json:"interval_seconds"`
+	ReadyLeaseSeconds int  `json:"ready_lease_seconds"`
+	TimeoutMS         int  `json:"timeout_ms"`
 	MaxTokens        int  `json:"max_tokens"`
 	Concurrency      int  `json:"concurrency"`
 	RecoveryAttempts int  `json:"recovery_attempts"`
@@ -113,7 +114,7 @@ func Default() Config {
 			RequestTimeoutMS: 120000, LatencyWeight: 0.015, FailureWeight: 25,
 			RetryBackoffMS: 150, MaxRetryAfterSeconds: 60,
 		},
-		Probe: ProbeConfig{Enabled: true, OnStart: true, IntervalSeconds: 120, TimeoutMS: 8000, MaxTokens: 1, Concurrency: 16, RecoveryAttempts: 5, RecoveryRetryMS: 500},
+		Probe: ProbeConfig{Enabled: true, OnStart: true, IntervalSeconds: 120, ReadyLeaseSeconds: 300, TimeoutMS: 8000, MaxTokens: 1, Concurrency: 16, RecoveryAttempts: 5, RecoveryRetryMS: 500},
 	}
 }
 
@@ -181,6 +182,9 @@ func (c *Config) ApplyDefaults() {
 	}
 	if c.Probe.IntervalSeconds <= 0 {
 		c.Probe.IntervalSeconds = 120
+	}
+	if c.Probe.ReadyLeaseSeconds <= 0 {
+		c.Probe.ReadyLeaseSeconds = 300
 	}
 	if c.Probe.TimeoutMS <= 0 {
 		c.Probe.TimeoutMS = 8000
@@ -359,6 +363,9 @@ func (c Config) Cooldown() time.Duration {
 }
 func (c Config) ProbeInterval() time.Duration {
 	return time.Duration(c.Probe.IntervalSeconds) * time.Second
+}
+func (c Config) ProbeReadyLease() time.Duration {
+	return time.Duration(c.Probe.ReadyLeaseSeconds) * time.Second
 }
 func (c Config) ProbeTimeout() time.Duration {
 	return time.Duration(c.Probe.TimeoutMS) * time.Millisecond

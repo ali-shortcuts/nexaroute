@@ -92,7 +92,9 @@ Important controls:
 With `routing.strategy = "ready_queue"`:
 
 - a deployment must pass a health probe before it can serve Claude traffic;
-- automatic background sweeps do **not** re-probe deployments already marked `healthy`;
+- automatic background sweeps skip a `healthy` deployment while its ready-health lease is fresh;
+- successful real Claude traffic refreshes that lease, so active models are not needlessly probe-tested;
+- an idle healthy deployment is micro-probed after the lease expires so cold fallbacks do not stay falsely healthy forever;
 - the first eligible routed failure removes the deployment from the ready queue immediately;
 - the recovery supervisor owns retry/cooldown until the deployment proves healthy again;
 - changing provider Base URL, credentials, auth mode, proxy, endpoint paths, forwarded headers, or the upstream model ID invalidates the old health proof;
@@ -104,6 +106,7 @@ With `routing.strategy = "ready_queue"`:
 
 Ready-queue recovery adds:
 
+- `ready_lease_seconds` — maximum age of a healthy proof before an idle ready model is revalidated; default `300`
 - `recovery_attempts` — supervisor probes after a quarantined model fails; default `5`
 - `recovery_retry_ms` — delay between failed recovery probes; default `500`
 - a model returns to the ready queue immediately on the first successful recovery probe
@@ -113,13 +116,14 @@ Ready-queue recovery adds:
 
 Default behavior:
 
-- interval: 120 seconds
+- supervisor interval: 120 seconds
+- ready-health lease: 300 seconds
 - max output: 1 token
 - timeout: 8 seconds
 - concurrency: 16
 - failure threshold: inherited by deployment health policy
 
-At 100 models, continuous probing consumes real quota even with tiny prompts. Tune the interval or disable background probes if a provider is expensive or quota-constrained.
+At 100 models, the ready-health lease prevents healthy active models from being synthetic-probed on every sweep. Only new/unverified, recovery-owned, or lease-expired idle deployments need background work. Increase the lease when a provider is expensive or quota-constrained.
 
 ## Admin settings
 

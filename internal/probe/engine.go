@@ -239,10 +239,18 @@ func (e *Engine) deployment(id string) (router.Deployment, providers.Adapter, bo
 	return router.Deployment{}, nil, false
 }
 
-// RunOnce performs an explicit operator-requested sweep. Background supervisor
-// sweeps do not re-probe healthy ready models: only previously unverified
-// deployments are health-checked. Quarantined/cooldown deployments are owned by
-// their dedicated recovery loops.
+func readyLeaseExpired(st health.State, now time.Time, lease time.Duration) bool {
+	if lease <= 0 || st.LastChecked.IsZero() {
+		return true
+	}
+	return !now.Before(st.LastChecked.Add(lease))
+}
+
+// RunOnce performs an explicit operator-requested sweep. Background ready-queue
+// sweeps avoid fresh ready deployments, but revalidate an idle healthy
+// deployment once its health lease expires. Real successful Claude traffic
+// refreshes LastChecked, so actively used models normally need no synthetic
+// probe. Quarantined/cooldown deployments remain recovery-supervisor owned.
 func (e *Engine) RunOnce(ctx context.Context) Result {
 	return e.runOnce(ctx, true)
 }
@@ -254,6 +262,8 @@ func (e *Engine) runOnce(ctx context.Context, force bool) Result {
 
 	cfg := e.current()
 	readySupervisor := cfg.Routing.Strategy == "ready_queue"
+	readyLease := cfg.ProbeReadyLease()
+	sweepNow := time.Now()
 	result := Result{}
 	if !force && !cfg.Probe.Enabled {
 		result.DurationMS = time.Since(start).Milliseconds()
@@ -308,8 +318,10 @@ func (e *Engine) runOnce(ctx context.Context, force bool) Result {
 		if !force && readySupervisor {
 			switch job.state.Status {
 			case health.Healthy:
-				result.SkippedReady++
-				continue
+				if !readyLeaseExpired(job.state, sweepNow, readyLease) {
+					result.SkippedReady++
+					continue
+				}
 			case health.Cooldown:
 				result.SkippedCooldown++
 				e.Recover(d.ID)

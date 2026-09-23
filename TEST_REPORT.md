@@ -80,7 +80,7 @@ The ready queue was tightened further after comparison against mature open-sourc
 
 Required invariants now covered by regression tests:
 
-- a healthy ready-queue model is skipped by automatic background supervisor sweeps;
+- a healthy ready-queue model is skipped while its ready-health lease is fresh, while an idle stale-ready model becomes eligible for revalidation;
 - an unknown/new deployment must pass a probe before becoming routable;
 - a real Claude failure ejects the deployment immediately and starts supervised recovery;
 - temporary all-key rate-limit cooldown waits do not consume the five recovery attempts;

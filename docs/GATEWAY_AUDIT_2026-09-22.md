@@ -54,18 +54,19 @@ Invariant:
 
 This gives request-time routing a local, fast decision instead of blocking Claude on a fresh network health check.
 
-### 2. Healthy ready models are not periodically re-probed
+### 2. Traffic-refreshed health leases for the ready pool
 
-Under the default `ready_queue` strategy, background supervisor sweeps skip deployments already marked `Healthy`. Other explicitly selected legacy routing strategies retain their periodic probe semantics.
+Under the default `ready_queue` strategy, a successful health proof has a bounded lease instead of being trusted forever.
 
-A healthy model is reconsidered only when:
+- every successful real Claude request refreshes `LastChecked` and therefore renews the deployment's ready-health lease;
+- automatic sweeps skip healthy deployments while that lease is fresh;
+- a healthy deployment that stays idle past the lease is revalidated with the same tiny micro-probe;
+- new/unverified deployments still require an initial probe before they can become routable;
+- degraded/cooldown deployments remain owned by their recovery loops.
 
-- real Claude traffic fails it; or
-- its provider/model probe identity changes during hot reload.
+This combines passive health feedback from real traffic with sparse active checks for cold fallbacks. It avoids repeatedly probing active models while also preventing an unused backup from remaining falsely `Healthy` indefinitely.
 
 The explicit operator action **Probe all models** can still force a complete retest.
-
-This avoids wasting quota and avoids creating self-inflicted rate limits on models already proven good.
 
 ### 3. Dedicated recovery lifecycle
 
