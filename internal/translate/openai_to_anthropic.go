@@ -15,7 +15,9 @@ func OpenAIToAnthropic(in core.OpenAIRequest, model string) (core.AnthropicReque
 	}
 	var system strings.Builder
 	for _, m := range in.Messages {
-		if m.Role == "system" {
+		role := strings.ToLower(strings.TrimSpace(m.Role))
+		switch role {
+		case "system", "developer":
 			for _, b := range openAIContentToAnthBlocks(m.Content) {
 				if b["type"] == "text" {
 					if system.Len() > 0 {
@@ -25,10 +27,16 @@ func OpenAIToAnthropic(in core.OpenAIRequest, model string) (core.AnthropicReque
 				}
 			}
 			continue
+		case "user", "assistant", "tool":
+		default:
+			return out, fmt.Errorf("unsupported OpenAI message role %q for Anthropic translation", m.Role)
 		}
 		blocks := openAIContentToAnthBlocks(m.Content)
-		if m.Role == "assistant" {
+		if role == "assistant" {
 			for _, tc := range m.ToolCalls {
+				if strings.TrimSpace(tc.ID) == "" || strings.TrimSpace(tc.Function.Name) == "" {
+					return out, fmt.Errorf("assistant tool call requires non-empty id and function name")
+				}
 				obj := map[string]any{}
 				if strings.TrimSpace(tc.Function.Arguments) != "" {
 					if err := json.Unmarshal([]byte(tc.Function.Arguments), &obj); err != nil {
@@ -38,13 +46,19 @@ func OpenAIToAnthropic(in core.OpenAIRequest, model string) (core.AnthropicReque
 				blocks = append(blocks, map[string]any{"type": "tool_use", "id": tc.ID, "name": tc.Function.Name, "input": obj})
 			}
 		}
-		role := m.Role
-		if m.Role == "tool" {
-			role = "user"
+		anthRole := role
+		if role == "tool" {
+			if strings.TrimSpace(m.ToolCallID) == "" {
+				return out, fmt.Errorf("tool message requires non-empty tool_call_id")
+			}
+			anthRole = "user"
 			blocks = []map[string]any{{"type": "tool_result", "tool_use_id": m.ToolCallID, "content": normalizeToolResultContent(m.Content)}}
 		}
-		raw, _ := json.Marshal(blocks)
-		out.Messages = append(out.Messages, core.AnthMessage{Role: role, Content: raw})
+		raw, err := json.Marshal(blocks)
+		if err != nil {
+			return out, fmt.Errorf("translate OpenAI message content: %w", err)
+		}
+		out.Messages = append(out.Messages, core.AnthMessage{Role: anthRole, Content: raw})
 	}
 	if system.Len() > 0 {
 		out.System, _ = json.Marshal(system.String())

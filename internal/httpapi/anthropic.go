@@ -259,8 +259,19 @@ func writeRawUpstreamError(w http.ResponseWriter, status int, contentType string
 func proxyResponse(w http.ResponseWriter, resp *http.Response) error {
 	defer resp.Body.Close()
 	isSSE := strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream")
+	connectionScoped := map[string]struct{}{}
+	for _, value := range resp.Header.Values("Connection") {
+		for _, token := range strings.Split(value, ",") {
+			if token = strings.ToLower(strings.TrimSpace(token)); token != "" {
+				connectionScoped[token] = struct{}{}
+			}
+		}
+	}
 	for k, vs := range resp.Header {
 		lk := strings.ToLower(strings.TrimSpace(k))
+		if _, blocked := connectionScoped[lk]; blocked {
+			continue
+		}
 		switch lk {
 		case "connection", "proxy-connection", "keep-alive", "transfer-encoding", "te", "trailer", "upgrade",
 			"proxy-authenticate", "proxy-authorization", "authorization", "x-api-key", "x-admin-key", "set-cookie":

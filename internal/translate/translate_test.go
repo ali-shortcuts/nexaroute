@@ -87,3 +87,53 @@ func TestOpenAIToAnthropicRejectsMalformedToolArguments(t *testing.T) {
 		t.Fatal("malformed historical tool arguments must not be silently converted")
 	}
 }
+
+func TestOpenAIToAnthropicMapsDeveloperRoleToSystem(t *testing.T) {
+	in := core.OpenAIRequest{
+		Model: "x",
+		Messages: []core.OpenAIMessage{
+			{Role: "developer", Content: "developer policy"},
+			{Role: "user", Content: "hello"},
+		},
+	}
+	got, err := OpenAIToAnthropic(in, "backend")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var system string
+	if err := json.Unmarshal(got.System, &system); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(system, "developer policy") {
+		t.Fatalf("developer message not mapped into Anthropic system context: %q", system)
+	}
+	if len(got.Messages) != 1 || got.Messages[0].Role != "user" {
+		t.Fatalf("unexpected translated messages: %#v", got.Messages)
+	}
+}
+
+func TestOpenAIToAnthropicRejectsInvalidRolesAndToolIdentity(t *testing.T) {
+	cases := []core.OpenAIRequest{
+		{Messages: []core.OpenAIMessage{{Role: "nonsense", Content: "x"}}},
+		{Messages: []core.OpenAIMessage{{Role: "tool", Content: "x"}}},
+		{Messages: []core.OpenAIMessage{{Role: "assistant", ToolCalls: []core.OpenAIToolCall{{Function: core.OpenAIFunctionCall{Name: "f", Arguments: "{}"}}}}}},
+	}
+	for i, in := range cases {
+		if _, err := OpenAIToAnthropic(in, "m"); err == nil {
+			t.Fatalf("case %d should have failed", i)
+		}
+	}
+}
+
+func TestAnthropicToOpenAIRejectsInvalidToolStructure(t *testing.T) {
+	cases := []core.AnthropicRequest{
+		{Messages: []core.AnthMessage{{Role: "invalid", Content: json.RawMessage(`"x"`)}}},
+		{Messages: []core.AnthMessage{{Role: "user", Content: json.RawMessage(`[{"type":"tool_use","id":"x","name":"f","input":{}}]`)}}},
+		{Messages: []core.AnthMessage{{Role: "user", Content: json.RawMessage(`[{"type":"tool_result","content":"ok"}]`)}}},
+	}
+	for i, in := range cases {
+		if _, err := AnthropicToOpenAI(in, "m"); err == nil {
+			t.Fatalf("case %d should have failed", i)
+		}
+	}
+}

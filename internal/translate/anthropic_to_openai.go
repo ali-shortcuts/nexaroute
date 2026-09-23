@@ -19,6 +19,10 @@ func AnthropicToOpenAI(in core.AnthropicRequest, model string) (core.OpenAIReque
 		out.Messages = append(out.Messages, core.OpenAIMessage{Role: "system", Content: sys})
 	}
 	for _, m := range in.Messages {
+		role := strings.ToLower(strings.TrimSpace(m.Role))
+		if role != "user" && role != "assistant" {
+			return out, fmt.Errorf("unsupported Anthropic message role %q for OpenAI translation", m.Role)
+		}
 		blocks, err := core.ParseAnthContent(m.Content)
 		if err != nil {
 			return out, err
@@ -44,12 +48,18 @@ func AnthropicToOpenAI(in core.AnthropicRequest, model string) (core.OpenAIReque
 					parts = append(parts, map[string]any{"type": "image_url", "image_url": map[string]any{"url": u}})
 				}
 			case "tool_use":
-				if m.Role != "assistant" {
-					continue
+				if role != "assistant" || strings.TrimSpace(b.ID) == "" || strings.TrimSpace(b.Name) == "" {
+					return out, fmt.Errorf("Anthropic tool_use requires assistant role, id, and name")
 				}
-				arg, _ := json.Marshal(b.Input)
+				arg, err := json.Marshal(b.Input)
+				if err != nil {
+					return out, fmt.Errorf("encode Anthropic tool input: %w", err)
+				}
 				assistantCalls = append(assistantCalls, core.OpenAIToolCall{ID: b.ID, Type: "function", Function: core.OpenAIFunctionCall{Name: b.Name, Arguments: string(arg)}})
 			case "tool_result":
+				if role != "user" || strings.TrimSpace(b.ToolUseID) == "" {
+					return out, fmt.Errorf("Anthropic tool_result requires user role and tool_use_id")
+				}
 				flush()
 				var content any = ""
 				if len(b.Content) > 0 {
