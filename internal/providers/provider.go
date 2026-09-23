@@ -41,21 +41,58 @@ func NewRegistry(cfg config.Config) (*Registry, error) {
 	return r, nil
 }
 
-func (r *Registry) Reload(cfg config.Config) error {
-	next := map[string]Adapter{}
+// Prepare builds a complete next registry without mutating the live one.
+// When rebuild is non-nil, unchanged provider adapters are reused so their
+// connection pools and credential cooldown state survive unrelated reloads.
+func (r *Registry) Prepare(cfg config.Config, rebuild map[string]struct{}) (*Registry, error) {
+	r.mu.RLock()
+	current := make(map[string]Adapter, len(r.m))
+	for id, a := range r.m {
+		current[id] = a
+	}
+	r.mu.RUnlock()
+
+	next := &Registry{m: make(map[string]Adapter)}
 	for _, p := range cfg.Providers {
 		if !p.Enabled {
 			continue
 		}
+		if rebuild != nil {
+			if _, changed := rebuild[p.ID]; !changed {
+				if a, ok := current[p.ID]; ok {
+					next.m[p.ID] = a
+					continue
+				}
+			}
+		}
 		a, err := NewAdapter(p, cfg.RequestTimeout())
 		if err != nil {
-			return err
+			return nil, err
 		}
-		next[p.ID] = a
+		next.m[p.ID] = a
 	}
+	return next, nil
+}
+
+func (r *Registry) Replace(next *Registry) {
+	if next == nil {
+		return
+	}
+	next.mu.RLock()
+	m := next.m
+	next.mu.RUnlock()
+
 	r.mu.Lock()
-	r.m = next
+	r.m = m
 	r.mu.Unlock()
+}
+
+func (r *Registry) Reload(cfg config.Config) error {
+	next, err := r.Prepare(cfg, nil)
+	if err != nil {
+		return err
+	}
+	r.Replace(next)
 	return nil
 }
 func (r *Registry) Get(id string) (Adapter, bool) {
