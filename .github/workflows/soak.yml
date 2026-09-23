@@ -7,6 +7,14 @@ on:
         description: Repeated stress rounds before same-process soak
         required: false
         default: "3"
+  push:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/soak.yml"
+      - "scripts/soak.sh"
+      - "scripts/stress.sh"
+      - "internal/**/soak_test.go"
+      - "internal/**/stress_test.go"
 
 permissions:
   contents: read

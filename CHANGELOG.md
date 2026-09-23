@@ -56,7 +56,7 @@ This file describes the current supported v0.3 state only. Superseded interim im
 ## Stress and soak verification
 
 - Normal CI now includes a bounded stress gate for large routing tables, recovery floods, overload admission, event-state pressure, and concurrent log rotation.
-- A manual `Soak` workflow adds repeated stress rounds, same-process traffic/hot-reload cycles, repeated recovery cycles, and race-enabled soak execution.
+- A `Soak` workflow adds repeated stress rounds, same-process traffic/hot-reload cycles, repeated recovery cycles, and race-enabled soak execution. It is manually runnable and auto-runs only when stress/soak infrastructure changes.
 
 ## Verification
 

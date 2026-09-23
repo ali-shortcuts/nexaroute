@@ -26,7 +26,7 @@ Every normal CI run also executes one bounded stress pass covering:
 
 ## Manual soak gate
 
-`.github/workflows/soak.yml` is a manual-only long-form gate. It repeats the bounded stress suite, then runs same-process concurrent traffic + hot reload and repeated recovery cycles, followed by race-enabled soak checks. It is intentionally not scheduled on every push to avoid wasting CI resources.
+`.github/workflows/soak.yml` is a long-form gate. It can be started manually and also runs automatically only when the stress/soak workflow, scripts, or stress/soak test files change. It repeats the bounded stress suite, then runs same-process concurrent traffic + hot reload and repeated recovery cycles, followed by race-enabled soak checks. Ordinary application pushes do not pay this extra CI cost.
 
 ## Required runtime gates
 
