@@ -82,3 +82,17 @@ Runtime and health state are single-process/in-memory. Provider configuration is
 Health probing is selective and event-driven. Startup establishes readiness, background sweeps test only deployments that are not yet proven healthy, and failed deployments move into dedicated recovery loops. Healthy ready-queue deployments are not periodically re-probed; real Claude traffic is their health signal until a failure or configuration identity change ejects them. The interval remains configurable (minimum 1 second) for discovering new/unverified deployments without turning health checks into a quota/rate-limit attack.
 
 Micro-probes measure availability and latency. They do not measure model intelligence/answer quality. Model strength is expressed through configured deployment `priority` and `weight`; automatic quality benchmarking is outside the current v0.3 scope.
+
+
+## Routing boundaries after Ready Mesh
+
+Implemented routing intelligence is deterministic and observable: session affinity, capability filtering, priority/weight policy, live concurrency pressure, latency/failure evidence, provider-level P2C selection, credential-level P2C selection, scoped capability circuits, and supervised recovery.
+
+Not implemented yet:
+
+- provider-reported TPM/RPM budget accounting or predictive quota-reset scheduling;
+- cost-aware routing based on current provider pricing/billing;
+- shared/distributed affinity and breaker state across multiple NexaRoute processes;
+- an online learned semantic router that sends every prompt through another model/encoder.
+
+The last item is deliberate for the current data plane: a learned router would add latency, cost and a new failure mode. Model/task specialization should currently be expressed with aliases plus explicit capability metadata until a separately evaluated routing model can prove a measurable benefit.

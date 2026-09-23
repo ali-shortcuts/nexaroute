@@ -66,6 +66,7 @@ A client requesting `model: "coding"` receives the best eligible deployment acco
 Available strategies:
 
 ```text
+ready_mesh
 ready_queue
 adaptive_round_robin
 adaptive
@@ -87,9 +88,9 @@ Important controls:
 - `max_retry_after_seconds`
 
 
-### Ready-queue supervisor semantics
+### Ready Mesh supervisor semantics
 
-With `routing.strategy = "ready_queue"`:
+With `routing.strategy = "ready_mesh"` (recommended/default):
 
 - a deployment must pass a health probe before it can serve Claude traffic;
 - automatic background sweeps skip a `healthy` deployment while its ready-health lease is fresh;
@@ -134,3 +135,17 @@ For local-only use, the default is safest:
 ```
 
 For Docker/LAN access, set an admin key and put TLS/reverse-proxy controls in front if the environment is not fully trusted.
+
+
+### Ready Mesh controls
+
+- `session_affinity` — preserve a successful conversation/deployment relationship while it remains healthy.
+- `session_ttl_seconds` — idle affinity lease; default `3600`.
+- `p2c_window` — maximum number of best-priority candidates considered before the power-of-two pick; default `8`.
+- `capacity_weight` — penalty for live active/waiting provider pressure; default `35`.
+- `capability_failure_threshold` — consecutive scoped failures before a capability circuit opens; default `2`.
+- `capability_cooldown_seconds` — scoped circuit cooldown; default `300`.
+
+Provider presets are served by the gateway itself through the Admin API so the Web UI does not maintain a second hard-coded provider catalog. Custom Provider remains fully editable. `models_path` may be a normal path or an absolute URL for compatible providers whose discovery endpoint lives on a different host/path.
+
+**Test connection** checks endpoint reachability/auth separately from **Test selected models**, which performs actual minimal model inference.

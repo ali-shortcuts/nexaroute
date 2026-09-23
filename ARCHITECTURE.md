@@ -95,7 +95,8 @@ The router:
 
 Supported strategies:
 
-- `ready_queue` (default): only verified `healthy` deployments are routable; deterministic priority/weight ordering keeps the strongest healthy deployment sticky until it fails
+- `ready_mesh` (default): only verified `healthy` deployments are routable; a healthy session pin is preferred, otherwise deterministic power-of-two sampling chooses between candidates in the best priority tier using health/score and live capacity pressure
+- `ready_queue`: legacy deterministic priority/weight ordering over verified healthy deployments
 - `adaptive_round_robin`: health/scoring plus rotation among healthy top candidates
 - `adaptive`: score by health, weight, priority, latency and failure history
 - `priority`: health tier first, then explicit priority
@@ -137,7 +138,7 @@ A provider can use:
 - a primary environment-variable key
 - additional named credentials
 
-Resolved credentials form a pool. Selection rotates through usable keys. A key that returns authentication/quota/rate-limit statuses is independently cooled down, allowing another key for the same provider to be tried before failing the deployment.
+Resolved credentials form a pool. Selection is load-aware: two usable keys are sampled and the less-loaded/lower-failure key is reserved. The reservation lasts until the upstream response body is consumed or closed, so long-lived SSE streams count as real key load. A key that returns authentication/quota/rate-limit statuses is independently cooled down, allowing another key for the same provider to be tried before failing the deployment.
 
 Client-side `Authorization`, `x-api-key`, cookies and admin credentials are treated as sensitive and are not blindly forwarded. Provider auth is applied after custom headers so stale user-configured Authorization values cannot override an explicit configured credential.
 
@@ -147,7 +148,7 @@ Each provider adapter has a bounded semaphore. Requests waiting on that semaphor
 
 ## Probe plane
 
-The probe engine executes tiny health requests with bounded concurrency. Under the default `ready_queue` strategy, automatic background sweeps do not re-probe a deployment that is already `healthy`; they establish readiness for `unknown` deployments and ensure degraded/cooldown deployments have a recovery supervisor. Legacy strategies such as `adaptive` retain their periodic health-probe semantics. A healthy deployment leaves the ready queue only after a real routed failure or after a hot-reload change invalidates its previous health proof. At startup it primes all enabled deployments before the HTTP listener opens, so Claude traffic only sees models that have already passed a health request.
+The probe engine executes tiny health requests with bounded concurrency. Under the default `ready_mesh` strategy, automatic background sweeps do not re-probe a deployment that is already `healthy`; they establish readiness for `unknown` deployments and ensure degraded/cooldown deployments have a recovery supervisor. Legacy strategies such as `adaptive` retain their periodic health-probe semantics. A healthy deployment leaves the ready queue only after a real routed failure or after a hot-reload change invalidates its previous health proof. At startup it primes all enabled deployments before the HTTP listener opens, so Claude traffic only sees models that have already passed a health request.
 
 Defaults:
 
@@ -223,3 +224,18 @@ By default:
 - browser admin key is kept in `sessionStorage`, not persisted to config/localStorage
 
 The project is not designed to be placed directly on the public internet without TLS/reverse-proxy hardening and additional access controls.
+
+
+## Ready Mesh scheduling
+
+Ready Mesh keeps the request path deterministic and network-free at selection time.
+
+- Request structure creates an explicit requirement profile: model/alias, tools, vision, streaming and reasoning.
+- A bounded session key is derived from Claude Code/LiteLLM-compatible headers or request metadata.
+- A successful session is pinned to its deployment for a configurable TTL while that deployment remains eligible.
+- New or unpinned sessions stay inside the best configured priority tier and use power-of-two selection rather than scanning for a global winner on every request.
+- Live provider pressure is computed from active requests plus waiting requests relative to provider concurrency.
+- Capability failures can open a scoped circuit (for example streaming) without poisoning plain text traffic for the same deployment.
+- The handler revalidates each candidate immediately before an attempt, closing the stale-candidate window during concurrent quarantine or hot reload.
+
+This is deliberately not an opaque learned router in the data plane. Task awareness comes from explicit request capabilities and configured aliases/profiles so routing decisions remain explainable and regression-testable.
