@@ -32,8 +32,9 @@ const (
 )
 
 type recoveryTask struct {
-	id      string
-	attempt int
+	id         string
+	attempt    int
+	generation uint64
 }
 
 type Engine struct {
@@ -56,9 +57,10 @@ type Engine struct {
 	recovering      map[string]bool
 	recoveryQueue   chan recoveryTask
 	recoveryWorkers sync.Once
-	recoveryTimers  map[string]*time.Timer
-	recoveryTokens  map[string]uint64
-	recoverySeq     uint64
+	recoveryTimers      map[string]*time.Timer
+	recoveryTokens      map[string]uint64
+	recoveryGenerations map[string]uint64
+	recoverySeq         uint64
 
 	limitMu      sync.Mutex
 	activeProbes int
@@ -75,9 +77,10 @@ func New(cfg config.Config, reg *providers.Registry, rt *router.Router, hm *heal
 		trigger:       make(chan struct{}, 1),
 		recovering:     map[string]bool{},
 		recoveryQueue:  make(chan recoveryTask, maxRecoveryQueue),
-		recoveryTimers: map[string]*time.Timer{},
-		recoveryTokens: map[string]uint64{},
-		limitChanged:   make(chan struct{}),
+		recoveryTimers:      map[string]*time.Timer{},
+		recoveryTokens:      map[string]uint64{},
+		recoveryGenerations: map[string]uint64{},
+		limitChanged:        make(chan struct{}),
 	}
 }
 
@@ -235,11 +238,15 @@ func (e *Engine) Recover(id string) {
 		e.recoveryMu.Unlock()
 		return
 	}
+	e.recoverySeq++
+	generation := e.recoverySeq
 	e.recovering[id] = true
+	e.recoveryGenerations[id] = generation
 	e.recoveryMu.Unlock()
 
-	if !e.enqueueRecovery(ctx, recoveryTask{id: id, attempt: 1}) {
-		e.clearRecovering(id)
+	task := recoveryTask{id: id, attempt: 1, generation: generation}
+	if !e.enqueueRecovery(ctx, task) {
+		e.clearRecoveryTask(task)
 		e.bus.Add(events.Event{Kind: "recovery_queue_full", Deployment: id, Message: "bounded recovery queue is full; background sweep will retry", ErrorType: "recovery_queue_full"})
 	}
 }
@@ -256,15 +263,26 @@ func (e *Engine) enqueueRecovery(ctx context.Context, task recoveryTask) bool {
 	}
 }
 
-func (e *Engine) clearRecovering(id string) {
+func (e *Engine) clearRecoveryTask(task recoveryTask) {
 	e.recoveryMu.Lock()
-	if timer := e.recoveryTimers[id]; timer != nil {
-		timer.Stop()
-		delete(e.recoveryTimers, id)
+	if !e.recovering[task.id] || e.recoveryGenerations[task.id] != task.generation {
+		e.recoveryMu.Unlock()
+		return
 	}
-	delete(e.recoveryTokens, id)
-	delete(e.recovering, id)
+	if timer := e.recoveryTimers[task.id]; timer != nil {
+		timer.Stop()
+		delete(e.recoveryTimers, task.id)
+	}
+	delete(e.recoveryTokens, task.id)
+	delete(e.recoveryGenerations, task.id)
+	delete(e.recovering, task.id)
 	e.recoveryMu.Unlock()
+}
+
+func (e *Engine) isCurrentRecovery(task recoveryTask) bool {
+	e.recoveryMu.Lock()
+	defer e.recoveryMu.Unlock()
+	return e.recovering[task.id] && e.recoveryGenerations[task.id] == task.generation
 }
 
 func (e *Engine) cancelAllRecoveries() {
@@ -276,6 +294,7 @@ func (e *Engine) cancelAllRecoveries() {
 		delete(e.recoveryTimers, id)
 	}
 	e.recoveryTokens = map[string]uint64{}
+	e.recoveryGenerations = map[string]uint64{}
 	e.recovering = map[string]bool{}
 	e.recoveryMu.Unlock()
 }
@@ -291,21 +310,21 @@ func (e *Engine) scheduleRecovery(ctx context.Context, task recoveryTask, delay 
 		delay = 0
 	}
 	if delay == 0 {
-		if ctx.Err() != nil || !e.isRecovering(task.id) {
-			e.clearRecovering(task.id)
+		if ctx.Err() != nil || !e.isCurrentRecovery(task) {
+			e.clearRecoveryTask(task)
 			return
 		}
 		if !e.enqueueRecovery(ctx, task) {
-			e.clearRecovering(task.id)
+			e.clearRecoveryTask(task)
 			e.bus.Add(events.Event{Kind: "recovery_queue_full", Deployment: task.id, Message: "bounded recovery queue is full; background sweep will retry", ErrorType: "recovery_queue_full"})
 		}
 		return
 	}
 
 	e.recoveryMu.Lock()
-	if !e.recovering[task.id] || ctx.Err() != nil {
+	if !e.recovering[task.id] || e.recoveryGenerations[task.id] != task.generation || ctx.Err() != nil {
 		e.recoveryMu.Unlock()
-		e.clearRecovering(task.id)
+		e.clearRecoveryTask(task)
 		return
 	}
 	if old := e.recoveryTimers[task.id]; old != nil {
@@ -316,7 +335,9 @@ func (e *Engine) scheduleRecovery(ctx context.Context, task recoveryTask, delay 
 	e.recoveryTokens[task.id] = token
 	timer := time.AfterFunc(delay, func() {
 		e.recoveryMu.Lock()
-		if !e.recovering[task.id] || e.recoveryTokens[task.id] != token {
+		if !e.recovering[task.id] ||
+			e.recoveryGenerations[task.id] != task.generation ||
+			e.recoveryTokens[task.id] != token {
 			e.recoveryMu.Unlock()
 			return
 		}
@@ -325,11 +346,11 @@ func (e *Engine) scheduleRecovery(ctx context.Context, task recoveryTask, delay 
 		e.recoveryMu.Unlock()
 
 		if ctx.Err() != nil {
-			e.clearRecovering(task.id)
+			e.clearRecoveryTask(task)
 			return
 		}
 		if !e.enqueueRecovery(ctx, task) {
-			e.clearRecovering(task.id)
+			e.clearRecoveryTask(task)
 			e.bus.Add(events.Event{Kind: "recovery_queue_full", Deployment: task.id, Message: "bounded recovery queue is full; background sweep will retry", ErrorType: "recovery_queue_full"})
 		}
 	})
@@ -343,7 +364,7 @@ func (e *Engine) recoveryWorker(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case task := <-e.recoveryQueue:
-			if !e.isRecovering(task.id) {
+			if !e.isCurrentRecovery(task) {
 				continue
 			}
 			e.processRecoveryTask(ctx, task)
@@ -353,23 +374,23 @@ func (e *Engine) recoveryWorker(ctx context.Context) {
 
 func (e *Engine) processRecoveryTask(ctx context.Context, task recoveryTask) {
 	if ctx.Err() != nil {
-		e.clearRecovering(task.id)
+		e.clearRecoveryTask(task)
 		return
 	}
 	cfg := e.current()
 	if !router.IsReadyStrategy(cfg.Routing.Strategy) {
-		e.clearRecovering(task.id)
+		e.clearRecoveryTask(task)
 		return
 	}
 	d, a, ok := e.deployment(task.id)
 	if !ok {
-		e.clearRecovering(task.id)
+		e.clearRecoveryTask(task)
 		return
 	}
 
 	st := e.hm.Get(task.id)
 	if st.Status == health.Healthy {
-		e.clearRecovering(task.id)
+		e.clearRecoveryTask(task)
 		return
 	}
 	if st.Status == health.Cooldown && !st.CooldownUntil.IsZero() {
@@ -396,12 +417,12 @@ func (e *Engine) processRecoveryTask(ctx context.Context, task recoveryTask) {
 	// provider/model pointer in a queued recovery task.
 	d, a, ok = e.deployment(task.id)
 	if !ok {
-		e.clearRecovering(task.id)
+		e.clearRecoveryTask(task)
 		return
 	}
 	cfg = e.current()
 	if !e.acquireProbe(ctx, cfg.Probe.Concurrency) {
-		e.clearRecovering(task.id)
+		e.clearRecoveryTask(task)
 		return
 	}
 	pctx, cancel := context.WithTimeout(ctx, cfg.ProbeTimeout())
@@ -412,7 +433,7 @@ func (e *Engine) processRecoveryTask(ctx context.Context, task recoveryTask) {
 	if err == nil {
 		e.hm.RecordSuccess(task.id, lat)
 		e.bus.Add(events.Event{Kind: "recovery_ready", Deployment: task.id, Message: fmt.Sprintf("recovered on attempt %d/%d", task.attempt, attempts), LatencyMS: lat.Milliseconds(), StatusCode: status})
-		e.clearRecovering(task.id)
+		e.clearRecoveryTask(task)
 		return
 	}
 

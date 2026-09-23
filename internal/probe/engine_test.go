@@ -463,9 +463,12 @@ func TestReloadCancelsDelayedRecoveryAndPreventsStaleTimerABA(t *testing.T) {
 	e.setRunContext(ctx)
 
 	e.recoveryMu.Lock()
+	e.recoverySeq++
+	oldGeneration := e.recoverySeq
 	e.recovering["p/m"] = true
+	e.recoveryGenerations["p/m"] = oldGeneration
 	e.recoveryMu.Unlock()
-	e.scheduleRecovery(ctx, recoveryTask{id: "p/m", attempt: 1}, 40*time.Millisecond)
+	e.scheduleRecovery(ctx, recoveryTask{id: "p/m", attempt: 1, generation: oldGeneration}, 40*time.Millisecond)
 
 	legacy := cfg
 	legacy.Routing.Strategy = "adaptive"
@@ -474,7 +477,10 @@ func TestReloadCancelsDelayedRecoveryAndPreventsStaleTimerABA(t *testing.T) {
 	ready := cfg
 	e.Reload(ready)
 	e.recoveryMu.Lock()
+	e.recoverySeq++
+	newGeneration := e.recoverySeq
 	e.recovering["p/m"] = true
+	e.recoveryGenerations["p/m"] = newGeneration
 	e.recoveryMu.Unlock()
 
 	time.Sleep(80 * time.Millisecond)
@@ -503,9 +509,13 @@ func TestClearRecoveringStopsOwnedDelayedTimer(t *testing.T) {
 	e.setRunContext(ctx)
 
 	e.recoveryMu.Lock()
+	e.recoverySeq++
+	generation := e.recoverySeq
 	e.recovering["x"] = true
+	e.recoveryGenerations["x"] = generation
 	e.recoveryMu.Unlock()
-	e.scheduleRecovery(ctx, recoveryTask{id: "x", attempt: 1}, time.Hour)
+	task := recoveryTask{id: "x", attempt: 1, generation: generation}
+	e.scheduleRecovery(ctx, task, time.Hour)
 
 	e.recoveryMu.Lock()
 	timer := e.recoveryTimers["x"]
@@ -513,14 +523,57 @@ func TestClearRecoveringStopsOwnedDelayedTimer(t *testing.T) {
 	if timer == nil {
 		t.Fatal("expected owned recovery timer")
 	}
-	e.clearRecovering("x")
+	e.clearRecoveryTask(task)
 
 	e.recoveryMu.Lock()
 	_, tracked := e.recovering["x"]
 	_, hasTimer := e.recoveryTimers["x"]
 	_, hasToken := e.recoveryTokens["x"]
+	_, hasGeneration := e.recoveryGenerations["x"]
 	e.recoveryMu.Unlock()
-	if tracked || hasTimer || hasToken {
-		t.Fatalf("recovery cleanup incomplete: tracked=%v timer=%v token=%v", tracked, hasTimer, hasToken)
+	if tracked || hasTimer || hasToken || hasGeneration {
+		t.Fatalf("recovery cleanup incomplete: tracked=%v timer=%v token=%v generation=%v", tracked, hasTimer, hasToken, hasGeneration)
+	}
+}
+
+func TestStaleQueuedRecoveryTaskCannotActOnNewGeneration(t *testing.T) {
+	cfg := config.Default()
+	hm := health.New(cfg.Routing.FailureThreshold, cfg.Cooldown())
+	reg, err := providers.NewRegistry(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt := router.New(cfg, hm)
+	e := New(cfg, reg, rt, hm, events.New(20))
+
+	e.recoveryMu.Lock()
+	e.recoverySeq++
+	oldGeneration := e.recoverySeq
+	e.recovering["same"] = true
+	e.recoveryGenerations["same"] = oldGeneration
+	e.recoveryMu.Unlock()
+	oldTask := recoveryTask{id: "same", attempt: 1, generation: oldGeneration}
+	if !e.isCurrentRecovery(oldTask) {
+		t.Fatal("old generation should initially be current")
+	}
+
+	e.cancelAllRecoveries()
+	e.recoveryMu.Lock()
+	e.recoverySeq++
+	newGeneration := e.recoverySeq
+	e.recovering["same"] = true
+	e.recoveryGenerations["same"] = newGeneration
+	e.recoveryMu.Unlock()
+	newTask := recoveryTask{id: "same", attempt: 1, generation: newGeneration}
+
+	if e.isCurrentRecovery(oldTask) {
+		t.Fatal("stale queued task was accepted by a newer recovery generation")
+	}
+	if !e.isCurrentRecovery(newTask) {
+		t.Fatal("new recovery generation was not recognized")
+	}
+	e.clearRecoveryTask(oldTask)
+	if !e.isCurrentRecovery(newTask) {
+		t.Fatal("stale task cleared the newer recovery generation")
 	}
 }
