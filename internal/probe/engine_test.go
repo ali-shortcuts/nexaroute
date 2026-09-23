@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -339,4 +340,100 @@ func TestLegacyAdaptiveBackgroundSweepStillReprobesHealthyModels(t *testing.T) {
 	if res.Passed != 1 || res.SkippedReady != 0 || calls.Load() != 1 {
 		t.Fatalf("legacy adaptive health semantics changed: result=%+v calls=%d", res, calls.Load())
 	}
+}
+
+func TestRecoverFloodQueuesWithoutPerDeploymentGoroutines(t *testing.T) {
+	cfg := config.Default()
+	cfg.Probe.Enabled = true
+	cfg.Probe.OnStart = false
+	cfg.Providers = []config.ProviderConfig{{
+		ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "http://example.invalid",
+		AuthMode: "none", Enabled: true, MaxConcurrency: 32,
+	}}
+	for i := 0; i < 500; i++ {
+		cfg.Providers[0].Models = append(cfg.Providers[0].Models, config.ModelConfig{
+			ID: fmt.Sprintf("m%d", i), Model: fmt.Sprintf("model-%d", i), Enabled: true, Weight: 1,
+		})
+	}
+	cfg.ApplyDefaults()
+	hm := health.New(cfg.Routing.FailureThreshold, cfg.Cooldown())
+	reg, err := providers.NewRegistry(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt := router.New(cfg, hm)
+	e := New(cfg, reg, rt, hm, events.New(20))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	e.setRunContext(ctx)
+
+	before := runtime.NumGoroutine()
+	for _, d := range rt.All() {
+		hm.ForceCooldown(d.ID, "test", time.Minute)
+		e.Recover(d.ID)
+	}
+	time.Sleep(20 * time.Millisecond)
+	after := runtime.NumGoroutine()
+	if delta := after - before; delta > 10 {
+		t.Fatalf("Recover created per-deployment goroutines: delta=%d", delta)
+	}
+	if got := len(e.recoveryQueue); got != 500 {
+		t.Fatalf("queued recovery tasks=%d want 500", got)
+	}
+	if got := len(e.recovering); got != 500 {
+		t.Fatalf("tracked recoveries=%d want 500", got)
+	}
+}
+
+func TestRecoveryWorkersRetryAndReturnModelToHealthy(t *testing.T) {
+	var calls atomic.Int32
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := calls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		if n < 3 {
+			w.WriteHeader(http.StatusBadGateway)
+			_, _ = w.Write([]byte(`{"error":"temporary"}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"id":"c","choices":[{"message":{"role":"assistant","content":"OK"}}]}`))
+	}))
+	defer up.Close()
+
+	cfg := config.Default()
+	cfg.Probe.Enabled = true
+	cfg.Probe.OnStart = false
+	cfg.Probe.RecoveryAttempts = 5
+	cfg.Probe.RecoveryRetryMS = 5
+	cfg.Probe.TimeoutMS = 1000
+	cfg.Providers = []config.ProviderConfig{{
+		ID: "p", Name: "P", Type: "openai_compatible", BaseURL: up.URL,
+		AuthMode: "none", Enabled: true, MaxConcurrency: 8,
+		Models: []config.ModelConfig{{ID: "m", Model: "m", Enabled: true, Weight: 1}},
+	}}
+	cfg.ApplyDefaults()
+	hm := health.New(cfg.Routing.FailureThreshold, cfg.Cooldown())
+	reg, err := providers.NewRegistry(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt := router.New(cfg, hm)
+	e := New(cfg, reg, rt, hm, events.New(50))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	e.Start(ctx)
+
+	hm.Quarantine("p/m", "initial", time.Millisecond)
+	e.Recover("p/m")
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if hm.Get("p/m").Status == health.Healthy && calls.Load() >= 3 {
+			if e.isRecovering("p/m") {
+				t.Fatal("recovery marker remained after success")
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("model did not recover: calls=%d state=%+v", calls.Load(), hm.Get("p/m"))
 }

@@ -238,7 +238,7 @@ func (e *Engine) scheduleRecovery(ctx context.Context, task recoveryTask, delay 
 	if delay < 0 {
 		delay = 0
 	}
-	time.AfterFunc(delay, func() {
+	requeue := func() {
 		if ctx.Err() != nil || !e.isRecovering(task.id) {
 			e.clearRecovering(task.id)
 			return
@@ -247,7 +247,12 @@ func (e *Engine) scheduleRecovery(ctx context.Context, task recoveryTask, delay 
 			e.clearRecovering(task.id)
 			e.bus.Add(events.Event{Kind: "recovery_queue_full", Deployment: task.id, Message: "bounded recovery queue is full; background sweep will retry", ErrorType: "recovery_queue_full"})
 		}
-	})
+	}
+	if delay == 0 {
+		requeue()
+		return
+	}
+	time.AfterFunc(delay, requeue)
 }
 
 func (e *Engine) recoveryWorker(ctx context.Context) {
