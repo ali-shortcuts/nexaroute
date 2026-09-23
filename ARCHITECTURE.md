@@ -142,9 +142,13 @@ Resolved credentials form a pool. Selection is load-aware: two usable keys are s
 
 Client-side `Authorization`, `x-api-key`, cookies and admin credentials are treated as sensitive and are not blindly forwarded. Provider auth is applied after custom headers so stale user-configured Authorization values cannot override an explicit configured credential.
 
-## Provider concurrency
+## Provider concurrency and global admission
 
 Each provider adapter has a bounded semaphore. Requests waiting on that semaphore respect context cancellation. This prevents one provider from accumulating unbounded simultaneous work while still allowing other providers to be routed independently.
+
+The HTTP middleware also enforces a global data-plane admission ceiling through `routing.max_inflight_requests`. Excess model requests are rejected before expensive request processing/provider work begins, with `503` and `Retry-After`; liveness, readiness, metrics and Admin endpoints remain available for diagnosis.
+
+Provider adapters are reused across unrelated hot reloads so HTTP pools and credential cooldown state survive. If an environment-backed credential resolves to a new value, NexaRoute detects the snapshot mismatch and rebuilds only that provider adapter so rotated keys are picked up without rebuilding the entire registry.
 
 ## Probe plane
 

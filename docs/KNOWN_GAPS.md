@@ -63,6 +63,7 @@ Implemented:
 
 Not implemented as a full internet-facing control plane:
 
+- built-in client authentication/authorization for `/v1/*` (use a trusted reverse proxy/firewall/VPN when exposure is not strictly local);
 - built-in TLS
 - RBAC/multi-user accounts
 - CSRF session framework
