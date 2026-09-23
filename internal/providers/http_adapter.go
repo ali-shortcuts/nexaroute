@@ -588,7 +588,7 @@ func (a *httpAdapter) validateProbeResponse(data []byte) error {
 				return fmt.Errorf("probe returned invalid Anthropic content: %w", err)
 			}
 		}
-		if typ != "message" || role != "assistant" || root["content"] == nil {
+		if typ != "message" || role != "assistant" || content == nil {
 			return errors.New("probe returned an invalid Anthropic message envelope")
 		}
 	default:
