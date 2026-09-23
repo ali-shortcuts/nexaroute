@@ -190,18 +190,18 @@ func (r *Router) scored(d Deployment, hs health.State, req Requirement, cfg conf
 	return Scored{Deployment: d, Health: hs, Score: score, CapacityPressure: pressure}
 }
 
-func (r *Router) eligibleDeployment(d Deployment, req Requirement, cfg config.Config, ignoreModel bool) (Scored, bool) {
+func (r *Router) eligibleDeployment(d Deployment, req Requirement, cfg config.Config, ignoreModel bool, scopes []string) (Scored, bool) {
 	if !ignoreModel && !matchesModel(d, req.Model) {
 		return Scored{}, false
 	}
 	if req.Tools && !d.Capabilities.Tools || req.Vision && !d.Capabilities.Vision || req.Streaming && !d.Capabilities.Streaming || req.Reasoning && !d.Capabilities.Reasoning {
 		return Scored{}, false
 	}
-	scopes := []string(nil)
+	healthScopes := []string(nil)
 	if cfg.Routing.Strategy == "ready_mesh" {
-		scopes = req.Scopes()
+		healthScopes = scopes
 	}
-	hs, scopesReady := r.health.GetWithScopes(d.ID, scopes)
+	hs, scopesReady := r.health.GetWithScopes(d.ID, healthScopes)
 	if IsReadyStrategy(cfg.Routing.Strategy) {
 		if hs.Status != health.Healthy {
 			return Scored{}, false
@@ -354,12 +354,13 @@ func (r *Router) orderReadyMesh(out []Scored, req Requirement, cfg config.Config
 func (r *Router) Candidates(req Requirement) []Scored {
 	r.mu.RLock()
 	cfg := r.cfg
-	all := append([]Deployment(nil), r.all...)
+	all := r.all
 	r.mu.RUnlock()
+	scopes := req.Scopes()
 	build := func(ignore bool) []Scored {
 		out := make([]Scored, 0, len(all))
 		for _, d := range all {
-			if s, ok := r.eligibleDeployment(d, req, cfg, ignore); ok {
+			if s, ok := r.eligibleDeployment(d, req, cfg, ignore, scopes); ok {
 				out = append(out, s)
 			}
 		}
@@ -478,11 +479,12 @@ func (r *Router) Candidates(req Requirement) []Scored {
 func (r *Router) Eligible(id string, req Requirement) (Scored, bool) {
 	r.mu.RLock()
 	cfg := r.cfg
-	all := append([]Deployment(nil), r.all...)
+	all := r.all
 	r.mu.RUnlock()
+	scopes := req.Scopes()
 	for _, d := range all {
 		if d.ID == id {
-			return r.eligibleDeployment(d, req, cfg, false)
+			return r.eligibleDeployment(d, req, cfg, false, scopes)
 		}
 	}
 	return Scored{}, false
