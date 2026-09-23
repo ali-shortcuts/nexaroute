@@ -1,4 +1,4 @@
-# Security notes — v0.3
+# Security — v0.3
 
 NexaRoute defaults to localhost and should stay there for first testing.
 
@@ -13,6 +13,7 @@ NexaRoute defaults to localhost and should stay there for first testing.
 - rewritten config files use `0600`
 - browser admin key is kept in `sessionStorage`
 - provider concurrency is bounded
+- global data-plane in-flight work is bounded and overload rejections are observable in metrics/events
 - stream idle watchdog cancels stalled upstream work
 - request logs contain metadata, not request bodies/API keys
 
@@ -21,6 +22,12 @@ NexaRoute defaults to localhost and should stay there for first testing.
 Prefer environment references instead of literal keys in JSON when practical.
 
 The provider editor can reveal a resolved credential to an authorized local/admin user. That behavior is intentional because the project requires full edit visibility. Treat access to the Web UI/admin API as equivalent to access to provider credentials.
+
+## Client-facing authentication boundary
+
+NexaRoute v0.3 does **not** provide a separate built-in authentication policy for the client-facing `/v1/*` data plane. Provider credentials are never treated as client credentials. If the listener is reachable from an untrusted network, put the client-facing routes behind a trusted reverse proxy/API gateway, firewall, VPN, or equivalent access-control layer.
+
+The Admin API is a separate boundary: it remains loopback-only by default or requires the configured Admin key when remote administration is intentionally enabled.
 
 ## Remote exposure
 
