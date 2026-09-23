@@ -160,12 +160,16 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Gateway-Provider", c.Deployment.ProviderID)
 		w.Header().Set("X-Gateway-Upstream-Model", c.Deployment.Model)
 		if c.Deployment.ProviderType == "anthropic_compatible" {
-			e = proxyResponse(w, resp)
+			if in.Stream {
+				e = proxyResponse(w, resp)
+			} else {
+				e = proxyValidatedJSONResponse(w, resp, validateAnthropicResponseJSON)
+			}
 		} else if in.Stream {
 			e = streamOpenAIToAnthropic(w, resp, in.Model, r.Header.Get("x-request-id"))
 		} else {
 			var o core.OpenAIResponse
-			e = decodeJSONLimited(resp.Body, &o)
+			e = decodeValidatedJSONLimited(resp.Body, &o, validateOpenAIResponseJSON)
 			resp.Body.Close()
 			if e == nil {
 				var translated core.AnthResponse
@@ -182,7 +186,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "client_disconnect", Deployment: c.Deployment.ID, Message: r.Context().Err().Error(), ErrorType: "caller_cancelled", LatencyMS: totalLatency.Milliseconds(), StatusCode: resp.StatusCode})
 				return
 			}
-			if !in.Stream && c.Deployment.ProviderType != "anthropic_compatible" {
+			if !in.Stream && !responseCommitted(w) {
 				lastStatus = 0
 				lastBody = nil
 				if router.IsReadyStrategy(cfg.Routing.Strategy) {
@@ -256,9 +260,7 @@ func writeRawUpstreamError(w http.ResponseWriter, status int, contentType string
 	_, _ = w.Write(b)
 }
 
-func proxyResponse(w http.ResponseWriter, resp *http.Response) error {
-	defer resp.Body.Close()
-	isSSE := strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream")
+func copyUpstreamResponseHeaders(w http.ResponseWriter, resp *http.Response, isSSE bool) {
 	connectionScoped := map[string]struct{}{}
 	for _, value := range resp.Header.Values("Connection") {
 		for _, token := range strings.Split(value, ",") {
@@ -288,6 +290,29 @@ func proxyResponse(w http.ResponseWriter, resp *http.Response) error {
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("X-Accel-Buffering", "no")
 	}
+}
+
+func proxyValidatedJSONResponse(w http.ResponseWriter, resp *http.Response, validate jsonEnvelopeValidator) error {
+	defer resp.Body.Close()
+	b, err := readJSONLimited(resp.Body)
+	if err != nil {
+		return err
+	}
+	if validate != nil {
+		if err := validate(b); err != nil {
+			return err
+		}
+	}
+	copyUpstreamResponseHeaders(w, resp, false)
+	w.WriteHeader(resp.StatusCode)
+	_, err = w.Write(b)
+	return err
+}
+
+func proxyResponse(w http.ResponseWriter, resp *http.Response) error {
+	defer resp.Body.Close()
+	isSSE := strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream")
+	copyUpstreamResponseHeaders(w, resp, isSSE)
 	w.WriteHeader(resp.StatusCode)
 	if !isSSE {
 		_, err := io.Copy(w, resp.Body)

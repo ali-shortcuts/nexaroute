@@ -154,12 +154,16 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Gateway-Provider", c.Deployment.ProviderID)
 		w.Header().Set("X-Gateway-Upstream-Model", c.Deployment.Model)
 		if c.Deployment.ProviderType == "openai_compatible" {
-			e = proxyResponse(w, resp)
+			if in.Stream {
+				e = proxyResponse(w, resp)
+			} else {
+				e = proxyValidatedJSONResponse(w, resp, validateOpenAIResponseJSON)
+			}
 		} else if in.Stream {
 			e = streamAnthropicToOpenAI(w, resp, in.Model, r.Header.Get("x-request-id"))
 		} else {
 			var an core.AnthResponse
-			e = decodeJSONLimited(resp.Body, &an)
+			e = decodeValidatedJSONLimited(resp.Body, &an, validateAnthropicResponseJSON)
 			resp.Body.Close()
 			if e == nil {
 				writeJSON(w, 200, translate.AnthropicResponseToOpenAI(an, in.Model))
@@ -172,7 +176,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "client_disconnect", Deployment: c.Deployment.ID, Message: r.Context().Err().Error(), ErrorType: "caller_cancelled", LatencyMS: total.Milliseconds(), StatusCode: resp.StatusCode})
 				return
 			}
-			if !in.Stream && c.Deployment.ProviderType != "openai_compatible" {
+			if !in.Stream && !responseCommitted(w) {
 				lastStatus = 0
 				lastBody = nil
 				if router.IsReadyStrategy(cfg.Routing.Strategy) {

@@ -385,6 +385,14 @@ type statusWriter struct {
 }
 
 func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+func (w *statusWriter) Committed() bool             { return w.wroteHeader }
+
+func responseCommitted(w http.ResponseWriter) bool {
+	if state, ok := w.(interface{ Committed() bool }); ok {
+		return state.Committed()
+	}
+	return false
+}
 
 func (w *statusWriter) WriteHeader(code int) {
 	if w.wroteHeader {

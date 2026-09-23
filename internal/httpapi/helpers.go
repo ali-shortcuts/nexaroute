@@ -56,16 +56,90 @@ func hasReasoningOpenAI(raw []byte) bool {
 	return inspectRequestJSON(raw, "", []string{"reasoning_effort", "reasoning"}).Reasoning
 }
 
-func decodeJSONLimited(r io.Reader, dst any) error {
+type jsonEnvelopeValidator func([]byte) error
+
+func readJSONLimited(r io.Reader) ([]byte, error) {
 	b, err := io.ReadAll(io.LimitReader(r, maxUpstreamJSONBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(b) > maxUpstreamJSONBytes {
+		return nil, fmt.Errorf("upstream JSON response exceeds %d bytes", maxUpstreamJSONBytes)
+	}
+	return b, nil
+}
+
+func decodeValidatedJSONLimited(r io.Reader, dst any, validate jsonEnvelopeValidator) error {
+	b, err := readJSONLimited(r)
 	if err != nil {
 		return err
 	}
-	if len(b) > maxUpstreamJSONBytes {
-		return fmt.Errorf("upstream JSON response exceeds %d bytes", maxUpstreamJSONBytes)
+	if validate != nil {
+		if err := validate(b); err != nil {
+			return err
+		}
 	}
 	if err := json.Unmarshal(b, dst); err != nil {
 		return err
+	}
+	return nil
+}
+
+func validateOpenAIResponseJSON(b []byte) error {
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(b, &root); err != nil {
+		return fmt.Errorf("invalid OpenAI response JSON: %w", err)
+	}
+	if raw, ok := root["error"]; ok && len(raw) > 0 && string(raw) != "null" {
+		return fmt.Errorf("OpenAI response contains an error envelope")
+	}
+	rawChoices := root["choices"]
+	if len(rawChoices) == 0 {
+		return fmt.Errorf("invalid OpenAI response: choices missing")
+	}
+	var choices []map[string]json.RawMessage
+	if err := json.Unmarshal(rawChoices, &choices); err != nil {
+		return fmt.Errorf("invalid OpenAI response choices: %w", err)
+	}
+	if len(choices) == 0 || len(choices[0]["message"]) == 0 {
+		return fmt.Errorf("invalid OpenAI response: message missing")
+	}
+	var message map[string]json.RawMessage
+	if err := json.Unmarshal(choices[0]["message"], &message); err != nil || message == nil {
+		if err != nil {
+			return fmt.Errorf("invalid OpenAI response message: %w", err)
+		}
+		return fmt.Errorf("invalid OpenAI response message")
+	}
+	if len(message) == 0 {
+		return fmt.Errorf("invalid OpenAI response: empty message")
+	}
+	return nil
+}
+
+func validateAnthropicResponseJSON(b []byte) error {
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(b, &root); err != nil {
+		return fmt.Errorf("invalid Anthropic response JSON: %w", err)
+	}
+	if raw, ok := root["error"]; ok && len(raw) > 0 && string(raw) != "null" {
+		return fmt.Errorf("Anthropic response contains an error envelope")
+	}
+	var typ, role string
+	if raw := root["type"]; len(raw) > 0 {
+		_ = json.Unmarshal(raw, &typ)
+	}
+	if raw := root["role"]; len(raw) > 0 {
+		_ = json.Unmarshal(raw, &role)
+	}
+	var content []json.RawMessage
+	if raw := root["content"]; len(raw) > 0 {
+		if err := json.Unmarshal(raw, &content); err != nil {
+			return fmt.Errorf("invalid Anthropic response content: %w", err)
+		}
+	}
+	if typ != "message" || role != "assistant" || content == nil {
+		return fmt.Errorf("invalid Anthropic message envelope")
 	}
 	return nil
 }
