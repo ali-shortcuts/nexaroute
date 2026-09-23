@@ -181,6 +181,27 @@ func (s *Server) applyConfigLocked(cfg config.Config) error {
 		}
 	}
 
+	nextEnabled := make(map[string]struct{}, len(cfg.Providers))
+	for _, p := range cfg.Providers {
+		if p.Enabled {
+			nextEnabled[p.ID] = struct{}{}
+		}
+	}
+	staleAdapters := make([]providers.Adapter, 0, len(rebuild))
+	for _, oldProvider := range oldCfg.Providers {
+		if !oldProvider.Enabled {
+			continue
+		}
+		_, removedOrDisabled := nextEnabled[oldProvider.ID]
+		_, rebuilt := rebuild[oldProvider.ID]
+		if removedOrDisabled && !rebuilt {
+			continue
+		}
+		if a, ok := s.reg.Get(oldProvider.ID); ok {
+			staleAdapters = append(staleAdapters, a)
+		}
+	}
+
 	// Prepare the complete next registry before touching disk. Unchanged
 	// providers reuse their live adapters, preserving HTTP connection pools and
 	// credential cooldown/load state across routing-only or probe-only edits.
@@ -220,6 +241,9 @@ func (s *Server) applyConfigLocked(cfg config.Config) error {
 
 	s.cfg = cfg
 	s.probe.Reload(cfg)
+	for _, a := range staleAdapters {
+		providers.CloseIdleConnections(a)
+	}
 	return nil
 }
 

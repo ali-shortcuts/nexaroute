@@ -124,6 +124,12 @@ func (r *Registry) CredentialsMatchProvider(p config.ProviderConfig) bool {
 	return a.CredentialsMatch(p.ResolvedCredentials())
 }
 
+func CloseIdleConnections(a Adapter) {
+	if closer, ok := a.(interface{ CloseIdleConnections() }); ok {
+		closer.CloseIdleConnections()
+	}
+}
+
 func (r *Registry) Stats() []ProviderStats {
 	r.mu.RLock()
 	adapters := make([]Adapter, 0, len(r.m))
