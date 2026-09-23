@@ -30,6 +30,60 @@ type testResult struct {
 	Error      string `json:"error,omitempty"`
 }
 
+func (s *Server) adminProviderPresets(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		errorJSON(w, 405, "method not allowed")
+		return
+	}
+	writeJSON(w, 200, map[string]any{"presets": providers.Presets()})
+}
+
+func (s *Server) adminProviderCheck(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		errorJSON(w, 405, "method not allowed")
+		return
+	}
+	var in providerForm
+	if _, err := readJSON(r, &in); err != nil {
+		errorJSON(w, 400, "invalid JSON: "+err.Error())
+		return
+	}
+	if in.PreserveSecret {
+		mergeExistingSecret(s.currentConfig(), &in.Provider)
+	}
+	normalizeProvider(&in.Provider)
+	if in.Provider.BaseURL == "" {
+		errorJSON(w, 400, "base_url is required")
+		return
+	}
+	a, err := providers.NewAdapter(in.Provider, 8*time.Second)
+	if err != nil {
+		errorJSON(w, 400, err.Error())
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
+	defer cancel()
+	start := time.Now()
+	resp, err := a.DoPath(ctx, http.MethodGet, in.Provider.ModelsPath, nil, false, nil)
+	latency := time.Since(start).Milliseconds()
+	if err != nil {
+		writeJSON(w, 200, map[string]any{
+			"ok": false, "reachable": false, "auth_ok": false,
+			"latency_ms": latency, "error": err.Error(),
+		})
+		return
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
+	authOK := resp.StatusCode != http.StatusUnauthorized && resp.StatusCode != http.StatusForbidden
+	reachable := true
+	ok := authOK && resp.StatusCode < 500
+	writeJSON(w, 200, map[string]any{
+		"ok": ok, "reachable": reachable, "auth_ok": authOK,
+		"status_code": resp.StatusCode, "latency_ms": latency,
+	})
+}
+
 func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		errorJSON(w, 405, "method not allowed")
@@ -40,9 +94,11 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 	deployments := s.rt.All()
 	s.runtimeMu.RUnlock()
 	writeJSON(w, 200, map[string]any{
-		"deployments": deployments,
-		"health":      s.hm.Snapshot(),
-		"events":      s.bus.Snapshot(),
+		"deployments":   deployments,
+		"health":        s.hm.Snapshot(),
+		"events":        s.bus.Snapshot(),
+		"provider_stats": s.reg.Stats(),
+		"session_count":  s.rt.SessionCount(),
 		"config": map[string]any{
 			"probe":   cfg.Probe,
 			"routing": cfg.Routing,

@@ -55,3 +55,10 @@ func TestCustomAuthorizationAllowedWhenAuthModeNone(t *testing.T) {
 		t.Fatalf("custom auth unexpectedly replaced: %q", gotAuth)
 	}
 }
+
+func TestEndpointAllowsAbsoluteOverride(t *testing.T) {
+	got := endpoint("https://api.example.com/v1", "https://catalog.example.com/models")
+	if got != "https://catalog.example.com/models" {
+		t.Fatalf("absolute endpoint=%q", got)
+	}
+}

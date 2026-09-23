@@ -98,8 +98,12 @@ func (a *httpAdapter) Stats() ProviderStats {
 
 func endpoint(base, suffix string) string {
 	b := strings.TrimRight(base, "/")
+	suffix = strings.TrimSpace(suffix)
 	if suffix == "" {
 		return b
+	}
+	if u, err := url.Parse(suffix); err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != "" {
+		return u.String()
 	}
 	if !strings.HasPrefix(suffix, "/") {
 		suffix = "/" + suffix
