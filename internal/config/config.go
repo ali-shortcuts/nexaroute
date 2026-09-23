@@ -271,20 +271,11 @@ func (c *Config) ApplyDefaults() {
 	if c.Logging.MaxSizeMB == 0 {
 		c.Logging.MaxSizeMB = 32
 	}
-	if c.Logging.MaxBackups == 0 {
-		c.Logging.MaxBackups = 3
-	}
 	if c.Logging.AccessMode == "" {
 		c.Logging.AccessMode = "sampled"
 	}
 	if c.Logging.SuccessSampleEvery == 0 {
 		c.Logging.SuccessSampleEvery = 1000
-	}
-	if c.Logging.SlowRequestMS == 0 {
-		c.Logging.SlowRequestMS = 5000
-	}
-	if c.Logging.ConsoleMaxLinesPerMinute == 0 {
-		c.Logging.ConsoleMaxLinesPerMinute = 30
 	}
 	if c.Routing.Strategy == "" {
 		c.Routing.Strategy = "ready_mesh"
