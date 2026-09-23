@@ -147,13 +147,7 @@ func changedDeploymentIDs(oldCfg, newCfg config.Config) map[string]struct{} {
 // applyConfig validates and persists first, then swaps the in-memory provider
 // registry/router under one short lock. Existing Adapter pointers already taken
 // by in-flight requests remain valid after the registry map is replaced.
-func (s *Server) applyConfig(cfg config.Config) error {
-	// Serialize control-plane mutations from validation through durable write and
-	// runtime swap. This prevents concurrent admin updates from racing on stale
-	// snapshots or leaving disk and memory at different revisions.
-	s.applyMu.Lock()
-	defer s.applyMu.Unlock()
-
+func (s *Server) applyConfigLocked(cfg config.Config) error {
 	cfg.ApplyDefaults()
 	if err := cfg.Validate(); err != nil {
 		return err
@@ -195,6 +189,26 @@ func (s *Server) applyConfig(cfg config.Config) error {
 	s.cfg = cfg
 	s.probe.Reload(cfg)
 	return nil
+}
+
+func (s *Server) applyConfig(cfg config.Config) error {
+	s.applyMu.Lock()
+	defer s.applyMu.Unlock()
+	return s.applyConfigLocked(cfg)
+}
+
+func (s *Server) mutateConfig(fn func(*config.Config) error) (config.Config, error) {
+	s.applyMu.Lock()
+	defer s.applyMu.Unlock()
+
+	cfg := s.currentConfig()
+	if err := fn(&cfg); err != nil {
+		return config.Config{}, err
+	}
+	if err := s.applyConfigLocked(cfg); err != nil {
+		return config.Config{}, err
+	}
+	return cfg, nil
 }
 
 func (s *Server) routeSnapshot(req router.Requirement) (config.Config, []router.Scored) {
