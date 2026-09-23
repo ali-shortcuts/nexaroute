@@ -164,9 +164,10 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		} else if in.Stream {
 			e = streamOpenAIToAnthropic(w, resp, in.Model, r.Header.Get("x-request-id"))
 		} else {
-			defer resp.Body.Close()
 			var o core.OpenAIResponse
-			if e = decodeJSONLimited(resp.Body, &o); e == nil {
+			e = decodeJSONLimited(resp.Body, &o)
+			resp.Body.Close()
+			if e == nil {
 				writeJSON(w, 200, translate.OpenAIResponseToAnthropic(o, in.Model))
 			}
 		}
@@ -175,6 +176,23 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 			lastErr = e.Error()
 			if clientRequestGone(r.Context()) {
 				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "client_disconnect", Deployment: c.Deployment.ID, Message: r.Context().Err().Error(), ErrorType: "caller_cancelled", LatencyMS: totalLatency.Milliseconds(), StatusCode: resp.StatusCode})
+				return
+			}
+			if !in.Stream && c.Deployment.ProviderType != "anthropic_compatible" {
+				lastStatus = 0
+				lastBody = nil
+				if router.IsReadyStrategy(cfg.Routing.Strategy) {
+					s.hm.Quarantine(c.Deployment.ID, lastErr, totalLatency)
+					s.probe.Recover(c.Deployment.ID)
+				} else {
+					s.hm.RecordFailure(c.Deployment.ID, lastErr, totalLatency)
+				}
+				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "response_decode_fail", Deployment: c.Deployment.ID, Message: lastErr, ErrorType: "provider_invalid_response", LatencyMS: totalLatency.Milliseconds(), StatusCode: resp.StatusCode})
+				if attempts < max && i+1 < len(candidates) {
+					s.retryPause(routeCtx, r.Header.Get("x-request-id"), cfg, attemptIndex, max)
+					continue
+				}
+				anthropicErrorJSON(w, http.StatusBadGateway, "upstream returned an invalid response")
 				return
 			}
 			if cfg.Routing.Strategy == "ready_mesh" && req.Streaming {
