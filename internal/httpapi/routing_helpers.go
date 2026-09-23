@@ -224,15 +224,37 @@ func bodySessionKey(root map[string]any) string {
 }
 
 func inspectRequestJSON(raw []byte, visionType string, reasoningKeys []string) requestInspection {
-	var root any
+	var root map[string]any
 	if json.Unmarshal(raw, &root) != nil {
 		return requestInspection{}
 	}
-	out := requestInspection{}
-	if obj, ok := root.(map[string]any); ok {
-		out.BodySessionKey = bodySessionKey(obj)
+	out := requestInspection{BodySessionKey: bodySessionKey(root)}
+
+	// Reasoning controls are protocol-level request options. Do not scan tool
+	// schemas or arbitrary user/tool payloads for keys with the same name.
+	for _, wanted := range reasoningKeys {
+		for key := range root {
+			if strings.EqualFold(key, wanted) {
+				out.Reasoning = true
+				break
+			}
+		}
+		if out.Reasoning {
+			break
+		}
 	}
-	stack := []any{root}
+
+	// Vision parts are meaningful inside message content. Restrict traversal to
+	// the messages subtree so a tool schema/example containing type=image(_url)
+	// cannot accidentally force vision-capable routing.
+	if visionType == "" {
+		return out
+	}
+	messages, ok := root["messages"]
+	if !ok {
+		return out
+	}
+	stack := []any{messages}
 	nodes := 0
 	for len(stack) > 0 {
 		last := len(stack) - 1
@@ -245,22 +267,14 @@ func inspectRequestJSON(raw []byte, visionType string, reasoningKeys []string) r
 		}
 		switch x := v.(type) {
 		case map[string]any:
+			if typ, _ := x["type"].(string); strings.EqualFold(typ, visionType) {
+				out.Vision = true
+			}
 			if len(x) > maxRequestInspectionNodes-nodes-len(stack) {
 				out.TooComplex = true
 				return out
 			}
-			if visionType != "" {
-				if typ, _ := x["type"].(string); strings.EqualFold(typ, visionType) {
-					out.Vision = true
-				}
-			}
-			for key, child := range x {
-				for _, wanted := range reasoningKeys {
-					if strings.EqualFold(key, wanted) {
-						out.Reasoning = true
-						break
-					}
-				}
+			for _, child := range x {
 				stack = append(stack, child)
 			}
 		case []any:
