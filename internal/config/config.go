@@ -455,6 +455,16 @@ func (c Config) Validate() error {
 	return nil
 }
 
+func ValidateProviderConfig(p ProviderConfig) error {
+	p.ApplyDefaults()
+	if p.ID == "" {
+		p.ID = "_provider_check"
+	}
+	cfg := Default()
+	cfg.Providers = []ProviderConfig{p}
+	return cfg.Validate()
+}
+
 func (p ProviderConfig) ResolvedAPIKey() string {
 	if p.APIKeyEnv != "" {
 		if v := os.Getenv(p.APIKeyEnv); v != "" {
