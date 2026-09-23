@@ -26,6 +26,16 @@ type Result struct {
 	DurationMS      int64 `json:"duration_ms"`
 }
 
+const (
+	recoveryWorkerCount = 64
+	maxRecoveryQueue     = 20000
+)
+
+type recoveryTask struct {
+	id      string
+	attempt int
+}
+
 type Engine struct {
 	cfgMu sync.RWMutex
 	cfg   config.Config
@@ -42,8 +52,10 @@ type Engine struct {
 	ctxMu  sync.RWMutex
 	runCtx context.Context
 
-	recoveryMu sync.Mutex
-	recovering map[string]bool
+	recoveryMu      sync.Mutex
+	recovering      map[string]bool
+	recoveryQueue   chan recoveryTask
+	recoveryWorkers sync.Once
 
 	limitMu      sync.Mutex
 	activeProbes int
@@ -59,6 +71,7 @@ func New(cfg config.Config, reg *providers.Registry, rt *router.Router, hm *heal
 		bus:          bus,
 		trigger:      make(chan struct{}, 1),
 		recovering:   map[string]bool{},
+		recoveryQueue: make(chan recoveryTask, maxRecoveryQueue),
 		limitChanged: make(chan struct{}),
 	}
 }
@@ -67,6 +80,11 @@ func (e *Engine) Reload(cfg config.Config) {
 	e.cfgMu.Lock()
 	e.cfg = cfg
 	e.cfgMu.Unlock()
+	if !router.IsReadyStrategy(cfg.Routing.Strategy) {
+		e.recoveryMu.Lock()
+		e.recovering = map[string]bool{}
+		e.recoveryMu.Unlock()
+	}
 
 	// Wake probe workers so a raised concurrency limit takes effect promptly.
 	e.limitMu.Lock()
@@ -118,6 +136,11 @@ func (e *Engine) wasPrimed() bool {
 
 func (e *Engine) Start(ctx context.Context) {
 	e.setRunContext(ctx)
+	e.recoveryWorkers.Do(func() {
+		for i := 0; i < recoveryWorkerCount; i++ {
+			go e.recoveryWorker(ctx)
+		}
+	})
 	go e.Run(ctx)
 }
 
@@ -161,15 +184,16 @@ func (e *Engine) Run(ctx context.Context) {
 	}
 }
 
-// Recover hands one quarantined deployment to the background supervisor.
-// Duplicate recovery loops for the same deployment are suppressed.
+// Recover hands one quarantined deployment to a bounded recovery queue.
+// Duplicate queued/active/delayed recovery for the same deployment is
+// suppressed. Long cooldowns are represented by timers, not sleeping goroutines.
 func (e *Engine) Recover(id string) {
 	id = strings.TrimSpace(id)
 	if id == "" {
 		return
 	}
 	ctx := e.context()
-	if ctx == nil {
+	if ctx == nil || ctx.Err() != nil {
 		return
 	}
 	e.recoveryMu.Lock()
@@ -180,20 +204,156 @@ func (e *Engine) Recover(id string) {
 	e.recovering[id] = true
 	e.recoveryMu.Unlock()
 
-	go func() {
-		defer func() {
-			e.recoveryMu.Lock()
-			delete(e.recovering, id)
-			e.recoveryMu.Unlock()
-		}()
-		e.recoverLoop(ctx, id)
-	}()
+	if !e.enqueueRecovery(ctx, recoveryTask{id: id, attempt: 1}) {
+		e.clearRecovering(id)
+		e.bus.Add(events.Event{Kind: "recovery_queue_full", Deployment: id, Message: "bounded recovery queue is full; background sweep will retry", ErrorType: "recovery_queue_full"})
+	}
+}
+
+func (e *Engine) enqueueRecovery(ctx context.Context, task recoveryTask) bool {
+	if ctx == nil || ctx.Err() != nil {
+		return false
+	}
+	select {
+	case e.recoveryQueue <- task:
+		return true
+	default:
+		return false
+	}
+}
+
+func (e *Engine) clearRecovering(id string) {
+	e.recoveryMu.Lock()
+	delete(e.recovering, id)
+	e.recoveryMu.Unlock()
 }
 
 func (e *Engine) isRecovering(id string) bool {
 	e.recoveryMu.Lock()
 	defer e.recoveryMu.Unlock()
 	return e.recovering[id]
+}
+
+func (e *Engine) scheduleRecovery(ctx context.Context, task recoveryTask, delay time.Duration) {
+	if delay < 0 {
+		delay = 0
+	}
+	time.AfterFunc(delay, func() {
+		if ctx.Err() != nil || !e.isRecovering(task.id) {
+			e.clearRecovering(task.id)
+			return
+		}
+		if !e.enqueueRecovery(ctx, task) {
+			e.clearRecovering(task.id)
+			e.bus.Add(events.Event{Kind: "recovery_queue_full", Deployment: task.id, Message: "bounded recovery queue is full; background sweep will retry", ErrorType: "recovery_queue_full"})
+		}
+	})
+}
+
+func (e *Engine) recoveryWorker(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case task := <-e.recoveryQueue:
+			if !e.isRecovering(task.id) {
+				continue
+			}
+			e.processRecoveryTask(ctx, task)
+		}
+	}
+}
+
+func (e *Engine) processRecoveryTask(ctx context.Context, task recoveryTask) {
+	if ctx.Err() != nil {
+		e.clearRecovering(task.id)
+		return
+	}
+	cfg := e.current()
+	if !router.IsReadyStrategy(cfg.Routing.Strategy) {
+		e.clearRecovering(task.id)
+		return
+	}
+	d, a, ok := e.deployment(task.id)
+	if !ok {
+		e.clearRecovering(task.id)
+		return
+	}
+
+	st := e.hm.Get(task.id)
+	if st.Status == health.Healthy {
+		e.clearRecovering(task.id)
+		return
+	}
+	if st.Status == health.Cooldown && !st.CooldownUntil.IsZero() {
+		if wait := time.Until(st.CooldownUntil); wait > 0 {
+			e.bus.Add(events.Event{Kind: "recovery_wait", Deployment: task.id, Message: fmt.Sprintf("cooldown until %s", st.CooldownUntil.Format(time.RFC3339))})
+			task.attempt = 1
+			e.scheduleRecovery(ctx, task, wait)
+			return
+		}
+	}
+
+	attempts := cfg.Probe.RecoveryAttempts
+	if attempts < 1 {
+		attempts = 5
+	}
+	if task.attempt < 1 {
+		task.attempt = 1
+	}
+	if task.attempt > attempts {
+		task.attempt = attempts
+	}
+
+	// Re-resolve immediately before the probe so hot reloads never keep a stale
+	// provider/model pointer in a queued recovery task.
+	d, a, ok = e.deployment(task.id)
+	if !ok {
+		e.clearRecovering(task.id)
+		return
+	}
+	cfg = e.current()
+	if !e.acquireProbe(ctx, cfg.Probe.Concurrency) {
+		e.clearRecovering(task.id)
+		return
+	}
+	pctx, cancel := context.WithTimeout(ctx, cfg.ProbeTimeout())
+	lat, status, err := a.Probe(pctx, d.Model, cfg.Probe.MaxTokens)
+	cancel()
+	e.releaseProbe()
+
+	if err == nil {
+		e.hm.RecordSuccess(task.id, lat)
+		e.bus.Add(events.Event{Kind: "recovery_ready", Deployment: task.id, Message: fmt.Sprintf("recovered on attempt %d/%d", task.attempt, attempts), LatencyMS: lat.Milliseconds(), StatusCode: status})
+		e.clearRecovering(task.id)
+		return
+	}
+
+	if wait, ok := providers.RetryAfter(err); ok {
+		maxWait := time.Duration(cfg.Routing.MaxRetryAfterSeconds) * time.Second
+		if maxWait > 0 && wait > maxWait {
+			wait = maxWait
+		}
+		e.bus.Add(events.Event{Kind: "recovery_deferred", Deployment: task.id, Message: fmt.Sprintf("credential rate-limit cooldown; retry after %s", wait), StatusCode: status})
+		e.scheduleRecovery(ctx, task, wait)
+		return
+	}
+
+	lastErr := err.Error()
+	e.hm.RecordRecoveryFailure(task.id, lastErr, lat)
+	e.bus.Add(events.Event{Kind: "recovery_fail", Deployment: task.id, Message: fmt.Sprintf("attempt %d/%d: %s", task.attempt, attempts, lastErr), LatencyMS: lat.Milliseconds(), StatusCode: status})
+
+	if task.attempt < attempts {
+		task.attempt++
+		e.scheduleRecovery(ctx, task, cfg.ProbeRecoveryRetry())
+		return
+	}
+
+	cooldown := cfg.Cooldown()
+	e.hm.EnterCooldown(task.id, lastErr, cooldown)
+	e.bus.Add(events.Event{Kind: "recovery_cooldown", Deployment: task.id, Message: fmt.Sprintf("%d recovery attempts failed; retry after %s", attempts, cooldown), LatencyMS: lat.Milliseconds(), StatusCode: status})
+	task.attempt = 1
+	e.scheduleRecovery(ctx, task, cooldown)
 }
 
 func (e *Engine) acquireProbe(ctx context.Context, limit int) bool {
@@ -401,124 +561,3 @@ func (e *Engine) runOnce(ctx context.Context, force bool) Result {
 	return result
 }
 
-// recoverLoop owns the lifecycle of one quarantined deployment:
-// five supervisor probes -> immediate return on first success -> 30 minute
-// cooldown after all attempts fail -> repeat after cooldown until healthy or
-// removed from configuration.
-func (e *Engine) recoverLoop(ctx context.Context, id string) {
-	for {
-		if ctx.Err() != nil {
-			return
-		}
-		cfg := e.current()
-		if !router.IsReadyStrategy(cfg.Routing.Strategy) {
-			return
-		}
-		d, a, ok := e.deployment(id)
-		if !ok {
-			return
-		}
-
-		st := e.hm.Get(id)
-		if st.Status == health.Healthy {
-			return
-		}
-		if st.Status == health.Cooldown && !st.CooldownUntil.IsZero() {
-			wait := time.Until(st.CooldownUntil)
-			if wait > 0 {
-				e.bus.Add(events.Event{Kind: "recovery_wait", Deployment: id, Message: fmt.Sprintf("cooldown until %s", st.CooldownUntil.Format(time.RFC3339))})
-				t := time.NewTimer(wait)
-				select {
-				case <-ctx.Done():
-					t.Stop()
-					return
-				case <-t.C:
-				}
-			}
-		}
-
-		attempts := cfg.Probe.RecoveryAttempts
-		if attempts < 1 {
-			attempts = 5
-		}
-		var lastErr string
-		var lastStatus int
-		var lastLatency time.Duration
-
-		for attempt := 1; attempt <= attempts; attempt++ {
-			if ctx.Err() != nil {
-				return
-			}
-			// Re-resolve adapter/model on every attempt so hot reloads are safe.
-			d, a, ok = e.deployment(id)
-			if !ok {
-				return
-			}
-			cfg = e.current()
-			if !e.acquireProbe(ctx, cfg.Probe.Concurrency) {
-				return
-			}
-			pctx, cancel := context.WithTimeout(ctx, cfg.ProbeTimeout())
-			lat, status, err := a.Probe(pctx, d.Model, cfg.Probe.MaxTokens)
-			cancel()
-			e.releaseProbe()
-			lastLatency, lastStatus = lat, status
-
-			if err == nil {
-				e.hm.RecordSuccess(id, lat)
-				e.bus.Add(events.Event{Kind: "recovery_ready", Deployment: id, Message: fmt.Sprintf("recovered on attempt %d/%d", attempt, attempts), LatencyMS: lat.Milliseconds(), StatusCode: status})
-				return
-			}
-
-			if wait, ok := providers.RetryAfter(err); ok {
-				maxWait := time.Duration(cfg.Routing.MaxRetryAfterSeconds) * time.Second
-				if maxWait > 0 && wait > maxWait {
-					wait = maxWait
-				}
-				e.bus.Add(events.Event{Kind: "recovery_deferred", Deployment: id, Message: fmt.Sprintf("credential rate-limit cooldown; retry after %s", wait), StatusCode: status})
-				attempt--
-				t := time.NewTimer(wait)
-				select {
-				case <-ctx.Done():
-					t.Stop()
-					return
-				case <-t.C:
-				}
-				continue
-			}
-
-			lastErr = err.Error()
-			e.hm.RecordRecoveryFailure(id, lastErr, lat)
-			e.bus.Add(events.Event{Kind: "recovery_fail", Deployment: id, Message: fmt.Sprintf("attempt %d/%d: %s", attempt, attempts, lastErr), LatencyMS: lat.Milliseconds(), StatusCode: status})
-			if attempt < attempts {
-				delay := cfg.ProbeRecoveryRetry()
-				if delay > 0 {
-					t := time.NewTimer(delay)
-					select {
-					case <-ctx.Done():
-						t.Stop()
-						return
-					case <-t.C:
-					}
-				}
-			}
-		}
-
-		if lastErr == "" {
-			lastErr = "recovery attempts exhausted"
-		}
-		cooldown := cfg.Cooldown()
-		e.hm.EnterCooldown(id, lastErr, cooldown)
-		e.bus.Add(events.Event{Kind: "recovery_cooldown", Deployment: id, Message: fmt.Sprintf("%d recovery attempts failed; retry after %s", attempts, cooldown), LatencyMS: lastLatency.Milliseconds(), StatusCode: lastStatus})
-
-		t := time.NewTimer(cooldown)
-		select {
-		case <-ctx.Done():
-			t.Stop()
-			return
-		case <-t.C:
-		}
-		// The next loop re-resolves the deployment and starts a fresh recovery
-		// budget. health.Get transitions the expired cooldown to half-open.
-	}
-}
