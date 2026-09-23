@@ -14,6 +14,20 @@ This document describes the current verification contract, not historical CI sna
 - JavaScript syntax check when Node is available;
 - Linux amd64 and arm64 builds.
 
+## Bounded stress gate
+
+Every normal CI run also executes one bounded stress pass covering:
+
+- 10,000-deployment indexed routing and concurrent session pressure;
+- 5,000-deployment supervised recovery pressure inside valid per-provider limits;
+- concurrent event-ring/counter flooding;
+- global HTTP admission overload while `/healthz` remains responsive;
+- concurrent rotating-log writes with disk-retention bounds.
+
+## Manual soak gate
+
+`.github/workflows/soak.yml` is a manual-only long-form gate. It repeats the bounded stress suite, then runs same-process concurrent traffic + hot reload and repeated recovery cycles, followed by race-enabled soak checks. It is intentionally not scheduled on every push to avoid wasting CI resources.
+
 ## Required runtime gates
 
 - local runtime smoke test;

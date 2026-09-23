@@ -66,6 +66,8 @@ Implemented resilience:
 - environment-backed credential rotation is detected during hot reload; only providers whose resolved credentials or transport identity changed are rebuilt
 - the HTTP listener opens immediately for liveness/UI observability, then the startup readiness sweep probes every enabled deployment; `/readyz` and ready-mesh routing remain unready until successful models enter the ready queue
 - manual **Probe all models** with pass/fail results
+- bounded CI stress gate covers 10k-deployment routing, 5k supervised recoveries, event floods, HTTP admission overload, and concurrent log rotation
+- manual `Soak` workflow repeats the stress suite and adds same-process hot-reload/recovery cycles plus race-enabled soak checks
 
 
 ### How the smart routing loop actually works

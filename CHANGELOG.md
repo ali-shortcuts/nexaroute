@@ -53,6 +53,11 @@ This file describes the current supported v0.3 state only. Superseded interim im
 - Health probes require a bounded, fully readable, protocol-valid success envelope; HTTP `2xx` alone is not enough.
 - Truncated, malformed or wrong-protocol probe responses cannot mark a deployment healthy.
 
+## Stress and soak verification
+
+- Normal CI now includes a bounded stress gate for large routing tables, recovery floods, overload admission, event-state pressure, and concurrent log rotation.
+- A manual `Soak` workflow adds repeated stress rounds, same-process traffic/hot-reload cycles, repeated recovery cycles, and race-enabled soak execution.
+
 ## Verification
 
 The authoritative acceptance gate is the repository CI plus `scripts/verify.sh`: repository cleanliness, formatting, repeated/shuffled tests, vet, race detection, fuzzing, JavaScript syntax validation, Linux cross-builds, local runtime smoke, installer smoke, Docker build and Docker runtime smoke.
