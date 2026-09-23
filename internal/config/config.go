@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net"
 	"net/url"
@@ -124,6 +125,9 @@ const (
 	maxProbeTokens            = 64
 	maxStringIDBytes          = 256
 	maxURLBytes               = 4096
+	maxTotalDeployments       = 20000
+	maxTotalAliases           = 100000
+	maxConfigBytes            = 16 << 20
 )
 
 func Default() Config {
@@ -143,9 +147,17 @@ func Default() Config {
 
 func Load(path string) (Config, error) {
 	cfg := Default()
-	b, err := os.ReadFile(path)
+	f, err := os.Open(path)
 	if err != nil {
 		return cfg, err
+	}
+	defer f.Close()
+	b, err := io.ReadAll(io.LimitReader(f, maxConfigBytes+1))
+	if err != nil {
+		return cfg, err
+	}
+	if len(b) > maxConfigBytes {
+		return cfg, fmt.Errorf("config exceeds safe limit %d bytes", maxConfigBytes)
 	}
 	if err := json.Unmarshal(b, &cfg); err != nil {
 		return cfg, err
@@ -369,6 +381,8 @@ func (c Config) Validate() error {
 	}
 	seenP := map[string]bool{}
 	seenD := map[string]bool{}
+	totalModels := 0
+	totalAliases := 0
 	for i, p := range c.Providers {
 		if p.ID == "" {
 			return fmt.Errorf("providers[%d].id is required", i)
@@ -391,6 +405,10 @@ func (c Config) Validate() error {
 		}
 		if len(p.Models) > maxModelsPerProvider {
 			return fmt.Errorf("provider %q models exceeds safe limit %d", p.ID, maxModelsPerProvider)
+		}
+		totalModels += len(p.Models)
+		if totalModels > maxTotalDeployments {
+			return fmt.Errorf("total deployments exceeds safe limit %d", maxTotalDeployments)
 		}
 		if len(p.Credentials) > maxCredentialsPerProvider {
 			return fmt.Errorf("provider %q credentials exceeds safe limit %d", p.ID, maxCredentialsPerProvider)
@@ -433,6 +451,10 @@ func (c Config) Validate() error {
 			}
 			if len(m.ID) > maxStringIDBytes || len(m.Model) > 1024 || len(m.Aliases) > 128 {
 				return fmt.Errorf("provider %q model[%d] identifiers/aliases exceed safe limits", p.ID, j)
+			}
+			totalAliases += len(m.Aliases)
+			if totalAliases > maxTotalAliases {
+				return fmt.Errorf("total model aliases exceeds safe limit %d", maxTotalAliases)
 			}
 			for _, alias := range m.Aliases {
 				if len(alias) > maxStringIDBytes {
@@ -534,6 +556,9 @@ func SaveAtomic(path string, c Config) error {
 	b, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
 		return err
+	}
+	if len(b) > maxConfigBytes {
+		return fmt.Errorf("serialized config exceeds safe limit %d bytes", maxConfigBytes)
 	}
 
 	dir := filepath.Dir(path)
