@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"reflect"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -256,14 +257,25 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 			r.Header.Set("x-request-id", rid)
 		}
 		w.Header().Set("x-request-id", rid)
+		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				if recovered == http.ErrAbortHandler {
+					panic(recovered)
+				}
+				s.bus.Add(events.Event{RequestID: rid, Kind: "internal_panic", Message: "handler panic recovered", ErrorType: "internal_panic"})
+				s.log.Printf("request_id=%s handler_panic type=%T stack=%q", rid, recovered, debug.Stack())
+				if !sw.wroteHeader {
+					errorJSON(sw, http.StatusInternalServerError, "internal gateway error")
+				}
+			}
+			s.log.Printf("request_id=%s method=%s path=%s status=%d duration=%s", rid, r.Method, r.URL.Path, sw.status, time.Since(start))
+		}()
 		if strings.HasPrefix(r.URL.Path, "/admin/api/") && !s.adminAuthorized(r) {
-			errorJSON(w, http.StatusUnauthorized, "admin authorization required")
-			s.log.Printf("request_id=%s method=%s path=%s status=%d duration=%s", rid, r.Method, r.URL.Path, http.StatusUnauthorized, time.Since(start))
+			errorJSON(sw, http.StatusUnauthorized, "admin authorization required")
 			return
 		}
-		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(sw, r)
-		s.log.Printf("request_id=%s method=%s path=%s status=%d duration=%s", rid, r.Method, r.URL.Path, sw.status, time.Since(start))
 	})
 }
 
@@ -272,6 +284,8 @@ type statusWriter struct {
 	status      int
 	wroteHeader bool
 }
+
+func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 func (w *statusWriter) WriteHeader(code int) {
 	if w.wroteHeader {
