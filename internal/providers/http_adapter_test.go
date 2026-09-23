@@ -2,6 +2,7 @@ package providers
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -90,4 +91,31 @@ func TestCredentialP2CSkipsCoolingKey(t *testing.T) {
 		t.Fatalf("selected idx=%d key=%q ok=%v", idx, key, ok)
 	}
 	a.releaseCredential(idx)
+}
+
+type terminalErrorBody struct{}
+
+func (terminalErrorBody) Read([]byte) (int, error) { return 0, errors.New("terminal read failure") }
+func (terminalErrorBody) Close() error              { return nil }
+
+func TestReleaseOnDoneBodyReleasesOnTerminalReadError(t *testing.T) {
+	released := 0
+	body := &releaseOnDoneBody{
+		ReadCloser: terminalErrorBody{},
+		release: func() {
+			released++
+		},
+	}
+	if _, err := body.Read(make([]byte, 1)); err == nil {
+		t.Fatal("expected terminal read error")
+	}
+	if released != 1 {
+		t.Fatalf("release count=%d want 1", released)
+	}
+	if err := body.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if released != 1 {
+		t.Fatalf("release ran more than once: %d", released)
+	}
 }

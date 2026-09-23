@@ -349,3 +349,27 @@ func TestSessionAffinityTableRemainsBoundedUnderUniqueIDs(t *testing.T) {
 		t.Fatalf("session table grew to %d, limit=%d", got, maxSessionPins)
 	}
 }
+
+func TestSpecificModelIndexCoversAllMatchForms(t *testing.T) {
+	cfg := config.Default()
+	cfg.Providers = []config.ProviderConfig{{
+		ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "http://example.invalid", Enabled: true,
+		Models: []config.ModelConfig{{
+			ID: "short", Model: "vendor/model-v1", Aliases: []string{"coding", "fast"},
+			Enabled: true, Weight: 1, Capabilities: config.Capabilities{Streaming: true},
+		}},
+	}}
+	h := health.New(5, time.Hour)
+	h.RecordSuccess("p/short", time.Millisecond)
+	r := New(cfg, h)
+
+	for _, key := range []string{"p/short", "short", "vendor/model-v1", "coding", "fast"} {
+		got := r.Candidates(Requirement{Model: key, Streaming: true})
+		if len(got) != 1 || got[0].Deployment.ID != "p/short" {
+			t.Fatalf("model key %q routed to %#v", key, got)
+		}
+		if indexed := r.byModel[key]; len(indexed) != 1 || indexed[0].ID != "p/short" {
+			t.Fatalf("model key %q missing from index: %#v", key, indexed)
+		}
+	}
+}

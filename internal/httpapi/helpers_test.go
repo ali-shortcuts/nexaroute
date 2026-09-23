@@ -2,6 +2,8 @@ package httpapi
 
 import (
 	"bytes"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -131,4 +133,48 @@ func TestNormalizeRequestIDBoundsAndSanitizes(t *testing.T) {
 	if strings.ContainsAny(got, "/\r\n\t ") {
 		t.Fatalf("request id contains unsafe characters: %q", got)
 	}
+}
+
+type failingStreamWriter struct {
+	header http.Header
+	err    error
+}
+
+func (w *failingStreamWriter) Header() http.Header {
+	if w.header == nil {
+		w.header = make(http.Header)
+	}
+	return w.header
+}
+func (w *failingStreamWriter) WriteHeader(int) {}
+func (w *failingStreamWriter) Write([]byte) (int, error) {
+	if w.err == nil {
+		w.err = errors.New("client write failed")
+	}
+	return 0, w.err
+}
+
+func TestTranslatedStreamsStopOnClientWriteFailure(t *testing.T) {
+	t.Run("openai to anthropic", func(t *testing.T) {
+		w := &failingStreamWriter{}
+		resp := &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body:       io.NopCloser(strings.NewReader("data: [DONE]\n\n")),
+		}
+		if err := streamOpenAIToAnthropic(w, resp, "m"); err == nil || !strings.Contains(err.Error(), "client write failed") {
+			t.Fatalf("unexpected stream error: %v", err)
+		}
+	})
+	t.Run("anthropic to openai", func(t *testing.T) {
+		w := &failingStreamWriter{}
+		resp := &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body:       io.NopCloser(strings.NewReader("data: {\"type\":\"message_stop\"}\n\n")),
+		}
+		if err := streamAnthropicToOpenAI(w, resp, "m"); err == nil || !strings.Contains(err.Error(), "client write failed") {
+			t.Fatalf("unexpected stream error: %v", err)
+		}
+	})
 }
