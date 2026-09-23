@@ -339,10 +339,41 @@ func (s *Server) rejectOverloaded(w http.ResponseWriter, r *http.Request, reques
 	errorJSON(w, http.StatusServiceUnavailable, "gateway is at capacity; retry shortly")
 }
 
+func (s *Server) accessLoggingConfig() config.LoggingConfig {
+	s.runtimeMu.RLock()
+	defer s.runtimeMu.RUnlock()
+	return s.cfg.Logging
+}
+
+func (s *Server) shouldLogRequest(status int, duration time.Duration, streaming bool, requestNumber uint64) bool {
+	cfg := s.accessLoggingConfig()
+	if cfg.AccessMode == "off" {
+		return false
+	}
+	if status >= http.StatusBadRequest {
+		return true
+	}
+	if !streaming && cfg.SlowRequestMS > 0 && duration >= time.Duration(cfg.SlowRequestMS)*time.Millisecond {
+		return true
+	}
+	switch cfg.AccessMode {
+	case "all":
+		return true
+	case "sampled":
+		every := cfg.SuccessSampleEvery
+		if every < 1 {
+			every = 1000
+		}
+		return requestNumber%uint64(every) == 0
+	default:
+		return false
+	}
+}
+
 func (s *Server) middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
-		s.requestTotal.Add(1)
+		requestNumber := s.requestTotal.Add(1)
 		rid := normalizeRequestID(r.Header.Get("x-request-id"))
 		if rid == "" {
 			rid = fmt.Sprintf("nexaroute-%x-%x", time.Now().UnixNano(), s.requestSeq.Add(1))
@@ -361,7 +392,11 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 					errorJSON(sw, http.StatusInternalServerError, "internal gateway error")
 				}
 			}
-			s.log.Printf("request_id=%s method=%s path=%s status=%d duration=%s", rid, r.Method, r.URL.Path, sw.status, time.Since(start))
+			duration := time.Since(start)
+			streaming := strings.Contains(strings.ToLower(sw.Header().Get("Content-Type")), "text/event-stream")
+			if s.shouldLogRequest(sw.status, duration, streaming, requestNumber) {
+				s.log.Printf("request_id=%s method=%s path=%s status=%d duration=%s", rid, r.Method, r.URL.Path, sw.status, duration)
+			}
 		}()
 		if strings.HasPrefix(r.URL.Path, "/admin/api/") && !s.adminAuthorized(r) {
 			errorJSON(sw, http.StatusUnauthorized, "admin authorization required")
