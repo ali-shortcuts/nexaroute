@@ -117,5 +117,8 @@ func (r *Registry) Stats() []ProviderStats {
 }
 func NewAdapter(p config.ProviderConfig, timeout time.Duration) (Adapter, error) {
 	p.ApplyDefaults()
+	if err := config.ValidateProviderConfig(p); err != nil {
+		return nil, err
+	}
 	return newHTTPAdapter(p, timeout)
 }
