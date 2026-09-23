@@ -580,15 +580,20 @@ func TestStaleQueuedRecoveryTaskCannotActOnNewGeneration(t *testing.T) {
 
 func TestRunOnceParentCancellationDoesNotQuarantineDeployment(t *testing.T) {
 	started := make(chan struct{})
+	release := make(chan struct{})
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-started:
 		default:
 			close(started)
 		}
-		<-r.Context().Done()
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
 	}))
 	defer up.Close()
+	defer close(release)
 
 	cfg := config.Default()
 	cfg.Probe.Enabled = true
@@ -632,15 +637,20 @@ func TestRunOnceParentCancellationDoesNotQuarantineDeployment(t *testing.T) {
 
 func TestRecoveryParentCancellationDoesNotRecordSyntheticFailure(t *testing.T) {
 	started := make(chan struct{})
+	release := make(chan struct{})
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-started:
 		default:
 			close(started)
 		}
-		<-r.Context().Done()
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
 	}))
 	defer up.Close()
+	defer close(release)
 
 	cfg := config.Default()
 	cfg.Probe.Enabled = true
