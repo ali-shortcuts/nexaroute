@@ -272,7 +272,7 @@ Read:
 - `TEST_REPORT.md`
 - `docs/COMPATIBILITY.md`
 - `docs/KNOWN_GAPS.md`
-- `docs/SECURITY.md`
+- `SECURITY.md`
 - `ROADMAP.md`
 
 before treating v0.3 as production infrastructure.
