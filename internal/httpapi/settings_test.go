@@ -117,3 +117,90 @@ func testConfigPath(t *testing.T, s *Server) string {
 	t.Helper()
 	return s.configPath
 }
+
+func TestAdminProviderTestSavedModeIncludesDisabledModels(t *testing.T) {
+	var tested []string
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Model string `json:"model"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		tested = append(tested, body.Model)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "c1", "object": "chat.completion",
+			"choices": []map[string]any{{"index": 0, "message": map[string]any{"role": "assistant", "content": "ok"}, "finish_reason": "stop"}},
+			"usage":   map[string]any{"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+		})
+	}))
+	defer up.Close()
+
+	cfg := config.Default()
+	cfg.Admin.APIKey = "k"
+	cfg.Admin.BindLocalOnly = false
+	cfg.Probe.Enabled = false
+	cfg.Providers = []config.ProviderConfig{{
+		ID: "p1", Name: "P1", Type: "openai_compatible", BaseURL: up.URL + "/v1",
+		AuthMode: "none", Enabled: true,
+		Models: []config.ModelConfig{
+			{ID: "m1", Model: "enabled-model", Enabled: true, Weight: 1, Capabilities: config.Capabilities{Streaming: true, Tools: true}},
+			{ID: "m2", Model: "disabled-model", Enabled: false, Weight: 1, Capabilities: config.Capabilities{Streaming: true, Tools: true}},
+		},
+	}}
+	s := testGateway(t, cfg)
+
+	post := func(body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "http://gateway/admin/api/provider-test", strings.NewReader(body))
+		req.Header.Set("x-admin-key", "k")
+		req.Header.Set("content-type", "application/json")
+		rr := httptest.NewRecorder()
+		s.Handler().ServeHTTP(rr, req)
+		return rr
+	}
+
+	// Saved mode: explicitly test the disabled model without resending secrets.
+	rr := post(`{"provider_id":"p1","test_models":["disabled-model"]}`)
+	if rr.Code != 200 {
+		t.Fatalf("saved-mode test status = %d body=%s", rr.Code, rr.Body.String())
+	}
+	var out struct {
+		OK      bool `json:"ok"`
+		Passed  int  `json:"passed"`
+		Results []struct {
+			Model string `json:"model"`
+			OK    bool   `json:"ok"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if !out.OK || out.Passed != 1 || len(out.Results) != 1 || out.Results[0].Model != "disabled-model" || !out.Results[0].OK {
+		t.Fatalf("unexpected saved-mode results: %+v", out)
+	}
+
+	// Saved mode with no explicit models probes every configured model,
+	// including the disabled one.
+	rr = post(`{"provider_id":"p1"}`)
+	if rr.Code != 200 {
+		t.Fatalf("saved-mode default test status = %d", rr.Code)
+	}
+	out = struct {
+		OK      bool `json:"ok"`
+		Passed  int  `json:"passed"`
+		Results []struct {
+			Model string `json:"model"`
+			OK    bool   `json:"ok"`
+		} `json:"results"`
+	}{}
+	if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Results) != 2 || out.Passed != 2 {
+		t.Fatalf("saved-mode default run should include disabled models: %+v", out)
+	}
+
+	// Unknown provider id is a 404.
+	if rr := post(`{"provider_id":"nope","test_models":["x"]}`); rr.Code != 404 {
+		t.Fatalf("unknown provider test status = %d", rr.Code)
+	}
+}

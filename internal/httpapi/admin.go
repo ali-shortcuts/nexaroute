@@ -26,6 +26,7 @@ var (
 
 type providerForm struct {
 	Provider       config.ProviderConfig `json:"provider"`
+	ProviderID     string                `json:"provider_id,omitempty"`
 	PreserveSecret bool                  `json:"preserve_secret"`
 	TestModels     []string              `json:"test_models,omitempty"`
 }
@@ -310,27 +311,45 @@ func (s *Server) adminProviderTest(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 400, "invalid JSON: "+err.Error())
 		return
 	}
-	if in.PreserveSecret {
-		mergeExistingSecret(s.currentConfig(), &in.Provider)
+	p := in.Provider
+	savedMode := strings.TrimSpace(in.ProviderID) != ""
+	if savedMode {
+		// Saved-provider mode: probe the stored configuration (with its real
+		// resolved credentials) without the caller re-sending the provider.
+		// Used by the Models table quick test and for re-testing disabled
+		// models before re-enabling them.
+		cfg := s.currentConfig()
+		idx := cfg.ProviderIndex(in.ProviderID)
+		if idx < 0 {
+			errorJSON(w, 404, "provider not found")
+			return
+		}
+		p = cfg.Providers[idx]
+	} else {
+		if in.PreserveSecret {
+			mergeExistingSecret(s.currentConfig(), &p)
+		}
+		normalizeProvider(&p)
 	}
-	normalizeProvider(&in.Provider)
-	if in.Provider.ID == "" || in.Provider.BaseURL == "" {
+	if p.ID == "" || p.BaseURL == "" {
 		errorJSON(w, 400, "provider id and base_url are required")
 		return
 	}
-	if in.Provider.Type != "openai_compatible" && in.Provider.Type != "anthropic_compatible" {
+	if p.Type != "openai_compatible" && p.Type != "anthropic_compatible" {
 		errorJSON(w, 400, "unsupported provider type")
 		return
 	}
-	a, err := providers.NewAdapter(in.Provider, 10*time.Second)
+	a, err := providers.NewAdapter(p, 10*time.Second)
 	if err != nil {
 		errorJSON(w, 400, err.Error())
 		return
 	}
 	models := uniqueStrings(in.TestModels)
 	if len(models) == 0 {
-		for _, m := range in.Provider.Models {
-			if m.Enabled {
+		for _, m := range p.Models {
+			if savedMode || m.Enabled {
+				// Saved mode intentionally includes disabled models so the
+				// operator can verify them before re-enabling.
 				models = append(models, m.Model)
 			}
 		}
@@ -352,7 +371,7 @@ func (s *Server) adminProviderTest(w http.ResponseWriter, r *http.Request) {
 
 	results := make([]testResult, len(models))
 	var wg sync.WaitGroup
-	limit := in.Provider.MaxConcurrency
+	limit := p.MaxConcurrency
 	if limit < 1 || limit > 32 {
 		limit = 16
 	}
