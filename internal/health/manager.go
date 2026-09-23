@@ -103,17 +103,62 @@ func normalizeScopes(s State, now time.Time) State {
 	return s
 }
 
-func (m *Manager) Get(id string) State {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+func stateNeedsNormalization(s State, now time.Time) bool {
+	if s.Status == Cooldown && !s.CooldownUntil.IsZero() && now.After(s.CooldownUntil) {
+		return true
+	}
+	for _, st := range s.Scopes {
+		if st.Status == Cooldown && !st.CooldownUntil.IsZero() && now.After(st.CooldownUntil) {
+			return true
+		}
+	}
+	return false
+}
+
+func scopesReadyState(s State, scopes []string) bool {
+	for _, scope := range scopes {
+		if st, ok := s.Scopes[scope]; ok && st.Status == Cooldown {
+			return false
+		}
+	}
+	return true
+}
+
+func (m *Manager) GetWithScopes(id string, scopes []string) (State, bool) {
+	now := time.Now()
+	m.mu.RLock()
 	s, ok := m.states[id]
 	if !ok {
+		m.mu.RUnlock()
 		s = State{Deployment: id, Status: Unknown}
+		return s, true
 	}
-	now := time.Now()
+	if !stateNeedsNormalization(s, now) {
+		out := cloneState(s)
+		ready := scopesReadyState(s, scopes)
+		m.mu.RUnlock()
+		return out, ready
+	}
+	m.mu.RUnlock()
+
+	m.mu.Lock()
+	s, ok = m.states[id]
+	if !ok {
+		m.mu.Unlock()
+		s = State{Deployment: id, Status: Unknown}
+		return s, true
+	}
 	s = normalizeScopes(normalizeGlobal(s, now), now)
 	m.states[id] = s
-	return cloneState(s)
+	out := cloneState(s)
+	ready := scopesReadyState(s, scopes)
+	m.mu.Unlock()
+	return out, ready
+}
+
+func (m *Manager) Get(id string) State {
+	s, _ := m.GetWithScopes(id, nil)
+	return s
 }
 
 func updateEWMA(s *State, latency time.Duration) {
@@ -311,35 +356,8 @@ func (m *Manager) ScopesReady(id string, scopes []string) bool {
 	if len(scopes) == 0 {
 		return true
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	s := m.states[id]
-	now := time.Now()
-	changed := false
-	for _, scope := range scopes {
-		st, ok := s.Scopes[scope]
-		if !ok {
-			continue
-		}
-		if st.Status == Cooldown && !st.CooldownUntil.IsZero() && now.After(st.CooldownUntil) {
-			st.Status = Unknown
-			st.ConsecutiveFailures = 0
-			st.LastError = ""
-			st.CooldownUntil = time.Time{}
-			s.Scopes[scope] = st
-			changed = true
-		}
-		if st.Status == Cooldown {
-			if changed {
-				m.states[id] = s
-			}
-			return false
-		}
-	}
-	if changed {
-		m.states[id] = s
-	}
-	return true
+	_, ready := m.GetWithScopes(id, scopes)
+	return ready
 }
 
 func (m *Manager) Invalidate(id string) {
