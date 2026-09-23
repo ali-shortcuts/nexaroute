@@ -441,3 +441,86 @@ func TestRecoveryWorkersRetryAndReturnModelToHealthy(t *testing.T) {
 	}
 	t.Fatalf("model did not recover: calls=%d state=%+v", calls.Load(), hm.Get("p/m"))
 }
+
+func TestReloadCancelsDelayedRecoveryAndPreventsStaleTimerABA(t *testing.T) {
+	cfg := config.Default()
+	cfg.Probe.Enabled = true
+	cfg.Providers = []config.ProviderConfig{{
+		ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "http://example.invalid",
+		AuthMode: "none", Enabled: true,
+		Models: []config.ModelConfig{{ID: "m", Model: "m", Enabled: true, Weight: 1}},
+	}}
+	cfg.ApplyDefaults()
+	hm := health.New(cfg.Routing.FailureThreshold, cfg.Cooldown())
+	reg, err := providers.NewRegistry(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt := router.New(cfg, hm)
+	e := New(cfg, reg, rt, hm, events.New(20))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	e.setRunContext(ctx)
+
+	e.recoveryMu.Lock()
+	e.recovering["p/m"] = true
+	e.recoveryMu.Unlock()
+	e.scheduleRecovery(ctx, recoveryTask{id: "p/m", attempt: 1}, 40*time.Millisecond)
+
+	legacy := cfg
+	legacy.Routing.Strategy = "adaptive"
+	e.Reload(legacy)
+
+	ready := cfg
+	e.Reload(ready)
+	e.recoveryMu.Lock()
+	e.recovering["p/m"] = true
+	e.recoveryMu.Unlock()
+
+	time.Sleep(80 * time.Millisecond)
+	if got := len(e.recoveryQueue); got != 0 {
+		t.Fatalf("stale timer re-enqueued an old recovery task: queue=%d", got)
+	}
+	e.recoveryMu.Lock()
+	_, hasTimer := e.recoveryTimers["p/m"]
+	e.recoveryMu.Unlock()
+	if hasTimer {
+		t.Fatal("stale delayed recovery timer survived strategy reset")
+	}
+}
+
+func TestClearRecoveringStopsOwnedDelayedTimer(t *testing.T) {
+	cfg := config.Default()
+	hm := health.New(cfg.Routing.FailureThreshold, cfg.Cooldown())
+	reg, err := providers.NewRegistry(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt := router.New(cfg, hm)
+	e := New(cfg, reg, rt, hm, events.New(20))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	e.setRunContext(ctx)
+
+	e.recoveryMu.Lock()
+	e.recovering["x"] = true
+	e.recoveryMu.Unlock()
+	e.scheduleRecovery(ctx, recoveryTask{id: "x", attempt: 1}, time.Hour)
+
+	e.recoveryMu.Lock()
+	timer := e.recoveryTimers["x"]
+	e.recoveryMu.Unlock()
+	if timer == nil {
+		t.Fatal("expected owned recovery timer")
+	}
+	e.clearRecovering("x")
+
+	e.recoveryMu.Lock()
+	_, tracked := e.recovering["x"]
+	_, hasTimer := e.recoveryTimers["x"]
+	_, hasToken := e.recoveryTokens["x"]
+	e.recoveryMu.Unlock()
+	if tracked || hasTimer || hasToken {
+		t.Fatalf("recovery cleanup incomplete: tracked=%v timer=%v token=%v", tracked, hasTimer, hasToken)
+	}
+}
