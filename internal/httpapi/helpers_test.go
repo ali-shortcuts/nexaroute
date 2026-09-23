@@ -418,3 +418,26 @@ func TestSuccessfulResponseEnvelopeValidatorsRejectEmptyShapes(t *testing.T) {
 		t.Fatalf("valid Anthropic envelope rejected: %v", err)
 	}
 }
+
+func TestRetryAfterDurationIsBoundedAndOverflowSafe(t *testing.T) {
+	max := 60 * time.Second
+	cases := []struct {
+		value string
+		want  time.Duration
+	}{
+		{"5", 5 * time.Second},
+		{"3600", max},
+		{"999999999999999999999999999", 30 * time.Second},
+		{"", 30 * time.Second},
+	}
+	for _, tc := range cases {
+		h := http.Header{"Retry-After": []string{tc.value}}
+		if got := retryAfterDuration(h, max); got != tc.want {
+			t.Fatalf("Retry-After %q => %s want %s", tc.value, got, tc.want)
+		}
+	}
+	future := time.Now().Add(24 * time.Hour).UTC().Format(http.TimeFormat)
+	if got := retryAfterDuration(http.Header{"Retry-After": []string{future}}, max); got != max {
+		t.Fatalf("future HTTP-date => %s want %s", got, max)
+	}
+}

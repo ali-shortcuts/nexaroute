@@ -120,23 +120,37 @@ func hardCooldownStatus(code int) bool {
 }
 
 func retryAfterDuration(h http.Header, max time.Duration) time.Duration {
-	d := time.Duration(0)
+	fallback := 30 * time.Second
+	if max > 0 && fallback > max {
+		fallback = max
+	}
 	v := strings.TrimSpace(h.Get("Retry-After"))
-	if sec, err := strconv.Atoi(v); err == nil && sec > 0 {
-		d = time.Duration(sec) * time.Second
+	if v == "" {
+		return fallback
 	}
-	if d == 0 && v != "" {
-		if t, err := http.ParseTime(v); err == nil && t.After(time.Now()) {
-			d = time.Until(t)
+	if sec, err := strconv.ParseInt(v, 10, 64); err == nil && sec > 0 {
+		if max > 0 {
+			maxSeconds := int64(max / time.Second)
+			if maxSeconds < 1 || sec >= maxSeconds {
+				return max
+			}
 		}
+		if sec > int64((time.Duration(1<<63-1))/time.Second) {
+			if max > 0 {
+				return max
+			}
+			return fallback
+		}
+		return time.Duration(sec) * time.Second
 	}
-	if d <= 0 {
-		d = 30 * time.Second
+	if t, err := http.ParseTime(v); err == nil && t.After(time.Now()) {
+		d := time.Until(t)
+		if max > 0 && d > max {
+			return max
+		}
+		return d
 	}
-	if max > 0 && d > max {
-		d = max
-	}
-	return d
+	return fallback
 }
 
 func redactProviderBody(p config.ProviderConfig, b []byte) []byte {
