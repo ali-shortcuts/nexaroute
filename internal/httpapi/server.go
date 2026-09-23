@@ -27,16 +27,16 @@ import (
 var webFS embed.FS
 
 type Server struct {
-	applyMu      sync.Mutex
-	runtimeMu    sync.RWMutex
-	cfg          config.Config
-	configPath   string
-	reg          *providers.Registry
-	rt           *router.Router
-	hm           *health.Manager
-	bus          *events.Bus
-	probe        *probe.Engine
-	log          *log.Logger
+	applyMu         sync.Mutex
+	runtimeMu       sync.RWMutex
+	cfg             config.Config
+	configPath      string
+	reg             *providers.Registry
+	rt              *router.Router
+	hm              *health.Manager
+	bus             *events.Bus
+	probe           *probe.Engine
+	log             *log.Logger
 	requestSeq      atomic.Uint64
 	requestTotal    atomic.Uint64
 	inflight        atomic.Int64
@@ -308,7 +308,7 @@ func (s *Server) releaseDataPlane() {
 func (s *Server) rejectOverloaded(w http.ResponseWriter, r *http.Request, requestID string) {
 	s.overloadRejects.Add(1)
 	s.bus.Add(events.Event{
-		RequestID: requestID,
+		RequestID:  requestID,
 		Kind:       "gateway_overloaded",
 		Message:    "global data-plane admission limit reached",
 		ErrorType:  "gateway_overloaded",
