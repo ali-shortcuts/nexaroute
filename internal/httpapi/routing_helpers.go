@@ -3,12 +3,17 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash/fnv"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 	"unicode/utf8"
 
@@ -337,4 +342,57 @@ func (s *Server) recordRouteSuccess(req router.Requirement, deploymentID string,
 	s.hm.RecordSuccess(deploymentID, latency)
 	s.hm.RecordScopeSuccess(deploymentID, req.Scopes())
 	s.rt.ObserveSession(req, deploymentID)
+}
+
+// classifyTransportError maps a transport-layer failure to a precise event
+// error type. Client cancellation is reported as caller_cancelled (upstream).
+// Unrecognized failures keep the historical provider_connection_failed type.
+func classifyTransportError(err error) string {
+	if err == nil {
+		return ""
+	}
+	if errors.Is(err, context.Canceled) {
+		return "caller_cancelled"
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "provider_timeout"
+	}
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return "provider_timeout"
+	}
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		if dnsErr.IsNotFound {
+			return "dns_not_found"
+		}
+		return "dns_failure"
+	}
+	if errors.Is(err, syscall.ECONNREFUSED) {
+		return "connection_refused"
+	}
+	if errors.Is(err, syscall.ECONNRESET) {
+		return "connection_reset"
+	}
+	if errors.Is(err, syscall.ECONNABORTED) {
+		return "connection_aborted"
+	}
+	if errors.Is(err, syscall.EHOSTUNREACH) || errors.Is(err, syscall.ENETUNREACH) {
+		return "network_unreachable"
+	}
+	var x509Hostname x509.HostnameError
+	if errors.As(err, &x509Hostname) {
+		return "tls_failure"
+	}
+	var x509Authority x509.UnknownAuthorityError
+	if errors.As(err, &x509Authority) {
+		return "tls_failure"
+	}
+	var tlsRecord tls.RecordHeaderError
+	if errors.As(err, &tlsRecord) {
+		return "tls_failure"
+	}
+	// tls.CertificateVerificationError wraps an x509 error and supports
+	// Unwrap, so the x509 checks above already classify it as tls_failure.
+	return "provider_connection_failed"
 }

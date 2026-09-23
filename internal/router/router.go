@@ -191,7 +191,7 @@ func capacityPressure(l ProviderLoad) float64 {
 	return p
 }
 
-func (r *Router) scored(d Deployment, hs health.State, req Requirement, cfg config.Config) Scored {
+func scored(d Deployment, hs health.State, req Requirement, cfg config.Config) Scored {
 	score := 100.0
 	switch hs.Status {
 	case health.Healthy:
@@ -217,6 +217,17 @@ func (r *Router) scored(d Deployment, hs health.State, req Requirement, cfg conf
 }
 
 func (r *Router) eligibleDeployment(d Deployment, req Requirement, cfg config.Config, ignoreModel bool, scopes []string) (Scored, bool) {
+	healthScopes := []string(nil)
+	if cfg.Routing.Strategy == "ready_mesh" {
+		healthScopes = scopes
+	}
+	hs, scopesReady := r.health.GetWithScopes(d.ID, healthScopes)
+	return r.eligibleWithScoped(health.ScopedState{State: hs, ScopesReady: scopesReady}, d, req, cfg, ignoreModel, scopes)
+}
+
+// eligibleWithScoped applies the eligibility policy to a pre-resolved health
+// snapshot so batched and single lookups share one canonical implementation.
+func (r *Router) eligibleWithScoped(scoped health.ScopedState, d Deployment, req Requirement, cfg config.Config, ignoreModel bool, scopes []string) (Scored, bool) {
 	if !ignoreModel && !matchesModel(d, req.Model) {
 		return Scored{}, false
 	}
@@ -226,22 +237,18 @@ func (r *Router) eligibleDeployment(d Deployment, req Requirement, cfg config.Co
 	if req.Tools && !d.Capabilities.Tools || req.Vision && !d.Capabilities.Vision || req.Streaming && !d.Capabilities.Streaming || req.Reasoning && !d.Capabilities.Reasoning {
 		return Scored{}, false
 	}
-	healthScopes := []string(nil)
-	if cfg.Routing.Strategy == "ready_mesh" {
-		healthScopes = scopes
-	}
-	hs, scopesReady := r.health.GetWithScopes(d.ID, healthScopes)
+	hs := scoped.State
 	if IsReadyStrategy(cfg.Routing.Strategy) {
 		if hs.Status != health.Healthy {
 			return Scored{}, false
 		}
-		if cfg.Routing.Strategy == "ready_mesh" && !scopesReady {
+		if cfg.Routing.Strategy == "ready_mesh" && !scoped.ScopesReady {
 			return Scored{}, false
 		}
 	} else if hs.Status == health.Cooldown {
 		return Scored{}, false
 	}
-	return r.scored(d, hs, req, cfg), true
+	return scored(d, hs, req, cfg), true
 }
 
 func (r *Router) affinityBucket(req Requirement) string {
@@ -401,9 +408,25 @@ func (r *Router) Candidates(req Requirement) []Scored {
 	}
 	r.mu.RUnlock()
 	scopes := req.Scopes()
+	// Virtual routes (auto/claude-auto) evaluate the whole registry; resolve
+	// every health state under one lock instead of one lock per deployment.
+	scopedStates := []health.ScopedState(nil)
+	if len(source) > 64 {
+		ids := make([]string, len(source))
+		for i, d := range source {
+			ids[i] = d.ID
+		}
+		scopedStates = r.health.GetManyScoped(ids, scopes)
+	}
 	build := func(in []Deployment, ignore bool) []Scored {
 		out := make([]Scored, 0, len(in))
-		for _, d := range in {
+		for i, d := range in {
+			if scopedStates != nil && len(scopedStates) == len(source) && i < len(scopedStates) && len(in) == len(source) {
+				if sc, ok := r.eligibleWithScoped(scopedStates[i], d, req, cfg, ignore, scopes); ok {
+					out = append(out, sc)
+				}
+				continue
+			}
 			if s, ok := r.eligibleDeployment(d, req, cfg, ignore, scopes); ok {
 				out = append(out, s)
 			}
@@ -412,6 +435,7 @@ func (r *Router) Candidates(req Requirement) []Scored {
 	}
 	out := build(source, false)
 	if len(out) == 0 && !known && cfg.Routing.FallbackOnUnknownModel {
+		scopedStates = nil // fallback list is not position-aligned with the prefetch
 		out = build(all, true)
 	}
 	if len(out) <= 1 {
@@ -560,4 +584,14 @@ func (r *Router) Readiness(strategy string) (total, usable int) {
 		}
 	}
 	return total, usable
+}
+
+// PinnedDeployment reports the deployment currently pinned to the request's
+// session bucket, if any. Used by the route preview surface; routing itself
+// never trusts a pin that is not also an eligible scored candidate.
+func (r *Router) PinnedDeployment(req Requirement) string {
+	r.mu.RLock()
+	cfg := r.cfg
+	r.mu.RUnlock()
+	return r.pinned(req, cfg)
 }

@@ -124,6 +124,69 @@ func scopesReadyState(s State, scopes []string) bool {
 	return true
 }
 
+// ScopedState pairs a health state snapshot with its scope readiness result.
+// In batched results State.Scopes is intentionally stripped (nil): the
+// readiness verdict was already computed under the lock, and dropping the
+// per-deployment scope maps keeps large virtual-route scans allocation-free.
+// Callers that need per-scope detail must use GetWithScopes instead.
+type ScopedState struct {
+	State       State
+	ScopesReady bool
+}
+
+// GetManyScoped resolves the health state for many deployment IDs under a
+// single read lock, applying exactly the same normalization and scope
+// readiness semantics as GetWithScopes. Result[i] corresponds to ids[i];
+// missing IDs come back Unknown/ready. In batched results State.Scopes is
+// intentionally stripped (nil): the readiness verdict was already computed
+// under the lock, and dropping the per-deployment scope maps keeps large
+// virtual-route scans allocation-light. Callers that need per-scope detail
+// must use GetWithScopes instead.
+func (m *Manager) GetManyScoped(ids []string, scopes []string) []ScopedState {
+	now := time.Now()
+	m.mu.RLock()
+	out := make([]ScopedState, len(ids))
+	var pending []int
+	for i, id := range ids {
+		s, ok := m.states[id]
+		if !ok {
+			out[i] = ScopedState{State: State{Deployment: id, Status: Unknown}, ScopesReady: true}
+			continue
+		}
+		if stateNeedsNormalization(s, now) {
+			pending = append(pending, i)
+			s2 := s
+			s2.Scopes = nil
+			out[i] = ScopedState{State: s2}
+			continue
+		}
+		ready := scopesReadyState(s, scopes)
+		s2 := s
+		s2.Scopes = nil
+		out[i] = ScopedState{State: s2, ScopesReady: ready}
+	}
+	m.mu.RUnlock()
+
+	if len(pending) > 0 {
+		m.mu.Lock()
+		for _, i := range pending {
+			s, ok := m.states[ids[i]]
+			if !ok {
+				out[i] = ScopedState{State: State{Deployment: ids[i], Status: Unknown}, ScopesReady: true}
+				continue
+			}
+			s = normalizeScopes(normalizeGlobal(s, now), now)
+			m.states[ids[i]] = s
+			ready := scopesReadyState(s, scopes)
+			s2 := s
+			s2.Scopes = nil
+			out[i] = ScopedState{State: s2, ScopesReady: ready}
+		}
+		m.mu.Unlock()
+	}
+	return out
+}
+
 func (m *Manager) GetWithScopes(id string, scopes []string) (State, bool) {
 	now := time.Now()
 	m.mu.RLock()

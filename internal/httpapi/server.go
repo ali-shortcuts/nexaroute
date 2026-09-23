@@ -342,6 +342,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/admin/api/guardrails/test", s.adminGuardrailsTest)
 	mux.HandleFunc("/admin/api/usage", s.adminUsage)
 	mux.HandleFunc("/admin/api/requests", s.adminRequests)
+	mux.HandleFunc("/admin/api/route-preview", s.adminRoutePreview)
 	mux.HandleFunc("/admin/api/usage/reset", s.adminUsage)
 
 	sub, _ := fs.Sub(webFS, "web")
