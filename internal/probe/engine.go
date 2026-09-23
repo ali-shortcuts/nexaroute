@@ -28,7 +28,7 @@ type Result struct {
 
 const (
 	recoveryWorkerCount = 64
-	maxRecoveryQueue     = 20000
+	maxRecoveryQueue    = 20000
 )
 
 type recoveryTask struct {
@@ -64,15 +64,15 @@ type Engine struct {
 
 func New(cfg config.Config, reg *providers.Registry, rt *router.Router, hm *health.Manager, bus *events.Bus) *Engine {
 	return &Engine{
-		cfg:          cfg,
-		reg:          reg,
-		rt:           rt,
-		hm:           hm,
-		bus:          bus,
-		trigger:      make(chan struct{}, 1),
-		recovering:   map[string]bool{},
+		cfg:           cfg,
+		reg:           reg,
+		rt:            rt,
+		hm:            hm,
+		bus:           bus,
+		trigger:       make(chan struct{}, 1),
+		recovering:    map[string]bool{},
 		recoveryQueue: make(chan recoveryTask, maxRecoveryQueue),
-		limitChanged: make(chan struct{}),
+		limitChanged:  make(chan struct{}),
 	}
 }
 
@@ -587,4 +587,3 @@ func (e *Engine) runOnce(ctx context.Context, force bool) Result {
 	result.DurationMS = time.Since(start).Milliseconds()
 	return result
 }
-
