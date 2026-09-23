@@ -198,3 +198,38 @@ func TestValidateAllowsNamespacedUpstreamModelAndAlias(t *testing.T) {
 		t.Fatalf("namespaced upstream model/alias should remain valid: %v", err)
 	}
 }
+
+func TestNegativeValuesAreRejectedInsteadOfDefaulted(t *testing.T) {
+	cases := []struct {
+		name string
+		edit func(*Config)
+	}{
+		{"max inflight", func(c *Config) { c.Routing.MaxInflightRequests = -1 }},
+		{"max attempts", func(c *Config) { c.Routing.MaxAttempts = -1 }},
+		{"session ttl", func(c *Config) { c.Routing.SessionTTLSeconds = -1 }},
+		{"probe concurrency", func(c *Config) { c.Probe.Concurrency = -1 }},
+		{"probe timeout", func(c *Config) { c.Probe.TimeoutMS = -1 }},
+		{"provider concurrency", func(c *Config) {
+			c.Providers = []ProviderConfig{{
+				ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "https://example.com",
+				Enabled: true, MaxConcurrency: -1,
+			}}
+		}},
+		{"model weight", func(c *Config) {
+			c.Providers = []ProviderConfig{{
+				ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "https://example.com",
+				Enabled: true, Models: []ModelConfig{{ID: "m", Model: "m", Enabled: true, Weight: -1}},
+			}}
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := Default()
+			tc.edit(&cfg)
+			cfg.ApplyDefaults()
+			if err := cfg.Validate(); err == nil {
+				t.Fatal("negative value should be rejected, not silently defaulted")
+			}
+		})
+	}
+}
