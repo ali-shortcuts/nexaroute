@@ -94,9 +94,9 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 	deployments := s.rt.All()
 	s.runtimeMu.RUnlock()
 	writeJSON(w, 200, map[string]any{
-		"deployments":   deployments,
-		"health":        s.hm.Snapshot(),
-		"events":        s.bus.Snapshot(),
+		"deployments":    deployments,
+		"health":         s.hm.Snapshot(),
+		"events":         s.bus.Snapshot(),
 		"provider_stats": s.reg.Stats(),
 		"session_count":  s.rt.SessionCount(),
 		"config": map[string]any{
