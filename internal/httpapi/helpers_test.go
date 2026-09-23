@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ali-shortcuts/nexaroute/internal/config"
 )
 
 func TestCapabilityDetectionIgnoresWordsInsideUserText(t *testing.T) {
@@ -177,4 +179,44 @@ func TestTranslatedStreamsStopOnClientWriteFailure(t *testing.T) {
 			t.Fatalf("unexpected stream error: %v", err)
 		}
 	})
+}
+
+func TestDataPlaneAdmissionIsBoundedAndRecoverable(t *testing.T) {
+	s := &Server{cfg: config.Config{Routing: config.RoutingConfig{MaxInflightRequests: 2}}}
+	if !s.tryAcquireDataPlane() || !s.tryAcquireDataPlane() {
+		t.Fatal("first two admissions should succeed")
+	}
+	if s.tryAcquireDataPlane() {
+		t.Fatal("third admission should be rejected")
+	}
+	s.releaseDataPlane()
+	if !s.tryAcquireDataPlane() {
+		t.Fatal("capacity should recover after release")
+	}
+	s.releaseDataPlane()
+	s.releaseDataPlane()
+	if got := s.inflight.Load(); got != 0 {
+		t.Fatalf("inflight=%d want 0", got)
+	}
+}
+
+func TestDataPlaneAdmissionOnlyCoversExpensivePostEndpoints(t *testing.T) {
+	cases := []struct {
+		method string
+		path   string
+		want   bool
+	}{
+		{http.MethodPost, "/v1/messages", true},
+		{http.MethodPost, "/v1/messages/count_tokens", true},
+		{http.MethodPost, "/v1/chat/completions", true},
+		{http.MethodGet, "/v1/models", false},
+		{http.MethodGet, "/healthz", false},
+		{http.MethodPost, "/admin/api/probe", false},
+	}
+	for _, tc := range cases {
+		req := httptest.NewRequest(tc.method, tc.path, nil)
+		if got := isDataPlaneRequest(req); got != tc.want {
+			t.Fatalf("%s %s admission=%v want %v", tc.method, tc.path, got, tc.want)
+		}
+	}
 }

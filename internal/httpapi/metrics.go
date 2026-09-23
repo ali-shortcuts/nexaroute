@@ -29,6 +29,16 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintln(w, "# TYPE nexaroute_http_requests_total counter")
 	fmt.Fprintf(w, "nexaroute_http_requests_total %d\n", s.requestTotal.Load())
 
+	fmt.Fprintln(w, "# HELP nexaroute_inflight_requests Data-plane requests currently admitted by the gateway.")
+	fmt.Fprintln(w, "# TYPE nexaroute_inflight_requests gauge")
+	fmt.Fprintf(w, "nexaroute_inflight_requests %d\n", s.inflight.Load())
+	fmt.Fprintln(w, "# HELP nexaroute_inflight_request_limit Global data-plane admission limit.")
+	fmt.Fprintln(w, "# TYPE nexaroute_inflight_request_limit gauge")
+	fmt.Fprintf(w, "nexaroute_inflight_request_limit %d\n", s.admissionLimit())
+	fmt.Fprintln(w, "# HELP nexaroute_overload_rejections_total Data-plane requests rejected because the gateway was at capacity.")
+	fmt.Fprintln(w, "# TYPE nexaroute_overload_rejections_total counter")
+	fmt.Fprintf(w, "nexaroute_overload_rejections_total %d\n", s.overloadRejects.Load())
+
 	fmt.Fprintln(w, "# HELP nexaroute_deployments_total Configured enabled model deployments.")
 	fmt.Fprintln(w, "# TYPE nexaroute_deployments_total gauge")
 	fmt.Fprintf(w, "nexaroute_deployments_total %d\n", len(ds))

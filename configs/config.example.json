@@ -11,6 +11,7 @@
     "session_ttl_seconds": 3600,
     "p2c_window": 8,
     "max_attempts": 4,
+    "max_inflight_requests": 128,
     "failure_threshold": 5,
     "cooldown_seconds": 1800,
     "capability_failure_threshold": 2,

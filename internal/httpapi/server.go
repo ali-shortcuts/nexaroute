@@ -37,8 +37,10 @@ type Server struct {
 	bus          *events.Bus
 	probe        *probe.Engine
 	log          *log.Logger
-	requestSeq   atomic.Uint64
-	requestTotal atomic.Uint64
+	requestSeq      atomic.Uint64
+	requestTotal    atomic.Uint64
+	inflight        atomic.Int64
+	overloadRejects atomic.Uint64
 }
 
 func New(cfg config.Config, configPath string, reg *providers.Registry, rt *router.Router, hm *health.Manager, bus *events.Bus, pe *probe.Engine, l *log.Logger) *Server {
@@ -261,6 +263,65 @@ func (s *Server) Handler() http.Handler {
 	return s.middleware(mux)
 }
 
+
+func isDataPlaneRequest(r *http.Request) bool {
+	if r.Method != http.MethodPost {
+		return false
+	}
+	switch r.URL.Path {
+	case "/v1/messages", "/v1/messages/count_tokens", "/v1/chat/completions":
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *Server) admissionLimit() int64 {
+	s.runtimeMu.RLock()
+	limit := s.cfg.Routing.MaxInflightRequests
+	s.runtimeMu.RUnlock()
+	if limit < 1 {
+		limit = 128
+	}
+	return int64(limit)
+}
+
+func (s *Server) tryAcquireDataPlane() bool {
+	limit := s.admissionLimit()
+	for {
+		current := s.inflight.Load()
+		if current >= limit {
+			return false
+		}
+		if s.inflight.CompareAndSwap(current, current+1) {
+			return true
+		}
+	}
+}
+
+func (s *Server) releaseDataPlane() {
+	if n := s.inflight.Add(-1); n < 0 {
+		s.inflight.Store(0)
+	}
+}
+
+func (s *Server) rejectOverloaded(w http.ResponseWriter, r *http.Request, requestID string) {
+	s.overloadRejects.Add(1)
+	s.bus.Add(events.Event{
+		RequestID: requestID,
+		Kind:       "gateway_overloaded",
+		Message:    "global data-plane admission limit reached",
+		ErrorType:  "gateway_overloaded",
+		StatusCode: http.StatusServiceUnavailable,
+	})
+	w.Header().Set("Retry-After", "1")
+	if r.URL.Path == "/v1/messages" || r.URL.Path == "/v1/messages/count_tokens" {
+		anthropicErrorJSON(w, http.StatusServiceUnavailable, "gateway is at capacity; retry shortly")
+		return
+	}
+	errorJSON(w, http.StatusServiceUnavailable, "gateway is at capacity; retry shortly")
+}
+
 func (s *Server) middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
@@ -288,6 +349,13 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 		if strings.HasPrefix(r.URL.Path, "/admin/api/") && !s.adminAuthorized(r) {
 			errorJSON(sw, http.StatusUnauthorized, "admin authorization required")
 			return
+		}
+		if isDataPlaneRequest(r) {
+			if !s.tryAcquireDataPlane() {
+				s.rejectOverloaded(sw, r, rid)
+				return
+			}
+			defer s.releaseDataPlane()
 		}
 		next.ServeHTTP(sw, r)
 	})

@@ -147,3 +147,11 @@ func TestValidateRejectsHeaderInjection(t *testing.T) {
 		t.Fatalf("header injection should fail validation, got %v", err)
 	}
 }
+
+func TestValidateRejectsUnsafeGlobalInflightLimit(t *testing.T) {
+	cfg := Default()
+	cfg.Routing.MaxInflightRequests = 10001
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "max_inflight_requests") {
+		t.Fatalf("expected max_inflight_requests validation error, got %v", err)
+	}
+}

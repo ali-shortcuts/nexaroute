@@ -35,6 +35,7 @@ type RoutingConfig struct {
 	SessionTTLSeconds          int     `json:"session_ttl_seconds"`
 	P2CWindow                  int     `json:"p2c_window"`
 	MaxAttempts                int     `json:"max_attempts"`
+	MaxInflightRequests        int     `json:"max_inflight_requests"`
 	FailureThreshold           int     `json:"failure_threshold"`
 	CooldownSeconds            int     `json:"cooldown_seconds"`
 	CapabilityFailureThreshold int     `json:"capability_failure_threshold"`
@@ -166,7 +167,7 @@ func Default() Config {
 		Admin:  AdminConfig{BindLocalOnly: true},
 		Routing: RoutingConfig{
 			Strategy: "ready_mesh", FallbackOnUnknownModel: true, SessionAffinity: true, SessionTTLSeconds: 3600, P2CWindow: 8,
-			MaxAttempts: 4, FailureThreshold: 5, CooldownSeconds: 1800,
+			MaxAttempts: 4, MaxInflightRequests: 128, FailureThreshold: 5, CooldownSeconds: 1800,
 			CapabilityFailureThreshold: 2, CapabilityCooldownSeconds: 300,
 			RequestTimeoutMS: 120000, LatencyWeight: 0.015, FailureWeight: 25, CapacityWeight: 35,
 			RetryBackoffMS: 150, MaxRetryAfterSeconds: 60,
@@ -229,6 +230,9 @@ func (c *Config) ApplyDefaults() {
 	}
 	if c.Routing.MaxAttempts <= 0 {
 		c.Routing.MaxAttempts = 4
+	}
+	if c.Routing.MaxInflightRequests <= 0 {
+		c.Routing.MaxInflightRequests = 128
 	}
 	if c.Routing.FailureThreshold <= 0 {
 		c.Routing.FailureThreshold = 5
@@ -351,6 +355,9 @@ func (c Config) Validate() error {
 	}
 	if c.Routing.MaxAttempts <= 0 || c.Routing.MaxAttempts > maxRoutingAttempts {
 		return fmt.Errorf("routing.max_attempts must be between 1 and %d", maxRoutingAttempts)
+	}
+	if c.Routing.MaxInflightRequests < 1 || c.Routing.MaxInflightRequests > 10000 {
+		return errors.New("routing.max_inflight_requests must be between 1 and 10000")
 	}
 	if c.Routing.SessionTTLSeconds > 30*24*60*60 {
 		return errors.New("routing.session_ttl_seconds must be <= 2592000")
