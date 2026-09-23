@@ -18,9 +18,20 @@ import (
 type Config struct {
 	Listen    string           `json:"listen"`
 	Admin     AdminConfig      `json:"admin"`
+	Logging   LoggingConfig    `json:"logging"`
 	Routing   RoutingConfig    `json:"routing"`
 	Probe     ProbeConfig      `json:"probe"`
 	Providers []ProviderConfig `json:"providers"`
+}
+
+type LoggingConfig struct {
+	File                     string `json:"file"`
+	MaxSizeMB                int    `json:"max_size_mb"`
+	MaxBackups               int    `json:"max_backups"`
+	AccessMode               string `json:"access_mode"` // off | errors | sampled | all
+	SuccessSampleEvery       int    `json:"success_sample_every"`
+	SlowRequestMS            int    `json:"slow_request_ms"`
+	ConsoleMaxLinesPerMinute int    `json:"console_max_lines_per_minute"`
 }
 
 type AdminConfig struct {
@@ -183,7 +194,12 @@ func validHeaderValue(s string) bool {
 func Default() Config {
 	return Config{
 		Listen: "127.0.0.1:8080",
-		Admin:  AdminConfig{BindLocalOnly: true},
+		Admin: AdminConfig{BindLocalOnly: true},
+		Logging: LoggingConfig{
+			File: "auto", MaxSizeMB: 32, MaxBackups: 3,
+			AccessMode: "sampled", SuccessSampleEvery: 1000, SlowRequestMS: 5000,
+			ConsoleMaxLinesPerMinute: 30,
+		},
 		Routing: RoutingConfig{
 			Strategy: "ready_mesh", FallbackOnUnknownModel: true, SessionAffinity: true, SessionTTLSeconds: 3600, P2CWindow: 8,
 			MaxAttempts: 4, MaxInflightRequests: 128, FailureThreshold: 5, CooldownSeconds: 1800,
@@ -236,12 +252,39 @@ func (c *Config) ApplyEnvOverrides() error {
 		}
 		c.Admin.BindLocalOnly = b
 	}
+	if v, ok := os.LookupEnv("NEXAROUTE_LOG_FILE"); ok {
+		c.Logging.File = strings.TrimSpace(v)
+		if c.Logging.File == "" {
+			c.Logging.File = "off"
+		}
+	}
 	return nil
 }
 
 func (c *Config) ApplyDefaults() {
 	if c.Listen == "" {
 		c.Listen = "127.0.0.1:8080"
+	}
+	if c.Logging.File == "" {
+		c.Logging.File = "auto"
+	}
+	if c.Logging.MaxSizeMB == 0 {
+		c.Logging.MaxSizeMB = 32
+	}
+	if c.Logging.MaxBackups == 0 {
+		c.Logging.MaxBackups = 3
+	}
+	if c.Logging.AccessMode == "" {
+		c.Logging.AccessMode = "sampled"
+	}
+	if c.Logging.SuccessSampleEvery == 0 {
+		c.Logging.SuccessSampleEvery = 1000
+	}
+	if c.Logging.SlowRequestMS == 0 {
+		c.Logging.SlowRequestMS = 5000
+	}
+	if c.Logging.ConsoleMaxLinesPerMinute == 0 {
+		c.Logging.ConsoleMaxLinesPerMinute = 30
 	}
 	if c.Routing.Strategy == "" {
 		c.Routing.Strategy = "ready_mesh"
@@ -352,6 +395,29 @@ func (c Config) Validate() error {
 	}
 	if _, _, err := net.SplitHostPort(c.Listen); err != nil {
 		return fmt.Errorf("listen must be host:port: %w", err)
+	}
+	if len(c.Logging.File) > maxURLBytes {
+		return errors.New("logging.file is too long")
+	}
+	if c.Logging.MaxSizeMB < 1 || c.Logging.MaxSizeMB > 1024 {
+		return errors.New("logging.max_size_mb must be between 1 and 1024")
+	}
+	if c.Logging.MaxBackups < 0 || c.Logging.MaxBackups > 20 {
+		return errors.New("logging.max_backups must be between 0 and 20")
+	}
+	switch c.Logging.AccessMode {
+	case "off", "errors", "sampled", "all":
+	default:
+		return errors.New("logging.access_mode must be off, errors, sampled, or all")
+	}
+	if c.Logging.SuccessSampleEvery < 1 || c.Logging.SuccessSampleEvery > 1_000_000 {
+		return errors.New("logging.success_sample_every must be between 1 and 1000000")
+	}
+	if c.Logging.SlowRequestMS < 0 || c.Logging.SlowRequestMS > 60*60*1000 {
+		return errors.New("logging.slow_request_ms must be between 0 and 3600000")
+	}
+	if c.Logging.ConsoleMaxLinesPerMinute < 0 || c.Logging.ConsoleMaxLinesPerMinute > 10000 {
+		return errors.New("logging.console_max_lines_per_minute must be between 0 and 10000")
 	}
 	if len(c.Providers) > maxProviders {
 		return fmt.Errorf("providers exceeds safe limit %d", maxProviders)
