@@ -263,7 +263,6 @@ func (s *Server) Handler() http.Handler {
 	return s.middleware(mux)
 }
 
-
 func isDataPlaneRequest(r *http.Request) bool {
 	if r.Method != http.MethodPost {
 		return false
