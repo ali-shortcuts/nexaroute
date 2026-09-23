@@ -420,7 +420,7 @@ func normalizeProvider(p *config.ProviderConfig) {
 		if p.Models[i].ID == "" {
 			p.Models[i].ID = slug(p.Models[i].Model)
 		}
-		if p.Models[i].Weight <= 0 {
+		if p.Models[i].Weight == 0 {
 			p.Models[i].Weight = 1
 		}
 	}
