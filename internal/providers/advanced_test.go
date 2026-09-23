@@ -2,10 +2,10 @@ package providers
 
 import (
 	"context"
-	"os"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
