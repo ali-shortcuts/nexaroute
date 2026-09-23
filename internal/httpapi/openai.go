@@ -227,10 +227,18 @@ func streamAnthropicToOpenAI(w http.ResponseWriter, resp *http.Response, model s
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("X-Accel-Buffering", "no")
 	fl, _ := w.(http.Flusher)
+	var writeErr error
 	emit := func(v any) {
-		b, _ := json.Marshal(v)
-		fmt.Fprintf(w, "data: %s\n\n", b)
-		if fl != nil {
+		if writeErr != nil {
+			return
+		}
+		b, err := json.Marshal(v)
+		if err != nil {
+			writeErr = err
+			return
+		}
+		_, writeErr = fmt.Fprintf(w, "data: %s\n\n", b)
+		if writeErr == nil && fl != nil {
 			fl.Flush()
 		}
 	}
@@ -297,7 +305,13 @@ func streamAnthropicToOpenAI(w http.ResponseWriter, resp *http.Response, model s
 			terminal = true
 		case "error":
 			emit(map[string]any{"error": env["error"]})
+			if writeErr != nil {
+				return writeErr
+			}
 			return fmt.Errorf("anthropic stream error")
+		}
+		if writeErr != nil {
+			return writeErr
 		}
 	}
 	if err := scanner.Err(); err != nil {
@@ -307,7 +321,12 @@ func streamAnthropicToOpenAI(w http.ResponseWriter, resp *http.Response, model s
 		return io.ErrUnexpectedEOF
 	}
 	emit(map[string]any{"id": completionID, "object": "chat.completion.chunk", "model": model, "choices": []any{map[string]any{"index": 0, "delta": map[string]any{}, "finish_reason": finish}}})
-	fmt.Fprint(w, "data: [DONE]\n\n")
+	if writeErr != nil {
+		return writeErr
+	}
+	if _, err := fmt.Fprint(w, "data: [DONE]\n\n"); err != nil {
+		return err
+	}
 	if fl != nil {
 		fl.Flush()
 	}
