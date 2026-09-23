@@ -44,10 +44,10 @@ type ProbeConfig struct {
 	IntervalSeconds   int  `json:"interval_seconds"`
 	ReadyLeaseSeconds int  `json:"ready_lease_seconds"`
 	TimeoutMS         int  `json:"timeout_ms"`
-	MaxTokens        int  `json:"max_tokens"`
-	Concurrency      int  `json:"concurrency"`
-	RecoveryAttempts int  `json:"recovery_attempts"`
-	RecoveryRetryMS  int  `json:"recovery_retry_ms"`
+	MaxTokens         int  `json:"max_tokens"`
+	Concurrency       int  `json:"concurrency"`
+	RecoveryAttempts  int  `json:"recovery_attempts"`
+	RecoveryRetryMS   int  `json:"recovery_retry_ms"`
 }
 
 type CredentialConfig struct {
