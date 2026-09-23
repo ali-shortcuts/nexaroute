@@ -31,8 +31,13 @@ func (s *Server) countTokens(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if strings.TrimSpace(in.Model) != "" {
-		req := router.Requirement{Model: in.Model, Tools: len(in.Tools) > 0, Vision: hasVisionAnth(raw)}
-		req = s.prepareRequirement(req, r, raw)
+		inspection := inspectRequestJSON(raw, "image", []string{"thinking", "reasoning"})
+		if inspection.TooComplex {
+			anthropicErrorJSON(w, http.StatusBadRequest, "request JSON structure is too complex")
+			return
+		}
+		req := router.Requirement{Model: in.Model, Tools: len(in.Tools) > 0, Vision: inspection.Vision, Reasoning: inspection.Reasoning}
+		req = s.prepareRequirement(req, r, inspection.BodySessionKey)
 		_, candidates := s.routeSnapshot(req)
 		forward := copySelectedRequestHeaders(r)
 		for _, c := range candidates {
