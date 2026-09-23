@@ -62,7 +62,12 @@ func TestRotatingWriterWithZeroBackupsKeepsOnlyCurrentFile(t *testing.T) {
 		t.Fatalf("backup should not exist when retention=0: %v", err)
 	}
 	if st, err := os.Stat(path); err != nil || st.Size() > 1024 {
-		t.Fatalf("current log not bounded: size=%v err=%v", func() int64 { if st != nil { return st.Size() }; return -1 }(), err)
+		t.Fatalf("current log not bounded: size=%v err=%v", func() int64 {
+			if st != nil {
+				return st.Size()
+			}
+			return -1
+		}(), err)
 	}
 }
 
