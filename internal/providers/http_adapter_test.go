@@ -62,3 +62,32 @@ func TestEndpointAllowsAbsoluteOverride(t *testing.T) {
 		t.Fatalf("absolute endpoint=%q", got)
 	}
 }
+
+func TestCredentialP2CPrefersLessActiveKey(t *testing.T) {
+	a := &httpAdapter{creds: []credentialState{{Key: "a"}, {Key: "b"}}}
+	first, _, ok := a.reserveCredential(nil)
+	if !ok {
+		t.Fatal("first credential was not selected")
+	}
+	second, _, ok := a.reserveCredential(nil)
+	if !ok {
+		t.Fatal("second credential was not selected")
+	}
+	if first == second {
+		t.Fatalf("power-of-two key selection reused busy key %d", first)
+	}
+	a.releaseCredential(first)
+	a.releaseCredential(second)
+}
+
+func TestCredentialP2CSkipsCoolingKey(t *testing.T) {
+	a := &httpAdapter{creds: []credentialState{
+		{Key: "cooling", CooldownUntil: time.Now().Add(time.Hour)},
+		{Key: "ready"},
+	}}
+	idx, key, ok := a.reserveCredential(nil)
+	if !ok || idx != 1 || key != "ready" {
+		t.Fatalf("selected idx=%d key=%q ok=%v", idx, key, ok)
+	}
+	a.releaseCredential(idx)
+}
