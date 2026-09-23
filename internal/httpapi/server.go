@@ -410,9 +410,13 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 				s.log.Printf("request_id=%s method=%s path=%s status=%d duration=%s", rid, r.Method, r.URL.Path, sw.status, duration)
 			}
 		}()
-		if strings.HasPrefix(r.URL.Path, "/admin/api/") && !s.adminAuthorized(r) {
-			errorJSON(sw, http.StatusUnauthorized, "admin authorization required")
-			return
+		if strings.HasPrefix(r.URL.Path, "/admin/api/") {
+			w.Header().Set("Cache-Control", "no-store")
+			w.Header().Set("Pragma", "no-cache")
+			if !s.adminAuthorized(r) {
+				errorJSON(sw, http.StatusUnauthorized, "admin authorization required")
+				return
+			}
 		}
 		if isDataPlaneRequest(r) {
 			if !s.tryAcquireDataPlane() {
