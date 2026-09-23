@@ -80,7 +80,13 @@ func main() {
 	bus := events.New(500)
 	pe := probe.New(cfg, reg, rt, hm, bus)
 	api := httpapi.New(cfg, *configPath, reg, rt, hm, bus, pe, logger)
-	srv := &http.Server{Addr: cfg.Listen, Handler: api.Handler(), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 180 * time.Second, MaxHeaderBytes: 1 << 20}
+	srv := &http.Server{
+		Addr: cfg.Listen, Handler: api.Handler(),
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       60 * time.Second,
+		IdleTimeout:       180 * time.Second,
+		MaxHeaderBytes:    128 << 10,
+	}
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 	if cfg.Probe.Enabled && cfg.Probe.OnStart {
