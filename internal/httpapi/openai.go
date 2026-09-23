@@ -48,6 +48,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 		req.ProviderType = "openai_compatible"
 	}
 	req = s.prepareRequirement(req, r, inspection.BodySessionKey)
+	s.telemetryModel(r, in.Model, in.Stream)
 	cfg, candidates := s.routeSnapshot(req)
 	if len(candidates) == 0 {
 		errorJSON(w, 503, "no compatible healthy deployment")

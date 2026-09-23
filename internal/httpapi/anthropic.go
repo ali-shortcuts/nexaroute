@@ -52,6 +52,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		req.ProviderType = "anthropic_compatible"
 	}
 	req = s.prepareRequirement(req, r, inspection.BodySessionKey)
+	s.telemetryModel(r, in.Model, in.Stream)
 	cfg, candidates := s.routeSnapshot(req)
 	if len(candidates) == 0 {
 		anthropicErrorJSON(w, 503, "no compatible healthy deployment")

@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/ali-shortcuts/nexaroute/internal/config"
+	"github.com/ali-shortcuts/nexaroute/internal/router"
 )
 
 // usageFromEnvelope extracts (input, output) token counts from either
@@ -70,14 +71,52 @@ func (s *Server) priceFor(deploymentID string) config.PriceConfig {
 }
 
 // usageRecorder returns a closure that attributes token usage and estimated
-// cost to the deployment and authenticated client key of one request.
+// cost to the deployment and authenticated client key of one request, and
+// feeds the same facts into the request telemetry finalized by middleware.
 func (s *Server) usageRecorder(r *http.Request, deploymentID string) func(in, out int64) {
 	key := clientKeyName(r)
+	tm := requestTelemetry(r)
+	if tm != nil {
+		tm.mu.Lock()
+		tm.keyName = key
+		tm.deployment = deploymentID
+		tm.mu.Unlock()
+		if d, ok := s.currentRouteDeployment(deploymentID); ok {
+			tm.mu.Lock()
+			tm.providerName = d.ProviderName
+			tm.mu.Unlock()
+		}
+	}
 	return func(in, out int64) {
 		price := s.priceFor(deploymentID)
 		cost := float64(in)/1e6*price.InputPerM + float64(out)/1e6*price.OutputPerM
 		s.usage.RecordRequest(deploymentID, key, in, out, cost)
+		if tm != nil {
+			tm.mu.Lock()
+			tm.inputTokens += in
+			tm.outputTokens += out
+			tm.estCostUSD += cost
+			tm.mu.Unlock()
+		}
 	}
+}
+
+// telemetryModel stamps the requested model and streaming mode onto the
+// request telemetry so the recent-requests log shows the resolved route.
+func (s *Server) telemetryModel(r *http.Request, model string, stream bool) {
+	tm := requestTelemetry(r)
+	if tm == nil {
+		return
+	}
+	tm.mu.Lock()
+	tm.model = model
+	tm.stream = stream
+	tm.mu.Unlock()
+}
+
+// currentRouteDeployment resolves a deployment id to its display metadata.
+func (s *Server) currentRouteDeployment(id string) (router.Deployment, bool) {
+	return s.rt.Deployment(id)
 }
 
 // proxyValidatedJSONWithUsage streams a validated JSON upstream response to

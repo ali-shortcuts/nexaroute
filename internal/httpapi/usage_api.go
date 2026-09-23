@@ -2,7 +2,27 @@ package httpapi
 
 import (
 	"net/http"
+	"strconv"
 )
+
+// GET /admin/api/requests?limit=100 → recent completed data-plane requests
+// (newest first) with their resolved route, latency, tokens and cost.
+func (s *Server) adminRequests(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		errorJSON(w, 405, "method not allowed")
+		return
+	}
+	limit := 0
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+			if limit > 500 {
+				limit = 500
+			}
+		}
+	}
+	writeJSON(w, 200, map[string]any{"requests": s.usage.RecentRequests(limit)})
+}
 
 // GET  /admin/api/usage        → snapshot
 // POST /admin/api/usage/reset  → zero the in-memory counters

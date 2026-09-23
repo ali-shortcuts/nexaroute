@@ -341,6 +341,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/admin/api/client-auth-required", s.adminClientAuthRequired)
 	mux.HandleFunc("/admin/api/guardrails/test", s.adminGuardrailsTest)
 	mux.HandleFunc("/admin/api/usage", s.adminUsage)
+	mux.HandleFunc("/admin/api/requests", s.adminRequests)
 	mux.HandleFunc("/admin/api/usage/reset", s.adminUsage)
 
 	sub, _ := fs.Sub(webFS, "web")
@@ -464,6 +465,13 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 			if s.shouldLogRequest(sw.status, duration, streaming, requestNumber) {
 				s.log.Printf("request_id=%s method=%s path=%s status=%d duration=%s", rid, r.Method, r.URL.Path, sw.status, duration)
 			}
+			if isDataPlaneRequest(r) {
+				errMsg := ""
+				if sw.status >= 400 {
+					errMsg = http.StatusText(sw.status)
+				}
+				s.finalizeTelemetry(requestTelemetry(r), sw.status, duration, errMsg)
+			}
 		}()
 		if strings.HasPrefix(r.URL.Path, "/admin/api/") {
 			w.Header().Set("Cache-Control", "no-store")
@@ -474,6 +482,7 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 			}
 		}
 		if isDataPlaneRequest(r) {
+			r = markRequestTelemetry(r, rid)
 			if s.clientAuthRequired() {
 				name, ok := s.authorizeClientKey(r)
 				if !ok {
@@ -483,6 +492,11 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 					return
 				}
 				r = r.WithContext(context.WithValue(r.Context(), clientKeyNameKey{}, name))
+				if tm := requestTelemetry(r); tm != nil {
+					tm.mu.Lock()
+					tm.keyName = name
+					tm.mu.Unlock()
+				}
 			}
 			if !s.tryAcquireDataPlane() {
 				s.rejectOverloaded(sw, r, rid)
