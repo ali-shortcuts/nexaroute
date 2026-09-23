@@ -342,7 +342,7 @@ func TestLegacyAdaptiveBackgroundSweepStillReprobesHealthyModels(t *testing.T) {
 	}
 }
 
-func TestRecoverFloodQueuesWithoutPerDeploymentGoroutines(t *testing.T) {
+func TestRecoverFloodUsesFixedWorkerPoolNotPerDeploymentGoroutines(t *testing.T) {
 	cfg := config.Default()
 	cfg.Probe.Enabled = true
 	cfg.Probe.OnStart = false
@@ -372,16 +372,20 @@ func TestRecoverFloodQueuesWithoutPerDeploymentGoroutines(t *testing.T) {
 		hm.ForceCooldown(d.ID, "test", time.Minute)
 		e.Recover(d.ID)
 	}
-	time.Sleep(20 * time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
 	after := runtime.NumGoroutine()
-	if delta := after - before; delta > 10 {
-		t.Fatalf("Recover created per-deployment goroutines: delta=%d", delta)
+	if delta := after - before; delta > recoveryWorkerCount+12 {
+		t.Fatalf("recovery flood created per-deployment goroutines: delta=%d worker_limit=%d", delta, recoveryWorkerCount)
 	}
-	if got := len(e.recoveryQueue); got != 500 {
-		t.Fatalf("queued recovery tasks=%d want 500", got)
+	stats := e.Stats()
+	if stats.RecoveryWorkers != recoveryWorkerCount {
+		t.Fatalf("worker limit=%d want %d", stats.RecoveryWorkers, recoveryWorkerCount)
 	}
-	if got := len(e.recovering); got != 500 {
-		t.Fatalf("tracked recoveries=%d want 500", got)
+	if stats.RecoveryTracked != 500 {
+		t.Fatalf("tracked recoveries=%d want 500", stats.RecoveryTracked)
+	}
+	if stats.RecoveryQueueDepth > maxRecoveryQueue {
+		t.Fatalf("queue depth=%d limit=%d", stats.RecoveryQueueDepth, maxRecoveryQueue)
 	}
 }
 
