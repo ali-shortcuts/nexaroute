@@ -241,31 +241,31 @@ func (c *Config) ApplyDefaults() {
 	if c.Routing.Strategy == "" {
 		c.Routing.Strategy = "ready_mesh"
 	}
-	if c.Routing.SessionTTLSeconds <= 0 {
+	if c.Routing.SessionTTLSeconds == 0 {
 		c.Routing.SessionTTLSeconds = 3600
 	}
-	if c.Routing.P2CWindow <= 0 {
+	if c.Routing.P2CWindow == 0 {
 		c.Routing.P2CWindow = 8
 	}
-	if c.Routing.MaxAttempts <= 0 {
+	if c.Routing.MaxAttempts == 0 {
 		c.Routing.MaxAttempts = 4
 	}
-	if c.Routing.MaxInflightRequests <= 0 {
+	if c.Routing.MaxInflightRequests == 0 {
 		c.Routing.MaxInflightRequests = 128
 	}
-	if c.Routing.FailureThreshold <= 0 {
+	if c.Routing.FailureThreshold == 0 {
 		c.Routing.FailureThreshold = 5
 	}
-	if c.Routing.CooldownSeconds <= 0 {
+	if c.Routing.CooldownSeconds == 0 {
 		c.Routing.CooldownSeconds = 1800
 	}
-	if c.Routing.CapabilityFailureThreshold <= 0 {
+	if c.Routing.CapabilityFailureThreshold == 0 {
 		c.Routing.CapabilityFailureThreshold = 2
 	}
-	if c.Routing.CapabilityCooldownSeconds <= 0 {
+	if c.Routing.CapabilityCooldownSeconds == 0 {
 		c.Routing.CapabilityCooldownSeconds = 300
 	}
-	if c.Routing.RequestTimeoutMS <= 0 {
+	if c.Routing.RequestTimeoutMS == 0 {
 		c.Routing.RequestTimeoutMS = 120000
 	}
 	if c.Routing.LatencyWeight == 0 {
@@ -280,25 +280,25 @@ func (c *Config) ApplyDefaults() {
 	if c.Routing.RetryBackoffMS < 0 {
 		c.Routing.RetryBackoffMS = 0
 	}
-	if c.Routing.MaxRetryAfterSeconds <= 0 {
+	if c.Routing.MaxRetryAfterSeconds == 0 {
 		c.Routing.MaxRetryAfterSeconds = 60
 	}
-	if c.Probe.IntervalSeconds <= 0 {
+	if c.Probe.IntervalSeconds == 0 {
 		c.Probe.IntervalSeconds = 120
 	}
-	if c.Probe.ReadyLeaseSeconds <= 0 {
+	if c.Probe.ReadyLeaseSeconds == 0 {
 		c.Probe.ReadyLeaseSeconds = 300
 	}
-	if c.Probe.TimeoutMS <= 0 {
+	if c.Probe.TimeoutMS == 0 {
 		c.Probe.TimeoutMS = 8000
 	}
-	if c.Probe.MaxTokens <= 0 {
+	if c.Probe.MaxTokens == 0 {
 		c.Probe.MaxTokens = 1
 	}
-	if c.Probe.Concurrency <= 0 {
+	if c.Probe.Concurrency == 0 {
 		c.Probe.Concurrency = 16
 	}
-	if c.Probe.RecoveryAttempts <= 0 {
+	if c.Probe.RecoveryAttempts == 0 {
 		c.Probe.RecoveryAttempts = 5
 	}
 	if c.Probe.RecoveryRetryMS < 0 {
@@ -338,10 +338,10 @@ func (p *ProviderConfig) ApplyDefaults() {
 	if p.CountTokensPath == "" {
 		p.CountTokensPath = "/v1/messages/count_tokens"
 	}
-	if p.MaxConcurrency <= 0 {
+	if p.MaxConcurrency == 0 {
 		p.MaxConcurrency = 32
 	}
-	if p.StreamIdleTimeoutSeconds <= 0 {
+	if p.StreamIdleTimeoutSeconds == 0 {
 		p.StreamIdleTimeoutSeconds = 180
 	}
 	if len(p.ForwardHeaders) == 0 && p.Type == "anthropic_compatible" {
@@ -353,7 +353,7 @@ func (p *ProviderConfig) ApplyDefaults() {
 		}
 	}
 	for i := range p.Models {
-		if p.Models[i].Weight <= 0 {
+		if p.Models[i].Weight == 0 {
 			p.Models[i].Weight = 1
 		}
 	}
@@ -378,11 +378,11 @@ func (c Config) Validate() error {
 	if c.Routing.MaxInflightRequests < 1 || c.Routing.MaxInflightRequests > 10000 {
 		return errors.New("routing.max_inflight_requests must be between 1 and 10000")
 	}
-	if c.Routing.SessionTTLSeconds > 30*24*60*60 {
-		return errors.New("routing.session_ttl_seconds must be <= 2592000")
+	if c.Routing.SessionTTLSeconds < 1 || c.Routing.SessionTTLSeconds > 30*24*60*60 {
+		return errors.New("routing.session_ttl_seconds must be between 1 and 2592000")
 	}
-	if c.Routing.P2CWindow > maxModelsPerProvider {
-		return fmt.Errorf("routing.p2c_window must be <= %d", maxModelsPerProvider)
+	if c.Routing.P2CWindow < 1 || c.Routing.P2CWindow > maxModelsPerProvider {
+		return fmt.Errorf("routing.p2c_window must be between 1 and %d", maxModelsPerProvider)
 	}
 	if c.Routing.FailureThreshold <= 0 || c.Routing.FailureThreshold > 1000 {
 		return errors.New("routing.failure_threshold must be between 1 and 1000")
