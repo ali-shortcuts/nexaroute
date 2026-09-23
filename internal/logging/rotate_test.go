@@ -93,3 +93,28 @@ func TestRateLimitedWriterSuppressesStormsAndReportsSummary(t *testing.T) {
 		t.Fatalf("new window did not resume writes: %q", dst.String())
 	}
 }
+
+func TestRotatingWriterTreatsGlobCharactersInPathLiterally(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nexa[prod]*.log")
+	if err := os.WriteFile(path+".9", []byte("stale"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	other := filepath.Join(dir, "nexap.log.9")
+	if err := os.WriteFile(other, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	w, err := NewRotatingWriter(path, 1024, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+
+	if _, err := os.Stat(path + ".9"); !os.IsNotExist(err) {
+		t.Fatalf("literal stale backup was not removed: %v", err)
+	}
+	if b, err := os.ReadFile(other); err != nil || string(b) != "keep" {
+		t.Fatalf("unrelated file matched as a glob pattern: err=%v body=%q", err, b)
+	}
+}

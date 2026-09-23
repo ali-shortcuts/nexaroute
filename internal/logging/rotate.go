@@ -72,17 +72,24 @@ func (w *RotatingWriter) open() error {
 }
 
 func (w *RotatingWriter) cleanupBackups() error {
-	matches, err := filepath.Glob(w.path + ".*")
+	dir := filepath.Dir(w.path)
+	base := filepath.Base(w.path)
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return err
 	}
-	for _, name := range matches {
-		suffix := strings.TrimPrefix(name, w.path+".")
+	prefix := base + "."
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasPrefix(entry.Name(), prefix) {
+			continue
+		}
+		suffix := strings.TrimPrefix(entry.Name(), prefix)
 		n, err := strconv.Atoi(suffix)
 		if err != nil || n < 1 {
 			continue
 		}
 		if n > w.backups {
+			name := filepath.Join(dir, entry.Name())
 			if err := os.Remove(name); err != nil && !os.IsNotExist(err) {
 				return err
 			}
