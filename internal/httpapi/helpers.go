@@ -15,6 +15,12 @@ const (
 )
 
 func readJSON(r *http.Request, dst any) ([]byte, error) {
+	if strings.HasPrefix(r.URL.Path, "/admin/api/") {
+		ct := strings.ToLower(strings.TrimSpace(strings.SplitN(r.Header.Get("Content-Type"), ";", 2)[0]))
+		if ct != "application/json" {
+			return nil, fmt.Errorf("Content-Type must be application/json")
+		}
+	}
 	b, err := io.ReadAll(io.LimitReader(r.Body, maxJSONBodyBytes+1))
 	if err != nil {
 		return nil, err
