@@ -118,3 +118,36 @@ func TestRotatingWriterTreatsGlobCharactersInPathLiterally(t *testing.T) {
 		t.Fatalf("unrelated file matched as a glob pattern: err=%v body=%q", err, b)
 	}
 }
+
+func TestNewRotatingWriterReturnsRotationErrorWithoutNilPanic(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nexaroute.log")
+	if err := os.WriteFile(path, []byte(strings.Repeat("x", 2048)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// A non-empty directory at the oldest backup path makes rotation fail only
+	// after the active file has already been closed and cleared.
+	blocker := path + ".1"
+	if err := os.Mkdir(blocker, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(blocker, "keep"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("constructor panicked after post-close rotation failure: %v", r)
+		}
+	}()
+	w, err := NewRotatingWriter(path, 1024, 1)
+	if err == nil {
+		if w != nil {
+			_ = w.Close()
+		}
+		t.Fatal("expected startup rotation failure")
+	}
+	if w != nil {
+		t.Fatal("failed constructor returned a live writer")
+	}
+}

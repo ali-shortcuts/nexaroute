@@ -45,7 +45,10 @@ func NewRotatingWriter(path string, maxBytes int64, backups int) (*RotatingWrite
 	}
 	if w.size >= w.maxBytes {
 		if err := w.rotateLocked(); err != nil {
-			_ = w.file.Close()
+			if w.file != nil {
+				_ = w.file.Close()
+				w.file = nil
+			}
 			return nil, err
 		}
 	}
