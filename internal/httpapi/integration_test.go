@@ -701,3 +701,65 @@ func TestTranslatedStreamsRequireTerminalSignal(t *testing.T) {
 		t.Fatalf("anthropic translated stream error=%v want unexpected EOF", err)
 	}
 }
+
+func TestCountTokensRejectsMalformedNativeSuccessAndFallsBackToEstimate(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "count_tokens") {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, "{bad")
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"text","text":"ok"}],"model":"m","stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`)
+	}))
+	defer up.Close()
+
+	cfg := config.Default()
+	cfg.Probe.Enabled = false
+	cfg.Providers = []config.ProviderConfig{{
+		ID: "a", Name: "A", Type: "anthropic_compatible", BaseURL: up.URL, AuthMode: "none", Enabled: true,
+		MessagesPath: "/v1/messages", CountTokensPath: "/v1/messages/count_tokens",
+		Models: []config.ModelConfig{{ID: "m", Model: "m", Enabled: true, Weight: 1}},
+	}}
+	s := testGateway(t, cfg)
+	req := httptest.NewRequest(http.MethodPost, "http://gateway/v1/messages/count_tokens", strings.NewReader(`{"model":"m","messages":[{"role":"user","content":"hello"}]}`))
+	rr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	var got map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatalf("fallback response is not valid JSON: %v body=%s", err, rr.Body.String())
+	}
+	if got["estimated"] != true {
+		t.Fatalf("malformed native 2xx should fall back to estimate: %#v", got)
+	}
+}
+
+func TestCountTokensRejectsOversizedNativeSuccess(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"input_tokens":1,"padding":"`+strings.Repeat("x", (2<<20)+100)+`"}`)
+	}))
+	defer up.Close()
+
+	cfg := config.Default()
+	cfg.Probe.Enabled = false
+	cfg.Providers = []config.ProviderConfig{{
+		ID: "a", Name: "A", Type: "anthropic_compatible", BaseURL: up.URL, AuthMode: "none", Enabled: true,
+		CountTokensPath: "/", MessagesPath: "/",
+		Models: []config.ModelConfig{{ID: "m", Model: "m", Enabled: true, Weight: 1}},
+	}}
+	s := testGateway(t, cfg)
+	req := httptest.NewRequest(http.MethodPost, "http://gateway/v1/messages/count_tokens", strings.NewReader(`{"model":"m","messages":[{"role":"user","content":"hello"}]}`))
+	rr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	var got map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil || got["estimated"] != true {
+		t.Fatalf("oversized native response should fall back to estimate: err=%v body=%s", err, rr.Body.String())
+	}
+}

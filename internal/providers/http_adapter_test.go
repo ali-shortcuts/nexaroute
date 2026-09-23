@@ -209,9 +209,9 @@ func TestProbeRejectsNullOrNonObjectOpenAIMessage(t *testing.T) {
 func TestParseRetryAfterBounded(t *testing.T) {
 	capDelay := 60 * time.Second
 	cases := []struct {
-		name string
+		name  string
 		value string
-		want time.Duration
+		want  time.Duration
 	}{
 		{"normal seconds", "5", 5 * time.Second},
 		{"huge seconds", "31536000", capDelay},

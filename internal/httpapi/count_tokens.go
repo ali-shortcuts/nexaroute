@@ -58,9 +58,25 @@ func (s *Server) countTokens(w http.ResponseWriter, r *http.Request) {
 			if e != nil {
 				continue
 			}
-			b, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+			const maxNativeTokenCountBytes = 2 << 20
+			b, readErr := io.ReadAll(io.LimitReader(resp.Body, maxNativeTokenCountBytes+1))
 			resp.Body.Close()
+			if readErr != nil || len(b) > maxNativeTokenCountBytes {
+				continue
+			}
 			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+				var root map[string]json.RawMessage
+				if json.Unmarshal(b, &root) != nil {
+					continue
+				}
+				rawTokens, ok := root["input_tokens"]
+				if !ok {
+					continue
+				}
+				var inputTokens int64
+				if json.Unmarshal(rawTokens, &inputTokens) != nil || inputTokens < 0 {
+					continue
+				}
 				if ct := resp.Header.Get("Content-Type"); ct != "" {
 					w.Header().Set("Content-Type", ct)
 				}
