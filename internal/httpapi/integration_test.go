@@ -763,3 +763,53 @@ func TestCountTokensRejectsOversizedNativeSuccess(t *testing.T) {
 		t.Fatalf("oversized native response should fall back to estimate: err=%v body=%s", err, rr.Body.String())
 	}
 }
+
+func TestHotReloadInvalidatesHealthOnEnvironmentCredentialRotation(t *testing.T) {
+	const envName = "NEXAROUTE_INTEGRATION_ROTATING_KEY"
+	t.Setenv(envName, "key-one")
+	cfg := config.Default()
+	cfg.Probe.Enabled = false
+	cfg.Providers = []config.ProviderConfig{{
+		ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "http://example.invalid",
+		APIKeyEnv: envName, AuthMode: "bearer", Enabled: true,
+		Models: []config.ModelConfig{{ID: "m", Model: "m", Enabled: true, Weight: 1}},
+	}}
+	s := testGateway(t, cfg)
+	if st := s.hm.Get("p/m"); st.Status != health.Healthy {
+		t.Fatalf("fixture not healthy: %+v", st)
+	}
+
+	t.Setenv(envName, "key-two")
+	if err := s.applyConfig(s.currentConfig()); err != nil {
+		t.Fatal(err)
+	}
+	if st := s.hm.Get("p/m"); st.Status != health.Unknown {
+		t.Fatalf("rotated environment credential kept stale health proof: %+v", st)
+	}
+}
+
+func TestHotReloadInvalidatesHealthWhenCapabilitiesChange(t *testing.T) {
+	cfg := config.Default()
+	cfg.Probe.Enabled = false
+	cfg.Providers = []config.ProviderConfig{{
+		ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "http://example.invalid",
+		AuthMode: "none", Enabled: true,
+		Models: []config.ModelConfig{{
+			ID: "m", Model: "m", Enabled: true, Weight: 1,
+			Capabilities: config.Capabilities{Streaming: true},
+		}},
+	}}
+	s := testGateway(t, cfg)
+	if st := s.hm.Get("p/m"); st.Status != health.Healthy {
+		t.Fatalf("fixture not healthy: %+v", st)
+	}
+
+	next := s.currentConfig()
+	next.Providers[0].Models[0].Capabilities.Tools = true
+	if err := s.applyConfig(next); err != nil {
+		t.Fatal(err)
+	}
+	if st := s.hm.Get("p/m"); st.Status != health.Unknown {
+		t.Fatalf("capability identity change kept stale health proof: %+v", st)
+	}
+}

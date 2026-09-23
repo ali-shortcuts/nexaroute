@@ -143,7 +143,7 @@ func changedDeploymentIDs(oldCfg, newCfg config.Config) map[string]struct{} {
 				continue
 			}
 			om, existed := oldModels[nm.ID]
-			if providerChanged || !existed || !om.Enabled || om.Model != nm.Model {
+			if providerChanged || !existed || !om.Enabled || om.Model != nm.Model || !reflect.DeepEqual(om.Capabilities, nm.Capabilities) {
 				changed[np.ID+"/"+nm.ID] = struct{}{}
 			}
 		}
@@ -161,9 +161,11 @@ func (s *Server) applyConfigLocked(cfg config.Config) error {
 	}
 	oldCfg := s.currentConfig()
 	rebuild := changedProviderAdapterIDs(oldCfg, cfg)
+	rotatedCredentialProviders := map[string]struct{}{}
 	for _, p := range cfg.Providers {
 		if p.Enabled && !s.reg.CredentialsMatchProvider(p) {
 			rebuild[p.ID] = struct{}{}
+			rotatedCredentialProviders[p.ID] = struct{}{}
 		}
 	}
 
@@ -194,7 +196,13 @@ func (s *Server) applyConfigLocked(cfg config.Config) error {
 		valid[d.ID] = struct{}{}
 	}
 	s.hm.Retain(valid)
-	for id := range changedDeploymentIDs(oldCfg, cfg) {
+	changedHealth := changedDeploymentIDs(oldCfg, cfg)
+	for _, d := range s.rt.All() {
+		if _, rotated := rotatedCredentialProviders[d.ProviderID]; rotated {
+			changedHealth[d.ID] = struct{}{}
+		}
+	}
+	for id := range changedHealth {
 		s.hm.Invalidate(id)
 	}
 
