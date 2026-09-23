@@ -11,9 +11,9 @@ type settingsForm struct {
 }
 
 func (s *Server) adminSettings(w http.ResponseWriter, r *http.Request) {
-	cfg := s.currentConfig()
 	switch r.Method {
 	case http.MethodGet:
+		cfg := s.currentConfig()
 		writeJSON(w, 200, settingsForm{Routing: cfg.Routing, Probe: cfg.Probe})
 	case http.MethodPut:
 		var in settingsForm
@@ -21,10 +21,13 @@ func (s *Server) adminSettings(w http.ResponseWriter, r *http.Request) {
 			errorJSON(w, 400, "invalid JSON: "+err.Error())
 			return
 		}
-		cfg.Routing = in.Routing
-		cfg.Probe = in.Probe
-		cfg.ApplyDefaults()
-		if err := s.applyConfig(cfg); err != nil {
+		cfg, err := s.mutateConfig(func(cfg *config.Config) error {
+			cfg.Routing = in.Routing
+			cfg.Probe = in.Probe
+			cfg.ApplyDefaults()
+			return nil
+		})
+		if err != nil {
 			errorJSON(w, 400, err.Error())
 			return
 		}

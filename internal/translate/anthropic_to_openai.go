@@ -3,6 +3,7 @@ package translate
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/ali-shortcuts/nexaroute/internal/core"
 )
@@ -115,7 +116,7 @@ func anthImageURL(src map[string]any) string {
 	return ""
 }
 
-func OpenAIResponseToAnthropic(in core.OpenAIResponse, requestedModel string) core.AnthResponse {
+func OpenAIResponseToAnthropic(in core.OpenAIResponse, requestedModel string) (core.AnthResponse, error) {
 	stop := "end_turn"
 	content := []core.AnthContentBlock{}
 	if len(in.Choices) > 0 {
@@ -130,7 +131,11 @@ func OpenAIResponseToAnthropic(in core.OpenAIResponse, requestedModel string) co
 		}
 		for _, tc := range c.Message.ToolCalls {
 			obj := map[string]any{}
-			_ = json.Unmarshal([]byte(tc.Function.Arguments), &obj)
+			if strings.TrimSpace(tc.Function.Arguments) != "" {
+				if err := json.Unmarshal([]byte(tc.Function.Arguments), &obj); err != nil {
+					return core.AnthResponse{}, fmt.Errorf("tool call %q arguments are invalid JSON: %w", tc.ID, err)
+				}
+			}
 			content = append(content, core.AnthContentBlock{Type: "tool_use", ID: tc.ID, Name: tc.Function.Name, Input: obj})
 		}
 		if c.FinishReason != nil {
@@ -147,5 +152,5 @@ func OpenAIResponseToAnthropic(in core.OpenAIResponse, requestedModel string) co
 	if len(content) == 0 {
 		content = append(content, core.AnthContentBlock{Type: "text", Text: ""})
 	}
-	return core.AnthResponse{ID: in.ID, Type: "message", Role: "assistant", Content: content, Model: requestedModel, StopReason: &stop, Usage: core.AnthUsage{InputTokens: in.Usage.PromptTokens, OutputTokens: in.Usage.CompletionTokens}}
+	return core.AnthResponse{ID: in.ID, Type: "message", Role: "assistant", Content: content, Model: requestedModel, StopReason: &stop, Usage: core.AnthUsage{InputTokens: in.Usage.PromptTokens, OutputTokens: in.Usage.CompletionTokens}}, nil
 }

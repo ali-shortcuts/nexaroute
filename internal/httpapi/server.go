@@ -4,10 +4,13 @@ import (
 	"crypto/subtle"
 	"embed"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"net"
 	"net/http"
+	"reflect"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -25,17 +28,20 @@ import (
 var webFS embed.FS
 
 type Server struct {
-	runtimeMu    sync.RWMutex
-	cfg          config.Config
-	configPath   string
-	reg          *providers.Registry
-	rt           *router.Router
-	hm           *health.Manager
-	bus          *events.Bus
-	probe        *probe.Engine
-	log          *log.Logger
-	requestSeq   atomic.Uint64
-	requestTotal atomic.Uint64
+	applyMu         sync.Mutex
+	runtimeMu       sync.RWMutex
+	cfg             config.Config
+	configPath      string
+	reg             *providers.Registry
+	rt              *router.Router
+	hm              *health.Manager
+	bus             *events.Bus
+	probe           *probe.Engine
+	log             *log.Logger
+	requestSeq      atomic.Uint64
+	requestTotal    atomic.Uint64
+	inflight        atomic.Int64
+	overloadRejects atomic.Uint64
 }
 
 func New(cfg config.Config, configPath string, reg *providers.Registry, rt *router.Router, hm *health.Manager, bus *events.Bus, pe *probe.Engine, l *log.Logger) *Server {
@@ -68,47 +74,169 @@ func cloneConfig(in config.Config) config.Config {
 	return out
 }
 
+func providerProbeIdentityEqual(a, b config.ProviderConfig) bool {
+	return a.Type == b.Type &&
+		a.BaseURL == b.BaseURL &&
+		a.APIKey == b.APIKey &&
+		a.APIKeyEnv == b.APIKeyEnv &&
+		reflect.DeepEqual(a.Credentials, b.Credentials) &&
+		a.AuthMode == b.AuthMode &&
+		reflect.DeepEqual(a.Headers, b.Headers) &&
+		reflect.DeepEqual(a.ForwardHeaders, b.ForwardHeaders) &&
+		a.ProxyURL == b.ProxyURL &&
+		a.ChatPath == b.ChatPath &&
+		a.MessagesPath == b.MessagesPath &&
+		a.ModelsPath == b.ModelsPath &&
+		a.CountTokensPath == b.CountTokensPath &&
+		a.Enabled == b.Enabled
+}
+
+func providerAdapterIdentityEqual(a, b config.ProviderConfig) bool {
+	return providerProbeIdentityEqual(a, b) &&
+		a.MaxConcurrency == b.MaxConcurrency &&
+		a.StreamIdleTimeoutSeconds == b.StreamIdleTimeoutSeconds
+}
+
+func changedProviderAdapterIDs(oldCfg, newCfg config.Config) map[string]struct{} {
+	changed := map[string]struct{}{}
+	oldProviders := make(map[string]config.ProviderConfig, len(oldCfg.Providers))
+	for _, p := range oldCfg.Providers {
+		oldProviders[p.ID] = p
+	}
+	timeoutChanged := oldCfg.Routing.RequestTimeoutMS != newCfg.Routing.RequestTimeoutMS
+	for _, np := range newCfg.Providers {
+		if !np.Enabled {
+			continue
+		}
+		op, ok := oldProviders[np.ID]
+		if timeoutChanged || !ok || !op.Enabled || !providerAdapterIdentityEqual(op, np) {
+			changed[np.ID] = struct{}{}
+		}
+	}
+	return changed
+}
+
+func changedDeploymentIDs(oldCfg, newCfg config.Config) map[string]struct{} {
+	changed := map[string]struct{}{}
+	oldProviders := map[string]config.ProviderConfig{}
+	for _, p := range oldCfg.Providers {
+		oldProviders[p.ID] = p
+	}
+	for _, np := range newCfg.Providers {
+		if !np.Enabled {
+			continue
+		}
+		op, ok := oldProviders[np.ID]
+		providerChanged := !ok || !providerProbeIdentityEqual(op, np)
+		oldModels := map[string]config.ModelConfig{}
+		if ok {
+			for _, m := range op.Models {
+				oldModels[m.ID] = m
+			}
+		}
+		for _, nm := range np.Models {
+			if !nm.Enabled {
+				continue
+			}
+			om, existed := oldModels[nm.ID]
+			if providerChanged || !existed || !om.Enabled || om.Model != nm.Model {
+				changed[np.ID+"/"+nm.ID] = struct{}{}
+			}
+		}
+	}
+	return changed
+}
+
 // applyConfig validates and persists first, then swaps the in-memory provider
 // registry/router under one short lock. Existing Adapter pointers already taken
 // by in-flight requests remain valid after the registry map is replaced.
-func (s *Server) applyConfig(cfg config.Config) error {
+func (s *Server) applyConfigLocked(cfg config.Config) error {
+	cfg.ApplyDefaults()
 	if err := cfg.Validate(); err != nil {
 		return err
 	}
-	// Build once before touching disk to catch future adapter-construction errors.
-	if _, err := providers.NewRegistry(cfg); err != nil {
+	oldCfg := s.currentConfig()
+	rebuild := changedProviderAdapterIDs(oldCfg, cfg)
+	for _, p := range cfg.Providers {
+		if p.Enabled && !s.reg.CredentialsMatchProvider(p) {
+			rebuild[p.ID] = struct{}{}
+		}
+	}
+
+	// Prepare the complete next registry before touching disk. Unchanged
+	// providers reuse their live adapters, preserving HTTP connection pools and
+	// credential cooldown/load state across routing-only or probe-only edits.
+	nextReg, err := s.reg.Prepare(cfg, rebuild)
+	if err != nil {
 		return err
 	}
 	if err := config.SaveAtomic(s.configPath, cfg); err != nil {
 		return err
 	}
+
 	s.runtimeMu.Lock()
 	defer s.runtimeMu.Unlock()
-	if err := s.reg.Reload(cfg); err != nil {
-		return err
-	}
+	s.reg.Replace(nextReg)
 	s.rt.Reload(cfg)
-	s.hm.Configure(cfg.Routing.FailureThreshold, cfg.Cooldown())
-	s.probe.Reload(cfg)
+	s.hm.ConfigureAdvanced(
+		cfg.Routing.FailureThreshold,
+		cfg.Cooldown(),
+		cfg.Routing.CapabilityFailureThreshold,
+		time.Duration(cfg.Routing.CapabilityCooldownSeconds)*time.Second,
+	)
+
+	valid := map[string]struct{}{}
+	for _, d := range s.rt.All() {
+		valid[d.ID] = struct{}{}
+	}
+	s.hm.Retain(valid)
+	for id := range changedDeploymentIDs(oldCfg, cfg) {
+		s.hm.Invalidate(id)
+	}
+
 	s.cfg = cfg
+	s.probe.Reload(cfg)
 	return nil
 }
 
-func (s *Server) routeSnapshot(req router.Requirement) (config.Config, []router.Scored, map[string]providers.Adapter) {
+func (s *Server) applyConfig(cfg config.Config) error {
+	s.applyMu.Lock()
+	defer s.applyMu.Unlock()
+	return s.applyConfigLocked(cfg)
+}
+
+func (s *Server) mutateConfig(fn func(*config.Config) error) (config.Config, error) {
+	s.applyMu.Lock()
+	defer s.applyMu.Unlock()
+
+	cfg := s.currentConfig()
+	if err := fn(&cfg); err != nil {
+		return config.Config{}, err
+	}
+	if err := s.applyConfigLocked(cfg); err != nil {
+		return config.Config{}, err
+	}
+	return cfg, nil
+}
+
+func (s *Server) routeSnapshot(req router.Requirement) (config.Config, []router.Scored) {
 	s.runtimeMu.RLock()
 	defer s.runtimeMu.RUnlock()
-	cfg := s.cfg
-	candidates := s.rt.Candidates(req)
-	adapters := make(map[string]providers.Adapter, len(candidates))
-	for _, c := range candidates {
-		if _, ok := adapters[c.Deployment.ProviderID]; ok {
-			continue
-		}
-		if a, ok := s.reg.Get(c.Deployment.ProviderID); ok {
-			adapters[c.Deployment.ProviderID] = a
-		}
+	return s.cfg, s.rt.Candidates(req)
+}
+
+func (s *Server) currentRouteCandidate(id string, req router.Requirement) (router.Scored, providers.Adapter, bool) {
+	s.runtimeMu.RLock()
+	defer s.runtimeMu.RUnlock()
+	candidate, ok := s.rt.Eligible(id, req)
+	if !ok {
+		return router.Scored{}, nil, false
 	}
-	return cfg, candidates, adapters
+	adapter, ok := s.reg.Get(candidate.Deployment.ProviderID)
+	if !ok {
+		return router.Scored{}, nil, false
+	}
+	return candidate, adapter, true
 }
 
 func (s *Server) Handler() http.Handler {
@@ -130,6 +258,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/admin/api/probe", s.adminProbe)
 	mux.HandleFunc("/admin/api/providers", s.adminProviders)
 	mux.HandleFunc("/admin/api/providers/", s.adminProviderByID)
+	mux.HandleFunc("/admin/api/provider-presets", s.adminProviderPresets)
+	mux.HandleFunc("/admin/api/provider-check", s.adminProviderCheck)
 	mux.HandleFunc("/admin/api/provider-test", s.adminProviderTest)
 	mux.HandleFunc("/admin/api/provider-discover", s.adminProviderDiscover)
 	mux.HandleFunc("/admin/api/settings", s.adminSettings)
@@ -139,37 +269,136 @@ func (s *Server) Handler() http.Handler {
 	return s.middleware(mux)
 }
 
+func isDataPlaneRequest(r *http.Request) bool {
+	if r.Method != http.MethodPost {
+		return false
+	}
+	switch r.URL.Path {
+	case "/v1/messages", "/v1/messages/count_tokens", "/v1/chat/completions":
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *Server) admissionLimit() int64 {
+	s.runtimeMu.RLock()
+	limit := s.cfg.Routing.MaxInflightRequests
+	s.runtimeMu.RUnlock()
+	if limit < 1 {
+		limit = 128
+	}
+	return int64(limit)
+}
+
+func (s *Server) tryAcquireDataPlane() bool {
+	limit := s.admissionLimit()
+	for {
+		current := s.inflight.Load()
+		if current >= limit {
+			return false
+		}
+		if s.inflight.CompareAndSwap(current, current+1) {
+			return true
+		}
+	}
+}
+
+func (s *Server) releaseDataPlane() {
+	if n := s.inflight.Add(-1); n < 0 {
+		s.inflight.Store(0)
+	}
+}
+
+func (s *Server) rejectOverloaded(w http.ResponseWriter, r *http.Request, requestID string) {
+	s.overloadRejects.Add(1)
+	s.bus.Add(events.Event{
+		RequestID:  requestID,
+		Kind:       "gateway_overloaded",
+		Message:    "global data-plane admission limit reached",
+		ErrorType:  "gateway_overloaded",
+		StatusCode: http.StatusServiceUnavailable,
+	})
+	w.Header().Set("Retry-After", "1")
+	if r.URL.Path == "/v1/messages" || r.URL.Path == "/v1/messages/count_tokens" {
+		anthropicErrorJSON(w, http.StatusServiceUnavailable, "gateway is at capacity; retry shortly")
+		return
+	}
+	errorJSON(w, http.StatusServiceUnavailable, "gateway is at capacity; retry shortly")
+}
+
 func (s *Server) middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		s.requestTotal.Add(1)
-		rid := strings.TrimSpace(r.Header.Get("x-request-id"))
+		rid := normalizeRequestID(r.Header.Get("x-request-id"))
 		if rid == "" {
 			rid = fmt.Sprintf("nexaroute-%x-%x", time.Now().UnixNano(), s.requestSeq.Add(1))
 			r.Header.Set("x-request-id", rid)
 		}
 		w.Header().Set("x-request-id", rid)
+		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				if recovered == http.ErrAbortHandler {
+					panic(recovered)
+				}
+				s.bus.Add(events.Event{RequestID: rid, Kind: "internal_panic", Message: "handler panic recovered", ErrorType: "internal_panic"})
+				s.log.Printf("request_id=%s handler_panic type=%T stack=%q", rid, recovered, debug.Stack())
+				if !sw.wroteHeader {
+					errorJSON(sw, http.StatusInternalServerError, "internal gateway error")
+				}
+			}
+			s.log.Printf("request_id=%s method=%s path=%s status=%d duration=%s", rid, r.Method, r.URL.Path, sw.status, time.Since(start))
+		}()
 		if strings.HasPrefix(r.URL.Path, "/admin/api/") && !s.adminAuthorized(r) {
-			errorJSON(w, http.StatusUnauthorized, "admin authorization required")
-			s.log.Printf("request_id=%s method=%s path=%s status=%d duration=%s", rid, r.Method, r.URL.Path, http.StatusUnauthorized, time.Since(start))
+			errorJSON(sw, http.StatusUnauthorized, "admin authorization required")
 			return
 		}
-		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
+		if isDataPlaneRequest(r) {
+			if !s.tryAcquireDataPlane() {
+				s.rejectOverloaded(sw, r, rid)
+				return
+			}
+			defer s.releaseDataPlane()
+		}
 		next.ServeHTTP(sw, r)
-		s.log.Printf("request_id=%s method=%s path=%s status=%d duration=%s", rid, r.Method, r.URL.Path, sw.status, time.Since(start))
 	})
 }
 
 type statusWriter struct {
 	http.ResponseWriter
-	status int
+	status      int
+	wroteHeader bool
 }
 
-func (w *statusWriter) WriteHeader(code int) { w.status = code; w.ResponseWriter.WriteHeader(code) }
+func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+func (w *statusWriter) WriteHeader(code int) {
+	if w.wroteHeader {
+		return
+	}
+	w.wroteHeader = true
+	w.status = code
+	w.ResponseWriter.WriteHeader(code)
+}
 func (w *statusWriter) Flush() {
+	if !w.wroteHeader {
+		w.WriteHeader(http.StatusOK)
+	}
 	if f, ok := w.ResponseWriter.(http.Flusher); ok {
 		f.Flush()
 	}
+}
+
+func (w *statusWriter) ReadFrom(r io.Reader) (int64, error) {
+	if !w.wroteHeader {
+		w.WriteHeader(http.StatusOK)
+	}
+	if rf, ok := w.ResponseWriter.(io.ReaderFrom); ok {
+		return rf.ReadFrom(r)
+	}
+	return io.Copy(w.ResponseWriter, r)
 }
 
 func (s *Server) adminAuthorized(r *http.Request) bool {

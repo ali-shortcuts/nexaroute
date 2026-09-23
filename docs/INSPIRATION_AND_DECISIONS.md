@@ -17,7 +17,7 @@ We keep the topology idea but make routing health explicit per deployment and se
 - Failure thresholds and temporary removal from the active pool
 - Router-centric multi-deployment abstraction
 
-Our requested default is stricter: 5 consecutive failures -> 1 hour cooldown, configurable.
+NexaRoute's current default is stricter and more explicit: `ready_mesh` routes only verified healthy deployments; the first eligible routed failure quarantines a deployment immediately, the recovery supervisor performs up to five real recovery probes, and five failed probes enter the default 30-minute cooldown before a new recovery cycle.
 
 ## Portkey Gateway — what is useful
 

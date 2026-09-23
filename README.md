@@ -38,7 +38,8 @@ Routing is done per **deployment** (`provider/model`), not just per provider.
 
 Implemented strategies:
 
-- `ready_queue` (default): only pre-verified healthy deployments are routable; the strongest configured healthy model stays first until it fails
+- `ready_mesh` (default): only pre-verified healthy deployments are routable; session affinity keeps a healthy conversation pinned while capacity-aware power-of-two selection spreads new sessions across the best-priority tier
+- `ready_queue`: legacy deterministic sticky-strongest ordering over the same verified healthy pool
 - `adaptive`
 - `priority`
 - `round_robin`
@@ -58,25 +59,31 @@ Implemented resilience:
 - first routed failure immediately quarantines that deployment; the recovery supervisor then probes it up to 5 times
 - half-open recovery after cooldown
 - if all 5 recovery probes fail, the deployment enters a 30-minute cooldown; after cooldown the supervisor automatically starts a fresh recovery cycle
-- credential-level rotation and cooldown independent of model-level health
-- startup readiness sweep probes every enabled deployment before the HTTP listener opens; successful models enter the ready queue immediately
+- credential-level power-of-two load balancing plus independent per-key cooldown, so busy or failing keys are not selected blindly
+- bounded global data-plane admission (`max_inflight_requests`, default 128) rejects excess work with 503/Retry-After while health, readiness, metrics and Admin diagnostics remain responsive
+- environment-backed credential rotation is detected during hot reload; only providers whose resolved credentials or transport identity changed are rebuilt
+- the HTTP listener opens immediately for liveness/UI observability, then the startup readiness sweep probes every enabled deployment; `/readyz` and ready-mesh routing remain unready until successful models enter the ready queue
 - manual **Probe all models** with pass/fail results
 
 
 ### How the smart routing loop actually works
 
-The health loop is deliberately **event-driven + periodic**, not a wasteful sub-second broadcast to every model:
+The health loop is deliberately **event-driven + selective**, not a wasteful broadcast over models already proven healthy:
 
 - every real client request updates the selected deployment's health immediately;
-- background probes use a tiny request (`max_tokens=1` by default) to refresh idle deployments;
-- each periodic probe cycle revalidates the ready pool with bounded concurrency; failed deployments leave the ready queue immediately and move to the recovery supervisor;
-- cooldown deployments never receive Claude traffic; after their deadline the supervisor retries them and only a successful probe returns them to the ready queue;
-- candidate order combines configured model priority/weight, health state, EWMA response-header latency, and historical failure rate;
+- startup probes use a tiny request (`max_tokens=1` by default) to establish the initial ready queue;
+- automatic background sweeps probe new/unverified deployments and revalidate only healthy deployments whose ready-health lease has expired;
+- every successful real Claude request refreshes that deployment's health lease, so actively used ready models normally receive no synthetic probe;
+- an idle ready model is micro-probed after the lease expires, preventing a long-unused fallback from remaining falsely healthy forever;
+- failed/degraded/cooldown deployments are owned by dedicated recovery loops and never receive Claude traffic;
+- candidate order combines configured model priority/weight with verified ready state; under `ready_mesh`, an eligible session pin wins first, otherwise two candidates inside the best priority tier are compared using score and live provider pressure;
 - recovery policy defaults to **5 supervisor attempts -> 1800-second cooldown**, with a 500 ms retry delay between failed recovery probes;
+- temporary all-key `429` cooldown waits do not consume the five-attempt recovery budget;
+- the explicit **Probe all models** admin action remains available when an operator intentionally wants to retest healthy models too;
 - a real Claude Code request tries candidates in routing order and fails over before client-visible response bytes are committed.
 - capability routing inspects the parsed request structure for images and reasoning controls, so words such as “image” in ordinary user text do not cause false capability requirements.
 
-`probe.interval_seconds` is configurable down to 1 second. The router decision itself is local and fast; remote health checks still take normal network/provider latency. NexaRoute therefore keeps readiness warm in the background instead of blocking each Claude request on a new health check.
+`probe.interval_seconds` is configurable down to 1 second. `probe.ready_lease_seconds` defaults to 300 seconds: real successful Claude traffic renews that lease, while an idle ready fallback is micro-probed after the lease expires. The router decision itself is local and fast; remote health checks still take normal network/provider latency. NexaRoute therefore keeps readiness warm in the background without repeatedly probing active models or blocking each Claude request on a new health check.
 
 Model **quality** is represented explicitly by configured `priority` and `weight`; a one-token health probe can prove availability/latency, but it cannot honestly measure which LLM is intellectually stronger.
 
@@ -112,9 +119,10 @@ Provider workflow:
 5. Configure auth and API key, environment reference, or credential pool
 6. Configure proxy / endpoint overrides / forwarded headers if needed
 7. Detect models or add model IDs manually
-8. Test provider/models
-9. Save
-10. Re-open **Edit** later
+8. Run **Test connection** for reachability/auth
+9. Run **Test selected models** for real inference
+10. Save
+11. Re-open **Edit** later
 
 Editing does not silently destroy working secrets. The saved Base URL, protocol, models, proxy, endpoint overrides, forward headers, auth settings, credential pool, concurrency settings, and credential source are loaded back into the form. If the secret field is unchanged, `preserve_secret` keeps the prior secret exactly.
 
@@ -128,6 +136,10 @@ The dashboard includes:
 - live event feed
 - manual probes
 - runtime routing/probe settings
+- provider pressure (active/waiting/capacity and credential cooling)
+- capability-scoped health evidence
+- active session-affinity count
+- CLI Tools onboarding for Anthropic/Claude Code and OpenAI-compatible clients
 
 ## Fastest Ubuntu test: use a release package
 
@@ -260,7 +272,7 @@ Read:
 - `TEST_REPORT.md`
 - `docs/COMPATIBILITY.md`
 - `docs/KNOWN_GAPS.md`
-- `docs/SECURITY.md`
+- `SECURITY.md`
 - `ROADMAP.md`
 
 before treating v0.3 as production infrastructure.
@@ -278,3 +290,15 @@ sudo install -m 755 nexaroute /usr/local/bin/nexaroute
 ```
 
 The repository CI repeats formatting, tests, vet, race detection, and Linux amd64/arm64 builds on pushes and pull requests. Tagged releases build downloadable Linux binaries and SHA-256 checksums automatically.
+
+
+## Ready Mesh maturity notes
+
+NexaRoute now uses two routing levels:
+
+1. **Deployment/provider level** — verified health, capability requirements, priority tier, session affinity, live provider concurrency pressure, latency/failure scoring, and power-of-two selection.
+2. **Credential/key level** — within the selected provider, two available keys are compared by live in-flight load and failure history; 401/402/403/429 cooldown remains isolated to the affected key.
+
+Every failover candidate is revalidated against current health and the hot-reloaded registry immediately before use. A candidate that became quarantined or was replaced after the initial request snapshot is skipped rather than being used from stale state.
+
+The built-in provider preset catalog is intentionally limited to endpoints that fit NexaRoute's implemented OpenAI-compatible or Anthropic-compatible adapter contracts. A preset is configuration convenience, not a claim that every provider-specific extension is supported.

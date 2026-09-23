@@ -1,10 +1,12 @@
 package router
 
 import (
-	"github.com/ali-shortcuts/nexaroute/internal/config"
-	"github.com/ali-shortcuts/nexaroute/internal/health"
+	"fmt"
 	"testing"
 	"time"
+
+	"github.com/ali-shortcuts/nexaroute/internal/config"
+	"github.com/ali-shortcuts/nexaroute/internal/health"
 )
 
 func TestCandidatesExcludeCooldown(t *testing.T) {
@@ -237,5 +239,137 @@ func TestReadyQueueRequiresSuccessfulHealthProofAndStaysSticky(t *testing.T) {
 	after := r.Candidates(Requirement{Model: "coding", Streaming: true})
 	if len(after) != 1 || after[0].Deployment.ID != "p/weak" {
 		t.Fatalf("quarantined first model must leave ready queue immediately: %#v", after)
+	}
+}
+
+func TestReadyMeshP2CPrefersUnsaturatedProvider(t *testing.T) {
+	cfg := config.Default()
+	cfg.Routing.Strategy = "ready_mesh"
+	cfg.Routing.P2CWindow = 2
+	cfg.Providers = []config.ProviderConfig{
+		{ID: "busy", Name: "Busy", Type: "openai_compatible", BaseURL: "http://x", Enabled: true, Models: []config.ModelConfig{{ID: "m", Model: "m1", Enabled: true, Priority: 0, Weight: 1}}},
+		{ID: "free", Name: "Free", Type: "openai_compatible", BaseURL: "http://y", Enabled: true, Models: []config.ModelConfig{{ID: "m", Model: "m2", Enabled: true, Priority: 0, Weight: 1}}},
+	}
+	h := health.New(5, time.Hour)
+	h.RecordSuccess("busy/m", 10*time.Millisecond)
+	h.RecordSuccess("free/m", 10*time.Millisecond)
+	r := New(cfg, h)
+	got := r.Candidates(Requirement{
+		Model:        "auto",
+		SelectionKey: "req",
+		ProviderLoad: map[string]ProviderLoad{
+			"busy": {Active: 32, Waiting: 8, Limit: 32},
+			"free": {Active: 1, Limit: 32},
+		},
+	})
+	if len(got) != 2 || got[0].Deployment.ProviderID != "free" {
+		t.Fatalf("ready mesh did not avoid saturation: %#v", got)
+	}
+}
+
+func TestReadyMeshSessionAffinityPinsAfterSuccess(t *testing.T) {
+	cfg := config.Default()
+	cfg.Routing.Strategy = "ready_mesh"
+	cfg.Routing.SessionAffinity = true
+	cfg.Providers = []config.ProviderConfig{{ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "http://x", Enabled: true, Models: []config.ModelConfig{
+		{ID: "a", Model: "a", Enabled: true, Weight: 1},
+		{ID: "b", Model: "b", Enabled: true, Weight: 1},
+	}}}
+	h := health.New(5, time.Hour)
+	h.RecordSuccess("p/a", 10*time.Millisecond)
+	h.RecordSuccess("p/b", 10*time.Millisecond)
+	r := New(cfg, h)
+	req := Requirement{Model: "auto", SessionKey: "claude-session", SelectionKey: "first"}
+	first := r.Candidates(req)
+	if len(first) != 2 {
+		t.Fatalf("want 2 candidates, got %d", len(first))
+	}
+	r.ObserveSession(req, first[0].Deployment.ID)
+	req.SelectionKey = "different"
+	second := r.Candidates(req)
+	if second[0].Deployment.ID != first[0].Deployment.ID {
+		t.Fatalf("session moved from %s to %s", first[0].Deployment.ID, second[0].Deployment.ID)
+	}
+}
+
+func TestReadyMeshCapabilityCooldownIsScoped(t *testing.T) {
+	cfg := config.Default()
+	cfg.Routing.Strategy = "ready_mesh"
+	cfg.Providers = []config.ProviderConfig{{ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "http://x", Enabled: true, Models: []config.ModelConfig{
+		{ID: "a", Model: "a", Enabled: true, Weight: 1, Capabilities: config.Capabilities{Streaming: true}},
+		{ID: "b", Model: "b", Enabled: true, Weight: 1, Capabilities: config.Capabilities{Streaming: true}},
+	}}}
+	h := health.New(5, time.Hour)
+	h.ConfigureAdvanced(5, time.Hour, 2, time.Hour)
+	h.RecordSuccess("p/a", time.Millisecond)
+	h.RecordSuccess("p/b", time.Millisecond)
+	h.RecordScopeFailure("p/a", []string{"streaming"}, "x")
+	h.RecordScopeFailure("p/a", []string{"streaming"}, "x")
+	r := New(cfg, h)
+	stream := r.Candidates(Requirement{Model: "auto", Streaming: true})
+	if len(stream) != 1 || stream[0].Deployment.ID != "p/b" {
+		t.Fatalf("bad scoped filter %#v", stream)
+	}
+	if plain := r.Candidates(Requirement{Model: "auto"}); len(plain) != 2 {
+		t.Fatalf("global health poisoned %#v", plain)
+	}
+}
+
+func TestEligibleRejectsCandidateAfterQuarantine(t *testing.T) {
+	cfg := config.Default()
+	cfg.Routing.Strategy = "ready_mesh"
+	cfg.Providers = []config.ProviderConfig{{ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "http://x", Enabled: true, Models: []config.ModelConfig{{ID: "m", Model: "m", Enabled: true}}}}
+	h := health.New(5, time.Hour)
+	h.RecordSuccess("p/m", time.Millisecond)
+	r := New(cfg, h)
+	if _, ok := r.Eligible("p/m", Requirement{Model: "auto"}); !ok {
+		t.Fatal("healthy deployment unexpectedly ineligible")
+	}
+	h.Quarantine("p/m", "x", time.Millisecond)
+	if _, ok := r.Eligible("p/m", Requirement{Model: "auto"}); ok {
+		t.Fatal("stale candidate remained eligible")
+	}
+}
+
+func TestSessionAffinityTableRemainsBoundedUnderUniqueIDs(t *testing.T) {
+	cfg := config.Default()
+	cfg.Routing.Strategy = "ready_mesh"
+	cfg.Routing.SessionAffinity = true
+	cfg.Providers = []config.ProviderConfig{{
+		ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "http://example.invalid", Enabled: true,
+		Models: []config.ModelConfig{{ID: "m", Model: "m", Enabled: true, Weight: 1}},
+	}}
+	h := health.New(5, time.Hour)
+	h.RecordSuccess("p/m", time.Millisecond)
+	r := New(cfg, h)
+	for i := 0; i < maxSessionPins+500; i++ {
+		r.ObserveSession(Requirement{Model: "auto", SessionKey: fmt.Sprintf("session-%d", i)}, "p/m")
+	}
+	if got := r.SessionCount(); got > maxSessionPins {
+		t.Fatalf("session table grew to %d, limit=%d", got, maxSessionPins)
+	}
+}
+
+func TestSpecificModelIndexCoversAllMatchForms(t *testing.T) {
+	cfg := config.Default()
+	cfg.Providers = []config.ProviderConfig{{
+		ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "http://example.invalid", Enabled: true,
+		Models: []config.ModelConfig{{
+			ID: "short", Model: "vendor/model-v1", Aliases: []string{"coding", "fast"},
+			Enabled: true, Weight: 1, Capabilities: config.Capabilities{Streaming: true},
+		}},
+	}}
+	h := health.New(5, time.Hour)
+	h.RecordSuccess("p/short", time.Millisecond)
+	r := New(cfg, h)
+
+	for _, key := range []string{"p/short", "short", "vendor/model-v1", "coding", "fast"} {
+		got := r.Candidates(Requirement{Model: key, Streaming: true})
+		if len(got) != 1 || got[0].Deployment.ID != "p/short" {
+			t.Fatalf("model key %q routed to %#v", key, got)
+		}
+		if indexed := r.byModel[key]; len(indexed) != 1 || indexed[0].ID != "p/short" {
+			t.Fatalf("model key %q missing from index: %#v", key, indexed)
+		}
 	}
 }

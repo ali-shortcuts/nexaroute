@@ -13,12 +13,13 @@ func (s *Server) models(w http.ResponseWriter, r *http.Request) {
 	s.runtimeMu.RLock()
 	deployments := s.rt.All()
 	s.runtimeMu.RUnlock()
-	data := []map[string]any{}
-	seen := map[string]bool{}
+	created := time.Now().Unix()
+	data := make([]map[string]any, 0, 2+len(deployments)*2)
+	seen := make(map[string]bool, 2+len(deployments)*2)
 	if len(deployments) > 0 {
 		for _, id := range []string{"auto", "claude-auto"} {
 			seen[id] = true
-			data = append(data, map[string]any{"id": id, "object": "model", "created": time.Now().Unix(), "owned_by": "gateway"})
+			data = append(data, map[string]any{"id": id, "object": "model", "created": created, "owned_by": "gateway"})
 		}
 	}
 	for _, d := range deployments {
@@ -28,7 +29,7 @@ func (s *Server) models(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			seen[id] = true
-			data = append(data, map[string]any{"id": id, "object": "model", "created": time.Now().Unix(), "owned_by": d.ProviderID})
+			data = append(data, map[string]any{"id": id, "object": "model", "created": created, "owned_by": d.ProviderID})
 		}
 	}
 	writeJSON(w, 200, map[string]any{"object": "list", "data": data})

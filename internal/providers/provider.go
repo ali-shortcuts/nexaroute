@@ -22,6 +22,8 @@ type Adapter interface {
 	ID() string
 	Kind() string
 	Stats() ProviderStats
+	CredentialsMatch([]string) bool
+	RedactBody([]byte) []byte
 	Do(ctx context.Context, payload []byte, stream bool, forward http.Header) (*http.Response, error)
 	DoPath(ctx context.Context, method, path string, payload []byte, stream bool, forward http.Header) (*http.Response, error)
 	CountTokens(ctx context.Context, payload []byte, forward http.Header) (*http.Response, error)
@@ -41,21 +43,58 @@ func NewRegistry(cfg config.Config) (*Registry, error) {
 	return r, nil
 }
 
-func (r *Registry) Reload(cfg config.Config) error {
-	next := map[string]Adapter{}
+// Prepare builds a complete next registry without mutating the live one.
+// When rebuild is non-nil, unchanged provider adapters are reused so their
+// connection pools and credential cooldown state survive unrelated reloads.
+func (r *Registry) Prepare(cfg config.Config, rebuild map[string]struct{}) (*Registry, error) {
+	r.mu.RLock()
+	current := make(map[string]Adapter, len(r.m))
+	for id, a := range r.m {
+		current[id] = a
+	}
+	r.mu.RUnlock()
+
+	next := &Registry{m: make(map[string]Adapter)}
 	for _, p := range cfg.Providers {
 		if !p.Enabled {
 			continue
 		}
+		if rebuild != nil {
+			if _, changed := rebuild[p.ID]; !changed {
+				if a, ok := current[p.ID]; ok {
+					next.m[p.ID] = a
+					continue
+				}
+			}
+		}
 		a, err := NewAdapter(p, cfg.RequestTimeout())
 		if err != nil {
-			return err
+			return nil, err
 		}
-		next[p.ID] = a
+		next.m[p.ID] = a
 	}
+	return next, nil
+}
+
+func (r *Registry) Replace(next *Registry) {
+	if next == nil {
+		return
+	}
+	next.mu.RLock()
+	m := next.m
+	next.mu.RUnlock()
+
 	r.mu.Lock()
-	r.m = next
+	r.m = m
 	r.mu.Unlock()
+}
+
+func (r *Registry) Reload(cfg config.Config) error {
+	next, err := r.Prepare(cfg, nil)
+	if err != nil {
+		return err
+	}
+	r.Replace(next)
 	return nil
 }
 func (r *Registry) Get(id string) (Adapter, bool) {
@@ -63,6 +102,26 @@ func (r *Registry) Get(id string) (Adapter, bool) {
 	defer r.mu.RUnlock()
 	a, ok := r.m[id]
 	return a, ok
+}
+
+func (r *Registry) Stat(id string) (ProviderStats, bool) {
+	r.mu.RLock()
+	a, ok := r.m[id]
+	r.mu.RUnlock()
+	if !ok {
+		return ProviderStats{}, false
+	}
+	return a.Stats(), true
+}
+
+func (r *Registry) CredentialsMatchProvider(p config.ProviderConfig) bool {
+	r.mu.RLock()
+	a, ok := r.m[p.ID]
+	r.mu.RUnlock()
+	if !ok {
+		return false
+	}
+	return a.CredentialsMatch(p.ResolvedCredentials())
 }
 
 func (r *Registry) Stats() []ProviderStats {
@@ -80,5 +139,8 @@ func (r *Registry) Stats() []ProviderStats {
 }
 func NewAdapter(p config.ProviderConfig, timeout time.Duration) (Adapter, error) {
 	p.ApplyDefaults()
+	if err := config.ValidateProviderConfig(p); err != nil {
+		return nil, err
+	}
 	return newHTTPAdapter(p, timeout)
 }

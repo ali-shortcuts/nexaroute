@@ -124,3 +124,45 @@ func TestFiveRecoveryFailuresThenEnterCooldownKeepsExactCount(t *testing.T) {
 		t.Fatalf("unexpected cooldown state: %+v", st)
 	}
 }
+
+func TestInvalidateAndRetainHealthProofs(t *testing.T) {
+	m := New(5, 30*time.Minute)
+	m.RecordSuccess("p/keep", time.Millisecond)
+	m.RecordSuccess("p/change", time.Millisecond)
+	m.RecordSuccess("p/remove", time.Millisecond)
+
+	m.Invalidate("p/change")
+	m.Retain(map[string]struct{}{"p/keep": {}, "p/change": {}})
+
+	if st := m.Get("p/keep"); st.Status != Healthy {
+		t.Fatalf("unchanged deployment lost health: %+v", st)
+	}
+	if st := m.Get("p/change"); st.Status != Unknown {
+		t.Fatalf("changed deployment kept stale health proof: %+v", st)
+	}
+	for _, st := range m.Snapshot() {
+		if st.Deployment == "p/remove" {
+			t.Fatalf("removed deployment health state was retained: %+v", st)
+		}
+	}
+}
+
+func TestCapabilityCooldownDoesNotPoisonGlobalHealth(t *testing.T) {
+	m := New(5, time.Hour)
+	m.ConfigureAdvanced(5, time.Hour, 2, time.Hour)
+	m.RecordSuccess("p/m", time.Millisecond)
+	m.RecordScopeFailure("p/m", []string{"streaming"}, "x")
+	if !m.ScopesReady("p/m", []string{"streaming"}) {
+		t.Fatal("scope circuit opened too early")
+	}
+	m.RecordScopeFailure("p/m", []string{"streaming"}, "x")
+	if m.ScopesReady("p/m", []string{"streaming"}) {
+		t.Fatal("scope circuit should be cooling down")
+	}
+	if st := m.Get("p/m"); st.Status != Healthy {
+		t.Fatalf("scope failure poisoned global health: %+v", st)
+	}
+	if !m.ScopesReady("p/m", []string{"tools"}) {
+		t.Fatal("unrelated scope was poisoned")
+	}
+}

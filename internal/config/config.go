@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"math"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -26,27 +29,35 @@ type AdminConfig struct {
 }
 
 type RoutingConfig struct {
-	Strategy               string  `json:"strategy"`
-	FallbackOnUnknownModel bool    `json:"fallback_on_unknown_model"`
-	MaxAttempts            int     `json:"max_attempts"`
-	FailureThreshold       int     `json:"failure_threshold"`
-	CooldownSeconds        int     `json:"cooldown_seconds"`
-	RequestTimeoutMS       int     `json:"request_timeout_ms"`
-	LatencyWeight          float64 `json:"latency_weight"`
-	FailureWeight          float64 `json:"failure_weight"`
-	RetryBackoffMS         int     `json:"retry_backoff_ms"`
-	MaxRetryAfterSeconds   int     `json:"max_retry_after_seconds"`
+	Strategy                   string  `json:"strategy"`
+	FallbackOnUnknownModel     bool    `json:"fallback_on_unknown_model"`
+	SessionAffinity            bool    `json:"session_affinity"`
+	SessionTTLSeconds          int     `json:"session_ttl_seconds"`
+	P2CWindow                  int     `json:"p2c_window"`
+	MaxAttempts                int     `json:"max_attempts"`
+	MaxInflightRequests        int     `json:"max_inflight_requests"`
+	FailureThreshold           int     `json:"failure_threshold"`
+	CooldownSeconds            int     `json:"cooldown_seconds"`
+	CapabilityFailureThreshold int     `json:"capability_failure_threshold"`
+	CapabilityCooldownSeconds  int     `json:"capability_cooldown_seconds"`
+	RequestTimeoutMS           int     `json:"request_timeout_ms"`
+	LatencyWeight              float64 `json:"latency_weight"`
+	FailureWeight              float64 `json:"failure_weight"`
+	CapacityWeight             float64 `json:"capacity_weight"`
+	RetryBackoffMS             int     `json:"retry_backoff_ms"`
+	MaxRetryAfterSeconds       int     `json:"max_retry_after_seconds"`
 }
 
 type ProbeConfig struct {
-	Enabled          bool `json:"enabled"`
-	OnStart          bool `json:"on_start"`
-	IntervalSeconds  int  `json:"interval_seconds"`
-	TimeoutMS        int  `json:"timeout_ms"`
-	MaxTokens        int  `json:"max_tokens"`
-	Concurrency      int  `json:"concurrency"`
-	RecoveryAttempts int  `json:"recovery_attempts"`
-	RecoveryRetryMS  int  `json:"recovery_retry_ms"`
+	Enabled           bool `json:"enabled"`
+	OnStart           bool `json:"on_start"`
+	IntervalSeconds   int  `json:"interval_seconds"`
+	ReadyLeaseSeconds int  `json:"ready_lease_seconds"`
+	TimeoutMS         int  `json:"timeout_ms"`
+	MaxTokens         int  `json:"max_tokens"`
+	Concurrency       int  `json:"concurrency"`
+	RecoveryAttempts  int  `json:"recovery_attempts"`
+	RecoveryRetryMS   int  `json:"recovery_retry_ms"`
 }
 
 type CredentialConfig struct {
@@ -104,24 +115,99 @@ type Capabilities struct {
 	Reasoning bool `json:"reasoning"`
 }
 
+const (
+	maxProviders              = 512
+	maxModelsPerProvider      = 4096
+	maxCredentialsPerProvider = 256
+	maxProviderHeaders        = 128
+	maxProviderConcurrency    = 4096
+	maxProbeConcurrency       = 1024
+	maxRoutingAttempts        = 64
+	maxProbeTokens            = 64
+	maxStringIDBytes          = 256
+	maxURLBytes               = 4096
+	maxTotalDeployments       = 20000
+	maxTotalAliases           = 100000
+	maxConfigBytes            = 16 << 20
+)
+
+func validLocalID(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' {
+			continue
+		}
+		switch c {
+		case '-', '_', '.':
+			continue
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func validHeaderName(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' {
+			continue
+		}
+		switch c {
+		case '!', '#', '$', '%', '&', 0x27, '*', '+', '-', '.', '^', '_', 0x60, '|', '~':
+			continue
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func validHeaderValue(s string) bool {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c == '\t' || c >= 0x20 && c != 0x7f {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
 func Default() Config {
 	return Config{
 		Listen: "127.0.0.1:8080",
 		Admin:  AdminConfig{BindLocalOnly: true},
 		Routing: RoutingConfig{
-			Strategy: "ready_queue", FallbackOnUnknownModel: true, MaxAttempts: 4, FailureThreshold: 5, CooldownSeconds: 1800,
-			RequestTimeoutMS: 120000, LatencyWeight: 0.015, FailureWeight: 25,
+			Strategy: "ready_mesh", FallbackOnUnknownModel: true, SessionAffinity: true, SessionTTLSeconds: 3600, P2CWindow: 8,
+			MaxAttempts: 4, MaxInflightRequests: 128, FailureThreshold: 5, CooldownSeconds: 1800,
+			CapabilityFailureThreshold: 2, CapabilityCooldownSeconds: 300,
+			RequestTimeoutMS: 120000, LatencyWeight: 0.015, FailureWeight: 25, CapacityWeight: 35,
 			RetryBackoffMS: 150, MaxRetryAfterSeconds: 60,
 		},
-		Probe: ProbeConfig{Enabled: true, OnStart: true, IntervalSeconds: 120, TimeoutMS: 8000, MaxTokens: 1, Concurrency: 16, RecoveryAttempts: 5, RecoveryRetryMS: 500},
+		Probe: ProbeConfig{Enabled: true, OnStart: true, IntervalSeconds: 120, ReadyLeaseSeconds: 300, TimeoutMS: 8000, MaxTokens: 1, Concurrency: 16, RecoveryAttempts: 5, RecoveryRetryMS: 500},
 	}
 }
 
 func Load(path string) (Config, error) {
 	cfg := Default()
-	b, err := os.ReadFile(path)
+	f, err := os.Open(path)
 	if err != nil {
 		return cfg, err
+	}
+	defer f.Close()
+	b, err := io.ReadAll(io.LimitReader(f, maxConfigBytes+1))
+	if err != nil {
+		return cfg, err
+	}
+	if len(b) > maxConfigBytes {
+		return cfg, fmt.Errorf("config exceeds safe limit %d bytes", maxConfigBytes)
 	}
 	if err := json.Unmarshal(b, &cfg); err != nil {
 		return cfg, err
@@ -153,52 +239,55 @@ func (c *Config) ApplyDefaults() {
 		c.Listen = "127.0.0.1:8080"
 	}
 	if c.Routing.Strategy == "" {
-		c.Routing.Strategy = "ready_queue"
+		c.Routing.Strategy = "ready_mesh"
 	}
-	if c.Routing.MaxAttempts <= 0 {
+	if c.Routing.SessionTTLSeconds == 0 {
+		c.Routing.SessionTTLSeconds = 3600
+	}
+	if c.Routing.P2CWindow == 0 {
+		c.Routing.P2CWindow = 8
+	}
+	if c.Routing.MaxAttempts == 0 {
 		c.Routing.MaxAttempts = 4
 	}
-	if c.Routing.FailureThreshold <= 0 {
+	if c.Routing.MaxInflightRequests == 0 {
+		c.Routing.MaxInflightRequests = 128
+	}
+	if c.Routing.FailureThreshold == 0 {
 		c.Routing.FailureThreshold = 5
 	}
-	if c.Routing.CooldownSeconds <= 0 {
+	if c.Routing.CooldownSeconds == 0 {
 		c.Routing.CooldownSeconds = 1800
 	}
-	if c.Routing.RequestTimeoutMS <= 0 {
+	if c.Routing.CapabilityFailureThreshold == 0 {
+		c.Routing.CapabilityFailureThreshold = 2
+	}
+	if c.Routing.CapabilityCooldownSeconds == 0 {
+		c.Routing.CapabilityCooldownSeconds = 300
+	}
+	if c.Routing.RequestTimeoutMS == 0 {
 		c.Routing.RequestTimeoutMS = 120000
 	}
-	if c.Routing.LatencyWeight == 0 {
-		c.Routing.LatencyWeight = 0.015
-	}
-	if c.Routing.FailureWeight == 0 {
-		c.Routing.FailureWeight = 25
-	}
-	if c.Routing.RetryBackoffMS < 0 {
-		c.Routing.RetryBackoffMS = 0
-	}
-	if c.Routing.MaxRetryAfterSeconds <= 0 {
+	if c.Routing.MaxRetryAfterSeconds == 0 {
 		c.Routing.MaxRetryAfterSeconds = 60
 	}
-	if c.Probe.IntervalSeconds <= 0 {
+	if c.Probe.IntervalSeconds == 0 {
 		c.Probe.IntervalSeconds = 120
 	}
-	if c.Probe.TimeoutMS <= 0 {
+	if c.Probe.ReadyLeaseSeconds == 0 {
+		c.Probe.ReadyLeaseSeconds = 300
+	}
+	if c.Probe.TimeoutMS == 0 {
 		c.Probe.TimeoutMS = 8000
 	}
-	if c.Probe.MaxTokens <= 0 {
+	if c.Probe.MaxTokens == 0 {
 		c.Probe.MaxTokens = 1
 	}
-	if c.Probe.Concurrency <= 0 {
+	if c.Probe.Concurrency == 0 {
 		c.Probe.Concurrency = 16
 	}
-	if c.Probe.RecoveryAttempts <= 0 {
+	if c.Probe.RecoveryAttempts == 0 {
 		c.Probe.RecoveryAttempts = 5
-	}
-	if c.Probe.RecoveryRetryMS < 0 {
-		c.Probe.RecoveryRetryMS = 0
-	}
-	if c.Probe.RecoveryRetryMS == 0 {
-		c.Probe.RecoveryRetryMS = 500
 	}
 	for i := range c.Providers {
 		c.Providers[i].ApplyDefaults()
@@ -231,10 +320,10 @@ func (p *ProviderConfig) ApplyDefaults() {
 	if p.CountTokensPath == "" {
 		p.CountTokensPath = "/v1/messages/count_tokens"
 	}
-	if p.MaxConcurrency <= 0 {
+	if p.MaxConcurrency == 0 {
 		p.MaxConcurrency = 32
 	}
-	if p.StreamIdleTimeoutSeconds <= 0 {
+	if p.StreamIdleTimeoutSeconds == 0 {
 		p.StreamIdleTimeoutSeconds = 180
 	}
 	if len(p.ForwardHeaders) == 0 && p.Type == "anthropic_compatible" {
@@ -246,7 +335,7 @@ func (p *ProviderConfig) ApplyDefaults() {
 		}
 	}
 	for i := range p.Models {
-		if p.Models[i].Weight <= 0 {
+		if p.Models[i].Weight == 0 {
 			p.Models[i].Weight = 1
 		}
 	}
@@ -256,26 +345,91 @@ func (c Config) Validate() error {
 	if strings.TrimSpace(c.Listen) == "" {
 		return errors.New("listen is required")
 	}
-	if c.Routing.Strategy != "ready_queue" && c.Routing.Strategy != "adaptive" && c.Routing.Strategy != "adaptive_round_robin" && c.Routing.Strategy != "priority" && c.Routing.Strategy != "round_robin" && c.Routing.Strategy != "least_latency" {
-		return errors.New("routing.strategy must be ready_queue, adaptive, adaptive_round_robin, priority, round_robin, or least_latency")
+	if _, _, err := net.SplitHostPort(c.Listen); err != nil {
+		return fmt.Errorf("listen must be host:port: %w", err)
 	}
-	if c.Routing.MaxAttempts <= 0 {
-		return errors.New("routing.max_attempts must be > 0")
+	if len(c.Providers) > maxProviders {
+		return fmt.Errorf("providers exceeds safe limit %d", maxProviders)
 	}
-	if c.Routing.FailureThreshold <= 0 {
-		return errors.New("routing.failure_threshold must be > 0")
+	if c.Routing.Strategy != "ready_mesh" && c.Routing.Strategy != "ready_queue" && c.Routing.Strategy != "adaptive" && c.Routing.Strategy != "adaptive_round_robin" && c.Routing.Strategy != "priority" && c.Routing.Strategy != "round_robin" && c.Routing.Strategy != "least_latency" {
+		return errors.New("routing.strategy must be ready_mesh, ready_queue, adaptive, adaptive_round_robin, priority, round_robin, or least_latency")
 	}
-	if c.Routing.CooldownSeconds < 1 {
-		return errors.New("routing.cooldown_seconds must be > 0")
+	if c.Routing.MaxAttempts <= 0 || c.Routing.MaxAttempts > maxRoutingAttempts {
+		return fmt.Errorf("routing.max_attempts must be between 1 and %d", maxRoutingAttempts)
 	}
-	if c.Routing.RequestTimeoutMS < 100 {
-		return errors.New("routing.request_timeout_ms must be >= 100")
+	if c.Routing.MaxInflightRequests < 1 || c.Routing.MaxInflightRequests > 10000 {
+		return errors.New("routing.max_inflight_requests must be between 1 and 10000")
+	}
+	if c.Routing.SessionTTLSeconds < 1 || c.Routing.SessionTTLSeconds > 30*24*60*60 {
+		return errors.New("routing.session_ttl_seconds must be between 1 and 2592000")
+	}
+	if c.Routing.P2CWindow < 1 || c.Routing.P2CWindow > maxModelsPerProvider {
+		return fmt.Errorf("routing.p2c_window must be between 1 and %d", maxModelsPerProvider)
+	}
+	if c.Routing.FailureThreshold <= 0 || c.Routing.FailureThreshold > 1000 {
+		return errors.New("routing.failure_threshold must be between 1 and 1000")
+	}
+	if c.Routing.CapabilityFailureThreshold <= 0 || c.Routing.CapabilityFailureThreshold > 1000 {
+		return errors.New("routing.capability_failure_threshold must be between 1 and 1000")
+	}
+	if c.Routing.CooldownSeconds < 1 || c.Routing.CooldownSeconds > 7*24*60*60 {
+		return errors.New("routing.cooldown_seconds must be between 1 and 604800")
+	}
+	if c.Routing.CapabilityCooldownSeconds < 1 || c.Routing.CapabilityCooldownSeconds > 7*24*60*60 {
+		return errors.New("routing.capability_cooldown_seconds must be between 1 and 604800")
+	}
+	if c.Routing.RequestTimeoutMS < 100 || c.Routing.RequestTimeoutMS > 30*60*1000 {
+		return errors.New("routing.request_timeout_ms must be between 100 and 1800000")
+	}
+	if c.Routing.RetryBackoffMS < 0 || c.Routing.RetryBackoffMS > 60000 {
+		return errors.New("routing.retry_backoff_ms must be between 0 and 60000")
+	}
+	if c.Routing.MaxRetryAfterSeconds < 1 || c.Routing.MaxRetryAfterSeconds > 86400 {
+		return errors.New("routing.max_retry_after_seconds must be between 1 and 86400")
+	}
+	for name, v := range map[string]float64{
+		"routing.latency_weight":  c.Routing.LatencyWeight,
+		"routing.failure_weight":  c.Routing.FailureWeight,
+		"routing.capacity_weight": c.Routing.CapacityWeight,
+	} {
+		if math.IsNaN(v) || math.IsInf(v, 0) || v < 0 || v > 1_000_000 {
+			return fmt.Errorf("%s must be finite and between 0 and 1000000", name)
+		}
+	}
+	if c.Probe.IntervalSeconds < 1 || c.Probe.IntervalSeconds > 86400 {
+		return errors.New("probe.interval_seconds must be between 1 and 86400")
+	}
+	if c.Probe.ReadyLeaseSeconds < 1 || c.Probe.ReadyLeaseSeconds > 7*24*60*60 {
+		return errors.New("probe.ready_lease_seconds must be between 1 and 604800")
+	}
+	if c.Probe.TimeoutMS < 100 || c.Probe.TimeoutMS > 300000 {
+		return errors.New("probe.timeout_ms must be between 100 and 300000")
+	}
+	if c.Probe.MaxTokens < 1 || c.Probe.MaxTokens > maxProbeTokens {
+		return fmt.Errorf("probe.max_tokens must be between 1 and %d", maxProbeTokens)
+	}
+	if c.Probe.Concurrency < 1 || c.Probe.Concurrency > maxProbeConcurrency {
+		return fmt.Errorf("probe.concurrency must be between 1 and %d", maxProbeConcurrency)
+	}
+	if c.Probe.RecoveryAttempts < 1 || c.Probe.RecoveryAttempts > 100 {
+		return errors.New("probe.recovery_attempts must be between 1 and 100")
+	}
+	if c.Probe.RecoveryRetryMS < 0 || c.Probe.RecoveryRetryMS > 60000 {
+		return errors.New("probe.recovery_retry_ms must be between 0 and 60000")
 	}
 	seenP := map[string]bool{}
 	seenD := map[string]bool{}
+	totalModels := 0
+	totalAliases := 0
 	for i, p := range c.Providers {
 		if p.ID == "" {
 			return fmt.Errorf("providers[%d].id is required", i)
+		}
+		if len(p.ID) > maxStringIDBytes || len(p.Name) > 1024 {
+			return fmt.Errorf("provider %q id/name is too long", p.ID)
+		}
+		if !validLocalID(p.ID) {
+			return fmt.Errorf("provider id %q may contain only letters, digits, dot, underscore, and hyphen", p.ID)
 		}
 		if seenP[p.ID] {
 			return fmt.Errorf("duplicate provider id %q", p.ID)
@@ -286,6 +440,22 @@ func (c Config) Validate() error {
 		}
 		if p.BaseURL == "" {
 			return fmt.Errorf("provider %q base_url is required", p.ID)
+		}
+		if len(p.BaseURL) > maxURLBytes || len(p.ProxyURL) > maxURLBytes {
+			return fmt.Errorf("provider %q URL is too long", p.ID)
+		}
+		if len(p.Models) > maxModelsPerProvider {
+			return fmt.Errorf("provider %q models exceeds safe limit %d", p.ID, maxModelsPerProvider)
+		}
+		totalModels += len(p.Models)
+		if totalModels > maxTotalDeployments {
+			return fmt.Errorf("total deployments exceeds safe limit %d", maxTotalDeployments)
+		}
+		if len(p.Credentials) > maxCredentialsPerProvider {
+			return fmt.Errorf("provider %q credentials exceeds safe limit %d", p.ID, maxCredentialsPerProvider)
+		}
+		if len(p.Headers) > maxProviderHeaders || len(p.ForwardHeaders) > maxProviderHeaders {
+			return fmt.Errorf("provider %q headers exceeds safe limit %d", p.ID, maxProviderHeaders)
 		}
 		u, err := url.Parse(p.BaseURL)
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
@@ -300,15 +470,53 @@ func (c Config) Validate() error {
 		if p.AuthMode != "" && p.AuthMode != "bearer" && p.AuthMode != "x-api-key" && p.AuthMode != "none" {
 			return fmt.Errorf("provider %q has unsupported auth_mode %q", p.ID, p.AuthMode)
 		}
-		if p.MaxConcurrency < 0 {
-			return fmt.Errorf("provider %q max_concurrency must be >= 0", p.ID)
+		if p.MaxConcurrency < 1 || p.MaxConcurrency > maxProviderConcurrency {
+			return fmt.Errorf("provider %q max_concurrency must be between 1 and %d", p.ID, maxProviderConcurrency)
 		}
-		if p.StreamIdleTimeoutSeconds < 0 {
-			return fmt.Errorf("provider %q stream_idle_timeout_seconds must be >= 0", p.ID)
+		if p.StreamIdleTimeoutSeconds < 1 || p.StreamIdleTimeoutSeconds > 24*60*60 {
+			return fmt.Errorf("provider %q stream_idle_timeout_seconds must be between 1 and 86400", p.ID)
+		}
+		for k, v := range p.Headers {
+			if len(k) > 256 || len(v) > 8192 || !validHeaderName(k) || !validHeaderValue(v) {
+				return fmt.Errorf("provider %q has invalid custom header", p.ID)
+			}
+		}
+		for _, h := range p.ForwardHeaders {
+			if len(h) > 256 || !validHeaderName(h) {
+				return fmt.Errorf("provider %q has invalid forward header", p.ID)
+			}
+		}
+		for name, path := range map[string]string{
+			"chat_path": p.ChatPath, "messages_path": p.MessagesPath, "models_path": p.ModelsPath, "count_tokens_path": p.CountTokensPath,
+		} {
+			if len(path) > maxURLBytes {
+				return fmt.Errorf("provider %q %s is too long", p.ID, name)
+			}
+			if _, err := url.Parse(path); err != nil {
+				return fmt.Errorf("provider %q has invalid %s", p.ID, name)
+			}
 		}
 		for j, m := range p.Models {
 			if m.ID == "" {
 				return fmt.Errorf("provider %q model[%d].id is required", p.ID, j)
+			}
+			if len(m.ID) > maxStringIDBytes || len(m.Model) > 1024 || len(m.Aliases) > 128 {
+				return fmt.Errorf("provider %q model[%d] identifiers/aliases exceed safe limits", p.ID, j)
+			}
+			if !validLocalID(m.ID) {
+				return fmt.Errorf("provider %q model[%d].id may contain only letters, digits, dot, underscore, and hyphen", p.ID, j)
+			}
+			totalAliases += len(m.Aliases)
+			if totalAliases > maxTotalAliases {
+				return fmt.Errorf("total model aliases exceeds safe limit %d", maxTotalAliases)
+			}
+			for _, alias := range m.Aliases {
+				if len(alias) > maxStringIDBytes {
+					return fmt.Errorf("deployment %q alias is too long", p.ID+"/"+m.ID)
+				}
+			}
+			if math.IsNaN(m.Weight) || math.IsInf(m.Weight, 0) || m.Weight <= 0 || m.Weight > 1_000_000 {
+				return fmt.Errorf("deployment %q weight must be finite and between 0 and 1000000", p.ID+"/"+m.ID)
 			}
 			key := p.ID + "/" + m.ID
 			if seenD[key] {
@@ -321,6 +529,16 @@ func (c Config) Validate() error {
 		}
 	}
 	return nil
+}
+
+func ValidateProviderConfig(p ProviderConfig) error {
+	p.ApplyDefaults()
+	if p.ID == "" {
+		p.ID = "_provider_check"
+	}
+	cfg := Default()
+	cfg.Providers = []ProviderConfig{p}
+	return cfg.Validate()
 }
 
 func (p ProviderConfig) ResolvedAPIKey() string {
@@ -360,6 +578,9 @@ func (c Config) Cooldown() time.Duration {
 func (c Config) ProbeInterval() time.Duration {
 	return time.Duration(c.Probe.IntervalSeconds) * time.Second
 }
+func (c Config) ProbeReadyLease() time.Duration {
+	return time.Duration(c.Probe.ReadyLeaseSeconds) * time.Second
+}
 func (c Config) ProbeTimeout() time.Duration {
 	return time.Duration(c.Probe.TimeoutMS) * time.Millisecond
 }
@@ -389,6 +610,9 @@ func SaveAtomic(path string, c Config) error {
 	b, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
 		return err
+	}
+	if len(b) > maxConfigBytes {
+		return fmt.Errorf("serialized config exceeds safe limit %d bytes", maxConfigBytes)
 	}
 
 	dir := filepath.Dir(path)

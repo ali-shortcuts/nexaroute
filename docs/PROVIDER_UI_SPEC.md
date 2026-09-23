@@ -38,12 +38,13 @@ Required semantics:
 ## Runtime behavior after save
 
 A successful save:
-1. validates the proposed config,
-2. validates that provider adapters can be constructed,
+1. takes a fresh config snapshot under the control-plane mutation lock,
+2. validates and prepares the proposed runtime before touching disk,
 3. writes the config atomically,
-4. reloads the provider registry,
-5. reloads the router deployments,
-6. triggers fresh health probes.
+4. reuses unchanged provider adapters so live HTTP pools and credential cooldown state survive unrelated edits,
+5. rebuilds only providers whose transport/auth/credential identity actually changed, including rotated environment-backed credentials,
+6. reloads the router deployment indexes and invalidates only stale health proofs,
+7. triggers the selective probe/recovery engine.
 
 A gateway process restart is not required for provider CRUD.
 

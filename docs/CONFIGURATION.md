@@ -66,6 +66,7 @@ A client requesting `model: "coding"` receives the best eligible deployment acco
 Available strategies:
 
 ```text
+ready_mesh
 ready_queue
 adaptive_round_robin
 adaptive
@@ -78,34 +79,53 @@ Important controls:
 
 - `fallback_on_unknown_model`
 - `max_attempts`
+- `max_inflight_requests` — global admission limit for expensive data-plane POST requests; default `128`, range `1..10000`. Health, readiness, metrics, model listing, and Admin API remain observable when the data plane is saturated.
 - `failure_threshold` (legacy/other routing strategies)
-- `cooldown_seconds` (default `1800` for ready-queue recovery)
+- `cooldown_seconds` (default `1800` for supervised ready-strategy recovery)
 - `request_timeout_ms`
 - `latency_weight`
 - `failure_weight`
 - `retry_backoff_ms`
 - `max_retry_after_seconds`
 
+
+### Ready Mesh supervisor semantics
+
+With `routing.strategy = "ready_mesh"` (recommended/default):
+
+- a deployment must pass a health probe before it can serve Claude traffic;
+- automatic background sweeps skip a `healthy` deployment while its ready-health lease is fresh;
+- successful real Claude traffic refreshes that lease, so active models are not needlessly probe-tested;
+- an idle healthy deployment is micro-probed after the lease expires so cold fallbacks do not stay falsely healthy forever;
+- the first eligible routed failure removes the deployment from the ready queue immediately;
+- the recovery supervisor owns retry/cooldown until the deployment proves healthy again;
+- changing provider Base URL, credentials, auth mode, proxy, endpoint paths, forwarded headers, or the upstream model ID invalidates the old health proof;
+- display-name-only changes do not unnecessarily invalidate a working deployment;
+- a temporary all-key `429` cooldown is a wait state and does not spend the five recovery attempts;
+- the explicit **Probe all models** action remains available when an operator intentionally wants a full retest.
+
 ## Probe settings
 
-Ready-queue recovery adds:
+Supervised ready-strategy recovery adds:
 
+- `ready_lease_seconds` — maximum age of a healthy proof before an idle ready model is revalidated; default `300`
 - `recovery_attempts` — supervisor probes after a quarantined model fails; default `5`
 - `recovery_retry_ms` — delay between failed recovery probes; default `500`
-- a model returns to the ready queue immediately on the first successful recovery probe
+- a model returns to the verified ready pool immediately on the first successful recovery probe
 - after all recovery attempts fail, `routing.cooldown_seconds` is applied before the next recovery cycle
 
 
 
 Default behavior:
 
-- interval: 120 seconds
+- supervisor interval: 120 seconds
+- ready-health lease: 300 seconds
 - max output: 1 token
 - timeout: 8 seconds
 - concurrency: 16
 - failure threshold: inherited by deployment health policy
 
-At 100 models, continuous probing consumes real quota even with tiny prompts. Tune the interval or disable background probes if a provider is expensive or quota-constrained.
+At 100 models, the ready-health lease prevents healthy active models from being synthetic-probed on every sweep. Only new/unverified, recovery-owned, or lease-expired idle deployments need background work. Increase the lease when a provider is expensive or quota-constrained.
 
 ## Admin settings
 
@@ -116,3 +136,18 @@ For local-only use, the default is safest:
 ```
 
 For Docker/LAN access, set an admin key and put TLS/reverse-proxy controls in front if the environment is not fully trusted.
+
+
+### Ready Mesh controls
+
+- `session_affinity` — preserve a successful conversation/deployment relationship while it remains healthy.
+- `session_ttl_seconds` — idle affinity lease; default `3600`.
+- `p2c_window` — maximum number of best-priority candidates considered before the power-of-two pick; default `8`.
+- `capacity_weight` — penalty for live active/waiting provider pressure; default `35`.
+- The Web UI exposes all Ready Mesh controls, including session affinity/TTL, P2C window, capacity weight, capability thresholds/cooldown, global in-flight admission, and ready-health lease.
+- `capability_failure_threshold` — consecutive scoped failures before a capability circuit opens; default `2`.
+- `capability_cooldown_seconds` — scoped circuit cooldown; default `300`.
+
+Provider presets are served by the gateway itself through the Admin API so the Web UI does not maintain a second hard-coded provider catalog. Custom Provider remains fully editable. `models_path` may be a normal path or an absolute URL for compatible providers whose discovery endpoint lives on a different host/path.
+
+**Test connection** checks endpoint reachability/auth separately from **Test selected models**, which performs actual minimal model inference.

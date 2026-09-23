@@ -22,6 +22,7 @@ type Result struct {
 	SkippedCooldown int   `json:"skipped_cooldown"`
 	SkippedMissing  int   `json:"skipped_missing_adapter"`
 	SkippedRecovery int   `json:"skipped_recovery"`
+	SkippedReady    int   `json:"skipped_ready"`
 	DurationMS      int64 `json:"duration_ms"`
 }
 
@@ -228,21 +229,26 @@ func (e *Engine) releaseProbe() {
 }
 
 func (e *Engine) deployment(id string) (router.Deployment, providers.Adapter, bool) {
-	for _, d := range e.rt.All() {
-		if d.ID != id {
-			continue
-		}
-		a, ok := e.reg.Get(d.ProviderID)
-		return d, a, ok
+	d, ok := e.rt.Deployment(id)
+	if !ok {
+		return router.Deployment{}, nil, false
 	}
-	return router.Deployment{}, nil, false
+	a, ok := e.reg.Get(d.ProviderID)
+	return d, a, ok
 }
 
-// RunOnce performs one parallel background sweep. Healthy deployments are
-// continuously revalidated. Unknown deployments need one successful probe
-// before they enter the ready queue. A failed sweep probe immediately
-// quarantines the deployment and starts its dedicated five-attempt recovery
-// lifecycle.
+func readyLeaseExpired(st health.State, now time.Time, lease time.Duration) bool {
+	if lease <= 0 || st.LastChecked.IsZero() {
+		return true
+	}
+	return !now.Before(st.LastChecked.Add(lease))
+}
+
+// RunOnce performs an explicit operator-requested sweep. Background ready-queue
+// sweeps avoid fresh ready deployments, but revalidate an idle healthy
+// deployment once its health lease expires. Real successful Claude traffic
+// refreshes LastChecked, so actively used models normally need no synthetic
+// probe. Quarantined/cooldown deployments remain recovery-supervisor owned.
 func (e *Engine) RunOnce(ctx context.Context) Result {
 	return e.runOnce(ctx, true)
 }
@@ -253,6 +259,9 @@ func (e *Engine) runOnce(ctx context.Context, force bool) Result {
 	defer e.runMu.Unlock()
 
 	cfg := e.current()
+	readySupervisor := router.IsReadyStrategy(cfg.Routing.Strategy)
+	readyLease := cfg.ProbeReadyLease()
+	sweepNow := time.Now()
 	result := Result{}
 	if !force && !cfg.Probe.Enabled {
 		result.DurationMS = time.Since(start).Milliseconds()
@@ -304,11 +313,27 @@ func (e *Engine) runOnce(ctx context.Context, force bool) Result {
 	for _, job := range jobs {
 		d := job.d
 		result.Total++
-		if job.state.Status == health.Cooldown {
+		if !force && readySupervisor {
+			switch job.state.Status {
+			case health.Healthy:
+				if !readyLeaseExpired(job.state, sweepNow, readyLease) {
+					result.SkippedReady++
+					continue
+				}
+			case health.Cooldown:
+				result.SkippedCooldown++
+				e.Recover(d.ID)
+				continue
+			case health.Degraded, health.HalfOpen:
+				result.SkippedRecovery++
+				e.Recover(d.ID)
+				continue
+			}
+		} else if job.state.Status == health.Cooldown {
 			result.SkippedCooldown++
 			continue
 		}
-		if e.isRecovering(d.ID) {
+		if readySupervisor && e.isRecovering(d.ID) {
 			result.SkippedRecovery++
 			continue
 		}
@@ -333,11 +358,26 @@ func (e *Engine) runOnce(ctx context.Context, force bool) Result {
 			cancel()
 
 			if err != nil {
-				e.hm.Quarantine(d.ID, err.Error(), lat)
-				e.bus.Add(events.Event{Kind: "probe_quarantine", Deployment: d.ID, Message: err.Error(), LatencyMS: lat.Milliseconds(), StatusCode: status})
+				if readySupervisor {
+					e.hm.Quarantine(d.ID, err.Error(), lat)
+					e.bus.Add(events.Event{Kind: "probe_quarantine", Deployment: d.ID, Message: err.Error(), LatencyMS: lat.Milliseconds(), StatusCode: status})
+					resultMu.Lock()
+					failedIDs = append(failedIDs, d.ID)
+					resultMu.Unlock()
+				} else {
+					if status == 401 || status == 402 || status == 403 || status == 429 {
+						cooldown := cfg.Cooldown()
+						if status == 429 && cooldown > time.Minute {
+							cooldown = time.Minute
+						}
+						e.hm.ForceCooldown(d.ID, err.Error(), cooldown)
+					} else {
+						e.hm.RecordFailure(d.ID, err.Error(), lat)
+					}
+					e.bus.Add(events.Event{Kind: "probe_fail", Deployment: d.ID, Message: err.Error(), LatencyMS: lat.Milliseconds(), StatusCode: status})
+				}
 				resultMu.Lock()
 				result.Failed++
-				failedIDs = append(failedIDs, d.ID)
 				resultMu.Unlock()
 				return
 			}
@@ -352,8 +392,10 @@ func (e *Engine) runOnce(ctx context.Context, force bool) Result {
 	wg.Wait()
 	// Let every deployment receive its first health check before failed models
 	// consume probe capacity with recovery retries.
-	for _, id := range failedIDs {
-		e.Recover(id)
+	if readySupervisor {
+		for _, id := range failedIDs {
+			e.Recover(id)
+		}
 	}
 	result.DurationMS = time.Since(start).Milliseconds()
 	return result
@@ -369,6 +411,9 @@ func (e *Engine) recoverLoop(ctx context.Context, id string) {
 			return
 		}
 		cfg := e.current()
+		if !router.IsReadyStrategy(cfg.Routing.Strategy) {
+			return
+		}
 		d, a, ok := e.deployment(id)
 		if !ok {
 			return
@@ -423,6 +468,23 @@ func (e *Engine) recoverLoop(ctx context.Context, id string) {
 				e.hm.RecordSuccess(id, lat)
 				e.bus.Add(events.Event{Kind: "recovery_ready", Deployment: id, Message: fmt.Sprintf("recovered on attempt %d/%d", attempt, attempts), LatencyMS: lat.Milliseconds(), StatusCode: status})
 				return
+			}
+
+			if wait, ok := providers.RetryAfter(err); ok {
+				maxWait := time.Duration(cfg.Routing.MaxRetryAfterSeconds) * time.Second
+				if maxWait > 0 && wait > maxWait {
+					wait = maxWait
+				}
+				e.bus.Add(events.Event{Kind: "recovery_deferred", Deployment: id, Message: fmt.Sprintf("credential rate-limit cooldown; retry after %s", wait), StatusCode: status})
+				attempt--
+				t := time.NewTimer(wait)
+				select {
+				case <-ctx.Done():
+					t.Stop()
+					return
+				case <-t.C:
+				}
+				continue
 			}
 
 			lastErr = err.Error()

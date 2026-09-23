@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/ali-shortcuts/nexaroute/internal/health"
+	"github.com/ali-shortcuts/nexaroute/internal/router"
 )
 
 func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
@@ -27,6 +28,16 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintln(w, "# HELP nexaroute_http_requests_total Total HTTP requests received by the gateway.")
 	fmt.Fprintln(w, "# TYPE nexaroute_http_requests_total counter")
 	fmt.Fprintf(w, "nexaroute_http_requests_total %d\n", s.requestTotal.Load())
+
+	fmt.Fprintln(w, "# HELP nexaroute_inflight_requests Data-plane requests currently admitted by the gateway.")
+	fmt.Fprintln(w, "# TYPE nexaroute_inflight_requests gauge")
+	fmt.Fprintf(w, "nexaroute_inflight_requests %d\n", s.inflight.Load())
+	fmt.Fprintln(w, "# HELP nexaroute_inflight_request_limit Global data-plane admission limit.")
+	fmt.Fprintln(w, "# TYPE nexaroute_inflight_request_limit gauge")
+	fmt.Fprintf(w, "nexaroute_inflight_request_limit %d\n", s.admissionLimit())
+	fmt.Fprintln(w, "# HELP nexaroute_overload_rejections_total Data-plane requests rejected because the gateway was at capacity.")
+	fmt.Fprintln(w, "# TYPE nexaroute_overload_rejections_total counter")
+	fmt.Fprintf(w, "nexaroute_overload_rejections_total %d\n", s.overloadRejects.Load())
 
 	fmt.Fprintln(w, "# HELP nexaroute_deployments_total Configured enabled model deployments.")
 	fmt.Fprintln(w, "# TYPE nexaroute_deployments_total gauge")
@@ -65,6 +76,18 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "nexaroute_runtime_events_total{kind=%q} %d\n", sanitizeMetricLabel(k), counts[k])
 	}
 
+	fmt.Fprintln(w, "# HELP nexaroute_errors_total Normalized runtime failures by fault type.")
+	fmt.Fprintln(w, "# TYPE nexaroute_errors_total counter")
+	errorCounts := s.bus.ErrorCounts()
+	errorTypes := make([]string, 0, len(errorCounts))
+	for k := range errorCounts {
+		errorTypes = append(errorTypes, k)
+	}
+	sort.Strings(errorTypes)
+	for _, k := range errorTypes {
+		fmt.Fprintf(w, "nexaroute_errors_total{error_type=%q} %d\n", sanitizeMetricLabel(k), errorCounts[k])
+	}
+
 	fmt.Fprintln(w, "# HELP nexaroute_provider_active_requests Requests currently holding a provider concurrency slot.")
 	fmt.Fprintln(w, "# TYPE nexaroute_provider_active_requests gauge")
 	fmt.Fprintln(w, "# HELP nexaroute_provider_waiting_requests Requests waiting for a provider concurrency slot.")
@@ -95,13 +118,25 @@ func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	usable := 0
+	cfg := s.currentConfig()
 	for _, d := range ds {
-		if s.hm.Get(d.ID).Status != health.Cooldown {
+		st := s.hm.Get(d.ID).Status
+		if router.IsReadyStrategy(cfg.Routing.Strategy) {
+			if st == health.Healthy {
+				usable++
+			}
+			continue
+		}
+		if st != health.Cooldown {
 			usable++
 		}
 	}
 	if usable == 0 {
-		errorJSON(w, 503, "all model deployments are in cooldown")
+		if router.IsReadyStrategy(cfg.Routing.Strategy) {
+			errorJSON(w, 503, "no verified healthy model deployments in ready queue")
+		} else {
+			errorJSON(w, 503, "no usable model deployments")
+		}
 		return
 	}
 	writeJSON(w, 200, map[string]any{"ok": true, "deployments": len(ds), "usable": usable})

@@ -1,10 +1,15 @@
 package router
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"hash/fnv"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/ali-shortcuts/nexaroute/internal/config"
 	"github.com/ali-shortcuts/nexaroute/internal/health"
@@ -22,32 +27,76 @@ type Deployment struct {
 	Capabilities config.Capabilities `json:"capabilities"`
 }
 
+type ProviderLoad struct {
+	Active  int64
+	Waiting int64
+	Limit   int
+}
+
 type Requirement struct {
 	Model                               string
 	Tools, Vision, Streaming, Reasoning bool
-}
-type Scored struct {
-	Deployment Deployment   `json:"deployment"`
-	Health     health.State `json:"health"`
-	Score      float64      `json:"score"`
+	SessionKey                          string
+	SelectionKey                        string
+	ProviderLoad                        map[string]ProviderLoad
+	LoadForProvider                     func(string) ProviderLoad
 }
 
+func (r Requirement) Scopes() []string {
+	out := make([]string, 0, 4)
+	if r.Tools {
+		out = append(out, "tools")
+	}
+	if r.Vision {
+		out = append(out, "vision")
+	}
+	if r.Streaming {
+		out = append(out, "streaming")
+	}
+	if r.Reasoning {
+		out = append(out, "reasoning")
+	}
+	return out
+}
+
+type Scored struct {
+	Deployment       Deployment   `json:"deployment"`
+	Health           health.State `json:"health"`
+	Score            float64      `json:"score"`
+	CapacityPressure float64      `json:"capacity_pressure,omitempty"`
+}
+
+type sessionPin struct {
+	Deployment string
+	Expires    time.Time
+}
+
+const maxSessionPins = 10000
+
 type Router struct {
-	mu     sync.RWMutex
-	cfg    config.Config
-	health *health.Manager
-	all    []Deployment
-	rr     atomic.Uint64
+	mu        sync.RWMutex
+	cfg       config.Config
+	health    *health.Manager
+	all       []Deployment
+	byID      map[string]Deployment
+	byModel   map[string][]Deployment
+	rr        atomic.Uint64
+	sessionMu sync.RWMutex
+	sessions  map[string]sessionPin
 }
 
 func New(cfg config.Config, hm *health.Manager) *Router {
-	r := &Router{health: hm}
+	r := &Router{health: hm, sessions: map[string]sessionPin{}}
 	r.Reload(cfg)
 	return r
 }
+func IsReadyStrategy(s string) bool { return s == "ready_mesh" || s == "ready_queue" }
 
 func (r *Router) Reload(cfg config.Config) {
 	all := make([]Deployment, 0)
+	byID := map[string]Deployment{}
+	byModel := map[string][]Deployment{}
+	valid := map[string]struct{}{}
 	for _, p := range cfg.Providers {
 		if !p.Enabled {
 			continue
@@ -60,13 +109,43 @@ func (r *Router) Reload(cfg config.Config) {
 			if w <= 0 {
 				w = 1
 			}
-			all = append(all, Deployment{ID: p.ID + "/" + m.ID, ProviderID: p.ID, ProviderName: p.Name, ProviderType: p.Type, Model: m.Model, Aliases: m.Aliases, Priority: m.Priority, Weight: w, Capabilities: m.Capabilities})
+			d := Deployment{ID: p.ID + "/" + m.ID, ProviderID: p.ID, ProviderName: p.Name, ProviderType: p.Type, Model: m.Model, Aliases: m.Aliases, Priority: m.Priority, Weight: w, Capabilities: m.Capabilities}
+			all = append(all, d)
+			byID[d.ID] = d
+			valid[d.ID] = struct{}{}
+
+			seenKeys := map[string]struct{}{}
+			keys := append([]string{d.ID, d.Model, m.ID}, d.Aliases...)
+			for _, key := range keys {
+				if key == "" {
+					continue
+				}
+				if _, seen := seenKeys[key]; seen {
+					continue
+				}
+				seenKeys[key] = struct{}{}
+				byModel[key] = append(byModel[key], d)
+			}
 		}
 	}
 	r.mu.Lock()
 	r.cfg = cfg
 	r.all = all
+	r.byID = byID
+	r.byModel = byModel
 	r.mu.Unlock()
+	r.sessionMu.Lock()
+	now := time.Now()
+	if !cfg.Routing.SessionAffinity {
+		r.sessions = map[string]sessionPin{}
+	} else {
+		for k, pin := range r.sessions {
+			if _, ok := valid[pin.Deployment]; !ok || now.After(pin.Expires) {
+				delete(r.sessions, k)
+			}
+		}
+	}
+	r.sessionMu.Unlock()
 }
 
 func matchesModel(d Deployment, model string) bool {
@@ -92,90 +171,252 @@ func healthRank(st health.Status) int {
 		return 1
 	case health.HalfOpen:
 		return 2
-	case health.Degraded:
-		return 3
 	default:
 		return 3
 	}
 }
 
+func capacityPressure(l ProviderLoad) float64 {
+	if l.Limit <= 0 {
+		return 0
+	}
+	p := (float64(l.Active) + 2*float64(l.Waiting)) / float64(l.Limit)
+	if p < 0 {
+		return 0
+	}
+	if p > 4 {
+		return 4
+	}
+	return p
+}
+
+func (r *Router) scored(d Deployment, hs health.State, req Requirement, cfg config.Config) Scored {
+	score := 100.0
+	switch hs.Status {
+	case health.Healthy:
+		score += 35
+	case health.Unknown:
+		score += 10
+	case health.HalfOpen:
+		score -= 10
+	case health.Degraded:
+		score -= 20
+	}
+	load := req.ProviderLoad[d.ProviderID]
+	if req.LoadForProvider != nil {
+		load = req.LoadForProvider(d.ProviderID)
+	}
+	pressure := capacityPressure(load)
+	score += d.Weight*10 - float64(d.Priority)*3 - hs.EWMALatencyMS*cfg.Routing.LatencyWeight - pressure*cfg.Routing.CapacityWeight
+	total := hs.Successes + hs.Failures
+	if total > 0 {
+		score -= (float64(hs.Failures) / float64(total)) * cfg.Routing.FailureWeight
+	}
+	return Scored{Deployment: d, Health: hs, Score: score, CapacityPressure: pressure}
+}
+
+func (r *Router) eligibleDeployment(d Deployment, req Requirement, cfg config.Config, ignoreModel bool, scopes []string) (Scored, bool) {
+	if !ignoreModel && !matchesModel(d, req.Model) {
+		return Scored{}, false
+	}
+	if req.Tools && !d.Capabilities.Tools || req.Vision && !d.Capabilities.Vision || req.Streaming && !d.Capabilities.Streaming || req.Reasoning && !d.Capabilities.Reasoning {
+		return Scored{}, false
+	}
+	healthScopes := []string(nil)
+	if cfg.Routing.Strategy == "ready_mesh" {
+		healthScopes = scopes
+	}
+	hs, scopesReady := r.health.GetWithScopes(d.ID, healthScopes)
+	if IsReadyStrategy(cfg.Routing.Strategy) {
+		if hs.Status != health.Healthy {
+			return Scored{}, false
+		}
+		if cfg.Routing.Strategy == "ready_mesh" && !scopesReady {
+			return Scored{}, false
+		}
+	} else if hs.Status == health.Cooldown {
+		return Scored{}, false
+	}
+	return r.scored(d, hs, req, cfg), true
+}
+
+func (r *Router) affinityBucket(req Requirement) string {
+	if strings.TrimSpace(req.SessionKey) == "" {
+		return ""
+	}
+	h := sha256.Sum256([]byte(req.SessionKey))
+	return hex.EncodeToString(h[:16]) + "|" + req.Model + "|" + strings.Join(req.Scopes(), ",")
+}
+func (r *Router) pinned(req Requirement, cfg config.Config) string {
+	if !cfg.Routing.SessionAffinity {
+		return ""
+	}
+	key := r.affinityBucket(req)
+	if key == "" {
+		return ""
+	}
+	now := time.Now()
+	r.sessionMu.RLock()
+	pin, ok := r.sessions[key]
+	if ok && now.Before(pin.Expires) {
+		r.sessionMu.RUnlock()
+		return pin.Deployment
+	}
+	r.sessionMu.RUnlock()
+	if !ok {
+		return ""
+	}
+
+	// Upgrade only for the rare expiry path and re-check after acquiring the
+	// write lock in case another request refreshed the pin meanwhile.
+	r.sessionMu.Lock()
+	defer r.sessionMu.Unlock()
+	pin, ok = r.sessions[key]
+	if !ok {
+		return ""
+	}
+	if time.Now().After(pin.Expires) {
+		delete(r.sessions, key)
+		return ""
+	}
+	return pin.Deployment
+}
+func (r *Router) ObserveSession(req Requirement, id string) {
+	r.mu.RLock()
+	cfg := r.cfg
+	r.mu.RUnlock()
+	if !cfg.Routing.SessionAffinity || strings.TrimSpace(req.SessionKey) == "" || id == "" {
+		return
+	}
+	ttl := time.Duration(cfg.Routing.SessionTTLSeconds) * time.Second
+	if ttl <= 0 {
+		ttl = time.Hour
+	}
+	key := r.affinityBucket(req)
+	r.sessionMu.Lock()
+	if _, exists := r.sessions[key]; !exists && len(r.sessions) >= maxSessionPins {
+		// Affinity is an optimization, not authoritative state. Under a flood of
+		// unique session IDs, evict one bounded entry instead of scanning the
+		// whole table on every insertion.
+		for k := range r.sessions {
+			delete(r.sessions, k)
+			break
+		}
+	}
+	r.sessions[key] = sessionPin{Deployment: id, Expires: time.Now().Add(ttl)}
+	r.sessionMu.Unlock()
+}
+func (r *Router) SessionCount() int {
+	r.sessionMu.Lock()
+	defer r.sessionMu.Unlock()
+	now := time.Now()
+	for k, p := range r.sessions {
+		if now.After(p.Expires) {
+			delete(r.sessions, k)
+		}
+	}
+	return len(r.sessions)
+}
+
+func hashIndex(key string, salt byte, n int) int {
+	if n <= 1 {
+		return 0
+	}
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(key))
+	_, _ = h.Write([]byte{salt})
+	return int(h.Sum64() % uint64(n))
+}
+func better(a, b Scored) bool {
+	if a.Score != b.Score {
+		return a.Score > b.Score
+	}
+	if a.CapacityPressure != b.CapacityPressure {
+		return a.CapacityPressure < b.CapacityPressure
+	}
+	return a.Deployment.ID < b.Deployment.ID
+}
+
+func (r *Router) orderReadyMesh(out []Scored, req Requirement, cfg config.Config) {
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Deployment.Priority != out[j].Deployment.Priority {
+			return out[i].Deployment.Priority < out[j].Deployment.Priority
+		}
+		return better(out[i], out[j])
+	})
+	if len(out) < 2 {
+		return
+	}
+	if pin := r.pinned(req, cfg); pin != "" {
+		for i := range out {
+			if out[i].Deployment.ID == pin {
+				out[0], out[i] = out[i], out[0]
+				return
+			}
+		}
+	}
+	window := 1
+	p := out[0].Deployment.Priority
+	for window < len(out) && out[window].Deployment.Priority == p {
+		window++
+	}
+	if cfg.Routing.P2CWindow > 0 && window > cfg.Routing.P2CWindow {
+		window = cfg.Routing.P2CWindow
+	}
+	if window < 2 {
+		return
+	}
+	key := req.SelectionKey
+	if key == "" {
+		key = req.SessionKey
+	}
+	if key == "" {
+		key = strconv.FormatUint(r.rr.Add(1), 10)
+	}
+	a := hashIndex(key, 'a', window)
+	b := hashIndex(key, 'b', window-1)
+	if b >= a {
+		b++
+	}
+	winner := a
+	if better(out[b], out[a]) {
+		winner = b
+	}
+	out[0], out[winner] = out[winner], out[0]
+}
+
 func (r *Router) Candidates(req Requirement) []Scored {
 	r.mu.RLock()
 	cfg := r.cfg
-	all := append([]Deployment(nil), r.all...)
+	all := r.all
+	source := all
+	known := req.Model == "" || req.Model == "auto" || req.Model == "claude-auto"
+	if !known {
+		source = r.byModel[req.Model]
+		known = len(source) > 0
+	}
 	r.mu.RUnlock()
-
-	build := func(ignoreModel bool) []Scored {
-		out := make([]Scored, 0, len(all))
-		for _, d := range all {
-			if !ignoreModel && !matchesModel(d, req.Model) {
-				continue
+	scopes := req.Scopes()
+	build := func(in []Deployment, ignore bool) []Scored {
+		out := make([]Scored, 0, len(in))
+		for _, d := range in {
+			if s, ok := r.eligibleDeployment(d, req, cfg, ignore, scopes); ok {
+				out = append(out, s)
 			}
-			if req.Tools && !d.Capabilities.Tools {
-				continue
-			}
-			if req.Vision && !d.Capabilities.Vision {
-				continue
-			}
-			if req.Streaming && !d.Capabilities.Streaming {
-				continue
-			}
-			if req.Reasoning && !d.Capabilities.Reasoning {
-				continue
-			}
-			hs := r.health.Get(d.ID)
-			if cfg.Routing.Strategy == "ready_queue" {
-				if hs.Status != health.Healthy {
-					continue
-				}
-			} else if hs.Status == health.Cooldown {
-				continue
-			}
-			score := 100.0
-			switch hs.Status {
-			case health.Healthy:
-				score += 35
-			case health.Unknown:
-				score += 10
-			case health.HalfOpen:
-				score -= 10
-			case health.Degraded:
-				score -= 20
-			}
-			score += d.Weight*10 - float64(d.Priority)*3 - hs.EWMALatencyMS*cfg.Routing.LatencyWeight
-			total := hs.Successes + hs.Failures
-			if total > 0 {
-				score -= (float64(hs.Failures) / float64(total)) * cfg.Routing.FailureWeight
-			}
-			out = append(out, Scored{Deployment: d, Health: hs, Score: score})
 		}
 		return out
 	}
-
-	out := build(false)
-	modelKnown := req.Model == "" || req.Model == "auto" || req.Model == "claude-auto"
-	if !modelKnown {
-		for _, d := range all {
-			if matchesModel(d, req.Model) {
-				modelKnown = true
-				break
-			}
-		}
-	}
-	if len(out) == 0 && !modelKnown && cfg.Routing.FallbackOnUnknownModel {
-		out = build(true)
+	out := build(source, false)
+	if len(out) == 0 && !known && cfg.Routing.FallbackOnUnknownModel {
+		out = build(all, true)
 	}
 	if len(out) <= 1 {
 		return out
 	}
-
-	strategy := cfg.Routing.Strategy
-	switch strategy {
+	switch cfg.Routing.Strategy {
+	case "ready_mesh":
+		r.orderReadyMesh(out, req, cfg)
 	case "ready_queue":
-		// Deterministic, sticky ready queue: strongest configured healthy model
-		// stays first until it leaves Healthy. Priority/weight are static
-		// strength controls; ID is a stable tie-breaker so successful latency
-		// observations do not reshuffle the queue between Claude requests.
 		sort.SliceStable(out, func(i, j int) bool {
 			if out[i].Deployment.Priority != out[j].Deployment.Priority {
 				return out[i].Deployment.Priority < out[j].Deployment.Priority
@@ -203,7 +444,6 @@ func (r *Router) Candidates(req Requirement) []Scored {
 				return ri < rj
 			}
 			li, lj := out[i].Health.EWMALatencyMS, out[j].Health.EWMALatencyMS
-			// Unknown latency goes after measured latency inside the same health band.
 			if li == 0 && lj != 0 {
 				return false
 			}
@@ -223,19 +463,16 @@ func (r *Router) Candidates(req Requirement) []Scored {
 			}
 			return out[i].Deployment.ID < out[j].Deployment.ID
 		})
-		// Rotate only inside the best currently available health band. Rotating
-		// the entire list can promote a degraded/half-open deployment ahead of a
-		// healthy one once the round-robin offset advances far enough.
-		bestRank := healthRank(out[0].Health.Status)
-		window := 1
-		for window < len(out) && healthRank(out[window].Health.Status) == bestRank {
-			window++
+		rank := healthRank(out[0].Health.Status)
+		w := 1
+		for w < len(out) && healthRank(out[w].Health.Status) == rank {
+			w++
 		}
-		if window > 1 {
-			off := int(r.rr.Add(1)-1) % window
-			rot := append([]Scored(nil), out[:window]...)
-			for i := 0; i < window; i++ {
-				out[i] = rot[(i+off)%window]
+		if w > 1 {
+			off := int((r.rr.Add(1) - 1) % uint64(w))
+			rot := append([]Scored(nil), out[:w]...)
+			for i := 0; i < w; i++ {
+				out[i] = rot[(i+off)%w]
 			}
 		}
 	case "adaptive_round_robin":
@@ -246,19 +483,19 @@ func (r *Router) Candidates(req Requirement) []Scored {
 			}
 			return out[i].Score > out[j].Score
 		})
-		window := 1
+		w := 1
 		best := out[0].Score
-		for window < len(out) && window < 32 && out[window].Score >= best-15 && out[window].Health.Status != health.Degraded {
-			window++
+		for w < len(out) && w < 32 && out[w].Score >= best-15 && out[w].Health.Status != health.Degraded {
+			w++
 		}
-		if window > 1 {
-			off := int(r.rr.Add(1)-1) % window
-			rot := append([]Scored(nil), out[:window]...)
-			for i := 0; i < window; i++ {
-				out[i] = rot[(i+off)%window]
+		if w > 1 {
+			off := int((r.rr.Add(1) - 1) % uint64(w))
+			rot := append([]Scored(nil), out[:w]...)
+			for i := 0; i < w; i++ {
+				out[i] = rot[(i+off)%w]
 			}
 		}
-	default: // adaptive
+	default:
 		sort.SliceStable(out, func(i, j int) bool {
 			ri, rj := healthRank(out[i].Health.Status), healthRank(out[j].Health.Status)
 			if ri != rj {
@@ -268,6 +505,23 @@ func (r *Router) Candidates(req Requirement) []Scored {
 		})
 	}
 	return out
+}
+
+func (r *Router) Eligible(id string, req Requirement) (Scored, bool) {
+	r.mu.RLock()
+	cfg := r.cfg
+	d, ok := r.byID[id]
+	r.mu.RUnlock()
+	if !ok {
+		return Scored{}, false
+	}
+	return r.eligibleDeployment(d, req, cfg, false, req.Scopes())
+}
+func (r *Router) Deployment(id string) (Deployment, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	d, ok := r.byID[id]
+	return d, ok
 }
 
 func (r *Router) All() []Deployment {

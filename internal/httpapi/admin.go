@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,6 +15,11 @@ import (
 
 	"github.com/ali-shortcuts/nexaroute/internal/config"
 	"github.com/ali-shortcuts/nexaroute/internal/providers"
+)
+
+var (
+	errAdminProviderNotFound = errors.New("provider not found")
+	errAdminProviderExists   = errors.New("provider id already exists")
 )
 
 type providerForm struct {
@@ -30,6 +36,60 @@ type testResult struct {
 	Error      string `json:"error,omitempty"`
 }
 
+func (s *Server) adminProviderPresets(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		errorJSON(w, 405, "method not allowed")
+		return
+	}
+	writeJSON(w, 200, map[string]any{"presets": providers.Presets()})
+}
+
+func (s *Server) adminProviderCheck(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		errorJSON(w, 405, "method not allowed")
+		return
+	}
+	var in providerForm
+	if _, err := readJSON(r, &in); err != nil {
+		errorJSON(w, 400, "invalid JSON: "+err.Error())
+		return
+	}
+	if in.PreserveSecret {
+		mergeExistingSecret(s.currentConfig(), &in.Provider)
+	}
+	normalizeProvider(&in.Provider)
+	if in.Provider.BaseURL == "" {
+		errorJSON(w, 400, "base_url is required")
+		return
+	}
+	a, err := providers.NewAdapter(in.Provider, 8*time.Second)
+	if err != nil {
+		errorJSON(w, 400, err.Error())
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
+	defer cancel()
+	start := time.Now()
+	resp, err := a.DoPath(ctx, http.MethodGet, in.Provider.ModelsPath, nil, false, nil)
+	latency := time.Since(start).Milliseconds()
+	if err != nil {
+		writeJSON(w, 200, map[string]any{
+			"ok": false, "reachable": false, "auth_ok": false,
+			"latency_ms": latency, "error": err.Error(),
+		})
+		return
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
+	authOK := resp.StatusCode != http.StatusUnauthorized && resp.StatusCode != http.StatusForbidden
+	reachable := true
+	ok := authOK && resp.StatusCode < 500
+	writeJSON(w, 200, map[string]any{
+		"ok": ok, "reachable": reachable, "auth_ok": authOK,
+		"status_code": resp.StatusCode, "latency_ms": latency,
+	})
+}
+
 func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		errorJSON(w, 405, "method not allowed")
@@ -40,9 +100,11 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 	deployments := s.rt.All()
 	s.runtimeMu.RUnlock()
 	writeJSON(w, 200, map[string]any{
-		"deployments": deployments,
-		"health":      s.hm.Snapshot(),
-		"events":      s.bus.Snapshot(),
+		"deployments":    deployments,
+		"health":         s.hm.Snapshot(),
+		"events":         s.bus.Snapshot(),
+		"provider_stats": s.reg.Stats(),
+		"session_count":  s.rt.SessionCount(),
 		"config": map[string]any{
 			"probe":   cfg.Probe,
 			"routing": cfg.Routing,
@@ -81,14 +143,18 @@ func (s *Server) adminProviders(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		normalizeProvider(&in.Provider)
-		cfg := s.currentConfig()
-		if cfg.ProviderIndex(in.Provider.ID) >= 0 {
-			errorJSON(w, 409, "provider id already exists")
-			return
-		}
-		cfg.Providers = append(cfg.Providers, in.Provider)
-		if err := s.applyConfig(cfg); err != nil {
-			errorJSON(w, 400, err.Error())
+		if _, err := s.mutateConfig(func(cfg *config.Config) error {
+			if cfg.ProviderIndex(in.Provider.ID) >= 0 {
+				return errAdminProviderExists
+			}
+			cfg.Providers = append(cfg.Providers, in.Provider)
+			return nil
+		}); err != nil {
+			if errors.Is(err, errAdminProviderExists) {
+				errorJSON(w, 409, err.Error())
+			} else {
+				errorJSON(w, 400, err.Error())
+			}
 			return
 		}
 		s.probe.Trigger()
@@ -104,15 +170,15 @@ func (s *Server) adminProviderByID(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 400, "provider id required")
 		return
 	}
-	cfg := s.currentConfig()
-	idx := cfg.ProviderIndex(id)
-	if idx < 0 {
-		errorJSON(w, 404, "provider not found")
-		return
-	}
 
 	switch r.Method {
 	case http.MethodGet:
+		cfg := s.currentConfig()
+		idx := cfg.ProviderIndex(id)
+		if idx < 0 {
+			errorJSON(w, 404, "provider not found")
+			return
+		}
 		p := cfg.Providers[idx]
 		reveal := r.URL.Query().Get("reveal") == "1" || r.URL.Query().Get("reveal") == "true"
 		payload := map[string]any{
@@ -137,32 +203,56 @@ func (s *Server) adminProviderByID(w http.ResponseWriter, r *http.Request) {
 			errorJSON(w, 400, "invalid JSON: "+err.Error())
 			return
 		}
-		old := cfg.Providers[idx]
-		if in.Provider.ID == "" {
-			in.Provider.ID = old.ID
-		}
-		if in.Provider.ID != old.ID && cfg.ProviderIndex(in.Provider.ID) >= 0 {
-			errorJSON(w, 409, "provider id already exists")
-			return
-		}
-		if in.PreserveSecret {
-			in.Provider.APIKey = old.APIKey
-			in.Provider.APIKeyEnv = old.APIKeyEnv
-			in.Provider.Credentials = old.Credentials
-		}
-		normalizeProvider(&in.Provider)
-		cfg.Providers[idx] = in.Provider
-		if err := s.applyConfig(cfg); err != nil {
-			errorJSON(w, 400, err.Error())
+		var saved config.ProviderConfig
+		if _, err := s.mutateConfig(func(cfg *config.Config) error {
+			idx := cfg.ProviderIndex(id)
+			if idx < 0 {
+				return errAdminProviderNotFound
+			}
+			old := cfg.Providers[idx]
+			if in.Provider.ID == "" {
+				in.Provider.ID = old.ID
+			}
+			if in.Provider.ID != old.ID && cfg.ProviderIndex(in.Provider.ID) >= 0 {
+				return errAdminProviderExists
+			}
+			if in.PreserveSecret {
+				in.Provider.APIKey = old.APIKey
+				in.Provider.APIKeyEnv = old.APIKeyEnv
+				in.Provider.Credentials = old.Credentials
+			}
+			normalizeProvider(&in.Provider)
+			cfg.Providers[idx] = in.Provider
+			saved = in.Provider
+			return nil
+		}); err != nil {
+			switch {
+			case errors.Is(err, errAdminProviderNotFound):
+				errorJSON(w, 404, err.Error())
+			case errors.Is(err, errAdminProviderExists):
+				errorJSON(w, 409, err.Error())
+			default:
+				errorJSON(w, 400, err.Error())
+			}
 			return
 		}
 		s.probe.Trigger()
-		writeJSON(w, 200, map[string]any{"saved": true, "provider": providerSummary(in.Provider)})
+		writeJSON(w, 200, map[string]any{"saved": true, "provider": providerSummary(saved)})
 
 	case http.MethodDelete:
-		cfg.Providers = append(cfg.Providers[:idx], cfg.Providers[idx+1:]...)
-		if err := s.applyConfig(cfg); err != nil {
-			errorJSON(w, 400, err.Error())
+		if _, err := s.mutateConfig(func(cfg *config.Config) error {
+			idx := cfg.ProviderIndex(id)
+			if idx < 0 {
+				return errAdminProviderNotFound
+			}
+			cfg.Providers = append(cfg.Providers[:idx], cfg.Providers[idx+1:]...)
+			return nil
+		}); err != nil {
+			if errors.Is(err, errAdminProviderNotFound) {
+				errorJSON(w, 404, err.Error())
+			} else {
+				errorJSON(w, 400, err.Error())
+			}
 			return
 		}
 		writeJSON(w, 200, map[string]any{"deleted": true, "id": id})
@@ -213,6 +303,12 @@ func (s *Server) adminProviderTest(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(models) > 100 {
 		models = models[:100]
+	}
+	for _, model := range models {
+		if len(model) > 1024 {
+			errorJSON(w, 400, "model id exceeds safe limit 1024 bytes")
+			return
+		}
 	}
 
 	results := make([]testResult, len(models))
@@ -324,7 +420,7 @@ func normalizeProvider(p *config.ProviderConfig) {
 		if p.Models[i].ID == "" {
 			p.Models[i].ID = slug(p.Models[i].Model)
 		}
-		if p.Models[i].Weight <= 0 {
+		if p.Models[i].Weight == 0 {
 			p.Models[i].Weight = 1
 		}
 	}
@@ -380,8 +476,16 @@ func discoverModels(ctx context.Context, p config.ProviderConfig) ([]string, int
 			continue
 		}
 		lastStatus = resp.StatusCode
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+		b, readErr := io.ReadAll(io.LimitReader(resp.Body, (4<<20)+1))
 		resp.Body.Close()
+		if readErr != nil {
+			lastErr = fmt.Errorf("model discovery read: %w", readErr)
+			continue
+		}
+		if len(b) > 4<<20 {
+			lastErr = fmt.Errorf("model discovery response exceeds 4194304 bytes")
+			continue
+		}
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			b = redactProviderBody(p, b)
 			lastErr = fmt.Errorf("model discovery HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
@@ -401,26 +505,35 @@ func discoverModels(ctx context.Context, p config.ProviderConfig) ([]string, int
 }
 
 func parseModelList(b []byte) []string {
+	const maxModels = 10000
+	const maxModelIDBytes = 1024
 	var root any
 	if json.Unmarshal(b, &root) != nil {
 		return nil
 	}
 	out := []string{}
 	add := func(v any) {
+		if len(out) >= maxModels {
+			return
+		}
 		switch x := v.(type) {
 		case string:
 			x = strings.TrimSpace(x)
 			if strings.HasPrefix(x, "models/") {
 				x = strings.TrimPrefix(x, "models/")
 			}
-			out = append(out, x)
+			if len(x) <= maxModelIDBytes {
+				out = append(out, x)
+			}
 		case map[string]any:
 			for _, key := range []string{"id", "model", "name"} {
 				if id, _ := x[key].(string); strings.TrimSpace(id) != "" {
 					if strings.HasPrefix(id, "models/") {
 						id = strings.TrimPrefix(id, "models/")
 					}
-					out = append(out, id)
+					if len(id) <= maxModelIDBytes {
+						out = append(out, id)
+					}
 					return
 				}
 			}

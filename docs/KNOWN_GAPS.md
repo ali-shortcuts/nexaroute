@@ -63,6 +63,7 @@ Implemented:
 
 Not implemented as a full internet-facing control plane:
 
+- built-in client authentication/authorization for `/v1/*` (use a trusted reverse proxy/firewall/VPN when exposure is not strictly local);
 - built-in TLS
 - RBAC/multi-user accounts
 - CSRF session framework
@@ -79,6 +80,20 @@ Runtime and health state are single-process/in-memory. Provider configuration is
 
 ## Probe cadence and model quality
 
-Health probing is periodic and event-driven, not a sub-second broadcast to every configured model. The interval is configurable (minimum 1 second), and real traffic also updates health immediately. This avoids turning health checks into a quota/rate-limit attack against the configured providers.
+Health probing is selective and event-driven. Startup establishes readiness, new/unverified deployments are probed, and failed deployments move into dedicated recovery loops. Successful real Claude traffic refreshes a deployment's ready-health lease, so actively used models are not needlessly synthetic-probed. A healthy deployment that remains idle past `probe.ready_lease_seconds` is micro-probed before its health proof is trusted indefinitely. The sweep interval remains configurable (minimum 1 second) without turning health checks into a quota/rate-limit attack.
 
 Micro-probes measure availability and latency. They do not measure model intelligence/answer quality. Model strength is expressed through configured deployment `priority` and `weight`; automatic quality benchmarking is outside the current v0.3 scope.
+
+
+## Routing boundaries after Ready Mesh
+
+Implemented routing intelligence is deterministic and observable: session affinity, capability filtering, priority/weight policy, live concurrency pressure, latency/failure evidence, provider-level P2C selection, credential-level P2C selection, scoped capability circuits, and supervised recovery.
+
+Not implemented yet:
+
+- provider-reported TPM/RPM budget accounting or predictive quota-reset scheduling;
+- cost-aware routing based on current provider pricing/billing;
+- shared/distributed affinity and breaker state across multiple NexaRoute processes;
+- an online learned semantic router that sends every prompt through another model/encoder.
+
+The last item is deliberate for the current data plane: a learned router would add latency, cost and a new failure mode. Model/task specialization should currently be expressed with aliases plus explicit capability metadata until a separately evaluated routing model can prove a measurable benefit.

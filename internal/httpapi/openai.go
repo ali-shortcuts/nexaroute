@@ -34,8 +34,14 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 400, "model and messages are required")
 		return
 	}
-	req := router.Requirement{Model: in.Model, Tools: len(in.Tools) > 0, Vision: hasVisionOpenAI(raw), Streaming: in.Stream, Reasoning: hasReasoningOpenAI(raw)}
-	cfg, candidates, adapters := s.routeSnapshot(req)
+	inspection := inspectRequestJSON(raw, "image_url", []string{"reasoning_effort", "reasoning"})
+	if inspection.TooComplex {
+		errorJSON(w, http.StatusBadRequest, "request JSON structure is too complex")
+		return
+	}
+	req := router.Requirement{Model: in.Model, Tools: len(in.Tools) > 0, Vision: inspection.Vision, Streaming: in.Stream, Reasoning: inspection.Reasoning}
+	req = s.prepareRequirement(req, r, inspection.BodySessionKey)
+	cfg, candidates := s.routeSnapshot(req)
 	if len(candidates) == 0 {
 		errorJSON(w, 503, "no compatible healthy deployment")
 		return
@@ -44,19 +50,22 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 	if max > len(candidates) {
 		max = len(candidates)
 	}
+	routeCtx, routeCancel := routeContext(r.Context(), in.Stream, cfg.RequestTimeout())
+	defer routeCancel()
 	var lastErr string
 	var lastStatus int
 	var lastBody []byte
 	var lastContentType string
 	forward := copySelectedRequestHeaders(r)
-	for i := 0; i < max; i++ {
+	attempts := 0
+	for i := 0; i < len(candidates) && attempts < max; i++ {
 		c := candidates[i]
-		s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_attempt", Deployment: c.Deployment.ID, Message: fmt.Sprintf("attempt=%d score=%.2f health=%s", i+1, c.Score, c.Health.Status)})
-		a, ok := adapters[c.Deployment.ProviderID]
+		fresh, a, ok := s.currentRouteCandidate(c.Deployment.ID, req)
 		if !ok {
-			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_skip", Deployment: c.Deployment.ID, Message: "provider adapter unavailable"})
+			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_skip", Deployment: c.Deployment.ID, Message: "candidate is no longer eligible or provider changed"})
 			continue
 		}
+		c = fresh
 		var payload []byte
 		if c.Deployment.ProviderType == "openai_compatible" {
 			payload, err = patchJSONModel(raw, c.Deployment.Model)
@@ -71,33 +80,50 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 			lastErr = err.Error()
 			continue
 		}
+		attempts++
+		attemptIndex := attempts - 1
+		s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_attempt", Deployment: c.Deployment.ID, Message: fmt.Sprintf("attempt=%d score=%.2f health=%s pressure=%.3f", attempts, c.Score, c.Health.Status, c.CapacityPressure)})
 		start := time.Now()
-		resp, e := a.Do(r.Context(), payload, in.Stream, forward)
+		resp, e := a.Do(routeCtx, payload, in.Stream, forward)
 		headerLatency := time.Since(start)
 		if e != nil {
 			lastErr = e.Error()
-			if cfg.Routing.Strategy == "ready_queue" {
+			if clientRequestGone(r.Context()) {
+				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "client_disconnect", Deployment: c.Deployment.ID, Message: r.Context().Err().Error(), ErrorType: "caller_cancelled", LatencyMS: headerLatency.Milliseconds()})
+				return
+			}
+			if gatewayDeadlineExceeded(routeCtx, r.Context()) {
+				if router.IsReadyStrategy(cfg.Routing.Strategy) {
+					s.hm.Quarantine(c.Deployment.ID, lastErr, headerLatency)
+					s.probe.Recover(c.Deployment.ID)
+				} else {
+					s.hm.RecordFailure(c.Deployment.ID, lastErr, headerLatency)
+				}
+				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_timeout", Deployment: c.Deployment.ID, Message: lastErr, ErrorType: "provider_timeout", LatencyMS: headerLatency.Milliseconds()})
+				break
+			}
+			if router.IsReadyStrategy(cfg.Routing.Strategy) {
 				s.hm.Quarantine(c.Deployment.ID, lastErr, headerLatency)
 				s.probe.Recover(c.Deployment.ID)
 			} else {
 				s.hm.RecordFailure(c.Deployment.ID, lastErr, headerLatency)
 			}
-			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_fail", Deployment: c.Deployment.ID, Message: lastErr, LatencyMS: headerLatency.Milliseconds()})
-			if i+1 < max {
-				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "failover", Deployment: c.Deployment.ID, Message: "transport failure; trying " + candidates[i+1].Deployment.ID})
+			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_fail", Deployment: c.Deployment.ID, Message: lastErr, ErrorType: "provider_connection_failed", LatencyMS: headerLatency.Milliseconds()})
+			if attempts < max && i+1 < len(candidates) {
+				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "failover", Deployment: c.Deployment.ID, Message: "transport failure; trying next eligible candidate"})
 			}
-			s.retryPause(r, cfg, i, max)
+			s.retryPause(routeCtx, r.Header.Get("x-request-id"), cfg, attemptIndex, max)
 			continue
 		}
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			b, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
 			resp.Body.Close()
-			b = redactProviderSecrets(cfg, c.Deployment.ProviderID, b)
+			b = a.RedactBody(b)
 			lastStatus = resp.StatusCode
 			lastBody = b
 			lastContentType = resp.Header.Get("Content-Type")
 			lastErr = upstreamError(resp.StatusCode, b)
-			if cfg.Routing.Strategy == "ready_queue" {
+			if router.IsReadyStrategy(cfg.Routing.Strategy) {
 				if failoverEligible(resp.StatusCode) {
 					s.hm.Quarantine(c.Deployment.ID, lastErr, headerLatency)
 					s.probe.Recover(c.Deployment.ID)
@@ -111,10 +137,10 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 			} else {
 				s.hm.RecordFailure(c.Deployment.ID, lastErr, headerLatency)
 			}
-			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_fail", Deployment: c.Deployment.ID, Message: lastErr, LatencyMS: headerLatency.Milliseconds(), StatusCode: resp.StatusCode})
-			if failoverEligible(resp.StatusCode) && i+1 < max {
-				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "failover", Deployment: c.Deployment.ID, Message: fmt.Sprintf("HTTP %d; trying %s", resp.StatusCode, candidates[i+1].Deployment.ID), StatusCode: resp.StatusCode})
-				s.retryPause(r, cfg, i, max)
+			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_fail", Deployment: c.Deployment.ID, Message: lastErr, ErrorType: errorTypeForStatus(resp.StatusCode), LatencyMS: headerLatency.Milliseconds(), StatusCode: resp.StatusCode})
+			if failoverEligible(resp.StatusCode) && attempts < max && i+1 < len(candidates) {
+				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "failover", Deployment: c.Deployment.ID, Message: fmt.Sprintf("HTTP %d; trying next eligible candidate", resp.StatusCode), StatusCode: resp.StatusCode})
+				s.retryPause(routeCtx, r.Header.Get("x-request-id"), cfg, attemptIndex, max)
 				continue
 			}
 			if c.Deployment.ProviderType == "openai_compatible" {
@@ -132,26 +158,57 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 		} else if in.Stream {
 			e = streamAnthropicToOpenAI(w, resp, in.Model, r.Header.Get("x-request-id"))
 		} else {
-			defer resp.Body.Close()
 			var an core.AnthResponse
-			if e = json.NewDecoder(resp.Body).Decode(&an); e == nil {
+			e = decodeJSONLimited(resp.Body, &an)
+			resp.Body.Close()
+			if e == nil {
 				writeJSON(w, 200, translate.AnthropicResponseToOpenAI(an, in.Model))
 			}
 		}
 		total := time.Since(start)
 		if e != nil {
 			lastErr = e.Error()
-			if cfg.Routing.Strategy == "ready_queue" {
+			if clientRequestGone(r.Context()) {
+				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "client_disconnect", Deployment: c.Deployment.ID, Message: r.Context().Err().Error(), ErrorType: "caller_cancelled", LatencyMS: total.Milliseconds(), StatusCode: resp.StatusCode})
+				return
+			}
+			if !in.Stream && c.Deployment.ProviderType != "openai_compatible" {
+				lastStatus = 0
+				lastBody = nil
+				if router.IsReadyStrategy(cfg.Routing.Strategy) {
+					s.hm.Quarantine(c.Deployment.ID, lastErr, total)
+					s.probe.Recover(c.Deployment.ID)
+				} else {
+					s.hm.RecordFailure(c.Deployment.ID, lastErr, total)
+				}
+				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "response_decode_fail", Deployment: c.Deployment.ID, Message: lastErr, ErrorType: "provider_invalid_response", LatencyMS: total.Milliseconds(), StatusCode: resp.StatusCode})
+				if attempts < max && i+1 < len(candidates) {
+					s.retryPause(routeCtx, r.Header.Get("x-request-id"), cfg, attemptIndex, max)
+					continue
+				}
+				errorJSON(w, http.StatusBadGateway, "upstream returned an invalid response")
+				return
+			}
+			if cfg.Routing.Strategy == "ready_mesh" && req.Streaming {
+				s.hm.RecordScopeFailure(c.Deployment.ID, []string{"streaming"}, lastErr)
+			} else if router.IsReadyStrategy(cfg.Routing.Strategy) {
 				s.hm.Quarantine(c.Deployment.ID, lastErr, total)
 				s.probe.Recover(c.Deployment.ID)
 			} else {
 				s.hm.RecordFailure(c.Deployment.ID, lastErr, total)
 			}
-			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "stream_fail", Deployment: c.Deployment.ID, Message: lastErr, LatencyMS: total.Milliseconds(), StatusCode: resp.StatusCode})
+			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "stream_fail", Deployment: c.Deployment.ID, Message: lastErr, ErrorType: "provider_stream_error", LatencyMS: total.Milliseconds(), StatusCode: resp.StatusCode})
 			return
 		}
-		s.hm.RecordSuccess(c.Deployment.ID, headerLatency)
+		s.recordRouteSuccess(req, c.Deployment.ID, headerLatency)
 		s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_ok", Deployment: c.Deployment.ID, Message: "request completed", LatencyMS: total.Milliseconds(), StatusCode: resp.StatusCode})
+		return
+	}
+	if gatewayDeadlineExceeded(routeCtx, r.Context()) {
+		errorJSON(w, http.StatusGatewayTimeout, "gateway request timeout")
+		return
+	}
+	if clientRequestGone(r.Context()) {
 		return
 	}
 	if lastStatus > 0 && len(lastBody) > 0 {
@@ -170,16 +227,25 @@ func streamAnthropicToOpenAI(w http.ResponseWriter, resp *http.Response, model s
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("X-Accel-Buffering", "no")
 	fl, _ := w.(http.Flusher)
+	var writeErr error
 	emit := func(v any) {
-		b, _ := json.Marshal(v)
-		fmt.Fprintf(w, "data: %s\n\n", b)
-		if fl != nil {
+		if writeErr != nil {
+			return
+		}
+		b, err := json.Marshal(v)
+		if err != nil {
+			writeErr = err
+			return
+		}
+		_, writeErr = fmt.Fprintf(w, "data: %s\n\n", b)
+		if writeErr == nil && fl != nil {
 			fl.Flush()
 		}
 	}
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 64<<10), 8<<20)
 	finish := "stop"
+	terminal := false
 	completionID := uniqueStreamID("chatcmpl", requestID...)
 	toolIndex := map[int]int{}
 	nextTool := 0
@@ -193,8 +259,8 @@ func streamAnthropicToOpenAI(w http.ResponseWriter, resp *http.Response, model s
 			continue
 		}
 		var env map[string]any
-		if json.Unmarshal([]byte(d), &env) != nil {
-			continue
+		if err := json.Unmarshal([]byte(d), &env); err != nil {
+			return fmt.Errorf("invalid Anthropic SSE JSON: %w", err)
 		}
 		typ, _ := env["type"].(string)
 		switch typ {
@@ -225,6 +291,9 @@ func streamAnthropicToOpenAI(w http.ResponseWriter, resp *http.Response, model s
 		case "message_delta":
 			del, _ := env["delta"].(map[string]any)
 			sr, _ := del["stop_reason"].(string)
+			if sr != "" {
+				terminal = true
+			}
 			if sr == "tool_use" {
 				finish = "tool_calls"
 			} else if sr == "max_tokens" {
@@ -232,16 +301,32 @@ func streamAnthropicToOpenAI(w http.ResponseWriter, resp *http.Response, model s
 			} else if sr != "" {
 				finish = "stop"
 			}
+		case "message_stop":
+			terminal = true
 		case "error":
 			emit(map[string]any{"error": env["error"]})
+			if writeErr != nil {
+				return writeErr
+			}
 			return fmt.Errorf("anthropic stream error")
+		}
+		if writeErr != nil {
+			return writeErr
 		}
 	}
 	if err := scanner.Err(); err != nil {
 		return err
 	}
+	if !terminal {
+		return io.ErrUnexpectedEOF
+	}
 	emit(map[string]any{"id": completionID, "object": "chat.completion.chunk", "model": model, "choices": []any{map[string]any{"index": 0, "delta": map[string]any{}, "finish_reason": finish}}})
-	fmt.Fprint(w, "data: [DONE]\n\n")
+	if writeErr != nil {
+		return writeErr
+	}
+	if _, err := fmt.Fprint(w, "data: [DONE]\n\n"); err != nil {
+		return err
+	}
 	if fl != nil {
 		fl.Flush()
 	}
