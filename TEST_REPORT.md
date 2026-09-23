@@ -56,7 +56,24 @@ Every normal CI run also executes one bounded stress pass covering:
 - embedded Web UI control wiring;
 - rotating log disk bounds, backup cleanup and console rate limiting;
 - concurrent event/session flood bounds;
-- bounded recovery-queue behavior and worker retry recovery.
+- bounded recovery-queue behavior and worker retry recovery;
+- fault injection with fake providers: hung-provider timeout failover, mid-stream upstream close, garbage-200 pre-commit failover, all-`429` capped `Retry-After` surfacing, connection-refused classification, flapping-provider cooldown isolation, credential redaction in failure bodies;
+- route preview read-only API: ordering, explanations, session pin, alias/capability eligibility, empty-result notes, method guard.
+
+## Measured routing performance (linux/amd64, CI-class vCPU)
+
+`go test ./internal/router -bench . -benchmem` (1000 iterations):
+
+| Benchmark | Scale | ns/op | B/op | allocs/op |
+|---|---|---:|---:|---:|
+| BenchmarkCandidates_10Providers | 10 deployments | ~580 | 352 | 1 |
+| BenchmarkCandidates_100Models | 100 deployments | ~570 | 352 | 1 |
+| BenchmarkCandidates_1000Models | 1000 deployments | ~510 | 352 | 1 |
+| BenchmarkCandidates_3000Models | 3000 deployments | ~600 | 352 | 1 |
+| BenchmarkCandidates_AliasVirtualScan | 1020 deployments (catch-all `auto`) | ~1.6M | ~566K | 6 |
+| BenchmarkEligibleSingle | single eligibility check | ~330 | 0 | 0 |
+
+Targeted model lookups stay sub-microsecond and allocation-flat up to 3000 deployments. The catch-all virtual scan is linear in the registry (one health-lock acquisition total, ~6 allocations beyond the returned candidate slice); routing a specific model never scans the registry.
 
 ## Release rule
 

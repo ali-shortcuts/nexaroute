@@ -103,6 +103,10 @@ Supported strategies:
 - `round_robin`: rotate eligible deployments
 - `least_latency`: prefer measured low-latency healthy deployments
 
+Candidate resolution is index-backed: a concrete model/alias lookup never scans the registry, while the virtual catch-all models (`auto`, `claude-auto`) intentionally evaluate the full eligible set and resolve all health states under a single batched snapshot (`health.Manager.GetManyScoped`, same normalization and scope-readiness semantics as single lookups). `POST /admin/api/route-preview` exposes the same resolution read-only with per-candidate explanations for operators.
+
+Transport failures are classified (`classifyTransportError`) into DNS, timeout, caller-cancel, connection refused/reset, network-unreachable and TLS classes so route-failure events never misreport a client cancellation as a provider outage.
+
 ## Failure and cooldown lifecycle
 
 Default model/deployment policy:

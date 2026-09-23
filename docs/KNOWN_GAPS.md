@@ -87,6 +87,9 @@ Micro-probes measure availability and latency. They do not measure model intelli
 
 ## Routing boundaries after Ready Mesh
 
+- `routing.attempt_timeout_ms` defaults to `0` (off): without it a hung non-streaming provider consumes the whole `request_timeout_ms` budget before failover; enabling it bounds each attempt individually. Streaming attempts are never attempt-timeout-bounded; guard them with per-provider `stream_idle_timeout_seconds`, which itself defaults to `0` (no idle guard) to avoid breaking long-silent reasoning upstreams.
+- The catch-all virtual models (`auto`, `claude-auto`) scan the whole deployment registry per request by design; at a few thousand deployments this costs on the order of a millisecond per request (measured in `TEST_REPORT.md`). Targeted model lookups are sub-microsecond.
+
 Implemented routing intelligence is deterministic and observable: session affinity, capability filtering, priority/weight policy, live concurrency pressure, latency/failure evidence, provider-level P2C selection, credential-level P2C selection, scoped capability circuits, and supervised recovery.
 
 Not implemented yet:

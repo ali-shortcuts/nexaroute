@@ -103,6 +103,7 @@ Important controls:
 - `failure_threshold` (legacy/other routing strategies)
 - `cooldown_seconds` (default `1800` for supervised ready-strategy recovery)
 - `request_timeout_ms`
+- `attempt_timeout_ms` — optional per-attempt bound (default `0` = off) for non-streaming requests so one hung provider cannot consume the whole `request_timeout_ms` budget before failover; streaming attempts are exempt and rely on provider `stream_idle_timeout_seconds`
 - `latency_weight`
 - `failure_weight`
 - `retry_backoff_ms`

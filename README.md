@@ -54,7 +54,9 @@ Implemented resilience:
 - EWMA latency and failure-rate scoring
 - retries/failover before response bytes are committed
 - failover on transport errors, selected 4xx provider/auth failures, `429`, and retryable `5xx`
-- `Retry-After` handling with a configurable cap
+- `Retry-After` handling with a configurable cap, surfaced to the client on exhausted `429` responses
+- optional `attempt_timeout_ms` per-attempt bound so one hung provider cannot consume the whole request budget before failover (default off; streaming exempt)
+- failure events classify transport causes (DNS, timeout, caller cancel, connection refused/reset, TLS) so client cancellations are never counted as provider failures
 - per-deployment circuit breaker
 - first routed failure immediately quarantines that deployment; the recovery supervisor then probes it up to 5 times
 - half-open recovery after cooldown
@@ -81,6 +83,7 @@ The health loop is deliberately **event-driven + selective**, not a wasteful bro
 - an idle ready model is micro-probed after the lease expires, preventing a long-unused fallback from remaining falsely healthy forever;
 - failed/degraded/cooldown deployments are owned by dedicated recovery loops and never receive Claude traffic;
 - candidate order combines configured model priority/weight with verified ready state; under `ready_mesh`, an eligible session pin wins first, otherwise two candidates inside the best priority tier are compared using score and live provider pressure;
+- **Route Preview** (`POST /admin/api/route-preview`) resolves a hypothetical model/session/capability request against the live router and returns the ordered candidates with per-candidate explanations (score, tier, health proof age, latency evidence, capacity pressure, session pin) without any secret material and without routing traffic;
 - recovery policy defaults to **5 supervisor attempts -> 1800-second cooldown**, with a 500 ms retry delay between failed recovery probes;
 - temporary all-key `429` cooldown waits do not consume the five-attempt recovery budget;
 - the explicit **Probe all models** admin action remains available when an operator intentionally wants to retest healthy models too;

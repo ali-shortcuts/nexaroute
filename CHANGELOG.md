@@ -8,7 +8,10 @@ This file describes the current supported v0.3 state only. Superseded interim im
 - Only deployments with a valid health proof are routable under ready strategies.
 - Session affinity keeps an eligible conversation pinned to its deployment.
 - New sessions use priority-aware, capacity-aware power-of-two selection inside the best priority tier.
-- Model/deployment lookup is indexed by deployment ID, upstream model ID, local model ID, and alias.
+- Model/deployment lookup is indexed by deployment ID, upstream model ID, local model ID, and alias; virtual catch-all scans batch health resolution under one lock.
+- `POST /admin/api/route-preview` resolves hypothetical requests read-only with per-candidate explanations.
+- `routing.attempt_timeout_ms` (default off) bounds each non-streaming attempt inside the request budget so failover survives a hung provider.
+- Client-visible `429` responses carry the capped upstream `Retry-After`; transport failures are classified (DNS/timeout/cancel/refused/reset/TLS) in route-failure events.
 - Every failover candidate is revalidated immediately before use.
 - The first eligible routed failure quarantines the deployment.
 - Recovery performs up to five real probes; five failures enter the default 30-minute cooldown, then recovery starts again.
