@@ -29,7 +29,7 @@ OPENAI_API_KEY=local-placeholder</pre><small>Aliases such as auto/coding can map
 </div></div></section>
 <section id="settings" class="tab">
 <div class="panel settings-panel">
-  <div class="panelhead"><div><h2>Runtime settings</h2><p>Routing and probe settings are hot-reloaded after save. Admin credential stays only in this browser session.</p></div></div>
+  <div class="panelhead"><div><h2>Runtime settings</h2><p>All runtime settings are hot-reloaded after save and persisted atomically to the active config file. Changes that need a restart are marked read-only.</p></div></div>
   <div class="settings-grid">
     <div class="form-section">
       <div class="section-kicker">Routing</div>
@@ -49,10 +49,26 @@ OPENAI_API_KEY=local-placeholder</pre><small>Aliases such as auto/coding can map
       <div class="check-grid"><label class="check-row"><input id="prEnabled" type="checkbox"><span>Enable background probes</span></label><label class="check-row"><input id="prOnStart" type="checkbox"><span>Probe on startup</span></label></div>
       <div class="form-grid two"><label class="field"><span>Supervisor interval (sec)</span><input id="prInterval" type="number" min="1"></label><label class="field"><span>Ready health lease (sec)</span><input id="prReadyLease" type="number" min="1"></label></div><div class="form-grid two"><label class="field"><span>Timeout (ms)</span><input id="prTimeout" type="number" min="100"></label><span></span></div>
       <div class="form-grid two"><label class="field"><span>Probe max tokens</span><input id="prTokens" type="number" min="1" max="64"></label><label class="field"><span>Probe concurrency</span><input id="prConcurrency" type="number" min="1" max="1024"></label></div><div class="form-grid two"><label class="field"><span>Recovery attempts</span><input id="prRecoveryAttempts" type="number" min="1" max="100"></label><label class="field"><span>Recovery retry delay (ms)</span><input id="prRecoveryRetry" type="number" min="0"></label></div>
-      <button id="saveRuntimeSettings" class="btn primary">Save runtime settings</button>
     </div>
   </div>
-  <div class="form-section admin-section"><div class="section-kicker">Admin</div><label class="field"><span>Admin key</span><div class="secret-row"><input id="adminKey" type="password" placeholder="x-admin-key"><button id="toggleAdminKey" class="icon-btn">Show</button></div><em>Stored in sessionStorage only; closing this browser session clears it.</em></label><div class="settings-actions"><button id="saveAdminKey" class="btn secondary">Save for session</button></div></div>
+  <div class="settings-grid">
+    <div class="form-section">
+      <div class="section-kicker">Logging</div>
+      <label class="field"><span>Log file</span><input id="lgFile" spellcheck="false" placeholder="auto | off | /path/nexaroute.log"><em><code>auto</code> stores the log next to the config file; <code>off</code> disables the file writer.</em></label>
+      <div class="form-grid two"><label class="field"><span>Max file size (MB)</span><input id="lgMaxSize" type="number" min="1" max="1024"></label><label class="field"><span>Backups kept</span><input id="lgBackups" type="number" min="0" max="20"></label></div>
+      <label class="field"><span>Access log mode</span><select id="lgAccessMode"><option value="off">Off</option><option value="errors">Errors and slow requests only</option><option value="sampled">Sampled successes</option><option value="all">All requests</option></select></label>
+      <div class="form-grid two"><label class="field"><span>Success sample every N</span><input id="lgSampleEvery" type="number" min="1" max="1000000"></label><label class="field"><span>Slow request threshold (ms)</span><input id="lgSlowMS" type="number" min="0" max="3600000"></label></div>
+      <div class="form-grid two"><label class="field"><span>Console max lines / minute</span><input id="lgConsoleRate" type="number" min="0" max="10000"><em>0 keeps the console unlimited.</em></label><span></span></div>
+    </div>
+    <div class="form-section admin-section">
+      <div class="section-kicker">Admin &amp; security</div>
+      <label class="check-row"><input id="adBindLocalOnly" type="checkbox"><span>Restrict admin API to loopback connections</span></label>
+      <label class="field"><span>Admin API key <small>(persisted in config)</small></span><div class="secret-row"><input id="adApiKey" type="password" autocomplete="off" placeholder="x-admin-key"><button id="toggleAdminKey" class="icon-btn">Show</button></div><em>The key applies immediately after save and is kept in this browser session automatically. Leave empty only for loopback-only admin.</em></label>
+      <label class="field"><span>Listen address <small>(read-only — set via config file or NEXAROUTE_LISTEN)</small></span><input id="adListen" readonly></label>
+      <p class="hint">Environment variables NEXAROUTE_ADMIN_KEY / NEXAROUTE_ADMIN_BIND_LOCAL_ONLY override these values on restart.</p>
+    </div>
+  </div>
+  <div class="settings-actions"><button id="saveRuntimeSettings" class="btn primary">Save settings</button><span class="hint">Applied hot — no restart needed.</span></div>
   <details class="raw-config"><summary>Current config snapshot</summary><pre id="settingsJson"></pre></details>
 </div>
 </section>

@@ -477,6 +477,17 @@ func (w *statusWriter) WriteHeader(code int) {
 	w.status = code
 	w.ResponseWriter.WriteHeader(code)
 }
+
+// Write keeps wroteHeader in sync with the implicit 200 header that
+// net/http emits on the first body write, so a later guarded WriteHeader
+// call cannot reach the underlying writer twice.
+func (w *statusWriter) Write(b []byte) (int, error) {
+	if !w.wroteHeader {
+		w.wroteHeader = true
+		w.status = http.StatusOK
+	}
+	return w.ResponseWriter.Write(b)
+}
 func (w *statusWriter) Flush() {
 	if !w.wroteHeader {
 		w.WriteHeader(http.StatusOK)
