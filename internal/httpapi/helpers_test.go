@@ -466,3 +466,39 @@ func TestAccessLoggingIsSampledAndDoesNotTreatLongStreamsAsSlowRequests(t *testi
 		t.Fatal("access_mode=off should disable request access lines")
 	}
 }
+
+func TestAdminAPIResponsesAreNoStore(t *testing.T) {
+	cfg := config.Default()
+	srv := testGateway(t, cfg)
+	req := httptest.NewRequest(http.MethodGet, "http://gateway/admin/api/snapshot", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	if got := rr.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("Cache-Control=%q want no-store", got)
+	}
+	if got := rr.Header().Get("Pragma"); got != "no-cache" {
+		t.Fatalf("Pragma=%q want no-cache", got)
+	}
+}
+
+func TestAdminReadJSONRejectsTextPlainBody(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "http://gateway/admin/api/providers", strings.NewReader(`{"provider":{}}`))
+	req.Header.Set("Content-Type", "text/plain")
+	var dst map[string]any
+	if _, err := readJSON(req, &dst); err == nil || !strings.Contains(err.Error(), "application/json") {
+		t.Fatalf("text/plain admin JSON should be rejected, got %v", err)
+	}
+}
+
+func TestAdminReadJSONAcceptsJSONCharset(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "http://gateway/admin/api/providers", strings.NewReader(`{"ok":true}`))
+	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+	var dst map[string]any
+	if _, err := readJSON(req, &dst); err != nil {
+		t.Fatalf("valid admin JSON content type rejected: %v", err)
+	}
+}
