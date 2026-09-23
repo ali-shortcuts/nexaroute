@@ -130,6 +130,7 @@ func TestProbeRequiresProtocolValidSuccessEnvelope(t *testing.T) {
 		{"malformed json", "openai_compatible", "{bad", true},
 		{"wrong openai envelope", "openai_compatible", `{"ok":true}`, true},
 		{"valid openai", "openai_compatible", `{"id":"x","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"OK"},"finish_reason":"stop"}],"usage":{}}`, false},
+		{"null anthropic content", "anthropic_compatible", `{"id":"x","type":"message","role":"assistant","content":null,"model":"m"}`, true},
 		{"valid anthropic", "anthropic_compatible", `{"id":"x","type":"message","role":"assistant","content":[{"type":"text","text":"OK"}],"model":"m","stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`, false},
 	}
 	for _, tc := range tests {
