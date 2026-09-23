@@ -537,7 +537,10 @@ func (a *httpAdapter) Probe(ctx context.Context, model string, maxTokens int) (t
 		maxTokens = 1
 	}
 	body := map[string]any{"model": model, "max_tokens": maxTokens, "messages": []map[string]any{{"role": "user", "content": "OK"}}, "stream": false}
-	b, _ := json.Marshal(body)
+	b, err := json.Marshal(body)
+	if err != nil {
+		return 0, 0, fmt.Errorf("probe request encode: %w", err)
+	}
 	start := time.Now()
 	resp, err := a.Do(ctx, b, false, nil)
 	lat := time.Since(start)
@@ -545,11 +548,63 @@ func (a *httpAdapter) Probe(ctx context.Context, model string, maxTokens int) (t
 		return lat, 0, err
 	}
 	defer resp.Body.Close()
-	data, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	const maxProbeResponseBytes = 1 << 20
+	data, readErr := io.ReadAll(io.LimitReader(resp.Body, maxProbeResponseBytes+1))
+	if readErr != nil {
+		return lat, resp.StatusCode, fmt.Errorf("probe response read: %w", readErr)
+	}
+	if len(data) > maxProbeResponseBytes {
+		return lat, resp.StatusCode, fmt.Errorf("probe response exceeds %d bytes", maxProbeResponseBytes)
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return lat, resp.StatusCode, fmt.Errorf("probe http %d: %s", resp.StatusCode, a.safeSnippet(data))
 	}
+	if err := a.validateProbeResponse(data); err != nil {
+		return lat, resp.StatusCode, err
+	}
 	return lat, resp.StatusCode, nil
+}
+
+func (a *httpAdapter) validateProbeResponse(data []byte) error {
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(data, &root); err != nil {
+		return fmt.Errorf("probe returned malformed JSON: %w", err)
+	}
+	if raw, ok := root["error"]; ok && len(raw) > 0 && string(raw) != "null" {
+		return fmt.Errorf("probe returned error envelope: %s", a.safeSnippet(raw))
+	}
+	switch a.p.Type {
+	case "anthropic_compatible":
+		var typ, role string
+		if raw := root["type"]; len(raw) > 0 {
+			_ = json.Unmarshal(raw, &typ)
+		}
+		if raw := root["role"]; len(raw) > 0 {
+			_ = json.Unmarshal(raw, &role)
+		}
+		var content []json.RawMessage
+		if raw := root["content"]; len(raw) > 0 {
+			if err := json.Unmarshal(raw, &content); err != nil {
+				return fmt.Errorf("probe returned invalid Anthropic content: %w", err)
+			}
+		}
+		if typ != "message" || role != "assistant" || root["content"] == nil {
+			return errors.New("probe returned an invalid Anthropic message envelope")
+		}
+	default:
+		var choices []map[string]json.RawMessage
+		raw := root["choices"]
+		if len(raw) == 0 {
+			return errors.New("probe returned an invalid OpenAI chat-completion envelope: choices missing")
+		}
+		if err := json.Unmarshal(raw, &choices); err != nil {
+			return fmt.Errorf("probe returned invalid OpenAI choices: %w", err)
+		}
+		if len(choices) == 0 || choices[0]["message"] == nil {
+			return errors.New("probe returned an invalid OpenAI chat-completion envelope")
+		}
+	}
+	return nil
 }
 
 type releaseOnDoneBody struct {
