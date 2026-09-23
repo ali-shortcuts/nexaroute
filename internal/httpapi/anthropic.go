@@ -319,6 +319,35 @@ func proxyValidatedJSONResponse(w http.ResponseWriter, resp *http.Response, vali
 	return err
 }
 
+// proxyResponse performs an unvalidated streaming passthrough of an upstream
+// response. It copies safe response headers, strips sensitive and hop-by-hop
+// headers, and flushes incrementally when the payload is an SSE stream.
+func proxyResponse(w http.ResponseWriter, resp *http.Response) error {
+	defer resp.Body.Close()
+	isSSE := strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream")
+	copyUpstreamResponseHeaders(w, resp, isSSE)
+	w.WriteHeader(resp.StatusCode)
+	fl, _ := w.(http.Flusher)
+	buf := make([]byte, 32<<10)
+	for {
+		n, err := resp.Body.Read(buf)
+		if n > 0 {
+			if _, werr := w.Write(buf[:n]); werr != nil {
+				return werr
+			}
+			if fl != nil {
+				fl.Flush()
+			}
+		}
+		if err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			return err
+		}
+	}
+}
+
 type nativeSSETracker struct {
 	protocol string
 	line     []byte
