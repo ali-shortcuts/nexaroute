@@ -13,6 +13,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/ali-shortcuts/nexaroute/internal/config"
+	"github.com/ali-shortcuts/nexaroute/internal/providers"
+	"github.com/ali-shortcuts/nexaroute/internal/router"
 )
 
 func routeContext(parent context.Context, streaming bool, timeout time.Duration) (context.Context, context.CancelFunc) {
@@ -182,4 +184,66 @@ func copySelectedRequestHeaders(r *http.Request) http.Header {
 		}
 	}
 	return h
+}
+
+
+func boundedSessionValue(v string) string {
+	v = strings.TrimSpace(v)
+	if len(v) > 256 {
+		v = v[:256]
+	}
+	return v
+}
+
+func sessionKeyFromRequest(r *http.Request, raw []byte) string {
+	for _, header := range []string{"x-claude-code-session-id", "x-litellm-session-id", "x-litellm-trace-id", "x-session-id"} {
+		if v := boundedSessionValue(r.Header.Get(header)); v != "" {
+			return v
+		}
+	}
+	var obj map[string]any
+	if json.Unmarshal(raw, &obj) != nil {
+		return ""
+	}
+	if v, _ := obj["session_id"].(string); boundedSessionValue(v) != "" {
+		return boundedSessionValue(v)
+	}
+	meta, _ := obj["metadata"].(map[string]any)
+	if meta == nil {
+		return ""
+	}
+	if v, _ := meta["session_id"].(string); boundedSessionValue(v) != "" {
+		return boundedSessionValue(v)
+	}
+	if user, ok := meta["user_id"].(map[string]any); ok {
+		if v, _ := user["session_id"].(string); boundedSessionValue(v) != "" {
+			return boundedSessionValue(v)
+		}
+	}
+	return ""
+}
+
+func providerLoadSnapshot(stats []providers.ProviderStats) map[string]router.ProviderLoad {
+	out := make(map[string]router.ProviderLoad, len(stats))
+	for _, st := range stats {
+		out[st.ID] = router.ProviderLoad{
+			Active:  st.ActiveRequests,
+			Waiting: st.WaitingRequests,
+			Limit:   st.MaxConcurrency,
+		}
+	}
+	return out
+}
+
+func (s *Server) prepareRequirement(req router.Requirement, r *http.Request, raw []byte) router.Requirement {
+	req.SessionKey = sessionKeyFromRequest(r, raw)
+	req.SelectionKey = r.Header.Get("x-request-id")
+	req.ProviderLoad = providerLoadSnapshot(s.reg.Stats())
+	return req
+}
+
+func (s *Server) recordRouteSuccess(req router.Requirement, deploymentID string, latency time.Duration) {
+	s.hm.RecordSuccess(deploymentID, latency)
+	s.hm.RecordScopeSuccess(deploymentID, req.Scopes())
+	s.rt.ObserveSession(req, deploymentID)
 }

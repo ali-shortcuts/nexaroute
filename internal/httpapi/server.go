@@ -138,7 +138,12 @@ func (s *Server) applyConfig(cfg config.Config) error {
 		return err
 	}
 	s.rt.Reload(cfg)
-	s.hm.Configure(cfg.Routing.FailureThreshold, cfg.Cooldown())
+	s.hm.ConfigureAdvanced(
+		cfg.Routing.FailureThreshold,
+		cfg.Cooldown(),
+		cfg.Routing.CapabilityFailureThreshold,
+		time.Duration(cfg.Routing.CapabilityCooldownSeconds)*time.Second,
+	)
 
 	valid := map[string]struct{}{}
 	for _, d := range s.rt.All() {
@@ -154,21 +159,24 @@ func (s *Server) applyConfig(cfg config.Config) error {
 	return nil
 }
 
-func (s *Server) routeSnapshot(req router.Requirement) (config.Config, []router.Scored, map[string]providers.Adapter) {
+func (s *Server) routeSnapshot(req router.Requirement) (config.Config, []router.Scored) {
 	s.runtimeMu.RLock()
 	defer s.runtimeMu.RUnlock()
-	cfg := s.cfg
-	candidates := s.rt.Candidates(req)
-	adapters := make(map[string]providers.Adapter, len(candidates))
-	for _, c := range candidates {
-		if _, ok := adapters[c.Deployment.ProviderID]; ok {
-			continue
-		}
-		if a, ok := s.reg.Get(c.Deployment.ProviderID); ok {
-			adapters[c.Deployment.ProviderID] = a
-		}
+	return s.cfg, s.rt.Candidates(req)
+}
+
+func (s *Server) currentRouteCandidate(id string, req router.Requirement) (router.Scored, providers.Adapter, bool) {
+	s.runtimeMu.RLock()
+	defer s.runtimeMu.RUnlock()
+	candidate, ok := s.rt.Eligible(id, req)
+	if !ok {
+		return router.Scored{}, nil, false
 	}
-	return cfg, candidates, adapters
+	adapter, ok := s.reg.Get(candidate.Deployment.ProviderID)
+	if !ok {
+		return router.Scored{}, nil, false
+	}
+	return candidate, adapter, true
 }
 
 func (s *Server) Handler() http.Handler {

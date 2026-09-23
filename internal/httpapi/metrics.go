@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/ali-shortcuts/nexaroute/internal/health"
+	"github.com/ali-shortcuts/nexaroute/internal/router"
 )
 
 func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
@@ -110,7 +111,7 @@ func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
 	cfg := s.currentConfig()
 	for _, d := range ds {
 		st := s.hm.Get(d.ID).Status
-		if cfg.Routing.Strategy == "ready_queue" {
+		if router.IsReadyStrategy(cfg.Routing.Strategy) {
 			if st == health.Healthy {
 				usable++
 			}
@@ -121,7 +122,7 @@ func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if usable == 0 {
-		if cfg.Routing.Strategy == "ready_queue" {
+		if router.IsReadyStrategy(cfg.Routing.Strategy) {
 			errorJSON(w, 503, "no verified healthy model deployments in ready queue")
 		} else {
 			errorJSON(w, 503, "no usable model deployments")

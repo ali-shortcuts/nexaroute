@@ -81,3 +81,20 @@ func TestJitteredRetryBackoffCapsHugeDurationsWithoutOverflow(t *testing.T) {
 		t.Fatalf("backoff=%s outside safe cap", got)
 	}
 }
+
+func TestSessionKeyPrefersClaudeCodeHeader(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	req.Header.Set("X-Claude-Code-Session-Id", "claude-session")
+	raw := []byte(`{"metadata":{"session_id":"body-session"}}`)
+	if got := sessionKeyFromRequest(req, raw); got != "claude-session" {
+		t.Fatalf("session=%q want claude-session", got)
+	}
+}
+
+func TestSessionKeyReadsNestedMetadata(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	raw := []byte(`{"metadata":{"user_id":{"session_id":"nested-session"}}}`)
+	if got := sessionKeyFromRequest(req, raw); got != "nested-session" {
+		t.Fatalf("session=%q want nested-session", got)
+	}
+}

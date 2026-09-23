@@ -35,7 +35,8 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req := router.Requirement{Model: in.Model, Tools: len(in.Tools) > 0, Vision: hasVisionOpenAI(raw), Streaming: in.Stream, Reasoning: hasReasoningOpenAI(raw)}
-	cfg, candidates, adapters := s.routeSnapshot(req)
+	req = s.prepareRequirement(req, r, raw)
+	cfg, candidates := s.routeSnapshot(req)
 	if len(candidates) == 0 {
 		errorJSON(w, 503, "no compatible healthy deployment")
 		return
@@ -53,12 +54,13 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 	forward := copySelectedRequestHeaders(r)
 	for i := 0; i < max; i++ {
 		c := candidates[i]
-		s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_attempt", Deployment: c.Deployment.ID, Message: fmt.Sprintf("attempt=%d score=%.2f health=%s", i+1, c.Score, c.Health.Status)})
-		a, ok := adapters[c.Deployment.ProviderID]
+		fresh, a, ok := s.currentRouteCandidate(c.Deployment.ID, req)
 		if !ok {
-			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_skip", Deployment: c.Deployment.ID, Message: "provider adapter unavailable"})
+			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_skip", Deployment: c.Deployment.ID, Message: "candidate is no longer eligible or provider changed"})
 			continue
 		}
+		c = fresh
+		s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_attempt", Deployment: c.Deployment.ID, Message: fmt.Sprintf("attempt=%d score=%.2f health=%s pressure=%.3f", i+1, c.Score, c.Health.Status, c.CapacityPressure)})
 		var payload []byte
 		if c.Deployment.ProviderType == "openai_compatible" {
 			payload, err = patchJSONModel(raw, c.Deployment.Model)
@@ -83,7 +85,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if gatewayDeadlineExceeded(routeCtx, r.Context()) {
-				if cfg.Routing.Strategy == "ready_queue" {
+				if router.IsReadyStrategy(cfg.Routing.Strategy) {
 					s.hm.Quarantine(c.Deployment.ID, lastErr, headerLatency)
 					s.probe.Recover(c.Deployment.ID)
 				} else {
@@ -92,7 +94,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_timeout", Deployment: c.Deployment.ID, Message: lastErr, ErrorType: "provider_timeout", LatencyMS: headerLatency.Milliseconds()})
 				break
 			}
-			if cfg.Routing.Strategy == "ready_queue" {
+			if router.IsReadyStrategy(cfg.Routing.Strategy) {
 				s.hm.Quarantine(c.Deployment.ID, lastErr, headerLatency)
 				s.probe.Recover(c.Deployment.ID)
 			} else {
@@ -113,7 +115,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 			lastBody = b
 			lastContentType = resp.Header.Get("Content-Type")
 			lastErr = upstreamError(resp.StatusCode, b)
-			if cfg.Routing.Strategy == "ready_queue" {
+			if router.IsReadyStrategy(cfg.Routing.Strategy) {
 				if failoverEligible(resp.StatusCode) {
 					s.hm.Quarantine(c.Deployment.ID, lastErr, headerLatency)
 					s.probe.Recover(c.Deployment.ID)
@@ -161,7 +163,9 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "client_disconnect", Deployment: c.Deployment.ID, Message: r.Context().Err().Error(), ErrorType: "caller_cancelled", LatencyMS: total.Milliseconds(), StatusCode: resp.StatusCode})
 				return
 			}
-			if cfg.Routing.Strategy == "ready_queue" {
+			if cfg.Routing.Strategy == "ready_mesh" && req.Streaming {
+				s.hm.RecordScopeFailure(c.Deployment.ID, []string{"streaming"}, lastErr)
+			} else if router.IsReadyStrategy(cfg.Routing.Strategy) {
 				s.hm.Quarantine(c.Deployment.ID, lastErr, total)
 				s.probe.Recover(c.Deployment.ID)
 			} else {
@@ -170,7 +174,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "stream_fail", Deployment: c.Deployment.ID, Message: lastErr, ErrorType: "provider_stream_error", LatencyMS: total.Milliseconds(), StatusCode: resp.StatusCode})
 			return
 		}
-		s.hm.RecordSuccess(c.Deployment.ID, headerLatency)
+		s.recordRouteSuccess(req, c.Deployment.ID, headerLatency)
 		s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_ok", Deployment: c.Deployment.ID, Message: "request completed", LatencyMS: total.Milliseconds(), StatusCode: resp.StatusCode})
 		return
 	}
