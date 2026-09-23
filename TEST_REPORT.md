@@ -233,3 +233,39 @@ Verified locally:
 - Linux arm64 build: PASS
 - `scripts/smoke-local.sh`: PASS
 - repository source scan contains no `ghp_...` token pattern: PASS
+
+
+## Ready Mesh maturity pass — 2026-09-23
+
+This pass upgrades the same v0.3 validation branch without changing the version number. The goal was to close the remaining routing/control-plane weaknesses while keeping the data plane deterministic and observable.
+
+Implemented and regression-tested:
+
+- `ready_mesh` is the default verified-ready strategy; legacy `ready_queue` remains available;
+- session affinity keeps a successful Claude/LiteLLM-style session on the same deployment while it remains eligible;
+- provider-level power-of-two selection operates inside the best configured priority tier and uses live active/waiting concurrency pressure;
+- every failover candidate is revalidated against current health and the hot-reloaded provider registry immediately before use;
+- capability-scoped health can cool a broken streaming/tools/vision/reasoning path without unnecessarily poisoning unrelated traffic;
+- provider health and session/capability state are exposed through the Admin snapshot and Web UI;
+- the provider editor now reads a server-side compatible-provider preset catalog instead of maintaining an independent hard-coded UI list;
+- connection/auth verification is separate from real model-inference verification;
+- absolute model-discovery endpoint overrides are supported for compatible providers whose model catalog uses a different path/host;
+- credential pools now use key-level power-of-two selection based on live in-flight load and failure evidence, while per-key 401/402/403/429 cooldown remains isolated;
+- credential reservations remain active until the response body is consumed or closed, so long-lived SSE streams contribute to key load.
+
+The data plane deliberately does not invoke a second learned model to choose a route. Task awareness comes from explicit model aliases and parsed request capabilities so routing remains explainable and testable.
+
+### Verification checkpoint
+
+GitHub Actions CI run **#108** on code head `5f38dc0d500d1dae95ff97d17155732f15181290` completed successfully.
+
+The successful job included:
+
+- repository cleanliness checks;
+- full verification (formatting, Go tests, vet/race/fuzz/cross-build and JavaScript syntax as defined by `scripts/verify.sh`);
+- local runtime smoke test;
+- installer smoke test;
+- Docker build;
+- Docker runtime smoke test.
+
+The final documentation-only alignment commit is verified by the subsequent PR CI before the branch is treated as complete.

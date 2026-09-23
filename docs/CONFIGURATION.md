@@ -80,7 +80,7 @@ Important controls:
 - `fallback_on_unknown_model`
 - `max_attempts`
 - `failure_threshold` (legacy/other routing strategies)
-- `cooldown_seconds` (default `1800` for ready-queue recovery)
+- `cooldown_seconds` (default `1800` for supervised ready-strategy recovery)
 - `request_timeout_ms`
 - `latency_weight`
 - `failure_weight`
@@ -105,12 +105,12 @@ With `routing.strategy = "ready_mesh"` (recommended/default):
 
 ## Probe settings
 
-Ready-queue recovery adds:
+Supervised ready-strategy recovery adds:
 
 - `ready_lease_seconds` — maximum age of a healthy proof before an idle ready model is revalidated; default `300`
 - `recovery_attempts` — supervisor probes after a quarantined model fails; default `5`
 - `recovery_retry_ms` — delay between failed recovery probes; default `500`
-- a model returns to the ready queue immediately on the first successful recovery probe
+- a model returns to the verified ready pool immediately on the first successful recovery probe
 - after all recovery attempts fail, `routing.cooldown_seconds` is applied before the next recovery cycle
 
 

@@ -120,7 +120,7 @@ Provider workflow:
 8. Run **Test connection** for reachability/auth
 9. Run **Test selected models** for real inference
 10. Save
-10. Re-open **Edit** later
+11. Re-open **Edit** later
 
 Editing does not silently destroy working secrets. The saved Base URL, protocol, models, proxy, endpoint overrides, forward headers, auth settings, credential pool, concurrency settings, and credential source are loaded back into the form. If the secret field is unchanged, `preserve_secret` keeps the prior secret exactly.
 
