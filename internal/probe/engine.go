@@ -54,10 +54,10 @@ type Engine struct {
 	ctxMu  sync.RWMutex
 	runCtx context.Context
 
-	recoveryMu      sync.Mutex
-	recovering      map[string]bool
-	recoveryQueue   chan recoveryTask
-	recoveryWorkers sync.Once
+	recoveryMu          sync.Mutex
+	recovering          map[string]bool
+	recoveryQueue       chan recoveryTask
+	recoveryWorkers     sync.Once
 	recoveryTimers      map[string]*time.Timer
 	recoveryTokens      map[string]uint64
 	recoveryGenerations map[string]uint64
@@ -70,14 +70,14 @@ type Engine struct {
 
 func New(cfg config.Config, reg *providers.Registry, rt *router.Router, hm *health.Manager, bus *events.Bus) *Engine {
 	return &Engine{
-		cfg:           cfg,
-		reg:           reg,
-		rt:            rt,
-		hm:            hm,
-		bus:           bus,
-		trigger:       make(chan struct{}, 1),
-		recovering:     map[string]bool{},
-		recoveryQueue:  make(chan recoveryTask, maxRecoveryQueue),
+		cfg:                 cfg,
+		reg:                 reg,
+		rt:                  rt,
+		hm:                  hm,
+		bus:                 bus,
+		trigger:             make(chan struct{}, 1),
+		recovering:          map[string]bool{},
+		recoveryQueue:       make(chan recoveryTask, maxRecoveryQueue),
 		recoveryTimers:      map[string]*time.Timer{},
 		recoveryTokens:      map[string]uint64{},
 		recoveryGenerations: map[string]uint64{},
