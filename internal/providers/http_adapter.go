@@ -113,6 +113,11 @@ func newHTTPAdapterWithRetryCap(p config.ProviderConfig, timeout, retryAfterCap 
 }
 func (a *httpAdapter) ID() string   { return a.p.ID }
 func (a *httpAdapter) Kind() string { return a.p.Type }
+func (a *httpAdapter) CloseIdleConnections() {
+	if a.c != nil {
+		a.c.CloseIdleConnections()
+	}
+}
 func (a *httpAdapter) Stats() ProviderStats {
 	a.credMu.RLock()
 	defer a.credMu.RUnlock()
