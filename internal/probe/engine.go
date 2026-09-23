@@ -229,14 +229,12 @@ func (e *Engine) releaseProbe() {
 }
 
 func (e *Engine) deployment(id string) (router.Deployment, providers.Adapter, bool) {
-	for _, d := range e.rt.All() {
-		if d.ID != id {
-			continue
-		}
-		a, ok := e.reg.Get(d.ProviderID)
-		return d, a, ok
+	d, ok := e.rt.Deployment(id)
+	if !ok {
+		return router.Deployment{}, nil, false
 	}
-	return router.Deployment{}, nil, false
+	a, ok := e.reg.Get(d.ProviderID)
+	return d, a, ok
 }
 
 func readyLeaseExpired(st health.State, now time.Time, lease time.Duration) bool {

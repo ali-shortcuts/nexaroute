@@ -503,6 +503,13 @@ func (r *Router) Eligible(id string, req Requirement) (Scored, bool) {
 	}
 	return r.eligibleDeployment(d, req, cfg, false, req.Scopes())
 }
+func (r *Router) Deployment(id string) (Deployment, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	d, ok := r.byID[id]
+	return d, ok
+}
+
 func (r *Router) All() []Deployment {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
