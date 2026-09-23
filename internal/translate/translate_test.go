@@ -60,7 +60,7 @@ func TestOpenAIResponseToAnthropicRejectsMalformedToolArguments(t *testing.T) {
 			Message: core.OpenAIMessage{
 				Role: "assistant",
 				ToolCalls: []core.OpenAIToolCall{{
-					ID: "call-1",
+					ID:       "call-1",
 					Function: core.OpenAIFunctionCall{Name: "shell", Arguments: "{bad"},
 				}},
 			},
@@ -78,7 +78,7 @@ func TestOpenAIToAnthropicRejectsMalformedToolArguments(t *testing.T) {
 		Messages: []core.OpenAIMessage{{
 			Role: "assistant",
 			ToolCalls: []core.OpenAIToolCall{{
-				ID: "call-1",
+				ID:       "call-1",
 				Function: core.OpenAIFunctionCall{Name: "shell", Arguments: "{bad"},
 			}},
 		}},
