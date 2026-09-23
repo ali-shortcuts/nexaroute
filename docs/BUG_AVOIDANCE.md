@@ -47,8 +47,9 @@ Defense:
 Defense:
 
 - health is per deployment
-- failing deployment enters cooldown
-- router removes cooldown deployments before scoring
+- under the default `ready_mesh` strategy, the first eligible routed failure quarantines the deployment immediately
+- a dedicated recovery supervisor owns the five-attempt recovery/cooldown lifecycle
+- quarantined/cooldown deployments are excluded from client routing
 
 ## 7. Mid-stream fallback must not corrupt a response
 
