@@ -27,12 +27,6 @@ func defaultConfigPath() string {
 	if p := os.Getenv("NEXAROUTE_CONFIG"); p != "" {
 		return p
 	}
-	if _, err := os.Stat("config.json"); err == nil {
-		return "config.json"
-	}
-	if _, err := os.Stat(filepath.Join("configs", "config.example.json")); err == nil {
-		return filepath.Join("configs", "config.example.json")
-	}
 	return "config.json"
 }
 
@@ -89,10 +83,11 @@ func main() {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
+	serverErr := make(chan error, 1)
 	go func() {
 		logger.Printf("version=%s config=%s listening=http://%s", version, *configPath, cfg.Listen)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.Printf("server_error=%v", err)
+			serverErr <- err
 			cancel()
 		}
 	}()
@@ -106,5 +101,10 @@ func main() {
 	defer shutdownCancel()
 	if err := srv.Shutdown(shutdown); err != nil {
 		logger.Printf("shutdown_error=%v", err)
+	}
+	select {
+	case err := <-serverErr:
+		logger.Fatalf("server_error=%v", err)
+	default:
 	}
 }
