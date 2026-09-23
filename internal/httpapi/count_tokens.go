@@ -32,16 +32,18 @@ func (s *Server) countTokens(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.TrimSpace(in.Model) != "" {
 		req := router.Requirement{Model: in.Model, Tools: len(in.Tools) > 0, Vision: hasVisionAnth(raw)}
-		_, candidates, adapters := s.routeSnapshot(req)
+		req = s.prepareRequirement(req, r, raw)
+		_, candidates := s.routeSnapshot(req)
 		forward := copySelectedRequestHeaders(r)
 		for _, c := range candidates {
 			if c.Deployment.ProviderType != "anthropic_compatible" {
 				continue
 			}
-			a, ok := adapters[c.Deployment.ProviderID]
-			if !ok {
+			fresh, a, ok := s.currentRouteCandidate(c.Deployment.ID, req)
+			if !ok || fresh.Deployment.ProviderType != "anthropic_compatible" {
 				continue
 			}
+			c = fresh
 			payload, e := patchJSONModel(raw, c.Deployment.Model)
 			if e != nil {
 				continue
