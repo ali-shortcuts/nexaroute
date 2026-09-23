@@ -10,8 +10,13 @@ bash -n install-user.sh run-local.sh scripts/*.sh
 
 echo '== formatting =='
 if out=$(gofmt -l .) && [[ -n "$out" ]]; then
-  echo "$out"
-  echo 'gofmt check failed' >&2
+  echo 'gofmt check failed for:' >&2
+  echo "$out" >&2
+  while IFS= read -r file; do
+    [[ -z "$file" ]] && continue
+    echo "--- gofmt diff: $file ---" >&2
+    gofmt -d "$file" >&2 || true
+  done <<< "$out"
   exit 1
 fi
 
