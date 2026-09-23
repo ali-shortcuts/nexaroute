@@ -24,7 +24,7 @@ Common Claude Code text/tool/stream flows are implemented and regression-tested,
 
 In particular:
 
-- reasoning/thinking formats differ across providers;
+- reasoning/thinking formats differ across providers. NexaRoute does not silently translate those controls: when a request explicitly asks for reasoning/thinking, routing is constrained to the matching native ingress protocol;
 - prompt-cache metadata does not always have an OpenAI-compatible equivalent;
 - provider-specific beta fields are safest on native Anthropic passthrough;
 - a committed broken stream is not transparently resumed on another provider.

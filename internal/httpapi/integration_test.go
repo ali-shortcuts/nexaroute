@@ -919,3 +919,98 @@ func TestCrossProtocolInvalid2xxFailsOverBeforeCommit(t *testing.T) {
 		t.Fatalf("invalid cross-protocol envelope remained healthy: %+v", st)
 	}
 }
+
+func TestAnthropicReasoningStaysOnNativeProtocol(t *testing.T) {
+	var openCalls, anthCalls atomic.Int32
+	open := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		openCalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"bad","object":"chat.completion","choices":[{"message":{"role":"assistant","content":"wrong"}}]}`)
+	}))
+	defer open.Close()
+	anth := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		anthCalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"ok","type":"message","role":"assistant","content":[{"type":"text","text":"native"}],"model":"a","stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`)
+	}))
+	defer anth.Close()
+
+	cfg := config.Default()
+	cfg.Probe.Enabled = false
+	cfg.Providers = []config.ProviderConfig{
+		{ID: "open", Name: "Open", Type: "openai_compatible", BaseURL: open.URL, AuthMode: "none", Enabled: true,
+			Models: []config.ModelConfig{{ID: "m", Model: "o", Aliases: []string{"coding"}, Enabled: true, Priority: 0, Weight: 1, Capabilities: config.Capabilities{Reasoning: true}}}},
+		{ID: "anth", Name: "Anth", Type: "anthropic_compatible", BaseURL: anth.URL, AuthMode: "none", Enabled: true,
+			Models: []config.ModelConfig{{ID: "m", Model: "a", Aliases: []string{"coding"}, Enabled: true, Priority: 10, Weight: 1, Capabilities: config.Capabilities{Reasoning: true}}}},
+	}
+	s := testGateway(t, cfg)
+	req := httptest.NewRequest(http.MethodPost, "http://gateway/v1/messages", strings.NewReader(`{"model":"coding","max_tokens":8,"thinking":{"type":"enabled","budget_tokens":8},"messages":[{"role":"user","content":"hi"}]}`))
+	rr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), "native") {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	if openCalls.Load() != 0 || anthCalls.Load() != 1 {
+		t.Fatalf("reasoning crossed protocol: open=%d anth=%d", openCalls.Load(), anthCalls.Load())
+	}
+}
+
+func TestOpenAIReasoningStaysOnNativeProtocol(t *testing.T) {
+	var openCalls, anthCalls atomic.Int32
+	anth := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		anthCalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"bad","type":"message","role":"assistant","content":[{"type":"text","text":"wrong"}]}`)
+	}))
+	defer anth.Close()
+	open := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		openCalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"ok","object":"chat.completion","choices":[{"message":{"role":"assistant","content":"native"}}],"usage":{}}`)
+	}))
+	defer open.Close()
+
+	cfg := config.Default()
+	cfg.Probe.Enabled = false
+	cfg.Providers = []config.ProviderConfig{
+		{ID: "anth", Name: "Anth", Type: "anthropic_compatible", BaseURL: anth.URL, AuthMode: "none", Enabled: true,
+			Models: []config.ModelConfig{{ID: "m", Model: "a", Aliases: []string{"coding"}, Enabled: true, Priority: 0, Weight: 1, Capabilities: config.Capabilities{Reasoning: true}}}},
+		{ID: "open", Name: "Open", Type: "openai_compatible", BaseURL: open.URL, AuthMode: "none", Enabled: true,
+			Models: []config.ModelConfig{{ID: "m", Model: "o", Aliases: []string{"coding"}, Enabled: true, Priority: 10, Weight: 1, Capabilities: config.Capabilities{Reasoning: true}}}},
+	}
+	s := testGateway(t, cfg)
+	req := httptest.NewRequest(http.MethodPost, "http://gateway/v1/chat/completions", strings.NewReader(`{"model":"coding","reasoning_effort":"high","messages":[{"role":"user","content":"hi"}]}`))
+	rr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), "native") {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	if anthCalls.Load() != 0 || openCalls.Load() != 1 {
+		t.Fatalf("reasoning crossed protocol: anth=%d open=%d", anthCalls.Load(), openCalls.Load())
+	}
+}
+
+func TestReasoningWithoutNativeProtocolCandidateIsUnavailable(t *testing.T) {
+	var calls atomic.Int32
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer up.Close()
+	cfg := config.Default()
+	cfg.Probe.Enabled = false
+	cfg.Providers = []config.ProviderConfig{{
+		ID: "open", Name: "Open", Type: "openai_compatible", BaseURL: up.URL, AuthMode: "none", Enabled: true,
+		Models: []config.ModelConfig{{ID: "m", Model: "o", Aliases: []string{"coding"}, Enabled: true, Weight: 1, Capabilities: config.Capabilities{Reasoning: true}}},
+	}}
+	s := testGateway(t, cfg)
+	req := httptest.NewRequest(http.MethodPost, "http://gateway/v1/messages", strings.NewReader(`{"model":"coding","max_tokens":8,"thinking":{"type":"enabled"},"messages":[{"role":"user","content":"hi"}]}`))
+	rr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d want 503 body=%s", rr.Code, rr.Body.String())
+	}
+	if calls.Load() != 0 {
+		t.Fatalf("cross-protocol provider received reasoning request: %d", calls.Load())
+	}
+}

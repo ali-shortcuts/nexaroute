@@ -373,3 +373,21 @@ func TestSpecificModelIndexCoversAllMatchForms(t *testing.T) {
 		}
 	}
 }
+
+func TestProviderTypeRequirementFiltersCandidates(t *testing.T) {
+	cfg := config.Default()
+	cfg.Providers = []config.ProviderConfig{
+		{ID: "o", Name: "O", Type: "openai_compatible", BaseURL: "http://example.invalid", Enabled: true,
+			Models: []config.ModelConfig{{ID: "m", Model: "m", Aliases: []string{"coding"}, Enabled: true, Weight: 1, Capabilities: config.Capabilities{Reasoning: true}}}},
+		{ID: "a", Name: "A", Type: "anthropic_compatible", BaseURL: "http://example.invalid", Enabled: true,
+			Models: []config.ModelConfig{{ID: "m", Model: "m", Aliases: []string{"coding"}, Enabled: true, Weight: 1, Capabilities: config.Capabilities{Reasoning: true}}}},
+	}
+	h := health.New(5, time.Hour)
+	h.RecordSuccess("o/m", time.Millisecond)
+	h.RecordSuccess("a/m", time.Millisecond)
+	r := New(cfg, h)
+	got := r.Candidates(Requirement{Model: "coding", Reasoning: true, ProviderType: "anthropic_compatible"})
+	if len(got) != 1 || got[0].Deployment.ProviderType != "anthropic_compatible" {
+		t.Fatalf("provider type requirement ignored: %#v", got)
+	}
+}
