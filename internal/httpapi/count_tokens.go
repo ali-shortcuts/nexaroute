@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -67,7 +68,7 @@ func (s *Server) countTokens(w http.ResponseWriter, r *http.Request) {
 				_, _ = w.Write(b)
 				return
 			}
-			if !retryable(resp.StatusCode) {
+			if !failoverEligible(resp.StatusCode) {
 				break
 			}
 		}
@@ -75,11 +76,9 @@ func (s *Server) countTokens(w http.ResponseWriter, r *http.Request) {
 	// Estimate from the full JSON body, including tool schemas and image/PDF
 	// metadata. This is intentionally labelled estimated because tokenization
 	// is model-specific.
-	var compact any
-	if json.Unmarshal(raw, &compact) == nil {
-		if b, e := json.Marshal(compact); e == nil {
-			raw = b
-		}
+	var compact bytes.Buffer
+	if json.Compact(&compact, raw) == nil {
+		raw = compact.Bytes()
 	}
 	chars := utf8.RuneCount(raw)
 	tokens := (chars + 3) / 4
