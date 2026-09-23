@@ -79,6 +79,7 @@ Important controls:
 
 - `fallback_on_unknown_model`
 - `max_attempts`
+- `max_inflight_requests` — global admission limit for expensive data-plane POST requests; default `128`, range `1..10000`. Health, readiness, metrics, model listing, and Admin API remain observable when the data plane is saturated.
 - `failure_threshold` (legacy/other routing strategies)
 - `cooldown_seconds` (default `1800` for supervised ready-strategy recovery)
 - `request_timeout_ms`
@@ -143,6 +144,7 @@ For Docker/LAN access, set an admin key and put TLS/reverse-proxy controls in fr
 - `session_ttl_seconds` — idle affinity lease; default `3600`.
 - `p2c_window` — maximum number of best-priority candidates considered before the power-of-two pick; default `8`.
 - `capacity_weight` — penalty for live active/waiting provider pressure; default `35`.
+- The Web UI exposes all Ready Mesh controls, including session affinity/TTL, P2C window, capacity weight, capability thresholds/cooldown, global in-flight admission, and ready-health lease.
 - `capability_failure_threshold` — consecutive scoped failures before a capability circuit opens; default `2`.
 - `capability_cooldown_seconds` — scoped circuit cooldown; default `300`.
 
