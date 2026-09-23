@@ -114,16 +114,16 @@ type Capabilities struct {
 }
 
 const (
-	maxProviders             = 512
-	maxModelsPerProvider     = 4096
+	maxProviders              = 512
+	maxModelsPerProvider      = 4096
 	maxCredentialsPerProvider = 256
-	maxProviderHeaders       = 128
-	maxProviderConcurrency   = 4096
-	maxProbeConcurrency      = 1024
-	maxRoutingAttempts       = 64
-	maxProbeTokens           = 64
-	maxStringIDBytes         = 256
-	maxURLBytes              = 4096
+	maxProviderHeaders        = 128
+	maxProviderConcurrency    = 4096
+	maxProbeConcurrency       = 1024
+	maxRoutingAttempts        = 64
+	maxProbeTokens            = 64
+	maxStringIDBytes          = 256
+	maxURLBytes               = 4096
 )
 
 func Default() Config {
