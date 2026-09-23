@@ -1,9 +1,13 @@
 package httpapi
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"regexp"
+	"unicode/utf8"
 
 	"github.com/ali-shortcuts/nexaroute/internal/events"
 )
@@ -23,8 +27,10 @@ type guardrailViolation struct {
 // not a content-understanding filter.
 func (s *Server) guardrailProblem(raw []byte) *guardrailViolation {
 	g := s.currentConfig().Guardrails
-	if g.MaxPromptChars > 0 && len(raw) > g.MaxPromptChars {
-		return &guardrailViolation{Rule: "max_prompt_chars", Detail: fmt.Sprintf("request body is %d chars, limit is %d", len(raw), g.MaxPromptChars)}
+	// Characters, not bytes: runeCount <= byteCount, so bodies at or under
+	// the limit in bytes can never exceed it in characters (fast path).
+	if g.MaxPromptChars > 0 && len(raw) > g.MaxPromptChars && utf8.RuneCount(raw) > g.MaxPromptChars {
+		return &guardrailViolation{Rule: "max_prompt_chars", Detail: fmt.Sprintf("request body is %d chars, limit is %d", utf8.RuneCount(raw), g.MaxPromptChars)}
 	}
 	if len(g.BlockedPatterns) == 0 || len(raw) == 0 {
 		return nil
@@ -33,16 +39,50 @@ func (s *Server) guardrailProblem(raw []byte) *guardrailViolation {
 	if len(scan) > maxGuardrailScanBytes {
 		scan = scan[:maxGuardrailScanBytes]
 	}
+	// Patterns are also matched against the decoded JSON string content, so a
+	// client cannot smuggle a keyword past the filter with \uXXXX escapes
+	// (e.g. "top\u0073ecret"). The decoded pass runs only when the raw body
+	// actually contains unicode escapes.
+	targets := [][]byte{scan}
+	if bytes.Contains(scan, []byte(`\u`)) {
+		if decoded, ok := decodedJSONStrings(scan); ok && len(decoded) > 0 {
+			targets = append(targets, decoded)
+		}
+	}
 	for _, pattern := range g.BlockedPatterns {
 		re, err := regexp.Compile("(?i)" + pattern)
 		if err != nil {
 			continue // validation guarantees compilable patterns; skip defensively
 		}
-		if re.Match(scan) {
-			return &guardrailViolation{Rule: "blocked_pattern", Pattern: pattern}
+		for _, target := range targets {
+			if re.Match(target) {
+				return &guardrailViolation{Rule: "blocked_pattern", Pattern: pattern}
+			}
 		}
 	}
 	return nil
+}
+
+// decodedJSONStrings extracts the decoded string values of a JSON document
+// (joined with newlines) so escape-encoded content can be scanned. Malformed
+// JSON yields whatever decoded cleanly plus ok=false; the raw pass above
+// already covered the well-formed subset in that case.
+func decodedJSONStrings(raw []byte) ([]byte, bool) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	var out []byte
+	for {
+		tok, err := dec.Token()
+		if err == io.EOF {
+			return out, true
+		}
+		if err != nil {
+			return out, false
+		}
+		if str, ok := tok.(string); ok {
+			out = append(out, str...)
+			out = append(out, '\n')
+		}
+	}
 }
 
 func (s *Server) rejectGuardrail(w http.ResponseWriter, r *http.Request, requestID string, v *guardrailViolation) {
@@ -83,11 +123,11 @@ func (s *Server) adminGuardrailsTest(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	lengthBlocked := g.MaxPromptChars > 0 && len(in.Text) > g.MaxPromptChars
+	lengthBlocked := g.MaxPromptChars > 0 && len(in.Text) > g.MaxPromptChars && utf8.RuneCountInString(in.Text) > g.MaxPromptChars
 	writeJSON(w, 200, map[string]any{
 		"blocked":        lengthBlocked || len(matches) > 0,
 		"length_blocked": lengthBlocked,
 		"matches":        matches,
-		"length":         len(in.Text),
+		"length":         utf8.RuneCountInString(in.Text),
 	})
 }

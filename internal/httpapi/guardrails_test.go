@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/ali-shortcuts/nexaroute/internal/config"
 )
@@ -109,5 +110,47 @@ func TestGuardrailsInvalidPatternFailsValidation(t *testing.T) {
 	cfg.Guardrails = config.GuardrailsConfig{BlockedPatterns: []string{"([unclosed"}}
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("invalid regex must fail config validation")
+	}
+}
+
+func TestGuardrailBlocksUnicodeEscapedKeyword(t *testing.T) {
+	// A raw-body-only scan would miss keywords smuggled as \uXXXX escapes
+	// (any JSON serializer can emit them). The decoded string content must
+	// be scanned too.
+	raw := []byte(`{"model":"m1","messages":[{"role":"user","content":"say top\u0073ecret now"}]}`)
+	srv := guardrailsGateway(t, config.GuardrailsConfig{BlockedPatterns: []string{"topsecret"}})
+	if v := srv.guardrailProblem(raw); v == nil || v.Rule != "blocked_pattern" {
+		t.Fatalf("unicode-escaped keyword must be blocked, got %v", v)
+	}
+	if v := srv.guardrailProblem([]byte(`{"model":"m1","messages":[{"role":"user","content":"harmless text"}]}`)); v != nil {
+		t.Fatalf("harmless body must pass, got %v", v)
+	}
+}
+
+func TestGuardrailMaxPromptCharsCountsRunesNotBytes(t *testing.T) {
+	// Multibyte content (e.g. Persian) must not trip a character limit
+	// merely because of its byte length. Pick a limit strictly between the
+	// body's rune count and its byte count: rune-honest code passes, the old
+	// byte-counting code blocked it.
+	persian := []byte(`{"messages":[{"role":"user","content":"` + strings.Repeat("سلام ", 20) + `"}]}`)
+	runes, bytesN := utf8.RuneCount(persian), len(persian)
+	if !(bytesN > runes) {
+		t.Fatalf("fixture must be multibyte-heavy: bytes=%d runes=%d", bytesN, runes)
+	}
+	limit := (bytesN + runes) / 2
+	srv := guardrailsGateway(t, config.GuardrailsConfig{MaxPromptChars: limit})
+	if v := srv.guardrailProblem(persian); v != nil {
+		t.Fatalf("multibyte body of %d chars must pass a %d-char limit (bytes=%d), got %v", runes, limit, bytesN, v)
+	}
+	over := []byte(`{"messages":[{"role":"user","content":"` + strings.Repeat("سلام ", 40) + `"}]}`)
+	if utf8.RuneCount(over) <= limit {
+		t.Fatalf("over fixture must exceed the limit: runes=%d limit=%d", utf8.RuneCount(over), limit)
+	}
+	if v := srv.guardrailProblem(over); v == nil || v.Rule != "max_prompt_chars" {
+		t.Fatalf("body beyond the char limit must be blocked, got %v", v)
+	}
+	// ASCII still enforces the identical byte/char case.
+	if v := srv.guardrailProblem([]byte(strings.Repeat("a", limit+1))); v == nil || v.Rule != "max_prompt_chars" {
+		t.Fatalf("oversized ASCII body must be blocked, got %v", v)
 	}
 }
