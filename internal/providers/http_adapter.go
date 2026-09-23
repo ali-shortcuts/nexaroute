@@ -524,7 +524,7 @@ type releaseOnDoneBody struct {
 
 func (b *releaseOnDoneBody) Read(p []byte) (int, error) {
 	n, err := b.ReadCloser.Read(p)
-	if err == io.EOF {
+	if err != nil {
 		b.once.Do(b.release)
 	}
 	return n, err
