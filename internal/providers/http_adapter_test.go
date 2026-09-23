@@ -119,3 +119,61 @@ func TestReleaseOnDoneBodyReleasesOnTerminalReadError(t *testing.T) {
 		t.Fatalf("release ran more than once: %d", released)
 	}
 }
+
+func TestProbeRequiresProtocolValidSuccessEnvelope(t *testing.T) {
+	tests := []struct {
+		name         string
+		providerType string
+		body         string
+		wantErr      bool
+	}{
+		{"malformed json", "openai_compatible", "{bad", true},
+		{"wrong openai envelope", "openai_compatible", `{"ok":true}`, true},
+		{"valid openai", "openai_compatible", `{"id":"x","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"OK"},"finish_reason":"stop"}],"usage":{}}`, false},
+		{"valid anthropic", "anthropic_compatible", `{"id":"x","type":"message","role":"assistant","content":[{"type":"text","text":"OK"}],"model":"m","stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, tc.body)
+			}))
+			defer srv.Close()
+			p := config.ProviderConfig{
+				ID: "p", Name: "P", Type: tc.providerType, BaseURL: srv.URL,
+				ChatPath: "/", MessagesPath: "/", MaxConcurrency: 1, Enabled: true,
+			}
+			a, err := newHTTPAdapter(p, 2*time.Second)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, _, err = a.Probe(context.Background(), "m", 1)
+			if tc.wantErr && err == nil {
+				t.Fatal("expected invalid probe response to fail")
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("valid probe failed: %v", err)
+			}
+		})
+	}
+}
+
+func TestProbeRejectsTruncatedSuccessBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", "200")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"choices":[`)
+	}))
+	defer srv.Close()
+	p := config.ProviderConfig{
+		ID: "p", Name: "P", Type: "openai_compatible", BaseURL: srv.URL,
+		ChatPath: "/", MaxConcurrency: 1, Enabled: true,
+	}
+	a, err := newHTTPAdapter(p, 2*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := a.Probe(context.Background(), "m", 1); err == nil {
+		t.Fatal("truncated 2xx probe body must not mark a deployment healthy")
+	}
+}
