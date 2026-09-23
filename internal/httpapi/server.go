@@ -213,7 +213,7 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		s.requestTotal.Add(1)
-		rid := strings.TrimSpace(r.Header.Get("x-request-id"))
+		rid := normalizeRequestID(r.Header.Get("x-request-id"))
 		if rid == "" {
 			rid = fmt.Sprintf("nexaroute-%x-%x", time.Now().UnixNano(), s.requestSeq.Add(1))
 			r.Header.Set("x-request-id", rid)
