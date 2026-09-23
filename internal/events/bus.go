@@ -89,11 +89,20 @@ func (b *Bus) Add(e Event) {
 	incrementBoundedCounter(b.errorCounts, e.ErrorType)
 }
 func (b *Bus) Snapshot() []Event {
+	return b.SnapshotLimit(0)
+}
+
+func (b *Bus) SnapshotLimit(limit int) []Event {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
-	out := make([]Event, b.count)
-	for i := 0; i < b.count; i++ {
-		out[i] = b.items[(b.start+i)%b.max]
+	count := b.count
+	if limit > 0 && count > limit {
+		count = limit
+	}
+	out := make([]Event, count)
+	offset := b.count - count
+	for i := 0; i < count; i++ {
+		out[i] = b.items[(b.start+offset+i)%b.max]
 	}
 	return out
 }

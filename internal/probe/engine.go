@@ -95,6 +95,28 @@ func (e *Engine) Reload(cfg config.Config) {
 	e.Trigger()
 }
 
+type RuntimeStats struct {
+	RecoveryQueueDepth int
+	RecoveryTracked    int
+	RecoveryWorkers    int
+	ActiveProbes       int
+}
+
+func (e *Engine) Stats() RuntimeStats {
+	e.recoveryMu.Lock()
+	tracked := len(e.recovering)
+	e.recoveryMu.Unlock()
+	e.limitMu.Lock()
+	active := e.activeProbes
+	e.limitMu.Unlock()
+	return RuntimeStats{
+		RecoveryQueueDepth: len(e.recoveryQueue),
+		RecoveryTracked:    tracked,
+		RecoveryWorkers:    recoveryWorkerCount,
+		ActiveProbes:       active,
+	}
+}
+
 func (e *Engine) current() config.Config {
 	e.cfgMu.RLock()
 	defer e.cfgMu.RUnlock()

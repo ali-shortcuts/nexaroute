@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"sort"
 	"strings"
 	"sync"
@@ -95,16 +96,55 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 405, "method not allowed")
 		return
 	}
+	parseLimit := func(name string, max int) int {
+		v := strings.TrimSpace(r.URL.Query().Get(name))
+		if v == "" {
+			return 0
+		}
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			return 0
+		}
+		if n > max {
+			return max
+		}
+		return n
+	}
 	cfg := s.currentConfig()
-	s.runtimeMu.RLock()
 	deployments := s.rt.All()
-	s.runtimeMu.RUnlock()
+	healthAll := s.hm.Snapshot()
+	healthCounts := map[health.Status]int{}
+	for _, st := range healthAll {
+		healthCounts[st.Status]++
+	}
+	totalDeployments := len(deployments)
+	limit := parseLimit("limit", 5000)
+	truncated := limit > 0 && len(deployments) > limit
+	if truncated {
+		deployments = deployments[:limit]
+		keep := make(map[string]struct{}, len(deployments))
+		for _, d := range deployments {
+			keep[d.ID] = struct{}{}
+		}
+		filtered := make([]health.State, 0, len(deployments))
+		for _, st := range healthAll {
+			if _, ok := keep[st.Deployment]; ok {
+				filtered = append(filtered, st)
+			}
+		}
+		healthAll = filtered
+	}
+	eventLimit := parseLimit("events", 500)
 	writeJSON(w, 200, map[string]any{
-		"deployments":    deployments,
-		"health":         s.hm.Snapshot(),
-		"events":         s.bus.Snapshot(),
-		"provider_stats": s.reg.Stats(),
-		"session_count":  s.rt.SessionCount(),
+		"deployments":      deployments,
+		"deployment_total": totalDeployments,
+		"snapshot_truncated": truncated,
+		"health":           healthAll,
+		"health_counts":    healthCounts,
+		"events":           s.bus.SnapshotLimit(eventLimit),
+		"provider_stats":   s.reg.Stats(),
+		"session_count":    s.rt.SessionCount(),
+		"probe_stats":      s.probe.Stats(),
 		"config": map[string]any{
 			"probe":   cfg.Probe,
 			"routing": cfg.Routing,
