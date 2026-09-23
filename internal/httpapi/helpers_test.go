@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"net/http"
@@ -347,4 +348,45 @@ func TestTranslatedStreamsRejectMalformedSSEJSON(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
+}
+
+func TestCloneConfigPreservesExplicitEmptyForwardHeaders(t *testing.T) {
+	cfg := config.Default()
+	cfg.Providers = []config.ProviderConfig{{
+		ID: "a", Name: "A", Type: "anthropic_compatible", BaseURL: "https://example.com",
+		ForwardHeaders: []string{}, Enabled: true,
+	}}
+	got := cloneConfig(cfg)
+	if got.Providers[0].ForwardHeaders == nil {
+		t.Fatal("cloneConfig collapsed explicit empty forward_headers to nil")
+	}
+	if len(got.Providers[0].ForwardHeaders) != 0 {
+		t.Fatalf("cloneConfig changed explicit empty forward_headers: %#v", got.Providers[0].ForwardHeaders)
+	}
+}
+
+func TestDiscoverModelsBoundsErrorBody(t *testing.T) {
+	secret := "super-secret-key"
+	huge := strings.Repeat("X", 10000) + secret
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = io.WriteString(w, huge)
+	}))
+	defer srv.Close()
+
+	p := config.ProviderConfig{
+		ID: "p", Name: "P", Type: "openai_compatible", BaseURL: srv.URL,
+		APIKey: secret, AuthMode: "bearer", ModelsPath: "/", MaxConcurrency: 1, Enabled: true,
+	}
+	_, _, err := discoverModels(context.Background(), p)
+	if err == nil {
+		t.Fatal("expected discovery failure")
+	}
+	msg := err.Error()
+	if len(msg) > 2300 {
+		t.Fatalf("discovery error was not bounded, len=%d", len(msg))
+	}
+	if strings.Contains(msg, secret) {
+		t.Fatal("discovery error leaked provider credential")
+	}
 }

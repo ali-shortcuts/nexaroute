@@ -257,3 +257,23 @@ func TestExplicitZeroRoutingWeightsAndRetryDelaysArePreserved(t *testing.T) {
 		t.Fatalf("explicit zero weights/delays should validate: %v", err)
 	}
 }
+
+func TestExplicitEmptyForwardHeadersRemainEmpty(t *testing.T) {
+	p := ProviderConfig{
+		ID: "a", Name: "A", Type: "anthropic_compatible", BaseURL: "https://example.com",
+		ForwardHeaders: []string{}, Enabled: true,
+	}
+	p.ApplyDefaults()
+	if p.ForwardHeaders == nil {
+		t.Fatal("explicit empty forward_headers lost nil-vs-empty distinction")
+	}
+	if len(p.ForwardHeaders) != 0 {
+		t.Fatalf("explicit empty forward_headers was overwritten: %#v", p.ForwardHeaders)
+	}
+
+	p2 := ProviderConfig{ID: "b", Name: "B", Type: "anthropic_compatible", BaseURL: "https://example.com", Enabled: true}
+	p2.ApplyDefaults()
+	if len(p2.ForwardHeaders) == 0 {
+		t.Fatal("missing forward_headers should still receive Anthropic defaults")
+	}
+}

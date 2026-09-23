@@ -178,3 +178,74 @@ func TestProbeRejectsTruncatedSuccessBody(t *testing.T) {
 		t.Fatal("truncated 2xx probe body must not mark a deployment healthy")
 	}
 }
+
+func TestProbeRejectsNullOrNonObjectOpenAIMessage(t *testing.T) {
+	for _, body := range []string{
+		`{"choices":[{"message":null}]}`,
+		`{"choices":[{"message":"not-an-object"}]}`,
+		`{"choices":[{"message":123}]}`,
+	} {
+		t.Run(body, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, body)
+			}))
+			defer srv.Close()
+			p := config.ProviderConfig{
+				ID: "p", Name: "P", Type: "openai_compatible", BaseURL: srv.URL,
+				ChatPath: "/", MaxConcurrency: 1, Enabled: true,
+			}
+			a, err := newHTTPAdapter(p, 2*time.Second)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := a.Probe(context.Background(), "m", 1); err == nil {
+				t.Fatalf("invalid OpenAI message envelope was accepted: %s", body)
+			}
+		})
+	}
+}
+
+func TestParseRetryAfterBounded(t *testing.T) {
+	capDelay := 60 * time.Second
+	cases := []struct {
+		name string
+		value string
+		want time.Duration
+	}{
+		{"normal seconds", "5", 5 * time.Second},
+		{"huge seconds", "31536000", capDelay},
+		{"overflow integer", "999999999999999999999999999", capDelay},
+		{"empty fallback", "", capDelay},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := parseRetryAfterBounded(tc.value, capDelay, capDelay); got != tc.want {
+				t.Fatalf("got %s want %s", got, tc.want)
+			}
+		})
+	}
+	future := time.Now().Add(24 * time.Hour).UTC().Format(http.TimeFormat)
+	if got := parseRetryAfterBounded(future, capDelay, capDelay); got != capDelay {
+		t.Fatalf("future HTTP-date was not capped: %s", got)
+	}
+}
+
+func TestCredential429CooldownUsesConfiguredRetryAfterCap(t *testing.T) {
+	p := config.ProviderConfig{
+		ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "http://example.invalid",
+		MaxConcurrency: 1, Enabled: true, Credentials: []config.CredentialConfig{{Name: "k", APIKey: "secret", Enabled: true}},
+	}
+	a, err := newHTTPAdapterWithRetryCap(p, time.Second, 2*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := time.Now()
+	a.cooldownCredential(0, http.StatusTooManyRequests, "3600")
+	a.credMu.RLock()
+	until := a.creds[0].CooldownUntil
+	a.credMu.RUnlock()
+	if d := until.Sub(before); d < time.Second || d > 3*time.Second {
+		t.Fatalf("credential cooldown ignored cap: %s", d)
+	}
+}
