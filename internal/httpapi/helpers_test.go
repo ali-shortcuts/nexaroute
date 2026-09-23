@@ -220,3 +220,31 @@ func TestDataPlaneAdmissionOnlyCoversExpensivePostEndpoints(t *testing.T) {
 		}
 	}
 }
+
+func TestReadyMeshSettingsControlsAreWiredInEmbeddedUI(t *testing.T) {
+	index, err := webFS.ReadFile("web/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	app, err := webFS.ReadFile("web/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(index)
+	js := string(app)
+	controls := []string{
+		"rtSessionAffinity", "rtSessionTTL", "rtP2CWindow", "rtCapacityWeight",
+		"rtAttempts", "rtMaxInflight", "rtFailureThreshold", "rtCapabilityThreshold",
+		"rtCapabilityCooldown", "rtCooldown", "rtTimeout", "rtBackoff", "rtRetryAfter",
+		"prEnabled", "prOnStart", "prInterval", "prReadyLease", "prTimeout",
+		"prTokens", "prConcurrency", "prRecoveryAttempts", "prRecoveryRetry",
+	}
+	for _, id := range controls {
+		if !strings.Contains(html, `id="" + id + `") {
+			t.Fatalf("control %s missing from embedded HTML", id)
+		}
+		if !strings.Contains(js, "#"+id) {
+			t.Fatalf("control %s is present in HTML but not wired in app.js", id)
+		}
+	}
+}
