@@ -8,13 +8,14 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"strconv"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/ali-shortcuts/nexaroute/internal/config"
+	"github.com/ali-shortcuts/nexaroute/internal/health"
 	"github.com/ali-shortcuts/nexaroute/internal/providers"
 )
 
@@ -110,18 +111,16 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 		}
 		return n
 	}
-	cfg := s.currentConfig()
-	deployments := s.rt.All()
+	routingCfg, probeCfg := s.runtimeSettingsSnapshot()
+	limit := parseLimit("limit", 5000)
+	deployments, totalDeployments := s.rt.AllLimit(limit)
 	healthAll := s.hm.Snapshot()
 	healthCounts := map[health.Status]int{}
 	for _, st := range healthAll {
 		healthCounts[st.Status]++
 	}
-	totalDeployments := len(deployments)
-	limit := parseLimit("limit", 5000)
-	truncated := limit > 0 && len(deployments) > limit
+	truncated := limit > 0 && totalDeployments > len(deployments)
 	if truncated {
-		deployments = deployments[:limit]
 		keep := make(map[string]struct{}, len(deployments))
 		for _, d := range deployments {
 			keep[d.ID] = struct{}{}
@@ -146,8 +145,8 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 		"session_count":    s.rt.SessionCount(),
 		"probe_stats":      s.probe.Stats(),
 		"config": map[string]any{
-			"probe":   cfg.Probe,
-			"routing": cfg.Routing,
+			"probe":   probeCfg,
+			"routing": routingCfg,
 		},
 	})
 }

@@ -528,8 +528,36 @@ func (r *Router) Deployment(id string) (Deployment, bool) {
 	return d, ok
 }
 
-func (r *Router) All() []Deployment {
+func (r *Router) AllLimit(limit int) ([]Deployment, int) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return append([]Deployment(nil), r.all...)
+	total := len(r.all)
+	n := total
+	if limit > 0 && n > limit {
+		n = limit
+	}
+	return append([]Deployment(nil), r.all[:n]...), total
+}
+
+func (r *Router) All() []Deployment {
+	out, _ := r.AllLimit(0)
+	return out
+}
+
+func (r *Router) Readiness(strategy string) (total, usable int) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	total = len(r.all)
+	readyStrategy := IsReadyStrategy(strategy)
+	for _, d := range r.all {
+		st := r.health.Get(d.ID).Status
+		if readyStrategy {
+			if st == health.Healthy {
+				usable++
+			}
+		} else if st != health.Cooldown {
+			usable++
+		}
+	}
+	return total, usable
 }

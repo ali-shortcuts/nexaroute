@@ -13,8 +13,8 @@ type settingsForm struct {
 func (s *Server) adminSettings(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		cfg := s.currentConfig()
-		writeJSON(w, 200, settingsForm{Routing: cfg.Routing, Probe: cfg.Probe})
+		routingCfg, probeCfg := s.runtimeSettingsSnapshot()
+		writeJSON(w, 200, settingsForm{Routing: routingCfg, Probe: probeCfg})
 	case http.MethodPut:
 		var in settingsForm
 		if _, err := readJSON(r, &in); err != nil {

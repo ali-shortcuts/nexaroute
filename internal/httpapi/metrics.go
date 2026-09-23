@@ -126,34 +126,21 @@ func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 405, "method not allowed")
 		return
 	}
-	ds := s.rt.All()
-	if len(ds) == 0 {
+	routingCfg, _ := s.runtimeSettingsSnapshot()
+	total, usable := s.rt.Readiness(routingCfg.Strategy)
+	if total == 0 {
 		errorJSON(w, 503, "no enabled model deployments")
 		return
 	}
-	usable := 0
-	cfg := s.currentConfig()
-	for _, d := range ds {
-		st := s.hm.Get(d.ID).Status
-		if router.IsReadyStrategy(cfg.Routing.Strategy) {
-			if st == health.Healthy {
-				usable++
-			}
-			continue
-		}
-		if st != health.Cooldown {
-			usable++
-		}
-	}
 	if usable == 0 {
-		if router.IsReadyStrategy(cfg.Routing.Strategy) {
+		if router.IsReadyStrategy(routingCfg.Strategy) {
 			errorJSON(w, 503, "no verified healthy model deployments in ready queue")
 		} else {
 			errorJSON(w, 503, "no usable model deployments")
 		}
 		return
 	}
-	writeJSON(w, 200, map[string]any{"ok": true, "deployments": len(ds), "usable": usable})
+	writeJSON(w, 200, map[string]any{"ok": true, "deployments": total, "usable": usable})
 }
 
 func sanitizeMetricLabel(s string) string {

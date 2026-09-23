@@ -54,6 +54,18 @@ func (s *Server) currentConfig() config.Config {
 	return cloneConfig(s.cfg)
 }
 
+func (s *Server) runtimeSettingsSnapshot() (config.RoutingConfig, config.ProbeConfig) {
+	s.runtimeMu.RLock()
+	defer s.runtimeMu.RUnlock()
+	return s.cfg.Routing, s.cfg.Probe
+}
+
+func (s *Server) adminConfigSnapshot() config.AdminConfig {
+	s.runtimeMu.RLock()
+	defer s.runtimeMu.RUnlock()
+	return s.cfg.Admin
+}
+
 func cloneConfig(in config.Config) config.Config {
 	out := in
 	out.Providers = append([]config.ProviderConfig(nil), in.Providers...)
@@ -457,24 +469,24 @@ func (w *statusWriter) ReadFrom(r io.Reader) (int64, error) {
 }
 
 func (s *Server) adminAuthorized(r *http.Request) bool {
-	cfg := s.currentConfig()
+	cfg := s.adminConfigSnapshot()
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		host = r.RemoteAddr
 	}
 	ip := net.ParseIP(host)
 	isLoopback := ip != nil && ip.IsLoopback()
-	if cfg.Admin.BindLocalOnly && !isLoopback {
+	if cfg.BindLocalOnly && !isLoopback {
 		return false
 	}
-	if cfg.Admin.APIKey != "" {
+	if cfg.APIKey != "" {
 		got := r.Header.Get("x-admin-key")
 		if got == "" {
 			if v := r.Header.Get("Authorization"); strings.HasPrefix(v, "Bearer ") {
 				got = strings.TrimPrefix(v, "Bearer ")
 			}
 		}
-		return len(got) == len(cfg.Admin.APIKey) && subtle.ConstantTimeCompare([]byte(got), []byte(cfg.Admin.APIKey)) == 1
+		return len(got) == len(cfg.APIKey) && subtle.ConstantTimeCompare([]byte(got), []byte(cfg.APIKey)) == 1
 	}
 	return isLoopback
 }
