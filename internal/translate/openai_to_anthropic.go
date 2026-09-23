@@ -30,7 +30,11 @@ func OpenAIToAnthropic(in core.OpenAIRequest, model string) (core.AnthropicReque
 		if m.Role == "assistant" {
 			for _, tc := range m.ToolCalls {
 				obj := map[string]any{}
-				_ = json.Unmarshal([]byte(tc.Function.Arguments), &obj)
+				if strings.TrimSpace(tc.Function.Arguments) != "" {
+					if err := json.Unmarshal([]byte(tc.Function.Arguments), &obj); err != nil {
+						return out, fmt.Errorf("tool call %q arguments are invalid JSON: %w", tc.ID, err)
+					}
+				}
 				blocks = append(blocks, map[string]any{"type": "tool_use", "id": tc.ID, "name": tc.Function.Name, "input": obj})
 			}
 		}

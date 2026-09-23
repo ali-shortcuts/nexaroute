@@ -71,3 +71,19 @@ func TestOpenAIResponseToAnthropicRejectsMalformedToolArguments(t *testing.T) {
 		t.Fatal("malformed tool arguments must not be silently converted to an empty object")
 	}
 }
+
+func TestOpenAIToAnthropicRejectsMalformedToolArguments(t *testing.T) {
+	in := core.OpenAIRequest{
+		Model: "x",
+		Messages: []core.OpenAIMessage{{
+			Role: "assistant",
+			ToolCalls: []core.OpenAIToolCall{{
+				ID: "call-1",
+				Function: core.OpenAIFunctionCall{Name: "shell", Arguments: "{bad"},
+			}},
+		}},
+	}
+	if _, err := OpenAIToAnthropic(in, "backend"); err == nil {
+		t.Fatal("malformed historical tool arguments must not be silently converted")
+	}
+}
