@@ -2,11 +2,11 @@ package router
 
 import (
 	"fmt"
+	"testing"
+	"time"
 
 	"github.com/ali-shortcuts/nexaroute/internal/config"
 	"github.com/ali-shortcuts/nexaroute/internal/health"
-	"testing"
-	"time"
 )
 
 func TestCandidatesExcludeCooldown(t *testing.T) {
