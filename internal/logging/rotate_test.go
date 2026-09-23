@@ -2,6 +2,7 @@ package logging
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -151,3 +152,46 @@ func TestNewRotatingWriterReturnsRotationErrorWithoutNilPanic(t *testing.T) {
 		t.Fatal("failed constructor returned a live writer")
 	}
 }
+
+type alwaysFailWriter struct{}
+
+func (alwaysFailWriter) Write([]byte) (int, error) {
+	return 0, io.ErrClosedPipe
+}
+
+func TestFanoutWriterStillWritesHealthySinkAfterEarlierFailure(t *testing.T) {
+	var healthy bytes.Buffer
+	w := NewFanoutWriter(alwaysFailWriter{}, &healthy)
+	n, err := w.Write([]byte("important log line"))
+	if n != len("important log line") {
+		t.Fatalf("reported bytes=%d", n)
+	}
+	if err == nil {
+		t.Fatal("fanout should surface the failed sink")
+	}
+	if healthy.String() != "important log line" {
+		t.Fatalf("healthy sink did not receive log after peer failure: %q", healthy.String())
+	}
+}
+
+func TestFanoutWriterAttemptsLaterSinkAfterShortWrite(t *testing.T) {
+	var healthy bytes.Buffer
+	short := writerFunc(func(p []byte) (int, error) {
+		if len(p) == 0 {
+			return 0, nil
+		}
+		return len(p) - 1, nil
+	})
+	w := NewFanoutWriter(short, &healthy)
+	_, err := w.Write([]byte("abcdef"))
+	if err == nil {
+		t.Fatal("short write should be reported")
+	}
+	if healthy.String() != "abcdef" {
+		t.Fatalf("later sink skipped after short write: %q", healthy.String())
+	}
+}
+
+type writerFunc func([]byte) (int, error)
+
+func (f writerFunc) Write(p []byte) (int, error) { return f(p) }

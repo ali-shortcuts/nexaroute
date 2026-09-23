@@ -239,3 +239,49 @@ func (w *RateLimitedWriter) Write(p []byte) (int, error) {
 	}
 	return len(p), nil
 }
+
+
+// FanoutWriter attempts every configured sink even if an earlier sink fails.
+// This keeps stderr/journald available when the rotating file hits a runtime
+// filesystem error (for example disk-full or permission changes).
+type FanoutWriter struct {
+	writers []io.Writer
+}
+
+func NewFanoutWriter(writers ...io.Writer) *FanoutWriter {
+	filtered := make([]io.Writer, 0, len(writers))
+	for _, w := range writers {
+		if w != nil {
+			filtered = append(filtered, w)
+		}
+	}
+	return &FanoutWriter{writers: filtered}
+}
+
+func (w *FanoutWriter) Write(p []byte) (int, error) {
+	if len(w.writers) == 0 {
+		return len(p), nil
+	}
+	var firstErr error
+	success := false
+	for _, dst := range w.writers {
+		n, err := dst.Write(p)
+		if err == nil && n != len(p) {
+			err = io.ErrShortWrite
+		}
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		success = true
+	}
+	if success {
+		return len(p), firstErr
+	}
+	if firstErr != nil {
+		return 0, firstErr
+	}
+	return len(p), nil
+}

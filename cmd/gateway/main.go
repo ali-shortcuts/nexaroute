@@ -93,7 +93,7 @@ func main() {
 	if len(logWriters) == 1 {
 		logOutput = logWriters[0]
 	} else if len(logWriters) > 1 {
-		logOutput = io.MultiWriter(logWriters...)
+		logOutput = logging.NewFanoutWriter(logWriters...)
 	}
 	logger := log.New(logOutput, "nexaroute ", log.LstdFlags|log.Lmicroseconds)
 	if logFile != nil {
