@@ -2,6 +2,7 @@ package providers
 
 import (
 	"context"
+	"os"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -306,5 +307,38 @@ func TestAllRateLimitedCredentialsExposeRetryAfter(t *testing.T) {
 	}
 	if d <= 0 || d > 1100*time.Millisecond {
 		t.Fatalf("retry-after=%s want about 1s", d)
+	}
+}
+
+func TestRedactBodyCoversAdapterSnapshotAndRotatedEnvCredential(t *testing.T) {
+	const envName = "NEXAROUTE_TEST_REDACT_ROTATION"
+	old, had := os.LookupEnv(envName)
+	t.Cleanup(func() {
+		if had {
+			_ = os.Setenv(envName, old)
+		} else {
+			_ = os.Unsetenv(envName)
+		}
+	})
+	if err := os.Setenv(envName, "old-secret"); err != nil {
+		t.Fatal(err)
+	}
+	p := config.ProviderConfig{
+		ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "http://example.invalid",
+		APIKeyEnv: envName, AuthMode: "bearer", Enabled: true, MaxConcurrency: 1,
+	}
+	a, err := newHTTPAdapter(p, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Setenv(envName, "new-secret"); err != nil {
+		t.Fatal(err)
+	}
+	got := string(a.RedactBody([]byte("old-secret new-secret public")))
+	if strings.Contains(got, "old-secret") || strings.Contains(got, "new-secret") {
+		t.Fatalf("credential leaked after env rotation: %q", got)
+	}
+	if !strings.Contains(got, "public") {
+		t.Fatalf("non-secret content was unexpectedly removed: %q", got)
 	}
 }
