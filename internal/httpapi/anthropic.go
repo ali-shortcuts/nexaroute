@@ -168,7 +168,11 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 			e = decodeJSONLimited(resp.Body, &o)
 			resp.Body.Close()
 			if e == nil {
-				writeJSON(w, 200, translate.OpenAIResponseToAnthropic(o, in.Model))
+				var translated core.AnthResponse
+				translated, e = translate.OpenAIResponseToAnthropic(o, in.Model)
+				if e == nil {
+					writeJSON(w, 200, translated)
+				}
 			}
 		}
 		totalLatency := time.Since(start)

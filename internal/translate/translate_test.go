@@ -2,8 +2,9 @@ package translate
 
 import (
 	"encoding/json"
-	"github.com/ali-shortcuts/nexaroute/internal/core"
 	"testing"
+
+	"github.com/ali-shortcuts/nexaroute/internal/core"
 )
 
 func TestAnthropicToOpenAITool(t *testing.T) {
@@ -48,5 +49,25 @@ func TestOpenAIImageURLToAnthropic(t *testing.T) {
 	src := blocks[0]["source"].(map[string]any)
 	if src["type"] != "url" {
 		t.Fatalf("bad source %#v", src)
+	}
+}
+
+func TestOpenAIResponseToAnthropicRejectsMalformedToolArguments(t *testing.T) {
+	finish := "tool_calls"
+	in := core.OpenAIResponse{
+		ID: "x",
+		Choices: []core.OpenAIChoice{{
+			Message: core.OpenAIMessage{
+				Role: "assistant",
+				ToolCalls: []core.OpenAIToolCall{{
+					ID: "call-1",
+					Function: core.OpenAIFunctionCall{Name: "shell", Arguments: "{bad"},
+				}},
+			},
+			FinishReason: &finish,
+		}},
+	}
+	if _, err := OpenAIResponseToAnthropic(in, "m"); err == nil {
+		t.Fatal("malformed tool arguments must not be silently converted to an empty object")
 	}
 }
