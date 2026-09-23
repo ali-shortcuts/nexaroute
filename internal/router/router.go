@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"hash/fnv"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -68,6 +69,8 @@ type sessionPin struct {
 	Deployment string
 	Expires    time.Time
 }
+
+const maxSessionPins = 10000
 
 type Router struct {
 	mu        sync.RWMutex
@@ -194,12 +197,16 @@ func (r *Router) eligibleDeployment(d Deployment, req Requirement, cfg config.Co
 	if req.Tools && !d.Capabilities.Tools || req.Vision && !d.Capabilities.Vision || req.Streaming && !d.Capabilities.Streaming || req.Reasoning && !d.Capabilities.Reasoning {
 		return Scored{}, false
 	}
-	hs := r.health.Get(d.ID)
+	scopes := []string(nil)
+	if cfg.Routing.Strategy == "ready_mesh" {
+		scopes = req.Scopes()
+	}
+	hs, scopesReady := r.health.GetWithScopes(d.ID, scopes)
 	if IsReadyStrategy(cfg.Routing.Strategy) {
 		if hs.Status != health.Healthy {
 			return Scored{}, false
 		}
-		if cfg.Routing.Strategy == "ready_mesh" && !r.health.ScopesReady(d.ID, req.Scopes()) {
+		if cfg.Routing.Strategy == "ready_mesh" && !scopesReady {
 			return Scored{}, false
 		}
 	} else if hs.Status == health.Cooldown {
@@ -248,6 +255,20 @@ func (r *Router) ObserveSession(req Requirement, id string) {
 	}
 	key := r.affinityBucket(req)
 	r.sessionMu.Lock()
+	if _, exists := r.sessions[key]; !exists && len(r.sessions) >= maxSessionPins {
+		now := time.Now()
+		for k, pin := range r.sessions {
+			if now.After(pin.Expires) {
+				delete(r.sessions, k)
+			}
+		}
+		if len(r.sessions) >= maxSessionPins {
+			for k := range r.sessions {
+				delete(r.sessions, k)
+				break
+			}
+		}
+	}
 	r.sessions[key] = sessionPin{Deployment: id, Expires: time.Now().Add(ttl)}
 	r.sessionMu.Unlock()
 }
@@ -316,7 +337,7 @@ func (r *Router) orderReadyMesh(out []Scored, req Requirement, cfg config.Config
 		key = req.SessionKey
 	}
 	if key == "" {
-		key = string(rune(r.rr.Add(1)))
+		key = strconv.FormatUint(r.rr.Add(1), 10)
 	}
 	a := hashIndex(key, 'a', window)
 	b := hashIndex(key, 'b', window-1)
@@ -416,7 +437,7 @@ func (r *Router) Candidates(req Requirement) []Scored {
 			w++
 		}
 		if w > 1 {
-			off := int(r.rr.Add(1)-1) % w
+			off := int((r.rr.Add(1) - 1) % uint64(w))
 			rot := append([]Scored(nil), out[:w]...)
 			for i := 0; i < w; i++ {
 				out[i] = rot[(i+off)%w]
@@ -436,7 +457,7 @@ func (r *Router) Candidates(req Requirement) []Scored {
 			w++
 		}
 		if w > 1 {
-			off := int(r.rr.Add(1)-1) % w
+			off := int((r.rr.Add(1) - 1) % uint64(w))
 			rot := append([]Scored(nil), out[:w]...)
 			for i := 0; i < w; i++ {
 				out[i] = rot[(i+off)%w]
