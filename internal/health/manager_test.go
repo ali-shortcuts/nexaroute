@@ -148,8 +148,21 @@ func TestInvalidateAndRetainHealthProofs(t *testing.T) {
 }
 
 func TestCapabilityCooldownDoesNotPoisonGlobalHealth(t *testing.T) {
-	m:=New(5,time.Hour);m.ConfigureAdvanced(5,time.Hour,2,time.Hour);m.RecordSuccess("p/m",time.Millisecond)
-	m.RecordScopeFailure("p/m",[]string{"streaming"},"x");if !m.ScopesReady("p/m",[]string{"streaming"}){t.Fatal("opened early")}
-	m.RecordScopeFailure("p/m",[]string{"streaming"},"x");if m.ScopesReady("p/m",[]string{"streaming"}){t.Fatal("scope should cool")}
-	if st:=m.Get("p/m");st.Status!=Healthy{t.Fatalf("global poisoned %+v",st)};if !m.ScopesReady("p/m",[]string{"tools"}){t.Fatal("unrelated scope poisoned")}
+	m := New(5, time.Hour)
+	m.ConfigureAdvanced(5, time.Hour, 2, time.Hour)
+	m.RecordSuccess("p/m", time.Millisecond)
+	m.RecordScopeFailure("p/m", []string{"streaming"}, "x")
+	if !m.ScopesReady("p/m", []string{"streaming"}) {
+		t.Fatal("scope circuit opened too early")
+	}
+	m.RecordScopeFailure("p/m", []string{"streaming"}, "x")
+	if m.ScopesReady("p/m", []string{"streaming"}) {
+		t.Fatal("scope circuit should be cooling down")
+	}
+	if st := m.Get("p/m"); st.Status != Healthy {
+		t.Fatalf("scope failure poisoned global health: %+v", st)
+	}
+	if !m.ScopesReady("p/m", []string{"tools"}) {
+		t.Fatal("unrelated scope was poisoned")
+	}
 }

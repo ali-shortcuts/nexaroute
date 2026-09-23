@@ -186,7 +186,6 @@ func copySelectedRequestHeaders(r *http.Request) http.Header {
 	return h
 }
 
-
 func boundedSessionValue(v string) string {
 	v = strings.TrimSpace(v)
 	if len(v) > 256 {
