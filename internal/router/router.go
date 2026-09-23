@@ -36,6 +36,7 @@ type ProviderLoad struct {
 type Requirement struct {
 	Model                               string
 	Tools, Vision, Streaming, Reasoning bool
+	ProviderType                        string
 	SessionKey                          string
 	SelectionKey                        string
 	ProviderLoad                        map[string]ProviderLoad
@@ -219,6 +220,9 @@ func (r *Router) eligibleDeployment(d Deployment, req Requirement, cfg config.Co
 	if !ignoreModel && !matchesModel(d, req.Model) {
 		return Scored{}, false
 	}
+	if req.ProviderType != "" && d.ProviderType != req.ProviderType {
+		return Scored{}, false
+	}
 	if req.Tools && !d.Capabilities.Tools || req.Vision && !d.Capabilities.Vision || req.Streaming && !d.Capabilities.Streaming || req.Reasoning && !d.Capabilities.Reasoning {
 		return Scored{}, false
 	}
@@ -245,7 +249,7 @@ func (r *Router) affinityBucket(req Requirement) string {
 		return ""
 	}
 	h := sha256.Sum256([]byte(req.SessionKey))
-	return hex.EncodeToString(h[:16]) + "|" + req.Model + "|" + strings.Join(req.Scopes(), ",")
+	return hex.EncodeToString(h[:16]) + "|" + req.Model + "|" + req.ProviderType + "|" + strings.Join(req.Scopes(), ",")
 }
 func (r *Router) pinned(req Requirement, cfg config.Config) string {
 	if !cfg.Routing.SessionAffinity {

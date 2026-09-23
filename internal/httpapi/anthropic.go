@@ -43,6 +43,9 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req := router.Requirement{Model: in.Model, Tools: len(in.Tools) > 0, Vision: inspection.Vision, Streaming: in.Stream, Reasoning: inspection.Reasoning}
+	if req.Reasoning {
+		req.ProviderType = "anthropic_compatible"
+	}
 	req = s.prepareRequirement(req, r, inspection.BodySessionKey)
 	cfg, candidates := s.routeSnapshot(req)
 	if len(candidates) == 0 {

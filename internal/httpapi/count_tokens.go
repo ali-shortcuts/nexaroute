@@ -38,6 +38,9 @@ func (s *Server) countTokens(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		req := router.Requirement{Model: in.Model, Tools: len(in.Tools) > 0, Vision: inspection.Vision, Reasoning: inspection.Reasoning}
+		if req.Reasoning {
+			req.ProviderType = "anthropic_compatible"
+		}
 		req = s.prepareRequirement(req, r, inspection.BodySessionKey)
 		_, candidates := s.routeSnapshot(req)
 		forward := copySelectedRequestHeaders(r)
