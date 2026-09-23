@@ -37,8 +37,13 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	req := router.Requirement{Model: in.Model, Tools: len(in.Tools) > 0, Vision: hasVisionAnth(raw), Streaming: in.Stream, Reasoning: hasReasoningAnth(raw)}
-	req = s.prepareRequirement(req, r, raw)
+	inspection := inspectRequestJSON(raw, "image", []string{"thinking", "reasoning"})
+	if inspection.TooComplex {
+		anthropicErrorJSON(w, http.StatusBadRequest, "request JSON structure is too complex")
+		return
+	}
+	req := router.Requirement{Model: in.Model, Tools: len(in.Tools) > 0, Vision: inspection.Vision, Streaming: in.Stream, Reasoning: inspection.Reasoning}
+	req = s.prepareRequirement(req, r, inspection.BodySessionKey)
 	cfg, candidates := s.routeSnapshot(req)
 	if len(candidates) == 0 {
 		anthropicErrorJSON(w, 503, "no compatible healthy deployment")
@@ -158,7 +163,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		} else {
 			defer resp.Body.Close()
 			var o core.OpenAIResponse
-			if e = json.NewDecoder(resp.Body).Decode(&o); e == nil {
+			if e = decodeJSONLimited(resp.Body, &o); e == nil {
 				writeJSON(w, 200, translate.OpenAIResponseToAnthropic(o, in.Model))
 			}
 		}
