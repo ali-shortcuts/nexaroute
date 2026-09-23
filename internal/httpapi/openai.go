@@ -158,7 +158,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Gateway-Upstream-Model", c.Deployment.Model)
 		if c.Deployment.ProviderType == "openai_compatible" {
 			if in.Stream {
-				e = proxyResponse(w, resp)
+				e = proxyNativeSSE(w, resp, "openai")
 			} else {
 				e = proxyValidatedJSONResponse(w, resp, validateOpenAIResponseJSON)
 			}
@@ -179,16 +179,22 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "client_disconnect", Deployment: c.Deployment.ID, Message: r.Context().Err().Error(), ErrorType: "caller_cancelled", LatencyMS: total.Milliseconds(), StatusCode: resp.StatusCode})
 				return
 			}
-			if !in.Stream && !responseCommitted(w) {
+			if !responseCommitted(w) {
 				lastStatus = 0
 				lastBody = nil
-				if router.IsReadyStrategy(cfg.Routing.Strategy) {
+				if cfg.Routing.Strategy == "ready_mesh" && req.Streaming {
+					s.hm.RecordScopeFailure(c.Deployment.ID, []string{"streaming"}, lastErr)
+				} else if router.IsReadyStrategy(cfg.Routing.Strategy) {
 					s.hm.Quarantine(c.Deployment.ID, lastErr, total)
 					s.probe.Recover(c.Deployment.ID)
 				} else {
 					s.hm.RecordFailure(c.Deployment.ID, lastErr, total)
 				}
-				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "response_decode_fail", Deployment: c.Deployment.ID, Message: lastErr, ErrorType: "provider_invalid_response", LatencyMS: total.Milliseconds(), StatusCode: resp.StatusCode})
+				kind := "response_decode_fail"
+				if req.Streaming {
+					kind = "stream_fail_precommit"
+				}
+				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: kind, Deployment: c.Deployment.ID, Message: lastErr, ErrorType: "provider_invalid_response", LatencyMS: total.Milliseconds(), StatusCode: resp.StatusCode})
 				if attempts < max && i+1 < len(candidates) {
 					s.retryPause(routeCtx, r.Header.Get("x-request-id"), cfg, attemptIndex, max)
 					continue

@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -164,7 +165,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Gateway-Upstream-Model", c.Deployment.Model)
 		if c.Deployment.ProviderType == "anthropic_compatible" {
 			if in.Stream {
-				e = proxyResponse(w, resp)
+				e = proxyNativeSSE(w, resp, "anthropic")
 			} else {
 				e = proxyValidatedJSONResponse(w, resp, validateAnthropicResponseJSON)
 			}
@@ -189,16 +190,22 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "client_disconnect", Deployment: c.Deployment.ID, Message: r.Context().Err().Error(), ErrorType: "caller_cancelled", LatencyMS: totalLatency.Milliseconds(), StatusCode: resp.StatusCode})
 				return
 			}
-			if !in.Stream && !responseCommitted(w) {
+			if !responseCommitted(w) {
 				lastStatus = 0
 				lastBody = nil
-				if router.IsReadyStrategy(cfg.Routing.Strategy) {
+				if cfg.Routing.Strategy == "ready_mesh" && req.Streaming {
+					s.hm.RecordScopeFailure(c.Deployment.ID, []string{"streaming"}, lastErr)
+				} else if router.IsReadyStrategy(cfg.Routing.Strategy) {
 					s.hm.Quarantine(c.Deployment.ID, lastErr, totalLatency)
 					s.probe.Recover(c.Deployment.ID)
 				} else {
 					s.hm.RecordFailure(c.Deployment.ID, lastErr, totalLatency)
 				}
-				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "response_decode_fail", Deployment: c.Deployment.ID, Message: lastErr, ErrorType: "provider_invalid_response", LatencyMS: totalLatency.Milliseconds(), StatusCode: resp.StatusCode})
+				kind := "response_decode_fail"
+				if req.Streaming {
+					kind = "stream_fail_precommit"
+				}
+				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: kind, Deployment: c.Deployment.ID, Message: lastErr, ErrorType: "provider_invalid_response", LatencyMS: totalLatency.Milliseconds(), StatusCode: resp.StatusCode})
 				if attempts < max && i+1 < len(candidates) {
 					s.retryPause(routeCtx, r.Header.Get("x-request-id"), cfg, attemptIndex, max)
 					continue
@@ -312,20 +319,142 @@ func proxyValidatedJSONResponse(w http.ResponseWriter, resp *http.Response, vali
 	return err
 }
 
-func proxyResponse(w http.ResponseWriter, resp *http.Response) error {
-	defer resp.Body.Close()
-	isSSE := strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream")
-	copyUpstreamResponseHeaders(w, resp, isSSE)
-	w.WriteHeader(resp.StatusCode)
-	if !isSSE {
-		_, err := io.Copy(w, resp.Body)
-		return err
+type nativeSSETracker struct {
+	protocol string
+	line     []byte
+	terminal bool
+}
+
+const maxNativeSSELineBytes = 8 << 20
+
+func (t *nativeSSETracker) consume(p []byte) error {
+	for len(p) > 0 {
+		n := bytes.IndexByte(p, '\n')
+		if n < 0 {
+			if len(t.line)+len(p) > maxNativeSSELineBytes {
+				return fmt.Errorf("native SSE line exceeds %d bytes", maxNativeSSELineBytes)
+			}
+			t.line = append(t.line, p...)
+			return nil
+		}
+		if len(t.line)+n > maxNativeSSELineBytes {
+			return fmt.Errorf("native SSE line exceeds %d bytes", maxNativeSSELineBytes)
+		}
+		t.line = append(t.line, p[:n]...)
+		if err := t.processLine(); err != nil {
+			return err
+		}
+		t.line = t.line[:0]
+		p = p[n+1:]
 	}
+	return nil
+}
+
+func (t *nativeSSETracker) processLine() error {
+	line := bytes.TrimSpace(t.line)
+	if len(line) == 0 || !bytes.HasPrefix(line, []byte("data:")) {
+		return nil
+	}
+	data := bytes.TrimSpace(line[len("data:"):])
+	if len(data) == 0 {
+		return nil
+	}
+	if t.protocol == "openai" && bytes.Equal(data, []byte("[DONE]")) {
+		t.terminal = true
+		return nil
+	}
+
+	var env map[string]json.RawMessage
+	if err := json.Unmarshal(data, &env); err != nil {
+		return fmt.Errorf("invalid %s SSE JSON: %w", t.protocol, err)
+	}
+	if raw := env["error"]; len(raw) > 0 && string(raw) != "null" {
+		return fmt.Errorf("%s SSE error event", t.protocol)
+	}
+
+	switch t.protocol {
+	case "openai":
+		var choices []struct {
+			FinishReason json.RawMessage `json:"finish_reason"`
+		}
+		if raw := env["choices"]; len(raw) > 0 {
+			if err := json.Unmarshal(raw, &choices); err != nil {
+				return fmt.Errorf("invalid OpenAI SSE choices: %w", err)
+			}
+		}
+		for _, choice := range choices {
+			if len(choice.FinishReason) == 0 || string(choice.FinishReason) == "null" {
+				continue
+			}
+			var reason string
+			if err := json.Unmarshal(choice.FinishReason, &reason); err != nil {
+				return fmt.Errorf("invalid OpenAI SSE finish_reason: %w", err)
+			}
+			if reason != "" {
+				t.terminal = true
+			}
+		}
+	case "anthropic":
+		var typ string
+		if raw := env["type"]; len(raw) > 0 {
+			if err := json.Unmarshal(raw, &typ); err != nil {
+				return fmt.Errorf("invalid Anthropic SSE type: %w", err)
+			}
+		}
+		if typ == "error" {
+			return fmt.Errorf("anthropic SSE error event")
+		}
+		if typ == "message_stop" {
+			t.terminal = true
+		}
+		if typ == "message_delta" {
+			var delta struct {
+				StopReason *string `json:"stop_reason"`
+			}
+			if raw := env["delta"]; len(raw) > 0 {
+				if err := json.Unmarshal(raw, &delta); err != nil {
+					return fmt.Errorf("invalid Anthropic SSE message_delta: %w", err)
+				}
+				if delta.StopReason != nil && *delta.StopReason != "" {
+					t.terminal = true
+				}
+			}
+		}
+	default:
+		return fmt.Errorf("unknown native SSE protocol %q", t.protocol)
+	}
+	return nil
+}
+
+func (t *nativeSSETracker) finish() error {
+	if len(t.line) > 0 {
+		if err := t.processLine(); err != nil {
+			return err
+		}
+		t.line = nil
+	}
+	if !t.terminal {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+
+func proxyNativeSSE(w http.ResponseWriter, resp *http.Response, protocol string) error {
+	defer resp.Body.Close()
+	if !strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
+		return fmt.Errorf("expected text/event-stream from %s upstream", protocol)
+	}
+	copyUpstreamResponseHeaders(w, resp, true)
+	w.WriteHeader(resp.StatusCode)
 	fl, _ := w.(http.Flusher)
+	tracker := &nativeSSETracker{protocol: protocol}
 	buf := make([]byte, 32<<10)
 	for {
 		n, err := resp.Body.Read(buf)
 		if n > 0 {
+			if terr := tracker.consume(buf[:n]); terr != nil {
+				return terr
+			}
 			if _, werr := w.Write(buf[:n]); werr != nil {
 				return werr
 			}
@@ -335,7 +464,7 @@ func proxyResponse(w http.ResponseWriter, resp *http.Response) error {
 		}
 		if err != nil {
 			if err == io.EOF {
-				return nil
+				return tracker.finish()
 			}
 			return err
 		}
