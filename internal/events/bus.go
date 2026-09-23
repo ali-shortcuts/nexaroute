@@ -20,6 +20,8 @@ type Bus struct {
 	mu          sync.RWMutex
 	max         int
 	items       []Event
+	start       int
+	count       int
 	counts      map[string]uint64
 	errorCounts map[string]uint64
 }
@@ -28,7 +30,7 @@ func New(max int) *Bus {
 	if max < 10 {
 		max = 10
 	}
-	return &Bus{max: max, counts: map[string]uint64{}, errorCounts: map[string]uint64{}}
+	return &Bus{max: max, items: make([]Event, max), counts: map[string]uint64{}, errorCounts: map[string]uint64{}}
 }
 func (b *Bus) Add(e Event) {
 	b.mu.Lock()
@@ -36,20 +38,26 @@ func (b *Bus) Add(e Event) {
 	if e.Time.IsZero() {
 		e.Time = time.Now()
 	}
-	b.items = append(b.items, e)
+	if b.count < b.max {
+		idx := (b.start + b.count) % b.max
+		b.items[idx] = e
+		b.count++
+	} else {
+		b.items[b.start] = e
+		b.start = (b.start + 1) % b.max
+	}
 	b.counts[e.Kind]++
 	if e.ErrorType != "" {
 		b.errorCounts[e.ErrorType]++
-	}
-	if len(b.items) > b.max {
-		b.items = append([]Event(nil), b.items[len(b.items)-b.max:]...)
 	}
 }
 func (b *Bus) Snapshot() []Event {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
-	out := make([]Event, len(b.items))
-	copy(out, b.items)
+	out := make([]Event, b.count)
+	for i := 0; i < b.count; i++ {
+		out[i] = b.items[(b.start+i)%b.max]
+	}
 	return out
 }
 
