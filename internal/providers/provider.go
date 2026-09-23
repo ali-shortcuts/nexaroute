@@ -22,6 +22,7 @@ type Adapter interface {
 	ID() string
 	Kind() string
 	Stats() ProviderStats
+	CredentialsMatch([]string) bool
 	Do(ctx context.Context, payload []byte, stream bool, forward http.Header) (*http.Response, error)
 	DoPath(ctx context.Context, method, path string, payload []byte, stream bool, forward http.Header) (*http.Response, error)
 	CountTokens(ctx context.Context, payload []byte, forward http.Header) (*http.Response, error)
@@ -110,6 +111,16 @@ func (r *Registry) Stat(id string) (ProviderStats, bool) {
 		return ProviderStats{}, false
 	}
 	return a.Stats(), true
+}
+
+func (r *Registry) CredentialsMatchProvider(p config.ProviderConfig) bool {
+	r.mu.RLock()
+	a, ok := r.m[p.ID]
+	r.mu.RUnlock()
+	if !ok {
+		return false
+	}
+	return a.CredentialsMatch(p.ResolvedCredentials())
 }
 
 func (r *Registry) Stats() []ProviderStats {

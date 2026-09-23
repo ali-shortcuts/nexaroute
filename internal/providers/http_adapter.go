@@ -121,6 +121,20 @@ func (a *httpAdapter) Stats() ProviderStats {
 	}
 }
 
+func (a *httpAdapter) CredentialsMatch(keys []string) bool {
+	a.credMu.RLock()
+	defer a.credMu.RUnlock()
+	if len(keys) != len(a.creds) {
+		return false
+	}
+	for i, key := range keys {
+		if a.creds[i].Key != key {
+			return false
+		}
+	}
+	return true
+}
+
 func endpoint(base, suffix string) string {
 	b := strings.TrimRight(base, "/")
 	suffix = strings.TrimSpace(suffix)

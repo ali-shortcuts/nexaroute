@@ -157,6 +157,11 @@ func (s *Server) applyConfigLocked(cfg config.Config) error {
 	}
 	oldCfg := s.currentConfig()
 	rebuild := changedProviderAdapterIDs(oldCfg, cfg)
+	for _, p := range cfg.Providers {
+		if p.Enabled && !s.reg.CredentialsMatchProvider(p) {
+			rebuild[p.ID] = struct{}{}
+		}
+	}
 
 	// Prepare the complete next registry before touching disk. Unchanged
 	// providers reuse their live adapters, preserving HTTP connection pools and
