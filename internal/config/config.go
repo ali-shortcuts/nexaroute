@@ -86,7 +86,7 @@ type ProviderConfig struct {
 	Credentials              []CredentialConfig `json:"credentials,omitempty"`
 	AuthMode                 string             `json:"auth_mode,omitempty"` // bearer | x-api-key | none
 	Headers                  map[string]string  `json:"headers,omitempty"`
-	ForwardHeaders           []string           `json:"forward_headers,omitempty"`
+	ForwardHeaders           []string           `json:"forward_headers"`
 	ProxyURL                 string             `json:"proxy_url,omitempty"`
 	ChatPath                 string             `json:"chat_path,omitempty"`
 	MessagesPath             string             `json:"messages_path,omitempty"`
@@ -212,7 +212,9 @@ func Load(path string) (Config, error) {
 	if err := json.Unmarshal(b, &cfg); err != nil {
 		return cfg, err
 	}
-	cfg.ApplyEnvOverrides()
+	if err := cfg.ApplyEnvOverrides(); err != nil {
+		return cfg, err
+	}
 	cfg.ApplyDefaults()
 	if err := cfg.Validate(); err != nil {
 		return cfg, err
@@ -220,7 +222,7 @@ func Load(path string) (Config, error) {
 	return cfg, nil
 }
 
-func (c *Config) ApplyEnvOverrides() {
+func (c *Config) ApplyEnvOverrides() error {
 	if v := strings.TrimSpace(os.Getenv("NEXAROUTE_LISTEN")); v != "" {
 		c.Listen = v
 	}
@@ -228,10 +230,13 @@ func (c *Config) ApplyEnvOverrides() {
 		c.Admin.APIKey = v
 	}
 	if v, ok := os.LookupEnv("NEXAROUTE_ADMIN_BIND_LOCAL_ONLY"); ok {
-		if b, err := strconv.ParseBool(strings.TrimSpace(v)); err == nil {
-			c.Admin.BindLocalOnly = b
+		b, err := strconv.ParseBool(strings.TrimSpace(v))
+		if err != nil {
+			return fmt.Errorf("NEXAROUTE_ADMIN_BIND_LOCAL_ONLY must be a valid boolean: %w", err)
 		}
+		c.Admin.BindLocalOnly = b
 	}
+	return nil
 }
 
 func (c *Config) ApplyDefaults() {

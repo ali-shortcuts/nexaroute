@@ -277,3 +277,42 @@ func TestExplicitEmptyForwardHeadersRemainEmpty(t *testing.T) {
 		t.Fatal("missing forward_headers should still receive Anthropic defaults")
 	}
 }
+
+func TestForwardHeadersExplicitEmptySurvivesSaveLoad(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	cfg := Default()
+	cfg.Providers = []ProviderConfig{{
+		ID: "a", Name: "A", Type: "anthropic_compatible", BaseURL: "https://example.com",
+		ForwardHeaders: []string{}, Enabled: true,
+	}}
+	if err := SaveAtomic(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Providers[0].ForwardHeaders == nil {
+		t.Fatal("explicit empty forward_headers was lost during JSON round trip")
+	}
+	if len(loaded.Providers[0].ForwardHeaders) != 0 {
+		t.Fatalf("explicit empty forward_headers was repopulated: %#v", loaded.Providers[0].ForwardHeaders)
+	}
+}
+
+func TestLoadRejectsInvalidAdminBindEnvironmentBoolean(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	cfg := Default()
+	cfg.Admin.BindLocalOnly = false
+	if err := SaveAtomic(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("NEXAROUTE_ADMIN_BIND_LOCAL_ONLY", "definitely-not-a-bool")
+	loaded, err := Load(path)
+	if err == nil {
+		t.Fatalf("invalid security-sensitive env override was silently accepted: %+v", loaded.Admin)
+	}
+	if !strings.Contains(err.Error(), "NEXAROUTE_ADMIN_BIND_LOCAL_ONLY") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}

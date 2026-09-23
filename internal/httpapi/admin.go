@@ -318,13 +318,19 @@ func (s *Server) adminProviderTest(w http.ResponseWriter, r *http.Request) {
 		limit = 16
 	}
 	sem := make(chan struct{}, limit)
+	parentCtx := r.Context()
 	for i, model := range models {
 		wg.Add(1)
 		go func(i int, model string) {
 			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-parentCtx.Done():
+				results[i] = testResult{Model: model, Error: parentCtx.Err().Error()}
+				return
+			}
+			ctx, cancel := context.WithTimeout(parentCtx, 10*time.Second)
 			defer cancel()
 			lat, status, e := a.Probe(ctx, model, 1)
 			tr := testResult{Model: model, OK: e == nil, StatusCode: status, LatencyMS: lat.Milliseconds()}
@@ -335,6 +341,9 @@ func (s *Server) adminProviderTest(w http.ResponseWriter, r *http.Request) {
 		}(i, model)
 	}
 	wg.Wait()
+	if parentCtx.Err() != nil {
+		return
+	}
 	passed := 0
 	for _, x := range results {
 		if x.OK {
