@@ -43,10 +43,10 @@ func RetryAfter(err error) (time.Duration, bool) {
 }
 
 type httpAdapter struct {
-	p       config.ProviderConfig
-	c       *http.Client
-	streamC *http.Client
-	sem     chan struct{}
+	p              config.ProviderConfig
+	c              *http.Client
+	streamC        *http.Client
+	sem            chan struct{}
 	credMu         sync.RWMutex
 	creds          []credentialState
 	rr             uint64
