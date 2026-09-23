@@ -60,7 +60,7 @@ Implemented resilience:
 - half-open recovery after cooldown
 - if all 5 recovery probes fail, the deployment enters a 30-minute cooldown; after cooldown the supervisor automatically starts a fresh recovery cycle
 - credential-level power-of-two load balancing plus independent per-key cooldown, so busy or failing keys are not selected blindly
-- startup readiness sweep probes every enabled deployment before the HTTP listener opens; successful models enter the ready queue immediately
+- the HTTP listener opens immediately for liveness/UI observability, then the startup readiness sweep probes every enabled deployment; `/readyz` and ready-mesh routing remain unready until successful models enter the ready queue
 - manual **Probe all models** with pass/fail results
 
 

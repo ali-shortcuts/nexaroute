@@ -89,11 +89,6 @@ func main() {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
-	if cfg.Probe.Enabled && cfg.Probe.OnStart {
-		result := pe.Prime(ctx)
-		logger.Printf("startup_probe total=%d ready=%d failed=%d cooldown=%d duration_ms=%d", result.Total, result.Passed, result.Failed, result.SkippedCooldown, result.DurationMS)
-	}
-	pe.Start(ctx)
 	go func() {
 		logger.Printf("version=%s config=%s listening=http://%s", version, *configPath, cfg.Listen)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -101,6 +96,11 @@ func main() {
 			cancel()
 		}
 	}()
+	if cfg.Probe.Enabled && cfg.Probe.OnStart {
+		result := pe.Prime(ctx)
+		logger.Printf("startup_probe total=%d ready=%d failed=%d cooldown=%d duration_ms=%d", result.Total, result.Passed, result.Failed, result.SkippedCooldown, result.DurationMS)
+	}
+	pe.Start(ctx)
 	<-ctx.Done()
 	shutdown, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()

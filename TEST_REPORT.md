@@ -63,8 +63,8 @@ Regression tests were added for these paths, including race-detector-sensitive c
 
 This upgrade changes the default routing lifecycle from request-time candidate rotation to a pre-verified ready queue:
 
-1. startup probes every enabled deployment before serving Claude traffic;
-2. only `healthy` deployments enter the ready queue;
+1. the HTTP listener becomes available first for liveness/diagnostics, while startup probes every enabled deployment before that deployment can serve Claude traffic;
+2. only `healthy` deployments enter the ready queue and `/readyz` remains unready until at least one is healthy;
 3. priority/weight ordering keeps the strongest configured healthy deployment first;
 4. the first eligible routed failure quarantines that deployment immediately;
 5. the supervisor probes the quarantined deployment up to five times;
