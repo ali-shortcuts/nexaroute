@@ -81,7 +81,7 @@ type Router struct {
 	byID      map[string]Deployment
 	byModel   map[string][]Deployment
 	rr        atomic.Uint64
-	sessionMu sync.Mutex
+	sessionMu sync.RWMutex
 	sessions  map[string]sessionPin
 }
 
@@ -255,9 +255,23 @@ func (r *Router) pinned(req Requirement, cfg config.Config) string {
 	if key == "" {
 		return ""
 	}
+	now := time.Now()
+	r.sessionMu.RLock()
+	pin, ok := r.sessions[key]
+	if ok && now.Before(pin.Expires) {
+		r.sessionMu.RUnlock()
+		return pin.Deployment
+	}
+	r.sessionMu.RUnlock()
+	if !ok {
+		return ""
+	}
+
+	// Upgrade only for the rare expiry path and re-check after acquiring the
+	// write lock in case another request refreshed the pin meanwhile.
 	r.sessionMu.Lock()
 	defer r.sessionMu.Unlock()
-	pin, ok := r.sessions[key]
+	pin, ok = r.sessions[key]
 	if !ok {
 		return ""
 	}
