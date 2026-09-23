@@ -288,3 +288,36 @@ func TestStatusWriterPreservesReaderFromFastPath(t *testing.T) {
 		t.Fatalf("status not committed as 200: wrapper=%d base=%d", sw.status, base.status)
 	}
 }
+
+func TestCapabilityDetectionIgnoresToolSchemaLookalikes(t *testing.T) {
+	raw := []byte(`{
+		"model":"m",
+		"messages":[{"role":"user","content":"hello"}],
+		"tools":[{"type":"function","function":{"name":"x","parameters":{
+			"type":"object",
+			"properties":{
+				"reasoning":{"type":"string"},
+				"example":{"type":"image_url"},
+				"anthropic_example":{"type":"image"}
+			}
+		}}}]
+	}`)
+	if got := inspectRequestJSON(raw, "image_url", []string{"reasoning_effort", "reasoning"}); got.Vision || got.Reasoning {
+		t.Fatalf("OpenAI tool schema lookalikes must not imply capabilities: %+v", got)
+	}
+	if got := inspectRequestJSON(raw, "image", []string{"thinking", "reasoning"}); got.Vision || got.Reasoning {
+		t.Fatalf("Anthropic tool schema lookalikes must not imply capabilities: %+v", got)
+	}
+}
+
+func TestCapabilityDetectionUsesTopLevelReasoningAndMessageVision(t *testing.T) {
+	raw := []byte(`{
+		"model":"m",
+		"reasoning_effort":"high",
+		"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"https://example.invalid/a.png"}}]}]
+	}`)
+	got := inspectRequestJSON(raw, "image_url", []string{"reasoning_effort", "reasoning"})
+	if !got.Vision || !got.Reasoning || got.TooComplex {
+		t.Fatalf("real protocol controls should be detected: %+v", got)
+	}
+}
