@@ -98,3 +98,37 @@ func TestSessionKeyReadsNestedMetadata(t *testing.T) {
 		t.Fatalf("session=%q want nested-session", got)
 	}
 }
+
+func TestRequestInspectionFindsCapabilitiesAndSessionInOnePass(t *testing.T) {
+	raw := []byte(`{"metadata":{"user_id":{"session_id":"s-1"}},"messages":[{"content":[{"type":"image_url","image_url":{"url":"x"}}]}],"reasoning_effort":"high"}`)
+	got := inspectRequestJSON(raw, "image_url", []string{"reasoning_effort", "reasoning"})
+	if !got.Vision || !got.Reasoning || got.BodySessionKey != "s-1" || got.TooComplex {
+		t.Fatalf("unexpected inspection result: %+v", got)
+	}
+}
+
+func TestRequestInspectionRejectsPathologicalNodeCount(t *testing.T) {
+	var b strings.Builder
+	b.WriteString(`{"messages":[`)
+	for i := 0; i < maxRequestInspectionNodes+1; i++ {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(`{}`)
+	}
+	b.WriteString(`]}`)
+	got := inspectRequestJSON([]byte(b.String()), "image_url", nil)
+	if !got.TooComplex {
+		t.Fatal("pathological JSON structure should hit inspection node bound")
+	}
+}
+
+func TestNormalizeRequestIDBoundsAndSanitizes(t *testing.T) {
+	got := normalizeRequestID(strings.Repeat("abc/", 100))
+	if len(got) > 128 {
+		t.Fatalf("request id len=%d want <=128", len(got))
+	}
+	if strings.ContainsAny(got, "/\r\n\t ") {
+		t.Fatalf("request id contains unsafe characters: %q", got)
+	}
+}

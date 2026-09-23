@@ -1,6 +1,8 @@
 package router
 
 import (
+	"fmt"
+
 	"github.com/ali-shortcuts/nexaroute/internal/config"
 	"github.com/ali-shortcuts/nexaroute/internal/health"
 	"testing"
@@ -326,5 +328,24 @@ func TestEligibleRejectsCandidateAfterQuarantine(t *testing.T) {
 	h.Quarantine("p/m", "x", time.Millisecond)
 	if _, ok := r.Eligible("p/m", Requirement{Model: "auto"}); ok {
 		t.Fatal("stale candidate remained eligible")
+	}
+}
+
+func TestSessionAffinityTableRemainsBoundedUnderUniqueIDs(t *testing.T) {
+	cfg := config.Default()
+	cfg.Routing.Strategy = "ready_mesh"
+	cfg.Routing.SessionAffinity = true
+	cfg.Providers = []config.ProviderConfig{{
+		ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "http://example.invalid", Enabled: true,
+		Models: []config.ModelConfig{{ID: "m", Model: "m", Enabled: true, Weight: 1}},
+	}}
+	h := health.New(5, time.Hour)
+	h.RecordSuccess("p/m", time.Millisecond)
+	r := New(cfg, h)
+	for i := 0; i < maxSessionPins+500; i++ {
+		r.ObserveSession(Requirement{Model: "auto", SessionKey: fmt.Sprintf("session-%d", i)}, "p/m")
+	}
+	if got := r.SessionCount(); got > maxSessionPins {
+		t.Fatalf("session table grew to %d, limit=%d", got, maxSessionPins)
 	}
 }

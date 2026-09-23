@@ -109,3 +109,41 @@ func TestReadyMeshRecoveryDefaults(t *testing.T) {
 		t.Fatalf("unexpected recovery defaults: %+v", cfg.Probe)
 	}
 }
+
+func TestValidateRejectsUnsafeResourceLimits(t *testing.T) {
+	cases := []struct {
+		name string
+		edit func(*Config)
+	}{
+		{"probe concurrency", func(c *Config) { c.Probe.Concurrency = maxProbeConcurrency + 1 }},
+		{"probe tokens", func(c *Config) { c.Probe.MaxTokens = maxProbeTokens + 1 }},
+		{"routing attempts", func(c *Config) { c.Routing.MaxAttempts = maxRoutingAttempts + 1 }},
+		{"provider concurrency", func(c *Config) {
+			c.Providers = []ProviderConfig{{
+				ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "https://example.com",
+				Enabled: true, MaxConcurrency: maxProviderConcurrency + 1,
+			}}
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := Default()
+			tc.edit(&cfg)
+			if err := cfg.Validate(); err == nil {
+				t.Fatal("expected unsafe resource limit to be rejected")
+			}
+		})
+	}
+}
+
+func TestValidateRejectsHeaderInjection(t *testing.T) {
+	cfg := Default()
+	cfg.Providers = []ProviderConfig{{
+		ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "https://example.com",
+		Enabled: true, Headers: map[string]string{"X-Test": "ok\r\nInjected: yes"},
+	}}
+	cfg.ApplyDefaults()
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "invalid custom header") {
+		t.Fatalf("header injection should fail validation, got %v", err)
+	}
+}
