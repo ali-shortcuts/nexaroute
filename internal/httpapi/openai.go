@@ -259,8 +259,8 @@ func streamAnthropicToOpenAI(w http.ResponseWriter, resp *http.Response, model s
 			continue
 		}
 		var env map[string]any
-		if json.Unmarshal([]byte(d), &env) != nil {
-			continue
+		if err := json.Unmarshal([]byte(d), &env); err != nil {
+			return fmt.Errorf("invalid Anthropic SSE JSON: %w", err)
 		}
 		typ, _ := env["type"].(string)
 		switch typ {
