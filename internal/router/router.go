@@ -77,6 +77,8 @@ type Router struct {
 	cfg       config.Config
 	health    *health.Manager
 	all       []Deployment
+	byID      map[string]Deployment
+	byModel   map[string][]Deployment
 	rr        atomic.Uint64
 	sessionMu sync.Mutex
 	sessions  map[string]sessionPin
@@ -91,6 +93,8 @@ func IsReadyStrategy(s string) bool { return s == "ready_mesh" || s == "ready_qu
 
 func (r *Router) Reload(cfg config.Config) {
 	all := make([]Deployment, 0)
+	byID := map[string]Deployment{}
+	byModel := map[string][]Deployment{}
 	valid := map[string]struct{}{}
 	for _, p := range cfg.Providers {
 		if !p.Enabled {
@@ -106,12 +110,28 @@ func (r *Router) Reload(cfg config.Config) {
 			}
 			d := Deployment{ID: p.ID + "/" + m.ID, ProviderID: p.ID, ProviderName: p.Name, ProviderType: p.Type, Model: m.Model, Aliases: m.Aliases, Priority: m.Priority, Weight: w, Capabilities: m.Capabilities}
 			all = append(all, d)
+			byID[d.ID] = d
 			valid[d.ID] = struct{}{}
+
+			seenKeys := map[string]struct{}{}
+			keys := append([]string{d.ID, d.Model, m.ID}, d.Aliases...)
+			for _, key := range keys {
+				if key == "" {
+					continue
+				}
+				if _, seen := seenKeys[key]; seen {
+					continue
+				}
+				seenKeys[key] = struct{}{}
+				byModel[key] = append(byModel[key], d)
+			}
 		}
 	}
 	r.mu.Lock()
 	r.cfg = cfg
 	r.all = all
+	r.byID = byID
+	r.byModel = byModel
 	r.mu.Unlock()
 	r.sessionMu.Lock()
 	now := time.Now()
@@ -350,29 +370,26 @@ func (r *Router) Candidates(req Requirement) []Scored {
 	r.mu.RLock()
 	cfg := r.cfg
 	all := r.all
+	source := all
+	known := req.Model == "" || req.Model == "auto" || req.Model == "claude-auto"
+	if !known {
+		source = r.byModel[req.Model]
+		known = len(source) > 0
+	}
 	r.mu.RUnlock()
 	scopes := req.Scopes()
-	build := func(ignore bool) []Scored {
-		out := make([]Scored, 0, len(all))
-		for _, d := range all {
+	build := func(in []Deployment, ignore bool) []Scored {
+		out := make([]Scored, 0, len(in))
+		for _, d := range in {
 			if s, ok := r.eligibleDeployment(d, req, cfg, ignore, scopes); ok {
 				out = append(out, s)
 			}
 		}
 		return out
 	}
-	out := build(false)
-	known := req.Model == "" || req.Model == "auto" || req.Model == "claude-auto"
-	if !known {
-		for _, d := range all {
-			if matchesModel(d, req.Model) {
-				known = true
-				break
-			}
-		}
-	}
+	out := build(source, false)
 	if len(out) == 0 && !known && cfg.Routing.FallbackOnUnknownModel {
-		out = build(true)
+		out = build(all, true)
 	}
 	if len(out) <= 1 {
 		return out
@@ -474,15 +491,12 @@ func (r *Router) Candidates(req Requirement) []Scored {
 func (r *Router) Eligible(id string, req Requirement) (Scored, bool) {
 	r.mu.RLock()
 	cfg := r.cfg
-	all := r.all
+	d, ok := r.byID[id]
 	r.mu.RUnlock()
-	scopes := req.Scopes()
-	for _, d := range all {
-		if d.ID == id {
-			return r.eligibleDeployment(d, req, cfg, false, scopes)
-		}
+	if !ok {
+		return Scored{}, false
 	}
-	return Scored{}, false
+	return r.eligibleDeployment(d, req, cfg, false, req.Scopes())
 }
 func (r *Router) All() []Deployment {
 	r.mu.RLock()
