@@ -388,8 +388,8 @@ func streamOpenAIToAnthropic(w http.ResponseWriter, resp *http.Response, model s
 			break
 		}
 		var raw map[string]any
-		if json.Unmarshal([]byte(d), &raw) != nil {
-			continue
+		if err := json.Unmarshal([]byte(d), &raw); err != nil {
+			return fmt.Errorf("invalid OpenAI SSE JSON: %w", err)
 		}
 		if er, ok := raw["error"]; ok {
 			emit("error", map[string]any{"type": "error", "error": er})
@@ -407,7 +407,10 @@ func streamOpenAIToAnthropic(w http.ResponseWriter, resp *http.Response, model s
 				FinishReason *string `json:"finish_reason"`
 			} `json:"choices"`
 		}
-		if json.Unmarshal([]byte(d), &obj) != nil || len(obj.Choices) == 0 {
+		if err := json.Unmarshal([]byte(d), &obj); err != nil {
+			return fmt.Errorf("invalid OpenAI SSE chunk: %w", err)
+		}
+		if len(obj.Choices) == 0 {
 			continue
 		}
 		ch := obj.Choices[0]
