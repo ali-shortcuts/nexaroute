@@ -61,7 +61,8 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 	var lastContentType string
 	forward := copySelectedRequestHeaders(r)
 
-	for i := 0; i < max; i++ {
+	attempts := 0
+	for i := 0; i < len(candidates) && attempts < max; i++ {
 		c := candidates[i]
 		fresh, a, ok := s.currentRouteCandidate(c.Deployment.ID, req)
 		if !ok {
@@ -69,7 +70,6 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		c = fresh
-		s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_attempt", Deployment: c.Deployment.ID, Message: fmt.Sprintf("attempt=%d score=%.2f health=%s pressure=%.3f", i+1, c.Score, c.Health.Status, c.CapacityPressure)})
 		var payload []byte
 		if c.Deployment.ProviderType == "anthropic_compatible" {
 			payload, err = patchJSONModel(raw, c.Deployment.Model)
@@ -85,6 +85,9 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
+		attempts++
+		attemptIndex := attempts - 1
+		s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_attempt", Deployment: c.Deployment.ID, Message: fmt.Sprintf("attempt=%d score=%.2f health=%s pressure=%.3f", attempts, c.Score, c.Health.Status, c.CapacityPressure)})
 		start := time.Now()
 		resp, e := a.Do(routeCtx, payload, in.Stream, forward)
 		headerLatency := time.Since(start)
@@ -111,10 +114,10 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 				s.hm.RecordFailure(c.Deployment.ID, lastErr, headerLatency)
 			}
 			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_fail", Deployment: c.Deployment.ID, Message: lastErr, ErrorType: "provider_connection_failed", LatencyMS: headerLatency.Milliseconds()})
-			if i+1 < max {
-				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "failover", Deployment: c.Deployment.ID, Message: "transport failure; trying " + candidates[i+1].Deployment.ID})
+			if attempts < max && i+1 < len(candidates) {
+				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "failover", Deployment: c.Deployment.ID, Message: "transport failure; trying next eligible candidate"})
 			}
-			s.retryPause(routeCtx, r.Header.Get("x-request-id"), cfg, i, max)
+			s.retryPause(routeCtx, r.Header.Get("x-request-id"), cfg, attemptIndex, max)
 			continue
 		}
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -140,9 +143,9 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 				s.hm.RecordFailure(c.Deployment.ID, lastErr, headerLatency)
 			}
 			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_fail", Deployment: c.Deployment.ID, Message: lastErr, ErrorType: errorTypeForStatus(resp.StatusCode), LatencyMS: headerLatency.Milliseconds(), StatusCode: resp.StatusCode})
-			if failoverEligible(resp.StatusCode) && i+1 < max {
-				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "failover", Deployment: c.Deployment.ID, Message: fmt.Sprintf("HTTP %d; trying %s", resp.StatusCode, candidates[i+1].Deployment.ID), StatusCode: resp.StatusCode})
-				s.retryPause(routeCtx, r.Header.Get("x-request-id"), cfg, i, max)
+			if failoverEligible(resp.StatusCode) && attempts < max && i+1 < len(candidates) {
+				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "failover", Deployment: c.Deployment.ID, Message: fmt.Sprintf("HTTP %d; trying next eligible candidate", resp.StatusCode), StatusCode: resp.StatusCode})
+				s.retryPause(routeCtx, r.Header.Get("x-request-id"), cfg, attemptIndex, max)
 				continue
 			}
 			if c.Deployment.ProviderType == "anthropic_compatible" {
