@@ -131,6 +131,25 @@ const (
 	maxConfigBytes            = 16 << 20
 )
 
+func validLocalID(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' {
+			continue
+		}
+		switch c {
+		case '-', '_', '.':
+			continue
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 func validHeaderName(s string) bool {
 	if s == "" {
 		return false
@@ -427,6 +446,9 @@ func (c Config) Validate() error {
 		if len(p.ID) > maxStringIDBytes || len(p.Name) > 1024 {
 			return fmt.Errorf("provider %q id/name is too long", p.ID)
 		}
+		if !validLocalID(p.ID) {
+			return fmt.Errorf("provider id %q may contain only letters, digits, dot, underscore, and hyphen", p.ID)
+		}
 		if seenP[p.ID] {
 			return fmt.Errorf("duplicate provider id %q", p.ID)
 		}
@@ -498,6 +520,9 @@ func (c Config) Validate() error {
 			}
 			if len(m.ID) > maxStringIDBytes || len(m.Model) > 1024 || len(m.Aliases) > 128 {
 				return fmt.Errorf("provider %q model[%d] identifiers/aliases exceed safe limits", p.ID, j)
+			}
+			if !validLocalID(m.ID) {
+				return fmt.Errorf("provider %q model[%d].id may contain only letters, digits, dot, underscore, and hyphen", p.ID, j)
 			}
 			totalAliases += len(m.Aliases)
 			if totalAliases > maxTotalAliases {
