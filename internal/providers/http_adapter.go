@@ -47,16 +47,35 @@ type httpAdapter struct {
 	c       *http.Client
 	streamC *http.Client
 	sem     chan struct{}
-	credMu  sync.Mutex
-	creds   []credentialState
-	rr      int
-	active  atomic.Int64
-	waiting atomic.Int64
+	credMu         sync.RWMutex
+	creds          []credentialState
+	rr             uint64
+	forwardAllowed map[string]struct{}
+	active         atomic.Int64
+	waiting        atomic.Int64
 }
 
 func newHTTPAdapter(p config.ProviderConfig, timeout time.Duration) (*httpAdapter, error) {
+	mc := p.MaxConcurrency
+	if mc <= 0 {
+		mc = 32
+	}
+	maxIdle := mc * 2
+	if maxIdle < 64 {
+		maxIdle = 64
+	}
+	if maxIdle > 2048 {
+		maxIdle = 2048
+	}
+	idlePerHost := mc
+	if idlePerHost < 16 {
+		idlePerHost = 16
+	}
+	if idlePerHost > 512 {
+		idlePerHost = 512
+	}
 	tr := &http.Transport{
-		MaxIdleConns: 256, MaxIdleConnsPerHost: 64, MaxConnsPerHost: 128,
+		MaxIdleConns: maxIdle, MaxIdleConnsPerHost: idlePerHost, MaxConnsPerHost: mc,
 		IdleConnTimeout: 90 * time.Second, TLSHandshakeTimeout: 15 * time.Second,
 		ResponseHeaderTimeout: timeout, ExpectContinueTimeout: time.Second,
 		ForceAttemptHTTP2: true,
@@ -68,11 +87,16 @@ func newHTTPAdapter(p config.ProviderConfig, timeout time.Duration) (*httpAdapte
 		}
 		tr.Proxy = http.ProxyURL(u)
 	}
-	mc := p.MaxConcurrency
-	if mc <= 0 {
-		mc = 32
+	a := &httpAdapter{
+		p: p, c: &http.Client{Transport: tr, Timeout: timeout}, streamC: &http.Client{Transport: tr},
+		sem: make(chan struct{}, mc), forwardAllowed: make(map[string]struct{}, len(p.ForwardHeaders)),
 	}
-	a := &httpAdapter{p: p, c: &http.Client{Transport: tr, Timeout: timeout}, streamC: &http.Client{Transport: tr}, sem: make(chan struct{}, mc)}
+	for _, h := range p.ForwardHeaders {
+		h = strings.ToLower(strings.TrimSpace(h))
+		if h != "" {
+			a.forwardAllowed[h] = struct{}{}
+		}
+	}
 	for _, k := range p.ResolvedCredentials() {
 		a.creds = append(a.creds, credentialState{Key: k})
 	}
@@ -81,8 +105,8 @@ func newHTTPAdapter(p config.ProviderConfig, timeout time.Duration) (*httpAdapte
 func (a *httpAdapter) ID() string   { return a.p.ID }
 func (a *httpAdapter) Kind() string { return a.p.Type }
 func (a *httpAdapter) Stats() ProviderStats {
-	a.credMu.Lock()
-	defer a.credMu.Unlock()
+	a.credMu.RLock()
+	defer a.credMu.RUnlock()
 	now := time.Now()
 	cooling := 0
 	for _, c := range a.creds {
@@ -271,13 +295,9 @@ func (a *httpAdapter) applyHeaders(req *http.Request, forward http.Header) {
 	for k, v := range a.p.Headers {
 		req.Header.Set(k, v)
 	}
-	allowed := map[string]bool{}
-	for _, h := range a.p.ForwardHeaders {
-		allowed[strings.ToLower(strings.TrimSpace(h))] = true
-	}
 	for k, vals := range forward {
 		lk := strings.ToLower(k)
-		if !allowed[lk] || lk == "authorization" || lk == "x-api-key" || lk == "x-admin-key" {
+		if _, ok := a.forwardAllowed[lk]; !ok || lk == "authorization" || lk == "x-api-key" || lk == "x-admin-key" {
 			continue
 		}
 		req.Header.Del(k)
@@ -329,8 +349,8 @@ func (a *httpAdapter) reserveCredential(excluded map[int]bool) (int, string, boo
 	}
 	chosen := available[0]
 	if len(available) > 1 {
-		aPos := a.rr % len(available)
-		bPos := (a.rr*7 + 1) % len(available)
+		aPos := int(a.rr % uint64(len(available)))
+		bPos := int((a.rr*7 + 1) % uint64(len(available)))
 		if bPos == aPos {
 			bPos = (bPos + 1) % len(available)
 		}
@@ -358,8 +378,8 @@ func credentialLessLoaded(a, b credentialState) bool {
 }
 
 func (a *httpAdapter) hasAvailableCredential(excluded map[int]bool) bool {
-	a.credMu.Lock()
-	defer a.credMu.Unlock()
+	a.credMu.RLock()
+	defer a.credMu.RUnlock()
 	now := time.Now()
 	for i := range a.creds {
 		if excluded[i] {
@@ -415,8 +435,8 @@ func (a *httpAdapter) cooldownCredential(i, status int, retryAfter string) {
 }
 
 func (a *httpAdapter) nextCredentialRetryAfter() (time.Duration, bool) {
-	a.credMu.Lock()
-	defer a.credMu.Unlock()
+	a.credMu.RLock()
+	defer a.credMu.RUnlock()
 	now := time.Now()
 	var min time.Duration
 	found := false
@@ -440,14 +460,14 @@ func (a *httpAdapter) safeSnippet(b []byte) string {
 	if len(msg) > 768 {
 		msg = msg[:768] + "…"
 	}
-	a.credMu.Lock()
+	a.credMu.RLock()
 	keys := make([]string, 0, len(a.creds))
 	for i := range a.creds {
 		if a.creds[i].Key != "" {
 			keys = append(keys, a.creds[i].Key)
 		}
 	}
-	a.credMu.Unlock()
+	a.credMu.RUnlock()
 	for _, key := range keys {
 		msg = strings.ReplaceAll(msg, key, "[REDACTED]")
 	}
