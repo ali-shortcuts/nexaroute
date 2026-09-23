@@ -186,6 +186,15 @@ func copySelectedRequestHeaders(r *http.Request) http.Header {
 	return h
 }
 
+const maxRequestInspectionNodes = 100000
+
+type requestInspection struct {
+	Vision         bool
+	Reasoning      bool
+	TooComplex     bool
+	BodySessionKey string
+}
+
 func boundedSessionValue(v string) string {
 	v = strings.TrimSpace(v)
 	if len(v) > 256 {
@@ -194,20 +203,11 @@ func boundedSessionValue(v string) string {
 	return v
 }
 
-func sessionKeyFromRequest(r *http.Request, raw []byte) string {
-	for _, header := range []string{"x-claude-code-session-id", "x-litellm-session-id", "x-litellm-trace-id", "x-session-id"} {
-		if v := boundedSessionValue(r.Header.Get(header)); v != "" {
-			return v
-		}
-	}
-	var obj map[string]any
-	if json.Unmarshal(raw, &obj) != nil {
-		return ""
-	}
-	if v, _ := obj["session_id"].(string); boundedSessionValue(v) != "" {
+func bodySessionKey(root map[string]any) string {
+	if v, _ := root["session_id"].(string); boundedSessionValue(v) != "" {
 		return boundedSessionValue(v)
 	}
-	meta, _ := obj["metadata"].(map[string]any)
+	meta, _ := root["metadata"].(map[string]any)
 	if meta == nil {
 		return ""
 	}
@@ -222,6 +222,71 @@ func sessionKeyFromRequest(r *http.Request, raw []byte) string {
 	return ""
 }
 
+func inspectRequestJSON(raw []byte, visionType string, reasoningKeys []string) requestInspection {
+	var root any
+	if json.Unmarshal(raw, &root) != nil {
+		return requestInspection{}
+	}
+	out := requestInspection{}
+	if obj, ok := root.(map[string]any); ok {
+		out.BodySessionKey = bodySessionKey(obj)
+	}
+	stack := []any{root}
+	nodes := 0
+	for len(stack) > 0 {
+		last := len(stack) - 1
+		v := stack[last]
+		stack = stack[:last]
+		nodes++
+		if nodes > maxRequestInspectionNodes {
+			out.TooComplex = true
+			return out
+		}
+		switch x := v.(type) {
+		case map[string]any:
+			if len(x) > maxRequestInspectionNodes-nodes-len(stack) {
+				out.TooComplex = true
+				return out
+			}
+			if visionType != "" {
+				if typ, _ := x["type"].(string); strings.EqualFold(typ, visionType) {
+					out.Vision = true
+				}
+			}
+			for key, child := range x {
+				for _, wanted := range reasoningKeys {
+					if strings.EqualFold(key, wanted) {
+						out.Reasoning = true
+						break
+					}
+				}
+				stack = append(stack, child)
+			}
+		case []any:
+			if len(x) > maxRequestInspectionNodes-nodes-len(stack) {
+				out.TooComplex = true
+				return out
+			}
+			stack = append(stack, x...)
+		}
+	}
+	return out
+}
+
+func sessionKeyFromRequestParts(r *http.Request, bodyKey string) string {
+	for _, header := range []string{"x-claude-code-session-id", "x-litellm-session-id", "x-litellm-trace-id", "x-session-id"} {
+		if v := boundedSessionValue(r.Header.Get(header)); v != "" {
+			return v
+		}
+	}
+	return boundedSessionValue(bodyKey)
+}
+
+func sessionKeyFromRequest(r *http.Request, raw []byte) string {
+	inspection := inspectRequestJSON(raw, "", nil)
+	return sessionKeyFromRequestParts(r, inspection.BodySessionKey)
+}
+
 func providerLoadSnapshot(stats []providers.ProviderStats) map[string]router.ProviderLoad {
 	out := make(map[string]router.ProviderLoad, len(stats))
 	for _, st := range stats {
@@ -234,8 +299,8 @@ func providerLoadSnapshot(stats []providers.ProviderStats) map[string]router.Pro
 	return out
 }
 
-func (s *Server) prepareRequirement(req router.Requirement, r *http.Request, raw []byte) router.Requirement {
-	req.SessionKey = sessionKeyFromRequest(r, raw)
+func (s *Server) prepareRequirement(req router.Requirement, r *http.Request, bodySessionKey string) router.Requirement {
+	req.SessionKey = sessionKeyFromRequestParts(r, bodySessionKey)
 	req.SelectionKey = r.Header.Get("x-request-id")
 	req.ProviderLoad = providerLoadSnapshot(s.reg.Stats())
 	return req
