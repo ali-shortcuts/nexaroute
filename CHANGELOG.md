@@ -1,63 +1,103 @@
-# Changelog — current v0.3 baseline
+# Changelog
 
-This file describes the current supported v0.3 state only. Superseded interim implementation notes and contradictory historical behavior are intentionally not kept as active documentation.
+## v0.4 — bulletproof cross-protocol translation and 9router-class dashboard
 
-## Routing and supervisor
+### OpenAI ↔ Anthropic translation hardening
 
-- `ready_mesh` is the default routing strategy.
-- Only deployments with a valid health proof are routable under ready strategies.
-- Session affinity keeps an eligible conversation pinned to its deployment.
-- New sessions use priority-aware, capacity-aware power-of-two selection inside the best priority tier.
-- Model/deployment lookup is indexed by deployment ID, upstream model ID, local model ID, and alias.
-- Every failover candidate is revalidated immediately before use.
-- The first eligible routed failure quarantines the deployment.
-- Recovery performs up to five real probes; five failures enter the default 30-minute cooldown, then recovery starts again.
-- Temporary all-credential `429` cooldown is treated as a wait state rather than a model-health failure.
-- Successful real traffic refreshes the ready-health lease; idle healthy models are micro-probed after lease expiry.
-- `/readyz` reflects actual routable health.
+This release rebuilds the cross-protocol translation layer around one rule:
+a valid conversation must never dead-end because of a protocol mismatch.
+Patterns were studied from LiteLLM, 9router (open-sse), new-api, one-api,
+claude-code-proxy and y-router, then implemented natively with zero
+dependencies.
 
-## Provider and credential execution
+Request direction (Anthropic client → OpenAI upstream):
 
-- Generic OpenAI-compatible Chat Completions and Anthropic-compatible Messages providers are supported.
-- Provider concurrency is bounded until the response body or stream is consumed or closed.
-- Credential pools use load/failure-aware selection and independent key cooldown.
-- Environment-backed credential rotation is detected during hot reload.
-- Unchanged adapters are reused across unrelated config edits so connection pools and credential state survive.
-- Routed error redaction covers both the adapter's live credential snapshot and the currently resolved environment credential.
+- `thinking` / `redacted_thinking` blocks in replayed history are dropped
+  instead of failing the request, so Claude Code extended-thinking sessions
+  survive against OpenAI-compatible upstreams.
+- Unknown Anthropic block types (`server_tool_use`, `web_search_tool_result`,
+  documents, future additions) are dropped instead of hard-failing.
+- `thinking {type:enabled, budget_tokens}` maps onto a conservative
+  `reasoning_effort` level; `metadata.user_id` maps onto the OpenAI `user`
+  parameter; `disable_parallel_tool_use` maps onto `parallel_tool_calls`.
+- `tool_result` blocks normalize fully: block arrays become ordered
+  text/image parts, `is_error` keeps a visible `[tool error]` prefix, and tool
+  messages always precede trailing user text so they directly follow the
+  assistant `tool_calls` they answer.
 
-## Protocol and stream hardening
+Request direction (OpenAI client → Anthropic upstream):
 
-- Native same-protocol passthrough and common cross-protocol text/tool/image translation are supported.
-- Malformed tool-call JSON is rejected instead of silently converted.
-- Translated SSE requires valid JSON and a valid terminal protocol signal.
-- Client write failures stop translated streams immediately.
-- Capability detection is scoped to protocol controls/messages so tool-schema lookalikes do not force false vision/reasoning routing.
-- Ingress JSON, translated upstream JSON, config files, model discovery and error-body reads are bounded.
+- Consecutive same-role messages are merged into single multi-block messages.
+  The Anthropic API enforces strict role alternation and rejects naive relays;
+  NexaRoute now guarantees valid alternation for every input.
+- Parallel OpenAI tool results coalesce into one user message with multiple
+  `tool_result` blocks (the shape Claude Code itself produces).
+- Conversations opening with an assistant turn receive a user placeholder;
+  empty content becomes `...` instead of an API-rejected empty text block.
+- `stop` / `stop_sequences` translate in both directions (previously dropped).
+- `reasoning_effort` maps onto Anthropic `thinking` budgets with the
+  `max_tokens > budget_tokens` invariant enforced, and the thinking request is
+  dropped over tool-using histories that cannot carry signed thinking blocks
+  (prevents Anthropic's "Expected thinking or redacted_thinking" 400).
+- Tool names sanitize reversibly: MCP-style names with dots/colons or excess
+  length (OpenAI 64-char limit, Anthropic 128-char limit) rename through a
+  bidirectional map and restore on every response path.
+- `input_schema` defaults to `{"type":"object"}` when missing; image media
+  types normalize (`image/jpg` → `image/jpeg`); `user` maps to
+  `metadata.user_id`.
 
-## Admission, configuration and control plane
+Response and streaming:
 
-- Global expensive data-plane work is bounded by `routing.max_inflight_requests`; overload returns `503` while health/readiness/metrics/Admin remain observable.
-- Config mutation is serialized from fresh snapshot through validation, durable write and runtime swap.
-- Negative invalid values fail fast instead of being silently defaulted.
-- Local provider/model IDs are constrained to unambiguous safe identifiers.
-- HTTP header names/values and endpoint paths are validated before runtime.
-- The Web UI wires all Ready Mesh/probe controls, including session affinity, ready lease, P2C window, capability circuit settings and global admission.
-- The event feed uses a bounded ring buffer with bounded event fields and bounded dynamic counter-key maps.
-- Operational logs self-rotate with fixed disk retention; successful access lines are sampled by default and console output is storm-limited.
-- Recovery scheduling uses a fixed worker pool and bounded queue; long cooldowns no longer hold one sleeping goroutine per failed deployment.
+- Real token usage now flows end to end: translated streaming requests inject
+  `stream_options: {"include_usage": true}`, providers that reject the option
+  are retried once without it, and usage (including cache-read tokens)
+  surfaces in Anthropic `message_delta` usage and OpenAI final usage chunks.
+- The Anthropic→OpenAI stream emits the role-first chunk OpenAI clients
+  expect, maps `thinking_delta` onto the widely-supported `reasoning_content`
+  field, pads empty tool argument streams with `{}` (no empty JSON parses),
+  and maps `refusal`/`pause_turn` stop reasons onto OpenAI finish reasons.
+- The OpenAI→Anthropic stream handles content-part array deltas, emits a
+  `ping` frame after `message_start`, and maps `function_call` /
+  `content_filter` finish reasons onto Anthropic stop reasons.
+- Non-stream response translation handles content-part arrays, surfaces
+  Anthropic thinking text as `reasoning_content` (safe direction; unsigned
+  thinking blocks are never fabricated in the poison-prone direction), and
+  preserves malformed tool arguments in a `{"_raw": ...}` object instead of
+  failing the whole turn.
+- A spec-correct SSE reader replaces line-scanning: multi-line `data:` frames
+  join, comments and CRLF are tolerated, and unterminated final frames flush.
 
-## Startup and probing
+### Routing
 
-- The HTTP listener opens first so liveness/UI diagnostics are immediately observable.
-- Readiness remains false until a deployment proves healthy.
-- Health probes require a bounded, fully readable, protocol-valid success envelope; HTTP `2xx` alone is not enough.
-- Truncated, malformed or wrong-protocol probe responses cannot mark a deployment healthy.
+- Reasoning-marked requests relax their provider-class preference when no
+  Anthropic-compatible (or OpenAI-compatible) deployment is healthy, falling
+  back to any reasoning-capable deployment instead of returning 503.
 
-## Stress and soak verification
+### Web dashboard
 
-- Normal CI now includes a bounded stress gate for large routing tables, recovery floods, overload admission, event-state pressure, and concurrent log rotation.
-- A `Soak` workflow adds repeated stress rounds, same-process traffic/hot-reload cycles, repeated recovery cycles, and race-enabled soak execution. It is manually runnable and auto-runs only when stress/soak infrastructure changes.
+- Fully rebuilt embedded dashboard (no external assets, no build step):
+  KPI cards with latency sparkline, fleet-health donut, live model ring with
+  orbit animation, latency timeline chart, 9router-style live console with
+  severity-colored routing lines and filters, provider cards with gradient
+  marks and health bars, deployment table with inline latency bars and search,
+  capability evidence panel, tabbed CLI Tools with copy-to-clipboard, and a
+  polished provider drawer.
 
-## Verification
+### Bug fixes
 
-The authoritative acceptance gate is the repository CI plus `scripts/verify.sh`: repository cleanliness, formatting, repeated/shuffled tests, vet, race detection, fuzzing, JavaScript syntax validation, Linux cross-builds, local runtime smoke, installer smoke, Docker build and Docker runtime smoke.
+- Fixed a pre-existing test-infrastructure deadlock: fake upstream handlers
+  that never read the request body defeated the HTTP server's disconnect
+  detection after the remaining single background read consumed buffered body
+  bytes; cancellation tests could hang forever. Handlers now drain the body,
+  matching real upstream behavior.
+- Fixed `streamAnthropicToOpenAI` ending without a finish chunk when the
+  upstream ended with `message_stop` but no `message_delta` stop reason.
+- Usage chunks with an empty `choices` array are no longer discarded during
+  stream translation.
+
+## v0.3 — baseline
+
+- Ready Mesh routing with session affinity, capacity-aware power-of-two
+  selection, supervised bounded recovery, credential pools with key-level
+  cooldown, bounded global admission, self-rotating logs, and the first
+  embedded control-plane dashboard.

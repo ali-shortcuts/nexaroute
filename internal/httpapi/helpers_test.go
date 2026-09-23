@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ali-shortcuts/nexaroute/internal/config"
+	"github.com/ali-shortcuts/nexaroute/internal/translate"
 )
 
 func TestCapabilityDetectionIgnoresWordsInsideUserText(t *testing.T) {
@@ -165,7 +166,7 @@ func TestTranslatedStreamsStopOnClientWriteFailure(t *testing.T) {
 			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
 			Body:       io.NopCloser(strings.NewReader("data: [DONE]\n\n")),
 		}
-		if err := streamOpenAIToAnthropic(w, resp, "m"); err == nil || !strings.Contains(err.Error(), "client write failed") {
+		if err := streamOpenAIToAnthropic(w, resp, "m", nil); err == nil || !strings.Contains(err.Error(), "client write failed") {
 			t.Fatalf("unexpected stream error: %v", err)
 		}
 	})
@@ -176,7 +177,7 @@ func TestTranslatedStreamsStopOnClientWriteFailure(t *testing.T) {
 			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
 			Body:       io.NopCloser(strings.NewReader("data: {\"type\":\"message_stop\"}\n\n")),
 		}
-		if err := streamAnthropicToOpenAI(w, resp, "m"); err == nil || !strings.Contains(err.Error(), "client write failed") {
+		if err := streamAnthropicToOpenAI(w, resp, "m", nil); err == nil || !strings.Contains(err.Error(), "client write failed") {
 			t.Fatalf("unexpected stream error: %v", err)
 		}
 	})
@@ -331,7 +332,7 @@ func TestTranslatedStreamsRejectMalformedSSEJSON(t *testing.T) {
 			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
 			Body:       io.NopCloser(strings.NewReader("data: {bad}\n\n")),
 		}
-		err := streamOpenAIToAnthropic(rr, resp, "m")
+		err := streamOpenAIToAnthropic(rr, resp, "m", nil)
 		if err == nil || !strings.Contains(err.Error(), "invalid OpenAI SSE JSON") {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -343,7 +344,7 @@ func TestTranslatedStreamsRejectMalformedSSEJSON(t *testing.T) {
 			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
 			Body:       io.NopCloser(strings.NewReader("data: {bad}\n\n")),
 		}
-		err := streamAnthropicToOpenAI(rr, resp, "m")
+		err := streamAnthropicToOpenAI(rr, resp, "m", nil)
 		if err == nil || !strings.Contains(err.Error(), "invalid Anthropic SSE JSON") {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -500,5 +501,252 @@ func TestAdminReadJSONAcceptsJSONCharset(t *testing.T) {
 	var dst map[string]any
 	if _, err := readJSON(req, &dst); err != nil {
 		t.Fatalf("valid admin JSON content type rejected: %v", err)
+
+func TestAnthropicStopToOpenAIFinishMatrix(t *testing.T) {
+	cases := map[string]string{
+		"tool_use":      "tool_calls",
+		"max_tokens":    "length",
+		"refusal":       "content_filter",
+		"pause_turn":    "stop",
+		"end_turn":      "stop",
+		"stop_sequence": "stop",
+	}
+	for k, want := range cases {
+		if got := anthropicStopToOpenAIFinish(k); got != want {
+			t.Fatalf("stop_reason %q: want %q got %q", k, want, got)
+		}
+	}
+}
+
+func TestStripStreamOptions(t *testing.T) {
+	payload := []byte(`{"model":"m","stream":true,"stream_options":{"include_usage":true},"messages":[]}`)
+	stripped, ok := stripStreamOptions(payload)
+	if !ok {
+		t.Fatal("expected stream_options to be stripped")
+	}
+	if strings.Contains(string(stripped), "stream_options") {
+		t.Fatalf("stream_options still present: %s", stripped)
+	}
+	if !strings.Contains(string(stripped), `"model":"m"`) {
+		t.Fatalf("other fields lost: %s", stripped)
+	}
+	if _, ok := stripStreamOptions([]byte(`{"model":"m"}`)); ok {
+		t.Fatal("no stream_options should report false")
+	}
+}
+
+func parseSSEEvents(t *testing.T, body string) []struct {
+	Name string
+	Data string
+} {
+	t.Helper()
+	var events []struct {
+		Name string
+		Data string
+	}
+	for _, frame := range strings.Split(body, "\n\n") {
+		if strings.TrimSpace(frame) == "" {
+			continue
+		}
+		var name, data string
+		for _, line := range strings.Split(frame, "\n") {
+			switch {
+			case strings.HasPrefix(line, "event: "):
+				name = strings.TrimPrefix(line, "event: ")
+			case strings.HasPrefix(line, "data: "):
+				data += strings.TrimPrefix(line, "data: ")
+			}
+		}
+		events = append(events, struct {
+			Name string
+			Data string
+		}{name, data})
+	}
+	return events
+}
+
+func TestStreamOpenAIToAnthropicUsageAndContentVariants(t *testing.T) {
+	upstream := strings.Join([]string{
+		`data: {"id":"1","choices":[{"index":0,"delta":{"role":"assistant","content":""}}]}`,
+		``,
+		`data: {"id":"1","choices":[{"index":0,"delta":{"content":[{"type":"text","text":"hel"},{"type":"text","text":"lo"}]}}]}`,
+		``,
+		`event: ping`,
+		`data: {"keep":true}`,
+		``,
+		`data: {"id":"1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"gi","arguments":"{\"a\""}}]}}]}`,
+		``,
+		`data: {"id":"1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":":1}"}}]}}]}`,
+		``,
+		`data: {"id":"1","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}],"usage":null}`,
+		``,
+		`data: {"id":"1","choices":[],"usage":{"prompt_tokens":11,"completion_tokens":7,"total_tokens":18,"prompt_tokens_details":{"cached_tokens":4}}}`,
+		``,
+		`data: [DONE]`,
+		``,
+	}, "\n")
+	rr := httptest.NewRecorder()
+	resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(upstream))}
+	err := streamOpenAIToAnthropic(rr, resp, "m", nil, "req-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := parseSSEEvents(t, rr.Body.String())
+	names := make([]string, 0, len(events))
+	for _, e := range events {
+		names = append(names, e.Name)
+	}
+	for _, want := range []string{"message_start", "ping", "content_block_start", "content_block_delta", "content_block_stop", "message_delta", "message_stop"} {
+		found := false
+		for _, n := range names {
+			if n == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("missing %q event in %v", want, names)
+		}
+	}
+	var md string
+	for _, e := range events {
+		if e.Name == "message_delta" {
+			md = e.Data
+		}
+	}
+	if !strings.Contains(md, `"stop_reason":"tool_use"`) {
+		t.Fatalf("stop_reason wrong: %s", md)
+	}
+	if !strings.Contains(md, `"input_tokens":11`) || !strings.Contains(md, `"output_tokens":7`) || !strings.Contains(md, `"cache_read_input_tokens":4`) {
+		t.Fatalf("usage not propagated into message_delta: %s", md)
+	}
+	// Content-part array deltas must surface as text deltas.
+	joined := rr.Body.String()
+	if !strings.Contains(joined, `hel`) || !strings.Contains(joined, `lo`) {
+		t.Fatalf("array content dropped: %s", joined)
+	}
+	if !strings.Contains(joined, `"partial_json":"{\"a\"`) || !strings.Contains(joined, `"partial_json":":1}"`) {
+		t.Fatalf("tool argument fragments not streamed: %s", joined)
+	}
+}
+
+func TestStreamAnthropicToOpenAIRoleReasoningAndUsage(t *testing.T) {
+	upstream := strings.Join([]string{
+		`data: {"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":9,"cache_read_input_tokens":3,"output_tokens":1}}}`,
+		``,
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}`,
+		``,
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"pondering"}}`,
+		``,
+		`data: {"type":"content_block_stop","index":0}`,
+		``,
+		`data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"tu1","name":"srv.tool","input":{}}}`,
+		``,
+		`data: {"type":"content_block_stop","index":1}`,
+		``,
+		`data: {"type":"content_block_start","index":2,"content_block":{"type":"text","text":""}}`,
+		``,
+		`data: {"type":"content_block_delta","index":2,"delta":{"type":"text_delta","text":"done"}}`,
+		``,
+		`data: {"type":"content_block_stop","index":2}`,
+		``,
+		`data: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":6}}`,
+		``,
+		`data: {"type":"message_stop"}`,
+		``,
+	}, "\n")
+	rr := httptest.NewRecorder()
+	resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(upstream))}
+	nm := translate.NewAnthropicNameMap([]string{"srv.tool"})
+	err := streamAnthropicToOpenAI(rr, resp, "m", nm, "req-2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := rr.Body.String()
+	lines := strings.Split(strings.TrimSpace(out), "\n\n")
+	// First chunk must carry the assistant role.
+	first := lines[0]
+	if !strings.HasPrefix(first, "data: ") || !strings.Contains(first, `"role":"assistant"`) {
+		t.Fatalf("first chunk must carry assistant role: %q", first)
+	}
+	if !strings.Contains(out, `"reasoning_content":"pondering"`) {
+		t.Fatalf("thinking delta not surfaced as reasoning_content: %s", out)
+	}
+	if !strings.Contains(out, `"name":"srv.tool"`) {
+		t.Fatalf("tool name not reverse-mapped: %s", out)
+	}
+	// The tool block never streamed arguments; it must be padded to "{}".
+	if !strings.Contains(out, `"arguments":"{}"`) {
+		t.Fatalf("empty tool arguments not padded: %s", out)
+	}
+	if !strings.Contains(out, `"finish_reason":"tool_calls"`) {
+		t.Fatalf("finish_reason wrong: %s", out)
+	}
+	if !strings.Contains(out, `"prompt_tokens":9`) || !strings.Contains(out, `"completion_tokens":6`) {
+		t.Fatalf("usage chunk missing: %s", out)
+	}
+	if !strings.Contains(out, `"cached_tokens":3`) {
+		t.Fatalf("cache tokens not surfaced: %s", out)
+	}
+	if !strings.HasSuffix(strings.TrimSpace(out), "data: [DONE]") {
+		t.Fatalf("stream must end with [DONE]: %q", out[len(out)-40:])
+	}
+}
+
+func TestStreamAnthropicToOpenAIRefusalStopReason(t *testing.T) {
+	upstream := strings.Join([]string{
+		`data: {"type":"message_start","message":{"id":"m","usage":{"input_tokens":1}}}`,
+		``,
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+		``,
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"no"}}`,
+		``,
+		`data: {"type":"message_delta","delta":{"stop_reason":"refusal"},"usage":{"output_tokens":1}}`,
+		``,
+		`data: {"type":"message_stop"}`,
+		``,
+	}, "\n")
+	rr := httptest.NewRecorder()
+	resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(upstream))}
+	if err := streamAnthropicToOpenAI(rr, resp, "m", nil); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(rr.Body.String(), `"finish_reason":"content_filter"`) {
+		t.Fatalf("refusal must map to content_filter: %s", rr.Body.String())
+	}
+}
+
+func TestSSEReaderMultiLineDataAndComments(t *testing.T) {
+	payload := "data: {\"a\":\n" +
+		"data: 1}\n" +
+		"\n" +
+		": keep-alive comment\n" +
+		"event: custom\n" +
+		"data: second\n" +
+		"\n" +
+		"data: tail-no-blank"
+	r := newSSEReader(strings.NewReader(payload))
+	ev, done, err := r.Next()
+	if err != nil || done {
+		t.Fatalf("first event: %v %v", done, err)
+	}
+	if ev.data != "{\"a\":\n1}" {
+		t.Fatalf("multi-line data not joined: %q", ev.data)
+	}
+	ev2, done2, err2 := r.Next()
+	if err2 != nil || done2 {
+		t.Fatalf("second event: %v %v", done2, err2)
+	}
+	if ev2.name != "custom" || ev2.data != "second" {
+		t.Fatalf("event field lost: %+v", ev2)
+	}
+	ev3, done3, err3 := r.Next()
+	if err3 != nil || done3 {
+		t.Fatalf("trailing frame: %v %v", done3, err3)
+	}
+	if ev3.data != "tail-no-blank" {
+		t.Fatalf("frame without trailing blank lost: %q", ev3.data)
+	}
+	if _, done4, _ := r.Next(); !done4 {
+		t.Fatal("expected clean EOF")
 	}
 }

@@ -1,7 +1,6 @@
 package httpapi
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -45,6 +44,17 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 	}
 	req = s.prepareRequirement(req, r, inspection.BodySessionKey)
 	cfg, candidates := s.routeSnapshot(req)
+	if len(candidates) == 0 && req.ProviderType != "" {
+		// Mirror of the Anthropic-side relaxation: a reasoning-marked request
+		// falls back to any reasoning-capable deployment when its preferred
+		// provider class has no healthy candidates.
+		relaxed := req
+		relaxed.ProviderType = ""
+		if c2, cand2 := s.routeSnapshot(relaxed); len(cand2) > 0 {
+			req = relaxed
+			cfg, candidates = c2, cand2
+		}
+	}
 	if len(candidates) == 0 {
 		errorJSON(w, 503, "no compatible healthy deployment")
 		return
@@ -70,11 +80,14 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 		}
 		c = fresh
 		var payload []byte
+		var nm *translate.NameMap
 		if c.Deployment.ProviderType == "openai_compatible" {
 			payload, err = patchJSONModel(raw, c.Deployment.Model)
 		} else {
 			var an core.AnthropicRequest
-			an, err = translate.OpenAIToAnthropic(in, c.Deployment.Model)
+			var terr error
+			an, nm, terr = translate.OpenAIToAnthropic(in, c.Deployment.Model)
+			err = terr
 			if err == nil {
 				payload, err = json.Marshal(an)
 			}
@@ -163,13 +176,13 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 				e = proxyValidatedJSONResponse(w, resp, validateOpenAIResponseJSON)
 			}
 		} else if in.Stream {
-			e = streamAnthropicToOpenAI(w, resp, in.Model, r.Header.Get("x-request-id"))
+			e = streamAnthropicToOpenAI(w, resp, in.Model, nm, r.Header.Get("x-request-id"))
 		} else {
 			var an core.AnthResponse
 			e = decodeValidatedJSONLimited(resp.Body, &an, validateAnthropicResponseJSON)
 			resp.Body.Close()
 			if e == nil {
-				writeJSON(w, 200, translate.AnthropicResponseToOpenAI(an, in.Model))
+				writeJSON(w, 200, translate.AnthropicResponseToOpenAI(an, in.Model, nm))
 			}
 		}
 		total := time.Since(start)
@@ -234,7 +247,28 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 	errorJSON(w, 502, "all candidate deployments failed: "+lastErr)
 }
 
-func streamAnthropicToOpenAI(w http.ResponseWriter, resp *http.Response, model string, requestID ...string) error {
+// anthropicStopToOpenAIFinish maps Anthropic stop_reason values onto the
+// OpenAI finish_reason vocabulary, including refusal and pause_turn.
+func anthropicStopToOpenAIFinish(reason string) string {
+	switch reason {
+	case "tool_use":
+		return "tool_calls"
+	case "max_tokens":
+		return "length"
+	case "refusal":
+		return "content_filter"
+	default:
+		return "stop"
+	}
+}
+
+// streamAnthropicToOpenAI translates an Anthropic Messages SSE stream into
+// OpenAI Chat Completions chunks. It emits the role-first chunk OpenAI
+// clients expect, surfaces thinking deltas through the widely-supported
+// reasoning_content field, pads empty tool argument streams with "{}" so
+// clients never observe an empty JSON parse, and forwards real usage in a
+// final usage-only chunk before [DONE].
+func streamAnthropicToOpenAI(w http.ResponseWriter, resp *http.Response, model string, nm *translate.NameMap, requestID ...string) error {
 	defer resp.Body.Close()
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -255,19 +289,35 @@ func streamAnthropicToOpenAI(w http.ResponseWriter, resp *http.Response, model s
 			fl.Flush()
 		}
 	}
-	scanner := bufio.NewScanner(resp.Body)
-	scanner.Buffer(make([]byte, 64<<10), 8<<20)
+	reader := newSSEReader(resp.Body)
+	completionID := uniqueStreamID("chatcmpl", requestID...)
+	chunk := func(delta map[string]any, finish *string) map[string]any {
+		return map[string]any{"id": completionID, "object": "chat.completion.chunk", "model": model, "choices": []any{map[string]any{"index": 0, "delta": delta, "finish_reason": finish}}}
+	}
 	finish := "stop"
 	terminal := false
-	completionID := uniqueStreamID("chatcmpl", requestID...)
 	toolIndex := map[int]int{}
+	toolArgsSeen := map[int]bool{}
 	nextTool := 0
-	for scanner.Scan() {
-		line := scanner.Text()
-		if !strings.HasPrefix(line, "data:") {
-			continue
+	inputTokens, outputTokens := 0, 0
+	cacheReadTokens, cacheCreationTokens := 0, 0
+	usageSeen := false
+
+	// OpenAI convention: the first chunk carries the assistant role.
+	emit(chunk(map[string]any{"role": "assistant", "content": ""}, nil))
+	if writeErr != nil {
+		return writeErr
+	}
+
+	for {
+		ev, done, err := reader.Next()
+		if err != nil {
+			return err
 		}
-		d := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if done {
+			break
+		}
+		d := strings.TrimSpace(ev.data)
 		if d == "" {
 			continue
 		}
@@ -277,6 +327,24 @@ func streamAnthropicToOpenAI(w http.ResponseWriter, resp *http.Response, model s
 		}
 		typ, _ := env["type"].(string)
 		switch typ {
+		case "message_start":
+			if msg, _ := env["message"].(map[string]any); msg != nil {
+				if u, _ := msg["usage"].(map[string]any); u != nil {
+					usageSeen = true
+					if v, ok := numberInt(u["input_tokens"]); ok && v >= 0 {
+						inputTokens = v
+					}
+					if v, ok := numberInt(u["cache_read_input_tokens"]); ok && v > 0 {
+						cacheReadTokens = v
+					}
+					if v, ok := numberInt(u["cache_creation_input_tokens"]); ok && v > 0 {
+						cacheCreationTokens = v
+					}
+					if v, ok := numberInt(u["output_tokens"]); ok && v > 0 {
+						outputTokens = v
+					}
+				}
+			}
 		case "content_block_start":
 			ai, _ := numberInt(env["index"])
 			cb, _ := env["content_block"].(map[string]any)
@@ -284,7 +352,18 @@ func streamAnthropicToOpenAI(w http.ResponseWriter, resp *http.Response, model s
 				oi := nextTool
 				nextTool++
 				toolIndex[ai] = oi
-				emit(map[string]any{"id": completionID, "object": "chat.completion.chunk", "model": model, "choices": []any{map[string]any{"index": 0, "delta": map[string]any{"tool_calls": []any{map[string]any{"index": oi, "id": cb["id"], "type": "function", "function": map[string]any{"name": cb["name"], "arguments": ""}}}}, "finish_reason": nil}}})
+				name, _ := cb["name"].(string)
+				id, _ := cb["id"].(string)
+				if id == "" {
+					id = fmt.Sprintf("call_%s_%d", completionID, oi)
+				}
+				emit(map[string]any{"id": completionID, "object": "chat.completion.chunk", "model": model, "choices": []any{map[string]any{"index": 0, "delta": map[string]any{"tool_calls": []any{map[string]any{"index": oi, "id": id, "type": "function", "function": map[string]any{"name": nm.Reverse(name), "arguments": ""}}}}, "finish_reason": nil}}})
+				if input, ok := cb["input"].(map[string]any); ok && len(input) > 0 {
+					if b, merr := json.Marshal(input); merr == nil && len(b) > 0 {
+						emit(map[string]any{"id": completionID, "object": "chat.completion.chunk", "model": model, "choices": []any{map[string]any{"index": 0, "delta": map[string]any{"tool_calls": []any{map[string]any{"index": oi, "function": map[string]any{"arguments": string(b)}}}}, "finish_reason": nil}}})
+						toolArgsSeen[oi] = true
+					}
+				}
 			}
 		case "content_block_delta":
 			ai, _ := numberInt(env["index"])
@@ -293,26 +372,52 @@ func streamAnthropicToOpenAI(w http.ResponseWriter, resp *http.Response, model s
 			switch dt {
 			case "text_delta":
 				txt, _ := delta["text"].(string)
-				emit(map[string]any{"id": completionID, "object": "chat.completion.chunk", "model": model, "choices": []any{map[string]any{"index": 0, "delta": map[string]any{"content": txt}, "finish_reason": nil}}})
+				if txt != "" {
+					emit(chunk(map[string]any{"content": txt}, nil))
+				}
 			case "input_json_delta":
 				part, _ := delta["partial_json"].(string)
-				oi, ok := toolIndex[ai]
-				if ok {
-					emit(map[string]any{"id": completionID, "object": "chat.completion.chunk", "model": model, "choices": []any{map[string]any{"index": 0, "delta": map[string]any{"tool_calls": []any{map[string]any{"index": oi, "function": map[string]any{"arguments": part}}}}, "finish_reason": nil}}})
+				if part != "" {
+					if oi, ok := toolIndex[ai]; ok {
+						emit(map[string]any{"id": completionID, "object": "chat.completion.chunk", "model": model, "choices": []any{map[string]any{"index": 0, "delta": map[string]any{"tool_calls": []any{map[string]any{"index": oi, "function": map[string]any{"arguments": part}}}}, "finish_reason": nil}}})
+						toolArgsSeen[oi] = true
+					}
 				}
+			case "thinking_delta":
+				txt, _ := delta["thinking"].(string)
+				if txt != "" {
+					emit(chunk(map[string]any{"reasoning_content": txt}, nil))
+				}
+			}
+		case "content_block_stop":
+			ai, _ := numberInt(env["index"])
+			if oi, ok := toolIndex[ai]; ok && !toolArgsSeen[oi] {
+				// A tool block that never streamed arguments still needs a
+				// valid JSON object; one-api/new-api apply the same padding.
+				emit(map[string]any{"id": completionID, "object": "chat.completion.chunk", "model": model, "choices": []any{map[string]any{"index": 0, "delta": map[string]any{"tool_calls": []any{map[string]any{"index": oi, "function": map[string]any{"arguments": "{}"}}}}, "finish_reason": nil}}})
+				toolArgsSeen[oi] = true
 			}
 		case "message_delta":
 			del, _ := env["delta"].(map[string]any)
 			sr, _ := del["stop_reason"].(string)
 			if sr != "" {
 				terminal = true
+				finish = anthropicStopToOpenAIFinish(sr)
 			}
-			if sr == "tool_use" {
-				finish = "tool_calls"
-			} else if sr == "max_tokens" {
-				finish = "length"
-			} else if sr != "" {
-				finish = "stop"
+			if u, _ := env["usage"].(map[string]any); u != nil {
+				usageSeen = true
+				if v, ok := numberInt(u["output_tokens"]); ok && v >= 0 {
+					outputTokens = v
+				}
+				if v, ok := numberInt(u["input_tokens"]); ok && v >= 0 {
+					inputTokens = v
+				}
+				if v, ok := numberInt(u["cache_read_input_tokens"]); ok && v > 0 {
+					cacheReadTokens = v
+				}
+				if v, ok := numberInt(u["cache_creation_input_tokens"]); ok && v > 0 {
+					cacheCreationTokens = v
+				}
 			}
 		case "message_stop":
 			terminal = true
@@ -327,15 +432,22 @@ func streamAnthropicToOpenAI(w http.ResponseWriter, resp *http.Response, model s
 			return writeErr
 		}
 	}
-	if err := scanner.Err(); err != nil {
-		return err
-	}
 	if !terminal {
 		return io.ErrUnexpectedEOF
 	}
-	emit(map[string]any{"id": completionID, "object": "chat.completion.chunk", "model": model, "choices": []any{map[string]any{"index": 0, "delta": map[string]any{}, "finish_reason": finish}}})
+	emit(chunk(map[string]any{}, &finish))
 	if writeErr != nil {
 		return writeErr
+	}
+	if usageSeen {
+		usage := map[string]any{"prompt_tokens": inputTokens, "completion_tokens": outputTokens, "total_tokens": inputTokens + outputTokens}
+		if cacheReadTokens+cacheCreationTokens > 0 {
+			usage["prompt_tokens_details"] = map[string]any{"cached_tokens": cacheReadTokens}
+		}
+		emit(map[string]any{"id": completionID, "object": "chat.completion.chunk", "model": model, "choices": []any{}, "usage": usage})
+		if writeErr != nil {
+			return writeErr
+		}
 	}
 	if _, err := fmt.Fprint(w, "data: [DONE]\n\n"); err != nil {
 		return err

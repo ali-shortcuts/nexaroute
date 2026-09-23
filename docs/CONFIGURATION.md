@@ -1,4 +1,4 @@
-# Configuration — v0.3
+# Configuration — v0.4
 
 ## Runtime environment overrides
 

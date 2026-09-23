@@ -14,6 +14,7 @@ type AnthBlock struct {
 	Source    map[string]any  `json:"source,omitempty"`
 	ToolUseID string          `json:"tool_use_id,omitempty"`
 	Content   json.RawMessage `json:"content,omitempty"`
+	IsError   bool            `json:"is_error,omitempty"`
 }
 
 func ParseAnthContent(raw json.RawMessage) ([]AnthBlock, error) {

@@ -6,10 +6,21 @@ This project borrows *patterns*, not source code.
 
 - Dashboard-first provider/model management
 - A visible model topology / live operational view
+- A live console log of every routing decision
 - Model aliases/tiers and automatic fallback concept
 - Local self-hosted workflow
 
-We keep the topology idea but make routing health explicit per deployment and separate UI from protocol correctness.
+We keep the topology idea and the console-log concept but make routing health explicit per deployment and separate UI from protocol correctness. The v0.4 dashboard adopts 9router's KPI-card + live-console + topology layout with a dark premium design system and zero external assets.
+
+## 9Router open-sse — translation patterns adopted in v0.4
+
+- Format-detection boundary with per-pair request/response translators
+- Tool-name sanitization with reversible mapping for names violating the
+  target protocol grammar (MCP-style names survive the round trip)
+- Dropping unknown content block types instead of dead-ending conversations
+- `stream_options: {"include_usage": true}` injection for real token
+  accounting with a graceful retry against providers that reject it
+- max_tokens raised above thinking budgets instead of dropping the request
 
 ## LiteLLM — what is useful
 
@@ -18,6 +29,12 @@ We keep the topology idea but make routing health explicit per deployment and se
 - Router-centric multi-deployment abstraction
 
 NexaRoute's current default is stricter and more explicit: `ready_mesh` routes only verified healthy deployments; the first eligible routed failure quarantines a deployment immediately, the recovery supervisor performs up to five real recovery probes, and five failed probes enter the default 30-minute cooldown before a new recovery cycle.
+
+Translation patterns adopted in v0.4 from LiteLLM: the tool-name chokepoint with forward/reverse maps, the thinking-budget guard that drops reasoning over tool-using histories without signed thinking blocks, cache-token mapping in both directions, and `user` ↔ `metadata.user_id`.
+
+From new-api: merging consecutive same-role messages, coalescing parallel tool results into one user turn, dense tool-call index mapping in streams, and role-first chunk emission.
+
+From claude-code-proxy / y-router: the warning example — their silent drops (thinking history, stop sequences, tool_choice) are exactly the gaps v0.4 closes explicitly.
 
 ## Portkey Gateway — what is useful
 

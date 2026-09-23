@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"runtime"
@@ -582,6 +583,11 @@ func TestRunOnceParentCancellationDoesNotQuarantineDeployment(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Drain the request body first: the server's single background read
+		// consumes buffered body bytes instead of seeing the client's FIN,
+		// which would otherwise leave this handler blocked forever after the
+		// caller cancels (real upstreams always read request bodies).
+		_, _ = io.Copy(io.Discard, r.Body)
 		select {
 		case <-started:
 		default:
@@ -639,6 +645,11 @@ func TestRecoveryParentCancellationDoesNotRecordSyntheticFailure(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Drain the request body first: the server's single background read
+		// consumes buffered body bytes instead of seeing the client's FIN,
+		// which would otherwise leave this handler blocked forever after the
+		// caller cancels (real upstreams always read request bodies).
+		_, _ = io.Copy(io.Discard, r.Body)
 		select {
 		case <-started:
 		default:

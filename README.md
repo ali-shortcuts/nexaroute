@@ -1,10 +1,10 @@
-# NexaRoute — v0.3
+# NexaRoute — v0.4
 
 A self-hosted Go gateway for routing Anthropic-compatible and OpenAI-compatible clients across many LLM providers/models. The first target is **Claude Code -> NexaRoute -> Chat2API / other OpenAI-compatible or Anthropic-compatible providers**.
 
-This package intentionally stays named **v0.3** until the user validates it on the target Ubuntu machine. The code is runnable and heavily tested, but no software can honestly be guaranteed to contain zero bugs.
+This package is **v0.4**: bulletproof OpenAI↔Anthropic translation, a rebuilt 9router-class dashboard, and the same hardened Ready Mesh routing core. The code is runnable and heavily tested, but no software can honestly be guaranteed to contain zero bugs.
 
-## What v0.3 currently implements
+## What v0.4 currently implements
 
 ### Client-facing endpoints
 
@@ -96,20 +96,37 @@ Model **quality** is represented explicitly by configured `priority` and `weight
 
 For native Anthropic-compatible upstreams, the gateway prefers passthrough and preserves unknown JSON fields instead of needlessly normalizing them. This is important for fields that can evolve independently of the gateway.
 
-For Anthropic -> OpenAI-compatible routing, v0.3 includes:
+For Anthropic -> OpenAI-compatible routing, v0.4 includes:
 
-- text conversion
+- text conversion (string and content-part arrays in both directions)
 - system content
-- tool definitions
-- tool calls / `tool_use`
-- tool results
-- parallel tool-call streaming
-- common image/data-URL conversion paths
-- Anthropic-style SSE events
+- tool definitions with reversible name sanitization (MCP-style names survive)
+- tool calls / `tool_use` (malformed arguments preserved via `{"_raw": ...}`)
+- tool results (block arrays normalized, `is_error` preserved, ordering fixed)
+- parallel tool-call streaming with real `include_usage` token accounting
+- thinking/reasoning translation: Anthropic budgets ↔ OpenAI `reasoning_effort`
+  with the `max_tokens > budget_tokens` invariant enforced
+- `stop_sequences`, `top_k`-safe parameter handling, `metadata.user_id` mapping
+- common image/data-URL conversion paths with media-type normalization
+- Anthropic-style SSE events including `ping` and usage propagation
 - Anthropic-style error envelopes on Anthropic ingress
 - forwarding of explicitly allowed headers such as `anthropic-beta` and `anthropic-version`
 
+For OpenAI -> Anthropic-compatible routing, v0.4 enforces the invariants that
+naive relays miss:
+
+- strict role alternation (consecutive same-role messages merge)
+- first message must be a user turn (placeholder prepended when needed)
+- parallel OpenAI tool results coalesce into one user message
+- `reasoning_effort` maps onto Anthropic thinking budgets and is dropped over
+  tool-using histories that cannot carry signed thinking blocks
+- streamed thinking deltas surface as OpenAI `reasoning_content`
+- role-first chunk, `{}`-padded empty tool arguments, refusal/pause_turn stop
+  reason mapping, and final usage-only chunks before `[DONE]`
+
 The gateway does **not** pretend to resume a stream on a different model after client-visible bytes have already been sent. A broken committed stream fails rather than fabricating continuity.
+
+Unsigned thinking blocks are never fabricated toward Anthropic clients: replaying them against a native Anthropic upstream would poison the conversation. Reasoning text from OpenAI-compatible upstreams is therefore intentionally not surfaced as Anthropic thinking blocks in the cross-protocol response path.
 
 ## Web UI
 
@@ -257,7 +274,7 @@ journalctl --user -u nexaroute -f
 The image binds to `0.0.0.0:8080`. If the Web UI/admin API will be reached from outside loopback, configure an admin key:
 
 ```bash
-docker build -t nexaroute:0.3 .
+docker build -t nexaroute:0.4 .
 docker run --rm -p 8080:8080 \
   -e NEXAROUTE_ADMIN_KEY='replace-with-a-strong-random-secret' \
   nexaroute:0.3
@@ -267,7 +284,7 @@ Do not expose the admin UI directly to the public internet without TLS and addit
 
 ## What is deliberately not claimed
 
-The supported path is strong, but v0.3 is **not** a universal implementation of every LLM protocol. Native OpenAI Responses, Gemini native `generateContent`, Bedrock, Vertex AI, Azure-specific deployment semantics, embeddings/rerank, encrypted-at-rest secret vaults, distributed state, cost/budget routing, and full internet-facing RBAC/CSRF hardening are not implemented.
+The supported path is strong, but v0.4 is **not*** a universal implementation of every LLM protocol. Native OpenAI Responses, Gemini native `generateContent`, Bedrock, Vertex AI, Azure-specific deployment semantics, embeddings/rerank, encrypted-at-rest secret vaults, distributed state, cost/budget routing, and full internet-facing RBAC/CSRF hardening are not implemented.
 
 Cross-protocol reasoning/thinking metadata can also be provider-specific. Native Anthropic passthrough is the safest path for Anthropic-only fields.
 
@@ -280,7 +297,7 @@ Read:
 - `SECURITY.md`
 - `ROADMAP.md`
 
-before treating v0.3 as production infrastructure.
+before treating v0.4 as production infrastructure.
 
 ## Install from GitHub source
 

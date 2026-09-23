@@ -338,3 +338,23 @@ func (s *Server) recordRouteSuccess(req router.Requirement, deploymentID string,
 	s.hm.RecordScopeSuccess(deploymentID, req.Scopes())
 	s.rt.ObserveSession(req, deploymentID)
 }
+
+// stripStreamOptions removes the stream_options field from a translated
+// OpenAI payload. Providers that predate the option reject it with a 400
+// whose body mentions the field; the caller retries once with the stripped
+// payload so streaming keeps working against conservative upstreams.
+func stripStreamOptions(payload []byte) ([]byte, bool) {
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &obj); err != nil {
+		return payload, false
+	}
+	if _, ok := obj["stream_options"]; !ok {
+		return payload, false
+	}
+	delete(obj, "stream_options")
+	stripped, err := json.Marshal(obj)
+	if err != nil {
+		return payload, false
+	}
+	return stripped, true
+}

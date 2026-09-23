@@ -1,4 +1,4 @@
-# Security — v0.3
+# Security — v0.4
 
 NexaRoute defaults to localhost and should stay there for first testing.
 
@@ -25,7 +25,7 @@ The provider editor can reveal a resolved credential to an authorized local/admi
 
 ## Client-facing authentication boundary
 
-NexaRoute v0.3 does **not** provide a separate built-in authentication policy for the client-facing `/v1/*` data plane. Provider credentials are never treated as client credentials. If the listener is reachable from an untrusted network, put the client-facing routes behind a trusted reverse proxy/API gateway, firewall, VPN, or equivalent access-control layer.
+NexaRoute v0.4 does **not** provide a separate built-in authentication policy for the client-facing `/v1/*` data plane. Provider credentials are never treated as client credentials. If the listener is reachable from an untrusted network, put the client-facing routes behind a trusted reverse proxy/API gateway, firewall, VPN, or equivalent access-control layer.
 
 The Admin API is a separate boundary: it remains loopback-only by default or requires the configured Admin key when remote administration is intentionally enabled.
 

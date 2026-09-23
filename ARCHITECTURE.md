@@ -1,8 +1,8 @@
-# NexaRoute architecture — v0.3
+# NexaRoute architecture — v0.4
 
 ## Objective
 
-NexaRoute v0.3 is a single-process Go gateway with an embedded Web UI. It accepts Anthropic-compatible and OpenAI-compatible client traffic, normalizes only when necessary, routes each request across eligible provider/model deployments, monitors health continuously, and hot-reloads provider configuration without restarting the process.
+NexaRoute v0.4 is a single-process Go gateway with an embedded Web UI. It accepts Anthropic-compatible and OpenAI-compatible client traffic, normalizes only when necessary, routes each request across eligible provider/model deployments, monitors health continuously, and hot-reloads provider configuration without restarting the process.
 
 The central design rule is separation of concerns:
 

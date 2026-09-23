@@ -9,83 +9,261 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/core"
 )
 
-func OpenAIToAnthropic(in core.OpenAIRequest, model string) (core.AnthropicRequest, error) {
-	out := core.AnthropicRequest{Model: model, MaxTokens: in.MaxTokens, Stream: in.Stream, Temperature: in.Temperature, TopP: in.TopP}
+const (
+	// defaultAnthropicMaxTokens matches the value used by mature relays when a
+	// client omits max_tokens (OpenAI allows omission; Anthropic requires it).
+	defaultAnthropicMaxTokens = 4096
+	// emptyTextPlaceholder replaces empty content, which the Anthropic API
+	// rejects ("text: String should have at least 1 character").
+	emptyTextPlaceholder = "..."
+)
+
+// OpenAIToAnthropic converts an OpenAI Chat Completions request into an
+// Anthropic Messages request. It enforces the two structural invariants that
+// real Anthropic upstreams hard-reject and naive relays get wrong:
+//
+//  1. Strict role alternation — consecutive same-role messages (including the
+//     user messages produced by OpenAI tool results) are merged into single
+//     messages with multiple content blocks.
+//  2. The first message must have role "user" — a placeholder user message is
+//     prepended when a conversation opens with an assistant turn.
+//
+// Tool names are sanitized through a reversible NameMap (MCP-style names with
+// dots/colons/length overflow), malformed tool arguments are preserved in a
+// {"_raw": ...} object instead of failing the request, and thinking budgets
+// derived from reasoning_effort keep the max_tokens > budget_tokens invariant.
+func OpenAIToAnthropic(in core.OpenAIRequest, model string) (core.AnthropicRequest, *NameMap, error) {
+	out := core.AnthropicRequest{Model: model, Stream: in.Stream, Temperature: in.Temperature, TopP: in.TopP}
+	out.MaxTokens = in.MaxTokens
 	if out.MaxTokens <= 0 {
-		out.MaxTokens = 1024
+		out.MaxTokens = in.MaxCompletionTokens
 	}
-	out.StopSequences = openAIStopToAnthropic(in.Stop)
-	var system strings.Builder
+	if out.MaxTokens <= 0 {
+		out.MaxTokens = defaultAnthropicMaxTokens
+	}
+
+	names := make([]string, 0, len(in.Tools))
+	for _, t := range in.Tools {
+		names = append(names, t.Function.Name)
+	}
+	nm := NewAnthropicNameMap(names)
+
+	budget, thinkingEnabled := reasoningEffortToThinkingBudget(openAIEffort(in))
+	if thinkingEnabled {
+		out.Thinking, _ = json.Marshal(map[string]any{"type": "enabled", "budget_tokens": budget})
+		if out.MaxTokens <= budget {
+			// Anthropic requires max_tokens > thinking.budget_tokens; raise the
+			// ceiling instead of dropping the caller's reasoning request.
+			out.MaxTokens = budget + 1024
+		}
+	}
+
+	type pendingMsg struct {
+		role           string
+		blocks         []map[string]any
+		allToolResults bool
+	}
+	var messages []pendingMsg
+	assistantHasToolUse := false
+
+	flushInto := func(role string, blocks []map[string]any) {
+		if len(blocks) == 0 {
+			return
+		}
+		if n := len(messages); n > 0 && messages[n-1].role == role {
+			messages[n-1].blocks = append(messages[n-1].blocks, blocks...)
+			return
+		}
+		messages = append(messages, pendingMsg{role: role, blocks: blocks})
+	}
+
 	for _, m := range in.Messages {
 		role := strings.ToLower(strings.TrimSpace(m.Role))
 		switch role {
 		case "system", "developer":
 			if err := validateOpenAIContentForAnthropic(m.Content, false); err != nil {
-				return out, fmt.Errorf("%s message content: %w", role, err)
+				return out, nm, fmt.Errorf("%s message content: %w", role, err)
 			}
+			var sysText strings.Builder
 			for _, b := range openAIContentToAnthBlocks(m.Content) {
 				if b["type"] == "text" {
-					if system.Len() > 0 {
-						system.WriteByte('\n')
+					if sysText.Len() > 0 {
+						sysText.WriteByte('\n')
 					}
-					system.WriteString(fmt.Sprint(b["text"]))
+					sysText.WriteString(fmt.Sprint(b["text"]))
+				}
+			}
+			if sysText.Len() > 0 {
+				if out.System != nil && len(out.System) > 0 {
+					var prev string
+					_ = json.Unmarshal(out.System, &prev)
+					out.System, _ = json.Marshal(strings.TrimSpace(prev + "\n" + sysText.String()))
+				} else {
+					out.System, _ = json.Marshal(sysText.String())
 				}
 			}
 			continue
 		case "user", "assistant", "tool":
 		default:
-			return out, fmt.Errorf("unsupported OpenAI message role %q for Anthropic translation", m.Role)
+			return out, nm, fmt.Errorf("unsupported OpenAI message role %q for Anthropic translation", m.Role)
 		}
 		if err := validateOpenAIContentForAnthropic(m.Content, role != "tool"); err != nil {
-			return out, fmt.Errorf("%s message content: %w", role, err)
+			return out, nm, fmt.Errorf("%s message content: %w", role, err)
 		}
 		blocks := openAIContentToAnthBlocks(m.Content)
-		anthRole := role
-		if role == "assistant" {
-			for _, tc := range m.ToolCalls {
-				if strings.TrimSpace(tc.ID) == "" || strings.TrimSpace(tc.Function.Name) == "" {
-					return out, fmt.Errorf("assistant tool call requires non-empty id and function name")
+
+		switch role {
+		case "assistant":
+			assistantBlocks := make([]map[string]any, 0, len(blocks)+len(m.ToolCalls))
+			assistantBlocks = append(assistantBlocks, blocks...)
+			for i, tc := range m.ToolCalls {
+				if strings.TrimSpace(tc.Function.Name) == "" {
+					return out, nm, fmt.Errorf("assistant tool call requires non-empty function name")
 				}
 				obj := map[string]any{}
 				if strings.TrimSpace(tc.Function.Arguments) != "" {
 					if err := json.Unmarshal([]byte(tc.Function.Arguments), &obj); err != nil {
-						return out, fmt.Errorf("tool call %q arguments are invalid JSON: %w", tc.ID, err)
+						// Preserve the malformed payload instead of rejecting
+						// the whole conversation history.
+						obj = map[string]any{"_raw": tc.Function.Arguments}
 					}
 				}
-				blocks = append(blocks, map[string]any{"type": "tool_use", "id": tc.ID, "name": tc.Function.Name, "input": obj})
+				id := strings.TrimSpace(tc.ID)
+				if id == "" {
+					id = fmt.Sprintf("toolu_openai_%d", len(messages)+i)
+				}
+				assistantBlocks = append(assistantBlocks, map[string]any{
+					"type": "tool_use", "id": id, "name": nm.Forward(tc.Function.Name), "input": obj,
+				})
+				assistantHasToolUse = true
 			}
-		}
-		if role == "tool" {
+			if len(assistantBlocks) == 0 {
+				assistantBlocks = append(assistantBlocks, map[string]any{"type": "text", "text": emptyTextPlaceholder})
+			}
+			flushInto("assistant", assistantBlocks)
+		case "tool":
 			if strings.TrimSpace(m.ToolCallID) == "" {
-				return out, fmt.Errorf("tool message requires non-empty tool_call_id")
+				return out, nm, fmt.Errorf("tool message requires non-empty tool_call_id")
 			}
-			anthRole = "user"
-			blocks = []map[string]any{{"type": "tool_result", "tool_use_id": m.ToolCallID, "content": normalizeToolResultContent(m.Content)}}
+			// Parallel OpenAI tool results arrive as consecutive tool messages;
+			// they must coalesce into ONE user message with multiple
+			// tool_result blocks or Anthropic rejects the alternation.
+			toolResults := []map[string]any{{
+				"type":        "tool_result",
+				"tool_use_id": m.ToolCallID,
+				"content":     normalizeToolResultContent(m.Content),
+			}}
+			if n := len(messages); n > 0 && messages[n-1].role == "user" && messages[n-1].allToolResults {
+				messages[n-1].blocks = append(messages[n-1].blocks, toolResults...)
+			} else {
+				messages = append(messages, pendingMsg{role: "user", blocks: toolResults, allToolResults: true})
+			}
+		case "user":
+			if len(blocks) == 0 {
+				blocks = []map[string]any{{"type": "text", "text": emptyTextPlaceholder}}
+			}
+			flushInto("user", blocks)
 		}
-		if len(blocks) == 0 {
-			// The Anthropic Messages API rejects empty content arrays. OpenAI
-			// clients sometimes emit empty string/array content mid-conversation,
-			// so such messages are dropped instead of producing an upstream 400.
-			continue
-		}
-		raw, err := json.Marshal(blocks)
+	}
+
+	// Anthropic rejects "Expected thinking or redacted_thinking, but found
+	// tool_use": when reasoning is requested but the replayed assistant turns
+	// contain tool_use without any signed thinking blocks, drop the thinking
+	// request instead of letting every upstream call 400.
+	if thinkingEnabled && assistantHasToolUse {
+		out.Thinking = nil
+	}
+
+	if len(messages) == 0 {
+		return out, nm, fmt.Errorf("no messages after translation")
+	}
+	// Anthropic requires the first message to be a user turn.
+	if messages[0].role != "user" {
+		messages = append([]pendingMsg{{role: "user", blocks: []map[string]any{{"type": "text", "text": emptyTextPlaceholder}}}}, messages...)
+	}
+	for _, p := range messages {
+		raw, err := json.Marshal(p.blocks)
 		if err != nil {
-			return out, fmt.Errorf("translate OpenAI message content: %w", err)
+			return out, nm, fmt.Errorf("translate OpenAI message content: %w", err)
 		}
-		out.Messages = append(out.Messages, core.AnthMessage{Role: anthRole, Content: raw})
+		out.Messages = append(out.Messages, core.AnthMessage{Role: p.role, Content: raw})
 	}
-	if system.Len() > 0 {
-		out.System, _ = json.Marshal(system.String())
-	}
+
 	for _, t := range in.Tools {
-		out.Tools = append(out.Tools, core.AnthTool{Name: t.Function.Name, Description: t.Function.Description, InputSchema: t.Function.Parameters})
+		schema := t.Function.Parameters
+		if schema == nil {
+			schema = map[string]any{"type": "object"}
+		} else if _, ok := schema["type"]; !ok {
+			clone := make(map[string]any, len(schema)+1)
+			for k, v := range schema {
+				clone[k] = v
+			}
+			clone["type"] = "object"
+			schema = clone
+		}
+		out.Tools = append(out.Tools, core.AnthTool{Name: nm.Forward(t.Function.Name), Description: t.Function.Description, InputSchema: schema})
 	}
-	switch v := in.ToolChoice.(type) {
+	applyOpenAIToolChoiceToAnthropic(&out, in.ToolChoice)
+	applyOpenAIStopToAnthropic(&out, in.Stop)
+	if strings.TrimSpace(in.User) != "" {
+		if out.Metadata == nil || len(out.Metadata) == 0 {
+			out.Metadata, _ = json.Marshal(map[string]any{"user_id": strings.TrimSpace(in.User)})
+		}
+	}
+	return out, nm, nil
+}
+
+// openAIEffort resolves the reasoning effort from either reasoning_effort or a
+// structured reasoning {effort: ...} object (some clients use either shape).
+func openAIEffort(in core.OpenAIRequest) string {
+	effort := strings.ToLower(strings.TrimSpace(in.ReasoningEffort))
+	if effort != "" {
+		return effort
+	}
+	if len(in.Reasoning) > 0 && string(in.Reasoning) != "null" {
+		var cfg struct {
+			Effort  string `json:"effort"`
+			Enabled *bool  `json:"enabled"`
+		}
+		if err := json.Unmarshal(in.Reasoning, &cfg); err == nil {
+			if cfg.Enabled != nil && !*cfg.Enabled {
+				return "none"
+			}
+			return strings.ToLower(strings.TrimSpace(cfg.Effort))
+		}
+	}
+	return ""
+}
+
+// reasoningEffortToThinkingBudget maps OpenAI reasoning effort levels onto
+// conservative Anthropic thinking budgets.
+func reasoningEffortToThinkingBudget(effort string) (int, bool) {
+	switch effort {
+	case "none", "off", "disabled", "":
+		return 0, false
+	case "minimal", "low":
+		return 2048, true
+	case "medium":
+		return 8192, true
+	case "high":
+		return 16384, true
+	case "xhigh", "max":
+		return 32768, true
+	default:
+		return 8192, true
+	}
+}
+
+func applyOpenAIToolChoiceToAnthropic(out *core.AnthropicRequest, choice any) {
+	switch v := choice.(type) {
 	case string:
-		if v == "required" {
+		switch v {
+		case "required":
 			out.ToolChoice = map[string]any{"type": "any"}
-		} else {
-			out.ToolChoice = map[string]any{"type": v}
+		case "none":
+			out.ToolChoice = map[string]any{"type": "none"}
+		case "auto":
+			out.ToolChoice = map[string]any{"type": "auto"}
 		}
 	case map[string]any:
 		if f, ok := v["function"].(map[string]any); ok {
@@ -94,50 +272,31 @@ func OpenAIToAnthropic(in core.OpenAIRequest, model string) (core.AnthropicReque
 			}
 		}
 	}
-	if len(out.Messages) == 0 {
-		return out, fmt.Errorf("no messages after translation")
-	}
-	return out, nil
 }
 
-// openAIStopToAnthropic maps the OpenAI `stop` parameter (string or string
-// array) onto Anthropic `stop_sequences` so both upstream protocol classes
-// honor the same termination contract.
-func openAIStopToAnthropic(v any) []string {
-	const maxStopSequences = 16
-	out := []string{}
-	appendStop := func(s string) {
-		s = strings.TrimSpace(s)
-		if s == "" {
-			return
-		}
-		for _, existing := range out {
-			if existing == s {
-				return
-			}
-		}
-		if len(out) < maxStopSequences {
-			out = append(out, s)
-		}
-	}
-	switch x := v.(type) {
+// applyOpenAIStopToAnthropic carries stop sequences across the protocol
+// boundary; dropping them would make stop-controlled clients misbehave.
+func applyOpenAIStopToAnthropic(out *core.AnthropicRequest, stop any) {
+	switch v := stop.(type) {
 	case string:
-		appendStop(x)
+		if v != "" {
+			out.StopSequences = []string{v}
+		}
 	case []string:
-		for _, s := range x {
-			appendStop(s)
+		if len(v) > 0 {
+			out.StopSequences = append([]string(nil), v...)
 		}
 	case []any:
-		for _, item := range x {
-			if s, ok := item.(string); ok {
-				appendStop(s)
+		var seqs []string
+		for _, item := range v {
+			if s, ok := item.(string); ok && s != "" {
+				seqs = append(seqs, s)
 			}
 		}
+		if len(seqs) > 0 {
+			out.StopSequences = seqs
+		}
 	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
 }
 
 func validateOpenAIContentForAnthropic(content any, allowImage bool) error {
@@ -239,17 +398,42 @@ func openAIImageToAnthSource(v any) map[string]any {
 	case map[string]any:
 		u, _ = x["url"].(string)
 	}
+	u = strings.TrimSpace(u)
 	if u == "" {
 		return nil
 	}
 	if strings.HasPrefix(u, "data:") {
 		rest := strings.TrimPrefix(u, "data:")
 		parts := strings.SplitN(rest, ",", 2)
-		if len(parts) == 2 && strings.HasSuffix(parts[0], ";base64") {
-			return map[string]any{"type": "base64", "media_type": strings.TrimSuffix(parts[0], ";base64"), "data": parts[1]}
+		if len(parts) == 2 {
+			mt := strings.TrimSuffix(parts[0], ";base64")
+			if strings.HasSuffix(parts[0], ";base64") {
+				return map[string]any{"type": "base64", "media_type": normalizeImageMediaType(mt), "data": parts[1]}
+			}
+			// Inline non-base64 data URLs (svg+xml, plain text) cannot be
+			// represented as an Anthropic base64 source; keep them as URL
+			// sources so upstream providers that support them still work.
+			return map[string]any{"type": "url", "url": u}
 		}
+		return nil
 	}
 	return map[string]any{"type": "url", "url": u}
+}
+
+// normalizeImageMediaType maps common non-standard image MIME types onto the
+// set the Anthropic API accepts (png/jpeg/gif/webp).
+func normalizeImageMediaType(mt string) string {
+	mt = strings.ToLower(strings.TrimSpace(mt))
+	switch mt {
+	case "image/jpg":
+		return "image/jpeg"
+	case "image/jpe", "image/jp2", "image/pipeg":
+		return "image/jpeg"
+	case "image/svg", "image/svgz":
+		return "image/svg+xml"
+	default:
+		return mt
+	}
 }
 
 func normalizeToolResultContent(v any) any {
@@ -259,20 +443,41 @@ func normalizeToolResultContent(v any) any {
 	return v
 }
 
-func AnthropicResponseToOpenAI(in core.AnthResponse, requestedModel string) core.OpenAIResponse {
+// AnthropicResponseToOpenAI converts an Anthropic Messages response into an
+// OpenAI Chat Completions response. Thinking text is surfaced through the
+// widely-adopted reasoning_content field (safe: OpenAI clients never replay it
+// to an Anthropic upstream with signature requirements).
+func AnthropicResponseToOpenAI(in core.AnthResponse, requestedModel string, nm *NameMap) core.OpenAIResponse {
 	msg := core.OpenAIMessage{Role: "assistant"}
 	text := ""
+	reasoning := ""
 	calls := []core.OpenAIToolCall{}
 	for _, b := range in.Content {
-		if b.Type == "text" {
+		switch b.Type {
+		case "text":
 			text += b.Text
-		}
-		if b.Type == "tool_use" {
+		case "tool_use":
 			arg, _ := json.Marshal(b.Input)
-			calls = append(calls, core.OpenAIToolCall{ID: b.ID, Type: "function", Function: core.OpenAIFunctionCall{Name: b.Name, Arguments: string(arg)}})
+			calls = append(calls, core.OpenAIToolCall{
+				ID:       b.ID,
+				Type:     "function",
+				Function: core.OpenAIFunctionCall{Name: nm.Reverse(b.Name), Arguments: string(arg)},
+			})
+		case "thinking":
+			if b.Thinking != "" {
+				if reasoning != "" {
+					reasoning += "\n"
+				}
+				reasoning += b.Thinking
+			}
 		}
 	}
-	msg.Content = text
+	if text != "" || len(calls) == 0 {
+		msg.Content = text
+	}
+	if reasoning != "" {
+		msg.ReasoningContent = reasoning
+	}
 	msg.ToolCalls = calls
 	finish := "stop"
 	if in.StopReason != nil {
@@ -281,7 +486,24 @@ func AnthropicResponseToOpenAI(in core.AnthResponse, requestedModel string) core
 			finish = "tool_calls"
 		case "max_tokens":
 			finish = "length"
+		case "refusal":
+			finish = "content_filter"
 		}
 	}
-	return core.OpenAIResponse{ID: in.ID, Object: "chat.completion", Created: time.Now().Unix(), Model: requestedModel, Choices: []core.OpenAIChoice{{Index: 0, Message: msg, FinishReason: &finish}}, Usage: core.OpenAIUsage{PromptTokens: in.Usage.InputTokens, CompletionTokens: in.Usage.OutputTokens, TotalTokens: in.Usage.InputTokens + in.Usage.OutputTokens}}
+	usage := core.OpenAIUsage{
+		PromptTokens:     in.Usage.InputTokens,
+		CompletionTokens: in.Usage.OutputTokens,
+		TotalTokens:      in.Usage.InputTokens + in.Usage.OutputTokens,
+	}
+	if in.Usage.CacheReadInputTokens > 0 {
+		usage.PromptTokensDetails = &core.OpenAIUsageDetail{CachedTokens: in.Usage.CacheReadInputTokens}
+	}
+	return core.OpenAIResponse{
+		ID:      in.ID,
+		Object:  "chat.completion",
+		Created: time.Now().Unix(),
+		Model:   requestedModel,
+		Choices: []core.OpenAIChoice{{Index: 0, Message: msg, FinishReason: &finish}},
+		Usage:   usage,
+	}
 }

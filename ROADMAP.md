@@ -1,6 +1,6 @@
-# Roadmap — after the current v0.3 baseline
+# Roadmap — after the current v0.4 baseline
 
-The current v0.3 baseline already includes verified-ready routing, session affinity, provider/credential P2C selection, capability-aware circuits, supervised recovery, bounded admission, hot reload, provider discovery/testing, embedded UI, and Linux/Docker packaging.
+The current v0.4 baseline already includes verified-ready routing, session affinity, provider/credential P2C selection, capability-aware circuits, supervised recovery, bounded admission, hot reload, provider discovery/testing, embedded UI, and Linux/Docker packaging.
 
 Future work should be added only as separately scoped, tested capabilities.
 

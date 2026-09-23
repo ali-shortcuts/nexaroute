@@ -141,7 +141,7 @@ func TestAnthropicStreamToOpenAIIncludesToolArguments(t *testing.T) {
 	}, "\n")
 	resp := &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(sse))}
 	rr := httptest.NewRecorder()
-	if err := streamAnthropicToOpenAI(rr, resp, "client"); err != nil {
+	if err := streamAnthropicToOpenAI(rr, resp, "client", nil); err != nil {
 		t.Fatal(err)
 	}
 	out := rr.Body.String()
@@ -158,7 +158,7 @@ func TestOpenAIStreamToAnthropicParallelTools(t *testing.T) {
 	}
 	resp := &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(strings.Join(chunks, "\n\n")))}
 	rr := httptest.NewRecorder()
-	if err := streamOpenAIToAnthropic(rr, resp, "client"); err != nil {
+	if err := streamOpenAIToAnthropic(rr, resp, "client", nil); err != nil {
 		t.Fatal(err)
 	}
 	out := rr.Body.String()
@@ -688,7 +688,7 @@ func TestTranslatedStreamsRequireTerminalSignal(t *testing.T) {
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
 		Body:       io.NopCloser(strings.NewReader("data: {\"choices\":[{\"delta\":{\"content\":\"partial\"},\"finish_reason\":null}]}\n\n")),
 	}
-	if err := streamOpenAIToAnthropic(httptest.NewRecorder(), openAIResp, "m"); !errors.Is(err, io.ErrUnexpectedEOF) {
+	if err := streamOpenAIToAnthropic(httptest.NewRecorder(), openAIResp, "m", nil); !errors.Is(err, io.ErrUnexpectedEOF) {
 		t.Fatalf("openai translated stream error=%v want unexpected EOF", err)
 	}
 
@@ -697,7 +697,7 @@ func TestTranslatedStreamsRequireTerminalSignal(t *testing.T) {
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
 		Body:       io.NopCloser(strings.NewReader("data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"partial\"}}\n\n")),
 	}
-	if err := streamAnthropicToOpenAI(httptest.NewRecorder(), anthResp, "m"); !errors.Is(err, io.ErrUnexpectedEOF) {
+	if err := streamAnthropicToOpenAI(httptest.NewRecorder(), anthResp, "m", nil); !errors.Is(err, io.ErrUnexpectedEOF) {
 		t.Fatalf("anthropic translated stream error=%v want unexpected EOF", err)
 	}
 }
@@ -989,11 +989,14 @@ func TestOpenAIReasoningStaysOnNativeProtocol(t *testing.T) {
 	}
 }
 
-func TestReasoningWithoutNativeProtocolCandidateIsUnavailable(t *testing.T) {
+func TestReasoningFallsBackToReasoningCapableOpenAIDeployment(t *testing.T) {
 	var calls atomic.Int32
+	var gotBody []byte
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
-		w.WriteHeader(http.StatusOK)
+		gotBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"1","object":"chat.completion","model":"o","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`))
 	}))
 	defer up.Close()
 	cfg := config.Default()
@@ -1003,14 +1006,27 @@ func TestReasoningWithoutNativeProtocolCandidateIsUnavailable(t *testing.T) {
 		Models: []config.ModelConfig{{ID: "m", Model: "o", Aliases: []string{"coding"}, Enabled: true, Weight: 1, Capabilities: config.Capabilities{Reasoning: true}}},
 	}}
 	s := testGateway(t, cfg)
-	req := httptest.NewRequest(http.MethodPost, "http://gateway/v1/messages", strings.NewReader(`{"model":"coding","max_tokens":8,"thinking":{"type":"enabled"},"messages":[{"role":"user","content":"hi"}]}`))
+	req := httptest.NewRequest(http.MethodPost, "http://gateway/v1/messages", strings.NewReader(`{"model":"coding","max_tokens":8,"thinking":{"type":"enabled","budget_tokens":9000},"messages":[{"role":"user","content":"hi"}]}`))
 	rr := httptest.NewRecorder()
 	s.Handler().ServeHTTP(rr, req)
-	if rr.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status=%d want 503 body=%s", rr.Code, rr.Body.String())
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d want 200 body=%s", rr.Code, rr.Body.String())
 	}
-	if calls.Load() != 0 {
-		t.Fatalf("cross-protocol provider received reasoning request: %d", calls.Load())
+	if calls.Load() != 1 {
+		t.Fatalf("reasoning fallback should reach the capable deployment: %d", calls.Load())
+	}
+	// The thinking budget must be translated into reasoning_effort, and the
+	// Anthropic-only thinking field must not leak to the OpenAI upstream.
+	body := string(gotBody)
+	if !strings.Contains(body, `"reasoning_effort":"medium"`) {
+		t.Fatalf("thinking budget not translated: %s", body)
+	}
+	if strings.Contains(body, `"thinking"`) {
+		t.Fatalf("anthropic thinking field leaked upstream: %s", body)
+	}
+	// The Anthropic client must receive a valid Anthropic-shaped response.
+	if !strings.Contains(rr.Body.String(), `"type":"message"`) || !strings.Contains(rr.Body.String(), `"stop_reason"`) {
+		t.Fatalf("response not Anthropic-shaped: %s", rr.Body.String())
 	}
 }
 

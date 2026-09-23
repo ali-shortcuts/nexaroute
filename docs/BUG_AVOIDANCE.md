@@ -30,7 +30,7 @@ Defense:
 
 Defense:
 
-- v0.3 provider type is a single explicit enum
+- v0.4 provider type is a single explicit enum
 - update replaces that field exactly
 - backend does not merge an older provider type back into a new edit
 
@@ -56,4 +56,4 @@ Defense:
 Defense:
 
 - failover is allowed only before response bytes are committed
-- v0.3 does not pretend arbitrary streamed generation can be resumed safely on another model
+- v0.4 does not pretend arbitrary streamed generation can be resumed safely on another model
