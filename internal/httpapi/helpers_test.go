@@ -248,3 +248,43 @@ func TestReadyMeshSettingsControlsAreWiredInEmbeddedUI(t *testing.T) {
 		}
 	}
 }
+
+type readerFromResponseWriter struct {
+	header http.Header
+	body   bytes.Buffer
+	status int
+	used   bool
+}
+
+func (w *readerFromResponseWriter) Header() http.Header {
+	if w.header == nil {
+		w.header = make(http.Header)
+	}
+	return w.header
+}
+func (w *readerFromResponseWriter) WriteHeader(code int) { w.status = code }
+func (w *readerFromResponseWriter) Write(p []byte) (int, error) {
+	return w.body.Write(p)
+}
+func (w *readerFromResponseWriter) ReadFrom(r io.Reader) (int64, error) {
+	w.used = true
+	return io.Copy(&w.body, r)
+}
+
+func TestStatusWriterPreservesReaderFromFastPath(t *testing.T) {
+	base := &readerFromResponseWriter{}
+	sw := &statusWriter{ResponseWriter: base, status: http.StatusOK}
+	n, err := sw.ReadFrom(strings.NewReader("abcdef"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 6 || base.body.String() != "abcdef" {
+		t.Fatalf("copied=%d body=%q", n, base.body.String())
+	}
+	if !base.used {
+		t.Fatal("underlying ReaderFrom fast path was not used")
+	}
+	if sw.status != http.StatusOK || base.status != http.StatusOK {
+		t.Fatalf("status not committed as 200: wrapper=%d base=%d", sw.status, base.status)
+	}
+}
