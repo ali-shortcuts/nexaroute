@@ -18,6 +18,9 @@ func OpenAIToAnthropic(in core.OpenAIRequest, model string) (core.AnthropicReque
 		role := strings.ToLower(strings.TrimSpace(m.Role))
 		switch role {
 		case "system", "developer":
+			if err := validateOpenAIContentForAnthropic(m.Content, false); err != nil {
+				return out, fmt.Errorf("%s message content: %w", role, err)
+			}
 			for _, b := range openAIContentToAnthBlocks(m.Content) {
 				if b["type"] == "text" {
 					if system.Len() > 0 {
@@ -30,6 +33,9 @@ func OpenAIToAnthropic(in core.OpenAIRequest, model string) (core.AnthropicReque
 		case "user", "assistant", "tool":
 		default:
 			return out, fmt.Errorf("unsupported OpenAI message role %q for Anthropic translation", m.Role)
+		}
+		if err := validateOpenAIContentForAnthropic(m.Content, role != "tool"); err != nil {
+			return out, fmt.Errorf("%s message content: %w", role, err)
 		}
 		blocks := openAIContentToAnthBlocks(m.Content)
 		if role == "assistant" {
@@ -84,6 +90,56 @@ func OpenAIToAnthropic(in core.OpenAIRequest, model string) (core.AnthropicReque
 		return out, fmt.Errorf("no messages after translation")
 	}
 	return out, nil
+}
+
+func validateOpenAIContentForAnthropic(content any, allowImage bool) error {
+	validatePart := func(m map[string]any) error {
+		typ, ok := m["type"].(string)
+		if !ok || strings.TrimSpace(typ) == "" {
+			return fmt.Errorf("content part type is required")
+		}
+		switch typ {
+		case "text", "input_text":
+			if _, ok := m["text"].(string); !ok {
+				return fmt.Errorf("%s content part requires string text", typ)
+			}
+		case "image_url":
+			if !allowImage {
+				return fmt.Errorf("image_url is not supported in this message role")
+			}
+			if openAIImageToAnthSource(m["image_url"]) == nil {
+				return fmt.Errorf("image_url content part has no usable URL")
+			}
+		default:
+			return fmt.Errorf("unsupported OpenAI content part type %q for Anthropic translation", typ)
+		}
+		return nil
+	}
+
+	switch v := content.(type) {
+	case nil, string:
+		return nil
+	case []any:
+		for _, raw := range v {
+			m, ok := raw.(map[string]any)
+			if !ok {
+				return fmt.Errorf("content array contains a non-object part")
+			}
+			if err := validatePart(m); err != nil {
+				return err
+			}
+		}
+		return nil
+	case []map[string]any:
+		for _, m := range v {
+			if err := validatePart(m); err != nil {
+				return err
+			}
+		}
+		return nil
+	default:
+		return fmt.Errorf("unsupported OpenAI content value type %T", content)
+	}
 }
 
 func openAIContentToAnthBlocks(content any) []map[string]any {

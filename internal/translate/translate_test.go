@@ -138,3 +138,30 @@ func TestAnthropicToOpenAIRejectsInvalidToolStructure(t *testing.T) {
 		}
 	}
 }
+
+func TestOpenAIToAnthropicRejectsUnsupportedContentParts(t *testing.T) {
+	cases := []core.OpenAIRequest{
+		{Messages: []core.OpenAIMessage{{Role: "user", Content: []any{map[string]any{"type": "input_audio", "input_audio": map[string]any{"data": "x"}}}}}},
+		{Messages: []core.OpenAIMessage{{Role: "user", Content: []any{"not-an-object"}}}},
+		{Messages: []core.OpenAIMessage{{Role: "user", Content: map[string]any{"type": "text", "text": "x"}}}},
+		{Messages: []core.OpenAIMessage{{Role: "system", Content: []any{map[string]any{"type": "image_url", "image_url": map[string]any{"url": "https://example.com/x.png"}}}}}},
+	}
+	for i, in := range cases {
+		if _, err := OpenAIToAnthropic(in, "m"); err == nil {
+			t.Fatalf("case %d should reject unsupported content instead of dropping it", i)
+		}
+	}
+}
+
+func TestAnthropicToOpenAIRejectsUnsupportedContentBlocksAndSystem(t *testing.T) {
+	cases := []core.AnthropicRequest{
+		{System: json.RawMessage(`{"type":"not-valid-system"}`), Messages: []core.AnthMessage{{Role: "user", Content: json.RawMessage(`"hi"`)}}},
+		{Messages: []core.AnthMessage{{Role: "user", Content: json.RawMessage(`[{"type":"thinking","thinking":"secret"}]`)}}},
+		{Messages: []core.AnthMessage{{Role: "user", Content: json.RawMessage(`[{"type":"image","source":{"type":"base64","media_type":"","data":""}}]`)}}},
+	}
+	for i, in := range cases {
+		if _, err := AnthropicToOpenAI(in, "m"); err == nil {
+			t.Fatalf("case %d should reject unsupported content instead of dropping it", i)
+		}
+	}
+}

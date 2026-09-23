@@ -15,7 +15,11 @@ func AnthropicToOpenAI(in core.AnthropicRequest, model string) (core.OpenAIReque
 	} else if len(in.StopSequences) > 1 {
 		out.Stop = in.StopSequences
 	}
-	if sys := core.ParseSystem(in.System); sys != "" {
+	sys, err := parseAnthropicSystemStrict(in.System)
+	if err != nil {
+		return out, err
+	}
+	if sys != "" {
 		out.Messages = append(out.Messages, core.OpenAIMessage{Role: "system", Content: sys})
 	}
 	for _, m := range in.Messages {
@@ -44,9 +48,11 @@ func AnthropicToOpenAI(in core.AnthropicRequest, model string) (core.OpenAIReque
 			case "text":
 				parts = append(parts, map[string]any{"type": "text", "text": b.Text})
 			case "image":
-				if u := anthImageURL(b.Source); u != "" {
-					parts = append(parts, map[string]any{"type": "image_url", "image_url": map[string]any{"url": u}})
+				u := anthImageURL(b.Source)
+				if u == "" {
+					return out, fmt.Errorf("Anthropic image block has no usable source")
 				}
+				parts = append(parts, map[string]any{"type": "image_url", "image_url": map[string]any{"url": u}})
 			case "tool_use":
 				if role != "assistant" || strings.TrimSpace(b.ID) == "" || strings.TrimSpace(b.Name) == "" {
 					return out, fmt.Errorf("Anthropic tool_use requires assistant role, id, and name")
@@ -63,11 +69,13 @@ func AnthropicToOpenAI(in core.AnthropicRequest, model string) (core.OpenAIReque
 				flush()
 				var content any = ""
 				if len(b.Content) > 0 {
-					if json.Unmarshal(b.Content, &content) != nil {
-						content = string(b.Content)
+					if err := json.Unmarshal(b.Content, &content); err != nil {
+						return out, fmt.Errorf("Anthropic tool_result content is invalid JSON: %w", err)
 					}
 				}
 				out.Messages = append(out.Messages, core.OpenAIMessage{Role: "tool", ToolCallID: b.ToolUseID, Content: content})
+			default:
+				return out, fmt.Errorf("unsupported Anthropic content block type %q for OpenAI translation", b.Type)
 			}
 		}
 		if len(assistantCalls) > 0 {
@@ -102,6 +110,31 @@ func AnthropicToOpenAI(in core.AnthropicRequest, model string) (core.OpenAIReque
 		return out, fmt.Errorf("no messages after translation")
 	}
 	return out, nil
+}
+
+func parseAnthropicSystemStrict(raw json.RawMessage) (string, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return "", nil
+	}
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		return text, nil
+	}
+	var blocks []core.AnthBlock
+	if err := json.Unmarshal(raw, &blocks); err != nil {
+		return "", fmt.Errorf("invalid Anthropic system content: %w", err)
+	}
+	var b strings.Builder
+	for _, block := range blocks {
+		if block.Type != "text" {
+			return "", fmt.Errorf("unsupported Anthropic system block type %q", block.Type)
+		}
+		if b.Len() > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(block.Text)
+	}
+	return strings.TrimSpace(b.String()), nil
 }
 
 func anthImageURL(src map[string]any) string {
