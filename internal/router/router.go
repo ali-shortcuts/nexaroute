@@ -256,17 +256,12 @@ func (r *Router) ObserveSession(req Requirement, id string) {
 	key := r.affinityBucket(req)
 	r.sessionMu.Lock()
 	if _, exists := r.sessions[key]; !exists && len(r.sessions) >= maxSessionPins {
-		now := time.Now()
-		for k, pin := range r.sessions {
-			if now.After(pin.Expires) {
-				delete(r.sessions, k)
-			}
-		}
-		if len(r.sessions) >= maxSessionPins {
-			for k := range r.sessions {
-				delete(r.sessions, k)
-				break
-			}
+		// Affinity is an optimization, not authoritative state. Under a flood of
+		// unique session IDs, evict one bounded entry instead of scanning the
+		// whole table on every insertion.
+		for k := range r.sessions {
+			delete(r.sessions, k)
+			break
 		}
 	}
 	r.sessions[key] = sessionPin{Deployment: id, Expires: time.Now().Add(ttl)}
