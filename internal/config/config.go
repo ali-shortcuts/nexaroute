@@ -194,7 +194,7 @@ func validHeaderValue(s string) bool {
 func Default() Config {
 	return Config{
 		Listen: "127.0.0.1:8080",
-		Admin: AdminConfig{BindLocalOnly: true},
+		Admin:  AdminConfig{BindLocalOnly: true},
 		Logging: LoggingConfig{
 			File: "auto", MaxSizeMB: 32, MaxBackups: 3,
 			AccessMode: "sampled", SuccessSampleEvery: 1000, SlowRequestMS: 5000,
