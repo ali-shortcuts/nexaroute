@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -68,6 +69,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 	var lastStatus int
 	var lastBody []byte
 	var lastContentType string
+	lastRetryAfter := 0
 	forward := copySelectedRequestHeaders(r)
 
 	attempts := 0
@@ -98,10 +100,14 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		attemptIndex := attempts - 1
 		recordUsage := s.usageRecorder(r, c.Deployment.ID)
 		s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_attempt", Deployment: c.Deployment.ID, Message: fmt.Sprintf("attempt=%d score=%.2f health=%s pressure=%.3f", attempts, c.Score, c.Health.Status, c.CapacityPressure)})
+		attemptCtx, attemptCancel := attemptContext(routeCtx, in.Stream, cfg.AttemptTimeout())
 		start := time.Now()
-		resp, e := a.Do(routeCtx, payload, in.Stream, forward)
+		resp, e := a.Do(attemptCtx, payload, in.Stream, forward)
 		headerLatency := time.Since(start)
 		if e != nil {
+			if attemptCancel != nil {
+				attemptCancel()
+			}
 			lastErr = e.Error()
 			if clientRequestGone(r.Context()) {
 				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "client_disconnect", Deployment: c.Deployment.ID, Message: r.Context().Err().Error(), ErrorType: "caller_cancelled", LatencyMS: headerLatency.Milliseconds()})
@@ -133,11 +139,17 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			b, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
 			resp.Body.Close()
+			if attemptCancel != nil {
+				attemptCancel()
+			}
 			b = a.RedactBody(b)
 			lastStatus = resp.StatusCode
 			lastBody = b
 			lastContentType = resp.Header.Get("Content-Type")
 			lastErr = upstreamError(resp.StatusCode, b)
+			if resp.StatusCode == http.StatusTooManyRequests {
+				lastRetryAfter = int(retryAfterDuration(resp.Header, time.Duration(cfg.Routing.MaxRetryAfterSeconds)*time.Second) / time.Second)
+			}
 			if router.IsReadyStrategy(cfg.Routing.Strategy) {
 				if failoverEligible(resp.StatusCode) {
 					s.hm.Quarantine(c.Deployment.ID, lastErr, headerLatency)
@@ -157,6 +169,9 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "failover", Deployment: c.Deployment.ID, Message: fmt.Sprintf("HTTP %d; trying next eligible candidate", resp.StatusCode), StatusCode: resp.StatusCode})
 				s.retryPause(routeCtx, r.Header.Get("x-request-id"), cfg, attemptIndex, max)
 				continue
+			}
+			if lastStatus == http.StatusTooManyRequests && lastRetryAfter > 0 {
+				w.Header().Set("Retry-After", strconv.Itoa(lastRetryAfter))
 			}
 			if c.Deployment.ProviderType == "anthropic_compatible" {
 				writeRawUpstreamError(w, lastStatus, lastContentType, lastBody)
@@ -192,6 +207,9 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 					recordUsage(int64(o.Usage.PromptTokens), int64(o.Usage.CompletionTokens))
 				}
 			}
+		}
+		if attemptCancel != nil {
+			attemptCancel() // body fully consumed; release the per-attempt timer
 		}
 		totalLatency := time.Since(start)
 		if e != nil {

@@ -28,6 +28,18 @@ func routeContext(parent context.Context, streaming bool, timeout time.Duration)
 	return context.WithTimeout(parent, timeout)
 }
 
+// attemptContext derives the per-attempt deadline from the route context so
+// one hung provider cannot consume the whole route budget before failover.
+// Streaming responses are exempt: their bodies legitimately outlive any
+// per-attempt bound and are guarded by stream idle timeouts instead. The
+// returned cancel is nil when no per-attempt context was created.
+func attemptContext(routeCtx context.Context, streaming bool, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if streaming || timeout <= 0 {
+		return routeCtx, nil
+	}
+	return context.WithTimeout(routeCtx, timeout)
+}
+
 func gatewayDeadlineExceeded(routeCtx, clientCtx context.Context) bool {
 	return routeCtx.Err() == context.DeadlineExceeded && clientCtx.Err() == nil
 }

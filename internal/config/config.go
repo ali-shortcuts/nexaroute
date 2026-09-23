@@ -81,6 +81,7 @@ type RoutingConfig struct {
 	CapabilityFailureThreshold int     `json:"capability_failure_threshold"`
 	CapabilityCooldownSeconds  int     `json:"capability_cooldown_seconds"`
 	RequestTimeoutMS           int     `json:"request_timeout_ms"`
+	AttemptTimeoutMS           int     `json:"attempt_timeout_ms"`
 	LatencyWeight              float64 `json:"latency_weight"`
 	FailureWeight              float64 `json:"failure_weight"`
 	CapacityWeight             float64 `json:"capacity_weight"`
@@ -233,7 +234,7 @@ func Default() Config {
 			Strategy: "ready_mesh", FallbackOnUnknownModel: true, SessionAffinity: true, SessionTTLSeconds: 3600, P2CWindow: 8,
 			MaxAttempts: 4, MaxInflightRequests: 128, FailureThreshold: 5, CooldownSeconds: 1800,
 			CapabilityFailureThreshold: 2, CapabilityCooldownSeconds: 300,
-			RequestTimeoutMS: 120000, LatencyWeight: 0.015, FailureWeight: 25, CapacityWeight: 35,
+			RequestTimeoutMS: 120000, AttemptTimeoutMS: 0, LatencyWeight: 0.015, FailureWeight: 25, CapacityWeight: 35,
 			RetryBackoffMS: 150, MaxRetryAfterSeconds: 60,
 		},
 		Probe: ProbeConfig{Enabled: true, OnStart: true, IntervalSeconds: 120, ReadyLeaseSeconds: 300, TimeoutMS: 8000, MaxTokens: 1, Concurrency: 16, RecoveryAttempts: 5, RecoveryRetryMS: 500},
@@ -481,6 +482,9 @@ func (c Config) Validate() error {
 	if c.Routing.RequestTimeoutMS < 100 || c.Routing.RequestTimeoutMS > 30*60*1000 {
 		return errors.New("routing.request_timeout_ms must be between 100 and 1800000")
 	}
+	if c.Routing.AttemptTimeoutMS < 0 || c.Routing.AttemptTimeoutMS > 30*60*1000 {
+		return errors.New("routing.attempt_timeout_ms must be between 0 and 1800000")
+	}
 	if c.Routing.RetryBackoffMS < 0 || c.Routing.RetryBackoffMS > 60000 {
 		return errors.New("routing.retry_backoff_ms must be between 0 and 60000")
 	}
@@ -667,6 +671,14 @@ func (p ProviderConfig) ResolvedCredentials() []string {
 		}
 	}
 	return out
+}
+
+// AttemptTimeout bounds a single provider attempt (time until the full
+// non-streaming exchange completes) so one hung provider cannot consume the
+// entire route budget and starve failover. 0 disables the per-attempt bound
+// and keeps the historical whole-request deadline behaviour.
+func (c Config) AttemptTimeout() time.Duration {
+	return time.Duration(c.Routing.AttemptTimeoutMS) * time.Millisecond
 }
 
 func (c Config) RequestTimeout() time.Duration {
