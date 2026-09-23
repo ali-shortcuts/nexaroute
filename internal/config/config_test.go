@@ -155,3 +155,46 @@ func TestValidateRejectsUnsafeGlobalInflightLimit(t *testing.T) {
 		t.Fatalf("expected max_inflight_requests validation error, got %v", err)
 	}
 }
+
+func TestValidateRejectsAmbiguousLocalIDs(t *testing.T) {
+	cases := []struct {
+		name string
+		edit func(*Config)
+	}{
+		{"provider slash", func(c *Config) {
+			c.Providers = []ProviderConfig{{
+				ID: "bad/provider", Name: "P", Type: "openai_compatible", BaseURL: "https://example.com", Enabled: true,
+			}}
+		}},
+		{"model slash", func(c *Config) {
+			c.Providers = []ProviderConfig{{
+				ID: "good-provider", Name: "P", Type: "openai_compatible", BaseURL: "https://example.com", Enabled: true,
+				Models: []ModelConfig{{ID: "bad/model", Model: "vendor/model", Enabled: true, Weight: 1}},
+			}}
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := Default()
+			tc.edit(&cfg)
+			cfg.ApplyDefaults()
+			if err := cfg.Validate(); err == nil {
+				t.Fatal("ambiguous local id should be rejected")
+			}
+		})
+	}
+}
+
+func TestValidateAllowsNamespacedUpstreamModelAndAlias(t *testing.T) {
+	cfg := Default()
+	cfg.Providers = []ProviderConfig{{
+		ID: "provider-1", Name: "P", Type: "openai_compatible", BaseURL: "https://example.com", Enabled: true,
+		Models: []ModelConfig{{
+			ID: "model-1", Model: "vendor/model:latest", Aliases: []string{"team/coding"}, Enabled: true, Weight: 1,
+		}},
+	}}
+	cfg.ApplyDefaults()
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("namespaced upstream model/alias should remain valid: %v", err)
+	}
+}
