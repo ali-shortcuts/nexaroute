@@ -299,8 +299,9 @@ func TestNativeProxyStripsSensitiveAndHopByHopResponseHeaders(t *testing.T) {
 			"Set-Cookie":         []string{"session=upstream-secret"},
 			"Authorization":      []string{"Bearer upstream-secret"},
 			"X-Api-Key":          []string{"upstream-secret"},
-			"Connection":         []string{"keep-alive"},
+			"Connection":         []string{"keep-alive, X-Internal-Hop"},
 			"Keep-Alive":         []string{"timeout=5"},
+			"X-Internal-Hop":     []string{"must-not-leak"},
 			"Proxy-Authenticate": []string{"Basic realm=upstream"},
 			"X-Safe-Upstream":    []string{"ok"},
 		},
@@ -310,7 +311,7 @@ func TestNativeProxyStripsSensitiveAndHopByHopResponseHeaders(t *testing.T) {
 	if err := proxyResponse(rr, resp); err != nil {
 		t.Fatal(err)
 	}
-	for _, h := range []string{"Set-Cookie", "Authorization", "X-Api-Key", "Connection", "Keep-Alive", "Proxy-Authenticate"} {
+	for _, h := range []string{"Set-Cookie", "Authorization", "X-Api-Key", "Connection", "Keep-Alive", "X-Internal-Hop", "Proxy-Authenticate"} {
 		if got := rr.Header().Get(h); got != "" {
 			t.Fatalf("sensitive/hop-by-hop header %s leaked: %q", h, got)
 		}
