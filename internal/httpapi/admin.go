@@ -304,6 +304,12 @@ func (s *Server) adminProviderTest(w http.ResponseWriter, r *http.Request) {
 	if len(models) > 100 {
 		models = models[:100]
 	}
+	for _, model := range models {
+		if len(model) > 1024 {
+			errorJSON(w, 400, "model id exceeds safe limit 1024 bytes")
+			return
+		}
+	}
 
 	results := make([]testResult, len(models))
 	var wg sync.WaitGroup
@@ -470,8 +476,16 @@ func discoverModels(ctx context.Context, p config.ProviderConfig) ([]string, int
 			continue
 		}
 		lastStatus = resp.StatusCode
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+		b, readErr := io.ReadAll(io.LimitReader(resp.Body, (4<<20)+1))
 		resp.Body.Close()
+		if readErr != nil {
+			lastErr = fmt.Errorf("model discovery read: %w", readErr)
+			continue
+		}
+		if len(b) > 4<<20 {
+			lastErr = fmt.Errorf("model discovery response exceeds 4194304 bytes")
+			continue
+		}
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			b = redactProviderBody(p, b)
 			lastErr = fmt.Errorf("model discovery HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
@@ -491,26 +505,35 @@ func discoverModels(ctx context.Context, p config.ProviderConfig) ([]string, int
 }
 
 func parseModelList(b []byte) []string {
+	const maxModels = 10000
+	const maxModelIDBytes = 1024
 	var root any
 	if json.Unmarshal(b, &root) != nil {
 		return nil
 	}
 	out := []string{}
 	add := func(v any) {
+		if len(out) >= maxModels {
+			return
+		}
 		switch x := v.(type) {
 		case string:
 			x = strings.TrimSpace(x)
 			if strings.HasPrefix(x, "models/") {
 				x = strings.TrimPrefix(x, "models/")
 			}
-			out = append(out, x)
+			if len(x) <= maxModelIDBytes {
+				out = append(out, x)
+			}
 		case map[string]any:
 			for _, key := range []string{"id", "model", "name"} {
 				if id, _ := x[key].(string); strings.TrimSpace(id) != "" {
 					if strings.HasPrefix(id, "models/") {
 						id = strings.TrimPrefix(id, "models/")
 					}
-					out = append(out, id)
+					if len(id) <= maxModelIDBytes {
+						out = append(out, id)
+					}
 					return
 				}
 			}
