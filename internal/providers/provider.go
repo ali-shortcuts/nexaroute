@@ -23,6 +23,7 @@ type Adapter interface {
 	Kind() string
 	Stats() ProviderStats
 	CredentialsMatch([]string) bool
+	RedactBody([]byte) []byte
 	Do(ctx context.Context, payload []byte, stream bool, forward http.Header) (*http.Response, error)
 	DoPath(ctx context.Context, method, path string, payload []byte, stream bool, forward http.Header) (*http.Response, error)
 	CountTokens(ctx context.Context, payload []byte, forward http.Header) (*http.Response, error)

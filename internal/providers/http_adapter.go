@@ -135,6 +135,28 @@ func (a *httpAdapter) CredentialsMatch(keys []string) bool {
 	return true
 }
 
+func (a *httpAdapter) RedactBody(b []byte) []byte {
+	out := append([]byte(nil), b...)
+	a.credMu.RLock()
+	keys := make([]string, 0, len(a.creds))
+	for i := range a.creds {
+		if a.creds[i].Key != "" {
+			keys = append(keys, a.creds[i].Key)
+		}
+	}
+	a.credMu.RUnlock()
+	for _, key := range keys {
+		out = bytes.ReplaceAll(out, []byte(key), []byte("[REDACTED]"))
+	}
+	// Also redact the currently resolved primary env value. During credential
+	// rotation this can differ briefly from the snapshot held by an in-flight
+	// adapter, so covering both sides prevents transition-time leaks.
+	if key := a.p.ResolvedAPIKey(); key != "" {
+		out = bytes.ReplaceAll(out, []byte(key), []byte("[REDACTED]"))
+	}
+	return out
+}
+
 func endpoint(base, suffix string) string {
 	b := strings.TrimRight(base, "/")
 	suffix = strings.TrimSpace(suffix)

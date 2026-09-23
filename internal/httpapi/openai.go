@@ -118,7 +118,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			b, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
 			resp.Body.Close()
-			b = redactProviderSecrets(cfg, c.Deployment.ProviderID, b)
+			b = a.RedactBody(b)
 			lastStatus = resp.StatusCode
 			lastBody = b
 			lastContentType = resp.Header.Get("Content-Type")
