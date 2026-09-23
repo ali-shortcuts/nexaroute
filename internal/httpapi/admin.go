@@ -135,15 +135,15 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 	}
 	eventLimit := parseLimit("events", 500)
 	writeJSON(w, 200, map[string]any{
-		"deployments":      deployments,
-		"deployment_total": totalDeployments,
+		"deployments":        deployments,
+		"deployment_total":   totalDeployments,
 		"snapshot_truncated": truncated,
-		"health":           healthAll,
-		"health_counts":    healthCounts,
-		"events":           s.bus.SnapshotLimit(eventLimit),
-		"provider_stats":   s.reg.Stats(),
-		"session_count":    s.rt.SessionCount(),
-		"probe_stats":      s.probe.Stats(),
+		"health":             healthAll,
+		"health_counts":      healthCounts,
+		"events":             s.bus.SnapshotLimit(eventLimit),
+		"provider_stats":     s.reg.Stats(),
+		"session_count":      s.rt.SessionCount(),
+		"probe_stats":        s.probe.Stats(),
 		"config": map[string]any{
 			"probe":   probeCfg,
 			"routing": routingCfg,
