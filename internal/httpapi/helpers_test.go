@@ -390,3 +390,31 @@ func TestDiscoverModelsBoundsErrorBody(t *testing.T) {
 		t.Fatal("discovery error leaked provider credential")
 	}
 }
+
+func TestSuccessfulResponseEnvelopeValidatorsRejectEmptyShapes(t *testing.T) {
+	for _, raw := range [][]byte{
+		[]byte(`{}`),
+		[]byte(`{"choices":[]}`),
+		[]byte(`{"choices":[{"message":null}]}`),
+		[]byte(`{"choices":[{"message":{}}]}`),
+	} {
+		if err := validateOpenAIResponseJSON(raw); err == nil {
+			t.Fatalf("OpenAI validator accepted %s", raw)
+		}
+	}
+	for _, raw := range [][]byte{
+		[]byte(`{}`),
+		[]byte(`{"type":"message","role":"assistant","content":null}`),
+		[]byte(`{"type":"message","role":"user","content":[]}`),
+	} {
+		if err := validateAnthropicResponseJSON(raw); err == nil {
+			t.Fatalf("Anthropic validator accepted %s", raw)
+		}
+	}
+	if err := validateOpenAIResponseJSON([]byte(`{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`)); err != nil {
+		t.Fatalf("valid OpenAI envelope rejected: %v", err)
+	}
+	if err := validateAnthropicResponseJSON([]byte(`{"type":"message","role":"assistant","content":[]}`)); err != nil {
+		t.Fatalf("valid Anthropic envelope rejected: %v", err)
+	}
+}

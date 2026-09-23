@@ -814,3 +814,108 @@ func TestHotReloadInvalidatesHealthWhenCapabilitiesChange(t *testing.T) {
 		t.Fatalf("capability identity change kept stale health proof: %+v", st)
 	}
 }
+
+func TestOpenAINativeInvalid2xxFailsOverBeforeCommit(t *testing.T) {
+	var badCalls, goodCalls atomic.Int32
+	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		badCalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{}`)
+	}))
+	defer bad.Close()
+	good := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		goodCalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"ok","object":"chat.completion","model":"good","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`)
+	}))
+	defer good.Close()
+
+	cfg := config.Default()
+	cfg.Probe.Enabled = false
+	cfg.Routing.MaxAttempts = 2
+	cfg.Providers = []config.ProviderConfig{
+		{ID: "bad", Name: "Bad", Type: "openai_compatible", BaseURL: bad.URL, AuthMode: "none", Enabled: true,
+			Models: []config.ModelConfig{{ID: "m", Model: "bad", Aliases: []string{"coding"}, Enabled: true, Priority: 0, Weight: 1}}},
+		{ID: "good", Name: "Good", Type: "openai_compatible", BaseURL: good.URL, AuthMode: "none", Enabled: true,
+			Models: []config.ModelConfig{{ID: "m", Model: "good", Aliases: []string{"coding"}, Enabled: true, Priority: 10, Weight: 1}}},
+	}
+	s := testGateway(t, cfg)
+	req := httptest.NewRequest(http.MethodPost, "http://gateway/v1/chat/completions", strings.NewReader(`{"model":"coding","messages":[{"role":"user","content":"hi"}]}`))
+	rr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), `"content":"ok"`) {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	if badCalls.Load() != 1 || goodCalls.Load() != 1 {
+		t.Fatalf("unexpected calls bad=%d good=%d", badCalls.Load(), goodCalls.Load())
+	}
+	if st := s.hm.Get("bad/m"); st.Status == health.Healthy {
+		t.Fatalf("invalid successful envelope remained healthy: %+v", st)
+	}
+}
+
+func TestAnthropicNativeInvalid2xxFailsOverBeforeCommit(t *testing.T) {
+	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"type":"message","role":"assistant","content":null}`)
+	}))
+	defer bad.Close()
+	good := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"msg_ok","type":"message","role":"assistant","content":[{"type":"text","text":"ok"}],"model":"good","stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`)
+	}))
+	defer good.Close()
+
+	cfg := config.Default()
+	cfg.Probe.Enabled = false
+	cfg.Routing.MaxAttempts = 2
+	cfg.Providers = []config.ProviderConfig{
+		{ID: "bad", Name: "Bad", Type: "anthropic_compatible", BaseURL: bad.URL, AuthMode: "none", Enabled: true,
+			Models: []config.ModelConfig{{ID: "m", Model: "bad", Aliases: []string{"coding"}, Enabled: true, Priority: 0, Weight: 1}}},
+		{ID: "good", Name: "Good", Type: "anthropic_compatible", BaseURL: good.URL, AuthMode: "none", Enabled: true,
+			Models: []config.ModelConfig{{ID: "m", Model: "good", Aliases: []string{"coding"}, Enabled: true, Priority: 10, Weight: 1}}},
+	}
+	s := testGateway(t, cfg)
+	req := httptest.NewRequest(http.MethodPost, "http://gateway/v1/messages", strings.NewReader(`{"model":"coding","max_tokens":8,"messages":[{"role":"user","content":"hi"}]}`))
+	rr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), `"text":"ok"`) {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	if st := s.hm.Get("bad/m"); st.Status == health.Healthy {
+		t.Fatalf("invalid Anthropic envelope remained healthy: %+v", st)
+	}
+}
+
+func TestCrossProtocolInvalid2xxFailsOverBeforeCommit(t *testing.T) {
+	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"choices":[]}`)
+	}))
+	defer bad.Close()
+	good := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"msg_ok","type":"message","role":"assistant","content":[{"type":"text","text":"fallback"}],"model":"good","stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`)
+	}))
+	defer good.Close()
+
+	cfg := config.Default()
+	cfg.Probe.Enabled = false
+	cfg.Routing.MaxAttempts = 2
+	cfg.Providers = []config.ProviderConfig{
+		{ID: "bad", Name: "Bad", Type: "openai_compatible", BaseURL: bad.URL, AuthMode: "none", Enabled: true,
+			Models: []config.ModelConfig{{ID: "m", Model: "bad", Aliases: []string{"coding"}, Enabled: true, Priority: 0, Weight: 1}}},
+		{ID: "good", Name: "Good", Type: "anthropic_compatible", BaseURL: good.URL, AuthMode: "none", Enabled: true,
+			Models: []config.ModelConfig{{ID: "m", Model: "good", Aliases: []string{"coding"}, Enabled: true, Priority: 10, Weight: 1}}},
+	}
+	s := testGateway(t, cfg)
+	req := httptest.NewRequest(http.MethodPost, "http://gateway/v1/messages", strings.NewReader(`{"model":"coding","max_tokens":8,"messages":[{"role":"user","content":"hi"}]}`))
+	rr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), `"fallback"`) {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	if st := s.hm.Get("bad/m"); st.Status == health.Healthy {
+		t.Fatalf("invalid cross-protocol envelope remained healthy: %+v", st)
+	}
+}
