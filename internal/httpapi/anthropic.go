@@ -312,15 +312,26 @@ func streamOpenAIToAnthropic(w http.ResponseWriter, resp *http.Response, model s
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("X-Accel-Buffering", "no")
 	fl, _ := w.(http.Flusher)
+	var writeErr error
 	emit := func(name string, v any) {
-		b, _ := json.Marshal(v)
-		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", name, b)
-		if fl != nil {
+		if writeErr != nil {
+			return
+		}
+		b, err := json.Marshal(v)
+		if err != nil {
+			writeErr = err
+			return
+		}
+		_, writeErr = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", name, b)
+		if writeErr == nil && fl != nil {
 			fl.Flush()
 		}
 	}
 	messageID := uniqueStreamID("msg", requestID...)
 	emit("message_start", map[string]any{"type": "message_start", "message": map[string]any{"id": messageID, "type": "message", "role": "assistant", "content": []any{}, "model": model, "stop_reason": nil, "stop_sequence": nil, "usage": map[string]int{"input_tokens": 0, "output_tokens": 0}}})
+	if writeErr != nil {
+		return writeErr
+	}
 
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 64<<10), 8<<20)
@@ -378,6 +389,9 @@ func streamOpenAIToAnthropic(w http.ResponseWriter, resp *http.Response, model s
 		}
 		if er, ok := raw["error"]; ok {
 			emit("error", map[string]any{"type": "error", "error": er})
+			if writeErr != nil {
+				return writeErr
+			}
 			return fmt.Errorf("openai stream error")
 		}
 		var obj struct {
@@ -421,6 +435,9 @@ func streamOpenAIToAnthropic(w http.ResponseWriter, resp *http.Response, model s
 			}
 			startTool(st)
 		}
+		if writeErr != nil {
+			return writeErr
+		}
 		if ch.FinishReason != nil {
 			terminal = true
 			switch *ch.FinishReason {
@@ -463,5 +480,8 @@ func streamOpenAIToAnthropic(w http.ResponseWriter, resp *http.Response, model s
 	}
 	emit("message_delta", map[string]any{"type": "message_delta", "delta": map[string]any{"stop_reason": finish, "stop_sequence": nil}, "usage": map[string]int{"output_tokens": 0}})
 	emit("message_stop", map[string]any{"type": "message_stop"})
+	if writeErr != nil {
+		return writeErr
+	}
 	return nil
 }
