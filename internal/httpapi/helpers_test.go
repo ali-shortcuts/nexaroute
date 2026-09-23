@@ -240,7 +240,7 @@ func TestReadyMeshSettingsControlsAreWiredInEmbeddedUI(t *testing.T) {
 		"prTokens", "prConcurrency", "prRecoveryAttempts", "prRecoveryRetry",
 	}
 	for _, id := range controls {
-		if !strings.Contains(html, `id="" + id + `") {
+		if !strings.Contains(html, "id=\""+id+"\"") {
 			t.Fatalf("control %s missing from embedded HTML", id)
 		}
 		if !strings.Contains(js, "#"+id) {
