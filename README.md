@@ -114,6 +114,10 @@ For Anthropic -> OpenAI-compatible routing, v0.3 includes:
 The gateway does **not** pretend to resume a stream on a different model after client-visible bytes have already been sent. A broken committed stream fails rather than fabricating continuity.
 
 ## Web UI
+## Web UI
+
+The embedded control plane ships a power dashboard: live traffic chart (requests/failures per minute from poll deltas), success-rate and token/cost KPIs, top deployments by volume, filterable live event stream (severity chips, search, pause), a request explorer with status/SSE/text filters and expandable rows, a model table with search, state filter, sorting, latency bars, health-proof age and cooldown countdown, Route Preview with capability requirements plus one-click end-to-end route test and copyable curl, per-provider "test all models", generated CLI snippets from the live origin and access keys, and config JSON export. All client-side, no external assets, no secrets embedded in served HTML.
+
 
 The UI is embedded in the Go binary; there is no separate web server to install.
 

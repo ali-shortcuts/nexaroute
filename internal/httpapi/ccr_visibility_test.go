@@ -163,3 +163,73 @@ func TestRecentRequestsLogCapturesRouteLatencyTokensAndAuthRejections(t *testing
 		t.Fatalf("admin requests log wrong: %d %s", arr.Code, arr.Body.String())
 	}
 }
+
+func TestWebUIServesPowerDashboardElements(t *testing.T) {
+	cfg := config.Default()
+	cfg.Admin.APIKey = "k"
+	cfg.Admin.BindLocalOnly = false
+	s := testGateway(t, cfg)
+	get := func(path string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, "http://gateway"+path, nil)
+		rr := httptest.NewRecorder()
+		s.Handler().ServeHTTP(rr, req)
+		if rr.Code != 200 {
+			t.Fatalf("GET %s: status %d", path, rr.Code)
+		}
+		return rr
+	}
+	index := get("/").Body.String()
+	appjs := get("/app.js").Body.String()
+	styles := get("/styles.css").Body.String()
+
+	// Overview command center: KPI strip, live traffic chart, top deployments,
+	// activity strip, window selector.
+	for _, id := range []string{"kRpm", "kSuccess", "kTokens", "trafficChart", "topDeployments", "activityStrip", "chartPeak"} {
+		if !strings.Contains(index, `id="`+id+`"`) {
+			t.Errorf("overview index.html missing #%s", id)
+		}
+	}
+	if !strings.Contains(index, "chart-win") {
+		t.Error("overview index.html missing chart window selector")
+	}
+	// Live client logic present and wired.
+	for _, fn := range []string{"renderTrafficChart", "renderTopDeployments", "renderActivityStrip", "evClass", "agoStr", "testCurlFor", "renderCLI", "PW.series"} {
+		if !strings.Contains(appjs, fn) {
+			t.Errorf("app.js missing power-UI symbol %s", fn)
+		}
+	}
+	// Events filters, request explorer controls, model table controls.
+	for _, id := range []string{"evChips", "evQuery", "evPauseBtn", "reqStatus", "reqSSE", "reqAuto", "reqQuery", "mwQuery", "mwStatus", "mwSort"} {
+		if !strings.Contains(index, `id="`+id+`"`) {
+			t.Errorf("index.html missing control #%s", id)
+		}
+	}
+	// Route preview capabilities are static inputs; the E2E test and curl-copy
+	// buttons are injected by the preview renderer into #previewOut.
+	for _, id := range []string{"pvTools", "pvVision", "pvStream", "pvReason"} {
+		if !strings.Contains(index, `id="`+id+`"`) {
+			t.Errorf("index.html missing preview capability #%s", id)
+		}
+	}
+	for _, id := range []string{"pvRunBtn", "pvCurlBtn"} {
+		if !strings.Contains(appjs, id) {
+			t.Errorf("app.js missing injected preview control %s", id)
+		}
+	}
+	// CLI snippets render from live origin (container static, buttons injected),
+	// config export and header controls are static.
+	for _, token := range []string{"cliGrid", "copyConfigBtn", "downloadConfigBtn", "pauseBtn", "refreshNowBtn"} {
+		if !strings.Contains(index, token) || !strings.Contains(appjs, token) {
+			t.Errorf("power-UI wiring incomplete for %s", token)
+		}
+	}
+	if !strings.Contains(appjs, "cli-copy") {
+		t.Error("app.js missing injected CLI copy buttons")
+	}
+	// New component styles shipped.
+	for _, cls := range []string{".traffic-chart", ".chip-row", ".latcell", ".top-deployments", ".req-detail"} {
+		if !strings.Contains(styles, cls) {
+			t.Errorf("styles.css missing %s", cls)
+		}
+	}
+}
