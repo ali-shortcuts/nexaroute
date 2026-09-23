@@ -68,6 +68,13 @@ func TestRoutePreviewOrdersExplainsAndMarksPin(t *testing.T) {
 	if !strings.Contains(reasons[0].(string), "verified healthy") {
 		t.Fatalf("explanation should mention verified health: %v", reasons)
 	}
+	// Every candidate must carry its own explanation, not just the winner.
+	for idx, raw := range cands {
+		cr, _ := raw.(map[string]any)["reasons"].([]any)
+		if len(cr) < 3 {
+			t.Fatalf("candidate %d lacks per-candidate reasons", idx)
+		}
+	}
 
 	// Alias targeting works and requires tools capability when requested.
 	out = preview(`{"model":"coding","tools":true}`)

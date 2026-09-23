@@ -330,3 +330,41 @@ func TestFaultAttemptTimeoutCannotOutliveRouteBudget(t *testing.T) {
 		t.Fatalf("route budget fired late: %v", elapsed)
 	}
 }
+
+func TestFaultRetryAfterSurvivesMixedFailuresPostLoop(t *testing.T) {
+	rateLimited := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Retry-After", "30")
+		w.Header().Set("content-type", "application/json")
+		w.WriteHeader(429)
+		fmt.Fprint(w, `{"error":{"message":"slow down","type":"rate_limit_error"}}`)
+	}))
+	defer rateLimited.Close()
+	dead := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	deadURL := dead.URL
+	dead.Close()
+
+	// Candidate order: 429 provider (tier 1) then dead provider (tier 5).
+	// The loop ends with a transport error on the last candidate, so the
+	// client-visible 429 comes from the post-loop write path and must still
+	// carry the capped Retry-After from the earlier rate-limited attempt.
+	s := faultGateway(t, rateLimited, rateLimited, func(c *config.Config) {
+		c.Providers[1].BaseURL = deadURL
+		c.Providers[1].ID = "solid-dead"
+		c.Routing.AttemptTimeoutMS = 300
+	})
+	req := httptest.NewRequest(http.MethodPost, "http://gw/v1/chat/completions", strings.NewReader(chatBody("up-m1")))
+	req.Header.Set("authorization", "Bearer nr-test")
+	req.Header.Set("content-type", "application/json")
+	rr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rr, req)
+	if rr.Code != 429 {
+		t.Fatalf("expected final 429, got %d: %s", rr.Code, rr.Body.String())
+	}
+	ra := rr.Header().Get("Retry-After")
+	if ra == "" {
+		t.Fatal("post-loop 429 must surface the capped upstream Retry-After")
+	}
+	if n := parseRetryAfterForTest(ra); n < 1 || n > 60 {
+		t.Fatalf("Retry-After %q outside cap/window", ra)
+	}
+}

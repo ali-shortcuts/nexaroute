@@ -63,7 +63,7 @@ func (s *Server) adminRoutePreview(w http.ResponseWriter, r *http.Request) {
 
 	pinned := s.rt.PinnedDeployment(req)
 	out := make([]routePreviewCandidate, 0, len(candidates))
-	for i, c := range candidates {
+	for _, c := range candidates {
 		pc := routePreviewCandidate{
 			DeploymentID: c.Deployment.ID,
 			ProviderID:   c.Deployment.ProviderID,
@@ -78,9 +78,7 @@ func (s *Server) adminRoutePreview(w http.ResponseWriter, r *http.Request) {
 			Pressure:     round2(c.CapacityPressure),
 			Pinned:       pinned != "" && pinned == c.Deployment.ID,
 		}
-		if i == 0 {
-			pc.Reasons = s.previewReasons(cfg.Routing.Strategy, c, pinned, len(candidates))
-		}
+		pc.Reasons = s.previewReasons(c, pinned, len(candidates))
 		out = append(out, pc)
 		if len(out) >= 25 {
 			break
@@ -89,7 +87,7 @@ func (s *Server) adminRoutePreview(w http.ResponseWriter, r *http.Request) {
 
 	notes := []string{}
 	if req.Reasoning {
-		notes = append(notes, "reasoning requests are constrained to a matching native-protocol provider by the ingress")
+		notes = append(notes, "reasoning requests are restricted to deployments that advertise reasoning capability from real protocol fields")
 	}
 	if len(candidates) == 0 {
 		if _, usable := s.rt.Readiness(cfg.Routing.Strategy); usable == 0 {
@@ -111,7 +109,7 @@ func (s *Server) adminRoutePreview(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) previewReasons(strategy string, c router.Scored, pinned string, total int) []string {
+func (s *Server) previewReasons(c router.Scored, pinned string, total int) []string {
 	reasons := []string{fmt.Sprintf("eligible and verified healthy (eligible candidates: %d)", total)}
 	if pinned != "" && pinned == c.Deployment.ID {
 		reasons = append(reasons, "session affinity pins this deployment for this session/model/capability bucket")

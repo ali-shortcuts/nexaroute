@@ -252,6 +252,9 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if lastStatus > 0 && len(lastBody) > 0 {
+		if lastStatus == http.StatusTooManyRequests && lastRetryAfter > 0 {
+			w.Header().Set("Retry-After", strconv.Itoa(lastRetryAfter))
+		}
 		writeRawUpstreamError(w, lastStatus, lastContentType, lastBody)
 		return
 	}
