@@ -13,4 +13,10 @@ go test -timeout=2m -count=1 ./internal/probe -run='^TestStress'
 echo '== event-state stress =='
 go test -timeout=2m -count=1 ./internal/events -run='^TestStress'
 
+echo '== HTTP admission stress =='
+go test -timeout=2m -count=1 ./internal/httpapi -run='^TestStress'
+
+echo '== concurrent log rotation stress =='
+go test -timeout=2m -count=1 ./internal/logging -run='^TestStress'
+
 echo 'STRESS PASS'

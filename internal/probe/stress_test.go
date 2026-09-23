@@ -28,14 +28,17 @@ func TestStressRecoveryFloodFiveThousandDeploymentsStaysBounded(t *testing.T) {
 	cfg.Probe.Enabled = true
 	cfg.Probe.OnStart = false
 	cfg.Probe.Concurrency = 32
-	cfg.Providers = []config.ProviderConfig{{
-		ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "http://example.invalid",
-		AuthMode: "none", Enabled: true, MaxConcurrency: 64,
-	}}
-	for i := 0; i < 5000; i++ {
-		cfg.Providers[0].Models = append(cfg.Providers[0].Models, config.ModelConfig{
-			ID: fmt.Sprintf("m%d", i), Model: fmt.Sprintf("model-%d", i), Enabled: true, Weight: 1,
-		})
+	for p := 0; p < 5; p++ {
+		pc := config.ProviderConfig{
+			ID: fmt.Sprintf("p%d", p), Name: "P", Type: "openai_compatible",
+			BaseURL: "http://example.invalid", AuthMode: "none", Enabled: true, MaxConcurrency: 64,
+		}
+		for i := 0; i < 1000; i++ {
+			pc.Models = append(pc.Models, config.ModelConfig{
+				ID: fmt.Sprintf("m%d", i), Model: fmt.Sprintf("model-%d-%d", p, i), Enabled: true, Weight: 1,
+			})
+		}
+		cfg.Providers = append(cfg.Providers, pc)
 	}
 	cfg.ApplyDefaults()
 	hm := health.New(cfg.Routing.FailureThreshold, cfg.Cooldown())
