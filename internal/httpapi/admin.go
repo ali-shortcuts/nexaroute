@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,6 +15,11 @@ import (
 
 	"github.com/ali-shortcuts/nexaroute/internal/config"
 	"github.com/ali-shortcuts/nexaroute/internal/providers"
+)
+
+var (
+	errAdminProviderNotFound = errors.New("provider not found")
+	errAdminProviderExists   = errors.New("provider id already exists")
 )
 
 type providerForm struct {
@@ -137,14 +143,18 @@ func (s *Server) adminProviders(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		normalizeProvider(&in.Provider)
-		cfg := s.currentConfig()
-		if cfg.ProviderIndex(in.Provider.ID) >= 0 {
-			errorJSON(w, 409, "provider id already exists")
-			return
-		}
-		cfg.Providers = append(cfg.Providers, in.Provider)
-		if err := s.applyConfig(cfg); err != nil {
-			errorJSON(w, 400, err.Error())
+		if _, err := s.mutateConfig(func(cfg *config.Config) error {
+			if cfg.ProviderIndex(in.Provider.ID) >= 0 {
+				return errAdminProviderExists
+			}
+			cfg.Providers = append(cfg.Providers, in.Provider)
+			return nil
+		}); err != nil {
+			if errors.Is(err, errAdminProviderExists) {
+				errorJSON(w, 409, err.Error())
+			} else {
+				errorJSON(w, 400, err.Error())
+			}
 			return
 		}
 		s.probe.Trigger()
@@ -160,15 +170,15 @@ func (s *Server) adminProviderByID(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 400, "provider id required")
 		return
 	}
-	cfg := s.currentConfig()
-	idx := cfg.ProviderIndex(id)
-	if idx < 0 {
-		errorJSON(w, 404, "provider not found")
-		return
-	}
 
 	switch r.Method {
 	case http.MethodGet:
+		cfg := s.currentConfig()
+		idx := cfg.ProviderIndex(id)
+		if idx < 0 {
+			errorJSON(w, 404, "provider not found")
+			return
+		}
 		p := cfg.Providers[idx]
 		reveal := r.URL.Query().Get("reveal") == "1" || r.URL.Query().Get("reveal") == "true"
 		payload := map[string]any{
@@ -193,32 +203,56 @@ func (s *Server) adminProviderByID(w http.ResponseWriter, r *http.Request) {
 			errorJSON(w, 400, "invalid JSON: "+err.Error())
 			return
 		}
-		old := cfg.Providers[idx]
-		if in.Provider.ID == "" {
-			in.Provider.ID = old.ID
-		}
-		if in.Provider.ID != old.ID && cfg.ProviderIndex(in.Provider.ID) >= 0 {
-			errorJSON(w, 409, "provider id already exists")
-			return
-		}
-		if in.PreserveSecret {
-			in.Provider.APIKey = old.APIKey
-			in.Provider.APIKeyEnv = old.APIKeyEnv
-			in.Provider.Credentials = old.Credentials
-		}
-		normalizeProvider(&in.Provider)
-		cfg.Providers[idx] = in.Provider
-		if err := s.applyConfig(cfg); err != nil {
-			errorJSON(w, 400, err.Error())
+		var saved config.ProviderConfig
+		if _, err := s.mutateConfig(func(cfg *config.Config) error {
+			idx := cfg.ProviderIndex(id)
+			if idx < 0 {
+				return errAdminProviderNotFound
+			}
+			old := cfg.Providers[idx]
+			if in.Provider.ID == "" {
+				in.Provider.ID = old.ID
+			}
+			if in.Provider.ID != old.ID && cfg.ProviderIndex(in.Provider.ID) >= 0 {
+				return errAdminProviderExists
+			}
+			if in.PreserveSecret {
+				in.Provider.APIKey = old.APIKey
+				in.Provider.APIKeyEnv = old.APIKeyEnv
+				in.Provider.Credentials = old.Credentials
+			}
+			normalizeProvider(&in.Provider)
+			cfg.Providers[idx] = in.Provider
+			saved = in.Provider
+			return nil
+		}); err != nil {
+			switch {
+			case errors.Is(err, errAdminProviderNotFound):
+				errorJSON(w, 404, err.Error())
+			case errors.Is(err, errAdminProviderExists):
+				errorJSON(w, 409, err.Error())
+			default:
+				errorJSON(w, 400, err.Error())
+			}
 			return
 		}
 		s.probe.Trigger()
-		writeJSON(w, 200, map[string]any{"saved": true, "provider": providerSummary(in.Provider)})
+		writeJSON(w, 200, map[string]any{"saved": true, "provider": providerSummary(saved)})
 
 	case http.MethodDelete:
-		cfg.Providers = append(cfg.Providers[:idx], cfg.Providers[idx+1:]...)
-		if err := s.applyConfig(cfg); err != nil {
-			errorJSON(w, 400, err.Error())
+		if _, err := s.mutateConfig(func(cfg *config.Config) error {
+			idx := cfg.ProviderIndex(id)
+			if idx < 0 {
+				return errAdminProviderNotFound
+			}
+			cfg.Providers = append(cfg.Providers[:idx], cfg.Providers[idx+1:]...)
+			return nil
+		}); err != nil {
+			if errors.Is(err, errAdminProviderNotFound) {
+				errorJSON(w, 404, err.Error())
+			} else {
+				errorJSON(w, 400, err.Error())
+			}
 			return
 		}
 		writeJSON(w, 200, map[string]any{"deleted": true, "id": id})
