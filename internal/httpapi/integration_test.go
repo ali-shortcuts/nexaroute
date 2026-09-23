@@ -32,7 +32,7 @@ func testGateway(t *testing.T, cfg config.Config) *Server {
 		t.Fatal(err)
 	}
 	rt := router.New(cfg, hm)
-	if cfg.Routing.Strategy == "ready_queue" {
+	if router.IsReadyStrategy(cfg.Routing.Strategy) {
 		for _, d := range rt.All() {
 			hm.RecordSuccess(d.ID, time.Millisecond)
 		}
