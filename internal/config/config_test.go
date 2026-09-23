@@ -316,3 +316,30 @@ func TestLoadRejectsInvalidAdminBindEnvironmentBoolean(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestLoggingZeroControlsArePreserved(t *testing.T) {
+	cfg := Default()
+	cfg.Logging.MaxBackups = 0
+	cfg.Logging.SlowRequestMS = 0
+	cfg.Logging.ConsoleMaxLinesPerMinute = 0
+	cfg.ApplyDefaults()
+	if cfg.Logging.MaxBackups != 0 || cfg.Logging.SlowRequestMS != 0 || cfg.Logging.ConsoleMaxLinesPerMinute != 0 {
+		t.Fatalf("explicit zero logging controls were overwritten: %+v", cfg.Logging)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("explicit zero logging controls should be valid: %v", err)
+	}
+}
+
+func TestLoggingValidationRejectsUnsafeRetention(t *testing.T) {
+	cfg := Default()
+	cfg.Logging.MaxSizeMB = 2048
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("oversized log rotation should be rejected")
+	}
+	cfg = Default()
+	cfg.Logging.AccessMode = "everything"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("unknown access logging mode should be rejected")
+	}
+}

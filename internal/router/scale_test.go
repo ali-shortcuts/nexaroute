@@ -2,10 +2,12 @@ package router
 
 import (
 	"fmt"
-	"github.com/ali-shortcuts/nexaroute/internal/config"
-	"github.com/ali-shortcuts/nexaroute/internal/health"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/ali-shortcuts/nexaroute/internal/config"
+	"github.com/ali-shortcuts/nexaroute/internal/health"
 )
 
 func TestTwentyProvidersHundredModels(t *testing.T) {
@@ -25,5 +27,36 @@ func TestTwentyProvidersHundredModels(t *testing.T) {
 	c := r.Candidates(Requirement{Model: "auto", Streaming: true, Tools: true})
 	if len(c) != 100 {
 		t.Fatalf("want 100 candidates got %d", len(c))
+	}
+}
+
+func TestConcurrentSessionFloodRemainsBounded(t *testing.T) {
+	cfg := config.Default()
+	cfg.Providers = []config.ProviderConfig{{
+		ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "http://example.invalid", Enabled: true,
+		Models: []config.ModelConfig{{ID: "m", Model: "m", Enabled: true, Weight: 1}},
+	}}
+	h := health.New(5, time.Hour)
+	h.RecordSuccess("p/m", time.Millisecond)
+	r := New(cfg, h)
+
+	var wg sync.WaitGroup
+	for g := 0; g < 32; g++ {
+		wg.Add(1)
+		go func(g int) {
+			defer wg.Done()
+			for i := 0; i < 1000; i++ {
+				key := fmt.Sprintf("g-%d-session-%d", g, i)
+				r.ObserveSession(Requirement{Model: "auto", SessionKey: key}, "p/m")
+				if got := r.Candidates(Requirement{Model: "auto", SessionKey: key}); len(got) == 0 {
+					t.Errorf("no candidate for %s", key)
+					return
+				}
+			}
+		}(g)
+	}
+	wg.Wait()
+	if got := r.SessionCount(); got > maxSessionPins {
+		t.Fatalf("session state grew to %d, limit=%d", got, maxSessionPins)
 	}
 }

@@ -441,3 +441,28 @@ func TestRetryAfterDurationIsBoundedAndOverflowSafe(t *testing.T) {
 		t.Fatalf("future HTTP-date => %s want %s", got, max)
 	}
 }
+
+func TestAccessLoggingIsSampledAndDoesNotTreatLongStreamsAsSlowRequests(t *testing.T) {
+	cfg := config.Default()
+	s := &Server{cfg: cfg}
+	if s.shouldLogRequest(http.StatusOK, 100*time.Millisecond, false, 1) {
+		t.Fatal("ordinary success should not be logged before its sample slot")
+	}
+	if !s.shouldLogRequest(http.StatusOK, 100*time.Millisecond, false, uint64(cfg.Logging.SuccessSampleEvery)) {
+		t.Fatal("sample slot should be logged")
+	}
+	if !s.shouldLogRequest(http.StatusBadGateway, 10*time.Millisecond, false, 1) {
+		t.Fatal("errors must always be access-logged")
+	}
+	if !s.shouldLogRequest(http.StatusOK, time.Duration(cfg.Logging.SlowRequestMS+1)*time.Millisecond, false, 1) {
+		t.Fatal("slow non-streaming request should be logged")
+	}
+	if s.shouldLogRequest(http.StatusOK, time.Hour, true, 1) {
+		t.Fatal("normal long-lived stream should not be treated as a slow request")
+	}
+	cfg.Logging.AccessMode = "off"
+	s.cfg = cfg
+	if s.shouldLogRequest(http.StatusInternalServerError, time.Second, false, 1) {
+		t.Fatal("access_mode=off should disable request access lines")
+	}
+}

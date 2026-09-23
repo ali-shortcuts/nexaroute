@@ -16,6 +16,40 @@ type Event struct {
 	ErrorType  string    `json:"error_type,omitempty"`
 }
 
+const (
+	maxCounterKeys       = 256
+	maxEventRequestID    = 128
+	maxEventKind         = 128
+	maxEventDeployment   = 512
+	maxEventMessage      = 4096
+	maxEventErrorType    = 128
+	counterOverflowKey   = "__other__"
+)
+
+func boundedString(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max]
+}
+
+func incrementBoundedCounter(m map[string]uint64, key string) {
+	if key == "" {
+		return
+	}
+	if _, ok := m[key]; ok {
+		m[key]++
+		return
+	}
+	// Reserve one slot for the overflow bucket so even future dynamic event
+	// kinds/error types cannot grow this map without bound.
+	if len(m) >= maxCounterKeys-1 {
+		m[counterOverflowKey]++
+		return
+	}
+	m[key] = 1
+}
+
 type Bus struct {
 	mu          sync.RWMutex
 	max         int
@@ -38,6 +72,11 @@ func (b *Bus) Add(e Event) {
 	if e.Time.IsZero() {
 		e.Time = time.Now()
 	}
+	e.RequestID = boundedString(e.RequestID, maxEventRequestID)
+	e.Kind = boundedString(e.Kind, maxEventKind)
+	e.Deployment = boundedString(e.Deployment, maxEventDeployment)
+	e.Message = boundedString(e.Message, maxEventMessage)
+	e.ErrorType = boundedString(e.ErrorType, maxEventErrorType)
 	if b.count < b.max {
 		idx := (b.start + b.count) % b.max
 		b.items[idx] = e
@@ -46,10 +85,8 @@ func (b *Bus) Add(e Event) {
 		b.items[b.start] = e
 		b.start = (b.start + 1) % b.max
 	}
-	b.counts[e.Kind]++
-	if e.ErrorType != "" {
-		b.errorCounts[e.ErrorType]++
-	}
+	incrementBoundedCounter(b.counts, e.Kind)
+	incrementBoundedCounter(b.errorCounts, e.ErrorType)
 }
 func (b *Bus) Snapshot() []Event {
 	b.mu.RLock()
