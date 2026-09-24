@@ -474,3 +474,97 @@ func TestQuotaExhaustionPressureDeprioritizesProvider(t *testing.T) {
 		t.Fatalf("quota-exhausted provider was not deprioritized: %#v", got)
 	}
 }
+func TestCostAwarePrefersCheaperKnownPriceWithinPriority(t *testing.T) {
+	cfg := config.Default()
+	cfg.Routing.Strategy = "cost_aware"
+	cfg.Routing.SessionAffinity = false
+	cfg.Providers = []config.ProviderConfig{{ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "http://x", Enabled: true, Models: []config.ModelConfig{
+		{ID: "expensive", Model: "expensive", Enabled: true, Priority: 0, Weight: 5, InputCostPerMTok: 10, OutputCostPerMTok: 30},
+		{ID: "cheap", Model: "cheap", Enabled: true, Priority: 0, Weight: 1, InputCostPerMTok: 1, OutputCostPerMTok: 2},
+	}}}
+	h := health.New(5, time.Hour)
+	h.RecordSuccess("p/expensive", time.Millisecond)
+	h.RecordSuccess("p/cheap", 20*time.Millisecond)
+	r := New(cfg, h)
+	got := r.Candidates(Requirement{Model: "auto", EstimatedInputTokens: 10_000, MaxOutputTokens: 2_000})
+	if len(got) != 2 || got[0].Deployment.ID != "p/cheap" {
+		t.Fatalf("cost-aware strategy did not prefer cheaper known price: %#v", got)
+	}
+	if !got[0].PriceKnown || got[0].EstimatedCostUSD <= 0 || got[0].EstimatedCostUSD >= got[1].EstimatedCostUSD {
+		t.Fatalf("unexpected cost estimates: %#v", got)
+	}
+}
+
+func TestCostAwareNeverCrossesConfiguredPriority(t *testing.T) {
+	cfg := config.Default()
+	cfg.Routing.Strategy = "cost_aware"
+	cfg.Routing.SessionAffinity = false
+	cfg.Providers = []config.ProviderConfig{{ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "http://x", Enabled: true, Models: []config.ModelConfig{
+		{ID: "preferred", Model: "preferred", Enabled: true, Priority: 0, Weight: 1, InputCostPerMTok: 50, OutputCostPerMTok: 100},
+		{ID: "cheap", Model: "cheap", Enabled: true, Priority: 1, Weight: 1, InputCostPerMTok: 0.1, OutputCostPerMTok: 0.2},
+	}}}
+	h := health.New(5, time.Hour)
+	h.RecordSuccess("p/preferred", time.Millisecond)
+	h.RecordSuccess("p/cheap", time.Millisecond)
+	got := New(cfg, h).Candidates(Requirement{Model: "auto", EstimatedInputTokens: 1000, MaxOutputTokens: 1000})
+	if len(got) != 2 || got[0].Deployment.ID != "p/preferred" {
+		t.Fatalf("cost ordering crossed configured priority tier: %#v", got)
+	}
+}
+
+func TestCostAwareDoesNotTreatUnknownPricingAsFree(t *testing.T) {
+	cfg := config.Default()
+	cfg.Routing.Strategy = "cost_aware"
+	cfg.Routing.SessionAffinity = false
+	cfg.Providers = []config.ProviderConfig{{ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "http://x", Enabled: true, Models: []config.ModelConfig{
+		{ID: "unknown", Model: "unknown", Enabled: true, Priority: 0, Weight: 100},
+		{ID: "priced", Model: "priced", Enabled: true, Priority: 0, Weight: 1, InputCostPerMTok: 2, OutputCostPerMTok: 4},
+	}}}
+	h := health.New(5, time.Hour)
+	h.RecordSuccess("p/unknown", time.Millisecond)
+	h.RecordSuccess("p/priced", time.Millisecond)
+	got := New(cfg, h).Candidates(Requirement{Model: "auto", EstimatedInputTokens: 1000, MaxOutputTokens: 1000})
+	if len(got) != 2 || got[0].Deployment.ID != "p/priced" || got[1].PriceKnown {
+		t.Fatalf("unknown pricing was treated as zero-cost: %#v", got)
+	}
+}
+
+func TestCostAwareWithoutOutputCeilingFallsBackToNormalScore(t *testing.T) {
+	cfg := config.Default()
+	cfg.Routing.Strategy = "cost_aware"
+	cfg.Routing.SessionAffinity = false
+	cfg.Providers = []config.ProviderConfig{{ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "http://x", Enabled: true, Models: []config.ModelConfig{
+		{ID: "strong", Model: "strong", Enabled: true, Priority: 0, Weight: 5, InputCostPerMTok: 20, OutputCostPerMTok: 40},
+		{ID: "cheap", Model: "cheap", Enabled: true, Priority: 0, Weight: 1, InputCostPerMTok: 1, OutputCostPerMTok: 2},
+	}}}
+	h := health.New(5, time.Hour)
+	h.RecordSuccess("p/strong", time.Millisecond)
+	h.RecordSuccess("p/cheap", time.Millisecond)
+	got := New(cfg, h).Candidates(Requirement{Model: "auto", EstimatedInputTokens: 1000})
+	if len(got) != 2 || got[0].Deployment.ID != "p/strong" || got[0].PriceKnown || got[1].PriceKnown {
+		t.Fatalf("incomplete request cost should fall back to ordinary score: %#v", got)
+	}
+}
+
+func TestProactiveQuotaPressureDeprioritizesLowHeadroomProvider(t *testing.T) {
+	cfg := config.Default()
+	cfg.Routing.Strategy = "ready_mesh"
+	cfg.Routing.P2CWindow = 2
+	cfg.Providers = []config.ProviderConfig{
+		{ID: "low", Name: "Low", Type: "openai_compatible", BaseURL: "http://x", Enabled: true, Models: []config.ModelConfig{{ID: "m", Model: "m1", Enabled: true, Weight: 1}}},
+		{ID: "room", Name: "Room", Type: "openai_compatible", BaseURL: "http://y", Enabled: true, Models: []config.ModelConfig{{ID: "m", Model: "m2", Enabled: true, Weight: 1}}},
+	}
+	h := health.New(5, time.Hour)
+	h.RecordSuccess("low/m", time.Millisecond)
+	h.RecordSuccess("room/m", time.Millisecond)
+	got := New(cfg, h).Candidates(Requirement{
+		Model: "auto", SelectionKey: "quota-headroom",
+		ProviderLoad: map[string]ProviderLoad{
+			"low":  {Limit: 32, QuotaPressure: 3.2},
+			"room": {Limit: 32},
+		},
+	})
+	if len(got) != 2 || got[0].Deployment.ProviderID != "room" {
+		t.Fatalf("low quota headroom was not proactively deprioritized: %#v", got)
+	}
+}
