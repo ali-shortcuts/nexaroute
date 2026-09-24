@@ -48,6 +48,7 @@ type httpAdapter struct {
 	streamC            *http.Client
 	sem                chan struct{}
 	credMu             sync.RWMutex
+	quotaMu            sync.Mutex
 	creds              []credentialState
 	rr                 uint64
 	forwardAllowed     map[string]struct{}
@@ -141,8 +142,15 @@ func (a *httpAdapter) Stats() ProviderStats {
 			cooling++
 		}
 	}
+	a.quotaMu.Lock()
+	requestLimit := a.requestLimit.Load()
 	remainingRequests := a.remainingRequests.Load()
+	tokenLimit := a.tokenLimit.Load()
 	remainingTokens := a.remainingTokens.Load()
+	requestResetUnix := a.requestResetUnix.Load()
+	tokenResetUnix := a.tokenResetUnix.Load()
+	rateLimitResetUnix := a.rateLimitResetUnix.Load()
+	a.quotaMu.Unlock()
 	reservedRequests := a.reservedRequests.Load()
 	reservedTokens := a.reservedTokens.Load()
 	effectiveRequests := remainingRequests
@@ -163,12 +171,12 @@ func (a *httpAdapter) Stats() ProviderStats {
 		ID: a.p.ID, MaxConcurrency: cap(a.sem),
 		ActiveRequests: a.active.Load(), WaitingRequests: a.waiting.Load(),
 		Credentials: len(a.creds), CredentialsCooling: cooling,
-		RequestLimit: a.requestLimit.Load(), RemainingRequests: remainingRequests,
+		RequestLimit: requestLimit, RemainingRequests: remainingRequests,
 		ReservedRequests: reservedRequests, EffectiveRemainingRequests: effectiveRequests,
-		TokenLimit: a.tokenLimit.Load(), RemainingTokens: remainingTokens,
+		TokenLimit: tokenLimit, RemainingTokens: remainingTokens,
 		ReservedTokens: reservedTokens, EffectiveRemainingTokens: effectiveTokens,
-		RequestResetUnix: a.requestResetUnix.Load(), TokenResetUnix: a.tokenResetUnix.Load(),
-		RateLimitResetUnix: a.rateLimitResetUnix.Load(),
+		RequestResetUnix: requestResetUnix, TokenResetUnix: tokenResetUnix,
+		RateLimitResetUnix: rateLimitResetUnix,
 	}
 }
 
@@ -485,44 +493,96 @@ type quotaObservation struct {
 	TokenRemaining   bool
 }
 
+// mergeQuotaWindow keeps remaining quota monotonic inside one still-active
+// reset window. Concurrent upstream responses can arrive out of order; a
+// stale response reporting a larger remaining value must not erase newer,
+// lower evidence. Once the current window expires, a fresh observation may
+// legitimately establish a higher budget.
+func mergeQuotaWindow(currentRemaining, currentReset int64, observedRemaining int64, hasRemaining bool, observedReset int64, hasReset bool, nowUnix int64) (int64, int64) {
+	nextRemaining := currentRemaining
+	nextReset := currentReset
+	activeWindow := currentReset > nowUnix
+
+	if !activeWindow {
+		if hasRemaining {
+			nextRemaining = observedRemaining
+		}
+		if hasReset {
+			nextReset = observedReset
+		}
+		return nextRemaining, nextReset
+	}
+
+	if hasRemaining && (currentRemaining < 0 || observedRemaining < currentRemaining) {
+		nextRemaining = observedRemaining
+	}
+	// Never extend an already-active window from a later/stale response.
+	// A shorter corrected deadline is conservative and permits fresh budget
+	// evidence to take effect sooner.
+	if hasReset && observedReset > nowUnix && observedReset < currentReset {
+		nextReset = observedReset
+	}
+	return nextRemaining, nextReset
+}
+
 func (a *httpAdapter) observeRateLimitHeaders(h http.Header) quotaObservation {
-	obs := quotaObservation{}
-	if n, ok := parseQuotaIntHeader(h, "x-ratelimit-limit-requests", "anthropic-ratelimit-requests-limit"); ok {
-		a.requestLimit.Store(n)
-	}
-	if n, ok := parseQuotaIntHeader(h, "x-ratelimit-remaining-requests", "anthropic-ratelimit-requests-remaining"); ok {
-		a.remainingRequests.Store(n)
-		obs.RequestRemaining = true
-	}
-	if n, ok := parseQuotaIntHeader(h, "x-ratelimit-limit-tokens", "anthropic-ratelimit-tokens-limit"); ok {
-		a.tokenLimit.Store(n)
-	}
-	if n, ok := parseQuotaIntHeader(h, "x-ratelimit-remaining-tokens", "anthropic-ratelimit-tokens-remaining"); ok {
-		a.remainingTokens.Store(n)
-		obs.TokenRemaining = true
-	}
-	requestReset, requestOK := parseQuotaResetHeader(h,
+	requestLimit, requestLimitOK := parseQuotaIntHeader(h, "x-ratelimit-limit-requests", "anthropic-ratelimit-requests-limit")
+	requestRemaining, requestRemainingOK := parseQuotaIntHeader(h, "x-ratelimit-remaining-requests", "anthropic-ratelimit-requests-remaining")
+	tokenLimit, tokenLimitOK := parseQuotaIntHeader(h, "x-ratelimit-limit-tokens", "anthropic-ratelimit-tokens-limit")
+	tokenRemaining, tokenRemainingOK := parseQuotaIntHeader(h, "x-ratelimit-remaining-tokens", "anthropic-ratelimit-tokens-remaining")
+	requestReset, requestResetOK := parseQuotaResetHeader(h,
 		"x-ratelimit-reset-requests", "anthropic-ratelimit-requests-reset",
 	)
-	if requestOK {
-		a.requestResetUnix.Store(requestReset)
-	}
-	tokenReset, tokenOK := parseQuotaResetHeader(h,
+	tokenReset, tokenResetOK := parseQuotaResetHeader(h,
 		"x-ratelimit-reset-tokens", "anthropic-ratelimit-tokens-reset",
 	)
-	if tokenOK {
-		a.tokenResetUnix.Store(tokenReset)
+
+	nowUnix := time.Now().Unix()
+	a.quotaMu.Lock()
+	defer a.quotaMu.Unlock()
+
+	if requestLimitOK {
+		a.requestLimit.Store(requestLimit)
 	}
-	// Preserve the legacy summary reset as the later known deadline. This is
-	// conservative for dashboards; routing uses the resource-specific resets.
-	reset := requestReset
-	if tokenReset > reset {
-		reset = tokenReset
+	if tokenLimitOK {
+		a.tokenLimit.Store(tokenLimit)
 	}
-	if reset > 0 {
-		a.rateLimitResetUnix.Store(reset)
+
+	currentRequestReset := a.requestResetUnix.Load()
+	nextRequests, nextRequestReset := mergeQuotaWindow(
+		a.remainingRequests.Load(), currentRequestReset,
+		requestRemaining, requestRemainingOK, requestReset, requestResetOK, nowUnix,
+	)
+	if requestRemainingOK {
+		a.remainingRequests.Store(nextRequests)
 	}
-	return obs
+	if requestResetOK || currentRequestReset <= nowUnix {
+		a.requestResetUnix.Store(nextRequestReset)
+	}
+
+	currentTokenReset := a.tokenResetUnix.Load()
+	nextTokens, nextTokenReset := mergeQuotaWindow(
+		a.remainingTokens.Load(), currentTokenReset,
+		tokenRemaining, tokenRemainingOK, tokenReset, tokenResetOK, nowUnix,
+	)
+	if tokenRemainingOK {
+		a.remainingTokens.Store(nextTokens)
+	}
+	if tokenResetOK || currentTokenReset <= nowUnix {
+		a.tokenResetUnix.Store(nextTokenReset)
+	}
+
+	// Preserve the legacy summary reset as the later merged resource deadline.
+	summaryReset := a.requestResetUnix.Load()
+	if t := a.tokenResetUnix.Load(); t > summaryReset {
+		summaryReset = t
+	}
+	a.rateLimitResetUnix.Store(summaryReset)
+
+	// Even a stale higher remaining header is fresh evidence for this response
+	// and can safely release that response's local reservation. It simply may
+	// not raise the shared budget state inside the active window.
+	return quotaObservation{RequestRemaining: requestRemainingOK, TokenRemaining: tokenRemainingOK}
 }
 
 func (a *httpAdapter) applyHeaders(req *http.Request, forward http.Header) {
