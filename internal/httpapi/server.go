@@ -209,6 +209,7 @@ func providerProbeIdentityEqual(a, b config.ProviderConfig) bool {
 		a.MessagesPath == b.MessagesPath &&
 		a.ModelsPath == b.ModelsPath &&
 		a.CountTokensPath == b.CountTokensPath &&
+		a.ResponsesPath == b.ResponsesPath &&
 		a.Enabled == b.Enabled
 }
 
