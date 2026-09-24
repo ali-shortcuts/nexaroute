@@ -173,6 +173,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Gateway-Deployment", c.Deployment.ID)
 		w.Header().Set("X-Gateway-Provider", c.Deployment.ProviderID)
 		w.Header().Set("X-Gateway-Upstream-Model", c.Deployment.Model)
+		resp.Body = s.observeUsageBody(resp.Body, c.Deployment, in.Stream)
 		if in.Stream {
 			deploymentID := c.Deployment.ID
 			resp.Body = observeFirstByte(resp.Body, start, func(d time.Duration) { s.hm.RecordTTFT(deploymentID, d) })
