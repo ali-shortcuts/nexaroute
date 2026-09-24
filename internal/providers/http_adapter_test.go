@@ -506,6 +506,7 @@ func TestResponsesNativeProbeUsesResponsesPathAndEnvelope(t *testing.T) {
 		{"error envelope", `{"error":{"message":"bad key"},"object":"response","status":"completed","output":[{}]}`, false},
 		{"chat envelope", `{"choices":[{"message":{"content":"OK"}}]}`, false},
 		{"null output", `{"object":"response","status":"completed","output":null}`, false},
+		{"untyped output", `{"object":"response","status":"completed","output":[{}]}`, false},
 		{"unfinished", `{"object":"response","status":"in_progress","output":[{}]}`, false},
 		{"malformed", `{"object":"response","status":"completed","output":[`, false},
 	}

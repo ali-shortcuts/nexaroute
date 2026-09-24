@@ -377,6 +377,7 @@ func rawOrEmptyObject(raw json.RawMessage) json.RawMessage {
 // ResponsesResponse is a permissive decoding target for /v1/responses output.
 type ResponsesResponse struct {
 	ID                string                `json:"id"`
+	Object            string                `json:"object"`
 	Model             string                `json:"model"`
 	Status            string                `json:"status"`
 	Output            []ResponsesOutputItem `json:"output"`
@@ -413,6 +414,17 @@ func DecodeResponsesResponse(b []byte) (Response, error) {
 	var in ResponsesResponse
 	if err := json.Unmarshal(b, &in); err != nil {
 		return Response{}, fmt.Errorf("invalid Responses body: %w", err)
+	}
+	if in.Error != nil {
+		return Response{}, fmt.Errorf("upstream returned a Responses error envelope")
+	}
+	if in.Object != "response" || (in.Status != "completed" && in.Status != "incomplete") || in.Output == nil {
+		return Response{}, fmt.Errorf("invalid Responses envelope: missing response object, terminal status, or output array")
+	}
+	for _, item := range in.Output {
+		if item.Type == "" {
+			return Response{}, fmt.Errorf("invalid Responses output item: missing type")
+		}
 	}
 	out := Response{ID: in.ID, Model: in.Model, StopReason: StopEndTurn, Raw: append(json.RawMessage(nil), b...)}
 	sawToolCall := false
@@ -487,7 +499,7 @@ func EncodeResponsesResponse(in Response, requestedModel string) ResponsesRespon
 		status = "incomplete"
 	}
 	out := ResponsesResponse{
-		ID: in.ID, Model: requestedModel, Status: status,
+		ID: in.ID, Object: "response", Model: requestedModel, Status: status,
 		Output: []ResponsesOutputItem{},
 		Usage:  &ResponsesUsage{InputTokens: in.Usage.InputTokens, OutputTokens: in.Usage.OutputTokens},
 	}

@@ -482,3 +482,33 @@ func TestHotReloadRejectsOldRepairEvidence(t *testing.T) {
 		t.Fatalf("old endpoint response re-admitted replacement: %+v", st)
 	}
 }
+
+func TestResponsesIngressRejectsMalformedNativeSuccess(t *testing.T) {
+	for _, tc := range []struct{ name, body string }{
+		{"embedded error", `{"object":"response","status":"completed","output":[],"error":{"message":"bad key"}}`},
+		{"unfinished response", `{"object":"response","status":"in_progress","output":[]}`},
+		{"missing output", `{"object":"response","status":"completed","output":null}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, tc.body)
+			}))
+			defer up.Close()
+			cfg := config.Default()
+			cfg.Probe.Enabled = false
+			cfg.Providers = []config.ProviderConfig{{ID: "p", Type: "openai_responses", BaseURL: up.URL,
+				AuthMode: "none", Enabled: true, Models: []config.ModelConfig{{ID: "m", Model: "m", Enabled: true, Weight: 1}}}}
+			s := testGateway(t, cfg)
+			rr := httptest.NewRecorder()
+			s.Handler().ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "http://gateway/v1/responses",
+				strings.NewReader(`{"model":"m","input":"hi"}`)))
+			if rr.Code != http.StatusBadGateway {
+				t.Fatalf("malformed HTTP 200 was treated as successful: status=%d body=%s", rr.Code, rr.Body.String())
+			}
+			if st := s.hm.Get("p/m"); st.Status != health.Degraded {
+				t.Fatalf("invalid response left deployment ready: %+v", st)
+			}
+		})
+	}
+}

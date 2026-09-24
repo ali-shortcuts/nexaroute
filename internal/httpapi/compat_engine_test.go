@@ -145,8 +145,8 @@ func TestResponsesIngressAgainstOpenAIUpstream(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
 		t.Fatal(err)
 	}
-	if resp["status"] != "completed" {
-		t.Fatalf("status=%v", resp["status"])
+	if resp["status"] != "completed" || resp["object"] != "response" {
+		t.Fatalf("invalid Responses envelope: %v", resp)
 	}
 	output, _ := resp["output"].([]any)
 	found := false

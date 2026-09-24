@@ -887,9 +887,16 @@ func (a *httpAdapter) validateProbeResponse(data []byte) error {
 		if err := json.Unmarshal(root["status"], &status); err != nil || (status != "completed" && status != "incomplete") {
 			return errors.New("probe returned an invalid Responses envelope: response did not finish")
 		}
-		var output []map[string]json.RawMessage
+		var output []struct {
+			Type string `json:"type"`
+		}
 		if err := json.Unmarshal(root["output"], &output); err != nil || len(output) == 0 {
 			return errors.New("probe returned an invalid Responses envelope: output missing")
+		}
+		for _, item := range output {
+			if item.Type == "" {
+				return errors.New("probe returned an invalid Responses envelope: output item missing type")
+			}
 		}
 	default:
 		var choices []map[string]json.RawMessage

@@ -633,6 +633,7 @@ func TestAnthropicEmitterPreservesStopSequenceReason(t *testing.T) {
 func TestResponsesNonStreamFunctionCallSignalsToolUse(t *testing.T) {
 	body := []byte(`{
 		"id":"resp_tool",
+		"object":"response",
 		"model":"upstream",
 		"status":"completed",
 		"output":[{"type":"function_call","call_id":"c1","name":"lookup","arguments":"{\"q\":\"x\"}","status":"completed"}],
@@ -647,5 +648,32 @@ func TestResponsesNonStreamFunctionCallSignalsToolUse(t *testing.T) {
 	}
 	if !got.HasToolCalls() {
 		t.Fatalf("function-call block lost: %+v", got)
+	}
+}
+
+func TestResponsesDecoderRejectsMalformedSuccessEnvelope(t *testing.T) {
+	for _, tc := range []struct {
+		name, body string
+		valid      bool
+	}{
+		{"error instead of response", `{"error":{"message":"bad key"}}`, false},
+		{"embedded error", `{"object":"response","status":"completed","output":[],"error":{"message":"failed"}}`, false},
+		{"chat response", `{"choices":[{"message":{"content":"hi"}}]}`, false},
+		{"still running", `{"object":"response","status":"in_progress","output":[]}`, false},
+		{"missing output", `{"object":"response","status":"completed"}`, false},
+		{"null output", `{"object":"response","status":"completed","output":null}`, false},
+		{"untyped output", `{"object":"response","status":"completed","output":[{}]}`, false},
+		{"empty but complete", `{"object":"response","status":"completed","output":[]}`, true},
+		{"incomplete", `{"object":"response","status":"incomplete","output":[]}`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := DecodeResponsesResponse([]byte(tc.body))
+			if (err == nil) != tc.valid {
+				t.Fatalf("valid=%v error=%v", tc.valid, err)
+			}
+		})
+	}
+	if encoded := EncodeResponsesResponse(Response{}, "client-model"); encoded.Object != "response" {
+		t.Fatalf("gateway emitted non-Responses object: %+v", encoded)
 	}
 }
