@@ -286,8 +286,8 @@ function renderDonut(counts, total) {
     ['donutGood', 'healthy', counts.healthy || 0, 'var(--good)'],
     ['donutUnknown', 'unknown', counts.unknown || 0, '#5c718a'],
     ['donutDegraded', 'degraded', counts.degraded || 0, 'var(--warn)'],
-    ['donutCooldown', 'cooldown', counts.cooldown || 0, 'var(--bad)'],
-    ['donutCooldown', 'half_open', counts.half_open || 0, '#c9b8ff']
+    ['donutHalfOpen', 'half_open', counts.half_open || 0, '#c9b8ff'],
+    ['donutCooldown', 'cooldown', counts.cooldown || 0, 'var(--bad)']
   ];
   const r = 48, circ = 2 * Math.PI * r;
   let offset = 0;
@@ -296,15 +296,8 @@ function renderDonut(counts, total) {
     const el = $('#' + id);
     const frac = total ? count / total : 0;
     const len = frac * circ;
-    if (id === 'donutCooldown' && label === 'half_open') {
-      // reuse the cooldown circle element sequentially for half-open
-      el.setAttribute('stroke-dasharray', `${len} ${circ - len}`);
-      el.setAttribute('stroke-dashoffset', -offset);
-      el.setAttribute('stroke', color);
-    } else {
-      el.setAttribute('stroke-dasharray', `${len} ${circ - len}`);
-      el.setAttribute('stroke-dashoffset', -offset);
-    }
+    el.setAttribute('stroke-dasharray', `${len} ${circ - len}`);
+    el.setAttribute('stroke-dashoffset', -offset);
     offset += len;
     if (count > 0 || label === 'healthy') legend.push(`<li><i style="background:${color}"></i>${label}<b>${fmtInt(count)}</b></li>`);
   }
