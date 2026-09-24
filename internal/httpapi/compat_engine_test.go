@@ -364,3 +364,61 @@ func TestCompatMatrixEndpoint(t *testing.T) {
 		t.Fatalf("protocol=%v", sc["protocol"])
 	}
 }
+func TestStatefulResponsesOnlyRouteToResponsesNative(t *testing.T) {
+	var chatCalls atomic.Int32
+	chat := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		chatCalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"chat","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"wrong upstream"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`))
+	}))
+	defer chat.Close()
+
+	var responsesCalls atomic.Int32
+	var received map[string]any
+	responses := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		responsesCalls.Add(1)
+		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
+			t.Errorf("decode upstream payload: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"resp_new","model":"resp-up","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"continued"}]}],"usage":{"input_tokens":2,"output_tokens":1}}`))
+	}))
+	defer responses.Close()
+
+	cfg := config.Default()
+	cfg.Probe.Enabled = false
+	cfg.Providers = []config.ProviderConfig{
+		{
+			ID: "chat", Name: "Chat", Type: "openai_compatible", BaseURL: chat.URL, AuthMode: "none", Enabled: true,
+			Models: []config.ModelConfig{{ID: "m", Model: "chat-up", Aliases: []string{"client"}, Enabled: true, Priority: 0, Weight: 10, Capabilities: config.Capabilities{Streaming: true}}},
+		},
+		{
+			ID: "responses", Name: "Responses", Type: "openai_responses", BaseURL: responses.URL, ResponsesPath: "/v1/responses", AuthMode: "none", Enabled: true,
+			Models: []config.ModelConfig{{ID: "m", Model: "resp-up", Aliases: []string{"client"}, Enabled: true, Priority: 10, Weight: 1, Capabilities: config.Capabilities{Streaming: true}}},
+		},
+	}
+	s := testGateway(t, cfg)
+	s.SyncCapabilityContracts()
+
+	body := `{"model":"client","input":"continue","previous_response_id":"resp_prev","store":false}`
+	req := httptest.NewRequest(http.MethodPost, "http://gateway/v1/responses", strings.NewReader(body))
+	rr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	if chatCalls.Load() != 0 {
+		t.Fatalf("stateful Responses request was lossily routed to Chat provider: calls=%d", chatCalls.Load())
+	}
+	if responsesCalls.Load() != 1 {
+		t.Fatalf("Responses-native calls=%d want 1", responsesCalls.Load())
+	}
+	if received["previous_response_id"] != "resp_prev" {
+		t.Fatalf("previous_response_id not preserved upstream: %#v", received)
+	}
+	store, ok := received["store"].(bool)
+	if !ok || store {
+		t.Fatalf("store=false not preserved upstream: %#v", received)
+	}
+}
