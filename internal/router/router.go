@@ -105,7 +105,9 @@ func New(cfg config.Config, hm *health.Manager) *Router {
 	r.Reload(cfg)
 	return r
 }
-func IsReadyStrategy(s string) bool { return s == "ready_mesh" || s == "ready_queue" || s == "cost_aware" }
+func IsReadyStrategy(s string) bool {
+	return s == "ready_mesh" || s == "ready_queue" || s == "cost_aware"
+}
 
 func (r *Router) Reload(cfg config.Config) {
 	all := make([]Deployment, 0)
