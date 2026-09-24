@@ -143,6 +143,7 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 		"snapshot_truncated": truncated,
 		"health":             healthAll,
 		"health_counts":      healthCounts,
+		"provider_health":    s.hm.ProviderSnapshot(),
 		"events":             s.bus.SnapshotLimit(eventLimit),
 		"provider_stats":     s.reg.Stats(),
 		"provider_pressure":  providerPressure(s.reg.Stats()),
