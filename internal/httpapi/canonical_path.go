@@ -104,6 +104,13 @@ func (s *Server) canonicalStreamPump(
 			break
 		}
 		for _, ev := range evs {
+			if kind == "anthropic" && ev.Type == canonical.StreamEnd && terminal {
+				// Anthropic normally reports the semantic stop reason in
+				// message_delta and then follows with message_stop. The latter
+				// must terminate framing without overwriting tool_use,
+				// max_tokens, stop_sequence, refusal, etc. with end_turn.
+				continue
+			}
 			if kind == "anthropic" {
 				switch ev.Type {
 				case canonical.StreamToolStart:
