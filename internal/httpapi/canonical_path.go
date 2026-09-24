@@ -145,8 +145,13 @@ func (s *Server) canonicalStreamPump(
 		streamErr = io.ErrUnexpectedEOF
 		_ = emitter.Emit(canonical.StreamEvent{Type: canonical.StreamError, ErrorMsg: "upstream stream ended before completion"})
 	}
-	if finErr := emitter.Finish(); finErr != nil && streamErr == nil {
-		streamErr = finErr
+	// A stream error is terminal by itself. Calling Finish after emitting an
+	// error would append a success tail (for example response.completed or
+	// [DONE]) and give clients contradictory terminal states.
+	if streamErr == nil && terminal {
+		if finErr := emitter.Finish(); finErr != nil {
+			streamErr = finErr
+		}
 	}
 	if streamErr == nil && terminal && usageHook != nil && usageSeen {
 		usageHook(inputTokens, outputTokens)
