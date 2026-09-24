@@ -40,26 +40,26 @@ type AdminConfig struct {
 }
 
 type RoutingConfig struct {
-	Strategy                   string  `json:"strategy"`
-	FallbackOnUnknownModel     bool    `json:"fallback_on_unknown_model"`
-	SessionAffinity            bool    `json:"session_affinity"`
-	SessionTTLSeconds          int     `json:"session_ttl_seconds"`
-	P2CWindow                  int     `json:"p2c_window"`
-	MaxAttempts                int     `json:"max_attempts"`
-	MaxInflightRequests        int     `json:"max_inflight_requests"`
+	Strategy                     string  `json:"strategy"`
+	FallbackOnUnknownModel       bool    `json:"fallback_on_unknown_model"`
+	SessionAffinity              bool    `json:"session_affinity"`
+	SessionTTLSeconds            int     `json:"session_ttl_seconds"`
+	P2CWindow                    int     `json:"p2c_window"`
+	MaxAttempts                  int     `json:"max_attempts"`
+	MaxInflightRequests          int     `json:"max_inflight_requests"`
 	FailureThreshold             int     `json:"failure_threshold"`
 	CooldownSeconds              int     `json:"cooldown_seconds"`
 	ProviderFailureThreshold     int     `json:"provider_failure_threshold"`
 	ProviderFailureWindowSeconds int     `json:"provider_failure_window_seconds"`
 	ProviderCooldownSeconds      int     `json:"provider_cooldown_seconds"`
 	CapabilityFailureThreshold   int     `json:"capability_failure_threshold"`
-	CapabilityCooldownSeconds  int     `json:"capability_cooldown_seconds"`
-	RequestTimeoutMS           int     `json:"request_timeout_ms"`
-	LatencyWeight              float64 `json:"latency_weight"`
-	FailureWeight              float64 `json:"failure_weight"`
-	CapacityWeight             float64 `json:"capacity_weight"`
-	RetryBackoffMS             int     `json:"retry_backoff_ms"`
-	MaxRetryAfterSeconds       int     `json:"max_retry_after_seconds"`
+	CapabilityCooldownSeconds    int     `json:"capability_cooldown_seconds"`
+	RequestTimeoutMS             int     `json:"request_timeout_ms"`
+	LatencyWeight                float64 `json:"latency_weight"`
+	FailureWeight                float64 `json:"failure_weight"`
+	CapacityWeight               float64 `json:"capacity_weight"`
+	RetryBackoffMS               int     `json:"retry_backoff_ms"`
+	MaxRetryAfterSeconds         int     `json:"max_retry_after_seconds"`
 }
 
 type ProbeConfig struct {
