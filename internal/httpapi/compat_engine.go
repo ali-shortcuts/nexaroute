@@ -490,6 +490,10 @@ func (t adapterTransport) Do(ctx context.Context, payload []byte, stream bool, f
 	return t.a.Do(ctx, payload, stream, forward)
 }
 
+func (t adapterTransport) DoPath(ctx context.Context, method, path string, payload []byte, stream bool, forward http.Header) (*http.Response, error) {
+	return t.a.DoPath(ctx, method, path, payload, stream, forward)
+}
+
 func (t adapterTransport) RedactBody(b []byte) []byte {
 	return t.a.RedactBody(b)
 }
