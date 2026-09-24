@@ -100,7 +100,7 @@ Important controls:
 - `fallback_on_unknown_model`
 - `max_attempts`
 - `max_inflight_requests` — global admission limit for expensive data-plane POST requests; default `256`, range `1..10000`. Health, readiness, metrics, model listing, and Admin API remain observable when the data plane is saturated.
-- `admission_queue_timeout_ms` — how long a request may queue for an in-flight slot when the gateway is at capacity (default `30000`, `0` = reject immediately). A burst of Claude Code sub-agents waits instead of failing.
+- `admission_queue_timeout_ms` — how long a request may queue for an in-flight slot when the gateway is at capacity (default `0` = wait until the client disconnects so a live Claude Code / sub-agent call is served; a positive value is a cap after which the gateway 503s).
 - `provider_queue_timeout_ms` — how long one attempt waits for a provider concurrency slot before spilling to the next candidate (default `30000`).
 - `failure_threshold` (legacy/other routing strategies)
 - `cooldown_seconds` (default `1800` for supervised ready-strategy recovery)

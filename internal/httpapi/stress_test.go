@@ -51,6 +51,7 @@ func TestStressGlobalAdmissionKeepsControlPlaneResponsive(t *testing.T) {
 	cfg := config.Default()
 	cfg.Probe.Enabled = false
 	cfg.Routing.MaxInflightRequests = 8
+	cfg.Routing.AdmissionQueueTimeoutMS = 1
 	cfg.Routing.MaxAttempts = 1
 	cfg.Providers = []config.ProviderConfig{{
 		ID: "p", Name: "P", Type: "openai_compatible", BaseURL: up.URL,

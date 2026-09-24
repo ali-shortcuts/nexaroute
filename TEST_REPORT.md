@@ -50,7 +50,7 @@ Every normal CI run also executes one bounded stress pass covering:
 - translated stream terminal validation and client-write failure;
 - strict health-probe response validation;
 - bounded request/config/discovery/upstream payloads;
-- global admission/overload behavior, including a 30s admission queue that absorbs parallel sub-agent streams, 32MiB SSE line bounds, and an unlimited MaxConnsPerHost behind the provider semaphore;
+- global admission/overload behavior, including an admission queue that waits while the client is connected (so parallel sub-agent streams drain instead of 503ing), 32MiB SSE line bounds, and an unlimited MaxConnsPerHost behind the provider semaphore;
 - config resource limits and invalid negative values;
 - request-ID sanitization and header validation;
 - secret redaction across credential rotation;

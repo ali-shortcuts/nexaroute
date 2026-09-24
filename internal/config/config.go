@@ -242,7 +242,7 @@ func Default() Config {
 			RequestTimeoutMS: 120000, AttemptTimeoutMS: 0, LatencyWeight: 0.015, FailureWeight: 25, CapacityWeight: 35,
 			RetryBackoffMS: 150, MaxRetryAfterSeconds: 60,
 			HedgeDelayMS: 0, RetryBudgetRatio: 0.2, StreamMaxDurationSeconds: 1800,
-			AdmissionQueueTimeoutMS: 30000, ProviderQueueTimeoutMS: 30000,
+			AdmissionQueueTimeoutMS: 0, ProviderQueueTimeoutMS: 30000,
 		},
 		Probe: ProbeConfig{Enabled: true, OnStart: true, IntervalSeconds: 120, ReadyLeaseSeconds: 300, TimeoutMS: 8000, MaxTokens: 1, Concurrency: 16, RecoveryAttempts: 5, RecoveryRetryMS: 500},
 	}
@@ -720,8 +720,9 @@ func (c Config) StreamMaxDuration() time.Duration {
 }
 
 // AdmissionQueueTimeout bounds how long a data-plane request waits for a
-// global admission slot before the gateway rejects it at capacity. 0 fails
-// fast immediately.
+// global admission slot. 0 waits until the client disconnects so a live
+// Claude Code / sub-agent call is served instead of 503'd; a positive
+// value is a cap after which the gateway rejects with 503.
 func (c Config) AdmissionQueueTimeout() time.Duration {
 	return time.Duration(c.Routing.AdmissionQueueTimeoutMS) * time.Millisecond
 }

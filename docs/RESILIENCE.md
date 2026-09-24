@@ -84,9 +84,10 @@ of answering instant 503s or queueing behind one busy provider:
   deployment.
 
 Tuning for parallel-agent bursts: keep `max_inflight_requests` above the
-expected parallelism (default 256), keep the admission queue timeout in
-tens of seconds (default 30s) so a terminal that fires several sub-agents
-together waits instead of 503ing, and keep the provider queue timeout
+expected parallelism (default 256). `admission_queue_timeout_ms` default `0`
+waits until the caller disconnects, so a live Claude Code session (main
+agent + sub-agents) is served instead of 503'd while it is still waiting.
+A positive value is an optional cap. Keep the provider queue timeout
 (default 30s) well under the request timeout so a spill still has budget
 to complete elsewhere. Stream idle default is 600s so thinking models that
 pause between tokens are not killed. Request/response caps: 32 MB ingress

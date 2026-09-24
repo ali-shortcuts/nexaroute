@@ -389,20 +389,28 @@ func (s *Server) admissionQueueTimeout() time.Duration {
 }
 
 // acquireDataPlane admits a data-plane request into the bounded global
-// inflight set. When the gateway is momentarily at capacity the request
-// waits for a release instead of being rejected outright, absorbing agent
-// bursts (dozens of parallel subagent calls); the wait is bounded by the
-// admission queue timeout and by client cancellation.
+// inflight set. When the gateway is at capacity the request waits for a
+// release so a Claude Code burst (main agent + sub-agents) is served
+// instead of 503'd. timeout==0 waits until the client disconnects;
+// a positive timeout is a cap, after which the request is rejected.
 func (s *Server) acquireDataPlane(ctx context.Context) bool {
-	limit := s.admissionLimit()
-	if s.tryInflight(limit) {
+	if s.tryInflight(s.admissionLimit()) {
 		return true
 	}
 	timeout := s.admissionQueueTimeout()
-	if timeout <= 0 {
-		return false
-	}
 	s.admissionWaits.Add(1)
+	if timeout <= 0 {
+		for {
+			select {
+			case <-ctx.Done():
+				return false
+			case <-s.admissionWake:
+				if s.tryInflight(s.admissionLimit()) {
+					return true
+				}
+			}
+		}
+	}
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	for {
@@ -410,9 +418,9 @@ func (s *Server) acquireDataPlane(ctx context.Context) bool {
 		case <-ctx.Done():
 			return false
 		case <-timer.C:
-			return s.tryInflight(limit)
+			return s.tryInflight(s.admissionLimit())
 		case <-s.admissionWake:
-			if s.tryInflight(limit) {
+			if s.tryInflight(s.admissionLimit()) {
 				return true
 			}
 		}

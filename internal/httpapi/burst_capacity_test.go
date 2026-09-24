@@ -55,7 +55,7 @@ func TestAdmissionQueueAbsorbsBurst(t *testing.T) {
 	cfg := config.Default()
 	cfg.Probe.Enabled = false
 	cfg.Routing.MaxInflightRequests = 2
-	cfg.Routing.AdmissionQueueTimeoutMS = 5000
+	cfg.Routing.AdmissionQueueTimeoutMS = 0
 	cfg.Providers = []config.ProviderConfig{burstProvider("p", up.URL, 8, 0)}
 	s := testGateway(t, cfg)
 
@@ -81,6 +81,58 @@ func TestAdmissionQueueAbsorbsBurst(t *testing.T) {
 	}
 	if got := burstKinds(s, "gateway_overloaded"); got != 0 {
 		t.Fatalf("gateway_overloaded events=%d want 0", got)
+	}
+}
+
+// timeout=0 must wait until a slot frees (as long as the client is still
+// connected) instead of 503'ing a live Claude Code / sub-agent call.
+func TestAdmissionQueueZeroWaitsUntilClientGone(t *testing.T) {
+	release := make(chan struct{})
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-release:
+		case <-r.Context().Done():
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, burstOpenAIResponse)
+	}))
+	defer up.Close()
+	cfg := config.Default()
+	cfg.Probe.Enabled = false
+	cfg.Routing.MaxInflightRequests = 1
+	cfg.Routing.AdmissionQueueTimeoutMS = 0
+	cfg.Providers = []config.ProviderConfig{burstProvider("p", up.URL, 4, 0)}
+	s := testGateway(t, cfg)
+
+	firstDone := make(chan int, 1)
+	go func() { firstDone <- burstPost(t, s, "zero-first").Code }()
+	deadline := time.Now().Add(2 * time.Second)
+	for s.inflight.Load() < 1 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if s.inflight.Load() < 1 {
+		t.Fatal("first request never took the slot")
+	}
+
+	secondDone := make(chan int, 1)
+	go func() { secondDone <- burstPost(t, s, "zero-second").Code }()
+	select {
+	case code := <-secondDone:
+		t.Fatalf("second request returned %d before the slot freed; 0 must wait", code)
+	case <-time.After(150 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case code := <-secondDone:
+		if code != 200 {
+			t.Fatalf("queued sub-agent status=%d want 200", code)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("queued sub-agent never drained")
+	}
+	if code := <-firstDone; code != 200 {
+		t.Fatalf("first request status=%d want 200", code)
 	}
 }
 
