@@ -185,6 +185,8 @@ func providerPressure(stats []providers.ProviderStats) []map[string]any {
 			"remaining_requests": st.RemainingRequests,
 			"token_limit":        st.TokenLimit,
 			"remaining_tokens":   st.RemainingTokens,
+			"request_reset":      st.RequestResetUnix,
+			"token_reset":        st.TokenResetUnix,
 			"rate_limit_reset":   st.RateLimitResetUnix,
 		})
 	}
