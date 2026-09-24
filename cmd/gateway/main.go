@@ -106,6 +106,7 @@ func main() {
 		logger.Printf("bounded_log_file=%s max_mb=%d backups=%d", logPath, cfg.Logging.MaxSizeMB, cfg.Logging.MaxBackups)
 	}
 	hm := health.New(cfg.Routing.FailureThreshold, cfg.Cooldown())
+	hm.ConfigureProviderIncidents(cfg.Routing.ProviderFailureThreshold, cfg.ProviderFailureWindow(), cfg.ProviderCooldown())
 	reg, err := providers.NewRegistry(cfg)
 	if err != nil {
 		logger.Fatal(err)
