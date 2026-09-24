@@ -189,7 +189,6 @@ func (s *Server) hedgedUpstreamDo(
 	}
 }
 
-
 // hedgeAttemptBundle carries everything needed to run and process one
 // attempt against one candidate.
 type hedgeAttemptBundle struct {
