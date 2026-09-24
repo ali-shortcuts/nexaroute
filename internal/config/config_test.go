@@ -49,7 +49,7 @@ func TestSaveAtomicModeAndNoBackup(t *testing.T) {
 }
 
 func TestRoutingStrategiesValidate(t *testing.T) {
-	for _, strategy := range []string{"ready_mesh", "ready_queue", "adaptive", "adaptive_round_robin", "priority", "round_robin", "least_latency"} {
+	for _, strategy := range []string{"ready_mesh", "ready_queue", "cost_aware", "adaptive", "adaptive_round_robin", "priority", "round_robin", "least_latency"} {
 		cfg := Default()
 		cfg.Routing.Strategy = strategy
 		if err := cfg.Validate(); err != nil {
