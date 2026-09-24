@@ -54,8 +54,12 @@ type httpAdapter struct {
 	retryAfterCap      time.Duration
 	active             atomic.Int64
 	waiting            atomic.Int64
+	requestLimit       atomic.Int64
 	remainingRequests  atomic.Int64
+	tokenLimit         atomic.Int64
 	remainingTokens    atomic.Int64
+	requestResetUnix   atomic.Int64
+	tokenResetUnix     atomic.Int64
 	rateLimitResetUnix atomic.Int64
 }
 
@@ -103,7 +107,9 @@ func newHTTPAdapterWithRetryCap(p config.ProviderConfig, timeout, retryAfterCap 
 		sem: make(chan struct{}, mc), forwardAllowed: make(map[string]struct{}, len(p.ForwardHeaders)),
 		retryAfterCap: retryAfterCap,
 	}
+	a.requestLimit.Store(-1)
 	a.remainingRequests.Store(-1)
+	a.tokenLimit.Store(-1)
 	a.remainingTokens.Store(-1)
 	for _, h := range p.ForwardHeaders {
 		h = strings.ToLower(strings.TrimSpace(h))
@@ -137,7 +143,9 @@ func (a *httpAdapter) Stats() ProviderStats {
 		ID: a.p.ID, MaxConcurrency: cap(a.sem),
 		ActiveRequests: a.active.Load(), WaitingRequests: a.waiting.Load(),
 		Credentials: len(a.creds), CredentialsCooling: cooling,
-		RemainingRequests: a.remainingRequests.Load(), RemainingTokens: a.remainingTokens.Load(),
+		RequestLimit: a.requestLimit.Load(), RemainingRequests: a.remainingRequests.Load(),
+		TokenLimit: a.tokenLimit.Load(), RemainingTokens: a.remainingTokens.Load(),
+		RequestResetUnix: a.requestResetUnix.Load(), TokenResetUnix: a.tokenResetUnix.Load(),
 		RateLimitResetUnix: a.rateLimitResetUnix.Load(),
 	}
 }
@@ -384,16 +392,37 @@ func parseQuotaResetHeader(h http.Header, names ...string) (int64, bool) {
 }
 
 func (a *httpAdapter) observeRateLimitHeaders(h http.Header) {
+	if n, ok := parseQuotaIntHeader(h, "x-ratelimit-limit-requests", "anthropic-ratelimit-requests-limit"); ok {
+		a.requestLimit.Store(n)
+	}
 	if n, ok := parseQuotaIntHeader(h, "x-ratelimit-remaining-requests", "anthropic-ratelimit-requests-remaining"); ok {
 		a.remainingRequests.Store(n)
+	}
+	if n, ok := parseQuotaIntHeader(h, "x-ratelimit-limit-tokens", "anthropic-ratelimit-tokens-limit"); ok {
+		a.tokenLimit.Store(n)
 	}
 	if n, ok := parseQuotaIntHeader(h, "x-ratelimit-remaining-tokens", "anthropic-ratelimit-tokens-remaining"); ok {
 		a.remainingTokens.Store(n)
 	}
-	if reset, ok := parseQuotaResetHeader(h,
-		"x-ratelimit-reset-requests", "x-ratelimit-reset-tokens",
-		"anthropic-ratelimit-requests-reset", "anthropic-ratelimit-tokens-reset",
-	); ok {
+	requestReset, requestOK := parseQuotaResetHeader(h,
+		"x-ratelimit-reset-requests", "anthropic-ratelimit-requests-reset",
+	)
+	if requestOK {
+		a.requestResetUnix.Store(requestReset)
+	}
+	tokenReset, tokenOK := parseQuotaResetHeader(h,
+		"x-ratelimit-reset-tokens", "anthropic-ratelimit-tokens-reset",
+	)
+	if tokenOK {
+		a.tokenResetUnix.Store(tokenReset)
+	}
+	// Preserve the legacy summary reset as the later known deadline. This is
+	// conservative for dashboards; routing uses the resource-specific resets.
+	reset := requestReset
+	if tokenReset > reset {
+		reset = tokenReset
+	}
+	if reset > 0 {
 		a.rateLimitResetUnix.Store(reset)
 	}
 }

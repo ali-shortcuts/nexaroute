@@ -1,4 +1,4 @@
-# Current verification contract — NexaRoute v0.4
+# Current verification contract — NexaRoute v0.5.1
 
 This document describes the current verification contract, not historical CI snapshots. Old run-specific reports were removed because they become stale as soon as the code changes.
 
@@ -47,6 +47,9 @@ Every normal CI run also executes one bounded stress pass covering:
 - provider-wide incident circuits requiring distinct deployment evidence and guarding active cooldowns from stale in-flight observations;
 - model-specific versus provider-wide error classification;
 - streaming TTFT observation and provider quota-header telemetry;
+- cost-aware ordering preserves priority, does not treat unknown pricing as free, and falls back when output cost cannot be bounded;
+- proactive quota-pressure curve from provider-reported limit/remaining/reset headers;
+- request/token quota reset deadlines tracked independently;
 - cancellation-neutral provider health;
 - malformed/truncated JSON and SSE;
 - translated stream terminal validation and client-write failure;

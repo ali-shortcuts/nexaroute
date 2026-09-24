@@ -252,7 +252,9 @@ func TestCredential429CooldownUsesConfiguredRetryAfterCap(t *testing.T) {
 func TestAdapterObservesCommonRateLimitHeaders(t *testing.T) {
 	reset := time.Now().Add(time.Minute).UTC().Format(time.RFC3339)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("x-ratelimit-limit-requests", "100")
 		w.Header().Set("x-ratelimit-remaining-requests", "0")
+		w.Header().Set("anthropic-ratelimit-tokens-limit", "5000")
 		w.Header().Set("x-ratelimit-remaining-tokens", "1234")
 		w.Header().Set("x-ratelimit-reset-requests", "30s")
 		w.Header().Set("anthropic-ratelimit-tokens-reset", reset)
@@ -272,10 +274,10 @@ func TestAdapterObservesCommonRateLimitHeaders(t *testing.T) {
 	_, _ = io.Copy(io.Discard, resp.Body)
 	_ = resp.Body.Close()
 	st := a.Stats()
-	if st.RemainingRequests != 0 || st.RemainingTokens != 1234 {
+	if st.RequestLimit != 100 || st.RemainingRequests != 0 || st.TokenLimit != 5000 || st.RemainingTokens != 1234 {
 		t.Fatalf("unexpected quota stats: %+v", st)
 	}
-	if st.RateLimitResetUnix <= time.Now().Unix() {
-		t.Fatalf("reset was not captured: %+v", st)
+	if st.RequestResetUnix <= time.Now().Unix() || st.TokenResetUnix <= time.Now().Unix() || st.RateLimitResetUnix <= time.Now().Unix() {
+		t.Fatalf("resource-specific resets were not captured: %+v", st)
 	}
 }

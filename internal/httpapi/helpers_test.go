@@ -947,3 +947,33 @@ func TestObserveFirstByteRecordsOnlyFirstRead(t *testing.T) {
 		t.Fatalf("observed ttft=%s unexpectedly small", observed)
 	}
 }
+func TestQuotaRemainingPressureStartsBelowQuarterBudget(t *testing.T) {
+	cases := []struct {
+		remaining, limit int64
+		wantMin, wantMax float64
+	}{
+		{100, 100, 0, 0},
+		{25, 100, 0, 0},
+		{20, 100, 0.79, 0.81},
+		{10, 100, 2.39, 2.41},
+		{0, 100, 4, 4},
+		{-1, 100, 0, 0},
+		{10, 0, 0, 0},
+	}
+	for _, tc := range cases {
+		got := quotaRemainingPressure(tc.remaining, tc.limit)
+		if got < tc.wantMin || got > tc.wantMax {
+			t.Fatalf("pressure(%d/%d)=%f want [%f,%f]", tc.remaining, tc.limit, got, tc.wantMin, tc.wantMax)
+		}
+	}
+}
+
+func TestEmbeddedUIExposesCostAwareStrategy(t *testing.T) {
+	index, err := webFS.ReadFile("web/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(index), `value="cost_aware"`) {
+		t.Fatal("cost-aware strategy missing from embedded dashboard")
+	}
+}

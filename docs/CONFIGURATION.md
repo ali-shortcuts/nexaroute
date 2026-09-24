@@ -81,12 +81,15 @@ Several deployments can share one alias:
 
 A client requesting `model: "coding"` receives the best eligible deployment according to the selected strategy. `auto` and `claude-auto` intentionally match the full eligible pool.
 
+`cost_aware` is an opt-in verified-ready strategy. It preserves configured priority tiers, requires healthy/capability-eligible candidates, and orders known-priced deployments by an estimated upper-bound request cost using the conservative prompt estimate plus the caller's explicit output-token ceiling. If the request omits an output ceiling, cost comparison is disabled for that request rather than inventing one. Deployments with unknown pricing are never treated as zero-cost. Session affinity remains valid only inside the best priority tier.
+
 ## Routing settings
 
 Available strategies:
 
 ```text
 ready_mesh
+cost_aware
 ready_queue
 adaptive_round_robin
 adaptive

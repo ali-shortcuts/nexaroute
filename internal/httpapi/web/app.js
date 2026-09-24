@@ -327,7 +327,9 @@ function renderProviders(h) {
     const pct = ds.length ? Math.round(ok / ds.length * 100) : 0;
     const inc = incidents[p.id] || { status: 'unknown' };
     const st = stats[p.id] || {};
-    const quota = Number.isFinite(st.remaining_requests) && st.remaining_requests >= 0 ? `${st.remaining_requests} req left` : 'quota unknown';
+    const quota = Number.isFinite(st.remaining_requests) && st.remaining_requests >= 0
+      ? (Number.isFinite(st.request_limit) && st.request_limit > 0 ? `${st.remaining_requests}/${st.request_limit} req` : `${st.remaining_requests} req left`)
+      : 'quota unknown';
     return `<article class="provider-card">
       <div class="provider-card-top">
         <div class="provider-mark" style="background:${providerColor(p.id)}">${esc((p.name || p.id).slice(0, 1).toUpperCase())}</div>
@@ -372,8 +374,10 @@ function renderHealthTab(h) {
     const inc = incidents[id] || { status: 'unknown' };
     const st = stats[id] || {};
     const capPct = p.capacity ? Math.min(100, Math.round((p.active / p.capacity) * 100)) : 0;
-    const reqQuota = Number.isFinite(st.remaining_requests) && st.remaining_requests >= 0 ? st.remaining_requests : '—';
-    const tokQuota = Number.isFinite(st.remaining_tokens) && st.remaining_tokens >= 0 ? st.remaining_tokens : '—';
+    const reqQuota = Number.isFinite(st.remaining_requests) && st.remaining_requests >= 0
+      ? (Number.isFinite(st.request_limit) && st.request_limit > 0 ? `${st.remaining_requests}/${st.request_limit}` : st.remaining_requests) : '—';
+    const tokQuota = Number.isFinite(st.remaining_tokens) && st.remaining_tokens >= 0
+      ? (Number.isFinite(st.token_limit) && st.token_limit > 0 ? `${st.remaining_tokens}/${st.token_limit}` : st.remaining_tokens) : '—';
     return `<tr>
       <td>${esc(p.provider_name || id)}</td>
       <td><span class="status ${esc(inc.status || 'unknown')}">${esc(inc.status || 'unknown')}</span></td>

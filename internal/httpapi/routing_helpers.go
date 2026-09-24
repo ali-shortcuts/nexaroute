@@ -325,6 +325,29 @@ func sessionKeyFromRequest(r *http.Request, raw []byte) string {
 	return sessionKeyFromRequestParts(r, inspection.BodySessionKey)
 }
 
+func quotaRemainingPressure(remaining, limit int64) float64 {
+	if remaining < 0 || limit <= 0 {
+		return 0
+	}
+	if remaining == 0 {
+		return 4
+	}
+	ratio := float64(remaining) / float64(limit)
+	// Stay neutral while at least 25% of a reported budget remains, then
+	// increase pressure smoothly to the same maximum as a saturated provider.
+	if ratio >= 0.25 {
+		return 0
+	}
+	p := (0.25 - ratio) / 0.25 * 4
+	if p < 0 {
+		return 0
+	}
+	if p > 4 {
+		return 4
+	}
+	return p
+}
+
 func (s *Server) prepareRequirement(req router.Requirement, r *http.Request, bodySessionKey string) router.Requirement {
 	req.SessionKey = sessionKeyFromRequestParts(r, bodySessionKey)
 	req.SelectionKey = r.Header.Get("x-request-id")
@@ -338,13 +361,30 @@ func (s *Server) prepareRequirement(req router.Requirement, r *http.Request, bod
 			cache[id] = router.ProviderLoad{}
 			return router.ProviderLoad{}
 		}
-		resetPending := st.RateLimitResetUnix > time.Now().Unix()
-		quotaExhausted := resetPending && (st.RemainingRequests == 0 || st.RemainingTokens == 0)
+		nowUnix := time.Now().Unix()
+		requestResetPending := st.RequestResetUnix > nowUnix
+		tokenResetPending := st.TokenResetUnix > nowUnix
+		// Backward compatibility for adapters/providers exposing only a shared
+		// reset deadline: use it for a zero-remaining hard signal, but never for
+		// ratio-based predictive pressure without a resource-specific deadline.
+		sharedResetPending := st.RateLimitResetUnix > nowUnix
+		quotaExhausted := (st.RemainingRequests == 0 && (requestResetPending || sharedResetPending)) ||
+			(st.RemainingTokens == 0 && (tokenResetPending || sharedResetPending))
+		quotaPressure := 0.0
+		if requestResetPending {
+			quotaPressure = quotaRemainingPressure(st.RemainingRequests, st.RequestLimit)
+		}
+		if tokenResetPending {
+			if p := quotaRemainingPressure(st.RemainingTokens, st.TokenLimit); p > quotaPressure {
+				quotaPressure = p
+			}
+		}
 		load := router.ProviderLoad{
 			Active:         st.ActiveRequests,
 			Waiting:        st.WaitingRequests,
 			Limit:          st.MaxConcurrency,
 			QuotaExhausted: quotaExhausted,
+			QuotaPressure:  quotaPressure,
 		}
 		cache[id] = load
 		return load

@@ -1,4 +1,4 @@
-# Known gaps — v0.4
+# Known gaps — v0.5.1
 
 These are explicit boundaries of the current code, not hidden assumptions.
 
@@ -87,7 +87,7 @@ The exact-match response cache is opt-in and deliberately narrow: non-streaming,
 
 Health probing is selective and event-driven. Startup establishes readiness, new/unverified deployments are probed, and failed deployments move into dedicated recovery loops. Successful real Claude traffic refreshes a deployment's ready-health lease, so actively used models are not needlessly synthetic-probed. A healthy deployment that remains idle past `probe.ready_lease_seconds` is micro-probed before its health proof is trusted indefinitely. The sweep interval remains configurable (minimum 1 second) without turning health checks into a quota/rate-limit attack.
 
-Micro-probes measure availability and latency. They do not measure model intelligence/answer quality. Model strength is expressed through configured deployment `priority` and `weight`; automatic quality benchmarking is outside the current v0.4 scope.
+Micro-probes measure availability and latency. They do not measure model intelligence/answer quality. Model strength is expressed through configured deployment `priority` and `weight`; automatic quality benchmarking is outside the current v0.5.1 scope.
 
 
 ## Routing boundaries after Ready Mesh
@@ -96,8 +96,8 @@ Implemented routing intelligence is deterministic and observable: session affini
 
 Not implemented yet:
 
-- complete provider-reported TPM/RPM accounting and predictive quota-reset scheduling (common remaining/reset headers are observed, but provider semantics vary);
-- cost-aware routing based on current provider pricing/billing and exact cross-provider usage accounting;
+- proactive quota headroom pressure is implemented when a provider reports limit, remaining, and future resource-specific reset headers, but local pre-reservation of future RPM/TPM budget before upstream evidence is still not implemented;
+- `cost_aware` routing uses configured base input/output prices and a bounded request estimate, but it is not invoice-perfect billing optimization (cache discounts, credits, batch pricing, taxes, and provider-specific billing rules remain outside the router);
 - shared/distributed affinity and breaker state across multiple NexaRoute processes;
 - an online learned semantic router that sends every prompt through another model/encoder.
 

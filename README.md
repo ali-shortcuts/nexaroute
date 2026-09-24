@@ -1,15 +1,16 @@
-# NexaRoute — v0.5
+# NexaRoute — v0.5.1
 
 A self-hosted Go gateway for routing Anthropic-compatible and OpenAI-compatible clients across many LLM providers/models. The first target is **Claude Code -> NexaRoute -> Chat2API / other OpenAI-compatible or Anthropic-compatible providers**.
 
-This package is **v0.5**: the v0.4 translation + dashboard core, now extended with a provider-incident intelligence layer and a hedging/cache/usage tier that few if any open gateways combine. The code is runnable and heavily tested, but no software can honestly be guaranteed to contain zero bugs.
+This package is **v0.5.1**: the v0.4 translation + dashboard core, now extended with a provider-incident intelligence layer and a hedging/cache/usage tier that few if any open gateways combine. The code is runnable and heavily tested, but no software can honestly be guaranteed to contain zero bugs.
 
-## What v0.5 adds on top of v0.4
+## What v0.5.1 adds on top of v0.4
 
 ### Provider incident intelligence and quota awareness
 
 - **Provider-level incident circuits** are separate from per-deployment health: failures from multiple distinct deployments inside a bounded evidence window open a provider circuit, while model-specific 404s stay scoped to one deployment. Half-open provider failures reopen immediately; verified success closes the circuit; open providers are filtered from routing and readiness without discarding per-model health history.
-- **Quota intelligence from rate-limit headers**: common OpenAI (`x-ratelimit-remaining-*`, `x-ratelimit-reset-*`) and Anthropic (`anthropic-ratelimit-*`) headers are observed on every upstream response. When remaining quota is 0 with a known future reset, the provider is heavily deprioritized (capacity pressure ceiling) until reset rather than hard-removed, because quota semantics vary across providers.
+- **Quota intelligence from rate-limit headers**: common OpenAI and Anthropic limit/remaining/reset headers are observed on every upstream response. v0.5.1 tracks request and token windows separately; while a resource-specific reset is still in the future, routing pressure begins below 25% remaining headroom and rises smoothly to the existing exhausted-provider ceiling. Providers remain available as last resort because quota semantics vary.
+- **Opt-in cost-aware routing**: `routing.strategy="cost_aware"` keeps verified health, capability checks and configured priority tiers authoritative, then prefers lower bounded request cost among known-priced peers. Unknown pricing is never interpreted as free, and requests without an explicit output-token ceiling fall back to the ordinary score instead of inventing an output estimate.
 - **Error-class-aware failure policy**: 400/422 are caller-invalid and health-neutral; 409/425 fail over without poisoning health; 404 isolates the deployment; transport/auth/billing/rate-limit/timeout/5xx feed provider incident evidence.
 - **TTFT telemetry**: streaming time-to-first-byte EWMA is recorded separately from response-header latency and exposed per deployment in metrics and the dashboard.
 
@@ -314,17 +315,17 @@ journalctl --user -u nexaroute -f
 The image binds to `0.0.0.0:8080`. If the Web UI/admin API will be reached from outside loopback, configure an admin key:
 
 ```bash
-docker build -t nexaroute:0.4.1 .
+docker build -t nexaroute:0.5.1 .
 docker run --rm -p 8080:8080 \
   -e NEXAROUTE_ADMIN_KEY='replace-with-a-strong-random-secret' \
-  nexaroute:0.4.1
+  nexaroute:0.5.1
 ```
 
 Do not expose the admin UI directly to the public internet without TLS and additional perimeter controls.
 
 ## What is deliberately not claimed
 
-The supported path is strong, but v0.4 is **not*** a universal implementation of every LLM protocol. Native OpenAI Responses, Gemini native `generateContent`, Bedrock, Vertex AI, Azure-specific deployment semantics, embeddings/rerank, encrypted-at-rest secret vaults, distributed state, cost/budget routing, and full internet-facing RBAC/CSRF hardening are not implemented.
+The supported path is strong, but v0.5.1 is **not*** a universal implementation of every LLM protocol. Native OpenAI Responses, Gemini native `generateContent`, Bedrock, Vertex AI, Azure-specific deployment semantics, embeddings/rerank, encrypted-at-rest secret vaults, distributed state, invoice-perfect cost optimization or hard budget enforcement, and full internet-facing RBAC/CSRF hardening are not implemented.
 
 Cross-protocol reasoning/thinking metadata can also be provider-specific. Native Anthropic passthrough is the safest path for Anthropic-only fields.
 
@@ -337,7 +338,7 @@ Read:
 - `SECURITY.md`
 - `ROADMAP.md`
 
-before treating v0.4 as production infrastructure.
+before treating v0.5.1 as production infrastructure.
 
 ## Install from GitHub source
 
