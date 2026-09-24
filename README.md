@@ -1,10 +1,10 @@
-# NexaRoute — v0.4
+# NexaRoute — v0.4.2
 
 A self-hosted Go gateway for routing Anthropic-compatible and OpenAI-compatible clients across many LLM providers/models. The first target is **Claude Code -> NexaRoute -> Chat2API / other OpenAI-compatible or Anthropic-compatible providers**.
 
-This package is **v0.4**: bulletproof OpenAI↔Anthropic translation, a rebuilt 9router-class dashboard, and the same hardened Ready Mesh routing core. The code is runnable and heavily tested, but no software can honestly be guaranteed to contain zero bugs.
+This package is **v0.4.2**: bulletproof OpenAI↔Anthropic translation, a rebuilt 9router-class dashboard, and the same hardened Ready Mesh routing core. The code is runnable and heavily tested, but no software can honestly be guaranteed to contain zero bugs.
 
-## What v0.4 currently implements
+## What v0.4.2 currently implements
 
 ### Client-facing endpoints
 
@@ -289,7 +289,7 @@ Do not expose the admin UI directly to the public internet without TLS and addit
 
 ## What is deliberately not claimed
 
-The supported path is strong, but v0.4 is **not*** a universal implementation of every LLM protocol. Native OpenAI Responses, Gemini native `generateContent`, Bedrock, Vertex AI, Azure-specific deployment semantics, embeddings/rerank, encrypted-at-rest secret vaults, distributed state, budget-enforced routing, and full internet-facing RBAC/CSRF hardening are not implemented. Routed usage/cost telemetry is implemented, but it is not a provider invoice and does not yet drive route selection.
+The supported path is strong, but v0.4.2 is **not*** a universal implementation of every LLM protocol. Native OpenAI Responses, Gemini native `generateContent`, Bedrock, Vertex AI, Azure-specific deployment semantics, embeddings/rerank, encrypted-at-rest secret vaults, distributed state, budget-enforced routing, and full internet-facing RBAC/CSRF hardening are not implemented. Routed usage/cost telemetry is implemented, but it is not a provider invoice and does not yet drive route selection.
 
 Cross-protocol reasoning/thinking metadata can also be provider-specific. Native Anthropic passthrough is the safest path for Anthropic-only fields.
 
@@ -302,7 +302,7 @@ Read:
 - `SECURITY.md`
 - `ROADMAP.md`
 
-before treating v0.4 as production infrastructure.
+before treating v0.4.2 as production infrastructure.
 
 ## Install from GitHub source
 
