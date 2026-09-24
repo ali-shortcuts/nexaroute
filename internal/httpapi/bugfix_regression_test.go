@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -255,5 +256,58 @@ func TestHotReloadRejectsInFlightOldResponseFromCacheAndHealth(t *testing.T) {
 	}
 	if calls.Load() != 2 || request().Header().Get("X-NexaRoute-Cache") != "HIT" {
 		t.Fatalf("cache did not store new-model response, upstream calls=%d", calls.Load())
+	}
+}
+
+func TestHotReloadRejectsInFlightOldProbeEvidence(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			Model string `json:"model"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		if payload.Model == "old-model" {
+			close(started)
+			<-release
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"role":"assistant","content":"OK"}}]}`)
+	}))
+	defer func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+		up.Close()
+	}()
+	cfg := config.Default()
+	cfg.Probe.Enabled = false
+	cfg.Providers = []config.ProviderConfig{{
+		ID: "p", Type: "openai_compatible", BaseURL: up.URL, AuthMode: "none", Enabled: true,
+		Models: []config.ModelConfig{{ID: "m", Model: "old-model", Enabled: true, Weight: 1}},
+	}}
+	s := testGateway(t, cfg)
+	finished := make(chan struct{})
+	go func() { s.probe.RunOnce(context.Background()); close(finished) }()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("old availability probe never started")
+	}
+	next := s.currentConfig()
+	next.Providers[0].Models[0].Model = "new-model"
+	if err := s.applyConfig(next); err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+	select {
+	case <-finished:
+	case <-time.After(5 * time.Second):
+		t.Fatal("old availability probe never completed")
+	}
+	if st := s.hm.Get("p/m"); st.Status != health.Unknown {
+		t.Fatalf("old-model probe marked new-model ready: %+v", st)
 	}
 }
