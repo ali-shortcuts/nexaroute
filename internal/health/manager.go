@@ -34,7 +34,7 @@ type State struct {
 	Failures            int64                 `json:"failures"`
 	ConsecutiveFailures int                   `json:"consecutive_failures"`
 	EWMALatencyMS       float64               `json:"ewma_latency_ms"`
-	EWMAFailureRate      float64               `json:"ewma_failure_rate"`
+	EWMAFailureRate     float64               `json:"ewma_failure_rate"`
 	LastChecked         time.Time             `json:"last_checked"`
 	LastSuccess         time.Time             `json:"last_success"`
 	LastFailure         time.Time             `json:"last_failure"`
