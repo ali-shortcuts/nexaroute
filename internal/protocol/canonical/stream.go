@@ -364,6 +364,18 @@ func DecodeGeminiStreamChunk(data string) ([]StreamEvent, bool, error) {
 	if d == "" {
 		return nil, false, nil
 	}
+	// DecodeGeminiResponse intentionally gives non-stream responses a default
+	// end_turn stop reason even when finishReason is omitted. Streaming cannot
+	// use that default to infer termination: ordinary intermediate Gemini
+	// chunks omit finishReason. Inspect the raw envelope separately.
+	var raw GeminiResponse_
+	if err := json.Unmarshal([]byte(d), &raw); err != nil {
+		return nil, false, fmt.Errorf("invalid Gemini stream chunk: %w", err)
+	}
+	terminal := raw.PromptFeedback != nil && raw.PromptFeedback.BlockReason != ""
+	if len(raw.Candidates) > 0 && strings.TrimSpace(raw.Candidates[0].FinishReason) != "" {
+		terminal = true
+	}
 	resp, err := DecodeGeminiResponse([]byte(d))
 	if err != nil {
 		return nil, false, err
@@ -385,7 +397,6 @@ func DecodeGeminiStreamChunk(data string) ([]StreamEvent, bool, error) {
 		u := resp.Usage
 		events = append(events, StreamEvent{Type: StreamUsage, Usage: &u})
 	}
-	terminal := resp.StopReason != ""
 	if terminal {
 		events = append(events, StreamEvent{Type: StreamEnd, StopReason: resp.StopReason})
 	}
