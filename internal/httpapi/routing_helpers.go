@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -80,44 +82,44 @@ func patchJSONModel(raw []byte, model string) ([]byte, error) {
 	return json.Marshal(obj)
 }
 
-func errorTypeForStatus(code int) string {
+type upstreamFailurePolicy struct {
+	ErrorType            string
+	Failover             bool
+	QuarantineDeployment bool
+	SignalProvider       bool
+	HardCooldown         bool
+}
+
+func policyForStatus(code int) upstreamFailurePolicy {
 	switch code {
-	case http.StatusUnauthorized, http.StatusForbidden:
-		return "provider_auth_failed"
-	case http.StatusPaymentRequired:
-		return "provider_billing"
-	case http.StatusTooManyRequests:
-		return "provider_rate_limited"
-	case http.StatusRequestTimeout, http.StatusGatewayTimeout:
-		return "provider_timeout"
-	case http.StatusServiceUnavailable, 529:
-		return "provider_overloaded"
 	case http.StatusBadRequest, http.StatusUnprocessableEntity:
-		return "caller_invalid_request"
+		return upstreamFailurePolicy{ErrorType: "caller_invalid_request"}
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return upstreamFailurePolicy{ErrorType: "provider_auth_failed", Failover: true, QuarantineDeployment: true, SignalProvider: true, HardCooldown: true}
+	case http.StatusPaymentRequired:
+		return upstreamFailurePolicy{ErrorType: "provider_billing", Failover: true, QuarantineDeployment: true, SignalProvider: true, HardCooldown: true}
 	case http.StatusNotFound:
-		return "provider_request_rejected"
+		return upstreamFailurePolicy{ErrorType: "provider_request_rejected", Failover: true, QuarantineDeployment: true}
+	case http.StatusRequestTimeout, http.StatusGatewayTimeout:
+		return upstreamFailurePolicy{ErrorType: "provider_timeout", Failover: true, QuarantineDeployment: true, SignalProvider: true}
+	case http.StatusConflict, http.StatusTooEarly:
+		return upstreamFailurePolicy{ErrorType: "provider_transient_request", Failover: true}
+	case http.StatusTooManyRequests:
+		return upstreamFailurePolicy{ErrorType: "provider_rate_limited", Failover: true, QuarantineDeployment: true, SignalProvider: true, HardCooldown: true}
+	case http.StatusServiceUnavailable, 529:
+		return upstreamFailurePolicy{ErrorType: "provider_overloaded", Failover: true, QuarantineDeployment: true, SignalProvider: true}
 	default:
 		if code >= 500 {
-			return "provider_server_error"
+			return upstreamFailurePolicy{ErrorType: "provider_server_error", Failover: true, QuarantineDeployment: true, SignalProvider: true}
 		}
-		return "_OTHER"
+		return upstreamFailurePolicy{ErrorType: "_OTHER"}
 	}
 }
 
-func retryable(code int) bool {
-	return code == 408 || code == 409 || code == 425 || code == 429 || code == 500 || code == 502 || code == 503 || code == 504 || code == 529
-}
-func failoverEligible(code int) bool {
-	// Upstream auth/quota/not-found failures are deployment/provider failures from
-	// the gateway's perspective. Trying another configured deployment is useful
-	// and does not repeat the same failing upstream. 400/422 are intentionally
-	// excluded because they usually indicate a request that every provider would
-	// reject in the same way.
-	return retryable(code) || code == 401 || code == 402 || code == 403 || code == 404
-}
-func hardCooldownStatus(code int) bool {
-	return code == 401 || code == 402 || code == 403 || code == 429
-}
+func errorTypeForStatus(code int) string { return policyForStatus(code).ErrorType }
+func retryable(code int) bool            { return policyForStatus(code).Failover }
+func failoverEligible(code int) bool     { return policyForStatus(code).Failover }
+func hardCooldownStatus(code int) bool   { return policyForStatus(code).HardCooldown }
 
 func retryAfterDuration(h http.Header, max time.Duration) time.Duration {
 	fallback := 30 * time.Second
@@ -322,10 +324,13 @@ func (s *Server) prepareRequirement(req router.Requirement, r *http.Request, bod
 			cache[id] = router.ProviderLoad{}
 			return router.ProviderLoad{}
 		}
+		resetPending := st.RateLimitResetUnix > time.Now().Unix()
+		quotaExhausted := resetPending && (st.RemainingRequests == 0 || st.RemainingTokens == 0)
 		load := router.ProviderLoad{
-			Active:  st.ActiveRequests,
-			Waiting: st.WaitingRequests,
-			Limit:   st.MaxConcurrency,
+			Active:         st.ActiveRequests,
+			Waiting:        st.WaitingRequests,
+			Limit:          st.MaxConcurrency,
+			QuotaExhausted: quotaExhausted,
 		}
 		cache[id] = load
 		return load
@@ -333,10 +338,36 @@ func (s *Server) prepareRequirement(req router.Requirement, r *http.Request, bod
 	return req
 }
 
-func (s *Server) recordRouteSuccess(req router.Requirement, deploymentID string, latency time.Duration) {
+func (s *Server) recordRouteSuccess(req router.Requirement, deploymentID, providerID string, latency time.Duration) {
 	s.hm.RecordSuccess(deploymentID, latency)
+	s.hm.RecordProviderSuccess(providerID)
 	s.hm.RecordScopeSuccess(deploymentID, req.Scopes())
 	s.rt.ObserveSession(req, deploymentID)
+}
+
+func (s *Server) recordProviderFailure(providerID, deploymentID, reason string, policy upstreamFailurePolicy) {
+	if policy.SignalProvider {
+		s.hm.RecordProviderFailure(providerID, deploymentID, reason)
+	}
+}
+
+type firstByteBody struct {
+	io.ReadCloser
+	once    sync.Once
+	start   time.Time
+	observe func(time.Duration)
+}
+
+func (b *firstByteBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	if n > 0 && b.observe != nil {
+		b.once.Do(func() { b.observe(time.Since(b.start)) })
+	}
+	return n, err
+}
+
+func observeFirstByte(rc io.ReadCloser, start time.Time, observe func(time.Duration)) io.ReadCloser {
+	return &firstByteBody{ReadCloser: rc, start: start, observe: observe}
 }
 
 // stripStreamOptions removes the stream_options field from a translated
