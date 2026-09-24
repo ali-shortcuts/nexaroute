@@ -622,3 +622,24 @@ func TestGeminiEndpointDoesNotDuplicateVersionPrefix(t *testing.T) {
 		}
 	}
 }
+
+func TestProbeEnvelopeAgreesWithGatewayDecoder(t *testing.T) {
+	for _, tc := range []struct {
+		name, kind, body string
+		valid            bool
+	}{
+		{"OpenAI empty message", "openai_compatible", `{"choices":[{"message":{}}]}`, false},
+		{"OpenAI valid message", "openai_compatible", `{"choices":[{"message":{"role":"assistant","content":"OK"}}]}`, true},
+		{"Gemini empty feedback", "gemini", `{"promptFeedback":{}}`, false},
+		{"Gemini null feedback", "gemini", `{"promptFeedback":null}`, false},
+		{"Gemini blocked prompt", "gemini", `{"promptFeedback":{"blockReason":"SAFETY"}}`, true},
+		{"Gemini candidate", "gemini", `{"candidates":[{"content":{"parts":[{"text":"OK"}]},"finishReason":"STOP"}]}`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := &httpAdapter{p: config.ProviderConfig{Type: tc.kind}}
+			if err := a.validateProbeResponse([]byte(tc.body)); (err == nil) != tc.valid {
+				t.Fatalf("valid=%v err=%v body=%s", tc.valid, err, tc.body)
+			}
+		})
+	}
+}
