@@ -569,6 +569,8 @@ func (e *Engine) maybeProbeCapabilities(ctx context.Context, d router.Deployment
 		report = compat.RunCapabilitySuiteAnthropic(cctx, t, d.ID, d.Model)
 	case "openai_responses":
 		report = compat.RunCapabilitySuiteResponses(cctx, t, d.ID, d.Model)
+	case "gemini":
+		report = compat.RunCapabilitySuiteGemini(cctx, t, d.ID, d.Model)
 	default:
 		report = compat.RunCapabilitySuite(cctx, t, d.ID, d.Model, "")
 	}
