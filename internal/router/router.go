@@ -23,8 +23,9 @@ type Deployment struct {
 	Model        string              `json:"model"`
 	Aliases      []string            `json:"aliases"`
 	Priority     int                 `json:"priority"`
-	Weight       float64             `json:"weight"`
-	Capabilities config.Capabilities `json:"capabilities"`
+	Weight       float64              `json:"weight"`
+	Pricing      *config.PricingConfig `json:"pricing,omitempty"`
+	Capabilities config.Capabilities  `json:"capabilities"`
 }
 
 type ProviderLoad struct {
@@ -111,7 +112,12 @@ func (r *Router) Reload(cfg config.Config) {
 			if w <= 0 {
 				w = 1
 			}
-			d := Deployment{ID: p.ID + "/" + m.ID, ProviderID: p.ID, ProviderName: p.Name, ProviderType: p.Type, Model: m.Model, Aliases: m.Aliases, Priority: m.Priority, Weight: w, Capabilities: m.Capabilities}
+			var pricing *config.PricingConfig
+			if m.Pricing != nil {
+				copyPricing := *m.Pricing
+				pricing = &copyPricing
+			}
+			d := Deployment{ID: p.ID + "/" + m.ID, ProviderID: p.ID, ProviderName: p.Name, ProviderType: p.Type, Model: m.Model, Aliases: m.Aliases, Priority: m.Priority, Weight: w, Pricing: pricing, Capabilities: m.Capabilities}
 			all = append(all, d)
 			byID[d.ID] = d
 			valid[d.ID] = struct{}{}
