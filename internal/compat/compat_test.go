@@ -338,7 +338,7 @@ func (t *responsesRecordingTransport) Do(ctx context.Context, payload []byte, st
 		return &http.Response{
 			StatusCode: http.StatusBadRequest,
 			Header: http.Header{"Content-Type": []string{"application/json"}},
-			Body: &stringReaderCloser{Reader: strings.NewReader(`{"error":{"message":"messages must not be sent to Responses"}}`)},
+			Body:       &stringReaderCloser{Reader: strings.NewReader(`{"error":{"message":"messages must not be sent to Responses"}}`)},
 		}, nil
 	}
 	input, _ := req["input"].([]any)
