@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"time"
 
@@ -39,18 +40,15 @@ import (
 //   - Losing responses are closed, not drained: connection reuse is worth
 //     less than deterministic, immediate teardown.
 
-type hedgeLeg struct {
-	cancel context.CancelFunc
-	done   chan struct{}
-	resp   *http.Response
-	err    error
-	start  time.Time
+type hedgeResult struct {
+	resp  *http.Response
+	err   error
+	start time.Time
 }
 
-func (l *hedgeLeg) finish(resp *http.Response, err error) {
-	l.resp = resp
-	l.err = err
-	close(l.done)
+type hedgeLeg struct {
+	cancel context.CancelFunc
+	done   <-chan hedgeResult
 }
 
 type hedgeOutcome struct {
@@ -65,28 +63,52 @@ type hedgeOutcome struct {
 	hedgeLaunched bool
 }
 
-// abandonUpstream tears down a losing leg. No health signal is recorded.
-func (s *Server) abandonUpstream(leg *hedgeLeg, deploymentID, requestID, reason string) {
+func normalizeHedgeResult(r hedgeResult) hedgeResult {
+	if r.err == nil && r.resp == nil {
+		r.err = errors.New("upstream returned nil response without error")
+	}
+	return r
+}
+
+// abandonHedgeLeg cancels a losing leg immediately, then waits asynchronously
+// for its transport to unwind before closing any response body. Waiting in the
+// request goroutine would defeat hedging: a fast winner could otherwise be
+// blocked behind the slow loser it was meant to escape.
+func (s *Server) abandonHedgeLeg(leg *hedgeLeg, deploymentID, requestID, reason string) {
 	if leg == nil {
 		return
 	}
 	if leg.cancel != nil {
 		leg.cancel()
 	}
-	if leg.resp != nil && leg.resp.Body != nil {
-		_ = leg.resp.Body.Close()
-	}
-	s.bus.Add(events.Event{RequestID: requestID, Kind: "hedged_abandoned", Deployment: deploymentID, Message: reason})
+	go func() {
+		result, ok := <-leg.done
+		if ok && result.resp != nil && result.resp.Body != nil {
+			_ = result.resp.Body.Close()
+		}
+		s.bus.Add(events.Event{RequestID: requestID, Kind: "hedged_abandoned", Deployment: deploymentID, Message: reason})
+	}()
+}
+
+func startHedgeLeg(parent context.Context, run func(context.Context) (*http.Response, error)) *hedgeLeg {
+	ctx, cancel := context.WithCancel(parent)
+	done := make(chan hedgeResult, 1)
+	start := time.Now()
+	go func() {
+		resp, err := run(ctx)
+		done <- normalizeHedgeResult(hedgeResult{resp: resp, err: err, start: start})
+		close(done)
+	}()
+	return &hedgeLeg{cancel: cancel, done: done}
 }
 
 // hedgedUpstreamDo races two attempts for response headers.
 //
-// primary/secondary each run their attempt with a dedicated child context.
-// The winner is the first leg to deliver either a response or a terminal
-// transport error — except that a primary error does not win while the
-// secondary is still in flight, and a secondary error never wins while the
-// primary is still in flight. When both legs have failed the primary's error
-// is returned so error reporting stays deterministic.
+// The first leg to return a transport response wins. A transport error does
+// not beat an in-flight peer: if one leg fails, the other is allowed to
+// finish. When both fail, the primary error is reported for deterministic
+// diagnostics. Losers are cancelled immediately and cleaned up asynchronously,
+// so the winning response is never delayed by loser shutdown.
 func (s *Server) hedgedUpstreamDo(
 	routeCtx context.Context,
 	requestID, primaryID, secondaryID string,
@@ -94,121 +116,79 @@ func (s *Server) hedgedUpstreamDo(
 	primary func(ctx context.Context) (*http.Response, error),
 	secondary func(ctx context.Context) (*http.Response, error),
 ) hedgeOutcome {
-	out := hedgeOutcome{}
-	ctxA, cancelA := context.WithCancel(routeCtx)
-	ctxB, cancelB := context.WithCancel(routeCtx)
-	legA := &hedgeLeg{cancel: cancelA, done: make(chan struct{}), start: time.Now()}
-	legB := &hedgeLeg{cancel: cancelB, done: make(chan struct{})}
-
-	go func() {
-		resp, err := primary(ctxA)
-		legA.finish(resp, err)
-	}()
+	primaryLeg := startHedgeLeg(routeCtx, primary)
+	var secondaryLeg *hedgeLeg
 
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
-	bLaunched := false
-	bSettled := false
 
-	launchB := func() {
-		bLaunched = true
-		legB.start = time.Now()
+	var primaryResult *hedgeResult
+	var secondaryResult *hedgeResult
+
+	launchSecondary := func() {
+		if secondaryLeg != nil {
+			return
+		}
+		secondaryLeg = startHedgeLeg(routeCtx, secondary)
 		s.bus.Add(events.Event{RequestID: requestID, Kind: "hedge_launch", Deployment: secondaryID,
-			Message: "primary slow to first byte; racing next eligible deployment"})
-		go func() {
-			resp, err := secondary(ctxB)
-			legB.finish(resp, err)
-		}()
+			Message: "primary slow to response headers; racing next eligible deployment"})
 	}
 
 	for {
-		select {
-		case <-legA.done:
-			if !bLaunched {
-				out.resp, out.err, out.start = legA.resp, legA.err, legA.start
-				return out
-			}
-			if legA.err == nil && !bSettled {
-				// Primary delivered headers first; abandon the hedge leg.
-				<-legB.done
-				s.abandonUpstream(legB, secondaryID, requestID, "lost hedged race (primary responded first)")
-				out.resp, out.err, out.start = legA.resp, legA.err, legA.start
-				return out
-			}
-			// Primary failed while hedge in flight. If the hedge already
-			// failed too, report the primary's error; otherwise wait for the
-			// hedge and prefer its success.
-			if bSettled || legB.err != nil {
-				s.abandonUpstream(legB, secondaryID, requestID, "abandoned after primary failure (hedge failed or pending)")
-				out.resp, out.err, out.start, out.hedgeLaunched = legA.resp, legA.err, legA.start, true
-				return out
-			}
-			<-legB.done
-			bSettled = true
-			if legB.err == nil && legB.resp != nil {
-				s.abandonUpstream(legA, primaryID, requestID, "primary failed; hedged attempt took over")
-				out.resp, out.err, out.start, out.secondaryWon, out.hedgeLaunched = legB.resp, nil, legB.start, true, true
-				return out
-			}
-			out.resp, out.err, out.start, out.hedgeLaunched = legA.resp, legA.err, legA.start, true
-			return out
+		var primaryDone <-chan hedgeResult
+		if primaryResult == nil {
+			primaryDone = primaryLeg.done
+		}
+		var secondaryDone <-chan hedgeResult
+		if secondaryLeg != nil && secondaryResult == nil {
+			secondaryDone = secondaryLeg.done
+		}
 
-		case <-legB.done:
-			if legB.err == nil && legB.resp != nil && (legA.err != nil || !channelClosed(legA.done)) {
-				// Secondary delivered headers. If the primary is still in
-				// flight, abandon it; if the primary already failed, this is
-				// the takeover path.
-				if !channelClosed(legA.done) {
-					go func() {
-						<-legA.done
-						s.abandonUpstream(legA, primaryID, requestID, "lost hedged race (hedge responded first)")
-					}()
-				} else {
-					s.abandonUpstream(legA, primaryID, requestID, "primary failed; hedged attempt took over")
+		select {
+		case result := <-primaryDone:
+			r := result
+			primaryResult = &r
+			if r.err == nil {
+				if secondaryLeg != nil {
+					s.abandonHedgeLeg(secondaryLeg, secondaryID, requestID, "lost hedged race (primary responded first)")
 				}
-				out.resp, out.start, out.secondaryWon, out.hedgeLaunched = legB.resp, legB.start, true, true
-				return out
+				return hedgeOutcome{resp: r.resp, start: r.start, hedgeLaunched: secondaryLeg != nil}
 			}
-			// Hedge failed: keep waiting for the primary. A failing hedge
-			// must never invent a failure for an upstream that has not
-			// answered yet.
-			bSettled = true
-			if bLaunched {
-				s.bus.Add(events.Event{RequestID: requestID, Kind: "hedge_fail", Deployment: secondaryID, Message: legB.err.Error()})
+			if secondaryLeg == nil {
+				return hedgeOutcome{err: r.err, start: r.start}
 			}
-			if channelClosed(legA.done) {
-				out.resp, out.err, out.start, out.hedgeLaunched = legA.resp, legA.err, legA.start, true
-				return out
+			if secondaryResult != nil {
+				if secondaryResult.err == nil {
+					return hedgeOutcome{resp: secondaryResult.resp, start: secondaryResult.start, secondaryWon: true, hedgeLaunched: true}
+				}
+				return hedgeOutcome{err: r.err, start: r.start, hedgeLaunched: true}
+			}
+
+		case result := <-secondaryDone:
+			r := result
+			secondaryResult = &r
+			if r.err == nil {
+				s.abandonHedgeLeg(primaryLeg, primaryID, requestID, "lost hedged race (hedge responded first)")
+				return hedgeOutcome{resp: r.resp, start: r.start, secondaryWon: true, hedgeLaunched: true}
+			}
+			s.bus.Add(events.Event{RequestID: requestID, Kind: "hedge_fail", Deployment: secondaryID, Message: r.err.Error()})
+			if primaryResult != nil {
+				return hedgeOutcome{err: primaryResult.err, start: primaryResult.start, hedgeLaunched: true}
 			}
 
 		case <-timer.C:
-			if !bLaunched {
-				launchB()
-			}
+			launchSecondary()
 
 		case <-routeCtx.Done():
-			// Parent cancellation (client disconnect, deadline, shutdown)
-			// tears down both legs; the caller observes routeCtx.Err()
-			// through the returned primary error channel below.
-			<-legA.done
-			if bLaunched {
-				<-legB.done
-				s.abandonUpstream(legB, secondaryID, requestID, "route context cancelled during hedged race")
+			s.abandonHedgeLeg(primaryLeg, primaryID, requestID, "route context cancelled during hedged race")
+			if secondaryLeg != nil {
+				s.abandonHedgeLeg(secondaryLeg, secondaryID, requestID, "route context cancelled during hedged race")
 			}
-			out.resp, out.err, out.start, out.hedgeLaunched = legA.resp, legA.err, legA.start, bLaunched
-			return out
+			return hedgeOutcome{err: routeCtx.Err(), start: time.Now(), hedgeLaunched: secondaryLeg != nil}
 		}
 	}
 }
 
-func channelClosed(ch chan struct{}) bool {
-	select {
-	case <-ch:
-		return true
-	default:
-		return false
-	}
-}
 
 // hedgeAttemptBundle carries everything needed to run and process one
 // attempt against one candidate.
