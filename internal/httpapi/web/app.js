@@ -788,6 +788,9 @@ function readForm() {
       enabled: x.enabled !== false,
       priority: Number.isFinite(Number(x.priority)) ? Number(x.priority) : i,
       weight: Number(x.weight) > 0 ? Number(x.weight) : 1,
+      context_window: Number.isFinite(Number(x.context_window)) ? Math.max(0, Number(x.context_window)) : 0,
+      input_cost_per_mtok: Number.isFinite(Number(x.input_cost_per_mtok)) ? Math.max(0, Number(x.input_cost_per_mtok)) : 0,
+      output_cost_per_mtok: Number.isFinite(Number(x.output_cost_per_mtok)) ? Math.max(0, Number(x.output_cost_per_mtok)) : 0,
       capabilities: { streaming: c.streaming !== false, tools: c.tools !== false, vision: !!c.vision, reasoning: !!c.reasoning }
     };
   });
