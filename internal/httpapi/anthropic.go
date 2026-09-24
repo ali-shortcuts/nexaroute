@@ -456,7 +456,7 @@ type nativeSSETracker struct {
 	sniff    providers.StreamContentSniffer
 }
 
-const maxNativeSSELineBytes = 8 << 20
+const maxNativeSSELineBytes = maxSSELineBytes
 
 func (t *nativeSSETracker) consume(p []byte) error {
 	for len(p) > 0 {
@@ -699,7 +699,7 @@ func streamOpenAIToAnthropic(w http.ResponseWriter, resp *http.Response, model s
 	}
 
 	scanner := bufio.NewScanner(resp.Body)
-	scanner.Buffer(make([]byte, 64<<10), 8<<20)
+	scanner.Buffer(make([]byte, 64<<10), maxSSELineBytes)
 	var usageIn, usageOut int64
 	var sniff providers.StreamContentSniffer
 	nextIndex := 0

@@ -354,7 +354,7 @@ func streamAnthropicToOpenAI(w http.ResponseWriter, resp *http.Response, model s
 		writeErr = writeFlushed(w, []byte("data: "+string(b)+"\n\n"))
 	}
 	scanner := bufio.NewScanner(resp.Body)
-	scanner.Buffer(make([]byte, 64<<10), 8<<20)
+	scanner.Buffer(make([]byte, 64<<10), maxSSELineBytes)
 	finish := "stop"
 	terminal := false
 	var sniff providers.StreamContentSniffer

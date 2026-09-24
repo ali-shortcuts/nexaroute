@@ -84,11 +84,18 @@ of answering instant 503s or queueing behind one busy provider:
   deployment.
 
 Tuning for parallel-agent bursts: keep `max_inflight_requests` above the
-expected parallelism (default 128), keep the admission timeout in the low
-seconds, and keep the provider queue timeout well under the request timeout
-so a spill still has budget to complete elsewhere. Request/response body
-caps stay fixed: 16 MB ingress JSON, 32 MB upstream JSON — large enough for
-long agentic turns, small enough to bound per-request memory.
+expected parallelism (default 256), keep the admission queue timeout in
+tens of seconds (default 30s) so a terminal that fires several sub-agents
+together waits instead of 503ing, and keep the provider queue timeout
+(default 30s) well under the request timeout so a spill still has budget
+to complete elsewhere. Stream idle default is 600s so thinking models that
+pause between tokens are not killed. Request/response caps: 32 MB ingress
+JSON, 64 MB upstream JSON, 32 MB per SSE line — large enough for long
+agentic turns and multi-MB `tool_use` payloads. The gateway never overrides
+the client's `max_tokens`. The upstream HTTP transport does not cap
+connections at the semaphore (that deadlock stalls a burst); HTTP/2
+multiplexing is attempted. The listener has a 5-minute `ReadTimeout` and
+no `WriteTimeout`, so large context uploads and long generations survive.
 
 ## Hedged backup attempts (opt-in)
 

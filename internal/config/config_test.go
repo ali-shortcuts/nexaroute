@@ -358,11 +358,14 @@ func TestResilienceDefaultsAndExplicitZeros(t *testing.T) {
 	if cfg.Routing.HedgeDelayMS != 0 {
 		t.Fatalf("hedging must be off by default, got %d", cfg.Routing.HedgeDelayMS)
 	}
-	if cfg.Routing.AdmissionQueueTimeoutMS != 5000 {
-		t.Fatalf("default admission queue timeout must be 5000ms, got %d", cfg.Routing.AdmissionQueueTimeoutMS)
+	if cfg.Routing.AdmissionQueueTimeoutMS != 30000 {
+		t.Fatalf("default admission queue timeout must be 30000ms, got %d", cfg.Routing.AdmissionQueueTimeoutMS)
 	}
-	if cfg.Routing.ProviderQueueTimeoutMS != 10000 {
-		t.Fatalf("default provider queue timeout must be 10000ms, got %d", cfg.Routing.ProviderQueueTimeoutMS)
+	if cfg.Routing.ProviderQueueTimeoutMS != 30000 {
+		t.Fatalf("default provider queue timeout must be 30000ms, got %d", cfg.Routing.ProviderQueueTimeoutMS)
+	}
+	if cfg.Routing.MaxInflightRequests != 256 {
+		t.Fatalf("default inflight must be 256, got %d", cfg.Routing.MaxInflightRequests)
 	}
 	// Explicit zeros keep their "disabled" meaning through ApplyDefaults.
 	cfg.Routing.RetryBudgetRatio = 0

@@ -111,7 +111,7 @@ func main() {
 	srv := &http.Server{
 		Addr: cfg.Listen, Handler: api.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       60 * time.Second,
+		ReadTimeout:       5 * time.Minute,
 		IdleTimeout:       180 * time.Second,
 		MaxHeaderBytes:    128 << 10,
 	}

@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net/http"
@@ -155,5 +156,20 @@ func TestWriteFlushedFallsBackOnRecorders(t *testing.T) {
 	}
 	if !rr.Flushed || !strings.Contains(rr.Body.String(), "data: x") {
 		t.Fatalf("recorder must receive flushed bytes: flushed=%v body=%q", rr.Flushed, rr.Body.String())
+	}
+}
+
+func TestNativeSSETrackerRejectsOversizedLine(t *testing.T) {
+	var tr nativeSSETracker
+	chunk := bytes.Repeat([]byte("x"), 256<<10)
+	var err error
+	for i := 0; i < (maxNativeSSELineBytes/len(chunk))+2; i++ {
+		err = tr.consume(chunk)
+		if err != nil {
+			break
+		}
+	}
+	if err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("oversized SSE line must be rejected, got %v", err)
 	}
 }

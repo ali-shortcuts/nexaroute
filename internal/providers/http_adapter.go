@@ -94,7 +94,11 @@ func newHTTPAdapterWithRetryCap(p config.ProviderConfig, timeout, retryAfterCap 
 		idlePerHost = 512
 	}
 	tr := &http.Transport{
-		MaxIdleConns: maxIdle, MaxIdleConnsPerHost: idlePerHost, MaxConnsPerHost: mc,
+		// MaxConnsPerHost is unlimited: the adapter semaphore is the
+		// concurrency gate. Capping connections at the semaphore size
+		// deadlocks a slot behind a stuck TCP conn and cannot absorb a
+		// burst of Claude Code sub-agent streams.
+		MaxIdleConns: maxIdle, MaxIdleConnsPerHost: idlePerHost,
 		IdleConnTimeout: 90 * time.Second, TLSHandshakeTimeout: 15 * time.Second,
 		ResponseHeaderTimeout: timeout, ExpectContinueTimeout: time.Second,
 		DialContext:       providerDialer().DialContext,

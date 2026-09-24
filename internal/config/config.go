@@ -237,12 +237,12 @@ func Default() Config {
 		},
 		Routing: RoutingConfig{
 			Strategy: "ready_mesh", FallbackOnUnknownModel: true, SessionAffinity: true, SessionTTLSeconds: 3600, P2CWindow: 8,
-			MaxAttempts: 4, MaxInflightRequests: 128, FailureThreshold: 5, CooldownSeconds: 1800,
+			MaxAttempts: 4, MaxInflightRequests: 256, FailureThreshold: 5, CooldownSeconds: 1800,
 			CapabilityFailureThreshold: 2, CapabilityCooldownSeconds: 300,
 			RequestTimeoutMS: 120000, AttemptTimeoutMS: 0, LatencyWeight: 0.015, FailureWeight: 25, CapacityWeight: 35,
 			RetryBackoffMS: 150, MaxRetryAfterSeconds: 60,
 			HedgeDelayMS: 0, RetryBudgetRatio: 0.2, StreamMaxDurationSeconds: 1800,
-			AdmissionQueueTimeoutMS: 5000, ProviderQueueTimeoutMS: 10000,
+			AdmissionQueueTimeoutMS: 30000, ProviderQueueTimeoutMS: 30000,
 		},
 		Probe: ProbeConfig{Enabled: true, OnStart: true, IntervalSeconds: 120, ReadyLeaseSeconds: 300, TimeoutMS: 8000, MaxTokens: 1, Concurrency: 16, RecoveryAttempts: 5, RecoveryRetryMS: 500},
 	}
@@ -327,7 +327,7 @@ func (c *Config) ApplyDefaults() {
 		c.Routing.MaxAttempts = 4
 	}
 	if c.Routing.MaxInflightRequests == 0 {
-		c.Routing.MaxInflightRequests = 128
+		c.Routing.MaxInflightRequests = 256
 	}
 	if c.Routing.FailureThreshold == 0 {
 		c.Routing.FailureThreshold = 5
@@ -397,10 +397,10 @@ func (p *ProviderConfig) ApplyDefaults() {
 		p.CountTokensPath = "/v1/messages/count_tokens"
 	}
 	if p.MaxConcurrency == 0 {
-		p.MaxConcurrency = 32
+		p.MaxConcurrency = 64
 	}
 	if p.StreamIdleTimeoutSeconds == 0 {
-		p.StreamIdleTimeoutSeconds = 180
+		p.StreamIdleTimeoutSeconds = 600
 	}
 	if p.ForwardHeaders == nil && p.Type == "anthropic_compatible" {
 		p.ForwardHeaders = []string{"anthropic-beta", "anthropic-version", "user-agent"}

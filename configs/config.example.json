@@ -11,7 +11,7 @@
     "session_ttl_seconds": 3600,
     "p2c_window": 8,
     "max_attempts": 4,
-    "max_inflight_requests": 128,
+    "max_inflight_requests": 256,
     "failure_threshold": 5,
     "cooldown_seconds": 1800,
     "capability_failure_threshold": 2,
@@ -25,8 +25,8 @@
     "hedge_delay_ms": 0,
     "retry_budget_ratio": 0.2,
     "stream_max_duration_seconds": 1800,
-    "admission_queue_timeout_ms": 5000,
-    "provider_queue_timeout_ms": 10000
+    "admission_queue_timeout_ms": 30000,
+    "provider_queue_timeout_ms": 30000
   },
   "probe": {
     "enabled": true,
@@ -55,8 +55,8 @@
       "messages_path": "/v1/messages",
       "models_path": "/v1/models",
       "count_tokens_path": "/v1/messages/count_tokens",
-      "max_concurrency": 32,
-      "stream_idle_timeout_seconds": 180,
+      "max_concurrency": 64,
+      "stream_idle_timeout_seconds": 600,
       "enabled": false,
       "models": [
         {
@@ -90,8 +90,8 @@
         "user-agent",
         "x-request-id"
       ],
-      "max_concurrency": 32,
-      "stream_idle_timeout_seconds": 180,
+      "max_concurrency": 64,
+      "stream_idle_timeout_seconds": 600,
       "enabled": false,
       "models": [
         {

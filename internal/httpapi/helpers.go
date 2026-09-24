@@ -12,8 +12,11 @@ import (
 )
 
 const (
-	maxJSONBodyBytes     = 16 << 20
-	maxUpstreamJSONBytes = 32 << 20
+	maxJSONBodyBytes     = 32 << 20
+	maxUpstreamJSONBytes = 64 << 20
+	// maxSSELineBytes bounds one SSE data line. Claude Code tool_use
+	// payloads can be multi-MB files in a single event.
+	maxSSELineBytes = 32 << 20
 )
 
 func readJSON(r *http.Request, dst any) ([]byte, error) {

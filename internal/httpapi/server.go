@@ -373,7 +373,7 @@ func (s *Server) admissionLimit() int64 {
 	limit := s.cfg.Routing.MaxInflightRequests
 	s.runtimeMu.RUnlock()
 	if limit < 1 {
-		limit = 128
+		limit = 256
 	}
 	return int64(limit)
 }
@@ -410,11 +410,11 @@ func (s *Server) acquireDataPlane(ctx context.Context) bool {
 		case <-ctx.Done():
 			return false
 		case <-timer.C:
-			return false
+			return s.tryInflight(limit)
 		case <-s.admissionWake:
-		}
-		if s.tryInflight(limit) {
-			return true
+			if s.tryInflight(limit) {
+				return true
+			}
 		}
 	}
 }
