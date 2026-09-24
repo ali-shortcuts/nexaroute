@@ -107,6 +107,15 @@ func runGeminiProbe(ctx context.Context, t PathProbeTransport, model string, spe
 		return out, err
 	}
 	defer resp.Body.Close()
+	if spec.stream && resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		if !strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
+			out.Detail = "200 but content-type is not event-stream"
+			return out, nil
+		}
+		out.Verdict = Supported
+		out.Detail = "Gemini SSE endpoint verified"
+		return out, nil
+	}
 	body, readErr := io.ReadAll(io.LimitReader(resp.Body, 256<<10))
 	if readErr != nil {
 		out.Detail = "response read: " + readErr.Error()
@@ -124,15 +133,6 @@ func runGeminiProbe(ctx context.Context, t PathProbeTransport, model string, spe
 			return out, nil
 		}
 		return out, fmt.Errorf("probe transport status %d: %s", resp.StatusCode, cls.Message)
-	}
-	if spec.stream {
-		if !strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
-			out.Detail = "200 but content-type is not event-stream"
-			return out, nil
-		}
-		out.Verdict = Supported
-		out.Detail = "Gemini SSE endpoint verified"
-		return out, nil
 	}
 
 	canResp, err := canonical.DecodeGeminiResponse(body)
