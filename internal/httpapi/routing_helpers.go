@@ -401,6 +401,13 @@ func providerLoadFromStats(st providers.ProviderStats, nowUnix int64) router.Pro
 
 func (s *Server) prepareRequirement(req router.Requirement, r *http.Request, bodySessionKey string) router.Requirement {
 	req.SessionKey = sessionKeyFromRequestParts(r, bodySessionKey)
+	if req.SessionKey != "" {
+		// A session identifier is only unique within a client. Bind pins to
+		// the presented client key so two tenants using the same session ID
+		// cannot change each other's preferred deployment. Never retain the
+		// credential itself in the router's session table.
+		req.SessionKey = keyDigest(extractClientKey(r)) + ":" + req.SessionKey
+	}
 	req.SelectionKey = r.Header.Get("x-request-id")
 	cache := make(map[string]router.ProviderLoad, 4)
 	req.LoadForProvider = func(id string) router.ProviderLoad {

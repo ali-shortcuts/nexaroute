@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/ali-shortcuts/nexaroute/internal/config"
+	"github.com/ali-shortcuts/nexaroute/internal/router"
 )
 
 func TestNativeAnthropicStreamRecordsUsageEndToEnd(t *testing.T) {
@@ -94,5 +95,68 @@ func TestNativeSSEMultilineFrameSurvivesFragmentedReads(t *testing.T) {
 	}
 	if rr.Body.String() != body || calls != 1 || in != 7 || out != 3 {
 		t.Fatalf("fragmented stream lost data or usage: calls=%d tokens=%d/%d body=%q", calls, in, out, rr.Body.String())
+	}
+}
+
+func TestNativeSSEReportsUpstreamFailuresToClient(t *testing.T) {
+	for _, tc := range []struct {
+		name, protocol, frame, expected string
+	}{
+		{"OpenAI error", "openai", "data: {\"error\":{\"message\":\"upstream failed\"}}\n\n", `"error"`},
+		{"Anthropic error", "anthropic", "event: error\ndata: {\"type\":\"error\",\"error\":{\"message\":\"upstream failed\"}}\n\n", `event: error`},
+		{"OpenAI malformed", "openai", "data: {not-json}\n\n", `"error"`},
+		{"OpenAI missing terminal", "openai", "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n", `"error"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}},
+				Body: io.NopCloser(strings.NewReader(tc.frame))}
+			rr := httptest.NewRecorder()
+			if err := proxyNativeSSE(rr, resp, tc.protocol); err == nil {
+				t.Fatal("invalid upstream stream was accepted")
+			}
+			out := rr.Body.String()
+			if !strings.Contains(out, tc.expected) || !strings.Contains(out, "upstream stream failed") {
+				t.Fatalf("upstream error was hidden from SSE client: %q", out)
+			}
+			if strings.Contains(out, "upstream failed") || strings.Contains(out, "{not-json}") {
+				t.Fatalf("untrusted upstream error details leaked to SSE client: %q", out)
+			}
+		})
+	}
+}
+
+func TestSessionAffinityIsIsolatedAcrossAuthenticatedClients(t *testing.T) {
+	cfg := config.Default()
+	cfg.Probe.Enabled = false
+	cfg.Routing.SessionAffinity = true
+	cfg.ClientAuth = config.ClientAuthConfig{Enabled: true, Keys: []string{"client-key-alpha", "client-key-bravo"}}
+	cfg.Providers = []config.ProviderConfig{
+		{ID: "first", Type: "openai_compatible", BaseURL: "http://127.0.0.1:1", AuthMode: "none", Enabled: true,
+			Models: []config.ModelConfig{{ID: "m", Model: "up-one", Enabled: true, Weight: 1}}},
+		{ID: "second", Type: "openai_compatible", BaseURL: "http://127.0.0.1:1", AuthMode: "none", Enabled: true,
+			Models: []config.ModelConfig{{ID: "m", Model: "up-two", Enabled: true, Weight: 1}}},
+	}
+	s := testGateway(t, cfg)
+	requirement := func(key string) router.Requirement {
+		r := httptest.NewRequest(http.MethodPost, "http://gateway/v1/chat/completions", nil)
+		r.Header.Set("X-Session-ID", "same-session")
+		r.Header.Set("Authorization", "Bearer "+key)
+		return s.prepareRequirement(router.Requirement{Model: "auto"}, r, "")
+	}
+	first := requirement("client-key-alpha")
+	second := requirement("client-key-bravo")
+	if first.SessionKey == second.SessionKey {
+		t.Fatal("different client keys shared a session affinity bucket")
+	}
+	s.rt.ObserveSession(first, "first/m")
+	s.rt.ObserveSession(second, "second/m")
+	for _, tc := range []struct {
+		req  router.Requirement
+		want string
+	}{{first, "first/m"}, {second, "second/m"}} {
+		got := s.rt.Candidates(tc.req)
+		if len(got) != 2 || got[0].Deployment.ID != tc.want {
+			t.Fatalf("client pin overwritten: want=%s candidates=%+v", tc.want, got)
+		}
 	}
 }

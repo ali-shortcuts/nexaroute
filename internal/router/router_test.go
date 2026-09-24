@@ -588,3 +588,27 @@ func TestCostAwareAffinityCannotOverrideHigherPriority(t *testing.T) {
 		t.Fatalf("lower-priority affinity pin overrode priority: %#v", got)
 	}
 }
+
+func TestReadyMeshAffinityHonorsPriorityAfterReload(t *testing.T) {
+	cfg := config.Default()
+	cfg.Routing.Strategy = "ready_mesh"
+	cfg.Routing.SessionAffinity = true
+	cfg.Providers = []config.ProviderConfig{{ID: "p", Type: "openai_compatible", BaseURL: "http://example.invalid", Enabled: true,
+		Models: []config.ModelConfig{
+			{ID: "old", Model: "old", Enabled: true, Weight: 1, Priority: 0},
+			{ID: "new", Model: "new", Enabled: true, Weight: 1, Priority: 10},
+		}}}
+	hm := health.New(cfg.Routing.FailureThreshold, cfg.Cooldown())
+	hm.RecordSuccess("p/old", time.Millisecond)
+	hm.RecordSuccess("p/new", time.Millisecond)
+	r := New(cfg, hm)
+	req := Requirement{Model: "auto", SessionKey: "client-session"}
+	r.ObserveSession(req, "p/old")
+	cfg.Providers[0].Models[0].Priority = 10
+	cfg.Providers[0].Models[1].Priority = 0
+	r.Reload(cfg)
+	got := r.Candidates(req)
+	if len(got) != 2 || got[0].Deployment.ID != "p/new" {
+		t.Fatalf("stale affinity pin overrode updated operator priority: %+v", got)
+	}
+}

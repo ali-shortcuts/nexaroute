@@ -662,6 +662,23 @@ func (t *nativeSSETracker) finish() error {
 	return nil
 }
 
+// reportNativeSSEError sends a terminal error in the same wire protocol. A
+// native stream is already committed as HTTP 200, so returning a Go error
+// alone would leave the client with a silent, apparently successful stream.
+// Use a generic message: upstream error events may contain credentials.
+func reportNativeSSEError(w http.ResponseWriter, protocol string) {
+	var frame string
+	if protocol == "anthropic" {
+		frame = "\n\nevent: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"upstream stream failed\"}}\n\n"
+	} else {
+		frame = "\n\ndata: {\"error\":{\"type\":\"server_error\",\"message\":\"upstream stream failed\"}}\n\n"
+	}
+	_, _ = io.WriteString(w, frame)
+	if fl, ok := w.(http.Flusher); ok {
+		fl.Flush()
+	}
+}
+
 func proxyNativeSSE(w http.ResponseWriter, resp *http.Response, protocol string, usageHooks ...func(prompt, completion int)) error {
 	defer resp.Body.Close()
 	if !strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
@@ -679,6 +696,7 @@ func proxyNativeSSE(w http.ResponseWriter, resp *http.Response, protocol string,
 		n, err := resp.Body.Read(buf)
 		if n > 0 {
 			if terr := tracker.consume(buf[:n]); terr != nil {
+				reportNativeSSEError(w, protocol)
 				return terr
 			}
 			if _, werr := w.Write(buf[:n]); werr != nil {
@@ -690,8 +708,13 @@ func proxyNativeSSE(w http.ResponseWriter, resp *http.Response, protocol string,
 		}
 		if err != nil {
 			if err == io.EOF {
-				return tracker.finish()
+				if finErr := tracker.finish(); finErr != nil {
+					reportNativeSSEError(w, protocol)
+					return finErr
+				}
+				return nil
 			}
+			reportNativeSSEError(w, protocol)
 			return err
 		}
 	}
