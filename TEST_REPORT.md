@@ -44,6 +44,9 @@ Every normal CI run also executes one bounded stress pass covering:
 - credential cooldown and environment-key rotation;
 - hot reload adapter reuse and stale-health invalidation;
 - total failover budgets and actual upstream-attempt accounting;
+- provider-wide incident circuits requiring distinct deployment evidence and guarding active cooldowns from stale in-flight observations;
+- model-specific versus provider-wide error classification;
+- streaming TTFT observation and provider quota-header telemetry;
 - cancellation-neutral provider health;
 - malformed/truncated JSON and SSE;
 - translated stream terminal validation and client-write failure;
