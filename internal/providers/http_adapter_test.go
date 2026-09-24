@@ -2,6 +2,7 @@ package providers
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -118,6 +119,49 @@ func TestReleaseOnDoneBodyReleasesOnTerminalReadError(t *testing.T) {
 	}
 	if released != 1 {
 		t.Fatalf("release ran more than once: %d", released)
+	}
+}
+
+func TestResponsesProbeUsesResponsesPathAndPayload(t *testing.T) {
+	var gotPath string
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(body, &got); err != nil {
+			t.Fatalf("probe payload is not JSON: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"resp_1","object":"response","status":"completed","model":"m","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"OK"}]}],"usage":{"input_tokens":1,"output_tokens":1}}`)
+	}))
+	defer srv.Close()
+
+	p := config.ProviderConfig{
+		ID: "p", Name: "P", Type: "openai_responses", BaseURL: srv.URL,
+		ChatPath: "/must-not-use", ResponsesPath: "/custom/responses",
+		MaxConcurrency: 1, Enabled: true,
+	}
+	a, err := newHTTPAdapter(p, 2*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, status, err := a.Probe(context.Background(), "m", 3); err != nil || status != http.StatusOK {
+		t.Fatalf("Responses probe failed: status=%d err=%v", status, err)
+	}
+	if gotPath != "/custom/responses" {
+		t.Fatalf("probe path=%q want /custom/responses", gotPath)
+	}
+	if _, ok := got["messages"]; ok {
+		t.Fatalf("Responses probe leaked Chat Completions messages field: %#v", got)
+	}
+	if got["input"] == nil {
+		t.Fatalf("Responses probe missing input: %#v", got)
+	}
+	if got["max_output_tokens"] != float64(3) {
+		t.Fatalf("max_output_tokens=%v want 3", got["max_output_tokens"])
 	}
 }
 
