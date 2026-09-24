@@ -28,6 +28,7 @@ func testGateway(t *testing.T, cfg config.Config) *Server {
 	t.Helper()
 	cfg.ApplyDefaults()
 	hm := health.New(cfg.Routing.FailureThreshold, cfg.Cooldown())
+	hm.ConfigureProviderIncidents(cfg.Routing.ProviderFailureThreshold, cfg.ProviderFailureWindow(), cfg.ProviderCooldown())
 	reg, err := providers.NewRegistry(cfg)
 	if err != nil {
 		t.Fatal(err)
