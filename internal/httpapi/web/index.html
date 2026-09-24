@@ -121,7 +121,7 @@
           <input id="modelSearch" class="search" type="search" placeholder="Filter deployments…" spellcheck="false">
         </div>
         <div class="tablewrap"><table>
-          <thead><tr><th>Deployment</th><th>Provider</th><th>Model</th><th>Status</th><th>Latency</th><th>Failures</th></tr></thead>
+          <thead><tr><th>Deployment</th><th>Provider</th><th>Model</th><th>Status</th><th>Latency</th><th>TTFT</th><th>Failures</th></tr></thead>
           <tbody id="modelRows"></tbody>
         </table></div>
       </div>
@@ -133,7 +133,7 @@
         <div class="panel">
           <div class="panelhead"><div><h2>Provider pressure</h2><p>Live in-flight capacity, waiting requests and credential cooling.</p></div><span class="live">LIVE</span></div>
           <div class="tablewrap"><table>
-            <thead><tr><th>Provider</th><th>Active</th><th>Waiting</th><th>Capacity</th><th>Credentials</th><th>Cooling</th></tr></thead>
+            <thead><tr><th>Provider</th><th>Incident</th><th>Active</th><th>Waiting</th><th>Capacity</th><th>Credentials</th><th>Cooling</th><th>Req quota</th><th>Token quota</th></tr></thead>
             <tbody id="providerHealthRows"></tbody>
           </table></div>
         </div>
@@ -189,8 +189,16 @@
               <label class="field"><span>Failure threshold</span><input id="rtFailureThreshold" type="number" min="1" max="1000"></label>
             </div>
             <div class="form-grid two">
+              <label class="field"><span>Provider incident threshold</span><input id="rtProviderFailureThreshold" type="number" min="2" max="100"></label>
+              <label class="field"><span>Provider incident window (sec)</span><input id="rtProviderFailureWindow" type="number" min="1" max="3600"></label>
+            </div>
+            <div class="form-grid two">
+              <label class="field"><span>Provider incident cooldown (sec)</span><input id="rtProviderCooldown" type="number" min="1" max="86400"></label>
               <label class="field"><span>Capability failure threshold</span><input id="rtCapabilityThreshold" type="number" min="1" max="1000"></label>
+            </div>
+            <div class="form-grid two">
               <label class="field"><span>Capability cooldown (sec)</span><input id="rtCapabilityCooldown" type="number" min="1"></label>
+              <span></span>
             </div>
             <div class="form-grid two">
               <label class="field"><span>Cooldown seconds</span><input id="rtCooldown" type="number" min="1"></label>

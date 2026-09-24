@@ -16,6 +16,9 @@ type ProviderStats struct {
 	WaitingRequests    int64  `json:"waiting_requests"`
 	Credentials        int    `json:"credentials"`
 	CredentialsCooling int    `json:"credentials_cooling"`
+	RemainingRequests  int64  `json:"remaining_requests"`
+	RemainingTokens    int64  `json:"remaining_tokens"`
+	RateLimitResetUnix int64  `json:"rate_limit_reset_unix,omitempty"`
 }
 
 type Adapter interface {

@@ -236,7 +236,8 @@ func TestReadyMeshSettingsControlsAreWiredInEmbeddedUI(t *testing.T) {
 	js := string(app)
 	controls := []string{
 		"rtSessionAffinity", "rtSessionTTL", "rtP2CWindow", "rtCapacityWeight",
-		"rtAttempts", "rtMaxInflight", "rtFailureThreshold", "rtCapabilityThreshold",
+		"rtAttempts", "rtMaxInflight", "rtFailureThreshold", "rtProviderFailureThreshold",
+		"rtProviderFailureWindow", "rtProviderCooldown", "rtCapabilityThreshold",
 		"rtCapabilityCooldown", "rtCooldown", "rtTimeout", "rtBackoff", "rtRetryAfter",
 		"prEnabled", "prOnStart", "prInterval", "prReadyLease", "prTimeout",
 		"prTokens", "prConcurrency", "prRecoveryAttempts", "prRecoveryRetry",
@@ -909,5 +910,40 @@ func TestStreamAnthropicToOpenAISuccessStillEmitsRoleFirst(t *testing.T) {
 	}
 	if !strings.Contains(out, `"role":"assistant"`) || !strings.Contains(out, `"content":"hello"`) || !strings.Contains(out, "[DONE]") {
 		t.Fatalf("happy path degraded: %q", out)
+	}
+}
+
+func TestFailurePolicySeparatesModelAndProviderFailures(t *testing.T) {
+	modelMissing := policyForStatus(http.StatusNotFound)
+	if !modelMissing.Failover || !modelMissing.QuarantineDeployment || modelMissing.SignalProvider {
+		t.Fatalf("404 policy should isolate deployment only: %+v", modelMissing)
+	}
+	overloaded := policyForStatus(http.StatusServiceUnavailable)
+	if !overloaded.Failover || !overloaded.QuarantineDeployment || !overloaded.SignalProvider {
+		t.Fatalf("503 policy should signal provider incident: %+v", overloaded)
+	}
+	conflict := policyForStatus(http.StatusConflict)
+	if !conflict.Failover || conflict.QuarantineDeployment || conflict.SignalProvider {
+		t.Fatalf("409 should fail over without poisoning health: %+v", conflict)
+	}
+}
+
+func TestObserveFirstByteRecordsOnlyFirstRead(t *testing.T) {
+	var calls int
+	var observed time.Duration
+	start := time.Now().Add(-50 * time.Millisecond)
+	body := observeFirstByte(io.NopCloser(strings.NewReader("hello")), start, func(d time.Duration) {
+		calls++
+		observed = d
+	})
+	buf := make([]byte, 2)
+	_, _ = body.Read(buf)
+	_, _ = body.Read(buf)
+	_ = body.Close()
+	if calls != 1 {
+		t.Fatalf("first-byte observer calls=%d want 1", calls)
+	}
+	if observed < 40*time.Millisecond {
+		t.Fatalf("observed ttft=%s unexpectedly small", observed)
 	}
 }

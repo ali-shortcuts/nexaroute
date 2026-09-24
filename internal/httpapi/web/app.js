@@ -103,6 +103,9 @@ function fillRuntimeSettings() {
   $('#rtAttempts').value = r.max_attempts || 4;
   $('#rtMaxInflight').value = r.max_inflight_requests || 128;
   $('#rtFailureThreshold').value = r.failure_threshold || 5;
+  $('#rtProviderFailureThreshold').value = r.provider_failure_threshold || 3;
+  $('#rtProviderFailureWindow').value = r.provider_failure_window_seconds || 20;
+  $('#rtProviderCooldown').value = r.provider_cooldown_seconds || 30;
   $('#rtCapabilityThreshold').value = r.capability_failure_threshold || 2;
   $('#rtCapabilityCooldown').value = r.capability_cooldown_seconds || 300;
   $('#rtCooldown').value = r.cooldown_seconds || 1800;
@@ -133,6 +136,9 @@ $('#saveRuntimeSettings').onclick = async () => {
       max_attempts: intVal('#rtAttempts', 4, 1),
       max_inflight_requests: intVal('#rtMaxInflight', 128, 1),
       failure_threshold: intVal('#rtFailureThreshold', 5, 1),
+      provider_failure_threshold: intVal('#rtProviderFailureThreshold', 3, 2),
+      provider_failure_window_seconds: intVal('#rtProviderFailureWindow', 20, 1),
+      provider_cooldown_seconds: intVal('#rtProviderCooldown', 30, 1),
       capability_failure_threshold: intVal('#rtCapabilityThreshold', 2, 1),
       capability_cooldown_seconds: intVal('#rtCapabilityCooldown', 300, 1),
       cooldown_seconds: intVal('#rtCooldown', 1800, 1),
@@ -299,10 +305,15 @@ function providerColor(id) {
 }
 
 function renderProviders(h) {
+  const incidents = Object.fromEntries((snap.provider_health || []).map(x => [x.provider, x]));
+  const stats = Object.fromEntries((snap.provider_stats || []).map(x => [x.id, x]));
   $('#providerGrid').innerHTML = providerSummaries.map(p => {
     const ds = (snap.deployments || []).filter(d => d.provider_id === p.id);
     const ok = ds.filter(d => (h[d.id] || {}).status === 'healthy').length;
     const pct = ds.length ? Math.round(ok / ds.length * 100) : 0;
+    const inc = incidents[p.id] || { status: 'unknown' };
+    const st = stats[p.id] || {};
+    const quota = Number.isFinite(st.remaining_requests) && st.remaining_requests >= 0 ? `${st.remaining_requests} req left` : 'quota unknown';
     return `<article class="provider-card">
       <div class="provider-card-top">
         <div class="provider-mark" style="background:${providerColor(p.id)}">${esc((p.name || p.id).slice(0, 1).toUpperCase())}</div>
@@ -311,11 +322,11 @@ function renderProviders(h) {
       </div>
       <div class="provider-url" title="${esc(p.base_url)}">${esc(p.base_url)}</div>
       <div class="provider-healthbar"><i style="width:${pct}%"></i></div>
-      <div class="provider-meta"><span>${p.has_secret ? `${p.credential_count || 1} credential(s)` : 'No credential'}</span><span>${ok}/${ds.length} healthy</span></div>
+      <div class="provider-meta"><span>${p.has_secret ? `${p.credential_count || 1} credential(s)` : 'No credential'}</span><span>${ok}/${ds.length} healthy</span><span>incident: ${esc(inc.status || 'unknown')}</span><span>${esc(quota)}</span></div>
       <button class="edit-provider btn secondary" data-id="${esc(p.id)}">Edit provider</button>
     </article>`;
   }).join('') || '<div class="empty-state"><strong>No providers yet.</strong><span>Add an OpenAI-compatible or Anthropic-compatible upstream to start routing.</span></div>';
-  $$('.edit-provider').forEach(b => b.onclick = () => openEdit(b.dataset.id));
+  $('.edit-provider').forEach(b => b.onclick = () => openEdit(b.dataset.id));
 }
 
 function renderModels(ds, h) {
@@ -331,29 +342,38 @@ function renderModels(ds, h) {
       <td>${esc(d.model)}</td>
       <td><span class="status ${esc(x.status)}">${esc(x.status)}</span></td>
       <td><span class="latbar">${lat ? `<span class="track"><i style="width:${Math.round(lat / maxLat * 100)}%"></i></span>` : ''}${fmtMs(lat)}</span></td>
+      <td>${fmtMs(Number(x.ewma_ttft_ms || 0))}</td>
       <td>${x.consecutive_failures || 0}</td>
     </tr>`;
-  }).join('') || '<tr><td colspan="6" style="color:var(--muted)">No deployments match.</td></tr>';
+  }).join('') || '<tr><td colspan="7" style="color:var(--muted)">No deployments match.</td></tr>';
 }
 $('#modelSearch').oninput = () => renderModels(snap.deployments || [], healthMap());
 
 function renderHealthTab(h) {
+  const incidents = Object.fromEntries((snap.provider_health || []).map(x => [x.provider, x]));
+  const stats = Object.fromEntries((snap.provider_stats || []).map(x => [x.id, x]));
   const rows = (snap.provider_pressure || []);
   $('#providerHealthRows').innerHTML = rows.map(p => {
+    const id = p.provider_id || p.provider;
+    const inc = incidents[id] || { status: 'unknown' };
+    const st = stats[id] || {};
     const capPct = p.capacity ? Math.min(100, Math.round((p.active / p.capacity) * 100)) : 0;
+    const reqQuota = Number.isFinite(st.remaining_requests) && st.remaining_requests >= 0 ? st.remaining_requests : '—';
+    const tokQuota = Number.isFinite(st.remaining_tokens) && st.remaining_tokens >= 0 ? st.remaining_tokens : '—';
     return `<tr>
-      <td>${esc(p.provider_name || p.provider_id || p.provider)}</td>
+      <td>${esc(p.provider_name || id)}</td>
+      <td><span class="status ${esc(inc.status || 'unknown')}">${esc(inc.status || 'unknown')}</span></td>
       <td>${p.active ?? 0}</td><td>${p.waiting ?? 0}</td>
       <td><span class="latbar">${p.capacity ? `<span class="track"><i style="width:${capPct}%;background:${capPct > 85 ? 'var(--bad)' : capPct > 60 ? 'var(--warn)' : 'var(--good)'}"></i></span>` : ''}${p.capacity ?? '∞'}</span></td>
       <td>${esc(p.credentials ?? '—')}</td>
-      <td>${p.cooling ? `<span class="status cooldown">cooling</span>` : '<span class="status healthy">ok</span>'}</td>
+      <td>${p.cooling ? '<span class="status cooldown">cooling</span>' : '<span class="status healthy">ok</span>'}</td>
+      <td>${reqQuota}</td><td>${tokQuota}</td>
     </tr>`;
-  }).join('') || '<tr><td colspan="6" style="color:var(--muted)">No provider pressure data.</td></tr>';
+  }).join('') || '<tr><td colspan="9" style="color:var(--muted)">No provider pressure data.</td></tr>';
 
   const scopes = snap.scope_health || [];
   $('#scopeHealthList').innerHTML = scopes.map(s => {
     const st = s.status || 'unknown';
-    const cls = st === 'healthy' ? 'good' : st === 'cooldown' ? 'bad' : 'degraded';
     return `<div class="scope-row">
       <div><strong>${esc(s.deployment)}</strong><br><small>scope: ${esc((s.scopes || []).join(', '))}</small></div>
       <span class="status ${esc(st)}">${esc(st)}</span>

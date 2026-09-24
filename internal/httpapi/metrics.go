@@ -65,6 +65,10 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 
 	fmt.Fprintln(w, "# HELP nexaroute_deployment_ewma_latency_ms Response-header EWMA latency by deployment.")
 	fmt.Fprintln(w, "# TYPE nexaroute_deployment_ewma_latency_ms gauge")
+	fmt.Fprintln(w, "# HELP nexaroute_deployment_ewma_ttft_ms Streaming time-to-first-byte EWMA by deployment.")
+	fmt.Fprintln(w, "# TYPE nexaroute_deployment_ewma_ttft_ms gauge")
+	fmt.Fprintln(w, "# HELP nexaroute_deployment_ewma_failure_rate Recency-weighted failure rate by deployment.")
+	fmt.Fprintln(w, "# TYPE nexaroute_deployment_ewma_failure_rate gauge")
 	fmt.Fprintln(w, "# HELP nexaroute_deployment_successes_total Successful observations by deployment.")
 	fmt.Fprintln(w, "# TYPE nexaroute_deployment_successes_total counter")
 	fmt.Fprintln(w, "# HELP nexaroute_deployment_failures_total Failed observations by deployment.")
@@ -74,6 +78,8 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 		id := sanitizeMetricLabel(d.ID)
 		provider := sanitizeMetricLabel(d.ProviderID)
 		fmt.Fprintf(w, "nexaroute_deployment_ewma_latency_ms{deployment=%q,provider=%q} %.3f\n", id, provider, h.EWMALatencyMS)
+		fmt.Fprintf(w, "nexaroute_deployment_ewma_ttft_ms{deployment=%q,provider=%q} %.3f\n", id, provider, h.EWMATTFTMS)
+		fmt.Fprintf(w, "nexaroute_deployment_ewma_failure_rate{deployment=%q,provider=%q} %.6f\n", id, provider, h.EWMAFailureRate)
 		fmt.Fprintf(w, "nexaroute_deployment_successes_total{deployment=%q,provider=%q} %d\n", id, provider, h.Successes)
 		fmt.Fprintf(w, "nexaroute_deployment_failures_total{deployment=%q,provider=%q} %d\n", id, provider, h.Failures)
 	}
@@ -110,6 +116,12 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintln(w, "# TYPE nexaroute_provider_concurrency_limit gauge")
 	fmt.Fprintln(w, "# HELP nexaroute_provider_credentials_cooling Credentials currently quarantined by provider.")
 	fmt.Fprintln(w, "# TYPE nexaroute_provider_credentials_cooling gauge")
+	fmt.Fprintln(w, "# HELP nexaroute_provider_remaining_requests Latest upstream request quota remaining; -1 means unknown.")
+	fmt.Fprintln(w, "# TYPE nexaroute_provider_remaining_requests gauge")
+	fmt.Fprintln(w, "# HELP nexaroute_provider_remaining_tokens Latest upstream token quota remaining; -1 means unknown.")
+	fmt.Fprintln(w, "# TYPE nexaroute_provider_remaining_tokens gauge")
+	fmt.Fprintln(w, "# HELP nexaroute_provider_rate_limit_reset_unix Latest known upstream quota reset time as Unix seconds.")
+	fmt.Fprintln(w, "# TYPE nexaroute_provider_rate_limit_reset_unix gauge")
 	stats := s.reg.Stats()
 	sort.Slice(stats, func(i, j int) bool { return stats[i].ID < stats[j].ID })
 	for _, st := range stats {
@@ -118,6 +130,21 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "nexaroute_provider_waiting_requests{provider=%q} %d\n", id, st.WaitingRequests)
 		fmt.Fprintf(w, "nexaroute_provider_concurrency_limit{provider=%q} %d\n", id, st.MaxConcurrency)
 		fmt.Fprintf(w, "nexaroute_provider_credentials_cooling{provider=%q} %d\n", id, st.CredentialsCooling)
+		fmt.Fprintf(w, "nexaroute_provider_remaining_requests{provider=%q} %d\n", id, st.RemainingRequests)
+		fmt.Fprintf(w, "nexaroute_provider_remaining_tokens{provider=%q} %d\n", id, st.RemainingTokens)
+		fmt.Fprintf(w, "nexaroute_provider_rate_limit_reset_unix{provider=%q} %d\n", id, st.RateLimitResetUnix)
+	}
+
+	fmt.Fprintln(w, "# HELP nexaroute_provider_incident_state Provider-level circuit state (1 for current state).")
+	fmt.Fprintln(w, "# TYPE nexaroute_provider_incident_state gauge")
+	fmt.Fprintln(w, "# HELP nexaroute_provider_incident_evidence Distinct failing deployments observed inside the provider incident window.")
+	fmt.Fprintln(w, "# TYPE nexaroute_provider_incident_evidence gauge")
+	providerHealth := s.hm.ProviderSnapshot()
+	sort.Slice(providerHealth, func(i, j int) bool { return providerHealth[i].Provider < providerHealth[j].Provider })
+	for _, st := range providerHealth {
+		id := sanitizeMetricLabel(st.Provider)
+		fmt.Fprintf(w, "nexaroute_provider_incident_state{provider=%q,status=%q} 1\n", id, st.Status)
+		fmt.Fprintf(w, "nexaroute_provider_incident_evidence{provider=%q} %d\n", id, st.Evidence)
 	}
 }
 

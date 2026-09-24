@@ -278,3 +278,86 @@ func TestDegradedFailureClearsStaleCooldownDeadline(t *testing.T) {
 	}
 	_ = m
 }
+
+func TestProviderIncidentRequiresDistinctDeployments(t *testing.T) {
+	m := New(5, time.Hour)
+	m.ConfigureProviderIncidents(3, time.Second, time.Minute)
+	m.RecordProviderFailure("p", "p/a", "transport")
+	m.RecordProviderFailure("p", "p/a", "transport again")
+	if !m.ProviderAvailable("p") {
+		t.Fatal("one failing deployment must not open provider circuit")
+	}
+	m.RecordProviderFailure("p", "p/b", "timeout")
+	if !m.ProviderAvailable("p") {
+		t.Fatal("two distinct failures must stay below threshold 3")
+	}
+	m.RecordProviderFailure("p", "p/c", "503")
+	if m.ProviderAvailable("p") {
+		t.Fatal("three distinct failures should open provider circuit")
+	}
+	snap := m.ProviderSnapshot()
+	if len(snap) != 1 || snap[0].Status != Cooldown || snap[0].Evidence != 3 {
+		t.Fatalf("unexpected provider state: %#v", snap)
+	}
+}
+
+func TestProviderIncidentHalfOpenFailureRecoolsImmediately(t *testing.T) {
+	m := New(5, time.Hour)
+	m.ConfigureProviderIncidents(2, time.Second, 5*time.Millisecond)
+	m.RecordProviderFailure("p", "p/a", "x")
+	m.RecordProviderFailure("p", "p/b", "x")
+	if m.ProviderAvailable("p") {
+		t.Fatal("provider should be cooling")
+	}
+	time.Sleep(8 * time.Millisecond)
+	if !m.ProviderAvailable("p") {
+		t.Fatal("expired provider cooldown should enter half-open")
+	}
+	m.RecordProviderFailure("p", "p/a", "still bad")
+	if m.ProviderAvailable("p") {
+		t.Fatal("half-open provider failure should immediately re-open circuit")
+	}
+}
+
+func TestProviderInFlightObservationsDoNotBreakActiveCooldown(t *testing.T) {
+	m := New(5, time.Hour)
+	m.ConfigureProviderIncidents(2, time.Second, time.Minute)
+	m.RecordProviderFailure("p", "p/a", "x")
+	m.RecordProviderFailure("p", "p/b", "x")
+	before := m.ProviderSnapshot()[0].CooldownUntil
+	m.RecordProviderSuccess("p")
+	m.RecordProviderFailure("p", "p/a", "late failure")
+	st := m.ProviderSnapshot()[0]
+	if st.Status != Cooldown {
+		t.Fatalf("in-flight observation changed active provider cooldown: %+v", st)
+	}
+	if st.CooldownUntil != before {
+		t.Fatalf("provider cooldown deadline changed: before=%v after=%v", before, st.CooldownUntil)
+	}
+}
+
+func TestRecordTTFTUsesEWMA(t *testing.T) {
+	m := New(5, time.Hour)
+	m.RecordTTFT("p/m", 100*time.Millisecond)
+	m.RecordTTFT("p/m", 300*time.Millisecond)
+	if got := m.Get("p/m").EWMATTFTMS; got < 149 || got > 151 {
+		t.Fatalf("ttft ewma=%f want about 150", got)
+	}
+}
+
+func TestInvalidateProviderClearsIncidentEvidence(t *testing.T) {
+	m := New(5, time.Hour)
+	m.ConfigureProviderIncidents(2, time.Second, time.Minute)
+	m.RecordProviderFailure("p", "p/a", "x")
+	m.RecordProviderFailure("p", "p/b", "x")
+	if m.ProviderAvailable("p") {
+		t.Fatal("fixture provider circuit did not open")
+	}
+	m.InvalidateProvider("p")
+	if !m.ProviderAvailable("p") {
+		t.Fatal("invalidated provider remained unavailable")
+	}
+	if got := m.ProviderSnapshot(); len(got) != 0 {
+		t.Fatalf("invalidated provider state remained: %#v", got)
+	}
+}
