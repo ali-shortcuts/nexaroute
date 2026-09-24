@@ -582,7 +582,7 @@ function emptyProvider() {
   return {
     id: '', name: '', type: 'openai_compatible', base_url: '', api_key: '', api_key_env: '', credentials: [],
     auth_mode: 'bearer', headers: {}, forward_headers: null, proxy_url: '',
-    chat_path: '/v1/chat/completions', messages_path: '/v1/messages', models_path: '/v1/models',
+    chat_path: '/v1/chat/completions', responses_path: '/v1/responses', messages_path: '/v1/messages', models_path: '/v1/models',
     count_tokens_path: '/v1/messages/count_tokens', max_concurrency: 32, stream_idle_timeout_seconds: 180,
     enabled: true, models: []
   };
@@ -640,6 +640,7 @@ function applyPreset(k) {
     $('#pBase').value = p.base_url || p.base || '';
     $('#pAuth').value = p.auth_mode || 'bearer';
     $('#pChatPath').value = p.chat_path || '/v1/chat/completions';
+    $('#pResponsesPath').value = p.responses_path || '/v1/responses';
     $('#pMessagesPath').value = p.messages_path || '/v1/messages';
     $('#pModelsPath').value = p.models_path || '/v1/models';
     $('#pCountPath').value = p.count_tokens_path || '/v1/messages/count_tokens';
@@ -655,6 +656,7 @@ function applyPreset(k) {
   $('#pBase').value = c.base;
   $('#pAuth').value = c.auth;
   $('#pChatPath').value = '/v1/chat/completions';
+  $('#pResponsesPath').value = '/v1/responses';
   $('#pMessagesPath').value = '/v1/messages';
   $('#pModelsPath').value = '/v1/models';
   $('#pCountPath').value = '/v1/messages/count_tokens';
@@ -673,9 +675,10 @@ $('#pKeyEnv').oninput = () => editor.secretDirty = true;
 $('#pCredentials').oninput = () => editor.secretDirty = true;
 $('#pPreset').onchange = () => applyPreset($('#pPreset').value);
 $('#pType').onchange = () => {
-  const a = $('#pAuth');
-  if ($('#pType').value === 'anthropic_compatible' && a.value === 'bearer') a.value = 'x-api-key';
-  if ($('#pType').value === 'openai_compatible' && a.value === 'x-api-key') a.value = 'bearer';
+  const a = $('#pAuth'), typ = $('#pType').value;
+  if (typ === 'anthropic_compatible' && (a.value === 'bearer' || a.value === 'x-goog-api-key')) a.value = 'x-api-key';
+  if (typ === 'gemini' && (a.value === 'bearer' || a.value === 'x-api-key')) a.value = 'x-goog-api-key';
+  if ((typ === 'openai_compatible' || typ === 'openai_responses') && (a.value === 'x-api-key' || a.value === 'x-goog-api-key')) a.value = 'bearer';
 };
 async function openEdit(id) {
   try {
@@ -716,6 +719,7 @@ function fillForm() {
   $('#pConcurrency').value = p.max_concurrency || 32;
   $('#pStreamIdle').value = p.stream_idle_timeout_seconds || 180;
   $('#pChatPath').value = p.chat_path || '/v1/chat/completions';
+  $('#pResponsesPath').value = p.responses_path || '/v1/responses';
   $('#pMessagesPath').value = p.messages_path || '/v1/messages';
   $('#pModelsPath').value = p.models_path || '/v1/models';
   $('#pCountPath').value = p.count_tokens_path || '/v1/messages/count_tokens';
@@ -785,8 +789,9 @@ function readForm() {
       return v.length ? v : (editor.mode === 'add' ? null : []);
     })(),
     proxy_url: $('#pProxy').value.trim(),
-    chat_path: $('#pChatPath').value.trim(), messages_path: $('#pMessagesPath').value.trim(),
-    models_path: $('#pModelsPath').value.trim(), count_tokens_path: $('#pCountPath').value.trim(),
+    chat_path: $('#pChatPath').value.trim(), responses_path: $('#pResponsesPath').value.trim(),
+    messages_path: $('#pMessagesPath').value.trim(), models_path: $('#pModelsPath').value.trim(),
+    count_tokens_path: $('#pCountPath').value.trim(),
     max_concurrency: Math.max(1, parseInt($('#pConcurrency').value || '32', 10)),
     stream_idle_timeout_seconds: Math.max(10, parseInt($('#pStreamIdle').value || '180', 10)),
     enabled: $('#pEnabled').checked, models
