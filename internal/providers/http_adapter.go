@@ -43,17 +43,20 @@ func RetryAfter(err error) (time.Duration, bool) {
 }
 
 type httpAdapter struct {
-	p              config.ProviderConfig
-	c              *http.Client
-	streamC        *http.Client
-	sem            chan struct{}
-	credMu         sync.RWMutex
-	creds          []credentialState
-	rr             uint64
-	forwardAllowed map[string]struct{}
-	retryAfterCap  time.Duration
-	active         atomic.Int64
-	waiting        atomic.Int64
+	p                  config.ProviderConfig
+	c                  *http.Client
+	streamC            *http.Client
+	sem                chan struct{}
+	credMu             sync.RWMutex
+	creds              []credentialState
+	rr                 uint64
+	forwardAllowed     map[string]struct{}
+	retryAfterCap      time.Duration
+	active             atomic.Int64
+	waiting            atomic.Int64
+	remainingRequests  atomic.Int64
+	remainingTokens    atomic.Int64
+	rateLimitResetUnix atomic.Int64
 }
 
 func newHTTPAdapter(p config.ProviderConfig, timeout time.Duration) (*httpAdapter, error) {
@@ -100,6 +103,8 @@ func newHTTPAdapterWithRetryCap(p config.ProviderConfig, timeout, retryAfterCap 
 		sem: make(chan struct{}, mc), forwardAllowed: make(map[string]struct{}, len(p.ForwardHeaders)),
 		retryAfterCap: retryAfterCap,
 	}
+	a.remainingRequests.Store(-1)
+	a.remainingTokens.Store(-1)
 	for _, h := range p.ForwardHeaders {
 		h = strings.ToLower(strings.TrimSpace(h))
 		if h != "" {
@@ -132,6 +137,8 @@ func (a *httpAdapter) Stats() ProviderStats {
 		ID: a.p.ID, MaxConcurrency: cap(a.sem),
 		ActiveRequests: a.active.Load(), WaitingRequests: a.waiting.Load(),
 		Credentials: len(a.creds), CredentialsCooling: cooling,
+		RemainingRequests: a.remainingRequests.Load(), RemainingTokens: a.remainingTokens.Load(),
+		RateLimitResetUnix: a.rateLimitResetUnix.Load(),
 	}
 }
 
@@ -304,6 +311,7 @@ func (a *httpAdapter) DoPath(ctx context.Context, method, path string, payload [
 			release()
 			return nil, err
 		}
+		a.observeRateLimitHeaders(resp.Header)
 		if stream && cancel != nil {
 			idle := time.Duration(a.p.StreamIdleTimeoutSeconds) * time.Second
 			if idle > 0 {
@@ -339,6 +347,55 @@ func (a *httpAdapter) DoPath(ctx context.Context, method, path string, payload [
 		lastErr = errors.New("no usable credentials")
 	}
 	return nil, lastErr
+}
+
+func parseQuotaIntHeader(h http.Header, names ...string) (int64, bool) {
+	for _, name := range names {
+		v := strings.TrimSpace(h.Get(name))
+		if v == "" {
+			continue
+		}
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err == nil && n >= 0 {
+			return n, true
+		}
+	}
+	return 0, false
+}
+
+func parseQuotaResetHeader(h http.Header, names ...string) (int64, bool) {
+	now := time.Now()
+	for _, name := range names {
+		v := strings.TrimSpace(h.Get(name))
+		if v == "" {
+			continue
+		}
+		if t, err := time.Parse(time.RFC3339, v); err == nil && t.After(now) {
+			return t.Unix(), true
+		}
+		if t, err := http.ParseTime(v); err == nil && t.After(now) {
+			return t.Unix(), true
+		}
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return now.Add(d).Unix(), true
+		}
+	}
+	return 0, false
+}
+
+func (a *httpAdapter) observeRateLimitHeaders(h http.Header) {
+	if n, ok := parseQuotaIntHeader(h, "x-ratelimit-remaining-requests", "anthropic-ratelimit-requests-remaining"); ok {
+		a.remainingRequests.Store(n)
+	}
+	if n, ok := parseQuotaIntHeader(h, "x-ratelimit-remaining-tokens", "anthropic-ratelimit-tokens-remaining"); ok {
+		a.remainingTokens.Store(n)
+	}
+	if reset, ok := parseQuotaResetHeader(h,
+		"x-ratelimit-reset-requests", "x-ratelimit-reset-tokens",
+		"anthropic-ratelimit-requests-reset", "anthropic-ratelimit-tokens-reset",
+	); ok {
+		a.rateLimitResetUnix.Store(reset)
+	}
 }
 
 func (a *httpAdapter) applyHeaders(req *http.Request, forward http.Header) {
