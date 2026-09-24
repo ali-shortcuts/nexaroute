@@ -254,3 +254,39 @@ whenever possible. This reduces correlated retry storms when one provider is
 experiencing a regional, authentication, quota or transport incident, while
 keeping same-provider deployments available after independent failure domains
 have been tried.
+
+
+## Provider incident circuits
+
+Deployment health and provider health are separate failure domains. A model-specific
+failure such as a 404 can quarantine only that deployment. Provider-wide evidence
+is reserved for transport failures, exhausted authentication/billing paths,
+rate limits, timeouts, and server/overload failures.
+
+The provider circuit opens only after failures from multiple distinct deployments
+inside a bounded evidence window. One broken model therefore cannot suppress an
+entire provider. While a provider cooldown is active, stale success or failure
+observations from requests that were already in flight cannot clear or downgrade
+that cooldown. Cooldown expiry enters half-open state; a new provider-level
+failure immediately reopens the circuit, while a verified success after the
+deadline closes it.
+
+The router filters providers with open incident circuits before deployment
+scoring. Existing per-deployment health proofs remain intact, so provider
+recovery does not require reconstructing every model's health history. A Base
+URL/authentication identity change explicitly invalidates the old provider
+incident state so a repaired endpoint is not held behind stale evidence.
+
+## Quota and streaming telemetry
+
+HTTP adapters observe common OpenAI and Anthropic rate-limit headers for remaining
+requests, remaining tokens, and reset times. These values are advisory because
+providers do not standardize quota semantics. A provider whose quota is known to
+be exhausted until a future reset is strongly deprioritized rather than
+absolutely removed, preserving a last-resort path when no alternative exists.
+
+For streaming traffic, NexaRoute records EWMA time-to-first-byte (TTFT) from
+request dispatch to the first upstream body bytes. Response-header latency
+remains a separate metric. NexaRoute intentionally does not label byte
+throughput as token throughput; exact cross-provider tokens/second requires
+protocol-aware usage accounting.
