@@ -564,9 +564,12 @@ func (e *Engine) maybeProbeCapabilities(ctx context.Context, d router.Deployment
 	defer cancel()
 	t := adapterTransport{a: a}
 	var report compat.ProbeReport
-	if d.ProviderType == "anthropic_compatible" {
+	switch d.ProviderType {
+	case "anthropic_compatible":
 		report = compat.RunCapabilitySuiteAnthropic(cctx, t, d.ID, d.Model)
-	} else {
+	case "openai_responses":
+		report = compat.RunCapabilitySuiteResponses(cctx, t, d.ID, d.Model)
+	default:
 		report = compat.RunCapabilitySuite(cctx, t, d.ID, d.Model, "")
 	}
 	for _, o := range report.Outcomes {
