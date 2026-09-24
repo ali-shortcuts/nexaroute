@@ -249,3 +249,33 @@ func TestCredential429CooldownUsesConfiguredRetryAfterCap(t *testing.T) {
 		t.Fatalf("credential cooldown ignored cap: %s", d)
 	}
 }
+func TestAdapterObservesCommonRateLimitHeaders(t *testing.T) {
+	reset := time.Now().Add(time.Minute).UTC().Format(time.RFC3339)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("x-ratelimit-remaining-requests", "0")
+		w.Header().Set("x-ratelimit-remaining-tokens", "1234")
+		w.Header().Set("x-ratelimit-reset-requests", "30s")
+		w.Header().Set("anthropic-ratelimit-tokens-reset", reset)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`)
+	}))
+	defer srv.Close()
+	p := config.ProviderConfig{ID: "p", Name: "P", Type: "openai_compatible", BaseURL: srv.URL, AuthMode: "none", ChatPath: "/", MaxConcurrency: 1, Enabled: true}
+	a, err := newHTTPAdapter(p, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := a.Do(context.Background(), []byte(`{"model":"m","messages":[]}`), false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+	st := a.Stats()
+	if st.RemainingRequests != 0 || st.RemainingTokens != 1234 {
+		t.Fatalf("unexpected quota stats: %+v", st)
+	}
+	if st.RateLimitResetUnix <= time.Now().Unix() {
+		t.Fatalf("reset was not captured: %+v", st)
+	}
+}
