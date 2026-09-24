@@ -634,6 +634,7 @@ const providerPresets = {
   custom: null,
   chat2api: { name: 'Chat2API', id: 'chat2api', type: 'openai_compatible', base: 'http://127.0.0.1:5000/v1', auth: 'bearer' },
   anthropic: { name: 'Anthropic', id: 'anthropic', type: 'anthropic_compatible', base: 'https://api.anthropic.com', auth: 'x-api-key' },
+  gemini: { name: 'Google Gemini', id: 'gemini', type: 'gemini', base: 'https://generativelanguage.googleapis.com', auth: 'x-goog-api-key' },
   openai: { name: 'OpenAI', id: 'openai', type: 'openai_compatible', base: 'https://api.openai.com/v1', auth: 'bearer' },
   openrouter: { name: 'OpenRouter', id: 'openrouter', type: 'openai_compatible', base: 'https://openrouter.ai/api/v1', auth: 'bearer' },
   deepseek: { name: 'DeepSeek', id: 'deepseek', type: 'openai_compatible', base: 'https://api.deepseek.com', auth: 'bearer' },
@@ -711,8 +712,9 @@ $('#pCredentials').oninput = () => editor.secretDirty = true;
 $('#pPreset').onchange = () => applyPreset($('#pPreset').value);
 $('#pType').onchange = () => {
   const a = $('#pAuth');
-  if ($('#pType').value === 'anthropic_compatible' && a.value === 'bearer') a.value = 'x-api-key';
-  if ($('#pType').value === 'openai_compatible' && a.value === 'x-api-key') a.value = 'bearer';
+  if ($('#pType').value === 'anthropic_compatible' && (a.value === 'bearer' || a.value === 'x-goog-api-key')) a.value = 'x-api-key';
+  if ($('#pType').value === 'openai_compatible' && (a.value === 'x-api-key' || a.value === 'x-goog-api-key')) a.value = 'bearer';
+  if ($('#pType').value === 'gemini' && (a.value === 'bearer' || a.value === 'x-api-key')) a.value = 'x-goog-api-key';
 };
 async function openEdit(id) {
   try {

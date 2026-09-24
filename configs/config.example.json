@@ -115,6 +115,39 @@
       ],
       "dialect": "",
       "protocol": "auto"
+    },
+    {
+      "id": "gemini",
+      "name": "Google Gemini",
+      "type": "gemini",
+      "base_url": "https://generativelanguage.googleapis.com",
+      "api_key_env": "GEMINI_API_KEY",
+      "credentials": [],
+      "auth_mode": "x-goog-api-key",
+      "headers": {},
+      "forward_headers": [],
+      "proxy_url": "",
+      "models_path": "/v1beta/models",
+      "max_concurrency": 32,
+      "stream_idle_timeout_seconds": 180,
+      "enabled": false,
+      "models": [
+        {
+          "id": "flash",
+          "model": "gemini-2.0-flash",
+          "enabled": true,
+          "priority": 5,
+          "weight": 1,
+          "capabilities": {
+            "streaming": true,
+            "tools": true,
+            "vision": true,
+            "reasoning": false
+          }
+        }
+      ],
+      "dialect": "generic_gemini",
+      "protocol": "gemini"
     }
   ],
   "logging": {

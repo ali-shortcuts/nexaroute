@@ -107,6 +107,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		var streamOptionsInjected bool
 		var payload []byte
 		c, a, nm, streamOptionsInjected, payload = primary.c, primary.a, primary.nm, primary.injected, primary.payload
+		bundle := primary
 		s.seedCompatContract(c.Deployment.ID, c.Deployment.Capabilities, c.Deployment.ProviderType)
 		attempts++
 		attemptIndex := attempts - 1
@@ -122,6 +123,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		}
 		if out.secondaryWon {
 			c, a, nm, streamOptionsInjected, payload = winner.c, winner.a, winner.nm, winner.injected, winner.payload
+			bundle = winner
 			s.seedCompatContract(c.Deployment.ID, c.Deployment.Capabilities, c.Deployment.ProviderType)
 			attempts++
 			attemptIndex = attempts - 1
@@ -136,7 +138,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 				if stripped, ok := stripStreamOptions(payload); ok {
 					payload = stripped
 					streamOptionsInjected = false
-					resp, e = a.Do(routeCtx, payload, in.Stream, forward)
+					resp, e = bundle.sender(in.Stream, forward)(routeCtx, payload)
 				} else {
 					resp.Body = io.NopCloser(bytes.NewReader(probe))
 				}
@@ -182,7 +184,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 			b = a.RedactBody(b)
 			// Bounded same-deployment repair (compat engine) before the
 			// error path below runs.
-			if repaired, _, _, good := s.maybeRepairUpstream(routeCtx, a, c.Deployment.ID, payload, in.Stream, forward, resp.StatusCode, b, r.Header.Get("x-request-id")); good {
+			if repaired, _, _, good := s.maybeRepairUpstream(routeCtx, bundle.sender(in.Stream, forward), a.RedactBody, c.Deployment.ID, payload, resp.StatusCode, b, r.Header.Get("x-request-id")); good {
 				resp = repaired
 			} else {
 				lastStatus = resp.StatusCode
@@ -229,7 +231,24 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 			deploymentID := c.Deployment.ID
 			resp.Body = observeFirstByte(resp.Body, start, func(d time.Duration) { s.hm.RecordTTFT(deploymentID, d) })
 		}
-		if c.Deployment.ProviderType == "anthropic_compatible" {
+		if c.Deployment.ProviderType == "gemini" {
+			if in.Stream {
+				e = streamGeminiToAnthropic(w, resp, in.Model, func(prompt, completion int) {
+					s.usage.Record(c.Deployment.ID, int64(prompt), int64(completion))
+				}, r.Header.Get("x-request-id"))
+			} else {
+				var translated any
+				var prompt, completion int
+				translated, prompt, completion, e = geminiResponseForClient(resp, "anthropic", in.Model)
+				if e == nil {
+					s.usage.Record(c.Deployment.ID, int64(prompt), int64(completion))
+					if b, merr := json.Marshal(translated); merr == nil {
+						s.cacheStoreResponse(cacheKey, cacheable, c.Deployment.ID, 200, "application/json", b)
+					}
+					writeJSON(w, 200, translated)
+				}
+			}
+		} else if c.Deployment.ProviderType == "anthropic_compatible" {
 			if in.Stream {
 				e = proxyNativeSSE(w, resp, "anthropic", func(prompt, completion int) {
 					s.usage.Record(c.Deployment.ID, int64(prompt), int64(completion))

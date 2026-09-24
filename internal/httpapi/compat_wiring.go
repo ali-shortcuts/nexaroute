@@ -15,7 +15,6 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/compat/repair"
 	"github.com/ali-shortcuts/nexaroute/internal/config"
 	"github.com/ali-shortcuts/nexaroute/internal/events"
-	"github.com/ali-shortcuts/nexaroute/internal/providers"
 )
 
 // compatStore returns the server capability store, lazily creating it for
@@ -116,14 +115,14 @@ func truncateCompat(s string, n int) string {
 // maybeRepairUpstream attempts bounded same-deployment repair for classified
 // UNSUPPORTED_PARAMETER failures. It returns the replacement response when a
 // repair rule applied; ok=false means the caller should use the original
-// status/body handling.
+// status/body handling. The caller supplies the dispatch closure so
+// model-scoped upstreams (Gemini) repair against the right URL.
 func (s *Server) maybeRepairUpstream(
 	ctx context.Context,
-	a providers.Adapter,
+	send func(context.Context, []byte) (*http.Response, error),
+	redact func([]byte) []byte,
 	deploymentID string,
 	payload []byte,
-	stream bool,
-	forward http.Header,
 	status int,
 	body []byte,
 	requestID string,
@@ -147,7 +146,7 @@ func (s *Server) maybeRepairUpstream(
 			return nil, nil, repair.Attempt{}, false
 		}
 		current = next
-		r, err := a.Do(ctx, current, stream, forward)
+		r, err := send(ctx, current)
 		if err != nil {
 			s.bus.Add(events.Event{RequestID: requestID, Kind: "compat_repair_error",
 				Deployment: deploymentID, Message: "repair attempt transport error: " + err.Error()})
@@ -156,7 +155,9 @@ func (s *Server) maybeRepairUpstream(
 		if r.StatusCode < 200 || r.StatusCode >= 300 {
 			rb, _ := io.ReadAll(io.LimitReader(r.Body, 2<<20))
 			r.Body.Close()
-			rb = a.RedactBody(rb)
+			if redact != nil {
+				rb = redact(rb)
+			}
 			nextClass := classifyUpstream(r.StatusCode, rb)
 			s.bus.Add(events.Event{RequestID: requestID, Kind: "compat_repair_fail",
 				Deployment: deploymentID,

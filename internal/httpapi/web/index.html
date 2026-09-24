@@ -297,6 +297,7 @@
         <label class="field"><span>Endpoint type</span><select id="pType">
           <option value="openai_compatible">OpenAI Compatible — Chat Completions</option>
           <option value="anthropic_compatible">Anthropic Compatible — Messages</option>
+          <option value="gemini">Google Gemini — Generate Content</option>
         </select></label>
         <div class="form-grid two">
           <label class="field"><span>Protocol <small>(auto default)</small></span><select id="pProtocol">
@@ -311,6 +312,7 @@
             <option value="">Auto (from provider identity)</option>
             <option value="generic_openai">Generic OpenAI</option>
             <option value="generic_anthropic">Generic Anthropic</option>
+            <option value="generic_gemini">Generic Gemini</option>
             <option value="nvidia_nim">NVIDIA NIM</option>
             <option value="deepseek">DeepSeek</option>
             <option value="openrouter">OpenRouter</option>
@@ -325,6 +327,7 @@
             <option value="">Auto (by provider type)</option>
             <option value="bearer">Bearer token</option>
             <option value="x-api-key">x-api-key</option>
+            <option value="x-goog-api-key">x-goog-api-key (Gemini)</option>
             <option value="none">No authentication</option>
           </select></label>
           <label class="field switch-field"><span>Enabled</span><input id="pEnabled" type="checkbox" checked></label>

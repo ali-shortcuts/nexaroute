@@ -146,7 +146,7 @@ func TestGeminiConverters(t *testing.T) {
 		Tools:    []ToolDef{{Name: "t"}},
 	}
 	g := r.ToGeminiRequest()
-	if g.SystemInstruction == nil || len(g.Contents) != 1 || len(g.Tools) != 1 {
+	if g.SystemInstruction == nil || len(g.Contents) != 1 || len(g.Tools) != 1 || len(g.Tools[0].FunctionDeclarations) != 1 {
 		t.Fatalf("wrong gemini request: %+v", g)
 	}
 	resp, err := FromGeminiResponse(GeminiResponse{

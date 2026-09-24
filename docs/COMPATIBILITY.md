@@ -8,6 +8,9 @@
 | OpenAI `/v1/chat/completions` | Anthropic-compatible | Yes (role alternation guaranteed) | Yes (role chunk first) | Yes (merged parallel tool results) | Yes (`{}`-padded args, reasoning deltas) | `reasoning_effort` → `thinking` budget | Data URL + URL sources | Fields with a mapped meaning |
 | OpenAI `/v1/responses` | OpenAI-compatible | Yes (via Canonical IR) | Yes (`response.created` → text/function deltas → `response.completed`) | Yes (function tools) | Yes (function-call argument deltas, `{}`-padded) | Via `reasoning_effort` mapping | Input image parts | Fields with a mapped meaning |
 | OpenAI `/v1/responses` | Anthropic-compatible | Yes (via Canonical IR) | Yes (same event contract) | Yes | Yes | Via thinking mapping | Provider-dependent | Fields with a mapped meaning |
+| Anthropic `/v1/messages` | Gemini (`generateContent`) | Yes (via Canonical IR) | Yes (usage + finish mapped) | Yes (function declarations) | Yes (function-call deltas) | Dropped (no Gemini mapping) | Data URL + URL sources | Fields with a mapped meaning |
+| OpenAI `/v1/chat/completions` | Gemini (`generateContent`) | Yes (via Canonical IR) | Yes (usage + finish mapped) | Yes (function declarations) | Yes (function-call deltas) | Dropped (no Gemini mapping) | Data URL + URL sources | Fields with a mapped meaning |
+| OpenAI `/v1/responses` | Gemini (`generateContent`) | Yes (via Canonical IR) | Yes (same event contract) | Yes (function tools) | Yes | Dropped (no Gemini mapping) | Input image parts | Fields with a mapped meaning |
 
 Universal Compatibility Engine (per-deployment, separate from health):
 
@@ -19,7 +22,7 @@ Universal Compatibility Engine (per-deployment, separate from health):
 - bounded repair (≤2 attempts): `max_completion_tokens → max_tokens`, drop
   optional unsupported fields; semantics-critical fields are never dropped;
 - dialect registry (`generic_openai`, `nvidia_nim`, `deepseek`, `openrouter`,
-  `together`, `groq`, `generic_anthropic`, `custom`) selected per provider via
+  `together`, `groq`, `generic_anthropic`, `generic_gemini`, `custom`) selected per provider via
   optional `dialect` / `protocol` fields (`auto` by default);
 - router filters REQUIRED capabilities verified UNSUPPORTED before any upstream
   attempt; UNKNOWN stays eligible but loses score to verified alternatives;

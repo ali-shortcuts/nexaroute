@@ -34,7 +34,15 @@ The in-memory event feed is independently bounded: it keeps only the newest ring
 ```text
 openai_compatible
 anthropic_compatible
+gemini
 ```
+
+`gemini` targets the Google Gemini API (`https://generativelanguage.googleapis.com`):
+auth defaults to `x-goog-api-key`, requests go to per-model
+`/v1beta/models/{model}:generateContent` (or `:streamGenerateContent?alt=sse`),
+and the model list is read from `/v1beta/models`. All three ingress APIs
+(chat, messages, responses — including streaming) translate through the
+Canonical IR.
 
 A provider is generic; adding another OpenAI-compatible endpoint should normally require configuration, not a new code branch.
 

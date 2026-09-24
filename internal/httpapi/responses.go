@@ -1,6 +1,8 @@
 package httpapi
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,16 +11,17 @@ import (
 	"time"
 
 	"github.com/ali-shortcuts/nexaroute/internal/compat/canonical"
+	"github.com/ali-shortcuts/nexaroute/internal/compat/stream"
 	"github.com/ali-shortcuts/nexaroute/internal/core"
 	"github.com/ali-shortcuts/nexaroute/internal/events"
 	"github.com/ali-shortcuts/nexaroute/internal/router"
 )
 
-// OpenAI Responses ingress (first-class adapter, Phase 9).
+// OpenAI Responses ingress (first-class adapter, Phase 9, streaming Phase 10).
 // The Responses wire shape is decoded into the Canonical IR, routed like any
-// other request, and encoded back. Only OpenAI-compatible upstreams are
-// targeted in this phase; Anthropic upstreams are reached through the same
-// cross-protocol translators as chat completions.
+// other request, and encoded back — per upstream protocol class. Streaming
+// responses are translated from upstream SSE through the compat/stream
+// decoders, so every supported upstream class can serve stream:true.
 
 type responsesInputItem struct {
 	Type    string `json:"type"`
@@ -262,7 +265,15 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 		c = fresh
 		var payload []byte
 		var streamOptsInjected bool
-		if c.Deployment.ProviderType == "anthropic_compatible" {
+		if c.Deployment.ProviderType == "gemini" {
+			gemReq := canon.ToGeminiRequest()
+			var err error
+			payload, err = json.Marshal(gemReq)
+			if err != nil {
+				lastErr = "attempt payload could not be built"
+				continue
+			}
+		} else if c.Deployment.ProviderType == "anthropic_compatible" {
 			anthReq := canon.ToAnthropicRequest(c.Deployment.Model)
 			var err error
 			payload, err = json.Marshal(anthReq)
@@ -286,8 +297,14 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 		attempts++
 		attemptIndex := attempts - 1
 		s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_attempt", Deployment: c.Deployment.ID, Message: fmt.Sprintf("attempt=%d responses ingress", attempts)})
+		send := func(ctx context.Context, p []byte) (*http.Response, error) {
+			return a.Do(ctx, p, in.Stream, forward)
+		}
+		if c.Deployment.ProviderType == "gemini" {
+			send = geminiSendFor(a, c.Deployment.Model, in.Stream, forward)
+		}
 		start := time.Now()
-		resp, err := a.Do(routeCtx, payload, in.Stream, forward)
+		resp, err := send(routeCtx, payload)
 		if err == nil && streamOptsInjected && resp.StatusCode == http.StatusBadRequest {
 			probe, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 			resp.Body.Close()
@@ -295,7 +312,7 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 				if stripped, ok := stripStreamOptions(payload); ok {
 					payload = stripped
 					streamOptsInjected = false
-					resp, err = a.Do(routeCtx, payload, in.Stream, forward)
+					resp, err = send(routeCtx, payload)
 				} else {
 					resp.Body = io.NopCloser(bytes.NewReader(probe))
 				}
@@ -334,7 +351,7 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 			resp.Body.Close()
 			b = a.RedactBody(b)
 			// Bounded repair before failing over.
-			if repaired, _, _, good := s.maybeRepairUpstream(routeCtx, a, c.Deployment.ID, payload, false, forward, resp.StatusCode, b, r.Header.Get("x-request-id")); good {
+			if repaired, _, _, good := s.maybeRepairUpstream(routeCtx, send, a.RedactBody, c.Deployment.ID, payload, resp.StatusCode, b, r.Header.Get("x-request-id")); good {
 				resp = repaired
 			} else {
 				lastStatus = resp.StatusCode
@@ -380,6 +397,8 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 			var dec stream.Decoder = &stream.OpenAIDecoder{}
 			if c.Deployment.ProviderType == "anthropic_compatible" {
 				dec = &stream.AnthropicDecoder{}
+			} else if c.Deployment.ProviderType == "gemini" {
+				dec = &stream.GeminiDecoder{}
 			}
 			se = streamUpstreamToResponses(w, resp, dec, in.Model, responseID, func(prompt, completion int) {
 				s.usage.Record(c.Deployment.ID, int64(prompt), int64(completion))
@@ -392,6 +411,19 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 				s.usage.Record(c.Deployment.ID, int64(an.Usage.InputTokens), int64(an.Usage.OutputTokens))
 				canonResp := canonical.FromAnthropicResponse(an)
 				writeJSON(w, 200, canonicalToResponsesObject(in.Model, canonResp, responseID))
+			}
+		} else if c.Deployment.ProviderType == "gemini" {
+			var g canonical.GeminiResponse
+			se = decodeValidatedJSONLimited(resp.Body, &g, validateGeminiResponseJSON)
+			resp.Body.Close()
+			if se == nil {
+				canonResp, cerr := canonical.FromGeminiResponse(g)
+				if cerr != nil {
+					se = cerr
+				} else {
+					s.usage.Record(c.Deployment.ID, int64(canonResp.InputTokens), int64(canonResp.OutputTokens))
+					writeJSON(w, 200, canonicalToResponsesObject(in.Model, canonResp, responseID))
+				}
 			}
 		} else {
 			var o core.OpenAIResponse

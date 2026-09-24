@@ -20,7 +20,7 @@ func (s *Server) hello(w http.ResponseWriter, r *http.Request) {
 		"go":      runtime.Version(),
 		"protocols": map[string]any{
 			"ingress":  []string{"anthropic_messages", "openai_chat_completions"},
-			"upstream": []string{"anthropic_compatible", "openai_compatible"},
+			"upstream": []string{"anthropic_compatible", "gemini", "openai_compatible"},
 		},
 		"endpoints": []string{"/v1/messages", "/v1/messages/count_tokens", "/v1/chat/completions", "/v1/models", "/healthz", "/readyz", "/metrics"},
 	})

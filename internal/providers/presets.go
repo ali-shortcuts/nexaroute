@@ -18,6 +18,7 @@ func Presets() []Preset {
 	return []Preset{
 		{ID: "custom", Name: "Custom Provider", Category: "Custom", Type: "openai_compatible", AuthMode: "bearer"},
 		{ID: "anthropic", Name: "Anthropic", Category: "Direct", Type: "anthropic_compatible", BaseURL: "https://api.anthropic.com", AuthMode: "x-api-key", MessagesPath: "/v1/messages", ModelsPath: "/v1/models", CountTokensPath: "/v1/messages/count_tokens"},
+		{ID: "gemini", Name: "Google Gemini", Category: "Direct", Type: "gemini", BaseURL: "https://generativelanguage.googleapis.com", AuthMode: "x-goog-api-key", ModelsPath: "/v1beta/models"},
 		{ID: "openai", Name: "OpenAI", Category: "Direct", Type: "openai_compatible", BaseURL: "https://api.openai.com/v1", AuthMode: "bearer"},
 		{ID: "openrouter", Name: "OpenRouter", Category: "Gateway", Type: "openai_compatible", BaseURL: "https://openrouter.ai/api/v1", AuthMode: "bearer"},
 		{ID: "deepseek", Name: "DeepSeek", Category: "Direct", Type: "openai_compatible", BaseURL: "https://api.deepseek.com/v1", AuthMode: "bearer"},

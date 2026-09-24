@@ -90,6 +90,7 @@ func streamUpstreamToResponses(w http.ResponseWriter, resp *http.Response, dec s
 	outputOrder := []int{} // tool indices in emission order (for final output)
 	inputTokens, outputTokens := 0, 0
 	finish := "stop"
+	sawEnd := false
 
 	openText := func() {
 		if textOpen {
@@ -202,7 +203,6 @@ func streamUpstreamToResponses(w http.ResponseWriter, resp *http.Response, dec s
 	}
 
 	buf := make([]byte, 32<<10)
-	terminal := false
 	for {
 		n, err := resp.Body.Read(buf)
 		if n > 0 {
@@ -235,15 +235,10 @@ func streamUpstreamToResponses(w http.ResponseWriter, resp *http.Response, dec s
 		emitFailed("upstream stream ended without a terminal event")
 		return ferr
 	}
-	for _, ev := range events {
-		if ev.Kind == stream.KindEnd {
-			terminal = true
-		}
-	}
-	if !terminal {
-		// Decoders guarantee a terminal KindEnd on clean Finish; reaching
-		// here means the upstream closed a well-formed but empty stream.
-		// An empty completion is still a completion: commit and finish.
+	if !sawEnd {
+		// Decoders only Finish cleanly on a terminal marker, so reaching
+		// here means a well-formed but event-less stream. An empty
+		// completion is still a completion: commit and finish.
 		emitCreated()
 	}
 

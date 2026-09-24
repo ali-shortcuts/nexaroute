@@ -412,7 +412,7 @@ func (s *Server) adminProviderTest(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 400, "provider id and base_url are required")
 		return
 	}
-	if in.Provider.Type != "openai_compatible" && in.Provider.Type != "anthropic_compatible" {
+	if in.Provider.Type != "openai_compatible" && in.Provider.Type != "anthropic_compatible" && in.Provider.Type != "gemini" {
 		errorJSON(w, 400, "unsupported provider type")
 		return
 	}

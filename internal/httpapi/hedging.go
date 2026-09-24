@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/ali-shortcuts/nexaroute/internal/compat/canonical"
 	"github.com/ali-shortcuts/nexaroute/internal/config"
 	"github.com/ali-shortcuts/nexaroute/internal/core"
 	"github.com/ali-shortcuts/nexaroute/internal/events"
@@ -326,6 +327,31 @@ type hedgeAttemptBundle struct {
 	// OpenAI-compatible payload on behalf of an Anthropic client (so a 400
 	// mentioning the option can be retried without it).
 	injected bool
+	// send dispatches the payload. Nil means the adapter's fixed default
+	// path; model-scoped upstreams (Gemini) override it so hedging, retry
+	// and repair all hit the right URL.
+	send func(ctx context.Context, payload []byte, stream bool, forward http.Header) (*http.Response, error)
+}
+
+// dispatch runs the bundle against its upstream.
+func (b hedgeAttemptBundle) dispatch(ctx context.Context, stream bool, forward http.Header) (*http.Response, error) {
+	if b.send != nil {
+		return b.send(ctx, b.payload, stream, forward)
+	}
+	return b.a.Do(ctx, b.payload, stream, forward)
+}
+
+// sender binds the bundle's dispatch to one stream/forward pair for callers
+// (repair, option-strip retry) that resend derived payloads.
+func (b hedgeAttemptBundle) sender(stream bool, forward http.Header) func(context.Context, []byte) (*http.Response, error) {
+	if b.send != nil {
+		return func(ctx context.Context, p []byte) (*http.Response, error) {
+			return b.send(ctx, p, stream, forward)
+		}
+	}
+	return func(ctx context.Context, p []byte) (*http.Response, error) {
+		return b.a.Do(ctx, p, stream, forward)
+	}
 }
 
 func (s *Server) hedgingEligible(cfg config.Config) bool {
@@ -349,7 +375,7 @@ func (s *Server) doAttemptWithHedge(
 ) (hedgeOutcome, hedgeAttemptBundle, bool) {
 	plain := func() (hedgeOutcome, hedgeAttemptBundle, bool) {
 		start := time.Now()
-		resp, err := primary.a.Do(routeCtx, primary.payload, stream, forward)
+		resp, err := primary.dispatch(routeCtx, stream, forward)
 		return hedgeOutcome{resp: resp, err: err, start: start}, primary, false
 	}
 	if attempts != 1 || !s.hedgingEligible(cfg) || i+1 >= len(candidates) || attempts+1 > max {
@@ -362,10 +388,10 @@ func (s *Server) doAttemptWithHedge(
 	out := s.hedgedUpstreamDo(routeCtx, requestID,
 		primary.c.Deployment.ID, partner.c.Deployment.ID, cfg.HedgingDelay(),
 		func(ctx context.Context) (*http.Response, error) {
-			return primary.a.Do(ctx, primary.payload, stream, forward)
+			return primary.dispatch(ctx, stream, forward)
 		},
 		func(ctx context.Context) (*http.Response, error) {
-			return partner.a.Do(ctx, partner.payload, stream, forward)
+			return partner.dispatch(ctx, stream, forward)
 		},
 	)
 	winner := primary
@@ -377,7 +403,7 @@ func (s *Server) doAttemptWithHedge(
 
 // buildOpenAIAttempt prepares one attempt for the OpenAI ingress pipeline:
 // passthrough for OpenAI-compatible targets, translation for
-// Anthropic-compatible targets.
+// Anthropic-compatible targets, Canonical IR for Gemini targets.
 func (s *Server) buildOpenAIAttempt(cand router.Scored, req router.Requirement, raw []byte, in core.OpenAIRequest) (hedgeAttemptBundle, bool) {
 	fresh, a, ok := s.currentRouteCandidate(cand.Deployment.ID, req)
 	if !ok {
@@ -385,9 +411,19 @@ func (s *Server) buildOpenAIAttempt(cand router.Scored, req router.Requirement, 
 	}
 	bundle := hedgeAttemptBundle{c: fresh, a: a}
 	var err error
-	if fresh.Deployment.ProviderType == "openai_compatible" {
+	switch fresh.Deployment.ProviderType {
+	case "gemini":
+		var canon canonical.Request
+		canon, err = canonical.FromOpenAIRequest(in)
+		if err == nil {
+			bundle.payload, err = json.Marshal(canon.ToGeminiRequest())
+		}
+		if err == nil {
+			bundle.send = geminiBundleSend(a, fresh.Deployment.Model)
+		}
+	case "openai_compatible":
 		bundle.payload, err = patchJSONModel(raw, fresh.Deployment.Model)
-	} else {
+	default:
 		var an core.AnthropicRequest
 		an, bundle.nm, err = translate.OpenAIToAnthropic(in, fresh.Deployment.Model)
 		if err == nil {
@@ -400,9 +436,18 @@ func (s *Server) buildOpenAIAttempt(cand router.Scored, req router.Requirement, 
 	return bundle, true
 }
 
+// geminiBundleSend dispatches payloads to the model-scoped GenerateContent
+// URL for one Gemini deployment.
+func geminiBundleSend(a providers.Adapter, model string) func(context.Context, []byte, bool, http.Header) (*http.Response, error) {
+	return func(ctx context.Context, p []byte, stream bool, forward http.Header) (*http.Response, error) {
+		return a.DoPath(ctx, http.MethodPost, providers.GeminiRequestPath(model, stream), p, stream, forward)
+	}
+}
+
 // buildAnthropicAttempt prepares one attempt for the Anthropic ingress
 // pipeline: passthrough for Anthropic-compatible targets, translation with
-// usage-requesting stream options for OpenAI-compatible targets.
+// usage-requesting stream options for OpenAI-compatible targets, Canonical
+// IR for Gemini targets.
 func (s *Server) buildAnthropicAttempt(cand router.Scored, req router.Requirement, raw []byte, in core.AnthropicRequest) (hedgeAttemptBundle, bool) {
 	fresh, a, ok := s.currentRouteCandidate(cand.Deployment.ID, req)
 	if !ok {
@@ -410,9 +455,19 @@ func (s *Server) buildAnthropicAttempt(cand router.Scored, req router.Requiremen
 	}
 	bundle := hedgeAttemptBundle{c: fresh, a: a}
 	var err error
-	if fresh.Deployment.ProviderType == "anthropic_compatible" {
+	switch fresh.Deployment.ProviderType {
+	case "gemini":
+		var canon canonical.Request
+		canon, err = canonical.FromAnthropicRequest(in)
+		if err == nil {
+			bundle.payload, err = json.Marshal(canon.ToGeminiRequest())
+		}
+		if err == nil {
+			bundle.send = geminiBundleSend(a, fresh.Deployment.Model)
+		}
+	case "anthropic_compatible":
 		bundle.payload, err = patchJSONModel(raw, fresh.Deployment.Model)
-	} else {
+	default:
 		var o core.OpenAIRequest
 		o, bundle.nm, err = translate.AnthropicToOpenAI(in, fresh.Deployment.Model)
 		if err == nil && in.Stream {

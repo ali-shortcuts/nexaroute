@@ -155,12 +155,12 @@ func (c CredentialConfig) Resolved() string {
 type ProviderConfig struct {
 	ID              string             `json:"id"`
 	Name            string             `json:"name"`
-	Type            string             `json:"type"` // openai_compatible | anthropic_compatible
+	Type            string             `json:"type"` // openai_compatible | anthropic_compatible | gemini
 	BaseURL         string             `json:"base_url"`
 	APIKey          string             `json:"api_key,omitempty"`
 	APIKeyEnv       string             `json:"api_key_env,omitempty"`
 	Credentials     []CredentialConfig `json:"credentials,omitempty"`
-	AuthMode        string             `json:"auth_mode,omitempty"` // bearer | x-api-key | none
+	AuthMode        string             `json:"auth_mode,omitempty"` // bearer | x-api-key | x-goog-api-key | none
 	Headers         map[string]string  `json:"headers,omitempty"`
 	ForwardHeaders  []string           `json:"forward_headers"`
 	ProxyURL        string             `json:"proxy_url,omitempty"`
@@ -446,9 +446,12 @@ func (p *ProviderConfig) ApplyDefaults() {
 		p.Name = p.ID
 	}
 	if p.AuthMode == "" {
-		if p.Type == "anthropic_compatible" {
+		switch p.Type {
+		case "anthropic_compatible":
 			p.AuthMode = "x-api-key"
-		} else {
+		case "gemini":
+			p.AuthMode = "x-goog-api-key"
+		default:
 			p.AuthMode = "bearer"
 		}
 	}
@@ -459,7 +462,11 @@ func (p *ProviderConfig) ApplyDefaults() {
 		p.MessagesPath = "/v1/messages"
 	}
 	if p.ModelsPath == "" {
-		p.ModelsPath = "/v1/models"
+		if p.Type == "gemini" {
+			p.ModelsPath = "/v1beta/models"
+		} else {
+			p.ModelsPath = "/v1/models"
+		}
 	}
 	if p.CountTokensPath == "" {
 		p.CountTokensPath = "/v1/messages/count_tokens"
@@ -656,7 +663,7 @@ func (c Config) Validate() error {
 			return fmt.Errorf("duplicate provider id %q", p.ID)
 		}
 		seenP[p.ID] = true
-		if p.Type != "openai_compatible" && p.Type != "anthropic_compatible" {
+		if p.Type != "openai_compatible" && p.Type != "anthropic_compatible" && p.Type != "gemini" {
 			return fmt.Errorf("provider %q has unsupported type %q", p.ID, p.Type)
 		}
 		if p.BaseURL == "" {
@@ -688,14 +695,14 @@ func (c Config) Validate() error {
 				return fmt.Errorf("provider %q has invalid proxy_url", p.ID)
 			}
 		}
-		if p.AuthMode != "" && p.AuthMode != "bearer" && p.AuthMode != "x-api-key" && p.AuthMode != "none" {
+		if p.AuthMode != "" && p.AuthMode != "bearer" && p.AuthMode != "x-api-key" && p.AuthMode != "x-goog-api-key" && p.AuthMode != "none" {
 			return fmt.Errorf("provider %q has unsupported auth_mode %q", p.ID, p.AuthMode)
 		}
 		if len(p.Dialect) > 64 {
 			return fmt.Errorf("provider %q dialect is too long", p.ID)
 		}
 		switch p.Dialect {
-		case "", "generic_openai", "generic_anthropic", "nvidia_nim", "deepseek", "openrouter", "together", "groq", "custom":
+		case "", "generic_openai", "generic_anthropic", "generic_gemini", "nvidia_nim", "deepseek", "openrouter", "together", "groq", "custom":
 		default:
 			return fmt.Errorf("provider %q has unsupported dialect %q", p.ID, p.Dialect)
 		}

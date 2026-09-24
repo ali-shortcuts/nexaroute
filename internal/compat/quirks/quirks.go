@@ -9,7 +9,7 @@ import "strings"
 // OpenAI Chat protocol while applying only their own quirk deltas.
 type DialectProfile struct {
 	Name string `json:"name"`
-	// AuthStyle is bearer | x-api-key | none.
+	// AuthStyle is bearer | x-api-key | x-goog-api-key | none.
 	AuthStyle string `json:"auth_style"`
 	// EndpointStyle documents path conventions (openai | anthropic).
 	EndpointStyle string `json:"endpoint_style"`
@@ -46,6 +46,12 @@ var registry = map[string]DialectProfile{
 		MaxTokensField: "max_tokens", SupportsStreamOptions: false,
 		SupportsParallelTools: true, ReasoningField: "thinking",
 		Notes: "Baseline Anthropic Messages behavior.",
+	},
+	"generic_gemini": {
+		Name: "generic_gemini", AuthStyle: "x-goog-api-key", EndpointStyle: "gemini",
+		MaxTokensField: "max_tokens", SupportsStreamOptions: false,
+		SupportsParallelTools: false, ReasoningField: "none",
+		Notes: "Google Gemini API (v1beta generateContent): x-goog-api-key auth, per-model action paths.",
 	},
 	"nvidia_nim": {
 		Name: "nvidia_nim", AuthStyle: "bearer", EndpointStyle: "openai",
@@ -96,7 +102,7 @@ func Get(name string) DialectProfile {
 
 // Names lists registered dialect names.
 func Names() []string {
-	return []string{"generic_openai", "generic_anthropic", "nvidia_nim", "deepseek", "openrouter", "together", "groq", "custom"}
+	return []string{"generic_openai", "generic_anthropic", "generic_gemini", "nvidia_nim", "deepseek", "openrouter", "together", "groq", "custom"}
 }
 
 // Infer guesses the dialect from provider identity signals (explicit config,
@@ -118,9 +124,14 @@ func Infer(explicit, providerID, baseURL, providerType string) DialectProfile {
 		return registry["together"]
 	case strings.Contains(hay, "groq"):
 		return registry["groq"]
+	case strings.Contains(hay, "gemini"), strings.Contains(hay, "generativelanguage"):
+		return registry["generic_gemini"]
 	}
 	if strings.TrimSpace(providerType) == "anthropic_compatible" {
 		return registry["generic_anthropic"]
+	}
+	if strings.TrimSpace(providerType) == "gemini" {
+		return registry["generic_gemini"]
 	}
 	return registry["generic_openai"]
 }

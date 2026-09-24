@@ -202,7 +202,24 @@ func endpoint(base, suffix string) string {
 	if strings.HasSuffix(b, "/v1") && strings.HasPrefix(suffix, "/v1/") {
 		return b + strings.TrimPrefix(suffix, "/v1")
 	}
+	if strings.HasSuffix(b, "/v1beta") && strings.HasPrefix(suffix, "/v1beta/") {
+		return b + strings.TrimPrefix(suffix, "/v1beta")
+	}
 	return b + suffix
+}
+
+// GeminiRequestPath builds the model-scoped GenerateContent suffix for a
+// Gemini provider. Streaming uses :streamGenerateContent with alt=sse so the
+// response arrives as Server-Sent Events.
+func GeminiRequestPath(model string, stream bool) string {
+	model = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(model), "models/"))
+	if model == "" {
+		model = "unknown"
+	}
+	if stream {
+		return "/v1beta/models/" + url.PathEscape(model) + ":streamGenerateContent?alt=sse"
+	}
+	return "/v1beta/models/" + url.PathEscape(model) + ":generateContent"
 }
 
 func (a *httpAdapter) defaultPath() string {
@@ -213,6 +230,9 @@ func (a *httpAdapter) defaultPath() string {
 }
 
 func (a *httpAdapter) Do(ctx context.Context, payload []byte, stream bool, forward http.Header) (*http.Response, error) {
+	if a.p.Type == "gemini" {
+		return nil, fmt.Errorf("provider %s: gemini requests need a model-scoped path; use DoPath with GeminiRequestPath", a.p.ID)
+	}
 	return a.DoPath(ctx, http.MethodPost, a.defaultPath(), payload, stream, forward)
 }
 
@@ -425,15 +445,21 @@ func (a *httpAdapter) applyAuthKey(req *http.Request, key string) {
 	}
 	mode := a.p.AuthMode
 	if mode == "" {
-		if a.p.Type == "anthropic_compatible" {
+		switch a.p.Type {
+		case "anthropic_compatible":
 			mode = "x-api-key"
-		} else {
+		case "gemini":
+			mode = "x-goog-api-key"
+		default:
 			mode = "bearer"
 		}
 	}
-	if mode == "x-api-key" {
+	switch mode {
+	case "x-api-key":
 		req.Header.Set("x-api-key", key)
-	} else {
+	case "x-goog-api-key":
+		req.Header.Set("x-goog-api-key", key)
+	default:
 		req.Header.Set("Authorization", "Bearer "+key)
 	}
 }
@@ -620,13 +646,23 @@ func (a *httpAdapter) Probe(ctx context.Context, model string, maxTokens int) (t
 	if maxTokens < 1 {
 		maxTokens = 1
 	}
-	body := map[string]any{"model": model, "max_tokens": maxTokens, "messages": []map[string]any{{"role": "user", "content": "OK"}}, "stream": false}
+	path := a.defaultPath()
+	var body map[string]any
+	if a.p.Type == "gemini" {
+		path = GeminiRequestPath(model, false)
+		body = map[string]any{
+			"contents":         []any{map[string]any{"role": "user", "parts": []any{map[string]any{"text": "OK"}}}},
+			"generationConfig": map[string]any{"maxOutputTokens": maxTokens},
+		}
+	} else {
+		body = map[string]any{"model": model, "max_tokens": maxTokens, "messages": []map[string]any{{"role": "user", "content": "OK"}}, "stream": false}
+	}
 	b, err := json.Marshal(body)
 	if err != nil {
 		return 0, 0, fmt.Errorf("probe request encode: %w", err)
 	}
 	start := time.Now()
-	resp, err := a.Do(ctx, b, false, nil)
+	resp, err := a.DoPath(ctx, http.MethodPost, path, b, false, nil)
 	lat := time.Since(start)
 	if err != nil {
 		return lat, 0, err
@@ -674,6 +710,18 @@ func (a *httpAdapter) validateProbeResponse(data []byte) error {
 		}
 		if typ != "message" || role != "assistant" || content == nil {
 			return errors.New("probe returned an invalid Anthropic message envelope")
+		}
+	case "gemini":
+		raw := root["candidates"]
+		if len(raw) == 0 {
+			return errors.New("probe returned an invalid Gemini envelope: candidates missing")
+		}
+		var candidates []map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &candidates); err != nil {
+			return fmt.Errorf("probe returned invalid Gemini candidates: %w", err)
+		}
+		if len(candidates) == 0 || len(candidates[0]["content"]) == 0 {
+			return errors.New("probe returned an invalid Gemini envelope")
 		}
 	default:
 		var choices []map[string]json.RawMessage

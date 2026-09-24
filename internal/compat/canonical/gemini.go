@@ -7,9 +7,9 @@ import (
 )
 
 // Minimal Gemini GenerateContent protocol family (first-class adapter,
-// Phase 9). The gateway does not serve Gemini ingress yet; this file provides
-// the Canonical IR <-> Gemini dialect converters so Gemini upstreams can be
-// added without touching Router core.
+// Phase 9; upstream serving in Phase 11). The gateway does not serve Gemini
+// ingress; this file provides the Canonical IR <-> Gemini dialect converters
+// so Gemini upstreams work without touching Router core.
 
 // GeminiPart is one GenerateContent content part.
 type GeminiPart struct {
@@ -50,11 +50,24 @@ type GeminiFunctionDecl struct {
 	Parameters  map[string]any `json:"parameters,omitempty"`
 }
 
+// GeminiTool wraps function declarations the way GenerateContent expects
+// them: {"tools": [{"functionDeclarations": [...]}]}.
+type GeminiTool struct {
+	FunctionDeclarations []GeminiFunctionDecl `json:"functionDeclarations"`
+}
+
+// GeminiToolConfig carries the function-calling mode (AUTO/ANY/NONE) plus
+// optional allowed names for pinned calls.
+type GeminiToolConfig struct {
+	FunctionCallingConfig map[string]any `json:"functionCallingConfig"`
+}
+
 // GeminiRequest is a minimal GenerateContent request.
 type GeminiRequest struct {
 	SystemInstruction *GeminiContent       `json:"systemInstruction,omitempty"`
 	Contents          []GeminiContent      `json:"contents"`
-	Tools             []GeminiFunctionDecl `json:"-"`
+	Tools             []GeminiTool         `json:"tools,omitempty"`
+	ToolConfig        *GeminiToolConfig    `json:"toolConfig,omitempty"`
 	GenerationConfig  map[string]any       `json:"generationConfig,omitempty"`
 }
 
@@ -127,12 +140,28 @@ func (r Request) ToGeminiRequest() GeminiRequest {
 			out.Contents = append(out.Contents, gc)
 		}
 	}
+	decls := []GeminiFunctionDecl{}
 	for _, t := range r.Tools {
 		params := t.Parameters
 		if params == nil {
 			params = map[string]any{"type": "object"}
 		}
-		out.Tools = append(out.Tools, GeminiFunctionDecl{Name: t.Name, Description: t.Description, Parameters: params})
+		decls = append(decls, GeminiFunctionDecl{Name: t.Name, Description: t.Description, Parameters: params})
+	}
+	if len(decls) > 0 {
+		out.Tools = []GeminiTool{{FunctionDeclarations: decls}}
+	}
+	switch {
+	case r.ToolChoice == "required":
+		out.ToolConfig = &GeminiToolConfig{FunctionCallingConfig: map[string]any{"mode": "ANY"}}
+	case r.ToolChoice == "none":
+		out.ToolConfig = &GeminiToolConfig{FunctionCallingConfig: map[string]any{"mode": "NONE"}}
+	case strings.HasPrefix(r.ToolChoice, "named:"):
+		if name := strings.TrimPrefix(r.ToolChoice, "named:"); name != "" {
+			out.ToolConfig = &GeminiToolConfig{FunctionCallingConfig: map[string]any{
+				"mode": "ANY", "allowedFunctionNames": []string{name},
+			}}
+		}
 	}
 	gen := map[string]any{}
 	if r.Temperature != nil {
