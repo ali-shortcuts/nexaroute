@@ -212,6 +212,7 @@ func TestDataPlaneAdmissionOnlyCoversExpensivePostEndpoints(t *testing.T) {
 		{http.MethodPost, "/v1/messages", true},
 		{http.MethodPost, "/v1/messages/count_tokens", true},
 		{http.MethodPost, "/v1/chat/completions", true},
+		{http.MethodPost, "/v1/responses", true},
 		{http.MethodGet, "/v1/models", false},
 		{http.MethodGet, "/healthz", false},
 		{http.MethodPost, "/admin/api/probe", false},
@@ -1045,5 +1046,45 @@ func TestQuotaReservationMetricsAndUIWiring(t *testing.T) {
 		if !strings.Contains(js, field) {
 			t.Fatalf("dashboard is not wired to quota field %s", field)
 		}
+	}
+}
+
+func TestResponsesInputInspectionProducesRoutingEstimate(t *testing.T) {
+	raw := []byte(`{
+		"model":"m",
+		"reasoning":{"effort":"high"},
+		"input":[
+			{"role":"user","content":[
+				{"type":"input_text","text":"hello world"},
+				{"type":"input_image","image_url":"data:image/png;base64,AAAA"}
+			]}
+		]
+	}`)
+	got := inspectRequestJSON(raw, "input_image", []string{"reasoning"})
+	if got.TooComplex {
+		t.Fatal("normal Responses request marked too complex")
+	}
+	if !got.Vision || !got.Reasoning {
+		t.Fatalf("Responses capabilities not detected: %+v", got)
+	}
+	if got.EstimatedPromptTokens <= 16 {
+		t.Fatalf("Responses input did not contribute to token estimate: %+v", got)
+	}
+}
+
+func TestResponsesInputInspectionIgnoresToolSchemaLookalikes(t *testing.T) {
+	raw := []byte(`{
+		"model":"m",
+		"input":[{"role":"user","content":[{"type":"input_text","text":"hello"}]}],
+		"tools":[{"type":"function","name":"x","parameters":{
+			"type":"object","properties":{"example":{"type":"input_image"}}
+		}}]
+	}`)
+	got := inspectRequestJSON(raw, "input_image", []string{"reasoning"})
+	if got.Vision || got.Reasoning {
+		t.Fatalf("Responses tool schema lookalikes implied capabilities: %+v", got)
+	}
+	if got.EstimatedPromptTokens <= 16 {
+		t.Fatalf("real input text was not estimated: %+v", got)
 	}
 }
