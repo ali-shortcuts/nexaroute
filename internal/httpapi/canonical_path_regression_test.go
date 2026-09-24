@@ -124,3 +124,43 @@ func TestCanonicalStreamUsageRecordedOnceAfterSuccessfulTerminal(t *testing.T) {
 		t.Fatalf("usage hook calls=%d input=%d output=%d want 1,7,3", calls, gotInput, gotOutput)
 	}
 }
+
+func TestAnthropicTextBlockStopDoesNotBecomeResponsesToolEnd(t *testing.T) {
+	stream := strings.Join([]string{
+		`event: message_start`,
+		`data: {"type":"message_start","message":{"usage":{"input_tokens":4,"output_tokens":0}}}`,
+		``,
+		`event: content_block_start`,
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+		``,
+		`event: content_block_delta`,
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello"}}`,
+		``,
+		`event: content_block_stop`,
+		`data: {"type":"content_block_stop","index":0}`,
+		``,
+		`event: message_delta`,
+		`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}}`,
+		``,
+		`event: message_stop`,
+		`data: {"type":"message_stop"}`,
+		``,
+	}, "\n")
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       io.NopCloser(strings.NewReader(stream)),
+	}
+	rr := httptest.NewRecorder()
+	err := (&Server{}).canonicalStreamPump(rr, resp, "anthropic", "openai_responses", "client-model", "req-text-stop", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := rr.Body.String()
+	if !strings.Contains(out, "response.output_text.delta") || !strings.Contains(out, "hello") {
+		t.Fatalf("text delta missing from Responses stream: %s", out)
+	}
+	if strings.Contains(out, "function_call_arguments.done") || strings.Contains(out, `"type":"function_call"`) {
+		t.Fatalf("Anthropic text block stop was misclassified as tool completion: %s", out)
+	}
+}
