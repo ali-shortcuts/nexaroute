@@ -376,7 +376,7 @@ func DecodeGeminiStreamChunk(data string) ([]StreamEvent, bool, error) {
 	if len(raw.Candidates) > 0 && strings.TrimSpace(raw.Candidates[0].FinishReason) != "" {
 		terminal = true
 	}
-	resp, err := DecodeGeminiResponse([]byte(d))
+	resp, err := decodeGeminiResponse([]byte(d), true)
 	if err != nil {
 		return nil, false, err
 	}

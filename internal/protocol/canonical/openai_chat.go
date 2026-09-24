@@ -446,6 +446,9 @@ func floatFromMetadata(meta map[string]any, key string) (float64, bool) {
 // DecodeOpenAIChatResponse converts an OpenAI Chat Completions response body
 // into the IR.
 func DecodeOpenAIChatResponse(b []byte) (Response, error) {
+	if err := ValidateOpenAIChatResponseJSON(b); err != nil {
+		return Response{}, err
+	}
 	var in core.OpenAIResponse
 	if err := json.Unmarshal(b, &in); err != nil {
 		return Response{}, fmt.Errorf("invalid OpenAI response: %w", err)
