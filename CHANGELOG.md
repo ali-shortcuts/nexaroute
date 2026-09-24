@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.5.0 — hedging, response cache, client keys, context pre-routing, usage accounting
+
+### Added
+
+- **Request hedging** (`routing.hedging_enabled`, `routing.hedging_delay_ms`): bounded first-attempt race against the next eligible deployment when the primary is slow to response headers. Loser legs are abandoned with zero health signal; `hedge_launch` / `hedged_abandoned` events make every race observable. Guardrails: first attempt only, one partner maximum, attempt-budget aware, route-context bounded.
+- **Exact-match response cache** (`cache.*`): opt-in, LRU + TTL + entry/byte bounded, deterministic non-streaming requests only, wholesale invalidation on config swap, `x-nexaroute-no-cache` per-request bypass, `X-NexaRoute-Cache` header, Prometheus counters, dashboard KPI.
+- **Client API keys** (`client_auth.*`): opt-in data-plane auth for `/v1/messages`, `/v1/chat/completions`, `/v1/messages/count_tokens` and `/v1/models`; constant-time digest comparison; optional per-key RPM token bucket with `Retry-After`; protocol-shaped errors.
+- **Context-window pre-routing** (`models[].context_window`): deployments advertising a too-small window are skipped when the estimated prompt plus `max_tokens` cannot fit; unknown windows are never filtered.
+- **Usage and cost accounting**: per-deployment cumulative prompt/completion tokens from all four response paths (including native SSE tail chunks), optional per-model pricing with snapshot-time cost resolution, Prometheus `nexaroute_deployment_tokens_total` / `nexaroute_estimated_cost_usd_total`, admin snapshot `usage`, dashboard Tokens/Spend KPI card.
+- **Provider incident circuits, quota hints, TTFT** (merged from `codex/provider-incident-intelligence-v03`): provider-level evidence-windowed circuits with half-open reopen, OpenAI/Anthropic rate-limit header observation with quota-exhausted deprioritization until reset, error-class-aware failure policy (400/422 health-neutral, 409/425 failover without poisoning, 404 deployment-scoped), separate streaming TTFT EWMA, admin controls, metrics and UI columns.
+
+### Fixed
+
+- `stream_options` 400-retry now rebinds correctly when the hedged winner is the translated leg (stream options injection state follows the winning bundle).
+- Usage parsing tolerates providers that emit `usage: null` in the include_usage tail chunk.
+
 ## v0.4.1 — concurrent-correctness, admin hardening and stream failover
 
 ### Fixed

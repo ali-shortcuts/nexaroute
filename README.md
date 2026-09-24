@@ -1,8 +1,45 @@
-# NexaRoute — v0.4
+# NexaRoute — v0.5
 
 A self-hosted Go gateway for routing Anthropic-compatible and OpenAI-compatible clients across many LLM providers/models. The first target is **Claude Code -> NexaRoute -> Chat2API / other OpenAI-compatible or Anthropic-compatible providers**.
 
-This package is **v0.4**: bulletproof OpenAI↔Anthropic translation, a rebuilt 9router-class dashboard, and the same hardened Ready Mesh routing core. The code is runnable and heavily tested, but no software can honestly be guaranteed to contain zero bugs.
+This package is **v0.5**: the v0.4 translation + dashboard core, now extended with a provider-incident intelligence layer and a hedging/cache/usage tier that few if any open gateways combine. The code is runnable and heavily tested, but no software can honestly be guaranteed to contain zero bugs.
+
+## What v0.5 adds on top of v0.4
+
+### Provider incident intelligence and quota awareness
+
+- **Provider-level incident circuits** are separate from per-deployment health: failures from multiple distinct deployments inside a bounded evidence window open a provider circuit, while model-specific 404s stay scoped to one deployment. Half-open provider failures reopen immediately; verified success closes the circuit; open providers are filtered from routing and readiness without discarding per-model health history.
+- **Quota intelligence from rate-limit headers**: common OpenAI (`x-ratelimit-remaining-*`, `x-ratelimit-reset-*`) and Anthropic (`anthropic-ratelimit-*`) headers are observed on every upstream response. When remaining quota is 0 with a known future reset, the provider is heavily deprioritized (capacity pressure ceiling) until reset rather than hard-removed, because quota semantics vary across providers.
+- **Error-class-aware failure policy**: 400/422 are caller-invalid and health-neutral; 409/425 fail over without poisoning health; 404 isolates the deployment; transport/auth/billing/rate-limit/timeout/5xx feed provider incident evidence.
+- **TTFT telemetry**: streaming time-to-first-byte EWMA is recorded separately from response-header latency and exposed per deployment in metrics and the dashboard.
+
+### Request hedging (tail-latency race)
+
+- When `routing.hedging_enabled` is true, the FIRST attempt of a request launches immediately against the primary candidate; if response headers have not arrived within `routing.hedging_delay_ms` (default 1500), the gateway launches a second attempt against the next eligible candidate and lets the upstreams race. First transport-level winner is served.
+- Abandonment is a routing decision, **not provider evidence**: the losing leg records no failure, no quarantine, and no provider-incident signal, so hedging can never poison health data. Worst-case amplification is 2x for slow starts and 1x for the common fast path. Client disconnects and gateway deadlines cancel both legs immediately.
+- This is the "tail at scale" speculative-execution pattern applied at the LLM-gateway boundary; most gateways only offer serial retries.
+
+### Exact-match response cache (opt-in)
+
+- `cache.enabled` (default false) memorizes complete, non-streaming, deterministic responses (temperature absent/0, top_p absent/1) under a bounded LRU with TTL, entry and byte caps.
+- Hits are observable via the `X-NexaRoute-Cache: HIT` response header, a `cache_hit` event, and Prometheus counters. Clients can bypass per request with `x-nexaroute-no-cache`.
+- Every successful config swap invalidates the cache wholesale, so a cached response can never outlive the routing topology that produced it.
+
+### Client API keys (opt-in)
+
+- `client_auth.enabled` gates `/v1/*` with static keys accepted from `Authorization: Bearer` or `x-api-key`, compared in constant time over SHA-256 digests, with an optional per-key requests-per-minute ceiling (`client_auth.rpm`) enforced by a bounded token bucket.
+- Protocol-shaped 401/429 errors are emitted per ingress (OpenAI-style vs Anthropic-style).
+
+### Context-window-aware pre-routing
+
+- Model deployments can advertise `context_window`. The gateway estimates prompt size (chars/4 heuristic plus per-message overhead, deliberately biased to overestimate) plus requested `max_tokens`, and skips deployments whose advertised window cannot fit the request. A guaranteed-failure attempt wastes attempt budget and burns provider quota for an error the gateway can predict in microseconds.
+- Deployments with unknown windows are never filtered.
+
+### Usage and cost accounting
+
+- Real upstream-reported prompt/completion tokens are recorded per deployment from all four response paths (native non-stream, native SSE, translated non-stream, translated SSE).
+- Optional per-model pricing (`input_cost_per_mtok`, `output_cost_per_mtok`) yields cumulative estimated spend, resolved at snapshot time so price edits take effect immediately.
+- Exposed via `nexaroute_deployment_tokens_total`, `nexaroute_estimated_cost_usd_total`, the admin snapshot, and two new dashboard KPI cards.
 
 ## What v0.4 currently implements
 

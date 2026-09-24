@@ -1,6 +1,6 @@
-# Roadmap — after the current v0.4 baseline
+# Roadmap — after the current v0.5 baseline
 
-The current v0.4 baseline already includes verified-ready routing, session affinity, provider/credential P2C selection, capability-aware circuits, supervised recovery, bounded admission, hot reload, provider discovery/testing, embedded UI, and Linux/Docker packaging.
+The current v0.5 baseline includes everything v0.4 shipped (verified-ready routing, session affinity, provider/credential P2C selection, capability-aware circuits, supervised recovery, bounded admission, hot reload, provider discovery/testing, embedded UI, Linux/Docker packaging) plus provider incident circuits, quota hints, TTFT telemetry, request hedging, an opt-in exact-match response cache, opt-in client API keys, context-window-aware pre-routing, and usage/cost accounting.
 
 Future work should be added only as separately scoped, tested capabilities.
 
@@ -18,11 +18,11 @@ Future work should be added only as separately scoped, tested capabilities.
 ## Routing intelligence
 
 - explicit named fallback chains/pools;
-- context-window-aware routing;
-- provider-reported RPM/TPM headroom and reset-aware routing;
-- cost/budget-aware routing;
+- ~~context-window-aware routing~~ (shipped in v0.5 with a conservative chars/4 estimator and unknown-window exemption);
+- proactive request scheduling against provider-reported RPM/TPM budgets (v0.5 observes remaining quotas and reset times and deprioritizes exhausted providers; predictive throttling against a known per-minute budget is still open);
+- price-aware candidate ordering on top of the v0.5 usage/pricing accounting (accounting shipped; routing remains cost-neutral);
 - richer per-request route explanations;
-- carefully evaluated hedged requests only for operations where duplicate work is safe;
+- ~~carefully evaluated hedged requests~~ (shipped in v0.5 for the first attempt with a single partner, zero-health-signal abandonment, and route-context bounding);
 - learned/semantic routing only if it proves measurable benefit without unacceptable latency, cost, or failure amplification.
 
 ## Operations and security

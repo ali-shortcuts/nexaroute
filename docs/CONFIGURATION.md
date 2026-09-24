@@ -171,3 +171,39 @@ For Docker/LAN access, set an admin key and put TLS/reverse-proxy controls in fr
 Provider presets are served by the gateway itself through the Admin API so the Web UI does not maintain a second hard-coded provider catalog. Custom Provider remains fully editable. `models_path` may be a normal path or an absolute URL for compatible providers whose discovery endpoint lives on a different host/path.
 
 **Test connection** checks endpoint reachability/auth separately from **Test selected models**, which performs actual minimal model inference.
+
+## v0.5 routing, cache, client auth and model fields
+
+### routing (additions)
+
+| Field | Default | Meaning |
+|---|---|---|
+| `hedging_enabled` | `false` | Race a second deployment when the first attempt is slow to response headers. First attempt only; loser abandoned with no health penalty. |
+| `hedging_delay_ms` | `1500` | Delay before the hedge partner launches (50–600000). |
+
+### cache (new object, opt-in)
+
+| Field | Default | Meaning |
+|---|---|---|
+| `enabled` | `false` | Master switch. When false, all caching behavior is skipped. |
+| `ttl_seconds` | `300` | Entry lifetime (1–2592000). |
+| `max_entries` | `256` | LRU entry bound (1–65536). |
+| `max_body_bytes` | `1048576` | Per-response cap and total byte budget seed (1024–67108864). |
+
+Only non-streaming requests with `temperature` absent/0 and `top_p` absent/1 are eligible. Every config swap invalidates the cache. Per-request bypass header: `x-nexaroute-no-cache: 1`.
+
+### client_auth (new object, opt-in)
+
+| Field | Default | Meaning |
+|---|---|---|
+| `enabled` | `false` | Gate `/v1/*` endpoints with static keys. |
+| `keys` | `[]` | 8–512 byte keys; presented via `Authorization: Bearer <key>` or `x-api-key`. |
+| `rpm` | `0` | Per-key requests-per-minute ceiling; `0` disables the ceiling. |
+
+### model fields (additions per deployment)
+
+| Field | Default | Meaning |
+|---|---|---|
+| `context_window` | `0` (unknown) | Advertised usable context window in tokens; requests estimated to exceed it skip this deployment. |
+| `input_cost_per_mtok` | `0` | USD per million input tokens, used for estimated-spend accounting. |
+| `output_cost_per_mtok` | `0` | USD per million output tokens, used for estimated-spend accounting. |

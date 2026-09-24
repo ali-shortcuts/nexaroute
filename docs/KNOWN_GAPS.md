@@ -60,10 +60,11 @@ Implemented:
 - optional admin API key
 - constant-time admin-key comparison
 - session-only browser storage for the entered admin key
+- optional data-plane client API keys (`client_auth`) with constant-time digest comparison and an optional per-key RPM ceiling
 
 Not implemented as a full internet-facing control plane:
 
-- built-in client authentication/authorization for `/v1/*` (use a trusted reverse proxy/firewall/VPN when exposure is not strictly local);
+- per-client quotas beyond the RPM ceiling, key lifecycle UI (create/revoke from the dashboard), hashed-at-rest client keys;
 - built-in TLS
 - RBAC/multi-user accounts
 - CSRF session framework
@@ -77,6 +78,10 @@ Discovery parses several common result shapes, but model-list APIs are not stand
 
 Runtime and health state are single-process/in-memory. Provider configuration is persisted atomically to the active JSON file without creating backup copies. Distributed state, Redis/Postgres coordination, and multi-node breaker synchronization are not implemented.
 
+
+## Response cache boundaries
+
+The exact-match response cache is opt-in and deliberately narrow: non-streaming, deterministic-sampling requests only, bounded by entries/bytes/TTL, invalidated on every config swap. It is not a semantic cache; two requests that differ by one byte are different keys. Streaming responses are never cached, and cached entries are replayed with the deployment label that produced them so the dashboard stays honest about provenance.
 
 ## Probe cadence and model quality
 
