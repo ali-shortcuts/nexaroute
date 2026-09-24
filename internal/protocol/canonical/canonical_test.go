@@ -629,3 +629,23 @@ func TestAnthropicEmitterPreservesStopSequenceReason(t *testing.T) {
 		t.Fatalf("stop_sequence was incorrectly reported as max_tokens: %s", out)
 	}
 }
+
+func TestResponsesNonStreamFunctionCallSignalsToolUse(t *testing.T) {
+	body := []byte(`{
+		"id":"resp_tool",
+		"model":"upstream",
+		"status":"completed",
+		"output":[{"type":"function_call","call_id":"c1","name":"lookup","arguments":"{\"q\":\"x\"}","status":"completed"}],
+		"usage":{"input_tokens":5,"output_tokens":2}
+	}`)
+	got, err := DecodeResponsesResponse(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.StopReason != StopToolUse {
+		t.Fatalf("function-call response stop=%q want %q", got.StopReason, StopToolUse)
+	}
+	if !got.HasToolCalls() {
+		t.Fatalf("function-call block lost: %+v", got)
+	}
+}
