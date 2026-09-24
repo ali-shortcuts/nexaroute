@@ -146,6 +146,37 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "nexaroute_provider_incident_state{provider=%q,status=%q} 1\n", id, st.Status)
 		fmt.Fprintf(w, "nexaroute_provider_incident_evidence{provider=%q} %d\n", id, st.Evidence)
 	}
+
+	// Exact-match response cache counters.
+	cs := s.respCache.Stats()
+	fmt.Fprintln(w, "# HELP nexaroute_cache_hits_total Exact-match response cache hits.")
+	fmt.Fprintln(w, "# TYPE nexaroute_cache_hits_total counter")
+	fmt.Fprintf(w, "nexaroute_cache_hits_total %d\n", cs.Hits)
+	fmt.Fprintln(w, "# HELP nexaroute_cache_misses_total Exact-match response cache misses.")
+	fmt.Fprintln(w, "# TYPE nexaroute_cache_misses_total counter")
+	fmt.Fprintf(w, "nexaroute_cache_misses_total %d\n", cs.Misses)
+	fmt.Fprintln(w, "# HELP nexaroute_cache_bypasses_total Requests ineligible for the response cache.")
+	fmt.Fprintln(w, "# TYPE nexaroute_cache_bypasses_total counter")
+	fmt.Fprintf(w, "nexaroute_cache_bypasses_total %d\n", cs.Bypasses)
+	fmt.Fprintln(w, "# HELP nexaroute_cache_entries Currently cached exact-match responses.")
+	fmt.Fprintln(w, "# TYPE nexaroute_cache_entries gauge")
+	fmt.Fprintf(w, "nexaroute_cache_entries %d\n", cs.Entries)
+	fmt.Fprintln(w, "# HELP nexaroute_cache_bytes Cached response bytes.")
+	fmt.Fprintln(w, "# TYPE nexaroute_cache_bytes gauge")
+	fmt.Fprintf(w, "nexaroute_cache_bytes %d\n", cs.BytesStored)
+
+	// Cumulative token accounting per deployment and estimated spend.
+	usageSnap := s.usageSnapshotWithPrices(s.currentConfig())
+	fmt.Fprintln(w, "# HELP nexaroute_deployment_tokens_total Cumulative upstream-reported tokens by deployment and kind.")
+	fmt.Fprintln(w, "# TYPE nexaroute_deployment_tokens_total counter")
+	for _, row := range usageSnap.ByDeployment {
+		id := sanitizeMetricLabel(row.Deployment)
+		fmt.Fprintf(w, "nexaroute_deployment_tokens_total{deployment=%q,kind=%q} %d\n", id, "prompt", row.PromptTokens)
+		fmt.Fprintf(w, "nexaroute_deployment_tokens_total{deployment=%q,kind=%q} %d\n", id, "completion", row.CompletionTok)
+	}
+	fmt.Fprintln(w, "# HELP nexaroute_estimated_cost_usd_total Cumulative estimated spend in USD from configured per-model pricing.")
+	fmt.Fprintln(w, "# TYPE nexaroute_estimated_cost_usd_total counter")
+	fmt.Fprintf(w, "nexaroute_estimated_cost_usd_total %.6f\n", usageSnap.TotalEstimatedCostUSD)
 }
 
 func (s *Server) ready(w http.ResponseWriter, r *http.Request) {

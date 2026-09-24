@@ -137,6 +137,8 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 		healthAll = filtered
 	}
 	eventLimit := parseLimit("events", 500)
+	cfgFull := s.currentConfig()
+	usageSnap := s.usageSnapshotWithPrices(cfgFull)
 	writeJSON(w, 200, map[string]any{
 		"deployments":        deployments,
 		"deployment_total":   totalDeployments,
@@ -152,6 +154,13 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 		"probe_stats":        s.probe.Stats(),
 		"request_total":      s.requestTotal.Load(),
 		"version":            gatewayVersion,
+		"usage":              usageSnap,
+		"cache":              s.respCache.Stats(),
+		"client_auth": map[string]any{
+			"enabled": cfgFull.ClientAuth.Enabled,
+			"keys":    len(cfgFull.ClientAuth.Keys),
+			"rpm":     cfgFull.ClientAuth.RPM,
+		},
 		"config": map[string]any{
 			"probe":   probeCfg,
 			"routing": routingCfg,

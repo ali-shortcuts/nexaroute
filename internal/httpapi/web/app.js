@@ -13,6 +13,7 @@ let latencyHistory = [];
 const $ = q => document.querySelector(q), $$ = q => [...document.querySelectorAll(q)];
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[c]));
 const fmtInt = n => Number(n || 0).toLocaleString('en-US');
+const fmtCompact = n => { if (!Number.isFinite(n) || n <= 0) return '0'; if (n >= 1e9) return (n / 1e9).toFixed(1) + 'B'; if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M'; if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K'; return String(n); };
 const fmtMs = n => (Number.isFinite(Number(n)) && Number(n) > 0) ? Math.round(Number(n)) + ' ms' : '—';
 
 let adminKey = sessionStorage.getItem('nexaroute_admin_key') || '';
@@ -112,6 +113,8 @@ function fillRuntimeSettings() {
   $('#rtTimeout').value = r.request_timeout_ms || 120000;
   $('#rtBackoff').value = Number.isFinite(r.retry_backoff_ms) ? r.retry_backoff_ms : 150;
   $('#rtRetryAfter').value = r.max_retry_after_seconds || 60;
+  $('#rtHedgingEnabled').checked = !!r.hedging_enabled;
+  $('#rtHedgingDelay').value = r.hedging_delay_ms || 1500;
   $('#prEnabled').checked = p.enabled !== false;
   $('#prOnStart').checked = !!p.on_start;
   $('#prInterval').value = p.interval_seconds || 120;
@@ -144,7 +147,9 @@ $('#saveRuntimeSettings').onclick = async () => {
       cooldown_seconds: intVal('#rtCooldown', 1800, 1),
       request_timeout_ms: intVal('#rtTimeout', 120000, 100),
       retry_backoff_ms: intVal('#rtBackoff', 150, 0),
-      max_retry_after_seconds: intVal('#rtRetryAfter', 60, 1)
+      max_retry_after_seconds: intVal('#rtRetryAfter', 60, 1),
+      hedging_enabled: $('#rtHedgingEnabled').checked,
+      hedging_delay_ms: intVal('#rtHedgingDelay', 1500, 50)
     },
     probe: {
       ...p,
@@ -221,8 +226,17 @@ function render() {
   renderHealthTab(h);
   renderConsole();
   $('#settingsJson').textContent = JSON.stringify(snap.config || {}, null, 2);
+  // Cache + usage KPI cards (v0.5)
+  const ch = Number(snap.cache?.hits ?? 0), cm = Number(snap.cache?.misses ?? 0);
+  const rate = (ch + cm) ? Math.round(ch / (ch + cm) * 100) + '%' : '—';
+  $('#sCacheRate').textContent = rate;
+  $('#sCacheSub').textContent = snap.cache?.hits != null ? (fmtInt(ch) + ' hits / ' + fmtInt(cm) + ' misses') : 'exact-match cache off';
+  const up = Number(snap.usage?.total_prompt_tokens ?? 0), ucp = Number(snap.usage?.total_completion_tokens ?? 0);
+  $('#sTokens').textContent = fmtCompact(up + ucp);
+  const cost = Number(snap.usage?.total_estimated_cost_usd ?? 0);
+  $('#sSpendSub').textContent = cost > 0 ? ('~$' + (cost >= 1 ? cost.toFixed(2) : cost.toFixed(4)) + ' est. spend') : 'no pricing configured';
   $('#footRequests').textContent = fmtInt(snap.request_total ?? 0) + ' requests';
-  $('#brandVersion').textContent = 'v' + (snap.version || '0.4') + ' • control plane';
+  $('#brandVersion').textContent = 'v' + (snap.version || '0.5') + ' • control plane';
 }
 
 function renderRing(ds, h) {
@@ -783,6 +797,9 @@ function renderPicker() {
         <label>Aliases<input data-model="${esc(m)}" data-meta="aliases" value="${esc((x.aliases || []).join(', '))}" placeholder="coding, auto"></label>
         <label>Priority<input data-model="${esc(m)}" data-meta="priority" type="number" value="${Number.isFinite(Number(x.priority)) ? Number(x.priority) : i}"></label>
         <label>Weight<input data-model="${esc(m)}" data-meta="weight" type="number" min="0.01" step="0.1" value="${Number(x.weight) > 0 ? Number(x.weight) : 1}"></label>
+        <label>Context window<input data-model="${esc(m)}" data-meta="context_window" type="number" min="0" step="1000" value="${Number.isFinite(Number(x.context_window)) ? Number(x.context_window) : 0}" placeholder="e.g. 200000"></label>
+        <label>Input $/MTok<input data-model="${esc(m)}" data-meta="input_cost_per_mtok" type="number" min="0" step="0.01" value="${Number.isFinite(Number(x.input_cost_per_mtok)) ? Number(x.input_cost_per_mtok) : 0}"></label>
+        <label>Output $/MTok<input data-model="${esc(m)}" data-meta="output_cost_per_mtok" type="number" min="0" step="0.01" value="${Number.isFinite(Number(x.output_cost_per_mtok)) ? Number(x.output_cost_per_mtok) : 0}"></label>
       </div>
       <div class="model-cap-row">
         <label><input data-model="${esc(m)}" data-cap="streaming" type="checkbox" ${c.streaming !== false ? 'checked' : ''}>Streaming</label>
@@ -798,6 +815,9 @@ function renderPicker() {
     if (x.dataset.meta === 'aliases') meta.aliases = x.value.split(',').map(v => v.trim()).filter(Boolean);
     else if (x.dataset.meta === 'priority') meta.priority = parseInt(x.value || '0', 10);
     else if (x.dataset.meta === 'weight') meta.weight = Math.max(.01, parseFloat(x.value || '1'));
+    else if (x.dataset.meta === 'context_window') meta.context_window = Math.max(0, parseInt(x.value || '0', 10));
+    else if (x.dataset.meta === 'input_cost_per_mtok') meta.input_cost_per_mtok = Math.max(0, parseFloat(x.value || '0'));
+    else if (x.dataset.meta === 'output_cost_per_mtok') meta.output_cost_per_mtok = Math.max(0, parseFloat(x.value || '0'));
   });
   $$('#modelPicker [data-cap]').forEach(x => x.onchange = () => {
     const meta = ensureModelMeta(x.dataset.model);

@@ -50,6 +50,8 @@
         <div class="kpi"><div class="kpi-head"><span>Cooldown</span><em class="kpi-ico bad">◉</em></div><b id="sCooldown">0</b><small id="sCooldownSub">recovering</small></div>
         <div class="kpi"><div class="kpi-head"><span>Sessions</span><em class="kpi-ico violet">◈</em></div><b id="sSessions">0</b><small>affinity pins</small></div>
         <div class="kpi"><div class="kpi-head"><span>Avg latency</span><em class="kpi-ico cyan">⚡</em></div><b id="sLatency">—</b><svg class="spark" id="latencySpark" viewBox="0 0 120 28" preserveAspectRatio="none"><path class="spark-area" d=""></path><path class="spark-line" d=""></path></svg></div>
+        <div class="kpi"><div class="kpi-head"><span>Cache hit rate</span><em class="kpi-ico violet">❐</em></div><b id="sCacheRate">—</b><small id="sCacheSub">exact-match cache off</small></div>
+        <div class="kpi"><div class="kpi-head"><span>Tokens / Est. spend</span><em class="kpi-ico good">Σ</em></div><b id="sTokens">0</b><small id="sSpendSub">no pricing configured</small></div>
       </div>
 
       <div class="grid-2-1">
@@ -207,6 +209,10 @@
             <div class="form-grid two">
               <label class="field"><span>Retry backoff (ms)</span><input id="rtBackoff" type="number" min="0"></label>
               <label class="field"><span>Max Retry-After (sec)</span><input id="rtRetryAfter" type="number" min="1"></label>
+            </div>
+            <div class="form-grid two">
+              <label class="check-row"><input id="rtHedgingEnabled" type="checkbox"><span>Enable request hedging (race a second deployment when the primary is slow to first byte)</span></label>
+              <label class="field"><span>Hedge delay (ms)</span><input id="rtHedgingDelay" type="number" min="50" step="50"></label>
             </div>
           </div>
           <div class="form-section">
