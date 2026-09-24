@@ -261,6 +261,9 @@ func TestProviderEditorSupportsAllBackendProtocolTypesAndResponsesPath(t *testin
 	if !strings.Contains(js, "typ === 'gemini'") || !strings.Contains(js, "x-goog-api-key") {
 		t.Fatal("Gemini auth-mode switching is not wired in app.js")
 	}
+	if !strings.Contains(js, "p.id || p.key") || !strings.Contains(js, "p.name || p.label || key") {
+		t.Fatal("server preset id/name schema is not wired into the provider editor")
+	}
 }
 
 func TestReadyMeshSettingsControlsAreWiredInEmbeddedUI(t *testing.T) {
