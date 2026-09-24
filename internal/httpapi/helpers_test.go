@@ -1126,11 +1126,17 @@ func TestProviderEditButtonsUseCollectionSelector(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	js := string(app)
-	if strings.Contains(js, "$('.edit-provider').forEach") {
-		t.Fatal("provider edit binding uses single-element selector with forEach")
+	foundCollection := false
+	for _, line := range strings.Split(string(app), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "$('.edit-provider').forEach(b => b.onclick = () => openEdit(b.dataset.id));" {
+			t.Fatal("provider edit binding uses single-element selector with forEach")
+		}
+		if line == "$('.edit-provider').forEach(b => b.onclick = () => openEdit(b.dataset.id));" {
+			foundCollection = true
+		}
 	}
-	if !strings.Contains(js, "$$('.edit-provider').forEach") {
+	if !foundCollection {
 		t.Fatal("provider edit binding is missing the collection selector")
 	}
 }
