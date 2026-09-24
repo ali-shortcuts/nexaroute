@@ -804,7 +804,10 @@ func (a *httpAdapter) Probe(ctx context.Context, model string, maxTokens int) (t
 			"generationConfig": map[string]any{"maxOutputTokens": maxTokens},
 		}
 	case "openai_responses":
-		body = map[string]any{"model": model, "input": "Reply OK", "max_output_tokens": maxTokens, "stream": false}
+		body = map[string]any{
+			"model": model, "input": "Reply with the single word: OK",
+			"max_output_tokens": maxTokens, "stream": false,
+		}
 	default:
 		body = map[string]any{"model": model, "max_tokens": maxTokens, "messages": []map[string]any{{"role": "user", "content": "OK"}}, "stream": false}
 	}
@@ -816,6 +819,8 @@ func (a *httpAdapter) Probe(ctx context.Context, model string, maxTokens int) (t
 	var resp *http.Response
 	if a.p.Type == "gemini" {
 		resp, err = a.DoPath(ctx, http.MethodPost, a.geminiModelPath(model, false), b, false, nil)
+	} else if a.p.Type == "openai_responses" {
+		resp, err = a.DoPath(ctx, http.MethodPost, a.p.ResponsesPath, b, false, nil)
 	} else {
 		resp, err = a.Do(ctx, b, false, nil)
 	}

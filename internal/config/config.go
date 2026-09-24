@@ -674,7 +674,8 @@ func (c Config) Validate() error {
 			}
 		}
 		for name, path := range map[string]string{
-			"chat_path": p.ChatPath, "messages_path": p.MessagesPath, "models_path": p.ModelsPath, "count_tokens_path": p.CountTokensPath,
+			"chat_path": p.ChatPath, "messages_path": p.MessagesPath, "models_path": p.ModelsPath,
+			"count_tokens_path": p.CountTokensPath, "responses_path": p.ResponsesPath,
 		} {
 			if len(path) > maxURLBytes {
 				return fmt.Errorf("provider %q %s is too long", p.ID, name)

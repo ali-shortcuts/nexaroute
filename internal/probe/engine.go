@@ -580,9 +580,9 @@ func readyLeaseExpired(st health.State, now time.Time, lease time.Duration) bool
 // SetCapabilityStore wires the shared capability contract store. When set
 // and probe.capability_probes is enabled, a successful Level A availability
 // probe triggers a one-time Level B compatibility suite for the deployment
-// (openai-compatible dialects natively; anthropic-compatible via their own
-// payload shapes). Results are cached in the store, so each deployment pays
-// the suite cost once per identity.
+// (OpenAI Chat and Anthropic natively; Responses via protocol translation).
+// Results are cached in the store, so each deployment pays the suite cost
+// once per identity.
 func (e *Engine) SetCapabilityStore(store *compat.Store) {
 	e.capStore = store
 }
@@ -592,9 +592,9 @@ func (e *Engine) maybeProbeCapabilities(ctx context.Context, d router.Deployment
 		return
 	}
 	cfg := e.current()
-	if !cfg.Probe.CapabilityProbes || d.ProviderType == "gemini" || d.ProviderType == "openai_responses" {
-		// The Level B suites speak Chat Completions or Anthropic Messages;
-		// neither payload is valid for Gemini or Responses-native upstreams.
+	if !cfg.Probe.CapabilityProbes || d.ProviderType == "gemini" {
+		// No Gemini-native Level B suite exists yet; avoid sending the
+		// Chat Completions probes to a Gemini-only endpoint.
 		return
 	}
 	e.observationsMu.RLock()
@@ -612,9 +612,12 @@ func (e *Engine) maybeProbeCapabilities(ctx context.Context, d router.Deployment
 	defer cancel()
 	t := adapterTransport{a: a}
 	var report compat.ProbeReport
-	if d.ProviderType == "anthropic_compatible" {
+	switch d.ProviderType {
+	case "anthropic_compatible":
 		report = compat.RunCapabilitySuiteAnthropic(cctx, t, d.ID, d.Model)
-	} else {
+	case "openai_responses":
+		report = compat.RunCapabilitySuiteResponses(cctx, t, d.ID, d.Model)
+	default:
 		report = compat.RunCapabilitySuite(cctx, t, d.ID, d.Model, "")
 	}
 	e.observeCurrent(d, a, func() {
