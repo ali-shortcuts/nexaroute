@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ali-shortcuts/nexaroute/internal/config"
+	"github.com/ali-shortcuts/nexaroute/internal/events"
 	"github.com/ali-shortcuts/nexaroute/internal/providers"
 	"github.com/ali-shortcuts/nexaroute/internal/translate"
 )
@@ -212,6 +213,7 @@ func TestDataPlaneAdmissionOnlyCoversExpensivePostEndpoints(t *testing.T) {
 		{http.MethodPost, "/v1/messages", true},
 		{http.MethodPost, "/v1/messages/count_tokens", true},
 		{http.MethodPost, "/v1/chat/completions", true},
+		{http.MethodPost, "/v1/responses", true},
 		{http.MethodGet, "/v1/models", false},
 		{http.MethodGet, "/healthz", false},
 		{http.MethodPost, "/admin/api/probe", false},
@@ -1073,5 +1075,30 @@ func TestResponsesInspectionUsesInputAndInstructionsOnly(t *testing.T) {
 	got = inspectResponsesRequestJSON(noImageInput)
 	if got.Vision {
 		t.Fatal("tool schema input_image falsely triggered Responses vision")
+	}
+}
+
+func TestResponsesOverloadUsesResponsesErrorEnvelope(t *testing.T) {
+	s := &Server{
+		cfg: config.Config{Routing: config.RoutingConfig{MaxInflightRequests: 1}},
+		bus: events.New(16),
+	}
+	if !s.tryAcquireDataPlane() {
+		t.Fatal("failed to occupy the only admission slot")
+	}
+	defer s.releaseDataPlane()
+
+	req := httptest.NewRequest(http.MethodPost, "http://gateway/v1/responses", strings.NewReader(`{"model":"m","input":"x"}`))
+	rr := httptest.NewRecorder()
+	s.rejectOverloaded(rr, req, "req-overload")
+
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d want 503 body=%s", rr.Code, rr.Body.String())
+	}
+	if rr.Header().Get("Retry-After") != "1" {
+		t.Fatalf("Retry-After=%q want 1", rr.Header().Get("Retry-After"))
+	}
+	if !strings.Contains(rr.Body.String(), `"type":"server_error"`) || !strings.Contains(rr.Body.String(), `"code":"server_error"`) {
+		t.Fatalf("Responses overload envelope is not protocol-appropriate: %s", rr.Body.String())
 	}
 }
