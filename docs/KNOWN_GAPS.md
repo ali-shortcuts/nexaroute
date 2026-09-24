@@ -1,4 +1,4 @@
-# Known gaps — v0.4
+# Known gaps — v0.4.2
 
 These are explicit boundaries of the current code, not hidden assumptions.
 
