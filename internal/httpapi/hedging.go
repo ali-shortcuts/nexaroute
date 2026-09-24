@@ -265,7 +265,7 @@ func (s *Server) doAttemptWithHedge(
 	if out.secondaryWon {
 		winner = partner
 	}
-	return out, winner, true
+	return out, winner, out.hedgeLaunched
 }
 
 // buildOpenAIAttempt prepares one attempt for the OpenAI ingress pipeline:
