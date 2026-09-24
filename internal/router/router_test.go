@@ -425,3 +425,52 @@ func TestReadyMeshDiversifiesFailoverAcrossProviders(t *testing.T) {
 		t.Fatalf("same-provider fallback should remain available after diversification: %#v", got)
 	}
 }
+func TestProviderIncidentCircuitExcludesWholeProvider(t *testing.T) {
+	cfg := config.Default()
+	cfg.Routing.Strategy = "ready_mesh"
+	cfg.Providers = []config.ProviderConfig{
+		{ID: "p1", Name: "P1", Type: "openai_compatible", BaseURL: "http://p1.invalid", Enabled: true, Models: []config.ModelConfig{
+			{ID: "a", Model: "a", Enabled: true, Weight: 1},
+			{ID: "b", Model: "b", Enabled: true, Weight: 1},
+		}},
+		{ID: "p2", Name: "P2", Type: "openai_compatible", BaseURL: "http://p2.invalid", Enabled: true, Models: []config.ModelConfig{
+			{ID: "c", Model: "c", Enabled: true, Weight: 1},
+		}},
+	}
+	h := health.New(5, time.Hour)
+	h.ConfigureProviderIncidents(2, time.Second, time.Minute)
+	for _, id := range []string{"p1/a", "p1/b", "p2/c"} {
+		h.RecordSuccess(id, time.Millisecond)
+	}
+	h.RecordProviderFailure("p1", "p1/a", "transport")
+	h.RecordProviderFailure("p1", "p1/b", "transport")
+	r := New(cfg, h)
+	got := r.Candidates(Requirement{Model: "auto"})
+	if len(got) != 1 || got[0].Deployment.ProviderID != "p2" {
+		t.Fatalf("open provider circuit leaked into routing: %#v", got)
+	}
+}
+
+func TestQuotaExhaustionPressureDeprioritizesProvider(t *testing.T) {
+	cfg := config.Default()
+	cfg.Routing.Strategy = "ready_mesh"
+	cfg.Routing.P2CWindow = 2
+	cfg.Providers = []config.ProviderConfig{
+		{ID: "quota", Name: "Quota", Type: "openai_compatible", BaseURL: "http://q.invalid", Enabled: true, Models: []config.ModelConfig{{ID: "m", Model: "q", Enabled: true, Weight: 1}}},
+		{ID: "ready", Name: "Ready", Type: "openai_compatible", BaseURL: "http://r.invalid", Enabled: true, Models: []config.ModelConfig{{ID: "m", Model: "r", Enabled: true, Weight: 1}}},
+	}
+	h := health.New(5, time.Hour)
+	h.RecordSuccess("quota/m", time.Millisecond)
+	h.RecordSuccess("ready/m", time.Millisecond)
+	r := New(cfg, h)
+	got := r.Candidates(Requirement{
+		Model: "auto", SelectionKey: "quota-test",
+		ProviderLoad: map[string]ProviderLoad{
+			"quota": {Limit: 32, QuotaExhausted: true},
+			"ready": {Limit: 32},
+		},
+	})
+	if len(got) != 2 || got[0].Deployment.ProviderID != "ready" {
+		t.Fatalf("quota-exhausted provider was not deprioritized: %#v", got)
+	}
+}
