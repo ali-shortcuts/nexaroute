@@ -1104,3 +1104,24 @@ func TestRoutingOnlyReloadKeepsExistingAdapterPool(t *testing.T) {
 		t.Fatal("routing-only reload rebuilt provider adapter instead of reusing its pool")
 	}
 }
+
+func TestRetryAfterCapReloadRebuildsProviderAdapter(t *testing.T) {
+	cfg := config.Default()
+	cfg.Probe.Enabled = false
+	cfg.Providers = []config.ProviderConfig{{
+		ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "http://example.invalid",
+		AuthMode: "none", Enabled: true, MaxConcurrency: 2,
+		Models: []config.ModelConfig{{ID: "m", Model: "m", Enabled: true, Weight: 1}},
+	}}
+	s := testGateway(t, cfg)
+	before, _ := s.reg.Get("p")
+	next := s.currentConfig()
+	next.Routing.MaxRetryAfterSeconds++
+	if err := s.applyConfig(next); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := s.reg.Get("p")
+	if before == after {
+		t.Fatal("retry-after cap change reused adapter with stale retry policy")
+	}
+}

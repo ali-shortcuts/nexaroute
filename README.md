@@ -69,8 +69,9 @@ Implemented resilience:
 - virtual catch-all models `auto` and `claude-auto`
 - optional fallback when the client asks for an unknown model
 - weighted and priority-aware deployment selection
-- EWMA latency and failure-rate scoring
+- EWMA latency and recency-weighted failure-rate scoring
 - retries/failover before response bytes are committed
+- provider-diverse failover ordering inside each priority tier to reduce correlated retry storms
 - failover on transport errors, selected 4xx provider/auth failures, `429`, and retryable `5xx`
 - upstream logical-error detection: `200` responses carrying an error envelope, an error finish reason, or injected paywall/quota text (for example "doesn't have enough credits") are classified as failures, never successes — with per-key cooldown for quota/auth/throttle causes and failover to the next healthy deployment (see `docs/UPSTREAM_ERRORS.md`)
 - `Retry-After` handling with a configurable cap, surfaced to the client on exhausted `429` responses
