@@ -161,6 +161,19 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if gatewayDeadlineExceeded(routeCtx, r.Context()) {
+				s.observeCurrentRoute(c.Deployment, a, func() {
+					s.hm.RecordProviderFailure(c.Deployment.ProviderID, c.Deployment.ID, lastErr)
+					if router.IsReadyStrategy(cfg.Routing.Strategy) {
+						s.hm.Quarantine(c.Deployment.ID, lastErr, headerLatency)
+						s.probe.Recover(c.Deployment.ID)
+					} else {
+						s.hm.RecordFailure(c.Deployment.ID, lastErr, headerLatency)
+					}
+				})
+				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_timeout", Deployment: c.Deployment.ID, Message: lastErr, ErrorType: "provider_timeout", LatencyMS: headerLatency.Milliseconds()})
+				break
+			}
+			s.observeCurrentRoute(c.Deployment, a, func() {
 				s.hm.RecordProviderFailure(c.Deployment.ProviderID, c.Deployment.ID, lastErr)
 				if router.IsReadyStrategy(cfg.Routing.Strategy) {
 					s.hm.Quarantine(c.Deployment.ID, lastErr, headerLatency)
@@ -168,16 +181,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 				} else {
 					s.hm.RecordFailure(c.Deployment.ID, lastErr, headerLatency)
 				}
-				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_timeout", Deployment: c.Deployment.ID, Message: lastErr, ErrorType: "provider_timeout", LatencyMS: headerLatency.Milliseconds()})
-				break
-			}
-			s.hm.RecordProviderFailure(c.Deployment.ProviderID, c.Deployment.ID, lastErr)
-			if router.IsReadyStrategy(cfg.Routing.Strategy) {
-				s.hm.Quarantine(c.Deployment.ID, lastErr, headerLatency)
-				s.probe.Recover(c.Deployment.ID)
-			} else {
-				s.hm.RecordFailure(c.Deployment.ID, lastErr, headerLatency)
-			}
+			})
 			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_fail", Deployment: c.Deployment.ID, Message: lastErr, ErrorType: "provider_connection_failed", LatencyMS: headerLatency.Milliseconds()})
 			if attempts < max && i+1 < len(candidates) {
 				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "failover", Deployment: c.Deployment.ID, Message: "transport failure; trying next eligible candidate"})
@@ -203,21 +207,23 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 				policy.HardCooldown = false
 				policy.SignalProvider = false
 			}
-			s.recordProviderFailure(c.Deployment.ProviderID, c.Deployment.ID, lastErr, policy)
-			if router.IsReadyStrategy(cfg.Routing.Strategy) {
-				if policy.QuarantineDeployment {
-					s.hm.Quarantine(c.Deployment.ID, lastErr, headerLatency)
-					s.probe.Recover(c.Deployment.ID)
+			s.observeCurrentRoute(c.Deployment, a, func() {
+				s.recordProviderFailure(c.Deployment.ProviderID, c.Deployment.ID, lastErr, policy)
+				if router.IsReadyStrategy(cfg.Routing.Strategy) {
+					if policy.QuarantineDeployment {
+						s.hm.Quarantine(c.Deployment.ID, lastErr, headerLatency)
+						s.probe.Recover(c.Deployment.ID)
+					}
+				} else if policy.HardCooldown {
+					d := cfg.Cooldown()
+					if resp.StatusCode == 429 {
+						d = retryAfterDuration(resp.Header, time.Duration(cfg.Routing.MaxRetryAfterSeconds)*time.Second)
+					}
+					s.hm.ForceCooldown(c.Deployment.ID, lastErr, d)
+				} else if policy.QuarantineDeployment {
+					s.hm.RecordFailure(c.Deployment.ID, lastErr, headerLatency)
 				}
-			} else if policy.HardCooldown {
-				d := cfg.Cooldown()
-				if resp.StatusCode == 429 {
-					d = retryAfterDuration(resp.Header, time.Duration(cfg.Routing.MaxRetryAfterSeconds)*time.Second)
-				}
-				s.hm.ForceCooldown(c.Deployment.ID, lastErr, d)
-			} else if policy.QuarantineDeployment {
-				s.hm.RecordFailure(c.Deployment.ID, lastErr, headerLatency)
-			}
+			})
 			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_fail", Deployment: c.Deployment.ID, Message: lastErr, ErrorType: policy.ErrorType, LatencyMS: headerLatency.Milliseconds(), StatusCode: resp.StatusCode})
 			if (policy.Failover || cls.CapabilityFailure) && attempts < max && i+1 < len(candidates) {
 				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "failover", Deployment: c.Deployment.ID, Message: fmt.Sprintf("HTTP %d; trying next eligible candidate", resp.StatusCode), StatusCode: resp.StatusCode})
@@ -236,7 +242,9 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Gateway-Upstream-Model", c.Deployment.Model)
 		if in.Stream {
 			deploymentID := c.Deployment.ID
-			resp.Body = observeFirstByte(resp.Body, start, func(d time.Duration) { s.hm.RecordTTFT(deploymentID, d) })
+			resp.Body = observeFirstByte(resp.Body, start, func(d time.Duration) {
+				s.observeCurrentRoute(c.Deployment, a, func() { s.hm.RecordTTFT(deploymentID, d) })
+			})
 		}
 		switch {
 		case kind != "":
@@ -284,14 +292,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 			if !responseCommitted(w) {
 				lastStatus = 0
 				lastBody = nil
-				if cfg.Routing.Strategy == "ready_mesh" && req.Streaming {
-					s.hm.RecordScopeFailure(c.Deployment.ID, []string{"streaming"}, lastErr)
-				} else if router.IsReadyStrategy(cfg.Routing.Strategy) {
-					s.hm.Quarantine(c.Deployment.ID, lastErr, total)
-					s.probe.Recover(c.Deployment.ID)
-				} else {
-					s.hm.RecordFailure(c.Deployment.ID, lastErr, total)
-				}
+				s.recordResponseFailure(cfg, c.Deployment, a, req.Streaming, lastErr, total, false)
 				kind := "response_decode_fail"
 				if req.Streaming {
 					kind = "stream_fail_precommit"
@@ -304,15 +305,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 				errorJSON(w, http.StatusBadGateway, "upstream returned an invalid response")
 				return
 			}
-			if cfg.Routing.Strategy == "ready_mesh" && req.Streaming {
-				s.hm.RecordScopeFailure(c.Deployment.ID, []string{"streaming"}, lastErr)
-			} else if router.IsReadyStrategy(cfg.Routing.Strategy) {
-				s.hm.Quarantine(c.Deployment.ID, lastErr, total)
-				s.probe.Recover(c.Deployment.ID)
-			} else {
-				s.hm.RecordFailure(c.Deployment.ID, lastErr, total)
-			}
-			s.hm.RecordProviderFailure(c.Deployment.ProviderID, c.Deployment.ID, lastErr)
+			s.recordResponseFailure(cfg, c.Deployment, a, req.Streaming, lastErr, total, true)
 			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "stream_fail", Deployment: c.Deployment.ID, Message: lastErr, ErrorType: "provider_stream_error", LatencyMS: total.Milliseconds(), StatusCode: resp.StatusCode})
 			return
 		}

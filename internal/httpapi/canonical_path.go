@@ -294,16 +294,18 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 	for i := 0; i < len(candidates) && attempts < max; i++ {
 		c := candidates[i]
 		attempts++
-		deployment := c.Deployment
-		dialect, cached := dialects[deployment.ProviderID]
-		if !cached {
-			dialect = s.dialectFor(deployment.ProviderID, deployment.ProviderType, "")
-			dialects[deployment.ProviderID] = dialect
-		}
 		bundle, ok := s.buildCanonicalAttempt(c, req, canReq, in.Model, profile)
 		if !ok {
 			lastErr = "candidate could not serve this request"
 			continue
+		}
+		// buildCanonicalAttempt re-resolves candidates immediately before
+		// dispatch; all subsequent bookkeeping must use that fresh deployment.
+		deployment := bundle.c.Deployment
+		dialect, cached := dialects[deployment.ProviderID]
+		if !cached {
+			dialect = s.dialectFor(deployment.ProviderID, deployment.ProviderType, "")
+			dialects[deployment.ProviderID] = dialect
 		}
 		start := time.Now()
 		s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_attempt", Deployment: deployment.ID,
@@ -323,13 +325,15 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 			}
 			cls := compat.ClassifyTransportError(derr)
 			policy := cls.Policy()
-			s.hm.RecordProviderFailure(deployment.ProviderID, deployment.ID, lastErr)
-			if router.IsReadyStrategy(cfg.Routing.Strategy) {
-				s.hm.Quarantine(deployment.ID, lastErr, time.Since(start))
-				s.probe.Recover(deployment.ID)
-			} else if policy.HardCooldown {
-				s.hm.ForceCooldown(deployment.ID, lastErr, cfg.Cooldown())
-			}
+			s.observeCurrentRoute(deployment, bundle.a, func() {
+				s.hm.RecordProviderFailure(deployment.ProviderID, deployment.ID, lastErr)
+				if router.IsReadyStrategy(cfg.Routing.Strategy) {
+					s.hm.Quarantine(deployment.ID, lastErr, time.Since(start))
+					s.probe.Recover(deployment.ID)
+				} else if policy.HardCooldown {
+					s.hm.ForceCooldown(deployment.ID, lastErr, cfg.Cooldown())
+				}
+			})
 			if attempts < max && i+1 < len(candidates) {
 				s.retryPause(routeCtx, r.Header.Get("x-request-id"), cfg, attempts-1, max)
 				continue
@@ -346,23 +350,25 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 			cls, policy := classifyFailure(resp.StatusCode, b)
 			// Capability failures never touch deployment health; the router
 			// may still fail over to a deployment that supports the feature.
-			s.recordProviderFailure(deployment.ProviderID, deployment.ID, cls.Message, policy)
-			if !cls.CapabilityFailure {
-				if router.IsReadyStrategy(cfg.Routing.Strategy) {
-					if policy.QuarantineDeployment {
-						s.hm.Quarantine(deployment.ID, cls.Message, time.Since(start))
-						s.probe.Recover(deployment.ID)
+			s.observeCurrentRoute(deployment, bundle.a, func() {
+				s.recordProviderFailure(deployment.ProviderID, deployment.ID, cls.Message, policy)
+				if !cls.CapabilityFailure {
+					if router.IsReadyStrategy(cfg.Routing.Strategy) {
+						if policy.QuarantineDeployment {
+							s.hm.Quarantine(deployment.ID, cls.Message, time.Since(start))
+							s.probe.Recover(deployment.ID)
+						}
+					} else if policy.HardCooldown {
+						d := cfg.Cooldown()
+						if resp.StatusCode == http.StatusTooManyRequests {
+							d = retryAfterDuration(resp.Header, time.Duration(cfg.Routing.MaxRetryAfterSeconds)*time.Second)
+						}
+						s.hm.ForceCooldown(deployment.ID, cls.Message, d)
+					} else if policy.QuarantineDeployment {
+						s.hm.RecordFailure(deployment.ID, cls.Message, time.Since(start))
 					}
-				} else if policy.HardCooldown {
-					d := cfg.Cooldown()
-					if resp.StatusCode == http.StatusTooManyRequests {
-						d = retryAfterDuration(resp.Header, time.Duration(cfg.Routing.MaxRetryAfterSeconds)*time.Second)
-					}
-					s.hm.ForceCooldown(deployment.ID, cls.Message, d)
-				} else if policy.QuarantineDeployment {
-					s.hm.RecordFailure(deployment.ID, cls.Message, time.Since(start))
 				}
-			}
+			})
 			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_fail", Deployment: deployment.ID,
 				Message: cls.CapabilityLabel() + ": " + cls.Message, ErrorType: policy.ErrorType, LatencyMS: time.Since(start).Milliseconds(), StatusCode: lastStatus})
 			if (policy.Failover || cls.CapabilityFailure) && attempts < max && i+1 < len(candidates) {
@@ -377,7 +383,9 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if req.Streaming {
-			resp.Body = observeFirstByte(resp.Body, start, func(d time.Duration) { s.hm.RecordTTFT(deployment.ID, d) })
+			resp.Body = observeFirstByte(resp.Body, start, func(d time.Duration) {
+				s.observeCurrentRoute(deployment, bundle.a, func() { s.hm.RecordTTFT(deployment.ID, d) })
+			})
 		}
 		deploy := deployment
 		sent := sentPayload
@@ -397,12 +405,14 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 			}
 			cls := compat.ClassifyMalformedResponse(lastErr)
 			if !responseCommitted(w) {
-				if router.IsReadyStrategy(cfg.Routing.Strategy) {
-					s.hm.Quarantine(deploy.ID, lastErr, total)
-					s.probe.Recover(deploy.ID)
-				} else {
-					s.hm.RecordFailure(deploy.ID, lastErr, total)
-				}
+				s.observeCurrentRoute(deploy, bundle.a, func() {
+					if router.IsReadyStrategy(cfg.Routing.Strategy) {
+						s.hm.Quarantine(deploy.ID, lastErr, total)
+						s.probe.Recover(deploy.ID)
+					} else {
+						s.hm.RecordFailure(deploy.ID, lastErr, total)
+					}
+				})
 				if attempts < max && i+1 < len(candidates) {
 					s.retryPause(routeCtx, r.Header.Get("x-request-id"), cfg, attempts-1, max)
 					continue

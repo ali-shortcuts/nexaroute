@@ -432,16 +432,41 @@ func (s *Server) routeStillCurrent(d router.Deployment, a providers.Adapter) boo
 	return ok && current == a
 }
 
-func (s *Server) recordRouteSuccess(req router.Requirement, d router.Deployment, a providers.Adapter, latency time.Duration) {
+// observeCurrentRoute performs both the identity check and the observation
+// under the config lock, so reload cannot slip between them.
+func (s *Server) observeCurrentRoute(d router.Deployment, a providers.Adapter, apply func()) bool {
 	s.runtimeMu.RLock()
 	defer s.runtimeMu.RUnlock()
 	if !s.routeStillCurrent(d, a) {
-		return
+		return false
 	}
-	s.hm.RecordSuccess(d.ID, latency)
-	s.hm.RecordProviderSuccess(d.ProviderID)
-	s.hm.RecordScopeSuccess(d.ID, req.Scopes())
-	s.rt.ObserveSession(req, d.ID)
+	apply()
+	return true
+}
+
+func (s *Server) recordRouteSuccess(req router.Requirement, d router.Deployment, a providers.Adapter, latency time.Duration) {
+	s.observeCurrentRoute(d, a, func() {
+		s.hm.RecordSuccess(d.ID, latency)
+		s.hm.RecordProviderSuccess(d.ProviderID)
+		s.hm.RecordScopeSuccess(d.ID, req.Scopes())
+		s.rt.ObserveSession(req, d.ID)
+	})
+}
+
+func (s *Server) recordResponseFailure(cfg config.Config, d router.Deployment, a providers.Adapter, streaming bool, reason string, latency time.Duration, committed bool) {
+	s.observeCurrentRoute(d, a, func() {
+		if cfg.Routing.Strategy == "ready_mesh" && streaming {
+			s.hm.RecordScopeFailure(d.ID, []string{"streaming"}, reason)
+		} else if router.IsReadyStrategy(cfg.Routing.Strategy) {
+			s.hm.Quarantine(d.ID, reason, latency)
+			s.probe.Recover(d.ID)
+		} else {
+			s.hm.RecordFailure(d.ID, reason, latency)
+		}
+		if committed {
+			s.hm.RecordProviderFailure(d.ProviderID, d.ID, reason)
+		}
+	})
 }
 
 func (s *Server) recordProviderFailure(providerID, deploymentID, reason string, policy upstreamFailurePolicy) {

@@ -311,3 +311,174 @@ func TestHotReloadRejectsInFlightOldProbeEvidence(t *testing.T) {
 		t.Fatalf("old-model probe marked new-model ready: %+v", st)
 	}
 }
+
+func TestResponsesRepairKeepsNativeProviderPath(t *testing.T) {
+	var calls atomic.Int32
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/custom/responses" {
+			t.Errorf("repair attempt used wrong endpoint: %q", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("invalid payload: %v", err)
+		}
+		if calls.Add(1) == 1 {
+			if payload["temperature"] == nil {
+				t.Error("first attempt omitted requested temperature")
+			}
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = io.WriteString(w, `{"error":{"message":"temperature is not supported by this model","type":"invalid_request_error","param":"temperature"}}`)
+			return
+		}
+		if payload["temperature"] != nil {
+			t.Errorf("repaired request retained unsupported temperature: %v", payload)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"object":"response","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"fixed"}]}]}`)
+	}))
+	defer up.Close()
+	cfg := config.Default()
+	cfg.Probe.Enabled = false
+	cfg.Providers = []config.ProviderConfig{{ID: "p", Type: "openai_responses", BaseURL: up.URL,
+		ChatPath: "/wrong/chat", ResponsesPath: "/custom/responses", AuthMode: "none", Enabled: true,
+		Models: []config.ModelConfig{{ID: "m", Model: "up-model", Enabled: true, Weight: 1}}}}
+	s := testGateway(t, cfg)
+	s.SyncCapabilityContracts()
+	rr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "http://gateway/v1/responses",
+		strings.NewReader(`{"model":"m","input":"hello","temperature":0.5}`)))
+	if rr.Code != http.StatusOK || calls.Load() != 2 || !strings.Contains(rr.Body.String(), "fixed") {
+		t.Fatalf("status=%d calls=%d body=%s", rr.Code, calls.Load(), rr.Body.String())
+	}
+}
+
+func TestHotReloadRejectsInFlightOldProviderFailure(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			Model string `json:"model"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		if payload.Model == "old-model" {
+			close(started)
+			<-release
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = io.WriteString(w, `{"error":{"message":"old endpoint failed"}}`)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"role":"assistant","content":"new"}}]}`)
+	}))
+	defer func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+		up.Close()
+	}()
+	cfg := config.Default()
+	cfg.Probe.Enabled = false
+	cfg.Providers = []config.ProviderConfig{{ID: "p", Type: "openai_compatible", BaseURL: up.URL,
+		AuthMode: "none", Enabled: true, Models: []config.ModelConfig{{ID: "m", Model: "old-model", Enabled: true, Weight: 1}}}}
+	s := testGateway(t, cfg)
+	finished := make(chan struct{})
+	go func() {
+		rr := httptest.NewRecorder()
+		s.Handler().ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "http://gateway/v1/chat/completions",
+			strings.NewReader(`{"model":"m","messages":[{"role":"user","content":"hi"}]}`)))
+		close(finished)
+	}()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("old request never started")
+	}
+	next := s.currentConfig()
+	next.Providers[0].Models[0].Model = "new-model"
+	if err := s.applyConfig(next); err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+	select {
+	case <-finished:
+	case <-time.After(5 * time.Second):
+		t.Fatal("old request never completed")
+	}
+	if st := s.hm.Get("p/m"); st.Status != health.Unknown {
+		t.Fatalf("old-model failure quarantined new-model: %+v", st)
+	}
+	if states := s.hm.ProviderSnapshot(); len(states) != 0 {
+		t.Fatalf("old-model failure contaminated provider health: %+v", states)
+	}
+}
+
+func TestHotReloadRejectsOldRepairEvidence(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var calls atomic.Int32
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/old/responses" {
+			t.Errorf("in-flight request used new path: %q", r.URL.Path)
+		}
+		if calls.Add(1) == 1 {
+			close(started)
+			<-release
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = io.WriteString(w, `{"error":{"message":"temperature is not supported by this model","type":"invalid_request_error","param":"temperature"}}`)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"object":"response","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}]}`)
+	}))
+	defer func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+		up.Close()
+	}()
+	cfg := config.Default()
+	cfg.Probe.Enabled = false
+	cfg.Providers = []config.ProviderConfig{{ID: "p", Type: "openai_responses", BaseURL: up.URL,
+		ResponsesPath: "/old/responses", AuthMode: "none", Enabled: true,
+		Models: []config.ModelConfig{{ID: "m", Model: "model", Enabled: true, Weight: 1}}}}
+	s := testGateway(t, cfg)
+	s.SyncCapabilityContracts()
+	finished := make(chan struct{})
+	go func() {
+		rr := httptest.NewRecorder()
+		s.Handler().ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "http://gateway/v1/responses",
+			strings.NewReader(`{"model":"m","input":"hi","temperature":0.5}`)))
+		close(finished)
+	}()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("old request never started")
+	}
+	next := s.currentConfig()
+	next.Providers[0].ResponsesPath = "/new/responses"
+	if err := s.applyConfig(next); err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+	select {
+	case <-finished:
+	case <-time.After(5 * time.Second):
+		t.Fatal("old repair never completed")
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("repair attempts=%d want two attempts on original adapter", calls.Load())
+	}
+	if contract := s.capStore.Get("p/m"); contract.Capabilities.Temperature == compat.Unsupported || contract.LastRepair != "" {
+		t.Fatalf("old endpoint repair poisoned replacement contract: %+v", contract)
+	}
+	if st := s.hm.Get("p/m"); st.Status != health.Unknown {
+		t.Fatalf("old endpoint response re-admitted replacement: %+v", st)
+	}
+}

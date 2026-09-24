@@ -318,11 +318,13 @@ func (s *Server) doUpstreamWithRepair(
 	if s.currentConfig().Routing.SanitizeEnabled {
 		contract := s.capStore.Get(deployment.ID)
 		if res, err := compat.Sanitize(payload, contract, dialect, profile); err == nil && res.Changed {
-			s.capStore.SetRepair(deployment.ID, "pre-dispatch: "+fmt.Sprintf("removed %v, renamed %v", res.Removed, res.Renamed))
-			s.bus.Add(events.Event{
-				RequestID: requestID, Kind: "compat_sanitize", Deployment: deployment.ID,
-				Message:   fmt.Sprintf("removed %v renamed %v (pre-dispatch)", res.Removed, res.Renamed),
-				ErrorType: "parameter_sanitized",
+			s.observeCurrentRoute(deployment, a, func() {
+				s.capStore.SetRepair(deployment.ID, "pre-dispatch: "+fmt.Sprintf("removed %v, renamed %v", res.Removed, res.Renamed))
+				s.bus.Add(events.Event{
+					RequestID: requestID, Kind: "compat_sanitize", Deployment: deployment.ID,
+					Message:   fmt.Sprintf("removed %v renamed %v (pre-dispatch)", res.Removed, res.Renamed),
+					ErrorType: "parameter_sanitized",
+				})
 			})
 			payload = res.Payload
 		}
@@ -355,23 +357,27 @@ func (s *Server) doUpstreamWithRepair(
 		repaired, plan, ok := compat.Repair(cls, payload, dialect, profile)
 		if !ok {
 			// Semantics-critical capability failure with no safe repair.
-			// Learn the fact and return the upstream error untouched.
-			if cls.Capability != "" {
-				s.capStore.LearnUnsupported(deployment.ID, cls.Capability, compat.SourceRuntime, cls.Message, key)
-			}
-			s.capStore.SetIssue(deployment.ID, cls.CapabilityLabel())
+			// Learn the fact only when this is still the current deployment.
+			s.observeCurrentRoute(deployment, a, func() {
+				if cls.Capability != "" {
+					s.capStore.LearnUnsupported(deployment.ID, cls.Capability, compat.SourceRuntime, cls.Message, key)
+				}
+				s.capStore.SetIssue(deployment.ID, cls.CapabilityLabel())
+			})
 			resp.Body = io.NopCloser(bytes.NewReader(body))
 			return resp, payload, out, nil
 		}
 		attempts--
 		out.Repaired = true
 		out.Description = compat.DescribePlan(plan)
-		for _, rule := range plan.Rules {
-			if rule.Capability != "" {
-				s.capStore.LearnUnsupported(deployment.ID, rule.Capability, compat.SourceRuntime, cls.Message, key)
+		s.observeCurrentRoute(deployment, a, func() {
+			for _, rule := range plan.Rules {
+				if rule.Capability != "" {
+					s.capStore.LearnUnsupported(deployment.ID, rule.Capability, compat.SourceRuntime, cls.Message, key)
+				}
 			}
-		}
-		s.capStore.SetRepair(deployment.ID, out.Description)
+			s.capStore.SetRepair(deployment.ID, out.Description)
+		})
 		if canReq != nil {
 			applyRepairToCanonical(canReq, plan)
 		}
@@ -464,22 +470,26 @@ func (s *Server) maybeRepairUpstream(
 		}
 		repaired, plan, ok := compat.Repair(cls, payload, dialect, profile)
 		if !ok {
-			if cls.Capability != "" {
-				s.capStore.LearnUnsupported(deployment.ID, cls.Capability, compat.SourceRuntime, cls.Message, key)
-			}
-			s.capStore.SetIssue(deployment.ID, cls.CapabilityLabel())
+			s.observeCurrentRoute(deployment, bundle.a, func() {
+				if cls.Capability != "" {
+					s.capStore.LearnUnsupported(deployment.ID, cls.Capability, compat.SourceRuntime, cls.Message, key)
+				}
+				s.capStore.SetIssue(deployment.ID, cls.CapabilityLabel())
+			})
 			resp.Body = io.NopCloser(bytes.NewReader(body))
 			return resp, payload, out
 		}
 		attempts--
 		out.Repaired = true
 		out.Description = compat.DescribePlan(plan)
-		for _, rule := range plan.Rules {
-			if rule.Capability != "" {
-				s.capStore.LearnUnsupported(deployment.ID, rule.Capability, compat.SourceRuntime, cls.Message, key)
+		s.observeCurrentRoute(deployment, bundle.a, func() {
+			for _, rule := range plan.Rules {
+				if rule.Capability != "" {
+					s.capStore.LearnUnsupported(deployment.ID, rule.Capability, compat.SourceRuntime, cls.Message, key)
+				}
 			}
-		}
-		s.capStore.SetRepair(deployment.ID, out.Description)
+			s.capStore.SetRepair(deployment.ID, out.Description)
+		})
 		s.bus.Add(events.Event{
 			RequestID: requestID, Kind: "compat_repair", Deployment: deployment.ID,
 			Message:   fmt.Sprintf("%s (%s); retrying with adapted payload", cls.CapabilityLabel(), out.Description),
@@ -584,11 +594,13 @@ func (s *Server) sanitizeOutgoingPayload(bundle hedgeAttemptBundle, payload []by
 	if err != nil || !res.Changed {
 		return payload
 	}
-	s.capStore.SetRepair(deployment.ID, "pre-dispatch: removed "+fmt.Sprint(res.Removed)+" renamed "+fmt.Sprint(res.Renamed))
-	s.bus.Add(events.Event{
-		Kind: "compat_sanitize", Deployment: deployment.ID,
-		Message:   fmt.Sprintf("removed %v renamed %v (pre-dispatch)", res.Removed, res.Renamed),
-		ErrorType: "parameter_sanitized",
+	s.observeCurrentRoute(deployment, bundle.a, func() {
+		s.capStore.SetRepair(deployment.ID, "pre-dispatch: removed "+fmt.Sprint(res.Removed)+" renamed "+fmt.Sprint(res.Renamed))
+		s.bus.Add(events.Event{
+			Kind: "compat_sanitize", Deployment: deployment.ID,
+			Message:   fmt.Sprintf("removed %v renamed %v (pre-dispatch)", res.Removed, res.Renamed),
+			ErrorType: "parameter_sanitized",
+		})
 	})
 	return res.Payload
 }
