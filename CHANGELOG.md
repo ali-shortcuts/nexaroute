@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.5.1 — price-aware routing and proactive quota headroom
+
+### Added
+
+- **Opt-in `cost_aware` routing**: verified-ready selection keeps configured priority tiers authoritative, prefers lower bounded request cost among known-priced peers, never treats unknown pricing as free, and falls back to ordinary score ordering when a caller omits an output-token ceiling.
+- **Proactive quota pressure**: common OpenAI/Anthropic request/token limit headers are captured in addition to remaining/reset values. While a resource-specific reset is still in the future, routing pressure begins below 25% remaining headroom and rises smoothly toward the existing exhausted-provider ceiling.
+- **Separate request/token reset deadlines**: request and token quota windows are tracked independently so one resource cannot borrow the other's reset clock.
+- Dashboard/Admin/Prometheus surfaces now show quota ceilings and resource-specific reset deadlines.
+
+### Fixed
+
+- Runtime version reporting is consistent: binary and HTTP/dashboard version now both report v0.5.1.
+- Provider-card edit button binding uses the multi-element selector correctly.
+
+
 ## v0.5.0 — hedging, response cache, client keys, context pre-routing, usage accounting
 
 ### Added
