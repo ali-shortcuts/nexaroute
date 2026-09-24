@@ -677,3 +677,42 @@ func TestResponsesDecoderRejectsMalformedSuccessEnvelope(t *testing.T) {
 		t.Fatalf("gateway emitted non-Responses object: %+v", encoded)
 	}
 }
+
+func TestCanonicalNonStreamDecodersRejectMalformedSuccessEnvelopes(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		decode func([]byte) (Response, error)
+		body   string
+		valid  bool
+	}{
+		{"OpenAI error", DecodeOpenAIChatResponse, `{"error":{"message":"invalid key"}}`, false},
+		{"OpenAI missing choices", DecodeOpenAIChatResponse, `{"object":"chat.completion","choices":[]}`, false},
+		{"OpenAI empty message", DecodeOpenAIChatResponse, `{"choices":[{"message":{}}]}`, false},
+		{"OpenAI valid message", DecodeOpenAIChatResponse, `{"choices":[{"message":{"role":"assistant","content":"OK"}}]}`, true},
+		{"Anthropic error", DecodeAnthropicResponse, `{"error":{"message":"invalid key"}}`, false},
+		{"Anthropic null content", DecodeAnthropicResponse, `{"type":"message","role":"assistant","content":null}`, false},
+		{"Anthropic valid empty content", DecodeAnthropicResponse, `{"type":"message","role":"assistant","content":[]}`, true},
+		{"Gemini error", DecodeGeminiResponse, `{"error":{"code":429,"message":"quota exceeded"}}`, false},
+		{"Gemini missing candidates", DecodeGeminiResponse, `{"candidates":[]}`, false},
+		{"Gemini usage without answer", DecodeGeminiResponse, `{"usageMetadata":{"promptTokenCount":2}}`, false},
+		{"Gemini blocked prompt", DecodeGeminiResponse, `{"promptFeedback":{"blockReason":"SAFETY"}}`, true},
+		{"Gemini valid candidate", DecodeGeminiResponse, `{"candidates":[{"content":{"role":"model","parts":[{"text":"OK"}]},"finishReason":"STOP"}]}`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := tc.decode([]byte(tc.body))
+			if (err == nil) != tc.valid {
+				t.Fatalf("valid=%v error=%v, body=%s", tc.valid, err, tc.body)
+			}
+		})
+	}
+}
+
+func TestGeminiStreamingUsageOnlyChunkRemainsValid(t *testing.T) {
+	events, terminal, err := DecodeGeminiStreamChunk(`{"usageMetadata":{"promptTokenCount":2,"candidatesTokenCount":3}}`)
+	if err != nil || terminal || len(events) != 1 || events[0].Type != StreamUsage || events[0].Usage == nil || events[0].Usage.OutputTokens != 3 {
+		t.Fatalf("usage-only Gemini chunk: events=%+v terminal=%v err=%v", events, terminal, err)
+	}
+	if _, _, err := DecodeGeminiStreamChunk(`{"error":{"message":"quota exceeded"}}`); err == nil {
+		t.Fatal("200 Gemini error event was silently treated as an empty stream chunk")
+	}
+}

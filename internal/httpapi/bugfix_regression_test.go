@@ -568,3 +568,40 @@ func TestChatAndMessagesIngressUseNativeProviderPaths(t *testing.T) {
 		}
 	}
 }
+
+func TestResponsesIngressRejectsMalformedSuccessFromOtherProtocols(t *testing.T) {
+	for _, tc := range []struct{ kind, path string }{
+		{"openai_compatible", "/v1/chat/completions"},
+		{"anthropic_compatible", "/v1/messages"},
+		{"gemini", "/v1beta/models/up-model:generateContent"},
+	} {
+		t.Run(tc.kind, func(t *testing.T) {
+			var calls atomic.Int32
+			up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
+				if r.URL.Path != tc.path {
+					t.Errorf("upstream path=%q want=%q", r.URL.Path, tc.path)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, `{"error":{"message":"invalid upstream key"}}`)
+			}))
+			defer up.Close()
+			cfg := config.Default()
+			cfg.Probe.Enabled = false
+			cfg.Providers = []config.ProviderConfig{{
+				ID: "p", Type: tc.kind, BaseURL: up.URL, AuthMode: "none", Enabled: true,
+				Models: []config.ModelConfig{{ID: "m", Model: "up-model", Enabled: true, Weight: 1}},
+			}}
+			s := testGateway(t, cfg)
+			rr := httptest.NewRecorder()
+			s.Handler().ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "http://gateway/v1/responses",
+				strings.NewReader(`{"model":"m","input":"hi","max_output_tokens":16}`)))
+			if rr.Code != http.StatusBadGateway || calls.Load() != 1 {
+				t.Fatalf("malformed 200 looked successful: status=%d calls=%d body=%s", rr.Code, calls.Load(), rr.Body.String())
+			}
+			if st := s.hm.Get("p/m"); st.Status != health.Degraded {
+				t.Fatalf("malformed 200 left deployment ready: %+v", st)
+			}
+		})
+	}
+}
