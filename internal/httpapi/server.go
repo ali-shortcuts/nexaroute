@@ -477,7 +477,7 @@ func isDataPlaneRequest(r *http.Request) bool {
 		return false
 	}
 	switch r.URL.Path {
-	case "/v1/messages", "/v1/messages/count_tokens", "/v1/chat/completions":
+	case "/v1/messages", "/v1/messages/count_tokens", "/v1/chat/completions", "/v1/responses":
 		return true
 	default:
 		return false
@@ -525,6 +525,10 @@ func (s *Server) rejectOverloaded(w http.ResponseWriter, r *http.Request, reques
 	w.Header().Set("Retry-After", "1")
 	if r.URL.Path == "/v1/messages" || r.URL.Path == "/v1/messages/count_tokens" {
 		anthropicErrorJSON(w, http.StatusServiceUnavailable, "gateway is at capacity; retry shortly")
+		return
+	}
+	if r.URL.Path == "/v1/responses" {
+		canonicalErrorJSON(w, "openai_responses", http.StatusServiceUnavailable, "server_error", "gateway is at capacity; retry shortly")
 		return
 	}
 	errorJSON(w, http.StatusServiceUnavailable, "gateway is at capacity; retry shortly")
