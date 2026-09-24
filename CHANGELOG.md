@@ -4,14 +4,14 @@
 
 ### Added
 
-- **Canonical Request/Response IR** (`internal/compat/canonical`): Anthropic and OpenAI Chat decode into one normalized model (messages, tools, reasoning, images, sampling, stop, stream) with required-vs-optional capability requirements; encoders produce provider payloads. Gemini GenerateContent converters ship in the same package for future upstream use.
+- **Canonical Request/Response IR** (`internal/compat/canonical`): Anthropic and OpenAI Chat decode into one normalized model (messages, tools, reasoning, images, sampling, stop, stream) with required-vs-optional capability requirements; encoders produce provider payloads. Gemini GenerateContent converters ship in the same package and power the Gemini upstream below.
 - **Per-deployment capability contracts** (`internal/compat/capabilities`): tri-state SUPPORTED/UNSUPPORTED/UNKNOWN per capability (never assume UNKNOWN = UNSUPPORTED), provenance (static/discovery/probe/runtime + confidence + timestamp), conservative runtime learning (only high-confidence evidence flips values), invalidation on base-URL/protocol/model/dialect change, and Claude Code scorecards (`CLAUDE_CODE_READY` / `CHAT_READY` / …).
 - **Structured error taxonomy** (`internal/compat/errors`): 19 classes (AUTH_ERROR, INVALID_KEY, QUOTA_EXHAUSTED, RATE_LIMIT, MODEL_NOT_FOUND, UNSUPPORTED_PARAMETER/TOOL_CALLING/REASONING/VISION/STRUCTURED_OUTPUT, CONTEXT_OVERFLOW, …) with a 20-case provider-shape matrix across OpenAI/Anthropic/NVIDIA/DeepSeek/OpenRouter/Gemini/generic fixtures.
 - **No false health failures**: capability failures (e.g. 400 "temperature is not supported") are health-neutral — no quarantine, no provider-incident signal, no failover — and teach the capability contract instead. Regression tests pin `health=HEALTHY` + `temperature=UNSUPPORTED` with and without repair.
 - **Bounded repair engine** (`internal/compat/repair`, `compat.max_repair_attempts` ≤ 2): deterministic rules (`max_completion_tokens → max_tokens`, drop temperature/top_p/stop/seed/penalties/stream_options/reasoning_effort/parallel_tool_calls). Semantics-critical fields (tools, tool_choice, response_format, json_schema) are never silently dropped.
 - **Parameter sanitizer** (`internal/compat/sanitizer`): optional unsupported fields are dropped per policy; missing REQUIRED capabilities make a deployment ineligible instead of being sent anyway.
-- **Dialect registry** (`internal/compat/quirks`): `generic_openai`, `generic_anthropic`, `nvidia_nim`, `deepseek`, `openrouter`, `together`, `groq`, `custom` — no `if provider ==` sprawl. Providers accept optional `dialect` / `protocol` (`auto` default) in config and the dashboard.
-- **Canonical stream events** (`internal/compat/stream`): OpenAI and Anthropic SSE decode into Start/TextDelta/ReasoningDelta/ToolCallStart-Delta-End/Usage/End/Error events; golden SSE test asserts event-by-event decoding.
+- **Dialect registry** (`internal/compat/quirks`): `generic_openai`, `generic_anthropic`, `generic_gemini`, `nvidia_nim`, `deepseek`, `openrouter`, `together`, `groq`, `custom` — no `if provider ==` sprawl. Providers accept optional `dialect` / `protocol` (`auto` default) in config and the dashboard.
+- **Canonical stream events** (`internal/compat/stream`): OpenAI, Anthropic, and Gemini SSE decode into Start/TextDelta/ReasoningDelta/ToolCallStart-Delta-End/Usage/End/Error events; golden SSE test asserts event-by-event decoding.
 - **Protocol auto-discovery** (`internal/compat/detector`): probes `/v1/models`, `/v1/chat/completions`, `/v1/responses`, `/v1/messages` once (never on the hot path) into a YES/NO/UNKNOWN contract.
 - **Two-layer capability probing** (`internal/compat/capprobe` + `POST /admin/api/compat/probe`): Level A availability plus 16 Level B cases (system/streaming/tools/parallel/structured/reasoning/vision/sampling/max-tokens…); Quick / Full / Claude Code agent tool-loop modes; verified outcomes feed the capability store.
 - **Router integration**: REQUIRED capabilities verified UNSUPPORTED filter deployments before any upstream attempt; UNKNOWN required capabilities stay eligible but lose score to verified alternatives.
@@ -20,6 +20,37 @@
 - **Gemini upstream** (`type: "gemini"`): `generateContent` / `streamGenerateContent` via model-scoped paths, `x-goog-api-key` auth (auto default), Canonical-IR translation for all three ingress APIs (chat, messages, responses — including streaming), a Gemini SSE decoder with usage/finish mapping, the `generic_gemini` dialect profile, and a dashboard preset + provider-type option.
 - **Admin + dashboard**: `GET /admin/api/compat` (contracts + scorecards, also inside `/admin/api/snapshot`), new Compat tab with scorecard table and Quick/Full/Agent probe runner, dialect/protocol provider fields.
 - **Golden translation tests** (`internal/compat/golden_test.go` + `testdata/`): Anthropic → Canonical → NVIDIA request JSON, NVIDIA → Canonical → Anthropic response, SSE event stream.
+
+## v0.5.2 — in-flight quota reservation
+
+### Added
+
+- **In-flight request reservations**: every tagged data-plane upstream leg temporarily reserves one request against the latest provider-reported request headroom.
+- **In-flight token reservations**: each leg also reserves the request's conservative prompt estimate plus explicit output-token ceiling when available.
+- **Effective quota telemetry**: Provider/Admin/Prometheus surfaces now expose raw remaining quota, locally reserved request/token amounts, and effective remaining headroom.
+- **Reservation-aware routing**: quota pressure and exhausted-provider signals use effective remaining quota so concurrent requests do not all route against the same stale quota snapshot.
+- **Hedging-safe accounting**: primary and hedge legs reserve independently. Fresh resource-specific remaining headers release that resource immediately; otherwise the reservation survives until response-body completion.
+
+### Boundaries
+
+- Reservations are advisory and local to one NexaRoute process. They do not hard-block requests.
+- Probe, discovery, provider-test and other untagged control-plane calls do not create data-plane reservations.
+- Completed requests without fresh quota headers do not create durable rolling-window debt; hard RPM/TPM throttling remains future work.
+
+
+## v0.5.1 — price-aware routing and proactive quota headroom
+
+### Added
+
+- **Opt-in `cost_aware` routing**: verified-ready selection keeps configured priority tiers authoritative, prefers lower bounded request cost among known-priced peers, never treats unknown pricing as free, and falls back to ordinary score ordering when a caller omits an output-token ceiling.
+- **Proactive quota pressure**: common OpenAI/Anthropic request/token limit headers are captured in addition to remaining/reset values. While a resource-specific reset is still in the future, routing pressure begins below 25% remaining headroom and rises smoothly toward the existing exhausted-provider ceiling.
+- **Separate request/token reset deadlines**: request and token quota windows are tracked independently so one resource cannot borrow the other's reset clock.
+- Dashboard/Admin/Prometheus surfaces now show quota ceilings and resource-specific reset deadlines.
+
+### Fixed
+
+- Runtime version reporting is consistent: binary and HTTP/dashboard version now both report v0.5.1.
+- Provider-card edit button binding uses the multi-element selector correctly.
 
 ## v0.5.0 — hedging, response cache, client keys, context pre-routing, usage accounting
 

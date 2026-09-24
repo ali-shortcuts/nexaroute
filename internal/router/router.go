@@ -17,16 +17,18 @@ import (
 )
 
 type Deployment struct {
-	ID            string              `json:"id"`
-	ProviderID    string              `json:"provider_id"`
-	ProviderName  string              `json:"provider_name"`
-	ProviderType  string              `json:"provider_type"`
-	Model         string              `json:"model"`
-	Aliases       []string            `json:"aliases"`
-	Priority      int                 `json:"priority"`
-	Weight        float64             `json:"weight"`
-	ContextWindow int                 `json:"context_window,omitempty"`
-	Capabilities  config.Capabilities `json:"capabilities"`
+	ID                string              `json:"id"`
+	ProviderID        string              `json:"provider_id"`
+	ProviderName      string              `json:"provider_name"`
+	ProviderType      string              `json:"provider_type"`
+	Model             string              `json:"model"`
+	Aliases           []string            `json:"aliases"`
+	Priority          int                 `json:"priority"`
+	Weight            float64             `json:"weight"`
+	ContextWindow     int                 `json:"context_window,omitempty"`
+	InputCostPerMTok  float64             `json:"input_cost_per_mtok,omitempty"`
+	OutputCostPerMTok float64             `json:"output_cost_per_mtok,omitempty"`
+	Capabilities      config.Capabilities `json:"capabilities"`
 }
 
 type ProviderLoad struct {
@@ -34,6 +36,7 @@ type ProviderLoad struct {
 	Waiting        int64
 	Limit          int
 	QuotaExhausted bool
+	QuotaPressure  float64
 }
 
 type Requirement struct {
@@ -48,7 +51,9 @@ type Requirement struct {
 	// must advertise to serve this request (estimated prompt tokens plus
 	// requested output). Zero disables the check. Deployments with an
 	// unknown context window are always eligible.
-	MinContextWindow int
+	MinContextWindow     int
+	EstimatedInputTokens int
+	MaxOutputTokens      int
 }
 
 func (r Requirement) Scopes() []string {
@@ -73,6 +78,8 @@ type Scored struct {
 	Health           health.State `json:"health"`
 	Score            float64      `json:"score"`
 	CapacityPressure float64      `json:"capacity_pressure,omitempty"`
+	EstimatedCostUSD float64      `json:"estimated_cost_usd,omitempty"`
+	PriceKnown       bool         `json:"price_known,omitempty"`
 }
 
 type sessionPin struct {
@@ -102,7 +109,9 @@ func New(cfg config.Config, hm *health.Manager) *Router {
 	r.Reload(cfg)
 	return r
 }
-func IsReadyStrategy(s string) bool { return s == "ready_mesh" || s == "ready_queue" }
+func IsReadyStrategy(s string) bool {
+	return s == "ready_mesh" || s == "ready_queue" || s == "cost_aware"
+}
 
 // SetCompatLookup installs the tri-state capability hook. The lookup must be
 // concurrency-safe; it runs on the routing hot path and must stay cheap
@@ -140,7 +149,7 @@ func (r *Router) Reload(cfg config.Config) {
 			if w <= 0 {
 				w = 1
 			}
-			d := Deployment{ID: p.ID + "/" + m.ID, ProviderID: p.ID, ProviderName: p.Name, ProviderType: p.Type, Model: m.Model, Aliases: m.Aliases, Priority: m.Priority, Weight: w, ContextWindow: m.ContextWindow, Capabilities: m.Capabilities}
+			d := Deployment{ID: p.ID + "/" + m.ID, ProviderID: p.ID, ProviderName: p.Name, ProviderType: p.Type, Model: m.Model, Aliases: m.Aliases, Priority: m.Priority, Weight: w, ContextWindow: m.ContextWindow, InputCostPerMTok: m.InputCostPerMTok, OutputCostPerMTok: m.OutputCostPerMTok, Capabilities: m.Capabilities}
 			all = append(all, d)
 			byID[d.ID] = d
 			valid[d.ID] = struct{}{}
@@ -211,12 +220,18 @@ func capacityPressure(l ProviderLoad) float64 {
 	if l.QuotaExhausted {
 		return 4
 	}
-	if l.Limit <= 0 {
-		return 0
+	p := 0.0
+	if l.Limit > 0 {
+		p = (float64(l.Active) + 2*float64(l.Waiting)) / float64(l.Limit)
 	}
-	p := (float64(l.Active) + 2*float64(l.Waiting)) / float64(l.Limit)
 	if p < 0 {
-		return 0
+		p = 0
+	}
+	if p > 4 {
+		p = 4
+	}
+	if l.QuotaPressure > p {
+		p = l.QuotaPressure
 	}
 	if p > 4 {
 		return 4
@@ -257,7 +272,8 @@ func (r *Router) scored(d Deployment, hs health.State, req Requirement, cfg conf
 			}
 		}
 	}
-	return Scored{Deployment: d, Health: hs, Score: score, CapacityPressure: pressure}
+	cost, priceKnown := estimatedRequestCost(d, req)
+	return Scored{Deployment: d, Health: hs, Score: score, CapacityPressure: pressure, EstimatedCostUSD: cost, PriceKnown: priceKnown}
 }
 
 // requiredCompatKeys maps a routing requirement onto capability keys that
@@ -311,7 +327,7 @@ func (r *Router) eligibleDeployment(d Deployment, req Requirement, cfg config.Co
 		}
 	}
 	healthScopes := []string(nil)
-	if cfg.Routing.Strategy == "ready_mesh" {
+	if cfg.Routing.Strategy == "ready_mesh" || cfg.Routing.Strategy == "cost_aware" {
 		healthScopes = scopes
 	}
 	hs, scopesReady := r.health.GetWithScopes(d.ID, healthScopes)
@@ -415,6 +431,25 @@ func hashIndex(key string, salt byte, n int) int {
 	_, _ = h.Write([]byte{salt})
 	return int(h.Sum64() % uint64(n))
 }
+func estimatedRequestCost(d Deployment, req Requirement) (float64, bool) {
+	// Cost-aware ordering is only trustworthy when the request supplies an
+	// output ceiling. OpenAI callers may omit one; in that case all candidates
+	// fall back to the ordinary health/quality ordering instead of comparing
+	// incomplete input-only estimates.
+	if req.EstimatedInputTokens <= 0 || req.MaxOutputTokens <= 0 {
+		return 0, false
+	}
+	if d.InputCostPerMTok <= 0 && d.OutputCostPerMTok <= 0 {
+		return 0, false
+	}
+	cost := (float64(req.EstimatedInputTokens)*d.InputCostPerMTok +
+		float64(req.MaxOutputTokens)*d.OutputCostPerMTok) / 1_000_000
+	if cost < 0 {
+		return 0, false
+	}
+	return cost, true
+}
+
 func better(a, b Scored) bool {
 	if a.Score != b.Score {
 		return a.Score > b.Score
@@ -456,6 +491,39 @@ func diversifyProviderFailover(out []Scored, start, attemptLimit int) {
 		copy(out[i+1:pick+1], out[i:pick])
 		out[i] = chosen
 	}
+}
+
+func (r *Router) orderCostAware(out []Scored, req Requirement, cfg config.Config) {
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Deployment.Priority != out[j].Deployment.Priority {
+			return out[i].Deployment.Priority < out[j].Deployment.Priority
+		}
+		if out[i].PriceKnown != out[j].PriceKnown {
+			return out[i].PriceKnown
+		}
+		if out[i].PriceKnown && out[i].EstimatedCostUSD != out[j].EstimatedCostUSD {
+			return out[i].EstimatedCostUSD < out[j].EstimatedCostUSD
+		}
+		return better(out[i], out[j])
+	})
+	if len(out) < 2 {
+		return
+	}
+	// Session affinity stays authoritative when enabled. Operators who want
+	// every turn re-priced can disable affinity explicitly.
+	if pin := r.pinned(req, cfg); pin != "" {
+		bestPriority := out[0].Deployment.Priority
+		for i := range out {
+			if out[i].Deployment.ID == pin && out[i].Deployment.Priority == bestPriority {
+				chosen := out[i]
+				copy(out[1:i+1], out[0:i])
+				out[0] = chosen
+				diversifyProviderFailover(out, 1, cfg.Routing.MaxAttempts)
+				return
+			}
+		}
+	}
+	diversifyProviderFailover(out, 1, cfg.Routing.MaxAttempts)
 }
 
 func (r *Router) orderReadyMesh(out []Scored, req Requirement, cfg config.Config) {
@@ -542,6 +610,8 @@ func (r *Router) Candidates(req Requirement) []Scored {
 	switch cfg.Routing.Strategy {
 	case "ready_mesh":
 		r.orderReadyMesh(out, req, cfg)
+	case "cost_aware":
+		r.orderCostAware(out, req, cfg)
 	case "ready_queue":
 		sort.SliceStable(out, func(i, j int) bool {
 			if out[i].Deployment.Priority != out[j].Deployment.Priority {

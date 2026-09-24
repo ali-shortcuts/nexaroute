@@ -30,7 +30,7 @@ import (
 // installed binary reports the released version. TestVersionMatchesBuildinfo
 // pins it to internal/buildinfo.Version, which is what the HTTP surfaces
 // (/api/hello, /version, admin snapshot) report, so the two can never drift.
-const version = "0.5.0"
+const version = "0.5.2"
 
 func defaultConfigPath() string {
 	if p := os.Getenv("NEXAROUTE_CONFIG"); p != "" {

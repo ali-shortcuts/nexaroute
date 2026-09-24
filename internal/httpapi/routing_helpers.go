@@ -15,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/ali-shortcuts/nexaroute/internal/config"
+	"github.com/ali-shortcuts/nexaroute/internal/providers"
 	"github.com/ali-shortcuts/nexaroute/internal/router"
 )
 
@@ -324,6 +325,67 @@ func sessionKeyFromRequest(r *http.Request, raw []byte) string {
 	return sessionKeyFromRequestParts(r, inspection.BodySessionKey)
 }
 
+func quotaRemainingPressure(remaining, limit int64) float64 {
+	if remaining < 0 || limit <= 0 {
+		return 0
+	}
+	if remaining == 0 {
+		return 4
+	}
+	ratio := float64(remaining) / float64(limit)
+	// Stay neutral while at least 25% of a reported budget remains, then
+	// increase pressure smoothly to the same maximum as a saturated provider.
+	if ratio >= 0.25 {
+		return 0
+	}
+	p := (0.25 - ratio) / 0.25 * 4
+	if p < 0 {
+		return 0
+	}
+	if p > 4 {
+		return 4
+	}
+	return p
+}
+
+func providerLoadFromStats(st providers.ProviderStats, nowUnix int64) router.ProviderLoad {
+	requestResetPending := st.RequestResetUnix > nowUnix
+	tokenResetPending := st.TokenResetUnix > nowUnix
+	// Effective remaining quota subtracts data-plane requests/tokens that
+	// are already in flight but may not yet be reflected in a provider's
+	// latest remaining-* response headers.
+	remainingRequests := st.EffectiveRemainingRequests
+	if remainingRequests < 0 {
+		remainingRequests = st.RemainingRequests
+	}
+	remainingTokens := st.EffectiveRemainingTokens
+	if remainingTokens < 0 {
+		remainingTokens = st.RemainingTokens
+	}
+	// Backward compatibility for adapters/providers exposing only a shared
+	// reset deadline: use it for a zero-remaining signal, but never for
+	// ratio-based predictive pressure without a resource-specific deadline.
+	sharedResetPending := st.RateLimitResetUnix > nowUnix
+	quotaExhausted := (remainingRequests == 0 && (requestResetPending || sharedResetPending)) ||
+		(remainingTokens == 0 && (tokenResetPending || sharedResetPending))
+	quotaPressure := 0.0
+	if requestResetPending {
+		quotaPressure = quotaRemainingPressure(remainingRequests, st.RequestLimit)
+	}
+	if tokenResetPending {
+		if p := quotaRemainingPressure(remainingTokens, st.TokenLimit); p > quotaPressure {
+			quotaPressure = p
+		}
+	}
+	return router.ProviderLoad{
+		Active:         st.ActiveRequests,
+		Waiting:        st.WaitingRequests,
+		Limit:          st.MaxConcurrency,
+		QuotaExhausted: quotaExhausted,
+		QuotaPressure:  quotaPressure,
+	}
+}
+
 func (s *Server) prepareRequirement(req router.Requirement, r *http.Request, bodySessionKey string) router.Requirement {
 	req.SessionKey = sessionKeyFromRequestParts(r, bodySessionKey)
 	req.SelectionKey = r.Header.Get("x-request-id")
@@ -337,20 +399,12 @@ func (s *Server) prepareRequirement(req router.Requirement, r *http.Request, bod
 			cache[id] = router.ProviderLoad{}
 			return router.ProviderLoad{}
 		}
-		resetPending := st.RateLimitResetUnix > time.Now().Unix()
-		quotaExhausted := resetPending && (st.RemainingRequests == 0 || st.RemainingTokens == 0)
-		load := router.ProviderLoad{
-			Active:         st.ActiveRequests,
-			Waiting:        st.WaitingRequests,
-			Limit:          st.MaxConcurrency,
-			QuotaExhausted: quotaExhausted,
-		}
+		load := providerLoadFromStats(st, time.Now().Unix())
 		cache[id] = load
 		return load
 	}
 	return req
 }
-
 func (s *Server) recordRouteSuccess(req router.Requirement, deploymentID, providerID string, latency time.Duration) {
 	s.hm.RecordSuccess(deploymentID, latency)
 	s.hm.RecordProviderSuccess(providerID)

@@ -1,4 +1,4 @@
-# Known gaps — v0.5
+# Known gaps — v0.5.2
 
 These are explicit boundaries of the current code, not hidden assumptions.
 
@@ -8,10 +8,10 @@ Implemented runtime protocol classes are:
 
 - OpenAI-compatible Chat Completions
 - Anthropic-compatible Messages
+- Gemini GenerateContent (`type: gemini`, all three ingress APIs)
 
 Not implemented as native protocol classes:
 
-- Gemini native API (upstream adapter in progress)
 - OpenAI Responses API as an *upstream* protocol class (served as client
   ingress, including `stream:true`, since the Compatibility Engine)
 - Bedrock
@@ -88,7 +88,7 @@ The exact-match response cache is opt-in and deliberately narrow: non-streaming,
 
 Health probing is selective and event-driven. Startup establishes readiness, new/unverified deployments are probed, and failed deployments move into dedicated recovery loops. Successful real Claude traffic refreshes a deployment's ready-health lease, so actively used models are not needlessly synthetic-probed. A healthy deployment that remains idle past `probe.ready_lease_seconds` is micro-probed before its health proof is trusted indefinitely. The sweep interval remains configurable (minimum 1 second) without turning health checks into a quota/rate-limit attack.
 
-Micro-probes measure availability and latency. They do not measure model intelligence/answer quality. Model strength is expressed through configured deployment `priority` and `weight`; automatic quality benchmarking is outside the current v0.5 scope.
+Micro-probes measure availability and latency. They do not measure model intelligence/answer quality. Model strength is expressed through configured deployment `priority` and `weight`; automatic quality benchmarking is outside the current v0.5.2 scope.
 
 
 ## Routing boundaries after Ready Mesh
@@ -97,8 +97,8 @@ Implemented routing intelligence is deterministic and observable: session affini
 
 Not implemented yet:
 
-- complete provider-reported TPM/RPM accounting and predictive quota-reset scheduling (common remaining/reset headers are observed, but provider semantics vary);
-- cost-aware routing based on current provider pricing/billing and exact cross-provider usage accounting;
+- proactive quota headroom pressure and in-flight local reservations are implemented when provider quota evidence exists, but reservations are deliberately advisory: NexaRoute does not yet persist rolling-window quota debt after a completed response without fresh headers, hard-throttle traffic from inferred quota, or coordinate reservations across multiple gateway processes;
+- `cost_aware` routing uses configured base input/output prices and a bounded request estimate, but it is not invoice-perfect billing optimization (cache discounts, credits, batch pricing, taxes, and provider-specific billing rules remain outside the router);
 - shared/distributed affinity and breaker state across multiple NexaRoute processes;
 - an online learned semantic router that sends every prompt through another model/encoder.
 

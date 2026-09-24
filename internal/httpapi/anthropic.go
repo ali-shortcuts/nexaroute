@@ -13,6 +13,7 @@ import (
 
 	"github.com/ali-shortcuts/nexaroute/internal/core"
 	"github.com/ali-shortcuts/nexaroute/internal/events"
+	"github.com/ali-shortcuts/nexaroute/internal/providers"
 	"github.com/ali-shortcuts/nexaroute/internal/router"
 	"github.com/ali-shortcuts/nexaroute/internal/translate"
 )
@@ -49,8 +50,12 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 	if req.Reasoning {
 		req.ProviderType = "anthropic_compatible"
 	}
-	// Context-window pre-routing: Anthropic requires an explicit max_tokens.
-	req.MinContextWindow = inspection.EstimatedPromptTokens + in.MaxTokens
+	// Context and cost pre-routing use the same conservative prompt estimate.
+	// Anthropic requires an explicit max_tokens, so cost-aware ordering has a
+	// complete output ceiling for this request.
+	req.EstimatedInputTokens = inspection.EstimatedPromptTokens
+	req.MaxOutputTokens = in.MaxTokens
+	req.MinContextWindow = req.EstimatedInputTokens + req.MaxOutputTokens
 	req = s.prepareRequirement(req, r, inspection.BodySessionKey)
 	cfg, candidates := s.routeSnapshot(req)
 	if len(candidates) == 0 && req.ProviderType != "" {
@@ -78,6 +83,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		max = len(candidates)
 	}
 	routeCtx, routeCancel := routeContext(r.Context(), in.Stream, cfg.RequestTimeout())
+	routeCtx = providers.WithQuotaEstimate(routeCtx, req.EstimatedInputTokens, req.MaxOutputTokens)
 	defer routeCancel()
 	var lastErr string
 	var lastStatus int

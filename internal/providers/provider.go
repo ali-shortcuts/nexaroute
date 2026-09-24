@@ -10,15 +10,66 @@ import (
 )
 
 type ProviderStats struct {
-	ID                 string `json:"id"`
-	MaxConcurrency     int    `json:"max_concurrency"`
-	ActiveRequests     int64  `json:"active_requests"`
-	WaitingRequests    int64  `json:"waiting_requests"`
-	Credentials        int    `json:"credentials"`
-	CredentialsCooling int    `json:"credentials_cooling"`
-	RemainingRequests  int64  `json:"remaining_requests"`
-	RemainingTokens    int64  `json:"remaining_tokens"`
-	RateLimitResetUnix int64  `json:"rate_limit_reset_unix,omitempty"`
+	ID                         string `json:"id"`
+	MaxConcurrency             int    `json:"max_concurrency"`
+	ActiveRequests             int64  `json:"active_requests"`
+	WaitingRequests            int64  `json:"waiting_requests"`
+	Credentials                int    `json:"credentials"`
+	CredentialsCooling         int    `json:"credentials_cooling"`
+	RequestLimit               int64  `json:"request_limit"`
+	RemainingRequests          int64  `json:"remaining_requests"`
+	ReservedRequests           int64  `json:"reserved_requests"`
+	EffectiveRemainingRequests int64  `json:"effective_remaining_requests"`
+	TokenLimit                 int64  `json:"token_limit"`
+	RemainingTokens            int64  `json:"remaining_tokens"`
+	ReservedTokens             int64  `json:"reserved_tokens"`
+	EffectiveRemainingTokens   int64  `json:"effective_remaining_tokens"`
+	RequestResetUnix           int64  `json:"request_reset_unix,omitempty"`
+	TokenResetUnix             int64  `json:"token_reset_unix,omitempty"`
+	RateLimitResetUnix         int64  `json:"rate_limit_reset_unix,omitempty"`
+}
+
+type quotaEstimateContextKey struct{}
+
+const maxQuotaEstimateTokens int64 = 1_000_000_000_000
+
+// WithQuotaEstimate marks a data-plane upstream attempt with a conservative
+// token bound. Adapters use it only as an in-flight reservation overlay on
+// provider-reported quota; it never hard-blocks a request by itself.
+func WithQuotaEstimate(ctx context.Context, estimatedInputTokens, maxOutputTokens int) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var total int64
+	for _, v := range []int{estimatedInputTokens, maxOutputTokens} {
+		if v <= 0 {
+			continue
+		}
+		x := int64(v)
+		if x > maxQuotaEstimateTokens-total {
+			total = maxQuotaEstimateTokens
+			break
+		}
+		total += x
+	}
+	return context.WithValue(ctx, quotaEstimateContextKey{}, total)
+}
+
+func quotaEstimateFromContext(ctx context.Context) (int64, bool) {
+	if ctx == nil {
+		return 0, false
+	}
+	v, ok := ctx.Value(quotaEstimateContextKey{}).(int64)
+	if !ok {
+		return 0, false
+	}
+	if v < 0 {
+		v = 0
+	}
+	if v > maxQuotaEstimateTokens {
+		v = maxQuotaEstimateTokens
+	}
+	return v, true
 }
 
 type Adapter interface {

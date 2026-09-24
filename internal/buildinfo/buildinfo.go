@@ -9,4 +9,4 @@ package buildinfo
 // The CLI keeps its own literal in cmd/gateway/main.go because the CI installer
 // smoke job scrapes it from the source; TestVersionMatchesBuildinfo pins the two
 // together. Bump both and CHANGELOG.md on release.
-const Version = "0.5.0"
+const Version = "0.5.2"

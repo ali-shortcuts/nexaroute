@@ -54,9 +54,15 @@ type httpAdapter struct {
 	retryAfterCap      time.Duration
 	active             atomic.Int64
 	waiting            atomic.Int64
+	requestLimit       atomic.Int64
 	remainingRequests  atomic.Int64
+	tokenLimit         atomic.Int64
 	remainingTokens    atomic.Int64
+	requestResetUnix   atomic.Int64
+	tokenResetUnix     atomic.Int64
 	rateLimitResetUnix atomic.Int64
+	reservedRequests   atomic.Int64
+	reservedTokens     atomic.Int64
 }
 
 func newHTTPAdapter(p config.ProviderConfig, timeout time.Duration) (*httpAdapter, error) {
@@ -103,7 +109,9 @@ func newHTTPAdapterWithRetryCap(p config.ProviderConfig, timeout, retryAfterCap 
 		sem: make(chan struct{}, mc), forwardAllowed: make(map[string]struct{}, len(p.ForwardHeaders)),
 		retryAfterCap: retryAfterCap,
 	}
+	a.requestLimit.Store(-1)
 	a.remainingRequests.Store(-1)
+	a.tokenLimit.Store(-1)
 	a.remainingTokens.Store(-1)
 	for _, h := range p.ForwardHeaders {
 		h = strings.ToLower(strings.TrimSpace(h))
@@ -133,11 +141,33 @@ func (a *httpAdapter) Stats() ProviderStats {
 			cooling++
 		}
 	}
+	remainingRequests := a.remainingRequests.Load()
+	remainingTokens := a.remainingTokens.Load()
+	reservedRequests := a.reservedRequests.Load()
+	reservedTokens := a.reservedTokens.Load()
+	effectiveRequests := remainingRequests
+	if effectiveRequests >= 0 {
+		effectiveRequests -= reservedRequests
+		if effectiveRequests < 0 {
+			effectiveRequests = 0
+		}
+	}
+	effectiveTokens := remainingTokens
+	if effectiveTokens >= 0 {
+		effectiveTokens -= reservedTokens
+		if effectiveTokens < 0 {
+			effectiveTokens = 0
+		}
+	}
 	return ProviderStats{
 		ID: a.p.ID, MaxConcurrency: cap(a.sem),
 		ActiveRequests: a.active.Load(), WaitingRequests: a.waiting.Load(),
 		Credentials: len(a.creds), CredentialsCooling: cooling,
-		RemainingRequests: a.remainingRequests.Load(), RemainingTokens: a.remainingTokens.Load(),
+		RequestLimit: a.requestLimit.Load(), RemainingRequests: remainingRequests,
+		ReservedRequests: reservedRequests, EffectiveRemainingRequests: effectiveRequests,
+		TokenLimit: a.tokenLimit.Load(), RemainingTokens: remainingTokens,
+		ReservedTokens: reservedTokens, EffectiveRemainingTokens: effectiveTokens,
+		RequestResetUnix: a.requestResetUnix.Load(), TokenResetUnix: a.tokenResetUnix.Load(),
 		RateLimitResetUnix: a.rateLimitResetUnix.Load(),
 	}
 }
@@ -227,6 +257,53 @@ func (a *httpAdapter) defaultPath() string {
 		return a.p.MessagesPath
 	}
 	return a.p.ChatPath
+}
+
+type quotaReservation struct {
+	a           *httpAdapter
+	requests    int64
+	tokens      int64
+	requestOnce sync.Once
+	tokenOnce   sync.Once
+}
+
+func (a *httpAdapter) reserveQuota(ctx context.Context) *quotaReservation {
+	tokens, ok := quotaEstimateFromContext(ctx)
+	if !ok {
+		return nil
+	}
+	r := &quotaReservation{a: a, requests: 1, tokens: tokens}
+	a.reservedRequests.Add(1)
+	if tokens > 0 {
+		a.reservedTokens.Add(tokens)
+	}
+	return r
+}
+
+func (r *quotaReservation) releaseRequests() {
+	if r == nil || r.a == nil || r.requests <= 0 {
+		return
+	}
+	r.requestOnce.Do(func() {
+		r.a.reservedRequests.Add(-r.requests)
+	})
+}
+
+func (r *quotaReservation) releaseTokens() {
+	if r == nil || r.a == nil || r.tokens <= 0 {
+		return
+	}
+	r.tokenOnce.Do(func() {
+		r.a.reservedTokens.Add(-r.tokens)
+	})
+}
+
+func (r *quotaReservation) releaseAll() {
+	if r == nil {
+		return
+	}
+	r.releaseRequests()
+	r.releaseTokens()
 }
 
 func (a *httpAdapter) Do(ctx context.Context, payload []byte, stream bool, forward http.Header) (*http.Response, error) {
@@ -322,8 +399,10 @@ func (a *httpAdapter) DoPath(ctx context.Context, method, path string, payload [
 		if stream {
 			client = a.streamC
 		}
+		reservation := a.reserveQuota(reqCtx)
 		resp, err := client.Do(req)
 		if err != nil {
+			reservation.releaseAll()
 			if cancel != nil {
 				cancel()
 			}
@@ -331,7 +410,13 @@ func (a *httpAdapter) DoPath(ctx context.Context, method, path string, payload [
 			release()
 			return nil, err
 		}
-		a.observeRateLimitHeaders(resp.Header)
+		observed := a.observeRateLimitHeaders(resp.Header)
+		if observed.RequestRemaining {
+			reservation.releaseRequests()
+		}
+		if observed.TokenRemaining {
+			reservation.releaseTokens()
+		}
 		if stream && cancel != nil {
 			idle := time.Duration(a.p.StreamIdleTimeoutSeconds) * time.Second
 			if idle > 0 {
@@ -345,6 +430,7 @@ func (a *httpAdapter) DoPath(ctx context.Context, method, path string, payload [
 			if a.hasAvailableCredential(attempted) {
 				body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 				resp.Body.Close()
+				reservation.releaseAll()
 				a.releaseCredential(idx)
 				lastErr = fmt.Errorf("credential rejected http %d: %s", resp.StatusCode, a.safeSnippet(body))
 				continue
@@ -357,6 +443,7 @@ func (a *httpAdapter) DoPath(ctx context.Context, method, path string, payload [
 		// fully consumed or closed. This makes key-level load balancing reflect
 		// long-lived SSE streams instead of only time-to-first-byte.
 		resp.Body = &releaseOnDoneBody{ReadCloser: resp.Body, release: func() {
+			reservation.releaseAll()
 			a.releaseCredential(idx)
 			release()
 		}}
@@ -403,19 +490,49 @@ func parseQuotaResetHeader(h http.Header, names ...string) (int64, bool) {
 	return 0, false
 }
 
-func (a *httpAdapter) observeRateLimitHeaders(h http.Header) {
+type quotaObservation struct {
+	RequestRemaining bool
+	TokenRemaining   bool
+}
+
+func (a *httpAdapter) observeRateLimitHeaders(h http.Header) quotaObservation {
+	obs := quotaObservation{}
+	if n, ok := parseQuotaIntHeader(h, "x-ratelimit-limit-requests", "anthropic-ratelimit-requests-limit"); ok {
+		a.requestLimit.Store(n)
+	}
 	if n, ok := parseQuotaIntHeader(h, "x-ratelimit-remaining-requests", "anthropic-ratelimit-requests-remaining"); ok {
 		a.remainingRequests.Store(n)
+		obs.RequestRemaining = true
+	}
+	if n, ok := parseQuotaIntHeader(h, "x-ratelimit-limit-tokens", "anthropic-ratelimit-tokens-limit"); ok {
+		a.tokenLimit.Store(n)
 	}
 	if n, ok := parseQuotaIntHeader(h, "x-ratelimit-remaining-tokens", "anthropic-ratelimit-tokens-remaining"); ok {
 		a.remainingTokens.Store(n)
+		obs.TokenRemaining = true
 	}
-	if reset, ok := parseQuotaResetHeader(h,
-		"x-ratelimit-reset-requests", "x-ratelimit-reset-tokens",
-		"anthropic-ratelimit-requests-reset", "anthropic-ratelimit-tokens-reset",
-	); ok {
+	requestReset, requestOK := parseQuotaResetHeader(h,
+		"x-ratelimit-reset-requests", "anthropic-ratelimit-requests-reset",
+	)
+	if requestOK {
+		a.requestResetUnix.Store(requestReset)
+	}
+	tokenReset, tokenOK := parseQuotaResetHeader(h,
+		"x-ratelimit-reset-tokens", "anthropic-ratelimit-tokens-reset",
+	)
+	if tokenOK {
+		a.tokenResetUnix.Store(tokenReset)
+	}
+	// Preserve the legacy summary reset as the later known deadline. This is
+	// conservative for dashboards; routing uses the resource-specific resets.
+	reset := requestReset
+	if tokenReset > reset {
+		reset = tokenReset
+	}
+	if reset > 0 {
 		a.rateLimitResetUnix.Store(reset)
 	}
+	return obs
 }
 
 func (a *httpAdapter) applyHeaders(req *http.Request, forward http.Header) {

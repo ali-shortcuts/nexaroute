@@ -1,4 +1,4 @@
-# Roadmap — after the current v0.5 baseline
+# Roadmap — after the current v0.5.2 baseline
 
 The current v0.5 baseline includes everything v0.4 shipped (verified-ready routing, session affinity, provider/credential P2C selection, capability-aware circuits, supervised recovery, bounded admission, hot reload, provider discovery/testing, embedded UI, Linux/Docker packaging) plus provider incident circuits, quota hints, TTFT telemetry, request hedging, an opt-in exact-match response cache, opt-in client API keys, context-window-aware pre-routing, and usage/cost accounting.
 
@@ -19,8 +19,10 @@ Future work should be added only as separately scoped, tested capabilities.
 
 - explicit named fallback chains/pools;
 - ~~context-window-aware routing~~ (shipped in v0.5 with a conservative chars/4 estimator and unknown-window exemption);
-- proactive request scheduling against provider-reported RPM/TPM budgets (v0.5 observes remaining quotas and reset times and deprioritizes exhausted providers; predictive throttling against a known per-minute budget is still open);
-- price-aware candidate ordering on top of the v0.5 usage/pricing accounting (accounting shipped; routing remains cost-neutral);
+- ~~proactive quota headroom pressure~~ (shipped in v0.5.1 when providers report limit + remaining + resource-specific reset headers; the router starts deprioritizing below 25% headroom and preserves last-resort availability);
+- ~~in-flight local quota reservation~~ (shipped in v0.5.2: data-plane upstream attempts temporarily subtract one request plus a conservative token bound from effective headroom until fresh provider evidence or response-body completion);
+- durable rolling-window RPM/TPM debt, hard throttling, and cross-process quota coordination are still open;
+- ~~price-aware candidate ordering~~ (shipped in v0.5.1 as the opt-in `cost_aware` verified-ready strategy; priority tiers remain authoritative and incomplete request-cost estimates fall back safely);
 - richer per-request route explanations;
 - ~~carefully evaluated hedged requests~~ (shipped in v0.5 for the first attempt with a single partner, zero-health-signal abandonment, and route-context bounding);
 - learned/semantic routing only if it proves measurable benefit without unacceptable latency, cost, or failure amplification.

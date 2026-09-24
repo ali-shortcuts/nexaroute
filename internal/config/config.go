@@ -539,8 +539,8 @@ func (c Config) Validate() error {
 	if len(c.Providers) > maxProviders {
 		return fmt.Errorf("providers exceeds safe limit %d", maxProviders)
 	}
-	if c.Routing.Strategy != "ready_mesh" && c.Routing.Strategy != "ready_queue" && c.Routing.Strategy != "adaptive" && c.Routing.Strategy != "adaptive_round_robin" && c.Routing.Strategy != "priority" && c.Routing.Strategy != "round_robin" && c.Routing.Strategy != "least_latency" {
-		return errors.New("routing.strategy must be ready_mesh, ready_queue, adaptive, adaptive_round_robin, priority, round_robin, or least_latency")
+	if c.Routing.Strategy != "ready_mesh" && c.Routing.Strategy != "ready_queue" && c.Routing.Strategy != "cost_aware" && c.Routing.Strategy != "adaptive" && c.Routing.Strategy != "adaptive_round_robin" && c.Routing.Strategy != "priority" && c.Routing.Strategy != "round_robin" && c.Routing.Strategy != "least_latency" {
+		return errors.New("routing.strategy must be ready_mesh, ready_queue, cost_aware, adaptive, adaptive_round_robin, priority, round_robin, or least_latency")
 	}
 	if c.Routing.MaxAttempts <= 0 || c.Routing.MaxAttempts > maxRoutingAttempts {
 		return fmt.Errorf("routing.max_attempts must be between 1 and %d", maxRoutingAttempts)

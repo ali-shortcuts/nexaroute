@@ -14,6 +14,7 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/compat/stream"
 	"github.com/ali-shortcuts/nexaroute/internal/core"
 	"github.com/ali-shortcuts/nexaroute/internal/events"
+	"github.com/ali-shortcuts/nexaroute/internal/providers"
 	"github.com/ali-shortcuts/nexaroute/internal/router"
 )
 
@@ -236,8 +237,10 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 		Model: in.Model, Tools: canon.HasTools(),
 		Vision:    canon.HasImages() || inspection.Vision,
 		Streaming: in.Stream, Reasoning: canon.HasReasoning() || inspection.Reasoning,
-		MinContextWindow: inspection.EstimatedPromptTokens + in.MaxOutputTokens,
 	}
+	req.EstimatedInputTokens = inspection.EstimatedPromptTokens
+	req.MaxOutputTokens = in.MaxOutputTokens
+	req.MinContextWindow = req.EstimatedInputTokens + req.MaxOutputTokens
 	req = s.prepareRequirement(req, r, inspection.BodySessionKey)
 	cfg, candidates := s.routeSnapshot(req)
 	if len(candidates) == 0 {
@@ -249,6 +252,7 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 		max = len(candidates)
 	}
 	routeCtx, routeCancel := routeContext(r.Context(), in.Stream, cfg.RequestTimeout())
+	routeCtx = providers.WithQuotaEstimate(routeCtx, req.EstimatedInputTokens, req.MaxOutputTokens)
 	defer routeCancel()
 	forward := copySelectedRequestHeaders(r)
 	var lastErr string
