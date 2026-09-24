@@ -164,3 +164,24 @@ func TestAnthropicTextBlockStopDoesNotBecomeResponsesToolEnd(t *testing.T) {
 		t.Fatalf("Anthropic text block stop was misclassified as tool completion: %s", out)
 	}
 }
+
+func TestCanonicalStreamErrorDoesNotAppendSuccessTail(t *testing.T) {
+	stream := "data: {\"error\":{\"message\":\"upstream exploded\",\"type\":\"server_error\"}}\n\n"
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       io.NopCloser(strings.NewReader(stream)),
+	}
+	rr := httptest.NewRecorder()
+	err := (&Server{}).canonicalStreamPump(rr, resp, "openai_chat", "openai_responses", "client-model", "req-stream-error", nil)
+	if err == nil {
+		t.Fatal("expected upstream stream error")
+	}
+	out := rr.Body.String()
+	if !strings.Contains(out, "response.failed") {
+		t.Fatalf("Responses client did not receive failure terminal: %s", out)
+	}
+	if strings.Contains(out, "response.completed") {
+		t.Fatalf("canonical stream emitted success after failure: %s", out)
+	}
+}
