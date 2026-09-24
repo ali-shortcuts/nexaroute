@@ -347,7 +347,7 @@ function renderProviders(h) {
       <button class="edit-provider btn secondary" data-id="${esc(p.id)}">Edit provider</button>
     </article>`;
   }).join('') || '<div class="empty-state"><strong>No providers yet.</strong><span>Add an OpenAI-compatible or Anthropic-compatible upstream to start routing.</span></div>';
-  $('.edit-provider').forEach(b => b.onclick = () => openEdit(b.dataset.id));
+  $$('.edit-provider').forEach(b => b.onclick = () => openEdit(b.dataset.id));
 }
 
 function renderModels(ds, h) {
@@ -580,7 +580,7 @@ $$('#cliTabs button').forEach(b => b.onclick = () => {
 /* ---------- provider editor ---------- */
 function emptyProvider() {
   return {
-    id: '', name: '', type: 'openai_compatible', base_url: '', api_key: '', api_key_env: '', credentials: [],
+    id: '', name: '', type: 'openai_compatible', dialect: '', base_url: '', api_key: '', api_key_env: '', credentials: [],
     auth_mode: 'bearer', headers: {}, forward_headers: null, proxy_url: '',
     chat_path: '/v1/chat/completions', responses_path: '/v1/responses', messages_path: '/v1/messages', models_path: '/v1/models',
     count_tokens_path: '/v1/messages/count_tokens', max_concurrency: 32, stream_idle_timeout_seconds: 180,
@@ -788,11 +788,15 @@ function readForm() {
       enabled: x.enabled !== false,
       priority: Number.isFinite(Number(x.priority)) ? Number(x.priority) : i,
       weight: Number(x.weight) > 0 ? Number(x.weight) : 1,
+      context_window: Number.isFinite(Number(x.context_window)) ? Math.max(0, Number(x.context_window)) : 0,
+      input_cost_per_mtok: Number.isFinite(Number(x.input_cost_per_mtok)) ? Math.max(0, Number(x.input_cost_per_mtok)) : 0,
+      output_cost_per_mtok: Number.isFinite(Number(x.output_cost_per_mtok)) ? Math.max(0, Number(x.output_cost_per_mtok)) : 0,
       capabilities: { streaming: c.streaming !== false, tools: c.tools !== false, vision: !!c.vision, reasoning: !!c.reasoning }
     };
   });
   const p = {
     id: $('#pId').value.trim(), name: $('#pName').value.trim(), type: $('#pType').value,
+    dialect: editor.provider?.dialect || '',
     base_url: $('#pBase').value.trim(), api_key: $('#pKey').value, api_key_env: $('#pKeyEnv').value.trim(),
     credentials: creds, auth_mode: $('#pAuth').value, headers: hs,
     forward_headers: (() => {
@@ -804,7 +808,7 @@ function readForm() {
     messages_path: $('#pMessagesPath').value.trim(), models_path: $('#pModelsPath').value.trim(),
     count_tokens_path: $('#pCountPath').value.trim(),
     max_concurrency: Math.max(1, parseInt($('#pConcurrency').value || '32', 10)),
-    stream_idle_timeout_seconds: Math.max(10, parseInt($('#pStreamIdle').value || '180', 10)),
+    stream_idle_timeout_seconds: Math.max(1, parseInt($('#pStreamIdle').value || '180', 10)),
     enabled: $('#pEnabled').checked, models
   };
   if (!p.id) throw new Error('Internal ID is required');

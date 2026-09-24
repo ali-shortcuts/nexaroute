@@ -1075,6 +1075,72 @@ func TestQuotaRemainingPressureStartsBelowQuarterBudget(t *testing.T) {
 	}
 }
 
+func TestProviderEditorStreamIdleRangeMatchesBackend(t *testing.T) {
+	index, err := webFS.ReadFile("web/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(index)
+	if !strings.Contains(html, `id="pStreamIdle" type="number" min="1" max="86400"`) {
+		t.Fatal("provider editor stream-idle range is narrower than backend validation")
+	}
+
+	app, err := webFS.ReadFile("web/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(app), "stream_idle_timeout_seconds: Math.max(1,") {
+		t.Fatal("provider editor silently clamps valid stream-idle values below 10 seconds")
+	}
+}
+
+func TestProviderEditorPreservesDialectOverride(t *testing.T) {
+	app, err := webFS.ReadFile("web/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(app), "dialect: editor.provider?.dialect || ''") {
+		t.Fatal("provider editor save path drops existing dialect override")
+	}
+}
+
+func TestProviderEditorSerializesModelContextAndPricing(t *testing.T) {
+	app, err := webFS.ReadFile("web/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	js := string(app)
+	for _, field := range []string{
+		"context_window:",
+		"input_cost_per_mtok:",
+		"output_cost_per_mtok:",
+	} {
+		if !strings.Contains(js, field) {
+			t.Fatalf("provider editor save path omits model field %s", field)
+		}
+	}
+}
+
+func TestProviderEditButtonsUseCollectionSelector(t *testing.T) {
+	app, err := webFS.ReadFile("web/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundCollection := false
+	for _, line := range strings.Split(string(app), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "$('.edit-provider').forEach(b => b.onclick = () => openEdit(b.dataset.id));" {
+			t.Fatal("provider edit binding uses single-element selector with forEach")
+		}
+		if line == "$$('.edit-provider').forEach(b => b.onclick = () => openEdit(b.dataset.id));" {
+			foundCollection = true
+		}
+	}
+	if !foundCollection {
+		t.Fatal("provider edit binding is missing the collection selector")
+	}
+}
+
 func TestEmbeddedUIExposesCostAwareStrategy(t *testing.T) {
 	index, err := webFS.ReadFile("web/index.html")
 	if err != nil {

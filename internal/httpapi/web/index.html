@@ -323,7 +323,7 @@
           <label class="field"><span>Proxy URL <small>(optional)</small></span><input id="pProxy" spellcheck="false" placeholder="http://127.0.0.1:7890"></label>
           <label class="field"><span>Max concurrency</span><input id="pConcurrency" type="number" min="1" max="512" value="32"></label>
         </div>
-        <label class="field"><span>Stream idle timeout (seconds)</span><input id="pStreamIdle" type="number" min="10" max="3600" value="180">
+        <label class="field"><span>Stream idle timeout (seconds)</span><input id="pStreamIdle" type="number" min="1" max="86400" value="180">
           <em>Cancels a stalled upstream stream without imposing a total stream duration limit.</em></label>
         <div class="form-grid two">
           <label class="field"><span>Chat Completions path</span><input id="pChatPath" spellcheck="false" placeholder="/v1/chat/completions"></label>
