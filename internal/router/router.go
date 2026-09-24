@@ -16,15 +16,16 @@ import (
 )
 
 type Deployment struct {
-	ID           string              `json:"id"`
-	ProviderID   string              `json:"provider_id"`
-	ProviderName string              `json:"provider_name"`
-	ProviderType string              `json:"provider_type"`
-	Model        string              `json:"model"`
-	Aliases      []string            `json:"aliases"`
-	Priority     int                 `json:"priority"`
-	Weight       float64             `json:"weight"`
-	Capabilities config.Capabilities `json:"capabilities"`
+	ID            string              `json:"id"`
+	ProviderID    string              `json:"provider_id"`
+	ProviderName  string              `json:"provider_name"`
+	ProviderType  string              `json:"provider_type"`
+	Model         string              `json:"model"`
+	Aliases       []string            `json:"aliases"`
+	Priority      int                 `json:"priority"`
+	Weight        float64             `json:"weight"`
+	ContextWindow int                 `json:"context_window,omitempty"`
+	Capabilities  config.Capabilities `json:"capabilities"`
 }
 
 type ProviderLoad struct {
@@ -42,6 +43,11 @@ type Requirement struct {
 	SelectionKey                        string
 	ProviderLoad                        map[string]ProviderLoad
 	LoadForProvider                     func(string) ProviderLoad
+	// MinContextWindow is the minimum usable context window a deployment
+	// must advertise to serve this request (estimated prompt tokens plus
+	// requested output). Zero disables the check. Deployments with an
+	// unknown context window are always eligible.
+	MinContextWindow int
 }
 
 func (r Requirement) Scopes() []string {
@@ -111,7 +117,7 @@ func (r *Router) Reload(cfg config.Config) {
 			if w <= 0 {
 				w = 1
 			}
-			d := Deployment{ID: p.ID + "/" + m.ID, ProviderID: p.ID, ProviderName: p.Name, ProviderType: p.Type, Model: m.Model, Aliases: m.Aliases, Priority: m.Priority, Weight: w, Capabilities: m.Capabilities}
+			d := Deployment{ID: p.ID + "/" + m.ID, ProviderID: p.ID, ProviderName: p.Name, ProviderType: p.Type, Model: m.Model, Aliases: m.Aliases, Priority: m.Priority, Weight: w, ContextWindow: m.ContextWindow, Capabilities: m.Capabilities}
 			all = append(all, d)
 			byID[d.ID] = d
 			valid[d.ID] = struct{}{}
@@ -225,6 +231,13 @@ func (r *Router) eligibleDeployment(d Deployment, req Requirement, cfg config.Co
 		return Scored{}, false
 	}
 	if !r.health.ProviderAvailable(d.ProviderID) {
+		return Scored{}, false
+	}
+	// Pre-call context check: skip deployments that advertise a context
+	// window too small for the estimated request. A guaranteed-failure
+	// attempt wastes one attempt budget and burns provider quota for an
+	// error the gateway can predict in microseconds.
+	if req.MinContextWindow > 0 && d.ContextWindow > 0 && d.ContextWindow < req.MinContextWindow {
 		return Scored{}, false
 	}
 	if req.Tools && !d.Capabilities.Tools || req.Vision && !d.Capabilities.Vision || req.Streaming && !d.Capabilities.Streaming || req.Reasoning && !d.Capabilities.Reasoning {

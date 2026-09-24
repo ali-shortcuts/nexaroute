@@ -16,12 +16,14 @@ import (
 )
 
 type Config struct {
-	Listen    string           `json:"listen"`
-	Admin     AdminConfig      `json:"admin"`
-	Logging   LoggingConfig    `json:"logging"`
-	Routing   RoutingConfig    `json:"routing"`
-	Probe     ProbeConfig      `json:"probe"`
-	Providers []ProviderConfig `json:"providers"`
+	Listen     string           `json:"listen"`
+	Admin      AdminConfig      `json:"admin"`
+	Logging    LoggingConfig    `json:"logging"`
+	Routing    RoutingConfig    `json:"routing"`
+	Probe      ProbeConfig      `json:"probe"`
+	Cache      CacheConfig      `json:"cache"`
+	ClientAuth ClientAuthConfig `json:"client_auth"`
+	Providers  []ProviderConfig `json:"providers"`
 }
 
 type LoggingConfig struct {
@@ -60,6 +62,27 @@ type RoutingConfig struct {
 	CapacityWeight               float64 `json:"capacity_weight"`
 	RetryBackoffMS               int     `json:"retry_backoff_ms"`
 	MaxRetryAfterSeconds         int     `json:"max_retry_after_seconds"`
+	HedgingEnabled               bool    `json:"hedging_enabled"`
+	HedgingDelayMS               int     `json:"hedging_delay_ms"`
+}
+
+// CacheConfig gates the exact-match response cache. It is deliberately
+// opt-in: a shared gateway serving mixed traffic must not memorize responses
+// unless the operator asked for it.
+type CacheConfig struct {
+	Enabled      bool `json:"enabled"`
+	TTLSeconds   int  `json:"ttl_seconds"`
+	MaxEntries   int  `json:"max_entries"`
+	MaxBodyBytes int  `json:"max_body_bytes"`
+}
+
+// ClientAuthConfig enables optional per-key data-plane authentication with a
+// per-key request-per-minute ceiling. Disabled by default so local single-user
+// deployments keep working without configuration.
+type ClientAuthConfig struct {
+	Enabled bool     `json:"enabled"`
+	Keys    []string `json:"keys"`
+	RPM     int      `json:"rpm"`
 }
 
 type ProbeConfig struct {
@@ -113,13 +136,16 @@ type ProviderConfig struct {
 }
 
 type ModelConfig struct {
-	ID           string       `json:"id"`
-	Model        string       `json:"model"`
-	Aliases      []string     `json:"aliases,omitempty"`
-	Enabled      bool         `json:"enabled"`
-	Priority     int          `json:"priority"`
-	Weight       float64      `json:"weight"`
-	Capabilities Capabilities `json:"capabilities"`
+	ID                string       `json:"id"`
+	Model             string       `json:"model"`
+	Aliases           []string     `json:"aliases,omitempty"`
+	Enabled           bool         `json:"enabled"`
+	Priority          int          `json:"priority"`
+	Weight            float64      `json:"weight"`
+	ContextWindow     int          `json:"context_window,omitempty"`
+	InputCostPerMTok  float64      `json:"input_cost_per_mtok,omitempty"`
+	OutputCostPerMTok float64      `json:"output_cost_per_mtok,omitempty"`
+	Capabilities      Capabilities `json:"capabilities"`
 }
 
 type Capabilities struct {
@@ -210,8 +236,11 @@ func Default() Config {
 			CapabilityFailureThreshold: 2, CapabilityCooldownSeconds: 300,
 			RequestTimeoutMS: 120000, LatencyWeight: 0.015, FailureWeight: 25, CapacityWeight: 35,
 			RetryBackoffMS: 150, MaxRetryAfterSeconds: 60,
+			HedgingEnabled: false, HedgingDelayMS: 1500,
 		},
-		Probe: ProbeConfig{Enabled: true, OnStart: true, IntervalSeconds: 120, ReadyLeaseSeconds: 300, TimeoutMS: 8000, MaxTokens: 1, Concurrency: 16, RecoveryAttempts: 5, RecoveryRetryMS: 500},
+		Probe:      ProbeConfig{Enabled: true, OnStart: true, IntervalSeconds: 120, ReadyLeaseSeconds: 300, TimeoutMS: 8000, MaxTokens: 1, Concurrency: 16, RecoveryAttempts: 5, RecoveryRetryMS: 500},
+		Cache:      CacheConfig{Enabled: false, TTLSeconds: 300, MaxEntries: 256, MaxBodyBytes: 1 << 20},
+		ClientAuth: ClientAuthConfig{Enabled: false, RPM: 0},
 	}
 }
 
@@ -315,6 +344,18 @@ func (c *Config) ApplyDefaults() {
 	}
 	if c.Routing.CapabilityFailureThreshold == 0 {
 		c.Routing.CapabilityFailureThreshold = 2
+	}
+	if c.Routing.HedgingDelayMS == 0 {
+		c.Routing.HedgingDelayMS = 1500
+	}
+	if c.Cache.TTLSeconds == 0 {
+		c.Cache.TTLSeconds = 300
+	}
+	if c.Cache.MaxEntries == 0 {
+		c.Cache.MaxEntries = 256
+	}
+	if c.Cache.MaxBodyBytes == 0 {
+		c.Cache.MaxBodyBytes = 1 << 20
 	}
 	if c.Routing.CapabilityCooldownSeconds == 0 {
 		c.Routing.CapabilityCooldownSeconds = 300
@@ -487,6 +528,34 @@ func (c Config) Validate() error {
 	if c.Routing.MaxRetryAfterSeconds < 1 || c.Routing.MaxRetryAfterSeconds > 86400 {
 		return errors.New("routing.max_retry_after_seconds must be between 1 and 86400")
 	}
+	if c.Routing.HedgingDelayMS < 50 || c.Routing.HedgingDelayMS > 600000 {
+		return errors.New("routing.hedging_delay_ms must be between 50 and 600000")
+	}
+	if c.Cache.TTLSeconds < 1 || c.Cache.TTLSeconds > 30*24*60*60 {
+		return errors.New("cache.ttl_seconds must be between 1 and 2592000")
+	}
+	if c.Cache.MaxEntries < 1 || c.Cache.MaxEntries > 65536 {
+		return errors.New("cache.max_entries must be between 1 and 65536")
+	}
+	if c.Cache.MaxBodyBytes < 1024 || c.Cache.MaxBodyBytes > 64<<20 {
+		return errors.New("cache.max_body_bytes must be between 1024 and 67108864")
+	}
+	if c.ClientAuth.Enabled {
+		if len(c.ClientAuth.Keys) == 0 {
+			return errors.New("client_auth.keys must not be empty when client_auth is enabled")
+		}
+		if len(c.ClientAuth.Keys) > 1024 {
+			return errors.New("client_auth.keys exceeds safe limit 1024")
+		}
+		for _, k := range c.ClientAuth.Keys {
+			if len(k) < 8 || len(k) > 512 {
+				return errors.New("client_auth.keys entries must be between 8 and 512 bytes")
+			}
+		}
+		if c.ClientAuth.RPM < 0 || c.ClientAuth.RPM > 1000000 {
+			return errors.New("client_auth.rpm must be between 0 and 1000000")
+		}
+	}
 	for name, v := range map[string]float64{
 		"routing.latency_weight":  c.Routing.LatencyWeight,
 		"routing.failure_weight":  c.Routing.FailureWeight,
@@ -618,6 +687,16 @@ func (c Config) Validate() error {
 			if math.IsNaN(m.Weight) || math.IsInf(m.Weight, 0) || m.Weight <= 0 || m.Weight > 1_000_000 {
 				return fmt.Errorf("deployment %q weight must be finite and between 0 and 1000000", p.ID+"/"+m.ID)
 			}
+			if m.ContextWindow < 0 || m.ContextWindow > 100_000_000 {
+				return fmt.Errorf("deployment %q context_window must be between 0 and 100000000", p.ID+"/"+m.ID)
+			}
+			for name, cost := range map[string]float64{
+				"input_cost_per_mtok": m.InputCostPerMTok, "output_cost_per_mtok": m.OutputCostPerMTok,
+			} {
+				if math.IsNaN(cost) || math.IsInf(cost, 0) || cost < 0 || cost > 100000 {
+					return fmt.Errorf("deployment %q %s must be finite and between 0 and 100000", p.ID+"/"+m.ID, name)
+				}
+			}
 			key := p.ID + "/" + m.ID
 			if seenD[key] {
 				return fmt.Errorf("duplicate deployment %q", key)
@@ -680,6 +759,12 @@ func (c Config) ProviderFailureWindow() time.Duration {
 }
 func (c Config) ProviderCooldown() time.Duration {
 	return time.Duration(c.Routing.ProviderCooldownSeconds) * time.Second
+}
+func (c Config) HedgingDelay() time.Duration {
+	return time.Duration(c.Routing.HedgingDelayMS) * time.Millisecond
+}
+func (c Config) CacheTTL() time.Duration {
+	return time.Duration(c.Cache.TTLSeconds) * time.Second
 }
 func (c Config) ProbeInterval() time.Duration {
 	return time.Duration(c.Probe.IntervalSeconds) * time.Second
