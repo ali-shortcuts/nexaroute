@@ -121,7 +121,7 @@
           <input id="modelSearch" class="search" type="search" placeholder="Filter deployments…" spellcheck="false">
         </div>
         <div class="tablewrap"><table>
-          <thead><tr><th>Deployment</th><th>Provider</th><th>Model</th><th>Status</th><th>Latency</th><th>TTFT</th><th>Failures</th></tr></thead>
+          <thead><tr><th>Deployment</th><th>Provider</th><th>Model</th><th>Status</th><th>Latency</th><th>TTFT</th><th>Input</th><th>Output</th><th>Usage</th><th>Est. cost</th><th>Failures</th></tr></thead>
           <tbody id="modelRows"></tbody>
         </table></div>
       </div>
@@ -320,7 +320,7 @@
           <label><input id="pCapVision" type="checkbox"> Vision</label>
           <label><input id="pCapReasoning" type="checkbox"> Reasoning / thinking</label>
         </div>
-        <p class="hint">Each selected model keeps its own aliases, priority, weight and capability flags. Edit them directly below.</p>
+        <p class="hint">Each selected model keeps its own aliases, priority, weight, capability flags and optional base input/output price. Pricing is USD per 1M tokens and is used only for cost estimates.</p>
         <div id="discoverStatus" class="inline-status"></div>
         <div class="manual-row"><input id="manualModel" placeholder="deepseek-chat"><button id="addModelBtn" class="btn secondary">Add model</button></div>
         <div id="modelPicker" class="model-picker"></div>
