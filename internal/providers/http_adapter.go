@@ -225,6 +225,40 @@ func (a *httpAdapter) CountTokens(ctx context.Context, payload []byte, forward h
 	return a.DoPath(ctx, http.MethodPost, a.p.CountTokensPath, payload, false, forward)
 }
 
+// acquireSlot waits for a provider concurrency slot. Besides request
+// cancellation, the wait is bounded by the queue timeout carried on ctx (see
+// WithQueueTimeout): on expiry it reports ErrProviderSaturated so the caller
+// spills over to the next candidate instead of queueing behind a saturated
+// provider for the whole route budget.
+func (a *httpAdapter) acquireSlot(ctx context.Context) error {
+	select {
+	case a.sem <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+	timeout := QueueTimeoutFrom(ctx)
+	if timeout <= 0 {
+		select {
+		case a.sem <- struct{}{}:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case a.sem <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return fmt.Errorf("provider %s: %w", a.p.ID, ErrProviderSaturated)
+	}
+}
+
 func (a *httpAdapter) DoPath(ctx context.Context, method, path string, payload []byte, stream bool, forward http.Header) (*http.Response, error) {
 	u := endpoint(a.p.BaseURL, path)
 	parsed, err := url.Parse(u)
@@ -233,14 +267,12 @@ func (a *httpAdapter) DoPath(ctx context.Context, method, path string, payload [
 	}
 
 	a.waiting.Add(1)
-	select {
-	case a.sem <- struct{}{}:
+	if err := a.acquireSlot(ctx); err != nil {
 		a.waiting.Add(-1)
-		a.active.Add(1)
-	case <-ctx.Done():
-		a.waiting.Add(-1)
-		return nil, ctx.Err()
+		return nil, err
 	}
+	a.waiting.Add(-1)
+	a.active.Add(1)
 	var releaseOnce sync.Once
 	release := func() {
 		releaseOnce.Do(func() {

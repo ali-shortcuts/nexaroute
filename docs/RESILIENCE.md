@@ -51,6 +51,45 @@ and a `retry_budget_exhausted` event — instead of hammering already-failing
 providers. Under a total outage this converts a slow retry storm into fast,
 precise failures while recovery probes bring deployments back.
 
+## Burst capacity: admission queue and saturation spillover
+
+Agent harnesses (e.g. Claude Code with parallel subagents) routinely fire
+dozens of simultaneous requests. Two bounded waits absorb that shape instead
+of answering instant 503s or queueing behind one busy provider:
+
+- **Admission queue.** When all `max_inflight_requests` slots are taken, a
+  request waits for a release for up to
+  `routing.admission_queue_timeout_ms` (default `5000`, `0` = fail fast as
+  before, max 60000). Waits are counted in
+  `nexaroute_admission_waits_total`. A wait that expires — or a client that
+  disconnects while queued — still answers 503 + `Retry-After: 1` with a
+  `gateway_overloaded` event, so the queue is a shock absorber, not a
+  parking lot.
+- **Saturation spillover.** One upstream attempt waits for a provider
+  concurrency slot for up to `routing.provider_queue_timeout_ms` (default
+  `10000`, `0` = wait the whole route budget). On expiry the attempt spills
+  to the next candidate immediately — no backoff pause, because the next
+  provider is a different capacity pool — emitting a `provider_saturated`
+  event and counting `nexaroute_provider_saturated_total`. Spilling spends no
+  retry budget — the saturated provider did no work, so a spill is a redirect, not a retry — and it never touches
+  the busy deployment's health: capacity pressure is not failure. A hedged
+  loser that only gave up on a saturated slot is likewise left alone.
+- **All-saturated terminal.** When every attempted candidate was saturated,
+  the request fails fast with 503 + `Retry-After: 1` ("all providers
+  saturated") instead of a 502 or a hung route budget.
+- **Capacity-aware session affinity.** A session pin still holds while its
+  provider has room, but when the pinned provider is full (pressure ≥ 1)
+  the request yields to least-pressure ordering for that request, so a
+  session key shared by many parallel subagents cannot hotspot one
+  deployment.
+
+Tuning for parallel-agent bursts: keep `max_inflight_requests` above the
+expected parallelism (default 128), keep the admission timeout in the low
+seconds, and keep the provider queue timeout well under the request timeout
+so a spill still has budget to complete elsewhere. Request/response body
+caps stay fixed: 16 MB ingress JSON, 32 MB upstream JSON — large enough for
+long agentic turns, small enough to bound per-request memory.
+
 ## Hedged backup attempts (opt-in)
 
 `routing.hedge_delay_ms` (default `0` = off, max 60000) races a backup

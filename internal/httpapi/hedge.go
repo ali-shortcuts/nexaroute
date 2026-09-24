@@ -171,11 +171,13 @@ func (s *Server) closeHedgeLoser(r hedgeResult) {
 }
 
 // recordHedgeLoser accounts a genuine loser signal. A loser that was merely
-// slower carries no health information and is left alone; a loser that
-// failed on its own (not via our race cancellation) is recorded exactly
-// like a normal failed attempt so dashboards stay truthful.
+// slower carries no health information and is left alone; a loser that gave
+// up on a saturated provider slot is a capacity signal, not a health signal,
+// and is left alone as well. A loser that failed on its own (not via our
+// race cancellation) is recorded exactly like a normal failed attempt so
+// dashboards stay truthful.
 func (s *Server) recordHedgeLoser(hc hedgeCall, loser router.Scored, r hedgeResult) {
-	if r.err == nil || hc.routeCtx.Err() != nil || errors.Is(r.err, context.Canceled) {
+	if r.err == nil || hc.routeCtx.Err() != nil || errors.Is(r.err, context.Canceled) || providers.IsSaturated(r.err) {
 		return
 	}
 	msg := r.err.Error()

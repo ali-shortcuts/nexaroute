@@ -2,12 +2,44 @@ package providers
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"sync"
 	"time"
 
 	"github.com/ali-shortcuts/nexaroute/internal/config"
 )
+
+// ErrProviderSaturated reports that an upstream attempt gave up waiting for
+// a provider concurrency slot. Callers must spill over to the next candidate
+// (without poisoning the saturated provider's health) instead of queueing
+// behind it for the whole route budget.
+var ErrProviderSaturated = errors.New("provider at capacity")
+
+type queueTimeoutKey struct{}
+
+// WithQueueTimeout carries the per-attempt provider queue timeout on ctx.
+// Zero or absent means: wait for a slot for the whole request budget.
+func WithQueueTimeout(ctx context.Context, d time.Duration) context.Context {
+	if d <= 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, queueTimeoutKey{}, d)
+}
+
+// QueueTimeoutFrom returns the provider queue timeout carried on ctx, or 0
+// for the unbounded legacy wait.
+func QueueTimeoutFrom(ctx context.Context) time.Duration {
+	if d, ok := ctx.Value(queueTimeoutKey{}).(time.Duration); ok && d > 0 {
+		return d
+	}
+	return 0
+}
+
+// IsSaturated reports whether err is a provider-capacity spill signal.
+func IsSaturated(err error) bool {
+	return errors.Is(err, ErrProviderSaturated)
+}
 
 type ProviderStats struct {
 	ID                 string `json:"id"`

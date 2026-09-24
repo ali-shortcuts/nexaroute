@@ -61,8 +61,10 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 		max = len(candidates)
 	}
 	routeCtx, routeCancel := routeContext(r.Context(), in.Stream, cfg.RequestTimeout(), cfg.StreamMaxDuration())
+	routeCtx = providers.WithQueueTimeout(routeCtx, cfg.ProviderQueueTimeout())
 	defer routeCancel()
 	var lastErr string
+	var saturatedOnly = true
 	var lastStatus int
 	var lastBody []byte
 	var lastContentType string
@@ -90,6 +92,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 		payload, buildErr := buildPayload(c)
 		if buildErr != nil {
 			lastErr = buildErr.Error()
+			saturatedOnly = false
 			continue
 		}
 		attempts++
@@ -117,6 +120,22 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 				attemptCancel()
 			}
 			lastErr = e.Error()
+			if providers.IsSaturated(e) {
+				// The provider was at capacity: spill over to the next
+				// candidate immediately (no backoff pause — the next
+				// provider is a different capacity pool) without touching
+				// this deployment's health. A spill holds no slot on the
+				// saturated provider, so it spends no retry budget; the
+				// per-request attempt cap still bounds candidate tries.
+				lastErr = "provider at capacity; spilling to next candidate"
+				saturatedOnly = true
+				s.saturatedSpills.Add(1)
+				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "provider_saturated", Deployment: c.Deployment.ID, Message: lastErr, ErrorType: "provider_saturated", LatencyMS: headerLatency.Milliseconds()})
+				if attempts < max && i+1 < len(candidates) {
+					s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "failover", Deployment: c.Deployment.ID, Message: "provider saturated; trying next eligible candidate"})
+				}
+				continue
+			}
 			if clientRequestGone(r.Context()) {
 				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "client_disconnect", Deployment: c.Deployment.ID, Message: r.Context().Err().Error(), ErrorType: "caller_cancelled", LatencyMS: headerLatency.Milliseconds()})
 				return
@@ -129,6 +148,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 					s.hm.RecordFailure(c.Deployment.ID, lastErr, headerLatency)
 				}
 				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_timeout", Deployment: c.Deployment.ID, Message: lastErr, ErrorType: "provider_timeout", LatencyMS: headerLatency.Milliseconds()})
+				saturatedOnly = false
 				break
 			}
 			if router.IsReadyStrategy(cfg.Routing.Strategy) {
@@ -137,6 +157,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 			} else {
 				s.hm.RecordFailure(c.Deployment.ID, lastErr, headerLatency)
 			}
+			saturatedOnly = false
 			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_fail", Deployment: c.Deployment.ID, Message: lastErr, ErrorType: classifyTransportError(e), LatencyMS: headerLatency.Milliseconds()})
 			if attempts < max && i+1 < len(candidates) {
 				if !s.consumeFailoverBudget(r.Header.Get("x-request-id"), c.Deployment.ID, "transport failure") {
@@ -159,6 +180,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 			lastBody = b
 			lastContentType = resp.Header.Get("Content-Type")
 			lastErr = upstreamError(resp.StatusCode, b)
+			saturatedOnly = false
 			if resp.StatusCode == http.StatusTooManyRequests {
 				lastRetryAfter = int(retryAfterDuration(resp.Header, time.Duration(cfg.Routing.MaxRetryAfterSeconds)*time.Second) / time.Second)
 			}
@@ -228,6 +250,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 		total := time.Since(start)
 		if e != nil {
 			lastErr = e.Error()
+			saturatedOnly = false
 			decodeErrType := "provider_invalid_response"
 			streamErrType := "provider_stream_error"
 			if uerr, ok := asUpstreamLogicalError(e); ok {
@@ -300,6 +323,11 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Retry-After", strconv.Itoa(lastRetryAfter))
 		}
 		writeRawUpstreamError(w, lastStatus, lastContentType, lastBody)
+		return
+	}
+	if saturatedOnly && lastErr != "" {
+		w.Header().Set("Retry-After", "1")
+		errorJSON(w, 503, "all providers saturated; retry shortly")
 		return
 	}
 	if lastErr == "" {

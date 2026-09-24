@@ -425,3 +425,38 @@ func TestReadyMeshDiversifiesFailoverAcrossProviders(t *testing.T) {
 		t.Fatalf("same-provider fallback should remain available after diversification: %#v", got)
 	}
 }
+
+func TestReadyMeshSessionPinYieldsWhenPinnedProviderSaturated(t *testing.T) {
+	cfg := config.Default()
+	cfg.Routing.Strategy = "ready_mesh"
+	cfg.Routing.SessionAffinity = true
+	cfg.Providers = []config.ProviderConfig{
+		{ID: "pa", Name: "PA", Type: "openai_compatible", BaseURL: "http://a", Enabled: true, Models: []config.ModelConfig{
+			{ID: "m", Model: "m", Enabled: true, Weight: 1},
+		}},
+		{ID: "pb", Name: "PB", Type: "openai_compatible", BaseURL: "http://b", Enabled: true, Models: []config.ModelConfig{
+			{ID: "m", Model: "m", Enabled: true, Weight: 1},
+		}},
+	}
+	h := health.New(5, time.Hour)
+	h.RecordSuccess("pa/m", 10*time.Millisecond)
+	h.RecordSuccess("pb/m", 10*time.Millisecond)
+	r := New(cfg, h)
+	req := Requirement{Model: "auto", SessionKey: "shared-subagent-session", SelectionKey: "s"}
+	r.ObserveSession(req, "pa/m")
+
+	idle := r.Candidates(req)
+	if len(idle) != 2 || idle[0].Deployment.ID != "pa/m" {
+		t.Fatalf("idle pin must hold, got %#v", idle)
+	}
+
+	busy := req
+	busy.ProviderLoad = map[string]ProviderLoad{
+		"pa": {Active: 32, Limit: 32},
+		"pb": {Active: 1, Limit: 32},
+	}
+	got := r.Candidates(busy)
+	if len(got) != 2 || got[0].Deployment.ID != "pb/m" {
+		t.Fatalf("saturated pin must yield to the idle provider, got %#v", got)
+	}
+}

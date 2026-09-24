@@ -391,6 +391,13 @@ func (r *Router) orderReadyMesh(out []Scored, req Requirement, cfg config.Config
 	if pin := r.pinned(req, cfg); pin != "" {
 		for i := range out {
 			if out[i].Deployment.ID == pin {
+				// A pin keeps prompt-cache warmth, but it must not become a
+				// hotspot: when every parallel subagent shares one session
+				// key and the pinned provider is already full, yield to
+				// least-pressure ordering for this request instead.
+				if out[i].CapacityPressure >= 1 {
+					return
+				}
 				chosen := out[i]
 				copy(out[1:i+1], out[0:i])
 				out[0] = chosen

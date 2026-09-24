@@ -46,6 +46,9 @@ type Server struct {
 	inflight          atomic.Int64
 	overloadRejects   atomic.Uint64
 	clientAuthRejects atomic.Uint64
+	admissionWaits    atomic.Uint64
+	saturatedSpills   atomic.Uint64
+	admissionWake     chan struct{}
 	retryBudget       *retryBudget
 }
 
@@ -61,7 +64,7 @@ func clientKeyName(r *http.Request) string {
 }
 
 func New(cfg config.Config, configPath string, reg *providers.Registry, rt *router.Router, hm *health.Manager, bus *events.Bus, pe *probe.Engine, l *log.Logger) *Server {
-	return &Server{cfg: cfg, configPath: configPath, reg: reg, rt: rt, hm: hm, bus: bus, probe: pe, log: l, usage: usage.New(), retryBudget: newRetryBudget(cfg.Routing.RetryBudgetRatio)}
+	return &Server{cfg: cfg, configPath: configPath, reg: reg, rt: rt, hm: hm, bus: bus, probe: pe, log: l, usage: usage.New(), retryBudget: newRetryBudget(cfg.Routing.RetryBudgetRatio), admissionWake: make(chan struct{}, 1)}
 }
 
 func (s *Server) currentConfig() config.Config {
@@ -375,8 +378,48 @@ func (s *Server) admissionLimit() int64 {
 	return int64(limit)
 }
 
-func (s *Server) tryAcquireDataPlane() bool {
+func (s *Server) admissionQueueTimeout() time.Duration {
+	s.runtimeMu.RLock()
+	timeout := s.cfg.Routing.AdmissionQueueTimeoutMS
+	s.runtimeMu.RUnlock()
+	if timeout < 0 {
+		timeout = 0
+	}
+	return time.Duration(timeout) * time.Millisecond
+}
+
+// acquireDataPlane admits a data-plane request into the bounded global
+// inflight set. When the gateway is momentarily at capacity the request
+// waits for a release instead of being rejected outright, absorbing agent
+// bursts (dozens of parallel subagent calls); the wait is bounded by the
+// admission queue timeout and by client cancellation.
+func (s *Server) acquireDataPlane(ctx context.Context) bool {
 	limit := s.admissionLimit()
+	if s.tryInflight(limit) {
+		return true
+	}
+	timeout := s.admissionQueueTimeout()
+	if timeout <= 0 {
+		return false
+	}
+	s.admissionWaits.Add(1)
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-timer.C:
+			return false
+		case <-s.admissionWake:
+		}
+		if s.tryInflight(limit) {
+			return true
+		}
+	}
+}
+
+func (s *Server) tryInflight(limit int64) bool {
 	for {
 		current := s.inflight.Load()
 		if current >= limit {
@@ -391,6 +434,10 @@ func (s *Server) tryAcquireDataPlane() bool {
 func (s *Server) releaseDataPlane() {
 	if n := s.inflight.Add(-1); n < 0 {
 		s.inflight.Store(0)
+	}
+	select {
+	case s.admissionWake <- struct{}{}:
+	default:
 	}
 }
 
@@ -502,7 +549,10 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 					tm.mu.Unlock()
 				}
 			}
-			if !s.tryAcquireDataPlane() {
+			if !s.acquireDataPlane(r.Context()) {
+				if clientRequestGone(r.Context()) {
+					return
+				}
 				s.rejectOverloaded(sw, r, rid)
 				return
 			}

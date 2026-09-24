@@ -184,14 +184,15 @@ func TestTranslatedStreamsStopOnClientWriteFailure(t *testing.T) {
 
 func TestDataPlaneAdmissionIsBoundedAndRecoverable(t *testing.T) {
 	s := &Server{cfg: config.Config{Routing: config.RoutingConfig{MaxInflightRequests: 2}}}
-	if !s.tryAcquireDataPlane() || !s.tryAcquireDataPlane() {
+	ctx := context.Background()
+	if !s.acquireDataPlane(ctx) || !s.acquireDataPlane(ctx) {
 		t.Fatal("first two admissions should succeed")
 	}
-	if s.tryAcquireDataPlane() {
+	if s.acquireDataPlane(ctx) {
 		t.Fatal("third admission should be rejected")
 	}
 	s.releaseDataPlane()
-	if !s.tryAcquireDataPlane() {
+	if !s.acquireDataPlane(ctx) {
 		t.Fatal("capacity should recover after release")
 	}
 	s.releaseDataPlane()

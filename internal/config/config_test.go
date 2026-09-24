@@ -358,6 +358,12 @@ func TestResilienceDefaultsAndExplicitZeros(t *testing.T) {
 	if cfg.Routing.HedgeDelayMS != 0 {
 		t.Fatalf("hedging must be off by default, got %d", cfg.Routing.HedgeDelayMS)
 	}
+	if cfg.Routing.AdmissionQueueTimeoutMS != 5000 {
+		t.Fatalf("default admission queue timeout must be 5000ms, got %d", cfg.Routing.AdmissionQueueTimeoutMS)
+	}
+	if cfg.Routing.ProviderQueueTimeoutMS != 10000 {
+		t.Fatalf("default provider queue timeout must be 10000ms, got %d", cfg.Routing.ProviderQueueTimeoutMS)
+	}
 	// Explicit zeros keep their "disabled" meaning through ApplyDefaults.
 	cfg.Routing.RetryBudgetRatio = 0
 	cfg.Routing.StreamMaxDurationSeconds = 0
@@ -374,6 +380,8 @@ func TestResilienceDefaultsAndExplicitZeros(t *testing.T) {
 		func(c *Config) { c.Routing.RetryBudgetRatio = 0.005 },
 		func(c *Config) { c.Routing.StreamMaxDurationSeconds = 59 },
 		func(c *Config) { c.Routing.StreamMaxDurationSeconds = 86401 },
+		func(c *Config) { c.Routing.AdmissionQueueTimeoutMS = 60001 },
+		func(c *Config) { c.Routing.ProviderQueueTimeoutMS = 600001 },
 	} {
 		cfg := Default()
 		bad(&cfg)

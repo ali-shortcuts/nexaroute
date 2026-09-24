@@ -38,6 +38,12 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintln(w, "# HELP nexaroute_overload_rejections_total Data-plane requests rejected because the gateway was at capacity.")
 	fmt.Fprintln(w, "# TYPE nexaroute_overload_rejections_total counter")
 	fmt.Fprintf(w, "nexaroute_overload_rejections_total %d\n", s.overloadRejects.Load())
+	fmt.Fprintln(w, "# HELP nexaroute_admission_waits_total Data-plane requests that waited for a global admission slot.")
+	fmt.Fprintln(w, "# TYPE nexaroute_admission_waits_total counter")
+	fmt.Fprintf(w, "nexaroute_admission_waits_total %d\n", s.admissionWaits.Load())
+	fmt.Fprintln(w, "# HELP nexaroute_provider_saturated_total Upstream attempts that spilled over because the provider was at capacity.")
+	fmt.Fprintln(w, "# TYPE nexaroute_provider_saturated_total counter")
+	fmt.Fprintf(w, "nexaroute_provider_saturated_total %d\n", s.saturatedSpills.Load())
 
 	fmt.Fprintln(w, "# HELP nexaroute_client_auth_rejections_total Data-plane requests rejected for a missing or invalid client key.")
 	fmt.Fprintln(w, "# TYPE nexaroute_client_auth_rejections_total counter")

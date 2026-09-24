@@ -90,6 +90,8 @@ type RoutingConfig struct {
 	HedgeDelayMS               int     `json:"hedge_delay_ms"`
 	RetryBudgetRatio           float64 `json:"retry_budget_ratio"`
 	StreamMaxDurationSeconds   int     `json:"stream_max_duration_seconds"`
+	AdmissionQueueTimeoutMS    int     `json:"admission_queue_timeout_ms"`
+	ProviderQueueTimeoutMS     int     `json:"provider_queue_timeout_ms"`
 }
 
 type ProbeConfig struct {
@@ -240,6 +242,7 @@ func Default() Config {
 			RequestTimeoutMS: 120000, AttemptTimeoutMS: 0, LatencyWeight: 0.015, FailureWeight: 25, CapacityWeight: 35,
 			RetryBackoffMS: 150, MaxRetryAfterSeconds: 60,
 			HedgeDelayMS: 0, RetryBudgetRatio: 0.2, StreamMaxDurationSeconds: 1800,
+			AdmissionQueueTimeoutMS: 5000, ProviderQueueTimeoutMS: 10000,
 		},
 		Probe: ProbeConfig{Enabled: true, OnStart: true, IntervalSeconds: 120, ReadyLeaseSeconds: 300, TimeoutMS: 8000, MaxTokens: 1, Concurrency: 16, RecoveryAttempts: 5, RecoveryRetryMS: 500},
 	}
@@ -504,6 +507,12 @@ func (c Config) Validate() error {
 	if d := c.Routing.StreamMaxDurationSeconds; d < 0 || d > 86400 || (d > 0 && d < 60) {
 		return errors.New("routing.stream_max_duration_seconds must be 0 (unbounded) or between 60 and 86400")
 	}
+	if q := c.Routing.AdmissionQueueTimeoutMS; q < 0 || q > 60000 {
+		return errors.New("routing.admission_queue_timeout_ms must be between 0 and 60000")
+	}
+	if q := c.Routing.ProviderQueueTimeoutMS; q < 0 || q > 600000 {
+		return errors.New("routing.provider_queue_timeout_ms must be between 0 and 600000")
+	}
 	for name, v := range map[string]float64{
 		"routing.latency_weight":  c.Routing.LatencyWeight,
 		"routing.failure_weight":  c.Routing.FailureWeight,
@@ -708,6 +717,20 @@ func (c Config) HedgeDelay() time.Duration {
 // trickling provider cannot hold a request forever. 0 disables the bound.
 func (c Config) StreamMaxDuration() time.Duration {
 	return time.Duration(c.Routing.StreamMaxDurationSeconds) * time.Second
+}
+
+// AdmissionQueueTimeout bounds how long a data-plane request waits for a
+// global admission slot before the gateway rejects it at capacity. 0 fails
+// fast immediately.
+func (c Config) AdmissionQueueTimeout() time.Duration {
+	return time.Duration(c.Routing.AdmissionQueueTimeoutMS) * time.Millisecond
+}
+
+// ProviderQueueTimeout bounds how long one upstream attempt waits for a
+// provider concurrency slot before spilling over to the next candidate. 0
+// waits for the whole route budget.
+func (c Config) ProviderQueueTimeout() time.Duration {
+	return time.Duration(c.Routing.ProviderQueueTimeoutMS) * time.Millisecond
 }
 func (c Config) Cooldown() time.Duration {
 	return time.Duration(c.Routing.CooldownSeconds) * time.Second
