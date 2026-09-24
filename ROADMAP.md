@@ -19,8 +19,9 @@ Future work should be added only as separately scoped, tested capabilities.
 
 - explicit named fallback chains/pools;
 - ~~context-window-aware routing~~ (shipped in v0.5 with a conservative chars/4 estimator and unknown-window exemption);
-- proactive request scheduling against provider-reported RPM/TPM budgets (v0.5 observes remaining quotas and reset times and deprioritizes exhausted providers; predictive throttling against a known per-minute budget is still open);
-- price-aware candidate ordering on top of the v0.5 usage/pricing accounting (accounting shipped; routing remains cost-neutral);
+- ~~proactive quota headroom pressure~~ (shipped in v0.5.1 when providers report limit + remaining + resource-specific reset headers; the router starts deprioritizing below 25% headroom and preserves last-resort availability);
+- predictive local reservation/throttling against known RPM/TPM budgets before any provider response is still open;
+- ~~price-aware candidate ordering~~ (shipped in v0.5.1 as the opt-in `cost_aware` verified-ready strategy; priority tiers remain authoritative and incomplete request-cost estimates fall back safely);
 - richer per-request route explanations;
 - ~~carefully evaluated hedged requests~~ (shipped in v0.5 for the first attempt with a single partner, zero-health-signal abandonment, and route-context bounding);
 - learned/semantic routing only if it proves measurable benefit without unacceptable latency, cost, or failure amplification.
