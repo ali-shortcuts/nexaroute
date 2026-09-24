@@ -61,6 +61,8 @@ type httpAdapter struct {
 	requestResetUnix   atomic.Int64
 	tokenResetUnix     atomic.Int64
 	rateLimitResetUnix atomic.Int64
+	reservedRequests   atomic.Int64
+	reservedTokens     atomic.Int64
 }
 
 func newHTTPAdapter(p config.ProviderConfig, timeout time.Duration) (*httpAdapter, error) {
@@ -139,12 +141,32 @@ func (a *httpAdapter) Stats() ProviderStats {
 			cooling++
 		}
 	}
+	remainingRequests := a.remainingRequests.Load()
+	remainingTokens := a.remainingTokens.Load()
+	reservedRequests := a.reservedRequests.Load()
+	reservedTokens := a.reservedTokens.Load()
+	effectiveRequests := remainingRequests
+	if effectiveRequests >= 0 {
+		effectiveRequests -= reservedRequests
+		if effectiveRequests < 0 {
+			effectiveRequests = 0
+		}
+	}
+	effectiveTokens := remainingTokens
+	if effectiveTokens >= 0 {
+		effectiveTokens -= reservedTokens
+		if effectiveTokens < 0 {
+			effectiveTokens = 0
+		}
+	}
 	return ProviderStats{
 		ID: a.p.ID, MaxConcurrency: cap(a.sem),
 		ActiveRequests: a.active.Load(), WaitingRequests: a.waiting.Load(),
 		Credentials: len(a.creds), CredentialsCooling: cooling,
-		RequestLimit: a.requestLimit.Load(), RemainingRequests: a.remainingRequests.Load(),
-		TokenLimit: a.tokenLimit.Load(), RemainingTokens: a.remainingTokens.Load(),
+		RequestLimit: a.requestLimit.Load(), RemainingRequests: remainingRequests,
+		ReservedRequests: reservedRequests, EffectiveRemainingRequests: effectiveRequests,
+		TokenLimit: a.tokenLimit.Load(), RemainingTokens: remainingTokens,
+		ReservedTokens: reservedTokens, EffectiveRemainingTokens: effectiveTokens,
 		RequestResetUnix: a.requestResetUnix.Load(), TokenResetUnix: a.tokenResetUnix.Load(),
 		RateLimitResetUnix: a.rateLimitResetUnix.Load(),
 	}
