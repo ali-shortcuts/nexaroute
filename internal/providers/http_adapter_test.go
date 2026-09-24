@@ -281,3 +281,124 @@ func TestAdapterObservesCommonRateLimitHeaders(t *testing.T) {
 		t.Fatalf("resource-specific resets were not captured: %+v", st)
 	}
 }
+func TestQuotaReservationReducesEffectiveHeadroomUntilBodyDone(t *testing.T) {
+	started := make(chan struct{})
+	releaseHeaders := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		<-releaseHeaders
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`)
+	}))
+	defer srv.Close()
+
+	p := config.ProviderConfig{ID: "p", Name: "P", Type: "openai_compatible", BaseURL: srv.URL, AuthMode: "none", ChatPath: "/", MaxConcurrency: 4, Enabled: true}
+	a, err := newHTTPAdapter(p, 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.requestLimit.Store(10)
+	a.remainingRequests.Store(5)
+	a.tokenLimit.Store(1000)
+	a.remainingTokens.Store(500)
+	a.requestResetUnix.Store(time.Now().Add(time.Minute).Unix())
+	a.tokenResetUnix.Store(time.Now().Add(time.Minute).Unix())
+
+	type result struct {
+		resp *http.Response
+		err  error
+	}
+	resultCh := make(chan result, 1)
+	ctx := WithQuotaEstimate(context.Background(), 100, 50)
+	go func() {
+		resp, err := a.Do(ctx, []byte(`{"model":"m","messages":[{"role":"user","content":"hi"}]}`), false, nil)
+		resultCh <- result{resp: resp, err: err}
+	}()
+
+	<-started
+	st := a.Stats()
+	if st.ReservedRequests != 1 || st.ReservedTokens != 150 {
+		t.Fatalf("reservation not visible while request is in flight: %+v", st)
+	}
+	if st.EffectiveRemainingRequests != 4 || st.EffectiveRemainingTokens != 350 {
+		t.Fatalf("effective headroom did not subtract reservation: %+v", st)
+	}
+
+	close(releaseHeaders)
+	got := <-resultCh
+	if got.err != nil {
+		t.Fatal(got.err)
+	}
+	// No fresh remaining-* headers were returned, so the reservation must stay
+	// in place while the response body is still owned by the caller.
+	st = a.Stats()
+	if st.ReservedRequests != 1 || st.ReservedTokens != 150 {
+		t.Fatalf("reservation released before body completion without fresh quota headers: %+v", st)
+	}
+	if err := got.resp.Body.Close(); err != nil {
+		t.Fatal(err)
+	}
+	st = a.Stats()
+	if st.ReservedRequests != 0 || st.ReservedTokens != 0 || st.EffectiveRemainingRequests != 5 || st.EffectiveRemainingTokens != 500 {
+		t.Fatalf("reservation leaked after body close: %+v", st)
+	}
+}
+
+func TestFreshQuotaHeaderReleasesOnlyObservedResourceReservation(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("x-ratelimit-remaining-requests", "4")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`)
+	}))
+	defer srv.Close()
+
+	p := config.ProviderConfig{ID: "p", Name: "P", Type: "openai_compatible", BaseURL: srv.URL, AuthMode: "none", ChatPath: "/", MaxConcurrency: 2, Enabled: true}
+	a, err := newHTTPAdapter(p, 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.requestLimit.Store(10)
+	a.remainingRequests.Store(5)
+	a.tokenLimit.Store(1000)
+	a.remainingTokens.Store(500)
+
+	ctx := WithQuotaEstimate(context.Background(), 100, 50)
+	resp, err := a.Do(ctx, []byte(`{"model":"m","messages":[]}`), false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := a.Stats()
+	if st.ReservedRequests != 0 || st.RemainingRequests != 4 || st.EffectiveRemainingRequests != 4 {
+		t.Fatalf("fresh request quota header did not replace local request reservation: %+v", st)
+	}
+	if st.ReservedTokens != 150 || st.EffectiveRemainingTokens != 350 {
+		t.Fatalf("token reservation should remain until body completion without a fresh token header: %+v", st)
+	}
+	_ = resp.Body.Close()
+	if st = a.Stats(); st.ReservedTokens != 0 || st.EffectiveRemainingTokens != 500 {
+		t.Fatalf("token reservation leaked after body close: %+v", st)
+	}
+}
+
+func TestQuotaReservationRequiresTaggedDataPlaneContext(t *testing.T) {
+	a := &httpAdapter{}
+	if r := a.reserveQuota(context.Background()); r != nil {
+		t.Fatal("untagged probe/admin context unexpectedly reserved provider quota")
+	}
+	if st := a.Stats(); st.ReservedRequests != 0 || st.ReservedTokens != 0 {
+		t.Fatalf("untagged context polluted quota stats: %+v", st)
+	}
+}
+
+func TestQuotaEstimateContextBoundsAndSumsTokens(t *testing.T) {
+	ctx := WithQuotaEstimate(context.Background(), 120, 30)
+	got, ok := quotaEstimateFromContext(ctx)
+	if !ok || got != 150 {
+		t.Fatalf("quota estimate=%d ok=%v want 150,true", got, ok)
+	}
+	ctx = WithQuotaEstimate(context.Background(), -10, 30)
+	got, ok = quotaEstimateFromContext(ctx)
+	if !ok || got != 30 {
+		t.Fatalf("negative estimate handling=%d ok=%v", got, ok)
+	}
+}
