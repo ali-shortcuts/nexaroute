@@ -92,7 +92,9 @@ Implemented routing intelligence is deterministic and observable: session affini
 Not implemented yet:
 
 - complete provider-reported TPM/RPM accounting and predictive quota-reset scheduling (common remaining/reset headers are observed, but provider semantics vary);
-- cost-aware routing based on current provider pricing/billing and exact cross-provider usage accounting;
+- budget enforcement and cost-aware route selection;
+- complete billing fidelity for cache discounts/creation premiums, provider credits, taxes, batch pricing and other provider-specific billing rules;
+- accounting for synthetic health probes and Admin model-test traffic (current exact usage/cost telemetry covers routed model traffic);
 - shared/distributed affinity and breaker state across multiple NexaRoute processes;
 - an online learned semantic router that sends every prompt through another model/encoder.
 
