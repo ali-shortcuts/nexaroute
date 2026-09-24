@@ -117,6 +117,87 @@ func TestHedgeNotLaunchedWhenPrimaryFast(t *testing.T) {
 	}
 }
 
+// TestHedgePrimaryWinIsNotDelayedByLoser pins the race fast path: when the
+// primary wins a hedged race the client is served as soon as the primary
+// answers, and the losing leg is cancelled instead of awaited. The losing leg
+// here is a stalled provider, so awaiting it would push client latency up to
+// the loser's full response time (regression: the winner path used to block
+// until the loser answered).
+func TestHedgePrimaryWinIsNotDelayedByLoser(t *testing.T) {
+	var primaryCalls, loserCalls atomic.Int64
+	var loserCancelledAtMillis atomic.Int64 // 0 = never cancelled
+	primary := openAIUpstream(openAIOKBody, 200*time.Millisecond, &primaryCalls)
+	defer primary.Close()
+
+	start := time.Now()
+	loser := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		loserCalls.Add(1)
+		// Drain the body first: net/http only starts its background
+		// disconnect read once the request body is fully consumed, and
+		// without it a cancelled client would go unnoticed here.
+		_, _ = io.Copy(io.Discard, r.Body)
+		select {
+		case <-time.After(3 * time.Second): // stalled provider
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, openAIOKBody)
+		case <-r.Context().Done():
+			loserCancelledAtMillis.Store(time.Since(start).Milliseconds())
+		}
+	}))
+	defer loser.Close()
+
+	cfg := config.Default()
+	cfg.Probe.Enabled = false
+	cfg.Routing.HedgingEnabled = true
+	cfg.Routing.HedgingDelayMS = 50
+	cfg.Routing.MaxAttempts = 4
+	cfg.Providers = []config.ProviderConfig{
+		{ID: "primary", Name: "P", Type: "openai_compatible", BaseURL: primary.URL, AuthMode: "none", Enabled: true, Models: []config.ModelConfig{{ID: "m", Model: "upstream-model", Enabled: true, Weight: 1, Priority: 0, Capabilities: config.Capabilities{Streaming: true, Tools: true}}}},
+		{ID: "loser", Name: "L", Type: "openai_compatible", BaseURL: loser.URL, AuthMode: "none", Enabled: true, Models: []config.ModelConfig{{ID: "m", Model: "upstream-model", Enabled: true, Weight: 1, Priority: 1, Capabilities: config.Capabilities{Streaming: true, Tools: true}}}},
+	}
+	s := testGateway(t, cfg)
+	rr := doOpenAIRequest(s, `{"model":"m","messages":[{"role":"user","content":"hi"}]}`)
+	elapsed := time.Since(start)
+
+	if rr.Code != 200 {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	if got := rr.Header().Get("X-Gateway-Deployment"); got != "primary/m" {
+		t.Fatalf("expected primary to win, got %q", got)
+	}
+	if elapsed > time.Second {
+		t.Fatalf("client waited %v for the winning primary; the losing hedge leg must not delay the response", elapsed)
+	}
+	if loserCalls.Load() != 1 {
+		t.Fatalf("loser upstream calls=%d, want 1", loserCalls.Load())
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for loserCancelledAtMillis.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if loserCancelledAtMillis.Load() == 0 {
+		t.Fatal("losing hedge leg was not cancelled after the primary won")
+	}
+	kinds := map[string]int{}
+	for _, ev := range s.bus.SnapshotLimit(64) {
+		kinds[ev.Kind]++
+	}
+	if kinds["hedge_launch"] != 1 {
+		t.Fatalf("expected one hedge_launch event, got %+v", kinds)
+	}
+	for kinds["hedged_abandoned"] == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+		kinds = map[string]int{}
+		for _, ev := range s.bus.SnapshotLimit(64) {
+			kinds[ev.Kind]++
+		}
+	}
+	if kinds["hedged_abandoned"] != 1 {
+		t.Fatalf("expected one hedged_abandoned event, got %+v", kinds)
+	}
+}
+
 // --- Client auth ---------------------------------------------------------
 
 func TestClientAuthRejectsMissingAndWrongKeys(t *testing.T) {

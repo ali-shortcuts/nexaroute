@@ -3,9 +3,11 @@ package httpapi
 import (
 	"net/http"
 	"runtime"
+
+	"github.com/ali-shortcuts/nexaroute/internal/buildinfo"
 )
 
-const gatewayVersion = "0.4.1"
+const gatewayVersion = buildinfo.Version
 
 func (s *Server) hello(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {

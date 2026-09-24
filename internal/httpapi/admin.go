@@ -719,30 +719,3 @@ func parseModelList(b []byte) []string {
 	}
 	return uniqueStrings(out)
 }
-
-func applyProviderHeaders(req *http.Request, p config.ProviderConfig) {
-	// Custom headers first. Explicit configured auth then wins, preventing stale
-	// Authorization/x-api-key headers from silently replacing the real key.
-	for k, v := range p.Headers {
-		req.Header.Set(k, v)
-	}
-	key := p.ResolvedAPIKey()
-	if key != "" && p.AuthMode != "none" {
-		mode := p.AuthMode
-		if mode == "" {
-			if p.Type == "anthropic_compatible" {
-				mode = "x-api-key"
-			} else {
-				mode = "bearer"
-			}
-		}
-		if mode == "x-api-key" {
-			req.Header.Set("x-api-key", key)
-		} else {
-			req.Header.Set("Authorization", "Bearer "+key)
-		}
-	}
-	if p.Type == "anthropic_compatible" && req.Header.Get("anthropic-version") == "" {
-		req.Header.Set("anthropic-version", "2023-06-01")
-	}
-}

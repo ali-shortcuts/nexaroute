@@ -41,7 +41,7 @@ This package is **v0.5**: the v0.4 translation + dashboard core, now extended wi
 - Optional per-model pricing (`input_cost_per_mtok`, `output_cost_per_mtok`) yields cumulative estimated spend, resolved at snapshot time so price edits take effect immediately.
 - Exposed via `nexaroute_deployment_tokens_total`, `nexaroute_estimated_cost_usd_total`, the admin snapshot, and two new dashboard KPI cards.
 
-## What v0.4 currently implements
+## What v0.5 currently implements
 
 ### Client-facing endpoints
 
@@ -135,7 +135,7 @@ Model **quality** is represented explicitly by configured `priority` and `weight
 
 For native Anthropic-compatible upstreams, the gateway prefers passthrough and preserves unknown JSON fields instead of needlessly normalizing them. This is important for fields that can evolve independently of the gateway.
 
-For Anthropic -> OpenAI-compatible routing, v0.4 includes:
+For Anthropic -> OpenAI-compatible routing, v0.5 includes:
 
 - text conversion (string and content-part arrays in both directions)
 - system content
@@ -151,7 +151,7 @@ For Anthropic -> OpenAI-compatible routing, v0.4 includes:
 - Anthropic-style error envelopes on Anthropic ingress
 - forwarding of explicitly allowed headers such as `anthropic-beta` and `anthropic-version`
 
-For OpenAI -> Anthropic-compatible routing, v0.4 enforces the invariants that
+For OpenAI -> Anthropic-compatible routing, v0.5 enforces the invariants that
 naive relays miss:
 
 - strict role alternation (consecutive same-role messages merge)
@@ -244,6 +244,12 @@ Before adding any real provider, you can verify the packaged binary, embedded UI
 
 It uses a temporary loopback-only configuration and removes it when the test finishes.
 
+To additionally exercise the v0.5 tier against the built binary — exact-match cache MISS/HIT, the hedged-race fast path, usage/cost metrics, health endpoints and the embedded UI — run:
+
+```bash
+make smoke-v05   # or: ./scripts/smoke-v05.sh
+```
+
 ## Chat2API example
 
 In Web UI -> **Providers -> Add provider**:
@@ -288,7 +294,7 @@ Go 1.23+ is recommended for the exact verification path used for this package.
 ./scripts/verify.sh
 ```
 
-The script checks formatting, repeated shuffled tests, `go vet`, the race detector, JavaScript syntax when Node is installed, short fuzz runs, and static Linux builds for amd64 and arm64.
+The script checks formatting, repeated shuffled tests, `go vet`, the race detector, JavaScript syntax when Node is installed, short fuzz runs, static Linux builds for amd64 and arm64, and finally runs the live v0.5 smoke (`scripts/smoke-v05.sh`) against the freshly built binary when python3 is available.
 
 Manual commands:
 
@@ -314,17 +320,17 @@ journalctl --user -u nexaroute -f
 The image binds to `0.0.0.0:8080`. If the Web UI/admin API will be reached from outside loopback, configure an admin key:
 
 ```bash
-docker build -t nexaroute:0.4.1 .
+docker build -t nexaroute:0.5.0 .
 docker run --rm -p 8080:8080 \
   -e NEXAROUTE_ADMIN_KEY='replace-with-a-strong-random-secret' \
-  nexaroute:0.4.1
+  nexaroute:0.5.0
 ```
 
 Do not expose the admin UI directly to the public internet without TLS and additional perimeter controls.
 
 ## What is deliberately not claimed
 
-The supported path is strong, but v0.4 is **not*** a universal implementation of every LLM protocol. Native OpenAI Responses, Gemini native `generateContent`, Bedrock, Vertex AI, Azure-specific deployment semantics, embeddings/rerank, encrypted-at-rest secret vaults, distributed state, cost/budget routing, and full internet-facing RBAC/CSRF hardening are not implemented.
+The supported path is strong, but v0.5 is **not*** a universal implementation of every LLM protocol. Native OpenAI Responses, Gemini native `generateContent`, Bedrock, Vertex AI, Azure-specific deployment semantics, embeddings/rerank, encrypted-at-rest secret vaults, distributed state, cost/budget routing, and full internet-facing RBAC/CSRF hardening are not implemented.
 
 Cross-protocol reasoning/thinking metadata can also be provider-specific. Native Anthropic passthrough is the safest path for Anthropic-only fields.
 
@@ -337,7 +343,7 @@ Read:
 - `SECURITY.md`
 - `ROADMAP.md`
 
-before treating v0.4 as production infrastructure.
+before treating v0.5 as production infrastructure.
 
 ## Install from GitHub source
 

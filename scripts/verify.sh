@@ -47,4 +47,15 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags='-s -w' -o bin
 echo '== linux arm64 build =='
 CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags='-s -w' -o bin/nexaroute-linux-arm64 ./cmd/gateway
 
+# Live smoke against the freshly built binary: cache MISS/HIT, hedged-race fast
+# path, usage/cost metrics, health endpoints and the embedded UI. It binds only
+# loopback scratch ports and kills everything it starts, so it is safe to run
+# alongside the rest of the gate.
+if command -v python3 >/dev/null 2>&1; then
+  echo '== v0.5 live smoke =='
+  ./scripts/smoke-v05.sh
+else
+  echo 'WARN: python3 not installed; skipping the v0.5 live smoke' >&2
+fi
+
 echo 'VERIFY PASS'

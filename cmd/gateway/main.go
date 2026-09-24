@@ -24,6 +24,12 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/router"
 )
 
+// version is the CLI release version: it is what `--version` prints and what
+// the startup log records. It must stay a plain string literal here because the
+// installer smoke job in CI reads it back out of this file to prove the
+// installed binary reports the released version. TestVersionMatchesBuildinfo
+// pins it to internal/buildinfo.Version, which is what the HTTP surfaces
+// (/api/hello, /version, admin snapshot) report, so the two can never drift.
 const version = "0.5.0"
 
 func defaultConfigPath() string {

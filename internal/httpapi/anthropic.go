@@ -381,23 +381,6 @@ func copyUpstreamResponseHeaders(w http.ResponseWriter, resp *http.Response, isS
 	}
 }
 
-func proxyValidatedJSONResponse(w http.ResponseWriter, resp *http.Response, validate jsonEnvelopeValidator) error {
-	defer resp.Body.Close()
-	b, err := readJSONLimited(resp.Body)
-	if err != nil {
-		return err
-	}
-	if validate != nil {
-		if err := validate(b); err != nil {
-			return err
-		}
-	}
-	copyUpstreamResponseHeaders(w, resp, false)
-	w.WriteHeader(resp.StatusCode)
-	_, err = w.Write(b)
-	return err
-}
-
 type nativeSSETracker struct {
 	protocol string
 	line     []byte

@@ -30,7 +30,7 @@ Defense:
 
 Defense:
 
-- v0.4 provider type is a single explicit enum
+- the provider type is a single explicit enum
 - update replaces that field exactly
 - backend does not merge an older provider type back into a new edit
 
@@ -56,4 +56,24 @@ Defense:
 Defense:
 
 - failover is allowed only before response bytes are committed
-- v0.4 does not pretend arbitrary streamed generation can be resumed safely on another model
+- the gateway does not pretend arbitrary streamed generation can be resumed safely on another model
+
+## 8. A winning attempt must not be serialized behind a losing one
+
+Failure class: a first-attempt hedge races a second deployment, the primary answers
+with a servable response, and the implementation then waits for the slower hedge
+leg to finish before replying. The race that exists to remove tail latency adds it
+back: the client waits for the losing leg, and the loser keeps burning provider
+quota and holding a concurrency slot until the route deadline.
+
+Defense:
+
+- the winner is returned as soon as it delivers response headers;
+- the losing leg's context is cancelled immediately, and its body is closed off
+  the request path once the transport releases it;
+- if the primary answers with a status the caller would fail over from, the
+  in-flight hedge leg is the natural failover, so its transport result is awaited
+  and preferred instead of being discarded and repeated;
+- a hedge is never launched once the primary has already settled;
+- the latency contract is pinned by a unit test and by the live v0.5 smoke test,
+  not only by the hedge-wins path.

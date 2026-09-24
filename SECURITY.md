@@ -1,4 +1,4 @@
-# Security — v0.4
+# Security — v0.5
 
 NexaRoute defaults to localhost and should stay there for first testing.
 
@@ -25,9 +25,11 @@ The provider editor can reveal a resolved credential to an authorized local/admi
 
 ## Client-facing authentication boundary
 
-NexaRoute v0.4 does **not** provide a separate built-in authentication policy for the client-facing `/v1/*` data plane. Provider credentials are never treated as client credentials. If the listener is reachable from an untrusted network, put the client-facing routes behind a trusted reverse proxy/API gateway, firewall, VPN, or equivalent access-control layer.
+NexaRoute is loopback-first and client auth is **opt-in**. Since v0.5 the `/v1/*` data plane can be gated by static client keys (`client_auth.enabled`, `client_auth.keys`, `client_auth.rpm`): keys are compared in constant time over SHA-256 digests, may be presented as `x-api-key` or `Authorization: Bearer …`, and an optional per-key request-per-minute ceiling is enforced per client key. Overload/limit rejections are observable in metrics and events.
 
-The Admin API is a separate boundary: it remains loopback-only by default or requires the configured Admin key when remote administration is intentionally enabled.
+With `client_auth` left disabled (the default) there is **no** built-in authentication on the client-facing `/v1/*` plane. Provider credentials are never treated as client credentials. In that configuration, if the listener is reachable from an untrusted network, put the client-facing routes behind a trusted reverse proxy/API gateway, firewall, VPN, or equivalent access-control layer — or enable `client_auth` for key-level gating.
+
+The Admin API is a separate boundary: it remains loopback-only by default or requires the configured Admin key when remote administration is intentionally enabled. Client keys never grant admin access.
 
 ## Remote exposure
 

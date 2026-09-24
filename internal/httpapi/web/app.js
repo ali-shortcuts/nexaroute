@@ -340,7 +340,7 @@ function renderProviders(h) {
       <button class="edit-provider btn secondary" data-id="${esc(p.id)}">Edit provider</button>
     </article>`;
   }).join('') || '<div class="empty-state"><strong>No providers yet.</strong><span>Add an OpenAI-compatible or Anthropic-compatible upstream to start routing.</span></div>';
-  $('.edit-provider').forEach(b => b.onclick = () => openEdit(b.dataset.id));
+  $$('.edit-provider').forEach(b => b.onclick = () => openEdit(b.dataset.id));
 }
 
 function renderModels(ds, h) {
@@ -603,10 +603,13 @@ function fillPresetSelect() {
   const entries = [];
   const seen = new Set();
   if (Array.isArray(serverPresets)) {
+    // The admin API serializes presets as {id, name, category, type, base_url,
+    // auth_mode, ...}; older builds may still send {key, label}, so accept both.
     for (const p of serverPresets) {
-      if (!p || !p.key || seen.has(p.key)) continue;
-      seen.add(p.key);
-      entries.push(`<option value="${esc(p.key)}">${esc(p.label || p.key)}</option>`);
+      const key = p && (p.id || p.key);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      entries.push(`<option value="${esc(key)}">${esc(p.name || p.label || key)}</option>`);
     }
   }
   for (const k of Object.keys(providerPresets)) {
@@ -617,15 +620,16 @@ function fillPresetSelect() {
   sel.value = current || 'custom';
 }
 function applyPreset(k) {
-  const p = serverPresets && Array.isArray(serverPresets) ? serverPresets.find(x => x && x.key === k) : null;
+  const p = serverPresets && Array.isArray(serverPresets) ? serverPresets.find(x => x && (x.id === k || x.key === k)) : null;
   if (p) {
+    const name = p.name || p.label || p.id || p.key;
     if (editor.mode === 'add') {
-      if (!$('#pName').value.trim()) $('#pName').value = p.name || p.key;
+      if (!$('#pName').value.trim()) $('#pName').value = name;
       if (!$('#pId').value.trim()) $('#pId').value = p.id || p.key;
     }
     $('#pType').value = p.type || 'openai_compatible';
     $('#pBase').value = p.base_url || p.base || '';
-    $('#pAuth').value = p.auth_mode || 'bearer';
+    $('#pAuth').value = p.auth_mode || p.auth || 'bearer';
     $('#pChatPath').value = p.chat_path || '/v1/chat/completions';
     $('#pMessagesPath').value = p.messages_path || '/v1/messages';
     $('#pModelsPath').value = p.models_path || '/v1/models';
@@ -691,7 +695,10 @@ function fillForm() {
   $('#pId').disabled = editor.mode === 'edit';
   $('#pType').value = p.type || 'openai_compatible';
   $('#pBase').value = p.base_url || '';
-  $('#pAuth').value = p.auth_mode || 'bearer';
+  // An empty auth_mode means "Auto (by provider type)", which ApplyDefaults
+  // resolves server-side; preserve it instead of silently rewriting it to
+  // bearer when an auto-configured provider is edited.
+  $('#pAuth').value = p.auth_mode || '';
   $('#pEnabled').checked = p.enabled !== false;
   $('#pKey').value = p.api_key || '';
   $('#pKey').placeholder = editor.mode === 'edit' && editor.secretSource === 'env' ? 'stored in env var - leave blank to keep' : '';

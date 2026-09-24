@@ -1,4 +1,4 @@
-# Known gaps — v0.4
+# Known gaps — v0.5
 
 These are explicit boundaries of the current code, not hidden assumptions.
 
@@ -24,7 +24,7 @@ Common Claude Code text/tool/stream flows are implemented and regression-tested,
 
 In particular:
 
-- reasoning/thinking formats differ across providers. NexaRoute does not silently translate those controls: when a request explicitly asks for reasoning/thinking, routing is constrained to the matching native ingress protocol;
+- reasoning/thinking formats differ across providers. A request that explicitly asks for reasoning/thinking is routed only to deployments whose `capabilities.reasoning` is enabled, and cross-protocol translation is lossy by nature: Anthropic thinking budgets map to OpenAI `reasoning_effort` (and back), and reasoning text from an OpenAI-compatible upstream is not fabricated into Anthropic thinking blocks. Native Anthropic passthrough remains the lossless path;
 - prompt-cache metadata does not always have an OpenAI-compatible equivalent;
 - provider-specific beta fields are safest on native Anthropic passthrough;
 - a committed broken stream is not transparently resumed on another provider.
@@ -87,7 +87,7 @@ The exact-match response cache is opt-in and deliberately narrow: non-streaming,
 
 Health probing is selective and event-driven. Startup establishes readiness, new/unverified deployments are probed, and failed deployments move into dedicated recovery loops. Successful real Claude traffic refreshes a deployment's ready-health lease, so actively used models are not needlessly synthetic-probed. A healthy deployment that remains idle past `probe.ready_lease_seconds` is micro-probed before its health proof is trusted indefinitely. The sweep interval remains configurable (minimum 1 second) without turning health checks into a quota/rate-limit attack.
 
-Micro-probes measure availability and latency. They do not measure model intelligence/answer quality. Model strength is expressed through configured deployment `priority` and `weight`; automatic quality benchmarking is outside the current v0.4 scope.
+Micro-probes measure availability and latency. They do not measure model intelligence/answer quality. Model strength is expressed through configured deployment `priority` and `weight`; automatic quality benchmarking is outside the current v0.5 scope.
 
 
 ## Routing boundaries after Ready Mesh

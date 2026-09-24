@@ -1,4 +1,4 @@
-# Compatibility matrix — v0.4
+# Compatibility matrix — v0.5
 
 | Client ingress | Upstream | Text | Text streaming | Tools | Tool streaming | Reasoning | Images | Unknown native fields |
 |---|---|---:|---:|---:|---:|---:|---:|---|
@@ -35,7 +35,7 @@ Cross-protocol guarantees (the "never dead-end" rules):
 6. Usage propagation — include_usage injection, cache-token mapping in both
    directions, and `{}` padding for tools that stream no arguments.
 
-The strongest intended v0.4 test path is:
+The strongest intended v0.5 test path is:
 
 ```text
 Claude Code -> Anthropic /v1/messages -> NexaRoute -> OpenAI-compatible Chat2API -> model

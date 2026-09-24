@@ -1,4 +1,4 @@
-# Current verification contract — NexaRoute v0.4
+# Current verification contract — NexaRoute v0.5
 
 This document describes the current verification contract, not historical CI snapshots. Old run-specific reports were removed because they become stale as soon as the code changes.
 
@@ -31,6 +31,7 @@ Every normal CI run also executes one bounded stress pass covering:
 ## Required runtime gates
 
 - local runtime smoke test;
+- v0.5 feature smoke test (`scripts/smoke-v05.sh`): live cache MISS/HIT, hedged-race fast path, usage/cost/metrics series, health endpoints and embedded UI served by the built binary. It runs at the end of `scripts/verify.sh`, so every CI run covers it;
 - installable-package / installer smoke test;
 - Docker image build;
 - Docker runtime smoke test including config persistence and permissions.
@@ -48,6 +49,7 @@ Every normal CI run also executes one bounded stress pass covering:
 - model-specific versus provider-wide error classification;
 - streaming TTFT observation and provider quota-header telemetry;
 - cancellation-neutral provider health;
+- hedged-race winner latency and cancellation of the losing leg (unit + live smoke, so a slow loser can never be awaited again);
 - malformed/truncated JSON and SSE;
 - translated stream terminal validation and client-write failure;
 - strict health-probe response validation;

@@ -119,7 +119,6 @@ func policyForStatus(code int) upstreamFailurePolicy {
 func errorTypeForStatus(code int) string { return policyForStatus(code).ErrorType }
 func retryable(code int) bool            { return policyForStatus(code).Failover }
 func failoverEligible(code int) bool     { return policyForStatus(code).Failover }
-func hardCooldownStatus(code int) bool   { return policyForStatus(code).HardCooldown }
 
 func retryAfterDuration(h http.Header, max time.Duration) time.Duration {
 	fallback := 30 * time.Second

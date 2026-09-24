@@ -1,6 +1,6 @@
 # Contributing
 
-NexaRoute v0.4 is intentionally conservative while real Claude Code/provider compatibility is being validated.
+NexaRoute v0.5 is intentionally conservative while real Claude Code/provider compatibility is being validated.
 
 ## Before opening a PR
 
