@@ -290,3 +290,37 @@ request dispatch to the first upstream body bytes. Response-header latency
 remains a separate metric. NexaRoute intentionally does not label byte
 throughput as token throughput; exact cross-provider tokens/second requires
 protocol-aware usage accounting.
+
+
+## In-flight quota reservation overlay
+
+Provider rate-limit headers are necessarily retrospective: several concurrent
+requests can select the same provider before the first one returns a fresh
+`remaining-*` value. NexaRoute v0.5.2 overlays local in-flight reservations
+on that external evidence.
+
+Only tagged data-plane Chat/Messages attempts reserve quota. Each real upstream
+leg reserves one request plus a bounded token estimate (conservative prompt
+estimate + explicit output ceiling when available). Hedged primary/secondary
+legs therefore reserve independently, matching their actual upstream
+amplification.
+
+Provider stats expose both raw observed values and effective values:
+
+```text
+effective_requests = max(0, observed_remaining_requests - reserved_requests)
+effective_tokens   = max(0, observed_remaining_tokens   - reserved_tokens)
+```
+
+Unknown observed quota remains unknown; local reservations never manufacture a
+quota ceiling. Routing pressure uses effective headroom only while the relevant
+provider reset window is still known to be in the future.
+
+A fresh resource-specific remaining header supersedes the local reservation for
+that resource immediately. If no fresh header is returned, the reservation is
+held until the response body is consumed or closed, so a long-lived stream
+continues to apply pressure while it occupies uncertain quota.
+
+This layer is advisory rather than authoritative throttling. It intentionally
+does not persist rolling-window debt after a completed response that supplied no
+fresh quota evidence, and it is process-local rather than distributed state.
