@@ -49,8 +49,12 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 	if req.Reasoning {
 		req.ProviderType = "anthropic_compatible"
 	}
-	// Context-window pre-routing: Anthropic requires an explicit max_tokens.
-	req.MinContextWindow = inspection.EstimatedPromptTokens + in.MaxTokens
+	// Context and cost pre-routing use the same conservative prompt estimate.
+	// Anthropic requires an explicit max_tokens, so cost-aware ordering has a
+	// complete output ceiling for this request.
+	req.EstimatedInputTokens = inspection.EstimatedPromptTokens
+	req.MaxOutputTokens = in.MaxTokens
+	req.MinContextWindow = req.EstimatedInputTokens + req.MaxOutputTokens
 	req = s.prepareRequirement(req, r, inspection.BodySessionKey)
 	cfg, candidates := s.routeSnapshot(req)
 	if len(candidates) == 0 && req.ProviderType != "" {
