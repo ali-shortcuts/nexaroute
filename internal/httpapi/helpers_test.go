@@ -947,3 +947,80 @@ func TestObserveFirstByteRecordsOnlyFirstRead(t *testing.T) {
 		t.Fatalf("observed ttft=%s unexpectedly small", observed)
 	}
 }
+func TestCloneConfigDeepCopiesModelPricing(t *testing.T) {
+	cfg := config.Default()
+	cfg.Providers = []config.ProviderConfig{{
+		ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "https://example.com", Enabled: true,
+		Models: []config.ModelConfig{{
+			ID: "m", Model: "m", Enabled: true, Weight: 1,
+			Pricing: &config.PricingConfig{InputUSDPerMillion: 1, OutputUSDPerMillion: 2},
+		}},
+	}}
+	got := cloneConfig(cfg)
+	got.Providers[0].Models[0].Pricing.InputUSDPerMillion = 99
+	if cfg.Providers[0].Models[0].Pricing.InputUSDPerMillion != 1 {
+		t.Fatal("cloneConfig aliased model pricing pointer")
+	}
+}
+
+func TestUsageTelemetryIsExposedByAdminAndMetrics(t *testing.T) {
+	srv := testGateway(t, config.Default())
+	srv.usage.Record("p/m", "p", usageacct.Sample{InputTokens: 100, OutputTokens: 20}, &usageacct.Pricing{InputUSDPerMillion: 1, OutputUSDPerMillion: 2})
+	srv.usage.RecordUnknown("p/m", "p")
+
+	req := httptest.NewRequest(http.MethodGet, "http://gateway/admin/api/snapshot", nil)
+	req.Host = "127.0.0.1"
+	req.RemoteAddr = "127.0.0.1:12345"
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("snapshot status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	var snap map[string]json.RawMessage
+	if err := json.Unmarshal(rr.Body.Bytes(), &snap); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"usage_total", "deployment_usage", "provider_usage"} {
+		if len(snap[key]) == 0 {
+			t.Fatalf("snapshot missing %s: %s", key, rr.Body.String())
+		}
+	}
+
+	mreq := httptest.NewRequest(http.MethodGet, "http://gateway/metrics", nil)
+	mrr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(mrr, mreq)
+	body := mrr.Body.String()
+	for _, metric := range []string{
+		"nexaroute_usage_exact_requests_total",
+		"nexaroute_usage_unknown_requests_total",
+		"nexaroute_usage_input_tokens_total",
+		"nexaroute_estimated_cost_usd_total",
+		"nexaroute_usage_exact_coverage_ratio",
+	} {
+		if !strings.Contains(body, metric) {
+			t.Fatalf("metrics missing %s", metric)
+		}
+	}
+}
+
+func TestEmbeddedUIWiresModelPricingAndUsageTelemetry(t *testing.T) {
+	index, err := webFS.ReadFile("web/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	app, err := webFS.ReadFile("web/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	html, js := string(index), string(app)
+	for _, needle := range []string{"Est. cost", "Input", "Output"} {
+		if !strings.Contains(html, needle) {
+			t.Fatalf("model usage column %q missing from UI", needle)
+		}
+	}
+	for _, needle := range []string{"data-price=\"input_usd_per_million\"", "data-price=\"output_usd_per_million\"", "deployment_usage", "provider_usage"} {
+		if !strings.Contains(js, needle) {
+			t.Fatalf("usage/pricing wiring missing %q", needle)
+		}
+	}
+}
