@@ -51,9 +51,11 @@ Implemented resilience:
 - virtual catch-all models `auto` and `claude-auto`
 - optional fallback when the client asks for an unknown model
 - weighted and priority-aware deployment selection
-- EWMA latency and recency-weighted failure-rate scoring
+- EWMA response-header latency, streaming TTFT, and recency-weighted failure-rate scoring
 - retries/failover before response bytes are committed
 - provider-diverse failover ordering inside each priority tier to reduce correlated retry storms
+- provider-wide incident circuits require failures from multiple distinct deployments before suppressing a provider
+- error-aware failure policy keeps request conflicts health-neutral, isolates model 404s, and treats transport/auth/billing/rate-limit/5xx failures as possible provider incidents
 - failover on transport errors, selected 4xx provider/auth failures, `429`, and retryable `5xx`
 - `Retry-After` handling with a configurable cap
 - per-deployment circuit breaker
@@ -159,6 +161,7 @@ The dashboard includes:
 - manual probes
 - runtime routing/probe settings
 - provider pressure (active/waiting/capacity and credential cooling)
+- provider incident state plus common OpenAI/Anthropic remaining-request/token quota hints
 - capability-scoped health evidence
 - active session-affinity count
 - CLI Tools onboarding for Anthropic/Claude Code and OpenAI-compatible clients
