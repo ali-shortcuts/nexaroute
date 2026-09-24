@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/ali-shortcuts/nexaroute/internal/core"
 )
@@ -13,6 +14,7 @@ func OpenAIToAnthropic(in core.OpenAIRequest, model string) (core.AnthropicReque
 	if out.MaxTokens <= 0 {
 		out.MaxTokens = 1024
 	}
+	out.StopSequences = openAIStopToAnthropic(in.Stop)
 	var system strings.Builder
 	for _, m := range in.Messages {
 		role := strings.ToLower(strings.TrimSpace(m.Role))
@@ -38,6 +40,7 @@ func OpenAIToAnthropic(in core.OpenAIRequest, model string) (core.AnthropicReque
 			return out, fmt.Errorf("%s message content: %w", role, err)
 		}
 		blocks := openAIContentToAnthBlocks(m.Content)
+		anthRole := role
 		if role == "assistant" {
 			for _, tc := range m.ToolCalls {
 				if strings.TrimSpace(tc.ID) == "" || strings.TrimSpace(tc.Function.Name) == "" {
@@ -52,13 +55,18 @@ func OpenAIToAnthropic(in core.OpenAIRequest, model string) (core.AnthropicReque
 				blocks = append(blocks, map[string]any{"type": "tool_use", "id": tc.ID, "name": tc.Function.Name, "input": obj})
 			}
 		}
-		anthRole := role
 		if role == "tool" {
 			if strings.TrimSpace(m.ToolCallID) == "" {
 				return out, fmt.Errorf("tool message requires non-empty tool_call_id")
 			}
 			anthRole = "user"
 			blocks = []map[string]any{{"type": "tool_result", "tool_use_id": m.ToolCallID, "content": normalizeToolResultContent(m.Content)}}
+		}
+		if len(blocks) == 0 {
+			// The Anthropic Messages API rejects empty content arrays. OpenAI
+			// clients sometimes emit empty string/array content mid-conversation,
+			// so such messages are dropped instead of producing an upstream 400.
+			continue
 		}
 		raw, err := json.Marshal(blocks)
 		if err != nil {
@@ -90,6 +98,46 @@ func OpenAIToAnthropic(in core.OpenAIRequest, model string) (core.AnthropicReque
 		return out, fmt.Errorf("no messages after translation")
 	}
 	return out, nil
+}
+
+// openAIStopToAnthropic maps the OpenAI `stop` parameter (string or string
+// array) onto Anthropic `stop_sequences` so both upstream protocol classes
+// honor the same termination contract.
+func openAIStopToAnthropic(v any) []string {
+	const maxStopSequences = 16
+	out := []string{}
+	appendStop := func(s string) {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			return
+		}
+		for _, existing := range out {
+			if existing == s {
+				return
+			}
+		}
+		if len(out) < maxStopSequences {
+			out = append(out, s)
+		}
+	}
+	switch x := v.(type) {
+	case string:
+		appendStop(x)
+	case []string:
+		for _, s := range x {
+			appendStop(s)
+		}
+	case []any:
+		for _, item := range x {
+			if s, ok := item.(string); ok {
+				appendStop(s)
+			}
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func validateOpenAIContentForAnthropic(content any, allowImage bool) error {
@@ -235,5 +283,5 @@ func AnthropicResponseToOpenAI(in core.AnthResponse, requestedModel string) core
 			finish = "length"
 		}
 	}
-	return core.OpenAIResponse{ID: in.ID, Object: "chat.completion", Model: requestedModel, Choices: []core.OpenAIChoice{{Index: 0, Message: msg, FinishReason: &finish}}, Usage: core.OpenAIUsage{PromptTokens: in.Usage.InputTokens, CompletionTokens: in.Usage.OutputTokens, TotalTokens: in.Usage.InputTokens + in.Usage.OutputTokens}}
+	return core.OpenAIResponse{ID: in.ID, Object: "chat.completion", Created: time.Now().Unix(), Model: requestedModel, Choices: []core.OpenAIChoice{{Index: 0, Message: msg, FinishReason: &finish}}, Usage: core.OpenAIUsage{PromptTokens: in.Usage.InputTokens, CompletionTokens: in.Usage.OutputTokens, TotalTokens: in.Usage.InputTokens + in.Usage.OutputTokens}}
 }
