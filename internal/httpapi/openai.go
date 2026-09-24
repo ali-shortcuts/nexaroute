@@ -510,7 +510,8 @@ func streamAnthropicToOpenAIWithUsage(w http.ResponseWriter, resp *http.Response
 			del, _ := env["delta"].(map[string]any)
 			sr, _ := del["stop_reason"].(string)
 			if sr != "" {
-				terminal = true
+				// Only message_stop ends the Anthropic stream; this is the
+				// semantic reason, which may arrive before a truncated EOF.
 				finish = anthropicStopToOpenAIFinish(sr)
 			}
 			if u, _ := env["usage"].(map[string]any); u != nil {

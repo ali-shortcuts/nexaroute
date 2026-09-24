@@ -592,9 +592,8 @@ func (t *nativeSSETracker) processData(data []byte) error {
 				if err := json.Unmarshal(raw, &delta); err != nil {
 					return fmt.Errorf("invalid Anthropic SSE message_delta: %w", err)
 				}
-				if delta.StopReason != nil && *delta.StopReason != "" {
-					t.terminal = true
-				}
+				// The stop reason is only semantic; message_stop is the terminal
+				// frame. An EOF between these events is a truncated response.
 			}
 		}
 	default:

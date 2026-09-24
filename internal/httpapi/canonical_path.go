@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -71,6 +72,7 @@ func (s *Server) canonicalStreamPump(
 	emitter := canonical.NewStreamEmitter(clientProtocol, w, requestedModel, requestID)
 	reader := canonical.NewSSEReader(resp.Body)
 	terminal := false
+	anthropicStopReasonSeen := false
 	var streamErr error
 	inputTokens, outputTokens := 0, 0
 	usageSeen := false
@@ -104,12 +106,23 @@ func (s *Server) canonicalStreamPump(
 			break
 		}
 		for _, ev := range evs {
-			if kind == "anthropic" && ev.Type == canonical.StreamEnd && terminal {
-				// Anthropic normally reports the semantic stop reason in
-				// message_delta and then follows with message_stop. The latter
-				// must terminate framing without overwriting tool_use,
-				// max_tokens, stop_sequence, refusal, etc. with end_turn.
-				continue
+			if kind == "anthropic" && ev.Type == canonical.StreamEnd {
+				var frame struct {
+					Type string `json:"type"`
+				}
+				// The decoder already validated the JSON. StreamEnd can mean
+				// either a semantic stop reason or the actual message_stop.
+				_ = json.Unmarshal([]byte(data), &frame)
+				if frame.Type == "message_stop" {
+					terminal = true
+					if anthropicStopReasonSeen {
+						// Preserve the reason from message_delta instead of
+						// overwriting tool_use/max_tokens with end_turn.
+						continue
+					}
+				} else {
+					anthropicStopReasonSeen = true
+				}
 			}
 			if kind == "anthropic" {
 				switch ev.Type {
@@ -139,7 +152,7 @@ func (s *Server) canonicalStreamPump(
 			if ev.Type == canonical.StreamError {
 				streamErr = fmt.Errorf("upstream stream error: %s", ev.ErrorMsg)
 			}
-			if ev.Type == canonical.StreamEnd {
+			if ev.Type == canonical.StreamEnd && kind != "anthropic" {
 				terminal = true
 			}
 			if emitErr := emitter.Emit(ev); emitErr != nil {

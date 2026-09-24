@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -159,4 +160,53 @@ func TestSessionAffinityIsIsolatedAcrossAuthenticatedClients(t *testing.T) {
 			t.Fatalf("client pin overwritten: want=%s candidates=%+v", tc.want, got)
 		}
 	}
+}
+
+// message_delta reports the semantic stop reason, but message_stop is the
+// Anthropic protocol's actual end-of-stream marker. EOF in between is a
+// truncated reply, not a successful completion (or a billable usage hook).
+func TestAnthropicMissingMessageStopIsNotSuccessful(t *testing.T) {
+	body := "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":2}}}\n\n" +
+		"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"partial\"}}\n\n" +
+		"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":3}}\n\n"
+	resp := func() *http.Response {
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body: io.NopCloser(strings.NewReader(body))}
+	}
+	t.Run("native", func(t *testing.T) {
+		rr := httptest.NewRecorder()
+		called := false
+		err := proxyNativeSSE(rr, resp(), "anthropic", func(_, _ int) { called = true })
+		if !errors.Is(err, io.ErrUnexpectedEOF) || called {
+			t.Fatalf("truncated native stream accepted: err=%v usageRecorded=%t", err, called)
+		}
+		if !strings.Contains(rr.Body.String(), "event: error") {
+			t.Fatalf("native client was not notified: %q", rr.Body.String())
+		}
+	})
+	t.Run("legacy translation", func(t *testing.T) {
+		rr := httptest.NewRecorder()
+		called := false
+		err := streamAnthropicToOpenAIWithUsage(rr, resp(), "m", nil, func(_, _ int) { called = true })
+		if !errors.Is(err, io.ErrUnexpectedEOF) || called {
+			t.Fatalf("truncated translated stream accepted: err=%v usageRecorded=%t", err, called)
+		}
+		out := rr.Body.String()
+		if !strings.Contains(out, `"gateway_stream_error"`) || strings.Contains(out, "[DONE]") {
+			t.Fatalf("translated client saw success rather than error: %q", out)
+		}
+	})
+	t.Run("canonical translation", func(t *testing.T) {
+		rr := httptest.NewRecorder()
+		called := false
+		err := (&Server{}).canonicalStreamPump(rr, resp(), "anthropic", "openai_responses", "m", "req-truncated",
+			func(_, _ int) { called = true })
+		if !errors.Is(err, io.ErrUnexpectedEOF) || called {
+			t.Fatalf("truncated canonical stream accepted: err=%v usageRecorded=%t", err, called)
+		}
+		out := rr.Body.String()
+		if !strings.Contains(out, "response.failed") || strings.Contains(out, "response.completed") {
+			t.Fatalf("canonical client saw success rather than error: %q", out)
+		}
+	})
 }
