@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -777,6 +778,44 @@ func TestAdminKeylessModeRejectsRebindHost(t *testing.T) {
 	srv.Handler().ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("localhost host status=%d want 200", rr.Code)
+	}
+}
+
+func TestAdminRateLimitBucketMapHasHardCap(t *testing.T) {
+	now := time.Now()
+	s := &Server{adminBuckets: make(map[string]*adminBucket, maxAdminBuckets)}
+	for i := 0; i < maxAdminBuckets; i++ {
+		s.adminBuckets[fmt.Sprintf("active-%d", i)] = &adminBucket{tokens: adminBucketCapacity, last: now}
+	}
+	if s.adminAllow("new-source", 1) {
+		t.Fatal("new source should be rejected when the active admin bucket table is full")
+	}
+	if got := len(s.adminBuckets); got != maxAdminBuckets {
+		t.Fatalf("admin bucket table grew past cap: %d > %d", got, maxAdminBuckets)
+	}
+	if !s.adminAllow("active-0", 1) {
+		t.Fatal("existing bucket should remain usable while table is full")
+	}
+}
+
+func TestAdminRateLimitPrunesIdleBucketBeforeRejectingNewSource(t *testing.T) {
+	now := time.Now()
+	s := &Server{adminBuckets: make(map[string]*adminBucket, maxAdminBuckets)}
+	for i := 0; i < maxAdminBuckets; i++ {
+		last := now
+		if i == 0 {
+			last = now.Add(-adminBucketIdle - time.Second)
+		}
+		s.adminBuckets[fmt.Sprintf("source-%d", i)] = &adminBucket{tokens: adminBucketCapacity, last: last}
+	}
+	if !s.adminAllow("replacement-source", 1) {
+		t.Fatal("new source should be admitted after idle bucket pruning")
+	}
+	if got := len(s.adminBuckets); got > maxAdminBuckets {
+		t.Fatalf("admin bucket table exceeded hard cap after pruning: %d", got)
+	}
+	if _, ok := s.adminBuckets["source-0"]; ok {
+		t.Fatal("idle admin bucket was not pruned")
 	}
 }
 
