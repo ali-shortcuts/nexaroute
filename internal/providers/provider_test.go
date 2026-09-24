@@ -7,6 +7,27 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/config"
 )
 
+func TestPresetsExposeResponsesAndGeminiProtocols(t *testing.T) {
+	byID := map[string]Preset{}
+	for _, p := range Presets() {
+		byID[p.ID] = p
+	}
+	responses, ok := byID["openai-responses"]
+	if !ok {
+		t.Fatal("OpenAI Responses preset missing")
+	}
+	if responses.Type != "openai_responses" || responses.AuthMode != "bearer" || responses.ResponsesPath != "/v1/responses" {
+		t.Fatalf("OpenAI Responses preset is incomplete: %+v", responses)
+	}
+	gemini, ok := byID["google-gemini"]
+	if !ok {
+		t.Fatal("Google Gemini preset missing")
+	}
+	if gemini.Type != "gemini" || gemini.AuthMode != "x-goog-api-key" || gemini.ModelsPath != "/v1beta/models" {
+		t.Fatalf("Google Gemini preset is incomplete: %+v", gemini)
+	}
+}
+
 func TestRegistryPrepareReusesUnchangedAdapter(t *testing.T) {
 	cfg := config.Default()
 	cfg.Providers = []config.ProviderConfig{{

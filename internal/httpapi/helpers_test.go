@@ -227,6 +227,45 @@ func TestDataPlaneAdmissionOnlyCoversExpensivePostEndpoints(t *testing.T) {
 	}
 }
 
+func TestProviderEditorSupportsAllBackendProtocolTypesAndResponsesPath(t *testing.T) {
+	index, err := webFS.ReadFile("web/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	app, err := webFS.ReadFile("web/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(index)
+	js := string(app)
+	for _, typ := range []string{"openai_compatible", "openai_responses", "anthropic_compatible", "gemini"} {
+		if !strings.Contains(html, "value=\""+typ+"\"") {
+			t.Fatalf("provider endpoint type %s missing from embedded editor", typ)
+		}
+	}
+	if !strings.Contains(html, `value="x-goog-api-key"`) {
+		t.Fatal("Gemini x-goog-api-key auth mode missing from embedded editor")
+	}
+	if !strings.Contains(html, `id="pResponsesPath"`) {
+		t.Fatal("Responses path input missing from embedded editor")
+	}
+	for _, want := range []string{
+		"responses_path: '/v1/responses'",
+		"p.responses_path || '/v1/responses'",
+		"responses_path: $('#pResponsesPath').value.trim()",
+	} {
+		if !strings.Contains(js, want) {
+			t.Fatalf("Responses path is not fully round-tripped in app.js: missing %q", want)
+		}
+	}
+	if !strings.Contains(js, "typ === 'gemini'") || !strings.Contains(js, "x-goog-api-key") {
+		t.Fatal("Gemini auth-mode switching is not wired in app.js")
+	}
+	if !strings.Contains(js, "p.id || p.key") || !strings.Contains(js, "p.name || p.label || key") {
+		t.Fatal("server preset id/name schema is not wired into the provider editor")
+	}
+}
+
 func TestReadyMeshSettingsControlsAreWiredInEmbeddedUI(t *testing.T) {
 	index, err := webFS.ReadFile("web/index.html")
 	if err != nil {
