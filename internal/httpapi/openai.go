@@ -84,6 +84,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 	if max > len(candidates) {
 		max = len(candidates)
 	}
+	profile := profileFromRequirement(req, nil)
 	routeCtx, routeCancel := routeContext(r.Context(), in.Stream, cfg.RequestTimeout())
 	routeCtx = providers.WithQuotaEstimate(routeCtx, req.EstimatedInputTokens, req.MaxOutputTokens)
 	defer routeCancel()
@@ -99,6 +100,9 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		c := candidates[i]
+		if _, ineligible := s.capabilityIneligible(r.Header.Get("x-request-id"), c.Deployment.ID, profile); ineligible {
+			continue
+		}
 		fresh, a, ok := s.currentRouteCandidate(c.Deployment.ID, req)
 		if !ok {
 			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_skip", Deployment: c.Deployment.ID, Message: "candidate is no longer eligible or provider changed"})
@@ -112,6 +116,8 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 		}
 		var nm *translate.NameMap
 		c, a, nm = primary.c, primary.a, primary.nm
+		payload := primary.payload
+		kind := primary.canonicalKind
 		attempts++
 		attemptIndex := attempts - 1
 		s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_attempt", Deployment: c.Deployment.ID, Message: fmt.Sprintf("attempt=%d score=%.2f health=%s pressure=%.3f", attempts, c.Score, c.Health.Status, c.CapacityPressure)})
@@ -124,12 +130,23 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 		}
 		if out.secondaryWon {
 			c, a, nm = winner.c, winner.a, winner.nm
+			kind = winner.canonicalKind
+			payload = winner.payload
 			attempts++
 			attemptIndex = attempts - 1
 			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_attempt", Deployment: c.Deployment.ID, Message: fmt.Sprintf("attempt=%d score=%.2f health=%s pressure=%.3f (hedged winner)", attempts, c.Score, c.Health.Status, c.CapacityPressure)})
 		}
 		resp, e := out.resp, out.err
 		start = out.start
+		if e == nil && resp.StatusCode >= 400 && resp.StatusCode < 500 {
+			// Bounded deterministic repair on classified capability
+			// rejections; never marks the deployment unhealthy.
+			resp, payload, _ = s.maybeRepairUpstream(routeCtx, r.Header.Get("x-request-id"),
+				hedgeAttemptBundle{c: c, a: a}, payload, resp, in.Stream, forward, cfg.Routing.MaxRepairAttempts, profile)
+			if resp == nil {
+				e = fmt.Errorf("repair retry transport failure")
+			}
+		}
 		headerLatency := time.Since(start)
 		if e != nil {
 			lastErr = e.Error()
@@ -170,7 +187,16 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 			lastBody = b
 			lastContentType = resp.Header.Get("Content-Type")
 			lastErr = upstreamError(resp.StatusCode, b)
-			policy := policyForStatus(resp.StatusCode)
+			cls, policy := classifyFailure(resp.StatusCode, b)
+			if cls.CapabilityFailure {
+				// Capability failures are compatibility facts, not health
+				// failures: the deployment stays in the ready mesh.
+				lastErr = fmt.Sprintf("%s: %s", cls.CapabilityLabel(), cls.Message)
+				policy.Failover = true
+				policy.QuarantineDeployment = false
+				policy.HardCooldown = false
+				policy.SignalProvider = false
+			}
 			s.recordProviderFailure(c.Deployment.ProviderID, c.Deployment.ID, lastErr, policy)
 			if router.IsReadyStrategy(cfg.Routing.Strategy) {
 				if policy.QuarantineDeployment {
@@ -187,7 +213,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 				s.hm.RecordFailure(c.Deployment.ID, lastErr, headerLatency)
 			}
 			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_fail", Deployment: c.Deployment.ID, Message: lastErr, ErrorType: policy.ErrorType, LatencyMS: headerLatency.Milliseconds(), StatusCode: resp.StatusCode})
-			if policy.Failover && attempts < max && i+1 < len(candidates) {
+			if (policy.Failover || cls.CapabilityFailure) && attempts < max && i+1 < len(candidates) {
 				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "failover", Deployment: c.Deployment.ID, Message: fmt.Sprintf("HTTP %d; trying next eligible candidate", resp.StatusCode), StatusCode: resp.StatusCode})
 				s.retryPause(routeCtx, r.Header.Get("x-request-id"), cfg, attemptIndex, max)
 				continue
@@ -206,7 +232,17 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 			deploymentID := c.Deployment.ID
 			resp.Body = observeFirstByte(resp.Body, start, func(d time.Duration) { s.hm.RecordTTFT(deploymentID, d) })
 		}
-		if c.Deployment.ProviderType == "openai_compatible" {
+		switch {
+		case kind != "":
+			// Canonical-IR upstream (Gemini / Responses-native) decoded through
+			// the IR and re-encoded for the OpenAI client.
+			if in.Stream {
+				e = s.canonicalStreamPump(w, resp, kind, "openai_chat", in.Model, r.Header.Get("x-request-id"))
+			} else {
+				e = s.handleCanonicalResponse(w, resp, kind, "openai_chat", in.Model, r.Header.Get("x-request-id"), false,
+					func(input, output int) { s.usage.Record(c.Deployment.ID, int64(input), int64(output)) })
+			}
+		case c.Deployment.ProviderType == "openai_compatible":
 			if in.Stream {
 				e = proxyNativeSSE(w, resp, "openai", func(prompt, completion int) {
 					s.usage.Record(c.Deployment.ID, int64(prompt), int64(completion))
@@ -214,11 +250,11 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 			} else {
 				e = s.proxyOpenAINativeJSON(w, resp, c.Deployment.ID, cacheKey, cacheable)
 			}
-		} else if in.Stream {
+		case in.Stream:
 			e = streamAnthropicToOpenAIWithUsage(w, resp, in.Model, nm, func(prompt, completion int) {
 				s.usage.Record(c.Deployment.ID, int64(prompt), int64(completion))
 			}, r.Header.Get("x-request-id"))
-		} else {
+		default:
 			var an core.AnthResponse
 			e = decodeValidatedJSONLimited(resp.Body, &an, validateAnthropicResponseJSON)
 			resp.Body.Close()
@@ -274,6 +310,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.recordRouteSuccess(req, c.Deployment.ID, c.Deployment.ProviderID, headerLatency)
+		s.learnFromSuccess(c.Deployment.ID, c.Deployment.ProviderID, c.Deployment, payload, nil)
 		s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_ok", Deployment: c.Deployment.ID, Message: "request completed", LatencyMS: total.Milliseconds(), StatusCode: resp.StatusCode})
 		return
 	}

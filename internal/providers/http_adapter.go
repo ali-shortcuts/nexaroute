@@ -289,6 +289,16 @@ func (r *quotaReservation) releaseAll() {
 	r.releaseTokens()
 }
 
+// geminiModelPath builds the model-in-path Gemini endpoint. Stream calls use
+// streamGenerateContent with the SSE alt parameter.
+func (a *httpAdapter) geminiModelPath(model string, stream bool) string {
+	model = strings.TrimPrefix(strings.TrimSpace(model), "models/")
+	if stream {
+		return "/v1beta/models/" + url.PathEscape(model) + ":streamGenerateContent?alt=sse"
+	}
+	return "/v1beta/models/" + url.PathEscape(model) + ":generateContent"
+}
+
 func (a *httpAdapter) Do(ctx context.Context, payload []byte, stream bool, forward http.Header) (*http.Response, error) {
 	return a.DoPath(ctx, http.MethodPost, a.defaultPath(), payload, stream, forward)
 }
@@ -542,15 +552,21 @@ func (a *httpAdapter) applyAuthKey(req *http.Request, key string) {
 	}
 	mode := a.p.AuthMode
 	if mode == "" {
-		if a.p.Type == "anthropic_compatible" {
+		switch a.p.Type {
+		case "anthropic_compatible":
 			mode = "x-api-key"
-		} else {
+		case "gemini":
+			mode = "x-goog-api-key"
+		default:
 			mode = "bearer"
 		}
 	}
-	if mode == "x-api-key" {
+	switch mode {
+	case "x-api-key":
 		req.Header.Set("x-api-key", key)
-	} else {
+	case "x-goog-api-key":
+		req.Header.Set("x-goog-api-key", key)
+	default:
 		req.Header.Set("Authorization", "Bearer "+key)
 	}
 }
@@ -737,13 +753,27 @@ func (a *httpAdapter) Probe(ctx context.Context, model string, maxTokens int) (t
 	if maxTokens < 1 {
 		maxTokens = 1
 	}
-	body := map[string]any{"model": model, "max_tokens": maxTokens, "messages": []map[string]any{{"role": "user", "content": "OK"}}, "stream": false}
+	var body map[string]any
+	switch a.p.Type {
+	case "gemini":
+		body = map[string]any{
+			"contents":         []map[string]any{{"role": "user", "parts": []map[string]any{{"text": "OK"}}}},
+			"generationConfig": map[string]any{"maxOutputTokens": maxTokens},
+		}
+	default:
+		body = map[string]any{"model": model, "max_tokens": maxTokens, "messages": []map[string]any{{"role": "user", "content": "OK"}}, "stream": false}
+	}
 	b, err := json.Marshal(body)
 	if err != nil {
 		return 0, 0, fmt.Errorf("probe request encode: %w", err)
 	}
 	start := time.Now()
-	resp, err := a.Do(ctx, b, false, nil)
+	var resp *http.Response
+	if a.p.Type == "gemini" {
+		resp, err = a.DoPath(ctx, http.MethodPost, a.geminiModelPath(model, false), b, false, nil)
+	} else {
+		resp, err = a.Do(ctx, b, false, nil)
+	}
 	lat := time.Since(start)
 	if err != nil {
 		return lat, 0, err
@@ -791,6 +821,18 @@ func (a *httpAdapter) validateProbeResponse(data []byte) error {
 		}
 		if typ != "message" || role != "assistant" || content == nil {
 			return errors.New("probe returned an invalid Anthropic message envelope")
+		}
+	case "gemini":
+		var candidates []map[string]json.RawMessage
+		raw := root["candidates"]
+		if len(raw) == 0 {
+			if pf, ok := root["promptFeedback"]; ok && len(pf) > 0 {
+				return nil // blocked prompt is a valid Gemini envelope
+			}
+			return errors.New("probe returned an invalid Gemini envelope: candidates missing")
+		}
+		if err := json.Unmarshal(raw, &candidates); err != nil || len(candidates) == 0 {
+			return fmt.Errorf("probe returned invalid Gemini candidates: %w", err)
 		}
 	default:
 		var choices []map[string]json.RawMessage

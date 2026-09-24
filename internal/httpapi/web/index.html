@@ -21,6 +21,7 @@
       <button data-tab="providers" data-title="Providers"><span class="nav-ico">◈</span>Providers</button>
       <button data-tab="models" data-title="Model Deployments"><span class="nav-ico">▦</span>Models</button>
       <button data-tab="health" data-title="Health &amp; Pressure"><span class="nav-ico">♥</span>Health</button>
+      <button data-tab="compat" data-title="Compatibility Matrix"><span class="nav-ico">⧉</span>Compat</button>
       <button data-tab="cli" data-title="CLI Tools"><span class="nav-ico">⌘</span>CLI Tools</button>
       <button data-tab="settings" data-title="Runtime Settings"><span class="nav-ico">⚙</span>Settings</button>
     </nav>
@@ -126,6 +127,24 @@
           <thead><tr><th>Deployment</th><th>Provider</th><th>Model</th><th>Status</th><th>Latency</th><th>TTFT</th><th>Failures</th></tr></thead>
           <tbody id="modelRows"></tbody>
         </table></div>
+      </div>
+    </section>
+
+    <!-- ============ COMPAT ============ -->
+    <section id="compat" class="tab">
+      <div class="panel">
+        <div class="panelhead"><div><h2>Model capability matrix</h2><p>Verified per-model compatibility: probing, runtime learning, bounded repairs and the Claude Code scorecard. Health and compatibility are separate.</p></div>
+          <div class="panelhead-side">
+            <button id="compatTestFull" class="btn secondary" title="Run the full Level B capability suite on every deployment">🧪 Full test</button>
+            <button id="compatTestAgent" class="btn secondary" title="Simulate a Claude Code tool loop on every deployment">🤖 Agent test</button>
+            <button id="compatReset" class="btn ghost" title="Drop cached capability contracts; fresh probes will re-run">↺ Reset cache</button>
+          </div>
+        </div>
+        <div class="tablewrap"><table>
+          <thead><tr><th>Deployment</th><th>Health</th><th>Protocol</th><th>Chat</th><th>Stream</th><th>Tools</th><th>Par.</th><th>Reason</th><th>Vision</th><th>Temp</th><th>Status</th><th>Last issue</th><th>Last repair</th></tr></thead>
+          <tbody id="compatRows"></tbody>
+        </table></div>
+        <div id="compatReport" class="compat-report" hidden></div>
       </div>
     </section>
 

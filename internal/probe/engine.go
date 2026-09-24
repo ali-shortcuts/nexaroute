@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ali-shortcuts/nexaroute/internal/compat"
 	"github.com/ali-shortcuts/nexaroute/internal/config"
 	"github.com/ali-shortcuts/nexaroute/internal/events"
 	"github.com/ali-shortcuts/nexaroute/internal/health"
@@ -56,6 +57,9 @@ type Engine struct {
 	rt    *router.Router
 	hm    *health.Manager
 	bus   *events.Bus
+
+	// capStore receives Level B compatibility verdicts; nil disables.
+	capStore *compat.Store
 
 	trigger chan struct{}
 	runMu   sync.Mutex
@@ -535,6 +539,63 @@ func readyLeaseExpired(st health.State, now time.Time, lease time.Duration) bool
 	return !now.Before(st.LastChecked.Add(lease))
 }
 
+// SetCapabilityStore wires the shared capability contract store. When set
+// and probe.capability_probes is enabled, a successful Level A availability
+// probe triggers a one-time Level B compatibility suite for the deployment
+// (openai-compatible dialects natively; anthropic-compatible via their own
+// payload shapes). Results are cached in the store, so each deployment pays
+// the suite cost once per identity.
+func (e *Engine) SetCapabilityStore(store *compat.Store) {
+	e.capStore = store
+}
+
+func (e *Engine) maybeProbeCapabilities(ctx context.Context, d router.Deployment, a providers.Adapter) {
+	if e.capStore == nil {
+		return
+	}
+	cfg := e.current()
+	if !cfg.Probe.CapabilityProbes {
+		return
+	}
+	if contract := e.capStore.Get(d.ID); contract.Capabilities.Text == compat.Supported {
+		return // already verified
+	}
+	cctx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	defer cancel()
+	t := adapterTransport{a: a}
+	var report compat.ProbeReport
+	if d.ProviderType == "anthropic_compatible" {
+		report = compat.RunCapabilitySuiteAnthropic(cctx, t, d.ID, d.Model)
+	} else {
+		report = compat.RunCapabilitySuite(cctx, t, d.ID, d.Model, "")
+	}
+	for _, o := range report.Outcomes {
+		switch o.Verdict {
+		case compat.Supported:
+			e.capStore.LearnSuccess(d.ID, o.Capability, compat.SourceProbe, o.Detail, "")
+		case compat.Unsupported:
+			e.capStore.LearnUnsupported(d.ID, o.Capability, compat.SourceProbe, o.Detail, "")
+		}
+	}
+	e.bus.Add(events.Event{
+		Kind: "capability_probe", Deployment: d.ID,
+		Message: fmt.Sprintf("capability suite passed=%d failed=%d inconclusive=%d", report.Passed, report.Failed, report.Inconclusive),
+	})
+}
+
+// adapterTransport adapts a providers.Adapter onto the probe transport.
+type adapterTransport struct {
+	a providers.Adapter
+}
+
+func (t adapterTransport) Do(ctx context.Context, payload []byte, stream bool, forward http.Header) (*http.Response, error) {
+	return t.a.Do(ctx, payload, stream, forward)
+}
+
+func (t adapterTransport) RedactBody(b []byte) []byte {
+	return t.a.RedactBody(b)
+}
+
 // RunOnce performs an explicit operator-requested sweep. Background ready-queue
 // sweeps avoid fresh ready deployments, but revalidate an idle healthy
 // deployment once its health lease expires. Real successful Claude traffic
@@ -691,6 +752,7 @@ func (e *Engine) runOnce(ctx context.Context, force bool) Result {
 			e.hm.RecordSuccess(d.ID, lat)
 			e.hm.RecordProviderSuccess(d.ProviderID)
 			e.bus.Add(events.Event{Kind: "probe_ready", Deployment: d.ID, Message: fmt.Sprintf("ready after probe (%d)", status), LatencyMS: lat.Milliseconds(), StatusCode: status})
+			e.maybeProbeCapabilities(ctx, d, a)
 			resultMu.Lock()
 			result.Passed++
 			resultMu.Unlock()

@@ -68,7 +68,8 @@ const subtitles = {
   models: 'Per-deployment routing state: health, latency and failure tracking.',
   health: 'Live provider pressure and capability-scoped circuit evidence.',
   cli: 'One-click connection snippets for coding agents and OpenAI-compatible tools.',
-  settings: 'Hot-reloaded routing and probe configuration.'
+  settings: 'Hot-reloaded routing and probe configuration.',
+  compat: 'Universal Compatibility Engine: verified model capabilities, repairs and the Claude Code scorecard.'
 };
 $$('nav button').forEach(b => b.onclick = () => {
   $$('nav button').forEach(x => x.classList.remove('active'));
@@ -80,6 +81,7 @@ $$('nav button').forEach(b => b.onclick = () => {
   if (b.dataset.tab === 'settings') fillRuntimeSettings();
   if (b.dataset.tab === 'console') { consoleUnread = 0; $('#consoleDot').hidden = true; renderConsole(); }
   if (b.dataset.tab === 'cli') renderCLI();
+  if (b.dataset.tab === 'compat') loadCompat();
 });
 $('#pauseBtn').onclick = () => {
   paused = !paused;
@@ -224,6 +226,7 @@ function render() {
   renderProviders(h);
   renderModels(ds, h);
   renderHealthTab(h);
+  if ($('#compat').classList.contains('active')) renderCompat();
   renderConsole();
   $('#settingsJson').textContent = JSON.stringify(snap.config || {}, null, 2);
   // Cache + usage KPI cards (v0.5)
@@ -921,3 +924,109 @@ $('#deleteProviderBtn').onclick = async () => {
   renderCLI();
   tick();
 })();
+
+
+/* ---------- compatibility matrix (Universal Compatibility Engine) ---------- */
+let compatData = { deployments: [] };
+let compatBusy = false;
+
+function capChip(v) {
+  if (v === 'supported') return '<span class="cap pass">PASS</span>';
+  if (v === 'unsupported') return '<span class="cap fail">UNSUP</span>';
+  return '<span class="cap unknown">?</span>';
+}
+
+function statusChip(st) {
+  const cls = st === 'CLAUDE_CODE_READY' ? 'ready' : st === 'CHAT_READY' ? 'chat' : st === 'NOT_AGENT_READY' ? 'not' : 'unverified';
+  const label = st === 'CLAUDE_CODE_READY' ? 'AGENT READY' : st === 'CHAT_READY' ? 'CHAT READY' : st === 'NOT_AGENT_READY' ? 'NOT AGENT' : 'UNVERIFIED';
+  return `<span class="statuschip ${cls}">${label}</span>`;
+}
+
+async function loadCompat() {
+  try {
+    compatData = await api('/admin/api/compat');
+    renderCompat();
+  } catch (e) {
+    $('#compatRows').innerHTML = `<tr><td colspan="13">${esc(e.message)}</td></tr>`;
+  }
+}
+
+function renderCompat() {
+  const rows = (compatData.deployments || []).map(d => {
+    const c = d.scorecard?.capabilities || {};
+    const sc = d.scorecard || {};
+    const issue = d.last_compatibility_issue || '';
+    const repair = d.last_repair || '';
+    return `<tr>
+      <td><strong>${esc(d.deployment)}</strong></td>
+      <td>${esc(d.health)}</td>
+      <td>${esc(sc.protocol || '—')}</td>
+      <td>${capChip(c.text)}</td>
+      <td>${capChip(c.streaming)}</td>
+      <td>${capChip(c.tools)}</td>
+      <td>${capChip(c.parallel_tool_calls)}</td>
+      <td>${capChip(c.reasoning)}</td>
+      <td>${capChip(c.vision)}</td>
+      <td>${capChip(c.temperature)}</td>
+      <td>${statusChip(sc.status || 'NOT_VERIFIED')}</td>
+      <td>${esc(issue.length > 40 ? issue.slice(0, 40) + '…' : issue) || '<span class="cap na">—</span>'}</td>
+      <td>${esc(repair.length > 40 ? repair.slice(0, 40) + '…' : repair) || '<span class="cap na">—</span>'}</td>
+    </tr>`;
+  });
+  $('#compatRows').innerHTML = rows.join('') || '<tr><td colspan="13">No deployments configured.</td></tr>';
+}
+
+function reportText(r) {
+  if (!r) return '';
+  const lines = [];
+  lines.push(`deployment: ${r.deployment}  model: ${r.model}  level: ${r.level}  ok: ${r.ok}`);
+  (r.outcomes || []).forEach(o => lines.push(`  ${o.capability.padEnd(22)} ${o.verdict.padEnd(12)} ${o.detail || ''}`));
+  (r.agent_steps || []).forEach(st => lines.push(`  step ${st.step}: ${st.passed ? 'PASS' : 'FAIL'} ${st.detail || ''} (${st.latency_ms} ms)`));
+  return lines.join('\n');
+}
+
+async function runCompatSuite(mode) {
+  if (compatBusy) return;
+  const cfg = snap.config || {};
+  const providers = (cfg.providers || []).filter(p => p.enabled);
+  if (!providers.length) { toast('No enabled providers to test', true); return; }
+  compatBusy = true;
+  const buttons = [$('#compatTestFull'), $('#compatTestAgent')];
+  buttons.forEach(b => b && (b.disabled = true));
+  $('#compatReport').hidden = false;
+  $('#compatReport').textContent = `Running ${mode} suite… (this can take a while; bounded per deployment)`;
+  try {
+    const blocks = [];
+    for (const p of providers) {
+      const models = (p.models || []).filter(m => m.enabled).map(m => m.id);
+      if (!models.length) continue;
+      const d = await api('/admin/api/provider-test', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider: p, preserve_secret: true, test_models: models, mode })
+      });
+      (d.results || []).forEach(x => {
+        const r = mode === 'full' ? x.capability_report : x.agent_report;
+        blocks.push(reportText(r) || `${x.model}: ${x.ok ? 'PASS' : 'FAIL'} ${x.error || ''}`);
+      });
+    }
+    $('#compatReport').textContent = blocks.join('\n\n') || 'No models to test.';
+    await loadCompat();
+    toast(mode === 'full' ? 'Full capability suite finished' : 'Agent loop test finished');
+  } catch (e) {
+    $('#compatReport').textContent = 'Test failed: ' + e.message;
+    toast(e.message, true);
+  } finally {
+    compatBusy = false;
+    buttons.forEach(b => b && (b.disabled = false));
+  }
+}
+
+$('#compatTestFull').onclick = () => runCompatSuite('full');
+$('#compatTestAgent').onclick = () => runCompatSuite('claude_code');
+$('#compatReset').onclick = async () => {
+  try {
+    await api('/admin/api/compat/reset', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ deployment: 'all' }) });
+    toast('Capability cache reset; fresh probes will re-run');
+    await loadCompat();
+  } catch (e) { toast(e.message, true); }
+};

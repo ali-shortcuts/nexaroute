@@ -9,6 +9,7 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/config"
 	"github.com/ali-shortcuts/nexaroute/internal/core"
 	"github.com/ali-shortcuts/nexaroute/internal/events"
+	"github.com/ali-shortcuts/nexaroute/internal/protocol/canonical"
 	"github.com/ali-shortcuts/nexaroute/internal/providers"
 	"github.com/ali-shortcuts/nexaroute/internal/router"
 	"github.com/ali-shortcuts/nexaroute/internal/translate"
@@ -220,6 +221,14 @@ type hedgeAttemptBundle struct {
 	// OpenAI-compatible payload on behalf of an Anthropic client (so a 400
 	// mentioning the option can be retried without it).
 	injected bool
+	// path overrides the adapter's default upstream path (Gemini and
+	// Responses-native upstreams carry the model in the URL path). Empty
+	// means the adapter default.
+	path string
+	// canonicalKind marks upstream protocol families served through the
+	// canonical IR path ("openai_chat", "anthropic", "gemini",
+	// "openai_responses"). Empty means the legacy data path.
+	canonicalKind string
 }
 
 func (s *Server) hedgingEligible(cfg config.Config) bool {
@@ -241,9 +250,15 @@ func (s *Server) doAttemptWithHedge(
 	stream bool,
 	forward http.Header,
 ) (hedgeOutcome, hedgeAttemptBundle, bool) {
+	dispatch := func(b hedgeAttemptBundle, ctx context.Context) (*http.Response, error) {
+		if b.path != "" {
+			return b.a.DoPath(ctx, http.MethodPost, b.path, b.payload, stream, forward)
+		}
+		return b.a.Do(ctx, b.payload, stream, forward)
+	}
 	plain := func() (hedgeOutcome, hedgeAttemptBundle, bool) {
 		start := time.Now()
-		resp, err := primary.a.Do(routeCtx, primary.payload, stream, forward)
+		resp, err := dispatch(primary, routeCtx)
 		return hedgeOutcome{resp: resp, err: err, start: start}, primary, false
 	}
 	if attempts != 1 || !s.hedgingEligible(cfg) || i+1 >= len(candidates) || attempts+1 > max {
@@ -253,13 +268,18 @@ func (s *Server) doAttemptWithHedge(
 	if !ok {
 		return plain()
 	}
+	if primary.canonicalKind != partner.canonicalKind || primary.path != "" || partner.path != "" {
+		// Canonical/path-addressed attempts skip hedging: their retry and
+		// repair semantics are handled by the compatibility engine.
+		return plain()
+	}
 	out := s.hedgedUpstreamDo(routeCtx, requestID,
 		primary.c.Deployment.ID, partner.c.Deployment.ID, cfg.HedgingDelay(),
 		func(ctx context.Context) (*http.Response, error) {
-			return primary.a.Do(ctx, primary.payload, stream, forward)
+			return dispatch(primary, ctx)
 		},
 		func(ctx context.Context) (*http.Response, error) {
-			return partner.a.Do(ctx, partner.payload, stream, forward)
+			return dispatch(partner, ctx)
 		},
 	)
 	winner := primary
@@ -279,13 +299,27 @@ func (s *Server) buildOpenAIAttempt(cand router.Scored, req router.Requirement, 
 	}
 	bundle := hedgeAttemptBundle{c: fresh, a: a}
 	var err error
-	if fresh.Deployment.ProviderType == "openai_compatible" {
-		bundle.payload, err = patchJSONModel(raw, fresh.Deployment.Model)
-	} else {
+	switch fresh.Deployment.ProviderType {
+	case "gemini", "openai_responses":
+		canReq := canonical.DecodeOpenAIChatRequest(in, in.Model)
+		bundle, ok = s.finishCanonicalAttempt(bundle, canReq)
+		if !ok {
+			return hedgeAttemptBundle{}, false
+		}
+		return bundle, true
+	case "anthropic_compatible":
 		var an core.AnthropicRequest
 		an, bundle.nm, err = translate.OpenAIToAnthropic(in, fresh.Deployment.Model)
 		if err == nil {
 			bundle.payload, err = json.Marshal(an)
+			if err == nil {
+				bundle.payload = s.sanitizeOutgoingPayload(bundle, bundle.payload, req)
+			}
+		}
+	default:
+		bundle.payload, err = patchJSONModel(raw, fresh.Deployment.Model)
+		if err == nil {
+			bundle.payload = s.sanitizeOutgoingPayload(bundle, bundle.payload, req)
 		}
 	}
 	if err != nil {
@@ -304,9 +338,20 @@ func (s *Server) buildAnthropicAttempt(cand router.Scored, req router.Requiremen
 	}
 	bundle := hedgeAttemptBundle{c: fresh, a: a}
 	var err error
-	if fresh.Deployment.ProviderType == "anthropic_compatible" {
+	switch fresh.Deployment.ProviderType {
+	case "gemini", "openai_responses":
+		canReq, derr := canonical.DecodeAnthropicRequest(in, in.Model)
+		if derr != nil {
+			return hedgeAttemptBundle{}, false
+		}
+		bundle, ok := s.finishCanonicalAttempt(bundle, canReq)
+		if !ok {
+			return hedgeAttemptBundle{}, false
+		}
+		return bundle, true
+	case "anthropic_compatible":
 		bundle.payload, err = patchJSONModel(raw, fresh.Deployment.Model)
-	} else {
+	default:
 		var o core.OpenAIRequest
 		o, bundle.nm, err = translate.AnthropicToOpenAI(in, fresh.Deployment.Model)
 		if err == nil && in.Stream {
@@ -315,6 +360,9 @@ func (s *Server) buildAnthropicAttempt(cand router.Scored, req router.Requiremen
 		}
 		if err == nil {
 			bundle.payload, err = json.Marshal(o)
+			if err == nil {
+				bundle.payload = s.sanitizeOutgoingPayload(bundle, bundle.payload, req)
+			}
 		}
 	}
 	if err != nil {

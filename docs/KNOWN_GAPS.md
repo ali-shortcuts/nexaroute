@@ -102,3 +102,20 @@ Not implemented yet:
 - an online learned semantic router that sends every prompt through another model/encoder.
 
 The last item is deliberate for the current data plane: a learned router would add latency, cost and a new failure mode. Model/task specialization should currently be expressed with aliases plus explicit capability metadata until a separately evaluated routing model can prove a measurable benefit.
+
+## Universal Compatibility Engine boundaries (v0.6)
+
+Implemented but bounded by design:
+
+- Level B probing sends OpenAI-shaped or Anthropic-shaped probe payloads per
+  provider family. Gemini upstreams are served through the canonical path and
+  learn from real traffic and error classification; a dedicated
+  Gemini-shaped probe suite is future work.
+- The repair engine mutates OpenAI-style and Anthropic-style payload keys.
+  Gemini-native payloads carry parameters inside `generationConfig`, so
+  capability rejections there fail over instead of being repaired inline.
+- Runtime learning upgrades UNKNOWN to SUPPORTED conservatively and never
+  flips verified UNSUPPORTED back; only a contract reset (identity change or
+  `/admin/api/compat/reset`) re-opens the question.
+- The capability cache is in-memory, matching the single-process state model
+  described above; multi-process deployments re-probe after restart.

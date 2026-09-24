@@ -30,6 +30,87 @@
 
 - Runtime version reporting is consistent: binary and HTTP/dashboard version now both report v0.5.1.
 - Provider-card edit button binding uses the multi-element selector correctly.
+## v0.6.0 — Universal Compatibility Engine
+
+NexaRoute v0.6 turns the gateway from "protocol translator" into a
+protocol-aware, model-aware compatibility engine. Central rule: a capability
+failure is not a model failure, and health is not compatibility.
+
+### Added
+
+- **Canonical request/response IR** (`internal/protocol/canonical`): every
+  protocol family decodes into one intermediate representation and re-encodes
+  from it. Anthropic Messages, OpenAI Chat Completions and OpenAI Responses
+  are first-class on both the client and upstream side; Gemini
+  GenerateContent is a first-class upstream (model-in-path, x-goog-api-key,
+  functionCall/functionResponse mapping, schema keyword stripping).
+- **Canonical stream event model**: OpenAI/Anthropic/Gemini/Responses SSE all
+  decode into `StreamEvent`s (text, thinking, tool start/delta/end, usage,
+  end, error) and re-encode into the client's dialect. Provider-specific SSE
+  logic can no longer leak into handlers.
+- **`POST /v1/responses` ingress**: the OpenAI Responses API is now a
+  first-class client protocol, served through the canonical IR against every
+  upstream family (openai_chat, anthropic, gemini, responses-native).
+- **Model-level capability matrix** (`internal/compat`): tri-state
+  SUPPORTED / UNSUPPORTED / UNKNOWN per deployment for 19 capabilities, with
+  per-fact evidence (source, confidence, timestamp). UNKNOWN is never treated
+  as UNSUPPORTED and never claimed as SUPPORTED.
+- **Dialect registry**: `nvidia_nim`, `deepseek`, `openrouter`, `groq`,
+  `together`, `openai`, `anthropic`, `gemini`, `generic_openai`,
+  `generic_anthropic` - provider differences live in data, not in `if
+  provider == ...` branches. Config field `providers[].dialect` overrides
+  host fingerprinting.
+- **Structured error classifier** (19 error classes): `unsupported_parameter`,
+  `unsupported_tool_calling`, `context_overflow`, `model_not_found`, ... with
+  offending-parameter extraction. Capability failures and health failures are
+  separate state machines end to end.
+- **Bounded deterministic repair engine**: a 400 that says "temperature is not
+  supported" no longer fails the request or kills the deployment. The
+  classifier identifies the capability, the repair engine applies one
+  deterministic mutation (drop `temperature`, rename
+  `max_completion_tokens`->`max_tokens`, drop `stream_options`, ...), retries
+  once (`routing.max_repair_attempts`), and caches the learned fact.
+  Semantics-critical fields (tools, vision, explicitly requested reasoning)
+  are never stripped.
+- **Proactive parameter sanitizer**: once a capability is verified-unsupported,
+  subsequent requests skip the doomed round trip entirely
+  (`routing.sanitize_enabled`).
+- **Level B capability probing**: beyond the availability probe, a bounded
+  suite verifies text, system message, streaming, tools, tool_choice,
+  parallel tool calls, reasoning effort, temperature, top_p, stop,
+  max_completion_tokens, JSON mode and vision per deployment
+  (`probe.capability_probes`), with OpenAI-shaped and Anthropic-shaped
+  variants. Results feed the capability contract.
+- **Runtime capability learning**: successful real traffic upgrades UNKNOWN
+  capabilities to SUPPORTED; classified upstream verdicts record
+  UNSUPPORTED. Learning is conservative: a generic 500 can never teach a
+  capability fact, and verified UNSUPPORTED is never silently flipped back.
+- **Contract invalidation**: capability cache drops when base URL, dialect,
+  model id or credential scope changes; `POST /admin/api/compat/reset`
+  forces fresh probes.
+- **Claude Code scorecard**: BASIC_CHAT / STREAMING / TOOLS / TOOL_RESULTS /
+  PARALLEL_TOOLS / REASONING per deployment with status CLAUDE_CODE_READY,
+  CHAT_READY, NOT_AGENT_READY or NOT_VERIFIED - no single "healthy" boolean.
+- **Claude Code agent-loop simulation** (`provider-test` mode
+  `claude_code`): a real tool-call round trip (tool definition -> tool call ->
+  tool result continuation -> final text). A deployment is only agent-ready
+  when this passes end to end.
+- **Admin compatibility matrix**: `GET /admin/api/compat` plus a new
+  dashboard tab showing per-deployment capability chips, scorecard status,
+  last compatibility issue and last repair.
+- **New provider types** `gemini` and `openai_responses` with presets-ready
+  auth modes (`x-goog-api-key`), plus `routing.max_repair_attempts`,
+  `routing.sanitize_enabled` and `probe.capability_probes` settings.
+
+### Fixed
+
+- A 400 "temperature is not supported" no longer poisons the request path as
+  a generic caller error; it is a repairable capability failure (regression
+  tested: deployment stays HEALTHY, capability learned, request succeeds).
+- Context-overflow 400s now fail over to deployments with larger windows
+  instead of dead-ending on the first candidate.
+- Gemini `STOP` finish reason with function calls now maps to the
+  tool_use/tool_calls stop vocabulary expected by agent clients.
 
 
 ## v0.5.0 — hedging, response cache, client keys, context pre-routing, usage accounting

@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ali-shortcuts/nexaroute/internal/compat"
 	"github.com/ali-shortcuts/nexaroute/internal/config"
 	"github.com/ali-shortcuts/nexaroute/internal/health"
 	"github.com/ali-shortcuts/nexaroute/internal/providers"
@@ -30,6 +31,10 @@ type providerForm struct {
 	Provider       config.ProviderConfig `json:"provider"`
 	PreserveSecret bool                  `json:"preserve_secret"`
 	TestModels     []string              `json:"test_models,omitempty"`
+	// Mode selects the probe depth: quick (default, availability),
+	// full (Level B capability suite) or claude_code (agent-loop
+	// simulation). See docs/COMPATIBILITY.md.
+	Mode string `json:"mode,omitempty"`
 }
 
 type testResult struct {
@@ -38,6 +43,10 @@ type testResult struct {
 	StatusCode int    `json:"status_code"`
 	LatencyMS  int64  `json:"latency_ms"`
 	Error      string `json:"error,omitempty"`
+	// CapabilityReport is present for mode=full.
+	CapabilityReport *compat.ProbeReport `json:"capability_report,omitempty"`
+	// AgentReport is present for mode=claude_code.
+	AgentReport *compat.ProbeReport `json:"agent_report,omitempty"`
 }
 
 func (s *Server) adminProviderPresets(w http.ResponseWriter, r *http.Request) {
@@ -422,7 +431,7 @@ func (s *Server) adminProviderTest(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 400, "provider id and base_url are required")
 		return
 	}
-	if in.Provider.Type != "openai_compatible" && in.Provider.Type != "anthropic_compatible" {
+	if in.Provider.Type != "openai_compatible" && in.Provider.Type != "anthropic_compatible" && in.Provider.Type != "gemini" && in.Provider.Type != "openai_responses" {
 		errorJSON(w, 400, "unsupported provider type")
 		return
 	}
@@ -474,14 +483,38 @@ func (s *Server) adminProviderTest(w http.ResponseWriter, r *http.Request) {
 				results[i] = testResult{Model: model, Error: parentCtx.Err().Error()}
 				return
 			}
-			ctx, cancel := context.WithTimeout(parentCtx, 10*time.Second)
-			defer cancel()
-			lat, status, e := a.Probe(ctx, model, 1)
-			tr := testResult{Model: model, OK: e == nil, StatusCode: status, LatencyMS: lat.Milliseconds()}
-			if e != nil {
-				tr.Error = e.Error()
+			switch in.Mode {
+			case "full":
+				ctx, cancel := context.WithTimeout(parentCtx, 120*time.Second)
+				defer cancel()
+				tr := testResult{Model: model}
+				var report compat.ProbeReport
+				if in.Provider.Type == "anthropic_compatible" {
+					report = compat.RunCapabilitySuiteAnthropic(ctx, adapterTransport{a: a}, in.Provider.ID, model)
+				} else {
+					report = compat.RunCapabilitySuite(ctx, adapterTransport{a: a}, in.Provider.ID, model, in.Provider.Dialect)
+				}
+				tr.CapabilityReport = &report
+				tr.OK = report.OK && report.TransportFail == 0
+				results[i] = tr
+			case "claude_code":
+				ctx, cancel := context.WithTimeout(parentCtx, 120*time.Second)
+				defer cancel()
+				tr := testResult{Model: model}
+				report := compat.RunAgentLoopSimulation(ctx, adapterTransport{a: a}, in.Provider.ID, model)
+				tr.AgentReport = &report
+				tr.OK = report.OK
+				results[i] = tr
+			default:
+				ctx, cancel := context.WithTimeout(parentCtx, 10*time.Second)
+				defer cancel()
+				lat, status, e := a.Probe(ctx, model, 1)
+				tr := testResult{Model: model, OK: e == nil, StatusCode: status, LatencyMS: lat.Milliseconds()}
+				if e != nil {
+					tr.Error = e.Error()
+				}
+				results[i] = tr
 			}
-			results[i] = tr
 		}(i, model)
 	}
 	wg.Wait()

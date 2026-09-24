@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/ali-shortcuts/nexaroute/internal/cache"
+	"github.com/ali-shortcuts/nexaroute/internal/compat"
 	"github.com/ali-shortcuts/nexaroute/internal/config"
 	"github.com/ali-shortcuts/nexaroute/internal/events"
 	"github.com/ali-shortcuts/nexaroute/internal/health"
@@ -50,6 +51,7 @@ type Server struct {
 	clientBuckets   map[string]*clientBucket
 	respCache       *cache.Cache
 	usage           *usage.Tracker
+	capStore        *compat.Store
 }
 
 // adminBucket is a compact token bucket keyed by remote address. Capacity 90
@@ -147,6 +149,7 @@ func New(cfg config.Config, configPath string, reg *providers.Registry, rt *rout
 		cfg: cfg, configPath: configPath, reg: reg, rt: rt, hm: hm, bus: bus, probe: pe, log: l,
 		respCache: cache.New(cfg.CacheTTL(), cfg.Cache.MaxEntries, int64(cfg.Cache.MaxBodyBytes)),
 		usage:     usage.New(),
+		capStore:  compat.NewStore(),
 	}
 }
 
@@ -381,6 +384,7 @@ func (s *Server) applyConfigLocked(cfg config.Config) error {
 
 	s.cfg = cfg
 	s.probe.Reload(cfg)
+	s.syncCapabilityContracts(cfg)
 	for _, a := range staleAdapters {
 		providers.CloseIdleConnections(a)
 	}
@@ -449,6 +453,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/messages", s.anthropicMessages)
 	mux.HandleFunc("/v1/messages/count_tokens", s.countTokens)
 	mux.HandleFunc("/v1/chat/completions", s.openAIChat)
+	mux.HandleFunc("/v1/responses", s.openAIResponses)
 
 	mux.HandleFunc("/admin/api/snapshot", s.adminSnapshot)
 	mux.HandleFunc("/admin/api/probe", s.adminProbe)
@@ -457,6 +462,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/admin/api/provider-presets", s.adminProviderPresets)
 	mux.HandleFunc("/admin/api/provider-check", s.adminProviderCheck)
 	mux.HandleFunc("/admin/api/provider-test", s.adminProviderTest)
+	mux.HandleFunc("/admin/api/compat", s.adminCompatMatrix)
+	mux.HandleFunc("/admin/api/compat/reset", s.adminCompatReset)
 	mux.HandleFunc("/admin/api/provider-discover", s.adminProviderDiscover)
 	mux.HandleFunc("/admin/api/settings", s.adminSettings)
 

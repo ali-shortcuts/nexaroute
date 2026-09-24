@@ -64,6 +64,12 @@ type RoutingConfig struct {
 	MaxRetryAfterSeconds         int     `json:"max_retry_after_seconds"`
 	HedgingEnabled               bool    `json:"hedging_enabled"`
 	HedgingDelayMS               int     `json:"hedging_delay_ms"`
+	// MaxRepairAttempts bounds deterministic bounded-repair retries per
+	// candidate (capability rejections only). 1-2 recommended.
+	MaxRepairAttempts int `json:"max_repair_attempts"`
+	// SanitizeEnabled enables proactive pre-dispatch parameter
+	// sanitization against the cached capability contract.
+	SanitizeEnabled bool `json:"sanitize_enabled"`
 }
 
 // CacheConfig gates the exact-match response cache. It is deliberately
@@ -95,6 +101,9 @@ type ProbeConfig struct {
 	Concurrency       int  `json:"concurrency"`
 	RecoveryAttempts  int  `json:"recovery_attempts"`
 	RecoveryRetryMS   int  `json:"recovery_retry_ms"`
+	// CapabilityProbes enables Level B compatibility probing (bounded,
+	// cached per deployment) in addition to Level A availability probes.
+	CapabilityProbes bool `json:"capability_probes"`
 }
 
 type CredentialConfig struct {
@@ -116,12 +125,13 @@ func (c CredentialConfig) Resolved() string {
 type ProviderConfig struct {
 	ID                       string             `json:"id"`
 	Name                     string             `json:"name"`
-	Type                     string             `json:"type"` // openai_compatible | anthropic_compatible
+	Type                     string             `json:"type"`              // openai_compatible | anthropic_compatible | gemini | openai_responses
+	Dialect                  string             `json:"dialect,omitempty"` // optional dialect override (see compat.Dialects)
 	BaseURL                  string             `json:"base_url"`
 	APIKey                   string             `json:"api_key,omitempty"`
 	APIKeyEnv                string             `json:"api_key_env,omitempty"`
 	Credentials              []CredentialConfig `json:"credentials,omitempty"`
-	AuthMode                 string             `json:"auth_mode,omitempty"` // bearer | x-api-key | none
+	AuthMode                 string             `json:"auth_mode,omitempty"` // bearer | x-api-key | x-goog-api-key | none
 	Headers                  map[string]string  `json:"headers,omitempty"`
 	ForwardHeaders           []string           `json:"forward_headers"`
 	ProxyURL                 string             `json:"proxy_url,omitempty"`
@@ -129,6 +139,7 @@ type ProviderConfig struct {
 	MessagesPath             string             `json:"messages_path,omitempty"`
 	ModelsPath               string             `json:"models_path,omitempty"`
 	CountTokensPath          string             `json:"count_tokens_path,omitempty"`
+	ResponsesPath            string             `json:"responses_path,omitempty"`
 	MaxConcurrency           int                `json:"max_concurrency,omitempty"`
 	StreamIdleTimeoutSeconds int                `json:"stream_idle_timeout_seconds,omitempty"`
 	Enabled                  bool               `json:"enabled"`
@@ -236,9 +247,10 @@ func Default() Config {
 			CapabilityFailureThreshold: 2, CapabilityCooldownSeconds: 300,
 			RequestTimeoutMS: 120000, LatencyWeight: 0.015, FailureWeight: 25, CapacityWeight: 35,
 			RetryBackoffMS: 150, MaxRetryAfterSeconds: 60,
+			MaxRepairAttempts: 1, SanitizeEnabled: true,
 			HedgingEnabled: false, HedgingDelayMS: 1500,
 		},
-		Probe:      ProbeConfig{Enabled: true, OnStart: true, IntervalSeconds: 120, ReadyLeaseSeconds: 300, TimeoutMS: 8000, MaxTokens: 1, Concurrency: 16, RecoveryAttempts: 5, RecoveryRetryMS: 500},
+		Probe:      ProbeConfig{Enabled: true, OnStart: true, IntervalSeconds: 120, ReadyLeaseSeconds: 300, TimeoutMS: 8000, MaxTokens: 1, Concurrency: 16, RecoveryAttempts: 5, RecoveryRetryMS: 500, CapabilityProbes: true},
 		Cache:      CacheConfig{Enabled: false, TTLSeconds: 300, MaxEntries: 256, MaxBodyBytes: 1 << 20},
 		ClientAuth: ClientAuthConfig{Enabled: false, RPM: 0},
 	}
@@ -397,14 +409,20 @@ func (p *ProviderConfig) ApplyDefaults() {
 		p.Name = p.ID
 	}
 	if p.AuthMode == "" {
-		if p.Type == "anthropic_compatible" {
+		switch p.Type {
+		case "anthropic_compatible":
 			p.AuthMode = "x-api-key"
-		} else {
+		case "gemini":
+			p.AuthMode = "x-goog-api-key"
+		default:
 			p.AuthMode = "bearer"
 		}
 	}
 	if p.ChatPath == "" {
 		p.ChatPath = "/v1/chat/completions"
+	}
+	if p.ResponsesPath == "" {
+		p.ResponsesPath = "/v1/responses"
 	}
 	if p.MessagesPath == "" {
 		p.MessagesPath = "/v1/messages"
@@ -604,7 +622,7 @@ func (c Config) Validate() error {
 			return fmt.Errorf("duplicate provider id %q", p.ID)
 		}
 		seenP[p.ID] = true
-		if p.Type != "openai_compatible" && p.Type != "anthropic_compatible" {
+		if p.Type != "openai_compatible" && p.Type != "anthropic_compatible" && p.Type != "gemini" && p.Type != "openai_responses" {
 			return fmt.Errorf("provider %q has unsupported type %q", p.ID, p.Type)
 		}
 		if p.BaseURL == "" {
@@ -636,7 +654,7 @@ func (c Config) Validate() error {
 				return fmt.Errorf("provider %q has invalid proxy_url", p.ID)
 			}
 		}
-		if p.AuthMode != "" && p.AuthMode != "bearer" && p.AuthMode != "x-api-key" && p.AuthMode != "none" {
+		if p.AuthMode != "" && p.AuthMode != "bearer" && p.AuthMode != "x-api-key" && p.AuthMode != "x-goog-api-key" && p.AuthMode != "none" {
 			return fmt.Errorf("provider %q has unsupported auth_mode %q", p.ID, p.AuthMode)
 		}
 		if p.MaxConcurrency < 1 || p.MaxConcurrency > maxProviderConcurrency {

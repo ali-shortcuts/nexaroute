@@ -1,8 +1,8 @@
-# NexaRoute — v0.5.2
+# NexaRoute — v0.6
 
 A self-hosted Go gateway for routing Anthropic-compatible and OpenAI-compatible clients across many LLM providers/models. The first target is **Claude Code -> NexaRoute -> Chat2API / other OpenAI-compatible or Anthropic-compatible providers**.
 
-This package is **v0.5.2**: the v0.4 translation + dashboard core, now extended with a provider-incident intelligence layer and a hedging/cache/usage tier that few if any open gateways combine. The code is runnable and heavily tested, but no software can honestly be guaranteed to contain zero bugs.
+This package is **v0.6**: the v0.4 translation + dashboard core, now extended with a provider-incident intelligence layer and a hedging/cache/usage tier that few if any open gateways combine. The code is runnable and heavily tested, but no software can honestly be guaranteed to contain zero bugs.
 
 ## What v0.5.2 adds on top of v0.4
 

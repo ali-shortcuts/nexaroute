@@ -81,6 +81,10 @@ type OpenAIRequest struct {
 	Seed                *int64          `json:"seed,omitempty"`
 	User                string          `json:"user,omitempty"`
 	N                   int             `json:"n,omitempty"`
+	// ResponseFormatRaw preserves response_format verbatim for upstreams
+	// that support structured output; canonical traffic sets it through
+	// the compatibility engine.
+	ResponseFormatRaw any `json:"response_format,omitempty"`
 }
 
 type OpenAIMessage struct {

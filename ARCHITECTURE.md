@@ -324,3 +324,79 @@ continues to apply pressure while it occupies uncertain quota.
 This layer is advisory rather than authoritative throttling. It intentionally
 does not persist rolling-window debt after a completed response that supplied no
 fresh quota evidence, and it is process-local rather than distributed state.
+
+## Universal Compatibility Engine (v0.6)
+
+v0.6 adds the layer that turns NexaRoute from a protocol translator into a
+protocol-aware, model-aware compatibility engine. The design rules are
+absolute:
+
+```text
+Provider   != Protocol      (NVIDIA is a provider; OpenAI Chat is a protocol)
+Protocol   != Dialect       (NVIDIA NIM is a dialect of OpenAI Chat)
+Provider   != Model capability
+Health     != Compatibility
+```
+
+### Canonical IR
+
+`internal/protocol/canonical` defines one intermediate representation for
+requests, responses and stream events. Client protocols (Anthropic Messages,
+OpenAI Chat, OpenAI Responses) decode into it; upstream protocols (those plus
+Gemini GenerateContent) encode from it. Direct N x N translators are not
+added; a new protocol family plugs into the IR once and becomes reachable
+from everywhere. The proven legacy Anthropic<->OpenAI fast path remains for
+those two families; every other combination (including the `/v1/responses`
+ingress and Gemini/Responses-native upstreams) flows through the IR.
+
+Stream normalization follows the same rule: OpenAI, Anthropic, Gemini and
+Responses SSE decode into canonical `StreamEvent`s, then re-encode into the
+client's dialect.
+
+### Capability contract
+
+`internal/compat` tracks a tri-state (SUPPORTED / UNSUPPORTED / UNKNOWN)
+capability matrix per deployment - not per provider. Facts carry evidence:
+source (static config, dialect prior, discovery, probe, runtime), confidence
+and timestamp. UNKNOWN is never treated as UNSUPPORTED, and nothing is ever
+claimed SUPPORTED without config declaration, a passed probe, or verified
+real traffic. A generic 500 can never teach a capability fact.
+
+Contracts are keyed by an invalidation fingerprint (base URL, dialect, model
+id, credential scope); any identity change drops stale compatibility
+knowledge, and revalidation happens through probes.
+
+### Error classification and bounded repair
+
+Every upstream failure flows through `compat.ClassifyUpstreamError` into a
+19-class taxonomy. Capability-family failures (unsupported parameter, tools,
+reasoning, vision) belong to the compatibility plane: they never quarantine a
+deployment, never signal a provider incident, and trigger a bounded
+deterministic repair (drop the parameter, rename the token-budget key, ...)
+with a single retry per `routing.max_repair_attempts`. Every repair is cached
+into the contract so the next request skips the doomed round trip entirely
+(proactive sanitizer). Health failures (auth, quota, rate limit, overload,
+timeouts, transport) keep the existing failover/cooldown semantics.
+
+Context-overflow 400s are classified separately: the deployment is healthy,
+the request simply cannot fit, and failover to a larger-window deployment is
+correct behavior.
+
+### Probing
+
+Level A remains the availability probe. Level B (`probe.capability_probes`)
+runs a bounded per-deployment capability suite - text, system message,
+streaming, tools, tool choice, parallel tool calls, reasoning effort,
+temperature, top_p, stop, max_completion_tokens, JSON mode, vision - with
+OpenAI-shaped and Anthropic-shaped variants, once per deployment identity,
+and writes verdicts into the contract. The admin "Full test" button runs the
+same suite on demand; the "Agent test" button simulates a real Claude Code
+tool loop (tool definition -> tool call -> tool result -> final text).
+
+### Router integration
+
+Routing requirements distinguish required from optional capabilities. A
+required capability that is verified-UNSUPPORTED excludes a candidate before
+any upstream call; UNKNOWN never blocks, so unproven pools still serve
+traffic while probes refine them. The dashboard Compat tab exposes the full
+matrix with evidence, last issue and last repair breadcrumbs.

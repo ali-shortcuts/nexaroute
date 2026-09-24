@@ -23,7 +23,9 @@
     "retry_backoff_ms": 150,
     "max_retry_after_seconds": 60,
     "hedging_enabled": false,
-    "hedging_delay_ms": 1500
+    "hedging_delay_ms": 1500,
+    "max_repair_attempts": 1,
+    "sanitize_enabled": true
   },
   "probe": {
     "enabled": true,
@@ -34,7 +36,8 @@
     "max_tokens": 1,
     "concurrency": 16,
     "recovery_attempts": 5,
-    "recovery_retry_ms": 500
+    "recovery_retry_ms": 500,
+    "capability_probes": true
   },
   "providers": [
     {

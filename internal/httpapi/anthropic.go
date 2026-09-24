@@ -82,6 +82,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 	if max > len(candidates) {
 		max = len(candidates)
 	}
+	profile := profileFromRequirement(req, nil)
 	routeCtx, routeCancel := routeContext(r.Context(), in.Stream, cfg.RequestTimeout())
 	routeCtx = providers.WithQuotaEstimate(routeCtx, req.EstimatedInputTokens, req.MaxOutputTokens)
 	defer routeCancel()
@@ -98,6 +99,9 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		c := candidates[i]
+		if _, ineligible := s.capabilityIneligible(r.Header.Get("x-request-id"), c.Deployment.ID, profile); ineligible {
+			continue
+		}
 		fresh, a, ok := s.currentRouteCandidate(c.Deployment.ID, req)
 		if !ok {
 			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_skip", Deployment: c.Deployment.ID, Message: "candidate is no longer eligible or provider changed"})
@@ -112,6 +116,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		var nm *translate.NameMap
 		var streamOptionsInjected bool
 		var payload []byte
+		kind := primary.canonicalKind
 		c, a, nm, streamOptionsInjected, payload = primary.c, primary.a, primary.nm, primary.injected, primary.payload
 		attempts++
 		attemptIndex := attempts - 1
@@ -126,6 +131,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 			skip[i+1] = true
 		}
 		if out.secondaryWon {
+			kind = winner.canonicalKind
 			c, a, nm, streamOptionsInjected, payload = winner.c, winner.a, winner.nm, winner.injected, winner.payload
 			attempts++
 			attemptIndex = attempts - 1
@@ -133,6 +139,16 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		}
 		resp, e := out.resp, out.err
 		start = out.start
+		if e == nil && resp.StatusCode >= 400 && resp.StatusCode < 500 {
+			// Bounded deterministic repair: a classified capability rejection
+			// (e.g. "temperature is not supported") retries once with an
+			// adapted payload instead of killing a healthy deployment.
+			resp, payload, _ = s.maybeRepairUpstream(routeCtx, r.Header.Get("x-request-id"),
+				hedgeAttemptBundle{c: c, a: a}, payload, resp, in.Stream, forward, cfg.Routing.MaxRepairAttempts, profile)
+			if resp == nil {
+				e = fmt.Errorf("repair retry transport failure")
+			}
+		}
 		if e == nil && streamOptionsInjected && resp.StatusCode == http.StatusBadRequest {
 			probe, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 			resp.Body.Close()
@@ -188,7 +204,16 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 			lastBody = b
 			lastContentType = resp.Header.Get("Content-Type")
 			lastErr = upstreamError(resp.StatusCode, b)
-			policy := policyForStatus(resp.StatusCode)
+			cls, policy := classifyFailure(resp.StatusCode, b)
+			if cls.CapabilityFailure {
+				// Capability failures are compatibility facts, not health
+				// failures: the deployment stays in the ready mesh.
+				lastErr = fmt.Sprintf("%s: %s", cls.CapabilityLabel(), cls.Message)
+				policy.Failover = true
+				policy.QuarantineDeployment = false
+				policy.HardCooldown = false
+				policy.SignalProvider = false
+			}
 			s.recordProviderFailure(c.Deployment.ProviderID, c.Deployment.ID, lastErr, policy)
 			if router.IsReadyStrategy(cfg.Routing.Strategy) {
 				if policy.QuarantineDeployment {
@@ -225,7 +250,17 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 			deploymentID := c.Deployment.ID
 			resp.Body = observeFirstByte(resp.Body, start, func(d time.Duration) { s.hm.RecordTTFT(deploymentID, d) })
 		}
-		if c.Deployment.ProviderType == "anthropic_compatible" {
+		switch {
+		case kind != "":
+			// Canonical-IR upstream (Gemini / Responses-native): decode into
+			// canonical events/blocks and re-encode for the Anthropic client.
+			if in.Stream {
+				e = s.canonicalStreamPump(w, resp, kind, "anthropic", in.Model, r.Header.Get("x-request-id"))
+			} else {
+				e = s.handleCanonicalResponse(w, resp, kind, "anthropic", in.Model, r.Header.Get("x-request-id"), false,
+					func(input, output int) { s.usage.Record(c.Deployment.ID, int64(input), int64(output)) })
+			}
+		case c.Deployment.ProviderType == "anthropic_compatible":
 			if in.Stream {
 				e = proxyNativeSSE(w, resp, "anthropic", func(prompt, completion int) {
 					s.usage.Record(c.Deployment.ID, int64(prompt), int64(completion))
@@ -247,11 +282,11 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 					_, e = w.Write(b)
 				}
 			}
-		} else if in.Stream {
+		case in.Stream:
 			e = streamOpenAIToAnthropicWithUsage(w, resp, in.Model, nm, func(prompt, completion int) {
 				s.usage.Record(c.Deployment.ID, int64(prompt), int64(completion))
 			}, r.Header.Get("x-request-id"))
-		} else {
+		default:
 			var o core.OpenAIResponse
 			e = decodeValidatedJSONLimited(resp.Body, &o, validateOpenAIResponseJSON)
 			resp.Body.Close()
@@ -311,6 +346,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.recordRouteSuccess(req, c.Deployment.ID, c.Deployment.ProviderID, headerLatency)
+		s.learnFromSuccess(c.Deployment.ID, c.Deployment.ProviderID, c.Deployment, payload, nil)
 		s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_ok", Deployment: c.Deployment.ID, Message: "request completed", LatencyMS: totalLatency.Milliseconds(), StatusCode: resp.StatusCode})
 		return
 	}

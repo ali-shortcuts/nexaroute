@@ -24,7 +24,7 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/router"
 )
 
-const version = "0.5.2"
+const version = "0.6.0"
 
 func defaultConfigPath() string {
 	if p := os.Getenv("NEXAROUTE_CONFIG"); p != "" {
@@ -115,6 +115,8 @@ func main() {
 	bus := events.New(500)
 	pe := probe.New(cfg, reg, rt, hm, bus)
 	api := httpapi.New(cfg, *configPath, reg, rt, hm, bus, pe, logger)
+	api.SyncCapabilityContracts()
+	pe.SetCapabilityStore(api.CapabilityStore())
 	srv := &http.Server{
 		Addr: cfg.Listen, Handler: api.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
