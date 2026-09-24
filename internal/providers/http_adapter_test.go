@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -401,4 +402,112 @@ func TestQuotaEstimateContextBoundsAndSumsTokens(t *testing.T) {
 	if !ok || got != 30 {
 		t.Fatalf("negative estimate handling=%d ok=%v", got, ok)
 	}
+}
+
+func TestMergeQuotaWindowRejectsStaleIncreaseInsideActiveReset(t *testing.T) {
+	now := time.Now().Unix()
+	remaining, reset := mergeQuotaWindow(7, now+60, 8, true, now+90, true, now)
+	if remaining != 7 {
+		t.Fatalf("stale response raised remaining quota: got=%d want=7", remaining)
+	}
+	if reset != now+60 {
+		t.Fatalf("later stale reset extended active window: got=%d want=%d", reset, now+60)
+	}
+
+	remaining, reset = mergeQuotaWindow(7, now+60, 6, true, now+30, true, now)
+	if remaining != 6 {
+		t.Fatalf("lower remaining evidence was not accepted: got=%d want=6", remaining)
+	}
+	if reset != now+30 {
+		t.Fatalf("shorter corrected reset was not accepted: got=%d want=%d", reset, now+30)
+	}
+}
+
+func TestMergeQuotaWindowAcceptsHigherRemainingAfterExpiry(t *testing.T) {
+	now := time.Now().Unix()
+	remaining, reset := mergeQuotaWindow(2, now-1, 10, true, now+60, true, now)
+	if remaining != 10 || reset != now+60 {
+		t.Fatalf("new quota window did not accept refreshed budget: remaining=%d reset=%d", remaining, reset)
+	}
+}
+
+func TestConcurrentQuotaObservationsCannotRaiseActiveWindowRemaining(t *testing.T) {
+	a := &httpAdapter{}
+	now := time.Now().Unix()
+	a.remainingRequests.Store(10)
+	a.remainingTokens.Store(1000)
+	a.requestResetUnix.Store(now + 60)
+	a.tokenResetUnix.Store(now + 60)
+
+	requestValues := []string{"9", "7", "8", "6", "7"}
+	tokenValues := []string{"900", "700", "800", "600", "750"}
+	var wg sync.WaitGroup
+	for i := range requestValues {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			h := http.Header{}
+			h.Set("x-ratelimit-remaining-requests", requestValues[i])
+			h.Set("x-ratelimit-remaining-tokens", tokenValues[i])
+			a.observeRateLimitHeaders(h)
+		}(i)
+	}
+	wg.Wait()
+
+	st := a.Stats()
+	if st.RemainingRequests != 6 || st.RemainingTokens != 600 {
+		t.Fatalf("out-of-order quota observations were not conservative: %+v", st)
+	}
+	if st.RequestResetUnix != now+60 || st.TokenResetUnix != now+60 {
+		t.Fatalf("active reset window unexpectedly changed: %+v", st)
+	}
+}
+
+func TestExpiredQuotaWindowCanRefreshToHigherRemaining(t *testing.T) {
+	a := &httpAdapter{}
+	now := time.Now().Unix()
+	a.remainingRequests.Store(1)
+	a.requestResetUnix.Store(now - 1)
+
+	h := http.Header{}
+	h.Set("x-ratelimit-remaining-requests", "50")
+	h.Set("x-ratelimit-reset-requests", "30s")
+	a.observeRateLimitHeaders(h)
+
+	st := a.Stats()
+	if st.RemainingRequests != 50 {
+		t.Fatalf("expired window blocked refreshed remaining quota: %+v", st)
+	}
+	if st.RequestResetUnix <= now {
+		t.Fatalf("new reset deadline was not accepted: %+v", st)
+	}
+}
+
+func TestStaleRemainingHeaderReleasesReservationWithoutRaisingBudget(t *testing.T) {
+	a := &httpAdapter{}
+	now := time.Now().Unix()
+	a.remainingRequests.Store(5)
+	a.requestResetUnix.Store(now + 60)
+
+	reservation := a.reserveQuota(WithQuotaEstimate(context.Background(), 10, 0))
+	if reservation == nil {
+		t.Fatal("expected tagged context to create reservation")
+	}
+	if got := a.Stats().EffectiveRemainingRequests; got != 4 {
+		t.Fatalf("reservation did not reduce headroom before stale response: %d", got)
+	}
+
+	h := http.Header{}
+	h.Set("x-ratelimit-remaining-requests", "6")
+	obs := a.observeRateLimitHeaders(h)
+	if !obs.RequestRemaining {
+		t.Fatal("remaining header should still release this response's reservation")
+	}
+	reservation.releaseRequests()
+
+	st := a.Stats()
+	if st.RemainingRequests != 5 || st.ReservedRequests != 0 || st.EffectiveRemainingRequests != 5 {
+		t.Fatalf("stale evidence changed budget or leaked reservation: %+v", st)
+	}
+	reservation.releaseTokens()
 }
