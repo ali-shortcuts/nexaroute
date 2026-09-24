@@ -362,6 +362,25 @@ func hashIndex(key string, salt byte, n int) int {
 	_, _ = h.Write([]byte{salt})
 	return int(h.Sum64() % uint64(n))
 }
+func estimatedRequestCost(d Deployment, req Requirement) (float64, bool) {
+	// Cost-aware ordering is only trustworthy when the request supplies an
+	// output ceiling. OpenAI callers may omit one; in that case all candidates
+	// fall back to the ordinary health/quality ordering instead of comparing
+	// incomplete input-only estimates.
+	if req.EstimatedInputTokens <= 0 || req.MaxOutputTokens <= 0 {
+		return 0, false
+	}
+	if d.InputCostPerMTok <= 0 && d.OutputCostPerMTok <= 0 {
+		return 0, false
+	}
+	cost := (float64(req.EstimatedInputTokens)*d.InputCostPerMTok +
+		float64(req.MaxOutputTokens)*d.OutputCostPerMTok) / 1_000_000
+	if cost < 0 {
+		return 0, false
+	}
+	return cost, true
+}
+
 func better(a, b Scored) bool {
 	if a.Score != b.Score {
 		return a.Score > b.Score
@@ -403,6 +422,38 @@ func diversifyProviderFailover(out []Scored, start, attemptLimit int) {
 		copy(out[i+1:pick+1], out[i:pick])
 		out[i] = chosen
 	}
+}
+
+func (r *Router) orderCostAware(out []Scored, req Requirement, cfg config.Config) {
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Deployment.Priority != out[j].Deployment.Priority {
+			return out[i].Deployment.Priority < out[j].Deployment.Priority
+		}
+		if out[i].PriceKnown != out[j].PriceKnown {
+			return out[i].PriceKnown
+		}
+		if out[i].PriceKnown && out[i].EstimatedCostUSD != out[j].EstimatedCostUSD {
+			return out[i].EstimatedCostUSD < out[j].EstimatedCostUSD
+		}
+		return better(out[i], out[j])
+	})
+	if len(out) < 2 {
+		return
+	}
+	// Session affinity stays authoritative when enabled. Operators who want
+	// every turn re-priced can disable affinity explicitly.
+	if pin := r.pinned(req, cfg); pin != "" {
+		for i := range out {
+			if out[i].Deployment.ID == pin {
+				chosen := out[i]
+				copy(out[1:i+1], out[0:i])
+				out[0] = chosen
+				diversifyProviderFailover(out, 1, cfg.Routing.MaxAttempts)
+				return
+			}
+		}
+	}
+	diversifyProviderFailover(out, 1, cfg.Routing.MaxAttempts)
 }
 
 func (r *Router) orderReadyMesh(out []Scored, req Requirement, cfg config.Config) {
@@ -489,6 +540,8 @@ func (r *Router) Candidates(req Requirement) []Scored {
 	switch cfg.Routing.Strategy {
 	case "ready_mesh":
 		r.orderReadyMesh(out, req, cfg)
+	case "cost_aware":
+		r.orderCostAware(out, req, cfg)
 	case "ready_queue":
 		sort.SliceStable(out, func(i, j int) bool {
 			if out[i].Deployment.Priority != out[j].Deployment.Priority {
