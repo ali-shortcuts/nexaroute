@@ -47,6 +47,9 @@ Every normal CI run also executes one bounded stress pass covering:
 - provider-wide incident circuits requiring distinct deployment evidence and guarding active cooldowns from stale in-flight observations;
 - model-specific versus provider-wide error classification;
 - streaming TTFT observation and provider quota-header telemetry;
+- exact routed JSON/SSE usage accounting with unknown-coverage semantics;
+- per-model base pricing validation and estimated-cost telemetry;
+- multi-frame Anthropic SSE usage merging and empty-usage false-positive rejection;
 - cancellation-neutral provider health;
 - malformed/truncated JSON and SSE;
 - translated stream terminal validation and client-write failure;
