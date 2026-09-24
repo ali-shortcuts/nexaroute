@@ -428,7 +428,11 @@ func (p *ProviderConfig) ApplyDefaults() {
 		p.MessagesPath = "/v1/messages"
 	}
 	if p.ModelsPath == "" {
-		p.ModelsPath = "/v1/models"
+		if p.Type == "gemini" {
+			p.ModelsPath = "/v1beta/models"
+		} else {
+			p.ModelsPath = "/v1/models"
+		}
 	}
 	if p.CountTokensPath == "" {
 		p.CountTokensPath = "/v1/messages/count_tokens"
