@@ -617,9 +617,10 @@ function fillPresetSelect() {
   const seen = new Set();
   if (Array.isArray(serverPresets)) {
     for (const p of serverPresets) {
-      if (!p || !p.key || seen.has(p.key)) continue;
-      seen.add(p.key);
-      entries.push(`<option value="${esc(p.key)}">${esc(p.label || p.key)}</option>`);
+      const key = p && (p.id || p.key);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      entries.push(`<option value="${esc(key)}">${esc(p.name || p.label || key)}</option>`);
     }
   }
   for (const k of Object.keys(providerPresets)) {
@@ -630,11 +631,12 @@ function fillPresetSelect() {
   sel.value = current || 'custom';
 }
 function applyPreset(k) {
-  const p = serverPresets && Array.isArray(serverPresets) ? serverPresets.find(x => x && x.key === k) : null;
+  const p = serverPresets && Array.isArray(serverPresets) ? serverPresets.find(x => x && (x.id || x.key) === k) : null;
   if (p) {
     if (editor.mode === 'add') {
-      if (!$('#pName').value.trim()) $('#pName').value = p.name || p.key;
-      if (!$('#pId').value.trim()) $('#pId').value = p.id || p.key;
+      const key = p.id || p.key;
+      if (!$('#pName').value.trim()) $('#pName').value = p.name || p.label || key;
+      if (!$('#pId').value.trim()) $('#pId').value = key;
     }
     $('#pType').value = p.type || 'openai_compatible';
     $('#pBase').value = p.base_url || p.base || '';
