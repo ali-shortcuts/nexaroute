@@ -148,7 +148,7 @@ main{padding:24px 30px 46px;min-width:0}
 .donut-wrap{position:relative;width:132px;height:132px;flex:none}
 .donut-track{fill:none;stroke:rgba(255,255,255,.06);stroke-width:13}
 .donut-seg{fill:none;stroke-width:13;stroke-linecap:butt;transform:rotate(-90deg);transform-origin:60px 60px;transition:stroke-dasharray .5s ease,stroke-dashoffset .5s ease}
-#donutGood{stroke:var(--good)}#donutUnknown{stroke:#5c718a}#donutDegraded{stroke:var(--warn)}#donutCooldown{stroke:var(--bad)}
+#donutGood{stroke:var(--good)}#donutUnknown{stroke:#5c718a}#donutDegraded{stroke:var(--warn)}#donutHalfOpen{stroke:#c9b8ff}#donutCooldown{stroke:var(--bad)}
 .donut-center{position:absolute;inset:0;display:grid;place-items:center;align-content:center;text-align:center}
 .donut-center b{font-size:22px;font-weight:750}
 .donut-center small{color:var(--muted);font-size:9.5px;letter-spacing:.1em;text-transform:uppercase}
