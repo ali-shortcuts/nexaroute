@@ -4,10 +4,13 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/ali-shortcuts/nexaroute/internal/config"
 	"github.com/ali-shortcuts/nexaroute/internal/events"
 )
 
@@ -131,5 +134,111 @@ func TestHedgeBothFailuresReturnsPrimaryErrorDeterministically(t *testing.T) {
 	}
 	if !out.hedgeLaunched {
 		t.Fatal("expected hedge to launch")
+	}
+}
+
+func hedgeBudgetProvider(id, baseURL string, priority int) config.ProviderConfig {
+	return config.ProviderConfig{
+		ID: id, Name: id, Type: "openai_compatible", BaseURL: baseURL,
+		AuthMode: "none", Enabled: true, MaxConcurrency: 8,
+		Models: []config.ModelConfig{{
+			ID: "m", Model: id + "-model", Aliases: []string{"client"},
+			Enabled: true, Priority: priority, Weight: 1,
+			Capabilities: config.Capabilities{Streaming: true},
+		}},
+	}
+}
+
+func TestFastPrimaryFailureDoesNotSkipUnlaunchedHedgeCandidate(t *testing.T) {
+	var firstCalls, secondCalls atomic.Int64
+	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		firstCalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = io.WriteString(w, `{"error":{"message":"fast failure","type":"server_error"}}`)
+	}))
+	defer first.Close()
+	second := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		secondCalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"ok","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"recovered"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
+	}))
+	defer second.Close()
+
+	cfg := config.Default()
+	cfg.Probe.Enabled = false
+	cfg.Routing.Strategy = "priority"
+	cfg.Routing.MaxAttempts = 2
+	cfg.Routing.HedgingEnabled = true
+	cfg.Routing.HedgingDelayMS = 150
+	cfg.Routing.RetryBackoffMS = 1
+	cfg.Providers = []config.ProviderConfig{
+		hedgeBudgetProvider("first", first.URL, 0),
+		hedgeBudgetProvider("second", second.URL, 1),
+	}
+	srv := testGateway(t, cfg)
+
+	req := httptest.NewRequest(http.MethodPost, "http://gateway/v1/chat/completions",
+		strings.NewReader(`{"model":"client","messages":[{"role":"user","content":"hi"}]}`))
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("unlaunched hedge candidate was skipped: status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	if firstCalls.Load() != 1 || secondCalls.Load() != 1 {
+		t.Fatalf("calls first=%d second=%d want 1,1", firstCalls.Load(), secondCalls.Load())
+	}
+}
+
+func TestLaunchedHedgeCountsAgainstMaxAttemptsEvenWhenPrimaryWins(t *testing.T) {
+	var primaryCalls, hedgeCalls, thirdCalls atomic.Int64
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		primaryCalls.Add(1)
+		time.Sleep(35 * time.Millisecond)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = io.WriteString(w, `{"error":{"message":"primary failed","type":"server_error"}}`)
+	}))
+	defer primary.Close()
+	hedge := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hedgeCalls.Add(1)
+		<-r.Context().Done()
+	}))
+	defer hedge.Close()
+	third := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		thirdCalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"third","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"should not run"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
+	}))
+	defer third.Close()
+
+	cfg := config.Default()
+	cfg.Probe.Enabled = false
+	cfg.Routing.Strategy = "priority"
+	cfg.Routing.MaxAttempts = 2
+	cfg.Routing.HedgingEnabled = true
+	cfg.Routing.HedgingDelayMS = 5
+	cfg.Routing.RetryBackoffMS = 1
+	cfg.Providers = []config.ProviderConfig{
+		hedgeBudgetProvider("primary", primary.URL, 0),
+		hedgeBudgetProvider("hedge", hedge.URL, 1),
+		hedgeBudgetProvider("third", third.URL, 2),
+	}
+	srv := testGateway(t, cfg)
+
+	req := httptest.NewRequest(http.MethodPost, "http://gateway/v1/chat/completions",
+		strings.NewReader(`{"model":"client","messages":[{"role":"user","content":"hi"}]}`))
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+
+	if primaryCalls.Load() != 1 || hedgeCalls.Load() != 1 {
+		t.Fatalf("hedge was not actually launched: primary=%d hedge=%d", primaryCalls.Load(), hedgeCalls.Load())
+	}
+	if thirdCalls.Load() != 0 {
+		t.Fatalf("max_attempts=2 was exceeded; third provider called %d time(s)", thirdCalls.Load())
+	}
+	if rr.Code == http.StatusOK {
+		t.Fatalf("third provider appears to have been used despite exhausted attempt budget: %s", rr.Body.String())
 	}
 }
