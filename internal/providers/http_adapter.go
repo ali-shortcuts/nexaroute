@@ -244,10 +244,14 @@ func endpoint(base, suffix string) string {
 }
 
 func (a *httpAdapter) defaultPath() string {
-	if a.p.Type == "anthropic_compatible" {
+	switch a.p.Type {
+	case "anthropic_compatible":
 		return a.p.MessagesPath
+	case "openai_responses":
+		return a.p.ResponsesPath
+	default:
+		return a.p.ChatPath
 	}
-	return a.p.ChatPath
 }
 
 type quotaReservation struct {
@@ -799,6 +803,11 @@ func (a *httpAdapter) Probe(ctx context.Context, model string, maxTokens int) (t
 			"contents":         []map[string]any{{"role": "user", "parts": []map[string]any{{"text": "OK"}}}},
 			"generationConfig": map[string]any{"maxOutputTokens": maxTokens},
 		}
+	case "openai_responses":
+		body = map[string]any{
+			"model": model, "input": "Reply with the single word: OK",
+			"max_output_tokens": maxTokens, "stream": false,
+		}
 	default:
 		body = map[string]any{"model": model, "max_tokens": maxTokens, "messages": []map[string]any{{"role": "user", "content": "OK"}}, "stream": false}
 	}
@@ -810,6 +819,8 @@ func (a *httpAdapter) Probe(ctx context.Context, model string, maxTokens int) (t
 	var resp *http.Response
 	if a.p.Type == "gemini" {
 		resp, err = a.DoPath(ctx, http.MethodPost, a.geminiModelPath(model, false), b, false, nil)
+	} else if a.p.Type == "openai_responses" {
+		resp, err = a.DoPath(ctx, http.MethodPost, a.p.ResponsesPath, b, false, nil)
 	} else {
 		resp, err = a.Do(ctx, b, false, nil)
 	}
@@ -860,6 +871,19 @@ func (a *httpAdapter) validateProbeResponse(data []byte) error {
 		}
 		if typ != "message" || role != "assistant" || content == nil {
 			return errors.New("probe returned an invalid Anthropic message envelope")
+		}
+	case "openai_responses":
+		var status string
+		if raw := root["status"]; len(raw) > 0 {
+			_ = json.Unmarshal(raw, &status)
+		}
+		rawOutput, hasOutput := root["output"]
+		if status == "" || !hasOutput {
+			return errors.New("probe returned an invalid Responses envelope: status/output missing")
+		}
+		var output []json.RawMessage
+		if err := json.Unmarshal(rawOutput, &output); err != nil {
+			return fmt.Errorf("probe returned invalid Responses output: %w", err)
 		}
 	case "gemini":
 		var candidates []map[string]json.RawMessage

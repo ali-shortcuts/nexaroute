@@ -324,6 +324,81 @@ func TestCapabilitySuiteVerdicts(t *testing.T) {
 	})
 }
 
+type responsesRecordingTransport struct {
+	payloads [][]byte
+}
+
+func (t *responsesRecordingTransport) Do(ctx context.Context, payload []byte, stream bool, forward http.Header) (*http.Response, error) {
+	t.payloads = append(t.payloads, append([]byte(nil), payload...))
+	var req map[string]any
+	if err := json.Unmarshal(payload, &req); err != nil {
+		return nil, err
+	}
+	if _, ok := req["messages"]; ok {
+		return &http.Response{
+			StatusCode: http.StatusBadRequest,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       &stringReaderCloser{Reader: strings.NewReader(`{"error":{"message":"messages must not be sent to Responses"}}`)},
+		}, nil
+	}
+	input, _ := req["input"].([]any)
+	hasFunctionOutput := false
+	for _, raw := range input {
+		item, _ := raw.(map[string]any)
+		if item != nil && item["type"] == "function_call_output" {
+			hasFunctionOutput = true
+			break
+		}
+	}
+	body := `{"id":"resp_1","status":"completed","model":"m","output":[{"type":"function_call","call_id":"call_1","name":"get_weather","arguments":"{\"city\":\"Paris\"}"}]}`
+	if hasFunctionOutput {
+		body = `{"id":"resp_2","status":"completed","model":"m","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"It is 15C and sunny in Paris."}]}],"usage":{"input_tokens":10,"output_tokens":8}}`
+	}
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       &stringReaderCloser{Reader: strings.NewReader(body)},
+	}, nil
+}
+
+func (t *responsesRecordingTransport) RedactBody(b []byte) []byte { return b }
+
+func TestResponsesAgentLoopUsesResponsesWireProtocol(t *testing.T) {
+	ft := &responsesRecordingTransport{}
+	report := RunAgentLoopSimulationResponses(context.Background(), ft, "dep", "m")
+	if !report.OK {
+		t.Fatalf("Responses agent loop failed: %+v", report)
+	}
+	if len(ft.payloads) != 2 {
+		t.Fatalf("payload count=%d want 2", len(ft.payloads))
+	}
+	for i, payload := range ft.payloads {
+		var got map[string]any
+		if err := json.Unmarshal(payload, &got); err != nil {
+			t.Fatalf("payload %d malformed: %v", i, err)
+		}
+		if _, ok := got["messages"]; ok {
+			t.Fatalf("payload %d leaked Chat Completions messages: %s", i, payload)
+		}
+		if got["input"] == nil {
+			t.Fatalf("payload %d missing Responses input: %s", i, payload)
+		}
+	}
+	var second map[string]any
+	_ = json.Unmarshal(ft.payloads[1], &second)
+	items, _ := second["input"].([]any)
+	foundOutput := false
+	for _, raw := range items {
+		item, _ := raw.(map[string]any)
+		if item != nil && item["type"] == "function_call_output" && item["call_id"] == "call_1" {
+			foundOutput = true
+		}
+	}
+	if !foundOutput {
+		t.Fatalf("second Responses request missing function_call_output: %s", ft.payloads[1])
+	}
+}
+
 func TestAgentLoopSimulationEndToEnd(t *testing.T) {
 	toolCallBody := `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"call_1","type":"function","function":{"name":"get_weather","arguments":"{\"city\":\"Paris\"}"}}]},"finish_reason":"tool_calls"}]}`
 	continuationBody := `{"choices":[{"message":{"role":"assistant","content":"It is 15C and sunny in Paris."}}],"usage":{"prompt_tokens":10,"completion_tokens":8}}`

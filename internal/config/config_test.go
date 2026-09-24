@@ -80,6 +80,20 @@ func TestLoadAppliesRuntimeEnvironmentOverrides(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsInvalidResponsesPath(t *testing.T) {
+	cfg := Default()
+	p := ProviderConfig{
+		ID: "p", Name: "P", Type: "openai_responses",
+		BaseURL: "https://example.com", ResponsesPath: "://bad path",
+		Enabled: true,
+	}
+	p.ApplyDefaults()
+	cfg.Providers = []ProviderConfig{p}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "responses_path") {
+		t.Fatalf("invalid responses_path should fail validation, got %v", err)
+	}
+}
+
 func TestValidateRejectsProxyWithoutHost(t *testing.T) {
 	cfg := Default()
 	cfg.Providers = []ProviderConfig{{

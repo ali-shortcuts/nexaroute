@@ -356,6 +356,26 @@ func TestTranslatedStreamsRejectMalformedSSEJSON(t *testing.T) {
 	})
 }
 
+func TestProviderHotReloadDetectsResponsesPathChange(t *testing.T) {
+	oldProvider := config.ProviderConfig{
+		ID: "p", Type: "openai_responses", BaseURL: "https://example.invalid",
+		ResponsesPath: "/v1/responses", Enabled: true,
+	}
+	newProvider := oldProvider
+	newProvider.ResponsesPath = "/custom/responses"
+
+	if providerProbeIdentityEqual(oldProvider, newProvider) {
+		t.Fatal("responses_path change was ignored by provider identity")
+	}
+
+	oldCfg := config.Config{Providers: []config.ProviderConfig{oldProvider}}
+	newCfg := config.Config{Providers: []config.ProviderConfig{newProvider}}
+	changed := changedProviderAdapterIDs(oldCfg, newCfg)
+	if _, ok := changed["p"]; !ok {
+		t.Fatalf("responses_path change did not request adapter rebuild: %#v", changed)
+	}
+}
+
 func TestCloneConfigPreservesExplicitEmptyForwardHeaders(t *testing.T) {
 	cfg := config.Default()
 	cfg.Providers = []config.ProviderConfig{{
