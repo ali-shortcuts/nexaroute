@@ -580,7 +580,7 @@ $$('#cliTabs button').forEach(b => b.onclick = () => {
 /* ---------- provider editor ---------- */
 function emptyProvider() {
   return {
-    id: '', name: '', type: 'openai_compatible', base_url: '', api_key: '', api_key_env: '', credentials: [],
+    id: '', name: '', type: 'openai_compatible', dialect: '', base_url: '', api_key: '', api_key_env: '', credentials: [],
     auth_mode: 'bearer', headers: {}, forward_headers: null, proxy_url: '',
     chat_path: '/v1/chat/completions', responses_path: '/v1/responses', messages_path: '/v1/messages', models_path: '/v1/models',
     count_tokens_path: '/v1/messages/count_tokens', max_concurrency: 32, stream_idle_timeout_seconds: 180,
@@ -796,6 +796,7 @@ function readForm() {
   });
   const p = {
     id: $('#pId').value.trim(), name: $('#pName').value.trim(), type: $('#pType').value,
+    dialect: editor.provider?.dialect || '',
     base_url: $('#pBase').value.trim(), api_key: $('#pKey').value, api_key_env: $('#pKeyEnv').value.trim(),
     credentials: creds, auth_mode: $('#pAuth').value, headers: hs,
     forward_headers: (() => {
