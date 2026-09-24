@@ -203,6 +203,19 @@ Only non-streaming requests with `temperature` absent/0 and `top_p` absent/1 are
 | `keys` | `[]` | 8–512 byte keys; presented via `Authorization: Bearer <key>` or `x-api-key`. |
 | `rpm` | `0` | Per-key requests-per-minute ceiling; `0` disables the ceiling. |
 
+### In-flight quota reservations
+
+No new configuration switch is required. Reservations activate only for normal Chat/Messages data-plane attempts that carry NexaRoute's internal request-size estimate and only influence routing when a provider has already supplied usable quota evidence.
+
+For each in-flight upstream leg, NexaRoute temporarily subtracts:
+
+- one request from the latest reported request quota; and
+- the conservative estimated input tokens plus an explicit output-token ceiling when available.
+
+If a fresh `remaining-requests` or `remaining-tokens` header arrives, that resource's local reservation is released immediately because the provider has supplied newer evidence. When a provider omits a fresh remaining header, the reservation is retained until the response body is consumed or closed. This matters for long SSE streams.
+
+The resulting **effective remaining** values feed quota pressure. This is intentionally not a hard local rate limiter: unknown or ambiguous provider semantics must not make NexaRoute reject otherwise usable last-resort capacity. Durable rolling-window RPM/TPM debt and hard throttling are separate future capabilities.
+
 ### model fields (additions per deployment)
 
 | Field | Default | Meaning |
