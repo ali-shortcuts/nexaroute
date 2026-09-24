@@ -264,6 +264,12 @@ func TestProviderEditorSupportsAllBackendProtocolTypesAndResponsesPath(t *testin
 	if !strings.Contains(js, "p.id || p.key") || !strings.Contains(js, "p.name || p.label || key") {
 		t.Fatal("server preset id/name schema is not wired into the provider editor")
 	}
+	if !strings.Contains(js, `<optgroup label="API Providers">`) || !strings.Contains(js, `<optgroup label="Local Providers">`) {
+		t.Fatal("provider presets are not separated into API and Local groups")
+	}
+	if !strings.Contains(js, "!!(p && p.local)") || !strings.Contains(js, "!!p.local") {
+		t.Fatal("provider preset local metadata is not used by the editor")
+	}
 }
 
 func TestReadyMeshSettingsControlsAreWiredInEmbeddedUI(t *testing.T) {
