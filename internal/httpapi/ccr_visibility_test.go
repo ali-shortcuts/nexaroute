@@ -232,4 +232,12 @@ func TestWebUIServesPowerDashboardElements(t *testing.T) {
 			t.Errorf("styles.css missing %s", cls)
 		}
 	}
+	// Pause must actually gate the polling loop, not just relabel the button.
+	if !strings.Contains(appjs, "if(PW.paused){setTimeout(tick,1000);return}") {
+		t.Error("app.js tick loop is not gated on PW.paused (pause button would keep polling)")
+	}
+	// KPI tiles must stay flat: the old nested Success-rate div broke the grid.
+	if strings.Contains(index, `<div><div><span>Success rate</span>`) {
+		t.Error("index.html has the nested Success-rate tile wrapper")
+	}
 }
