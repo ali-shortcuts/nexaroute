@@ -241,3 +241,73 @@ func TestWebUIServesPowerDashboardElements(t *testing.T) {
 		t.Error("index.html has the nested Success-rate tile wrapper")
 	}
 }
+
+func TestWebUIServesAboutCreatorSection(t *testing.T) {
+	cfg := config.Default()
+	cfg.Admin.APIKey = "k"
+	cfg.Admin.BindLocalOnly = false
+	s := testGateway(t, cfg)
+	get := func(path string) string {
+		req := httptest.NewRequest(http.MethodGet, "http://gateway"+path, nil)
+		rr := httptest.NewRecorder()
+		s.Handler().ServeHTTP(rr, req)
+		if rr.Code != 200 {
+			t.Fatalf("GET %s: status %d", path, rr.Code)
+		}
+		return rr.Body.String()
+	}
+	index := get("/")
+	appjs := get("/app.js")
+	styles := get("/styles.css")
+
+	if !strings.Contains(index, `data-tab="about"`) {
+		t.Error("index.html missing About nav button")
+	}
+	if !strings.Contains(index, `id="about"`) {
+		t.Error("index.html missing #about section")
+	}
+	for _, token := range []string{"Powered by Mr Ali", "Created and developed by Mr Ali"} {
+		if !strings.Contains(index, token) {
+			t.Errorf("index.html missing creator token %q", token)
+		}
+	}
+	// Every creator URL must be present exactly as specified. The whole card
+	// is the anchor, so the icon itself is clickable too.
+	for _, href := range []string{
+		`href="mailto:Ali.hekmati2026@gmail.com"`,
+		`href="https://t.me/Ali_silent0"`,
+		`href="https://t.me/Ali_shortcuts"`,
+		`href="https://www.facebook.com/AliShortcuts"`,
+		`href="https://www.tiktok.com/@ali_shortcuts"`,
+		`href="https://www.instagram.com/ali_shortcuts"`,
+		`href="https://www.youtube.com/@Ali_Shortcuts"`,
+	} {
+		if !strings.Contains(index, href) {
+			t.Errorf("index.html missing creator link %s", href)
+		}
+	}
+	if strings.Count(index, "creator-link") < 7 {
+		t.Error("expected 7 clickable creator cards")
+	}
+	if !strings.Contains(index, `target="_blank"`) {
+		t.Error("creator links should open in a new tab")
+	}
+	for _, cls := range []string{".creator-grid", ".creator-link", ".creator-icon", ".mobile-tabs"} {
+		if !strings.Contains(styles, cls) {
+			t.Errorf("styles.css missing %s", cls)
+		}
+	}
+	// The sidebar is hidden on small screens, so a mobile selector must keep
+	// every tab (including About) reachable.
+	if !strings.Contains(index, `id="mobileTabs"`) {
+		t.Error("index.html missing mobile tab selector")
+	}
+	if !strings.Contains(index, `<option value="about">About</option>`) {
+		t.Error("mobile tab selector missing the About option")
+	}
+	for _, token := range []string{"mobileTabs", "data-goto"} {
+		if !strings.Contains(appjs, token) {
+			t.Errorf("app.js missing mobile/about wiring %s", token)
+		}
+	}
+}

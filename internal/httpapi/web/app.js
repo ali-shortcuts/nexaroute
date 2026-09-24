@@ -175,4 +175,8 @@ $('#refreshNowBtn').onclick=()=>refresh();
 /* --- chart window selector --- */
 $$('.chart-win').forEach(b=>b.onclick=()=>{$$('.chart-win').forEach(x=>x.classList.remove('active'));b.classList.add('active');PW.win=+b.dataset.win;renderTrafficChart()});
 
+/* --- About + mobile navigation: the sidebar is hidden on small screens, so a
+   mobile-only selector keeps every tab (including About) reachable. --- */
+(function(){const sel=document.querySelector('#mobileTabs');function activate(name){const btn=document.querySelector('nav button[data-tab="'+name+'"]');if(btn)btn.click();if(sel)sel.value=name}if(sel)sel.addEventListener('change',()=>activate(sel.value));document.querySelectorAll('[data-goto]').forEach(b=>b.addEventListener('click',()=>activate(b.dataset.goto)));document.querySelectorAll('nav button').forEach(b=>b.addEventListener('click',()=>{if(sel)sel.value=b.dataset.tab}))})();
+
 refresh();

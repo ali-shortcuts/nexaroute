@@ -114,9 +114,8 @@ For Anthropic -> OpenAI-compatible routing, v0.3 includes:
 The gateway does **not** pretend to resume a stream on a different model after client-visible bytes have already been sent. A broken committed stream fails rather than fabricating continuity.
 
 ## Web UI
-## Web UI
 
-The embedded control plane ships a power dashboard: live traffic chart (requests/failures per minute from poll deltas), success-rate and token/cost KPIs, top deployments by volume, filterable live event stream (severity chips, search, pause), a request explorer with status/SSE/text filters and expandable rows, a model table with search, state filter, sorting, latency bars, health-proof age and cooldown countdown, Route Preview with capability requirements plus one-click end-to-end route test and copyable curl, per-provider "test all models", generated CLI snippets from the live origin and access keys, and config JSON export. All client-side, no external assets, no secrets embedded in served HTML.
+The embedded control plane ships a power dashboard: live traffic chart (requests/failures per minute from poll deltas), success-rate and token/cost KPIs, top deployments by volume, filterable live event stream (severity chips, search, pause), a request explorer with status/SSE/text filters and expandable rows, a model table with search, state filter, sorting, latency bars, health-proof age and cooldown countdown, Route Preview with capability requirements plus one-click end-to-end route test and copyable curl, per-provider "test all models", generated CLI snippets from the live origin and access keys, config JSON export, and an About tab with creator/support channels. All client-side, no external assets, no secrets embedded in served HTML.
 
 
 The UI is embedded in the Go binary; there is no separate web server to install.
@@ -182,6 +181,8 @@ http://127.0.0.1:8080/
 ```
 
 The sample providers are disabled, so the gateway will not contact any real provider until you configure and enable one.
+
+Step-by-step Ubuntu instructions (release package, source build, systemd autostart, update, uninstall, troubleshooting) live in `docs/UBUNTU_INSTALL.md`.
 
 ## Quick local self-test
 
@@ -313,3 +314,19 @@ NexaRoute now uses two routing levels:
 Every failover candidate is revalidated against current health and the hot-reloaded registry immediately before use. A candidate that became quarantined or was replaced after the initial request snapshot is skipped rather than being used from stale state.
 
 The built-in provider preset catalog is intentionally limited to endpoints that fit NexaRoute's implemented OpenAI-compatible or Anthropic-compatible adapter contracts. A preset is configuration convenience, not a claim that every provider-specific extension is supported.
+
+## Creator / Support
+
+**Powered by Mr Ali** — Created and developed by Mr Ali, an independent developer building practical digital tools, automation solutions, and useful projects. Follow the channels below for updates, new projects, and useful content.
+
+| Platform | Link |
+|---|---|
+| Email | [Ali.hekmati2026@gmail.com](mailto:Ali.hekmati2026@gmail.com) |
+| Telegram | [@Ali_silent0](https://t.me/Ali_silent0) |
+| Telegram Channel | [@Ali_shortcuts](https://t.me/Ali_shortcuts) |
+| Facebook | [AliShortcuts](https://www.facebook.com/AliShortcuts) |
+| TikTok | [@ali_shortcuts](https://www.tiktok.com/@ali_shortcuts) |
+| Instagram | [@ali_shortcuts](https://www.instagram.com/ali_shortcuts) |
+| YouTube | [@Ali_Shortcuts](https://www.youtube.com/@Ali_Shortcuts) |
+
+The same information is available inside the app under the **About** tab.
