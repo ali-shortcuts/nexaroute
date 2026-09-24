@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.5.2 — in-flight quota reservation
+
+### Added
+
+- **In-flight request reservations**: every tagged data-plane upstream leg temporarily reserves one request against the latest provider-reported request headroom.
+- **In-flight token reservations**: each leg also reserves the request's conservative prompt estimate plus explicit output-token ceiling when available.
+- **Effective quota telemetry**: Provider/Admin/Prometheus surfaces now expose raw remaining quota, locally reserved request/token amounts, and effective remaining headroom.
+- **Reservation-aware routing**: quota pressure and exhausted-provider signals use effective remaining quota so concurrent requests do not all route against the same stale quota snapshot.
+- **Hedging-safe accounting**: primary and hedge legs reserve independently. Fresh resource-specific remaining headers release that resource immediately; otherwise the reservation survives until response-body completion.
+
+### Boundaries
+
+- Reservations are advisory and local to one NexaRoute process. They do not hard-block requests.
+- Probe, discovery, provider-test and other untagged control-plane calls do not create data-plane reservations.
+- Completed requests without fresh quota headers do not create durable rolling-window debt; hard RPM/TPM throttling remains future work.
+
+
 ## v0.5.1 — price-aware routing and proactive quota headroom
 
 ### Added
