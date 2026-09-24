@@ -338,14 +338,19 @@ func better(a, b Scored) bool {
 	return a.Deployment.ID < b.Deployment.ID
 }
 
-func diversifyProviderFailover(out []Scored, start int) {
+func diversifyProviderFailover(out []Scored, start, attemptLimit int) {
 	if start < 1 {
 		start = 1
 	}
-	// The primary route is already selected for quality/affinity. For fallbacks,
-	// avoid hitting the same provider repeatedly when an equivalent-priority
-	// deployment exists in another failure domain. Never cross a priority tier.
-	for i := start; i < len(out); i++ {
+	stop := len(out)
+	if attemptLimit > 0 && stop > attemptLimit {
+		stop = attemptLimit
+	}
+	// The primary route is already selected for quality/affinity. Only reorder
+	// the bounded prefix the request can actually attempt; scanning/reordering an
+	// entire large candidate pool would add hot-path work with no runtime value.
+	// Never cross a priority tier.
+	for i := start; i < stop; i++ {
 		if out[i].Deployment.ProviderID != out[i-1].Deployment.ProviderID {
 			continue
 		}
@@ -382,7 +387,7 @@ func (r *Router) orderReadyMesh(out []Scored, req Requirement, cfg config.Config
 				chosen := out[i]
 				copy(out[1:i+1], out[0:i])
 				out[0] = chosen
-				diversifyProviderFailover(out, 1)
+				diversifyProviderFailover(out, 1, cfg.Routing.MaxAttempts)
 				return
 			}
 		}
@@ -396,7 +401,7 @@ func (r *Router) orderReadyMesh(out []Scored, req Requirement, cfg config.Config
 		window = cfg.Routing.P2CWindow
 	}
 	if window < 2 {
-		diversifyProviderFailover(out, 1)
+		diversifyProviderFailover(out, 1, cfg.Routing.MaxAttempts)
 		return
 	}
 	key := req.SelectionKey
@@ -416,7 +421,7 @@ func (r *Router) orderReadyMesh(out []Scored, req Requirement, cfg config.Config
 		winner = b
 	}
 	out[0], out[winner] = out[winner], out[0]
-	diversifyProviderFailover(out, 1)
+	diversifyProviderFailover(out, 1, cfg.Routing.MaxAttempts)
 }
 
 func (r *Router) Candidates(req Requirement) []Scored {
