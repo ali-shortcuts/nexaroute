@@ -203,7 +203,12 @@ func TestLaunchedHedgeCountsAgainstMaxAttemptsEvenWhenPrimaryWins(t *testing.T) 
 	defer primary.Close()
 	hedge := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hedgeCalls.Add(1)
-		<-r.Context().Done()
+		select {
+		case <-r.Context().Done():
+		case <-time.After(500 * time.Millisecond):
+			// Test teardown must stay bounded even if a platform transport
+			// delays propagating client cancellation to the server context.
+		}
 	}))
 	defer hedge.Close()
 	third := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
