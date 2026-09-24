@@ -290,3 +290,46 @@ request dispatch to the first upstream body bytes. Response-header latency
 remains a separate metric. NexaRoute intentionally does not label byte
 throughput as token throughput; exact cross-provider tokens/second requires
 protocol-aware usage accounting.
+
+
+## Routed usage accounting
+
+Usage accounting is attached to the successful upstream response body before
+native passthrough or protocol translation. This gives native and translated
+requests one accounting source and prevents double-counting translated usage.
+
+For non-streaming responses, NexaRoute records usage only when the upstream
+returns the protocol's real usage object. For streaming responses, the observer
+parses SSE framing incrementally and merges OpenAI usage-tail chunks or
+Anthropic message_start/message_delta usage. A completed response without
+complete usage is counted as `unknown`; NexaRoute does not estimate tokens and
+label them exact.
+
+Runtime accounting is in-memory and grouped by deployment and provider. Current
+Admin/Prometheus surfaces expose exact-request count, unknown-request count,
+input/output tokens, cache-read/cache-creation tokens when reported, reasoning
+tokens when reported, and exact-usage coverage.
+
+Accounting currently covers routed model traffic. Synthetic health probes and
+Admin connection/model tests are intentionally not included yet, so these
+totals are not a complete provider bill.
+
+### Configured pricing and estimated cost
+
+Each model may optionally define:
+
+```json
+"pricing": {
+  "input_usd_per_million": 2.5,
+  "output_usd_per_million": 10.0
+}
+```
+
+When both prices are configured and exact input/output usage is available,
+NexaRoute computes a base routed-traffic cost estimate. The estimate is not
+called a provider invoice: cache discounts/creation premiums, batch discounts,
+provider credits, taxes, minimums, and provider-specific billing semantics are
+not modeled in this phase.
+
+Cost-aware or budget-enforced routing must be built on top of this measured
+coverage rather than on fabricated token estimates.
