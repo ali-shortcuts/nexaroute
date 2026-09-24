@@ -14,10 +14,15 @@ type Sample struct {
 	ReasoningTokens          int64 `json:"reasoning_tokens,omitempty"`
 }
 
+const maxTokensPerObservation int64 = 1_000_000_000_000
+
 func (s Sample) Valid() bool {
-	return s.InputTokens >= 0 && s.OutputTokens >= 0 &&
-		s.CacheReadInputTokens >= 0 && s.CacheCreationInputTokens >= 0 &&
-		s.ReasoningTokens >= 0
+	for _, v := range []int64{s.InputTokens, s.OutputTokens, s.CacheReadInputTokens, s.CacheCreationInputTokens, s.ReasoningTokens} {
+		if v < 0 || v > maxTokensPerObservation {
+			return false
+		}
+	}
+	return true
 }
 
 type Pricing struct {
@@ -49,20 +54,27 @@ type Stats struct {
 	EstimatedCostUSD         float64 `json:"estimated_cost_usd"`
 }
 
+func saturatingAddInt64(a, b int64) int64 {
+	if b > 0 && a > math.MaxInt64-b {
+		return math.MaxInt64
+	}
+	return a + b
+}
+
 func (s *Stats) addSample(sample Sample, pricing *Pricing) {
 	s.ExactRequests++
-	s.InputTokens += sample.InputTokens
-	s.OutputTokens += sample.OutputTokens
-	s.CacheReadInputTokens += sample.CacheReadInputTokens
-	s.CacheCreationInputTokens += sample.CacheCreationInputTokens
-	s.ReasoningTokens += sample.ReasoningTokens
+	s.InputTokens = saturatingAddInt64(s.InputTokens, sample.InputTokens)
+	s.OutputTokens = saturatingAddInt64(s.OutputTokens, sample.OutputTokens)
+	s.CacheReadInputTokens = saturatingAddInt64(s.CacheReadInputTokens, sample.CacheReadInputTokens)
+	s.CacheCreationInputTokens = saturatingAddInt64(s.CacheCreationInputTokens, sample.CacheCreationInputTokens)
+	s.ReasoningTokens = saturatingAddInt64(s.ReasoningTokens, sample.ReasoningTokens)
 	if pricing != nil && pricing.Configured() {
 		// USD-per-million * tokens * 1e9 nanos/USD = tokens * price * 1000.
 		cost := float64(sample.InputTokens)*pricing.InputUSDPerMillion*1000 +
 			float64(sample.OutputTokens)*pricing.OutputUSDPerMillion*1000
 		if cost >= 0 && cost <= math.MaxInt64 {
 			n := int64(math.Round(cost))
-			s.EstimatedCostNanoUSD += n
+			s.EstimatedCostNanoUSD = saturatingAddInt64(s.EstimatedCostNanoUSD, n)
 			s.EstimatedCostUSD = float64(s.EstimatedCostNanoUSD) / 1e9
 			s.PricedRequests++
 		}
