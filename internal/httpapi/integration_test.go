@@ -323,7 +323,7 @@ func TestNativeProxyStripsSensitiveAndHopByHopResponseHeaders(t *testing.T) {
 func TestNativeSSEProxyFlushes(t *testing.T) {
 	resp := &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"text/event-stream"}, "Content-Length": []string{"12"}}, Body: io.NopCloser(strings.NewReader("data: {\"choices\":[{\"finish_reason\":\"stop\"}]}\n\n"))}
 	rr := httptest.NewRecorder()
-	if err := proxyNativeSSE(rr, resp, "openai"); err != nil {
+	if err := proxyNativeSSE(rr, resp, "openai", func(in, out int64) {}); err != nil {
 		t.Fatal(err)
 	}
 	if !rr.Flushed {
