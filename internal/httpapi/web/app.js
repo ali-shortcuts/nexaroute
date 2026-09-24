@@ -307,6 +307,7 @@ function providerColor(id) {
 function renderProviders(h) {
   const incidents = Object.fromEntries((snap.provider_health || []).map(x => [x.provider, x]));
   const stats = Object.fromEntries((snap.provider_stats || []).map(x => [x.id, x]));
+  const usage = Object.fromEntries((snap.provider_usage || []).map(x => [x.provider, x]));
   $('#providerGrid').innerHTML = providerSummaries.map(p => {
     const ds = (snap.deployments || []).filter(d => d.provider_id === p.id);
     const ok = ds.filter(d => (h[d.id] || {}).status === 'healthy').length;
@@ -322,7 +323,7 @@ function renderProviders(h) {
       </div>
       <div class="provider-url" title="${esc(p.base_url)}">${esc(p.base_url)}</div>
       <div class="provider-healthbar"><i style="width:${pct}%"></i></div>
-      <div class="provider-meta"><span>${p.has_secret ? `${p.credential_count || 1} credential(s)` : 'No credential'}</span><span>${ok}/${ds.length} healthy</span><span>incident: ${esc(inc.status || 'unknown')}</span><span>${esc(quota)}</span></div>
+      <div class="provider-meta"><span>${p.has_secret ? `${p.credential_count || 1} credential(s)` : 'No credential'}</span><span>${ok}/${ds.length} healthy</span><span>incident: ${esc(inc.status || 'unknown')}</span><span>${esc(quota)}</span><span>${(() => { const u = usage[p.id] || {}; const seen = Number(u.exact_requests || 0) + Number(u.unknown_requests || 0); return seen ? `usage ${u.exact_requests || 0}/${seen} exact` : 'usage unseen'; })()}</span><span>${(() => { const u = usage[p.id] || {}; return Number(u.priced_requests || 0) > 0 ? `~${Number(u.estimated_cost_usd || 0).toFixed(6)}` : 'cost unpriced'; })()}</span></div>
       <button class="edit-provider btn secondary" data-id="${esc(p.id)}">Edit provider</button>
     </article>`;
   }).join('') || '<div class="empty-state"><strong>No providers yet.</strong><span>Add an OpenAI-compatible or Anthropic-compatible upstream to start routing.</span></div>';
@@ -333,9 +334,14 @@ function renderModels(ds, h) {
   const q = ($('#modelSearch').value || '').toLowerCase();
   const rows = ds.filter(d => !q || d.id.toLowerCase().includes(q) || (d.provider_id || '').toLowerCase().includes(q) || (d.model || '').toLowerCase().includes(q));
   const maxLat = Math.max(1, ...ds.map(d => Number((h[d.id] || {}).ewma_latency_ms || 0)));
+  const usage = Object.fromEntries((snap.deployment_usage || []).map(x => [x.deployment, x]));
   $('#modelRows').innerHTML = rows.map(d => {
     const x = h[d.id] || { status: 'unknown' };
+    const u = usage[d.id] || {};
     const lat = Number(x.ewma_latency_ms || 0);
+    const exact = Number(u.exact_requests || 0), unknown = Number(u.unknown_requests || 0), seen = exact + unknown;
+    const coverage = seen ? Math.round(exact / seen * 100) + '%' : '—';
+    const cost = Number(u.priced_requests || 0) > 0 ? '~$' + Number(u.estimated_cost_usd || 0).toFixed(6) : '—';
     return `<tr>
       <td class="dep-id">${esc(d.id)}</td>
       <td>${esc(d.provider_name || d.provider_id)}</td>
@@ -343,9 +349,13 @@ function renderModels(ds, h) {
       <td><span class="status ${esc(x.status)}">${esc(x.status)}</span></td>
       <td><span class="latbar">${lat ? `<span class="track"><i style="width:${Math.round(lat / maxLat * 100)}%"></i></span>` : ''}${fmtMs(lat)}</span></td>
       <td>${fmtMs(Number(x.ewma_ttft_ms || 0))}</td>
+      <td>${fmtInt(Number(u.input_tokens || 0))}</td>
+      <td>${fmtInt(Number(u.output_tokens || 0))}</td>
+      <td title="${exact} exact / ${unknown} unknown">${coverage}</td>
+      <td>${cost}</td>
       <td>${x.consecutive_failures || 0}</td>
     </tr>`;
-  }).join('') || '<tr><td colspan="7" style="color:var(--muted)">No deployments match.</td></tr>';
+  }).join('') || '<tr><td colspan="11" style="color:var(--muted)">No deployments match.</td></tr>';
 }
 $('#modelSearch').oninput = () => renderModels(snap.deployments || [], healthMap());
 
@@ -713,7 +723,7 @@ function defaultModelMeta(m, i = 0) {
   return {
     id: slug(m), model: m,
     aliases: $('#pAliases').value.split(',').map(x => x.trim()).filter(Boolean),
-    enabled: true, priority: i, weight: 1,
+    enabled: true, priority: i, weight: 1, pricing: null,
     capabilities: { streaming: $('#pCapStreaming').checked, tools: $('#pCapTools').checked, vision: $('#pCapVision').checked, reasoning: $('#pCapReasoning').checked }
   };
 }
@@ -724,6 +734,7 @@ function ensureModelMeta(m, i = 0) {
   if (!Array.isArray(x.aliases)) x.aliases = [];
   if (!Number.isFinite(x.priority)) x.priority = i;
   if (!Number.isFinite(x.weight) || x.weight <= 0) x.weight = 1;
+  if (x.pricing && typeof x.pricing !== 'object') x.pricing = null;
   return x;
 }
 function readForm() {
@@ -746,6 +757,16 @@ function readForm() {
       enabled: x.enabled !== false,
       priority: Number.isFinite(Number(x.priority)) ? Number(x.priority) : i,
       weight: Number(x.weight) > 0 ? Number(x.weight) : 1,
+      pricing: (() => {
+        const pr = x.pricing || {};
+        const hasIn = pr.input_usd_per_million !== undefined && pr.input_usd_per_million !== null && pr.input_usd_per_million !== '';
+        const hasOut = pr.output_usd_per_million !== undefined && pr.output_usd_per_million !== null && pr.output_usd_per_million !== '';
+        if (!hasIn && !hasOut) return undefined;
+        if (!hasIn || !hasOut) throw new Error('Both input and output price are required for ' + m);
+        const input = Number(pr.input_usd_per_million), output = Number(pr.output_usd_per_million);
+        if (!Number.isFinite(input) || input < 0 || !Number.isFinite(output) || output < 0) throw new Error('Model prices must be finite non-negative numbers for ' + m);
+        return { input_usd_per_million: input, output_usd_per_million: output };
+      })(),
       capabilities: { streaming: c.streaming !== false, tools: c.tools !== false, vision: !!c.vision, reasoning: !!c.reasoning }
     };
   });
@@ -784,6 +805,11 @@ function renderPicker() {
         <label>Priority<input data-model="${esc(m)}" data-meta="priority" type="number" value="${Number.isFinite(Number(x.priority)) ? Number(x.priority) : i}"></label>
         <label>Weight<input data-model="${esc(m)}" data-meta="weight" type="number" min="0.01" step="0.1" value="${Number(x.weight) > 0 ? Number(x.weight) : 1}"></label>
       </div>
+      <div class="model-meta-grid">
+        <label>Input $ / 1M<input data-model="${esc(m)}" data-price="input_usd_per_million" type="number" min="0" step="0.000001" value="${x.pricing?.input_usd_per_million ?? ''}" placeholder="optional"></label>
+        <label>Output $ / 1M<input data-model="${esc(m)}" data-price="output_usd_per_million" type="number" min="0" step="0.000001" value="${x.pricing?.output_usd_per_million ?? ''}" placeholder="optional"></label>
+        <span></span>
+      </div>
       <div class="model-cap-row">
         <label><input data-model="${esc(m)}" data-cap="streaming" type="checkbox" ${c.streaming !== false ? 'checked' : ''}>Streaming</label>
         <label><input data-model="${esc(m)}" data-cap="tools" type="checkbox" ${c.tools !== false ? 'checked' : ''}>Tools</label>
@@ -799,7 +825,15 @@ function renderPicker() {
     else if (x.dataset.meta === 'priority') meta.priority = parseInt(x.value || '0', 10);
     else if (x.dataset.meta === 'weight') meta.weight = Math.max(.01, parseFloat(x.value || '1'));
   });
-  $$('#modelPicker [data-cap]').forEach(x => x.onchange = () => {
+  $('#modelPicker [data-price]').forEach(x => x.oninput = () => {
+    const meta = ensureModelMeta(x.dataset.model);
+    meta.pricing = meta.pricing || {};
+    const raw = x.value.trim();
+    if (raw === '') delete meta.pricing[x.dataset.price];
+    else meta.pricing[x.dataset.price] = Number(raw);
+    if (Object.keys(meta.pricing).length === 0) meta.pricing = null;
+  });
+  $('#modelPicker [data-cap]').forEach(x => x.onchange = () => {
     const meta = ensureModelMeta(x.dataset.model);
     meta.capabilities = meta.capabilities || {};
     meta.capabilities[x.dataset.cap] = x.checked;
