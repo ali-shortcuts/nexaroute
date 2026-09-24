@@ -183,7 +183,6 @@ func TestSnapshotNormalizesExpiredCooldowns(t *testing.T) {
 	}
 }
 
-
 func TestFailureEWMARecoversFromOldFailure(t *testing.T) {
 	m := New(100, time.Hour)
 	m.RecordFailure("p/m", "temporary", time.Millisecond)
