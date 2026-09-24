@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -535,5 +536,110 @@ func TestOutOfOrderQuotaResponsesDoNotRestoreStaleHeadroom(t *testing.T) {
 	}
 	if st.RateLimitResetUnix != newTokenReset.Unix() {
 		t.Fatalf("summary reset did not preserve latest accepted resource deadline: %+v", st)
+	}
+}
+
+func TestResponsesNativeProbeUsesResponsesPathAndEnvelope(t *testing.T) {
+	cases := []struct {
+		name   string
+		body   string
+		wantOK bool
+	}{
+		{"complete", `{"object":"response","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"OK"}]}]}`, true},
+		{"token limit", `{"object":"response","status":"incomplete","output":[{"type":"message","content":[{"type":"output_text","text":"O"}]}]}`, true},
+		{"error envelope", `{"error":{"message":"bad key"},"object":"response","status":"completed","output":[{}]}`, false},
+		{"chat envelope", `{"choices":[{"message":{"content":"OK"}}]}`, false},
+		{"null output", `{"object":"response","status":"completed","output":null}`, false},
+		{"untyped output", `{"object":"response","status":"completed","output":[{}]}`, false},
+		{"unfinished", `{"object":"response","status":"in_progress","output":[{}]}`, false},
+		{"malformed", `{"object":"response","status":"completed","output":[`, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/custom/responses" {
+					t.Errorf("probe sent to %q instead of Responses path", r.URL.Path)
+					w.WriteHeader(http.StatusNotFound)
+					return
+				}
+				var payload map[string]any
+				if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+					t.Errorf("invalid probe payload: %v", err)
+				}
+				if payload["model"] != "up-model" || payload["input"] == nil || payload["max_output_tokens"] != float64(1) || payload["messages"] != nil {
+					t.Errorf("probe used wrong protocol: %v", payload)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, tc.body)
+			}))
+			defer up.Close()
+			p := config.ProviderConfig{ID: "p", Type: "openai_responses", BaseURL: up.URL,
+				ChatPath: "/wrong/chat", ResponsesPath: "/custom/responses", AuthMode: "none", Enabled: true}
+			a, err := NewAdapter(p, time.Second)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, status, err := a.Probe(context.Background(), "up-model", 1)
+			if status != http.StatusOK || (err == nil) != tc.wantOK {
+				t.Fatalf("probe status=%d error=%v wantOK=%v", status, err, tc.wantOK)
+			}
+		})
+	}
+}
+
+func TestGeminiModelPathPreservesReservedCharacters(t *testing.T) {
+	const model = "models/gemini?flavor=preview#v2"
+	for _, tc := range []struct {
+		stream, alt bool
+		suffix      string
+	}{
+		{false, false, ":generateContent"},
+		{true, true, ":streamGenerateContent"},
+	} {
+		u, err := url.Parse("https://gemini.example" + GeminiModelPath(model, tc.stream))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := "/v1beta/models/gemini?flavor=preview#v2" + tc.suffix; u.Path != want {
+			t.Errorf("stream=%v path=%q want=%q", tc.stream, u.Path, want)
+		}
+		if want := map[bool]string{true: "alt=sse", false: ""}[tc.alt]; u.RawQuery != want || u.Fragment != "" {
+			t.Errorf("stream=%v query=%q fragment=%q want query=%q", tc.stream, u.RawQuery, u.Fragment, want)
+		}
+	}
+}
+
+func TestGeminiEndpointDoesNotDuplicateVersionPrefix(t *testing.T) {
+	const base = "https://gemini.example/v1beta"
+	for _, stream := range []bool{false, true} {
+		got := endpoint(base, GeminiModelPath("gemini-flash", stream))
+		want := base + "/models/gemini-flash:generateContent"
+		if stream {
+			want = base + "/models/gemini-flash:streamGenerateContent?alt=sse"
+		}
+		if got != want {
+			t.Fatalf("stream=%v endpoint=%q want=%q", stream, got, want)
+		}
+	}
+}
+
+func TestProbeEnvelopeAgreesWithGatewayDecoder(t *testing.T) {
+	for _, tc := range []struct {
+		name, kind, body string
+		valid            bool
+	}{
+		{"OpenAI empty message", "openai_compatible", `{"choices":[{"message":{}}]}`, false},
+		{"OpenAI valid message", "openai_compatible", `{"choices":[{"message":{"role":"assistant","content":"OK"}}]}`, true},
+		{"Gemini empty feedback", "gemini", `{"promptFeedback":{}}`, false},
+		{"Gemini null feedback", "gemini", `{"promptFeedback":null}`, false},
+		{"Gemini blocked prompt", "gemini", `{"promptFeedback":{"blockReason":"SAFETY"}}`, true},
+		{"Gemini candidate", "gemini", `{"candidates":[{"content":{"parts":[{"text":"OK"}]},"finishReason":"STOP"}]}`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := &httpAdapter{p: config.ProviderConfig{Type: tc.kind}}
+			if err := a.validateProbeResponse([]byte(tc.body)); (err == nil) != tc.valid {
+				t.Fatalf("valid=%v err=%v body=%s", tc.valid, err, tc.body)
+			}
+		})
 	}
 }

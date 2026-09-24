@@ -633,6 +633,7 @@ func TestAnthropicEmitterPreservesStopSequenceReason(t *testing.T) {
 func TestResponsesNonStreamFunctionCallSignalsToolUse(t *testing.T) {
 	body := []byte(`{
 		"id":"resp_tool",
+		"object":"response",
 		"model":"upstream",
 		"status":"completed",
 		"output":[{"type":"function_call","call_id":"c1","name":"lookup","arguments":"{\"q\":\"x\"}","status":"completed"}],
@@ -647,5 +648,88 @@ func TestResponsesNonStreamFunctionCallSignalsToolUse(t *testing.T) {
 	}
 	if !got.HasToolCalls() {
 		t.Fatalf("function-call block lost: %+v", got)
+	}
+}
+
+func TestResponsesDecoderRejectsMalformedSuccessEnvelope(t *testing.T) {
+	for _, tc := range []struct {
+		name, body string
+		valid      bool
+	}{
+		{"error instead of response", `{"error":{"message":"bad key"}}`, false},
+		{"embedded error", `{"object":"response","status":"completed","output":[],"error":{"message":"failed"}}`, false},
+		{"chat response", `{"choices":[{"message":{"content":"hi"}}]}`, false},
+		{"still running", `{"object":"response","status":"in_progress","output":[]}`, false},
+		{"missing output", `{"object":"response","status":"completed"}`, false},
+		{"null output", `{"object":"response","status":"completed","output":null}`, false},
+		{"untyped output", `{"object":"response","status":"completed","output":[{}]}`, false},
+		{"empty but complete", `{"object":"response","status":"completed","output":[]}`, true},
+		{"incomplete", `{"object":"response","status":"incomplete","output":[]}`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := DecodeResponsesResponse([]byte(tc.body))
+			if (err == nil) != tc.valid {
+				t.Fatalf("valid=%v error=%v", tc.valid, err)
+			}
+		})
+	}
+	if encoded := EncodeResponsesResponse(Response{}, "client-model"); encoded.Object != "response" {
+		t.Fatalf("gateway emitted non-Responses object: %+v", encoded)
+	}
+}
+
+func TestCanonicalNonStreamDecodersRejectMalformedSuccessEnvelopes(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		decode func([]byte) (Response, error)
+		body   string
+		valid  bool
+	}{
+		{"OpenAI error", DecodeOpenAIChatResponse, `{"error":{"message":"invalid key"}}`, false},
+		{"OpenAI missing choices", DecodeOpenAIChatResponse, `{"object":"chat.completion","choices":[]}`, false},
+		{"OpenAI empty message", DecodeOpenAIChatResponse, `{"choices":[{"message":{}}]}`, false},
+		{"OpenAI valid message", DecodeOpenAIChatResponse, `{"choices":[{"message":{"role":"assistant","content":"OK"}}]}`, true},
+		{"Anthropic error", DecodeAnthropicResponse, `{"error":{"message":"invalid key"}}`, false},
+		{"Anthropic null content", DecodeAnthropicResponse, `{"type":"message","role":"assistant","content":null}`, false},
+		{"Anthropic valid empty content", DecodeAnthropicResponse, `{"type":"message","role":"assistant","content":[]}`, true},
+		{"Gemini error", DecodeGeminiResponse, `{"error":{"code":429,"message":"quota exceeded"}}`, false},
+		{"Gemini missing candidates", DecodeGeminiResponse, `{"candidates":[]}`, false},
+		{"Gemini usage without answer", DecodeGeminiResponse, `{"usageMetadata":{"promptTokenCount":2}}`, false},
+		{"Gemini blocked prompt", DecodeGeminiResponse, `{"promptFeedback":{"blockReason":"SAFETY"}}`, true},
+		{"Gemini valid candidate", DecodeGeminiResponse, `{"candidates":[{"content":{"role":"model","parts":[{"text":"OK"}]},"finishReason":"STOP"}]}`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := tc.decode([]byte(tc.body))
+			if (err == nil) != tc.valid {
+				t.Fatalf("valid=%v error=%v, body=%s", tc.valid, err, tc.body)
+			}
+		})
+	}
+}
+
+func TestGeminiStreamingUsageOnlyChunkRemainsValid(t *testing.T) {
+	events, terminal, err := DecodeGeminiStreamChunk(`{"usageMetadata":{"promptTokenCount":2,"candidatesTokenCount":3}}`)
+	if err != nil || terminal || len(events) != 1 || events[0].Type != StreamUsage || events[0].Usage == nil || events[0].Usage.OutputTokens != 3 {
+		t.Fatalf("usage-only Gemini chunk: events=%+v terminal=%v err=%v", events, terminal, err)
+	}
+	if _, _, err := DecodeGeminiStreamChunk(`{"error":{"message":"quota exceeded"}}`); err == nil {
+		t.Fatal("200 Gemini error event was silently treated as an empty stream chunk")
+	}
+}
+
+func TestResponsesStreamTerminalDoesNotTurnEmbeddedErrorIntoCompletion(t *testing.T) {
+	for _, tc := range []struct{ name, event string }{
+		{"completed event with error", `{"type":"response.completed","response":{"status":"completed","output":[],"error":{"message":"bad key"}}}`},
+		{"completed event with failed status", `{"type":"response.completed","response":{"status":"failed","output":[]}}`},
+		{"completed event with missing output", `{"type":"response.completed","response":{"status":"completed","output":null}}`},
+		{"incomplete event with error", `{"type":"response.incomplete","response":{"status":"incomplete","error":{"message":"bad key"}}}`},
+		{"incomplete event with wrong status", `{"type":"response.incomplete","response":{"status":"completed"}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			events, terminal, err := DecodeResponsesStreamEvent("", tc.event)
+			if err == nil || terminal || len(events) > 0 {
+				t.Fatalf("invalid Responses terminal event became success: events=%+v terminal=%v err=%v", events, terminal, err)
+			}
+		})
 	}
 }

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/ali-shortcuts/nexaroute/internal/config"
+	"github.com/ali-shortcuts/nexaroute/internal/protocol/canonical"
 )
 
 type credentialState struct {
@@ -237,8 +238,12 @@ func endpoint(base, suffix string) string {
 			break
 		}
 	}
-	if strings.HasSuffix(b, "/v1") && strings.HasPrefix(suffix, "/v1/") {
-		return b + strings.TrimPrefix(suffix, "/v1")
+	// Providers may configure the API version in base_url. Do not append it
+	// again when the path builder includes the same version (Gemini uses v1beta).
+	for _, version := range []string{"/v1", "/v1beta"} {
+		if strings.HasSuffix(b, version) && strings.HasPrefix(suffix, version+"/") {
+			return b + strings.TrimPrefix(suffix, version)
+		}
 	}
 	return b + suffix
 }
@@ -301,9 +306,10 @@ func (r *quotaReservation) releaseAll() {
 	r.releaseTokens()
 }
 
-// geminiModelPath builds the model-in-path Gemini endpoint. Stream calls use
-// streamGenerateContent with the SSE alt parameter.
-func (a *httpAdapter) geminiModelPath(model string, stream bool) string {
+// GeminiModelPath builds the model-in-path Gemini endpoint. Escaping the
+// deployment model is essential: its reserved characters are not URL syntax.
+// Stream calls use streamGenerateContent with the SSE alt parameter.
+func GeminiModelPath(model string, stream bool) string {
 	model = strings.TrimPrefix(strings.TrimSpace(model), "models/")
 	if stream {
 		return "/v1beta/models/" + url.PathEscape(model) + ":streamGenerateContent?alt=sse"
@@ -818,7 +824,7 @@ func (a *httpAdapter) Probe(ctx context.Context, model string, maxTokens int) (t
 	start := time.Now()
 	var resp *http.Response
 	if a.p.Type == "gemini" {
-		resp, err = a.DoPath(ctx, http.MethodPost, a.geminiModelPath(model, false), b, false, nil)
+		resp, err = a.DoPath(ctx, http.MethodPost, GeminiModelPath(model, false), b, false, nil)
 	} else if a.p.Type == "openai_responses" {
 		resp, err = a.DoPath(ctx, http.MethodPost, a.p.ResponsesPath, b, false, nil)
 	} else {
@@ -856,65 +862,35 @@ func (a *httpAdapter) validateProbeResponse(data []byte) error {
 	}
 	switch a.p.Type {
 	case "anthropic_compatible":
-		var typ, role string
-		if raw := root["type"]; len(raw) > 0 {
-			_ = json.Unmarshal(raw, &typ)
-		}
-		if raw := root["role"]; len(raw) > 0 {
-			_ = json.Unmarshal(raw, &role)
-		}
-		var content []json.RawMessage
-		if raw := root["content"]; len(raw) > 0 {
-			if err := json.Unmarshal(raw, &content); err != nil {
-				return fmt.Errorf("probe returned invalid Anthropic content: %w", err)
-			}
-		}
-		if typ != "message" || role != "assistant" || content == nil {
-			return errors.New("probe returned an invalid Anthropic message envelope")
-		}
-	case "openai_responses":
-		var status string
-		if raw := root["status"]; len(raw) > 0 {
-			_ = json.Unmarshal(raw, &status)
-		}
-		rawOutput, hasOutput := root["output"]
-		if status == "" || !hasOutput {
-			return errors.New("probe returned an invalid Responses envelope: status/output missing")
-		}
-		var output []json.RawMessage
-		if err := json.Unmarshal(rawOutput, &output); err != nil {
-			return fmt.Errorf("probe returned invalid Responses output: %w", err)
+		if err := canonical.ValidateAnthropicResponseJSON(data); err != nil {
+			return fmt.Errorf("probe returned an invalid Anthropic message: %w", err)
 		}
 	case "gemini":
-		var candidates []map[string]json.RawMessage
-		raw := root["candidates"]
-		if len(raw) == 0 {
-			if pf, ok := root["promptFeedback"]; ok && len(pf) > 0 {
-				return nil // blocked prompt is a valid Gemini envelope
-			}
-			return errors.New("probe returned an invalid Gemini envelope: candidates missing")
+		if _, err := canonical.DecodeGeminiResponse(data); err != nil {
+			return fmt.Errorf("probe returned an invalid Gemini response: %w", err)
 		}
-		if err := json.Unmarshal(raw, &candidates); err != nil || len(candidates) == 0 {
-			return fmt.Errorf("probe returned invalid Gemini candidates: %w", err)
+	case "openai_responses":
+		var object, status string
+		if err := json.Unmarshal(root["object"], &object); err != nil || object != "response" {
+			return errors.New("probe returned an invalid Responses envelope: object must be response")
+		}
+		if err := json.Unmarshal(root["status"], &status); err != nil || (status != "completed" && status != "incomplete") {
+			return errors.New("probe returned an invalid Responses envelope: response did not finish")
+		}
+		var output []struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(root["output"], &output); err != nil || len(output) == 0 {
+			return errors.New("probe returned an invalid Responses envelope: output missing")
+		}
+		for _, item := range output {
+			if item.Type == "" {
+				return errors.New("probe returned an invalid Responses envelope: output item missing type")
+			}
 		}
 	default:
-		var choices []map[string]json.RawMessage
-		raw := root["choices"]
-		if len(raw) == 0 {
-			return errors.New("probe returned an invalid OpenAI chat-completion envelope: choices missing")
-		}
-		if err := json.Unmarshal(raw, &choices); err != nil {
-			return fmt.Errorf("probe returned invalid OpenAI choices: %w", err)
-		}
-		if len(choices) == 0 || len(choices[0]["message"]) == 0 {
-			return errors.New("probe returned an invalid OpenAI chat-completion envelope")
-		}
-		var message map[string]json.RawMessage
-		if err := json.Unmarshal(choices[0]["message"], &message); err != nil || message == nil {
-			if err != nil {
-				return fmt.Errorf("probe returned an invalid OpenAI message object: %w", err)
-			}
-			return errors.New("probe returned an invalid OpenAI message object")
+		if err := canonical.ValidateOpenAIChatResponseJSON(data); err != nil {
+			return fmt.Errorf("probe returned an invalid OpenAI chat completion: %w", err)
 		}
 	}
 	return nil

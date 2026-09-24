@@ -470,8 +470,9 @@ func (r *Router) orderReadyMesh(out []Scored, req Requirement, cfg config.Config
 		return
 	}
 	if pin := r.pinned(req, cfg); pin != "" {
+		bestPriority := out[0].Deployment.Priority
 		for i := range out {
-			if out[i].Deployment.ID == pin {
+			if out[i].Deployment.ID == pin && out[i].Deployment.Priority == bestPriority {
 				chosen := out[i]
 				copy(out[1:i+1], out[0:i])
 				out[0] = chosen

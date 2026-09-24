@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/ali-shortcuts/nexaroute/internal/config"
 )
@@ -220,5 +221,65 @@ func TestAnthropicMessageStopDoesNotOverwriteToolUseReason(t *testing.T) {
 	out := rr.Body.String()
 	if !strings.Contains(out, `"finish_reason":"tool_calls"`) {
 		t.Fatalf("Anthropic tool_use stop reason was overwritten: %s", out)
+	}
+}
+
+func TestCanonicalStreamStopsReadingAfterUpstreamError(t *testing.T) {
+	for _, tc := range []struct{ name, kind, frame string }{
+		{"OpenAI", "openai_chat", "data: {\"error\":{\"message\":\"bad key\"}}\n\n"},
+		{"Anthropic", "anthropic", "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"bad key\"}}\n\n"},
+		{"Responses", "openai_responses", "event: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"error\":{\"message\":\"bad key\"}}}\n\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reader, writer := io.Pipe()
+			defer writer.Close()
+			resp := &http.Response{Body: reader, Header: http.Header{"Content-Type": []string{"text/event-stream"}}}
+			rr := httptest.NewRecorder()
+			finished := make(chan error, 1)
+			go func() {
+				finished <- (&Server{}).canonicalStreamPump(rr, resp, tc.kind, "openai_responses", "m", "error-event", nil)
+			}()
+			if _, err := io.WriteString(writer, tc.frame); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case err := <-finished:
+				if err == nil {
+					t.Fatal("upstream failure was reported as stream success")
+				}
+				if out := rr.Body.String(); !strings.Contains(out, "response.failed") || strings.Contains(out, "response.completed") {
+					t.Fatalf("wrong terminal frame after upstream error: %s", out)
+				}
+			case <-time.After(time.Second):
+				_ = writer.Close() // Unblock the faulty implementation before failing.
+				<-finished
+				t.Fatal("gateway kept waiting for upstream data after a terminal error event")
+			}
+		})
+	}
+}
+
+func TestCanonicalResponseRejectsTruncatedOversizeBody(t *testing.T) {
+	const limit = 8 << 20
+	valid := `{"candidates":[{"content":{"role":"model","parts":[{"text":"OK"}]},"finishReason":"STOP"}]}`
+	padded := valid + strings.Repeat(" ", limit-len(valid))
+	for _, tc := range []struct {
+		name, body string
+		valid      bool
+	}{
+		{"exactly at limit", padded, true},
+		{"invalid trailing data beyond limit", padded + "MALFORMED", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := &http.Response{Body: io.NopCloser(strings.NewReader(tc.body))}
+			rr := httptest.NewRecorder()
+			err := (&Server{}).handleCanonicalResponse(rr, resp, "gemini", "openai_chat", "m", "size-limit", false, nil)
+			if (err == nil) != tc.valid {
+				t.Fatalf("valid=%v err=%v body=%s", tc.valid, err, rr.Body.String())
+			}
+			if tc.valid && !strings.Contains(rr.Body.String(), "OK") || !tc.valid && rr.Body.Len() != 0 {
+				t.Fatalf("wrong output for valid=%v: %q", tc.valid, rr.Body.String())
+			}
+		})
 	}
 }

@@ -74,7 +74,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Exact-match response cache (opt-in; see cache_wiring.go).
-	cacheKey, cacheable := s.cacheLookupFor(r.URL.Path, raw, in.Stream, in.Temperature, in.TopP)
+	cacheKey, cacheable := s.cacheLookupFor(r, raw, in.Stream, in.Temperature, in.TopP)
 	if s.cacheServe(w, r, cacheKey, cacheable) {
 		return
 	}
@@ -138,6 +138,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 			attemptIndex = attempts - 1
 		}
 		if out.secondaryWon {
+			primary = winner
 			kind = winner.canonicalKind
 			c, a, nm, streamOptionsInjected, payload = winner.c, winner.a, winner.nm, winner.injected, winner.payload
 			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_attempt", Deployment: c.Deployment.ID, Message: fmt.Sprintf("attempt=%d score=%.2f health=%s pressure=%.3f (hedged winner)", attempts, c.Score, c.Health.Status, c.CapacityPressure)})
@@ -149,7 +150,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 			// (e.g. "temperature is not supported") retries once with an
 			// adapted payload instead of killing a healthy deployment.
 			resp, payload, _ = s.maybeRepairUpstream(routeCtx, r.Header.Get("x-request-id"),
-				hedgeAttemptBundle{c: c, a: a}, payload, resp, in.Stream, forward, cfg.Routing.MaxRepairAttempts, profile)
+				primary, payload, resp, in.Stream, forward, cfg.Routing.MaxRepairAttempts, profile)
 			if resp == nil {
 				e = fmt.Errorf("repair retry transport failure")
 			}
@@ -177,6 +178,19 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if gatewayDeadlineExceeded(routeCtx, r.Context()) {
+				s.observeCurrentRoute(c.Deployment, a, func() {
+					s.hm.RecordProviderFailure(c.Deployment.ProviderID, c.Deployment.ID, lastErr)
+					if router.IsReadyStrategy(cfg.Routing.Strategy) {
+						s.hm.Quarantine(c.Deployment.ID, lastErr, headerLatency)
+						s.probe.Recover(c.Deployment.ID)
+					} else {
+						s.hm.RecordFailure(c.Deployment.ID, lastErr, headerLatency)
+					}
+				})
+				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_timeout", Deployment: c.Deployment.ID, Message: lastErr, ErrorType: "provider_timeout", LatencyMS: headerLatency.Milliseconds()})
+				break
+			}
+			s.observeCurrentRoute(c.Deployment, a, func() {
 				s.hm.RecordProviderFailure(c.Deployment.ProviderID, c.Deployment.ID, lastErr)
 				if router.IsReadyStrategy(cfg.Routing.Strategy) {
 					s.hm.Quarantine(c.Deployment.ID, lastErr, headerLatency)
@@ -184,16 +198,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 				} else {
 					s.hm.RecordFailure(c.Deployment.ID, lastErr, headerLatency)
 				}
-				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_timeout", Deployment: c.Deployment.ID, Message: lastErr, ErrorType: "provider_timeout", LatencyMS: headerLatency.Milliseconds()})
-				break
-			}
-			s.hm.RecordProviderFailure(c.Deployment.ProviderID, c.Deployment.ID, lastErr)
-			if router.IsReadyStrategy(cfg.Routing.Strategy) {
-				s.hm.Quarantine(c.Deployment.ID, lastErr, headerLatency)
-				s.probe.Recover(c.Deployment.ID)
-			} else {
-				s.hm.RecordFailure(c.Deployment.ID, lastErr, headerLatency)
-			}
+			})
 			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_fail", Deployment: c.Deployment.ID, Message: lastErr, ErrorType: "provider_connection_failed", LatencyMS: headerLatency.Milliseconds()})
 			if attempts < max && i+1 < len(candidates) {
 				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "failover", Deployment: c.Deployment.ID, Message: "transport failure; trying next eligible candidate"})
@@ -219,21 +224,23 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 				policy.HardCooldown = false
 				policy.SignalProvider = false
 			}
-			s.recordProviderFailure(c.Deployment.ProviderID, c.Deployment.ID, lastErr, policy)
-			if router.IsReadyStrategy(cfg.Routing.Strategy) {
-				if policy.QuarantineDeployment {
-					s.hm.Quarantine(c.Deployment.ID, lastErr, headerLatency)
-					s.probe.Recover(c.Deployment.ID)
+			s.observeCurrentRoute(c.Deployment, a, func() {
+				s.recordProviderFailure(c.Deployment.ProviderID, c.Deployment.ID, lastErr, policy)
+				if router.IsReadyStrategy(cfg.Routing.Strategy) {
+					if policy.QuarantineDeployment {
+						s.hm.Quarantine(c.Deployment.ID, lastErr, headerLatency)
+						s.probe.Recover(c.Deployment.ID)
+					}
+				} else if policy.HardCooldown {
+					d := cfg.Cooldown()
+					if resp.StatusCode == 429 {
+						d = retryAfterDuration(resp.Header, time.Duration(cfg.Routing.MaxRetryAfterSeconds)*time.Second)
+					}
+					s.hm.ForceCooldown(c.Deployment.ID, lastErr, d)
+				} else if policy.QuarantineDeployment {
+					s.hm.RecordFailure(c.Deployment.ID, lastErr, headerLatency)
 				}
-			} else if policy.HardCooldown {
-				d := cfg.Cooldown()
-				if resp.StatusCode == 429 {
-					d = retryAfterDuration(resp.Header, time.Duration(cfg.Routing.MaxRetryAfterSeconds)*time.Second)
-				}
-				s.hm.ForceCooldown(c.Deployment.ID, lastErr, d)
-			} else if policy.QuarantineDeployment {
-				s.hm.RecordFailure(c.Deployment.ID, lastErr, headerLatency)
-			}
+			})
 			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_fail", Deployment: c.Deployment.ID, Message: lastErr, ErrorType: policy.ErrorType, LatencyMS: headerLatency.Milliseconds(), StatusCode: resp.StatusCode})
 			if policy.Failover && attempts < max && i+1 < len(candidates) {
 				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "failover", Deployment: c.Deployment.ID, Message: fmt.Sprintf("HTTP %d; trying next eligible candidate", resp.StatusCode), StatusCode: resp.StatusCode})
@@ -253,7 +260,9 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Gateway-Upstream-Model", c.Deployment.Model)
 		if in.Stream {
 			deploymentID := c.Deployment.ID
-			resp.Body = observeFirstByte(resp.Body, start, func(d time.Duration) { s.hm.RecordTTFT(deploymentID, d) })
+			resp.Body = observeFirstByte(resp.Body, start, func(d time.Duration) {
+				s.observeCurrentRoute(c.Deployment, a, func() { s.hm.RecordTTFT(deploymentID, d) })
+			})
 		}
 		switch {
 		case kind != "":
@@ -318,14 +327,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 			if !responseCommitted(w) {
 				lastStatus = 0
 				lastBody = nil
-				if cfg.Routing.Strategy == "ready_mesh" && req.Streaming {
-					s.hm.RecordScopeFailure(c.Deployment.ID, []string{"streaming"}, lastErr)
-				} else if router.IsReadyStrategy(cfg.Routing.Strategy) {
-					s.hm.Quarantine(c.Deployment.ID, lastErr, totalLatency)
-					s.probe.Recover(c.Deployment.ID)
-				} else {
-					s.hm.RecordFailure(c.Deployment.ID, lastErr, totalLatency)
-				}
+				s.recordResponseFailure(cfg, c.Deployment, a, req.Streaming, lastErr, totalLatency, false)
 				kind := "response_decode_fail"
 				if req.Streaming {
 					kind = "stream_fail_precommit"
@@ -338,21 +340,13 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 				anthropicErrorJSON(w, http.StatusBadGateway, "upstream returned an invalid response")
 				return
 			}
-			if cfg.Routing.Strategy == "ready_mesh" && req.Streaming {
-				s.hm.RecordScopeFailure(c.Deployment.ID, []string{"streaming"}, lastErr)
-			} else if router.IsReadyStrategy(cfg.Routing.Strategy) {
-				s.hm.Quarantine(c.Deployment.ID, lastErr, totalLatency)
-				s.probe.Recover(c.Deployment.ID)
-			} else {
-				s.hm.RecordFailure(c.Deployment.ID, lastErr, totalLatency)
-			}
-			s.hm.RecordProviderFailure(c.Deployment.ProviderID, c.Deployment.ID, lastErr)
+			s.recordResponseFailure(cfg, c.Deployment, a, req.Streaming, lastErr, totalLatency, true)
 			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "stream_fail", Deployment: c.Deployment.ID, Message: lastErr, ErrorType: "provider_stream_error", LatencyMS: totalLatency.Milliseconds(), StatusCode: resp.StatusCode})
 			// Once a successful upstream response has begun, do not attempt fake mid-stream failover.
 			return
 		}
-		s.recordRouteSuccess(req, c.Deployment.ID, c.Deployment.ProviderID, headerLatency)
-		s.learnFromSuccess(c.Deployment.ID, c.Deployment.ProviderID, c.Deployment, payload, nil)
+		s.recordRouteSuccess(req, c.Deployment, a, headerLatency)
+		s.learnFromSuccess(c.Deployment.ID, c.Deployment.ProviderID, c.Deployment, a, payload, nil)
 		s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_ok", Deployment: c.Deployment.ID, Message: "request completed", LatencyMS: totalLatency.Milliseconds(), StatusCode: resp.StatusCode})
 		return
 	}
@@ -449,6 +443,8 @@ func proxyValidatedJSONResponse(w http.ResponseWriter, resp *http.Response, vali
 type nativeSSETracker struct {
 	protocol string
 	line     []byte
+	data     []byte // SSE joins all data: lines in one event with newlines.
+	hasData  bool
 	terminal bool
 	// usage accounting (optional hook). The hook fires at most once, when
 	// the protocol's terminal usage information is complete.
@@ -484,11 +480,45 @@ func (t *nativeSSETracker) consume(p []byte) error {
 }
 
 func (t *nativeSSETracker) processLine() error {
-	line := bytes.TrimSpace(t.line)
-	if len(line) == 0 || !bytes.HasPrefix(line, []byte("data:")) {
+	line := bytes.TrimRight(t.line, "\r")
+	if len(bytes.TrimSpace(line)) == 0 {
+		return t.processEvent()
+	}
+	if !bytes.HasPrefix(line, []byte("data:")) && !bytes.Equal(line, []byte("data")) {
+		return nil // event:, id:, retry: and comments do not carry data.
+	}
+	var part []byte
+	if len(line) > len("data") {
+		part = line[len("data:"):]
+		if len(part) > 0 && part[0] == ' ' {
+			part = part[1:]
+		}
+	}
+	newLen := len(t.data) + len(part)
+	if t.hasData {
+		newLen++
+	}
+	if newLen > maxNativeSSELineBytes {
+		return fmt.Errorf("native SSE event exceeds %d bytes", maxNativeSSELineBytes)
+	}
+	if t.hasData {
+		t.data = append(t.data, '\n')
+	}
+	t.data = append(t.data, part...)
+	t.hasData = true
+	return nil
+}
+
+func (t *nativeSSETracker) processEvent() error {
+	if !t.hasData {
 		return nil
 	}
-	data := bytes.TrimSpace(line[len("data:"):])
+	t.hasData = false
+	defer func() { t.data = t.data[:0] }()
+	return t.processData(bytes.TrimSpace(t.data))
+}
+
+func (t *nativeSSETracker) processData(data []byte) error {
 	if len(data) == 0 {
 		return nil
 	}
@@ -562,9 +592,8 @@ func (t *nativeSSETracker) processLine() error {
 				if err := json.Unmarshal(raw, &delta); err != nil {
 					return fmt.Errorf("invalid Anthropic SSE message_delta: %w", err)
 				}
-				if delta.StopReason != nil && *delta.StopReason != "" {
-					t.terminal = true
-				}
+				// The stop reason is only semantic; message_stop is the terminal
+				// frame. An EOF between these events is a truncated response.
 			}
 		}
 	default:
@@ -580,35 +609,31 @@ func (t *nativeSSETracker) observeAnthropicUsage(typ string, env map[string]json
 	switch typ {
 	case "message_start":
 		var start struct {
-			Message struct {
-				Usage struct {
-					InputTokens  int `json:"input_tokens"`
-					OutputTokens int `json:"output_tokens"`
-				} `json:"usage"`
-			} `json:"message"`
-		}
-		if raw := env["message"]; len(raw) > 0 {
-			if err := json.Unmarshal(raw, &start); err == nil {
-				t.usageInput = start.Message.Usage.InputTokens
-				if start.Message.Usage.OutputTokens > t.usageOutput {
-					t.usageOutput = start.Message.Usage.OutputTokens
-				}
-			}
-		}
-	case "message_delta":
-		var delta struct {
 			Usage struct {
 				InputTokens  int `json:"input_tokens"`
 				OutputTokens int `json:"output_tokens"`
 			} `json:"usage"`
 		}
-		if raw := env["usage"]; len(raw) > 0 {
-			if err := json.Unmarshal(raw, &delta); err == nil {
-				if delta.Usage.OutputTokens > t.usageOutput {
-					t.usageOutput = delta.Usage.OutputTokens
+		if raw := env["message"]; len(raw) > 0 {
+			if err := json.Unmarshal(raw, &start); err == nil {
+				t.usageInput = start.Usage.InputTokens
+				if start.Usage.OutputTokens > t.usageOutput {
+					t.usageOutput = start.Usage.OutputTokens
 				}
-				if delta.Usage.InputTokens > t.usageInput {
-					t.usageInput = delta.Usage.InputTokens
+			}
+		}
+	case "message_delta":
+		var usage struct {
+			InputTokens  int `json:"input_tokens"`
+			OutputTokens int `json:"output_tokens"`
+		}
+		if raw := env["usage"]; len(raw) > 0 {
+			if err := json.Unmarshal(raw, &usage); err == nil {
+				if usage.OutputTokens > t.usageOutput {
+					t.usageOutput = usage.OutputTokens
+				}
+				if usage.InputTokens > t.usageInput {
+					t.usageInput = usage.InputTokens
 				}
 			}
 		}
@@ -627,10 +652,30 @@ func (t *nativeSSETracker) finish() error {
 		}
 		t.line = nil
 	}
+	if err := t.processEvent(); err != nil {
+		return err
+	}
 	if !t.terminal {
 		return io.ErrUnexpectedEOF
 	}
 	return nil
+}
+
+// reportNativeSSEError sends a terminal error in the same wire protocol. A
+// native stream is already committed as HTTP 200, so returning a Go error
+// alone would leave the client with a silent, apparently successful stream.
+// Use a generic message: upstream error events may contain credentials.
+func reportNativeSSEError(w http.ResponseWriter, protocol string) {
+	var frame string
+	if protocol == "anthropic" {
+		frame = "\n\nevent: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"upstream stream failed\"}}\n\n"
+	} else {
+		frame = "\n\ndata: {\"error\":{\"type\":\"server_error\",\"message\":\"upstream stream failed\"}}\n\n"
+	}
+	_, _ = io.WriteString(w, frame)
+	if fl, ok := w.(http.Flusher); ok {
+		fl.Flush()
+	}
 }
 
 func proxyNativeSSE(w http.ResponseWriter, resp *http.Response, protocol string, usageHooks ...func(prompt, completion int)) error {
@@ -645,24 +690,76 @@ func proxyNativeSSE(w http.ResponseWriter, resp *http.Response, protocol string,
 	if len(usageHooks) > 0 && usageHooks[0] != nil {
 		tracker.usageHook = usageHooks[0]
 	}
+	flush := func(frame []byte) error {
+		if _, err := w.Write(frame); err != nil {
+			return err
+		}
+		if fl != nil {
+			fl.Flush()
+		}
+		return nil
+	}
+
+	// Keep the exact upstream bytes, but do not release an event until the
+	// tracker has validated its complete frame. Otherwise a fragmented error
+	// event can disclose its raw (possibly credential-bearing) message before
+	// a later Read reveals that it was an error. A bounded frame also prevents
+	// an upstream that never sends a blank line from growing memory forever.
+	const maxNativeSSEFrameBytes = 2 * maxNativeSSELineBytes
 	buf := make([]byte, 32<<10)
+	var pending []byte
+	scanAt, lineStart := 0, 0
 	for {
 		n, err := resp.Body.Read(buf)
 		if n > 0 {
-			if terr := tracker.consume(buf[:n]); terr != nil {
-				return terr
+			pending = append(pending, buf[:n]...)
+			for scanAt < len(pending) {
+				nl := bytes.IndexByte(pending[scanAt:], '\n')
+				if nl < 0 {
+					scanAt = len(pending)
+					break
+				}
+				end := scanAt + nl
+				blank := len(bytes.TrimSpace(pending[lineStart:end])) == 0
+				scanAt = end + 1
+				if !blank {
+					lineStart = scanAt
+					continue
+				}
+				frame := pending[:scanAt]
+				if terr := tracker.consume(frame); terr != nil {
+					reportNativeSSEError(w, protocol)
+					return terr
+				}
+				if werr := flush(frame); werr != nil {
+					return werr
+				}
+				pending = pending[scanAt:]
+				scanAt, lineStart = 0, 0
 			}
-			if _, werr := w.Write(buf[:n]); werr != nil {
-				return werr
-			}
-			if fl != nil {
-				fl.Flush()
+			if len(pending) > maxNativeSSEFrameBytes {
+				reportNativeSSEError(w, protocol)
+				return fmt.Errorf("native SSE frame exceeds %d bytes", maxNativeSSEFrameBytes)
 			}
 		}
 		if err != nil {
 			if err == io.EOF {
-				return tracker.finish()
+				if len(pending) > 0 {
+					if terr := tracker.consume(pending); terr != nil {
+						reportNativeSSEError(w, protocol)
+						return terr
+					}
+				}
+				if finErr := tracker.finish(); finErr != nil {
+					reportNativeSSEError(w, protocol)
+					return finErr
+				}
+				if len(pending) > 0 {
+					return flush(pending)
+				}
+				return nil
 			}
+			reportNativeSSEError(w, protocol)
 			return err
 		}
 	}

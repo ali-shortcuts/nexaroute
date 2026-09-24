@@ -278,6 +278,7 @@ func parseOrQuote(s string) json.RawMessage {
 
 // GeminiResponse_ is the GenerateContent response body (permissive).
 type GeminiResponse_ struct {
+	Error          json.RawMessage   `json:"error,omitempty"`
 	Candidates     []GeminiCandidate `json:"candidates"`
 	PromptFeedback *struct {
 		BlockReason string `json:"blockReason,omitempty"`
@@ -297,9 +298,22 @@ type GeminiCandidate struct {
 
 // DecodeGeminiResponse converts a GenerateContent body into the IR.
 func DecodeGeminiResponse(b []byte) (Response, error) {
+	return decodeGeminiResponse(b, false)
+}
+
+// Streaming may send a standalone usage update without candidates; complete
+// non-stream responses must contain a candidate or an explicit blocked prompt.
+func decodeGeminiResponse(b []byte, allowUsageOnly bool) (Response, error) {
 	var in GeminiResponse_
 	if err := json.Unmarshal(b, &in); err != nil {
 		return Response{}, fmt.Errorf("invalid Gemini response: %w", err)
+	}
+	if len(in.Error) > 0 && string(in.Error) != "null" {
+		return Response{}, fmt.Errorf("Gemini response contains an error envelope")
+	}
+	blocked := in.PromptFeedback != nil && in.PromptFeedback.BlockReason != ""
+	if len(in.Candidates) == 0 && !blocked && !(allowUsageOnly && in.UsageMetadata != nil) {
+		return Response{}, fmt.Errorf("invalid Gemini response: candidates missing")
 	}
 	out := Response{StopReason: StopEndTurn, Raw: append(json.RawMessage(nil), b...)}
 	if in.PromptFeedback != nil && in.PromptFeedback.BlockReason != "" {

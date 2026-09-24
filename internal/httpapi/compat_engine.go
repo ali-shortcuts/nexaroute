@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/ali-shortcuts/nexaroute/internal/compat"
@@ -111,8 +110,12 @@ func staticCapsFromConfig(m config.ModelConfig) compat.ModelCapabilities {
 // runs while the runtime write lock is held.
 func (s *Server) syncCapabilityContracts(cfg config.Config) {
 	byProvider := map[string]config.ProviderConfig{}
+	byDeployment := map[string]config.ModelConfig{}
 	for _, p := range cfg.Providers {
 		byProvider[p.ID] = p
+		for _, m := range p.Models {
+			byDeployment[p.ID+"/"+m.ID] = m
+		}
 	}
 	valid := map[string]struct{}{}
 	for _, d := range s.rt.All() {
@@ -121,14 +124,14 @@ func (s *Server) syncCapabilityContracts(cfg config.Config) {
 		if !ok {
 			continue
 		}
-		dialect := compat.DetectDialect(p.ID, p.Type, p.BaseURL, p.Dialect)
-		var modelCfg config.ModelConfig
-		for _, m := range p.Models {
-			if m.ID == d.ID || m.Model == d.Model {
-				modelCfg = m
-				break
-			}
+		// Deployment identity, not upstream model name, selects static caps:
+		// multiple aliases may intentionally point to the same model with
+		// different operator-declared capabilities/context windows.
+		modelCfg, ok := byDeployment[d.ID]
+		if !ok {
+			continue
 		}
+		dialect := compat.DetectDialect(p.ID, p.Type, p.BaseURL, p.Dialect)
 		key := compat.InvalidationKey(p.BaseURL, dialect.Name, d.Model, credentialScope(p))
 		if !s.capStore.InvalidateIf(d.ID, key) {
 			seed := compat.SeedFromDialect(dialect, staticCapsFromConfig(modelCfg))
@@ -185,9 +188,20 @@ func (s *Server) capabilityIneligible(requestID, deploymentID string, profile co
 // learnFromSuccess records capability evidence from real successful traffic.
 // Learning is conservative: only parameters that were actually present in
 // the successful payload are marked SUPPORTED.
-func (s *Server) learnFromSuccess(deploymentID, providerID string, d router.Deployment, payload []byte, canReq *canonical.Request) {
-	p, ok := s.providerConfigFor(providerID)
-	if !ok {
+func (s *Server) learnFromSuccess(deploymentID, providerID string, d router.Deployment, a providers.Adapter, payload []byte, canReq *canonical.Request) {
+	s.runtimeMu.RLock()
+	defer s.runtimeMu.RUnlock()
+	if !s.routeStillCurrent(d, a) {
+		return
+	}
+	var p config.ProviderConfig
+	for _, configured := range s.cfg.Providers {
+		if configured.ID == providerID {
+			p = configured
+			break
+		}
+	}
+	if p.ID == "" {
 		return
 	}
 	dialect := compat.DetectDialect(p.ID, p.Type, p.BaseURL, p.Dialect)
@@ -277,9 +291,7 @@ type repairOutcome struct {
 func (s *Server) doUpstreamWithRepair(
 	ctx context.Context,
 	requestID string,
-	a providers.Adapter,
-	deployment router.Deployment,
-	payload []byte,
+	bundle hedgeAttemptBundle,
 	stream bool,
 	forward http.Header,
 	dialect compat.DialectProfile,
@@ -287,6 +299,9 @@ func (s *Server) doUpstreamWithRepair(
 	maxRepairs int,
 	canReq *canonical.Request,
 ) (*http.Response, []byte, repairOutcome, error) {
+	a := bundle.a
+	deployment := bundle.c.Deployment
+	payload := bundle.payload
 	out := repairOutcome{}
 	attempts := maxRepairs
 	if attempts < 0 {
@@ -302,17 +317,25 @@ func (s *Server) doUpstreamWithRepair(
 	if s.currentConfig().Routing.SanitizeEnabled {
 		contract := s.capStore.Get(deployment.ID)
 		if res, err := compat.Sanitize(payload, contract, dialect, profile); err == nil && res.Changed {
-			s.capStore.SetRepair(deployment.ID, "pre-dispatch: "+fmt.Sprintf("removed %v, renamed %v", res.Removed, res.Renamed))
-			s.bus.Add(events.Event{
-				RequestID: requestID, Kind: "compat_sanitize", Deployment: deployment.ID,
-				Message:   fmt.Sprintf("removed %v renamed %v (pre-dispatch)", res.Removed, res.Renamed),
-				ErrorType: "parameter_sanitized",
+			s.observeCurrentRoute(deployment, a, func() {
+				s.capStore.SetRepair(deployment.ID, "pre-dispatch: "+fmt.Sprintf("removed %v, renamed %v", res.Removed, res.Renamed))
+				s.bus.Add(events.Event{
+					RequestID: requestID, Kind: "compat_sanitize", Deployment: deployment.ID,
+					Message:   fmt.Sprintf("removed %v renamed %v (pre-dispatch)", res.Removed, res.Renamed),
+					ErrorType: "parameter_sanitized",
+				})
 			})
 			payload = res.Payload
 		}
 	}
 	for {
-		resp, err := a.Do(ctx, payload, stream, forward)
+		var resp *http.Response
+		var err error
+		if bundle.path != "" {
+			resp, err = a.DoPath(ctx, http.MethodPost, bundle.path, payload, stream, forward)
+		} else {
+			resp, err = a.Do(ctx, payload, stream, forward)
+		}
 		if err != nil {
 			return nil, payload, out, err
 		}
@@ -333,23 +356,27 @@ func (s *Server) doUpstreamWithRepair(
 		repaired, plan, ok := compat.Repair(cls, payload, dialect, profile)
 		if !ok {
 			// Semantics-critical capability failure with no safe repair.
-			// Learn the fact and return the upstream error untouched.
-			if cls.Capability != "" {
-				s.capStore.LearnUnsupported(deployment.ID, cls.Capability, compat.SourceRuntime, cls.Message, key)
-			}
-			s.capStore.SetIssue(deployment.ID, cls.CapabilityLabel())
+			// Learn the fact only when this is still the current deployment.
+			s.observeCurrentRoute(deployment, a, func() {
+				if cls.Capability != "" {
+					s.capStore.LearnUnsupported(deployment.ID, cls.Capability, compat.SourceRuntime, cls.Message, key)
+				}
+				s.capStore.SetIssue(deployment.ID, cls.CapabilityLabel())
+			})
 			resp.Body = io.NopCloser(bytes.NewReader(body))
 			return resp, payload, out, nil
 		}
 		attempts--
 		out.Repaired = true
 		out.Description = compat.DescribePlan(plan)
-		for _, rule := range plan.Rules {
-			if rule.Capability != "" {
-				s.capStore.LearnUnsupported(deployment.ID, rule.Capability, compat.SourceRuntime, cls.Message, key)
+		s.observeCurrentRoute(deployment, a, func() {
+			for _, rule := range plan.Rules {
+				if rule.Capability != "" {
+					s.capStore.LearnUnsupported(deployment.ID, rule.Capability, compat.SourceRuntime, cls.Message, key)
+				}
 			}
-		}
-		s.capStore.SetRepair(deployment.ID, out.Description)
+			s.capStore.SetRepair(deployment.ID, out.Description)
+		})
 		if canReq != nil {
 			applyRepairToCanonical(canReq, plan)
 		}
@@ -442,22 +469,26 @@ func (s *Server) maybeRepairUpstream(
 		}
 		repaired, plan, ok := compat.Repair(cls, payload, dialect, profile)
 		if !ok {
-			if cls.Capability != "" {
-				s.capStore.LearnUnsupported(deployment.ID, cls.Capability, compat.SourceRuntime, cls.Message, key)
-			}
-			s.capStore.SetIssue(deployment.ID, cls.CapabilityLabel())
+			s.observeCurrentRoute(deployment, bundle.a, func() {
+				if cls.Capability != "" {
+					s.capStore.LearnUnsupported(deployment.ID, cls.Capability, compat.SourceRuntime, cls.Message, key)
+				}
+				s.capStore.SetIssue(deployment.ID, cls.CapabilityLabel())
+			})
 			resp.Body = io.NopCloser(bytes.NewReader(body))
 			return resp, payload, out
 		}
 		attempts--
 		out.Repaired = true
 		out.Description = compat.DescribePlan(plan)
-		for _, rule := range plan.Rules {
-			if rule.Capability != "" {
-				s.capStore.LearnUnsupported(deployment.ID, rule.Capability, compat.SourceRuntime, cls.Message, key)
+		s.observeCurrentRoute(deployment, bundle.a, func() {
+			for _, rule := range plan.Rules {
+				if rule.Capability != "" {
+					s.capStore.LearnUnsupported(deployment.ID, rule.Capability, compat.SourceRuntime, cls.Message, key)
+				}
 			}
-		}
-		s.capStore.SetRepair(deployment.ID, out.Description)
+			s.capStore.SetRepair(deployment.ID, out.Description)
+		})
 		s.bus.Add(events.Event{
 			RequestID: requestID, Kind: "compat_repair", Deployment: deployment.ID,
 			Message:   fmt.Sprintf("%s (%s); retrying with adapted payload", cls.CapabilityLabel(), out.Description),
@@ -516,10 +547,7 @@ func (s *Server) finishCanonicalAttempt(bundle hedgeAttemptBundle, canReq canoni
 		}
 	case "gemini":
 		payload, _, err = canonical.EncodeGeminiRequest(canReq, bundle.c.Deployment.Model)
-		bundle.path = "/v1beta/models/" + strings.TrimPrefix(bundle.c.Deployment.Model, "models/") + ":streamGenerateContent?alt=sse"
-		if !canReq.Stream {
-			bundle.path = "/v1beta/models/" + strings.TrimPrefix(bundle.c.Deployment.Model, "models/") + ":generateContent"
-		}
+		bundle.path = providers.GeminiModelPath(bundle.c.Deployment.Model, canReq.Stream)
 	case "openai_responses":
 		payload, err = canonical.EncodeResponsesRequest(canReq, bundle.c.Deployment.Model)
 		bundle.path = p.ResponsesPath
@@ -562,11 +590,13 @@ func (s *Server) sanitizeOutgoingPayload(bundle hedgeAttemptBundle, payload []by
 	if err != nil || !res.Changed {
 		return payload
 	}
-	s.capStore.SetRepair(deployment.ID, "pre-dispatch: removed "+fmt.Sprint(res.Removed)+" renamed "+fmt.Sprint(res.Renamed))
-	s.bus.Add(events.Event{
-		Kind: "compat_sanitize", Deployment: deployment.ID,
-		Message:   fmt.Sprintf("removed %v renamed %v (pre-dispatch)", res.Removed, res.Renamed),
-		ErrorType: "parameter_sanitized",
+	s.observeCurrentRoute(deployment, bundle.a, func() {
+		s.capStore.SetRepair(deployment.ID, "pre-dispatch: removed "+fmt.Sprint(res.Removed)+" renamed "+fmt.Sprint(res.Renamed))
+		s.bus.Add(events.Event{
+			Kind: "compat_sanitize", Deployment: deployment.ID,
+			Message:   fmt.Sprintf("removed %v renamed %v (pre-dispatch)", res.Removed, res.Renamed),
+			ErrorType: "parameter_sanitized",
+		})
 	})
 	return res.Payload
 }

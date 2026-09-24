@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -71,6 +72,7 @@ func (s *Server) canonicalStreamPump(
 	emitter := canonical.NewStreamEmitter(clientProtocol, w, requestedModel, requestID)
 	reader := canonical.NewSSEReader(resp.Body)
 	terminal := false
+	anthropicStopReasonSeen := false
 	var streamErr error
 	inputTokens, outputTokens := 0, 0
 	usageSeen := false
@@ -104,12 +106,23 @@ func (s *Server) canonicalStreamPump(
 			break
 		}
 		for _, ev := range evs {
-			if kind == "anthropic" && ev.Type == canonical.StreamEnd && terminal {
-				// Anthropic normally reports the semantic stop reason in
-				// message_delta and then follows with message_stop. The latter
-				// must terminate framing without overwriting tool_use,
-				// max_tokens, stop_sequence, refusal, etc. with end_turn.
-				continue
+			if kind == "anthropic" && ev.Type == canonical.StreamEnd {
+				var frame struct {
+					Type string `json:"type"`
+				}
+				// The decoder already validated the JSON. StreamEnd can mean
+				// either a semantic stop reason or the actual message_stop.
+				_ = json.Unmarshal([]byte(data), &frame)
+				if frame.Type == "message_stop" {
+					terminal = true
+					if anthropicStopReasonSeen {
+						// Preserve the reason from message_delta instead of
+						// overwriting tool_use/max_tokens with end_turn.
+						continue
+					}
+				} else {
+					anthropicStopReasonSeen = true
+				}
 			}
 			if kind == "anthropic" {
 				switch ev.Type {
@@ -139,13 +152,18 @@ func (s *Server) canonicalStreamPump(
 			if ev.Type == canonical.StreamError {
 				streamErr = fmt.Errorf("upstream stream error: %s", ev.ErrorMsg)
 			}
-			if ev.Type == canonical.StreamEnd {
+			if ev.Type == canonical.StreamEnd && kind != "anthropic" {
 				terminal = true
 			}
 			if emitErr := emitter.Emit(ev); emitErr != nil {
 				// Client went away; stop reading upstream.
 				return emitErr
 			}
+		}
+		if streamErr != nil {
+			// A terminal error frame must release the upstream connection now;
+			// waiting for more events can hang on an otherwise idle SSE socket.
+			break
 		}
 	}
 	if !terminal && streamErr == nil {
@@ -180,10 +198,14 @@ func (s *Server) handleCanonicalResponse(
 	if stream {
 		return s.canonicalStreamPump(w, resp, kind, clientProtocol, requestedModel, requestID, usageHook)
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	const maxCanonicalResponseBytes = 8 << 20
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxCanonicalResponseBytes+1))
 	resp.Body.Close()
 	if err != nil {
 		return fmt.Errorf("upstream response read failed: %w", err)
+	}
+	if len(body) > maxCanonicalResponseBytes {
+		return fmt.Errorf("upstream response exceeds %d bytes", maxCanonicalResponseBytes)
 	}
 	var canResp canonical.Response
 	switch kind {
@@ -294,23 +316,25 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 	for i := 0; i < len(candidates) && attempts < max; i++ {
 		c := candidates[i]
 		attempts++
-		deployment := c.Deployment
-		dialect, cached := dialects[deployment.ProviderID]
-		if !cached {
-			dialect = s.dialectFor(deployment.ProviderID, deployment.ProviderType, "")
-			dialects[deployment.ProviderID] = dialect
-		}
 		bundle, ok := s.buildCanonicalAttempt(c, req, canReq, in.Model, profile)
 		if !ok {
 			lastErr = "candidate could not serve this request"
 			continue
 		}
+		// buildCanonicalAttempt re-resolves candidates immediately before
+		// dispatch; all subsequent bookkeeping must use that fresh deployment.
+		deployment := bundle.c.Deployment
+		dialect, cached := dialects[deployment.ProviderID]
+		if !cached {
+			dialect = s.dialectFor(deployment.ProviderID, deployment.ProviderType, "")
+			dialects[deployment.ProviderID] = dialect
+		}
 		start := time.Now()
 		s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_attempt", Deployment: deployment.ID,
 			Message: fmt.Sprintf("attempt=%d kind=%s score=%.2f", attempts, bundle.canonicalKind, c.Score)})
 		resp, sentPayload, repair, derr := s.doUpstreamWithRepair(
-			routeCtx, r.Header.Get("x-request-id"), bundle.a, deployment,
-			bundle.payload, req.Streaming, forward, dialect, profile,
+			routeCtx, r.Header.Get("x-request-id"), bundle,
+			req.Streaming, forward, dialect, profile,
 			cfg.Routing.MaxRepairAttempts, &canReq,
 		)
 		if derr != nil {
@@ -323,13 +347,15 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 			}
 			cls := compat.ClassifyTransportError(derr)
 			policy := cls.Policy()
-			s.hm.RecordProviderFailure(deployment.ProviderID, deployment.ID, lastErr)
-			if router.IsReadyStrategy(cfg.Routing.Strategy) {
-				s.hm.Quarantine(deployment.ID, lastErr, time.Since(start))
-				s.probe.Recover(deployment.ID)
-			} else if policy.HardCooldown {
-				s.hm.ForceCooldown(deployment.ID, lastErr, cfg.Cooldown())
-			}
+			s.observeCurrentRoute(deployment, bundle.a, func() {
+				s.hm.RecordProviderFailure(deployment.ProviderID, deployment.ID, lastErr)
+				if router.IsReadyStrategy(cfg.Routing.Strategy) {
+					s.hm.Quarantine(deployment.ID, lastErr, time.Since(start))
+					s.probe.Recover(deployment.ID)
+				} else if policy.HardCooldown {
+					s.hm.ForceCooldown(deployment.ID, lastErr, cfg.Cooldown())
+				}
+			})
 			if attempts < max && i+1 < len(candidates) {
 				s.retryPause(routeCtx, r.Header.Get("x-request-id"), cfg, attempts-1, max)
 				continue
@@ -346,23 +372,25 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 			cls, policy := classifyFailure(resp.StatusCode, b)
 			// Capability failures never touch deployment health; the router
 			// may still fail over to a deployment that supports the feature.
-			s.recordProviderFailure(deployment.ProviderID, deployment.ID, cls.Message, policy)
-			if !cls.CapabilityFailure {
-				if router.IsReadyStrategy(cfg.Routing.Strategy) {
-					if policy.QuarantineDeployment {
-						s.hm.Quarantine(deployment.ID, cls.Message, time.Since(start))
-						s.probe.Recover(deployment.ID)
+			s.observeCurrentRoute(deployment, bundle.a, func() {
+				s.recordProviderFailure(deployment.ProviderID, deployment.ID, cls.Message, policy)
+				if !cls.CapabilityFailure {
+					if router.IsReadyStrategy(cfg.Routing.Strategy) {
+						if policy.QuarantineDeployment {
+							s.hm.Quarantine(deployment.ID, cls.Message, time.Since(start))
+							s.probe.Recover(deployment.ID)
+						}
+					} else if policy.HardCooldown {
+						d := cfg.Cooldown()
+						if resp.StatusCode == http.StatusTooManyRequests {
+							d = retryAfterDuration(resp.Header, time.Duration(cfg.Routing.MaxRetryAfterSeconds)*time.Second)
+						}
+						s.hm.ForceCooldown(deployment.ID, cls.Message, d)
+					} else if policy.QuarantineDeployment {
+						s.hm.RecordFailure(deployment.ID, cls.Message, time.Since(start))
 					}
-				} else if policy.HardCooldown {
-					d := cfg.Cooldown()
-					if resp.StatusCode == http.StatusTooManyRequests {
-						d = retryAfterDuration(resp.Header, time.Duration(cfg.Routing.MaxRetryAfterSeconds)*time.Second)
-					}
-					s.hm.ForceCooldown(deployment.ID, cls.Message, d)
-				} else if policy.QuarantineDeployment {
-					s.hm.RecordFailure(deployment.ID, cls.Message, time.Since(start))
 				}
-			}
+			})
 			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_fail", Deployment: deployment.ID,
 				Message: cls.CapabilityLabel() + ": " + cls.Message, ErrorType: policy.ErrorType, LatencyMS: time.Since(start).Milliseconds(), StatusCode: lastStatus})
 			if (policy.Failover || cls.CapabilityFailure) && attempts < max && i+1 < len(candidates) {
@@ -377,7 +405,9 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if req.Streaming {
-			resp.Body = observeFirstByte(resp.Body, start, func(d time.Duration) { s.hm.RecordTTFT(deployment.ID, d) })
+			resp.Body = observeFirstByte(resp.Body, start, func(d time.Duration) {
+				s.observeCurrentRoute(deployment, bundle.a, func() { s.hm.RecordTTFT(deployment.ID, d) })
+			})
 		}
 		deploy := deployment
 		sent := sentPayload
@@ -397,12 +427,14 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 			}
 			cls := compat.ClassifyMalformedResponse(lastErr)
 			if !responseCommitted(w) {
-				if router.IsReadyStrategy(cfg.Routing.Strategy) {
-					s.hm.Quarantine(deploy.ID, lastErr, total)
-					s.probe.Recover(deploy.ID)
-				} else {
-					s.hm.RecordFailure(deploy.ID, lastErr, total)
-				}
+				s.observeCurrentRoute(deploy, bundle.a, func() {
+					if router.IsReadyStrategy(cfg.Routing.Strategy) {
+						s.hm.Quarantine(deploy.ID, lastErr, total)
+						s.probe.Recover(deploy.ID)
+					} else {
+						s.hm.RecordFailure(deploy.ID, lastErr, total)
+					}
+				})
 				if attempts < max && i+1 < len(candidates) {
 					s.retryPause(routeCtx, r.Header.Get("x-request-id"), cfg, attempts-1, max)
 					continue
@@ -414,8 +446,8 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 				Message: lastErr, ErrorType: string(cls.Class), LatencyMS: total.Milliseconds()})
 			return
 		}
-		s.recordRouteSuccess(req, deploy.ID, deploy.ProviderID, time.Since(start))
-		s.learnFromSuccess(deploy.ID, deploy.ProviderID, deploy, sent, &canReq)
+		s.recordRouteSuccess(req, deploy, bundle.a, time.Since(start))
+		s.learnFromSuccess(deploy.ID, deploy.ProviderID, deploy, bundle.a, sent, &canReq)
 		s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_ok", Deployment: deploy.ID,
 			Message: "request completed", LatencyMS: total.Milliseconds()})
 		return

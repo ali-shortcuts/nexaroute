@@ -407,6 +407,9 @@ func encodeAnthBlocks(parts []Part) []map[string]any {
 
 // DecodeAnthropicResponse converts a native Anthropic response body into the IR.
 func DecodeAnthropicResponse(b []byte) (Response, error) {
+	if err := ValidateAnthropicResponseJSON(b); err != nil {
+		return Response{}, err
+	}
 	var in core.AnthResponse
 	if err := json.Unmarshal(b, &in); err != nil {
 		return Response{}, fmt.Errorf("invalid Anthropic response: %w", err)

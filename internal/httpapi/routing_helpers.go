@@ -401,6 +401,13 @@ func providerLoadFromStats(st providers.ProviderStats, nowUnix int64) router.Pro
 
 func (s *Server) prepareRequirement(req router.Requirement, r *http.Request, bodySessionKey string) router.Requirement {
 	req.SessionKey = sessionKeyFromRequestParts(r, bodySessionKey)
+	if req.SessionKey != "" {
+		// A session identifier is only unique within a client. Bind pins to
+		// the presented client key so two tenants using the same session ID
+		// cannot change each other's preferred deployment. Never retain the
+		// credential itself in the router's session table.
+		req.SessionKey = keyDigest(extractClientKey(r)) + ":" + req.SessionKey
+	}
 	req.SelectionKey = r.Header.Get("x-request-id")
 	cache := make(map[string]router.ProviderLoad, 4)
 	req.LoadForProvider = func(id string) router.ProviderLoad {
@@ -418,11 +425,55 @@ func (s *Server) prepareRequirement(req router.Requirement, r *http.Request, bod
 	}
 	return req
 }
-func (s *Server) recordRouteSuccess(req router.Requirement, deploymentID, providerID string, latency time.Duration) {
-	s.hm.RecordSuccess(deploymentID, latency)
-	s.hm.RecordProviderSuccess(providerID)
-	s.hm.RecordScopeSuccess(deploymentID, req.Scopes())
-	s.rt.ObserveSession(req, deploymentID)
+
+// routeStillCurrent is called under runtimeMu.RLock. In-flight responses from
+// an old model/adapter must not restore ready health after hot reload has
+// invalidated that deployment ID for its replacement.
+func (s *Server) routeStillCurrent(d router.Deployment, a providers.Adapter) bool {
+	fresh, ok := s.rt.Deployment(d.ID)
+	if !ok || fresh.ProviderID != d.ProviderID || fresh.ProviderType != d.ProviderType ||
+		fresh.Model != d.Model || fresh.ContextWindow != d.ContextWindow || fresh.Capabilities != d.Capabilities {
+		return false
+	}
+	current, ok := s.reg.Get(d.ProviderID)
+	return ok && current == a
+}
+
+// observeCurrentRoute performs both the identity check and the observation
+// under the config lock, so reload cannot slip between them.
+func (s *Server) observeCurrentRoute(d router.Deployment, a providers.Adapter, apply func()) bool {
+	s.runtimeMu.RLock()
+	defer s.runtimeMu.RUnlock()
+	if !s.routeStillCurrent(d, a) {
+		return false
+	}
+	apply()
+	return true
+}
+
+func (s *Server) recordRouteSuccess(req router.Requirement, d router.Deployment, a providers.Adapter, latency time.Duration) {
+	s.observeCurrentRoute(d, a, func() {
+		s.hm.RecordSuccess(d.ID, latency)
+		s.hm.RecordProviderSuccess(d.ProviderID)
+		s.hm.RecordScopeSuccess(d.ID, req.Scopes())
+		s.rt.ObserveSession(req, d.ID)
+	})
+}
+
+func (s *Server) recordResponseFailure(cfg config.Config, d router.Deployment, a providers.Adapter, streaming bool, reason string, latency time.Duration, committed bool) {
+	s.observeCurrentRoute(d, a, func() {
+		if cfg.Routing.Strategy == "ready_mesh" && streaming {
+			s.hm.RecordScopeFailure(d.ID, []string{"streaming"}, reason)
+		} else if router.IsReadyStrategy(cfg.Routing.Strategy) {
+			s.hm.Quarantine(d.ID, reason, latency)
+			s.probe.Recover(d.ID)
+		} else {
+			s.hm.RecordFailure(d.ID, reason, latency)
+		}
+		if committed {
+			s.hm.RecordProviderFailure(d.ProviderID, d.ID, reason)
+		}
+	})
 }
 
 func (s *Server) recordProviderFailure(providerID, deploymentID, reason string, policy upstreamFailurePolicy) {

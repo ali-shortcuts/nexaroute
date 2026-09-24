@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ali-shortcuts/nexaroute/internal/compat"
 	"github.com/ali-shortcuts/nexaroute/internal/config"
 	"github.com/ali-shortcuts/nexaroute/internal/events"
 	"github.com/ali-shortcuts/nexaroute/internal/health"
@@ -700,4 +701,60 @@ func TestRecoveryParentCancellationDoesNotRecordSyntheticFailure(t *testing.T) {
 	if after.Status != before.Status || after.RecoveryFailures != before.RecoveryFailures {
 		t.Fatalf("shutdown cancellation mutated health: before=%+v after=%+v", before, after)
 	}
+}
+
+func TestCapabilitySuiteRunsDespiteStaticTextPriorOnlyOnce(t *testing.T) {
+	var calls atomic.Int32
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		var payload map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		if payload["stream"] == true {
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(w, "data: [DONE]\n\n")
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"role":"assistant","content":"OK"}}]}`)
+	}))
+	defer up.Close()
+	cfg := config.Default()
+	cfg.Probe.CapabilityProbes = true
+	cfg.Providers = []config.ProviderConfig{{ID: "p", Type: "openai_compatible", Dialect: "nvidia_nim",
+		BaseURL: up.URL, AuthMode: "none", Enabled: true,
+		Models: []config.ModelConfig{{ID: "m", Model: "m", Enabled: true, Weight: 1}}}}
+	cfg.ApplyDefaults()
+	hm := health.New(cfg.Routing.FailureThreshold, cfg.Cooldown())
+	reg, err := providers.NewRegistry(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt := router.New(cfg, hm)
+	e := New(cfg, reg, rt, hm, events.New(20))
+	store := compat.NewStore()
+	d := rt.All()[0]
+	seed := compat.SeedFromDialect(compat.DetectDialect("p", d.ProviderType, up.URL, "nvidia_nim"), compat.ModelCapabilities{})
+	store.Seed(d.ID, seed, compat.SourceStatic, "prior", "current-identity")
+	e.SetCapabilityStore(store)
+	if store.Get(d.ID).Capabilities.Text != compat.Supported {
+		t.Fatal("test requires a supported static Text prior")
+	}
+	e.maybeProbeCapabilities(context.Background(), d, mustAdapter(t, reg, "p"))
+	firstCalls := calls.Load()
+	if firstCalls < 2 || store.Get(d.ID).Evidence[compat.CapText].Source != compat.SourceProbe {
+		t.Fatalf("Level B never ran despite only static text prior: calls=%d evidence=%+v", firstCalls, store.Get(d.ID).Evidence)
+	}
+	e.maybeProbeCapabilities(context.Background(), d, mustAdapter(t, reg, "p"))
+	if calls.Load() != firstCalls {
+		t.Fatalf("Level B repeated despite probe evidence: calls=%d initial=%d", calls.Load(), firstCalls)
+	}
+}
+
+func mustAdapter(t *testing.T, reg *providers.Registry, id string) providers.Adapter {
+	t.Helper()
+	a, ok := reg.Get(id)
+	if !ok {
+		t.Fatalf("adapter %s missing", id)
+	}
+	return a
 }

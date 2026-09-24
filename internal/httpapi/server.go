@@ -183,6 +183,7 @@ func (s *Server) adminConfigSnapshot() config.AdminConfig {
 
 func cloneConfig(in config.Config) config.Config {
 	out := in
+	out.ClientAuth.Keys = append([]string(nil), in.ClientAuth.Keys...)
 	out.Providers = append([]config.ProviderConfig(nil), in.Providers...)
 	for i := range out.Providers {
 		if in.Providers[i].Headers != nil {
@@ -207,6 +208,7 @@ func cloneConfig(in config.Config) config.Config {
 
 func providerProbeIdentityEqual(a, b config.ProviderConfig) bool {
 	return a.Type == b.Type &&
+		a.Dialect == b.Dialect &&
 		a.BaseURL == b.BaseURL &&
 		a.APIKey == b.APIKey &&
 		a.APIKeyEnv == b.APIKeyEnv &&
@@ -217,9 +219,9 @@ func providerProbeIdentityEqual(a, b config.ProviderConfig) bool {
 		a.ProxyURL == b.ProxyURL &&
 		a.ChatPath == b.ChatPath &&
 		a.MessagesPath == b.MessagesPath &&
+		a.ResponsesPath == b.ResponsesPath &&
 		a.ModelsPath == b.ModelsPath &&
 		a.CountTokensPath == b.CountTokensPath &&
-		a.ResponsesPath == b.ResponsesPath &&
 		a.Enabled == b.Enabled
 }
 
@@ -272,7 +274,7 @@ func changedDeploymentIDs(oldCfg, newCfg config.Config) map[string]struct{} {
 				continue
 			}
 			om, existed := oldModels[nm.ID]
-			if providerChanged || !existed || !om.Enabled || om.Model != nm.Model || !reflect.DeepEqual(om.Capabilities, nm.Capabilities) {
+			if providerChanged || !existed || !om.Enabled || om.Model != nm.Model || om.ContextWindow != nm.ContextWindow || !reflect.DeepEqual(om.Capabilities, nm.Capabilities) {
 				changed[np.ID+"/"+nm.ID] = struct{}{}
 			}
 		}
@@ -332,73 +334,78 @@ func (s *Server) applyConfigLocked(cfg config.Config) error {
 
 	s.runtimeMu.Lock()
 	defer s.runtimeMu.Unlock()
-	s.reg.Replace(nextReg)
-	s.rt.Reload(cfg)
-	s.hm.ConfigureAdvanced(
-		cfg.Routing.FailureThreshold,
-		cfg.Cooldown(),
-		cfg.Routing.CapabilityFailureThreshold,
-		time.Duration(cfg.Routing.CapabilityCooldownSeconds)*time.Second,
-	)
-	s.hm.ConfigureProviderIncidents(
-		cfg.Routing.ProviderFailureThreshold,
-		cfg.ProviderFailureWindow(),
-		cfg.ProviderCooldown(),
-	)
+	s.probe.WithConfigSwap(func() {
+		s.reg.Replace(nextReg)
+		s.rt.Reload(cfg)
+		s.hm.ConfigureAdvanced(
+			cfg.Routing.FailureThreshold,
+			cfg.Cooldown(),
+			cfg.Routing.CapabilityFailureThreshold,
+			time.Duration(cfg.Routing.CapabilityCooldownSeconds)*time.Second,
+		)
+		s.hm.ConfigureProviderIncidents(
+			cfg.Routing.ProviderFailureThreshold,
+			cfg.ProviderFailureWindow(),
+			cfg.ProviderCooldown(),
+		)
 
-	valid := map[string]struct{}{}
-	for _, d := range s.rt.All() {
-		valid[d.ID] = struct{}{}
-	}
-	s.hm.Retain(valid)
-	validProviders := map[string]struct{}{}
-	for _, p := range cfg.Providers {
-		if p.Enabled {
-			validProviders[p.ID] = struct{}{}
+		valid := map[string]struct{}{}
+		for _, d := range s.rt.All() {
+			valid[d.ID] = struct{}{}
 		}
-	}
-	s.hm.RetainProviders(validProviders)
-	s.usage.Retain(valid)
-	// Cached responses must never outlive the topology that produced them:
-	// any config swap invalidates the exact-match cache wholesale.
-	s.respCache.Invalidate()
+		s.hm.Retain(valid)
+		validProviders := map[string]struct{}{}
+		for _, p := range cfg.Providers {
+			if p.Enabled {
+				validProviders[p.ID] = struct{}{}
+			}
+		}
+		s.hm.RetainProviders(validProviders)
+		s.usage.Retain(valid)
+		// A config swap also changes the cache's TTL/capacity. Reject in-flight
+		// old-generation stores so an old response cannot repopulate the table.
+		s.respCache.Reconfigure(cfg.CacheTTL(), cfg.Cache.MaxEntries, int64(cfg.Cache.MaxBodyBytes))
 
-	changedHealth := changedDeploymentIDs(oldCfg, cfg)
-	oldProvidersByID := make(map[string]config.ProviderConfig, len(oldCfg.Providers))
-	for _, p := range oldCfg.Providers {
-		oldProvidersByID[p.ID] = p
-	}
-	changedProviderHealth := map[string]struct{}{}
-	for _, p := range cfg.Providers {
-		if !p.Enabled {
-			continue
+		changedHealth := changedDeploymentIDs(oldCfg, cfg)
+		oldProvidersByID := make(map[string]config.ProviderConfig, len(oldCfg.Providers))
+		for _, p := range oldCfg.Providers {
+			oldProvidersByID[p.ID] = p
 		}
-		old, existed := oldProvidersByID[p.ID]
-		if !existed || !old.Enabled || !providerProbeIdentityEqual(old, p) {
-			changedProviderHealth[p.ID] = struct{}{}
+		changedProviderHealth := map[string]struct{}{}
+		for _, p := range cfg.Providers {
+			if !p.Enabled {
+				continue
+			}
+			old, existed := oldProvidersByID[p.ID]
+			if !existed || !old.Enabled || !providerProbeIdentityEqual(old, p) {
+				changedProviderHealth[p.ID] = struct{}{}
+			}
+			if _, rotated := rotatedCredentialProviders[p.ID]; rotated {
+				changedProviderHealth[p.ID] = struct{}{}
+			}
 		}
-		if _, rotated := rotatedCredentialProviders[p.ID]; rotated {
-			changedProviderHealth[p.ID] = struct{}{}
+		for _, d := range s.rt.All() {
+			if _, rotated := rotatedCredentialProviders[d.ProviderID]; rotated {
+				changedHealth[d.ID] = struct{}{}
+			}
 		}
-	}
-	for _, d := range s.rt.All() {
-		if _, rotated := rotatedCredentialProviders[d.ProviderID]; rotated {
-			changedHealth[d.ID] = struct{}{}
+		for id := range changedHealth {
+			s.hm.Invalidate(id)
+			// A changed operator capability, context window or upstream endpoint
+			// cannot inherit the previous deployment's learned compatibility facts.
+			s.capStore.Drop(id)
 		}
-	}
-	for id := range changedHealth {
-		s.hm.Invalidate(id)
-	}
-	for id := range changedProviderHealth {
-		s.hm.InvalidateProvider(id)
-	}
+		for id := range changedProviderHealth {
+			s.hm.InvalidateProvider(id)
+		}
 
-	s.cfg = cfg
-	s.probe.Reload(cfg)
-	s.syncCapabilityContracts(cfg)
-	for _, a := range staleAdapters {
-		providers.CloseIdleConnections(a)
-	}
+		s.cfg = cfg
+		s.probe.Reload(cfg)
+		s.syncCapabilityContracts(cfg)
+		for _, a := range staleAdapters {
+			providers.CloseIdleConnections(a)
+		}
+	})
 	return nil
 }
 
