@@ -494,6 +494,8 @@ func (s *Server) adminProviderTest(w http.ResponseWriter, r *http.Request) {
 					report = compat.RunCapabilitySuiteAnthropic(ctx, adapterTransport{a: a}, in.Provider.ID, model)
 				case "openai_responses":
 					report = compat.RunCapabilitySuiteResponses(ctx, adapterTransport{a: a}, in.Provider.ID, model)
+				case "gemini":
+					report = compat.RunCapabilitySuiteGemini(ctx, adapterTransport{a: a}, in.Provider.ID, model)
 				default:
 					report = compat.RunCapabilitySuite(ctx, adapterTransport{a: a}, in.Provider.ID, model, in.Provider.Dialect)
 				}
@@ -505,9 +507,12 @@ func (s *Server) adminProviderTest(w http.ResponseWriter, r *http.Request) {
 				defer cancel()
 				tr := testResult{Model: model}
 				var report compat.ProbeReport
-				if in.Provider.Type == "openai_responses" {
+				switch in.Provider.Type {
+				case "openai_responses":
 					report = compat.RunAgentLoopSimulationResponses(ctx, adapterTransport{a: a}, in.Provider.ID, model)
-				} else {
+				case "gemini":
+					report = compat.RunAgentLoopSimulationGemini(ctx, adapterTransport{a: a}, in.Provider.ID, model)
+				default:
 					report = compat.RunAgentLoopSimulation(ctx, adapterTransport{a: a}, in.Provider.ID, model)
 				}
 				tr.AgentReport = &report
