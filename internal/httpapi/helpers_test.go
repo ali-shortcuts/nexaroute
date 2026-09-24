@@ -1121,6 +1121,20 @@ func TestProviderEditorSerializesModelContextAndPricing(t *testing.T) {
 	}
 }
 
+func TestCompatibilitySuiteUsesUpstreamModelName(t *testing.T) {
+	app, err := webFS.ReadFile("web/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	js := string(app)
+	if strings.Contains(js, ".filter(m => m.enabled).map(m => m.id)") {
+		t.Fatal("compatibility suite sends internal model IDs to the upstream provider")
+	}
+	if !strings.Contains(js, ".filter(m => m.enabled).map(m => m.model)") {
+		t.Fatal("compatibility suite is not wired to upstream model names")
+	}
+}
+
 func TestHealthDonutUsesDistinctHalfOpenSegment(t *testing.T) {
 	index, err := webFS.ReadFile("web/index.html")
 	if err != nil {
