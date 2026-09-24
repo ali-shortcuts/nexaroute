@@ -364,18 +364,29 @@ func (s *Server) prepareRequirement(req router.Requirement, r *http.Request, bod
 		nowUnix := time.Now().Unix()
 		requestResetPending := st.RequestResetUnix > nowUnix
 		tokenResetPending := st.TokenResetUnix > nowUnix
+		// Effective remaining quota subtracts data-plane requests/tokens that
+		// are already in flight but may not yet be reflected in a provider's
+		// latest remaining-* response headers.
+		remainingRequests := st.EffectiveRemainingRequests
+		if remainingRequests < 0 {
+			remainingRequests = st.RemainingRequests
+		}
+		remainingTokens := st.EffectiveRemainingTokens
+		if remainingTokens < 0 {
+			remainingTokens = st.RemainingTokens
+		}
 		// Backward compatibility for adapters/providers exposing only a shared
 		// reset deadline: use it for a zero-remaining hard signal, but never for
 		// ratio-based predictive pressure without a resource-specific deadline.
 		sharedResetPending := st.RateLimitResetUnix > nowUnix
-		quotaExhausted := (st.RemainingRequests == 0 && (requestResetPending || sharedResetPending)) ||
-			(st.RemainingTokens == 0 && (tokenResetPending || sharedResetPending))
+		quotaExhausted := (remainingRequests == 0 && (requestResetPending || sharedResetPending)) ||
+			(remainingTokens == 0 && (tokenResetPending || sharedResetPending))
 		quotaPressure := 0.0
 		if requestResetPending {
-			quotaPressure = quotaRemainingPressure(st.RemainingRequests, st.RequestLimit)
+			quotaPressure = quotaRemainingPressure(remainingRequests, st.RequestLimit)
 		}
 		if tokenResetPending {
-			if p := quotaRemainingPressure(st.RemainingTokens, st.TokenLimit); p > quotaPressure {
+			if p := quotaRemainingPressure(remainingTokens, st.TokenLimit); p > quotaPressure {
 				quotaPressure = p
 			}
 		}
