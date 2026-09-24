@@ -324,3 +324,23 @@ continues to apply pressure while it occupies uncertain quota.
 This layer is advisory rather than authoritative throttling. It intentionally
 does not persist rolling-window debt after a completed response that supplied no
 fresh quota evidence, and it is process-local rather than distributed state.
+
+
+### Concurrent quota observation ordering
+
+Upstream responses are concurrent and may complete out of order. A response
+created earlier can therefore arrive after a newer response and carry a larger
+`remaining-requests` or `remaining-tokens` value from the same active reset
+window.
+
+v0.5.3 serializes quota observations per provider and applies a conservative
+merge rule while a resource-specific reset deadline is still in the future:
+
+- remaining quota may decrease, but a later-arriving larger value cannot raise it;
+- a stale response cannot extend the active reset deadline;
+- a provider may shorten/correct the reset deadline;
+- once the current reset expires, the next observation may establish a new
+  window with a higher remaining value.
+
+Request and token windows are merged independently. This rule affects routing
+evidence only; it does not turn quota hints into a hard local throttle.
