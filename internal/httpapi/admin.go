@@ -19,6 +19,7 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/config"
 	"github.com/ali-shortcuts/nexaroute/internal/health"
 	"github.com/ali-shortcuts/nexaroute/internal/providers"
+	usageacct "github.com/ali-shortcuts/nexaroute/internal/usage"
 )
 
 var (
@@ -123,8 +124,9 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 		healthCounts[st.Status]++
 	}
 	truncated := limit > 0 && totalDeployments > len(deployments)
+	var keep map[string]struct{}
 	if truncated {
-		keep := make(map[string]struct{}, len(deployments))
+		keep = make(map[string]struct{}, len(deployments))
 		for _, d := range deployments {
 			keep[d.ID] = struct{}{}
 		}
@@ -135,6 +137,16 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		healthAll = filtered
+	}
+	usageRows := s.usage.Snapshot()
+	if truncated {
+		filtered := make([]usageacct.Stats, 0, len(deployments))
+		for _, st := range usageRows {
+			if _, ok := keep[st.Deployment]; ok {
+				filtered = append(filtered, st)
+			}
+		}
+		usageRows = filtered
 	}
 	eventLimit := parseLimit("events", 500)
 	writeJSON(w, 200, map[string]any{
@@ -147,6 +159,9 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 		"events":             s.bus.SnapshotLimit(eventLimit),
 		"provider_stats":     s.reg.Stats(),
 		"provider_pressure":  providerPressure(s.reg.Stats()),
+		"usage_total":        s.usage.Total(),
+		"deployment_usage":   usageRows,
+		"provider_usage":     s.usage.ProviderSnapshot(),
 		"scope_health":       scopeHealthRows(healthAll),
 		"session_count":      s.rt.SessionCount(),
 		"probe_stats":        s.probe.Stats(),
