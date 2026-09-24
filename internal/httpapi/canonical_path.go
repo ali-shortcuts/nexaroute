@@ -74,6 +74,7 @@ func (s *Server) canonicalStreamPump(
 	var streamErr error
 	inputTokens, outputTokens := 0, 0
 	usageSeen := false
+	anthropicToolBlocks := map[int]bool{}
 	for {
 		name, data, done, err := reader.Next()
 		if err != nil {
@@ -103,6 +104,20 @@ func (s *Server) canonicalStreamPump(
 			break
 		}
 		for _, ev := range evs {
+			if kind == "anthropic" {
+				switch ev.Type {
+				case canonical.StreamToolStart:
+					anthropicToolBlocks[ev.ToolIndex] = true
+				case canonical.StreamToolEnd:
+					if !anthropicToolBlocks[ev.ToolIndex] {
+						// Anthropic emits content_block_stop for text, thinking
+						// and tool blocks alike. Only a block that previously
+						// emitted ToolStart may become a canonical ToolEnd.
+						continue
+					}
+					delete(anthropicToolBlocks, ev.ToolIndex)
+				}
+			}
 			if ev.Usage != nil {
 				if ev.Usage.InputTokens > inputTokens {
 					inputTokens = ev.Usage.InputTokens
