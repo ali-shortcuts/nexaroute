@@ -76,7 +76,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 	}
 	// Exact-match response cache (opt-in). Only complete, non-streaming,
 	// deterministic requests are ever considered; anything else bypasses.
-	cacheKey, cacheable := s.cacheLookupFor(r.URL.Path, raw, in.Stream, in.Temperature, in.TopP)
+	cacheKey, cacheable := s.cacheLookupFor(r, raw, in.Stream, in.Temperature, in.TopP)
 	if s.cacheServe(w, r, cacheKey, cacheable) {
 		return
 	}
@@ -136,6 +136,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 			attemptIndex = attempts - 1
 		}
 		if out.secondaryWon {
+			primary = winner
 			c, a, nm = winner.c, winner.a, winner.nm
 			kind = winner.canonicalKind
 			payload = winner.payload
@@ -147,7 +148,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 			// Bounded deterministic repair on classified capability
 			// rejections; never marks the deployment unhealthy.
 			resp, payload, _ = s.maybeRepairUpstream(routeCtx, r.Header.Get("x-request-id"),
-				hedgeAttemptBundle{c: c, a: a}, payload, resp, in.Stream, forward, cfg.Routing.MaxRepairAttempts, profile)
+				primary, payload, resp, in.Stream, forward, cfg.Routing.MaxRepairAttempts, profile)
 			if resp == nil {
 				e = fmt.Errorf("repair retry transport failure")
 			}
@@ -315,8 +316,8 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "stream_fail", Deployment: c.Deployment.ID, Message: lastErr, ErrorType: "provider_stream_error", LatencyMS: total.Milliseconds(), StatusCode: resp.StatusCode})
 			return
 		}
-		s.recordRouteSuccess(req, c.Deployment.ID, c.Deployment.ProviderID, headerLatency)
-		s.learnFromSuccess(c.Deployment.ID, c.Deployment.ProviderID, c.Deployment, payload, nil)
+		s.recordRouteSuccess(req, c.Deployment, a, headerLatency)
+		s.learnFromSuccess(c.Deployment.ID, c.Deployment.ProviderID, c.Deployment, a, payload, nil)
 		s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_ok", Deployment: c.Deployment.ID, Message: "request completed", LatencyMS: total.Milliseconds(), StatusCode: resp.StatusCode})
 		return
 	}

@@ -244,10 +244,14 @@ func endpoint(base, suffix string) string {
 }
 
 func (a *httpAdapter) defaultPath() string {
-	if a.p.Type == "anthropic_compatible" {
+	switch a.p.Type {
+	case "anthropic_compatible":
 		return a.p.MessagesPath
+	case "openai_responses":
+		return a.p.ResponsesPath
+	default:
+		return a.p.ChatPath
 	}
-	return a.p.ChatPath
 }
 
 type quotaReservation struct {
@@ -799,6 +803,8 @@ func (a *httpAdapter) Probe(ctx context.Context, model string, maxTokens int) (t
 			"contents":         []map[string]any{{"role": "user", "parts": []map[string]any{{"text": "OK"}}}},
 			"generationConfig": map[string]any{"maxOutputTokens": maxTokens},
 		}
+	case "openai_responses":
+		body = map[string]any{"model": model, "input": "Reply OK", "max_output_tokens": maxTokens, "stream": false}
 	default:
 		body = map[string]any{"model": model, "max_tokens": maxTokens, "messages": []map[string]any{{"role": "user", "content": "OK"}}, "stream": false}
 	}
@@ -872,6 +878,18 @@ func (a *httpAdapter) validateProbeResponse(data []byte) error {
 		}
 		if err := json.Unmarshal(raw, &candidates); err != nil || len(candidates) == 0 {
 			return fmt.Errorf("probe returned invalid Gemini candidates: %w", err)
+		}
+	case "openai_responses":
+		var object, status string
+		if err := json.Unmarshal(root["object"], &object); err != nil || object != "response" {
+			return errors.New("probe returned an invalid Responses envelope: object must be response")
+		}
+		if err := json.Unmarshal(root["status"], &status); err != nil || (status != "completed" && status != "incomplete") {
+			return errors.New("probe returned an invalid Responses envelope: response did not finish")
+		}
+		var output []map[string]json.RawMessage
+		if err := json.Unmarshal(root["output"], &output); err != nil || len(output) == 0 {
+			return errors.New("probe returned an invalid Responses envelope: output missing")
 		}
 	default:
 		var choices []map[string]json.RawMessage

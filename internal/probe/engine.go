@@ -554,12 +554,16 @@ func (e *Engine) maybeProbeCapabilities(ctx context.Context, d router.Deployment
 		return
 	}
 	cfg := e.current()
-	if !cfg.Probe.CapabilityProbes {
+	if !cfg.Probe.CapabilityProbes || d.ProviderType == "gemini" || d.ProviderType == "openai_responses" {
+		// The Level B suites speak Chat Completions or Anthropic Messages;
+		// neither payload is valid for Gemini or Responses-native upstreams.
 		return
 	}
-	if contract := e.capStore.Get(d.ID); contract.Capabilities.Text == compat.Supported {
-		return // already verified
+	contract := e.capStore.Get(d.ID)
+	if evidence, ok := contract.Evidence[compat.CapText]; ok && evidence.Source == compat.SourceProbe {
+		return // Level B already verified for this deployment identity
 	}
+	key := contract.InvalidationKey
 	cctx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
 	t := adapterTransport{a: a}
@@ -572,9 +576,9 @@ func (e *Engine) maybeProbeCapabilities(ctx context.Context, d router.Deployment
 	for _, o := range report.Outcomes {
 		switch o.Verdict {
 		case compat.Supported:
-			e.capStore.LearnSuccess(d.ID, o.Capability, compat.SourceProbe, o.Detail, "")
+			e.capStore.LearnSuccess(d.ID, o.Capability, compat.SourceProbe, o.Detail, key)
 		case compat.Unsupported:
-			e.capStore.LearnUnsupported(d.ID, o.Capability, compat.SourceProbe, o.Detail, "")
+			e.capStore.LearnUnsupported(d.ID, o.Capability, compat.SourceProbe, o.Detail, key)
 		}
 	}
 	e.bus.Add(events.Event{

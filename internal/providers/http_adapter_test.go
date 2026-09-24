@@ -2,6 +2,7 @@ package providers
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -491,5 +492,52 @@ func TestOutOfOrderQuotaResponsesDoNotRestoreStaleHeadroom(t *testing.T) {
 	}
 	if st.RateLimitResetUnix != newTokenReset.Unix() {
 		t.Fatalf("summary reset did not preserve latest accepted resource deadline: %+v", st)
+	}
+}
+
+func TestResponsesNativeProbeUsesResponsesPathAndEnvelope(t *testing.T) {
+	cases := []struct {
+		name   string
+		body   string
+		wantOK bool
+	}{
+		{"complete", `{"object":"response","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"OK"}]}]}`, true},
+		{"token limit", `{"object":"response","status":"incomplete","output":[{"type":"message","content":[{"type":"output_text","text":"O"}]}]}`, true},
+		{"error envelope", `{"error":{"message":"bad key"},"object":"response","status":"completed","output":[{}]}`, false},
+		{"chat envelope", `{"choices":[{"message":{"content":"OK"}}]}`, false},
+		{"null output", `{"object":"response","status":"completed","output":null}`, false},
+		{"unfinished", `{"object":"response","status":"in_progress","output":[{}]}`, false},
+		{"malformed", `{"object":"response","status":"completed","output":[`, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/custom/responses" {
+					t.Errorf("probe sent to %q instead of Responses path", r.URL.Path)
+					w.WriteHeader(http.StatusNotFound)
+					return
+				}
+				var payload map[string]any
+				if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+					t.Errorf("invalid probe payload: %v", err)
+				}
+				if payload["model"] != "up-model" || payload["input"] == nil || payload["max_output_tokens"] != float64(1) || payload["messages"] != nil {
+					t.Errorf("probe used wrong protocol: %v", payload)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, tc.body)
+			}))
+			defer up.Close()
+			p := config.ProviderConfig{ID: "p", Type: "openai_responses", BaseURL: up.URL,
+				ChatPath: "/wrong/chat", ResponsesPath: "/custom/responses", AuthMode: "none", Enabled: true}
+			a, err := NewAdapter(p, time.Second)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, status, err := a.Probe(context.Background(), "up-model", 1)
+			if status != http.StatusOK || (err == nil) != tc.wantOK {
+				t.Fatalf("probe status=%d error=%v wantOK=%v", status, err, tc.wantOK)
+			}
+		})
 	}
 }

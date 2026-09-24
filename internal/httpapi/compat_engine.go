@@ -111,8 +111,12 @@ func staticCapsFromConfig(m config.ModelConfig) compat.ModelCapabilities {
 // runs while the runtime write lock is held.
 func (s *Server) syncCapabilityContracts(cfg config.Config) {
 	byProvider := map[string]config.ProviderConfig{}
+	byDeployment := map[string]config.ModelConfig{}
 	for _, p := range cfg.Providers {
 		byProvider[p.ID] = p
+		for _, m := range p.Models {
+			byDeployment[p.ID+"/"+m.ID] = m
+		}
 	}
 	valid := map[string]struct{}{}
 	for _, d := range s.rt.All() {
@@ -121,14 +125,14 @@ func (s *Server) syncCapabilityContracts(cfg config.Config) {
 		if !ok {
 			continue
 		}
-		dialect := compat.DetectDialect(p.ID, p.Type, p.BaseURL, p.Dialect)
-		var modelCfg config.ModelConfig
-		for _, m := range p.Models {
-			if m.ID == d.ID || m.Model == d.Model {
-				modelCfg = m
-				break
-			}
+		// Deployment identity, not upstream model name, selects static caps:
+		// multiple aliases may intentionally point to the same model with
+		// different operator-declared capabilities/context windows.
+		modelCfg, ok := byDeployment[d.ID]
+		if !ok {
+			continue
 		}
+		dialect := compat.DetectDialect(p.ID, p.Type, p.BaseURL, p.Dialect)
 		key := compat.InvalidationKey(p.BaseURL, dialect.Name, d.Model, credentialScope(p))
 		if !s.capStore.InvalidateIf(d.ID, key) {
 			seed := compat.SeedFromDialect(dialect, staticCapsFromConfig(modelCfg))
@@ -185,9 +189,20 @@ func (s *Server) capabilityIneligible(requestID, deploymentID string, profile co
 // learnFromSuccess records capability evidence from real successful traffic.
 // Learning is conservative: only parameters that were actually present in
 // the successful payload are marked SUPPORTED.
-func (s *Server) learnFromSuccess(deploymentID, providerID string, d router.Deployment, payload []byte, canReq *canonical.Request) {
-	p, ok := s.providerConfigFor(providerID)
-	if !ok {
+func (s *Server) learnFromSuccess(deploymentID, providerID string, d router.Deployment, a providers.Adapter, payload []byte, canReq *canonical.Request) {
+	s.runtimeMu.RLock()
+	defer s.runtimeMu.RUnlock()
+	if !s.routeStillCurrent(d, a) {
+		return
+	}
+	var p config.ProviderConfig
+	for _, configured := range s.cfg.Providers {
+		if configured.ID == providerID {
+			p = configured
+			break
+		}
+	}
+	if p.ID == "" {
 		return
 	}
 	dialect := compat.DetectDialect(p.ID, p.Type, p.BaseURL, p.Dialect)
@@ -277,9 +292,7 @@ type repairOutcome struct {
 func (s *Server) doUpstreamWithRepair(
 	ctx context.Context,
 	requestID string,
-	a providers.Adapter,
-	deployment router.Deployment,
-	payload []byte,
+	bundle hedgeAttemptBundle,
 	stream bool,
 	forward http.Header,
 	dialect compat.DialectProfile,
@@ -287,6 +300,9 @@ func (s *Server) doUpstreamWithRepair(
 	maxRepairs int,
 	canReq *canonical.Request,
 ) (*http.Response, []byte, repairOutcome, error) {
+	a := bundle.a
+	deployment := bundle.c.Deployment
+	payload := bundle.payload
 	out := repairOutcome{}
 	attempts := maxRepairs
 	if attempts < 0 {
@@ -312,7 +328,13 @@ func (s *Server) doUpstreamWithRepair(
 		}
 	}
 	for {
-		resp, err := a.Do(ctx, payload, stream, forward)
+		var resp *http.Response
+		var err error
+		if bundle.path != "" {
+			resp, err = a.DoPath(ctx, http.MethodPost, bundle.path, payload, stream, forward)
+		} else {
+			resp, err = a.Do(ctx, payload, stream, forward)
+		}
 		if err != nil {
 			return nil, payload, out, err
 		}

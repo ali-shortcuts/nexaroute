@@ -3,6 +3,8 @@ package httpapi
 import (
 	"encoding/json"
 	"net/http"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/ali-shortcuts/nexaroute/internal/cache"
@@ -25,25 +27,76 @@ import (
 // can force a fresh evaluation per request with the x-nexaroute-no-cache
 // header.
 
-func (s *Server) cacheLookupFor(path string, body []byte, stream bool, temperature, topP *float64) (string, bool) {
+type responseCacheKey struct {
+	value      string
+	generation uint64
+}
+
+type scopedHeader struct {
+	Name   string   `json:"name"`
+	Values []string `json:"values"`
+}
+
+// cacheRequestScope includes every request input that can affect the upstream
+// reply or route. Only a SHA-256 digest of this scope is kept in the cache;
+// client credentials and forwarded header values are never stored in clear.
+func cacheRequestScope(r *http.Request, cfg config.Config) []byte {
+	names := map[string]struct{}{}
+	for _, p := range cfg.Providers {
+		if !p.Enabled {
+			continue
+		}
+		for _, h := range p.ForwardHeaders {
+			if !blockedClientForwardHeader(h) {
+				names[http.CanonicalHeaderKey(strings.TrimSpace(h))] = struct{}{}
+			}
+		}
+	}
+	// Session affinity affects deployment choice even if the provider does
+	// not forward any of these headers.
+	for _, h := range []string{"x-claude-code-session-id", "x-litellm-session-id", "x-litellm-trace-id", "x-session-id"} {
+		names[http.CanonicalHeaderKey(h)] = struct{}{}
+	}
+	keys := make([]string, 0, len(names))
+	for h := range names {
+		keys = append(keys, h)
+	}
+	sort.Strings(keys)
+	headers := make([]scopedHeader, 0, len(keys))
+	for _, h := range keys {
+		if values := r.Header.Values(h); len(values) > 0 {
+			headers = append(headers, scopedHeader{Name: h, Values: values})
+		}
+	}
+	scope, _ := json.Marshal(struct {
+		ClientKey string         `json:"client_key"`
+		Headers   []scopedHeader `json:"headers"`
+	}{ClientKey: extractClientKey(r), Headers: headers})
+	return scope
+}
+
+func (s *Server) cacheLookupFor(r *http.Request, body []byte, stream bool, temperature, topP *float64) (responseCacheKey, bool) {
 	cfg := s.currentConfig()
 	if !cfg.Cache.Enabled || stream {
-		return "", false
+		return responseCacheKey{}, false
 	}
 	if temperature != nil && *temperature != 0 {
-		return "", false
+		return responseCacheKey{}, false
 	}
 	if topP != nil && *topP != 1 {
-		return "", false
+		return responseCacheKey{}, false
 	}
 	if len(body) > cfg.Cache.MaxBodyBytes {
-		return "", false
+		return responseCacheKey{}, false
 	}
-	return cache.Key(path, body), true
+	return responseCacheKey{
+		value:      cache.KeyScoped(r.URL.Path, body, cacheRequestScope(r, cfg)),
+		generation: s.respCache.Generation(),
+	}, true
 }
 
 // cacheServe writes a cache hit and returns true when the request is complete.
-func (s *Server) cacheServe(w http.ResponseWriter, r *http.Request, key string, cacheable bool) bool {
+func (s *Server) cacheServe(w http.ResponseWriter, r *http.Request, key responseCacheKey, cacheable bool) bool {
 	if !cacheable {
 		return false
 	}
@@ -51,7 +104,7 @@ func (s *Server) cacheServe(w http.ResponseWriter, r *http.Request, key string, 
 		s.respCache.Bypass()
 		return false
 	}
-	entry, ok := s.respCache.Lookup(key)
+	entry, ok := s.respCache.LookupForGeneration(key.value, key.generation)
 	if !ok {
 		return false
 	}
@@ -65,7 +118,7 @@ func (s *Server) cacheServe(w http.ResponseWriter, r *http.Request, key string, 
 }
 
 // cacheStoreResponse stores a complete client-facing response body.
-func (s *Server) cacheStoreResponse(key string, cacheable bool, deploymentID string, status int, contentType string, body []byte) {
+func (s *Server) cacheStoreResponse(key responseCacheKey, cacheable bool, deploymentID string, status int, contentType string, body []byte) {
 	if !cacheable || status != http.StatusOK || len(body) == 0 {
 		return
 	}
@@ -73,7 +126,7 @@ func (s *Server) cacheStoreResponse(key string, cacheable bool, deploymentID str
 	if !cfg.Cache.Enabled {
 		return
 	}
-	s.respCache.Store(key, cache.Entry{
+	s.respCache.StoreForGeneration(key.value, key.generation, cache.Entry{
 		Body:        body,
 		ContentType: contentType,
 		Status:      status,
@@ -84,7 +137,7 @@ func (s *Server) cacheStoreResponse(key string, cacheable bool, deploymentID str
 
 // proxyOpenAINativeJSON performs the validated non-stream passthrough while
 // observing real usage and feeding the response cache.
-func (s *Server) proxyOpenAINativeJSON(w http.ResponseWriter, resp *http.Response, deploymentID, cacheKey string, cacheable bool) error {
+func (s *Server) proxyOpenAINativeJSON(w http.ResponseWriter, resp *http.Response, deploymentID string, cacheKey responseCacheKey, cacheable bool) error {
 	defer resp.Body.Close()
 	b, err := readJSONLimited(resp.Body)
 	if err != nil {

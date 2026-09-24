@@ -183,6 +183,7 @@ func (s *Server) adminConfigSnapshot() config.AdminConfig {
 
 func cloneConfig(in config.Config) config.Config {
 	out := in
+	out.ClientAuth.Keys = append([]string(nil), in.ClientAuth.Keys...)
 	out.Providers = append([]config.ProviderConfig(nil), in.Providers...)
 	for i := range out.Providers {
 		if in.Providers[i].Headers != nil {
@@ -207,6 +208,7 @@ func cloneConfig(in config.Config) config.Config {
 
 func providerProbeIdentityEqual(a, b config.ProviderConfig) bool {
 	return a.Type == b.Type &&
+		a.Dialect == b.Dialect &&
 		a.BaseURL == b.BaseURL &&
 		a.APIKey == b.APIKey &&
 		a.APIKeyEnv == b.APIKeyEnv &&
@@ -217,6 +219,7 @@ func providerProbeIdentityEqual(a, b config.ProviderConfig) bool {
 		a.ProxyURL == b.ProxyURL &&
 		a.ChatPath == b.ChatPath &&
 		a.MessagesPath == b.MessagesPath &&
+		a.ResponsesPath == b.ResponsesPath &&
 		a.ModelsPath == b.ModelsPath &&
 		a.CountTokensPath == b.CountTokensPath &&
 		a.Enabled == b.Enabled
@@ -271,7 +274,7 @@ func changedDeploymentIDs(oldCfg, newCfg config.Config) map[string]struct{} {
 				continue
 			}
 			om, existed := oldModels[nm.ID]
-			if providerChanged || !existed || !om.Enabled || om.Model != nm.Model || !reflect.DeepEqual(om.Capabilities, nm.Capabilities) {
+			if providerChanged || !existed || !om.Enabled || om.Model != nm.Model || om.ContextWindow != nm.ContextWindow || !reflect.DeepEqual(om.Capabilities, nm.Capabilities) {
 				changed[np.ID+"/"+nm.ID] = struct{}{}
 			}
 		}
@@ -358,9 +361,9 @@ func (s *Server) applyConfigLocked(cfg config.Config) error {
 	}
 	s.hm.RetainProviders(validProviders)
 	s.usage.Retain(valid)
-	// Cached responses must never outlive the topology that produced them:
-	// any config swap invalidates the exact-match cache wholesale.
-	s.respCache.Invalidate()
+	// A config swap also changes the cache's TTL/capacity. Reject in-flight
+	// old-generation stores so an old response cannot repopulate the table.
+	s.respCache.Reconfigure(cfg.CacheTTL(), cfg.Cache.MaxEntries, int64(cfg.Cache.MaxBodyBytes))
 
 	changedHealth := changedDeploymentIDs(oldCfg, cfg)
 	oldProvidersByID := make(map[string]config.ProviderConfig, len(oldCfg.Providers))
@@ -387,6 +390,9 @@ func (s *Server) applyConfigLocked(cfg config.Config) error {
 	}
 	for id := range changedHealth {
 		s.hm.Invalidate(id)
+		// A changed operator capability, context window or upstream endpoint
+		// cannot inherit the previous deployment's learned compatibility facts.
+		s.capStore.Drop(id)
 	}
 	for id := range changedProviderHealth {
 		s.hm.InvalidateProvider(id)

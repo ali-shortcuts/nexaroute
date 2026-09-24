@@ -74,7 +74,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Exact-match response cache (opt-in; see cache_wiring.go).
-	cacheKey, cacheable := s.cacheLookupFor(r.URL.Path, raw, in.Stream, in.Temperature, in.TopP)
+	cacheKey, cacheable := s.cacheLookupFor(r, raw, in.Stream, in.Temperature, in.TopP)
 	if s.cacheServe(w, r, cacheKey, cacheable) {
 		return
 	}
@@ -138,6 +138,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 			attemptIndex = attempts - 1
 		}
 		if out.secondaryWon {
+			primary = winner
 			kind = winner.canonicalKind
 			c, a, nm, streamOptionsInjected, payload = winner.c, winner.a, winner.nm, winner.injected, winner.payload
 			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_attempt", Deployment: c.Deployment.ID, Message: fmt.Sprintf("attempt=%d score=%.2f health=%s pressure=%.3f (hedged winner)", attempts, c.Score, c.Health.Status, c.CapacityPressure)})
@@ -149,7 +150,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 			// (e.g. "temperature is not supported") retries once with an
 			// adapted payload instead of killing a healthy deployment.
 			resp, payload, _ = s.maybeRepairUpstream(routeCtx, r.Header.Get("x-request-id"),
-				hedgeAttemptBundle{c: c, a: a}, payload, resp, in.Stream, forward, cfg.Routing.MaxRepairAttempts, profile)
+				primary, payload, resp, in.Stream, forward, cfg.Routing.MaxRepairAttempts, profile)
 			if resp == nil {
 				e = fmt.Errorf("repair retry transport failure")
 			}
@@ -351,8 +352,8 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 			// Once a successful upstream response has begun, do not attempt fake mid-stream failover.
 			return
 		}
-		s.recordRouteSuccess(req, c.Deployment.ID, c.Deployment.ProviderID, headerLatency)
-		s.learnFromSuccess(c.Deployment.ID, c.Deployment.ProviderID, c.Deployment, payload, nil)
+		s.recordRouteSuccess(req, c.Deployment, a, headerLatency)
+		s.learnFromSuccess(c.Deployment.ID, c.Deployment.ProviderID, c.Deployment, a, payload, nil)
 		s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_ok", Deployment: c.Deployment.ID, Message: "request completed", LatencyMS: totalLatency.Milliseconds(), StatusCode: resp.StatusCode})
 		return
 	}

@@ -418,11 +418,30 @@ func (s *Server) prepareRequirement(req router.Requirement, r *http.Request, bod
 	}
 	return req
 }
-func (s *Server) recordRouteSuccess(req router.Requirement, deploymentID, providerID string, latency time.Duration) {
-	s.hm.RecordSuccess(deploymentID, latency)
-	s.hm.RecordProviderSuccess(providerID)
-	s.hm.RecordScopeSuccess(deploymentID, req.Scopes())
-	s.rt.ObserveSession(req, deploymentID)
+
+// routeStillCurrent is called under runtimeMu.RLock. In-flight responses from
+// an old model/adapter must not restore ready health after hot reload has
+// invalidated that deployment ID for its replacement.
+func (s *Server) routeStillCurrent(d router.Deployment, a providers.Adapter) bool {
+	fresh, ok := s.rt.Deployment(d.ID)
+	if !ok || fresh.ProviderID != d.ProviderID || fresh.ProviderType != d.ProviderType ||
+		fresh.Model != d.Model || fresh.ContextWindow != d.ContextWindow || fresh.Capabilities != d.Capabilities {
+		return false
+	}
+	current, ok := s.reg.Get(d.ProviderID)
+	return ok && current == a
+}
+
+func (s *Server) recordRouteSuccess(req router.Requirement, d router.Deployment, a providers.Adapter, latency time.Duration) {
+	s.runtimeMu.RLock()
+	defer s.runtimeMu.RUnlock()
+	if !s.routeStillCurrent(d, a) {
+		return
+	}
+	s.hm.RecordSuccess(d.ID, latency)
+	s.hm.RecordProviderSuccess(d.ProviderID)
+	s.hm.RecordScopeSuccess(d.ID, req.Scopes())
+	s.rt.ObserveSession(req, d.ID)
 }
 
 func (s *Server) recordProviderFailure(providerID, deploymentID, reason string, policy upstreamFailurePolicy) {

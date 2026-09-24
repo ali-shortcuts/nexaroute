@@ -44,6 +44,7 @@ type Cache struct {
 	maxEntries int
 	maxBytes   int64
 	bytes      int64
+	generation uint64
 	stats      Stats
 }
 
@@ -51,6 +52,17 @@ type Cache struct {
 // Bounds are clamped to safe minima so a misconfigured cache can never grow
 // without limit.
 func New(ttl time.Duration, maxEntries int, maxTotalBytes int64) *Cache {
+	ttl, maxEntries, maxTotalBytes = normalizeBounds(ttl, maxEntries, maxTotalBytes)
+	return &Cache{
+		ttl:        ttl,
+		entries:    make(map[string]*lruNode, 16),
+		order:      &lruList{},
+		maxEntries: maxEntries,
+		maxBytes:   maxTotalBytes,
+	}
+}
+
+func normalizeBounds(ttl time.Duration, maxEntries int, maxTotalBytes int64) (time.Duration, int, int64) {
 	if ttl <= 0 {
 		ttl = 5 * time.Minute
 	}
@@ -66,28 +78,52 @@ func New(ttl time.Duration, maxEntries int, maxTotalBytes int64) *Cache {
 	if maxTotalBytes > 1<<30 {
 		maxTotalBytes = 1 << 30
 	}
-	return &Cache{
-		ttl:        ttl,
-		entries:    make(map[string]*lruNode, 16),
-		order:      &lruList{},
-		maxEntries: maxEntries,
-		maxBytes:   maxTotalBytes,
-	}
+	return ttl, maxEntries, maxTotalBytes
 }
 
 // Key derives the cache key for an ingress path and request body.
-func Key(path string, body []byte) string {
+func Key(path string, body []byte) string { return KeyScoped(path, body, nil) }
+
+// KeyScoped includes request inputs outside the JSON body (the authenticated
+// client, session headers and headers allowed to reach upstream providers).
+// The scope is only ever stored as part of this digest, never in plaintext.
+func KeyScoped(path string, body, scope []byte) string {
 	h := sha256.New()
 	h.Write([]byte(path))
 	h.Write([]byte{0})
 	h.Write(body)
+	h.Write([]byte{0})
+	h.Write(scope)
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+// Generation identifies the current config's cache entries. In-flight old
+// responses must not repopulate the cache after a config swap.
+func (c *Cache) Generation() uint64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.generation
 }
 
 // Lookup returns a live entry for the key and marks it recently used.
 func (c *Cache) Lookup(key string) (Entry, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	return c.lookupLocked(key)
+}
+
+// LookupForGeneration never serves an old-config request from a newer cache.
+func (c *Cache) LookupForGeneration(key string, generation uint64) (Entry, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.generation != generation {
+		c.stats.Misses++
+		return Entry{}, false
+	}
+	return c.lookupLocked(key)
+}
+
+func (c *Cache) lookupLocked(key string) (Entry, bool) {
 	node, ok := c.entries[key]
 	if !ok {
 		c.stats.Misses++
@@ -108,12 +144,23 @@ func (c *Cache) Lookup(key string) (Entry, bool) {
 // Entries larger than the total byte budget are rejected outright: they could
 // never coexist with anything else and would silently break the bound.
 func (c *Cache) Store(key string, e Entry) {
-	if len(e.Body) == 0 {
-		return
-	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if int64(len(e.Body)) > c.maxBytes {
+	c.storeLocked(key, e)
+}
+
+// StoreForGeneration rejects a response that started before the last config
+// swap, even if it finished after Invalidate/Reconfigure acquired the lock.
+func (c *Cache) StoreForGeneration(key string, generation uint64, e Entry) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.generation == generation {
+		c.storeLocked(key, e)
+	}
+}
+
+func (c *Cache) storeLocked(key string, e Entry) {
+	if len(e.Body) == 0 || int64(len(e.Body)) > c.maxBytes {
 		return
 	}
 	if old, ok := c.entries[key]; ok {
@@ -157,20 +204,32 @@ func (c *Cache) removeNode(n *lruNode) {
 // can never outlive the routing topology that produced them.
 func (c *Cache) Invalidate() {
 	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.invalidateLocked()
+}
+
+func (c *Cache) invalidateLocked() {
+	c.generation++
 	c.entries = make(map[string]*lruNode, 16)
 	c.order = &lruList{}
 	c.bytes = 0
-	c.mu.Unlock()
+}
+
+// Reconfigure atomically applies new cache limits and invalidates old entries.
+func (c *Cache) Reconfigure(ttl time.Duration, maxEntries int, maxTotalBytes int64) {
+	ttl, maxEntries, maxTotalBytes = normalizeBounds(ttl, maxEntries, maxTotalBytes)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.ttl, c.maxEntries, c.maxBytes = ttl, maxEntries, maxTotalBytes
+	c.invalidateLocked()
 }
 
 // Reset clears entries and counters (admin action).
 func (c *Cache) Reset() {
 	c.mu.Lock()
-	c.entries = make(map[string]*lruNode, 16)
-	c.order = &lruList{}
-	c.bytes = 0
+	defer c.mu.Unlock()
+	c.invalidateLocked()
 	c.stats = Stats{}
-	c.mu.Unlock()
 }
 
 // Stats returns a snapshot of counters and current occupancy.

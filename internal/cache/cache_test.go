@@ -106,3 +106,52 @@ func TestCacheKeyDistinctPerPathAndBody(t *testing.T) {
 		t.Fatalf("expected sha256 hex key length 64, got %d", len(k1))
 	}
 }
+
+func TestCacheGenerationRejectsInFlightOldResponse(t *testing.T) {
+	c := New(time.Minute, 8, 1<<20)
+	key := KeyScoped("/v1/messages", []byte(`{"model":"m"}`), []byte("client-a"))
+	generation := c.Generation()
+	c.Invalidate()
+	c.StoreForGeneration(key, generation, Entry{Body: []byte("stale"), CreatedAt: time.Now()})
+	if _, ok := c.Lookup(key); ok {
+		t.Fatal("old request repopulated cache after invalidation")
+	}
+	fresh := c.Generation()
+	c.StoreForGeneration(key, fresh, Entry{Body: []byte("fresh"), CreatedAt: time.Now()})
+	if entry, ok := c.LookupForGeneration(key, fresh); !ok || string(entry.Body) != "fresh" {
+		t.Fatalf("fresh response was not stored: ok=%v entry=%+v", ok, entry)
+	}
+	if _, ok := c.LookupForGeneration(key, generation); ok {
+		t.Fatal("old-generation request hit new-generation cache")
+	}
+}
+
+func TestCacheReconfigureAppliesNewLimits(t *testing.T) {
+	c := New(time.Minute, 4, 100)
+	old := c.Generation()
+	c.Store("old", Entry{Body: []byte("old"), CreatedAt: time.Now()})
+	c.Reconfigure(time.Millisecond, 1, 4)
+	if c.Generation() == old || c.Stats().Entries != 0 {
+		t.Fatal("reconfiguration did not invalidate old entries")
+	}
+	c.Store("too-large", Entry{Body: []byte("12345"), CreatedAt: time.Now()})
+	if c.Stats().Entries != 0 {
+		t.Fatal("reconfigured byte limit was not enforced")
+	}
+	c.Store("one", Entry{Body: []byte("a"), CreatedAt: time.Now()})
+	c.Store("two", Entry{Body: []byte("b"), CreatedAt: time.Now()})
+	if _, ok := c.Lookup("one"); ok {
+		t.Fatal("reconfigured entry limit was not enforced")
+	}
+	time.Sleep(3 * time.Millisecond)
+	if _, ok := c.Lookup("two"); ok {
+		t.Fatal("reconfigured TTL was not enforced")
+	}
+}
+
+func TestCacheKeyScopedByClientInputs(t *testing.T) {
+	body := []byte(`{"model":"m"}`)
+	if KeyScoped("/v1/messages", body, []byte("client-a")) == KeyScoped("/v1/messages", body, []byte("client-b")) {
+		t.Fatal("request scope must distinguish otherwise identical bodies")
+	}
+}

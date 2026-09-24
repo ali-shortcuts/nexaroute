@@ -309,8 +309,8 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 		s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_attempt", Deployment: deployment.ID,
 			Message: fmt.Sprintf("attempt=%d kind=%s score=%.2f", attempts, bundle.canonicalKind, c.Score)})
 		resp, sentPayload, repair, derr := s.doUpstreamWithRepair(
-			routeCtx, r.Header.Get("x-request-id"), bundle.a, deployment,
-			bundle.payload, req.Streaming, forward, dialect, profile,
+			routeCtx, r.Header.Get("x-request-id"), bundle,
+			req.Streaming, forward, dialect, profile,
 			cfg.Routing.MaxRepairAttempts, &canReq,
 		)
 		if derr != nil {
@@ -414,8 +414,8 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 				Message: lastErr, ErrorType: string(cls.Class), LatencyMS: total.Milliseconds()})
 			return
 		}
-		s.recordRouteSuccess(req, deploy.ID, deploy.ProviderID, time.Since(start))
-		s.learnFromSuccess(deploy.ID, deploy.ProviderID, deploy, sent, &canReq)
+		s.recordRouteSuccess(req, deploy, bundle.a, time.Since(start))
+		s.learnFromSuccess(deploy.ID, deploy.ProviderID, deploy, bundle.a, sent, &canReq)
 		s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_ok", Deployment: deploy.ID,
 			Message: "request completed", LatencyMS: total.Milliseconds()})
 		return
