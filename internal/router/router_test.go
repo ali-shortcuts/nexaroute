@@ -568,3 +568,23 @@ func TestProactiveQuotaPressureDeprioritizesLowHeadroomProvider(t *testing.T) {
 		t.Fatalf("low quota headroom was not proactively deprioritized: %#v", got)
 	}
 }
+
+func TestCostAwareAffinityCannotOverrideHigherPriority(t *testing.T) {
+	cfg := config.Default()
+	cfg.Routing.Strategy = "cost_aware"
+	cfg.Routing.SessionAffinity = true
+	cfg.Providers = []config.ProviderConfig{{ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "http://x", Enabled: true, Models: []config.ModelConfig{
+		{ID: "high", Model: "high", Enabled: true, Priority: 0, Weight: 1, InputCostPerMTok: 5, OutputCostPerMTok: 5},
+		{ID: "low", Model: "low", Enabled: true, Priority: 1, Weight: 1, InputCostPerMTok: 1, OutputCostPerMTok: 1},
+	}}}
+	h := health.New(5, time.Hour)
+	h.RecordSuccess("p/high", time.Millisecond)
+	h.RecordSuccess("p/low", time.Millisecond)
+	r := New(cfg, h)
+	req := Requirement{Model: "auto", SessionKey: "s", EstimatedInputTokens: 1000, MaxOutputTokens: 1000}
+	r.ObserveSession(req, "p/low")
+	got := r.Candidates(req)
+	if len(got) != 2 || got[0].Deployment.ID != "p/high" {
+		t.Fatalf("lower-priority affinity pin overrode priority: %#v", got)
+	}
+}
