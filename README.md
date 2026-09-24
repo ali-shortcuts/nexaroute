@@ -277,10 +277,10 @@ journalctl --user -u nexaroute -f
 The image binds to `0.0.0.0:8080`. If the Web UI/admin API will be reached from outside loopback, configure an admin key:
 
 ```bash
-docker build -t nexaroute:0.4 .
+docker build -t nexaroute:0.4.1 .
 docker run --rm -p 8080:8080 \
   -e NEXAROUTE_ADMIN_KEY='replace-with-a-strong-random-secret' \
-  nexaroute:0.3
+  nexaroute:0.4.1
 ```
 
 Do not expose the admin UI directly to the public internet without TLS and additional perimeter controls.
