@@ -29,9 +29,9 @@ func TestRuntimeVersionAndProtocolSurfaceMatchV060(t *testing.T) {
 	}
 
 	var got struct {
-		Version string `json:"version"`
+		Version   string `json:"version"`
 		Protocols struct {
-			Ingress []string `json:"ingress"`
+			Ingress  []string `json:"ingress"`
 			Upstream []string `json:"upstream"`
 		} `json:"protocols"`
 		Endpoints []string `json:"endpoints"`
