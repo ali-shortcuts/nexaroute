@@ -177,6 +177,10 @@ func cloneConfig(in config.Config) config.Config {
 		}
 		for j := range out.Providers[i].Models {
 			out.Providers[i].Models[j].Aliases = append([]string(nil), in.Providers[i].Models[j].Aliases...)
+			if in.Providers[i].Models[j].Pricing != nil {
+				pricing := *in.Providers[i].Models[j].Pricing
+				out.Providers[i].Models[j].Pricing = &pricing
+			}
 		}
 	}
 	return out
