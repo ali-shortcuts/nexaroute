@@ -277,7 +277,7 @@ func TestAdapterObservesCommonRateLimitHeaders(t *testing.T) {
 	if st.RequestLimit != 100 || st.RemainingRequests != 0 || st.TokenLimit != 5000 || st.RemainingTokens != 1234 {
 		t.Fatalf("unexpected quota stats: %+v", st)
 	}
-	if st.RateLimitResetUnix <= time.Now().Unix() {
-		t.Fatalf("reset was not captured: %+v", st)
+	if st.RequestResetUnix <= time.Now().Unix() || st.TokenResetUnix <= time.Now().Unix() || st.RateLimitResetUnix <= time.Now().Unix() {
+		t.Fatalf("resource-specific resets were not captured: %+v", st)
 	}
 }
