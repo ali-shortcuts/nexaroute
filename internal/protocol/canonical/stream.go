@@ -820,18 +820,18 @@ func openAIFinish(stop string) string {
 // ---------- Responses client emitter ----------
 
 type responsesEmitter struct {
-	w        http.ResponseWriter
-	fl       http.Flusher
-	model    string
-	id       string
-	writeErr error
-	toolIdx     map[int]string
-	toolOutIdx  map[int]int
-	nextOutIdx  int
-	itemSeq     int
-	usage    *Usage
-	stop     string
-	finished bool
+	w          http.ResponseWriter
+	fl         http.Flusher
+	model      string
+	id         string
+	writeErr   error
+	toolIdx    map[int]string
+	toolOutIdx map[int]int
+	nextOutIdx int
+	itemSeq    int
+	usage      *Usage
+	stop       string
+	finished   bool
 }
 
 // NewResponsesEmitter streams canonical events as OpenAI Responses SSE.
