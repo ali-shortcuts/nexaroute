@@ -60,7 +60,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 	if max > len(candidates) {
 		max = len(candidates)
 	}
-	routeCtx, routeCancel := routeContext(r.Context(), in.Stream, cfg.RequestTimeout())
+	routeCtx, routeCancel := routeContext(r.Context(), in.Stream, cfg.RequestTimeout(), cfg.StreamMaxDuration())
 	defer routeCancel()
 	var lastErr string
 	var lastStatus int
@@ -68,6 +68,16 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 	var lastContentType string
 	lastRetryAfter := 0
 	forward := copySelectedRequestHeaders(r)
+	buildPayload := func(sc router.Scored) ([]byte, error) {
+		if sc.Deployment.ProviderType == "openai_compatible" {
+			return patchJSONModel(raw, sc.Deployment.Model)
+		}
+		an, err := translate.OpenAIToAnthropic(in, sc.Deployment.Model)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(an)
+	}
 	attempts := 0
 	for i := 0; i < len(candidates) && attempts < max; i++ {
 		c := candidates[i]
@@ -77,27 +87,30 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		c = fresh
-		var payload []byte
-		if c.Deployment.ProviderType == "openai_compatible" {
-			payload, err = patchJSONModel(raw, c.Deployment.Model)
-		} else {
-			var an core.AnthropicRequest
-			an, err = translate.OpenAIToAnthropic(in, c.Deployment.Model)
-			if err == nil {
-				payload, err = json.Marshal(an)
-			}
-		}
-		if err != nil {
-			lastErr = err.Error()
+		payload, buildErr := buildPayload(c)
+		if buildErr != nil {
+			lastErr = buildErr.Error()
 			continue
 		}
 		attempts++
 		attemptIndex := attempts - 1
 		recordUsage := s.usageRecorder(r, c.Deployment.ID)
 		s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_attempt", Deployment: c.Deployment.ID, Message: fmt.Sprintf("attempt=%d score=%.2f health=%s pressure=%.3f", attempts, c.Score, c.Health.Status, c.CapacityPressure)})
-		attemptCtx, attemptCancel := attemptContext(routeCtx, in.Stream, cfg.AttemptTimeout())
 		start := time.Now()
-		resp, e := a.Do(attemptCtx, payload, in.Stream, forward)
+		hr := s.hedgedDo(hedgeCall{
+			routeCtx: routeCtx, streaming: in.Stream, attemptTimeout: cfg.AttemptTimeout(),
+			candidates: candidates, from: i, primary: c, primaryAdapter: a, primaryPayload: payload,
+			req: req, buildPayload: buildPayload, forward: forward, requestID: r.Header.Get("x-request-id"),
+			strategy: cfg.Routing.Strategy, delay: cfg.HedgeDelay(), maxAttempts: max, attempts: attempts,
+		})
+		if hr.hedged && hr.candidate.Deployment.ID != c.Deployment.ID {
+			c = hr.candidate
+			a = hr.adapter
+			recordUsage = s.usageRecorder(r, c.Deployment.ID)
+		}
+		attemptCancel := hr.cancel
+		attempts += hr.extraAttempts
+		resp, e := hr.resp, hr.err
 		headerLatency := time.Since(start)
 		if e != nil {
 			if attemptCancel != nil {
@@ -126,6 +139,10 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 			}
 			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_fail", Deployment: c.Deployment.ID, Message: lastErr, ErrorType: classifyTransportError(e), LatencyMS: headerLatency.Milliseconds()})
 			if attempts < max && i+1 < len(candidates) {
+				if !s.consumeFailoverBudget(r.Header.Get("x-request-id"), c.Deployment.ID, "transport failure") {
+					w.Header().Set("Retry-After", "1")
+					break
+				}
 				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "failover", Deployment: c.Deployment.ID, Message: "transport failure; trying next eligible candidate"})
 			}
 			s.retryPause(routeCtx, r.Header.Get("x-request-id"), cfg, attemptIndex, max)
@@ -165,6 +182,10 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 			}
 			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_fail", Deployment: c.Deployment.ID, Message: lastErr, ErrorType: errType, LatencyMS: headerLatency.Milliseconds(), StatusCode: resp.StatusCode})
 			if failoverEligible(resp.StatusCode) && attempts < max && i+1 < len(candidates) {
+				if !s.consumeFailoverBudget(r.Header.Get("x-request-id"), c.Deployment.ID, "http "+strconv.Itoa(resp.StatusCode)) {
+					w.Header().Set("Retry-After", "1")
+					break
+				}
 				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "failover", Deployment: c.Deployment.ID, Message: fmt.Sprintf("HTTP %d; trying next eligible candidate", resp.StatusCode), StatusCode: resp.StatusCode})
 				s.retryPause(routeCtx, r.Header.Get("x-request-id"), cfg, attemptIndex, max)
 				continue
@@ -213,7 +234,14 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 				decodeErrType = errorTypeForUpstreamClass(uerr.Class)
 				streamErrType = decodeErrType
 			}
+			if streamErrType == "provider_stream_error" && gatewayDeadlineExceeded(routeCtx, r.Context()) {
+				streamErrType = "provider_timeout"
+			}
 			lastErr = string(redactProviderBody(providerConfigFor(cfg, c.Deployment.ProviderID), []byte(lastErr)))
+			if AsClientWriteError(e) {
+				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "client_stalled", Deployment: c.Deployment.ID, Message: lastErr, ErrorType: "client_write_timeout", LatencyMS: total.Milliseconds(), StatusCode: resp.StatusCode})
+				return
+			}
 			if clientRequestGone(r.Context()) {
 				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "client_disconnect", Deployment: c.Deployment.ID, Message: r.Context().Err().Error(), ErrorType: "caller_cancelled", LatencyMS: total.Milliseconds(), StatusCode: resp.StatusCode})
 				return
@@ -235,6 +263,10 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 				}
 				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: kind, Deployment: c.Deployment.ID, Message: lastErr, ErrorType: decodeErrType, LatencyMS: total.Milliseconds(), StatusCode: resp.StatusCode})
 				if attempts < max && i+1 < len(candidates) {
+					if !s.consumeFailoverBudget(r.Header.Get("x-request-id"), c.Deployment.ID, kind) {
+						w.Header().Set("Retry-After", "1")
+						break
+					}
 					s.retryPause(routeCtx, r.Header.Get("x-request-id"), cfg, attemptIndex, max)
 					continue
 				}
@@ -281,7 +313,6 @@ func streamAnthropicToOpenAI(w http.ResponseWriter, resp *http.Response, model s
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("X-Accel-Buffering", "no")
-	fl, _ := w.(http.Flusher)
 	var writeErr error
 	emit := func(v any) {
 		if writeErr != nil {
@@ -292,10 +323,7 @@ func streamAnthropicToOpenAI(w http.ResponseWriter, resp *http.Response, model s
 			writeErr = err
 			return
 		}
-		_, writeErr = fmt.Fprintf(w, "data: %s\n\n", b)
-		if writeErr == nil && fl != nil {
-			fl.Flush()
-		}
+		writeErr = writeFlushed(w, []byte("data: "+string(b)+"\n\n"))
 	}
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 64<<10), 8<<20)
@@ -403,11 +431,8 @@ func streamAnthropicToOpenAI(w http.ResponseWriter, resp *http.Response, model s
 	if writeErr != nil {
 		return writeErr
 	}
-	if _, err := fmt.Fprint(w, "data: [DONE]\n\n"); err != nil {
+	if err := writeFlushed(w, []byte("data: [DONE]\n\n")); err != nil {
 		return err
-	}
-	if fl != nil {
-		fl.Flush()
 	}
 	if recordUsage != nil {
 		recordUsage(usageIn, usageOut)

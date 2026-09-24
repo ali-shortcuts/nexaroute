@@ -44,7 +44,13 @@ func (e *requestTooLargeError) Error() string {
 func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
-	_ = json.NewEncoder(w).Encode(v)
+	// Marshal first so the body goes out under a single write deadline;
+	// the trailing newline preserves the historical Encoder output.
+	b, err := json.Marshal(v)
+	if err != nil {
+		return
+	}
+	_ = writeOnce(w, append(b, '\n'))
 }
 func errorJSON(w http.ResponseWriter, code int, msg string) {
 	writeJSON(w, code, map[string]any{"error": map[string]any{"type": "gateway_error", "message": msg}})

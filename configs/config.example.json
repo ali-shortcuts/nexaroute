@@ -21,7 +21,10 @@
     "failure_weight": 25,
     "capacity_weight": 35,
     "retry_backoff_ms": 150,
-    "max_retry_after_seconds": 60
+    "max_retry_after_seconds": 60,
+    "hedge_delay_ms": 0,
+    "retry_budget_ratio": 0.2,
+    "stream_max_duration_seconds": 1800
   },
   "probe": {
     "enabled": true,

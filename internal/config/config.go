@@ -87,6 +87,9 @@ type RoutingConfig struct {
 	CapacityWeight             float64 `json:"capacity_weight"`
 	RetryBackoffMS             int     `json:"retry_backoff_ms"`
 	MaxRetryAfterSeconds       int     `json:"max_retry_after_seconds"`
+	HedgeDelayMS               int     `json:"hedge_delay_ms"`
+	RetryBudgetRatio           float64 `json:"retry_budget_ratio"`
+	StreamMaxDurationSeconds   int     `json:"stream_max_duration_seconds"`
 }
 
 type ProbeConfig struct {
@@ -236,6 +239,7 @@ func Default() Config {
 			CapabilityFailureThreshold: 2, CapabilityCooldownSeconds: 300,
 			RequestTimeoutMS: 120000, AttemptTimeoutMS: 0, LatencyWeight: 0.015, FailureWeight: 25, CapacityWeight: 35,
 			RetryBackoffMS: 150, MaxRetryAfterSeconds: 60,
+			HedgeDelayMS: 0, RetryBudgetRatio: 0.2, StreamMaxDurationSeconds: 1800,
 		},
 		Probe: ProbeConfig{Enabled: true, OnStart: true, IntervalSeconds: 120, ReadyLeaseSeconds: 300, TimeoutMS: 8000, MaxTokens: 1, Concurrency: 16, RecoveryAttempts: 5, RecoveryRetryMS: 500},
 	}
@@ -491,6 +495,15 @@ func (c Config) Validate() error {
 	if c.Routing.MaxRetryAfterSeconds < 1 || c.Routing.MaxRetryAfterSeconds > 86400 {
 		return errors.New("routing.max_retry_after_seconds must be between 1 and 86400")
 	}
+	if c.Routing.HedgeDelayMS < 0 || c.Routing.HedgeDelayMS > 60000 {
+		return errors.New("routing.hedge_delay_ms must be between 0 and 60000")
+	}
+	if r := c.Routing.RetryBudgetRatio; math.IsNaN(r) || math.IsInf(r, 0) || r < 0 || r > 1 || (r > 0 && r < 0.01) {
+		return errors.New("routing.retry_budget_ratio must be 0 (unlimited) or between 0.01 and 1")
+	}
+	if d := c.Routing.StreamMaxDurationSeconds; d < 0 || d > 86400 || (d > 0 && d < 60) {
+		return errors.New("routing.stream_max_duration_seconds must be 0 (unbounded) or between 60 and 86400")
+	}
 	for name, v := range map[string]float64{
 		"routing.latency_weight":  c.Routing.LatencyWeight,
 		"routing.failure_weight":  c.Routing.FailureWeight,
@@ -683,6 +696,18 @@ func (c Config) AttemptTimeout() time.Duration {
 
 func (c Config) RequestTimeout() time.Duration {
 	return time.Duration(c.Routing.RequestTimeoutMS) * time.Millisecond
+}
+
+// HedgeDelay is how long an attempt may run before a backup attempt on the
+// next eligible deployment races it. 0 disables hedging.
+func (c Config) HedgeDelay() time.Duration {
+	return time.Duration(c.Routing.HedgeDelayMS) * time.Millisecond
+}
+
+// StreamMaxDuration bounds the total lifetime of a streaming response so a
+// trickling provider cannot hold a request forever. 0 disables the bound.
+func (c Config) StreamMaxDuration() time.Duration {
+	return time.Duration(c.Routing.StreamMaxDurationSeconds) * time.Second
 }
 func (c Config) Cooldown() time.Duration {
 	return time.Duration(c.Routing.CooldownSeconds) * time.Second

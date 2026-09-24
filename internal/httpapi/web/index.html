@@ -63,6 +63,8 @@ OPENAI_API_KEY=local-placeholder</pre><small>Aliases such as auto/coding can map
       <div class="form-grid two"><label class="field"><span>Capability cooldown (sec)</span><input id="rtCapabilityCooldown" type="number" min="1"></label><span></span></div>
       <div class="form-grid two"><label class="field"><span>Cooldown seconds</span><input id="rtCooldown" type="number" min="1"></label><label class="field"><span>Request timeout (ms)</span><input id="rtTimeout" type="number" min="100"></label></div>
       <div class="form-grid two"><label class="field"><span>Retry backoff (ms)</span><input id="rtBackoff" type="number" min="0"></label><label class="field"><span>Max Retry-After (sec)</span><input id="rtRetryAfter" type="number" min="1"></label></div>
+      <div class="form-grid two"><label class="field"><span>Hedge delay (ms, 0 = off)</span><input id="rtHedgeDelay" type="number" min="0" max="60000" step="100"></label><label class="field"><span>Stream max duration (sec, 0 = unbounded)</span><input id="rtStreamMaxDur" type="number" min="0" max="86400" step="60"></label></div>
+      <div class="form-grid two"><label class="field"><span>Retry budget ratio (0 = unlimited)</span><input id="rtRetryBudget" type="number" min="0" max="1" step="0.05"></label><span></span></div>
     </div>
     <div class="form-section">
       <div class="section-kicker">Health probes</div>

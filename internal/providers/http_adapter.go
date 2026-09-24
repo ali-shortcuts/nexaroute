@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -17,6 +18,16 @@ import (
 
 	"github.com/ali-shortcuts/nexaroute/internal/config"
 )
+
+// providerDialer bounds the dial phase (DNS + TCP connect) well below the
+// response-header timeout so routing blackholes fail over in seconds instead
+// of hanging on Go's 30s default. Keep-alives probe idle pooled connections
+// so dead peers are detected by the OS instead of stalling the next request;
+// DualStack races A/AAAA resolution (happy eyeballs) instead of waiting out
+// a broken IPv6 path before trying IPv4.
+func providerDialer() *net.Dialer {
+	return &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second, DualStack: true}
+}
 
 type credentialState struct {
 	Key           string
@@ -86,6 +97,7 @@ func newHTTPAdapterWithRetryCap(p config.ProviderConfig, timeout, retryAfterCap 
 		MaxIdleConns: maxIdle, MaxIdleConnsPerHost: idlePerHost, MaxConnsPerHost: mc,
 		IdleConnTimeout: 90 * time.Second, TLSHandshakeTimeout: 15 * time.Second,
 		ResponseHeaderTimeout: timeout, ExpectContinueTimeout: time.Second,
+		DialContext:       providerDialer().DialContext,
 		ForceAttemptHTTP2: true,
 	}
 	if p.ProxyURL != "" {

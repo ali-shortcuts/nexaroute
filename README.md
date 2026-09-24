@@ -303,6 +303,8 @@ Read:
 - `TEST_REPORT.md`
 - `docs/COMPATIBILITY.md`
 - `docs/KNOWN_GAPS.md`
+- `docs/RESILIENCE.md`
+- `docs/UPSTREAM_ERRORS.md`
 - `SECURITY.md`
 - `ROADMAP.md`
 

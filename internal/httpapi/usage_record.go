@@ -138,6 +138,6 @@ func (s *Server) proxyValidatedJSONWithUsage(w http.ResponseWriter, resp *http.R
 	}
 	copyUpstreamResponseHeaders(w, resp, false)
 	w.WriteHeader(resp.StatusCode)
-	_, err = w.Write(b)
+	err = writeOnce(w, b)
 	return err
 }

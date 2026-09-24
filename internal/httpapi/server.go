@@ -46,6 +46,7 @@ type Server struct {
 	inflight          atomic.Int64
 	overloadRejects   atomic.Uint64
 	clientAuthRejects atomic.Uint64
+	retryBudget       *retryBudget
 }
 
 type clientKeyNameKey struct{}
@@ -60,7 +61,7 @@ func clientKeyName(r *http.Request) string {
 }
 
 func New(cfg config.Config, configPath string, reg *providers.Registry, rt *router.Router, hm *health.Manager, bus *events.Bus, pe *probe.Engine, l *log.Logger) *Server {
-	return &Server{cfg: cfg, configPath: configPath, reg: reg, rt: rt, hm: hm, bus: bus, probe: pe, log: l, usage: usage.New()}
+	return &Server{cfg: cfg, configPath: configPath, reg: reg, rt: rt, hm: hm, bus: bus, probe: pe, log: l, usage: usage.New(), retryBudget: newRetryBudget(cfg.Routing.RetryBudgetRatio)}
 }
 
 func (s *Server) currentConfig() config.Config {
@@ -265,6 +266,7 @@ func (s *Server) applyConfigLocked(cfg config.Config) error {
 	}
 
 	s.cfg = cfg
+	s.retryBudget.setRatio(cfg.Routing.RetryBudgetRatio)
 	s.probe.Reload(cfg)
 	for _, a := range staleAdapters {
 		providers.CloseIdleConnections(a)
@@ -503,6 +505,7 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 				s.rejectOverloaded(sw, r, rid)
 				return
 			}
+			s.retryBudget.deposit()
 			defer s.releaseDataPlane()
 		}
 		next.ServeHTTP(sw, r)

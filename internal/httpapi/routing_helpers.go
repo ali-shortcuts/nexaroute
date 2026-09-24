@@ -18,12 +18,35 @@ import (
 	"unicode/utf8"
 
 	"github.com/ali-shortcuts/nexaroute/internal/config"
+	"github.com/ali-shortcuts/nexaroute/internal/events"
 	"github.com/ali-shortcuts/nexaroute/internal/providers"
 	"github.com/ali-shortcuts/nexaroute/internal/router"
 )
 
-func routeContext(parent context.Context, streaming bool, timeout time.Duration) (context.Context, context.CancelFunc) {
-	if streaming || timeout <= 0 {
+// consumeFailoverBudget spends one retry-budget token for a follow-up
+// upstream attempt. When the budget is exhausted it records a
+// retry_budget_exhausted event and reports false: the caller must break out
+// and fail fast instead of continuing to the next candidate. detail must be
+// a static safe string (never an error body or credential).
+func (s *Server) consumeFailoverBudget(requestID, deploymentID, detail string) bool {
+	if s.retryBudget.allowRetry() {
+		return true
+	}
+	s.bus.Add(events.Event{RequestID: requestID, Kind: "retry_budget_exhausted", Deployment: deploymentID, Message: "retry budget exhausted; failing fast instead of trying the next candidate (" + detail + ")", ErrorType: "retry_budget_exhausted"})
+	return false
+}
+
+func routeContext(parent context.Context, streaming bool, timeout, streamTimeout time.Duration) (context.Context, context.CancelFunc) {
+	if streaming {
+		// Streams legitimately outlive the non-streaming request budget, but
+		// they must not live forever: a trickling provider would otherwise
+		// hold the request (and the caller) without bound.
+		if streamTimeout <= 0 {
+			return context.WithCancel(parent)
+		}
+		return context.WithTimeout(parent, streamTimeout)
+	}
+	if timeout <= 0 {
 		return context.WithCancel(parent)
 	}
 	return context.WithTimeout(parent, timeout)
