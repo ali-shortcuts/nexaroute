@@ -559,3 +559,52 @@ func TestResponsesStreamDecoderPreservesParallelToolIndexes(t *testing.T) {
 		})
 	}
 }
+
+func TestResponsesStreamIncompleteIsTerminalMaxTokensNotError(t *testing.T) {
+	data := `{"type":"response.incomplete","response":{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"usage":{"input_tokens":11,"output_tokens":5}}}`
+	evs, terminal, err := DecodeResponsesStreamEvent("", data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !terminal {
+		t.Fatal("response.incomplete must terminate the stream")
+	}
+	var sawUsage, sawEnd bool
+	for _, ev := range evs {
+		if ev.Type == StreamError {
+			t.Fatalf("response.incomplete was misclassified as hard stream error: %+v", evs)
+		}
+		if ev.Type == StreamUsage && ev.Usage != nil && ev.Usage.InputTokens == 11 && ev.Usage.OutputTokens == 5 {
+			sawUsage = true
+		}
+		if ev.Type == StreamEnd && ev.StopReason == StopMaxTokens {
+			sawEnd = true
+		}
+	}
+	if !sawUsage || !sawEnd {
+		t.Fatalf("incomplete terminal semantics lost: %+v", evs)
+	}
+}
+
+func TestResponsesCompletedWithFunctionCallSignalsToolUse(t *testing.T) {
+	data := `{"type":"response.completed","response":{"status":"completed","output":[{"type":"function_call","call_id":"c1","name":"tool","arguments":"{}"}],"usage":{"input_tokens":3,"output_tokens":4}}}`
+	evs, terminal, err := DecodeResponsesStreamEvent("", data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !terminal {
+		t.Fatal("response.completed must terminate the stream")
+	}
+	found := false
+	for _, ev := range evs {
+		if ev.Type == StreamEnd {
+			found = true
+			if ev.StopReason != StopToolUse {
+				t.Fatalf("function-call completion stop=%q want %q", ev.StopReason, StopToolUse)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("completed response emitted no StreamEnd: %+v", evs)
+	}
+}
