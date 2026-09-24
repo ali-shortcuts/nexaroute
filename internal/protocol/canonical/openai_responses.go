@@ -61,9 +61,11 @@ func DecodeResponsesRequest(in ResponsesRequest) (Request, error) {
 		Stream:          in.Stream,
 		MaxOutputTokens: in.MaxOutputTokens,
 		Temperature:     in.Temperature,
-		TopP:            in.TopP,
-		Stop:            NormalizeStop(in.Stop),
-		ClientProtocol:  "openai_responses",
+		TopP:              in.TopP,
+		Stop:              NormalizeStop(in.Stop),
+		PreviousResponseID: in.PreviousResponseID,
+		Store:             in.Store,
+		ClientProtocol:    "openai_responses",
 	}
 	if len(in.Instructions) > 0 && string(in.Instructions) != "null" {
 		var text string
@@ -313,6 +315,12 @@ func EncodeResponsesRequest(in Request, upstreamModel string) ([]byte, error) {
 		"model":  upstreamModel,
 		"input":  items,
 		"stream": in.Stream,
+	}
+	if in.PreviousResponseID != "" {
+		out["previous_response_id"] = in.PreviousResponseID
+	}
+	if in.Store != nil {
+		out["store"] = *in.Store
 	}
 	if in.MaxOutputTokens > 0 {
 		out["max_output_tokens"] = in.MaxOutputTokens
