@@ -1,4 +1,4 @@
-# NexaRoute — 0.6.1-beta.1
+# NexaRoute — 0.6.1-beta.2
 
 A self-hosted Go LLM gateway with an embedded dashboard. Route OpenAI Chat,
 Anthropic Messages and a **stateless subset** of OpenAI Responses across
@@ -18,7 +18,7 @@ The installer verifies the downloaded archive against release SHA256SUMS.
 This command requires the matching GitHub Release to have been published:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ali-shortcuts/nexaroute/v0.6.1-beta.1/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/ali-shortcuts/nexaroute/v0.6.1-beta.2/install.sh | bash
 ```
 
 ### Install the review beta from source
@@ -165,8 +165,8 @@ systemctl --user enable --now nexaroute
 Docker:
 
 ```bash
-docker build -t nexaroute:0.6.1-beta.1 .
-docker run --rm -p 127.0.0.1:8080:8080 -e NEXAROUTE_ADMIN_KEY='replace-with-a-random-secret' nexaroute:0.6.1-beta.1
+docker build -t nexaroute:0.6.1-beta.2 .
+docker run --rm -p 127.0.0.1:8080:8080 -e NEXAROUTE_ADMIN_KEY='replace-with-a-random-secret' nexaroute:0.6.1-beta.2
 ```
 
 Persist `/config` with appropriate ownership if using Docker beyond a temporary

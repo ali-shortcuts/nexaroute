@@ -1,4 +1,4 @@
-# Known gaps — v0.6.1-beta.1
+# Known gaps — v0.6.1-beta.2
 
 These are explicit boundaries of the current code, not hidden assumptions.
 
@@ -130,3 +130,12 @@ Implemented but bounded by design:
 - Linux amd64 was runtime-tested locally. Linux arm64, macOS amd64/arm64 and Windows amd64 were cross-compiled; native runtime certification on those targets is pending.
 - No live paid-provider credentials were supplied for this audit. Mocked integration coverage does not establish current Claude Code, Codex CLI or every provider/model compatibility.
 - No comparative throughput benchmark, penetration test, long-duration production soak or distributed deployment certification was performed.
+
+## Transport and bounded parsing (beta.2)
+
+Provider redirects may only stay on the exact same scheme/host/port origin.
+Configure the final URL explicitly for services that redirect elsewhere.
+Canonical SSE frames are limited to 16 MiB and 65536 data lines per event.
+Responses native requests use store=false; this does not make a claim about a
+provider's retention policies. File/reference input and unknown content types
+are not implemented and now fail explicitly.

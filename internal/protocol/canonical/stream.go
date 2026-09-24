@@ -52,6 +52,8 @@ type SSEReader struct {
 	done       bool
 	eventName  string
 	dataBuffer []string
+	frameBytes int
+	dataLines  int
 }
 
 // NewSSEReader wraps an upstream body.
@@ -66,23 +68,39 @@ func NewSSEReader(r io.Reader) *SSEReader {
 func (sr *SSEReader) Next() (name, data string, done bool, err error) {
 	for !sr.done && sr.scanner.Scan() {
 		line := sr.scanner.Text()
+		sr.frameBytes += len(line) + 1
+		if sr.frameBytes > 16<<20 {
+			sr.done = true
+			sr.dataBuffer = nil
+			return "", "", false, fmt.Errorf("SSE frame exceeds 16 MiB")
+		}
 		switch {
 		case line == "":
 			// End of one SSE event block.
 			if len(sr.dataBuffer) > 0 {
 				payload := strings.Join(sr.dataBuffer, "\n")
-				sr.dataBuffer = sr.dataBuffer[:0]
+				sr.dataBuffer = nil
+				sr.frameBytes = 0
+				sr.dataLines = 0
 				evName := sr.eventName
 				sr.eventName = ""
 				return evName, payload, false, nil
 			}
 			sr.eventName = ""
+			sr.frameBytes = 0
+			sr.dataLines = 0
 			continue
 		case strings.HasPrefix(line, ":"):
 			continue // comment / keep-alive
 		case strings.HasPrefix(line, "event:"):
 			sr.eventName = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
 		case strings.HasPrefix(line, "data:"):
+			sr.dataLines++
+			if sr.dataLines > 65536 {
+				sr.done = true
+				sr.dataBuffer = nil
+				return "", "", false, fmt.Errorf("SSE frame has too many data lines")
+			}
 			sr.dataBuffer = append(sr.dataBuffer, strings.TrimPrefix(strings.TrimPrefix(line, "data:"), " "))
 		case strings.HasPrefix(line, "id:"), strings.HasPrefix(line, "retry:"):
 			continue
@@ -100,7 +118,9 @@ func (sr *SSEReader) Next() (name, data string, done bool, err error) {
 	// Flush a trailing block that lacked the final blank line.
 	if len(sr.dataBuffer) > 0 {
 		payload := strings.Join(sr.dataBuffer, "\n")
-		sr.dataBuffer = sr.dataBuffer[:0]
+		sr.dataBuffer = nil
+		sr.frameBytes = 0
+		sr.dataLines = 0
 		return sr.eventName, payload, false, nil
 	}
 	return "", "", true, nil
@@ -561,7 +581,7 @@ func (e *anthropicEmitter) Emit(ev StreamEvent) error {
 		if ev.StopReason != "" && ev.StopReason != StopStopSequence {
 			e.stopReason = ev.StopReason
 		} else if ev.StopReason == StopStopSequence {
-			e.stopReason = StopMaxTokens
+			e.stopReason = StopEndTurn
 		}
 	case StreamError:
 		e.frame("error", map[string]any{"type": "error", "error": map[string]any{"type": mapErrorType(ev.ErrorCode), "message": ev.ErrorMsg}})
@@ -930,8 +950,15 @@ func (e *responsesEmitter) Emit(ev StreamEvent) error {
 		return e.writeErr
 	}
 	// Final Responses events contain the complete output. Bound retained state.
-	e.buffered += len(ev.Text) + len(ev.ArgsDelta) + len(ev.ToolName) + len(ev.ToolID)
-	if ev.Type != StreamError && (e.buffered > 8<<20 || len(e.items) > 4096) {
+	e.buffered += len(ev.Text) + len(ev.ArgsDelta)
+	if ev.Type == StreamToolStart {
+		e.buffered += len(ev.ToolName) + len(ev.ToolID)
+	}
+	_, toolExists := e.toolIdx[ev.ToolIndex]
+	createsItem := (ev.Type == StreamText && e.textIndex < 0) ||
+		(ev.Type == StreamThinking && e.reasoningIndex < 0) ||
+		((ev.Type == StreamToolStart || ev.Type == StreamToolDelta) && !toolExists)
+	if ev.Type != StreamError && (e.buffered > 8<<20 || (createsItem && len(e.items) >= 4096)) {
 		err := fmt.Errorf("Responses stream output exceeds gateway buffer limit")
 		e.Emit(StreamEvent{Type: StreamError, ErrorMsg: err.Error()})
 		e.writeErr = err
@@ -976,7 +1003,9 @@ func (e *responsesEmitter) Emit(ev StreamEvent) error {
 	case StreamToolDelta:
 		idx, ok := e.toolIdx[ev.ToolIndex]
 		if !ok {
-			e.Emit(StreamEvent{Type: StreamToolStart, ToolIndex: ev.ToolIndex, ToolID: ev.ToolID, ToolName: ev.ToolName})
+			if err := e.Emit(StreamEvent{Type: StreamToolStart, ToolIndex: ev.ToolIndex, ToolID: ev.ToolID, ToolName: ev.ToolName}); err != nil {
+				return err
+			}
 			idx = e.toolIdx[ev.ToolIndex]
 		}
 		e.items[idx].text.WriteString(ev.ArgsDelta)

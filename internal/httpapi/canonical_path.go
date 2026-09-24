@@ -112,6 +112,9 @@ func (s *Server) canonicalStreamPump(
 				}
 				if evs[i].Type == canonical.StreamToolStart || evs[i].Type == canonical.StreamToolDelta || evs[i].Type == canonical.StreamToolEnd {
 					evs[i].ToolIndex += nextGeminiTool
+					if evs[i].Type == canonical.StreamToolStart {
+						evs[i].ToolID = fmt.Sprintf("call_%d", evs[i].ToolIndex)
+					}
 				}
 			}
 			nextGeminiTool += count

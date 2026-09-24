@@ -293,7 +293,7 @@ func MapStopReason(reason string) string {
 		return StopToolUse
 	case "max_tokens", "length":
 		return StopMaxTokens
-	case "stop_sequence", "stop":
+	case "stop_sequence":
 		return StopStopSequence
 	case "refusal", "content_filter":
 		return StopRefusal

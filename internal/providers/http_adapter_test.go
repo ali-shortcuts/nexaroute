@@ -402,3 +402,56 @@ func TestQuotaEstimateContextBoundsAndSumsTokens(t *testing.T) {
 		t.Fatalf("negative estimate handling=%d ok=%v", got, ok)
 	}
 }
+
+func TestReviewRedirectDoesNotLeakProviderKey(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		var leaked bool
+		target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			leaked = r.Header.Get("x-api-key") != ""
+			w.WriteHeader(200)
+		}))
+		source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, target.URL, http.StatusTemporaryRedirect)
+		}))
+		p := config.ProviderConfig{ID: "p", Type: "anthropic_compatible", BaseURL: source.URL, APIKey: "private-key", AuthMode: "x-api-key", MessagesPath: "/v1/messages", Enabled: true}
+		a, err := newHTTPAdapter(p, time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := a.Do(context.Background(), []byte(`{}`), stream, nil)
+		if resp != nil {
+			resp.Body.Close()
+		}
+		target.Close()
+		source.Close()
+		if leaked {
+			t.Fatalf("stream=%v cross-origin redirect leaked key (err=%v)", stream, err)
+		}
+	}
+}
+
+func TestReviewSameOriginRedirectWorks(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/start" {
+			http.Redirect(w, r, "/end", http.StatusTemporaryRedirect)
+			return
+		}
+		if r.Header.Get("x-api-key") != "private-key" || r.Method != "POST" {
+			t.Error("lost request semantics")
+		}
+		io.WriteString(w, "ok")
+	}))
+	defer up.Close()
+	a, err := newHTTPAdapter(config.ProviderConfig{ID: "p", Type: "anthropic_compatible", BaseURL: up.URL, APIKey: "private-key", AuthMode: "x-api-key", MessagesPath: "/start", Enabled: true}, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := a.Do(context.Background(), []byte(`{}`), false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("status=%d", resp.StatusCode)
+	}
+}

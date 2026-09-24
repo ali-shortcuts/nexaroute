@@ -8,6 +8,9 @@ go version
 echo '== shell syntax =='
 for script in install.sh install-user.sh run-local.sh scripts/*.sh; do bash -n "$script"; done
 
+echo '== source installer bootstrap =='
+./scripts/test-bootstrap.sh
+
 echo '== formatting =='
 if out=$(gofmt -l .) && [[ -n "$out" ]]; then
   echo 'gofmt check failed for:' >&2

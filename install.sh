@@ -2,7 +2,7 @@
 # Download a checksum-verified release, or explicitly build a source ref.
 set -euo pipefail
 REPO='ali-shortcuts/nexaroute'
-VERSION="${NEXAROUTE_VERSION:-v0.6.1-beta.1}"
+VERSION="${NEXAROUTE_VERSION:-v0.6.1-beta.2}"
 SOURCE_REF=''
 case "${1:-}" in
   --source) SOURCE_REF="${2:-main}" ;;
@@ -14,7 +14,14 @@ trap 'rm -rf "$WORK"' EXIT
 if [[ -n "$SOURCE_REF" ]]; then
   for dep in git go; do command -v "$dep" >/dev/null || { echo "Missing: $dep (Go 1.23+ required)" >&2; exit 1; }; done
   git clone --quiet "https://github.com/$REPO.git" "$WORK/nexaroute"
-  git -C "$WORK/nexaroute" checkout --quiet --detach "$SOURCE_REF"
+  # Resolve remote-only branches before detached checkout (no local tracking
+  # branch is created by a normal clone for non-default branches).
+  if REF_SHA="$(git -C "$WORK/nexaroute" rev-parse --verify --end-of-options "$SOURCE_REF^{commit}" 2>/dev/null)"; then
+    :
+  else
+    REF_SHA="$(git -C "$WORK/nexaroute" rev-parse --verify --end-of-options "refs/remotes/origin/$SOURCE_REF^{commit}")"
+  fi
+  git -C "$WORK/nexaroute" checkout --quiet --detach "$REF_SHA"
   bash "$WORK/nexaroute/install-user.sh"
   exit 0
 fi

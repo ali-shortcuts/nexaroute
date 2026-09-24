@@ -76,7 +76,7 @@ func (s *Server) adminAllow(ip string, cost float64) bool {
 	if s.adminBuckets == nil {
 		s.adminBuckets = map[string]*adminBucket{}
 	}
-	if len(s.adminBuckets) > 4096 {
+	if len(s.adminBuckets) >= 4096 {
 		for k, b := range s.adminBuckets {
 			if now.Sub(b.last) > adminBucketIdle {
 				delete(s.adminBuckets, k)
@@ -84,6 +84,9 @@ func (s *Server) adminAllow(ip string, cost float64) bool {
 		}
 	}
 	b, ok := s.adminBuckets[ip]
+	if !ok && len(s.adminBuckets) >= 4096 {
+		return false
+	}
 	if !ok || now.Sub(b.last) > adminBucketIdle {
 		b = &adminBucket{tokens: adminBucketCapacity, last: now}
 		s.adminBuckets[ip] = b
