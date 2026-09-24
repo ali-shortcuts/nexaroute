@@ -1075,6 +1075,25 @@ func TestQuotaRemainingPressureStartsBelowQuarterBudget(t *testing.T) {
 	}
 }
 
+func TestProviderEditorStreamIdleRangeMatchesBackend(t *testing.T) {
+	index, err := webFS.ReadFile("web/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(index)
+	if !strings.Contains(html, `id="pStreamIdle" type="number" min="1" max="86400"`) {
+		t.Fatal("provider editor stream-idle range is narrower than backend validation")
+	}
+
+	app, err := webFS.ReadFile("web/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(app), "stream_idle_timeout_seconds: Math.max(1,") {
+		t.Fatal("provider editor silently clamps valid stream-idle values below 10 seconds")
+	}
+}
+
 func TestProviderEditorSerializesModelContextAndPricing(t *testing.T) {
 	app, err := webFS.ReadFile("web/app.js")
 	if err != nil {
