@@ -3,6 +3,7 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/ali-shortcuts/nexaroute/internal/config"
 	"github.com/ali-shortcuts/nexaroute/internal/translate"
+	usageacct "github.com/ali-shortcuts/nexaroute/internal/usage"
 )
 
 func TestCapabilityDetectionIgnoresWordsInsideUserText(t *testing.T) {
