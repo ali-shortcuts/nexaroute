@@ -327,8 +327,10 @@ function renderProviders(h) {
     const pct = ds.length ? Math.round(ok / ds.length * 100) : 0;
     const inc = incidents[p.id] || { status: 'unknown' };
     const st = stats[p.id] || {};
-    const quota = Number.isFinite(st.remaining_requests) && st.remaining_requests >= 0
-      ? (Number.isFinite(st.request_limit) && st.request_limit > 0 ? `${st.remaining_requests}/${st.request_limit} req` : `${st.remaining_requests} req left`)
+    const effectiveReq = Number.isFinite(st.effective_remaining_requests) ? st.effective_remaining_requests : st.remaining_requests;
+    const reservedReq = Number.isFinite(st.reserved_requests) && st.reserved_requests > 0 ? st.reserved_requests : 0;
+    const quota = Number.isFinite(effectiveReq) && effectiveReq >= 0
+      ? (Number.isFinite(st.request_limit) && st.request_limit > 0 ? `${effectiveReq}/${st.request_limit} req${reservedReq ? ` · ${reservedReq} reserved` : ''}` : `${effectiveReq} req left`)
       : 'quota unknown';
     return `<article class="provider-card">
       <div class="provider-card-top">
@@ -374,10 +376,14 @@ function renderHealthTab(h) {
     const inc = incidents[id] || { status: 'unknown' };
     const st = stats[id] || {};
     const capPct = p.capacity ? Math.min(100, Math.round((p.active / p.capacity) * 100)) : 0;
-    const reqQuota = Number.isFinite(st.remaining_requests) && st.remaining_requests >= 0
-      ? (Number.isFinite(st.request_limit) && st.request_limit > 0 ? `${st.remaining_requests}/${st.request_limit}` : st.remaining_requests) : '—';
-    const tokQuota = Number.isFinite(st.remaining_tokens) && st.remaining_tokens >= 0
-      ? (Number.isFinite(st.token_limit) && st.token_limit > 0 ? `${st.remaining_tokens}/${st.token_limit}` : st.remaining_tokens) : '—';
+    const effectiveReq = Number.isFinite(st.effective_remaining_requests) ? st.effective_remaining_requests : st.remaining_requests;
+    const effectiveTok = Number.isFinite(st.effective_remaining_tokens) ? st.effective_remaining_tokens : st.remaining_tokens;
+    const reqReserved = Number.isFinite(st.reserved_requests) && st.reserved_requests > 0 ? st.reserved_requests : 0;
+    const tokReserved = Number.isFinite(st.reserved_tokens) && st.reserved_tokens > 0 ? st.reserved_tokens : 0;
+    const reqQuota = Number.isFinite(effectiveReq) && effectiveReq >= 0
+      ? (Number.isFinite(st.request_limit) && st.request_limit > 0 ? `${effectiveReq}/${st.request_limit}${reqReserved ? ` (-${reqReserved})` : ''}` : effectiveReq) : '—';
+    const tokQuota = Number.isFinite(effectiveTok) && effectiveTok >= 0
+      ? (Number.isFinite(st.token_limit) && st.token_limit > 0 ? `${effectiveTok}/${st.token_limit}${tokReserved ? ` (-${fmtInt(tokReserved)})` : ''}` : fmtInt(effectiveTok)) : '—';
     return `<tr>
       <td>${esc(p.provider_name || id)}</td>
       <td><span class="status ${esc(inc.status || 'unknown')}">${esc(inc.status || 'unknown')}</span></td>

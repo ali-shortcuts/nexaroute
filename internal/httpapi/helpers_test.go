@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ali-shortcuts/nexaroute/internal/config"
+	"github.com/ali-shortcuts/nexaroute/internal/providers"
 	"github.com/ali-shortcuts/nexaroute/internal/translate"
 )
 
@@ -975,5 +976,74 @@ func TestEmbeddedUIExposesCostAwareStrategy(t *testing.T) {
 	}
 	if !strings.Contains(string(index), `value="cost_aware"`) {
 		t.Fatal("cost-aware strategy missing from embedded dashboard")
+	}
+}
+
+func TestProviderLoadUsesEffectiveReservedQuotaHeadroom(t *testing.T) {
+	now := time.Now().Unix()
+	st := providers.ProviderStats{
+		MaxConcurrency:             32,
+		ActiveRequests:             2,
+		WaitingRequests:            1,
+		RequestLimit:               100,
+		RemainingRequests:          20,
+		ReservedRequests:           10,
+		EffectiveRemainingRequests: 10,
+		RequestResetUnix:           now + 60,
+		TokenLimit:                 1000,
+		RemainingTokens:            800,
+		EffectiveRemainingTokens:   800,
+		TokenResetUnix:             now + 60,
+	}
+	load := providerLoadFromStats(st, now)
+	// Raw request headroom 20/100 would yield 0.8 pressure. Effective
+	// headroom 10/100 must yield 2.4 and therefore dominate capacity pressure.
+	if load.QuotaPressure < 2.39 || load.QuotaPressure > 2.41 {
+		t.Fatalf("quota pressure ignored local reservations: %+v", load)
+	}
+	if load.QuotaExhausted {
+		t.Fatalf("10%% effective headroom should be pressured, not exhausted: %+v", load)
+	}
+
+	st.EffectiveRemainingRequests = 0
+	load = providerLoadFromStats(st, now)
+	if !load.QuotaExhausted || load.QuotaPressure != 4 {
+		t.Fatalf("effective zero headroom must surface as exhausted pressure: %+v", load)
+	}
+}
+
+func TestQuotaReservationMetricsAndUIWiring(t *testing.T) {
+	srv := testGateway(t, config.Default())
+	req := httptest.NewRequest(http.MethodGet, "http://gateway/metrics", nil)
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("metrics status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	for _, metric := range []string{
+		"nexaroute_provider_reserved_requests",
+		"nexaroute_provider_effective_remaining_requests",
+		"nexaroute_provider_reserved_tokens",
+		"nexaroute_provider_effective_remaining_tokens",
+	} {
+		if !strings.Contains(rr.Body.String(), metric) {
+			t.Fatalf("metrics missing %s", metric)
+		}
+	}
+
+	app, err := webFS.ReadFile("web/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	js := string(app)
+	for _, field := range []string{
+		"effective_remaining_requests",
+		"reserved_requests",
+		"effective_remaining_tokens",
+		"reserved_tokens",
+	} {
+		if !strings.Contains(js, field) {
+			t.Fatalf("dashboard is not wired to quota field %s", field)
+		}
 	}
 }

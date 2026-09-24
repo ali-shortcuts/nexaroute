@@ -13,6 +13,7 @@ import (
 
 	"github.com/ali-shortcuts/nexaroute/internal/core"
 	"github.com/ali-shortcuts/nexaroute/internal/events"
+	"github.com/ali-shortcuts/nexaroute/internal/providers"
 	"github.com/ali-shortcuts/nexaroute/internal/router"
 	"github.com/ali-shortcuts/nexaroute/internal/translate"
 )
@@ -82,6 +83,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		max = len(candidates)
 	}
 	routeCtx, routeCancel := routeContext(r.Context(), in.Stream, cfg.RequestTimeout())
+	routeCtx = providers.WithQuotaEstimate(routeCtx, req.EstimatedInputTokens, req.MaxOutputTokens)
 	defer routeCancel()
 	var lastErr string
 	var lastStatus int
