@@ -268,7 +268,7 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 		Model: in.Model, Tools: reqReqs.Tools, Vision: reqReqs.Vision,
 		Streaming: reqReqs.Streaming, Reasoning: reqReqs.Reasoning,
 	}
-	inspection := inspectRequestJSON(raw, "input_image", []string{"reasoning"})
+	inspection := inspectResponsesRequestJSON(raw)
 	req.EstimatedInputTokens = inspection.EstimatedPromptTokens
 	req.MaxOutputTokens = in.MaxOutputTokens
 	req.MinContextWindow = req.EstimatedInputTokens + req.MaxOutputTokens
