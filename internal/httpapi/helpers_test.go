@@ -1011,3 +1011,39 @@ func TestProviderLoadUsesEffectiveReservedQuotaHeadroom(t *testing.T) {
 		t.Fatalf("effective zero headroom must surface as exhausted pressure: %+v", load)
 	}
 }
+
+func TestQuotaReservationMetricsAndUIWiring(t *testing.T) {
+	srv := testGateway(t, config.Default())
+	req := httptest.NewRequest(http.MethodGet, "http://gateway/metrics", nil)
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("metrics status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	for _, metric := range []string{
+		"nexaroute_provider_reserved_requests",
+		"nexaroute_provider_effective_remaining_requests",
+		"nexaroute_provider_reserved_tokens",
+		"nexaroute_provider_effective_remaining_tokens",
+	} {
+		if !strings.Contains(rr.Body.String(), metric) {
+			t.Fatalf("metrics missing %s", metric)
+		}
+	}
+
+	app, err := webFS.ReadFile("web/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	js := string(app)
+	for _, field := range []string{
+		"effective_remaining_requests",
+		"reserved_requests",
+		"effective_remaining_tokens",
+		"reserved_tokens",
+	} {
+		if !strings.Contains(js, field) {
+			t.Fatalf("dashboard is not wired to quota field %s", field)
+		}
+	}
+}
