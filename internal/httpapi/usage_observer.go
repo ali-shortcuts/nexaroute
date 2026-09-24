@@ -115,8 +115,8 @@ func parseNonStreamUsage(protocol string, body []byte) (usageacct.Sample, bool) 
 	case "openai":
 		var env struct {
 			Usage *struct {
-				PromptTokens            int64 `json:"prompt_tokens"`
-				CompletionTokens        int64 `json:"completion_tokens"`
+				PromptTokens            *int64 `json:"prompt_tokens"`
+				CompletionTokens        *int64 `json:"completion_tokens"`
 				PromptTokensDetails     *struct {
 					CachedTokens int64 `json:"cached_tokens"`
 				} `json:"prompt_tokens_details"`
@@ -125,10 +125,10 @@ func parseNonStreamUsage(protocol string, body []byte) (usageacct.Sample, bool) 
 				} `json:"completion_tokens_details"`
 			} `json:"usage"`
 		}
-		if json.Unmarshal(body, &env) != nil || env.Usage == nil {
+		if json.Unmarshal(body, &env) != nil || env.Usage == nil || env.Usage.PromptTokens == nil || env.Usage.CompletionTokens == nil {
 			return usageacct.Sample{}, false
 		}
-		s := usageacct.Sample{InputTokens: env.Usage.PromptTokens, OutputTokens: env.Usage.CompletionTokens}
+		s := usageacct.Sample{InputTokens: *env.Usage.PromptTokens, OutputTokens: *env.Usage.CompletionTokens}
 		if env.Usage.PromptTokensDetails != nil {
 			s.CacheReadInputTokens = env.Usage.PromptTokensDetails.CachedTokens
 		}
@@ -139,20 +139,24 @@ func parseNonStreamUsage(protocol string, body []byte) (usageacct.Sample, bool) 
 	case "anthropic":
 		var env struct {
 			Usage *struct {
-				InputTokens              int64 `json:"input_tokens"`
-				OutputTokens             int64 `json:"output_tokens"`
-				CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
-				CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
+				InputTokens              *int64 `json:"input_tokens"`
+				OutputTokens             *int64 `json:"output_tokens"`
+				CacheCreationInputTokens *int64 `json:"cache_creation_input_tokens"`
+				CacheReadInputTokens     *int64 `json:"cache_read_input_tokens"`
 			} `json:"usage"`
 		}
-		if json.Unmarshal(body, &env) != nil || env.Usage == nil {
+		if json.Unmarshal(body, &env) != nil || env.Usage == nil || env.Usage.InputTokens == nil || env.Usage.OutputTokens == nil {
 			return usageacct.Sample{}, false
 		}
 		s := usageacct.Sample{
-			InputTokens:              env.Usage.InputTokens,
-			OutputTokens:             env.Usage.OutputTokens,
-			CacheReadInputTokens:     env.Usage.CacheReadInputTokens,
-			CacheCreationInputTokens: env.Usage.CacheCreationInputTokens,
+			InputTokens:  *env.Usage.InputTokens,
+			OutputTokens: *env.Usage.OutputTokens,
+		}
+		if env.Usage.CacheReadInputTokens != nil {
+			s.CacheReadInputTokens = *env.Usage.CacheReadInputTokens
+		}
+		if env.Usage.CacheCreationInputTokens != nil {
+			s.CacheCreationInputTokens = *env.Usage.CacheCreationInputTokens
 		}
 		return s, s.Valid()
 	default:
@@ -245,8 +249,8 @@ func (t *usageSSETracker) processFrame() error {
 	case "openai":
 		if raw := env["usage"]; len(raw) > 0 && string(raw) != "null" {
 			var u struct {
-				PromptTokens            int64 `json:"prompt_tokens"`
-				CompletionTokens        int64 `json:"completion_tokens"`
+				PromptTokens            *int64 `json:"prompt_tokens"`
+				CompletionTokens        *int64 `json:"completion_tokens"`
 				PromptTokensDetails     *struct {
 					CachedTokens int64 `json:"cached_tokens"`
 				} `json:"prompt_tokens_details"`
@@ -254,9 +258,9 @@ func (t *usageSSETracker) processFrame() error {
 					ReasoningTokens int64 `json:"reasoning_tokens"`
 				} `json:"completion_tokens_details"`
 			}
-			if json.Unmarshal(raw, &u) == nil {
-				t.sample.InputTokens = u.PromptTokens
-				t.sample.OutputTokens = u.CompletionTokens
+			if json.Unmarshal(raw, &u) == nil && u.PromptTokens != nil && u.CompletionTokens != nil {
+				t.sample.InputTokens = *u.PromptTokens
+				t.sample.OutputTokens = *u.CompletionTokens
 				if u.PromptTokensDetails != nil {
 					t.sample.CacheReadInputTokens = u.PromptTokensDetails.CachedTokens
 				}
@@ -293,8 +297,9 @@ func (t *usageSSETracker) processFrame() error {
 				} `json:"usage"`
 			}
 			if raw := env["message"]; len(raw) > 0 && json.Unmarshal(raw, &msg) == nil && msg.Usage != nil {
-				mergeAnthropicUsage(&t.sample, msg.Usage.InputTokens, msg.Usage.OutputTokens, msg.Usage.CacheReadInputTokens, msg.Usage.CacheCreationInputTokens)
-				t.usageSeen = t.sample.Valid()
+				if mergeAnthropicUsage(&t.sample, msg.Usage.InputTokens, msg.Usage.OutputTokens, msg.Usage.CacheReadInputTokens, msg.Usage.CacheCreationInputTokens) {
+					t.usageSeen = t.sample.Valid()
+				}
 			}
 		case "message_delta":
 			var u struct {
@@ -304,8 +309,9 @@ func (t *usageSSETracker) processFrame() error {
 				CacheReadInputTokens     *int64 `json:"cache_read_input_tokens"`
 			}
 			if raw := env["usage"]; len(raw) > 0 && json.Unmarshal(raw, &u) == nil {
-				mergeAnthropicUsage(&t.sample, u.InputTokens, u.OutputTokens, u.CacheReadInputTokens, u.CacheCreationInputTokens)
-				t.usageSeen = t.sample.Valid()
+				if mergeAnthropicUsage(&t.sample, u.InputTokens, u.OutputTokens, u.CacheReadInputTokens, u.CacheCreationInputTokens) {
+					t.usageSeen = t.sample.Valid()
+				}
 			}
 			var delta struct {
 				StopReason *string `json:"stop_reason"`
@@ -320,7 +326,8 @@ func (t *usageSSETracker) processFrame() error {
 	return nil
 }
 
-func mergeAnthropicUsage(s *usageacct.Sample, input, output, cacheRead, cacheCreate *int64) {
+func mergeAnthropicUsage(s *usageacct.Sample, input, output, cacheRead, cacheCreate *int64) bool {
+	seen := input != nil || output != nil || cacheRead != nil || cacheCreate != nil
 	if input != nil {
 		s.InputTokens = *input
 	}
@@ -333,6 +340,7 @@ func mergeAnthropicUsage(s *usageacct.Sample, input, output, cacheRead, cacheCre
 	if cacheCreate != nil {
 		s.CacheCreationInputTokens = *cacheCreate
 	}
+	return seen
 }
 
 func (t *usageSSETracker) finish() error {
