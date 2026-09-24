@@ -443,8 +443,9 @@ func (r *Router) orderCostAware(out []Scored, req Requirement, cfg config.Config
 	// Session affinity stays authoritative when enabled. Operators who want
 	// every turn re-priced can disable affinity explicitly.
 	if pin := r.pinned(req, cfg); pin != "" {
+		bestPriority := out[0].Deployment.Priority
 		for i := range out {
-			if out[i].Deployment.ID == pin {
+			if out[i].Deployment.ID == pin && out[i].Deployment.Priority == bestPriority {
 				chosen := out[i]
 				copy(out[1:i+1], out[0:i])
 				out[0] = chosen
