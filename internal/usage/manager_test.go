@@ -46,3 +46,10 @@ func TestRetainBoundsRuntimeKeys(t *testing.T) {
 		t.Fatalf("unexpected provider snapshot: %+v", got)
 	}
 }
+func TestRejectsUnreasonableUpstreamTokenCounts(t *testing.T) {
+	m := New()
+	m.Record("p/m", "p", Sample{InputTokens: maxTokensPerObservation + 1}, nil)
+	if got := m.Total(); got.ExactRequests != 0 || got.InputTokens != 0 {
+		t.Fatalf("unreasonable usage was accepted: %+v", got)
+	}
+}
