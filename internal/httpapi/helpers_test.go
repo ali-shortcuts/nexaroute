@@ -1075,6 +1075,23 @@ func TestQuotaRemainingPressureStartsBelowQuarterBudget(t *testing.T) {
 	}
 }
 
+func TestProviderEditorSerializesModelContextAndPricing(t *testing.T) {
+	app, err := webFS.ReadFile("web/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	js := string(app)
+	for _, field := range []string{
+		"context_window:",
+		"input_cost_per_mtok:",
+		"output_cost_per_mtok:",
+	} {
+		if !strings.Contains(js, field) {
+			t.Fatalf("provider editor save path omits model field %s", field)
+		}
+	}
+}
+
 func TestProviderEditButtonsUseCollectionSelector(t *testing.T) {
 	app, err := webFS.ReadFile("web/app.js")
 	if err != nil {
