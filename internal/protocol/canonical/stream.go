@@ -364,6 +364,18 @@ func DecodeGeminiStreamChunk(data string) ([]StreamEvent, bool, error) {
 	if d == "" {
 		return nil, false, nil
 	}
+	// DecodeGeminiResponse intentionally gives non-stream responses a default
+	// end_turn stop reason even when finishReason is omitted. Streaming cannot
+	// use that default to infer termination: ordinary intermediate Gemini
+	// chunks omit finishReason. Inspect the raw envelope separately.
+	var raw GeminiResponse_
+	if err := json.Unmarshal([]byte(d), &raw); err != nil {
+		return nil, false, fmt.Errorf("invalid Gemini stream chunk: %w", err)
+	}
+	terminal := raw.PromptFeedback != nil && raw.PromptFeedback.BlockReason != ""
+	if len(raw.Candidates) > 0 && strings.TrimSpace(raw.Candidates[0].FinishReason) != "" {
+		terminal = true
+	}
 	resp, err := DecodeGeminiResponse([]byte(d))
 	if err != nil {
 		return nil, false, err
@@ -385,8 +397,10 @@ func DecodeGeminiStreamChunk(data string) ([]StreamEvent, bool, error) {
 		u := resp.Usage
 		events = append(events, StreamEvent{Type: StreamUsage, Usage: &u})
 	}
-	events = append(events, StreamEvent{Type: StreamEnd, StopReason: resp.StopReason})
-	return events, false, nil
+	if terminal {
+		events = append(events, StreamEvent{Type: StreamEnd, StopReason: resp.StopReason})
+	}
+	return events, terminal, nil
 }
 
 // ---------- Client encoders (canonical events -> SSE) ----------
@@ -422,7 +436,9 @@ type anthropicEmitter struct {
 	blocks     map[int]int // upstream tool index -> anthropic content block index
 	nextIndex  int
 	textOpen   bool
+	textIndex  int
 	thinkOpen  bool
+	thinkIndex int
 	openBlocks map[int]bool
 	usage      Usage
 	usageSeen  bool
@@ -439,6 +455,7 @@ func NewAnthropicEmitter(w http.ResponseWriter, model, requestID string) StreamE
 	e := &anthropicEmitter{
 		w: w, fl: fl, model: model, messageID: uniqueMessageID(requestID),
 		blocks: map[int]int{}, openBlocks: map[int]bool{},
+		textIndex: -1, thinkIndex: -1,
 	}
 	e.frame("message_start", map[string]any{
 		"type": "message_start",
@@ -495,26 +512,40 @@ func (e *anthropicEmitter) Emit(ev StreamEvent) error {
 		}
 	case StreamText:
 		if !e.textOpen {
+			if e.thinkOpen {
+				e.closeBlock(e.thinkIndex)
+				e.thinkOpen = false
+				e.thinkIndex = -1
+			}
 			e.textOpen = true
-			e.openBlock(e.nextIndex, map[string]any{"type": "text", "text": ""})
+			e.textIndex = e.nextIndex
+			e.openBlock(e.textIndex, map[string]any{"type": "text", "text": ""})
 			e.nextIndex++
 		}
-		e.frame("content_block_delta", map[string]any{"type": "content_block_delta", "index": e.nextIndex - 1, "delta": map[string]any{"type": "text_delta", "text": ev.Text}})
+		e.frame("content_block_delta", map[string]any{"type": "content_block_delta", "index": e.textIndex, "delta": map[string]any{"type": "text_delta", "text": ev.Text}})
 	case StreamThinking:
 		if !e.thinkOpen {
+			if e.textOpen {
+				e.closeBlock(e.textIndex)
+				e.textOpen = false
+				e.textIndex = -1
+			}
 			e.thinkOpen = true
-			e.openBlock(e.nextIndex, map[string]any{"type": "thinking", "thinking": ""})
+			e.thinkIndex = e.nextIndex
+			e.openBlock(e.thinkIndex, map[string]any{"type": "thinking", "thinking": ""})
 			e.nextIndex++
 		}
-		e.frame("content_block_delta", map[string]any{"type": "content_block_delta", "index": e.nextIndex - 1, "delta": map[string]any{"type": "thinking_delta", "thinking": ev.Text}})
+		e.frame("content_block_delta", map[string]any{"type": "content_block_delta", "index": e.thinkIndex, "delta": map[string]any{"type": "thinking_delta", "thinking": ev.Text}})
 	case StreamToolStart:
 		if e.thinkOpen {
-			e.closeBlock(e.nextIndex - 1)
+			e.closeBlock(e.thinkIndex)
 			e.thinkOpen = false
+			e.thinkIndex = -1
 		}
 		if e.textOpen {
-			e.closeBlock(e.nextIndex - 1)
+			e.closeBlock(e.textIndex)
 			e.textOpen = false
+			e.textIndex = -1
 		}
 		idx := e.nextIndex
 		e.nextIndex++
@@ -548,10 +579,8 @@ func (e *anthropicEmitter) Emit(ev StreamEvent) error {
 			e.usageSeen = true
 		}
 	case StreamEnd:
-		if ev.StopReason != "" && ev.StopReason != StopStopSequence {
+		if ev.StopReason != "" {
 			e.stopReason = ev.StopReason
-		} else if ev.StopReason == StopStopSequence {
-			e.stopReason = StopMaxTokens
 		}
 	case StreamError:
 		e.frame("error", map[string]any{"type": "error", "error": map[string]any{"type": mapErrorType(ev.ErrorCode), "message": ev.ErrorMsg}})
@@ -565,10 +594,14 @@ func (e *anthropicEmitter) Finish() error {
 	}
 	e.finished = true
 	if e.thinkOpen {
-		e.closeBlock(e.nextIndex - 1)
+		e.closeBlock(e.thinkIndex)
+		e.thinkOpen = false
+		e.thinkIndex = -1
 	}
 	if e.textOpen {
-		e.closeBlock(e.nextIndex - 1)
+		e.closeBlock(e.textIndex)
+		e.textOpen = false
+		e.textIndex = -1
 	}
 	for idx, open := range e.openBlocks {
 		if open {
@@ -785,16 +818,18 @@ func openAIFinish(stop string) string {
 // ---------- Responses client emitter ----------
 
 type responsesEmitter struct {
-	w        http.ResponseWriter
-	fl       http.Flusher
-	model    string
-	id       string
-	writeErr error
-	toolIdx  map[int]string
-	itemSeq  int
-	usage    *Usage
-	stop     string
-	finished bool
+	w          http.ResponseWriter
+	fl         http.Flusher
+	model      string
+	id         string
+	writeErr   error
+	toolIdx    map[int]string
+	toolOutIdx map[int]int
+	nextOutIdx int
+	itemSeq    int
+	usage      *Usage
+	stop       string
+	finished   bool
 }
 
 // NewResponsesEmitter streams canonical events as OpenAI Responses SSE.
@@ -803,7 +838,10 @@ func NewResponsesEmitter(w http.ResponseWriter, model string) StreamEmitter {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("X-Accel-Buffering", "no")
-	e := &responsesEmitter{w: w, fl: fl, model: model, id: fmt.Sprintf("resp_%d", messageClock()), toolIdx: map[int]string{}}
+	e := &responsesEmitter{
+		w: w, fl: fl, model: model, id: fmt.Sprintf("resp_%d", messageClock()),
+		toolIdx: map[int]string{}, toolOutIdx: map[int]int{}, nextOutIdx: 1,
+	}
 	created := float64(timeNow())
 	e.event("response.created", map[string]any{"type": "response.created", "response": map[string]any{
 		"id": e.id, "object": "response", "status": "in_progress", "model": model, "output": []any{}, "created_at": created,
@@ -851,31 +889,46 @@ func (e *responsesEmitter) Emit(ev StreamEvent) error {
 		if callID == "" {
 			callID = fmt.Sprintf("call_%d", ev.ToolIndex)
 		}
+		outIdx := e.nextOutIdx
+		e.nextOutIdx++
 		e.toolIdx[ev.ToolIndex] = callID
+		e.toolOutIdx[ev.ToolIndex] = outIdx
 		e.event("response.output_item.added", map[string]any{
-			"type": "response.output_item.added", "output_index": 1,
+			"type": "response.output_item.added", "output_index": outIdx,
 			"item": map[string]any{"type": "function_call", "id": "fc_" + callID, "call_id": callID, "name": ev.ToolName, "arguments": "", "status": "in_progress"},
 		})
 	case StreamToolDelta:
 		callID, ok := e.toolIdx[ev.ToolIndex]
+		outIdx, outOK := e.toolOutIdx[ev.ToolIndex]
 		if !ok {
 			callID = fmt.Sprintf("call_%d", ev.ToolIndex)
 			e.toolIdx[ev.ToolIndex] = callID
 		}
+		if !outOK {
+			outIdx = e.nextOutIdx
+			e.nextOutIdx++
+			e.toolOutIdx[ev.ToolIndex] = outIdx
+		}
 		e.event("response.function_call_arguments.delta", map[string]any{
 			"type": "response.function_call_arguments.delta", "item_id": "fc_" + callID,
-			"output_index": 1, "delta": ev.ArgsDelta,
+			"output_index": outIdx, "delta": ev.ArgsDelta,
 		})
 	case StreamToolEnd:
 		callID, ok := e.toolIdx[ev.ToolIndex]
+		outIdx, outOK := e.toolOutIdx[ev.ToolIndex]
 		if !ok {
 			callID = fmt.Sprintf("call_%d", ev.ToolIndex)
 		}
+		if !outOK {
+			outIdx = e.nextOutIdx
+			e.nextOutIdx++
+			e.toolOutIdx[ev.ToolIndex] = outIdx
+		}
 		e.event("response.function_call_arguments.done", map[string]any{
-			"type": "response.function_call_arguments.done", "item_id": "fc_" + callID, "output_index": 1, "arguments": "",
+			"type": "response.function_call_arguments.done", "item_id": "fc_" + callID, "output_index": outIdx, "arguments": "",
 		})
 		e.event("response.output_item.done", map[string]any{
-			"type": "response.output_item.done", "output_index": 1,
+			"type": "response.output_item.done", "output_index": outIdx,
 			"item": map[string]any{"type": "function_call", "id": "fc_" + callID, "call_id": callID, "status": "completed"},
 		})
 	case StreamUsage:

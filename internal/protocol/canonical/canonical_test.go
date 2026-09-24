@@ -3,6 +3,7 @@ package canonical
 import (
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -388,3 +389,263 @@ func (s *sliceWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 func (s *sliceWriter) WriteHeader(int) {}
+
+func TestGeminiStreamChunkOnlyTerminatesOnFinalFinishReason(t *testing.T) {
+	nonFinal := `{"candidates":[{"content":{"role":"model","parts":[{"text":"partial"}]}}]}`
+	evs, terminal, err := DecodeGeminiStreamChunk(nonFinal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if terminal {
+		t.Fatal("Gemini chunk without finishReason was marked terminal")
+	}
+	for _, ev := range evs {
+		if ev.Type == StreamEnd {
+			t.Fatalf("non-final Gemini chunk emitted StreamEnd: %+v", evs)
+		}
+	}
+
+	final := `{"candidates":[{"content":{"role":"model","parts":[{"text":"done"}]},"finishReason":"STOP"}]}`
+	evs, terminal, err = DecodeGeminiStreamChunk(final)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !terminal {
+		t.Fatal("Gemini chunk with finishReason was not marked terminal")
+	}
+	foundEnd := false
+	for _, ev := range evs {
+		if ev.Type == StreamEnd {
+			foundEnd = true
+			if ev.StopReason == "" {
+				t.Fatalf("terminal Gemini event missing stop reason: %+v", ev)
+			}
+		}
+	}
+	if !foundEnd {
+		t.Fatalf("final Gemini chunk did not emit StreamEnd: %+v", evs)
+	}
+}
+
+func TestAnthropicEmitterKeepsTextAndThinkingBlockIndexesSeparate(t *testing.T) {
+	rr := httptest.NewRecorder()
+	emitter := NewAnthropicEmitter(rr, "model", "req-blocks")
+	events := []StreamEvent{
+		{Type: StreamText, Text: "text-a"},
+		{Type: StreamThinking, Text: "think-b"},
+		{Type: StreamText, Text: "text-c"},
+		{Type: StreamEnd, StopReason: StopEndTurn},
+	}
+	for _, ev := range events {
+		if err := emitter.Emit(ev); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := emitter.Finish(); err != nil {
+		t.Fatal(err)
+	}
+
+	got := map[string]int{}
+	for _, line := range strings.Split(rr.Body.String(), "\n") {
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		var frame map[string]any
+		if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &frame); err != nil {
+			t.Fatal(err)
+		}
+		if frame["type"] != "content_block_delta" {
+			continue
+		}
+		delta, _ := frame["delta"].(map[string]any)
+		typ, _ := delta["type"].(string)
+		var key string
+		switch typ {
+		case "text_delta":
+			key, _ = delta["text"].(string)
+		case "thinking_delta":
+			key, _ = delta["thinking"].(string)
+		default:
+			continue
+		}
+		idx, _ := frame["index"].(float64)
+		got[key] = int(idx)
+	}
+	if got["text-a"] != 0 || got["think-b"] != 1 || got["text-c"] != 2 {
+		t.Fatalf("interleaved text/thinking deltas used wrong block indexes: %#v\n%s", got, rr.Body.String())
+	}
+}
+
+func TestResponsesEmitterUsesDistinctOutputIndexesForParallelTools(t *testing.T) {
+	rr := httptest.NewRecorder()
+	emitter := NewResponsesEmitter(rr, "model")
+	events := []StreamEvent{
+		{Type: StreamToolStart, ToolIndex: 0, ToolID: "c0", ToolName: "first"},
+		{Type: StreamToolDelta, ToolIndex: 0, ArgsDelta: "{\"a\":1}"},
+		{Type: StreamToolEnd, ToolIndex: 0},
+		{Type: StreamToolStart, ToolIndex: 1, ToolID: "c1", ToolName: "second"},
+		{Type: StreamToolDelta, ToolIndex: 1, ArgsDelta: "{\"b\":2}"},
+		{Type: StreamToolEnd, ToolIndex: 1},
+		{Type: StreamEnd, StopReason: StopToolUse},
+	}
+	for _, ev := range events {
+		if err := emitter.Emit(ev); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := emitter.Finish(); err != nil {
+		t.Fatal(err)
+	}
+
+	indexByCall := map[string]int{}
+	for _, line := range strings.Split(rr.Body.String(), "\n") {
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		var frame map[string]any
+		if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &frame); err != nil {
+			t.Fatal(err)
+		}
+		item, _ := frame["item"].(map[string]any)
+		callID, _ := item["call_id"].(string)
+		if callID == "" {
+			if itemID, _ := frame["item_id"].(string); strings.HasPrefix(itemID, "fc_") {
+				callID = strings.TrimPrefix(itemID, "fc_")
+			}
+		}
+		if callID == "" {
+			continue
+		}
+		idx, ok := frame["output_index"].(float64)
+		if !ok {
+			continue
+		}
+		if prev, exists := indexByCall[callID]; exists && prev != int(idx) {
+			t.Fatalf("tool %s changed output_index from %d to %d\n%s", callID, prev, int(idx), rr.Body.String())
+		}
+		indexByCall[callID] = int(idx)
+	}
+	if indexByCall["c0"] != 1 || indexByCall["c1"] != 2 {
+		t.Fatalf("parallel tools reused output indexes: %#v\n%s", indexByCall, rr.Body.String())
+	}
+}
+
+func TestResponsesStreamDecoderPreservesParallelToolIndexes(t *testing.T) {
+	cases := []struct {
+		name      string
+		data      string
+		wantType  string
+		wantIndex int
+	}{
+		{"start0", `{"type":"response.output_item.added","output_index":1,"item":{"type":"function_call","call_id":"c0","name":"first"}}`, StreamToolStart, 1},
+		{"delta0", `{"type":"response.function_call_arguments.delta","output_index":1,"delta":"{\"a\":1}"}`, StreamToolDelta, 1},
+		{"end0", `{"type":"response.output_item.done","output_index":1,"item":{"type":"function_call","call_id":"c0"}}`, StreamToolEnd, 1},
+		{"start1", `{"type":"response.output_item.added","output_index":2,"item":{"type":"function_call","call_id":"c1","name":"second"}}`, StreamToolStart, 2},
+		{"delta1", `{"type":"response.function_call_arguments.delta","output_index":2,"delta":"{\"b\":2}"}`, StreamToolDelta, 2},
+		{"end1", `{"type":"response.output_item.done","output_index":2,"item":{"type":"function_call","call_id":"c1"}}`, StreamToolEnd, 2},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			evs, terminal, err := DecodeResponsesStreamEvent("", tc.data)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if terminal {
+				t.Fatalf("tool event unexpectedly terminal: %+v", evs)
+			}
+			if len(evs) != 1 || evs[0].Type != tc.wantType || evs[0].ToolIndex != tc.wantIndex {
+				t.Fatalf("decoded=%+v want type=%s index=%d", evs, tc.wantType, tc.wantIndex)
+			}
+		})
+	}
+}
+
+func TestResponsesStreamIncompleteIsTerminalMaxTokensNotError(t *testing.T) {
+	data := `{"type":"response.incomplete","response":{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"usage":{"input_tokens":11,"output_tokens":5}}}`
+	evs, terminal, err := DecodeResponsesStreamEvent("", data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !terminal {
+		t.Fatal("response.incomplete must terminate the stream")
+	}
+	var sawUsage, sawEnd bool
+	for _, ev := range evs {
+		if ev.Type == StreamError {
+			t.Fatalf("response.incomplete was misclassified as hard stream error: %+v", evs)
+		}
+		if ev.Type == StreamUsage && ev.Usage != nil && ev.Usage.InputTokens == 11 && ev.Usage.OutputTokens == 5 {
+			sawUsage = true
+		}
+		if ev.Type == StreamEnd && ev.StopReason == StopMaxTokens {
+			sawEnd = true
+		}
+	}
+	if !sawUsage || !sawEnd {
+		t.Fatalf("incomplete terminal semantics lost: %+v", evs)
+	}
+}
+
+func TestResponsesCompletedWithFunctionCallSignalsToolUse(t *testing.T) {
+	data := `{"type":"response.completed","response":{"status":"completed","output":[{"type":"function_call","call_id":"c1","name":"tool","arguments":"{}"}],"usage":{"input_tokens":3,"output_tokens":4}}}`
+	evs, terminal, err := DecodeResponsesStreamEvent("", data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !terminal {
+		t.Fatal("response.completed must terminate the stream")
+	}
+	found := false
+	for _, ev := range evs {
+		if ev.Type == StreamEnd {
+			found = true
+			if ev.StopReason != StopToolUse {
+				t.Fatalf("function-call completion stop=%q want %q", ev.StopReason, StopToolUse)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("completed response emitted no StreamEnd: %+v", evs)
+	}
+}
+
+func TestAnthropicEmitterPreservesStopSequenceReason(t *testing.T) {
+	rr := httptest.NewRecorder()
+	emitter := NewAnthropicEmitter(rr, "model", "req-stop-sequence")
+	if err := emitter.Emit(StreamEvent{Type: StreamText, Text: "done"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := emitter.Emit(StreamEvent{Type: StreamEnd, StopReason: StopStopSequence}); err != nil {
+		t.Fatal(err)
+	}
+	if err := emitter.Finish(); err != nil {
+		t.Fatal(err)
+	}
+	out := rr.Body.String()
+	if !strings.Contains(out, `"stop_reason":"stop_sequence"`) {
+		t.Fatalf("stop_sequence reason was not preserved: %s", out)
+	}
+	if strings.Contains(out, `"stop_reason":"max_tokens"`) {
+		t.Fatalf("stop_sequence was incorrectly reported as max_tokens: %s", out)
+	}
+}
+
+func TestResponsesNonStreamFunctionCallSignalsToolUse(t *testing.T) {
+	body := []byte(`{
+		"id":"resp_tool",
+		"model":"upstream",
+		"status":"completed",
+		"output":[{"type":"function_call","call_id":"c1","name":"lookup","arguments":"{\"q\":\"x\"}","status":"completed"}],
+		"usage":{"input_tokens":5,"output_tokens":2}
+	}`)
+	got, err := DecodeResponsesResponse(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.StopReason != StopToolUse {
+		t.Fatalf("function-call response stop=%q want %q", got.StopReason, StopToolUse)
+	}
+	if !got.HasToolCalls() {
+		t.Fatalf("function-call block lost: %+v", got)
+	}
+}

@@ -239,6 +239,14 @@ func bodySessionKey(root map[string]any) string {
 }
 
 func inspectRequestJSON(raw []byte, visionType string, reasoningKeys []string) requestInspection {
+	return inspectRequestJSONFields(raw, visionType, reasoningKeys, []string{"messages"})
+}
+
+func inspectResponsesRequestJSON(raw []byte) requestInspection {
+	return inspectRequestJSONFields(raw, "input_image", []string{"reasoning"}, []string{"input", "instructions"})
+}
+
+func inspectRequestJSONFields(raw []byte, visionType string, reasoningKeys, contentFields []string) requestInspection {
 	var root map[string]any
 	if json.Unmarshal(raw, &root) != nil {
 		return requestInspection{}
@@ -259,17 +267,21 @@ func inspectRequestJSON(raw []byte, visionType string, reasoningKeys []string) r
 		}
 	}
 
-	// Vision parts are meaningful inside message content. Restrict traversal to
-	// the messages subtree so a tool schema/example containing type=image(_url)
-	// cannot accidentally force vision-capable routing. The same traversal
-	// accumulates a cheap character estimate for context-window pre-routing.
-	messages, ok := root["messages"]
-	if !ok {
+	// Inspect only protocol-defined conversation/input fields. This keeps tool
+	// schemas and arbitrary metadata from falsely triggering vision while still
+	// giving Responses API requests their real input/instructions estimate.
+	stack := make([]any, 0, len(contentFields))
+	for _, field := range contentFields {
+		if v, ok := root[field]; ok {
+			stack = append(stack, v)
+		}
+	}
+	if len(stack) == 0 {
 		return out
 	}
+
 	chars := 0
 	messageCount := 0
-	stack := []any{messages}
 	nodes := 0
 	for len(stack) > 0 {
 		last := len(stack) - 1
@@ -284,7 +296,7 @@ func inspectRequestJSON(raw []byte, visionType string, reasoningKeys []string) r
 		case string:
 			chars += len(x)
 		case map[string]any:
-			if typ, _ := x["type"].(string); strings.EqualFold(typ, visionType) {
+			if typ, _ := x["type"].(string); visionType != "" && strings.EqualFold(typ, visionType) {
 				out.Vision = true
 			}
 			if _, isMsg := x["role"]; isMsg {

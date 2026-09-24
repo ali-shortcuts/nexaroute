@@ -415,6 +415,7 @@ func DecodeResponsesResponse(b []byte) (Response, error) {
 		return Response{}, fmt.Errorf("invalid Responses body: %w", err)
 	}
 	out := Response{ID: in.ID, Model: in.Model, StopReason: StopEndTurn, Raw: append(json.RawMessage(nil), b...)}
+	sawToolCall := false
 	for _, item := range in.Output {
 		switch item.Type {
 		case "message":
@@ -434,6 +435,7 @@ func DecodeResponsesResponse(b []byte) (Response, error) {
 				out.Blocks = append(out.Blocks, Block{Type: PartText, Text: sb.String()})
 			}
 		case "function_call":
+			sawToolCall = true
 			out.Blocks = append(out.Blocks, Block{Type: PartToolCall, ToolCall: &ToolCall{
 				ID: item.CallID, Name: item.Name, Arguments: item.Arguments,
 			}})
@@ -455,6 +457,10 @@ func DecodeResponsesResponse(b []byte) (Response, error) {
 	switch in.Status {
 	case "incomplete":
 		out.StopReason = StopMaxTokens
+	default:
+		if sawToolCall {
+			out.StopReason = StopToolUse
+		}
 	}
 	if in.Usage != nil {
 		out.Usage = Usage{InputTokens: in.Usage.InputTokens, OutputTokens: in.Usage.OutputTokens}
@@ -565,26 +571,49 @@ func DecodeResponsesStreamEvent(eventName, data string) ([]StreamEvent, bool, er
 		}
 	case "response.output_item.added":
 		var ev struct {
-			Item ResponsesOutputItem `json:"item"`
+			OutputIndex int                 `json:"output_index"`
+			Item        ResponsesOutputItem `json:"item"`
 		}
 		if json.Unmarshal([]byte(d), &ev) == nil && ev.Item.Type == "function_call" {
-			return []StreamEvent{{Type: StreamToolStart, ToolIndex: 0, ToolID: ev.Item.CallID, ToolName: ev.Item.Name}}, false, nil
+			return []StreamEvent{{Type: StreamToolStart, ToolIndex: ev.OutputIndex, ToolID: ev.Item.CallID, ToolName: ev.Item.Name}}, false, nil
 		}
 	case "response.function_call_arguments.delta":
 		var ev struct {
-			Delta string `json:"delta"`
+			OutputIndex int    `json:"output_index"`
+			Delta       string `json:"delta"`
 		}
 		if json.Unmarshal([]byte(d), &ev) == nil && ev.Delta != "" {
-			return []StreamEvent{{Type: StreamToolDelta, ToolIndex: 0, ArgsDelta: ev.Delta}}, false, nil
+			return []StreamEvent{{Type: StreamToolDelta, ToolIndex: ev.OutputIndex, ArgsDelta: ev.Delta}}, false, nil
 		}
 	case "response.output_item.done":
 		var ev struct {
-			Item ResponsesOutputItem `json:"item"`
+			OutputIndex int                 `json:"output_index"`
+			Item        ResponsesOutputItem `json:"item"`
 		}
 		if json.Unmarshal([]byte(d), &ev) == nil && ev.Item.Type == "function_call" {
-			return []StreamEvent{{Type: StreamToolEnd, ToolIndex: 0}}, false, nil
+			return []StreamEvent{{Type: StreamToolEnd, ToolIndex: ev.OutputIndex}}, false, nil
 		}
-	case "response.failed", "response.incomplete", "error":
+	case "response.incomplete":
+		var ev struct {
+			Response ResponsesResponse `json:"response"`
+		}
+		if err := json.Unmarshal([]byte(d), &ev); err != nil {
+			return nil, false, fmt.Errorf("invalid Responses incomplete event: %w", err)
+		}
+		var events []StreamEvent
+		if ev.Response.Usage != nil {
+			u := Usage{InputTokens: ev.Response.Usage.InputTokens, OutputTokens: ev.Response.Usage.OutputTokens}
+			if ev.Response.Usage.InputTokensDetails != nil {
+				u.CacheReadTokens = ev.Response.Usage.InputTokensDetails.CachedTokens
+			}
+			if ev.Response.Usage.OutputTokensDetails != nil {
+				u.ReasoningTokens = ev.Response.Usage.OutputTokensDetails.ReasoningTokens
+			}
+			events = append(events, StreamEvent{Type: StreamUsage, Usage: &u})
+		}
+		events = append(events, StreamEvent{Type: StreamEnd, StopReason: StopMaxTokens})
+		return events, true, nil
+	case "response.failed", "error":
 		var ev struct {
 			Response struct {
 				Error map[string]any `json:"error"`
@@ -604,11 +633,11 @@ func DecodeResponsesStreamEvent(eventName, data string) ([]StreamEvent, bool, er
 		return []StreamEvent{{Type: StreamError, ErrorCode: code, ErrorMsg: msg}}, true, nil
 	case "response.completed", "response.done":
 		var ev struct {
-			Response struct {
-				Usage *ResponsesUsage `json:"usage"`
-			} `json:"response"`
+			Response ResponsesResponse `json:"response"`
 		}
-		_ = json.Unmarshal([]byte(d), &ev)
+		if err := json.Unmarshal([]byte(d), &ev); err != nil {
+			return nil, false, fmt.Errorf("invalid Responses completed event: %w", err)
+		}
 		var events []StreamEvent
 		if ev.Response.Usage != nil {
 			u := Usage{InputTokens: ev.Response.Usage.InputTokens, OutputTokens: ev.Response.Usage.OutputTokens}
@@ -620,7 +649,14 @@ func DecodeResponsesStreamEvent(eventName, data string) ([]StreamEvent, bool, er
 			}
 			events = append(events, StreamEvent{Type: StreamUsage, Usage: &u})
 		}
-		events = append(events, StreamEvent{Type: StreamEnd, StopReason: StopEndTurn})
+		stop := StopEndTurn
+		for _, item := range ev.Response.Output {
+			if item.Type == "function_call" {
+				stop = StopToolUse
+				break
+			}
+		}
+		events = append(events, StreamEvent{Type: StreamEnd, StopReason: stop})
 		return events, true, nil
 	}
 	return nil, false, nil

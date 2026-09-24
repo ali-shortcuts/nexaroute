@@ -1047,3 +1047,31 @@ func TestQuotaReservationMetricsAndUIWiring(t *testing.T) {
 		}
 	}
 }
+
+func TestResponsesInspectionUsesInputAndInstructionsOnly(t *testing.T) {
+	raw := []byte(`{
+		"model":"gpt-x",
+		"instructions":"system guidance",
+		"input":[{"type":"message","role":"user","content":[
+			{"type":"input_text","text":"describe this"},
+			{"type":"input_image","image_url":"https://example.invalid/image.png"}
+		]}],
+		"tools":[{"type":"function","name":"f","parameters":{"type":"object","properties":{"fake":{"type":"input_image"}}}}]
+	}`)
+	got := inspectResponsesRequestJSON(raw)
+	if !got.Vision {
+		t.Fatal("Responses input_image was not detected")
+	}
+	if got.EstimatedPromptTokens <= 16 {
+		t.Fatalf("Responses input/instructions were not included in token estimate: %+v", got)
+	}
+
+	noImageInput := []byte(`{
+		"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"plain"}]}],
+		"tools":[{"parameters":{"example":{"type":"input_image"}}}]
+	}`)
+	got = inspectResponsesRequestJSON(noImageInput)
+	if got.Vision {
+		t.Fatal("tool schema input_image falsely triggered Responses vision")
+	}
+}
