@@ -84,6 +84,52 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "nexaroute_deployment_failures_total{deployment=%q,provider=%q} %d\n", id, provider, h.Failures)
 	}
 
+	usageRows := s.usage.Snapshot()
+	fmt.Fprintln(w, "# HELP nexaroute_usage_exact_requests_total Routed upstream responses with exact token usage reported.")
+	fmt.Fprintln(w, "# TYPE nexaroute_usage_exact_requests_total counter")
+	fmt.Fprintln(w, "# HELP nexaroute_usage_unknown_requests_total Routed upstream responses without complete exact token usage.")
+	fmt.Fprintln(w, "# TYPE nexaroute_usage_unknown_requests_total counter")
+	fmt.Fprintln(w, "# HELP nexaroute_usage_input_tokens_total Exact upstream input/prompt tokens reported.")
+	fmt.Fprintln(w, "# TYPE nexaroute_usage_input_tokens_total counter")
+	fmt.Fprintln(w, "# HELP nexaroute_usage_output_tokens_total Exact upstream output/completion tokens reported.")
+	fmt.Fprintln(w, "# TYPE nexaroute_usage_output_tokens_total counter")
+	fmt.Fprintln(w, "# HELP nexaroute_usage_cache_read_input_tokens_total Exact cache-read input tokens reported by upstreams.")
+	fmt.Fprintln(w, "# TYPE nexaroute_usage_cache_read_input_tokens_total counter")
+	fmt.Fprintln(w, "# HELP nexaroute_usage_cache_creation_input_tokens_total Exact cache-creation input tokens reported by upstreams.")
+	fmt.Fprintln(w, "# TYPE nexaroute_usage_cache_creation_input_tokens_total counter")
+	fmt.Fprintln(w, "# HELP nexaroute_usage_reasoning_tokens_total Exact reasoning tokens reported by OpenAI-compatible upstreams.")
+	fmt.Fprintln(w, "# TYPE nexaroute_usage_reasoning_tokens_total counter")
+	fmt.Fprintln(w, "# HELP nexaroute_estimated_cost_usd_total Cost estimate from exact usage and configured base input/output prices.")
+	fmt.Fprintln(w, "# TYPE nexaroute_estimated_cost_usd_total counter")
+	for _, st := range usageRows {
+		id := sanitizeMetricLabel(st.Deployment)
+		provider := sanitizeMetricLabel(st.Provider)
+		fmt.Fprintf(w, "nexaroute_usage_exact_requests_total{deployment=%q,provider=%q} %d\n", id, provider, st.ExactRequests)
+		fmt.Fprintf(w, "nexaroute_usage_unknown_requests_total{deployment=%q,provider=%q} %d\n", id, provider, st.UnknownRequests)
+		fmt.Fprintf(w, "nexaroute_usage_input_tokens_total{deployment=%q,provider=%q} %d\n", id, provider, st.InputTokens)
+		fmt.Fprintf(w, "nexaroute_usage_output_tokens_total{deployment=%q,provider=%q} %d\n", id, provider, st.OutputTokens)
+		fmt.Fprintf(w, "nexaroute_usage_cache_read_input_tokens_total{deployment=%q,provider=%q} %d\n", id, provider, st.CacheReadInputTokens)
+		fmt.Fprintf(w, "nexaroute_usage_cache_creation_input_tokens_total{deployment=%q,provider=%q} %d\n", id, provider, st.CacheCreationInputTokens)
+		fmt.Fprintf(w, "nexaroute_usage_reasoning_tokens_total{deployment=%q,provider=%q} %d\n", id, provider, st.ReasoningTokens)
+		fmt.Fprintf(w, "nexaroute_estimated_cost_usd_total{deployment=%q,provider=%q} %.9f\n", id, provider, st.EstimatedCostUSD)
+	}
+	usageTotal := s.usage.Total()
+	coverageDenom := usageTotal.ExactRequests + usageTotal.UnknownRequests
+	coverage := 0.0
+	if coverageDenom > 0 {
+		coverage = float64(usageTotal.ExactRequests) / float64(coverageDenom)
+	}
+	pricedCoverage := 0.0
+	if usageTotal.ExactRequests > 0 {
+		pricedCoverage = float64(usageTotal.PricedRequests) / float64(usageTotal.ExactRequests)
+	}
+	fmt.Fprintln(w, "# HELP nexaroute_usage_exact_coverage_ratio Fraction of observed routed upstream responses carrying exact usage.")
+	fmt.Fprintln(w, "# TYPE nexaroute_usage_exact_coverage_ratio gauge")
+	fmt.Fprintf(w, "nexaroute_usage_exact_coverage_ratio %.6f\n", coverage)
+	fmt.Fprintln(w, "# HELP nexaroute_usage_priced_coverage_ratio Fraction of exact-usage responses with configured model pricing.")
+	fmt.Fprintln(w, "# TYPE nexaroute_usage_priced_coverage_ratio gauge")
+	fmt.Fprintf(w, "nexaroute_usage_priced_coverage_ratio %.6f\n", pricedCoverage)
+
 	fmt.Fprintln(w, "# HELP nexaroute_runtime_events_total Cumulative routing/probe/stream events.")
 	fmt.Fprintln(w, "# TYPE nexaroute_runtime_events_total counter")
 	counts := s.bus.Counts()
