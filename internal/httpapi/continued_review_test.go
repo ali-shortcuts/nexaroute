@@ -234,3 +234,12 @@ func TestAnthropicMissingMessageStopIsNotSuccessful(t *testing.T) {
 		}
 	})
 }
+
+func TestLegacySSEReaderBoundsAggregateMultilineEvent(t *testing.T) {
+	line := "data: " + strings.Repeat("x", 1024) + "\n"
+	body := strings.Repeat(line, (8<<20)/len(line)+2) + "\n"
+	reader := newSSEReader(strings.NewReader(body))
+	if _, done, err := reader.Next(); err == nil || done {
+		t.Fatalf("oversized multi-line SSE event was accepted: done=%t err=%v", done, err)
+	}
+}

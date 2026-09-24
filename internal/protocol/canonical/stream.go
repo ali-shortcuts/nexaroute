@@ -52,7 +52,12 @@ type SSEReader struct {
 	done       bool
 	eventName  string
 	dataBuffer []string
+	eventBytes int
 }
+
+// Scanner's limit applies to each line, not to an event assembled from many
+// data: lines. Bound the entire untrusted upstream frame as well.
+const maxCanonicalSSEEventBytes = 8 << 20
 
 // NewSSEReader wraps an upstream body.
 func NewSSEReader(r io.Reader) *SSEReader {
@@ -66,8 +71,14 @@ func NewSSEReader(r io.Reader) *SSEReader {
 func (sr *SSEReader) Next() (name, data string, done bool, err error) {
 	for !sr.done && sr.scanner.Scan() {
 		line := sr.scanner.Text()
+		if len(line)+1 > maxCanonicalSSEEventBytes-sr.eventBytes {
+			sr.done = true
+			return "", "", false, fmt.Errorf("upstream SSE event exceeds %d bytes", maxCanonicalSSEEventBytes)
+		}
+		sr.eventBytes += len(line) + 1
 		switch {
 		case line == "":
+			sr.eventBytes = 0
 			// End of one SSE event block.
 			if len(sr.dataBuffer) > 0 {
 				payload := strings.Join(sr.dataBuffer, "\n")
