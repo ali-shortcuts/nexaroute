@@ -18,6 +18,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/ali-shortcuts/nexaroute/internal/config"
+	"github.com/ali-shortcuts/nexaroute/internal/providers"
 	"github.com/ali-shortcuts/nexaroute/internal/router"
 )
 
@@ -119,6 +120,45 @@ func errorTypeForStatus(code int) string {
 		}
 		return "_OTHER"
 	}
+}
+
+// errorTypeForUpstreamClass maps a classified upstream failure onto the
+// existing event error-type vocabulary, so logical errors (including 200s
+// carrying paywall text) are reported precisely without new event types.
+func errorTypeForUpstreamClass(c providers.UpstreamErrorClass) string {
+	switch c {
+	case providers.UpstreamQuota:
+		return "provider_billing"
+	case providers.UpstreamAuth:
+		return "provider_auth_failed"
+	case providers.UpstreamRateLimit:
+		return "provider_rate_limited"
+	case providers.UpstreamOverloaded:
+		return "provider_overloaded"
+	case providers.UpstreamNotFound:
+		return "provider_request_rejected"
+	case providers.UpstreamInvalid:
+		return "caller_invalid_request"
+	case providers.UpstreamServer:
+		return "provider_server_error"
+	default:
+		return "provider_invalid_response"
+	}
+}
+
+func asUpstreamLogicalError(err error) (*providers.UpstreamLogicalError, bool) {
+	var uerr *providers.UpstreamLogicalError
+	if errors.As(err, &uerr) && uerr != nil {
+		return uerr, true
+	}
+	return nil, false
+}
+
+func providerConfigFor(cfg config.Config, id string) config.ProviderConfig {
+	if i := cfg.ProviderIndex(id); i >= 0 && i < len(cfg.Providers) {
+		return cfg.Providers[i]
+	}
+	return config.ProviderConfig{}
 }
 
 func retryable(code int) bool {

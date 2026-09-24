@@ -3,7 +3,22 @@
 Tested path for a clean Ubuntu machine (22.04 / 24.04, amd64 or arm64).
 NexaRoute is a single Go binary plus a JSON config file; there is no database.
 
-## Option A — release package (recommended, no Go needed)
+## One-command install (recommended)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ali-shortcuts/nexaroute/main/scripts/install.sh | bash
+```
+
+The installer detects your architecture, uses the latest GitHub release
+(or builds from source automatically when no release exists yet — then it
+needs `git` and Go 1.23+), and never overwrites your existing config.
+Add `--service` to also install and start the user-level systemd service:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ali-shortcuts/nexaroute/main/scripts/install.sh | bash -s -- --service
+```
+
+## Option A — release package manually (no Go needed)
 
 ```bash
 sudo apt update && sudo apt install -y curl tar

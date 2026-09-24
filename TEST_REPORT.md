@@ -32,6 +32,7 @@ Every normal CI run also executes one bounded stress pass covering:
 
 - local runtime smoke test;
 - installable-package / installer smoke test;
+- one-command installer (`scripts/install.sh`) default-path smoke test;
 - Docker image build;
 - Docker runtime smoke test including config persistence and permissions.
 
@@ -58,7 +59,9 @@ Every normal CI run also executes one bounded stress pass covering:
 - concurrent event/session flood bounds;
 - bounded recovery-queue behavior and worker retry recovery;
 - fault injection with fake providers: hung-provider timeout failover, mid-stream upstream close, garbage-200 pre-commit failover, all-`429` capped `Retry-After` surfacing, connection-refused classification, flapping-provider cooldown isolation, credential redaction in failure bodies;
+- upstream logical-error fault injection: quota/auth/throttle/paywall bodies, HTTP 200 with error envelopes or error finish reasons, and mid-stream error chunks/errors — all fail over (or surface a precise typed `502`) without recording success;
 - route preview read-only API: ordering, explanations, session pin, alias/capability eligibility, empty-result notes, method guard.
+- upstream logical-error detection: 200 error envelopes / paywall content / error finish reasons fail over without recording success; streamed paywall/error tails correct accounting post-commit; quota/auth/throttle classes cool only the serving credential; `429 insufficient_quota` earns the long quota cooldown; provider-test/probe surface the classified cause.
 
 ## Measured routing performance (linux/amd64, CI-class vCPU)
 

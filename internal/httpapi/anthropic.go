@@ -15,6 +15,7 @@ import (
 
 	"github.com/ali-shortcuts/nexaroute/internal/core"
 	"github.com/ali-shortcuts/nexaroute/internal/events"
+	"github.com/ali-shortcuts/nexaroute/internal/providers"
 	"github.com/ali-shortcuts/nexaroute/internal/router"
 	"github.com/ali-shortcuts/nexaroute/internal/translate"
 )
@@ -164,7 +165,11 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 			} else {
 				s.hm.RecordFailure(c.Deployment.ID, lastErr, headerLatency)
 			}
-			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_fail", Deployment: c.Deployment.ID, Message: lastErr, ErrorType: errorTypeForStatus(resp.StatusCode), LatencyMS: headerLatency.Milliseconds(), StatusCode: resp.StatusCode})
+			errType := errorTypeForStatus(resp.StatusCode)
+			if uerr := providers.ClassifyUpstreamResponse(resp.StatusCode, b); uerr != nil {
+				errType = errorTypeForUpstreamClass(uerr.Class)
+			}
+			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_fail", Deployment: c.Deployment.ID, Message: lastErr, ErrorType: errType, LatencyMS: headerLatency.Milliseconds(), StatusCode: resp.StatusCode})
 			if failoverEligible(resp.StatusCode) && attempts < max && i+1 < len(candidates) {
 				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "failover", Deployment: c.Deployment.ID, Message: fmt.Sprintf("HTTP %d; trying next eligible candidate", resp.StatusCode), StatusCode: resp.StatusCode})
 				s.retryPause(routeCtx, r.Header.Get("x-request-id"), cfg, attemptIndex, max)
@@ -214,6 +219,13 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		totalLatency := time.Since(start)
 		if e != nil {
 			lastErr = e.Error()
+			decodeErrType := "provider_invalid_response"
+			streamErrType := "provider_stream_error"
+			if uerr, ok := asUpstreamLogicalError(e); ok {
+				decodeErrType = errorTypeForUpstreamClass(uerr.Class)
+				streamErrType = decodeErrType
+			}
+			lastErr = string(redactProviderBody(providerConfigFor(cfg, c.Deployment.ProviderID), []byte(lastErr)))
 			if clientRequestGone(r.Context()) {
 				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "client_disconnect", Deployment: c.Deployment.ID, Message: r.Context().Err().Error(), ErrorType: "caller_cancelled", LatencyMS: totalLatency.Milliseconds(), StatusCode: resp.StatusCode})
 				return
@@ -233,12 +245,12 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 				if req.Streaming {
 					kind = "stream_fail_precommit"
 				}
-				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: kind, Deployment: c.Deployment.ID, Message: lastErr, ErrorType: "provider_invalid_response", LatencyMS: totalLatency.Milliseconds(), StatusCode: resp.StatusCode})
+				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: kind, Deployment: c.Deployment.ID, Message: lastErr, ErrorType: decodeErrType, LatencyMS: totalLatency.Milliseconds(), StatusCode: resp.StatusCode})
 				if attempts < max && i+1 < len(candidates) {
 					s.retryPause(routeCtx, r.Header.Get("x-request-id"), cfg, attemptIndex, max)
 					continue
 				}
-				anthropicErrorJSON(w, http.StatusBadGateway, "upstream returned an invalid response")
+				anthropicErrorJSON(w, http.StatusBadGateway, "upstream returned an invalid response: "+lastErr)
 				return
 			}
 			if cfg.Routing.Strategy == "ready_mesh" && req.Streaming {
@@ -249,7 +261,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 			} else {
 				s.hm.RecordFailure(c.Deployment.ID, lastErr, totalLatency)
 			}
-			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "stream_fail", Deployment: c.Deployment.ID, Message: lastErr, ErrorType: "provider_stream_error", LatencyMS: totalLatency.Milliseconds(), StatusCode: resp.StatusCode})
+			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "stream_fail", Deployment: c.Deployment.ID, Message: lastErr, ErrorType: streamErrType, LatencyMS: totalLatency.Milliseconds(), StatusCode: resp.StatusCode})
 			// Once a successful upstream response has begun, do not attempt fake mid-stream failover.
 			return
 		}
@@ -385,6 +397,7 @@ type nativeSSETracker struct {
 	terminal bool
 	inTok    int64
 	outTok   int64
+	sniff    providers.StreamContentSniffer
 }
 
 const maxNativeSSELineBytes = 8 << 20
@@ -430,14 +443,20 @@ func (t *nativeSSETracker) processLine() error {
 	if err := json.Unmarshal(data, &env); err != nil {
 		return fmt.Errorf("invalid %s SSE JSON: %w", t.protocol, err)
 	}
-	if raw := env["error"]; len(raw) > 0 && string(raw) != "null" {
-		return fmt.Errorf("%s SSE error event", t.protocol)
+	// Canonical in-band error detection: error chunks, Anthropic error
+	// events, and terminal error finish/stop reasons. finish_reason
+	// "error" in particular must fail, not pass as a normal terminal.
+	if uerr := providers.ClassifySSEData(t.protocol, data); uerr != nil {
+		return uerr
 	}
 
 	switch t.protocol {
 	case "openai":
 		var choices []struct {
 			FinishReason json.RawMessage `json:"finish_reason"`
+			Delta        struct {
+				Content json.RawMessage `json:"content"`
+			} `json:"delta"`
 		}
 		if raw := env["choices"]; len(raw) > 0 {
 			if err := json.Unmarshal(raw, &choices); err != nil {
@@ -458,6 +477,12 @@ func (t *nativeSSETracker) processLine() error {
 			}
 		}
 		for _, choice := range choices {
+			if len(choice.Delta.Content) > 0 {
+				var text string
+				if err := json.Unmarshal(choice.Delta.Content, &text); err == nil {
+					t.sniff.Add(text)
+				}
+			}
 			if len(choice.FinishReason) == 0 || string(choice.FinishReason) == "null" {
 				continue
 			}
@@ -476,8 +501,16 @@ func (t *nativeSSETracker) processLine() error {
 				return fmt.Errorf("invalid Anthropic SSE type: %w", err)
 			}
 		}
-		if typ == "error" {
-			return fmt.Errorf("anthropic SSE error event")
+		if typ == "content_block_delta" {
+			var delta struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			}
+			if raw := env["delta"]; len(raw) > 0 {
+				if err := json.Unmarshal(raw, &delta); err == nil && delta.Type == "text_delta" {
+					t.sniff.Add(delta.Text)
+				}
+			}
 		}
 		if typ == "message_start" {
 			var start struct {
@@ -532,6 +565,12 @@ func (t *nativeSSETracker) finish() error {
 			return err
 		}
 		t.line = nil
+	}
+	// A paywall message delivered as stream deltas is still a failure: it
+	// must not record success or pin the session. Bytes are already
+	// committed, so detection only corrects accounting, not delivery.
+	if class := t.sniff.Sniff(); class != providers.UpstreamOK {
+		return providers.ContentSniffError(class, true)
 	}
 	if !t.terminal {
 		return io.ErrUnexpectedEOF
@@ -614,6 +653,7 @@ func streamOpenAIToAnthropic(w http.ResponseWriter, resp *http.Response, model s
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 64<<10), 8<<20)
 	var usageIn, usageOut int64
+	var sniff providers.StreamContentSniffer
 	nextIndex := 0
 	textIndex := -1
 	textStarted := false
@@ -677,12 +717,12 @@ func streamOpenAIToAnthropic(w http.ResponseWriter, resp *http.Response, model s
 				}
 			}
 		}
-		if er, ok := raw["error"]; ok {
-			emit("error", map[string]any{"type": "error", "error": er})
+		if uerr := providers.ClassifySSEData("openai", []byte(d)); uerr != nil {
+			emit("error", map[string]any{"type": "error", "error": map[string]any{"type": "api_error", "message": uerr.Message}})
 			if writeErr != nil {
 				return writeErr
 			}
-			return fmt.Errorf("openai stream error")
+			return uerr
 		}
 		var obj struct {
 			Choices []struct {
@@ -703,6 +743,7 @@ func streamOpenAIToAnthropic(w http.ResponseWriter, resp *http.Response, model s
 		switch v := ch.Delta.Content.(type) {
 		case string:
 			if v != "" {
+				sniff.Add(v)
 				startText()
 				emit("content_block_delta", map[string]any{"type": "content_block_delta", "index": textIndex, "delta": map[string]any{"type": "text_delta", "text": v}})
 			}
@@ -746,6 +787,11 @@ func streamOpenAIToAnthropic(w http.ResponseWriter, resp *http.Response, model s
 	if err := scanner.Err(); err != nil {
 		emit("error", map[string]any{"type": "error", "error": map[string]any{"type": "api_error", "message": err.Error()}})
 		return err
+	}
+	if class := sniff.Sniff(); class != providers.UpstreamOK {
+		uerr := providers.ContentSniffError(class, true)
+		emit("error", map[string]any{"type": "error", "error": map[string]any{"type": "api_error", "message": uerr.Message}})
+		return uerr
 	}
 	if !terminal {
 		err := io.ErrUnexpectedEOF

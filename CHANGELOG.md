@@ -12,6 +12,8 @@ This file describes the current supported v0.3 state only. Superseded interim im
 - `POST /admin/api/route-preview` resolves hypothetical requests read-only with per-candidate explanations.
 - `routing.attempt_timeout_ms` (default off) bounds each non-streaming attempt inside the request budget so failover survives a hung provider.
 - Client-visible `429` responses carry the capped upstream `Retry-After`; transport failures are classified (DNS/timeout/cancel/refused/reset/TLS) in route-failure events.
+- Upstream logical errors are detected canonically: 200s with error envelopes, error finish reasons, or paywall/quota/auth/throttle text in content (or stream deltas) fail over instead of recording success; quota/auth/throttle causes cool only the serving credential, and `429 insufficient_quota` earns the long quota cooldown instead of the transient throttle window. See `docs/UPSTREAM_ERRORS.md`.
+- One-command Linux installer (`scripts/install.sh`): `curl -fsSL ... | bash` installs the binary plus a `0600` config (never overwritten) from the latest GitHub release, or automatically from source when no release exists yet; `--service` installs the user systemd unit.
 - Guardrails: `max_prompt_chars` counts characters (multibyte-aware, not bytes); blocked patterns also scan decoded JSON string content so `\uXXXX`-escaped keywords cannot bypass the filter.
 - Every failover candidate is revalidated immediately before use.
 - The first eligible routed failure quarantines the deployment.

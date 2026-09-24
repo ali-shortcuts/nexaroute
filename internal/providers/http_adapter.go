@@ -313,7 +313,13 @@ func (a *httpAdapter) DoPath(ctx context.Context, method, path string, payload [
 			}
 		}
 		if idx >= 0 && credentialRetryStatus(resp.StatusCode) {
-			a.cooldownCredential(idx, resp.StatusCode, resp.Header.Get("Retry-After"))
+			// Peek at the error body (replayably) before cooling the key: a
+			// 429 carrying insufficient_quota is account state, not a
+			// transient throttle, and earns the long quota cooldown instead
+			// of the short Retry-After window.
+			peeked := peekResponseBody(resp, maxCredentialPeekBytes)
+			uerr := ClassifyUpstreamResponse(resp.StatusCode, peeked)
+			a.cooldownCredentialFor(idx, resp.StatusCode, resp.Header.Get("Retry-After"), uerr)
 			if a.hasAvailableCredential(attempted) {
 				body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 				resp.Body.Close()
@@ -321,8 +327,46 @@ func (a *httpAdapter) DoPath(ctx context.Context, method, path string, payload [
 				lastErr = fmt.Errorf("credential rejected http %d: %s", resp.StatusCode, a.safeSnippet(body))
 				continue
 			}
+		} else if idx >= 0 && resp.StatusCode >= 200 && resp.StatusCode < 300 && !stream {
+			// A 2xx status alone proves nothing: proxies may answer 200
+			// with an error envelope or a paywall message inside a
+			// valid-looking completion. Only mark the credential
+			// successful when the peeked body shows no logical error;
+			// key-scoped logical errors (dead/quota/racing keys) cool the
+			// key and rotate exactly like their non-2xx equivalents.
+			peeked := peekResponseBody(resp, maxCredentialPeekBytes)
+			if uerr := ClassifyUpstreamResponse(resp.StatusCode, peeked); uerr != nil {
+				if uerr.Class.KeyScoped() {
+					a.cooldownCredential(idx, uerr.Class.CooldownStatus(), resp.Header.Get("Retry-After"))
+					if a.hasAvailableCredential(attempted) {
+						_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+						resp.Body.Close()
+						a.releaseCredential(idx)
+						lastErr = fmt.Errorf("credential served logical %s error: %s", uerr.Class, a.safeSnippet([]byte(uerr.Message)))
+						continue
+					}
+				} else {
+					a.noteCredentialFailure(idx, resp.StatusCode)
+				}
+				// Fall through with the replayed body: the caller runs the
+				// same classifier on the full response and fails over to
+				// the next deployment.
+			} else {
+				a.markCredentialSuccess(idx)
+			}
 		} else if idx >= 0 && resp.StatusCode >= 200 && resp.StatusCode < 300 {
 			a.markCredentialSuccess(idx)
+			// Stream headers are only a provisional success: watch for
+			// in-band error chunks and correct the credential outcome if
+			// the stream carries one. The watcher is strictly
+			// pass-through and disables itself on any anomaly.
+			resp.Body = newSSECredentialWatchBody(resp.Body, a.sseWatchProtocol(), func(class UpstreamErrorClass) {
+				if class.KeyScoped() {
+					a.cooldownCredential(idx, class.CooldownStatus(), "")
+				} else {
+					a.noteCredentialFailure(idx, resp.StatusCode)
+				}
+			})
 		}
 
 		// Provider and credential capacity both stay reserved until the body is
@@ -484,6 +528,120 @@ func (a *httpAdapter) cooldownCredential(i, status int, retryAfter string) {
 	a.creds[i].CooldownUntil = time.Now().Add(d)
 }
 
+// cooldownCredentialFor refines the cooldown bucket with the classified
+// failure: quota exhaustion is account state and always earns the long
+// quota cooldown, even when the provider reports it as 429.
+func (a *httpAdapter) cooldownCredentialFor(i, status int, retryAfter string, uerr *UpstreamLogicalError) {
+	if uerr != nil && uerr.Class == UpstreamQuota {
+		status = 402
+	}
+	a.cooldownCredential(i, status, retryAfter)
+}
+
+// noteCredentialFailure records a deployment-scoped failure against the
+// serving credential (power-of-two prefers healthier keys) without cooling
+// it: the key itself is fine, the deployment is not.
+func (a *httpAdapter) noteCredentialFailure(i, status int) {
+	a.credMu.Lock()
+	defer a.credMu.Unlock()
+	if i < 0 || i >= len(a.creds) {
+		return
+	}
+	a.creds[i].Failures++
+	a.creds[i].LastStatus = status
+}
+
+func (a *httpAdapter) sseWatchProtocol() string {
+	if a.p.Type == "anthropic_compatible" {
+		return "anthropic"
+	}
+	return "openai"
+}
+
+// maxCredentialPeekBytes bounds adapter-side body inspection. Error
+// envelopes and injected paywall text always sit at the start of the body,
+// so a small peek classifies credential outcomes without buffering whole
+// (potentially multi-megabyte) completions. Peeked bytes are replayed to
+// the caller untouched.
+const maxCredentialPeekBytes = 64 << 10
+
+type replayBody struct {
+	io.Reader
+	io.Closer
+}
+
+func peekResponseBody(resp *http.Response, n int) []byte {
+	peeked, _ := io.ReadAll(io.LimitReader(resp.Body, int64(n)))
+	resp.Body = &replayBody{Reader: io.MultiReader(bytes.NewReader(peeked), resp.Body), Closer: resp.Body}
+	return peeked
+}
+
+const maxSSEWatchLineBytes = 1 << 20
+
+// sseCredentialWatchBody observes a streamed upstream body for in-band
+// error chunks and reports the first detected failure class. It never
+// alters, delays, or truncates bytes; any oversized line or internal
+// anomaly permanently disables observation (pass-through from then on).
+type sseCredentialWatchBody struct {
+	rc       io.ReadCloser
+	protocol string
+	onError  func(UpstreamErrorClass)
+	line     []byte
+	done     bool
+}
+
+func newSSECredentialWatchBody(rc io.ReadCloser, protocol string, onError func(UpstreamErrorClass)) io.ReadCloser {
+	return &sseCredentialWatchBody{rc: rc, protocol: protocol, onError: onError}
+}
+
+func (b *sseCredentialWatchBody) Read(p []byte) (int, error) {
+	n, err := b.rc.Read(p)
+	if n > 0 && !b.done {
+		b.scan(p[:n])
+	}
+	return n, err
+}
+
+func (b *sseCredentialWatchBody) Close() error { return b.rc.Close() }
+
+func (b *sseCredentialWatchBody) scan(chunk []byte) {
+	for len(chunk) > 0 && !b.done {
+		i := bytes.IndexByte(chunk, '\n')
+		if i < 0 {
+			if len(b.line)+len(chunk) > maxSSEWatchLineBytes {
+				b.line = nil
+				b.done = true
+				return
+			}
+			b.line = append(b.line, chunk...)
+			return
+		}
+		if len(b.line)+i > maxSSEWatchLineBytes {
+			b.line = nil
+			b.done = true
+			return
+		}
+		b.line = append(b.line, chunk[:i]...)
+		b.checkLine(b.line)
+		b.line = b.line[:0]
+		chunk = chunk[i+1:]
+	}
+}
+
+func (b *sseCredentialWatchBody) checkLine(line []byte) {
+	line = bytes.TrimSpace(line)
+	if len(line) == 0 || !bytes.HasPrefix(line, []byte("data:")) {
+		return
+	}
+	data := bytes.TrimSpace(line[len("data:"):])
+	if uerr := ClassifySSEData(b.protocol, data); uerr != nil {
+		b.done = true
+		if b.onError != nil {
+			b.onError(uerr.Class)
+		}
+	}
+}
+
 func (a *httpAdapter) nextCredentialRetryAfter() (time.Duration, bool) {
 	a.credMu.RLock()
 	defer a.credMu.RUnlock()
@@ -584,7 +742,11 @@ func (a *httpAdapter) Probe(ctx context.Context, model string, maxTokens int) (t
 		return lat, resp.StatusCode, fmt.Errorf("probe response exceeds %d bytes", maxProbeResponseBytes)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return lat, resp.StatusCode, fmt.Errorf("probe http %d: %s", resp.StatusCode, a.safeSnippet(data))
+		class := ""
+		if uerr := ClassifyUpstreamResponse(resp.StatusCode, data); uerr != nil {
+			class = " (" + string(uerr.Class) + ")"
+		}
+		return lat, resp.StatusCode, fmt.Errorf("probe http %d%s: %s", resp.StatusCode, class, a.safeSnippet(data))
 	}
 	if err := a.validateProbeResponse(data); err != nil {
 		return lat, resp.StatusCode, err
@@ -599,6 +761,15 @@ func (a *httpAdapter) validateProbeResponse(data []byte) error {
 	}
 	if raw, ok := root["error"]; ok && len(raw) > 0 && string(raw) != "null" {
 		return fmt.Errorf("probe returned error envelope: %s", a.safeSnippet(raw))
+	}
+	// Error envelopes already failed above; the classifier additionally
+	// rejects error finish reasons and injected paywall/auth/throttle text
+	// inside otherwise valid-looking completions. Note the max_tokens=1
+	// caveat: a provider that truncates injected text to one token defeats
+	// content sniffing here, but the data plane still catches the full
+	// text on the first real request and quarantines the deployment.
+	if uerr := ClassifyUpstreamResponse(200, data); uerr != nil {
+		return fmt.Errorf("probe detected upstream %s error: %s", uerr.Class, a.safeSnippet([]byte(uerr.Message)))
 	}
 	switch a.p.Type {
 	case "anthropic_compatible":

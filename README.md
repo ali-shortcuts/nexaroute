@@ -4,6 +4,24 @@ A self-hosted Go gateway for routing Anthropic-compatible and OpenAI-compatible 
 
 This package intentionally stays named **v0.3** until the user validates it on the target Ubuntu machine. The code is runnable and heavily tested, but no software can honestly be guaranteed to contain zero bugs.
 
+## Install in one command (Linux)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ali-shortcuts/nexaroute/main/scripts/install.sh | bash
+```
+
+This installs `~/.local/bin/nexaroute` and `~/.config/nexaroute/config.json`
+(mode `0600`; an existing config is never overwritten), using the latest
+GitHub release — or building from source automatically when no release
+exists yet. Then run:
+
+```bash
+~/.local/bin/nexaroute -config ~/.config/nexaroute/config.json
+```
+
+Open `http://127.0.0.1:8080/`. See `docs/UBUNTU_INSTALL.md` for systemd
+autostart, updating, uninstalling, and troubleshooting.
+
 ## What v0.3 currently implements
 
 ### Client-facing endpoints
@@ -54,6 +72,7 @@ Implemented resilience:
 - EWMA latency and failure-rate scoring
 - retries/failover before response bytes are committed
 - failover on transport errors, selected 4xx provider/auth failures, `429`, and retryable `5xx`
+- upstream logical-error detection: `200` responses carrying an error envelope, an error finish reason, or injected paywall/quota text (for example "doesn't have enough credits") are classified as failures, never successes — with per-key cooldown for quota/auth/throttle causes and failover to the next healthy deployment (see `docs/UPSTREAM_ERRORS.md`)
 - `Retry-After` handling with a configurable cap, surfaced to the client on exhausted `429` responses
 - optional `attempt_timeout_ms` per-attempt bound so one hung provider cannot consume the whole request budget before failover (default off; streaming exempt)
 - failure events classify transport causes (DNS, timeout, caller cancel, connection refused/reset, TLS) so client cancellations are never counted as provider failures

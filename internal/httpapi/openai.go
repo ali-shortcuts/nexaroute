@@ -12,6 +12,7 @@ import (
 
 	"github.com/ali-shortcuts/nexaroute/internal/core"
 	"github.com/ali-shortcuts/nexaroute/internal/events"
+	"github.com/ali-shortcuts/nexaroute/internal/providers"
 	"github.com/ali-shortcuts/nexaroute/internal/router"
 	"github.com/ali-shortcuts/nexaroute/internal/translate"
 )
@@ -158,7 +159,11 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 			} else {
 				s.hm.RecordFailure(c.Deployment.ID, lastErr, headerLatency)
 			}
-			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_fail", Deployment: c.Deployment.ID, Message: lastErr, ErrorType: errorTypeForStatus(resp.StatusCode), LatencyMS: headerLatency.Milliseconds(), StatusCode: resp.StatusCode})
+			errType := errorTypeForStatus(resp.StatusCode)
+			if uerr := providers.ClassifyUpstreamResponse(resp.StatusCode, b); uerr != nil {
+				errType = errorTypeForUpstreamClass(uerr.Class)
+			}
+			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_fail", Deployment: c.Deployment.ID, Message: lastErr, ErrorType: errType, LatencyMS: headerLatency.Milliseconds(), StatusCode: resp.StatusCode})
 			if failoverEligible(resp.StatusCode) && attempts < max && i+1 < len(candidates) {
 				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "failover", Deployment: c.Deployment.ID, Message: fmt.Sprintf("HTTP %d; trying next eligible candidate", resp.StatusCode), StatusCode: resp.StatusCode})
 				s.retryPause(routeCtx, r.Header.Get("x-request-id"), cfg, attemptIndex, max)
@@ -202,6 +207,13 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 		total := time.Since(start)
 		if e != nil {
 			lastErr = e.Error()
+			decodeErrType := "provider_invalid_response"
+			streamErrType := "provider_stream_error"
+			if uerr, ok := asUpstreamLogicalError(e); ok {
+				decodeErrType = errorTypeForUpstreamClass(uerr.Class)
+				streamErrType = decodeErrType
+			}
+			lastErr = string(redactProviderBody(providerConfigFor(cfg, c.Deployment.ProviderID), []byte(lastErr)))
 			if clientRequestGone(r.Context()) {
 				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "client_disconnect", Deployment: c.Deployment.ID, Message: r.Context().Err().Error(), ErrorType: "caller_cancelled", LatencyMS: total.Milliseconds(), StatusCode: resp.StatusCode})
 				return
@@ -221,12 +233,12 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 				if req.Streaming {
 					kind = "stream_fail_precommit"
 				}
-				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: kind, Deployment: c.Deployment.ID, Message: lastErr, ErrorType: "provider_invalid_response", LatencyMS: total.Milliseconds(), StatusCode: resp.StatusCode})
+				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: kind, Deployment: c.Deployment.ID, Message: lastErr, ErrorType: decodeErrType, LatencyMS: total.Milliseconds(), StatusCode: resp.StatusCode})
 				if attempts < max && i+1 < len(candidates) {
 					s.retryPause(routeCtx, r.Header.Get("x-request-id"), cfg, attemptIndex, max)
 					continue
 				}
-				errorJSON(w, http.StatusBadGateway, "upstream returned an invalid response")
+				errorJSON(w, http.StatusBadGateway, "upstream returned an invalid response: "+lastErr)
 				return
 			}
 			if cfg.Routing.Strategy == "ready_mesh" && req.Streaming {
@@ -237,7 +249,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 			} else {
 				s.hm.RecordFailure(c.Deployment.ID, lastErr, total)
 			}
-			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "stream_fail", Deployment: c.Deployment.ID, Message: lastErr, ErrorType: "provider_stream_error", LatencyMS: total.Milliseconds(), StatusCode: resp.StatusCode})
+			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "stream_fail", Deployment: c.Deployment.ID, Message: lastErr, ErrorType: streamErrType, LatencyMS: total.Milliseconds(), StatusCode: resp.StatusCode})
 			return
 		}
 		s.recordRouteSuccess(req, c.Deployment.ID, headerLatency)
@@ -289,6 +301,7 @@ func streamAnthropicToOpenAI(w http.ResponseWriter, resp *http.Response, model s
 	scanner.Buffer(make([]byte, 64<<10), 8<<20)
 	finish := "stop"
 	terminal := false
+	var sniff providers.StreamContentSniffer
 	var usageIn, usageOut int64
 	completionID := uniqueStreamID("chatcmpl", requestID...)
 	toolIndex := map[int]int{}
@@ -335,6 +348,7 @@ func streamAnthropicToOpenAI(w http.ResponseWriter, resp *http.Response, model s
 			switch dt {
 			case "text_delta":
 				txt, _ := delta["text"].(string)
+				sniff.Add(txt)
 				emit(map[string]any{"id": completionID, "object": "chat.completion.chunk", "model": model, "choices": []any{map[string]any{"index": 0, "delta": map[string]any{"content": txt}, "finish_reason": nil}}})
 			case "input_json_delta":
 				part, _ := delta["partial_json"].(string)
@@ -346,6 +360,10 @@ func streamAnthropicToOpenAI(w http.ResponseWriter, resp *http.Response, model s
 		case "message_delta":
 			del, _ := env["delta"].(map[string]any)
 			sr, _ := del["stop_reason"].(string)
+			if uerr := providers.ClassifySSEData("anthropic", []byte(d)); uerr != nil {
+				emit(map[string]any{"error": map[string]any{"message": uerr.Message}})
+				return uerr
+			}
 			if sr != "" {
 				terminal = true
 			}
@@ -363,6 +381,9 @@ func streamAnthropicToOpenAI(w http.ResponseWriter, resp *http.Response, model s
 			if writeErr != nil {
 				return writeErr
 			}
+			if uerr := providers.ClassifySSEData("anthropic", []byte(d)); uerr != nil {
+				return uerr
+			}
 			return fmt.Errorf("anthropic stream error")
 		}
 		if writeErr != nil {
@@ -371,6 +392,9 @@ func streamAnthropicToOpenAI(w http.ResponseWriter, resp *http.Response, model s
 	}
 	if err := scanner.Err(); err != nil {
 		return err
+	}
+	if class := sniff.Sniff(); class != providers.UpstreamOK {
+		return providers.ContentSniffError(class, true)
 	}
 	if !terminal {
 		return io.ErrUnexpectedEOF
