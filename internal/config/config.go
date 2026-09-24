@@ -112,14 +112,20 @@ type ProviderConfig struct {
 	Models                   []ModelConfig      `json:"models"`
 }
 
+type PricingConfig struct {
+	InputUSDPerMillion  float64 `json:"input_usd_per_million"`
+	OutputUSDPerMillion float64 `json:"output_usd_per_million"`
+}
+
 type ModelConfig struct {
-	ID           string       `json:"id"`
-	Model        string       `json:"model"`
-	Aliases      []string     `json:"aliases,omitempty"`
-	Enabled      bool         `json:"enabled"`
-	Priority     int          `json:"priority"`
-	Weight       float64      `json:"weight"`
-	Capabilities Capabilities `json:"capabilities"`
+	ID           string         `json:"id"`
+	Model        string         `json:"model"`
+	Aliases      []string       `json:"aliases,omitempty"`
+	Enabled      bool           `json:"enabled"`
+	Priority     int            `json:"priority"`
+	Weight       float64        `json:"weight"`
+	Pricing      *PricingConfig `json:"pricing,omitempty"`
+	Capabilities Capabilities   `json:"capabilities"`
 }
 
 type Capabilities struct {
@@ -617,6 +623,16 @@ func (c Config) Validate() error {
 			}
 			if math.IsNaN(m.Weight) || math.IsInf(m.Weight, 0) || m.Weight <= 0 || m.Weight > 1_000_000 {
 				return fmt.Errorf("deployment %q weight must be finite and between 0 and 1000000", p.ID+"/"+m.ID)
+			}
+			if m.Pricing != nil {
+				for name, v := range map[string]float64{
+					"input_usd_per_million":  m.Pricing.InputUSDPerMillion,
+					"output_usd_per_million": m.Pricing.OutputUSDPerMillion,
+				} {
+					if math.IsNaN(v) || math.IsInf(v, 0) || v < 0 || v > 1_000_000 {
+						return fmt.Errorf("deployment %q pricing.%s must be finite and between 0 and 1000000", p.ID+"/"+m.ID, name)
+					}
+				}
 			}
 			key := p.ID + "/" + m.ID
 			if seenD[key] {
