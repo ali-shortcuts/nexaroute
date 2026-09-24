@@ -3,6 +3,7 @@ package probe
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"sort"
 	"strings"
 	"sync"
@@ -14,6 +15,16 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/providers"
 	"github.com/ali-shortcuts/nexaroute/internal/router"
 )
+
+func providerIncidentProbeFailure(status int) bool {
+	return status == 0 ||
+		status == http.StatusUnauthorized ||
+		status == http.StatusPaymentRequired ||
+		status == http.StatusForbidden ||
+		status == http.StatusRequestTimeout ||
+		status == http.StatusTooManyRequests ||
+		status >= 500
+}
 
 type Result struct {
 	Total           int   `json:"total"`
@@ -437,12 +448,16 @@ func (e *Engine) processRecoveryTask(ctx context.Context, task recoveryTask) {
 	}
 	if err == nil {
 		e.hm.RecordSuccess(task.id, lat)
+		e.hm.RecordProviderSuccess(d.ProviderID)
 		e.bus.Add(events.Event{Kind: "recovery_ready", Deployment: task.id, Message: fmt.Sprintf("recovered on attempt %d/%d", task.attempt, attempts), LatencyMS: lat.Milliseconds(), StatusCode: status})
 		e.clearRecoveryTask(task)
 		return
 	}
 
 	if wait, ok := providers.RetryAfter(err); ok {
+		if providerIncidentProbeFailure(status) {
+			e.hm.RecordProviderFailure(d.ProviderID, task.id, err.Error())
+		}
 		maxWait := time.Duration(cfg.Routing.MaxRetryAfterSeconds) * time.Second
 		if maxWait > 0 && wait > maxWait {
 			wait = maxWait
@@ -453,6 +468,9 @@ func (e *Engine) processRecoveryTask(ctx context.Context, task recoveryTask) {
 	}
 
 	lastErr := err.Error()
+	if providerIncidentProbeFailure(status) {
+		e.hm.RecordProviderFailure(d.ProviderID, task.id, lastErr)
+	}
 	e.hm.RecordRecoveryFailure(task.id, lastErr, lat)
 	e.bus.Add(events.Event{Kind: "recovery_fail", Deployment: task.id, Message: fmt.Sprintf("attempt %d/%d: %s", task.attempt, attempts, lastErr), LatencyMS: lat.Milliseconds(), StatusCode: status})
 
@@ -643,6 +661,9 @@ func (e *Engine) runOnce(ctx context.Context, force bool) Result {
 					resultMu.Unlock()
 					return
 				}
+				if providerIncidentProbeFailure(status) {
+					e.hm.RecordProviderFailure(d.ProviderID, d.ID, err.Error())
+				}
 				if readySupervisor {
 					e.hm.Quarantine(d.ID, err.Error(), lat)
 					e.bus.Add(events.Event{Kind: "probe_quarantine", Deployment: d.ID, Message: err.Error(), LatencyMS: lat.Milliseconds(), StatusCode: status})
@@ -668,6 +689,7 @@ func (e *Engine) runOnce(ctx context.Context, force bool) Result {
 			}
 
 			e.hm.RecordSuccess(d.ID, lat)
+			e.hm.RecordProviderSuccess(d.ProviderID)
 			e.bus.Add(events.Event{Kind: "probe_ready", Deployment: d.ID, Message: fmt.Sprintf("ready after probe (%d)", status), LatencyMS: lat.Milliseconds(), StatusCode: status})
 			resultMu.Lock()
 			result.Passed++
