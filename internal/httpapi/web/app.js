@@ -807,7 +807,7 @@ function readForm() {
     messages_path: $('#pMessagesPath').value.trim(), models_path: $('#pModelsPath').value.trim(),
     count_tokens_path: $('#pCountPath').value.trim(),
     max_concurrency: Math.max(1, parseInt($('#pConcurrency').value || '32', 10)),
-    stream_idle_timeout_seconds: Math.max(10, parseInt($('#pStreamIdle').value || '180', 10)),
+    stream_idle_timeout_seconds: Math.max(1, parseInt($('#pStreamIdle').value || '180', 10)),
     enabled: $('#pEnabled').checked, models
   };
   if (!p.id) throw new Error('Internal ID is required');
