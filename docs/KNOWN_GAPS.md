@@ -11,8 +11,9 @@ Implemented runtime protocol classes are:
 
 Not implemented as native protocol classes:
 
-- OpenAI Responses API
-- Gemini native API
+- Gemini native API (upstream adapter in progress)
+- OpenAI Responses API as an *upstream* protocol class (served as client
+  ingress, including `stream:true`, since the Compatibility Engine)
 - Bedrock
 - Vertex AI
 - Azure-specific deployment semantics

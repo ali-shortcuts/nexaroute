@@ -260,17 +260,49 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		c = fresh
-		chatReq := canon.ToOpenAIRequest(c.Deployment.Model)
-		payload, err := json.Marshal(chatReq)
-		if err != nil {
-			lastErr = "attempt payload could not be built"
-			continue
+		var payload []byte
+		var streamOptsInjected bool
+		if c.Deployment.ProviderType == "anthropic_compatible" {
+			anthReq := canon.ToAnthropicRequest(c.Deployment.Model)
+			var err error
+			payload, err = json.Marshal(anthReq)
+			if err != nil {
+				lastErr = "attempt payload could not be built"
+				continue
+			}
+		} else {
+			chatReq := canon.ToOpenAIRequest(c.Deployment.Model)
+			if in.Stream {
+				chatReq.StreamOptions = json.RawMessage(`{"include_usage":true}`)
+				streamOptsInjected = true
+			}
+			var err error
+			payload, err = json.Marshal(chatReq)
+			if err != nil {
+				lastErr = "attempt payload could not be built"
+				continue
+			}
 		}
 		attempts++
 		attemptIndex := attempts - 1
 		s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_attempt", Deployment: c.Deployment.ID, Message: fmt.Sprintf("attempt=%d responses ingress", attempts)})
 		start := time.Now()
-		resp, err := a.Do(routeCtx, payload, false, forward)
+		resp, err := a.Do(routeCtx, payload, in.Stream, forward)
+		if err == nil && streamOptsInjected && resp.StatusCode == http.StatusBadRequest {
+			probe, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+			resp.Body.Close()
+			if bytes.Contains(bytes.ToLower(probe), []byte("stream_options")) {
+				if stripped, ok := stripStreamOptions(payload); ok {
+					payload = stripped
+					streamOptsInjected = false
+					resp, err = a.Do(routeCtx, payload, in.Stream, forward)
+				} else {
+					resp.Body = io.NopCloser(bytes.NewReader(probe))
+				}
+			} else {
+				resp.Body = io.NopCloser(bytes.NewReader(probe))
+			}
+		}
 		headerLatency := time.Since(start)
 		if err != nil {
 			lastErr = err.Error()
@@ -338,32 +370,81 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Gateway-Deployment", c.Deployment.ID)
 		w.Header().Set("X-Gateway-Provider", c.Deployment.ProviderID)
 		w.Header().Set("X-Gateway-Upstream-Model", c.Deployment.Model)
-		if c.Deployment.ProviderType == "anthropic_compatible" {
-			var an core.AnthResponse
-			if err := decodeValidatedJSONLimited(resp.Body, &an, validateAnthropicResponseJSON); err != nil {
-				resp.Body.Close()
-				lastErr = err.Error()
-				errorJSON(w, http.StatusBadGateway, "upstream returned an invalid response")
-				return
+		if in.Stream {
+			deploymentID := c.Deployment.ID
+			resp.Body = observeFirstByte(resp.Body, start, func(d time.Duration) { s.hm.RecordTTFT(deploymentID, d) })
+		}
+		responseID := uniqueStreamID("resp", r.Header.Get("x-request-id"))
+		var se error
+		if in.Stream {
+			var dec stream.Decoder = &stream.OpenAIDecoder{}
+			if c.Deployment.ProviderType == "anthropic_compatible" {
+				dec = &stream.AnthropicDecoder{}
 			}
+			se = streamUpstreamToResponses(w, resp, dec, in.Model, responseID, func(prompt, completion int) {
+				s.usage.Record(c.Deployment.ID, int64(prompt), int64(completion))
+			}, r.Header.Get("x-request-id"))
+		} else if c.Deployment.ProviderType == "anthropic_compatible" {
+			var an core.AnthResponse
+			se = decodeValidatedJSONLimited(resp.Body, &an, validateAnthropicResponseJSON)
 			resp.Body.Close()
-			s.usage.Record(c.Deployment.ID, int64(an.Usage.InputTokens), int64(an.Usage.OutputTokens))
-			canonResp := canonical.FromAnthropicResponse(an)
-			writeJSON(w, 200, canonicalToResponsesObject(in.Model, canonResp, uniqueStreamID("resp", r.Header.Get("x-request-id"))))
+			if se == nil {
+				s.usage.Record(c.Deployment.ID, int64(an.Usage.InputTokens), int64(an.Usage.OutputTokens))
+				canonResp := canonical.FromAnthropicResponse(an)
+				writeJSON(w, 200, canonicalToResponsesObject(in.Model, canonResp, responseID))
+			}
 		} else {
 			var o core.OpenAIResponse
-			if err := decodeValidatedJSONLimited(resp.Body, &o, validateOpenAIResponseJSON); err != nil {
-				resp.Body.Close()
-				lastErr = err.Error()
+			se = decodeValidatedJSONLimited(resp.Body, &o, validateOpenAIResponseJSON)
+			resp.Body.Close()
+			if se == nil {
+				s.usage.Record(c.Deployment.ID, int64(o.Usage.PromptTokens), int64(o.Usage.CompletionTokens))
+				canonResp := canonical.FromOpenAIResponse(o)
+				writeJSON(w, 200, canonicalToResponsesObject(in.Model, canonResp, responseID))
+			}
+		}
+		total := time.Since(start)
+		if se != nil {
+			lastErr = se.Error()
+			if clientRequestGone(r.Context()) {
+				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "client_disconnect", Deployment: c.Deployment.ID, Message: r.Context().Err().Error(), ErrorType: "caller_cancelled", LatencyMS: total.Milliseconds(), StatusCode: resp.StatusCode})
+				return
+			}
+			if !responseCommitted(w) {
+				lastStatus = 0
+				lastBody = nil
+				if cfg.Routing.Strategy == "ready_mesh" && req.Streaming {
+					s.hm.RecordScopeFailure(c.Deployment.ID, []string{"streaming"}, lastErr)
+				} else if router.IsReadyStrategy(cfg.Routing.Strategy) {
+					s.hm.Quarantine(c.Deployment.ID, lastErr, total)
+					s.probe.Recover(c.Deployment.ID)
+				} else {
+					s.hm.RecordFailure(c.Deployment.ID, lastErr, total)
+				}
+				kind := "response_decode_fail"
+				if req.Streaming {
+					kind = "stream_fail_precommit"
+				}
+				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: kind, Deployment: c.Deployment.ID, Message: lastErr, ErrorType: "provider_invalid_response", LatencyMS: total.Milliseconds(), StatusCode: resp.StatusCode})
+				if attempts < max && i+1 < len(candidates) {
+					s.retryPause(routeCtx, r.Header.Get("x-request-id"), cfg, attemptIndex, max)
+					continue
+				}
 				errorJSON(w, http.StatusBadGateway, "upstream returned an invalid response")
 				return
 			}
-			resp.Body.Close()
-			s.usage.Record(c.Deployment.ID, int64(o.Usage.PromptTokens), int64(o.Usage.CompletionTokens))
-			canonResp := canonical.FromOpenAIResponse(o)
-			writeJSON(w, 200, canonicalToResponsesObject(in.Model, canonResp, uniqueStreamID("resp", r.Header.Get("x-request-id"))))
+			if cfg.Routing.Strategy == "ready_mesh" && req.Streaming {
+				s.hm.RecordScopeFailure(c.Deployment.ID, []string{"streaming"}, lastErr)
+			} else if router.IsReadyStrategy(cfg.Routing.Strategy) {
+				s.hm.Quarantine(c.Deployment.ID, lastErr, total)
+				s.probe.Recover(c.Deployment.ID)
+			} else {
+				s.hm.RecordFailure(c.Deployment.ID, lastErr, total)
+			}
+			s.hm.RecordProviderFailure(c.Deployment.ProviderID, c.Deployment.ID, lastErr)
+			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "stream_fail", Deployment: c.Deployment.ID, Message: lastErr, ErrorType: "provider_stream_error", LatencyMS: total.Milliseconds(), StatusCode: resp.StatusCode})
+			return
 		}
-		total := time.Since(start)
 		s.recordRouteSuccess(req, c.Deployment.ID, c.Deployment.ProviderID, headerLatency)
 		s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_ok", Deployment: c.Deployment.ID, Message: "responses request completed", LatencyMS: total.Milliseconds(), StatusCode: 200})
 		return
