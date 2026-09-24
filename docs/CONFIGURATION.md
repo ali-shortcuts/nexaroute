@@ -214,7 +214,9 @@ For each in-flight upstream leg, NexaRoute temporarily subtracts:
 
 If a fresh `remaining-requests` or `remaining-tokens` header arrives, that resource's local reservation is released immediately because the provider has supplied newer evidence. When a provider omits a fresh remaining header, the reservation is retained until the response body is consumed or closed. This matters for long SSE streams.
 
-The resulting **effective remaining** values feed quota pressure. This is intentionally not a hard local rate limiter: unknown or ambiguous provider semantics must not make NexaRoute reject otherwise usable last-resort capacity. Durable rolling-window RPM/TPM debt and hard throttling are separate future capabilities.
+The resulting **effective remaining** values feed quota pressure. While a resource-specific reset deadline is still active, remaining quota is merged monotonically: lower observations are accepted, but a late out-of-order response cannot raise the budget or extend that active deadline. After expiry, a new observation may establish a higher fresh budget.
+
+This is intentionally not a hard local rate limiter: unknown or ambiguous provider semantics must not make NexaRoute reject otherwise usable last-resort capacity. Durable rolling-window RPM/TPM debt and hard throttling are separate future capabilities.
 
 ### model fields (additions per deployment)
 
