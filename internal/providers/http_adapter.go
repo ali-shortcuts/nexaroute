@@ -237,8 +237,12 @@ func endpoint(base, suffix string) string {
 			break
 		}
 	}
-	if strings.HasSuffix(b, "/v1") && strings.HasPrefix(suffix, "/v1/") {
-		return b + strings.TrimPrefix(suffix, "/v1")
+	// Providers may configure the API version in base_url. Do not append it
+	// again when the path builder includes the same version (Gemini uses v1beta).
+	for _, version := range []string{"/v1", "/v1beta"} {
+		if strings.HasSuffix(b, version) && strings.HasPrefix(suffix, version+"/") {
+			return b + strings.TrimPrefix(suffix, version)
+		}
 	}
 	return b + suffix
 }

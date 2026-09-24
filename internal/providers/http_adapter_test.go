@@ -608,3 +608,17 @@ func TestGeminiModelPathPreservesReservedCharacters(t *testing.T) {
 		}
 	}
 }
+
+func TestGeminiEndpointDoesNotDuplicateVersionPrefix(t *testing.T) {
+	const base = "https://gemini.example/v1beta"
+	for _, stream := range []bool{false, true} {
+		got := endpoint(base, GeminiModelPath("gemini-flash", stream))
+		want := base + "/models/gemini-flash:generateContent"
+		if stream {
+			want = base + "/models/gemini-flash:streamGenerateContent?alt=sse"
+		}
+		if got != want {
+			t.Fatalf("stream=%v endpoint=%q want=%q", stream, got, want)
+		}
+	}
+}

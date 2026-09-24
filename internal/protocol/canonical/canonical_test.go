@@ -716,3 +716,20 @@ func TestGeminiStreamingUsageOnlyChunkRemainsValid(t *testing.T) {
 		t.Fatal("200 Gemini error event was silently treated as an empty stream chunk")
 	}
 }
+
+func TestResponsesStreamTerminalDoesNotTurnEmbeddedErrorIntoCompletion(t *testing.T) {
+	for _, tc := range []struct{ name, event string }{
+		{"completed event with error", `{"type":"response.completed","response":{"status":"completed","output":[],"error":{"message":"bad key"}}}`},
+		{"completed event with failed status", `{"type":"response.completed","response":{"status":"failed","output":[]}}`},
+		{"completed event with missing output", `{"type":"response.completed","response":{"status":"completed","output":null}}`},
+		{"incomplete event with error", `{"type":"response.incomplete","response":{"status":"incomplete","error":{"message":"bad key"}}}`},
+		{"incomplete event with wrong status", `{"type":"response.incomplete","response":{"status":"completed"}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			events, terminal, err := DecodeResponsesStreamEvent("", tc.event)
+			if err == nil || terminal || len(events) > 0 {
+				t.Fatalf("invalid Responses terminal event became success: events=%+v terminal=%v err=%v", events, terminal, err)
+			}
+		})
+	}
+}

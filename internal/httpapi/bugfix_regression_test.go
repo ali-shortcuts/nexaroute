@@ -631,3 +631,27 @@ func TestGeminiCanonicalModelPathDoesNotInterpretModelAsURL(t *testing.T) {
 		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
 	}
 }
+
+func TestGeminiVersionedBaseURLUsesSingleAPIVersion(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1beta/models/up-model:generateContent" {
+			t.Errorf("versioned base URL produced upstream path=%q", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"candidates":[{"content":{"role":"model","parts":[{"text":"ok"}]},"finishReason":"STOP"}]}`)
+	}))
+	defer up.Close()
+	cfg := config.Default()
+	cfg.Probe.Enabled = false
+	cfg.Providers = []config.ProviderConfig{{
+		ID: "p", Type: "gemini", BaseURL: up.URL + "/v1beta", AuthMode: "none", Enabled: true,
+		Models: []config.ModelConfig{{ID: "m", Model: "up-model", Enabled: true, Weight: 1}},
+	}}
+	s := testGateway(t, cfg)
+	rr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "http://gateway/v1/responses",
+		strings.NewReader(`{"model":"m","input":"hi"}`)))
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), "ok") {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+}

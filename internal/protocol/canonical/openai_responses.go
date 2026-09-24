@@ -612,6 +612,9 @@ func DecodeResponsesStreamEvent(eventName, data string) ([]StreamEvent, bool, er
 		if err := json.Unmarshal([]byte(d), &ev); err != nil {
 			return nil, false, fmt.Errorf("invalid Responses incomplete event: %w", err)
 		}
+		if ev.Response.Error != nil || ev.Response.Status != "incomplete" {
+			return nil, false, fmt.Errorf("invalid Responses incomplete event envelope")
+		}
 		var events []StreamEvent
 		if ev.Response.Usage != nil {
 			u := Usage{InputTokens: ev.Response.Usage.InputTokens, OutputTokens: ev.Response.Usage.OutputTokens}
@@ -650,6 +653,10 @@ func DecodeResponsesStreamEvent(eventName, data string) ([]StreamEvent, bool, er
 		if err := json.Unmarshal([]byte(d), &ev); err != nil {
 			return nil, false, fmt.Errorf("invalid Responses completed event: %w", err)
 		}
+		if ev.Response.Error != nil || (typ == "response.completed" && (ev.Response.Status != "completed" || ev.Response.Output == nil)) ||
+			(typ == "response.done" && ev.Response.Status != "" && ev.Response.Status != "completed" && ev.Response.Status != "incomplete") {
+			return nil, false, fmt.Errorf("invalid Responses completed event envelope")
+		}
 		var events []StreamEvent
 		if ev.Response.Usage != nil {
 			u := Usage{InputTokens: ev.Response.Usage.InputTokens, OutputTokens: ev.Response.Usage.OutputTokens}
@@ -662,10 +669,14 @@ func DecodeResponsesStreamEvent(eventName, data string) ([]StreamEvent, bool, er
 			events = append(events, StreamEvent{Type: StreamUsage, Usage: &u})
 		}
 		stop := StopEndTurn
-		for _, item := range ev.Response.Output {
-			if item.Type == "function_call" {
-				stop = StopToolUse
-				break
+		if ev.Response.Status == "incomplete" {
+			stop = StopMaxTokens
+		} else {
+			for _, item := range ev.Response.Output {
+				if item.Type == "function_call" {
+					stop = StopToolUse
+					break
+				}
 			}
 		}
 		events = append(events, StreamEvent{Type: StreamEnd, StopReason: stop})
