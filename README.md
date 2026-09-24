@@ -162,6 +162,8 @@ The dashboard includes:
 - runtime routing/probe settings
 - provider pressure (active/waiting/capacity and credential cooling)
 - provider incident state plus common OpenAI/Anthropic remaining-request/token quota hints
+- exact routed token usage accounting when upstreams report usage, with explicit unknown-usage coverage instead of fabricated counts
+- optional per-model base input/output pricing (USD per 1M tokens) and routed-traffic cost estimates exposed in metrics and dashboard
 - capability-scoped health evidence
 - active session-affinity count
 - CLI Tools onboarding for Anthropic/Claude Code and OpenAI-compatible clients
@@ -277,17 +279,17 @@ journalctl --user -u nexaroute -f
 The image binds to `0.0.0.0:8080`. If the Web UI/admin API will be reached from outside loopback, configure an admin key:
 
 ```bash
-docker build -t nexaroute:0.4.1 .
+docker build -t nexaroute:0.4.2 .
 docker run --rm -p 8080:8080 \
   -e NEXAROUTE_ADMIN_KEY='replace-with-a-strong-random-secret' \
-  nexaroute:0.4.1
+  nexaroute:0.4.2
 ```
 
 Do not expose the admin UI directly to the public internet without TLS and additional perimeter controls.
 
 ## What is deliberately not claimed
 
-The supported path is strong, but v0.4 is **not*** a universal implementation of every LLM protocol. Native OpenAI Responses, Gemini native `generateContent`, Bedrock, Vertex AI, Azure-specific deployment semantics, embeddings/rerank, encrypted-at-rest secret vaults, distributed state, cost/budget routing, and full internet-facing RBAC/CSRF hardening are not implemented.
+The supported path is strong, but v0.4 is **not*** a universal implementation of every LLM protocol. Native OpenAI Responses, Gemini native `generateContent`, Bedrock, Vertex AI, Azure-specific deployment semantics, embeddings/rerank, encrypted-at-rest secret vaults, distributed state, budget-enforced routing, and full internet-facing RBAC/CSRF hardening are not implemented. Routed usage/cost telemetry is implemented, but it is not a provider invoice and does not yet drive route selection.
 
 Cross-protocol reasoning/thinking metadata can also be provider-specific. Native Anthropic passthrough is the safest path for Anthropic-only fields.
 
