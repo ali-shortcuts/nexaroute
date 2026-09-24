@@ -200,3 +200,81 @@ func TestFailureEWMARecoversFromOldFailure(t *testing.T) {
 		t.Fatalf("lifetime counters must remain exact: %+v", st)
 	}
 }
+
+func TestInFlightFailureDoesNotDowngradeActiveCooldown(t *testing.T) {
+	m := New(3, time.Hour)
+	m.ForceCooldown("d", "429", time.Hour)
+	m.RecordFailure("d", "still failing", 10*time.Millisecond)
+	st := m.Get("d")
+	if st.Status != Cooldown {
+		t.Fatalf("in-flight failure downgraded active cooldown: %s", st.Status)
+	}
+	if st.CooldownUntil.IsZero() || !st.CooldownUntil.After(time.Now()) {
+		t.Fatal("active cooldown deadline was dropped")
+	}
+	if st.ConsecutiveFailures != 2 {
+		t.Fatalf("consecutive failures=%d want 2", st.ConsecutiveFailures)
+	}
+}
+
+func TestInFlightSuccessDoesNotReAdmitActiveCooldown(t *testing.T) {
+	m := New(3, time.Hour)
+	m.ForceCooldown("d", "429", time.Hour)
+	m.RecordSuccess("d", 10*time.Millisecond)
+	st := m.Get("d")
+	if st.Status != Cooldown {
+		t.Fatalf("stale success re-admitted a cooling deployment: %s", st.Status)
+	}
+	if st.CooldownUntil.IsZero() || !st.CooldownUntil.After(time.Now()) {
+		t.Fatal("active cooldown deadline was cleared by a stale success")
+	}
+	if st.Successes != 1 {
+		t.Fatalf("success counter=%d want 1", st.Successes)
+	}
+}
+
+func TestHalfOpenStampedeStaysCooling(t *testing.T) {
+	m := New(3, time.Hour)
+	m.ForceCooldown("d", "boom", 5*time.Millisecond)
+	time.Sleep(15 * time.Millisecond)
+	// Deadline passed: both concurrent observations see HalfOpen.
+	m.RecordFailure("d", "a", 0)
+	m.RecordFailure("d", "b", 0)
+	st := m.Get("d")
+	if st.Status != Cooldown {
+		t.Fatalf("half-open stampede left status=%s want cooldown", st.Status)
+	}
+	if st.CooldownUntil.IsZero() || !st.CooldownUntil.After(time.Now()) {
+		t.Fatal("half-open stampede did not re-arm the cooldown deadline")
+	}
+}
+
+func TestSuccessAfterExpiredCooldownRecovers(t *testing.T) {
+	m := New(3, time.Hour)
+	m.ForceCooldown("d", "429", 5*time.Millisecond)
+	time.Sleep(15 * time.Millisecond)
+	m.RecordSuccess("d", 10*time.Millisecond)
+	st := m.Get("d")
+	if st.Status != Healthy {
+		t.Fatalf("post-deadline success status=%s want healthy", st.Status)
+	}
+}
+
+func TestDegradedFailureClearsStaleCooldownDeadline(t *testing.T) {
+	m := New(10, time.Hour)
+	m.ForceCooldown("d", "429", 5*time.Millisecond)
+	time.Sleep(15 * time.Millisecond)
+	// State normalizes to HalfOpen on Get; force a Degraded path via low threshold.
+	m2 := New(10, time.Hour)
+	m2.EnterCooldown("e", "boom", 5*time.Millisecond)
+	time.Sleep(15 * time.Millisecond)
+	m2.RecordFailure("e", "slow", 0)
+	st := m2.Get("e")
+	if st.Status != Degraded {
+		t.Fatalf("status=%s want degraded", st.Status)
+	}
+	if !st.CooldownUntil.IsZero() {
+		t.Fatalf("degraded state kept stale cooldown_until=%v", st.CooldownUntil)
+	}
+	_ = m
+}

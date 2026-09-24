@@ -1,5 +1,59 @@
 # Changelog
 
+## v0.4.1 — concurrent-correctness, admin hardening and stream failover
+
+### Fixed
+
+- **Circuit breaker: concurrent observations can no longer downgrade an active
+  cooldown.** A half-open stampede or an in-flight request racing a 429
+  `ForceCooldown` used to flip the state back to `Degraded`, immediately
+  re-admitting the failing deployment. `RecordFailure` keeps an active
+  cooldown (and its deadline), `RecordSuccess` no longer re-admits a
+  deployment whose cooldown deadline is still in the future, and degraded
+  states no longer carry stale `cooldown_until` values.
+- **Stream failover before response commit.** The OpenAI-facing translated
+  stream deferred its role chunk until the first valid upstream event, so an
+  upstream that answers 200 and then dies before streaming now fails over to
+  the next candidate instead of committing a truncated response.
+- **Terminal error frames on mid-stream failures.** Both translation
+  directions emit a final error event (OpenAI-style `data: {"error": ...}`
+  chunk or Anthropic `event: error`) instead of silently cutting the stream,
+  and `[DONE]` is withheld after an error.
+- **Implicit response commits are now visible.** `statusWriter` overrides
+  `Write`, so `responseCommitted()` observes handlers that stream bytes
+  without an explicit `WriteHeader` (prevents double-stream concatenation).
+- **Admin API DNS-rebinding defense.** The keyless loopback trust mode now
+  validates the `Host` header, so a rebounded browser origin cannot read
+  admin data (including `reveal=1` resolved provider API keys).
+- **Admin API rate limiting.** `/admin/api/` requests pass through a per-IP
+  token bucket (capacity 90, 1.5/s refill); each unauthorized attempt burns
+  the full bucket, collapsing online key brute force while the dashboard's
+  own polling is unaffected.
+- **`POST /admin/api/probe` requires a JSON body**, closing the cross-site
+  simple-POST probe-trigger path that bypassed the JSON content-type gate.
+- **Dashboard Health tab and footer are live.** The snapshot now emits
+  `provider_pressure`, `scope_health`, `request_total` and `version` (the
+  UI previously read four fields the backend never sent, so provider
+  pressure, capability evidence and the request counter were permanently
+  empty).
+- **Console filters match real event kinds.** The Probes filter now matches
+  `probe_ready`/`probe_fail`/`probe_quarantine`/`recovery_*` (it previously
+  matched zero real kinds and always showed an empty list) and the Errors
+  filter includes stream and recovery failure kinds.
+- **Graceful shutdown drains real in-flight work.** The drain window is
+  derived from the request timeout and the largest provider stream idle
+  timeout instead of a fixed 10 s that SIGTERM-cut long streams.
+- **`NEXAROUTE_ADMIN_KEY=` (empty) no longer disables key auth** over a
+  file-provided key; config validation rejects non-numeric/out-of-range
+  listen ports.
+- **Event truncation is UTF-8 safe**, admin one-shot adapters release idle
+  connections, and editing a provider whose secret comes from an env var no
+  longer persists the resolved literal into `config.json` (UI keeps the key
+  field blank; the server additionally drops a submitted literal identical
+  to the env-resolved value).
+- `routeSnapshot` strips map-bearing fields from the hot-path config view so
+  a future handler cannot race the admin config swap.
+
 ## v0.4 — bulletproof cross-protocol translation and 9router-class dashboard
 
 ### OpenAI ↔ Anthropic translation hardening

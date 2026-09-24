@@ -303,15 +303,31 @@ func streamAnthropicToOpenAI(w http.ResponseWriter, resp *http.Response, model s
 	cacheReadTokens, cacheCreationTokens := 0, 0
 	usageSeen := false
 
-	// OpenAI convention: the first chunk carries the assistant role.
-	emit(chunk(map[string]any{"role": "assistant", "content": ""}, nil))
-	if writeErr != nil {
-		return writeErr
+	// The OpenAI role chunk commits the client response. It is deferred
+	// until the first valid upstream event proves the stream is alive, so
+	// an upstream that answers 200 and then dies before streaming can
+	// still fail over pre-commit to the next eligible candidate.
+	roleEmitted := false
+	emitRoleOnce := func() {
+		if roleEmitted {
+			return
+		}
+		roleEmitted = true
+		emit(chunk(map[string]any{"role": "assistant", "content": ""}, nil))
+	}
+	// streamErrorChunk surfaces a terminal OpenAI-style error payload so
+	// clients can detect a mid-stream truncation instead of seeing a
+	// silent network cut. [DONE] is intentionally withheld afterwards.
+	streamErrorChunk := func(message string) {
+		if roleEmitted && writeErr == nil {
+			emit(map[string]any{"error": map[string]any{"message": message, "type": "gateway_stream_error", "code": "provider_stream_error"}})
+		}
 	}
 
 	for {
 		ev, done, err := reader.Next()
 		if err != nil {
+			streamErrorChunk("upstream stream terminated before completion: " + err.Error())
 			return err
 		}
 		if done {
@@ -323,7 +339,12 @@ func streamAnthropicToOpenAI(w http.ResponseWriter, resp *http.Response, model s
 		}
 		var env map[string]any
 		if err := json.Unmarshal([]byte(d), &env); err != nil {
+			streamErrorChunk("upstream stream sent an invalid event")
 			return fmt.Errorf("invalid Anthropic SSE JSON: %w", err)
+		}
+		emitRoleOnce()
+		if writeErr != nil {
+			return writeErr
 		}
 		typ, _ := env["type"].(string)
 		switch typ {
@@ -433,7 +454,12 @@ func streamAnthropicToOpenAI(w http.ResponseWriter, resp *http.Response, model s
 		}
 	}
 	if !terminal {
+		streamErrorChunk("upstream stream ended without a terminal Anthropic event")
 		return io.ErrUnexpectedEOF
+	}
+	emitRoleOnce()
+	if writeErr != nil {
+		return writeErr
 	}
 	emit(chunk(map[string]any{}, &finish))
 	if writeErr != nil {

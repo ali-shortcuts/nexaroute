@@ -2,12 +2,14 @@ package httpapi
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -69,6 +71,7 @@ func (s *Server) adminProviderCheck(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 400, err.Error())
 		return
 	}
+	defer providers.CloseIdleConnections(a)
 	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
 	defer cancel()
 	start := time.Now()
@@ -142,8 +145,12 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 		"health_counts":      healthCounts,
 		"events":             s.bus.SnapshotLimit(eventLimit),
 		"provider_stats":     s.reg.Stats(),
+		"provider_pressure":  providerPressure(s.reg.Stats()),
+		"scope_health":       scopeHealthRows(healthAll),
 		"session_count":      s.rt.SessionCount(),
 		"probe_stats":        s.probe.Stats(),
+		"request_total":      s.requestTotal.Load(),
+		"version":            gatewayVersion,
 		"config": map[string]any{
 			"probe":   probeCfg,
 			"routing": routingCfg,
@@ -151,9 +158,84 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// providerPressure maps registry adapter stats onto the dashboard's
+// provider-pressure table shape.
+func providerPressure(stats []providers.ProviderStats) []map[string]any {
+	out := make([]map[string]any, 0, len(stats))
+	for _, st := range stats {
+		out = append(out, map[string]any{
+			"provider":    st.ID,
+			"provider_id": st.ID,
+			"active":      st.ActiveRequests,
+			"waiting":     st.WaitingRequests,
+			"capacity":    st.MaxConcurrency,
+			"credentials": st.Credentials,
+			"cooling":     st.CredentialsCooling,
+		})
+	}
+	return out
+}
+
+var scopeSeverity = map[health.Status]int{
+	health.Healthy:  0,
+	health.Unknown:  1,
+	health.HalfOpen: 2,
+	health.Degraded: 3,
+	health.Cooldown: 4,
+}
+
+// scopeHealthRows condenses per-scope circuit states into one row per
+// deployment whose scopes are not all healthy, matching the dashboard's
+// capability-evidence list.
+func scopeHealthRows(states []health.State) []map[string]any {
+	out := []map[string]any{}
+	for _, st := range states {
+		if len(st.Scopes) == 0 {
+			continue
+		}
+		names := make([]string, 0, len(st.Scopes))
+		worst := health.Healthy
+		worstFails := 0
+		anyUnhealthy := false
+		for name, sc := range st.Scopes {
+			names = append(names, name)
+			if scopeSeverity[sc.Status] > scopeSeverity[worst] {
+				worst = sc.Status
+			}
+			if sc.Status != health.Healthy {
+				anyUnhealthy = true
+				if sc.ConsecutiveFailures > worstFails {
+					worstFails = sc.ConsecutiveFailures
+				}
+			}
+		}
+		if !anyUnhealthy {
+			continue
+		}
+		sort.Strings(names)
+		out = append(out, map[string]any{
+			"deployment":           st.Deployment,
+			"scopes":               names,
+			"status":               worst,
+			"consecutive_failures": worstFails,
+		})
+	}
+	return out
+}
+
 func (s *Server) adminProbe(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		errorJSON(w, 405, "method not allowed")
+		return
+	}
+	// Reading the JSON body enforces the application/json content-type gate.
+	// Without it a cross-site simple POST (text/plain, no CORS preflight)
+	// could repeatedly trigger full probe sweeps against every upstream.
+	var body struct {
+		Reason string `json:"reason"`
+	}
+	if _, err := readJSON(r, &body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
 	}
 	wait := r.URL.Query().Get("wait") == "1" || strings.EqualFold(r.URL.Query().Get("wait"), "true")
@@ -260,6 +342,7 @@ func (s *Server) adminProviderByID(w http.ResponseWriter, r *http.Request) {
 				in.Provider.APIKeyEnv = old.APIKeyEnv
 				in.Provider.Credentials = old.Credentials
 			}
+			dropEnvResolvedLiteral(&in.Provider, old)
 			normalizeProvider(&in.Provider)
 			cfg.Providers[idx] = in.Provider
 			saved = in.Provider
@@ -327,6 +410,7 @@ func (s *Server) adminProviderTest(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 400, err.Error())
 		return
 	}
+	defer providers.CloseIdleConnections(a)
 	models := uniqueStrings(in.TestModels)
 	if len(models) == 0 {
 		for _, m := range in.Provider.Models {
@@ -453,6 +537,23 @@ func secretSource(p config.ProviderConfig) string {
 	return "none"
 }
 
+// dropEnvResolvedLiteral prevents an environment-provided secret from being
+// persisted as a file literal. A dashboard round-trip echoes the resolved key
+// back; when the submitted literal equals the current env value the literal
+// is dropped and the env reference kept.
+func dropEnvResolvedLiteral(in *config.ProviderConfig, old config.ProviderConfig) {
+	if in.APIKeyEnv == "" || in.APIKey == "" {
+		return
+	}
+	resolved := os.Getenv(in.APIKeyEnv)
+	if resolved == "" && old.APIKeyEnv == in.APIKeyEnv && old.APIKey == in.APIKey {
+		resolved = old.APIKey
+	}
+	if resolved != "" && subtle.ConstantTimeCompare([]byte(in.APIKey), []byte(resolved)) == 1 {
+		in.APIKey = ""
+	}
+}
+
 func mergeExistingSecret(cfg config.Config, p *config.ProviderConfig) {
 	if i := cfg.ProviderIndex(p.ID); i >= 0 {
 		p.APIKey = cfg.Providers[i].APIKey
@@ -511,6 +612,7 @@ func discoverModels(ctx context.Context, p config.ProviderConfig) ([]string, int
 	if err != nil {
 		return nil, 0, err
 	}
+	defer providers.CloseIdleConnections(a)
 	paths := []string{p.ModelsPath}
 	if p.ModelsPath == "/v1/models" {
 		paths = append(paths, "/models")

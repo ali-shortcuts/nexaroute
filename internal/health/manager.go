@@ -195,15 +195,23 @@ func (m *Manager) RecordSuccess(id string, latency time.Duration) {
 	s := m.states[id]
 	s.Deployment = id
 	s.Successes++
+	s.LastChecked = time.Now()
+	s.LastSuccess = s.LastChecked
+	updateEWMA(&s, latency)
 	updateFailureEWMA(&s, false)
+	if s.Status == Cooldown && !s.CooldownUntil.IsZero() && s.LastChecked.Before(s.CooldownUntil) {
+		// A request that started before a hard cooldown (e.g. a 429
+		// retry-after) completed successfully. That stale observation
+		// must not re-admit a deployment that is still cooling down;
+		// only observations arriving after the deadline may recover it.
+		m.states[id] = s
+		return
+	}
 	s.ConsecutiveFailures = 0
 	s.RecoveryFailures = 0
 	s.Status = Healthy
-	s.LastChecked = time.Now()
-	s.LastSuccess = s.LastChecked
 	s.LastError = ""
 	s.CooldownUntil = time.Time{}
-	updateEWMA(&s, latency)
 	m.states[id] = s
 }
 
@@ -219,11 +227,23 @@ func (m *Manager) RecordFailure(id, errMsg string, latency time.Duration) {
 	s.LastFailure = s.LastChecked
 	s.LastError = errMsg
 	updateEWMA(&s, latency)
+	if s.Status == Cooldown && !s.CooldownUntil.IsZero() && s.LastChecked.Before(s.CooldownUntil) {
+		// Active hard cooldown: an in-flight failure observation must
+		// never downgrade the deployment back to Degraded (which would
+		// immediately re-admit it and defeat the breaker during the
+		// half-open stampede). Keep the existing deadline; counters
+		// above still record the evidence.
+		m.states[id] = s
+		return
+	}
 	if s.Status == HalfOpen || s.ConsecutiveFailures >= m.threshold {
 		s.Status = Cooldown
 		s.CooldownUntil = time.Now().Add(m.cooldown)
 	} else {
 		s.Status = Degraded
+		// A degraded state carries no cooldown; drop any stale deadline
+		// so the snapshot never reports a bogus cooldown_until.
+		s.CooldownUntil = time.Time{}
 	}
 	m.states[id] = s
 }

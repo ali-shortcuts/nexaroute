@@ -24,7 +24,7 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/router"
 )
 
-const version = "0.4"
+const version = "0.4.1"
 
 func defaultConfigPath() string {
 	if p := os.Getenv("NEXAROUTE_CONFIG"); p != "" {
@@ -90,6 +90,12 @@ func main() {
 		logWriters = append(logWriters, logging.NewRateLimitedWriter(os.Stderr, cfg.Logging.ConsoleMaxLinesPerMinute, time.Minute))
 	}
 	var logOutput io.Writer = io.Discard
+	if len(logWriters) == 0 {
+		// file: "off" combined with console_max_lines_per_minute: 0 silences
+		// every log line, including shutdown errors. Warn once on stderr so
+		// an operator notices instead of running blind.
+		fmt.Fprintf(os.Stderr, "nexaroute: warning: all logging is disabled (logging.file=off and console_max_lines_per_minute=0)\n")
+	}
 	if len(logWriters) == 1 {
 		logOutput = logWriters[0]
 	} else if len(logWriters) > 1 {
@@ -131,7 +137,21 @@ func main() {
 	}
 	pe.Start(ctx)
 	<-ctx.Done()
-	shutdown, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// The drain window must cover the longest permitted in-flight request:
+	// non-streaming requests up to request_timeout_ms and streams whose idle
+	// timeout can exceed it. A fixed 10s deadline would SIGTERM-cut active
+	// responses mid-flight.
+	drain := cfg.RequestTimeout()
+	for _, p := range cfg.Providers {
+		if sd := time.Duration(p.StreamIdleTimeoutSeconds) * time.Second; sd > drain {
+			drain = sd
+		}
+	}
+	if drain < 10*time.Second {
+		drain = 10 * time.Second
+	}
+	drain += 5 * time.Second
+	shutdown, shutdownCancel := context.WithTimeout(context.Background(), drain)
 	defer shutdownCancel()
 	if err := srv.Shutdown(shutdown); err != nil {
 		logger.Printf("shutdown_error=%v", err)

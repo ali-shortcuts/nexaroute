@@ -243,7 +243,9 @@ func (c *Config) ApplyEnvOverrides() error {
 		c.Listen = v
 	}
 	if v, ok := os.LookupEnv("NEXAROUTE_ADMIN_KEY"); ok {
-		c.Admin.APIKey = v
+		// An empty value (e.g. Environment=NEXAROUTE_ADMIN_KEY= in a systemd
+		// unit) must not silently disable key auth over a file-provided key.
+		c.Admin.APIKey = strings.TrimSpace(v)
 	}
 	if v, ok := os.LookupEnv("NEXAROUTE_ADMIN_BIND_LOCAL_ONLY"); ok {
 		b, err := strconv.ParseBool(strings.TrimSpace(v))
@@ -384,8 +386,22 @@ func (c Config) Validate() error {
 	if strings.TrimSpace(c.Listen) == "" {
 		return errors.New("listen is required")
 	}
-	if _, _, err := net.SplitHostPort(c.Listen); err != nil {
+	host, port, err := net.SplitHostPort(c.Listen)
+	if err != nil {
 		return fmt.Errorf("listen must be host:port: %w", err)
+	}
+	if pn, perr := strconv.Atoi(port); perr != nil || pn < 1 || pn > 65535 {
+		return fmt.Errorf("listen port %q must be numeric between 1 and 65535", port)
+	}
+	if host == "" {
+		host = "0.0.0.0"
+	}
+	if net.ParseIP(strings.Trim(host, "[]")) == nil && host != "localhost" {
+		// Hostnames are allowed (DNS listeners), but garbage values that can
+		// never bind are rejected up front instead of failing mid-startup.
+		if net.ParseIP(host) == nil && !strings.Contains(host, ":") && strings.ContainsAny(host, "/\\ ") {
+			return fmt.Errorf("listen host %q is not a valid address", host)
+		}
 	}
 	if len(c.Logging.File) > maxURLBytes {
 		return errors.New("logging.file is too long")

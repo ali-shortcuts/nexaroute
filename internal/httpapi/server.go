@@ -42,6 +42,87 @@ type Server struct {
 	requestTotal    atomic.Uint64
 	inflight        atomic.Int64
 	overloadRejects atomic.Uint64
+	adminRL         sync.Mutex
+	adminBuckets    map[string]*adminBucket
+}
+
+// adminBucket is a compact token bucket keyed by remote address. Capacity 90
+// with a 1.5 token/s refill keeps the dashboard's serialized polling far
+// below the ceiling while capping online key-guessing traffic.
+const (
+	adminBucketCapacity = 90
+	adminBucketRefill   = 1.5
+	adminAuthPenalty    = 10.0
+	adminBucketIdle     = 10 * time.Minute
+)
+
+type adminBucket struct {
+	tokens float64
+	last   time.Time
+}
+
+func (s *Server) adminAllow(ip string, cost float64) bool {
+	now := time.Now()
+	s.adminRL.Lock()
+	defer s.adminRL.Unlock()
+	if s.adminBuckets == nil {
+		s.adminBuckets = map[string]*adminBucket{}
+	}
+	if len(s.adminBuckets) > 4096 {
+		for k, b := range s.adminBuckets {
+			if now.Sub(b.last) > adminBucketIdle {
+				delete(s.adminBuckets, k)
+			}
+		}
+	}
+	b, ok := s.adminBuckets[ip]
+	if !ok || now.Sub(b.last) > adminBucketIdle {
+		b = &adminBucket{tokens: adminBucketCapacity, last: now}
+		s.adminBuckets[ip] = b
+	}
+	b.tokens += now.Sub(b.last).Seconds() * adminBucketRefill
+	if b.tokens > adminBucketCapacity {
+		b.tokens = adminBucketCapacity
+	}
+	b.last = now
+	if b.tokens < cost {
+		return false
+	}
+	b.tokens -= cost
+	return true
+}
+
+func adminRemoteIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	return host
+}
+
+// adminHostAllowed rejects DNS-rebinding requests that present a Host header
+// pointing at a public name. It applies to the keyless loopback trust mode,
+// where a rebounded browser origin could otherwise read admin data (including
+// resolved provider API keys via reveal=1) same-origin without any CORS
+// preflight. When an explicit admin key is configured the check is skipped:
+// cross-origin reads already fail the key requirement.
+func adminHostAllowed(r *http.Request) bool {
+	h := r.Host
+	if h == "" {
+		return false
+	}
+	if hOnly, _, err := net.SplitHostPort(h); err == nil {
+		h = hOnly
+	} else {
+		h = strings.Trim(h, "[]")
+	}
+	if h == "localhost" || h == "127.0.0.1" || h == "::1" || h == "[::1]" {
+		return true
+	}
+	if ip := net.ParseIP(h); ip != nil && ip.IsLoopback() {
+		return true
+	}
+	return false
 }
 
 func New(cfg config.Config, configPath string, reg *providers.Registry, rt *router.Router, hm *health.Manager, bus *events.Bus, pe *probe.Engine, l *log.Logger) *Server {
@@ -268,10 +349,18 @@ func (s *Server) mutateConfig(fn func(*config.Config) error) (config.Config, err
 	return cfg, nil
 }
 
+// routeSnapshot returns the request-path view of the runtime config. The
+// map/slice-bearing fields (Providers) are stripped: unlike currentConfig()
+// this runs on the hot path of every data-plane request, so instead of a
+// deep copy the caller gets a value copy whose only shared state is the
+// scalar-only Routing struct. A handler that needs Providers must use
+// currentConfig().
 func (s *Server) routeSnapshot(req router.Requirement) (config.Config, []router.Scored) {
 	s.runtimeMu.RLock()
 	defer s.runtimeMu.RUnlock()
-	return s.cfg, s.rt.Candidates(req)
+	out := s.cfg
+	out.Providers = nil
+	return out, s.rt.Candidates(req)
 }
 
 func (s *Server) currentRouteCandidate(id string, req router.Requirement) (router.Scored, providers.Adapter, bool) {
@@ -438,6 +527,17 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 		if strings.HasPrefix(r.URL.Path, "/admin/api/") {
 			w.Header().Set("Cache-Control", "no-store")
 			w.Header().Set("Pragma", "no-cache")
+			cost := 1.0
+			if !s.adminAuthorized(r) {
+				// Failed attempts burn a chunk of the bucket so an online
+				// key brute force collapses to a handful of guesses per IP
+				// while the dashboard's own polling stays unaffected.
+				cost = adminBucketCapacity
+			}
+			if !s.adminAllow(adminRemoteIP(r), cost) {
+				errorJSON(sw, http.StatusTooManyRequests, "admin rate limit exceeded")
+				return
+			}
 			if !s.adminAuthorized(r) {
 				errorJSON(sw, http.StatusUnauthorized, "admin authorization required")
 				return
@@ -478,6 +578,17 @@ func (w *statusWriter) WriteHeader(code int) {
 	w.status = code
 	w.ResponseWriter.WriteHeader(code)
 }
+
+// Write commits the wrapper state so responseCommitted() observes implicit
+// 200s from handlers that stream bytes without an explicit WriteHeader.
+// Without it a committed stream could be mistaken for pre-commit state and
+// concatenated onto a failover provider's output.
+func (w *statusWriter) Write(p []byte) (int, error) {
+	if !w.wroteHeader {
+		w.WriteHeader(http.StatusOK)
+	}
+	return w.ResponseWriter.Write(p)
+}
 func (w *statusWriter) Flush() {
 	if !w.wroteHeader {
 		w.WriteHeader(http.StatusOK)
@@ -517,5 +628,8 @@ func (s *Server) adminAuthorized(r *http.Request) bool {
 		}
 		return len(got) == len(cfg.APIKey) && subtle.ConstantTimeCompare([]byte(got), []byte(cfg.APIKey)) == 1
 	}
-	return isLoopback
+	// Keyless mode trusts the loopback; make sure the request was actually
+	// addressed to a loopback name so a DNS-rebound browser origin cannot
+	// silently read admin data (including reveal=1 resolved keys).
+	return isLoopback && adminHostAllowed(r)
 }

@@ -366,8 +366,8 @@ function renderHealthTab(h) {
 /* ---------- console ---------- */
 const consoleKinds = {
   routes: new Set(['route_ok', 'route_attempt', 'route_fail', 'route_skip', 'route_timeout', 'failover', 'client_disconnect', 'response_decode_fail', 'stream_fail', 'gateway_overloaded']),
-  errors: new Set(['route_fail', 'route_timeout', 'stream_fail', 'response_decode_fail', 'gateway_overloaded', 'internal_panic', 'client_disconnect']),
-  probes: new Set(['probe_ok', 'probe_fail', 'recovery', 'route_added', 'route_removed'])
+  errors: new Set(['route_fail', 'route_timeout', 'stream_fail', 'stream_fail_precommit', 'response_decode_fail', 'gateway_overloaded', 'internal_panic', 'client_disconnect', 'probe_fail', 'probe_quarantine', 'recovery_fail', 'recovery_queue_full']),
+  probes: new Set(['probe_ready', 'probe_fail', 'probe_quarantine', 'recovery_ready', 'recovery_fail', 'recovery_wait', 'recovery_deferred', 'recovery_cooldown', 'recovery_queue_full', 'stream_fail_precommit'])
 };
 function renderConsole() {
   const box = $('#consoleLog');
@@ -633,7 +633,10 @@ $('#pType').onchange = () => {
 async function openEdit(id) {
   try {
     const d = await api('/admin/api/providers/' + encodeURIComponent(id) + '?reveal=1'), p = d.provider;
-    p.api_key = d.resolved_api_key || p.api_key || '';
+    // When the secret comes from an environment variable the resolved
+    // literal must stay out of the form: any keystroke in the field would
+    // flip preserve_secret off and persist the env secret into config.json.
+    p.api_key = d.secret_source === 'env' ? '' : (d.resolved_api_key || p.api_key || '');
     editor = {
       mode: 'edit', originalId: id, provider: p,
       detected: (p.models || []).map(m => m.model),
@@ -657,6 +660,7 @@ function fillForm() {
   $('#pAuth').value = p.auth_mode || 'bearer';
   $('#pEnabled').checked = p.enabled !== false;
   $('#pKey').value = p.api_key || '';
+  $('#pKey').placeholder = editor.mode === 'edit' && editor.secretSource === 'env' ? 'stored in env var - leave blank to keep' : '';
   $('#pKey').type = 'password';
   $('#togglePKey').textContent = 'Show';
   $('#pKeyEnv').value = p.api_key_env || '';

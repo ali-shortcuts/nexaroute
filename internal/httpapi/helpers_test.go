@@ -472,6 +472,7 @@ func TestAdminAPIResponsesAreNoStore(t *testing.T) {
 	cfg := config.Default()
 	srv := testGateway(t, cfg)
 	req := httptest.NewRequest(http.MethodGet, "http://gateway/admin/api/snapshot", nil)
+	req.Host = "127.0.0.1"
 	req.RemoteAddr = "127.0.0.1:12345"
 	rr := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rr, req)
@@ -488,6 +489,7 @@ func TestAdminAPIResponsesAreNoStore(t *testing.T) {
 
 func TestAdminReadJSONRejectsTextPlainBody(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "http://gateway/admin/api/providers", strings.NewReader(`{"provider":{}}`))
+	req.Host = "127.0.0.1"
 	req.Header.Set("Content-Type", "text/plain")
 	var dst map[string]any
 	if _, err := readJSON(req, &dst); err == nil || !strings.Contains(err.Error(), "application/json") {
@@ -497,6 +499,7 @@ func TestAdminReadJSONRejectsTextPlainBody(t *testing.T) {
 
 func TestAdminReadJSONAcceptsJSONCharset(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "http://gateway/admin/api/providers", strings.NewReader(`{"ok":true}`))
+	req.Host = "127.0.0.1"
 	req.Header.Set("Content-Type", "application/json; charset=utf-8")
 	var dst map[string]any
 	if _, err := readJSON(req, &dst); err != nil {
@@ -750,5 +753,161 @@ func TestSSEReaderMultiLineDataAndComments(t *testing.T) {
 	}
 	if _, done4, _ := r.Next(); !done4 {
 		t.Fatal("expected clean EOF")
+	}
+}
+
+func TestAdminKeylessModeRejectsRebindHost(t *testing.T) {
+	cfg := config.Default()
+	srv := testGateway(t, cfg)
+	req := httptest.NewRequest(http.MethodGet, "http://gateway/admin/api/snapshot", nil)
+	req.Host = "evil.example.com"
+	req.RemoteAddr = "127.0.0.1:12345"
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("rebound host status=%d want 401", rr.Code)
+	}
+	req.Host = "localhost:8080"
+	req.RemoteAddr = "127.0.0.2:12346"
+	rr = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("localhost host status=%d want 200", rr.Code)
+	}
+}
+
+func TestAdminRateLimitBlocksBurstAfterAuthFailures(t *testing.T) {
+	cfg := config.Default()
+	cfg.Admin.APIKey = "secret-key"
+	srv := testGateway(t, cfg)
+	var last int
+	for i := 0; i < 120; i++ {
+		req := httptest.NewRequest(http.MethodGet, "http://gateway/admin/api/snapshot", nil)
+		req.Host = "127.0.0.1"
+		req.RemoteAddr = "10.1.1.1:5555"
+		req.Header.Set("x-admin-key", "wrong")
+		rr := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rr, req)
+		last = rr.Code
+	}
+	if last != http.StatusTooManyRequests {
+		t.Fatalf("status=%d want 429 after sustained auth failures", last)
+	}
+	// A different IP is unaffected.
+	req := httptest.NewRequest(http.MethodGet, "http://gateway/admin/api/snapshot", nil)
+	req.Host = "127.0.0.1"
+	req.RemoteAddr = "127.0.0.2:5556"
+	req.Header.Set("x-admin-key", "secret-key")
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("fresh IP status=%d want 200", rr.Code)
+	}
+}
+
+func TestAdminProbeRequiresJSONContentType(t *testing.T) {
+	cfg := config.Default()
+	srv := testGateway(t, cfg)
+	req := httptest.NewRequest(http.MethodPost, "http://gateway/admin/api/probe", strings.NewReader("x"))
+	req.Host = "127.0.0.1"
+	req.RemoteAddr = "127.0.0.1:12345"
+	req.Header.Set("Content-Type", "text/plain")
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("text/plain probe status=%d want 400", rr.Code)
+	}
+	req = httptest.NewRequest(http.MethodPost, "http://gateway/admin/api/probe", strings.NewReader(`{}`))
+	req.Host = "127.0.0.1"
+	req.RemoteAddr = "127.0.0.1:12347"
+	req.Header.Set("Content-Type", "application/json")
+	rr = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("json probe status=%d want 202", rr.Code)
+	}
+}
+
+func TestStatusWriterWriteMarksCommitted(t *testing.T) {
+	rr := httptest.NewRecorder()
+	sw := &statusWriter{ResponseWriter: rr, status: http.StatusOK}
+	if responseCommitted(sw) {
+		t.Fatal("fresh writer reported committed")
+	}
+	sw.Write([]byte("stream bytes"))
+	if !responseCommitted(sw) {
+		t.Fatal("implicit Write did not mark the response committed")
+	}
+	if sw.status != http.StatusOK {
+		t.Fatalf("implicit commit status=%d want 200", sw.status)
+	}
+}
+
+func TestStreamAnthropicToOpenAIDefersRoleChunkUntilUpstreamAlive(t *testing.T) {
+	// Upstream answers 200 and dies before sending a single event. The
+	// client response must remain uncommitted so the caller can fail over
+	// to the next candidate.
+	pr, pw := io.Pipe()
+	resp := &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: pr}
+	go func() { pw.CloseWithError(io.EOF) }()
+	rr := httptest.NewRecorder()
+	err := streamAnthropicToOpenAI(rr, resp, "m", nil)
+	if err == nil {
+		t.Fatal("dead upstream stream must return an error")
+	}
+	if responseCommitted(rr) {
+		t.Fatalf("response committed on dead upstream: status=%d body=%q", rr.Code, rr.Body.String())
+	}
+}
+
+func TestStreamAnthropicToOpenAIEmitsTerminalErrorChunkMidStream(t *testing.T) {
+	// A mid-stream failure after content was delivered commits the response
+	// and must surface an OpenAI-style error chunk instead of a silent cut.
+	body := "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":1}}}\n\n" +
+		"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hi\"}}\n\n" +
+		"event: broken\ndata: {not-json\n\n"
+	resp := &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(body))}
+	rr := httptest.NewRecorder()
+	sw := &statusWriter{ResponseWriter: rr, status: http.StatusOK}
+	err := streamAnthropicToOpenAI(sw, resp, "m", nil)
+	if err == nil {
+		t.Fatal("malformed upstream event must return an error")
+	}
+	out := rr.Body.String()
+	if !responseCommitted(sw) {
+		t.Fatal("mid-stream failure should have committed via role/content chunks")
+	}
+	if !strings.Contains(out, `"error"`) || !strings.Contains(out, "gateway_stream_error") {
+		t.Fatalf("terminal error chunk missing: %q", out)
+	}
+	if strings.Contains(out, "[DONE]") {
+		t.Fatal("[DONE] must not follow a stream error")
+	}
+	// The role chunk must still precede content chunks.
+	roleIdx := strings.Index(out, `"role":"assistant"`)
+	if roleIdx < 0 || roleIdx > strings.Index(out, `"content":"hi"`) {
+		t.Fatalf("role chunk ordering broken: %q", out)
+	}
+}
+
+func TestStreamAnthropicToOpenAISuccessStillEmitsRoleFirst(t *testing.T) {
+	body := "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":2}}}\n\n" +
+		"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hello\"}}\n\n" +
+		"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":1}}\n\n" +
+		"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
+	resp := &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(body))}
+	rr := httptest.NewRecorder()
+	if err := streamAnthropicToOpenAI(rr, resp, "m", nil); err != nil {
+		t.Fatalf("healthy stream failed: %v", err)
+	}
+	out := rr.Body.String()
+	if !strings.HasPrefix(out, "data: {") {
+		t.Fatalf("first chunk must be a role chunk, got %q", out[:60])
+	}
+	if roleIdx := strings.Index(out, `"role":"assistant"`); roleIdx < 0 || roleIdx > strings.Index(out, `"content":"hello"`) {
+		t.Fatalf("role chunk must precede content chunks: %q", out)
+	}
+	if !strings.Contains(out, `"role":"assistant"`) || !strings.Contains(out, `"content":"hello"`) || !strings.Contains(out, "[DONE]") {
+		t.Fatalf("happy path degraded: %q", out)
 	}
 }

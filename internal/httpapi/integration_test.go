@@ -213,6 +213,7 @@ func TestAdminEditPreservesSecretsAndAdvancedFields(t *testing.T) {
 	s := testGateway(t, cfg)
 	body := `{"provider":{"id":"p","name":"New","type":"openai_compatible","base_url":"http://127.0.0.1:9998","auth_mode":"bearer","proxy_url":"http://127.0.0.1:7777","max_concurrency":9,"stream_idle_timeout_seconds":333,"enabled":true,"models":[{"id":"m","model":"m","enabled":true,"weight":1,"capabilities":{}}]},"preserve_secret":true}`
 	req := httptest.NewRequest("PUT", "http://gateway/admin/api/providers/p", strings.NewReader(body))
+	req.Host = "127.0.0.1"
 	req.RemoteAddr = "127.0.0.1:12345"
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()

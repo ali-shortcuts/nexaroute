@@ -3,6 +3,7 @@ package events
 import (
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 type Event struct {
@@ -30,7 +31,16 @@ func boundedString(s string, max int) string {
 	if len(s) <= max {
 		return s
 	}
-	return s[:max]
+	cut := s[:max]
+	// Back up to a rune boundary so multibyte text is not split into an
+	// invalid UTF-8 sequence (json encoding would substitute U+FFFD).
+	for i := 0; i < 3 && len(cut) > 0; i++ {
+		if utf8.ValidString(cut) {
+			break
+		}
+		cut = cut[:len(cut)-1]
+	}
+	return cut
 }
 
 func incrementBoundedCounter(m map[string]uint64, key string) {

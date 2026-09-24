@@ -616,6 +616,10 @@ func streamOpenAIToAnthropic(w http.ResponseWriter, resp *http.Response, model s
 		}
 		var raw map[string]any
 		if err := json.Unmarshal([]byte(d), &raw); err != nil {
+			// The response is already committed (message_start was sent), so
+			// the Anthropic-protocol client must receive a terminal error
+			// frame instead of a silently truncated stream.
+			emit("error", map[string]any{"type": "error", "error": map[string]any{"type": "api_error", "message": "upstream stream sent an invalid event"}})
 			return fmt.Errorf("invalid OpenAI SSE JSON: %w", err)
 		}
 		if er, ok := raw["error"]; ok {
@@ -636,6 +640,7 @@ func streamOpenAIToAnthropic(w http.ResponseWriter, resp *http.Response, model s
 			Usage *core.OpenAIUsage `json:"usage"`
 		}
 		if err := json.Unmarshal([]byte(d), &obj); err != nil {
+			emit("error", map[string]any{"type": "error", "error": map[string]any{"type": "api_error", "message": "upstream stream sent an invalid chunk"}})
 			return fmt.Errorf("invalid OpenAI SSE chunk: %w", err)
 		}
 		if obj.Usage != nil {
