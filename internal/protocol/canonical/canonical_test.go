@@ -3,6 +3,7 @@ package canonical
 import (
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -388,3 +389,143 @@ func (s *sliceWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 func (s *sliceWriter) WriteHeader(int) {}
+
+func TestGeminiStreamChunkOnlyTerminatesOnFinalFinishReason(t *testing.T) {
+	nonFinal := `{"candidates":[{"content":{"role":"model","parts":[{"text":"partial"}]}}]}`
+	evs, terminal, err := DecodeGeminiStreamChunk(nonFinal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if terminal {
+		t.Fatal("Gemini chunk without finishReason was marked terminal")
+	}
+	for _, ev := range evs {
+		if ev.Type == StreamEnd {
+			t.Fatalf("non-final Gemini chunk emitted StreamEnd: %+v", evs)
+		}
+	}
+
+	final := `{"candidates":[{"content":{"role":"model","parts":[{"text":"done"}]},"finishReason":"STOP"}]}`
+	evs, terminal, err = DecodeGeminiStreamChunk(final)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !terminal {
+		t.Fatal("Gemini chunk with finishReason was not marked terminal")
+	}
+	foundEnd := false
+	for _, ev := range evs {
+		if ev.Type == StreamEnd {
+			foundEnd = true
+			if ev.StopReason == "" {
+				t.Fatalf("terminal Gemini event missing stop reason: %+v", ev)
+			}
+		}
+	}
+	if !foundEnd {
+		t.Fatalf("final Gemini chunk did not emit StreamEnd: %+v", evs)
+	}
+}
+
+func TestAnthropicEmitterKeepsTextAndThinkingBlockIndexesSeparate(t *testing.T) {
+	rr := httptest.NewRecorder()
+	emitter := NewAnthropicEmitter(rr, "model", "req-blocks")
+	events := []StreamEvent{
+		{Type: StreamText, Text: "text-a"},
+		{Type: StreamThinking, Text: "think-b"},
+		{Type: StreamText, Text: "text-c"},
+		{Type: StreamEnd, StopReason: StopEndTurn},
+	}
+	for _, ev := range events {
+		if err := emitter.Emit(ev); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := emitter.Finish(); err != nil {
+		t.Fatal(err)
+	}
+
+	got := map[string]int{}
+	for _, line := range strings.Split(rr.Body.String(), "\n") {
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		var frame map[string]any
+		if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &frame); err != nil {
+			t.Fatal(err)
+		}
+		if frame["type"] != "content_block_delta" {
+			continue
+		}
+		delta, _ := frame["delta"].(map[string]any)
+		typ, _ := delta["type"].(string)
+		var key string
+		switch typ {
+		case "text_delta":
+			key, _ = delta["text"].(string)
+		case "thinking_delta":
+			key, _ = delta["thinking"].(string)
+		default:
+			continue
+		}
+		idx, _ := frame["index"].(float64)
+		got[key] = int(idx)
+	}
+	if got["text-a"] != 0 || got["think-b"] != 1 || got["text-c"] != 2 {
+		t.Fatalf("interleaved text/thinking deltas used wrong block indexes: %#v\n%s", got, rr.Body.String())
+	}
+}
+
+func TestResponsesEmitterUsesDistinctOutputIndexesForParallelTools(t *testing.T) {
+	rr := httptest.NewRecorder()
+	emitter := NewResponsesEmitter(rr, "model")
+	events := []StreamEvent{
+		{Type: StreamToolStart, ToolIndex: 0, ToolID: "c0", ToolName: "first"},
+		{Type: StreamToolDelta, ToolIndex: 0, ArgsDelta: "{\"a\":1}"},
+		{Type: StreamToolEnd, ToolIndex: 0},
+		{Type: StreamToolStart, ToolIndex: 1, ToolID: "c1", ToolName: "second"},
+		{Type: StreamToolDelta, ToolIndex: 1, ArgsDelta: "{\"b\":2}"},
+		{Type: StreamToolEnd, ToolIndex: 1},
+		{Type: StreamEnd, StopReason: StopToolUse},
+	}
+	for _, ev := range events {
+		if err := emitter.Emit(ev); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := emitter.Finish(); err != nil {
+		t.Fatal(err)
+	}
+
+	indexByCall := map[string]int{}
+	for _, line := range strings.Split(rr.Body.String(), "\n") {
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		var frame map[string]any
+		if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &frame); err != nil {
+			t.Fatal(err)
+		}
+		item, _ := frame["item"].(map[string]any)
+		callID, _ := item["call_id"].(string)
+		if callID == "" {
+			if itemID, _ := frame["item_id"].(string); strings.HasPrefix(itemID, "fc_") {
+				callID = strings.TrimPrefix(itemID, "fc_")
+			}
+		}
+		if callID == "" {
+			continue
+		}
+		idx, ok := frame["output_index"].(float64)
+		if !ok {
+			continue
+		}
+		if prev, exists := indexByCall[callID]; exists && prev != int(idx) {
+			t.Fatalf("tool %s changed output_index from %d to %d\n%s", callID, prev, int(idx), rr.Body.String())
+		}
+		indexByCall[callID] = int(idx)
+	}
+	if indexByCall["c0"] != 1 || indexByCall["c1"] != 2 {
+		t.Fatalf("parallel tools reused output indexes: %#v\n%s", indexByCall, rr.Body.String())
+	}
+}
