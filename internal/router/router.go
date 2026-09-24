@@ -209,10 +209,7 @@ func (r *Router) scored(d Deployment, hs health.State, req Requirement, cfg conf
 	}
 	pressure := capacityPressure(load)
 	score += d.Weight*10 - float64(d.Priority)*3 - hs.EWMALatencyMS*cfg.Routing.LatencyWeight - pressure*cfg.Routing.CapacityWeight
-	total := hs.Successes + hs.Failures
-	if total > 0 {
-		score -= (float64(hs.Failures) / float64(total)) * cfg.Routing.FailureWeight
-	}
+	score -= hs.EWMAFailureRate * cfg.Routing.FailureWeight
 	return Scored{Deployment: d, Health: hs, Score: score, CapacityPressure: pressure}
 }
 
@@ -341,6 +338,34 @@ func better(a, b Scored) bool {
 	return a.Deployment.ID < b.Deployment.ID
 }
 
+func diversifyProviderFailover(out []Scored, start int) {
+	if start < 1 {
+		start = 1
+	}
+	// The primary route is already selected for quality/affinity. For fallbacks,
+	// avoid hitting the same provider repeatedly when an equivalent-priority
+	// deployment exists in another failure domain. Never cross a priority tier.
+	for i := start; i < len(out); i++ {
+		if out[i].Deployment.ProviderID != out[i-1].Deployment.ProviderID {
+			continue
+		}
+		priority := out[i].Deployment.Priority
+		pick := -1
+		for j := i + 1; j < len(out) && out[j].Deployment.Priority == priority; j++ {
+			if out[j].Deployment.ProviderID != out[i-1].Deployment.ProviderID {
+				pick = j
+				break
+			}
+		}
+		if pick < 0 {
+			continue
+		}
+		chosen := out[pick]
+		copy(out[i+1:pick+1], out[i:pick])
+		out[i] = chosen
+	}
+}
+
 func (r *Router) orderReadyMesh(out []Scored, req Requirement, cfg config.Config) {
 	sort.SliceStable(out, func(i, j int) bool {
 		if out[i].Deployment.Priority != out[j].Deployment.Priority {
@@ -354,7 +379,10 @@ func (r *Router) orderReadyMesh(out []Scored, req Requirement, cfg config.Config
 	if pin := r.pinned(req, cfg); pin != "" {
 		for i := range out {
 			if out[i].Deployment.ID == pin {
-				out[0], out[i] = out[i], out[0]
+				chosen := out[i]
+				copy(out[1:i+1], out[0:i])
+				out[0] = chosen
+				diversifyProviderFailover(out, 1)
 				return
 			}
 		}
@@ -368,6 +396,7 @@ func (r *Router) orderReadyMesh(out []Scored, req Requirement, cfg config.Config
 		window = cfg.Routing.P2CWindow
 	}
 	if window < 2 {
+		diversifyProviderFailover(out, 1)
 		return
 	}
 	key := req.SelectionKey
@@ -387,6 +416,7 @@ func (r *Router) orderReadyMesh(out []Scored, req Requirement, cfg config.Config
 		winner = b
 	}
 	out[0], out[winner] = out[winner], out[0]
+	diversifyProviderFailover(out, 1)
 }
 
 func (r *Router) Candidates(req Requirement) []Scored {
