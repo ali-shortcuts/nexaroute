@@ -1,4 +1,4 @@
-# Known gaps — v0.5.2
+# Known gaps — v0.5.3
 
 These are explicit boundaries of the current code, not hidden assumptions.
 
@@ -87,7 +87,7 @@ The exact-match response cache is opt-in and deliberately narrow: non-streaming,
 
 Health probing is selective and event-driven. Startup establishes readiness, new/unverified deployments are probed, and failed deployments move into dedicated recovery loops. Successful real Claude traffic refreshes a deployment's ready-health lease, so actively used models are not needlessly synthetic-probed. A healthy deployment that remains idle past `probe.ready_lease_seconds` is micro-probed before its health proof is trusted indefinitely. The sweep interval remains configurable (minimum 1 second) without turning health checks into a quota/rate-limit attack.
 
-Micro-probes measure availability and latency. They do not measure model intelligence/answer quality. Model strength is expressed through configured deployment `priority` and `weight`; automatic quality benchmarking is outside the current v0.5.2 scope.
+Micro-probes measure availability and latency. They do not measure model intelligence/answer quality. Model strength is expressed through configured deployment `priority` and `weight`; automatic quality benchmarking is outside the current v0.5.3 scope.
 
 
 ## Routing boundaries after Ready Mesh
