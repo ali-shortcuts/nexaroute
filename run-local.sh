@@ -7,11 +7,20 @@ if [[ ! -f "$CFG" ]]; then
   chmod 600 "$CFG"
   echo "Created $CFG"
 fi
-case "$(uname -m)" in
-  x86_64|amd64) BIN="$ROOT/bin/nexaroute-linux-amd64" ;;
-  aarch64|arm64) BIN="$ROOT/bin/nexaroute-linux-arm64" ;;
-  *) BIN="" ;;
+case "$(uname -s)" in
+  Linux) OS_ID=linux ;;
+  Darwin) OS_ID=darwin ;;
+  *) OS_ID="" ;;
 esac
+case "$(uname -m)" in
+  x86_64|amd64) ARCH_ID=amd64 ;;
+  aarch64|arm64) ARCH_ID=arm64 ;;
+  *) ARCH_ID="" ;;
+esac
+BIN=""
+if [[ -n "$OS_ID" && -n "$ARCH_ID" ]]; then
+  BIN="$ROOT/bin/nexaroute-${OS_ID}-${ARCH_ID}"
+fi
 if [[ -n "$BIN" && -x "$BIN" ]]; then
   exec "$BIN" -config "$CFG"
 fi

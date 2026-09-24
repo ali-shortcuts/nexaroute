@@ -3,7 +3,7 @@ name: Release build
 on:
   push:
     tags:
-      - 'v0.3'
+      - 'v*'
 
 permissions:
   contents: write
@@ -20,6 +20,17 @@ jobs:
           go-version: '1.23.x'
           cache: false
 
+      - name: Validate release tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_version="$(sed -n 's/^const version = "\([^"]*\)"/\1/p' cmd/gateway/main.go)"
+          tag_version="${GITHUB_REF_NAME#v}"
+          if [[ -z "$source_version" || "$source_version" != "$tag_version" ]]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match source version ${source_version:-<missing>}." >&2
+            exit 1
+          fi
+
       - name: Verify source
         run: ./scripts/verify.sh
 
@@ -29,28 +40,33 @@ jobs:
       - name: Docker build
         run: docker build --tag nexaroute-release:${GITHUB_REF_NAME} .
 
-      - name: Build release artifacts and installable package
+      - name: Build release artifacts and universal install package
         shell: bash
         run: |
           set -euo pipefail
           rm -rf dist/release-package
           mkdir -p dist/release-package/nexaroute/{bin,configs,deploy/systemd,scripts}
 
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags='-s -w' -o dist/nexaroute-linux-amd64 ./cmd/gateway
-          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags='-s -w' -o dist/nexaroute-linux-arm64 ./cmd/gateway
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+            os="${target%/*}"
+            arch="${target#*/}"
+            binary="dist/nexaroute-${os}-${arch}"
+            CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build -trimpath -ldflags='-s -w' -o "$binary" ./cmd/gateway
+            install -m 0755 "$binary" "dist/release-package/nexaroute/bin/nexaroute-${os}-${arch}"
+          done
 
-          install -m 0755 dist/nexaroute-linux-amd64 dist/release-package/nexaroute/bin/nexaroute-linux-amd64
-          install -m 0755 dist/nexaroute-linux-arm64 dist/release-package/nexaroute/bin/nexaroute-linux-arm64
-          install -m 0755 install-user.sh run-local.sh dist/release-package/nexaroute/
-          install -m 0755 scripts/install-systemd-user.sh scripts/smoke-local.sh dist/release-package/nexaroute/scripts/
+          install -m 0755 install.sh install-user.sh run-local.sh dist/release-package/nexaroute/
+          install -m 0755 scripts/install-systemd-user.sh scripts/smoke-local.sh scripts/smoke-installer.sh dist/release-package/nexaroute/scripts/
           install -m 0644 configs/config.example.json dist/release-package/nexaroute/configs/
           install -m 0644 deploy/systemd/nexaroute.service dist/release-package/nexaroute/deploy/systemd/
           install -m 0644 README.md LICENSE SECURITY.md dist/release-package/nexaroute/
 
-          tar -C dist/release-package -czf "dist/nexaroute-${GITHUB_REF_NAME}-linux.tar.gz" nexaroute
+          tar -C dist/release-package -czf dist/nexaroute-universal.tar.gz nexaroute
           (
             cd dist
-            sha256sum nexaroute-linux-amd64 nexaroute-linux-arm64 "nexaroute-${GITHUB_REF_NAME}-linux.tar.gz" > SHA256SUMS
+            sha256sum nexaroute-linux-amd64 nexaroute-linux-arm64 \
+              nexaroute-darwin-amd64 nexaroute-darwin-arm64 \
+              nexaroute-universal.tar.gz > SHA256SUMS
           )
 
       - name: Verify packaged installer
@@ -60,14 +76,36 @@ jobs:
           tmp="$(mktemp -d)"
           home="$(mktemp -d)"
           trap 'rm -rf "$tmp" "$home"' EXIT
-          tar -C "$tmp" -xzf "dist/nexaroute-${GITHUB_REF_NAME}-linux.tar.gz"
+          tar -C "$tmp" -xzf dist/nexaroute-universal.tar.gz
           "$tmp/nexaroute/scripts/smoke-local.sh"
+          "$tmp/nexaroute/scripts/smoke-installer.sh"
           HOME="$home" "$tmp/nexaroute/install-user.sh"
           test -x "$home/.local/bin/nexaroute"
-          "$home/.local/bin/nexaroute" -version | grep -F "NexaRoute v0.3"
+          expected_version="$(sed -n 's/^const version = "\([^"]*\)"/NexaRoute v\1/p' cmd/gateway/main.go)"
+          test -n "$expected_version"
+          test "$("$home/.local/bin/nexaroute" -version)" = "$expected_version"
           test -f "$home/.config/nexaroute/config.json"
           test "$(stat -c '%a' "$home/.config/nexaroute/config.json")" = "600"
           test ! -e "$home/.config/nexaroute/config.json.bak"
+
+          # Exercise the public one-line installer against a local release mirror.
+          mock="$tmp/mock/latest/download"
+          mkdir -p "$mock"
+          cp dist/nexaroute-universal.tar.gz dist/SHA256SUMS "$mock/"
+          python3 -m http.server 18082 --bind 127.0.0.1 --directory "$tmp/mock" >"$tmp/http.log" 2>&1 &
+          server_pid=$!
+          cleanup_server() { kill "$server_pid" 2>/dev/null || true; wait "$server_pid" 2>/dev/null || true; }
+          trap 'cleanup_server; rm -rf "$tmp" "$home"' EXIT
+          for _ in $(seq 1 50); do
+            if curl -fsS http://127.0.0.1:18082/latest/download/SHA256SUMS >/dev/null 2>&1; then break; fi
+            sleep 0.1
+          done
+          one_line_home="$tmp/one-line-home"
+          mkdir -p "$one_line_home"
+          HOME="$one_line_home" NEXAROUTE_RELEASES_URL=http://127.0.0.1:18082 \
+            "$tmp/nexaroute/install.sh"
+          test -x "$one_line_home/.local/bin/nexaroute"
+          test "$("$one_line_home/.local/bin/nexaroute" -version)" = "$expected_version"
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
@@ -75,6 +113,8 @@ jobs:
           files: |
             dist/nexaroute-linux-amd64
             dist/nexaroute-linux-arm64
-            dist/nexaroute-v0.3-linux.tar.gz
+            dist/nexaroute-darwin-amd64
+            dist/nexaroute-darwin-arm64
+            dist/nexaroute-universal.tar.gz
             dist/SHA256SUMS
           generate_release_notes: true
