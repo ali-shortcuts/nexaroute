@@ -263,13 +263,19 @@ func inspectRequestJSON(raw []byte, visionType string, reasoningKeys []string) r
 	// the messages subtree so a tool schema/example containing type=image(_url)
 	// cannot accidentally force vision-capable routing. The same traversal
 	// accumulates a cheap character estimate for context-window pre-routing.
-	messages, ok := root["messages"]
+	contentRoot, ok := root["messages"]
+	if !ok {
+		// OpenAI Responses uses "input" instead of "messages". Inspect the
+		// protocol content subtree rather than falling back to raw-body size so
+		// tool schemas/metadata cannot distort context, cost or quota estimates.
+		contentRoot, ok = root["input"]
+	}
 	if !ok {
 		return out
 	}
 	chars := 0
 	messageCount := 0
-	stack := []any{messages}
+	stack := []any{contentRoot}
 	nodes := 0
 	for len(stack) > 0 {
 		last := len(stack) - 1
