@@ -27,6 +27,17 @@ type ScopeState struct {
 	CooldownUntil       time.Time `json:"cooldown_until,omitempty"`
 }
 
+type ProviderState struct {
+	Provider      string    `json:"provider"`
+	Status        Status    `json:"status"`
+	Evidence      int       `json:"evidence"`
+	LastChecked   time.Time `json:"last_checked"`
+	LastSuccess   time.Time `json:"last_success"`
+	LastFailure   time.Time `json:"last_failure"`
+	LastError     string    `json:"last_error,omitempty"`
+	CooldownUntil time.Time `json:"cooldown_until,omitempty"`
+}
+
 type State struct {
 	Deployment          string                `json:"deployment"`
 	Status              Status                `json:"status"`
@@ -34,6 +45,7 @@ type State struct {
 	Failures            int64                 `json:"failures"`
 	ConsecutiveFailures int                   `json:"consecutive_failures"`
 	EWMALatencyMS       float64               `json:"ewma_latency_ms"`
+	EWMATTFTMS          float64               `json:"ewma_ttft_ms"`
 	EWMAFailureRate     float64               `json:"ewma_failure_rate"`
 	LastChecked         time.Time             `json:"last_checked"`
 	LastSuccess         time.Time             `json:"last_success"`
@@ -45,12 +57,17 @@ type State struct {
 }
 
 type Manager struct {
-	mu             sync.RWMutex
-	threshold      int
-	cooldown       time.Duration
-	scopeThreshold int
-	scopeCooldown  time.Duration
-	states         map[string]State
+	mu                sync.RWMutex
+	threshold         int
+	cooldown          time.Duration
+	scopeThreshold    int
+	scopeCooldown     time.Duration
+	providerThreshold int
+	providerWindow    time.Duration
+	providerCooldown  time.Duration
+	states            map[string]State
+	providers         map[string]ProviderState
+	providerEvidence  map[string]map[string]time.Time
 }
 
 func New(threshold int, cooldown time.Duration) *Manager {
@@ -61,11 +78,16 @@ func New(threshold int, cooldown time.Duration) *Manager {
 		cooldown = time.Hour
 	}
 	return &Manager{
-		threshold:      threshold,
-		cooldown:       cooldown,
-		scopeThreshold: 2,
-		scopeCooldown:  5 * time.Minute,
-		states:         map[string]State{},
+		threshold:         threshold,
+		cooldown:          cooldown,
+		scopeThreshold:    2,
+		scopeCooldown:     5 * time.Minute,
+		providerThreshold: 3,
+		providerWindow:    20 * time.Second,
+		providerCooldown:  30 * time.Second,
+		states:            map[string]State{},
+		providers:         map[string]ProviderState{},
+		providerEvidence:  map[string]map[string]time.Time{},
 	}
 }
 
@@ -189,6 +211,23 @@ func updateFailureEWMA(s *State, failed bool) {
 	s.EWMAFailureRate = s.EWMAFailureRate*0.75 + sample*0.25
 }
 
+func (m *Manager) RecordTTFT(id string, ttft time.Duration) {
+	ms := float64(ttft.Milliseconds())
+	if ms <= 0 {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	st := m.states[id]
+	st.Deployment = id
+	if st.EWMATTFTMS == 0 {
+		st.EWMATTFTMS = ms
+	} else {
+		st.EWMATTFTMS = st.EWMATTFTMS*0.75 + ms*0.25
+	}
+	m.states[id] = st
+}
+
 func (m *Manager) RecordSuccess(id string, latency time.Duration) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -246,6 +285,139 @@ func (m *Manager) RecordFailure(id, errMsg string, latency time.Duration) {
 		s.CooldownUntil = time.Time{}
 	}
 	m.states[id] = s
+}
+
+func normalizeProviderState(st ProviderState, now time.Time) ProviderState {
+	if st.Status == Cooldown && !st.CooldownUntil.IsZero() && now.After(st.CooldownUntil) {
+		st.Status = HalfOpen
+		st.Evidence = 0
+		st.LastError = ""
+		st.CooldownUntil = time.Time{}
+	}
+	return st
+}
+
+func (m *Manager) ProviderAvailable(id string) bool {
+	if id == "" {
+		return true
+	}
+	now := time.Now()
+	m.mu.RLock()
+	st, ok := m.providers[id]
+	if !ok {
+		m.mu.RUnlock()
+		return true
+	}
+	if st.Status != Cooldown || st.CooldownUntil.IsZero() || now.Before(st.CooldownUntil) {
+		available := st.Status != Cooldown
+		m.mu.RUnlock()
+		return available
+	}
+	m.mu.RUnlock()
+
+	m.mu.Lock()
+	st, ok = m.providers[id]
+	if !ok {
+		m.mu.Unlock()
+		return true
+	}
+	st = normalizeProviderState(st, now)
+	m.providers[id] = st
+	available := st.Status != Cooldown
+	m.mu.Unlock()
+	return available
+}
+
+func (m *Manager) RecordProviderFailure(providerID, deploymentID, reason string) {
+	if providerID == "" {
+		return
+	}
+	if deploymentID == "" {
+		deploymentID = providerID
+	}
+	now := time.Now()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	st := normalizeProviderState(m.providers[providerID], now)
+	st.Provider = providerID
+	st.LastChecked = now
+	st.LastFailure = now
+	st.LastError = reason
+
+	// A failure from a request already in flight must never downgrade an active
+	// provider cooldown back to Degraded. Keep the hard deadline intact.
+	if st.Status == Cooldown && !st.CooldownUntil.IsZero() && now.Before(st.CooldownUntil) {
+		m.providers[providerID] = st
+		return
+	}
+	if st.Status == HalfOpen {
+		st.Status = Cooldown
+		st.Evidence = 1
+		st.CooldownUntil = now.Add(m.providerCooldown)
+		m.providers[providerID] = st
+		m.providerEvidence[providerID] = map[string]time.Time{deploymentID: now}
+		return
+	}
+
+	evidence := m.providerEvidence[providerID]
+	if evidence == nil {
+		evidence = map[string]time.Time{}
+	}
+	for id, at := range evidence {
+		if now.Sub(at) > m.providerWindow {
+			delete(evidence, id)
+		}
+	}
+	evidence[deploymentID] = now
+	st.Evidence = len(evidence)
+	if st.Evidence >= m.providerThreshold {
+		st.Status = Cooldown
+		st.CooldownUntil = now.Add(m.providerCooldown)
+	} else {
+		st.Status = Degraded
+		st.CooldownUntil = time.Time{}
+	}
+	m.providerEvidence[providerID] = evidence
+	m.providers[providerID] = st
+}
+
+func (m *Manager) RecordProviderSuccess(providerID string) {
+	if providerID == "" {
+		return
+	}
+	now := time.Now()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	st := m.providers[providerID]
+	st.Provider = providerID
+	st.LastChecked = now
+	st.LastSuccess = now
+	if st.Status == Cooldown && !st.CooldownUntil.IsZero() && now.Before(st.CooldownUntil) {
+		// A successful request that started before another request opened the
+		// provider circuit is stale evidence; do not re-admit the provider early.
+		m.providers[providerID] = st
+		return
+	}
+	st.Status = Healthy
+	st.Evidence = 0
+	st.LastError = ""
+	st.CooldownUntil = time.Time{}
+	m.providers[providerID] = st
+	delete(m.providerEvidence, providerID)
+}
+
+func (m *Manager) ProviderSnapshot() []ProviderState {
+	now := time.Now()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]ProviderState, 0, len(m.providers))
+	for id, st := range m.providers {
+		st = normalizeProviderState(st, now)
+		m.providers[id] = st
+		out = append(out, st)
+	}
+	return out
 }
 
 func (m *Manager) Snapshot() []State {
@@ -436,12 +608,50 @@ func (m *Manager) Retain(valid map[string]struct{}) {
 	}
 }
 
+func (m *Manager) RetainProviders(valid map[string]struct{}) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for id := range m.providers {
+		if _, ok := valid[id]; !ok {
+			delete(m.providers, id)
+			delete(m.providerEvidence, id)
+		}
+	}
+}
+
+func (m *Manager) InvalidateProvider(id string) {
+	if id == "" {
+		return
+	}
+	m.mu.Lock()
+	delete(m.providers, id)
+	delete(m.providerEvidence, id)
+	m.mu.Unlock()
+}
+
 func (m *Manager) Configure(threshold int, cooldown time.Duration) {
 	m.mu.RLock()
 	scopeThreshold := m.scopeThreshold
 	scopeCooldown := m.scopeCooldown
 	m.mu.RUnlock()
 	m.ConfigureAdvanced(threshold, cooldown, scopeThreshold, scopeCooldown)
+}
+
+func (m *Manager) ConfigureProviderIncidents(threshold int, window, cooldown time.Duration) {
+	if threshold < 2 {
+		threshold = 2
+	}
+	if window <= 0 {
+		window = 20 * time.Second
+	}
+	if cooldown <= 0 {
+		cooldown = 30 * time.Second
+	}
+	m.mu.Lock()
+	m.providerThreshold = threshold
+	m.providerWindow = window
+	m.providerCooldown = cooldown
+	m.mu.Unlock()
 }
 
 func (m *Manager) ConfigureAdvanced(threshold int, cooldown time.Duration, scopeThreshold int, scopeCooldown time.Duration) {
