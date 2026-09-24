@@ -565,24 +565,27 @@ func DecodeResponsesStreamEvent(eventName, data string) ([]StreamEvent, bool, er
 		}
 	case "response.output_item.added":
 		var ev struct {
-			Item ResponsesOutputItem `json:"item"`
+			OutputIndex int                 `json:"output_index"`
+			Item        ResponsesOutputItem `json:"item"`
 		}
 		if json.Unmarshal([]byte(d), &ev) == nil && ev.Item.Type == "function_call" {
-			return []StreamEvent{{Type: StreamToolStart, ToolIndex: 0, ToolID: ev.Item.CallID, ToolName: ev.Item.Name}}, false, nil
+			return []StreamEvent{{Type: StreamToolStart, ToolIndex: ev.OutputIndex, ToolID: ev.Item.CallID, ToolName: ev.Item.Name}}, false, nil
 		}
 	case "response.function_call_arguments.delta":
 		var ev struct {
-			Delta string `json:"delta"`
+			OutputIndex int    `json:"output_index"`
+			Delta       string `json:"delta"`
 		}
 		if json.Unmarshal([]byte(d), &ev) == nil && ev.Delta != "" {
-			return []StreamEvent{{Type: StreamToolDelta, ToolIndex: 0, ArgsDelta: ev.Delta}}, false, nil
+			return []StreamEvent{{Type: StreamToolDelta, ToolIndex: ev.OutputIndex, ArgsDelta: ev.Delta}}, false, nil
 		}
 	case "response.output_item.done":
 		var ev struct {
-			Item ResponsesOutputItem `json:"item"`
+			OutputIndex int                 `json:"output_index"`
+			Item        ResponsesOutputItem `json:"item"`
 		}
 		if json.Unmarshal([]byte(d), &ev) == nil && ev.Item.Type == "function_call" {
-			return []StreamEvent{{Type: StreamToolEnd, ToolIndex: 0}}, false, nil
+			return []StreamEvent{{Type: StreamToolEnd, ToolIndex: ev.OutputIndex}}, false, nil
 		}
 	case "response.failed", "response.incomplete", "error":
 		var ev struct {
