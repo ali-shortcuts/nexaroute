@@ -415,6 +415,7 @@ func DecodeResponsesResponse(b []byte) (Response, error) {
 		return Response{}, fmt.Errorf("invalid Responses body: %w", err)
 	}
 	out := Response{ID: in.ID, Model: in.Model, StopReason: StopEndTurn, Raw: append(json.RawMessage(nil), b...)}
+	sawToolCall := false
 	for _, item := range in.Output {
 		switch item.Type {
 		case "message":
@@ -434,6 +435,7 @@ func DecodeResponsesResponse(b []byte) (Response, error) {
 				out.Blocks = append(out.Blocks, Block{Type: PartText, Text: sb.String()})
 			}
 		case "function_call":
+			sawToolCall = true
 			out.Blocks = append(out.Blocks, Block{Type: PartToolCall, ToolCall: &ToolCall{
 				ID: item.CallID, Name: item.Name, Arguments: item.Arguments,
 			}})
@@ -455,6 +457,10 @@ func DecodeResponsesResponse(b []byte) (Response, error) {
 	switch in.Status {
 	case "incomplete":
 		out.StopReason = StopMaxTokens
+	default:
+		if sawToolCall {
+			out.StopReason = StopToolUse
+		}
 	}
 	if in.Usage != nil {
 		out.Usage = Usage{InputTokens: in.Usage.InputTokens, OutputTokens: in.Usage.OutputTokens}
