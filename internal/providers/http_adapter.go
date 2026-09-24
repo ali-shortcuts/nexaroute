@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/ali-shortcuts/nexaroute/internal/config"
+	"github.com/ali-shortcuts/nexaroute/internal/protocol/canonical"
 )
 
 type credentialState struct {
@@ -861,33 +862,12 @@ func (a *httpAdapter) validateProbeResponse(data []byte) error {
 	}
 	switch a.p.Type {
 	case "anthropic_compatible":
-		var typ, role string
-		if raw := root["type"]; len(raw) > 0 {
-			_ = json.Unmarshal(raw, &typ)
-		}
-		if raw := root["role"]; len(raw) > 0 {
-			_ = json.Unmarshal(raw, &role)
-		}
-		var content []json.RawMessage
-		if raw := root["content"]; len(raw) > 0 {
-			if err := json.Unmarshal(raw, &content); err != nil {
-				return fmt.Errorf("probe returned invalid Anthropic content: %w", err)
-			}
-		}
-		if typ != "message" || role != "assistant" || content == nil {
-			return errors.New("probe returned an invalid Anthropic message envelope")
+		if err := canonical.ValidateAnthropicResponseJSON(data); err != nil {
+			return fmt.Errorf("probe returned an invalid Anthropic message: %w", err)
 		}
 	case "gemini":
-		var candidates []map[string]json.RawMessage
-		raw := root["candidates"]
-		if len(raw) == 0 {
-			if pf, ok := root["promptFeedback"]; ok && len(pf) > 0 {
-				return nil // blocked prompt is a valid Gemini envelope
-			}
-			return errors.New("probe returned an invalid Gemini envelope: candidates missing")
-		}
-		if err := json.Unmarshal(raw, &candidates); err != nil || len(candidates) == 0 {
-			return fmt.Errorf("probe returned invalid Gemini candidates: %w", err)
+		if _, err := canonical.DecodeGeminiResponse(data); err != nil {
+			return fmt.Errorf("probe returned an invalid Gemini response: %w", err)
 		}
 	case "openai_responses":
 		var object, status string
@@ -909,23 +889,8 @@ func (a *httpAdapter) validateProbeResponse(data []byte) error {
 			}
 		}
 	default:
-		var choices []map[string]json.RawMessage
-		raw := root["choices"]
-		if len(raw) == 0 {
-			return errors.New("probe returned an invalid OpenAI chat-completion envelope: choices missing")
-		}
-		if err := json.Unmarshal(raw, &choices); err != nil {
-			return fmt.Errorf("probe returned invalid OpenAI choices: %w", err)
-		}
-		if len(choices) == 0 || len(choices[0]["message"]) == 0 {
-			return errors.New("probe returned an invalid OpenAI chat-completion envelope")
-		}
-		var message map[string]json.RawMessage
-		if err := json.Unmarshal(choices[0]["message"], &message); err != nil || message == nil {
-			if err != nil {
-				return fmt.Errorf("probe returned an invalid OpenAI message object: %w", err)
-			}
-			return errors.New("probe returned an invalid OpenAI message object")
+		if err := canonical.ValidateOpenAIChatResponseJSON(data); err != nil {
+			return fmt.Errorf("probe returned an invalid OpenAI chat completion: %w", err)
 		}
 	}
 	return nil

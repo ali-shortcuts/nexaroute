@@ -69,3 +69,30 @@ func TestNativeSSEAcceptsMultilineData(t *testing.T) {
 		})
 	}
 }
+
+type oneByteReader struct{ io.Reader }
+
+func (r oneByteReader) Read(p []byte) (int, error) {
+	return r.Reader.Read(p[:1])
+}
+
+func TestNativeSSEMultilineFrameSurvivesFragmentedReads(t *testing.T) {
+	body := "event: message_start\n" +
+		"data: {\"type\":\"message_start\",\"message\":{\"usage\":\n" +
+		"data: {\"input_tokens\":7}}}\n\n" +
+		"event: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":3}}\n\n" +
+		"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
+	resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body: io.NopCloser(oneByteReader{strings.NewReader(body)})}
+	rr := httptest.NewRecorder()
+	calls, in, out := 0, 0, 0
+	if err := proxyNativeSSE(rr, resp, "anthropic", func(p, c int) {
+		calls++
+		in, out = p, c
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if rr.Body.String() != body || calls != 1 || in != 7 || out != 3 {
+		t.Fatalf("fragmented stream lost data or usage: calls=%d tokens=%d/%d body=%q", calls, in, out, rr.Body.String())
+	}
+}

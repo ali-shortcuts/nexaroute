@@ -443,6 +443,8 @@ func proxyValidatedJSONResponse(w http.ResponseWriter, resp *http.Response, vali
 type nativeSSETracker struct {
 	protocol string
 	line     []byte
+	data     []byte // SSE joins all data: lines in one event with newlines.
+	hasData  bool
 	terminal bool
 	// usage accounting (optional hook). The hook fires at most once, when
 	// the protocol's terminal usage information is complete.
@@ -478,11 +480,45 @@ func (t *nativeSSETracker) consume(p []byte) error {
 }
 
 func (t *nativeSSETracker) processLine() error {
-	line := bytes.TrimSpace(t.line)
-	if len(line) == 0 || !bytes.HasPrefix(line, []byte("data:")) {
+	line := bytes.TrimRight(t.line, "\r")
+	if len(bytes.TrimSpace(line)) == 0 {
+		return t.processEvent()
+	}
+	if !bytes.HasPrefix(line, []byte("data:")) && !bytes.Equal(line, []byte("data")) {
+		return nil // event:, id:, retry: and comments do not carry data.
+	}
+	var part []byte
+	if len(line) > len("data") {
+		part = line[len("data:"):]
+		if len(part) > 0 && part[0] == ' ' {
+			part = part[1:]
+		}
+	}
+	newLen := len(t.data) + len(part)
+	if t.hasData {
+		newLen++
+	}
+	if newLen > maxNativeSSELineBytes {
+		return fmt.Errorf("native SSE event exceeds %d bytes", maxNativeSSELineBytes)
+	}
+	if t.hasData {
+		t.data = append(t.data, '\n')
+	}
+	t.data = append(t.data, part...)
+	t.hasData = true
+	return nil
+}
+
+func (t *nativeSSETracker) processEvent() error {
+	if !t.hasData {
 		return nil
 	}
-	data := bytes.TrimSpace(line[len("data:"):])
+	t.hasData = false
+	defer func() { t.data = t.data[:0] }()
+	return t.processData(bytes.TrimSpace(t.data))
+}
+
+func (t *nativeSSETracker) processData(data []byte) error {
 	if len(data) == 0 {
 		return nil
 	}
@@ -574,35 +610,31 @@ func (t *nativeSSETracker) observeAnthropicUsage(typ string, env map[string]json
 	switch typ {
 	case "message_start":
 		var start struct {
-			Message struct {
-				Usage struct {
-					InputTokens  int `json:"input_tokens"`
-					OutputTokens int `json:"output_tokens"`
-				} `json:"usage"`
-			} `json:"message"`
-		}
-		if raw := env["message"]; len(raw) > 0 {
-			if err := json.Unmarshal(raw, &start); err == nil {
-				t.usageInput = start.Message.Usage.InputTokens
-				if start.Message.Usage.OutputTokens > t.usageOutput {
-					t.usageOutput = start.Message.Usage.OutputTokens
-				}
-			}
-		}
-	case "message_delta":
-		var delta struct {
 			Usage struct {
 				InputTokens  int `json:"input_tokens"`
 				OutputTokens int `json:"output_tokens"`
 			} `json:"usage"`
 		}
-		if raw := env["usage"]; len(raw) > 0 {
-			if err := json.Unmarshal(raw, &delta); err == nil {
-				if delta.Usage.OutputTokens > t.usageOutput {
-					t.usageOutput = delta.Usage.OutputTokens
+		if raw := env["message"]; len(raw) > 0 {
+			if err := json.Unmarshal(raw, &start); err == nil {
+				t.usageInput = start.Usage.InputTokens
+				if start.Usage.OutputTokens > t.usageOutput {
+					t.usageOutput = start.Usage.OutputTokens
 				}
-				if delta.Usage.InputTokens > t.usageInput {
-					t.usageInput = delta.Usage.InputTokens
+			}
+		}
+	case "message_delta":
+		var usage struct {
+			InputTokens  int `json:"input_tokens"`
+			OutputTokens int `json:"output_tokens"`
+		}
+		if raw := env["usage"]; len(raw) > 0 {
+			if err := json.Unmarshal(raw, &usage); err == nil {
+				if usage.OutputTokens > t.usageOutput {
+					t.usageOutput = usage.OutputTokens
+				}
+				if usage.InputTokens > t.usageInput {
+					t.usageInput = usage.InputTokens
 				}
 			}
 		}
@@ -620,6 +652,9 @@ func (t *nativeSSETracker) finish() error {
 			return err
 		}
 		t.line = nil
+	}
+	if err := t.processEvent(); err != nil {
+		return err
 	}
 	if !t.terminal {
 		return io.ErrUnexpectedEOF
