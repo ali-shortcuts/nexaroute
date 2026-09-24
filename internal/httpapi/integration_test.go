@@ -309,9 +309,7 @@ func TestNativeProxyStripsSensitiveAndHopByHopResponseHeaders(t *testing.T) {
 		Body: io.NopCloser(strings.NewReader(`{"ok":true}`)),
 	}
 	rr := httptest.NewRecorder()
-	if err := proxyResponse(rr, resp); err != nil {
-		t.Fatal(err)
-	}
+	copyUpstreamResponseHeaders(rr, resp, false)
 	for _, h := range []string{"Set-Cookie", "Authorization", "X-Api-Key", "Connection", "Keep-Alive", "X-Internal-Hop", "Proxy-Authenticate"} {
 		if got := rr.Header().Get(h); got != "" {
 			t.Fatalf("sensitive/hop-by-hop header %s leaked: %q", h, got)
@@ -323,9 +321,9 @@ func TestNativeProxyStripsSensitiveAndHopByHopResponseHeaders(t *testing.T) {
 }
 
 func TestNativeSSEProxyFlushes(t *testing.T) {
-	resp := &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"text/event-stream"}, "Content-Length": []string{"12"}}, Body: io.NopCloser(strings.NewReader("data: one\n\n"))}
+	resp := &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"text/event-stream"}, "Content-Length": []string{"12"}}, Body: io.NopCloser(strings.NewReader("data: {\"choices\":[{\"finish_reason\":\"stop\"}]}\n\n"))}
 	rr := httptest.NewRecorder()
-	if err := proxyResponse(rr, resp); err != nil {
+	if err := proxyNativeSSE(rr, resp, "openai"); err != nil {
 		t.Fatal(err)
 	}
 	if !rr.Flushed {

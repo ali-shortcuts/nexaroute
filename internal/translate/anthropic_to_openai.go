@@ -73,7 +73,7 @@ func AnthropicToOpenAI(in core.AnthropicRequest, model string) (core.OpenAIReque
 						return out, fmt.Errorf("Anthropic tool_result content is invalid JSON: %w", err)
 					}
 				}
-				out.Messages = append(out.Messages, core.OpenAIMessage{Role: "tool", ToolCallID: b.ToolUseID, Content: content})
+				out.Messages = append(out.Messages, core.OpenAIMessage{Role: "tool", ToolCallID: b.ToolUseID, Content: normalizeOpenAIToolResultContent(content)})
 			default:
 				return out, fmt.Errorf("unsupported Anthropic content block type %q for OpenAI translation", b.Type)
 			}
@@ -135,6 +135,52 @@ func parseAnthropicSystemStrict(raw json.RawMessage) (string, error) {
 		b.WriteString(block.Text)
 	}
 	return strings.TrimSpace(b.String()), nil
+}
+
+func normalizeOpenAIToolResultContent(v any) any {
+	switch t := v.(type) {
+	case nil:
+		return ""
+	case string:
+		return t
+	case []any:
+		// Anthropic tool_result.content is commonly an array of content
+		// blocks. Many OpenAI-compatible upstreams only accept string tool
+		// content, so text-only arrays are flattened into one string.
+		// Non-text blocks are converted to OpenAI content parts instead.
+		texts := make([]string, 0, len(t))
+		parts := make([]any, 0, len(t))
+		for _, item := range t {
+			m, ok := item.(map[string]any)
+			if !ok {
+				return v
+			}
+			typ, _ := m["type"].(string)
+			if typ == "text" {
+				s, _ := m["text"].(string)
+				texts = append(texts, s)
+				continue
+			}
+			if typ == "image" {
+				if src, ok := m["source"].(map[string]any); ok {
+					if u := anthImageURL(src); u != "" {
+						parts = append(parts, map[string]any{"type": "image_url", "image_url": map[string]any{"url": u}})
+						continue
+					}
+				}
+			}
+			return v
+		}
+		if len(parts) > 0 {
+			if len(texts) > 0 {
+				parts = append(parts, map[string]any{"type": "text", "text": strings.Join(texts, "\n")})
+			}
+			return parts
+		}
+		return strings.Join(texts, "\n")
+	default:
+		return v
+	}
 }
 
 func anthImageURL(src map[string]any) string {
