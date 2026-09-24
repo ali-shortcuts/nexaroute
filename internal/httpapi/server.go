@@ -126,6 +126,17 @@ func adminHostAllowed(r *http.Request) bool {
 }
 
 func New(cfg config.Config, configPath string, reg *providers.Registry, rt *router.Router, hm *health.Manager, bus *events.Bus, pe *probe.Engine, l *log.Logger) *Server {
+	hm.ConfigureAdvanced(
+		cfg.Routing.FailureThreshold,
+		cfg.Cooldown(),
+		cfg.Routing.CapabilityFailureThreshold,
+		time.Duration(cfg.Routing.CapabilityCooldownSeconds)*time.Second,
+	)
+	hm.ConfigureProviderIncidents(
+		cfg.Routing.ProviderFailureThreshold,
+		cfg.ProviderFailureWindow(),
+		cfg.ProviderCooldown(),
+	)
 	return &Server{cfg: cfg, configPath: configPath, reg: reg, rt: rt, hm: hm, bus: bus, probe: pe, log: l}
 }
 
@@ -305,13 +316,43 @@ func (s *Server) applyConfigLocked(cfg config.Config) error {
 		cfg.Routing.CapabilityFailureThreshold,
 		time.Duration(cfg.Routing.CapabilityCooldownSeconds)*time.Second,
 	)
+	s.hm.ConfigureProviderIncidents(
+		cfg.Routing.ProviderFailureThreshold,
+		cfg.ProviderFailureWindow(),
+		cfg.ProviderCooldown(),
+	)
 
 	valid := map[string]struct{}{}
 	for _, d := range s.rt.All() {
 		valid[d.ID] = struct{}{}
 	}
 	s.hm.Retain(valid)
+	validProviders := map[string]struct{}{}
+	for _, p := range cfg.Providers {
+		if p.Enabled {
+			validProviders[p.ID] = struct{}{}
+		}
+	}
+	s.hm.RetainProviders(validProviders)
+
 	changedHealth := changedDeploymentIDs(oldCfg, cfg)
+	oldProvidersByID := make(map[string]config.ProviderConfig, len(oldCfg.Providers))
+	for _, p := range oldCfg.Providers {
+		oldProvidersByID[p.ID] = p
+	}
+	changedProviderHealth := map[string]struct{}{}
+	for _, p := range cfg.Providers {
+		if !p.Enabled {
+			continue
+		}
+		old, existed := oldProvidersByID[p.ID]
+		if !existed || !old.Enabled || !providerProbeIdentityEqual(old, p) {
+			changedProviderHealth[p.ID] = struct{}{}
+		}
+		if _, rotated := rotatedCredentialProviders[p.ID]; rotated {
+			changedProviderHealth[p.ID] = struct{}{}
+		}
+	}
 	for _, d := range s.rt.All() {
 		if _, rotated := rotatedCredentialProviders[d.ProviderID]; rotated {
 			changedHealth[d.ID] = struct{}{}
@@ -319,6 +360,9 @@ func (s *Server) applyConfigLocked(cfg config.Config) error {
 	}
 	for id := range changedHealth {
 		s.hm.Invalidate(id)
+	}
+	for id := range changedProviderHealth {
+		s.hm.InvalidateProvider(id)
 	}
 
 	s.cfg = cfg
