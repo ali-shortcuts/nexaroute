@@ -599,7 +599,7 @@ function toggleSecret(i, b) {
 }
 const providerPresets = {
   custom: null,
-  chat2api: { name: 'Chat2API', id: 'chat2api', type: 'openai_compatible', base: 'http://127.0.0.1:5000/v1', auth: 'bearer' },
+  chat2api: { name: 'Chat2API', id: 'chat2api', type: 'openai_compatible', base: 'http://127.0.0.1:5000/v1', auth: 'bearer', local: true },
   anthropic: { name: 'Anthropic', id: 'anthropic', type: 'anthropic_compatible', base: 'https://api.anthropic.com', auth: 'x-api-key' },
   openai: { name: 'OpenAI', id: 'openai', type: 'openai_compatible', base: 'https://api.openai.com/v1', auth: 'bearer' },
   openrouter: { name: 'OpenRouter', id: 'openrouter', type: 'openai_compatible', base: 'https://openrouter.ai/api/v1', auth: 'bearer' },
@@ -608,26 +608,35 @@ const providerPresets = {
   together: { name: 'Together AI', id: 'together', type: 'openai_compatible', base: 'https://api.together.xyz/v1', auth: 'bearer' },
   mistral: { name: 'Mistral', id: 'mistral', type: 'openai_compatible', base: 'https://api.mistral.ai/v1', auth: 'bearer' },
   xai: { name: 'xAI', id: 'xai', type: 'openai_compatible', base: 'https://api.x.ai/v1', auth: 'bearer' },
-  ollama: { name: 'Ollama', id: 'ollama', type: 'openai_compatible', base: 'http://127.0.0.1:11434/v1', auth: 'none' }
+  ollama: { name: 'Ollama', id: 'ollama', type: 'openai_compatible', base: 'http://127.0.0.1:11434/v1', auth: 'none', local: true },
+  lmstudio: { name: 'LM Studio', id: 'lmstudio', type: 'openai_compatible', base: 'http://127.0.0.1:1234/v1', auth: 'none', local: true },
+  vllm: { name: 'vLLM', id: 'vllm', type: 'openai_compatible', base: 'http://127.0.0.1:8000/v1', auth: 'none', local: true }
 };
 function fillPresetSelect() {
   const sel = $('#pPreset');
   const current = sel.value;
-  const entries = [];
+  const apiEntries = [];
+  const localEntries = [];
   const seen = new Set();
+  const add = (key, label, local) => {
+    if (!key || key === 'custom' || seen.has(key)) return;
+    seen.add(key);
+    const option = `<option value="${esc(key)}">${esc(label || key)}</option>`;
+    (local ? localEntries : apiEntries).push(option);
+  };
   if (Array.isArray(serverPresets)) {
     for (const p of serverPresets) {
       const key = p && (p.id || p.key);
-      if (!key || seen.has(key)) continue;
-      seen.add(key);
-      entries.push(`<option value="${esc(key)}">${esc(p.name || p.label || key)}</option>`);
+      add(key, p && (p.name || p.label || key), !!(p && p.local));
     }
   }
-  for (const k of Object.keys(providerPresets)) {
-    if (k === 'custom' || seen.has(k)) continue;
-    entries.push(`<option value="${esc(k)}">${esc(providerPresets[k].name)}</option>`);
+  for (const [key, p] of Object.entries(providerPresets)) {
+    if (!p) continue;
+    add(key, p.name || key, !!p.local);
   }
-  sel.innerHTML = '<option value="custom">Custom Provider</option>' + entries.join('');
+  const apiGroup = apiEntries.length ? `<optgroup label="API Providers">${apiEntries.join('')}</optgroup>` : '';
+  const localGroup = localEntries.length ? `<optgroup label="Local Providers">${localEntries.join('')}</optgroup>` : '';
+  sel.innerHTML = '<option value="custom">Custom Provider</option>' + apiGroup + localGroup;
   sel.value = current || 'custom';
 }
 function applyPreset(k) {
