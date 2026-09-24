@@ -347,7 +347,7 @@ function renderProviders(h) {
       <button class="edit-provider btn secondary" data-id="${esc(p.id)}">Edit provider</button>
     </article>`;
   }).join('') || '<div class="empty-state"><strong>No providers yet.</strong><span>Add an OpenAI-compatible or Anthropic-compatible upstream to start routing.</span></div>';
-  $('.edit-provider').forEach(b => b.onclick = () => openEdit(b.dataset.id));
+  $$('.edit-provider').forEach(b => b.onclick = () => openEdit(b.dataset.id));
 }
 
 function renderModels(ds, h) {
