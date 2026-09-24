@@ -532,9 +532,9 @@ func TestResponsesEmitterUsesDistinctOutputIndexesForParallelTools(t *testing.T)
 
 func TestResponsesStreamDecoderPreservesParallelToolIndexes(t *testing.T) {
 	cases := []struct {
-		name string
-		data string
-		wantType string
+		name      string
+		data      string
+		wantType  string
 		wantIndex int
 	}{
 		{"start0", `{"type":"response.output_item.added","output_index":1,"item":{"type":"function_call","call_id":"c0","name":"first"}}`, StreamToolStart, 1},
