@@ -1011,7 +1011,7 @@ async function runCompatSuite(mode) {
   try {
     const blocks = [];
     for (const p of providers) {
-      const models = (p.models || []).filter(m => m.enabled).map(m => m.id);
+      const models = (p.models || []).filter(m => m.enabled).map(m => m.model);
       if (!models.length) continue;
       const d = await api('/admin/api/provider-test', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
