@@ -24,7 +24,7 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/router"
 )
 
-const version = "0.4.1"
+const version = "0.4.2"
 
 func defaultConfigPath() string {
 	if p := os.Getenv("NEXAROUTE_CONFIG"); p != "" {
