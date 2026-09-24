@@ -293,17 +293,17 @@ func TestStatusWriterPreservesReaderFromFastPath(t *testing.T) {
 
 func TestCapabilityDetectionIgnoresToolSchemaLookalikes(t *testing.T) {
 	raw := []byte(`{
-		"model":"m",
-		"messages":[{"role":"user","content":"hello"}],
-		"tools":[{"type":"function","function":{"name":"x","parameters":{
-			"type":"object",
-			"properties":{
-				"reasoning":{"type":"string"},
-				"example":{"type":"image_url"},
-				"anthropic_example":{"type":"image"}
-			}
-		}}}]
-	}`)
+                "model":"m",
+                "messages":[{"role":"user","content":"hello"}],
+                "tools":[{"type":"function","function":{"name":"x","parameters":{
+                        "type":"object",
+                        "properties":{
+                                "reasoning":{"type":"string"},
+                                "example":{"type":"image_url"},
+                                "anthropic_example":{"type":"image"}
+                        }
+                }}}]
+        }`)
 	if got := inspectRequestJSON(raw, "image_url", []string{"reasoning_effort", "reasoning"}); got.Vision || got.Reasoning {
 		t.Fatalf("OpenAI tool schema lookalikes must not imply capabilities: %+v", got)
 	}
@@ -314,10 +314,10 @@ func TestCapabilityDetectionIgnoresToolSchemaLookalikes(t *testing.T) {
 
 func TestCapabilityDetectionUsesTopLevelReasoningAndMessageVision(t *testing.T) {
 	raw := []byte(`{
-		"model":"m",
-		"reasoning_effort":"high",
-		"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"https://example.invalid/a.png"}}]}]
-	}`)
+                "model":"m",
+                "reasoning_effort":"high",
+                "messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"https://example.invalid/a.png"}}]}]
+        }`)
 	got := inspectRequestJSON(raw, "image_url", []string{"reasoning_effort", "reasoning"})
 	if !got.Vision || !got.Reasoning || got.TooComplex {
 		t.Fatalf("real protocol controls should be detected: %+v", got)
@@ -501,6 +501,8 @@ func TestAdminReadJSONAcceptsJSONCharset(t *testing.T) {
 	var dst map[string]any
 	if _, err := readJSON(req, &dst); err != nil {
 		t.Fatalf("valid admin JSON content type rejected: %v", err)
+	}
+}
 
 func TestAnthropicStopToOpenAIFinishMatrix(t *testing.T) {
 	cases := map[string]string{
