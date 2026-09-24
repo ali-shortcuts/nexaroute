@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ali-shortcuts/nexaroute/internal/config"
+	"github.com/ali-shortcuts/nexaroute/internal/providers"
 	"github.com/ali-shortcuts/nexaroute/internal/translate"
 )
 
@@ -975,5 +976,38 @@ func TestEmbeddedUIExposesCostAwareStrategy(t *testing.T) {
 	}
 	if !strings.Contains(string(index), `value="cost_aware"`) {
 		t.Fatal("cost-aware strategy missing from embedded dashboard")
+	}
+}
+
+func TestProviderLoadUsesEffectiveReservedQuotaHeadroom(t *testing.T) {
+	now := time.Now().Unix()
+	st := providers.ProviderStats{
+		MaxConcurrency:             32,
+		ActiveRequests:             2,
+		WaitingRequests:            1,
+		RequestLimit:               100,
+		RemainingRequests:          20,
+		ReservedRequests:           10,
+		EffectiveRemainingRequests: 10,
+		RequestResetUnix:           now + 60,
+		TokenLimit:                 1000,
+		RemainingTokens:            800,
+		EffectiveRemainingTokens:   800,
+		TokenResetUnix:             now + 60,
+	}
+	load := providerLoadFromStats(st, now)
+	// Raw request headroom 20/100 would yield 0.8 pressure. Effective
+	// headroom 10/100 must yield 2.4 and therefore dominate capacity pressure.
+	if load.QuotaPressure < 2.39 || load.QuotaPressure > 2.41 {
+		t.Fatalf("quota pressure ignored local reservations: %+v", load)
+	}
+	if load.QuotaExhausted {
+		t.Fatalf("10%% effective headroom should be pressured, not exhausted: %+v", load)
+	}
+
+	st.EffectiveRemainingRequests = 0
+	load = providerLoadFromStats(st, now)
+	if !load.QuotaExhausted || load.QuotaPressure != 4 {
+		t.Fatalf("effective zero headroom must surface as exhausted pressure: %+v", load)
 	}
 }
