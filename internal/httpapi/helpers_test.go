@@ -1132,7 +1132,7 @@ func TestProviderEditButtonsUseCollectionSelector(t *testing.T) {
 		if line == "$('.edit-provider').forEach(b => b.onclick = () => openEdit(b.dataset.id));" {
 			t.Fatal("provider edit binding uses single-element selector with forEach")
 		}
-		if line == "$('.edit-provider').forEach(b => b.onclick = () => openEdit(b.dataset.id));" {
+		if line == "$$('.edit-provider').forEach(b => b.onclick = () => openEdit(b.dataset.id));" {
 			foundCollection = true
 		}
 	}
