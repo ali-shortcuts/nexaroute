@@ -124,7 +124,11 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintln(w, "# TYPE nexaroute_provider_token_limit gauge")
 	fmt.Fprintln(w, "# HELP nexaroute_provider_remaining_tokens Latest upstream token quota remaining; -1 means unknown.")
 	fmt.Fprintln(w, "# TYPE nexaroute_provider_remaining_tokens gauge")
-	fmt.Fprintln(w, "# HELP nexaroute_provider_rate_limit_reset_unix Latest known upstream quota reset time as Unix seconds.")
+	fmt.Fprintln(w, "# HELP nexaroute_provider_request_reset_unix Latest known upstream request-quota reset time as Unix seconds.")
+	fmt.Fprintln(w, "# TYPE nexaroute_provider_request_reset_unix gauge")
+	fmt.Fprintln(w, "# HELP nexaroute_provider_token_reset_unix Latest known upstream token-quota reset time as Unix seconds.")
+	fmt.Fprintln(w, "# TYPE nexaroute_provider_token_reset_unix gauge")
+	fmt.Fprintln(w, "# HELP nexaroute_provider_rate_limit_reset_unix Conservative latest known upstream quota reset time as Unix seconds.")
 	fmt.Fprintln(w, "# TYPE nexaroute_provider_rate_limit_reset_unix gauge")
 	stats := s.reg.Stats()
 	sort.Slice(stats, func(i, j int) bool { return stats[i].ID < stats[j].ID })
@@ -138,6 +142,8 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "nexaroute_provider_remaining_requests{provider=%q} %d\n", id, st.RemainingRequests)
 		fmt.Fprintf(w, "nexaroute_provider_token_limit{provider=%q} %d\n", id, st.TokenLimit)
 		fmt.Fprintf(w, "nexaroute_provider_remaining_tokens{provider=%q} %d\n", id, st.RemainingTokens)
+		fmt.Fprintf(w, "nexaroute_provider_request_reset_unix{provider=%q} %d\n", id, st.RequestResetUnix)
+		fmt.Fprintf(w, "nexaroute_provider_token_reset_unix{provider=%q} %d\n", id, st.TokenResetUnix)
 		fmt.Fprintf(w, "nexaroute_provider_rate_limit_reset_unix{provider=%q} %d\n", id, st.RateLimitResetUnix)
 	}
 
