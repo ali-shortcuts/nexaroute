@@ -579,10 +579,8 @@ func (e *anthropicEmitter) Emit(ev StreamEvent) error {
 			e.usageSeen = true
 		}
 	case StreamEnd:
-		if ev.StopReason != "" && ev.StopReason != StopStopSequence {
+		if ev.StopReason != "" {
 			e.stopReason = ev.StopReason
-		} else if ev.StopReason == StopStopSequence {
-			e.stopReason = StopMaxTokens
 		}
 	case StreamError:
 		e.frame("error", map[string]any{"type": "error", "error": map[string]any{"type": mapErrorType(ev.ErrorCode), "message": ev.ErrorMsg}})
