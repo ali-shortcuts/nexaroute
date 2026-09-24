@@ -529,3 +529,33 @@ func TestResponsesEmitterUsesDistinctOutputIndexesForParallelTools(t *testing.T)
 		t.Fatalf("parallel tools reused output indexes: %#v\n%s", indexByCall, rr.Body.String())
 	}
 }
+
+func TestResponsesStreamDecoderPreservesParallelToolIndexes(t *testing.T) {
+	cases := []struct {
+		name string
+		data string
+		wantType string
+		wantIndex int
+	}{
+		{"start0", `{"type":"response.output_item.added","output_index":1,"item":{"type":"function_call","call_id":"c0","name":"first"}}`, StreamToolStart, 1},
+		{"delta0", `{"type":"response.function_call_arguments.delta","output_index":1,"delta":"{\"a\":1}"}`, StreamToolDelta, 1},
+		{"end0", `{"type":"response.output_item.done","output_index":1,"item":{"type":"function_call","call_id":"c0"}}`, StreamToolEnd, 1},
+		{"start1", `{"type":"response.output_item.added","output_index":2,"item":{"type":"function_call","call_id":"c1","name":"second"}}`, StreamToolStart, 2},
+		{"delta1", `{"type":"response.function_call_arguments.delta","output_index":2,"delta":"{\"b\":2}"}`, StreamToolDelta, 2},
+		{"end1", `{"type":"response.output_item.done","output_index":2,"item":{"type":"function_call","call_id":"c1"}}`, StreamToolEnd, 2},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			evs, terminal, err := DecodeResponsesStreamEvent("", tc.data)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if terminal {
+				t.Fatalf("tool event unexpectedly terminal: %+v", evs)
+			}
+			if len(evs) != 1 || evs[0].Type != tc.wantType || evs[0].ToolIndex != tc.wantIndex {
+				t.Fatalf("decoded=%+v want type=%s index=%d", evs, tc.wantType, tc.wantIndex)
+			}
+		})
+	}
+}
