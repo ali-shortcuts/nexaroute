@@ -174,13 +174,13 @@ func providerPressure(stats []providers.ProviderStats) []map[string]any {
 	out := make([]map[string]any, 0, len(stats))
 	for _, st := range stats {
 		out = append(out, map[string]any{
-			"provider":           st.ID,
-			"provider_id":        st.ID,
-			"active":             st.ActiveRequests,
-			"waiting":            st.WaitingRequests,
-			"capacity":           st.MaxConcurrency,
-			"credentials":        st.Credentials,
-			"cooling":            st.CredentialsCooling,
+			"provider":                     st.ID,
+			"provider_id":                  st.ID,
+			"active":                       st.ActiveRequests,
+			"waiting":                      st.WaitingRequests,
+			"capacity":                     st.MaxConcurrency,
+			"credentials":                  st.Credentials,
+			"cooling":                      st.CredentialsCooling,
 			"request_limit":                st.RequestLimit,
 			"remaining_requests":           st.RemainingRequests,
 			"reserved_requests":            st.ReservedRequests,
@@ -189,9 +189,9 @@ func providerPressure(stats []providers.ProviderStats) []map[string]any {
 			"remaining_tokens":             st.RemainingTokens,
 			"reserved_tokens":              st.ReservedTokens,
 			"effective_remaining_tokens":   st.EffectiveRemainingTokens,
-			"request_reset":      st.RequestResetUnix,
-			"token_reset":        st.TokenResetUnix,
-			"rate_limit_reset":   st.RateLimitResetUnix,
+			"request_reset":                st.RequestResetUnix,
+			"token_reset":                  st.TokenResetUnix,
+			"rate_limit_reset":             st.RateLimitResetUnix,
 		})
 	}
 	return out
