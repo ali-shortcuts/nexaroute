@@ -17,6 +17,13 @@ type ProbeTransport interface {
 	RedactBody([]byte) []byte
 }
 
+// PathProbeTransport extends the probe surface only for protocols such as
+// Gemini whose model and operation live in the request URL rather than body.
+type PathProbeTransport interface {
+	ProbeTransport
+	DoPath(ctx context.Context, method, path string, payload []byte, stream bool, forward http.Header) (*http.Response, error)
+}
+
 // ProbeOutcome is one capability's verdict.
 type ProbeOutcome struct {
 	Capability string  `json:"capability"`
