@@ -477,7 +477,7 @@ func isDataPlaneRequest(r *http.Request) bool {
 		return false
 	}
 	switch r.URL.Path {
-	case "/v1/messages", "/v1/messages/count_tokens", "/v1/chat/completions":
+	case "/v1/messages", "/v1/messages/count_tokens", "/v1/chat/completions", "/v1/responses":
 		return true
 	default:
 		return false
