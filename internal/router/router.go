@@ -28,9 +28,10 @@ type Deployment struct {
 }
 
 type ProviderLoad struct {
-	Active  int64
-	Waiting int64
-	Limit   int
+	Active         int64
+	Waiting        int64
+	Limit          int
+	QuotaExhausted bool
 }
 
 type Requirement struct {
@@ -178,6 +179,9 @@ func healthRank(st health.Status) int {
 }
 
 func capacityPressure(l ProviderLoad) float64 {
+	if l.QuotaExhausted {
+		return 4
+	}
 	if l.Limit <= 0 {
 		return 0
 	}
@@ -218,6 +222,9 @@ func (r *Router) eligibleDeployment(d Deployment, req Requirement, cfg config.Co
 		return Scored{}, false
 	}
 	if req.ProviderType != "" && d.ProviderType != req.ProviderType {
+		return Scored{}, false
+	}
+	if !r.health.ProviderAvailable(d.ProviderID) {
 		return Scored{}, false
 	}
 	if req.Tools && !d.Capabilities.Tools || req.Vision && !d.Capabilities.Vision || req.Streaming && !d.Capabilities.Streaming || req.Reasoning && !d.Capabilities.Reasoning {
@@ -585,6 +592,9 @@ func (r *Router) Readiness(strategy string) (total, usable int) {
 	total = len(r.all)
 	readyStrategy := IsReadyStrategy(strategy)
 	for _, d := range r.all {
+		if !r.health.ProviderAvailable(d.ProviderID) {
+			continue
+		}
 		st := r.health.Get(d.ID).Status
 		if readyStrategy {
 			if st == health.Healthy {
