@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -583,5 +584,27 @@ func TestResponsesNativeProbeUsesResponsesPathAndEnvelope(t *testing.T) {
 				t.Fatalf("probe status=%d error=%v wantOK=%v", status, err, tc.wantOK)
 			}
 		})
+	}
+}
+
+func TestGeminiModelPathPreservesReservedCharacters(t *testing.T) {
+	const model = "models/gemini?flavor=preview#v2"
+	for _, tc := range []struct {
+		stream, alt bool
+		suffix      string
+	}{
+		{false, false, ":generateContent"},
+		{true, true, ":streamGenerateContent"},
+	} {
+		u, err := url.Parse("https://gemini.example" + GeminiModelPath(model, tc.stream))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := "/v1beta/models/gemini?flavor=preview#v2" + tc.suffix; u.Path != want {
+			t.Errorf("stream=%v path=%q want=%q", tc.stream, u.Path, want)
+		}
+		if want := map[bool]string{true: "alt=sse", false: ""}[tc.alt]; u.RawQuery != want || u.Fragment != "" {
+			t.Errorf("stream=%v query=%q fragment=%q want query=%q", tc.stream, u.RawQuery, u.Fragment, want)
+		}
 	}
 }

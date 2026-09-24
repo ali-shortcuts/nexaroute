@@ -301,9 +301,10 @@ func (r *quotaReservation) releaseAll() {
 	r.releaseTokens()
 }
 
-// geminiModelPath builds the model-in-path Gemini endpoint. Stream calls use
-// streamGenerateContent with the SSE alt parameter.
-func (a *httpAdapter) geminiModelPath(model string, stream bool) string {
+// GeminiModelPath builds the model-in-path Gemini endpoint. Escaping the
+// deployment model is essential: its reserved characters are not URL syntax.
+// Stream calls use streamGenerateContent with the SSE alt parameter.
+func GeminiModelPath(model string, stream bool) string {
 	model = strings.TrimPrefix(strings.TrimSpace(model), "models/")
 	if stream {
 		return "/v1beta/models/" + url.PathEscape(model) + ":streamGenerateContent?alt=sse"
@@ -818,7 +819,7 @@ func (a *httpAdapter) Probe(ctx context.Context, model string, maxTokens int) (t
 	start := time.Now()
 	var resp *http.Response
 	if a.p.Type == "gemini" {
-		resp, err = a.DoPath(ctx, http.MethodPost, a.geminiModelPath(model, false), b, false, nil)
+		resp, err = a.DoPath(ctx, http.MethodPost, GeminiModelPath(model, false), b, false, nil)
 	} else if a.p.Type == "openai_responses" {
 		resp, err = a.DoPath(ctx, http.MethodPost, a.p.ResponsesPath, b, false, nil)
 	} else {

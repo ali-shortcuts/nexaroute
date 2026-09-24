@@ -548,10 +548,7 @@ func (s *Server) finishCanonicalAttempt(bundle hedgeAttemptBundle, canReq canoni
 		}
 	case "gemini":
 		payload, _, err = canonical.EncodeGeminiRequest(canReq, bundle.c.Deployment.Model)
-		bundle.path = "/v1beta/models/" + strings.TrimPrefix(bundle.c.Deployment.Model, "models/") + ":streamGenerateContent?alt=sse"
-		if !canReq.Stream {
-			bundle.path = "/v1beta/models/" + strings.TrimPrefix(bundle.c.Deployment.Model, "models/") + ":generateContent"
-		}
+		bundle.path = providers.GeminiModelPath(bundle.c.Deployment.Model, canReq.Stream)
 	case "openai_responses":
 		payload, err = canonical.EncodeResponsesRequest(canReq, bundle.c.Deployment.Model)
 		bundle.path = p.ResponsesPath

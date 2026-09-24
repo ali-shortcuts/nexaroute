@@ -147,6 +147,11 @@ func (s *Server) canonicalStreamPump(
 				return emitErr
 			}
 		}
+		if streamErr != nil {
+			// A terminal error frame must release the upstream connection now;
+			// waiting for more events can hang on an otherwise idle SSE socket.
+			break
+		}
 	}
 	if !terminal && streamErr == nil {
 		streamErr = io.ErrUnexpectedEOF
@@ -180,10 +185,14 @@ func (s *Server) handleCanonicalResponse(
 	if stream {
 		return s.canonicalStreamPump(w, resp, kind, clientProtocol, requestedModel, requestID, usageHook)
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	const maxCanonicalResponseBytes = 8 << 20
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxCanonicalResponseBytes+1))
 	resp.Body.Close()
 	if err != nil {
 		return fmt.Errorf("upstream response read failed: %w", err)
+	}
+	if len(body) > maxCanonicalResponseBytes {
+		return fmt.Errorf("upstream response exceeds %d bytes", maxCanonicalResponseBytes)
 	}
 	var canResp canonical.Response
 	switch kind {

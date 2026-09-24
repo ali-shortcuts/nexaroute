@@ -605,3 +605,29 @@ func TestResponsesIngressRejectsMalformedSuccessFromOtherProtocols(t *testing.T)
 		})
 	}
 }
+
+func TestGeminiCanonicalModelPathDoesNotInterpretModelAsURL(t *testing.T) {
+	const model = "models/gemini?flavor=preview#v2"
+	const wantPath = "/v1beta/models/gemini?flavor=preview#v2:generateContent"
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != wantPath || r.URL.RawQuery != "" {
+			t.Errorf("model was interpreted as URL path/query: path=%q query=%q", r.URL.Path, r.URL.RawQuery)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"candidates":[{"content":{"role":"model","parts":[{"text":"model received"}]},"finishReason":"STOP"}]}`)
+	}))
+	defer up.Close()
+	cfg := config.Default()
+	cfg.Probe.Enabled = false
+	cfg.Providers = []config.ProviderConfig{{
+		ID: "p", Type: "gemini", BaseURL: up.URL, AuthMode: "none", Enabled: true,
+		Models: []config.ModelConfig{{ID: "m", Model: model, Enabled: true, Weight: 1}},
+	}}
+	s := testGateway(t, cfg)
+	rr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "http://gateway/v1/responses",
+		strings.NewReader(`{"model":"m","input":"hi","max_output_tokens":16}`)))
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), "model received") {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+}
