@@ -126,6 +126,30 @@ func TestNativeSSEReportsUpstreamFailuresToClient(t *testing.T) {
 	}
 }
 
+func TestNativeSSEDoesNotLeakFragmentedUpstreamError(t *testing.T) {
+	const secret = "provider-secret-must-not-leak"
+	for _, tc := range []struct {
+		protocol string
+		frame    string
+	}{
+		{"openai", "data: {\"error\":{\"message\":\"" + secret + "\"}}\n\n"},
+		{"anthropic", "event: error\ndata: {\"type\":\"error\",\"error\":{\"message\":\"" + secret + "\"}}\n\n"},
+	} {
+		t.Run(tc.protocol, func(t *testing.T) {
+			resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}},
+				Body: io.NopCloser(oneByteReader{strings.NewReader(tc.frame)})}
+			rr := httptest.NewRecorder()
+			if err := proxyNativeSSE(rr, resp, tc.protocol); err == nil {
+				t.Fatal("error event was accepted")
+			}
+			out := rr.Body.String()
+			if strings.Contains(out, secret) || !strings.Contains(out, "upstream stream failed") {
+				t.Fatalf("fragmented upstream error leaked or was hidden: %q", out)
+			}
+		})
+	}
+}
+
 func TestSessionAffinityIsIsolatedAcrossAuthenticatedClients(t *testing.T) {
 	cfg := config.Default()
 	cfg.Probe.Enabled = false

@@ -690,26 +690,72 @@ func proxyNativeSSE(w http.ResponseWriter, resp *http.Response, protocol string,
 	if len(usageHooks) > 0 && usageHooks[0] != nil {
 		tracker.usageHook = usageHooks[0]
 	}
+	flush := func(frame []byte) error {
+		if _, err := w.Write(frame); err != nil {
+			return err
+		}
+		if fl != nil {
+			fl.Flush()
+		}
+		return nil
+	}
+
+	// Keep the exact upstream bytes, but do not release an event until the
+	// tracker has validated its complete frame. Otherwise a fragmented error
+	// event can disclose its raw (possibly credential-bearing) message before
+	// a later Read reveals that it was an error. A bounded frame also prevents
+	// an upstream that never sends a blank line from growing memory forever.
+	const maxNativeSSEFrameBytes = 2 * maxNativeSSELineBytes
 	buf := make([]byte, 32<<10)
+	var pending []byte
+	scanAt, lineStart := 0, 0
 	for {
 		n, err := resp.Body.Read(buf)
 		if n > 0 {
-			if terr := tracker.consume(buf[:n]); terr != nil {
+			pending = append(pending, buf[:n]...)
+			for scanAt < len(pending) {
+				nl := bytes.IndexByte(pending[scanAt:], '\n')
+				if nl < 0 {
+					scanAt = len(pending)
+					break
+				}
+				end := scanAt + nl
+				blank := len(bytes.TrimSpace(pending[lineStart:end])) == 0
+				scanAt = end + 1
+				if !blank {
+					lineStart = scanAt
+					continue
+				}
+				frame := pending[:scanAt]
+				if terr := tracker.consume(frame); terr != nil {
+					reportNativeSSEError(w, protocol)
+					return terr
+				}
+				if werr := flush(frame); werr != nil {
+					return werr
+				}
+				pending = pending[scanAt:]
+				scanAt, lineStart = 0, 0
+			}
+			if len(pending) > maxNativeSSEFrameBytes {
 				reportNativeSSEError(w, protocol)
-				return terr
-			}
-			if _, werr := w.Write(buf[:n]); werr != nil {
-				return werr
-			}
-			if fl != nil {
-				fl.Flush()
+				return fmt.Errorf("native SSE frame exceeds %d bytes", maxNativeSSEFrameBytes)
 			}
 		}
 		if err != nil {
 			if err == io.EOF {
+				if len(pending) > 0 {
+					if terr := tracker.consume(pending); terr != nil {
+						reportNativeSSEError(w, protocol)
+						return terr
+					}
+				}
 				if finErr := tracker.finish(); finErr != nil {
 					reportNativeSSEError(w, protocol)
 					return finErr
+				}
+				if len(pending) > 0 {
+					return flush(pending)
 				}
 				return nil
 			}
