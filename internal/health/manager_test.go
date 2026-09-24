@@ -182,3 +182,22 @@ func TestSnapshotNormalizesExpiredCooldowns(t *testing.T) {
 		t.Fatalf("normalized state not persisted: %s", got)
 	}
 }
+
+
+func TestFailureEWMARecoversFromOldFailure(t *testing.T) {
+	m := New(100, time.Hour)
+	m.RecordFailure("p/m", "temporary", time.Millisecond)
+	if got := m.Get("p/m").EWMAFailureRate; got < 0.99 {
+		t.Fatalf("first failure EWMA=%f want near 1", got)
+	}
+	for i := 0; i < 20; i++ {
+		m.RecordSuccess("p/m", time.Millisecond)
+	}
+	st := m.Get("p/m")
+	if st.EWMAFailureRate >= 0.01 {
+		t.Fatalf("old failure did not decay enough: %+v", st)
+	}
+	if st.Failures != 1 || st.Successes != 20 {
+		t.Fatalf("lifetime counters must remain exact: %+v", st)
+	}
+}
