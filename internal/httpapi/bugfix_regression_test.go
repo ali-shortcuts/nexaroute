@@ -512,3 +512,59 @@ func TestResponsesIngressRejectsMalformedNativeSuccess(t *testing.T) {
 		})
 	}
 }
+
+// Every ingress must honor the provider's canonical endpoint, not just the
+// Responses ingress. Chat and Anthropic both use these native provider paths.
+func TestChatAndMessagesIngressUseNativeProviderPaths(t *testing.T) {
+	for _, upstream := range []struct {
+		kind, path, reply string
+	}{
+		{"openai_responses", "/custom/responses", `{"object":"response","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"cross-protocol"}]}]}`},
+		{"gemini", "/v1beta/models/up-model:generateContent", `{"candidates":[{"content":{"role":"model","parts":[{"text":"cross-protocol"}]},"finishReason":"STOP"}]}`},
+	} {
+		for _, ingress := range []struct {
+			name, path, body string
+		}{
+			{"chat", "/v1/chat/completions", `{"model":"m","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`},
+			{"messages", "/v1/messages", `{"model":"m","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`},
+		} {
+			t.Run(upstream.kind+"/"+ingress.name, func(t *testing.T) {
+				var calls atomic.Int32
+				up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					calls.Add(1)
+					if r.URL.Path != upstream.path {
+						t.Errorf("upstream path=%q want=%q", r.URL.Path, upstream.path)
+						w.WriteHeader(http.StatusNotFound)
+						return
+					}
+					var payload map[string]any
+					if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+						t.Errorf("invalid provider payload: %v", err)
+					}
+					if upstream.kind == "gemini" && payload["contents"] == nil ||
+						upstream.kind == "openai_responses" && (payload["input"] == nil || payload["model"] != "up-model") {
+						t.Errorf("wrong provider protocol: %v", payload)
+					}
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = io.WriteString(w, upstream.reply)
+				}))
+				defer up.Close()
+				cfg := config.Default()
+				cfg.Probe.Enabled = false
+				cfg.Providers = []config.ProviderConfig{{
+					ID: "p", Type: upstream.kind, BaseURL: up.URL, AuthMode: "none", Enabled: true,
+					ChatPath: "/wrong/chat", ResponsesPath: "/custom/responses",
+					Models: []config.ModelConfig{{ID: "m", Model: "up-model", Enabled: true, Weight: 1}},
+				}}
+				s := testGateway(t, cfg)
+				s.SyncCapabilityContracts()
+				rr := httptest.NewRecorder()
+				s.Handler().ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "http://gateway"+ingress.path,
+					strings.NewReader(ingress.body)))
+				if rr.Code != http.StatusOK || calls.Load() != 1 || !strings.Contains(rr.Body.String(), "cross-protocol") {
+					t.Fatalf("status=%d calls=%d body=%s", rr.Code, calls.Load(), rr.Body.String())
+				}
+			})
+		}
+	}
+}
