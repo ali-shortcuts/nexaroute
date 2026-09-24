@@ -47,9 +47,12 @@ type RoutingConfig struct {
 	P2CWindow                  int     `json:"p2c_window"`
 	MaxAttempts                int     `json:"max_attempts"`
 	MaxInflightRequests        int     `json:"max_inflight_requests"`
-	FailureThreshold           int     `json:"failure_threshold"`
-	CooldownSeconds            int     `json:"cooldown_seconds"`
-	CapabilityFailureThreshold int     `json:"capability_failure_threshold"`
+	FailureThreshold             int     `json:"failure_threshold"`
+	CooldownSeconds              int     `json:"cooldown_seconds"`
+	ProviderFailureThreshold     int     `json:"provider_failure_threshold"`
+	ProviderFailureWindowSeconds int     `json:"provider_failure_window_seconds"`
+	ProviderCooldownSeconds      int     `json:"provider_cooldown_seconds"`
+	CapabilityFailureThreshold   int     `json:"capability_failure_threshold"`
 	CapabilityCooldownSeconds  int     `json:"capability_cooldown_seconds"`
 	RequestTimeoutMS           int     `json:"request_timeout_ms"`
 	LatencyWeight              float64 `json:"latency_weight"`
@@ -203,6 +206,7 @@ func Default() Config {
 		Routing: RoutingConfig{
 			Strategy: "ready_mesh", FallbackOnUnknownModel: true, SessionAffinity: true, SessionTTLSeconds: 3600, P2CWindow: 8,
 			MaxAttempts: 4, MaxInflightRequests: 128, FailureThreshold: 5, CooldownSeconds: 1800,
+			ProviderFailureThreshold: 3, ProviderFailureWindowSeconds: 20, ProviderCooldownSeconds: 30,
 			CapabilityFailureThreshold: 2, CapabilityCooldownSeconds: 300,
 			RequestTimeoutMS: 120000, LatencyWeight: 0.015, FailureWeight: 25, CapacityWeight: 35,
 			RetryBackoffMS: 150, MaxRetryAfterSeconds: 60,
@@ -299,6 +303,15 @@ func (c *Config) ApplyDefaults() {
 	}
 	if c.Routing.CooldownSeconds == 0 {
 		c.Routing.CooldownSeconds = 1800
+	}
+	if c.Routing.ProviderFailureThreshold == 0 {
+		c.Routing.ProviderFailureThreshold = 3
+	}
+	if c.Routing.ProviderFailureWindowSeconds == 0 {
+		c.Routing.ProviderFailureWindowSeconds = 20
+	}
+	if c.Routing.ProviderCooldownSeconds == 0 {
+		c.Routing.ProviderCooldownSeconds = 30
 	}
 	if c.Routing.CapabilityFailureThreshold == 0 {
 		c.Routing.CapabilityFailureThreshold = 2
@@ -452,6 +465,15 @@ func (c Config) Validate() error {
 	}
 	if c.Routing.CooldownSeconds < 1 || c.Routing.CooldownSeconds > 7*24*60*60 {
 		return errors.New("routing.cooldown_seconds must be between 1 and 604800")
+	}
+	if c.Routing.ProviderFailureThreshold < 2 || c.Routing.ProviderFailureThreshold > 100 {
+		return errors.New("routing.provider_failure_threshold must be between 2 and 100")
+	}
+	if c.Routing.ProviderFailureWindowSeconds < 1 || c.Routing.ProviderFailureWindowSeconds > 3600 {
+		return errors.New("routing.provider_failure_window_seconds must be between 1 and 3600")
+	}
+	if c.Routing.ProviderCooldownSeconds < 1 || c.Routing.ProviderCooldownSeconds > 24*60*60 {
+		return errors.New("routing.provider_cooldown_seconds must be between 1 and 86400")
 	}
 	if c.Routing.CapabilityCooldownSeconds < 1 || c.Routing.CapabilityCooldownSeconds > 7*24*60*60 {
 		return errors.New("routing.capability_cooldown_seconds must be between 1 and 604800")
@@ -652,6 +674,12 @@ func (c Config) RequestTimeout() time.Duration {
 }
 func (c Config) Cooldown() time.Duration {
 	return time.Duration(c.Routing.CooldownSeconds) * time.Second
+}
+func (c Config) ProviderFailureWindow() time.Duration {
+	return time.Duration(c.Routing.ProviderFailureWindowSeconds) * time.Second
+}
+func (c Config) ProviderCooldown() time.Duration {
+	return time.Duration(c.Routing.ProviderCooldownSeconds) * time.Second
 }
 func (c Config) ProbeInterval() time.Duration {
 	return time.Duration(c.Probe.IntervalSeconds) * time.Second
