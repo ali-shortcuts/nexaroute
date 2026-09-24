@@ -10,18 +10,22 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
 )
 
 type Config struct {
-	Listen    string           `json:"listen"`
-	Admin     AdminConfig      `json:"admin"`
-	Logging   LoggingConfig    `json:"logging"`
-	Routing   RoutingConfig    `json:"routing"`
-	Probe     ProbeConfig      `json:"probe"`
-	Providers []ProviderConfig `json:"providers"`
+	Listen     string                 `json:"listen"`
+	Admin      AdminConfig            `json:"admin"`
+	Logging    LoggingConfig          `json:"logging"`
+	Routing    RoutingConfig          `json:"routing"`
+	Probe      ProbeConfig            `json:"probe"`
+	ClientAuth ClientAuthConfig       `json:"client_auth"`
+	Pricing    map[string]PriceConfig `json:"pricing,omitempty"`
+	Guardrails GuardrailsConfig       `json:"guardrails"`
+	Providers  []ProviderConfig       `json:"providers"`
 }
 
 type LoggingConfig struct {
@@ -39,6 +43,31 @@ type AdminConfig struct {
 	APIKey        string `json:"api_key"`
 }
 
+// ClientKey is a virtual client credential for the /v1/* data plane.
+type ClientKey struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Key     string `json:"key"`
+	Enabled bool   `json:"enabled"`
+}
+
+type ClientAuthConfig struct {
+	Required bool        `json:"required"`
+	Keys     []ClientKey `json:"keys"`
+}
+
+// PriceConfig is USD per 1M tokens for cost estimation.
+type PriceConfig struct {
+	InputPerM  float64 `json:"input_per_m"`
+	OutputPerM float64 `json:"output_per_m"`
+}
+
+type GuardrailsConfig struct {
+	MaxPromptChars     int      `json:"max_prompt_chars"`
+	BlockedPatterns    []string `json:"blocked_patterns"`
+	BlockEmptyMessages bool     `json:"block_empty_messages"`
+}
+
 type RoutingConfig struct {
 	Strategy                   string  `json:"strategy"`
 	FallbackOnUnknownModel     bool    `json:"fallback_on_unknown_model"`
@@ -52,11 +81,15 @@ type RoutingConfig struct {
 	CapabilityFailureThreshold int     `json:"capability_failure_threshold"`
 	CapabilityCooldownSeconds  int     `json:"capability_cooldown_seconds"`
 	RequestTimeoutMS           int     `json:"request_timeout_ms"`
+	AttemptTimeoutMS           int     `json:"attempt_timeout_ms"`
 	LatencyWeight              float64 `json:"latency_weight"`
 	FailureWeight              float64 `json:"failure_weight"`
 	CapacityWeight             float64 `json:"capacity_weight"`
 	RetryBackoffMS             int     `json:"retry_backoff_ms"`
 	MaxRetryAfterSeconds       int     `json:"max_retry_after_seconds"`
+	HedgeDelayMS               int     `json:"hedge_delay_ms"`
+	RetryBudgetRatio           float64 `json:"retry_budget_ratio"`
+	StreamMaxDurationSeconds   int     `json:"stream_max_duration_seconds"`
 }
 
 type ProbeConfig struct {
@@ -204,8 +237,9 @@ func Default() Config {
 			Strategy: "ready_mesh", FallbackOnUnknownModel: true, SessionAffinity: true, SessionTTLSeconds: 3600, P2CWindow: 8,
 			MaxAttempts: 4, MaxInflightRequests: 128, FailureThreshold: 5, CooldownSeconds: 1800,
 			CapabilityFailureThreshold: 2, CapabilityCooldownSeconds: 300,
-			RequestTimeoutMS: 120000, LatencyWeight: 0.015, FailureWeight: 25, CapacityWeight: 35,
+			RequestTimeoutMS: 120000, AttemptTimeoutMS: 0, LatencyWeight: 0.015, FailureWeight: 25, CapacityWeight: 35,
 			RetryBackoffMS: 150, MaxRetryAfterSeconds: 60,
+			HedgeDelayMS: 0, RetryBudgetRatio: 0.2, StreamMaxDurationSeconds: 1800,
 		},
 		Probe: ProbeConfig{Enabled: true, OnStart: true, IntervalSeconds: 120, ReadyLeaseSeconds: 300, TimeoutMS: 8000, MaxTokens: 1, Concurrency: 16, RecoveryAttempts: 5, RecoveryRetryMS: 500},
 	}
@@ -413,6 +447,15 @@ func (c Config) Validate() error {
 	if len(c.Providers) > maxProviders {
 		return fmt.Errorf("providers exceeds safe limit %d", maxProviders)
 	}
+	if err := validateClientAuth(c.ClientAuth); err != nil {
+		return err
+	}
+	if err := validatePricing(c.Pricing); err != nil {
+		return err
+	}
+	if err := validateGuardrails(c.Guardrails); err != nil {
+		return err
+	}
 	if c.Routing.Strategy != "ready_mesh" && c.Routing.Strategy != "ready_queue" && c.Routing.Strategy != "adaptive" && c.Routing.Strategy != "adaptive_round_robin" && c.Routing.Strategy != "priority" && c.Routing.Strategy != "round_robin" && c.Routing.Strategy != "least_latency" {
 		return errors.New("routing.strategy must be ready_mesh, ready_queue, adaptive, adaptive_round_robin, priority, round_robin, or least_latency")
 	}
@@ -443,11 +486,23 @@ func (c Config) Validate() error {
 	if c.Routing.RequestTimeoutMS < 100 || c.Routing.RequestTimeoutMS > 30*60*1000 {
 		return errors.New("routing.request_timeout_ms must be between 100 and 1800000")
 	}
+	if c.Routing.AttemptTimeoutMS < 0 || c.Routing.AttemptTimeoutMS > 30*60*1000 {
+		return errors.New("routing.attempt_timeout_ms must be between 0 and 1800000")
+	}
 	if c.Routing.RetryBackoffMS < 0 || c.Routing.RetryBackoffMS > 60000 {
 		return errors.New("routing.retry_backoff_ms must be between 0 and 60000")
 	}
 	if c.Routing.MaxRetryAfterSeconds < 1 || c.Routing.MaxRetryAfterSeconds > 86400 {
 		return errors.New("routing.max_retry_after_seconds must be between 1 and 86400")
+	}
+	if c.Routing.HedgeDelayMS < 0 || c.Routing.HedgeDelayMS > 60000 {
+		return errors.New("routing.hedge_delay_ms must be between 0 and 60000")
+	}
+	if r := c.Routing.RetryBudgetRatio; math.IsNaN(r) || math.IsInf(r, 0) || r < 0 || r > 1 || (r > 0 && r < 0.01) {
+		return errors.New("routing.retry_budget_ratio must be 0 (unlimited) or between 0.01 and 1")
+	}
+	if d := c.Routing.StreamMaxDurationSeconds; d < 0 || d > 86400 || (d > 0 && d < 60) {
+		return errors.New("routing.stream_max_duration_seconds must be 0 (unbounded) or between 60 and 86400")
 	}
 	for name, v := range map[string]float64{
 		"routing.latency_weight":  c.Routing.LatencyWeight,
@@ -631,8 +686,28 @@ func (p ProviderConfig) ResolvedCredentials() []string {
 	return out
 }
 
+// AttemptTimeout bounds a single provider attempt (time until the full
+// non-streaming exchange completes) so one hung provider cannot consume the
+// entire route budget and starve failover. 0 disables the per-attempt bound
+// and keeps the historical whole-request deadline behaviour.
+func (c Config) AttemptTimeout() time.Duration {
+	return time.Duration(c.Routing.AttemptTimeoutMS) * time.Millisecond
+}
+
 func (c Config) RequestTimeout() time.Duration {
 	return time.Duration(c.Routing.RequestTimeoutMS) * time.Millisecond
+}
+
+// HedgeDelay is how long an attempt may run before a backup attempt on the
+// next eligible deployment races it. 0 disables hedging.
+func (c Config) HedgeDelay() time.Duration {
+	return time.Duration(c.Routing.HedgeDelayMS) * time.Millisecond
+}
+
+// StreamMaxDuration bounds the total lifetime of a streaming response so a
+// trickling provider cannot hold a request forever. 0 disables the bound.
+func (c Config) StreamMaxDuration() time.Duration {
+	return time.Duration(c.Routing.StreamMaxDurationSeconds) * time.Second
 }
 func (c Config) Cooldown() time.Duration {
 	return time.Duration(c.Routing.CooldownSeconds) * time.Second
@@ -719,4 +794,90 @@ func (c Config) ProviderIndex(id string) int {
 		}
 	}
 	return -1
+}
+
+const (
+	maxClientKeys        = 256
+	maxClientKeyBytes    = 256
+	maxClientKeyName     = 128
+	maxPricingEntries    = 4096
+	maxPricingKeyBytes   = 256
+	maxBlockedPatterns   = 64
+	maxBlockedPatternLen = 512
+)
+
+func validateClientAuth(a ClientAuthConfig) error {
+	if len(a.Keys) > maxClientKeys {
+		return fmt.Errorf("client_auth.keys exceeds safe limit %d", maxClientKeys)
+	}
+	seenID := map[string]struct{}{}
+	seenKey := map[string]struct{}{}
+	enabled := 0
+	for i, k := range a.Keys {
+		if k.Key == "" {
+			return fmt.Errorf("client_auth.keys[%d].key is required", i)
+		}
+		if len(k.Key) > maxClientKeyBytes {
+			return fmt.Errorf("client_auth.keys[%d].key exceeds %d bytes", i, maxClientKeyBytes)
+		}
+		if len(k.Name) > maxClientKeyName {
+			return fmt.Errorf("client_auth.keys[%d].name exceeds %d bytes", i, maxClientKeyName)
+		}
+		if k.ID != "" {
+			if _, dup := seenID[k.ID]; dup {
+				return fmt.Errorf("client_auth.keys[%d].id %q is duplicated", i, k.ID)
+			}
+			seenID[k.ID] = struct{}{}
+		}
+		if _, dup := seenKey[k.Key]; dup {
+			return fmt.Errorf("client_auth.keys[%d].key value is duplicated", i)
+		}
+		seenKey[k.Key] = struct{}{}
+		if k.Enabled {
+			enabled++
+		}
+	}
+	if a.Required && enabled == 0 {
+		return errors.New("client_auth.required=true needs at least one enabled client key")
+	}
+	return nil
+}
+
+func validatePricing(p map[string]PriceConfig) error {
+	if len(p) > maxPricingEntries {
+		return fmt.Errorf("pricing exceeds safe limit %d entries", maxPricingEntries)
+	}
+	for k, v := range p {
+		if len(k) > maxPricingKeyBytes {
+			return fmt.Errorf("pricing key exceeds %d bytes", maxPricingKeyBytes)
+		}
+		if v.InputPerM < 0 || v.OutputPerM < 0 {
+			return fmt.Errorf("pricing[%q] rates cannot be negative", k)
+		}
+		if v.InputPerM > 1e6 || v.OutputPerM > 1e6 {
+			return fmt.Errorf("pricing[%q] rates exceed the safe bound 1000000 USD per 1M tokens", k)
+		}
+	}
+	return nil
+}
+
+func validateGuardrails(g GuardrailsConfig) error {
+	if g.MaxPromptChars < 0 || g.MaxPromptChars > 64<<20 {
+		return errors.New("guardrails.max_prompt_chars must be between 0 and 67108864")
+	}
+	if len(g.BlockedPatterns) > maxBlockedPatterns {
+		return fmt.Errorf("guardrails.blocked_patterns exceeds safe limit %d", maxBlockedPatterns)
+	}
+	for i, p := range g.BlockedPatterns {
+		if p == "" {
+			return fmt.Errorf("guardrails.blocked_patterns[%d] is empty", i)
+		}
+		if len(p) > maxBlockedPatternLen {
+			return fmt.Errorf("guardrails.blocked_patterns[%d] exceeds %d bytes", i, maxBlockedPatternLen)
+		}
+		if _, err := regexp.Compile("(?i)" + p); err != nil {
+			return fmt.Errorf("guardrails.blocked_patterns[%d] is not a valid regex: %w", i, err)
+		}
+	}
+	return nil
 }

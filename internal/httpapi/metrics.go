@@ -39,6 +39,10 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintln(w, "# TYPE nexaroute_overload_rejections_total counter")
 	fmt.Fprintf(w, "nexaroute_overload_rejections_total %d\n", s.overloadRejects.Load())
 
+	fmt.Fprintln(w, "# HELP nexaroute_client_auth_rejections_total Data-plane requests rejected for a missing or invalid client key.")
+	fmt.Fprintln(w, "# TYPE nexaroute_client_auth_rejections_total counter")
+	fmt.Fprintf(w, "nexaroute_client_auth_rejections_total %d\n", s.clientAuthRejects.Load())
+
 	ps := s.probe.Stats()
 	fmt.Fprintln(w, "# HELP nexaroute_probe_active Active health/recovery probes currently holding probe capacity.")
 	fmt.Fprintln(w, "# TYPE nexaroute_probe_active gauge")

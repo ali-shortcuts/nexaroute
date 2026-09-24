@@ -141,7 +141,7 @@ func TestAnthropicStreamToOpenAIIncludesToolArguments(t *testing.T) {
 	}, "\n")
 	resp := &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(sse))}
 	rr := httptest.NewRecorder()
-	if err := streamAnthropicToOpenAI(rr, resp, "client"); err != nil {
+	if err := streamAnthropicToOpenAI(rr, resp, "client", nil); err != nil {
 		t.Fatal(err)
 	}
 	out := rr.Body.String()
@@ -158,7 +158,7 @@ func TestOpenAIStreamToAnthropicParallelTools(t *testing.T) {
 	}
 	resp := &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(strings.Join(chunks, "\n\n")))}
 	rr := httptest.NewRecorder()
-	if err := streamOpenAIToAnthropic(rr, resp, "client"); err != nil {
+	if err := streamOpenAIToAnthropic(rr, resp, "client", nil); err != nil {
 		t.Fatal(err)
 	}
 	out := rr.Body.String()
@@ -323,7 +323,7 @@ func TestNativeProxyStripsSensitiveAndHopByHopResponseHeaders(t *testing.T) {
 func TestNativeSSEProxyFlushes(t *testing.T) {
 	resp := &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"text/event-stream"}, "Content-Length": []string{"12"}}, Body: io.NopCloser(strings.NewReader("data: {\"choices\":[{\"finish_reason\":\"stop\"}]}\n\n"))}
 	rr := httptest.NewRecorder()
-	if err := proxyNativeSSE(rr, resp, "openai"); err != nil {
+	if err := proxyNativeSSE(rr, resp, "openai", func(in, out int64) {}); err != nil {
 		t.Fatal(err)
 	}
 	if !rr.Flushed {
@@ -688,7 +688,7 @@ func TestTranslatedStreamsRequireTerminalSignal(t *testing.T) {
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
 		Body:       io.NopCloser(strings.NewReader("data: {\"choices\":[{\"delta\":{\"content\":\"partial\"},\"finish_reason\":null}]}\n\n")),
 	}
-	if err := streamOpenAIToAnthropic(httptest.NewRecorder(), openAIResp, "m"); !errors.Is(err, io.ErrUnexpectedEOF) {
+	if err := streamOpenAIToAnthropic(httptest.NewRecorder(), openAIResp, "m", nil); !errors.Is(err, io.ErrUnexpectedEOF) {
 		t.Fatalf("openai translated stream error=%v want unexpected EOF", err)
 	}
 
@@ -697,7 +697,7 @@ func TestTranslatedStreamsRequireTerminalSignal(t *testing.T) {
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
 		Body:       io.NopCloser(strings.NewReader("data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"partial\"}}\n\n")),
 	}
-	if err := streamAnthropicToOpenAI(httptest.NewRecorder(), anthResp, "m"); !errors.Is(err, io.ErrUnexpectedEOF) {
+	if err := streamAnthropicToOpenAI(httptest.NewRecorder(), anthResp, "m", nil); !errors.Is(err, io.ErrUnexpectedEOF) {
 		t.Fatalf("anthropic translated stream error=%v want unexpected EOF", err)
 	}
 }

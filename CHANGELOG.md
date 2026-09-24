@@ -8,7 +8,14 @@ This file describes the current supported v0.3 state only. Superseded interim im
 - Only deployments with a valid health proof are routable under ready strategies.
 - Session affinity keeps an eligible conversation pinned to its deployment.
 - New sessions use priority-aware, capacity-aware power-of-two selection inside the best priority tier.
-- Model/deployment lookup is indexed by deployment ID, upstream model ID, local model ID, and alias.
+- Model/deployment lookup is indexed by deployment ID, upstream model ID, local model ID, and alias; virtual catch-all scans batch health resolution under one lock.
+- `POST /admin/api/route-preview` resolves hypothetical requests read-only with per-candidate explanations.
+- `routing.attempt_timeout_ms` (default off) bounds each non-streaming attempt inside the request budget so failover survives a hung provider.
+- Client-visible `429` responses carry the capped upstream `Retry-After`; transport failures are classified (DNS/timeout/cancel/refused/reset/TLS) in route-failure events.
+- Upstream logical errors are detected canonically: 200s with error envelopes, error finish reasons, or paywall/quota/auth/throttle text in content (or stream deltas) fail over instead of recording success; quota/auth/throttle causes cool only the serving credential, and `429 insufficient_quota` earns the long quota cooldown instead of the transient throttle window. See `docs/UPSTREAM_ERRORS.md`.
+- Anti-hang resilience layers (see `docs/RESILIENCE.md`): absolute stream lifetime (`routing.stream_max_duration_seconds`, default 1800s) so trickling providers cannot hold requests forever; per-chunk downstream write deadlines (30s) so stalled clients cannot pin handlers and upstream slots, reported as `client_stalled` without poisoning deployment health; a Finagle-style retry budget (`routing.retry_budget_ratio`, default 0.2) that fails fast with `Retry-After: 1` instead of retry-storming dead providers; opt-in hedged backup attempts (`routing.hedge_delay_ms`, default off) that race the next deployment when the primary is slow; dial phase bounded at 10s with keep-alives and A/AAAA racing.
+- One-command Linux installer (`scripts/install.sh`): `curl -fsSL ... | bash` installs the binary plus a `0600` config (never overwritten) from the latest GitHub release, or automatically from source when no release exists yet; `--service` installs the user systemd unit.
+- Guardrails: `max_prompt_chars` counts characters (multibyte-aware, not bytes); blocked patterns also scan decoded JSON string content so `\uXXXX`-escaped keywords cannot bypass the filter.
 - Every failover candidate is revalidated immediately before use.
 - The first eligible routed failure quarantines the deployment.
 - Recovery performs up to five real probes; five failures enter the default 30-minute cooldown, then recovery starts again.
@@ -42,6 +49,7 @@ This file describes the current supported v0.3 state only. Superseded interim im
 - Local provider/model IDs are constrained to unambiguous safe identifiers.
 - HTTP header names/values and endpoint paths are validated before runtime.
 - The Web UI wires all Ready Mesh/probe controls, including session affinity, ready lease, P2C window, capability circuit settings and global admission.
+- The Web UI ships an About tab with version info and creator/support channels (email, Telegram, Telegram channel, Facebook, TikTok, Instagram, YouTube), plus a mobile tab selector so every tab stays reachable on small screens.
 - The event feed uses a bounded ring buffer with bounded event fields and bounded dynamic counter-key maps.
 - Operational logs self-rotate with fixed disk retention; successful access lines are sampled by default and console output is storm-limited.
 - Recovery scheduling uses a fixed worker pool and bounded queue; long cooldowns no longer hold one sleeping goroutine per failed deployment.

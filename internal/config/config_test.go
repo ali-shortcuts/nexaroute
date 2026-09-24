@@ -210,6 +210,9 @@ func TestNegativeValuesAreRejectedInsteadOfDefaulted(t *testing.T) {
 		{"probe concurrency", func(c *Config) { c.Probe.Concurrency = -1 }},
 		{"probe timeout", func(c *Config) { c.Probe.TimeoutMS = -1 }},
 		{"retry backoff", func(c *Config) { c.Routing.RetryBackoffMS = -1 }},
+		{"hedge delay", func(c *Config) { c.Routing.HedgeDelayMS = -1 }},
+		{"retry budget ratio", func(c *Config) { c.Routing.RetryBudgetRatio = -0.5 }},
+		{"stream max duration", func(c *Config) { c.Routing.StreamMaxDurationSeconds = -30 }},
 		{"recovery retry", func(c *Config) { c.Probe.RecoveryRetryMS = -1 }},
 		{"provider concurrency", func(c *Config) {
 			c.Providers = []ProviderConfig{{
@@ -341,5 +344,41 @@ func TestLoggingValidationRejectsUnsafeRetention(t *testing.T) {
 	cfg.Logging.AccessMode = "everything"
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("unknown access logging mode should be rejected")
+	}
+}
+
+func TestResilienceDefaultsAndExplicitZeros(t *testing.T) {
+	cfg := Default()
+	if cfg.Routing.RetryBudgetRatio != 0.2 {
+		t.Fatalf("default retry budget ratio must be 0.2, got %v", cfg.Routing.RetryBudgetRatio)
+	}
+	if cfg.Routing.StreamMaxDurationSeconds != 1800 {
+		t.Fatalf("default stream max duration must be 1800s, got %d", cfg.Routing.StreamMaxDurationSeconds)
+	}
+	if cfg.Routing.HedgeDelayMS != 0 {
+		t.Fatalf("hedging must be off by default, got %d", cfg.Routing.HedgeDelayMS)
+	}
+	// Explicit zeros keep their "disabled" meaning through ApplyDefaults.
+	cfg.Routing.RetryBudgetRatio = 0
+	cfg.Routing.StreamMaxDurationSeconds = 0
+	cfg.ApplyDefaults()
+	if cfg.Routing.RetryBudgetRatio != 0 || cfg.Routing.StreamMaxDurationSeconds != 0 {
+		t.Fatalf("explicit zero resilience values were overwritten: %+v", cfg.Routing)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("explicit zero resilience values should validate: %v", err)
+	}
+	for _, bad := range []func(*Config){
+		func(c *Config) { c.Routing.HedgeDelayMS = 60001 },
+		func(c *Config) { c.Routing.RetryBudgetRatio = 1.5 },
+		func(c *Config) { c.Routing.RetryBudgetRatio = 0.005 },
+		func(c *Config) { c.Routing.StreamMaxDurationSeconds = 59 },
+		func(c *Config) { c.Routing.StreamMaxDurationSeconds = 86401 },
+	} {
+		cfg := Default()
+		bad(&cfg)
+		if err := cfg.Validate(); err == nil {
+			t.Fatal("out-of-range resilience value should be rejected")
+		}
 	}
 }

@@ -3,24 +3,65 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash/fnv"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 	"unicode/utf8"
 
 	"github.com/ali-shortcuts/nexaroute/internal/config"
+	"github.com/ali-shortcuts/nexaroute/internal/events"
+	"github.com/ali-shortcuts/nexaroute/internal/providers"
 	"github.com/ali-shortcuts/nexaroute/internal/router"
 )
 
-func routeContext(parent context.Context, streaming bool, timeout time.Duration) (context.Context, context.CancelFunc) {
-	if streaming || timeout <= 0 {
+// consumeFailoverBudget spends one retry-budget token for a follow-up
+// upstream attempt. When the budget is exhausted it records a
+// retry_budget_exhausted event and reports false: the caller must break out
+// and fail fast instead of continuing to the next candidate. detail must be
+// a static safe string (never an error body or credential).
+func (s *Server) consumeFailoverBudget(requestID, deploymentID, detail string) bool {
+	if s.retryBudget.allowRetry() {
+		return true
+	}
+	s.bus.Add(events.Event{RequestID: requestID, Kind: "retry_budget_exhausted", Deployment: deploymentID, Message: "retry budget exhausted; failing fast instead of trying the next candidate (" + detail + ")", ErrorType: "retry_budget_exhausted"})
+	return false
+}
+
+func routeContext(parent context.Context, streaming bool, timeout, streamTimeout time.Duration) (context.Context, context.CancelFunc) {
+	if streaming {
+		// Streams legitimately outlive the non-streaming request budget, but
+		// they must not live forever: a trickling provider would otherwise
+		// hold the request (and the caller) without bound.
+		if streamTimeout <= 0 {
+			return context.WithCancel(parent)
+		}
+		return context.WithTimeout(parent, streamTimeout)
+	}
+	if timeout <= 0 {
 		return context.WithCancel(parent)
 	}
 	return context.WithTimeout(parent, timeout)
+}
+
+// attemptContext derives the per-attempt deadline from the route context so
+// one hung provider cannot consume the whole route budget before failover.
+// Streaming responses are exempt: their bodies legitimately outlive any
+// per-attempt bound and are guarded by stream idle timeouts instead. The
+// returned cancel is nil when no per-attempt context was created.
+func attemptContext(routeCtx context.Context, streaming bool, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if streaming || timeout <= 0 {
+		return routeCtx, nil
+	}
+	return context.WithTimeout(routeCtx, timeout)
 }
 
 func gatewayDeadlineExceeded(routeCtx, clientCtx context.Context) bool {
@@ -102,6 +143,45 @@ func errorTypeForStatus(code int) string {
 		}
 		return "_OTHER"
 	}
+}
+
+// errorTypeForUpstreamClass maps a classified upstream failure onto the
+// existing event error-type vocabulary, so logical errors (including 200s
+// carrying paywall text) are reported precisely without new event types.
+func errorTypeForUpstreamClass(c providers.UpstreamErrorClass) string {
+	switch c {
+	case providers.UpstreamQuota:
+		return "provider_billing"
+	case providers.UpstreamAuth:
+		return "provider_auth_failed"
+	case providers.UpstreamRateLimit:
+		return "provider_rate_limited"
+	case providers.UpstreamOverloaded:
+		return "provider_overloaded"
+	case providers.UpstreamNotFound:
+		return "provider_request_rejected"
+	case providers.UpstreamInvalid:
+		return "caller_invalid_request"
+	case providers.UpstreamServer:
+		return "provider_server_error"
+	default:
+		return "provider_invalid_response"
+	}
+}
+
+func asUpstreamLogicalError(err error) (*providers.UpstreamLogicalError, bool) {
+	var uerr *providers.UpstreamLogicalError
+	if errors.As(err, &uerr) && uerr != nil {
+		return uerr, true
+	}
+	return nil, false
+}
+
+func providerConfigFor(cfg config.Config, id string) config.ProviderConfig {
+	if i := cfg.ProviderIndex(id); i >= 0 && i < len(cfg.Providers) {
+		return cfg.Providers[i]
+	}
+	return config.ProviderConfig{}
 }
 
 func retryable(code int) bool {
@@ -337,4 +417,57 @@ func (s *Server) recordRouteSuccess(req router.Requirement, deploymentID string,
 	s.hm.RecordSuccess(deploymentID, latency)
 	s.hm.RecordScopeSuccess(deploymentID, req.Scopes())
 	s.rt.ObserveSession(req, deploymentID)
+}
+
+// classifyTransportError maps a transport-layer failure to a precise event
+// error type. Client cancellation is reported as caller_cancelled (upstream).
+// Unrecognized failures keep the historical provider_connection_failed type.
+func classifyTransportError(err error) string {
+	if err == nil {
+		return ""
+	}
+	if errors.Is(err, context.Canceled) {
+		return "caller_cancelled"
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "provider_timeout"
+	}
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return "provider_timeout"
+	}
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		if dnsErr.IsNotFound {
+			return "dns_not_found"
+		}
+		return "dns_failure"
+	}
+	if errors.Is(err, syscall.ECONNREFUSED) {
+		return "connection_refused"
+	}
+	if errors.Is(err, syscall.ECONNRESET) {
+		return "connection_reset"
+	}
+	if errors.Is(err, syscall.ECONNABORTED) {
+		return "connection_aborted"
+	}
+	if errors.Is(err, syscall.EHOSTUNREACH) || errors.Is(err, syscall.ENETUNREACH) {
+		return "network_unreachable"
+	}
+	var x509Hostname x509.HostnameError
+	if errors.As(err, &x509Hostname) {
+		return "tls_failure"
+	}
+	var x509Authority x509.UnknownAuthorityError
+	if errors.As(err, &x509Authority) {
+		return "tls_failure"
+	}
+	var tlsRecord tls.RecordHeaderError
+	if errors.As(err, &tlsRecord) {
+		return "tls_failure"
+	}
+	// tls.CertificateVerificationError wraps an x509 error and supports
+	// Unwrap, so the x509 checks above already classify it as tls_failure.
+	return "provider_connection_failed"
 }

@@ -26,6 +26,7 @@ var (
 
 type providerForm struct {
 	Provider       config.ProviderConfig `json:"provider"`
+	ProviderID     string                `json:"provider_id,omitempty"`
 	PreserveSecret bool                  `json:"preserve_secret"`
 	TestModels     []string              `json:"test_models,omitempty"`
 }
@@ -227,6 +228,33 @@ func (s *Server) adminProviderByID(w http.ResponseWriter, r *http.Request) {
 		}
 		if reveal {
 			payload["resolved_api_key"] = p.ResolvedAPIKey()
+			// CCR-style full visibility: the edit drawer can always show the
+			// actual credential in use for the primary key and every pool
+			// entry, including which ones are resolved from env vars.
+			resolved := make([]map[string]any, 0, len(p.Credentials)+1)
+			if pk := p.ResolvedAPIKey(); pk != "" {
+				source := "literal"
+				if p.APIKeyEnv != "" {
+					source = "env:" + p.APIKeyEnv
+				}
+				resolved = append(resolved, map[string]any{"name": "primary", "source": source, "key": pk})
+			}
+			for i, c := range p.Credentials {
+				rk := c.Resolved()
+				if rk == "" {
+					continue
+				}
+				source := "literal"
+				if c.APIKeyEnv != "" {
+					source = "env:" + c.APIKeyEnv
+				}
+				name := c.Name
+				if name == "" {
+					name = fmt.Sprintf("key-%d", i+1)
+				}
+				resolved = append(resolved, map[string]any{"name": name, "source": source, "key": rk})
+			}
+			payload["resolved_credentials"] = resolved
 		} else {
 			p.APIKey = ""
 			for i := range p.Credentials {
@@ -310,27 +338,45 @@ func (s *Server) adminProviderTest(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 400, "invalid JSON: "+err.Error())
 		return
 	}
-	if in.PreserveSecret {
-		mergeExistingSecret(s.currentConfig(), &in.Provider)
+	p := in.Provider
+	savedMode := strings.TrimSpace(in.ProviderID) != ""
+	if savedMode {
+		// Saved-provider mode: probe the stored configuration (with its real
+		// resolved credentials) without the caller re-sending the provider.
+		// Used by the Models table quick test and for re-testing disabled
+		// models before re-enabling them.
+		cfg := s.currentConfig()
+		idx := cfg.ProviderIndex(in.ProviderID)
+		if idx < 0 {
+			errorJSON(w, 404, "provider not found")
+			return
+		}
+		p = cfg.Providers[idx]
+	} else {
+		if in.PreserveSecret {
+			mergeExistingSecret(s.currentConfig(), &p)
+		}
+		normalizeProvider(&p)
 	}
-	normalizeProvider(&in.Provider)
-	if in.Provider.ID == "" || in.Provider.BaseURL == "" {
+	if p.ID == "" || p.BaseURL == "" {
 		errorJSON(w, 400, "provider id and base_url are required")
 		return
 	}
-	if in.Provider.Type != "openai_compatible" && in.Provider.Type != "anthropic_compatible" {
+	if p.Type != "openai_compatible" && p.Type != "anthropic_compatible" {
 		errorJSON(w, 400, "unsupported provider type")
 		return
 	}
-	a, err := providers.NewAdapter(in.Provider, 10*time.Second)
+	a, err := providers.NewAdapter(p, 10*time.Second)
 	if err != nil {
 		errorJSON(w, 400, err.Error())
 		return
 	}
 	models := uniqueStrings(in.TestModels)
 	if len(models) == 0 {
-		for _, m := range in.Provider.Models {
-			if m.Enabled {
+		for _, m := range p.Models {
+			if savedMode || m.Enabled {
+				// Saved mode intentionally includes disabled models so the
+				// operator can verify them before re-enabling.
 				models = append(models, m.Model)
 			}
 		}
@@ -352,7 +398,7 @@ func (s *Server) adminProviderTest(w http.ResponseWriter, r *http.Request) {
 
 	results := make([]testResult, len(models))
 	var wg sync.WaitGroup
-	limit := in.Provider.MaxConcurrency
+	limit := p.MaxConcurrency
 	if limit < 1 || limit > 32 {
 		limit = 16
 	}
@@ -423,6 +469,7 @@ func providerSummary(p config.ProviderConfig) map[string]any {
 	for _, m := range p.Models {
 		models = append(models, m.Model)
 	}
+	primary := p.ResolvedAPIKey()
 	return map[string]any{
 		"id":               p.ID,
 		"name":             p.Name,
@@ -437,7 +484,24 @@ func providerSummary(p config.ProviderConfig) map[string]any {
 		"credential_count": len(p.ResolvedCredentials()),
 		"proxy_url":        p.ProxyURL,
 		"max_concurrency":  p.MaxConcurrency,
+		// CCR-style always-visible credential identity: a masked primary key
+		// (or its env var name) so the provider list always shows what each
+		// provider authenticates with, without ever exposing the full secret.
+		"masked_key": maskSecret(primary),
+		"key_source": secretSource(p),
 	}
+}
+
+// maskSecret renders a credential as "prefix…suffix" (or "env:NAME" is not
+// possible here because env resolution already happened; empty stays empty).
+func maskSecret(key string) string {
+	if key == "" {
+		return ""
+	}
+	if len(key) <= 10 {
+		return key[:2] + "…"
+	}
+	return key[:6] + "…" + key[len(key)-4:]
 }
 
 func secretSource(p config.ProviderConfig) string {

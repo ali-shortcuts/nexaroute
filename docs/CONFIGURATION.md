@@ -103,6 +103,7 @@ Important controls:
 - `failure_threshold` (legacy/other routing strategies)
 - `cooldown_seconds` (default `1800` for supervised ready-strategy recovery)
 - `request_timeout_ms`
+- `attempt_timeout_ms` — optional per-attempt bound (default `0` = off) for non-streaming requests so one hung provider cannot consume the whole `request_timeout_ms` budget before failover; streaming attempts are exempt and rely on provider `stream_idle_timeout_seconds`
 - `latency_weight`
 - `failure_weight`
 - `retry_backoff_ms`
@@ -146,6 +147,16 @@ Default behavior:
 - failure threshold: inherited by deployment health policy
 
 At 100 models, the ready-health lease prevents healthy active models from being synthetic-probed on every sweep. Only new/unverified, recovery-owned, or lease-expired idle deployments need background work. Increase the lease when a provider is expensive or quota-constrained.
+
+## Input guardrails
+
+Optional request-screening rules evaluated on the raw request body before routing (both ingresses). Rejections are `400` with the matched rule named.
+
+- `guardrails.max_prompt_chars` — character limit for the request body (multibyte-aware: Persian/Arabic/CJK text counts characters, not bytes). `0` disables the limit. The limit measures the whole JSON body, including envelope overhead.
+- `guardrails.blocked_patterns` — up to 64 case-insensitive regular expressions (each ≤ 512 bytes). Patterns are matched against the raw body text and against the decoded JSON string content, so `\uXXXX`-escaped keywords cannot bypass the filter. Malformed regexes are rejected at save time.
+- `POST /admin/api/guardrails/test` with `{"text":"..."}` dry-runs the saved rules against arbitrary text (rune-based length verdict + matched pattern list).
+
+Guardrails are a deterministic text filter, not content understanding; they bound cost and obvious misuse, and they log a `guardrail_blocked` event per rejection.
 
 ## Admin settings
 

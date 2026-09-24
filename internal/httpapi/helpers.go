@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/ali-shortcuts/nexaroute/internal/providers"
 )
 
 const (
@@ -42,7 +44,13 @@ func (e *requestTooLargeError) Error() string {
 func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
-	_ = json.NewEncoder(w).Encode(v)
+	// Marshal first so the body goes out under a single write deadline;
+	// the trailing newline preserves the historical Encoder output.
+	b, err := json.Marshal(v)
+	if err != nil {
+		return
+	}
+	_ = writeOnce(w, append(b, '\n'))
 }
 func errorJSON(w http.ResponseWriter, code int, msg string) {
 	writeJSON(w, code, map[string]any{"error": map[string]any{"type": "gateway_error", "message": msg}})
@@ -96,8 +104,11 @@ func validateOpenAIResponseJSON(b []byte) error {
 	if err := json.Unmarshal(b, &root); err != nil {
 		return fmt.Errorf("invalid OpenAI response JSON: %w", err)
 	}
-	if raw, ok := root["error"]; ok && len(raw) > 0 && string(raw) != "null" {
-		return fmt.Errorf("OpenAI response contains an error envelope")
+	// Canonical logical-error detection first: classified error envelopes
+	// (with quota/auth/throttle cause), terminal error finish reasons, and
+	// injected paywall text inside otherwise valid-looking completions.
+	if uerr := providers.ClassifyUpstreamResponse(http.StatusOK, b); uerr != nil {
+		return uerr
 	}
 	rawChoices := root["choices"]
 	if len(rawChoices) == 0 {
@@ -128,8 +139,11 @@ func validateAnthropicResponseJSON(b []byte) error {
 	if err := json.Unmarshal(b, &root); err != nil {
 		return fmt.Errorf("invalid Anthropic response JSON: %w", err)
 	}
-	if raw, ok := root["error"]; ok && len(raw) > 0 && string(raw) != "null" {
-		return fmt.Errorf("Anthropic response contains an error envelope")
+	// Canonical logical-error detection first: classified error envelopes
+	// (with quota/auth/throttle cause), terminal error stop reasons, and
+	// injected paywall text inside otherwise valid-looking completions.
+	if uerr := providers.ClassifyUpstreamResponse(http.StatusOK, b); uerr != nil {
+		return uerr
 	}
 	var typ, role string
 	if raw := root["type"]; len(raw) > 0 {

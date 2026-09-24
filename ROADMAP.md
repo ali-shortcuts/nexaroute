@@ -17,6 +17,8 @@ Future work should be added only as separately scoped, tested capabilities.
 
 ## Routing intelligence
 
+- cache/revision-invalidate the virtual catch-all candidate scan so `auto` becomes O(revision) instead of O(registry) on large fleets (currently ~1.6 ms at 1020 deployments, measured);
+
 - explicit named fallback chains/pools;
 - context-window-aware routing;
 - provider-reported RPM/TPM headroom and reset-aware routing;

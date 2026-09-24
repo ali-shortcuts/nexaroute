@@ -32,6 +32,7 @@ Every normal CI run also executes one bounded stress pass covering:
 
 - local runtime smoke test;
 - installable-package / installer smoke test;
+- one-command installer (`scripts/install.sh`) default-path smoke test;
 - Docker image build;
 - Docker runtime smoke test including config persistence and permissions.
 
@@ -56,7 +57,27 @@ Every normal CI run also executes one bounded stress pass covering:
 - embedded Web UI control wiring;
 - rotating log disk bounds, backup cleanup and console rate limiting;
 - concurrent event/session flood bounds;
-- bounded recovery-queue behavior and worker retry recovery.
+- bounded recovery-queue behavior and worker retry recovery;
+- fault injection with fake providers: hung-provider timeout failover, mid-stream upstream close, garbage-200 pre-commit failover, all-`429` capped `Retry-After` surfacing, connection-refused classification, flapping-provider cooldown isolation, credential redaction in failure bodies;
+- upstream logical-error fault injection: quota/auth/throttle/paywall bodies, HTTP 200 with error envelopes or error finish reasons, and mid-stream error chunks/errors — all fail over (or surface a precise typed `502`) without recording success;
+- resilience fault injection: hedged backup wins on slow primaries (loser cancelled, no health poisoning) and degrades cleanly when disabled or the budget is spent; retry-budget exhaustion fails fast with `Retry-After: 1` and `retry_budget_exhausted` events; trickling streams are cut at the stream deadline with `provider_timeout`; client write deadlines enforced and cleared over real keep-alive connections, and stalled clients surface as typed `client_stalled` errors that never poison deployment health; dialer bounds pinned;
+- route preview read-only API: ordering, explanations, session pin, alias/capability eligibility, empty-result notes, method guard.
+- upstream logical-error detection: 200 error envelopes / paywall content / error finish reasons fail over without recording success; streamed paywall/error tails correct accounting post-commit; quota/auth/throttle classes cool only the serving credential; `429 insufficient_quota` earns the long quota cooldown; provider-test/probe surface the classified cause.
+
+## Measured routing performance (linux/amd64, CI-class vCPU)
+
+`go test ./internal/router -bench . -benchmem` (1000 iterations):
+
+| Benchmark | Scale | ns/op | B/op | allocs/op |
+|---|---|---:|---:|---:|
+| BenchmarkCandidates_10Providers | 10 deployments | ~580 | 352 | 1 |
+| BenchmarkCandidates_100Models | 100 deployments | ~570 | 352 | 1 |
+| BenchmarkCandidates_1000Models | 1000 deployments | ~510 | 352 | 1 |
+| BenchmarkCandidates_3000Models | 3000 deployments | ~600 | 352 | 1 |
+| BenchmarkCandidates_AliasVirtualScan | 1020 deployments (catch-all `auto`) | ~1.6M | ~566K | 6 |
+| BenchmarkEligibleSingle | single eligibility check | ~330 | 0 | 0 |
+
+Targeted model lookups stay sub-microsecond and allocation-flat up to 3000 deployments. The catch-all virtual scan is linear in the registry (one health-lock acquisition total, ~6 allocations beyond the returned candidate slice); routing a specific model never scans the registry.
 
 ## Release rule
 

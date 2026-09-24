@@ -4,6 +4,24 @@ A self-hosted Go gateway for routing Anthropic-compatible and OpenAI-compatible 
 
 This package intentionally stays named **v0.3** until the user validates it on the target Ubuntu machine. The code is runnable and heavily tested, but no software can honestly be guaranteed to contain zero bugs.
 
+## Install in one command (Linux)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ali-shortcuts/nexaroute/main/scripts/install.sh | bash
+```
+
+This installs `~/.local/bin/nexaroute` and `~/.config/nexaroute/config.json`
+(mode `0600`; an existing config is never overwritten), using the latest
+GitHub release — or building from source automatically when no release
+exists yet. Then run:
+
+```bash
+~/.local/bin/nexaroute -config ~/.config/nexaroute/config.json
+```
+
+Open `http://127.0.0.1:8080/`. See `docs/UBUNTU_INSTALL.md` for systemd
+autostart, updating, uninstalling, and troubleshooting.
+
 ## What v0.3 currently implements
 
 ### Client-facing endpoints
@@ -55,7 +73,10 @@ Implemented resilience:
 - retries/failover before response bytes are committed
 - provider-diverse failover ordering inside each priority tier to reduce correlated retry storms
 - failover on transport errors, selected 4xx provider/auth failures, `429`, and retryable `5xx`
-- `Retry-After` handling with a configurable cap
+- upstream logical-error detection: `200` responses carrying an error envelope, an error finish reason, or injected paywall/quota text (for example "doesn't have enough credits") are classified as failures, never successes — with per-key cooldown for quota/auth/throttle causes and failover to the next healthy deployment (see `docs/UPSTREAM_ERRORS.md`)
+- `Retry-After` handling with a configurable cap, surfaced to the client on exhausted `429` responses
+- optional `attempt_timeout_ms` per-attempt bound so one hung provider cannot consume the whole request budget before failover (default off; streaming exempt)
+- failure events classify transport causes (DNS, timeout, caller cancel, connection refused/reset, TLS) so client cancellations are never counted as provider failures
 - per-deployment circuit breaker
 - first routed failure immediately quarantines that deployment; the recovery supervisor then probes it up to 5 times
 - half-open recovery after cooldown
@@ -82,6 +103,7 @@ The health loop is deliberately **event-driven + selective**, not a wasteful bro
 - an idle ready model is micro-probed after the lease expires, preventing a long-unused fallback from remaining falsely healthy forever;
 - failed/degraded/cooldown deployments are owned by dedicated recovery loops and never receive Claude traffic;
 - candidate order combines configured model priority/weight with verified ready state; under `ready_mesh`, an eligible session pin wins first, otherwise two candidates inside the best priority tier are compared using score and live provider pressure;
+- **Route Preview** (`POST /admin/api/route-preview`) resolves a hypothetical model/session/capability request against the live router and returns the ordered candidates with per-candidate explanations (score, tier, health proof age, latency evidence, capacity pressure, session pin) without any secret material and without routing traffic;
 - recovery policy defaults to **5 supervisor attempts -> 1800-second cooldown**, with a 500 ms retry delay between failed recovery probes;
 - temporary all-key `429` cooldown waits do not consume the five-attempt recovery budget;
 - the explicit **Probe all models** admin action remains available when an operator intentionally wants to retest healthy models too;
@@ -112,6 +134,9 @@ For Anthropic -> OpenAI-compatible routing, v0.3 includes:
 The gateway does **not** pretend to resume a stream on a different model after client-visible bytes have already been sent. A broken committed stream fails rather than fabricating continuity.
 
 ## Web UI
+
+The embedded control plane ships a power dashboard: live traffic chart (requests/failures per minute from poll deltas), success-rate and token/cost KPIs, top deployments by volume, filterable live event stream (severity chips, search, pause), a request explorer with status/SSE/text filters and expandable rows, a model table with search, state filter, sorting, latency bars, health-proof age and cooldown countdown, Route Preview with capability requirements plus one-click end-to-end route test and copyable curl, per-provider "test all models", generated CLI snippets from the live origin and access keys, config JSON export, and an About tab with creator/support channels. All client-side, no external assets, no secrets embedded in served HTML.
+
 
 The UI is embedded in the Go binary; there is no separate web server to install.
 
@@ -176,6 +201,8 @@ http://127.0.0.1:8080/
 ```
 
 The sample providers are disabled, so the gateway will not contact any real provider until you configure and enable one.
+
+Step-by-step Ubuntu instructions (release package, source build, systemd autostart, update, uninstall, troubleshooting) live in `docs/UBUNTU_INSTALL.md`.
 
 ## Quick local self-test
 
@@ -277,6 +304,8 @@ Read:
 - `TEST_REPORT.md`
 - `docs/COMPATIBILITY.md`
 - `docs/KNOWN_GAPS.md`
+- `docs/RESILIENCE.md`
+- `docs/UPSTREAM_ERRORS.md`
 - `SECURITY.md`
 - `ROADMAP.md`
 
@@ -307,3 +336,19 @@ NexaRoute now uses two routing levels:
 Every failover candidate is revalidated against current health and the hot-reloaded registry immediately before use. A candidate that became quarantined or was replaced after the initial request snapshot is skipped rather than being used from stale state.
 
 The built-in provider preset catalog is intentionally limited to endpoints that fit NexaRoute's implemented OpenAI-compatible or Anthropic-compatible adapter contracts. A preset is configuration convenience, not a claim that every provider-specific extension is supported.
+
+## Creator / Support
+
+**Powered by Mr Ali** — Created and developed by Mr Ali, an independent developer building practical digital tools, automation solutions, and useful projects. Follow the channels below for updates, new projects, and useful content.
+
+| Platform | Link |
+|---|---|
+| Email | [Ali.hekmati2026@gmail.com](mailto:Ali.hekmati2026@gmail.com) |
+| Telegram | [@Ali_silent0](https://t.me/Ali_silent0) |
+| Telegram Channel | [@Ali_shortcuts](https://t.me/Ali_shortcuts) |
+| Facebook | [AliShortcuts](https://www.facebook.com/AliShortcuts) |
+| TikTok | [@ali_shortcuts](https://www.tiktok.com/@ali_shortcuts) |
+| Instagram | [@ali_shortcuts](https://www.instagram.com/ali_shortcuts) |
+| YouTube | [@Ali_Shortcuts](https://www.youtube.com/@Ali_Shortcuts) |
+
+The same information is available inside the app under the **About** tab.
