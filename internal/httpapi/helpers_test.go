@@ -1094,6 +1094,16 @@ func TestProviderEditorStreamIdleRangeMatchesBackend(t *testing.T) {
 	}
 }
 
+func TestProviderEditorPreservesDialectOverride(t *testing.T) {
+	app, err := webFS.ReadFile("web/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(app), "dialect: editor.provider?.dialect || ''") {
+		t.Fatal("provider editor save path drops existing dialect override")
+	}
+}
+
 func TestProviderEditorSerializesModelContextAndPricing(t *testing.T) {
 	app, err := webFS.ReadFile("web/app.js")
 	if err != nil {
