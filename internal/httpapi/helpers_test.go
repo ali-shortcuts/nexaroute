@@ -1121,6 +1121,37 @@ func TestProviderEditorSerializesModelContextAndPricing(t *testing.T) {
 	}
 }
 
+func TestHealthDonutUsesDistinctHalfOpenSegment(t *testing.T) {
+	index, err := webFS.ReadFile("web/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(index)
+	if !strings.Contains(html, `id="donutHalfOpen"`) {
+		t.Fatal("half-open health state is missing a dedicated donut SVG segment")
+	}
+
+	styles, err := webFS.ReadFile("web/styles.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(styles), "#donutHalfOpen{stroke:#c9b8ff}") {
+		t.Fatal("half-open donut segment is missing its independent stroke style")
+	}
+
+	app, err := webFS.ReadFile("web/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	js := string(app)
+	if !strings.Contains(js, "['donutHalfOpen', 'half_open'") {
+		t.Fatal("half-open health state is not mapped to its own donut segment")
+	}
+	if strings.Contains(js, "['donutCooldown', 'half_open'") {
+		t.Fatal("half-open health state still overwrites cooldown donut segment")
+	}
+}
+
 func TestProviderEditButtonsUseCollectionSelector(t *testing.T) {
 	app, err := webFS.ReadFile("web/app.js")
 	if err != nil {
