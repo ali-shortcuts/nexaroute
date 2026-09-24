@@ -392,7 +392,6 @@ func TestProviderTypeRequirementFiltersCandidates(t *testing.T) {
 	}
 }
 
-
 func TestReadyMeshDiversifiesFailoverAcrossProviders(t *testing.T) {
 	cfg := config.Default()
 	cfg.Routing.Strategy = "ready_mesh"
