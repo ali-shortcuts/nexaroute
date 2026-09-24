@@ -127,14 +127,19 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 				return s.buildAnthropicAttempt(candidates[idx], req, raw, in)
 			},
 			in.Stream, forward)
-		if hedgeLaunched && i+1 < len(candidates) {
-			skip[i+1] = true
+		if hedgeLaunched {
+			if i+1 < len(candidates) {
+				skip[i+1] = true
+			}
+			// A launched hedge is a real upstream call even when the primary
+			// wins the race. Count it against max_attempts so hedging cannot
+			// silently exceed the operator's upstream-call budget.
+			attempts++
+			attemptIndex = attempts - 1
 		}
 		if out.secondaryWon {
 			kind = winner.canonicalKind
 			c, a, nm, streamOptionsInjected, payload = winner.c, winner.a, winner.nm, winner.injected, winner.payload
-			attempts++
-			attemptIndex = attempts - 1
 			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_attempt", Deployment: c.Deployment.ID, Message: fmt.Sprintf("attempt=%d score=%.2f health=%s pressure=%.3f (hedged winner)", attempts, c.Score, c.Health.Status, c.CapacityPressure)})
 		}
 		resp, e := out.resp, out.err
