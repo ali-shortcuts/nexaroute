@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.5.3 — monotonic concurrent quota evidence
+
+### Fixed
+
+- **Out-of-order rate-limit responses can no longer raise remaining quota inside an active reset window.** Concurrent upstream requests may complete in a different order than they were sent; a late stale response reporting a larger remaining value is now ignored for budget state while lower evidence is still accepted.
+- **Reset deadlines cannot be extended by a stale response while the current window is active.** A shorter corrected deadline may be accepted; a higher remaining budget becomes valid again only after the current reset has expired.
+- Request and token windows remain independent, and the legacy summary reset is recomputed from the merged resource-specific deadlines.
+- A stale remaining header still releases the local reservation for the response that carried it, so monotonic evidence does not leak in-flight reservation pressure.
+
+### Tests
+
+- concurrent 9/7/8-style remaining observations converge to the minimum active-window evidence;
+- higher remaining values are accepted again after reset expiry;
+- shorter reset corrections are accepted while stale later resets are rejected;
+- stale quota evidence releases reservations without increasing effective budget.
+
+
 ## v0.5.2 — in-flight quota reservation
 
 ### Added
