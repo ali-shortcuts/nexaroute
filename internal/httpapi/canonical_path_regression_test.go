@@ -185,3 +185,40 @@ func TestCanonicalStreamErrorDoesNotAppendSuccessTail(t *testing.T) {
 		t.Fatalf("canonical stream emitted success after failure: %s", out)
 	}
 }
+
+func TestAnthropicMessageStopDoesNotOverwriteToolUseReason(t *testing.T) {
+	stream := strings.Join([]string{
+		`event: message_start`,
+		`data: {"type":"message_start","message":{"usage":{"input_tokens":4,"output_tokens":0}}}`,
+		``,
+		`event: content_block_start`,
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"tool_1","name":"lookup","input":{}}}`,
+		``,
+		`event: content_block_delta`,
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"q\":\"x\"}"}}`,
+		``,
+		`event: content_block_stop`,
+		`data: {"type":"content_block_stop","index":0}`,
+		``,
+		`event: message_delta`,
+		`data: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":3}}`,
+		``,
+		`event: message_stop`,
+		`data: {"type":"message_stop"}`,
+		``,
+	}, "\n")
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       io.NopCloser(strings.NewReader(stream)),
+	}
+	rr := httptest.NewRecorder()
+	err := (&Server{}).canonicalStreamPump(rr, resp, "anthropic", "openai_chat", "client-model", "req-tool-stop", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := rr.Body.String()
+	if !strings.Contains(out, `"finish_reason":"tool_calls"`) {
+		t.Fatalf("Anthropic tool_use stop reason was overwritten: %s", out)
+	}
+}
