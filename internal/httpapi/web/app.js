@@ -686,10 +686,13 @@ $('#pKeyEnv').oninput = () => editor.secretDirty = true;
 $('#pCredentials').oninput = () => editor.secretDirty = true;
 $('#pPreset').onchange = () => applyPreset($('#pPreset').value);
 $('#pType').onchange = () => {
-  const a = $('#pAuth'), typ = $('#pType').value;
+  const a = $('#pAuth'), typ = $('#pType').value, models = $('#pModelsPath');
   if (typ === 'anthropic_compatible' && (a.value === 'bearer' || a.value === 'x-goog-api-key')) a.value = 'x-api-key';
   if (typ === 'gemini' && (a.value === 'bearer' || a.value === 'x-api-key')) a.value = 'x-goog-api-key';
   if ((typ === 'openai_compatible' || typ === 'openai_responses') && (a.value === 'x-api-key' || a.value === 'x-goog-api-key')) a.value = 'bearer';
+  const modelPath = models.value.trim();
+  if (typ === 'gemini' && (modelPath === '' || modelPath === '/v1/models')) models.value = '/v1beta/models';
+  if (typ !== 'gemini' && modelPath === '/v1beta/models') models.value = '/v1/models';
 };
 async function openEdit(id) {
   try {
