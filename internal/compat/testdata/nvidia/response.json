@@ -1,0 +1,10 @@
+{
+  "id": "chatcmpl-test",
+  "object": "chat.completion",
+  "created": 1700000000,
+  "model": "meta/llama-test",
+  "choices": [
+    {"index": 0, "message": {"role": "assistant", "content": "It is 21:00 in Paris."}, "finish_reason": "stop"}
+  ],
+  "usage": {"prompt_tokens": 40, "completion_tokens": 10, "total_tokens": 50}
+}

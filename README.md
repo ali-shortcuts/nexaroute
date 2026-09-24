@@ -48,7 +48,9 @@ This package is **v0.5**: the v0.4 translation + dashboard core, now extended wi
 - `POST /v1/messages` — Anthropic Messages API ingress
 - `POST /v1/messages/count_tokens` — tries native Anthropic token counting when possible, otherwise returns a clearly marked local estimate
 - `POST /v1/chat/completions` — OpenAI Chat Completions ingress
+- `POST /v1/responses` — OpenAI Responses ingress (decoded via the Canonical IR, encoded back to the Responses object shape)
 - `GET /v1/models` — physical deployments, aliases, and the virtual `auto` / `claude-auto` models
+- `GET /admin/api/compat` — capability contracts + Claude Code scorecards; `POST /admin/api/compat/probe` — Quick / Full / Agent compatibility tests
 - `GET /api/hello` and `GET /version` — runtime/version diagnostics
 - `GET /healthz` — process liveness
 - `GET /readyz` — routing readiness

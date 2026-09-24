@@ -209,6 +209,40 @@ The reverse translator covers common text/tools and streaming paths, but provide
 
 For an eligible Anthropic-compatible upstream, `/v1/messages/count_tokens` first calls that provider's native token-count endpoint. If no native path is usable, NexaRoute returns a local conservative estimate with `estimated=true` rather than pretending it is exact.
 
+### OpenAI Responses
+
+`/v1/responses` decodes into the Canonical IR (input items, instructions,
+function tools), routes like any other ingress, and encodes the canonical
+response back to the Responses object shape with real usage. Streaming
+Responses is planned; this phase serves non-streaming requests.
+
+## Compatibility engine
+
+The Universal Compatibility Engine sits between routing and provider adapters:
+
+```text
+router (which deployment?)
+  -> capability contract (is it eligible? UNKNOWN stays eligible)
+  -> sanitizer (drop optional unsupported fields per policy)
+  -> dialect profile (provider quirk deltas, no if-provider sprawl)
+  -> upstream attempt
+  -> error classifier (health failure vs capability failure?)
+  -> bounded repair (<=2 deterministic retries) or failover
+  -> runtime learning (high-confidence evidence only)
+```
+
+Invariants:
+
+- Provider != Protocol, Protocol != Dialect, Provider != Model Capability,
+  Health != Compatibility.
+- Routing never rewrites protocol semantics; translation never chooses a
+  provider.
+- Capability failures are health-neutral: no quarantine, no provider-incident
+  signal, no failover.
+- UNKNOWN is never treated as UNSUPPORTED; the router prefers verified
+  alternatives on score instead.
+- Discovery and full probing never run on the request hot path.
+
 ## SSE and cancellation
 
 Native SSE passthrough explicitly flushes chunks. Cross-protocol SSE emits deterministic content-block indices. Stream adapters cancel upstream work when the client disconnects or the configured stream idle deadline is exceeded.

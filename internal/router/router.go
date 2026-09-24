@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/ali-shortcuts/nexaroute/internal/compat/capabilities"
 	"github.com/ali-shortcuts/nexaroute/internal/config"
 	"github.com/ali-shortcuts/nexaroute/internal/health"
 )
@@ -91,6 +92,9 @@ type Router struct {
 	rr        atomic.Uint64
 	sessionMu sync.RWMutex
 	sessions  map[string]sessionPin
+	// compatLookup reports tri-state capability support per deployment.
+	// Nil means no compat data: static config flags decide alone.
+	compatLookup func(deploymentID, capability string) capabilities.Support
 }
 
 func New(cfg config.Config, hm *health.Manager) *Router {
@@ -99,6 +103,25 @@ func New(cfg config.Config, hm *health.Manager) *Router {
 	return r
 }
 func IsReadyStrategy(s string) bool { return s == "ready_mesh" || s == "ready_queue" }
+
+// SetCompatLookup installs the tri-state capability hook. The lookup must be
+// concurrency-safe; it runs on the routing hot path and must stay cheap
+// (map read only, no probing).
+func (r *Router) SetCompatLookup(fn func(deploymentID, capability string) capabilities.Support) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.compatLookup = fn
+}
+
+func (r *Router) compatSupport(deploymentID, capability string) (capabilities.Support, bool) {
+	r.mu.RLock()
+	fn := r.compatLookup
+	r.mu.RUnlock()
+	if fn == nil {
+		return capabilities.Unknown, false
+	}
+	return fn(deploymentID, capability), true
+}
 
 func (r *Router) Reload(cfg config.Config) {
 	all := make([]Deployment, 0)
@@ -220,7 +243,40 @@ func (r *Router) scored(d Deployment, hs health.State, req Requirement, cfg conf
 	pressure := capacityPressure(load)
 	score += d.Weight*10 - float64(d.Priority)*3 - hs.EWMALatencyMS*cfg.Routing.LatencyWeight - pressure*cfg.Routing.CapacityWeight
 	score -= hs.EWMAFailureRate * cfg.Routing.FailureWeight
+	// UNKNOWN required capabilities stay eligible but lose to verified
+	// alternatives (spec section 28: UNKNOWN is not proven compatible).
+	if r.compatLookup != nil {
+		for _, need := range requiredCompatKeys(req) {
+			if sup, ok := r.compatSupport(d.ID, need); ok {
+				switch sup {
+				case capabilities.Supported:
+					score += 2
+				case capabilities.Unknown:
+					score -= 8
+				}
+			}
+		}
+	}
 	return Scored{Deployment: d, Health: hs, Score: score, CapacityPressure: pressure}
+}
+
+// requiredCompatKeys maps a routing requirement onto capability keys that
+// must not be UNSUPPORTED for the deployment to stay eligible.
+func requiredCompatKeys(req Requirement) []string {
+	keys := []string{}
+	if req.Tools {
+		keys = append(keys, "tools")
+	}
+	if req.Vision {
+		keys = append(keys, "vision")
+	}
+	if req.Streaming {
+		keys = append(keys, "streaming")
+	}
+	if req.Reasoning {
+		keys = append(keys, "reasoning")
+	}
+	return keys
 }
 
 func (r *Router) eligibleDeployment(d Deployment, req Requirement, cfg config.Config, ignoreModel bool, scopes []string) (Scored, bool) {
@@ -242,6 +298,17 @@ func (r *Router) eligibleDeployment(d Deployment, req Requirement, cfg config.Co
 	}
 	if req.Tools && !d.Capabilities.Tools || req.Vision && !d.Capabilities.Vision || req.Streaming && !d.Capabilities.Streaming || req.Reasoning && !d.Capabilities.Reasoning {
 		return Scored{}, false
+	}
+	// Capability-contract filter (spec section 21): a REQUIRED capability
+	// verified UNSUPPORTED makes the deployment ineligible BEFORE any
+	// upstream attempt. UNKNOWN stays eligible (verified alternatives win
+	// on score instead).
+	if r.compatLookup != nil {
+		for _, need := range requiredCompatKeys(req) {
+			if sup, ok := r.compatSupport(d.ID, need); ok && sup == capabilities.Unsupported {
+				return Scored{}, false
+			}
+		}
 	}
 	healthScopes := []string(nil)
 	if cfg.Routing.Strategy == "ready_mesh" {

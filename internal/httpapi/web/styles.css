@@ -347,3 +347,7 @@ pre{white-space:pre-wrap;color:#c5d2e3;background:#060c15;padding:14px;border-ra
 
 /* pause button active state */
 .btn.active-btn{border-color:rgba(255,200,97,.55);color:var(--warn);background:rgba(50,38,10,.35)}
+.compat-probe-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px}
+.compat-probe-row select{min-width:220px}
+.compat-json{background:rgba(5,10,18,.9);border:1px solid var(--line);border-radius:11px;padding:10px 12px;font-size:10px;max-height:320px;overflow:auto;white-space:pre-wrap;word-break:break-word}
+.compat-json:empty{display:none}

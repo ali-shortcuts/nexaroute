@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"github.com/ali-shortcuts/nexaroute/internal/cache"
+	"github.com/ali-shortcuts/nexaroute/internal/compat/capabilities"
+	"github.com/ali-shortcuts/nexaroute/internal/compat/quirks"
 	"github.com/ali-shortcuts/nexaroute/internal/config"
 	"github.com/ali-shortcuts/nexaroute/internal/events"
 	"github.com/ali-shortcuts/nexaroute/internal/health"
@@ -50,6 +52,7 @@ type Server struct {
 	clientBuckets   map[string]*clientBucket
 	respCache       *cache.Cache
 	usage           *usage.Tracker
+	compat          *capabilities.Store
 }
 
 // adminBucket is a compact token bucket keyed by remote address. Capacity 90
@@ -143,11 +146,32 @@ func New(cfg config.Config, configPath string, reg *providers.Registry, rt *rout
 		cfg.ProviderFailureWindow(),
 		cfg.ProviderCooldown(),
 	)
-	return &Server{
+	s := &Server{
 		cfg: cfg, configPath: configPath, reg: reg, rt: rt, hm: hm, bus: bus, probe: pe, log: l,
 		respCache: cache.New(cfg.CacheTTL(), cfg.Cache.MaxEntries, int64(cfg.Cache.MaxBodyBytes)),
 		usage:     usage.New(),
+		compat:    capabilities.NewStore(),
 	}
+	if rt != nil {
+		store := s.compat
+		rt.SetCompatLookup(func(deploymentID, capability string) capabilities.Support {
+			if m, ok := store.Get(deploymentID); ok {
+				return m.Get(capability).Value
+			}
+			return capabilities.Unknown
+		})
+		// Seed contracts from static config so UNKNOWN-vs-configured stays
+		// explicit from the first request.
+		for _, d := range rt.All() {
+			m := capabilities.FromStaticBools(
+				d.Capabilities.Streaming, d.Capabilities.Tools,
+				d.Capabilities.Vision, d.Capabilities.Reasoning)
+			m.NativeProtocol = d.ProviderType
+			m.ContextWindow = d.ContextWindow
+			store.Set(d.ID, m)
+		}
+	}
+	return s
 }
 
 func (s *Server) currentConfig() config.Config {
@@ -206,6 +230,8 @@ func providerProbeIdentityEqual(a, b config.ProviderConfig) bool {
 		a.MessagesPath == b.MessagesPath &&
 		a.ModelsPath == b.ModelsPath &&
 		a.CountTokensPath == b.CountTokensPath &&
+		a.Dialect == b.Dialect &&
+		a.Protocol == b.Protocol &&
 		a.Enabled == b.Enabled
 }
 
@@ -345,6 +371,10 @@ func (s *Server) applyConfigLocked(cfg config.Config) error {
 	}
 	s.hm.RetainProviders(validProviders)
 	s.usage.Retain(valid)
+	if s.compat == nil {
+		s.compat = capabilities.NewStore()
+	}
+	s.compat.Retain(valid)
 	// Cached responses must never outlive the topology that produced them:
 	// any config swap invalidates the exact-match cache wholesale.
 	s.respCache.Invalidate()
@@ -377,6 +407,25 @@ func (s *Server) applyConfigLocked(cfg config.Config) error {
 	}
 	for id := range changedProviderHealth {
 		s.hm.InvalidateProvider(id)
+	}
+	// Capability-cache invalidation (spec section 18): base URL, protocol,
+	// model ID, or dialect-version changes drop the learned contract.
+	providerByID := map[string]config.ProviderConfig{}
+	for _, p := range cfg.Providers {
+		providerByID[p.ID] = p
+	}
+	for _, d := range s.rt.All() {
+		if p, ok := providerByID[d.ProviderID]; ok {
+			s.compat.InvalidateIfChanged(d.ID, p.BaseURL, p.Type+"/"+p.Protocol, d.Model, quirks.Version+"/"+p.Dialect)
+		}
+		if _, ok := s.compat.Get(d.ID); !ok {
+			m := capabilities.FromStaticBools(
+				d.Capabilities.Streaming, d.Capabilities.Tools,
+				d.Capabilities.Vision, d.Capabilities.Reasoning)
+			m.NativeProtocol = d.ProviderType
+			m.ContextWindow = d.ContextWindow
+			s.compat.Set(d.ID, m)
+		}
 	}
 
 	s.cfg = cfg
@@ -449,6 +498,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/messages", s.anthropicMessages)
 	mux.HandleFunc("/v1/messages/count_tokens", s.countTokens)
 	mux.HandleFunc("/v1/chat/completions", s.openAIChat)
+	mux.HandleFunc("/v1/responses", s.openAIResponses)
 
 	mux.HandleFunc("/admin/api/snapshot", s.adminSnapshot)
 	mux.HandleFunc("/admin/api/probe", s.adminProbe)
@@ -458,6 +508,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/admin/api/provider-check", s.adminProviderCheck)
 	mux.HandleFunc("/admin/api/provider-test", s.adminProviderTest)
 	mux.HandleFunc("/admin/api/provider-discover", s.adminProviderDiscover)
+	mux.HandleFunc("/admin/api/compat", s.adminCompat)
+	mux.HandleFunc("/admin/api/compat/probe", s.adminCompatProbe)
 	mux.HandleFunc("/admin/api/settings", s.adminSettings)
 
 	sub, _ := fs.Sub(webFS, "web")
@@ -470,7 +522,7 @@ func isDataPlaneRequest(r *http.Request) bool {
 		return false
 	}
 	switch r.URL.Path {
-	case "/v1/messages", "/v1/messages/count_tokens", "/v1/chat/completions":
+	case "/v1/messages", "/v1/messages/count_tokens", "/v1/chat/completions", "/v1/responses":
 		return true
 	default:
 		return false

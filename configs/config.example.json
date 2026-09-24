@@ -75,7 +75,9 @@
           "input_cost_per_mtok": 3.0,
           "output_cost_per_mtok": 15.0
         }
-      ]
+      ],
+      "dialect": "",
+      "protocol": "auto"
     },
     {
       "id": "anthropic-direct",
@@ -110,7 +112,9 @@
             "reasoning": true
           }
         }
-      ]
+      ],
+      "dialect": "",
+      "protocol": "auto"
     }
   ],
   "logging": {
@@ -132,5 +136,10 @@
     "enabled": false,
     "keys": [],
     "rpm": 0
+  },
+  "compat": {
+    "repair_enabled": true,
+    "max_repair_attempts": 1,
+    "sanitize_optional": true
   }
 }

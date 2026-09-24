@@ -61,7 +61,8 @@ Every normal CI run also executes one bounded stress pass covering:
 - embedded Web UI control wiring;
 - rotating log disk bounds, backup cleanup and console rate limiting;
 - concurrent event/session flood bounds;
-- bounded recovery-queue behavior and worker retry recovery.
+- bounded recovery-queue behavior and worker retry recovery;
+- compatibility engine: no-false-health-failure regression (400 capability errors keep HEALTHY + teach UNSUPPORTED), bounded repair rules, router capability filtering, canonical round trips, golden translation fixtures, provider error-shape matrix, Claude Code tool loop, Responses ingress, admin compat probes.
 
 ## Release rule
 

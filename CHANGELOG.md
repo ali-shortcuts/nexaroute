@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased — Universal Compatibility Engine (phase 1–9 core)
+
+### Added
+
+- **Canonical Request/Response IR** (`internal/compat/canonical`): Anthropic and OpenAI Chat decode into one normalized model (messages, tools, reasoning, images, sampling, stop, stream) with required-vs-optional capability requirements; encoders produce provider payloads. Gemini GenerateContent converters ship in the same package for future upstream use.
+- **Per-deployment capability contracts** (`internal/compat/capabilities`): tri-state SUPPORTED/UNSUPPORTED/UNKNOWN per capability (never assume UNKNOWN = UNSUPPORTED), provenance (static/discovery/probe/runtime + confidence + timestamp), conservative runtime learning (only high-confidence evidence flips values), invalidation on base-URL/protocol/model/dialect change, and Claude Code scorecards (`CLAUDE_CODE_READY` / `CHAT_READY` / …).
+- **Structured error taxonomy** (`internal/compat/errors`): 19 classes (AUTH_ERROR, INVALID_KEY, QUOTA_EXHAUSTED, RATE_LIMIT, MODEL_NOT_FOUND, UNSUPPORTED_PARAMETER/TOOL_CALLING/REASONING/VISION/STRUCTURED_OUTPUT, CONTEXT_OVERFLOW, …) with a 20-case provider-shape matrix across OpenAI/Anthropic/NVIDIA/DeepSeek/OpenRouter/Gemini/generic fixtures.
+- **No false health failures**: capability failures (e.g. 400 "temperature is not supported") are health-neutral — no quarantine, no provider-incident signal, no failover — and teach the capability contract instead. Regression tests pin `health=HEALTHY` + `temperature=UNSUPPORTED` with and without repair.
+- **Bounded repair engine** (`internal/compat/repair`, `compat.max_repair_attempts` ≤ 2): deterministic rules (`max_completion_tokens → max_tokens`, drop temperature/top_p/stop/seed/penalties/stream_options/reasoning_effort/parallel_tool_calls). Semantics-critical fields (tools, tool_choice, response_format, json_schema) are never silently dropped.
+- **Parameter sanitizer** (`internal/compat/sanitizer`): optional unsupported fields are dropped per policy; missing REQUIRED capabilities make a deployment ineligible instead of being sent anyway.
+- **Dialect registry** (`internal/compat/quirks`): `generic_openai`, `generic_anthropic`, `nvidia_nim`, `deepseek`, `openrouter`, `together`, `groq`, `custom` — no `if provider ==` sprawl. Providers accept optional `dialect` / `protocol` (`auto` default) in config and the dashboard.
+- **Canonical stream events** (`internal/compat/stream`): OpenAI and Anthropic SSE decode into Start/TextDelta/ReasoningDelta/ToolCallStart-Delta-End/Usage/End/Error events; golden SSE test asserts event-by-event decoding.
+- **Protocol auto-discovery** (`internal/compat/detector`): probes `/v1/models`, `/v1/chat/completions`, `/v1/responses`, `/v1/messages` once (never on the hot path) into a YES/NO/UNKNOWN contract.
+- **Two-layer capability probing** (`internal/compat/capprobe` + `POST /admin/api/compat/probe`): Level A availability plus 16 Level B cases (system/streaming/tools/parallel/structured/reasoning/vision/sampling/max-tokens…); Quick / Full / Claude Code agent tool-loop modes; verified outcomes feed the capability store.
+- **Router integration**: REQUIRED capabilities verified UNSUPPORTED filter deployments before any upstream attempt; UNKNOWN required capabilities stay eligible but lose score to verified alternatives.
+- **OpenAI Responses ingress** (`POST /v1/responses`): decoded via the Canonical IR, routed and translated like other ingress, encoded back to the Responses object shape with real usage.
+- **Admin + dashboard**: `GET /admin/api/compat` (contracts + scorecards, also inside `/admin/api/snapshot`), new Compat tab with scorecard table and Quick/Full/Agent probe runner, dialect/protocol provider fields.
+- **Golden translation tests** (`internal/compat/golden_test.go` + `testdata/`): Anthropic → Canonical → NVIDIA request JSON, NVIDIA → Canonical → Anthropic response, SSE event stream.
+
 ## v0.5.0 — hedging, response cache, client keys, context pre-routing, usage accounting
 
 ### Added

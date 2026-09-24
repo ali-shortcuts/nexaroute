@@ -1,0 +1,9 @@
+{
+  "id": "msg_test",
+  "type": "message",
+  "role": "assistant",
+  "content": [{"type": "text", "text": "It is 21:00 in Paris."}],
+  "model": "claude-test",
+  "stop_reason": "end_turn",
+  "usage": {"input_tokens": 40, "output_tokens": 10}
+}

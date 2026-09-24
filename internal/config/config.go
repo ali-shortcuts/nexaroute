@@ -23,6 +23,7 @@ type Config struct {
 	Probe      ProbeConfig      `json:"probe"`
 	Cache      CacheConfig      `json:"cache"`
 	ClientAuth ClientAuthConfig `json:"client_auth"`
+	Compat     CompatConfig     `json:"compat"`
 	Providers  []ProviderConfig `json:"providers"`
 }
 
@@ -97,6 +98,44 @@ type ProbeConfig struct {
 	RecoveryRetryMS   int  `json:"recovery_retry_ms"`
 }
 
+// CompatConfig tunes the Universal Compatibility Engine. All fields are
+// optional; zero values select safe defaults via ApplyDefaults.
+type CompatConfig struct {
+	// RepairEnabled permits bounded same-deployment repair retries for
+	// classified UNSUPPORTED_PARAMETER failures (default true).
+	RepairEnabled *bool `json:"repair_enabled,omitempty"`
+	// MaxRepairAttempts bounds repair retries per request (default 1, max 2).
+	MaxRepairAttempts int `json:"max_repair_attempts,omitempty"`
+	// SanitizeOptional permits dropping optional unsupported fields before
+	// upstream dispatch when the capability contract says UNSUPPORTED
+	// (default true).
+	SanitizeOptional *bool `json:"sanitize_optional,omitempty"`
+}
+
+func (c CompatConfig) RepairsAllowed() bool {
+	if c.RepairEnabled == nil {
+		return true
+	}
+	return *c.RepairEnabled
+}
+
+func (c CompatConfig) SanitizeAllowed() bool {
+	if c.SanitizeOptional == nil {
+		return true
+	}
+	return *c.SanitizeOptional
+}
+
+func (c CompatConfig) RepairBudget() int {
+	if c.MaxRepairAttempts <= 0 {
+		return 1
+	}
+	if c.MaxRepairAttempts > 2 {
+		return 2
+	}
+	return c.MaxRepairAttempts
+}
+
 type CredentialConfig struct {
 	Name      string `json:"name,omitempty"`
 	APIKey    string `json:"api_key,omitempty"`
@@ -114,25 +153,33 @@ func (c CredentialConfig) Resolved() string {
 }
 
 type ProviderConfig struct {
-	ID                       string             `json:"id"`
-	Name                     string             `json:"name"`
-	Type                     string             `json:"type"` // openai_compatible | anthropic_compatible
-	BaseURL                  string             `json:"base_url"`
-	APIKey                   string             `json:"api_key,omitempty"`
-	APIKeyEnv                string             `json:"api_key_env,omitempty"`
-	Credentials              []CredentialConfig `json:"credentials,omitempty"`
-	AuthMode                 string             `json:"auth_mode,omitempty"` // bearer | x-api-key | none
-	Headers                  map[string]string  `json:"headers,omitempty"`
-	ForwardHeaders           []string           `json:"forward_headers"`
-	ProxyURL                 string             `json:"proxy_url,omitempty"`
-	ChatPath                 string             `json:"chat_path,omitempty"`
-	MessagesPath             string             `json:"messages_path,omitempty"`
-	ModelsPath               string             `json:"models_path,omitempty"`
-	CountTokensPath          string             `json:"count_tokens_path,omitempty"`
-	MaxConcurrency           int                `json:"max_concurrency,omitempty"`
-	StreamIdleTimeoutSeconds int                `json:"stream_idle_timeout_seconds,omitempty"`
-	Enabled                  bool               `json:"enabled"`
-	Models                   []ModelConfig      `json:"models"`
+	ID              string             `json:"id"`
+	Name            string             `json:"name"`
+	Type            string             `json:"type"` // openai_compatible | anthropic_compatible
+	BaseURL         string             `json:"base_url"`
+	APIKey          string             `json:"api_key,omitempty"`
+	APIKeyEnv       string             `json:"api_key_env,omitempty"`
+	Credentials     []CredentialConfig `json:"credentials,omitempty"`
+	AuthMode        string             `json:"auth_mode,omitempty"` // bearer | x-api-key | none
+	Headers         map[string]string  `json:"headers,omitempty"`
+	ForwardHeaders  []string           `json:"forward_headers"`
+	ProxyURL        string             `json:"proxy_url,omitempty"`
+	ChatPath        string             `json:"chat_path,omitempty"`
+	MessagesPath    string             `json:"messages_path,omitempty"`
+	ModelsPath      string             `json:"models_path,omitempty"`
+	CountTokensPath string             `json:"count_tokens_path,omitempty"`
+	// Dialect selects a quirk profile (generic_openai, nvidia_nim,
+	// deepseek, openrouter, ...). Empty means auto-infer from provider
+	// identity. Provider != Protocol != Dialect.
+	Dialect string `json:"dialect,omitempty"`
+	// Protocol selects the wire protocol family (openai_chat,
+	// openai_responses, anthropic, gemini, auto). Empty means auto from
+	// Type for backward compatibility.
+	Protocol                 string        `json:"protocol,omitempty"`
+	MaxConcurrency           int           `json:"max_concurrency,omitempty"`
+	StreamIdleTimeoutSeconds int           `json:"stream_idle_timeout_seconds,omitempty"`
+	Enabled                  bool          `json:"enabled"`
+	Models                   []ModelConfig `json:"models"`
 }
 
 type ModelConfig struct {
@@ -392,6 +439,8 @@ func (c *Config) ApplyDefaults() {
 func (p *ProviderConfig) ApplyDefaults() {
 	p.ID = strings.TrimSpace(p.ID)
 	p.Name = strings.TrimSpace(p.Name)
+	p.Dialect = strings.TrimSpace(p.Dialect)
+	p.Protocol = strings.TrimSpace(p.Protocol)
 	p.BaseURL = strings.TrimRight(strings.TrimSpace(p.BaseURL), "/")
 	if p.Name == "" {
 		p.Name = p.ID
@@ -531,6 +580,9 @@ func (c Config) Validate() error {
 	if c.Routing.HedgingDelayMS < 50 || c.Routing.HedgingDelayMS > 600000 {
 		return errors.New("routing.hedging_delay_ms must be between 50 and 600000")
 	}
+	if c.Compat.MaxRepairAttempts < 0 || c.Compat.MaxRepairAttempts > 2 {
+		return errors.New("compat.max_repair_attempts must be between 0 and 2")
+	}
 	if c.Cache.TTLSeconds < 1 || c.Cache.TTLSeconds > 30*24*60*60 {
 		return errors.New("cache.ttl_seconds must be between 1 and 2592000")
 	}
@@ -638,6 +690,19 @@ func (c Config) Validate() error {
 		}
 		if p.AuthMode != "" && p.AuthMode != "bearer" && p.AuthMode != "x-api-key" && p.AuthMode != "none" {
 			return fmt.Errorf("provider %q has unsupported auth_mode %q", p.ID, p.AuthMode)
+		}
+		if len(p.Dialect) > 64 {
+			return fmt.Errorf("provider %q dialect is too long", p.ID)
+		}
+		switch p.Dialect {
+		case "", "generic_openai", "generic_anthropic", "nvidia_nim", "deepseek", "openrouter", "together", "groq", "custom":
+		default:
+			return fmt.Errorf("provider %q has unsupported dialect %q", p.ID, p.Dialect)
+		}
+		switch p.Protocol {
+		case "", "auto", "openai_chat", "openai_responses", "anthropic", "gemini":
+		default:
+			return fmt.Errorf("provider %q has unsupported protocol %q", p.ID, p.Protocol)
 		}
 		if p.MaxConcurrency < 1 || p.MaxConcurrency > maxProviderConcurrency {
 			return fmt.Errorf("provider %q max_concurrency must be between 1 and %d", p.ID, maxProviderConcurrency)

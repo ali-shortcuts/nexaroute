@@ -1,0 +1,8 @@
+data: {"choices":[{"delta":{"content":"It is"}}]}
+
+data: {"choices":[{"delta":{"content":" 21:00"}}]}
+
+data: {"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":40,"completion_tokens":10}}
+
+data: [DONE]
+

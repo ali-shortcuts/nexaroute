@@ -150,6 +150,7 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 		"provider_stats":     s.reg.Stats(),
 		"provider_pressure":  providerPressure(s.reg.Stats()),
 		"scope_health":       scopeHealthRows(healthAll),
+		"compat":             s.compatSnapshot(),
 		"session_count":      s.rt.SessionCount(),
 		"probe_stats":        s.probe.Stats(),
 		"request_total":      s.requestTotal.Load(),

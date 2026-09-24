@@ -1,0 +1,16 @@
+{
+  "model": "meta/llama-test",
+  "max_tokens": 64,
+  "stream": false,
+  "temperature": 0.7,
+  "messages": [
+    {"role": "system", "content": "You are helpful."},
+    {"role": "user", "content": "What time is it?"},
+    {"role": "assistant", "tool_calls": [{"id": "tu1", "type": "function", "function": {"name": "get_time", "arguments": "{\"city\":\"Paris\"}"}}]},
+    {"role": "tool", "tool_call_id": "tu1", "content": "21:00"}
+  ],
+  "tools": [
+    {"type": "function", "function": {"name": "get_time", "description": "Get time", "parameters": {"type": "object", "properties": {"city": {"type": "string"}}}}}
+  ],
+  "tool_choice": "auto"
+}

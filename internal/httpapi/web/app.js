@@ -67,6 +67,7 @@ const subtitles = {
   providers: 'Upstream pools, credentials, endpoints and per-provider capacity.',
   models: 'Per-deployment routing state: health, latency and failure tracking.',
   health: 'Live provider pressure and capability-scoped circuit evidence.',
+  compat: 'Per-model capability contracts and Claude Code readiness — separate from health.',
   cli: 'One-click connection snippets for coding agents and OpenAI-compatible tools.',
   settings: 'Hot-reloaded routing and probe configuration.'
 };
@@ -224,6 +225,7 @@ function render() {
   renderProviders(h);
   renderModels(ds, h);
   renderHealthTab(h);
+  renderCompat();
   renderConsole();
   $('#settingsJson').textContent = JSON.stringify(snap.config || {}, null, 2);
   // Cache + usage KPI cards (v0.5)
@@ -397,11 +399,55 @@ function renderHealthTab(h) {
   }).join('') || '<p class="hint">No capability-scoped failures observed. Scopes activate when streaming, tools, vision or reasoning requests fail on a deployment.</p>';
 }
 
+/* ---------- compat ---------- */
+function compatBadge(v) {
+  const cls = v === 'PASS' || v === 'healthy' ? 'healthy' : v === 'FAIL' ? 'cooldown' : 'unknown';
+  return `<span class="status ${cls}">${esc(v || 'UNKNOWN')}</span>`;
+}
+function renderCompat() {
+  const cards = snap.compat?.scorecards || [];
+  $('#compatRows').innerHTML = cards.map(c => {
+    const stCls = c.status === 'CLAUDE_CODE_READY' ? 'healthy' : c.status === 'CHAT_READY' ? 'degraded' : 'unknown';
+    return `<tr>
+      <td>${esc(c.deployment)}</td>
+      <td>${compatBadge(c.availability)}</td>
+      <td>${compatBadge(c.basic_chat)}</td>
+      <td>${compatBadge(c.streaming)}</td>
+      <td>${compatBadge(c.tools)}</td>
+      <td>${compatBadge(c.reasoning)}</td>
+      <td><span class="status ${stCls}">${esc(c.status)}</span></td>
+      <td style="color:var(--muted)">${esc(c.failure_reason || '—')}</td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="8" style="color:var(--muted)">No capability contracts yet — route traffic or run a probe.</td></tr>';
+  const sel = $('#compatDeploy');
+  const cur = sel.value;
+  const ids = (snap.deployments || []).map(d => d.id);
+  sel.innerHTML = ids.map(id => `<option value="${esc(id)}">${esc(id)}</option>`).join('') || '<option value="">no deployments</option>';
+  if (ids.includes(cur)) sel.value = cur;
+}
+async function runCompatProbe(mode) {
+  const dep = $('#compatDeploy').value;
+  if (!dep) { $('#compatProbeOut').textContent = 'No deployment selected.'; return; }
+  $('#compatProbeOut').textContent = mode + ' probe running against ' + dep + '…';
+  $('#compatProbeJson').textContent = '';
+  try {
+    const d = await api('/admin/api/compat/probe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ deployment: dep, mode }) });
+    $('#compatProbeOut').textContent = mode + ' probe finished for ' + dep + '.';
+    $('#compatProbeJson').textContent = JSON.stringify(d, null, 2);
+    refresh();
+  } catch (e) {
+    $('#compatProbeOut').textContent = 'Probe failed: ' + (e.message || e);
+  }
+}
+$('#compatQuickBtn').onclick = () => runCompatProbe('quick');
+$('#compatFullBtn').onclick = () => runCompatProbe('full');
+$('#compatAgentBtn').onclick = () => runCompatProbe('agent');
+
 /* ---------- console ---------- */
 const consoleKinds = {
-  routes: new Set(['route_ok', 'route_attempt', 'route_fail', 'route_skip', 'route_timeout', 'failover', 'client_disconnect', 'response_decode_fail', 'stream_fail', 'gateway_overloaded']),
-  errors: new Set(['route_fail', 'route_timeout', 'stream_fail', 'stream_fail_precommit', 'response_decode_fail', 'gateway_overloaded', 'internal_panic', 'client_disconnect', 'probe_fail', 'probe_quarantine', 'recovery_fail', 'recovery_queue_full']),
-  probes: new Set(['probe_ready', 'probe_fail', 'probe_quarantine', 'recovery_ready', 'recovery_fail', 'recovery_wait', 'recovery_deferred', 'recovery_cooldown', 'recovery_queue_full', 'stream_fail_precommit'])
+  routes: new Set(['route_ok', 'route_attempt', 'route_fail', 'route_skip', 'route_timeout', 'failover', 'client_disconnect', 'response_decode_fail', 'stream_fail', 'gateway_overloaded', 'compat_repair_ok', 'compat_repair_fail', 'compat_repair_error']),
+  errors: new Set(['route_fail', 'route_timeout', 'stream_fail', 'stream_fail_precommit', 'response_decode_fail', 'gateway_overloaded', 'internal_panic', 'client_disconnect', 'probe_fail', 'probe_quarantine', 'recovery_fail', 'recovery_queue_full', 'compat_repair_error']),
+  probes: new Set(['probe_ready', 'probe_fail', 'probe_quarantine', 'recovery_ready', 'recovery_fail', 'recovery_wait', 'recovery_deferred', 'recovery_cooldown', 'recovery_queue_full', 'stream_fail_precommit', 'compat_repair_ok', 'compat_repair_fail'])
 };
 function renderConsole() {
   const box = $('#consoleLog');
@@ -694,6 +740,8 @@ function fillForm() {
   $('#pId').value = p.id || '';
   $('#pId').disabled = editor.mode === 'edit';
   $('#pType').value = p.type || 'openai_compatible';
+  $('#pProtocol').value = p.protocol || '';
+  $('#pDialect').value = p.dialect || '';
   $('#pBase').value = p.base_url || '';
   // An empty auth_mode means "Auto (by provider type)", which ApplyDefaults
   // resolves server-side; preserve it instead of silently rewriting it to
@@ -772,6 +820,7 @@ function readForm() {
   });
   const p = {
     id: $('#pId').value.trim(), name: $('#pName').value.trim(), type: $('#pType').value,
+    protocol: $('#pProtocol').value, dialect: $('#pDialect').value,
     base_url: $('#pBase').value.trim(), api_key: $('#pKey').value, api_key_env: $('#pKeyEnv').value.trim(),
     credentials: creds, auth_mode: $('#pAuth').value, headers: hs,
     forward_headers: (() => {

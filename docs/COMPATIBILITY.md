@@ -1,4 +1,4 @@
-# Compatibility matrix — v0.5
+# Compatibility matrix — v0.5 + Compatibility Engine
 
 | Client ingress | Upstream | Text | Text streaming | Tools | Tool streaming | Reasoning | Images | Unknown native fields |
 |---|---|---:|---:|---:|---:|---:|---:|---|
@@ -6,6 +6,25 @@
 | Anthropic `/v1/messages` | OpenAI-compatible Chat Completions | Yes | Yes | Yes (reversible name mapping) | Parallel flows, real usage | `thinking` → `reasoning_effort` | Data URL + URL sources | Fields with a mapped meaning |
 | OpenAI `/v1/chat/completions` | OpenAI-compatible | Yes | Yes | Yes | Native passthrough | `reasoning_effort` passthrough | Provider-dependent | Preserved where possible |
 | OpenAI `/v1/chat/completions` | Anthropic-compatible | Yes (role alternation guaranteed) | Yes (role chunk first) | Yes (merged parallel tool results) | Yes (`{}`-padded args, reasoning deltas) | `reasoning_effort` → `thinking` budget | Data URL + URL sources | Fields with a mapped meaning |
+| OpenAI `/v1/responses` | OpenAI-compatible | Yes (via Canonical IR) | Non-streaming in this phase | Yes (function tools) | Planned | Via `reasoning_effort` mapping | Input image parts | Fields with a mapped meaning |
+| OpenAI `/v1/responses` | Anthropic-compatible | Yes (via Canonical IR) | Non-streaming in this phase | Yes | Planned | Via thinking mapping | Provider-dependent | Fields with a mapped meaning |
+
+Universal Compatibility Engine (per-deployment, separate from health):
+
+- tri-state capability contracts (SUPPORTED / UNSUPPORTED / UNKNOWN) with
+  provenance and conservative runtime learning — see `GET /admin/api/compat`;
+- structured error taxonomy: capability failures (unsupported parameter, tool
+  calling, reasoning, vision, structured output, context overflow) are
+  health-neutral and teach the contract instead of quarantining the model;
+- bounded repair (≤2 attempts): `max_completion_tokens → max_tokens`, drop
+  optional unsupported fields; semantics-critical fields are never dropped;
+- dialect registry (`generic_openai`, `nvidia_nim`, `deepseek`, `openrouter`,
+  `together`, `groq`, `generic_anthropic`, `custom`) selected per provider via
+  optional `dialect` / `protocol` fields (`auto` by default);
+- router filters REQUIRED capabilities verified UNSUPPORTED before any upstream
+  attempt; UNKNOWN stays eligible but loses score to verified alternatives;
+- Quick / Full / Claude Code agent compatibility probes at
+  `POST /admin/api/compat/probe`, plus the Compat dashboard tab.
 
 Additional Anthropic behavior:
 

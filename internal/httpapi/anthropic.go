@@ -107,6 +107,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		var streamOptionsInjected bool
 		var payload []byte
 		c, a, nm, streamOptionsInjected, payload = primary.c, primary.a, primary.nm, primary.injected, primary.payload
+		s.seedCompatContract(c.Deployment.ID, c.Deployment.Capabilities, c.Deployment.ProviderType)
 		attempts++
 		attemptIndex := attempts - 1
 		s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_attempt", Deployment: c.Deployment.ID, Message: fmt.Sprintf("attempt=%d score=%.2f health=%s pressure=%.3f", attempts, c.Score, c.Health.Status, c.CapacityPressure)})
@@ -121,6 +122,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		}
 		if out.secondaryWon {
 			c, a, nm, streamOptionsInjected, payload = winner.c, winner.a, winner.nm, winner.injected, winner.payload
+			s.seedCompatContract(c.Deployment.ID, c.Deployment.Capabilities, c.Deployment.ProviderType)
 			attempts++
 			attemptIndex = attempts - 1
 			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_attempt", Deployment: c.Deployment.ID, Message: fmt.Sprintf("attempt=%d score=%.2f health=%s pressure=%.3f (hedged winner)", attempts, c.Score, c.Health.Status, c.CapacityPressure)})
@@ -178,38 +180,46 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 			b, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
 			resp.Body.Close()
 			b = a.RedactBody(b)
-			lastStatus = resp.StatusCode
-			lastBody = b
-			lastContentType = resp.Header.Get("Content-Type")
-			lastErr = upstreamError(resp.StatusCode, b)
-			policy := policyForStatus(resp.StatusCode)
-			s.recordProviderFailure(c.Deployment.ProviderID, c.Deployment.ID, lastErr, policy)
-			if router.IsReadyStrategy(cfg.Routing.Strategy) {
-				if policy.QuarantineDeployment {
-					s.hm.Quarantine(c.Deployment.ID, lastErr, headerLatency)
-					s.probe.Recover(c.Deployment.ID)
+			// Bounded same-deployment repair (compat engine) before the
+			// error path below runs.
+			if repaired, _, _, good := s.maybeRepairUpstream(routeCtx, a, c.Deployment.ID, payload, in.Stream, forward, resp.StatusCode, b, r.Header.Get("x-request-id")); good {
+				resp = repaired
+			} else {
+				lastStatus = resp.StatusCode
+				lastBody = b
+				lastContentType = resp.Header.Get("Content-Type")
+				lastErr = upstreamError(resp.StatusCode, b)
+				policy := policyForStatus(resp.StatusCode)
+				policy, classified := classifyUpstreamFailureForPolicy(resp.StatusCode, b, policy)
+				s.recordCompatObservation(c.Deployment.ID, classified)
+				s.recordProviderFailure(c.Deployment.ProviderID, c.Deployment.ID, lastErr, policy)
+				if router.IsReadyStrategy(cfg.Routing.Strategy) {
+					if policy.QuarantineDeployment {
+						s.hm.Quarantine(c.Deployment.ID, lastErr, headerLatency)
+						s.probe.Recover(c.Deployment.ID)
+					}
+				} else if policy.HardCooldown {
+					d := cfg.Cooldown()
+					if resp.StatusCode == 429 {
+						d = retryAfterDuration(resp.Header, time.Duration(cfg.Routing.MaxRetryAfterSeconds)*time.Second)
+					}
+					s.hm.ForceCooldown(c.Deployment.ID, lastErr, d)
+				} else if policy.QuarantineDeployment {
+					s.hm.RecordFailure(c.Deployment.ID, lastErr, headerLatency)
 				}
-			} else if policy.HardCooldown {
-				d := cfg.Cooldown()
-				if resp.StatusCode == 429 {
-					d = retryAfterDuration(resp.Header, time.Duration(cfg.Routing.MaxRetryAfterSeconds)*time.Second)
+				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_fail", Deployment: c.Deployment.ID, Message: lastErr, ErrorType: policy.ErrorType, LatencyMS: headerLatency.Milliseconds(), StatusCode: resp.StatusCode})
+				if policy.Failover && attempts < max && i+1 < len(candidates) {
+					s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "failover", Deployment: c.Deployment.ID, Message: fmt.Sprintf("HTTP %d; trying next eligible candidate", resp.StatusCode), StatusCode: resp.StatusCode})
+					s.retryPause(routeCtx, r.Header.Get("x-request-id"), cfg, attemptIndex, max)
+					continue
 				}
-				s.hm.ForceCooldown(c.Deployment.ID, lastErr, d)
-			} else if policy.QuarantineDeployment {
-				s.hm.RecordFailure(c.Deployment.ID, lastErr, headerLatency)
-			}
-			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_fail", Deployment: c.Deployment.ID, Message: lastErr, ErrorType: policy.ErrorType, LatencyMS: headerLatency.Milliseconds(), StatusCode: resp.StatusCode})
-			if policy.Failover && attempts < max && i+1 < len(candidates) {
-				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "failover", Deployment: c.Deployment.ID, Message: fmt.Sprintf("HTTP %d; trying next eligible candidate", resp.StatusCode), StatusCode: resp.StatusCode})
-				s.retryPause(routeCtx, r.Header.Get("x-request-id"), cfg, attemptIndex, max)
-				continue
-			}
-			if c.Deployment.ProviderType == "anthropic_compatible" {
-				writeRawUpstreamError(w, lastStatus, lastContentType, lastBody)
+				if c.Deployment.ProviderType == "anthropic_compatible" {
+					writeRawUpstreamError(w, lastStatus, lastContentType, lastBody)
+					return
+				}
+				anthropicErrorJSON(w, resp.StatusCode, lastErr)
 				return
 			}
-			anthropicErrorJSON(w, resp.StatusCode, lastErr)
-			return
 		}
 
 		w.Header().Set("X-Gateway-Deployment", c.Deployment.ID)

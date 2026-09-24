@@ -21,6 +21,7 @@
       <button data-tab="providers" data-title="Providers"><span class="nav-ico">◈</span>Providers</button>
       <button data-tab="models" data-title="Model Deployments"><span class="nav-ico">▦</span>Models</button>
       <button data-tab="health" data-title="Health &amp; Pressure"><span class="nav-ico">♥</span>Health</button>
+      <button data-tab="compat" data-title="Compatibility"><span class="nav-ico">◍</span>Compat</button>
       <button data-tab="cli" data-title="CLI Tools"><span class="nav-ico">⌘</span>CLI Tools</button>
       <button data-tab="settings" data-title="Runtime Settings"><span class="nav-ico">⚙</span>Settings</button>
     </nav>
@@ -143,6 +144,28 @@
           <div class="panelhead"><div><h2>Capability evidence</h2><p>Scoped circuit health for streaming, tools, vision and reasoning.</p></div></div>
           <div id="scopeHealthList" class="scope-health"></div>
         </div>
+      </div>
+    </section>
+
+    <!-- ============ COMPAT ============ -->
+    <section id="compat" class="tab">
+      <div class="panel">
+        <div class="panelhead"><div><h2>Claude Code compatibility</h2><p>Per-model capability contracts: health stays separate from compatibility.</p></div><span class="live">LIVE</span></div>
+        <div class="tablewrap"><table>
+          <thead><tr><th>Deployment</th><th>Availability</th><th>Chat</th><th>Stream</th><th>Tools</th><th>Reasoning</th><th>Status</th><th>Failure reason</th></tr></thead>
+          <tbody id="compatRows"></tbody>
+        </table></div>
+      </div>
+      <div class="panel">
+        <div class="panelhead"><div><h2>Compatibility probe</h2><p>Quick: basic generation. Full: capability matrix. Agent: Claude Code tool loop.</p></div></div>
+        <div class="compat-probe-row">
+          <select id="compatDeploy" class="search"></select>
+          <button id="compatQuickBtn" class="btn secondary">Quick test</button>
+          <button id="compatFullBtn" class="btn secondary">Full compatibility test</button>
+          <button id="compatAgentBtn" class="btn primary">Claude Code agent test</button>
+        </div>
+        <div id="compatProbeOut" class="inline-status"></div>
+        <pre id="compatProbeJson" class="compat-json"></pre>
       </div>
     </section>
 
@@ -275,6 +298,27 @@
           <option value="openai_compatible">OpenAI Compatible — Chat Completions</option>
           <option value="anthropic_compatible">Anthropic Compatible — Messages</option>
         </select></label>
+        <div class="form-grid two">
+          <label class="field"><span>Protocol <small>(auto default)</small></span><select id="pProtocol">
+            <option value="">Auto (from endpoint type)</option>
+            <option value="auto">Auto-detect</option>
+            <option value="openai_chat">OpenAI Chat</option>
+            <option value="openai_responses">OpenAI Responses</option>
+            <option value="anthropic">Anthropic</option>
+            <option value="gemini">Gemini</option>
+          </select></label>
+          <label class="field"><span>Dialect / quirks <small>(auto default)</small></span><select id="pDialect">
+            <option value="">Auto (from provider identity)</option>
+            <option value="generic_openai">Generic OpenAI</option>
+            <option value="generic_anthropic">Generic Anthropic</option>
+            <option value="nvidia_nim">NVIDIA NIM</option>
+            <option value="deepseek">DeepSeek</option>
+            <option value="openrouter">OpenRouter</option>
+            <option value="together">Together</option>
+            <option value="groq">Groq</option>
+            <option value="custom">Custom (conservative)</option>
+          </select></label>
+        </div>
         <label class="field"><span>Base URL</span><input id="pBase" spellcheck="false" placeholder="http://127.0.0.1:5000/v1"></label>
         <div class="form-grid two">
           <label class="field"><span>Authentication</span><select id="pAuth">
