@@ -343,3 +343,22 @@ func TestLoggingValidationRejectsUnsafeRetention(t *testing.T) {
 		t.Fatal("unknown access logging mode should be rejected")
 	}
 }
+
+func TestModelPricingValidation(t *testing.T) {
+	cfg := Default()
+	cfg.Providers = []ProviderConfig{{
+		ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "https://example.com", Enabled: true,
+		Models: []ModelConfig{{
+			ID: "m", Model: "vendor/model", Enabled: true, Weight: 1,
+			Pricing: &PricingConfig{InputUSDPerMillion: 0.15, OutputUSDPerMillion: 0.6},
+		}},
+	}}
+	cfg.ApplyDefaults()
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("valid model pricing rejected: %v", err)
+	}
+	cfg.Providers[0].Models[0].Pricing.InputUSDPerMillion = -1
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "pricing.input_usd_per_million") {
+		t.Fatalf("negative pricing should fail validation, got %v", err)
+	}
+}
