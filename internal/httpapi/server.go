@@ -22,6 +22,7 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/probe"
 	"github.com/ali-shortcuts/nexaroute/internal/providers"
 	"github.com/ali-shortcuts/nexaroute/internal/router"
+	usageacct "github.com/ali-shortcuts/nexaroute/internal/usage"
 )
 
 //go:embed web/*
@@ -37,6 +38,7 @@ type Server struct {
 	hm              *health.Manager
 	bus             *events.Bus
 	probe           *probe.Engine
+	usage           *usageacct.Manager
 	log             *log.Logger
 	requestSeq      atomic.Uint64
 	requestTotal    atomic.Uint64
@@ -137,7 +139,7 @@ func New(cfg config.Config, configPath string, reg *providers.Registry, rt *rout
 		cfg.ProviderFailureWindow(),
 		cfg.ProviderCooldown(),
 	)
-	return &Server{cfg: cfg, configPath: configPath, reg: reg, rt: rt, hm: hm, bus: bus, probe: pe, log: l}
+	return &Server{cfg: cfg, configPath: configPath, reg: reg, rt: rt, hm: hm, bus: bus, probe: pe, usage: usageacct.New(), log: l}
 }
 
 func (s *Server) currentConfig() config.Config {
@@ -338,6 +340,7 @@ func (s *Server) applyConfigLocked(cfg config.Config) error {
 		}
 	}
 	s.hm.RetainProviders(validProviders)
+	s.usage.Retain(valid, validProviders)
 
 	changedHealth := changedDeploymentIDs(oldCfg, cfg)
 	oldProvidersByID := make(map[string]config.ProviderConfig, len(oldCfg.Providers))
