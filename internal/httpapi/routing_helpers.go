@@ -361,11 +361,20 @@ func (s *Server) prepareRequirement(req router.Requirement, r *http.Request, bod
 			cache[id] = router.ProviderLoad{}
 			return router.ProviderLoad{}
 		}
-		resetPending := st.RateLimitResetUnix > time.Now().Unix()
-		quotaExhausted := resetPending && (st.RemainingRequests == 0 || st.RemainingTokens == 0)
+		nowUnix := time.Now().Unix()
+		requestResetPending := st.RequestResetUnix > nowUnix
+		tokenResetPending := st.TokenResetUnix > nowUnix
+		// Backward compatibility for adapters/providers exposing only a shared
+		// reset deadline: use it for a zero-remaining hard signal, but never for
+		// ratio-based predictive pressure without a resource-specific deadline.
+		sharedResetPending := st.RateLimitResetUnix > nowUnix
+		quotaExhausted := (st.RemainingRequests == 0 && (requestResetPending || sharedResetPending)) ||
+			(st.RemainingTokens == 0 && (tokenResetPending || sharedResetPending))
 		quotaPressure := 0.0
-		if resetPending {
+		if requestResetPending {
 			quotaPressure = quotaRemainingPressure(st.RemainingRequests, st.RequestLimit)
+		}
+		if tokenResetPending {
 			if p := quotaRemainingPressure(st.RemainingTokens, st.TokenLimit); p > quotaPressure {
 				quotaPressure = p
 			}
