@@ -1,4 +1,4 @@
-# Roadmap — after the current v0.5.2 baseline
+# Roadmap — after the current v0.5.3 baseline
 
 The current v0.5 baseline includes everything v0.4 shipped (verified-ready routing, session affinity, provider/credential P2C selection, capability-aware circuits, supervised recovery, bounded admission, hot reload, provider discovery/testing, embedded UI, Linux/Docker packaging) plus provider incident circuits, quota hints, TTFT telemetry, request hedging, an opt-in exact-match response cache, opt-in client API keys, context-window-aware pre-routing, and usage/cost accounting.
 
