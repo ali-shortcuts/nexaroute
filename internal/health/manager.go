@@ -34,6 +34,7 @@ type State struct {
 	Failures            int64                 `json:"failures"`
 	ConsecutiveFailures int                   `json:"consecutive_failures"`
 	EWMALatencyMS       float64               `json:"ewma_latency_ms"`
+	EWMAFailureRate     float64               `json:"ewma_failure_rate"`
 	LastChecked         time.Time             `json:"last_checked"`
 	LastSuccess         time.Time             `json:"last_success"`
 	LastFailure         time.Time             `json:"last_failure"`
@@ -173,12 +174,28 @@ func updateEWMA(s *State, latency time.Duration) {
 	}
 }
 
+func updateFailureEWMA(s *State, failed bool) {
+	sample := 0.0
+	if failed {
+		sample = 1
+	}
+	if s.Successes+s.Failures <= 1 {
+		s.EWMAFailureRate = sample
+		return
+	}
+	// Keep recent reliability meaningful without permanently penalizing a
+	// deployment for failures that happened far in the past. The same 0.25
+	// observation weight used for latency keeps the signal stable but adaptive.
+	s.EWMAFailureRate = s.EWMAFailureRate*0.75 + sample*0.25
+}
+
 func (m *Manager) RecordSuccess(id string, latency time.Duration) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	s := m.states[id]
 	s.Deployment = id
 	s.Successes++
+	updateFailureEWMA(&s, false)
 	s.ConsecutiveFailures = 0
 	s.RecoveryFailures = 0
 	s.Status = Healthy
@@ -196,6 +213,7 @@ func (m *Manager) RecordFailure(id, errMsg string, latency time.Duration) {
 	s := m.states[id]
 	s.Deployment = id
 	s.Failures++
+	updateFailureEWMA(&s, true)
 	s.ConsecutiveFailures++
 	s.LastChecked = time.Now()
 	s.LastFailure = s.LastChecked
@@ -248,6 +266,7 @@ func (m *Manager) Quarantine(id, reason string, latency time.Duration) {
 	s := m.states[id]
 	s.Deployment = id
 	s.Failures++
+	updateFailureEWMA(&s, true)
 	s.ConsecutiveFailures++
 	s.RecoveryFailures = 0
 	s.Status = Degraded
@@ -265,6 +284,7 @@ func (m *Manager) RecordRecoveryFailure(id, reason string, latency time.Duration
 	s := m.states[id]
 	s.Deployment = id
 	s.Failures++
+	updateFailureEWMA(&s, true)
 	s.ConsecutiveFailures++
 	s.RecoveryFailures++
 	s.Status = Degraded
@@ -300,6 +320,7 @@ func (m *Manager) ForceCooldown(id, reason string, d time.Duration) {
 	s := m.states[id]
 	s.Deployment = id
 	s.Failures++
+	updateFailureEWMA(&s, true)
 	s.ConsecutiveFailures++
 	s.Status = Cooldown
 	s.LastChecked = time.Now()

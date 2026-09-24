@@ -391,3 +391,37 @@ func TestProviderTypeRequirementFiltersCandidates(t *testing.T) {
 		t.Fatalf("provider type requirement ignored: %#v", got)
 	}
 }
+
+func TestReadyMeshDiversifiesFailoverAcrossProviders(t *testing.T) {
+	cfg := config.Default()
+	cfg.Routing.Strategy = "ready_mesh"
+	cfg.Routing.P2CWindow = 1
+	cfg.Providers = []config.ProviderConfig{
+		{ID: "p1", Name: "P1", Type: "openai_compatible", BaseURL: "http://p1.invalid", Enabled: true, Models: []config.ModelConfig{
+			{ID: "a", Model: "a", Enabled: true, Priority: 0, Weight: 1},
+			{ID: "b", Model: "b", Enabled: true, Priority: 0, Weight: 1},
+		}},
+		{ID: "p2", Name: "P2", Type: "openai_compatible", BaseURL: "http://p2.invalid", Enabled: true, Models: []config.ModelConfig{
+			{ID: "c", Model: "c", Enabled: true, Priority: 0, Weight: 1},
+		}},
+	}
+	h := health.New(5, time.Hour)
+	h.RecordSuccess("p1/a", time.Millisecond)
+	h.RecordSuccess("p1/b", 2*time.Millisecond)
+	h.RecordSuccess("p2/c", 3*time.Millisecond)
+	r := New(cfg, h)
+
+	got := r.Candidates(Requirement{Model: "auto", SelectionKey: "stable"})
+	if len(got) != 3 {
+		t.Fatalf("want 3 candidates got %d", len(got))
+	}
+	if got[0].Deployment.ID != "p1/a" {
+		t.Fatalf("primary quality selection changed unexpectedly: %#v", got)
+	}
+	if got[1].Deployment.ProviderID != "p2" {
+		t.Fatalf("first failover should leave the failed provider domain: %#v", got)
+	}
+	if got[2].Deployment.ID != "p1/b" {
+		t.Fatalf("same-provider fallback should remain available after diversification: %#v", got)
+	}
+}

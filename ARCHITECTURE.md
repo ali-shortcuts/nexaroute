@@ -75,7 +75,7 @@ A deployment includes:
 - priority and weight
 - capability flags
 - health status
-- EWMA latency
+- EWMA latency and recency-weighted failure rate
 - success/failure counters
 - consecutive failure count
 - cooldown deadline
@@ -243,3 +243,14 @@ Ready Mesh keeps the request path deterministic and network-free at selection ti
 - The handler revalidates each candidate immediately before an attempt, closing the stale-candidate window during concurrent quarantine or hot reload.
 
 This is deliberately not an opaque learned router in the data plane. Task awareness comes from explicit request capabilities and configured aliases/profiles so routing decisions remain explainable and regression-testable.
+
+
+## Failure-domain-aware fallback ordering
+
+For `ready_mesh`, primary selection still follows health, capability, priority,
+session affinity, score and live capacity. After the primary is fixed, fallback
+candidates are diversified across provider IDs within the same priority tier
+whenever possible. This reduces correlated retry storms when one provider is
+experiencing a regional, authentication, quota or transport incident, while
+keeping same-provider deployments available after independent failure domains
+have been tried.

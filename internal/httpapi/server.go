@@ -119,13 +119,14 @@ func changedProviderAdapterIDs(oldCfg, newCfg config.Config) map[string]struct{}
 	for _, p := range oldCfg.Providers {
 		oldProviders[p.ID] = p
 	}
-	timeoutChanged := oldCfg.Routing.RequestTimeoutMS != newCfg.Routing.RequestTimeoutMS
+	adapterPolicyChanged := oldCfg.Routing.RequestTimeoutMS != newCfg.Routing.RequestTimeoutMS ||
+		oldCfg.Routing.MaxRetryAfterSeconds != newCfg.Routing.MaxRetryAfterSeconds
 	for _, np := range newCfg.Providers {
 		if !np.Enabled {
 			continue
 		}
 		op, ok := oldProviders[np.ID]
-		if timeoutChanged || !ok || !op.Enabled || !providerAdapterIdentityEqual(op, np) {
+		if adapterPolicyChanged || !ok || !op.Enabled || !providerAdapterIdentityEqual(op, np) {
 			changed[np.ID] = struct{}{}
 		}
 	}

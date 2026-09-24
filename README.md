@@ -51,8 +51,9 @@ Implemented resilience:
 - virtual catch-all models `auto` and `claude-auto`
 - optional fallback when the client asks for an unknown model
 - weighted and priority-aware deployment selection
-- EWMA latency and failure-rate scoring
+- EWMA latency and recency-weighted failure-rate scoring
 - retries/failover before response bytes are committed
+- provider-diverse failover ordering inside each priority tier to reduce correlated retry storms
 - failover on transport errors, selected 4xx provider/auth failures, `429`, and retryable `5xx`
 - `Retry-After` handling with a configurable cap
 - per-deployment circuit breaker
