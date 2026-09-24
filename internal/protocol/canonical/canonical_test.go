@@ -608,3 +608,24 @@ func TestResponsesCompletedWithFunctionCallSignalsToolUse(t *testing.T) {
 		t.Fatalf("completed response emitted no StreamEnd: %+v", evs)
 	}
 }
+
+func TestAnthropicEmitterPreservesStopSequenceReason(t *testing.T) {
+	rr := httptest.NewRecorder()
+	emitter := NewAnthropicEmitter(rr, "model", "req-stop-sequence")
+	if err := emitter.Emit(StreamEvent{Type: StreamText, Text: "done"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := emitter.Emit(StreamEvent{Type: StreamEnd, StopReason: StopStopSequence}); err != nil {
+		t.Fatal(err)
+	}
+	if err := emitter.Finish(); err != nil {
+		t.Fatal(err)
+	}
+	out := rr.Body.String()
+	if !strings.Contains(out, `"stop_reason":"stop_sequence"`) {
+		t.Fatalf("stop_sequence reason was not preserved: %s", out)
+	}
+	if strings.Contains(out, `"stop_reason":"max_tokens"`) {
+		t.Fatalf("stop_sequence was incorrectly reported as max_tokens: %s", out)
+	}
+}
