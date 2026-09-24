@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -21,7 +22,7 @@ const burstOpenAIResponse = `{"id":"c","object":"chat.completion","created":1,"m
 const burstChatBody = `{"model":"client","messages":[{"role":"user","content":"hi"}],"stream":false}`
 
 func burstProvider(id string, baseURL string, maxConcurrency int, priority int) config.ProviderConfig {
-	return config.ProviderConfig{ID: id, Name: id, Type: "openai_compatible", BaseURL: baseURL, AuthMode: "none", Enabled: true, MaxConcurrency: maxConcurrency, Models: []config.ModelConfig{{ID: "m", Model: "upstream", Aliases: []string{"client"}, Enabled: true, Priority: priority, Weight: 1}}}
+	return config.ProviderConfig{ID: id, Name: id, Type: "openai_compatible", BaseURL: baseURL, AuthMode: "none", Enabled: true, MaxConcurrency: maxConcurrency, Models: []config.ModelConfig{{ID: "m", Model: "upstream", Aliases: []string{"client"}, Enabled: true, Priority: priority, Weight: 1, Capabilities: config.Capabilities{Streaming: true, Tools: true}}}}
 }
 
 func burstPost(t *testing.T, s *Server, rid string) *httptest.ResponseRecorder {
@@ -133,6 +134,125 @@ func TestAdmissionQueueZeroWaitsUntilClientGone(t *testing.T) {
 	}
 	if code := <-firstDone; code != 200 {
 		t.Fatalf("first request status=%d want 200", code)
+	}
+}
+
+// A single provider at max_concurrency must queue the extra sub-agent until a
+// slot frees (timeout 0) instead of returning 503 all-saturated.
+func TestProviderQueueZeroWaitsOnSingleProvider(t *testing.T) {
+	release := make(chan struct{})
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-release:
+		case <-r.Context().Done():
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, burstOpenAIResponse)
+	}))
+	defer up.Close()
+	cfg := config.Default()
+	cfg.Probe.Enabled = false
+	cfg.Routing.MaxInflightRequests = 16
+	cfg.Routing.AdmissionQueueTimeoutMS = 0
+	cfg.Routing.ProviderQueueTimeoutMS = 0
+	cfg.Providers = []config.ProviderConfig{burstProvider("p", up.URL, 1, 0)}
+	s := testGateway(t, cfg)
+
+	firstDone := make(chan int, 1)
+	go func() { firstDone <- burstPost(t, s, "prov-first").Code }()
+	deadline := time.Now().Add(2 * time.Second)
+	for s.inflight.Load() < 1 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	secondDone := make(chan int, 1)
+	go func() { secondDone <- burstPost(t, s, "prov-second").Code }()
+	select {
+	case code := <-secondDone:
+		t.Fatalf("second request returned %d while the only slot was busy; 0 must wait", code)
+	case <-time.After(150 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case code := <-secondDone:
+		if code != 200 {
+			t.Fatalf("queued provider wait status=%d want 200", code)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("queued provider wait never drained")
+	}
+	if code := <-firstDone; code != 200 {
+		t.Fatalf("first request status=%d want 200", code)
+	}
+	if got := burstKinds(s, "gateway_overloaded"); got != 0 {
+		t.Fatalf("gateway_overloaded events=%d want 0", got)
+	}
+}
+
+const burstStreamBody = `{"model":"client","stream":true,"max_tokens":128,"messages":[{"role":"user","content":"hi"}]}`
+
+func tokenBurstUpstream(chunks int) *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(200)
+		fl, _ := w.(http.Flusher)
+		if fl != nil {
+			fl.Flush()
+		}
+		for i := 0; i < chunks; i++ {
+			fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"content\":\"tok-%d-xxxxxxxx\"}}]}\n\n", i)
+			if fl != nil {
+				fl.Flush()
+			}
+		}
+		io.WriteString(w, "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n")
+		io.WriteString(w, "data: [DONE]\n\n")
+		if fl != nil {
+			fl.Flush()
+		}
+	}))
+}
+
+// Parallel streaming sub-agents must all complete with 200 — more tokens and
+// more concurrent requests must not 503 or truncate.
+func TestParallelSubAgentStreamsAllComplete(t *testing.T) {
+	up := tokenBurstUpstream(80)
+	defer up.Close()
+	cfg := config.Default()
+	cfg.Probe.Enabled = false
+	cfg.Routing.MaxInflightRequests = 4
+	cfg.Routing.AdmissionQueueTimeoutMS = 0
+	cfg.Routing.ProviderQueueTimeoutMS = 0
+	cfg.Providers = []config.ProviderConfig{burstProvider("p", up.URL, 2, 0)}
+	s := testGateway(t, cfg)
+
+	const n = 12
+	var wg sync.WaitGroup
+	var ok, other atomic.Int32
+	start := make(chan struct{})
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			req := httptest.NewRequest("POST", "http://gateway/v1/chat/completions", strings.NewReader(burstStreamBody))
+			req.Header.Set("content-type", "application/json")
+			rr := httptest.NewRecorder()
+			s.Handler().ServeHTTP(rr, req)
+			if rr.Code == 200 && strings.Contains(rr.Body.String(), "tok-79") && strings.Contains(rr.Body.String(), "[DONE]") {
+				ok.Add(1)
+				return
+			}
+			other.Add(1)
+		}()
+	}
+	close(start)
+	wg.Wait()
+	if ok.Load() != n {
+		t.Fatalf("parallel streams ok=%d other=%d want %d all 200 with full token bodies", ok.Load(), other.Load(), n)
+	}
+	if got := s.inflight.Load(); got != 0 {
+		t.Fatalf("inflight leaked: %d", got)
 	}
 }
 

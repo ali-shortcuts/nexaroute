@@ -87,9 +87,10 @@ Tuning for parallel-agent bursts: keep `max_inflight_requests` above the
 expected parallelism (default 256). `admission_queue_timeout_ms` default `0`
 waits until the caller disconnects, so a live Claude Code session (main
 agent + sub-agents) is served instead of 503'd while it is still waiting.
-A positive value is an optional cap. Keep the provider queue timeout
-(default 30s) well under the request timeout so a spill still has budget
-to complete elsewhere. Stream idle default is 600s so thinking models that
+A positive value is an optional cap. `provider_queue_timeout_ms` default `0`
+waits the whole route budget on a busy provider (Claude Code + one
+upstream queues extra sub-agents); a positive value spills to the next
+candidate. Stream idle default is 600s so thinking models that
 pause between tokens are not killed. Request/response caps: 32 MB ingress
 JSON, 64 MB upstream JSON, 32 MB per SSE line — large enough for long
 agentic turns and multi-MB `tool_use` payloads. The gateway never overrides

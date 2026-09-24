@@ -242,7 +242,7 @@ func Default() Config {
 			RequestTimeoutMS: 120000, AttemptTimeoutMS: 0, LatencyWeight: 0.015, FailureWeight: 25, CapacityWeight: 35,
 			RetryBackoffMS: 150, MaxRetryAfterSeconds: 60,
 			HedgeDelayMS: 0, RetryBudgetRatio: 0.2, StreamMaxDurationSeconds: 1800,
-			AdmissionQueueTimeoutMS: 0, ProviderQueueTimeoutMS: 30000,
+			AdmissionQueueTimeoutMS: 0, ProviderQueueTimeoutMS: 0,
 		},
 		Probe: ProbeConfig{Enabled: true, OnStart: true, IntervalSeconds: 120, ReadyLeaseSeconds: 300, TimeoutMS: 8000, MaxTokens: 1, Concurrency: 16, RecoveryAttempts: 5, RecoveryRetryMS: 500},
 	}
@@ -729,7 +729,8 @@ func (c Config) AdmissionQueueTimeout() time.Duration {
 
 // ProviderQueueTimeout bounds how long one upstream attempt waits for a
 // provider concurrency slot before spilling over to the next candidate. 0
-// waits for the whole route budget.
+// waits for the whole route budget so a single-provider Claude Code setup
+// queues sub-agents instead of 503'ing when every slot is busy.
 func (c Config) ProviderQueueTimeout() time.Duration {
 	return time.Duration(c.Routing.ProviderQueueTimeoutMS) * time.Millisecond
 }
