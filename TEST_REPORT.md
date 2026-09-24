@@ -1,4 +1,4 @@
-# Current verification contract — NexaRoute v0.4
+# Current verification contract — NexaRoute v0.4.2
 
 This document describes the current verification contract, not historical CI snapshots. Old run-specific reports were removed because they become stale as soon as the code changes.
 
