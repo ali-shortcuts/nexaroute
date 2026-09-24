@@ -10,6 +10,7 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/compat"
 	"github.com/ali-shortcuts/nexaroute/internal/events"
 	"github.com/ali-shortcuts/nexaroute/internal/protocol/canonical"
+	"github.com/ali-shortcuts/nexaroute/internal/providers"
 	"github.com/ali-shortcuts/nexaroute/internal/router"
 )
 
@@ -59,12 +60,20 @@ func (s *Server) canonicalStreamPump(
 	w http.ResponseWriter,
 	resp *http.Response,
 	kind, clientProtocol, requestedModel, requestID string,
+	usageHook func(input, output int),
 ) error {
+	// The adapter holds provider capacity, credential load and any local quota
+	// reservation until the response body reaches EOF or is explicitly closed.
+	// Early decoder/client-write failures therefore must close the body here.
+	defer resp.Body.Close()
+
 	fl, _ := w.(http.Flusher)
 	emitter := canonical.NewStreamEmitter(clientProtocol, w, requestedModel, requestID)
 	reader := canonical.NewSSEReader(resp.Body)
 	terminal := false
 	var streamErr error
+	inputTokens, outputTokens := 0, 0
+	usageSeen := false
 	for {
 		name, data, done, err := reader.Next()
 		if err != nil {
@@ -94,6 +103,17 @@ func (s *Server) canonicalStreamPump(
 			break
 		}
 		for _, ev := range evs {
+			if ev.Usage != nil {
+				if ev.Usage.InputTokens > inputTokens {
+					inputTokens = ev.Usage.InputTokens
+				}
+				if ev.Usage.OutputTokens > outputTokens {
+					outputTokens = ev.Usage.OutputTokens
+				}
+				if ev.Usage.InputTokens > 0 || ev.Usage.OutputTokens > 0 {
+					usageSeen = true
+				}
+			}
 			if ev.Type == canonical.StreamError {
 				streamErr = fmt.Errorf("upstream stream error: %s", ev.ErrorMsg)
 			}
@@ -113,6 +133,9 @@ func (s *Server) canonicalStreamPump(
 	if finErr := emitter.Finish(); finErr != nil && streamErr == nil {
 		streamErr = finErr
 	}
+	if streamErr == nil && terminal && usageHook != nil && usageSeen {
+		usageHook(inputTokens, outputTokens)
+	}
 	_ = fl
 	return streamErr
 }
@@ -128,7 +151,7 @@ func (s *Server) handleCanonicalResponse(
 	usageHook func(input, output int),
 ) error {
 	if stream {
-		return s.canonicalStreamPump(w, resp, kind, clientProtocol, requestedModel, requestID)
+		return s.canonicalStreamPump(w, resp, kind, clientProtocol, requestedModel, requestID, usageHook)
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	resp.Body.Close()
@@ -219,7 +242,9 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 		Streaming: reqReqs.Streaming, Reasoning: reqReqs.Reasoning,
 	}
 	inspection := inspectRequestJSON(raw, "input_image", []string{"reasoning"})
-	req.MinContextWindow = inspection.EstimatedPromptTokens + in.MaxOutputTokens
+	req.EstimatedInputTokens = inspection.EstimatedPromptTokens
+	req.MaxOutputTokens = in.MaxOutputTokens
+	req.MinContextWindow = req.EstimatedInputTokens + req.MaxOutputTokens
 	req = s.prepareRequirement(req, r, inspection.BodySessionKey)
 	cfg, candidates := s.routeSnapshot(req)
 	if len(candidates) == 0 {
@@ -231,6 +256,7 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 		max = len(candidates)
 	}
 	routeCtx, routeCancel := routeContext(r.Context(), req.Streaming, cfg.RequestTimeout())
+	routeCtx = providers.WithQuotaEstimate(routeCtx, req.EstimatedInputTokens, req.MaxOutputTokens)
 	defer routeCancel()
 	forward := copySelectedRequestHeaders(r)
 	profile := profileFromRequirement(req, &canReq)
@@ -330,7 +356,8 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 		sent := sentPayload
 		var usageErr error
 		if canReq.Stream {
-			usageErr = s.canonicalStreamPump(w, resp, bundle.canonicalKind, "openai_responses", in.Model, r.Header.Get("x-request-id"))
+			usageErr = s.canonicalStreamPump(w, resp, bundle.canonicalKind, "openai_responses", in.Model, r.Header.Get("x-request-id"),
+				func(input, output int) { s.usage.Record(deploy.ID, int64(input), int64(output)) })
 		} else {
 			usageErr = s.handleCanonicalResponse(w, resp, bundle.canonicalKind, "openai_responses", in.Model, r.Header.Get("x-request-id"), false,
 				func(input, output int) { s.usage.Record(deploy.ID, int64(input), int64(output)) })
