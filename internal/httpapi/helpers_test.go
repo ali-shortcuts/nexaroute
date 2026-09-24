@@ -1075,6 +1075,20 @@ func TestQuotaRemainingPressureStartsBelowQuarterBudget(t *testing.T) {
 	}
 }
 
+func TestProviderEditButtonsUseCollectionSelector(t *testing.T) {
+	app, err := webFS.ReadFile("web/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	js := string(app)
+	if strings.Contains(js, "$('.edit-provider').forEach") {
+		t.Fatal("provider edit binding uses single-element selector with forEach")
+	}
+	if !strings.Contains(js, "$$('.edit-provider').forEach") {
+		t.Fatal("provider edit binding is missing the collection selector")
+	}
+}
+
 func TestEmbeddedUIExposesCostAwareStrategy(t *testing.T) {
 	index, err := webFS.ReadFile("web/index.html")
 	if err != nil {
