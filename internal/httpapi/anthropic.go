@@ -136,6 +136,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if gatewayDeadlineExceeded(routeCtx, r.Context()) {
+				s.hm.RecordProviderFailure(c.Deployment.ProviderID, c.Deployment.ID, lastErr)
 				if router.IsReadyStrategy(cfg.Routing.Strategy) {
 					s.hm.Quarantine(c.Deployment.ID, lastErr, headerLatency)
 					s.probe.Recover(c.Deployment.ID)
@@ -145,6 +146,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_timeout", Deployment: c.Deployment.ID, Message: lastErr, ErrorType: "provider_timeout", LatencyMS: headerLatency.Milliseconds()})
 				break
 			}
+			s.hm.RecordProviderFailure(c.Deployment.ProviderID, c.Deployment.ID, lastErr)
 			if router.IsReadyStrategy(cfg.Routing.Strategy) {
 				s.hm.Quarantine(c.Deployment.ID, lastErr, headerLatency)
 				s.probe.Recover(c.Deployment.ID)
@@ -166,22 +168,24 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 			lastBody = b
 			lastContentType = resp.Header.Get("Content-Type")
 			lastErr = upstreamError(resp.StatusCode, b)
+			policy := policyForStatus(resp.StatusCode)
+			s.recordProviderFailure(c.Deployment.ProviderID, c.Deployment.ID, lastErr, policy)
 			if router.IsReadyStrategy(cfg.Routing.Strategy) {
-				if failoverEligible(resp.StatusCode) {
+				if policy.QuarantineDeployment {
 					s.hm.Quarantine(c.Deployment.ID, lastErr, headerLatency)
 					s.probe.Recover(c.Deployment.ID)
 				}
-			} else if hardCooldownStatus(resp.StatusCode) {
+			} else if policy.HardCooldown {
 				d := cfg.Cooldown()
 				if resp.StatusCode == 429 {
 					d = retryAfterDuration(resp.Header, time.Duration(cfg.Routing.MaxRetryAfterSeconds)*time.Second)
 				}
 				s.hm.ForceCooldown(c.Deployment.ID, lastErr, d)
-			} else {
+			} else if policy.QuarantineDeployment {
 				s.hm.RecordFailure(c.Deployment.ID, lastErr, headerLatency)
 			}
-			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_fail", Deployment: c.Deployment.ID, Message: lastErr, ErrorType: errorTypeForStatus(resp.StatusCode), LatencyMS: headerLatency.Milliseconds(), StatusCode: resp.StatusCode})
-			if failoverEligible(resp.StatusCode) && attempts < max && i+1 < len(candidates) {
+			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_fail", Deployment: c.Deployment.ID, Message: lastErr, ErrorType: policy.ErrorType, LatencyMS: headerLatency.Milliseconds(), StatusCode: resp.StatusCode})
+			if policy.Failover && attempts < max && i+1 < len(candidates) {
 				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "failover", Deployment: c.Deployment.ID, Message: fmt.Sprintf("HTTP %d; trying next eligible candidate", resp.StatusCode), StatusCode: resp.StatusCode})
 				s.retryPause(routeCtx, r.Header.Get("x-request-id"), cfg, attemptIndex, max)
 				continue
@@ -197,6 +201,10 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Gateway-Deployment", c.Deployment.ID)
 		w.Header().Set("X-Gateway-Provider", c.Deployment.ProviderID)
 		w.Header().Set("X-Gateway-Upstream-Model", c.Deployment.Model)
+		if in.Stream {
+			deploymentID := c.Deployment.ID
+			resp.Body = observeFirstByte(resp.Body, start, func(d time.Duration) { s.hm.RecordTTFT(deploymentID, d) })
+		}
 		if c.Deployment.ProviderType == "anthropic_compatible" {
 			if in.Stream {
 				e = proxyNativeSSE(w, resp, "anthropic")
@@ -255,11 +263,12 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 			} else {
 				s.hm.RecordFailure(c.Deployment.ID, lastErr, totalLatency)
 			}
+			s.hm.RecordProviderFailure(c.Deployment.ProviderID, c.Deployment.ID, lastErr)
 			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "stream_fail", Deployment: c.Deployment.ID, Message: lastErr, ErrorType: "provider_stream_error", LatencyMS: totalLatency.Milliseconds(), StatusCode: resp.StatusCode})
 			// Once a successful upstream response has begun, do not attempt fake mid-stream failover.
 			return
 		}
-		s.recordRouteSuccess(req, c.Deployment.ID, headerLatency)
+		s.recordRouteSuccess(req, c.Deployment.ID, c.Deployment.ProviderID, headerLatency)
 		s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_ok", Deployment: c.Deployment.ID, Message: "request completed", LatencyMS: totalLatency.Milliseconds(), StatusCode: resp.StatusCode})
 		return
 	}
