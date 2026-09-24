@@ -56,6 +56,13 @@ type ResponsesItem struct {
 // Input accepts either a plain string, a list of content strings/objects, or
 // the full item list (message / function_call / function_call_output items).
 func DecodeResponsesRequest(in ResponsesRequest) (Request, error) {
+	if in.PreviousResponseID != "" {
+		return Request{}, fmt.Errorf("previous_response_id is not supported; send the complete conversation in input")
+	}
+	if in.Store != nil && *in.Store {
+		return Request{}, fmt.Errorf("stored Responses are not supported; use store=false")
+	}
+
 	out := Request{
 		Model:           in.Model,
 		Stream:          in.Stream,
@@ -88,8 +95,9 @@ func DecodeResponsesRequest(in ResponsesRequest) (Request, error) {
 			b, _ := json.Marshal(schema)
 			out.Tools = append(out.Tools, ToolDef{Name: t.Name, Description: t.Description, Parameters: b})
 		}
-		// Built-in tools (web_search, computer_use, ...) carry no canonical
-		// equivalent; they are dropped rather than failing the request.
+		if t.Type != "function" && t.Type != "" {
+			return Request{}, fmt.Errorf("tool type %q is not supported by this gateway", t.Type)
+		}
 	}
 	out.ToolChoice = decodeOpenAIToolChoice(in.ToolChoice)
 	out.ParallelToolCalls = in.ParallelToolCalls
@@ -414,6 +422,12 @@ func DecodeResponsesResponse(b []byte) (Response, error) {
 	if err := json.Unmarshal(b, &in); err != nil {
 		return Response{}, fmt.Errorf("invalid Responses body: %w", err)
 	}
+	if in.Status == "failed" || in.Status == "cancelled" || in.Status == "queued" || in.Status == "in_progress" {
+		return Response{}, fmt.Errorf("upstream Responses status %q is not a completed synchronous response", in.Status)
+	}
+	if in.Output == nil {
+		return Response{}, fmt.Errorf("upstream Responses output is missing")
+	}
 	out := Response{ID: in.ID, Model: in.Model, StopReason: StopEndTurn, Raw: append(json.RawMessage(nil), b...)}
 	for _, item := range in.Output {
 		switch item.Type {
@@ -551,40 +565,45 @@ func DecodeResponsesStreamEvent(eventName, data string) ([]StreamEvent, bool, er
 	switch typ {
 	case "response.output_text.delta":
 		var ev struct {
-			Delta string `json:"delta"`
+			Delta       string `json:"delta"`
+			OutputIndex int    `json:"output_index"`
 		}
 		if json.Unmarshal([]byte(d), &ev) == nil && ev.Delta != "" {
 			return []StreamEvent{{Type: StreamText, Text: ev.Delta}}, false, nil
 		}
 	case "response.reasoning_summary_text.delta", "response.reasoning_text.delta":
 		var ev struct {
-			Delta string `json:"delta"`
+			Delta       string `json:"delta"`
+			OutputIndex int    `json:"output_index"`
 		}
 		if json.Unmarshal([]byte(d), &ev) == nil && ev.Delta != "" {
 			return []StreamEvent{{Type: StreamThinking, Text: ev.Delta}}, false, nil
 		}
 	case "response.output_item.added":
 		var ev struct {
-			Item ResponsesOutputItem `json:"item"`
+			Item        ResponsesOutputItem `json:"item"`
+			OutputIndex int                 `json:"output_index"`
 		}
 		if json.Unmarshal([]byte(d), &ev) == nil && ev.Item.Type == "function_call" {
-			return []StreamEvent{{Type: StreamToolStart, ToolIndex: 0, ToolID: ev.Item.CallID, ToolName: ev.Item.Name}}, false, nil
+			return []StreamEvent{{Type: StreamToolStart, ToolIndex: ev.OutputIndex, ToolID: ev.Item.CallID, ToolName: ev.Item.Name}}, false, nil
 		}
 	case "response.function_call_arguments.delta":
 		var ev struct {
-			Delta string `json:"delta"`
+			Delta       string `json:"delta"`
+			OutputIndex int    `json:"output_index"`
 		}
 		if json.Unmarshal([]byte(d), &ev) == nil && ev.Delta != "" {
-			return []StreamEvent{{Type: StreamToolDelta, ToolIndex: 0, ArgsDelta: ev.Delta}}, false, nil
+			return []StreamEvent{{Type: StreamToolDelta, ToolIndex: ev.OutputIndex, ArgsDelta: ev.Delta}}, false, nil
 		}
 	case "response.output_item.done":
 		var ev struct {
-			Item ResponsesOutputItem `json:"item"`
+			Item        ResponsesOutputItem `json:"item"`
+			OutputIndex int                 `json:"output_index"`
 		}
 		if json.Unmarshal([]byte(d), &ev) == nil && ev.Item.Type == "function_call" {
-			return []StreamEvent{{Type: StreamToolEnd, ToolIndex: 0}}, false, nil
+			return []StreamEvent{{Type: StreamToolEnd, ToolIndex: ev.OutputIndex}}, false, nil
 		}
-	case "response.failed", "response.incomplete", "error":
+	case "response.failed", "error":
 		var ev struct {
 			Response struct {
 				Error map[string]any `json:"error"`
@@ -602,7 +621,7 @@ func DecodeResponsesStreamEvent(eventName, data string) ([]StreamEvent, bool, er
 			}
 		}
 		return []StreamEvent{{Type: StreamError, ErrorCode: code, ErrorMsg: msg}}, true, nil
-	case "response.completed", "response.done":
+	case "response.completed", "response.done", "response.incomplete":
 		var ev struct {
 			Response struct {
 				Usage *ResponsesUsage `json:"usage"`
@@ -620,7 +639,11 @@ func DecodeResponsesStreamEvent(eventName, data string) ([]StreamEvent, bool, er
 			}
 			events = append(events, StreamEvent{Type: StreamUsage, Usage: &u})
 		}
-		events = append(events, StreamEvent{Type: StreamEnd, StopReason: StopEndTurn})
+		stop := StopEndTurn
+		if typ == "response.incomplete" {
+			stop = StopMaxTokens
+		}
+		events = append(events, StreamEvent{Type: StreamEnd, StopReason: stop})
 		return events, true, nil
 	}
 	return nil, false, nil

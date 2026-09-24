@@ -675,7 +675,8 @@ $('#pPreset').onchange = () => applyPreset($('#pPreset').value);
 $('#pType').onchange = () => {
   const a = $('#pAuth');
   if ($('#pType').value === 'anthropic_compatible' && a.value === 'bearer') a.value = 'x-api-key';
-  if ($('#pType').value === 'openai_compatible' && a.value === 'x-api-key') a.value = 'bearer';
+  if ($('#pType').value === 'gemini') { a.value = 'x-goog-api-key'; if ($('#pModelsPath').value === '/v1/models') $('#pModelsPath').value = '/v1beta/models'; }
+  if (['openai_compatible', 'openai_responses'].includes($('#pType').value) && ['x-api-key', 'x-goog-api-key'].includes(a.value)) a.value = 'bearer';
 };
 async function openEdit(id) {
   try {
@@ -768,6 +769,7 @@ function readForm() {
   const models = [...editor.selected].map((m, i) => {
     const x = ensureModelMeta(m, i), c = x.capabilities || {};
     return {
+      ...x,
       id: x.id || slug(m), model: m,
       aliases: [...new Set((x.aliases || []).map(v => String(v).trim()).filter(Boolean))],
       enabled: x.enabled !== false,
@@ -777,6 +779,7 @@ function readForm() {
     };
   });
   const p = {
+    ...editor.provider,
     id: $('#pId').value.trim(), name: $('#pName').value.trim(), type: $('#pType').value,
     base_url: $('#pBase').value.trim(), api_key: $('#pKey').value, api_key_env: $('#pKeyEnv').value.trim(),
     credentials: creds, auth_mode: $('#pAuth').value, headers: hs,

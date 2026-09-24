@@ -255,7 +255,8 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 			// Canonical-IR upstream (Gemini / Responses-native): decode into
 			// canonical events/blocks and re-encode for the Anthropic client.
 			if in.Stream {
-				e = s.canonicalStreamPump(w, resp, kind, "anthropic", in.Model, r.Header.Get("x-request-id"))
+				e = s.canonicalStreamPump(w, resp, kind, "anthropic", in.Model, r.Header.Get("x-request-id"),
+					func(input, output int) { s.usage.Record(c.Deployment.ID, int64(input), int64(output)) })
 			} else {
 				e = s.handleCanonicalResponse(w, resp, kind, "anthropic", in.Model, r.Header.Get("x-request-id"), false,
 					func(input, output int) { s.usage.Record(c.Deployment.ID, int64(input), int64(output)) })

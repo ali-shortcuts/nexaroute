@@ -346,7 +346,7 @@ func DecodeAnthropicStreamEvent(eventName, data string) ([]StreamEvent, error) {
 		}
 		return events, nil
 	case "message_stop":
-		return []StreamEvent{{Type: StreamEnd, StopReason: StopEndTurn}}, nil
+		return []StreamEvent{{Type: StreamEnd}}, nil
 	case "ping", "content_block_start_empty":
 		return nil, nil
 	case "error":
@@ -369,6 +369,7 @@ func DecodeGeminiStreamChunk(data string) ([]StreamEvent, bool, error) {
 		return nil, false, err
 	}
 	var events []StreamEvent
+	toolIndex := 0
 	for _, b := range resp.Blocks {
 		switch b.Type {
 		case PartText:
@@ -376,16 +377,25 @@ func DecodeGeminiStreamChunk(data string) ([]StreamEvent, bool, error) {
 		case PartThinking:
 			events = append(events, StreamEvent{Type: StreamThinking, Text: b.Thinking.Text})
 		case PartToolCall:
-			events = append(events, StreamEvent{Type: StreamToolStart, ToolName: b.ToolCall.Name, ToolID: b.ToolCall.ID})
-			events = append(events, StreamEvent{Type: StreamToolDelta, ArgsDelta: b.ToolCall.Arguments})
-			events = append(events, StreamEvent{Type: StreamToolEnd})
+			events = append(events, StreamEvent{Type: StreamToolStart, ToolIndex: toolIndex, ToolName: b.ToolCall.Name, ToolID: b.ToolCall.ID})
+			events = append(events, StreamEvent{Type: StreamToolDelta, ToolIndex: toolIndex, ArgsDelta: b.ToolCall.Arguments})
+			events = append(events, StreamEvent{Type: StreamToolEnd, ToolIndex: toolIndex})
+			toolIndex++
 		}
 	}
 	if resp.Usage.InputTokens > 0 || resp.Usage.OutputTokens > 0 {
 		u := resp.Usage
 		events = append(events, StreamEvent{Type: StreamUsage, Usage: &u})
 	}
-	events = append(events, StreamEvent{Type: StreamEnd, StopReason: resp.StopReason})
+	var raw GeminiResponse_
+	_ = json.Unmarshal([]byte(d), &raw)
+	terminal := raw.PromptFeedback != nil && raw.PromptFeedback.BlockReason != ""
+	if len(raw.Candidates) > 0 && raw.Candidates[0].FinishReason != "" {
+		terminal = true
+	}
+	if terminal {
+		events = append(events, StreamEvent{Type: StreamEnd, StopReason: resp.StopReason})
+	}
 	return events, false, nil
 }
 
@@ -732,7 +742,9 @@ func (e *openAIEmitter) Emit(ev StreamEvent) error {
 	case StreamUsage:
 		e.usage = ev.Usage
 	case StreamEnd:
-		e.finish = openAIFinish(ev.StopReason)
+		if ev.StopReason != "" {
+			e.finish = openAIFinish(ev.StopReason)
+		}
 	case StreamError:
 		// Surface as a terminal chunk carrying the error object.
 		e.chunk(map[string]any{"choices": []any{}, "error": map[string]any{"message": ev.ErrorMsg, "type": ev.ErrorCode}})
@@ -784,33 +796,37 @@ func openAIFinish(stop string) string {
 
 // ---------- Responses client emitter ----------
 
-type responsesEmitter struct {
-	w        http.ResponseWriter
-	fl       http.Flusher
-	model    string
-	id       string
-	writeErr error
-	toolIdx  map[int]string
-	itemSeq  int
-	usage    *Usage
-	stop     string
-	finished bool
+type responseStreamItem struct {
+	kind, id, callID, name string
+	text                   strings.Builder
+	done                   bool
 }
 
-// NewResponsesEmitter streams canonical events as OpenAI Responses SSE.
+type responsesEmitter struct {
+	w                         http.ResponseWriter
+	fl                        http.Flusher
+	model, id                 string
+	writeErr                  error
+	toolIdx                   map[int]int
+	items                     []*responseStreamItem
+	textIndex, reasoningIndex int
+	itemSeq                   int
+	usage                     Usage
+	stop                      string
+	finished                  bool
+	created                   int64
+	buffered                  int
+}
+
 func NewResponsesEmitter(w http.ResponseWriter, model string) StreamEmitter {
 	fl, _ := w.(http.Flusher)
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("X-Accel-Buffering", "no")
-	e := &responsesEmitter{w: w, fl: fl, model: model, id: fmt.Sprintf("resp_%d", messageClock()), toolIdx: map[int]string{}}
-	created := float64(timeNow())
-	e.event("response.created", map[string]any{"type": "response.created", "response": map[string]any{
-		"id": e.id, "object": "response", "status": "in_progress", "model": model, "output": []any{}, "created_at": created,
-	}})
-	e.event("response.in_progress", map[string]any{"type": "response.in_progress", "response": map[string]any{
-		"id": e.id, "object": "response", "status": "in_progress", "model": model, "output": []any{}, "created_at": created,
-	}})
+	e := &responsesEmitter{w: w, fl: fl, model: model, id: fmt.Sprintf("resp_%d", messageClock()), toolIdx: map[int]int{}, textIndex: -1, reasoningIndex: -1, created: timeNow()}
+	for _, typ := range []string{"response.created", "response.in_progress"} {
+		e.event(typ, map[string]any{"type": typ, "response": e.response("in_progress")})
+	}
 	return e
 }
 
@@ -831,61 +847,164 @@ func (e *responsesEmitter) event(name string, payload map[string]any) {
 	}
 }
 
+func (e *responsesEmitter) item(i int, status string) map[string]any {
+	it := e.items[i]
+	switch it.kind {
+	case "function_call":
+		args := it.text.String()
+		if args == "" && status != "in_progress" {
+			args = "{}"
+		}
+		return map[string]any{"type": it.kind, "id": it.id, "call_id": it.callID, "name": it.name, "arguments": args, "status": status}
+	case "reasoning":
+		return map[string]any{"type": it.kind, "id": it.id, "summary": []any{map[string]any{"type": "summary_text", "text": it.text.String()}}}
+	default:
+		content := []any{}
+		if status != "in_progress" || it.text.Len() > 0 {
+			content = append(content, map[string]any{"type": "output_text", "text": it.text.String(), "annotations": []any{}})
+		}
+		return map[string]any{"type": "message", "id": it.id, "role": "assistant", "content": content, "status": status}
+	}
+}
+
+func (e *responsesEmitter) response(status string) map[string]any {
+	output := make([]any, 0, len(e.items))
+	for i := range e.items {
+		output = append(output, e.item(i, status))
+	}
+	return map[string]any{"id": e.id, "object": "response", "created_at": e.created, "model": e.model, "status": status, "output": output, "error": nil, "incomplete_details": nil,
+		"usage": map[string]any{"input_tokens": e.usage.InputTokens, "output_tokens": e.usage.OutputTokens, "total_tokens": e.usage.InputTokens + e.usage.OutputTokens,
+			"input_tokens_details": map[string]int{"cached_tokens": e.usage.CacheReadTokens}, "output_tokens_details": map[string]int{"reasoning_tokens": e.usage.ReasoningTokens}}}
+}
+
+func (e *responsesEmitter) addItem(it *responseStreamItem) int {
+	i := len(e.items)
+	e.items = append(e.items, it)
+	e.event("response.output_item.added", map[string]any{"type": "response.output_item.added", "output_index": i, "item": e.item(i, "in_progress")})
+	return i
+}
+
+func (e *responsesEmitter) finishItem(i int) {
+	it := e.items[i]
+	if it.done {
+		return
+	}
+	it.done = true
+	common := func(typ string) map[string]any {
+		return map[string]any{"type": typ, "item_id": it.id, "output_index": i}
+	}
+	switch it.kind {
+	case "function_call":
+		p := common("response.function_call_arguments.done")
+		args := it.text.String()
+		if args == "" {
+			args = "{}"
+		}
+		p["arguments"] = args
+		p["name"] = it.name
+		e.event(p["type"].(string), p)
+	case "message":
+		p := common("response.output_text.done")
+		p["content_index"] = 0
+		p["text"] = it.text.String()
+		e.event(p["type"].(string), p)
+		p = common("response.content_part.done")
+		p["content_index"] = 0
+		p["part"] = map[string]any{"type": "output_text", "text": it.text.String(), "annotations": []any{}}
+		e.event(p["type"].(string), p)
+	case "reasoning":
+		p := common("response.reasoning_summary_text.done")
+		p["summary_index"] = 0
+		p["text"] = it.text.String()
+		e.event(p["type"].(string), p)
+		p = common("response.reasoning_summary_part.done")
+		p["summary_index"] = 0
+		p["part"] = map[string]any{"type": "summary_text", "text": it.text.String()}
+		e.event(p["type"].(string), p)
+	}
+	e.event("response.output_item.done", map[string]any{"type": "response.output_item.done", "output_index": i, "item": e.item(i, "completed")})
+}
+
 func (e *responsesEmitter) Emit(ev StreamEvent) error {
-	if e.writeErr != nil {
+	if e.finished || e.writeErr != nil {
 		return e.writeErr
 	}
+	// Final Responses events contain the complete output. Bound retained state.
+	e.buffered += len(ev.Text) + len(ev.ArgsDelta) + len(ev.ToolName) + len(ev.ToolID)
+	if ev.Type != StreamError && (e.buffered > 8<<20 || len(e.items) > 4096) {
+		err := fmt.Errorf("Responses stream output exceeds gateway buffer limit")
+		e.Emit(StreamEvent{Type: StreamError, ErrorMsg: err.Error()})
+		e.writeErr = err
+		return err
+	}
 	switch ev.Type {
-	case StreamText:
-		e.event("response.output_text.delta", map[string]any{
-			"type": "response.output_text.delta", "item_id": "msg_0", "output_index": 0,
-			"content_index": 0, "delta": ev.Text,
-		})
-	case StreamThinking:
-		e.event("response.reasoning_summary_text.delta", map[string]any{
-			"type": "response.reasoning_summary_text.delta", "item_id": "rs_0", "output_index": 0,
-			"summary_index": 0, "delta": ev.Text,
-		})
+	case StreamText, StreamThinking:
+		idx := e.textIndex
+		kind := "message"
+		prefix := "response.output_text"
+		field := "content_index"
+		if ev.Type == StreamThinking {
+			idx = e.reasoningIndex
+			kind = "reasoning"
+			prefix = "response.reasoning_summary_text"
+			field = "summary_index"
+		}
+		if idx < 0 {
+			idx = e.addItem(&responseStreamItem{kind: kind, id: fmt.Sprintf("%s_%d", e.id, len(e.items))})
+			typ := "response.content_part.added"
+			part := map[string]any{"type": "output_text", "text": "", "annotations": []any{}}
+			if kind == "reasoning" {
+				e.reasoningIndex = idx
+				typ = "response.reasoning_summary_part.added"
+				part = map[string]any{"type": "summary_text", "text": ""}
+			} else {
+				e.textIndex = idx
+			}
+			e.event(typ, map[string]any{"type": typ, "output_index": idx, "item_id": e.items[idx].id, field: 0, "part": part})
+		}
+		e.items[idx].text.WriteString(ev.Text)
+		e.event(prefix+".delta", map[string]any{"type": prefix + ".delta", "item_id": e.items[idx].id, "output_index": idx, field: 0, "delta": ev.Text})
 	case StreamToolStart:
-		callID := ev.ToolID
-		if callID == "" {
-			callID = fmt.Sprintf("call_%d", ev.ToolIndex)
+		if _, exists := e.toolIdx[ev.ToolIndex]; exists {
+			break
 		}
-		e.toolIdx[ev.ToolIndex] = callID
-		e.event("response.output_item.added", map[string]any{
-			"type": "response.output_item.added", "output_index": 1,
-			"item": map[string]any{"type": "function_call", "id": "fc_" + callID, "call_id": callID, "name": ev.ToolName, "arguments": "", "status": "in_progress"},
-		})
+		id := ev.ToolID
+		if id == "" {
+			id = fmt.Sprintf("call_%d", ev.ToolIndex)
+		}
+		e.toolIdx[ev.ToolIndex] = e.addItem(&responseStreamItem{kind: "function_call", id: "fc_" + id, callID: id, name: ev.ToolName})
 	case StreamToolDelta:
-		callID, ok := e.toolIdx[ev.ToolIndex]
+		idx, ok := e.toolIdx[ev.ToolIndex]
 		if !ok {
-			callID = fmt.Sprintf("call_%d", ev.ToolIndex)
-			e.toolIdx[ev.ToolIndex] = callID
+			e.Emit(StreamEvent{Type: StreamToolStart, ToolIndex: ev.ToolIndex, ToolID: ev.ToolID, ToolName: ev.ToolName})
+			idx = e.toolIdx[ev.ToolIndex]
 		}
-		e.event("response.function_call_arguments.delta", map[string]any{
-			"type": "response.function_call_arguments.delta", "item_id": "fc_" + callID,
-			"output_index": 1, "delta": ev.ArgsDelta,
-		})
+		e.items[idx].text.WriteString(ev.ArgsDelta)
+		e.event("response.function_call_arguments.delta", map[string]any{"type": "response.function_call_arguments.delta", "item_id": e.items[idx].id, "output_index": idx, "delta": ev.ArgsDelta})
 	case StreamToolEnd:
-		callID, ok := e.toolIdx[ev.ToolIndex]
-		if !ok {
-			callID = fmt.Sprintf("call_%d", ev.ToolIndex)
+		if idx, ok := e.toolIdx[ev.ToolIndex]; ok {
+			e.finishItem(idx)
 		}
-		e.event("response.function_call_arguments.done", map[string]any{
-			"type": "response.function_call_arguments.done", "item_id": "fc_" + callID, "output_index": 1, "arguments": "",
-		})
-		e.event("response.output_item.done", map[string]any{
-			"type": "response.output_item.done", "output_index": 1,
-			"item": map[string]any{"type": "function_call", "id": "fc_" + callID, "call_id": callID, "status": "completed"},
-		})
-	case StreamUsage:
-		e.usage = ev.Usage
+	case StreamStart, StreamUsage:
+		if ev.Usage != nil {
+			if ev.Usage.InputTokens > 0 {
+				e.usage.InputTokens = ev.Usage.InputTokens
+			}
+			if ev.Usage.OutputTokens > 0 {
+				e.usage.OutputTokens = ev.Usage.OutputTokens
+			}
+			e.usage.CacheReadTokens = ev.Usage.CacheReadTokens
+			e.usage.ReasoningTokens = ev.Usage.ReasoningTokens
+		}
 	case StreamEnd:
-		e.stop = ev.StopReason
+		if ev.StopReason != "" {
+			e.stop = ev.StopReason
+		}
 	case StreamError:
-		e.event("response.failed", map[string]any{"type": "response.failed", "response": map[string]any{
-			"id": e.id, "status": "failed", "error": map[string]any{"code": ev.ErrorCode, "message": ev.ErrorMsg},
-		}})
+		e.finished = true
+		resp := e.response("failed")
+		resp["error"] = map[string]any{"code": "server_error", "message": ev.ErrorMsg}
+		e.event("response.failed", map[string]any{"type": "response.failed", "response": resp})
 	}
 	return e.writeErr
 }
@@ -895,25 +1014,22 @@ func (e *responsesEmitter) Finish() error {
 		return e.writeErr
 	}
 	e.finished = true
+	for i := range e.items {
+		e.finishItem(i)
+	}
 	status := "completed"
 	if e.stop == StopMaxTokens || e.stop == StopRefusal {
 		status = "incomplete"
 	}
-	resp := map[string]any{
-		"id": e.id, "object": "response", "status": status, "model": e.model,
-		"output": []any{}, "usage": map[string]any{
-			"input_tokens": 0, "output_tokens": 0,
-		},
-	}
-	if e.usage != nil {
-		resp["usage"] = map[string]any{
-			"input_tokens": e.usage.InputTokens, "output_tokens": e.usage.OutputTokens,
-			"input_tokens_details":  map[string]any{"cached_tokens": e.usage.CacheReadTokens},
-			"output_tokens_details": map[string]any{"reasoning_tokens": e.usage.ReasoningTokens},
+	resp := e.response(status)
+	if status == "incomplete" {
+		reason := "max_output_tokens"
+		if e.stop == StopRefusal {
+			reason = "content_filter"
 		}
+		resp["incomplete_details"] = map[string]any{"reason": reason}
 	}
-	e.event("response.completed", map[string]any{"type": "response.completed", "response": resp})
+	typ := "response." + status
+	e.event(typ, map[string]any{"type": typ, "response": resp})
 	return e.writeErr
 }
-
-var _ = http.Flusher(nil)

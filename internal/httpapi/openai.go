@@ -237,7 +237,8 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 			// Canonical-IR upstream (Gemini / Responses-native) decoded through
 			// the IR and re-encoded for the OpenAI client.
 			if in.Stream {
-				e = s.canonicalStreamPump(w, resp, kind, "openai_chat", in.Model, r.Header.Get("x-request-id"))
+				e = s.canonicalStreamPump(w, resp, kind, "openai_chat", in.Model, r.Header.Get("x-request-id"),
+					func(input, output int) { s.usage.Record(c.Deployment.ID, int64(input), int64(output)) })
 			} else {
 				e = s.handleCanonicalResponse(w, resp, kind, "openai_chat", in.Model, r.Header.Get("x-request-id"), false,
 					func(input, output int) { s.usage.Record(c.Deployment.ID, int64(input), int64(output)) })

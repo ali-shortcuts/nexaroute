@@ -294,12 +294,15 @@
         <label class="field"><span>Endpoint type</span><select id="pType">
           <option value="openai_compatible">OpenAI Compatible — Chat Completions</option>
           <option value="anthropic_compatible">Anthropic Compatible — Messages</option>
+          <option value="openai_responses">OpenAI — Responses</option>
+          <option value="gemini">Gemini — GenerateContent</option>
         </select></label>
         <label class="field"><span>Base URL</span><input id="pBase" spellcheck="false" placeholder="http://127.0.0.1:5000/v1"></label>
         <div class="form-grid two">
           <label class="field"><span>Authentication</span><select id="pAuth">
             <option value="bearer">Bearer token</option>
             <option value="x-api-key">x-api-key</option>
+            <option value="x-goog-api-key">x-goog-api-key (Gemini)</option>
             <option value="none">No authentication</option>
           </select></label>
           <label class="field switch-field"><span>Enabled</span><input id="pEnabled" type="checkbox" checked></label>

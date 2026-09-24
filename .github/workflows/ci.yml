@@ -24,7 +24,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.23.x'
+          go-version: '1.26.x'
           cache: false
 
       - name: Repository cleanliness
@@ -59,7 +59,7 @@ jobs:
           trap 'rm -rf "$tmp_home"' EXIT
           HOME="$tmp_home" ./install-user.sh
           test -x "$tmp_home/.local/bin/nexaroute"
-          expected_version="$(sed -n 's/^const version = "\([^"]*\)"/NexaRoute v\1/p' cmd/gateway/main.go)"
+          expected_version="$(sed -n 's/^const Version = "\([^"]*\)"/NexaRoute v\1/p' internal/buildinfo/version.go)"
           test -n "$expected_version"
           test "$("$tmp_home/.local/bin/nexaroute" -version)" = "$expected_version"
           test -f "$tmp_home/.config/nexaroute/config.json"

@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ali-shortcuts/nexaroute/internal/buildinfo"
 	"github.com/ali-shortcuts/nexaroute/internal/config"
 	"github.com/ali-shortcuts/nexaroute/internal/events"
 	"github.com/ali-shortcuts/nexaroute/internal/health"
@@ -24,7 +25,7 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/router"
 )
 
-const version = "0.6.0"
+const version = buildinfo.Version
 
 func defaultConfigPath() string {
 	if p := os.Getenv("NEXAROUTE_CONFIG"); p != "" {

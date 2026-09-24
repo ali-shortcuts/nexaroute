@@ -301,7 +301,10 @@ func DecodeGeminiResponse(b []byte) (Response, error) {
 	if err := json.Unmarshal(b, &in); err != nil {
 		return Response{}, fmt.Errorf("invalid Gemini response: %w", err)
 	}
-	out := Response{StopReason: StopEndTurn, Raw: append(json.RawMessage(nil), b...)}
+	if len(in.Candidates) == 0 && in.PromptFeedback == nil && in.UsageMetadata == nil {
+		return Response{}, fmt.Errorf("Gemini response has no candidates, feedback or usage")
+	}
+	out := Response{ID: fmt.Sprintf("msg_%d", messageClock()), StopReason: StopEndTurn, Raw: append(json.RawMessage(nil), b...)}
 	if in.PromptFeedback != nil && in.PromptFeedback.BlockReason != "" {
 		out.StopReason = StopRefusal
 	}
@@ -309,11 +312,11 @@ func DecodeGeminiResponse(b []byte) (Response, error) {
 		c := in.Candidates[0]
 		sawToolCall := false
 		if c.Content != nil {
-			for _, p := range c.Content.Parts {
+			for partIndex, p := range c.Content.Parts {
 				switch {
 				case p.Text != "":
 					if p.Thought != nil && *p.Thought {
-						out.Blocks = append(out.Blocks, Block{Type: PartThinking, Thinking: &Thinking{Text: p.Text, Signature: "thought"}})
+						out.Blocks = append(out.Blocks, Block{Type: PartThinking, Thinking: &Thinking{Text: p.Text}})
 					} else {
 						out.Blocks = append(out.Blocks, Block{Type: PartText, Text: p.Text})
 					}
@@ -323,14 +326,14 @@ func DecodeGeminiResponse(b []byte) (Response, error) {
 					if strings.TrimSpace(args) == "" {
 						args = "{}"
 					}
-					out.Blocks = append(out.Blocks, Block{Type: PartToolCall, ToolCall: &ToolCall{Name: p.FunctionCall.Name, Arguments: args}})
+					out.Blocks = append(out.Blocks, Block{Type: PartToolCall, ToolCall: &ToolCall{ID: fmt.Sprintf("call_%d", partIndex), Name: p.FunctionCall.Name, Arguments: args}})
 				case p.FunctionCallV1 != nil:
 					sawToolCall = true
 					args := string(p.FunctionCallV1.Args)
 					if strings.TrimSpace(args) == "" {
 						args = "{}"
 					}
-					out.Blocks = append(out.Blocks, Block{Type: PartToolCall, ToolCall: &ToolCall{Name: p.FunctionCallV1.Name, Arguments: args}})
+					out.Blocks = append(out.Blocks, Block{Type: PartToolCall, ToolCall: &ToolCall{ID: fmt.Sprintf("call_%d", partIndex), Name: p.FunctionCallV1.Name, Arguments: args}})
 				}
 			}
 		}

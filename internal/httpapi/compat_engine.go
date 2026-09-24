@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -68,6 +69,10 @@ func (s *Server) providerConfigFor(providerID string) (config.ProviderConfig, bo
 func credentialScope(p config.ProviderConfig) string {
 	keys := p.ResolvedCredentials()
 	h := sha256.New()
+	// Operator capability and endpoint edits must invalidate learned contracts too.
+	identity, _ := json.Marshal(p)
+	h.Write(identity)
+	h.Write([]byte{0})
 	for _, k := range keys {
 		h.Write([]byte(k))
 		h.Write([]byte{0})
@@ -280,6 +285,7 @@ func (s *Server) doUpstreamWithRepair(
 	a providers.Adapter,
 	deployment router.Deployment,
 	payload []byte,
+	path string,
 	stream bool,
 	forward http.Header,
 	dialect compat.DialectProfile,
@@ -312,7 +318,13 @@ func (s *Server) doUpstreamWithRepair(
 		}
 	}
 	for {
-		resp, err := a.Do(ctx, payload, stream, forward)
+		var resp *http.Response
+		var err error
+		if path != "" {
+			resp, err = a.DoPath(ctx, http.MethodPost, path, payload, stream, forward)
+		} else {
+			resp, err = a.Do(ctx, payload, stream, forward)
+		}
 		if err != nil {
 			return nil, payload, out, err
 		}
@@ -516,9 +528,9 @@ func (s *Server) finishCanonicalAttempt(bundle hedgeAttemptBundle, canReq canoni
 		}
 	case "gemini":
 		payload, _, err = canonical.EncodeGeminiRequest(canReq, bundle.c.Deployment.Model)
-		bundle.path = "/v1beta/models/" + strings.TrimPrefix(bundle.c.Deployment.Model, "models/") + ":streamGenerateContent?alt=sse"
+		bundle.path = "/v1beta/models/" + url.PathEscape(strings.TrimPrefix(bundle.c.Deployment.Model, "models/")) + ":streamGenerateContent?alt=sse"
 		if !canReq.Stream {
-			bundle.path = "/v1beta/models/" + strings.TrimPrefix(bundle.c.Deployment.Model, "models/") + ":generateContent"
+			bundle.path = "/v1beta/models/" + url.PathEscape(strings.TrimPrefix(bundle.c.Deployment.Model, "models/")) + ":generateContent"
 		}
 	case "openai_responses":
 		payload, err = canonical.EncodeResponsesRequest(canReq, bundle.c.Deployment.Model)

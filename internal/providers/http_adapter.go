@@ -229,6 +229,9 @@ func endpoint(base, suffix string) string {
 			break
 		}
 	}
+	if strings.HasSuffix(b, "/v1beta") && strings.HasPrefix(suffix, "/v1beta/") {
+		return b + strings.TrimPrefix(suffix, "/v1beta")
+	}
 	if strings.HasSuffix(b, "/v1") && strings.HasPrefix(suffix, "/v1/") {
 		return b + strings.TrimPrefix(suffix, "/v1")
 	}
@@ -236,6 +239,9 @@ func endpoint(base, suffix string) string {
 }
 
 func (a *httpAdapter) defaultPath() string {
+	if a.p.Type == "openai_responses" {
+		return a.p.ResponsesPath
+	}
 	if a.p.Type == "anthropic_compatible" {
 		return a.p.MessagesPath
 	}
