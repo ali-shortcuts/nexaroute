@@ -16,12 +16,14 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/ali-shortcuts/nexaroute/internal/cache"
 	"github.com/ali-shortcuts/nexaroute/internal/config"
 	"github.com/ali-shortcuts/nexaroute/internal/events"
 	"github.com/ali-shortcuts/nexaroute/internal/health"
 	"github.com/ali-shortcuts/nexaroute/internal/probe"
 	"github.com/ali-shortcuts/nexaroute/internal/providers"
 	"github.com/ali-shortcuts/nexaroute/internal/router"
+	"github.com/ali-shortcuts/nexaroute/internal/usage"
 )
 
 //go:embed web/*
@@ -44,6 +46,10 @@ type Server struct {
 	overloadRejects atomic.Uint64
 	adminRL         sync.Mutex
 	adminBuckets    map[string]*adminBucket
+	clientRL        sync.Mutex
+	clientBuckets   map[string]*clientBucket
+	respCache       *cache.Cache
+	usage           *usage.Tracker
 }
 
 // adminBucket is a compact token bucket keyed by remote address. Capacity 90
@@ -137,7 +143,11 @@ func New(cfg config.Config, configPath string, reg *providers.Registry, rt *rout
 		cfg.ProviderFailureWindow(),
 		cfg.ProviderCooldown(),
 	)
-	return &Server{cfg: cfg, configPath: configPath, reg: reg, rt: rt, hm: hm, bus: bus, probe: pe, log: l}
+	return &Server{
+		cfg: cfg, configPath: configPath, reg: reg, rt: rt, hm: hm, bus: bus, probe: pe, log: l,
+		respCache: cache.New(cfg.CacheTTL(), cfg.Cache.MaxEntries, int64(cfg.Cache.MaxBodyBytes)),
+		usage:     usage.New(),
+	}
 }
 
 func (s *Server) currentConfig() config.Config {
@@ -334,6 +344,10 @@ func (s *Server) applyConfigLocked(cfg config.Config) error {
 		}
 	}
 	s.hm.RetainProviders(validProviders)
+	s.usage.Retain(valid)
+	// Cached responses must never outlive the topology that produced them:
+	// any config swap invalidates the exact-match cache wholesale.
+	s.respCache.Invalidate()
 
 	changedHealth := changedDeploymentIDs(oldCfg, cfg)
 	oldProvidersByID := make(map[string]config.ProviderConfig, len(oldCfg.Providers))

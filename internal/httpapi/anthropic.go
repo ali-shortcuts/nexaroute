@@ -22,6 +22,9 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		anthropicErrorJSON(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
+	if !s.clientAuthAllowed(w, r, true) {
+		return
+	}
 	var in core.AnthropicRequest
 	raw, err := readJSON(r, &in)
 	if err != nil {
@@ -46,6 +49,8 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 	if req.Reasoning {
 		req.ProviderType = "anthropic_compatible"
 	}
+	// Context-window pre-routing: Anthropic requires an explicit max_tokens.
+	req.MinContextWindow = inspection.EstimatedPromptTokens + in.MaxTokens
 	req = s.prepareRequirement(req, r, inspection.BodySessionKey)
 	cfg, candidates := s.routeSnapshot(req)
 	if len(candidates) == 0 && req.ProviderType != "" {
@@ -63,6 +68,11 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		anthropicErrorJSON(w, 503, "no compatible healthy deployment")
 		return
 	}
+	// Exact-match response cache (opt-in; see cache_wiring.go).
+	cacheKey, cacheable := s.cacheLookupFor(r.URL.Path, raw, in.Stream, in.Temperature, in.TopP)
+	if s.cacheServe(w, r, cacheKey, cacheable) {
+		return
+	}
 	max := cfg.Routing.MaxAttempts
 	if max > len(candidates) {
 		max = len(candidates)
@@ -76,7 +86,11 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 	forward := copySelectedRequestHeaders(r)
 
 	attempts := 0
+	skip := map[int]bool{}
 	for i := 0; i < len(candidates) && attempts < max; i++ {
+		if skip[i] {
+			continue
+		}
 		c := candidates[i]
 		fresh, a, ok := s.currentRouteCandidate(c.Deployment.ID, req)
 		if !ok {
@@ -84,35 +98,35 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		c = fresh
-		var payload []byte
-		var nm *translate.NameMap
-		streamOptionsInjected := false
-		if c.Deployment.ProviderType == "anthropic_compatible" {
-			payload, err = patchJSONModel(raw, c.Deployment.Model)
-		} else {
-			var o core.OpenAIRequest
-			o, nm, err = translate.AnthropicToOpenAI(in, c.Deployment.Model)
-			if err == nil && in.Stream {
-				// Request real token accounting from OpenAI-compatible
-				// upstreams so Anthropic clients receive usage; providers that
-				// reject the option are retried once without it.
-				o.StreamOptions = json.RawMessage(`{"include_usage":true}`)
-				streamOptionsInjected = true
-			}
-			if err == nil {
-				payload, err = json.Marshal(o)
-			}
-		}
-		if err != nil {
-			lastErr = err.Error()
+		primary, ok := s.buildAnthropicAttempt(c, req, raw, in)
+		if !ok {
+			lastErr = "attempt payload could not be built"
 			continue
 		}
-
+		var nm *translate.NameMap
+		var streamOptionsInjected bool
+		var payload []byte
+		c, a, nm, streamOptionsInjected, payload = primary.c, primary.a, primary.nm, primary.injected, primary.payload
 		attempts++
 		attemptIndex := attempts - 1
 		s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_attempt", Deployment: c.Deployment.ID, Message: fmt.Sprintf("attempt=%d score=%.2f health=%s pressure=%.3f", attempts, c.Score, c.Health.Status, c.CapacityPressure)})
 		start := time.Now()
-		resp, e := a.Do(routeCtx, payload, in.Stream, forward)
+		out, winner, hedgeLaunched := s.doAttemptWithHedge(routeCtx, r.Header.Get("x-request-id"), cfg, candidates, i, attempts, max, primary,
+			func(idx int) (hedgeAttemptBundle, bool) {
+				return s.buildAnthropicAttempt(candidates[idx], req, raw, in)
+			},
+			in.Stream, forward)
+		if hedgeLaunched && i+1 < len(candidates) {
+			skip[i+1] = true
+		}
+		if out.secondaryWon {
+			c, a, nm, streamOptionsInjected, payload = winner.c, winner.a, winner.nm, winner.injected, winner.payload
+			attempts++
+			attemptIndex = attempts - 1
+			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_attempt", Deployment: c.Deployment.ID, Message: fmt.Sprintf("attempt=%d score=%.2f health=%s pressure=%.3f (hedged winner)", attempts, c.Score, c.Health.Status, c.CapacityPressure)})
+		}
+		resp, e := out.resp, out.err
+		start = out.start
 		if e == nil && streamOptionsInjected && resp.StatusCode == http.StatusBadRequest {
 			probe, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 			resp.Body.Close()
@@ -207,20 +221,42 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		}
 		if c.Deployment.ProviderType == "anthropic_compatible" {
 			if in.Stream {
-				e = proxyNativeSSE(w, resp, "anthropic")
+				e = proxyNativeSSE(w, resp, "anthropic", func(prompt, completion int) {
+					s.usage.Record(c.Deployment.ID, int64(prompt), int64(completion))
+				})
 			} else {
-				e = proxyValidatedJSONResponse(w, resp, validateAnthropicResponseJSON)
+				var b []byte
+				b, e = readJSONLimited(resp.Body)
+				resp.Body.Close()
+				if e == nil {
+					e = validateAnthropicResponseJSON(b)
+				}
+				if e == nil {
+					if p, ct, ok := extractAnthropicUsage(b); ok {
+						s.usage.Record(c.Deployment.ID, int64(p), int64(ct))
+					}
+					s.cacheStoreResponse(cacheKey, cacheable, c.Deployment.ID, resp.StatusCode, "application/json", b)
+					copyUpstreamResponseHeaders(w, resp, false)
+					w.WriteHeader(resp.StatusCode)
+					_, e = w.Write(b)
+				}
 			}
 		} else if in.Stream {
-			e = streamOpenAIToAnthropic(w, resp, in.Model, nm, r.Header.Get("x-request-id"))
+			e = streamOpenAIToAnthropicWithUsage(w, resp, in.Model, nm, func(prompt, completion int) {
+				s.usage.Record(c.Deployment.ID, int64(prompt), int64(completion))
+			}, r.Header.Get("x-request-id"))
 		} else {
 			var o core.OpenAIResponse
 			e = decodeValidatedJSONLimited(resp.Body, &o, validateOpenAIResponseJSON)
 			resp.Body.Close()
 			if e == nil {
+				s.usage.Record(c.Deployment.ID, int64(o.Usage.PromptTokens), int64(o.Usage.CompletionTokens))
 				var translated core.AnthResponse
 				translated, e = translate.OpenAIResponseToAnthropic(o, in.Model, nm)
 				if e == nil {
+					if b, merr := json.Marshal(translated); merr == nil {
+						s.cacheStoreResponse(cacheKey, cacheable, c.Deployment.ID, 200, "application/json", b)
+					}
 					writeJSON(w, 200, translated)
 				}
 			}
@@ -366,6 +402,12 @@ type nativeSSETracker struct {
 	protocol string
 	line     []byte
 	terminal bool
+	// usage accounting (optional hook). The hook fires at most once, when
+	// the protocol's terminal usage information is complete.
+	usageHook    func(prompt, completion int)
+	usageInput   int
+	usageOutput  int
+	usageEmitted bool
 }
 
 const maxNativeSSELineBytes = 8 << 20
@@ -437,6 +479,17 @@ func (t *nativeSSETracker) processLine() error {
 				t.terminal = true
 			}
 		}
+		if raw := env["usage"]; len(raw) > 0 && string(raw) != "null" && t.usageHook != nil && !t.usageEmitted {
+			var u struct {
+				PromptTokens     int `json:"prompt_tokens"`
+				CompletionTokens int `json:"completion_tokens"`
+			}
+			if err := json.Unmarshal(raw, &u); err == nil {
+				t.usageInput, t.usageOutput = u.PromptTokens, u.CompletionTokens
+				t.usageEmitted = true
+				t.usageHook(t.usageInput, t.usageOutput)
+			}
+		}
 	case "anthropic":
 		var typ string
 		if raw := env["type"]; len(raw) > 0 {
@@ -446,6 +499,9 @@ func (t *nativeSSETracker) processLine() error {
 		}
 		if typ == "error" {
 			return fmt.Errorf("anthropic SSE error event")
+		}
+		if t.usageHook != nil {
+			t.observeAnthropicUsage(typ, env)
 		}
 		if typ == "message_stop" {
 			t.terminal = true
@@ -469,6 +525,53 @@ func (t *nativeSSETracker) processLine() error {
 	return nil
 }
 
+// observeAnthropicUsage accumulates Anthropic usage across message_start
+// (input tokens) and message_delta (output tokens) events, then fires the
+// hook once on message_stop when both sides have been observed.
+func (t *nativeSSETracker) observeAnthropicUsage(typ string, env map[string]json.RawMessage) {
+	switch typ {
+	case "message_start":
+		var start struct {
+			Message struct {
+				Usage struct {
+					InputTokens  int `json:"input_tokens"`
+					OutputTokens int `json:"output_tokens"`
+				} `json:"usage"`
+			} `json:"message"`
+		}
+		if raw := env["message"]; len(raw) > 0 {
+			if err := json.Unmarshal(raw, &start); err == nil {
+				t.usageInput = start.Message.Usage.InputTokens
+				if start.Message.Usage.OutputTokens > t.usageOutput {
+					t.usageOutput = start.Message.Usage.OutputTokens
+				}
+			}
+		}
+	case "message_delta":
+		var delta struct {
+			Usage struct {
+				InputTokens  int `json:"input_tokens"`
+				OutputTokens int `json:"output_tokens"`
+			} `json:"usage"`
+		}
+		if raw := env["usage"]; len(raw) > 0 {
+			if err := json.Unmarshal(raw, &delta); err == nil {
+				if delta.Usage.OutputTokens > t.usageOutput {
+					t.usageOutput = delta.Usage.OutputTokens
+				}
+				if delta.Usage.InputTokens > t.usageInput {
+					t.usageInput = delta.Usage.InputTokens
+				}
+			}
+		}
+	case "message_stop":
+		if !t.usageEmitted && (t.usageInput > 0 || t.usageOutput > 0) {
+			t.usageEmitted = true
+			t.usageHook(t.usageInput, t.usageOutput)
+		}
+	}
+}
+
 func (t *nativeSSETracker) finish() error {
 	if len(t.line) > 0 {
 		if err := t.processLine(); err != nil {
@@ -482,7 +585,7 @@ func (t *nativeSSETracker) finish() error {
 	return nil
 }
 
-func proxyNativeSSE(w http.ResponseWriter, resp *http.Response, protocol string) error {
+func proxyNativeSSE(w http.ResponseWriter, resp *http.Response, protocol string, usageHooks ...func(prompt, completion int)) error {
 	defer resp.Body.Close()
 	if !strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
 		return fmt.Errorf("expected text/event-stream from %s upstream", protocol)
@@ -491,6 +594,9 @@ func proxyNativeSSE(w http.ResponseWriter, resp *http.Response, protocol string)
 	w.WriteHeader(resp.StatusCode)
 	fl, _ := w.(http.Flusher)
 	tracker := &nativeSSETracker{protocol: protocol}
+	if len(usageHooks) > 0 && usageHooks[0] != nil {
+		tracker.usageHook = usageHooks[0]
+	}
 	buf := make([]byte, 32<<10)
 	for {
 		n, err := resp.Body.Read(buf)
@@ -527,6 +633,10 @@ type openAIToolStreamState struct {
 // array deltas, maps reasoning-style finish reasons, and restores original
 // client-facing tool names through the request's NameMap.
 func streamOpenAIToAnthropic(w http.ResponseWriter, resp *http.Response, model string, nm *translate.NameMap, requestID ...string) error {
+	return streamOpenAIToAnthropicWithUsage(w, resp, model, nm, nil, requestID...)
+}
+
+func streamOpenAIToAnthropicWithUsage(w http.ResponseWriter, resp *http.Response, model string, nm *translate.NameMap, usageSink func(prompt, completion int), requestID ...string) error {
 	defer resp.Body.Close()
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -759,6 +869,9 @@ func streamOpenAIToAnthropic(w http.ResponseWriter, resp *http.Response, model s
 	emit("message_stop", map[string]any{"type": "message_stop"})
 	if writeErr != nil {
 		return writeErr
+	}
+	if usageSink != nil && usageSeen {
+		usageSink(inputTokens, outputTokens)
 	}
 	return nil
 }

@@ -19,6 +19,9 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 405, "method not allowed")
 		return
 	}
+	if !s.clientAuthAllowed(w, r, false) {
+		return
+	}
 	var in core.OpenAIRequest
 	raw, err := readJSON(r, &in)
 	if err != nil {
@@ -42,6 +45,14 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 	if req.Reasoning {
 		req.ProviderType = "openai_compatible"
 	}
+	// Context-window pre-routing: skip deployments advertising a window too
+	// small for the estimated prompt plus requested output. Deployments
+	// with unknown windows are never filtered.
+	maxOut := in.MaxCompletionTokens
+	if maxOut == 0 {
+		maxOut = in.MaxTokens
+	}
+	req.MinContextWindow = inspection.EstimatedPromptTokens + maxOut
 	req = s.prepareRequirement(req, r, inspection.BodySessionKey)
 	cfg, candidates := s.routeSnapshot(req)
 	if len(candidates) == 0 && req.ProviderType != "" {
@@ -59,6 +70,12 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 503, "no compatible healthy deployment")
 		return
 	}
+	// Exact-match response cache (opt-in). Only complete, non-streaming,
+	// deterministic requests are ever considered; anything else bypasses.
+	cacheKey, cacheable := s.cacheLookupFor(r.URL.Path, raw, in.Stream, in.Temperature, in.TopP)
+	if s.cacheServe(w, r, cacheKey, cacheable) {
+		return
+	}
 	max := cfg.Routing.MaxAttempts
 	if max > len(candidates) {
 		max = len(candidates)
@@ -71,7 +88,11 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 	var lastContentType string
 	forward := copySelectedRequestHeaders(r)
 	attempts := 0
+	skip := map[int]bool{}
 	for i := 0; i < len(candidates) && attempts < max; i++ {
+		if skip[i] {
+			continue
+		}
 		c := candidates[i]
 		fresh, a, ok := s.currentRouteCandidate(c.Deployment.ID, req)
 		if !ok {
@@ -79,28 +100,31 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		c = fresh
-		var payload []byte
-		var nm *translate.NameMap
-		if c.Deployment.ProviderType == "openai_compatible" {
-			payload, err = patchJSONModel(raw, c.Deployment.Model)
-		} else {
-			var an core.AnthropicRequest
-			var terr error
-			an, nm, terr = translate.OpenAIToAnthropic(in, c.Deployment.Model)
-			err = terr
-			if err == nil {
-				payload, err = json.Marshal(an)
-			}
-		}
-		if err != nil {
-			lastErr = err.Error()
+		primary, ok := s.buildOpenAIAttempt(c, req, raw, in)
+		if !ok {
+			lastErr = "attempt payload could not be built"
 			continue
 		}
+		var nm *translate.NameMap
+		c, a, nm = primary.c, primary.a, primary.nm
 		attempts++
 		attemptIndex := attempts - 1
 		s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_attempt", Deployment: c.Deployment.ID, Message: fmt.Sprintf("attempt=%d score=%.2f health=%s pressure=%.3f", attempts, c.Score, c.Health.Status, c.CapacityPressure)})
 		start := time.Now()
-		resp, e := a.Do(routeCtx, payload, in.Stream, forward)
+		out, winner, hedgeLaunched := s.doAttemptWithHedge(routeCtx, r.Header.Get("x-request-id"), cfg, candidates, i, attempts, max, primary,
+			func(idx int) (hedgeAttemptBundle, bool) { return s.buildOpenAIAttempt(candidates[idx], req, raw, in) },
+			in.Stream, forward)
+		if hedgeLaunched && i+1 < len(candidates) {
+			skip[i+1] = true
+		}
+		if out.secondaryWon {
+			c, a, nm = winner.c, winner.a, winner.nm
+			attempts++
+			attemptIndex = attempts - 1
+			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_attempt", Deployment: c.Deployment.ID, Message: fmt.Sprintf("attempt=%d score=%.2f health=%s pressure=%.3f (hedged winner)", attempts, c.Score, c.Health.Status, c.CapacityPressure)})
+		}
+		resp, e := out.resp, out.err
+		start = out.start
 		headerLatency := time.Since(start)
 		if e != nil {
 			lastErr = e.Error()
@@ -179,18 +203,27 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 		}
 		if c.Deployment.ProviderType == "openai_compatible" {
 			if in.Stream {
-				e = proxyNativeSSE(w, resp, "openai")
+				e = proxyNativeSSE(w, resp, "openai", func(prompt, completion int) {
+					s.usage.Record(c.Deployment.ID, int64(prompt), int64(completion))
+				})
 			} else {
-				e = proxyValidatedJSONResponse(w, resp, validateOpenAIResponseJSON)
+				e = s.proxyOpenAINativeJSON(w, resp, c.Deployment.ID, cacheKey, cacheable)
 			}
 		} else if in.Stream {
-			e = streamAnthropicToOpenAI(w, resp, in.Model, nm, r.Header.Get("x-request-id"))
+			e = streamAnthropicToOpenAIWithUsage(w, resp, in.Model, nm, func(prompt, completion int) {
+				s.usage.Record(c.Deployment.ID, int64(prompt), int64(completion))
+			}, r.Header.Get("x-request-id"))
 		} else {
 			var an core.AnthResponse
 			e = decodeValidatedJSONLimited(resp.Body, &an, validateAnthropicResponseJSON)
 			resp.Body.Close()
 			if e == nil {
-				writeJSON(w, 200, translate.AnthropicResponseToOpenAI(an, in.Model, nm))
+				s.usage.Record(c.Deployment.ID, int64(an.Usage.InputTokens), int64(an.Usage.OutputTokens))
+				translated := translate.AnthropicResponseToOpenAI(an, in.Model, nm)
+				if b, merr := json.Marshal(translated); merr == nil {
+					s.cacheStoreResponse(cacheKey, cacheable, c.Deployment.ID, 200, "application/json", b)
+				}
+				writeJSON(w, 200, translated)
 			}
 		}
 		total := time.Since(start)
@@ -278,6 +311,10 @@ func anthropicStopToOpenAIFinish(reason string) string {
 // clients never observe an empty JSON parse, and forwards real usage in a
 // final usage-only chunk before [DONE].
 func streamAnthropicToOpenAI(w http.ResponseWriter, resp *http.Response, model string, nm *translate.NameMap, requestID ...string) error {
+	return streamAnthropicToOpenAIWithUsage(w, resp, model, nm, nil, requestID...)
+}
+
+func streamAnthropicToOpenAIWithUsage(w http.ResponseWriter, resp *http.Response, model string, nm *translate.NameMap, usageSink func(prompt, completion int), requestID ...string) error {
 	defer resp.Body.Close()
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -489,6 +526,9 @@ func streamAnthropicToOpenAI(w http.ResponseWriter, resp *http.Response, model s
 	}
 	if fl != nil {
 		fl.Flush()
+	}
+	if usageSink != nil && usageSeen {
+		usageSink(inputTokens, outputTokens)
 	}
 	return nil
 }

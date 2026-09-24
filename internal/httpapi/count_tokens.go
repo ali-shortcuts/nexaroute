@@ -21,6 +21,9 @@ func (s *Server) countTokens(w http.ResponseWriter, r *http.Request) {
 		anthropicErrorJSON(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
+	if !s.clientAuthAllowed(w, r, true) {
+		return
+	}
 	var in core.AnthropicRequest
 	raw, err := readJSON(r, &in)
 	if err != nil {

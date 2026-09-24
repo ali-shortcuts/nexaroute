@@ -10,6 +10,9 @@ func (s *Server) models(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 405, "method not allowed")
 		return
 	}
+	if !s.clientAuthAllowed(w, r, false) {
+		return
+	}
 	s.runtimeMu.RLock()
 	deployments := s.rt.All()
 	s.runtimeMu.RUnlock()

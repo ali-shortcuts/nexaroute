@@ -203,6 +203,11 @@ type requestInspection struct {
 	Reasoning      bool
 	TooComplex     bool
 	BodySessionKey string
+	// EstimatedPromptTokens is a fast chars/4 heuristic over the message
+	// subtree plus per-message overhead. It is intentionally conservative
+	// (an estimate, never exact) and only used for context-window
+	// pre-routing; billing uses real upstream usage numbers.
+	EstimatedPromptTokens int
 }
 
 func boundedSessionValue(v string) string {
@@ -255,14 +260,14 @@ func inspectRequestJSON(raw []byte, visionType string, reasoningKeys []string) r
 
 	// Vision parts are meaningful inside message content. Restrict traversal to
 	// the messages subtree so a tool schema/example containing type=image(_url)
-	// cannot accidentally force vision-capable routing.
-	if visionType == "" {
-		return out
-	}
+	// cannot accidentally force vision-capable routing. The same traversal
+	// accumulates a cheap character estimate for context-window pre-routing.
 	messages, ok := root["messages"]
 	if !ok {
 		return out
 	}
+	chars := 0
+	messageCount := 0
 	stack := []any{messages}
 	nodes := 0
 	for len(stack) > 0 {
@@ -275,9 +280,14 @@ func inspectRequestJSON(raw []byte, visionType string, reasoningKeys []string) r
 			return out
 		}
 		switch x := v.(type) {
+		case string:
+			chars += len(x)
 		case map[string]any:
 			if typ, _ := x["type"].(string); strings.EqualFold(typ, visionType) {
 				out.Vision = true
+			}
+			if _, isMsg := x["role"]; isMsg {
+				messageCount++
 			}
 			if len(x) > maxRequestInspectionNodes-nodes-len(stack) {
 				out.TooComplex = true
@@ -294,6 +304,10 @@ func inspectRequestJSON(raw []byte, visionType string, reasoningKeys []string) r
 			stack = append(stack, x...)
 		}
 	}
+	// ~4 chars per token plus a small per-message framing overhead and a
+	// fixed conversation floor; rounded up. Text is counted by bytes, which
+	// slightly overestimates multi-byte content — a safe bias for routing.
+	out.EstimatedPromptTokens = chars/4 + messageCount*8 + 16
 	return out
 }
 
