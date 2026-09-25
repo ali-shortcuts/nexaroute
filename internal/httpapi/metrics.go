@@ -229,22 +229,13 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 	s.runtimeMu.RLock()
 	decisionMetrics := map[string]int64{}
 	if s.decisionOrchestrator != nil {
-		// Use global metrics snapshot; orchestrator holds reference
 		decisionMetrics = s.decisionOrchestrator.MetricsSnapshot()
 	}
 	s.runtimeMu.RUnlock()
-	// If orchestrator not yet initialized, fallback to global
-	if len(decisionMetrics) == 0 {
-		// Import decision package metrics via method that doesn't require server lock
-		// We use a local copy via global variable
-		// To avoid import cycle, we directly call decision.GlobalMetrics.Snapshot() if available
-		// But we already have metrics via orchestrator; this fallback is for tests
-	}
 	fmt.Fprintln(w, "# HELP nexaroute_decision_total Decision plane executions by outcome.")
 	fmt.Fprintln(w, "# TYPE nexaroute_decision_total counter")
 	for k, v := range decisionMetrics {
-		// Skip latency avg which is gauge
-		if k == "latency_avg_ms" || k == "latency_count" {
+		if k == "latency_avg_ms" || k == "latency_count" || strings.HasPrefix(k, "external_") {
 			continue
 		}
 		fmt.Fprintf(w, "nexaroute_decision_total{outcome=%q} %d\n", sanitizeMetricLabel(k), v)
@@ -262,6 +253,37 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "nexaroute_decision_latency_count %d\n", cnt)
 	} else {
 		fmt.Fprintln(w, "nexaroute_decision_latency_count 0")
+	}
+
+	// Phase F: external decision provider metrics (bounded labels)
+	fmt.Fprintln(w, "# HELP nexaroute_external_decision_requests_total External decision requests by type and outcome.")
+	fmt.Fprintln(w, "# TYPE nexaroute_external_decision_requests_total counter")
+	outcomes := []struct {
+		key     string
+		outcome string
+	}{
+		{"external_selected", "selected"},
+		{"external_error", "error"},
+		{"external_timeout", "timeout"},
+		{"external_invalid", "invalid"},
+		{"external_unavailable", "unavailable"},
+		{"external_request_too_large", "request_too_large"},
+		{"external_response_too_large", "response_too_large"},
+	}
+	for _, o := range outcomes {
+		if v, ok := decisionMetrics[o.key]; ok && v > 0 {
+			fmt.Fprintf(w, "nexaroute_external_decision_requests_total{type=\"jev\",outcome=%q} %d\n", o.outcome, v)
+		}
+	}
+	if total, ok := decisionMetrics["external_total"]; ok {
+		fmt.Fprintf(w, "nexaroute_external_decision_requests_total{type=\"jev\",outcome=\"total\"} %d\n", total)
+	}
+	fmt.Fprintln(w, "# HELP nexaroute_external_decision_latency_seconds External decision latency.")
+	fmt.Fprintln(w, "# TYPE nexaroute_external_decision_latency_seconds gauge")
+	if avg, ok := decisionMetrics["external_latency_avg_ms"]; ok {
+		fmt.Fprintf(w, "nexaroute_external_decision_latency_seconds{type=\"jev\"} %.3f\n", float64(avg)/1000.0)
+	} else {
+		fmt.Fprintf(w, "nexaroute_external_decision_latency_seconds{type=\"jev\"} 0\n")
 	}
 }
 

@@ -73,27 +73,45 @@ type DecisionPolicyConfig struct {
 }
 
 type DecisionConfig struct {
-	Mode      string `json:"mode,omitempty"`       // off | local
-	Provider  string `json:"provider,omitempty"`   // local | policy (Phase E)
+	Mode      string `json:"mode,omitempty"`       // off | local | assisted (Phase F)
+	Provider  string `json:"provider,omitempty"`   // local | policy | external ID (Phase F)
 	TimeoutMS int    `json:"timeout_ms,omitempty"` // bounded, default 10ms
 	Policy    string `json:"policy,omitempty"`     // Phase E: global policy ID
 }
 
+type DecisionProviderConfig struct {
+	ID          string `json:"id"`
+	Type        string `json:"type"` // jev
+	Enabled     *bool  `json:"enabled,omitempty"`
+	APIKey      string `json:"api_key,omitempty"`
+	APIKeyEnv   string `json:"api_key_env,omitempty"`
+	PrivacyMode string `json:"privacy_mode,omitempty"` // metadata_only
+	BaseURL     string `json:"base_url,omitempty"`     // for testing, SSRF-protected
+}
+
+func (d DecisionProviderConfig) IsEnabled() bool {
+	if d.Enabled == nil {
+		return true
+	}
+	return *d.Enabled
+}
+
 type Config struct {
-	Listen           string                  `json:"listen"`
-	Admin            AdminConfig             `json:"admin"`
-	Logging          LoggingConfig           `json:"logging"`
-	Routing          RoutingConfig           `json:"routing"`
-	Probe            ProbeConfig             `json:"probe"`
-	Cache            CacheConfig             `json:"cache"`
-	ClientAuth       ClientAuthConfig        `json:"client_auth"`
-	Decision         DecisionConfig          `json:"decision,omitempty"`
-	DecisionPolicies []DecisionPolicyConfig  `json:"decision_policies,omitempty"`
-	Providers        []ProviderConfig        `json:"providers"`
-	VirtualEndpoints []VirtualEndpointConfig `json:"virtual_endpoints,omitempty"`
-	RouteProfiles    []RouteProfileConfig    `json:"route_profiles,omitempty"`
-	CandidatePools   []CandidatePoolConfig   `json:"candidate_pools,omitempty"`
-	FallbackChains   []FallbackChainConfig   `json:"fallback_chains,omitempty"`
+	Listen            string                   `json:"listen"`
+	Admin             AdminConfig              `json:"admin"`
+	Logging           LoggingConfig            `json:"logging"`
+	Routing           RoutingConfig            `json:"routing"`
+	Probe             ProbeConfig              `json:"probe"`
+	Cache             CacheConfig              `json:"cache"`
+	ClientAuth        ClientAuthConfig         `json:"client_auth"`
+	Decision          DecisionConfig           `json:"decision,omitempty"`
+	DecisionPolicies  []DecisionPolicyConfig   `json:"decision_policies,omitempty"`
+	DecisionProviders []DecisionProviderConfig `json:"decision_providers,omitempty"`
+	Providers         []ProviderConfig         `json:"providers"`
+	VirtualEndpoints  []VirtualEndpointConfig  `json:"virtual_endpoints,omitempty"`
+	RouteProfiles     []RouteProfileConfig     `json:"route_profiles,omitempty"`
+	CandidatePools    []CandidatePoolConfig    `json:"candidate_pools,omitempty"`
+	FallbackChains    []FallbackChainConfig    `json:"fallback_chains,omitempty"`
 }
 
 type LoggingConfig struct {
@@ -272,6 +290,8 @@ const (
 	maxTaskOverrides      = 32
 	maxDecisionPolicyName = 256
 	maxPolicyIDBytes      = 256
+	// Phase F limits
+	maxDecisionProviders = 16
 )
 
 func validLocalID(s string) bool {
@@ -595,6 +615,22 @@ func (c *Config) ApplyDefaults() {
 				norm[nk] = v
 			}
 			dp.TaskOverrides = norm
+		}
+	}
+	for i := range c.DecisionProviders {
+		dp := &c.DecisionProviders[i]
+		dp.ID = strings.TrimSpace(dp.ID)
+		dp.Type = strings.TrimSpace(strings.ToLower(dp.Type))
+		dp.APIKey = strings.TrimSpace(dp.APIKey)
+		dp.APIKeyEnv = strings.TrimSpace(dp.APIKeyEnv)
+		dp.PrivacyMode = strings.TrimSpace(strings.ToLower(dp.PrivacyMode))
+		dp.BaseURL = strings.TrimRight(strings.TrimSpace(dp.BaseURL), "/")
+		if dp.PrivacyMode == "" {
+			dp.PrivacyMode = "metadata_only"
+		}
+		if dp.Enabled == nil {
+			t := true
+			dp.Enabled = &t
 		}
 	}
 
@@ -952,16 +988,24 @@ func (c Config) Validate() error {
 			}
 		}
 	}
-	// Phase D/E: Decision
+	// Phase D/E/F: Decision
 	switch strings.ToLower(strings.TrimSpace(c.Decision.Mode)) {
-	case "", "off", "local":
+	case "", "off", "local", "assisted":
 	default:
-		return errors.New("decision.mode must be off or local")
+		return errors.New("decision.mode must be off, local, or assisted")
 	}
-	switch strings.ToLower(strings.TrimSpace(c.Decision.Provider)) {
-	case "", "local", "policy":
-	default:
-		return errors.New("decision.provider must be local or policy")
+	// Provider can be local, policy, or external ID (validated later against decision_providers)
+	// For local mode, provider must be local or policy (external not allowed)
+	// For assisted mode, provider must be external ID
+	// We do basic format check here, detailed check after collecting IDs
+	if c.Decision.Provider != "" {
+		if len(c.Decision.Provider) > maxPolicyIDBytes {
+			return errors.New("decision.provider is too long")
+		}
+		if !validLocalID(c.Decision.Provider) {
+			return fmt.Errorf("decision provider id %q invalid", c.Decision.Provider)
+		}
+		// No collision with built-ins is checked later, but we allow local/policy here for basic
 	}
 	if c.Decision.TimeoutMS < 1 || c.Decision.TimeoutMS > 5000 {
 		return errors.New("decision.timeout_ms must be between 1 and 5000")
@@ -1046,6 +1090,104 @@ func (c Config) Validate() error {
 		if len(c.DecisionPolicies) == 0 {
 			return fmt.Errorf("decision_policies must contain at least one policy when provider=policy")
 		}
+	}
+
+	// Phase F: Decision Providers (external)
+	if len(c.DecisionProviders) > maxDecisionProviders {
+		return fmt.Errorf("decision_providers exceeds safe limit %d", maxDecisionProviders)
+	}
+	seenDecisionProviderIDs := map[string]struct{}{}
+	for i, dp := range c.DecisionProviders {
+		if dp.ID == "" {
+			return fmt.Errorf("decision_providers[%d].id is required", i)
+		}
+		if len(dp.ID) > maxPolicyIDBytes || !validLocalID(dp.ID) {
+			return fmt.Errorf("decision provider id %q invalid", dp.ID)
+		}
+		if dp.ID == "local" || dp.ID == "policy" {
+			return fmt.Errorf("decision provider id %q collides with built-in provider", dp.ID)
+		}
+		if _, dup := seenDecisionProviderIDs[dp.ID]; dup {
+			return fmt.Errorf("duplicate decision provider id %q", dp.ID)
+		}
+		seenDecisionProviderIDs[dp.ID] = struct{}{}
+		if dp.Type == "" {
+			return fmt.Errorf("decision provider %q type is required", dp.ID)
+		}
+		if dp.Type != "jev" {
+			return fmt.Errorf("decision provider %q has unsupported type %q (only jev in Phase F)", dp.ID, dp.Type)
+		}
+		if len(dp.Type) > maxPolicyIDBytes {
+			return fmt.Errorf("decision provider %q type too long", dp.ID)
+		}
+		if dp.PrivacyMode != "" && dp.PrivacyMode != "metadata_only" {
+			return fmt.Errorf("decision provider %q privacy_mode must be metadata_only in Phase F (got %q)", dp.ID, dp.PrivacyMode)
+		}
+		if len(dp.APIKey) > 4096 {
+			return fmt.Errorf("decision provider %q api_key too long", dp.ID)
+		}
+		if len(dp.APIKeyEnv) > 256 {
+			return fmt.Errorf("decision provider %q api_key_env too long", dp.ID)
+		}
+		if dp.APIKeyEnv != "" {
+			// basic env var name validation: letters, digits, underscore, must not start with digit
+			if len(dp.APIKeyEnv) == 0 || (dp.APIKeyEnv[0] >= '0' && dp.APIKeyEnv[0] <= '9') {
+				return fmt.Errorf("decision provider %q api_key_env %q invalid", dp.ID, dp.APIKeyEnv)
+			}
+			for _, ch := range dp.APIKeyEnv {
+				if (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '_' {
+					continue
+				}
+				return fmt.Errorf("decision provider %q api_key_env %q invalid", dp.ID, dp.APIKeyEnv)
+			}
+		}
+		if len(dp.BaseURL) > maxURLBytes {
+			return fmt.Errorf("decision provider %q base_url too long", dp.ID)
+		}
+		if dp.BaseURL != "" {
+			u, err := url.Parse(dp.BaseURL)
+			if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+				return fmt.Errorf("decision provider %q has invalid base_url", dp.ID)
+			}
+			// Production must be HTTPS; allow HTTP only for testing with loopback? We enforce HTTPS for non-loopback, but for simplicity require https unless host is localhost/127.0.0.1 for tests
+			// SSRF protection: reject loopback/private/link-local/metadata in production, but allow for tests via internal constructor override
+			// Here we do basic check: if scheme http and not loopback, still allow for test, but we will enforce in transport layer
+		}
+	}
+
+	// Decision mode/provider cross-validation
+	mode := strings.ToLower(strings.TrimSpace(c.Decision.Mode))
+	provider := strings.ToLower(strings.TrimSpace(c.Decision.Provider))
+	if mode == "assisted" {
+		if provider == "" {
+			return fmt.Errorf("decision.provider is required when decision.mode=assisted")
+		}
+		if provider == "local" || provider == "policy" {
+			return fmt.Errorf("decision.provider must be external when mode=assisted (got %q)", provider)
+		}
+		if _, ok := seenDecisionProviderIDs[provider]; !ok {
+			return fmt.Errorf("decision.provider %q references unknown decision_providers", provider)
+		}
+		// Check enabled
+		for _, dp := range c.DecisionProviders {
+			if dp.ID == provider && !dp.IsEnabled() {
+				return fmt.Errorf("decision.provider %q is disabled", provider)
+			}
+		}
+	} else if mode == "local" {
+		if provider != "" && provider != "local" && provider != "policy" {
+			// If provider is external ID but mode is local, reject
+			if _, ok := seenDecisionProviderIDs[provider]; ok {
+				return fmt.Errorf("decision.provider %q is external but mode is local (use assisted)", provider)
+			}
+			// If it's unknown external ID, it would have been caught earlier as unknown provider? But we already allow any validLocalID for provider in local mode previously, now we check
+			// For local mode, only local/policy allowed
+			if provider != "local" && provider != "policy" {
+				return fmt.Errorf("decision.provider must be local or policy when mode=local (got %q)", provider)
+			}
+		}
+	} else if mode == "off" || mode == "" {
+		// off mode: provider can be anything but no external calls will happen; still validate if it references external that is disabled? Allow
 	}
 
 	// Phase B: Virtual Endpoints, Route Profiles, Candidate Pools, Fallback Chains

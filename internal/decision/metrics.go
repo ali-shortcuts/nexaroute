@@ -19,6 +19,17 @@ type Metrics struct {
 	latencySum     atomic.Int64 // nanos sum
 	latencyCount   atomic.Int64
 	offModeTotal   atomic.Int64
+	// Phase F: external provider metrics with bounded labels type=jev outcome=selected|error|timeout|invalid|unavailable
+	externalTotal            atomic.Int64
+	externalSelected         atomic.Int64
+	externalError            atomic.Int64
+	externalTimeout          atomic.Int64
+	externalInvalid          atomic.Int64
+	externalUnavailable      atomic.Int64
+	externalRequestTooLarge  atomic.Int64
+	externalResponseTooLarge atomic.Int64
+	externalLatencySum       atomic.Int64
+	externalLatencyCount     atomic.Int64
 }
 
 // Record records a decision outcome.
@@ -56,6 +67,42 @@ func (m *Metrics) Record(result DecisionResult, err error, timedOut bool, offMod
 			break
 		}
 	}
+
+	// Phase F: external metrics
+	isExternal := false
+	for _, rc := range result.ReasonCodes {
+		switch rc {
+		case ReasonExternalSelected, ReasonExternalAbstained, ReasonExternalTimeout, ReasonExternalHTTPError,
+			ReasonExternalInvalidResponse, ReasonExternalUnknownCandidate, ReasonExternalRequestTooLarge,
+			ReasonExternalResponseTooLarge, ReasonExternalProviderUnavailable:
+			isExternal = true
+		}
+	}
+	if isExternal {
+		m.externalTotal.Add(1)
+		if result.Latency > 0 {
+			m.externalLatencySum.Add(int64(result.Latency))
+			m.externalLatencyCount.Add(1)
+		}
+		for _, rc := range result.ReasonCodes {
+			switch rc {
+			case ReasonExternalSelected:
+				m.externalSelected.Add(1)
+			case ReasonExternalHTTPError, ReasonProviderError:
+				m.externalError.Add(1)
+			case ReasonExternalTimeout, ReasonTimeout:
+				m.externalTimeout.Add(1)
+			case ReasonExternalInvalidResponse, ReasonExternalUnknownCandidate, ReasonInvalidResult:
+				m.externalInvalid.Add(1)
+			case ReasonExternalProviderUnavailable, ReasonProviderUnhealthy:
+				m.externalUnavailable.Add(1)
+			case ReasonExternalRequestTooLarge:
+				m.externalRequestTooLarge.Add(1)
+			case ReasonExternalResponseTooLarge:
+				m.externalResponseTooLarge.Add(1)
+			}
+		}
+	}
 }
 
 // Snapshot returns a map for metrics endpoint / admin.
@@ -67,17 +114,33 @@ func (m *Metrics) Snapshot() map[string]int64 {
 	if latCount > 0 {
 		avgMs = (latSum / latCount) / int64(time.Millisecond)
 	}
+	extLatSum := m.externalLatencySum.Load()
+	extLatCount := m.externalLatencyCount.Load()
+	extAvgMs := int64(0)
+	if extLatCount > 0 {
+		extAvgMs = (extLatSum / extLatCount) / int64(time.Millisecond)
+	}
 	return map[string]int64{
-		"decisions_total": m.decisionsTotal.Load(),
-		"abstains_total":  m.abstainsTotal.Load(),
-		"failures_total":  m.failuresTotal.Load(),
-		"timeouts_total":  m.timeoutsTotal.Load(),
-		"invalid_total":   m.invalidTotal.Load(),
-		"select_total":    m.selectTotal.Load(),
-		"rank_total":      m.rankTotal.Load(),
-		"latency_avg_ms":  avgMs,
-		"latency_count":   latCount,
-		"off_mode_total":  m.offModeTotal.Load(),
+		"decisions_total":             m.decisionsTotal.Load(),
+		"abstains_total":              m.abstainsTotal.Load(),
+		"failures_total":              m.failuresTotal.Load(),
+		"timeouts_total":              m.timeoutsTotal.Load(),
+		"invalid_total":               m.invalidTotal.Load(),
+		"select_total":                m.selectTotal.Load(),
+		"rank_total":                  m.rankTotal.Load(),
+		"latency_avg_ms":              avgMs,
+		"latency_count":               latCount,
+		"off_mode_total":              m.offModeTotal.Load(),
+		"external_total":              m.externalTotal.Load(),
+		"external_selected":           m.externalSelected.Load(),
+		"external_error":              m.externalError.Load(),
+		"external_timeout":            m.externalTimeout.Load(),
+		"external_invalid":            m.externalInvalid.Load(),
+		"external_unavailable":        m.externalUnavailable.Load(),
+		"external_request_too_large":  m.externalRequestTooLarge.Load(),
+		"external_response_too_large": m.externalResponseTooLarge.Load(),
+		"external_latency_avg_ms":     extAvgMs,
+		"external_latency_count":      extLatCount,
 	}
 }
 

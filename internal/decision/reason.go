@@ -30,33 +30,54 @@ const (
 	ReasonTaskAwareWeights     ReasonCode = "TASK_AWARE_WEIGHTS"
 	ReasonMinDeltaNotMet       ReasonCode = "MIN_DELTA_NOT_MET"
 	ReasonContextGuardrail     ReasonCode = "CONTEXT_GUARDRAIL"
+	// Phase F: external provider
+	ReasonExternalSelected            ReasonCode = "EXTERNAL_SELECTED"
+	ReasonExternalAbstained           ReasonCode = "EXTERNAL_ABSTAINED"
+	ReasonExternalTimeout             ReasonCode = "EXTERNAL_TIMEOUT"
+	ReasonExternalHTTPError           ReasonCode = "EXTERNAL_HTTP_ERROR"
+	ReasonExternalInvalidResponse     ReasonCode = "EXTERNAL_INVALID_RESPONSE"
+	ReasonExternalUnknownCandidate    ReasonCode = "EXTERNAL_UNKNOWN_CANDIDATE"
+	ReasonExternalRequestTooLarge     ReasonCode = "EXTERNAL_REQUEST_TOO_LARGE"
+	ReasonExternalResponseTooLarge    ReasonCode = "EXTERNAL_RESPONSE_TOO_LARGE"
+	ReasonExternalProviderUnavailable ReasonCode = "EXTERNAL_PROVIDER_UNAVAILABLE"
+	ReasonPrimaryConstraintViolation  ReasonCode = "PRIMARY_CONSTRAINT_VIOLATION"
 )
 
 // allowedReasonCodes is the canonical set for validation.
 var allowedReasonCodes = map[ReasonCode]struct{}{
-	ReasonExistingOrderPreserved: {},
-	ReasonLocalPassThrough:       {},
-	ReasonAbstained:              {},
-	ReasonTimeout:                {},
-	ReasonProviderError:          {},
-	ReasonProviderPanic:          {},
-	ReasonInvalidResult:          {},
-	ReasonBudgetExceeded:         {},
-	ReasonOffMode:                {},
-	ReasonEligibleSetPreserved:   {},
-	ReasonNormalizationApplied:   {},
-	ReasonValidationFailed:       {},
-	ReasonSingleCandidate:        {},
-	ReasonEmptyEligible:          {},
-	ReasonProviderUnhealthy:      {},
-	ReasonAffinityPreserved:      {},
-	ReasonPoolBoundaryEnforced:   {},
-	ReasonPriorityGuardrail:      {},
-	ReasonPolicyScored:           {},
-	ReasonPolicySelectFirst:      {},
-	ReasonTaskAwareWeights:       {},
-	ReasonMinDeltaNotMet:         {},
-	ReasonContextGuardrail:       {},
+	ReasonExistingOrderPreserved:      {},
+	ReasonLocalPassThrough:            {},
+	ReasonAbstained:                   {},
+	ReasonTimeout:                     {},
+	ReasonProviderError:               {},
+	ReasonProviderPanic:               {},
+	ReasonInvalidResult:               {},
+	ReasonBudgetExceeded:              {},
+	ReasonOffMode:                     {},
+	ReasonEligibleSetPreserved:        {},
+	ReasonNormalizationApplied:        {},
+	ReasonValidationFailed:            {},
+	ReasonSingleCandidate:             {},
+	ReasonEmptyEligible:               {},
+	ReasonProviderUnhealthy:           {},
+	ReasonAffinityPreserved:           {},
+	ReasonPoolBoundaryEnforced:        {},
+	ReasonPriorityGuardrail:           {},
+	ReasonPolicyScored:                {},
+	ReasonPolicySelectFirst:           {},
+	ReasonTaskAwareWeights:            {},
+	ReasonMinDeltaNotMet:              {},
+	ReasonContextGuardrail:            {},
+	ReasonExternalSelected:            {},
+	ReasonExternalAbstained:           {},
+	ReasonExternalTimeout:             {},
+	ReasonExternalHTTPError:           {},
+	ReasonExternalInvalidResponse:     {},
+	ReasonExternalUnknownCandidate:    {},
+	ReasonExternalRequestTooLarge:     {},
+	ReasonExternalResponseTooLarge:    {},
+	ReasonExternalProviderUnavailable: {},
+	ReasonPrimaryConstraintViolation:  {},
 }
 
 // IsValidReasonCode reports whether code is in the bounded contract.

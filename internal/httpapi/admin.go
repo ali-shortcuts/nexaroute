@@ -192,7 +192,7 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 		}
 		cpList = cps
 	}
-	// Phase D: decision plane snapshot
+	// Phase D/F: decision plane snapshot
 	s.runtimeMu.RLock()
 	decisionCfg := cfgFull.Decision
 	decisionMetrics := map[string]int64{}
@@ -202,6 +202,46 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.decisionRegistry != nil {
 		decisionProviders = map[string]any{"providers": s.decisionRegistry.Snapshot()}
+	}
+	// Phase F: external decision providers safe status
+	externalProviders := []map[string]any{}
+	for _, extCfg := range cfgFull.DecisionProviders {
+		// Resolve key configured (no secret) — check actual env var
+		keyConfigured := false
+		if extCfg.APIKey != "" {
+			keyConfigured = true
+		} else if extCfg.APIKeyEnv != "" {
+			if v := os.Getenv(extCfg.APIKeyEnv); v != "" {
+				keyConfigured = true
+			}
+		}
+		// Get health from registry
+		healthStatus := "unknown"
+		healthMsg := ""
+		if s.decisionRegistry != nil {
+			if p, ok := s.decisionRegistry.Get(extCfg.ID); ok {
+				h := p.Health()
+				healthStatus = h.Status
+				healthMsg = h.Message
+				// If health says api key not configured, then keyConfigured false
+				if h.Message == "api key not configured" {
+					keyConfigured = false
+				}
+			}
+		}
+		item := map[string]any{
+			"id":             extCfg.ID,
+			"type":           extCfg.Type,
+			"enabled":        extCfg.IsEnabled(),
+			"health":         healthStatus,
+			"key_configured": keyConfigured,
+			"privacy_mode":   extCfg.PrivacyMode,
+		}
+		// Do not expose API key, base URL with secrets, etc.
+		if healthMsg != "" && healthMsg != "api key not configured" && healthMsg != "disabled" {
+			item["health_message"] = healthMsg
+		}
+		externalProviders = append(externalProviders, item)
 	}
 	s.runtimeMu.RUnlock()
 
@@ -232,9 +272,10 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 		"candidate_pools":   cpList,
 		"fallback_chains":   fcList,
 		"decision": map[string]any{
-			"config":    decisionCfg,
-			"metrics":   decisionMetrics,
-			"providers": decisionProviders,
+			"config":                      decisionCfg,
+			"metrics":                     decisionMetrics,
+			"providers":                   decisionProviders,
+			"external_decision_providers": externalProviders,
 		},
 		"config": map[string]any{
 			"probe":    probeCfg,

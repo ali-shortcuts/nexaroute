@@ -168,5 +168,15 @@
     "enabled": false,
     "keys": [],
     "rpm": 0
-  }
+  },
+  "decision_providers": [
+    {
+      "id": "jev-main",
+      "type": "jev",
+      "enabled": false,
+      "api_key_env": "JEV_API_KEY",
+      "privacy_mode": "metadata_only",
+      "base_url": "https://www.jevai.org"
+    }
+  ]
 }

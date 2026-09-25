@@ -9,6 +9,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"reflect"
 	"runtime/debug"
 	"strings"
@@ -20,6 +21,7 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/compat"
 	"github.com/ali-shortcuts/nexaroute/internal/config"
 	"github.com/ali-shortcuts/nexaroute/internal/decision"
+	"github.com/ali-shortcuts/nexaroute/internal/decision/jev"
 	"github.com/ali-shortcuts/nexaroute/internal/decision/policy"
 	"github.com/ali-shortcuts/nexaroute/internal/events"
 	"github.com/ali-shortcuts/nexaroute/internal/health"
@@ -179,6 +181,38 @@ func New(cfg config.Config, configPath string, reg *providers.Registry, rt *rout
 	policies := convertDecisionPolicies(cfg.DecisionPolicies)
 	policyProvider := policy.NewProvider(policies, cfg.Decision.Policy)
 	s.decisionRegistry.Register(policyProvider)
+	// Phase F: register external providers (jev)
+	for _, extCfg := range cfg.DecisionProviders {
+		if !extCfg.IsEnabled() {
+			continue
+		}
+		// Resolve API key
+		apiKey := extCfg.APIKey
+		if extCfg.APIKeyEnv != "" {
+			if v := os.Getenv(extCfg.APIKeyEnv); v != "" {
+				apiKey = v
+			}
+		}
+		if extCfg.Type == "jev" {
+			jevProvider, err := jev.NewProvider(jev.ProviderConfig{
+				ID:          extCfg.ID,
+				Type:        extCfg.Type,
+				Enabled:     extCfg.IsEnabled(),
+				APIKey:      apiKey,
+				APIKeyEnv:   extCfg.APIKeyEnv,
+				PrivacyMode: extCfg.PrivacyMode,
+				BaseURL:     extCfg.BaseURL,
+			})
+			if err != nil {
+				// Log but don't fail gateway startup; provider will be unavailable
+				if l != nil {
+					l.Printf("failed to create decision provider %s: %v", extCfg.ID, err)
+				}
+				continue
+			}
+			s.decisionRegistry.Register(jevProvider)
+		}
+	}
 	s.decisionOrchestrator = decision.NewOrchestrator(s.decisionRegistry, cfg.Decision, &decision.Metrics{})
 	s.routeResolver = route.NewResolver(cfg, rt.All())
 	return s
@@ -263,6 +297,13 @@ func cloneConfig(in config.Config) config.Config {
 			for k, v := range in.DecisionPolicies[i].TaskOverrides {
 				out.DecisionPolicies[i].TaskOverrides[k] = v
 			}
+		}
+	}
+	out.DecisionProviders = append([]config.DecisionProviderConfig(nil), in.DecisionProviders...)
+	for i := range out.DecisionProviders {
+		if in.DecisionProviders[i].Enabled != nil {
+			b := *in.DecisionProviders[i].Enabled
+			out.DecisionProviders[i].Enabled = &b
 		}
 	}
 	return out
@@ -466,6 +507,72 @@ func (s *Server) applyConfigLocked(cfg config.Config) error {
 			if updater, ok := pp.(interface{ UpdatePolicies([]policy.Policy, string) }); ok {
 				policies := convertDecisionPolicies(cfg.DecisionPolicies)
 				updater.UpdatePolicies(policies, cfg.Decision.Policy)
+			}
+		}
+		// Phase F: hot-reload external providers (jev) — build immutable new adapters and swap atomically
+		// Track old external IDs for removal
+		oldExternalIDs := map[string]struct{}{}
+		for _, id := range s.decisionRegistry.List() {
+			if id != "local" && id != "policy" {
+				oldExternalIDs[id] = struct{}{}
+			}
+		}
+		// Register new/updated external providers
+		newExternalIDs := map[string]struct{}{}
+		for _, extCfg := range cfg.DecisionProviders {
+			newExternalIDs[extCfg.ID] = struct{}{}
+			if !extCfg.IsEnabled() {
+				// Register disabled placeholder that returns unavailable
+				if extCfg.Type == "jev" {
+					disabledProvider, _ := jev.NewProvider(jev.ProviderConfig{
+						ID:          extCfg.ID,
+						Type:        extCfg.Type,
+						Enabled:     false,
+						PrivacyMode: extCfg.PrivacyMode,
+						BaseURL:     extCfg.BaseURL,
+					})
+					if disabledProvider != nil {
+						s.decisionRegistry.Register(disabledProvider)
+					}
+				}
+				continue
+			}
+			apiKey := extCfg.APIKey
+			if extCfg.APIKeyEnv != "" {
+				if v := os.Getenv(extCfg.APIKeyEnv); v != "" {
+					apiKey = v
+				}
+			}
+			if extCfg.Type == "jev" {
+				jevProvider, err := jev.NewProvider(jev.ProviderConfig{
+					ID:          extCfg.ID,
+					Type:        extCfg.Type,
+					Enabled:     extCfg.IsEnabled(),
+					APIKey:      apiKey,
+					APIKeyEnv:   extCfg.APIKeyEnv,
+					PrivacyMode: extCfg.PrivacyMode,
+					BaseURL:     extCfg.BaseURL,
+				})
+				if err != nil {
+					if s.log != nil {
+						s.log.Printf("failed to create decision provider %s: %v", extCfg.ID, err)
+					}
+					continue
+				}
+				s.decisionRegistry.Register(jevProvider)
+			}
+		}
+		// For removed external providers, register unavailable placeholder to stop new calls
+		for oldID := range oldExternalIDs {
+			if _, stillExists := newExternalIDs[oldID]; !stillExists {
+				disabledProvider, _ := jev.NewProvider(jev.ProviderConfig{
+					ID:      oldID,
+					Type:    "jev",
+					Enabled: false,
+				})
+				if disabledProvider != nil {
+					s.decisionRegistry.Register(disabledProvider)
+				}
 			}
 		}
 	}

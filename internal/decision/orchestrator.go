@@ -224,6 +224,9 @@ func (o *Orchestrator) Decide(ctx context.Context, req DecisionRequest) (ordered
 		return ordered, result, trace
 	}
 
+	// Compute primary selection constraints (Phase F generalization of Phase E guardrails)
+	primaryConstraints := ComputePrimaryConstraints(req.Candidates, req.PinnedCandidateID)
+
 	// Resolve provider
 	providerName := cfg.Provider
 	if providerName == "" {
@@ -249,6 +252,56 @@ func (o *Orchestrator) Decide(ctx context.Context, req DecisionRequest) (ordered
 			o.metrics.Record(result, perr, false, false)
 		}
 		return ordered, result, trace
+	}
+
+	// Affinity short-circuit: if forced primary exists due to eligible session affinity, do NOT call external provider
+	// This protects affinity, saves network cost, avoids data sharing
+	// For external providers (not local/policy), short-circuit here
+	if primaryConstraints.ForcedPrimaryID != "" {
+		// Determine if provider is external: not local and not policy
+		isExternal := provider.ID() != "local" && provider.ID() != "policy" && provider.ID() != "off" && provider.ID() != "none"
+		// Also check if provider type is external via registry? For now ID check is sufficient since external IDs are configurable like jev-main
+		// Additionally, if provider is known external via interface, we could check, but we use ID not in built-ins
+		if isExternal {
+			// Find forced candidate and return it as primary, preserving existing order for remainder
+			forcedID := primaryConstraints.ForcedPrimaryID
+			// Build ordered list: forced first + rest in original order
+			forcedCandidate := Candidate{}
+			found := false
+			for _, c := range req.Candidates {
+				if c.ID == forcedID {
+					forcedCandidate = c
+					found = true
+					break
+				}
+			}
+			if found {
+				ordered = make([]Candidate, 0, len(req.Candidates))
+				ordered = append(ordered, forcedCandidate)
+				for _, c := range req.Candidates {
+					if c.ID != forcedID {
+						ordered = append(ordered, c)
+					}
+				}
+				result = DecisionResult{
+					Action:      ActionSelect,
+					SelectedID:  forcedID,
+					Confidence:  1.0,
+					ReasonCodes: []ReasonCode{ReasonAffinityPreserved, ReasonEligibleSetPreserved},
+					ProviderID:  provider.ID(),
+				}
+				trace.ProviderID = provider.ID()
+				trace.Action = ActionSelect
+				trace.SelectedID = forcedID
+				trace.ReasonCodes = result.ReasonCodes
+				trace.FallbackUsed = false
+				if o.metrics != nil {
+					o.metrics.Record(result, nil, false, false)
+				}
+				return ordered, result, trace
+			}
+			// If forced not found (should not happen), fall through to normal path
+		}
 	}
 
 	// Provider health check before invocation
@@ -433,6 +486,29 @@ func (o *Orchestrator) Decide(ctx context.Context, req DecisionRequest) (ordered
 			o.metrics.Record(decideResult, verr, false, false)
 		}
 		return ordered, decideResult, trace
+	}
+
+	// Phase F: validate primary band — selected must be in AllowedPrimaryIDs
+	if decideResult.Action == ActionSelect {
+		if !primaryConstraints.IsAllowedPrimary(decideResult.SelectedID) {
+			ordered = CloneCandidates(req.Candidates)
+			decideResult = DecisionResult{
+				Action:      ActionAbstain,
+				Abstained:   true,
+				Confidence:  0,
+				ReasonCodes: []ReasonCode{ReasonPrimaryConstraintViolation, ReasonExistingOrderPreserved},
+				ProviderID:  provider.ID(),
+				Latency:     latency,
+				Error:       "primary constraint violation",
+			}
+			trace.Action = ActionAbstain
+			trace.ReasonCodes = decideResult.ReasonCodes
+			trace.FallbackUsed = true
+			if o.metrics != nil {
+				o.metrics.Record(decideResult, fmt.Errorf("primary constraint violation"), false, false)
+			}
+			return ordered, decideResult, trace
+		}
 	}
 
 	// Normalize
