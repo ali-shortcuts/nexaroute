@@ -1,10 +1,11 @@
-# Phase E — Multi-Objective Policy Engine + Reason Codes — Implementation Report (Final Convergence)
+# Phase E — Multi-Objective Policy Engine + Reason Codes — Implementation Report (Final Convergence + Hardening)
 
 Date: 2026-09-25
 Branch: arena/01a0d825-nexaroute
-Baseline: 7f8c0a97 (Phase D PASS) → f933313 Phase E multi-objective policy engine + reason codes → final convergence with fixes
+Baseline: 7f8c0a97 (Phase D PASS) → f933313 Phase E → d94bd40 final convergence → hardened tests (this commit)
 Spec: §12 Policy Engine, §13 Scoring, §14 Reason Codes, §15 Affinity/Pool/Priority, §42 Config, §46 Observability, Phase E safety
 Toolchain: /tmp/go1.23.0/bin/go go1.23.0 linux/amd64 (rebuilt from go1.4.3 → 1.17.13 → 1.20.6 → 1.23.0)
+Hardening: cross-protocol fatal on mismatch, VE/direct identical physical deployment, fallback exact B→A→C, affinity counterfactual, max_attempts third candidate zero hits, explainability required, privacy breakdown/metrics/admin, capability/health absence, hot reload coherent P1/P2, mutation-checked
 
 ---
 
@@ -400,43 +401,58 @@ Unchanged intentionally:
 
 ---
 
-## 8. Acceptance Checklist (33 items)
+## 8. Acceptance Checklist (Hardened — 19 items from spec + 33 original)
 
-- [x] 1. Context score request-relative headroom (MinContextWindow) — `computeContext(cands, required)` with (window-required)/window, required = MinContextWindow else Estimated+MaxOutput
-- [x] 2. Reliability unknown neutral via Successes/Failures — Candidate.Successes/Failures added, Successes+Failures==0 → 0.5 neutral
-- [x] 3. Min_score_delta vs original primary (not second-best) — original primary = min OriginalRank, improvement = top - original, examples A/B/C verified
-- [x] 4. Affinity authoritative before priority — affinity check before priority guardrail, pool boundary still first, tests AffinityAuthoritativeOverPriority, AffinityInLaterPoolMustNotLeapfrog
-- [x] 5. Explainability wired to DecisionTrace/PolicyTrace + events — PolicyTrace in result and trace, events fields populated, breakdown JSON
-- [x] 6. MarshalBreakdown valid JSON — structural bounding, iterative reduction to 4096, never byte-slice, tests MaxBoundsValidJSON
-- [x] 7. Provider=policy explicit config no silent no-op — resolvePolicy explicit, config validation requires decision.policy when provider=policy, test NoPolicyConfig
-- [x] 8. Zero-weight task override rejection — FromConfig and config validation reject all-zero override, test AllZeroRejected
-- [x] 9. Canonical task vocab sync — canonicalTasks vs taskprofile.AllTaskTypes() parity test, 15 types, case-insensitive lowercasing
-- [x] 10. Scorer_test committed — 24 tests covering router baseline higher/lower, all equal, NaN/Inf, reliability unknown neutral, measured success/failures, degraded/unknown, invalid NaN/Inf, latency lower better, 0/unmeasured neutral, equal known, TTFT same, capacity 0/moderate/max/invalid, cost PriceKnown false neutral, known cheaper wins, equal known, invalid neutral, context actual request-relative headroom, unknown neutral, equal, invalid, too-small defensive, 16k vs 128k 12k req, same windows tiny req
-- [x] 11. Provider_test committed — pool boundary, priority tier without affinity, affinity preserved, single, task override, tie, SELECT-only, deterministic, finite, no panic, etc.
-- [x] 12. Policy_test committed — valid, invalid ID, selection mode, min delta, no positive weight, task override canonical/non-canonical/all-zero/case-insensitive, ResolveWeights, vocab parity
-- [x] 13. Property_test committed — A eligible IDs preserved (200 random), B pool boundary (100 random), C priority tier without affinity (100 random), D affinity preserved (100 random), E deterministic, F finite [0,1] (200 random NaN/Inf), G no panic NaN/Inf (200 random negative/invalid)
-- [x] 14. Benchmark_test committed — 2/10/100 cands scoring + full decision + task weight + context, 10 benchmarks, output recorded
-- [x] 15. Component coverage — router baseline, reliability, latency, TTFT, capacity, cost, context all covered
-- [x] 16. Fuzz — short fuzz checks FuzzPatchJSONModel and FuzzParseAnthContent 2s each PASS (in verify.sh)
-- [x] 17. Cross-protocol OpenAI/Anthropic/Responses with real policy provider — TestPolicy_CrossProtocolWithRealPolicyProvider PASS
-- [x] 18. VE vs direct neutrality — TestPolicy_VEvsDirectNeutrality PASS
-- [x] 19. Fallback E2E B/A/C order — TestPolicy_FallbackE2E PASS (primary fail → fallback)
-- [x] 20. Session affinity E2E — TestPolicy_SessionAffinityE2E PASS (same session ID → same deployment)
-- [x] 21. Max_attempts with policy — TestPolicy_MaxAttemptsWithPolicy PASS (fail first, maxAttempts 2, hits <=2)
-- [x] 22. Capability/health boundary — TestPolicy_CapabilityAndHealthBoundary PASS (vision request only vision capable, policy must not override), TestPolicy_ContextWindowBoundary PASS (100 vs 100000 context)
-- [x] 23. Privacy canary SECRET_POLICY_CANARY_4e91 full-path — TestPolicyPrivacy_NoCanaryInBreakdown, NoCanaryInEvent, FullPathWithCanaryInput, TestPolicy_PrivacyCanaryFullPath (prompt contains canary → not in trace header, not in events, not in breakdown)
-- [x] 24. Hot-reload race test — TestPolicy_HotReloadRace PASS (50 concurrent requests + 50 reloads, no panic, race safe)
-- [x] 25. ./scripts/verify.sh PASS — real gates, 10 shuffles, race 3 shuffles, fuzz, amd64+arm64 builds
-- [x] 26. ARM64 build PASS — CGO_ENABLED=0 GOOS=linux GOARCH=arm64
-- [x] 27. Stress PASS — router scale, probe/recovery, event-state, admission, log rotation
-- [x] 28. Smoke-local PASS — UI, hello, models, admin snapshot, count_tokens fallback, provider CRUD, atomic persistence
-- [x] 29. Targeted race PASS — decision, httpapi, router, route, taskprofile, feature with -race
-- [x] 30. docs/PHASE_E_POLICY_ENGINE.md created — selection band, pool/priority/affinity semantics, context formula, reliability-known, scoring, task overrides, min_delta, tie, SELECT-only, PolicyTrace, events, privacy, fail-open, hot reload, limitations
-- [x] 31. PHASE_E_IMPLEMENTATION_REPORT.md updated honestly — exact test filenames + benchmark output + real gate results (this file)
-- [x] 32. No second router/gateway, no replacement of working systems — extended cleanly, router eligibility authoritative, no Jev dependency, no fabricated quality scores, privacy modes respected, no eval(), SSRF-hardened, no secrets in logs, Prometheus metrics bounded, embedded dashboard not replaced
-- [x] 33. gofmt, compile, unit+integration, static analysis, race, stress/regression — all PASS, no version bump
+### Hardening Spec (must be strict)
 
-Final: 33/33 PASS → READY
+- [x] Cross-protocol mismatch causes test failure — `TestPolicy_CrossProtocolWithRealPolicyProvider_Strict`: controlled fixture with RouterBaseline only (protocol token shape irrelevant), same eligible candidates [p1/m1 priority 0, p2/m2 priority 10], same TaskProfile simple_chat via "hi" across OpenAI/Anthropic/Responses, asserts non-empty headers and `depOpenAI == depAnthropic == depResponses` with `t.Fatalf` on divergence, expects p1/m1. Mutation: changed expected to p2/m2 → fails.
+
+- [x] VE/direct neutrality compares real equivalent candidate sets — `TestPolicy_VEvsDirectNeutrality_Strict`: VE public model "nexa-code" → pool1 explicit [p1/m1,p2/m2] and direct model "shared-model" alias for same physical set, both with same policy balanced RouterBaseline, both return 200, assert identical physical deployment p1/m1. Does not allow 404. Mutation: changed direct alias to only p2/m2 → fails neutrality (different sets).
+
+- [x] Fallback test exercises B fail → A fail → C success — `TestPolicy_FallbackE2E_Strict`: primary pool [B p2/m2, A p1/m1] fallback [C p3/m3], policy latency prefers B (10ms) over A (100ms), upstreams B fail 1, A fail 1, C succeed, maxAttempts 3, records attempt order via `attemptRecorder`.
+
+- [x] Exact fallback attempt order is asserted — asserts `order == [p2/m2 p1/m1 p3/m3]` exactly, `hits B=1 A=1 C=1`, final deployment C, and C never before A. Mutation: swapped expected order to B→C→A → fails, made C fail → fails.
+
+- [x] Session-affinity test proves policy would otherwise change primary — `TestPolicy_SessionAffinityE2E_Strict`: first request session S1 prefers B (B 10ms, A 100ms), B succeeds, stores B; then flip telemetry to A 10ms (10 times) B 100ms (10 times) so without affinity policy would prefer A; control request with different session S2 proves A selected; second request with original S1 still B.
+
+- [x] AFFINITY_PRESERVED is asserted — searches bus events for `DecisionReasonCodes` containing `AFFINITY_PRESERVED` with policy provider, fails if not found. Mutation: removed session header → second request selects A → fails affinity.
+
+- [x] Max-attempt test has >=3 candidates — `TestPolicy_MaxAttemptsWithPolicy_Strict`: A,B,C explicit, policy latency prefers A,B,C order, max_attempts 2, A fail 1, B fail 1, C would succeed.
+
+- [x] Third candidate is proven unattempted — asserts total attempts ==2, C hits 0, A=1 B=1, and total <= maxAttempts. Mutation: set max_attempts 3 → C hit becomes 1 → fails zero assertion.
+
+- [x] Explainability event is required — `TestPolicy_ExplainabilityWired_Strict`: fixture with >=2 candidates, pool [C weight5 original primary, A,B], latency prefers B, guarantees SELECT not ABSTAIN, requires policy SELECT event (not optional), fails if not found.
+
+- [x] DecisionBreakdown is validated — asserts `DecisionProvider==policy`, `DecisionPolicyID==balanced`, `TaskType` canonical non-empty lowercased no spaces, `DecisionOriginalPrimary` non-empty, `DecisionBreakdown` non-empty valid JSON length <=4096, `ChangedPrimary==true` and `Selected != Original` when primary changes, expects selected p2/m2.
+
+- [x] Prompt canary absent from breakdown/metrics/admin/events — `TestPolicy_PrivacyCanaryFullPath_Strict`: canary `SECRET_POLICY_CANARY_4e91` in actual user prompt content (not RequestID), inspects trace header, events, DecisionBreakdown, metrics text via GET /metrics, admin snapshot via GET /admin/api/snapshot, all must not contain canary. Mutation: put canary in breakdown JSON → fails.
+
+- [x] Capability-ineligible candidate never reaches execution — `TestPolicy_CapabilityBoundary_Strict`: tools-required request, A supports tools, B does not, B extremely attractive via latency 1ms vs A 1000ms, asserts B never attempted (hits 0) and final deployment A.
+
+- [x] Health/circuit-ineligible candidate never reaches policy execution — `TestPolicy_HealthBoundary_Strict`: C best telemetry (1ms) but 10 failures → cooldown, A,B healthy 100ms, asserts C never selected and hits 0. Also `TestPolicy_ContextWindowBoundary` still present.
+
+- [x] Hot reload results are coherent P1 or P2, never mixed — `TestPolicy_HotReloadCoherence_Strict`: P1 latency weight selects A (p1/m1), P2 reliability weight selects B (p2/m2), with telemetry A low latency low reliability, B high latency high reliability, C high weight original primary low reliability, during 100 concurrent reloads between P1 and P2 and 100 requests, each result dep must be A or B, never C, weights must be pure P1 (latency 1 reliability 0) or P2 (latency 0 reliability 1), never mixed, and dep A must correspond to P1 weights, dep B to P2. Race detector still passes.
+
+- [x] Critical tests were mutation-checked — documented at top of `policy_integration_test.go`: cross-protocol, VE/direct, fallback order, affinity, max_attempts, explainability, privacy, capability.
+
+- [x] verify.sh PASS — real gates, 10 shuffles, race 3 shuffles, fuzz, amd64+arm64 builds (see section 6)
+
+- [x] stress.sh PASS
+
+- [x] smoke-local.sh PASS
+
+- [x] targeted race PASS — `go test -race ./internal/decision/... ./internal/httpapi ./internal/router ./internal/route ./internal/taskprofile ./internal/feature`
+
+- [x] report accurately describes assertions — this file documents strict assertions.
+
+### Original 33 (still PASS)
+
+- [x] 1-9 semantic gaps fixed (context headroom, reliability neutral, min_delta vs original primary, affinity before priority, PolicyTrace wiring, valid JSON breakdown, explicit policy config, zero-weight override rejection, canonical vocab sync)
+- [x] 10-16 committed tests scorer/provider/policy/property/benchmark/explain/privacy + fuzz
+- [x] 17-24 E2E (now hardened) cross-protocol, VE/direct, fallback B/A/C, affinity, max_attempts, capability/health, privacy canary, hot-reload race
+- [x] 25-33 gates and docs
+
+Final: 19 hardening + 33 original = 52 checks PASS → READY
 
 ---
 
@@ -458,12 +474,22 @@ Final: 33/33 PASS → READY
 
 ---
 
-## 10. Final Verdict
+## 10. Final Verdict (Hardened)
 
 PHASE E: PASS
 
-- Multi-objective policy engine correct, privacy-safe, bounded, deterministic, fail-open, hot-reload safe, real gates green, semantic gaps fixed, committed test suite comprehensive, benchmarks recorded, docs match code.
+- Multi-objective policy engine correct, privacy-safe, bounded, deterministic, fail-open, hot-reload safe, real gates green, semantic gaps fixed, committed test suite comprehensive with strict assertions (cross-protocol fatal on mismatch, VE/direct identical physical deployment, fallback exact B→A→C order with hits 1 each and C never before A, affinity counterfactual proven via control session and AFFINITY_PRESERVED event, max_attempts third candidate zero hits, explainability event required with valid JSON breakdown <=4096 and ChangedPrimary true, privacy canary absent from breakdown/metrics/admin/events/trace, capability-ineligible never attempted, health-ineligible never executed, hot reload coherent P1/P2 never mixed), mutation-checked, benchmarks recorded, docs match code.
 
 Branch: arena/01a0d825-nexaroute
-Commit: final convergence with fixes (local dirty, to be committed)
-Gates: verify.sh PASS, stress.sh PASS, smoke-local.sh PASS, race PASS, ARM64 build PASS
+Commit: hardened (to be committed)
+Gates: verify.sh PASS, stress.sh PASS, smoke-local.sh PASS, targeted race PASS, ARM64 build PASS, benchmarks PASS
+
+Mutation-check evidence (deliberate breaks, not committed):
+- cross-protocol: changed expected deployment p1/m1 → p2/m2 → t.Fatalf divergence
+- VE/direct: changed direct alias to only p2/m2 → neutrality fails (different sets)
+- fallback: changed expected order B→A→C to B→C→A → fails order, made C fail → fails final dep C
+- affinity: removed session_id header → second request selects A not B → fails AFFINITY_PRESERVED
+- max_attempts: set max_attempts 3 → C hits 1 → fails zero assertion
+- explainability: set MinDelta 1.0 to force ABSTAIN → fails required SELECT event
+- privacy: injected canary into breakdown JSON → fails privacy check
+- capability: made B support tools → B attempted → fails absence assertion
