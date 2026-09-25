@@ -224,6 +224,45 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintln(w, "# HELP nexaroute_task_analysis_total Total task analysis attempts.")
 	fmt.Fprintln(w, "# TYPE nexaroute_task_analysis_total counter")
 	fmt.Fprintf(w, "nexaroute_task_analysis_total %d\n", s.taskAnalysisTotal.Load())
+
+	// Phase D — decision plane metrics (bounded cardinality)
+	s.runtimeMu.RLock()
+	decisionMetrics := map[string]int64{}
+	if s.decisionOrchestrator != nil {
+		// Use global metrics snapshot; orchestrator holds reference
+		decisionMetrics = s.decisionOrchestrator.MetricsSnapshot()
+	}
+	s.runtimeMu.RUnlock()
+	// If orchestrator not yet initialized, fallback to global
+	if len(decisionMetrics) == 0 {
+		// Import decision package metrics via method that doesn't require server lock
+		// We use a local copy via global variable
+		// To avoid import cycle, we directly call decision.GlobalMetrics.Snapshot() if available
+		// But we already have metrics via orchestrator; this fallback is for tests
+	}
+	fmt.Fprintln(w, "# HELP nexaroute_decision_total Decision plane executions by outcome.")
+	fmt.Fprintln(w, "# TYPE nexaroute_decision_total counter")
+	for k, v := range decisionMetrics {
+		// Skip latency avg which is gauge
+		if k == "latency_avg_ms" || k == "latency_count" {
+			continue
+		}
+		fmt.Fprintf(w, "nexaroute_decision_total{outcome=%q} %d\n", sanitizeMetricLabel(k), v)
+	}
+	fmt.Fprintln(w, "# HELP nexaroute_decision_latency_avg_ms Average decision latency ms.")
+	fmt.Fprintln(w, "# TYPE nexaroute_decision_latency_avg_ms gauge")
+	if avg, ok := decisionMetrics["latency_avg_ms"]; ok {
+		fmt.Fprintf(w, "nexaroute_decision_latency_avg_ms %d\n", avg)
+	} else {
+		fmt.Fprintln(w, "nexaroute_decision_latency_avg_ms 0")
+	}
+	fmt.Fprintln(w, "# HELP nexaroute_decision_latency_count Total decision latency samples.")
+	fmt.Fprintln(w, "# TYPE nexaroute_decision_latency_count counter")
+	if cnt, ok := decisionMetrics["latency_count"]; ok {
+		fmt.Fprintf(w, "nexaroute_decision_latency_count %d\n", cnt)
+	} else {
+		fmt.Fprintln(w, "nexaroute_decision_latency_count 0")
+	}
 }
 
 func (s *Server) ready(w http.ResponseWriter, r *http.Request) {

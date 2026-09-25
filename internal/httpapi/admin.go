@@ -192,6 +192,19 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 		}
 		cpList = cps
 	}
+	// Phase D: decision plane snapshot
+	s.runtimeMu.RLock()
+	decisionCfg := cfgFull.Decision
+	decisionMetrics := map[string]int64{}
+	decisionProviders := map[string]any{}
+	if s.decisionOrchestrator != nil {
+		decisionMetrics = s.decisionOrchestrator.MetricsSnapshot()
+	}
+	if s.decisionRegistry != nil {
+		decisionProviders = map[string]any{"providers": s.decisionRegistry.Snapshot()}
+	}
+	s.runtimeMu.RUnlock()
+
 	writeJSON(w, 200, map[string]any{
 		"deployments":        deployments,
 		"deployment_total":   totalDeployments,
@@ -218,9 +231,15 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 		"route_profiles":    rpList,
 		"candidate_pools":   cpList,
 		"fallback_chains":   fcList,
+		"decision": map[string]any{
+			"config":    decisionCfg,
+			"metrics":   decisionMetrics,
+			"providers": decisionProviders,
+		},
 		"config": map[string]any{
-			"probe":   probeCfg,
-			"routing": routingCfg,
+			"probe":    probeCfg,
+			"routing":  routingCfg,
+			"decision": decisionCfg,
 		},
 	})
 }

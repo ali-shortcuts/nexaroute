@@ -19,6 +19,7 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/cache"
 	"github.com/ali-shortcuts/nexaroute/internal/compat"
 	"github.com/ali-shortcuts/nexaroute/internal/config"
+	"github.com/ali-shortcuts/nexaroute/internal/decision"
 	"github.com/ali-shortcuts/nexaroute/internal/events"
 	"github.com/ali-shortcuts/nexaroute/internal/health"
 	"github.com/ali-shortcuts/nexaroute/internal/probe"
@@ -48,12 +49,15 @@ type Server struct {
 	overloadRejects atomic.Uint64
 	adminRL         sync.Mutex
 	adminBuckets    map[string]*adminBucket
-	clientRL        sync.Mutex
-	clientBuckets   map[string]*clientBucket
-	respCache       *cache.Cache
-	usage           *usage.Tracker
-	capStore        *compat.Store
-	routeResolver   *route.Resolver
+	// Phase D: Decision plane
+	decisionRegistry     *decision.Registry
+	decisionOrchestrator *decision.Orchestrator
+	clientRL             sync.Mutex
+	clientBuckets        map[string]*clientBucket
+	respCache            *cache.Cache
+	usage                *usage.Tracker
+	capStore             *compat.Store
+	routeResolver        *route.Resolver
 	// Phase C — task classification metrics (bounded cardinality)
 	taskMu             sync.Mutex
 	taskClassCounts    map[string]uint64 // key: task_type|complexity
@@ -164,10 +168,12 @@ func New(cfg config.Config, configPath string, reg *providers.Registry, rt *rout
 	)
 	s := &Server{
 		cfg: cfg, configPath: configPath, reg: reg, rt: rt, hm: hm, bus: bus, probe: pe, log: l,
-		respCache:       cache.New(cfg.CacheTTL(), cfg.Cache.MaxEntries, int64(cfg.Cache.MaxBodyBytes)),
-		usage:           usage.New(),
-		capStore:        compat.NewStore(),
-		taskClassCounts: make(map[string]uint64, 32),
+		respCache:            cache.New(cfg.CacheTTL(), cfg.Cache.MaxEntries, int64(cfg.Cache.MaxBodyBytes)),
+		usage:                usage.New(),
+		capStore:             compat.NewStore(),
+		taskClassCounts:      make(map[string]uint64, 32),
+		decisionRegistry:     decision.NewRegistry(),
+		decisionOrchestrator: decision.NewOrchestrator(nil, cfg.Decision, nil),
 	}
 	s.routeResolver = route.NewResolver(cfg, rt.All())
 	return s
@@ -424,6 +430,9 @@ func (s *Server) applyConfigLocked(cfg config.Config) error {
 	}
 
 	s.cfg = cfg
+	if s.decisionOrchestrator != nil {
+		s.decisionOrchestrator.UpdateConfig(cfg.Decision)
+	}
 	s.routeResolver = route.NewResolver(cfg, s.rt.All())
 	s.probe.Reload(cfg)
 	s.syncCapabilityContracts(cfg)

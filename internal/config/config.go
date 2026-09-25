@@ -52,6 +52,12 @@ type FallbackChainConfig struct {
 	Pools []string `json:"pools"`
 }
 
+type DecisionConfig struct {
+	Mode      string `json:"mode,omitempty"`       // off | local
+	Provider  string `json:"provider,omitempty"`   // local (Phase D only)
+	TimeoutMS int    `json:"timeout_ms,omitempty"` // bounded, default 10ms
+}
+
 type Config struct {
 	Listen           string                  `json:"listen"`
 	Admin            AdminConfig             `json:"admin"`
@@ -60,6 +66,7 @@ type Config struct {
 	Probe            ProbeConfig             `json:"probe"`
 	Cache            CacheConfig             `json:"cache"`
 	ClientAuth       ClientAuthConfig        `json:"client_auth"`
+	Decision         DecisionConfig          `json:"decision,omitempty"`
 	Providers        []ProviderConfig        `json:"providers"`
 	VirtualEndpoints []VirtualEndpointConfig `json:"virtual_endpoints,omitempty"`
 	RouteProfiles    []RouteProfileConfig    `json:"route_profiles,omitempty"`
@@ -311,6 +318,7 @@ func Default() Config {
 		Probe:      ProbeConfig{Enabled: true, OnStart: true, IntervalSeconds: 120, ReadyLeaseSeconds: 300, TimeoutMS: 8000, MaxTokens: 1, Concurrency: 16, RecoveryAttempts: 5, RecoveryRetryMS: 500, CapabilityProbes: true},
 		Cache:      CacheConfig{Enabled: false, TTLSeconds: 300, MaxEntries: 256, MaxBodyBytes: 1 << 20},
 		ClientAuth: ClientAuthConfig{Enabled: false, RPM: 0},
+		Decision:   DecisionConfig{Mode: "off", Provider: "local", TimeoutMS: 10},
 	}
 }
 
@@ -506,6 +514,19 @@ func (c *Config) ApplyDefaults() {
 			fc.Pools[j] = strings.TrimSpace(fc.Pools[j])
 		}
 	}
+	// Decision defaults (Phase D)
+	c.Decision.Mode = strings.TrimSpace(strings.ToLower(c.Decision.Mode))
+	c.Decision.Provider = strings.TrimSpace(strings.ToLower(c.Decision.Provider))
+	if c.Decision.Mode == "" {
+		c.Decision.Mode = "off"
+	}
+	if c.Decision.Provider == "" {
+		c.Decision.Provider = "local"
+	}
+	if c.Decision.TimeoutMS == 0 {
+		c.Decision.TimeoutMS = 10
+	}
+
 	// Backward compatibility: legacy public_model → default virtual endpoint.
 	if c.Routing.PublicModel != "" && len(c.VirtualEndpoints) == 0 {
 		t := true
@@ -860,6 +881,21 @@ func (c Config) Validate() error {
 			}
 		}
 	}
+	// Phase D: Decision
+	switch strings.ToLower(strings.TrimSpace(c.Decision.Mode)) {
+	case "", "off", "local":
+	default:
+		return errors.New("decision.mode must be off or local")
+	}
+	switch strings.ToLower(strings.TrimSpace(c.Decision.Provider)) {
+	case "", "local":
+	default:
+		return errors.New("decision.provider must be local in Phase D")
+	}
+	if c.Decision.TimeoutMS < 1 || c.Decision.TimeoutMS > 5000 {
+		return errors.New("decision.timeout_ms must be between 1 and 5000")
+	}
+
 	// Phase B: Virtual Endpoints, Route Profiles, Candidate Pools, Fallback Chains
 	if len(c.VirtualEndpoints) > maxVirtualEndpoints {
 		return fmt.Errorf("virtual_endpoints exceeds safe limit %d", maxVirtualEndpoints)
