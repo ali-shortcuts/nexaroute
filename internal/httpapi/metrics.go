@@ -201,6 +201,25 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintln(w, "# HELP nexaroute_estimated_cost_usd_total Cumulative estimated spend in USD from configured per-model pricing.")
 	fmt.Fprintln(w, "# TYPE nexaroute_estimated_cost_usd_total counter")
 	fmt.Fprintf(w, "nexaroute_estimated_cost_usd_total %.6f\n", usageSnap.TotalEstimatedCostUSD)
+
+	// External decision-plane counters. Labels are the bounded adapter type
+	// and outcome class only — never provider config IDs, deployment IDs,
+	// endpoints, request IDs, or session IDs.
+	decisionRows, decisionLatency := s.decisionMetricsSnapshot()
+	fmt.Fprintln(w, "# HELP nexaroute_external_decision_requests_total External decision provider calls by type and outcome class.")
+	fmt.Fprintln(w, "# TYPE nexaroute_external_decision_requests_total counter")
+	for _, row := range decisionRows {
+		fmt.Fprintf(w, "nexaroute_external_decision_requests_total{type=%q,outcome=%q} %d\n",
+			sanitizeMetricLabel(row.Type), sanitizeMetricLabel(row.Outcome), row.Count)
+	}
+	fmt.Fprintln(w, "# HELP nexaroute_external_decision_latency_seconds External decision provider latency by type.")
+	fmt.Fprintln(w, "# TYPE nexaroute_external_decision_latency_seconds summary")
+	for _, row := range decisionLatency {
+		fmt.Fprintf(w, "nexaroute_external_decision_latency_seconds_count{type=%q} %d\n",
+			sanitizeMetricLabel(row.Type), row.Count)
+		fmt.Fprintf(w, "nexaroute_external_decision_latency_seconds_sum{type=%q} %.6f\n",
+			sanitizeMetricLabel(row.Type), row.Sum)
+	}
 }
 
 func (s *Server) ready(w http.ResponseWriter, r *http.Request) {

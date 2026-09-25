@@ -318,6 +318,18 @@ func (r *Router) pinned(req Requirement, cfg config.Config) string {
 	}
 	return pin.Deployment
 }
+
+// SessionPin returns the session pin deployment ID for req, or "" when
+// session affinity is disabled, no session key is present, or no live pin
+// exists. The decision plane uses it to short-circuit external providers when
+// an eligible pin is authoritative. It reports the raw pin; eligibility
+// against the current candidate set is checked by the caller.
+func (r *Router) SessionPin(req Requirement) string {
+	r.mu.RLock()
+	cfg := r.cfg
+	r.mu.RUnlock()
+	return r.pinned(req, cfg)
+}
 func (r *Router) ObserveSession(req Requirement, id string) {
 	r.mu.RLock()
 	cfg := r.cfg

@@ -135,5 +135,19 @@
     "enabled": false,
     "keys": [],
     "rpm": 0
-  }
+  },
+  "decision": {
+    "mode": "off",
+    "provider": "local",
+    "timeout_ms": 400
+  },
+  "decision_providers": [
+    {
+      "id": "jev-main",
+      "type": "jev",
+      "enabled": false,
+      "api_key_env": "JEV_API_KEY",
+      "privacy_mode": "metadata_only"
+    }
+  ]
 }

@@ -23,7 +23,51 @@ type Config struct {
 	Probe      ProbeConfig      `json:"probe"`
 	Cache      CacheConfig      `json:"cache"`
 	ClientAuth ClientAuthConfig `json:"client_auth"`
-	Providers  []ProviderConfig `json:"providers"`
+	// Decision selects the routing-decision plane mode. Default off: no
+	// DecisionProvider runs and no external network traffic is possible.
+	Decision DecisionConfig `json:"decision"`
+	// DecisionProviders configures external DecisionProviders (e.g. Jev).
+	// It is intentionally separate from Providers (upstream models).
+	DecisionProviders []DecisionProviderConfig `json:"decision_providers"`
+	Providers         []ProviderConfig         `json:"providers"`
+}
+
+// DecisionConfig selects one routing-decision provider per request. There are
+// no provider chains in Phase F: exactly one provider runs.
+type DecisionConfig struct {
+	// Mode is off (no provider), local (local|policy built-ins only), or
+	// assisted (exactly one configured external provider may run).
+	Mode string `json:"mode"`
+	// Provider is the DecisionProvider ID: local, policy, or an external
+	// decision_providers entry ID (e.g. jev-main).
+	Provider string `json:"provider"`
+	// TimeoutMS bounds one provider call (fail open on expiry).
+	TimeoutMS int `json:"timeout_ms"`
+}
+
+// DecisionProviderConfig configures one external DecisionProvider. Secrets
+// belong in the environment (api_key_env); a literal api_key is accepted for
+// parity with upstream provider config but is never exposed in snapshots,
+// events, logs, metrics, or errors.
+type DecisionProviderConfig struct {
+	ID          string `json:"id"`
+	Type        string `json:"type"` // jev (only supported external type in Phase F)
+	Enabled     bool   `json:"enabled"`
+	APIKey      string `json:"api_key,omitempty"`
+	APIKeyEnv   string `json:"api_key_env,omitempty"`
+	PrivacyMode string `json:"privacy_mode"` // metadata_only (only supported mode in Phase F)
+}
+
+// ResolvedAPIKey returns the effective credential (environment first, then
+// literal). Callers must treat the result as secret: Authorization header
+// only, never logged or embedded in errors.
+func (p DecisionProviderConfig) ResolvedAPIKey() string {
+	if p.APIKeyEnv != "" {
+		if v := os.Getenv(p.APIKeyEnv); v != "" {
+			return v
+		}
+	}
+	return p.APIKey
 }
 
 type LoggingConfig struct {
@@ -180,6 +224,13 @@ const (
 	maxTotalDeployments       = 20000
 	maxTotalAliases           = 100000
 	maxConfigBytes            = 16 << 20
+	// External DecisionProvider bounds (Phase F: single provider per
+	// request, small registry, bounded secret-adjacent strings).
+	maxDecisionProviders    = 16
+	maxDecisionAPIKeyBytes  = 4096
+	maxDecisionAPIKeyEnvLen = 256
+	maxDecisionTimeoutMS    = 30000
+	minDecisionTimeoutMS    = 50
 )
 
 func validLocalID(s string) bool {
@@ -253,6 +304,7 @@ func Default() Config {
 		Probe:      ProbeConfig{Enabled: true, OnStart: true, IntervalSeconds: 120, ReadyLeaseSeconds: 300, TimeoutMS: 8000, MaxTokens: 1, Concurrency: 16, RecoveryAttempts: 5, RecoveryRetryMS: 500, CapabilityProbes: true},
 		Cache:      CacheConfig{Enabled: false, TTLSeconds: 300, MaxEntries: 256, MaxBodyBytes: 1 << 20},
 		ClientAuth: ClientAuthConfig{Enabled: false, RPM: 0},
+		Decision:   DecisionConfig{Mode: "off", Provider: "local", TimeoutMS: 400},
 	}
 }
 
@@ -395,6 +447,20 @@ func (c *Config) ApplyDefaults() {
 	}
 	if c.Probe.RecoveryAttempts == 0 {
 		c.Probe.RecoveryAttempts = 5
+	}
+	if c.Decision.Mode == "" {
+		c.Decision.Mode = "off"
+	}
+	if c.Decision.Provider == "" {
+		c.Decision.Provider = "local"
+	}
+	if c.Decision.TimeoutMS == 0 {
+		c.Decision.TimeoutMS = 400
+	}
+	for i := range c.DecisionProviders {
+		if c.DecisionProviders[i].PrivacyMode == "" {
+			c.DecisionProviders[i].PrivacyMode = "metadata_only"
+		}
 	}
 	for i := range c.Providers {
 		c.Providers[i].ApplyDefaults()
@@ -574,6 +640,9 @@ func (c Config) Validate() error {
 			return errors.New("client_auth.rpm must be between 0 and 1000000")
 		}
 	}
+	if err := c.validateDecision(); err != nil {
+		return err
+	}
 	for name, v := range map[string]float64{
 		"routing.latency_weight":  c.Routing.LatencyWeight,
 		"routing.failure_weight":  c.Routing.FailureWeight,
@@ -724,6 +793,109 @@ func (c Config) Validate() error {
 			if m.Model == "" {
 				return fmt.Errorf("deployment %q model is required", key)
 			}
+		}
+	}
+	return nil
+}
+
+func validEnvName(s string) bool {
+	if s == "" || len(s) > maxDecisionAPIKeyEnvLen {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c == '_' {
+			continue
+		}
+		if c >= '0' && c <= '9' && i > 0 {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// validateDecision enforces the external DecisionProvider contract: unique
+// IDs with no built-in collision, supported types only, metadata_only
+// privacy only, and mode/provider coherence. Ambiguous configs are rejected
+// before any request executes. External decisions stay explicit opt-in:
+// defaults (off/local) never touch the network.
+func (c Config) validateDecision() error {
+	switch c.Decision.Mode {
+	case "off", "local", "assisted":
+	default:
+		return errors.New("decision.mode must be off, local, or assisted")
+	}
+	if c.Decision.TimeoutMS < minDecisionTimeoutMS || c.Decision.TimeoutMS > maxDecisionTimeoutMS {
+		return fmt.Errorf("decision.timeout_ms must be between %d and %d", minDecisionTimeoutMS, maxDecisionTimeoutMS)
+	}
+	if len(c.DecisionProviders) > maxDecisionProviders {
+		return fmt.Errorf("decision_providers exceeds safe limit %d", maxDecisionProviders)
+	}
+	if len(c.Decision.Provider) > maxStringIDBytes {
+		return errors.New("decision.provider is too long")
+	}
+	seen := map[string]int{}
+	byID := map[string]DecisionProviderConfig{}
+	for i, p := range c.DecisionProviders {
+		if p.ID == "" {
+			return fmt.Errorf("decision_providers[%d].id is required", i)
+		}
+		if len(p.ID) > maxStringIDBytes {
+			return fmt.Errorf("decision provider %q id is too long", p.ID)
+		}
+		if !validLocalID(p.ID) {
+			return fmt.Errorf("decision provider id %q may contain only letters, digits, dot, underscore, and hyphen", p.ID)
+		}
+		if p.ID == "local" || p.ID == "policy" {
+			return fmt.Errorf("decision provider id %q collides with a built-in provider", p.ID)
+		}
+		if prev, dup := seen[p.ID]; dup {
+			return fmt.Errorf("duplicate decision provider id %q (entries %d and %d)", p.ID, prev, i)
+		}
+		seen[p.ID] = i
+		byID[p.ID] = p
+		if p.Type != "jev" {
+			return fmt.Errorf("decision provider %q has unsupported type %q (only jev in Phase F)", p.ID, p.Type)
+		}
+		if len(p.APIKey) > maxDecisionAPIKeyBytes {
+			return fmt.Errorf("decision provider %q api_key exceeds safe limit %d bytes", p.ID, maxDecisionAPIKeyBytes)
+		}
+		if p.APIKeyEnv != "" && !validEnvName(p.APIKeyEnv) {
+			return fmt.Errorf("decision provider %q has invalid api_key_env", p.ID)
+		}
+		if p.PrivacyMode != "metadata_only" {
+			return fmt.Errorf("decision provider %q must use privacy_mode metadata_only in Phase F", p.ID)
+		}
+	}
+	provider := c.Decision.Provider
+	if provider == "" {
+		return errors.New("decision.provider is required")
+	}
+	isBuiltin := provider == "local" || provider == "policy"
+	switch c.Decision.Mode {
+	case "off":
+		// No provider runs. A dangling non-builtin reference is still a
+		// typo worth rejecting, but enabled-ness is irrelevant.
+		if !isBuiltin {
+			if _, ok := byID[provider]; !ok {
+				return fmt.Errorf("decision.provider %q does not match any decision_providers entry", provider)
+			}
+		}
+	case "local":
+		if !isBuiltin {
+			return fmt.Errorf("decision.mode local must not point to external provider %q", provider)
+		}
+	case "assisted":
+		if isBuiltin {
+			return errors.New("decision.mode assisted requires an external decision provider")
+		}
+		ext, ok := byID[provider]
+		if !ok {
+			return fmt.Errorf("decision.provider %q does not match any decision_providers entry", provider)
+		}
+		if !ext.Enabled {
+			return fmt.Errorf("decision.provider %q is disabled", provider)
 		}
 	}
 	return nil

@@ -78,6 +78,12 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 	if s.cacheServe(w, r, cacheKey, cacheable) {
 		return
 	}
+	// Single-provider decision hook: may promote one permitted primary; a
+	// no-op unless a decision provider is configured, fail-open on any error.
+	if len(candidates) > 1 {
+		candidates = s.applyDecision(r.Context(), r.Header.Get("x-request-id"), req, candidates,
+			decisionFeaturesFromRequirement(req, false))
+	}
 	max := cfg.Routing.MaxAttempts
 	if max > len(candidates) {
 		max = len(candidates)

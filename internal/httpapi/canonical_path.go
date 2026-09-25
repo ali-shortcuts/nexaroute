@@ -278,6 +278,12 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 		canonicalErrorJSON(w, "openai_responses", http.StatusServiceUnavailable, "server_error", "no compatible healthy deployment")
 		return
 	}
+	// Single-provider decision hook: may promote one permitted primary; a
+	// no-op unless a decision provider is configured, fail-open on any error.
+	if len(candidates) > 1 {
+		candidates = s.applyDecision(r.Context(), r.Header.Get("x-request-id"), req, candidates,
+			decisionFeaturesFromRequirement(req, canReq.ResponseFormat != nil))
+	}
 	max := cfg.Routing.MaxAttempts
 	if max > len(candidates) {
 		max = len(candidates)

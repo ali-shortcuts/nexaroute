@@ -52,6 +52,9 @@ type Server struct {
 	respCache       *cache.Cache
 	usage           *usage.Tracker
 	capStore        *compat.Store
+	// decision holds the immutable decision-plane snapshot, swapped
+	// atomically on hot reload. Reads never block provider I/O.
+	decision atomic.Pointer[DecisionRuntime]
 }
 
 // adminBucket is a compact token bucket keyed by remote address. Capacity 90
@@ -155,12 +158,21 @@ func New(cfg config.Config, configPath string, reg *providers.Registry, rt *rout
 		cfg.ProviderFailureWindow(),
 		cfg.ProviderCooldown(),
 	)
-	return &Server{
+	s := &Server{
 		cfg: cfg, configPath: configPath, reg: reg, rt: rt, hm: hm, bus: bus, probe: pe, log: l,
 		respCache: cache.New(cfg.CacheTTL(), cfg.Cache.MaxEntries, int64(cfg.Cache.MaxBodyBytes)),
 		usage:     usage.New(),
 		capStore:  compat.NewStore(),
 	}
+	// The config is validated before New; a build failure here is defensive
+	// only and degrades to a disabled decision plane (never a broken server).
+	if rt, err := buildDecisionRuntime(cfg); err != nil {
+		l.Printf("decision plane disabled: %s", err)
+		s.decision.Store(disabledDecisionRuntime())
+	} else {
+		s.decision.Store(rt)
+	}
+	return s
 }
 
 func (s *Server) currentConfig() config.Config {
@@ -183,6 +195,7 @@ func (s *Server) adminConfigSnapshot() config.AdminConfig {
 
 func cloneConfig(in config.Config) config.Config {
 	out := in
+	out.DecisionProviders = append([]config.DecisionProviderConfig(nil), in.DecisionProviders...)
 	out.Providers = append([]config.ProviderConfig(nil), in.Providers...)
 	for i := range out.Providers {
 		if in.Providers[i].Headers != nil {
@@ -326,6 +339,17 @@ func (s *Server) applyConfigLocked(cfg config.Config) error {
 	if err != nil {
 		return err
 	}
+	// Build the next immutable decision snapshot before touching disk as
+	// well, carrying over cumulative metrics. In-flight requests keep the
+	// old snapshot (old adapters, old resolved credentials) untouched.
+	var carry *decisionMetrics
+	if old := s.decision.Load(); old != nil {
+		carry = old.metrics
+	}
+	nextDecision, err := buildDecisionRuntimeWithOptions(cfg, decisionBuildOptions{}, carry)
+	if err != nil {
+		return err
+	}
 	if err := config.SaveAtomic(s.configPath, cfg); err != nil {
 		return err
 	}
@@ -333,6 +357,7 @@ func (s *Server) applyConfigLocked(cfg config.Config) error {
 	s.runtimeMu.Lock()
 	defer s.runtimeMu.Unlock()
 	s.reg.Replace(nextReg)
+	s.decision.Store(nextDecision)
 	s.rt.Reload(cfg)
 	s.hm.ConfigureAdvanced(
 		cfg.Routing.FailureThreshold,

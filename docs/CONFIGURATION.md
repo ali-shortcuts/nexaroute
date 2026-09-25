@@ -223,3 +223,39 @@ The resulting **effective remaining** values feed quota pressure. This is intent
 | `context_window` | `0` (unknown) | Advertised usable context window in tokens; requests estimated to exceed it skip this deployment. |
 | `input_cost_per_mtok` | `0` | USD per million input tokens, used for estimated-spend accounting. |
 | `output_cost_per_mtok` | `0` | USD per million output tokens, used for estimated-spend accounting. |
+
+## Decision plane (assisted routing, Phase F)
+
+The decision plane reorders the router's eligible deployment band before
+execution. It never adds, removes, or rewrites deployments; every failure
+fails open to the pre-decision router order. Full contract:
+`docs/PHASE_F_EXTERNAL_DECISIONS.md`.
+
+### decision (new object, default off)
+
+| Field | Default | Meaning |
+|---|---|---|
+| `mode` | `"off"` | `off` (no provider), `local` (`local`/`policy` built-ins only), `assisted` (one external provider, fail-open). |
+| `provider` | `"local"` | `local`, `policy`, or an enabled `decision_providers` entry ID. |
+| `timeout_ms` | `400` | Per-call bound for one provider call (50–30000, enforced for every mode). |
+
+`local` mode rejects external provider IDs; `assisted` requires the
+referenced external entry to exist and be enabled; `off` allows a
+configured entry to stay idle. Mode/provider/timeout changes apply on
+hot reload; an invalid reload is rejected with the live plane untouched.
+
+### decision_providers (new array, default empty, max 16)
+
+| Field | Default | Meaning |
+|---|---|---|
+| `id` | (required) | Unique provider ID referenced by `decision.provider` (1–64 chars). |
+| `type` | (required) | Only `"jev"` in Phase F. |
+| `enabled` | `false` | Entry must be enabled to run in `assisted` mode. |
+| `api_key` | `""` | Literal credential (length-bounded; prefer `api_key_env`). |
+| `api_key_env` | `""` | Environment variable holding the credential; wins over `api_key`. |
+| `privacy_mode` | `"metadata_only"` | Only `"metadata_only"` in Phase F: opaque IDs + routing metadata, never prompts or parameters. |
+
+Only metadata leaves the gateway (opaque candidate IDs, capability
+flags, health snapshots, boolean request features). The API key is sent
+as an `Authorization: Bearer` header only and never appears in events,
+metrics, admin output, or errors.
