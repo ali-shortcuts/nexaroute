@@ -1,6 +1,7 @@
 package decision
 
 import (
+	"math"
 	"testing"
 )
 
@@ -50,12 +51,26 @@ func TestValidateResult_Duplicate(t *testing.T) {
 
 func TestValidateResult_InvalidConfidence(t *testing.T) {
 	eligible := makeEligible("A")
-	result := DecisionResult{
-		Action:     ActionAbstain,
-		Confidence: 1.5,
+	tests := []struct {
+		name string
+		conf float64
+	}{
+		{"too high", 1.5},
+		{"too low", -0.1},
+		{"NaN", math.NaN()},
+		{"+Inf", math.Inf(1)},
+		{"-Inf", math.Inf(-1)},
 	}
-	if err := ValidateResult(eligible, result); err == nil {
-		t.Fatal("expected error for confidence out of bounds")
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result := DecisionResult{
+				Action:     ActionAbstain,
+				Confidence: tc.conf,
+			}
+			if err := ValidateResult(eligible, result); err == nil {
+				t.Fatalf("expected error for confidence %v", tc.conf)
+			}
+		})
 	}
 }
 
@@ -68,6 +83,63 @@ func TestValidateResult_SelectUnknown(t *testing.T) {
 	}
 	if err := ValidateResult(eligible, result); err == nil {
 		t.Fatal("expected error for unknown selected")
+	}
+}
+
+func TestValidateResult_StrictAction(t *testing.T) {
+	eligible := makeEligible("A", "B")
+	cases := []DecisionResult{
+		{Action: "", Confidence: 0.5},
+		{Action: "FOO", Confidence: 0.5},
+		{Action: ActionSelect, SelectedID: "", Confidence: 0.5},
+		{Action: ActionSelect, SelectedID: "A", RankedIDs: []string{"A"}, Confidence: 0.5},
+		{Action: ActionRank, RankedIDs: []string{}, Confidence: 0.5},
+		{Action: ActionRank, SelectedID: "A", RankedIDs: []string{"A"}, Confidence: 0.5},
+		{Action: ActionAbstain, SelectedID: "A", Confidence: 0.5},
+		{Action: ActionAbstain, RankedIDs: []string{"A"}, Confidence: 0.5},
+	}
+	for i, r := range cases {
+		if err := ValidateResult(eligible, r); err == nil {
+			t.Fatalf("case %d should be invalid: %+v", i, r)
+		}
+	}
+}
+
+func TestValidateResult_BoundedRanked(t *testing.T) {
+	eligible := makeEligible("A", "B")
+	result := DecisionResult{
+		Action:     ActionRank,
+		RankedIDs:  []string{"A", "B", "C"},
+		Confidence: 0.5,
+	}
+	if err := ValidateResult(eligible, result); err == nil {
+		t.Fatal("expected error for ranked > eligible")
+	}
+}
+
+func TestValidateResult_ReasonCodeBounded(t *testing.T) {
+	eligible := makeEligible("A", "B")
+	// Unknown reason code
+	result := DecisionResult{
+		Action:      ActionAbstain,
+		Confidence:  0.5,
+		ReasonCodes: []ReasonCode{"UNKNOWN_CODE"},
+	}
+	if err := ValidateResult(eligible, result); err == nil {
+		t.Fatal("expected error for unknown reason code")
+	}
+	// Too many reason codes
+	many := make([]ReasonCode, MaxReasonCodes+1)
+	for i := range many {
+		many[i] = ReasonAbstained
+	}
+	result = DecisionResult{
+		Action:      ActionAbstain,
+		Confidence:  0.5,
+		ReasonCodes: many,
+	}
+	if err := ValidateResult(eligible, result); err == nil {
+		t.Fatal("expected error for too many reason codes")
 	}
 }
 
@@ -84,7 +156,6 @@ func TestNormalizeResult_RankPartial(t *testing.T) {
 	if reason != ReasonNormalizationApplied {
 		t.Fatalf("expected normalization reason, got %s", reason)
 	}
-	// Expected: [C,A,B,D]
 	expected := []string{"C", "A", "B", "D"}
 	if len(ordered) != len(expected) {
 		t.Fatalf("len mismatch: got %d expected %d", len(ordered), len(expected))
@@ -131,8 +202,11 @@ func TestNormalizeResult_AbstainPreservesOrder(t *testing.T) {
 func TestNormalizeResult_EmptyEligible(t *testing.T) {
 	var eligible []Candidate
 	result := DecisionResult{Action: ActionRank, RankedIDs: []string{"A"}}
-	ordered, _, _ := NormalizeResult(eligible, result)
+	ordered, _, reason := NormalizeResult(eligible, result)
 	if ordered != nil && len(ordered) != 0 {
 		t.Fatalf("expected nil or empty for empty eligible")
+	}
+	if reason != ReasonEmptyEligible {
+		t.Fatalf("expected EMPTY_ELIGIBLE reason")
 	}
 }

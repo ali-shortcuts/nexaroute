@@ -21,28 +21,25 @@ func (p *LocalProvider) Health() ProviderHealth {
 }
 
 func (p *LocalProvider) Decide(ctx context.Context, req DecisionRequest) (DecisionResult, error) {
-	// Respect context cancellation (timeout)
+	// Respect context cancellation (timeout) — MUST obey ctx.Done() per contract
 	select {
 	case <-ctx.Done():
 		return DecisionResult{
 			Action:      ActionAbstain,
 			Abstained:   true,
 			Confidence:  0,
-			ReasonCodes: []string{ReasonTimeout, ReasonExistingOrderPreserved},
+			ReasonCodes: []ReasonCode{ReasonTimeout, ReasonExistingOrderPreserved},
 			ProviderID:  p.ID(),
 		}, ctx.Err()
 	default:
 	}
 
 	// Pass-through: return ABSTAIN to signal "preserve existing order"
-	// This exercises the contract while guaranteeing zero semantic impact.
-	// Alternative could return RANK with same order, but ABSTAIN is clearer
-	// and cheaper to validate.
 	return DecisionResult{
 		Action:      ActionAbstain,
 		Abstained:   true,
 		Confidence:  1.0,
-		ReasonCodes: []string{ReasonExistingOrderPreserved, ReasonLocalPassThrough},
+		ReasonCodes: []ReasonCode{ReasonExistingOrderPreserved, ReasonLocalPassThrough},
 		ProviderID:  p.ID(),
 	}, nil
 }

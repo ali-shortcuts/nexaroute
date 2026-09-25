@@ -168,13 +168,13 @@ func New(cfg config.Config, configPath string, reg *providers.Registry, rt *rout
 	)
 	s := &Server{
 		cfg: cfg, configPath: configPath, reg: reg, rt: rt, hm: hm, bus: bus, probe: pe, log: l,
-		respCache:            cache.New(cfg.CacheTTL(), cfg.Cache.MaxEntries, int64(cfg.Cache.MaxBodyBytes)),
-		usage:                usage.New(),
-		capStore:             compat.NewStore(),
-		taskClassCounts:      make(map[string]uint64, 32),
-		decisionRegistry:     decision.NewRegistry(),
-		decisionOrchestrator: decision.NewOrchestrator(nil, cfg.Decision, nil),
+		respCache:       cache.New(cfg.CacheTTL(), cfg.Cache.MaxEntries, int64(cfg.Cache.MaxBodyBytes)),
+		usage:           usage.New(),
+		capStore:        compat.NewStore(),
+		taskClassCounts: make(map[string]uint64, 32),
 	}
+	s.decisionRegistry = decision.NewRegistry()
+	s.decisionOrchestrator = decision.NewOrchestrator(s.decisionRegistry, cfg.Decision, &decision.Metrics{})
 	s.routeResolver = route.NewResolver(cfg, rt.All())
 	return s
 }

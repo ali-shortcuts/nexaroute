@@ -16,10 +16,9 @@ func TestLocalProvider_PreservesOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !res.IsAbstain() {
+	if res.Action != ActionAbstain {
 		t.Fatalf("expected abstain, got %v", res.Action)
 	}
-	// Reason codes must contain EXISTING_ORDER_PRESERVED
 	found := false
 	for _, rc := range res.ReasonCodes {
 		if rc == ReasonExistingOrderPreserved {
@@ -41,9 +40,8 @@ func TestLocalProvider_ContextCancellation(t *testing.T) {
 	res, err := p.Decide(ctx, req)
 	if err == nil {
 		// Local provider checks context and returns error, but orchestrator will handle
-		// We expect abstain even on cancelled context
 	}
-	if !res.IsAbstain() {
+	if res.Action != ActionAbstain {
 		t.Fatalf("expected abstain on cancelled context")
 	}
 }

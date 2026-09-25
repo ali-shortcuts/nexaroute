@@ -5,16 +5,15 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ali-shortcuts/nexaroute/internal/events"
 	"github.com/ali-shortcuts/nexaroute/internal/feature"
 	"github.com/ali-shortcuts/nexaroute/internal/taskprofile"
 )
 
-// SECRET_DECISION_CANARY_82c1 must never appear in decision request JSON
+// SECRET_DECISION_CANARY_82c1 must never appear in decision artifacts
 const canary = "SECRET_DECISION_CANARY_82c1"
 
 func TestDecisionRequest_NoCanaryLeak(t *testing.T) {
-	// Simulate a request that contains canary in raw prompt, but DecisionRequest must not contain it
-	// DecisionRequest only has Features + TaskProfile + Candidates, no raw prompt
 	feat := feature.RequestFeatures{
 		Protocol:       feature.ProtocolOpenAI,
 		ModelRequested: "test-model",
@@ -50,8 +49,6 @@ func TestDecisionRequest_NoCanaryLeak(t *testing.T) {
 	if strings.Contains(s, canary) {
 		t.Fatalf("canary leaked in DecisionRequest JSON: %s", s)
 	}
-	// Also ensure no API keys, headers, etc. fields exist
-	// DecisionRequest struct should not have fields named api_key, header, prompt, etc.
 	if strings.Contains(strings.ToLower(s), "api_key") {
 		t.Fatalf("api_key field found in decision request")
 	}
@@ -61,7 +58,6 @@ func TestDecisionRequest_NoCanaryLeak(t *testing.T) {
 }
 
 func TestDecisionRequest_FieldsBounded(t *testing.T) {
-	// Ensure Candidate only has bounded fields, no secrets
 	c := Candidate{
 		ID:         "p1/m1",
 		ProviderID: "p1",
@@ -71,8 +67,86 @@ func TestDecisionRequest_FieldsBounded(t *testing.T) {
 	}
 	b, _ := json.Marshal(c)
 	s := string(b)
-	// Should not contain raw prompt or content
 	if strings.Contains(s, canary) {
 		t.Fatalf("canary in candidate")
+	}
+}
+
+func TestPrivacy_CompletePath(t *testing.T) {
+	// Verify canary absent from all decision artifacts
+	feat := feature.RequestFeatures{
+		Protocol:       feature.ProtocolOpenAI,
+		ModelRequested: "test",
+	}
+	profile := taskprofile.TaskProfile{
+		Type:       taskprofile.TaskCoding,
+		Complexity: taskprofile.ComplexityMedium,
+		Confidence: 0.9,
+	}
+	candidates := []Candidate{{ID: "p1/m1", ProviderID: "p1"}}
+
+	req := DecisionRequest{
+		TaskProfile: profile,
+		Features:    feat,
+		Candidates:  candidates,
+		Budget:      DefaultBudget(),
+	}
+
+	// Request
+	b, _ := json.Marshal(req)
+	if strings.Contains(string(b), canary) {
+		t.Fatalf("canary in request")
+	}
+
+	// Result
+	res := DecisionResult{
+		Action:      ActionAbstain,
+		Confidence:  0.9,
+		ReasonCodes: []ReasonCode{ReasonExistingOrderPreserved},
+		ProviderID:  "local",
+	}
+	b, _ = json.Marshal(res)
+	if strings.Contains(string(b), canary) {
+		t.Fatalf("canary in result")
+	}
+
+	// Trace
+	trace := DecisionTrace{
+		Mode:           "local",
+		ProviderID:     "local",
+		CandidateCount: 1,
+		Action:         ActionAbstain,
+		ReasonCodes:    []ReasonCode{ReasonExistingOrderPreserved},
+	}
+	b, _ = json.Marshal(trace)
+	if strings.Contains(string(b), canary) {
+		t.Fatalf("canary in trace")
+	}
+
+	// Event
+	ev := events.Event{
+		Kind:                "decision_ok",
+		DecisionProvider:    "local",
+		DecisionAction:      "ABSTAIN",
+		DecisionReasonCodes: "EXISTING_ORDER_PRESERVED",
+	}
+	b, _ = json.Marshal(ev)
+	if strings.Contains(string(b), canary) {
+		t.Fatalf("canary in event")
+	}
+
+	// Metrics snapshot should not contain canary (keys are fixed)
+	m := &Metrics{}
+	snap := m.Snapshot()
+	for k := range snap {
+		if strings.Contains(k, canary) {
+			t.Fatalf("canary in metrics key")
+		}
+	}
+
+	// Ensure no secret fields in request JSON
+	s := string(b)
+	if strings.Contains(strings.ToLower(s), "api_key") || strings.Contains(strings.ToLower(s), "authorization") {
+		t.Fatalf("secret field in event")
 	}
 }

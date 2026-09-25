@@ -6,6 +6,8 @@ import (
 )
 
 // Metrics tracks decision plane observability with bounded cardinality.
+// Each Server/Orchestrator owns its Metrics instance to avoid cross-server contamination.
+// No arbitrary provider text, deployment ID, request ID, VE ID, session ID becomes a label.
 type Metrics struct {
 	decisionsTotal atomic.Int64
 	abstainsTotal  atomic.Int64
@@ -20,6 +22,7 @@ type Metrics struct {
 }
 
 // Record records a decision outcome.
+// Outcome labels come from fixed internal enums only, not arbitrary provider-returned text.
 func (m *Metrics) Record(result DecisionResult, err error, timedOut bool, offMode bool) {
 	if offMode {
 		m.offModeTotal.Add(1)
@@ -32,7 +35,8 @@ func (m *Metrics) Record(result DecisionResult, err error, timedOut bool, offMod
 	if err != nil {
 		m.failuresTotal.Add(1)
 	}
-	if result.IsAbstain() {
+	// IsAbstain after strict validation: Action == ABSTAIN
+	if result.Action == ActionAbstain {
 		m.abstainsTotal.Add(1)
 	}
 	switch result.Action {
@@ -45,7 +49,7 @@ func (m *Metrics) Record(result DecisionResult, err error, timedOut bool, offMod
 		m.latencySum.Add(int64(result.Latency))
 		m.latencyCount.Add(1)
 	}
-	// Invalid tracked via reason codes
+	// Invalid tracked via reason codes — only canonical codes
 	for _, rc := range result.ReasonCodes {
 		if rc == ReasonInvalidResult || rc == ReasonValidationFailed {
 			m.invalidTotal.Add(1)
@@ -55,6 +59,7 @@ func (m *Metrics) Record(result DecisionResult, err error, timedOut bool, offMod
 }
 
 // Snapshot returns a map for metrics endpoint / admin.
+// Keys are fixed enums, not per-request.
 func (m *Metrics) Snapshot() map[string]int64 {
 	latSum := m.latencySum.Load()
 	latCount := m.latencyCount.Load()
@@ -76,5 +81,6 @@ func (m *Metrics) Snapshot() map[string]int64 {
 	}
 }
 
-// Global metrics instance (process-wide, like other metrics in httpapi).
+// GlobalMetrics fallback only if truly necessary internally (e.g. tests that don't create server).
+// Preferred: each Server/Orchestrator owns its Metrics.
 var GlobalMetrics = &Metrics{}

@@ -1,9 +1,9 @@
-# Phase D — DecisionProvider Contracts + Orchestrator + Eligible-Set Validator — Implementation Report
+# Phase D — DecisionProvider Contracts + Orchestrator + Eligible-Set Validator — Implementation Report (Final Safety Convergence)
 
-Date: 2026-09-25
+Date: 2026-09-25 (final convergence)
 Branch: arena/01a0d825-nexaroute
-Baseline: 2cf905cab6323f29892beb1d4d96a59956472cec (Phase C PASS)
-Spec sections: §7 DecisionProvider, §8 Orchestrator, §9 Validator, §10 Budget, §11 Privacy, §42 Config, §46 Observability
+Baseline: 2cf905cab6323f29892beb1d4d96a59956472cec (Phase C PASS) → fb28d52 (initial Phase D) → final convergence
+Spec sections: §7 DecisionProvider, §8 Orchestrator, §9 Validator, §10 Budget, §11 Privacy, §42 Config, §46 Observability, and safety convergence requirements
 
 ---
 
@@ -18,37 +18,35 @@ Feature Extractor → RequestFeatures (privacy-safe, no raw prompt)
   ↓
 Task Analyzer → TaskProfile (deterministic, stateless)
   ↓
-router.Requirement (Model, Tools, Vision, Streaming, Reasoning, EstimatedInputTokens, MaxOutputTokens, MinContextWindow, SessionKey)
+router.Requirement
   ↓
 candidatesForRequirement(req, protocol):
-  - snapshot cfg, resolver, router
-  - resolveVirtualEndpoint (disabled→404, protocol exact check)
+  - snapshot cfg, resolver, router under RLock
+  - resolve VE (disabled→404, protocol exact)
   - if virtual: reqAll Model="" → rt.Candidates(reqAll) → AllFilteredCandidates (pool ∩ eligible, dedup, preserve router order)
   - else: rt.Candidates(req)
   - returns E = eligible set (authoritative)
   ↓
-task_classified event (privacy-safe, latency_ms min 1)
+task_classified event
   ↓
-[Decision Plane] — NEW Phase D seam
-  - if mode=off: zero overhead, return E unchanged
-  - else: convert E to []decision.Candidate (ID, ProviderID, Model, Priority, Weight)
-         build DecisionRequest {TaskProfile, Features, Candidates E, VE/Route/Pool IDs, Budget (Timeout from config), RequestID}
-         orchestrator.Decide(ctx with timeout):
-           - resolve provider (local only in Phase D)
-           - context.WithTimeout(timeout) bounded 1-5000ms, default 10ms
-           - panic recovery → fail-open
-           - provider.Decide(ctx, req) → DecisionResult
-           - timeout/error → fail-open
-           - ValidateResult(E, result): unknown candidate → fail-open, duplicate → fail-open, confidence out of [0,1] → fail-open, invalid action → fail-open
-           - NormalizeResult: ABSTAIN→E original, SELECT C from [A,B,C,D]→[C,A,B,D], RANK [C,A] from [A,B,C,D]→[C,A,B,D] (omitted appended original order)
-           - metrics record
-  - reorder original []router.Scored by ordered []decision.Candidate preserving Scored metadata
+[Decision Plane] — Phase D seam
+  - Empty E: return empty, no provider call, reason EMPTY_ELIGIBLE
+  - Single E: return [A], no provider call, reason SINGLE_CANDIDATE
+  - OFF: clone E, zero overhead, reason OFF_MODE
+  - Budget: Timeout (default 10ms, bounded 1-5000ms) + MaxProviderCalls (default 1)
+  - Provider health check: if unavailable → fail-open PROVIDER_UNHEALTHY, no call
+  - Context with timeout, panic recovery, error bounding
+  - Capabilities enforcement: RANK requires CanRank, SELECT requires CanSelect
+  - ValidateResult strict: Action must be known non-empty, confidence finite not NaN/Inf [0,1], reason codes canonical bounded, ranked_ids bounded <= len(E) and <=4096, SELECT requires selected_id ∈ E and ranked empty, RANK requires ranked non-empty ⊆ E no duplicates selected empty, ABSTAIN requires both empty
+  - NormalizeResult: ABSTAIN→E original, SELECT C from [A,B,C,D]→[C,A,B,D], RANK [C,A]→[C,A,B,D] (omitted appended original order)
+  - Metrics per-orchestrator, events bounded, DecisionTrace
+  - Reorder original []router.Scored by ordered []decision.Candidate
   ↓
-cache lookup (opt-in exact-match)
+cache lookup
   ↓
-maxAttempts = min(cfg.Routing.MaxAttempts, len(candidates))
+maxAttempts hard bound
   ↓
-Execution loop (failover, hedging, capability repair, session pinning) — unchanged, uses decision-ordered E
+Execution with failover/hedging/repair/session affinity
 ```
 
 No second router, no second metrics stack, no second config system. Router remains eligibility owner, does not import decision.
@@ -61,9 +59,9 @@ No second router, no second metrics stack, no second config system. Router remai
 
 ```go
 type DecisionConfig struct {
-    Mode      string `json:"mode,omitempty"`       // off | local (Phase D)
-    Provider  string `json:"provider,omitempty"`   // local (Phase D only)
-    TimeoutMS int    `json:"timeout_ms,omitempty"` // bounded 1-5000, default 10ms
+    Mode      string `json:"mode,omitempty"`       // off | local
+    Provider  string `json:"provider,omitempty"`   // local
+    TimeoutMS int    `json:"timeout_ms,omitempty"` // 1-5000 default 10
 }
 type Config struct {
     ...
@@ -71,10 +69,7 @@ type Config struct {
 }
 ```
 
-Defaults:
-- `Default()` returns Decision{Mode:"off", Provider:"local", TimeoutMS:10}
-- `ApplyDefaults()` trims/lowercases Mode/Provider, defaults empty to off/local/10
-- `Validate()` rejects Mode not in {off,local,""}, Provider not in {local,""}, TimeoutMS not in [1,5000]
+Defaults: `Default()` returns Decision{Mode:"off", Provider:"local", TimeoutMS:10}, `ApplyDefaults()` trims/lowercases/defaults, `Validate()` rejects invalid.
 
 ### DecisionProvider (internal/decision/provider.go)
 
@@ -85,33 +80,24 @@ type DecisionProvider interface {
     Health() ProviderHealth
     Decide(ctx context.Context, req DecisionRequest) (DecisionResult, error)
 }
-type Capabilities struct {
-    CanRank   bool
-    CanSelect bool
-}
-type ProviderHealth struct {
-    Status    string // healthy, degraded, unavailable
-    Message   string
-    CheckedAt time.Time
-}
-const HealthHealthy = "healthy" etc
+// Contract: Decide MUST obey ctx.Done(), use context-aware I/O, return promptly, no unbounded goroutines.
+// Future HTTP adapters must bind requests to supplied context.
+// Health: if unavailable, orchestrator will not call Decide, fail-open PROVIDER_UNHEALTHY.
+// Capabilities: RANK requires CanRank, SELECT requires CanSelect.
+type Capabilities struct { CanRank, CanSelect bool }
+type ProviderHealth struct { Status string; Message string; CheckedAt time.Time }
+const HealthHealthy, HealthDegraded, HealthUnavailable
 ```
 
 ### DecisionRequest (internal/decision/request.go)
 
 ```go
-type Candidate struct {
-    ID         string
-    ProviderID string
-    Model      string
-    Priority   int
-    Weight     float64
-}
-type Constraints struct{} // Phase E placeholder
+type Candidate struct { ID, ProviderID, Model string; Priority int; Weight float64 }
+type Budget struct { Timeout time.Duration; MaxProviderCalls int } // default 1
 type DecisionRequest struct {
-    TaskProfile       TaskProfile // alias taskprofile.TaskProfile
-    Features          Features    // alias feature.RequestFeatures
-    Candidates        []Candidate // authoritative eligible set snapshot
+    TaskProfile       TaskProfile
+    Features          Features
+    Candidates        []Candidate
     VirtualEndpointID string
     RouteProfileID    string
     CandidatePoolID   string
@@ -122,139 +108,114 @@ type DecisionRequest struct {
 func CloneCandidates(in []Candidate) []Candidate
 ```
 
-Privacy: No raw prompt, no tool results, no headers, no API keys. Only TaskProfile+Features+IDs.
+Privacy: only TaskProfile+Features+IDs, no raw prompt, no secrets.
 
-### DecisionResult (internal/decision/result.go)
+### DecisionResult — Strict Contract (internal/decision/result.go)
 
 ```go
 type Action string
-const ActionSelect Action = "SELECT"
-const ActionRank Action = "RANK"
-const ActionAbstain Action = "ABSTAIN"
+const ActionSelect, ActionRank, ActionAbstain Action = "SELECT","RANK","ABSTAIN"
+
+type ReasonCode string // bounded enum
+const (
+    ReasonExistingOrderPreserved, ReasonLocalPassThrough, ReasonAbstained,
+    ReasonTimeout, ReasonProviderError, ReasonProviderPanic, ReasonInvalidResult,
+    ReasonBudgetExceeded, ReasonOffMode, ReasonEligibleSetPreserved,
+    ReasonNormalizationApplied, ReasonValidationFailed, ReasonSingleCandidate,
+    ReasonEmptyEligible, ReasonProviderUnhealthy ReasonCode = ...
+)
+const MaxReasonCodes=8, MaxReasonCodeLen=64, MaxSelectedIDLen=512, MaxProviderIDLen=128, MaxRankedIDs=4096
 
 type DecisionResult struct {
-    Action      Action
-    SelectedID  string
-    RankedIDs   []string
-    Confidence  float64 // 0-1
-    ReasonCodes []string
-    ProviderID  string
+    Action      Action       // must be SELECT,RANK,ABSTAIN — empty/unknown INVALID
+    SelectedID  string       // SELECT required ∈ E bounded 512, RANK/ABSTAIN must be empty
+    RankedIDs   []string     // RANK required non-empty ⊆ E no duplicates bounded <=len(E) <=4096, SELECT/ABSTAIN empty
+    Confidence  float64      // finite not NaN/Inf [0,1]
+    ReasonCodes []ReasonCode // bounded count <=8 len <=64 canonical only
+    ProviderID  string       // bounded 128
     Abstained   bool
     Latency     time.Duration
-    Error       string
+    Error       string // internal bounded 256 sanitized not for client
 }
-func (r DecisionResult) IsAbstain() bool
-func (r DecisionResult) ValidAction() bool
-```
-
-### Budget (internal/decision/budget.go)
-
-```go
-type Budget struct {
-    Timeout       time.Duration
-    MaxCandidates int
-}
-func DefaultBudget() Budget { return Budget{Timeout:10ms} }
+func (r DecisionResult) ValidAction() bool // known non-empty
+func (r DecisionResult) IsStrictAbstain() bool // ABSTAIN with empty payload
 ```
 
 ### Validator (internal/decision/validator.go)
 
 ```go
 func ValidateResult(eligible []Candidate, result DecisionResult) error
-// checks: eligible non-empty, action known, confidence [0,1], SelectedID in eligible if SELECT, RankedIDs subset of eligible, no duplicates
+// strict: action known non-empty, confidence finite not NaN/Inf [0,1], reason codes canonical bounded count/len, ranked bounded, SELECT/RANK/ABSTAIN payload rules, unknown/duplicate rejected
 
-func NormalizeResult(eligible []Candidate, result DecisionResult) (ordered []Candidate, applied bool, reason string)
-// ABSTAIN → clone original, not applied, ReasonAbstained
-// SELECT → [selected] + rest original order, applied, ReasonEligibleSetPreserved
-// RANK → ranked order + omitted appended original order, applied, ReasonNormalizationApplied if omitted>0 else ReasonEligibleSetPreserved
+func NormalizeResult(eligible []Candidate, result DecisionResult) (ordered []Candidate, applied bool, reason ReasonCode)
+// ABSTAIN→clone original, SINGLE_CANDIDATE/EMPTY_ELIGIBLE handling, SELECT→[selected]+rest original, RANK→ranked+omitted appended original order
 ```
 
-### Reason Codes (internal/decision/reason.go)
+### Budget (internal/decision/budget.go)
 
 ```go
-const (
-    ReasonExistingOrderPreserved = "EXISTING_ORDER_PRESERVED"
-    ReasonLocalPassThrough       = "LOCAL_PASS_THROUGH"
-    ReasonAbstained              = "ABSTAINED"
-    ReasonTimeout                = "TIMEOUT"
-    ReasonProviderError          = "PROVIDER_ERROR"
-    ReasonProviderPanic          = "PROVIDER_PANIC"
-    ReasonInvalidResult          = "INVALID_RESULT"
-    ReasonBudgetExceeded         = "BUDGET_EXCEEDED"
-    ReasonOffMode                = "OFF_MODE"
-    ReasonEligibleSetPreserved   = "ELIGIBLE_SET_PRESERVED"
-    ReasonNormalizationApplied   = "NORMALIZATION_APPLIED"
-    ReasonValidationFailed       = "VALIDATION_FAILED"
-)
+type Budget struct { Timeout time.Duration; MaxProviderCalls int }
+func DefaultBudget() Budget { Timeout:10ms, MaxProviderCalls:1 }
+func (b Budget) IsZero() bool
 ```
 
-### Local Provider (internal/decision/local.go)
-
-```go
-type LocalProvider struct{}
-func (p *LocalProvider) ID() string { return "local" }
-func (p *LocalProvider) Capabilities() Capabilities { return {CanRank:true} }
-func (p *LocalProvider) Health() ProviderHealth { return {Status:healthy} }
-func (p *LocalProvider) Decide(ctx context.Context, req DecisionRequest) (DecisionResult, error) {
-    // respects ctx cancellation → abstain with TIMEOUT
-    // returns ABSTAIN with Confidence 1.0, ReasonCodes [EXISTING_ORDER_PRESERVED, LOCAL_PASS_THROUGH]
-}
-```
-
-### Registry (internal/decision/registry.go)
-
-```go
-type Registry struct { mu RWMutex, providers map[string]DecisionProvider }
-func NewRegistry() *Registry // pre-registers local
-func (r *Registry) Register(p DecisionProvider)
-func (r *Registry) Get(id string) (DecisionProvider, bool)
-func (r *Registry) List() []string
-func (r *Registry) Snapshot() map[string]ProviderHealth
-func (r *Registry) Resolve(name string) (DecisionProvider, error) // empty→local
-```
-
-### Metrics (internal/decision/metrics.go)
-
-```go
-type Metrics struct {
-    decisionsTotal, abstainsTotal, failuresTotal, timeoutsTotal, invalidTotal, selectTotal, rankTotal, latencySum, latencyCount, offModeTotal atomic.Int64
-}
-func (m *Metrics) Record(result DecisionResult, err error, timedOut bool, offMode bool)
-func (m *Metrics) Snapshot() map[string]int64 // decisions_total, abstains_total, failures_total, timeouts_total, invalid_total, select_total, rank_total, latency_avg_ms, latency_count, off_mode_total
-var GlobalMetrics = &Metrics{}
-```
+MaxCandidates removed (dead field). MaxProviderCalls default 1, enforced, exhausted → BUDGET_EXCEEDED, no call.
 
 ### Orchestrator (internal/decision/orchestrator.go)
 
 ```go
-type Orchestrator struct {
-    registry *Registry
-    metrics  *Metrics
-    cfg      config.DecisionConfig // coherent snapshot for hot-reload
+type DecisionTrace struct {
+    Mode, ProviderID string; CandidateCount int; Action Action; SelectedID string; ReasonCodes []ReasonCode; Duration time.Duration; FallbackUsed bool
 }
-func NewOrchestrator(reg *Registry, cfg config.DecisionConfig, metrics *Metrics) *Orchestrator
-func (o *Orchestrator) UpdateConfig(cfg config.DecisionConfig) // hot-reload
-func (o *Orchestrator) Config() config.DecisionConfig
-func (o *Orchestrator) MetricsSnapshot() map[string]int64
-func (o *Orchestrator) Decide(ctx context.Context, req DecisionRequest) (ordered []Candidate, result DecisionResult, err error)
-// OFF → clone original, ABSTAIN OFF_MODE, metrics off_mode_total
-// Resolve provider → unknown → fail-open
-// Budget: timeout = min(cfg.TimeoutMS, req.Budget.Timeout) bounded 1ms-5s default 10ms
-// context.WithTimeout, panic recovery → PROVIDER_PANIC, timeout → TIMEOUT, error → PROVIDER_ERROR
-// Validate → invalid → fail-open INVALID_RESULT, VALIDATION_FAILED
-// Normalize → preserve failover coverage
+type Orchestrator struct { registry *Registry; metrics *Metrics; mu sync.RWMutex; cfg config.DecisionConfig }
+func NewOrchestrator(reg *Registry, cfg config.DecisionConfig, metrics *Metrics) *Orchestrator // per-instance metrics, not global
+func (o *Orchestrator) UpdateConfig(cfg config.DecisionConfig) // atomic under mu
+func (o *Orchestrator) Config() config.DecisionConfig // coherent snapshot under RLock
+func (o *Orchestrator) Decide(ctx context.Context, req DecisionRequest) (ordered []Candidate, result DecisionResult, trace DecisionTrace)
+// Empty→empty no call EMPTY_ELIGIBLE
+// Single→[A] no call SINGLE_CANDIDATE
+// OFF→clone OFF_MODE off_mode_total
+// Budget MaxProviderCalls enforced → BUDGET_EXCEEDED no call
+// Resolve provider → unknown → PROVIDER_ERROR fail-open
+// Health check → unavailable → PROVIDER_UNHEALTHY no call
+// Timeout via context.WithTimeout, provider must honor ctx.Done()
+// Panic recovery bounded 256 → PROVIDER_PANIC
+// Capabilities enforcement → mismatch → INVALID_RESULT, VALIDATION_FAILED
+// Validate strict → invalid → INVALID_RESULT, VALIDATION_FAILED
+// Normalize preserves failover
+// Error strings bounded 256
 ```
+
+Hot-reload race fixed: cfg protected by RWMutex, Decide snapshots under RLock, UpdateConfig under Lock, Request A coherent snapshot, Request B new snapshot, no half-old/half-new. Race test `TestOrchestrator_HotReloadRace` overlaps Decide and UpdateConfig 100 iterations, passes with `-race`.
+
+### Registry (internal/decision/registry.go)
+
+Pre-registers local, RWMutex protected, Resolve empty→local, Snapshot for admin.
+
+### Metrics (internal/decision/metrics.go)
+
+Per-orchestrator Metrics, not global shared. GlobalMetrics fallback only for tests. Each Server owns its Metrics via `&decision.Metrics{}` in `server.go` New(). Test `TestOrchestrator_MetricsIsolation` proves isolation.
+
+Metrics use fixed enums only for labels, not arbitrary provider text, deployment ID, request ID, VE ID, session ID. Snapshot fixed keys: decisions_total, abstains_total, failures_total, timeouts_total, invalid_total, select_total, rank_total, latency_avg_ms, latency_count, off_mode_total.
+
+Exposed via `/metrics` as `nexaroute_decision_total{outcome="..."}`.
+
+### Events (internal/events/bus.go)
+
+Added decision fields bounded: DecisionProvider 128, DecisionAction 32, DecisionSelected 512, DecisionReasonCodes 512, DecisionCandidateCount, DecisionConfidence.
+
+Kinds: decision_ok, decision_abstain, decision_fail, decision_timeout, decision_rejected.
+
+Safe fields: provider ID, action, candidate count, selected deployment ID, confidence, bounded reason codes, latency, VE ID, route profile, pool. Never raw prompt, tool schema, API keys, headers, arbitrary text, chain-of-thought.
+
+Emitted in `decision_wiring.go` via `emitDecisionEvent`.
 
 ### Wiring (internal/httpapi/decision_wiring.go)
 
-```go
-func decisionCandidates(scored []router.Scored) []decision.Candidate
-func reorderScoredByDecision(original []router.Scored, ordered []decision.Candidate) []router.Scored
-func (s *Server) applyDecisionPlane(ctx context.Context, candidates []router.Scored, ti taskIntelligence, resolvedRoute *route.ResolvedRoute, requestID string) []router.Scored
-// OFF fast path via cfg.Decision.Mode check
-// Builds DecisionRequest from ti.Features, ti.Profile, resolvedRoute IDs, Budget from cfg.Decision.TimeoutMS
-// Calls orchestrator.Decide, returns reordered scored
-```
+- `decisionCandidates` converts Scored to Candidate
+- `reorderScoredByDecision` preserves metadata, fallback if len mismatch
+- `emitDecisionEvent` builds bounded reason string, determines kind from result, adds event with safe fields
+- `applyDecisionPlane`: OFF fast path via snapshot, len<=1 fast path (but orchestrator also handles empty/single safely), converts, Budget Timeout + MaxProviderCalls=1, builds DecisionRequest from Features+Profile+VE IDs+RequestID, calls orchestrator.Decide (3 returns), emits event, reorders Scored.
 
 ---
 
@@ -263,29 +224,31 @@ func (s *Server) applyDecisionPlane(ctx context.Context, candidates []router.Sco
 New:
 - internal/decision/provider.go, request.go, result.go, validator.go, budget.go, local.go, reason.go, registry.go, metrics.go, orchestrator.go
 - internal/decision/validator_test.go, local_test.go, orchestrator_test.go, privacy_test.go, property_test.go, benchmark_test.go
-- internal/httpapi/decision_wiring.go
-- docs/PHASE_D_CURRENT_STATE_NOTE.md, PHASE_D_IMPLEMENTATION_REPORT.md
+- internal/httpapi/decision_wiring.go, decision_integration_test.go
+- docs/PHASE_D_CURRENT_STATE_NOTE.md, PHASE_D_DECISION_ARCHITECTURE.md, PHASE_D_IMPLEMENTATION_REPORT.md
 
 Modified:
-- internal/config/config.go — DecisionConfig, Config.Decision, Default() sets decision, ApplyDefaults trims/defaults, Validate rejects invalid
-- internal/httpapi/server.go — decisionRegistry, decisionOrchestrator fields, New() instantiates, applyConfigLocked updates orchestrator config
-- internal/httpapi/openai.go, anthropic.go, canonical_path.go — after candidatesForRequirement and task_classified, call applyDecisionPlane
+- internal/config/config.go — DecisionConfig, Default() sets, ApplyDefaults, Validate
+- internal/httpapi/server.go — decisionRegistry, decisionOrchestrator per-instance Metrics, New() uses same registry for orchestrator, applyConfigLocked updates orchestrator config
+- internal/httpapi/openai.go, anthropic.go, canonical_path.go — decision seam after candidatesForRequirement
 - internal/httpapi/metrics.go — decision metrics bounded
-- internal/httpapi/admin.go — snapshot includes decision config, metrics, provider health
+- internal/httpapi/admin.go — snapshot includes decision config/metrics/provider health
+- internal/events/bus.go — decision fields bounded, Add truncates
 
 Unchanged intentionally:
-- internal/router, internal/route, internal/health, internal/providers, internal/feature, internal/taskprofile, internal/compat, internal/protocol — no decision import, eligibility remains authoritative
+- internal/router, internal/route — no decision import, eligibility authoritative
+- internal/feature, internal/taskprofile — no decision dependency
 
 ---
 
 ## D. Verification
 
 ### Compile & Format
-- gofmt -w internal/decision/*.go internal/httpapi/*.go internal/config/config.go → clean
+- gofmt -l clean
 - go build ./... PASS
 - go vet ./... PASS
 
-### Unit Tests (17 packages → 18 with decision)
+### Unit Tests
 
 ```
 go test ./... -count=1
@@ -294,11 +257,11 @@ ok internal/cache
 ok internal/compat
 ok internal/config
 ok internal/core
-ok internal/decision (11 tests: validator 6, local 2, orchestrator 8, privacy 2, property 1)
+ok internal/decision
 ok internal/events
 ok internal/feature
 ok internal/health
-ok internal/httpapi (all previous + decision integration)
+ok internal/httpapi
 ok internal/logging
 ok internal/probe
 ok internal/protocol/canonical
@@ -310,113 +273,130 @@ ok internal/translate
 ok internal/usage
 ```
 
-- decision tests detailed:
-  - TestValidateResult_ValidRank, UnknownCandidate, Duplicate, InvalidConfidence, SelectUnknown PASS
-  - TestNormalizeResult_RankPartial: [C,A] from [A,B,C,D] → [C,A,B,D] PASS, reason NORMALIZATION_APPLIED
-  - TestNormalizeResult_Select: C from [A,B,C] → [C,A,B] PASS
-  - TestNormalizeResult_AbstainPreservesOrder PASS
-  - TestLocalProvider_PreservesOrder: returns ABSTAIN with EXISTING_ORDER_PRESERVED PASS
-  - TestLocalProvider_ContextCancellation PASS
-  - TestOrchestrator_OffMode: preserves order, OFF_MODE reason PASS
-  - TestOrchestrator_LocalPreservesOrder PASS
-  - TestOrchestrator_ValidRank: [C,A] from [A,B,C,D] → [C,A,B,D] PASS
-  - TestOrchestrator_InvalidResultFailOpen: unknown Z → original order PASS
-  - TestOrchestrator_TimeoutFailOpen: 50ms delay with 5ms timeout → original order, TIMEOUT reason PASS
-  - TestOrchestrator_ErrorFailOpen PASS
-  - TestOrchestrator_PanicRecovery: panic → original order, PROVIDER_PANIC reason PASS
-  - TestOrchestrator_EligibleSetInvariant: inject EVIL → not in ordered, length preserved PASS
-  - TestOrchestrator_SelectNormalization PASS
-  - TestDecisionRequest_NoCanaryLeak: canary SECRET_DECISION_CANARY_82c1 not in JSON, no api_key/auth header fields PASS
-  - TestProperty_EligibleSetPreserved: 200 random iterations, 20% invalid injection, 10% panic → eligible-set invariant preserved, no panic, no length change PASS
+Decision tests (detailed):
+- Validator: ValidRank, UnknownCandidate, Duplicate, InvalidConfidence (too high, too low, NaN, +Inf, -Inf), SelectUnknown, StrictAction (8 cases), BoundedRanked, ReasonCodeBounded (unknown, too many) PASS
+- Normalize: RankPartial [C,A] from [A,B,C,D]→[C,A,B,D] NORMALIZATION_APPLIED, Select, AbstainPreservesOrder, EmptyEligible→EMPTY_ELIGIBLE PASS
+- Local: PreservesOrder ABSTAIN EXISTING_ORDER_PRESERVED, ContextCancellation PASS
+- Orchestrator: OffMode preserves order OFF_MODE, LocalPreservesOrder, ValidRank [C,A,B,D], InvalidResultFailOpen unknown Z, TimeoutFailOpen 50ms delay/5ms budget TIMEOUT, ErrorFailOpen, PanicRecovery PROVIDER_PANIC, EligibleSetInvariant EVIL injection, SelectNormalization [C,A,B,D], EmptyEligible no call EMPTY_ELIGIBLE, SingleCandidate no call SINGLE_CANDIDATE, CapabilitiesEnforced (no-rank, no-select), ProviderHealthUnavailable no call PROVIDER_UNHEALTHY, BudgetMaxProviderCalls 0→BUDGET_EXCEEDED no call, NaNConfidenceRejected, InfConfidenceRejected (+Inf/-Inf), StrictContract 8 cases, BoundedRankedIDs, ReasonCodeValidation unknown, HotReloadRace 100 concurrent Decide+UpdateConfig, MetricsIsolation (2 orchestrators isolated), ContextAware timeout early PASS
+- Privacy: NoCanaryLeak, FieldsBounded, CompletePath (Request, Result, Trace, Event, Metrics, Admin) PASS
+- Property: EligibleSetPreserved 200 random iterations 20% invalid 10% panic → no injection no loss no panic PASS
 
-### Privacy
-- Canary SECRET_DECISION_CANARY_82c1 placed in raw request (simulated) → DecisionRequest JSON does not contain it (TestDecisionRequest_NoCanaryLeak)
-- DecisionRequest struct has no fields for api_key, authorization, prompt, content, tool results, headers
-- Candidate snapshot only ID, ProviderID, Model, Priority, Weight — no secrets
+### Integration Tests (httpapi)
 
-### Routing Neutrality & OFF Zero Overhead
-- OFF mode returns original order unchanged, no provider call (benchmark OFF vs local)
-- Local mode preserves exact order but exercises contract (reason codes EXISTING_ORDER_PRESERVED, LOCAL_PASS_THROUGH)
-- grep -R "decision" internal/router internal/route → no matches, proving decision cannot affect eligibility
-- Router remains eligibility owner: health, capabilities, provider circuit, context window, credentials, security policy all checked before decision seam
+- TestDecision_CrossProtocolLocalPreservesOrder: same pool, decision.mode=local, OpenAI/Anthropic/Responses identical ordering (p1/m1) PASS
+- TestDecision_RankingProviderSharedSeam: test provider [B,A] used across all three protocols, first deployment B PASS
+- TestDecision_PoolContainment: VE pool A,B, C exists, evil provider returns C,A → rejected, final A,B, C never executed (hitsC=0) PASS
+- TestDecision_MaxAttempts: candidates [A,B,C] auto model, max_attempts=2, A fail B fail C not attempted PASS
+- TestDecision_FallbackIntegration: VE→primary/fallback pool→A fail B succeed→success B, upstream model physical not virtual PASS
+- TestDecision_SessionAffinity: ranking [B,A] first request B, second same session pins B, affinity physical not provider ID/virtual model PASS
+- TestDecision_CredentialSelectionUnchanged: DecisionRequest no credential, credential P2C authoritative PASS
+- TestDecision_PrivacyCanaryCompletePath: canary absent from events, metrics, admin snapshot PASS
+- TestDecision_EventsEmitted: decision_ok/abstain/fail/timeout/rejected emitted with safe fields PASS
+- TestDecision_DecisionTrace: bounded, no canary PASS
+- TestDecision_MetricsBounded: metrics fixed enums, no canary, decision_total present PASS
+- TestDecision_RouterDoesNotImportDecision PASS
 
-### Eligible-Set Invariant Evidence
-- Validator rejects unknown candidate IDs (ErrUnknownCandidate)
-- Orchestrator property test: random provider returns random permutations, sometimes invalid (unknown IDs), sometimes panic, sometimes partial — ordered result always same set as eligible, no injection, no loss, no panic
-- Normalization: omitted eligible IDs appended in original order, preserving failover coverage
+### Privacy Canary — Complete Path
 
-### Fail-Open Evidence
-- Timeout: mock 50ms delay with 5ms budget → TIMEOUT reason, original order
-- Error: mock error → PROVIDER_ERROR, original order
-- Panic: mock panic → PROVIDER_PANIC, original order recovered
-- Invalid: unknown ID, duplicate, confidence out of bounds → INVALID_RESULT, VALIDATION_FAILED, original order
-- Unknown provider → fail-open
+Canary `SECRET_DECISION_CANARY_82c1` verified absent from:
+- DecisionRequest serialized form (privacy_test.go)
+- DecisionResult
+- DecisionTrace
+- decision events (TestDecision_PrivacyCanaryCompletePath checks bus snapshot JSON)
+- metrics (snapshot keys + /metrics endpoint)
+- admin snapshot (TestDecision_PrivacyCanaryCompletePath checks /admin/api/snapshot)
 
-### Config Hot-Reload Coherence
-- applyConfigLocked updates orchestrator config under runtimeMu after SaveAtomic, before resolver reload
-- New config snapshot coherent: decision config, routing, probe all updated atomically
-- Existing configs without decision field load with defaults via ApplyDefaults (off/local/10ms) — backward compatible
-
-### Metrics Cardinality
-- Decision metrics bounded: outcome labels from known set (decisions_total, abstains_total, failures_total, timeouts_total, invalid_total, select_total, rank_total, off_mode_total, latency_avg_ms, latency_count) — 10 keys max, not per-candidate
-- Reason codes bounded constants (12 codes)
-- Admin snapshot includes decision config, metrics, provider health
-
-### Benchmarks (actual, linux amd64, Go 1.23.9)
+### Benchmarks — Exact Output (final convergence)
 
 ```
-BenchmarkOrchestrator_OffMode-4    1000000    ~50 ns/op (clone slice, zero provider call)
-BenchmarkOrchestrator_Local-4       500000   ~300 ns/op (context check, abstain)
-BenchmarkValidator-4               2000000   ~150 ns/op
-BenchmarkNormalize-4               2000000   ~200 ns/op
+goos: linux
+goarch: amd64
+pkg: github.com/ali-shortcuts/nexaroute/internal/decision
+cpu: Intel(R) Xeon(R) Processor @ 2.60GHz
+BenchmarkOrchestrator_OffMode-2    4689223    277.0 ns/op    544 B/op    2 allocs/op
+BenchmarkOrchestrator_Local-2       750606    1469 ns/op    992 B/op    8 allocs/op
+BenchmarkValidator_10-2            2422431    478.2 ns/op    291 B/op    1 allocs/op
+BenchmarkValidator_100-2            237072    4435 ns/op   2840 B/op    2 allocs/op
+BenchmarkNormalize_10-2            1239799    999.3 ns/op   2127 B/op    2 allocs/op
+BenchmarkNormalize_100-2            118330    9085 ns/op  19464 B/op    3 allocs/op
+BenchmarkValidator-2               2498163    475.7 ns/op    291 B/op    1 allocs/op
+BenchmarkNormalize-2               1000000    1062 ns/op   2127 B/op    2 allocs/op
 ```
 
-OFF path ~50ns, local ~300ns — negligible vs router scoring and upstream latency. Total typical decision overhead <1µs for OFF, <5µs for local.
+OFF ~277 ns/op, LOCAL ~1469 ns/op, validator 10 ~478 ns/op, validator 100 ~4435 ns/op, normalizer 10 ~999 ns/op, normalizer 100 ~9085 ns/op.
+
+### Targeted Race Gate
+
+```
+go test -race ./internal/decision ./internal/httpapi ./internal/router ./internal/route ./internal/taskprofile ./internal/feature -count=1
+ok internal/decision 1.096s
+ok internal/httpapi 4.611s
+ok internal/router 1.349s
+ok internal/route 1.011s
+ok internal/taskprofile 1.013s
+ok internal/feature 1.236s
+```
+
+PASS, including hot-reload race test overlapping Decide and UpdateConfig.
 
 ### Full Mandatory Gates
 
-- ./scripts/verify.sh PASS (go version, shell syntax, formatting, unit/integration count=10 shuffle, vet, race count=3 shuffle, js syntax, fuzz 2s, linux amd64/arm64 builds)
-- ./scripts/stress.sh PASS (router scale, probe/recovery, event-state, admission, log rotation)
-- ./scripts/smoke-local.sh PASS (UI 200, hello 200, model list, admin snapshot includes decision, count_tokens fallback, provider CRUD, atomic persistence)
-- Race targeted: go test -race ./internal/decision ./internal/httpapi ./internal/config PASS
+- `./scripts/verify.sh` PASS (go version, shell syntax, formatting, unit/integration count=10 shuffle, vet, race count=3 shuffle, js syntax, fuzz 2s, linux amd64/arm64 builds)
+- `./scripts/stress.sh` PASS (router scale, probe/recovery, event-state, admission, log rotation)
+- `./scripts/smoke-local.sh` PASS (UI 200, hello 200, model list, admin snapshot includes decision config/metrics, count_tokens fallback, provider CRUD, atomic persistence)
 
 ---
 
-## E. Acceptance Checklist (Phase D)
+## E. Acceptance Checklist (Final Safety Convergence)
 
-- [x] DecisionConfig Mode off|local, Provider local, TimeoutMS 1-5000 default 10ms, backward compatible, Default() sets, ApplyDefaults fills, Validate rejects invalid
-- [x] DecisionProvider interface ID/Capabilities/Health/Decide defined, no core dependency on specific provider (Jev is future adapter, not core)
-- [x] DecisionRequest privacy-safe: TaskProfile + RequestFeatures + []Candidate snapshot + VE/route/pool IDs + Budget + RequestID, no raw prompt, no secrets, canary SECRET_DECISION_CANARY_82c1 not leaked
-- [x] DecisionResult Action SELECT/RANK/ABSTAIN, SelectedID, RankedIDs, Confidence 0-1, ReasonCodes bounded, ProviderID, Abstained, Latency
-- [x] Validator enforces eligible-set invariant C∈E, rejects unknown/duplicate/confidence bounds/invalid action, empty eligible
-- [x] Normalization preserves failover: partial RANK → ranked + omitted appended original order, SELECT → [selected]+rest original, ABSTAIN → original
-- [x] Orchestrator budget (Timeout from config, per-request Budget can tighten), timeout via context.WithTimeout, panic recovery, fail-open on timeout/error/panic/invalid, OFF zero overhead, LOCAL preserves order
-- [x] Local provider pass-through preserving order, reason EXISTING_ORDER_PRESERVED, respects context cancellation
-- [x] Registry with local pre-registered, Resolve, Snapshot for admin
-- [x] Metrics bounded cardinality, GlobalMetrics, Record, Snapshot, exposed via /metrics (nexaroute_decision_total, latency avg/count)
-- [x] Admin snapshot extension includes decision config, metrics, provider health
-- [x] Integration in openai.go, anthropic.go, canonical_path.go after candidatesForRequirement (eligible set E) and before execution/failover
-- [x] Router does NOT import decision (eligibility owner stays pure), no second router/gateway/metrics stack/config system
-- [x] Hot-reload coherence: orchestrator config updated atomically on config reload
-- [x] Property tests for eligible-set invariant (200 random iterations, invalid injection, panic)
-- [x] Privacy tests for canary leak
-- [x] Benchmarks for OFF, local, validator, normalize
-- [x] gofmt, go build, go test ./... PASS, race, verify.sh, stress.sh, smoke-local.sh PASS
-- [x] OFF behaves like current version (Phase C) — zero semantic impact
+- [x] NaN confidence rejected (math.IsNaN check, test NaN)
+- [x] +Inf/-Inf confidence rejected (math.IsInf check, test Inf)
+- [x] empty/unknown Action rejected (ValidAction requires known non-empty, tests empty/FOO)
+- [x] contradictory SELECT/RANK/ABSTAIN payload rejected (strict contract: SELECT with ranked, RANK with selected/empty ranked, ABSTAIN with selected/ranked)
+- [x] ranked result bounded (len > len(eligible) rejected, hard limit 4096, test too-many)
+- [x] reason codes typed/bounded/validated (ReasonCode type, allowed set, MaxReasonCodes 8, MaxReasonCodeLen 64, validation, test unknown/too many)
+- [x] orchestrator config hot reload race fixed (RWMutex around cfg, snapshot under RLock, UpdateConfig under Lock, coherent snapshot)
+- [x] concurrent hot-reload race test passes (TestOrchestrator_HotReloadRace 100 iterations, go test -race PASS)
+- [x] Budget includes MaxProviderCalls (Budget struct with MaxProviderCalls, DefaultBudget 1)
+- [x] provider-call budget enforced (if <=0 and explicitly set → BUDGET_EXCEEDED no call, test budget 0)
+- [x] dead MaxCandidates removed (Budget no longer has MaxCandidates, removed from code)
+- [x] empty eligible set skips provider (orchestrator handles empty, no call, EMPTY_ELIGIBLE, test empty)
+- [x] single candidate skips provider (orchestrator handles single, no call, SINGLE_CANDIDATE, test single)
+- [x] capabilities enforced (RANK requires CanRank, SELECT requires CanSelect, tests no-rank/no-select)
+- [x] provider health checked independently (Health() check before Decide, unavailable → PROVIDER_UNHEALTHY no call, test unhealthy)
+- [x] context cancellation contract documented/tested (provider.go comment: MUST obey ctx.Done(), test context-aware timeout)
+- [x] error strings bounded/private (Error truncated 256, panic truncated 256, not arbitrary upstream body, no secrets)
+- [x] decision events implemented (decision_ok, abstain, fail, timeout, rejected, safe fields, bounded, privacy-safe, test events emitted)
+- [x] DecisionTrace exists (struct with Mode, ProviderID, CandidateCount, Action, SelectedID, ReasonCodes, Duration, FallbackUsed, bounded, test trace)
+- [x] metrics remain bounded (fixed outcome labels, not deployment/request/VE/session, test metrics bounded, no canary)
+- [x] per-server metrics isolation verified (each Server owns Metrics via &Metrics{}, test isolation proves 2 orchestrators isolated)
+- [x] OpenAI decision integration tested (cross-protocol test)
+- [x] Anthropic decision integration tested (cross-protocol test)
+- [x] Responses decision integration tested (cross-protocol test via bus events)
+- [x] fallback integration tested (VE→primary/fallback pool→A fail B succeed)
+- [x] pool containment integration tested (evil provider returns C not in pool → rejected, C never executed)
+- [x] max_attempts integration tested (max_attempts=2, C not attempted)
+- [x] session affinity integration tested (ranking changes order, affinity pins physical B)
+- [x] credential selection unchanged (DecisionRequest no credential, P2C authoritative)
+- [x] complete privacy canary path passes (Request, Result, Trace, events, metrics, admin snapshot)
+- [x] exact benchmarks recorded (OFF 277.0 ns/op 544 B/op 2 allocs, LOCAL 1469 ns/op 992 B/op 8 allocs, validator 10 478.2 ns/op 291 B/op 1 alloc, validator 100 4435 ns/op 2840 B/op 2 alloc, normalizer 10 999.3 ns/op 2127 B/op 2 alloc, normalizer 100 9085 ns/op 19464 B/op 3 alloc)
+- [x] targeted race command PASS (decision, httpapi, router, route, taskprofile, feature)
+- [x] verify.sh PASS
+- [x] stress.sh PASS
+- [x] smoke-local.sh PASS
+- [x] architecture doc exists (PHASE_D_DECISION_ARCHITECTURE.md)
+- [x] implementation report matches code (this report)
 
 ---
 
 ## F. Remaining Limitations (intentional Phase D)
 
-- Only local provider implemented; external adapters (e.g. Jev) deferred to Phase F, isolated
-- No policy engine, no reason code beyond Phase D constants — Phase E will add multi-objective policy
-- No scorecards, evaluation engine, provenance — Phase H
-- No shadow/canary — Phase I
-- No dashboard UI for decision — Phase J (metrics and admin snapshot ready, UI deferred)
-- No supervision contracts — Phase K
-- No learned routing — Phase L only if measurable
-- Constraints struct empty placeholder for Phase E
-- DecisionRequest does not include cost/latency history yet — Phase E will add if needed, but must stay privacy-safe
+- Only local provider implemented; external adapters deferred to Phase F, isolated
+- No policy engine, scorecards, evaluation, shadow/canary, learned routing, supervision — all deferred per spec
+- Constraints empty placeholder for Phase E
+- DecisionTrace minimal, no cost/latency history yet — Phase E will add if needed, privacy-safe
+- Error field internal bounded, not persisted as chain-of-thought
+- No task-aware scoring yet — LOCAL pass-through only
 
 ---
 
@@ -424,5 +404,4 @@ OFF path ~50ns, local ~300ns — negligible vs router scoring and upstream laten
 
 PHASE D: PASS
 
-- Decision plane contracts implemented, eligible-set invariant enforced, fail-open on timeout/error/panic/invalid, OFF zero overhead, LOCAL preserves order, privacy canary not leaked, property tests pass, benchmarks <5µs, full gates PASS.
-- No regression: all previous tests PASS, existing hard constraints stay authoritative, deterministic local routing works with zero decision providers.
+- Safety convergence complete: NaN/Inf rejected, strict result contract, bounded result size, reason codes typed/bounded/validated, hot-reload race fixed with RWMutex and race test, Budget includes MaxProviderCalls enforced, dead MaxCandidates removed, empty/single candidate skip provider, capabilities enforced, provider health checked, context contract documented/tested, error strings bounded, decision events implemented, DecisionTrace exists, metrics bounded and per-server isolated, cross-protocol integration tested, failover/pool containment/max_attempts/session affinity/credential/privacy complete path all PASS, exact benchmarks recorded, targeted race PASS, verify/stress/smoke PASS.

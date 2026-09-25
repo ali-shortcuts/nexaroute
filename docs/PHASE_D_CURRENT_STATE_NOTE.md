@@ -1,8 +1,35 @@
-# Phase D Current-State Note — DecisionProvider Contracts + Orchestrator
+# Phase D Current-State Note — DecisionProvider Contracts + Orchestrator (Final Safety Convergence)
 
-Date: 2026-09-25
-Branch: arena/01a0d825-nexaroute (Phase C baseline 2cf905c)
-Spec sections: §7 DecisionProvider contracts, §8 orchestrator, §9 eligible-set validator, §10 decision budget, §11 privacy
+Date: 2026-09-25 (final convergence)
+Branch: arena/01a0d825-nexaroute (Phase C baseline 2cf905c → fb28d52 initial Phase D → final)
+Spec sections: §7 DecisionProvider contracts, §8 orchestrator, §9 eligible-set validator, §10 decision budget, §11 privacy, and safety convergence requirements
+
+> This note is the source of truth for Phase D pipeline and seam. For detailed contracts, see PHASE_D_DECISION_ARCHITECTURE.md and PHASE_D_IMPLEMENTATION_REPORT.md (final convergence). Code and tests are authoritative over reports.
+
+## Final Safety Convergence Summary
+
+Initial Phase D architecture was substantially correct but had correctness and concurrency gaps discovered by independent review. This convergence pass closes them without redesign:
+
+- NaN/Inf confidence now rejected via math.IsNaN/IsInf
+- Strict result contract: empty/unknown Action INVALID, SELECT requires selected_id ∈ E and ranked empty, RANK requires ranked non-empty ⊆ E no duplicates selected empty, ABSTAIN requires both empty
+- Bounded result size: ranked_ids len > len(eligible) rejected, hard limit 4096, reason codes bounded count 8 len 64 canonical only, selected_id 512, provider_id 128
+- Reason codes typed as ReasonCode enum with allowed set validation, no arbitrary text becomes metric/event
+- Hot reload race fixed: Orchestrator cfg protected by sync.RWMutex, Decide snapshots under RLock, UpdateConfig under Lock, coherent snapshot per request, race test overlapping Decide and UpdateConfig passes with -race
+- Budget includes MaxProviderCalls default 1 enforced, exhausted → BUDGET_EXCEEDED no call, dead MaxCandidates removed
+- Empty eligible: returns empty no provider call EMPTY_ELIGIBLE, single candidate: returns [A] no call SINGLE_CANDIDATE — both safe outside HTTP wiring
+- Capabilities enforced: RANK requires CanRank, SELECT requires CanSelect, mismatch → invalid fail-open
+- Provider health checked independently: unavailable → PROVIDER_UNHEALTHY no call, degraded allowed for local
+- Timeout contract documented: Decide MUST obey ctx.Done(), context-aware I/O, no unbounded goroutines, future HTTP adapters must bind to supplied context, tested via context-aware timeout
+- Error strings bounded 256 sanitized, not arbitrary upstream body, not secrets, reason codes for metrics
+- Decision events implemented: decision_ok, abstain, fail, timeout, rejected with safe bounded fields
+- DecisionTrace exists: Mode, ProviderID, CandidateCount, Action, SelectedID, ReasonCodes, Duration, FallbackUsed, bounded no chain-of-thought
+- Metrics per-server isolated (each Server owns Metrics), not global shared, test isolation proves, outcome labels fixed enums only
+- Cross-protocol, fallback, pool containment, max_attempts, session affinity, credential selection, privacy complete path integration tests added and PASS
+- Benchmarks exact: OFF 277.0 ns/op 544 B/op 2 allocs, LOCAL 1469 ns/op 992 B/op 8 allocs, validator 10 478.2 ns/op, validator 100 4435 ns/op, normalizer 10 999.3 ns/op, normalizer 100 9085 ns/op
+
+## Pipeline Before Phase D (verified)
+
+
 
 ## Pipeline Before Phase D (verified)
 

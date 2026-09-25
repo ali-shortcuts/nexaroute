@@ -33,6 +33,13 @@ type Event struct {
 	TaskHasReasoning  bool    `json:"task_has_reasoning,omitempty"`
 	TaskHasTools      bool    `json:"task_has_tools,omitempty"`
 	TaskStructuredOut bool    `json:"task_structured_out,omitempty"`
+	// Phase D — decision plane (privacy-safe, bounded)
+	DecisionProvider       string  `json:"decision_provider,omitempty"`
+	DecisionAction         string  `json:"decision_action,omitempty"`
+	DecisionSelected       string  `json:"decision_selected,omitempty"`
+	DecisionReasonCodes    string  `json:"decision_reason_codes,omitempty"`
+	DecisionCandidateCount int     `json:"decision_candidate_count,omitempty"`
+	DecisionConfidence     float64 `json:"decision_confidence,omitempty"`
 }
 
 const (
@@ -50,6 +57,11 @@ const (
 	maxEventTaskComplex  = 32
 	maxEventTaskReason   = 512
 	counterOverflowKey   = "__other__"
+	// Phase D decision bounds
+	maxEventDecisionProvider    = 128
+	maxEventDecisionAction      = 32
+	maxEventDecisionSelected    = 512
+	maxEventDecisionReasonCodes = 512
 )
 
 func boundedString(s string, max int) string {
@@ -119,6 +131,10 @@ func (b *Bus) Add(e Event) {
 	e.TaskType = boundedString(e.TaskType, maxEventTaskType)
 	e.TaskComplexity = boundedString(e.TaskComplexity, maxEventTaskComplex)
 	e.TaskReasonCodes = boundedString(e.TaskReasonCodes, maxEventTaskReason)
+	e.DecisionProvider = boundedString(e.DecisionProvider, maxEventDecisionProvider)
+	e.DecisionAction = boundedString(e.DecisionAction, maxEventDecisionAction)
+	e.DecisionSelected = boundedString(e.DecisionSelected, maxEventDecisionSelected)
+	e.DecisionReasonCodes = boundedString(e.DecisionReasonCodes, maxEventDecisionReasonCodes)
 	if b.count < b.max {
 		idx := (b.start + b.count) % b.max
 		b.items[idx] = e
