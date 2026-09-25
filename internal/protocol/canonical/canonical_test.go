@@ -649,3 +649,32 @@ func TestResponsesNonStreamFunctionCallSignalsToolUse(t *testing.T) {
 		t.Fatalf("function-call block lost: %+v", got)
 	}
 }
+func TestResponsesStateControlsRoundTrip(t *testing.T) {
+	store := false
+	in := ResponsesRequest{
+		Model:              "client-model",
+		Input:              json.RawMessage(`"continue"`),
+		PreviousResponseID: "resp_prev_123",
+		Store:              &store,
+	}
+	canReq, err := DecodeResponsesRequest(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if canReq.PreviousResponseID != "resp_prev_123" || canReq.Store == nil || *canReq.Store {
+		t.Fatalf("state controls lost in canonical decode: %+v", canReq)
+	}
+
+	payload, err := EncodeResponsesRequest(canReq, "upstream-model")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := mustJSONObj(t, payload)
+	if got["previous_response_id"] != "resp_prev_123" {
+		t.Fatalf("previous_response_id lost: %s", payload)
+	}
+	storeOut, ok := got["store"].(bool)
+	if !ok || storeOut {
+		t.Fatalf("store=false lost: %s", payload)
+	}
+}

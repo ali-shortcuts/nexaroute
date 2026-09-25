@@ -268,6 +268,13 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 		Model: in.Model, Tools: reqReqs.Tools, Vision: reqReqs.Vision,
 		Streaming: reqReqs.Streaming, Reasoning: reqReqs.Reasoning,
 	}
+	// previous_response_id and explicit store semantics are Responses-native
+	// server-side state controls. Translating them to Chat/Anthropic/Gemini
+	// would silently drop meaning, so constrain only those stateful requests
+	// to a Responses-native upstream.
+	if canReq.PreviousResponseID != "" || canReq.Store != nil {
+		req.ProviderType = "openai_responses"
+	}
 	inspection := inspectResponsesRequestJSON(raw)
 	req.EstimatedInputTokens = inspection.EstimatedPromptTokens
 	req.MaxOutputTokens = in.MaxOutputTokens
