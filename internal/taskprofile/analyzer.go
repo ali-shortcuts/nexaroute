@@ -24,11 +24,17 @@ func (a *Analyzer) Analyze(f feature.RequestFeatures) TaskProfile {
 		ToolCount:              f.ToolCount,
 		ImageCount:             f.VisionImageCount,
 		MessageCount:           f.MessageCount,
+		// Secondary requirement flags
+		RequiresVision:           f.HasVision,
+		RequiresReasoning:        f.HasReasoning,
+		RequiresTools:            f.HasTools,
+		RequiresStructuredOutput: f.StructuredOutput,
+		RequiresLongContext:      f.EstimatedPromptTokens > 8000,
+		ToolChoiceRequired:       f.ToolChoiceRequired,
 	}
 
-	reasons := make([]ReasonCode, 0, 12)
+	reasons := make([]ReasonCode, 0, 16)
 
-	// Collect reason codes from features (bounded, deterministic order)
 	if f.HasVision {
 		reasons = append(reasons, ReasonVisionPresent)
 		if f.VisionImageCount > 3 {
@@ -43,6 +49,9 @@ func (a *Analyzer) Analyze(f feature.RequestFeatures) TaskProfile {
 		if f.ToolCount > 5 {
 			reasons = append(reasons, ReasonComplexTools)
 		}
+	}
+	if f.ToolChoiceRequired {
+		reasons = append(reasons, ReasonToolChoiceRequired)
 	}
 	if f.StructuredOutput {
 		reasons = append(reasons, ReasonStructuredOutput)
@@ -92,7 +101,6 @@ func (a *Analyzer) Analyze(f feature.RequestFeatures) TaskProfile {
 	if f.Streaming {
 		reasons = append(reasons, ReasonStreaming)
 	}
-	// Context length signals
 	if f.EstimatedPromptTokens > 8000 {
 		reasons = append(reasons, ReasonLongContext)
 	}
@@ -101,91 +109,115 @@ func (a *Analyzer) Analyze(f feature.RequestFeatures) TaskProfile {
 	} else if f.MessageCount <= 1 {
 		reasons = append(reasons, ReasonSingleTurn)
 	}
+	// Simple chat signal
+	if f.MessageCount <= 1 && !f.HasCodeBlock && !f.HasTools && !f.HasVision && !f.HasStackTrace && !f.HasDiff && !f.HasFilePath {
+		reasons = append(reasons, ReasonSimpleChat)
+	}
 
-	// Deduplicate and sort for determinism
 	reasons = dedupAndSortReasons(reasons)
 	profile.ReasonCodes = reasons
 
-	// Task type precedence (deterministic)
-	// 1. Debugging: stack trace OR (debug keywords + code)
-	// 2. Editing: diff OR (edit keywords + (code or file path))
-	// 3. Repo: repo keywords + file path or code
-	// 4. Architecture: arch keywords
-	// 5. Coding: code block or code identifiers or file path with code context
-	// 6. Extraction: extraction keywords
-	// 7. Agent: agent keywords OR (tools + multi-turn)
-	// 8. Vision: vision present and no stronger code signals
-	// 9. Reasoning: reasoning requested and high complexity
-	// 10. General fallback
+	// Handle TooComplex -> UNKNOWN with low confidence
+	if f.TooComplex {
+		profile.Type = TaskUnknown
+		profile.Complexity = ComplexityMedium
+		profile.Confidence = 0.1
+		return profile
+	}
+
 	profile.Type = classifyType(f)
-
-	// Complexity based on tokens, message count, tools, images
 	profile.Complexity = classifyComplexity(f)
-
-	// Confidence based on number of matching signals
 	profile.Confidence = computeConfidence(f, profile.Type)
 
 	return profile
 }
 
 func classifyType(f feature.RequestFeatures) TaskType {
-	// Debugging has highest precedence when stack trace present
+	// Highest precedence: debugging with stack trace
 	if f.HasStackTrace {
 		return TaskDebugging
 	}
 	if f.HasDebugKeywords && (f.HasCodeBlock || f.HasCodeIdentifiers || f.HasFilePath) {
 		return TaskDebugging
 	}
-	// Editing: diff is strong signal
+	// Code edit: diff is strong signal
 	if f.HasDiff {
-		return TaskEditing
+		return TaskCodeEdit
 	}
-	if f.HasEditKeywords && (f.HasCodeBlock || f.HasFilePath || f.HasCodeIdentifiers) {
-		return TaskEditing
+	if f.HasEditKeywords {
+		// Strong edit signals: require code context
+		// - code block or identifiers always sufficient
+		// - file path sufficient only when not just a URL containing a path
+		if f.HasCodeBlock || f.HasCodeIdentifiers {
+			return TaskCodeEdit
+		}
+		if f.HasFilePath && !f.HasURL {
+			return TaskCodeEdit
+		}
 	}
-	// Repo
+	// Repository analysis
 	if f.HasRepoKeywords && (f.HasFilePath || f.HasCodeBlock) {
-		return TaskRepo
+		return TaskRepositoryAnalysis
 	}
-	// Architecture
+	// Architecture reasoning
 	if f.HasArchKeywords {
-		return TaskArchitecture
+		return TaskArchitectureReasoning
 	}
 	// Coding
 	if f.HasCodeBlock || f.HasCodeIdentifiers {
 		return TaskCoding
 	}
-	if f.HasFilePath && (f.HasEditKeywords || f.HasDebugKeywords || f.HasRepoKeywords) {
-		// file path alone not enough for coding unless combined; but if file path + code identifiers already handled
-		// fallback to general if only file path
-	}
-	// Extraction
+	// Data extraction
 	if f.HasExtractionKeywords {
-		return TaskExtraction
+		return TaskDataExtraction
 	}
-	// Agent
+	// Agentic task
 	if f.HasAgentKeywords {
-		return TaskAgent
+		return TaskAgenticTask
 	}
 	if f.HasTools && f.MessageCount > 3 {
-		return TaskAgent
+		return TaskAgenticTask
 	}
-	// Vision: if vision present and no code signals, classify as vision
+	// Tool use: tools present and required or tool choice required
+	if f.HasTools && (f.ToolChoiceRequired || f.ToolCount > 0) {
+		// Distinguish tool_use from agentic_task: agentic already handled
+		// If single turn with tools, it's tool_use
+		if f.MessageCount <= 2 {
+			return TaskToolUse
+		}
+		// Multi-turn with tools but without agent keywords -> still tool_use if not agentic
+		return TaskToolUse
+	}
+	// Vision: if vision present and no stronger code signals
 	if f.HasVision && !f.HasCodeBlock && !f.HasCodeIdentifiers && !f.HasStackTrace && !f.HasDiff {
 		return TaskVision
 	}
-	// Reasoning: if reasoning requested and complexity high or code present
+	// Structured output as primary only when it's dominant and no other strong signals
+	if f.StructuredOutput && !f.HasCodeBlock && !f.HasStackTrace && !f.HasDiff && !f.HasFilePath && !f.HasTools && !f.HasVision {
+		return TaskStructuredOutput
+	}
+	// Long context as primary only when very long and no other strong signals
+	if f.EstimatedPromptTokens > 8000 && !f.HasCodeBlock && !f.HasStackTrace && !f.HasDiff && !f.HasFilePath && !f.HasTools && !f.HasVision {
+		return TaskLongContext
+	}
+	// Deep reasoning
 	if f.HasReasoning && f.EstimatedPromptTokens > 2000 {
-		return TaskReasoning
+		return TaskDeepReasoning
+	}
+	// Simple chat: trivial/low, single turn, no code/tools/vision
+	if f.MessageCount <= 1 && !f.HasCodeBlock && !f.HasCodeIdentifiers && !f.HasTools && !f.HasVision && !f.HasStackTrace && !f.HasDiff && !f.HasFilePath {
+		// Further check: if estimated tokens small
+		if f.EstimatedPromptTokens < 500 {
+			return TaskSimpleChat
+		}
+		return TaskGeneral
 	}
 	// General fallback
 	return TaskGeneral
 }
 
 func classifyComplexity(f feature.RequestFeatures) Complexity {
-	tokens := f.EstimatedPromptTokens
-	// Adjust for tools and images
-	score := tokens
+	score := f.EstimatedPromptTokens
 	score += f.ToolCount * 200
 	score += f.VisionImageCount * 500
 	score += f.MessageCount * 50
@@ -214,10 +246,8 @@ func classifyComplexity(f feature.RequestFeatures) Complexity {
 }
 
 func computeConfidence(f feature.RequestFeatures, t TaskType) float64 {
-	// Base confidence
 	conf := 0.5
 
-	// Increase based on matching signals for the chosen type
 	switch t {
 	case TaskDebugging:
 		if f.HasStackTrace {
@@ -229,7 +259,7 @@ func computeConfidence(f feature.RequestFeatures, t TaskType) float64 {
 		if f.HasCodeBlock {
 			conf += 0.1
 		}
-	case TaskEditing:
+	case TaskCodeEdit:
 		if f.HasDiff {
 			conf += 0.4
 		}
@@ -239,14 +269,14 @@ func computeConfidence(f feature.RequestFeatures, t TaskType) float64 {
 		if f.HasFilePath {
 			conf += 0.1
 		}
-	case TaskRepo:
+	case TaskRepositoryAnalysis:
 		if f.HasRepoKeywords {
 			conf += 0.3
 		}
 		if f.HasFilePath {
 			conf += 0.2
 		}
-	case TaskArchitecture:
+	case TaskArchitectureReasoning:
 		if f.HasArchKeywords {
 			conf += 0.4
 		}
@@ -260,11 +290,11 @@ func computeConfidence(f feature.RequestFeatures, t TaskType) float64 {
 		if f.HasFilePath {
 			conf += 0.1
 		}
-	case TaskExtraction:
+	case TaskDataExtraction:
 		if f.HasExtractionKeywords {
 			conf += 0.3
 		}
-	case TaskAgent:
+	case TaskAgenticTask:
 		if f.HasAgentKeywords {
 			conf += 0.3
 		}
@@ -274,6 +304,16 @@ func computeConfidence(f feature.RequestFeatures, t TaskType) float64 {
 		if f.MessageCount > 3 {
 			conf += 0.1
 		}
+	case TaskToolUse:
+		if f.HasTools {
+			conf += 0.3
+		}
+		if f.ToolChoiceRequired {
+			conf += 0.2
+		}
+		if f.ToolCount > 1 {
+			conf += 0.1
+		}
 	case TaskVision:
 		if f.HasVision {
 			conf += 0.4
@@ -281,15 +321,40 @@ func computeConfidence(f feature.RequestFeatures, t TaskType) float64 {
 		if f.VisionImageCount > 1 {
 			conf += 0.1
 		}
-	case TaskReasoning:
+	case TaskDeepReasoning:
 		if f.HasReasoning {
 			conf += 0.3
 		}
 		if f.EstimatedPromptTokens > 2000 {
 			conf += 0.2
 		}
+	case TaskSimpleChat:
+		// High confidence if few signals
+		signalCount := 0
+		if f.HasCodeBlock {
+			signalCount++
+		}
+		if f.HasStackTrace {
+			signalCount++
+		}
+		if f.HasDiff {
+			signalCount++
+		}
+		if f.HasFilePath {
+			signalCount++
+		}
+		if f.HasTools {
+			signalCount++
+		}
+		if f.HasVision {
+			signalCount++
+		}
+		if signalCount == 0 {
+			conf = 0.85
+		} else {
+			conf = 0.4
+		}
 	case TaskGeneral:
-		// General is low confidence if many signals present, high if few
 		signalCount := 0
 		if f.HasCodeBlock {
 			signalCount++
@@ -329,9 +394,18 @@ func computeConfidence(f feature.RequestFeatures, t TaskType) float64 {
 				conf = 0.3
 			}
 		}
+	case TaskLongContext:
+		if f.EstimatedPromptTokens > 8000 {
+			conf += 0.3
+		}
+	case TaskStructuredOutput:
+		if f.StructuredOutput {
+			conf += 0.4
+		}
+	case TaskUnknown:
+		conf = 0.1
 	}
 
-	// Adjust for TooComplex: lower confidence
 	if f.TooComplex {
 		conf -= 0.1
 	}

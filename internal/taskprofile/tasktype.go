@@ -3,22 +3,59 @@ package taskprofile
 type TaskType string
 
 const (
-	TaskCoding       TaskType = "coding"
-	TaskDebugging    TaskType = "debugging"
-	TaskEditing      TaskType = "editing"
-	TaskRepo         TaskType = "repo"
-	TaskArchitecture TaskType = "architecture"
-	TaskExtraction   TaskType = "extraction"
-	TaskAgent        TaskType = "agent"
-	TaskVision       TaskType = "vision"
-	TaskReasoning    TaskType = "reasoning"
-	TaskGeneral      TaskType = "general"
-	TaskUnknown      TaskType = "unknown"
+	// Primary task types matching spec vocabulary
+	TaskSimpleChat            TaskType = "simple_chat"
+	TaskCoding                TaskType = "coding"
+	TaskCodeEdit              TaskType = "code_edit"
+	TaskDebugging             TaskType = "debugging"
+	TaskRepositoryAnalysis    TaskType = "repository_analysis"
+	TaskArchitectureReasoning TaskType = "architecture_reasoning"
+	TaskDeepReasoning         TaskType = "deep_reasoning"
+	TaskToolUse               TaskType = "tool_use"
+	TaskAgenticTask           TaskType = "agentic_task"
+	TaskLongContext           TaskType = "long_context"
+	TaskVision                TaskType = "vision"
+	TaskStructuredOutput      TaskType = "structured_output"
+	TaskDataExtraction        TaskType = "data_extraction"
+	TaskGeneral               TaskType = "general"
+	TaskUnknown               TaskType = "unknown"
+
+	// Backward compatibility aliases for previous vocabulary
+	TaskCodingAlias    = TaskCoding
+	TaskDebuggingAlias = TaskDebugging
+	TaskEditing        = TaskCodeEdit // old "editing" -> code_edit
+	TaskRepo           = TaskRepositoryAnalysis
+	TaskArchitecture   = TaskArchitectureReasoning
+	TaskExtraction     = TaskDataExtraction
+	TaskAgent          = TaskAgenticTask
+	TaskReasoning      = TaskDeepReasoning
+	TaskVisionAlias    = TaskVision
 )
+
+// AllTaskTypes returns the canonical list of task types for metrics cardinality checks
+func AllTaskTypes() []TaskType {
+	return []TaskType{
+		TaskSimpleChat,
+		TaskCoding,
+		TaskCodeEdit,
+		TaskDebugging,
+		TaskRepositoryAnalysis,
+		TaskArchitectureReasoning,
+		TaskDeepReasoning,
+		TaskToolUse,
+		TaskAgenticTask,
+		TaskLongContext,
+		TaskVision,
+		TaskStructuredOutput,
+		TaskDataExtraction,
+		TaskGeneral,
+		TaskUnknown,
+	}
+}
 
 func (t TaskType) Valid() bool {
 	switch t {
-	case TaskCoding, TaskDebugging, TaskEditing, TaskRepo, TaskArchitecture, TaskExtraction, TaskAgent, TaskVision, TaskReasoning, TaskGeneral, TaskUnknown:
+	case TaskSimpleChat, TaskCoding, TaskCodeEdit, TaskDebugging, TaskRepositoryAnalysis, TaskArchitectureReasoning, TaskDeepReasoning, TaskToolUse, TaskAgenticTask, TaskLongContext, TaskVision, TaskStructuredOutput, TaskDataExtraction, TaskGeneral, TaskUnknown:
 		return true
 	default:
 		return false
@@ -35,6 +72,16 @@ const (
 	ComplexityVeryHigh Complexity = "very_high"
 )
 
+func AllComplexities() []Complexity {
+	return []Complexity{
+		ComplexityTrivial,
+		ComplexityLow,
+		ComplexityMedium,
+		ComplexityHigh,
+		ComplexityVeryHigh,
+	}
+}
+
 func (c Complexity) Valid() bool {
 	switch c {
 	case ComplexityTrivial, ComplexityLow, ComplexityMedium, ComplexityHigh, ComplexityVeryHigh:
@@ -50,6 +97,7 @@ const (
 	ReasonVisionPresent      ReasonCode = "vision_present"
 	ReasonReasoningRequested ReasonCode = "reasoning_requested"
 	ReasonToolsPresent       ReasonCode = "tools_present"
+	ReasonToolChoiceRequired ReasonCode = "tool_choice_required"
 	ReasonStructuredOutput   ReasonCode = "structured_output"
 	ReasonCodeBlock          ReasonCode = "code_block"
 	ReasonInlineCode         ReasonCode = "inline_code"
@@ -71,4 +119,5 @@ const (
 	ReasonSystemPrompt       ReasonCode = "system_prompt"
 	ReasonStreaming          ReasonCode = "streaming"
 	ReasonHighImageCount     ReasonCode = "high_image_count"
+	ReasonSimpleChat         ReasonCode = "simple_chat"
 )

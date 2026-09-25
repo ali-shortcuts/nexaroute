@@ -1,9 +1,15 @@
 package feature
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
+
+func jsonMarshalStringBench(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
+}
 
 func BenchmarkExtractor_TinyChat(b *testing.B) {
 	raw := []byte(`{"model":"gpt-4","messages":[{"role":"user","content":"hello"}]}`)
@@ -22,8 +28,8 @@ func BenchmarkExtractor_TinyChat(b *testing.B) {
 }
 
 func BenchmarkExtractor_Coding(b *testing.B) {
-	content := "fix this bug in src/main.go\n```go\nfunc foo() { fmt.Println(\"hi\") }\n```\nStack trace: panic: nil pointer"
-	raw := []byte(`{"model":"gpt-4","messages":[{"role":"user","content":` + jsonMarshalString(content) + `}]}`)
+	content := "fix this bug in src/main.go\n\x60\x60\x60go\nfunc foo() { fmt.Println(\"hi\") }\n\x60\x60\x60\nStack trace: panic: nil pointer"
+	raw := []byte(`{"model":"gpt-4","messages":[{"role":"user","content":` + jsonMarshalStringBench(content) + `}]}`)
 	ext := NewExtractor()
 	opts := ExtractOptions{
 		Protocol:      ProtocolOpenAI,
@@ -52,7 +58,7 @@ func BenchmarkExtractor_ToolHeavy(b *testing.B) {
 
 func BenchmarkExtractor_ScanLimit(b *testing.B) {
 	large := strings.Repeat("a", 70*1024)
-	raw := []byte(`{"model":"test","messages":[{"role":"user","content":` + jsonMarshalString(large) + `}]}`)
+	raw := []byte(`{"model":"test","messages":[{"role":"user","content":` + jsonMarshalStringBench(large) + `}]}`)
 	ext := NewExtractor()
 	opts := ExtractOptions{
 		ContentFields: []string{"messages"},

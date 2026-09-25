@@ -47,24 +47,24 @@ func TestAnalyzer_TaskTypes(t *testing.T) {
 			expected: TaskDebugging,
 		},
 		{
-			name:     "editing diff",
+			name:     "code_edit diff",
 			feat:     feature.RequestFeatures{HasDiff: true},
-			expected: TaskEditing,
+			expected: TaskCodeEdit,
 		},
 		{
-			name:     "editing edit+code",
+			name:     "code_edit edit+code",
 			feat:     feature.RequestFeatures{HasEditKeywords: true, HasCodeBlock: true},
-			expected: TaskEditing,
+			expected: TaskCodeEdit,
 		},
 		{
-			name:     "repo",
+			name:     "repository_analysis",
 			feat:     feature.RequestFeatures{HasRepoKeywords: true, HasFilePath: true},
-			expected: TaskRepo,
+			expected: TaskRepositoryAnalysis,
 		},
 		{
-			name:     "architecture",
+			name:     "architecture_reasoning",
 			feat:     feature.RequestFeatures{HasArchKeywords: true},
-			expected: TaskArchitecture,
+			expected: TaskArchitectureReasoning,
 		},
 		{
 			name:     "coding code block",
@@ -77,19 +77,29 @@ func TestAnalyzer_TaskTypes(t *testing.T) {
 			expected: TaskCoding,
 		},
 		{
-			name:     "extraction",
+			name:     "data_extraction",
 			feat:     feature.RequestFeatures{HasExtractionKeywords: true},
-			expected: TaskExtraction,
+			expected: TaskDataExtraction,
 		},
 		{
-			name:     "agent keywords",
+			name:     "agentic_task keywords",
 			feat:     feature.RequestFeatures{HasAgentKeywords: true},
-			expected: TaskAgent,
+			expected: TaskAgenticTask,
 		},
 		{
-			name:     "agent tools multi-turn",
+			name:     "agentic_task tools multi-turn",
 			feat:     feature.RequestFeatures{HasTools: true, ToolCount: 2, MessageCount: 5},
-			expected: TaskAgent,
+			expected: TaskAgenticTask,
+		},
+		{
+			name:     "tool_use single turn",
+			feat:     feature.RequestFeatures{HasTools: true, ToolCount: 1, MessageCount: 1},
+			expected: TaskToolUse,
+		},
+		{
+			name:     "tool_use required",
+			feat:     feature.RequestFeatures{HasTools: true, ToolChoiceRequired: true, MessageCount: 1},
+			expected: TaskToolUse,
 		},
 		{
 			name:     "vision",
@@ -97,9 +107,34 @@ func TestAnalyzer_TaskTypes(t *testing.T) {
 			expected: TaskVision,
 		},
 		{
+			name:     "simple_chat",
+			feat:     feature.RequestFeatures{EstimatedPromptTokens: 100, MessageCount: 1},
+			expected: TaskSimpleChat,
+		},
+		{
+			name:     "deep_reasoning",
+			feat:     feature.RequestFeatures{HasReasoning: true, EstimatedPromptTokens: 3000, MessageCount: 1},
+			expected: TaskDeepReasoning,
+		},
+		{
+			name:     "structured_output",
+			feat:     feature.RequestFeatures{StructuredOutput: true, EstimatedPromptTokens: 100, MessageCount: 1},
+			expected: TaskStructuredOutput,
+		},
+		{
+			name:     "long_context",
+			feat:     feature.RequestFeatures{EstimatedPromptTokens: 9000, MessageCount: 1},
+			expected: TaskLongContext,
+		},
+		{
 			name:     "general fallback",
-			feat:     feature.RequestFeatures{},
+			feat:     feature.RequestFeatures{EstimatedPromptTokens: 600, MessageCount: 2},
 			expected: TaskGeneral,
+		},
+		{
+			name:     "unknown too complex",
+			feat:     feature.RequestFeatures{TooComplex: true},
+			expected: TaskUnknown,
 		},
 	}
 	a := NewAnalyzer()
@@ -150,7 +185,7 @@ func TestAnalyzer_Complexity(t *testing.T) {
 		{
 			name:     "high via tools",
 			feat:     feature.RequestFeatures{EstimatedPromptTokens: 100, ToolCount: 10},
-			expected: ComplexityMedium, // 100 + 10*200 = 2100 => medium
+			expected: ComplexityMedium,
 		},
 	}
 	a := NewAnalyzer()
@@ -166,17 +201,15 @@ func TestAnalyzer_Complexity(t *testing.T) {
 
 func TestAnalyzer_Confidence(t *testing.T) {
 	a := NewAnalyzer()
-	// Strong signal should have high confidence
 	feat := feature.RequestFeatures{HasStackTrace: true, HasCodeBlock: true, HasDebugKeywords: true}
 	p := a.Analyze(feat)
 	if p.Confidence < 0.8 {
 		t.Fatalf("expected high confidence for strong signals, got %f", p.Confidence)
 	}
-	// General with no signals should have decent confidence
-	feat2 := feature.RequestFeatures{}
+	feat2 := feature.RequestFeatures{EstimatedPromptTokens: 100, MessageCount: 1}
 	p2 := a.Analyze(feat2)
 	if p2.Confidence < 0.5 {
-		t.Fatalf("expected reasonable confidence for general, got %f", p2.Confidence)
+		t.Fatalf("expected reasonable confidence for simple_chat, got %f", p2.Confidence)
 	}
 	if p2.Confidence > 1.0 || p2.Confidence < 0.0 {
 		t.Fatalf("confidence out of range %f", p2.Confidence)
@@ -196,22 +229,23 @@ func TestAnalyzer_ReasonCodes(t *testing.T) {
 		Streaming:             true,
 		EstimatedPromptTokens: 9000,
 		MessageCount:          5,
+		ToolChoiceRequired:    true,
 	}
 	a := NewAnalyzer()
 	p := a.Analyze(feat)
-	// Check expected reason codes present
 	expected := map[ReasonCode]bool{
-		ReasonVisionPresent:  true,
-		ReasonHighImageCount: true,
-		ReasonToolsPresent:   true,
-		ReasonComplexTools:   true,
-		ReasonCodeBlock:      true,
-		ReasonStackTrace:     true,
-		ReasonFilePath:       true,
-		ReasonSystemPrompt:   true,
-		ReasonStreaming:      true,
-		ReasonLongContext:    true,
-		ReasonMultiTurn:      true,
+		ReasonVisionPresent:      true,
+		ReasonHighImageCount:     true,
+		ReasonToolsPresent:       true,
+		ReasonComplexTools:       true,
+		ReasonToolChoiceRequired: true,
+		ReasonCodeBlock:          true,
+		ReasonStackTrace:         true,
+		ReasonFilePath:           true,
+		ReasonSystemPrompt:       true,
+		ReasonStreaming:          true,
+		ReasonLongContext:        true,
+		ReasonMultiTurn:          true,
 	}
 	for rc := range expected {
 		found := false
@@ -225,7 +259,6 @@ func TestAnalyzer_ReasonCodes(t *testing.T) {
 			t.Fatalf("expected reason code %s not found in %v", rc, p.ReasonCodes)
 		}
 	}
-	// Ensure sorted and deduped
 	for i := 1; i < len(p.ReasonCodes); i++ {
 		if p.ReasonCodes[i-1] >= p.ReasonCodes[i] {
 			t.Fatalf("reason codes not sorted/deduped: %v", p.ReasonCodes)
@@ -234,12 +267,41 @@ func TestAnalyzer_ReasonCodes(t *testing.T) {
 }
 
 func TestAnalyzer_NoRawPromptAccess(t *testing.T) {
-	// Analyzer only uses RequestFeatures, which by design has no raw prompt.
-	// This test ensures Analyze doesn't panic on zero features.
 	a := NewAnalyzer()
 	feat := feature.RequestFeatures{}
 	p := a.Analyze(feat)
 	if p.Type == "" {
 		t.Fatalf("expected type")
+	}
+}
+
+func TestAnalyzer_SecondaryRequirements(t *testing.T) {
+	a := NewAnalyzer()
+	feat := feature.RequestFeatures{
+		HasVision:             true,
+		HasReasoning:          true,
+		HasTools:              true,
+		StructuredOutput:      true,
+		EstimatedPromptTokens: 9000,
+		ToolChoiceRequired:    true,
+	}
+	p := a.Analyze(feat)
+	if !p.RequiresVision {
+		t.Fatalf("expected RequiresVision")
+	}
+	if !p.RequiresReasoning {
+		t.Fatalf("expected RequiresReasoning")
+	}
+	if !p.RequiresTools {
+		t.Fatalf("expected RequiresTools")
+	}
+	if !p.RequiresStructuredOutput {
+		t.Fatalf("expected RequiresStructuredOutput")
+	}
+	if !p.RequiresLongContext {
+		t.Fatalf("expected RequiresLongContext")
+	}
+	if !p.ToolChoiceRequired {
+		t.Fatalf("expected ToolChoiceRequired")
 	}
 }

@@ -45,20 +45,39 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 	// Phase C: feature extraction + task classification (observational, routing-neutral)
 	hasSystem := false
 	if in.System != nil {
-		// system can be string or array; if present, treat as system prompt
 		hasSystem = true
 	}
+	var toolChoiceRequired *bool
+	if in.ToolChoice != nil {
+		b, _ := json.Marshal(in.ToolChoice)
+		var m map[string]any
+		if json.Unmarshal(b, &m) == nil {
+			typ, _ := m["type"].(string)
+			lowerTyp := strings.ToLower(typ)
+			req := lowerTyp == "tool" || lowerTyp == "any" || lowerTyp == "required"
+			toolChoiceRequired = &req
+		} else {
+			// If string value
+			var s string
+			if json.Unmarshal(b, &s) == nil {
+				lower := strings.ToLower(strings.TrimSpace(s))
+				req := lower == "any" || lower == "tool" || lower == "required"
+				toolChoiceRequired = &req
+			}
+		}
+	}
 	ti := extractFeaturesAndClassify(raw, feature.ExtractOptions{
-		Protocol:            feature.ProtocolAnthropic,
-		Model:               in.Model,
-		Streaming:           in.Stream,
-		VisionType:          "image",
-		ReasoningKeys:       []string{"thinking", "reasoning"},
-		ContentFields:       []string{"messages"},
-		MaxOutputTokens:     in.MaxTokens,
-		ToolCountHint:       len(in.Tools),
-		ToolChoiceHint:      in.ToolChoice != nil,
-		HasSystemPromptHint: &hasSystem,
+		Protocol:               feature.ProtocolAnthropic,
+		Model:                  in.Model,
+		Streaming:              in.Stream,
+		VisionType:             "image",
+		ReasoningKeys:          []string{"thinking", "reasoning"},
+		ContentFields:          []string{"messages"},
+		MaxOutputTokens:        in.MaxTokens,
+		ToolCountHint:          len(in.Tools),
+		ToolChoiceHint:         in.ToolChoice != nil,
+		ToolChoiceRequiredHint: toolChoiceRequired,
+		HasSystemPromptHint:    &hasSystem,
 	})
 	if ti.Features.TooComplex {
 		anthropicErrorJSON(w, http.StatusBadRequest, "request JSON structure is too complex")

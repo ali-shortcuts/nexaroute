@@ -42,6 +42,10 @@ func extractFeaturesAndClassify(raw []byte, opts feature.ExtractOptions) taskInt
 func (s *Server) emitTaskClassified(requestID string, ti taskIntelligence, resolvedRoute *route.ResolvedRoute) {
 	// Build comma-joined reason codes bounded
 	reasonStr := strings.Join(reasonCodesToStrings(ti.Profile.ReasonCodes), ",")
+	latencyMS := ti.Duration.Milliseconds()
+	if latencyMS == 0 && ti.Duration > 0 {
+		latencyMS = 1 // avoid 0ms for sub-ms classifications, still bounded
+	}
 	ev := events.Event{
 		RequestID:         requestID,
 		Kind:              "task_classified",
@@ -59,7 +63,7 @@ func (s *Server) emitTaskClassified(requestID string, ti taskIntelligence, resol
 		TaskHasReasoning:  ti.Features.HasReasoning,
 		TaskHasTools:      ti.Features.HasTools,
 		TaskStructuredOut: ti.Features.StructuredOutput,
-		LatencyMS:         ti.Duration.Milliseconds(),
+		LatencyMS:         latencyMS,
 	}
 	if resolvedRoute != nil {
 		ev.VirtualEndpoint = resolvedRoute.VirtualEndpointID
@@ -80,7 +84,8 @@ func reasonCodesToStrings(codes []taskprofile.ReasonCode) []string {
 }
 
 func (s *Server) recordTaskClassification(t taskprofile.TaskType, c taskprofile.Complexity) {
-	// Bounded cardinality: task type (10) x complexity (5) = 50 max keys
+	// Bounded cardinality: task types (len(AllTaskTypes)=15) x complexities (5) = 75 max keys
+	// Derived from canonical enum list, not magic number
 	key := string(t) + "|" + string(c)
 	s.taskMu.Lock()
 	if s.taskClassCounts == nil {

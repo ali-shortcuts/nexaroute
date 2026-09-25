@@ -50,17 +50,44 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
+	// Tool choice required detection
+	var toolChoiceRequired *bool
+	if in.ToolChoice != nil {
+		// Parse tool_choice for required semantics
+		// in.ToolChoice is any, could be string or map
+		if s, ok := in.ToolChoice.(string); ok {
+			lower := strings.ToLower(strings.TrimSpace(s))
+			req := lower == "required"
+			toolChoiceRequired = &req
+		} else {
+			// Try to marshal and check via feature parser
+			// Use feature extractor's parse logic via raw JSON field
+			// For simplicity, we will let extractor handle it from raw, but also check if object contains function
+			b, _ := json.Marshal(in.ToolChoice)
+			var m map[string]any
+			if json.Unmarshal(b, &m) == nil {
+				// If has function or name, it's required
+				_, hasFunc := m["function"]
+				_, hasName := m["name"]
+				typ, _ := m["type"].(string)
+				lowerTyp := strings.ToLower(typ)
+				req := hasFunc || hasName || lowerTyp == "tool" || lowerTyp == "function" || lowerTyp == "required" || lowerTyp == "any"
+				toolChoiceRequired = &req
+			}
+		}
+	}
 	ti := extractFeaturesAndClassify(raw, feature.ExtractOptions{
-		Protocol:            feature.ProtocolOpenAI,
-		Model:               in.Model,
-		Streaming:           in.Stream,
-		VisionType:          "image_url",
-		ReasoningKeys:       []string{"reasoning_effort", "reasoning"},
-		ContentFields:       []string{"messages"},
-		MaxOutputTokens:     maxOut,
-		ToolCountHint:       len(in.Tools),
-		ToolChoiceHint:      in.ToolChoice != nil,
-		HasSystemPromptHint: &hasSystem,
+		Protocol:               feature.ProtocolOpenAI,
+		Model:                  in.Model,
+		Streaming:              in.Stream,
+		VisionType:             "image_url",
+		ReasoningKeys:          []string{"reasoning_effort", "reasoning"},
+		ContentFields:          []string{"messages"},
+		MaxOutputTokens:        maxOut,
+		ToolCountHint:          len(in.Tools),
+		ToolChoiceHint:         in.ToolChoice != nil,
+		ToolChoiceRequiredHint: toolChoiceRequired,
+		HasSystemPromptHint:    &hasSystem,
 	})
 	if ti.Features.TooComplex {
 		errorJSON(w, http.StatusBadRequest, "request JSON structure is too complex")

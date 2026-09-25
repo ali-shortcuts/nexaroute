@@ -267,16 +267,23 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 	reqReqs := canReq.DetectRequirements()
 	// Phase C: feature extraction + task classification (observational)
 	hasSystem := len(in.Instructions) > 0
+	var toolChoiceRequired *bool
+	if canReq.ToolChoice != nil {
+		// In canonical IR, NeedsTool indicates required
+		req := reqReqs.NeedsTool
+		toolChoiceRequired = &req
+	}
 	ti := extractFeaturesAndClassify(raw, feature.ExtractOptions{
-		Protocol:            feature.ProtocolResponses,
-		Model:               in.Model,
-		Streaming:           reqReqs.Streaming,
-		VisionType:          "input_image",
-		ReasoningKeys:       []string{"reasoning"},
-		ContentFields:       []string{"input", "instructions"},
-		MaxOutputTokens:     in.MaxOutputTokens,
-		ToolCountHint:       len(in.Tools),
-		HasSystemPromptHint: &hasSystem,
+		Protocol:               feature.ProtocolResponses,
+		Model:                  in.Model,
+		Streaming:              reqReqs.Streaming,
+		VisionType:             "input_image",
+		ReasoningKeys:          []string{"reasoning"},
+		ContentFields:          []string{"input", "instructions"},
+		MaxOutputTokens:        in.MaxOutputTokens,
+		ToolCountHint:          len(in.Tools),
+		ToolChoiceRequiredHint: toolChoiceRequired,
+		HasSystemPromptHint:    &hasSystem,
 	})
 	if ti.Features.TooComplex {
 		canonicalErrorJSON(w, "openai_responses", http.StatusBadRequest, "invalid_request_error", "request JSON structure is too complex")

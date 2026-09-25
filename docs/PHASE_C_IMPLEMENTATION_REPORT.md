@@ -1,9 +1,9 @@
-# Phase C — Local Request Intelligence Foundation — Implementation Report
+# Phase C — Local Request Intelligence Foundation — Implementation Report (Converged)
 
-Date: 2026-09-25
+Date: 2026-09-25 (convergence)
 Branch: arena/01a0d825-nexaroute
-Baseline: ca5e05df96766ec403dfe8cd86ba354db37429da (Phase B verified PASS)
-Spec sections: Request/Task Feature Extraction, Local Classifier, Observational Only
+Baseline: ca5e05df96766ec403dfe8cd86ba354db37429da (Phase B PASS) → 3004540 → final convergence commit
+Spec sections: Request/Task Feature Extraction, Local Classifier, Observational Only, Convergence Gaps
 
 ---
 
@@ -12,153 +12,273 @@ Spec sections: Request/Task Feature Extraction, Local Classifier, Observational 
 ```
 Client (OpenAI / Anthropic / Responses)
   ↓ raw JSON (bounded body)
-Protocol decode (core.OpenAIRequest etc.)
+Protocol decode (core.OpenAIRequest / AnthropicRequest / ResponsesRequest via canonical IR)
   ↓
-Feature Extractor (internal/feature)
-  - Single bounded parse: root map[string]any, stack walk over contentFields (messages / input+instructions)
-  - Vision detection via type == visionType case-insensitive (image_url, image, input_image)
-  - Reasoning detection via top-level keys only (reasoning_effort, reasoning, thinking)
-  - Session key via session_id / metadata.session_id / metadata.user_id.session_id bounded 256
-  - Token estimate chars/4 + messageCount*8 +16, byte-based overestimate
-  - Tool count, tool_choice, structured output (response_format, text.format, json_schema)
-  - Relevant text collection up to 64KiB from content subtree, bounded builder, truncated flag
-  - Lexical signals: code block (``` count), inline code (`), stack trace (traceback, stack trace, at .java/.py/.go/.js, panic goroutine), diff (diff --git, @@ @@, --- +++), file path (src/, lib/, .go/.py/.js/.ts/.java/.rs, internal/, pkg/), URL (http:// https://), edit/debug/repo/arch/agent/extraction keywords, code identifiers (func, class, import, etc.)
-  ↓ RequestFeatures (privacy-safe, no raw content)
+Feature Extractor (internal/feature) — single bounded parse
+  - Root map[string]any unmarshal
+  - Session key: session_id / metadata.session_id / metadata.user_id.session_id bounded 256
+  - Reasoning: top-level keys only case-insensitive (reasoning_effort, reasoning, thinking)
+  - Structured output: response_format, text.format, json_schema
+  - Tools: count from root["tools"] or hint, tool_choice present/required via parseToolChoice
+  - Token estimate: all strings in contentFields subtree counted chars/4 + messageCount*8 +16
+  - Vision: type == visionType (image_url, image, input_image) case-insensitive, count capped 100
+  - Message count: presence of "role"
+  - System prompt: role system/developer or top-level system/instructions
+  - Relevant text: protocol-aware collection ONLY of semantically relevant natural-language text up to 64KiB
+    * OpenAI: messages[] roles system/developer/user/assistant (exclude tool/function), content string or [] parts type text/input_text/output_text
+    * Anthropic: system string or text blocks, messages content string or text blocks only, exclude tool_use/tool_result/image
+    * Responses: instructions string or text, input string or array items content input_text/text/output_text only, exclude input_image/tool_call
+  - Lexical signals from relevant text only: code block (```), inline code (`), stack trace (traceback, stack trace, at .java/.py/.go/.js/.ts + panic goroutine), diff (diff --git, @@ @@, --- +++), file path (src/, lib/, internal/, pkg/, / + .go/.py/.js/.ts/.java/.rs), URL (http:// https://), edit/debug/repo/arch/agent/extraction keywords, code identifiers
+  ↓ RequestFeatures (privacy-safe, no raw content, bounded)
 Router.Requirement from features (Vision, Reasoning, Tools, EstimatedPromptTokens, BodySessionKey, MaxOutputTokens, MinContextWindow)
   ↓
-Task Analyzer (internal/taskprofile) — deterministic, stateless
-  - TaskType precedence: debugging > editing > repo > architecture > coding > extraction > agent > vision > reasoning > general
-  - Complexity: trivial/low/medium/high/very_high based on tokens + toolCount*200 + imageCount*500 + messageCount*50 + code/diff/stack bonuses
-  - Confidence: 0.1-1.0 based on signal strength, penalized for TooComplex/truncated
-  - ReasonCodes: sorted, deduped, bounded list
-  ↓ TaskProfile
+Task Analyzer (internal/taskprofile) — deterministic, stateless, no locks, no global state
+  - Consumes only RequestFeatures
+  - Handles TooComplex → UNKNOWN
+  - TaskType precedence: debugging (stack trace or debug+code) > code_edit (diff or edit+code block/identifiers or edit+file path without URL) > repository_analysis (repo+file path/code) > architecture_reasoning (arch keywords) > coding (code block/identifiers) > data_extraction (extraction) > agentic_task (agent keywords or tools+multi-turn) > tool_use (tools+required/single turn) > vision (vision without code) > structured_output (structured without other signals) > long_context (tokens>8000 without other signals) > deep_reasoning (reasoning+tokens>2000) > simple_chat (messageCount≤1, no code/tools/vision/stack/diff/file path, tokens<500) > general > unknown
+  - Complexity: score = tokens + toolCount*200 + imageCount*500 + messageCount*50 + code 500 + diff 800 + stack 600 → trivial <200, low <1000, medium <4000, high <16000, very_high else
+  - Confidence: base 0.5 + signals per type (0.1-0.4), penalized for TooComplex (-0.1) and truncated (-0.05), clamped 0.1-1.0, simple_chat high confidence when no signals
+  - ReasonCodes: sorted, deduped, bounded
+  ↓ TaskProfile with secondary requirement flags
 candidatesForRequirement (unchanged, routing neutrality)
   ↓
-task_classified event (privacy-safe) + bounded metrics
+task_classified event (privacy-safe, latency_ms with min 1 if sub-ms) + bounded metrics (15*5=75 max)
   ↓
-Existing execution path (failover, health, session affinity, credential pool, etc. — unchanged)
+Existing execution (failover, health, session affinity, credential pool — unchanged)
 ```
 
-## B. File Changes
+## B. Exact Final Structs
 
-### New Packages
-- `internal/feature/features.go` — RequestFeatures struct, Protocol enum, constants, bounded helpers
-- `internal/feature/extractor.go` — Extractor, ExtractOptions, Extract, bodySessionKey, boundedStringBuilder, analyzeLexical, detectStructuredOutput, containsAny
-- `internal/feature/extractor_test.go` — 11 tests covering basic, vision (3 protocols), reasoning top-level only, session, TooComplex, lexical signals, truncation, privacy, tools, structured output, tokens
-- `internal/feature/bench_test.go` — 4 benchmarks: TinyChat, Coding, ToolHeavy, ScanLimit
-- `internal/taskprofile/tasktype.go` — TaskType (10 values), Complexity (5), ReasonCode (22 values)
-- `internal/taskprofile/profile.go` — TaskProfile struct, Valid()
-- `internal/taskprofile/analyzer.go` — Analyzer, Analyze, classifyType, classifyComplexity, computeConfidence, dedupAndSortReasons
-- `internal/taskprofile/analyzer_test.go` — 6 tests: deterministic, task types (13), complexity (6), confidence, reason codes, no raw prompt
+### RequestFeatures (internal/feature/features.go)
 
-### Modified Files
-- `internal/httpapi/routing_helpers.go` — refactored inspection to delegate to feature extractor (single source of truth), added import, preserved requestInspection backward compat
-- `internal/httpapi/task_intelligence.go` — NEW: global extractor+analyzer, extractFeaturesAndClassify, emitTaskClassified, recordTaskClassification, taskClassificationSnapshot
-- `internal/httpapi/openai.go` — use feature extractor with opts (ProtocolOpenAI, visionType image_url, reasoningKeys reasoning_effort+reasoning, contentFields messages, hints from decoded struct), check TooComplex, build Requirement from features, emit event after final resolution
-- `internal/httpapi/anthropic.go` — same for Anthropic (visionType image, reasoningKeys thinking+reasoning)
-- `internal/httpapi/canonical_path.go` — same for Responses (visionType input_image, reasoningKeys reasoning, contentFields input+instructions)
-- `internal/httpapi/server.go` — add taskMu, taskClassCounts map, taskAnalysisTotal atomic, init in New()
-- `internal/httpapi/metrics.go` — add nexaroute_task_classifications_total{task_type, complexity} sorted, nexaroute_task_analysis_total
-- `internal/httpapi/task_test.go` — NEW: 9 tests: routing neutrality, false positives, cross-protocol, privacy, event emission, VE neutrality, bounded metrics, performance, handler integration
-- `internal/events/bus.go` — extend Event with TaskType, Complexity, Confidence, ReasonCodes, EstimatedTok, ToolCount, ImageCount, MessageCount, HasCode, HasVision, HasReasoning, HasTools, StructuredOut; add bounded constants and boundedString handling
-- `docs/PHASE_C_CURRENT_STATE_NOTE.md` — audit note (pre-existing)
-- `docs/PHASE_C_REQUEST_INTELLIGENCE.md` — design doc (new)
-- `docs/PHASE_C_IMPLEMENTATION_REPORT.md` — this file
+```go
+type RequestFeatures struct {
+    Protocol       Protocol
+    ModelRequested string
+    Streaming      bool
 
-### Unchanged (intentionally)
-- `internal/router/router.go` — no TaskProfile consumption, routing neutrality preserved
-- `internal/route/resolver.go` — no task awareness
-- `internal/providers/*`, `internal/health/*`, `internal/probe/*` — no changes
-- `internal/config/config.go` — no new fields required, safe defaults
+    HasVision             bool
+    VisionImageCount      int
+    HasReasoning          bool
+    HasTools              bool
+    ToolCount             int
+    ToolChoice            bool // deprecated alias
+    ToolChoicePresent     bool
+    ToolChoiceRequired    bool
+    StructuredOutput      bool
+    HasSystemPrompt       bool
+    MessageCount          int
+    MaxOutputTokens       int
+    HasToolResult         bool
+    HasImageURL           bool
 
-## C. Verification
+    EstimatedPromptTokens int
+    EstimatedTotalTokens  int
+    TotalChars            int
+    RelevantTextLength    int
+    RelevantTruncated     bool
+
+    SessionKeyPresent bool
+    BodySessionKey    string `json:"-"`
+
+    TooComplex bool
+
+    HasCodeBlock          bool
+    CodeBlockCount        int
+    HasInlineCode         bool
+    HasStackTrace         bool
+    HasDiff               bool
+    HasFilePath           bool
+    HasURL                bool
+    HasEditKeywords       bool
+    HasDebugKeywords      bool
+    HasRepoKeywords       bool
+    HasArchKeywords       bool
+    HasAgentKeywords      bool
+    HasExtractionKeywords bool
+    HasCodeIdentifiers    bool
+}
+```
+
+### TaskType Enum (internal/taskprofile/tasktype.go)
+
+```go
+const (
+    TaskSimpleChat            TaskType = "simple_chat"
+    TaskCoding                TaskType = "coding"
+    TaskCodeEdit              TaskType = "code_edit"
+    TaskDebugging             TaskType = "debugging"
+    TaskRepositoryAnalysis    TaskType = "repository_analysis"
+    TaskArchitectureReasoning TaskType = "architecture_reasoning"
+    TaskDeepReasoning         TaskType = "deep_reasoning"
+    TaskToolUse               TaskType = "tool_use"
+    TaskAgenticTask           TaskType = "agentic_task"
+    TaskLongContext           TaskType = "long_context"
+    TaskVision                TaskType = "vision"
+    TaskStructuredOutput      TaskType = "structured_output"
+    TaskDataExtraction        TaskType = "data_extraction"
+    TaskGeneral               TaskType = "general"
+    TaskUnknown               TaskType = "unknown"
+)
+func AllTaskTypes() []TaskType { return 15 types }
+```
+
+### TaskProfile (internal/taskprofile/profile.go)
+
+```go
+type TaskProfile struct {
+    Type       TaskType
+    Complexity Complexity
+    Confidence float64
+    ReasonCodes []ReasonCode
+
+    EstimatedContextTokens int
+
+    RequiresVision           bool
+    RequiresReasoning        bool
+    RequiresTools            bool
+    RequiresStructuredOutput bool
+    RequiresLongContext      bool
+    ToolChoiceRequired       bool
+
+    HasVision    bool
+    HasReasoning bool
+    HasTools     bool
+    ToolCount    int
+    ImageCount   int
+    MessageCount int
+}
+```
+
+### Complexity & ReasonCodes
+
+Complexity: trivial, low, medium, high, very_high
+ReasonCodes: vision_present, reasoning_requested, tools_present, tool_choice_required, structured_output, code_block, inline_code, stack_trace, diff_present, file_path, url_present, edit_keyword, debug_keyword, repo_keyword, arch_keyword, agent_keyword, extraction_keyword, code_identifiers, long_context, multi_turn, single_turn, complex_tools, system_prompt, streaming, high_image_count, simple_chat
+
+## C. File Changes (vs Phase B)
+
+New:
+- internal/feature/features.go, extractor.go, extractor_test.go, bench_test.go
+- internal/taskprofile/tasktype.go, profile.go, analyzer.go, analyzer_test.go, bench_test.go
+- internal/httpapi/task_intelligence.go, task_test.go
+- docs/PHASE_C_CURRENT_STATE_NOTE.md, PHASE_C_REQUEST_INTELLIGENCE.md, PHASE_C_IMPLEMENTATION_REPORT.md
+
+Modified:
+- internal/httpapi/routing_helpers.go — delegates to feature extractor
+- internal/httpapi/openai.go, anthropic.go, canonical_path.go — feature extraction + tool choice required detection + event emission after final resolution
+- internal/httpapi/server.go — task counters init
+- internal/httpapi/metrics.go — task metrics with sorted keys, cardinality 15*5=75
+- internal/events/bus.go — task fields, bounded strings
+
+Unchanged intentionally:
+- internal/router, internal/route, internal/health, internal/providers, internal/config, internal/compat, internal/protocol — no task awareness
+
+## D. Verification
 
 ### Compile & Format
-- `go fmt ./...` — PASS (only formatting changes in new files)
-- `go build ./...` — PASS (amd64)
+- go fmt ./... PASS (fixed after convergence)
+- go build ./... PASS
+- go vet ./... PASS
 
 ### Unit Tests
-- `go test ./... -count=1` — PASS
-  - internal/feature: 11 tests PASS
-  - internal/taskprofile: 6 tests PASS
-  - internal/httpapi: 2.376s, includes 9 new task tests + existing integration tests PASS
-  - All other packages PASS
+- go test ./... -count=1 PASS (17 packages)
+  - feature: 13 tests (basic, vision 3 protocols, reasoning top-level only, session, TooComplex, lexical signals, truncation, privacy, tool count, tool choice semantics 6 cases, structured output, tokens, relevant text only, false positives spec 5 cases)
+  - taskprofile: 8 tests (deterministic, task types 20 cases, complexity 6, confidence, reason codes, no raw prompt, secondary requirements)
+  - httpapi: task tests 11 (routing neutrality, strengthened neutrality, false positives, false positives spec 5 + URL/tool schema, cross-protocol all three, privacy canary, event emission, VE neutrality, provider neutrality 6 models, bounded metrics, performance, handler integration, failure policy)
+  - existing integration tests PASS
 
-### Routing Neutrality
-- `TestTaskClassification_RoutingNeutrality` — PASS: same candidate count and ordering with and without intelligence
-- `TestTaskClassification_VirtualEndpointNeutrality` — PASS: task type independent of model/VE
-- Manual check: old inspectRequestJSONFields now delegates to feature extractor, so EstimatedPromptTokens, Vision, Reasoning, BodySessionKey, TooComplex produce same values as before for same raw JSON
+### Routing Neutrality Evidence
+- TestTaskClassification_RoutingNeutrality: identical candidate count and ordering for identical requirement
+- TestTaskClassification_RoutingNeutrality_Strengthened: fixed requirement vision+reasoning+tools → identical IDs, ordering, scores before and after analysis
+- grep -R "taskprofile|feature" internal/router internal/route internal/health internal/providers → no matches except unrelated "feature-x" header test, proving analyzer cannot affect failover/health/session/credentials
+- TaskProfile not imported in router/route/health/providers
 
-### False Positives
-- `TestTaskClassification_FalsePositives` — PASS: reasoning not detected from tool schemas, vision not detected from tool schemas
-- Lexical signals only from contentFields subtree, not tool schemas, matching existing inspection semantics
+### False-Positive Suite
+- "Can you edit this sentence?" → NOT code_edit (requires code block/identifiers or file path without URL) → PASS (simple_chat/general)
+- "Tell me what an error means in statistics." → NOT debugging (requires code context for generic error) → PASS
+- "Design a birthday card." → NOT architecture_reasoning (requires architecture-specific terms) → PASS
+- "JSON is a data format." → NOT structured_output (flag from response_format, not lexical) → PASS
+- "I saw an image yesterday." → NOT vision (type==visionType) → PASS
+- Tool schema, tool result, metadata, URL, JSON schema containing misleading keywords do NOT trigger → PASS (TestExtractor_RelevantTextOnly)
+
+### Cross-Protocol
+- TestTaskClassification_CrossProtocol_AllThree: OpenAI Chat, Anthropic Messages, Responses with equivalent semantic "fix this bug\n```go\nfunc foo() {}\n```\nStack trace: panic: nil\nsrc/main.go" + instructions → all produce debugging, same code block/stack/file path flags, complexity at least medium
+- Documented differences: Responses includes instructions as system prompt, message count may differ, but task type identical
+
+### VE/Provider Neutrality
+- VE neutrality: nexa-code vs different-model same content → same type
+- Provider neutrality: 6 models (gpt-4, claude-3, nexa-code, custom-model-123, prov1/model-a, prov2/model-b) same content → identical type, secondary flags independent
+- Classification does not depend on: model name, provider ID, deployment ID, API key, route profile, pool, health, cost/priority
+
+### Metric Cardinality
+- Previous claim 10*5=50 inconsistent because TaskType includes UNKNOWN (11) or now 15
+- Fixed: AllTaskTypes()=15, AllComplexities()=5, max 75
+- TestTaskClassification_BoundedMetrics uses AllTaskTypes() and AllComplexities() to compute expected max, asserts ≤75, logs 75
+- Comment updated
+
+### Analysis Duration
+- LatencyMS = duration.Milliseconds() with min 1 if duration>0 and <1ms, avoiding 0ms for sub-ms, still bounded
+- Benchmarks primary evidence, no high-cardinality metrics
+
+### Benchmarks (actual)
+
+Feature extractor (linux amd64, Xeon 2.60GHz, Go 1.23.9):
+- TinyChat: 3231 ns/op, 1120 B/op, 27 allocs/op
+- Coding: 6715 ns/op, 1680 B/op, 30 allocs/op
+- ToolHeavy: 9473 ns/op, 5096 B/op, 89 allocs/op
+- ScanLimit 70KiB: 676122 ns/op, 140368 B/op, 27 allocs/op
+
+TaskProfile analyzer:
+- SimpleChat: 433.9 ns/op, 344 B/op, 4 allocs/op
+- Coding: 465.2 ns/op, 360 B/op, 4 allocs/op
+- ToolHeavy: 640.1 ns/op, 392 B/op, 4 allocs/op
+- Complex: 3017 ns/op, 1848 B/op, 6 allocs/op
+
+Total typical: ~4-8 µs per request.
 
 ### Privacy
-- `TestExtractor_Privacy_NoRawContent` — PASS: features JSON doesn't contain secret
-- `TestTaskClassification_Privacy` — PASS: profile JSON doesn't contain secret
-- `TestTaskClassification_EventEmission` — PASS: event message static, no raw content
+- Canary SECRET_CANARY_7f31a9 placed in request → NOT in features JSON, profile JSON, task_classified event JSON, metrics keys, message fields
+- BodySessionKey json:"-" and not leaked via telemetry (verified)
 
-### Bounded Metrics
-- `TestTaskClassification_BoundedMetrics` — PASS: 1000 same key → 1 map entry, all combinations → ≤50 entries
-- Metrics output sorted for determinism
+### Failure Policy
+- TooComplex → UNKNOWN confidence 0.1, routing continues
+- Empty/invalid features → GENERAL/SIMPLE_CHAT/UNKNOWN, Valid()
+- Invalid JSON → existing 400, not 500 (TestAnalyzer_FailurePolicy)
 
-### Performance
-- `TestFeatureExtractor_Performance` — 100 iterations of 12KiB content, fast
-- Benchmarks (local): TinyChat few µs, Coding 10-20µs, ToolHeavy 5-10µs, ScanLimit 50-100µs
+### Full Mandatory Gates
+- ./scripts/verify.sh PASS (60s: go version, shell syntax, formatting, unit/integration count=10 shuffle, vet, race count=3 shuffle, js syntax, fuzz 2s, linux amd64/arm64 builds)
+- ./scripts/stress.sh PASS (router scale, probe/recovery, event-state, admission, log rotation)
+- ./scripts/smoke-local.sh PASS (UI 200, hello 200, model list, admin snapshot, count_tokens fallback, provider CRUD, atomic persistence)
+- Race targeted: go test -race ./internal/feature ./internal/taskprofile ./internal/httpapi ./internal/events ./internal/router PASS
 
-### Integration
-- `TestTaskClassification_HandlerIntegration` — PASS: openAIChat emits task_classified even when no healthy deployment (503), proving observational path works
+## E. Acceptance Checklist
 
-## D. Risks & Mitigations
+- [x] Task vocabulary matches intended semantic contract (15 types, distinguishes CODE_EDIT, REPOSITORY_ANALYSIS, ARCHITECTURE_REASONING, DATA_EXTRACTION, AGENTIC_TASK, TOOL_USE, SIMPLE_CHAT, DEEP_REASONING/LONG_CONTEXT/STRUCTURED_OUTPUT as secondary flags + primary when dominant)
+- [x] Important secondary requirements remain in TaskProfile (RequiresVision, RequiresReasoning, RequiresTools, RequiresStructuredOutput, RequiresLongContext, ToolChoiceRequired, EstimatedContextTokens)
+- [x] Tool-choice semantics normalized where reliable (ToolChoicePresent, ToolChoiceRequired, parsed for OpenAI auto/none/required/function and Anthropic auto/any/tool)
+- [x] Lexical analysis scans relevant text only (protocol-aware, excludes tool schemas, tool results, image URLs, metadata, JSON schemas)
+- [x] Explicit false-positive cases pass (5 spec cases + tool schema/result/URL/JSON schema)
+- [x] OpenAI + Anthropic + Responses cross-protocol fixtures pass (identical primary type, equivalent flags)
+- [x] VE/provider/model identity does not affect classification (VE neutrality + provider neutrality tests)
+- [x] Routing candidate order remains unchanged (neutrality + strengthened tests)
+- [x] Analyzer cannot affect failover/health/session/credentials (grep evidence, no imports)
+- [x] Metric cardinality claim is correct (15*5=75, derived from AllTaskTypes())
+- [x] Raw secret canary does not leak (SECRET_CANARY_7f31a9)
+- [x] Actual benchmarks executed (ns/op, B/op, allocs/op reported)
+- [x] ./scripts/verify.sh PASS
+- [x] ./scripts/stress.sh PASS
+- [x] ./scripts/smoke-local.sh PASS
+- [x] Targeted race tests PASS
+- [x] Documentation exactly matches code (final structs, enums, precedence, complexity, confidence, lexical semantics, privacy, cross-protocol, neutrality, benchmarks, verification)
 
-| Risk | Mitigation |
-|------|------------|
-| Duplicate JSON parsing (3rd parse) | Feature extractor subsumes old inspection; now only 2 parses (protocol decode + feature extraction) instead of 3; old inspectRequestJSONFields delegates to extractor |
-| Lexical scan overhead on large prompts | Bounded to 64KiB relevant text, lowercased once, simple substring searches, no regex, truncated flag |
-| False positives from tool schemas | Reasoning detection top-level only, vision detection only in contentFields subtree, same as existing inspection |
-| Privacy leak of raw prompt | RequestFeatures and TaskProfile contain only booleans, bounded counts, lengths; no raw text; tests verify no secret leakage; events use static message |
-| Routing neutrality violation | Analyzer never consumed by router; Requirement fields from features produce same values as old inspection; regression tests prove neutrality |
-| Metrics cardinality explosion | Bounded to task_type (10) x complexity (5) = 50 max keys, sorted output |
-| TooComplex handling | Preserves existing behavior: 400 request JSON structure is too complex, TooComplex flag propagated |
+## F. Remaining Limitations
 
-## E. Acceptance Criteria (Phase C)
+- Heuristic substring search, not NLP; edge false positives/negatives possible but guarded by false-positive suite
+- File path detection simple, may miss exotic paths
+- Tool choice required detection best-effort where reliable, ambiguous cases treated as present not required
+- Long context and structured output as primary only when dominant; otherwise secondary flags to avoid combinatorial explosion — documented as intentional
+- No session affinity or VE info used (by design)
 
-- [x] Normalized RequestFeatures + deterministic TaskProfile + local TaskAnalyzer in internal/feature and internal/taskprofile
-- [x] Observational only — MUST NOT alter router candidate ordering, failover, health, session affinity, credential selection
-- [x] Routing neutrality hard invariant with regression test
-- [x] Bounded lexical scan (64KiB), privacy-safe telemetry, bounded metrics
-- [x] False-positive / cross-protocol / routing-neutrality tests
-- [x] Benchmarks for tiny, coding, tool-heavy, scan-limit inputs
-- [x] Docs: PHASE_C_REQUEST_INTELLIGENCE.md + PHASE_C_IMPLEMENTATION_REPORT.md
-- [x] gofmt, compile, unit+integration tests PASS
-- [x] No quality scores fabricated: confidence is heuristic, not quality; provenance is deterministic local analysis
-- [x] No raw prompts sent to external providers (local only in Phase C)
+## G. Final Verdict
 
-## F. Next Phase (D) Prerequisites
-
-- DecisionProvider contracts (interface for ranking within eligible set)
-- Orchestrator (calls decision providers with budget, validates eligible set, rejects invalid candidates)
-- Eligible-set validator (ensures decision provider doesn't override protocol incompatibility, disabled deployment, health circuit, cooldown, etc.)
-- Decision budget (timeout, concurrency)
-- TaskProfile will be input to DecisionProvider, but privacy modes (METADATA_ONLY default) must be enforced
-
-## G. Commands Run
-
-```
-go fmt ./...
-go build ./...
-go test ./internal/feature -count=1 -v
-go test ./internal/taskprofile -count=1 -v
-go test ./internal/httpapi -run TestTaskClassification -count=1 -v
-go test ./... -count=1
-```
-All PASS on branch arena/01a0d825-nexaroute.
-
----
-
-## H. Diff Summary (vs Phase B baseline ca5e05d)
-
-- Added 2 packages, 6 new files, 2 test files, 1 bench file
-- Modified 7 files in httpapi, 1 in events, 1 in docs
-- No changes to router, route, providers, health, config, compat, protocol
-- Net +~1500 LOC, no second router/gateway, no config bump
+PHASE C: PASS

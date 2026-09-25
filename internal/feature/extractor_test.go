@@ -91,7 +91,6 @@ func TestExtractor_VisionDetection(t *testing.T) {
 }
 
 func TestExtractor_ReasoningDetection_TopLevelOnly(t *testing.T) {
-	// Reasoning key in tool schema should NOT trigger
 	raw := []byte(`{"model":"test","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"foo","description":"does reasoning"}}]}`)
 	ext := NewExtractor()
 	feat := ext.Extract(raw, ExtractOptions{
@@ -102,7 +101,6 @@ func TestExtractor_ReasoningDetection_TopLevelOnly(t *testing.T) {
 	if feat.HasReasoning {
 		t.Fatalf("reasoning should not be detected from tool schema")
 	}
-	// Top-level reasoning_effort should trigger
 	raw2 := []byte(`{"model":"test","messages":[{"role":"user","content":"hi"}],"reasoning_effort":"high"}`)
 	feat2 := ext.Extract(raw2, ExtractOptions{
 		VisionType:    "image_url",
@@ -126,7 +124,6 @@ func TestExtractor_SessionKey(t *testing.T) {
 	if !feat.SessionKeyPresent {
 		t.Fatalf("expected session present")
 	}
-	// metadata.session_id
 	raw2 := []byte(`{"model":"test","metadata":{"session_id":"meta-456"},"messages":[]}`)
 	feat2 := ext.Extract(raw2, ExtractOptions{
 		ContentFields: []string{"messages"},
@@ -137,11 +134,7 @@ func TestExtractor_SessionKey(t *testing.T) {
 }
 
 func TestExtractor_TooComplex(t *testing.T) {
-	// Build large nested structure exceeding node budget
-	// Use 100001 nested arrays via repeated wrapping
-	// Instead create a map with many keys
 	m := make(map[string]any)
-	// Create a slice with 100001 elements
 	slice := make([]any, 100001)
 	for i := range slice {
 		slice[i] = "x"
@@ -158,12 +151,12 @@ func TestExtractor_TooComplex(t *testing.T) {
 }
 
 func TestExtractor_LexicalSignals(t *testing.T) {
-	// Use \x60 for backtick to avoid raw string delimiter conflict
 	content := "Here is code:\n\x60\x60\x60go\nfunc foo() {}\n\x60\x60\x60\nAnd a stack trace:\nTraceback (most recent call last):\n File \"test.py\"\nAnd a diff:\ndiff --git a/file.go b/file.go\n--- a/file.go\n+++ b/file.go\n@@ -1 +1 @@\nAnd file path src/internal/foo.go\nAnd keywords: refactor this code, debug the error, architecture design doc, agent tool use, extract summarize"
 	m := map[string]any{"model": "test", "messages": []any{map[string]any{"role": "user", "content": content}}}
 	raw, _ := json.Marshal(m)
 	ext := NewExtractor()
 	feat := ext.Extract(raw, ExtractOptions{
+		Protocol:      ProtocolOpenAI,
 		ContentFields: []string{"messages"},
 	})
 	if !feat.HasCodeBlock {
@@ -202,11 +195,11 @@ func TestExtractor_LexicalSignals(t *testing.T) {
 }
 
 func TestExtractor_Truncation(t *testing.T) {
-	// Build a message with >64KiB text
 	large := strings.Repeat("a", 70*1024)
 	raw := []byte(`{"model":"test","messages":[{"role":"user","content":` + jsonMarshalString(large) + `}]}`)
 	ext := NewExtractor()
 	feat := ext.Extract(raw, ExtractOptions{
+		Protocol:      ProtocolOpenAI,
 		ContentFields: []string{"messages"},
 	})
 	if !feat.RelevantTruncated {
@@ -226,16 +219,12 @@ func TestExtractor_Privacy_NoRawContent(t *testing.T) {
 	raw := []byte(`{"model":"test","messages":[{"role":"user","content":"my secret password is hunter2"}]}`)
 	ext := NewExtractor()
 	feat := ext.Extract(raw, ExtractOptions{
+		Protocol:      ProtocolOpenAI,
 		ContentFields: []string{"messages"},
 	})
-	// Ensure features don't contain raw secret
-	// We check JSON marshaling of features doesn't contain secret
 	b, _ := json.Marshal(feat)
 	if strings.Contains(string(b), "hunter2") {
 		t.Fatalf("privacy violation: raw content leaked into features")
-	}
-	if feat.BodySessionKey != "" {
-		// BodySessionKey is allowed bounded, but not secret
 	}
 }
 
@@ -250,6 +239,66 @@ func TestExtractor_ToolCount(t *testing.T) {
 	}
 	if !feat.HasTools {
 		t.Fatalf("expected has tools")
+	}
+}
+
+func TestExtractor_ToolChoiceSemantics(t *testing.T) {
+	tests := []struct {
+		name           string
+		raw            string
+		expectPresent  bool
+		expectRequired bool
+	}{
+		{
+			name:           "no tool_choice",
+			raw:            `{"model":"test","messages":[]}`,
+			expectPresent:  false,
+			expectRequired: false,
+		},
+		{
+			name:           "tool_choice auto",
+			raw:            `{"model":"test","messages":[],"tool_choice":"auto"}`,
+			expectPresent:  true,
+			expectRequired: false,
+		},
+		{
+			name:           "tool_choice required",
+			raw:            `{"model":"test","messages":[],"tool_choice":"required"}`,
+			expectPresent:  true,
+			expectRequired: true,
+		},
+		{
+			name:           "tool_choice any anthropic",
+			raw:            `{"model":"test","messages":[],"tool_choice":{"type":"any"}}`,
+			expectPresent:  true,
+			expectRequired: true,
+		},
+		{
+			name:           "tool_choice tool forced",
+			raw:            `{"model":"test","messages":[],"tool_choice":{"type":"tool","name":"my_tool"}}`,
+			expectPresent:  true,
+			expectRequired: true,
+		},
+		{
+			name:           "tool_choice function forced",
+			raw:            `{"model":"test","messages":[],"tool_choice":{"type":"function","function":{"name":"foo"}}}`,
+			expectPresent:  true,
+			expectRequired: true,
+		},
+	}
+	ext := NewExtractor()
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			feat := ext.Extract([]byte(tc.raw), ExtractOptions{
+				ContentFields: []string{"messages"},
+			})
+			if feat.ToolChoicePresent != tc.expectPresent {
+				t.Fatalf("expected present %v got %v", tc.expectPresent, feat.ToolChoicePresent)
+			}
+			if feat.ToolChoiceRequired != tc.expectRequired {
+				t.Fatalf("expected required %v got %v", tc.expectRequired, feat.ToolChoiceRequired)
+			}
+		})
 	}
 }
 
@@ -268,10 +317,130 @@ func TestExtractor_EstimatedTokens(t *testing.T) {
 	raw := []byte(`{"messages":[{"role":"user","content":"hello world"}]}`)
 	ext := NewExtractor()
 	feat := ext.Extract(raw, ExtractOptions{
+		Protocol:      ProtocolOpenAI,
 		ContentFields: []string{"messages"},
 	})
-	// chars=11, messageCount=1, 11/4=2 +8+16=26
 	if feat.EstimatedPromptTokens < 20 {
 		t.Fatalf("unexpected token estimate %d", feat.EstimatedPromptTokens)
+	}
+}
+
+func TestExtractor_RelevantTextOnly(t *testing.T) {
+	ext := NewExtractor()
+	// Keywords inside tool schema should NOT trigger lexical signals
+	raw := []byte(`{
+		"model":"test",
+		"messages":[{"role":"user","content":"hello"}],
+		"tools":[{"type":"function","function":{"name":"edit_code","description":"refactor this code, debug the error, architecture design doc, extract summarize, agent tool use, src/main.go"}}]
+	}`)
+	feat := ext.Extract(raw, ExtractOptions{
+		Protocol:      ProtocolOpenAI,
+		ContentFields: []string{"messages"},
+	})
+	if feat.HasCodeBlock || feat.HasEditKeywords || feat.HasDebugKeywords || feat.HasArchKeywords || feat.HasExtractionKeywords || feat.HasAgentKeywords || feat.HasFilePath {
+		t.Fatalf("false positive: keywords inside tool schema triggered lexical signals: %+v", feat)
+	}
+
+	// Keywords inside tool result should NOT trigger
+	raw2 := []byte(`{
+		"model":"test",
+		"messages":[
+			{"role":"user","content":"hello"},
+			{"role":"tool","tool_call_id":"1","content":"refactor this code with bug in src/main.go\n\x60\x60\x60go\nfunc foo(){}\n\x60\x60\x60\nTraceback..."}
+		]
+	}`)
+	feat2 := ext.Extract(raw2, ExtractOptions{
+		Protocol:      ProtocolOpenAI,
+		ContentFields: []string{"messages"},
+	})
+	if feat2.HasCodeBlock || feat2.HasEditKeywords || feat2.HasFilePath {
+		t.Fatalf("false positive: keywords inside tool result triggered: %+v", feat2)
+	}
+
+	// Keywords inside image_url should NOT trigger
+	raw3 := []byte(`{
+		"model":"test",
+		"messages":[{"role":"user","content":[{"type":"text","text":"hello"},{"type":"image_url","image_url":{"url":"https://example.com/refactor src/main.go debug"}}]}]
+	}`)
+	feat3 := ext.Extract(raw3, ExtractOptions{
+		Protocol:      ProtocolOpenAI,
+		VisionType:    "image_url",
+		ContentFields: []string{"messages"},
+	})
+	if feat3.HasEditKeywords || feat3.HasFilePath || feat3.HasDebugKeywords {
+		t.Fatalf("false positive: keywords inside image_url triggered: %+v", feat3)
+	}
+
+	// Anthropic: tool_result should not trigger
+	raw4 := []byte(`{
+		"model":"test",
+		"messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"1","content":"refactor src/main.go \n\x60\x60\x60go\nfunc foo(){}\n\x60\x60\x60"}]}]
+	}`)
+	feat4 := ext.Extract(raw4, ExtractOptions{
+		Protocol:      ProtocolAnthropic,
+		ContentFields: []string{"messages"},
+	})
+	if feat4.HasCodeBlock || feat4.HasFilePath {
+		t.Fatalf("false positive: anthropic tool_result triggered: %+v", feat4)
+	}
+}
+
+func TestExtractor_FalsePositives_Spec(t *testing.T) {
+	ext := NewExtractor()
+	tests := []struct {
+		name    string
+		content string
+		check   func(RequestFeatures) bool // true if should NOT be classified as specific type
+	}{
+		{
+			name:    "edit sentence not code_edit",
+			content: "Can you edit this sentence?",
+			check: func(f RequestFeatures) bool {
+				// Should not have code context
+				return !f.HasCodeBlock && !f.HasFilePath && !f.HasDiff
+			},
+		},
+		{
+			name:    "error statistics not debugging",
+			content: "Tell me what an error means in statistics.",
+			check: func(f RequestFeatures) bool {
+				return !f.HasStackTrace
+			},
+		},
+		{
+			name:    "birthday card not architecture",
+			content: "Design a birthday card.",
+			check: func(f RequestFeatures) bool {
+				return !f.HasArchKeywords
+			},
+		},
+		{
+			name:    "JSON data format not structured_output",
+			content: "JSON is a data format.",
+			check: func(f RequestFeatures) bool {
+				// Structured output flag comes from response_format, not lexical
+				return !f.StructuredOutput
+			},
+		},
+		{
+			name:    "saw image not vision",
+			content: "I saw an image yesterday.",
+			check: func(f RequestFeatures) bool {
+				return !f.HasVision
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			m := map[string]any{"model": "test", "messages": []any{map[string]any{"role": "user", "content": tc.content}}}
+			raw, _ := json.Marshal(m)
+			feat := ext.Extract(raw, ExtractOptions{
+				Protocol:      ProtocolOpenAI,
+				ContentFields: []string{"messages"},
+			})
+			if !tc.check(feat) {
+				t.Fatalf("false positive for %q: %+v", tc.name, feat)
+			}
+		})
 	}
 }
