@@ -2,7 +2,7 @@
 # Download a checksum-verified release, or explicitly build a source ref.
 set -euo pipefail
 REPO='ali-shortcuts/nexaroute'
-VERSION="${NEXAROUTE_VERSION:-v0.6.1-beta.2}"
+VERSION="${NEXAROUTE_VERSION:-v0.6.1-beta.3}"
 SOURCE_REF=''
 case "${1:-}" in
   --source) SOURCE_REF="${2:-main}" ;;

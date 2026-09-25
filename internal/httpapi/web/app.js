@@ -80,7 +80,7 @@ $$('nav button').forEach(b => b.onclick = () => {
   $('#subtitle').textContent = subtitles[b.dataset.tab] || '';
   if (b.dataset.tab === 'settings') fillRuntimeSettings();
   if (b.dataset.tab === 'console') { consoleUnread = 0; $('#consoleDot').hidden = true; renderConsole(); }
-  if (b.dataset.tab === 'cli') renderCLI();
+  if (b.dataset.tab === 'cli') loadEndpoint();
   if (b.dataset.tab === 'compat') loadCompat();
 });
 $('#pauseBtn').onclick = () => {
@@ -498,60 +498,55 @@ window.addEventListener('resize', () => { renderRing(snap.deployments || [], hea
 setInterval(() => { $('#footClock').textContent = new Date().toLocaleTimeString('en-US', { hour12: false }); }, 1000);
 
 /* ---------- CLI tools tab ---------- */
-function cliSnippet(kind) {
-  const base = location.origin;
-  if (kind === 'claude') return {
-    title: 'Claude Code / Anthropic clients',
-    note: 'The placeholder key exists only for clients that require a non-empty value. Aliases such as auto/coding map many deployments behind one client model.',
-    body:
-`<span class="c"># Anthropic-compatible ingress</span>
-export ANTHROPIC_BASE_URL=${base}
-export ANTHROPIC_AUTH_TOKEN=local-placeholder
-export ANTHROPIC_MODEL=coding
-
-<span class="c"># or an explicit model / deployment</span>
-export ANTHROPIC_MODEL=auto`
-  };
-  if (kind === 'openai') return {
-    title: 'OpenAI-compatible tools',
-    note: 'Chat Completions requests flow through the same routing plane and the same bulletproof protocol translation.',
-    body:
-`<span class="c"># OpenAI Chat Completions ingress</span>
-export OPENAI_BASE_URL=${base}/v1
-export OPENAI_API_KEY=local-placeholder
-
-<span class="c"># direct curl</span>
-curl ${base}/v1/chat/completions \\
-  -H "Content-Type: application/json" \\
-  -d '{"model":"auto","messages":[{"role":"user","content":"hi"}]}'`
-  };
-  if (kind === 'env') return {
-    title: 'Session environment block',
-    note: 'Drop this into .zshrc / .bashrc for the current machine.',
-    body:
-`<span class="c"># NexaRoute client environment</span>
-export ANTHROPIC_BASE_URL=${base}
-export ANTHROPIC_AUTH_TOKEN=local-placeholder
-export OPENAI_BASE_URL=${base}/v1
-export OPENAI_API_KEY=local-placeholder`
-  };
-  return {
-    title: 'Health & diagnostics',
-    note: 'Useful endpoints for monitoring and CI checks.',
-    body:
-`<span class="c"># process liveness</span>
-curl -s ${base}/healthz
-
-<span class="c"># routing readiness (ready queue populated)</span>
-curl -s ${base}/readyz
-
-<span class="c"># Prometheus metrics</span>
-curl -s ${base}/metrics
-
-<span class="c"># exposed models and aliases</span>
-curl -s ${base}/v1/models`
-  };
+let endpoint = {model: 'nexaroute', api_key: ''};
+const shellQuote = value => "'" + String(value).replaceAll("'", "'\\''") + "'";
+async function loadEndpoint() {
+  try { endpoint = await api('/admin/api/endpoint'); showEndpoint(); }
+  catch (e) { $('#endpointStatus').textContent = e.message; }
 }
+function showEndpoint() {
+  $('#endpointURL').value = location.origin;
+  $('#endpointModel').value = endpoint.model;
+  $('#endpointKey').value = endpoint.api_key;
+  $('#endpointStatus').textContent = `${endpoint.deployments} enabled models in pool. ` + (endpoint.api_key ? 'Endpoint key is active.' : 'Create the endpoint to generate a real API key.');
+  renderCLI();
+}
+async function saveEndpoint(rotate) {
+  if (rotate && !confirm('Replace the gateway key? Clients using the old key must be updated.')) return;
+  try {
+    endpoint = await api('/admin/api/endpoint', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:$('#endpointModel').value,rotate_key:rotate})});
+    showEndpoint(); await refresh(); toast('Endpoint saved');
+  } catch(e) { toast(e.message); }
+}
+$('#endpointSave').onclick = () => saveEndpoint(false);
+$('#endpointRotate').onclick = () => saveEndpoint(true);
+$('#endpointCopyKey').onclick = e => { if(endpoint.api_key) copyText(endpoint.api_key,e.target); };
+function cliSnippet(kind) {
+  const base = shellQuote(location.origin), key = shellQuote(endpoint.api_key || 'CREATE_ENDPOINT_FIRST'), model = shellQuote(endpoint.model);
+  let body;
+  if (kind === 'claude') body = `export ANTHROPIC_BASE_URL=${base}
+export ANTHROPIC_AUTH_TOKEN=${key}
+export ANTHROPIC_MODEL=${model}
+export ANTHROPIC_DEFAULT_FABLE_MODEL=${model}
+export ANTHROPIC_DEFAULT_OPUS_MODEL=${model}
+export ANTHROPIC_DEFAULT_SONNET_MODEL=${model}
+export ANTHROPIC_DEFAULT_HAIKU_MODEL=${model}
+export CLAUDE_CODE_SUBAGENT_MODEL=${model}
+claude`;
+  else if(kind === 'openai') body = `export OPENAI_BASE_URL=${shellQuote(location.origin+'/v1')}
+export OPENAI_API_KEY=${key}
+# Set the model in your client to: ${endpoint.model}
+curl ${shellQuote(location.origin+'/v1/chat/completions')} -H "Authorization: Bearer $OPENAI_API_KEY" -H 'Content-Type: application/json' -d ${shellQuote(JSON.stringify({model:endpoint.model,messages:[{role:'user',content:'Hello'}]}))}`;
+  else if(kind === 'env') body = `export ANTHROPIC_BASE_URL=${base}
+export ANTHROPIC_AUTH_TOKEN=${key}
+export ANTHROPIC_MODEL=${model}
+export OPENAI_BASE_URL=${shellQuote(location.origin+'/v1')}
+export OPENAI_API_KEY=${key}`;
+  else body = `curl ${shellQuote(location.origin+'/healthz')}
+curl ${shellQuote(location.origin+'/v1/models')} -H ${shellQuote('Authorization: Bearer '+(endpoint.api_key||'CREATE_ENDPOINT_FIRST'))}`;
+  return {title:'Connect through one gateway',note:'Keep this key private. All eligible enabled models share the public name; upstream capabilities still apply.',body:esc(body)};
+}
+
 function renderCLI() {
   const tabs = $$('#cliTabs button');
   const active = tabs.find(b => b.classList.contains('active')) || tabs[0];

@@ -48,6 +48,9 @@ jobs:
       - name: Bounded stress checks
         run: ./scripts/stress.sh
 
+      - name: Command and browser launcher check
+        run: python3 scripts/test-launcher.py
+
       - name: Local runtime smoke test
         run: ./scripts/smoke-local.sh
 

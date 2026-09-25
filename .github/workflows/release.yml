@@ -2,6 +2,7 @@ name: Release build
 on:
   push:
     tags: ['v*']
+    branches: ['fix/beta-compatibility-install']
 permissions:
   contents: write
 jobs:
@@ -16,18 +17,29 @@ jobs:
           cache: false
       - name: Verify source
         run: ./scripts/verify.sh
+      - name: Command and browser launcher check
+        run: python3 scripts/test-launcher.py
+
       - name: Local runtime smoke test
         run: ./scripts/smoke-local.sh
       - name: Docker build
-        run: docker build --tag nexaroute-release:${GITHUB_REF_NAME} .
+        run: docker build --tag nexaroute-release:verify .
       - name: Build checksum-verified release packages
         run: ./scripts/package-release.sh
       - name: Verify packaged installer and upgrade
         run: ./scripts/test-installer.sh
+      - name: Determine release version
+        id: version
+        shell: bash
+        run: |
+          version="v$(sed -n 's/^const Version = "\([^"]*\)"/\1/p' internal/buildinfo/version.go)"
+          echo "tag=$version" >> "$GITHUB_OUTPUT"
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          prerelease: ${{ contains(github.ref_name, '-') }}
+          tag_name: ${{ steps.version.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          prerelease: ${{ contains(steps.version.outputs.tag, '-') }}
           files: |
             dist/*.tar.gz
             dist/nexaroute-windows-amd64.exe

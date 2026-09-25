@@ -22,7 +22,7 @@
       <button data-tab="models" data-title="Model Deployments"><span class="nav-ico">▦</span>Models</button>
       <button data-tab="health" data-title="Health &amp; Pressure"><span class="nav-ico">♥</span>Health</button>
       <button data-tab="compat" data-title="Compatibility Matrix"><span class="nav-ico">⧉</span>Compat</button>
-      <button data-tab="cli" data-title="CLI Tools"><span class="nav-ico">⌘</span>CLI Tools</button>
+      <button data-tab="cli" data-title="Gateway Endpoint"><span class="nav-ico">⌘</span>Endpoint</button>
       <button data-tab="settings" data-title="Runtime Settings"><span class="nav-ico">⚙</span>Settings</button>
     </nav>
     <div class="sidefoot">
@@ -168,7 +168,17 @@
     <!-- ============ CLI ============ -->
     <section id="cli" class="tab">
       <div class="panel cli-panel">
-        <div class="panelhead"><div><h2>CLI Tools</h2><p>Point coding agents at NexaRoute — Ready Mesh handles the upstream pool.</p></div></div>
+        <div class="panelhead"><div><h2>Gateway Endpoint</h2><p>Point coding agents at NexaRoute — Ready Mesh handles the upstream pool.</p></div></div>
+        <div class="settings-grid">
+          <label>Base URL<input id="endpointURL" readonly></label>
+          <label>Public model name<input id="endpointModel" value="nexaroute" maxlength="128"></label>
+          <label>Gateway API key<input id="endpointKey" type="password" readonly autocomplete="off"></label>
+          <div><button id="endpointSave" class="btn primary">Save / create endpoint</button>
+          <button id="endpointCopyKey" class="btn secondary">Copy key</button>
+          <button id="endpointRotate" class="btn secondary">Replace key</button></div>
+        </div>
+        <p id="endpointStatus" role="status">Loading endpoint…</p>
+        <p>All enabled, eligible models route behind this public name. Add and enable providers first. Replacing the key disconnects clients using the old key.</p>
         <div class="cli-tabs" id="cliTabs">
           <button class="active" data-cli="claude">Claude Code</button>
           <button data-cli="openai">OpenAI-compatible</button>

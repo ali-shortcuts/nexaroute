@@ -36,6 +36,7 @@ if command -v node >/dev/null 2>&1; then
   echo '== web ui javascript syntax =='
   node --check internal/httpapi/web/app.js
   node scripts/test-editor.js
+  node scripts/test-endpoint-ui.js
 else
   echo 'WARN: node not installed; skipping JavaScript syntax check' >&2
 fi

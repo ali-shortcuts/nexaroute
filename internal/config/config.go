@@ -42,6 +42,7 @@ type AdminConfig struct {
 }
 
 type RoutingConfig struct {
+	PublicModel                  string  `json:"public_model"`
 	Strategy                     string  `json:"strategy"`
 	FallbackOnUnknownModel       bool    `json:"fallback_on_unknown_model"`
 	SessionAffinity              bool    `json:"session_affinity"`
@@ -324,6 +325,9 @@ func (c *Config) ApplyDefaults() {
 	if c.Logging.SuccessSampleEvery == 0 {
 		c.Logging.SuccessSampleEvery = 1000
 	}
+	if c.Routing.PublicModel == "" {
+		c.Routing.PublicModel = "nexaroute"
+	}
 	if c.Routing.Strategy == "" {
 		c.Routing.Strategy = "ready_mesh"
 	}
@@ -500,6 +504,9 @@ func (c Config) Validate() error {
 	}
 	if len(c.Providers) > maxProviders {
 		return fmt.Errorf("providers exceeds safe limit %d", maxProviders)
+	}
+	if len(c.Routing.PublicModel) > 128 || strings.ContainsAny(c.Routing.PublicModel, " \t\r\n\"'`$\\") {
+		return errors.New("routing.public_model must be a simple model name of at most 128 bytes")
 	}
 	if c.Routing.Strategy != "ready_mesh" && c.Routing.Strategy != "ready_queue" && c.Routing.Strategy != "cost_aware" && c.Routing.Strategy != "adaptive" && c.Routing.Strategy != "adaptive_round_robin" && c.Routing.Strategy != "priority" && c.Routing.Strategy != "round_robin" && c.Routing.Strategy != "least_latency" {
 		return errors.New("routing.strategy must be ready_mesh, ready_queue, cost_aware, adaptive, adaptive_round_robin, priority, round_robin, or least_latency")

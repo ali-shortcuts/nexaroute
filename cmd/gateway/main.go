@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -31,6 +32,10 @@ func defaultConfigPath() string {
 	if p := os.Getenv("NEXAROUTE_CONFIG"); p != "" {
 		return p
 	}
+	home, err := os.UserHomeDir()
+	if err == nil {
+		return filepath.Join(home, ".config", "nexaroute", "config.json")
+	}
 	return "config.json"
 }
 
@@ -53,6 +58,7 @@ func ensureConfig(path string) error {
 func main() {
 	configPath := flag.String("config", defaultConfigPath(), "path to JSON config")
 	showVersion := flag.Bool("version", false, "print version and exit")
+	noBrowser := flag.Bool("no-browser", os.Getenv("NEXAROUTE_NO_BROWSER") == "1", "do not open the dashboard")
 	flag.Parse()
 	if *showVersion {
 		fmt.Println("NexaRoute v" + version)
@@ -127,14 +133,23 @@ func main() {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
+	listener, err := net.Listen("tcp", cfg.Listen)
+	if err != nil {
+		bootstrap.Fatal(err)
+	}
+	dashboard := dashboardURL(listener.Addr().String())
+	fmt.Printf("NexaRoute v%s\nDashboard: %s\n", version, dashboard)
 	serverErr := make(chan error, 1)
 	go func() {
 		logger.Printf("version=%s config=%s listening=http://%s", version, *configPath, cfg.Listen)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := srv.Serve(listener); err != nil && err != http.ErrServerClosed {
 			serverErr <- err
 			cancel()
 		}
 	}()
+	if !*noBrowser {
+		go openDashboard(ctx, dashboard)
+	}
 	if cfg.Probe.Enabled && cfg.Probe.OnStart {
 		result := pe.Prime(ctx)
 		logger.Printf("startup_probe total=%d ready=%d failed=%d cooldown=%d duration_ms=%d", result.Total, result.Passed, result.Failed, result.SkippedCooldown, result.DurationMS)

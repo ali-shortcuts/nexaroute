@@ -29,4 +29,8 @@ kill -0 "$TEST_PID"
 HOME="$TEST_HOME" bash "$WORK/nexaroute/install-user.sh"
 test "$(sha256sum "$CFG")" = "$BEFORE"
 test "$("$BIN" -version)" = "NexaRoute $VERSION"
+HOME="$TEST_HOME" bash -c 'source "$HOME/.bashrc"; export PATH="$HOME/.local/bin:$PATH"; command -v nexaroute; nexaroute -version'
+for rc in .profile .bashrc .zshrc; do
+  test "$(grep -c '^# NexaRoute command path$' "$TEST_HOME/$rc")" = 1
+done
 echo 'INSTALLER PASS: checksums, package, paths with spaces, config preservation, live binary upgrade'

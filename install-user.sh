@@ -39,12 +39,26 @@ else
   echo "Kept existing config: $CFG"
 fi
 mv -f "$STAGED" "$HOME/.local/bin/nexaroute"
+# Make the command available in future Bash/Zsh sessions without root access.
+for rc in "$HOME/.profile" "$HOME/.bashrc" "$HOME/.zshrc"; do
+  if ! grep -q '^# NexaRoute command path$' "$rc" 2>/dev/null; then
+    cat >> "$rc" <<'PATH_BLOCK'
+
+# NexaRoute command path
+case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin:$PATH" ;; esac
+PATH_BLOCK
+  fi
+done
 cat <<MSG
 Installed: $HOME/.local/bin/nexaroute
 Config:    $CFG
 
-Run:
-  "$HOME/.local/bin/nexaroute" -config "$CFG"
+Run in this terminal:
+  export PATH="\$HOME/.local/bin:\$PATH"
+  nexaroute
+
+Future terminals: nexaroute
+Chrome opens automatically on a desktop. Use nexaroute -no-browser on a server.
 
 Dashboard: http://127.0.0.1:8080/
 Providers start disabled; configure and enable them in the dashboard.

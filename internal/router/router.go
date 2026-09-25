@@ -240,7 +240,7 @@ func (r *Router) scored(d Deployment, hs health.State, req Requirement, cfg conf
 }
 
 func (r *Router) eligibleDeployment(d Deployment, req Requirement, cfg config.Config, ignoreModel bool, scopes []string) (Scored, bool) {
-	if !ignoreModel && !matchesModel(d, req.Model) {
+	if !ignoreModel && req.Model != cfg.Routing.PublicModel && !matchesModel(d, req.Model) {
 		return Scored{}, false
 	}
 	if req.ProviderType != "" && d.ProviderType != req.ProviderType {
@@ -517,7 +517,7 @@ func (r *Router) Candidates(req Requirement) []Scored {
 	cfg := r.cfg
 	all := r.all
 	source := all
-	known := req.Model == "" || req.Model == "auto" || req.Model == "claude-auto"
+	known := req.Model == cfg.Routing.PublicModel || req.Model == "" || req.Model == "auto" || req.Model == "claude-auto"
 	if !known {
 		source = r.byModel[req.Model]
 		known = len(source) > 0

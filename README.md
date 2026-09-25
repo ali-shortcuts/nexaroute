@@ -1,4 +1,37 @@
-# NexaRoute — 0.6.1-beta.2
+## One endpoint for your coding tools — beta.3
+
+Install or upgrade on Ubuntu/Linux or macOS (curl and tar required):
+
+```bash
+bash -c 'set -o pipefail; curl -fsSL https://raw.githubusercontent.com/ali-shortcuts/nexaroute/fix/beta-compatibility-install/install.sh | bash' && export PATH="$HOME/.local/bin:$PATH"
+nexaroute
+```
+
+The installer downloads the published beta.3 binary and verifies SHA256. No Go
+compiler is required. Existing settings are preserved. Future Bash/Zsh terminals
+recognize `nexaroute` directly. On a desktop, Chrome opens automatically (the
+system browser is the fallback); on SSH/headless servers the URL is printed.
+Use `nexaroute -no-browser` to suppress opening. The program runs in the foreground.
+
+1. Add providers and enable their models under **Providers**.
+2. Open **Endpoint**, choose one public model name (default `nexaroute`), and click
+   **Save / create endpoint**. This enables gateway API-key authentication.
+3. Copy the generated key and the Claude Code command block. Every eligible enabled
+   model, including future additions, is routed behind that one public name.
+4. Changing providers does not require changing the client URL/key/model. Replacing
+   the gateway key revokes the previous first client key; update its clients.
+
+The key protects all inference/model-discovery endpoints and is distinct from
+provider keys and the admin credential. Endpoint setup requires existing admin
+access and preserves additional configured client keys. Keys are stored in the
+owner-only config file; the endpoint key is displayed only through the protected
+Endpoint API, never the general snapshot. This is one shared routing pool, not
+per-key tenant isolation. Session affinity, health, capacity, priority and
+capability filters remain in force. Unsupported provider features remain limited.
+
+---
+
+# NexaRoute — 0.6.1-beta.3
 
 A self-hosted Go LLM gateway with an embedded dashboard. Route OpenAI Chat,
 Anthropic Messages and a **stateless subset** of OpenAI Responses across
@@ -18,7 +51,7 @@ The installer verifies the downloaded archive against release SHA256SUMS.
 This command requires the matching GitHub Release to have been published:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ali-shortcuts/nexaroute/v0.6.1-beta.2/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/ali-shortcuts/nexaroute/v0.6.1-beta.3/install.sh | bash
 ```
 
 ### Install the review beta from source
@@ -165,8 +198,8 @@ systemctl --user enable --now nexaroute
 Docker:
 
 ```bash
-docker build -t nexaroute:0.6.1-beta.2 .
-docker run --rm -p 127.0.0.1:8080:8080 -e NEXAROUTE_ADMIN_KEY='replace-with-a-random-secret' nexaroute:0.6.1-beta.2
+docker build -t nexaroute:0.6.1-beta.3 .
+docker run --rm -p 127.0.0.1:8080:8080 -e NEXAROUTE_ADMIN_KEY='replace-with-a-random-secret' nexaroute:0.6.1-beta.3
 ```
 
 Persist `/config` with appropriate ownership if using Docker beyond a temporary
