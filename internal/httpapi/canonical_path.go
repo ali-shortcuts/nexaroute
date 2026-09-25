@@ -273,10 +273,28 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 	req.MaxOutputTokens = in.MaxOutputTokens
 	req.MinContextWindow = req.EstimatedInputTokens + req.MaxOutputTokens
 	req = s.prepareRequirement(req, r, inspection.BodySessionKey)
-	cfg, candidates := s.routeSnapshot(req)
+	cfg, candidates, resolvedRoute, resolveErr := s.candidatesForRequirement(req, "openai_responses")
+	if resolveErr != nil {
+		if strings.Contains(resolveErr.Error(), "disabled") {
+			canonicalErrorJSON(w, "openai_responses", http.StatusNotFound, "invalid_request_error", resolveErr.Error())
+		} else {
+			canonicalErrorJSON(w, "openai_responses", http.StatusBadRequest, "invalid_request_error", resolveErr.Error())
+		}
+		return
+	}
 	if len(candidates) == 0 {
 		canonicalErrorJSON(w, "openai_responses", http.StatusServiceUnavailable, "server_error", "no compatible healthy deployment")
 		return
+	}
+	if resolvedRoute != nil {
+		w.Header().Set("X-Gateway-Virtual-Endpoint", resolvedRoute.VirtualEndpointID)
+		w.Header().Set("X-Gateway-Public-Model", resolvedRoute.PublicModel)
+		w.Header().Set("X-Gateway-Route-Profile", resolvedRoute.RouteProfileID)
+	}
+	// For virtual endpoints, ignore virtual model for eligibility.
+	reqEligible := req
+	if resolvedRoute != nil {
+		reqEligible.Model = ""
 	}
 	max := cfg.Routing.MaxAttempts
 	if max > len(candidates) {
@@ -300,7 +318,7 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 			dialect = s.dialectFor(deployment.ProviderID, deployment.ProviderType, "")
 			dialects[deployment.ProviderID] = dialect
 		}
-		bundle, ok := s.buildCanonicalAttempt(c, req, canReq, in.Model, profile)
+		bundle, ok := s.buildCanonicalAttempt(c, reqEligible, canReq, in.Model, profile)
 		if !ok {
 			lastErr = "candidate could not serve this request"
 			continue
@@ -416,8 +434,15 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 		}
 		s.recordRouteSuccess(req, deploy.ID, deploy.ProviderID, time.Since(start))
 		s.learnFromSuccess(deploy.ID, deploy.ProviderID, deploy, sent, &canReq)
-		s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_ok", Deployment: deploy.ID,
-			Message: "request completed", LatencyMS: total.Milliseconds()})
+		ev := events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_ok", Deployment: deploy.ID,
+			Message: "request completed", LatencyMS: total.Milliseconds()}
+		if resolvedRoute != nil {
+			ev.VirtualEndpoint = resolvedRoute.VirtualEndpointID
+			ev.PublicModel = resolvedRoute.PublicModel
+			ev.RouteProfile = resolvedRoute.RouteProfileID
+			ev.Pool = resolvedRoute.PrimaryPoolID
+		}
+		s.bus.Add(ev)
 		return
 	}
 	if lastErr == "" {

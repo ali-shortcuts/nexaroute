@@ -7,24 +7,32 @@ import (
 )
 
 type Event struct {
-	Time       time.Time `json:"time"`
-	RequestID  string    `json:"request_id,omitempty"`
-	Kind       string    `json:"kind"`
-	Deployment string    `json:"deployment,omitempty"`
-	Message    string    `json:"message"`
-	LatencyMS  int64     `json:"latency_ms,omitempty"`
-	StatusCode int       `json:"status_code,omitempty"`
-	ErrorType  string    `json:"error_type,omitempty"`
+	Time            time.Time `json:"time"`
+	RequestID       string    `json:"request_id,omitempty"`
+	Kind            string    `json:"kind"`
+	Deployment      string    `json:"deployment,omitempty"`
+	Message         string    `json:"message"`
+	LatencyMS       int64     `json:"latency_ms,omitempty"`
+	StatusCode      int       `json:"status_code,omitempty"`
+	ErrorType       string    `json:"error_type,omitempty"`
+	VirtualEndpoint string    `json:"virtual_endpoint,omitempty"`
+	PublicModel     string    `json:"public_model,omitempty"`
+	RouteProfile    string    `json:"route_profile,omitempty"`
+	Pool            string    `json:"pool,omitempty"`
 }
 
 const (
-	maxCounterKeys     = 256
-	maxEventRequestID  = 128
-	maxEventKind       = 128
-	maxEventDeployment = 512
-	maxEventMessage    = 4096
-	maxEventErrorType  = 128
-	counterOverflowKey = "__other__"
+	maxCounterKeys        = 256
+	maxEventRequestID     = 128
+	maxEventKind          = 128
+	maxEventDeployment    = 512
+	maxEventMessage       = 4096
+	maxEventErrorType     = 128
+	maxEventVirtual       = 256
+	maxEventPublicModel   = 256
+	maxEventRouteProfile  = 256
+	maxEventPool          = 256
+	counterOverflowKey    = "__other__"
 )
 
 func boundedString(s string, max int) string {
@@ -87,6 +95,10 @@ func (b *Bus) Add(e Event) {
 	e.Deployment = boundedString(e.Deployment, maxEventDeployment)
 	e.Message = boundedString(e.Message, maxEventMessage)
 	e.ErrorType = boundedString(e.ErrorType, maxEventErrorType)
+	e.VirtualEndpoint = boundedString(e.VirtualEndpoint, maxEventVirtual)
+	e.PublicModel = boundedString(e.PublicModel, maxEventPublicModel)
+	e.RouteProfile = boundedString(e.RouteProfile, maxEventRouteProfile)
+	e.Pool = boundedString(e.Pool, maxEventPool)
 	if b.count < b.max {
 		idx := (b.start + b.count) % b.max
 		b.items[idx] = e

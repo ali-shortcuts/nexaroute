@@ -15,15 +15,56 @@ import (
 	"time"
 )
 
+type VirtualEndpointConfig struct {
+	ID           string   `json:"id"`
+	Name         string   `json:"name,omitempty"`
+	Enabled      *bool    `json:"enabled,omitempty"`
+	PublicModel  string   `json:"public_model"`
+	RouteProfile string   `json:"route_profile"`
+	Protocols    []string `json:"protocols,omitempty"`
+}
+
+func (v VirtualEndpointConfig) IsEnabled() bool {
+	if v.Enabled == nil {
+		return true
+	}
+	return *v.Enabled
+}
+
+type RouteProfileConfig struct {
+	ID            string `json:"id"`
+	Name          string `json:"name,omitempty"`
+	CandidatePool string `json:"candidate_pool"`
+	FallbackChain string `json:"fallback_chain,omitempty"`
+	Strategy      string `json:"strategy,omitempty"`
+}
+
+type CandidatePoolConfig struct {
+	ID          string   `json:"id"`
+	Name        string   `json:"name,omitempty"`
+	Mode        string   `json:"mode,omitempty"` // explicit or all
+	Deployments []string `json:"deployments,omitempty"`
+}
+
+type FallbackChainConfig struct {
+	ID    string   `json:"id"`
+	Name  string   `json:"name,omitempty"`
+	Pools []string `json:"pools"`
+}
+
 type Config struct {
-	Listen     string           `json:"listen"`
-	Admin      AdminConfig      `json:"admin"`
-	Logging    LoggingConfig    `json:"logging"`
-	Routing    RoutingConfig    `json:"routing"`
-	Probe      ProbeConfig      `json:"probe"`
-	Cache      CacheConfig      `json:"cache"`
-	ClientAuth ClientAuthConfig `json:"client_auth"`
-	Providers  []ProviderConfig `json:"providers"`
+	Listen           string                  `json:"listen"`
+	Admin            AdminConfig             `json:"admin"`
+	Logging          LoggingConfig           `json:"logging"`
+	Routing          RoutingConfig           `json:"routing"`
+	Probe            ProbeConfig             `json:"probe"`
+	Cache            CacheConfig             `json:"cache"`
+	ClientAuth       ClientAuthConfig        `json:"client_auth"`
+	Providers        []ProviderConfig        `json:"providers"`
+	VirtualEndpoints []VirtualEndpointConfig `json:"virtual_endpoints,omitempty"`
+	RouteProfiles    []RouteProfileConfig    `json:"route_profiles,omitempty"`
+	CandidatePools   []CandidatePoolConfig   `json:"candidate_pools,omitempty"`
+	FallbackChains   []FallbackChainConfig   `json:"fallback_chains,omitempty"`
 }
 
 type LoggingConfig struct {
@@ -70,6 +111,12 @@ type RoutingConfig struct {
 	// SanitizeEnabled enables proactive pre-dispatch parameter
 	// sanitization against the cached capability contract.
 	SanitizeEnabled bool `json:"sanitize_enabled"`
+	// PublicModel is the legacy single-endpoint public model name from
+	// PR #13 (Beta 0.6.1). It is deprecated in favor of virtual_endpoints
+	// but preserved for backward compatibility. When set and no virtual
+	// endpoints are defined, it is auto-migrated to a default virtual
+	// endpoint with an all-eligible pool.
+	PublicModel string `json:"public_model,omitempty"`
 }
 
 // CacheConfig gates the exact-match response cache. It is deliberately
@@ -180,6 +227,17 @@ const (
 	maxTotalDeployments       = 20000
 	maxTotalAliases           = 100000
 	maxConfigBytes            = 16 << 20
+	// Phase B limits
+	maxVirtualEndpoints   = 256
+	maxRouteProfiles      = 256
+	maxCandidatePools     = 256
+	maxFallbackChains     = 256
+	maxPoolDeployments    = 4096
+	maxFallbackPools      = 32
+	maxProtocols          = 16
+	maxPublicModelBytes   = 128
+	maxPoolIDBytes        = 256
+	maxVirtualEndpointName = 256
 )
 
 func validLocalID(s string) bool {
@@ -399,6 +457,71 @@ func (c *Config) ApplyDefaults() {
 	for i := range c.Providers {
 		c.Providers[i].ApplyDefaults()
 	}
+	// Normalize legacy public_model.
+	c.Routing.PublicModel = strings.TrimSpace(c.Routing.PublicModel)
+	// Normalize virtual endpoints, route profiles, pools, fallback chains.
+	for i := range c.VirtualEndpoints {
+		ve := &c.VirtualEndpoints[i]
+		ve.ID = strings.TrimSpace(ve.ID)
+		ve.Name = strings.TrimSpace(ve.Name)
+		ve.PublicModel = strings.TrimSpace(ve.PublicModel)
+		ve.RouteProfile = strings.TrimSpace(ve.RouteProfile)
+		for j := range ve.Protocols {
+			ve.Protocols[j] = strings.TrimSpace(ve.Protocols[j])
+		}
+		if ve.Enabled == nil {
+			t := true
+			ve.Enabled = &t
+		}
+	}
+	for i := range c.RouteProfiles {
+		rp := &c.RouteProfiles[i]
+		rp.ID = strings.TrimSpace(rp.ID)
+		rp.Name = strings.TrimSpace(rp.Name)
+		rp.CandidatePool = strings.TrimSpace(rp.CandidatePool)
+		rp.FallbackChain = strings.TrimSpace(rp.FallbackChain)
+		rp.Strategy = strings.TrimSpace(rp.Strategy)
+	}
+	for i := range c.CandidatePools {
+		cp := &c.CandidatePools[i]
+		cp.ID = strings.TrimSpace(cp.ID)
+		cp.Name = strings.TrimSpace(cp.Name)
+		cp.Mode = strings.TrimSpace(strings.ToLower(cp.Mode))
+		if cp.Mode == "" {
+			cp.Mode = "explicit"
+		}
+		for j := range cp.Deployments {
+			cp.Deployments[j] = strings.TrimSpace(cp.Deployments[j])
+		}
+	}
+	for i := range c.FallbackChains {
+		fc := &c.FallbackChains[i]
+		fc.ID = strings.TrimSpace(fc.ID)
+		fc.Name = strings.TrimSpace(fc.Name)
+		for j := range fc.Pools {
+			fc.Pools[j] = strings.TrimSpace(fc.Pools[j])
+		}
+	}
+	// Backward compatibility: legacy public_model → default virtual endpoint.
+	if c.Routing.PublicModel != "" && len(c.VirtualEndpoints) == 0 {
+		t := true
+		// Only synthesize if legacy model is valid; validation will catch invalid.
+		if len(c.CandidatePools) == 0 {
+			c.CandidatePools = []CandidatePoolConfig{{ID: "default", Name: "Default (all eligible)", Mode: "all"}}
+		}
+		if len(c.RouteProfiles) == 0 {
+			poolID := c.CandidatePools[0].ID
+			if poolID == "" {
+				poolID = "default"
+			}
+			c.RouteProfiles = []RouteProfileConfig{{ID: "default", Name: "Default", CandidatePool: poolID}}
+		}
+		profileID := c.RouteProfiles[0].ID
+		if profileID == "" {
+			profileID = "default"
+		}
+		c.VirtualEndpoints = []VirtualEndpointConfig{{ID: "default", Name: "Default", Enabled: &t, PublicModel: c.Routing.PublicModel, RouteProfile: profileID}}
+	}
 }
 
 func (p *ProviderConfig) ApplyDefaults() {
@@ -469,8 +592,6 @@ func (c Config) Validate() error {
 		host = "0.0.0.0"
 	}
 	if net.ParseIP(strings.Trim(host, "[]")) == nil && host != "localhost" {
-		// Hostnames are allowed (DNS listeners), but garbage values that can
-		// never bind are rejected up front instead of failing mid-startup.
 		if net.ParseIP(host) == nil && !strings.Contains(host, ":") && strings.ContainsAny(host, "/\\ ") {
 			return fmt.Errorf("listen host %q is not a valid address", host)
 		}
@@ -604,6 +725,15 @@ func (c Config) Validate() error {
 	if c.Probe.RecoveryRetryMS < 0 || c.Probe.RecoveryRetryMS > 60000 {
 		return errors.New("probe.recovery_retry_ms must be between 0 and 60000")
 	}
+	// Legacy public_model validation (PR #13 compatibility)
+	if c.Routing.PublicModel != "" {
+		if len(c.Routing.PublicModel) > maxPublicModelBytes || strings.ContainsAny(c.Routing.PublicModel, " \t\r\n\"'`$\\") {
+			return errors.New("routing.public_model must be a simple model name of at most 128 bytes")
+		}
+		if c.Routing.PublicModel == "auto" || c.Routing.PublicModel == "claude-auto" {
+			return errors.New("routing.public_model must not be auto or claude-auto")
+		}
+	}
 	seenP := map[string]bool{}
 	seenD := map[string]bool{}
 	totalModels := 0
@@ -723,6 +853,207 @@ func (c Config) Validate() error {
 			seenD[key] = true
 			if m.Model == "" {
 				return fmt.Errorf("deployment %q model is required", key)
+			}
+		}
+	}
+	// Phase B: Virtual Endpoints, Route Profiles, Candidate Pools, Fallback Chains
+	if len(c.VirtualEndpoints) > maxVirtualEndpoints {
+		return fmt.Errorf("virtual_endpoints exceeds safe limit %d", maxVirtualEndpoints)
+	}
+	if len(c.RouteProfiles) > maxRouteProfiles {
+		return fmt.Errorf("route_profiles exceeds safe limit %d", maxRouteProfiles)
+	}
+	if len(c.CandidatePools) > maxCandidatePools {
+		return fmt.Errorf("candidate_pools exceeds safe limit %d", maxCandidatePools)
+	}
+	if len(c.FallbackChains) > maxFallbackChains {
+		return fmt.Errorf("fallback_chains exceeds safe limit %d", maxFallbackChains)
+	}
+	// Collect physical model identifiers for collision detection
+	physicalIDs := map[string]struct{}{}
+	for _, p := range c.Providers {
+		for _, m := range p.Models {
+			if !m.Enabled {
+				continue
+			}
+			physicalIDs[m.ID] = struct{}{}
+			physicalIDs[m.Model] = struct{}{}
+			physicalIDs[p.ID+"/"+m.ID] = struct{}{}
+			for _, a := range m.Aliases {
+				if a != "" {
+					physicalIDs[a] = struct{}{}
+				}
+			}
+		}
+	}
+	physicalIDs["auto"] = struct{}{}
+	physicalIDs["claude-auto"] = struct{}{}
+
+	// Candidate pools
+	poolIDs := map[string]struct{}{}
+	for i, cp := range c.CandidatePools {
+		if cp.ID == "" {
+			return fmt.Errorf("candidate_pools[%d].id is required", i)
+		}
+		if len(cp.ID) > maxPoolIDBytes || !validLocalID(cp.ID) {
+			return fmt.Errorf("candidate pool id %q invalid", cp.ID)
+		}
+		if _, dup := poolIDs[cp.ID]; dup {
+			return fmt.Errorf("duplicate candidate pool id %q", cp.ID)
+		}
+		poolIDs[cp.ID] = struct{}{}
+		if len(cp.Name) > maxVirtualEndpointName {
+			return fmt.Errorf("candidate pool %q name too long", cp.ID)
+		}
+		if cp.Mode != "explicit" && cp.Mode != "all" {
+			return fmt.Errorf("candidate pool %q mode must be explicit or all", cp.ID)
+		}
+		if len(cp.Deployments) > maxPoolDeployments {
+			return fmt.Errorf("candidate pool %q deployments exceeds limit %d", cp.ID, maxPoolDeployments)
+		}
+		for j, d := range cp.Deployments {
+			if d == "" {
+				return fmt.Errorf("candidate pool %q deployment[%d] is empty", cp.ID, j)
+			}
+			if len(d) > maxStringIDBytes {
+				return fmt.Errorf("candidate pool %q deployment %q too long", cp.ID, d)
+			}
+			if strings.ContainsAny(d, " \t\r\n\"'`$\\") {
+				return fmt.Errorf("candidate pool %q deployment %q contains invalid characters", cp.ID, d)
+			}
+		}
+	}
+
+	// Fallback chains
+	chainIDs := map[string]struct{}{}
+	for i, fc := range c.FallbackChains {
+		if fc.ID == "" {
+			return fmt.Errorf("fallback_chains[%d].id is required", i)
+		}
+		if len(fc.ID) > maxPoolIDBytes || !validLocalID(fc.ID) {
+			return fmt.Errorf("fallback chain id %q invalid", fc.ID)
+		}
+		if _, dup := chainIDs[fc.ID]; dup {
+			return fmt.Errorf("duplicate fallback chain id %q", fc.ID)
+		}
+		chainIDs[fc.ID] = struct{}{}
+		if len(fc.Name) > maxVirtualEndpointName {
+			return fmt.Errorf("fallback chain %q name too long", fc.ID)
+		}
+		if len(fc.Pools) == 0 {
+			return fmt.Errorf("fallback chain %q must have at least one pool", fc.ID)
+		}
+		if len(fc.Pools) > maxFallbackPools {
+			return fmt.Errorf("fallback chain %q exceeds pool limit %d", fc.ID, maxFallbackPools)
+		}
+		seenPool := map[string]struct{}{}
+		for j, pid := range fc.Pools {
+			if pid == "" {
+				return fmt.Errorf("fallback chain %q pool[%d] is empty", fc.ID, j)
+			}
+			if _, ok := poolIDs[pid]; !ok {
+				return fmt.Errorf("fallback chain %q references unknown pool %q", fc.ID, pid)
+			}
+			if _, dup := seenPool[pid]; dup {
+				return fmt.Errorf("fallback chain %q contains duplicate pool %q", fc.ID, pid)
+			}
+			seenPool[pid] = struct{}{}
+		}
+	}
+
+	// Route profiles
+	profileIDs := map[string]struct{}{}
+	for i, rp := range c.RouteProfiles {
+		if rp.ID == "" {
+			return fmt.Errorf("route_profiles[%d].id is required", i)
+		}
+		if len(rp.ID) > maxPoolIDBytes || !validLocalID(rp.ID) {
+			return fmt.Errorf("route profile id %q invalid", rp.ID)
+		}
+		if _, dup := profileIDs[rp.ID]; dup {
+			return fmt.Errorf("duplicate route profile id %q", rp.ID)
+		}
+		profileIDs[rp.ID] = struct{}{}
+		if len(rp.Name) > maxVirtualEndpointName {
+			return fmt.Errorf("route profile %q name too long", rp.ID)
+		}
+		if rp.CandidatePool == "" {
+			return fmt.Errorf("route profile %q candidate_pool is required", rp.ID)
+		}
+		if _, ok := poolIDs[rp.CandidatePool]; !ok {
+			return fmt.Errorf("route profile %q references unknown candidate pool %q", rp.ID, rp.CandidatePool)
+		}
+		if rp.FallbackChain != "" {
+			if _, ok := chainIDs[rp.FallbackChain]; !ok {
+				return fmt.Errorf("route profile %q references unknown fallback chain %q", rp.ID, rp.FallbackChain)
+			}
+		}
+		if rp.Strategy != "" {
+			if rp.Strategy != "ready_mesh" && rp.Strategy != "ready_queue" && rp.Strategy != "cost_aware" && rp.Strategy != "adaptive" && rp.Strategy != "adaptive_round_robin" && rp.Strategy != "priority" && rp.Strategy != "round_robin" && rp.Strategy != "least_latency" && rp.Strategy != "inherit" {
+				return fmt.Errorf("route profile %q has invalid strategy %q", rp.ID, rp.Strategy)
+			}
+		}
+	}
+
+	// Virtual endpoints
+	veIDs := map[string]struct{}{}
+	vePublicModels := map[string]struct{}{}
+	for i, ve := range c.VirtualEndpoints {
+		if ve.ID == "" {
+			return fmt.Errorf("virtual_endpoints[%d].id is required", i)
+		}
+		if len(ve.ID) > maxPoolIDBytes || !validLocalID(ve.ID) {
+			return fmt.Errorf("virtual endpoint id %q invalid", ve.ID)
+		}
+		if _, dup := veIDs[ve.ID]; dup {
+			return fmt.Errorf("duplicate virtual endpoint id %q", ve.ID)
+		}
+		veIDs[ve.ID] = struct{}{}
+		if len(ve.Name) > maxVirtualEndpointName {
+			return fmt.Errorf("virtual endpoint %q name too long", ve.ID)
+		}
+		if ve.PublicModel == "" {
+			return fmt.Errorf("virtual endpoint %q public_model is required", ve.ID)
+		}
+		if len(ve.PublicModel) > maxPublicModelBytes {
+			return fmt.Errorf("virtual endpoint %q public_model too long", ve.ID)
+		}
+		if strings.ContainsAny(ve.PublicModel, " \t\r\n\"'`$\\") {
+			return fmt.Errorf("virtual endpoint %q public_model contains invalid characters", ve.ID)
+		}
+		if ve.PublicModel == "auto" || ve.PublicModel == "claude-auto" {
+			return fmt.Errorf("virtual endpoint %q public_model must not be auto or claude-auto", ve.ID)
+		}
+		if _, dup := vePublicModels[ve.PublicModel]; dup {
+			return fmt.Errorf("duplicate virtual endpoint public_model %q", ve.PublicModel)
+		}
+		vePublicModels[ve.PublicModel] = struct{}{}
+		// Collision with physical models/aliases
+		if _, collides := physicalIDs[ve.PublicModel]; collides {
+			return fmt.Errorf("virtual endpoint %q public_model %q collides with existing physical model/alias", ve.ID, ve.PublicModel)
+		}
+		if ve.RouteProfile == "" {
+			return fmt.Errorf("virtual endpoint %q route_profile is required", ve.ID)
+		}
+		if _, ok := profileIDs[ve.RouteProfile]; !ok {
+			return fmt.Errorf("virtual endpoint %q references unknown route profile %q", ve.ID, ve.RouteProfile)
+		}
+		if len(ve.Protocols) > maxProtocols {
+			return fmt.Errorf("virtual endpoint %q protocols exceeds limit %d", ve.ID, maxProtocols)
+		}
+		for _, proto := range ve.Protocols {
+			if proto == "" {
+				return fmt.Errorf("virtual endpoint %q has empty protocol", ve.ID)
+			}
+			if len(proto) > 64 {
+				return fmt.Errorf("virtual endpoint %q protocol %q too long", ve.ID, proto)
+			}
+			// Allow letters, digits, hyphen, underscore
+			for _, ch := range proto {
+				if (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '-' || ch == '_' {
+					continue
+				}
+				return fmt.Errorf("virtual endpoint %q protocol %q invalid", ve.ID, proto)
 			}
 		}
 	}

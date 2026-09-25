@@ -148,6 +148,49 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 	eventLimit := parseLimit("events", 500)
 	cfgFull := s.currentConfig()
 	usageSnap := s.usageSnapshotWithPrices(cfgFull)
+	// Virtual endpoint observability: include expanded counts
+	s.runtimeMu.RLock()
+	resolver := s.routeResolver
+	s.runtimeMu.RUnlock()
+	var veList any = cfgFull.VirtualEndpoints
+	var rpList any = cfgFull.RouteProfiles
+	var cpList any = cfgFull.CandidatePools
+	var fcList any = cfgFull.FallbackChains
+	if resolver != nil {
+		// Enrich VE list with eligibility
+		ves := []map[string]any{}
+		for _, ve := range cfgFull.VirtualEndpoints {
+			// Find primary pool via profile
+			poolID := ""
+			for _, rp := range cfgFull.RouteProfiles {
+				if rp.ID == ve.RouteProfile {
+					poolID = rp.CandidatePool
+					break
+				}
+			}
+			eligible := 0
+			if poolID != "" {
+				if set, ok := resolver.GetExpanded(poolID); ok {
+					eligible = len(set)
+				}
+			}
+			ves = append(ves, map[string]any{
+				"id": ve.ID, "name": ve.Name, "enabled": ve.IsEnabled(),
+				"public_model": ve.PublicModel, "route_profile": ve.RouteProfile,
+				"protocols": ve.Protocols, "eligible": eligible,
+			})
+		}
+		veList = ves
+		cps := []map[string]any{}
+		for _, cp := range cfgFull.CandidatePools {
+			item := map[string]any{"id": cp.ID, "name": cp.Name, "mode": cp.Mode, "deployments": cp.Deployments}
+			if set, ok := resolver.GetExpanded(cp.ID); ok {
+				item["expanded_count"] = len(set)
+			}
+			cps = append(cps, item)
+		}
+		cpList = cps
+	}
 	writeJSON(w, 200, map[string]any{
 		"deployments":        deployments,
 		"deployment_total":   totalDeployments,
@@ -170,6 +213,10 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 			"keys":    len(cfgFull.ClientAuth.Keys),
 			"rpm":     cfgFull.ClientAuth.RPM,
 		},
+		"virtual_endpoints": veList,
+		"route_profiles":    rpList,
+		"candidate_pools":   cpList,
+		"fallback_chains":   fcList,
 		"config": map[string]any{
 			"probe":   probeCfg,
 			"routing": routingCfg,

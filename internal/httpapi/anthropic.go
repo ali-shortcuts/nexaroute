@@ -57,21 +57,39 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 	req.MaxOutputTokens = in.MaxTokens
 	req.MinContextWindow = req.EstimatedInputTokens + req.MaxOutputTokens
 	req = s.prepareRequirement(req, r, inspection.BodySessionKey)
-	cfg, candidates := s.routeSnapshot(req)
+	cfg, candidates, resolvedRoute, resolveErr := s.candidatesForRequirement(req, "anthropic")
+	if resolveErr != nil {
+		// Disabled endpoint or protocol not allowed
+		if strings.Contains(resolveErr.Error(), "disabled") {
+			anthropicErrorJSON(w, 404, resolveErr.Error())
+		} else {
+			anthropicErrorJSON(w, 400, resolveErr.Error())
+		}
+		return
+	}
 	if len(candidates) == 0 && req.ProviderType != "" {
-		// A reasoning request with no Anthropic-compatible deployment still
-		// deserves a chance against reasoning-capable OpenAI-compatible
-		// deployments; capability gating stays fully enforced.
 		relaxed := req
 		relaxed.ProviderType = ""
-		if c2, cand2 := s.routeSnapshot(relaxed); len(cand2) > 0 {
+		if c2, cand2, rr2, err2 := s.candidatesForRequirement(relaxed, "anthropic"); len(cand2) > 0 && err2 == nil {
 			req = relaxed
 			cfg, candidates = c2, cand2
+			resolvedRoute = rr2
 		}
 	}
 	if len(candidates) == 0 {
 		anthropicErrorJSON(w, 503, "no compatible healthy deployment")
 		return
+	}
+	// For observability: if virtual endpoint, add headers
+	if resolvedRoute != nil {
+		w.Header().Set("X-Gateway-Virtual-Endpoint", resolvedRoute.VirtualEndpointID)
+		w.Header().Set("X-Gateway-Public-Model", resolvedRoute.PublicModel)
+		w.Header().Set("X-Gateway-Route-Profile", resolvedRoute.RouteProfileID)
+	}
+	// For virtual endpoints, ignore virtual public model for eligibility.
+	reqEligible := req
+	if resolvedRoute != nil {
+		reqEligible.Model = ""
 	}
 	// Exact-match response cache (opt-in; see cache_wiring.go).
 	cacheKey, cacheable := s.cacheLookupFor(r.URL.Path, raw, in.Stream, in.Temperature, in.TopP)
@@ -102,13 +120,13 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		if _, ineligible := s.capabilityIneligible(r.Header.Get("x-request-id"), c.Deployment.ID, profile); ineligible {
 			continue
 		}
-		fresh, a, ok := s.currentRouteCandidate(c.Deployment.ID, req)
+		fresh, a, ok := s.currentRouteCandidate(c.Deployment.ID, reqEligible)
 		if !ok {
 			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_skip", Deployment: c.Deployment.ID, Message: "candidate is no longer eligible or provider changed"})
 			continue
 		}
 		c = fresh
-		primary, ok := s.buildAnthropicAttempt(c, req, raw, in)
+		primary, ok := s.buildAnthropicAttempt(c, reqEligible, raw, in)
 		if !ok {
 			lastErr = "attempt payload could not be built"
 			continue
@@ -124,7 +142,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		out, winner, hedgeLaunched := s.doAttemptWithHedge(routeCtx, r.Header.Get("x-request-id"), cfg, candidates, i, attempts, max, primary,
 			func(idx int) (hedgeAttemptBundle, bool) {
-				return s.buildAnthropicAttempt(candidates[idx], req, raw, in)
+				return s.buildAnthropicAttempt(candidates[idx], reqEligible, raw, in)
 			},
 			in.Stream, forward)
 		if hedgeLaunched {
@@ -353,7 +371,14 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		}
 		s.recordRouteSuccess(req, c.Deployment.ID, c.Deployment.ProviderID, headerLatency)
 		s.learnFromSuccess(c.Deployment.ID, c.Deployment.ProviderID, c.Deployment, payload, nil)
-		s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_ok", Deployment: c.Deployment.ID, Message: "request completed", LatencyMS: totalLatency.Milliseconds(), StatusCode: resp.StatusCode})
+		ev := events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_ok", Deployment: c.Deployment.ID, Message: "request completed", LatencyMS: totalLatency.Milliseconds(), StatusCode: resp.StatusCode}
+		if resolvedRoute != nil {
+			ev.VirtualEndpoint = resolvedRoute.VirtualEndpointID
+			ev.PublicModel = resolvedRoute.PublicModel
+			ev.RouteProfile = resolvedRoute.RouteProfileID
+			ev.Pool = resolvedRoute.PrimaryPoolID
+		}
+		s.bus.Add(ev)
 		return
 	}
 	if gatewayDeadlineExceeded(routeCtx, r.Context()) {

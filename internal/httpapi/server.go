@@ -23,6 +23,7 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/health"
 	"github.com/ali-shortcuts/nexaroute/internal/probe"
 	"github.com/ali-shortcuts/nexaroute/internal/providers"
+	"github.com/ali-shortcuts/nexaroute/internal/route"
 	"github.com/ali-shortcuts/nexaroute/internal/router"
 	"github.com/ali-shortcuts/nexaroute/internal/usage"
 )
@@ -52,6 +53,7 @@ type Server struct {
 	respCache       *cache.Cache
 	usage           *usage.Tracker
 	capStore        *compat.Store
+	routeResolver   *route.Resolver
 }
 
 // adminBucket is a compact token bucket keyed by remote address. Capacity 90
@@ -155,12 +157,14 @@ func New(cfg config.Config, configPath string, reg *providers.Registry, rt *rout
 		cfg.ProviderFailureWindow(),
 		cfg.ProviderCooldown(),
 	)
-	return &Server{
+	s := &Server{
 		cfg: cfg, configPath: configPath, reg: reg, rt: rt, hm: hm, bus: bus, probe: pe, log: l,
 		respCache: cache.New(cfg.CacheTTL(), cfg.Cache.MaxEntries, int64(cfg.Cache.MaxBodyBytes)),
 		usage:     usage.New(),
 		capStore:  compat.NewStore(),
 	}
+	s.routeResolver = route.NewResolver(cfg, rt.All())
+	return s
 }
 
 func (s *Server) currentConfig() config.Config {
@@ -183,6 +187,7 @@ func (s *Server) adminConfigSnapshot() config.AdminConfig {
 
 func cloneConfig(in config.Config) config.Config {
 	out := in
+	out.ClientAuth.Keys = append([]string(nil), in.ClientAuth.Keys...)
 	out.Providers = append([]config.ProviderConfig(nil), in.Providers...)
 	for i := range out.Providers {
 		if in.Providers[i].Headers != nil {
@@ -201,6 +206,25 @@ func cloneConfig(in config.Config) config.Config {
 		for j := range out.Providers[i].Models {
 			out.Providers[i].Models[j].Aliases = append([]string(nil), in.Providers[i].Models[j].Aliases...)
 		}
+	}
+	out.VirtualEndpoints = append([]config.VirtualEndpointConfig(nil), in.VirtualEndpoints...)
+	for i := range out.VirtualEndpoints {
+		if in.VirtualEndpoints[i].Protocols != nil {
+			out.VirtualEndpoints[i].Protocols = append([]string(nil), in.VirtualEndpoints[i].Protocols...)
+		}
+		if in.VirtualEndpoints[i].Enabled != nil {
+			b := *in.VirtualEndpoints[i].Enabled
+			out.VirtualEndpoints[i].Enabled = &b
+		}
+	}
+	out.RouteProfiles = append([]config.RouteProfileConfig(nil), in.RouteProfiles...)
+	out.CandidatePools = append([]config.CandidatePoolConfig(nil), in.CandidatePools...)
+	for i := range out.CandidatePools {
+		out.CandidatePools[i].Deployments = append([]string(nil), in.CandidatePools[i].Deployments...)
+	}
+	out.FallbackChains = append([]config.FallbackChainConfig(nil), in.FallbackChains...)
+	for i := range out.FallbackChains {
+		out.FallbackChains[i].Pools = append([]string(nil), in.FallbackChains[i].Pools...)
 	}
 	return out
 }
@@ -394,6 +418,7 @@ func (s *Server) applyConfigLocked(cfg config.Config) error {
 	}
 
 	s.cfg = cfg
+	s.routeResolver = route.NewResolver(cfg, s.rt.All())
 	s.probe.Reload(cfg)
 	s.syncCapabilityContracts(cfg)
 	for _, a := range staleAdapters {
@@ -436,10 +461,102 @@ func (s *Server) routeSnapshot(req router.Requirement) (config.Config, []router.
 	return out, s.rt.Candidates(req)
 }
 
+// resolveVirtualEndpoint looks up a virtual endpoint by public model.
+// Returns resolved route, true if virtual, error if disabled.
+func (s *Server) resolveVirtualEndpoint(model string) (route.ResolvedRoute, bool, error) {
+	s.runtimeMu.RLock()
+	resolver := s.routeResolver
+	s.runtimeMu.RUnlock()
+	if resolver == nil {
+		return route.ResolvedRoute{}, false, nil
+	}
+	resolved, ok := resolver.Resolve(model)
+	if !ok {
+		return route.ResolvedRoute{}, false, nil
+	}
+	// Check enabled state
+	ve, exists := resolver.ResolveByID(resolved.VirtualEndpointID)
+	if !exists {
+		return route.ResolvedRoute{}, false, nil
+	}
+	if !ve.IsEnabled() {
+		return resolved, true, fmt.Errorf("virtual endpoint %q is disabled", ve.ID)
+	}
+	return resolved, true, nil
+}
+
+// candidatesForRequirement returns routing config, filtered candidates, resolved route if virtual, and error if disabled.
+func (s *Server) candidatesForRequirement(req router.Requirement, protocol string) (config.Config, []router.Scored, *route.ResolvedRoute, error) {
+	// Snapshot cfg and resolver
+	s.runtimeMu.RLock()
+	cfgCopy := s.cfg
+	cfgCopy.Providers = nil
+	resolver := s.routeResolver
+	rt := s.rt
+	s.runtimeMu.RUnlock()
+
+	resolved, isVirtual, err := s.resolveVirtualEndpoint(req.Model)
+	if err != nil {
+		return cfgCopy, nil, &resolved, err
+	}
+	if !isVirtual {
+		// Non-virtual: use normal candidate set for the requested model.
+		candidates := rt.Candidates(req)
+		return cfgCopy, candidates, nil, nil
+	}
+	// Virtual endpoint: protocol check
+	if resolver != nil {
+		if ve, ok := resolver.ResolveByID(resolved.VirtualEndpointID); ok && len(ve.Protocols) > 0 {
+			allowed := false
+			for _, p := range ve.Protocols {
+				if strings.EqualFold(p, protocol) || (protocol == "openai_responses" && strings.EqualFold(p, "responses")) || (protocol == "responses" && strings.EqualFold(p, "openai_responses")) {
+					allowed = true
+					break
+				}
+				if strings.EqualFold(p, "anthropic") && protocol == "anthropic" {
+					allowed = true
+					break
+				}
+				if strings.EqualFold(p, "openai") && (protocol == "openai" || protocol == "openai_responses") {
+					allowed = true
+					break
+				}
+			}
+			if !allowed {
+				return cfgCopy, nil, &resolved, fmt.Errorf("protocol %q not allowed for virtual endpoint %q", protocol, ve.ID)
+			}
+		}
+	}
+	// For virtual endpoints, fetch candidates without model filter (auto) to get all eligible deployments,
+	// preserving other requirement dimensions (tools, vision, etc).
+	reqAll := req
+	reqAll.Model = ""
+	allCandidates := rt.Candidates(reqAll)
+	if resolver != nil {
+		filtered := resolver.AllFilteredCandidates(allCandidates, resolved)
+		return cfgCopy, filtered, &resolved, nil
+	}
+	return cfgCopy, allCandidates, &resolved, nil
+}
+
 func (s *Server) currentRouteCandidate(id string, req router.Requirement) (router.Scored, providers.Adapter, bool) {
 	s.runtimeMu.RLock()
 	defer s.runtimeMu.RUnlock()
 	candidate, ok := s.rt.Eligible(id, req)
+	if !ok {
+		return router.Scored{}, nil, false
+	}
+	adapter, ok := s.reg.Get(candidate.Deployment.ProviderID)
+	if !ok {
+		return router.Scored{}, nil, false
+	}
+	return candidate, adapter, true
+}
+
+func (s *Server) currentRouteCandidateIgnoreModel(id string, req router.Requirement) (router.Scored, providers.Adapter, bool) {
+	s.runtimeMu.RLock()
+	defer s.runtimeMu.RUnlock()
+	candidate, ok := s.rt.EligibleIgnoreModel(id, req)
 	if !ok {
 		return router.Scored{}, nil, false
 	}
@@ -477,6 +594,17 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/admin/api/compat/reset", s.adminCompatReset)
 	mux.HandleFunc("/admin/api/provider-discover", s.adminProviderDiscover)
 	mux.HandleFunc("/admin/api/settings", s.adminSettings)
+	// Phase B: Virtual Endpoints, Route Profiles, Candidate Pools, Fallback Chains
+	mux.HandleFunc("/admin/api/virtual-endpoints", s.adminVirtualEndpoints)
+	mux.HandleFunc("/admin/api/virtual-endpoints/", s.adminVirtualEndpointByID)
+	mux.HandleFunc("/admin/api/route-profiles", s.adminRouteProfiles)
+	mux.HandleFunc("/admin/api/route-profiles/", s.adminRouteProfileByID)
+	mux.HandleFunc("/admin/api/candidate-pools", s.adminCandidatePools)
+	mux.HandleFunc("/admin/api/candidate-pools/", s.adminCandidatePoolByID)
+	mux.HandleFunc("/admin/api/fallback-chains", s.adminFallbackChains)
+	mux.HandleFunc("/admin/api/fallback-chains/", s.adminFallbackChainByID)
+	// Legacy endpoint (PR #13 compatibility)
+	mux.HandleFunc("/admin/api/endpoint", s.adminEndpoint)
 
 	sub, _ := fs.Sub(webFS, "web")
 	mux.Handle("/", http.FileServer(http.FS(sub)))
