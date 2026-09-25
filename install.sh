@@ -42,5 +42,5 @@ elif command -v shasum >/dev/null; then
 else echo 'Install sha256sum or shasum.' >&2; exit 1
 fi
 [[ "$ACTUAL" == "$EXPECTED" ]] || { echo 'Checksum mismatch; installation stopped.' >&2; exit 1; }
-tar -xzf "$WORK/$ASSET" -C "$WORK"
+tar --no-same-owner -xzf "$WORK/$ASSET" -C "$WORK"
 bash "$WORK/nexaroute/install-user.sh"
