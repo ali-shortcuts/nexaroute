@@ -20,6 +20,7 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/compat"
 	"github.com/ali-shortcuts/nexaroute/internal/config"
 	"github.com/ali-shortcuts/nexaroute/internal/decision"
+	"github.com/ali-shortcuts/nexaroute/internal/decision/policy"
 	"github.com/ali-shortcuts/nexaroute/internal/events"
 	"github.com/ali-shortcuts/nexaroute/internal/health"
 	"github.com/ali-shortcuts/nexaroute/internal/probe"
@@ -174,9 +175,26 @@ func New(cfg config.Config, configPath string, reg *providers.Registry, rt *rout
 		taskClassCounts: make(map[string]uint64, 32),
 	}
 	s.decisionRegistry = decision.NewRegistry()
+	// Phase E: register deterministic policy provider
+	policies := convertDecisionPolicies(cfg.DecisionPolicies)
+	policyProvider := policy.NewProvider(policies, cfg.Decision.Policy)
+	s.decisionRegistry.Register(policyProvider)
 	s.decisionOrchestrator = decision.NewOrchestrator(s.decisionRegistry, cfg.Decision, &decision.Metrics{})
 	s.routeResolver = route.NewResolver(cfg, rt.All())
 	return s
+}
+
+func convertDecisionPolicies(in []config.DecisionPolicyConfig) []policy.Policy {
+	out := make([]policy.Policy, 0, len(in))
+	for _, c := range in {
+		p, err := policy.FromConfig(c)
+		if err != nil {
+			// Config validation already ensures validity, but skip invalid on best-effort
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
 }
 
 func (s *Server) currentConfig() config.Config {
@@ -237,6 +255,15 @@ func cloneConfig(in config.Config) config.Config {
 	out.FallbackChains = append([]config.FallbackChainConfig(nil), in.FallbackChains...)
 	for i := range out.FallbackChains {
 		out.FallbackChains[i].Pools = append([]string(nil), in.FallbackChains[i].Pools...)
+	}
+	out.DecisionPolicies = append([]config.DecisionPolicyConfig(nil), in.DecisionPolicies...)
+	for i := range out.DecisionPolicies {
+		if in.DecisionPolicies[i].TaskOverrides != nil {
+			out.DecisionPolicies[i].TaskOverrides = map[string]config.DecisionPolicyWeights{}
+			for k, v := range in.DecisionPolicies[i].TaskOverrides {
+				out.DecisionPolicies[i].TaskOverrides[k] = v
+			}
+		}
 	}
 	return out
 }
@@ -432,6 +459,15 @@ func (s *Server) applyConfigLocked(cfg config.Config) error {
 	s.cfg = cfg
 	if s.decisionOrchestrator != nil {
 		s.decisionOrchestrator.UpdateConfig(cfg.Decision)
+	}
+	// Phase E: hot-reload policy provider
+	if s.decisionRegistry != nil {
+		if pp, ok := s.decisionRegistry.Get("policy"); ok {
+			if updater, ok := pp.(interface{ UpdatePolicies([]policy.Policy, string) }); ok {
+				policies := convertDecisionPolicies(cfg.DecisionPolicies)
+				updater.UpdatePolicies(policies, cfg.Decision.Policy)
+			}
+		}
 	}
 	s.routeResolver = route.NewResolver(cfg, s.rt.All())
 	s.probe.Reload(cfg)

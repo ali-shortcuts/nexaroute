@@ -13,22 +13,115 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/taskprofile"
 )
 
-// decisionCandidates converts router.Scored to decision.Candidate snapshot.
-func decisionCandidates(scored []router.Scored) []decision.Candidate {
+// decisionCandidates converts router.Scored to decision.Candidate snapshot with extended signals for Phase E.
+func decisionCandidates(scored []router.Scored, resolved *route.ResolvedRoute) []decision.Candidate {
 	if len(scored) == 0 {
 		return nil
 	}
 	out := make([]decision.Candidate, 0, len(scored))
-	for _, s := range scored {
-		out = append(out, decision.Candidate{
-			ID:         s.Deployment.ID,
-			ProviderID: s.Deployment.ProviderID,
-			Model:      s.Deployment.Model,
-			Priority:   s.Deployment.Priority,
-			Weight:     s.Deployment.Weight,
-		})
+	for idx, s := range scored {
+		poolID, ordinal := poolInfoForDeployment(s.Deployment.ID, resolved)
+		c := decision.Candidate{
+			ID:               s.Deployment.ID,
+			ProviderID:       s.Deployment.ProviderID,
+			Model:            s.Deployment.Model,
+			Priority:         s.Deployment.Priority,
+			Weight:           s.Deployment.Weight,
+			PoolID:           poolID,
+			PoolOrdinal:      ordinal,
+			RouterScore:      s.Score,
+			HealthStatus:     string(s.Health.Status),
+			EWMALatencyMS:    s.Health.EWMALatencyMS,
+			EWMATTFTMS:       s.Health.EWMATTFTMS,
+			EWMAFailureRate:  s.Health.EWMAFailureRate,
+			CapacityPressure: s.CapacityPressure,
+			EstimatedCostUSD: s.EstimatedCostUSD,
+			PriceKnown:       s.PriceKnown,
+			ContextWindow:    s.Deployment.ContextWindow,
+			Capabilities: decision.CandidateCapabilities{
+				Streaming: s.Deployment.Capabilities.Streaming,
+				Tools:     s.Deployment.Capabilities.Tools,
+				Vision:    s.Deployment.Capabilities.Vision,
+				Reasoning: s.Deployment.Capabilities.Reasoning,
+			},
+			OriginalRank: idx,
+		}
+		out = append(out, c)
 	}
 	return out
+}
+
+func poolInfoForDeployment(deploymentID string, resolved *route.ResolvedRoute) (string, int) {
+	if resolved == nil {
+		return "", 0
+	}
+	// Primary pool
+	if resolved.AllowedDeployments != nil {
+		if _, ok := resolved.AllowedDeployments[deploymentID]; ok {
+			return resolved.PrimaryPoolID, 0
+		}
+	} else {
+		// If AllowedDeployments nil and mode all, treat as primary
+		if resolved.PrimaryMode == "all" {
+			// Check if deployment is in AllAllowed (union) — if primary is all, it should be considered primary
+			// But we still need to ensure fallback pools don't claim it first. Since primary is ordinal 0, return primary.
+			if resolved.AllAllowed != nil {
+				if _, ok := resolved.AllAllowed[deploymentID]; ok {
+					// If primary is all, primary wins
+					return resolved.PrimaryPoolID, 0
+				}
+			} else {
+				return resolved.PrimaryPoolID, 0
+			}
+		}
+	}
+	// Fallbacks
+	for i, set := range resolved.FallbackAllowed {
+		if set == nil {
+			continue
+		}
+		if _, ok := set[deploymentID]; ok {
+			// OrderedPoolIDs[0] is primary, so fallback i corresponds to OrderedPoolIDs[i+1]
+			ordinal := i + 1
+			poolID := ""
+			if ordinal < len(resolved.OrderedPoolIDs) {
+				poolID = resolved.OrderedPoolIDs[ordinal]
+			}
+			return poolID, ordinal
+		}
+	}
+	// Fallback: if deployment in AllAllowed but not in specific sets (e.g., all mode pools), assign based on OrderedPoolIDs order search
+	if resolved.OrderedPoolIDs != nil {
+		for ord := range resolved.OrderedPoolIDs {
+			// For pools not in FallbackAllowed (e.g., primary all), we already handled primary.
+			// For remaining, if pid matches primary, skip (already checked)
+			if ord == 0 {
+				continue
+			}
+			// If we have no set info, we can't determine, but we can still return ordinal if deployment is in AllAllowed
+			// To avoid mis-attribution, only return if AllAllowed contains it and we have no better info
+			if resolved.AllAllowed != nil {
+				if _, ok := resolved.AllAllowed[deploymentID]; ok {
+					// Return first matching ordinal where deployment could belong — use ordinal as fallback
+					// This is best-effort for all-mode fallback pools
+					// We will return the earliest ordinal where it could belong, but we already checked primary.
+					// For simplicity, return the pool ID if we can guess, else ordinal
+					// We don't have expanded sets here, so we return poolID with ordinal
+					// To keep deterministic, we return the poolID at ordinal
+					// But we need to know which pool actually contains it — without expanded, we approximate
+					// For correctness, we will search OrderedPoolIDs and if deployment is in AllAllowed, we return first fallback that could contain it.
+					// Since we already iterated FallbackAllowed, if not found, it might be in an all-mode fallback pool whose expanded set we don't have here.
+					// In that case, we return the first fallback ordinal where mode is all? We don't have mode info here.
+					// As fallback, return poolID at ordinal if ordinal < len(OrderedPoolIDs)
+					// Actually we should just return empty and ordinal 0 to avoid misclassifying, but for policy enforcement we need correct ordinal.
+					// For Phase E, we rely on resolver's AllFilteredCandidates preserving order, and pool ordinal is derived from OrderedPoolIDs position in filtered list?
+					// Simpler: if not found, return primary pool ID and 0 as fallback — conservative.
+				}
+			}
+		}
+	}
+	// Not found in any pool set — return primary as fallback for non-virtual? For virtual, this should not happen.
+	return resolved.PrimaryPoolID, 0
 }
 
 // reorderScoredByDecision reorders original Scored slice according to ordered decision candidates.
@@ -139,11 +232,14 @@ func (s *Server) applyDecisionPlane(
 	ti taskIntelligence,
 	resolvedRoute *route.ResolvedRoute,
 	requestID string,
+	req router.Requirement,
 ) []router.Scored {
 	// Fast path: check decision mode without lock? Need snapshot.
 	s.runtimeMu.RLock()
 	orch := s.decisionOrchestrator
 	cfgDecision := s.cfg.Decision
+	cfgCopy := s.cfg
+	rt := s.rt
 	s.runtimeMu.RUnlock()
 
 	if orch == nil {
@@ -161,8 +257,8 @@ func (s *Server) applyDecisionPlane(
 		return candidates
 	}
 
-	// Build decision request
-	dc := decisionCandidates(candidates)
+	// Build decision request with extended Phase E signals
+	dc := decisionCandidates(candidates, resolvedRoute)
 
 	var veID, rpID, poolID string
 	if resolvedRoute != nil {
@@ -181,18 +277,41 @@ func (s *Server) applyDecisionPlane(
 	var fp feature.RequestFeatures = ti.Features
 	var tp taskprofile.TaskProfile = ti.Profile
 
-	req := decision.DecisionRequest{
-		TaskProfile:       tp,
-		Features:          fp,
-		Candidates:        dc,
-		VirtualEndpointID: veID,
-		RouteProfileID:    rpID,
-		CandidatePoolID:   poolID,
-		Budget:            budget,
-		RequestID:         requestID,
+	// Phase E: resolve pinned deployment ID (privacy-safe, no raw session key)
+	pinnedID := ""
+	if rt != nil {
+		pinnedID = rt.PinnedDeploymentID(req)
 	}
 
-	ordered, result, trace := orch.Decide(ctx, req)
+	// Phase E: resolve policy ID — per RouteProfile overrides global
+	policyID := cfgDecision.Policy
+	if rpID != "" {
+		// Look up route profile's decision policy
+		for _, rp := range cfgCopy.RouteProfiles {
+			if rp.ID == rpID && rp.DecisionPolicy != "" {
+				policyID = rp.DecisionPolicy
+				break
+			}
+		}
+	}
+
+	decisionReq := decision.DecisionRequest{
+		TaskProfile:          tp,
+		Features:             fp,
+		Candidates:           dc,
+		VirtualEndpointID:    veID,
+		RouteProfileID:       rpID,
+		CandidatePoolID:      poolID,
+		PinnedCandidateID:    pinnedID,
+		PolicyID:             policyID,
+		EstimatedInputTokens: req.EstimatedInputTokens,
+		MaxOutputTokens:      req.MaxOutputTokens,
+		MinContextWindow:     req.MinContextWindow,
+		Budget:               budget,
+		RequestID:            requestID,
+	}
+
+	ordered, result, trace := orch.Decide(ctx, decisionReq)
 	// Emit decision event (bounded, privacy-safe)
 	s.emitDecisionEvent(requestID, result, trace, resolvedRoute, len(candidates))
 

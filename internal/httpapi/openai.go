@@ -129,8 +129,8 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 503, "no compatible healthy deployment")
 		return
 	}
-	// Phase D: Decision plane — rank within eligible set only, fail-open
-	candidates = s.applyDecisionPlane(r.Context(), candidates, ti, resolvedRoute, r.Header.Get("x-request-id"))
+	// Phase D/E: Decision plane — rank within eligible set only, fail-open, policy-aware
+	candidates = s.applyDecisionPlane(r.Context(), candidates, ti, resolvedRoute, r.Header.Get("x-request-id"), req)
 	if resolvedRoute != nil {
 		w.Header().Set("X-Gateway-Virtual-Endpoint", resolvedRoute.VirtualEndpointID)
 		w.Header().Set("X-Gateway-Public-Model", resolvedRoute.PublicModel)

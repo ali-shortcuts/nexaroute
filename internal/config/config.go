@@ -32,11 +32,12 @@ func (v VirtualEndpointConfig) IsEnabled() bool {
 }
 
 type RouteProfileConfig struct {
-	ID            string `json:"id"`
-	Name          string `json:"name,omitempty"`
-	CandidatePool string `json:"candidate_pool"`
-	FallbackChain string `json:"fallback_chain,omitempty"`
-	Strategy      string `json:"strategy,omitempty"`
+	ID             string `json:"id"`
+	Name           string `json:"name,omitempty"`
+	CandidatePool  string `json:"candidate_pool"`
+	FallbackChain  string `json:"fallback_chain,omitempty"`
+	Strategy       string `json:"strategy,omitempty"`
+	DecisionPolicy string `json:"decision_policy,omitempty"` // Phase E: optional policy ID
 }
 
 type CandidatePoolConfig struct {
@@ -52,10 +53,30 @@ type FallbackChainConfig struct {
 	Pools []string `json:"pools"`
 }
 
+type DecisionPolicyWeights struct {
+	RouterBaseline float64 `json:"router_baseline,omitempty"`
+	Reliability    float64 `json:"reliability,omitempty"`
+	Latency        float64 `json:"latency,omitempty"`
+	TTFT           float64 `json:"ttft,omitempty"`
+	Capacity       float64 `json:"capacity,omitempty"`
+	Cost           float64 `json:"cost,omitempty"`
+	Context        float64 `json:"context,omitempty"`
+}
+
+type DecisionPolicyConfig struct {
+	ID            string                           `json:"id"`
+	Name          string                           `json:"name,omitempty"`
+	SelectionMode string                           `json:"selection_mode,omitempty"` // only select_first in Phase E
+	Weights       DecisionPolicyWeights            `json:"weights"`
+	TaskOverrides map[string]DecisionPolicyWeights `json:"task_overrides,omitempty"`  // key = canonical TaskType
+	MinScoreDelta float64                          `json:"min_score_delta,omitempty"` // [0,1]
+}
+
 type DecisionConfig struct {
 	Mode      string `json:"mode,omitempty"`       // off | local
-	Provider  string `json:"provider,omitempty"`   // local (Phase D only)
+	Provider  string `json:"provider,omitempty"`   // local | policy (Phase E)
 	TimeoutMS int    `json:"timeout_ms,omitempty"` // bounded, default 10ms
+	Policy    string `json:"policy,omitempty"`     // Phase E: global policy ID
 }
 
 type Config struct {
@@ -67,6 +88,7 @@ type Config struct {
 	Cache            CacheConfig             `json:"cache"`
 	ClientAuth       ClientAuthConfig        `json:"client_auth"`
 	Decision         DecisionConfig          `json:"decision,omitempty"`
+	DecisionPolicies []DecisionPolicyConfig  `json:"decision_policies,omitempty"`
 	Providers        []ProviderConfig        `json:"providers"`
 	VirtualEndpoints []VirtualEndpointConfig `json:"virtual_endpoints,omitempty"`
 	RouteProfiles    []RouteProfileConfig    `json:"route_profiles,omitempty"`
@@ -245,6 +267,11 @@ const (
 	maxPublicModelBytes    = 128
 	maxPoolIDBytes         = 256
 	maxVirtualEndpointName = 256
+	// Phase E limits
+	maxDecisionPolicies   = 256
+	maxTaskOverrides      = 32
+	maxDecisionPolicyName = 256
+	maxPolicyIDBytes      = 256
 )
 
 func validLocalID(s string) bool {
@@ -264,6 +291,27 @@ func validLocalID(s string) bool {
 		}
 	}
 	return true
+}
+
+func validateDecisionPolicyWeights(w DecisionPolicyWeights, ctx string) error {
+	for name, v := range map[string]float64{
+		ctx + ".router_baseline": w.RouterBaseline,
+		ctx + ".reliability":     w.Reliability,
+		ctx + ".latency":         w.Latency,
+		ctx + ".ttft":            w.TTFT,
+		ctx + ".capacity":        w.Capacity,
+		ctx + ".cost":            w.Cost,
+		ctx + ".context":         w.Context,
+	} {
+		if math.IsNaN(v) || math.IsInf(v, 0) || v < 0 || v > 1_000_000 {
+			return fmt.Errorf("%s must be finite and between 0 and 1000000", name)
+		}
+	}
+	return nil
+}
+
+func hasPositiveWeight(w DecisionPolicyWeights) bool {
+	return w.RouterBaseline > 0 || w.Reliability > 0 || w.Latency > 0 || w.TTFT > 0 || w.Capacity > 0 || w.Cost > 0 || w.Context > 0
 }
 
 func validHeaderName(s string) bool {
@@ -489,6 +537,7 @@ func (c *Config) ApplyDefaults() {
 		rp.CandidatePool = strings.TrimSpace(rp.CandidatePool)
 		rp.FallbackChain = strings.TrimSpace(rp.FallbackChain)
 		rp.Strategy = strings.TrimSpace(strings.ToLower(rp.Strategy))
+		rp.DecisionPolicy = strings.TrimSpace(rp.DecisionPolicy)
 		// Phase B: only empty (inherit) is functional. Normalize "inherit" to empty for storage.
 		if rp.Strategy == "inherit" {
 			rp.Strategy = ""
@@ -514,9 +563,10 @@ func (c *Config) ApplyDefaults() {
 			fc.Pools[j] = strings.TrimSpace(fc.Pools[j])
 		}
 	}
-	// Decision defaults (Phase D)
+	// Decision defaults (Phase D/E)
 	c.Decision.Mode = strings.TrimSpace(strings.ToLower(c.Decision.Mode))
 	c.Decision.Provider = strings.TrimSpace(strings.ToLower(c.Decision.Provider))
+	c.Decision.Policy = strings.TrimSpace(c.Decision.Policy)
 	if c.Decision.Mode == "" {
 		c.Decision.Mode = "off"
 	}
@@ -525,6 +575,27 @@ func (c *Config) ApplyDefaults() {
 	}
 	if c.Decision.TimeoutMS == 0 {
 		c.Decision.TimeoutMS = 10
+	}
+	for i := range c.DecisionPolicies {
+		dp := &c.DecisionPolicies[i]
+		dp.ID = strings.TrimSpace(dp.ID)
+		dp.Name = strings.TrimSpace(dp.Name)
+		dp.SelectionMode = strings.TrimSpace(strings.ToLower(dp.SelectionMode))
+		if dp.SelectionMode == "" {
+			dp.SelectionMode = "select_first"
+		}
+		// Normalize task override keys to lowercase trimmed
+		if len(dp.TaskOverrides) > 0 {
+			norm := make(map[string]DecisionPolicyWeights, len(dp.TaskOverrides))
+			for k, v := range dp.TaskOverrides {
+				nk := strings.TrimSpace(strings.ToLower(k))
+				if nk == "" {
+					continue
+				}
+				norm[nk] = v
+			}
+			dp.TaskOverrides = norm
+		}
 	}
 
 	// Backward compatibility: legacy public_model → default virtual endpoint.
@@ -881,19 +952,88 @@ func (c Config) Validate() error {
 			}
 		}
 	}
-	// Phase D: Decision
+	// Phase D/E: Decision
 	switch strings.ToLower(strings.TrimSpace(c.Decision.Mode)) {
 	case "", "off", "local":
 	default:
 		return errors.New("decision.mode must be off or local")
 	}
 	switch strings.ToLower(strings.TrimSpace(c.Decision.Provider)) {
-	case "", "local":
+	case "", "local", "policy":
 	default:
-		return errors.New("decision.provider must be local in Phase D")
+		return errors.New("decision.provider must be local or policy")
 	}
 	if c.Decision.TimeoutMS < 1 || c.Decision.TimeoutMS > 5000 {
 		return errors.New("decision.timeout_ms must be between 1 and 5000")
+	}
+	if len(c.Decision.Policy) > maxPolicyIDBytes {
+		return errors.New("decision.policy is too long")
+	}
+	if c.Decision.Policy != "" && !validLocalID(c.Decision.Policy) {
+		return fmt.Errorf("decision policy id %q invalid", c.Decision.Policy)
+	}
+	if len(c.DecisionPolicies) > maxDecisionPolicies {
+		return fmt.Errorf("decision_policies exceeds safe limit %d", maxDecisionPolicies)
+	}
+	// Canonical task types for override validation (Phase C vocabulary)
+	canonicalTasks := map[string]struct{}{
+		"simple_chat": {}, "coding": {}, "code_edit": {}, "debugging": {},
+		"repository_analysis": {}, "architecture_reasoning": {}, "deep_reasoning": {},
+		"tool_use": {}, "agentic_task": {}, "long_context": {}, "vision": {},
+		"structured_output": {}, "data_extraction": {}, "general": {}, "unknown": {},
+	}
+	seenPolicyIDs := map[string]struct{}{}
+	for i, dp := range c.DecisionPolicies {
+		if dp.ID == "" {
+			return fmt.Errorf("decision_policies[%d].id is required", i)
+		}
+		if len(dp.ID) > maxPolicyIDBytes || !validLocalID(dp.ID) {
+			return fmt.Errorf("decision policy id %q invalid", dp.ID)
+		}
+		if _, dup := seenPolicyIDs[dp.ID]; dup {
+			return fmt.Errorf("duplicate decision policy id %q", dp.ID)
+		}
+		seenPolicyIDs[dp.ID] = struct{}{}
+		if len(dp.Name) > maxDecisionPolicyName {
+			return fmt.Errorf("decision policy %q name too long", dp.ID)
+		}
+		if dp.SelectionMode != "" && dp.SelectionMode != "select_first" {
+			return fmt.Errorf("decision policy %q selection_mode must be select_first", dp.ID)
+		}
+		if math.IsNaN(dp.MinScoreDelta) || math.IsInf(dp.MinScoreDelta, 0) || dp.MinScoreDelta < 0 || dp.MinScoreDelta > 1 {
+			return fmt.Errorf("decision policy %q min_score_delta must be finite and between 0 and 1", dp.ID)
+		}
+		// Validate weights
+		if err := validateDecisionPolicyWeights(dp.Weights, fmt.Sprintf("decision policy %q weights", dp.ID)); err != nil {
+			return err
+		}
+		// At least one positive weight
+		if !hasPositiveWeight(dp.Weights) {
+			return fmt.Errorf("decision policy %q must have at least one positive weight", dp.ID)
+		}
+		if len(dp.TaskOverrides) > maxTaskOverrides {
+			return fmt.Errorf("decision policy %q task_overrides exceeds limit %d", dp.ID, maxTaskOverrides)
+		}
+		for tk, w := range dp.TaskOverrides {
+			if tk == "" {
+				return fmt.Errorf("decision policy %q has empty task override key", dp.ID)
+			}
+			if len(tk) > maxPolicyIDBytes {
+				return fmt.Errorf("decision policy %q task override %q too long", dp.ID, tk)
+			}
+			if _, ok := canonicalTasks[tk]; !ok {
+				return fmt.Errorf("decision policy %q task override %q is not a canonical task type", dp.ID, tk)
+			}
+			if err := validateDecisionPolicyWeights(w, fmt.Sprintf("decision policy %q task_overrides[%q]", dp.ID, tk)); err != nil {
+				return err
+			}
+		}
+	}
+	// References must point to existing policies
+	if c.Decision.Policy != "" {
+		if _, ok := seenPolicyIDs[c.Decision.Policy]; !ok {
+			return fmt.Errorf("decision.policy %q references unknown decision policy", c.Decision.Policy)
+		}
 	}
 
 	// Phase B: Virtual Endpoints, Route Profiles, Candidate Pools, Fallback Chains
@@ -1033,6 +1173,14 @@ func (c Config) Validate() error {
 		// or "inherit" are accepted to avoid a misleading configurable field.
 		if rp.Strategy != "" && rp.Strategy != "inherit" {
 			return fmt.Errorf("route profile %q strategy must be empty or \"inherit\" in Phase B (got %q); per-profile routing strategies are deferred to Phase E", rp.ID, rp.Strategy)
+		}
+		if rp.DecisionPolicy != "" {
+			if len(rp.DecisionPolicy) > maxPolicyIDBytes || !validLocalID(rp.DecisionPolicy) {
+				return fmt.Errorf("route profile %q decision_policy %q invalid", rp.ID, rp.DecisionPolicy)
+			}
+			if _, ok := seenPolicyIDs[rp.DecisionPolicy]; !ok {
+				return fmt.Errorf("route profile %q references unknown decision policy %q", rp.ID, rp.DecisionPolicy)
+			}
 		}
 	}
 

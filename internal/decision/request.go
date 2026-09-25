@@ -5,14 +5,40 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/taskprofile"
 )
 
+// CandidateCapabilities is a privacy-safe subset of deployment capabilities.
+type CandidateCapabilities struct {
+	Streaming bool `json:"streaming,omitempty"`
+	Tools     bool `json:"tools,omitempty"`
+	Vision    bool `json:"vision,omitempty"`
+	Reasoning bool `json:"reasoning,omitempty"`
+}
+
 // Candidate is a privacy-safe snapshot of an eligible deployment.
 // It contains only routing-relevant identifiers, not secrets or raw prompts.
+// Extended in Phase E with pool, health, cost, and ranking signals.
 type Candidate struct {
 	ID         string  `json:"id"`
 	ProviderID string  `json:"provider_id"`
 	Model      string  `json:"model,omitempty"`
 	Priority   int     `json:"priority"`
 	Weight     float64 `json:"weight"`
+
+	// Phase E: pool / fallback boundary
+	PoolID      string `json:"pool_id,omitempty"`
+	PoolOrdinal int    `json:"pool_ordinal"`
+
+	// Phase E: router baseline and health
+	RouterScore      float64               `json:"router_score"`
+	HealthStatus     string                `json:"health_status,omitempty"`
+	EWMALatencyMS    float64               `json:"ewma_latency_ms,omitempty"`
+	EWMATTFTMS       float64               `json:"ewma_ttft_ms,omitempty"`
+	EWMAFailureRate  float64               `json:"ewma_failure_rate,omitempty"`
+	CapacityPressure float64               `json:"capacity_pressure,omitempty"`
+	EstimatedCostUSD float64               `json:"estimated_cost_usd,omitempty"`
+	PriceKnown       bool                  `json:"price_known,omitempty"`
+	ContextWindow    int                   `json:"context_window,omitempty"`
+	Capabilities     CandidateCapabilities `json:"capabilities,omitempty"`
+	OriginalRank     int                   `json:"original_rank"`
 }
 
 // Constraints placeholder for Phase E policy constraints.
@@ -34,6 +60,15 @@ type DecisionRequest struct {
 	VirtualEndpointID string `json:"virtual_endpoint_id,omitempty"`
 	RouteProfileID    string `json:"route_profile_id,omitempty"`
 	CandidatePoolID   string `json:"candidate_pool_id,omitempty"`
+
+	// Phase E: affinity and policy routing (privacy-safe, ID only)
+	PinnedCandidateID string `json:"pinned_candidate_id,omitempty"`
+	PolicyID          string `json:"policy_id,omitempty"`
+
+	// Phase E: context window signals (estimated tokens, no raw content)
+	EstimatedInputTokens int `json:"estimated_input_tokens,omitempty"`
+	MaxOutputTokens      int `json:"max_output_tokens,omitempty"`
+	MinContextWindow     int `json:"min_context_window,omitempty"`
 
 	// Policy / budget
 	Constraints Constraints `json:"constraints"`

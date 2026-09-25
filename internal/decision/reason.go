@@ -21,6 +21,15 @@ const (
 	ReasonSingleCandidate        ReasonCode = "SINGLE_CANDIDATE"
 	ReasonEmptyEligible          ReasonCode = "EMPTY_ELIGIBLE"
 	ReasonProviderUnhealthy      ReasonCode = "PROVIDER_UNHEALTHY"
+	// Phase E: policy engine
+	ReasonAffinityPreserved    ReasonCode = "AFFINITY_PRESERVED"
+	ReasonPoolBoundaryEnforced ReasonCode = "POOL_BOUNDARY_ENFORCED"
+	ReasonPriorityGuardrail    ReasonCode = "PRIORITY_GUARDRAIL_ENFORCED"
+	ReasonPolicyScored         ReasonCode = "POLICY_SCORED"
+	ReasonPolicySelectFirst    ReasonCode = "POLICY_SELECT_FIRST"
+	ReasonTaskAwareWeights     ReasonCode = "TASK_AWARE_WEIGHTS"
+	ReasonMinDeltaNotMet       ReasonCode = "MIN_DELTA_NOT_MET"
+	ReasonContextGuardrail     ReasonCode = "CONTEXT_GUARDRAIL"
 )
 
 // allowedReasonCodes is the canonical set for validation.
@@ -40,6 +49,14 @@ var allowedReasonCodes = map[ReasonCode]struct{}{
 	ReasonSingleCandidate:        {},
 	ReasonEmptyEligible:          {},
 	ReasonProviderUnhealthy:      {},
+	ReasonAffinityPreserved:      {},
+	ReasonPoolBoundaryEnforced:   {},
+	ReasonPriorityGuardrail:      {},
+	ReasonPolicyScored:           {},
+	ReasonPolicySelectFirst:      {},
+	ReasonTaskAwareWeights:       {},
+	ReasonMinDeltaNotMet:         {},
+	ReasonContextGuardrail:       {},
 }
 
 // IsValidReasonCode reports whether code is in the bounded contract.
