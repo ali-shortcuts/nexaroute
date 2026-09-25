@@ -30,15 +30,13 @@ func (s *Server) adminVirtualEndpoints(w http.ResponseWriter, r *http.Request) {
 		cfg := s.cfg
 		resolver := s.routeResolver
 		s.runtimeMu.RUnlock()
-		// Include eligibility counts
+		// Include pool membership counts (configured candidate count, not runtime eligibility).
+		// Runtime eligibility depends on health, capabilities, provider circuits, etc., and is evaluated per-request.
 		deployments := []map[string]any{}
 		if resolver != nil {
 			for _, ve := range resolver.ListVirtualEndpoints() {
-				// Count eligible deployments for this VE
-				// We need to compute eligible count by filtering router candidates for empty requirement? Use resolver expanded set.
+				// Pool member count = size of expanded primary pool (configured candidates)
 				allowed, _ := resolver.GetExpanded(func() string {
-					// Need profile to get pool
-					// Find profile
 					for _, rp := range cfg.RouteProfiles {
 						if rp.ID == ve.RouteProfile {
 							return rp.CandidatePool
@@ -46,11 +44,12 @@ func (s *Server) adminVirtualEndpoints(w http.ResponseWriter, r *http.Request) {
 					}
 					return ""
 				}())
-				eligible := len(allowed)
+				poolMemberCount := len(allowed)
 				deployments = append(deployments, map[string]any{
 					"id": ve.ID, "name": ve.Name, "enabled": ve.IsEnabled(), "public_model": ve.PublicModel,
 					"route_profile": ve.RouteProfile, "protocols": ve.Protocols,
-					"eligible_deployments": eligible,
+					"pool_member_count":          poolMemberCount,
+					"configured_candidate_count": poolMemberCount,
 				})
 			}
 		} else {
@@ -259,6 +258,12 @@ func (s *Server) adminRouteProfileByID(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"saved": true, "id": id})
 	case http.MethodDelete:
 		if _, err := s.mutateConfig(func(cfg *config.Config) error {
+			// Reference integrity: reject if any virtual endpoint references this profile
+			for _, ve := range cfg.VirtualEndpoints {
+				if ve.RouteProfile == id {
+					return fmt.Errorf("route profile %q is still referenced by virtual endpoint %q", id, ve.ID)
+				}
+			}
 			newList := make([]config.RouteProfileConfig, 0, len(cfg.RouteProfiles))
 			found := false
 			for _, rp := range cfg.RouteProfiles {
@@ -274,7 +279,12 @@ func (s *Server) adminRouteProfileByID(w http.ResponseWriter, r *http.Request) {
 			cfg.RouteProfiles = newList
 			return nil
 		}); err != nil {
-			errorJSON(w, 404, err.Error())
+			// 409 for reference integrity, 404 for not found
+			if strings.Contains(err.Error(), "still referenced") {
+				errorJSON(w, 409, err.Error())
+			} else {
+				errorJSON(w, 404, err.Error())
+			}
 			return
 		}
 		writeJSON(w, 200, map[string]any{"deleted": true, "id": id})
@@ -399,6 +409,19 @@ func (s *Server) adminCandidatePoolByID(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, 200, map[string]any{"saved": true, "id": id})
 	case http.MethodDelete:
 		if _, err := s.mutateConfig(func(cfg *config.Config) error {
+			// Reference integrity: reject if any route profile or fallback chain references this pool
+			for _, rp := range cfg.RouteProfiles {
+				if rp.CandidatePool == id {
+					return fmt.Errorf("candidate pool %q is still referenced by route profile %q", id, rp.ID)
+				}
+			}
+			for _, fc := range cfg.FallbackChains {
+				for _, pid := range fc.Pools {
+					if pid == id {
+						return fmt.Errorf("candidate pool %q is still referenced by fallback chain %q", id, fc.ID)
+					}
+				}
+			}
 			newList := make([]config.CandidatePoolConfig, 0, len(cfg.CandidatePools))
 			found := false
 			for _, cp := range cfg.CandidatePools {
@@ -414,7 +437,11 @@ func (s *Server) adminCandidatePoolByID(w http.ResponseWriter, r *http.Request) 
 			cfg.CandidatePools = newList
 			return nil
 		}); err != nil {
-			errorJSON(w, 404, err.Error())
+			if strings.Contains(err.Error(), "still referenced") {
+				errorJSON(w, 409, err.Error())
+			} else {
+				errorJSON(w, 404, err.Error())
+			}
 			return
 		}
 		writeJSON(w, 200, map[string]any{"deleted": true, "id": id})
@@ -509,6 +536,11 @@ func (s *Server) adminFallbackChainByID(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, 200, map[string]any{"saved": true, "id": id})
 	case http.MethodDelete:
 		if _, err := s.mutateConfig(func(cfg *config.Config) error {
+			for _, rp := range cfg.RouteProfiles {
+				if rp.FallbackChain == id {
+					return fmt.Errorf("fallback chain %q is still referenced by route profile %q", id, rp.ID)
+				}
+			}
 			newList := make([]config.FallbackChainConfig, 0, len(cfg.FallbackChains))
 			found := false
 			for _, fc := range cfg.FallbackChains {
@@ -524,7 +556,11 @@ func (s *Server) adminFallbackChainByID(w http.ResponseWriter, r *http.Request) 
 			cfg.FallbackChains = newList
 			return nil
 		}); err != nil {
-			errorJSON(w, 404, err.Error())
+			if strings.Contains(err.Error(), "still referenced") {
+				errorJSON(w, 409, err.Error())
+			} else {
+				errorJSON(w, 404, err.Error())
+			}
 			return
 		}
 		writeJSON(w, 200, map[string]any{"deleted": true, "id": id})

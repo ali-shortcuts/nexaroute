@@ -228,15 +228,15 @@ const (
 	maxTotalAliases           = 100000
 	maxConfigBytes            = 16 << 20
 	// Phase B limits
-	maxVirtualEndpoints   = 256
-	maxRouteProfiles      = 256
-	maxCandidatePools     = 256
-	maxFallbackChains     = 256
-	maxPoolDeployments    = 4096
-	maxFallbackPools      = 32
-	maxProtocols          = 16
-	maxPublicModelBytes   = 128
-	maxPoolIDBytes        = 256
+	maxVirtualEndpoints    = 256
+	maxRouteProfiles       = 256
+	maxCandidatePools      = 256
+	maxFallbackChains      = 256
+	maxPoolDeployments     = 4096
+	maxFallbackPools       = 32
+	maxProtocols           = 16
+	maxPublicModelBytes    = 128
+	maxPoolIDBytes         = 256
 	maxVirtualEndpointName = 256
 )
 
@@ -480,7 +480,11 @@ func (c *Config) ApplyDefaults() {
 		rp.Name = strings.TrimSpace(rp.Name)
 		rp.CandidatePool = strings.TrimSpace(rp.CandidatePool)
 		rp.FallbackChain = strings.TrimSpace(rp.FallbackChain)
-		rp.Strategy = strings.TrimSpace(rp.Strategy)
+		rp.Strategy = strings.TrimSpace(strings.ToLower(rp.Strategy))
+		// Phase B: only empty (inherit) is functional. Normalize "inherit" to empty for storage.
+		if rp.Strategy == "inherit" {
+			rp.Strategy = ""
+		}
 	}
 	for i := range c.CandidatePools {
 		cp := &c.CandidatePools[i]
@@ -988,10 +992,11 @@ func (c Config) Validate() error {
 				return fmt.Errorf("route profile %q references unknown fallback chain %q", rp.ID, rp.FallbackChain)
 			}
 		}
-		if rp.Strategy != "" {
-			if rp.Strategy != "ready_mesh" && rp.Strategy != "ready_queue" && rp.Strategy != "cost_aware" && rp.Strategy != "adaptive" && rp.Strategy != "adaptive_round_robin" && rp.Strategy != "priority" && rp.Strategy != "round_robin" && rp.Strategy != "least_latency" && rp.Strategy != "inherit" {
-				return fmt.Errorf("route profile %q has invalid strategy %q", rp.ID, rp.Strategy)
-			}
+		// Phase B: Route Profiles inherit the global routing strategy.
+		// Per-profile strategy override is deferred to Phase E. Only empty
+		// or "inherit" are accepted to avoid a misleading configurable field.
+		if rp.Strategy != "" && rp.Strategy != "inherit" {
+			return fmt.Errorf("route profile %q strategy must be empty or \"inherit\" in Phase B (got %q); per-profile routing strategies are deferred to Phase E", rp.ID, rp.Strategy)
 		}
 	}
 

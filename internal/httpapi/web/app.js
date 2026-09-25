@@ -68,7 +68,7 @@ const subtitles = {
   models: 'Per-deployment routing state: health, latency and failure tracking.',
   virtual: 'Virtual Endpoints: stable public model names → Route Profile → Candidate Pool. Change backends without client reconfig.',
   profiles: 'Route Profiles: reusable routing intent and policy.',
-  pools: 'Candidate Pools and Fallback Chains: logical pools define potential candidates; health/compat defines eligible.',
+  pools: 'Candidate Pools and Fallback Chains: pools define configured candidates; health/compat defines runtime eligible per-request.',
   health: 'Live provider pressure and capability-scoped circuit evidence.',
   cli: 'One-click connection snippets for coding agents and OpenAI-compatible tools.',
   settings: 'Hot-reloaded routing and probe configuration.',
@@ -570,7 +570,7 @@ curl -s ${base}/v1/models
 <span class="c"># virtual endpoints</span>
 curl -s ${base}/admin/api/virtual-endpoints -H "x-admin-key: $ADMIN_KEY"
 
-<span class="c"># example: ${veModel} → pool → eligible deployments</span>`
+<span class="c"># example: ${veModel} → pool (configured) → router eligibility → physical deployment</span>`
   };
 }
 
@@ -954,13 +954,13 @@ function renderVirtual() {
   const ves = snap.virtual_endpoints || [];
   const rows = ves.map(ve => {
     const enabled = ve.enabled !== false;
-    const eligible = ve.eligible != null ? ve.eligible : (ve.eligible_deployments ?? '—');
+    const poolCount = ve.pool_member_count != null ? ve.pool_member_count : (ve.configured_candidate_count ?? ve.eligible ?? ve.eligible_deployments ?? '—');
     return `<tr>
       <td><strong>${esc(ve.id)}</strong><br><small>${esc(ve.name || '')}</small></td>
       <td><code>${esc(ve.public_model || ve.id)}</code></td>
       <td>${esc(ve.route_profile || '')}</td>
       <td>${enabled ? '<span class=\"pill on\">Enabled</span>' : '<span class=\"pill\">Disabled</span>'}</td>
-      <td>${esc(eligible)}</td>
+      <td title="Configured pool members, not runtime eligible (health/compat filtered per-request)">${esc(poolCount)}</td>
       <td><button class=\"btn secondary\" onclick=\"editVirtual('${esc(ve.id)}')\">Edit</button> <button class=\"btn danger-ghost\" onclick=\"deleteVirtual('${esc(ve.id)}')\">Del</button></td>
     </tr>`;
   });
@@ -969,17 +969,19 @@ function renderVirtual() {
 
 function renderProfiles() {
   const rps = snap.route_profiles || [];
+  const globalStrat = snap.config?.routing?.strategy || 'ready_mesh';
   const rows = rps.map(rp => {
+    const strat = rp.strategy ? rp.strategy : `inherit (${esc(globalStrat)})`;
     return `<tr>
       <td><strong>${esc(rp.id)}</strong><br><small>${esc(rp.name || '')}</small></td>
       <td>${esc(rp.name || '')}</td>
       <td>${esc(rp.candidate_pool || '')}</td>
       <td>${esc(rp.fallback_chain || '—')}</td>
-      <td>${esc(rp.strategy || 'inherit')}</td>
+      <td title="Phase B: per-profile strategy deferred to Phase E; inherits global">${esc(strat)}</td>
       <td><button class=\"btn secondary\" onclick=\"editProfile('${esc(rp.id)}')\">Edit</button> <button class=\"btn danger-ghost\" onclick=\"deleteProfile('${esc(rp.id)}')\">Del</button></td>
     </tr>`;
   });
-  $('#profileRows').innerHTML = rows.join('') || '<tr><td colspan=\"6\" style=\"color:var(--muted)\">No route profiles. Create a profile to describe routing intent.</td></tr>';
+  $('#profileRows').innerHTML = rows.join('') || '<tr><td colspan=\"6\" style=\"color:var(--muted)\">No route profiles. Create a profile to describe routing intent. Strategy inherits global.</td></tr>';
 }
 
 function renderPools() {
@@ -1049,15 +1051,15 @@ async function editProfile(id) {
     if (fallback === null) return;
     const name = prompt('Display name:', existing ? (existing.name || '') : '');
     if (name === null) return;
-    const strategy = prompt('Strategy (inherit, ready_mesh, etc or empty for inherit):', existing ? (existing.strategy || 'inherit') : 'inherit');
-    if (strategy === null) return;
-    const body = { id, name: name || undefined, candidate_pool: pool.trim(), fallback_chain: fallback.trim() || undefined, strategy: strategy.trim() === 'inherit' || !strategy.trim() ? undefined : strategy.trim() };
+    // Phase B: strategy inherits global routing strategy. Per-profile override deferred to Phase E.
+    // Do not prompt for strategy; always inherit.
+    const body = { id, name: name || undefined, candidate_pool: pool.trim(), fallback_chain: fallback.trim() || undefined };
     if (existing) {
       await api('/admin/api/route-profiles/' + encodeURIComponent(id), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     } else {
       await api('/admin/api/route-profiles', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     }
-    toast('Route profile saved');
+    toast('Route profile saved (strategy inherits global: ' + (snap.config?.routing?.strategy || 'ready_mesh') + ')');
     await refresh();
   } catch (e) { toast(e.message, true); }
 }

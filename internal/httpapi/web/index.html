@@ -140,9 +140,10 @@
           <button id="addVirtualBtn" class="btn primary">+ Add endpoint</button>
         </div>
         <div class="tablewrap"><table>
-          <thead><tr><th>ID</th><th>Public Model</th><th>Route Profile</th><th>Enabled</th><th>Eligible</th><th>Actions</th></tr></thead>
+          <thead><tr><th>ID</th><th>Public Model</th><th>Route Profile</th><th>Enabled</th><th>Pool Members (configured)</th><th>Actions</th></tr></thead>
           <tbody id="virtualRows"></tbody>
         </table></div>
+        <p class="hint">Pool Members = configured candidate count (pool membership), not runtime eligible. Runtime eligibility depends on health, capabilities, provider circuits, context fit, etc.</p>
         <div id="virtualDetail" class="compat-report" hidden></div>
       </div>
     </section>
@@ -150,11 +151,11 @@
     <!-- ============ ROUTE PROFILES ============ -->
     <section id="profiles" class="tab">
       <div class="panel">
-        <div class="panelhead"><div><h2>Route Profiles</h2><p>Reusable routing intent: candidate pool, fallback chain, strategy.</p></div>
+        <div class="panelhead"><div><h2>Route Profiles</h2><p>Reusable routing intent: candidate pool + fallback chain. Strategy inherits global routing strategy (per-profile strategy deferred to Phase E).</p></div>
           <button id="addProfileBtn" class="btn primary">+ Add profile</button>
         </div>
         <div class="tablewrap"><table>
-          <thead><tr><th>ID</th><th>Name</th><th>Pool</th><th>Fallback</th><th>Strategy</th><th>Actions</th></tr></thead>
+          <thead><tr><th>ID</th><th>Name</th><th>Pool</th><th>Fallback</th><th>Strategy (Phase B: inherit)</th><th>Actions</th></tr></thead>
           <tbody id="profileRows"></tbody>
         </table></div>
       </div>

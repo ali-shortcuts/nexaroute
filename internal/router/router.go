@@ -646,17 +646,6 @@ func (r *Router) Eligible(id string, req Requirement) (Scored, bool) {
 	}
 	return r.eligibleDeployment(d, req, cfg, false, req.Scopes())
 }
-
-func (r *Router) EligibleIgnoreModel(id string, req Requirement) (Scored, bool) {
-	r.mu.RLock()
-	cfg := r.cfg
-	d, ok := r.byID[id]
-	r.mu.RUnlock()
-	if !ok {
-		return Scored{}, false
-	}
-	return r.eligibleDeployment(d, req, cfg, true, req.Scopes())
-}
 func (r *Router) Deployment(id string) (Deployment, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

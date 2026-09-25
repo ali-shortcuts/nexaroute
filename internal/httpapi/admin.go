@@ -157,10 +157,9 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 	var cpList any = cfgFull.CandidatePools
 	var fcList any = cfgFull.FallbackChains
 	if resolver != nil {
-		// Enrich VE list with eligibility
+		// Enrich VE list with pool membership counts (configured, not runtime eligibility)
 		ves := []map[string]any{}
 		for _, ve := range cfgFull.VirtualEndpoints {
-			// Find primary pool via profile
 			poolID := ""
 			for _, rp := range cfgFull.RouteProfiles {
 				if rp.ID == ve.RouteProfile {
@@ -168,16 +167,18 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 					break
 				}
 			}
-			eligible := 0
+			poolMemberCount := 0
 			if poolID != "" {
 				if set, ok := resolver.GetExpanded(poolID); ok {
-					eligible = len(set)
+					poolMemberCount = len(set)
 				}
 			}
 			ves = append(ves, map[string]any{
 				"id": ve.ID, "name": ve.Name, "enabled": ve.IsEnabled(),
 				"public_model": ve.PublicModel, "route_profile": ve.RouteProfile,
-				"protocols": ve.Protocols, "eligible": eligible,
+				"protocols":                  ve.Protocols,
+				"pool_member_count":          poolMemberCount,
+				"configured_candidate_count": poolMemberCount,
 			})
 		}
 		veList = ves

@@ -504,26 +504,34 @@ func (s *Server) candidatesForRequirement(req router.Requirement, protocol strin
 		candidates := rt.Candidates(req)
 		return cfgCopy, candidates, nil, nil
 	}
-	// Virtual endpoint: protocol check
+	// Virtual endpoint: protocol restriction check.
+	// Phase B semantics (exact, documented):
+	// - Empty protocols list → allow all ingress protocols.
+	// - "anthropic" → only /v1/messages
+	// - "openai" → only /v1/chat/completions
+	// - "openai_responses" or alias "responses" → only /v1/responses
+	// No hidden expansion: "openai" does NOT implicitly allow "openai_responses".
+	// If operator wants both chat and responses, they must list both protocols.
 	if resolver != nil {
 		if ve, ok := resolver.ResolveByID(resolved.VirtualEndpointID); ok && len(ve.Protocols) > 0 {
 			allowed := false
+			// Normalize incoming protocol
+			normIncoming := strings.ToLower(strings.TrimSpace(protocol))
+			if normIncoming == "responses" {
+				normIncoming = "openai_responses"
+			}
 			for _, p := range ve.Protocols {
-				if strings.EqualFold(p, protocol) || (protocol == "openai_responses" && strings.EqualFold(p, "responses")) || (protocol == "responses" && strings.EqualFold(p, "openai_responses")) {
-					allowed = true
-					break
+				normP := strings.ToLower(strings.TrimSpace(p))
+				if normP == "responses" {
+					normP = "openai_responses"
 				}
-				if strings.EqualFold(p, "anthropic") && protocol == "anthropic" {
-					allowed = true
-					break
-				}
-				if strings.EqualFold(p, "openai") && (protocol == "openai" || protocol == "openai_responses") {
+				if normP == normIncoming {
 					allowed = true
 					break
 				}
 			}
 			if !allowed {
-				return cfgCopy, nil, &resolved, fmt.Errorf("protocol %q not allowed for virtual endpoint %q", protocol, ve.ID)
+				return cfgCopy, nil, &resolved, fmt.Errorf("protocol %q not allowed for virtual endpoint %q (allowed: %s)", protocol, ve.ID, strings.Join(ve.Protocols, ", "))
 			}
 		}
 	}
@@ -543,20 +551,6 @@ func (s *Server) currentRouteCandidate(id string, req router.Requirement) (route
 	s.runtimeMu.RLock()
 	defer s.runtimeMu.RUnlock()
 	candidate, ok := s.rt.Eligible(id, req)
-	if !ok {
-		return router.Scored{}, nil, false
-	}
-	adapter, ok := s.reg.Get(candidate.Deployment.ProviderID)
-	if !ok {
-		return router.Scored{}, nil, false
-	}
-	return candidate, adapter, true
-}
-
-func (s *Server) currentRouteCandidateIgnoreModel(id string, req router.Requirement) (router.Scored, providers.Adapter, bool) {
-	s.runtimeMu.RLock()
-	defer s.runtimeMu.RUnlock()
-	candidate, ok := s.rt.EligibleIgnoreModel(id, req)
 	if !ok {
 		return router.Scored{}, nil, false
 	}

@@ -22,17 +22,17 @@ type Event struct {
 }
 
 const (
-	maxCounterKeys        = 256
-	maxEventRequestID     = 128
-	maxEventKind          = 128
-	maxEventDeployment    = 512
-	maxEventMessage       = 4096
-	maxEventErrorType     = 128
-	maxEventVirtual       = 256
-	maxEventPublicModel   = 256
-	maxEventRouteProfile  = 256
-	maxEventPool          = 256
-	counterOverflowKey    = "__other__"
+	maxCounterKeys       = 256
+	maxEventRequestID    = 128
+	maxEventKind         = 128
+	maxEventDeployment   = 512
+	maxEventMessage      = 4096
+	maxEventErrorType    = 128
+	maxEventVirtual      = 256
+	maxEventPublicModel  = 256
+	maxEventRouteProfile = 256
+	maxEventPool         = 256
+	counterOverflowKey   = "__other__"
 )
 
 func boundedString(s string, max int) string {

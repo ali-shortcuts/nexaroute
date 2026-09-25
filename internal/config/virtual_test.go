@@ -194,3 +194,35 @@ func TestExistingConfigsLoadUnchanged(t *testing.T) {
 		t.Fatalf("default config should have no virtual endpoints when public_model empty")
 	}
 }
+
+func TestRouteProfileStrategyMustNotLie(t *testing.T) {
+	// Phase B: only empty or "inherit" allowed. Any other strategy must be rejected.
+	cfg := Default()
+	cfg.CandidatePools = []CandidatePoolConfig{{ID: "pool1", Mode: "all"}}
+	cfg.RouteProfiles = []RouteProfileConfig{{ID: "profile1", CandidatePool: "pool1", Strategy: "ready_mesh"}}
+	cfg.ApplyDefaults()
+	// ApplyDefaults normalizes "inherit" to empty, but "ready_mesh" stays.
+	// After ApplyDefaults, validation should reject non-inherit strategies.
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "strategy must be empty or \"inherit\"") {
+		t.Fatalf("non-inherit strategy should be rejected in Phase B, got %v", err)
+	}
+
+	cfg2 := Default()
+	cfg2.CandidatePools = []CandidatePoolConfig{{ID: "pool1", Mode: "all"}}
+	cfg2.RouteProfiles = []RouteProfileConfig{{ID: "profile1", CandidatePool: "pool1", Strategy: "inherit"}}
+	cfg2.ApplyDefaults()
+	if err := cfg2.Validate(); err != nil {
+		t.Fatalf("inherit strategy should be allowed (normalized to empty): %v", err)
+	}
+	if cfg2.RouteProfiles[0].Strategy != "" {
+		t.Fatalf("inherit should be normalized to empty, got %q", cfg2.RouteProfiles[0].Strategy)
+	}
+
+	cfg3 := Default()
+	cfg3.CandidatePools = []CandidatePoolConfig{{ID: "pool1", Mode: "all"}}
+	cfg3.RouteProfiles = []RouteProfileConfig{{ID: "profile1", CandidatePool: "pool1", Strategy: ""}}
+	cfg3.ApplyDefaults()
+	if err := cfg3.Validate(); err != nil {
+		t.Fatalf("empty strategy should be allowed (inherit global): %v", err)
+	}
+}
