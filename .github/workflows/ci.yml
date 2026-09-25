@@ -66,6 +66,9 @@ jobs:
           test "$(stat -c '%a' "$tmp_home/.config/nexaroute/config.json")" = "600"
           test ! -e "$tmp_home/.config/nexaroute/config.json.bak"
 
+      - name: One-command installer and checksum smoke test
+        run: ./scripts/smoke-installer.sh
+
       - name: Docker build
         run: docker build --tag nexaroute-ci:current .
 

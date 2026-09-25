@@ -2,9 +2,16 @@
 
 A self-hosted Go gateway for routing Anthropic-compatible and OpenAI-compatible clients across many LLM providers/models. The first target is **Claude Code -> NexaRoute -> Chat2API / other OpenAI-compatible or Anthropic-compatible providers**.
 
-This package is **v0.6**: the v0.4 translation + dashboard core, now extended with a provider-incident intelligence layer and a hedging/cache/usage tier that few if any open gateways combine. The code is runnable and heavily tested, but no software can honestly be guaranteed to contain zero bugs.
+This package is **v0.6.0**. It includes the provider-incident, hedging/cache/usage, and Universal Compatibility Engine tiers. The code is runnable and heavily tested, but no software can honestly be guaranteed to contain zero bugs.
 
-## What v0.5.2 adds on top of v0.4
+## Universal Compatibility Engine (v0.6)
+
+- Anthropic Messages, OpenAI Chat Completions, and OpenAI Responses use a shared canonical request/response and stream-event representation.
+- Gemini GenerateContent is supported as an upstream protocol; OpenAI Responses is supported as a client-facing ingress.
+- Capability contracts distinguish supported, unsupported, and unknown behavior. Deterministic repairs are bounded, learned capability failures do not poison model health, and semantics-critical fields are not silently stripped.
+- See the v0.6 entry in `CHANGELOG.md` for the complete list and documented boundaries.
+
+## Provider routing and reliability features
 
 ### Provider incident intelligence and quota awareness
 
@@ -42,7 +49,7 @@ This package is **v0.6**: the v0.4 translation + dashboard core, now extended wi
 - Optional per-model pricing (`input_cost_per_mtok`, `output_cost_per_mtok`) yields cumulative estimated spend, resolved at snapshot time so price edits take effect immediately.
 - Exposed via `nexaroute_deployment_tokens_total`, `nexaroute_estimated_cost_usd_total`, the admin snapshot, and two new dashboard KPI cards.
 
-## What v0.4 currently implements
+## Gateway API and protocol details
 
 ### Client-facing endpoints
 
@@ -204,36 +211,33 @@ The dashboard includes:
 - active session-affinity count
 - CLI Tools onboarding for Anthropic/Claude Code and OpenAI-compatible clients
 
-## Fastest Ubuntu test: use a release package
+## Install with one command (Linux or macOS)
 
-After downloading and extracting a tagged release package, run:
+For a tagged release, install the latest published build with:
 
 ```bash
-cd nexaroute
-chmod +x install-user.sh
+curl -fsSL https://raw.githubusercontent.com/ali-shortcuts/nexaroute/main/install.sh | bash
+```
+
+The installer selects the matching **Linux/macOS amd64/arm64** binary, verifies the release archive's SHA-256 checksum, installs it under `~/.local/bin`, and creates a private config under `~/.config/nexaroute`. To install a specific release, use:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ali-shortcuts/nexaroute/main/install.sh | NEXAROUTE_VERSION=v0.6.0 bash
+```
+
+`~/.local/bin` must be on your `PATH` to run `nexaroute` without its full path. The installer prints the exact command and dashboard address. If no tagged GitHub release has been published yet, the script exits with a clear message. The same installer can be used from an already-downloaded release archive:
+
+```bash
 ./install-user.sh
 ```
 
-This installs:
-
-```text
-~/.local/bin/nexaroute
-~/.config/nexaroute/config.json
-```
-
-Run:
+Start the gateway and open its dashboard:
 
 ```bash
 ~/.local/bin/nexaroute -config ~/.config/nexaroute/config.json
 ```
 
-Open:
-
-```text
-http://127.0.0.1:8080/
-```
-
-The sample providers are disabled, so the gateway will not contact any real provider until you configure and enable one.
+Then open <http://127.0.0.1:8080/>. Sample providers are disabled, so NexaRoute does not contact any real provider until you configure and enable one. For other operating systems/architectures, build from source with Go 1.23+ or use Docker.
 
 ## Quick local self-test
 
@@ -289,7 +293,7 @@ Go 1.23+ is recommended for the exact verification path used for this package.
 ./scripts/verify.sh
 ```
 
-The script checks formatting, repeated shuffled tests, `go vet`, the race detector, JavaScript syntax when Node is installed, short fuzz runs, and static Linux builds for amd64 and arm64.
+The script checks Go version, shell syntax, formatting, repeated shuffled tests, `go vet`, the race detector when CGO and a C compiler are available, JavaScript syntax when Node is installed, short fuzz runs, and static Linux/macOS builds for amd64 and arm64.
 
 Manual commands:
 
@@ -315,17 +319,17 @@ journalctl --user -u nexaroute -f
 The image binds to `0.0.0.0:8080`. If the Web UI/admin API will be reached from outside loopback, configure an admin key:
 
 ```bash
-docker build -t nexaroute:0.5.2 .
+docker build -t nexaroute:0.6.0 .
 docker run --rm -p 8080:8080 \
   -e NEXAROUTE_ADMIN_KEY='replace-with-a-strong-random-secret' \
-  nexaroute:0.5.2
+  nexaroute:0.6.0
 ```
 
 Do not expose the admin UI directly to the public internet without TLS and additional perimeter controls.
 
 ## What is deliberately not claimed
 
-The supported path is strong, but v0.5.2 is **not*** a universal implementation of every LLM protocol. Native OpenAI Responses, Gemini native `generateContent`, Bedrock, Vertex AI, Azure-specific deployment semantics, embeddings/rerank, encrypted-at-rest secret vaults, distributed state, invoice-perfect cost optimization or hard budget enforcement, and full internet-facing RBAC/CSRF hardening are not implemented.
+The supported path is strong, but v0.6.0 is **not** a universal implementation of every LLM protocol. Bedrock, Vertex AI, Azure-specific deployment semantics, embeddings/rerank, encrypted-at-rest secret vaults, distributed state, invoice-perfect cost optimization or hard budget enforcement, and full internet-facing RBAC/CSRF hardening are not implemented.
 
 Cross-protocol reasoning/thinking metadata can also be provider-specific. Native Anthropic passthrough is the safest path for Anthropic-only fields.
 
@@ -338,7 +342,7 @@ Read:
 - `SECURITY.md`
 - `ROADMAP.md`
 
-before treating v0.5.2 as production infrastructure.
+before treating NexaRoute as production infrastructure.
 
 ## Install from GitHub source
 
@@ -352,7 +356,7 @@ go build -trimpath -o nexaroute ./cmd/gateway
 sudo install -m 755 nexaroute /usr/local/bin/nexaroute
 ```
 
-The repository CI repeats formatting, tests, vet, race detection, and Linux amd64/arm64 builds on pushes and pull requests. Tagged releases build downloadable Linux binaries and SHA-256 checksums automatically.
+The repository CI repeats formatting, tests, vet, race detection when supported, and Linux/macOS amd64/arm64 builds on pushes and pull requests. Version-matching tags (`vX.Y.Z`) build downloadable binaries, a universal install archive, and SHA-256 checksums automatically.
 
 
 ## Ready Mesh maturity notes

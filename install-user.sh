@@ -2,12 +2,19 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
+OS="$(uname -s)"
 ARCH="$(uname -m)"
-case "$ARCH" in
-  x86_64|amd64) BUNDLED="$ROOT/bin/nexaroute-linux-amd64" ;;
-  aarch64|arm64) BUNDLED="$ROOT/bin/nexaroute-linux-arm64" ;;
-  *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;;
+case "$OS" in
+  Linux) OS_ID=linux ;;
+  Darwin) OS_ID=darwin ;;
+  *) echo "Unsupported operating system: $OS (supported: Linux, macOS)" >&2; exit 1 ;;
 esac
+case "$ARCH" in
+  x86_64|amd64) ARCH_ID=amd64 ;;
+  aarch64|arm64) ARCH_ID=arm64 ;;
+  *) echo "Unsupported architecture: $ARCH (supported: amd64, arm64)" >&2; exit 1 ;;
+esac
+BUNDLED="$ROOT/bin/nexaroute-${OS_ID}-${ARCH_ID}"
 
 mkdir -p "$HOME/.local/bin" "$HOME/.config/nexaroute"
 chmod 700 "$HOME/.config/nexaroute"
@@ -17,13 +24,13 @@ if [[ -x "$BUNDLED" ]]; then
   SRC_BIN="$BUNDLED"
 else
   command -v go >/dev/null 2>&1 || {
-    echo "No bundled NexaRoute binary was found and Go is not installed." >&2
-    echo "Install Go 1.23+ or use a release package containing a Linux binary." >&2
+    echo "No bundled NexaRoute binary was found for ${OS_ID}/${ARCH_ID}, and Go is not installed." >&2
+    echo "Download the universal release archive or install Go 1.23+ to build from source." >&2
     exit 1
   }
   TMP_BIN="$(mktemp)"
   trap 'rm -f "$TMP_BIN"' EXIT
-  echo "Building NexaRoute v0.3 from source..."
+  echo "Building NexaRoute from source..."
   (cd "$ROOT" && CGO_ENABLED=0 go build -trimpath -o "$TMP_BIN" ./cmd/gateway)
   SRC_BIN="$TMP_BIN"
 fi
@@ -40,8 +47,9 @@ else
 fi
 rm -f "$CFG.bak"
 
+VERSION="$("$HOME/.local/bin/nexaroute" -version)"
 cat <<MSG
-Installed: $HOME/.local/bin/nexaroute
+Installed: $HOME/.local/bin/nexaroute ($VERSION)
 Config:    $CFG
 
 Run:
@@ -52,3 +60,8 @@ Dashboard:
 
 The example providers are disabled until you configure and enable them in the Web UI.
 MSG
+
+case ":${PATH}:" in
+  *":$HOME/.local/bin:"*) ;;
+  *) echo "Note: add $HOME/.local/bin to PATH to run 'nexaroute' from any terminal." ;;
+esac
