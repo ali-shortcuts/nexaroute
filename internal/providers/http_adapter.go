@@ -113,7 +113,7 @@ func newHTTPAdapterWithRetryCap(p config.ProviderConfig, timeout, retryAfterCap 
 		tr.Proxy = http.ProxyURL(u)
 	}
 	a := &httpAdapter{
-		p: p, c: &http.Client{Transport: tr, Timeout: timeout}, streamC: &http.Client{Transport: tr},
+		p: p, c: &http.Client{Transport: tr, Timeout: timeout, CheckRedirect: providerRedirect}, streamC: &http.Client{Transport: tr, CheckRedirect: providerRedirect},
 		sem: make(chan struct{}, mc), forwardAllowed: make(map[string]struct{}, len(p.ForwardHeaders)),
 		retryAfterCap: retryAfterCap,
 	}
@@ -236,6 +236,9 @@ func endpoint(base, suffix string) string {
 			b = strings.TrimSuffix(b, known)
 			break
 		}
+	}
+	if strings.HasSuffix(b, "/v1beta") && strings.HasPrefix(suffix, "/v1beta/") {
+		return b + strings.TrimPrefix(suffix, "/v1beta")
 	}
 	if strings.HasSuffix(b, "/v1") && strings.HasPrefix(suffix, "/v1/") {
 		return b + strings.TrimPrefix(suffix, "/v1")
@@ -979,4 +982,20 @@ func (b *idleBody) Close() error {
 	b.mu.Unlock()
 	b.cancel()
 	return b.rc.Close()
+}
+
+// Provider credentials and request bodies must never follow a redirect to a
+// different origin. Go's default policy does not protect custom API-key headers.
+func providerRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= 10 {
+		return fmt.Errorf("stopped after 10 redirects")
+	}
+	if len(via) == 0 {
+		return nil
+	}
+	origin := via[0].URL
+	if !strings.EqualFold(req.URL.Scheme, origin.Scheme) || !strings.EqualFold(req.URL.Host, origin.Host) {
+		return fmt.Errorf("cross-origin provider redirect blocked; configure the final endpoint explicitly")
+	}
+	return nil
 }

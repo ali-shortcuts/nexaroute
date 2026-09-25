@@ -99,6 +99,9 @@ func (s *Server) clientRPMAllow(presented string, rpm int) bool {
 	capacity := float64(rpm)
 	refill := float64(rpm) / 60.0
 	b, ok := s.clientBuckets[id]
+	if !ok && len(s.clientBuckets) >= maxClientBuckets {
+		return false
+	}
 	if !ok || now.Sub(b.last) > clientBucketIdle {
 		b = &clientBucket{tokens: capacity, last: now}
 		s.clientBuckets[id] = b

@@ -6,7 +6,10 @@ echo '== go version =='
 go version
 
 echo '== shell syntax =='
-bash -n install-user.sh run-local.sh scripts/*.sh
+for script in install.sh install-user.sh run-local.sh scripts/*.sh; do bash -n "$script"; done
+
+echo '== source installer bootstrap =='
+./scripts/test-bootstrap.sh
 
 echo '== formatting =='
 if out=$(gofmt -l .) && [[ -n "$out" ]]; then
@@ -32,6 +35,8 @@ go test -race -timeout=3m -shuffle=on -count=3 ./...
 if command -v node >/dev/null 2>&1; then
   echo '== web ui javascript syntax =='
   node --check internal/httpapi/web/app.js
+  node scripts/test-editor.js
+  node scripts/test-endpoint-ui.js
 else
   echo 'WARN: node not installed; skipping JavaScript syntax check' >&2
 fi

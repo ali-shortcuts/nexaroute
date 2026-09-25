@@ -20,7 +20,7 @@ func (s *Server) models(w http.ResponseWriter, r *http.Request) {
 	data := make([]map[string]any, 0, 2+len(deployments)*2)
 	seen := make(map[string]bool, 2+len(deployments)*2)
 	if len(deployments) > 0 {
-		for _, id := range []string{"auto", "claude-auto"} {
+		for _, id := range []string{s.currentConfig().Routing.PublicModel, "auto", "claude-auto"} {
 			seen[id] = true
 			data = append(data, map[string]any{"id": id, "object": "model", "created": created, "owned_by": "gateway"})
 		}

@@ -60,48 +60,72 @@ func (s *Server) canonicalStreamPump(
 	w http.ResponseWriter,
 	resp *http.Response,
 	kind, clientProtocol, requestedModel, requestID string,
-	usageHook func(input, output int),
+	usageHooks ...func(int, int),
 ) error {
-	// The adapter holds provider capacity, credential load and any local quota
-	// reservation until the response body reaches EOF or is explicitly closed.
-	// Early decoder/client-write failures therefore must close the body here.
 	defer resp.Body.Close()
-
-	fl, _ := w.(http.Flusher)
-	emitter := canonical.NewStreamEmitter(clientProtocol, w, requestedModel, requestID)
+	var emitter canonical.StreamEmitter
+	var usage canonical.Usage
+	defer func() {
+		for _, hook := range usageHooks {
+			if hook != nil {
+				hook(usage.InputTokens, usage.OutputTokens)
+			}
+		}
+	}()
+	emit := func(ev canonical.StreamEvent) error {
+		if emitter == nil {
+			emitter = canonical.NewStreamEmitter(clientProtocol, w, requestedModel, requestID)
+		}
+		return emitter.Emit(ev)
+	}
+	fail := func(err error) error {
+		if emitter != nil {
+			_ = emitter.Emit(canonical.StreamEvent{Type: canonical.StreamError, ErrorMsg: err.Error()})
+		}
+		return err
+	}
 	reader := canonical.NewSSEReader(resp.Body)
 	terminal := false
-	var streamErr error
-	inputTokens, outputTokens := 0, 0
-	usageSeen := false
+	nextGeminiTool := 0
+	sawTool := false
 	anthropicToolBlocks := map[int]bool{}
 	for {
 		name, data, done, err := reader.Next()
 		if err != nil {
-			if !terminal {
-				_ = emitter.Emit(canonical.StreamEvent{Type: canonical.StreamError, ErrorMsg: "upstream stream read failed: " + err.Error()})
-			}
-			streamErr = err
-			break
+			return fail(fmt.Errorf("upstream stream read failed: %w", err))
 		}
 		if done {
 			break
 		}
 		var evs []canonical.StreamEvent
+		var protocolDone bool
 		switch kind {
 		case "anthropic":
 			evs, err = canonical.DecodeAnthropicStreamEvent(name, data)
+			protocolDone = name == "message_stop"
 		case "gemini":
-			evs, _, err = canonical.DecodeGeminiStreamChunk(data)
+			evs, protocolDone, err = canonical.DecodeGeminiStreamChunk(data)
+			// Gemini function calls are complete objects; indices are local to a chunk.
+			count := 0
+			for i := range evs {
+				if evs[i].Type == canonical.StreamToolStart {
+					count++
+				}
+				if evs[i].Type == canonical.StreamToolStart || evs[i].Type == canonical.StreamToolDelta || evs[i].Type == canonical.StreamToolEnd {
+					evs[i].ToolIndex += nextGeminiTool
+					if evs[i].Type == canonical.StreamToolStart {
+						evs[i].ToolID = fmt.Sprintf("call_%d", evs[i].ToolIndex)
+					}
+				}
+			}
+			nextGeminiTool += count
 		case "openai_responses":
-			evs, terminal, err = canonical.DecodeResponsesStreamEvent(name, data)
+			evs, protocolDone, err = canonical.DecodeResponsesStreamEvent(name, data)
 		default:
-			evs, terminal, err = canonical.DecodeOpenAIStreamChunk(data)
+			evs, protocolDone, err = canonical.DecodeOpenAIStreamChunk(data)
 		}
 		if err != nil {
-			_ = emitter.Emit(canonical.StreamEvent{Type: canonical.StreamError, ErrorMsg: "upstream stream protocol violation: " + err.Error()})
-			streamErr = err
-			break
+			return fail(fmt.Errorf("upstream stream protocol violation: %w", err))
 		}
 		for _, ev := range evs {
 			if kind == "anthropic" && ev.Type == canonical.StreamEnd && terminal {
@@ -125,46 +149,46 @@ func (s *Server) canonicalStreamPump(
 					delete(anthropicToolBlocks, ev.ToolIndex)
 				}
 			}
-			if ev.Usage != nil {
-				if ev.Usage.InputTokens > inputTokens {
-					inputTokens = ev.Usage.InputTokens
-				}
-				if ev.Usage.OutputTokens > outputTokens {
-					outputTokens = ev.Usage.OutputTokens
-				}
-				if ev.Usage.InputTokens > 0 || ev.Usage.OutputTokens > 0 {
-					usageSeen = true
-				}
-			}
 			if ev.Type == canonical.StreamError {
-				streamErr = fmt.Errorf("upstream stream error: %s", ev.ErrorMsg)
+				return fail(fmt.Errorf("upstream stream error: %s", ev.ErrorMsg))
+			}
+			if ev.Type == canonical.StreamToolStart {
+				sawTool = true
 			}
 			if ev.Type == canonical.StreamEnd {
+				if sawTool && ev.StopReason == canonical.StopEndTurn {
+					ev.StopReason = canonical.StopToolUse
+				}
 				terminal = true
 			}
-			if emitErr := emitter.Emit(ev); emitErr != nil {
-				// Client went away; stop reading upstream.
-				return emitErr
+			if ev.Usage != nil {
+				if ev.Usage.InputTokens > 0 {
+					usage.InputTokens = ev.Usage.InputTokens
+				}
+				if ev.Usage.OutputTokens > 0 {
+					usage.OutputTokens = ev.Usage.OutputTokens
+				}
+			}
+			// Foreign reasoning has no replayable Anthropic signature.
+			if clientProtocol == "anthropic" && ev.Type == canonical.StreamThinking {
+				continue
+			}
+			if err := emit(ev); err != nil {
+				return err
 			}
 		}
-	}
-	if !terminal && streamErr == nil {
-		streamErr = io.ErrUnexpectedEOF
-		_ = emitter.Emit(canonical.StreamEvent{Type: canonical.StreamError, ErrorMsg: "upstream stream ended before completion"})
-	}
-	// A stream error is terminal by itself. Calling Finish after emitting an
-	// error would append a success tail (for example response.completed or
-	// [DONE]) and give clients contradictory terminal states.
-	if streamErr == nil && terminal {
-		if finErr := emitter.Finish(); finErr != nil {
-			streamErr = finErr
+		if protocolDone {
+			terminal = true
+			break
 		}
 	}
-	if streamErr == nil && terminal && usageHook != nil && usageSeen {
-		usageHook(inputTokens, outputTokens)
+	if !terminal {
+		return fail(io.ErrUnexpectedEOF)
 	}
-	_ = fl
-	return streamErr
+	if emitter == nil {
+		return fmt.Errorf("upstream stream contained no response events")
+	}
+	return emitter.Finish()
 }
 
 // handleCanonicalResponse processes a successful upstream response received
@@ -180,7 +204,7 @@ func (s *Server) handleCanonicalResponse(
 	if stream {
 		return s.canonicalStreamPump(w, resp, kind, clientProtocol, requestedModel, requestID, usageHook)
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	body, err := readJSONLimited(resp.Body)
 	resp.Body.Close()
 	if err != nil {
 		return fmt.Errorf("upstream response read failed: %w", err)
@@ -188,12 +212,18 @@ func (s *Server) handleCanonicalResponse(
 	var canResp canonical.Response
 	switch kind {
 	case "anthropic":
+		if err = validateAnthropicResponseJSON(body); err != nil {
+			return err
+		}
 		canResp, err = canonical.DecodeAnthropicResponse(body)
 	case "gemini":
 		canResp, err = canonical.DecodeGeminiResponse(body)
 	case "openai_responses":
 		canResp, err = canonical.DecodeResponsesResponse(body)
 	default:
+		if err = validateOpenAIResponseJSON(body); err != nil {
+			return err
+		}
 		canResp, err = canonical.DecodeOpenAIChatResponse(body)
 	}
 	if err != nil {
@@ -269,9 +299,13 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 		Streaming: reqReqs.Streaming, Reasoning: reqReqs.Reasoning,
 	}
 	inspection := inspectResponsesRequestJSON(raw)
+	if inspection.TooComplex {
+		canonicalErrorJSON(w, "openai_responses", http.StatusBadRequest, "invalid_request_error", "request JSON structure is too complex")
+		return
+	}
 	req.EstimatedInputTokens = inspection.EstimatedPromptTokens
 	req.MaxOutputTokens = in.MaxOutputTokens
-	req.MinContextWindow = req.EstimatedInputTokens + req.MaxOutputTokens
+	req.MinContextWindow = inspection.EstimatedPromptTokens + in.MaxOutputTokens
 	req = s.prepareRequirement(req, r, inspection.BodySessionKey)
 	cfg, candidates := s.routeSnapshot(req)
 	if len(candidates) == 0 {
@@ -293,7 +327,6 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 	attempts := 0
 	for i := 0; i < len(candidates) && attempts < max; i++ {
 		c := candidates[i]
-		attempts++
 		deployment := c.Deployment
 		dialect, cached := dialects[deployment.ProviderID]
 		if !cached {
@@ -305,12 +338,13 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 			lastErr = "candidate could not serve this request"
 			continue
 		}
+		attempts++
 		start := time.Now()
 		s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_attempt", Deployment: deployment.ID,
 			Message: fmt.Sprintf("attempt=%d kind=%s score=%.2f", attempts, bundle.canonicalKind, c.Score)})
 		resp, sentPayload, repair, derr := s.doUpstreamWithRepair(
 			routeCtx, r.Header.Get("x-request-id"), bundle.a, deployment,
-			bundle.payload, req.Streaming, forward, dialect, profile,
+			bundle.payload, bundle.path, req.Streaming, forward, dialect, profile,
 			cfg.Routing.MaxRepairAttempts, &canReq,
 		)
 		if derr != nil {
@@ -321,6 +355,10 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 			if clientRequestGone(r.Context()) {
 				return
 			}
+			if gatewayDeadlineExceeded(routeCtx, r.Context()) {
+				canonicalErrorJSON(w, "openai_responses", http.StatusGatewayTimeout, "api_error", "gateway request timeout")
+				return
+			}
 			cls := compat.ClassifyTransportError(derr)
 			policy := cls.Policy()
 			s.hm.RecordProviderFailure(deployment.ProviderID, deployment.ID, lastErr)
@@ -329,6 +367,8 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 				s.probe.Recover(deployment.ID)
 			} else if policy.HardCooldown {
 				s.hm.ForceCooldown(deployment.ID, lastErr, cfg.Cooldown())
+			} else if policy.QuarantineDeployment {
+				s.hm.RecordFailure(deployment.ID, lastErr, time.Since(start))
 			}
 			if attempts < max && i+1 < len(candidates) {
 				s.retryPause(routeCtx, r.Header.Get("x-request-id"), cfg, attempts-1, max)
@@ -376,6 +416,9 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 			canonicalErrorJSON(w, "openai_responses", cls.HTTPStatus(), policy.ErrorType, cls.Message)
 			return
 		}
+		w.Header().Set("X-Gateway-Deployment", deployment.ID)
+		w.Header().Set("X-Gateway-Provider", deployment.ProviderID)
+		w.Header().Set("X-Gateway-Upstream-Model", deployment.Model)
 		if req.Streaming {
 			resp.Body = observeFirstByte(resp.Body, start, func(d time.Duration) { s.hm.RecordTTFT(deployment.ID, d) })
 		}
@@ -410,6 +453,15 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 				canonicalErrorJSON(w, "openai_responses", http.StatusBadGateway, "api_error", "upstream returned an invalid response")
 				return
 			}
+			if cfg.Routing.Strategy == "ready_mesh" && req.Streaming {
+				s.hm.RecordScopeFailure(deploy.ID, []string{"streaming"}, lastErr)
+			} else if router.IsReadyStrategy(cfg.Routing.Strategy) {
+				s.hm.Quarantine(deploy.ID, lastErr, total)
+				s.probe.Recover(deploy.ID)
+			} else {
+				s.hm.RecordFailure(deploy.ID, lastErr, total)
+			}
+			s.hm.RecordProviderFailure(deploy.ProviderID, deploy.ID, lastErr)
 			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "stream_fail", Deployment: deploy.ID,
 				Message: lastErr, ErrorType: string(cls.Class), LatencyMS: total.Milliseconds()})
 			return

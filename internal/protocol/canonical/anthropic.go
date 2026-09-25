@@ -443,7 +443,7 @@ func EncodeAnthropicResponse(in Response, requestedModel string) core.AnthRespon
 		stop = StopEndTurn
 	}
 	if stop == StopStopSequence {
-		stop = StopMaxTokens // Anthropic reports stop_sequence only with a sequence value.
+		stop = StopEndTurn // Without the matching sequence value, report a normal completion.
 	}
 	content := make([]core.AnthContentBlock, 0, len(in.Blocks))
 	for _, b := range in.Blocks {

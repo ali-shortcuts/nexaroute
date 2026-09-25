@@ -525,7 +525,8 @@ func TestResponsesEmitterUsesDistinctOutputIndexesForParallelTools(t *testing.T)
 		}
 		indexByCall[callID] = int(idx)
 	}
-	if indexByCall["c0"] != 1 || indexByCall["c1"] != 2 {
+	// Output indexes refer to the actual output array; tool-only output starts at zero.
+	if len(indexByCall) != 2 || indexByCall["c0"] != 0 || indexByCall["c1"] != 1 {
 		t.Fatalf("parallel tools reused output indexes: %#v\n%s", indexByCall, rr.Body.String())
 	}
 }

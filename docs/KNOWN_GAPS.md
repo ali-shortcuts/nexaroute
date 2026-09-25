@@ -1,4 +1,4 @@
-# Known gaps — v0.5.2
+# Known gaps — v0.6.1-beta.2
 
 These are explicit boundaries of the current code, not hidden assumptions.
 
@@ -8,11 +8,12 @@ Implemented runtime protocol classes are:
 
 - OpenAI-compatible Chat Completions
 - Anthropic-compatible Messages
+- Stateless OpenAI Responses subset
+- Gemini GenerateContent upstream (not Gemini ingress)
 
 Not implemented as native protocol classes:
 
-- OpenAI Responses API
-- Gemini native API
+- Stateful/background Responses, hosted tools and response retrieval/deletion
 - Bedrock
 - Vertex AI
 - Azure-specific deployment semantics
@@ -24,7 +25,7 @@ Common Claude Code text/tool/stream flows are implemented and regression-tested,
 
 In particular:
 
-- reasoning/thinking formats differ across providers. NexaRoute does not silently translate those controls: when a request explicitly asks for reasoning/thinking, routing is constrained to the matching native ingress protocol;
+- reasoning/thinking formats differ across providers. native-protocol candidates are preferred for Chat/Messages reasoning requests, but the existing router can relax that preference when no native candidate is healthy. Foreign reasoning has no valid Anthropic signature and is not emitted as Anthropic thinking. Exact reasoning parity is not guaranteed;
 - prompt-cache metadata does not always have an OpenAI-compatible equivalent;
 - provider-specific beta fields are safest on native Anthropic passthrough;
 - a committed broken stream is not transparently resumed on another provider.
@@ -119,3 +120,22 @@ Implemented but bounded by design:
   `/admin/api/compat/reset`) re-opens the question.
 - The capability cache is in-memory, matching the single-process state model
   described above; multi-process deployments re-probe after restart.
+
+## Beta audit boundaries
+
+- Responses ingress uses serial failover; Chat/Messages hedging and response caching are not wired into this ingress.
+- Responses client streaming retains output for the final protocol object, bounded to 8 MiB and 4096 items. Exceeding the bound ends the stream with an error.
+- `previous_response_id`, `store=true`, and non-function hosted tools are rejected, rather than silently discarding conversation state or requested tools.
+- The canonical formats represent a subset. Audio/video, encrypted reasoning, Gemini thought signatures, provider-specific extension fields and arbitrary future tool types are not universally preserved.
+- Linux amd64 was runtime-tested locally. Linux arm64, macOS amd64/arm64 and Windows amd64 were cross-compiled; native runtime certification on those targets is pending.
+- No live paid-provider credentials were supplied for this audit. Mocked integration coverage does not establish current Claude Code, Codex CLI or every provider/model compatibility.
+- No comparative throughput benchmark, penetration test, long-duration production soak or distributed deployment certification was performed.
+
+## Transport and bounded parsing (beta.2)
+
+Provider redirects may only stay on the exact same scheme/host/port origin.
+Configure the final URL explicitly for services that redirect elsewhere.
+Canonical SSE frames are limited to 16 MiB and 65536 data lines per event.
+Responses native requests use store=false; this does not make a claim about a
+provider's retention policies. File/reference input and unknown content types
+are not implemented and now fail explicitly.

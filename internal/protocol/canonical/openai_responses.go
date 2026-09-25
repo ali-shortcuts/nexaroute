@@ -52,10 +52,38 @@ type ResponsesItem struct {
 	Summary   []map[string]any `json:"summary,omitempty"`
 }
 
+// UnmarshalJSON accepts the Responses easy-message string content form as
+// well as structured content parts. Encoders emit both forms.
+func (item *ResponsesItem) UnmarshalJSON(data []byte) error {
+	type plain ResponsesItem
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	if raw, ok := fields["content"]; ok {
+		var text string
+		if string(raw) != "null" && json.Unmarshal(raw, &text) == nil {
+			fields["content"], _ = json.Marshal([]map[string]any{{"type": "input_text", "text": text}})
+		}
+	}
+	normalized, err := json.Marshal(fields)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(normalized, (*plain)(item))
+}
+
 // DecodeResponsesRequest converts an OpenAI Responses request into the IR.
 // Input accepts either a plain string, a list of content strings/objects, or
 // the full item list (message / function_call / function_call_output items).
 func DecodeResponsesRequest(in ResponsesRequest) (Request, error) {
+	if in.PreviousResponseID != "" {
+		return Request{}, fmt.Errorf("previous_response_id is not supported; send the complete conversation in input")
+	}
+	if in.Store != nil && *in.Store {
+		return Request{}, fmt.Errorf("stored Responses are not supported; use store=false")
+	}
+
 	out := Request{
 		Model:           in.Model,
 		Stream:          in.Stream,
@@ -79,6 +107,9 @@ func DecodeResponsesRequest(in ResponsesRequest) (Request, error) {
 		out.Messages = append(out.Messages, Message{Role: RoleUser, Parts: parts})
 	}
 	out.Messages = append(out.Messages, messages...)
+	if len(out.Messages) == 0 {
+		return Request{}, fmt.Errorf("input must contain at least one supported message or tool result")
+	}
 	for _, t := range in.Tools {
 		if t.Type == "function" || t.Type == "" {
 			schema := t.Parameters
@@ -88,10 +119,19 @@ func DecodeResponsesRequest(in ResponsesRequest) (Request, error) {
 			b, _ := json.Marshal(schema)
 			out.Tools = append(out.Tools, ToolDef{Name: t.Name, Description: t.Description, Parameters: b})
 		}
-		// Built-in tools (web_search, computer_use, ...) carry no canonical
-		// equivalent; they are dropped rather than failing the request.
+		if t.Type != "function" && t.Type != "" {
+			return Request{}, fmt.Errorf("tool type %q is not supported by this gateway", t.Type)
+		}
 	}
 	out.ToolChoice = decodeOpenAIToolChoice(in.ToolChoice)
+	if choice, ok := in.ToolChoice.(map[string]any); ok && choice["type"] == "function" {
+		if name, ok := choice["name"].(string); ok && name != "" {
+			out.ToolChoice = &ToolChoice{Mode: "tool", Name: name}
+		}
+	}
+	if in.ToolChoice != nil && out.ToolChoice == nil {
+		return Request{}, fmt.Errorf("unsupported Responses tool_choice")
+	}
 	out.ParallelToolCalls = in.ParallelToolCalls
 	if len(in.Reasoning) > 0 && string(in.Reasoning) != "null" {
 		var r struct {
@@ -162,7 +202,7 @@ func decodeResponsesInput(raw json.RawMessage) ([]Part, []Message, error) {
 		var str string
 		if err := json.Unmarshal(itemRaw, &str); err == nil {
 			if str != "" {
-				standalone = append(standalone, Part{Type: PartText, Text: str})
+				messages = append(messages, Message{Role: RoleUser, Parts: []Part{{Type: PartText, Text: str}}})
 			}
 			continue
 		}
@@ -186,7 +226,10 @@ func decodeResponsesInput(raw json.RawMessage) ([]Part, []Message, error) {
 			if role == "" {
 				role = RoleUser
 			}
-			parts := responsesContentToParts(item.Content)
+			parts, err := responsesContentToParts(item.Content)
+			if err != nil {
+				return nil, nil, err
+			}
 			if len(parts) > 0 {
 				messages = append(messages, Message{Role: role, Parts: parts})
 			}
@@ -203,13 +246,13 @@ func decodeResponsesInput(raw json.RawMessage) ([]Part, []Message, error) {
 		case "reasoning":
 			// Reasoning items are replay-state only; ignored.
 		default:
-			// Unknown item types are ignored.
+			return nil, nil, fmt.Errorf("unsupported Responses input item type %q", typ)
 		}
 	}
 	return standalone, messages, nil
 }
 
-func responsesContentToParts(content []map[string]any) []Part {
+func responsesContentToParts(content []map[string]any) ([]Part, error) {
 	parts := make([]Part, 0, len(content))
 	for _, c := range content {
 		typ, _ := c["type"].(string)
@@ -224,9 +267,11 @@ func responsesContentToParts(content []map[string]any) []Part {
 			if img != nil {
 				parts = append(parts, Part{Type: PartImage, Image: img})
 			}
+		default:
+			return nil, fmt.Errorf("unsupported Responses content type %q", typ)
 		}
 	}
-	return parts
+	return parts, nil
 }
 
 // EncodeResponsesRequest builds an OpenAI Responses payload from the IR.
@@ -313,6 +358,7 @@ func EncodeResponsesRequest(in Request, upstreamModel string) ([]byte, error) {
 		"model":  upstreamModel,
 		"input":  items,
 		"stream": in.Stream,
+		"store":  false,
 	}
 	if in.MaxOutputTokens > 0 {
 		out["max_output_tokens"] = in.MaxOutputTokens
@@ -398,6 +444,7 @@ type ResponsesOutputItem struct {
 }
 
 type ResponsesUsage struct {
+	TotalTokens         int `json:"total_tokens"`
 	InputTokens         int `json:"input_tokens"`
 	OutputTokens        int `json:"output_tokens"`
 	OutputTokensDetails *struct {
@@ -414,8 +461,13 @@ func DecodeResponsesResponse(b []byte) (Response, error) {
 	if err := json.Unmarshal(b, &in); err != nil {
 		return Response{}, fmt.Errorf("invalid Responses body: %w", err)
 	}
+	if in.Status == "failed" || in.Status == "cancelled" || in.Status == "queued" || in.Status == "in_progress" {
+		return Response{}, fmt.Errorf("upstream Responses status %q is not a completed synchronous response", in.Status)
+	}
+	if in.Output == nil {
+		return Response{}, fmt.Errorf("upstream Responses output is missing")
+	}
 	out := Response{ID: in.ID, Model: in.Model, StopReason: StopEndTurn, Raw: append(json.RawMessage(nil), b...)}
-	sawToolCall := false
 	for _, item := range in.Output {
 		switch item.Type {
 		case "message":
@@ -435,7 +487,6 @@ func DecodeResponsesResponse(b []byte) (Response, error) {
 				out.Blocks = append(out.Blocks, Block{Type: PartText, Text: sb.String()})
 			}
 		case "function_call":
-			sawToolCall = true
 			out.Blocks = append(out.Blocks, Block{Type: PartToolCall, ToolCall: &ToolCall{
 				ID: item.CallID, Name: item.Name, Arguments: item.Arguments,
 			}})
@@ -450,17 +501,15 @@ func DecodeResponsesResponse(b []byte) (Response, error) {
 				}
 			}
 			if sb.Len() > 0 {
-				out.Blocks = append(out.Blocks, Block{Type: PartThinking, Thinking: &Thinking{Text: sb.String(), Signature: "summary"}})
+				out.Blocks = append(out.Blocks, Block{Type: PartThinking, Thinking: &Thinking{Text: sb.String()}})
 			}
 		}
 	}
-	switch in.Status {
-	case "incomplete":
-		out.StopReason = StopMaxTokens
-	default:
-		if sawToolCall {
-			out.StopReason = StopToolUse
-		}
+	if out.HasToolCalls() {
+		out.StopReason = StopToolUse
+	}
+	if in.Status == "incomplete" {
+		out.StopReason = responsesIncompleteStop(in.IncompleteDetails)
 	}
 	if in.Usage != nil {
 		out.Usage = Usage{InputTokens: in.Usage.InputTokens, OutputTokens: in.Usage.OutputTokens}
@@ -489,7 +538,14 @@ func EncodeResponsesResponse(in Response, requestedModel string) ResponsesRespon
 	out := ResponsesResponse{
 		ID: in.ID, Model: requestedModel, Status: status,
 		Output: []ResponsesOutputItem{},
-		Usage:  &ResponsesUsage{InputTokens: in.Usage.InputTokens, OutputTokens: in.Usage.OutputTokens},
+		Usage:  &ResponsesUsage{InputTokens: in.Usage.InputTokens, OutputTokens: in.Usage.OutputTokens, TotalTokens: in.Usage.InputTokens + in.Usage.OutputTokens},
+	}
+	if status == "incomplete" {
+		reason := "max_output_tokens"
+		if in.StopReason == StopRefusal {
+			reason = "content_filter"
+		}
+		out.IncompleteDetails = map[string]any{"reason": reason}
 	}
 	if out.ID == "" {
 		out.ID = fmt.Sprintf("resp_%d", time.Now().UnixNano())
@@ -557,62 +613,44 @@ func DecodeResponsesStreamEvent(eventName, data string) ([]StreamEvent, bool, er
 	switch typ {
 	case "response.output_text.delta":
 		var ev struct {
-			Delta string `json:"delta"`
+			Delta       string `json:"delta"`
+			OutputIndex int    `json:"output_index"`
 		}
 		if json.Unmarshal([]byte(d), &ev) == nil && ev.Delta != "" {
 			return []StreamEvent{{Type: StreamText, Text: ev.Delta}}, false, nil
 		}
 	case "response.reasoning_summary_text.delta", "response.reasoning_text.delta":
 		var ev struct {
-			Delta string `json:"delta"`
+			Delta       string `json:"delta"`
+			OutputIndex int    `json:"output_index"`
 		}
 		if json.Unmarshal([]byte(d), &ev) == nil && ev.Delta != "" {
 			return []StreamEvent{{Type: StreamThinking, Text: ev.Delta}}, false, nil
 		}
 	case "response.output_item.added":
 		var ev struct {
-			OutputIndex int                 `json:"output_index"`
 			Item        ResponsesOutputItem `json:"item"`
+			OutputIndex int                 `json:"output_index"`
 		}
 		if json.Unmarshal([]byte(d), &ev) == nil && ev.Item.Type == "function_call" {
 			return []StreamEvent{{Type: StreamToolStart, ToolIndex: ev.OutputIndex, ToolID: ev.Item.CallID, ToolName: ev.Item.Name}}, false, nil
 		}
 	case "response.function_call_arguments.delta":
 		var ev struct {
-			OutputIndex int    `json:"output_index"`
 			Delta       string `json:"delta"`
+			OutputIndex int    `json:"output_index"`
 		}
 		if json.Unmarshal([]byte(d), &ev) == nil && ev.Delta != "" {
 			return []StreamEvent{{Type: StreamToolDelta, ToolIndex: ev.OutputIndex, ArgsDelta: ev.Delta}}, false, nil
 		}
 	case "response.output_item.done":
 		var ev struct {
-			OutputIndex int                 `json:"output_index"`
 			Item        ResponsesOutputItem `json:"item"`
+			OutputIndex int                 `json:"output_index"`
 		}
 		if json.Unmarshal([]byte(d), &ev) == nil && ev.Item.Type == "function_call" {
 			return []StreamEvent{{Type: StreamToolEnd, ToolIndex: ev.OutputIndex}}, false, nil
 		}
-	case "response.incomplete":
-		var ev struct {
-			Response ResponsesResponse `json:"response"`
-		}
-		if err := json.Unmarshal([]byte(d), &ev); err != nil {
-			return nil, false, fmt.Errorf("invalid Responses incomplete event: %w", err)
-		}
-		var events []StreamEvent
-		if ev.Response.Usage != nil {
-			u := Usage{InputTokens: ev.Response.Usage.InputTokens, OutputTokens: ev.Response.Usage.OutputTokens}
-			if ev.Response.Usage.InputTokensDetails != nil {
-				u.CacheReadTokens = ev.Response.Usage.InputTokensDetails.CachedTokens
-			}
-			if ev.Response.Usage.OutputTokensDetails != nil {
-				u.ReasoningTokens = ev.Response.Usage.OutputTokensDetails.ReasoningTokens
-			}
-			events = append(events, StreamEvent{Type: StreamUsage, Usage: &u})
-		}
-		events = append(events, StreamEvent{Type: StreamEnd, StopReason: StopMaxTokens})
-		return events, true, nil
 	case "response.failed", "error":
 		var ev struct {
 			Response struct {
@@ -631,7 +669,7 @@ func DecodeResponsesStreamEvent(eventName, data string) ([]StreamEvent, bool, er
 			}
 		}
 		return []StreamEvent{{Type: StreamError, ErrorCode: code, ErrorMsg: msg}}, true, nil
-	case "response.completed", "response.done":
+	case "response.completed", "response.done", "response.incomplete":
 		var ev struct {
 			Response ResponsesResponse `json:"response"`
 		}
@@ -656,8 +694,18 @@ func DecodeResponsesStreamEvent(eventName, data string) ([]StreamEvent, bool, er
 				break
 			}
 		}
+		if typ == "response.incomplete" {
+			stop = responsesIncompleteStop(ev.Response.IncompleteDetails)
+		}
 		events = append(events, StreamEvent{Type: StreamEnd, StopReason: stop})
 		return events, true, nil
 	}
 	return nil, false, nil
+}
+
+func responsesIncompleteStop(details map[string]any) string {
+	if details["reason"] == "content_filter" {
+		return StopRefusal
+	}
+	return StopMaxTokens
 }

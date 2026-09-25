@@ -16,10 +16,7 @@ func containsString(xs []string, want string) bool {
 	return false
 }
 
-func TestRuntimeVersionAndProtocolSurfaceMatchV060(t *testing.T) {
-	if gatewayVersion != "0.6.0" {
-		t.Fatalf("gatewayVersion=%q want 0.6.0", gatewayVersion)
-	}
+func TestRuntimeVersionAndProtocolSurfaceMatchBuild(t *testing.T) {
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "http://gateway/version", nil)
@@ -39,8 +36,8 @@ func TestRuntimeVersionAndProtocolSurfaceMatchV060(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.Version != "0.6.0" {
-		t.Fatalf("/version reports %q want 0.6.0", got.Version)
+	if got.Version != gatewayVersion {
+		t.Fatalf("/version reports %q want %q", got.Version, gatewayVersion)
 	}
 	for _, want := range []string{"anthropic_messages", "openai_chat_completions", "openai_responses"} {
 		if !containsString(got.Protocols.Ingress, want) {

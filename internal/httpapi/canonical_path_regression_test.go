@@ -11,18 +11,18 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/config"
 )
 
-type closeTrackingBody struct {
+type atomicCloseTrackingBody struct {
 	io.Reader
 	closed atomic.Bool
 }
 
-func (b *closeTrackingBody) Close() error {
+func (b *atomicCloseTrackingBody) Close() error {
 	b.closed.Store(true)
 	return nil
 }
 
 func TestCanonicalStreamPumpClosesBodyOnProtocolError(t *testing.T) {
-	body := &closeTrackingBody{Reader: strings.NewReader("data: {not-json}\n\n")}
+	body := &atomicCloseTrackingBody{Reader: strings.NewReader("data: {not-json}\n\n")}
 	resp := &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
@@ -166,7 +166,8 @@ func TestAnthropicTextBlockStopDoesNotBecomeResponsesToolEnd(t *testing.T) {
 }
 
 func TestCanonicalStreamErrorDoesNotAppendSuccessTail(t *testing.T) {
-	stream := "data: {\"error\":{\"message\":\"upstream exploded\",\"type\":\"server_error\"}}\n\n"
+	// Commit one content event first. Errors before commitment remain eligible for failover.
+	stream := "data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\ndata: {\"error\":{\"message\":\"upstream exploded\",\"type\":\"server_error\"}}\n\n"
 	resp := &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},

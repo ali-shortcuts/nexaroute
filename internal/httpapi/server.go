@@ -183,6 +183,7 @@ func (s *Server) adminConfigSnapshot() config.AdminConfig {
 
 func cloneConfig(in config.Config) config.Config {
 	out := in
+	out.ClientAuth.Keys = append([]string(nil), in.ClientAuth.Keys...)
 	out.Providers = append([]config.ProviderConfig(nil), in.Providers...)
 	for i := range out.Providers {
 		if in.Providers[i].Headers != nil {
@@ -477,6 +478,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/admin/api/compat/reset", s.adminCompatReset)
 	mux.HandleFunc("/admin/api/provider-discover", s.adminProviderDiscover)
 	mux.HandleFunc("/admin/api/settings", s.adminSettings)
+	mux.HandleFunc("/admin/api/endpoint", s.adminEndpoint)
 
 	sub, _ := fs.Sub(webFS, "web")
 	mux.Handle("/", http.FileServer(http.FS(sub)))
