@@ -254,6 +254,286 @@ func toolProbePayload(model, toolChoice string, twoTools bool) []byte {
 	return b
 }
 
+// responsesProbeTransport adapts the existing OpenAI-chat-shaped probe suite
+// to an OpenAI Responses-only upstream. Keeping the verdict engine shared
+// avoids divergent capability semantics while ensuring the wire protocol is
+// correct for Responses-native providers.
+type responsesProbeTransport struct {
+	base ProbeTransport
+}
+
+func (t responsesProbeTransport) RedactBody(b []byte) []byte {
+	return t.base.RedactBody(b)
+}
+
+func (t responsesProbeTransport) Do(ctx context.Context, payload []byte, stream bool, forward http.Header) (*http.Response, error) {
+	converted, err := chatProbePayloadToResponses(payload)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := t.base.Do(ctx, converted, stream, forward)
+	if err != nil || resp == nil || stream || resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return resp, err
+	}
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	_ = resp.Body.Close()
+	if readErr != nil {
+		return nil, readErr
+	}
+	chatBody, convErr := responsesProbeBodyToChat(body)
+	if convErr != nil {
+		resp.Body = io.NopCloser(bytes.NewReader(body))
+		resp.ContentLength = int64(len(body))
+		return resp, nil
+	}
+	resp.Body = io.NopCloser(bytes.NewReader(chatBody))
+	resp.ContentLength = int64(len(chatBody))
+	return resp, nil
+}
+
+func chatProbePayloadToResponses(payload []byte) ([]byte, error) {
+	var in map[string]any
+	if err := json.Unmarshal(payload, &in); err != nil {
+		return nil, fmt.Errorf("responses probe request decode: %w", err)
+	}
+	out := map[string]any{}
+	for _, key := range []string{"model", "stream", "temperature", "top_p", "stop", "parallel_tool_calls", "metadata"} {
+		if v, ok := in[key]; ok {
+			out[key] = v
+		}
+	}
+	if v, ok := in["max_completion_tokens"]; ok {
+		out["max_output_tokens"] = v
+	} else if v, ok := in["max_tokens"]; ok {
+		out["max_output_tokens"] = v
+	}
+	if effort, ok := in["reasoning_effort"]; ok {
+		out["reasoning"] = map[string]any{"effort": effort}
+	}
+	if choice, ok := in["tool_choice"]; ok {
+		out["tool_choice"] = choice
+	}
+	if rf, ok := in["response_format"].(map[string]any); ok {
+		format := map[string]any{}
+		if typ, _ := rf["type"].(string); typ != "" {
+			format["type"] = typ
+		}
+		if js, ok := rf["json_schema"].(map[string]any); ok {
+			for _, key := range []string{"name", "schema", "strict"} {
+				if v, exists := js[key]; exists {
+					format[key] = v
+				}
+			}
+		}
+		if len(format) > 0 {
+			out["text"] = map[string]any{"format": format}
+		}
+	}
+	if rawTools, ok := in["tools"].([]any); ok {
+		tools := make([]any, 0, len(rawTools))
+		for _, raw := range rawTools {
+			m, _ := raw.(map[string]any)
+			if m == nil {
+				continue
+			}
+			if fn, ok := m["function"].(map[string]any); ok {
+				flat := map[string]any{"type": "function"}
+				for _, key := range []string{"name", "description", "parameters", "strict"} {
+					if v, exists := fn[key]; exists {
+						flat[key] = v
+					}
+				}
+				tools = append(tools, flat)
+				continue
+			}
+			tools = append(tools, m)
+		}
+		if len(tools) > 0 {
+			out["tools"] = tools
+		}
+	}
+
+	var input []any
+	var instructions []string
+	if messages, ok := in["messages"].([]any); ok {
+		for _, raw := range messages {
+			msg, _ := raw.(map[string]any)
+			if msg == nil {
+				continue
+			}
+			role, _ := msg["role"].(string)
+			if role == "system" || role == "developer" {
+				if txt, ok := msg["content"].(string); ok && strings.TrimSpace(txt) != "" {
+					instructions = append(instructions, txt)
+				}
+				continue
+			}
+			if role == "tool" {
+				callID, _ := msg["tool_call_id"].(string)
+				output := ""
+				switch v := msg["content"].(type) {
+				case string:
+					output = v
+				default:
+					if b, err := json.Marshal(v); err == nil {
+						output = string(b)
+					}
+				}
+				input = append(input, map[string]any{"type": "function_call_output", "call_id": callID, "output": output})
+				continue
+			}
+
+			content := responsesProbeContent(msg["content"])
+			if len(content) > 0 {
+				input = append(input, map[string]any{"type": "message", "role": role, "content": content})
+			}
+			if role == "assistant" {
+				if calls, ok := msg["tool_calls"].([]any); ok {
+					for _, rawCall := range calls {
+						call, _ := rawCall.(map[string]any)
+						fn, _ := call["function"].(map[string]any)
+						if call == nil || fn == nil {
+							continue
+						}
+						input = append(input, map[string]any{
+							"type":      "function_call",
+							"call_id":   call["id"],
+							"name":      fn["name"],
+							"arguments": fn["arguments"],
+						})
+					}
+				}
+			}
+		}
+	}
+	if len(instructions) > 0 {
+		out["instructions"] = strings.Join(instructions, "\n")
+	}
+	if len(input) == 0 {
+		input = append(input, map[string]any{
+			"type": "message", "role": "user",
+			"content": []any{map[string]any{"type": "input_text", "text": "Reply with the single word: OK"}},
+		})
+	}
+	out["input"] = input
+	return json.Marshal(out)
+}
+
+func responsesProbeContent(v any) []any {
+	switch content := v.(type) {
+	case string:
+		if content == "" {
+			return nil
+		}
+		return []any{map[string]any{"type": "input_text", "text": content}}
+	case []any:
+		out := make([]any, 0, len(content))
+		for _, raw := range content {
+			part, _ := raw.(map[string]any)
+			if part == nil {
+				continue
+			}
+			typ, _ := part["type"].(string)
+			switch typ {
+			case "text", "input_text":
+				if txt, _ := part["text"].(string); txt != "" {
+					out = append(out, map[string]any{"type": "input_text", "text": txt})
+				}
+			case "image_url", "input_image":
+				imageURL := ""
+				switch iv := part["image_url"].(type) {
+				case string:
+					imageURL = iv
+				case map[string]any:
+					imageURL, _ = iv["url"].(string)
+				}
+				if imageURL != "" {
+					out = append(out, map[string]any{"type": "input_image", "image_url": imageURL})
+				}
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func responsesProbeBodyToChat(body []byte) ([]byte, error) {
+	var in struct {
+		ID     string `json:"id"`
+		Model  string `json:"model"`
+		Status string `json:"status"`
+		Output []struct {
+			Type      string           `json:"type"`
+			Content   []map[string]any `json:"content"`
+			Name      string           `json:"name"`
+			CallID    string           `json:"call_id"`
+			Arguments string           `json:"arguments"`
+		} `json:"output"`
+		Usage *struct {
+			InputTokens  int `json:"input_tokens"`
+			OutputTokens int `json:"output_tokens"`
+		} `json:"usage"`
+	}
+	if err := json.Unmarshal(body, &in); err != nil {
+		return nil, fmt.Errorf("responses probe response decode: %w", err)
+	}
+	var textParts []string
+	var toolCalls []any
+	for _, item := range in.Output {
+		switch item.Type {
+		case "message":
+			for _, part := range item.Content {
+				typ, _ := part["type"].(string)
+				if typ == "output_text" || typ == "text" || typ == "" {
+					if txt, _ := part["text"].(string); txt != "" {
+						textParts = append(textParts, txt)
+					}
+				}
+			}
+		case "function_call":
+			toolCalls = append(toolCalls, map[string]any{
+				"id": item.CallID, "type": "function",
+				"function": map[string]any{"name": item.Name, "arguments": item.Arguments},
+			})
+		}
+	}
+	message := map[string]any{"role": "assistant", "content": strings.Join(textParts, "\n")}
+	if len(toolCalls) > 0 {
+		message["tool_calls"] = toolCalls
+	}
+	finish := "stop"
+	if len(toolCalls) > 0 {
+		finish = "tool_calls"
+	} else if in.Status == "incomplete" {
+		finish = "length"
+	}
+	out := map[string]any{
+		"id": in.ID, "model": in.Model, "object": "chat.completion",
+		"choices": []any{map[string]any{"index": 0, "message": message, "finish_reason": finish}},
+	}
+	if in.Usage != nil {
+		out["usage"] = map[string]any{
+			"prompt_tokens": in.Usage.InputTokens, "completion_tokens": in.Usage.OutputTokens,
+			"total_tokens": in.Usage.InputTokens + in.Usage.OutputTokens,
+		}
+	}
+	return json.Marshal(out)
+}
+
+// RunCapabilitySuiteResponses executes the existing capability matrix through
+// a Responses wire adapter so Responses-only providers are never probed with
+// Chat Completions payloads.
+func RunCapabilitySuiteResponses(ctx context.Context, t ProbeTransport, deploymentID, model string) ProbeReport {
+	return RunCapabilitySuite(ctx, responsesProbeTransport{base: t}, deploymentID, model, "openai_responses")
+}
+
+// RunAgentLoopSimulationResponses runs the agent-loop verifier over the same
+// Responses wire adapter.
+func RunAgentLoopSimulationResponses(ctx context.Context, t ProbeTransport, deploymentID, model string) ProbeReport {
+	return RunAgentLoopSimulation(ctx, responsesProbeTransport{base: t}, deploymentID, model)
+}
+
 // RunCapabilitySuite executes the Level B compatibility probes (spec
 // section 6) against one deployment. ctx should carry a bounded deadline.
 // Probes are intentionally cheap (<=128 output tokens each).

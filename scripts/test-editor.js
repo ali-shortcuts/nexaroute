@@ -4,7 +4,7 @@ const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const source = fs.readFileSync('internal/httpapi/web/app.js', 'utf8');
 const form = source.slice(source.indexOf('function readForm()'), source.indexOf('\nfunction payload('));
-const values = {pId:'p',pName:'P',pType:'gemini',pBase:'https://example.test',pAuth:'x-goog-api-key'};
+const values = {pId:'p',pName:'P',pType:'gemini',pBase:'https://example.test',pAuth:'x-goog-api-key',pResponsesPath:'/custom/responses'};
 const model = {id:'m',model:'gemini-test',context_window:65536,input_cost_per_mtok:2,output_cost_per_mtok:8,capabilities:{streaming:true}};
 const context = {
  editor: {mode:'edit',provider:{responses_path:'/custom/responses',dialect:'gemini'},selected:new Set(['gemini-test'])},

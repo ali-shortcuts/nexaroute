@@ -62,6 +62,7 @@ const (
 	adminBucketRefill   = 1.5
 	adminAuthPenalty    = 10.0
 	adminBucketIdle     = 10 * time.Minute
+	maxAdminBuckets     = 4096
 )
 
 type adminBucket struct {
@@ -76,7 +77,7 @@ func (s *Server) adminAllow(ip string, cost float64) bool {
 	if s.adminBuckets == nil {
 		s.adminBuckets = map[string]*adminBucket{}
 	}
-	if len(s.adminBuckets) >= 4096 {
+	if len(s.adminBuckets) >= maxAdminBuckets {
 		for k, b := range s.adminBuckets {
 			if now.Sub(b.last) > adminBucketIdle {
 				delete(s.adminBuckets, k)
@@ -84,10 +85,16 @@ func (s *Server) adminAllow(ip string, cost float64) bool {
 		}
 	}
 	b, ok := s.adminBuckets[ip]
-	if !ok && len(s.adminBuckets) >= 4096 {
-		return false
-	}
-	if !ok || now.Sub(b.last) > adminBucketIdle {
+	if !ok {
+		// Unauthorized attempts are bucketed before auth. Under a distributed
+		// source-IP flood, allowing a new bucket after the table is full would
+		// make this supposedly bounded limiter an unbounded memory sink.
+		if len(s.adminBuckets) >= maxAdminBuckets {
+			return false
+		}
+		b = &adminBucket{tokens: adminBucketCapacity, last: now}
+		s.adminBuckets[ip] = b
+	} else if now.Sub(b.last) > adminBucketIdle {
 		b = &adminBucket{tokens: adminBucketCapacity, last: now}
 		s.adminBuckets[ip] = b
 	}
@@ -212,6 +219,7 @@ func providerProbeIdentityEqual(a, b config.ProviderConfig) bool {
 		a.MessagesPath == b.MessagesPath &&
 		a.ModelsPath == b.ModelsPath &&
 		a.CountTokensPath == b.CountTokensPath &&
+		a.ResponsesPath == b.ResponsesPath &&
 		a.Enabled == b.Enabled
 }
 
@@ -528,6 +536,10 @@ func (s *Server) rejectOverloaded(w http.ResponseWriter, r *http.Request, reques
 	w.Header().Set("Retry-After", "1")
 	if r.URL.Path == "/v1/messages" || r.URL.Path == "/v1/messages/count_tokens" {
 		anthropicErrorJSON(w, http.StatusServiceUnavailable, "gateway is at capacity; retry shortly")
+		return
+	}
+	if r.URL.Path == "/v1/responses" {
+		canonicalErrorJSON(w, "openai_responses", http.StatusServiceUnavailable, "server_error", "gateway is at capacity; retry shortly")
 		return
 	}
 	errorJSON(w, http.StatusServiceUnavailable, "gateway is at capacity; retry shortly")

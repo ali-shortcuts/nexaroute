@@ -2,10 +2,12 @@ package providers
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -117,6 +119,49 @@ func TestReleaseOnDoneBodyReleasesOnTerminalReadError(t *testing.T) {
 	}
 	if released != 1 {
 		t.Fatalf("release ran more than once: %d", released)
+	}
+}
+
+func TestResponsesProbeUsesResponsesPathAndPayload(t *testing.T) {
+	var gotPath string
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(body, &got); err != nil {
+			t.Fatalf("probe payload is not JSON: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"resp_1","object":"response","status":"completed","model":"m","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"OK"}]}],"usage":{"input_tokens":1,"output_tokens":1}}`)
+	}))
+	defer srv.Close()
+
+	p := config.ProviderConfig{
+		ID: "p", Name: "P", Type: "openai_responses", BaseURL: srv.URL,
+		ChatPath: "/must-not-use", ResponsesPath: "/custom/responses",
+		MaxConcurrency: 1, Enabled: true,
+	}
+	a, err := newHTTPAdapter(p, 2*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, status, err := a.Probe(context.Background(), "m", 3); err != nil || status != http.StatusOK {
+		t.Fatalf("Responses probe failed: status=%d err=%v", status, err)
+	}
+	if gotPath != "/custom/responses" {
+		t.Fatalf("probe path=%q want /custom/responses", gotPath)
+	}
+	if _, ok := got["messages"]; ok {
+		t.Fatalf("Responses probe leaked Chat Completions messages field: %#v", got)
+	}
+	if got["input"] == nil {
+		t.Fatalf("Responses probe missing input: %#v", got)
+	}
+	if got["max_output_tokens"] != float64(3) {
+		t.Fatalf("max_output_tokens=%v want 3", got["max_output_tokens"])
 	}
 }
 
@@ -453,5 +498,95 @@ func TestReviewSameOriginRedirectWorks(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
 		t.Fatalf("status=%d", resp.StatusCode)
+	}
+}
+
+func TestOutOfOrderQuotaResponsesDoNotRestoreStaleHeadroom(t *testing.T) {
+	var calls atomic.Int64
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+
+	now := time.Now().UTC().Truncate(time.Second)
+	oldRequestReset := now.Add(time.Minute)
+	oldTokenReset := now.Add(2 * time.Minute)
+	newRequestReset := now.Add(3 * time.Minute)
+	newTokenReset := now.Add(4 * time.Minute)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := calls.Add(1)
+		if n == 1 {
+			close(firstStarted)
+			<-releaseFirst
+			w.Header().Set("x-ratelimit-limit-requests", "100")
+			w.Header().Set("x-ratelimit-remaining-requests", "9")
+			w.Header().Set("x-ratelimit-reset-requests", oldRequestReset.Format(time.RFC3339))
+			w.Header().Set("x-ratelimit-limit-tokens", "5000")
+			w.Header().Set("x-ratelimit-remaining-tokens", "900")
+			w.Header().Set("x-ratelimit-reset-tokens", oldTokenReset.Format(time.RFC3339))
+		} else {
+			w.Header().Set("x-ratelimit-limit-requests", "90")
+			w.Header().Set("x-ratelimit-remaining-requests", "8")
+			w.Header().Set("x-ratelimit-reset-requests", newRequestReset.Format(time.RFC3339))
+			w.Header().Set("x-ratelimit-limit-tokens", "4000")
+			w.Header().Set("x-ratelimit-remaining-tokens", "800")
+			w.Header().Set("x-ratelimit-reset-tokens", newTokenReset.Format(time.RFC3339))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`)
+	}))
+	defer srv.Close()
+
+	p := config.ProviderConfig{
+		ID: "p", Name: "P", Type: "openai_compatible", BaseURL: srv.URL,
+		AuthMode: "none", ChatPath: "/", MaxConcurrency: 2, Enabled: true,
+	}
+	a, err := newHTTPAdapter(p, 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	type result struct {
+		resp *http.Response
+		err  error
+	}
+	firstResult := make(chan result, 1)
+	go func() {
+		resp, err := a.Do(context.Background(), []byte(`{"model":"m","messages":[]}`), false, nil)
+		firstResult <- result{resp: resp, err: err}
+	}()
+
+	<-firstStarted
+	secondResp, err := a.Do(context.Background(), []byte(`{"model":"m","messages":[]}`), false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.Copy(io.Discard, secondResp.Body)
+	_ = secondResp.Body.Close()
+
+	st := a.Stats()
+	if st.RequestLimit != 90 || st.RemainingRequests != 8 || st.TokenLimit != 4000 || st.RemainingTokens != 800 {
+		t.Fatalf("newer quota observation was not installed: %+v", st)
+	}
+
+	close(releaseFirst)
+	first := <-firstResult
+	if first.err != nil {
+		t.Fatal(first.err)
+	}
+	_, _ = io.Copy(io.Discard, first.resp.Body)
+	_ = first.resp.Body.Close()
+
+	st = a.Stats()
+	if st.RequestLimit != 90 || st.RemainingRequests != 8 {
+		t.Fatalf("stale request quota response overwrote newer evidence: %+v", st)
+	}
+	if st.TokenLimit != 4000 || st.RemainingTokens != 800 {
+		t.Fatalf("stale token quota response overwrote newer evidence: %+v", st)
+	}
+	if st.RequestResetUnix != newRequestReset.Unix() || st.TokenResetUnix != newTokenReset.Unix() {
+		t.Fatalf("stale reset deadline overwrote newer evidence: %+v", st)
+	}
+	if st.RateLimitResetUnix != newTokenReset.Unix() {
+		t.Fatalf("summary reset did not preserve latest accepted resource deadline: %+v", st)
 	}
 }

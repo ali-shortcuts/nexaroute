@@ -286,8 +286,8 @@ function renderDonut(counts, total) {
     ['donutGood', 'healthy', counts.healthy || 0, 'var(--good)'],
     ['donutUnknown', 'unknown', counts.unknown || 0, '#5c718a'],
     ['donutDegraded', 'degraded', counts.degraded || 0, 'var(--warn)'],
-    ['donutCooldown', 'cooldown', counts.cooldown || 0, 'var(--bad)'],
-    ['donutCooldown', 'half_open', counts.half_open || 0, '#c9b8ff']
+    ['donutHalfOpen', 'half_open', counts.half_open || 0, '#c9b8ff'],
+    ['donutCooldown', 'cooldown', counts.cooldown || 0, 'var(--bad)']
   ];
   const r = 48, circ = 2 * Math.PI * r;
   let offset = 0;
@@ -296,15 +296,8 @@ function renderDonut(counts, total) {
     const el = $('#' + id);
     const frac = total ? count / total : 0;
     const len = frac * circ;
-    if (id === 'donutCooldown' && label === 'half_open') {
-      // reuse the cooldown circle element sequentially for half-open
-      el.setAttribute('stroke-dasharray', `${len} ${circ - len}`);
-      el.setAttribute('stroke-dashoffset', -offset);
-      el.setAttribute('stroke', color);
-    } else {
-      el.setAttribute('stroke-dasharray', `${len} ${circ - len}`);
-      el.setAttribute('stroke-dashoffset', -offset);
-    }
+    el.setAttribute('stroke-dasharray', `${len} ${circ - len}`);
+    el.setAttribute('stroke-dashoffset', -offset);
     offset += len;
     if (count > 0 || label === 'healthy') legend.push(`<li><i style="background:${color}"></i>${label}<b>${fmtInt(count)}</b></li>`);
   }
@@ -347,7 +340,7 @@ function renderProviders(h) {
       <button class="edit-provider btn secondary" data-id="${esc(p.id)}">Edit provider</button>
     </article>`;
   }).join('') || '<div class="empty-state"><strong>No providers yet.</strong><span>Add an OpenAI-compatible or Anthropic-compatible upstream to start routing.</span></div>';
-  $('.edit-provider').forEach(b => b.onclick = () => openEdit(b.dataset.id));
+  $$('.edit-provider').forEach(b => b.onclick = () => openEdit(b.dataset.id));
 }
 
 function renderModels(ds, h) {
@@ -580,9 +573,9 @@ $$('#cliTabs button').forEach(b => b.onclick = () => {
 /* ---------- provider editor ---------- */
 function emptyProvider() {
   return {
-    id: '', name: '', type: 'openai_compatible', base_url: '', api_key: '', api_key_env: '', credentials: [],
+    id: '', name: '', type: 'openai_compatible', dialect: '', base_url: '', api_key: '', api_key_env: '', credentials: [],
     auth_mode: 'bearer', headers: {}, forward_headers: null, proxy_url: '',
-    chat_path: '/v1/chat/completions', messages_path: '/v1/messages', models_path: '/v1/models',
+    chat_path: '/v1/chat/completions', responses_path: '/v1/responses', messages_path: '/v1/messages', models_path: '/v1/models',
     count_tokens_path: '/v1/messages/count_tokens', max_concurrency: 32, stream_idle_timeout_seconds: 180,
     enabled: true, models: []
   };
@@ -599,7 +592,7 @@ function toggleSecret(i, b) {
 }
 const providerPresets = {
   custom: null,
-  chat2api: { name: 'Chat2API', id: 'chat2api', type: 'openai_compatible', base: 'http://127.0.0.1:5000/v1', auth: 'bearer' },
+  chat2api: { name: 'Chat2API', id: 'chat2api', type: 'openai_compatible', base: 'http://127.0.0.1:5000/v1', auth: 'bearer', local: true },
   anthropic: { name: 'Anthropic', id: 'anthropic', type: 'anthropic_compatible', base: 'https://api.anthropic.com', auth: 'x-api-key' },
   openai: { name: 'OpenAI', id: 'openai', type: 'openai_compatible', base: 'https://api.openai.com/v1', auth: 'bearer' },
   openrouter: { name: 'OpenRouter', id: 'openrouter', type: 'openai_compatible', base: 'https://openrouter.ai/api/v1', auth: 'bearer' },
@@ -608,38 +601,50 @@ const providerPresets = {
   together: { name: 'Together AI', id: 'together', type: 'openai_compatible', base: 'https://api.together.xyz/v1', auth: 'bearer' },
   mistral: { name: 'Mistral', id: 'mistral', type: 'openai_compatible', base: 'https://api.mistral.ai/v1', auth: 'bearer' },
   xai: { name: 'xAI', id: 'xai', type: 'openai_compatible', base: 'https://api.x.ai/v1', auth: 'bearer' },
-  ollama: { name: 'Ollama', id: 'ollama', type: 'openai_compatible', base: 'http://127.0.0.1:11434/v1', auth: 'none' }
+  ollama: { name: 'Ollama', id: 'ollama', type: 'openai_compatible', base: 'http://127.0.0.1:11434/v1', auth: 'none', local: true },
+  lmstudio: { name: 'LM Studio', id: 'lmstudio', type: 'openai_compatible', base: 'http://127.0.0.1:1234/v1', auth: 'none', local: true },
+  vllm: { name: 'vLLM', id: 'vllm', type: 'openai_compatible', base: 'http://127.0.0.1:8000/v1', auth: 'none', local: true }
 };
 function fillPresetSelect() {
   const sel = $('#pPreset');
   const current = sel.value;
-  const entries = [];
+  const apiEntries = [];
+  const localEntries = [];
   const seen = new Set();
+  const add = (key, label, local) => {
+    if (!key || key === 'custom' || seen.has(key)) return;
+    seen.add(key);
+    const option = `<option value="${esc(key)}">${esc(label || key)}</option>`;
+    (local ? localEntries : apiEntries).push(option);
+  };
   if (Array.isArray(serverPresets)) {
     for (const p of serverPresets) {
-      if (!p || !p.key || seen.has(p.key)) continue;
-      seen.add(p.key);
-      entries.push(`<option value="${esc(p.key)}">${esc(p.label || p.key)}</option>`);
+      const key = p && (p.id || p.key);
+      add(key, p && (p.name || p.label || key), !!(p && p.local));
     }
   }
-  for (const k of Object.keys(providerPresets)) {
-    if (k === 'custom' || seen.has(k)) continue;
-    entries.push(`<option value="${esc(k)}">${esc(providerPresets[k].name)}</option>`);
+  for (const [key, p] of Object.entries(providerPresets)) {
+    if (!p) continue;
+    add(key, p.name || key, !!p.local);
   }
-  sel.innerHTML = '<option value="custom">Custom Provider</option>' + entries.join('');
+  const apiGroup = apiEntries.length ? `<optgroup label="API Providers">${apiEntries.join('')}</optgroup>` : '';
+  const localGroup = localEntries.length ? `<optgroup label="Local Providers">${localEntries.join('')}</optgroup>` : '';
+  sel.innerHTML = '<option value="custom">Custom Provider</option>' + apiGroup + localGroup;
   sel.value = current || 'custom';
 }
 function applyPreset(k) {
-  const p = serverPresets && Array.isArray(serverPresets) ? serverPresets.find(x => x && x.key === k) : null;
+  const p = serverPresets && Array.isArray(serverPresets) ? serverPresets.find(x => x && (x.id || x.key) === k) : null;
   if (p) {
     if (editor.mode === 'add') {
-      if (!$('#pName').value.trim()) $('#pName').value = p.name || p.key;
-      if (!$('#pId').value.trim()) $('#pId').value = p.id || p.key;
+      const key = p.id || p.key;
+      if (!$('#pName').value.trim()) $('#pName').value = p.name || p.label || key;
+      if (!$('#pId').value.trim()) $('#pId').value = key;
     }
     $('#pType').value = p.type || 'openai_compatible';
     $('#pBase').value = p.base_url || p.base || '';
     $('#pAuth').value = p.auth_mode || 'bearer';
     $('#pChatPath').value = p.chat_path || '/v1/chat/completions';
+    $('#pResponsesPath').value = p.responses_path || '/v1/responses';
     $('#pMessagesPath').value = p.messages_path || '/v1/messages';
     $('#pModelsPath').value = p.models_path || '/v1/models';
     $('#pCountPath').value = p.count_tokens_path || '/v1/messages/count_tokens';
@@ -655,6 +660,7 @@ function applyPreset(k) {
   $('#pBase').value = c.base;
   $('#pAuth').value = c.auth;
   $('#pChatPath').value = '/v1/chat/completions';
+  $('#pResponsesPath').value = '/v1/responses';
   $('#pMessagesPath').value = '/v1/messages';
   $('#pModelsPath').value = '/v1/models';
   $('#pCountPath').value = '/v1/messages/count_tokens';
@@ -673,10 +679,11 @@ $('#pKeyEnv').oninput = () => editor.secretDirty = true;
 $('#pCredentials').oninput = () => editor.secretDirty = true;
 $('#pPreset').onchange = () => applyPreset($('#pPreset').value);
 $('#pType').onchange = () => {
-  const a = $('#pAuth');
-  if ($('#pType').value === 'anthropic_compatible' && a.value === 'bearer') a.value = 'x-api-key';
-  if ($('#pType').value === 'gemini') { a.value = 'x-goog-api-key'; if ($('#pModelsPath').value === '/v1/models') $('#pModelsPath').value = '/v1beta/models'; }
-  if (['openai_compatible', 'openai_responses'].includes($('#pType').value) && ['x-api-key', 'x-goog-api-key'].includes(a.value)) a.value = 'bearer';
+  const a = $('#pAuth'), typ = $('#pType').value;
+  if (typ === 'anthropic_compatible' && (a.value === 'bearer' || a.value === 'x-goog-api-key')) a.value = 'x-api-key';
+  if (typ === 'gemini' && $('#pModelsPath').value === '/v1/models') $('#pModelsPath').value = '/v1beta/models';
+  if (typ === 'gemini' && (a.value === 'bearer' || a.value === 'x-api-key')) a.value = 'x-goog-api-key';
+  if ((typ === 'openai_compatible' || typ === 'openai_responses') && (a.value === 'x-api-key' || a.value === 'x-goog-api-key')) a.value = 'bearer';
 };
 async function openEdit(id) {
   try {
@@ -717,6 +724,7 @@ function fillForm() {
   $('#pConcurrency').value = p.max_concurrency || 32;
   $('#pStreamIdle').value = p.stream_idle_timeout_seconds || 180;
   $('#pChatPath').value = p.chat_path || '/v1/chat/completions';
+  $('#pResponsesPath').value = p.responses_path || '/v1/responses';
   $('#pMessagesPath').value = p.messages_path || '/v1/messages';
   $('#pModelsPath').value = p.models_path || '/v1/models';
   $('#pCountPath').value = p.count_tokens_path || '/v1/messages/count_tokens';
@@ -775,12 +783,16 @@ function readForm() {
       enabled: x.enabled !== false,
       priority: Number.isFinite(Number(x.priority)) ? Number(x.priority) : i,
       weight: Number(x.weight) > 0 ? Number(x.weight) : 1,
+      context_window: Number.isFinite(Number(x.context_window)) ? Math.max(0, Number(x.context_window)) : 0,
+      input_cost_per_mtok: Number.isFinite(Number(x.input_cost_per_mtok)) ? Math.max(0, Number(x.input_cost_per_mtok)) : 0,
+      output_cost_per_mtok: Number.isFinite(Number(x.output_cost_per_mtok)) ? Math.max(0, Number(x.output_cost_per_mtok)) : 0,
       capabilities: { streaming: c.streaming !== false, tools: c.tools !== false, vision: !!c.vision, reasoning: !!c.reasoning }
     };
   });
   const p = {
     ...editor.provider,
     id: $('#pId').value.trim(), name: $('#pName').value.trim(), type: $('#pType').value,
+    dialect: editor.provider?.dialect || '',
     base_url: $('#pBase').value.trim(), api_key: $('#pKey').value, api_key_env: $('#pKeyEnv').value.trim(),
     credentials: creds, auth_mode: $('#pAuth').value, headers: hs,
     forward_headers: (() => {
@@ -788,10 +800,11 @@ function readForm() {
       return v.length ? v : (editor.mode === 'add' ? null : []);
     })(),
     proxy_url: $('#pProxy').value.trim(),
-    chat_path: $('#pChatPath').value.trim(), messages_path: $('#pMessagesPath').value.trim(),
-    models_path: $('#pModelsPath').value.trim(), count_tokens_path: $('#pCountPath').value.trim(),
+    chat_path: $('#pChatPath').value.trim(), responses_path: $('#pResponsesPath').value.trim(),
+    messages_path: $('#pMessagesPath').value.trim(), models_path: $('#pModelsPath').value.trim(),
+    count_tokens_path: $('#pCountPath').value.trim(),
     max_concurrency: Math.max(1, parseInt($('#pConcurrency').value || '32', 10)),
-    stream_idle_timeout_seconds: Math.max(10, parseInt($('#pStreamIdle').value || '180', 10)),
+    stream_idle_timeout_seconds: Math.max(1, parseInt($('#pStreamIdle').value || '180', 10)),
     enabled: $('#pEnabled').checked, models
   };
   if (!p.id) throw new Error('Internal ID is required');

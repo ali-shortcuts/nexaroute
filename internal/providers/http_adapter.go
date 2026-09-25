@@ -63,6 +63,14 @@ type httpAdapter struct {
 	rateLimitResetUnix atomic.Int64
 	reservedRequests   atomic.Int64
 	reservedTokens     atomic.Int64
+	quotaDispatchSeq   atomic.Uint64
+	quotaMu            sync.Mutex
+	requestLimitSeq    uint64
+	requestRemainSeq   uint64
+	requestResetSeq    uint64
+	tokenLimitSeq      uint64
+	tokenRemainSeq     uint64
+	tokenResetSeq      uint64
 }
 
 func newHTTPAdapter(p config.ProviderConfig, timeout time.Duration) (*httpAdapter, error) {
@@ -239,13 +247,14 @@ func endpoint(base, suffix string) string {
 }
 
 func (a *httpAdapter) defaultPath() string {
-	if a.p.Type == "openai_responses" {
-		return a.p.ResponsesPath
-	}
-	if a.p.Type == "anthropic_compatible" {
+	switch a.p.Type {
+	case "anthropic_compatible":
 		return a.p.MessagesPath
+	case "openai_responses":
+		return a.p.ResponsesPath
+	default:
+		return a.p.ChatPath
 	}
-	return a.p.ChatPath
 }
 
 type quotaReservation struct {
@@ -396,6 +405,7 @@ func (a *httpAdapter) DoPath(ctx context.Context, method, path string, payload [
 			client = a.streamC
 		}
 		reservation := a.reserveQuota(reqCtx)
+		quotaSeq := a.quotaDispatchSeq.Add(1)
 		resp, err := client.Do(req)
 		if err != nil {
 			reservation.releaseAll()
@@ -406,7 +416,7 @@ func (a *httpAdapter) DoPath(ctx context.Context, method, path string, payload [
 			release()
 			return nil, err
 		}
-		observed := a.observeRateLimitHeaders(resp.Header)
+		observed := a.observeRateLimitHeaders(resp.Header, quotaSeq)
 		if observed.RequestRemaining {
 			reservation.releaseRequests()
 		}
@@ -491,46 +501,76 @@ type quotaObservation struct {
 	TokenRemaining   bool
 }
 
-func (a *httpAdapter) observeRateLimitHeaders(h http.Header) quotaObservation {
-	obs := quotaObservation{}
-	if n, ok := parseQuotaIntHeader(h, "x-ratelimit-limit-requests", "anthropic-ratelimit-requests-limit"); ok {
-		a.requestLimit.Store(n)
-	}
-	if n, ok := parseQuotaIntHeader(h, "x-ratelimit-remaining-requests", "anthropic-ratelimit-requests-remaining"); ok {
-		a.remainingRequests.Store(n)
-		obs.RequestRemaining = true
-	}
-	if n, ok := parseQuotaIntHeader(h, "x-ratelimit-limit-tokens", "anthropic-ratelimit-tokens-limit"); ok {
-		a.tokenLimit.Store(n)
-	}
-	if n, ok := parseQuotaIntHeader(h, "x-ratelimit-remaining-tokens", "anthropic-ratelimit-tokens-remaining"); ok {
-		a.remainingTokens.Store(n)
-		obs.TokenRemaining = true
-	}
-	requestReset, requestOK := parseQuotaResetHeader(h,
+func (a *httpAdapter) observeRateLimitHeaders(h http.Header, dispatchSeq uint64) quotaObservation {
+	requestLimit, requestLimitOK := parseQuotaIntHeader(h,
+		"x-ratelimit-limit-requests", "anthropic-ratelimit-requests-limit",
+	)
+	requestRemaining, requestRemainingOK := parseQuotaIntHeader(h,
+		"x-ratelimit-remaining-requests", "anthropic-ratelimit-requests-remaining",
+	)
+	tokenLimit, tokenLimitOK := parseQuotaIntHeader(h,
+		"x-ratelimit-limit-tokens", "anthropic-ratelimit-tokens-limit",
+	)
+	tokenRemaining, tokenRemainingOK := parseQuotaIntHeader(h,
+		"x-ratelimit-remaining-tokens", "anthropic-ratelimit-tokens-remaining",
+	)
+	requestReset, requestResetOK := parseQuotaResetHeader(h,
 		"x-ratelimit-reset-requests", "anthropic-ratelimit-requests-reset",
 	)
-	if requestOK {
-		a.requestResetUnix.Store(requestReset)
-	}
-	tokenReset, tokenOK := parseQuotaResetHeader(h,
+	tokenReset, tokenResetOK := parseQuotaResetHeader(h,
 		"x-ratelimit-reset-tokens", "anthropic-ratelimit-tokens-reset",
 	)
-	if tokenOK {
+
+	obs := quotaObservation{
+		RequestRemaining: requestRemainingOK,
+		TokenRemaining:   tokenRemainingOK,
+	}
+
+	// Concurrent requests can complete out of order. A response from an older
+	// dispatch must never overwrite quota evidence already observed from a
+	// newer dispatch, or remaining headroom can jump backwards to a stale,
+	// overly optimistic value. Serialize the small observation update so each
+	// field's dispatch sequence and value move together.
+	a.quotaMu.Lock()
+	defer a.quotaMu.Unlock()
+
+	if requestLimitOK && dispatchSeq >= a.requestLimitSeq {
+		a.requestLimitSeq = dispatchSeq
+		a.requestLimit.Store(requestLimit)
+	}
+	if requestRemainingOK && dispatchSeq >= a.requestRemainSeq {
+		a.requestRemainSeq = dispatchSeq
+		a.remainingRequests.Store(requestRemaining)
+	}
+	if requestResetOK && dispatchSeq >= a.requestResetSeq {
+		a.requestResetSeq = dispatchSeq
+		a.requestResetUnix.Store(requestReset)
+	}
+	if tokenLimitOK && dispatchSeq >= a.tokenLimitSeq {
+		a.tokenLimitSeq = dispatchSeq
+		a.tokenLimit.Store(tokenLimit)
+	}
+	if tokenRemainingOK && dispatchSeq >= a.tokenRemainSeq {
+		a.tokenRemainSeq = dispatchSeq
+		a.remainingTokens.Store(tokenRemaining)
+	}
+	if tokenResetOK && dispatchSeq >= a.tokenResetSeq {
+		a.tokenResetSeq = dispatchSeq
 		a.tokenResetUnix.Store(tokenReset)
 	}
-	// Preserve the legacy summary reset as the later known deadline. This is
-	// conservative for dashboards; routing uses the resource-specific resets.
-	reset := requestReset
-	if tokenReset > reset {
-		reset = tokenReset
+
+	// The legacy summary is always derived from the latest accepted
+	// resource-specific reset values. A response containing only one reset
+	// therefore cannot accidentally erase a later deadline from the other.
+	reset := a.requestResetUnix.Load()
+	if token := a.tokenResetUnix.Load(); token > reset {
+		reset = token
 	}
 	if reset > 0 {
 		a.rateLimitResetUnix.Store(reset)
 	}
 	return obs
 }
-
 func (a *httpAdapter) applyHeaders(req *http.Request, forward http.Header) {
 	for k, v := range a.p.Headers {
 		req.Header.Set(k, v)
@@ -766,6 +806,11 @@ func (a *httpAdapter) Probe(ctx context.Context, model string, maxTokens int) (t
 			"contents":         []map[string]any{{"role": "user", "parts": []map[string]any{{"text": "OK"}}}},
 			"generationConfig": map[string]any{"maxOutputTokens": maxTokens},
 		}
+	case "openai_responses":
+		body = map[string]any{
+			"model": model, "input": "Reply with the single word: OK",
+			"max_output_tokens": maxTokens, "stream": false,
+		}
 	default:
 		body = map[string]any{"model": model, "max_tokens": maxTokens, "messages": []map[string]any{{"role": "user", "content": "OK"}}, "stream": false}
 	}
@@ -777,6 +822,8 @@ func (a *httpAdapter) Probe(ctx context.Context, model string, maxTokens int) (t
 	var resp *http.Response
 	if a.p.Type == "gemini" {
 		resp, err = a.DoPath(ctx, http.MethodPost, a.geminiModelPath(model, false), b, false, nil)
+	} else if a.p.Type == "openai_responses" {
+		resp, err = a.DoPath(ctx, http.MethodPost, a.p.ResponsesPath, b, false, nil)
 	} else {
 		resp, err = a.Do(ctx, b, false, nil)
 	}
@@ -827,6 +874,19 @@ func (a *httpAdapter) validateProbeResponse(data []byte) error {
 		}
 		if typ != "message" || role != "assistant" || content == nil {
 			return errors.New("probe returned an invalid Anthropic message envelope")
+		}
+	case "openai_responses":
+		var status string
+		if raw := root["status"]; len(raw) > 0 {
+			_ = json.Unmarshal(raw, &status)
+		}
+		rawOutput, hasOutput := root["output"]
+		if status == "" || !hasOutput {
+			return errors.New("probe returned an invalid Responses envelope: status/output missing")
+		}
+		var output []json.RawMessage
+		if err := json.Unmarshal(rawOutput, &output); err != nil {
+			return fmt.Errorf("probe returned invalid Responses output: %w", err)
 		}
 	case "gemini":
 		var candidates []map[string]json.RawMessage

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ali-shortcuts/nexaroute/internal/config"
+	"github.com/ali-shortcuts/nexaroute/internal/events"
 	"github.com/ali-shortcuts/nexaroute/internal/providers"
 	"github.com/ali-shortcuts/nexaroute/internal/translate"
 )
@@ -212,6 +214,7 @@ func TestDataPlaneAdmissionOnlyCoversExpensivePostEndpoints(t *testing.T) {
 		{http.MethodPost, "/v1/messages", true},
 		{http.MethodPost, "/v1/messages/count_tokens", true},
 		{http.MethodPost, "/v1/chat/completions", true},
+		{http.MethodPost, "/v1/responses", true},
 		{http.MethodGet, "/v1/models", false},
 		{http.MethodGet, "/healthz", false},
 		{http.MethodPost, "/admin/api/probe", false},
@@ -221,6 +224,51 @@ func TestDataPlaneAdmissionOnlyCoversExpensivePostEndpoints(t *testing.T) {
 		if got := isDataPlaneRequest(req); got != tc.want {
 			t.Fatalf("%s %s admission=%v want %v", tc.method, tc.path, got, tc.want)
 		}
+	}
+}
+
+func TestProviderEditorSupportsAllBackendProtocolTypesAndResponsesPath(t *testing.T) {
+	index, err := webFS.ReadFile("web/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	app, err := webFS.ReadFile("web/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(index)
+	js := string(app)
+	for _, typ := range []string{"openai_compatible", "openai_responses", "anthropic_compatible", "gemini"} {
+		if !strings.Contains(html, "value=\""+typ+"\"") {
+			t.Fatalf("provider endpoint type %s missing from embedded editor", typ)
+		}
+	}
+	if !strings.Contains(html, `value="x-goog-api-key"`) {
+		t.Fatal("Gemini x-goog-api-key auth mode missing from embedded editor")
+	}
+	if !strings.Contains(html, `id="pResponsesPath"`) {
+		t.Fatal("Responses path input missing from embedded editor")
+	}
+	for _, want := range []string{
+		"responses_path: '/v1/responses'",
+		"p.responses_path || '/v1/responses'",
+		"responses_path: $('#pResponsesPath').value.trim()",
+	} {
+		if !strings.Contains(js, want) {
+			t.Fatalf("Responses path is not fully round-tripped in app.js: missing %q", want)
+		}
+	}
+	if !strings.Contains(js, "typ === 'gemini'") || !strings.Contains(js, "x-goog-api-key") {
+		t.Fatal("Gemini auth-mode switching is not wired in app.js")
+	}
+	if !strings.Contains(js, "p.id || p.key") || !strings.Contains(js, "p.name || p.label || key") {
+		t.Fatal("server preset id/name schema is not wired into the provider editor")
+	}
+	if !strings.Contains(js, `<optgroup label="API Providers">`) || !strings.Contains(js, `<optgroup label="Local Providers">`) {
+		t.Fatal("provider presets are not separated into API and Local groups")
+	}
+	if !strings.Contains(js, "!!(p && p.local)") || !strings.Contains(js, "!!p.local") {
+		t.Fatal("provider preset local metadata is not used by the editor")
 	}
 }
 
@@ -351,6 +399,26 @@ func TestTranslatedStreamsRejectMalformedSSEJSON(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
+}
+
+func TestProviderHotReloadDetectsResponsesPathChange(t *testing.T) {
+	oldProvider := config.ProviderConfig{
+		ID: "p", Type: "openai_responses", BaseURL: "https://example.invalid",
+		ResponsesPath: "/v1/responses", Enabled: true,
+	}
+	newProvider := oldProvider
+	newProvider.ResponsesPath = "/custom/responses"
+
+	if providerProbeIdentityEqual(oldProvider, newProvider) {
+		t.Fatal("responses_path change was ignored by provider identity")
+	}
+
+	oldCfg := config.Config{Providers: []config.ProviderConfig{oldProvider}}
+	newCfg := config.Config{Providers: []config.ProviderConfig{newProvider}}
+	changed := changedProviderAdapterIDs(oldCfg, newCfg)
+	if _, ok := changed["p"]; !ok {
+		t.Fatalf("responses_path change did not request adapter rebuild: %#v", changed)
+	}
 }
 
 func TestCloneConfigPreservesExplicitEmptyForwardHeaders(t *testing.T) {
@@ -778,6 +846,44 @@ func TestAdminKeylessModeRejectsRebindHost(t *testing.T) {
 	}
 }
 
+func TestAdminRateLimitBucketMapHasHardCap(t *testing.T) {
+	now := time.Now()
+	s := &Server{adminBuckets: make(map[string]*adminBucket, maxAdminBuckets)}
+	for i := 0; i < maxAdminBuckets; i++ {
+		s.adminBuckets[fmt.Sprintf("active-%d", i)] = &adminBucket{tokens: adminBucketCapacity, last: now}
+	}
+	if s.adminAllow("new-source", 1) {
+		t.Fatal("new source should be rejected when the active admin bucket table is full")
+	}
+	if got := len(s.adminBuckets); got != maxAdminBuckets {
+		t.Fatalf("admin bucket table grew past cap: %d > %d", got, maxAdminBuckets)
+	}
+	if !s.adminAllow("active-0", 1) {
+		t.Fatal("existing bucket should remain usable while table is full")
+	}
+}
+
+func TestAdminRateLimitPrunesIdleBucketBeforeRejectingNewSource(t *testing.T) {
+	now := time.Now()
+	s := &Server{adminBuckets: make(map[string]*adminBucket, maxAdminBuckets)}
+	for i := 0; i < maxAdminBuckets; i++ {
+		last := now
+		if i == 0 {
+			last = now.Add(-adminBucketIdle - time.Second)
+		}
+		s.adminBuckets[fmt.Sprintf("source-%d", i)] = &adminBucket{tokens: adminBucketCapacity, last: last}
+	}
+	if !s.adminAllow("replacement-source", 1) {
+		t.Fatal("new source should be admitted after idle bucket pruning")
+	}
+	if got := len(s.adminBuckets); got > maxAdminBuckets {
+		t.Fatalf("admin bucket table exceeded hard cap after pruning: %d", got)
+	}
+	if _, ok := s.adminBuckets["source-0"]; ok {
+		t.Fatal("idle admin bucket was not pruned")
+	}
+}
+
 func TestAdminRateLimitBlocksBurstAfterAuthFailures(t *testing.T) {
 	cfg := config.Default()
 	cfg.Admin.APIKey = "secret-key"
@@ -969,6 +1075,103 @@ func TestQuotaRemainingPressureStartsBelowQuarterBudget(t *testing.T) {
 	}
 }
 
+func TestProviderEditorStreamIdleRangeMatchesBackend(t *testing.T) {
+	index, err := webFS.ReadFile("web/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(index)
+	if !strings.Contains(html, `id="pStreamIdle" type="number" min="1" max="86400"`) {
+		t.Fatal("provider editor stream-idle range is narrower than backend validation")
+	}
+
+	app, err := webFS.ReadFile("web/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(app), "stream_idle_timeout_seconds: Math.max(1,") {
+		t.Fatal("provider editor silently clamps valid stream-idle values below 10 seconds")
+	}
+}
+
+func TestProviderEditorPreservesDialectOverride(t *testing.T) {
+	app, err := webFS.ReadFile("web/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(app), "dialect: editor.provider?.dialect || ''") {
+		t.Fatal("provider editor save path drops existing dialect override")
+	}
+}
+
+func TestProviderEditorSerializesModelContextAndPricing(t *testing.T) {
+	app, err := webFS.ReadFile("web/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	js := string(app)
+	for _, field := range []string{
+		"context_window:",
+		"input_cost_per_mtok:",
+		"output_cost_per_mtok:",
+	} {
+		if !strings.Contains(js, field) {
+			t.Fatalf("provider editor save path omits model field %s", field)
+		}
+	}
+}
+
+func TestHealthDonutUsesDistinctHalfOpenSegment(t *testing.T) {
+	index, err := webFS.ReadFile("web/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(index)
+	if !strings.Contains(html, `id="donutHalfOpen"`) {
+		t.Fatal("half-open health state is missing a dedicated donut SVG segment")
+	}
+
+	styles, err := webFS.ReadFile("web/styles.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(styles), "#donutHalfOpen{stroke:#c9b8ff}") {
+		t.Fatal("half-open donut segment is missing its independent stroke style")
+	}
+
+	app, err := webFS.ReadFile("web/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	js := string(app)
+	if !strings.Contains(js, "['donutHalfOpen', 'half_open'") {
+		t.Fatal("half-open health state is not mapped to its own donut segment")
+	}
+	if strings.Contains(js, "['donutCooldown', 'half_open'") {
+		t.Fatal("half-open health state still overwrites cooldown donut segment")
+	}
+}
+
+func TestProviderEditButtonsUseCollectionSelector(t *testing.T) {
+	app, err := webFS.ReadFile("web/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundCollection := false
+	for _, line := range strings.Split(string(app), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "$('.edit-provider').forEach(b => b.onclick = () => openEdit(b.dataset.id));" {
+			t.Fatal("provider edit binding uses single-element selector with forEach")
+		}
+		if line == "$$('.edit-provider').forEach(b => b.onclick = () => openEdit(b.dataset.id));" {
+			foundCollection = true
+		}
+	}
+	if !foundCollection {
+		t.Fatal("provider edit binding is missing the collection selector")
+	}
+}
+
 func TestEmbeddedUIExposesCostAwareStrategy(t *testing.T) {
 	index, err := webFS.ReadFile("web/index.html")
 	if err != nil {
@@ -1045,5 +1248,58 @@ func TestQuotaReservationMetricsAndUIWiring(t *testing.T) {
 		if !strings.Contains(js, field) {
 			t.Fatalf("dashboard is not wired to quota field %s", field)
 		}
+	}
+}
+
+func TestResponsesInspectionUsesInputAndInstructionsOnly(t *testing.T) {
+	raw := []byte(`{
+		"model":"gpt-x",
+		"instructions":"system guidance",
+		"input":[{"type":"message","role":"user","content":[
+			{"type":"input_text","text":"describe this"},
+			{"type":"input_image","image_url":"https://example.invalid/image.png"}
+		]}],
+		"tools":[{"type":"function","name":"f","parameters":{"type":"object","properties":{"fake":{"type":"input_image"}}}}]
+	}`)
+	got := inspectResponsesRequestJSON(raw)
+	if !got.Vision {
+		t.Fatal("Responses input_image was not detected")
+	}
+	if got.EstimatedPromptTokens <= 16 {
+		t.Fatalf("Responses input/instructions were not included in token estimate: %+v", got)
+	}
+
+	noImageInput := []byte(`{
+		"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"plain"}]}],
+		"tools":[{"parameters":{"example":{"type":"input_image"}}}]
+	}`)
+	got = inspectResponsesRequestJSON(noImageInput)
+	if got.Vision {
+		t.Fatal("tool schema input_image falsely triggered Responses vision")
+	}
+}
+
+func TestResponsesOverloadUsesResponsesErrorEnvelope(t *testing.T) {
+	s := &Server{
+		cfg: config.Config{Routing: config.RoutingConfig{MaxInflightRequests: 1}},
+		bus: events.New(16),
+	}
+	if !s.tryAcquireDataPlane() {
+		t.Fatal("failed to occupy the only admission slot")
+	}
+	defer s.releaseDataPlane()
+
+	req := httptest.NewRequest(http.MethodPost, "http://gateway/v1/responses", strings.NewReader(`{"model":"m","input":"x"}`))
+	rr := httptest.NewRecorder()
+	s.rejectOverloaded(rr, req, "req-overload")
+
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d want 503 body=%s", rr.Code, rr.Body.String())
+	}
+	if rr.Header().Get("Retry-After") != "1" {
+		t.Fatalf("Retry-After=%q want 1", rr.Header().Get("Retry-After"))
+	}
+	if !strings.Contains(rr.Body.String(), `"type":"server_error"`) || !strings.Contains(rr.Body.String(), `"code":"server_error"`) {
+		t.Fatalf("Responses overload envelope is not protocol-appropriate: %s", rr.Body.String())
 	}
 }

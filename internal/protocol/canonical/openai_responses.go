@@ -671,12 +671,11 @@ func DecodeResponsesStreamEvent(eventName, data string) ([]StreamEvent, bool, er
 		return []StreamEvent{{Type: StreamError, ErrorCode: code, ErrorMsg: msg}}, true, nil
 	case "response.completed", "response.done", "response.incomplete":
 		var ev struct {
-			Response struct {
-				Usage             *ResponsesUsage `json:"usage"`
-				IncompleteDetails map[string]any  `json:"incomplete_details"`
-			} `json:"response"`
+			Response ResponsesResponse `json:"response"`
 		}
-		_ = json.Unmarshal([]byte(d), &ev)
+		if err := json.Unmarshal([]byte(d), &ev); err != nil {
+			return nil, false, fmt.Errorf("invalid Responses completed event: %w", err)
+		}
 		var events []StreamEvent
 		if ev.Response.Usage != nil {
 			u := Usage{InputTokens: ev.Response.Usage.InputTokens, OutputTokens: ev.Response.Usage.OutputTokens}
@@ -689,6 +688,12 @@ func DecodeResponsesStreamEvent(eventName, data string) ([]StreamEvent, bool, er
 			events = append(events, StreamEvent{Type: StreamUsage, Usage: &u})
 		}
 		stop := StopEndTurn
+		for _, item := range ev.Response.Output {
+			if item.Type == "function_call" {
+				stop = StopToolUse
+				break
+			}
+		}
 		if typ == "response.incomplete" {
 			stop = responsesIncompleteStop(ev.Response.IncompleteDetails)
 		}

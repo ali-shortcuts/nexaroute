@@ -72,7 +72,7 @@
           <div class="panel">
             <div class="panelhead"><div><h2>Fleet health</h2><p>Verified deployment distribution.</p></div></div>
             <div class="donut-row">
-              <div class="donut-wrap"><svg id="donut" viewBox="0 0 120 120"><circle class="donut-track" cx="60" cy="60" r="48"/><circle class="donut-seg" id="donutGood" cx="60" cy="60" r="48"/><circle class="donut-seg" id="donutUnknown" cx="60" cy="60" r="48"/><circle class="donut-seg" id="donutDegraded" cx="60" cy="60" r="48"/><circle class="donut-seg" id="donutCooldown" cx="60" cy="60" r="48"/></svg><div class="donut-center"><b id="donutPct">0%</b><small>ready</small></div></div>
+              <div class="donut-wrap"><svg id="donut" viewBox="0 0 120 120"><circle class="donut-track" cx="60" cy="60" r="48"/><circle class="donut-seg" id="donutGood" cx="60" cy="60" r="48"/><circle class="donut-seg" id="donutUnknown" cx="60" cy="60" r="48"/><circle class="donut-seg" id="donutDegraded" cx="60" cy="60" r="48"/><circle class="donut-seg" id="donutHalfOpen" cx="60" cy="60" r="48"/><circle class="donut-seg" id="donutCooldown" cx="60" cy="60" r="48"/></svg><div class="donut-center"><b id="donutPct">0%</b><small>ready</small></div></div>
               <ul class="donut-legend" id="donutLegend"></ul>
             </div>
           </div>
@@ -293,16 +293,16 @@
         </div>
         <label class="field"><span>Endpoint type</span><select id="pType">
           <option value="openai_compatible">OpenAI Compatible — Chat Completions</option>
+          <option value="openai_responses">OpenAI — Responses API</option>
           <option value="anthropic_compatible">Anthropic Compatible — Messages</option>
-          <option value="openai_responses">OpenAI — Responses</option>
-          <option value="gemini">Gemini — GenerateContent</option>
+          <option value="gemini">Google Gemini — GenerateContent</option>
         </select></label>
         <label class="field"><span>Base URL</span><input id="pBase" spellcheck="false" placeholder="http://127.0.0.1:5000/v1"></label>
         <div class="form-grid two">
           <label class="field"><span>Authentication</span><select id="pAuth">
             <option value="bearer">Bearer token</option>
             <option value="x-api-key">x-api-key</option>
-            <option value="x-goog-api-key">x-goog-api-key (Gemini)</option>
+            <option value="x-goog-api-key">x-goog-api-key</option>
             <option value="none">No authentication</option>
           </select></label>
           <label class="field switch-field"><span>Enabled</span><input id="pEnabled" type="checkbox" checked></label>
@@ -323,16 +323,17 @@
           <label class="field"><span>Proxy URL <small>(optional)</small></span><input id="pProxy" spellcheck="false" placeholder="http://127.0.0.1:7890"></label>
           <label class="field"><span>Max concurrency</span><input id="pConcurrency" type="number" min="1" max="512" value="32"></label>
         </div>
-        <label class="field"><span>Stream idle timeout (seconds)</span><input id="pStreamIdle" type="number" min="10" max="3600" value="180">
+        <label class="field"><span>Stream idle timeout (seconds)</span><input id="pStreamIdle" type="number" min="1" max="86400" value="180">
           <em>Cancels a stalled upstream stream without imposing a total stream duration limit.</em></label>
         <div class="form-grid two">
           <label class="field"><span>Chat Completions path</span><input id="pChatPath" spellcheck="false" placeholder="/v1/chat/completions"></label>
-          <label class="field"><span>Anthropic Messages path</span><input id="pMessagesPath" spellcheck="false" placeholder="/v1/messages"></label>
+          <label class="field"><span>Responses path</span><input id="pResponsesPath" spellcheck="false" placeholder="/v1/responses"></label>
         </div>
         <div class="form-grid two">
-          <label class="field"><span>Models path</span><input id="pModelsPath" spellcheck="false" placeholder="/v1/models or absolute https://…"></label>
+          <label class="field"><span>Anthropic Messages path</span><input id="pMessagesPath" spellcheck="false" placeholder="/v1/messages"></label>
           <label class="field"><span>Count tokens path</span><input id="pCountPath" spellcheck="false" placeholder="/v1/messages/count_tokens"></label>
         </div>
+        <label class="field"><span>Models path</span><input id="pModelsPath" spellcheck="false" placeholder="/v1/models or absolute https://…"></label>
         <label class="field"><span>Forward request headers <small>comma separated</small></span><input id="pForwardHeaders" spellcheck="false" placeholder="anthropic-beta, anthropic-version, user-agent"></label>
         <label class="field"><span>Credential pool JSON <small>(optional)</small></span><textarea id="pCredentials" rows="5" spellcheck="false" placeholder='[{"name":"key-2","api_key_env":"SECOND_KEY","enabled":true}]'></textarea>
           <em>Additional keys rotate automatically. 401/402/403/429 can temporarily cool down only the failing key.</em></label>

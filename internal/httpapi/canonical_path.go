@@ -88,6 +88,7 @@ func (s *Server) canonicalStreamPump(
 	terminal := false
 	nextGeminiTool := 0
 	sawTool := false
+	anthropicToolBlocks := map[int]bool{}
 	for {
 		name, data, done, err := reader.Next()
 		if err != nil {
@@ -127,6 +128,27 @@ func (s *Server) canonicalStreamPump(
 			return fail(fmt.Errorf("upstream stream protocol violation: %w", err))
 		}
 		for _, ev := range evs {
+			if kind == "anthropic" && ev.Type == canonical.StreamEnd && terminal {
+				// Anthropic normally reports the semantic stop reason in
+				// message_delta and then follows with message_stop. The latter
+				// must terminate framing without overwriting tool_use,
+				// max_tokens, stop_sequence, refusal, etc. with end_turn.
+				continue
+			}
+			if kind == "anthropic" {
+				switch ev.Type {
+				case canonical.StreamToolStart:
+					anthropicToolBlocks[ev.ToolIndex] = true
+				case canonical.StreamToolEnd:
+					if !anthropicToolBlocks[ev.ToolIndex] {
+						// Anthropic emits content_block_stop for text, thinking
+						// and tool blocks alike. Only a block that previously
+						// emitted ToolStart may become a canonical ToolEnd.
+						continue
+					}
+					delete(anthropicToolBlocks, ev.ToolIndex)
+				}
+			}
 			if ev.Type == canonical.StreamError {
 				return fail(fmt.Errorf("upstream stream error: %s", ev.ErrorMsg))
 			}
@@ -276,7 +298,7 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 		Model: in.Model, Tools: reqReqs.Tools, Vision: reqReqs.Vision,
 		Streaming: reqReqs.Streaming, Reasoning: reqReqs.Reasoning,
 	}
-	inspection := inspectRequestJSON(raw, "input_image", []string{"reasoning"})
+	inspection := inspectResponsesRequestJSON(raw)
 	if inspection.TooComplex {
 		canonicalErrorJSON(w, "openai_responses", http.StatusBadRequest, "invalid_request_error", "request JSON structure is too complex")
 		return
@@ -295,8 +317,8 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 		max = len(candidates)
 	}
 	routeCtx, routeCancel := routeContext(r.Context(), req.Streaming, cfg.RequestTimeout())
-	defer routeCancel()
 	routeCtx = providers.WithQuotaEstimate(routeCtx, req.EstimatedInputTokens, req.MaxOutputTokens)
+	defer routeCancel()
 	forward := copySelectedRequestHeaders(r)
 	profile := profileFromRequirement(req, &canReq)
 	dialects := map[string]compat.DialectProfile{}

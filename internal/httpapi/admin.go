@@ -489,9 +489,12 @@ func (s *Server) adminProviderTest(w http.ResponseWriter, r *http.Request) {
 				defer cancel()
 				tr := testResult{Model: model}
 				var report compat.ProbeReport
-				if in.Provider.Type == "anthropic_compatible" {
+				switch in.Provider.Type {
+				case "anthropic_compatible":
 					report = compat.RunCapabilitySuiteAnthropic(ctx, adapterTransport{a: a}, in.Provider.ID, model)
-				} else {
+				case "openai_responses":
+					report = compat.RunCapabilitySuiteResponses(ctx, adapterTransport{a: a}, in.Provider.ID, model)
+				default:
 					report = compat.RunCapabilitySuite(ctx, adapterTransport{a: a}, in.Provider.ID, model, in.Provider.Dialect)
 				}
 				tr.CapabilityReport = &report
@@ -501,7 +504,12 @@ func (s *Server) adminProviderTest(w http.ResponseWriter, r *http.Request) {
 				ctx, cancel := context.WithTimeout(parentCtx, 120*time.Second)
 				defer cancel()
 				tr := testResult{Model: model}
-				report := compat.RunAgentLoopSimulation(ctx, adapterTransport{a: a}, in.Provider.ID, model)
+				var report compat.ProbeReport
+				if in.Provider.Type == "openai_responses" {
+					report = compat.RunAgentLoopSimulationResponses(ctx, adapterTransport{a: a}, in.Provider.ID, model)
+				} else {
+					report = compat.RunAgentLoopSimulation(ctx, adapterTransport{a: a}, in.Provider.ID, model)
+				}
 				tr.AgentReport = &report
 				tr.OK = report.OK
 				results[i] = tr
