@@ -39,6 +39,39 @@
     "recovery_retry_ms": 500,
     "capability_probes": true
   },
+  "decision": {
+    "mode": "local",
+    "provider": "policy",
+    "policy": "balanced",
+    "timeout_ms": 10
+  },
+  "decision_policies": [
+    {
+      "id": "balanced",
+      "name": "Balanced latency/reliability",
+      "selection_mode": "select_first",
+      "weights": {
+        "router_baseline": 1,
+        "reliability": 1,
+        "latency": 1,
+        "ttft": 0.5,
+        "capacity": 0.5,
+        "cost": 0.2,
+        "context": 0.3
+      },
+      "task_overrides": {
+        "coding": {
+          "latency": 1,
+          "reliability": 1
+        },
+        "long_context": {
+          "context": 1,
+          "capacity": 0.5
+        }
+      },
+      "min_score_delta": 0.05
+    }
+  ],
   "providers": [
     {
       "id": "chat2api",

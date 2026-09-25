@@ -12,9 +12,8 @@ import (
 // Provider implements decision.DecisionProvider for deterministic policy engine.
 // ID is "policy", CanSelect true, CanRank false, healthy.
 type Provider struct {
-	mu       sync.RWMutex
-	policies map[string]Policy
-	// default policy ID for global fallback
+	mu              sync.RWMutex
+	policies        map[string]Policy
 	defaultPolicyID string
 }
 
@@ -59,26 +58,21 @@ func (p *Provider) Health() decision.ProviderHealth {
 }
 
 // resolvePolicy returns policy for request, using request PolicyID or default.
-// Returns nil if not found.
+// Returns nil if not found. Explicit config required — no implicit single-policy magic.
 func (p *Provider) resolvePolicy(req decision.DecisionRequest) *Policy {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	// Try request policy ID first
 	if req.PolicyID != "" {
 		if pol, ok := p.policies[req.PolicyID]; ok {
-			return &pol
+			// copy to avoid referencing loop variable
+			c := pol
+			return &c
 		}
 	}
 	// Fallback to default
 	if p.defaultPolicyID != "" {
 		if pol, ok := p.policies[p.defaultPolicyID]; ok {
-			return &pol
-		}
-	}
-	// If only one policy exists, use it as implicit default
-	if len(p.policies) == 1 {
-		for _, pol := range p.policies {
-			// copy to avoid referencing loop variable
 			c := pol
 			return &c
 		}
@@ -111,10 +105,9 @@ func (p *Provider) Decide(ctx context.Context, req decision.DecisionRequest) (de
 		}, nil
 	}
 
-	// Resolve policy
+	// Resolve policy — explicit required, no silent no-op magic
 	pol := p.resolvePolicy(req)
 	if pol == nil {
-		// No policy configured → abstain, preserve order
 		return decision.DecisionResult{
 			Action:      decision.ActionAbstain,
 			Abstained:   true,
@@ -124,26 +117,69 @@ func (p *Provider) Decide(ctx context.Context, req decision.DecisionRequest) (de
 		}, nil
 	}
 
-	// Enforce selection band: earliest PoolOrdinal only
+	// Enforce selection band: earliest PoolOrdinal only (fallback hard boundary)
 	minOrdinal := candidates[0].PoolOrdinal
 	for _, c := range candidates[1:] {
 		if c.PoolOrdinal < minOrdinal {
 			minOrdinal = c.PoolOrdinal
 		}
 	}
-	band := make([]decision.Candidate, 0, len(candidates))
+	bandPool := make([]decision.Candidate, 0, len(candidates))
 	for _, c := range candidates {
 		if c.PoolOrdinal == minOrdinal {
-			band = append(band, c)
+			bandPool = append(bandPool, c)
 		}
 	}
 	reasonCodes := []decision.ReasonCode{}
-	poolEnforced := len(band) < len(candidates)
-	if poolEnforced {
+	if len(bandPool) < len(candidates) {
 		reasonCodes = append(reasonCodes, decision.ReasonPoolBoundaryEnforced)
 	}
+	if len(bandPool) == 0 {
+		bandPool = candidates
+	}
 
-	// Minimum Priority tier only (hard guardrail)
+	// Affinity preserved BEFORE priority: if pinned eligible inside earliest permitted pool, preserve it
+	if req.PinnedCandidateID != "" {
+		for _, c := range bandPool {
+			if c.ID == req.PinnedCandidateID {
+				rc := append([]decision.ReasonCode{decision.ReasonAffinityPreserved, decision.ReasonPolicySelectFirst}, reasonCodes...)
+				if len(rc) > decision.MaxReasonCodes {
+					rc = rc[:decision.MaxReasonCodes]
+				}
+				hasScored := false
+				for _, r := range rc {
+					if r == decision.ReasonPolicyScored {
+						hasScored = true
+						break
+					}
+				}
+				if !hasScored {
+					rc = append(rc, decision.ReasonPolicyScored)
+				}
+				// Policy trace for affinity case
+				pt := &decision.PolicyTrace{
+					PolicyID:             pol.ID,
+					TaskType:             string(req.TaskProfile.Type),
+					OriginalPrimaryID:    originalPrimaryID(bandPool),
+					SelectedID:           c.ID,
+					ChangedPrimary:       c.ID != originalPrimaryID(bandPool),
+					SelectedScore:        1.0,
+					OriginalPrimaryScore: 1.0,
+				}
+				return decision.DecisionResult{
+					Action:      decision.ActionSelect,
+					SelectedID:  c.ID,
+					Confidence:  1.0,
+					ReasonCodes: rc,
+					ProviderID:  p.ID(),
+					PolicyTrace: pt,
+				}, nil
+			}
+		}
+	}
+
+	// Minimum Priority tier only (hard guardrail) — after affinity check
+	band := bandPool
 	if len(band) > 0 {
 		minPriority := band[0].Priority
 		for _, c := range band[1:] {
@@ -162,41 +198,10 @@ func (p *Provider) Decide(ctx context.Context, req decision.DecisionRequest) (de
 		}
 		band = filtered
 	}
-
 	if len(band) == 0 {
-		// Should not happen, but fallback
-		band = candidates
-	}
-
-	// Affinity preserved: if pinned candidate in band, select it
-	if req.PinnedCandidateID != "" {
-		for _, c := range band {
-			if c.ID == req.PinnedCandidateID {
-				// Select pinned
-				rc := append([]decision.ReasonCode{decision.ReasonAffinityPreserved, decision.ReasonPolicySelectFirst}, reasonCodes...)
-				// Ensure bounded
-				if len(rc) > decision.MaxReasonCodes {
-					rc = rc[:decision.MaxReasonCodes]
-				}
-				// Include policy scored for observability
-				hasScored := false
-				for _, r := range rc {
-					if r == decision.ReasonPolicyScored {
-						hasScored = true
-						break
-					}
-				}
-				if !hasScored {
-					rc = append(rc, decision.ReasonPolicyScored)
-				}
-				return decision.DecisionResult{
-					Action:      decision.ActionSelect,
-					SelectedID:  c.ID,
-					Confidence:  1.0,
-					ReasonCodes: rc,
-					ProviderID:  p.ID(),
-				}, nil
-			}
+		band = bandPool
+		if len(band) == 0 {
+			band = candidates
 		}
 	}
 
@@ -204,14 +209,24 @@ func (p *Provider) Decide(ctx context.Context, req decision.DecisionRequest) (de
 	if len(band) == 1 {
 		rc := []decision.ReasonCode{decision.ReasonPolicyScored, decision.ReasonPolicySelectFirst}
 		rc = append(rc, reasonCodes...)
-		// Deduplicate and bound
 		rc = dedupReasonCodes(rc)
+		origID := originalPrimaryID(band)
+		pt := &decision.PolicyTrace{
+			PolicyID:             pol.ID,
+			TaskType:             string(req.TaskProfile.Type),
+			OriginalPrimaryID:    origID,
+			SelectedID:           band[0].ID,
+			ChangedPrimary:       false,
+			SelectedScore:        1.0,
+			OriginalPrimaryScore: 1.0,
+		}
 		return decision.DecisionResult{
 			Action:      decision.ActionSelect,
 			SelectedID:  band[0].ID,
 			Confidence:  1.0,
 			ReasonCodes: rc,
 			ProviderID:  p.ID(),
+			PolicyTrace: pt,
 		}, nil
 	}
 
@@ -222,47 +237,138 @@ func (p *Provider) Decide(ctx context.Context, req decision.DecisionRequest) (de
 	}
 	effectiveWeights, taskAware := pol.ResolveWeights(taskType)
 
-	// Score candidates
-	scored := ScoreCandidates(band)
+	// Determine required context for headroom scoring
+	required := req.MinContextWindow
+	if required <= 0 {
+		// Fallback to estimated tokens if MinContextWindow not set
+		est := req.EstimatedInputTokens + req.MaxOutputTokens
+		if est > 0 {
+			required = est
+		}
+	}
+
+	// Score candidates with request-relative context
+	scored := ScoreCandidates(band, required)
 	scored = ApplyWeights(scored, effectiveWeights)
 
-	// Sort by weighted score desc, then OriginalRank asc for determinism (preserve router order on tie)
+	// Sort by weighted score desc, then OriginalRank asc for determinism
 	sort.SliceStable(scored, func(i, j int) bool {
 		if math.Abs(scored[i].WeightedScore-scored[j].WeightedScore) > 1e-9 {
 			return scored[i].WeightedScore > scored[j].WeightedScore
 		}
-		// Tie: preserve original router order
 		return scored[i].OriginalRank < scored[j].OriginalRank
 	})
 
-	// Check min_score_delta
-	if len(scored) >= 2 {
-		top := scored[0].WeightedScore
-		second := scored[1].WeightedScore
-		delta := top - second
+	// Find original primary: earliest OriginalRank in band
+	origPrimaryID := originalPrimaryID(band)
+	var origPrimaryScore float64
+	var origPrimaryFound bool
+	var origBreakdown map[string]float64
+	for _, sc := range scored {
+		if sc.Candidate.ID == origPrimaryID {
+			origPrimaryScore = sc.WeightedScore
+			origPrimaryFound = true
+			origBreakdown = sc.Components
+			break
+		}
+	}
+	if !origPrimaryFound && len(scored) > 0 {
+		// Fallback: if original primary not in scored (should not happen), use first by OriginalRank
+		origPrimaryID = band[0].ID
+		for _, c := range band[1:] {
+			if c.OriginalRank < band[0].OriginalRank {
+				// Actually need to find min OriginalRank
+			}
+		}
+		// Find min OriginalRank
+		minRank := band[0].OriginalRank
+		origPrimaryID = band[0].ID
+		for _, c := range band[1:] {
+			if c.OriginalRank < minRank {
+				minRank = c.OriginalRank
+				origPrimaryID = c.ID
+			}
+		}
+		// Try again
+		for _, sc := range scored {
+			if sc.Candidate.ID == origPrimaryID {
+				origPrimaryScore = sc.WeightedScore
+				origBreakdown = sc.Components
+				break
+			}
+		}
+	}
+
+	topCandidate := scored[0]
+	// If best already IS original primary -> preserve order, abstain is preferable to avoid churn
+	if topCandidate.Candidate.ID == origPrimaryID {
+		rc := []decision.ReasonCode{decision.ReasonExistingOrderPreserved, decision.ReasonPolicyScored}
+		rc = append(rc, reasonCodes...)
+		if taskAware {
+			rc = append(rc, decision.ReasonTaskAwareWeights)
+		}
+		rc = dedupReasonCodes(rc)
+		pt := &decision.PolicyTrace{
+			PolicyID:             pol.ID,
+			TaskType:             taskType,
+			OriginalPrimaryID:    origPrimaryID,
+			SelectedID:           origPrimaryID,
+			ChangedPrimary:       false,
+			SelectedScore:        topCandidate.WeightedScore,
+			OriginalPrimaryScore: origPrimaryScore,
+			SelectedBreakdown:    topCandidate.Components,
+			OriginalBreakdown:    origBreakdown,
+			Weights:              weightsToMap(effectiveWeights),
+		}
+		return decision.DecisionResult{
+			Action:      decision.ActionAbstain,
+			Abstained:   true,
+			Confidence:  0,
+			ReasonCodes: rc,
+			ProviderID:  p.ID(),
+			PolicyTrace: pt,
+		}, nil
+	}
+
+	// Check min_score_delta against ORIGINAL PRIMARY, not second-best
+	if pol.MinScoreDelta > 0 {
+		delta := topCandidate.WeightedScore - origPrimaryScore
 		if delta < 0 {
 			delta = -delta
 		}
-		if delta < pol.MinScoreDelta {
-			// Abstain, preserve order
+		// Actually we want best beats original by at least delta
+		improvement := topCandidate.WeightedScore - origPrimaryScore
+		if improvement < pol.MinScoreDelta {
 			rc := []decision.ReasonCode{decision.ReasonMinDeltaNotMet, decision.ReasonPolicyScored, decision.ReasonExistingOrderPreserved}
 			rc = append(rc, reasonCodes...)
 			if taskAware {
 				rc = append(rc, decision.ReasonTaskAwareWeights)
 			}
 			rc = dedupReasonCodes(rc)
+			pt := &decision.PolicyTrace{
+				PolicyID:             pol.ID,
+				TaskType:             taskType,
+				OriginalPrimaryID:    origPrimaryID,
+				SelectedID:           topCandidate.Candidate.ID,
+				ChangedPrimary:       false,
+				SelectedScore:        topCandidate.WeightedScore,
+				OriginalPrimaryScore: origPrimaryScore,
+				SelectedBreakdown:    topCandidate.Components,
+				OriginalBreakdown:    origBreakdown,
+				Weights:              weightsToMap(effectiveWeights),
+			}
 			return decision.DecisionResult{
 				Action:      decision.ActionAbstain,
 				Abstained:   true,
 				Confidence:  0,
 				ReasonCodes: rc,
 				ProviderID:  p.ID(),
+				PolicyTrace: pt,
 			}, nil
 		}
 	}
 
 	// Select top
-	topCandidate := scored[0]
 	rc := []decision.ReasonCode{decision.ReasonPolicyScored, decision.ReasonPolicySelectFirst}
 	rc = append(rc, reasonCodes...)
 	if taskAware {
@@ -281,13 +387,54 @@ func (p *Provider) Decide(ctx context.Context, req decision.DecisionRequest) (de
 		conf = 1
 	}
 
+	pt := &decision.PolicyTrace{
+		PolicyID:             pol.ID,
+		TaskType:             taskType,
+		OriginalPrimaryID:    origPrimaryID,
+		SelectedID:           topCandidate.Candidate.ID,
+		ChangedPrimary:       topCandidate.Candidate.ID != origPrimaryID,
+		SelectedScore:        topCandidate.WeightedScore,
+		OriginalPrimaryScore: origPrimaryScore,
+		SelectedBreakdown:    topCandidate.Components,
+		OriginalBreakdown:    origBreakdown,
+		Weights:              weightsToMap(effectiveWeights),
+	}
+
 	return decision.DecisionResult{
 		Action:      decision.ActionSelect,
 		SelectedID:  topCandidate.Candidate.ID,
 		Confidence:  conf,
 		ReasonCodes: rc,
 		ProviderID:  p.ID(),
+		PolicyTrace: pt,
 	}, nil
+}
+
+func originalPrimaryID(band []decision.Candidate) string {
+	if len(band) == 0 {
+		return ""
+	}
+	minRank := band[0].OriginalRank
+	id := band[0].ID
+	for _, c := range band[1:] {
+		if c.OriginalRank < minRank {
+			minRank = c.OriginalRank
+			id = c.ID
+		}
+	}
+	return id
+}
+
+func weightsToMap(w Weights) map[string]float64 {
+	return map[string]float64{
+		CompRouterBaseline: w.RouterBaseline,
+		CompReliability:    w.Reliability,
+		CompLatency:        w.Latency,
+		CompTTFT:           w.TTFT,
+		CompCapacity:       w.Capacity,
+		CompCost:           w.Cost,
+		CompContext:        w.Context,
+	}
 }
 
 func dedupReasonCodes(in []decision.ReasonCode) []decision.ReasonCode {

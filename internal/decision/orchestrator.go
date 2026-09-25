@@ -20,6 +20,8 @@ type DecisionTrace struct {
 	ReasonCodes    []ReasonCode  `json:"reason_codes,omitempty"`
 	Duration       time.Duration `json:"duration"`
 	FallbackUsed   bool          `json:"fallback_used"`
+	// Phase E: optional policy trace
+	PolicyTrace *PolicyTrace `json:"policy_trace,omitempty"`
 	// Input/output IDs may be included only if bounded and useful; omitted for privacy/brevity in Phase D
 }
 
@@ -454,6 +456,10 @@ func (o *Orchestrator) Decide(ctx context.Context, req DecisionRequest) (ordered
 	trace.FallbackUsed = !applied || normReason == ReasonNormalizationApplied || normReason == ReasonAbstained
 	if decideResult.Action == ActionSelect {
 		trace.SelectedID = decideResult.SelectedID
+	}
+	// Copy policy trace if present (Phase E)
+	if decideResult.PolicyTrace != nil {
+		trace.PolicyTrace = decideResult.PolicyTrace
 	}
 
 	if o.metrics != nil {

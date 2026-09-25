@@ -1027,12 +1027,24 @@ func (c Config) Validate() error {
 			if err := validateDecisionPolicyWeights(w, fmt.Sprintf("decision policy %q task_overrides[%q]", dp.ID, tk)); err != nil {
 				return err
 			}
+			if !hasPositiveWeight(w) {
+				return fmt.Errorf("decision policy %q task_overrides[%q] must have at least one positive weight", dp.ID, tk)
+			}
 		}
 	}
 	// References must point to existing policies
 	if c.Decision.Policy != "" {
 		if _, ok := seenPolicyIDs[c.Decision.Policy]; !ok {
 			return fmt.Errorf("decision.policy %q references unknown decision policy", c.Decision.Policy)
+		}
+	}
+	// Explicit config required when provider=policy: must have deterministic usable global policy
+	if strings.ToLower(strings.TrimSpace(c.Decision.Mode)) == "local" && strings.ToLower(strings.TrimSpace(c.Decision.Provider)) == "policy" {
+		if c.Decision.Policy == "" {
+			return fmt.Errorf("decision.policy is required when decision.mode=local and decision.provider=policy")
+		}
+		if len(c.DecisionPolicies) == 0 {
+			return fmt.Errorf("decision_policies must contain at least one policy when provider=policy")
 		}
 	}
 

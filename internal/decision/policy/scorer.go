@@ -128,6 +128,11 @@ func computeRouterBaseline(cands []decision.Candidate) map[string]float64 {
 func computeReliability(cands []decision.Candidate) map[string]float64 {
 	out := make(map[string]float64, len(cands))
 	for _, c := range cands {
+		// If no reliability observations yet, treat as neutral, not perfect
+		if c.Successes+c.Failures == 0 {
+			out[c.ID] = 0.5
+			continue
+		}
 		hs := healthScore(c.HealthStatus)
 		// failure rate: 1 - failureRate
 		frScore := 0.5
@@ -285,54 +290,36 @@ func computeCost(cands []decision.Candidate) map[string]float64 {
 	return out
 }
 
-func computeContext(cands []decision.Candidate) map[string]float64 {
+func computeContext(cands []decision.Candidate, required int) map[string]float64 {
 	out := make(map[string]float64, len(cands))
-	known := []float64{}
-	for _, c := range cands {
-		if c.ContextWindow > 0 {
-			known = append(known, float64(c.ContextWindow))
-		}
-	}
-	if len(known) == 0 {
+	// If no meaningful request requirement, neutral for all
+	if required <= 0 {
 		for _, c := range cands {
 			out[c.ID] = 0.5
 		}
 		return out
 	}
-	min := known[0]
-	max := known[0]
-	for _, v := range known[1:] {
-		if v < min {
-			min = v
-		}
-		if v > max {
-			max = v
-		}
-	}
-	delta := max - min
-	if delta < 1e-9 {
-		for _, c := range cands {
-			if c.ContextWindow > 0 {
-				out[c.ID] = 0.5
-			} else {
-				out[c.ID] = 0.5
-			}
-		}
-		return out
-	}
 	for _, c := range cands {
-		if c.ContextWindow > 0 {
-			norm := (float64(c.ContextWindow) - min) / delta
-			out[c.ID] = clamp01(norm)
-		} else {
+		// Unknown context window -> neutral
+		if c.ContextWindow <= 0 {
 			out[c.ID] = 0.5
+			continue
 		}
+		// Defensive: if window < required, already should be filtered by router, do not reward
+		if c.ContextWindow < required {
+			out[c.ID] = 0.0
+			continue
+		}
+		// Headroom = (window - required)/window clamped [0,1]
+		headroom := float64(c.ContextWindow-required) / float64(c.ContextWindow)
+		out[c.ID] = clamp01(headroom)
 	}
 	return out
 }
 
 // ScoreCandidates computes component scores for each candidate and returns breakdown.
-func ScoreCandidates(cands []decision.Candidate) []ScoredCandidate {
+// required is MinContextWindow (or EstimatedInput+MaxOutput) for request-relative headroom.
+func ScoreCandidates(cands []decision.Candidate, required int) []ScoredCandidate {
 	if len(cands) == 0 {
 		return nil
 	}
@@ -342,7 +329,7 @@ func ScoreCandidates(cands []decision.Candidate) []ScoredCandidate {
 	ttftScores := computeLatency(cands, true)
 	capacityScores := computeCapacity(cands)
 	costScores := computeCost(cands)
-	contextScores := computeContext(cands)
+	contextScores := computeContext(cands, required)
 
 	out := make([]ScoredCandidate, 0, len(cands))
 	for _, c := range cands {

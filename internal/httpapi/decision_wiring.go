@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"time"
 
@@ -12,6 +13,19 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/router"
 	"github.com/ali-shortcuts/nexaroute/internal/taskprofile"
 )
+
+func jsonMarshalBounded(v interface{}, maxLen int) (string, error) {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return "", err
+	}
+	if len(b) <= maxLen {
+		return string(b), nil
+	}
+	// If too large, return empty array/object fallback that is valid JSON
+	// For breakdown payload, we truncate to selected scores only
+	return "{}", nil
+}
 
 // decisionCandidates converts router.Scored to decision.Candidate snapshot with extended signals for Phase E.
 func decisionCandidates(scored []router.Scored, resolved *route.ResolvedRoute) []decision.Candidate {
@@ -34,6 +48,8 @@ func decisionCandidates(scored []router.Scored, resolved *route.ResolvedRoute) [
 			EWMALatencyMS:    s.Health.EWMALatencyMS,
 			EWMATTFTMS:       s.Health.EWMATTFTMS,
 			EWMAFailureRate:  s.Health.EWMAFailureRate,
+			Successes:        s.Health.Successes,
+			Failures:         s.Health.Failures,
 			CapacityPressure: s.CapacityPressure,
 			EstimatedCostUSD: s.EstimatedCostUSD,
 			PriceKnown:       s.PriceKnown,
@@ -167,6 +183,54 @@ func (s *Server) emitDecisionEvent(requestID string, result decision.DecisionRes
 		}
 		reasonStr = strings.Join(parts, ",")
 	}
+	// Build breakdown JSON if policy trace present
+	breakdownJSON := ""
+	if result.PolicyTrace != nil {
+		// Marshal selected and original breakdowns plus weights as privacy-safe JSON
+		type breakdownPayload struct {
+			SelectedID           string             `json:"selected_id,omitempty"`
+			OriginalPrimaryID    string             `json:"original_primary_id,omitempty"`
+			SelectedScore        float64            `json:"selected_score"`
+			OriginalPrimaryScore float64            `json:"original_primary_score"`
+			SelectedBreakdown    map[string]float64 `json:"selected_breakdown,omitempty"`
+			OriginalBreakdown    map[string]float64 `json:"original_breakdown,omitempty"`
+			Weights              map[string]float64 `json:"weights,omitempty"`
+		}
+		payload := breakdownPayload{
+			SelectedID:           result.PolicyTrace.SelectedID,
+			OriginalPrimaryID:    result.PolicyTrace.OriginalPrimaryID,
+			SelectedScore:        result.PolicyTrace.SelectedScore,
+			OriginalPrimaryScore: result.PolicyTrace.OriginalPrimaryScore,
+			SelectedBreakdown:    result.PolicyTrace.SelectedBreakdown,
+			OriginalBreakdown:    result.PolicyTrace.OriginalBreakdown,
+			Weights:              result.PolicyTrace.Weights,
+		}
+		if b, err := jsonMarshalBounded(payload, 4096); err == nil {
+			breakdownJSON = b
+		}
+	} else if trace.PolicyTrace != nil {
+		type breakdownPayload struct {
+			SelectedID           string             `json:"selected_id,omitempty"`
+			OriginalPrimaryID    string             `json:"original_primary_id,omitempty"`
+			SelectedScore        float64            `json:"selected_score"`
+			OriginalPrimaryScore float64            `json:"original_primary_score"`
+			SelectedBreakdown    map[string]float64 `json:"selected_breakdown,omitempty"`
+			OriginalBreakdown    map[string]float64 `json:"original_breakdown,omitempty"`
+			Weights              map[string]float64 `json:"weights,omitempty"`
+		}
+		payload := breakdownPayload{
+			SelectedID:           trace.PolicyTrace.SelectedID,
+			OriginalPrimaryID:    trace.PolicyTrace.OriginalPrimaryID,
+			SelectedScore:        trace.PolicyTrace.SelectedScore,
+			OriginalPrimaryScore: trace.PolicyTrace.OriginalPrimaryScore,
+			SelectedBreakdown:    trace.PolicyTrace.SelectedBreakdown,
+			OriginalBreakdown:    trace.PolicyTrace.OriginalBreakdown,
+			Weights:              trace.PolicyTrace.Weights,
+		}
+		if b, err := jsonMarshalBounded(payload, 4096); err == nil {
+			breakdownJSON = b
+		}
+	}
 
 	// Determine event kind from result
 	kind := "decision_ok"
@@ -210,6 +274,22 @@ func (s *Server) emitDecisionEvent(requestID string, result decision.DecisionRes
 		DecisionCandidateCount: candidateCount,
 		DecisionConfidence:     result.Confidence,
 		LatencyMS:              result.Latency.Milliseconds(),
+		DecisionBreakdown:      breakdownJSON,
+	}
+	if result.PolicyTrace != nil {
+		ev.DecisionPolicyID = result.PolicyTrace.PolicyID
+		ev.DecisionTaskType = result.PolicyTrace.TaskType
+		ev.DecisionOriginalPrimary = result.PolicyTrace.OriginalPrimaryID
+		ev.DecisionSelectedScore = result.PolicyTrace.SelectedScore
+		ev.DecisionOriginalScore = result.PolicyTrace.OriginalPrimaryScore
+		ev.DecisionChangedPrimary = result.PolicyTrace.ChangedPrimary
+	} else if trace.PolicyTrace != nil {
+		ev.DecisionPolicyID = trace.PolicyTrace.PolicyID
+		ev.DecisionTaskType = trace.PolicyTrace.TaskType
+		ev.DecisionOriginalPrimary = trace.PolicyTrace.OriginalPrimaryID
+		ev.DecisionSelectedScore = trace.PolicyTrace.SelectedScore
+		ev.DecisionOriginalScore = trace.PolicyTrace.OriginalPrimaryScore
+		ev.DecisionChangedPrimary = trace.PolicyTrace.ChangedPrimary
 	}
 	if resolvedRoute != nil {
 		ev.VirtualEndpoint = resolvedRoute.VirtualEndpointID

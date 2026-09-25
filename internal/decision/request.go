@@ -33,6 +33,8 @@ type Candidate struct {
 	EWMALatencyMS    float64               `json:"ewma_latency_ms,omitempty"`
 	EWMATTFTMS       float64               `json:"ewma_ttft_ms,omitempty"`
 	EWMAFailureRate  float64               `json:"ewma_failure_rate,omitempty"`
+	Successes        int64                 `json:"successes,omitempty"`
+	Failures         int64                 `json:"failures,omitempty"`
 	CapacityPressure float64               `json:"capacity_pressure,omitempty"`
 	EstimatedCostUSD float64               `json:"estimated_cost_usd,omitempty"`
 	PriceKnown       bool                  `json:"price_known,omitempty"`

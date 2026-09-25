@@ -65,7 +65,7 @@ func Explain(scored []ScoredCandidate, w Weights) []PolicyScoreBreakdown {
 }
 
 // MarshalBreakdown marshals breakdowns to JSON with bounded size (for events).
-// Returns truncated JSON if too large.
+// Returns valid JSON always — structurally bounded before marshal, never byte-sliced.
 func MarshalBreakdown(breakdowns []PolicyScoreBreakdown) string {
 	if len(breakdowns) == 0 {
 		return "[]"
@@ -74,13 +74,21 @@ func MarshalBreakdown(breakdowns []PolicyScoreBreakdown) string {
 	if len(breakdowns) > 10 {
 		breakdowns = breakdowns[:10]
 	}
-	b, err := json.Marshal(breakdowns)
-	if err != nil {
-		return "[]"
-	}
+	// Ensure each breakdown has bounded component count (already 7) and bounded IDs
+	// If still too large, iteratively reduce count until under limit
 	const maxLen = 4096
-	if len(b) > maxLen {
-		return string(b[:maxLen])
+	for n := len(breakdowns); n > 0; n-- {
+		trimmed := breakdowns[:n]
+		// Also bound component maps to 7 entries (already) and ensure weights not too large
+		// For safety, we marshal and check length
+		b, err := json.Marshal(trimmed)
+		if err != nil {
+			return "[]"
+		}
+		if len(b) <= maxLen {
+			return string(b)
+		}
 	}
-	return string(b)
+	// Fallback: return empty array if even 1 is too large (should not happen with bounded fields)
+	return "[]"
 }

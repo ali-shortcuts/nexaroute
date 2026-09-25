@@ -112,9 +112,9 @@ func FromConfig(c config.DecisionPolicyConfig) (Policy, error) {
 		if err := validateWeights(ww, fmt.Sprintf("policy %q task_overrides[%q]", id, nk)); err != nil {
 			return Policy{}, err
 		}
-		// Allow zero weights in override? But at least one positive if override is used? We allow zero here, but effective weights will be checked later.
-		// For consistency, require at least one positive if override non-empty? We allow empty override to mean no override? But config validation already ensures base has positive.
-		// For override, we allow all zero meaning fallback to base? Safer to allow but not require positive.
+		if !hasPositive(ww) {
+			return Policy{}, fmt.Errorf("policy %q task_overrides[%q] must have at least one positive weight", id, nk)
+		}
 		overrides[nk] = ww
 	}
 	return Policy{

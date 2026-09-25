@@ -40,6 +40,14 @@ type Event struct {
 	DecisionReasonCodes    string  `json:"decision_reason_codes,omitempty"`
 	DecisionCandidateCount int     `json:"decision_candidate_count,omitempty"`
 	DecisionConfidence     float64 `json:"decision_confidence,omitempty"`
+	// Phase E — policy explainability (privacy-safe, bounded)
+	DecisionPolicyID        string  `json:"decision_policy_id,omitempty"`
+	DecisionTaskType        string  `json:"decision_task_type,omitempty"`
+	DecisionOriginalPrimary string  `json:"decision_original_primary,omitempty"`
+	DecisionSelectedScore   float64 `json:"decision_selected_score,omitempty"`
+	DecisionOriginalScore   float64 `json:"decision_original_score,omitempty"`
+	DecisionChangedPrimary  bool    `json:"decision_changed_primary,omitempty"`
+	DecisionBreakdown       string  `json:"decision_breakdown,omitempty"`
 }
 
 const (
@@ -62,6 +70,11 @@ const (
 	maxEventDecisionAction      = 32
 	maxEventDecisionSelected    = 512
 	maxEventDecisionReasonCodes = 512
+	// Phase E policy bounds
+	maxEventDecisionPolicyID        = 128
+	maxEventDecisionTaskType        = 32
+	maxEventDecisionOriginalPrimary = 512
+	maxEventDecisionBreakdown       = 4096
 )
 
 func boundedString(s string, max int) string {
@@ -135,6 +148,10 @@ func (b *Bus) Add(e Event) {
 	e.DecisionAction = boundedString(e.DecisionAction, maxEventDecisionAction)
 	e.DecisionSelected = boundedString(e.DecisionSelected, maxEventDecisionSelected)
 	e.DecisionReasonCodes = boundedString(e.DecisionReasonCodes, maxEventDecisionReasonCodes)
+	e.DecisionPolicyID = boundedString(e.DecisionPolicyID, maxEventDecisionPolicyID)
+	e.DecisionTaskType = boundedString(e.DecisionTaskType, maxEventDecisionTaskType)
+	e.DecisionOriginalPrimary = boundedString(e.DecisionOriginalPrimary, maxEventDecisionOriginalPrimary)
+	e.DecisionBreakdown = boundedString(e.DecisionBreakdown, maxEventDecisionBreakdown)
 	if b.count < b.max {
 		idx := (b.start + b.count) % b.max
 		b.items[idx] = e

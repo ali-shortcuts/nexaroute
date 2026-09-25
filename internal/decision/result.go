@@ -11,6 +11,22 @@ const (
 	ActionAbstain Action = "ABSTAIN"
 )
 
+// PolicyTrace is a bounded, privacy-safe explanation of policy scoring.
+// It contains only IDs, scores, and component breakdowns — no raw prompts, secrets, or chain-of-thought.
+type PolicyTrace struct {
+	PolicyID             string  `json:"policy_id,omitempty"`
+	TaskType             string  `json:"task_type,omitempty"`
+	OriginalPrimaryID    string  `json:"original_primary_id,omitempty"`
+	SelectedID           string  `json:"selected_id,omitempty"`
+	ChangedPrimary       bool    `json:"changed_primary"`
+	SelectedScore        float64 `json:"selected_score"`
+	OriginalPrimaryScore float64 `json:"original_primary_score"`
+	// Bounded breakdowns for selected and original primary (optional)
+	SelectedBreakdown map[string]float64 `json:"selected_breakdown,omitempty"`
+	OriginalBreakdown map[string]float64 `json:"original_breakdown,omitempty"`
+	Weights           map[string]float64 `json:"weights,omitempty"`
+}
+
 // DecisionResult is the output of a DecisionProvider.
 // It MUST obey strict contract validated by ValidateResult.
 type DecisionResult struct {
@@ -42,6 +58,9 @@ type DecisionResult struct {
 	// Must not become unbounded telemetry or privacy channel.
 	// Serialized only for internal debug, but truncated and sanitized.
 	Error string `json:"error,omitempty"`
+
+	// PolicyTrace is optional, only set by policy provider, bounded and privacy-safe
+	PolicyTrace *PolicyTrace `json:"policy_trace,omitempty"`
 }
 
 // IsAbstain reports whether result is an abstention.
