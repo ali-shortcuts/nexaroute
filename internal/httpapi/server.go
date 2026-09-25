@@ -54,6 +54,11 @@ type Server struct {
 	usage           *usage.Tracker
 	capStore        *compat.Store
 	routeResolver   *route.Resolver
+	// Phase C — task classification metrics (bounded cardinality)
+	taskMu             sync.Mutex
+	taskClassCounts    map[string]uint64 // key: task_type|complexity
+	taskAnalysisTotal  atomic.Uint64
+	taskAnalysisErrors atomic.Uint64
 }
 
 // adminBucket is a compact token bucket keyed by remote address. Capacity 90
@@ -159,9 +164,10 @@ func New(cfg config.Config, configPath string, reg *providers.Registry, rt *rout
 	)
 	s := &Server{
 		cfg: cfg, configPath: configPath, reg: reg, rt: rt, hm: hm, bus: bus, probe: pe, log: l,
-		respCache: cache.New(cfg.CacheTTL(), cfg.Cache.MaxEntries, int64(cfg.Cache.MaxBodyBytes)),
-		usage:     usage.New(),
-		capStore:  compat.NewStore(),
+		respCache:       cache.New(cfg.CacheTTL(), cfg.Cache.MaxEntries, int64(cfg.Cache.MaxBodyBytes)),
+		usage:           usage.New(),
+		capStore:        compat.NewStore(),
+		taskClassCounts: make(map[string]uint64, 32),
 	}
 	s.routeResolver = route.NewResolver(cfg, rt.All())
 	return s

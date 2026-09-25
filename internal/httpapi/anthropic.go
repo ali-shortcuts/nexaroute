@@ -13,6 +13,7 @@ import (
 
 	"github.com/ali-shortcuts/nexaroute/internal/core"
 	"github.com/ali-shortcuts/nexaroute/internal/events"
+	"github.com/ali-shortcuts/nexaroute/internal/feature"
 	"github.com/ali-shortcuts/nexaroute/internal/providers"
 	"github.com/ali-shortcuts/nexaroute/internal/router"
 	"github.com/ali-shortcuts/nexaroute/internal/translate"
@@ -41,22 +42,39 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	inspection := inspectRequestJSON(raw, "image", []string{"thinking", "reasoning"})
-	if inspection.TooComplex {
+	// Phase C: feature extraction + task classification (observational, routing-neutral)
+	hasSystem := false
+	if in.System != nil {
+		// system can be string or array; if present, treat as system prompt
+		hasSystem = true
+	}
+	ti := extractFeaturesAndClassify(raw, feature.ExtractOptions{
+		Protocol:            feature.ProtocolAnthropic,
+		Model:               in.Model,
+		Streaming:           in.Stream,
+		VisionType:          "image",
+		ReasoningKeys:       []string{"thinking", "reasoning"},
+		ContentFields:       []string{"messages"},
+		MaxOutputTokens:     in.MaxTokens,
+		ToolCountHint:       len(in.Tools),
+		ToolChoiceHint:      in.ToolChoice != nil,
+		HasSystemPromptHint: &hasSystem,
+	})
+	if ti.Features.TooComplex {
 		anthropicErrorJSON(w, http.StatusBadRequest, "request JSON structure is too complex")
 		return
 	}
-	req := router.Requirement{Model: in.Model, Tools: len(in.Tools) > 0, Vision: inspection.Vision, Streaming: in.Stream, Reasoning: inspection.Reasoning}
+	req := router.Requirement{Model: in.Model, Tools: ti.Features.HasTools, Vision: ti.Features.HasVision, Streaming: in.Stream, Reasoning: ti.Features.HasReasoning}
 	if req.Reasoning {
 		req.ProviderType = "anthropic_compatible"
 	}
 	// Context and cost pre-routing use the same conservative prompt estimate.
 	// Anthropic requires an explicit max_tokens, so cost-aware ordering has a
 	// complete output ceiling for this request.
-	req.EstimatedInputTokens = inspection.EstimatedPromptTokens
+	req.EstimatedInputTokens = ti.Features.EstimatedPromptTokens
 	req.MaxOutputTokens = in.MaxTokens
 	req.MinContextWindow = req.EstimatedInputTokens + req.MaxOutputTokens
-	req = s.prepareRequirement(req, r, inspection.BodySessionKey)
+	req = s.prepareRequirement(req, r, ti.Features.BodySessionKey)
 	cfg, candidates, resolvedRoute, resolveErr := s.candidatesForRequirement(req, "anthropic")
 	if resolveErr != nil {
 		// Disabled endpoint or protocol not allowed
@@ -76,6 +94,8 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 			resolvedRoute = rr2
 		}
 	}
+	// Emit task_classified event (privacy-safe) after final resolution
+	s.emitTaskClassified(r.Header.Get("x-request-id"), ti, resolvedRoute)
 	if len(candidates) == 0 {
 		anthropicErrorJSON(w, 503, "no compatible healthy deployment")
 		return

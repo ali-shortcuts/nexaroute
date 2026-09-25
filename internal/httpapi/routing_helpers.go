@@ -15,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/ali-shortcuts/nexaroute/internal/config"
+	"github.com/ali-shortcuts/nexaroute/internal/feature"
 	"github.com/ali-shortcuts/nexaroute/internal/providers"
 	"github.com/ali-shortcuts/nexaroute/internal/router"
 )
@@ -247,81 +248,21 @@ func inspectResponsesRequestJSON(raw []byte) requestInspection {
 }
 
 func inspectRequestJSONFields(raw []byte, visionType string, reasoningKeys, contentFields []string) requestInspection {
-	var root map[string]any
-	if json.Unmarshal(raw, &root) != nil {
-		return requestInspection{}
+	// Delegate to feature extractor as single source of truth for structural inspection
+	extractor := feature.NewExtractor()
+	feat := extractor.Extract(raw, feature.ExtractOptions{
+		Protocol:      feature.ProtocolUnknown,
+		VisionType:    visionType,
+		ReasoningKeys: reasoningKeys,
+		ContentFields: contentFields,
+	})
+	return requestInspection{
+		Vision:                feat.HasVision,
+		Reasoning:             feat.HasReasoning,
+		TooComplex:            feat.TooComplex,
+		BodySessionKey:        feat.BodySessionKey,
+		EstimatedPromptTokens: feat.EstimatedPromptTokens,
 	}
-	out := requestInspection{BodySessionKey: bodySessionKey(root)}
-
-	// Reasoning controls are protocol-level request options. Do not scan tool
-	// schemas or arbitrary user/tool payloads for keys with the same name.
-	for _, wanted := range reasoningKeys {
-		for key := range root {
-			if strings.EqualFold(key, wanted) {
-				out.Reasoning = true
-				break
-			}
-		}
-		if out.Reasoning {
-			break
-		}
-	}
-
-	// Inspect only protocol-defined conversation/input fields. This keeps tool
-	// schemas and arbitrary metadata from falsely triggering vision while still
-	// giving Responses API requests their real input/instructions estimate.
-	stack := make([]any, 0, len(contentFields))
-	for _, field := range contentFields {
-		if v, ok := root[field]; ok {
-			stack = append(stack, v)
-		}
-	}
-	if len(stack) == 0 {
-		return out
-	}
-
-	chars := 0
-	messageCount := 0
-	nodes := 0
-	for len(stack) > 0 {
-		last := len(stack) - 1
-		v := stack[last]
-		stack = stack[:last]
-		nodes++
-		if nodes > maxRequestInspectionNodes {
-			out.TooComplex = true
-			return out
-		}
-		switch x := v.(type) {
-		case string:
-			chars += len(x)
-		case map[string]any:
-			if typ, _ := x["type"].(string); visionType != "" && strings.EqualFold(typ, visionType) {
-				out.Vision = true
-			}
-			if _, isMsg := x["role"]; isMsg {
-				messageCount++
-			}
-			if len(x) > maxRequestInspectionNodes-nodes-len(stack) {
-				out.TooComplex = true
-				return out
-			}
-			for _, child := range x {
-				stack = append(stack, child)
-			}
-		case []any:
-			if len(x) > maxRequestInspectionNodes-nodes-len(stack) {
-				out.TooComplex = true
-				return out
-			}
-			stack = append(stack, x...)
-		}
-	}
-	// ~4 chars per token plus a small per-message framing overhead and a
-	// fixed conversation floor; rounded up. Text is counted by bytes, which
-	// slightly overestimates multi-byte content — a safe bias for routing.
-	out.EstimatedPromptTokens = chars/4 + messageCount*8 + 16
-	return out
 }
 
 func sessionKeyFromRequestParts(r *http.Request, bodyKey string) string {

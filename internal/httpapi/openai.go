@@ -10,6 +10,7 @@ import (
 
 	"github.com/ali-shortcuts/nexaroute/internal/core"
 	"github.com/ali-shortcuts/nexaroute/internal/events"
+	"github.com/ali-shortcuts/nexaroute/internal/feature"
 	"github.com/ali-shortcuts/nexaroute/internal/providers"
 	"github.com/ali-shortcuts/nexaroute/internal/router"
 	"github.com/ali-shortcuts/nexaroute/internal/translate"
@@ -37,12 +38,35 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 400, "model and messages are required")
 		return
 	}
-	inspection := inspectRequestJSON(raw, "image_url", []string{"reasoning_effort", "reasoning"})
-	if inspection.TooComplex {
+	// Phase C: feature extraction + task classification (observational, routing-neutral)
+	maxOut := in.MaxCompletionTokens
+	if maxOut == 0 {
+		maxOut = in.MaxTokens
+	}
+	hasSystem := false
+	for _, m := range in.Messages {
+		if strings.EqualFold(m.Role, "system") || strings.EqualFold(m.Role, "developer") {
+			hasSystem = true
+			break
+		}
+	}
+	ti := extractFeaturesAndClassify(raw, feature.ExtractOptions{
+		Protocol:            feature.ProtocolOpenAI,
+		Model:               in.Model,
+		Streaming:           in.Stream,
+		VisionType:          "image_url",
+		ReasoningKeys:       []string{"reasoning_effort", "reasoning"},
+		ContentFields:       []string{"messages"},
+		MaxOutputTokens:     maxOut,
+		ToolCountHint:       len(in.Tools),
+		ToolChoiceHint:      in.ToolChoice != nil,
+		HasSystemPromptHint: &hasSystem,
+	})
+	if ti.Features.TooComplex {
 		errorJSON(w, http.StatusBadRequest, "request JSON structure is too complex")
 		return
 	}
-	req := router.Requirement{Model: in.Model, Tools: len(in.Tools) > 0, Vision: inspection.Vision, Streaming: in.Stream, Reasoning: inspection.Reasoning}
+	req := router.Requirement{Model: in.Model, Tools: ti.Features.HasTools, Vision: ti.Features.HasVision, Streaming: in.Stream, Reasoning: ti.Features.HasReasoning}
 	if req.Reasoning {
 		req.ProviderType = "openai_compatible"
 	}
@@ -50,14 +74,10 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 	// small for the estimated prompt plus requested output. The same estimate
 	// feeds cost-aware ordering. If the caller omits an output ceiling,
 	// cost-aware routing deliberately falls back to normal ordering.
-	maxOut := in.MaxCompletionTokens
-	if maxOut == 0 {
-		maxOut = in.MaxTokens
-	}
-	req.EstimatedInputTokens = inspection.EstimatedPromptTokens
+	req.EstimatedInputTokens = ti.Features.EstimatedPromptTokens
 	req.MaxOutputTokens = maxOut
 	req.MinContextWindow = req.EstimatedInputTokens + req.MaxOutputTokens
-	req = s.prepareRequirement(req, r, inspection.BodySessionKey)
+	req = s.prepareRequirement(req, r, ti.Features.BodySessionKey)
 	cfg, candidates, resolvedRoute, resolveErr := s.candidatesForRequirement(req, "openai")
 	if resolveErr != nil {
 		if strings.Contains(resolveErr.Error(), "disabled") {
@@ -76,6 +96,8 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 			resolvedRoute = rr2
 		}
 	}
+	// Emit task_classified event (privacy-safe, no raw prompt) after final route resolution
+	s.emitTaskClassified(r.Header.Get("x-request-id"), ti, resolvedRoute)
 	if len(candidates) == 0 {
 		errorJSON(w, 503, "no compatible healthy deployment")
 		return

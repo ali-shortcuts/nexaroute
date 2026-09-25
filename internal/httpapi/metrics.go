@@ -201,6 +201,29 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintln(w, "# HELP nexaroute_estimated_cost_usd_total Cumulative estimated spend in USD from configured per-model pricing.")
 	fmt.Fprintln(w, "# TYPE nexaroute_estimated_cost_usd_total counter")
 	fmt.Fprintf(w, "nexaroute_estimated_cost_usd_total %.6f\n", usageSnap.TotalEstimatedCostUSD)
+
+	// Phase C — task classification metrics (bounded cardinality)
+	fmt.Fprintln(w, "# HELP nexaroute_task_classifications_total Requests classified by task type and complexity.")
+	fmt.Fprintln(w, "# TYPE nexaroute_task_classifications_total counter")
+	taskCounts := s.taskClassificationSnapshot()
+	// Sort keys for deterministic output
+	keys := make([]string, 0, len(taskCounts))
+	for k := range taskCounts {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		parts := strings.SplitN(k, "|", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		taskType := sanitizeMetricLabel(parts[0])
+		complexity := sanitizeMetricLabel(parts[1])
+		fmt.Fprintf(w, "nexaroute_task_classifications_total{task_type=%q,complexity=%q} %d\n", taskType, complexity, taskCounts[k])
+	}
+	fmt.Fprintln(w, "# HELP nexaroute_task_analysis_total Total task analysis attempts.")
+	fmt.Fprintln(w, "# TYPE nexaroute_task_analysis_total counter")
+	fmt.Fprintf(w, "nexaroute_task_analysis_total %d\n", s.taskAnalysisTotal.Load())
 }
 
 func (s *Server) ready(w http.ResponseWriter, r *http.Request) {

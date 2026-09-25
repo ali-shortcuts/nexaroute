@@ -19,6 +19,20 @@ type Event struct {
 	PublicModel     string    `json:"public_model,omitempty"`
 	RouteProfile    string    `json:"route_profile,omitempty"`
 	Pool            string    `json:"pool,omitempty"`
+	// Phase C — task classification (privacy-safe, bounded)
+	TaskType          string  `json:"task_type,omitempty"`
+	TaskComplexity    string  `json:"task_complexity,omitempty"`
+	TaskConfidence    float64 `json:"task_confidence,omitempty"`
+	TaskReasonCodes   string  `json:"task_reason_codes,omitempty"` // comma-joined, bounded
+	TaskEstimatedTok  int     `json:"task_estimated_tokens,omitempty"`
+	TaskToolCount     int     `json:"task_tool_count,omitempty"`
+	TaskImageCount    int     `json:"task_image_count,omitempty"`
+	TaskMessageCount  int     `json:"task_message_count,omitempty"`
+	TaskHasCode       bool    `json:"task_has_code,omitempty"`
+	TaskHasVision     bool    `json:"task_has_vision,omitempty"`
+	TaskHasReasoning  bool    `json:"task_has_reasoning,omitempty"`
+	TaskHasTools      bool    `json:"task_has_tools,omitempty"`
+	TaskStructuredOut bool    `json:"task_structured_out,omitempty"`
 }
 
 const (
@@ -32,6 +46,9 @@ const (
 	maxEventPublicModel  = 256
 	maxEventRouteProfile = 256
 	maxEventPool         = 256
+	maxEventTaskType     = 32
+	maxEventTaskComplex  = 32
+	maxEventTaskReason   = 512
 	counterOverflowKey   = "__other__"
 )
 
@@ -99,6 +116,9 @@ func (b *Bus) Add(e Event) {
 	e.PublicModel = boundedString(e.PublicModel, maxEventPublicModel)
 	e.RouteProfile = boundedString(e.RouteProfile, maxEventRouteProfile)
 	e.Pool = boundedString(e.Pool, maxEventPool)
+	e.TaskType = boundedString(e.TaskType, maxEventTaskType)
+	e.TaskComplexity = boundedString(e.TaskComplexity, maxEventTaskComplex)
+	e.TaskReasonCodes = boundedString(e.TaskReasonCodes, maxEventTaskReason)
 	if b.count < b.max {
 		idx := (b.start + b.count) % b.max
 		b.items[idx] = e

@@ -9,6 +9,7 @@ import (
 
 	"github.com/ali-shortcuts/nexaroute/internal/compat"
 	"github.com/ali-shortcuts/nexaroute/internal/events"
+	"github.com/ali-shortcuts/nexaroute/internal/feature"
 	"github.com/ali-shortcuts/nexaroute/internal/protocol/canonical"
 	"github.com/ali-shortcuts/nexaroute/internal/providers"
 	"github.com/ali-shortcuts/nexaroute/internal/router"
@@ -264,15 +265,31 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	reqReqs := canReq.DetectRequirements()
-	req := router.Requirement{
-		Model: in.Model, Tools: reqReqs.Tools, Vision: reqReqs.Vision,
-		Streaming: reqReqs.Streaming, Reasoning: reqReqs.Reasoning,
+	// Phase C: feature extraction + task classification (observational)
+	hasSystem := len(in.Instructions) > 0
+	ti := extractFeaturesAndClassify(raw, feature.ExtractOptions{
+		Protocol:            feature.ProtocolResponses,
+		Model:               in.Model,
+		Streaming:           reqReqs.Streaming,
+		VisionType:          "input_image",
+		ReasoningKeys:       []string{"reasoning"},
+		ContentFields:       []string{"input", "instructions"},
+		MaxOutputTokens:     in.MaxOutputTokens,
+		ToolCountHint:       len(in.Tools),
+		HasSystemPromptHint: &hasSystem,
+	})
+	if ti.Features.TooComplex {
+		canonicalErrorJSON(w, "openai_responses", http.StatusBadRequest, "invalid_request_error", "request JSON structure is too complex")
+		return
 	}
-	inspection := inspectResponsesRequestJSON(raw)
-	req.EstimatedInputTokens = inspection.EstimatedPromptTokens
+	req := router.Requirement{
+		Model: in.Model, Tools: ti.Features.HasTools || reqReqs.Tools, Vision: ti.Features.HasVision || reqReqs.Vision,
+		Streaming: reqReqs.Streaming, Reasoning: ti.Features.HasReasoning || reqReqs.Reasoning,
+	}
+	req.EstimatedInputTokens = ti.Features.EstimatedPromptTokens
 	req.MaxOutputTokens = in.MaxOutputTokens
 	req.MinContextWindow = req.EstimatedInputTokens + req.MaxOutputTokens
-	req = s.prepareRequirement(req, r, inspection.BodySessionKey)
+	req = s.prepareRequirement(req, r, ti.Features.BodySessionKey)
 	cfg, candidates, resolvedRoute, resolveErr := s.candidatesForRequirement(req, "openai_responses")
 	if resolveErr != nil {
 		if strings.Contains(resolveErr.Error(), "disabled") {
@@ -282,6 +299,8 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	// Emit task_classified event (privacy-safe) after final resolution
+	s.emitTaskClassified(r.Header.Get("x-request-id"), ti, resolvedRoute)
 	if len(candidates) == 0 {
 		canonicalErrorJSON(w, "openai_responses", http.StatusServiceUnavailable, "server_error", "no compatible healthy deployment")
 		return
