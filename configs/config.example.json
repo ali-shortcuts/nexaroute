@@ -191,6 +191,7 @@
   },
   "evaluation": {
     "enabled": false,
+    "live_enabled": false,
     "max_runs": 64,
     "max_scorecards": 1024,
     "import_path": "",

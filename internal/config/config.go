@@ -150,11 +150,12 @@ func (d DecisionProviderConfig) IsEnabled() bool {
 // The plane is observation-only in Phase H: nothing here changes routing.
 type EvaluationConfig struct {
 	Enabled         bool    `json:"enabled,omitempty"`
+	LiveEnabled     bool    `json:"live_enabled,omitempty"`      // allow mode=live: real upstream calls to the explicitly selected deployment (default off)
 	MaxRuns         int     `json:"max_runs,omitempty"`          // bounded stored runs (memory + state file)
 	MaxScorecards   int     `json:"max_scorecards,omitempty"`    // bounded scorecard registry size
 	ImportPath      string  `json:"import_path,omitempty"`       // read-only scorecard artifact (JSON)
 	StatePath       string  `json:"state_path,omitempty"`        // optional evaluation state file (0600, atomic)
-	MaxArtifacts    int     `json:"max_artifacts,omitempty"`     // per-run artifact bound
+	MaxArtifacts    int     `json:"max_artifacts,omitempty"`     // per-run artifact/input bound
 	LatencyTargetMS float64 `json:"latency_target_ms,omitempty"` // optional scoring target for latency evidence
 	TTFTTargetMS    float64 `json:"ttft_target_ms,omitempty"`    // optional scoring target for TTFT evidence
 }

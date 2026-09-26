@@ -37,6 +37,8 @@ type evaluationPlane struct {
 
 	stateWritesFailed atomic.Uint64
 	runsTotal         atomic.Uint64
+	runsLive          atomic.Uint64
+	upstreamCalls     atomic.Uint64
 	runsInsufficient  atomic.Uint64
 	runsRejected      atomic.Uint64
 	scorecardsWritten atomic.Uint64
@@ -52,6 +54,8 @@ func newEvaluationPlane(cfg config.EvaluationConfig, previous *evaluationPlane) 
 		p.runner = previous.runner
 		p.store = previous.Store()
 		p.runsTotal.Store(previous.runsTotal.Load())
+		p.runsLive.Store(previous.runsLive.Load())
+		p.upstreamCalls.Store(previous.upstreamCalls.Load())
 		p.runsInsufficient.Store(previous.runsInsufficient.Load())
 		p.runsRejected.Store(previous.runsRejected.Load())
 		p.scorecardsWritten.Store(previous.scorecardsWritten.Load())
@@ -203,6 +207,7 @@ func (p *evaluationPlane) Retain(valid map[string]struct{}) {
 // Stats is the bounded observability view of the evaluation plane.
 type evaluationStats struct {
 	Enabled           bool                 `json:"enabled"`
+	LiveEnabled       bool                 `json:"live_enabled"`
 	JudgeRegistered   bool                 `json:"judge_registered"`
 	ImportPath        string               `json:"import_path,omitempty"`
 	StatePath         string               `json:"state_path,omitempty"`
@@ -210,6 +215,8 @@ type evaluationStats struct {
 	ImportError       string               `json:"import_error,omitempty"`
 	Runs              int                  `json:"runs_stored"`
 	RunsTotal         uint64               `json:"runs_total"`
+	RunsLive          uint64               `json:"live_runs_total"`
+	UpstreamCalls     uint64               `json:"upstream_calls_total"`
 	RunsInsufficient  uint64               `json:"runs_insufficient_samples"`
 	RunsRejected      uint64               `json:"runs_rejected"`
 	ScorecardsWritten uint64               `json:"scorecards_written"`
@@ -224,6 +231,7 @@ func (p *evaluationPlane) Stats() evaluationStats {
 	cfg := p.config()
 	st := evaluationStats{
 		Enabled:           cfg.Enabled,
+		LiveEnabled:       cfg.LiveEnabled,
 		JudgeRegistered:   len(p.runner.Evaluators().Judges()) > 0,
 		ImportPath:        cfg.ImportPath,
 		StatePath:         cfg.StatePath,
@@ -231,6 +239,8 @@ func (p *evaluationPlane) Stats() evaluationStats {
 		ImportError:       p.ImportError(),
 		Runs:              p.store.Len(),
 		RunsTotal:         p.runsTotal.Load(),
+		RunsLive:          p.runsLive.Load(),
+		UpstreamCalls:     p.upstreamCalls.Load(),
 		RunsInsufficient:  p.runsInsufficient.Load(),
 		RunsRejected:      p.runsRejected.Load(),
 		ScorecardsWritten: p.scorecardsWritten.Load(),

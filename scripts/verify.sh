@@ -41,6 +41,7 @@ GOMAXPROCS=2 go test ./internal/httpapi -run='^$' -fuzz=FuzzPatchJSONModel -fuzz
 GOMAXPROCS=2 go test ./internal/core -run='^$' -fuzz=FuzzParseAnthContent -fuzztime=2s -parallel=2
 GOMAXPROCS=2 go test ./internal/eval -run='^$' -fuzz=FuzzResolve_Verdicts -fuzztime=2s -parallel=2
 GOMAXPROCS=2 go test ./internal/eval -run='^$' -fuzz=FuzzRunner_Artifacts -fuzztime=2s -parallel=2
+GOMAXPROCS=2 go test ./internal/providers -run='^$' -fuzz=FuzzCompletionDecode -fuzztime=2s -parallel=2
 GOMAXPROCS=2 go test ./internal/scorecards -run='^$' -fuzz=FuzzImportJSON -fuzztime=2s -parallel=2
 GOMAXPROCS=2 go test ./internal/scorecards -run='^$' -fuzz=FuzzValueValidation -fuzztime=2s -parallel=2
 

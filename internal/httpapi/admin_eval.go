@@ -113,14 +113,18 @@ func (s *Server) adminEvaluationSuites(w http.ResponseWriter, r *http.Request) {
 		stats = plane.Stats()
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"enabled":    plane != nil && plane.Enabled(),
-		"suites":     eval.Catalog(),
-		"evaluators": stats.Evaluators,
+		"enabled":      plane != nil && plane.Enabled(),
+		"live_enabled": stats.LiveEnabled,
+		"modes":        []string{eval.ModeReplay, eval.ModeLive},
+		"suites":       eval.Catalog(),
+		"evaluators":   stats.Evaluators,
 		"bounds": map[string]int{
 			"max_artifacts_per_run": eval.MaxOutcomesPerRun,
 			"max_cases_per_suite":   eval.MaxCasesPerSuite,
 			"max_stored_runs":       eval.MaxStoredRuns,
 			"max_scorecards":        plane.maxScorecards(),
+			"max_live_prompt_bytes": eval.MaxLivePromptBytes,
+			"max_live_tokens":       eval.MaxLiveTokens,
 		},
 		"judge_available": stats.JudgeRegistered,
 		"judge_note":      "Phase H ships no judge implementation; deterministic evaluators always take precedence",
@@ -172,6 +176,7 @@ func evalRunRows(runs []eval.Result) []map[string]any {
 	for _, run := range runs {
 		row := map[string]any{
 			"run_id":         run.RunID,
+			"mode":           run.Mode,
 			"suite_id":       run.SuiteID,
 			"suite_version":  run.SuiteVersion,
 			"deployment_id":  run.DeploymentID,
@@ -194,10 +199,11 @@ func evalRunRows(runs []eval.Result) []map[string]any {
 	return out
 }
 
-// evaluationRunRequest is the POST /admin/api/evaluation/run payload. It carries
-// recorded artifacts (evidence), never prompts: the gateway judges what a model
-// already produced.
+// evaluationRunRequest is the POST /admin/api/evaluation/run payload. In replay
+// mode it carries recorded artifacts (evidence); in live mode it carries the
+// case inputs that are sent to the one explicitly selected deployment.
 type evaluationRunRequest struct {
+	Mode            string         `json:"mode,omitempty"`
 	SuiteID         string         `json:"suite_id"`
 	DeploymentID    string         `json:"deployment_id"`
 	ProviderID      string         `json:"provider_id,omitempty"`
@@ -205,14 +211,18 @@ type evaluationRunRequest struct {
 	CaseTimeoutMS   int            `json:"case_timeout_ms,omitempty"`
 	LatencyTargetMS float64        `json:"latency_target_ms,omitempty"`
 	TTFTTargetMS    float64        `json:"ttft_target_ms,omitempty"`
-	Artifacts       []eval.Outcome `json:"artifacts"`
+	Artifacts       []eval.Outcome `json:"artifacts,omitempty"`
+	Inputs          []eval.Input   `json:"inputs,omitempty"`
 }
 
-// adminEvaluationRun executes a deterministic suite against recorded artifacts,
-// stores the run and writes a scorecard when the run produced evidence.
+// adminEvaluationRun executes a deterministic suite, stores the run and writes
+// a scorecard when the run produced evidence.
 //
-// It never calls an upstream model: Phase H evaluation is offline replay, so it
-// cannot consume quota, pollute provider health or affect data-plane routing.
+// Replay mode (the default) replays recorded artifacts offline and never
+// touches the network. Live mode sends the declared case inputs to the one
+// explicitly selected deployment through its existing provider adapter — no
+// router selection, no DecisionProviders, no health/cache/session/routing
+// interaction (see LiveEvaluationExecutor).
 func (s *Server) adminEvaluationRun(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		errorJSON(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -265,20 +275,25 @@ func (s *Server) adminEvaluationRun(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, http.StatusBadRequest, "model does not match deployment")
 		return
 	}
-	if len(in.Artifacts) == 0 {
-		errorJSON(w, http.StatusBadRequest, "artifacts are required: evaluation replays recorded evidence")
+	// Mode selection: replay is the safe default (offline, no upstream calls);
+	// live targets the explicitly selected deployment only. Router selection
+	// is never part of an evaluation run.
+	mode := strings.ToLower(strings.TrimSpace(in.Mode))
+	if mode == "" {
+		mode = eval.ModeReplay
+	}
+	if mode != eval.ModeReplay && mode != eval.ModeLive {
+		errorJSON(w, http.StatusBadRequest, "mode must be replay or live")
 		return
 	}
-	if len(in.Artifacts) > cfg.MaxArtifacts {
-		errorJSON(w, http.StatusBadRequest, "too many artifacts for one run")
-		return
-	}
-	if _, ok := eval.LookupSuite(in.SuiteID); !ok {
+	suite, ok := eval.LookupSuite(in.SuiteID)
+	if !ok {
 		errorJSON(w, http.StatusBadRequest, "unknown suite_id: "+in.SuiteID)
 		return
 	}
 
 	req := eval.Request{
+		Mode:            mode,
 		DeploymentID:    dep.ID,
 		ProviderID:      dep.ProviderID,
 		Model:           dep.Model,
@@ -298,9 +313,31 @@ func (s *Server) adminEvaluationRun(w http.ResponseWriter, r *http.Request) {
 		req.CaseTimeoutMS = eval.MaxRunTimeoutMS
 	}
 
-	exec, execErr := eval.NewReplayExecutor(in.Artifacts)
+	var exec eval.Executor
+	var execErr error
+	if mode == eval.ModeReplay {
+		if len(in.Inputs) > 0 {
+			errorJSON(w, http.StatusBadRequest, "inputs require mode=live; replay mode replays recorded artifacts")
+			return
+		}
+		if len(in.Artifacts) == 0 {
+			errorJSON(w, http.StatusBadRequest, "artifacts are required: replay mode replays recorded evidence")
+			return
+		}
+		if len(in.Artifacts) > cfg.MaxArtifacts {
+			errorJSON(w, http.StatusBadRequest, "too many artifacts for one run")
+			return
+		}
+		exec, execErr = eval.NewReplayExecutor(in.Artifacts)
+	} else {
+		exec, execErr = s.liveExecutorFor(cfg, dep, suite, in)
+	}
 	if execErr != nil {
 		plane.runsRejected.Add(1)
+		if le, ok := execErr.(*liveRequestError); ok {
+			errorJSON(w, le.status, le.msg)
+			return
+		}
 		errorJSON(w, http.StatusBadRequest, execErr.Error())
 		return
 	}
@@ -311,6 +348,10 @@ func (s *Server) adminEvaluationRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	plane.runsTotal.Add(1)
+	if run.Mode == eval.ModeLive {
+		plane.runsLive.Add(1)
+		plane.upstreamCalls.Add(uint64(run.Upstream))
+	}
 	if !run.Scoreable {
 		plane.runsInsufficient.Add(1)
 	}
@@ -398,7 +439,12 @@ func (s *Server) emitEvaluationEvent(run eval.Result, resp map[string]any) {
 	if written, ok := resp["scorecard_written"].(bool); ok && !written && run.Scoreable {
 		status = "no_scorecard"
 	}
-	message := "suite=" + run.SuiteID + " samples=" + strconv.Itoa(run.Samples) +
+	runMode := run.Mode
+	if runMode == "" {
+		runMode = eval.ModeReplay
+	}
+	message := "suite=" + run.SuiteID + " mode=" + runMode + " samples=" + strconv.Itoa(run.Samples) +
+		" upstream_calls=" + strconv.Itoa(run.Upstream) +
 		" score=" + strconv.FormatFloat(run.Score, 'f', 4, 64) +
 		" status=" + status + " verdicts=" + strings.Join(parts, ",")
 	s.bus.Add(events.Event{

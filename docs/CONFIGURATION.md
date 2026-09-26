@@ -236,17 +236,19 @@ and, while disabled, accepts no runs and writes no scorecards.
 | Field | Default | Bounds | Meaning |
 |---|---|---|---|
 | `enabled` | `false` | — | Master switch. While false, `POST /admin/api/evaluation/run` returns 409 and no artifact is imported. |
+| `live_enabled` | `false` | — | Allow `mode=live`: real upstream calls to the explicitly selected deployment. While false, only offline replay runs are accepted. |
 | `max_runs` | `64` | 1–512 | Bounded retained evaluation runs (memory and state file). |
 | `max_scorecards` | `1024` | 1–4096 | Scorecard registry bound (deployments). |
 | `import_path` | `""` | ≤ 4096 bytes | Read-only scorecard artifact (JSON). Re-read on config reload; a malformed artifact is rejected as a whole and reported as `import_error`. |
 | `state_path` | `""` | ≤ 4096 bytes | Optional durability file: one atomic, mode-0600 JSON document holding bounded runs and scorecards. |
-| `max_artifacts` | `128` | 1–512 | Per-run artifact bound. |
+| `max_artifacts` | `128` | 1–512 | Per-run artifact/live-input bound. |
 | `latency_target_ms` | `0` | 0–600000 | Optional latency scoring target. A latency value is only produced when a target exists. |
 | `ttft_target_ms` | `0` | 0–600000 | Optional TTFT scoring target, same rule. |
 
 ```json
 "evaluation": {
   "enabled": true,
+  "live_enabled": true,
   "max_runs": 64,
   "max_scorecards": 1024,
   "import_path": "/etc/nexaroute/scorecards.json",
@@ -276,18 +278,41 @@ invented: a deployment with no evidence simply has no scorecard.
 
 ### Evaluation runs
 
-`POST /admin/api/evaluation/run` replays **recorded artifacts** (never prompts)
-through deterministic suites:
+`POST /admin/api/evaluation/run` supports two modes (both require
+`evaluation.enabled`; the mode field defaults to the safe value):
+
+- **`mode: "replay"` (default)** — replays **recorded artifacts** (never
+  prompts) through deterministic suites, performs no network I/O:
 
 ```json
-{"suite_id": "coding", "deployment_id": "chat2api/deepseek",
+{"mode": "replay", "suite_id": "coding", "deployment_id": "chat2api/deepseek",
  "artifacts": [{"case_id": "coding-bugfix", "status": "ok",
                 "unit_tests": {"compiled": true, "passed": 3}}],
  "latency_target_ms": 2000}
 ```
 
-Unknown fields, unknown suites, unknown deployments, mismatched
-`provider_id`/`model`, missing artifacts and oversized payloads are rejected. A
-run that produced too little evidence to meet the suite's minimum sample count
-stores the run but writes **no** scorecard (`scorecard_written: false`). Model
-outputs never appear in events, metrics or the admin snapshot.
+- **`mode: "live"`** (additionally requires `evaluation.live_enabled: true`) —
+  sends the declared case **inputs** to the explicitly selected
+  `deployment_id` through its configured provider adapter (one bounded,
+  non-streaming completion per case input) and judges the real responses:
+
+```json
+{"mode": "live", "suite_id": "reasoning", "deployment_id": "chat2api/deepseek",
+ "inputs": [{"case_id": "reasoning-multi-step-arithmetic",
+             "prompt": "Compute 40+2. Reply with the number only.", "max_tokens": 64}]}
+```
+
+Live evaluation never selects a route: `deployment_id` is the only target and
+the decision plane (local/policy/Jev/hybrid chain) is never consulted. It does
+not write production model/provider health, does not touch session affinity or
+the response cache, and does not alter routing state — all strict-test
+guaranteed. Inputs may contain confidential evaluation datasets; they are sent
+only to the selected deployment's model and never appear in run records,
+scorecards, events, metrics or the admin snapshot.
+
+Unknown fields, unknown modes, unknown suites, unknown deployments, mismatched
+`provider_id`/`model`, missing artifacts/inputs, inputs for unknown cases and
+oversized payloads are rejected. A run that produced too little evidence to
+meet the suite's minimum sample count stores the run but writes **no**
+scorecard (`scorecard_written: false`). Model outputs never appear in events,
+metrics or the admin snapshot.

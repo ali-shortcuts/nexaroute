@@ -125,9 +125,15 @@ Implemented but bounded by design:
 The Phase H evaluation plane is an admin-only observation surface and is
 explicitly bounded:
 
-- evaluation is **offline replay**: the admin endpoint accepts recorded
-  artifacts and never prompts a model, calls an upstream or spends provider
-  quota. Live, in-band quality measurement is not implemented;
+- evaluation supports two modes: **offline replay** (default; recorded
+  artifacts, no network) and **live evaluation** (opt-in via
+  `evaluation.live_enabled` + `mode=live`; real bounded upstream calls to the
+  explicitly selected `deployment_id` through the existing provider adapter).
+  Live evaluation performs no router selection, never consults
+  DecisionProviders, and does not touch production health, quota reservations,
+  the response cache, session affinity or routing state (strict-test proven).
+  What is not implemented: streaming evaluation, multi-deployment comparison
+  runs and automatic/scheduled evaluation;
 - no judge implementation ships. Deterministic evaluators decide every case; the
   judge path exists and is proven never to override a deterministic verdict, but
   the HTTP surface cannot enable it;

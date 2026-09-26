@@ -382,11 +382,24 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 		} else {
 			fmt.Fprintln(w, "nexaroute_evaluation_enabled 0")
 		}
+		fmt.Fprintln(w, "# HELP nexaroute_evaluation_live_enabled Whether live evaluation (real upstream calls to the selected deployment) is permitted (1) or disabled (0).")
+		fmt.Fprintln(w, "# TYPE nexaroute_evaluation_live_enabled gauge")
+		if evalStats.LiveEnabled {
+			fmt.Fprintln(w, "nexaroute_evaluation_live_enabled 1")
+		} else {
+			fmt.Fprintln(w, "nexaroute_evaluation_live_enabled 0")
+		}
 		fmt.Fprintln(w, "# HELP nexaroute_evaluation_runs_total Evaluation runs by outcome.")
 		fmt.Fprintln(w, "# TYPE nexaroute_evaluation_runs_total counter")
 		fmt.Fprintf(w, "nexaroute_evaluation_runs_total{outcome=%q} %d\n", "stored", evalStats.RunsTotal)
 		fmt.Fprintf(w, "nexaroute_evaluation_runs_total{outcome=%q} %d\n", "insufficient_samples", evalStats.RunsInsufficient)
 		fmt.Fprintf(w, "nexaroute_evaluation_runs_total{outcome=%q} %d\n", "rejected", evalStats.RunsRejected)
+		fmt.Fprintln(w, "# HELP nexaroute_evaluation_live_runs_total Live evaluation runs executed against an explicitly selected physical deployment.")
+		fmt.Fprintln(w, "# TYPE nexaroute_evaluation_live_runs_total counter")
+		fmt.Fprintf(w, "nexaroute_evaluation_live_runs_total %d\n", evalStats.RunsLive)
+		fmt.Fprintln(w, "# HELP nexaroute_evaluation_upstream_calls_total Real upstream model calls made by live evaluation runs (replay mode performs none).")
+		fmt.Fprintln(w, "# TYPE nexaroute_evaluation_upstream_calls_total counter")
+		fmt.Fprintf(w, "nexaroute_evaluation_upstream_calls_total %d\n", evalStats.UpstreamCalls)
 		fmt.Fprintln(w, "# HELP nexaroute_evaluation_scorecards_written_total Scorecards written from evaluation runs.")
 		fmt.Fprintln(w, "# TYPE nexaroute_evaluation_scorecards_written_total counter")
 		fmt.Fprintf(w, "nexaroute_evaluation_scorecards_written_total %d\n", evalStats.ScorecardsWritten)

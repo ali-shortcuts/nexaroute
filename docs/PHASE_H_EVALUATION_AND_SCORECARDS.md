@@ -124,12 +124,44 @@ enables it.
 - `HealthFromRuns` produces an **evaluation-health namespace** that is separate
   from routing health and is never read by the router.
 
-### 2.4 Offline replay (isolation mechanism)
+### 2.4 Execution modes: replay (offline) and live (explicitly targeted)
 
-`ReplayExecutor` is constructed from recorded artifacts. It performs no I/O and
-reports `UpstreamCalls() == 0`. The HTTP run endpoint requires artifacts and
-returns `400` otherwise: Phase H never prompts a model, never probes an
-upstream, never spends quota, and cannot warm or poison production health.
+The run endpoint supports two modes; both require `evaluation.enabled`.
+
+**Replay (default).** `ReplayExecutor` is constructed from recorded artifacts.
+It performs no I/O and reports `UpstreamCalls() == 0`. Replaying consumes no
+quota and cannot touch upstreams, credentials or health.
+
+**Live (opt-in).** With `evaluation.live_enabled: true` and `mode: "live"`,
+`LiveEvaluationExecutor` evaluates the one deployment named by
+`deployment_id`:
+
+- it resolves that deployment's configured provider adapter and sends each
+  declared case input (`inputs[]`) upstream as one bounded, non-streaming
+  completion, reusing the production adapter/transport (credentials, endpoint,
+  TLS, timeouts) — no second client stack;
+- the real response becomes the judged artifact (text, tool call, usage,
+  latency, status); an HTTP error status is honest failure evidence,
+  a transport/context failure is an executor error, never a fabricated score;
+- cases without a declared input are `missing` evidence, exactly like replayed
+  gaps.
+
+Live mode imposes strict isolation, enforced by construction and proven by
+strict tests (`internal/httpapi/evaluation_live_test.go`):
+
+| Isolation guarantee | Mechanism |
+|---|---|
+| No router selection | The executor never sees `router.Requirement`; the admin handler resolves the explicit `deployment_id` to its provider adapter directly. Only that deployment is ever called — exactly once per case input. |
+| No DecisionProviders | The request path (`applyDecisionPlane` → orchestrator) is never entered: local/policy/Jev/hybrid-chain calls stay at zero, and DecisionProvider health cannot change. |
+| No production health impact | `health.Manager.RecordSuccess/RecordFailure` and provider-incident recording live in the request-path handlers and the probe engine only; the evaluation path touches neither, so success, HTTP 500 and timeouts all leave health snapshots identical. |
+| No quota reservation | Live calls are not marked with a data-plane quota estimate, so no in-flight reservation is created. Provider-reported rate-limit headers are observed exactly like probe traffic (provider truth, not a local deduction). |
+| No production cache | The response cache is written only by request-path handlers. |
+| No session affinity | The router session table is written only from the request path. |
+| No routing-state change | Round-robin cursor, weights, priorities and candidate order are never read or written; routing results before and after a scorecard-writing live run are identical. |
+| Privacy | Prompts and outputs stay inside the executor. Run records carry verdicts and bounded error categories; events/metrics carry counts. Provider credentials never enter records, scorecards, events, metrics, admin surfaces or errors (adapter-side redaction plus dropped error bodies). |
+
+`tests` proving each row run in the standard gates; see
+`TestPhaseH_LiveEvaluation*` and the implementation report.
 
 ## 3. Isolation contract
 
@@ -141,9 +173,12 @@ Two independent mechanisms enforce that evaluation cannot influence routing:
    files with `go/parser` and fails on any violation.
 2. **Runtime shape**. The evaluation plane is owned by the admin surface only.
    The only production data it reads is deployment identity (to refuse
-   evaluating a deployment that does not exist). It writes to the scorecard
+   evaluating a deployment that does not exist, and in live mode to resolve
+   that deployment's configured provider adapter). It writes to the scorecard
    registry, run store and its own state file — never to health, router,
-   provider, usage or cache state.
+   provider, usage or cache state. Live mode makes real upstream calls, but
+   only to the explicitly selected deployment and only through the isolated
+   executor path in §2.4.
 
 ## 4. HTTP surface (admin only)
 
@@ -153,20 +188,26 @@ Two independent mechanisms enforce that evaluation cannot influence routing:
 | `GET /admin/api/scorecards/{deployment_id}` | Single scorecard with version history; `404` when no evidence exists. |
 | `GET /admin/api/evaluation/suites` | Suite catalog, evaluator IDs, bounds, `judge_available: false`. |
 | `GET /admin/api/evaluation/runs?limit=&run=` | Bounded run history (`limit ≤ 100`) plus the evaluation-health namespace. |
-| `POST /admin/api/evaluation/run` | Replays recorded artifacts, stores the run, writes a scorecard only when evidence is sufficient. |
+| `POST /admin/api/evaluation/run` | Runs in `replay` mode (default: replays recorded artifacts, no I/O) or `live` mode (real calls to the explicitly selected deployment only), stores the run, writes a scorecard only when evidence is sufficient. |
 
-`POST` payload: `suite_id`, `deployment_id`, `artifacts[]` (required), optional
-`provider_id`, `model`, `case_timeout_ms`, `latency_target_ms`, `ttft_target_ms`.
-Unknown JSON fields are rejected; the body is bounded at 4 MiB (413 over);
-`deployment_id` must exist and `provider_id`/`model` must match it; a disabled
-plane returns 409; too many artifacts (config bound) returns 400.
+`POST` payload: `mode` (`replay` default | `live`), `suite_id`,
+`deployment_id` (required, the only target — no router selection), optional
+`provider_id`, `model`, `case_timeout_ms`, `latency_target_ms`,
+`ttft_target_ms`; replay requires `artifacts[]`, live requires `inputs[]`
+(`case_id`, `prompt`, optional `system`, `max_tokens ≤ 4096`) and rejects
+artifacts (and vice versa). Unknown JSON fields are rejected; the body is
+bounded at 4 MiB (413 over); `deployment_id` must exist and
+`provider_id`/`model` must match it; a disabled plane returns 409; live with
+`live_enabled: false` returns 409; too many artifacts/inputs returns 400;
+inputs referencing unknown suite cases or duplicates return 400.
 
 The admin snapshot carries `scorecards` and `evaluation` sections, and the
 metrics endpoint exposes bounded families (counts by provenance and verdict,
 runs by outcome, scorecards written, import failures, state write failures).
 
-Events: kind `eval_run` with the suite label (≤ 32 chars), samples, score,
-status and verdict counts. **Model outputs never enter events.**
+Events: kind `eval_run` with the suite label (≤ 32 chars), mode, upstream call
+count, samples, score, status and verdict counts. **Model outputs and prompts
+never enter events.**
 
 ## 5. Configuration
 
@@ -174,6 +215,7 @@ status and verdict counts. **Model outputs never enter events.**
 {
   "evaluation": {
     "enabled": false,
+    "live_enabled": false,
     "max_runs": 64,
     "max_scorecards": 1024,
     "import_path": "",
@@ -188,11 +230,12 @@ status and verdict counts. **Model outputs never enter events.**
 | Field | Default | Bounds | Meaning |
 |---|---|---|---|
 | `enabled` | `false` | — | Opt-in. While false the plane accepts no runs and no imports; scorecards can never be written. |
+| `live_enabled` | `false` | — | Allow `mode=live` real upstream calls to the explicitly selected deployment. Off by default: even with the plane enabled, only offline replay is accepted. |
 | `max_runs` | `64` | 1–512 | Bounded retained runs (memory and state file). |
 | `max_scorecards` | `1024` | 1–4096 | Scorecard registry bound. |
 | `import_path` | `""` | ≤ 4096 bytes | Read-only scorecard artifact (JSON). Re-read on config reload; failures are reported, never partially applied. |
 | `state_path` | `""` | ≤ 4096 bytes | Optional durable state file, written atomically with mode 0600. |
-| `max_artifacts` | `128` | 1–512 | Per-run artifact bound. |
+| `max_artifacts` | `128` | 1–512 | Per-run artifact/live-input bound. |
 | `latency_target_ms` / `ttft_target_ms` | `0` | 0–600000 | Optional scoring targets used as evidence only when provided. |
 
 Hot reload: a config swap prepares the next plane reusing the live registry and
@@ -214,9 +257,14 @@ are never dropped to make room.
 
 ## 7. Non-goals
 
-- No routing influence of any kind in Phase H.
-- No judge implementation, no LLM-as-judge calls.
-- No live model calls, no network access, no prompt submission.
+- No routing influence of any kind in Phase H (live evaluation is equally
+  incapable of influencing routing; see §2.4's isolation table).
+- No judge implementation, no LLM-as-judge calls (the judge evaluator remains
+  disabled; deterministic evaluators decide).
+- Live evaluation is deliberately narrow: exactly one explicitly selected
+  deployment per run, bounded single-turn completions, no streaming, no
+  failover, no route/profile/pool semantics. It is not a traffic generator and
+  not a second request path.
 - No operator-defined suites yet (catalog is built-in, versioned).
 - No telemetry ingestion pipeline yet (`FromTelemetry` exists as a validated
   constructor, but nothing feeds it automatically).

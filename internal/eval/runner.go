@@ -89,12 +89,22 @@ func (o Outcome) Validate() error {
 	return nil
 }
 
-// Executor produces the model behavior for a case. Phase H ships the replay
-// executor (recorded artifacts, no network). A caller may supply any executor;
-// the runner then only ever reads its outputs and cannot influence routing state.
+// Executor produces the model behavior for a case. Phase H ships two
+// executors: the replay executor (recorded artifacts, no network) and the live
+// executor (internal/httpapi.LiveEvaluationExecutor: real upstream calls to one
+// explicitly selected deployment). A caller may supply any executor; the runner
+// then only ever reads its outputs and cannot influence routing state.
 type Executor interface {
 	Execute(ctx context.Context, c Case) (Outcome, error)
 }
+
+var errNoArtifact = errors.New("no recorded artifact for case")
+
+// ErrNoEvidence is returned by an executor when it cannot produce any outcome
+// for a case: no recorded artifact (replay) or no declared live input (live
+// mode). The runner records the case as "missing" — never as a failure and
+// never as a success — so a run cannot invent coverage.
+var ErrNoEvidence = errNoArtifact
 
 // ReplayExecutor answers cases from recorded artifacts. It performs no I/O, so a
 // replayed evaluation cannot touch upstream providers, credentials or health.
@@ -136,8 +146,6 @@ func (r *ReplayExecutor) Calls() int { return r.calls }
 // UpstreamCalls reports network calls made by this executor: always zero.
 func (r *ReplayExecutor) UpstreamCalls() int { return 0 }
 
-var errNoArtifact = errors.New("no recorded artifact for case")
-
 // Runner executes suites. It is stateless apart from the evaluator registry, so
 // concurrent runs are safe.
 type Runner struct {
@@ -165,6 +173,7 @@ func (r *Runner) Evaluators() *Registry { return r.registry }
 // Request is one evaluation run request.
 type Request struct {
 	RunID           string               `json:"run_id,omitempty"`
+	Mode            string               `json:"mode,omitempty"`
 	DeploymentID    string               `json:"deployment_id"`
 	ProviderID      string               `json:"provider_id,omitempty"`
 	Model           string               `json:"model,omitempty"`
@@ -175,6 +184,60 @@ type Request struct {
 	TTFTTargetMS    float64              `json:"ttft_target_ms,omitempty"`
 	Outcomes        []Outcome            `json:"artifacts,omitempty"`
 	Dimension       scorecards.Dimension `json:"-"`
+}
+
+// Execution modes. Replay is the safe default: it replays recorded artifacts
+// and performs no I/O. Live sends the declared case inputs to the one
+// explicitly selected deployment through the production provider adapter.
+const (
+	ModeReplay = "replay"
+	ModeLive   = "live"
+)
+
+// Bounds for live evaluation inputs.
+const (
+	// MaxLivePromptBytes bounds one live prompt or system message.
+	MaxLivePromptBytes = MaxOutputBytes
+	// MaxLiveTokens bounds the requested completion size of one live case so a
+	// live run cannot spend unbounded model output.
+	MaxLiveTokens = 4096
+	// DefaultLiveMaxTokens keeps live evaluation cheap when the operator does
+	// not declare a per-case budget.
+	DefaultLiveMaxTokens = 256
+)
+
+// Input is one live-evaluation prompt for a case. In live mode the runner's
+// executor sends each declared input to the explicitly selected deployment and
+// the response becomes the judged artifact. Inputs are never stored anywhere:
+// run records carry verdicts and bounded error categories only.
+type Input struct {
+	CaseID    string `json:"case_id"`
+	Prompt    string `json:"prompt"`
+	System    string `json:"system,omitempty"`
+	MaxTokens int    `json:"max_tokens,omitempty"`
+}
+
+// Validate bounds one live input.
+func (i Input) Validate() error {
+	if strings.TrimSpace(i.CaseID) == "" {
+		return errors.New("live input is missing case_id")
+	}
+	if len(i.CaseID) > 256 {
+		return errors.New("live input case_id exceeds safe limit")
+	}
+	if strings.TrimSpace(i.Prompt) == "" {
+		return fmt.Errorf("live input %q has an empty prompt", i.CaseID)
+	}
+	if len(i.Prompt) > MaxLivePromptBytes {
+		return fmt.Errorf("live input %q prompt exceeds safe limit", i.CaseID)
+	}
+	if len(i.System) > MaxLivePromptBytes {
+		return fmt.Errorf("live input %q system message exceeds safe limit", i.CaseID)
+	}
+	if i.MaxTokens < 0 || i.MaxTokens > MaxLiveTokens {
+		return fmt.Errorf("live input %q max_tokens must be in [0,%d]", i.CaseID, MaxLiveTokens)
+	}
+	return nil
 }
 
 // Bounds for runs.
@@ -210,6 +273,7 @@ type DimensionScore struct {
 // Result is the bounded, JSON-serializable outcome of one run.
 type Result struct {
 	RunID        string    `json:"run_id"`
+	Mode         string    `json:"mode,omitempty"`
 	SuiteID      string    `json:"suite_id"`
 	SuiteVersion string    `json:"suite_version"`
 	DeploymentID string    `json:"deployment_id"`
@@ -237,6 +301,11 @@ func (r Result) Validate() error {
 	if r.RunID == "" || r.SuiteID == "" || r.DeploymentID == "" {
 		return errors.New("evaluation result requires run_id, suite_id and deployment_id")
 	}
+	switch r.Mode {
+	case "", ModeReplay, ModeLive:
+	default:
+		return errors.New("evaluation mode must be replay or live")
+	}
 	if len(r.Cases) > MaxOutcomesPerRun {
 		return errors.New("evaluation result exceeds case bound")
 	}
@@ -250,12 +319,15 @@ func finite01(v float64) bool {
 	return !math.IsNaN(v) && !math.IsInf(v, 0) && v >= 0 && v <= 1
 }
 
-// Run executes a suite against recorded artifacts.
+// Run executes a suite against recorded artifacts. It always records replay
+// mode: the executor it builds cannot make upstream calls, so the recorded
+// mode can never claim contact it did not make.
 func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 	exec, err := NewReplayExecutor(req.Outcomes)
 	if err != nil {
 		return Result{}, err
 	}
+	req.Mode = ModeReplay
 	return r.RunWithExecutor(ctx, req, exec)
 }
 
@@ -273,6 +345,13 @@ func (r *Runner) RunWithExecutor(ctx context.Context, req Request, exec Executor
 	if strings.TrimSpace(req.DeploymentID) == "" {
 		return Result{}, errors.New("evaluation requires deployment_id")
 	}
+	mode := strings.ToLower(strings.TrimSpace(req.Mode))
+	if mode == "" {
+		mode = ModeReplay
+	}
+	if mode != ModeReplay && mode != ModeLive {
+		return Result{}, fmt.Errorf("unknown evaluation mode %q", req.Mode)
+	}
 	if exec == nil {
 		return Result{}, errors.New("evaluation requires an executor")
 	}
@@ -282,6 +361,7 @@ func (r *Runner) RunWithExecutor(ctx context.Context, req Request, exec Executor
 	started := r.now()
 	res := Result{
 		RunID:        req.RunID,
+		Mode:         mode,
 		SuiteID:      suite.ID,
 		SuiteVersion: suite.Version,
 		DeploymentID: req.DeploymentID,
@@ -455,8 +535,12 @@ func (r *Runner) RunWithExecutor(ctx context.Context, req Request, exec Executor
 	finished := r.now()
 	res.FinishedAt = finished
 	res.DurationMS = finished.Sub(started).Milliseconds()
-	if r, ok := exec.(*ReplayExecutor); ok {
-		res.Upstream = r.UpstreamCalls()
+	// Executors that can report real upstream calls do so here. The replay
+	// executor always reports 0; the live executor (internal/httpapi) reports
+	// exactly the number of real model requests it made to the selected
+	// deployment — one per case with a declared input.
+	if counter, ok := exec.(interface{ UpstreamCalls() int }); ok {
+		res.Upstream = counter.UpstreamCalls()
 	}
 	return res, nil
 }
