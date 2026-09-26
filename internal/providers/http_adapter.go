@@ -792,24 +792,38 @@ func parseRetryAfterBounded(v string, fallback, cap time.Duration) time.Duration
 	return fallback
 }
 
-func (a *httpAdapter) Probe(ctx context.Context, model string, maxTokens int) (time.Duration, int, error) {
+// HealthProbeContent is the synthetic availability-probe payload. It is not a
+// user prompt and must never be replaced with live client text.
+const HealthProbeContent = "nexaroute-health-probe"
+
+const maxProbeOutputTokens = 20
+
+func clampProbeMaxTokens(maxTokens int) int {
 	if maxTokens < 1 {
-		maxTokens = 1
+		return 1
 	}
+	if maxTokens > maxProbeOutputTokens {
+		return maxProbeOutputTokens
+	}
+	return maxTokens
+}
+
+func (a *httpAdapter) Probe(ctx context.Context, model string, maxTokens int) (time.Duration, int, error) {
+	maxTokens = clampProbeMaxTokens(maxTokens)
 	var body map[string]any
 	switch a.p.Type {
 	case "gemini":
 		body = map[string]any{
-			"contents":         []map[string]any{{"role": "user", "parts": []map[string]any{{"text": "OK"}}}},
+			"contents":         []map[string]any{{"role": "user", "parts": []map[string]any{{"text": HealthProbeContent}}}},
 			"generationConfig": map[string]any{"maxOutputTokens": maxTokens},
 		}
 	case "openai_responses":
 		body = map[string]any{
-			"model": model, "input": "Reply with the single word: OK",
+			"model": model, "input": HealthProbeContent,
 			"max_output_tokens": maxTokens, "stream": false,
 		}
 	default:
-		body = map[string]any{"model": model, "max_tokens": maxTokens, "messages": []map[string]any{{"role": "user", "content": "OK"}}, "stream": false}
+		body = map[string]any{"model": model, "max_tokens": maxTokens, "messages": []map[string]any{{"role": "user", "content": HealthProbeContent}}, "stream": false}
 	}
 	b, err := json.Marshal(body)
 	if err != nil {

@@ -568,20 +568,11 @@ func (s *Server) adminProviderByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		p := cfg.Providers[idx]
-		reveal := r.URL.Query().Get("reveal") == "1" || r.URL.Query().Get("reveal") == "true"
+		hasSecret := len(p.ResolvedCredentials()) > 0
 		payload := map[string]any{
-			"provider":      p,
+			"provider":      redactProviderSecrets(p),
 			"secret_source": secretSource(p),
-			"has_secret":    len(p.ResolvedCredentials()) > 0,
-		}
-		if reveal {
-			payload["resolved_api_key"] = p.ResolvedAPIKey()
-		} else {
-			p.APIKey = ""
-			for i := range p.Credentials {
-				p.Credentials[i].APIKey = ""
-			}
-			payload["provider"] = p
+			"has_secret":    hasSecret,
 		}
 		writeJSON(w, 200, payload)
 
@@ -799,6 +790,14 @@ func (s *Server) adminProviderDiscover(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{"ok": true, "status_code": status, "models": models})
+}
+
+func redactProviderSecrets(p config.ProviderConfig) config.ProviderConfig {
+	p.APIKey = ""
+	for i := range p.Credentials {
+		p.Credentials[i].APIKey = ""
+	}
+	return p
 }
 
 func providerSummary(p config.ProviderConfig) map[string]any {

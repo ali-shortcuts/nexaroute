@@ -26,13 +26,6 @@ import (
 
 const version = "0.6.0"
 
-func defaultConfigPath() string {
-	if p := os.Getenv("NEXAROUTE_CONFIG"); p != "" {
-		return p
-	}
-	return "config.json"
-}
-
 func ensureConfig(path string) error {
 	if _, err := os.Stat(path); err == nil {
 		return nil
@@ -52,10 +45,14 @@ func ensureConfig(path string) error {
 func main() {
 	configPath := flag.String("config", defaultConfigPath(), "path to JSON config")
 	showVersion := flag.Bool("version", false, "print version and exit")
+	noBrowser := flag.Bool("no-browser", false, "do not auto-open the Web UI")
 	flag.Parse()
 	if *showVersion {
 		fmt.Println("NexaRoute v" + version)
 		return
+	}
+	if *noBrowser {
+		_ = os.Setenv("NEXAROUTE_NO_BROWSER", "1")
 	}
 	bootstrap := log.New(os.Stderr, "nexaroute ", log.LstdFlags|log.Lmicroseconds)
 	if err := ensureConfig(*configPath); err != nil {
@@ -117,6 +114,18 @@ func main() {
 	api := httpapi.New(cfg, *configPath, reg, rt, hm, bus, pe, logger)
 	api.SyncCapabilityContracts()
 	pe.SetCapabilityStore(api.CapabilityStore())
+	uiURL := publicUIURL(cfg.Listen)
+	lock, existing, err := acquireInstanceLock(instanceLockPath(), instanceInfo{
+		PID: os.Getpid(), Listen: cfg.Listen, URL: uiURL, Config: *configPath,
+	})
+	if err != nil {
+		logger.Fatal(err)
+	}
+	if lock == nil {
+		handleExistingInstance(existing, os.Stderr)
+		return
+	}
+	defer lock.Close()
 	srv := &http.Server{
 		Addr: cfg.Listen, Handler: api.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
@@ -134,6 +143,7 @@ func main() {
 			cancel()
 		}
 	}()
+	go launchUIWhenReady(uiURL, os.Stderr)
 	if cfg.Probe.Enabled && cfg.Probe.OnStart {
 		result := pe.Prime(ctx)
 		logger.Printf("startup_probe total=%d ready=%d failed=%d cooldown=%d duration_ms=%d", result.Total, result.Passed, result.Failed, result.SkippedCooldown, result.DurationMS)

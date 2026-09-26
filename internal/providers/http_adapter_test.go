@@ -537,3 +537,34 @@ func TestOutOfOrderQuotaResponsesDoNotRestoreStaleHeadroom(t *testing.T) {
 		t.Fatalf("summary reset did not preserve latest accepted resource deadline: %+v", st)
 	}
 }
+
+func TestProbeBudgetAndSyntheticPayload(t *testing.T) {
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Errorf("decode: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"x","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{}}`)
+	}))
+	defer srv.Close()
+	p := config.ProviderConfig{ID: "p", Name: "p", Type: "openai_compatible", BaseURL: srv.URL, AuthMode: "none", Enabled: true, MaxConcurrency: 1}
+	a, err := newHTTPAdapter(p, 2*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := a.Probe(context.Background(), "m", 99); err != nil {
+		t.Fatal(err)
+	}
+	if got["max_tokens"] != float64(20) {
+		t.Fatalf("max_tokens=%v want clamped 20", got["max_tokens"])
+	}
+	msgs, _ := got["messages"].([]any)
+	if len(msgs) != 1 {
+		t.Fatalf("messages=%#v", got["messages"])
+	}
+	m0, _ := msgs[0].(map[string]any)
+	if m0["content"] != HealthProbeContent {
+		t.Fatalf("probe content=%v want synthetic %q", m0["content"], HealthProbeContent)
+	}
+}

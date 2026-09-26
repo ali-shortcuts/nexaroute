@@ -334,7 +334,7 @@ const (
 	maxProviderConcurrency    = 4096
 	maxProbeConcurrency       = 1024
 	maxRoutingAttempts        = 64
-	maxProbeTokens            = 64
+	maxProbeTokens            = 20
 	maxStringIDBytes          = 256
 	maxURLBytes               = 4096
 	maxTotalDeployments       = 20000

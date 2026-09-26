@@ -221,17 +221,16 @@ This installs:
 ~/.config/nexaroute/config.json
 ```
 
-Run:
+Ensure `~/.local/bin` is on `PATH`, then run:
 
 ```bash
-~/.local/bin/nexaroute -config ~/.config/nexaroute/config.json
+nexaroute
 ```
 
-Open:
-
-```text
-http://127.0.0.1:8080/
-```
+The process uses `~/.config/nexaroute/config.json` by default, starts the local
+gateway, and opens the Web UI when a browser is available (otherwise it prints
+`http://127.0.0.1:8080/`). A second `nexaroute` invocation reuses the existing
+instance instead of starting a duplicate gateway.
 
 The sample providers are disabled, so the gateway will not contact any real provider until you configure and enable one.
 

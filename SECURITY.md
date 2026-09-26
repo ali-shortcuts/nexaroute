@@ -21,7 +21,12 @@ NexaRoute defaults to localhost and should stay there for first testing.
 
 Prefer environment references instead of literal keys in JSON when practical.
 
-The provider editor can reveal a resolved credential to an authorized local/admin user. That behavior is intentional because the project requires full edit visibility. Treat access to the Web UI/admin API as equivalent to access to provider credentials.
+Provider API keys can be entered in the Web UI and are persisted in the 0600
+config file (or via environment-variable references). After save, admin GET
+responses, the dashboard, snapshots, metrics, and events never return the
+plaintext key. Leave the editor field blank to keep the stored secret.
+Treat access to the host and the config file as equivalent to access to
+provider credentials.
 
 ## Client-facing authentication boundary
 

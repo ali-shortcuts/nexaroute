@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ali-shortcuts/nexaroute/internal/clock"
 	"github.com/ali-shortcuts/nexaroute/internal/compat"
 	"github.com/ali-shortcuts/nexaroute/internal/config"
 	"github.com/ali-shortcuts/nexaroute/internal/events"
@@ -73,10 +74,11 @@ type Engine struct {
 	recovering          map[string]bool
 	recoveryQueue       chan recoveryTask
 	recoveryWorkers     sync.Once
-	recoveryTimers      map[string]*time.Timer
+	recoveryTimers      map[string]clock.Timer
 	recoveryTokens      map[string]uint64
 	recoveryGenerations map[string]uint64
 	recoverySeq         uint64
+	clk                 clock.Clock
 
 	limitMu      sync.Mutex
 	activeProbes int
@@ -93,11 +95,31 @@ func New(cfg config.Config, reg *providers.Registry, rt *router.Router, hm *heal
 		trigger:             make(chan struct{}, 1),
 		recovering:          map[string]bool{},
 		recoveryQueue:       make(chan recoveryTask, maxRecoveryQueue),
-		recoveryTimers:      map[string]*time.Timer{},
+		recoveryTimers:      map[string]clock.Timer{},
 		recoveryTokens:      map[string]uint64{},
 		recoveryGenerations: map[string]uint64{},
 		limitChanged:        make(chan struct{}),
+		clk:                 clock.Real(),
 	}
+}
+
+func (e *Engine) clock() clock.Clock {
+	if e != nil && e.clk != nil {
+		return e.clk
+	}
+	return clock.Real()
+}
+
+// SetClock replaces the recovery scheduler clock. Tests inject a fake clock
+// so cooldown/re-entry can be proven without a real 30-minute wait.
+func (e *Engine) SetClock(c clock.Clock) {
+	if e == nil {
+		return
+	}
+	if c == nil {
+		c = clock.Real()
+	}
+	e.clk = c
 }
 
 func (e *Engine) Reload(cfg config.Config) {
@@ -349,7 +371,7 @@ func (e *Engine) scheduleRecovery(ctx context.Context, task recoveryTask, delay 
 	e.recoverySeq++
 	token := e.recoverySeq
 	e.recoveryTokens[task.id] = token
-	timer := time.AfterFunc(delay, func() {
+	timer := e.clock().AfterFunc(delay, func() {
 		e.recoveryMu.Lock()
 		if !e.recovering[task.id] ||
 			e.recoveryGenerations[task.id] != task.generation ||
@@ -410,7 +432,7 @@ func (e *Engine) processRecoveryTask(ctx context.Context, task recoveryTask) {
 		return
 	}
 	if st.Status == health.Cooldown && !st.CooldownUntil.IsZero() {
-		if wait := time.Until(st.CooldownUntil); wait > 0 {
+		if wait := e.clock().Until(st.CooldownUntil); wait > 0 {
 			e.bus.Add(events.Event{Kind: "recovery_wait", Deployment: task.id, Message: fmt.Sprintf("cooldown until %s", st.CooldownUntil.Format(time.RFC3339))})
 			task.attempt = 1
 			e.scheduleRecovery(ctx, task, wait)

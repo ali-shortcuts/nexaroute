@@ -6,3 +6,4 @@ config.local.json
 /dist/
 coverage.out
 *.prof
+SHA256SUMS

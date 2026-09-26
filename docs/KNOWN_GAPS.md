@@ -50,7 +50,10 @@ Not implemented:
 
 - encrypted-at-rest secret vault / OS keyring integration
 
-The Web UI can reveal a resolved provider credential to an authorized local/admin user because edit visibility was an explicit project requirement. Do not expose that admin surface to untrusted networks.
+After save, the Web UI and admin APIs do not return provider API keys in
+plaintext. Operators re-enter a key only when rotating it. Encrypted-at-rest
+vault / OS keyring integration is still not implemented. Do not expose the
+admin surface to untrusted networks.
 
 ## Admin security
 

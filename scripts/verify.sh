@@ -51,4 +51,12 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags='-s -w' -o bin
 echo '== linux arm64 build =='
 CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags='-s -w' -o bin/nexaroute-linux-arm64 ./cmd/gateway
 
+echo '== sha256sums =='
+(cd bin && sha256sum nexaroute-linux-amd64 nexaroute-linux-arm64 > SHA256SUMS)
+cp bin/SHA256SUMS SHA256SUMS
+test -s SHA256SUMS
+
+echo '== installer test =='
+./scripts/test-installer.sh
+
 echo 'VERIFY PASS'

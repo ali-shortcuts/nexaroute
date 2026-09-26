@@ -708,17 +708,19 @@ $('#pType').onchange = () => {
 };
 async function openEdit(id) {
   try {
-    const d = await api('/admin/api/providers/' + encodeURIComponent(id) + '?reveal=1'), p = d.provider;
-    // When the secret comes from an environment variable the resolved
-    // literal must stay out of the form: any keystroke in the field would
-    // flip preserve_secret off and persist the env secret into config.json.
-    p.api_key = d.secret_source === 'env' ? '' : (d.resolved_api_key || p.api_key || '');
+    const d = await api('/admin/api/providers/' + encodeURIComponent(id)), p = d.provider;
+    // Saved credentials are never returned after persist. Leave the field
+    // blank and keep preserve_secret unless the operator types a replacement.
+    p.api_key = '';
+    if (Array.isArray(p.credentials)) {
+      p.credentials = p.credentials.map(c => Object.assign({}, c, { api_key: '' }));
+    }
     editor = {
       mode: 'edit', originalId: id, provider: p,
       detected: (p.models || []).map(m => m.model),
       selected: new Set((p.models || []).map(m => m.model)),
       modelMeta: new Map((p.models || []).map(m => [m.model, m])),
-      secretDirty: false, secretSource: d.secret_source || 'none'
+      secretDirty: false, secretSource: d.secret_source || 'none', hasSecret: !!d.has_secret
     };
     fillForm(); modal(true);
   } catch (e) { toast(e.message, true); }
@@ -736,7 +738,7 @@ function fillForm() {
   $('#pAuth').value = p.auth_mode || 'bearer';
   $('#pEnabled').checked = p.enabled !== false;
   $('#pKey').value = p.api_key || '';
-  $('#pKey').placeholder = editor.mode === 'edit' && editor.secretSource === 'env' ? 'stored in env var - leave blank to keep' : '';
+  $('#pKey').placeholder = editor.mode === 'edit' && (editor.hasSecret || editor.secretSource === 'env') ? 'saved — leave blank to keep' : '';
   $('#pKey').type = 'password';
   $('#togglePKey').textContent = 'Show';
   $('#pKeyEnv').value = p.api_key_env || '';
