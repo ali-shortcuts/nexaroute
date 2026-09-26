@@ -41,6 +41,14 @@ const (
 	ReasonExternalResponseTooLarge    ReasonCode = "EXTERNAL_RESPONSE_TOO_LARGE"
 	ReasonExternalProviderUnavailable ReasonCode = "EXTERNAL_PROVIDER_UNAVAILABLE"
 	ReasonPrimaryConstraintViolation  ReasonCode = "PRIMARY_CONSTRAINT_VIOLATION"
+	// Phase G: chain
+	ReasonChainSelected            ReasonCode = "CHAIN_SELECTED"
+	ReasonChainExhausted           ReasonCode = "CHAIN_EXHAUSTED"
+	ReasonChainBudgetExhausted     ReasonCode = "CHAIN_BUDGET_EXHAUSTED"
+	ReasonChainDeadlineExhausted   ReasonCode = "CHAIN_DEADLINE_EXHAUSTED"
+	ReasonChainStepAbstained       ReasonCode = "CHAIN_STEP_ABSTAINED"
+	ReasonChainStepFailed          ReasonCode = "CHAIN_STEP_FAILED"
+	ReasonDecisionProviderCooldown ReasonCode = "DECISION_PROVIDER_COOLDOWN"
 )
 
 // allowedReasonCodes is the canonical set for validation.
@@ -78,6 +86,13 @@ var allowedReasonCodes = map[ReasonCode]struct{}{
 	ReasonExternalResponseTooLarge:    {},
 	ReasonExternalProviderUnavailable: {},
 	ReasonPrimaryConstraintViolation:  {},
+	ReasonChainSelected:               {},
+	ReasonChainExhausted:              {},
+	ReasonChainBudgetExhausted:        {},
+	ReasonChainDeadlineExhausted:      {},
+	ReasonChainStepAbstained:          {},
+	ReasonChainStepFailed:             {},
+	ReasonDecisionProviderCooldown:    {},
 }
 
 // IsValidReasonCode reports whether code is in the bounded contract.

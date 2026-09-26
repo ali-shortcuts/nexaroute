@@ -48,6 +48,11 @@ type Event struct {
 	DecisionOriginalScore   float64 `json:"decision_original_score,omitempty"`
 	DecisionChangedPrimary  bool    `json:"decision_changed_primary,omitempty"`
 	DecisionBreakdown       string  `json:"decision_breakdown,omitempty"`
+	// Phase G — chain (privacy-safe, bounded)
+	DecisionChainID          string `json:"decision_chain_id,omitempty"`
+	DecisionChainOutcome     string `json:"decision_chain_outcome,omitempty"`
+	DecisionChainCalls       int    `json:"decision_chain_calls,omitempty"`
+	DecisionSelectedProvider string `json:"decision_selected_provider,omitempty"`
 }
 
 const (
@@ -75,6 +80,9 @@ const (
 	maxEventDecisionTaskType        = 32
 	maxEventDecisionOriginalPrimary = 512
 	maxEventDecisionBreakdown       = 4096
+	// Phase G chain bounds
+	maxEventDecisionChainID      = 128
+	maxEventDecisionChainOutcome = 32
 )
 
 func boundedString(s string, max int) string {
@@ -152,6 +160,10 @@ func (b *Bus) Add(e Event) {
 	e.DecisionTaskType = boundedString(e.DecisionTaskType, maxEventDecisionTaskType)
 	e.DecisionOriginalPrimary = boundedString(e.DecisionOriginalPrimary, maxEventDecisionOriginalPrimary)
 	e.DecisionBreakdown = boundedString(e.DecisionBreakdown, maxEventDecisionBreakdown)
+	e.DecisionChainID = boundedString(e.DecisionChainID, maxEventDecisionChainID)
+	e.DecisionChainOutcome = boundedString(e.DecisionChainOutcome, maxEventDecisionChainOutcome)
+	// DecisionSelectedProvider reuses provider bound
+	e.DecisionSelectedProvider = boundedString(e.DecisionSelectedProvider, maxEventDecisionProvider)
 	if b.count < b.max {
 		idx := (b.start + b.count) % b.max
 		b.items[idx] = e

@@ -73,10 +73,57 @@ type DecisionPolicyConfig struct {
 }
 
 type DecisionConfig struct {
-	Mode      string `json:"mode,omitempty"`       // off | local | assisted (Phase F)
-	Provider  string `json:"provider,omitempty"`   // local | policy | external ID (Phase F)
-	TimeoutMS int    `json:"timeout_ms,omitempty"` // bounded, default 10ms
-	Policy    string `json:"policy,omitempty"`     // Phase E: global policy ID
+	Mode             string `json:"mode,omitempty"`               // off | local | assisted (Phase F) | hybrid (Phase G)
+	Provider         string `json:"provider,omitempty"`           // local | policy | external ID (Phase F, used in off/local/assisted)
+	TimeoutMS        int    `json:"timeout_ms,omitempty"`         // bounded, default 10ms — whole chain deadline in hybrid
+	Policy           string `json:"policy,omitempty"`             // Phase E: global policy ID
+	Chain            string `json:"chain,omitempty"`              // Phase G: chain ID when mode=hybrid
+	MaxProviderCalls int    `json:"max_provider_calls,omitempty"` // Phase G: global chain call budget
+}
+
+type DecisionProviderHealthConfig struct {
+	FailureThreshold     int `json:"failure_threshold,omitempty"`      // consecutive failures in window to open cooldown (default 3)
+	FailureWindowSeconds int `json:"failure_window_seconds,omitempty"` // window seconds (default 30)
+	CooldownSeconds      int `json:"cooldown_seconds,omitempty"`       // cooldown duration seconds (default 60)
+}
+
+type DecisionChainStep struct {
+	Provider  string `json:"provider,omitempty"`   // provider ID (local | policy | external)
+	TimeoutMS int    `json:"timeout_ms,omitempty"` // optional per-step timeout (bounded 1-5000)
+}
+
+// UnmarshalJSON allows steps to be specified as either string "jev-main" or object {"provider":"jev-main","timeout_ms":300}
+func (s *DecisionChainStep) UnmarshalJSON(data []byte) error {
+	// Try string first
+	var str string
+	if err := json.Unmarshal(data, &str); err == nil {
+		s.Provider = strings.TrimSpace(str)
+		s.TimeoutMS = 0
+		return nil
+	}
+	// Try object
+	type alias DecisionChainStep
+	var a alias
+	if err := json.Unmarshal(data, &a); err != nil {
+		return err
+	}
+	s.Provider = strings.TrimSpace(a.Provider)
+	s.TimeoutMS = a.TimeoutMS
+	return nil
+}
+
+func (s DecisionChainStep) MarshalJSON() ([]byte, error) {
+	// If only provider and no timeout, marshal as string for backward readability? Keep object for consistency.
+	if s.TimeoutMS == 0 {
+		return json.Marshal(s.Provider)
+	}
+	type alias DecisionChainStep
+	return json.Marshal(alias(s))
+}
+
+type DecisionChainConfig struct {
+	ID    string              `json:"id"`
+	Steps []DecisionChainStep `json:"steps"`
 }
 
 type DecisionProviderConfig struct {
@@ -97,21 +144,23 @@ func (d DecisionProviderConfig) IsEnabled() bool {
 }
 
 type Config struct {
-	Listen            string                   `json:"listen"`
-	Admin             AdminConfig              `json:"admin"`
-	Logging           LoggingConfig            `json:"logging"`
-	Routing           RoutingConfig            `json:"routing"`
-	Probe             ProbeConfig              `json:"probe"`
-	Cache             CacheConfig              `json:"cache"`
-	ClientAuth        ClientAuthConfig         `json:"client_auth"`
-	Decision          DecisionConfig           `json:"decision,omitempty"`
-	DecisionPolicies  []DecisionPolicyConfig   `json:"decision_policies,omitempty"`
-	DecisionProviders []DecisionProviderConfig `json:"decision_providers,omitempty"`
-	Providers         []ProviderConfig         `json:"providers"`
-	VirtualEndpoints  []VirtualEndpointConfig  `json:"virtual_endpoints,omitempty"`
-	RouteProfiles     []RouteProfileConfig     `json:"route_profiles,omitempty"`
-	CandidatePools    []CandidatePoolConfig    `json:"candidate_pools,omitempty"`
-	FallbackChains    []FallbackChainConfig    `json:"fallback_chains,omitempty"`
+	Listen                 string                       `json:"listen"`
+	Admin                  AdminConfig                  `json:"admin"`
+	Logging                LoggingConfig                `json:"logging"`
+	Routing                RoutingConfig                `json:"routing"`
+	Probe                  ProbeConfig                  `json:"probe"`
+	Cache                  CacheConfig                  `json:"cache"`
+	ClientAuth             ClientAuthConfig             `json:"client_auth"`
+	Decision               DecisionConfig               `json:"decision,omitempty"`
+	DecisionPolicies       []DecisionPolicyConfig       `json:"decision_policies,omitempty"`
+	DecisionProviders      []DecisionProviderConfig     `json:"decision_providers,omitempty"`
+	DecisionChains         []DecisionChainConfig        `json:"decision_chains,omitempty"`
+	DecisionProviderHealth DecisionProviderHealthConfig `json:"decision_provider_health,omitempty"`
+	Providers              []ProviderConfig             `json:"providers"`
+	VirtualEndpoints       []VirtualEndpointConfig      `json:"virtual_endpoints,omitempty"`
+	RouteProfiles          []RouteProfileConfig         `json:"route_profiles,omitempty"`
+	CandidatePools         []CandidatePoolConfig        `json:"candidate_pools,omitempty"`
+	FallbackChains         []FallbackChainConfig        `json:"fallback_chains,omitempty"`
 }
 
 type LoggingConfig struct {
@@ -292,6 +341,10 @@ const (
 	maxPolicyIDBytes      = 256
 	// Phase F limits
 	maxDecisionProviders = 16
+	// Phase G limits
+	maxDecisionChains       = 64
+	maxDecisionChainSteps   = 8
+	maxDecisionChainIDBytes = 256
 )
 
 func validLocalID(s string) bool {
@@ -383,10 +436,11 @@ func Default() Config {
 			MaxRepairAttempts: 1, SanitizeEnabled: true,
 			HedgingEnabled: false, HedgingDelayMS: 1500,
 		},
-		Probe:      ProbeConfig{Enabled: true, OnStart: true, IntervalSeconds: 120, ReadyLeaseSeconds: 300, TimeoutMS: 8000, MaxTokens: 1, Concurrency: 16, RecoveryAttempts: 5, RecoveryRetryMS: 500, CapabilityProbes: true},
-		Cache:      CacheConfig{Enabled: false, TTLSeconds: 300, MaxEntries: 256, MaxBodyBytes: 1 << 20},
-		ClientAuth: ClientAuthConfig{Enabled: false, RPM: 0},
-		Decision:   DecisionConfig{Mode: "off", Provider: "local", TimeoutMS: 10},
+		Probe:                  ProbeConfig{Enabled: true, OnStart: true, IntervalSeconds: 120, ReadyLeaseSeconds: 300, TimeoutMS: 8000, MaxTokens: 1, Concurrency: 16, RecoveryAttempts: 5, RecoveryRetryMS: 500, CapabilityProbes: true},
+		Cache:                  CacheConfig{Enabled: false, TTLSeconds: 300, MaxEntries: 256, MaxBodyBytes: 1 << 20},
+		ClientAuth:             ClientAuthConfig{Enabled: false, RPM: 0},
+		Decision:               DecisionConfig{Mode: "off", Provider: "local", TimeoutMS: 10},
+		DecisionProviderHealth: DecisionProviderHealthConfig{FailureThreshold: 3, FailureWindowSeconds: 30, CooldownSeconds: 60},
 	}
 }
 
@@ -583,10 +637,11 @@ func (c *Config) ApplyDefaults() {
 			fc.Pools[j] = strings.TrimSpace(fc.Pools[j])
 		}
 	}
-	// Decision defaults (Phase D/E)
+	// Decision defaults (Phase D/E/G)
 	c.Decision.Mode = strings.TrimSpace(strings.ToLower(c.Decision.Mode))
 	c.Decision.Provider = strings.TrimSpace(strings.ToLower(c.Decision.Provider))
 	c.Decision.Policy = strings.TrimSpace(c.Decision.Policy)
+	c.Decision.Chain = strings.TrimSpace(c.Decision.Chain)
 	if c.Decision.Mode == "" {
 		c.Decision.Mode = "off"
 	}
@@ -595,6 +650,39 @@ func (c *Config) ApplyDefaults() {
 	}
 	if c.Decision.TimeoutMS == 0 {
 		c.Decision.TimeoutMS = 10
+	}
+	// MaxProviderCalls default: for hybrid default to chain length bounded, else 1
+	// Keep 0 as explicit unset for validation; default handling below after chains normalized
+	for i := range c.DecisionChains {
+		c.DecisionChains[i].ID = strings.TrimSpace(c.DecisionChains[i].ID)
+		for j := range c.DecisionChains[i].Steps {
+			c.DecisionChains[i].Steps[j].Provider = strings.TrimSpace(c.DecisionChains[i].Steps[j].Provider)
+		}
+	}
+	// Decision provider health defaults
+	if c.DecisionProviderHealth.FailureThreshold == 0 {
+		c.DecisionProviderHealth.FailureThreshold = 3
+	}
+	if c.DecisionProviderHealth.FailureWindowSeconds == 0 {
+		c.DecisionProviderHealth.FailureWindowSeconds = 30
+	}
+	if c.DecisionProviderHealth.CooldownSeconds == 0 {
+		c.DecisionProviderHealth.CooldownSeconds = 60
+	}
+	// Hybrid max_provider_calls default: if hybrid and 0, default to chain length (bounded)
+	if c.Decision.Mode == "hybrid" && c.Decision.MaxProviderCalls == 0 {
+		for _, ch := range c.DecisionChains {
+			if ch.ID == c.Decision.Chain {
+				c.Decision.MaxProviderCalls = len(ch.Steps)
+				break
+			}
+		}
+		if c.Decision.MaxProviderCalls == 0 {
+			c.Decision.MaxProviderCalls = 1
+		}
+		if c.Decision.MaxProviderCalls > maxDecisionChainSteps {
+			c.Decision.MaxProviderCalls = maxDecisionChainSteps
+		}
 	}
 	for i := range c.DecisionPolicies {
 		dp := &c.DecisionPolicies[i]
@@ -988,11 +1076,11 @@ func (c Config) Validate() error {
 			}
 		}
 	}
-	// Phase D/E/F: Decision
+	// Phase D/E/F/G: Decision
 	switch strings.ToLower(strings.TrimSpace(c.Decision.Mode)) {
-	case "", "off", "local", "assisted":
+	case "", "off", "local", "assisted", "hybrid":
 	default:
-		return errors.New("decision.mode must be off, local, or assisted")
+		return errors.New("decision.mode must be off, local, assisted, or hybrid")
 	}
 	// Provider can be local, policy, or external ID (validated later against decision_providers)
 	// For local mode, provider must be local or policy (external not allowed)
@@ -1009,6 +1097,30 @@ func (c Config) Validate() error {
 	}
 	if c.Decision.TimeoutMS < 1 || c.Decision.TimeoutMS > 5000 {
 		return errors.New("decision.timeout_ms must be between 1 and 5000")
+	}
+	if c.Decision.Chain != "" {
+		if len(c.Decision.Chain) > maxDecisionChainIDBytes {
+			return errors.New("decision.chain is too long")
+		}
+		if !validLocalID(c.Decision.Chain) {
+			return fmt.Errorf("decision chain id %q invalid", c.Decision.Chain)
+		}
+	}
+	if c.Decision.MaxProviderCalls < 0 || c.Decision.MaxProviderCalls > maxDecisionChainSteps {
+		return fmt.Errorf("decision.max_provider_calls must be between 0 and %d", maxDecisionChainSteps)
+	}
+	if len(c.Decision.Chain) > 0 && strings.ToLower(strings.TrimSpace(c.Decision.Mode)) != "hybrid" {
+		return errors.New("decision.chain is only valid when decision.mode=hybrid")
+	}
+	// Validate DecisionProviderHealth
+	if c.DecisionProviderHealth.FailureThreshold < 1 || c.DecisionProviderHealth.FailureThreshold > 100 {
+		return errors.New("decision_provider_health.failure_threshold must be between 1 and 100")
+	}
+	if c.DecisionProviderHealth.FailureWindowSeconds < 1 || c.DecisionProviderHealth.FailureWindowSeconds > 3600 {
+		return errors.New("decision_provider_health.failure_window_seconds must be between 1 and 3600")
+	}
+	if c.DecisionProviderHealth.CooldownSeconds < 1 || c.DecisionProviderHealth.CooldownSeconds > 86400 {
+		return errors.New("decision_provider_health.cooldown_seconds must be between 1 and 86400")
 	}
 	if len(c.Decision.Policy) > maxPolicyIDBytes {
 		return errors.New("decision.policy is too long")
@@ -1155,6 +1267,59 @@ func (c Config) Validate() error {
 		}
 	}
 
+	// Phase G: Decision chains
+	if len(c.DecisionChains) > maxDecisionChains {
+		return fmt.Errorf("decision_chains exceeds safe limit %d", maxDecisionChains)
+	}
+	seenChainIDs := map[string]struct{}{}
+	for i, ch := range c.DecisionChains {
+		if ch.ID == "" {
+			return fmt.Errorf("decision_chains[%d].id is required", i)
+		}
+		if len(ch.ID) > maxDecisionChainIDBytes || !validLocalID(ch.ID) {
+			return fmt.Errorf("decision chain id %q invalid", ch.ID)
+		}
+		if _, dup := seenChainIDs[ch.ID]; dup {
+			return fmt.Errorf("duplicate decision chain id %q", ch.ID)
+		}
+		// Chain ID must not collide with provider IDs (avoids ambiguous routing)
+		if _, collides := seenDecisionProviderIDs[ch.ID]; collides {
+			return fmt.Errorf("decision chain id %q collides with decision provider id", ch.ID)
+		}
+		if ch.ID == "local" || ch.ID == "policy" || ch.ID == "off" {
+			return fmt.Errorf("decision chain id %q collides with built-in provider", ch.ID)
+		}
+		seenChainIDs[ch.ID] = struct{}{}
+		if len(ch.Steps) == 0 {
+			return fmt.Errorf("decision chain %q must have at least one step", ch.ID)
+		}
+		if len(ch.Steps) > maxDecisionChainSteps {
+			return fmt.Errorf("decision chain %q steps exceeds limit %d", ch.ID, maxDecisionChainSteps)
+		}
+		seenStepProviders := map[string]struct{}{}
+		for j, step := range ch.Steps {
+			if step.Provider == "" {
+				return fmt.Errorf("decision chain %q step[%d] provider is required", ch.ID, j)
+			}
+			if len(step.Provider) > maxPolicyIDBytes || !validLocalID(step.Provider) {
+				return fmt.Errorf("decision chain %q step[%d] provider %q invalid", ch.ID, j, step.Provider)
+			}
+			if _, dup := seenStepProviders[step.Provider]; dup {
+				return fmt.Errorf("decision chain %q contains duplicate provider %q (Phase G no retry)", ch.ID, step.Provider)
+			}
+			seenStepProviders[step.Provider] = struct{}{}
+			if step.TimeoutMS < 0 || step.TimeoutMS > 5000 {
+				return fmt.Errorf("decision chain %q step[%d] timeout_ms must be between 0 and 5000", ch.ID, j)
+			}
+			// Provider must be built-in local/policy or configured external ID
+			if step.Provider != "local" && step.Provider != "policy" {
+				if _, ok := seenDecisionProviderIDs[step.Provider]; !ok {
+					return fmt.Errorf("decision chain %q step[%d] references unknown provider %q", ch.ID, j, step.Provider)
+				}
+			}
+		}
+	}
+
 	// Decision mode/provider cross-validation
 	mode := strings.ToLower(strings.TrimSpace(c.Decision.Mode))
 	provider := strings.ToLower(strings.TrimSpace(c.Decision.Provider))
@@ -1188,6 +1353,28 @@ func (c Config) Validate() error {
 		}
 	} else if mode == "off" || mode == "" {
 		// off mode: provider can be anything but no external calls will happen; still validate if it references external that is disabled? Allow
+	} else if mode == "hybrid" {
+		if c.Decision.Chain == "" {
+			return errors.New("decision.chain is required when decision.mode=hybrid")
+		}
+		if _, ok := seenChainIDs[c.Decision.Chain]; !ok {
+			return fmt.Errorf("decision.chain %q references unknown decision_chains", c.Decision.Chain)
+		}
+		// In hybrid, provider field is ignored; if set, warn but not reject for backward compat?
+		// Enforce provider not used with hybrid to avoid ambiguity: if provider set and not local, reject?
+		// Allow provider empty/local but not external — hybrid uses chain only.
+		if c.Decision.Provider != "" && c.Decision.Provider != "local" && c.Decision.Provider != "policy" {
+			// If provider references external while hybrid, likely misconfig — reject
+			if _, ok := seenDecisionProviderIDs[c.Decision.Provider]; ok {
+				return fmt.Errorf("decision.provider %q is external but mode is hybrid (use decision.chain)", c.Decision.Provider)
+			}
+		}
+		if c.Decision.MaxProviderCalls < 0 || c.Decision.MaxProviderCalls > maxDecisionChainSteps {
+			return fmt.Errorf("decision.max_provider_calls must be between 0 and %d", maxDecisionChainSteps)
+		}
+		// Chain existence already validated; steps provider references already validated
+		// Hot-reload safety: decision.chain must reference existing chain cannot be dangling (checked above)
+		// Removed provider handling: already validated steps reference existing providers, but allow disabled external provider in chain (will be skipped)
 	}
 
 	// Phase B: Virtual Endpoints, Route Profiles, Candidate Pools, Fallback Chains
