@@ -26,8 +26,9 @@ The installer was syntax-checked but not exercised against a real published rele
 
 ## Not completed / known gaps
 
-- The exact A/B/C/D Anthropic failover E2E, max-attempt/deadline assertions, fake-clock five-probe recovery and cooldown-expiry E2E, and local artifact installer upgrade/start E2E remain to be completed.
-- No Linux binaries/checksums were built. No 50/100/200 benchmark results were collected.
+- Added an exact mocked A/B/C/D Anthropic Messages failover E2E test asserting expected physical attempt order `A`, `A→B`, `B→D`, stable public route header and no use of pre-cooled C. It is not executed because Go is unavailable. Existing integration coverage includes total request timeout budget, but this new scenario does not independently measure deadline expiry.
+- The fake-clock five-probe recovery E2E, cooldown expiry/re-entry E2E, and local artifact installer upgrade/start E2E remain incomplete.
+- Added local scheduler acceptance cases for 50/100/200, but they have not been run. No Linux binaries/checksums were built and no benchmark results were collected.
 - The Go 1.23.x toolchain used by repository CI could not be obtained: `go.dev` TLS connections and Debian package mirrors fail in this sandbox, and no local Go binary exists. Therefore new code has not been compiled or run.
 - Full requested protocol matrix remains bounded as described in `KNOWN_GAPS.md`.
 - The requested branch `arena/nexaroute-runtime-finalization-v2` cannot be created/used in this session. Arena fixes this session to `arena/01a0dd9d-nexaroute`; work is checkpointed and pushed there instead.
@@ -37,8 +38,8 @@ The installer was syntax-checked but not exercised against a real published rele
 | Gate | Result |
 |---|---|
 | `bash -n scripts/install.sh` | PASS at prior checkpoint |
-| `git diff --check` | PASS at prior checkpoint; rerun after follow-up changes pending |
-| Go tests / `go vet` / `gofmt` | BLOCKED: Go 1.23.x unavailable; outbound downloads/package mirrors fail |
+| `git diff --check` | PASS for the follow-up commit |
+| Go tests / `go vet` / `gofmt` | BLOCKED: Go 1.23.x unavailable; outbound downloads/package mirrors fail. All requested commands were attempted and returned `command not found`. |
 | verify/stress/smoke scripts | Previous attempts blocked (Go absent / no binary); must rerun when toolchain is available |
 | new desktop, privacy, probe scale tests | Added but NOT RUN |
 | exact failover/recovery/install tests, fuzz and benchmarks | NOT COMPLETED / NOT RUN |

@@ -58,6 +58,7 @@ func TestProbeSchedulerAt50_100_200Deployments(t *testing.T) {
 			cfg.Probe.OnStart = false
 			cfg.Probe.Concurrency = 32
 			cfg.Probe.MaxTokens = 1
+			cfg.Probe.CapabilityProbes = false
 			cfg.Probe.TimeoutMS = 3000
 			p := config.ProviderConfig{ID: "mock", Name: "Mock", Type: "openai_compatible", BaseURL: up.URL, AuthMode: "none", Enabled: true}
 			for i := 0; i < count; i++ {
