@@ -3,7 +3,7 @@
 The release installer downloads the published binary for Linux x86-64 or ARM64 and verifies it against the release `SHA256SUMS` file. It does not clone or compile source and does not require Go.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ali-shortcuts/nexaroute/main/scripts/install.sh | bash
+curl -fsSL https://github.com/ali-shortcuts/nexaroute/releases/latest/download/install.sh | bash
 ```
 
 By default, root installs to `/usr/local/bin`; a regular user installs to `~/.local/bin`. Override with `NEXAROUTE_INSTALL_DIR`. If `~/.local/bin` is not on `PATH`, add it as suggested by the installer. Configuration is stored under `${XDG_CONFIG_HOME:-~/.config}/nexaroute/config.json`; upgrades leave it untouched. The installer requires curl, sha256sum and python3.

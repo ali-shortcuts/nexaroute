@@ -1,6 +1,6 @@
 # Quickstart
 
-1. Install: `curl -fsSL https://raw.githubusercontent.com/ali-shortcuts/nexaroute/main/scripts/install.sh | bash`
+1. Install: `curl -fsSL https://github.com/ali-shortcuts/nexaroute/releases/latest/download/install.sh | bash`
 2. Start: `nexaroute` (default dashboard: http://127.0.0.1:8080/)
 3. Add a provider and enabled physical model in the dashboard; save and test it.
 4. Create and enable a virtual endpoint/route with a candidate pool.

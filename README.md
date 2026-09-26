@@ -1,8 +1,56 @@
-# NexaRoute — v0.6
+# NexaRoute — v0.7
 
 A self-hosted Go gateway for routing Anthropic-compatible and OpenAI-compatible clients across many LLM providers/models. The first target is **Claude Code -> NexaRoute -> Chat2API / other OpenAI-compatible or Anthropic-compatible providers**.
 
-This package is **v0.6**: the v0.4 translation + dashboard core, now extended with a provider-incident intelligence layer and a hedging/cache/usage tier that few if any open gateways combine. The code is runnable and heavily tested, but no software can honestly be guaranteed to contain zero bugs.
+This package is **v0.7**: the final integration release that consolidates all phases (A through H) into a single coherent product with runtime finalization, Ubuntu installer, write-only credential handling, and complete protocol compatibility. The code is runnable and heavily tested, but no software can honestly be guaranteed to contain zero bugs.
+
+## Quick Start
+
+```bash
+# Install (Linux only, no Go required)
+curl -fsSL https://github.com/ali-shortcuts/nexaroute/releases/latest/download/install.sh | bash
+
+# Start
+nexaroute
+
+# Open http://127.0.0.1:8080/ in your browser
+```
+
+See [INSTALLATION.md](INSTALLATION.md) for detailed installation instructions and [QUICKSTART.md](QUICKSTART.md) for a step-by-step guide.
+
+## What v0.7 adds (Final Integration)
+
+### Unified single-instance lifecycle
+- **Kernel-based process locking** (`internal/desktop`) prevents duplicate gateway processes. If NexaRoute is already running, a second invocation opens the existing UI instead of starting a duplicate listener.
+- **Browser auto-launch** with UI readiness detection. Opens the dashboard automatically when a graphical environment is available. Headless machines print the URL and continue normally.
+- **`--no-browser` flag** for environments where automatic browser launch is unwanted.
+- **Persistent XDG config** at `~/.config/nexaroute/config.json` with `0600` permissions. Config survives upgrades.
+
+### Write-only credential security
+- Provider API keys, headers, and proxy URLs are **write-only**: they can be entered and changed but are NEVER returned in admin API responses, snapshots, metrics, events, logs, or error strings.
+- The legacy `?reveal=1` query is ignored. Blank, untouched fields preserve existing secrets server-side.
+- Comprehensive secret canary regression tests ensure no leakage.
+
+### One-command Ubuntu installer
+- `scripts/install.sh` downloads pre-built Linux binaries (amd64/arm64) from GitHub Releases, verifies SHA256 checksums, and installs atomically.
+- No Go, git, or source compilation required by the end user.
+- Installer E2E suite verifies clean install, checksum rejection, upgrade preservation, and config permissions.
+
+### Runtime finalization
+- **Bounded concurrency probing** at 50/100/200 deployment scale with no deadlock, no goroutine leak, and no user-prompt leakage.
+- **Strict failover E2E** with exact attempt ordering, deadline enforcement, and cooldown skipping.
+- **Recovery with fake-clock cooldown** testing: 5 failures → 30-minute cooldown → re-entry → healthy.
+- **Non-blocking startup probe** that doesn't delay the main event loop.
+
+### Protocol compatibility
+- **Stable public model identity** in native Anthropic responses across physical failover.
+- **Tool choice name preservation** and rejection of lossy Anthropic blocks.
+- **Protocol translation fuzz coverage** for edge cases.
+- Complete compatibility matrix: Anthropic↔Anthropic, Anthropic↔OpenAI, OpenAI↔OpenAI, OpenAI↔Anthropic.
+
+### Phase H observational evaluation
+- Replay and live evaluation of physical deployments with explicit opt-in.
+- Scorecards remain routing-neutral: no production health, cache, session-affinity, or credential mutation.
 
 ## What v0.5.2 adds on top of v0.4
 
