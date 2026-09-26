@@ -75,6 +75,13 @@ func TestAnthropicNativePreservesUnknownFieldsAndBetaHeader(t *testing.T) {
 	if beta != "test-beta" {
 		t.Fatalf("beta not forwarded %q", beta)
 	}
+	var clientResponse map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &clientResponse); err != nil {
+		t.Fatal(err)
+	}
+	if clientResponse["model"] != "client-model" {
+		t.Fatalf("response exposed physical model instead of stable client model: %#v", clientResponse["model"])
+	}
 }
 
 func TestCountTokensUsesNativeAnthropicEndpoint(t *testing.T) {
@@ -148,6 +155,27 @@ func TestAnthropicStreamToOpenAIIncludesToolArguments(t *testing.T) {
 	out := rr.Body.String()
 	if !strings.Contains(out, "arguments") || !strings.Contains(out, "cmd") || !strings.Contains(out, "ls") {
 		t.Fatalf("tool arguments missing: %s", out)
+	}
+}
+
+func TestNativeAnthropicStreamRewritesPhysicalModelToPublicModel(t *testing.T) {
+	sse := `event: message_start
+ data: {"type":"message_start","message":{"id":"m1","type":"message","role":"assistant","content":[],"model":"physical-model","usage":{"input_tokens":1,"output_tokens":0}}}
+
+event: message_stop
+ data: {"type":"message_stop"}
+
+`
+	// Remove the leading space before SSE data fields: parsers accept it, but
+	// exact upstream semantics are easier to assert with standard framing.
+	sse = strings.ReplaceAll(sse, "\n data:", "\ndata:")
+	resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(sse))}
+	rr := httptest.NewRecorder()
+	if err := proxyNativeSSEWithModel(rr, resp, "anthropic", "public-route"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(rr.Body.String(), `"model":"public-route"`) || strings.Contains(rr.Body.String(), `"model":"physical-model"`) {
+		t.Fatalf("stream leaked physical model name: %s", rr.Body.String())
 	}
 }
 
@@ -1141,5 +1169,45 @@ func TestRetryAfterCapReloadRebuildsProviderAdapter(t *testing.T) {
 	after, _ := s.reg.Get("p")
 	if before == after {
 		t.Fatal("retry-after cap change reused adapter with stale retry policy")
+	}
+}
+
+func TestSavedProviderCredentialsAreWriteOnly(t *testing.T) {
+	t.Setenv("WRITE_ONLY_TEST_KEY", "environment-secret")
+	cfg := config.Default()
+	cfg.Probe.Enabled = false
+	cfg.Admin.BindLocalOnly = false
+	cfg.Providers = []config.ProviderConfig{{ID: "private", Type: "openai_compatible", BaseURL: "http://127.0.0.1:9/v1", APIKey: "primary-secret", APIKeyEnv: "WRITE_ONLY_TEST_KEY", AuthMode: "bearer", Headers: map[string]string{"X-Token": "header-secret"}, ProxyURL: "http://user:proxy-secret@127.0.0.1:9998", Credentials: []config.CredentialConfig{{Name: "extra", APIKey: "pool-secret", Enabled: true}}, Models: []config.ModelConfig{{ID: "m", Model: "m", Enabled: true, Weight: 1}}}}
+	s := testGateway(t, cfg)
+	for _, path := range []string{"/admin/api/providers/private", "/admin/api/providers/private?reveal=1", "/admin/api/providers/private?reveal=true", "/admin/api/providers", "/admin/api/snapshot"} {
+		rr := httptest.NewRecorder()
+		req := httptest.NewRequest("GET", "http://localhost"+path, nil)
+		req.RemoteAddr = "127.0.0.1:12345"
+		s.Handler().ServeHTTP(rr, req)
+		if rr.Code != 200 {
+			t.Fatalf("%s: %d %s", path, rr.Code, rr.Body.String())
+		}
+		for _, secret := range []string{"primary-secret", "environment-secret", "pool-secret", "header-secret", "proxy-secret", "resolved_api_key"} {
+			if strings.Contains(rr.Body.String(), secret) {
+				t.Fatalf("%s leaked %s", path, secret)
+			}
+		}
+	}
+	// Redacting a read must not mutate live configuration or credential slices.
+	got := s.currentConfig().Providers[0]
+	if got.APIKey != "primary-secret" || got.Credentials[0].APIKey != "pool-secret" || got.Headers["X-Token"] != "header-secret" {
+		t.Fatal("read mutated saved secrets")
+	}
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest("PUT", "http://localhost/admin/api/providers/private", strings.NewReader(`{"provider":{"id":"private","name":"Renamed","type":"openai_compatible","base_url":"http://127.0.0.1:9/v1","auth_mode":"bearer","enabled":false,"models":[]},"preserve_secret":true,"preserve_headers":true,"preserve_proxy":true}`))
+	req.RemoteAddr = "127.0.0.1:12345"
+	req.Header.Set("Content-Type", "application/json")
+	s.Handler().ServeHTTP(rr, req)
+	if rr.Code != 200 {
+		t.Fatalf("%d %s", rr.Code, rr.Body.String())
+	}
+	got = s.currentConfig().Providers[0]
+	if got.APIKey != "primary-secret" || got.Credentials[0].APIKey != "pool-secret" || got.Headers["X-Token"] != "header-secret" || !strings.Contains(got.ProxyURL, "proxy-secret") {
+		t.Fatal("edit lost saved secrets")
 	}
 }

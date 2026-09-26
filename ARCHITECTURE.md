@@ -187,7 +187,7 @@ Web UI editor
 
 An unrelated provider edit must not destroy a working credential.
 
-When Edit opens, the UI restores the provider's saved Base URL, protocol, auth mode, model list, proxy, endpoint overrides, forwarded headers, concurrency, credential pool and credential source. An authorized local/admin user may reveal the resolved secret into a password field.
+When Edit opens, the UI restores the provider's saved Base URL, protocol, auth mode, model list, endpoint overrides, forwarded-header names, concurrency and credential-source metadata. Saved keys, credential-pool values, custom headers and proxy URLs are write-only. Untouched fields are preserved server-side; no resolved secret is returned to the editor.
 
 If the user does not change secret fields, the update sends `preserve_secret=true`, and the server preserves the existing `api_key`, `api_key_env`, and credential pool instead of replacing them with blank values.
 

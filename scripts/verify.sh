@@ -20,13 +20,19 @@ if out=$(gofmt -l .) && [[ -n "$out" ]]; then
   exit 1
 fi
 
-echo '== unit/integration tests =='
+echo '== mandatory clean unit/integration pass =='
+go test -timeout=3m -count=1 ./...
+
+echo '== randomized repeat unit/integration tests =='
 go test -timeout=3m -shuffle=on -count=10 ./...
 
 echo '== go vet =='
 go vet ./...
 
-echo '== race detector =='
+echo '== mandatory clean race pass =='
+go test -race -timeout=3m -count=1 ./...
+
+echo '== randomized repeat race detector =='
 go test -race -timeout=3m -shuffle=on -count=3 ./...
 
 if command -v node >/dev/null 2>&1; then
@@ -39,6 +45,17 @@ fi
 echo '== short fuzz checks =='
 GOMAXPROCS=2 go test ./internal/httpapi -run='^$' -fuzz=FuzzPatchJSONModel -fuzztime=2s -parallel=2
 GOMAXPROCS=2 go test ./internal/core -run='^$' -fuzz=FuzzParseAnthContent -fuzztime=2s -parallel=2
+GOMAXPROCS=2 go test ./internal/eval -run='^$' -fuzz=FuzzResolve_Verdicts -fuzztime=2s -parallel=2
+GOMAXPROCS=2 go test ./internal/eval -run='^$' -fuzz=FuzzRunner_Artifacts -fuzztime=2s -parallel=2
+GOMAXPROCS=2 go test ./internal/scorecards -run='^$' -fuzz=FuzzImportJSON -fuzztime=2s -parallel=2
+GOMAXPROCS=2 go test ./internal/scorecards -run='^$' -fuzz=FuzzValueValidation -fuzztime=2s -parallel=2
+GOMAXPROCS=2 go test ./internal/evallive -run='^$' -fuzz=FuzzLiveExecutor_UpstreamResponse -fuzztime=2s -parallel=2
+GOMAXPROCS=2 go test ./internal/evallive -run='^$' -fuzz=FuzzLiveExecutor_Prompts -fuzztime=2s -parallel=2
+
+echo '== bounded benchmark smoke =='
+go test -run='^$' -bench=. -benchtime=1x -benchmem \
+  ./internal/decision ./internal/decision/policy ./internal/decision/providerstate \
+  ./internal/eval ./internal/evallive ./internal/feature ./internal/probe ./internal/taskprofile
 
 echo '== linux amd64 build =='
 mkdir -p bin

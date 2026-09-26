@@ -39,6 +39,59 @@
     "recovery_retry_ms": 500,
     "capability_probes": true
   },
+  "decision": {
+    "mode": "hybrid",
+    "chain": "external-policy",
+    "timeout_ms": 800,
+    "max_provider_calls": 2
+  },
+  "decision_chains": [
+    {
+      "id": "external-policy",
+      "steps": [
+        {"provider": "jev-main"},
+        {"provider": "policy"}
+      ]
+    },
+    {
+      "id": "policy-only",
+      "steps": [
+        {"provider": "policy"}
+      ]
+    }
+  ],
+  "decision_provider_health": {
+    "failure_threshold": 2,
+    "failure_window_seconds": 30,
+    "cooldown_seconds": 60
+  },
+  "decision_policies": [
+    {
+      "id": "balanced",
+      "name": "Balanced latency/reliability",
+      "selection_mode": "select_first",
+      "weights": {
+        "router_baseline": 1,
+        "reliability": 1,
+        "latency": 1,
+        "ttft": 0.5,
+        "capacity": 0.5,
+        "cost": 0.2,
+        "context": 0.3
+      },
+      "task_overrides": {
+        "coding": {
+          "latency": 1,
+          "reliability": 1
+        },
+        "long_context": {
+          "context": 1,
+          "capacity": 0.5
+        }
+      },
+      "min_score_delta": 0.05
+    }
+  ],
   "providers": [
     {
       "id": "chat2api",
@@ -135,5 +188,26 @@
     "enabled": false,
     "keys": [],
     "rpm": 0
-  }
+  },
+  "evaluation": {
+    "enabled": false,
+    "live_enabled": false,
+    "max_runs": 64,
+    "max_scorecards": 1024,
+    "import_path": "",
+    "state_path": "",
+    "max_artifacts": 128,
+    "latency_target_ms": 0,
+    "ttft_target_ms": 0
+  },
+  "decision_providers": [
+    {
+      "id": "jev-main",
+      "type": "jev",
+      "enabled": false,
+      "api_key_env": "JEV_API_KEY",
+      "privacy_mode": "metadata_only",
+      "base_url": "https://www.jevai.org"
+    }
+  ]
 }

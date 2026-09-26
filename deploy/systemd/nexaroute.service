@@ -1,11 +1,11 @@
 [Unit]
-Description=NexaRoute v0.4 Intelligent Multi-LLM Gateway
+Description=NexaRoute Intelligent Multi-LLM Gateway
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=%h/.local/bin/nexaroute -config %h/.config/nexaroute/config.json
+ExecStart=/usr/local/bin/nexaroute -no-browser -config %h/.config/nexaroute/config.json
 Restart=on-failure
 RestartSec=2
 NoNewPrivileges=true
