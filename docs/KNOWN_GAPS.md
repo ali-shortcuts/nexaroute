@@ -119,3 +119,28 @@ Implemented but bounded by design:
   `/admin/api/compat/reset`) re-opens the question.
 - The capability cache is in-memory, matching the single-process state model
   described above; multi-process deployments re-probe after restart.
+
+## Model Intelligence and evaluation boundaries (Phase H)
+
+The Phase H evaluation plane is an admin-only observation surface and is
+explicitly bounded:
+
+- evaluation is **offline replay**: the admin endpoint accepts recorded
+  artifacts and never prompts a model, calls an upstream or spends provider
+  quota. Live, in-band quality measurement is not implemented;
+- no judge implementation ships. Deterministic evaluators decide every case; the
+  judge path exists and is proven never to override a deterministic verdict, but
+  the HTTP surface cannot enable it;
+- the suite catalog is built-in and versioned. Operator-defined suites and
+  custom case packs are not configurable yet;
+- `production_telemetry` provenance exists as a validated constructor
+  (`FromTelemetry`) but nothing ingests telemetry automatically; operational
+  values are only produced from a completed evaluation run (availability,
+  failure rate, and latency/TTFT when a target is configured);
+- scorecards are single-process state. `evaluation.state_path` gives one process
+  durable runs/scorecards, but there is no shared/distributed scorecard store,
+  no multi-node coordination and no history beyond the bounded version ring;
+- scorecard values are evidence records, not routing inputs. Phase H does not
+  order candidates, change weights/priorities, gate failover or alter health by
+  scorecard content, and a structural guard test keeps the dependency direction
+  that way.

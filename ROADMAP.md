@@ -39,6 +39,21 @@ Future work should be added only as separately scoped, tested capabilities.
 - persistent cost/token accounting;
 - shared/distributed health, breaker and affinity state if multi-instance HA is required.
 
+## Model Intelligence follow-ups (after Phase H)
+
+Phase H shipped the observable core: provenance-mandatory scorecards, eight
+deterministic suites, offline artifact replay, bounded admin/API surface and
+optional durable state. Not yet implemented:
+
+- an LLM-judge implementation registered behind the existing judge interface and
+  precedence rules (a judge may inform, never override, deterministic verdicts);
+- operator-defined suites/case packs plus artifact production harnesses;
+- automatic ingestion of production telemetry into `production_telemetry`
+  scorecard values (currently a validated constructor without a pipeline);
+- scorecard-driven *offline* reporting (trend/regression reports), still
+  explicitly not routing input;
+- a shared/distributed scorecard and run store if multi-instance HA is required.
+
 ## Release discipline
 
 A later version number should be created only after:

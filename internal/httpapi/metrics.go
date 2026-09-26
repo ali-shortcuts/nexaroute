@@ -342,6 +342,67 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprintf(w, "nexaroute_decision_chain_steps_total{provider_type=\"local\",outcome=%q} %d\n", o.outcome, v)
 		}
 	}
+
+	// Phase H — Model Intelligence scorecards and the evaluation plane.
+	// These families are written by the admin surface only; nothing here is read
+	// by the router, so evaluation cannot influence real routing.
+	evalPlane := s.evaluationSnapshot()
+	if evalPlane != nil {
+		regStats := evalPlane.Registry().Stats()
+		evalStats := evalPlane.Stats()
+		fmt.Fprintln(w, "# HELP nexaroute_scorecards_total Deployments with a Model Intelligence scorecard.")
+		fmt.Fprintln(w, "# TYPE nexaroute_scorecards_total gauge")
+		fmt.Fprintf(w, "nexaroute_scorecards_total %d\n", regStats.Deployments)
+		fmt.Fprintln(w, "# HELP nexaroute_scorecard_values Scorecard values by provenance (every value must have one).")
+		fmt.Fprintln(w, "# TYPE nexaroute_scorecard_values gauge")
+		provCounts := evalPlane.provenanceCounts()
+		for _, prov := range evalPlane.provenanceKeys() {
+			fmt.Fprintf(w, "nexaroute_scorecard_values{provenance=%q} %d\n", sanitizeMetricLabel(prov), provCounts[prov])
+		}
+		fmt.Fprintln(w, "# HELP nexaroute_scorecard_values_by_kind Scorecard quality values that carry evidence versus the full quality matrix.")
+		fmt.Fprintln(w, "# TYPE nexaroute_scorecard_values_by_kind gauge")
+		fmt.Fprintf(w, "nexaroute_scorecard_values_by_kind{kind=%q} %d\n", "quality_evidence", regStats.QualityCoverage)
+		fmt.Fprintf(w, "nexaroute_scorecard_values_by_kind{kind=%q} %d\n", "quality_slots", regStats.QualitySlots)
+		fmt.Fprintln(w, "# HELP nexaroute_scorecard_upserts_total Scorecard versions written.")
+		fmt.Fprintln(w, "# TYPE nexaroute_scorecard_upserts_total counter")
+		fmt.Fprintf(w, "nexaroute_scorecard_upserts_total %d\n", regStats.Upserts)
+		fmt.Fprintln(w, "# HELP nexaroute_scorecard_rejected_total Scorecard writes rejected by validation.")
+		fmt.Fprintln(w, "# TYPE nexaroute_scorecard_rejected_total counter")
+		fmt.Fprintf(w, "nexaroute_scorecard_rejected_total %d\n", regStats.Rejected)
+		fmt.Fprintln(w, "# HELP nexaroute_scorecard_imported Loaded imported scorecard artifacts.")
+		fmt.Fprintln(w, "# TYPE nexaroute_scorecard_imported gauge")
+		fmt.Fprintf(w, "nexaroute_scorecard_imported %d\n", evalStats.Imported)
+		fmt.Fprintln(w, "# HELP nexaroute_scorecard_import_failures_total Scorecard artifact imports that failed validation.")
+		fmt.Fprintln(w, "# TYPE nexaroute_scorecard_import_failures_total counter")
+		fmt.Fprintf(w, "nexaroute_scorecard_import_failures_total %d\n", evalPlane.importFailures.Load())
+		fmt.Fprintln(w, "# HELP nexaroute_evaluation_enabled Whether the evaluation plane accepts runs (1) or is disabled (0).")
+		fmt.Fprintln(w, "# TYPE nexaroute_evaluation_enabled gauge")
+		if evalStats.Enabled {
+			fmt.Fprintln(w, "nexaroute_evaluation_enabled 1")
+		} else {
+			fmt.Fprintln(w, "nexaroute_evaluation_enabled 0")
+		}
+		fmt.Fprintln(w, "# HELP nexaroute_evaluation_runs_total Evaluation runs by outcome.")
+		fmt.Fprintln(w, "# TYPE nexaroute_evaluation_runs_total counter")
+		fmt.Fprintf(w, "nexaroute_evaluation_runs_total{outcome=%q} %d\n", "stored", evalStats.RunsTotal)
+		fmt.Fprintf(w, "nexaroute_evaluation_runs_total{outcome=%q} %d\n", "insufficient_samples", evalStats.RunsInsufficient)
+		fmt.Fprintf(w, "nexaroute_evaluation_runs_total{outcome=%q} %d\n", "rejected", evalStats.RunsRejected)
+		fmt.Fprintln(w, "# HELP nexaroute_evaluation_scorecards_written_total Scorecards written from evaluation runs.")
+		fmt.Fprintln(w, "# TYPE nexaroute_evaluation_scorecards_written_total counter")
+		fmt.Fprintf(w, "nexaroute_evaluation_scorecards_written_total %d\n", evalStats.ScorecardsWritten)
+		fmt.Fprintln(w, "# HELP nexaroute_evaluation_stored_runs Evaluation runs currently retained in the bounded store.")
+		fmt.Fprintln(w, "# TYPE nexaroute_evaluation_stored_runs gauge")
+		fmt.Fprintf(w, "nexaroute_evaluation_stored_runs %d\n", evalStats.Runs)
+		fmt.Fprintln(w, "# HELP nexaroute_evaluation_cases_total Evaluated cases by verdict (deterministic evaluators only).")
+		fmt.Fprintln(w, "# TYPE nexaroute_evaluation_cases_total counter")
+		verdictCounts := evalPlane.verdictCounts()
+		for _, v := range evalPlane.verdictKeys() {
+			if verdictCounts[v] == 0 {
+				continue
+			}
+			fmt.Fprintf(w, "nexaroute_evaluation_cases_total{verdict=%q} %d\n", sanitizeMetricLabel(v), verdictCounts[v])
+		}
+	}
 }
 
 func (s *Server) ready(w http.ResponseWriter, r *http.Request) {

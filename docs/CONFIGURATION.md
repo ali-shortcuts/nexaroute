@@ -223,3 +223,71 @@ The resulting **effective remaining** values feed quota pressure. This is intent
 | `context_window` | `0` (unknown) | Advertised usable context window in tokens; requests estimated to exceed it skip this deployment. |
 | `input_cost_per_mtok` | `0` | USD per million input tokens, used for estimated-spend accounting. |
 | `output_cost_per_mtok` | `0` | USD per million output tokens, used for estimated-spend accounting. |
+
+## Phase H — Model Intelligence scorecards and evaluation
+
+Phase H adds an opt-in, admin-only observation plane. It never affects routing:
+no scorecard value is read by the router, the health manager or the decision
+plane (enforced by a structural import guard test). It is disabled by default
+and, while disabled, accepts no runs and writes no scorecards.
+
+### evaluation (new object, opt-in)
+
+| Field | Default | Bounds | Meaning |
+|---|---|---|---|
+| `enabled` | `false` | — | Master switch. While false, `POST /admin/api/evaluation/run` returns 409 and no artifact is imported. |
+| `max_runs` | `64` | 1–512 | Bounded retained evaluation runs (memory and state file). |
+| `max_scorecards` | `1024` | 1–4096 | Scorecard registry bound (deployments). |
+| `import_path` | `""` | ≤ 4096 bytes | Read-only scorecard artifact (JSON). Re-read on config reload; a malformed artifact is rejected as a whole and reported as `import_error`. |
+| `state_path` | `""` | ≤ 4096 bytes | Optional durability file: one atomic, mode-0600 JSON document holding bounded runs and scorecards. |
+| `max_artifacts` | `128` | 1–512 | Per-run artifact bound. |
+| `latency_target_ms` | `0` | 0–600000 | Optional latency scoring target. A latency value is only produced when a target exists. |
+| `ttft_target_ms` | `0` | 0–600000 | Optional TTFT scoring target, same rule. |
+
+```json
+"evaluation": {
+  "enabled": true,
+  "max_runs": 64,
+  "max_scorecards": 1024,
+  "import_path": "/etc/nexaroute/scorecards.json",
+  "state_path": "/var/lib/nexaroute/evaluation-state.json",
+  "max_artifacts": 128,
+  "latency_target_ms": 2000,
+  "ttft_target_ms": 800
+}
+```
+
+### Scorecard artifact shape (`import_path`)
+
+```json
+{"scorecards": [
+  {"deployment_id": "chat2api/deepseek", "provider_id": "chat2api", "model": "deepseek-chat",
+   "version": 1, "generated_at": "2026-09-26T12:00:00Z",
+   "values": {"coding": {"score": 0.8, "provenance": "imported",
+                          "sample_count": 12, "confidence": 0.375, "source": "vendor-bench"}}}
+]}
+```
+
+Every value must carry a provenance (`operator_config`, `imported`,
+`evaluation`, `production_telemetry`). Unknown fields, duplicate deployments,
+missing `generated_at`, missing provenance and missing samples for measured
+provenances reject the whole artifact. Values without evidence are never
+invented: a deployment with no evidence simply has no scorecard.
+
+### Evaluation runs
+
+`POST /admin/api/evaluation/run` replays **recorded artifacts** (never prompts)
+through deterministic suites:
+
+```json
+{"suite_id": "coding", "deployment_id": "chat2api/deepseek",
+ "artifacts": [{"case_id": "coding-bugfix", "status": "ok",
+                "unit_tests": {"compiled": true, "passed": 3}}],
+ "latency_target_ms": 2000}
+```
+
+Unknown fields, unknown suites, unknown deployments, mismatched
+`provider_id`/`model`, missing artifacts and oversized payloads are rejected. A
+run that produced too little evidence to meet the suite's minimum sample count
+stores the run but writes **no** scorecard (`scorecard_written: false`). Model
+outputs never appear in events, metrics or the admin snapshot.

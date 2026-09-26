@@ -331,6 +331,43 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 	}
 	s.runtimeMu.RUnlock()
 
+	// Phase H: scorecards + evaluation plane. Bounded and privacy-safe: rows carry
+	// ids, scores, provenance and sample counts, never model outputs.
+	evalPlane := s.evaluationSnapshot()
+	scorecardsSection := map[string]any{
+		"rows":  []map[string]any{},
+		"total": 0,
+	}
+	evaluationSection := map[string]any{"enabled": false, "suites": []any{}}
+	if evalPlane != nil {
+		scorecardsSection = map[string]any{
+			"rows":             evalPlane.scorecardRows(50),
+			"total":            evalPlane.Registry().Len(),
+			"by_provenance":    evalPlane.provenanceCounts(),
+			"values":           evalPlane.Registry().Stats().Values,
+			"quality_coverage": evalPlane.Registry().Stats().QualityCoverage,
+		}
+		st := evalPlane.Stats()
+		evaluationSection = map[string]any{
+			"enabled":                   st.Enabled,
+			"judge_registered":          st.JudgeRegistered,
+			"suites":                    evalPlane.SuiteCatalog(),
+			"evaluators":                st.Evaluators,
+			"runs_stored":               st.Runs,
+			"runs_total":                st.RunsTotal,
+			"runs_insufficient_samples": st.RunsInsufficient,
+			"runs_rejected":             st.RunsRejected,
+			"scorecards_written":        st.ScorecardsWritten,
+			"imported_scorecards":       st.Imported,
+			"import_error":              st.ImportError,
+			"state_path":                st.StatePath,
+			"state_writes_failed":       st.StateWritesFailed,
+			"verdict_counts":            evalPlane.verdictCounts(),
+			"health":                    evalPlane.evaluationHealthRows(50),
+			"note":                      "evaluation is offline replay; scorecards never change routing in Phase H",
+		}
+	}
+
 	writeJSON(w, 200, map[string]any{
 		"deployments":        deployments,
 		"deployment_total":   totalDeployments,
@@ -367,6 +404,8 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 		},
 		"decision_chains":          cfgFull.DecisionChains,
 		"decision_provider_health": cfgFull.DecisionProviderHealth,
+		"scorecards":               scorecardsSection,
+		"evaluation":               evaluationSection,
 		"config": map[string]any{
 			"probe":    probeCfg,
 			"routing":  routingCfg,

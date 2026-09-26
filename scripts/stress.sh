@@ -19,4 +19,7 @@ go test -timeout=2m -count=1 ./internal/httpapi -run='^TestStress'
 echo '== concurrent log rotation stress =='
 go test -timeout=2m -count=1 ./internal/logging -run='^TestStress'
 
+echo '== evaluation plane stress =='
+go test -timeout=2m -count=1 ./internal/eval -run='^TestStress'
+
 echo 'STRESS PASS'

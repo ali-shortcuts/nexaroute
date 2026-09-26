@@ -61,6 +61,9 @@ type Server struct {
 	usage                *usage.Tracker
 	capStore             *compat.Store
 	routeResolver        *route.Resolver
+	// Phase H: evaluation plane (scorecards + deterministic evaluation). Admin
+	// surface only; the data plane never reads it.
+	evaluation *evaluationPlane
 	// Phase C — task classification metrics (bounded cardinality)
 	taskMu             sync.Mutex
 	taskClassCounts    map[string]uint64 // key: task_type|complexity
@@ -215,6 +218,9 @@ func New(cfg config.Config, configPath string, reg *providers.Registry, rt *rout
 	}
 	s.decisionOrchestrator = decision.NewOrchestratorWithConfig(s.decisionRegistry, cfg, &decision.Metrics{})
 	s.routeResolver = route.NewResolver(cfg, rt.All())
+	// Phase H: evaluation plane (opt-in, admin-only, never in the request path).
+	s.evaluation = newEvaluationPlane(cfg.Evaluation, nil)
+	s.evaluation.Configure(cfg.Evaluation, l)
 	return s
 }
 
@@ -235,6 +241,15 @@ func (s *Server) currentConfig() config.Config {
 	s.runtimeMu.RLock()
 	defer s.runtimeMu.RUnlock()
 	return cloneConfig(s.cfg)
+}
+
+// evaluationSnapshot returns the live evaluation plane under the runtime lock.
+// The plane is immutable-by-replacement: a config reload publishes a new plane
+// object, and in-flight readers keep a coherent reference.
+func (s *Server) evaluationSnapshot() *evaluationPlane {
+	s.runtimeMu.RLock()
+	defer s.runtimeMu.RUnlock()
+	return s.evaluation
 }
 
 func (s *Server) runtimeSettingsSnapshot() (config.RoutingConfig, config.ProbeConfig) {
@@ -438,6 +453,11 @@ func (s *Server) applyConfigLocked(cfg config.Config) error {
 	if err := config.SaveAtomic(s.configPath, cfg); err != nil {
 		return err
 	}
+	// Phase H: prepare the next evaluation plane outside the runtime lock so an
+	// artifact import never blocks the request path. Evidence already recorded is
+	// carried over.
+	nextEvaluation := newEvaluationPlane(cfg.Evaluation, s.evaluation)
+	nextEvaluation.Configure(cfg.Evaluation, s.log)
 
 	s.runtimeMu.Lock()
 	defer s.runtimeMu.Unlock()
@@ -460,6 +480,10 @@ func (s *Server) applyConfigLocked(cfg config.Config) error {
 		valid[d.ID] = struct{}{}
 	}
 	s.hm.Retain(valid)
+	// Phase H: evaluation evidence for removed deployments does not survive a
+	// config swap, and the freshly prepared plane is published atomically.
+	s.evaluation = nextEvaluation
+	s.evaluation.Retain(valid)
 	validProviders := map[string]struct{}{}
 	for _, p := range cfg.Providers {
 		if p.Enabled {
@@ -796,6 +820,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/admin/api/candidate-pools/", s.adminCandidatePoolByID)
 	mux.HandleFunc("/admin/api/fallback-chains", s.adminFallbackChains)
 	mux.HandleFunc("/admin/api/fallback-chains/", s.adminFallbackChainByID)
+	// Phase H: Model Intelligence scorecards + deterministic evaluation
+	mux.HandleFunc("/admin/api/scorecards", s.adminScorecards)
+	mux.HandleFunc("/admin/api/scorecards/", s.adminScorecardByDeployment)
+	mux.HandleFunc("/admin/api/evaluation/suites", s.adminEvaluationSuites)
+	mux.HandleFunc("/admin/api/evaluation/runs", s.adminEvaluationRuns)
+	mux.HandleFunc("/admin/api/evaluation/run", s.adminEvaluationRun)
 	// Legacy endpoint (PR #13 compatibility)
 	mux.HandleFunc("/admin/api/endpoint", s.adminEndpoint)
 

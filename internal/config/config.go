@@ -143,6 +143,22 @@ func (d DecisionProviderConfig) IsEnabled() bool {
 	return *d.Enabled
 }
 
+// EvaluationConfig gates the Phase H evaluation plane. It is opt-in: a gateway
+// that does not evaluate models keeps zero evaluation state, and scorecards can
+// never be written unless an operator configured or imported the evidence.
+//
+// The plane is observation-only in Phase H: nothing here changes routing.
+type EvaluationConfig struct {
+	Enabled         bool    `json:"enabled,omitempty"`
+	MaxRuns         int     `json:"max_runs,omitempty"`          // bounded stored runs (memory + state file)
+	MaxScorecards   int     `json:"max_scorecards,omitempty"`    // bounded scorecard registry size
+	ImportPath      string  `json:"import_path,omitempty"`       // read-only scorecard artifact (JSON)
+	StatePath       string  `json:"state_path,omitempty"`        // optional evaluation state file (0600, atomic)
+	MaxArtifacts    int     `json:"max_artifacts,omitempty"`     // per-run artifact bound
+	LatencyTargetMS float64 `json:"latency_target_ms,omitempty"` // optional scoring target for latency evidence
+	TTFTTargetMS    float64 `json:"ttft_target_ms,omitempty"`    // optional scoring target for TTFT evidence
+}
+
 type Config struct {
 	Listen                 string                       `json:"listen"`
 	Admin                  AdminConfig                  `json:"admin"`
@@ -151,6 +167,7 @@ type Config struct {
 	Probe                  ProbeConfig                  `json:"probe"`
 	Cache                  CacheConfig                  `json:"cache"`
 	ClientAuth             ClientAuthConfig             `json:"client_auth"`
+	Evaluation             EvaluationConfig             `json:"evaluation,omitempty"`
 	Decision               DecisionConfig               `json:"decision,omitempty"`
 	DecisionPolicies       []DecisionPolicyConfig       `json:"decision_policies,omitempty"`
 	DecisionProviders      []DecisionProviderConfig     `json:"decision_providers,omitempty"`
@@ -341,6 +358,12 @@ const (
 	maxPolicyIDBytes      = 256
 	// Phase F limits
 	maxDecisionProviders = 16
+	// Phase H limits
+	maxEvaluationRuns        = 512
+	maxEvaluationScorecards  = 4096
+	maxEvaluationArtifacts   = 512
+	maxEvaluationImportBytes = 4096
+	maxEvaluationLatencyMS   = 600000
 	// Phase G limits
 	maxDecisionChains       = 64
 	maxDecisionChainSteps   = 8
@@ -440,6 +463,7 @@ func Default() Config {
 		Cache:                  CacheConfig{Enabled: false, TTLSeconds: 300, MaxEntries: 256, MaxBodyBytes: 1 << 20},
 		ClientAuth:             ClientAuthConfig{Enabled: false, RPM: 0},
 		Decision:               DecisionConfig{Mode: "off", Provider: "local", TimeoutMS: 10},
+		Evaluation:             EvaluationConfig{Enabled: false, MaxRuns: 64, MaxScorecards: 1024, MaxArtifacts: 128},
 		DecisionProviderHealth: DecisionProviderHealthConfig{FailureThreshold: 3, FailureWindowSeconds: 30, CooldownSeconds: 60},
 	}
 }
@@ -637,6 +661,28 @@ func (c *Config) ApplyDefaults() {
 			fc.Pools[j] = strings.TrimSpace(fc.Pools[j])
 		}
 	}
+	// Evaluation defaults (Phase H)
+	c.Evaluation.ImportPath = strings.TrimSpace(c.Evaluation.ImportPath)
+	c.Evaluation.StatePath = strings.TrimSpace(c.Evaluation.StatePath)
+	if c.Evaluation.MaxRuns == 0 {
+		c.Evaluation.MaxRuns = 64
+	}
+	if c.Evaluation.MaxRuns > maxEvaluationRuns {
+		c.Evaluation.MaxRuns = maxEvaluationRuns
+	}
+	if c.Evaluation.MaxScorecards == 0 {
+		c.Evaluation.MaxScorecards = 1024
+	}
+	if c.Evaluation.MaxScorecards > maxEvaluationScorecards {
+		c.Evaluation.MaxScorecards = maxEvaluationScorecards
+	}
+	if c.Evaluation.MaxArtifacts == 0 {
+		c.Evaluation.MaxArtifacts = 128
+	}
+	if c.Evaluation.MaxArtifacts > maxEvaluationArtifacts {
+		c.Evaluation.MaxArtifacts = maxEvaluationArtifacts
+	}
+
 	// Decision defaults (Phase D/E/G)
 	c.Decision.Mode = strings.TrimSpace(strings.ToLower(c.Decision.Mode))
 	c.Decision.Provider = strings.TrimSpace(strings.ToLower(c.Decision.Provider))
@@ -1076,6 +1122,31 @@ func (c Config) Validate() error {
 			}
 		}
 	}
+	// Phase H: evaluation plane
+	if c.Evaluation.MaxRuns < 1 || c.Evaluation.MaxRuns > maxEvaluationRuns {
+		return fmt.Errorf("evaluation.max_runs must be between 1 and %d", maxEvaluationRuns)
+	}
+	if c.Evaluation.MaxScorecards < 1 || c.Evaluation.MaxScorecards > maxEvaluationScorecards {
+		return fmt.Errorf("evaluation.max_scorecards must be between 1 and %d", maxEvaluationScorecards)
+	}
+	if c.Evaluation.MaxArtifacts < 1 || c.Evaluation.MaxArtifacts > maxEvaluationArtifacts {
+		return fmt.Errorf("evaluation.max_artifacts must be between 1 and %d", maxEvaluationArtifacts)
+	}
+	if len(c.Evaluation.ImportPath) > maxEvaluationImportBytes {
+		return errors.New("evaluation.import_path is too long")
+	}
+	if len(c.Evaluation.StatePath) > maxEvaluationImportBytes {
+		return errors.New("evaluation.state_path is too long")
+	}
+	for name, v := range map[string]float64{
+		"evaluation.latency_target_ms": c.Evaluation.LatencyTargetMS,
+		"evaluation.ttft_target_ms":    c.Evaluation.TTFTTargetMS,
+	} {
+		if math.IsNaN(v) || math.IsInf(v, 0) || v < 0 || v > maxEvaluationLatencyMS {
+			return fmt.Errorf("%s must be finite and between 0 and %d", name, maxEvaluationLatencyMS)
+		}
+	}
+
 	// Phase D/E/F/G: Decision
 	switch strings.ToLower(strings.TrimSpace(c.Decision.Mode)) {
 	case "", "off", "local", "assisted", "hybrid":

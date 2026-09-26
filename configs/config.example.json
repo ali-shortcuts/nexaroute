@@ -189,6 +189,16 @@
     "keys": [],
     "rpm": 0
   },
+  "evaluation": {
+    "enabled": false,
+    "max_runs": 64,
+    "max_scorecards": 1024,
+    "import_path": "",
+    "state_path": "",
+    "max_artifacts": 128,
+    "latency_target_ms": 0,
+    "ttft_target_ms": 0
+  },
   "decision_providers": [
     {
       "id": "jev-main",
