@@ -34,14 +34,23 @@ chmod +x "$tmp/bin/curl"
 export FIXTURE="$tmp/fixture"
 export HOME="$tmp/home"
 export NEXAROUTE_INSTALL_DIR="$HOME/.local/bin"
-export PATH="$tmp/bin:$PATH"
+export PATH="$tmp/bin:$HOME/.local/bin:$PATH"
 
 bash "$ROOT/scripts/install.sh"
 test -x "$HOME/.local/bin/nexaroute"
-test "$("$HOME/.local/bin/nexaroute")" = "fake release gateway"
+test "$(command -v nexaroute)" = "$HOME/.local/bin/nexaroute"
+test "$(nexaroute)" = "fake release gateway"
 config="$HOME/.config/nexaroute/config.json"
 test -d "$(dirname "$config")"
 printf '{"preserve":"runtime-config-canary"}\n' > "$config"
 bash "$ROOT/scripts/install.sh"
 grep -Fq runtime-config-canary "$config"
-printf 'PASS: offline release asset install, executable command, and upgrade config preservation\n'
+old_binary="$(sha256sum "$HOME/.local/bin/nexaroute" | cut -d ' ' -f1)"
+printf '%064d  %s\\n' 0 "$asset" > "$tmp/fixture/SHA256SUMS"
+if bash "$ROOT/scripts/install.sh" >/dev/null 2>&1; then
+  echo "installer accepted a bad checksum" >&2
+  exit 1
+fi
+test "$(sha256sum "$HOME/.local/bin/nexaroute" | cut -d ' ' -f1)" = "$old_binary"
+test "$(nexaroute)" = "fake release gateway"
+printf 'PASS: offline release install, PATH command, config upgrade preservation, checksum rejection and safe failure\n'
