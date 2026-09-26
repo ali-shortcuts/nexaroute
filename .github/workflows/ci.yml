@@ -51,20 +51,10 @@ jobs:
       - name: Local runtime smoke test
         run: ./scripts/smoke-local.sh
 
-      - name: Installer smoke test
-        shell: bash
+      - name: Release packaging and installer lifecycle tests
         run: |
-          set -euo pipefail
-          tmp_home="$(mktemp -d)"
-          trap 'rm -rf "$tmp_home"' EXIT
-          HOME="$tmp_home" ./install-user.sh
-          test -x "$tmp_home/.local/bin/nexaroute"
-          expected_version="$(sed -n 's/^const version = "\([^"]*\)"/NexaRoute v\1/p' cmd/gateway/main.go)"
-          test -n "$expected_version"
-          test "$("$tmp_home/.local/bin/nexaroute" -version)" = "$expected_version"
-          test -f "$tmp_home/.config/nexaroute/config.json"
-          test "$(stat -c '%a' "$tmp_home/.config/nexaroute/config.json")" = "600"
-          test ! -e "$tmp_home/.config/nexaroute/config.json.bak"
+          ./scripts/build-release.sh v0.6.0
+          ./scripts/test-install.sh
 
       - name: Docker build
         run: docker build --tag nexaroute-ci:current .

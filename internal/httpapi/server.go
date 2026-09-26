@@ -138,7 +138,7 @@ func adminRemoteIP(r *http.Request) string {
 // adminHostAllowed rejects DNS-rebinding requests that present a Host header
 // pointing at a public name. It applies to the keyless loopback trust mode,
 // where a rebounded browser origin could otherwise read admin data (including
-// resolved provider API keys via reveal=1) same-origin without any CORS
+// provider configuration) same-origin without any CORS
 // preflight. When an explicit admin key is configured the check is skipped:
 // cross-origin reads already fail the key requirement.
 func adminHostAllowed(r *http.Request) bool {
@@ -1061,6 +1061,6 @@ func (s *Server) adminAuthorized(r *http.Request) bool {
 	}
 	// Keyless mode trusts the loopback; make sure the request was actually
 	// addressed to a loopback name so a DNS-rebound browser origin cannot
-	// silently read admin data (including reveal=1 resolved keys).
+	// silently read privileged admin data.
 	return isLoopback && adminHostAllowed(r)
 }

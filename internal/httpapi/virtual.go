@@ -578,10 +578,6 @@ func (s *Server) adminEndpoint(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		cfg := s.currentConfig()
-		key := ""
-		if cfg.ClientAuth.Enabled && len(cfg.ClientAuth.Keys) > 0 {
-			key = cfg.ClientAuth.Keys[0]
-		}
 		publicModel := cfg.Routing.PublicModel
 		// If virtual endpoints exist, report the default one
 		if len(cfg.VirtualEndpoints) > 0 {
@@ -606,7 +602,7 @@ func (s *Server) adminEndpoint(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		writeJSON(w, 200, map[string]any{"model": publicModel, "api_key": key, "enabled": cfg.ClientAuth.Enabled, "deployments": count})
+		writeJSON(w, 200, map[string]any{"model": publicModel, "has_key": len(cfg.ClientAuth.Keys) > 0, "enabled": cfg.ClientAuth.Enabled, "deployments": count})
 	case http.MethodPost:
 		var in struct {
 			Model     string `json:"model"`
@@ -688,10 +684,6 @@ func (s *Server) adminEndpoint(w http.ResponseWriter, r *http.Request) {
 			errorJSON(w, 400, err.Error())
 			return
 		}
-		key := ""
-		if cfg.ClientAuth.Enabled && len(cfg.ClientAuth.Keys) > 0 {
-			key = cfg.ClientAuth.Keys[0]
-		}
 		count := 0
 		for _, p := range cfg.Providers {
 			if p.Enabled {
@@ -702,7 +694,7 @@ func (s *Server) adminEndpoint(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		writeJSON(w, 200, map[string]any{"model": model, "api_key": key, "enabled": cfg.ClientAuth.Enabled, "deployments": count})
+		writeJSON(w, 200, map[string]any{"model": model, "has_key": len(cfg.ClientAuth.Keys) > 0, "enabled": cfg.ClientAuth.Enabled, "deployments": count})
 	default:
 		errorJSON(w, 405, "method not allowed")
 	}

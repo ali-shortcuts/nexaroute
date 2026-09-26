@@ -1,80 +1,45 @@
-name: Release build
+name: Prepare release (no publishing)
 
 on:
-  push:
-    tags:
-      - 'v0.3'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Future release tag (for example v0.6.0)'
+        required: true
+        default: v0.6.0
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  build:
+  prepare:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-go@v5
         with:
           go-version: '1.23.x'
           cache: false
-
-      - name: Verify source
+      - name: Verify source and both architectures
         run: ./scripts/verify.sh
-
-      - name: Local runtime smoke test
+      - name: Stress tests
+        run: ./scripts/stress.sh
+      - name: Runtime smoke test
         run: ./scripts/smoke-local.sh
-
-      - name: Docker build
-        run: docker build --tag nexaroute-release:${GITHUB_REF_NAME} .
-
-      - name: Build release artifacts and installable package
-        shell: bash
-        run: |
-          set -euo pipefail
-          rm -rf dist/release-package
-          mkdir -p dist/release-package/nexaroute/{bin,configs,deploy/systemd,scripts}
-
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags='-s -w' -o dist/nexaroute-linux-amd64 ./cmd/gateway
-          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags='-s -w' -o dist/nexaroute-linux-arm64 ./cmd/gateway
-
-          install -m 0755 dist/nexaroute-linux-amd64 dist/release-package/nexaroute/bin/nexaroute-linux-amd64
-          install -m 0755 dist/nexaroute-linux-arm64 dist/release-package/nexaroute/bin/nexaroute-linux-arm64
-          install -m 0755 install-user.sh run-local.sh dist/release-package/nexaroute/
-          install -m 0755 scripts/install-systemd-user.sh scripts/smoke-local.sh dist/release-package/nexaroute/scripts/
-          install -m 0644 configs/config.example.json dist/release-package/nexaroute/configs/
-          install -m 0644 deploy/systemd/nexaroute.service dist/release-package/nexaroute/deploy/systemd/
-          install -m 0644 README.md LICENSE SECURITY.md dist/release-package/nexaroute/
-
-          tar -C dist/release-package -czf "dist/nexaroute-${GITHUB_REF_NAME}-linux.tar.gz" nexaroute
-          (
-            cd dist
-            sha256sum nexaroute-linux-amd64 nexaroute-linux-arm64 "nexaroute-${GITHUB_REF_NAME}-linux.tar.gz" > SHA256SUMS
-          )
-
-      - name: Verify packaged installer
-        shell: bash
-        run: |
-          set -euo pipefail
-          tmp="$(mktemp -d)"
-          home="$(mktemp -d)"
-          trap 'rm -rf "$tmp" "$home"' EXIT
-          tar -C "$tmp" -xzf "dist/nexaroute-${GITHUB_REF_NAME}-linux.tar.gz"
-          "$tmp/nexaroute/scripts/smoke-local.sh"
-          HOME="$home" "$tmp/nexaroute/install-user.sh"
-          test -x "$home/.local/bin/nexaroute"
-          "$home/.local/bin/nexaroute" -version | grep -F "NexaRoute v0.3"
-          test -f "$home/.config/nexaroute/config.json"
-          test "$(stat -c '%a' "$home/.config/nexaroute/config.json")" = "600"
-          test ! -e "$home/.config/nexaroute/config.json.bak"
-
-      - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
+      - name: Prepare exact release assets
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: ./scripts/build-release.sh "$RELEASE_VERSION"
+      - name: Installer and desktop lifecycle tests
+        run: ./scripts/test-install.sh
+      - name: Retain artifacts for release review (not a GitHub Release)
+        uses: actions/upload-artifact@v4
         with:
-          files: |
+          name: nexaroute-release-candidate
+          path: |
             dist/nexaroute-linux-amd64
             dist/nexaroute-linux-arm64
-            dist/nexaroute-v0.3-linux.tar.gz
+            dist/install.sh
             dist/SHA256SUMS
-          generate_release_notes: true
+          if-no-files-found: error

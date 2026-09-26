@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -24,14 +25,7 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/router"
 )
 
-const version = "0.6.0"
-
-func defaultConfigPath() string {
-	if p := os.Getenv("NEXAROUTE_CONFIG"); p != "" {
-		return p
-	}
-	return "config.json"
-}
+var version = "0.6.0"
 
 func ensureConfig(path string) error {
 	if _, err := os.Stat(path); err == nil {
@@ -51,6 +45,7 @@ func ensureConfig(path string) error {
 
 func main() {
 	configPath := flag.String("config", defaultConfigPath(), "path to JSON config")
+	noBrowser := flag.Bool("no-browser", false, "do not automatically open the Web UI")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
 	if *showVersion {
@@ -58,6 +53,31 @@ func main() {
 		return
 	}
 	bootstrap := log.New(os.Stderr, "nexaroute ", log.LstdFlags|log.Lmicroseconds)
+	if *configPath == "" {
+		bootstrap.Fatal("cannot locate user config directory; set HOME, XDG_CONFIG_HOME, or NEXAROUTE_CONFIG")
+	}
+	absolute, err := filepath.Abs(*configPath)
+	if err != nil {
+		bootstrap.Fatal(err)
+	}
+	// Resolve aliases before taking the sibling lock.
+	if err := os.MkdirAll(filepath.Dir(absolute), 0o700); err != nil {
+		bootstrap.Fatal(err)
+	}
+	dir, err := filepath.EvalSymlinks(filepath.Dir(absolute))
+	if err != nil {
+		bootstrap.Fatal(err)
+	}
+	absolute = filepath.Join(dir, filepath.Base(absolute))
+	if resolved, err := filepath.EvalSymlinks(absolute); err == nil {
+		absolute = resolved
+	}
+	*configPath = absolute
+	lock, err := lockInstance(*configPath)
+	if err != nil {
+		bootstrap.Fatal(err)
+	}
+	defer lock.Close()
 	if err := ensureConfig(*configPath); err != nil {
 		bootstrap.Fatal(err)
 	}
@@ -126,12 +146,34 @@ func main() {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
+	listener, err := net.Listen("tcp", cfg.Listen)
+	if err != nil {
+		bootstrap.Fatalf("cannot listen on %s (another instance may be running): %v", cfg.Listen, err)
+	}
+	defer listener.Close()
 	serverErr := make(chan error, 1)
 	go func() {
 		logger.Printf("version=%s config=%s listening=http://%s", version, *configPath, cfg.Listen)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := srv.Serve(listener); err != nil && err != http.ErrServerClosed {
 			serverErr <- err
 			cancel()
+		}
+	}()
+	url := uiURL(listener.Addr())
+	fmt.Fprintf(os.Stderr, "NexaRoute UI: %s\nConfig: %s\nPress Ctrl+C to stop.\n", url, *configPath)
+	go func() {
+		readyCtx, readyCancel := context.WithTimeout(ctx, 10*time.Second)
+		defer readyCancel()
+		if err := waitForUI(readyCtx, url); err != nil {
+			if ctx.Err() == nil {
+				bootstrap.Printf("UI readiness check failed: %v; open %s manually", err, url)
+			}
+			return
+		}
+		if !*noBrowser {
+			if err := openBrowser(ctx, url); err != nil && ctx.Err() == nil {
+				bootstrap.Printf("%v; open %s manually", err, url)
+			}
 		}
 	}()
 	if cfg.Probe.Enabled && cfg.Probe.OnStart {

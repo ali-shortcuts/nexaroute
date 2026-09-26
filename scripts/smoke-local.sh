@@ -43,7 +43,7 @@ chmod 600 "$TMP/config.json"
 printf %s "stale backup must be removed" > "$TMP/config.json.bak"
 chmod 600 "$TMP/config.json.bak"
 
-"$BIN" -config "$TMP/config.json" >"$TMP/gateway.log" 2>&1 &
+"$BIN" -no-browser -config "$TMP/config.json" >"$TMP/gateway.log" 2>&1 &
 PID=$!
 
 for _ in $(seq 1 80); do
@@ -91,12 +91,13 @@ PY
 
 CREATE='{"provider":{"id":"smoke-openai","name":"Smoke OpenAI","type":"openai_compatible","base_url":"http://127.0.0.1:19999/v1","api_key":"secret-one","auth_mode":"bearer","enabled":false,"models":[{"id":"m1","model":"model-1","enabled":true,"priority":10,"weight":1,"capabilities":{"streaming":true,"tools":true,"vision":false,"reasoning":false}}]},"preserve_secret":false}'
 expect_status 201 "$(status POST "$BASE/admin/api/providers" "$CREATE")" "provider create"
-expect_status 200 "$(status GET "$BASE/admin/api/providers/smoke-openai?reveal=1")" "provider reveal"
+expect_status 200 "$(status GET "$BASE/admin/api/providers/smoke-openai?reveal=1")" "legacy reveal remains redacted"
 python3 - "$TMP/resp" <<'PY'
 import json, sys
 x = json.load(open(sys.argv[1]))
 assert x['provider']['base_url'] == 'http://127.0.0.1:19999/v1', x
-assert x.get('resolved_api_key') == 'secret-one', x
+assert 'resolved_api_key' not in x, x
+assert not x['provider'].get('api_key'), x
 PY
 
 UPDATE='{"provider":{"id":"smoke-openai","name":"Smoke Renamed","type":"openai_compatible","base_url":"http://127.0.0.1:19999/v1","auth_mode":"bearer","enabled":false,"models":[{"id":"m1","model":"model-1","enabled":true,"priority":10,"weight":1,"capabilities":{"streaming":true,"tools":true,"vision":false,"reasoning":false}}]},"preserve_secret":true}'
@@ -107,7 +108,8 @@ import json, sys
 x = json.load(open(sys.argv[1]))
 assert x['provider']['name'] == 'Smoke Renamed', x
 assert x['provider']['base_url'] == 'http://127.0.0.1:19999/v1', x
-assert x.get('resolved_api_key') == 'secret-one', x
+assert 'resolved_api_key' not in x, x
+assert not x['provider'].get('api_key'), x
 PY
 
 expect_status 200 "$(status GET "$BASE/admin/api/providers/smoke-openai")" "provider redacted read"
@@ -117,6 +119,16 @@ x = json.load(open(sys.argv[1]))
 assert x['provider'].get('api_key', '') == '', x
 assert x.get('has_secret') is True, x
 PY
+
+# The UI must never retrieve a saved key. Verify preservation only on local disk.
+python3 - "$TMP/config.json" <<'PYSECRET'
+import json, os, sys
+cfg = json.load(open(sys.argv[1]))
+p = next(p for p in cfg['providers'] if p['id'] == 'smoke-openai')
+assert p['api_key'] == 'secret-one'
+assert p['name'] == 'Smoke Renamed'
+assert os.stat(sys.argv[1]).st_mode & 0o777 == 0o600
+PYSECRET
 
 expect_status 200 "$(status DELETE "$BASE/admin/api/providers/smoke-openai")" "provider delete"
 

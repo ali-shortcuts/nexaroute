@@ -1143,3 +1143,43 @@ func TestRetryAfterCapReloadRebuildsProviderAdapter(t *testing.T) {
 		t.Fatal("retry-after cap change reused adapter with stale retry policy")
 	}
 }
+
+func TestSavedProviderCredentialsAreWriteOnly(t *testing.T) {
+	t.Setenv("WRITE_ONLY_TEST_KEY", "environment-secret")
+	cfg := config.Default()
+	cfg.Probe.Enabled = false
+	cfg.Admin.BindLocalOnly = false
+	cfg.Providers = []config.ProviderConfig{{ID: "private", Type: "openai_compatible", BaseURL: "http://127.0.0.1:9/v1", APIKey: "primary-secret", APIKeyEnv: "WRITE_ONLY_TEST_KEY", AuthMode: "bearer", Headers: map[string]string{"X-Token": "header-secret"}, ProxyURL: "http://user:proxy-secret@127.0.0.1:9998", Credentials: []config.CredentialConfig{{Name: "extra", APIKey: "pool-secret", Enabled: true}}, Models: []config.ModelConfig{{ID: "m", Model: "m", Enabled: true, Weight: 1}}}}
+	s := testGateway(t, cfg)
+	for _, path := range []string{"/admin/api/providers/private", "/admin/api/providers/private?reveal=1", "/admin/api/providers/private?reveal=true", "/admin/api/providers", "/admin/api/snapshot"} {
+		rr := httptest.NewRecorder()
+		req := httptest.NewRequest("GET", "http://localhost"+path, nil)
+		req.RemoteAddr = "127.0.0.1:12345"
+		s.Handler().ServeHTTP(rr, req)
+		if rr.Code != 200 {
+			t.Fatalf("%s: %d %s", path, rr.Code, rr.Body.String())
+		}
+		for _, secret := range []string{"primary-secret", "environment-secret", "pool-secret", "header-secret", "proxy-secret", "resolved_api_key"} {
+			if strings.Contains(rr.Body.String(), secret) {
+				t.Fatalf("%s leaked %s", path, secret)
+			}
+		}
+	}
+	// Redacting a read must not mutate live configuration or credential slices.
+	got := s.currentConfig().Providers[0]
+	if got.APIKey != "primary-secret" || got.Credentials[0].APIKey != "pool-secret" || got.Headers["X-Token"] != "header-secret" {
+		t.Fatal("read mutated saved secrets")
+	}
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest("PUT", "http://localhost/admin/api/providers/private", strings.NewReader(`{"provider":{"id":"private","name":"Renamed","type":"openai_compatible","base_url":"http://127.0.0.1:9/v1","auth_mode":"bearer","enabled":false,"models":[]},"preserve_secret":true,"preserve_headers":true,"preserve_proxy":true}`))
+	req.RemoteAddr = "127.0.0.1:12345"
+	req.Header.Set("Content-Type", "application/json")
+	s.Handler().ServeHTTP(rr, req)
+	if rr.Code != 200 {
+		t.Fatalf("%d %s", rr.Code, rr.Body.String())
+	}
+	got = s.currentConfig().Providers[0]
+	if got.APIKey != "primary-secret" || got.Credentials[0].APIKey != "pool-secret" || got.Headers["X-Token"] != "header-secret" || !strings.Contains(got.ProxyURL, "proxy-secret") {
+		t.Fatal("edit lost saved secrets")
+	}
+}
