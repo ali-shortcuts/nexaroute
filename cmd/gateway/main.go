@@ -247,7 +247,7 @@ func openExistingUI(url string, output io.Writer) {
 		return
 	}
 	if browser, err := desktop.OpenBrowser(url, nil, nil); err != nil {
-		fmt.Fprintf(output, "Dashboard: %s (browser unavailable: %v)\n", url, err)
+		fmt.Fprintf(output, "NexaRoute is already running. Dashboard: %s (browser unavailable: %v)\n", url, err)
 	} else {
 		fmt.Fprintf(output, "NexaRoute is already running; opened dashboard with %s: %s\n", browser, url)
 	}

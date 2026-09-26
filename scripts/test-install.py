@@ -74,7 +74,9 @@ shutil.copyfile(pathlib.Path(os.environ["TEST_FIXTURE"]) / url.rsplit("/", 1)[1]
                PATH=f"{dest}:{tools}:/usr/local/bin:/usr/bin:/bin", NEXAROUTE_INSTALL_DIR=str(dest),
                TEST_FIXTURE=str(fixture), TEST_URL_LOG=str(tmp / "downloads"), DISPLAY="", WAYLAND_DISPLAY="")
     def install(extra=None, ok=True):
-        result = subprocess.run(["bash"], input=(ROOT / "install-user.sh").read_text(),
+        # Exercise the exact canonical script copied into every GitHub Release.
+        # Feeding it on stdin also proves the documented curl | bash mode.
+        result = subprocess.run(["bash"], input=(ROOT / "scripts/install.sh").read_text(),
                                 env=env | (extra or {}), text=True, capture_output=True)
         check((result.returncode == 0) == ok, result.stdout + result.stderr)
         return result
@@ -126,7 +128,9 @@ shutil.copyfile(pathlib.Path(os.environ["TEST_FIXTURE"]) / url.rsplit("/", 1)[1]
         check(cfg.parent.stat().st_mode & 0o777 == 0o700, "private config directory")
         check(not (tmp / "config.json").exists(), "working-directory config created")
         duplicate = subprocess.run(["nexaroute"], env=env, capture_output=True, text=True, timeout=3)
-        check(duplicate.returncode != 0 and "already running" in duplicate.stderr, duplicate.stderr)
+        check(duplicate.returncode == 0 and "already running" in duplicate.stdout.lower(),
+              duplicate.stdout + duplicate.stderr)
+        check(proc.poll() is None, "duplicate launch disturbed the running gateway")
         # A separate config cannot take over the same listening address either.
         other = subprocess.run(["nexaroute", "-config", str(tmp / "other.json")], env=env, capture_output=True, text=True, timeout=3)
         check(other.returncode != 0 and "cannot listen" in other.stderr, other.stderr)

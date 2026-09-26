@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/ali-shortcuts/nexaroute/internal/config"
@@ -196,6 +198,10 @@ type hedgeAttemptBundle struct {
 	a       providers.Adapter
 	payload []byte
 	nm      *translate.NameMap
+	// buildErr is safe, bounded context for an unsupported cross-protocol
+	// mapping. It is returned to the ingress handler instead of silently
+	// reducing the request to a generic "payload could not be built" failure.
+	buildErr error
 	// injected marks that stream_options include_usage was added to an
 	// OpenAI-compatible payload on behalf of an Anthropic client (so a 400
 	// mentioning the option can be retried without it).
@@ -268,6 +274,19 @@ func (s *Server) doAttemptWithHedge(
 	return out, winner, out.hedgeLaunched
 }
 
+const maxProtocolMappingErrorBytes = 512
+
+func boundedProtocolMappingError(err error) error {
+	if err == nil {
+		return nil
+	}
+	message := strings.TrimSpace(err.Error())
+	if len(message) > maxProtocolMappingErrorBytes {
+		message = message[:maxProtocolMappingErrorBytes] + "..."
+	}
+	return fmt.Errorf("unsupported protocol mapping: %s", message)
+}
+
 // buildOpenAIAttempt prepares one attempt for the OpenAI ingress pipeline:
 // passthrough for OpenAI-compatible targets, translation for
 // Anthropic-compatible targets.
@@ -302,7 +321,8 @@ func (s *Server) buildOpenAIAttempt(cand router.Scored, req router.Requirement, 
 		}
 	}
 	if err != nil {
-		return hedgeAttemptBundle{}, false
+		bundle.buildErr = boundedProtocolMappingError(err)
+		return bundle, false
 	}
 	return bundle, true
 }
@@ -321,7 +341,8 @@ func (s *Server) buildAnthropicAttempt(cand router.Scored, req router.Requiremen
 	case "gemini", "openai_responses":
 		canReq, derr := canonical.DecodeAnthropicRequest(in, in.Model)
 		if derr != nil {
-			return hedgeAttemptBundle{}, false
+			bundle.buildErr = boundedProtocolMappingError(derr)
+			return bundle, false
 		}
 		bundle, ok := s.finishCanonicalAttempt(bundle, canReq)
 		if !ok {
@@ -345,7 +366,8 @@ func (s *Server) buildAnthropicAttempt(cand router.Scored, req router.Requiremen
 		}
 	}
 	if err != nil {
-		return hedgeAttemptBundle{}, false
+		bundle.buildErr = boundedProtocolMappingError(err)
+		return bundle, false
 	}
 	return bundle, true
 }

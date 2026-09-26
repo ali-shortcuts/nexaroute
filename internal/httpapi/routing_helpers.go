@@ -157,6 +157,41 @@ func retryAfterDuration(h http.Header, max time.Duration) time.Duration {
 	return fallback
 }
 
+// retryAfterResponseValue validates and bounds an upstream Retry-After value
+// before exposing it to a client. It deliberately emits delta-seconds so an
+// untrusted upstream cannot inject arbitrary header text or an unbounded wait.
+func retryAfterResponseValue(h http.Header, max time.Duration) string {
+	v := strings.TrimSpace(h.Get("Retry-After"))
+	if v == "" {
+		return ""
+	}
+	if sec, err := strconv.ParseInt(v, 10, 64); err == nil && sec >= 0 {
+		if max > 0 {
+			maxSec := int64(max / time.Second)
+			if maxSec < 1 {
+				maxSec = 1
+			}
+			if sec > maxSec {
+				sec = maxSec
+			}
+		}
+		return strconv.FormatInt(sec, 10)
+	}
+	t, err := http.ParseTime(v)
+	if err != nil {
+		return ""
+	}
+	d := time.Until(t)
+	if d < 0 {
+		d = 0
+	}
+	if max > 0 && d > max {
+		d = max
+	}
+	seconds := int64((d + time.Second - 1) / time.Second)
+	return strconv.FormatInt(seconds, 10)
+}
+
 func redactProviderBody(p config.ProviderConfig, b []byte) []byte {
 	out := append([]byte(nil), b...)
 	for _, key := range p.ResolvedCredentials() {

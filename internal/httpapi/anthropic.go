@@ -151,6 +151,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 	var lastStatus int
 	var lastBody []byte
 	var lastContentType string
+	var lastRetryAfter string
 	forward := copySelectedRequestHeaders(r)
 
 	attempts := 0
@@ -171,7 +172,11 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		c = fresh
 		primary, ok := s.buildAnthropicAttempt(c, reqEligible, raw, in)
 		if !ok {
-			lastErr = "attempt payload could not be built"
+			if primary.buildErr != nil {
+				lastErr = primary.buildErr.Error()
+			} else {
+				lastErr = "attempt payload could not be built"
+			}
 			continue
 		}
 		var nm *translate.NameMap
@@ -269,6 +274,10 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 			lastStatus = resp.StatusCode
 			lastBody = b
 			lastContentType = resp.Header.Get("Content-Type")
+			lastRetryAfter = ""
+			if resp.StatusCode == http.StatusTooManyRequests {
+				lastRetryAfter = retryAfterResponseValue(resp.Header, time.Duration(cfg.Routing.MaxRetryAfterSeconds)*time.Second)
+			}
 			lastErr = upstreamError(resp.StatusCode, b)
 			cls, policy := classifyFailure(resp.StatusCode, b)
 			if cls.CapabilityFailure {
@@ -300,6 +309,9 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "failover", Deployment: c.Deployment.ID, Message: fmt.Sprintf("HTTP %d; trying next eligible candidate", resp.StatusCode), StatusCode: resp.StatusCode})
 				s.retryPause(routeCtx, r.Header.Get("x-request-id"), cfg, attemptIndex, max)
 				continue
+			}
+			if lastRetryAfter != "" {
+				w.Header().Set("Retry-After", lastRetryAfter)
 			}
 			if c.Deployment.ProviderType == "anthropic_compatible" {
 				writeRawUpstreamError(w, lastStatus, lastContentType, lastBody)
@@ -435,6 +447,9 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if lastStatus > 0 && len(lastBody) > 0 {
+		if lastRetryAfter != "" {
+			w.Header().Set("Retry-After", lastRetryAfter)
+		}
 		writeRawUpstreamError(w, lastStatus, lastContentType, lastBody)
 		return
 	}
