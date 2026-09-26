@@ -85,6 +85,9 @@ func TestClaudeStableAnthropicRouteFailoverABCD(t *testing.T) {
 		if err := json.Unmarshal(rr.Body.Bytes(), &response); err != nil || response["type"] != "message" {
 			t.Fatalf("invalid Anthropic response: %s err=%v", rr.Body.String(), err)
 		}
+		if response["model"] != "nexa-stable" {
+			t.Fatalf("client response exposed physical model instead of stable route: %#v", response["model"])
+		}
 		return rr
 	}
 

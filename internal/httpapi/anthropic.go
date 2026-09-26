@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -328,7 +329,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 			}
 		case c.Deployment.ProviderType == "anthropic_compatible":
 			if in.Stream {
-				e = proxyNativeSSE(w, resp, "anthropic", func(prompt, completion int) {
+				e = proxyNativeSSEWithModel(w, resp, "anthropic", in.Model, func(prompt, completion int) {
 					s.usage.Record(c.Deployment.ID, int64(prompt), int64(completion))
 				})
 			} else {
@@ -337,6 +338,9 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 				resp.Body.Close()
 				if e == nil {
 					e = validateAnthropicResponseJSON(b)
+				}
+				if e == nil {
+					b, e = rewriteAnthropicResponseModel(b, in.Model)
 				}
 				if e == nil {
 					if p, ct, ok := extractAnthropicUsage(b); ok {
@@ -701,6 +705,10 @@ func (t *nativeSSETracker) finish() error {
 }
 
 func proxyNativeSSE(w http.ResponseWriter, resp *http.Response, protocol string, usageHooks ...func(prompt, completion int)) error {
+	return proxyNativeSSEWithModel(w, resp, protocol, "", usageHooks...)
+}
+
+func proxyNativeSSEWithModel(w http.ResponseWriter, resp *http.Response, protocol, publicModel string, usageHooks ...func(prompt, completion int)) error {
 	defer resp.Body.Close()
 	if !strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
 		return fmt.Errorf("expected text/event-stream from %s upstream", protocol)
@@ -709,22 +717,35 @@ func proxyNativeSSE(w http.ResponseWriter, resp *http.Response, protocol string,
 	w.WriteHeader(resp.StatusCode)
 	fl, _ := w.(http.Flusher)
 	tracker := &nativeSSETracker{protocol: protocol}
-	if len(usageHooks) > 0 && usageHooks[0] != nil {
+	if len(usageHooks) > 0 {
 		tracker.usageHook = usageHooks[0]
 	}
-	buf := make([]byte, 32<<10)
+	reader := bufio.NewReaderSize(resp.Body, 32<<10)
+	line := make([]byte, 0, 1024)
 	for {
-		n, err := resp.Body.Read(buf)
-		if n > 0 {
-			if terr := tracker.consume(buf[:n]); terr != nil {
+		fragment, err := reader.ReadSlice('\n')
+		if len(line)+len(fragment) > maxNativeSSELineBytes {
+			return fmt.Errorf("native SSE line exceeds %d bytes", maxNativeSSELineBytes)
+		}
+		line = append(line, fragment...)
+		if err == bufio.ErrBufferFull {
+			continue
+		}
+		if len(line) > 0 {
+			if terr := tracker.consume(line); terr != nil {
 				return terr
 			}
-			if _, werr := w.Write(buf[:n]); werr != nil {
+			out := line
+			if protocol == "anthropic" && publicModel != "" {
+				out = rewriteAnthropicSSEModelLine(line, publicModel)
+			}
+			if _, werr := w.Write(out); werr != nil {
 				return werr
 			}
 			if fl != nil {
 				fl.Flush()
 			}
+			line = line[:0]
 		}
 		if err != nil {
 			if err == io.EOF {
@@ -733,6 +754,67 @@ func proxyNativeSSE(w http.ResponseWriter, resp *http.Response, protocol string,
 			return err
 		}
 	}
+}
+
+func rewriteAnthropicResponseModel(body []byte, model string) ([]byte, error) {
+	if strings.TrimSpace(model) == "" {
+		return body, nil
+	}
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return nil, err
+	}
+	if envelope == nil {
+		return nil, fmt.Errorf("Anthropic response must be a JSON object")
+	}
+	encoded, err := json.Marshal(model)
+	if err != nil {
+		return nil, err
+	}
+	envelope["model"] = encoded
+	return json.Marshal(envelope)
+}
+
+func rewriteAnthropicSSEModelLine(line []byte, model string) []byte {
+	ending := []byte{}
+	content := line
+	if bytes.HasSuffix(content, []byte("\r\n")) {
+		ending, content = []byte("\r\n"), content[:len(content)-2]
+	} else if bytes.HasSuffix(content, []byte("\n")) {
+		ending, content = []byte("\n"), content[:len(content)-1]
+	}
+	trimmed := bytes.TrimLeft(content, " \t")
+	leading := content[:len(content)-len(trimmed)]
+	if !bytes.HasPrefix(trimmed, []byte("data:")) {
+		return line
+	}
+	data := bytes.TrimSpace(trimmed[len("data:"):])
+	var envelope map[string]json.RawMessage
+	if json.Unmarshal(data, &envelope) != nil {
+		return line
+	}
+	var typ string
+	if json.Unmarshal(envelope["type"], &typ) != nil || typ != "message_start" {
+		return line
+	}
+	var message map[string]json.RawMessage
+	if json.Unmarshal(envelope["message"], &message) != nil || message == nil {
+		return line
+	}
+	modelJSON, err := json.Marshal(model)
+	if err != nil {
+		return line
+	}
+	message["model"] = modelJSON
+	envelope["message"], err = json.Marshal(message)
+	if err != nil {
+		return line
+	}
+	encoded, err := json.Marshal(envelope)
+	if err != nil {
+		return line
+	}
+	return bytes.Join([][]byte{leading, []byte("data: "), encoded, ending}, nil)
 }
 
 type openAIToolStreamState struct {
