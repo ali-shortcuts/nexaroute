@@ -17,30 +17,32 @@ Existing probe defaults include 16 concurrent probes, a one-token output budget,
 
 The installer was syntax-checked but not exercised against a real published release. The old release workflow appears to be pinned to tag `v0.3`; release availability and latest asset names need verification before claiming installer readiness.
 
+## Follow-up implementation (checkpoint `287619a`, continuing)
+
+- Added `internal/desktop`: Linux advisory lock file (mode 0600, kernel-released/stale-safe), HTTP readiness polling, browser preference launcher, asynchronous process release, and headless GUI detection. `cmd/gateway` acquires lock per config, second invocation opens the existing UI instead of starting another server, and the first invocation waits for `/healthz` before browser launch. URL is printed when readiness/browser launch cannot be confirmed.
+- Added injectable browser launcher, lock ownership/recovery, and readiness unit tests.
+- Removed `?reveal=1` credential disclosure. Provider detail API now always strips literal and pooled credential values; UI edit keeps secrets server-side via existing `preserve_secret` mechanism. Added canary regression coverage for save response, provider GET including legacy reveal query, provider list, admin snapshot, metrics, persisted config and file permissions.
+- Added a 50/100/200 mock deployment concurrent probe acceptance test checking bounded concurrency, speed, synthetic prompt isolation, token budget, successful readiness and partial failures.
+
 ## Not completed / known gaps
 
-- `nexaroute` does not yet have the requested verified duplicate-process startup lock, ready-wait, and preferred automatic browser-launch flow. The gateway serves the local dashboard; no claim of auto-opening Chrome is made.
-- Startup probing is not confirmed to be fully non-blocking with the UI readiness requirement.
-- The UI's existing authorized credential visibility conflicts with the requested never-reveal-after-save requirement; it must be changed and tested.
-- The strict requested 200-deployment lifecycle test, exact A/B/C/D Claude Code failover E2E, fake-clock recovery/cooldown tests, and installation E2E were not added here.
-- Full requested protocol matrix is not established. OpenAI Responses API, multimodal and provider-specific fidelity remain bounded/documented gaps.
-- No benchmark results were collected. No PR/commit/push was made.
+- The exact A/B/C/D Anthropic failover E2E, max-attempt/deadline assertions, fake-clock five-probe recovery and cooldown-expiry E2E, and local artifact installer upgrade/start E2E remain to be completed.
+- No Linux binaries/checksums were built. No 50/100/200 benchmark results were collected.
+- The Go 1.23.x toolchain used by repository CI could not be obtained: `go.dev` TLS connections and Debian package mirrors fail in this sandbox, and no local Go binary exists. Therefore new code has not been compiled or run.
+- Full requested protocol matrix remains bounded as described in `KNOWN_GAPS.md`.
+- The requested branch `arena/nexaroute-runtime-finalization-v2` cannot be created/used in this session. Arena fixes this session to `arena/01a0dd9d-nexaroute`; work is checkpointed and pushed there instead.
 
 ## Verification results
 
 | Gate | Result |
 |---|---|
-| `bash -n scripts/install.sh` | PASS |
-| `git diff --check` | PASS |
-| `go test ./...` | NOT RUN: Go toolchain unavailable (`go: command not found`) |
-| `go test -race ./...` | NOT RUN: Go toolchain unavailable |
-| `./scripts/verify.sh` | BLOCKED: Go toolchain unavailable |
-| `./scripts/stress.sh` | BLOCKED: Go toolchain unavailable |
-| `./scripts/smoke-local.sh` | BLOCKED: expected built binary absent; Go unavailable |
-| fuzz, scale benchmarks, install E2E | NOT RUN |
-
-The requested final re-fetch found no `origin/arena/01a0dbf9-nexaroute` ref in the fetched remote refs (only `origin/main` was listed); therefore no Phase H integration update could be assessed. The checkout base itself is the supplied Phase H commit. A Go-enabled environment and confirmation of the release endpoint are required before mandatory gates can be evaluated.
+| `bash -n scripts/install.sh` | PASS at prior checkpoint |
+| `git diff --check` | PASS at prior checkpoint; rerun after follow-up changes pending |
+| Go tests / `go vet` / `gofmt` | BLOCKED: Go 1.23.x unavailable; outbound downloads/package mirrors fail |
+| verify/stress/smoke scripts | Previous attempts blocked (Go absent / no binary); must rerun when toolchain is available |
+| new desktop, privacy, probe scale tests | Added but NOT RUN |
+| exact failover/recovery/install tests, fuzz and benchmarks | NOT COMPLETED / NOT RUN |
 
 ## Final verdict
 
-**RUNTIME FINALIZATION: NOT READY.** Major requested runtime behaviors and the full regression gate remain unimplemented or unverified. The changes above are partial and must not be treated as a production release sign-off.
+**RUNTIME FINALIZATION: NOT READY.** Several previously identified runtime gaps now have implementations and tests, but the code has not been compiled, the full requested E2E scenarios and install verification are absent, and mandatory gates/benchmarks cannot be claimed.

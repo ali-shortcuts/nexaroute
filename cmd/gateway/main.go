@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/ali-shortcuts/nexaroute/internal/config"
+	"github.com/ali-shortcuts/nexaroute/internal/desktop"
 	"github.com/ali-shortcuts/nexaroute/internal/events"
 	"github.com/ali-shortcuts/nexaroute/internal/health"
 	"github.com/ali-shortcuts/nexaroute/internal/httpapi"
@@ -40,6 +42,45 @@ func defaultConfigPath() string {
 		return filepath.Join(base, "nexaroute", "config.json")
 	}
 	return "config.json"
+}
+
+func dashboardURL(listen string) string {
+	host, port, err := net.SplitHostPort(listen)
+	if err != nil {
+		return "http://127.0.0.1:8080/"
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = "127.0.0.1"
+	}
+	return "http://" + net.JoinHostPort(host, port) + "/"
+}
+
+func openExistingUI(url string, output io.Writer) {
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	if err := desktop.WaitReady(ctx, strings.TrimSuffix(url, "/")); err != nil {
+		fmt.Fprintf(output, "NexaRoute may already be starting. Dashboard: %s\n", url)
+		return
+	}
+	if browser, err := desktop.OpenBrowser(url, nil, nil); err != nil {
+		fmt.Fprintf(output, "Dashboard: %s (browser unavailable: %v)\n", url, err)
+	} else {
+		fmt.Fprintf(output, "NexaRoute is already running; opened dashboard with %s: %s\n", browser, url)
+	}
+}
+
+func startBrowserWhenReady(url string, output io.Writer) {
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	if err := desktop.WaitReady(ctx, strings.TrimSuffix(url, "/")); err != nil {
+		fmt.Fprintf(output, "Dashboard: %s (server readiness not confirmed: %v)\n", url, err)
+		return
+	}
+	if browser, err := desktop.OpenBrowser(url, nil, nil); err != nil {
+		fmt.Fprintf(output, "Dashboard: %s (browser unavailable: %v)\n", url, err)
+	} else {
+		fmt.Fprintf(output, "Opened NexaRoute dashboard with %s: %s\n", browser, url)
+	}
 }
 
 func ensureConfig(path string) error {
@@ -77,6 +118,16 @@ func main() {
 	if err != nil {
 		bootstrap.Fatal(err)
 	}
+	uiURL := dashboardURL(cfg.Listen)
+	processLock, acquired, err := desktop.Acquire(*configPath + ".lock")
+	if err != nil {
+		bootstrap.Fatalf("cannot acquire local gateway lock: %v", err)
+	}
+	if !acquired {
+		openExistingUI(uiURL, os.Stdout)
+		return
+	}
+	defer processLock.Close()
 
 	var logWriters []io.Writer
 	var logFile *logging.RotatingWriter
@@ -143,6 +194,7 @@ func main() {
 			cancel()
 		}
 	}()
+	startBrowserWhenReady(uiURL, os.Stdout)
 	if cfg.Probe.Enabled && cfg.Probe.OnStart {
 		result := pe.Prime(ctx)
 		logger.Printf("startup_probe total=%d ready=%d failed=%d cooldown=%d duration_ms=%d", result.Total, result.Passed, result.Failed, result.SkippedCooldown, result.DurationMS)
