@@ -568,21 +568,15 @@ func (s *Server) adminProviderByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		p := cfg.Providers[idx]
-		reveal := r.URL.Query().Get("reveal") == "1" || r.URL.Query().Get("reveal") == "true"
 		payload := map[string]any{
-			"provider":      p,
 			"secret_source": secretSource(p),
 			"has_secret":    len(p.ResolvedCredentials()) > 0,
 		}
-		if reveal {
-			payload["resolved_api_key"] = p.ResolvedAPIKey()
-		} else {
-			p.APIKey = ""
-			for i := range p.Credentials {
-				p.Credentials[i].APIKey = ""
-			}
-			payload["provider"] = p
+		p.APIKey = ""
+		for i := range p.Credentials {
+			p.Credentials[i].APIKey = ""
 		}
+		payload["provider"] = p
 		writeJSON(w, 200, payload)
 
 	case http.MethodPut:

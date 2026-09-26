@@ -9,11 +9,11 @@ import (
 )
 
 // AnthropicToOpenAI converts an Anthropic Messages request into an
-// OpenAI Chat Completions request. It never fails on exotic-but-valid content:
-// reasoning/thinking blocks are dropped (they cannot be replayed against
-// OpenAI upstreams), unknown Anthropic block types are dropped rather than
-// hard-failing the conversation, and tool names are sanitized through a
-// reversible NameMap so MCP-style names survive the round trip.
+// OpenAI Chat Completions request. Reasoning/thinking blocks are dropped
+// because they cannot be replayed against OpenAI upstreams; unknown block types
+// are rejected rather than silently changing request meaning. Tool names are
+// sanitized through a reversible NameMap so MCP-style names survive the round
+// trip.
 //
 // The returned *NameMap is nil when no tool name needed sanitizing; it must be
 // passed back to OpenAIResponseToAnthropic and the streaming translator so
@@ -102,11 +102,9 @@ func AnthropicToOpenAI(in core.AnthropicRequest, model string) (core.OpenAIReque
 				// failing the whole conversation (extended-thinking sessions
 				// legitimately contain these blocks in assistant history).
 			default:
-				// Unknown block types (server_tool_use, web_search_tool_result,
-				// document, code execution, future additions) are dropped so a
-				// conversation never dead-ends on a feature this gateway does
-				// not model. Structurally invalid tool blocks above still fail
-				// closed because dropping them would corrupt tool-call pairing.
+				// Cross-protocol translation must not silently discard content:
+				// the OpenAI dialect cannot represent unknown Anthropic blocks.
+				return out, nm, fmt.Errorf("unsupported Anthropic content block %q for OpenAI translation", b.Type)
 			}
 		}
 		if len(assistantCalls) > 0 {
@@ -155,7 +153,7 @@ func AnthropicToOpenAI(in core.AnthropicRequest, model string) (core.OpenAIReque
 			Function: core.OpenAIFunction{Name: nm.Forward(t.Name), Description: t.Description, Parameters: params},
 		})
 	}
-	applyAnthropicToolChoiceToOpenAI(&out, in.ToolChoice)
+	applyAnthropicToolChoiceToOpenAI(&out, in.ToolChoice, nm)
 	applyAnthropicThinkingToOpenAI(&out, in.Thinking)
 	applyAnthropicMetadataToOpenAI(&out, in.Metadata)
 	if len(out.Messages) == 0 {
@@ -237,7 +235,7 @@ func asSourceMap(v any) map[string]any {
 	return m
 }
 
-func applyAnthropicToolChoiceToOpenAI(out *core.OpenAIRequest, choice any) {
+func applyAnthropicToolChoiceToOpenAI(out *core.OpenAIRequest, choice any, names *NameMap) {
 	switch v := choice.(type) {
 	case string:
 		switch v {
@@ -265,6 +263,9 @@ func applyAnthropicToolChoiceToOpenAI(out *core.OpenAIRequest, choice any) {
 			}
 		case "tool":
 			if name, _ := v["name"].(string); name != "" {
+				if names != nil {
+					name = names.Forward(name)
+				}
 				out.ToolChoice = map[string]any{"type": "function", "function": map[string]any{"name": name}}
 			}
 		}

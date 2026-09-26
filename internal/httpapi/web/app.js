@@ -708,11 +708,10 @@ $('#pType').onchange = () => {
 };
 async function openEdit(id) {
   try {
-    const d = await api('/admin/api/providers/' + encodeURIComponent(id) + '?reveal=1'), p = d.provider;
-    // When the secret comes from an environment variable the resolved
-    // literal must stay out of the form: any keystroke in the field would
-    // flip preserve_secret off and persist the env secret into config.json.
-    p.api_key = d.secret_source === 'env' ? '' : (d.resolved_api_key || p.api_key || '');
+    const d = await api('/admin/api/providers/' + encodeURIComponent(id)), p = d.provider;
+    // Existing literal keys and credential pool values are never returned by
+    // the API. preserve_secret keeps them server-side unless the operator
+    // explicitly enters replacements.
     editor = {
       mode: 'edit', originalId: id, provider: p,
       detected: (p.models || []).map(m => m.model),

@@ -31,7 +31,7 @@ Cross-protocol guarantees (the "never dead-end" rules):
    responses.
 4. Malformed tool arguments are preserved via `{"_raw": ...}` objects instead
    of failing the request or silently vanishing.
-5. Unknown content block types are dropped, never fatal.
+5. Unknown content blocks are preserved on native-protocol passthrough where possible. Cross-protocol translation rejects blocks without a canonical equivalent instead of silently discarding user content.
 6. Usage propagation — include_usage injection, cache-token mapping in both
    directions, and `{}` padding for tools that stream no arguments.
 

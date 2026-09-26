@@ -45,12 +45,11 @@ Implemented:
 - credential rotation/failover/cooldown
 - rewritten config mode `0600`
 - secret-preserving provider edit
+- credentials stripped on all admin read surfaces (never revealed after save, even to admin GET / snapshot / metrics)
 
 Not implemented:
 
 - encrypted-at-rest secret vault / OS keyring integration
-
-The Web UI can reveal a resolved provider credential to an authorized local/admin user because edit visibility was an explicit project requirement. Do not expose that admin surface to untrusted networks.
 
 ## Admin security
 
