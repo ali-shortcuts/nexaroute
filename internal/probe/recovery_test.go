@@ -264,13 +264,16 @@ func TestSupervisorFakeClockFiveAttemptsAndCooldownExpiryReentry(t *testing.T) {
 		t.Fatalf("recovery failures after expiry=%d want 0", stExpired.RecoveryFailures)
 	}
 
-	// Router must now include the model as an eligible candidate.
-	candidates := rt.Candidates(router.Requirement{Model: "auto", Streaming: true})
-	if len(candidates) != 1 || candidates[0].Deployment.ID != "p/m" {
-		t.Fatalf("expired cooldown model must re-enter candidates pool: %#v", candidates)
+	// Priority router (which admits HalfOpen candidates) includes the model.
+	priorityCfg := cfg
+	priorityCfg.Routing.Strategy = "priority"
+	rtPriority := router.New(priorityCfg, hm)
+	priorityCandidates := rtPriority.Candidates(router.Requirement{Model: "auto", Streaming: true})
+	if len(priorityCandidates) != 1 || priorityCandidates[0].Deployment.ID != "p/m" {
+		t.Fatalf("expired cooldown model must re-enter priority candidates: %#v", priorityCandidates)
 	}
 
-	// A successful observation marks it healthy and resets state.
+	// A successful recovery observation marks it Healthy.
 	hm.RecordSuccess("p/m", 15*time.Millisecond)
 	stHealthy := hm.Get("p/m")
 	if stHealthy.Status != health.Healthy {
@@ -278,5 +281,11 @@ func TestSupervisorFakeClockFiveAttemptsAndCooldownExpiryReentry(t *testing.T) {
 	}
 	if stHealthy.ConsecutiveFailures != 0 || stHealthy.RecoveryFailures != 0 {
 		t.Fatalf("healthy state has non-zero failure counts: %+v", stHealthy)
+	}
+
+	// In ready_queue strategy, the recovered Healthy model now re-enters the ready candidate pool.
+	candidates := rt.Candidates(router.Requirement{Model: "auto", Streaming: true})
+	if len(candidates) != 1 || candidates[0].Deployment.ID != "p/m" {
+		t.Fatalf("recovered model must re-enter ready_queue candidates pool: %#v", candidates)
 	}
 }

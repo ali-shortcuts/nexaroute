@@ -91,23 +91,30 @@ PY
 
 CREATE='{"provider":{"id":"smoke-openai","name":"Smoke OpenAI","type":"openai_compatible","base_url":"http://127.0.0.1:19999/v1","api_key":"secret-one","auth_mode":"bearer","enabled":false,"models":[{"id":"m1","model":"model-1","enabled":true,"priority":10,"weight":1,"capabilities":{"streaming":true,"tools":true,"vision":false,"reasoning":false}}]},"preserve_secret":false}'
 expect_status 201 "$(status POST "$BASE/admin/api/providers" "$CREATE")" "provider create"
-expect_status 200 "$(status GET "$BASE/admin/api/providers/smoke-openai?reveal=1")" "provider reveal"
+expect_status 200 "$(status GET "$BASE/admin/api/providers/smoke-openai?reveal=1")" "provider get ignores reveal"
 python3 - "$TMP/resp" <<'PY'
 import json, sys
 x = json.load(open(sys.argv[1]))
+raw = open(sys.argv[1]).read()
 assert x['provider']['base_url'] == 'http://127.0.0.1:19999/v1', x
-assert x.get('resolved_api_key') == 'secret-one', x
+assert x.get('has_secret') is True, x
+assert x.get('resolved_api_key') in (None, '', []), x
+assert 'secret-one' not in raw, raw
+assert x['provider'].get('api_key', '') == '', x
 PY
 
 UPDATE='{"provider":{"id":"smoke-openai","name":"Smoke Renamed","type":"openai_compatible","base_url":"http://127.0.0.1:19999/v1","auth_mode":"bearer","enabled":false,"models":[{"id":"m1","model":"model-1","enabled":true,"priority":10,"weight":1,"capabilities":{"streaming":true,"tools":true,"vision":false,"reasoning":false}}]},"preserve_secret":true}'
 expect_status 200 "$(status PUT "$BASE/admin/api/providers/smoke-openai" "$UPDATE")" "provider edit"
-expect_status 200 "$(status GET "$BASE/admin/api/providers/smoke-openai?reveal=1")" "provider re-open"
+expect_status 200 "$(status GET "$BASE/admin/api/providers/smoke-openai?reveal=1")" "provider re-open stays redacted"
 python3 - "$TMP/resp" <<'PY'
 import json, sys
 x = json.load(open(sys.argv[1]))
+raw = open(sys.argv[1]).read()
 assert x['provider']['name'] == 'Smoke Renamed', x
 assert x['provider']['base_url'] == 'http://127.0.0.1:19999/v1', x
-assert x.get('resolved_api_key') == 'secret-one', x
+assert x.get('has_secret') is True, x
+assert 'secret-one' not in raw, raw
+assert x.get('resolved_api_key') in (None, '', []), x
 PY
 
 expect_status 200 "$(status GET "$BASE/admin/api/providers/smoke-openai")" "provider redacted read"

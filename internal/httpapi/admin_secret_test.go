@@ -29,7 +29,7 @@ func TestProviderSecretsPersistButAreNeverReturnedByAdminSurfaces(t *testing.T) 
 		ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "http://127.0.0.1:9",
 		APIKey: primary, AuthMode: "bearer", Enabled: true,
 		Credentials: []config.CredentialConfig{{Name: "fallback", APIKey: secondary, Enabled: true}},
-		Models: []config.ModelConfig{{ID: "m", Model: "m", Enabled: true, Weight: 1}},
+		Models:      []config.ModelConfig{{ID: "m", Model: "m", Enabled: true, Weight: 1}},
 	}}
 	s := testGateway(t, cfg)
 

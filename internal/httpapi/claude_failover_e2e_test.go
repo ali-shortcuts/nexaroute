@@ -56,7 +56,8 @@ func TestClaudeStableAnthropicRouteFailoverABCD(t *testing.T) {
 		deployments = append(deployments, id)
 		cfg.Providers = append(cfg.Providers, config.ProviderConfig{
 			ID: "p" + name, Name: name, Type: "anthropic_compatible", BaseURL: servers[name].URL,
-			AuthMode: "none", Enabled: true,
+			ForwardHeaders: []string{"x-request-id"},
+			AuthMode:       "none", Enabled: true,
 			Models: []config.ModelConfig{{ID: "m", Model: "physical-" + name, Enabled: true, Priority: i, Weight: 1, Capabilities: config.Capabilities{Streaming: true, Tools: true}}},
 		})
 	}

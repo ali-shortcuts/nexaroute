@@ -33,7 +33,7 @@ func TestProbeSchedulerAt50_100_200Deployments(t *testing.T) {
 				if string(encoded) == "" || containsString(string(encoded), "USER_PROMPT_CANARY") {
 					t.Errorf("probe contains user prompt material")
 				}
-				calls.Add(1)
+				callNum := calls.Add(1)
 				n := active.Add(1)
 				for old := peak.Load(); n > old && !peak.CompareAndSwap(old, n); old = peak.Load() {
 				}
@@ -43,7 +43,7 @@ func TestProbeSchedulerAt50_100_200Deployments(t *testing.T) {
 					t.Errorf("probe path=%s", r.URL.Path)
 				}
 				w.Header().Set("Content-Type", "application/json")
-				if calls.Load()%19 == 0 {
+				if callNum%19 == 0 {
 					w.WriteHeader(http.StatusServiceUnavailable)
 					_, _ = w.Write([]byte(`{"error":"mock unavailable"}`))
 					return
@@ -112,4 +112,52 @@ func containsString(s, sub string) bool {
 		}
 		return false
 	}())
+}
+
+func benchmarkProbeScheduler(b *testing.B, count int) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"probe","choices":[{"message":{"role":"assistant","content":"ok"}}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`))
+	}))
+	defer up.Close()
+
+	cfg := config.Default()
+	cfg.Routing.Strategy = "ready_queue"
+	cfg.Probe.Enabled = true
+	cfg.Probe.OnStart = false
+	cfg.Probe.Concurrency = 32
+	cfg.Probe.MaxTokens = 1
+	cfg.Probe.CapabilityProbes = false
+	cfg.Probe.TimeoutMS = 3000
+	p := config.ProviderConfig{ID: "mock", Name: "Mock", Type: "openai_compatible", BaseURL: up.URL, AuthMode: "none", Enabled: true}
+	for i := 0; i < count; i++ {
+		p.Models = append(p.Models, config.ModelConfig{ID: fmt.Sprintf("m%03d", i), Model: fmt.Sprintf("model-%03d", i), Enabled: true, Weight: 1, Capabilities: config.Capabilities{Streaming: true}})
+	}
+	cfg.Providers = []config.ProviderConfig{p}
+	cfg.ApplyDefaults()
+	hm := health.New(cfg.Routing.FailureThreshold, cfg.Cooldown())
+	reg, err := providers.NewRegistry(cfg)
+	if err != nil {
+		b.Fatal(err)
+	}
+	rt := router.New(cfg, hm)
+	e := New(cfg, reg, rt, hm, events.New(count+10))
+	ctx := context.Background()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = e.runOnce(ctx, true)
+	}
+}
+
+func BenchmarkProbeScheduler_50(b *testing.B) {
+	benchmarkProbeScheduler(b, 50)
+}
+
+func BenchmarkProbeScheduler_100(b *testing.B) {
+	benchmarkProbeScheduler(b, 100)
+}
+
+func BenchmarkProbeScheduler_200(b *testing.B) {
+	benchmarkProbeScheduler(b, 200)
 }

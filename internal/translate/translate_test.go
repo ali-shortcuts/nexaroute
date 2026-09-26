@@ -457,8 +457,8 @@ func TestNamedToolChoiceUsesSanitizedName(t *testing.T) {
 	anthContent := json.RawMessage(`"run it"`)
 	anth := core.AnthropicRequest{
 		Model: "client", MaxTokens: 12,
-		Messages: []core.AnthMessage{{Role: "user", Content: anthContent}},
-		Tools: []core.AnthTool{{Name: "server.run", InputSchema: map[string]any{"type": "object"}}},
+		Messages:   []core.AnthMessage{{Role: "user", Content: anthContent}},
+		Tools:      []core.AnthTool{{Name: "server.run", InputSchema: map[string]any{"type": "object"}}},
 		ToolChoice: map[string]any{"type": "tool", "name": "server.run"},
 	}
 	openReq, _, err := AnthropicToOpenAI(anth, "physical")
@@ -476,7 +476,7 @@ func TestNamedToolChoiceUsesSanitizedName(t *testing.T) {
 
 	openReqIn := core.OpenAIRequest{
 		Model: "client", Messages: []core.OpenAIMessage{{Role: "user", Content: "go"}},
-		Tools: []core.OpenAITool{{Type: "function", Function: core.OpenAIFunction{Name: "server.run", Parameters: map[string]any{"type": "object"}}}},
+		Tools:      []core.OpenAITool{{Type: "function", Function: core.OpenAIFunction{Name: "server.run", Parameters: map[string]any{"type": "object"}}}},
 		ToolChoice: map[string]any{"type": "function", "function": map[string]any{"name": "server.run"}},
 	}
 	anthReq, _, err := OpenAIToAnthropic(openReqIn, "physical")
