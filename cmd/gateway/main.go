@@ -30,6 +30,15 @@ func defaultConfigPath() string {
 	if p := os.Getenv("NEXAROUTE_CONFIG"); p != "" {
 		return p
 	}
+	base := os.Getenv("XDG_CONFIG_HOME")
+	if base == "" {
+		if home, err := os.UserHomeDir(); err == nil && home != "" {
+			base = filepath.Join(home, ".config")
+		}
+	}
+	if base != "" {
+		return filepath.Join(base, "nexaroute", "config.json")
+	}
 	return "config.json"
 }
 
