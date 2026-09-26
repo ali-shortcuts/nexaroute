@@ -203,6 +203,7 @@ func (p *evaluationPlane) Retain(valid map[string]struct{}) {
 // Stats is the bounded observability view of the evaluation plane.
 type evaluationStats struct {
 	Enabled           bool                 `json:"enabled"`
+	LiveEnabled       bool                 `json:"live_enabled"`
 	JudgeRegistered   bool                 `json:"judge_registered"`
 	ImportPath        string               `json:"import_path,omitempty"`
 	StatePath         string               `json:"state_path,omitempty"`
@@ -224,6 +225,7 @@ func (p *evaluationPlane) Stats() evaluationStats {
 	cfg := p.config()
 	st := evaluationStats{
 		Enabled:           cfg.Enabled,
+		LiveEnabled:       cfg.Enabled && cfg.LiveEnabled,
 		JudgeRegistered:   len(p.runner.Evaluators().Judges()) > 0,
 		ImportPath:        cfg.ImportPath,
 		StatePath:         cfg.StatePath,

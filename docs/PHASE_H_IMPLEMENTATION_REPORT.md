@@ -2,143 +2,402 @@
 
 Date: 2026-09-26
 Branch: `arena/01a0dbf9-nexaroute`
-Baseline: `090e95e1eabfba1ecf7e4b0ffdcdff4a37d41651` ("Merge Phase G: Decision Provider Chains")
-Scope: Phase H only (Empirical Evaluation + Model Scorecards). Phases A–G untouched.
+Phase H baseline: `7bc67662118d56120da841c1e552e8a0c5e60396` ("Phase H offline-replay convergence")
+Scope: Phase H final convergence — **live physical-deployment evaluation**. Phases A–G untouched; Phase I not started.
 Design reference: `docs/PHASE_H_EVALUATION_AND_SCORECARDS.md`
+Current-state note: `docs/PHASE_H_CURRENT_STATE_NOTE.md`
 
-## 1. Deliverables
+---
 
-### New packages
+## 0. Verdict
 
-| File | Lines | Purpose |
+**PHASE H: PASS**
+
+Offline replay and live physical-deployment evaluation both ship, are both
+explicit and isolated, and Phase H still has zero production routing influence.
+
+---
+
+## 1. What this convergence added
+
+Phase H previously evaluated **recorded artifacts offline only**. The gap closed
+here is live evaluation of a specifically selected physical deployment, without
+turning Phase H into a routing feature.
+
+| Area | Before | After |
 |---|---|---|
-| `internal/scorecards/scorecards.go` | 950 | Provenance-mandatory scorecard model, 15 dimensions, confidence calibration, strict artifact import, bounded versioned registry |
-| `internal/eval/suite.go` | 253 | 8 expectation kinds, 8 versioned built-in suites, catalog + validation, bounds |
-| `internal/eval/evaluator.go` | 494 | Deterministic evaluators, disabled judge, resolver with deterministic-first precedence, bounded evaluator registry |
-| `internal/eval/runner.go` | 586 | Offline replay executor, bounded runner, decisive-only weighted scoring, scorecard conversion, evaluation-health namespace |
-| `internal/eval/store.go` | 154 | Bounded in-memory run store (≤ 512) with retention/aggregates |
+| Execution modes | replay only | `mode=replay` (offline) **and** `mode=live` (physical deployment) |
+| Upstream I/O | never | replay: never; live: one real request per prompted case |
+| DecisionProviders | not involved | still not involved — asserted at zero for live too |
+| Config gate | `evaluation.enabled` | `evaluation.enabled` **and** `evaluation.live_enabled` (both default `false`) |
 
-### New admin plane (httpapi)
+Replay is unchanged. `eval.ReplayExecutor` keeps its exact previous behaviour,
+semantics and bounds; it is simply now one of two explicit modes.
 
-| File | Lines | Purpose |
+---
+
+## 2. Live executor architecture
+
+### 2.1 Components
+
+| File | Lines | Role |
 |---|---|---|
-| `internal/httpapi/evaluation_plane.go` | 383 | Plane state, config application, import lifecycle, Retain, Stats, bounded admin views |
-| `internal/httpapi/admin_eval.go` | 419 | 4 GET + 1 POST endpoints, payload validation, event emission (no model outputs) |
-| `internal/httpapi/evaluation_state.go` | 184 | Optional durable state (version 1), strict whole-document load, atomic 0600 write, oldest-run trimming |
+| `internal/evallive/executor.go` | 320 | `LiveEvaluationExecutor` — the live `eval.Executor` |
+| `internal/providers/evaluation.go` | 382 | `EvaluationTwin` (isolated adapter clone), `LiveCapable`, `LiveComplete`, native request/response shaping |
+| `internal/httpapi/admin_eval.go` | +265 | `mode` handling, live validation, live run path, `live` response block |
+| `internal/config/config.go` | +7 | `EvaluationConfig.LiveEnabled` |
+| `internal/eval/runner.go` | +17 | `upstreamCalls(exec)` so a run record reports the real live upstream count |
+| `internal/providers/http_adapter.go` | +4 | `evaluationOnly` field on the adapter |
 
-### Modified
+### 2.2 Request flow
 
-- `internal/config/config.go` — `EvaluationConfig` (opt-in, bounded) + defaults/clamps/validation.
-- `internal/httpapi/server.go` — plane field/init, snapshot accessor, config-swap integration (`newEvaluationPlane` + `Retain(valid)`), 5 routes.
-- `internal/httpapi/admin.go` — `scorecards` + `evaluation` sections in the admin snapshot.
-- `internal/httpapi/metrics.go` — bounded Phase H metric families.
-- `internal/httpapi/helpers.go` — body/content-type limits reused by the evaluation endpoints.
-- `scripts/verify.sh` — adds the four Phase H fuzz targets to the short fuzz gate.
-- `scripts/stress.sh` — adds the bounded evaluation-plane stress member.
-- `configs/config.example.json`, `docs/CONFIGURATION.md` — documented `evaluation` section.
-- `docs/KNOWN_GAPS.md`, `ROADMAP.md` — Phase H boundaries and follow-ups recorded.
+```
+POST /admin/api/evaluation/run  {mode:"live", deployment_id, suite_id, prompts[]}
+   │
+   ├─ plane enabled? .................... no  → 409
+   ├─ evaluation.live_enabled? .......... no  → 409
+   ├─ suite exists? prompts valid? ...... no  → 400
+   ├─ deployment exists in registry? .... no  → 404
+   │
+   ├─ s.reg.Get(providerID)                    ← production adapter (read-only)
+   ├─ providers.EvaluationTwin(adapter)        ← isolated clone, shares transport
+   ├─ evallive.NewLiveEvaluationExecutor(...)  ← refuses a production adapter
+   │
+   └─ eval.Runner.RunWithExecutor(...)         ← UNCHANGED runner
+        └─ per case: LiveEvaluationExecutor.Execute
+              └─ providers.LiveComplete(ctx, twin, model, prompt, maxTokens)
+                    └─ twin.DoPath(POST, native path, native body)
+                          ⇒ same path resolution / auth / headers / transport
+                            as the data plane
+        └─ deterministic evaluators → verdicts → score → scorecard
+```
 
-### Tests
+### 2.3 Reuse, not a second client architecture
 
-| File | Top-level tests | Fuzz | Bench |
-|---|---|---|---|
-| `internal/scorecards/scorecards_test.go` | 21 | — | — |
-| `internal/scorecards/fuzz_test.go` | — | 2 | — |
-| `internal/eval/eval_test.go` | 28 (incl. always-on concurrency) | — | — |
-| `internal/eval/isolation_test.go` | 2 (structural guard + replay isolation) | — | — |
-| `internal/eval/fuzz_test.go` | — | 2 | — |
-| `internal/eval/bench_test.go` | — | — | 5 |
-| `internal/eval/stress_test.go` | 2 (1 gated by `NEXAROUTE_STRESS=1`) | — | — |
-| `internal/httpapi/evaluation_plane_test.go` | 11 end-to-end admin tests | — | — |
-| `internal/config/evaluation_config_test.go` | 4 (+10 rejection subtests) | — | — |
+There is exactly one provider adapter implementation in the repository
+(`providers.httpAdapter`), and live evaluation uses it:
 
-Test fixtures: `internal/scorecards/testdata/fuzz/FuzzImportJSON/714f8e84ca6cf0a5`
-is the preserved regression corpus entry from the empty-scorecard bug found by
-fuzzing (see §4).
+- the request body and path come from the adapter's own per-provider
+  conventions (`chat_path` / `messages_path` / `responses_path` /
+  Gemini `:generateContent`), the same ones `Probe` and the data plane use;
+- auth mode, forwarded headers, `anthropic-version`, the concurrency semaphore,
+  proxy and TLS settings and the HTTP transport are the adapter's;
+- the response is decoded against the provider's native shape
+  (OpenAI / Anthropic / Responses / Gemini).
 
-## 2. Requirement coverage
+No new OpenAI or Anthropic client type, no new transport, no parallel
+protocol stack was introduced.
 
-| Phase H requirement | Status | Evidence |
+### 2.4 Isolation by construction
+
+`providers.EvaluationTwin` returns a clone that **shares the production
+`http.Transport`** (connection pool, proxy, TLS) but owns **private copies** of
+every counter the data plane observes:
+
+| State | Production adapter | Evaluation twin |
 |---|---|---|
-| Scorecards with provenance for every value | PASS | `ErrNoProvenance` on empty provenance; `TestValidateValue_ProvenanceIsMandatory`, `TestValidateValue_ProvenanceRules`, `TestPhaseH_RunWritesProvenanceScorecard` asserts every admin row value carries `provenance`, `source`, `sample_count`, `evaluated_at` |
-| No fabrication | PASS | `TestNoFabrication_MissingDimensionStaysMissing`, `TestFromEvaluation_NoEvidenceNoScorecard`, `TestRunner_InsufficientSamplesProducesNoScorecard`, `TestPhaseH_ThinEvidenceWritesNoScorecard` (200 OK + `scorecard_written:false`, registry stays empty), `TestPhaseH_RunRejectsFabricationAndMutation`, `FuzzImportJSON` (empty scorecards rejected) |
-| Deterministic evaluator > judge precedence | PASS | `TestResolve_DeterministicAlwaysWins`, `TestRunner_JudgeCannotOverrideDeterministicVerdict`, `TestRunner_JudgeUsedOnlyWhenNoDeterministicVerdict`, `FuzzResolve_Verdicts` (random verdict mixes never let a judge override `pass`/`fail`) |
-| Imports are all-or-nothing | PASS | `ImportJSON` validates the whole artifact before anything is written; the plane adds a registry-capacity pre-check so an over-bound artifact is rejected before mutation (`TestPhaseH_ImportArtifactIsAllOrNothing`, `TestPhaseH_ImportRespectsRegistryBoundAtomically`) |
-| Evaluation isolation (no production health pollution) | PASS | `TestIsolation_ProductionFilesDoNotImportRoutingState` (dependency direction), `TestIsolation_ReplayExecutorMakesNoNetworkCalls`, `TestPhaseH_EvaluationDoesNotTouchRoutingOrUpstreams` (zero upstream calls, identical health snapshot, identical candidate order), `TestPhaseH_EventsAndRunsCarryNoModelOutputs` |
-| §16 scorecards + provenance | PASS | `internal/scorecards` package tests + admin surface tests |
-| §17/§18 evaluation engine + suites, deterministic-first | PASS | `internal/eval` package tests (suites, evaluators, runner, store, health) |
-| Scorecards must not change routing | PASS | structural guard + `reflect.DeepEqual` health/candidate assertions + no production import of the eval packages (verified by grep and by the guard test) |
+| transport / connection pool | shared | shared (that is the reuse) |
+| credentials (key material) | shared strings | **private cooldown / success state** |
+| quota accounting from response headers | production | **private** |
+| `active` / `waiting` gauges | production | **private semaphore + counters** |
+| rate-limit sequence counters | production | **private** |
 
-## 3. Gates actually executed
+`LiveComplete` and `NewLiveEvaluationExecutor` both **refuse** an adapter that is
+not evaluation-isolated. Passing the production adapter is a hard error, so
+"live evaluation accidentally used production state" cannot compile-and-pass;
+it fails.
 
-All commands below were run in this session on this branch, in this sandbox
-(Debian 12 x86_64, 2 vCPU, Go 1.23.9). Nothing in this section is projected.
+`internal/evallive` imports neither `internal/router`, nor `internal/health`,
+nor `internal/decision`, nor `internal/route`, nor `internal/probe`. It holds a
+four-field `Deployment` projection (`ID`, `ProviderID`, `Model`,
+`ProviderType`) and nothing else. `internal/eval` and `internal/scorecards`
+still import none of the routing packages, and the pre-existing structural
+guard test is unchanged and still passes.
+
+---
+
+## 3. Isolation guarantees
+
+Verified by tests, and every guarantee below is **mutation-checked**: the test
+was observed to fail when the guarantee was deliberately broken, and to pass
+again after the mutation was reverted (§7).
+
+| Production state | Live evaluation effect | Test |
+|---|---|---|
+| Model / deployment health (`health.Manager`) | untouched | `TestPhaseH_Live_HealthIsolationSuccessErrorAndTimeout` |
+| Circuits / cooldowns / quarantine | untouched | same |
+| Provider health incidents | untouched | same |
+| DecisionProvider health (`providerstate`) | untouched (no provider called) | `TestPhaseH_Live_ProviderCredentialAndQuotaIsolation` |
+| Provider credential cooldown & success marks | untouched | same |
+| Provider quota accounting (`remaining`/`limit`/`reserved`) | untouched | same |
+| Provider concurrency gauges (`active`/`waiting`) | untouched | same |
+| Session affinity pins | none created, moved or read | `TestPhaseH_Live_CreatesNoSessionAffinityState` |
+| Production response cache | never read, never written | `TestPhaseH_Live_NeverWritesProductionResponseCache` |
+| Production usage accounting | untouched | included in the health fingerprint |
+| Candidate ordering / routing metrics | untouched | `TestPhaseH_LiveScorecardsHaveZeroRoutingInfluence` |
+
+Both directions are covered: a **successful** live evaluation cannot improve
+production health, and a live evaluation against an **HTTP 500** or a
+**timeout** cannot degrade it. The health test snapshots a fully-populated
+fingerprint (deployment health, provider health, provider stats, session count,
+cache stats, usage) and requires it to be **byte-identical** before and after
+each of the three runs.
+
+---
+
+## 4. Real upstream test
+
+`TestPhaseH_Live_ExactlyOneUpstreamCallAndZeroDecisionProviderCalls`
+(`internal/httpapi/eval_live_test.go`) runs against a real `httptest` upstream.
+
+**Setup that makes the assertions falsifiable.** The gateway is configured in
+`hybrid` decision mode with a three-step chain (`jev-main` → `policy` → `local`).
+A production request is sent first and the test **fails if the three
+DecisionProvider counters are all zero**, because then the "zero calls"
+assertion would be vacuous.
+
+**Asserted results**
+
+| Assertion | Result |
+|---|---|
+| Selected physical deployment upstream calls | **exactly 1** (single prompted case) |
+| Non-selected deployment upstream calls | **0** (no fan-out, no fallback) |
+| LocalProvider calls | **0** |
+| PolicyProvider calls | **0** |
+| Jev provider calls | **0** |
+| Hybrid chain (`DecisionOrchestrator.MetricsSnapshot()`) | **0** movement on every metric |
+| New `decision_*` events | **0** |
+
+`TestPhaseH_Live_ResponseIsGradedAndCreatesScorecard` drives three live cases
+through a real upstream, asserts `upstream_calls == 3` (one per case), asserts
+the response is graded (`score == 1`), and asserts a scorecard is written with
+the `reasoning` quality dimension and measured `evaluation` provenance.
+
+---
+
+## 5. Health / cache / affinity isolation (detail)
+
+### 5.1 Health isolation
+
+`healthFingerprint` serialises deployment health, provider health, provider
+stats, session count, cache stats and usage into one string, sorted so the value
+is stable. The test performs:
+
+1. baseline (with two real `RecordSuccess` entries so the snapshot is not empty);
+2. a successful live run → fingerprint must be identical;
+3. a live run against an HTTP 500 upstream → identical (and the run is graded
+   `score == 0`);
+4. a live run against a timing-out upstream (`case_timeout_ms: 60`) → identical
+   (and graded `score == 0`).
+
+### 5.2 Cache isolation
+
+The live prompt is **byte-identical to the production request body**, so any
+evaluation write into the production response cache would surface as a `HIT`.
+After the live run, `cache.Stats()` shows `entries == 0` and `stores == 0`. The
+equivalent production request then **MISSes**, and a second identical request
+**HIT**s — proving both that the cache is enabled and that the MISS was real.
+
+### 5.3 Affinity isolation
+
+A production request with `X-Session-Id` first creates a real affinity pin (the
+test fails if `SessionCount() == 0`). After a live run, the full fingerprint
+including `SessionCount()` is unchanged and `PinnedDeploymentID` for that
+session key is unchanged.
+
+### 5.4 Provider credential and quota isolation
+
+An upstream that returns `429` with `Retry-After` and full `x-ratelimit-*`
+headers — exactly the response that moves production credential and quota state
+on the data plane — is driven by a live run. The production adapter's
+`credentials_cooling`, `remaining_tokens`, `token_limit`,
+`remaining_requests`, `request_limit`, `active_requests`, `waiting_requests`,
+`reserved_requests` and `reserved_tokens` are all unchanged.
+
+---
+
+## 6. Privacy canaries
+
+`TestPhaseH_Live_PrivacyCanaries`.
+
+### 6.1 Dataset canary — `SECRET_EVAL_DATASET_CANARY_7b91`
+
+Placed inside every live prompt. The test first **proves it reached the
+explicitly selected physical deployment** (the upstream received the requests),
+then asserts it appears in **none** of:
+
+- `/metrics`
+- `/admin/api/snapshot` (normal admin snapshot)
+- events snapshot
+- the evaluation run response
+- `/admin/api/evaluation/runs`
+- `/admin/api/scorecards`
+- `/admin/api/health`
+- gateway log output
+
+### 6.2 Provider credential canary — `SECRET_EVAL_PROVIDER_KEY_3f42`
+
+Configured as the provider's API key. The upstream deliberately returns
+HTTP 500 and **echoes the `Authorization` header in the error body**, so the
+canary is present in the failure payload. The test proves it was actually sent
+(`auth` header observed at the upstream), then asserts it appears in **none** of
+the same surfaces above, plus:
+
+- `decision.DecisionTrace`
+- routing events (every event in the bus is marshalled and checked)
+- model-health state (`hm.Snapshot()` and `hm.ProviderSnapshot()`)
+- scorecards (raw prompt content is not required, so it is not stored)
+- errors surfaced by the admin API
+
+Mechanism: `LiveComplete` never copies an upstream message into an
+`eval.Outcome`; failure details are reduced to a bounded `ErrorType`
+(`http_500`, `upstream_timeout`, `upstream_transport`, `empty_completion`).
+Transport errors pass through `httpAdapter.RedactBody` before they can reach a
+run record, event, metric or log line.
+
+---
+
+## 7. Routing neutrality
+
+`TestPhaseH_LiveScorecardsHaveZeroRoutingInfluence`:
+
+1. Send a production request; record `X-Gateway-Deployment`.
+2. Populate **extreme** scorecards into the live registry: `p1/m1` quality `1.0`
+   with 4096 samples, `p2/m2` quality `0.0` with 4096 samples. The test asserts
+   the registry really holds both.
+3. Send the **same** production request again; assert
+   `X-Gateway-Deployment` is identical.
+
+Additionally, a capturing PolicyProvider records the `DecisionRequest` it
+receives; the marshalled **candidate payload** is asserted to contain no
+`quality`, `scorecard`, `eval_score`, `dim_` or `confidence_score` field.
+Phase H does **not** add scorecard quality to PolicyProvider and does **not**
+send scorecards to Jev.
+
+Not implemented, as required: no scorecard-aware production routing, no shadow
+routing, no canary routing, no active quality weighting, no learned routing.
+
+### 7.1 Mutation checks (the isolation tests are not tautologies)
+
+Each mutation below was applied, the listed tests were observed to **fail**, and
+then the mutation was reverted and the tests observed to **pass** again.
+
+| Mutation | Test that caught it |
+|---|---|
+| `EvaluationTwin` returns the production adapter; `LiveComplete`/`LiveCapable` stop enforcing `evaluationOnly` | `TestPhaseH_Live_ProviderCredentialAndQuotaIsolation` |
+| Live path calls `hm.RecordSuccess(...)` | `TestPhaseH_Live_HealthIsolationSuccessErrorAndTimeout` |
+| Live path calls `rt.ObserveSession(...)` | `TestPhaseH_Live_CreatesNoSessionAffinityState` |
+| Live path calls `cacheStoreResponse(...)` | `TestPhaseH_Live_NeverWritesProductionResponseCache` |
+| Live path calls `decisionOrchestrator.Decide(...)` | `TestPhaseH_Live_ExactlyOneUpstreamCallAndZeroDecisionProviderCalls` (metric `decisions_total` moved 1 → 2) |
+
+---
+
+## 8. Gates actually executed
+
+Everything below was run in this session, on this branch, in this sandbox
+(Debian 12 x86_64, 2 vCPU, Go 1.23.9). Nothing here is projected. Go 1.23.9 was
+bootstrapped from source in the sandbox because `go.dev` and the module proxy
+are unreachable from it; the module has no external dependencies, so all
+commands ran with `GOPROXY=off`.
 
 | Gate | Command | Result |
 |---|---|---|
-| Formatting | `gofmt -l .` | no output (clean) |
+| Formatting | `gofmt -l .` | clean |
 | Vet | `go vet ./...` | clean |
-| Unit/integration (count=1) | `go test -count=1 -timeout=8m ./...` | 25 packages ok |
-| Unit/integration (CI shape) | `./scripts/verify.sh` (`-count=10 -shuffle=on`, race `-count=3`, 6 fuzz targets, 2 cross-builds) | **VERIFY PASS** — 3m21s, and again 2m11s after the final production-code change |
-| Race | `go test -race -count=1 -timeout=10m ./...` | 25 packages ok in 22.9s; re-exercised by `verify.sh -race -count=3` after the final change |
-| Fuzz | `go test -run='^$' -fuzz=<target> -fuzztime=3s ./internal/{eval,scorecards}/` | `FuzzResolve_Verdicts` 38,073 execs PASS; `FuzzRunner_Artifacts` 61,904 execs PASS; `FuzzImportJSON` 117,174 execs PASS; `FuzzValueValidation` 54,174 execs PASS |
-| Benchmarks | `go test -run='^$' -bench=. -benchmem ./internal/...` (whole repository, default benchtime) | all packages ok in 73s. Phase H: `Resolve_Verdicts 6.98 ns/op` (0 allocs), `ReplayExecutor 17.3 ns/op` (0 allocs), `Run/Coding 7.3 µs/op` (35 allocs), `Run/AllSuites 102 µs/op`, `HealthFromRuns 11.9 µs/op` |
-| Stress | `./scripts/stress.sh` (incl. new evaluation-plane member) | **STRESS PASS** in 3.6s |
-| Gated stress | `NEXAROUTE_STRESS=1 go test -count=1 -run='^TestStress' ./internal/eval/` | PASS in 0.14s (32 workers × 250 bounded runs, 60s budget) |
-| Smoke | `./scripts/smoke-local.sh` (prebuilt linux-amd64 binary) | **SMOKE PASS** |
+| Full gate | `./scripts/verify.sh` | **VERIFY PASS** |
+| Stress | `./scripts/stress.sh` | **STRESS PASS** |
+| Smoke | `./scripts/smoke-local.sh` | **SMOKE PASS** |
+| Race (required set) | `go test -race ./internal/eval/... ./internal/scorecards/... ./internal/httpapi ./internal/decision/... ./internal/router ./internal/route` | all packages ok |
+| Race (live package) | `go test -race ./internal/evallive/...` | ok |
+| Full suite | `go test ./...` | 26 packages ok |
 
-## 4. Findings and fixes during implementation
+### 8.1 `verify.sh` detail
 
-1. **Fuzzing found a real fabrication hole.** `FuzzImportJSON` produced a
-   scorecard with an empty `values` map that passed validation. Fix: `Validate`
-   now rejects a scorecard with no values ("no evidence, no scorecard"), and the
-   regression input is kept in `internal/scorecards/testdata/fuzz/`.
-2. **`Resolve` returned human-readable reasons as its category.** Metrics and
-   admin labels need bounded values, so `Resolve` now returns the stable
-   categories `deterministic` / `judge` / `none`; the human reason stays on
-   `VerdictResult.Reason`.
-3. **Hot reload could roll evidence back to a stale state file.** The plane now
-   remembers `loadedStatePath` and re-reads the state file only when
-   `evaluation.state_path` actually changes
-   (`TestPhaseH_ReloadKeepsEvidenceForLiveDeploymentsOnly` overwrites the state
-   file with an empty one, reloads, and proves memory is not rolled back).
-4. **A flaky isolation assertion.** The first version of
-   `TestPhaseH_EvaluationDoesNotTouchRoutingOrUpstreams` compared
-   `[]health.State` with `reflect.DeepEqual`; the health snapshot has
-   non-deterministic map-iteration order, so the test failed under
-   `verify.sh -count=10` despite the product being correct. Fixed by comparing
-   maps keyed by deployment ID — found only because the gate was actually run.
-5. **Import atomicity under a full registry.** `ImportJSON` already rejected a
-   malformed artifact wholesale, but a valid artifact could still be applied
-   halfway if the live registry filled up mid-loop. `loadImport` now performs a
-   capacity pre-check and refuses the artifact before writing anything
-   (`TestPhaseH_ImportRespectsRegistryBoundAtomically`), so an import is atomic
-   in every case.
-6. **Removed an inert knob.** The initial `evaluation.judge_enabled` config field
-   could not enable anything (Phase H ships no judge), so it was deleted rather
-   than documented as a lie.
+`verify.sh` now runs `gofmt`, shell syntax, `go test -count=10 -shuffle=on`,
+`go vet`, `go test -race -count=3 -shuffle=on`, **eight** short fuzz targets
+(the six pre-existing ones plus the two new live-evaluation targets), and
+linux amd64 + arm64 cross builds. Result: **VERIFY PASS**.
 
-## 5. Risk #9 (evaluation isolation) — how it is answered
+### 8.2 Fuzz results (30s per target, `GOMAXPROCS=2`)
 
-`docs/PHASE_A_CURRENT_STATE_REPORT.md` risk #9 asks that evaluation traffic be
-tagged so it cannot create data-plane quota reservations or health signals.
-Phase H answers it with a stronger property: **evaluation performs no data-plane
-traffic at all.** Artifacts are replayed offline through `ReplayExecutor`
-(`UpstreamCalls() == 0`); there is no in-band evaluation call, no quota
-reservation, no health signal, and no provider cooldown interaction. If a later
-phase introduces in-band evaluation, that phase must reintroduce the tagged-
-context mechanism for it.
+| Target | Execs | Result |
+|---|---|---|
+| `FuzzResolve_Verdicts` (`internal/eval`) | 453,945 | PASS |
+| `FuzzRunner_Artifacts` (`internal/eval`) | 918,421 | PASS |
+| `FuzzImportJSON` (`internal/scorecards`) | 618,490 | PASS |
+| `FuzzValueValidation` (`internal/scorecards`) | 662,021 | PASS |
+| `FuzzLiveExecutor_UpstreamResponse` (`internal/evallive`) | 32,537 | PASS |
+| `FuzzLiveExecutor_Prompts` (`internal/evallive`) | 6,661 | PASS |
 
-## 6. Boundaries (explicit)
+No crashers were written to any `testdata/fuzz` corpus.
 
-- Phase H never performs live model calls; `POST /admin/api/evaluation/run`
-  requires recorded artifacts and replays them offline (`upstream_calls == 0`).
-- No judge implementation is shipped. Deterministic evaluators decide; the
-  judge path exists and is proven never to override them.
-- Scorecards do not influence routing in any way.
-- Operator-defined suites and automatic telemetry ingestion are follow-ups
-  (recorded in `ROADMAP.md` / `docs/KNOWN_GAPS.md`), not Phase H.
-- Phase I was not started, per instruction.
-- The dashboard tab for scorecards/evaluation is Phase J work per
-  `docs/PHASE_A_CURRENT_STATE_REPORT.md`; Phase H exposes the admin API,
-  snapshot sections and metrics that Phase J will render.
+### 8.3 Benchmarks (`-benchtime=100x`)
+
+| Benchmark | ns/op | B/op | allocs/op |
+|---|---|---|---|
+| `BenchmarkResolve_Verdicts` (`internal/eval`) | 15.58 | 0 | 0 |
+| `BenchmarkReplayExecutor` (`internal/eval`) | 19.58 | 0 | 0 |
+| `BenchmarkRun_CodingSuite` (`internal/eval`) | 9,097 | 7,285 | 35 |
+| `BenchmarkRun_AllSuites` (`internal/eval`) | 108,327 | 101,196 | 553 |
+| `BenchmarkHealthFromRuns` (`internal/eval`) | 14,108 | 5,217 | 32 |
+| `BenchmarkLiveExecutor_Execute` (`internal/evallive`) | 83,006 | 13,524 | 182 |
+| `BenchmarkLiveExecutor_RunSuite` (`internal/evallive`, 3 live upstream calls) | 359,843 | 44,422 | 569 |
+| `BenchmarkLiveExecutor_PromptValidation` (`internal/evallive`) | 4,893 | 2,542 | 3 |
+
+The live numbers are dominated by real loopback HTTP through the shared
+transport; they are recorded so a regression in the live path is visible.
+
+---
+
+## 9. Test inventory added in this convergence
+
+| File | Tests |
+|---|---|
+| `internal/evallive/executor_test.go` | 9 (construction guards, one-call-per-case, missing prompt, HTTP failure graded, timeout graded, empty completion, runner integration producing a scorecard, prompt privacy at the executor boundary) |
+| `internal/evallive/fuzz_test.go` | 2 fuzz targets |
+| `internal/evallive/bench_test.go` | 3 benchmarks |
+| `internal/httpapi/eval_live_test.go` | 9 (real upstream + zero DecisionProvider calls, graded scorecard, health isolation for success/500/timeout, provider credential & quota isolation, cache isolation, affinity isolation, routing neutrality, privacy canaries, mode validation, opt-in gate) |
+
+Pre-existing Phase H tests were not weakened: replay still requires artifacts,
+still performs zero upstream I/O, and the disabled-plane behaviour is unchanged.
+
+---
+
+## 10. Documentation updates
+
+- `docs/PHASE_H_EVALUATION_AND_SCORECARDS.md` — new §2.4 "Execution modes"
+  (replay / live), §2.4.2 live architecture, an expanded §3 isolation contract
+  with a per-state table, updated HTTP surface and config sections, and a
+  rewritten non-goals list. The claim that Phase H performs no live model calls
+  was **removed** and replaced with an accurate statement of the two modes.
+- `docs/PHASE_H_CURRENT_STATE_NOTE.md` — "Offline replay, never live probing"
+  replaced by "Two explicit execution modes"; non-goals corrected; acceptance
+  table extended with the live isolation, zero-DecisionProvider and canary rows.
+- `docs/CONFIGURATION.md` — `evaluation.live_enabled` documented plus a new
+  "Evaluation modes" subsection.
+- `configs/config.example.json` — `evaluation.live_enabled: false`.
+- `internal/httpapi/admin.go` — the admin snapshot note now reads "Phase H
+  supports offline replay and opt-in live physical-deployment evaluation;
+  scorecards never change routing in Phase H".
+- `scripts/verify.sh` — the two live-evaluation fuzz targets added to the gate.
+
+---
+
+## 11. Boundaries (unchanged and enforced)
+
+- Replay mode still performs **zero** upstream I/O.
+- Live mode is opt-in twice (`evaluation.enabled` + `evaluation.live_enabled`),
+  per-request explicit (`"mode":"live"`), targets one explicit `deployment_id`,
+  and runs only when an admin posts it. No evaluation traffic on startup, none
+  on config reload, none automatically.
+- Live evaluation bypasses every DecisionProvider and cannot change production
+  health, affinity, cache, quota or routing state.
+- Scorecards still have **zero** production routing influence.
+- Phase I was not started: no scorecard-aware routing, no shadow routing, no
+  canary routing, no active quality weighting, no learned routing.
+
+---
+
+## 12. Final verdict
+
+**PHASE H: PASS**

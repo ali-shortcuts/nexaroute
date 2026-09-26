@@ -148,8 +148,15 @@ func (d DecisionProviderConfig) IsEnabled() bool {
 // never be written unless an operator configured or imported the evidence.
 //
 // The plane is observation-only in Phase H: nothing here changes routing.
+//
+// LiveEnabled is a second, independent switch. Enabling the plane only lets the
+// gateway grade evidence; enabling live evaluation is the separate operator
+// decision that allows the gateway to send real prompts to a physically selected
+// deployment. It is off unless it is explicitly turned on, and even then traffic
+// happens only when an admin POSTs a run with mode=live.
 type EvaluationConfig struct {
 	Enabled         bool    `json:"enabled,omitempty"`
+	LiveEnabled     bool    `json:"live_enabled,omitempty"`      // opt-in gate for live physical-deployment evaluation
 	MaxRuns         int     `json:"max_runs,omitempty"`          // bounded stored runs (memory + state file)
 	MaxScorecards   int     `json:"max_scorecards,omitempty"`    // bounded scorecard registry size
 	ImportPath      string  `json:"import_path,omitempty"`       // read-only scorecard artifact (JSON)

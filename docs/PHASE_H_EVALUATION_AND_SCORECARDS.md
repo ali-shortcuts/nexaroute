@@ -124,12 +124,59 @@ enables it.
 - `HealthFromRuns` produces an **evaluation-health namespace** that is separate
   from routing health and is never read by the router.
 
-### 2.4 Offline replay (isolation mechanism)
+### 2.4 Execution modes (one endpoint, two explicit modes)
+
+`POST /admin/api/evaluation/run` takes an explicit `mode`. There is no implicit
+mode and no fallback between them.
+
+| `mode` | Executor | Upstream I/O | Input | Notes |
+|---|---|---|---|---|
+| `replay` (default, and when `mode` is omitted) | `eval.ReplayExecutor` | **none** | `artifacts[]` (required) | Grades recorded evidence. `UpstreamCalls() == 0`. |
+| `live` | `evallive.LiveEvaluationExecutor` | **one real request per prompted case** | `deployment_id` (required) + `prompts[]` (required) | Measures one explicitly selected physical deployment. |
+
+A replay run that carries `prompts` is rejected; a live run that carries
+`artifacts` is rejected. The two modes are never mixed.
+
+#### 2.4.1 Offline replay (isolation mechanism)
 
 `ReplayExecutor` is constructed from recorded artifacts. It performs no I/O and
-reports `UpstreamCalls() == 0`. The HTTP run endpoint requires artifacts and
-returns `400` otherwise: Phase H never prompts a model, never probes an
-upstream, never spends quota, and cannot warm or poison production health.
+reports `UpstreamCalls() == 0`. Replay cannot prompt a model, probe an upstream,
+spend quota, or warm or poison production health.
+
+#### 2.4.2 Live physical-deployment evaluation
+
+Live evaluation answers a question replay cannot: *what does this deployment do
+right now?* It is measurement only, and it is deliberately the most constrained
+code path in Phase H.
+
+- **One explicit target.** The run carries `deployment_id`. The deployment must
+  already exist in the routing registry; it is read once, as identity
+  (`id`, `provider_id`, `model`, `provider_type`) and nothing else. No candidate
+  set is built, no eligibility check runs, no fallback exists.
+- **No DecisionProviders.** Live evaluation does not call `LocalProvider`,
+  `PolicyProvider`, any Jev provider, or any hybrid `DecisionProvider` chain. It
+  does not call the decision orchestrator at all.
+- **One call per case.** A prompted case produces exactly one upstream request.
+  There is no retry, no second candidate, no hedge. The run record reports the
+  real count in `upstream_calls`.
+- **Same adapter, isolated instance.** The request is built and dispatched by
+  the provider adapter that already serves the data plane — same path
+  resolution, same auth application, same headers, same HTTP transport. There is
+  no second OpenAI/Anthropic/Gemini client architecture. What *is* duplicated is
+  state: the call goes through an **evaluation twin**
+  (`providers.EvaluationTwin`) that shares the transport but owns private copies
+  of credential cooldowns, quota accounting and concurrency gauges.
+  `providers.LiveComplete` refuses to run against a production adapter, so
+  "isolation bypassed" is a hard error rather than a review convention.
+- **Failure is evidence.** A transport error, an HTTP error (recorded as
+  `http_<status>`), a timeout and an empty completion are all recorded and
+  graded like any other artifact. Nothing is retried and nothing is invented. A
+  case with no prompt produces a `missing` result, never a synthetic score.
+
+`internal/evallive` imports neither the router, nor the health manager, nor the
+decision plane, so it structurally cannot reach routing state. `internal/eval`
+still imports none of the routing packages either — the existing dependency
+guard is unchanged and still passes.
 
 ## 3. Isolation contract
 
@@ -145,21 +192,56 @@ Two independent mechanisms enforce that evaluation cannot influence routing:
    registry, run store and its own state file — never to health, router,
    provider, usage or cache state.
 
+Live evaluation adds a third mechanism, because it *does* perform I/O:
+
+3. **Evaluated traffic is structurally non-production.** A live run goes through
+   an evaluation twin of the provider adapter, never the production instance.
+   That single fact is what keeps the following true in both directions —
+   evaluation success cannot improve production health and evaluation failure
+   cannot degrade it:
+
+   | Production state | Live evaluation effect |
+   |---|---|
+   | Model / deployment health (`health.Manager`) | untouched (never read, never recorded) |
+   | Circuits, cooldowns, quarantine | untouched |
+   | DecisionProvider health (`providerstate`) | untouched (no provider is called) |
+   | Provider credential cooldown / success marks | untouched (twin has private credential state) |
+   | Provider quota accounting from response headers | untouched (twin has private counters) |
+   | Provider concurrency gauges (`active`/`waiting`) | untouched (twin has private semaphore) |
+   | Session affinity pins | untouched (no pin created, moved or read) |
+   | Production response cache | never read, never written |
+   | Candidate ordering / routing metrics | untouched |
+   | Production usage accounting | untouched |
+
+   Every row is asserted by a test that is mutation-checked: breaking isolation
+   makes the test fail (`docs/PHASE_H_IMPLEMENTATION_REPORT.md` §7).
+
 ## 4. HTTP surface (admin only)
 
 | Endpoint | Behaviour |
 |---|---|
 | `GET /admin/api/scorecards?limit=&deployment=` | Bounded rows (`limit ≤ 500`, default 50) with per-value provenance, quality coverage, provenance histogram; unknown deployment returns an empty list **plus a note**, never a score. |
 | `GET /admin/api/scorecards/{deployment_id}` | Single scorecard with version history; `404` when no evidence exists. |
-| `GET /admin/api/evaluation/suites` | Suite catalog, evaluator IDs, bounds, `judge_available: false`. |
+| `GET /admin/api/evaluation/suites` | Suite catalog, evaluator IDs, bounds, `judge_available: false`, `modes`, `live_enabled` and the live bounds. |
 | `GET /admin/api/evaluation/runs?limit=&run=` | Bounded run history (`limit ≤ 100`) plus the evaluation-health namespace. |
-| `POST /admin/api/evaluation/run` | Replays recorded artifacts, stores the run, writes a scorecard only when evidence is sufficient. |
+| `POST /admin/api/evaluation/run` | `mode=replay` (default) grades recorded artifacts; `mode=live` measures one physical deployment. Both store the run and write a scorecard only when evidence is sufficient. |
 
-`POST` payload: `suite_id`, `deployment_id`, `artifacts[]` (required), optional
-`provider_id`, `model`, `case_timeout_ms`, `latency_target_ms`, `ttft_target_ms`.
+`POST` payload:
+
+- shared: `suite_id`, `deployment_id` (required), `mode` (`replay` | `live`,
+  default `replay`), optional `provider_id`, `model`, `case_timeout_ms`,
+  `latency_target_ms`, `ttft_target_ms`;
+- `mode=replay`: `artifacts[]` (required, ≤ `evaluation.max_artifacts`);
+- `mode=live`: `prompts[]` (required, ≤ 512 entries, each `{case_id, prompt}`
+  with `prompt ≤ 64 KiB`), optional `max_output_tokens` (≤ 4096).
+
 Unknown JSON fields are rejected; the body is bounded at 4 MiB (413 over);
-`deployment_id` must exist and `provider_id`/`model` must match it; a disabled
-plane returns 409; too many artifacts (config bound) returns 400.
+`deployment_id` must exist and `provider_id`/`model` must match it; an unknown
+mode returns 400; a disabled plane returns 409; live mode with
+`evaluation.live_enabled = false` returns 409; a live prompt whose `case_id` is
+not in the named suite returns 400; too many artifacts or prompts returns 400.
+`mode=live` additionally reports a `live` block with the targeted deployment and
+the real `upstream_calls` count.
 
 The admin snapshot carries `scorecards` and `evaluation` sections, and the
 metrics endpoint exposes bounded families (counts by provenance and verdict,
@@ -174,6 +256,7 @@ status and verdict counts. **Model outputs never enter events.**
 {
   "evaluation": {
     "enabled": false,
+    "live_enabled": false,
     "max_runs": 64,
     "max_scorecards": 1024,
     "import_path": "",
@@ -188,6 +271,7 @@ status and verdict counts. **Model outputs never enter events.**
 | Field | Default | Bounds | Meaning |
 |---|---|---|---|
 | `enabled` | `false` | — | Opt-in. While false the plane accepts no runs and no imports; scorecards can never be written. |
+| `live_enabled` | `false` | — | Second, independent opt-in for **live** evaluation. While false, `mode=live` is refused with 409 and no prompt ever leaves the gateway. Setting it does not create traffic by itself: live calls happen only when an admin POSTs a run with `mode=live`. |
 | `max_runs` | `64` | 1–512 | Bounded retained runs (memory and state file). |
 | `max_scorecards` | `1024` | 1–4096 | Scorecard registry bound. |
 | `import_path` | `""` | ≤ 4096 bytes | Read-only scorecard artifact (JSON). Re-read on config reload; failures are reported, never partially applied. |
@@ -216,7 +300,12 @@ are never dropped to make room.
 
 - No routing influence of any kind in Phase H.
 - No judge implementation, no LLM-as-judge calls.
-- No live model calls, no network access, no prompt submission.
+- No replay-mode network access: `mode=replay` performs zero upstream I/O.
+- No *automatic* live traffic: `mode=live` runs only when an operator
+  explicitly posts a run, requires `evaluation.enabled` **and**
+  `evaluation.live_enabled`, and targets one explicitly named deployment.
+- No scorecard-aware routing, shadow routing, canary routing, active quality
+  weighting or learned routing — that is Phase I and was not started.
 - No operator-defined suites yet (catalog is built-in, versioned).
 - No telemetry ingestion pipeline yet (`FromTelemetry` exists as a validated
   constructor, but nothing feeds it automatically).

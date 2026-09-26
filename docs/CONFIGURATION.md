@@ -236,6 +236,7 @@ and, while disabled, accepts no runs and writes no scorecards.
 | Field | Default | Bounds | Meaning |
 |---|---|---|---|
 | `enabled` | `false` | — | Master switch. While false, `POST /admin/api/evaluation/run` returns 409 and no artifact is imported. |
+| `live_enabled` | `false` | — | Second, independent switch for **live** physical-deployment evaluation (`"mode":"live"`). While false, live runs return 409 and no prompt leaves the gateway. Turning it on creates no traffic by itself: live calls happen only when an admin posts a run with `"mode":"live"` and an explicit `deployment_id`. |
 | `max_runs` | `64` | 1–512 | Bounded retained evaluation runs (memory and state file). |
 | `max_scorecards` | `1024` | 1–4096 | Scorecard registry bound (deployments). |
 | `import_path` | `""` | ≤ 4096 bytes | Read-only scorecard artifact (JSON). Re-read on config reload; a malformed artifact is rejected as a whole and reported as `import_error`. |
@@ -244,9 +245,23 @@ and, while disabled, accepts no runs and writes no scorecards.
 | `latency_target_ms` | `0` | 0–600000 | Optional latency scoring target. A latency value is only produced when a target exists. |
 | `ttft_target_ms` | `0` | 0–600000 | Optional TTFT scoring target, same rule. |
 
+### Evaluation modes
+
+`POST /admin/api/evaluation/run` accepts an explicit `mode`:
+
+- `"mode":"replay"` (default) — grades recorded `artifacts[]`. Performs **no**
+  upstream I/O.
+- `"mode":"live"` — sends `prompts[]` to exactly one explicitly selected
+  physical deployment (`deployment_id`), one request per prompted case. Requires
+  `evaluation.enabled` **and** `evaluation.live_enabled`. It bypasses every
+  DecisionProvider and cannot change production health, affinity, cache, quota
+  or routing state. Prompts are inputs only: they are never written to run
+  records, scorecards, events, metrics or logs.
+
 ```json
 "evaluation": {
   "enabled": true,
+  "live_enabled": false,
   "max_runs": 64,
   "max_scorecards": 1024,
   "import_path": "/etc/nexaroute/scorecards.json",

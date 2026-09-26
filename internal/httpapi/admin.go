@@ -364,7 +364,7 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 			"state_writes_failed":       st.StateWritesFailed,
 			"verdict_counts":            evalPlane.verdictCounts(),
 			"health":                    evalPlane.evaluationHealthRows(50),
-			"note":                      "evaluation is offline replay; scorecards never change routing in Phase H",
+			"note":                      "Phase H supports offline replay and opt-in live physical-deployment evaluation; scorecards never change routing in Phase H",
 		}
 	}
 

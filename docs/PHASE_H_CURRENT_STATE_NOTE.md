@@ -54,12 +54,21 @@ deployment's behavior?* — and refuses to answer anything else.
    Deterministic evaluators always outrank a judge; the judge evaluator exists
    but is disabled and Phase H ships no judge implementation.
 
-3. **Offline replay, never live probing.**
-   `POST /admin/api/evaluation/run` accepts *recorded artifacts* (evidence
-   produced outside the request path) and replays them through a
-   `ReplayExecutor` whose `UpstreamCalls()` is always zero. Evaluation therefore
-   cannot consume provider quota, pollute model health, warm/age provider
-   cooldowns, or change candidate ordering.
+3. **Two explicit execution modes: offline replay and opt-in live evaluation.**
+
+   - `mode=replay` (default) accepts *recorded artifacts* (evidence produced
+     outside the request path) and replays them through a `ReplayExecutor`
+     whose `UpstreamCalls()` is always zero. Replay cannot consume provider
+     quota, pollute model health, warm/age provider cooldowns, or change
+     candidate ordering.
+   - `mode=live` targets exactly one explicitly selected physical deployment and
+     makes one real upstream request per prompted case. It is measurement only,
+     and it is isolated: the call goes through an evaluation twin of the
+     provider adapter (`providers.EvaluationTwin`) that shares the transport but
+     owns private credential, quota and concurrency state, and it consults no
+     DecisionProvider. Live mode requires `evaluation.enabled` **and**
+     `evaluation.live_enabled`; both default to `false`, so the gateway sends no
+     evaluation traffic on startup or on its own.
 
 4. **Admin surface, metrics and events.**
    Five admin endpoints (scorecard list/detail, suite catalog, run history,
@@ -77,9 +86,12 @@ deployment's behavior?* — and refuses to answer anything else.
   affect health/circuits, or gate failover.
 - No judge model calls and no LLM-as-judge scoring in the request path or the
   admin path.
-- No network access during evaluation: no upstream probes, no live model calls,
-  no prompt submission.
+- No network access in replay mode: no upstream probes, no live model calls,
+  no prompt submission (live mode is the documented, opt-in exception, and it
+  is explicit, isolated and DecisionProvider-free).
 - No invented values: insufficient evidence produces no value and no scorecard.
+- No Phase I behaviour: no scorecard-aware routing, shadow routing, canary
+  routing, active quality weighting or learned routing.
 
 ## Acceptance criteria (from `docs/PHASE_A_CURRENT_STATE_REPORT.md`, Phase H)
 
@@ -89,5 +101,8 @@ deployment's behavior?* — and refuses to answer anything else.
 | No fabrication (no evidence ⇒ no score) | `Value.Validate`, `FromEvaluation` skip rule, `Result.Scorecard()` `ok=false` | `TestFromEvaluation_NoEvidenceNoScorecard`, `TestRunner_InsufficientSamplesProducesNoScorecard`, `TestPhaseH_ThinEvidenceWritesNoScorecard` |
 | Deterministic evaluator > judge precedence | `eval.Resolve` | `TestResolve_DeterministicAlwaysWins`, `TestRunner_JudgeCannotOverrideDeterministicVerdict`, `FuzzResolve_Verdicts` |
 | Evaluation isolation (no production health pollution) | package dependency direction, `ReplayExecutor`, admin-only plane | `TestIsolation_*`, `TestPhaseH_EvaluationDoesNotTouchRoutingOrUpstreams` |
+| Live evaluation isolation | `providers.EvaluationTwin`, `evallive` package, admin live path | `TestPhaseH_Live_HealthIsolationSuccessErrorAndTimeout`, `TestPhaseH_Live_ProviderCredentialAndQuotaIsolation`, `TestPhaseH_Live_NeverWritesProductionResponseCache`, `TestPhaseH_Live_CreatesNoSessionAffinityState` |
+| Live evaluation calls zero DecisionProviders | live path never touches the orchestrator | `TestPhaseH_Live_ExactlyOneUpstreamCallAndZeroDecisionProviderCalls` |
+| Privacy canaries | prompt/credential canaries never reach metrics, snapshot, events, health, scorecards, admin APIs, errors or logs | `TestPhaseH_Live_PrivacyCanaries` |
 | §16 scorecards + provenance | `internal/scorecards` | package tests + HTTP admin tests |
 | §17/§18 evaluation engine + suites, deterministic-first | `internal/eval` | package tests + suite catalog tests |

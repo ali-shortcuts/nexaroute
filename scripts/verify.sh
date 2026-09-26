@@ -43,6 +43,8 @@ GOMAXPROCS=2 go test ./internal/eval -run='^$' -fuzz=FuzzResolve_Verdicts -fuzzt
 GOMAXPROCS=2 go test ./internal/eval -run='^$' -fuzz=FuzzRunner_Artifacts -fuzztime=2s -parallel=2
 GOMAXPROCS=2 go test ./internal/scorecards -run='^$' -fuzz=FuzzImportJSON -fuzztime=2s -parallel=2
 GOMAXPROCS=2 go test ./internal/scorecards -run='^$' -fuzz=FuzzValueValidation -fuzztime=2s -parallel=2
+GOMAXPROCS=2 go test ./internal/evallive -run='^$' -fuzz=FuzzLiveExecutor_UpstreamResponse -fuzztime=2s -parallel=2
+GOMAXPROCS=2 go test ./internal/evallive -run='^$' -fuzz=FuzzLiveExecutor_Prompts -fuzztime=2s -parallel=2
 
 echo '== linux amd64 build =='
 mkdir -p bin

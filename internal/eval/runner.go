@@ -455,10 +455,21 @@ func (r *Runner) RunWithExecutor(ctx context.Context, req Request, exec Executor
 	finished := r.now()
 	res.FinishedAt = finished
 	res.DurationMS = finished.Sub(started).Milliseconds()
-	if r, ok := exec.(*ReplayExecutor); ok {
-		res.Upstream = r.UpstreamCalls()
-	}
+	res.Upstream = upstreamCalls(exec)
 	return res, nil
+}
+
+// upstreamCalls reports how many real upstream requests an executor made.
+//
+// Replay reports a constant zero because it performs no I/O. A live executor
+// reports its real count, so a run record always states whether evidence came
+// from recorded artifacts or from a physical deployment.
+func upstreamCalls(exec Executor) int {
+	type upstreamCounter interface{ UpstreamCalls() int }
+	if u, ok := exec.(upstreamCounter); ok {
+		return u.UpstreamCalls()
+	}
+	return 0
 }
 
 func clamp01(v float64) float64 {
