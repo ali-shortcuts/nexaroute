@@ -30,7 +30,7 @@ The installer was syntax-checked but not exercised against a real published rele
 - Added an injected-clock recovery test covering exactly five failures, exact 30-minute expiry, route exclusion during cooldown, scheduler requalification after a 30-minute fake advance, and return to the candidate pool. Existing recovery coverage tests recovery on the third probe. These additions have not run without Go.
 - Added and ran an offline release-style installer E2E using local assets/curl shim: checksum verification, executable install, no Go requirement, config directory creation, and upgrade config preservation pass. It does not run the real gateway binary or cover arm64; those remain incomplete.
 - Added local scheduler acceptance cases plus `BenchmarkProbeSchedulerAtScale` and `BenchmarkRoutingCandidatesAtScale` for 50/100/200, but none have been run. No Linux binaries/checksums were built and no benchmark results were collected.
-- The Go 1.23.x toolchain used by repository CI could not be obtained: `go.dev` TLS connections and Debian package mirrors fail in this sandbox, and no local Go binary exists. Therefore new code has not been compiled or run.
+- The Go 1.23.x toolchain used by repository CI could not be obtained: `go.dev` TLS connections and Debian package mirrors fail in this sandbox, and no local Go binary exists. Therefore new Go code has not been compiled or tested. A GitHub Actions workflow dispatch was also attempted and denied with HTTP 403, so it could not serve as a remote test runner.
 - Full requested protocol matrix remains bounded as described in `KNOWN_GAPS.md`.
 - The requested branch `arena/nexaroute-runtime-finalization-v2` cannot be created/used in this session. Arena fixes this session to `arena/01a0dd9d-nexaroute`; work is checkpointed and pushed there instead.
 
@@ -44,8 +44,10 @@ The installer was syntax-checked but not exercised against a real published rele
 | Go tests / `go vet` / `gofmt` | BLOCKED: Go 1.23.x unavailable; outbound downloads/package mirrors fail. All requested commands were attempted and returned `command not found`. |
 | verify/stress/smoke scripts | Previous attempts blocked (Go absent / no binary); must rerun when toolchain is available |
 | new desktop, privacy, probe scale tests | Added but NOT RUN |
-| exact failover/recovery/install tests, fuzz and benchmarks | NOT COMPLETED / NOT RUN |
+| exact A/B/C/D failover and fake-clock recovery tests | Added but NOT RUN |
+| offline installer test | PASS; real built-binary/arm64 installer E2E NOT RUN |
+| fuzz campaigns and 50/100/200 benchmarks | NOT RUN |
 
 ## Final verdict
 
-**RUNTIME FINALIZATION: NOT READY.** Several previously identified runtime gaps now have implementations and tests, but the code has not been compiled, the full requested E2E scenarios and install verification are absent, and mandatory gates/benchmarks cannot be claimed.
+**RUNTIME FINALIZATION: NOT READY.** Browser/process protection, credential hiding, local 50/100/200 probe acceptance, A/B/C/D failover, fake-clock recovery and offline installer coverage have implementations/tests, but Go code could not be compiled or run. Real Linux binaries, arm64 and real-binary installer E2E, full mandatory gates, fuzz campaigns and benchmark results remain unverified; no PASS claim is justified.

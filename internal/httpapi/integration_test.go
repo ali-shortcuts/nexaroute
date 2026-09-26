@@ -82,6 +82,9 @@ func TestAnthropicNativePreservesUnknownFieldsAndBetaHeader(t *testing.T) {
 	if clientResponse["model"] != "client-model" {
 		t.Fatalf("response exposed physical model instead of stable client model: %#v", clientResponse["model"])
 	}
+	if clientResponse["usage"] == nil || clientResponse["content"] == nil {
+		t.Fatalf("model rewrite damaged Anthropic response semantics: %#v", clientResponse)
+	}
 }
 
 func TestCountTokensUsesNativeAnthropicEndpoint(t *testing.T) {
