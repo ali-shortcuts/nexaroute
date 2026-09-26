@@ -15,13 +15,14 @@ candidatesForRequirement(req, protocol):
   ↓
 task_classified event
   ↓
-[Decision Plane seam] — after E, before cache/execution
-  - decisionCandidates() → []decision.Candidate (PoolID, PoolOrdinal, Priority, RouterScore, Health, CapacityPressure, Cost, ContextWindow, Capabilities, OriginalRank)
-  - PinnedCandidateID via router.PinnedDeploymentID(req)
-  - Constraints = ComputePrimaryConstraints(E, pinnedID) // Allowed, Forced, fallback boundary, priority band, affinity
-  - Orchestrator.Decide or ChainExecutor.Execute: produces orderedCandidates (same elements as E, reordered) + DecisionResult + ChainTrace
+[Decision Plane seam] — after E, after cache check (Phase G: cache-before-decision)
+  - On HIT: `Cache.Get(req)` → serve directly, `X-Cache: HIT`, zero DecisionProvider calls, no ChainExecutor
+  - On MISS: decisionCandidates() → []decision.Candidate (PoolID, PoolOrdinal, Priority, RouterScore, Health, CapacityPressure, Cost, ContextWindow, Capabilities, OriginalRank)
+    PinnedCandidateID via router.PinnedDeploymentID(req)
+    Constraints = ComputePrimaryConstraints(E, pinnedID)
+    ChainExecutor.Execute: orderedCandidates + DecisionResult + ChainTrace
   ↓
-cache lookup (key includes orderedCandidates IDs), maxAttempts loop, execution
+cache store (on MISS), maxAttempts loop, execution (openai_responses: no cache path)
 ```
 
 Router remains eligibility owner, does NOT import decision. DecisionRequest remains privacy-safe: TaskProfile+Features+Candidate snapshot+VE/route/pool IDs+Budget+RequestID, no raw prompt, no secrets, no headers, no PII.
@@ -48,7 +49,7 @@ Router remains eligibility owner, does NOT import decision. DecisionRequest rema
 - **Privacy**: DecisionRequest remains metadata_only; secret canaries (prompt, header, body) never appear in chain events, metrics, admin snapshot, X-Gateway-Decision-Trace header, or upstream payloads. Remote transport already redacts.
 
 ### 4. Integration: hybrid E2E
-- Hybrid mode selects chain per request, executes via ChainExecutor before cache. Cache key includes orderedCandidates, so decision ordering is cached; second identical request hits cache with zero decision provider calls. Decision result reorders candidates: only selected primary moves to front, remainder preserves original router order (existing failover order preserved, never reordered by RANK).
+- Hybrid mode selects chain per request, executes via ChainExecutor only on cache MISS (cache lookup is before decision). Cache key includes orderedCandidates IDs and decision ordering is cached; second identical request is HIT with zero DecisionProvider calls (`X-Cache: HIT`). Only selected primary moves to front, remainder preserves original router order (never reordered by RANK). openai_responses has no cache path.
 - Fallback chains preserved: decision selection respects `AllowedIDs` (pool containment + fallback boundary + priority band). SelectedID must be in AllowedIDs else INVALID and continue.
 - MaxAttempts routing remains authoritative: decision cannot increase max_attempts. After decision reordering, execution loop still respects cfg.Routing.MaxAttempts; hedging counts against same budget.
 - Cross-protocol strict: decision applied per request per protocol; same deployment ID may appear under openai/anthropic/responses but each protocol's AllowedIDs differ — decision for one protocol never leaks to another.

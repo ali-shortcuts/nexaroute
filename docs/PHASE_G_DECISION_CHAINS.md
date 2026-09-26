@@ -108,7 +108,7 @@ Trace bounded: providerType mapped to jev/policy/local (not raw ID), ReasonCodes
 - Admin snapshot: `GET /admin/api/snapshot` includes `decisionChains`, `decisionProviderHealth`, `key_configured` booleans, not secrets. Previous canaries (SECRET_EXTERNAL_PROMPT_CANARY_94af etc.) never appear in any output.
 
 ## 8. Routing integration invariants
-- Decision precedes cache: cache key includes ordered Candidates IDs; second hit zero provider calls.
+- Cache lookup/serve occurs BEFORE decision-plane execution (Phase G optimization): `Cache.Get` checked immediately after `candidatesForRequirement` and before `applyDecisionPlane`. On HIT, `X-Cache: HIT` and zero `DecisionProvider` calls; cached response includes prior decision ordering. Only MISS proceeds to `ChainExecutor`. Note: `openai_responses` currently has no cache path (documented, not covered).
 - MaxAttempts routing authoritative: decision cannot increase max_attempts; after decision, execution loopDiversify respects cfg.Routing.MaxAttempts and hedged attempts count against same budget.
 - Fallback boundary: decision selection must be in AllowedIDs (which already excludes fallback-violating IDs). Policy/priority guardrails still apply per step.
 - Cross-protocol and VE/direct strictness preserved: each request recomputes AllowedIDs per protocol/VE; decision for one never leaks.
