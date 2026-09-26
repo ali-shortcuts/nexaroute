@@ -536,24 +536,19 @@ func (e *ChainExecutor) Execute(
 		}
 
 		if decideResult.Action == ActionRank {
-			// For chain, RANK is technically supported via generic validator, but spec says prefer SELECT/ABSTAIN and not expand scope
-			// We treat RANK as SELECT: normalize and return if valid
-			stepTrace.Outcome = StepOutcomeSelected
+			// Phase G contract: chain chooses PRIMARY only. RANK must NOT become a full-list chain result.
+			// Treat valid RANK as invalid for chain semantics: do not reorder full failover list, continue to next provider if budget/deadline allow.
+			stepTrace.Outcome = StepOutcomeInvalid
 			stepTrace.Action = ActionRank
-			stepTrace.ReasonCodes = decideResult.ReasonCodes
+			stepTrace.ReasonCodes = []ReasonCode{ReasonInvalidResult, ReasonValidationFailed, ReasonChainStepFailed}
 			trace.Steps = append(trace.Steps, stepTrace)
 			if e.metrics != nil {
-				e.metrics.RecordChainStep(stepTrace.ProviderType, "selected")
-				e.metrics.RecordChainOutcome("selected")
+				e.metrics.RecordChainStep(stepTrace.ProviderType, "invalid")
 			}
 			if isExternal && e.state != nil {
-				e.state.RecordSuccess(provider.ID())
+				e.state.RecordFailure(provider.ID())
 			}
-			normalized, _, _ := NormalizeResult(req.Candidates, decideResult)
-			trace.Outcome = ChainOutcomeSelected
-			trace.CallsUsed = callsUsed
-			trace.SelectedProviderID = provider.ID()
-			return normalized, decideResult, trace
+			continue
 		}
 	}
 

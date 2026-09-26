@@ -40,10 +40,30 @@
     "capability_probes": true
   },
   "decision": {
-    "mode": "local",
-    "provider": "policy",
-    "policy": "balanced",
-    "timeout_ms": 10
+    "mode": "hybrid",
+    "chain": "external-policy",
+    "timeout_ms": 800,
+    "max_provider_calls": 2
+  },
+  "decision_chains": [
+    {
+      "id": "external-policy",
+      "steps": [
+        {"provider": "jev-main"},
+        {"provider": "policy"}
+      ]
+    },
+    {
+      "id": "policy-only",
+      "steps": [
+        {"provider": "policy"}
+      ]
+    }
+  ],
+  "decision_provider_health": {
+    "failure_threshold": 2,
+    "failure_window_seconds": 30,
+    "cooldown_seconds": 60
   },
   "decision_policies": [
     {
