@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"io"
@@ -29,6 +30,24 @@ func routeContext(parent context.Context, streaming bool, timeout time.Duration)
 
 func gatewayDeadlineExceeded(routeCtx, clientCtx context.Context) bool {
 	return routeCtx.Err() == context.DeadlineExceeded && clientCtx.Err() == nil
+}
+
+// gatewayDeadlineError closes the narrow race where the HTTP client's timeout
+// and the route context share the same budget. Either timer may be observed
+// first; a transport timeout under a bounded route is still a gateway deadline,
+// not a generic 502. Caller cancellation always takes precedence.
+func gatewayDeadlineError(routeCtx, clientCtx context.Context, err error) bool {
+	if clientCtx.Err() != nil {
+		return false
+	}
+	if gatewayDeadlineExceeded(routeCtx, clientCtx) {
+		return true
+	}
+	if _, bounded := routeCtx.Deadline(); !bounded || err == nil {
+		return false
+	}
+	var timeout interface{ Timeout() bool }
+	return errors.As(err, &timeout) && timeout.Timeout()
 }
 
 func clientRequestGone(clientCtx context.Context) bool {

@@ -428,6 +428,9 @@ func TestProtocolMatrixE2EClientCancellation(t *testing.T) {
 			entered := make(chan struct{})
 			cancelled := make(chan struct{})
 			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				w.WriteHeader(http.StatusOK)
+				w.(http.Flusher).Flush()
 				close(entered)
 				<-r.Context().Done()
 				close(cancelled)
@@ -435,7 +438,7 @@ func TestProtocolMatrixE2EClientCancellation(t *testing.T) {
 			defer upstream.Close()
 
 			gateway := testGateway(t, protocolMatrixConfig(upstream.URL, tc.upstream))
-			path, body := protocolMatrixSimpleRequest(tc.ingress)
+			path, body := protocolMatrixRequest(tc.ingress, true)
 			ctx, cancel := context.WithCancel(context.Background())
 			req := httptest.NewRequest(http.MethodPost, "http://gateway"+path, strings.NewReader(body)).WithContext(ctx)
 			done := make(chan struct{})
@@ -457,7 +460,7 @@ func TestProtocolMatrixE2EClientCancellation(t *testing.T) {
 			select {
 			case <-cancelled:
 			case <-time.After(time.Second):
-				t.Fatal("upstream request was not cancelled")
+				t.Fatal("upstream streaming request was not cancelled")
 			}
 			if got := gateway.bus.Counts()["client_disconnect"]; got != 1 {
 				t.Fatalf("client_disconnect events=%d want 1", got)
@@ -469,10 +472,12 @@ func TestProtocolMatrixE2EClientCancellation(t *testing.T) {
 func TestProtocolMatrixE2ERequestDeadline(t *testing.T) {
 	for _, tc := range protocolMatrixPaths {
 		t.Run(tc.name, func(t *testing.T) {
-			upstream := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-				<-r.Context().Done()
+			release := make(chan struct{})
+			upstream := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+				<-release
 			}))
 			defer upstream.Close()
+			defer close(release)
 			cfg := protocolMatrixConfig(upstream.URL, tc.upstream)
 			cfg.Routing.RequestTimeoutMS = 30
 			gateway := testGateway(t, cfg)

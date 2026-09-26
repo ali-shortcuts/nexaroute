@@ -163,6 +163,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 	var lastBody []byte
 	var lastContentType string
 	var lastRetryAfter string
+	var gatewayTimedOut bool
 	forward := copySelectedRequestHeaders(r)
 	attempts := 0
 	skip := map[int]bool{}
@@ -236,7 +237,8 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "client_disconnect", Deployment: c.Deployment.ID, Message: r.Context().Err().Error(), ErrorType: "caller_cancelled", LatencyMS: headerLatency.Milliseconds()})
 				return
 			}
-			if gatewayDeadlineExceeded(routeCtx, r.Context()) {
+			if gatewayDeadlineError(routeCtx, r.Context(), e) {
+				gatewayTimedOut = true
 				s.hm.RecordProviderFailure(c.Deployment.ProviderID, c.Deployment.ID, lastErr)
 				if router.IsReadyStrategy(cfg.Routing.Strategy) {
 					s.hm.Quarantine(c.Deployment.ID, lastErr, headerLatency)
@@ -411,7 +413,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 		s.bus.Add(ev)
 		return
 	}
-	if gatewayDeadlineExceeded(routeCtx, r.Context()) {
+	if gatewayTimedOut || gatewayDeadlineExceeded(routeCtx, r.Context()) {
 		errorJSON(w, http.StatusGatewayTimeout, "gateway request timeout")
 		return
 	}

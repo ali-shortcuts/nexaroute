@@ -170,7 +170,7 @@ shutil.copyfile(pathlib.Path(os.environ["TEST_FIXTURE"]) / url.rsplit("/", 1)[1]
         check(cfg.read_bytes() == original, "upgrade/reinstall changed config")
         check("/download/v0.6.0/" in (tmp / "downloads").read_text(), "pinned release URL")
         stop(proc)
-        check("no graphical session" in (tmp / "gateway-0.log").read_text(), "headless fallback")
+        check("no graphical desktop session" in (tmp / "gateway-0.log").read_text(), "headless fallback")
         # Verify configured browser launcher receives the ready UI URL.
         browser_log = tmp / "browser-url"
         executable(tools / "google-chrome", f'#!/bin/sh\nprintf "%s" "$1" > "{browser_log}"\n')
