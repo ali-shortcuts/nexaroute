@@ -82,7 +82,7 @@ All commands below were run in this session on this branch, in this sandbox
 | Unit/integration (CI shape) | `./scripts/verify.sh` (`-count=10 -shuffle=on`, race `-count=3`, 6 fuzz targets, 2 cross-builds) | **VERIFY PASS** — 3m21s, and again 2m11s after the final production-code change |
 | Race | `go test -race -count=1 -timeout=10m ./...` | 25 packages ok in 22.9s; re-exercised by `verify.sh -race -count=3` after the final change |
 | Fuzz | `go test -run='^$' -fuzz=<target> -fuzztime=3s ./internal/{eval,scorecards}/` | `FuzzResolve_Verdicts` 38,073 execs PASS; `FuzzRunner_Artifacts` 61,904 execs PASS; `FuzzImportJSON` 117,174 execs PASS; `FuzzValueValidation` 54,174 execs PASS |
-| Benchmarks | `go test -run='^$' -bench=. -benchmem -benchtime=200x ./internal/eval/` | `Resolve 82.9 ns/op` (0 allocs); `Replay 27.5 ns/op`; `Run/Coding 16.4 µs/op` (35 allocs); `Run/AllSuites 163 µs/op`; `HealthFromRuns 28.0 µs/op` |
+| Benchmarks | `go test -run='^$' -bench=. -benchmem ./internal/...` (whole repository, default benchtime) | all packages ok in 73s. Phase H: `Resolve_Verdicts 6.98 ns/op` (0 allocs), `ReplayExecutor 17.3 ns/op` (0 allocs), `Run/Coding 7.3 µs/op` (35 allocs), `Run/AllSuites 102 µs/op`, `HealthFromRuns 11.9 µs/op` |
 | Stress | `./scripts/stress.sh` (incl. new evaluation-plane member) | **STRESS PASS** in 3.6s |
 | Gated stress | `NEXAROUTE_STRESS=1 go test -count=1 -run='^TestStress' ./internal/eval/` | PASS in 0.14s (32 workers × 250 bounded runs, 60s budget) |
 | Smoke | `./scripts/smoke-local.sh` (prebuilt linux-amd64 binary) | **SMOKE PASS** |
