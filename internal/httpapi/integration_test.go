@@ -75,6 +75,13 @@ func TestAnthropicNativePreservesUnknownFieldsAndBetaHeader(t *testing.T) {
 	if beta != "test-beta" {
 		t.Fatalf("beta not forwarded %q", beta)
 	}
+	var clientResponse map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &clientResponse); err != nil {
+		t.Fatal(err)
+	}
+	if clientResponse["model"] != "client-model" {
+		t.Fatalf("response exposed physical model instead of stable client model: %#v", clientResponse["model"])
+	}
 }
 
 func TestCountTokensUsesNativeAnthropicEndpoint(t *testing.T) {
@@ -148,6 +155,27 @@ func TestAnthropicStreamToOpenAIIncludesToolArguments(t *testing.T) {
 	out := rr.Body.String()
 	if !strings.Contains(out, "arguments") || !strings.Contains(out, "cmd") || !strings.Contains(out, "ls") {
 		t.Fatalf("tool arguments missing: %s", out)
+	}
+}
+
+func TestNativeAnthropicStreamRewritesPhysicalModelToPublicModel(t *testing.T) {
+	sse := `event: message_start
+ data: {"type":"message_start","message":{"id":"m1","type":"message","role":"assistant","content":[],"model":"physical-model","usage":{"input_tokens":1,"output_tokens":0}}}
+
+event: message_stop
+ data: {"type":"message_stop"}
+
+`
+	// Remove the leading space before SSE data fields: parsers accept it, but
+	// exact upstream semantics are easier to assert with standard framing.
+	sse = strings.ReplaceAll(sse, "\n data:", "\ndata:")
+	resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(sse))}
+	rr := httptest.NewRecorder()
+	if err := proxyNativeSSEWithModel(rr, resp, "anthropic", "public-route"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(rr.Body.String(), `"model":"public-route"`) || strings.Contains(rr.Body.String(), `"model":"physical-model"`) {
+		t.Fatalf("stream leaked physical model name: %s", rr.Body.String())
 	}
 }
 
