@@ -233,21 +233,17 @@ func TestAnthropicToOpenAIDropsThinkingBlocks(t *testing.T) {
 	}
 }
 
-// Unknown Anthropic block types (server_tool_use, web_search_tool_result, ...)
-// are dropped rather than dead-ending the conversation.
-func TestAnthropicToOpenAIDropsUnknownBlockTypes(t *testing.T) {
+// Unknown Anthropic blocks are rejected on cross-protocol translation rather
+// than silently disappearing and changing the caller's message semantics.
+func TestAnthropicToOpenAIRejectsUnknownBlockTypes(t *testing.T) {
 	content := json.RawMessage(`[
 		{"type":"server_tool_use","id":"srvtoolu_1","name":"web_search","input":{}},
 		{"type":"web_search_tool_result","tool_use_id":"srvtoolu_1","content":[]},
 		{"type":"text","text":"answer"}
 	]`)
 	in := core.AnthropicRequest{Model: "x", MaxTokens: 10, Messages: []core.AnthMessage{{Role: "assistant", Content: content}}}
-	o, _, err := AnthropicToOpenAI(in, "backend")
-	if err != nil {
-		t.Fatalf("unknown block types must not fail translation: %v", err)
-	}
-	if txt, _ := o.Messages[0].Content.(string); txt != "answer" {
-		t.Fatalf("expected surviving text, got %#v", o.Messages[0].Content)
+	if _, _, err := AnthropicToOpenAI(in, "backend"); err == nil {
+		t.Fatal("unknown block types must not be silently dropped")
 	}
 }
 
@@ -454,6 +450,42 @@ func TestOpenAIToAnthropicToolChoiceMatrix(t *testing.T) {
 		if string(got) != c.want {
 			t.Fatalf("tool_choice %v: want %s got %s", c.choice, c.want, got)
 		}
+	}
+}
+
+func TestNamedToolChoiceUsesSanitizedName(t *testing.T) {
+	anthContent := json.RawMessage(`"run it"`)
+	anth := core.AnthropicRequest{
+		Model: "client", MaxTokens: 12,
+		Messages: []core.AnthMessage{{Role: "user", Content: anthContent}},
+		Tools: []core.AnthTool{{Name: "server.run", InputSchema: map[string]any{"type": "object"}}},
+		ToolChoice: map[string]any{"type": "tool", "name": "server.run"},
+	}
+	openReq, _, err := AnthropicToOpenAI(anth, "physical")
+	if err != nil {
+		t.Fatal(err)
+	}
+	toolChoice, ok := openReq.ToolChoice.(map[string]any)
+	if !ok {
+		t.Fatalf("tool_choice=%#v", openReq.ToolChoice)
+	}
+	fn, _ := toolChoice["function"].(map[string]any)
+	if fn["name"] != "server_run" {
+		t.Fatalf("named Anthropic choice did not use sanitized OpenAI tool name: %#v", toolChoice)
+	}
+
+	openReqIn := core.OpenAIRequest{
+		Model: "client", Messages: []core.OpenAIMessage{{Role: "user", Content: "go"}},
+		Tools: []core.OpenAITool{{Type: "function", Function: core.OpenAIFunction{Name: "server.run", Parameters: map[string]any{"type": "object"}}}},
+		ToolChoice: map[string]any{"type": "function", "function": map[string]any{"name": "server.run"}},
+	}
+	anthReq, _, err := OpenAIToAnthropic(openReqIn, "physical")
+	if err != nil {
+		t.Fatal(err)
+	}
+	choice, ok := anthReq.ToolChoice.(map[string]any)
+	if !ok || choice["name"] != "server_run" {
+		t.Fatalf("named OpenAI choice did not use sanitized Anthropic tool name: %#v", anthReq.ToolChoice)
 	}
 }
 

@@ -20,6 +20,8 @@ Privacy/security regression tests already exercise provider credential redaction
 ## Changes in this work
 
 - Added fuzz targets `FuzzAnthropicToOpenAI` and `FuzzOpenAIToAnthropic` with valid and malformed seeds. Arbitrary JSON that decodes into protocol request types must not panic translation; invalid structures may return errors.
+- Hardened named `tool_choice` translation to use the same reversible sanitized tool-name map as tool definitions/calls.
+- Changed unknown Anthropic message block behavior on cross-protocol/canonical translation from silent content loss to explicit incompatibility errors; native protocol passthrough remains the route for provider-specific blocks. Updated the compatibility regression test and docs.
 - Added `docs/CLAUDE_CODE.md` with stable public endpoint/model guidance and documented translation boundaries.
 - Added this report; no installer or probe/recovery engine changes were made for this protocol-only task.
 
