@@ -20,15 +20,16 @@ The installer was syntax-checked but not exercised against a real published rele
 ## Follow-up implementation (checkpoint `287619a`, continuing)
 
 - Added `internal/desktop`: Linux advisory lock file (mode 0600, kernel-released/stale-safe), HTTP readiness polling, browser preference launcher, asynchronous process release, and headless GUI detection. `cmd/gateway` acquires lock per config, second invocation opens the existing UI instead of starting another server, and the first invocation waits for `/healthz` before browser launch. URL is printed when readiness/browser launch cannot be confirmed.
-- Added injectable browser launcher, lock ownership/recovery, and readiness unit tests.
+- Added injectable browser launch/readiness tests, lock ownership/recovery tests, and readiness deadline tests. These are implementation/tests added, not test results.
 - Removed `?reveal=1` credential disclosure. Provider detail API now always strips literal and pooled credential values; UI edit keeps secrets server-side via existing `preserve_secret` mechanism. Added canary regression coverage for save response, provider GET including legacy reveal query, provider list, admin snapshot, metrics, persisted config and file permissions.
 - Added a 50/100/200 mock deployment concurrent probe acceptance test checking bounded concurrency, speed, synthetic prompt isolation, token budget, successful readiness and partial failures.
 
 ## Not completed / known gaps
 
 - Added an exact mocked A/B/C/D Anthropic Messages failover E2E test asserting expected physical attempt order `A`, `A→B`, `B→D`, stable public route header and no use of pre-cooled C. It is not executed because Go is unavailable. Existing integration coverage includes total request timeout budget, but this new scenario does not independently measure deadline expiry.
-- The fake-clock five-probe recovery E2E, cooldown expiry/re-entry E2E, and local artifact installer upgrade/start E2E remain incomplete.
-- Added local scheduler acceptance cases for 50/100/200, but they have not been run. No Linux binaries/checksums were built and no benchmark results were collected.
+- Added an injected-clock recovery test covering exactly five failures, exact 30-minute expiry, route exclusion during cooldown, scheduler requalification after a 30-minute fake advance, and return to the candidate pool. Existing recovery coverage tests recovery on the third probe. These additions have not run without Go.
+- Added and ran an offline release-style installer E2E using local assets/curl shim: checksum verification, executable install, no Go requirement, config directory creation, and upgrade config preservation pass. It does not run the real gateway binary or cover arm64; those remain incomplete.
+- Added local scheduler acceptance cases plus `BenchmarkProbeSchedulerAtScale` and `BenchmarkRoutingCandidatesAtScale` for 50/100/200, but none have been run. No Linux binaries/checksums were built and no benchmark results were collected.
 - The Go 1.23.x toolchain used by repository CI could not be obtained: `go.dev` TLS connections and Debian package mirrors fail in this sandbox, and no local Go binary exists. Therefore new code has not been compiled or run.
 - Full requested protocol matrix remains bounded as described in `KNOWN_GAPS.md`.
 - The requested branch `arena/nexaroute-runtime-finalization-v2` cannot be created/used in this session. Arena fixes this session to `arena/01a0dd9d-nexaroute`; work is checkpointed and pushed there instead.
@@ -37,7 +38,8 @@ The installer was syntax-checked but not exercised against a real published rele
 
 | Gate | Result |
 |---|---|
-| `bash -n scripts/install.sh` | PASS at prior checkpoint |
+| `bash -n scripts/install.sh scripts/test-install.sh` | PASS |
+| `scripts/test-install.sh` offline release-style E2E | PASS: checksum, no-Go install, command executable, config dir and upgrade preservation |
 | `git diff --check` | PASS for the follow-up commit |
 | Go tests / `go vet` / `gofmt` | BLOCKED: Go 1.23.x unavailable; outbound downloads/package mirrors fail. All requested commands were attempted and returned `command not found`. |
 | verify/stress/smoke scripts | Previous attempts blocked (Go absent / no binary); must rerun when toolchain is available |

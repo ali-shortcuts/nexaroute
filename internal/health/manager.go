@@ -58,6 +58,8 @@ type State struct {
 
 type Manager struct {
 	mu                sync.RWMutex
+	clockMu           sync.RWMutex
+	now               func() time.Time
 	threshold         int
 	cooldown          time.Duration
 	scopeThreshold    int
@@ -78,6 +80,7 @@ func New(threshold int, cooldown time.Duration) *Manager {
 		cooldown = time.Hour
 	}
 	return &Manager{
+		now:               time.Now,
 		threshold:         threshold,
 		cooldown:          cooldown,
 		scopeThreshold:    2,
@@ -103,7 +106,7 @@ func cloneState(s State) State {
 }
 
 func normalizeGlobal(s State, now time.Time) State {
-	if s.Status == Cooldown && !s.CooldownUntil.IsZero() && now.After(s.CooldownUntil) {
+	if s.Status == Cooldown && !s.CooldownUntil.IsZero() && !now.Before(s.CooldownUntil) {
 		s.Status = HalfOpen
 		s.ConsecutiveFailures = 0
 		s.RecoveryFailures = 0
@@ -115,7 +118,7 @@ func normalizeGlobal(s State, now time.Time) State {
 
 func normalizeScopes(s State, now time.Time) State {
 	for name, st := range s.Scopes {
-		if st.Status == Cooldown && !st.CooldownUntil.IsZero() && now.After(st.CooldownUntil) {
+		if st.Status == Cooldown && !st.CooldownUntil.IsZero() && !now.Before(st.CooldownUntil) {
 			st.Status = Unknown
 			st.ConsecutiveFailures = 0
 			st.LastError = ""
@@ -127,11 +130,11 @@ func normalizeScopes(s State, now time.Time) State {
 }
 
 func stateNeedsNormalization(s State, now time.Time) bool {
-	if s.Status == Cooldown && !s.CooldownUntil.IsZero() && now.After(s.CooldownUntil) {
+	if s.Status == Cooldown && !s.CooldownUntil.IsZero() && !now.Before(s.CooldownUntil) {
 		return true
 	}
 	for _, st := range s.Scopes {
-		if st.Status == Cooldown && !st.CooldownUntil.IsZero() && now.After(st.CooldownUntil) {
+		if st.Status == Cooldown && !st.CooldownUntil.IsZero() && !now.Before(st.CooldownUntil) {
 			return true
 		}
 	}
@@ -147,8 +150,29 @@ func scopesReadyState(s State, scopes []string) bool {
 	return true
 }
 
+// SetClock replaces the health manager clock. It is primarily intended for
+// deterministic tests that advance cooldowns without sleeping.
+func (m *Manager) SetClock(clock func() time.Time) {
+	m.clockMu.Lock()
+	if clock == nil {
+		clock = time.Now
+	}
+	m.now = clock
+	m.clockMu.Unlock()
+}
+
+func (m *Manager) currentTime() time.Time {
+	m.clockMu.RLock()
+	clock := m.now
+	m.clockMu.RUnlock()
+	if clock == nil {
+		return time.Now()
+	}
+	return clock()
+}
+
 func (m *Manager) GetWithScopes(id string, scopes []string) (State, bool) {
-	now := time.Now()
+	now := m.currentTime()
 	m.mu.RLock()
 	s, ok := m.states[id]
 	if !ok {
@@ -234,7 +258,7 @@ func (m *Manager) RecordSuccess(id string, latency time.Duration) {
 	s := m.states[id]
 	s.Deployment = id
 	s.Successes++
-	s.LastChecked = time.Now()
+	s.LastChecked = m.currentTime()
 	s.LastSuccess = s.LastChecked
 	updateEWMA(&s, latency)
 	updateFailureEWMA(&s, false)
@@ -262,7 +286,7 @@ func (m *Manager) RecordFailure(id, errMsg string, latency time.Duration) {
 	s.Failures++
 	updateFailureEWMA(&s, true)
 	s.ConsecutiveFailures++
-	s.LastChecked = time.Now()
+	s.LastChecked = m.currentTime()
 	s.LastFailure = s.LastChecked
 	s.LastError = errMsg
 	updateEWMA(&s, latency)
@@ -277,7 +301,7 @@ func (m *Manager) RecordFailure(id, errMsg string, latency time.Duration) {
 	}
 	if s.Status == HalfOpen || s.ConsecutiveFailures >= m.threshold {
 		s.Status = Cooldown
-		s.CooldownUntil = time.Now().Add(m.cooldown)
+		s.CooldownUntil = m.currentTime().Add(m.cooldown)
 	} else {
 		s.Status = Degraded
 		// A degraded state carries no cooldown; drop any stale deadline
@@ -288,7 +312,7 @@ func (m *Manager) RecordFailure(id, errMsg string, latency time.Duration) {
 }
 
 func normalizeProviderState(st ProviderState, now time.Time) ProviderState {
-	if st.Status == Cooldown && !st.CooldownUntil.IsZero() && now.After(st.CooldownUntil) {
+	if st.Status == Cooldown && !st.CooldownUntil.IsZero() && !now.Before(st.CooldownUntil) {
 		st.Status = HalfOpen
 		st.Evidence = 0
 		st.LastError = ""
@@ -301,7 +325,7 @@ func (m *Manager) ProviderAvailable(id string) bool {
 	if id == "" {
 		return true
 	}
-	now := time.Now()
+	now := m.currentTime()
 	m.mu.RLock()
 	st, ok := m.providers[id]
 	if !ok {
@@ -335,7 +359,7 @@ func (m *Manager) RecordProviderFailure(providerID, deploymentID, reason string)
 	if deploymentID == "" {
 		deploymentID = providerID
 	}
-	now := time.Now()
+	now := m.currentTime()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -386,7 +410,7 @@ func (m *Manager) RecordProviderSuccess(providerID string) {
 	if providerID == "" {
 		return
 	}
-	now := time.Now()
+	now := m.currentTime()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	st := m.providers[providerID]
@@ -408,7 +432,7 @@ func (m *Manager) RecordProviderSuccess(providerID string) {
 }
 
 func (m *Manager) ProviderSnapshot() []ProviderState {
-	now := time.Now()
+	now := m.currentTime()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	out := make([]ProviderState, 0, len(m.providers))
@@ -421,7 +445,7 @@ func (m *Manager) ProviderSnapshot() []ProviderState {
 }
 
 func (m *Manager) Snapshot() []State {
-	now := time.Now()
+	now := m.currentTime()
 	m.mu.RLock()
 	needsWrite := false
 	for _, s := range m.states {
@@ -443,7 +467,7 @@ func (m *Manager) Snapshot() []State {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	out := make([]State, 0, len(m.states))
-	now = time.Now()
+	now = m.currentTime()
 	for id, s := range m.states {
 		s = normalizeScopes(normalizeGlobal(s, now), now)
 		m.states[id] = s
@@ -462,7 +486,7 @@ func (m *Manager) Quarantine(id, reason string, latency time.Duration) {
 	s.ConsecutiveFailures++
 	s.RecoveryFailures = 0
 	s.Status = Degraded
-	s.LastChecked = time.Now()
+	s.LastChecked = m.currentTime()
 	s.LastFailure = s.LastChecked
 	s.LastError = reason
 	s.CooldownUntil = time.Time{}
@@ -480,7 +504,7 @@ func (m *Manager) RecordRecoveryFailure(id, reason string, latency time.Duration
 	s.ConsecutiveFailures++
 	s.RecoveryFailures++
 	s.Status = Degraded
-	s.LastChecked = time.Now()
+	s.LastChecked = m.currentTime()
 	s.LastFailure = s.LastChecked
 	s.LastError = reason
 	s.CooldownUntil = time.Time{}
@@ -497,9 +521,9 @@ func (m *Manager) EnterCooldown(id, reason string, d time.Duration) {
 	s := m.states[id]
 	s.Deployment = id
 	s.Status = Cooldown
-	s.LastChecked = time.Now()
+	s.LastChecked = m.currentTime()
 	s.LastError = reason
-	s.CooldownUntil = time.Now().Add(d)
+	s.CooldownUntil = m.currentTime().Add(d)
 	m.states[id] = s
 }
 
@@ -515,10 +539,10 @@ func (m *Manager) ForceCooldown(id, reason string, d time.Duration) {
 	updateFailureEWMA(&s, true)
 	s.ConsecutiveFailures++
 	s.Status = Cooldown
-	s.LastChecked = time.Now()
+	s.LastChecked = m.currentTime()
 	s.LastFailure = s.LastChecked
 	s.LastError = reason
-	s.CooldownUntil = time.Now().Add(d)
+	s.CooldownUntil = m.currentTime().Add(d)
 	m.states[id] = s
 }
 
@@ -533,7 +557,7 @@ func (m *Manager) RecordScopeSuccess(id string, scopes []string) {
 	if s.Scopes == nil {
 		s.Scopes = map[string]ScopeState{}
 	}
-	now := time.Now()
+	now := m.currentTime()
 	for _, scope := range scopes {
 		if scope == "" {
 			continue
@@ -562,7 +586,7 @@ func (m *Manager) RecordScopeFailure(id string, scopes []string, reason string) 
 	if s.Scopes == nil {
 		s.Scopes = map[string]ScopeState{}
 	}
-	now := time.Now()
+	now := m.currentTime()
 	for _, scope := range scopes {
 		if scope == "" {
 			continue

@@ -55,32 +55,40 @@ func dashboardURL(listen string) string {
 	return "http://" + net.JoinHostPort(host, port) + "/"
 }
 
-func openExistingUI(url string, output io.Writer) {
+func openUI(url string, output io.Writer, waitReady func(context.Context, string) error, launchBrowser func(string) (string, error), existing bool) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
-	if err := desktop.WaitReady(ctx, strings.TrimSuffix(url, "/")); err != nil {
-		fmt.Fprintf(output, "NexaRoute may already be starting. Dashboard: %s\n", url)
-		return
+	if waitReady == nil {
+		waitReady = desktop.WaitReady
 	}
-	if browser, err := desktop.OpenBrowser(url, nil, nil); err != nil {
-		fmt.Fprintf(output, "Dashboard: %s (browser unavailable: %v)\n", url, err)
-	} else {
-		fmt.Fprintf(output, "NexaRoute is already running; opened dashboard with %s: %s\n", browser, url)
+	if launchBrowser == nil {
+		launchBrowser = func(target string) (string, error) {
+			return desktop.OpenBrowser(target, nil, nil)
+		}
 	}
-}
-
-func startBrowserWhenReady(url string, output io.Writer) {
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-	defer cancel()
-	if err := desktop.WaitReady(ctx, strings.TrimSuffix(url, "/")); err != nil {
+	if err := waitReady(ctx, strings.TrimSuffix(url, "/")); err != nil {
 		fmt.Fprintf(output, "Dashboard: %s (server readiness not confirmed: %v)\n", url, err)
-		return
+		return false
 	}
-	if browser, err := desktop.OpenBrowser(url, nil, nil); err != nil {
+	browser, err := launchBrowser(url)
+	if err != nil {
 		fmt.Fprintf(output, "Dashboard: %s (browser unavailable: %v)\n", url, err)
+		return false
+	}
+	if existing {
+		fmt.Fprintf(output, "NexaRoute is already running; opened dashboard with %s: %s\n", browser, url)
 	} else {
 		fmt.Fprintf(output, "Opened NexaRoute dashboard with %s: %s\n", browser, url)
 	}
+	return true
+}
+
+func openExistingUI(url string, output io.Writer) {
+	openUI(url, output, nil, nil, true)
+}
+
+func startBrowserWhenReady(url string, output io.Writer) {
+	openUI(url, output, nil, nil, false)
 }
 
 func ensureConfig(path string) error {

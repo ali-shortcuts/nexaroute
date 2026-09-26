@@ -1,7 +1,11 @@
 package main
 
 import (
+	"bytes"
+	"context"
+	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -23,6 +27,38 @@ func TestDashboardURLUsesLoopbackForWildcardBinds(t *testing.T) {
 		if got := dashboardURL(tc.listen); got != tc.want {
 			t.Errorf("dashboardURL(%q)=%q want %q", tc.listen, got, tc.want)
 		}
+	}
+}
+
+func TestOpenUIWaitsForReadinessBeforeInjectableBrowserLaunch(t *testing.T) {
+	var order []string
+	var output bytes.Buffer
+	wait := func(ctx context.Context, url string) error {
+		order = append(order, "ready:"+url)
+		return nil
+	}
+	launch := func(url string) (string, error) {
+		order = append(order, "browser:"+url)
+		return "fake-chrome", nil
+	}
+	if !openUI("http://127.0.0.1:8080/", &output, wait, launch, false) {
+		t.Fatal("expected UI open success")
+	}
+	if got, want := strings.Join(order, ","), "ready:http://127.0.0.1:8080,browser:http://127.0.0.1:8080/"; got != want {
+		t.Fatalf("open order=%q want %q", got, want)
+	}
+	if !strings.Contains(output.String(), "fake-chrome") {
+		t.Fatalf("missing launch status: %s", output.String())
+	}
+}
+
+func TestOpenUIHeadlessReportsURLWithoutFailingGateway(t *testing.T) {
+	var output bytes.Buffer
+	opened := openUI("http://127.0.0.1:8080/", &output,
+		func(context.Context, string) error { return nil },
+		func(string) (string, error) { return "", errors.New("no GUI") }, false)
+	if opened || !strings.Contains(output.String(), "http://127.0.0.1:8080/") {
+		t.Fatalf("headless result opened=%v output=%q", opened, output.String())
 	}
 }
 

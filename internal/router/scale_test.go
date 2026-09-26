@@ -60,3 +60,29 @@ func TestConcurrentSessionFloodRemainsBounded(t *testing.T) {
 		t.Fatalf("session state grew to %d, limit=%d", got, maxSessionPins)
 	}
 }
+
+func BenchmarkRoutingCandidatesAtScale(b *testing.B) {
+	for _, count := range []int{50, 100, 200} {
+		b.Run(fmt.Sprintf("deployments_%d", count), func(b *testing.B) {
+			cfg := config.Default()
+			provider := config.ProviderConfig{ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "http://example.invalid", Enabled: true}
+			for i := 0; i < count; i++ {
+				provider.Models = append(provider.Models, config.ModelConfig{ID: fmt.Sprintf("m%d", i), Model: fmt.Sprintf("model-%d", i), Aliases: []string{"stable"}, Enabled: true, Weight: 1, Capabilities: config.Capabilities{Streaming: true, Tools: true}})
+			}
+			cfg.Providers = []config.ProviderConfig{provider}
+			hm := health.New(5, time.Hour)
+			rt := New(cfg, hm)
+			for _, d := range rt.All() {
+				hm.RecordSuccess(d.ID, time.Millisecond)
+			}
+			req := Requirement{Model: "stable", Streaming: true, Tools: true}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if got := rt.Candidates(req); len(got) != count {
+					b.Fatalf("candidates=%d want=%d", len(got), count)
+				}
+			}
+		})
+	}
+}

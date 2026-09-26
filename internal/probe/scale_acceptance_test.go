@@ -103,6 +103,46 @@ func TestProbeSchedulerAt50_100_200Deployments(t *testing.T) {
 	}
 }
 
+func BenchmarkProbeSchedulerAtScale(b *testing.B) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"probe","choices":[{"message":{"role":"assistant","content":"ok"}}]}`))
+	}))
+	defer up.Close()
+	for _, count := range []int{50, 100, 200} {
+		b.Run(fmt.Sprintf("deployments_%d", count), func(b *testing.B) {
+			cfg := config.Default()
+			cfg.Routing.Strategy = "ready_queue"
+			cfg.Probe.Enabled = true
+			cfg.Probe.Concurrency = 32
+			cfg.Probe.MaxTokens = 1
+			cfg.Probe.CapabilityProbes = false
+			cfg.Probe.TimeoutMS = 3000
+			p := config.ProviderConfig{ID: "mock", Name: "Mock", Type: "openai_compatible", BaseURL: up.URL, AuthMode: "none", Enabled: true}
+			for i := 0; i < count; i++ {
+				p.Models = append(p.Models, config.ModelConfig{ID: fmt.Sprintf("m%d", i), Model: fmt.Sprintf("model-%d", i), Enabled: true, Weight: 1})
+			}
+			cfg.Providers = []config.ProviderConfig{p}
+			cfg.ApplyDefaults()
+			hm := health.New(cfg.Routing.FailureThreshold, cfg.Cooldown())
+			reg, err := providers.NewRegistry(cfg)
+			if err != nil {
+				b.Fatal(err)
+			}
+			rt := router.New(cfg, hm)
+			e := New(cfg, reg, rt, hm, events.New(count+10))
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				result := e.runOnce(context.Background(), true)
+				if result.Passed != count {
+					b.Fatalf("probe pass=%d want=%d result=%+v", result.Passed, count, result)
+				}
+			}
+		})
+	}
+}
+
 func containsString(s, sub string) bool {
 	return len(sub) == 0 || (len(s) >= len(sub) && func() bool {
 		for i := 0; i+len(sub) <= len(s); i++ {
