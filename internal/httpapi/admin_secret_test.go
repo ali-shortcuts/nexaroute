@@ -1,6 +1,9 @@
 package httpapi
 
 import (
+	"bytes"
+	"encoding/json"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -32,6 +35,8 @@ func TestProviderSecretsPersistButAreNeverReturnedByAdminSurfaces(t *testing.T) 
 		Models: []config.ModelConfig{{ID: "m", Model: "m", Enabled: true, Weight: 1}},
 	}}
 	s := testGateway(t, cfg)
+	var logs bytes.Buffer
+	s.log = log.New(&logs, "", 0)
 
 	// Saving edits must preserve existing secret values server-side without
 	// echoing them in the mutation response.
@@ -68,5 +73,17 @@ func TestProviderSecretsPersistButAreNeverReturnedByAdminSurfaces(t *testing.T) 
 	info, err := os.Stat(s.configPath)
 	if err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("config file should be mode 0600: mode=%v err=%v", info, err)
+	}
+	events, err := json.Marshal(s.bus.Snapshot())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, surface := range []struct {
+		name string
+		data string
+	}{{"logs", logs.String()}, {"events", string(events)}} {
+		if strings.Contains(surface.data, primary) || strings.Contains(surface.data, secondary) {
+			t.Fatalf("provider key canary leaked to %s: %s", surface.name, surface.data)
+		}
 	}
 }
