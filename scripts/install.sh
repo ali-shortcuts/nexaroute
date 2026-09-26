@@ -24,12 +24,20 @@ else
   bindir="${HOME:?HOME must be set}/.local/bin"
 fi
 
-command -v python3 >/dev/null 2>&1 || fail "python3 is required to read release metadata"
 tmp="$(mktemp -d)" || fail "could not create temporary directory"
 trap 'rm -rf "$tmp"' EXIT
 
-curl --fail --silent --show-error --location --retry 3 "$API" -o "$tmp/release.json" || fail "could not retrieve latest release metadata from GitHub"
-readarray -t release_info < <(python3 - "$tmp/release.json" <<'PY'
+if [[ -n "${NEXAROUTE_LOCAL_RELEASE_DIR:-}" ]]; then
+  tag="${NEXAROUTE_LOCAL_RELEASE_TAG:-v0.6.0}"
+  [[ -d "$NEXAROUTE_LOCAL_RELEASE_DIR" ]] || fail "local release directory does not exist: $NEXAROUTE_LOCAL_RELEASE_DIR"
+  [[ -f "$NEXAROUTE_LOCAL_RELEASE_DIR/$asset" ]] || fail "local release asset not found: $NEXAROUTE_LOCAL_RELEASE_DIR/$asset"
+  [[ -f "$NEXAROUTE_LOCAL_RELEASE_DIR/SHA256SUMS" ]] || fail "local release SHA256SUMS not found: $NEXAROUTE_LOCAL_RELEASE_DIR/SHA256SUMS"
+  cp "$NEXAROUTE_LOCAL_RELEASE_DIR/$asset" "$tmp/$asset"
+  cp "$NEXAROUTE_LOCAL_RELEASE_DIR/SHA256SUMS" "$tmp/SHA256SUMS"
+else
+  command -v python3 >/dev/null 2>&1 || fail "python3 is required to read release metadata"
+  curl --fail --silent --show-error --location --retry 3 "$API" -o "$tmp/release.json" || fail "could not retrieve latest release metadata from GitHub"
+  readarray -t release_info < <(python3 - "$tmp/release.json" <<'PY'
 import json, sys
 try:
     release = json.load(open(sys.argv[1], encoding='utf-8'))
@@ -44,14 +52,15 @@ except Exception as e:
     sys.exit(1)
 PY
 ) || fail "invalid release metadata"
-[[ ${#release_info[@]} -ge 2 ]] || fail "could not parse release metadata"
-tag="${release_info[0]}"
-assets=" ${release_info[1]} "
-[[ "$assets" == *" $asset "* ]] || fail "release $tag has no asset for $(uname -m): $asset"
-[[ "$assets" == *" SHA256SUMS "* ]] || fail "release $tag has no SHA256SUMS"
+  [[ ${#release_info[@]} -ge 2 ]] || fail "could not parse release metadata"
+  tag="${release_info[0]}"
+  assets=" ${release_info[1]} "
+  [[ "$assets" == *" $asset "* ]] || fail "release $tag has no asset for $(uname -m): $asset"
+  [[ "$assets" == *" SHA256SUMS "* ]] || fail "release $tag has no SHA256SUMS"
 
-curl --fail --silent --show-error --location --retry 3 "$ASSET_BASE/$tag/$asset" -o "$tmp/$asset" || fail "failed to download $asset"
-curl --fail --silent --show-error --location --retry 3 "$ASSET_BASE/$tag/SHA256SUMS" -o "$tmp/SHA256SUMS" || fail "failed to download release checksums"
+  curl --fail --silent --show-error --location --retry 3 "$ASSET_BASE/$tag/$asset" -o "$tmp/$asset" || fail "failed to download $asset"
+  curl --fail --silent --show-error --location --retry 3 "$ASSET_BASE/$tag/SHA256SUMS" -o "$tmp/SHA256SUMS" || fail "failed to download release checksums"
+fi
 (cd "$tmp" && grep -E "^[[:xdigit:]]{64}[[:space:]]+\*?${asset}$" SHA256SUMS > checksum.selected && [[ -s checksum.selected ]] && sha256sum --check checksum.selected) || fail "checksum verification failed for $asset"
 [[ -s "$tmp/$asset" ]] || fail "downloaded binary is empty"
 

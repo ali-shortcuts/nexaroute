@@ -194,10 +194,18 @@ func main() {
 			cancel()
 		}
 	}()
-	startBrowserWhenReady(uiURL, os.Stdout)
+	// Ensure the HTTP listener is accepting connections before initiating probing or browser launch.
+	readyCtx, readyCancel := context.WithTimeout(ctx, 5*time.Second)
+	if err := desktop.WaitReady(readyCtx, strings.TrimSuffix(uiURL, "/")); err != nil {
+		logger.Printf("server_readiness_wait_err=%v", err)
+	}
+	readyCancel()
+	go startBrowserWhenReady(uiURL, os.Stdout)
 	if cfg.Probe.Enabled && cfg.Probe.OnStart {
-		result := pe.Prime(ctx)
-		logger.Printf("startup_probe total=%d ready=%d failed=%d cooldown=%d duration_ms=%d", result.Total, result.Passed, result.Failed, result.SkippedCooldown, result.DurationMS)
+		go func() {
+			result := pe.Prime(ctx)
+			logger.Printf("startup_probe total=%d ready=%d failed=%d cooldown=%d duration_ms=%d", result.Total, result.Passed, result.Failed, result.SkippedCooldown, result.DurationMS)
+		}()
 	}
 	pe.Start(ctx)
 	<-ctx.Done()
