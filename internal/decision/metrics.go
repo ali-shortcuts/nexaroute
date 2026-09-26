@@ -30,6 +30,20 @@ type Metrics struct {
 	externalResponseTooLarge atomic.Int64
 	externalLatencySum       atomic.Int64
 	externalLatencyCount     atomic.Int64
+	// Phase G: chain metrics
+	chainSelected          atomic.Int64
+	chainExhausted         atomic.Int64
+	chainBudgetExhausted   atomic.Int64
+	chainDeadlineExhausted atomic.Int64
+	chainAffinity          atomic.Int64
+	chainStepSelected      atomic.Int64
+	chainStepAbstained     atomic.Int64
+	chainStepError         atomic.Int64
+	chainStepTimeout       atomic.Int64
+	chainStepInvalid       atomic.Int64
+	chainStepUnavailable   atomic.Int64
+	chainStepCooldown      atomic.Int64
+	chainStepSkippedBudget atomic.Int64
 }
 
 // Record records a decision outcome.
@@ -105,6 +119,44 @@ func (m *Metrics) Record(result DecisionResult, err error, timedOut bool, offMod
 	}
 }
 
+func (m *Metrics) RecordChainOutcome(outcome string) {
+	switch outcome {
+	case "selected":
+		m.chainSelected.Add(1)
+	case "exhausted":
+		m.chainExhausted.Add(1)
+	case "budget_exhausted":
+		m.chainBudgetExhausted.Add(1)
+	case "deadline_exhausted":
+		m.chainDeadlineExhausted.Add(1)
+	case "affinity_preserved":
+		m.chainAffinity.Add(1)
+	}
+}
+
+func (m *Metrics) RecordChainStep(providerType, outcome string) {
+	// providerType bounded jev|policy|local (fallback to unknown not counted)
+	// outcome bounded selected|abstain|error|timeout|invalid|unavailable|cooldown|skipped_budget
+	switch outcome {
+	case "selected":
+		m.chainStepSelected.Add(1)
+	case "abstained":
+		m.chainStepAbstained.Add(1)
+	case "error":
+		m.chainStepError.Add(1)
+	case "timeout":
+		m.chainStepTimeout.Add(1)
+	case "invalid":
+		m.chainStepInvalid.Add(1)
+	case "unavailable":
+		m.chainStepUnavailable.Add(1)
+	case "cooldown":
+		m.chainStepCooldown.Add(1)
+	case "skipped_budget":
+		m.chainStepSkippedBudget.Add(1)
+	}
+}
+
 // Snapshot returns a map for metrics endpoint / admin.
 // Keys are fixed enums, not per-request.
 func (m *Metrics) Snapshot() map[string]int64 {
@@ -141,6 +193,19 @@ func (m *Metrics) Snapshot() map[string]int64 {
 		"external_response_too_large": m.externalResponseTooLarge.Load(),
 		"external_latency_avg_ms":     extAvgMs,
 		"external_latency_count":      extLatCount,
+		"chain_selected":              m.chainSelected.Load(),
+		"chain_exhausted":             m.chainExhausted.Load(),
+		"chain_budget_exhausted":      m.chainBudgetExhausted.Load(),
+		"chain_deadline_exhausted":    m.chainDeadlineExhausted.Load(),
+		"chain_affinity_preserved":    m.chainAffinity.Load(),
+		"chain_step_selected":         m.chainStepSelected.Load(),
+		"chain_step_abstained":        m.chainStepAbstained.Load(),
+		"chain_step_error":            m.chainStepError.Load(),
+		"chain_step_timeout":          m.chainStepTimeout.Load(),
+		"chain_step_invalid":          m.chainStepInvalid.Load(),
+		"chain_step_unavailable":      m.chainStepUnavailable.Load(),
+		"chain_step_cooldown":         m.chainStepCooldown.Load(),
+		"chain_step_skipped_budget":   m.chainStepSkippedBudget.Load(),
 	}
 }
 

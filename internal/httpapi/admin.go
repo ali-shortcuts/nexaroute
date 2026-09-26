@@ -243,6 +243,92 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 		}
 		externalProviders = append(externalProviders, item)
 	}
+	// Phase G: chain state and provider health (bounded, safe)
+	chainsSnapshot := []map[string]any{}
+	for _, ch := range cfgFull.DecisionChains {
+		stepInfos := []map[string]any{}
+		for _, step := range ch.Steps {
+			// Determine type for display
+			pType := "jev"
+			if step.Provider == "local" {
+				pType = "local"
+			} else if step.Provider == "policy" {
+				pType = "policy"
+			} else {
+				// lookup external type
+				for _, ext := range cfgFull.DecisionProviders {
+					if ext.ID == step.Provider {
+						pType = ext.Type
+						break
+					}
+				}
+			}
+			item := map[string]any{
+				"provider_id": step.Provider,
+				"type":        pType,
+			}
+			if step.TimeoutMS > 0 {
+				item["timeout_ms"] = step.TimeoutMS
+			}
+			// Add runtime health if available
+			if s.decisionOrchestrator != nil && s.decisionOrchestrator.ProviderState() != nil {
+				if st, ok := s.decisionOrchestrator.ProviderState().SnapshotOne(step.Provider); ok {
+					item["state"] = st.Status
+					if !st.CooldownUntil.IsZero() {
+						item["cooldown_until"] = st.CooldownUntil.Format(time.RFC3339)
+						item["cooldown_active"] = !time.Now().Before(st.CooldownUntil) == false && s.decisionOrchestrator.ProviderState().IsCooldown(step.Provider)
+						// Use IsCooldown check
+						item["cooldown_active"] = s.decisionOrchestrator.ProviderState().IsCooldown(step.Provider)
+					} else {
+						item["cooldown_active"] = false
+					}
+					item["consecutive_failures"] = st.ConsecutiveFailures
+					if !st.LastFailure.IsZero() {
+						item["last_failure"] = st.LastFailure.Format(time.RFC3339)
+					}
+					if !st.LastSuccess.IsZero() {
+						item["last_success"] = st.LastSuccess.Format(time.RFC3339)
+					}
+				} else {
+					item["state"] = "healthy"
+					item["cooldown_active"] = false
+					item["consecutive_failures"] = 0
+				}
+			}
+			stepInfos = append(stepInfos, item)
+		}
+		chainsSnapshot = append(chainsSnapshot, map[string]any{
+			"id":         ch.ID,
+			"step_count": len(ch.Steps),
+			"steps":      stepInfos,
+		})
+	}
+	// Provider state snapshot for all decision providers (bounded)
+	providerStateSnapshot := map[string]any{}
+	if s.decisionOrchestrator != nil && s.decisionOrchestrator.ProviderState() != nil {
+		snap := s.decisionOrchestrator.ProviderState().Snapshot()
+		safeSnap := map[string]any{}
+		for id, st := range snap {
+			entry := map[string]any{
+				"status":               st.Status,
+				"consecutive_failures": st.ConsecutiveFailures,
+				"failures_in_window":   st.FailuresInWindow,
+				"successes":            st.Successes,
+				"cooldown_active":      s.decisionOrchestrator.ProviderState().IsCooldown(id),
+			}
+			if !st.CooldownUntil.IsZero() {
+				entry["cooldown_until"] = st.CooldownUntil.Format(time.RFC3339)
+			}
+			if !st.LastFailure.IsZero() {
+				entry["last_failure"] = st.LastFailure.Format(time.RFC3339)
+			}
+			if !st.LastSuccess.IsZero() {
+				entry["last_success"] = st.LastSuccess.Format(time.RFC3339)
+			}
+			safeSnap[id] = entry
+		}
+		providerStateSnapshot = safeSnap
+	}
 	s.runtimeMu.RUnlock()
 
 	writeJSON(w, 200, map[string]any{
@@ -276,7 +362,11 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 			"metrics":                     decisionMetrics,
 			"providers":                   decisionProviders,
 			"external_decision_providers": externalProviders,
+			"chains":                      chainsSnapshot,
+			"provider_state":              providerStateSnapshot,
 		},
+		"decision_chains":          cfgFull.DecisionChains,
+		"decision_provider_health": cfgFull.DecisionProviderHealth,
 		"config": map[string]any{
 			"probe":    probeCfg,
 			"routing":  routingCfg,

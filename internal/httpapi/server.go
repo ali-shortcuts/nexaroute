@@ -213,7 +213,7 @@ func New(cfg config.Config, configPath string, reg *providers.Registry, rt *rout
 			s.decisionRegistry.Register(jevProvider)
 		}
 	}
-	s.decisionOrchestrator = decision.NewOrchestrator(s.decisionRegistry, cfg.Decision, &decision.Metrics{})
+	s.decisionOrchestrator = decision.NewOrchestratorWithConfig(s.decisionRegistry, cfg, &decision.Metrics{})
 	s.routeResolver = route.NewResolver(cfg, rt.All())
 	return s
 }
@@ -306,6 +306,11 @@ func cloneConfig(in config.Config) config.Config {
 			out.DecisionProviders[i].Enabled = &b
 		}
 	}
+	out.DecisionChains = append([]config.DecisionChainConfig(nil), in.DecisionChains...)
+	for i := range out.DecisionChains {
+		out.DecisionChains[i].Steps = append([]config.DecisionChainStep(nil), in.DecisionChains[i].Steps...)
+	}
+	// DecisionProviderHealth is value struct, already copied
 	return out
 }
 
@@ -498,8 +503,40 @@ func (s *Server) applyConfigLocked(cfg config.Config) error {
 	}
 
 	s.cfg = cfg
+	// Phase G: update decision orchestrator with chains and health (coherent snapshot)
 	if s.decisionOrchestrator != nil {
-		s.decisionOrchestrator.UpdateConfig(cfg.Decision)
+		// Preserve provider state across unrelated reloads: compare old vs new identity
+		oldProvidersByDecisionID := map[string]config.DecisionProviderConfig{}
+		for _, p := range oldCfg.DecisionProviders {
+			oldProvidersByDecisionID[p.ID] = p
+		}
+		// If identity materially changes (endpoint/key/type/privacy), reset state
+		if s.decisionOrchestrator.ProviderState() != nil {
+			for _, newP := range cfg.DecisionProviders {
+				oldP, existed := oldProvidersByDecisionID[newP.ID]
+				if !existed {
+					continue
+				}
+				// Compare identity fields that affect runtime health
+				oldKey := oldP.APIKey
+				if oldP.APIKeyEnv != "" {
+					if v := os.Getenv(oldP.APIKeyEnv); v != "" {
+						oldKey = v
+					}
+				}
+				newKey := newP.APIKey
+				if newP.APIKeyEnv != "" {
+					if v := os.Getenv(newP.APIKeyEnv); v != "" {
+						newKey = v
+					}
+				}
+				if oldP.Type != newP.Type || oldP.BaseURL != newP.BaseURL || oldKey != newKey || oldP.PrivacyMode != newP.PrivacyMode {
+					s.decisionOrchestrator.ProviderState().Reset(newP.ID)
+				}
+			}
+			// Also reset state for removed providers (they will be re-registered as disabled)
+		}
+		s.decisionOrchestrator.UpdateFullConfig(cfg)
 	}
 	// Phase E: hot-reload policy provider
 	if s.decisionRegistry != nil {
@@ -509,7 +546,7 @@ func (s *Server) applyConfigLocked(cfg config.Config) error {
 				updater.UpdatePolicies(policies, cfg.Decision.Policy)
 			}
 		}
-		// Phase F: hot-reload external providers (jev) — build immutable new adapters and swap atomically
+		// Phase F/G: hot-reload external providers (jev) — build immutable new adapters and swap atomically
 		// Track old external IDs for removal
 		oldExternalIDs := map[string]struct{}{}
 		for _, id := range s.decisionRegistry.List() {
@@ -572,6 +609,10 @@ func (s *Server) applyConfigLocked(cfg config.Config) error {
 				})
 				if disabledProvider != nil {
 					s.decisionRegistry.Register(disabledProvider)
+				}
+				// Also reset its provider state (removed)
+				if s.decisionOrchestrator != nil && s.decisionOrchestrator.ProviderState() != nil {
+					s.decisionOrchestrator.ProviderState().Reset(oldID)
 				}
 			}
 		}

@@ -129,13 +129,6 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 503, "no compatible healthy deployment")
 		return
 	}
-	// Phase D/E: Decision plane — rank within eligible set only, fail-open, policy-aware
-	candidates = s.applyDecisionPlane(r.Context(), candidates, ti, resolvedRoute, r.Header.Get("x-request-id"), req)
-	if resolvedRoute != nil {
-		w.Header().Set("X-Gateway-Virtual-Endpoint", resolvedRoute.VirtualEndpointID)
-		w.Header().Set("X-Gateway-Public-Model", resolvedRoute.PublicModel)
-		w.Header().Set("X-Gateway-Route-Profile", resolvedRoute.RouteProfileID)
-	}
 	// For virtual endpoints, eligibility should ignore the virtual public model
 	// and use only pool + capability checks. The pool filtering already happened
 	// in candidatesForRequirement, so we clear Model for eligibility.
@@ -145,9 +138,17 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 	}
 	// Exact-match response cache (opt-in). Only complete, non-streaming,
 	// deterministic requests are ever considered; anything else bypasses.
+	// Phase F/G: Check cache BEFORE decision plane — on HIT, decision provider calls must be 0
 	cacheKey, cacheable := s.cacheLookupFor(r.URL.Path, raw, in.Stream, in.Temperature, in.TopP)
 	if s.cacheServe(w, r, cacheKey, cacheable) {
 		return
+	}
+	// Phase D/E/G: Decision plane — rank within eligible set only, fail-open, chain-aware
+	candidates = s.applyDecisionPlane(r.Context(), candidates, ti, resolvedRoute, r.Header.Get("x-request-id"), req)
+	if resolvedRoute != nil {
+		w.Header().Set("X-Gateway-Virtual-Endpoint", resolvedRoute.VirtualEndpointID)
+		w.Header().Set("X-Gateway-Public-Model", resolvedRoute.PublicModel)
+		w.Header().Set("X-Gateway-Route-Profile", resolvedRoute.RouteProfileID)
 	}
 	max := cfg.Routing.MaxAttempts
 	if max > len(candidates) {

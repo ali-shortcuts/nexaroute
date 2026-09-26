@@ -119,23 +119,24 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		anthropicErrorJSON(w, 503, "no compatible healthy deployment")
 		return
 	}
-	// Phase D/E: Decision plane — rank within eligible set only, fail-open, policy-aware
-	candidates = s.applyDecisionPlane(r.Context(), candidates, ti, resolvedRoute, r.Header.Get("x-request-id"), req)
-	// For observability: if virtual endpoint, add headers
-	if resolvedRoute != nil {
-		w.Header().Set("X-Gateway-Virtual-Endpoint", resolvedRoute.VirtualEndpointID)
-		w.Header().Set("X-Gateway-Public-Model", resolvedRoute.PublicModel)
-		w.Header().Set("X-Gateway-Route-Profile", resolvedRoute.RouteProfileID)
-	}
 	// For virtual endpoints, ignore virtual public model for eligibility.
 	reqEligible := req
 	if resolvedRoute != nil {
 		reqEligible.Model = ""
 	}
 	// Exact-match response cache (opt-in; see cache_wiring.go).
+	// Phase F/G: Check cache BEFORE decision — on HIT, decision calls must be 0
 	cacheKey, cacheable := s.cacheLookupFor(r.URL.Path, raw, in.Stream, in.Temperature, in.TopP)
 	if s.cacheServe(w, r, cacheKey, cacheable) {
 		return
+	}
+	// Phase D/E/G: Decision plane — rank within eligible set only, fail-open, chain-aware
+	candidates = s.applyDecisionPlane(r.Context(), candidates, ti, resolvedRoute, r.Header.Get("x-request-id"), req)
+	// For observability: if virtual endpoint, add headers
+	if resolvedRoute != nil {
+		w.Header().Set("X-Gateway-Virtual-Endpoint", resolvedRoute.VirtualEndpointID)
+		w.Header().Set("X-Gateway-Public-Model", resolvedRoute.PublicModel)
+		w.Header().Set("X-Gateway-Route-Profile", resolvedRoute.RouteProfileID)
 	}
 	max := cfg.Routing.MaxAttempts
 	if max > len(candidates) {

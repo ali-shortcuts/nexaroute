@@ -262,6 +262,26 @@ func (s *Server) emitDecisionEvent(requestID string, result decision.DecisionRes
 			break
 		}
 	}
+	// Phase G chain outcome overrides
+	if trace.ChainTrace != nil {
+		switch trace.ChainTrace.Outcome {
+		case decision.ChainOutcomeBudgetExhausted:
+			kind = "decision_fail"
+		case decision.ChainOutcomeDeadlineExhausted:
+			kind = "decision_timeout"
+		case decision.ChainOutcomeAffinityPreserved:
+			// affinity preserved is a select with pinned, treat as ok
+			if result.Action == decision.ActionSelect {
+				kind = "decision_ok"
+			} else {
+				kind = "decision_abstain"
+			}
+		case decision.ChainOutcomeExhausted:
+			kind = "decision_abstain"
+		case decision.ChainOutcomeSelected:
+			kind = "decision_ok"
+		}
+	}
 
 	ev := events.Event{
 		RequestID:              requestID,
@@ -275,6 +295,20 @@ func (s *Server) emitDecisionEvent(requestID string, result decision.DecisionRes
 		DecisionConfidence:     result.Confidence,
 		LatencyMS:              result.Latency.Milliseconds(),
 		DecisionBreakdown:      breakdownJSON,
+	}
+	if trace.ChainTrace != nil {
+		ev.DecisionChainID = trace.ChainTrace.ChainID
+		ev.DecisionChainOutcome = trace.ChainTrace.Outcome
+		ev.DecisionChainCalls = trace.ChainTrace.CallsUsed
+		ev.DecisionSelectedProvider = trace.ChainTrace.SelectedProviderID
+		// If result provider empty but chain selected, use selected provider
+		if ev.DecisionSelectedProvider == "" {
+			ev.DecisionSelectedProvider = result.ProviderID
+		}
+	}
+	// Also expose chain trace via decision mode if hybrid
+	if trace.Mode == "hybrid" && ev.DecisionChainID == "" && trace.ChainTrace != nil {
+		ev.DecisionChainID = trace.ChainTrace.ChainID
 	}
 	if result.PolicyTrace != nil {
 		ev.DecisionPolicyID = result.PolicyTrace.PolicyID
@@ -347,10 +381,23 @@ func (s *Server) applyDecisionPlane(
 		poolID = resolvedRoute.PrimaryPoolID
 	}
 
-	// Budget from config — includes MaxProviderCalls = 1 for Phase D
-	budget := decision.Budget{
-		Timeout:          time.Duration(cfgDecision.TimeoutMS) * time.Millisecond,
-		MaxProviderCalls: 1,
+	// Budget from config — Phase G chain global
+	var budget decision.Budget
+	if cfgDecision.Mode == "hybrid" {
+		maxCalls := cfgDecision.MaxProviderCalls
+		if maxCalls == 0 {
+			// Let orchestrator default to chain length; pass 0 to mean default
+			maxCalls = 0
+		}
+		budget = decision.Budget{
+			Timeout:          time.Duration(cfgDecision.TimeoutMS) * time.Millisecond,
+			MaxProviderCalls: maxCalls,
+		}
+	} else {
+		budget = decision.Budget{
+			Timeout:          time.Duration(cfgDecision.TimeoutMS) * time.Millisecond,
+			MaxProviderCalls: 1,
+		}
 	}
 
 	// Use task intelligence; ensure types align
