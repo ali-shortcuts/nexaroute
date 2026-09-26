@@ -204,36 +204,25 @@ The dashboard includes:
 - active session-affinity count
 - CLI Tools onboarding for Anthropic/Claude Code and OpenAI-compatible clients
 
-## Fastest Ubuntu test: use a release package
+## Ubuntu install and browser startup
 
-After downloading and extracting a tagged release package, run:
-
-```bash
-cd nexaroute
-chmod +x install-user.sh
-./install-user.sh
-```
-
-This installs:
-
-```text
-~/.local/bin/nexaroute
-~/.config/nexaroute/config.json
-```
-
-Run:
+Release assets are prepared but **not yet published**. Once the reviewed release
+is available:
 
 ```bash
-~/.local/bin/nexaroute -config ~/.config/nexaroute/config.json
+curl -fsSL https://github.com/ali-shortcuts/nexaroute/releases/latest/download/install.sh | bash
+nexaroute
 ```
 
-Open:
+No Go or git required. The installer verifies SHA256 and installs into
+`/usr/local/bin` (sudo for the binary only). The embedded UI opens automatically;
+headless systems print the URL. Settings live in
+`${XDG_CONFIG_HOME:-$HOME/.config}/nexaroute/config.json` and survive upgrades.
+Keep the terminal open; Ctrl+C stops NexaRoute. Saved credentials are write-only.
 
-```text
-http://127.0.0.1:8080/
-```
-
-The sample providers are disabled, so the gateway will not contact any real provider until you configure and enable one.
+See [Installation](docs/INSTALLATION.md) for options and release preparation, and
+[Quickstart](docs/QUICKSTART.md) for adding providers, creating a route, and
+connecting Claude Code.
 
 ## Quick local self-test
 

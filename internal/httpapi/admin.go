@@ -28,9 +28,11 @@ var (
 )
 
 type providerForm struct {
-	Provider       config.ProviderConfig `json:"provider"`
-	PreserveSecret bool                  `json:"preserve_secret"`
-	TestModels     []string              `json:"test_models,omitempty"`
+	Provider        config.ProviderConfig `json:"provider"`
+	PreserveSecret  bool                  `json:"preserve_secret"`
+	PreserveHeaders bool                  `json:"preserve_headers"`
+	PreserveProxy   bool                  `json:"preserve_proxy"`
+	TestModels      []string              `json:"test_models,omitempty"`
 	// Mode selects the probe depth: quick (default, availability),
 	// full (Level B capability suite) or claude_code (agent-loop
 	// simulation). See docs/COMPATIBILITY.md.
@@ -67,9 +69,7 @@ func (s *Server) adminProviderCheck(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 400, "invalid JSON: "+err.Error())
 		return
 	}
-	if in.PreserveSecret {
-		mergeExistingSecret(s.currentConfig(), &in.Provider)
-	}
+	mergePreservedFields(s.currentConfig(), &in)
 	normalizeProvider(&in.Provider)
 	if in.Provider.BaseURL == "" {
 		errorJSON(w, 400, "base_url is required")
@@ -568,15 +568,16 @@ func (s *Server) adminProviderByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		p := cfg.Providers[idx]
-		payload := map[string]any{
-			"secret_source": secretSource(p),
-			"has_secret":    len(p.ResolvedCredentials()) > 0,
-		}
+		// Saved credentials are write-only, even for legacy ?reveal=1 callers.
+		source, hasSecret := secretSource(p), len(p.ResolvedCredentials()) > 0
 		p.APIKey = ""
+		p.Headers = nil // custom authorization headers can also contain secrets
+		p.ProxyURL = "" // proxy URLs may contain passwords
+		p.Credentials = append([]config.CredentialConfig(nil), p.Credentials...)
 		for i := range p.Credentials {
 			p.Credentials[i].APIKey = ""
 		}
-		payload["provider"] = p
+		payload := map[string]any{"provider": p, "secret_source": source, "has_secret": hasSecret}
 		writeJSON(w, 200, payload)
 
 	case http.MethodPut:
@@ -602,6 +603,12 @@ func (s *Server) adminProviderByID(w http.ResponseWriter, r *http.Request) {
 				in.Provider.APIKey = old.APIKey
 				in.Provider.APIKeyEnv = old.APIKeyEnv
 				in.Provider.Credentials = old.Credentials
+			}
+			if in.PreserveHeaders {
+				in.Provider.Headers = old.Headers
+			}
+			if in.PreserveProxy {
+				in.Provider.ProxyURL = old.ProxyURL
 			}
 			dropEnvResolvedLiteral(&in.Provider, old)
 			normalizeProvider(&in.Provider)
@@ -654,9 +661,7 @@ func (s *Server) adminProviderTest(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 400, "invalid JSON: "+err.Error())
 		return
 	}
-	if in.PreserveSecret {
-		mergeExistingSecret(s.currentConfig(), &in.Provider)
-	}
+	mergePreservedFields(s.currentConfig(), &in)
 	normalizeProvider(&in.Provider)
 	if in.Provider.ID == "" || in.Provider.BaseURL == "" {
 		errorJSON(w, 400, "provider id and base_url are required")
@@ -779,9 +784,7 @@ func (s *Server) adminProviderDiscover(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 400, "invalid JSON: "+err.Error())
 		return
 	}
-	if in.PreserveSecret {
-		mergeExistingSecret(s.currentConfig(), &in.Provider)
-	}
+	mergePreservedFields(s.currentConfig(), &in)
 	normalizeProvider(&in.Provider)
 	if in.Provider.BaseURL == "" {
 		errorJSON(w, 400, "base_url is required")
@@ -812,7 +815,7 @@ func providerSummary(p config.ProviderConfig) map[string]any {
 		"has_secret":       len(p.ResolvedCredentials()) > 0,
 		"api_key_env":      p.APIKeyEnv,
 		"credential_count": len(p.ResolvedCredentials()),
-		"proxy_url":        p.ProxyURL,
+		"has_proxy":        p.ProxyURL != "",
 		"max_concurrency":  p.MaxConcurrency,
 	}
 }
@@ -844,6 +847,21 @@ func dropEnvResolvedLiteral(in *config.ProviderConfig, old config.ProviderConfig
 	}
 	if resolved != "" && subtle.ConstantTimeCompare([]byte(in.APIKey), []byte(resolved)) == 1 {
 		in.APIKey = ""
+	}
+}
+
+// Unchanged write-only fields are merged server-side for save/discover/test.
+func mergePreservedFields(cfg config.Config, in *providerForm) {
+	if in.PreserveSecret {
+		mergeExistingSecret(cfg, &in.Provider)
+	}
+	if i := cfg.ProviderIndex(in.Provider.ID); i >= 0 {
+		if in.PreserveHeaders {
+			in.Provider.Headers = cfg.Providers[i].Headers
+		}
+		if in.PreserveProxy {
+			in.Provider.ProxyURL = cfg.Providers[i].ProxyURL
+		}
 	}
 }
 

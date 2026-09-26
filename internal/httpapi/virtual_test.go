@@ -520,13 +520,14 @@ func TestLegacyEndpointCompatibility(t *testing.T) {
 		t.Fatalf("legacy endpoint creation failed: %d %s", rr.Code, rr.Body.String())
 	}
 	var resp struct {
-		Model string `json:"model"`
-		Key   string `json:"api_key"`
+		Model  string `json:"model"`
+		Key    string `json:"api_key"`
+		HasKey bool   `json:"has_key"`
 	}
 	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("invalid response: %v", err)
 	}
-	if resp.Model != "my-coding" || !strings.HasPrefix(resp.Key, "nx_") {
+	if resp.Model != "my-coding" || resp.Key != "" || !resp.HasKey || !strings.HasPrefix(s.currentConfig().ClientAuth.Keys[0], "nx_") {
 		t.Fatalf("unexpected response: %+v", resp)
 	}
 
@@ -795,6 +796,10 @@ func TestLegacyEndpointSecurity(t *testing.T) {
 		t.Fatalf("GET /admin/api/endpoint should have no-store, got %q", rr.Header().Get("Cache-Control"))
 	}
 
+	if strings.Contains(rr.Body.String(), "valid-key-12345678") || strings.Contains(rr.Body.String(), "api_key") {
+		t.Fatal("endpoint GET returned a saved client key")
+	}
+
 	// POST should have no-store
 	req = httptest.NewRequest("POST", "http://localhost/admin/api/endpoint", strings.NewReader(`{"model":"test-model"}`))
 	req.RemoteAddr = "127.0.0.1:12345"
@@ -803,6 +808,10 @@ func TestLegacyEndpointSecurity(t *testing.T) {
 	s.Handler().ServeHTTP(rr, req)
 	if rr.Header().Get("Cache-Control") != "no-store" {
 		t.Fatalf("POST /admin/api/endpoint should have no-store, got %q", rr.Header().Get("Cache-Control"))
+	}
+
+	if strings.Contains(rr.Body.String(), "valid-key-12345678") || strings.Contains(rr.Body.String(), "api_key") {
+		t.Fatal("endpoint POST returned a saved client key")
 	}
 
 	// Key should not appear in snapshot (only count)
@@ -817,7 +826,7 @@ func TestLegacyEndpointSecurity(t *testing.T) {
 	}
 
 	// Provider keys should not be returned
-	// (adminEndpoint only returns client key, not provider keys - verified by code)
+	// Neither provider nor client keys may be returned.
 
 	// Rotation should preserve unrelated keys
 	// We have 2 keys, rotate should replace first but keep second

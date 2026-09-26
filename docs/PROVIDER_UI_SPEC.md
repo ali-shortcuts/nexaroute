@@ -29,9 +29,9 @@ Required semantics:
 - Base URL is fully visible and editable.
 - Provider type is visible.
 - Saved models are visible.
-- Credential is loaded for an authorized local/admin edit request and placed in a password input.
-- Show/Hide changes only browser display, not the stored value.
-- If the secret field was not changed, `preserve_secret=true` is sent. This keeps the exact previous `api_key` / `api_key_env` source.
+- Saved credentials are write-only and are never loaded into the editor.
+- Show/Hide applies only to a newly entered key, never to a saved key.
+- If the secret field was not changed, `preserve_secret=true` is sent. This keeps the exact previous `api_key` / `api_key_env` / credential-pool values. Editing any credential field replaces the complete credential set. Custom headers and proxy URLs are also write-only and have separate `preserve_headers` / `preserve_proxy` flags.
 - Provider ID is locked in the current UI after creation to avoid accidental identity changes.
 - Delete is explicit and requires confirmation.
 
@@ -50,6 +50,6 @@ A gateway process restart is not required for provider CRUD.
 
 ## Secret handling boundary
 
-The edit endpoint can reveal a resolved secret only through the admin boundary. With the default configuration, admin API access is loopback-only. If an admin API key is configured, that key is required; `bind_local_only=true` still blocks remote admin access.
+The edit endpoint never returns saved literal, pooled, or environment-resolved credentials, even with `?reveal=1`. Headers and proxy URLs are also not returned. Base URLs and other metadata must not contain credentials. With the default configuration, admin API access is loopback-only. If an admin API key is configured, that key is required; `bind_local_only=true` still blocks remote admin access.
 
 This UI is intentionally local-first. Exposing it to a network requires additional CSRF/session hardening planned for a later release.

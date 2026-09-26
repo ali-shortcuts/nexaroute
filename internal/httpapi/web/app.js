@@ -699,6 +699,8 @@ $('#togglePKey').onclick = () => toggleSecret('#pKey', '#togglePKey');
 $('#pKey').oninput = () => editor.secretDirty = true;
 $('#pKeyEnv').oninput = () => editor.secretDirty = true;
 $('#pCredentials').oninput = () => editor.secretDirty = true;
+$('#pHeaders').oninput = () => editor.headersDirty = true;
+$('#pProxy').oninput = () => editor.proxyDirty = true;
 $('#pPreset').onchange = () => applyPreset($('#pPreset').value);
 $('#pType').onchange = () => {
   const a = $('#pAuth'), typ = $('#pType').value;
@@ -709,9 +711,8 @@ $('#pType').onchange = () => {
 async function openEdit(id) {
   try {
     const d = await api('/admin/api/providers/' + encodeURIComponent(id)), p = d.provider;
-    // Existing literal keys and credential pool values are never returned by
-    // the API. preserve_secret keeps them server-side unless the operator
-    // explicitly enters replacements.
+    // Saved keys never leave the server. Blank, untouched fields preserve them.
+    p.api_key = '';
     editor = {
       mode: 'edit', originalId: id, provider: p,
       detected: (p.models || []).map(m => m.model),
@@ -735,12 +736,14 @@ function fillForm() {
   $('#pAuth').value = p.auth_mode || 'bearer';
   $('#pEnabled').checked = p.enabled !== false;
   $('#pKey').value = p.api_key || '';
-  $('#pKey').placeholder = editor.mode === 'edit' && editor.secretSource === 'env' ? 'stored in env var - leave blank to keep' : '';
+  $('#pKey').placeholder = editor.mode === 'edit' ? 'Saved key is write-only; leave untouched to keep' : '';
   $('#pKey').type = 'password';
   $('#togglePKey').textContent = 'Show';
   $('#pKeyEnv').value = p.api_key_env || '';
   $('#pHeaders').value = Object.keys(p.headers || {}).length ? JSON.stringify(p.headers, null, 2) : '';
-  $('#pProxy').value = p.proxy_url || '';
+  $('#pProxy').value = '';
+  $('#pProxy').placeholder = editor.mode === 'edit' ? 'Write-only; leave untouched to keep saved proxy' : '';
+  $('#pHeaders').placeholder = editor.mode === 'edit' ? 'Write-only; leave untouched to keep saved headers' : '{}';
   $('#pConcurrency').value = p.max_concurrency || 32;
   $('#pStreamIdle').value = p.stream_idle_timeout_seconds || 180;
   $('#pChatPath').value = p.chat_path || '/v1/chat/completions';
@@ -749,7 +752,8 @@ function fillForm() {
   $('#pModelsPath').value = p.models_path || '/v1/models';
   $('#pCountPath').value = p.count_tokens_path || '/v1/messages/count_tokens';
   $('#pForwardHeaders').value = (p.forward_headers || []).join(', ');
-  $('#pCredentials').value = (p.credentials || []).length ? JSON.stringify(p.credentials, null, 2) : '';
+  $('#pCredentials').value = '';
+  $('#pCredentials').placeholder = editor.mode === 'edit' ? 'Saved pool is write-only. Leave untouched to keep, or enter a complete replacement.' : '[]';
   const first = (p.models || [])[0] || {};
   const caps = first.capabilities || { streaming: true, tools: true, vision: false, reasoning: false };
   $('#pAliases').value = '';
@@ -757,7 +761,7 @@ function fillForm() {
   $('#pCapTools').checked = caps.tools !== false;
   $('#pCapVision').checked = !!caps.vision;
   $('#pCapReasoning').checked = !!caps.reasoning;
-  $('#secretSource').textContent = editor.mode === 'edit' ? `saved source: ${editor.secretSource}` : '';
+  $('#secretSource').textContent = editor.mode === 'edit' ? `Saved source: ${editor.secretSource}. Keys are write-only. Editing any credential field replaces the entire credential set; re-enter all keys you want to keep.` : '';
   $('#discoverStatus').textContent = '';
   $('#testResults').innerHTML = '';
   renderPicker();
@@ -831,7 +835,7 @@ function readForm() {
   return p;
 }
 function payload(p) {
-  return { provider: p, preserve_secret: editor.mode === 'edit' && !editor.secretDirty, test_models: [...editor.selected] };
+  return { provider: p, preserve_secret: editor.mode === 'edit' && !editor.secretDirty, preserve_headers: editor.mode === 'edit' && !editor.headersDirty, preserve_proxy: editor.mode === 'edit' && !editor.proxyDirty, test_models: [...editor.selected] };
 }
 function renderPicker() {
   const all = [...new Set([...editor.detected, ...editor.selected])];
@@ -933,6 +937,11 @@ $('#saveProviderBtn').onclick = async () => {
     if (editor.mode === 'add') await api('/admin/api/providers', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: b });
     else await api('/admin/api/providers/' + encodeURIComponent(editor.originalId), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: b });
     toast('Provider saved and runtime reloaded');
+    $('#pKey').value = '';
+    $('#pCredentials').value = '';
+    $('#pHeaders').value = '';
+    $('#pProxy').value = '';
+    editor = null;
     modal(false);
     await refresh();
   } catch (e) { toast(e.message, true); }
@@ -1248,7 +1257,7 @@ async function runCompatSuite(mode) {
       if (!models.length) continue;
       const d = await api('/admin/api/provider-test', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ provider: p, preserve_secret: true, test_models: models, mode })
+        body: JSON.stringify({ provider: p, preserve_secret: true, preserve_headers: true, preserve_proxy: true, test_models: models, mode })
       });
       (d.results || []).forEach(x => {
         const r = mode === 'full' ? x.capability_report : x.agent_report;

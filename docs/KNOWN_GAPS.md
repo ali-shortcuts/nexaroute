@@ -2,6 +2,9 @@
 
 These are explicit boundaries of the current code, not hidden assumptions.
 
+For the Ubuntu installer/release candidate, see the current
+[installation release report](INSTALL_RELEASE_REPORT.md#known-gaps--required-release-sign-off).
+
 ## Protocol scope
 
 Implemented runtime protocol classes are:
@@ -50,6 +53,8 @@ Implemented:
 Not implemented:
 
 - encrypted-at-rest secret vault / OS keyring integration
+
+Saved provider keys are now write-only, including literal, pool, and environment keys. Headers and proxy URLs are also write-only. Editing a credential field replaces the whole credential set; individual saved pool keys cannot be revealed. Do not store credentials in base URLs or other public metadata. Do not expose the admin surface to untrusted networks.
 
 ## Admin security
 
