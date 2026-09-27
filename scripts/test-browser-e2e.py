@@ -390,6 +390,7 @@ def main() -> None:
                 page.locator('.edit-provider[data-id="e2e-provider"]').click()
                 page.locator("#deleteProviderBtn").click()
                 page.locator('[data-dialog-value="yes"]').click()
+                wait_class_state(page, "#providerModal", "open", False)
                 expect(page.locator("#providerGrid")).not_to_contain_text("Browser E2E Provider Renamed")
 
                 assert not console_errors, "browser errors: " + "; ".join(console_errors)
