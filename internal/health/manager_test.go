@@ -183,6 +183,63 @@ func TestSnapshotNormalizesExpiredCooldowns(t *testing.T) {
 	}
 }
 
+func TestRetirementIsStickyUntilDeploymentIdentityChanges(t *testing.T) {
+	m := New(3, time.Hour)
+	m.SetIdentity("p/m", "identity-v1")
+	if !m.RetireForIdentity("p/m", "identity-v1", "model_retired", "model_retired") {
+		t.Fatal("expected active identity to retire")
+	}
+	m.RecordSuccessForIdentity("p/m", "identity-v1", time.Millisecond)
+	m.RecordFailureForIdentity("p/m", "identity-v1", "late failure", time.Millisecond)
+	if st := m.Get("p/m"); st.Status != Retired || st.LastErrorClass != "model_retired" {
+		t.Fatalf("late traffic changed retired state: %+v", st)
+	}
+	m.SetIdentity("p/m", "identity-v2")
+	if st := m.Get("p/m"); st.Status != Unknown || st.Identity != "identity-v2" || st.LastErrorClass != "" {
+		t.Fatalf("identity change did not reset retirement: %+v", st)
+	}
+}
+
+func TestQuarantineRequiresVerifiedIdentityRecovery(t *testing.T) {
+	m := New(5, time.Hour)
+	m.SetIdentity("p/m", "identity-v1")
+	m.QuarantineWithClassForIdentity("p/m", "identity-v1", "model temporarily unavailable", "model_temporarily_unavailable", time.Millisecond)
+	st := m.Get("p/m")
+	if st.Status != Degraded || !st.Quarantined || st.LastErrorClass != "model_temporarily_unavailable" {
+		t.Fatalf("quarantine state=%+v", st)
+	}
+	m.RecordSuccessForIdentity("p/m", "stale-identity", time.Millisecond)
+	if st = m.Get("p/m"); st.Status != Degraded || !st.Quarantined {
+		t.Fatalf("stale identity recovered deployment: %+v", st)
+	}
+	m.RecordSuccessForIdentity("p/m", "identity-v1", time.Millisecond)
+	if st = m.Get("p/m"); st.Status != Degraded || !st.Quarantined {
+		t.Fatalf("late live success bypassed supervised recovery: %+v", st)
+	}
+	if !m.RecordRecoverySuccessForIdentity("p/m", "identity-v1", st.Revision, time.Millisecond) {
+		t.Fatal("expected current recovery revision to restore readiness")
+	}
+	if st = m.Get("p/m"); st.Status != Healthy || st.Quarantined || st.LastErrorClass != "" {
+		t.Fatalf("verified recovery did not restore ready state: %+v", st)
+	}
+}
+
+func TestStaleRecoverySuccessCannotClearNewerFailure(t *testing.T) {
+	m := New(5, time.Hour)
+	m.SetIdentity("p/m", "identity-v1")
+	m.QuarantineWithClassForIdentity("p/m", "identity-v1", "first failure", "model_temporarily_unavailable", time.Millisecond)
+	st := m.Get("p/m")
+	oldRevision := st.Revision
+	m.ForceCooldownWithClassForIdentity("p/m", "identity-v1", "new rate limit", "rate_limit", time.Minute)
+	if m.RecordRecoverySuccessForIdentity("p/m", "identity-v1", oldRevision, time.Millisecond) {
+		t.Fatal("stale recovery success unexpectedly cleared a newer cooldown")
+	}
+	st = m.Get("p/m")
+	if st.Status != Cooldown || !st.Quarantined || st.LastErrorClass != "rate_limit" {
+		t.Fatalf("newer failure state was lost: %+v", st)
+	}
+}
+
 func TestFailureEWMARecoversFromOldFailure(t *testing.T) {
 	m := New(100, time.Hour)
 	m.RecordFailure("p/m", "temporary", time.Millisecond)

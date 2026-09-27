@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -8,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ali-shortcuts/nexaroute/internal/compat"
 	"github.com/ali-shortcuts/nexaroute/internal/core"
 	"github.com/ali-shortcuts/nexaroute/internal/events"
 	"github.com/ali-shortcuts/nexaroute/internal/feature"
@@ -155,13 +157,14 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 		max = len(candidates)
 	}
 	profile := profileFromRequirement(req, nil)
+	if toolChoiceRequired != nil {
+		profile.NeedsTool = *toolChoiceRequired
+	}
 	routeCtx, routeCancel := routeContext(r.Context(), in.Stream, cfg.RequestTimeout())
 	routeCtx = providers.WithQuotaEstimate(routeCtx, req.EstimatedInputTokens, req.MaxOutputTokens)
 	defer routeCancel()
 	var lastErr string
-	var lastStatus int
-	var lastBody []byte
-	var lastContentType string
+	var lastClass compat.Classified
 	var lastRetryAfter string
 	var gatewayTimedOut bool
 	forward := copySelectedRequestHeaders(r)
@@ -232,96 +235,67 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 		}
 		headerLatency := time.Since(start)
 		if e != nil {
-			lastErr = e.Error()
 			if clientRequestGone(r.Context()) {
-				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "client_disconnect", Deployment: c.Deployment.ID, Message: r.Context().Err().Error(), ErrorType: "caller_cancelled", LatencyMS: headerLatency.Milliseconds()})
+			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "client_disconnect", Deployment: c.Deployment.ID, Message: "client cancelled request", ErrorType: "caller_cancelled", LatencyMS: headerLatency.Milliseconds()})
 				return
 			}
 			if gatewayDeadlineError(routeCtx, r.Context(), e) {
 				gatewayTimedOut = true
-				s.hm.RecordProviderFailure(c.Deployment.ProviderID, c.Deployment.ID, lastErr)
-				if router.IsReadyStrategy(cfg.Routing.Strategy) {
-					s.hm.Quarantine(c.Deployment.ID, lastErr, headerLatency)
-					s.probe.Recover(c.Deployment.ID)
-				} else {
-					s.hm.RecordFailure(c.Deployment.ID, lastErr, headerLatency)
-				}
-				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_timeout", Deployment: c.Deployment.ID, Message: lastErr, ErrorType: "provider_timeout", LatencyMS: headerLatency.Milliseconds()})
+				lastRetryAfter = ""
+				lastClass = compat.Classified{Class: compat.ClassTimeout, StatusCode: http.StatusGatewayTimeout}
+				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_timeout", Deployment: c.Deployment.ID, Message: "gateway request deadline exceeded", ErrorType: "gateway_timeout", FailureClass: string(compat.ClassTimeout), LatencyMS: headerLatency.Milliseconds()})
 				break
 			}
-			s.hm.RecordProviderFailure(c.Deployment.ProviderID, c.Deployment.ID, lastErr)
-			if router.IsReadyStrategy(cfg.Routing.Strategy) {
-				s.hm.Quarantine(c.Deployment.ID, lastErr, headerLatency)
-				s.probe.Recover(c.Deployment.ID)
-			} else {
-				s.hm.RecordFailure(c.Deployment.ID, lastErr, headerLatency)
+			cls := classifyUpstreamTransportError(e)
+			lastClass = cls
+			lastErr = safeFailureReason(cls)
+			policy := s.applyClassifiedFailure(c.Deployment, cls, headerLatency, providers.RetryAfterValue(e), e)
+			if cls.Class == compat.ClassRateLimit || cls.StatusCode == http.StatusTooManyRequests {
+				lastRetryAfter = retryAfterErrorValue(e, time.Duration(cfg.Routing.MaxRetryAfterSeconds)*time.Second)
 			}
-			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_fail", Deployment: c.Deployment.ID, Message: lastErr, ErrorType: "provider_connection_failed", LatencyMS: headerLatency.Milliseconds()})
-			if attempts < max && i+1 < len(candidates) {
-				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "failover", Deployment: c.Deployment.ID, Message: "transport failure; trying next eligible candidate"})
+			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_fail", Deployment: c.Deployment.ID,
+				Message: "upstream transport failed", ErrorType: policy.ErrorType, FailureClass: string(cls.Class), LatencyMS: headerLatency.Milliseconds(), StatusCode: cls.StatusCode})
+			if policy.Failover && attempts < max && i+1 < len(candidates) {
+				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "failover", Deployment: c.Deployment.ID, Message: "trying next eligible candidate", FailureClass: string(cls.Class), StatusCode: cls.StatusCode})
+				s.retryPause(routeCtx, r.Header.Get("x-request-id"), cfg, attemptIndex, max)
+				continue
 			}
-			s.retryPause(routeCtx, r.Header.Get("x-request-id"), cfg, attemptIndex, max)
+			if !policy.Failover {
+				writeClassifiedTerminalError(w, "openai", cls, lastRetryAfter)
+				return
+			}
 			continue
 		}
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			b, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
 			resp.Body.Close()
 			b = a.RedactBody(b)
-			lastStatus = resp.StatusCode
-			lastBody = b
-			lastContentType = resp.Header.Get("Content-Type")
-			lastRetryAfter = ""
-			if resp.StatusCode == http.StatusTooManyRequests {
-				lastRetryAfter = retryAfterResponseValue(resp.Header, time.Duration(cfg.Routing.MaxRetryAfterSeconds)*time.Second)
-			}
-			lastErr = upstreamError(resp.StatusCode, b)
 			cls, policy := classifyFailure(resp.StatusCode, b)
-			if cls.CapabilityFailure {
-				// Capability failures are compatibility facts, not health
-				// failures: the deployment stays in the ready mesh.
-				lastErr = fmt.Sprintf("%s: %s", cls.CapabilityLabel(), cls.Message)
-				policy.Failover = true
-				policy.QuarantineDeployment = false
-				policy.HardCooldown = false
-				policy.SignalProvider = false
+			lastClass = cls
+			lastErr = safeFailureReason(cls)
+			if cls.Class == compat.ClassRateLimit || cls.StatusCode == http.StatusTooManyRequests {
+				lastRetryAfter = retryAfterResponseValue(resp.Header, time.Duration(cfg.Routing.MaxRetryAfterSeconds)*time.Second)
+			} else {
+				lastRetryAfter = ""
 			}
-			s.recordProviderFailure(c.Deployment.ProviderID, c.Deployment.ID, lastErr, policy)
-			if router.IsReadyStrategy(cfg.Routing.Strategy) {
-				if policy.QuarantineDeployment {
-					s.hm.Quarantine(c.Deployment.ID, lastErr, headerLatency)
-					s.probe.Recover(c.Deployment.ID)
-				}
-			} else if policy.HardCooldown {
-				d := cfg.Cooldown()
-				if resp.StatusCode == 429 {
-					d = retryAfterDuration(resp.Header, time.Duration(cfg.Routing.MaxRetryAfterSeconds)*time.Second)
-				}
-				s.hm.ForceCooldown(c.Deployment.ID, lastErr, d)
-			} else if policy.QuarantineDeployment {
-				s.hm.RecordFailure(c.Deployment.ID, lastErr, headerLatency)
-			}
-			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_fail", Deployment: c.Deployment.ID, Message: lastErr, ErrorType: policy.ErrorType, LatencyMS: headerLatency.Milliseconds(), StatusCode: resp.StatusCode})
-			if (policy.Failover || cls.CapabilityFailure) && attempts < max && i+1 < len(candidates) {
-				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "failover", Deployment: c.Deployment.ID, Message: fmt.Sprintf("HTTP %d; trying next eligible candidate", resp.StatusCode), StatusCode: resp.StatusCode})
+			s.applyClassifiedFailure(c.Deployment, cls, headerLatency, resp.Header.Get("Retry-After"), nil)
+			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_fail", Deployment: c.Deployment.ID,
+				Message: safeTerminalMessage(cls), ErrorType: policy.ErrorType, FailureClass: string(cls.Class), LatencyMS: headerLatency.Milliseconds(), StatusCode: resp.StatusCode})
+			if policy.Failover && attempts < max && i+1 < len(candidates) {
+				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "failover", Deployment: c.Deployment.ID, Message: "trying next eligible candidate", FailureClass: string(cls.Class), StatusCode: resp.StatusCode})
 				s.retryPause(routeCtx, r.Header.Get("x-request-id"), cfg, attemptIndex, max)
 				continue
 			}
-			if lastRetryAfter != "" {
-				w.Header().Set("Retry-After", lastRetryAfter)
-			}
-			if c.Deployment.ProviderType == "openai_compatible" {
-				writeRawUpstreamError(w, lastStatus, lastContentType, lastBody)
-				return
-			}
-			errorJSON(w, resp.StatusCode, lastErr)
+			writeClassifiedTerminalError(w, "openai", cls, lastRetryAfter)
 			return
 		}
+
 		w.Header().Set("X-Gateway-Deployment", c.Deployment.ID)
 		w.Header().Set("X-Gateway-Provider", c.Deployment.ProviderID)
 		w.Header().Set("X-Gateway-Upstream-Model", c.Deployment.Model)
 		if in.Stream {
 			deploymentID := c.Deployment.ID
-			resp.Body = observeFirstByte(resp.Body, start, func(d time.Duration) { s.hm.RecordTTFT(deploymentID, d) })
+			resp.Body = observeFirstByte(resp.Body, start, func(d time.Duration) { s.hm.RecordTTFTForIdentity(deploymentID, c.Deployment.Identity, d) })
 		}
 		switch {
 		case kind != "":
@@ -361,47 +335,68 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 		}
 		total := time.Since(start)
 		if e != nil {
-			lastErr = e.Error()
 			if clientRequestGone(r.Context()) {
-				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "client_disconnect", Deployment: c.Deployment.ID, Message: r.Context().Err().Error(), ErrorType: "caller_cancelled", LatencyMS: total.Milliseconds(), StatusCode: resp.StatusCode})
+				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "client_disconnect", Deployment: c.Deployment.ID, Message: "client cancelled request", ErrorType: "caller_cancelled", LatencyMS: total.Milliseconds(), StatusCode: resp.StatusCode})
 				return
 			}
-			if !responseCommitted(w) {
-				lastStatus = 0
-				lastBody = nil
-				if cfg.Routing.Strategy == "ready_mesh" && req.Streaming {
-					s.hm.RecordScopeFailure(c.Deployment.ID, []string{"streaming"}, lastErr)
-				} else if router.IsReadyStrategy(cfg.Routing.Strategy) {
-					s.hm.Quarantine(c.Deployment.ID, lastErr, total)
-					s.probe.Recover(c.Deployment.ID)
-				} else {
-					s.hm.RecordFailure(c.Deployment.ID, lastErr, total)
+			if gatewayDeadlineError(routeCtx, r.Context(), e) {
+				gatewayTimedOut = true
+				lastRetryAfter = ""
+				lastClass = compat.Classified{Class: compat.ClassTimeout, StatusCode: http.StatusGatewayTimeout}
+				committed := responseCommitted(w)
+				phase := "precommit"
+				if committed {
+					phase = "postcommit"
 				}
+				if in.Stream {
+					kind := "stream_fail_precommit"
+					if committed {
+						kind = "stream_fail_postcommit"
+					}
+					s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: kind, Deployment: c.Deployment.ID,
+						Message: "gateway request deadline exceeded during stream", ErrorType: "gateway_timeout", FailureClass: string(compat.ClassTimeout), StreamPhase: phase, LatencyMS: total.Milliseconds(), StatusCode: resp.StatusCode})
+				}
+				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_timeout", Deployment: c.Deployment.ID,
+					Message: "gateway request deadline exceeded", ErrorType: "gateway_timeout", FailureClass: string(compat.ClassTimeout), LatencyMS: total.Milliseconds(), StatusCode: resp.StatusCode})
+				if committed {
+					return
+				}
+				break
+			}
+			cls := compat.ClassifyMalformedResponse(e.Error())
+			if in.Stream {
+				cls = compat.ClassifyStreamProtocolError(e.Error())
+			}
+			lastClass = cls
+			lastErr = safeFailureReason(cls)
+			committed := responseCommitted(w)
+			if !committed {
+				s.applyClassifiedFailure(c.Deployment, cls, total, "", nil)
 				kind := "response_decode_fail"
-				if req.Streaming {
+				if in.Stream {
 					kind = "stream_fail_precommit"
 				}
-				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: kind, Deployment: c.Deployment.ID, Message: lastErr, ErrorType: "provider_invalid_response", LatencyMS: total.Milliseconds(), StatusCode: resp.StatusCode})
+				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: kind, Deployment: c.Deployment.ID,
+					Message: "upstream response failed validation before client commit", ErrorType: string(cls.Class), FailureClass: string(cls.Class), StreamPhase: "precommit", LatencyMS: total.Milliseconds(), StatusCode: resp.StatusCode})
 				if attempts < max && i+1 < len(candidates) {
 					s.retryPause(routeCtx, r.Header.Get("x-request-id"), cfg, attemptIndex, max)
 					continue
 				}
-				errorJSON(w, http.StatusBadGateway, "upstream returned an invalid response")
+				writeClassifiedTerminalError(w, "openai", cls, "")
 				return
 			}
-			if cfg.Routing.Strategy == "ready_mesh" && req.Streaming {
-				s.hm.RecordScopeFailure(c.Deployment.ID, []string{"streaming"}, lastErr)
-			} else if router.IsReadyStrategy(cfg.Routing.Strategy) {
-				s.hm.Quarantine(c.Deployment.ID, lastErr, total)
-				s.probe.Recover(c.Deployment.ID)
-			} else {
-				s.hm.RecordFailure(c.Deployment.ID, lastErr, total)
+			s.applyClassifiedFailure(c.Deployment, cls, total, "", nil)
+			kind := "response_decode_fail"
+			phase := "postcommit"
+			if in.Stream {
+				kind = "stream_fail_postcommit"
 			}
-			s.hm.RecordProviderFailure(c.Deployment.ProviderID, c.Deployment.ID, lastErr)
-			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "stream_fail", Deployment: c.Deployment.ID, Message: lastErr, ErrorType: "provider_stream_error", LatencyMS: total.Milliseconds(), StatusCode: resp.StatusCode})
+			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: kind, Deployment: c.Deployment.ID,
+				Message: "upstream response failed validation after client commit", ErrorType: string(cls.Class), FailureClass: string(cls.Class), StreamPhase: phase, LatencyMS: total.Milliseconds(), StatusCode: resp.StatusCode})
 			return
 		}
-		s.recordRouteSuccess(req, c.Deployment.ID, c.Deployment.ProviderID, headerLatency)
+
+		s.recordRouteSuccess(req, c.Deployment, headerLatency)
 		s.learnFromSuccess(c.Deployment.ID, c.Deployment.ProviderID, c.Deployment, payload, nil)
 		ev := events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_ok", Deployment: c.Deployment.ID, Message: "request completed", LatencyMS: total.Milliseconds(), StatusCode: resp.StatusCode}
 		if resolvedRoute != nil {
@@ -420,17 +415,14 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 	if clientRequestGone(r.Context()) {
 		return
 	}
-	if lastStatus > 0 && len(lastBody) > 0 {
-		if lastRetryAfter != "" {
-			w.Header().Set("Retry-After", lastRetryAfter)
-		}
-		writeRawUpstreamError(w, lastStatus, lastContentType, lastBody)
+	if lastClass.Class != "" {
+		writeClassifiedTerminalError(w, "openai", lastClass, lastRetryAfter)
 		return
 	}
 	if lastErr == "" {
-		lastErr = "no usable deployment"
+		lastClass = compat.Classified{Class: compat.ClassUnknown, StatusCode: http.StatusBadGateway}
 	}
-	errorJSON(w, 502, "all candidate deployments failed: "+lastErr)
+	writeClassifiedTerminalError(w, "openai", lastClass, "")
 }
 
 // anthropicStopToOpenAIFinish maps Anthropic stop_reason values onto the
@@ -458,8 +450,65 @@ func streamAnthropicToOpenAI(w http.ResponseWriter, resp *http.Response, model s
 	return streamAnthropicToOpenAIWithUsage(w, resp, model, nm, nil, requestID...)
 }
 
+func validateAnthropicInitialStreamEvent(ev sseEvent) (bool, error) {
+	data := strings.TrimSpace(ev.data)
+	if data == "" {
+		return false, nil
+	}
+	var initial struct {
+		Type string `json:"type"`
+		Error json.RawMessage `json:"error"`
+		Message struct {
+			ID      string          `json:"id"`
+			Type    string          `json:"type"`
+			Role    string          `json:"role"`
+			Content json.RawMessage `json:"content"`
+		} `json:"message"`
+	}
+	if err := json.Unmarshal([]byte(data), &initial); err != nil {
+		return false, fmt.Errorf("invalid initial Anthropic stream event")
+	}
+	if len(initial.Error) > 0 && !bytes.Equal(bytes.TrimSpace(initial.Error), []byte("null")) || initial.Type == "error" {
+		return false, fmt.Errorf("Anthropic stream reported an error before message_start")
+	}
+	if initial.Type == "ping" || ev.name == "ping" {
+		return false, nil
+	}
+	if initial.Type != "message_start" || initial.Message.Type != "message" || initial.Message.Role != "assistant" || len(initial.Message.Content) == 0 {
+		return false, fmt.Errorf("Anthropic stream did not begin with a valid message_start event")
+	}
+	return true, nil
+}
+
 func streamAnthropicToOpenAIWithUsage(w http.ResponseWriter, resp *http.Response, model string, nm *translate.NameMap, usageSink func(prompt, completion int), requestID ...string) error {
 	defer resp.Body.Close()
+	reader := newSSEReader(resp.Body)
+	validator := &nativeSSETracker{protocol: "anthropic"}
+	var initial sseEvent
+	for {
+		ev, done, err := reader.Next()
+		if err != nil {
+			return fmt.Errorf("failed reading initial Anthropic stream event")
+		}
+		if done {
+			return io.ErrUnexpectedEOF
+		}
+		if ev.name == "error" {
+			return fmt.Errorf("Anthropic stream reported an error before its first message")
+		}
+		valid, err := validateAnthropicInitialStreamEvent(ev)
+		if err != nil {
+			return err
+		}
+		if valid {
+			validationFrame := []byte("event: " + ev.name + "\ndata: " + ev.data + "\n\n")
+			if err := validator.consume(validationFrame); err != nil {
+				return err
+			}
+			initial = ev
+			break
+		}
+	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("X-Accel-Buffering", "no")
@@ -479,7 +528,6 @@ func streamAnthropicToOpenAIWithUsage(w http.ResponseWriter, resp *http.Response
 			fl.Flush()
 		}
 	}
-	reader := newSSEReader(resp.Body)
 	completionID := uniqueStreamID("chatcmpl", requestID...)
 	chunk := func(delta map[string]any, finish *string) map[string]any {
 		return map[string]any{"id": completionID, "object": "chat.completion.chunk", "model": model, "choices": []any{map[string]any{"index": 0, "delta": delta, "finish_reason": finish}}}
@@ -514,18 +562,38 @@ func streamAnthropicToOpenAIWithUsage(w http.ResponseWriter, resp *http.Response
 		}
 	}
 
+	pendingInitial := true
 	for {
-		ev, done, err := reader.Next()
+		ev := initial
+		done := false
+		var err error
+		isInitial := pendingInitial
+		if pendingInitial {
+			pendingInitial = false
+		} else {
+			ev, done, err = reader.Next()
+		}
 		if err != nil {
-			streamErrorChunk("upstream stream terminated before completion: " + err.Error())
+			streamErrorChunk("upstream stream terminated unexpectedly")
 			return err
 		}
 		if done {
 			break
 		}
 		d := strings.TrimSpace(ev.data)
+		if ev.name == "error" {
+			streamErrorChunk("upstream stream failed")
+			return fmt.Errorf("Anthropic stream error event")
+		}
 		if d == "" {
 			continue
+		}
+		if !isInitial {
+			validationFrame := []byte("event: " + ev.name + "\ndata: " + ev.data + "\n\n")
+			if err := validator.consume(validationFrame); err != nil {
+				streamErrorChunk("upstream stream sent an invalid event")
+				return err
+			}
 		}
 		var env map[string]any
 		if err := json.Unmarshal([]byte(d), &env); err != nil {
@@ -612,7 +680,6 @@ func streamAnthropicToOpenAIWithUsage(w http.ResponseWriter, resp *http.Response
 			del, _ := env["delta"].(map[string]any)
 			sr, _ := del["stop_reason"].(string)
 			if sr != "" {
-				terminal = true
 				finish = anthropicStopToOpenAIFinish(sr)
 			}
 			if u, _ := env["usage"].(map[string]any); u != nil {
@@ -633,7 +700,7 @@ func streamAnthropicToOpenAIWithUsage(w http.ResponseWriter, resp *http.Response
 		case "message_stop":
 			terminal = true
 		case "error":
-			emit(map[string]any{"error": env["error"]})
+			emit(map[string]any{"error": map[string]any{"message": "upstream stream failed", "type": "gateway_stream_error", "code": "provider_stream_error"}})
 			if writeErr != nil {
 				return writeErr
 			}
@@ -641,6 +708,9 @@ func streamAnthropicToOpenAIWithUsage(w http.ResponseWriter, resp *http.Response
 		}
 		if writeErr != nil {
 			return writeErr
+		}
+		if typ == "message_stop" {
+			break
 		}
 	}
 	if !terminal {

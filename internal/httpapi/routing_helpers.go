@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"hash/fnv"
 	"io"
@@ -22,7 +21,8 @@ import (
 )
 
 func routeContext(parent context.Context, streaming bool, timeout time.Duration) (context.Context, context.CancelFunc) {
-	if streaming || timeout <= 0 {
+	_ = streaming // streams share the same total request budget as buffered calls
+	if timeout <= 0 {
 		return context.WithCancel(parent)
 	}
 	return context.WithTimeout(parent, timeout)
@@ -32,10 +32,9 @@ func gatewayDeadlineExceeded(routeCtx, clientCtx context.Context) bool {
 	return routeCtx.Err() == context.DeadlineExceeded && clientCtx.Err() == nil
 }
 
-// gatewayDeadlineError closes the narrow race where the HTTP client's timeout
-// and the route context share the same budget. Either timer may be observed
-// first; a transport timeout under a bounded route is still a gateway deadline,
-// not a generic 502. Caller cancellation always takes precedence.
+// gatewayDeadlineError classifies only exhaustion of the gateway's total
+// request budget as a gateway timeout. An upstream/transport timeout while the
+// route context still has budget remains eligible for failover.
 func gatewayDeadlineError(routeCtx, clientCtx context.Context, err error) bool {
 	if clientCtx.Err() != nil {
 		return false
@@ -43,11 +42,7 @@ func gatewayDeadlineError(routeCtx, clientCtx context.Context, err error) bool {
 	if gatewayDeadlineExceeded(routeCtx, clientCtx) {
 		return true
 	}
-	if _, bounded := routeCtx.Deadline(); !bounded || err == nil {
-		return false
-	}
-	var timeout interface{ Timeout() bool }
-	return errors.As(err, &timeout) && timeout.Timeout()
+	return err != nil && routeCtx.Err() == context.DeadlineExceeded
 }
 
 func clientRequestGone(clientCtx context.Context) bool {
@@ -109,6 +104,7 @@ type upstreamFailurePolicy struct {
 	QuarantineDeployment bool
 	SignalProvider       bool
 	HardCooldown         bool
+	RetireDeployment     bool
 }
 
 func policyForStatus(code int) upstreamFailurePolicy {
@@ -151,7 +147,10 @@ func retryAfterDuration(h http.Header, max time.Duration) time.Duration {
 	if v == "" {
 		return fallback
 	}
-	if sec, err := strconv.ParseInt(v, 10, 64); err == nil && sec > 0 {
+	if sec, err := strconv.ParseInt(v, 10, 64); err == nil && sec >= 0 {
+		if sec == 0 {
+			return 0
+		}
 		if max > 0 {
 			maxSeconds := int64(max / time.Second)
 			if maxSeconds < 1 || sec >= maxSeconds {
@@ -166,8 +165,11 @@ func retryAfterDuration(h http.Header, max time.Duration) time.Duration {
 		}
 		return time.Duration(sec) * time.Second
 	}
-	if t, err := http.ParseTime(v); err == nil && t.After(time.Now()) {
+	if t, err := http.ParseTime(v); err == nil {
 		d := time.Until(t)
+		if d <= 0 {
+			return 0
+		}
 		if max > 0 && d > max {
 			return max
 		}
@@ -179,6 +181,23 @@ func retryAfterDuration(h http.Header, max time.Duration) time.Duration {
 // retryAfterResponseValue validates and bounds an upstream Retry-After value
 // before exposing it to a client. It deliberately emits delta-seconds so an
 // untrusted upstream cannot inject arbitrary header text or an unbounded wait.
+func retryAfterErrorValue(err error, max time.Duration) string {
+	if wait, ok := providers.RetryAfter(err); ok && wait > 0 {
+		if max > 0 && wait > max {
+			wait = max
+		}
+		seconds := int64((wait + time.Second - 1) / time.Second)
+		if seconds < 1 {
+			seconds = 1
+		}
+		return strconv.FormatInt(seconds, 10)
+	}
+	if value := providers.RetryAfterValue(err); value != "" {
+		return retryAfterResponseValue(http.Header{"Retry-After": []string{value}}, max)
+	}
+	return ""
+}
+
 func retryAfterResponseValue(h http.Header, max time.Duration) string {
 	v := strings.TrimSpace(h.Get("Retry-After"))
 	if v == "" {
@@ -413,11 +432,11 @@ func (s *Server) prepareRequirement(req router.Requirement, r *http.Request, bod
 	}
 	return req
 }
-func (s *Server) recordRouteSuccess(req router.Requirement, deploymentID, providerID string, latency time.Duration) {
-	s.hm.RecordSuccess(deploymentID, latency)
-	s.hm.RecordProviderSuccess(providerID)
-	s.hm.RecordScopeSuccess(deploymentID, req.Scopes())
-	s.rt.ObserveSession(req, deploymentID)
+func (s *Server) recordRouteSuccess(req router.Requirement, deployment router.Deployment, latency time.Duration) {
+	s.hm.RecordSuccessForIdentity(deployment.ID, deployment.Identity, latency)
+	s.hm.RecordProviderSuccess(deployment.ProviderID)
+	s.hm.RecordScopeSuccess(deployment.ID, req.Scopes())
+	s.rt.ObserveSession(req, deployment.ID)
 }
 
 func (s *Server) recordProviderFailure(providerID, deploymentID, reason string, policy upstreamFailurePolicy) {

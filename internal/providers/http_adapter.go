@@ -34,6 +34,30 @@ type RetryAfterError struct {
 func (e *RetryAfterError) Error() string { return e.Cause.Error() }
 func (e *RetryAfterError) Unwrap() error { return e.Cause }
 
+// UpstreamResponseError preserves structured response evidence for the policy
+// classifier while keeping Error() safe for logs/events. Body is never copied
+// to a client response or supervisor event.
+type UpstreamResponseError struct {
+	StatusCode       int
+	Body             []byte
+	RetryAfterValue  string
+}
+
+func (e *UpstreamResponseError) Error() string {
+	if e == nil {
+		return "upstream response error"
+	}
+	return fmt.Sprintf("upstream http %d", e.StatusCode)
+}
+
+func RetryAfterValue(err error) string {
+	var e *UpstreamResponseError
+	if errors.As(err, &e) && e != nil {
+		return e.RetryAfterValue
+	}
+	return ""
+}
+
 func RetryAfter(err error) (time.Duration, bool) {
 	var e *RetryAfterError
 	if errors.As(err, &e) && e.After > 0 {
@@ -439,8 +463,8 @@ func (a *httpAdapter) DoPath(ctx context.Context, method, path string, payload [
 				resp.Body.Close()
 				reservation.releaseAll()
 				a.releaseCredential(idx)
-				lastErr = fmt.Errorf("credential rejected http %d: %s", resp.StatusCode, a.safeSnippet(body))
-				continue
+					lastErr = &UpstreamResponseError{StatusCode: resp.StatusCode, Body: append([]byte(nil), body...), RetryAfterValue: resp.Header.Get("Retry-After")}
+					continue
 			}
 		} else if idx >= 0 && resp.StatusCode >= 200 && resp.StatusCode < 300 {
 			a.markCredentialSuccess(idx)
@@ -842,7 +866,15 @@ func (a *httpAdapter) Probe(ctx context.Context, model string, maxTokens int) (t
 		return lat, resp.StatusCode, fmt.Errorf("probe response exceeds %d bytes", maxProbeResponseBytes)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return lat, resp.StatusCode, fmt.Errorf("probe http %d: %s", resp.StatusCode, a.safeSnippet(data))
+		upstreamErr := &UpstreamResponseError{
+			StatusCode: resp.StatusCode, Body: append([]byte(nil), data...),
+			RetryAfterValue: resp.Header.Get("Retry-After"),
+		}
+		if resp.StatusCode == http.StatusTooManyRequests {
+			wait := parseRetryAfterBounded(upstreamErr.RetryAfterValue, time.Second, a.retryAfterCap)
+			return lat, resp.StatusCode, &RetryAfterError{Cause: upstreamErr, After: wait}
+		}
+		return lat, resp.StatusCode, upstreamErr
 	}
 	if err := a.validateProbeResponse(data); err != nil {
 		return lat, resp.StatusCode, err

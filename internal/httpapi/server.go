@@ -331,6 +331,7 @@ func cloneConfig(in config.Config) config.Config {
 
 func providerProbeIdentityEqual(a, b config.ProviderConfig) bool {
 	return a.Type == b.Type &&
+		a.Dialect == b.Dialect &&
 		a.BaseURL == b.BaseURL &&
 		a.APIKey == b.APIKey &&
 		a.APIKeyEnv == b.APIKeyEnv &&
@@ -396,7 +397,7 @@ func changedDeploymentIDs(oldCfg, newCfg config.Config) map[string]struct{} {
 				continue
 			}
 			om, existed := oldModels[nm.ID]
-			if providerChanged || !existed || !om.Enabled || om.Model != nm.Model || !reflect.DeepEqual(om.Capabilities, nm.Capabilities) {
+			if providerChanged || !existed || !om.Enabled || !reflect.DeepEqual(om, nm) {
 				changed[np.ID+"/"+nm.ID] = struct{}{}
 			}
 		}
@@ -520,7 +521,11 @@ func (s *Server) applyConfigLocked(cfg config.Config) error {
 		}
 	}
 	for id := range changedHealth {
-		s.hm.Invalidate(id)
+		identity := ""
+		if deployment, ok := s.rt.Deployment(id); ok {
+			identity = deployment.Identity
+		}
+		s.hm.Invalidate(id, identity)
 	}
 	for id := range changedProviderHealth {
 		s.hm.InvalidateProvider(id)

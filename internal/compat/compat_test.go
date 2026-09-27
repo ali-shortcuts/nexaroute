@@ -3,6 +3,8 @@ package compat
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -59,7 +61,7 @@ func TestClassifyStatusFamilies(t *testing.T) {
 		want   ErrorClass
 	}{
 		{http.StatusUnauthorized, `{"error":{"message":"invalid api key"}}`, ClassInvalidKey},
-		{http.StatusPaymentRequired, `{"error":{"message":"billing"}}`, ClassQuotaExhausted},
+		{http.StatusPaymentRequired, `{"error":{"message":"billing"}}`, ClassBillingCreditExhausted},
 		{http.StatusTooManyRequests, `{"error":{"message":"rate limit exceeded"}}`, ClassRateLimit},
 		{http.StatusNotFound, `{"error":{"message":"model not found: gpt-xyz"}}`, ClassModelNotFound},
 		{http.StatusNotFound, `{"error":{"message":"invalid url path"}}`, ClassEndpointNotFound},
@@ -75,6 +77,87 @@ func TestClassifyStatusFamilies(t *testing.T) {
 	cls := ClassifyUpstreamError(http.StatusInternalServerError, []byte(`{"error":{"message":"boom"}}`))
 	if cls.CapabilityFailure || !cls.RetryableSamePayload {
 		t.Fatalf("generic 500 must never be a capability failure: %+v", cls)
+	}
+}
+
+func TestStructuredFailureTaxonomyAndPolicies(t *testing.T) {
+	cases := []struct {
+		name       string
+		status     int
+		body       string
+		class      ErrorClass
+		failover   bool
+		quarantine bool
+		retire     bool
+		caller     bool
+	}{
+		{"model eol 410", http.StatusGone, `{"error":{"code":"model_eol","type":"model_retired","message":"deepseek-ai/deepseek-v4-flash is permanently retired"}}`, ClassModelRetired, true, false, true, false},
+		{"model discontinued 410", http.StatusGone, `{"error":{"message":"The deepseek model has been discontinued"}}`, ClassModelRetired, true, false, true, false},
+		{"endpoint gone 410", http.StatusGone, `{"type":"about:blank","title":"Gone","detail":"configured upstream endpoint was removed"}`, ClassEndpointNotFound, true, true, false, false},
+		{"temporary model unavailable 400", http.StatusBadRequest, `{"error":{"code":"model_unavailable","type":"invalid_request_error","message":"model deepseek-v4-flash is temporarily unavailable"}}`, ClassModelTemporarilyUnavailable, true, true, false, false},
+		{"nested RFC-style error type", http.StatusBadRequest, `{"type":"error","error":{"type":"model_unavailable","message":"the model is temporarily unavailable"}}`, ClassModelTemporarilyUnavailable, true, true, false, false},
+		{"quota code on 429 retains cooldown policy", http.StatusTooManyRequests, `{"error":{"code":"insufficient_quota"}}`, ClassQuotaExhausted, true, true, false, false},
+		{"caller schema 400", http.StatusBadRequest, `{"error":{"code":"invalid_request","message":"messages must be a non-empty array"}}`, ClassInvalidRequestSchema, false, false, false, true},
+		{"model not found 404", http.StatusNotFound, `{"error":{"code":"model_not_found","message":"unknown model"}}`, ClassModelNotFound, true, true, false, false},
+		{"endpoint not found 404", http.StatusNotFound, `{"error":{"code":"route_not_found","message":"unknown endpoint"}}`, ClassEndpointNotFound, true, true, false, false},
+		{"auth 401", http.StatusUnauthorized, `{"error":{"code":"invalid_api_key","message":"rejected"}}`, ClassInvalidKey, true, true, false, false},
+		{"quota 402", http.StatusPaymentRequired, `{"error":{"code":"insufficient_quota","message":"quota exhausted"}}`, ClassQuotaExhausted, true, true, false, false},
+		{"billing 402", http.StatusPaymentRequired, `{"error":{"code":"credits_exhausted","message":"billing balance exhausted"}}`, ClassBillingCreditExhausted, true, true, false, false},
+		{"rate 429", http.StatusTooManyRequests, `{"error":{"code":"rate_limit_exceeded"}}`, ClassRateLimit, true, true, false, false},
+		{"server 500", http.StatusInternalServerError, `{"error":{"message":"internal failure"}}`, ClassUpstreamInternal, true, true, false, false},
+		{"overload 503", http.StatusServiceUnavailable, `{"error":{"message":"overloaded"}}`, ClassUpstreamOverload, true, true, false, false},
+		{"overload 529", 529, `{"error":{"message":"overloaded"}}`, ClassUpstreamOverload, true, true, false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			classified := ClassifyUpstreamError(tc.status, []byte(tc.body))
+			if classified.Class != tc.class {
+				t.Fatalf("class=%q want=%q: %+v", classified.Class, tc.class, classified)
+			}
+			policy := classified.Policy()
+			if policy.Failover != tc.failover || policy.QuarantineDeployment != tc.quarantine || policy.RetireDeployment != tc.retire || classified.CallerError != tc.caller {
+				t.Fatalf("policy=%+v classified=%+v", policy, classified)
+			}
+		})
+	}
+}
+
+func TestUntrustedProviderParameterIsNotExposedAsTerminalParameter(t *testing.T) {
+	secret := "sk-live-provider-secret"
+	classified := ClassifyUpstreamError(http.StatusBadRequest, []byte(`{"error":{"code":"unsupported_parameter","param":"`+secret+`"}}`))
+	if classified.Parameter != "" {
+		t.Fatalf("provider-controlled parameter was not sanitized: %+v", classified)
+	}
+}
+
+func TestRFC7807AndMalformedResponseClassification(t *testing.T) {
+	problem := []byte(`{"type":"https://provider.example/problems/context-overflow","title":"Request too large","status":400,"detail":"Input exceeds the maximum context window","instance":"req-1"}`)
+	classified := ClassifyUpstreamError(http.StatusBadRequest, problem)
+	if classified.Class != ClassContextOverflow || classified.CapabilityFailure || classified.Policy().QuarantineDeployment {
+		t.Fatalf("RFC 7807 context classification=%+v", classified)
+	}
+	malformed := ClassifyMalformedResponse("invalid JSON object")
+	if malformed.Class != ClassMalformedResponse || !malformed.Policy().Failover {
+		t.Fatalf("malformed 2xx policy=%+v", malformed.Policy())
+	}
+	protocol := ClassifyStreamProtocolError("bad SSE frame")
+	if protocol.Class != ClassStreamProtocolError || !protocol.Policy().Failover {
+		t.Fatalf("stream protocol policy=%+v", protocol.Policy())
+	}
+}
+
+func TestTransportTimeoutAndResetClassification(t *testing.T) {
+	if got := ClassifyTransportError(context.DeadlineExceeded); got.Class != ClassTimeout || !got.Policy().Failover {
+		t.Fatalf("timeout classification=%+v", got)
+	}
+	if got := ClassifyTransportError(errors.New("read tcp: connection reset by peer")); got.Class != ClassNetworkError || !got.Policy().Failover {
+		t.Fatalf("reset classification=%+v", got)
+	}
+	if got := ClassifyTransportError(io.EOF); got.Class != ClassNetworkError || !got.Policy().Failover {
+		t.Fatalf("EOF classification=%+v", got)
+	}
+	if got := ClassifyTransportError(context.Canceled); got.Class != ClassNetworkError || got.Policy().Failover {
+		t.Fatalf("caller cancellation should not retry: %+v", got)
 	}
 }
 

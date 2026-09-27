@@ -351,7 +351,7 @@ func TestNativeProxyStripsSensitiveAndHopByHopResponseHeaders(t *testing.T) {
 }
 
 func TestNativeSSEProxyFlushes(t *testing.T) {
-	resp := &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"text/event-stream"}, "Content-Length": []string{"12"}}, Body: io.NopCloser(strings.NewReader("data: {\"choices\":[{\"finish_reason\":\"stop\"}]}\n\n"))}
+	resp := &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"text/event-stream"}, "Content-Length": []string{"12"}}, Body: io.NopCloser(strings.NewReader("data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" + "data: [DONE]\n\n"))}
 	rr := httptest.NewRecorder()
 	if err := proxyNativeSSE(rr, resp, "openai"); err != nil {
 		t.Fatal(err)
@@ -384,6 +384,184 @@ func TestAnthropicIngressUsesAnthropicErrorShape(t *testing.T) {
 	errObj, _ := got["error"].(map[string]any)
 	if errObj["type"] != "invalid_request_error" {
 		t.Fatalf("wrong error type: %#v", got)
+	}
+}
+
+func TestClaudeMessagesABCDFailureSupervisorRegression(t *testing.T) {
+	probeContext, cancelProbe := context.WithCancel(context.Background())
+	defer cancelProbe()
+	allowBProbe := make(chan struct{})
+	bProbeStarted := make(chan struct{}, 1)
+	var aRequests, aProbes atomic.Int32
+	var bRequests, bProbes atomic.Int32
+	var cRequests, dRequests atomic.Int32
+	var orderMu sync.Mutex
+	order := make([]string, 0, 4)
+	appendAttempt := func(name string) {
+		orderMu.Lock()
+		order = append(order, name)
+		orderMu.Unlock()
+	}
+	isProbeRequest := func(r *http.Request) bool {
+		var body struct {
+			Messages []struct {
+				Content any `json:"content"`
+			} `json:"messages"`
+		}
+		if json.NewDecoder(r.Body).Decode(&body) != nil || len(body.Messages) == 0 {
+			return false
+		}
+		if content, ok := body.Messages[len(body.Messages)-1].Content.(string); ok {
+			return content == "OK"
+		}
+		return false
+	}
+	validOpenAIResponse := func(w http.ResponseWriter, model, text string) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"chatcmpl-d","object":"chat.completion","model":"`+model+`","choices":[{"index":0,"message":{"role":"assistant","content":"`+text+`"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`)
+	}
+	newUpstream := func(handler http.HandlerFunc) *httptest.Server {
+		up := httptest.NewServer(handler)
+		t.Cleanup(up.Close)
+		return up
+	}
+	a := newUpstream(func(w http.ResponseWriter, r *http.Request) {
+		if isProbeRequest(r) {
+			aProbes.Add(1)
+			validOpenAIResponse(w, "deepseek-ai/deepseek-v4-flash", "unexpected-A-probe")
+			return
+		}
+		aRequests.Add(1)
+		appendAttempt("A")
+		w.WriteHeader(http.StatusGone)
+		_, _ = io.WriteString(w, `{"error":{"code":"model_eol","type":"model_retired","message":"deepseek-ai/deepseek-v4-flash has reached end of life"}}`)
+	})
+	b := newUpstream(func(w http.ResponseWriter, r *http.Request) {
+		if isProbeRequest(r) {
+			bProbes.Add(1)
+			select {
+			case bProbeStarted <- struct{}{}:
+			default:
+			}
+			select {
+			case <-allowBProbe:
+				validOpenAIResponse(w, "deepseek-v4-flash", "B_RECOVERED")
+			case <-probeContext.Done():
+				return
+			}
+			return
+		}
+		bRequests.Add(1)
+		appendAttempt("B")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = io.WriteString(w, `{"error":{"code":"model_unavailable","type":"invalid_request_error","message":"deepseek-v4-flash is temporarily unavailable"}}`)
+	})
+	c := newUpstream(func(w http.ResponseWriter, r *http.Request) {
+		if isProbeRequest(r) {
+			w.Header().Set("Retry-After", "2")
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = io.WriteString(w, `{"error":{"code":"rate_limit_exceeded"}}`)
+			return
+		}
+		cRequests.Add(1)
+		appendAttempt("C")
+		w.Header().Set("Retry-After", "2")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = io.WriteString(w, `{"error":{"code":"rate_limit_exceeded","message":"C_RATE_PRIVATE"}}`)
+	})
+	d := newUpstream(func(w http.ResponseWriter, r *http.Request) {
+		if isProbeRequest(r) {
+			validOpenAIResponse(w, "model-d", "unexpected-D-probe")
+			return
+		}
+		dRequests.Add(1)
+		appendAttempt("D")
+		validOpenAIResponse(w, "model-d", "D_ONLY")
+	})
+
+	cfg := config.Default()
+	cfg.Probe.Enabled = false
+	cfg.Probe.CapabilityProbes = false
+	cfg.Routing.Strategy = "priority"
+	cfg.Routing.MaxAttempts = 4
+	cfg.Routing.RetryBackoffMS = 1
+	cfg.Providers = []config.ProviderConfig{
+		{ID: "A", Name: "A", Type: "openai_compatible", BaseURL: a.URL, AuthMode: "none", Enabled: true, Models: []config.ModelConfig{{ID: "m", Model: "deepseek-ai/deepseek-v4-flash", Aliases: []string{"claude-auto"}, Enabled: true, Priority: 0, Weight: 1}}},
+		{ID: "B", Name: "B", Type: "openai_compatible", BaseURL: b.URL, AuthMode: "none", Enabled: true, Models: []config.ModelConfig{{ID: "m", Model: "deepseek-v4-flash", Aliases: []string{"claude-auto"}, Enabled: true, Priority: 1, Weight: 1}}},
+		{ID: "C", Name: "C", Type: "openai_compatible", BaseURL: c.URL, AuthMode: "none", Enabled: true, Models: []config.ModelConfig{{ID: "m", Model: "model-c", Aliases: []string{"claude-auto"}, Enabled: true, Priority: 2, Weight: 1}}},
+		{ID: "D", Name: "D", Type: "openai_compatible", BaseURL: d.URL, AuthMode: "none", Enabled: true, Models: []config.ModelConfig{{ID: "m", Model: "model-d", Aliases: []string{"claude-auto"}, Enabled: true, Priority: 3, Weight: 1}}},
+	}
+	s := testGateway(t, cfg)
+	s.probe.Start(probeContext)
+	req := httptest.NewRequest("POST", "http://gateway/v1/messages", strings.NewReader(`{"model":"claude-auto","max_tokens":8,"messages":[{"role":"user","content":"hi"}]}`))
+	rr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	var response map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &response); err != nil {
+		t.Fatalf("invalid Anthropic response: %v: %s", err, rr.Body.String())
+	}
+	if response["model"] != "claude-auto" || !strings.Contains(rr.Body.String(), "D_ONLY") {
+		t.Fatalf("client did not receive only D's response with public model identity: %s", rr.Body.String())
+	}
+	for _, private := range []string{"model_eol", "model_unavailable", "C_RATE_PRIVATE", "B_RECOVERED"} {
+		if strings.Contains(rr.Body.String(), private) {
+			t.Fatalf("intermediate provider details leaked to Claude: %s", rr.Body.String())
+		}
+	}
+	orderMu.Lock()
+	gotOrder := strings.Join(order, ",")
+	orderMu.Unlock()
+	if gotOrder != "A,B,C,D" || aRequests.Load() != 1 || bRequests.Load() != 1 || cRequests.Load() != 1 || dRequests.Load() != 1 {
+		t.Fatalf("attempt order=%q calls A/B/C/D=%d/%d/%d/%d", gotOrder, aRequests.Load(), bRequests.Load(), cRequests.Load(), dRequests.Load())
+	}
+	if st := s.hm.Get("A/m"); st.Status != health.Retired || st.LastErrorClass != "model_retired" {
+		t.Fatalf("A must remain permanently retired: %+v", st)
+	}
+	if aProbes.Load() != 0 {
+		t.Fatalf("retired A was recovery-probed: probes=%d", aProbes.Load())
+	}
+	if st := s.hm.Get("C/m"); st.Status != health.Cooldown || st.LastErrorClass != "rate_limit" {
+		t.Fatalf("C did not enter Retry-After cooldown: %+v", st)
+	} else if remaining := time.Until(st.CooldownUntil); remaining < time.Second || remaining > 3*time.Second {
+		t.Fatalf("C Retry-After: 2 cooldown was not honored within bounds: remaining=%s state=%+v", remaining, st)
+	}
+	select {
+	case <-bProbeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("B did not enter supervised recovery")
+	}
+	close(allowBProbe)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		st := s.hm.Get("B/m")
+		if st.Status == health.Healthy && !st.Quarantined {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if st := s.hm.Get("B/m"); st.Status != health.Healthy || st.Quarantined || bProbes.Load() != 1 {
+		t.Fatalf("B's first verified recovery did not restore ready state: state=%+v probes=%d", st, bProbes.Load())
+	}
+	var sawRetirement, sawCooldown, sawRecovery, sawModelUnavailable bool
+	for _, ev := range s.bus.Snapshot() {
+		if ev.Deployment == "A/m" && ev.SupervisorState == "retired" && ev.SupervisorTerminal {
+			sawRetirement = true
+		}
+		if ev.Deployment == "C/m" && ev.SupervisorState == "cooldown" && ev.FailureClass == "rate_limit" {
+			sawCooldown = true
+		}
+		if ev.Deployment == "B/m" && ev.Kind == "recovery_ready" {
+			sawRecovery = true
+		}
+		if ev.Deployment == "B/m" && ev.SupervisorState == "model_unavailable" && ev.FailureClass == "model_temporarily_unavailable" {
+			sawModelUnavailable = true
+		}
+	}
+	if !sawRetirement || !sawCooldown || !sawRecovery || !sawModelUnavailable {
+		t.Fatalf("missing structured lifecycle events retirement=%v model_unavailable=%v cooldown=%v recovery=%v", sawRetirement, sawModelUnavailable, sawCooldown, sawRecovery)
 	}
 }
 
@@ -424,6 +602,362 @@ func TestAnthropicRequestFailsOverAfterUpstream401(t *testing.T) {
 	}
 	if got := rr.Header().Get("X-Gateway-Provider"); got != "good" {
 		t.Fatalf("route header provider=%q want good", got)
+	}
+}
+
+func TestRateLimitRetryAfterZeroUsesMinimumPositiveCooldown(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Retry-After", "0")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = io.WriteString(w, `{"error":{"code":"rate_limit_exceeded"}}`)
+	}))
+	defer upstream.Close()
+	cfg := config.Default()
+	cfg.Probe.Enabled = false
+	cfg.Routing.Strategy = "priority"
+	cfg.Routing.MaxAttempts = 1
+	cfg.Providers = []config.ProviderConfig{{
+		ID: "A", Name: "A", Type: "anthropic_compatible", BaseURL: upstream.URL, AuthMode: "none", Enabled: true,
+		Models: []config.ModelConfig{{ID: "m", Model: "physical-a", Aliases: []string{"claude-auto"}, Enabled: true, Weight: 1}},
+	}}
+	gateway := testGateway(t, cfg)
+	clock := time.Now()
+	gateway.hm.SetNowFunc(func() time.Time { return clock })
+	request := `{"model":"claude-auto","max_tokens":8,"messages":[{"role":"user","content":"hi"}]}`
+	rr := httptest.NewRecorder()
+	gateway.Handler().ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "http://gateway/v1/messages", strings.NewReader(request)))
+	if rr.Code != http.StatusTooManyRequests || rr.Header().Get("Retry-After") != "0" {
+		t.Fatalf("rate-limit terminal response status=%d Retry-After=%q body=%s", rr.Code, rr.Header().Get("Retry-After"), rr.Body.String())
+	}
+	state := gateway.hm.Get("A/m")
+	if state.Status != health.Cooldown || state.LastErrorClass != "rate_limit" || state.CooldownUntil.Sub(clock) != time.Second {
+		t.Fatalf("Retry-After: 0 must use a one-second minimum, state=%+v", state)
+	}
+}
+
+func TestClaudeCandidateExhaustionReturnsOneSafeTerminalError(t *testing.T) {
+	var aCalls, bCalls atomic.Int32
+	a := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		aCalls.Add(1)
+		w.Header().Set("X-Internal-Upstream", "A_PRIVATE_HEADER")
+		w.Header().Set("Authorization", "Bearer A_PRIVATE_CREDENTIAL")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = io.WriteString(w, `{"error":{"code":"invalid_api_key","message":"A_PRIVATE_AUTH_BODY"}}`)
+	}))
+	defer a.Close()
+	b := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		bCalls.Add(1)
+		w.Header().Set("X-Internal-Upstream", "B_PRIVATE_HEADER")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = io.WriteString(w, `{"error":{"type":"api_error","message":"B_PRIVATE_5XX_BODY"}}`)
+	}))
+	defer b.Close()
+
+	cfg := config.Default()
+	cfg.Probe.Enabled = false
+	cfg.Routing.Strategy = "priority"
+	cfg.Routing.MaxAttempts = 2
+	cfg.Routing.RetryBackoffMS = 0
+	cfg.Providers = []config.ProviderConfig{
+		{ID: "A", Name: "A", Type: "anthropic_compatible", BaseURL: a.URL, AuthMode: "none", Enabled: true, Models: []config.ModelConfig{{ID: "m", Model: "physical-a", Aliases: []string{"claude-auto"}, Enabled: true, Priority: 0, Weight: 1}}},
+		{ID: "B", Name: "B", Type: "anthropic_compatible", BaseURL: b.URL, AuthMode: "none", Enabled: true, Models: []config.ModelConfig{{ID: "m", Model: "physical-b", Aliases: []string{"claude-auto"}, Enabled: true, Priority: 1, Weight: 1}}},
+	}
+	gateway := testGateway(t, cfg)
+	request := `{"model":"claude-auto","max_tokens":8,"messages":[{"role":"user","content":"hi"}]}`
+	rr := httptest.NewRecorder()
+	gateway.Handler().ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "http://gateway/v1/messages", strings.NewReader(request)))
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("exhaustion status=%d want 503 body=%s", rr.Code, rr.Body.String())
+	}
+	var terminal map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &terminal); err != nil || terminal["type"] != "error" {
+		t.Fatalf("terminal response is not one normalized Anthropic error: err=%v body=%s", err, rr.Body.String())
+	}
+	if aCalls.Load() != 1 || bCalls.Load() != 1 {
+		t.Fatalf("exhaustion calls A/B=%d/%d, want 1/1", aCalls.Load(), bCalls.Load())
+	}
+	for _, private := range []string{"A_PRIVATE_AUTH_BODY", "B_PRIVATE_5XX_BODY", "A_PRIVATE_CREDENTIAL", "A_PRIVATE_HEADER", "B_PRIVATE_HEADER"} {
+		if strings.Contains(rr.Body.String(), private) || strings.Contains(rr.Header().Get("X-Internal-Upstream"), private) {
+			t.Fatalf("provider detail leaked in terminal response: %s", rr.Body.String())
+		}
+	}
+	if rr.Header().Get("Authorization") != "" || rr.Header().Get("X-Internal-Upstream") != "" {
+		t.Fatalf("provider response headers leaked: %v", rr.Header())
+	}
+	for _, event := range gateway.bus.Snapshot() {
+		if strings.Contains(event.Message, "A_PRIVATE") || strings.Contains(event.Message, "B_PRIVATE") {
+			t.Fatalf("provider detail leaked in supervisor event: %+v", event)
+		}
+	}
+}
+
+func TestClaudeStreamFailureFailoverStopsAtCommitBoundary(t *testing.T) {
+	writeCompleteStream := func(w http.ResponseWriter, model, text string) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprintf(w, `event: message_start
+data: {"type":"message_start","message":{"id":"msg","type":"message","role":"assistant","content":[],"model":%q,"usage":{"input_tokens":1,"output_tokens":0}}}
+
+`, model)
+		_, _ = io.WriteString(w, `event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}
+
+`)
+		_, _ = fmt.Fprintf(w, `event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":%q}}
+
+`, text)
+		_, _ = io.WriteString(w, `event: content_block_stop
+data: {"type":"content_block_stop","index":0}
+
+`)
+		_, _ = io.WriteString(w, `event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":1}}
+
+`)
+		_, _ = io.WriteString(w, `event: message_stop
+data: {"type":"message_stop"}
+
+`)
+	}
+
+	t.Run("precommit failover", func(t *testing.T) {
+		var aCalls, bCalls atomic.Int32
+		a := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			aCalls.Add(1)
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(w, `event: error
+data: {"type":"error","error":{"type":"api_error","message":"A_PRIVATE_STREAM_FAILURE"}}
+
+`)
+		}))
+		defer a.Close()
+		b := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			bCalls.Add(1)
+			writeCompleteStream(w, "physical-b", "B_ONLY")
+		}))
+		defer b.Close()
+
+		cfg := config.Default()
+		cfg.Probe.Enabled = false
+		cfg.Routing.Strategy = "priority"
+		cfg.Routing.MaxAttempts = 2
+		cfg.Routing.RetryBackoffMS = 0
+		cfg.Providers = []config.ProviderConfig{
+			{ID: "A", Name: "A", Type: "anthropic_compatible", BaseURL: a.URL, AuthMode: "none", Enabled: true, Models: []config.ModelConfig{{ID: "m", Model: "physical-a", Aliases: []string{"claude-auto"}, Enabled: true, Priority: 0, Weight: 1}}},
+			{ID: "B", Name: "B", Type: "anthropic_compatible", BaseURL: b.URL, AuthMode: "none", Enabled: true, Models: []config.ModelConfig{{ID: "m", Model: "physical-b", Aliases: []string{"claude-auto"}, Enabled: true, Priority: 1, Weight: 1}}},
+		}
+		gateway := testGateway(t, cfg)
+		request := `{"model":"claude-auto","max_tokens":8,"stream":true,"messages":[{"role":"user","content":"hi"}]}`
+		rr := httptest.NewRecorder()
+		gateway.Handler().ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "http://gateway/v1/messages", strings.NewReader(request)))
+		if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), "B_ONLY") || strings.Contains(rr.Body.String(), "A_PRIVATE_STREAM_FAILURE") {
+			t.Fatalf("precommit failure did not fail over to B cleanly: status=%d body=%s", rr.Code, rr.Body.String())
+		}
+		if aCalls.Load() != 1 || bCalls.Load() != 1 {
+			t.Fatalf("precommit attempts A/B=%d/%d, want 1/1", aCalls.Load(), bCalls.Load())
+		}
+		var eventFound bool
+		for _, event := range gateway.bus.Snapshot() {
+			if event.Kind == "stream_fail_precommit" && event.Deployment == "A/m" && event.StreamPhase == "precommit" {
+				eventFound = true
+			}
+		}
+		if !eventFound {
+			t.Fatal("missing stream_fail_precommit event")
+		}
+	})
+
+	t.Run("postcommit does not continue on B", func(t *testing.T) {
+		var aCalls, bCalls atomic.Int32
+		a := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			aCalls.Add(1)
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(w, `event: message_start
+data: {"type":"message_start","message":{"id":"msg-a","type":"message","role":"assistant","content":[],"model":"physical-a","usage":{"input_tokens":1}}}
+
+`)
+			_, _ = io.WriteString(w, `event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"A_PARTIAL"}}
+
+`)
+		}))
+		defer a.Close()
+		b := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			bCalls.Add(1)
+			writeCompleteStream(w, "physical-b", "B_MUST_NOT_APPEAR")
+		}))
+		defer b.Close()
+
+		cfg := config.Default()
+		cfg.Probe.Enabled = false
+		cfg.Routing.Strategy = "priority"
+		cfg.Routing.MaxAttempts = 2
+		cfg.Routing.RetryBackoffMS = 0
+		cfg.Providers = []config.ProviderConfig{
+			{ID: "A", Name: "A", Type: "anthropic_compatible", BaseURL: a.URL, AuthMode: "none", Enabled: true, Models: []config.ModelConfig{{ID: "m", Model: "physical-a", Aliases: []string{"claude-auto"}, Enabled: true, Priority: 0, Weight: 1}}},
+			{ID: "B", Name: "B", Type: "anthropic_compatible", BaseURL: b.URL, AuthMode: "none", Enabled: true, Models: []config.ModelConfig{{ID: "m", Model: "physical-b", Aliases: []string{"claude-auto"}, Enabled: true, Priority: 1, Weight: 1}}},
+		}
+		gateway := testGateway(t, cfg)
+		request := `{"model":"claude-auto","max_tokens":8,"stream":true,"messages":[{"role":"user","content":"hi"}]}`
+		rr := httptest.NewRecorder()
+		gateway.Handler().ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "http://gateway/v1/messages", strings.NewReader(request)))
+		if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), "A_PARTIAL") || strings.Contains(rr.Body.String(), "B_MUST_NOT_APPEAR") {
+			t.Fatalf("postcommit failure incorrectly continued on B: status=%d body=%s", rr.Code, rr.Body.String())
+		}
+		if aCalls.Load() != 1 || bCalls.Load() != 0 {
+			t.Fatalf("postcommit attempts A/B=%d/%d, want 1/0", aCalls.Load(), bCalls.Load())
+		}
+		var eventFound bool
+		for _, event := range gateway.bus.Snapshot() {
+			if event.Kind == "stream_fail_postcommit" && event.Deployment == "A/m" && event.StreamPhase == "postcommit" {
+				eventFound = true
+			}
+		}
+		if !eventFound {
+			t.Fatal("missing stream_fail_postcommit event")
+		}
+	})
+}
+
+func TestAnthropicStreamInitialValidationFailsOverBeforeOpenAICommit(t *testing.T) {
+	var aCalls, bCalls atomic.Int32
+	a := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		aCalls.Add(1)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, `event: message_start
+data: {"type":"message_start","message":{"id":"msg-a","type":"message","role":"assistant","content":[],"usage":{"input_tokens":-1}}}
+
+`)
+	}))
+	defer a.Close()
+	b := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		bCalls.Add(1)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, `data: {"id":"chat-b","object":"chat.completion.chunk","model":"physical-b","choices":[{"index":0,"delta":{"role":"assistant","content":"B_ONLY"},"finish_reason":null}]}
+
+`)
+		_, _ = io.WriteString(w, `data: {"id":"chat-b","object":"chat.completion.chunk","model":"physical-b","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+`)
+		_, _ = io.WriteString(w, "data: [DONE]\n\n")
+	}))
+	defer b.Close()
+
+	cfg := config.Default()
+	cfg.Probe.Enabled = false
+	cfg.Routing.Strategy = "priority"
+	cfg.Routing.MaxAttempts = 2
+	cfg.Routing.RetryBackoffMS = 0
+	cfg.Providers = []config.ProviderConfig{
+		{ID: "A", Name: "A", Type: "anthropic_compatible", BaseURL: a.URL, AuthMode: "none", Enabled: true, Models: []config.ModelConfig{{ID: "m", Model: "physical-a", Aliases: []string{"coding"}, Enabled: true, Priority: 0, Weight: 1}}},
+		{ID: "B", Name: "B", Type: "openai_compatible", BaseURL: b.URL, AuthMode: "none", Enabled: true, Models: []config.ModelConfig{{ID: "m", Model: "physical-b", Aliases: []string{"coding"}, Enabled: true, Priority: 1, Weight: 1}}},
+	}
+	gateway := testGateway(t, cfg)
+	request := `{"model":"coding","stream":true,"max_tokens":8,"messages":[{"role":"user","content":"hi"}]}`
+	rr := httptest.NewRecorder()
+	gateway.Handler().ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "http://gateway/v1/chat/completions", strings.NewReader(request)))
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), "B_ONLY") {
+		t.Fatalf("malformed initial Anthropic frame was not failed over before client commit: status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	if aCalls.Load() != 1 || bCalls.Load() != 1 {
+		t.Fatalf("initial-frame attempts A/B=%d/%d, want 1/1", aCalls.Load(), bCalls.Load())
+	}
+	var eventFound bool
+	for _, event := range gateway.bus.Snapshot() {
+		if event.Kind == "stream_fail_precommit" && event.Deployment == "A/m" && event.StreamPhase == "precommit" {
+			eventFound = true
+		}
+	}
+	if !eventFound {
+		t.Fatal("missing precommit stream failure event for invalid initial usage")
+	}
+}
+
+func TestClaudeUnsupportedForcedToolChoiceFailsOverWithoutRepair(t *testing.T) {
+	var aCalls, bCalls atomic.Int32
+	a := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		aCalls.Add(1)
+		var payload map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		if payload["tool_choice"] == nil {
+			t.Errorf("forced tool_choice was silently removed before dispatch: %#v", payload)
+		}
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = io.WriteString(w, `{"error":{"code":"unsupported_parameter","param":"tool_choice","message":"A_PRIVATE_UNSUPPORTED tool_choice is not supported"}}`)
+	}))
+	defer a.Close()
+	b := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		bCalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"chatcmpl-tool","object":"chat.completion","model":"physical-b","choices":[{"index":0,"message":{"role":"assistant","content":null,"tool_calls":[{"id":"call-1","type":"function","function":{"name":"run","arguments":"{}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`)
+	}))
+	defer b.Close()
+
+	cfg := config.Default()
+	cfg.Probe.Enabled = false
+	cfg.Routing.Strategy = "priority"
+	cfg.Routing.MaxAttempts = 2
+	cfg.Routing.MaxRepairAttempts = 1
+	cfg.Providers = []config.ProviderConfig{
+		{ID: "A", Name: "A", Type: "openai_compatible", BaseURL: a.URL, AuthMode: "none", Enabled: true, Models: []config.ModelConfig{{ID: "m", Model: "physical-a", Aliases: []string{"claude-auto"}, Enabled: true, Priority: 0, Weight: 1, Capabilities: config.Capabilities{Tools: true, Streaming: true}}}},
+		{ID: "B", Name: "B", Type: "openai_compatible", BaseURL: b.URL, AuthMode: "none", Enabled: true, Models: []config.ModelConfig{{ID: "m", Model: "physical-b", Aliases: []string{"claude-auto"}, Enabled: true, Priority: 1, Weight: 1, Capabilities: config.Capabilities{Tools: true, Streaming: true}}}},
+	}
+	s := testGateway(t, cfg)
+	request := `{"model":"claude-auto","max_tokens":32,"messages":[{"role":"user","content":"run this"}],"tools":[{"name":"run","description":"run a command","input_schema":{"type":"object","properties":{}}}],"tool_choice":{"type":"tool","name":"run"}}`
+	req := httptest.NewRequest(http.MethodPost, "http://gateway/v1/messages", strings.NewReader(request))
+	rr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	var response map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &response); err != nil {
+		t.Fatalf("invalid Anthropic tool response: %v: %s", err, rr.Body.String())
+	}
+	content, _ := response["content"].([]any)
+	if response["model"] != "claude-auto" || len(content) != 1 {
+		t.Fatalf("tool fallback did not preserve public model/content: %s", rr.Body.String())
+	}
+	block, _ := content[0].(map[string]any)
+	if block["type"] != "tool_use" || block["name"] != "run" || strings.Contains(rr.Body.String(), "A_PRIVATE_UNSUPPORTED") {
+		t.Fatalf("Claude did not receive only B's valid tool response: %s", rr.Body.String())
+	}
+	if aCalls.Load() != 1 || bCalls.Load() != 1 {
+		t.Fatalf("calls A/B=%d/%d; expected one unrepaired A attempt and one B fallback", aCalls.Load(), bCalls.Load())
+	}
+	if state := s.hm.Get("A/m"); state.Quarantined || state.Status != health.Unknown {
+		t.Fatalf("unsupported parameter damaged deployment health: %+v", state)
+	}
+	var sawFailover bool
+	for _, event := range s.bus.Snapshot() {
+		if event.Kind == "failover" && event.Deployment == "A/m" && event.FailureClass == "unsupported_parameter" {
+			sawFailover = true
+		}
+		if strings.Contains(event.Message, "A_PRIVATE_UNSUPPORTED") {
+			t.Fatalf("provider detail leaked into an event: %+v", event)
+		}
+	}
+	if !sawFailover {
+		t.Fatal("missing structured unsupported-parameter failover event")
+	}
+
+	// The forced choice is a hard semantic requirement. Once A's rejection is
+	// learned, a later request must skip A rather than silently repairing by
+	// removing tool_choice and changing the requested behavior.
+	req2 := httptest.NewRequest(http.MethodPost, "http://gateway/v1/messages", strings.NewReader(request))
+	rr2 := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rr2, req2)
+	if rr2.Code != http.StatusOK || aCalls.Load() != 1 || bCalls.Load() != 2 {
+		t.Fatalf("learned forced-tool incompatibility was not skipped: status=%d A/B=%d/%d body=%s", rr2.Code, aCalls.Load(), bCalls.Load(), rr2.Body.String())
+	}
+	var sawCapabilitySkip bool
+	for _, event := range s.bus.Snapshot() {
+		if event.Kind == "capability_skip" && event.Deployment == "A/m" {
+			sawCapabilitySkip = true
+		}
+	}
+	if !sawCapabilitySkip {
+		t.Fatal("missing capability_skip event for known unsupported forced tool choice")
 	}
 }
 
@@ -725,7 +1259,8 @@ func TestTranslatedStreamsRequireTerminalSignal(t *testing.T) {
 	anthResp := &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
-		Body:       io.NopCloser(strings.NewReader("data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"partial\"}}\n\n")),
+		Body: io.NopCloser(strings.NewReader("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"m\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"usage\":{\"input_tokens\":1}}}\n\n" +
+			"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"partial\"}}\n\n")),
 	}
 	if err := streamAnthropicToOpenAI(httptest.NewRecorder(), anthResp, "m", nil); !errors.Is(err, io.ErrUnexpectedEOF) {
 		t.Fatalf("anthropic translated stream error=%v want unexpected EOF", err)

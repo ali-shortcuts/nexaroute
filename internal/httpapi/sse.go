@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"bufio"
+	"fmt"
 	"io"
 	"strings"
 )
@@ -18,12 +19,14 @@ type sseEvent struct {
 // tolerated, and unknown fields (id, retry, event) never terminate a frame.
 // Naive line-by-line "data:" scanning drops multi-line payloads, which real
 // providers and proxy layers occasionally emit.
+const maxSSEEventBytes = 8 << 20
+
 type sseReader struct {
-	sc     *bufio.Scanner
-	event  string
-	data   strings.Builder
-	hasAny bool
-	sawCR  bool
+	sc         *bufio.Scanner
+	event      string
+	data       strings.Builder
+	hasAny     bool
+	eventBytes int
 }
 
 func newSSEReader(r io.Reader) *sseReader {
@@ -37,15 +40,21 @@ func newSSEReader(r io.Reader) *sseReader {
 func (s *sseReader) Next() (ev sseEvent, done bool, err error) {
 	for s.sc.Scan() {
 		line := strings.TrimRight(s.sc.Text(), "\r")
+		s.eventBytes += len(line) + 1
+		if s.eventBytes > maxSSEEventBytes {
+			return sseEvent{}, false, fmt.Errorf("SSE event exceeds %d bytes", maxSSEEventBytes)
+		}
 		switch {
 		case line == "":
 			if !s.hasAny {
+				s.eventBytes = 0
 				continue
 			}
 			ev := sseEvent{name: s.event, data: s.data.String()}
 			s.event = ""
 			s.data.Reset()
 			s.hasAny = false
+			s.eventBytes = 0
 			return ev, false, nil
 		case strings.HasPrefix(line, ":"):
 			continue

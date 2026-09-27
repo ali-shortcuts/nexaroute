@@ -15,6 +15,11 @@ type Event struct {
 	LatencyMS       int64     `json:"latency_ms,omitempty"`
 	StatusCode      int       `json:"status_code,omitempty"`
 	ErrorType       string    `json:"error_type,omitempty"`
+	FailureClass    string    `json:"failure_class,omitempty"`
+	SupervisorState string    `json:"supervisor_state,omitempty"`
+	SupervisorAttempt int     `json:"supervisor_attempt,omitempty"`
+	SupervisorTerminal bool   `json:"supervisor_terminal,omitempty"`
+	StreamPhase     string    `json:"stream_phase,omitempty"`
 	VirtualEndpoint string    `json:"virtual_endpoint,omitempty"`
 	PublicModel     string    `json:"public_model,omitempty"`
 	RouteProfile    string    `json:"route_profile,omitempty"`
@@ -62,6 +67,9 @@ const (
 	maxEventDeployment   = 512
 	maxEventMessage      = 4096
 	maxEventErrorType    = 128
+	maxEventFailureClass = 128
+	maxEventSupervisor   = 32
+	maxEventStreamPhase  = 32
 	maxEventVirtual      = 256
 	maxEventPublicModel  = 256
 	maxEventRouteProfile = 256
@@ -145,6 +153,9 @@ func (b *Bus) Add(e Event) {
 	e.Deployment = boundedString(e.Deployment, maxEventDeployment)
 	e.Message = boundedString(e.Message, maxEventMessage)
 	e.ErrorType = boundedString(e.ErrorType, maxEventErrorType)
+	e.FailureClass = boundedString(e.FailureClass, maxEventFailureClass)
+	e.SupervisorState = boundedString(e.SupervisorState, maxEventSupervisor)
+	e.StreamPhase = boundedString(e.StreamPhase, maxEventStreamPhase)
 	e.VirtualEndpoint = boundedString(e.VirtualEndpoint, maxEventVirtual)
 	e.PublicModel = boundedString(e.PublicModel, maxEventPublicModel)
 	e.RouteProfile = boundedString(e.RouteProfile, maxEventRouteProfile)

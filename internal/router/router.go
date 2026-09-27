@@ -3,6 +3,7 @@ package router
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"hash/fnv"
 	"sort"
 	"strconv"
@@ -17,6 +18,7 @@ import (
 
 type Deployment struct {
 	ID                string              `json:"id"`
+	Identity          string              `json:"-"`
 	ProviderID        string              `json:"provider_id"`
 	ProviderName      string              `json:"provider_name"`
 	ProviderType      string              `json:"provider_type"`
@@ -101,10 +103,69 @@ type Router struct {
 }
 
 func New(cfg config.Config, hm *health.Manager) *Router {
+	if hm == nil {
+		hm = health.New(cfg.Routing.FailureThreshold, cfg.Cooldown())
+	}
 	r := &Router{health: hm, sessions: map[string]sessionPin{}}
 	r.Reload(cfg)
 	return r
 }
+
+type credentialIdentity struct {
+	Name      string `json:"name,omitempty"`
+	APIKeyEnv string `json:"api_key_env,omitempty"`
+	Enabled   bool   `json:"enabled"`
+}
+
+func deploymentIdentity(p config.ProviderConfig, m config.ModelConfig) string {
+	authHasher := sha256.New()
+	for _, credential := range p.ResolvedCredentials() {
+		_, _ = authHasher.Write([]byte(strconv.Itoa(len(credential))))
+		_, _ = authHasher.Write([]byte{0})
+		_, _ = authHasher.Write([]byte(credential))
+	}
+	authFingerprint := authHasher.Sum(nil)
+	credentials := make([]credentialIdentity, 0, len(p.Credentials))
+	for _, c := range p.Credentials {
+		credentials = append(credentials, credentialIdentity{Name: c.Name, APIKeyEnv: c.APIKeyEnv, Enabled: c.Enabled})
+	}
+	identity := struct {
+		Provider struct {
+			ID, Name, Type, Dialect, BaseURL, APIKeyEnv, AuthMode string
+			Headers                                            map[string]string
+			ForwardHeaders                                     []string
+			ProxyURL, ChatPath, MessagesPath, ModelsPath        string
+			CountTokensPath, ResponsesPath                    string
+			MaxConcurrency, StreamIdleTimeoutSeconds           int
+			CredentialConfig                                   []credentialIdentity
+			ResolvedAuthFingerprint                            string
+		}
+		Model config.ModelConfig
+	}{Model: m}
+	identity.Provider.ID = p.ID
+	identity.Provider.Name = p.Name
+	identity.Provider.Type = p.Type
+	identity.Provider.Dialect = p.Dialect
+	identity.Provider.BaseURL = p.BaseURL
+	identity.Provider.APIKeyEnv = p.APIKeyEnv
+	identity.Provider.AuthMode = p.AuthMode
+	identity.Provider.Headers = p.Headers
+	identity.Provider.ForwardHeaders = p.ForwardHeaders
+	identity.Provider.ProxyURL = p.ProxyURL
+	identity.Provider.ChatPath = p.ChatPath
+	identity.Provider.MessagesPath = p.MessagesPath
+	identity.Provider.ModelsPath = p.ModelsPath
+	identity.Provider.CountTokensPath = p.CountTokensPath
+	identity.Provider.ResponsesPath = p.ResponsesPath
+	identity.Provider.MaxConcurrency = p.MaxConcurrency
+	identity.Provider.StreamIdleTimeoutSeconds = p.StreamIdleTimeoutSeconds
+	identity.Provider.CredentialConfig = credentials
+	identity.Provider.ResolvedAuthFingerprint = hex.EncodeToString(authFingerprint[:])
+	encoded, _ := json.Marshal(identity)
+	h := sha256.Sum256(encoded)
+	return hex.EncodeToString(h[:])
+}
+
 func IsReadyStrategy(s string) bool {
 	return s == "ready_mesh" || s == "ready_queue" || s == "cost_aware"
 }
@@ -126,7 +187,8 @@ func (r *Router) Reload(cfg config.Config) {
 			if w <= 0 {
 				w = 1
 			}
-			d := Deployment{ID: p.ID + "/" + m.ID, ProviderID: p.ID, ProviderName: p.Name, ProviderType: p.Type, Model: m.Model, Aliases: m.Aliases, Priority: m.Priority, Weight: w, ContextWindow: m.ContextWindow, InputCostPerMTok: m.InputCostPerMTok, OutputCostPerMTok: m.OutputCostPerMTok, Capabilities: m.Capabilities}
+			d := Deployment{ID: p.ID + "/" + m.ID, Identity: deploymentIdentity(p, m), ProviderID: p.ID, ProviderName: p.Name, ProviderType: p.Type, Model: m.Model, Aliases: m.Aliases, Priority: m.Priority, Weight: w, ContextWindow: m.ContextWindow, InputCostPerMTok: m.InputCostPerMTok, OutputCostPerMTok: m.OutputCostPerMTok, Capabilities: m.Capabilities}
+			r.health.SetIdentity(d.ID, d.Identity)
 			all = append(all, d)
 			byID[d.ID] = d
 			valid[d.ID] = struct{}{}
@@ -264,6 +326,12 @@ func (r *Router) eligibleDeployment(d Deployment, req Requirement, cfg config.Co
 		healthScopes = scopes
 	}
 	hs, scopesReady := r.health.GetWithScopes(d.ID, healthScopes)
+	// Retirement is a deployment-lifecycle fact; supervised quarantine is an
+	// immediate ejection fact. Neither may be overridden by a permissive
+	// routing strategy or by cached/session-affinity ordering.
+	if hs.Status == health.Retired || hs.Quarantined {
+		return Scored{}, false
+	}
 	if IsReadyStrategy(cfg.Routing.Strategy) {
 		if hs.Status != health.Healthy {
 			return Scored{}, false
@@ -687,12 +755,15 @@ func (r *Router) Readiness(strategy string) (total, usable int) {
 		if !r.health.ProviderAvailable(d.ProviderID) {
 			continue
 		}
-		st := r.health.Get(d.ID).Status
+		state := r.health.Get(d.ID)
+		if state.Status == health.Retired || state.Quarantined {
+			continue
+		}
 		if readyStrategy {
-			if st == health.Healthy {
+			if state.Status == health.Healthy {
 				usable++
 			}
-		} else if st != health.Cooldown {
+		} else if state.Status != health.Cooldown {
 			usable++
 		}
 	}

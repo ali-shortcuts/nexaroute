@@ -59,7 +59,7 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 
 	fmt.Fprintln(w, "# HELP nexaroute_health_deployments Deployment count by health status.")
 	fmt.Fprintln(w, "# TYPE nexaroute_health_deployments gauge")
-	for _, st := range []health.Status{health.Unknown, health.Healthy, health.Degraded, health.HalfOpen, health.Cooldown} {
+	for _, st := range []health.Status{health.Unknown, health.Healthy, health.Degraded, health.HalfOpen, health.Cooldown, health.Retired} {
 		fmt.Fprintf(w, "nexaroute_health_deployments{status=%q} %d\n", st, by[st])
 	}
 

@@ -2,6 +2,7 @@ package probe
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -27,6 +28,29 @@ func providerIncidentProbeFailure(status int) bool {
 		status >= 500
 }
 
+func classifyProbeFailure(status int, err error) compat.Classified {
+	var responseErr *providers.UpstreamResponseError
+	if errors.As(err, &responseErr) && responseErr != nil {
+		return compat.ClassifyUpstreamError(responseErr.StatusCode, responseErr.Body)
+	}
+	if status >= 200 && status < 300 {
+		c := compat.ClassifyMalformedResponse("probe response failed protocol validation")
+		c.StatusCode = status
+		return c
+	}
+	if status > 0 {
+		return compat.ClassifyUpstreamError(status, nil)
+	}
+	return compat.ClassifyTransportError(err)
+}
+
+func safeProbeFailure(c compat.Classified) string {
+	if c.StatusCode > 0 {
+		return fmt.Sprintf("%s (upstream status %d)", c.Class, c.StatusCode)
+	}
+	return string(c.Class)
+}
+
 type Result struct {
 	Total           int   `json:"total"`
 	Passed          int   `json:"passed"`
@@ -35,6 +59,7 @@ type Result struct {
 	SkippedMissing  int   `json:"skipped_missing_adapter"`
 	SkippedRecovery int   `json:"skipped_recovery"`
 	SkippedReady    int   `json:"skipped_ready"`
+	SkippedRetired  int   `json:"skipped_retired"`
 	Canceled        int   `json:"canceled,omitempty"`
 	DurationMS      int64 `json:"duration_ms"`
 }
@@ -46,6 +71,7 @@ const (
 
 type recoveryTask struct {
 	id         string
+	identity   string
 	attempt    int
 	generation uint64
 }
@@ -104,9 +130,11 @@ func (e *Engine) Reload(cfg config.Config) {
 	e.cfgMu.Lock()
 	e.cfg = cfg
 	e.cfgMu.Unlock()
-	if !router.IsReadyStrategy(cfg.Routing.Strategy) {
-		e.cancelAllRecoveries()
-	}
+	// Config reload may replace a model or provider identity while delayed
+	// recovery timers are pending. Cancel all queued work; periodic/manual
+	// sweeps and newly classified failures will rebuild recovery under the
+	// current identity.
+	e.cancelAllRecoveries()
 
 	// Wake probe workers so a raised concurrency limit takes effect promptly.
 	e.limitMu.Lock()
@@ -248,6 +276,14 @@ func (e *Engine) Recover(id string) {
 	if ctx == nil || ctx.Err() != nil {
 		return
 	}
+	d, _, ok := e.deployment(id)
+	if !ok {
+		return
+	}
+	st := e.hm.Get(id)
+	if st.Status == health.Retired || (st.Identity != "" && st.Identity != d.Identity) {
+		return
+	}
 	e.startRecoveryWorkers(ctx)
 	e.recoveryMu.Lock()
 	if e.recovering[id] {
@@ -260,7 +296,7 @@ func (e *Engine) Recover(id string) {
 	e.recoveryGenerations[id] = generation
 	e.recoveryMu.Unlock()
 
-	task := recoveryTask{id: id, attempt: 1, generation: generation}
+	task := recoveryTask{id: id, identity: d.Identity, attempt: 1, generation: generation}
 	if !e.enqueueRecovery(ctx, task) {
 		e.clearRecoveryTask(task)
 		e.bus.Add(events.Event{Kind: "recovery_queue_full", Deployment: id, Message: "bounded recovery queue is full; background sweep will retry", ErrorType: "recovery_queue_full"})
@@ -394,18 +430,18 @@ func (e *Engine) processRecoveryTask(ctx context.Context, task recoveryTask) {
 		return
 	}
 	cfg := e.current()
-	if !router.IsReadyStrategy(cfg.Routing.Strategy) {
-		e.clearRecoveryTask(task)
-		return
-	}
 	d, a, ok := e.deployment(task.id)
-	if !ok {
+	if !ok || d.Identity != task.identity {
 		e.clearRecoveryTask(task)
 		return
 	}
 
 	st := e.hm.Get(task.id)
-	if st.Status == health.Healthy {
+	if st.Status == health.Retired || (st.Identity != "" && st.Identity != task.identity) {
+		e.clearRecoveryTask(task)
+		return
+	}
+	if st.Status == health.Healthy && !st.Quarantined {
 		e.clearRecoveryTask(task)
 		return
 	}
@@ -432,7 +468,7 @@ func (e *Engine) processRecoveryTask(ctx context.Context, task recoveryTask) {
 	// Re-resolve immediately before the probe so hot reloads never keep a stale
 	// provider/model pointer in a queued recovery task.
 	d, a, ok = e.deployment(task.id)
-	if !ok {
+	if !ok || d.Identity != task.identity {
 		e.clearRecoveryTask(task)
 		return
 	}
@@ -450,33 +486,87 @@ func (e *Engine) processRecoveryTask(ctx context.Context, task recoveryTask) {
 		e.clearRecoveryTask(task)
 		return
 	}
+	currentDeployment, stillConfigured := e.rt.Deployment(task.id)
+	currentHealth := e.hm.Get(task.id)
+	if !stillConfigured || currentDeployment.Identity != task.identity || currentHealth.Status == health.Retired ||
+		(currentHealth.Identity != "" && currentHealth.Identity != task.identity) {
+		e.clearRecoveryTask(task)
+		return
+	}
 	if err == nil {
-		e.hm.RecordSuccess(task.id, lat)
-		e.hm.RecordProviderSuccess(d.ProviderID)
-		e.bus.Add(events.Event{Kind: "recovery_ready", Deployment: task.id, Message: fmt.Sprintf("recovered on attempt %d/%d", task.attempt, attempts), LatencyMS: lat.Milliseconds(), StatusCode: status})
+		if e.hm.RecordRecoverySuccessForIdentity(task.id, task.identity, st.Revision, lat) {
+			e.hm.RecordProviderSuccess(d.ProviderID)
+			e.bus.Add(events.Event{Kind: "recovery_ready", Deployment: task.id, Message: fmt.Sprintf("recovered on attempt %d/%d", task.attempt, attempts),
+				SupervisorState: "ready", LatencyMS: lat.Milliseconds(), StatusCode: status})
+			e.clearRecoveryTask(task)
+			return
+		}
+		currentHealth = e.hm.Get(task.id)
+		currentDeployment, stillConfigured = e.rt.Deployment(task.id)
+		if !stillConfigured || currentDeployment.Identity != task.identity || currentHealth.Status == health.Retired ||
+			(currentHealth.Identity != "" && currentHealth.Identity != task.identity) {
+			e.clearRecoveryTask(task)
+			return
+		}
+		if currentHealth.Status == health.Healthy && !currentHealth.Quarantined {
+			e.clearRecoveryTask(task)
+			return
+		}
+		task.attempt = 1
+		delay := cfg.ProbeRecoveryRetry()
+		if currentHealth.Status == health.Cooldown && !currentHealth.CooldownUntil.IsZero() {
+			if wait := time.Until(currentHealth.CooldownUntil); wait > 0 {
+				delay = wait
+			}
+		}
+		e.bus.Add(events.Event{Kind: "recovery_stale", Deployment: task.id,
+			Message: "recovery success was superseded by newer deployment health evidence",
+			FailureClass: currentHealth.LastErrorClass, SupervisorState: "recovering", StatusCode: status})
+		e.scheduleRecovery(ctx, task, delay)
+		return
+	}
+
+	classified := classifyProbeFailure(status, err)
+	if classified.Class == compat.ClassModelRetired {
+		reason := safeProbeFailure(classified)
+		if e.hm.RetireForIdentity(task.id, task.identity, reason, string(classified.Class)) {
+			e.bus.Add(events.Event{Kind: "supervisor_state", Deployment: task.id, Message: "deployment permanently retired by model lifecycle evidence",
+				ErrorType: string(classified.Class), FailureClass: string(classified.Class), SupervisorState: "retired", SupervisorTerminal: true, StatusCode: status})
+		}
+		e.clearRecoveryTask(task)
+		return
+	}
+	if classified.CapabilityFailure || classified.CallerError || classified.Class == compat.ClassContextOverflow {
+		e.bus.Add(events.Event{Kind: "recovery_inconclusive", Deployment: task.id,
+			Message: "recovery probe request was rejected; deployment remains quarantined",
+			ErrorType: string(classified.Class), FailureClass: string(classified.Class), SupervisorState: "quarantined", StatusCode: status})
 		e.clearRecoveryTask(task)
 		return
 	}
 
+	lastErr := safeProbeFailure(classified)
 	if wait, ok := providers.RetryAfter(err); ok {
 		if providerIncidentProbeFailure(status) {
-			e.hm.RecordProviderFailure(d.ProviderID, task.id, err.Error())
+			e.hm.RecordProviderFailure(d.ProviderID, task.id, lastErr)
 		}
 		maxWait := time.Duration(cfg.Routing.MaxRetryAfterSeconds) * time.Second
 		if maxWait > 0 && wait > maxWait {
 			wait = maxWait
 		}
-		e.bus.Add(events.Event{Kind: "recovery_deferred", Deployment: task.id, Message: fmt.Sprintf("credential rate-limit cooldown; retry after %s", wait), StatusCode: status})
+		e.hm.EnterCooldownWithClassForIdentity(task.id, task.identity, lastErr, string(classified.Class), wait)
+		e.bus.Add(events.Event{Kind: "recovery_deferred", Deployment: task.id, Message: fmt.Sprintf("provider cooldown; retry after %s", wait),
+			ErrorType: string(classified.Class), FailureClass: string(classified.Class), SupervisorState: "cooldown", StatusCode: status})
 		e.scheduleRecovery(ctx, task, wait)
 		return
 	}
 
-	lastErr := err.Error()
 	if providerIncidentProbeFailure(status) {
 		e.hm.RecordProviderFailure(d.ProviderID, task.id, lastErr)
 	}
-	e.hm.RecordRecoveryFailure(task.id, lastErr, lat)
-	e.bus.Add(events.Event{Kind: "recovery_fail", Deployment: task.id, Message: fmt.Sprintf("attempt %d/%d: %s", task.attempt, attempts, lastErr), LatencyMS: lat.Milliseconds(), StatusCode: status})
+	e.hm.RecordRecoveryFailureClassForIdentity(task.id, task.identity, lastErr, string(classified.Class), lat)
+	e.bus.Add(events.Event{Kind: "recovery_fail", Deployment: task.id, Message: fmt.Sprintf("recovery attempt %d/%d failed", task.attempt, attempts),
+		ErrorType: string(classified.Class), FailureClass: string(classified.Class), SupervisorState: "recovering", SupervisorAttempt: task.attempt,
+		LatencyMS: lat.Milliseconds(), StatusCode: status})
 
 	if task.attempt < attempts {
 		task.attempt++
@@ -485,8 +575,8 @@ func (e *Engine) processRecoveryTask(ctx context.Context, task recoveryTask) {
 	}
 
 	cooldown := cfg.Cooldown()
-	e.hm.EnterCooldown(task.id, lastErr, cooldown)
-	e.bus.Add(events.Event{Kind: "recovery_cooldown", Deployment: task.id, Message: fmt.Sprintf("%d recovery attempts failed; retry after %s", attempts, cooldown), LatencyMS: lat.Milliseconds(), StatusCode: status})
+	e.hm.EnterCooldownWithClassForIdentity(task.id, task.identity, lastErr, string(classified.Class), cooldown)
+	e.bus.Add(events.Event{Kind: "recovery_cooldown", Deployment: task.id, Message: fmt.Sprintf("%d recovery attempts failed; retry after %s", attempts, cooldown), ErrorType: string(classified.Class), FailureClass: string(classified.Class), SupervisorState: "cooldown", SupervisorAttempt: attempts, LatencyMS: lat.Milliseconds(), StatusCode: status})
 	task.attempt = 1
 	e.scheduleRecovery(ctx, task, cooldown)
 }
@@ -643,8 +733,10 @@ func (e *Engine) runOnce(ctx context.Context, force bool) Result {
 		case health.Healthy:
 			return 3
 		case health.Cooldown:
-			return 4
-		default:
+				return 4
+			case health.Retired:
+				return 5
+			default:
 			return 3
 		}
 	}
@@ -666,29 +758,41 @@ func (e *Engine) runOnce(ctx context.Context, force bool) Result {
 	var wg sync.WaitGroup
 	var resultMu sync.Mutex
 	failedIDs := make([]string, 0)
-	for idx, job := range jobs {
-		d := job.d
-		if !force && readySupervisor {
-			switch job.state.Status {
-			case health.Healthy:
-				if !readyLeaseExpired(job.state, sweepNow, readyLease) {
-					result.SkippedReady++
-					continue
-				}
-			case health.Cooldown:
-				result.SkippedCooldown++
-				e.Recover(d.ID)
+		for idx, job := range jobs {
+			d := job.d
+			if job.state.Status == health.Retired {
+				result.SkippedRetired++
 				continue
-			case health.Degraded, health.HalfOpen:
-				result.SkippedRecovery++
+			}
+			if job.state.Quarantined {
+				if job.state.Status == health.Cooldown {
+					result.SkippedCooldown++
+				} else {
+					result.SkippedRecovery++
+				}
 				e.Recover(d.ID)
 				continue
 			}
-		} else if job.state.Status == health.Cooldown {
-			result.SkippedCooldown++
-			continue
-		}
-		if readySupervisor && e.isRecovering(d.ID) {
+			if !force && readySupervisor {
+				switch job.state.Status {
+				case health.Healthy:
+					if !readyLeaseExpired(job.state, sweepNow, readyLease) {
+						result.SkippedReady++
+						continue
+					}
+				case health.Cooldown:
+					result.SkippedCooldown++
+					continue
+				case health.Degraded, health.HalfOpen:
+					result.SkippedRecovery++
+					e.Recover(d.ID)
+					continue
+				}
+			} else if job.state.Status == health.Cooldown {
+				result.SkippedCooldown++
+				continue
+			}
+			if readySupervisor && e.isRecovering(d.ID) {
 			result.SkippedRecovery++
 			continue
 		}
@@ -718,43 +822,97 @@ func (e *Engine) runOnce(ctx context.Context, force bool) Result {
 			lat, status, err := a.Probe(pctx, d.Model, cfg.Probe.MaxTokens)
 			cancel()
 
+			if ctx.Err() != nil {
+				resultMu.Lock()
+				result.Canceled++
+				resultMu.Unlock()
+				return
+			}
+			current, configured := e.rt.Deployment(d.ID)
+			state := e.hm.Get(d.ID)
+			if !configured || current.Identity != d.Identity || state.Status == health.Retired ||
+				(state.Identity != "" && state.Identity != d.Identity) {
+				resultMu.Lock()
+				if state.Status == health.Retired {
+					result.SkippedRetired++
+				} else {
+					result.SkippedRecovery++
+				}
+				resultMu.Unlock()
+				return
+			}
+
 			if err != nil {
-				if ctx.Err() != nil {
+				classified := classifyProbeFailure(status, err)
+				reason := safeProbeFailure(classified)
+				policy := classified.Policy()
+				if classified.CapabilityFailure || classified.CallerError || classified.Class == compat.ClassContextOverflow {
+					e.bus.Add(events.Event{Kind: "probe_inconclusive", Deployment: d.ID,
+						Message: "probe request was rejected; deployment health remains unchanged",
+						ErrorType: string(classified.Class), FailureClass: string(classified.Class), SupervisorState: "unchanged", StatusCode: status})
 					resultMu.Lock()
-					result.Canceled++
+					result.Failed++
 					resultMu.Unlock()
 					return
 				}
 				if providerIncidentProbeFailure(status) {
-					e.hm.RecordProviderFailure(d.ProviderID, d.ID, err.Error())
+					e.hm.RecordProviderFailure(d.ProviderID, d.ID, reason)
 				}
-				if readySupervisor {
-					e.hm.Quarantine(d.ID, err.Error(), lat)
-					e.bus.Add(events.Event{Kind: "probe_quarantine", Deployment: d.ID, Message: err.Error(), LatencyMS: lat.Milliseconds(), StatusCode: status})
-					resultMu.Lock()
-					failedIDs = append(failedIDs, d.ID)
-					resultMu.Unlock()
-				} else {
-					if status == 401 || status == 402 || status == 403 || status == 429 {
-						cooldown := cfg.Cooldown()
-						if status == 429 && cooldown > time.Minute {
-							cooldown = time.Minute
-						}
-						e.hm.ForceCooldown(d.ID, err.Error(), cooldown)
-					} else {
-						e.hm.RecordFailure(d.ID, err.Error(), lat)
+				if policy.RetireDeployment {
+					if e.hm.RetireForIdentity(d.ID, d.Identity, reason, string(classified.Class)) {
+						e.bus.Add(events.Event{Kind: "supervisor_state", Deployment: d.ID, Message: "deployment permanently retired by model lifecycle evidence",
+							ErrorType: string(classified.Class), FailureClass: string(classified.Class), SupervisorState: "retired", SupervisorTerminal: true, StatusCode: status})
 					}
-					e.bus.Add(events.Event{Kind: "probe_fail", Deployment: d.ID, Message: err.Error(), LatencyMS: lat.Milliseconds(), StatusCode: status})
+				} else {
+					retryWait, hasRetryWait := providers.RetryAfter(err)
+					if classified.Class == compat.ClassRateLimit && !hasRetryWait {
+						retryWait, hasRetryWait = cfg.Cooldown(), true
+					}
+					if hasRetryWait {
+						maxWait := time.Duration(cfg.Routing.MaxRetryAfterSeconds) * time.Second
+						if retryWait <= 0 {
+							retryWait = time.Second
+						}
+						if maxWait > 0 && retryWait > maxWait {
+							retryWait = maxWait
+						}
+						e.hm.ForceCooldownWithClassForIdentity(d.ID, d.Identity, reason, string(classified.Class), retryWait)
+						e.bus.Add(events.Event{Kind: "probe_deferred", Deployment: d.ID, Message: "probe deferred by bounded provider cooldown",
+							ErrorType: string(classified.Class), FailureClass: string(classified.Class), SupervisorState: "cooldown", StatusCode: status})
+						resultMu.Lock()
+						failedIDs = append(failedIDs, d.ID)
+						resultMu.Unlock()
+					} else if classified.Class == compat.ClassModelTemporarilyUnavailable ||
+						(readySupervisor && policy.QuarantineDeployment) {
+						e.hm.QuarantineWithClassForIdentity(d.ID, d.Identity, reason, string(classified.Class), lat)
+						e.bus.Add(events.Event{Kind: "probe_quarantine", Deployment: d.ID, Message: "deployment removed from routing pending supervised recovery",
+							ErrorType: string(classified.Class), FailureClass: string(classified.Class), SupervisorState: "quarantined", StatusCode: status})
+						resultMu.Lock()
+						failedIDs = append(failedIDs, d.ID)
+						resultMu.Unlock()
+					} else if policy.HardCooldown {
+						cooldown := cfg.Cooldown()
+						e.hm.ForceCooldownWithClassForIdentity(d.ID, d.Identity, reason, string(classified.Class), cooldown)
+						resultMu.Lock()
+						failedIDs = append(failedIDs, d.ID)
+						resultMu.Unlock()
+					} else if policy.QuarantineDeployment {
+						e.hm.RecordFailureForIdentity(d.ID, d.Identity, reason, lat)
+					} else {
+						e.hm.RecordFailureForIdentity(d.ID, d.Identity, reason, lat)
+					}
 				}
+				e.bus.Add(events.Event{Kind: "probe_fail", Deployment: d.ID, Message: "probe failed; classified for routing policy",
+					ErrorType: string(classified.Class), FailureClass: string(classified.Class), LatencyMS: lat.Milliseconds(), StatusCode: status})
 				resultMu.Lock()
 				result.Failed++
 				resultMu.Unlock()
 				return
 			}
 
-			e.hm.RecordSuccess(d.ID, lat)
+			e.hm.RecordSuccessForIdentity(d.ID, d.Identity, lat)
 			e.hm.RecordProviderSuccess(d.ProviderID)
-			e.bus.Add(events.Event{Kind: "probe_ready", Deployment: d.ID, Message: fmt.Sprintf("ready after probe (%d)", status), LatencyMS: lat.Milliseconds(), StatusCode: status})
+			e.bus.Add(events.Event{Kind: "probe_ready", Deployment: d.ID, Message: fmt.Sprintf("ready after probe (%d)", status), SupervisorState: "ready", LatencyMS: lat.Milliseconds(), StatusCode: status})
 			e.maybeProbeCapabilities(ctx, d, a)
 			resultMu.Lock()
 			result.Passed++
@@ -764,10 +922,8 @@ func (e *Engine) runOnce(ctx context.Context, force bool) Result {
 	wg.Wait()
 	// Let every deployment receive its first health check before failed models
 	// consume probe capacity with recovery retries.
-	if readySupervisor {
-		for _, id := range failedIDs {
-			e.Recover(id)
-		}
+	for _, id := range failedIDs {
+		e.Recover(id)
 	}
 	result.DurationMS = time.Since(start).Milliseconds()
 	return result

@@ -13,6 +13,7 @@ const (
 	Degraded Status = "degraded"
 	HalfOpen Status = "half_open"
 	Cooldown Status = "cooldown"
+	Retired  Status = "retired"
 )
 
 type ScopeState struct {
@@ -40,6 +41,8 @@ type ProviderState struct {
 
 type State struct {
 	Deployment          string                `json:"deployment"`
+	Identity            string                `json:"-"`
+	Revision            uint64                `json:"-"`
 	Status              Status                `json:"status"`
 	Successes           int64                 `json:"successes"`
 	Failures            int64                 `json:"failures"`
@@ -51,8 +54,10 @@ type State struct {
 	LastSuccess         time.Time             `json:"last_success"`
 	LastFailure         time.Time             `json:"last_failure"`
 	LastError           string                `json:"last_error,omitempty"`
+	LastErrorClass      string                `json:"last_error_class,omitempty"`
 	CooldownUntil       time.Time             `json:"cooldown_until,omitempty"`
 	RecoveryFailures    int                   `json:"recovery_failures,omitempty"`
+	Quarantined         bool                  `json:"quarantined,omitempty"`
 	Scopes              map[string]ScopeState `json:"scopes,omitempty"`
 }
 
@@ -232,6 +237,10 @@ func updateFailureEWMA(s *State, failed bool) {
 }
 
 func (m *Manager) RecordTTFT(id string, ttft time.Duration) {
+	m.RecordTTFTForIdentity(id, "", ttft)
+}
+
+func (m *Manager) RecordTTFTForIdentity(id, identity string, ttft time.Duration) {
 	ms := float64(ttft.Milliseconds())
 	if ms <= 0 {
 		return
@@ -240,6 +249,15 @@ func (m *Manager) RecordTTFT(id string, ttft time.Duration) {
 	defer m.mu.Unlock()
 	st := m.states[id]
 	st.Deployment = id
+	if !healthIdentityMatches(st, identity) {
+		return
+	}
+	if st.Identity == "" {
+		st.Identity = identity
+	}
+	if st.Status == Retired {
+		return
+	}
 	if st.EWMATTFTMS == 0 {
 		st.EWMATTFTMS = ms
 	} else {
@@ -249,36 +267,92 @@ func (m *Manager) RecordTTFT(id string, ttft time.Duration) {
 }
 
 func (m *Manager) RecordSuccess(id string, latency time.Duration) {
+	m.RecordSuccessForIdentity(id, "", latency)
+}
+
+func (m *Manager) RecordSuccessForIdentity(id, identity string, latency time.Duration) {
+	m.recordSuccessForIdentity(id, identity, 0, latency, false)
+}
+
+// RecordRecoverySuccessForIdentity admits a deployment only when the successful
+// probe observed the same lifecycle revision that is still current. A concurrent
+// failure or cooldown makes an older probe result stale.
+func (m *Manager) RecordRecoverySuccessForIdentity(id, identity string, expectedRevision uint64, latency time.Duration) bool {
+	return m.recordSuccessForIdentity(id, identity, expectedRevision, latency, true)
+}
+
+func (m *Manager) recordSuccessForIdentity(id, identity string, expectedRevision uint64, latency time.Duration, recovery bool) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	s := m.states[id]
 	s.Deployment = id
+	if !healthIdentityMatches(s, identity) {
+		return false
+	}
+	if s.Identity == "" {
+		s.Identity = identity
+	}
+	// A late success from an in-flight request must not undo permanent model
+	// retirement for the active deployment identity.
+	if s.Status == Retired {
+		return false
+	}
 	s.Successes++
 	s.LastChecked = m.now()
 	s.LastSuccess = s.LastChecked
 	updateEWMA(&s, latency)
 	updateFailureEWMA(&s, false)
 	if s.Status == Cooldown && !s.CooldownUntil.IsZero() && s.LastChecked.Before(s.CooldownUntil) {
-		// A request that started before a hard cooldown (e.g. a 429
-		// retry-after) completed successfully. That stale observation
-		// must not re-admit a deployment that is still cooling down;
-		// only observations arriving after the deadline may recover it.
+		// A stale success must not re-admit a deployment that is still cooling
+		// down; only a later supervised recovery can restore readiness.
 		m.states[id] = s
-		return
+		return false
+	}
+	if recovery && s.Revision != expectedRevision {
+		m.states[id] = s
+		return false
+	}
+	if s.Quarantined && !recovery {
+		// Successful traffic already in flight when quarantine began is not a
+		// supervised recovery verdict. Keep it out of routing until a probe passes.
+		if s.Status == Cooldown {
+			s.Status = Degraded
+			s.CooldownUntil = time.Time{}
+		}
+		m.states[id] = s
+		return false
 	}
 	s.ConsecutiveFailures = 0
 	s.RecoveryFailures = 0
 	s.Status = Healthy
 	s.LastError = ""
+	s.LastErrorClass = ""
+	s.Quarantined = false
 	s.CooldownUntil = time.Time{}
+	s.Revision++
 	m.states[id] = s
+	return true
 }
 
 func (m *Manager) RecordFailure(id, errMsg string, latency time.Duration) {
+	m.RecordFailureForIdentity(id, "", errMsg, latency)
+}
+
+func (m *Manager) RecordFailureForIdentity(id, identity, errMsg string, latency time.Duration) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	s := m.states[id]
 	s.Deployment = id
+	if !healthIdentityMatches(s, identity) {
+		return
+	}
+	if s.Identity == "" {
+		s.Identity = identity
+	}
+	if s.Status == Retired {
+		return
+	}
+	s.Revision++
 	s.Failures++
 	updateFailureEWMA(&s, true)
 	s.ConsecutiveFailures++
@@ -473,42 +547,126 @@ func (m *Manager) Snapshot() []State {
 }
 
 func (m *Manager) Quarantine(id, reason string, latency time.Duration) {
+	m.QuarantineWithClass(id, reason, "", latency)
+}
+
+// QuarantineWithClass immediately removes a deployment from routing while the
+// bounded recovery supervisor verifies it. The quarantine flag survives
+// cooldown expiry until a recovery success or an identity reset.
+func (m *Manager) QuarantineWithClass(id, reason, errorClass string, latency time.Duration) {
+	m.QuarantineWithClassForIdentity(id, "", reason, errorClass, latency)
+}
+
+func (m *Manager) QuarantineWithClassForIdentity(id, identity, reason, errorClass string, latency time.Duration) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	s := m.states[id]
 	s.Deployment = id
+	if !healthIdentityMatches(s, identity) {
+		return
+	}
+	if s.Identity == "" {
+		s.Identity = identity
+	}
+	if s.Status == Retired {
+		return
+	}
+	s.Revision++
 	s.Failures++
 	updateFailureEWMA(&s, true)
 	s.ConsecutiveFailures++
 	s.RecoveryFailures = 0
 	s.Status = Degraded
+	s.Quarantined = true
 	s.LastChecked = m.now()
 	s.LastFailure = s.LastChecked
 	s.LastError = reason
+	s.LastErrorClass = errorClass
 	s.CooldownUntil = time.Time{}
 	updateEWMA(&s, latency)
 	m.states[id] = s
 }
 
-func (m *Manager) RecordRecoveryFailure(id, reason string, latency time.Duration) {
+// Retire permanently removes the current deployment identity from routing and
+// the recovery probe queue. Invalidation on config/model identity change is
+// the only automatic way to clear this lifecycle state.
+func (m *Manager) Retire(id, reason, errorClass string) {
+	m.RetireForIdentity(id, "", reason, errorClass)
+}
+
+func (m *Manager) RetireForIdentity(id, identity, reason, errorClass string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	s := m.states[id]
 	s.Deployment = id
+	if !healthIdentityMatches(s, identity) {
+		return false
+	}
+	if s.Identity == "" {
+		s.Identity = identity
+	}
+	s.Revision++
+	s.Status = Retired
+	s.Quarantined = false
+	s.ConsecutiveFailures++
+	s.LastChecked = m.now()
+	s.LastFailure = s.LastChecked
+	s.LastError = reason
+	s.LastErrorClass = errorClass
+	s.CooldownUntil = time.Time{}
+	m.states[id] = s
+	return true
+}
+
+func (m *Manager) RecordRecoveryFailure(id, reason string, latency time.Duration) {
+	m.RecordRecoveryFailureForIdentity(id, "", reason, latency)
+}
+
+func (m *Manager) RecordRecoveryFailureForIdentity(id, identity, reason string, latency time.Duration) {
+	m.RecordRecoveryFailureClassForIdentity(id, identity, reason, "", latency)
+}
+
+func (m *Manager) RecordRecoveryFailureClassForIdentity(id, identity, reason, errorClass string, latency time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s := m.states[id]
+	s.Deployment = id
+	if !healthIdentityMatches(s, identity) {
+		return
+	}
+	if s.Identity == "" {
+		s.Identity = identity
+	}
+	if s.Status == Retired {
+		return
+	}
+	s.Revision++
 	s.Failures++
 	updateFailureEWMA(&s, true)
 	s.ConsecutiveFailures++
 	s.RecoveryFailures++
 	s.Status = Degraded
+	s.Quarantined = true
 	s.LastChecked = m.now()
 	s.LastFailure = s.LastChecked
 	s.LastError = reason
+	if errorClass != "" {
+		s.LastErrorClass = errorClass
+	}
 	s.CooldownUntil = time.Time{}
 	updateEWMA(&s, latency)
 	m.states[id] = s
 }
 
 func (m *Manager) EnterCooldown(id, reason string, d time.Duration) {
+	m.EnterCooldownWithClass(id, reason, "", d)
+}
+
+func (m *Manager) EnterCooldownWithClass(id, reason, errorClass string, d time.Duration) {
+	m.EnterCooldownWithClassForIdentity(id, "", reason, errorClass, d)
+}
+
+func (m *Manager) EnterCooldownWithClassForIdentity(id, identity, reason, errorClass string, d time.Duration) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if d <= 0 {
@@ -516,14 +674,34 @@ func (m *Manager) EnterCooldown(id, reason string, d time.Duration) {
 	}
 	s := m.states[id]
 	s.Deployment = id
+	if !healthIdentityMatches(s, identity) {
+		return
+	}
+	if s.Identity == "" {
+		s.Identity = identity
+	}
+	if s.Status == Retired {
+		return
+	}
+	s.Revision++
 	s.Status = Cooldown
+	s.Quarantined = true
 	s.LastChecked = m.now()
 	s.LastError = reason
+	s.LastErrorClass = errorClass
 	s.CooldownUntil = m.now().Add(d)
 	m.states[id] = s
 }
 
 func (m *Manager) ForceCooldown(id, reason string, d time.Duration) {
+	m.ForceCooldownWithClass(id, reason, "", d)
+}
+
+func (m *Manager) ForceCooldownWithClass(id, reason, errorClass string, d time.Duration) {
+	m.ForceCooldownWithClassForIdentity(id, "", reason, errorClass, d)
+}
+
+func (m *Manager) ForceCooldownWithClassForIdentity(id, identity, reason, errorClass string, d time.Duration) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if d <= 0 {
@@ -531,13 +709,25 @@ func (m *Manager) ForceCooldown(id, reason string, d time.Duration) {
 	}
 	s := m.states[id]
 	s.Deployment = id
+	if !healthIdentityMatches(s, identity) {
+		return
+	}
+	if s.Identity == "" {
+		s.Identity = identity
+	}
+	if s.Status == Retired {
+		return
+	}
+	s.Revision++
 	s.Failures++
 	updateFailureEWMA(&s, true)
 	s.ConsecutiveFailures++
 	s.Status = Cooldown
+	s.Quarantined = true
 	s.LastChecked = m.now()
 	s.LastFailure = s.LastChecked
 	s.LastError = reason
+	s.LastErrorClass = errorClass
 	s.CooldownUntil = m.now().Add(d)
 	m.states[id] = s
 }
@@ -612,10 +802,41 @@ func (m *Manager) ScopesReady(id string, scopes []string) bool {
 	return ready
 }
 
-func (m *Manager) Invalidate(id string) {
+func healthIdentityMatches(s State, identity string) bool {
+	return identity == "" || s.Identity == "" || s.Identity == identity
+}
+
+// SetIdentity binds lifecycle/health state to the configured deployment
+// identity. A material identity change clears all observations, quarantine,
+// cooldown, and retirement before the new deployment can be routed.
+func (m *Manager) SetIdentity(id, identity string) {
+	if id == "" || identity == "" {
+		return
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.states[id] = State{Deployment: id, Status: Unknown}
+	s := m.states[id]
+	if s.Identity != "" && s.Identity != identity {
+		s = State{Deployment: id, Identity: identity, Revision: s.Revision + 1, Status: Unknown}
+	} else {
+		s.Deployment = id
+		s.Identity = identity
+	}
+	m.states[id] = s
+}
+
+func (m *Manager) Invalidate(id string, identities ...string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	identity := ""
+	if len(identities) > 0 {
+		identity = identities[0]
+	}
+	current := m.states[id]
+	if identity == "" {
+		identity = current.Identity
+	}
+	m.states[id] = State{Deployment: id, Identity: identity, Revision: current.Revision + 1, Status: Unknown}
 }
 
 func (m *Manager) Retain(valid map[string]struct{}) {

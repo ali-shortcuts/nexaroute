@@ -496,6 +496,7 @@ func TestRetryAfterDurationIsBoundedAndOverflowSafe(t *testing.T) {
 		value string
 		want  time.Duration
 	}{
+		{"0", 0},
 		{"5", 5 * time.Second},
 		{"3600", max},
 		{"999999999999999999999999999", 30 * time.Second},
@@ -706,7 +707,7 @@ func TestStreamOpenAIToAnthropicUsageAndContentVariants(t *testing.T) {
 
 func TestStreamAnthropicToOpenAIRoleReasoningAndUsage(t *testing.T) {
 	upstream := strings.Join([]string{
-		`data: {"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":9,"cache_read_input_tokens":3,"output_tokens":1}}}`,
+		`data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[],"usage":{"input_tokens":9,"cache_read_input_tokens":3,"output_tokens":1}}}`,
 		``,
 		`data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}`,
 		``,
@@ -769,7 +770,7 @@ func TestStreamAnthropicToOpenAIRoleReasoningAndUsage(t *testing.T) {
 
 func TestStreamAnthropicToOpenAIRefusalStopReason(t *testing.T) {
 	upstream := strings.Join([]string{
-		`data: {"type":"message_start","message":{"id":"m","usage":{"input_tokens":1}}}`,
+		`data: {"type":"message_start","message":{"id":"m","type":"message","role":"assistant","content":[],"usage":{"input_tokens":1}}}`,
 		``,
 		`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
 		``,
@@ -971,7 +972,7 @@ func TestStreamAnthropicToOpenAIDefersRoleChunkUntilUpstreamAlive(t *testing.T) 
 func TestStreamAnthropicToOpenAIEmitsTerminalErrorChunkMidStream(t *testing.T) {
 	// A mid-stream failure after content was delivered commits the response
 	// and must surface an OpenAI-style error chunk instead of a silent cut.
-	body := "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":1}}}\n\n" +
+	body := "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"m\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"usage\":{\"input_tokens\":1}}}\n\n" +
 		"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hi\"}}\n\n" +
 		"event: broken\ndata: {not-json\n\n"
 	resp := &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(body))}
@@ -999,7 +1000,7 @@ func TestStreamAnthropicToOpenAIEmitsTerminalErrorChunkMidStream(t *testing.T) {
 }
 
 func TestStreamAnthropicToOpenAISuccessStillEmitsRoleFirst(t *testing.T) {
-	body := "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":2}}}\n\n" +
+	body := "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"m\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"usage\":{\"input_tokens\":2}}}\n\n" +
 		"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hello\"}}\n\n" +
 		"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":1}}\n\n" +
 		"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"

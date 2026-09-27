@@ -22,6 +22,33 @@ func TestCandidatesExcludeCooldown(t *testing.T) {
 	}
 }
 
+func TestRetiredDeploymentCannotBeSelectedUntilIdentityChanges(t *testing.T) {
+	cfg := config.Default()
+	cfg.Routing.SessionAffinity = true
+	cfg.Providers = []config.ProviderConfig{{ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "http://one", Enabled: true, Models: []config.ModelConfig{{ID: "m", Model: "model-v1", Aliases: []string{"claude-auto"}, Enabled: true, Weight: 1}}}}
+	h := health.New(3, time.Hour)
+	r := New(cfg, h)
+	deployment, ok := r.Deployment("p/m")
+	if !ok {
+		t.Fatal("deployment missing")
+	}
+	if !h.RetireForIdentity("p/m", deployment.Identity, "model_eol", "model_retired") {
+		t.Fatal("failed to retire current identity")
+	}
+	if got := r.Candidates(Requirement{Model: "claude-auto", SessionKey: "session-1"}); len(got) != 0 {
+		t.Fatalf("retired deployment remained routable: %+v", got)
+	}
+
+	cfg.Providers[0].Models[0].Model = "model-v2"
+	r.Reload(cfg)
+	if st := h.Get("p/m"); st.Status != health.Unknown || st.Identity == deployment.Identity {
+		t.Fatalf("material identity change did not clear retirement: %+v", st)
+	}
+	if got := r.Candidates(Requirement{Model: "claude-auto", SessionKey: "session-1"}); len(got) != 1 || got[0].Deployment.Model != "model-v2" {
+		t.Fatalf("new identity did not return to routing: %+v", got)
+	}
+}
+
 func TestAdaptiveRoundRobinRotatesHealthyTopTier(t *testing.T) {
 	cfg := config.Default()
 	cfg.Routing.Strategy = "adaptive_round_robin"

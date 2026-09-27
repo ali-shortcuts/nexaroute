@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"errors"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -246,7 +247,179 @@ func classifyFailure(status int, body []byte) (compat.Classified, upstreamFailur
 		QuarantineDeployment: p.QuarantineDeployment,
 		SignalProvider:       p.SignalProvider,
 		HardCooldown:         p.HardCooldown,
+		RetireDeployment:     p.RetireDeployment,
 	}
+}
+
+func classifyUpstreamTransportError(err error) compat.Classified {
+	var responseErr *providers.UpstreamResponseError
+	if errors.As(err, &responseErr) && responseErr != nil {
+		return compat.ClassifyUpstreamError(responseErr.StatusCode, responseErr.Body)
+	}
+	if wait, ok := providers.RetryAfter(err); ok && wait > 0 {
+		return compat.Classified{Class: compat.ClassRateLimit, Message: "rate limit cooldown", RetryableSamePayload: true}
+	}
+	return compat.ClassifyTransportError(err)
+}
+
+func safeFailureReason(cls compat.Classified) string {
+	if cls.StatusCode > 0 {
+		return fmt.Sprintf("%s (upstream status %d)", cls.Class, cls.StatusCode)
+	}
+	return string(cls.Class)
+}
+
+func safeTerminalMessage(cls compat.Classified) string {
+	switch cls.Class {
+	case compat.ClassInvalidRequestSchema:
+		return "The request is invalid."
+	case compat.ClassContextOverflow:
+		return "The request exceeds the selected model's context window."
+	case compat.ClassModelRetired:
+		return "The requested model has been permanently retired."
+	case compat.ClassModelTemporarilyUnavailable:
+		return "The requested model is temporarily unavailable."
+	case compat.ClassModelNotFound:
+		return "The requested model was not found."
+	case compat.ClassEndpointNotFound:
+		return "The upstream endpoint was not found."
+	case compat.ClassUnsupportedParameter, compat.ClassUnsupportedTools, compat.ClassUnsupportedReasoning, compat.ClassUnsupportedVision:
+		if cls.Parameter != "" {
+			return "The selected model does not support parameter: " + cls.Parameter + "."
+		}
+		return "The selected model does not support a requested capability."
+	case compat.ClassRateLimit:
+		return "All eligible upstream deployments are rate limited."
+	case compat.ClassAuthError, compat.ClassCredentialFailure, compat.ClassInvalidKey:
+		return "All eligible upstream deployments rejected authentication."
+	case compat.ClassQuotaExhausted, compat.ClassBillingCreditExhausted:
+		return "All eligible upstream deployments have exhausted quota or credits."
+	case compat.ClassTimeout:
+		return "All eligible upstream deployments timed out."
+	case compat.ClassNetworkError:
+		return "All eligible upstream deployments are unreachable."
+	case compat.ClassMalformedResponse, compat.ClassStreamProtocolError:
+		return "The upstream returned an invalid response."
+	case compat.ClassUpstreamOverload:
+		return "All eligible upstream deployments are overloaded."
+	case compat.ClassUpstreamInternal:
+		return "All eligible upstream deployments failed internally."
+	default:
+		return "All eligible upstream deployments failed."
+	}
+}
+
+func safeParameterForTerminal(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if len(value) == 0 || len(value) > 64 {
+		return ""
+	}
+	for _, r := range value {
+		if !(r >= 'a' && r <= 'z') && !(r >= '0' && r <= '9') && r != '_' && r != '.' && r != '-' {
+			return ""
+		}
+	}
+	return value
+}
+
+func writeClassifiedTerminalError(w http.ResponseWriter, protocol string, cls compat.Classified, retryAfter string) {
+	if retryAfter != "" {
+		w.Header().Set("Retry-After", retryAfter)
+	}
+	status := cls.HTTPStatus()
+	message := safeTerminalMessage(cls)
+	parameter := ""
+	if cls.CapabilityFailure {
+		parameter = safeParameterForTerminal(cls.Parameter)
+	}
+	switch protocol {
+	case "anthropic":
+		anthropicErrorJSON(w, status, message)
+	case "openai_responses":
+		canonicalErrorJSON(w, protocol, status, string(cls.Class), message)
+	default:
+		writeJSON(w, status, map[string]any{"error": map[string]any{
+			"type": "gateway_error", "code": string(cls.Class), "param": parameter, "message": message,
+		}})
+	}
+}
+
+// applyClassifiedFailure updates health and lifecycle state for a failed
+// deployment identity. The reason persisted to health is deliberately limited
+// to the stable class and status; provider prose and payloads stay private.
+func (s *Server) applyClassifiedFailure(d router.Deployment, cls compat.Classified, latency time.Duration, retryAfter string, transportErr error) upstreamFailurePolicy {
+	policy := upstreamFailurePolicy{
+		ErrorType: cls.Policy().ErrorType, Failover: cls.Policy().Failover,
+		QuarantineDeployment: cls.Policy().QuarantineDeployment,
+		SignalProvider: cls.Policy().SignalProvider, HardCooldown: cls.Policy().HardCooldown,
+		RetireDeployment: cls.Policy().RetireDeployment,
+	}
+	current, ok := s.rt.Deployment(d.ID)
+	if !ok || current.Identity != d.Identity {
+		return policy
+	}
+	reason := safeFailureReason(cls)
+	if policy.RetireDeployment {
+		if s.hm.RetireForIdentity(d.ID, d.Identity, reason, string(cls.Class)) {
+			s.bus.Add(events.Event{Kind: "supervisor_state", Deployment: d.ID, Message: "deployment permanently retired by model lifecycle evidence",
+				ErrorType: string(cls.Class), FailureClass: string(cls.Class), SupervisorState: "retired", SupervisorTerminal: true, StatusCode: cls.StatusCode})
+		}
+		return policy
+	}
+	if policy.SignalProvider {
+		s.recordProviderFailure(d.ProviderID, d.ID, reason, policy)
+	}
+	if cls.CapabilityFailure || cls.CallerError || cls.Class == compat.ClassContextOverflow {
+		return policy
+	}
+
+	cfg := s.currentConfig()
+	maxRetryAfter := time.Duration(cfg.Routing.MaxRetryAfterSeconds) * time.Second
+	if policy.HardCooldown {
+		delay := cfg.Cooldown()
+		if cls.Class == compat.ClassRateLimit || cls.StatusCode == http.StatusTooManyRequests {
+			if strings.TrimSpace(retryAfter) != "" {
+				delay = retryAfterDuration(http.Header{"Retry-After": []string{retryAfter}}, maxRetryAfter)
+				if delay <= 0 {
+					delay = time.Second
+				}
+			} else if wait, ok := providers.RetryAfter(transportErr); ok {
+				delay = wait
+				if delay <= 0 {
+					delay = time.Second
+				}
+				if maxRetryAfter > 0 && delay > maxRetryAfter {
+					delay = maxRetryAfter
+				}
+			}
+		}
+		s.hm.ForceCooldownWithClassForIdentity(d.ID, d.Identity, reason, string(cls.Class), delay)
+		s.bus.Add(events.Event{Kind: "supervisor_state", Deployment: d.ID, Message: "deployment placed in bounded upstream cooldown",
+			ErrorType: string(cls.Class), FailureClass: string(cls.Class), SupervisorState: "cooldown", StatusCode: cls.StatusCode})
+		if s.probe != nil {
+			s.probe.Recover(d.ID)
+		}
+		return policy
+	}
+
+	if cls.Class == compat.ClassModelTemporarilyUnavailable ||
+		(policy.QuarantineDeployment && router.IsReadyStrategy(cfg.Routing.Strategy)) {
+		s.hm.QuarantineWithClassForIdentity(d.ID, d.Identity, reason, string(cls.Class), latency)
+		if s.probe != nil {
+			s.probe.Recover(d.ID)
+		}
+		state := "quarantined"
+		if cls.Class == compat.ClassModelTemporarilyUnavailable {
+			state = "model_unavailable"
+		}
+		s.bus.Add(events.Event{Kind: "supervisor_state", Deployment: d.ID, Message: "deployment removed from routing pending supervised recovery",
+			ErrorType: string(cls.Class), FailureClass: string(cls.Class), SupervisorState: state, StatusCode: cls.StatusCode})
+		return policy
+	}
+	if policy.QuarantineDeployment {
+		s.hm.RecordFailureForIdentity(d.ID, d.Identity, reason, latency)
+	}
+	return policy
 }
 
 // repairOutcome reports what the bounded repair engine did.
@@ -334,8 +507,8 @@ func (s *Server) doUpstreamWithRepair(
 		if !ok {
 			// Semantics-critical capability failure with no safe repair.
 			// Learn the fact and return the upstream error untouched.
-			if cls.Capability != "" {
-				s.capStore.LearnUnsupported(deployment.ID, cls.Capability, compat.SourceRuntime, cls.Message, key)
+			if capability := rejectedCapabilityForProfile(cls, profile); capability != "" {
+				s.capStore.LearnUnsupported(deployment.ID, capability, compat.SourceRuntime, cls.CapabilityLabel(), key)
 			}
 			s.capStore.SetIssue(deployment.ID, cls.CapabilityLabel())
 			resp.Body = io.NopCloser(bytes.NewReader(body))
@@ -346,7 +519,7 @@ func (s *Server) doUpstreamWithRepair(
 		out.Description = compat.DescribePlan(plan)
 		for _, rule := range plan.Rules {
 			if rule.Capability != "" {
-				s.capStore.LearnUnsupported(deployment.ID, rule.Capability, compat.SourceRuntime, cls.Message, key)
+				s.capStore.LearnUnsupported(deployment.ID, rule.Capability, compat.SourceRuntime, cls.CapabilityLabel(), key)
 			}
 		}
 		s.capStore.SetRepair(deployment.ID, out.Description)
@@ -397,6 +570,13 @@ var _ = translate.NameMap{}
 var _ = canonical.StopEndTurn
 var _ = time.Now
 
+func rejectedCapabilityForProfile(cls compat.Classified, profile compat.RequirementProfile) string {
+	if cls.Parameter == "tool_choice" && profile.NeedsTool {
+		return compat.CapToolChoiceRequired
+	}
+	return cls.Capability
+}
+
 // maybeRepairUpstream inspects a 4xx upstream response on the legacy data
 // path; when the classifier identifies a repairable capability failure and
 // repair budget remains, it applies the deterministic repair and re-dispatches
@@ -442,8 +622,8 @@ func (s *Server) maybeRepairUpstream(
 		}
 		repaired, plan, ok := compat.Repair(cls, payload, dialect, profile)
 		if !ok {
-			if cls.Capability != "" {
-				s.capStore.LearnUnsupported(deployment.ID, cls.Capability, compat.SourceRuntime, cls.Message, key)
+			if capability := rejectedCapabilityForProfile(cls, profile); capability != "" {
+				s.capStore.LearnUnsupported(deployment.ID, capability, compat.SourceRuntime, cls.CapabilityLabel(), key)
 			}
 			s.capStore.SetIssue(deployment.ID, cls.CapabilityLabel())
 			resp.Body = io.NopCloser(bytes.NewReader(body))
@@ -454,7 +634,7 @@ func (s *Server) maybeRepairUpstream(
 		out.Description = compat.DescribePlan(plan)
 		for _, rule := range plan.Rules {
 			if rule.Capability != "" {
-				s.capStore.LearnUnsupported(deployment.ID, rule.Capability, compat.SourceRuntime, cls.Message, key)
+				s.capStore.LearnUnsupported(deployment.ID, rule.Capability, compat.SourceRuntime, cls.CapabilityLabel(), key)
 			}
 		}
 		s.capStore.SetRepair(deployment.ID, out.Description)

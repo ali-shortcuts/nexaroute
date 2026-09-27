@@ -98,6 +98,85 @@ func TestSupervisorReturnsModelToReadyQueueOnFirstSuccessfulRecovery(t *testing.
 	}
 }
 
+func TestModelUnavailable400EntersSupervisedRecoveryAndRecoversOnFirstSuccess(t *testing.T) {
+	var calls atomic.Int32
+	e, hm, rt, _, ctx, cancel := recoveryFixture(t, func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":{"code":"model_unavailable","message":"model temporarily unavailable"}}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"ok","choices":[{"message":{"role":"assistant","content":"OK"}}]}`))
+	}, 5, 1800)
+	defer cancel()
+
+	res := e.Prime(ctx)
+	if res.Failed != 1 || hm.Get("p/m").Status != health.Degraded || !hm.Get("p/m").Quarantined {
+		t.Fatalf("model_unavailable was not quarantined: result=%+v state=%+v", res, hm.Get("p/m"))
+	}
+	st := waitForState(t, hm, "p/m", health.Healthy, time.Second)
+	if st.Quarantined || st.RecoveryFailures != 0 {
+		t.Fatalf("first verified recovery did not return deployment to ready: %+v", st)
+	}
+	if got := rt.Candidates(router.Requirement{Model: "auto", Streaming: true}); len(got) != 1 {
+		t.Fatalf("recovered deployment missing from route candidates: %+v", got)
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("probe calls=%d want failed initial probe + first successful recovery", calls.Load())
+	}
+}
+
+func TestUnsupportedProbeParameterDoesNotQuarantineDeployment(t *testing.T) {
+	e, hm, _, calls, ctx, cancel := recoveryFixture(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":{"code":"unsupported_parameter","param":"max_tokens","message":"max_tokens is not supported"}}`))
+	}, 5, 1800)
+	defer cancel()
+
+	result := e.RunOnce(ctx)
+	state := hm.Get("p/m")
+	if result.Failed != 1 || state.Status != health.Unknown || state.Quarantined {
+		t.Fatalf("compatibility rejection was treated as health failure: result=%+v state=%+v", result, state)
+	}
+	if calls.Load() != 1 || e.Stats().RecoveryTracked != 0 {
+		t.Fatalf("inconclusive probe entered recovery: calls=%d stats=%+v", calls.Load(), e.Stats())
+	}
+}
+
+func TestRetiredModelIsNeverScheduledForRecoveryProbe(t *testing.T) {
+	var calls atomic.Int32
+	e, hm, rt, _, ctx, cancel := recoveryFixture(t, func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusGone)
+		_, _ = w.Write([]byte(`{"error":{"code":"model_eol","type":"model_retired","message":"model has reached end of life"}}`))
+	}, 5, 1800)
+	defer cancel()
+	e.setRunContext(ctx)
+
+	res := e.RunOnce(ctx)
+	if res.Failed != 1 {
+		t.Fatalf("probe result=%+v want one EOL failure", res)
+	}
+	st := hm.Get("p/m")
+	if st.Status != health.Retired || st.LastErrorClass != "model_retired" {
+		t.Fatalf("model EOL did not persist as retired: %+v", st)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("EOL deployment received %d probes; want only the failed initial probe", calls.Load())
+	}
+	if e.Stats().RecoveryTracked != 0 {
+		t.Fatalf("retired deployment entered recovery supervisor: %+v", e.Stats())
+	}
+	if got := rt.Candidates(router.Requirement{Model: "auto", Streaming: true}); len(got) != 0 {
+		t.Fatalf("retired deployment remained routable: %+v", got)
+	}
+	e.Recover("p/m")
+	if e.Stats().RecoveryTracked != 0 || calls.Load() != 1 {
+		t.Fatalf("manual recovery rescheduled a retired model: stats=%+v calls=%d", e.Stats(), calls.Load())
+	}
+}
+
 func TestSupervisorFiveFailuresEnterCooldownWithoutSixthFailure(t *testing.T) {
 	e, hm, rt, calls, ctx, cancel := recoveryFixture(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)

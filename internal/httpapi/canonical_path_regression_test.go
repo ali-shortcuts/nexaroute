@@ -95,7 +95,7 @@ func TestResponsesIngressCarriesQuotaReservationEstimate(t *testing.T) {
 func TestCanonicalStreamUsageRecordedOnceAfterSuccessfulTerminal(t *testing.T) {
 	stream := strings.Join([]string{
 		`event: message_start`,
-		`data: {"type":"message_start","message":{"usage":{"input_tokens":7,"output_tokens":0}}}`,
+		`data: {"type":"message_start","message":{"id":"msg_7","type":"message","role":"assistant","content":[],"usage":{"input_tokens":7,"output_tokens":0}}}`,
 		``,
 		`event: message_delta`,
 		`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}}`,
@@ -128,7 +128,7 @@ func TestCanonicalStreamUsageRecordedOnceAfterSuccessfulTerminal(t *testing.T) {
 func TestAnthropicTextBlockStopDoesNotBecomeResponsesToolEnd(t *testing.T) {
 	stream := strings.Join([]string{
 		`event: message_start`,
-		`data: {"type":"message_start","message":{"usage":{"input_tokens":4,"output_tokens":0}}}`,
+		`data: {"type":"message_start","message":{"id":"msg_4","type":"message","role":"assistant","content":[],"usage":{"input_tokens":4,"output_tokens":0}}}`,
 		``,
 		`event: content_block_start`,
 		`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
@@ -178,18 +178,15 @@ func TestCanonicalStreamErrorDoesNotAppendSuccessTail(t *testing.T) {
 		t.Fatal("expected upstream stream error")
 	}
 	out := rr.Body.String()
-	if !strings.Contains(out, "response.failed") {
-		t.Fatalf("Responses client did not receive failure terminal: %s", out)
-	}
-	if strings.Contains(out, "response.completed") {
-		t.Fatalf("canonical stream emitted success after failure: %s", out)
+	if responseCommitted(rr) || out != "" {
+		t.Fatalf("invalid initial event must remain uncommitted for routing failover: status=%d body=%s", rr.Code, out)
 	}
 }
 
 func TestAnthropicMessageStopDoesNotOverwriteToolUseReason(t *testing.T) {
 	stream := strings.Join([]string{
 		`event: message_start`,
-		`data: {"type":"message_start","message":{"usage":{"input_tokens":4,"output_tokens":0}}}`,
+		`data: {"type":"message_start","message":{"id":"msg_4","type":"message","role":"assistant","content":[],"usage":{"input_tokens":4,"output_tokens":0}}}`,
 		``,
 		`event: content_block_start`,
 		`data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"tool_1","name":"lookup","input":{}}}`,
