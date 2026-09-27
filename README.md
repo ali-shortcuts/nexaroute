@@ -76,9 +76,11 @@ Details: [docs/CLAUDE_CODE.md](docs/CLAUDE_CODE.md).
 1. `nexaroute` — the UI opens (or visit <http://127.0.0.1:8080/>).
 2. **Providers -> Add provider** — choose a preset or custom, enter the base URL
    and credentials, detect or add models, test, save.
-3. Create a **candidate pool**, a **route profile**, and a **virtual endpoint**
-   (public model name) in the sidebar pages; enable it.
-4. Point your client at NexaRoute with the virtual endpoint's public model name.
+3. Open **Routing → Create route**, choose the upstream deployments, select
+   automatic or ordered fallback, and save a stable public model name such as `coding`.
+   Advanced users can still edit Candidate Pools, Route Profiles, Virtual Endpoints,
+   and Fallback Chains from **Routing → Advanced**.
+4. Point your client at NexaRoute with that public model name.
 
 Step-by-step: [docs/QUICKSTART.md](docs/QUICKSTART.md). Configuration
 reference: [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
@@ -96,10 +98,10 @@ journalctl --user -u nexaroute -f
 ## Docker
 
 ```bash
-docker build -t nexaroute:0.7.0 .
+docker build -t nexaroute:local .
 docker run --rm -p 8080:8080 \
   -e NEXAROUTE_ADMIN_KEY='replace-with-a-strong-random-secret' \
-  nexaroute:0.7.0
+  nexaroute:local
 ```
 
 Set an admin key before exposing the UI/admin API beyond loopback.

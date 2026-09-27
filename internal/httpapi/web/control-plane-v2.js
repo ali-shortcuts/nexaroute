@@ -172,6 +172,7 @@
       }
     }
     const lb=q('#cpLangBtn'); if(lb) lb.textContent=T('language');
+    const skip=q('.cp-skip-link'); if(skip) skip.textContent=state.lang==='fa'?'رفتن به محتوای اصلی':'Skip to main content';
     const providerTitle=q('#providers .panelhead h2'); if(providerTitle) providerTitle.textContent=T('providers');
     const add=q('#addProviderBtn'); if(add) add.textContent='+ ' + T('addProvider');
     const routeAdd=q('#cpAddRoute'); if(routeAdd) routeAdd.textContent='+ ' + T('addRoute');

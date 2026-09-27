@@ -10,9 +10,8 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to build and verify (for example v0.7.0)'
+        description: 'Version to build and verify (for example v0.9.1)'
         required: true
-        default: v0.7.0
 
 permissions:
   contents: read

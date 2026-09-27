@@ -94,6 +94,9 @@ func TestControlPlaneV2AccessibilityContracts(t *testing.T) {
 	js := string(jsBytes)
 	for _, want := range []string{
 		"installExperiencePolish",
+		"const skip=q('.cp-skip-link')",
+		"Skip to main content",
+		"رفتن به محتوای اصلی",
 		"aria-current",
 		"aria-controls",
 		"aria-live",
