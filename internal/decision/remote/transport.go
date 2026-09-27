@@ -187,7 +187,7 @@ func NewTestTransport() *http.Transport {
 		IdleConnTimeout:       10 * time.Second,
 		TLSHandshakeTimeout:   5 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
-		TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12},
+		TLSClientConfig:       &tls.Config{MinVersion: tls.VersionTLS12},
 	}
 }
 
