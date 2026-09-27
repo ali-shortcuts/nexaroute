@@ -27,8 +27,8 @@ func TestOpenAIToAnthropicRejectsArgsBeforeToolName(t *testing.T) {
 	body := "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"x\\\":1}\"}}]}}]}\n\n"
 	resp := &http.Response{
 		StatusCode: http.StatusOK,
-		Header: http.Header{"Content-Type": []string{"text/event-stream"}},
-		Body: io.NopCloser(strings.NewReader(body)),
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       io.NopCloser(strings.NewReader(body)),
 	}
 	err := streamOpenAIToAnthropic(httptest.NewRecorder(), resp, "model", nil)
 	if err == nil || !strings.Contains(err.Error(), "before tool name") {
