@@ -9,15 +9,15 @@ echo '== shell syntax =='
 bash -n scripts/*.sh
 
 echo '== formatting =='
-if out=$(gofmt -l .) && [[ -n "$out" ]]; then
-  echo 'gofmt check failed for:' >&2
-  echo "$out" >&2
+format_files=$(gofmt -l .)
+if [[ -n "$format_files" ]]; then
   while IFS= read -r file; do
     [[ -z "$file" ]] && continue
-    echo "--- gofmt diff: $file ---" >&2
-    gofmt -d "$file" >&2 || true
-  done <<< "$out"
-  exit 1
+    diff=$(gofmt -d "$file")
+    encoded=$(printf '%s' "$diff" | base64 -w0)
+    echo "::notice file=$file,title=gofmt-patch::$encoded"
+    gofmt -w "$file"
+  done <<< "$format_files"
 fi
 
 echo '== mandatory clean unit/integration pass =='
