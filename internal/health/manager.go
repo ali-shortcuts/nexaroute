@@ -13,6 +13,7 @@ const (
 	Degraded Status = "degraded"
 	HalfOpen Status = "half_open"
 	Cooldown Status = "cooldown"
+	Retired  Status = "retired"
 )
 
 type ScopeState struct {
@@ -51,6 +52,7 @@ type State struct {
 	LastSuccess         time.Time             `json:"last_success"`
 	LastFailure         time.Time             `json:"last_failure"`
 	LastError           string                `json:"last_error,omitempty"`
+	LastErrorClass      string                `json:"last_error_class,omitempty"`
 	CooldownUntil       time.Time             `json:"cooldown_until,omitempty"`
 	RecoveryFailures    int                   `json:"recovery_failures,omitempty"`
 	Scopes              map[string]ScopeState `json:"scopes,omitempty"`
@@ -258,6 +260,12 @@ func (m *Manager) RecordSuccess(id string, latency time.Duration) {
 	s.LastSuccess = s.LastChecked
 	updateEWMA(&s, latency)
 	updateFailureEWMA(&s, false)
+	if s.Status == Retired {
+		// A success from a request that was already in flight before retirement
+		// must never re-admit a permanently retired model.
+		m.states[id] = s
+		return
+	}
 	if s.Status == Cooldown && !s.CooldownUntil.IsZero() && s.LastChecked.Before(s.CooldownUntil) {
 		// A request that started before a hard cooldown (e.g. a 429
 		// retry-after) completed successfully. That stale observation
@@ -477,6 +485,10 @@ func (m *Manager) Quarantine(id, reason string, latency time.Duration) {
 	defer m.mu.Unlock()
 	s := m.states[id]
 	s.Deployment = id
+	if s.Status == Retired {
+		m.states[id] = s
+		return
+	}
 	s.Failures++
 	updateFailureEWMA(&s, true)
 	s.ConsecutiveFailures++
@@ -495,6 +507,10 @@ func (m *Manager) RecordRecoveryFailure(id, reason string, latency time.Duration
 	defer m.mu.Unlock()
 	s := m.states[id]
 	s.Deployment = id
+	if s.Status == Retired {
+		m.states[id] = s
+		return
+	}
 	s.Failures++
 	updateFailureEWMA(&s, true)
 	s.ConsecutiveFailures++
@@ -511,6 +527,9 @@ func (m *Manager) RecordRecoveryFailure(id, reason string, latency time.Duration
 func (m *Manager) EnterCooldown(id, reason string, d time.Duration) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if s := m.states[id]; s.Status == Retired {
+		return
+	}
 	if d <= 0 {
 		d = m.cooldown
 	}
@@ -526,6 +545,9 @@ func (m *Manager) EnterCooldown(id, reason string, d time.Duration) {
 func (m *Manager) ForceCooldown(id, reason string, d time.Duration) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if s := m.states[id]; s.Status == Retired {
+		return
+	}
 	if d <= 0 {
 		d = m.cooldown
 	}
@@ -539,6 +561,24 @@ func (m *Manager) ForceCooldown(id, reason string, d time.Duration) {
 	s.LastFailure = s.LastChecked
 	s.LastError = reason
 	s.CooldownUntil = m.now().Add(d)
+	m.states[id] = s
+}
+
+func (m *Manager) Retire(id, reason, errorClass string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s := m.states[id]
+	now := m.now()
+	s.Deployment = id
+	s.Status = Retired
+	s.Failures++
+	s.ConsecutiveFailures++
+	s.LastChecked = now
+	s.LastFailure = now
+	s.LastError = reason
+	s.LastErrorClass = errorClass
+	s.CooldownUntil = time.Time{}
+	s.RecoveryFailures = 0
 	m.states[id] = s
 }
 
