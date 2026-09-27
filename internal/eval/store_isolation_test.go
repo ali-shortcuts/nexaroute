@@ -12,7 +12,7 @@ func validStoredResult() Result {
 			Verdicts: []VerdictResult{{EvaluatorID: "det", Kind: KindDeterministic, Verdict: VerdictPass, Reason: "ok"}},
 		}},
 		Counts: map[Verdict]int{VerdictPass: 1},
-		Score: 1, Samples: 1, Scoreable: true,
+		Score:  1, Samples: 1, Scoreable: true,
 		Evaluators: []string{"det"},
 	}
 }
