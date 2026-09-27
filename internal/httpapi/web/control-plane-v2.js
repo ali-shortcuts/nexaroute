@@ -269,6 +269,26 @@
     return {profile,pool,chain};
   }
 
+  function isSimpleManagedRoute(ve) {
+    const {profile}=routeParts(ve);
+    return !!profile && profile.id === ve.id + '-profile';
+  }
+
+  function routeSelectedDeployments(ve) {
+    const {pool,chain}=routeParts(ve);
+    if (pool?.mode === 'all') return new Set((snap.deployments||[]).map(d=>d.id));
+    if (chain) {
+      const pools=snap.candidate_pools||[];
+      const out=new Set();
+      for(const pid of chain.pools||[]) {
+        const p=pools.find(x=>x.id===pid);
+        for(const dep of p?.deployments||[]) out.add(dep);
+      }
+      return out;
+    }
+    return new Set(pool?.deployments||[]);
+  }
+
   function renderRoutingStudio() {
     const list=q('#cpRouteList'); if(!list) return;
     const routes=snap.virtual_endpoints||[];
@@ -289,7 +309,7 @@
         </div>
         <div class="cp-route-meta"><span>${h(members)}</span><span>Profile: ${h(ve.route_profile||'—')}</span>${chain?`<span>${h(chain.pools?.length||0)} fallback stages</span>`:''}</div>
         <div class="cp-route-actions">
-          <button class="btn secondary" data-route-edit="${h(ve.id)}">${h(T('edit'))}</button>
+          <button class="btn secondary" data-route-edit="${h(ve.id)}">${h(isSimpleManagedRoute(ve)?T('edit'):T('advanced'))}</button>
           <button class="btn danger-ghost" data-route-delete="${h(ve.id)}">${h(T('delete'))}</button>
         </div>
       </article>`;
@@ -309,10 +329,9 @@
 
   function openRouteDialog(id='') {
     const ve=(snap.virtual_endpoints||[]).find(x=>x.id===id);
+    if(ve && !isSimpleManagedRoute(ve)) { advancedVirtual(id); return; }
     const parts=ve?routeParts(ve):{};
-    let selected=new Set();
-    if(parts.pool?.mode==='all') (snap.deployments||[]).forEach(d=>selected.add(d.id));
-    else (parts.pool?.deployments||[]).forEach(x=>selected.add(x));
+    const selected=ve?routeSelectedDeployments(ve):new Set();
     const mode=parts.chain?'ordered':'automatic';
     openDialog({
       title:ve?T('edit')+' '+T('routing'):T('addRoute'),
@@ -378,54 +397,32 @@
     });
   }
 
-  async function saveSimpleRoute({existing,name,publicModel,mode,deployments,parts}) {
-    const base=slugify(existing?.public_model||publicModel);
-    let primaryPool=parts?.profile?.candidate_pool || `route-${base}-pool`;
-    let fallbackChain='';
-    if(mode==='ordered'){
-      const poolIDs=[];
-      for(let i=0;i<deployments.length;i++){
-        const pid=`route-${base}-stage-${i+1}`;
-        await upsert(snap.candidate_pools,'/admin/api/candidate-pools',pid,{id:pid,name:`${name} — stage ${i+1}`,mode:'explicit',deployments:[deployments[i]]});
-        poolIDs.push(pid);
-      }
-      primaryPool=poolIDs[0];
-      fallbackChain=parts?.profile?.fallback_chain || `route-${base}-fallback`;
-      await upsert(snap.fallback_chains,'/admin/api/fallback-chains',fallbackChain,{id:fallbackChain,name:`${name} fallback`,pools:poolIDs});
-    }else{
-      await upsert(snap.candidate_pools,'/admin/api/candidate-pools',primaryPool,{id:primaryPool,name:`${name} models`,mode:'explicit',deployments});
-    }
-    const profileID=existing?.route_profile || `route-${base}-profile`;
-    await upsert(snap.route_profiles,'/admin/api/route-profiles',profileID,{
-      id:profileID,name:`${name} profile`,candidate_pool:primaryPool,...(fallbackChain?{fallback_chain:fallbackChain}:{})
+  async function saveSimpleRoute({existing,name,publicModel,mode,deployments}) {
+    const id=existing?.id || `route-${slugify(publicModel)}`;
+    const body={
+      id,
+      name,
+      public_model:publicModel,
+      mode,
+      deployments,
+      enabled:existing?.enabled!==false
+    };
+    await api('/admin/api/simple-routes'+(existing?'/'+encodeURIComponent(id):''),{
+      method:existing?'PUT':'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(body)
     });
-    const veID=existing?.id || `route-${base}`;
-    const body={id:veID,name,public_model:publicModel,route_profile:profileID,enabled:existing?.enabled!==false};
-    await upsert(snap.virtual_endpoints,'/admin/api/virtual-endpoints',veID,body);
     await refresh();
     cpToast(T('saved'));
   }
 
   async function deleteSimpleRoute(id) {
     const ve=(snap.virtual_endpoints||[]).find(x=>x.id===id); if(!ve)return;
+    if(!isSimpleManagedRoute(ve)) { await deleteAdvanced('/admin/api/virtual-endpoints',id,'virtual endpoint'); return; }
     const ok=await UI.confirm(T('deleteRoute'),`${T('destructive')}\n${ve.public_model||ve.id}`);
     if(!ok)return;
-    const {profile,pool,chain}=routeParts(ve);
-    const prefix='route-'+slugify(ve.public_model||ve.id);
     try{
-      await api('/admin/api/virtual-endpoints/'+encodeURIComponent(id),{method:'DELETE'});
-      const profileShared=(snap.virtual_endpoints||[]).some(x=>x.id!==id&&x.route_profile===profile?.id);
-      if(profile && !profileShared && profile.id.startsWith(prefix)){
-        await api('/admin/api/route-profiles/'+encodeURIComponent(profile.id),{method:'DELETE'}).catch(()=>{});
-        const chainShared=(snap.route_profiles||[]).some(x=>x.id!==profile.id&&x.fallback_chain===chain?.id);
-        if(chain && !chainShared && chain.id.startsWith(prefix)) await api('/admin/api/fallback-chains/'+encodeURIComponent(chain.id),{method:'DELETE'}).catch(()=>{});
-        const candidates=(snap.candidate_pools||[]).filter(p=>p.id.startsWith(prefix));
-        for(const p of candidates){
-          const usedByOther=(snap.route_profiles||[]).some(x=>x.id!==profile.id&&x.candidate_pool===p.id) ||
-            (snap.fallback_chains||[]).some(x=>x.id!==chain?.id&&(x.pools||[]).includes(p.id));
-          if(!usedByOther) await api('/admin/api/candidate-pools/'+encodeURIComponent(p.id),{method:'DELETE'}).catch(()=>{});
-        }
-      }
+      await api('/admin/api/simple-routes/'+encodeURIComponent(id),{method:'DELETE'});
       await refresh();cpToast(T('saved'));
     }catch(e){cpToast(e.message,true);}
   }
