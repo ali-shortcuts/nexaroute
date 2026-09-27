@@ -117,7 +117,7 @@ def advance_provider(page: Page) -> None:
 
 def save_provider(page: Page) -> None:
     page.locator("#saveProviderBtn").click()
-    expect(page.locator("#providerModal")).not_to_have_class(lambda value: "open" in value)
+    assert "open" not in (page.locator("#providerModal").get_attribute("class") or "")
     expect(page.locator("#apiState")).to_contain_text("connected")
 
 
@@ -257,7 +257,7 @@ def main() -> None:
                 model_list.locator(".cp-check-item", has_text="model-alpha").locator("input").check()
                 model_list.locator(".cp-check-item", has_text="model-beta").locator("input").check()
                 page.locator('[data-dialog-value="save"]').click()
-                expect(page.locator("#cpDialogHost")).not_to_have_class(lambda value: "open" in value)
+                assert "open" not in (page.locator("#cpDialogHost").get_attribute("class") or "")
                 expect(page.locator("#cpRouteList")).to_contain_text("coding")
 
                 # Connect/CLI must use public model and must never expose provider secrets.
@@ -300,7 +300,7 @@ def main() -> None:
 
                 # Delete simple route and prove shared advanced primitives survive.
                 page.locator('[data-route-delete="route-coding"]').click()
-                expect(page.locator("#cpDialogHost")).to_have_class(lambda value: "open" in value)
+                assert "open" in (page.locator("#cpDialogHost").get_attribute("class") or "")
                 page.locator('[data-dialog-value="yes"]').click()
                 expect(page.locator("#cpRouteList")).not_to_contain_text("Coding Route")
                 snapshot = api_json(base, "/admin/api/snapshot?limit=500&events=100")
@@ -355,7 +355,7 @@ def main() -> None:
                 assert provider_from_disk(config_path, "manual-e2e")["id"] == "manual-e2e"
                 page.locator("#deleteProviderBtn").click()
                 page.locator('[data-dialog-value="yes"]').click()
-                expect(page.locator("#providerModal")).not_to_have_class(lambda value: "open" in value)
+                assert "open" not in (page.locator("#providerModal").get_attribute("class") or "")
                 expect(page.locator("#providerGrid")).not_to_contain_text("Manual Provider")
 
                 # Remove advanced refs before deleting their referenced provider.
