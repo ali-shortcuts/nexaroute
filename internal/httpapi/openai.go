@@ -334,7 +334,9 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 				// while shielding multi-candidate failover chains (and model
 				// lifecycle errors) from leaking the final physical provider failure.
 				shieldTerminal = len(candidates) > 1 || cls.Class == compat.ClassModelRetired || cls.Class == compat.ClassModelTemporarilyUnavailable
-				break
+				if shieldTerminal {
+					break
+				}
 			}
 			if lastRetryAfter != "" {
 				w.Header().Set("Retry-After", lastRetryAfter)
