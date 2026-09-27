@@ -116,8 +116,22 @@ func newHTTPAdapterWithRetryCap(p config.ProviderConfig, timeout, retryAfterCap 
 		}
 		tr.Proxy = http.ProxyURL(u)
 	}
+	checkRedirect := func(req *http.Request, via []*http.Request) error {
+		if len(via) == 0 {
+			return nil
+		}
+		if len(via) >= 10 {
+			return fmt.Errorf("stopped after 10 redirects")
+		}
+		if !sameHTTPOrigin(via[0].URL, req.URL) {
+			// API keys, custom provider headers, and allowlisted client headers
+			// must never cross an origin boundary through an automatic redirect.
+			return errors.New("refused cross-origin provider redirect")
+		}
+		return nil
+	}
 	a := &httpAdapter{
-		p: p, c: &http.Client{Transport: tr, Timeout: timeout}, streamC: &http.Client{Transport: tr},
+		p: p, c: &http.Client{Transport: tr, Timeout: timeout, CheckRedirect: checkRedirect}, streamC: &http.Client{Transport: tr, CheckRedirect: checkRedirect},
 		sem: make(chan struct{}, mc), forwardAllowed: make(map[string]struct{}, len(p.ForwardHeaders)),
 		retryAfterCap: retryAfterCap,
 	}
@@ -200,6 +214,11 @@ func (a *httpAdapter) CredentialsMatch(keys []string) bool {
 
 func (a *httpAdapter) RedactBody(b []byte) []byte {
 	out := append([]byte(nil), b...)
+	for _, value := range a.p.Headers {
+		if value != "" {
+			out = bytes.ReplaceAll(out, []byte(value), []byte("[REDACTED]"))
+		}
+	}
 	a.credMu.RLock()
 	keys := make([]string, 0, len(a.creds))
 	for i := range a.creds {
@@ -218,6 +237,13 @@ func (a *httpAdapter) RedactBody(b []byte) []byte {
 		out = bytes.ReplaceAll(out, []byte(key), []byte("[REDACTED]"))
 	}
 	return out
+}
+
+func sameHTTPOrigin(a, b *url.URL) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	return strings.EqualFold(a.Scheme, b.Scheme) && strings.EqualFold(a.Host, b.Host)
 }
 
 func endpoint(base, suffix string) string {

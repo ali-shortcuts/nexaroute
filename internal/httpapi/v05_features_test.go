@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -225,6 +226,119 @@ func TestResponseCacheHitAndInvalidation(t *testing.T) {
 	}
 	if calls.Load() != 4 {
 		t.Fatalf("expected upstream refill after invalidation, calls=%d", calls.Load())
+	}
+}
+
+func TestResponseCacheIsolatesForwardedHeadersAndClientKeys(t *testing.T) {
+	var calls atomic.Int64
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		content := "tenant=" + r.Header.Get("X-Tenant")
+		_, _ = fmt.Fprintf(w, `{"id":"c","object":"chat.completion","model":"upstream-model","choices":[{"index":0,"message":{"role":"assistant","content":%q},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`, content)
+	}))
+	defer up.Close()
+	cfg := singleProviderOpenAI(t, up.URL, "m", config.ModelConfig{})
+	cfg.Cache = config.CacheConfig{Enabled: true, TTLSeconds: 60, MaxEntries: 16, MaxBodyBytes: 1 << 20}
+	cfg.ClientAuth = config.ClientAuthConfig{Enabled: true, Keys: []string{"client-key-alpha-123456", "client-key-beta-123456"}}
+	cfg.Providers[0].ForwardHeaders = []string{"X-Tenant"}
+	s := testGateway(t, cfg)
+	body := `{"model":"m","messages":[{"role":"user","content":"same prompt"}]}`
+	call := func(tenant, key string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("POST", "http://gateway/v1/chat/completions", strings.NewReader(body))
+		req.Header.Set("X-Tenant", tenant)
+		req.Header.Set("Authorization", "Bearer "+key)
+		rr := httptest.NewRecorder()
+		s.Handler().ServeHTTP(rr, req)
+		return rr
+	}
+
+	first := call("alice", "client-key-alpha-123456")
+	if first.Code != http.StatusOK || first.Header().Get("X-NexaRoute-Cache") == "HIT" {
+		t.Fatalf("first request should reach upstream: status=%d cache=%q", first.Code, first.Header().Get("X-NexaRoute-Cache"))
+	}
+	second := call("bob", "client-key-alpha-123456")
+	if second.Code != http.StatusOK || second.Header().Get("X-NexaRoute-Cache") == "HIT" || !strings.Contains(second.Body.String(), "tenant=bob") {
+		t.Fatalf("different forwarded identity must not reuse cache: status=%d cache=%q body=%s", second.Code, second.Header().Get("X-NexaRoute-Cache"), second.Body.String())
+	}
+	third := call("bob", "client-key-alpha-123456")
+	if third.Header().Get("X-NexaRoute-Cache") != "HIT" {
+		t.Fatalf("identical tenant and client key should hit cache: status=%d body=%s", third.Code, third.Body.String())
+	}
+	fourth := call("bob", "client-key-beta-123456")
+	if fourth.Code != http.StatusOK || fourth.Header().Get("X-NexaRoute-Cache") == "HIT" {
+		t.Fatalf("different client key must not reuse cache: status=%d cache=%q", fourth.Code, fourth.Header().Get("X-NexaRoute-Cache"))
+	}
+	if got := calls.Load(); got != 3 {
+		t.Fatalf("upstream calls=%d want 3 (alice, bob, and second client key)", got)
+	}
+}
+
+func TestResponseCacheDoesNotRepopulateAcrossProviderHotReload(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	var oldCalls, newCalls atomic.Int64
+	oldUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		oldCalls.Add(1)
+		close(started)
+		<-release
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, strings.Replace(openAIOKBody, `"content":"ok"`, `"content":"old-provider"`, 1))
+	}))
+	defer oldUpstream.Close()
+	newUpstream := openAIUpstream(strings.Replace(openAIOKBody, `"content":"ok"`, `"content":"new-provider"`, 1), 0, &newCalls)
+	defer newUpstream.Close()
+
+	cfg := singleProviderOpenAI(t, oldUpstream.URL, "m", config.ModelConfig{})
+	cfg.Cache = config.CacheConfig{Enabled: true, TTLSeconds: 60, MaxEntries: 16, MaxBodyBytes: 1 << 20}
+	s := testGateway(t, cfg)
+	body := `{"model":"m","messages":[{"role":"user","content":"provider swap race"}]}`
+	firstDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() { firstDone <- doOpenAIRequest(s, body) }()
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("old upstream was not reached")
+	}
+	if _, err := s.mutateConfig(func(c *config.Config) error {
+		c.Providers[0].BaseURL = newUpstream.URL
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+	select {
+	case first := <-firstDone:
+		if first.Code != http.StatusOK || !strings.Contains(first.Body.String(), "old-provider") {
+			t.Fatalf("in-flight request should complete against its original snapshot: status=%d body=%s", first.Code, first.Body.String())
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("old request did not complete")
+	}
+	second := doOpenAIRequest(s, body)
+	if second.Code != http.StatusOK || second.Header().Get("X-NexaRoute-Cache") == "HIT" || !strings.Contains(second.Body.String(), "new-provider") {
+		t.Fatalf("request after reload must use new provider, not stale cache: status=%d cache=%q body=%s", second.Code, second.Header().Get("X-NexaRoute-Cache"), second.Body.String())
+	}
+	if oldCalls.Load() != 1 || newCalls.Load() != 1 {
+		t.Fatalf("provider calls old=%d new=%d want one each", oldCalls.Load(), newCalls.Load())
+	}
+}
+
+func TestUpstreamErrorRedactsConfiguredCustomHeader(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = fmt.Fprintf(w, `{"error":"invalid","received":%q}`, r.Header.Get("X-Provider-Secret"))
+	}))
+	defer up.Close()
+	cfg := singleProviderOpenAI(t, up.URL, "m", config.ModelConfig{})
+	cfg.Providers[0].Headers = map[string]string{"X-Provider-Secret": "custom-secret-canary"}
+	s := testGateway(t, cfg)
+	rr := doOpenAIRequest(s, `{"model":"m","messages":[{"role":"user","content":"hi"}]}`)
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	if strings.Contains(rr.Body.String(), "custom-secret-canary") || !strings.Contains(rr.Body.String(), "[REDACTED]") {
+		t.Fatalf("custom header secret leaked in upstream error: %s", rr.Body.String())
 	}
 }
 

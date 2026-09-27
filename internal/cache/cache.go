@@ -77,10 +77,19 @@ func New(ttl time.Duration, maxEntries int, maxTotalBytes int64) *Cache {
 
 // Key derives the cache key for an ingress path and request body.
 func Key(path string, body []byte) string {
+	return KeyWithContext(path, body, nil)
+}
+
+// KeyWithContext derives a cache key that also isolates request context which
+// can affect routing or the upstream response. The context is hashed and is
+// never stored as part of the cache key.
+func KeyWithContext(path string, body, context []byte) string {
 	h := sha256.New()
 	h.Write([]byte(path))
 	h.Write([]byte{0})
 	h.Write(body)
+	h.Write([]byte{0})
+	h.Write(context)
 	return hex.EncodeToString(h.Sum(nil))
 }
 

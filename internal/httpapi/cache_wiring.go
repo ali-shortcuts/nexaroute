@@ -3,11 +3,13 @@ package httpapi
 import (
 	"encoding/json"
 	"net/http"
+	"sort"
 	"time"
 
 	"github.com/ali-shortcuts/nexaroute/internal/cache"
 	"github.com/ali-shortcuts/nexaroute/internal/config"
 	"github.com/ali-shortcuts/nexaroute/internal/events"
+	"github.com/ali-shortcuts/nexaroute/internal/router"
 	"github.com/ali-shortcuts/nexaroute/internal/usage"
 )
 
@@ -25,7 +27,7 @@ import (
 // can force a fresh evaluation per request with the x-nexaroute-no-cache
 // header.
 
-func (s *Server) cacheLookupFor(path string, body []byte, stream bool, temperature, topP *float64) (string, bool) {
+func (s *Server) cacheLookupFor(r *http.Request, path string, body []byte, stream bool, temperature, topP *float64, candidates []router.Scored, generation uint64) (string, bool) {
 	cfg := s.currentConfig()
 	if !cfg.Cache.Enabled || stream {
 		return "", false
@@ -39,7 +41,46 @@ func (s *Server) cacheLookupFor(path string, body []byte, stream bool, temperatu
 	if len(body) > cfg.Cache.MaxBodyBytes {
 		return "", false
 	}
-	return cache.Key(path, body), true
+	providerIDs := make(map[string]struct{}, len(candidates))
+	for _, candidate := range candidates {
+		providerIDs[candidate.Deployment.ProviderID] = struct{}{}
+	}
+	forwardNames := map[string]struct{}{}
+	for _, name := range []string{"x-claude-code-session-id", "x-litellm-session-id", "x-litellm-trace-id", "x-session-id"} {
+		forwardNames[http.CanonicalHeaderKey(name)] = struct{}{}
+	}
+	for _, provider := range cfg.Providers {
+		if _, eligible := providerIDs[provider.ID]; !eligible {
+			continue
+		}
+		for _, name := range provider.ForwardHeaders {
+			if name != "" {
+				forwardNames[http.CanonicalHeaderKey(name)] = struct{}{}
+			}
+		}
+	}
+	names := make([]string, 0, len(forwardNames))
+	for name := range forwardNames {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	forwarded := make(map[string][]string, len(names))
+	for _, name := range names {
+		forwarded[name] = append([]string(nil), r.Header.Values(name)...)
+	}
+	clientKeyDigest := ""
+	if cfg.ClientAuth.Enabled {
+		clientKeyDigest = keyDigest(extractClientKey(r))
+	}
+	contextBytes, err := json.Marshal(struct {
+		Generation       uint64              `json:"generation"`
+		ClientKeyDigest  string              `json:"client_key_digest,omitempty"`
+		ForwardedHeaders map[string][]string `json:"forwarded_headers,omitempty"`
+	}{Generation: generation, ClientKeyDigest: clientKeyDigest, ForwardedHeaders: forwarded})
+	if err != nil {
+		return "", false
+	}
+	return cache.KeyWithContext(path, body, contextBytes), true
 }
 
 // cacheServe writes a cache hit and returns true when the request is complete.
@@ -65,12 +106,12 @@ func (s *Server) cacheServe(w http.ResponseWriter, r *http.Request, key string, 
 }
 
 // cacheStoreResponse stores a complete client-facing response body.
-func (s *Server) cacheStoreResponse(key string, cacheable bool, deploymentID string, status int, contentType string, body []byte) {
+func (s *Server) cacheStoreResponse(key string, generation uint64, cacheable bool, deploymentID string, status int, contentType string, body []byte) {
 	if !cacheable || status != http.StatusOK || len(body) == 0 {
 		return
 	}
-	cfg := s.currentConfig()
-	if !cfg.Cache.Enabled {
+	cfg, currentGeneration := s.cacheConfigSnapshot()
+	if !cfg.Cache.Enabled || generation != currentGeneration {
 		return
 	}
 	s.respCache.Store(key, cache.Entry{
@@ -84,7 +125,7 @@ func (s *Server) cacheStoreResponse(key string, cacheable bool, deploymentID str
 
 // proxyOpenAINativeJSON performs the validated non-stream passthrough while
 // observing real usage and feeding the response cache.
-func (s *Server) proxyOpenAINativeJSON(w http.ResponseWriter, resp *http.Response, deploymentID, cacheKey string, cacheable bool) error {
+func (s *Server) proxyOpenAINativeJSON(w http.ResponseWriter, resp *http.Response, deploymentID, cacheKey string, generation uint64, cacheable bool) error {
 	defer resp.Body.Close()
 	b, err := readJSONLimited(resp.Body)
 	if err != nil {
@@ -96,7 +137,7 @@ func (s *Server) proxyOpenAINativeJSON(w http.ResponseWriter, resp *http.Respons
 	if p, c, ok := extractOpenAIUsage(b); ok {
 		s.usage.Record(deploymentID, int64(p), int64(c))
 	}
-	s.cacheStoreResponse(cacheKey, cacheable, deploymentID, resp.StatusCode, "application/json", b)
+	s.cacheStoreResponse(cacheKey, generation, cacheable, deploymentID, resp.StatusCode, "application/json", b)
 	copyUpstreamResponseHeaders(w, resp, false)
 	w.WriteHeader(resp.StatusCode)
 	_, err = w.Write(b)

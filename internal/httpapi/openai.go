@@ -24,6 +24,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 	if !s.clientAuthAllowed(w, r, false) {
 		return
 	}
+	cacheGeneration := s.cacheGenerationSnapshot()
 	var in core.OpenAIRequest
 	raw, err := readJSON(r, &in)
 	if err != nil {
@@ -139,7 +140,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 	// Exact-match response cache (opt-in). Only complete, non-streaming,
 	// deterministic requests are ever considered; anything else bypasses.
 	// Phase F/G: Check cache BEFORE decision plane — on HIT, decision provider calls must be 0
-	cacheKey, cacheable := s.cacheLookupFor(r.URL.Path, raw, in.Stream, in.Temperature, in.TopP)
+	cacheKey, cacheable := s.cacheLookupFor(r, r.URL.Path, raw, in.Stream, in.Temperature, in.TopP, candidates, cacheGeneration)
 	if s.cacheServe(w, r, cacheKey, cacheable) {
 		return
 	}
@@ -340,7 +341,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 					s.usage.Record(c.Deployment.ID, int64(prompt), int64(completion))
 				})
 			} else {
-				e = s.proxyOpenAINativeJSON(w, resp, c.Deployment.ID, cacheKey, cacheable)
+				e = s.proxyOpenAINativeJSON(w, resp, c.Deployment.ID, cacheKey, cacheGeneration, cacheable)
 			}
 		case in.Stream:
 			e = streamAnthropicToOpenAIWithUsage(w, resp, in.Model, nm, func(prompt, completion int) {
@@ -354,7 +355,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 				s.usage.Record(c.Deployment.ID, int64(an.Usage.InputTokens), int64(an.Usage.OutputTokens))
 				translated := translate.AnthropicResponseToOpenAI(an, in.Model, nm)
 				if b, merr := json.Marshal(translated); merr == nil {
-					s.cacheStoreResponse(cacheKey, cacheable, c.Deployment.ID, 200, "application/json", b)
+					s.cacheStoreResponse(cacheKey, cacheGeneration, cacheable, c.Deployment.ID, 200, "application/json", b)
 				}
 				writeJSON(w, 200, translated)
 			}

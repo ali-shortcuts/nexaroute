@@ -106,3 +106,15 @@ func TestCacheKeyDistinctPerPathAndBody(t *testing.T) {
 		t.Fatalf("expected sha256 hex key length 64, got %d", len(k1))
 	}
 }
+
+func TestCacheKeyIncludesContext(t *testing.T) {
+	body := []byte(`{"model":"m","messages":[]}`)
+	k1 := KeyWithContext("/v1/chat/completions", body, []byte(`{"tenant":"alice"}`))
+	k2 := KeyWithContext("/v1/chat/completions", body, []byte(`{"tenant":"bob"}`))
+	if k1 == k2 {
+		t.Fatal("cache keys must differ when response-affecting request context differs")
+	}
+	if k1 != KeyWithContext("/v1/chat/completions", body, []byte(`{"tenant":"alice"}`)) {
+		t.Fatal("same request context must produce a stable cache key")
+	}
+}

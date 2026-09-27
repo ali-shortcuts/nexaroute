@@ -28,6 +28,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 	if !s.clientAuthAllowed(w, r, true) {
 		return
 	}
+	cacheGeneration := s.cacheGenerationSnapshot()
 	var in core.AnthropicRequest
 	raw, err := readJSON(r, &in)
 	if err != nil {
@@ -127,7 +128,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	// Exact-match response cache (opt-in; see cache_wiring.go).
 	// Phase F/G: Check cache BEFORE decision — on HIT, decision calls must be 0
-	cacheKey, cacheable := s.cacheLookupFor(r.URL.Path, raw, in.Stream, in.Temperature, in.TopP)
+	cacheKey, cacheable := s.cacheLookupFor(r, r.URL.Path, raw, in.Stream, in.Temperature, in.TopP, candidates, cacheGeneration)
 	if s.cacheServe(w, r, cacheKey, cacheable) {
 		return
 	}
@@ -360,7 +361,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 					if p, ct, ok := extractAnthropicUsage(b); ok {
 						s.usage.Record(c.Deployment.ID, int64(p), int64(ct))
 					}
-					s.cacheStoreResponse(cacheKey, cacheable, c.Deployment.ID, resp.StatusCode, "application/json", b)
+					s.cacheStoreResponse(cacheKey, cacheGeneration, cacheable, c.Deployment.ID, resp.StatusCode, "application/json", b)
 					copyUpstreamResponseHeaders(w, resp, false)
 					w.WriteHeader(resp.StatusCode)
 					_, e = w.Write(b)
@@ -380,7 +381,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 				translated, e = translate.OpenAIResponseToAnthropic(o, in.Model, nm)
 				if e == nil {
 					if b, merr := json.Marshal(translated); merr == nil {
-						s.cacheStoreResponse(cacheKey, cacheable, c.Deployment.ID, 200, "application/json", b)
+						s.cacheStoreResponse(cacheKey, cacheGeneration, cacheable, c.Deployment.ID, 200, "application/json", b)
 					}
 					writeJSON(w, 200, translated)
 				}

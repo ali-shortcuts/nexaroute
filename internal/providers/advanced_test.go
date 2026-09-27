@@ -131,6 +131,61 @@ func TestSafeSnippetConcurrentWithCredentialStateChanges(t *testing.T) {
 	wg.Wait()
 }
 
+func TestProviderRedirectDoesNotForwardSecretsAcrossOrigins(t *testing.T) {
+	var targetHits atomic.Int64
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		targetHits.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer target.Close()
+
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		location := strings.Replace(target.URL, "127.0.0.1", "localhost", 1)
+		http.Redirect(w, r, location, http.StatusFound)
+	}))
+	defer origin.Close()
+
+	p := config.ProviderConfig{
+		ID: "redirect", Name: "redirect", Type: "openai_compatible",
+		BaseURL: origin.URL, APIKey: "provider-secret", AuthMode: "x-api-key",
+		Headers: map[string]string{"X-Provider-Secret": "custom-secret"}, Enabled: true,
+	}
+	a, err := newHTTPAdapter(p, 2*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := a.Do(context.Background(), []byte(`{"model":"m","messages":[]}`), false, nil)
+	if err == nil {
+		if resp != nil {
+			resp.Body.Close()
+		}
+		t.Fatal("cross-origin redirect should fail closed")
+	}
+	if resp != nil {
+		resp.Body.Close()
+		t.Fatalf("refused redirect should not return an upstream response: status %d", resp.StatusCode)
+	}
+	if got := targetHits.Load(); got != 0 {
+		t.Fatalf("cross-origin redirect destination was contacted %d times", got)
+	}
+}
+
+func TestRedactBodyIncludesConfiguredCustomHeaders(t *testing.T) {
+	p := config.ProviderConfig{
+		ID: "redact", Name: "redact", Type: "openai_compatible",
+		BaseURL: "http://example.invalid", AuthMode: "none",
+		Headers: map[string]string{"X-Provider-Secret": "custom-secret"}, Enabled: true,
+	}
+	a, err := newHTTPAdapter(p, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(a.RedactBody([]byte(`{"echo":"custom-secret"}`)))
+	if strings.Contains(got, "custom-secret") || !strings.Contains(got, "[REDACTED]") {
+		t.Fatalf("custom header secret was not redacted: %s", got)
+	}
+}
+
 func TestForwardHeaderAllowlistDoesNotLeakClientAuth(t *testing.T) {
 	var beta, auth string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

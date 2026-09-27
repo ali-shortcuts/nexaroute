@@ -58,6 +58,7 @@ type Server struct {
 	clientRL             sync.Mutex
 	clientBuckets        map[string]*clientBucket
 	respCache            *cache.Cache
+	cacheGeneration      uint64 // guarded by runtimeMu; scopes cache keys to a config snapshot
 	usage                *usage.Tracker
 	capStore             *compat.Store
 	routeResolver        *route.Resolver
@@ -175,6 +176,7 @@ func New(cfg config.Config, configPath string, reg *providers.Registry, rt *rout
 	s := &Server{
 		cfg: cfg, configPath: configPath, reg: reg, rt: rt, hm: hm, bus: bus, probe: pe, log: l,
 		respCache:       cache.New(cfg.CacheTTL(), cfg.Cache.MaxEntries, int64(cfg.Cache.MaxBodyBytes)),
+		cacheGeneration: 1,
 		usage:           usage.New(),
 		capStore:        compat.NewStore(),
 		taskClassCounts: make(map[string]uint64, 32),
@@ -241,6 +243,18 @@ func (s *Server) currentConfig() config.Config {
 	s.runtimeMu.RLock()
 	defer s.runtimeMu.RUnlock()
 	return cloneConfig(s.cfg)
+}
+
+func (s *Server) cacheGenerationSnapshot() uint64 {
+	s.runtimeMu.RLock()
+	defer s.runtimeMu.RUnlock()
+	return s.cacheGeneration
+}
+
+func (s *Server) cacheConfigSnapshot() (config.Config, uint64) {
+	s.runtimeMu.RLock()
+	defer s.runtimeMu.RUnlock()
+	return cloneConfig(s.cfg), s.cacheGeneration
 }
 
 // evaluationSnapshot returns the live evaluation plane under the runtime lock.
@@ -492,6 +506,7 @@ func (s *Server) applyConfigLocked(cfg config.Config) error {
 	}
 	s.hm.RetainProviders(validProviders)
 	s.usage.Retain(valid)
+	s.cacheGeneration++
 	// Cached responses must never outlive the topology that produced them:
 	// any config swap invalidates the exact-match cache wholesale.
 	s.respCache.Invalidate()
