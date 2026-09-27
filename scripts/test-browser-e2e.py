@@ -111,6 +111,13 @@ def install_mock_provider_checks(page: Page) -> None:
     page.route("**/admin/api/provider-test", model_test)
 
 
+def set_provider_id(page: Page, provider_id: str) -> None:
+    field = page.locator("#pId")
+    if not field.is_visible():
+        page.locator("#providerModal details.cp-advanced-toggle summary").click()
+    field.fill(provider_id)
+
+
 def advance_provider(page: Page) -> None:
     page.locator("#cpProviderNext").click()
 
@@ -191,7 +198,7 @@ def main() -> None:
                 page.locator("#addProviderBtn").click()
                 expect(page.locator("#providerModal")).to_be_visible()
                 page.locator("#pName").fill("Browser E2E Provider")
-                page.locator("#pId").fill("e2e-provider")
+                set_provider_id(page, "e2e-provider")
                 page.locator("#pBase").fill("https://provider.invalid/v1")
                 page.locator("#pKey").fill("browser-secret-one")
                 advance_provider(page)
@@ -232,7 +239,7 @@ def main() -> None:
                 # Discovery-failure -> manual-model fallback -> persistence.
                 page.locator("#addProviderBtn").click()
                 page.locator("#pName").fill("Manual Provider")
-                page.locator("#pId").fill("manual-e2e")
+                set_provider_id(page, "manual-e2e")
                 page.locator("#pBase").fill("https://manual.invalid/v1")
                 page.locator("#pProtocolMode").select_option("manual")
                 page.locator("#pType").select_option("openai_compatible")
