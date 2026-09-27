@@ -16,17 +16,14 @@
       <div class="brand-copy"><strong>NexaRoute</strong><small id="brandVersion">control plane</small></div>
     </div>
     <nav id="nav">
-      <button class="active" data-tab="overview" data-title="Routing Overview"><span class="nav-ico">◎</span>Overview</button>
-      <button data-tab="console" data-title="Live Console"><span class="nav-ico">▤</span>Console<span class="nav-dot" id="consoleDot" hidden></span></button>
-      <button data-tab="providers" data-title="Providers"><span class="nav-ico">◈</span>Providers</button>
-      <button data-tab="models" data-title="Model Deployments"><span class="nav-ico">▦</span>Models</button>
-      <button data-tab="virtual" data-title="Virtual Endpoints"><span class="nav-ico">◐</span>Endpoints</button>
-      <button data-tab="profiles" data-title="Route Profiles"><span class="nav-ico">⬙</span>Profiles</button>
-      <button data-tab="pools" data-title="Candidate Pools"><span class="nav-ico">⬡</span>Pools</button>
-      <button data-tab="health" data-title="Health &amp; Pressure"><span class="nav-ico">♥</span>Health</button>
-      <button data-tab="compat" data-title="Compatibility Matrix"><span class="nav-ico">⧉</span>Compat</button>
-      <button data-tab="cli" data-title="CLI Tools"><span class="nav-ico">⌘</span>CLI Tools</button>
-      <button data-tab="settings" data-title="Runtime Settings"><span class="nav-ico">⚙</span>Settings</button>
+      <button class="active" data-tab="overview" data-title="Overview"><span class="nav-ico">◎</span><span data-i18n="nav.overview">Overview</span></button>
+      <button data-tab="providers" data-title="Providers"><span class="nav-ico">◈</span><span data-i18n="nav.providers">Providers</span></button>
+      <button data-tab="routing" data-title="Routing"><span class="nav-ico">⇄</span><span data-i18n="nav.routing">Routing</span></button>
+      <button data-tab="models" data-title="Models"><span class="nav-ico">▦</span><span data-i18n="nav.models">Models</span></button>
+      <button data-tab="console" data-title="Observability"><span class="nav-ico">▤</span><span data-i18n="nav.observability">Observability</span><span class="nav-dot" id="consoleDot" hidden></span></button>
+      <button data-tab="health" data-title="Health"><span class="nav-ico">♥</span><span data-i18n="nav.health">Health</span></button>
+      <button data-tab="cli" data-title="Connect"><span class="nav-ico">⌘</span><span data-i18n="nav.connect">Connect</span></button>
+      <button data-tab="settings" data-title="Settings"><span class="nav-ico">⚙</span><span data-i18n="nav.settings">Settings</span></button>
     </nav>
     <div class="sidefoot">
       <div class="conn" id="apiState"><span class="conn-dot"></span><span class="conn-text">connecting</span></div>
@@ -41,6 +38,10 @@
         <p id="subtitle">Ready Mesh: verified health, session affinity, capacity-aware routing and supervised recovery.</p>
       </div>
       <div class="topbar-actions">
+        <select id="languageSelect" class="compact-select" aria-label="Language">
+          <option value="en">English</option>
+          <option value="fa">فارسی / دری</option>
+        </select>
         <button id="pauseBtn" class="btn ghost" title="Pause live polling">⏸ Pause</button>
         <button id="probeBtn" class="btn secondary">⚡ Probe all models</button>
       </div>
@@ -139,9 +140,12 @@
     <!-- ============ PROVIDERS ============ -->
     <section id="providers" class="tab">
       <div class="panel">
-        <div class="panelhead">
-          <div><h2>Providers</h2><p>Add, test, save and edit upstreams without losing connection details.</p></div>
-          <button id="addProviderBtn" class="btn primary">+ Add provider</button>
+        <div class="panelhead provider-head">
+          <div><h2 data-i18n="providers.title">Providers</h2><p data-i18n="providers.subtitle">Connect an API, discover its models, choose what NexaRoute can use, and save.</p></div>
+          <div class="panelhead-side">
+            <input id="providerSearch" class="search" type="search" placeholder="Search providers…" spellcheck="false">
+            <button id="addProviderBtn" class="btn primary">+ Add provider</button>
+          </div>
         </div>
         <div id="providerGrid" class="provider-grid"></div>
       </div>
@@ -160,8 +164,47 @@
       </div>
     </section>
 
+    <!-- ============ ROUTING ============ -->
+    <section id="routing" class="tab">
+      <div class="panel route-builder-panel">
+        <div class="panelhead">
+          <div><h2 data-i18n="routing.title">Routing</h2><p data-i18n="routing.subtitle">Create a stable public model and choose which saved deployments may serve it. NexaRoute keeps the advanced router underneath.</p></div>
+          <button id="addRouteBtn" class="btn primary">+ Create route</button>
+        </div>
+        <div id="routeCards" class="route-card-grid"></div>
+        <div id="routeEmpty" class="empty-state route-empty" hidden>
+          <strong>No routes yet.</strong>
+          <span>Create a route such as <code>coding</code> and point Claude Code at one stable model name.</span>
+          <button id="addFirstRouteBtn" class="btn primary">Create your first route</button>
+        </div>
+      </div>
+      <details class="panel advanced-routing">
+        <summary><span>Advanced routing primitives</span><small>Candidate Pools · Route Profiles · Fallback Chains · Virtual Endpoints</small></summary>
+        <div class="advanced-routing-body">
+          <div class="advanced-section">
+            <div class="panelhead"><div><h3>Virtual Endpoints</h3><p>Stable client-facing model names.</p></div><button id="addVirtualBtn" class="btn secondary">+ Endpoint</button></div>
+            <div class="tablewrap"><table><thead><tr><th>ID</th><th>Public Model</th><th>Route Profile</th><th>Enabled</th><th>Pool Members</th><th>Actions</th></tr></thead><tbody id="virtualRows"></tbody></table></div>
+          </div>
+          <div class="advanced-section">
+            <div class="panelhead"><div><h3>Route Profiles</h3><p>Reusable routing intent.</p></div><button id="addProfileBtn" class="btn secondary">+ Profile</button></div>
+            <div class="tablewrap"><table><thead><tr><th>ID</th><th>Name</th><th>Pool</th><th>Fallback</th><th>Strategy</th><th>Actions</th></tr></thead><tbody id="profileRows"></tbody></table></div>
+          </div>
+          <div class="advanced-grid">
+            <div class="advanced-section">
+              <div class="panelhead"><div><h3>Candidate Pools</h3></div><button id="addPoolBtn" class="btn secondary">+ Pool</button></div>
+              <div class="tablewrap"><table><thead><tr><th>ID</th><th>Mode</th><th>Members</th><th>Expanded</th><th>Actions</th></tr></thead><tbody id="poolRows"></tbody></table></div>
+            </div>
+            <div class="advanced-section">
+              <div class="panelhead"><div><h3>Fallback Chains</h3></div><button id="addChainBtn" class="btn secondary">+ Chain</button></div>
+              <div class="tablewrap"><table><thead><tr><th>ID</th><th>Pools</th><th>Actions</th></tr></thead><tbody id="chainRows"></tbody></table></div>
+            </div>
+          </div>
+        </div>
+      </details>
+    </section>
+
     <!-- ============ VIRTUAL ENDPOINTS ============ -->
-    <section id="virtual" class="tab">
+    <section id="virtual" class="tab legacy-advanced-tab">
       <div class="panel">
         <div class="panelhead"><div><h2>Virtual Endpoints</h2><p>Stable client-facing model names → Route Profile → Candidate Pool. Changing backends doesn't require client reconfiguration.</p></div>
           <button id="addVirtualBtn" class="btn primary">+ Add endpoint</button>
@@ -176,7 +219,7 @@
     </section>
 
     <!-- ============ ROUTE PROFILES ============ -->
-    <section id="profiles" class="tab">
+    <section id="profiles" class="tab legacy-advanced-tab">
       <div class="panel">
         <div class="panelhead"><div><h2>Route Profiles</h2><p>Reusable routing intent: candidate pool + fallback chain. Strategy inherits global routing strategy (per-profile strategy deferred to Phase E).</p></div>
           <button id="addProfileBtn" class="btn primary">+ Add profile</button>
@@ -189,7 +232,7 @@
     </section>
 
     <!-- ============ POOLS ============ -->
-    <section id="pools" class="tab">
+    <section id="pools" class="tab legacy-advanced-tab">
       <div class="panel">
         <div class="panelhead"><div><h2>Candidate Pools &amp; Fallback Chains</h2><p>Logical pools define potential candidates; health/compat filtering defines currently eligible.</p></div>
           <div class="panelhead-side">
@@ -396,15 +439,17 @@
       </div>
       <div class="form-section">
         <div class="section-kicker">Credentials</div>
-        <label class="field"><span>API Key <small id="secretSource"></small></span>
+        <div id="savedCredential" class="saved-secret" hidden><span class="saved-secret-dot"></span><div><strong>Saved credential</strong><small id="savedCredentialMeta">Stored securely; value is never returned to the browser.</small></div><button id="replaceCredentialBtn" class="btn secondary">Replace</button></div>
+        <label id="apiKeyField" class="field"><span>API Key <small id="secretSource"></small></span>
           <div class="secret-row"><input id="pKey" type="password" autocomplete="off" placeholder="sk-..."><button id="togglePKey" class="icon-btn">Show</button></div>
-          <em>Saved credentials are write-only. Leave fields untouched to keep them; editing a credential field replaces the complete key/pool set.</em>
+          <em>Existing secrets remain write-only. Enter a new key only when you want to replace the saved credential.</em>
         </label>
         <label class="field"><span>API key environment variable <small>(optional)</small></span><input id="pKeyEnv" spellcheck="false" placeholder="CHAT2API_KEY"></label>
         <label class="field"><span>Extra headers JSON <small>(optional)</small></span><textarea id="pHeaders" rows="3" spellcheck="false" placeholder='{"X-Custom":"value"}'></textarea></label>
       </div>
-      <div class="form-section">
-        <div class="section-kicker">Advanced provider controls</div>
+      <details class="form-section advanced-provider" id="advancedProvider">
+        <summary><span>Advanced provider controls</span><small>Paths, proxy, headers, concurrency and credential pool</small></summary>
+        <div class="advanced-provider-body">
         <div class="form-grid two">
           <label class="field"><span>Proxy URL <small>(optional)</small></span><input id="pProxy" spellcheck="false" placeholder="http://127.0.0.1:7890"></label>
           <label class="field"><span>Max concurrency</span><input id="pConcurrency" type="number" min="1" max="512" value="32"></label>
@@ -423,11 +468,21 @@
         <label class="field"><span>Forward request headers <small>comma separated</small></span><input id="pForwardHeaders" spellcheck="false" placeholder="anthropic-beta, anthropic-version, user-agent"></label>
         <label class="field"><span>Credential pool JSON <small>(optional)</small></span><textarea id="pCredentials" rows="5" spellcheck="false" placeholder='[{"name":"key-2","api_key_env":"SECOND_KEY","enabled":true}]'></textarea>
           <em>Additional keys rotate automatically. 401/402/403/429 can temporarily cool down only the failing key.</em></label>
-      </div>
+        </div>
+      </details>
       <div class="form-section">
         <div class="section-row">
-          <div><div class="section-kicker">Models</div><p class="hint">Detect models or add a model ID manually.</p></div>
+          <div><div class="section-kicker">Models</div><p class="hint">Detect models, search, select all or choose only the models you want NexaRoute to use.</p></div>
           <button id="discoverBtn" class="btn secondary">Detect models</button>
+        </div>
+        <div class="model-picker-toolbar">
+          <input id="modelPickerSearch" class="search" type="search" placeholder="Search detected models…" spellcheck="false">
+          <div class="model-picker-actions">
+            <button id="selectAllModels" class="btn ghost small">Select all</button>
+            <button id="selectVisibleModels" class="btn ghost small">Select visible</button>
+            <button id="clearModels" class="btn ghost small">Clear</button>
+            <span id="modelSelectedCount" class="selection-count">0 selected</span>
+          </div>
         </div>
         <label class="field"><span>Defaults for newly added models <small>aliases, comma separated</small></span><input id="pAliases" spellcheck="false" placeholder="coding, auto"></label>
         <div class="cap-grid">
@@ -460,6 +515,55 @@
     </div>
   </div>
 </div>
+<!-- ============ SIMPLE ROUTE BUILDER ============ -->
+<div id="routeModal" class="modal" aria-hidden="true">
+  <div class="modal-backdrop" data-close-route></div>
+  <div class="dialog-card route-dialog" role="dialog" aria-modal="true" aria-labelledby="routeFormTitle">
+    <div class="drawer-head"><div><h2 id="routeFormTitle">Create route</h2><p>Simple on the surface, backed by NexaRoute's existing pool/profile/endpoint primitives.</p></div><button id="closeRouteModal" class="close-btn" aria-label="Close">×</button></div>
+    <div class="dialog-scroll">
+      <div class="form-grid two">
+        <label class="field"><span>Route name</span><input id="routeName" placeholder="Coding"></label>
+        <label class="field"><span>Public model</span><input id="routePublicModel" placeholder="coding" spellcheck="false"></label>
+      </div>
+      <label class="field"><span>Routing mode</span><select id="routeMode"><option value="automatic">Automatic — healthy/capable models</option><option value="ordered">Ordered fallback</option></select><em>Automatic uses the configured global Ready Mesh policy. Ordered fallback groups selections into ordered pools.</em></label>
+      <div class="route-model-head"><div><strong>Models</strong><small>Choose saved deployments for this route.</small></div><span id="routeSelectionCount">0 selected</span></div>
+      <input id="routeModelSearch" class="search wide" type="search" placeholder="Search provider or model…">
+      <div class="route-select-actions"><button id="routeSelectAll" class="btn ghost small">Select all</button><button id="routeClearAll" class="btn ghost small">Clear</button></div>
+      <div id="routeModelPicker" class="route-model-picker"></div>
+      <details class="advanced-route-options"><summary>Advanced identity</summary><div class="form-grid two"><label class="field"><span>Internal route ID</span><input id="routeId" spellcheck="false"></label><label class="field"><span>Enabled</span><select id="routeEnabled"><option value="true">Enabled</option><option value="false">Disabled</option></select></label></div></details>
+      <div id="routeFormError" class="inline-status badtext"></div>
+    </div>
+    <div class="drawer-foot"><button id="deleteRouteBtn" class="btn danger-ghost hidden">Delete</button><div class="spacer"></div><button id="cancelRouteBtn" class="btn secondary">Cancel</button><button id="saveRouteBtn" class="btn primary">Save route</button></div>
+  </div>
+</div>
+
+<!-- ============ GENERIC NEXAROUTE DIALOG ============ -->
+<div id="formDialog" class="modal" aria-hidden="true">
+  <div class="modal-backdrop" data-close-form-dialog></div>
+  <div class="dialog-card compact-dialog" role="dialog" aria-modal="true">
+    <div class="drawer-head"><div><h2 id="formDialogTitle">Edit</h2><p id="formDialogSubtitle"></p></div><button id="closeFormDialog" class="close-btn">×</button></div>
+    <form id="formDialogFields" class="dialog-scroll"></form>
+    <div class="drawer-foot"><div class="spacer"></div><button id="formDialogCancel" class="btn secondary" type="button">Cancel</button><button id="formDialogSave" class="btn primary" type="button">Save</button></div>
+  </div>
+</div>
+
+<div id="confirmDialog" class="modal" aria-hidden="true">
+  <div class="modal-backdrop" data-close-confirm></div>
+  <div class="dialog-card confirm-card" role="dialog" aria-modal="true">
+    <div class="confirm-icon">!</div><h2 id="confirmTitle">Confirm</h2><p id="confirmMessage"></p>
+    <div class="confirm-actions"><button id="confirmCancel" class="btn secondary">Cancel</button><button id="confirmAccept" class="btn danger">Delete</button></div>
+  </div>
+</div>
+
+<div id="adminKeyDialog" class="modal" aria-hidden="true">
+  <div class="modal-backdrop"></div>
+  <div class="dialog-card compact-dialog" role="dialog" aria-modal="true">
+    <div class="drawer-head"><div><h2>Admin access</h2><p>This NexaRoute instance requires an admin key for control-plane actions.</p></div></div>
+    <div class="dialog-scroll"><label class="field"><span>Admin key</span><input id="adminKeyDialogInput" type="password" autocomplete="off"></label><div id="adminKeyDialogError" class="inline-status badtext"></div></div>
+    <div class="drawer-foot"><div class="spacer"></div><button id="adminKeyDialogSave" class="btn primary">Continue</button></div>
+  </div>
+</div>
+
 <div id="toast" class="toast" role="status"></div>
 <script src="/app.js"></script>
 </body>
