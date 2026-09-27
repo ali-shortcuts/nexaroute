@@ -60,23 +60,23 @@ func (s *sseReader) Next() (ev sseEvent, done bool, err error) {
 				field, value = line, ""
 			}
 			value = strings.TrimPrefix(value, " ")
-				switch field {
-				case "event":
-					if s.eventBytes+len(value) > maxSSEEventBytes {
-						return sseEvent{}, false, fmt.Errorf("SSE event exceeds safe limit of %d bytes", maxSSEEventBytes)
-					}
-					s.event = value
+			switch field {
+			case "event":
+				if s.eventBytes+len(value) > maxSSEEventBytes {
+					return sseEvent{}, false, fmt.Errorf("SSE event exceeds safe limit of %d bytes", maxSSEEventBytes)
+				}
+				s.event = value
 				s.eventBytes += len(value)
 				s.hasAny = true
 			case "data":
 				add := len(value)
-					if s.data.Len() > 0 {
-						add++
-					}
-					if s.eventBytes+add > maxSSEEventBytes {
-						return sseEvent{}, false, fmt.Errorf("SSE event exceeds safe limit of %d bytes", maxSSEEventBytes)
-					}
-					if s.data.Len() > 0 {
+				if s.data.Len() > 0 {
+					add++
+				}
+				if s.eventBytes+add > maxSSEEventBytes {
+					return sseEvent{}, false, fmt.Errorf("SSE event exceeds safe limit of %d bytes", maxSSEEventBytes)
+				}
+				if s.data.Len() > 0 {
 					s.data.WriteByte('\n')
 				}
 				s.data.WriteString(value)
