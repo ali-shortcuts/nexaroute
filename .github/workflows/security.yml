@@ -27,7 +27,7 @@ jobs:
       - name: Check reachable Go vulnerabilities
         uses: golang/govulncheck-action@v1
         with:
-          go-version-file: go.mod
+          go-version: '1.23'
           go-package: ./...
           cache: false
 
