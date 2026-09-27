@@ -830,13 +830,33 @@
     try{await api(path+'/'+encodeURIComponent(id),{method:'DELETE'});await refresh();cpToast(T('saved'));}catch(e){cpToast(e.message,true);}
   }
 
+  async function quickTestProvider(id,button){
+    const old=button?.textContent;
+    try{
+      if(button){button.disabled=true;button.textContent=state.lang==='fa'?'در حال بررسی…':'Testing…';}
+      const d=await api('/admin/api/providers/'+encodeURIComponent(id));
+      const provider=d.provider;
+      const result=await api('/admin/api/provider-check',{
+        method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({provider,preserve_secret:true,preserve_headers:true,preserve_proxy:true,test_models:[]})
+      });
+      cpToast(result.ok ? (state.lang==='fa'?'اتصال ارائه‌دهنده موفق است.':'Provider connection is healthy.') : (result.error||T('failed')), !result.ok);
+    }catch(e){cpToast(e.message,true);}
+    finally{if(button){button.disabled=false;button.textContent=old;}}
+  }
+
   function enhanceProviderCards(){
     const grid=q('#providerGrid');if(!grid)return;
     qa('.provider-card',grid).forEach(card=>{
       if(q('.cp-card-actions',card))return;
       const edit=q('.edit-provider',card);if(!edit)return;
+      const id=edit.dataset.id;
       const actions=document.createElement('div');actions.className='cp-card-actions';
-      edit.before(actions);actions.append(edit);
+      const test=document.createElement('button');test.className='btn secondary';test.type='button';
+      test.textContent=state.lang==='fa'?'آزمایش اتصال':'Test connection';
+      test.onclick=()=>quickTestProvider(id,test);
+      edit.textContent=T('edit');
+      edit.before(actions);actions.append(test,edit);
     });
   }
 
