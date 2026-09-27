@@ -141,7 +141,7 @@ var classPatterns = []struct {
 	{regexp.MustCompile(`(?i)(not found|does not exist|unknown url|invalid url|no such endpoint|404)`), ClassEndpointNotFound, ""},
 }
 
-var modelRetiredPattern = regexp.MustCompile(`(?i)(reached (?:its )?end of life|end[ -]of[ -](?:life|support)|\\beol\\b|retired|decommissioned|discontinued|sunset|withdrawn|no longer available|permanently unavailable)`)
+var modelRetiredPattern = regexp.MustCompile(`(?i)(reached (?:its )?end of life|end[ -]of[ -](?:life|support)|\beol\b|retired|decommissioned|discontinued|sunset|withdrawn|no longer available|permanently unavailable)`)
 var modelUnavailablePattern = regexp.MustCompile(`(?i)(model.{0,80}(?:currently|temporarily) unavailable|(?:currently|temporarily) unavailable.{0,80}model|model is unavailable)`)
 
 func providerErrorFields(body []byte) (code, typ, msg string) {
