@@ -108,6 +108,7 @@
     label('#pPreset','Provider preset','قالب ارائه‌دهنده');
     label('#pName','Name','نام');
     label('#pId','Internal ID','شناسه داخلی');
+    label('#pProtocolMode','Protocol','پروتکل');
     label('#pType','Endpoint type','نوع پروتکل');
     label('#pBase','Base URL','آدرس پایه');
     label('#pAuth','Authentication','احراز هویت');
@@ -495,7 +496,12 @@
     q('#cancelProviderBtn').before(back,next);
     back.onclick=()=>setProviderStep(Math.max(0,state.providerStep-1));
     next.onclick=()=>advanceProviderStep();
-    qa('[data-provider-step]',progress).forEach(b=>b.onclick=()=>setProviderStep(Number(b.dataset.providerStep)));
+    qa('[data-provider-step]',progress).forEach(b=>b.onclick=()=>{
+      const target=Number(b.dataset.providerStep);
+      if(target<=state.providerStep) setProviderStep(target);
+      else if(target===state.providerStep+1) advanceProviderStep();
+      else cpToast(state.lang==='fa'?'ابتدا مرحله قبلی را تکمیل کنید.':'Complete the previous step first.',true);
+    });
     q('#addProviderBtn').onclick=()=>{
       const ident=nextProviderIdentity();
       editor={mode:'add',originalId:'',provider:emptyProvider(),detected:[],selected:new Set(),modelMeta:new Map(),secretDirty:true,secretSource:'none'};
@@ -584,6 +590,11 @@
     if(q('#cpProviderNext'))q('#cpProviderNext').textContent=T('next');
     if(q('#saveProviderBtn'))q('#saveProviderBtn').textContent=T('saveProvider');
     if(q('#discoverBtn'))q('#discoverBtn').textContent=T('detectModels');
+    const protocol=q('#pProtocolMode');
+    if(protocol){
+      const auto=protocol.querySelector('option[value="auto"]'),manual=protocol.querySelector('option[value="manual"]');
+      if(auto)auto.textContent=T('protocolAuto');if(manual)manual.textContent=T('protocolManual');
+    }
   }
 
   function advanceProviderStep(){
