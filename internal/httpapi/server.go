@@ -851,6 +851,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/admin/api/route-profiles/", s.adminRouteProfileByID)
 	mux.HandleFunc("/admin/api/candidate-pools", s.adminCandidatePools)
 	mux.HandleFunc("/admin/api/candidate-pools/", s.adminCandidatePoolByID)
+	mux.HandleFunc("/admin/api/simple-routes", s.adminSimpleRoutes)
+	mux.HandleFunc("/admin/api/simple-routes/", s.adminSimpleRouteByID)
 	mux.HandleFunc("/admin/api/fallback-chains", s.adminFallbackChains)
 	mux.HandleFunc("/admin/api/fallback-chains/", s.adminFallbackChainByID)
 	// Phase H: Model Intelligence scorecards + deterministic evaluation
