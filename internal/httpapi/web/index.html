@@ -208,62 +208,6 @@
       </details>
     </section>
 
-    <!-- ============ VIRTUAL ENDPOINTS ============ -->
-    <section id="virtual" class="tab legacy-advanced-tab">
-      <div class="panel">
-        <div class="panelhead"><div><h2>Virtual Endpoints</h2><p>Stable client-facing model names → Route Profile → Candidate Pool. Changing backends doesn't require client reconfiguration.</p></div>
-          <button id="addVirtualBtn" class="btn primary">+ Add endpoint</button>
-        </div>
-        <div class="tablewrap"><table>
-          <thead><tr><th>ID</th><th>Public Model</th><th>Route Profile</th><th>Enabled</th><th>Pool Members (configured)</th><th>Actions</th></tr></thead>
-          <tbody id="virtualRows"></tbody>
-        </table></div>
-        <p class="hint">Pool Members = configured candidate count (pool membership), not runtime eligible. Runtime eligibility depends on health, capabilities, provider circuits, context fit, etc.</p>
-        <div id="virtualDetail" class="compat-report" hidden></div>
-      </div>
-    </section>
-
-    <!-- ============ ROUTE PROFILES ============ -->
-    <section id="profiles" class="tab legacy-advanced-tab">
-      <div class="panel">
-        <div class="panelhead"><div><h2>Route Profiles</h2><p>Reusable routing intent: candidate pool + fallback chain. Strategy inherits global routing strategy (per-profile strategy deferred to Phase E).</p></div>
-          <button id="addProfileBtn" class="btn primary">+ Add profile</button>
-        </div>
-        <div class="tablewrap"><table>
-          <thead><tr><th>ID</th><th>Name</th><th>Pool</th><th>Fallback</th><th>Strategy (Phase B: inherit)</th><th>Actions</th></tr></thead>
-          <tbody id="profileRows"></tbody>
-        </table></div>
-      </div>
-    </section>
-
-    <!-- ============ POOLS ============ -->
-    <section id="pools" class="tab legacy-advanced-tab">
-      <div class="panel">
-        <div class="panelhead"><div><h2>Candidate Pools &amp; Fallback Chains</h2><p>Logical pools define potential candidates; health/compat filtering defines currently eligible.</p></div>
-          <div class="panelhead-side">
-            <button id="addPoolBtn" class="btn primary">+ Add pool</button>
-            <button id="addChainBtn" class="btn secondary">+ Add chain</button>
-          </div>
-        </div>
-        <div class="grid-2-1">
-          <div class="panel">
-            <h3 style="margin:12px 0 8px 12px">Candidate Pools</h3>
-            <div class="tablewrap"><table>
-              <thead><tr><th>ID</th><th>Mode</th><th>Members</th><th>Expanded</th><th>Actions</th></tr></thead>
-              <tbody id="poolRows"></tbody>
-            </table></div>
-          </div>
-          <div class="panel">
-            <h3 style="margin:12px 0 8px 12px">Fallback Chains</h3>
-            <div class="tablewrap"><table>
-              <thead><tr><th>ID</th><th>Pools</th><th>Actions</th></tr></thead>
-              <tbody id="chainRows"></tbody>
-            </table></div>
-          </div>
-        </div>
-      </div>
-    </section>
-
     <!-- ============ COMPAT ============ -->
     <section id="compat" class="tab">
       <div class="panel">
