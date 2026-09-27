@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/ali-shortcuts/nexaroute/internal/core"
@@ -561,14 +562,20 @@ func EncodeOpenAIChatResponse(in Response, requestedModel string) core.OpenAIRes
 	}
 }
 
-var messageClockNanos = time.Now().UnixNano()
+var messageClockNanos atomic.Int64
 
-// messageClock yields compact monotonic ids for stream/message identifiers.
+// messageClock yields process-unique monotonic identifiers without a data race.
+// It intentionally keeps nanosecond precision instead of truncating to
+// milliseconds, which previously allowed concurrent duplicate IDs.
 func messageClock() int64 {
-	n := time.Now().UnixNano()
-	if n <= messageClockNanos {
-		n = messageClockNanos + 1
+	for {
+		prev := messageClockNanos.Load()
+		n := time.Now().UnixNano()
+		if n <= prev {
+			n = prev + 1
+		}
+		if messageClockNanos.CompareAndSwap(prev, n) {
+			return n
+		}
 	}
-	messageClockNanos = n
-	return n / 1000000
 }
