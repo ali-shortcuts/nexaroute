@@ -355,9 +355,9 @@ function render() {
   renderHealthTab(h);
   renderRoutingObservatory(h, ds);
   if ($('#compat').classList.contains('active')) renderCompat();
-  if ($('#virtual').classList.contains('active')) renderVirtual();
-  if ($('#profiles').classList.contains('active')) renderProfiles();
-  if ($('#pools').classList.contains('active')) renderPools();
+  if ($('#virtual')?.classList.contains('active')) renderVirtual();
+  if ($('#profiles')?.classList.contains('active')) renderProfiles();
+  if ($('#pools')?.classList.contains('active')) renderPools();
   if ($('#routing').classList.contains('active')) renderRouting();
   renderConsole();
   $('#settingsJson').textContent = JSON.stringify(snap.config || {}, null, 2);
@@ -1284,15 +1284,20 @@ function routeParts(ve){
   const pool=(snap.candidate_pools||[]).find(x=>x.id===rp?.candidate_pool);
   return {rp,pool};
 }
+function isSimpleManagedRoute(ve){
+  const {rp,pool}=routeParts(ve);
+  return !!rp && !!pool && rp.id===ve.id+'-profile' && pool.id===ve.id+'-pool';
+}
 function renderRouting(){
   const ves=snap.virtual_endpoints||[];
   $('#routeEmpty').hidden=!!ves.length;
   $('#routeCards').innerHTML=ves.map(ve=>{
     const {rp,pool}=routeParts(ve), members=pool?.mode==='all'?['All eligible deployments']:(pool?.deployments||[]);
-    return `<article class="route-card"><div class="route-card-head"><div><span class="route-public">${esc(ve.public_model||ve.id)}</span><h3>${esc(ve.name||ve.id)}</h3></div><span class="pill ${ve.enabled!==false?'on':''}">${ve.enabled!==false?'Enabled':'Disabled'}</span></div><p>${members.length?members.slice(0,3).map(esc).join(' · '):'No model members'}${members.length>3?` · +${members.length-3} more`:''}</p><div class="route-card-meta"><span>${esc(snap.config?.routing?.strategy||'ready_mesh')}</span><span>${members.length} member${members.length===1?'':'s'}</span></div><div class="route-card-actions"><button class="btn secondary edit-simple-route" data-id="${esc(ve.id)}">Edit</button><button class="btn ghost copy-route" data-model="${esc(ve.public_model||ve.id)}">Copy model</button></div></article>`;
+    return `<article class="route-card"><div class="route-card-head"><div><span class="route-public">${esc(ve.public_model||ve.id)}</span><h3>${esc(ve.name||ve.id)}</h3></div><span class="pill ${ve.enabled!==false?'on':''}">${ve.enabled!==false?'Enabled':'Disabled'}</span></div><p>${members.length?members.slice(0,3).map(esc).join(' · '):'No model members'}${members.length>3?` · +${members.length-3} more`:''}</p><div class="route-card-meta"><span>${esc(snap.config?.routing?.strategy||'ready_mesh')}</span><span>${members.length} member${members.length===1?'':'s'}</span></div><div class="route-card-actions"><button class="btn secondary ${isSimpleManagedRoute(ve)?'edit-simple-route':'edit-advanced-route'}" data-id="${esc(ve.id)}">${isSimpleManagedRoute(ve)?'Edit route':'Advanced edit'}</button><button class="btn ghost copy-route" data-model="${esc(ve.public_model||ve.id)}">Copy model</button></div></article>`;
   }).join('');
-  $$('.edit-simple-route').forEach(b=>b.onclick=()=>openRouteEditor(b.dataset.id));
-  $$('.copy-route').forEach(b=>b.onclick=e=>copyText(b.dataset.model,e.currentTarget));
+  $('.edit-simple-route').forEach(b=>b.onclick=()=>openRouteEditor(b.dataset.id));
+  $('.edit-advanced-route').forEach(b=>b.onclick=()=>editVirtual(b.dataset.id));
+  $('.copy-route').forEach(b=>b.onclick=e=>copyText(b.dataset.model,e.currentTarget));
 }
 function setRouteModal(open){const m=$('#routeModal');m.classList.toggle('open',open);m.setAttribute('aria-hidden',open?'false':'true');document.body.classList.toggle('modal-open',open);}
 function routeDeployments(){
@@ -1355,8 +1360,8 @@ async function deleteSimpleRoute(){
   const {rp,pool}=routeParts(existing);
   try{
     await api('/admin/api/virtual-endpoints/'+encodeURIComponent(existing.id),{method:'DELETE'});
-    if(rp) await api('/admin/api/route-profiles/'+encodeURIComponent(rp.id),{method:'DELETE'});
-    if(pool) await api('/admin/api/candidate-pools/'+encodeURIComponent(pool.id),{method:'DELETE'});
+    if(rp && rp.id===existing.id+'-profile') await api('/admin/api/route-profiles/'+encodeURIComponent(rp.id),{method:'DELETE'});
+    if(pool && pool.id===existing.id+'-pool') await api('/admin/api/candidate-pools/'+encodeURIComponent(pool.id),{method:'DELETE'});
     setRouteModal(false);toast('Route deleted');await refresh();
   }catch(e){toast(e.message,true);}
 }
