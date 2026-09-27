@@ -102,6 +102,38 @@
     }
   }
 
+  function translateProviderFields(){
+    const fa=state.lang==='fa';
+    const label=(id,en,faText)=>{const el=q(id);const field=el?.closest('.field');const span=field?.querySelector(':scope > span');if(span)span.textContent=fa?faText:en;};
+    label('#pPreset','Provider preset','قالب ارائه‌دهنده');
+    label('#pName','Name','نام');
+    label('#pId','Internal ID','شناسه داخلی');
+    label('#pType','Endpoint type','نوع پروتکل');
+    label('#pBase','Base URL','آدرس پایه');
+    label('#pAuth','Authentication','احراز هویت');
+    label('#pEnabled','Enabled','فعال');
+    label('#pKey','API Key','کلید API');
+    label('#pKeyEnv','API key environment variable','متغیر محیطی کلید API');
+    label('#pHeaders','Extra headers JSON','هدرهای اضافی JSON');
+    label('#pProxy','Proxy URL','آدرس Proxy');
+    label('#pConcurrency','Max concurrency','حداکثر هم‌زمانی');
+    label('#pStreamIdle','Stream idle timeout (seconds)','مهلت بی‌فعالیتی استریم (ثانیه)');
+    label('#pModelsPath','Models path','مسیر مدل‌ها');
+    label('#pForwardHeaders','Forward request headers','هدرهای قابل انتقال');
+    label('#pCredentials','Credential pool JSON','مجموعه کلیدها (JSON)');
+    label('#pAliases','Defaults for newly added models','پیش‌فرض مدل‌های تازه');
+    const kickers=qa('#providerModal .section-kicker');
+    const names=fa?['اتصال','اطلاعات ورود','تنظیمات پیشرفته ارائه‌دهنده','مدل‌ها','بررسی']:['Connection','Credentials','Advanced provider controls','Models','Verification'];
+    kickers.forEach((x,i)=>{if(names[i])x.textContent=names[i];});
+    if(q('#addModelBtn'))q('#addModelBtn').textContent=fa?'افزودن مدل':'Add model';
+    if(q('#checkConnectionBtn'))q('#checkConnectionBtn').textContent=T('testConnection');
+    if(q('#testProviderBtn'))q('#testProviderBtn').textContent=T('testModels');
+    if(q('#cancelProviderBtn'))q('#cancelProviderBtn').textContent=T('cancel');
+    if(q('#deleteProviderBtn'))q('#deleteProviderBtn').textContent=T('delete');
+    const title=q('#providerFormTitle');
+    if(title) title.textContent=editor?.mode==='edit'?(fa?'ویرایش ارائه‌دهنده':'Edit provider'):(fa?'افزودن ارائه‌دهنده':'Add provider');
+  }
+
   function applyLanguage() {
     document.documentElement.lang = state.lang === 'fa' ? 'fa' : 'en';
     document.documentElement.dir = state.lang === 'fa' ? 'rtl' : 'ltr';
@@ -117,6 +149,27 @@
       const dot = b.querySelector('.nav-dot')?.outerHTML || '';
       b.innerHTML = ico + h(T(key)) + dot;
     }
+    const titleKeys={overview:'overview',console:'observability',providers:'providers',models:'models',health:'health',cli:'connect',settings:'settings',routing:'routing'};
+    for(const [tab,key] of Object.entries(titleKeys)){const b=q(`nav button[data-tab="${tab}"]`);if(b)b.dataset.title=T(key);}
+    if(typeof subtitles!=='undefined'){
+      if(state.lang==='fa'){
+        subtitles.overview='سلامت مسیرها، ظرفیت، Failover و بازیابی در یک نمای ساده.';
+        subtitles.console='رویدادهای مسیریابی، خطا، Probe و بازیابی به‌صورت زنده.';
+        subtitles.providers='APIها، کلیدها و مدل‌های upstream را مدیریت کنید.';
+        subtitles.models='وضعیت هر deployment، تأخیر و سلامت مدل‌ها.';
+        subtitles.health='فشار Providerها، مدارهای سلامت و بازیابی.';
+        subtitles.cli='تنظیم آماده برای Claude Code و کلاینت‌های سازگار.';
+        subtitles.settings='تنظیمات موتور مسیریابی، Probe و امنیت.';
+      }else{
+        subtitles.overview='Health, capacity, failover and recovery in one operational view.';
+        subtitles.console='Routing, failure, probe and recovery events as they happen.';
+        subtitles.providers='Manage upstream APIs, credentials and model catalogs.';
+        subtitles.models='Deployment health, latency and routing state.';
+        subtitles.health='Provider pressure, health circuits and recovery.';
+        subtitles.cli='Ready-to-copy setup for Claude Code and compatible clients.';
+        subtitles.settings='Routing engine, probe and security controls.';
+      }
+    }
     const lb=q('#cpLangBtn'); if(lb) lb.textContent=T('language');
     const providerTitle=q('#providers .panelhead h2'); if(providerTitle) providerTitle.textContent=T('providers');
     const add=q('#addProviderBtn'); if(add) add.textContent='+ ' + T('addProvider');
@@ -124,6 +177,10 @@
     renderRoutingStudio();
     renderOnboarding();
     updateProviderWizardText();
+    translateProviderFields();
+    const active=q('nav button.active');
+    if(active && q('#title')) q('#title').textContent=active.dataset.title||q('#title').textContent;
+    if(active && typeof subtitles!=='undefined' && q('#subtitle')) q('#subtitle').textContent=subtitles[active.dataset.tab]||q('#subtitle').textContent;
   }
 
   function installTopbarTools() {
@@ -478,6 +535,7 @@
     syncProtocolMode();
     installSecretSavedState();
     enhanceModelPicker();
+    translateProviderFields();
     setProviderStep(0);
   }
 
