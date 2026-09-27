@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestSaveAtomicModeAndPreservesUserBackup(t *testing.T) {
+func TestSaveAtomicModeAndPreservesOperatorBackup(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
 	cfg := Default()
@@ -29,8 +29,12 @@ func TestSaveAtomicModeAndPreservesUserBackup(t *testing.T) {
 	if err := SaveAtomic(path, cfg); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(path + ".bak"); err != nil {
-		t.Fatalf("user backup was removed: %v", err)
+	backup, err := os.ReadFile(path + ".bak")
+	if err != nil {
+		t.Fatalf("operator backup was deleted: %v", err)
+	}
+	if string(backup) != "stale secret copy" {
+		t.Fatalf("operator backup was modified: %q", backup)
 	}
 	leftovers, err := filepath.Glob(filepath.Join(dir, ".config.json.tmp-*"))
 	if err != nil {

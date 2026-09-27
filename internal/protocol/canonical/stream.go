@@ -47,12 +47,19 @@ type StreamEvent struct {
 
 // SSEReader reads text/event-stream frames incrementally. It is dialect
 // agnostic: it only splits frames and hands `data:` payloads to callers.
+const (
+	maxSSEEventBytes   = 8 << 20
+	maxStreamTools     = 128
+	maxStreamToolIndex = 4096
+	maxStreamToolName  = 1024
+	maxStreamArgsDelta = 1 << 20
+)
+
 type SSEReader struct {
-	scanner    *bufio.Scanner
-	done       bool
-	eventName  string
-	dataBuffer []string
-	eventBytes int
+	scanner   *bufio.Scanner
+	done      bool
+	eventName string
+	data      strings.Builder
 }
 
 // NewSSEReader wraps an upstream body.
@@ -70,10 +77,9 @@ func (sr *SSEReader) Next() (name, data string, done bool, err error) {
 		switch {
 		case line == "":
 			// End of one SSE event block.
-			if len(sr.dataBuffer) > 0 {
-				payload := strings.Join(sr.dataBuffer, "\n")
-				sr.dataBuffer = sr.dataBuffer[:0]
-				sr.eventBytes = 0
+			if sr.data.Len() > 0 {
+				payload := sr.data.String()
+				sr.data.Reset()
 				evName := sr.eventName
 				sr.eventName = ""
 				return evName, payload, false, nil
@@ -85,7 +91,20 @@ func (sr *SSEReader) Next() (name, data string, done bool, err error) {
 		case strings.HasPrefix(line, "event:"):
 			sr.eventName = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
 		case strings.HasPrefix(line, "data:"):
-			sr.dataBuffer = append(sr.dataBuffer, strings.TrimPrefix(strings.TrimPrefix(line, "data:"), " "))
+			value := strings.TrimPrefix(strings.TrimPrefix(line, "data:"), " ")
+			extra := len(value)
+			if sr.data.Len() > 0 {
+				extra++
+			}
+			if sr.data.Len()+extra > maxSSEEventBytes {
+				sr.done = true
+				sr.data.Reset()
+				return "", "", false, fmt.Errorf("SSE event exceeds safe limit %d bytes", maxSSEEventBytes)
+			}
+			if sr.data.Len() > 0 {
+				sr.data.WriteByte('\n')
+			}
+			sr.data.WriteString(value)
 		case strings.HasPrefix(line, "id:"), strings.HasPrefix(line, "retry:"):
 			continue
 		}
@@ -100,9 +119,9 @@ func (sr *SSEReader) Next() (name, data string, done bool, err error) {
 	}
 	sr.done = true
 	// Flush a trailing block that lacked the final blank line.
-	if len(sr.dataBuffer) > 0 {
-		payload := strings.Join(sr.dataBuffer, "\n")
-		sr.dataBuffer = sr.dataBuffer[:0]
+	if sr.data.Len() > 0 {
+		payload := sr.data.String()
+		sr.data.Reset()
 		return sr.eventName, payload, false, nil
 	}
 	return "", "", true, nil
@@ -679,9 +698,6 @@ type openAIEmitter struct {
 	id         string
 	created    int64
 	writeErr   error
-	toolArgs   map[int]*strings.Builder
-	toolNames  map[int]string
-	toolIDs    map[int]string
 	emittedAny bool
 	finish     string
 	usage      *Usage
@@ -696,10 +712,7 @@ func NewOpenAIEmitter(w http.ResponseWriter, model string) StreamEmitter {
 	w.Header().Set("X-Accel-Buffering", "no")
 	e := &openAIEmitter{
 		w: w, fl: fl, model: model, created: timeNow(),
-		id:        fmt.Sprintf("chatcmpl-%d", messageClock()),
-		toolArgs:  map[int]*strings.Builder{},
-		toolNames: map[int]string{},
-		toolIDs:   map[int]string{},
+		id: fmt.Sprintf("chatcmpl-%d", messageClock()),
 	}
 	return e
 }
@@ -736,15 +749,11 @@ func (e *openAIEmitter) Emit(ev StreamEvent) error {
 	case StreamThinking:
 		e.chunk(map[string]any{"choices": []any{map[string]any{"index": 0, "delta": map[string]any{"reasoning_content": ev.Text}, "finish_reason": nil}}})
 	case StreamToolStart:
+		if ev.ToolIndex < 0 || ev.ToolIndex > maxStreamToolIndex || len(ev.ToolName) > maxStreamToolName {
+			return fmt.Errorf("stream tool metadata exceeds safe limit")
+		}
 		e.emittedAny = true
 		name := ev.ToolName
-		if ev.ToolIndex >= 0 {
-			e.toolNames[ev.ToolIndex] = name
-			e.toolIDs[ev.ToolIndex] = ev.ToolID
-			if _, ok := e.toolArgs[ev.ToolIndex]; !ok {
-				e.toolArgs[ev.ToolIndex] = &strings.Builder{}
-			}
-		}
 		id := ev.ToolID
 		if id == "" {
 			id = fmt.Sprintf("call_%d", ev.ToolIndex)
@@ -752,13 +761,9 @@ func (e *openAIEmitter) Emit(ev StreamEvent) error {
 		e.chunk(map[string]any{"choices": []any{map[string]any{"index": 0, "delta": map[string]any{
 			"tool_calls": []any{map[string]any{"index": ev.ToolIndex, "id": id, "type": "function", "function": map[string]any{"name": name, "arguments": ""}}}}, "finish_reason": nil}}})
 	case StreamToolDelta:
-		buf, ok := e.toolArgs[ev.ToolIndex]
-		if !ok {
-			buf = &strings.Builder{}
-			e.toolArgs[ev.ToolIndex] = buf
-			e.toolIDs[ev.ToolIndex] = fmt.Sprintf("call_%d", ev.ToolIndex)
+		if ev.ToolIndex < 0 || ev.ToolIndex > maxStreamToolIndex || len(ev.ArgsDelta) > maxStreamArgsDelta {
+			return fmt.Errorf("stream tool delta exceeds safe limit")
 		}
-		buf.WriteString(ev.ArgsDelta)
 		e.emittedAny = true
 		e.chunk(map[string]any{"choices": []any{map[string]any{"index": 0, "delta": map[string]any{
 			"tool_calls": []any{map[string]any{"index": ev.ToolIndex, "function": map[string]any{"arguments": ev.ArgsDelta}}},
@@ -887,6 +892,12 @@ func (e *responsesEmitter) Emit(ev StreamEvent) error {
 			"summary_index": 0, "delta": ev.Text,
 		})
 	case StreamToolStart:
+		if ev.ToolIndex < 0 || ev.ToolIndex > maxStreamToolIndex || len(ev.ToolName) > maxStreamToolName {
+			return fmt.Errorf("stream tool metadata exceeds safe limit")
+		}
+		if _, exists := e.toolIdx[ev.ToolIndex]; !exists && len(e.toolIdx) >= maxStreamTools {
+			return fmt.Errorf("stream exceeds safe tool count %d", maxStreamTools)
+		}
 		callID := ev.ToolID
 		if callID == "" {
 			callID = fmt.Sprintf("call_%d", ev.ToolIndex)
@@ -900,16 +911,13 @@ func (e *responsesEmitter) Emit(ev StreamEvent) error {
 			"item": map[string]any{"type": "function_call", "id": "fc_" + callID, "call_id": callID, "name": ev.ToolName, "arguments": "", "status": "in_progress"},
 		})
 	case StreamToolDelta:
+		if ev.ToolIndex < 0 || ev.ToolIndex > maxStreamToolIndex || len(ev.ArgsDelta) > maxStreamArgsDelta {
+			return fmt.Errorf("stream tool delta exceeds safe limit")
+		}
 		callID, ok := e.toolIdx[ev.ToolIndex]
 		outIdx, outOK := e.toolOutIdx[ev.ToolIndex]
-		if !ok {
-			callID = fmt.Sprintf("call_%d", ev.ToolIndex)
-			e.toolIdx[ev.ToolIndex] = callID
-		}
-		if !outOK {
-			outIdx = e.nextOutIdx
-			e.nextOutIdx++
-			e.toolOutIdx[ev.ToolIndex] = outIdx
+		if !ok || !outOK {
+			return fmt.Errorf("stream tool delta arrived before tool start")
 		}
 		e.event("response.function_call_arguments.delta", map[string]any{
 			"type": "response.function_call_arguments.delta", "item_id": "fc_" + callID,
@@ -918,13 +926,8 @@ func (e *responsesEmitter) Emit(ev StreamEvent) error {
 	case StreamToolEnd:
 		callID, ok := e.toolIdx[ev.ToolIndex]
 		outIdx, outOK := e.toolOutIdx[ev.ToolIndex]
-		if !ok {
-			callID = fmt.Sprintf("call_%d", ev.ToolIndex)
-		}
-		if !outOK {
-			outIdx = e.nextOutIdx
-			e.nextOutIdx++
-			e.toolOutIdx[ev.ToolIndex] = outIdx
+		if !ok || !outOK {
+			return fmt.Errorf("stream tool end arrived before tool start")
 		}
 		e.event("response.function_call_arguments.done", map[string]any{
 			"type": "response.function_call_arguments.done", "item_id": "fc_" + callID, "output_index": outIdx, "arguments": "",

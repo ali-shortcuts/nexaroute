@@ -373,8 +373,17 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 			if router.IsReadyStrategy(cfg.Routing.Strategy) {
 				s.hm.Quarantine(deployment.ID, lastErr, time.Since(start))
 				s.probe.Recover(deployment.ID)
-			} else if policy.HardCooldown {
-				s.hm.ForceCooldown(deployment.ID, lastErr, cfg.Cooldown())
+			} else {
+				// Legacy strategies still need deployment-level failure evidence;
+				// otherwise Responses transport failures never affect health.
+				s.hm.RecordFailure(deployment.ID, lastErr, time.Since(start))
+				if policy.HardCooldown {
+					s.hm.ForceCooldown(deployment.ID, lastErr, cfg.Cooldown())
+				}
+			}
+			if gatewayDeadlineExceeded(routeCtx, r.Context()) {
+				canonicalErrorJSON(w, "openai_responses", http.StatusGatewayTimeout, "timeout", "gateway request timeout")
+				return
 			}
 			if attempts < max && i+1 < len(candidates) {
 				s.retryPause(routeCtx, r.Header.Get("x-request-id"), cfg, attempts-1, max)
@@ -490,6 +499,10 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 			ev.Pool = resolvedRoute.PrimaryPoolID
 		}
 		s.bus.Add(ev)
+		return
+	}
+	if gatewayDeadlineExceeded(routeCtx, r.Context()) {
+		canonicalErrorJSON(w, "openai_responses", http.StatusGatewayTimeout, "timeout", "gateway request timeout")
 		return
 	}
 	if lastErr == "" {

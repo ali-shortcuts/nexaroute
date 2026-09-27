@@ -146,6 +146,10 @@ func (r *ReplayExecutor) UpstreamCalls() int { return 0 }
 
 var errNoArtifact = errors.New("no recorded artifact for case")
 
+// ErrMissingEvidence lets external executors report an intentional absence of
+// case evidence without being misclassified as an infrastructure failure.
+var ErrMissingEvidence = errors.New("missing evaluation evidence")
+
 // Runner executes suites. It is stateless apart from the evaluator registry, so
 // concurrent runs are safe.
 type Runner struct {
@@ -242,37 +246,96 @@ type Result struct {
 
 // Validate bounds a result read back from persistence or a client payload.
 func (r Result) Validate() error {
-	if r.RunID == "" || r.SuiteID == "" || r.DeploymentID == "" {
+	if strings.TrimSpace(r.RunID) == "" || strings.TrimSpace(r.SuiteID) == "" || strings.TrimSpace(r.DeploymentID) == "" {
 		return errors.New("evaluation result requires run_id, suite_id and deployment_id")
 	}
-	if len(r.Cases) > MaxOutcomesPerRun {
-		return errors.New("evaluation result exceeds case bound")
+	for label, value := range map[string]string{
+		"run_id": r.RunID, "suite_id": r.SuiteID, "suite_version": r.SuiteVersion,
+		"deployment_id": r.DeploymentID, "provider_id": r.ProviderID,
+	} {
+		if len(value) > 256 {
+			return fmt.Errorf("evaluation result %s exceeds safe limit", label)
+		}
+	}
+	if len(r.Model) > 1024 || len(r.Reason) > MaxReasonBytes {
+		return errors.New("evaluation result text field exceeds safe limit")
+	}
+	if len(r.Cases) > MaxOutcomesPerRun || len(r.Evaluators) > MaxEvaluators || len(r.Extra) > 64 {
+		return errors.New("evaluation result exceeds collection bound")
+	}
+	if r.DurationMS < 0 || r.Samples < 0 || r.Upstream < 0 {
+		return errors.New("evaluation result has negative counters")
 	}
 	if !finite01(r.Score) {
 		return errors.New("evaluation score must be finite and between 0 and 1")
 	}
-	if len(r.Reason) > MaxReasonBytes || len(r.Cases) > MaxOutcomesPerRun {
-		return errors.New("evaluation result metadata exceeds safe limit")
-	}
-	for _, c := range r.Cases {
-		if strings.TrimSpace(c.CaseID) == "" || len(c.CaseID) > 256 || len(c.ErrorType) > MaxReasonBytes || len(c.Verdicts) > MaxVerdictsPerCase {
-			return errors.New("evaluation case exceeds safe limit")
+	computed := map[Verdict]int{}
+	decisive := 0
+	for _, cr := range r.Cases {
+		if strings.TrimSpace(cr.CaseID) == "" || len(cr.CaseID) > 256 || len(cr.ErrorType) > MaxReasonBytes || len(cr.Resolution) > 64 {
+			return errors.New("evaluation case result exceeds safe limit")
 		}
-		if c.Weight < 0 || math.IsNaN(c.Weight) || math.IsInf(c.Weight, 0) {
-			return errors.New("evaluation case weight is invalid")
+		if !cr.Verdict.Valid() || cr.LatencyMS < 0 || math.IsNaN(cr.Weight) || math.IsInf(cr.Weight, 0) || cr.Weight < 0 {
+			return errors.New("evaluation case result is invalid")
 		}
-		for _, v := range c.Verdicts {
-			if len(v.EvaluatorID) > 256 || len(v.Reason) > MaxReasonBytes || !v.Verdict.Valid() {
-				return errors.New("evaluation verdict is invalid")
+		if len(cr.Verdicts) > MaxVerdictsPerCase {
+			return errors.New("evaluation case exceeds verdict bound")
+		}
+		for _, vr := range cr.Verdicts {
+			if strings.TrimSpace(vr.EvaluatorID) == "" || len(vr.EvaluatorID) > 256 || len(vr.Reason) > MaxReasonBytes || !vr.Verdict.Valid() {
+				return errors.New("evaluation verdict result exceeds safe limit")
+			}
+			if vr.Kind != KindDeterministic && vr.Kind != KindJudge {
+				return errors.New("evaluation verdict result has unknown kind")
 			}
 		}
+		computed[cr.Verdict]++
+		if cr.Verdict.Decisive() {
+			decisive++
+		}
 	}
-	if r.Quality != nil && (!finite01(r.Quality.Score) || !finite01(r.Quality.Confidence) || r.Quality.Samples < 0) {
-		return errors.New("evaluation quality dimension is invalid")
+	for v, n := range r.Counts {
+		if !v.Valid() || n < 0 {
+			return errors.New("evaluation result verdict counts are invalid")
+		}
+	}
+	// Persisted results produced by older bounded stores may contain aggregate
+	// counts without case detail. When case detail is present, however, the
+	// aggregate must match it exactly.
+	if len(r.Cases) > 0 {
+		for v, n := range r.Counts {
+			if computed[v] != n {
+				return errors.New("evaluation result verdict counts are inconsistent")
+			}
+		}
+		for v, n := range computed {
+			if r.Counts[v] != n {
+				return errors.New("evaluation result verdict counts are incomplete")
+			}
+		}
+		if r.Samples != decisive {
+			return errors.New("evaluation result sample count is inconsistent")
+		}
+	}
+	for _, id := range r.Evaluators {
+		if strings.TrimSpace(id) == "" || len(id) > 256 {
+			return errors.New("evaluation result evaluator id exceeds safe limit")
+		}
+	}
+	validateDimension := func(d DimensionScore) error {
+		if !finite01(d.Score) || !finite01(d.Confidence) || math.IsNaN(d.Raw) || math.IsInf(d.Raw, 0) || d.Samples < 0 {
+			return errors.New("evaluation dimension score is invalid")
+		}
+		return nil
+	}
+	if r.Quality != nil {
+		if err := validateDimension(*r.Quality); err != nil {
+			return err
+		}
 	}
 	for _, d := range r.Extra {
-		if !finite01(d.Score) || !finite01(d.Confidence) || d.Samples < 0 {
-			return errors.New("evaluation dimension is invalid")
+		if err := validateDimension(d); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -365,8 +428,8 @@ func (r *Runner) RunWithExecutor(ctx context.Context, req Request, exec Executor
 				switch {
 				case errors.Is(err, errNoArtifact):
 					cr.ErrorType = "missing_artifact"
-				case strings.Contains(err.Error(), "missing prompt"):
-					cr.ErrorType = "missing_prompt"
+				case errors.Is(err, ErrMissingEvidence):
+					cr.ErrorType = "missing_evidence"
 				case errors.Is(err, context.DeadlineExceeded):
 					cr.Verdict = VerdictError
 					cr.Resolution = "timeout"
