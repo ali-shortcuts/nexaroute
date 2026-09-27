@@ -443,13 +443,18 @@ function renderRoutingObservatory(h, ds) {
   $('#obsResult').className = result.toLowerCase();
 
   const stateByDeployment = {};
+  const statePriority = { retired: 50, unavailable: 40, cooldown: 30, success: 25, failed: 20, active: 10 };
+  const setDeploymentState = (deployment, next) => {
+    const current = stateByDeployment[deployment];
+    if (!current || (statePriority[next] || 0) >= (statePriority[current] || 0)) stateByDeployment[deployment] = next;
+  };
   for (const e of requestEvents) {
     if (!e.deployment) continue;
-    if (e.kind === 'model_retired') stateByDeployment[e.deployment] = 'retired';
-    else if (e.kind === 'model_unavailable') stateByDeployment[e.deployment] = 'unavailable';
-    else if (e.kind === 'route_ok') stateByDeployment[e.deployment] = 'success';
+    if (e.kind === 'model_retired') setDeploymentState(e.deployment, 'retired');
+    else if (e.kind === 'model_unavailable') setDeploymentState(e.deployment, 'unavailable');
+    else if (e.kind === 'route_ok') setDeploymentState(e.deployment, 'success');
     else if (e.kind === 'route_fail' || e.kind === 'route_timeout' || e.kind === 'response_decode_fail' || e.kind === 'stream_fail_precommit') {
-      stateByDeployment[e.deployment] = e.error_type === 'provider_rate_limited' ? 'cooldown' : 'failed';
+      setDeploymentState(e.deployment, e.error_type === 'provider_rate_limited' ? 'cooldown' : 'failed');
     }
   }
   const attempts = requestEvents.filter(e => e.kind === 'route_attempt');
