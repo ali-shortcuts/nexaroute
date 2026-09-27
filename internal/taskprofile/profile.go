@@ -1,5 +1,7 @@
 package taskprofile
 
+import "math"
+
 // TaskProfile is the deterministic classification result.
 // It is derived solely from RequestFeatures, never from raw prompts.
 type TaskProfile struct {
@@ -28,11 +30,19 @@ type TaskProfile struct {
 	MessageCount int  `json:"message_count"`
 }
 
+// Valid reports whether the profile is well formed.
+//
+// Confidence is checked for finiteness as well as range: NaN compares false
+// against every bound, so a range check alone lets a malformed profile through
+// as valid.
 func (p TaskProfile) Valid() bool {
 	if !p.Type.Valid() {
 		return false
 	}
 	if !p.Complexity.Valid() {
+		return false
+	}
+	if math.IsNaN(p.Confidence) || math.IsInf(p.Confidence, 0) {
 		return false
 	}
 	if p.Confidence < 0 || p.Confidence > 1 {
