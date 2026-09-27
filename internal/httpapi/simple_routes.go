@@ -83,7 +83,7 @@ func (s *Server) adminSimpleRouteByID(w http.ResponseWriter, r *http.Request) {
 			if cfg.VirtualEndpoints[idx].RouteProfile != simpleProfileID(id) {
 				return fmt.Errorf("virtual endpoint %q is advanced-managed and cannot be edited as a simple route", id)
 			}
-			removeSimpleRoutePrimitives(cfg, id, false)
+			removeSimpleRoutePrimitives(cfg, id)
 			compileSimpleRoute(cfg, in)
 			return nil
 		}); err != nil {
@@ -101,7 +101,7 @@ func (s *Server) adminSimpleRouteByID(w http.ResponseWriter, r *http.Request) {
 			if cfg.VirtualEndpoints[idx].RouteProfile != simpleProfileID(id) {
 				return fmt.Errorf("virtual endpoint %q is advanced-managed and cannot be deleted as a simple route", id)
 			}
-			removeSimpleRoutePrimitives(cfg, id, true)
+			removeSimpleRoutePrimitives(cfg, id)
 			return nil
 		}); err != nil {
 			errorJSON(w, http.StatusBadRequest, err.Error())
@@ -222,7 +222,7 @@ func compileSimpleRoute(cfg *config.Config, in simpleRouteForm) {
 	})
 }
 
-func removeSimpleRoutePrimitives(cfg *config.Config, id string, removeEndpoint bool) {
+func removeSimpleRoutePrimitives(cfg *config.Config, id string) {
 	profileID, poolID, fallbackID, stagePrefix := simpleProfileID(id), simplePoolID(id), simpleFallbackID(id), simpleStagePrefix(id)
 
 	// Determine only the pools owned by this simple route. Never sweep every
@@ -275,7 +275,6 @@ func removeSimpleRoutePrimitives(cfg *config.Config, id string, removeEndpoint b
 	}
 	cfg.CandidatePools = cp
 
-	_ = removeEndpoint // retained for call-site compatibility; both paths are atomic.
 }
 
 func poolReferenced(cfg *config.Config, poolID string) bool {
