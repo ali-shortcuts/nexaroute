@@ -295,17 +295,27 @@ func (r Result) Validate() error {
 		}
 	}
 	for v, n := range r.Counts {
-		if !v.Valid() || n < 0 || computed[v] != n {
-			return errors.New("evaluation result verdict counts are inconsistent")
+		if !v.Valid() || n < 0 {
+			return errors.New("evaluation result verdict counts are invalid")
 		}
 	}
-	for v, n := range computed {
-		if r.Counts[v] != n {
-			return errors.New("evaluation result verdict counts are incomplete")
+	// Persisted results produced by older bounded stores may contain aggregate
+	// counts without case detail. When case detail is present, however, the
+	// aggregate must match it exactly.
+	if len(r.Cases) > 0 {
+		for v, n := range r.Counts {
+			if computed[v] != n {
+				return errors.New("evaluation result verdict counts are inconsistent")
+			}
 		}
-	}
-	if r.Samples != decisive {
-		return errors.New("evaluation result sample count is inconsistent")
+		for v, n := range computed {
+			if r.Counts[v] != n {
+				return errors.New("evaluation result verdict counts are incomplete")
+			}
+		}
+		if r.Samples != decisive {
+			return errors.New("evaluation result sample count is inconsistent")
+		}
 	}
 	for _, id := range r.Evaluators {
 		if strings.TrimSpace(id) == "" || len(id) > 256 {
