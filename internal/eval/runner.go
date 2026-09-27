@@ -146,6 +146,10 @@ func (r *ReplayExecutor) UpstreamCalls() int { return 0 }
 
 var errNoArtifact = errors.New("no recorded artifact for case")
 
+// ErrMissingEvidence lets external executors report an intentional absence of
+// case evidence without being misclassified as an infrastructure failure.
+var ErrMissingEvidence = errors.New("missing evaluation evidence")
+
 // Runner executes suites. It is stateless apart from the evaluator registry, so
 // concurrent runs are safe.
 type Runner struct {
@@ -242,14 +246,87 @@ type Result struct {
 
 // Validate bounds a result read back from persistence or a client payload.
 func (r Result) Validate() error {
-	if r.RunID == "" || r.SuiteID == "" || r.DeploymentID == "" {
+	if strings.TrimSpace(r.RunID) == "" || strings.TrimSpace(r.SuiteID) == "" || strings.TrimSpace(r.DeploymentID) == "" {
 		return errors.New("evaluation result requires run_id, suite_id and deployment_id")
 	}
-	if len(r.Cases) > MaxOutcomesPerRun {
-		return errors.New("evaluation result exceeds case bound")
+	for label, value := range map[string]string{
+		"run_id": r.RunID, "suite_id": r.SuiteID, "suite_version": r.SuiteVersion,
+		"deployment_id": r.DeploymentID, "provider_id": r.ProviderID,
+	} {
+		if len(value) > 256 {
+			return fmt.Errorf("evaluation result %s exceeds safe limit", label)
+		}
+	}
+	if len(r.Model) > 1024 || len(r.Reason) > MaxReasonBytes {
+		return errors.New("evaluation result text field exceeds safe limit")
+	}
+	if len(r.Cases) > MaxOutcomesPerRun || len(r.Evaluators) > MaxEvaluators || len(r.Extra) > 64 {
+		return errors.New("evaluation result exceeds collection bound")
+	}
+	if r.DurationMS < 0 || r.Samples < 0 || r.Upstream < 0 {
+		return errors.New("evaluation result has negative counters")
 	}
 	if !finite01(r.Score) {
 		return errors.New("evaluation score must be finite and between 0 and 1")
+	}
+	computed := map[Verdict]int{}
+	decisive := 0
+	for _, cr := range r.Cases {
+		if strings.TrimSpace(cr.CaseID) == "" || len(cr.CaseID) > 256 || len(cr.ErrorType) > MaxReasonBytes || len(cr.Resolution) > 64 {
+			return errors.New("evaluation case result exceeds safe limit")
+		}
+		if !cr.Verdict.Valid() || cr.LatencyMS < 0 || math.IsNaN(cr.Weight) || math.IsInf(cr.Weight, 0) || cr.Weight < 0 {
+			return errors.New("evaluation case result is invalid")
+		}
+		if len(cr.Verdicts) > MaxVerdictsPerCase {
+			return errors.New("evaluation case exceeds verdict bound")
+		}
+		for _, vr := range cr.Verdicts {
+			if strings.TrimSpace(vr.EvaluatorID) == "" || len(vr.EvaluatorID) > 256 || len(vr.Reason) > MaxReasonBytes || !vr.Verdict.Valid() {
+				return errors.New("evaluation verdict result exceeds safe limit")
+			}
+			if vr.Kind != KindDeterministic && vr.Kind != KindJudge {
+				return errors.New("evaluation verdict result has unknown kind")
+			}
+		}
+		computed[cr.Verdict]++
+		if cr.Verdict.Decisive() {
+			decisive++
+		}
+	}
+	for v, n := range r.Counts {
+		if !v.Valid() || n < 0 || computed[v] != n {
+			return errors.New("evaluation result verdict counts are inconsistent")
+		}
+	}
+	for v, n := range computed {
+		if r.Counts[v] != n {
+			return errors.New("evaluation result verdict counts are incomplete")
+		}
+	}
+	if r.Samples != decisive {
+		return errors.New("evaluation result sample count is inconsistent")
+	}
+	for _, id := range r.Evaluators {
+		if strings.TrimSpace(id) == "" || len(id) > 256 {
+			return errors.New("evaluation result evaluator id exceeds safe limit")
+		}
+	}
+	validateDimension := func(d DimensionScore) error {
+		if !finite01(d.Score) || !finite01(d.Confidence) || math.IsNaN(d.Raw) || math.IsInf(d.Raw, 0) || d.Samples < 0 {
+			return errors.New("evaluation dimension score is invalid")
+		}
+		return nil
+	}
+	if r.Quality != nil {
+		if err := validateDimension(*r.Quality); err != nil {
+			return err
+		}
+	}
+	for _, d := range r.Extra {
+		if err := validateDimension(d); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -341,6 +418,8 @@ func (r *Runner) RunWithExecutor(ctx context.Context, req Request, exec Executor
 				switch {
 				case errors.Is(err, errNoArtifact):
 					cr.ErrorType = "missing_artifact"
+				case errors.Is(err, ErrMissingEvidence):
+					cr.ErrorType = "missing_evidence"
 				case errors.Is(err, context.DeadlineExceeded):
 					cr.Verdict = VerdictError
 					cr.Resolution = "timeout"
@@ -377,15 +456,17 @@ func (r *Runner) RunWithExecutor(ctx context.Context, req Request, exec Executor
 				}
 				verdicts = append(verdicts, e.Evaluate(caseCtx, c, outcome))
 			}
-			for _, e := range r.registry.Judges() {
-				if len(verdicts) >= MaxVerdictsPerCase {
-					break
+			if req.JudgeEnabled {
+				for _, e := range r.registry.Judges() {
+					if len(verdicts) >= MaxVerdictsPerCase {
+						break
+					}
+					vr := e.Evaluate(caseCtx, c, outcome)
+					if vr.Verdict != VerdictUnjudged {
+						res.JudgeUsed = true
+					}
+					verdicts = append(verdicts, vr)
 				}
-				vr := e.Evaluate(caseCtx, c, outcome)
-				if vr.Verdict != VerdictUnjudged {
-					res.JudgeUsed = true
-				}
-				verdicts = append(verdicts, vr)
 			}
 			verdict, resolution := Resolve(verdicts, req.JudgeEnabled)
 			cr.Verdict = verdict
