@@ -60,7 +60,7 @@ func TestControlPlaneV2KeepsSimpleAndAdvancedRouting(t *testing.T) {
 		"advancedPool",
 		"advancedProfile",
 		"advancedVirtual",
-		"Provider 1",
+		"nextProviderIdentity",
 		"Select all",
 		"Saved credential",
 		"fa:",
