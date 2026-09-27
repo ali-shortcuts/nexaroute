@@ -40,7 +40,7 @@ with open(dst, 'w', encoding='utf-8') as f:
     json.dump(cfg, f, indent=2)
 PY
 chmod 600 "$TMP/config.json"
-printf %s "stale backup must be removed" > "$TMP/config.json.bak"
+printf %s "operator backup must be preserved" > "$TMP/config.json.bak"
 chmod 600 "$TMP/config.json.bak"
 
 "$BIN" -no-browser -config "$TMP/config.json" >"$TMP/gateway.log" 2>&1 &
@@ -137,15 +137,15 @@ PYSECRET
 
 expect_status 200 "$(status DELETE "$BASE/admin/api/providers/smoke-openai")" "provider delete"
 
-if [[ -e "$TMP/config.json.bak" ]]; then
-  echo "FAIL backup file was created: $TMP/config.json.bak" >&2
+if [[ ! -f "$TMP/config.json.bak" ]] || [[ "$(cat "$TMP/config.json.bak")" != "operator backup must be preserved" ]]; then
+  echo "FAIL operator backup was removed or modified: $TMP/config.json.bak" >&2
   exit 1
 fi
 if compgen -G "$TMP/.config.json.tmp-*" >/dev/null; then
   echo "FAIL temporary config file leaked" >&2
   exit 1
 fi
-echo "PASS backup-free atomic config persistence"
+echo "PASS atomic config persistence preserves operator backups"
 
 if ! kill -0 "$PID" 2>/dev/null; then
   echo "NexaRoute died during smoke test" >&2
