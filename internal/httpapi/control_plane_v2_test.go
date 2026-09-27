@@ -26,7 +26,7 @@ func TestControlPlaneV2AssetsAreEmbedded(t *testing.T) {
 
 func TestControlPlaneV2HasNoNativeBrowserDialogs(t *testing.T) {
 	files := []string{"web/app.js", "web/control-plane-v2.js"}
-	native := regexp.MustCompile(`(^|[^.A-Za-z0-9_])(prompt|confirm|alert)s*(`)
+	native := regexp.MustCompile(`(^|[^.A-Za-z0-9_])(prompt|confirm|alert)\\s*\\(`)
 	for _, name := range files {
 		b, err := webFS.ReadFile(name)
 		if err != nil {
