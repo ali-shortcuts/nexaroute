@@ -872,10 +872,10 @@ func rewriteAnthropicSSEModelLine(line []byte, model string) []byte {
 }
 
 const (
-	maxTranslatedStreamTools     = 128
-	maxTranslatedToolIndex       = 4096
-	maxTranslatedToolNameBytes   = 1024
-	maxTranslatedArgsDeltaBytes  = 1 << 20
+	maxTranslatedStreamTools    = 128
+	maxTranslatedToolIndex      = 4096
+	maxTranslatedToolNameBytes  = 1024
+	maxTranslatedArgsDeltaBytes = 1 << 20
 )
 
 type openAIToolStreamState struct {
