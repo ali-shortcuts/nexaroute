@@ -474,7 +474,10 @@ func Default() Config {
 	}
 }
 
-func Load(path string) (Config, error) {
+// LoadBase reads only the durable file configuration. Runtime environment
+// overrides are deliberately excluded so a later Admin API save cannot
+// accidentally persist process-scoped values or injected secrets.
+func LoadBase(path string) (Config, error) {
 	cfg := Default()
 	f, err := os.Open(path)
 	if err != nil {
@@ -489,6 +492,18 @@ func Load(path string) (Config, error) {
 		return cfg, fmt.Errorf("config exceeds safe limit %d bytes", maxConfigBytes)
 	}
 	if err := json.Unmarshal(b, &cfg); err != nil {
+		return cfg, err
+	}
+	cfg.ApplyDefaults()
+	if err := cfg.Validate(); err != nil {
+		return cfg, err
+	}
+	return cfg, nil
+}
+
+func Load(path string) (Config, error) {
+	cfg, err := LoadBase(path)
+	if err != nil {
 		return cfg, err
 	}
 	if err := cfg.ApplyEnvOverrides(); err != nil {
@@ -506,9 +521,11 @@ func (c *Config) ApplyEnvOverrides() error {
 		c.Listen = v
 	}
 	if v, ok := os.LookupEnv("NEXAROUTE_ADMIN_KEY"); ok {
-		// An empty value (e.g. Environment=NEXAROUTE_ADMIN_KEY= in a systemd
-		// unit) must not silently disable key auth over a file-provided key.
-		c.Admin.APIKey = strings.TrimSpace(v)
+		// Empty/whitespace environment values never erase a durable admin key.
+		// Deliberate key removal must happen through an explicit config edit.
+		if v = strings.TrimSpace(v); v != "" {
+			c.Admin.APIKey = v
+		}
 	}
 	if v, ok := os.LookupEnv("NEXAROUTE_ADMIN_BIND_LOCAL_ONLY"); ok {
 		b, err := strconv.ParseBool(strings.TrimSpace(v))
@@ -1748,9 +1765,8 @@ func RemoveStaleBackup(path string) error {
 }
 
 func SaveAtomic(path string, c Config) error {
-	if err := RemoveStaleBackup(path); err != nil {
-		return err
-	}
+	// Never delete a sibling .bak file: it may be an operator-created recovery
+	// copy containing the only usable credentials/configuration.
 	c.ApplyDefaults()
 	if err := c.Validate(); err != nil {
 		return err
