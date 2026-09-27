@@ -37,17 +37,21 @@ no usable route yet, not a failed installation.
 
 ## 4. Create a route
 
-Use the **Pools**, **Profiles**, and **Endpoints** sidebar pages:
+Open **Routing → Create route**:
 
-1. In **Pools**, create a **candidate pool** (for example `coding`). Use `explicit` and select
-   deployment IDs such as `my-provider/my-model-id`, or `all` for all candidates.
-2. In **Profiles**, create a **route profile** (for example `coding`) that uses that pool.
-3. In **Endpoints**, create and enable a **virtual endpoint** with public model `claude-coding`,
-   the `coding` route profile. The default endpoint protocols include Anthropic Messages.
+1. Give the route a display name and stable public model name, for example `coding`.
+2. Select one or more provider/model deployments.
+3. Choose **Automatic** to let NexaRoute select among healthy eligible deployments,
+   or **Ordered fallback** to preserve an explicit fallback order.
+4. Save the route. The backend applies the Candidate Pool → Route Profile →
+   Virtual Endpoint mutation atomically.
 
-Providers, models/deployments, pools, profiles, endpoints, and enabled states
-persist automatically. The model/deployment and compatibility views show health;
-there is no need to wait for all providers before editing configuration.
+Advanced users can still manage Candidate Pools, Route Profiles, Virtual
+Endpoints, Fallback Chains, and compatibility details from **Routing → Advanced**.
+
+Providers, models/deployments, routes, and enabled states persist automatically.
+The model/deployment and observability views show live health; there is no need
+to wait for every provider before continuing configuration.
 
 ## 5. Connect Claude Code
 
@@ -56,7 +60,7 @@ In another terminal, with Claude Code already installed:
 ```bash
 export ANTHROPIC_BASE_URL=http://127.0.0.1:8080
 export ANTHROPIC_AUTH_TOKEN=nexaroute-local
-claude --model claude-coding
+claude --model coding
 ```
 
 `nexaroute-local` is a placeholder for the default loopback-only gateway with
