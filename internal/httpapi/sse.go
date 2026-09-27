@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"bufio"
+	"fmt"
 	"io"
 	"strings"
 )
@@ -18,6 +19,8 @@ type sseEvent struct {
 // tolerated, and unknown fields (id, retry, event) never terminate a frame.
 // Naive line-by-line "data:" scanning drops multi-line payloads, which real
 // providers and proxy layers occasionally emit.
+const maxSSEEventBytes = 8 << 20
+
 type sseReader struct {
 	sc     *bufio.Scanner
 	event  string
@@ -60,6 +63,15 @@ func (s *sseReader) Next() (ev sseEvent, done bool, err error) {
 				s.event = value
 				s.hasAny = true
 			case "data":
+				extra := len(value)
+				if s.data.Len() > 0 {
+					extra++
+				}
+				if s.data.Len()+extra > maxSSEEventBytes {
+					s.data.Reset()
+					s.hasAny = false
+					return sseEvent{}, false, fmt.Errorf("SSE event exceeds safe limit %d bytes", maxSSEEventBytes)
+				}
 				if s.data.Len() > 0 {
 					s.data.WriteByte('\n')
 				}
