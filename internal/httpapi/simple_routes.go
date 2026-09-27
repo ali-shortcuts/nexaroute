@@ -155,9 +155,9 @@ func normalizeSimpleRoute(in *simpleRouteForm) error {
 	return nil
 }
 
-func simpleProfileID(id string) string { return id + "-profile" }
-func simplePoolID(id string) string    { return id + "-pool" }
-func simpleFallbackID(id string) string { return id + "-fallback" }
+func simpleProfileID(id string) string   { return id + "-profile" }
+func simplePoolID(id string) string      { return id + "-pool" }
+func simpleFallbackID(id string) string  { return id + "-fallback" }
 func simpleStagePrefix(id string) string { return id + "-stage-" }
 
 func findVirtualEndpoint(cfg *config.Config, id string) int {
