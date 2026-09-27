@@ -154,6 +154,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 	var lastBody []byte
 	var lastContentType string
 	var lastRetryAfter string
+	var shieldTerminal bool
 	var gatewayTimedOut bool
 	forward := copySelectedRequestHeaders(r)
 
@@ -335,9 +336,10 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			if policy.Failover {
-				// Candidate set is exhausted. Do not expose the last provider's raw
-				// model/provider failure to the client; emit one normalized terminal
-				// gateway error after the loop.
+				// Preserve legacy terminal status/body semantics for a lone upstream,
+				// while shielding multi-candidate failover chains (and model
+				// lifecycle errors) from leaking the final physical provider failure.
+				shieldTerminal = len(candidates) > 1 || cls.Class == compat.ClassModelRetired || cls.Class == compat.ClassModelTemporarilyUnavailable
 				break
 			}
 			if lastRetryAfter != "" {
@@ -480,8 +482,12 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		if lastRetryAfter != "" {
 			w.Header().Set("Retry-After", lastRetryAfter)
 		}
-		s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "candidate_exhausted", Message: "all eligible upstream deployments failed", ErrorType: "candidate_exhausted", StatusCode: http.StatusServiceUnavailable})
-		anthropicErrorJSON(w, http.StatusServiceUnavailable, "all eligible upstream deployments failed")
+		if shieldTerminal {
+			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "candidate_exhausted", Message: "all eligible upstream deployments failed", ErrorType: "candidate_exhausted", StatusCode: http.StatusServiceUnavailable})
+			anthropicErrorJSON(w, http.StatusServiceUnavailable, "all eligible upstream deployments failed")
+			return
+		}
+		writeRawUpstreamError(w, lastStatus, lastContentType, lastBody)
 		return
 	}
 	if lastErr == "" {
