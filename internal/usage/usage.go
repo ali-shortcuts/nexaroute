@@ -51,15 +51,56 @@ type Tracker struct {
 // by config at 20000, so this cannot be exceeded by legitimate traffic.
 const maxDeployments = 20000
 
+// maxTokensPerRecord bounds one observed token count.
+//
+// Upstream usage values are untrusted input: a broken or hostile provider can
+// report counts that no real response could produce (MaxInt64, or values whose
+// running sum passes MaxInt64). Accumulating them verbatim wraps int64 and
+// turns cumulative accounting — and every cost estimate derived from it —
+// negative. No single response can exceed this ceiling, so a larger report is
+// clamped to it instead of corrupting the counters.
+const maxTokensPerRecord = int64(1) << 40
+
+// sanitizeTokenCount clamps one reported token count into [0, maxTokensPerRecord].
+// Non-positive values are dropped, which keeps probes and failed attempts out of
+// accounting exactly as before.
+func sanitizeTokenCount(v int64) int64 {
+	if v <= 0 {
+		return 0
+	}
+	if v > maxTokensPerRecord {
+		return maxTokensPerRecord
+	}
+	return v
+}
+
+// saturatingAdd adds a non-negative delta to a cumulative counter and pins the
+// result at the int64 ceiling instead of wrapping to negative.
+func saturatingAdd(total, delta int64) int64 {
+	const maxInt64 = int64(1<<63 - 1)
+	if delta <= 0 {
+		return total
+	}
+	if total > maxInt64-delta {
+		return maxInt64
+	}
+	return total + delta
+}
+
 // New returns an empty tracker.
 func New() *Tracker {
 	return &Tracker{byDeploy: map[string]*Totals{}}
 }
 
-// Record accumulates one observed response. Non-positive token counts are
-// ignored so synthetic probes and failed attempts never pollute accounting.
+// Record accumulates one observed response. Reported counts are clamped first
+// (see maxTokensPerRecord) and then added with saturation, so an upstream that
+// reports absurd token counts cannot wrap the cumulative counters. Non-positive
+// token counts are ignored so synthetic probes and failed attempts never pollute
+// accounting.
 func (t *Tracker) Record(deploymentID string, promptTokens, completionTokens int64) {
-	if promptTokens <= 0 && completionTokens <= 0 {
+	promptTokens = sanitizeTokenCount(promptTokens)
+	completionTokens = sanitizeTokenCount(completionTokens)
+	if promptTokens == 0 && completionTokens == 0 {
 		return
 	}
 	if deploymentID == "" {
@@ -76,12 +117,12 @@ func (t *Tracker) Record(deploymentID string, promptTokens, completionTokens int
 		t.byDeploy[deploymentID] = tot
 	}
 	if promptTokens > 0 {
-		tot.PromptTokens += promptTokens
-		t.prompt += promptTokens
+		tot.PromptTokens = saturatingAdd(tot.PromptTokens, promptTokens)
+		t.prompt = saturatingAdd(t.prompt, promptTokens)
 	}
 	if completionTokens > 0 {
-		tot.CompletionTok += completionTokens
-		t.completion += completionTokens
+		tot.CompletionTok = saturatingAdd(tot.CompletionTok, completionTokens)
+		t.completion = saturatingAdd(t.completion, completionTokens)
 	}
 	tot.Requests++
 	t.requests++
