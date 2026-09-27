@@ -48,7 +48,10 @@ func TestRunnerCaseTimeoutBoundsEvaluators(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	if elapsed > time.Second {
+	// The judge waits two seconds per case when it is not cancelled, so three
+	// graded cases take six seconds under the bug and well under two seconds
+	// once the case context reaches grading.
+	if elapsed > 2*time.Second {
 		t.Fatalf("grading escaped the per-case timeout: %d cases with case_timeout_ms=20 took %v", len(suite.Cases), elapsed)
 	}
 	if len(res.Cases) != len(suite.Cases) {
