@@ -15,7 +15,12 @@ if [[ -n "$format_files" ]]; then
     [[ -z "$file" ]] && continue
     diff=$(gofmt -d "$file")
     encoded=$(printf '%s' "$diff" | base64 -w0)
-    echo "::notice file=$file,title=gofmt-patch::$encoded"
+    file_tag=${file//\//_}
+    chunk_size=3000
+    for ((offset = 0, part = 0; offset < ${#encoded}; offset += chunk_size, part++)); do
+      chunk=${encoded:offset:chunk_size}
+      echo "::notice file=$file,title=gofmt-${file_tag}-${part}::$chunk"
+    done
     gofmt -w "$file"
   done <<< "$format_files"
 fi
