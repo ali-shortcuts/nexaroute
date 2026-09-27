@@ -204,6 +204,8 @@ def main() -> None:
                 advance_provider(page)
                 page.locator("#discoverBtn").click()
                 expect(page.locator("#discoverStatus")).to_contain_text("2")
+                expect(page.locator("#cpModelCount")).to_contain_text("0")
+                page.locator("#cpSelectAll").click()
                 expect(page.locator("#cpModelCount")).to_contain_text("2")
                 advance_provider(page)
                 page.locator("#checkConnectionBtn").click()
