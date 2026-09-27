@@ -471,7 +471,12 @@ func (p *Provider) UpdateFromConfig(apiKey, baseURL string, enabled bool) error 
 
 // For secret-safe string
 func (p *Provider) String() string {
-	return fmt.Sprintf("jev provider %s enabled=%t key_configured=%t", p.ID(), p.enabled, p.HasAPIKey())
+	p.mu.RLock()
+	id := p.id
+	enabled := p.enabled
+	keyConfigured := p.apiKey != ""
+	p.mu.RUnlock()
+	return fmt.Sprintf("jev provider %s enabled=%t key_configured=%t", id, enabled, keyConfigured)
 }
 
 // Ensure no raw prompt leakage: BuildTaskSummary and BuildCandidateDescription already enforce metadata_only
