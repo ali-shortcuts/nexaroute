@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -173,5 +174,118 @@ func TestSupervisorDoesNotConsumeRecoveryBudgetWhileCredentialRateLimited(t *tes
 	}
 	if calls.Load() != 2 {
 		t.Fatalf("upstream calls=%d want initial 429 + one post-cooldown recovery", calls.Load())
+	}
+}
+
+func TestSupervisorFakeClockFiveAttemptsAndCooldownExpiryReentry(t *testing.T) {
+	var mu sync.Mutex
+	fakeNow := time.Date(2026, 9, 26, 12, 0, 0, 0, time.UTC)
+	nowFn := func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		return fakeNow
+	}
+	advance := func(d time.Duration) {
+		mu.Lock()
+		fakeNow = fakeNow.Add(d)
+		mu.Unlock()
+	}
+
+	var calls atomic.Int32
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"error":"offline"}`))
+	}))
+	defer up.Close()
+
+	cfg := config.Default()
+	cfg.Routing.Strategy = "ready_queue"
+	cfg.Routing.CooldownSeconds = 1800 // 30-minute cooldown
+	cfg.Probe.Enabled = true
+	cfg.Probe.OnStart = true
+	cfg.Probe.Concurrency = 8
+	cfg.Probe.TimeoutMS = 1000
+	cfg.Probe.RecoveryAttempts = 5
+	cfg.Probe.RecoveryRetryMS = 5
+	cfg.Providers = []config.ProviderConfig{{
+		ID: "p", Name: "P", Type: "openai_compatible", BaseURL: up.URL,
+		AuthMode: "none", Enabled: true,
+		Models: []config.ModelConfig{{ID: "m", Model: "m", Enabled: true, Priority: 0, Weight: 1, Capabilities: config.Capabilities{Streaming: true}}},
+	}}
+	cfg.ApplyDefaults()
+
+	hm := health.New(cfg.Routing.FailureThreshold, cfg.Cooldown())
+	hm.SetNowFunc(nowFn)
+	reg, err := providers.NewRegistry(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt := router.New(cfg, hm)
+	e := New(cfg, reg, rt, hm, events.New(100))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	res := e.Prime(ctx)
+	if res.Failed != 1 {
+		t.Fatalf("prime failed=%d want 1", res.Failed)
+	}
+
+	// Wait for supervisor to exhaust all 5 recovery attempts and enter Cooldown.
+	st := waitForState(t, hm, "p/m", health.Cooldown, 2*time.Second)
+	if st.RecoveryFailures != 5 {
+		t.Fatalf("recovery failures=%d want exactly 5", st.RecoveryFailures)
+	}
+	if n := calls.Load(); n != 6 {
+		t.Fatalf("calls=%d want 1 initial + 5 recovery attempts", n)
+	}
+	if got := rt.Candidates(router.Requirement{Model: "auto", Streaming: true}); len(got) != 0 {
+		t.Fatalf("cooldown model must not be routable: %#v", got)
+	}
+
+	// Advance fake clock by 10 minutes: still in cooldown, not routable.
+	advance(10 * time.Minute)
+	if s := hm.Get("p/m"); s.Status != health.Cooldown {
+		t.Fatalf("after 10 min: status=%s want Cooldown", s.Status)
+	}
+	if got := rt.Candidates(router.Requirement{Model: "auto", Streaming: true}); len(got) != 0 {
+		t.Fatalf("cooldown model must not be routable after 10m: %#v", got)
+	}
+
+	// Advance fake clock past the 30-minute cooldown window (by 21 more minutes = 31 total).
+	advance(21 * time.Minute)
+
+	// Now status normalizes to HalfOpen upon access.
+	stExpired := hm.Get("p/m")
+	if stExpired.Status != health.HalfOpen {
+		t.Fatalf("after 31 min: status=%s want HalfOpen", stExpired.Status)
+	}
+	if stExpired.RecoveryFailures != 0 {
+		t.Fatalf("recovery failures after expiry=%d want 0", stExpired.RecoveryFailures)
+	}
+
+	// Priority router (which admits HalfOpen candidates) includes the model.
+	priorityCfg := cfg
+	priorityCfg.Routing.Strategy = "priority"
+	rtPriority := router.New(priorityCfg, hm)
+	priorityCandidates := rtPriority.Candidates(router.Requirement{Model: "auto", Streaming: true})
+	if len(priorityCandidates) != 1 || priorityCandidates[0].Deployment.ID != "p/m" {
+		t.Fatalf("expired cooldown model must re-enter priority candidates: %#v", priorityCandidates)
+	}
+
+	// A successful recovery observation marks it Healthy.
+	hm.RecordSuccess("p/m", 15*time.Millisecond)
+	stHealthy := hm.Get("p/m")
+	if stHealthy.Status != health.Healthy {
+		t.Fatalf("after success: status=%s want Healthy", stHealthy.Status)
+	}
+	if stHealthy.ConsecutiveFailures != 0 || stHealthy.RecoveryFailures != 0 {
+		t.Fatalf("healthy state has non-zero failure counts: %+v", stHealthy)
+	}
+
+	// In ready_queue strategy, the recovered Healthy model now re-enters the ready candidate pool.
+	candidates := rt.Candidates(router.Requirement{Model: "auto", Streaming: true})
+	if len(candidates) != 1 || candidates[0].Deployment.ID != "p/m" {
+		t.Fatalf("recovered model must re-enter ready_queue candidates pool: %#v", candidates)
 	}
 }

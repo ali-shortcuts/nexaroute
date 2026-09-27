@@ -10,6 +10,7 @@ import (
 
 	"github.com/ali-shortcuts/nexaroute/internal/core"
 	"github.com/ali-shortcuts/nexaroute/internal/events"
+	"github.com/ali-shortcuts/nexaroute/internal/feature"
 	"github.com/ali-shortcuts/nexaroute/internal/providers"
 	"github.com/ali-shortcuts/nexaroute/internal/router"
 	"github.com/ali-shortcuts/nexaroute/internal/translate"
@@ -37,12 +38,62 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 400, "model and messages are required")
 		return
 	}
-	inspection := inspectRequestJSON(raw, "image_url", []string{"reasoning_effort", "reasoning"})
-	if inspection.TooComplex {
+	// Phase C: feature extraction + task classification (observational, routing-neutral)
+	maxOut := in.MaxCompletionTokens
+	if maxOut == 0 {
+		maxOut = in.MaxTokens
+	}
+	hasSystem := false
+	for _, m := range in.Messages {
+		if strings.EqualFold(m.Role, "system") || strings.EqualFold(m.Role, "developer") {
+			hasSystem = true
+			break
+		}
+	}
+	// Tool choice required detection
+	var toolChoiceRequired *bool
+	if in.ToolChoice != nil {
+		// Parse tool_choice for required semantics
+		// in.ToolChoice is any, could be string or map
+		if s, ok := in.ToolChoice.(string); ok {
+			lower := strings.ToLower(strings.TrimSpace(s))
+			req := lower == "required"
+			toolChoiceRequired = &req
+		} else {
+			// Try to marshal and check via feature parser
+			// Use feature extractor's parse logic via raw JSON field
+			// For simplicity, we will let extractor handle it from raw, but also check if object contains function
+			b, _ := json.Marshal(in.ToolChoice)
+			var m map[string]any
+			if json.Unmarshal(b, &m) == nil {
+				// If has function or name, it's required
+				_, hasFunc := m["function"]
+				_, hasName := m["name"]
+				typ, _ := m["type"].(string)
+				lowerTyp := strings.ToLower(typ)
+				req := hasFunc || hasName || lowerTyp == "tool" || lowerTyp == "function" || lowerTyp == "required" || lowerTyp == "any"
+				toolChoiceRequired = &req
+			}
+		}
+	}
+	ti := extractFeaturesAndClassify(raw, feature.ExtractOptions{
+		Protocol:               feature.ProtocolOpenAI,
+		Model:                  in.Model,
+		Streaming:              in.Stream,
+		VisionType:             "image_url",
+		ReasoningKeys:          []string{"reasoning_effort", "reasoning"},
+		ContentFields:          []string{"messages"},
+		MaxOutputTokens:        maxOut,
+		ToolCountHint:          len(in.Tools),
+		ToolChoiceHint:         in.ToolChoice != nil,
+		ToolChoiceRequiredHint: toolChoiceRequired,
+		HasSystemPromptHint:    &hasSystem,
+	})
+	if ti.Features.TooComplex {
 		errorJSON(w, http.StatusBadRequest, "request JSON structure is too complex")
 		return
 	}
-	req := router.Requirement{Model: in.Model, Tools: len(in.Tools) > 0, Vision: inspection.Vision, Streaming: in.Stream, Reasoning: inspection.Reasoning}
+	req := router.Requirement{Model: in.Model, Tools: ti.Features.HasTools, Vision: ti.Features.HasVision, Streaming: in.Stream, Reasoning: ti.Features.HasReasoning}
 	if req.Reasoning {
 		req.ProviderType = "openai_compatible"
 	}
@@ -50,35 +101,54 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 	// small for the estimated prompt plus requested output. The same estimate
 	// feeds cost-aware ordering. If the caller omits an output ceiling,
 	// cost-aware routing deliberately falls back to normal ordering.
-	maxOut := in.MaxCompletionTokens
-	if maxOut == 0 {
-		maxOut = in.MaxTokens
-	}
-	req.EstimatedInputTokens = inspection.EstimatedPromptTokens
+	req.EstimatedInputTokens = ti.Features.EstimatedPromptTokens
 	req.MaxOutputTokens = maxOut
 	req.MinContextWindow = req.EstimatedInputTokens + req.MaxOutputTokens
-	req = s.prepareRequirement(req, r, inspection.BodySessionKey)
-	cfg, candidates := s.routeSnapshot(req)
+	req = s.prepareRequirement(req, r, ti.Features.BodySessionKey)
+	cfg, candidates, resolvedRoute, resolveErr := s.candidatesForRequirement(req, "openai")
+	if resolveErr != nil {
+		if strings.Contains(resolveErr.Error(), "disabled") {
+			errorJSON(w, 404, resolveErr.Error())
+		} else {
+			errorJSON(w, 400, resolveErr.Error())
+		}
+		return
+	}
 	if len(candidates) == 0 && req.ProviderType != "" {
-		// Mirror of the Anthropic-side relaxation: a reasoning-marked request
-		// falls back to any reasoning-capable deployment when its preferred
-		// provider class has no healthy candidates.
 		relaxed := req
 		relaxed.ProviderType = ""
-		if c2, cand2 := s.routeSnapshot(relaxed); len(cand2) > 0 {
+		if c2, cand2, rr2, err2 := s.candidatesForRequirement(relaxed, "openai"); len(cand2) > 0 && err2 == nil {
 			req = relaxed
 			cfg, candidates = c2, cand2
+			resolvedRoute = rr2
 		}
 	}
+	// Emit task_classified event (privacy-safe, no raw prompt) after final route resolution
+	s.emitTaskClassified(r.Header.Get("x-request-id"), ti, resolvedRoute)
 	if len(candidates) == 0 {
 		errorJSON(w, 503, "no compatible healthy deployment")
 		return
 	}
+	// For virtual endpoints, eligibility should ignore the virtual public model
+	// and use only pool + capability checks. The pool filtering already happened
+	// in candidatesForRequirement, so we clear Model for eligibility.
+	reqEligible := req
+	if resolvedRoute != nil {
+		reqEligible.Model = ""
+	}
 	// Exact-match response cache (opt-in). Only complete, non-streaming,
 	// deterministic requests are ever considered; anything else bypasses.
+	// Phase F/G: Check cache BEFORE decision plane — on HIT, decision provider calls must be 0
 	cacheKey, cacheable := s.cacheLookupFor(r.URL.Path, raw, in.Stream, in.Temperature, in.TopP)
 	if s.cacheServe(w, r, cacheKey, cacheable) {
 		return
+	}
+	// Phase D/E/G: Decision plane — rank within eligible set only, fail-open, chain-aware
+	candidates = s.applyDecisionPlane(r.Context(), candidates, ti, resolvedRoute, r.Header.Get("x-request-id"), req)
+	if resolvedRoute != nil {
+		w.Header().Set("X-Gateway-Virtual-Endpoint", resolvedRoute.VirtualEndpointID)
+		w.Header().Set("X-Gateway-Public-Model", resolvedRoute.PublicModel)
+		w.Header().Set("X-Gateway-Route-Profile", resolvedRoute.RouteProfileID)
 	}
 	max := cfg.Routing.MaxAttempts
 	if max > len(candidates) {
@@ -92,6 +162,8 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 	var lastStatus int
 	var lastBody []byte
 	var lastContentType string
+	var lastRetryAfter string
+	var gatewayTimedOut bool
 	forward := copySelectedRequestHeaders(r)
 	attempts := 0
 	skip := map[int]bool{}
@@ -103,15 +175,19 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 		if _, ineligible := s.capabilityIneligible(r.Header.Get("x-request-id"), c.Deployment.ID, profile); ineligible {
 			continue
 		}
-		fresh, a, ok := s.currentRouteCandidate(c.Deployment.ID, req)
+		fresh, a, ok := s.currentRouteCandidate(c.Deployment.ID, reqEligible)
 		if !ok {
 			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_skip", Deployment: c.Deployment.ID, Message: "candidate is no longer eligible or provider changed"})
 			continue
 		}
 		c = fresh
-		primary, ok := s.buildOpenAIAttempt(c, req, raw, in)
+		primary, ok := s.buildOpenAIAttempt(c, reqEligible, raw, in)
 		if !ok {
-			lastErr = "attempt payload could not be built"
+			if primary.buildErr != nil {
+				lastErr = primary.buildErr.Error()
+			} else {
+				lastErr = "attempt payload could not be built"
+			}
 			continue
 		}
 		var nm *translate.NameMap
@@ -123,7 +199,9 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 		s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_attempt", Deployment: c.Deployment.ID, Message: fmt.Sprintf("attempt=%d score=%.2f health=%s pressure=%.3f", attempts, c.Score, c.Health.Status, c.CapacityPressure)})
 		start := time.Now()
 		out, winner, hedgeLaunched := s.doAttemptWithHedge(routeCtx, r.Header.Get("x-request-id"), cfg, candidates, i, attempts, max, primary,
-			func(idx int) (hedgeAttemptBundle, bool) { return s.buildOpenAIAttempt(candidates[idx], req, raw, in) },
+			func(idx int) (hedgeAttemptBundle, bool) {
+				return s.buildOpenAIAttempt(candidates[idx], reqEligible, raw, in)
+			},
 			in.Stream, forward)
 		if hedgeLaunched {
 			if i+1 < len(candidates) {
@@ -159,7 +237,8 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "client_disconnect", Deployment: c.Deployment.ID, Message: r.Context().Err().Error(), ErrorType: "caller_cancelled", LatencyMS: headerLatency.Milliseconds()})
 				return
 			}
-			if gatewayDeadlineExceeded(routeCtx, r.Context()) {
+			if gatewayDeadlineError(routeCtx, r.Context(), e) {
+				gatewayTimedOut = true
 				s.hm.RecordProviderFailure(c.Deployment.ProviderID, c.Deployment.ID, lastErr)
 				if router.IsReadyStrategy(cfg.Routing.Strategy) {
 					s.hm.Quarantine(c.Deployment.ID, lastErr, headerLatency)
@@ -191,6 +270,10 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 			lastStatus = resp.StatusCode
 			lastBody = b
 			lastContentType = resp.Header.Get("Content-Type")
+			lastRetryAfter = ""
+			if resp.StatusCode == http.StatusTooManyRequests {
+				lastRetryAfter = retryAfterResponseValue(resp.Header, time.Duration(cfg.Routing.MaxRetryAfterSeconds)*time.Second)
+			}
 			lastErr = upstreamError(resp.StatusCode, b)
 			cls, policy := classifyFailure(resp.StatusCode, b)
 			if cls.CapabilityFailure {
@@ -222,6 +305,9 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "failover", Deployment: c.Deployment.ID, Message: fmt.Sprintf("HTTP %d; trying next eligible candidate", resp.StatusCode), StatusCode: resp.StatusCode})
 				s.retryPause(routeCtx, r.Header.Get("x-request-id"), cfg, attemptIndex, max)
 				continue
+			}
+			if lastRetryAfter != "" {
+				w.Header().Set("Retry-After", lastRetryAfter)
 			}
 			if c.Deployment.ProviderType == "openai_compatible" {
 				writeRawUpstreamError(w, lastStatus, lastContentType, lastBody)
@@ -317,10 +403,17 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 		}
 		s.recordRouteSuccess(req, c.Deployment.ID, c.Deployment.ProviderID, headerLatency)
 		s.learnFromSuccess(c.Deployment.ID, c.Deployment.ProviderID, c.Deployment, payload, nil)
-		s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_ok", Deployment: c.Deployment.ID, Message: "request completed", LatencyMS: total.Milliseconds(), StatusCode: resp.StatusCode})
+		ev := events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_ok", Deployment: c.Deployment.ID, Message: "request completed", LatencyMS: total.Milliseconds(), StatusCode: resp.StatusCode}
+		if resolvedRoute != nil {
+			ev.VirtualEndpoint = resolvedRoute.VirtualEndpointID
+			ev.PublicModel = resolvedRoute.PublicModel
+			ev.RouteProfile = resolvedRoute.RouteProfileID
+			ev.Pool = resolvedRoute.PrimaryPoolID
+		}
+		s.bus.Add(ev)
 		return
 	}
-	if gatewayDeadlineExceeded(routeCtx, r.Context()) {
+	if gatewayTimedOut || gatewayDeadlineExceeded(routeCtx, r.Context()) {
 		errorJSON(w, http.StatusGatewayTimeout, "gateway request timeout")
 		return
 	}
@@ -328,6 +421,9 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if lastStatus > 0 && len(lastBody) > 0 {
+		if lastRetryAfter != "" {
+			w.Header().Set("Retry-After", lastRetryAfter)
+		}
 		writeRawUpstreamError(w, lastStatus, lastContentType, lastBody)
 		return
 	}

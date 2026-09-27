@@ -20,6 +20,9 @@
       <button data-tab="console" data-title="Live Console"><span class="nav-ico">▤</span>Console<span class="nav-dot" id="consoleDot" hidden></span></button>
       <button data-tab="providers" data-title="Providers"><span class="nav-ico">◈</span>Providers</button>
       <button data-tab="models" data-title="Model Deployments"><span class="nav-ico">▦</span>Models</button>
+      <button data-tab="virtual" data-title="Virtual Endpoints"><span class="nav-ico">◐</span>Endpoints</button>
+      <button data-tab="profiles" data-title="Route Profiles"><span class="nav-ico">⬙</span>Profiles</button>
+      <button data-tab="pools" data-title="Candidate Pools"><span class="nav-ico">⬡</span>Pools</button>
       <button data-tab="health" data-title="Health &amp; Pressure"><span class="nav-ico">♥</span>Health</button>
       <button data-tab="compat" data-title="Compatibility Matrix"><span class="nav-ico">⧉</span>Compat</button>
       <button data-tab="cli" data-title="CLI Tools"><span class="nav-ico">⌘</span>CLI Tools</button>
@@ -127,6 +130,62 @@
           <thead><tr><th>Deployment</th><th>Provider</th><th>Model</th><th>Status</th><th>Latency</th><th>TTFT</th><th>Failures</th></tr></thead>
           <tbody id="modelRows"></tbody>
         </table></div>
+      </div>
+    </section>
+
+    <!-- ============ VIRTUAL ENDPOINTS ============ -->
+    <section id="virtual" class="tab">
+      <div class="panel">
+        <div class="panelhead"><div><h2>Virtual Endpoints</h2><p>Stable client-facing model names → Route Profile → Candidate Pool. Changing backends doesn't require client reconfiguration.</p></div>
+          <button id="addVirtualBtn" class="btn primary">+ Add endpoint</button>
+        </div>
+        <div class="tablewrap"><table>
+          <thead><tr><th>ID</th><th>Public Model</th><th>Route Profile</th><th>Enabled</th><th>Pool Members (configured)</th><th>Actions</th></tr></thead>
+          <tbody id="virtualRows"></tbody>
+        </table></div>
+        <p class="hint">Pool Members = configured candidate count (pool membership), not runtime eligible. Runtime eligibility depends on health, capabilities, provider circuits, context fit, etc.</p>
+        <div id="virtualDetail" class="compat-report" hidden></div>
+      </div>
+    </section>
+
+    <!-- ============ ROUTE PROFILES ============ -->
+    <section id="profiles" class="tab">
+      <div class="panel">
+        <div class="panelhead"><div><h2>Route Profiles</h2><p>Reusable routing intent: candidate pool + fallback chain. Strategy inherits global routing strategy (per-profile strategy deferred to Phase E).</p></div>
+          <button id="addProfileBtn" class="btn primary">+ Add profile</button>
+        </div>
+        <div class="tablewrap"><table>
+          <thead><tr><th>ID</th><th>Name</th><th>Pool</th><th>Fallback</th><th>Strategy (Phase B: inherit)</th><th>Actions</th></tr></thead>
+          <tbody id="profileRows"></tbody>
+        </table></div>
+      </div>
+    </section>
+
+    <!-- ============ POOLS ============ -->
+    <section id="pools" class="tab">
+      <div class="panel">
+        <div class="panelhead"><div><h2>Candidate Pools &amp; Fallback Chains</h2><p>Logical pools define potential candidates; health/compat filtering defines currently eligible.</p></div>
+          <div class="panelhead-side">
+            <button id="addPoolBtn" class="btn primary">+ Add pool</button>
+            <button id="addChainBtn" class="btn secondary">+ Add chain</button>
+          </div>
+        </div>
+        <div class="grid-2-1">
+          <div class="panel">
+            <h3 style="margin:12px 0 8px 12px">Candidate Pools</h3>
+            <div class="tablewrap"><table>
+              <thead><tr><th>ID</th><th>Mode</th><th>Members</th><th>Expanded</th><th>Actions</th></tr></thead>
+              <tbody id="poolRows"></tbody>
+            </table></div>
+          </div>
+          <div class="panel">
+            <h3 style="margin:12px 0 8px 12px">Fallback Chains</h3>
+            <div class="tablewrap"><table>
+              <thead><tr><th>ID</th><th>Pools</th><th>Actions</th></tr></thead>
+              <tbody id="chainRows"></tbody>
+            </table></div>
+          </div>
+        </div>
       </div>
     </section>
 
@@ -312,7 +371,7 @@
         <div class="section-kicker">Credentials</div>
         <label class="field"><span>API Key <small id="secretSource"></small></span>
           <div class="secret-row"><input id="pKey" type="password" autocomplete="off" placeholder="sk-..."><button id="togglePKey" class="icon-btn">Show</button></div>
-          <em>When editing, the saved credential is loaded and preserved unless you change it.</em>
+          <em>Saved credentials are write-only. Leave fields untouched to keep them; editing a credential field replaces the complete key/pool set.</em>
         </label>
         <label class="field"><span>API key environment variable <small>(optional)</small></span><input id="pKeyEnv" spellcheck="false" placeholder="CHAT2API_KEY"></label>
         <label class="field"><span>Extra headers JSON <small>(optional)</small></span><textarea id="pHeaders" rows="3" spellcheck="false" placeholder='{"X-Custom":"value"}'></textarea></label>

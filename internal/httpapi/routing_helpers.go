@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"io"
@@ -15,6 +16,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/ali-shortcuts/nexaroute/internal/config"
+	"github.com/ali-shortcuts/nexaroute/internal/feature"
 	"github.com/ali-shortcuts/nexaroute/internal/providers"
 	"github.com/ali-shortcuts/nexaroute/internal/router"
 )
@@ -28,6 +30,24 @@ func routeContext(parent context.Context, streaming bool, timeout time.Duration)
 
 func gatewayDeadlineExceeded(routeCtx, clientCtx context.Context) bool {
 	return routeCtx.Err() == context.DeadlineExceeded && clientCtx.Err() == nil
+}
+
+// gatewayDeadlineError closes the narrow race where the HTTP client's timeout
+// and the route context share the same budget. Either timer may be observed
+// first; a transport timeout under a bounded route is still a gateway deadline,
+// not a generic 502. Caller cancellation always takes precedence.
+func gatewayDeadlineError(routeCtx, clientCtx context.Context, err error) bool {
+	if clientCtx.Err() != nil {
+		return false
+	}
+	if gatewayDeadlineExceeded(routeCtx, clientCtx) {
+		return true
+	}
+	if _, bounded := routeCtx.Deadline(); !bounded || err == nil {
+		return false
+	}
+	var timeout interface{ Timeout() bool }
+	return errors.As(err, &timeout) && timeout.Timeout()
 }
 
 func clientRequestGone(clientCtx context.Context) bool {
@@ -156,6 +176,41 @@ func retryAfterDuration(h http.Header, max time.Duration) time.Duration {
 	return fallback
 }
 
+// retryAfterResponseValue validates and bounds an upstream Retry-After value
+// before exposing it to a client. It deliberately emits delta-seconds so an
+// untrusted upstream cannot inject arbitrary header text or an unbounded wait.
+func retryAfterResponseValue(h http.Header, max time.Duration) string {
+	v := strings.TrimSpace(h.Get("Retry-After"))
+	if v == "" {
+		return ""
+	}
+	if sec, err := strconv.ParseInt(v, 10, 64); err == nil && sec >= 0 {
+		if max > 0 {
+			maxSec := int64(max / time.Second)
+			if maxSec < 1 {
+				maxSec = 1
+			}
+			if sec > maxSec {
+				sec = maxSec
+			}
+		}
+		return strconv.FormatInt(sec, 10)
+	}
+	t, err := http.ParseTime(v)
+	if err != nil {
+		return ""
+	}
+	d := time.Until(t)
+	if d < 0 {
+		d = 0
+	}
+	if max > 0 && d > max {
+		d = max
+	}
+	seconds := int64((d + time.Second - 1) / time.Second)
+	return strconv.FormatInt(seconds, 10)
+}
+
 func redactProviderBody(p config.ProviderConfig, b []byte) []byte {
 	out := append([]byte(nil), b...)
 	for _, key := range p.ResolvedCredentials() {
@@ -247,81 +302,21 @@ func inspectResponsesRequestJSON(raw []byte) requestInspection {
 }
 
 func inspectRequestJSONFields(raw []byte, visionType string, reasoningKeys, contentFields []string) requestInspection {
-	var root map[string]any
-	if json.Unmarshal(raw, &root) != nil {
-		return requestInspection{}
+	// Delegate to feature extractor as single source of truth for structural inspection
+	extractor := feature.NewExtractor()
+	feat := extractor.Extract(raw, feature.ExtractOptions{
+		Protocol:      feature.ProtocolUnknown,
+		VisionType:    visionType,
+		ReasoningKeys: reasoningKeys,
+		ContentFields: contentFields,
+	})
+	return requestInspection{
+		Vision:                feat.HasVision,
+		Reasoning:             feat.HasReasoning,
+		TooComplex:            feat.TooComplex,
+		BodySessionKey:        feat.BodySessionKey,
+		EstimatedPromptTokens: feat.EstimatedPromptTokens,
 	}
-	out := requestInspection{BodySessionKey: bodySessionKey(root)}
-
-	// Reasoning controls are protocol-level request options. Do not scan tool
-	// schemas or arbitrary user/tool payloads for keys with the same name.
-	for _, wanted := range reasoningKeys {
-		for key := range root {
-			if strings.EqualFold(key, wanted) {
-				out.Reasoning = true
-				break
-			}
-		}
-		if out.Reasoning {
-			break
-		}
-	}
-
-	// Inspect only protocol-defined conversation/input fields. This keeps tool
-	// schemas and arbitrary metadata from falsely triggering vision while still
-	// giving Responses API requests their real input/instructions estimate.
-	stack := make([]any, 0, len(contentFields))
-	for _, field := range contentFields {
-		if v, ok := root[field]; ok {
-			stack = append(stack, v)
-		}
-	}
-	if len(stack) == 0 {
-		return out
-	}
-
-	chars := 0
-	messageCount := 0
-	nodes := 0
-	for len(stack) > 0 {
-		last := len(stack) - 1
-		v := stack[last]
-		stack = stack[:last]
-		nodes++
-		if nodes > maxRequestInspectionNodes {
-			out.TooComplex = true
-			return out
-		}
-		switch x := v.(type) {
-		case string:
-			chars += len(x)
-		case map[string]any:
-			if typ, _ := x["type"].(string); visionType != "" && strings.EqualFold(typ, visionType) {
-				out.Vision = true
-			}
-			if _, isMsg := x["role"]; isMsg {
-				messageCount++
-			}
-			if len(x) > maxRequestInspectionNodes-nodes-len(stack) {
-				out.TooComplex = true
-				return out
-			}
-			for _, child := range x {
-				stack = append(stack, child)
-			}
-		case []any:
-			if len(x) > maxRequestInspectionNodes-nodes-len(stack) {
-				out.TooComplex = true
-				return out
-			}
-			stack = append(stack, x...)
-		}
-	}
-	// ~4 chars per token plus a small per-message framing overhead and a
-	// fixed conversation floor; rounded up. Text is counted by bytes, which
-	// slightly overestimates multi-byte content — a safe bias for routing.
-	out.EstimatedPromptTokens = chars/4 + messageCount*8 + 16
-	return out
 }
 
 func sessionKeyFromRequestParts(r *http.Request, bodyKey string) string {

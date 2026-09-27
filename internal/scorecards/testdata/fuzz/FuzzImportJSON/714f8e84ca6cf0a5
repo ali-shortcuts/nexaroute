@@ -1,0 +1,2 @@
+go test fuzz v1
+string("{\"sCoreCArds\":[{\"deploYment_id\":\"000\",\"version\":0,\"generAted_At\":\"0000-01-01T00:00:00Z\"}]}")

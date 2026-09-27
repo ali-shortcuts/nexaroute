@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/ali-shortcuts/nexaroute/internal/core"
 	"github.com/ali-shortcuts/nexaroute/internal/events"
+	"github.com/ali-shortcuts/nexaroute/internal/feature"
 	"github.com/ali-shortcuts/nexaroute/internal/providers"
 	"github.com/ali-shortcuts/nexaroute/internal/router"
 	"github.com/ali-shortcuts/nexaroute/internal/translate"
@@ -41,42 +43,101 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	inspection := inspectRequestJSON(raw, "image", []string{"thinking", "reasoning"})
-	if inspection.TooComplex {
+	// Phase C: feature extraction + task classification (observational, routing-neutral)
+	hasSystem := false
+	if in.System != nil {
+		hasSystem = true
+	}
+	var toolChoiceRequired *bool
+	if in.ToolChoice != nil {
+		b, _ := json.Marshal(in.ToolChoice)
+		var m map[string]any
+		if json.Unmarshal(b, &m) == nil {
+			typ, _ := m["type"].(string)
+			lowerTyp := strings.ToLower(typ)
+			req := lowerTyp == "tool" || lowerTyp == "any" || lowerTyp == "required"
+			toolChoiceRequired = &req
+		} else {
+			// If string value
+			var s string
+			if json.Unmarshal(b, &s) == nil {
+				lower := strings.ToLower(strings.TrimSpace(s))
+				req := lower == "any" || lower == "tool" || lower == "required"
+				toolChoiceRequired = &req
+			}
+		}
+	}
+	ti := extractFeaturesAndClassify(raw, feature.ExtractOptions{
+		Protocol:               feature.ProtocolAnthropic,
+		Model:                  in.Model,
+		Streaming:              in.Stream,
+		VisionType:             "image",
+		ReasoningKeys:          []string{"thinking", "reasoning"},
+		ContentFields:          []string{"messages"},
+		MaxOutputTokens:        in.MaxTokens,
+		ToolCountHint:          len(in.Tools),
+		ToolChoiceHint:         in.ToolChoice != nil,
+		ToolChoiceRequiredHint: toolChoiceRequired,
+		HasSystemPromptHint:    &hasSystem,
+	})
+	if ti.Features.TooComplex {
 		anthropicErrorJSON(w, http.StatusBadRequest, "request JSON structure is too complex")
 		return
 	}
-	req := router.Requirement{Model: in.Model, Tools: len(in.Tools) > 0, Vision: inspection.Vision, Streaming: in.Stream, Reasoning: inspection.Reasoning}
+	req := router.Requirement{Model: in.Model, Tools: ti.Features.HasTools, Vision: ti.Features.HasVision, Streaming: in.Stream, Reasoning: ti.Features.HasReasoning}
 	if req.Reasoning {
 		req.ProviderType = "anthropic_compatible"
 	}
 	// Context and cost pre-routing use the same conservative prompt estimate.
 	// Anthropic requires an explicit max_tokens, so cost-aware ordering has a
 	// complete output ceiling for this request.
-	req.EstimatedInputTokens = inspection.EstimatedPromptTokens
+	req.EstimatedInputTokens = ti.Features.EstimatedPromptTokens
 	req.MaxOutputTokens = in.MaxTokens
 	req.MinContextWindow = req.EstimatedInputTokens + req.MaxOutputTokens
-	req = s.prepareRequirement(req, r, inspection.BodySessionKey)
-	cfg, candidates := s.routeSnapshot(req)
+	req = s.prepareRequirement(req, r, ti.Features.BodySessionKey)
+	cfg, candidates, resolvedRoute, resolveErr := s.candidatesForRequirement(req, "anthropic")
+	if resolveErr != nil {
+		// Disabled endpoint or protocol not allowed
+		if strings.Contains(resolveErr.Error(), "disabled") {
+			anthropicErrorJSON(w, 404, resolveErr.Error())
+		} else {
+			anthropicErrorJSON(w, 400, resolveErr.Error())
+		}
+		return
+	}
 	if len(candidates) == 0 && req.ProviderType != "" {
-		// A reasoning request with no Anthropic-compatible deployment still
-		// deserves a chance against reasoning-capable OpenAI-compatible
-		// deployments; capability gating stays fully enforced.
 		relaxed := req
 		relaxed.ProviderType = ""
-		if c2, cand2 := s.routeSnapshot(relaxed); len(cand2) > 0 {
+		if c2, cand2, rr2, err2 := s.candidatesForRequirement(relaxed, "anthropic"); len(cand2) > 0 && err2 == nil {
 			req = relaxed
 			cfg, candidates = c2, cand2
+			resolvedRoute = rr2
 		}
 	}
+	// Emit task_classified event (privacy-safe) after final resolution
+	s.emitTaskClassified(r.Header.Get("x-request-id"), ti, resolvedRoute)
 	if len(candidates) == 0 {
 		anthropicErrorJSON(w, 503, "no compatible healthy deployment")
 		return
 	}
+	// For virtual endpoints, ignore virtual public model for eligibility.
+	reqEligible := req
+	if resolvedRoute != nil {
+		reqEligible.Model = ""
+	}
 	// Exact-match response cache (opt-in; see cache_wiring.go).
+	// Phase F/G: Check cache BEFORE decision — on HIT, decision calls must be 0
 	cacheKey, cacheable := s.cacheLookupFor(r.URL.Path, raw, in.Stream, in.Temperature, in.TopP)
 	if s.cacheServe(w, r, cacheKey, cacheable) {
 		return
+	}
+	// Phase D/E/G: Decision plane — rank within eligible set only, fail-open, chain-aware
+	candidates = s.applyDecisionPlane(r.Context(), candidates, ti, resolvedRoute, r.Header.Get("x-request-id"), req)
+	// For observability: if virtual endpoint, add headers
+	if resolvedRoute != nil {
+		w.Header().Set("X-Gateway-Virtual-Endpoint", resolvedRoute.VirtualEndpointID)
+		w.Header().Set("X-Gateway-Public-Model", resolvedRoute.PublicModel)
+		w.Header().Set("X-Gateway-Route-Profile", resolvedRoute.RouteProfileID)
 	}
 	max := cfg.Routing.MaxAttempts
 	if max > len(candidates) {
@@ -90,6 +151,8 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 	var lastStatus int
 	var lastBody []byte
 	var lastContentType string
+	var lastRetryAfter string
+	var gatewayTimedOut bool
 	forward := copySelectedRequestHeaders(r)
 
 	attempts := 0
@@ -102,15 +165,19 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		if _, ineligible := s.capabilityIneligible(r.Header.Get("x-request-id"), c.Deployment.ID, profile); ineligible {
 			continue
 		}
-		fresh, a, ok := s.currentRouteCandidate(c.Deployment.ID, req)
+		fresh, a, ok := s.currentRouteCandidate(c.Deployment.ID, reqEligible)
 		if !ok {
 			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_skip", Deployment: c.Deployment.ID, Message: "candidate is no longer eligible or provider changed"})
 			continue
 		}
 		c = fresh
-		primary, ok := s.buildAnthropicAttempt(c, req, raw, in)
+		primary, ok := s.buildAnthropicAttempt(c, reqEligible, raw, in)
 		if !ok {
-			lastErr = "attempt payload could not be built"
+			if primary.buildErr != nil {
+				lastErr = primary.buildErr.Error()
+			} else {
+				lastErr = "attempt payload could not be built"
+			}
 			continue
 		}
 		var nm *translate.NameMap
@@ -124,7 +191,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		out, winner, hedgeLaunched := s.doAttemptWithHedge(routeCtx, r.Header.Get("x-request-id"), cfg, candidates, i, attempts, max, primary,
 			func(idx int) (hedgeAttemptBundle, bool) {
-				return s.buildAnthropicAttempt(candidates[idx], req, raw, in)
+				return s.buildAnthropicAttempt(candidates[idx], reqEligible, raw, in)
 			},
 			in.Stream, forward)
 		if hedgeLaunched {
@@ -176,7 +243,8 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "client_disconnect", Deployment: c.Deployment.ID, Message: r.Context().Err().Error(), ErrorType: "caller_cancelled", LatencyMS: headerLatency.Milliseconds()})
 				return
 			}
-			if gatewayDeadlineExceeded(routeCtx, r.Context()) {
+			if gatewayDeadlineError(routeCtx, r.Context(), e) {
+				gatewayTimedOut = true
 				s.hm.RecordProviderFailure(c.Deployment.ProviderID, c.Deployment.ID, lastErr)
 				if router.IsReadyStrategy(cfg.Routing.Strategy) {
 					s.hm.Quarantine(c.Deployment.ID, lastErr, headerLatency)
@@ -208,6 +276,10 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 			lastStatus = resp.StatusCode
 			lastBody = b
 			lastContentType = resp.Header.Get("Content-Type")
+			lastRetryAfter = ""
+			if resp.StatusCode == http.StatusTooManyRequests {
+				lastRetryAfter = retryAfterResponseValue(resp.Header, time.Duration(cfg.Routing.MaxRetryAfterSeconds)*time.Second)
+			}
 			lastErr = upstreamError(resp.StatusCode, b)
 			cls, policy := classifyFailure(resp.StatusCode, b)
 			if cls.CapabilityFailure {
@@ -240,6 +312,9 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 				s.retryPause(routeCtx, r.Header.Get("x-request-id"), cfg, attemptIndex, max)
 				continue
 			}
+			if lastRetryAfter != "" {
+				w.Header().Set("Retry-After", lastRetryAfter)
+			}
 			if c.Deployment.ProviderType == "anthropic_compatible" {
 				writeRawUpstreamError(w, lastStatus, lastContentType, lastBody)
 				return
@@ -268,7 +343,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 			}
 		case c.Deployment.ProviderType == "anthropic_compatible":
 			if in.Stream {
-				e = proxyNativeSSE(w, resp, "anthropic", func(prompt, completion int) {
+				e = proxyNativeSSEWithModel(w, resp, "anthropic", in.Model, func(prompt, completion int) {
 					s.usage.Record(c.Deployment.ID, int64(prompt), int64(completion))
 				})
 			} else {
@@ -277,6 +352,9 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 				resp.Body.Close()
 				if e == nil {
 					e = validateAnthropicResponseJSON(b)
+				}
+				if e == nil {
+					b, e = rewriteAnthropicResponseModel(b, in.Model)
 				}
 				if e == nil {
 					if p, ct, ok := extractAnthropicUsage(b); ok {
@@ -353,10 +431,17 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		}
 		s.recordRouteSuccess(req, c.Deployment.ID, c.Deployment.ProviderID, headerLatency)
 		s.learnFromSuccess(c.Deployment.ID, c.Deployment.ProviderID, c.Deployment, payload, nil)
-		s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_ok", Deployment: c.Deployment.ID, Message: "request completed", LatencyMS: totalLatency.Milliseconds(), StatusCode: resp.StatusCode})
+		ev := events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_ok", Deployment: c.Deployment.ID, Message: "request completed", LatencyMS: totalLatency.Milliseconds(), StatusCode: resp.StatusCode}
+		if resolvedRoute != nil {
+			ev.VirtualEndpoint = resolvedRoute.VirtualEndpointID
+			ev.PublicModel = resolvedRoute.PublicModel
+			ev.RouteProfile = resolvedRoute.RouteProfileID
+			ev.Pool = resolvedRoute.PrimaryPoolID
+		}
+		s.bus.Add(ev)
 		return
 	}
-	if gatewayDeadlineExceeded(routeCtx, r.Context()) {
+	if gatewayTimedOut || gatewayDeadlineExceeded(routeCtx, r.Context()) {
 		anthropicErrorJSON(w, http.StatusGatewayTimeout, "gateway request timeout")
 		return
 	}
@@ -364,6 +449,9 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if lastStatus > 0 && len(lastBody) > 0 {
+		if lastRetryAfter != "" {
+			w.Header().Set("Retry-After", lastRetryAfter)
+		}
 		writeRawUpstreamError(w, lastStatus, lastContentType, lastBody)
 		return
 	}
@@ -634,6 +722,10 @@ func (t *nativeSSETracker) finish() error {
 }
 
 func proxyNativeSSE(w http.ResponseWriter, resp *http.Response, protocol string, usageHooks ...func(prompt, completion int)) error {
+	return proxyNativeSSEWithModel(w, resp, protocol, "", usageHooks...)
+}
+
+func proxyNativeSSEWithModel(w http.ResponseWriter, resp *http.Response, protocol, publicModel string, usageHooks ...func(prompt, completion int)) error {
 	defer resp.Body.Close()
 	if !strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
 		return fmt.Errorf("expected text/event-stream from %s upstream", protocol)
@@ -642,22 +734,35 @@ func proxyNativeSSE(w http.ResponseWriter, resp *http.Response, protocol string,
 	w.WriteHeader(resp.StatusCode)
 	fl, _ := w.(http.Flusher)
 	tracker := &nativeSSETracker{protocol: protocol}
-	if len(usageHooks) > 0 && usageHooks[0] != nil {
+	if len(usageHooks) > 0 {
 		tracker.usageHook = usageHooks[0]
 	}
-	buf := make([]byte, 32<<10)
+	reader := bufio.NewReaderSize(resp.Body, 32<<10)
+	line := make([]byte, 0, 1024)
 	for {
-		n, err := resp.Body.Read(buf)
-		if n > 0 {
-			if terr := tracker.consume(buf[:n]); terr != nil {
+		fragment, err := reader.ReadSlice('\n')
+		if len(line)+len(fragment) > maxNativeSSELineBytes {
+			return fmt.Errorf("native SSE line exceeds %d bytes", maxNativeSSELineBytes)
+		}
+		line = append(line, fragment...)
+		if err == bufio.ErrBufferFull {
+			continue
+		}
+		if len(line) > 0 {
+			if terr := tracker.consume(line); terr != nil {
 				return terr
 			}
-			if _, werr := w.Write(buf[:n]); werr != nil {
+			out := line
+			if protocol == "anthropic" && publicModel != "" {
+				out = rewriteAnthropicSSEModelLine(line, publicModel)
+			}
+			if _, werr := w.Write(out); werr != nil {
 				return werr
 			}
 			if fl != nil {
 				fl.Flush()
 			}
+			line = line[:0]
 		}
 		if err != nil {
 			if err == io.EOF {
@@ -666,6 +771,67 @@ func proxyNativeSSE(w http.ResponseWriter, resp *http.Response, protocol string,
 			return err
 		}
 	}
+}
+
+func rewriteAnthropicResponseModel(body []byte, model string) ([]byte, error) {
+	if strings.TrimSpace(model) == "" {
+		return body, nil
+	}
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return nil, err
+	}
+	if envelope == nil {
+		return nil, fmt.Errorf("Anthropic response must be a JSON object")
+	}
+	encoded, err := json.Marshal(model)
+	if err != nil {
+		return nil, err
+	}
+	envelope["model"] = encoded
+	return json.Marshal(envelope)
+}
+
+func rewriteAnthropicSSEModelLine(line []byte, model string) []byte {
+	ending := []byte{}
+	content := line
+	if bytes.HasSuffix(content, []byte("\r\n")) {
+		ending, content = []byte("\r\n"), content[:len(content)-2]
+	} else if bytes.HasSuffix(content, []byte("\n")) {
+		ending, content = []byte("\n"), content[:len(content)-1]
+	}
+	trimmed := bytes.TrimLeft(content, " \t")
+	leading := content[:len(content)-len(trimmed)]
+	if !bytes.HasPrefix(trimmed, []byte("data:")) {
+		return line
+	}
+	data := bytes.TrimSpace(trimmed[len("data:"):])
+	var envelope map[string]json.RawMessage
+	if json.Unmarshal(data, &envelope) != nil {
+		return line
+	}
+	var typ string
+	if json.Unmarshal(envelope["type"], &typ) != nil || typ != "message_start" {
+		return line
+	}
+	var message map[string]json.RawMessage
+	if json.Unmarshal(envelope["message"], &message) != nil || message == nil {
+		return line
+	}
+	modelJSON, err := json.Marshal(model)
+	if err != nil {
+		return line
+	}
+	message["model"] = modelJSON
+	envelope["message"], err = json.Marshal(message)
+	if err != nil {
+		return line
+	}
+	encoded, err := json.Marshal(envelope)
+	if err != nil {
+		return line
+	}
+	return bytes.Join([][]byte{leading, []byte("data: "), encoded, ending}, nil)
 }
 
 type openAIToolStreamState struct {

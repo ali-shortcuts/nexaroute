@@ -1,4 +1,4 @@
-# Configuration — v0.4
+# Configuration
 
 ## Runtime environment overrides
 
@@ -112,7 +112,7 @@ Important controls:
 - `max_retry_after_seconds`
 
 
-### Ready Mesh supervisor semantics
+### Ready-mesh supervisor semantics
 
 With `routing.strategy = "ready_mesh"` (recommended/default):
 
@@ -161,7 +161,7 @@ For local-only use, the default is safest:
 For Docker/LAN access, set an admin key and put TLS/reverse-proxy controls in front if the environment is not fully trusted.
 
 
-### Ready Mesh controls
+### Ready-mesh controls
 
 - `session_affinity` — preserve a successful conversation/deployment relationship while it remains healthy.
 - `session_ttl_seconds` — idle affinity lease; default `3600`.
@@ -175,7 +175,7 @@ Provider presets are served by the gateway itself through the Admin API so the W
 
 **Test connection** checks endpoint reachability/auth separately from **Test selected models**, which performs actual minimal model inference.
 
-## v0.5 routing, cache, client auth and model fields
+## Routing additions, cache, client auth and model fields
 
 ### routing (additions)
 
@@ -223,3 +223,86 @@ The resulting **effective remaining** values feed quota pressure. This is intent
 | `context_window` | `0` (unknown) | Advertised usable context window in tokens; requests estimated to exceed it skip this deployment. |
 | `input_cost_per_mtok` | `0` | USD per million input tokens, used for estimated-spend accounting. |
 | `output_cost_per_mtok` | `0` | USD per million output tokens, used for estimated-spend accounting. |
+
+## Model intelligence scorecards and evaluation
+
+The evaluation plane is an opt-in, admin-only observation plane. It never affects routing:
+no scorecard value is read by the router, the health manager or the decision
+plane (enforced by a structural import guard test). It is disabled by default
+and, while disabled, accepts no runs and writes no scorecards.
+
+### evaluation (new object, opt-in)
+
+| Field | Default | Bounds | Meaning |
+|---|---|---|---|
+| `enabled` | `false` | — | Master switch. While false, `POST /admin/api/evaluation/run` returns 409 and no artifact is imported. |
+| `live_enabled` | `false` | — | Second, independent switch for **live** physical-deployment evaluation (`"mode":"live"`). While false, live runs return 409 and no prompt leaves the gateway. Turning it on creates no traffic by itself: live calls happen only when an admin posts a run with `"mode":"live"` and an explicit `deployment_id`. |
+| `max_runs` | `64` | 1–512 | Bounded retained evaluation runs (memory and state file). |
+| `max_scorecards` | `1024` | 1–4096 | Scorecard registry bound (deployments). |
+| `import_path` | `""` | ≤ 4096 bytes | Read-only scorecard artifact (JSON). Re-read on config reload; a malformed artifact is rejected as a whole and reported as `import_error`. |
+| `state_path` | `""` | ≤ 4096 bytes | Optional durability file: one atomic, mode-0600 JSON document holding bounded runs and scorecards. |
+| `max_artifacts` | `128` | 1–512 | Per-run artifact bound. |
+| `latency_target_ms` | `0` | 0–600000 | Optional latency scoring target. A latency value is only produced when a target exists. |
+| `ttft_target_ms` | `0` | 0–600000 | Optional TTFT scoring target, same rule. |
+
+### Evaluation modes
+
+`POST /admin/api/evaluation/run` accepts an explicit `mode`:
+
+- `"mode":"replay"` (default) — grades recorded `artifacts[]`. Performs **no**
+  upstream I/O.
+- `"mode":"live"` — sends `prompts[]` to exactly one explicitly selected
+  physical deployment (`deployment_id`), one request per prompted case. Requires
+  `evaluation.enabled` **and** `evaluation.live_enabled`. It bypasses every
+  DecisionProvider and cannot change production health, affinity, cache, quota
+  or routing state. Prompts are inputs only: they are never written to run
+  records, scorecards, events, metrics or logs.
+
+```json
+"evaluation": {
+  "enabled": true,
+  "live_enabled": false,
+  "max_runs": 64,
+  "max_scorecards": 1024,
+  "import_path": "/etc/nexaroute/scorecards.json",
+  "state_path": "/var/lib/nexaroute/evaluation-state.json",
+  "max_artifacts": 128,
+  "latency_target_ms": 2000,
+  "ttft_target_ms": 800
+}
+```
+
+### Scorecard artifact shape (`import_path`)
+
+```json
+{"scorecards": [
+  {"deployment_id": "chat2api/deepseek", "provider_id": "chat2api", "model": "deepseek-chat",
+   "version": 1, "generated_at": "2026-09-26T12:00:00Z",
+   "values": {"coding": {"score": 0.8, "provenance": "imported",
+                          "sample_count": 12, "confidence": 0.375, "source": "vendor-bench"}}}
+]}
+```
+
+Every value must carry a provenance (`operator_config`, `imported`,
+`evaluation`, `production_telemetry`). Unknown fields, duplicate deployments,
+missing `generated_at`, missing provenance and missing samples for measured
+provenances reject the whole artifact. Values without evidence are never
+invented: a deployment with no evidence simply has no scorecard.
+
+### Evaluation runs
+
+`POST /admin/api/evaluation/run` replays **recorded artifacts** (never prompts)
+through deterministic suites:
+
+```json
+{"suite_id": "coding", "deployment_id": "chat2api/deepseek",
+ "artifacts": [{"case_id": "coding-bugfix", "status": "ok",
+                "unit_tests": {"compiled": true, "passed": 3}}],
+ "latency_target_ms": 2000}
+```
+
+Unknown fields, unknown suites, unknown deployments, mismatched
+`provider_id`/`model`, missing artifacts and oversized payloads are rejected. A
+run that produced too little evidence to meet the suite's minimum sample count
+stores the run but writes **no** scorecard (`scorecard_written: false`). Model
+outputs never appear in events, metrics or the admin snapshot.

@@ -11,4 +11,4 @@ COPY --from=build /out/nexaroute /nexaroute
 COPY --from=build --chown=65532:65532 /out/config /config
 ENV NEXAROUTE_LISTEN=0.0.0.0:8080 NEXAROUTE_ADMIN_BIND_LOCAL_ONLY=false
 EXPOSE 8080
-ENTRYPOINT ["/nexaroute","-config","/config/config.json"]
+ENTRYPOINT ["/nexaroute","-no-browser","-config","/config/config.json"]

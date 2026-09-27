@@ -1,4 +1,4 @@
-# Known gaps — v0.5.2
+# Known gaps
 
 These are explicit boundaries of the current code, not hidden assumptions.
 
@@ -8,11 +8,11 @@ Implemented runtime protocol classes are:
 
 - OpenAI-compatible Chat Completions
 - Anthropic-compatible Messages
+- OpenAI Responses (explicit `/v1/responses` path)
+- Gemini upstreams through the canonical adapter
 
 Not implemented as native protocol classes:
 
-- OpenAI Responses API
-- Gemini native API
 - Bedrock
 - Vertex AI
 - Azure-specific deployment semantics
@@ -45,12 +45,13 @@ Implemented:
 - credential rotation/failover/cooldown
 - rewritten config mode `0600`
 - secret-preserving provider edit
+- credentials stripped on all admin read surfaces (never revealed after save, even to admin GET / snapshot / metrics)
 
 Not implemented:
 
 - encrypted-at-rest secret vault / OS keyring integration
 
-The Web UI can reveal a resolved provider credential to an authorized local/admin user because edit visibility was an explicit project requirement. Do not expose that admin surface to untrusted networks.
+Saved provider keys are now write-only, including literal, pool, and environment keys. Headers and proxy URLs are also write-only. Editing a credential field replaces the whole credential set; individual saved pool keys cannot be revealed. Do not store credentials in base URLs or other public metadata. Do not expose the admin surface to untrusted networks.
 
 ## Admin security
 
@@ -87,10 +88,10 @@ The exact-match response cache is opt-in and deliberately narrow: non-streaming,
 
 Health probing is selective and event-driven. Startup establishes readiness, new/unverified deployments are probed, and failed deployments move into dedicated recovery loops. Successful real Claude traffic refreshes a deployment's ready-health lease, so actively used models are not needlessly synthetic-probed. A healthy deployment that remains idle past `probe.ready_lease_seconds` is micro-probed before its health proof is trusted indefinitely. The sweep interval remains configurable (minimum 1 second) without turning health checks into a quota/rate-limit attack.
 
-Micro-probes measure availability and latency. They do not measure model intelligence/answer quality. Model strength is expressed through configured deployment `priority` and `weight`; automatic quality benchmarking is outside the current v0.5.2 scope.
+Micro-probes measure availability and latency. They do not measure model intelligence/answer quality. Model strength is expressed through configured deployment `priority` and `weight`; automatic quality benchmarking is outside current scope.
 
 
-## Routing boundaries after Ready Mesh
+## Routing boundaries
 
 Implemented routing intelligence is deterministic and observable: session affinity, capability filtering, priority/weight policy, live concurrency pressure, latency/failure evidence, provider-level P2C selection, credential-level P2C selection, scoped capability circuits, and supervised recovery.
 
@@ -103,7 +104,7 @@ Not implemented yet:
 
 The last item is deliberate for the current data plane: a learned router would add latency, cost and a new failure mode. Model/task specialization should currently be expressed with aliases plus explicit capability metadata until a separately evaluated routing model can prove a measurable benefit.
 
-## Universal Compatibility Engine boundaries (v0.6)
+## Compatibility engine boundaries
 
 Implemented but bounded by design:
 
@@ -119,3 +120,28 @@ Implemented but bounded by design:
   `/admin/api/compat/reset`) re-opens the question.
 - The capability cache is in-memory, matching the single-process state model
   described above; multi-process deployments re-probe after restart.
+
+## Model intelligence and evaluation boundaries
+
+The evaluation plane is an admin-only observation surface and is
+explicitly bounded:
+
+- evaluation is **offline replay**: the admin endpoint accepts recorded
+  artifacts and never prompts a model, calls an upstream or spends provider
+  quota. Live, in-band quality measurement is not implemented;
+- no judge implementation ships. Deterministic evaluators decide every case; the
+  judge path exists and is proven never to override a deterministic verdict, but
+  the HTTP surface cannot enable it;
+- the suite catalog is built-in and versioned. Operator-defined suites and
+  custom case packs are not configurable yet;
+- `production_telemetry` provenance exists as a validated constructor
+  (`FromTelemetry`) but nothing ingests telemetry automatically; operational
+  values are only produced from a completed evaluation run (availability,
+  failure rate, and latency/TTFT when a target is configured);
+- scorecards are single-process state. `evaluation.state_path` gives one process
+  durable runs/scorecards, but there is no shared/distributed scorecard store,
+  no multi-node coordination and no history beyond the bounded version ring;
+- scorecard values are evidence records, not routing inputs. The evaluation plane does not
+  order candidates, change weights/priorities, gate failover or alter health by
+  scorecard content, and a structural guard test keeps the dependency direction
+  that way.

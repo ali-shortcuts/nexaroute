@@ -9,6 +9,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"reflect"
 	"runtime/debug"
 	"strings"
@@ -19,10 +20,14 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/cache"
 	"github.com/ali-shortcuts/nexaroute/internal/compat"
 	"github.com/ali-shortcuts/nexaroute/internal/config"
+	"github.com/ali-shortcuts/nexaroute/internal/decision"
+	"github.com/ali-shortcuts/nexaroute/internal/decision/jev"
+	"github.com/ali-shortcuts/nexaroute/internal/decision/policy"
 	"github.com/ali-shortcuts/nexaroute/internal/events"
 	"github.com/ali-shortcuts/nexaroute/internal/health"
 	"github.com/ali-shortcuts/nexaroute/internal/probe"
 	"github.com/ali-shortcuts/nexaroute/internal/providers"
+	"github.com/ali-shortcuts/nexaroute/internal/route"
 	"github.com/ali-shortcuts/nexaroute/internal/router"
 	"github.com/ali-shortcuts/nexaroute/internal/usage"
 )
@@ -47,11 +52,23 @@ type Server struct {
 	overloadRejects atomic.Uint64
 	adminRL         sync.Mutex
 	adminBuckets    map[string]*adminBucket
-	clientRL        sync.Mutex
-	clientBuckets   map[string]*clientBucket
-	respCache       *cache.Cache
-	usage           *usage.Tracker
-	capStore        *compat.Store
+	// Phase D: Decision plane
+	decisionRegistry     *decision.Registry
+	decisionOrchestrator *decision.Orchestrator
+	clientRL             sync.Mutex
+	clientBuckets        map[string]*clientBucket
+	respCache            *cache.Cache
+	usage                *usage.Tracker
+	capStore             *compat.Store
+	routeResolver        *route.Resolver
+	// Phase H: evaluation plane (scorecards + deterministic evaluation). Admin
+	// surface only; the data plane never reads it.
+	evaluation *evaluationPlane
+	// Phase C — task classification metrics (bounded cardinality)
+	taskMu             sync.Mutex
+	taskClassCounts    map[string]uint64 // key: task_type|complexity
+	taskAnalysisTotal  atomic.Uint64
+	taskAnalysisErrors atomic.Uint64
 }
 
 // adminBucket is a compact token bucket keyed by remote address. Capacity 90
@@ -121,7 +138,7 @@ func adminRemoteIP(r *http.Request) string {
 // adminHostAllowed rejects DNS-rebinding requests that present a Host header
 // pointing at a public name. It applies to the keyless loopback trust mode,
 // where a rebounded browser origin could otherwise read admin data (including
-// resolved provider API keys via reveal=1) same-origin without any CORS
+// provider configuration) same-origin without any CORS
 // preflight. When an explicit admin key is configured the check is skipped:
 // cross-origin reads already fail the key requirement.
 func adminHostAllowed(r *http.Request) bool {
@@ -155,18 +172,84 @@ func New(cfg config.Config, configPath string, reg *providers.Registry, rt *rout
 		cfg.ProviderFailureWindow(),
 		cfg.ProviderCooldown(),
 	)
-	return &Server{
+	s := &Server{
 		cfg: cfg, configPath: configPath, reg: reg, rt: rt, hm: hm, bus: bus, probe: pe, log: l,
-		respCache: cache.New(cfg.CacheTTL(), cfg.Cache.MaxEntries, int64(cfg.Cache.MaxBodyBytes)),
-		usage:     usage.New(),
-		capStore:  compat.NewStore(),
+		respCache:       cache.New(cfg.CacheTTL(), cfg.Cache.MaxEntries, int64(cfg.Cache.MaxBodyBytes)),
+		usage:           usage.New(),
+		capStore:        compat.NewStore(),
+		taskClassCounts: make(map[string]uint64, 32),
 	}
+	s.decisionRegistry = decision.NewRegistry()
+	// Phase E: register deterministic policy provider
+	policies := convertDecisionPolicies(cfg.DecisionPolicies)
+	policyProvider := policy.NewProvider(policies, cfg.Decision.Policy)
+	s.decisionRegistry.Register(policyProvider)
+	// Phase F: register external providers (jev)
+	for _, extCfg := range cfg.DecisionProviders {
+		if !extCfg.IsEnabled() {
+			continue
+		}
+		// Resolve API key
+		apiKey := extCfg.APIKey
+		if extCfg.APIKeyEnv != "" {
+			if v := os.Getenv(extCfg.APIKeyEnv); v != "" {
+				apiKey = v
+			}
+		}
+		if extCfg.Type == "jev" {
+			jevProvider, err := jev.NewProvider(jev.ProviderConfig{
+				ID:          extCfg.ID,
+				Type:        extCfg.Type,
+				Enabled:     extCfg.IsEnabled(),
+				APIKey:      apiKey,
+				APIKeyEnv:   extCfg.APIKeyEnv,
+				PrivacyMode: extCfg.PrivacyMode,
+				BaseURL:     extCfg.BaseURL,
+			})
+			if err != nil {
+				// Log but don't fail gateway startup; provider will be unavailable
+				if l != nil {
+					l.Printf("failed to create decision provider %s: %v", extCfg.ID, err)
+				}
+				continue
+			}
+			s.decisionRegistry.Register(jevProvider)
+		}
+	}
+	s.decisionOrchestrator = decision.NewOrchestratorWithConfig(s.decisionRegistry, cfg, &decision.Metrics{})
+	s.routeResolver = route.NewResolver(cfg, rt.All())
+	// Phase H: evaluation plane (opt-in, admin-only, never in the request path).
+	s.evaluation = newEvaluationPlane(cfg.Evaluation, nil)
+	s.evaluation.Configure(cfg.Evaluation, l)
+	return s
+}
+
+func convertDecisionPolicies(in []config.DecisionPolicyConfig) []policy.Policy {
+	out := make([]policy.Policy, 0, len(in))
+	for _, c := range in {
+		p, err := policy.FromConfig(c)
+		if err != nil {
+			// Config validation already ensures validity, but skip invalid on best-effort
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
 }
 
 func (s *Server) currentConfig() config.Config {
 	s.runtimeMu.RLock()
 	defer s.runtimeMu.RUnlock()
 	return cloneConfig(s.cfg)
+}
+
+// evaluationSnapshot returns the live evaluation plane under the runtime lock.
+// The plane is immutable-by-replacement: a config reload publishes a new plane
+// object, and in-flight readers keep a coherent reference.
+func (s *Server) evaluationSnapshot() *evaluationPlane {
+	s.runtimeMu.RLock()
+	defer s.runtimeMu.RUnlock()
+	return s.evaluation
 }
 
 func (s *Server) runtimeSettingsSnapshot() (config.RoutingConfig, config.ProbeConfig) {
@@ -183,6 +266,7 @@ func (s *Server) adminConfigSnapshot() config.AdminConfig {
 
 func cloneConfig(in config.Config) config.Config {
 	out := in
+	out.ClientAuth.Keys = append([]string(nil), in.ClientAuth.Keys...)
 	out.Providers = append([]config.ProviderConfig(nil), in.Providers...)
 	for i := range out.Providers {
 		if in.Providers[i].Headers != nil {
@@ -202,6 +286,46 @@ func cloneConfig(in config.Config) config.Config {
 			out.Providers[i].Models[j].Aliases = append([]string(nil), in.Providers[i].Models[j].Aliases...)
 		}
 	}
+	out.VirtualEndpoints = append([]config.VirtualEndpointConfig(nil), in.VirtualEndpoints...)
+	for i := range out.VirtualEndpoints {
+		if in.VirtualEndpoints[i].Protocols != nil {
+			out.VirtualEndpoints[i].Protocols = append([]string(nil), in.VirtualEndpoints[i].Protocols...)
+		}
+		if in.VirtualEndpoints[i].Enabled != nil {
+			b := *in.VirtualEndpoints[i].Enabled
+			out.VirtualEndpoints[i].Enabled = &b
+		}
+	}
+	out.RouteProfiles = append([]config.RouteProfileConfig(nil), in.RouteProfiles...)
+	out.CandidatePools = append([]config.CandidatePoolConfig(nil), in.CandidatePools...)
+	for i := range out.CandidatePools {
+		out.CandidatePools[i].Deployments = append([]string(nil), in.CandidatePools[i].Deployments...)
+	}
+	out.FallbackChains = append([]config.FallbackChainConfig(nil), in.FallbackChains...)
+	for i := range out.FallbackChains {
+		out.FallbackChains[i].Pools = append([]string(nil), in.FallbackChains[i].Pools...)
+	}
+	out.DecisionPolicies = append([]config.DecisionPolicyConfig(nil), in.DecisionPolicies...)
+	for i := range out.DecisionPolicies {
+		if in.DecisionPolicies[i].TaskOverrides != nil {
+			out.DecisionPolicies[i].TaskOverrides = map[string]config.DecisionPolicyWeights{}
+			for k, v := range in.DecisionPolicies[i].TaskOverrides {
+				out.DecisionPolicies[i].TaskOverrides[k] = v
+			}
+		}
+	}
+	out.DecisionProviders = append([]config.DecisionProviderConfig(nil), in.DecisionProviders...)
+	for i := range out.DecisionProviders {
+		if in.DecisionProviders[i].Enabled != nil {
+			b := *in.DecisionProviders[i].Enabled
+			out.DecisionProviders[i].Enabled = &b
+		}
+	}
+	out.DecisionChains = append([]config.DecisionChainConfig(nil), in.DecisionChains...)
+	for i := range out.DecisionChains {
+		out.DecisionChains[i].Steps = append([]config.DecisionChainStep(nil), in.DecisionChains[i].Steps...)
+	}
+	// DecisionProviderHealth is value struct, already copied
 	return out
 }
 
@@ -329,6 +453,11 @@ func (s *Server) applyConfigLocked(cfg config.Config) error {
 	if err := config.SaveAtomic(s.configPath, cfg); err != nil {
 		return err
 	}
+	// Phase H: prepare the next evaluation plane outside the runtime lock so an
+	// artifact import never blocks the request path. Evidence already recorded is
+	// carried over.
+	nextEvaluation := newEvaluationPlane(cfg.Evaluation, s.evaluation)
+	nextEvaluation.Configure(cfg.Evaluation, s.log)
 
 	s.runtimeMu.Lock()
 	defer s.runtimeMu.Unlock()
@@ -351,6 +480,10 @@ func (s *Server) applyConfigLocked(cfg config.Config) error {
 		valid[d.ID] = struct{}{}
 	}
 	s.hm.Retain(valid)
+	// Phase H: evaluation evidence for removed deployments does not survive a
+	// config swap, and the freshly prepared plane is published atomically.
+	s.evaluation = nextEvaluation
+	s.evaluation.Retain(valid)
 	validProviders := map[string]struct{}{}
 	for _, p := range cfg.Providers {
 		if p.Enabled {
@@ -394,6 +527,121 @@ func (s *Server) applyConfigLocked(cfg config.Config) error {
 	}
 
 	s.cfg = cfg
+	// Phase G: update decision orchestrator with chains and health (coherent snapshot)
+	if s.decisionOrchestrator != nil {
+		// Preserve provider state across unrelated reloads: compare old vs new identity
+		oldProvidersByDecisionID := map[string]config.DecisionProviderConfig{}
+		for _, p := range oldCfg.DecisionProviders {
+			oldProvidersByDecisionID[p.ID] = p
+		}
+		// If identity materially changes (endpoint/key/type/privacy), reset state
+		if s.decisionOrchestrator.ProviderState() != nil {
+			for _, newP := range cfg.DecisionProviders {
+				oldP, existed := oldProvidersByDecisionID[newP.ID]
+				if !existed {
+					continue
+				}
+				// Compare identity fields that affect runtime health
+				oldKey := oldP.APIKey
+				if oldP.APIKeyEnv != "" {
+					if v := os.Getenv(oldP.APIKeyEnv); v != "" {
+						oldKey = v
+					}
+				}
+				newKey := newP.APIKey
+				if newP.APIKeyEnv != "" {
+					if v := os.Getenv(newP.APIKeyEnv); v != "" {
+						newKey = v
+					}
+				}
+				if oldP.Type != newP.Type || oldP.BaseURL != newP.BaseURL || oldKey != newKey || oldP.PrivacyMode != newP.PrivacyMode {
+					s.decisionOrchestrator.ProviderState().Reset(newP.ID)
+				}
+			}
+			// Also reset state for removed providers (they will be re-registered as disabled)
+		}
+		s.decisionOrchestrator.UpdateFullConfig(cfg)
+	}
+	// Phase E: hot-reload policy provider
+	if s.decisionRegistry != nil {
+		if pp, ok := s.decisionRegistry.Get("policy"); ok {
+			if updater, ok := pp.(interface{ UpdatePolicies([]policy.Policy, string) }); ok {
+				policies := convertDecisionPolicies(cfg.DecisionPolicies)
+				updater.UpdatePolicies(policies, cfg.Decision.Policy)
+			}
+		}
+		// Phase F/G: hot-reload external providers (jev) — build immutable new adapters and swap atomically
+		// Track old external IDs for removal
+		oldExternalIDs := map[string]struct{}{}
+		for _, id := range s.decisionRegistry.List() {
+			if id != "local" && id != "policy" {
+				oldExternalIDs[id] = struct{}{}
+			}
+		}
+		// Register new/updated external providers
+		newExternalIDs := map[string]struct{}{}
+		for _, extCfg := range cfg.DecisionProviders {
+			newExternalIDs[extCfg.ID] = struct{}{}
+			if !extCfg.IsEnabled() {
+				// Register disabled placeholder that returns unavailable
+				if extCfg.Type == "jev" {
+					disabledProvider, _ := jev.NewProvider(jev.ProviderConfig{
+						ID:          extCfg.ID,
+						Type:        extCfg.Type,
+						Enabled:     false,
+						PrivacyMode: extCfg.PrivacyMode,
+						BaseURL:     extCfg.BaseURL,
+					})
+					if disabledProvider != nil {
+						s.decisionRegistry.Register(disabledProvider)
+					}
+				}
+				continue
+			}
+			apiKey := extCfg.APIKey
+			if extCfg.APIKeyEnv != "" {
+				if v := os.Getenv(extCfg.APIKeyEnv); v != "" {
+					apiKey = v
+				}
+			}
+			if extCfg.Type == "jev" {
+				jevProvider, err := jev.NewProvider(jev.ProviderConfig{
+					ID:          extCfg.ID,
+					Type:        extCfg.Type,
+					Enabled:     extCfg.IsEnabled(),
+					APIKey:      apiKey,
+					APIKeyEnv:   extCfg.APIKeyEnv,
+					PrivacyMode: extCfg.PrivacyMode,
+					BaseURL:     extCfg.BaseURL,
+				})
+				if err != nil {
+					if s.log != nil {
+						s.log.Printf("failed to create decision provider %s: %v", extCfg.ID, err)
+					}
+					continue
+				}
+				s.decisionRegistry.Register(jevProvider)
+			}
+		}
+		// For removed external providers, register unavailable placeholder to stop new calls
+		for oldID := range oldExternalIDs {
+			if _, stillExists := newExternalIDs[oldID]; !stillExists {
+				disabledProvider, _ := jev.NewProvider(jev.ProviderConfig{
+					ID:      oldID,
+					Type:    "jev",
+					Enabled: false,
+				})
+				if disabledProvider != nil {
+					s.decisionRegistry.Register(disabledProvider)
+				}
+				// Also reset its provider state (removed)
+				if s.decisionOrchestrator != nil && s.decisionOrchestrator.ProviderState() != nil {
+					s.decisionOrchestrator.ProviderState().Reset(oldID)
+				}
+			}
+		}
+	}
+	s.routeResolver = route.NewResolver(cfg, s.rt.All())
 	s.probe.Reload(cfg)
 	s.syncCapabilityContracts(cfg)
 	for _, a := range staleAdapters {
@@ -434,6 +682,92 @@ func (s *Server) routeSnapshot(req router.Requirement) (config.Config, []router.
 	out := s.cfg
 	out.Providers = nil
 	return out, s.rt.Candidates(req)
+}
+
+// resolveVirtualEndpoint looks up a virtual endpoint by public model.
+// Returns resolved route, true if virtual, error if disabled.
+func (s *Server) resolveVirtualEndpoint(model string) (route.ResolvedRoute, bool, error) {
+	s.runtimeMu.RLock()
+	resolver := s.routeResolver
+	s.runtimeMu.RUnlock()
+	if resolver == nil {
+		return route.ResolvedRoute{}, false, nil
+	}
+	resolved, ok := resolver.Resolve(model)
+	if !ok {
+		return route.ResolvedRoute{}, false, nil
+	}
+	// Check enabled state
+	ve, exists := resolver.ResolveByID(resolved.VirtualEndpointID)
+	if !exists {
+		return route.ResolvedRoute{}, false, nil
+	}
+	if !ve.IsEnabled() {
+		return resolved, true, fmt.Errorf("virtual endpoint %q is disabled", ve.ID)
+	}
+	return resolved, true, nil
+}
+
+// candidatesForRequirement returns routing config, filtered candidates, resolved route if virtual, and error if disabled.
+func (s *Server) candidatesForRequirement(req router.Requirement, protocol string) (config.Config, []router.Scored, *route.ResolvedRoute, error) {
+	// Snapshot cfg and resolver
+	s.runtimeMu.RLock()
+	cfgCopy := s.cfg
+	cfgCopy.Providers = nil
+	resolver := s.routeResolver
+	rt := s.rt
+	s.runtimeMu.RUnlock()
+
+	resolved, isVirtual, err := s.resolveVirtualEndpoint(req.Model)
+	if err != nil {
+		return cfgCopy, nil, &resolved, err
+	}
+	if !isVirtual {
+		// Non-virtual: use normal candidate set for the requested model.
+		candidates := rt.Candidates(req)
+		return cfgCopy, candidates, nil, nil
+	}
+	// Virtual endpoint: protocol restriction check.
+	// Phase B semantics (exact, documented):
+	// - Empty protocols list → allow all ingress protocols.
+	// - "anthropic" → only /v1/messages
+	// - "openai" → only /v1/chat/completions
+	// - "openai_responses" or alias "responses" → only /v1/responses
+	// No hidden expansion: "openai" does NOT implicitly allow "openai_responses".
+	// If operator wants both chat and responses, they must list both protocols.
+	if resolver != nil {
+		if ve, ok := resolver.ResolveByID(resolved.VirtualEndpointID); ok && len(ve.Protocols) > 0 {
+			allowed := false
+			// Normalize incoming protocol
+			normIncoming := strings.ToLower(strings.TrimSpace(protocol))
+			if normIncoming == "responses" {
+				normIncoming = "openai_responses"
+			}
+			for _, p := range ve.Protocols {
+				normP := strings.ToLower(strings.TrimSpace(p))
+				if normP == "responses" {
+					normP = "openai_responses"
+				}
+				if normP == normIncoming {
+					allowed = true
+					break
+				}
+			}
+			if !allowed {
+				return cfgCopy, nil, &resolved, fmt.Errorf("protocol %q not allowed for virtual endpoint %q (allowed: %s)", protocol, ve.ID, strings.Join(ve.Protocols, ", "))
+			}
+		}
+	}
+	// For virtual endpoints, fetch candidates without model filter (auto) to get all eligible deployments,
+	// preserving other requirement dimensions (tools, vision, etc).
+	reqAll := req
+	reqAll.Model = ""
+	allCandidates := rt.Candidates(reqAll)
+	if resolver != nil {
+		filtered := resolver.AllFilteredCandidates(allCandidates, resolved)
+		return cfgCopy, filtered, &resolved, nil
+	}
+	return cfgCopy, allCandidates, &resolved, nil
 }
 
 func (s *Server) currentRouteCandidate(id string, req router.Requirement) (router.Scored, providers.Adapter, bool) {
@@ -477,6 +811,23 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/admin/api/compat/reset", s.adminCompatReset)
 	mux.HandleFunc("/admin/api/provider-discover", s.adminProviderDiscover)
 	mux.HandleFunc("/admin/api/settings", s.adminSettings)
+	// Phase B: Virtual Endpoints, Route Profiles, Candidate Pools, Fallback Chains
+	mux.HandleFunc("/admin/api/virtual-endpoints", s.adminVirtualEndpoints)
+	mux.HandleFunc("/admin/api/virtual-endpoints/", s.adminVirtualEndpointByID)
+	mux.HandleFunc("/admin/api/route-profiles", s.adminRouteProfiles)
+	mux.HandleFunc("/admin/api/route-profiles/", s.adminRouteProfileByID)
+	mux.HandleFunc("/admin/api/candidate-pools", s.adminCandidatePools)
+	mux.HandleFunc("/admin/api/candidate-pools/", s.adminCandidatePoolByID)
+	mux.HandleFunc("/admin/api/fallback-chains", s.adminFallbackChains)
+	mux.HandleFunc("/admin/api/fallback-chains/", s.adminFallbackChainByID)
+	// Phase H: Model Intelligence scorecards + deterministic evaluation
+	mux.HandleFunc("/admin/api/scorecards", s.adminScorecards)
+	mux.HandleFunc("/admin/api/scorecards/", s.adminScorecardByDeployment)
+	mux.HandleFunc("/admin/api/evaluation/suites", s.adminEvaluationSuites)
+	mux.HandleFunc("/admin/api/evaluation/runs", s.adminEvaluationRuns)
+	mux.HandleFunc("/admin/api/evaluation/run", s.adminEvaluationRun)
+	// Legacy endpoint (PR #13 compatibility)
+	mux.HandleFunc("/admin/api/endpoint", s.adminEndpoint)
 
 	sub, _ := fs.Sub(webFS, "web")
 	mux.Handle("/", http.FileServer(http.FS(sub)))
@@ -710,6 +1061,6 @@ func (s *Server) adminAuthorized(r *http.Request) bool {
 	}
 	// Keyless mode trusts the loopback; make sure the request was actually
 	// addressed to a loopback name so a DNS-rebound browser origin cannot
-	// silently read admin data (including reveal=1 resolved keys).
+	// silently read privileged admin data.
 	return isLoopback && adminHostAllowed(r)
 }

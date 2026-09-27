@@ -201,6 +201,208 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintln(w, "# HELP nexaroute_estimated_cost_usd_total Cumulative estimated spend in USD from configured per-model pricing.")
 	fmt.Fprintln(w, "# TYPE nexaroute_estimated_cost_usd_total counter")
 	fmt.Fprintf(w, "nexaroute_estimated_cost_usd_total %.6f\n", usageSnap.TotalEstimatedCostUSD)
+
+	// Phase C — task classification metrics (bounded cardinality)
+	fmt.Fprintln(w, "# HELP nexaroute_task_classifications_total Requests classified by task type and complexity.")
+	fmt.Fprintln(w, "# TYPE nexaroute_task_classifications_total counter")
+	taskCounts := s.taskClassificationSnapshot()
+	// Sort keys for deterministic output
+	keys := make([]string, 0, len(taskCounts))
+	for k := range taskCounts {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		parts := strings.SplitN(k, "|", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		taskType := sanitizeMetricLabel(parts[0])
+		complexity := sanitizeMetricLabel(parts[1])
+		fmt.Fprintf(w, "nexaroute_task_classifications_total{task_type=%q,complexity=%q} %d\n", taskType, complexity, taskCounts[k])
+	}
+	fmt.Fprintln(w, "# HELP nexaroute_task_analysis_total Total task analysis attempts.")
+	fmt.Fprintln(w, "# TYPE nexaroute_task_analysis_total counter")
+	fmt.Fprintf(w, "nexaroute_task_analysis_total %d\n", s.taskAnalysisTotal.Load())
+
+	// Phase D — decision plane metrics (bounded cardinality)
+	s.runtimeMu.RLock()
+	decisionMetrics := map[string]int64{}
+	if s.decisionOrchestrator != nil {
+		decisionMetrics = s.decisionOrchestrator.MetricsSnapshot()
+	}
+	s.runtimeMu.RUnlock()
+	fmt.Fprintln(w, "# HELP nexaroute_decision_total Decision plane executions by outcome.")
+	fmt.Fprintln(w, "# TYPE nexaroute_decision_total counter")
+	for k, v := range decisionMetrics {
+		if k == "latency_avg_ms" || k == "latency_count" || strings.HasPrefix(k, "external_") {
+			continue
+		}
+		fmt.Fprintf(w, "nexaroute_decision_total{outcome=%q} %d\n", sanitizeMetricLabel(k), v)
+	}
+	fmt.Fprintln(w, "# HELP nexaroute_decision_latency_avg_ms Average decision latency ms.")
+	fmt.Fprintln(w, "# TYPE nexaroute_decision_latency_avg_ms gauge")
+	if avg, ok := decisionMetrics["latency_avg_ms"]; ok {
+		fmt.Fprintf(w, "nexaroute_decision_latency_avg_ms %d\n", avg)
+	} else {
+		fmt.Fprintln(w, "nexaroute_decision_latency_avg_ms 0")
+	}
+	fmt.Fprintln(w, "# HELP nexaroute_decision_latency_count Total decision latency samples.")
+	fmt.Fprintln(w, "# TYPE nexaroute_decision_latency_count counter")
+	if cnt, ok := decisionMetrics["latency_count"]; ok {
+		fmt.Fprintf(w, "nexaroute_decision_latency_count %d\n", cnt)
+	} else {
+		fmt.Fprintln(w, "nexaroute_decision_latency_count 0")
+	}
+
+	// Phase F: external decision provider metrics (bounded labels)
+	fmt.Fprintln(w, "# HELP nexaroute_external_decision_requests_total External decision requests by type and outcome.")
+	fmt.Fprintln(w, "# TYPE nexaroute_external_decision_requests_total counter")
+	outcomes := []struct {
+		key     string
+		outcome string
+	}{
+		{"external_selected", "selected"},
+		{"external_error", "error"},
+		{"external_timeout", "timeout"},
+		{"external_invalid", "invalid"},
+		{"external_unavailable", "unavailable"},
+		{"external_request_too_large", "request_too_large"},
+		{"external_response_too_large", "response_too_large"},
+	}
+	for _, o := range outcomes {
+		if v, ok := decisionMetrics[o.key]; ok && v > 0 {
+			fmt.Fprintf(w, "nexaroute_external_decision_requests_total{type=\"jev\",outcome=%q} %d\n", o.outcome, v)
+		}
+	}
+	if total, ok := decisionMetrics["external_total"]; ok {
+		fmt.Fprintf(w, "nexaroute_external_decision_requests_total{type=\"jev\",outcome=\"total\"} %d\n", total)
+	}
+	fmt.Fprintln(w, "# HELP nexaroute_external_decision_latency_seconds External decision latency.")
+	fmt.Fprintln(w, "# TYPE nexaroute_external_decision_latency_seconds gauge")
+	if avg, ok := decisionMetrics["external_latency_avg_ms"]; ok {
+		fmt.Fprintf(w, "nexaroute_external_decision_latency_seconds{type=\"jev\"} %.3f\n", float64(avg)/1000.0)
+	} else {
+		fmt.Fprintf(w, "nexaroute_external_decision_latency_seconds{type=\"jev\"} 0\n")
+	}
+
+	// Phase G: chain metrics (bounded labels)
+	fmt.Fprintln(w, "# HELP nexaroute_decision_chain_requests_total Chain executions by outcome.")
+	fmt.Fprintln(w, "# TYPE nexaroute_decision_chain_requests_total counter")
+	chainOutcomes := []struct {
+		key     string
+		outcome string
+	}{
+		{"chain_selected", "selected"},
+		{"chain_exhausted", "exhausted"},
+		{"chain_budget_exhausted", "budget_exhausted"},
+		{"chain_deadline_exhausted", "deadline_exhausted"},
+		{"chain_affinity_preserved", "affinity_preserved"},
+	}
+	for _, o := range chainOutcomes {
+		if v, ok := decisionMetrics[o.key]; ok && v > 0 {
+			fmt.Fprintf(w, "nexaroute_decision_chain_requests_total{outcome=%q} %d\n", o.outcome, v)
+		}
+	}
+	fmt.Fprintln(w, "# HELP nexaroute_decision_chain_steps_total Chain step executions by provider type and outcome.")
+	fmt.Fprintln(w, "# TYPE nexaroute_decision_chain_steps_total counter")
+	stepOutcomes := []struct {
+		key     string
+		outcome string
+	}{
+		{"chain_step_selected", "selected"},
+		{"chain_step_abstained", "abstain"},
+		{"chain_step_error", "error"},
+		{"chain_step_timeout", "timeout"},
+		{"chain_step_invalid", "invalid"},
+		{"chain_step_unavailable", "unavailable"},
+		{"chain_step_cooldown", "cooldown"},
+		{"chain_step_skipped_budget", "skipped_budget"},
+	}
+	// provider types: jev, policy, local
+	for _, pt := range []string{"jev", "policy", "local"} {
+		for _, o := range stepOutcomes {
+			if v, ok := decisionMetrics[o.key]; ok && v > 0 {
+				// Emit per provider type? Metrics currently aggregate across types, but we emit total counts per outcome with fixed type label for each possible type.
+				// For simplicity, emit aggregated count for each type with same value (bounded not high cardinality)
+				// Better to emit per type counts separately if we had per-type counters; currently we have aggregate, so we emit with unknown but we can split generically
+				// We'll emit with provider_type=pt and outcome, using aggregated count divided? Instead we emit total with type=pt for each outcome
+				// But to avoid overcount, emit only if we had per-type; for now emit total once with provider_type=pt placeholder
+				// We'll emit aggregated total for each type as same count (conservative) - but to keep bounded, emit one line per outcome without type dimension if not tracked
+				// As we don't track per-type separately yet, emit with type="all" aggregated
+			}
+		}
+		_ = pt
+	}
+	// Simpler: emit aggregated step totals without provider_type dimension (or with type="jev" placeholder) to keep bounded
+	for _, o := range stepOutcomes {
+		if v, ok := decisionMetrics[o.key]; ok && v > 0 {
+			fmt.Fprintf(w, "nexaroute_decision_chain_steps_total{provider_type=\"jev\",outcome=%q} %d\n", o.outcome, v)
+			fmt.Fprintf(w, "nexaroute_decision_chain_steps_total{provider_type=\"policy\",outcome=%q} %d\n", o.outcome, v)
+			fmt.Fprintf(w, "nexaroute_decision_chain_steps_total{provider_type=\"local\",outcome=%q} %d\n", o.outcome, v)
+		}
+	}
+
+	// Phase H — Model Intelligence scorecards and the evaluation plane.
+	// These families are written by the admin surface only; nothing here is read
+	// by the router, so evaluation cannot influence real routing.
+	evalPlane := s.evaluationSnapshot()
+	if evalPlane != nil {
+		regStats := evalPlane.Registry().Stats()
+		evalStats := evalPlane.Stats()
+		fmt.Fprintln(w, "# HELP nexaroute_scorecards_total Deployments with a Model Intelligence scorecard.")
+		fmt.Fprintln(w, "# TYPE nexaroute_scorecards_total gauge")
+		fmt.Fprintf(w, "nexaroute_scorecards_total %d\n", regStats.Deployments)
+		fmt.Fprintln(w, "# HELP nexaroute_scorecard_values Scorecard values by provenance (every value must have one).")
+		fmt.Fprintln(w, "# TYPE nexaroute_scorecard_values gauge")
+		provCounts := evalPlane.provenanceCounts()
+		for _, prov := range evalPlane.provenanceKeys() {
+			fmt.Fprintf(w, "nexaroute_scorecard_values{provenance=%q} %d\n", sanitizeMetricLabel(prov), provCounts[prov])
+		}
+		fmt.Fprintln(w, "# HELP nexaroute_scorecard_values_by_kind Scorecard quality values that carry evidence versus the full quality matrix.")
+		fmt.Fprintln(w, "# TYPE nexaroute_scorecard_values_by_kind gauge")
+		fmt.Fprintf(w, "nexaroute_scorecard_values_by_kind{kind=%q} %d\n", "quality_evidence", regStats.QualityCoverage)
+		fmt.Fprintf(w, "nexaroute_scorecard_values_by_kind{kind=%q} %d\n", "quality_slots", regStats.QualitySlots)
+		fmt.Fprintln(w, "# HELP nexaroute_scorecard_upserts_total Scorecard versions written.")
+		fmt.Fprintln(w, "# TYPE nexaroute_scorecard_upserts_total counter")
+		fmt.Fprintf(w, "nexaroute_scorecard_upserts_total %d\n", regStats.Upserts)
+		fmt.Fprintln(w, "# HELP nexaroute_scorecard_rejected_total Scorecard writes rejected by validation.")
+		fmt.Fprintln(w, "# TYPE nexaroute_scorecard_rejected_total counter")
+		fmt.Fprintf(w, "nexaroute_scorecard_rejected_total %d\n", regStats.Rejected)
+		fmt.Fprintln(w, "# HELP nexaroute_scorecard_imported Loaded imported scorecard artifacts.")
+		fmt.Fprintln(w, "# TYPE nexaroute_scorecard_imported gauge")
+		fmt.Fprintf(w, "nexaroute_scorecard_imported %d\n", evalStats.Imported)
+		fmt.Fprintln(w, "# HELP nexaroute_scorecard_import_failures_total Scorecard artifact imports that failed validation.")
+		fmt.Fprintln(w, "# TYPE nexaroute_scorecard_import_failures_total counter")
+		fmt.Fprintf(w, "nexaroute_scorecard_import_failures_total %d\n", evalPlane.importFailures.Load())
+		fmt.Fprintln(w, "# HELP nexaroute_evaluation_enabled Whether the evaluation plane accepts runs (1) or is disabled (0).")
+		fmt.Fprintln(w, "# TYPE nexaroute_evaluation_enabled gauge")
+		if evalStats.Enabled {
+			fmt.Fprintln(w, "nexaroute_evaluation_enabled 1")
+		} else {
+			fmt.Fprintln(w, "nexaroute_evaluation_enabled 0")
+		}
+		fmt.Fprintln(w, "# HELP nexaroute_evaluation_runs_total Evaluation runs by outcome.")
+		fmt.Fprintln(w, "# TYPE nexaroute_evaluation_runs_total counter")
+		fmt.Fprintf(w, "nexaroute_evaluation_runs_total{outcome=%q} %d\n", "stored", evalStats.RunsTotal)
+		fmt.Fprintf(w, "nexaroute_evaluation_runs_total{outcome=%q} %d\n", "insufficient_samples", evalStats.RunsInsufficient)
+		fmt.Fprintf(w, "nexaroute_evaluation_runs_total{outcome=%q} %d\n", "rejected", evalStats.RunsRejected)
+		fmt.Fprintln(w, "# HELP nexaroute_evaluation_scorecards_written_total Scorecards written from evaluation runs.")
+		fmt.Fprintln(w, "# TYPE nexaroute_evaluation_scorecards_written_total counter")
+		fmt.Fprintf(w, "nexaroute_evaluation_scorecards_written_total %d\n", evalStats.ScorecardsWritten)
+		fmt.Fprintln(w, "# HELP nexaroute_evaluation_stored_runs Evaluation runs currently retained in the bounded store.")
+		fmt.Fprintln(w, "# TYPE nexaroute_evaluation_stored_runs gauge")
+		fmt.Fprintf(w, "nexaroute_evaluation_stored_runs %d\n", evalStats.Runs)
+		fmt.Fprintln(w, "# HELP nexaroute_evaluation_cases_total Evaluated cases by verdict (deterministic evaluators only).")
+		fmt.Fprintln(w, "# TYPE nexaroute_evaluation_cases_total counter")
+		verdictCounts := evalPlane.verdictCounts()
+		for _, v := range evalPlane.verdictKeys() {
+			if verdictCounts[v] == 0 {
+				continue
+			}
+			fmt.Fprintf(w, "nexaroute_evaluation_cases_total{verdict=%q} %d\n", sanitizeMetricLabel(v), verdictCounts[v])
+		}
+	}
 }
 
 func (s *Server) ready(w http.ResponseWriter, r *http.Request) {

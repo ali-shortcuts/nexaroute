@@ -66,6 +66,9 @@ const subtitles = {
   console: 'Every routing decision, probe, failover and recovery — as it happens.',
   providers: 'Upstream pools, credentials, endpoints and per-provider capacity.',
   models: 'Per-deployment routing state: health, latency and failure tracking.',
+  virtual: 'Virtual Endpoints: stable public model names → Route Profile → Candidate Pool. Change backends without client reconfig.',
+  profiles: 'Route Profiles: reusable routing intent and policy.',
+  pools: 'Candidate Pools and Fallback Chains: pools define configured candidates; health/compat defines runtime eligible per-request.',
   health: 'Live provider pressure and capability-scoped circuit evidence.',
   cli: 'One-click connection snippets for coding agents and OpenAI-compatible tools.',
   settings: 'Hot-reloaded routing and probe configuration.',
@@ -82,6 +85,9 @@ $$('nav button').forEach(b => b.onclick = () => {
   if (b.dataset.tab === 'console') { consoleUnread = 0; $('#consoleDot').hidden = true; renderConsole(); }
   if (b.dataset.tab === 'cli') renderCLI();
   if (b.dataset.tab === 'compat') loadCompat();
+  if (b.dataset.tab === 'virtual') renderVirtual();
+  if (b.dataset.tab === 'profiles') renderProfiles();
+  if (b.dataset.tab === 'pools') renderPools();
 });
 $('#pauseBtn').onclick = () => {
   paused = !paused;
@@ -227,6 +233,9 @@ function render() {
   renderModels(ds, h);
   renderHealthTab(h);
   if ($('#compat').classList.contains('active')) renderCompat();
+  if ($('#virtual').classList.contains('active')) renderVirtual();
+  if ($('#profiles').classList.contains('active')) renderProfiles();
+  if ($('#pools').classList.contains('active')) renderPools();
   renderConsole();
   $('#settingsJson').textContent = JSON.stringify(snap.config || {}, null, 2);
   // Cache + usage KPI cards (v0.5)
@@ -500,38 +509,45 @@ setInterval(() => { $('#footClock').textContent = new Date().toLocaleTimeString(
 /* ---------- CLI tools tab ---------- */
 function cliSnippet(kind) {
   const base = location.origin;
+  const ves = snap.virtual_endpoints || [];
+  const firstVE = ves.length ? ves[0] : null;
+  const veModel = firstVE ? (firstVE.public_model || firstVE.id) : 'nexa-code';
+  const veList = ves.length ? ves.map(v => v.public_model || v.id).join(', ') : 'auto, claude-auto';
   if (kind === 'claude') return {
-    title: 'Claude Code / Anthropic clients',
-    note: 'The placeholder key exists only for clients that require a non-empty value. Aliases such as auto/coding map many deployments behind one client model.',
+    title: 'Claude Code / Anthropic clients (virtual endpoint)',
+    note: ves.length ? `Virtual endpoints: ${veList}. Using ${veModel} routes through your configured pools without client reconfiguration.` : 'The placeholder key exists only for clients that require a non-empty value. Virtual endpoints provide stable public names.',
     body:
-`<span class="c"># Anthropic-compatible ingress</span>
+`<span class="c"># Anthropic-compatible ingress via virtual endpoint</span>
 export ANTHROPIC_BASE_URL=${base}
 export ANTHROPIC_AUTH_TOKEN=local-placeholder
-export ANTHROPIC_MODEL=coding
+export ANTHROPIC_MODEL=${veModel}
 
-<span class="c"># or an explicit model / deployment</span>
-export ANTHROPIC_MODEL=auto`
+<span class="c"># virtual endpoints available: ${veList}</span>
+<span class="c"># physical backend can change without client update</span>`
   };
   if (kind === 'openai') return {
-    title: 'OpenAI-compatible tools',
-    note: 'Chat Completions requests flow through the same routing plane and the same bulletproof protocol translation.',
+    title: 'OpenAI-compatible tools (virtual endpoint)',
+    note: ves.length ? `Virtual endpoint ${veModel} → Route Profile → Pool → existing router. Pool ∩ Eligibility = routable set.` : 'Chat Completions requests flow through the same routing plane and the same bulletproof protocol translation.',
     body:
-`<span class="c"># OpenAI Chat Completions ingress</span>
+`<span class="c"># OpenAI Chat Completions ingress via virtual endpoint</span>
 export OPENAI_BASE_URL=${base}/v1
 export OPENAI_API_KEY=local-placeholder
 
-<span class="c"># direct curl</span>
+<span class="c"># direct curl with virtual model</span>
 curl ${base}/v1/chat/completions \\
   -H "Content-Type: application/json" \\
-  -d '{"model":"auto","messages":[{"role":"user","content":"hi"}]}'`
+  -d '{"model":"${veModel}","messages":[{"role":"user","content":"hi"}]}'
+
+<span class="c"># virtual endpoints: ${veList}</span>`
   };
   if (kind === 'env') return {
     title: 'Session environment block',
-    note: 'Drop this into .zshrc / .bashrc for the current machine.',
+    note: ves.length ? `Use virtual model ${veModel} for stable client identity.` : 'Drop this into .zshrc / .bashrc for the current machine.',
     body:
-`<span class="c"># NexaRoute client environment</span>
+`<span class="c"># NexaRoute client environment (virtual endpoint)</span>
 export ANTHROPIC_BASE_URL=${base}
 export ANTHROPIC_AUTH_TOKEN=local-placeholder
+export ANTHROPIC_MODEL=${veModel}
 export OPENAI_BASE_URL=${base}/v1
 export OPENAI_API_KEY=local-placeholder`
   };
@@ -549,9 +565,15 @@ curl -s ${base}/readyz
 curl -s ${base}/metrics
 
 <span class="c"># exposed models and aliases</span>
-curl -s ${base}/v1/models`
+curl -s ${base}/v1/models
+
+<span class="c"># virtual endpoints</span>
+curl -s ${base}/admin/api/virtual-endpoints -H "x-admin-key: $ADMIN_KEY"
+
+<span class="c"># example: ${veModel} → pool (configured) → router eligibility → physical deployment</span>`
   };
 }
+
 function renderCLI() {
   const tabs = $$('#cliTabs button');
   const active = tabs.find(b => b.classList.contains('active')) || tabs[0];
@@ -677,6 +699,8 @@ $('#togglePKey').onclick = () => toggleSecret('#pKey', '#togglePKey');
 $('#pKey').oninput = () => editor.secretDirty = true;
 $('#pKeyEnv').oninput = () => editor.secretDirty = true;
 $('#pCredentials').oninput = () => editor.secretDirty = true;
+$('#pHeaders').oninput = () => editor.headersDirty = true;
+$('#pProxy').oninput = () => editor.proxyDirty = true;
 $('#pPreset').onchange = () => applyPreset($('#pPreset').value);
 $('#pType').onchange = () => {
   const a = $('#pAuth'), typ = $('#pType').value;
@@ -686,11 +710,9 @@ $('#pType').onchange = () => {
 };
 async function openEdit(id) {
   try {
-    const d = await api('/admin/api/providers/' + encodeURIComponent(id) + '?reveal=1'), p = d.provider;
-    // When the secret comes from an environment variable the resolved
-    // literal must stay out of the form: any keystroke in the field would
-    // flip preserve_secret off and persist the env secret into config.json.
-    p.api_key = d.secret_source === 'env' ? '' : (d.resolved_api_key || p.api_key || '');
+    const d = await api('/admin/api/providers/' + encodeURIComponent(id)), p = d.provider;
+    // Saved keys never leave the server. Blank, untouched fields preserve them.
+    p.api_key = '';
     editor = {
       mode: 'edit', originalId: id, provider: p,
       detected: (p.models || []).map(m => m.model),
@@ -714,12 +736,14 @@ function fillForm() {
   $('#pAuth').value = p.auth_mode || 'bearer';
   $('#pEnabled').checked = p.enabled !== false;
   $('#pKey').value = p.api_key || '';
-  $('#pKey').placeholder = editor.mode === 'edit' && editor.secretSource === 'env' ? 'stored in env var - leave blank to keep' : '';
+  $('#pKey').placeholder = editor.mode === 'edit' ? 'Saved key is write-only; leave untouched to keep' : '';
   $('#pKey').type = 'password';
   $('#togglePKey').textContent = 'Show';
   $('#pKeyEnv').value = p.api_key_env || '';
   $('#pHeaders').value = Object.keys(p.headers || {}).length ? JSON.stringify(p.headers, null, 2) : '';
-  $('#pProxy').value = p.proxy_url || '';
+  $('#pProxy').value = '';
+  $('#pProxy').placeholder = editor.mode === 'edit' ? 'Write-only; leave untouched to keep saved proxy' : '';
+  $('#pHeaders').placeholder = editor.mode === 'edit' ? 'Write-only; leave untouched to keep saved headers' : '{}';
   $('#pConcurrency').value = p.max_concurrency || 32;
   $('#pStreamIdle').value = p.stream_idle_timeout_seconds || 180;
   $('#pChatPath').value = p.chat_path || '/v1/chat/completions';
@@ -728,7 +752,8 @@ function fillForm() {
   $('#pModelsPath').value = p.models_path || '/v1/models';
   $('#pCountPath').value = p.count_tokens_path || '/v1/messages/count_tokens';
   $('#pForwardHeaders').value = (p.forward_headers || []).join(', ');
-  $('#pCredentials').value = (p.credentials || []).length ? JSON.stringify(p.credentials, null, 2) : '';
+  $('#pCredentials').value = '';
+  $('#pCredentials').placeholder = editor.mode === 'edit' ? 'Saved pool is write-only. Leave untouched to keep, or enter a complete replacement.' : '[]';
   const first = (p.models || [])[0] || {};
   const caps = first.capabilities || { streaming: true, tools: true, vision: false, reasoning: false };
   $('#pAliases').value = '';
@@ -736,7 +761,7 @@ function fillForm() {
   $('#pCapTools').checked = caps.tools !== false;
   $('#pCapVision').checked = !!caps.vision;
   $('#pCapReasoning').checked = !!caps.reasoning;
-  $('#secretSource').textContent = editor.mode === 'edit' ? `saved source: ${editor.secretSource}` : '';
+  $('#secretSource').textContent = editor.mode === 'edit' ? `Saved source: ${editor.secretSource}. Keys are write-only. Editing any credential field replaces the entire credential set; re-enter all keys you want to keep.` : '';
   $('#discoverStatus').textContent = '';
   $('#testResults').innerHTML = '';
   renderPicker();
@@ -810,7 +835,7 @@ function readForm() {
   return p;
 }
 function payload(p) {
-  return { provider: p, preserve_secret: editor.mode === 'edit' && !editor.secretDirty, test_models: [...editor.selected] };
+  return { provider: p, preserve_secret: editor.mode === 'edit' && !editor.secretDirty, preserve_headers: editor.mode === 'edit' && !editor.headersDirty, preserve_proxy: editor.mode === 'edit' && !editor.proxyDirty, test_models: [...editor.selected] };
 }
 function renderPicker() {
   const all = [...new Set([...editor.detected, ...editor.selected])];
@@ -912,6 +937,11 @@ $('#saveProviderBtn').onclick = async () => {
     if (editor.mode === 'add') await api('/admin/api/providers', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: b });
     else await api('/admin/api/providers/' + encodeURIComponent(editor.originalId), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: b });
     toast('Provider saved and runtime reloaded');
+    $('#pKey').value = '';
+    $('#pCredentials').value = '';
+    $('#pHeaders').value = '';
+    $('#pProxy').value = '';
+    editor = null;
     modal(false);
     await refresh();
   } catch (e) { toast(e.message, true); }
@@ -926,6 +956,218 @@ $('#deleteProviderBtn').onclick = async () => {
     await refresh();
   } catch (e) { toast(e.message, true); }
 };
+
+/* ---------- virtual endpoints / route profiles / pools ---------- */
+function renderVirtual() {
+  const ves = snap.virtual_endpoints || [];
+  const rows = ves.map(ve => {
+    const enabled = ve.enabled !== false;
+    const poolCount = ve.pool_member_count != null ? ve.pool_member_count : (ve.configured_candidate_count ?? ve.eligible ?? ve.eligible_deployments ?? '—');
+    return `<tr>
+      <td><strong>${esc(ve.id)}</strong><br><small>${esc(ve.name || '')}</small></td>
+      <td><code>${esc(ve.public_model || ve.id)}</code></td>
+      <td>${esc(ve.route_profile || '')}</td>
+      <td>${enabled ? '<span class=\"pill on\">Enabled</span>' : '<span class=\"pill\">Disabled</span>'}</td>
+      <td title="Configured pool members, not runtime eligible (health/compat filtered per-request)">${esc(poolCount)}</td>
+      <td><button class=\"btn secondary\" onclick=\"editVirtual('${esc(ve.id)}')\">Edit</button> <button class=\"btn danger-ghost\" onclick=\"deleteVirtual('${esc(ve.id)}')\">Del</button></td>
+    </tr>`;
+  });
+  $('#virtualRows').innerHTML = rows.join('') || '<tr><td colspan=\"6\" style=\"color:var(--muted)\">No virtual endpoints configured. Create one to get stable public model names.</td></tr>';
+}
+
+function renderProfiles() {
+  const rps = snap.route_profiles || [];
+  const globalStrat = snap.config?.routing?.strategy || 'ready_mesh';
+  const rows = rps.map(rp => {
+    const strat = rp.strategy ? rp.strategy : `inherit (${esc(globalStrat)})`;
+    return `<tr>
+      <td><strong>${esc(rp.id)}</strong><br><small>${esc(rp.name || '')}</small></td>
+      <td>${esc(rp.name || '')}</td>
+      <td>${esc(rp.candidate_pool || '')}</td>
+      <td>${esc(rp.fallback_chain || '—')}</td>
+      <td title="Phase B: per-profile strategy deferred to Phase E; inherits global">${esc(strat)}</td>
+      <td><button class=\"btn secondary\" onclick=\"editProfile('${esc(rp.id)}')\">Edit</button> <button class=\"btn danger-ghost\" onclick=\"deleteProfile('${esc(rp.id)}')\">Del</button></td>
+    </tr>`;
+  });
+  $('#profileRows').innerHTML = rows.join('') || '<tr><td colspan=\"6\" style=\"color:var(--muted)\">No route profiles. Create a profile to describe routing intent. Strategy inherits global.</td></tr>';
+}
+
+function renderPools() {
+  const cps = snap.candidate_pools || [];
+  const fcs = snap.fallback_chains || [];
+  const poolRows = cps.map(cp => {
+    const members = (cp.deployments || []).join(', ') || (cp.mode === 'all' ? '<em>all eligible</em>' : '<em>empty</em>');
+    const expanded = cp.expanded_count != null ? cp.expanded_count : (cp.expanded ? cp.expanded.length : '—');
+    return `<tr>
+      <td><strong>${esc(cp.id)}</strong><br><small>${esc(cp.name || '')}</small></td>
+      <td>${esc(cp.mode || 'explicit')}</td>
+      <td style=\"max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap\" title=\"${esc((cp.deployments || []).join(', '))}\">${members}</td>
+      <td>${esc(expanded)}</td>
+      <td><button class=\"btn secondary\" onclick=\"editPool('${esc(cp.id)}')\">Edit</button> <button class=\"btn danger-ghost\" onclick=\"deletePool('${esc(cp.id)}')\">Del</button></td>
+    </tr>`;
+  });
+  $('#poolRows').innerHTML = poolRows.join('') || '<tr><td colspan=\"5\" style=\"color:var(--muted)\">No candidate pools.</td></tr>';
+
+  const chainRows = fcs.map(fc => {
+    const pools = (fc.pools || []).join(' → ');
+    return `<tr>
+      <td><strong>${esc(fc.id)}</strong><br><small>${esc(fc.name || '')}</small></td>
+      <td>${esc(pools)}</td>
+      <td><button class=\"btn secondary\" onclick=\"editChain('${esc(fc.id)}')\">Edit</button> <button class=\"btn danger-ghost\" onclick=\"deleteChain('${esc(fc.id)}')\">Del</button></td>
+    </tr>`;
+  });
+  $('#chainRows').innerHTML = chainRows.join('') || '<tr><td colspan=\"3\" style=\"color:var(--muted)\">No fallback chains.</td></tr>';
+}
+
+// Simple prompt-based editors for Phase B (keep UI simple)
+async function editVirtual(id) {
+  try {
+    const existing = (snap.virtual_endpoints || []).find(v => v.id === id);
+    const pub = prompt('Public model name (client-facing):', existing ? existing.public_model : 'nexa-code');
+    if (pub === null) return;
+    const profile = prompt('Route profile ID:', existing ? existing.route_profile : 'default');
+    if (profile === null) return;
+    const name = prompt('Display name:', existing ? (existing.name || '') : '');
+    if (name === null) return;
+    const enabledStr = prompt('Enabled? (true/false):', existing ? String(existing.enabled !== false) : 'true');
+    if (enabledStr === null) return;
+    const enabled = enabledStr.toLowerCase() !== 'false';
+    const body = { id, name: name || undefined, public_model: pub.trim(), route_profile: profile.trim(), enabled };
+    if (existing) {
+      await api('/admin/api/virtual-endpoints/' + encodeURIComponent(id), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    } else {
+      await api('/admin/api/virtual-endpoints', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    }
+    toast('Virtual endpoint saved');
+    await refresh();
+  } catch (e) { toast(e.message, true); }
+}
+async function deleteVirtual(id) {
+  if (!confirm(`Delete virtual endpoint \"${id}\"?`)) return;
+  try {
+    await api('/admin/api/virtual-endpoints/' + encodeURIComponent(id), { method: 'DELETE' });
+    toast('Virtual endpoint deleted');
+    await refresh();
+  } catch (e) { toast(e.message, true); }
+}
+async function editProfile(id) {
+  try {
+    const existing = (snap.route_profiles || []).find(p => p.id === id);
+    const pool = prompt('Candidate pool ID:', existing ? existing.candidate_pool : 'default');
+    if (pool === null) return;
+    const fallback = prompt('Fallback chain ID (optional):', existing ? (existing.fallback_chain || '') : '');
+    if (fallback === null) return;
+    const name = prompt('Display name:', existing ? (existing.name || '') : '');
+    if (name === null) return;
+    // Phase B: strategy inherits global routing strategy. Per-profile override deferred to Phase E.
+    // Do not prompt for strategy; always inherit.
+    const body = { id, name: name || undefined, candidate_pool: pool.trim(), fallback_chain: fallback.trim() || undefined };
+    if (existing) {
+      await api('/admin/api/route-profiles/' + encodeURIComponent(id), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    } else {
+      await api('/admin/api/route-profiles', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    }
+    toast('Route profile saved (strategy inherits global: ' + (snap.config?.routing?.strategy || 'ready_mesh') + ')');
+    await refresh();
+  } catch (e) { toast(e.message, true); }
+}
+async function deleteProfile(id) {
+  if (!confirm(`Delete route profile \"${id}\"?`)) return;
+  try {
+    await api('/admin/api/route-profiles/' + encodeURIComponent(id), { method: 'DELETE' });
+    toast('Route profile deleted');
+    await refresh();
+  } catch (e) { toast(e.message, true); }
+}
+async function editPool(id) {
+  try {
+    const existing = (snap.candidate_pools || []).find(p => p.id === id);
+    const mode = prompt('Mode (explicit or all):', existing ? (existing.mode || 'explicit') : 'explicit');
+    if (mode === null) return;
+    let deployments = [];
+    if (mode.trim().toLowerCase() !== 'all') {
+      const depStr = prompt('Deployments (comma separated, e.g. provider-a/model-a, provider-b/model-b or model names):', existing ? (existing.deployments || []).join(', ') : '');
+      if (depStr === null) return;
+      deployments = depStr.split(',').map(s => s.trim()).filter(Boolean);
+    }
+    const name = prompt('Display name:', existing ? (existing.name || '') : '');
+    if (name === null) return;
+    const body = { id, name: name || undefined, mode: mode.trim().toLowerCase(), deployments };
+    if (existing) {
+      await api('/admin/api/candidate-pools/' + encodeURIComponent(id), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    } else {
+      await api('/admin/api/candidate-pools', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    }
+    toast('Candidate pool saved');
+    await refresh();
+  } catch (e) { toast(e.message, true); }
+}
+async function deletePool(id) {
+  if (!confirm(`Delete candidate pool \"${id}\"?`)) return;
+  try {
+    await api('/admin/api/candidate-pools/' + encodeURIComponent(id), { method: 'DELETE' });
+    toast('Candidate pool deleted');
+    await refresh();
+  } catch (e) { toast(e.message, true); }
+}
+async function editChain(id) {
+  try {
+    const existing = (snap.fallback_chains || []).find(c => c.id === id);
+    const poolsStr = prompt('Pools in order (comma separated pool IDs):', existing ? (existing.pools || []).join(', ') : '');
+    if (poolsStr === null) return;
+    const pools = poolsStr.split(',').map(s => s.trim()).filter(Boolean);
+    if (!pools.length) { alert('At least one pool required'); return; }
+    const name = prompt('Display name:', existing ? (existing.name || '') : '');
+    if (name === null) return;
+    const body = { id, name: name || undefined, pools };
+    if (existing) {
+      await api('/admin/api/fallback-chains/' + encodeURIComponent(id), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    } else {
+      await api('/admin/api/fallback-chains', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    }
+    toast('Fallback chain saved');
+    await refresh();
+  } catch (e) { toast(e.message, true); }
+}
+async function deleteChain(id) {
+  if (!confirm(`Delete fallback chain \"${id}\"?`)) return;
+  try {
+    await api('/admin/api/fallback-chains/' + encodeURIComponent(id), { method: 'DELETE' });
+    toast('Fallback chain deleted');
+    await refresh();
+  } catch (e) { toast(e.message, true); }
+}
+
+// Expose for inline onclick
+window.editVirtual = editVirtual;
+window.deleteVirtual = deleteVirtual;
+window.editProfile = editProfile;
+window.deleteProfile = deleteProfile;
+window.editPool = editPool;
+window.deletePool = deletePool;
+window.editChain = editChain;
+window.deleteChain = deleteChain;
+
+$('#addVirtualBtn')?.addEventListener('click', async () => {
+  const id = prompt('New virtual endpoint ID (letters, digits, -, _, .):', 'coding-prod');
+  if (!id) return;
+  await editVirtual(id.trim());
+});
+$('#addProfileBtn')?.addEventListener('click', async () => {
+  const id = prompt('New route profile ID:', 'coding-smart');
+  if (!id) return;
+  await editProfile(id.trim());
+});
+$('#addPoolBtn')?.addEventListener('click', async () => {
+  const id = prompt('New candidate pool ID:', 'coding');
+  if (!id) return;
+  await editPool(id.trim());
+});
+$('#addChainBtn')?.addEventListener('click', async () => {
+  const id = prompt('New fallback chain ID:', 'coding-fallback');
+  if (!id) return;
+  await editChain(id.trim());
+});
 
 /* ---------- boot ---------- */
 (async () => {
@@ -1015,7 +1257,7 @@ async function runCompatSuite(mode) {
       if (!models.length) continue;
       const d = await api('/admin/api/provider-test', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ provider: p, preserve_secret: true, test_models: models, mode })
+        body: JSON.stringify({ provider: p, preserve_secret: true, preserve_headers: true, preserve_proxy: true, test_models: models, mode })
       });
       (d.results || []).forEach(x => {
         const r = mode === 'full' ? x.capability_report : x.agent_report;

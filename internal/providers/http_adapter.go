@@ -71,6 +71,10 @@ type httpAdapter struct {
 	tokenLimitSeq      uint64
 	tokenRemainSeq     uint64
 	tokenResetSeq      uint64
+	// evaluationOnly marks an adapter clone reserved for Phase H live
+	// evaluation. Live evaluation refuses to run against a production adapter,
+	// so this flag is what makes "isolation bypassed" a hard failure.
+	evaluationOnly bool
 }
 
 func newHTTPAdapter(p config.ProviderConfig, timeout time.Duration) (*httpAdapter, error) {

@@ -140,8 +140,9 @@ func decodeAnthropicContent(raw json.RawMessage) ([]Part, error) {
 				parts = append(parts, Part{Type: PartThinking, Thinking: &Thinking{Text: tb.Thinking, Signature: tb.Signature}})
 			}
 		default:
-			// Unknown block types are dropped, mirroring the legacy translator:
-			// a conversation must not dead-end on an unmodeled feature.
+			// Fail closed rather than silently losing client content when an
+			// ingress feature has no canonical representation.
+			return nil, fmt.Errorf("unsupported Anthropic content block %q", m.Type)
 		}
 	}
 	return parts, nil

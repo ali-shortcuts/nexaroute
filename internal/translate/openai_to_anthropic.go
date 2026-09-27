@@ -203,7 +203,7 @@ func OpenAIToAnthropic(in core.OpenAIRequest, model string) (core.AnthropicReque
 		}
 		out.Tools = append(out.Tools, core.AnthTool{Name: nm.Forward(t.Function.Name), Description: t.Function.Description, InputSchema: schema})
 	}
-	applyOpenAIToolChoiceToAnthropic(&out, in.ToolChoice)
+	applyOpenAIToolChoiceToAnthropic(&out, in.ToolChoice, nm)
 	applyOpenAIStopToAnthropic(&out, in.Stop)
 	if strings.TrimSpace(in.User) != "" {
 		if out.Metadata == nil || len(out.Metadata) == 0 {
@@ -254,7 +254,7 @@ func reasoningEffortToThinkingBudget(effort string) (int, bool) {
 	}
 }
 
-func applyOpenAIToolChoiceToAnthropic(out *core.AnthropicRequest, choice any) {
+func applyOpenAIToolChoiceToAnthropic(out *core.AnthropicRequest, choice any, names *NameMap) {
 	switch v := choice.(type) {
 	case string:
 		switch v {
@@ -268,6 +268,9 @@ func applyOpenAIToolChoiceToAnthropic(out *core.AnthropicRequest, choice any) {
 	case map[string]any:
 		if f, ok := v["function"].(map[string]any); ok {
 			if name, _ := f["name"].(string); name != "" {
+				if names != nil {
+					name = names.Forward(name)
+				}
 				out.ToolChoice = map[string]any{"type": "tool", "name": name}
 			}
 		}

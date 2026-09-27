@@ -28,9 +28,11 @@ var (
 )
 
 type providerForm struct {
-	Provider       config.ProviderConfig `json:"provider"`
-	PreserveSecret bool                  `json:"preserve_secret"`
-	TestModels     []string              `json:"test_models,omitempty"`
+	Provider        config.ProviderConfig `json:"provider"`
+	PreserveSecret  bool                  `json:"preserve_secret"`
+	PreserveHeaders bool                  `json:"preserve_headers"`
+	PreserveProxy   bool                  `json:"preserve_proxy"`
+	TestModels      []string              `json:"test_models,omitempty"`
 	// Mode selects the probe depth: quick (default, availability),
 	// full (Level B capability suite) or claude_code (agent-loop
 	// simulation). See docs/COMPATIBILITY.md.
@@ -67,9 +69,7 @@ func (s *Server) adminProviderCheck(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 400, "invalid JSON: "+err.Error())
 		return
 	}
-	if in.PreserveSecret {
-		mergeExistingSecret(s.currentConfig(), &in.Provider)
-	}
+	mergePreservedFields(s.currentConfig(), &in)
 	normalizeProvider(&in.Provider)
 	if in.Provider.BaseURL == "" {
 		errorJSON(w, 400, "base_url is required")
@@ -148,6 +148,226 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 	eventLimit := parseLimit("events", 500)
 	cfgFull := s.currentConfig()
 	usageSnap := s.usageSnapshotWithPrices(cfgFull)
+	// Virtual endpoint observability: include expanded counts
+	s.runtimeMu.RLock()
+	resolver := s.routeResolver
+	s.runtimeMu.RUnlock()
+	var veList any = cfgFull.VirtualEndpoints
+	var rpList any = cfgFull.RouteProfiles
+	var cpList any = cfgFull.CandidatePools
+	var fcList any = cfgFull.FallbackChains
+	if resolver != nil {
+		// Enrich VE list with pool membership counts (configured, not runtime eligibility)
+		ves := []map[string]any{}
+		for _, ve := range cfgFull.VirtualEndpoints {
+			poolID := ""
+			for _, rp := range cfgFull.RouteProfiles {
+				if rp.ID == ve.RouteProfile {
+					poolID = rp.CandidatePool
+					break
+				}
+			}
+			poolMemberCount := 0
+			if poolID != "" {
+				if set, ok := resolver.GetExpanded(poolID); ok {
+					poolMemberCount = len(set)
+				}
+			}
+			ves = append(ves, map[string]any{
+				"id": ve.ID, "name": ve.Name, "enabled": ve.IsEnabled(),
+				"public_model": ve.PublicModel, "route_profile": ve.RouteProfile,
+				"protocols":                  ve.Protocols,
+				"pool_member_count":          poolMemberCount,
+				"configured_candidate_count": poolMemberCount,
+			})
+		}
+		veList = ves
+		cps := []map[string]any{}
+		for _, cp := range cfgFull.CandidatePools {
+			item := map[string]any{"id": cp.ID, "name": cp.Name, "mode": cp.Mode, "deployments": cp.Deployments}
+			if set, ok := resolver.GetExpanded(cp.ID); ok {
+				item["expanded_count"] = len(set)
+			}
+			cps = append(cps, item)
+		}
+		cpList = cps
+	}
+	// Phase D/F: decision plane snapshot
+	s.runtimeMu.RLock()
+	decisionCfg := cfgFull.Decision
+	decisionMetrics := map[string]int64{}
+	decisionProviders := map[string]any{}
+	if s.decisionOrchestrator != nil {
+		decisionMetrics = s.decisionOrchestrator.MetricsSnapshot()
+	}
+	if s.decisionRegistry != nil {
+		decisionProviders = map[string]any{"providers": s.decisionRegistry.Snapshot()}
+	}
+	// Phase F: external decision providers safe status
+	externalProviders := []map[string]any{}
+	for _, extCfg := range cfgFull.DecisionProviders {
+		// Resolve key configured (no secret) — check actual env var
+		keyConfigured := false
+		if extCfg.APIKey != "" {
+			keyConfigured = true
+		} else if extCfg.APIKeyEnv != "" {
+			if v := os.Getenv(extCfg.APIKeyEnv); v != "" {
+				keyConfigured = true
+			}
+		}
+		// Get health from registry
+		healthStatus := "unknown"
+		healthMsg := ""
+		if s.decisionRegistry != nil {
+			if p, ok := s.decisionRegistry.Get(extCfg.ID); ok {
+				h := p.Health()
+				healthStatus = h.Status
+				healthMsg = h.Message
+				// If health says api key not configured, then keyConfigured false
+				if h.Message == "api key not configured" {
+					keyConfigured = false
+				}
+			}
+		}
+		item := map[string]any{
+			"id":             extCfg.ID,
+			"type":           extCfg.Type,
+			"enabled":        extCfg.IsEnabled(),
+			"health":         healthStatus,
+			"key_configured": keyConfigured,
+			"privacy_mode":   extCfg.PrivacyMode,
+		}
+		// Do not expose API key, base URL with secrets, etc.
+		if healthMsg != "" && healthMsg != "api key not configured" && healthMsg != "disabled" {
+			item["health_message"] = healthMsg
+		}
+		externalProviders = append(externalProviders, item)
+	}
+	// Phase G: chain state and provider health (bounded, safe)
+	chainsSnapshot := []map[string]any{}
+	for _, ch := range cfgFull.DecisionChains {
+		stepInfos := []map[string]any{}
+		for _, step := range ch.Steps {
+			// Determine type for display
+			pType := "jev"
+			if step.Provider == "local" {
+				pType = "local"
+			} else if step.Provider == "policy" {
+				pType = "policy"
+			} else {
+				// lookup external type
+				for _, ext := range cfgFull.DecisionProviders {
+					if ext.ID == step.Provider {
+						pType = ext.Type
+						break
+					}
+				}
+			}
+			item := map[string]any{
+				"provider_id": step.Provider,
+				"type":        pType,
+			}
+			if step.TimeoutMS > 0 {
+				item["timeout_ms"] = step.TimeoutMS
+			}
+			// Add runtime health if available
+			if s.decisionOrchestrator != nil && s.decisionOrchestrator.ProviderState() != nil {
+				if st, ok := s.decisionOrchestrator.ProviderState().SnapshotOne(step.Provider); ok {
+					item["state"] = st.Status
+					if !st.CooldownUntil.IsZero() {
+						item["cooldown_until"] = st.CooldownUntil.Format(time.RFC3339)
+						item["cooldown_active"] = !time.Now().Before(st.CooldownUntil) == false && s.decisionOrchestrator.ProviderState().IsCooldown(step.Provider)
+						// Use IsCooldown check
+						item["cooldown_active"] = s.decisionOrchestrator.ProviderState().IsCooldown(step.Provider)
+					} else {
+						item["cooldown_active"] = false
+					}
+					item["consecutive_failures"] = st.ConsecutiveFailures
+					if !st.LastFailure.IsZero() {
+						item["last_failure"] = st.LastFailure.Format(time.RFC3339)
+					}
+					if !st.LastSuccess.IsZero() {
+						item["last_success"] = st.LastSuccess.Format(time.RFC3339)
+					}
+				} else {
+					item["state"] = "healthy"
+					item["cooldown_active"] = false
+					item["consecutive_failures"] = 0
+				}
+			}
+			stepInfos = append(stepInfos, item)
+		}
+		chainsSnapshot = append(chainsSnapshot, map[string]any{
+			"id":         ch.ID,
+			"step_count": len(ch.Steps),
+			"steps":      stepInfos,
+		})
+	}
+	// Provider state snapshot for all decision providers (bounded)
+	providerStateSnapshot := map[string]any{}
+	if s.decisionOrchestrator != nil && s.decisionOrchestrator.ProviderState() != nil {
+		snap := s.decisionOrchestrator.ProviderState().Snapshot()
+		safeSnap := map[string]any{}
+		for id, st := range snap {
+			entry := map[string]any{
+				"status":               st.Status,
+				"consecutive_failures": st.ConsecutiveFailures,
+				"failures_in_window":   st.FailuresInWindow,
+				"successes":            st.Successes,
+				"cooldown_active":      s.decisionOrchestrator.ProviderState().IsCooldown(id),
+			}
+			if !st.CooldownUntil.IsZero() {
+				entry["cooldown_until"] = st.CooldownUntil.Format(time.RFC3339)
+			}
+			if !st.LastFailure.IsZero() {
+				entry["last_failure"] = st.LastFailure.Format(time.RFC3339)
+			}
+			if !st.LastSuccess.IsZero() {
+				entry["last_success"] = st.LastSuccess.Format(time.RFC3339)
+			}
+			safeSnap[id] = entry
+		}
+		providerStateSnapshot = safeSnap
+	}
+	s.runtimeMu.RUnlock()
+
+	// Phase H: scorecards + evaluation plane. Bounded and privacy-safe: rows carry
+	// ids, scores, provenance and sample counts, never model outputs.
+	evalPlane := s.evaluationSnapshot()
+	scorecardsSection := map[string]any{
+		"rows":  []map[string]any{},
+		"total": 0,
+	}
+	evaluationSection := map[string]any{"enabled": false, "suites": []any{}}
+	if evalPlane != nil {
+		scorecardsSection = map[string]any{
+			"rows":             evalPlane.scorecardRows(50),
+			"total":            evalPlane.Registry().Len(),
+			"by_provenance":    evalPlane.provenanceCounts(),
+			"values":           evalPlane.Registry().Stats().Values,
+			"quality_coverage": evalPlane.Registry().Stats().QualityCoverage,
+		}
+		st := evalPlane.Stats()
+		evaluationSection = map[string]any{
+			"enabled":                   st.Enabled,
+			"judge_registered":          st.JudgeRegistered,
+			"suites":                    evalPlane.SuiteCatalog(),
+			"evaluators":                st.Evaluators,
+			"runs_stored":               st.Runs,
+			"runs_total":                st.RunsTotal,
+			"runs_insufficient_samples": st.RunsInsufficient,
+			"runs_rejected":             st.RunsRejected,
+			"scorecards_written":        st.ScorecardsWritten,
+			"imported_scorecards":       st.Imported,
+			"import_error":              st.ImportError,
+			"state_path":                st.StatePath,
+			"state_writes_failed":       st.StateWritesFailed,
+			"verdict_counts":            evalPlane.verdictCounts(),
+			"health":                    evalPlane.evaluationHealthRows(50),
+			"note":                      "Phase H supports offline replay and opt-in live physical-deployment evaluation; scorecards never change routing in Phase H",
+		}
+	}
+
 	writeJSON(w, 200, map[string]any{
 		"deployments":        deployments,
 		"deployment_total":   totalDeployments,
@@ -170,9 +390,26 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 			"keys":    len(cfgFull.ClientAuth.Keys),
 			"rpm":     cfgFull.ClientAuth.RPM,
 		},
+		"virtual_endpoints": veList,
+		"route_profiles":    rpList,
+		"candidate_pools":   cpList,
+		"fallback_chains":   fcList,
+		"decision": map[string]any{
+			"config":                      decisionCfg,
+			"metrics":                     decisionMetrics,
+			"providers":                   decisionProviders,
+			"external_decision_providers": externalProviders,
+			"chains":                      chainsSnapshot,
+			"provider_state":              providerStateSnapshot,
+		},
+		"decision_chains":          cfgFull.DecisionChains,
+		"decision_provider_health": cfgFull.DecisionProviderHealth,
+		"scorecards":               scorecardsSection,
+		"evaluation":               evaluationSection,
 		"config": map[string]any{
-			"probe":   probeCfg,
-			"routing": routingCfg,
+			"probe":    probeCfg,
+			"routing":  routingCfg,
+			"decision": decisionCfg,
 		},
 	})
 }
@@ -331,21 +568,16 @@ func (s *Server) adminProviderByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		p := cfg.Providers[idx]
-		reveal := r.URL.Query().Get("reveal") == "1" || r.URL.Query().Get("reveal") == "true"
-		payload := map[string]any{
-			"provider":      p,
-			"secret_source": secretSource(p),
-			"has_secret":    len(p.ResolvedCredentials()) > 0,
+		// Saved credentials are write-only, even for legacy ?reveal=1 callers.
+		source, hasSecret := secretSource(p), len(p.ResolvedCredentials()) > 0
+		p.APIKey = ""
+		p.Headers = nil // custom authorization headers can also contain secrets
+		p.ProxyURL = "" // proxy URLs may contain passwords
+		p.Credentials = append([]config.CredentialConfig(nil), p.Credentials...)
+		for i := range p.Credentials {
+			p.Credentials[i].APIKey = ""
 		}
-		if reveal {
-			payload["resolved_api_key"] = p.ResolvedAPIKey()
-		} else {
-			p.APIKey = ""
-			for i := range p.Credentials {
-				p.Credentials[i].APIKey = ""
-			}
-			payload["provider"] = p
-		}
+		payload := map[string]any{"provider": p, "secret_source": source, "has_secret": hasSecret}
 		writeJSON(w, 200, payload)
 
 	case http.MethodPut:
@@ -371,6 +603,12 @@ func (s *Server) adminProviderByID(w http.ResponseWriter, r *http.Request) {
 				in.Provider.APIKey = old.APIKey
 				in.Provider.APIKeyEnv = old.APIKeyEnv
 				in.Provider.Credentials = old.Credentials
+			}
+			if in.PreserveHeaders {
+				in.Provider.Headers = old.Headers
+			}
+			if in.PreserveProxy {
+				in.Provider.ProxyURL = old.ProxyURL
 			}
 			dropEnvResolvedLiteral(&in.Provider, old)
 			normalizeProvider(&in.Provider)
@@ -423,9 +661,7 @@ func (s *Server) adminProviderTest(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 400, "invalid JSON: "+err.Error())
 		return
 	}
-	if in.PreserveSecret {
-		mergeExistingSecret(s.currentConfig(), &in.Provider)
-	}
+	mergePreservedFields(s.currentConfig(), &in)
 	normalizeProvider(&in.Provider)
 	if in.Provider.ID == "" || in.Provider.BaseURL == "" {
 		errorJSON(w, 400, "provider id and base_url are required")
@@ -548,9 +784,7 @@ func (s *Server) adminProviderDiscover(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 400, "invalid JSON: "+err.Error())
 		return
 	}
-	if in.PreserveSecret {
-		mergeExistingSecret(s.currentConfig(), &in.Provider)
-	}
+	mergePreservedFields(s.currentConfig(), &in)
 	normalizeProvider(&in.Provider)
 	if in.Provider.BaseURL == "" {
 		errorJSON(w, 400, "base_url is required")
@@ -581,7 +815,7 @@ func providerSummary(p config.ProviderConfig) map[string]any {
 		"has_secret":       len(p.ResolvedCredentials()) > 0,
 		"api_key_env":      p.APIKeyEnv,
 		"credential_count": len(p.ResolvedCredentials()),
-		"proxy_url":        p.ProxyURL,
+		"has_proxy":        p.ProxyURL != "",
 		"max_concurrency":  p.MaxConcurrency,
 	}
 }
@@ -613,6 +847,21 @@ func dropEnvResolvedLiteral(in *config.ProviderConfig, old config.ProviderConfig
 	}
 	if resolved != "" && subtle.ConstantTimeCompare([]byte(in.APIKey), []byte(resolved)) == 1 {
 		in.APIKey = ""
+	}
+}
+
+// Unchanged write-only fields are merged server-side for save/discover/test.
+func mergePreservedFields(cfg config.Config, in *providerForm) {
+	if in.PreserveSecret {
+		mergeExistingSecret(cfg, &in.Provider)
+	}
+	if i := cfg.ProviderIndex(in.Provider.ID); i >= 0 {
+		if in.PreserveHeaders {
+			in.Provider.Headers = cfg.Providers[i].Headers
+		}
+		if in.PreserveProxy {
+			in.Provider.ProxyURL = cfg.Providers[i].ProxyURL
+		}
 	}
 }
 

@@ -318,6 +318,15 @@ func (r *Router) pinned(req Requirement, cfg config.Config) string {
 	}
 	return pin.Deployment
 }
+
+// PinnedDeploymentID returns the pinned deployment ID for given requirement without exposing raw session key.
+// It is safe for decision plane use — only returns deployment ID, not session key.
+func (r *Router) PinnedDeploymentID(req Requirement) string {
+	r.mu.RLock()
+	cfg := r.cfg
+	r.mu.RUnlock()
+	return r.pinned(req, cfg)
+}
 func (r *Router) ObserveSession(req Requirement, id string) {
 	r.mu.RLock()
 	cfg := r.cfg

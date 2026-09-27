@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/ali-shortcuts/nexaroute/internal/config"
+	"github.com/ali-shortcuts/nexaroute/internal/desktop"
 	"github.com/ali-shortcuts/nexaroute/internal/events"
 	"github.com/ali-shortcuts/nexaroute/internal/health"
 	"github.com/ali-shortcuts/nexaroute/internal/httpapi"
@@ -24,14 +26,8 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/router"
 )
 
-const version = "0.6.0"
-
-func defaultConfigPath() string {
-	if p := os.Getenv("NEXAROUTE_CONFIG"); p != "" {
-		return p
-	}
-	return "config.json"
-}
+// version is set at build time via -ldflags "-X main.version=...".
+var version = "0.7.0"
 
 func ensureConfig(path string) error {
 	if _, err := os.Stat(path); err == nil {
@@ -51,6 +47,7 @@ func ensureConfig(path string) error {
 
 func main() {
 	configPath := flag.String("config", defaultConfigPath(), "path to JSON config")
+	noBrowser := flag.Bool("no-browser", false, "do not automatically open the Web UI")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
 	if *showVersion {
@@ -58,6 +55,40 @@ func main() {
 		return
 	}
 	bootstrap := log.New(os.Stderr, "nexaroute ", log.LstdFlags|log.Lmicroseconds)
+	if *configPath == "" {
+		bootstrap.Fatal("cannot locate user config directory; set HOME, XDG_CONFIG_HOME, or NEXAROUTE_CONFIG")
+	}
+	absolute, err := filepath.Abs(*configPath)
+	if err != nil {
+		bootstrap.Fatal(err)
+	}
+	// Resolve aliases before taking the sibling lock.
+	if err := os.MkdirAll(filepath.Dir(absolute), 0o700); err != nil {
+		bootstrap.Fatal(err)
+	}
+	dir, err := filepath.EvalSymlinks(filepath.Dir(absolute))
+	if err != nil {
+		bootstrap.Fatal(err)
+	}
+	absolute = filepath.Join(dir, filepath.Base(absolute))
+	if resolved, err := filepath.EvalSymlinks(absolute); err == nil {
+		absolute = resolved
+	}
+	*configPath = absolute
+
+	// Single-instance detection: if another instance is already running for
+	// this config, open its UI instead of starting a duplicate listener.
+	processLock, acquired, err := desktop.Acquire(*configPath + ".lock")
+	if err != nil {
+		bootstrap.Fatalf("cannot acquire local gateway lock: %v", err)
+	}
+	if !acquired {
+		uiURL := dashboardURL(*configPath)
+		openExistingUI(uiURL, os.Stdout)
+		return
+	}
+	defer processLock.Close()
+
 	if err := ensureConfig(*configPath); err != nil {
 		bootstrap.Fatal(err)
 	}
@@ -91,9 +122,6 @@ func main() {
 	}
 	var logOutput io.Writer = io.Discard
 	if len(logWriters) == 0 {
-		// file: "off" combined with console_max_lines_per_minute: 0 silences
-		// every log line, including shutdown errors. Warn once on stderr so
-		// an operator notices instead of running blind.
 		fmt.Fprintf(os.Stderr, "nexaroute: warning: all logging is disabled (logging.file=off and console_max_lines_per_minute=0)\n")
 	}
 	if len(logWriters) == 1 {
@@ -126,17 +154,45 @@ func main() {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
+	listener, err := net.Listen("tcp", cfg.Listen)
+	if err != nil {
+		bootstrap.Fatalf("cannot listen on %s (another instance may be running): %v", cfg.Listen, err)
+	}
+	defer listener.Close()
 	serverErr := make(chan error, 1)
 	go func() {
 		logger.Printf("version=%s config=%s listening=http://%s", version, *configPath, cfg.Listen)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := srv.Serve(listener); err != nil && err != http.ErrServerClosed {
 			serverErr <- err
 			cancel()
 		}
 	}()
+	// Compute the UI URL from the actual listener address (handles port 0).
+	url := uiURL(listener.Addr())
+	fmt.Fprintf(os.Stderr, "NexaRoute UI: %s\nConfig: %s\nPress Ctrl+C to stop.\n", url, *configPath)
+	// Browser launch: wait for UI readiness, then open browser if enabled.
+	go func() {
+		readyCtx, readyCancel := context.WithTimeout(ctx, 10*time.Second)
+		defer readyCancel()
+		if err := desktop.WaitReady(readyCtx, strings.TrimSuffix(url, "/")); err != nil {
+			if ctx.Err() == nil {
+				bootstrap.Printf("UI readiness check failed: %v; open %s manually", err, url)
+			}
+			return
+		}
+		if !*noBrowser {
+			if browser, err := desktop.OpenBrowser(url, nil, nil); err != nil && ctx.Err() == nil {
+				bootstrap.Printf("browser unavailable: %v; open %s manually", err, url)
+			} else if err == nil {
+				fmt.Fprintf(os.Stdout, "Opened NexaRoute dashboard with %s: %s\n", browser, url)
+			}
+		}
+	}()
 	if cfg.Probe.Enabled && cfg.Probe.OnStart {
-		result := pe.Prime(ctx)
-		logger.Printf("startup_probe total=%d ready=%d failed=%d cooldown=%d duration_ms=%d", result.Total, result.Passed, result.Failed, result.SkippedCooldown, result.DurationMS)
+		go func() {
+			result := pe.Prime(ctx)
+			logger.Printf("startup_probe total=%d ready=%d failed=%d cooldown=%d duration_ms=%d", result.Total, result.Passed, result.Failed, result.SkippedCooldown, result.DurationMS)
+		}()
 	}
 	pe.Start(ctx)
 	<-ctx.Done()
@@ -163,5 +219,36 @@ func main() {
 	case err := <-serverErr:
 		logger.Fatalf("server_error=%v", err)
 	default:
+	}
+}
+
+// dashboardURL computes a user-facing URL from the config listen address.
+// Used when opening the UI for an already-running instance.
+func dashboardURL(configPath string) string {
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		return "http://127.0.0.1:8080/"
+	}
+	host, port, err := net.SplitHostPort(cfg.Listen)
+	if err != nil {
+		return "http://127.0.0.1:8080/"
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = "127.0.0.1"
+	}
+	return "http://" + net.JoinHostPort(host, port) + "/"
+}
+
+func openExistingUI(url string, output io.Writer) {
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	if err := desktop.WaitReady(ctx, strings.TrimSuffix(url, "/")); err != nil {
+		fmt.Fprintf(output, "NexaRoute may already be starting. Dashboard: %s\n", url)
+		return
+	}
+	if browser, err := desktop.OpenBrowser(url, nil, nil); err != nil {
+		fmt.Fprintf(output, "NexaRoute is already running. Dashboard: %s (browser unavailable: %v)\n", url, err)
+	} else {
+		fmt.Fprintf(output, "NexaRoute is already running; opened dashboard with %s: %s\n", browser, url)
 	}
 }

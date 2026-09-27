@@ -1,80 +1,169 @@
-name: Release build
+name: Release
+
+# Canonical stable release pipeline. A v* tag pushed on main publishes the
+# exact tested tag commit as a GitHub Release with the four required assets.
+# workflow_dispatch runs the identical verification without publishing.
 
 on:
   push:
-    tags:
-      - 'v0.3'
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to build and verify (for example v0.7.0)'
+        required: true
+        default: v0.7.0
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  build:
+  verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
+      - name: Set up Go
+        uses: actions/setup-go@v5
         with:
           go-version: '1.23.x'
           cache: false
 
-      - name: Verify source
+      - name: Resolve version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            version="${GITHUB_REF_NAME}"
+          else
+            version="${{ inputs.version }}"
+          fi
+          [[ "$version" =~ ^v[0-9][a-zA-Z0-9._-]*$ ]] || {
+            echo "Invalid release version: $version" >&2
+            exit 1
+          }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Repository cleanliness
+        shell: bash
+        run: |
+          set -euo pipefail
+          bad_files="$(git ls-files | grep -Ei '(^|/)(backup|backups|old|legacy)(/|$)|\.bak$|\.orig$|\.rej$|~$' || true)"
+          if [ -n "$bad_files" ]; then
+            echo "Forbidden backup/legacy artifacts:"
+            echo "$bad_files"
+            exit 1
+          fi
+          if git grep -nE 'LoadBackup|adminRollback|/admin/api/rollback|rollbackBtn|ulg_admin_key|ULG_CONFIG|ULG_LISTEN|ULG_ADMIN_KEY|ULG_ADMIN_BIND_LOCAL_ONLY|universal-llm-gateway' -- . ':(exclude).github/workflows'; then
+            echo "Forbidden backup/legacy identifiers remain in active source/docs."
+            exit 1
+          fi
+
+      - name: Full verification
         run: ./scripts/verify.sh
+
+      - name: Bounded stress checks
+        run: ./scripts/stress.sh
 
       - name: Local runtime smoke test
         run: ./scripts/smoke-local.sh
 
-      - name: Docker build
-        run: docker build --tag nexaroute-release:${GITHUB_REF_NAME} .
+      - name: Build release assets
+        run: ./scripts/build-release.sh "${{ steps.version.outputs.version }}"
 
-      - name: Build release artifacts and installable package
+      - name: Installer lifecycle tests
+        run: ./scripts/test-install.sh
+
+      - name: Verify checksums
         shell: bash
         run: |
           set -euo pipefail
-          rm -rf dist/release-package
-          mkdir -p dist/release-package/nexaroute/{bin,configs,deploy/systemd,scripts}
+          (cd dist && sha256sum -c SHA256SUMS)
+          required="nexaroute-linux-amd64 nexaroute-linux-arm64 install.sh SHA256SUMS"
+          for f in $required; do
+            [[ -s "dist/$f" ]] || { echo "missing release asset: $f" >&2; exit 1; }
+          done
+          cmp -s scripts/install.sh dist/install.sh || {
+            echo "dist/install.sh is not identical to scripts/install.sh" >&2
+            exit 1
+          }
 
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags='-s -w' -o dist/nexaroute-linux-amd64 ./cmd/gateway
-          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags='-s -w' -o dist/nexaroute-linux-arm64 ./cmd/gateway
-
-          install -m 0755 dist/nexaroute-linux-amd64 dist/release-package/nexaroute/bin/nexaroute-linux-amd64
-          install -m 0755 dist/nexaroute-linux-arm64 dist/release-package/nexaroute/bin/nexaroute-linux-arm64
-          install -m 0755 install-user.sh run-local.sh dist/release-package/nexaroute/
-          install -m 0755 scripts/install-systemd-user.sh scripts/smoke-local.sh dist/release-package/nexaroute/scripts/
-          install -m 0644 configs/config.example.json dist/release-package/nexaroute/configs/
-          install -m 0644 deploy/systemd/nexaroute.service dist/release-package/nexaroute/deploy/systemd/
-          install -m 0644 README.md LICENSE SECURITY.md dist/release-package/nexaroute/
-
-          tar -C dist/release-package -czf "dist/nexaroute-${GITHUB_REF_NAME}-linux.tar.gz" nexaroute
-          (
-            cd dist
-            sha256sum nexaroute-linux-amd64 nexaroute-linux-arm64 "nexaroute-${GITHUB_REF_NAME}-linux.tar.gz" > SHA256SUMS
-          )
-
-      - name: Verify packaged installer
+      - name: Verify embedded version
         shell: bash
         run: |
           set -euo pipefail
-          tmp="$(mktemp -d)"
-          home="$(mktemp -d)"
-          trap 'rm -rf "$tmp" "$home"' EXIT
-          tar -C "$tmp" -xzf "dist/nexaroute-${GITHUB_REF_NAME}-linux.tar.gz"
-          "$tmp/nexaroute/scripts/smoke-local.sh"
-          HOME="$home" "$tmp/nexaroute/install-user.sh"
-          test -x "$home/.local/bin/nexaroute"
-          "$home/.local/bin/nexaroute" -version | grep -F "NexaRoute v0.3"
-          test -f "$home/.config/nexaroute/config.json"
-          test "$(stat -c '%a' "$home/.config/nexaroute/config.json")" = "600"
-          test ! -e "$home/.config/nexaroute/config.json.bak"
+          want="${{ steps.version.outputs.version }}"
+          got="$(./dist/nexaroute-linux-amd64 -version)"
+          echo "$got"
+          [[ "$got" == *"v${want#v}"* ]] || {
+            echo "binary version mismatch: got '$got' want 'v${want#v}'" >&2
+            exit 1
+          }
 
-      - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
+      - name: Upload release assets
+        uses: actions/upload-artifact@v4
         with:
-          files: |
+          name: nexaroute-release-${{ steps.version.outputs.version }}
+          path: |
             dist/nexaroute-linux-amd64
             dist/nexaroute-linux-arm64
-            dist/nexaroute-v0.3-linux.tar.gz
+            dist/install.sh
             dist/SHA256SUMS
-          generate_release_notes: true
+          if-no-files-found: error
+
+  publish:
+    needs: verify
+    if: github.ref_type == 'tag' && startsWith(github.ref_name, 'v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Tag must point at a commit on main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main --depth=200
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "Tag ${GITHUB_REF_NAME} points at $GITHUB_SHA which is not on main." >&2
+            echo "Releases are published only from tested main commits." >&2
+            exit 1
+          fi
+
+      - name: Download verified assets
+        uses: actions/download-artifact@v4
+        with:
+          name: nexaroute-release-${{ github.ref_name }}
+          path: dist
+
+      - name: Verify checksums before publishing
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd dist && sha256sum -c SHA256SUMS)
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          gh release create "$tag" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "NexaRoute $tag" \
+            --latest \
+            dist/nexaroute-linux-amd64 \
+            dist/nexaroute-linux-arm64 \
+            dist/install.sh \
+            dist/SHA256SUMS
