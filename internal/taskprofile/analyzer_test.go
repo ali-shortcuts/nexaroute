@@ -1,6 +1,7 @@
 package taskprofile
 
 import (
+	"math"
 	"testing"
 
 	"github.com/ali-shortcuts/nexaroute/internal/feature"
@@ -303,5 +304,22 @@ func TestAnalyzer_SecondaryRequirements(t *testing.T) {
 	}
 	if !p.ToolChoiceRequired {
 		t.Fatalf("expected ToolChoiceRequired")
+	}
+}
+
+// TestTaskProfileValidRejectsNonFiniteConfidence pins the profile contract:
+// confidence is documented as a finite value in [0,1], and the decision plane
+// rejects non-finite confidence from providers. Valid() compared with < and >,
+// which NaN silently passes, so a malformed profile was reported as valid.
+func TestTaskProfileValidRejectsNonFiniteConfidence(t *testing.T) {
+	for _, bad := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} {
+		p := TaskProfile{Type: TaskCoding, Complexity: ComplexityLow, Confidence: bad}
+		if p.Valid() {
+			t.Fatalf("confidence %v must not be a valid profile", bad)
+		}
+	}
+	p := TaskProfile{Type: TaskCoding, Complexity: ComplexityLow, Confidence: 0.5}
+	if !p.Valid() {
+		t.Fatal("a finite confidence in range must stay valid")
 	}
 }

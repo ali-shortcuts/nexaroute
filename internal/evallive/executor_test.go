@@ -377,3 +377,27 @@ func TestLiveExecutorNeverPersistsPrompts(t *testing.T) {
 		t.Fatalf("upstream calls = %d, want 3", hits.Load())
 	}
 }
+
+// TestLiveExecutorAccessorsAreBounded covers the two accessors the admin surface
+// reads back: the deployment is the one fixed at construction, and an unprompted
+// case reports itself without echoing anything about the case input.
+func TestLiveExecutorAccessorsAreBounded(t *testing.T) {
+	srv := liveUpstream(t, &atomic.Int64{}, http.StatusOK, 0)
+	defer srv.Close()
+	dep := liveDeployment()
+	exec, err := NewLiveEvaluationExecutor(dep, liveTwin(t, srv.URL),
+		[]Prompt{{CaseID: "reasoning-multi-step-arithmetic", Prompt: "hi"}}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := exec.Deployment(); got != dep {
+		t.Fatalf("deployment = %+v, want %+v", got, dep)
+	}
+	if ids := exec.PromptCaseIDs(); len(ids) != 1 || ids[0] != "reasoning-multi-step-arithmetic" {
+		t.Fatalf("prompt case ids = %v", ids)
+	}
+	msg := (&MissingPromptError{CaseID: "coding-bugfix"}).Error()
+	if !strings.Contains(msg, "coding-bugfix") {
+		t.Fatalf("missing prompt error = %q, want it to name the case", msg)
+	}
+}
