@@ -225,25 +225,30 @@ func compileSimpleRoute(cfg *config.Config, in simpleRouteForm) {
 func removeSimpleRoutePrimitives(cfg *config.Config, id string, removeEndpoint bool) {
 	profileID, poolID, fallbackID, stagePrefix := simpleProfileID(id), simplePoolID(id), simpleFallbackID(id), simpleStagePrefix(id)
 
-	if removeEndpoint {
-		out := cfg.VirtualEndpoints[:0]
-		for _, x := range cfg.VirtualEndpoints {
-			if x.ID != id {
-				out = append(out, x)
+	// Determine only the pools owned by this simple route. Never sweep every
+	// pool sharing the prefix: an advanced operator may have created another
+	// object later with a similar name.
+	managedPools := map[string]bool{poolID: true}
+	for _, chain := range cfg.FallbackChains {
+		if chain.ID != fallbackID {
+			continue
+		}
+		for _, pid := range chain.Pools {
+			if strings.HasPrefix(pid, stagePrefix) {
+				managedPools[pid] = true
 			}
 		}
-		cfg.VirtualEndpoints = out
-	} else {
-		// Updating: remove the old endpoint too; compileSimpleRoute re-adds it
-		// with the complete normalized body in the same atomic mutation.
-		out := cfg.VirtualEndpoints[:0]
-		for _, x := range cfg.VirtualEndpoints {
-			if x.ID != id {
-				out = append(out, x)
-			}
-		}
-		cfg.VirtualEndpoints = out
 	}
+
+	// Updating and deleting both remove the old endpoint. An update recompiles
+	// and re-adds it in the same mutateConfig transaction.
+	outVE := cfg.VirtualEndpoints[:0]
+	for _, x := range cfg.VirtualEndpoints {
+		if x.ID != id {
+			outVE = append(outVE, x)
+		}
+	}
+	cfg.VirtualEndpoints = outVE
 
 	rp := cfg.RouteProfiles[:0]
 	for _, x := range cfg.RouteProfiles {
@@ -253,14 +258,6 @@ func removeSimpleRoutePrimitives(cfg *config.Config, id string, removeEndpoint b
 	}
 	cfg.RouteProfiles = rp
 
-	cp := cfg.CandidatePools[:0]
-	for _, x := range cfg.CandidatePools {
-		if x.ID != poolID && !strings.HasPrefix(x.ID, stagePrefix) {
-			cp = append(cp, x)
-		}
-	}
-	cfg.CandidatePools = cp
-
 	fc := cfg.FallbackChains[:0]
 	for _, x := range cfg.FallbackChains {
 		if x.ID != fallbackID {
@@ -268,4 +265,31 @@ func removeSimpleRoutePrimitives(cfg *config.Config, id string, removeEndpoint b
 		}
 	}
 	cfg.FallbackChains = fc
+
+	// Keep a managed pool if another advanced profile/chain references it.
+	cp := cfg.CandidatePools[:0]
+	for _, x := range cfg.CandidatePools {
+		if !managedPools[x.ID] || poolReferenced(cfg, x.ID) {
+			cp = append(cp, x)
+		}
+	}
+	cfg.CandidatePools = cp
+
+	_ = removeEndpoint // retained for call-site compatibility; both paths are atomic.
+}
+
+func poolReferenced(cfg *config.Config, poolID string) bool {
+	for _, rp := range cfg.RouteProfiles {
+		if rp.CandidatePool == poolID {
+			return true
+		}
+	}
+	for _, fc := range cfg.FallbackChains {
+		for _, pid := range fc.Pools {
+			if pid == poolID {
+				return true
+			}
+		}
+	}
+	return false
 }
