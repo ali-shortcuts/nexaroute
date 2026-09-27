@@ -841,10 +841,10 @@ func dropEnvResolvedLiteral(in *config.ProviderConfig, old config.ProviderConfig
 	if in.APIKeyEnv == "" || in.APIKey == "" {
 		return
 	}
+	// Only a value actually sourced from the environment may cause the
+	// submitted literal to be elided. A saved literal fallback must survive
+	// preserve_secret when the referenced environment variable is unset.
 	resolved := os.Getenv(in.APIKeyEnv)
-	if resolved == "" && old.APIKeyEnv == in.APIKeyEnv && old.APIKey == in.APIKey {
-		resolved = old.APIKey
-	}
 	if resolved != "" && subtle.ConstantTimeCompare([]byte(in.APIKey), []byte(resolved)) == 1 {
 		in.APIKey = ""
 	}
