@@ -43,6 +43,13 @@ else
   echo 'WARN: node not installed; skipping JavaScript syntax check' >&2
 fi
 
+echo '== real browser control-plane acceptance =='
+if command -v chromium >/dev/null 2>&1 && python3 -c 'import playwright' >/dev/null 2>&1; then
+  python3 scripts/test-browser-e2e.py
+else
+  echo 'WARN: Chromium + Python Playwright unavailable; skipping browser acceptance' >&2
+fi
+
 echo '== short fuzz checks =='
 GOMAXPROCS=2 go test ./internal/httpapi -run='^$' -fuzz=FuzzPatchJSONModel -fuzztime=2s -parallel=2
 GOMAXPROCS=2 go test ./internal/core -run='^$' -fuzz=FuzzParseAnthContent -fuzztime=2s -parallel=2

@@ -859,7 +859,8 @@ function fillForm() {
   $('#pCapTools').checked = caps.tools !== false;
   $('#pCapVision').checked = !!caps.vision;
   $('#pCapReasoning').checked = !!caps.reasoning;
-  $('#secretSource').textContent = editor.mode === 'edit' ? `Saved source: ${editor.secretSource}. Keys are write-only. Editing any credential field replaces the entire credential set; re-enter all keys you want to keep.` : '';
+  const source = $('#secretSource');
+  if (source) source.textContent = editor.mode === 'edit' ? `Saved source: ${editor.secretSource}. Keys are write-only. Editing any credential field replaces the entire credential set; re-enter all keys you want to keep.` : '';
   $('#discoverStatus').textContent = '';
   $('#testResults').innerHTML = '';
   renderPicker();
