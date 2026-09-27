@@ -48,11 +48,11 @@ type StreamEvent struct {
 // SSEReader reads text/event-stream frames incrementally. It is dialect
 // agnostic: it only splits frames and hands `data:` payloads to callers.
 const (
-	maxSSEEventBytes      = 8 << 20
-	maxStreamTools        = 128
-	maxStreamToolIndex    = 4096
-	maxStreamToolName     = 1024
-	maxStreamArgsDelta    = 1 << 20
+	maxSSEEventBytes   = 8 << 20
+	maxStreamTools     = 128
+	maxStreamToolIndex = 4096
+	maxStreamToolName  = 1024
+	maxStreamArgsDelta = 1 << 20
 )
 
 type SSEReader struct {
