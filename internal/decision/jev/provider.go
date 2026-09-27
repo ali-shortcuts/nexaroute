@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -41,6 +43,60 @@ type ProviderConfig struct {
 	HTTPClient  *http.Client // for tests
 }
 
+// defaultBaseURL is the official Jev endpoint used when no base_url is set.
+const defaultBaseURL = "https://www.jevai.org"
+
+// isLoopbackBaseURL reports whether raw is a plaintext loopback endpoint.
+//
+// config.base_url is the documented local-testing override, so it may point at a
+// loopback server — but only at loopback, and only over plain HTTP. Every other
+// target keeps the production transport guarantees. Notably this excludes the
+// link-local metadata address (169.254.169.254) and the private ranges, which
+// are the SSRF targets that matter, and excludes plaintext to any remote host,
+// which would put the API key on the wire in the clear.
+func isLoopbackBaseURL(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	if !strings.EqualFold(u.Scheme, "http") {
+		return false
+	}
+	host := u.Hostname()
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return strings.EqualFold(host, "localhost")
+}
+
+// newRemoteClient builds the transport for one provider.
+//
+// base_url is operator-supplied configuration, so it is a trust boundary: HTTPS
+// and the SSRF host guard stay in force unless the target is loopback (the
+// documented local-testing override) or an HTTP client was injected by Go code,
+// which is how tests address an httptest server. Loopback targets additionally
+// need the loopback-permitting transport, because the production transport
+// blocks loopback dials by design.
+func newRemoteClient(baseURL, apiKey string, httpClient *http.Client) (*remote.Client, error) {
+	if strings.TrimSpace(baseURL) == "" {
+		baseURL = defaultBaseURL
+	}
+	insecure := httpClient != nil || isLoopbackBaseURL(baseURL)
+	client, err := remote.NewClient(remote.ClientConfig{
+		BaseURL:          baseURL,
+		APIKey:           apiKey,
+		HTTPClient:       httpClient,
+		AllowHTTPForTest: insecure,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if httpClient == nil && insecure {
+		return remote.NewTestClient(baseURL, apiKey, nil)
+	}
+	return client, nil
+}
+
 func NewProvider(cfg ProviderConfig) (*Provider, error) {
 	if cfg.ID == "" {
 		return nil, fmt.Errorf("id required")
@@ -63,40 +119,10 @@ func NewProvider(cfg ProviderConfig) (*Provider, error) {
 		}
 	}
 
-	// Build client
-	allowHTTP := cfg.HTTPClient != nil
-	if cfg.BaseURL != "" && (cfg.BaseURL[:7] == "http://" || cfg.BaseURL[:8] == "https://") {
-		// For tests, allow http loopback when base URL is http (httptest server)
-		if len(cfg.BaseURL) >= 7 && cfg.BaseURL[:7] == "http://" {
-			allowHTTP = true
-		}
-	}
-	clientCfg := remote.ClientConfig{
-		BaseURL:          cfg.BaseURL,
-		APIKey:           apiKey,
-		HTTPClient:       cfg.HTTPClient,
-		AllowHTTPForTest: allowHTTP,
-	}
-	if cfg.BaseURL == "" {
-		clientCfg.BaseURL = "https://www.jevai.org"
-	}
-
-	client, err := remote.NewClient(clientCfg)
+	// Build client.
+	client, err := newRemoteClient(cfg.BaseURL, apiKey, cfg.HTTPClient)
 	if err != nil {
 		return nil, err
-	}
-
-	// For test injection with custom base URL, use test client that allows loopback
-	if cfg.BaseURL != "" && allowHTTP {
-		// Re-create with test client to allow 127.0.0.1 and http
-		httpClient := cfg.HTTPClient
-		if httpClient == nil {
-			httpClient = &http.Client{}
-		}
-		client, err = remote.NewTestClient(cfg.BaseURL, apiKey, httpClient)
-		if err != nil {
-			return nil, err
-		}
 	}
 
 	return &Provider{
@@ -161,7 +187,7 @@ func (p *Provider) BaseURL() string {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	if p.baseURL == "" {
-		return "https://www.jevai.org"
+		return defaultBaseURL
 	}
 	return p.baseURL
 }
@@ -429,29 +455,14 @@ func (p *Provider) UpdateFromConfig(apiKey, baseURL string, enabled bool) error 
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	// Resolve new client
-	cfg := remote.ClientConfig{
-		BaseURL:          baseURL,
-		APIKey:           apiKey,
-		AllowHTTPForTest: p.httpClient != nil,
+	// Resolve new client. The same trust boundary as construction applies: a
+	// hot-reloaded base_url cannot move the provider onto a plaintext remote or
+	// link-local endpoint.
+	client, err := newRemoteClient(baseURL, apiKey, p.httpClient)
+	if err != nil {
+		return err
 	}
-	if cfg.BaseURL == "" {
-		cfg.BaseURL = "https://www.jevai.org"
-	}
-	if p.httpClient != nil {
-		cfg.HTTPClient = p.httpClient
-		client, err := remote.NewTestClient(cfg.BaseURL, apiKey, p.httpClient)
-		if err != nil {
-			return err
-		}
-		p.client = client
-	} else {
-		client, err := remote.NewClient(cfg)
-		if err != nil {
-			return err
-		}
-		p.client = client
-	}
+	p.client = client
 	p.apiKey = apiKey
 	p.baseURL = baseURL
 	p.enabled = enabled
