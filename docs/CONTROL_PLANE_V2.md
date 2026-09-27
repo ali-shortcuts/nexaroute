@@ -141,6 +141,7 @@ Control Plane v2 composes the existing admin API:
 - `/admin/api/provider-discover`
 - `/admin/api/provider-check`
 - `/admin/api/provider-test`
+- `/admin/api/simple-routes`
 - `/admin/api/candidate-pools`
 - `/admin/api/route-profiles`
 - `/admin/api/fallback-chains`
