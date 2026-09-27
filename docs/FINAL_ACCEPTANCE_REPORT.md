@@ -188,7 +188,7 @@ main
 
 ## KNOWN LIMITATIONS
 
-1. **Linux-only installer** (amd64/arm64). macOS/Windows users must build from source or use the Docker image.
+1. **Linux-only native runtime/installer today** (amd64/arm64). The current single-instance desktop lock uses Linux `flock`; macOS/Windows native execution is not supported by this release. Use the Docker image on those platforms until a cross-platform lock implementation is shipped.
 2. **Plaintext configuration at rest** — config dir `0700`, config file `0600`; no OS keyring or encrypted vault.
 3. **Single-process runtime** — health, breaker, affinity, quota and scorecard state are in-memory; no distributed/multi-node coordination.
 4. **No built-in TLS** — use a reverse proxy for any non-loopback exposure.
