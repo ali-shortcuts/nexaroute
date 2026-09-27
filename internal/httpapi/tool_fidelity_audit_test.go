@@ -115,8 +115,8 @@ func TestToolFidelityAudit_BasicSchemaFidelity(t *testing.T) {
 func TestToolFidelityAudit_StreamingFragmentation(t *testing.T) {
 	// Upstream streams tool call args split at hostile boundaries
 	hostileCases := []struct {
-		name string
-		args string
+		name   string
+		args   string
 		splits []int
 	}{
 		{"simple", `{"command":"git status"}`, []int{2, 5, 10}},

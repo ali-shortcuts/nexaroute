@@ -98,11 +98,11 @@ func TestToolFidelity_SchemaTypePreservation(t *testing.T) {
 
 	// Test cases for various types
 	tests := []struct {
-		name      string
-		tool      string
-		args      string
+		name       string
+		tool       string
+		args       string
 		checkField string
-		checkType string
+		checkType  string
 		checkValue string
 	}{
 		{"bash string", "Bash", `{"command":"pwd"}`, "command", "string", "pwd"},
@@ -156,9 +156,9 @@ func TestToolFidelity_SchemaTypePreservation(t *testing.T) {
 
 			// Verify through full translation: canonical -> OpenAI -> canonical -> Anthropic
 			req := Request{
-				Model: "test",
+				Model:    "test",
 				Messages: []Message{{Role: RoleUser, Parts: []Part{{Type: PartText, Text: "hi"}}}},
-				Tools: []ToolDef{{Name: call.Name, Parameters: td.Parameters}},
+				Tools:    []ToolDef{{Name: call.Name, Parameters: td.Parameters}},
 			}
 			// Encode to OpenAI
 			oaiReq, err := EncodeOpenAIChatRequest(Request{
@@ -217,8 +217,8 @@ func TestToolFidelity_SchemaTypePreservation(t *testing.T) {
 func TestToolFidelity_StreamingFragmentation(t *testing.T) {
 	// Simulate hostile chunk boundaries
 	cases := []struct {
-		name  string
-		args  string
+		name   string
+		args   string
 		splits []int // split positions
 	}{
 		{"simple split", `{"command":"git status"}`, []int{2, 5, 10}},
@@ -515,9 +515,9 @@ func TestToolFidelity_ProviderTranslationMatrix(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			// Canonical -> OpenAI -> Canonical
 			req := Request{
-				Model: "test",
+				Model:    "test",
 				Messages: []Message{{Role: RoleUser, Parts: []Part{{Type: PartText, Text: "hi"}}}},
-				Tools: toolDefs,
+				Tools:    toolDefs,
 			}
 			oaiReq, err := EncodeOpenAIChatRequest(req, "upstream", false)
 			if err != nil {
@@ -613,8 +613,8 @@ func TestToolFidelity_ProviderTranslationMatrix(t *testing.T) {
 
 func TestToolFidelity_MalformedFailClosed(t *testing.T) {
 	malformed := []struct {
-		name string
-		args string
+		name       string
+		args       string
 		shouldFail bool
 	}{
 		{"null command", `{"command":null}`, true},
@@ -626,8 +626,8 @@ func TestToolFidelity_MalformedFailClosed(t *testing.T) {
 		{"invalid json", `{"command":`, true},
 		{"truncated", `{"command":"pwd"`, true},
 		{"duplicate keys", `{"command":"pwd","command":"ls"}`, false}, // JSON allows duplicate, last wins, still string
-		{"double encoded", `"{\"command\":\"pwd\"}"`, true}, // args encoded twice as JSON string
-		{"wrapper object", `{"value":"pwd"}`, true}, // unexpected wrapper
+		{"double encoded", `"{\"command\":\"pwd\"}"`, true},           // args encoded twice as JSON string
+		{"wrapper object", `{"value":"pwd"}`, true},                   // unexpected wrapper
 	}
 
 	// Tool schema expects command string
@@ -687,9 +687,9 @@ func TestToolFidelity_DoubleEncoding(t *testing.T) {
 	call := ToolCall{Name: "Bash", Arguments: original}
 	// Encode to OpenAI (should be string field, not double-encoded)
 	req := Request{
-		Model: "test",
+		Model:    "test",
 		Messages: []Message{{Role: RoleUser, Parts: []Part{{Type: PartText, Text: "hi"}}}},
-		Tools: []ToolDef{{Name: "Bash", Parameters: json.RawMessage(`{"type":"object","properties":{"command":{"type":"string"}}}`)}},
+		Tools:    []ToolDef{{Name: "Bash", Parameters: json.RawMessage(`{"type":"object","properties":{"command":{"type":"string"}}}`)}},
 	}
 	oaiReq, err := EncodeOpenAIChatRequest(req, "m", false)
 	if err != nil {
@@ -756,8 +756,8 @@ func TestToolFidelity_SizeBoundaries(t *testing.T) {
 func TestToolFidelity_Regression_StringMustNotBecomeUnknown(t *testing.T) {
 	// Exact regression for observed bug: Bash.command and Read.file_path must remain string
 	cases := []struct {
-		tool string
-		args string
+		tool  string
+		args  string
 		field string
 		value string
 	}{

@@ -505,7 +505,9 @@
       const ident=nextProviderIdentity();
       editor={mode:'add',originalId:'',provider:emptyProvider(),detected:[],selected:new Set(),modelMeta:new Map(),secretDirty:true,secretSource:'none'};
       editor.provider.name=ident.name;editor.provider.id=ident.id;
-      fillForm();q('#pId').dataset.autogen='1';state.autoProtocol=true;q('#pProtocolMode').value='auto';syncProtocolMode();setProviderStep(0);modal(true);
+      fillForm();q('#pId').dataset.autogen='1';state.autoProtocol=true;
+      const protocolMode=q('#pProtocolMode'); if(protocolMode) protocolMode.value='auto';
+      syncProtocolMode();setProviderStep(0);modal(true);
     };
     const originalFill=fillForm;
     fillForm=function(){originalFill();syncProviderUX();};
@@ -532,10 +534,12 @@
 
     if(editor.mode==='add'){
       q('#pId').dataset.autogen=q('#pId').dataset.autogen||'1';
-      q('#pProtocolMode').value='auto';state.autoProtocol=true;
+      const protocolMode=q('#pProtocolMode'); if(protocolMode) protocolMode.value='auto';
+      state.autoProtocol=true;
     }else{
       q('#pId').dataset.autogen='0';
-      q('#pProtocolMode').value='manual';state.autoProtocol=false;
+      const protocolMode=q('#pProtocolMode'); if(protocolMode) protocolMode.value='manual';
+      state.autoProtocol=false;
     }
     syncProtocolMode();
     installSecretSavedState();

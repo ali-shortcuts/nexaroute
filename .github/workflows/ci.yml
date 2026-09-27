@@ -51,6 +51,12 @@ jobs:
       - name: Local runtime smoke test
         run: ./scripts/smoke-local.sh
 
+      - name: Browser acceptance test
+        run: |
+          python3 -m pip install --user playwright
+          python3 -m playwright install --with-deps chromium
+          python3 scripts/test-browser-e2e.py
+
       - name: Release packaging and installer lifecycle tests
         run: |
           ./scripts/build-release.sh v0.7.0

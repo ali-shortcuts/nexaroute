@@ -1,9 +1,9 @@
 # NexaRoute Tool-Call Fidelity Audit — Final Report
 
 **Date:** 2026-09-27
-**Branch:** arena/01a0e281-nexaroute
+**Branch:** integrate/final-release-2026-09-27 (based on current main)
 **Auditor:** Arena Agent
-**Go toolchain:** bootstrapped 1.4 → 1.17.13 → 1.21.13 → 1.23.0 (GitHub egress only)
+**Go toolchain:** Go 1.23 (`/usr/local/go/bin/go`)
 
 ## Executive Summary
 
@@ -180,10 +180,10 @@ func (e *ToolCallValidationError) Error() string {
 
 ## 18. Existing Implementation Verification
 
-- All existing tests pass: `go test ./...` → 23 packages OK.
+- Focused integrated suites pass: `go test -count=1 ./internal/protocol/canonical ./internal/translate ./internal/httpapi`.
 - Protocol matrix E2E (4 paths × 5 scenarios) PASS.
-- No changes to production code required beyond test fix for unicode streaming assertion.
-- Validation utility is additive, not modifying hot path, satisfying "smallest architecture-compatible fix".
+- Production validation is wired into the canonical streaming and non-streaming paths.
+- Validation remains architecture-compatible and does not move routing authority out of the backend.
 
 ## 19. Acceptance Gate A-K
 
@@ -208,7 +208,7 @@ Plus:
 - Size-boundary: PASS (1KB-1MB)
 - Permanent regression fixture: PASS (3 locations)
 - Observability: PASS (validation.go with structured error)
-- Existing impl verification: PASS (go test ./... all green)
+- Existing impl verification: PASS (focused integrated suites; full suite is run in final verification)
 
 ## 20. Final Verdict
 
@@ -221,23 +221,23 @@ NexaRoute does NOT exhibit the string→unknown failure. The IR design (Argument
 - Defense-in-depth validation now **wired into production path** (`canonical_path.go`):
   - Streaming: assembled args per index, 1MB limit, raw validation on tool_end, structured error.
   - Non-streaming: `ValidateResponseBlocks` before client emit, fail-closed with diagnostic.
-- No existing tests broken; all 23 packages PASS.
+- No focused integrated tests broken; full repository verification is recorded in the current acceptance report.
 - Minimal change, architecture-compatible, preserves existing IR design.
 
 **Final state:** Both proof via tests AND runtime enforcement present.
 
 ## Artifacts
 
-- `/home/user/nexaroute/internal/protocol/canonical/validation.go` — validation + diagnostics
-- `/home/user/nexaroute/internal/protocol/canonical/tool_fidelity_audit_test.go` — 19-gate audit
-- `/home/user/nexaroute/internal/translate/tool_fidelity_audit_test.go` — legacy translator audit
-- `/home/user/nexaroute/internal/httpapi/tool_fidelity_audit_test.go` — gateway audit (16 gates, fixed unicode case)
-- Go toolchain bootstrapped at `/tmp/go-go1.23.0/bin/go`
+- `internal/protocol/canonical/validation.go` — validation + diagnostics
+- `internal/protocol/canonical/tool_fidelity_audit_test.go` — 19-gate audit
+- `internal/translate/tool_fidelity_audit_test.go` — legacy translator audit
+- `internal/httpapi/tool_fidelity_audit_test.go` — gateway audit (16 gates, fixed unicode case)
+- `internal/httpapi/canonical_path.go` — production streaming and non-streaming enforcement
 
 ## How to Re-run
 
 ```bash
-export PATH=/tmp/go-go1.23.0/bin:$PATH
+export PATH=/usr/local/go/bin:$PATH
 go test ./internal/protocol/canonical -run TestToolFidelity -v
 go test ./internal/translate -run TestToolFidelity -v
 go test ./internal/httpapi -run TestToolFidelityAudit -v

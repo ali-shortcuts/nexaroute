@@ -16,6 +16,17 @@ NexaRoute is intentionally conservative while real Claude Code/provider compatib
 ./scripts/verify.sh
 ```
 
+The verification script runs a real Chromium acceptance pass when Chromium and
+Python Playwright are available. It covers clean startup, empty-state
+navigation, provider drawer open/cancel, theme switching, Persian RTL, live
+polling pause/resume, and settings population. To run that pass directly:
+
+```bash
+python3 -m pip install --user playwright
+python3 -m playwright install chromium
+python3 scripts/test-browser-e2e.py
+```
+
 For faster iteration:
 
 ```bash

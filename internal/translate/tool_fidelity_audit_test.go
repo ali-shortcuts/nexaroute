@@ -55,7 +55,7 @@ func TestToolFidelity_AnthropicToOpenAI_PreservesStringTypes(t *testing.T) {
 			{Type: "tool_use", ID: "call_2", Name: "Read", Input: map[string]any{"file_path": "/tmp/example.txt"}},
 		},
 		StopReason: strPtr("tool_use"),
-		Usage: core.AnthUsage{InputTokens: 1, OutputTokens: 1},
+		Usage:      core.AnthUsage{InputTokens: 1, OutputTokens: 1},
 	}
 	oaiResp := AnthropicResponseToOpenAI(anthResp, "client", nil)
 	if len(oaiResp.Choices[0].Message.ToolCalls) != 2 {
@@ -84,7 +84,7 @@ func TestToolFidelity_AnthropicToOpenAI_PreservesStringTypes(t *testing.T) {
 
 func TestToolFidelity_OpenAIToAnthropic_PreservesStringTypes(t *testing.T) {
 	in := core.OpenAIRequest{
-		Model: "test",
+		Model:    "test",
 		Messages: []core.OpenAIMessage{{Role: "user", Content: "hi"}},
 		Tools: []core.OpenAITool{
 			{Type: "function", Function: core.OpenAIFunction{Name: "Bash", Parameters: map[string]any{"type": "object", "properties": map[string]any{"command": map[string]any{"type": "string"}}, "required": []any{"command"}}}},
@@ -185,7 +185,7 @@ func TestToolFidelity_MalformedArguments_PreservedViaRaw(t *testing.T) {
 		Messages: []core.OpenAIMessage{{
 			Role: "assistant",
 			ToolCalls: []core.OpenAIToolCall{{
-				ID: "call-1",
+				ID:       "call-1",
 				Function: core.OpenAIFunctionCall{Name: "Bash", Arguments: "{bad json"},
 			}},
 		}},
@@ -239,11 +239,11 @@ func TestToolFidelity_DoubleEncodingAudit(t *testing.T) {
 	anthReq := core.AnthropicRequest{
 		Model: "x", MaxTokens: 10,
 		Messages: []core.AnthMessage{{Role: "user", Content: content}},
-		Tools: []core.AnthTool{{Name: "Bash", InputSchema: map[string]any{"type": "object"}}},
+		Tools:    []core.AnthTool{{Name: "Bash", InputSchema: map[string]any{"type": "object"}}},
 	}
 	// Add a tool_use message
 	anthReq.Messages = append(anthReq.Messages, core.AnthMessage{
-		Role: "assistant",
+		Role:    "assistant",
 		Content: json.RawMessage(`[{"type":"tool_use","id":"c1","name":"Bash","input":{"command":"pwd"}}]`),
 	})
 	oaiReq, _, err := AnthropicToOpenAI(anthReq, "m")
