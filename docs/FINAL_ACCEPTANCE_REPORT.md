@@ -30,15 +30,14 @@ defect remains after the automated and manual audit gates.
 
 ## Public release status
 
-The latest published release at the time of this audit is **v0.10.0**.
+The latest published release at the time of this audit is **v0.10.1**.
 
-Its tag points to the main commit immediately before the final Control Plane
-visual/accessibility hardening. Therefore:
+Its tag points to the verified final integration commit containing the Control
+Plane and Tool Fidelity hardening. Therefore:
 
 - `main` is the newest verified source.
-- `v0.10.0` remains the latest verified stable release.
-- the next release tag must be cut from current `main` if the public installer
-  is expected to include the final UI hardening and this audit cleanup.
+- `v0.10.1` is the latest verified stable release.
+- the public installer now resolves to `v0.10.1`.
 
 A `workflow_dispatch` release run verifies and builds artifacts but deliberately
 does not publish; publication happens only for a `v*` tag on main.
@@ -118,7 +117,7 @@ The final integration was merged by PR #44 into `main`.
 - **Local vet/syntax:** `go vet ./...`, `node --check internal/httpapi/web/app.js`, and `node --check internal/httpapi/web/control-plane-v2.js` PASS
 - **Browser acceptance:** PASS — Chromium verified clean startup, empty provider state, provider drawer open/cancel, theme switch, Persian RTL, pause/resume, settings, and no JavaScript page errors
 - **CI acceptance:** PASS — browser acceptance, stress checks, runtime smoke, release packaging/installer lifecycle, Docker build and runtime smoke
-- **Release status:** no new public release tag was created in this integration; the latest published release remains `v0.10.0`. A new tag must be created from the verified `main` SHA when publishing is intended.
+- **Release status:** PASS — public release `v0.10.1` was published from the verified final integration SHA with amd64/arm64 binaries, installer, and checksums.
 
 ### Final verdict
 
