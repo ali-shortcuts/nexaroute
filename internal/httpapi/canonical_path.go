@@ -392,11 +392,26 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 			cls, policy := classifyFailure(resp.StatusCode, b)
 			// Capability failures never touch deployment health; the router
 			// may still fail over to a deployment that supports the feature.
-			s.recordProviderFailure(deployment.ProviderID, deployment.ID, cls.Message, policy)
-			if !cls.CapabilityFailure {
+			safeMessage := cls.Message
+			if cls.Class == compat.ClassModelRetired {
+				safeMessage = string(cls.Class)
+				policy.Failover = true
+				policy.QuarantineDeployment = false
+				policy.HardCooldown = false
+				policy.SignalProvider = false
+				s.hm.Retire(deployment.ID, "upstream model retired", string(cls.Class))
+				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "model_retired", Deployment: deployment.ID, Message: "deployment retired by upstream model lifecycle", ErrorType: string(cls.Class), StatusCode: resp.StatusCode})
+			} else if cls.Class == compat.ClassModelTemporarilyUnavailable {
+				safeMessage = string(cls.Class)
+				policy.Failover = true
+				policy.SignalProvider = false
+				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "model_unavailable", Deployment: deployment.ID, Message: "upstream model temporarily unavailable", ErrorType: string(cls.Class), StatusCode: resp.StatusCode})
+			}
+			s.recordProviderFailure(deployment.ProviderID, deployment.ID, safeMessage, policy)
+			if !cls.CapabilityFailure && cls.Class != compat.ClassModelRetired {
 				if router.IsReadyStrategy(cfg.Routing.Strategy) {
 					if policy.QuarantineDeployment {
-						s.hm.Quarantine(deployment.ID, cls.Message, time.Since(start))
+						s.hm.Quarantine(deployment.ID, safeMessage, time.Since(start))
 						s.probe.Recover(deployment.ID)
 					}
 				} else if policy.HardCooldown {
@@ -404,16 +419,20 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 					if resp.StatusCode == http.StatusTooManyRequests {
 						d = retryAfterDuration(resp.Header, time.Duration(cfg.Routing.MaxRetryAfterSeconds)*time.Second)
 					}
-					s.hm.ForceCooldown(deployment.ID, cls.Message, d)
+					s.hm.ForceCooldown(deployment.ID, safeMessage, d)
 				} else if policy.QuarantineDeployment {
-					s.hm.RecordFailure(deployment.ID, cls.Message, time.Since(start))
+					s.hm.RecordFailure(deployment.ID, safeMessage, time.Since(start))
 				}
 			}
 			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_fail", Deployment: deployment.ID,
-				Message: cls.CapabilityLabel() + ": " + cls.Message, ErrorType: policy.ErrorType, LatencyMS: time.Since(start).Milliseconds(), StatusCode: lastStatus})
+				Message: cls.CapabilityLabel() + ": " + safeMessage, ErrorType: policy.ErrorType, LatencyMS: time.Since(start).Milliseconds(), StatusCode: lastStatus})
 			if (policy.Failover || cls.CapabilityFailure) && attempts < max && i+1 < len(candidates) {
 				s.retryPause(routeCtx, r.Header.Get("x-request-id"), cfg, attempts-1, max)
 				continue
+			}
+			if cls.Class == compat.ClassModelRetired || cls.Class == compat.ClassModelTemporarilyUnavailable {
+				canonicalErrorJSON(w, "openai_responses", http.StatusServiceUnavailable, "candidate_exhausted", "all eligible upstream deployments failed")
+				return
 			}
 			if isNativeFamily(deployment.ProviderType, "openai_responses") {
 				writeRawUpstreamError(w, lastStatus, lastCT, b)
