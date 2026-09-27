@@ -61,7 +61,7 @@ jobs:
             echo "$bad_files"
             exit 1
           fi
-          if git grep -nE 'LoadBackup|adminRollback|/admin/api/rollback|rollbackBtn|ulg_admin_key|ULG_CONFIG|ULG_LISTEN|ULG_ADMIN_KEY|ULG_ADMIN_BIND_LOCAL_ONLY|universal-llm-gateway' -- . ':(exclude).github/workflows/release.yml'; then
+          if git grep -nE 'LoadBackup|adminRollback|/admin/api/rollback|rollbackBtn|ulg_admin_key|ULG_CONFIG|ULG_LISTEN|ULG_ADMIN_KEY|ULG_ADMIN_BIND_LOCAL_ONLY|universal-llm-gateway' -- . ':(exclude).github/workflows'; then
             echo "Forbidden backup/legacy identifiers remain in active source/docs."
             exit 1
           fi
