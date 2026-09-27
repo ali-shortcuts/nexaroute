@@ -304,7 +304,7 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprintf(w, "nexaroute_decision_chain_requests_total{outcome=%q} %d\n", o.outcome, v)
 		}
 	}
-	fmt.Fprintln(w, "# HELP nexaroute_decision_chain_steps_total Chain step executions by provider type and outcome.")
+	fmt.Fprintln(w, "# HELP nexaroute_decision_chain_steps_total Chain step executions by outcome.")
 	fmt.Fprintln(w, "# TYPE nexaroute_decision_chain_steps_total counter")
 	stepOutcomes := []struct {
 		key     string
@@ -319,27 +319,12 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 		{"chain_step_cooldown", "cooldown"},
 		{"chain_step_skipped_budget", "skipped_budget"},
 	}
-	// provider types: jev, policy, local
-	for _, pt := range []string{"jev", "policy", "local"} {
-		for _, o := range stepOutcomes {
-			if v, ok := decisionMetrics[o.key]; ok && v > 0 {
-				// Emit per provider type? Metrics currently aggregate across types, but we emit total counts per outcome with fixed type label for each possible type.
-				// For simplicity, emit aggregated count for each type with same value (bounded not high cardinality)
-				// Better to emit per type counts separately if we had per-type counters; currently we have aggregate, so we emit with unknown but we can split generically
-				// We'll emit with provider_type=pt and outcome, using aggregated count divided? Instead we emit total with type=pt for each outcome
-				// But to avoid overcount, emit only if we had per-type; for now emit total once with provider_type=pt placeholder
-				// We'll emit aggregated total for each type as same count (conservative) - but to keep bounded, emit one line per outcome without type dimension if not tracked
-				// As we don't track per-type separately yet, emit with type="all" aggregated
-			}
-		}
-		_ = pt
-	}
-	// Simpler: emit aggregated step totals without provider_type dimension (or with type="jev" placeholder) to keep bounded
+	// The decision metrics currently expose aggregate step counters, not
+	// provider-type keyed counters. Emit each aggregate exactly once rather than
+	// duplicating the same value under misleading jev/policy/local labels.
 	for _, o := range stepOutcomes {
 		if v, ok := decisionMetrics[o.key]; ok && v > 0 {
-			fmt.Fprintf(w, "nexaroute_decision_chain_steps_total{provider_type=\"jev\",outcome=%q} %d\n", o.outcome, v)
-			fmt.Fprintf(w, "nexaroute_decision_chain_steps_total{provider_type=\"policy\",outcome=%q} %d\n", o.outcome, v)
-			fmt.Fprintf(w, "nexaroute_decision_chain_steps_total{provider_type=\"local\",outcome=%q} %d\n", o.outcome, v)
+			fmt.Fprintf(w, "nexaroute_decision_chain_steps_total{outcome=%q} %d\n", o.outcome, v)
 		}
 	}
 
