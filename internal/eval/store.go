@@ -30,12 +30,33 @@ func NewStore(maxRuns int) *Store {
 	return &Store{maxRuns: maxRuns, byID: map[string]Result{}}
 }
 
+func cloneResult(run Result) Result {
+	out := run
+	out.Cases = append([]CaseResult(nil), run.Cases...)
+	for i := range out.Cases {
+		out.Cases[i].Verdicts = append([]VerdictResult(nil), run.Cases[i].Verdicts...)
+	}
+	out.Counts = make(map[Verdict]int, len(run.Counts))
+	for k, v := range run.Counts {
+		out.Counts[k] = v
+	}
+	if run.Quality != nil {
+		q := *run.Quality
+		out.Quality = &q
+	}
+	out.Extra = append([]DimensionScore(nil), run.Extra...)
+	out.Evaluators = append([]string(nil), run.Evaluators...)
+	return out
+}
+
 // Save stores a run, evicting the oldest runs beyond the bound. It is
-// idempotent per run id: re-saving a run replaces it in place.
+// idempotent per run id: re-saving a run replaces it in place. Mutable
+// slices/maps are cloned so callers cannot mutate store state after Save.
 func (s *Store) Save(run Result) error {
 	if err := run.Validate(); err != nil {
 		return err
 	}
+	run = cloneResult(run)
 	s.mu.Lock()
 	if _, exists := s.byID[run.RunID]; exists {
 		// Idempotent re-save of the same run id: keep the newest copy.
@@ -63,7 +84,7 @@ func (s *Store) Save(run Result) error {
 func (s *Store) snapshotLocked() []Result {
 	out := make([]Result, 0, len(s.order))
 	for _, id := range s.order {
-		out = append(out, s.byID[id])
+		out = append(out, cloneResult(s.byID[id]))
 	}
 	return out
 }
@@ -77,7 +98,7 @@ func (s *Store) Recent(limit int) []Result {
 	}
 	out := make([]Result, 0, limit)
 	for i := len(s.order) - 1; i >= 0 && len(out) < limit; i-- {
-		out = append(out, s.byID[s.order[i]])
+		out = append(out, cloneResult(s.byID[s.order[i]]))
 	}
 	return out
 }
@@ -94,7 +115,10 @@ func (s *Store) Get(runID string) (Result, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	run, ok := s.byID[runID]
-	return run, ok
+	if !ok {
+		return Result{}, false
+	}
+	return cloneResult(run), true
 }
 
 // Len returns the number of stored runs.
