@@ -3,15 +3,20 @@ package remote
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
 
 const (
 	DefaultUserAgent = "nexaroute-decision/1.0"
+	// maxRedirects caps redirect chains. Production never follows redirects
+	// (see redirectPolicy), so this is defense in depth.
+	maxRedirects = 5
 )
 
 // Client is minimal reusable external DecisionProvider transport
@@ -32,6 +37,52 @@ type ClientConfig struct {
 	AllowHTTPForTest bool
 }
 
+// validateRedirectURL applies the SSRF policy to a redirect destination:
+// no userinfo, https only (http only when allowHTTPAndPrivate is set for
+// tests), and no blocked hosts. It is called for EVERY redirect destination
+// before the client decides what to do with it.
+func validateRedirectURL(u *url.URL, allowHTTPAndPrivate bool) error {
+	if u == nil {
+		return fmt.Errorf("%w: nil redirect url", ErrInvalidConfig)
+	}
+	if u.User != nil {
+		return fmt.Errorf("%w: userinfo in redirect", ErrInvalidConfig)
+	}
+	if u.Scheme != "https" && !(allowHTTPAndPrivate && u.Scheme == "http") {
+		return fmt.Errorf("%w: redirect scheme must be https", ErrInvalidConfig)
+	}
+	if u.Host == "" {
+		return fmt.Errorf("%w: redirect host required", ErrInvalidConfig)
+	}
+	if !allowHTTPAndPrivate {
+		if err := checkDialHost(u.Hostname()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// redirectPolicy returns the redirect policy for the remote-decision client.
+// Every redirect destination is SSRF-validated (blocked destinations such as
+// 127.0.0.1, 169.254.169.254 or metadata.google.internal are rejected with
+// ErrSSRFBlocked), and redirects are NEVER followed: the 3xx response is
+// returned to the caller as ErrRedirectNotAllowed. Not following redirects
+// also guarantees Authorization headers can never leak to another target and
+// that redirect chains cannot walk toward internal services. Even if a
+// redirect were followed (e.g. a custom client), the transport still
+// SSRF-validates and IP-pins the connection to the destination host.
+func redirectPolicy(allowHTTPAndPrivate bool) func(req *http.Request, via []*http.Request) error {
+	return func(req *http.Request, via []*http.Request) error {
+		if err := validateRedirectURL(req.URL, allowHTTPAndPrivate); err != nil {
+			return err
+		}
+		if len(via) >= maxRedirects {
+			return fmt.Errorf("%w: too many redirects", ErrRedirectNotAllowed)
+		}
+		return http.ErrUseLastResponse
+	}
+}
+
 // NewClient creates a new remote client with secure defaults
 func NewClient(cfg ClientConfig) (*Client, error) {
 	if err := ValidateBaseURL(cfg.BaseURL, cfg.AllowHTTPForTest); err != nil {
@@ -49,18 +100,14 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 		httpClient = &http.Client{
 			Transport: transport,
 			Timeout:   10 * time.Second, // overall timeout, but context timeout is authoritative
-			// Disable redirects to prevent Authorization leakage
-			CheckRedirect: func(req *http.Request, via []*http.Request) error {
-				// Do not follow redirects
-				return http.ErrUseLastResponse
-			},
+			// Validate every redirect destination and never follow redirects
+			// (prevents SSRF via redirect and Authorization leakage).
+			CheckRedirect: redirectPolicy(cfg.AllowHTTPForTest),
 		}
 	} else {
 		// Ensure redirect policy is safe even for test client
 		if httpClient.CheckRedirect == nil {
-			httpClient.CheckRedirect = func(req *http.Request, via []*http.Request) error {
-				return http.ErrUseLastResponse
-			}
+			httpClient.CheckRedirect = redirectPolicy(cfg.AllowHTTPForTest)
 		}
 	}
 
@@ -84,9 +131,8 @@ func NewTestClient(baseURL, apiKey string, httpClient *http.Client) (*Client, er
 		httpClient = &http.Client{
 			Transport: transport,
 			Timeout:   5 * time.Second,
-			CheckRedirect: func(req *http.Request, via []*http.Request) error {
-				return http.ErrUseLastResponse
-			},
+			// CheckRedirect is left nil so NewClient installs the shared
+			// redirect policy (validated destinations, never followed).
 		}
 	}
 	return NewClient(ClientConfig{
@@ -121,12 +167,21 @@ func (c *Client) Do(ctx context.Context, path string, requestBody []byte) (respo
 	// Do exactly one call, no retry
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
+		// SSRF rejections (dial policy or redirect policy) surface as-is.
+		if errors.Is(err, ErrSSRFBlocked) {
+			return nil, 0, &Error{Kind: ErrSSRFBlocked, Message: "ssrf blocked"}
+		}
+		// Policy rejections (bad redirect target, malformed address).
+		if errors.Is(err, ErrInvalidConfig) {
+			return nil, 0, &Error{Kind: ErrInvalidConfig, Message: "invalid target"}
+		}
 		// Check context cancellation
 		if ctx.Err() != nil {
 			return nil, 0, &Error{Kind: ErrTimeout, Message: "context canceled"}
 		}
 		// Classify timeout
-		if strings.Contains(err.Error(), "timeout") || strings.Contains(err.Error(), "deadline") {
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) ||
+			strings.Contains(err.Error(), "timeout") || strings.Contains(err.Error(), "deadline") {
 			return nil, 0, &Error{Kind: ErrTimeout, Message: "timeout"}
 		}
 		return nil, 0, &Error{Kind: ErrUnavailable, Message: "connection error"}
