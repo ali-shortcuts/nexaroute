@@ -92,6 +92,16 @@ function applyLocale(next = locale) {
   const sel = $('#languageSelect');
   if (sel) sel.value = locale;
 }
+let theme = localStorage.getItem('nexaroute_theme') || 'system';
+function applyTheme(next = theme) {
+  theme = ['system','dark','light'].includes(next) ? next : 'system';
+  localStorage.setItem('nexaroute_theme', theme);
+  const effective = theme === 'system' ? (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark') : theme;
+  document.body.classList.toggle('theme-light', effective === 'light');
+  document.body.classList.toggle('theme-dark', effective === 'dark');
+  const sel = $('#themeSelect');
+  if (sel) sel.value = theme;
+}
 function requestAdminKey() {
   return new Promise(resolve => {
     const m = $('#adminKeyDialog'), inp = $('#adminKeyDialogInput'), err = $('#adminKeyDialogError');
@@ -1100,6 +1110,8 @@ function renderPicker() {
 }
 $('#providerSearch')?.addEventListener('input', () => renderProviders(healthMap()));
 $('#languageSelect')?.addEventListener('change', e => applyLocale(e.target.value));
+$('#themeSelect')?.addEventListener('change', e => applyTheme(e.target.value));
+matchMedia('(prefers-color-scheme: light)').addEventListener?.('change', () => { if (theme === 'system') applyTheme('system'); });
 $('#replaceCredentialBtn')?.addEventListener('click', () => {
   $('#savedCredential').hidden = true;
   $('#apiKeyField').hidden = false;
@@ -1360,6 +1372,7 @@ $('#routeSelectAll')?.addEventListener('click',()=>{routeDeployments().forEach(d
 $('#routeClearAll')?.addEventListener('click',()=>{routeEditor.selected.clear();renderRouteModelPicker();});
 /* ---------- boot ---------- */
 applyLocale();
+applyTheme();
 (async () => {
   try {
     const d = await api('/admin/api/provider-presets');
