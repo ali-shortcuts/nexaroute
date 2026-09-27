@@ -874,9 +874,64 @@
     };
   }
 
+  function installExperiencePolish(){
+    // Accessibility and operator ergonomics only; no data-plane decisions live here.
+    if(!q('.cp-skip-link')){
+      const skip=document.createElement('a');
+      skip.className='cp-skip-link';
+      skip.href='#mainContent';
+      skip.textContent=state.lang==='fa'?'رفتن به محتوای اصلی':'Skip to main content';
+      document.body.prepend(skip);
+    }
+    const main=q('main');
+    if(main && !main.id) main.id='mainContent';
+
+    const syncNavA11y=()=>{
+      qa('#nav button').forEach(btn=>{
+        const active=btn.classList.contains('active');
+        if(active) btn.setAttribute('aria-current','page');
+        else btn.removeAttribute('aria-current');
+        const target=btn.dataset.tab;
+        if(target) btn.setAttribute('aria-controls',target);
+      });
+      qa('.tab').forEach(tab=>tab.setAttribute('aria-hidden',tab.classList.contains('active')?'false':'true'));
+    };
+    syncNavA11y();
+    const nav=q('#nav');
+    if(nav){
+      new MutationObserver(syncNavA11y).observe(nav,{subtree:true,attributes:true,attributeFilter:['class']});
+      nav.addEventListener('keydown',e=>{
+        if(!['ArrowDown','ArrowUp','ArrowRight','ArrowLeft'].includes(e.key)) return;
+        const buttons=qa('button:not(.cp-hidden-nav)',nav).filter(b=>b.offsetParent!==null);
+        const current=document.activeElement;
+        const i=Math.max(0,buttons.indexOf(current));
+        const forward=e.key==='ArrowDown'||e.key==='ArrowRight';
+        const next=buttons[(i+(forward?1:-1)+buttons.length)%buttons.length];
+        if(next){e.preventDefault();next.focus();}
+      });
+    }
+
+    document.addEventListener('keydown',e=>{
+      if(e.key==='Escape'){
+        const host=q('#cpDialogHost.open');
+        if(host) q('[data-dialog-close]',host)?.click();
+      }
+      if((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==='k'){
+        const search=q('#providerSearch')||q('#modelSearch');
+        if(search && search.offsetParent!==null){e.preventDefault();search.focus();}
+      }
+    });
+
+    qa('table').forEach(table=>{
+      if(!table.getAttribute('role')) table.setAttribute('role','table');
+    });
+    q('#consoleLog')?.setAttribute('aria-live','polite');
+    q('#apiState')?.setAttribute('aria-live','polite');
+  }
+
   function init(){
     document.body.classList.add('cp-v2');
-    installTopbarTools();simplifyNavigation();installRoutingSection();installProviderSearch();
+    installTopbarTools();simplifyNavigation();installRoutingSection();installProviderSearch();installExperiencePolish();
     installProviderWizard();installAdminKeyFlow();overrideAdvancedEditors();wrapRender();patchProviderSaveFlow();
     applyTheme();applyLanguage();
     renderRoutingStudio();renderOnboarding();enhanceProviderCards();

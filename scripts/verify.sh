@@ -38,6 +38,7 @@ go test -race -timeout=3m -shuffle=on -count=3 ./...
 if command -v node >/dev/null 2>&1; then
   echo '== web ui javascript syntax =='
   node --check internal/httpapi/web/app.js
+  node --check internal/httpapi/web/control-plane-v2.js
 else
   echo 'WARN: node not installed; skipping JavaScript syntax check' >&2
 fi
