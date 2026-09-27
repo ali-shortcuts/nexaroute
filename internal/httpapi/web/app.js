@@ -1111,6 +1111,23 @@ function renderPicker() {
 $('#providerSearch')?.addEventListener('input', () => renderProviders(healthMap()));
 $('#languageSelect')?.addEventListener('change', e => applyLocale(e.target.value));
 $('#themeSelect')?.addEventListener('change', e => applyTheme(e.target.value));
+$('#openCompatBtn')?.addEventListener('click', () => {
+  const target = $('#nav button[data-tab="compat"]');
+  if (target) target.click();
+  else {
+    $('.tab').forEach(x => x.classList.remove('active'));
+    $('#compat')?.classList.add('active');
+    $('#title').textContent = 'Compatibility Lab';
+    $('#subtitle').textContent = subtitles.compat || '';
+    loadCompat();
+  }
+});
+$('#openAdvancedRoutingBtn')?.addEventListener('click', () => {
+  $('#nav button[data-tab="routing"]')?.click();
+  const advanced = $('.advanced-routing');
+  if (advanced) { advanced.open = true; advanced.scrollIntoView({behavior:'smooth',block:'start'}); }
+});
+
 matchMedia('(prefers-color-scheme: light)').addEventListener?.('change', () => { if (theme === 'system') applyTheme('system'); });
 $('#replaceCredentialBtn')?.addEventListener('click', () => {
   $('#savedCredential').hidden = true;
