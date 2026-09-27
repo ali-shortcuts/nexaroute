@@ -124,7 +124,7 @@ def wait_class_state(page: Page, selector: str, class_name: str, present: bool, 
             const el = document.querySelector(selector);
             return !!el && el.classList.contains(className) === present;
         }""",
-        [selector, class_name, present],
+        arg=[selector, class_name, present],
         timeout=timeout,
     )
 
