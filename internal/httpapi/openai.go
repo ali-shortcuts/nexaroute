@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ali-shortcuts/nexaroute/internal/compat"
 	"github.com/ali-shortcuts/nexaroute/internal/core"
 	"github.com/ali-shortcuts/nexaroute/internal/events"
 	"github.com/ali-shortcuts/nexaroute/internal/feature"
@@ -286,6 +287,26 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 				policy.HardCooldown = false
 				policy.SignalProvider = false
 			}
+			if cls.Class == compat.ClassModelRetired {
+				// Permanent model lifecycle failure: remove this deployment from
+				// eligibility until its identity/config changes. Never waste
+				// supervised recovery probes on an EOL model.
+				lastErr = string(cls.Class)
+				policy.Failover = true
+				policy.QuarantineDeployment = false
+				policy.HardCooldown = false
+				policy.SignalProvider = false
+				s.hm.Retire(c.Deployment.ID, "upstream model retired", string(cls.Class))
+				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "model_retired", Deployment: c.Deployment.ID, Message: "deployment retired by upstream model lifecycle", ErrorType: string(cls.Class), StatusCode: resp.StatusCode})
+			} else if cls.Class == compat.ClassModelTemporarilyUnavailable {
+				// Temporary model unavailability is a deployment condition, not a
+				// malformed Claude/OpenAI request. Keep the provider-wide circuit
+				// untouched and fail over immediately.
+				lastErr = string(cls.Class)
+				policy.Failover = true
+				policy.SignalProvider = false
+				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "model_unavailable", Deployment: c.Deployment.ID, Message: "upstream model temporarily unavailable", ErrorType: string(cls.Class), StatusCode: resp.StatusCode})
+			}
 			s.recordProviderFailure(c.Deployment.ProviderID, c.Deployment.ID, lastErr, policy)
 			if router.IsReadyStrategy(cfg.Routing.Strategy) {
 				if policy.QuarantineDeployment {
@@ -306,6 +327,12 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "failover", Deployment: c.Deployment.ID, Message: fmt.Sprintf("HTTP %d; trying next eligible candidate", resp.StatusCode), StatusCode: resp.StatusCode})
 				s.retryPause(routeCtx, r.Header.Get("x-request-id"), cfg, attemptIndex, max)
 				continue
+			}
+			if policy.Failover || cls.CapabilityFailure {
+				// Candidate set is exhausted. Do not expose the last provider's raw
+				// model/provider failure to the client; emit one normalized terminal
+				// gateway error after the loop.
+				break
 			}
 			if lastRetryAfter != "" {
 				w.Header().Set("Retry-After", lastRetryAfter)
@@ -425,7 +452,8 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 		if lastRetryAfter != "" {
 			w.Header().Set("Retry-After", lastRetryAfter)
 		}
-		writeRawUpstreamError(w, lastStatus, lastContentType, lastBody)
+		s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "candidate_exhausted", Message: "all eligible upstream deployments failed", ErrorType: "candidate_exhausted", StatusCode: http.StatusServiceUnavailable})
+		errorJSON(w, http.StatusServiceUnavailable, "all eligible upstream deployments failed")
 		return
 	}
 	if lastErr == "" {
