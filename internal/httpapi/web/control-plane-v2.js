@@ -321,7 +321,7 @@
   }
 
   async function saveSimpleRoute({existing,name,publicModel,mode,deployments,parts}) {
-    const base=slugify(existing?.id||publicModel);
+    const base=slugify(existing?.public_model||publicModel);
     let primaryPool=parts?.profile?.candidate_pool || `route-${base}-pool`;
     let fallbackChain='';
     if(mode==='ordered'){
@@ -352,8 +352,22 @@
     const ve=(snap.virtual_endpoints||[]).find(x=>x.id===id); if(!ve)return;
     const ok=await UI.confirm(T('deleteRoute'),`${T('destructive')}\n${ve.public_model||ve.id}`);
     if(!ok)return;
+    const {profile,pool,chain}=routeParts(ve);
+    const prefix='route-'+slugify(ve.public_model||ve.id);
     try{
       await api('/admin/api/virtual-endpoints/'+encodeURIComponent(id),{method:'DELETE'});
+      const profileShared=(snap.virtual_endpoints||[]).some(x=>x.id!==id&&x.route_profile===profile?.id);
+      if(profile && !profileShared && profile.id.startsWith(prefix)){
+        await api('/admin/api/route-profiles/'+encodeURIComponent(profile.id),{method:'DELETE'}).catch(()=>{});
+        const chainShared=(snap.route_profiles||[]).some(x=>x.id!==profile.id&&x.fallback_chain===chain?.id);
+        if(chain && !chainShared && chain.id.startsWith(prefix)) await api('/admin/api/fallback-chains/'+encodeURIComponent(chain.id),{method:'DELETE'}).catch(()=>{});
+        const candidates=(snap.candidate_pools||[]).filter(p=>p.id.startsWith(prefix));
+        for(const p of candidates){
+          const usedByOther=(snap.route_profiles||[]).some(x=>x.id!==profile.id&&x.candidate_pool===p.id) ||
+            (snap.fallback_chains||[]).some(x=>x.id!==chain?.id&&(x.pools||[]).includes(p.id));
+          if(!usedByOther) await api('/admin/api/candidate-pools/'+encodeURIComponent(p.id),{method:'DELETE'}).catch(()=>{});
+        }
+      }
       await refresh();cpToast(T('saved'));
     }catch(e){cpToast(e.message,true);}
   }
@@ -425,10 +439,6 @@
     back.onclick=()=>setProviderStep(Math.max(0,state.providerStep-1));
     next.onclick=()=>advanceProviderStep();
     qa('[data-provider-step]',progress).forEach(b=>b.onclick=()=>setProviderStep(Number(b.dataset.providerStep)));
-    q('#pName').addEventListener('input',()=>{
-      if(editor?.mode!=='add')return;
-      const id=q('#pId'); if(id?.dataset.autogen==='1') id.value=slugify(q('#pName').value);
-    });
     q('#addProviderBtn').onclick=()=>{
       const ident=nextProviderIdentity();
       editor={mode:'add',originalId:'',provider:emptyProvider(),detected:[],selected:new Set(),modelMeta:new Map(),secretDirty:true,secretSource:'none'};
@@ -456,6 +466,8 @@
 
   function syncProviderUX(){
     if(!editor)return;
+    if(editor.mode==='edit' && !editor._savedSelected) editor._savedSelected=new Set(editor.selected||[]);
+
     if(editor.mode==='add'){
       q('#pId').dataset.autogen=q('#pId').dataset.autogen||'1';
       q('#pProtocolMode').value='auto';state.autoProtocol=true;
@@ -557,7 +569,13 @@
         const badges=document.createElement('div');badges.className='cp-model-badges';
         const caps=meta.capabilities||{};
         const vals=[];if(caps.tools!==false)vals.push('Tools');if(caps.vision)vals.push('Vision');if(caps.reasoning)vals.push('Reason');if(caps.streaming!==false)vals.push('Stream');
-        badges.innerHTML=vals.map(v=>`<span class="cp-model-badge">${v}</span>`).join('');
+        const saved=editor?._savedSelected?.has(input.dataset.model);
+        const discovered=editor?._lastDiscovered?.has(input.dataset.model);
+        if(editor?.mode==='edit' && editor._lastDiscovered){
+          if(saved && !discovered) vals.unshift('<saved>');
+          else if(!saved && discovered) vals.unshift('<new>');
+        }
+        badges.innerHTML=vals.map(v=>v==='<saved>'?'<span class="cp-model-badge cp-stale-model">Saved · not discovered</span>':v==='<new>'?'<span class="cp-model-badge cp-new-model">New</span>':`<span class="cp-model-badge">${v}</span>`).join('');
         head.appendChild(badges);
       }
       const old=input.onchange;
@@ -595,6 +613,7 @@
       if(!best)throw new Error(lastErr||'No models discovered');
       q('#pType').value=best.type;
       if(q('#pAuth').value!=='none')q('#pAuth').value=best.auth;
+      editor._lastDiscovered=new Set(best.d.models||[]);
       editor.detected=[...new Set([...(best.d.models||[]),...editor.detected])];
       (best.d.models||[]).forEach((m,i)=>ensureModelMeta(m,i));
       renderPicker();
@@ -764,7 +783,7 @@
     const original=btn.onclick;
     btn.onclick=async function(){
       if(original) await original.call(btn);
-      setProviderStep(0);
+      if(!q('#providerModal')?.classList.contains('open')) setProviderStep(0);
     };
   }
 
