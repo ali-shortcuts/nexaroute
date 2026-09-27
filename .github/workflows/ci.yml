@@ -53,7 +53,7 @@ jobs:
 
       - name: Release packaging and installer lifecycle tests
         run: |
-          ./scripts/build-release.sh v0.6.0
+          ./scripts/build-release.sh v0.7.0
           ./scripts/test-install.sh
 
       - name: Docker build
