@@ -166,22 +166,19 @@ func (t *Tracker) Snapshot(prices map[string]Price) Snapshot {
 func (t *Tracker) Retain(valid map[string]struct{}) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	for id, tot := range t.byDeploy {
+	for id := range t.byDeploy {
 		if _, ok := valid[id]; !ok {
-			t.prompt -= tot.PromptTokens
-			t.completion -= tot.CompletionTok
-			t.requests -= tot.Requests
-			if t.prompt < 0 {
-				t.prompt = 0
-			}
-			if t.completion < 0 {
-				t.completion = 0
-			}
-			if t.requests < 0 {
-				t.requests = 0
-			}
 			delete(t.byDeploy, id)
 		}
+	}
+	// Recompute globals from the surviving rows. Subtraction is incorrect after
+	// a counter has saturated because the pre-saturation contribution is no
+	// longer recoverable from the saturated aggregate.
+	t.prompt, t.completion, t.requests = 0, 0, 0
+	for _, tot := range t.byDeploy {
+		t.prompt = saturatingAdd(t.prompt, tot.PromptTokens)
+		t.completion = saturatingAdd(t.completion, tot.CompletionTok)
+		t.requests = saturatingAdd(t.requests, tot.Requests)
 	}
 }
 
