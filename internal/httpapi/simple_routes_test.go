@@ -110,7 +110,6 @@ func TestSimpleRouteRejectsPartialInvalidMutation(t *testing.T) {
 	}
 }
 
-
 func TestSimpleRouteInvalidUpdatePreservesOldRoute(t *testing.T) {
 	s := testGateway(t, simpleRouteTestConfig())
 	rr := simpleRouteRequest(t, s, http.MethodPost, "/admin/api/simple-routes", "{\"id\":\"route-safe\",\"name\":\"Safe\",\"public_model\":\"safe\",\"mode\":\"automatic\",\"deployments\":[\"p1/m1\"]}")
