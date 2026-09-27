@@ -10,15 +10,15 @@ import (
 // validation failures. It intentionally does NOT include full sensitive
 // command contents in logs beyond metadata, but includes field-level info.
 type ToolCallValidationError struct {
-	Tool          string
-	Field         string
-	ExpectedType  string
-	ActualType    string
-	Stage         string
-	Protocol      string
-	Streaming     bool
-	Provider      string
-	Message       string
+	Tool         string
+	Field        string
+	ExpectedType string
+	ActualType   string
+	Stage        string
+	Protocol     string
+	Streaming    bool
+	Provider     string
+	Message      string
 }
 
 func (e *ToolCallValidationError) Error() string {
@@ -224,4 +224,147 @@ func ValidateToolCallArguments(schemaJSON json.RawMessage, args string, meta Val
 	def := ToolDef{Name: "unknown", Parameters: schemaJSON}
 	call := ToolCall{Arguments: args}
 	return ValidateToolCallWithMeta(def, call, meta)
+}
+
+// ValidateRawArguments validates that args is a well-formed JSON object
+// without requiring a schema. It detects double-encoding, null, empty,
+// non-object top-level, and wrapper patterns that could become "unknown".
+func ValidateRawArguments(args string, meta ValidationMeta) error {
+	trimmed := strings.TrimSpace(args)
+	if trimmed == "" {
+		return &ToolCallValidationError{
+			Tool: meta.Provider, Field: "", ExpectedType: "object", ActualType: "empty",
+			Stage: meta.Stage, Protocol: meta.Protocol, Streaming: meta.Streaming, Provider: meta.Provider,
+			Message: "arguments empty",
+		}
+	}
+	// Detect double-encoding: args is a JSON string that itself contains JSON
+	// e.g. "\"{\\\"command\\\":\\\"pwd\\\"}\""
+	if len(trimmed) >= 2 && trimmed[0] == '"' && trimmed[len(trimmed)-1] == '"' {
+		var inner string
+		if err := json.Unmarshal([]byte(trimmed), &inner); err == nil {
+			// inner is a string; check if it looks like JSON object
+			innerTrim := strings.TrimSpace(inner)
+			if strings.HasPrefix(innerTrim, "{") && strings.HasSuffix(innerTrim, "}") {
+				var probe any
+				if json.Unmarshal([]byte(innerTrim), &probe) == nil {
+					return &ToolCallValidationError{
+						Tool: "", Field: "", ExpectedType: "object", ActualType: "double_encoded_string",
+						Stage: meta.Stage, Protocol: meta.Protocol, Streaming: meta.Streaming, Provider: meta.Provider,
+						Message: "arguments appear double-encoded (JSON string containing JSON object)",
+					}
+				}
+			}
+		}
+	}
+
+	var generic any
+	if err := json.Unmarshal([]byte(trimmed), &generic); err != nil {
+		return &ToolCallValidationError{
+			Tool: "", Field: "", ExpectedType: "object", ActualType: "invalid_json",
+			Stage: meta.Stage, Protocol: meta.Protocol, Streaming: meta.Streaming, Provider: meta.Provider,
+			Message: fmt.Sprintf("invalid JSON: %v", err),
+		}
+	}
+	// Top-level must be object
+	m, ok := generic.(map[string]any)
+	if !ok {
+		actual := fmt.Sprintf("%T", generic)
+		if generic == nil {
+			actual = "null"
+		}
+		return &ToolCallValidationError{
+			Tool: "", Field: "", ExpectedType: "object", ActualType: actual,
+			Stage: meta.Stage, Protocol: meta.Protocol, Streaming: meta.Streaming, Provider: meta.Provider,
+			Message: "top-level arguments must be an object",
+		}
+	}
+
+	// Detect dangerous wrapper patterns that could be mistaken for string
+	// e.g. {"value":"pwd"} when schema expects string directly, or {"_raw":...}
+	// For raw validation without schema, we only flag obviously wrong shapes:
+	// - object with single key "value" where value is string but expected to be direct string field
+	// - object containing only unknown wrapper
+	if len(m) == 1 {
+		if _, hasValue := m["value"]; hasValue {
+			// This could be a mis-unwrapped string wrapper
+			// We don't fail closed here without schema, but we can log diagnostic
+			// For strictness, if the object has only "value" and no other keys,
+			// and the caller expects string fields like "command", it will be caught
+			// by schema validation later. Raw validation passes but we note.
+		}
+	}
+
+	return nil
+}
+
+// ValidateResponseBlocks validates all tool calls in a canonical response.
+// It fails closed on first malformed block, returning structured diagnostic.
+func ValidateResponseBlocks(blocks []Block, toolDefs []ToolDef, meta ValidationMeta) error {
+	// Build map of tool def by name for schema-aware validation
+	defMap := make(map[string]ToolDef, len(toolDefs))
+	for _, td := range toolDefs {
+		defMap[td.Name] = td
+	}
+
+	for _, b := range blocks {
+		if b.Type != PartToolCall || b.ToolCall == nil {
+			continue
+		}
+		// First, raw validation (no schema)
+		if err := ValidateRawArguments(b.ToolCall.Arguments, meta); err != nil {
+			// Enrich with tool name if missing
+			if ve, ok := err.(*ToolCallValidationError); ok && ve.Tool == "" {
+				ve.Tool = b.ToolCall.Name
+			}
+			return err
+		}
+		// If we have a def for this tool, do schema-aware validation
+		if def, ok := defMap[b.ToolCall.Name]; ok {
+			if err := ValidateToolCallWithMeta(def, *b.ToolCall, meta); err != nil {
+				return err
+			}
+		} else {
+			// Even without def, ensure known dangerous patterns for Bash/Read
+			// are caught: command/file_path must be string if present, and
+			// for known tools we enforce required fields to fail-closed on empty.
+			var argsMap map[string]any
+			if err := json.Unmarshal([]byte(b.ToolCall.Arguments), &argsMap); err == nil {
+				// Check critical fields if present must be string
+				for _, criticalField := range []string{"command", "file_path"} {
+					if v, exists := argsMap[criticalField]; exists {
+						if _, ok := v.(string); !ok {
+							actual := jsonTypeOf(v)
+							return &ToolCallValidationError{
+								Tool: b.ToolCall.Name, Field: criticalField, ExpectedType: "string", ActualType: actual,
+								Stage: meta.Stage, Protocol: meta.Protocol, Streaming: meta.Streaming, Provider: meta.Provider,
+								Message: fmt.Sprintf("critical field %q expected string but got %s (string->unknown bug class)", criticalField, actual),
+							}
+						}
+					}
+				}
+				// For well-known tools, enforce required field presence even without schema
+				// This makes empty {} fail-closed for Bash/Read, matching malformed expectations.
+				switch b.ToolCall.Name {
+				case "Bash":
+					if _, ok := argsMap["command"]; !ok {
+						return &ToolCallValidationError{
+							Tool: b.ToolCall.Name, Field: "command", ExpectedType: "required", ActualType: "missing",
+							Stage: meta.Stage, Protocol: meta.Protocol, Streaming: meta.Streaming, Provider: meta.Provider,
+							Message: "required field \"command\" missing for Bash tool",
+						}
+					}
+				case "Read":
+					if _, ok := argsMap["file_path"]; !ok {
+						return &ToolCallValidationError{
+							Tool: b.ToolCall.Name, Field: "file_path", ExpectedType: "required", ActualType: "missing",
+							Stage: meta.Stage, Protocol: meta.Protocol, Streaming: meta.Streaming, Provider: meta.Provider,
+							Message: "required field \"file_path\" missing for Read tool",
+						}
+					}
+				}
+			}
+		}
+	}
+	return nil
 }

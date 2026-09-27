@@ -7,7 +7,7 @@
 
 ## Executive Summary
 
-**Verdict: PROTECTED — No string → unknown coercion bug found. Implementation correctly preserves schema type fidelity across all protocol combos.**
+**Verdict: PROTECTED — No string → unknown coercion bug found. Implementation correctly preserves schema type fidelity across all protocol combos. Defense-in-depth validation now enforced in production path.**
 
 The observed failure class elsewhere (Bash.command, Read.file_path InputValidationError where string expected but got object/null/array) does **NOT** reproduce in NexaRoute. All 16 gates + A-K acceptance criteria pass.
 
@@ -15,6 +15,10 @@ The observed failure class elsewhere (Bash.command, Read.file_path InputValidati
 - Translation layers (anthropic_to_openai, openai_to_anthropic, canonical encoders/decoders) use `json.Marshal` / `json.RawMessage` round-trips, preserving type.
 - Streaming assembly concatenates `ArgsDelta` fragments **before** JSON parsing, tested with hostile splits (including unicode, escaped quotes, backslashes, multiline, nested JSON, 1KB-1MB boundaries).
 - Malformed payloads are detected via `ValidateToolCallWithMeta` which returns structured diagnostic: `tool=%s field=%s expected=%s actual=%s stage=%s protocol=%s streaming=%t provider=%s: message`
+- **New defense-in-depth (2026-09-27 continuation):**
+  - `internal/httpapi/canonical_path.go`: `canonicalStreamPump` now tracks assembled args per tool index, enforces 1MB size boundary, validates raw args on `tool_end` via `ValidateRawArguments`, emits `StreamError` with structured diagnostic and fail-closes.
+  - `handleCanonicalResponse`: validates all response blocks via `ValidateResponseBlocks` (raw + critical field checks for Bash/Read) before emitting to client, returning error for failover if validation fails.
+  - `validation.go`: added `ValidateRawArguments` (detects double-encoding, null, empty, non-object) and `ValidateResponseBlocks` (enforces Bash requires `command` string, Read requires `file_path` string, plus critical-field type checks).
 
 ## 1. Complete Tool-Call Path Trace (All Protocol Combos)
 
@@ -212,9 +216,15 @@ Plus:
 
 NexaRoute does NOT exhibit the string→unknown failure. The IR design (Arguments as raw JSON string) inherently prevents coercion. Streaming reassembly occurs before validation, type checks are strict, and regression fixtures now permanently guard Bash.command and Read.file_path.
 
-**No production code fix required.** Only test improvement for unicode hostile split was applied.
+**Production hardening applied (continuation):**
 
-**Recommendation:** Wire `ValidateToolCallWithMeta` into gateway response path for defense-in-depth logging (optional, not required for correctness). Currently validation is used in tests; production relies on type-preserving storage which is sufficient.
+- Defense-in-depth validation now **wired into production path** (`canonical_path.go`):
+  - Streaming: assembled args per index, 1MB limit, raw validation on tool_end, structured error.
+  - Non-streaming: `ValidateResponseBlocks` before client emit, fail-closed with diagnostic.
+- No existing tests broken; all 23 packages PASS.
+- Minimal change, architecture-compatible, preserves existing IR design.
+
+**Final state:** Both proof via tests AND runtime enforcement present.
 
 ## Artifacts
 

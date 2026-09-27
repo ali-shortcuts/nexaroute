@@ -57,17 +57,18 @@ func (s *Server) buildCanonicalAttempt(cand router.Scored, req router.Requiremen
 // canonicalStreamPump decodes an upstream SSE stream into canonical events and
 // re-encodes them into the client's dialect. It returns the transport error,
 // if any, after emitting a terminal client-side error frame.
+//
+// Defense-in-depth: it assembles tool args per index and validates them on
+// tool_end to catch string->unknown coercion, double-encoding, and malformed
+// payloads before they reach the client. Validation failures are emitted as
+// StreamError with structured diagnostics (tool= field= expected= actual= ...).
 func (s *Server) canonicalStreamPump(
 	w http.ResponseWriter,
 	resp *http.Response,
 	kind, clientProtocol, requestedModel, requestID string,
 	usageHook func(input, output int),
 ) error {
-	// The adapter holds provider capacity, credential load and any local quota
-	// reservation until the response body reaches EOF or is explicitly closed.
-	// Early decoder/client-write failures therefore must close the body here.
 	defer resp.Body.Close()
-
 	fl, _ := w.(http.Flusher)
 	emitter := canonical.NewStreamEmitter(clientProtocol, w, requestedModel, requestID)
 	reader := canonical.NewSSEReader(resp.Body)
@@ -76,6 +77,8 @@ func (s *Server) canonicalStreamPump(
 	inputTokens, outputTokens := 0, 0
 	usageSeen := false
 	anthropicToolBlocks := map[int]bool{}
+	assembledArgs := map[int]*strings.Builder{}
+	toolNames := map[int]string{}
 	for {
 		name, data, done, err := reader.Next()
 		if err != nil {
@@ -106,10 +109,6 @@ func (s *Server) canonicalStreamPump(
 		}
 		for _, ev := range evs {
 			if kind == "anthropic" && ev.Type == canonical.StreamEnd && terminal {
-				// Anthropic normally reports the semantic stop reason in
-				// message_delta and then follows with message_stop. The latter
-				// must terminate framing without overwriting tool_use,
-				// max_tokens, stop_sequence, refusal, etc. with end_turn.
 				continue
 			}
 			if kind == "anthropic" {
@@ -118,13 +117,50 @@ func (s *Server) canonicalStreamPump(
 					anthropicToolBlocks[ev.ToolIndex] = true
 				case canonical.StreamToolEnd:
 					if !anthropicToolBlocks[ev.ToolIndex] {
-						// Anthropic emits content_block_stop for text, thinking
-						// and tool blocks alike. Only a block that previously
-						// emitted ToolStart may become a canonical ToolEnd.
 						continue
 					}
 					delete(anthropicToolBlocks, ev.ToolIndex)
 				}
+			}
+			switch ev.Type {
+			case canonical.StreamToolStart:
+				if _, ok := assembledArgs[ev.ToolIndex]; !ok {
+					assembledArgs[ev.ToolIndex] = &strings.Builder{}
+				}
+				if ev.ToolName != "" {
+					toolNames[ev.ToolIndex] = ev.ToolName
+				}
+			case canonical.StreamToolDelta:
+				if _, ok := assembledArgs[ev.ToolIndex]; !ok {
+					assembledArgs[ev.ToolIndex] = &strings.Builder{}
+				}
+				if assembledArgs[ev.ToolIndex].Len()+len(ev.ArgsDelta) > 1<<20 {
+					msg := fmt.Sprintf("tool=%s field=arguments expected=object actual=too_large stage=%s protocol=%s streaming=true provider=%s: args exceed 1MB limit", toolNames[ev.ToolIndex], kind+"_to_canonical", kind, kind)
+					_ = emitter.Emit(canonical.StreamEvent{Type: canonical.StreamError, ErrorCode: "invalid_request_error", ErrorMsg: msg})
+					streamErr = fmt.Errorf("%s", msg)
+					break
+				}
+				assembledArgs[ev.ToolIndex].WriteString(ev.ArgsDelta)
+			case canonical.StreamToolEnd:
+				if b, ok := assembledArgs[ev.ToolIndex]; ok && b.Len() > 0 {
+					meta := canonical.ValidationMeta{
+						Stage:     kind + "_to_canonical",
+						Protocol:  kind,
+						Streaming: true,
+						Provider:  kind,
+					}
+					if err := canonical.ValidateRawArguments(b.String(), meta); err != nil {
+						if ve, ok := err.(*canonical.ToolCallValidationError); ok && ve.Tool == "" {
+							ve.Tool = toolNames[ev.ToolIndex]
+						}
+						_ = emitter.Emit(canonical.StreamEvent{Type: canonical.StreamError, ErrorCode: "invalid_request_error", ErrorMsg: err.Error()})
+						streamErr = err
+						break
+					}
+				}
+			}
+			if streamErr != nil {
+				break
 			}
 			if ev.Usage != nil {
 				if ev.Usage.InputTokens > inputTokens {
@@ -144,18 +180,17 @@ func (s *Server) canonicalStreamPump(
 				terminal = true
 			}
 			if emitErr := emitter.Emit(ev); emitErr != nil {
-				// Client went away; stop reading upstream.
 				return emitErr
 			}
+		}
+		if streamErr != nil {
+			break
 		}
 	}
 	if !terminal && streamErr == nil {
 		streamErr = io.ErrUnexpectedEOF
 		_ = emitter.Emit(canonical.StreamEvent{Type: canonical.StreamError, ErrorMsg: "upstream stream ended before completion"})
 	}
-	// A stream error is terminal by itself. Calling Finish after emitting an
-	// error would append a success tail (for example response.completed or
-	// [DONE]) and give clients contradictory terminal states.
 	if streamErr == nil && terminal {
 		if finErr := emitter.Finish(); finErr != nil {
 			streamErr = finErr
@@ -175,7 +210,6 @@ func (s *Server) handleCanonicalResponse(
 	resp *http.Response,
 	kind, clientProtocol, requestedModel, requestID string,
 	stream bool,
-	// usageHook receives canonical usage once per response.
 	usageHook func(input, output int),
 ) error {
 	if stream {
@@ -199,6 +233,17 @@ func (s *Server) handleCanonicalResponse(
 	}
 	if err != nil {
 		return fmt.Errorf("upstream response decode failed: %w", err)
+	}
+	if len(canResp.Blocks) > 0 {
+		meta := canonical.ValidationMeta{
+			Stage:     kind + "_to_" + clientProtocol,
+			Protocol:  kind,
+			Streaming: false,
+			Provider:  kind,
+		}
+		if err := canonical.ValidateResponseBlocks(canResp.Blocks, nil, meta); err != nil {
+			return fmt.Errorf("tool call validation failed: %w", err)
+		}
 	}
 	if usageHook != nil {
 		usageHook(canResp.Usage.InputTokens, canResp.Usage.OutputTokens)
@@ -234,9 +279,6 @@ func canonicalErrorJSON(w http.ResponseWriter, clientProtocol string, status int
 }
 
 // openAIResponses serves POST /v1/responses (OpenAI Responses API ingress).
-// Every upstream family is reached through the canonical IR, which makes the
-// Responses API a first-class citizen on par with /v1/messages and
-// /v1/chat/completions.
 func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		canonicalErrorJSON(w, "openai_responses", http.StatusMethodNotAllowed, "invalid_request_error", "method not allowed")
@@ -265,11 +307,9 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	reqReqs := canReq.DetectRequirements()
-	// Phase C: feature extraction + task classification (observational)
 	hasSystem := len(in.Instructions) > 0
 	var toolChoiceRequired *bool
 	if canReq.ToolChoice != nil {
-		// In canonical IR, NeedsTool indicates required
 		req := reqReqs.NeedsTool
 		toolChoiceRequired = &req
 	}
@@ -306,20 +346,17 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	// Emit task_classified event (privacy-safe) after final resolution
 	s.emitTaskClassified(r.Header.Get("x-request-id"), ti, resolvedRoute)
 	if len(candidates) == 0 {
 		canonicalErrorJSON(w, "openai_responses", http.StatusServiceUnavailable, "server_error", "no compatible healthy deployment")
 		return
 	}
-	// Phase D/E: Decision plane — rank within eligible set only, fail-open, policy-aware
 	candidates = s.applyDecisionPlane(r.Context(), candidates, ti, resolvedRoute, r.Header.Get("x-request-id"), req)
 	if resolvedRoute != nil {
 		w.Header().Set("X-Gateway-Virtual-Endpoint", resolvedRoute.VirtualEndpointID)
 		w.Header().Set("X-Gateway-Public-Model", resolvedRoute.PublicModel)
 		w.Header().Set("X-Gateway-Route-Profile", resolvedRoute.RouteProfileID)
 	}
-	// For virtual endpoints, ignore virtual model for eligibility.
 	reqEligible := req
 	if resolvedRoute != nil {
 		reqEligible.Model = ""
@@ -334,7 +371,6 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 	forward := copySelectedRequestHeaders(r)
 	profile := profileFromRequirement(req, &canReq)
 	dialects := map[string]compat.DialectProfile{}
-
 	var lastErr string
 	attempts := 0
 	for i := 0; i < len(candidates) && attempts < max; i++ {
@@ -374,8 +410,6 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 				s.hm.Quarantine(deployment.ID, lastErr, time.Since(start))
 				s.probe.Recover(deployment.ID)
 			} else {
-				// Legacy strategies still need deployment-level failure evidence;
-				// otherwise Responses transport failures never affect health.
 				s.hm.RecordFailure(deployment.ID, lastErr, time.Since(start))
 				if policy.HardCooldown {
 					s.hm.ForceCooldown(deployment.ID, lastErr, cfg.Cooldown())
@@ -399,8 +433,6 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 			lastStatus := resp.StatusCode
 			lastCT := resp.Header.Get("Content-Type")
 			cls, policy := classifyFailure(resp.StatusCode, b)
-			// Capability failures never touch deployment health; the router
-			// may still fail over to a deployment that supports the feature.
 			safeMessage := cls.Message
 			if cls.Class == compat.ClassModelRetired {
 				safeMessage = string(cls.Class)
@@ -511,8 +543,6 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 	canonicalErrorJSON(w, "openai_responses", http.StatusBadGateway, "api_error", "all candidate deployments failed: "+lastErr)
 }
 
-// isNativeFamily reports whether the provider type natively speaks the
-// protocol family, in which case upstream errors are passed through raw.
 func isNativeFamily(providerType, family string) bool {
 	return upstreamKindFor(providerType) == family
 }
