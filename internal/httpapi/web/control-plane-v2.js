@@ -484,7 +484,8 @@
       details.innerHTML=`<summary>${h(T('advanced'))}</summary>`;
       sections[2].before(details);details.append(sections[2]);
     }
-    const idField=q('#pId')?.closest('.field');idField?.classList.add('cp-id-field');
+    const idField=q('#pId')?.closest('.field');
+    if(idField && sections[2]) sections[2].prepend(idField);
     const typeField=q('#pType')?.closest('.field');
     if(typeField && !q('#pProtocolMode')){
       const proto=document.createElement('label');proto.className='field';proto.innerHTML=`<span>${h(T('protocol'))}</span><select id="pProtocolMode"><option value="auto">${h(T('protocolAuto'))}</option><option value="manual">${h(T('protocolManual'))}</option></select>`;
