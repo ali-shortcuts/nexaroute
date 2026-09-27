@@ -30,13 +30,13 @@ defect remains after the automated and manual audit gates.
 
 ## Public release status
 
-The latest published release at the time of this audit is **v0.9.0**.
+The latest published release at the time of this audit is **v0.10.0**.
 
 Its tag points to the main commit immediately before the final Control Plane
 visual/accessibility hardening. Therefore:
 
 - `main` is the newest verified source.
-- `v0.9.0` remains a verified stable release.
+- `v0.10.0` remains the latest verified stable release.
 - the next release tag must be cut from current `main` if the public installer
   is expected to include the final UI hardening and this audit cleanup.
 
@@ -103,3 +103,25 @@ See [KNOWN_GAPS.md](KNOWN_GAPS.md) for the complete boundaries.
 
 Historical worker branches or draft PRs are not canonical product state. Only
 `main`, passing workflows, and published release tags are authoritative.
+
+## Post-merge final verification — 2026-09-27
+
+The final integration was merged by PR #44 into `main`.
+
+- **Final integrated main SHA:** `532e167` (`feat: finalize Tool Fidelity and browser-verified Control Plane (#44)`)
+- **Open PRs/issues at verification:** none
+- **Remote branch state:** only `main` remains; obsolete worker branches were deleted after confirming their required work was merged
+- **CI:** PASS — GitHub Actions run `36331978132`
+- **Security:** PASS — GitHub Actions run `36331978143` (Go vulnerability scan and CodeQL)
+- **Local full tests:** `go test -count=1 ./...` PASS
+- **Local race tests:** `go test -race -count=1 ./...` PASS
+- **Local vet/syntax:** `go vet ./...`, `node --check internal/httpapi/web/app.js`, and `node --check internal/httpapi/web/control-plane-v2.js` PASS
+- **Browser acceptance:** PASS — Chromium verified clean startup, empty provider state, provider drawer open/cancel, theme switch, Persian RTL, pause/resume, settings, and no JavaScript page errors
+- **CI acceptance:** PASS — browser acceptance, stress checks, runtime smoke, release packaging/installer lifecycle, Docker build and runtime smoke
+- **Release status:** no new public release tag was created in this integration; the latest published release remains `v0.10.0`. A new tag must be created from the verified `main` SHA when publishing is intended.
+
+### Final verdict
+
+**PASS WITH DOCUMENTED LIMITATIONS**
+
+The backend routing authority and existing capabilities remain intact. Tool-call arguments are validated fail-closed in canonical streaming and non-streaming paths, the Control Plane has real browser acceptance coverage, and documentation now distinguishes simple routing from advanced routing. Product boundaries in `docs/KNOWN_GAPS.md` remain applicable.
