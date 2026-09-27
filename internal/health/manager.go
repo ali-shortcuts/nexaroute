@@ -287,6 +287,10 @@ func (m *Manager) RecordFailure(id, errMsg string, latency time.Duration) {
 	defer m.mu.Unlock()
 	s := m.states[id]
 	s.Deployment = id
+	if s.Status == Retired {
+		m.states[id] = s
+		return
+	}
 	s.Failures++
 	updateFailureEWMA(&s, true)
 	s.ConsecutiveFailures++
