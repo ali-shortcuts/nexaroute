@@ -1,9 +1,6 @@
-# Known gaps — v0.5.2
+# Known gaps
 
 These are explicit boundaries of the current code, not hidden assumptions.
-
-For the Ubuntu installer/release candidate, see the current
-[installation release report](INSTALL_RELEASE_REPORT.md#known-gaps--required-release-sign-off).
 
 ## Protocol scope
 
@@ -11,11 +8,11 @@ Implemented runtime protocol classes are:
 
 - OpenAI-compatible Chat Completions
 - Anthropic-compatible Messages
+- OpenAI Responses (explicit `/v1/responses` path)
+- Gemini upstreams through the canonical adapter
 
 Not implemented as native protocol classes:
 
-- OpenAI Responses API
-- Gemini native API
 - Bedrock
 - Vertex AI
 - Azure-specific deployment semantics
@@ -91,10 +88,10 @@ The exact-match response cache is opt-in and deliberately narrow: non-streaming,
 
 Health probing is selective and event-driven. Startup establishes readiness, new/unverified deployments are probed, and failed deployments move into dedicated recovery loops. Successful real Claude traffic refreshes a deployment's ready-health lease, so actively used models are not needlessly synthetic-probed. A healthy deployment that remains idle past `probe.ready_lease_seconds` is micro-probed before its health proof is trusted indefinitely. The sweep interval remains configurable (minimum 1 second) without turning health checks into a quota/rate-limit attack.
 
-Micro-probes measure availability and latency. They do not measure model intelligence/answer quality. Model strength is expressed through configured deployment `priority` and `weight`; automatic quality benchmarking is outside the current v0.5.2 scope.
+Micro-probes measure availability and latency. They do not measure model intelligence/answer quality. Model strength is expressed through configured deployment `priority` and `weight`; automatic quality benchmarking is outside current scope.
 
 
-## Routing boundaries after Ready Mesh
+## Routing boundaries
 
 Implemented routing intelligence is deterministic and observable: session affinity, capability filtering, priority/weight policy, live concurrency pressure, latency/failure evidence, provider-level P2C selection, credential-level P2C selection, scoped capability circuits, and supervised recovery.
 
@@ -107,7 +104,7 @@ Not implemented yet:
 
 The last item is deliberate for the current data plane: a learned router would add latency, cost and a new failure mode. Model/task specialization should currently be expressed with aliases plus explicit capability metadata until a separately evaluated routing model can prove a measurable benefit.
 
-## Universal Compatibility Engine boundaries (v0.6)
+## Compatibility engine boundaries
 
 Implemented but bounded by design:
 
@@ -124,9 +121,9 @@ Implemented but bounded by design:
 - The capability cache is in-memory, matching the single-process state model
   described above; multi-process deployments re-probe after restart.
 
-## Model Intelligence and evaluation boundaries (Phase H)
+## Model intelligence and evaluation boundaries
 
-The Phase H evaluation plane is an admin-only observation surface and is
+The evaluation plane is an admin-only observation surface and is
 explicitly bounded:
 
 - evaluation is **offline replay**: the admin endpoint accepts recorded
@@ -144,7 +141,7 @@ explicitly bounded:
 - scorecards are single-process state. `evaluation.state_path` gives one process
   durable runs/scorecards, but there is no shared/distributed scorecard store,
   no multi-node coordination and no history beyond the bounded version ring;
-- scorecard values are evidence records, not routing inputs. Phase H does not
+- scorecard values are evidence records, not routing inputs. The evaluation plane does not
   order candidates, change weights/priorities, gate failover or alter health by
   scorecard content, and a structural guard test keeps the dependency direction
   that way.

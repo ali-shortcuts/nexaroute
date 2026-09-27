@@ -1,4 +1,4 @@
-# Configuration — v0.4
+# Configuration
 
 ## Runtime environment overrides
 
@@ -112,7 +112,7 @@ Important controls:
 - `max_retry_after_seconds`
 
 
-### Ready Mesh supervisor semantics
+### Ready-mesh supervisor semantics
 
 With `routing.strategy = "ready_mesh"` (recommended/default):
 
@@ -161,7 +161,7 @@ For local-only use, the default is safest:
 For Docker/LAN access, set an admin key and put TLS/reverse-proxy controls in front if the environment is not fully trusted.
 
 
-### Ready Mesh controls
+### Ready-mesh controls
 
 - `session_affinity` — preserve a successful conversation/deployment relationship while it remains healthy.
 - `session_ttl_seconds` — idle affinity lease; default `3600`.
@@ -175,7 +175,7 @@ Provider presets are served by the gateway itself through the Admin API so the W
 
 **Test connection** checks endpoint reachability/auth separately from **Test selected models**, which performs actual minimal model inference.
 
-## v0.5 routing, cache, client auth and model fields
+## Routing additions, cache, client auth and model fields
 
 ### routing (additions)
 
@@ -224,9 +224,9 @@ The resulting **effective remaining** values feed quota pressure. This is intent
 | `input_cost_per_mtok` | `0` | USD per million input tokens, used for estimated-spend accounting. |
 | `output_cost_per_mtok` | `0` | USD per million output tokens, used for estimated-spend accounting. |
 
-## Phase H — Model Intelligence scorecards and evaluation
+## Model intelligence scorecards and evaluation
 
-Phase H adds an opt-in, admin-only observation plane. It never affects routing:
+The evaluation plane is an opt-in, admin-only observation plane. It never affects routing:
 no scorecard value is read by the router, the health manager or the decision
 plane (enforced by a structural import guard test). It is disabled by default
 and, while disabled, accepts no runs and writes no scorecards.

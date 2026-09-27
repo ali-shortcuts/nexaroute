@@ -1,8 +1,8 @@
-# NexaRoute architecture — v0.4
+# NexaRoute architecture
 
 ## Objective
 
-NexaRoute v0.4 is a single-process Go gateway with an embedded Web UI. It accepts Anthropic-compatible and OpenAI-compatible client traffic, normalizes only when necessary, routes each request across eligible provider/model deployments, monitors health continuously, and hot-reloads provider configuration without restarting the process.
+NexaRoute is a single-process Go gateway with an embedded Web UI. It accepts Anthropic-compatible and OpenAI-compatible client traffic, normalizes only when necessary, routes each request across eligible provider/model deployments, monitors health continuously, and hot-reloads provider configuration without restarting the process.
 
 The central design rule is separation of concerns:
 
@@ -296,7 +296,7 @@ protocol-aware usage accounting.
 
 Provider rate-limit headers are necessarily retrospective: several concurrent
 requests can select the same provider before the first one returns a fresh
-`remaining-*` value. NexaRoute v0.5.2 overlays local in-flight reservations
+`remaining-*` value. NexaRoute overlays local in-flight reservations
 on that external evidence.
 
 Only tagged data-plane Chat/Messages attempts reserve quota. Each real upstream
@@ -325,9 +325,9 @@ This layer is advisory rather than authoritative throttling. It intentionally
 does not persist rolling-window debt after a completed response that supplied no
 fresh quota evidence, and it is process-local rather than distributed state.
 
-## Universal Compatibility Engine (v0.6)
+## Universal Compatibility Engine
 
-v0.6 adds the layer that turns NexaRoute from a protocol translator into a
+The compatibility engine layer turns NexaRoute from a protocol translator into a
 protocol-aware, model-aware compatibility engine. The design rules are
 absolute:
 

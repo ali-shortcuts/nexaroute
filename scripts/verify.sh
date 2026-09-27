@@ -6,7 +6,7 @@ echo '== go version =='
 go version
 
 echo '== shell syntax =='
-bash -n install-user.sh run-local.sh scripts/*.sh
+bash -n scripts/*.sh
 
 echo '== formatting =='
 if out=$(gofmt -l .) && [[ -n "$out" ]]; then

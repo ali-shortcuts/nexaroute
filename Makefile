@@ -24,4 +24,4 @@ linux:
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags='-s -w' -o bin/nexaroute-linux-arm64 ./cmd/gateway
 
 run:
-	./run-local.sh
+	./scripts/run-dev.sh

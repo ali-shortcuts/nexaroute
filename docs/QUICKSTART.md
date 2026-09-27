@@ -1,7 +1,6 @@
-# NexaRoute quickstart — Ubuntu
+# NexaRoute quickstart
 
-> The one-command release assets are prepared, not published yet. Use this guide
-> once the reviewed release is available. See [Installation](INSTALLATION.md).
+See [Installation](INSTALLATION.md).
 
 ## 1. Install
 

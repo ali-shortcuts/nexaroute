@@ -15,14 +15,14 @@ esac
 RELEASE_DIR="$WORK/release-v1"
 mkdir -p "$RELEASE_DIR"
 
-# 1. Create mock release binary for v0.6.0
+# 1. Create mock release binary for v0.7.0
 cat <<'MOCK' > "$RELEASE_DIR/$ASSET_NAME"
 #!/usr/bin/env bash
 if [[ "${1:-}" == "-version" || "${1:-}" == "--version" ]]; then
-  echo "NexaRoute v0.6.0"
+  echo "NexaRoute v0.7.0"
   exit 0
 fi
-echo "NexaRoute v0.6.0 running"
+echo "NexaRoute v0.7.0 running"
 exit 0
 MOCK
 chmod 0755 "$RELEASE_DIR/$ASSET_NAME"
@@ -34,7 +34,7 @@ export NEXAROUTE_INSTALL_DIR="$INSTALL_BIN_DIR"
 export PATH="$INSTALL_BIN_DIR:$PATH"
 export XDG_CONFIG_HOME="$CONFIG_HOME"
 export NEXAROUTE_LOCAL_RELEASE_DIR="$RELEASE_DIR"
-export NEXAROUTE_LOCAL_RELEASE_TAG="v0.6.0"
+export NEXAROUTE_LOCAL_RELEASE_TAG="v0.7.0"
 
 # 2. Run clean install
 echo "== testing clean install =="
@@ -50,7 +50,7 @@ CFG_DIR_MODE="$(stat -c '%a' "$CONFIG_HOME/nexaroute")"
 [[ "$CFG_DIR_MODE" == "700" ]] || { echo "config dir mode is $CFG_DIR_MODE; want 700" >&2; exit 1; }
 
 VERSION_OUT="$("$INSTALL_BIN_DIR/nexaroute" -version)"
-[[ "$VERSION_OUT" == *"v0.6.0"* ]] || { echo "version output mismatch: $VERSION_OUT" >&2; exit 1; }
+[[ "$VERSION_OUT" == *"v0.7.0"* ]] || { echo "version output mismatch: $VERSION_OUT" >&2; exit 1; }
 
 # 3. Test checksum verification rejection
 echo "== testing checksum mismatch rejection =="
@@ -67,7 +67,7 @@ NEXAROUTE_LOCAL_RELEASE_DIR="$CORRUPT_DIR" bash "$ROOT/scripts/install.sh" 2>/de
 
 # Assert existing binary was not modified by the failed attempt
 VERSION_CHECK="$("$INSTALL_BIN_DIR/nexaroute" -version)"
-[[ "$VERSION_CHECK" == *"v0.6.0"* ]] || { echo "binary was corrupted by failed install" >&2; exit 1; }
+[[ "$VERSION_CHECK" == *"v0.7.0"* ]] || { echo "binary was corrupted by failed install" >&2; exit 1; }
 
 # 4. Test upgrade without config clobber
 echo "== testing upgrade flow and config preservation =="
@@ -81,22 +81,22 @@ mkdir -p "$RELEASE_DIR_V2"
 cat <<'MOCK2' > "$RELEASE_DIR_V2/$ASSET_NAME"
 #!/usr/bin/env bash
 if [[ "${1:-}" == "-version" || "${1:-}" == "--version" ]]; then
-  echo "NexaRoute v0.6.1"
+  echo "NexaRoute v0.7.1"
   exit 0
 fi
-echo "NexaRoute v0.6.1 running"
+echo "NexaRoute v0.7.1 running"
 exit 0
 MOCK2
 chmod 0755 "$RELEASE_DIR_V2/$ASSET_NAME"
 (cd "$RELEASE_DIR_V2" && sha256sum "$ASSET_NAME" > SHA256SUMS)
 
 export NEXAROUTE_LOCAL_RELEASE_DIR="$RELEASE_DIR_V2"
-export NEXAROUTE_LOCAL_RELEASE_TAG="v0.6.1"
+export NEXAROUTE_LOCAL_RELEASE_TAG="v0.7.1"
 
 bash "$ROOT/scripts/install.sh"
 
 NEW_VERSION_OUT="$("$INSTALL_BIN_DIR/nexaroute" -version)"
-[[ "$NEW_VERSION_OUT" == *"v0.6.1"* ]] || { echo "upgrade did not update version: $NEW_VERSION_OUT" >&2; exit 1; }
+[[ "$NEW_VERSION_OUT" == *"v0.7.1"* ]] || { echo "upgrade did not update version: $NEW_VERSION_OUT" >&2; exit 1; }
 
 # Config must remain intact with 0600 mode
 CFG_CONTENT="$(cat "$CFG_FILE")"

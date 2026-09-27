@@ -231,11 +231,10 @@ type RoutingConfig struct {
 	// SanitizeEnabled enables proactive pre-dispatch parameter
 	// sanitization against the cached capability contract.
 	SanitizeEnabled bool `json:"sanitize_enabled"`
-	// PublicModel is the legacy single-endpoint public model name from
-	// PR #13 (Beta 0.6.1). It is deprecated in favor of virtual_endpoints
-	// but preserved for backward compatibility. When set and no virtual
-	// endpoints are defined, it is auto-migrated to a default virtual
-	// endpoint with an all-eligible pool.
+	// PublicModel is the legacy single-endpoint public model name. It is
+	// deprecated in favor of virtual_endpoints but preserved for backward
+	// compatibility. When set and no virtual endpoints are defined, it is
+	// auto-migrated to a default virtual endpoint with an all-eligible pool.
 	PublicModel string `json:"public_model,omitempty"`
 }
 

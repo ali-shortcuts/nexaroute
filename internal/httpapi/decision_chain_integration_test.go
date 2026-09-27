@@ -598,7 +598,7 @@ func TestChain_CacheHitZeroCalls_Anthropic(t *testing.T) {
 	if jevProv.Calls() != firstJev || polProv.Calls() != firstPol {
 		t.Fatalf("anthropic cache hit should have 0 decision calls: before jev %d pol %d after jev %d pol %d", firstJev, firstPol, jevProv.Calls(), polProv.Calls())
 	}
-	// Note: openai_responses has no cache path; not covered here (documented in PHASE_G_DECISION_CHAINS.md)
+	// Note: openai_responses has no cache path; not covered here (see docs/CONFIGURATION.md)
 }
 
 func TestChain_CrossProtocolStrict(t *testing.T) {

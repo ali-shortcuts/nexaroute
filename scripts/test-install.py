@@ -164,11 +164,11 @@ shutil.copyfile(pathlib.Path(os.environ["TEST_FIXTURE"]) / url.rsplit("/", 1)[1]
         upgrade_sum = hashlib.sha256((fixture / "nexaroute-linux-amd64").read_bytes()).hexdigest()
         (fixture / "SHA256SUMS").write_text(upgrade_sum + "  nexaroute-linux-amd64\n")
         # Upgrade is an atomic executable replacement even while running.
-        install({"NEXAROUTE_VERSION": "v0.6.0"})
+        install({"NEXAROUTE_VERSION": "v0.7.0"})
         install()
         check(binary.read_bytes() != saved_binary, "upgrade did not replace executable")
         check(cfg.read_bytes() == original, "upgrade/reinstall changed config")
-        check("/download/v0.6.0/" in (tmp / "downloads").read_text(), "pinned release URL")
+        check("/download/v0.7.0/" in (tmp / "downloads").read_text(), "pinned release URL")
         stop(proc)
         check("no graphical desktop session" in (tmp / "gateway-0.log").read_text(), "headless fallback")
         # Verify configured browser launcher receives the ready UI URL.
