@@ -639,7 +639,7 @@
     const {close}=openDialog({
       title:T('adminKey'),subtitle:T('adminKeyCopy'),
       body:`<label class="cp-field"><span>x-admin-key</span><input id="cpAdminKeyInput" type="password" autocomplete="off"></label>`,
-      actions:[{label:T('cancel'),kind:'secondary',value:'cancel'},{label:T('save'),kind:'primary',value:'save'}],
+      actions:[{label:T('cancel'),kind:'secondary',value:'dismiss'},{label:T('save'),kind:'primary',value:'save'}],
       onReady:host=>{q('#cpAdminKeyInput',host).focus();q('#cpAdminKeyInput',host).onkeydown=e=>{if(e.key==='Enter')q('[data-dialog-value="save"]',host).click();};},
       onAction:(v,host)=>{if(v!=='save'){resolve(null);return true;}const key=q('#cpAdminKeyInput',host).value.trim();resolve(key||null);return true;}
     });
@@ -720,6 +720,11 @@
   }
 
   function overrideAdvancedEditors(){
+    UI.advancedVirtual=advancedVirtual;
+    UI.advancedProfile=advancedProfile;
+    UI.advancedPool=advancedPool;
+    UI.advancedChain=advancedChain;
+    UI.deleteAdvanced=deleteAdvanced;
     window.editVirtual=id=>advancedVirtual(id);
     window.editProfile=id=>advancedProfile(id);
     window.editPool=id=>advancedPool(id);
