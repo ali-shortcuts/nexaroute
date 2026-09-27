@@ -22,13 +22,18 @@ async function apiFetch(url, opt = {}) {
   if (adminKey) opt.headers['x-admin-key'] = adminKey;
   let r = await window.fetch(url, opt);
   if (r.status === 401) {
-    const k = prompt('Admin API key required');
-    if (k !== null) {
+    const k = await requestAdminKey();
+    if (k) {
       adminKey = k.trim();
       sessionStorage.setItem('nexaroute_admin_key', adminKey);
       $('#adminKey').value = adminKey;
       opt.headers['x-admin-key'] = adminKey;
       r = await window.fetch(url, opt);
+      if (r.status === 401) {
+        sessionStorage.removeItem('nexaroute_admin_key');
+        adminKey = '';
+        $('#adminKeyDialogError').textContent = 'That admin key was not accepted.';
+      }
     }
   }
   return r;
@@ -60,11 +65,115 @@ function fallbackCopy(text, done) {
   ta.remove();
 }
 
+/* ---------- control-plane UX helpers ---------- */
+const i18n = {
+  en: {
+    'nav.overview':'Overview','nav.providers':'Providers','nav.routing':'Routing','nav.models':'Models','nav.observability':'Observability','nav.health':'Health','nav.connect':'Connect','nav.settings':'Settings',
+    'providers.title':'Providers','providers.subtitle':'Connect an API, discover its models, choose what NexaRoute can use, and save.',
+    'routing.title':'Routing','routing.subtitle':'Create a stable public model and choose which saved deployments may serve it. NexaRoute keeps the advanced router underneath.'
+  },
+  fa: {
+    'nav.overview':'نمای کلی','nav.providers':'ارائه‌دهنده‌ها','nav.routing':'مسیریابی','nav.models':'مدل‌ها','nav.observability':'نظارت','nav.health':'سلامت','nav.connect':'اتصال','nav.settings':'تنظیمات',
+    'providers.title':'ارائه‌دهنده‌ها','providers.subtitle':'API را وصل کنید، مدل‌ها را شناسایی کنید، مدل‌های مورد استفاده را انتخاب کرده و ذخیره کنید.',
+    'routing.title':'مسیریابی','routing.subtitle':'یک نام مدل عمومی ثابت بسازید و مدل‌هایی را که اجازه سرویس‌دهی دارند انتخاب کنید؛ موتور قدرتمند NexaRoute در پشت صحنه باقی می‌ماند.'
+  }
+};
+let locale = localStorage.getItem('nexaroute_locale') || 'en';
+function applyLocale(next = locale) {
+  locale = i18n[next] ? next : 'en';
+  localStorage.setItem('nexaroute_locale', locale);
+  document.documentElement.lang = locale === 'fa' ? 'fa' : 'en';
+  document.documentElement.dir = locale === 'fa' ? 'rtl' : 'ltr';
+  document.body.classList.toggle('rtl', locale === 'fa');
+  $('[data-i18n]').forEach(el => {
+    const v = i18n[locale][el.dataset.i18n];
+    if (v) el.textContent = v;
+  });
+  const sel = $('#languageSelect');
+  if (sel) sel.value = locale;
+}
+function requestAdminKey() {
+  return new Promise(resolve => {
+    const m = $('#adminKeyDialog'), inp = $('#adminKeyDialogInput'), err = $('#adminKeyDialogError');
+    err.textContent = ''; inp.value = '';
+    m.classList.add('open'); m.setAttribute('aria-hidden','false');
+    document.body.classList.add('modal-open');
+    const finish = value => {
+      m.classList.remove('open'); m.setAttribute('aria-hidden','true');
+      document.body.classList.remove('modal-open');
+      $('#adminKeyDialogSave').onclick = null;
+      inp.onkeydown = null;
+      resolve(value);
+    };
+    $('#adminKeyDialogSave').onclick = () => finish(inp.value.trim());
+    inp.onkeydown = e => { if (e.key === 'Enter') finish(inp.value.trim()); };
+    setTimeout(() => inp.focus(), 0);
+  });
+}
+function showConfirm({title='Confirm', message='', accept='Continue', danger=true} = {}) {
+  return new Promise(resolve => {
+    const m = $('#confirmDialog');
+    $('#confirmTitle').textContent = title;
+    $('#confirmMessage').textContent = message;
+    const yes = $('#confirmAccept'), no = $('#confirmCancel');
+    yes.textContent = accept;
+    yes.className = danger ? 'btn danger' : 'btn primary';
+    m.classList.add('open'); m.setAttribute('aria-hidden','false');
+    document.body.classList.add('modal-open');
+    const done = value => {
+      m.classList.remove('open'); m.setAttribute('aria-hidden','true');
+      document.body.classList.remove('modal-open');
+      yes.onclick = no.onclick = null;
+      $('[data-close-confirm]').forEach(x => x.onclick = null);
+      resolve(value);
+    };
+    yes.onclick = () => done(true);
+    no.onclick = () => done(false);
+    $('[data-close-confirm]').forEach(x => x.onclick = () => done(false));
+  });
+}
+function showFormDialog({title='Edit', subtitle='', fields=[]} = {}) {
+  return new Promise(resolve => {
+    const m = $('#formDialog'), box = $('#formDialogFields');
+    $('#formDialogTitle').textContent = title;
+    $('#formDialogSubtitle').textContent = subtitle || '';
+    box.innerHTML = fields.map(f => {
+      const value = f.value ?? '';
+      if (f.type === 'select') return `<label class="field"><span>${esc(f.label)}</span><select data-key="${esc(f.key)}">${(f.options||[]).map(o => `<option value="${esc(o.value)}" ${String(o.value)===String(value)?'selected':''}>${esc(o.label)}</option>`).join('')}</select>${f.help?`<em>${esc(f.help)}</em>`:''}</label>`;
+      if (f.type === 'checkbox') return `<label class="check-row dialog-check"><input data-key="${esc(f.key)}" type="checkbox" ${value ? 'checked':''}><span>${esc(f.label)}</span></label>`;
+      if (f.type === 'textarea') return `<label class="field"><span>${esc(f.label)}</span><textarea data-key="${esc(f.key)}" rows="${f.rows||4}" placeholder="${esc(f.placeholder||'')}">${esc(value)}</textarea>${f.help?`<em>${esc(f.help)}</em>`:''}</label>`;
+      return `<label class="field"><span>${esc(f.label)}</span><input data-key="${esc(f.key)}" type="${f.type||'text'}" value="${esc(value)}" placeholder="${esc(f.placeholder||'')}" ${f.readonly?'readonly':''}>${f.help?`<em>${esc(f.help)}</em>`:''}</label>`;
+    }).join('');
+    m.classList.add('open'); m.setAttribute('aria-hidden','false');
+    document.body.classList.add('modal-open');
+    const save = $('#formDialogSave'), cancel = $('#formDialogCancel');
+    const done = value => {
+      m.classList.remove('open'); m.setAttribute('aria-hidden','true');
+      document.body.classList.remove('modal-open');
+      save.onclick = cancel.onclick = $('#closeFormDialog').onclick = null;
+      $('[data-close-form-dialog]').forEach(x => x.onclick = null);
+      resolve(value);
+    };
+    save.onclick = () => {
+      const out = {};
+      fields.forEach(f => {
+        const el = box.querySelector(`[data-key="${CSS.escape(f.key)}"]`);
+        out[f.key] = f.type === 'checkbox' ? !!el.checked : el.value;
+      });
+      done(out);
+    };
+    cancel.onclick = $('#closeFormDialog').onclick = () => done(null);
+    $('[data-close-form-dialog]').forEach(x => x.onclick = () => done(null));
+    setTimeout(() => box.querySelector('input,select,textarea')?.focus(), 0);
+  });
+}
+
 /* ---------- navigation ---------- */
 const subtitles = {
   overview: 'Ready Mesh: verified health, session affinity, capacity-aware routing and supervised recovery.',
   console: 'Every routing decision, probe, failover and recovery — as it happens.',
-  providers: 'Upstream pools, credentials, endpoints and per-provider capacity.',
+  providers: 'Connect APIs, discover models and manage saved credentials without exposing secrets.',
+  routing: 'Stable public models on top of NexaRoute’s existing pools, profiles and failover engine.',
   models: 'Per-deployment routing state: health, latency and failure tracking.',
   virtual: 'Virtual Endpoints: stable public model names → Route Profile → Candidate Pool. Change backends without client reconfig.',
   profiles: 'Route Profiles: reusable routing intent and policy.',
@@ -82,12 +191,14 @@ $$('nav button').forEach(b => b.onclick = () => {
   $('#title').textContent = b.dataset.title;
   $('#subtitle').textContent = subtitles[b.dataset.tab] || '';
   if (b.dataset.tab === 'settings') fillRuntimeSettings();
+  if (b.dataset.tab === 'routing') renderRouting();
   if (b.dataset.tab === 'console') { consoleUnread = 0; $('#consoleDot').hidden = true; renderConsole(); }
   if (b.dataset.tab === 'cli') renderCLI();
   if (b.dataset.tab === 'compat') loadCompat();
   if (b.dataset.tab === 'virtual') renderVirtual();
   if (b.dataset.tab === 'profiles') renderProfiles();
   if (b.dataset.tab === 'pools') renderPools();
+  if (b.dataset.tab === 'routing') { renderVirtual(); renderProfiles(); renderPools(); }
 });
 $('#pauseBtn').onclick = () => {
   paused = !paused;
@@ -237,6 +348,7 @@ function render() {
   if ($('#virtual').classList.contains('active')) renderVirtual();
   if ($('#profiles').classList.contains('active')) renderProfiles();
   if ($('#pools').classList.contains('active')) renderPools();
+  if ($('#routing').classList.contains('active')) renderRouting();
   renderConsole();
   $('#settingsJson').textContent = JSON.stringify(snap.config || {}, null, 2);
   // Cache + usage KPI cards (v0.5)
@@ -326,9 +438,10 @@ function providerColor(id) {
 }
 
 function renderProviders(h) {
+  const providerQuery = ($('#providerSearch')?.value || '').trim().toLowerCase();
   const incidents = Object.fromEntries((snap.provider_health || []).map(x => [x.provider, x]));
   const stats = Object.fromEntries((snap.provider_stats || []).map(x => [x.id, x]));
-  $('#providerGrid').innerHTML = providerSummaries.map(p => {
+  $('#providerGrid').innerHTML = providerSummaries.filter(p => !providerQuery || (p.name || p.id || '').toLowerCase().includes(providerQuery) || (p.type || '').toLowerCase().includes(providerQuery) || (p.base_url || '').toLowerCase().includes(providerQuery)).map(p => {
     const ds = (snap.deployments || []).filter(d => d.provider_id === p.id);
     const ok = ds.filter(d => (h[d.id] || {}).status === 'healthy').length;
     const pct = ds.length ? Math.round(ok / ds.length * 100) : 0;
@@ -781,7 +894,11 @@ function applyPreset(k) {
   $('#pCountPath').value = '/v1/messages/count_tokens';
 }
 $('#addProviderBtn').onclick = () => {
-  editor = { mode: 'add', originalId: '', provider: emptyProvider(), detected: [], selected: new Set(), modelMeta: new Map(), secretDirty: true, secretSource: 'none' };
+  const n = Math.max(1, providerSummaries.length + 1);
+  const p = emptyProvider();
+  p.name = `Provider ${n}`;
+  p.id = `provider-${n}`;
+  editor = { mode: 'add', originalId: '', provider: p, detected: [], selected: new Set(), modelMeta: new Map(), secretDirty: true, secretSource: 'none', hasSecret: false };
   fillForm(); modal(true);
 };
 $('#closeProviderModal').onclick = () => modal(false);
@@ -811,7 +928,7 @@ async function openEdit(id) {
       detected: (p.models || []).map(m => m.model),
       selected: new Set((p.models || []).map(m => m.model)),
       modelMeta: new Map((p.models || []).map(m => [m.model, m])),
-      secretDirty: false, secretSource: d.secret_source || 'none'
+      secretDirty: false, secretSource: d.secret_source || 'none', hasSecret: !!d.has_secret
     };
     fillForm(); modal(true);
   } catch (e) { toast(e.message, true); }
@@ -854,7 +971,12 @@ function fillForm() {
   $('#pCapTools').checked = caps.tools !== false;
   $('#pCapVision').checked = !!caps.vision;
   $('#pCapReasoning').checked = !!caps.reasoning;
-  $('#secretSource').textContent = editor.mode === 'edit' ? `Saved source: ${editor.secretSource}. Keys are write-only. Editing any credential field replaces the entire credential set; re-enter all keys you want to keep.` : '';
+  const hasSaved = editor.mode === 'edit' && (editor.hasSecret || editor.secretSource !== 'none');
+  $('#savedCredential').hidden = !hasSaved;
+  $('#apiKeyField').hidden = hasSaved;
+  $('#savedCredentialMeta').textContent = editor.secretSource && editor.secretSource !== 'none' ? `Saved via ${editor.secretSource}; value is never returned to the browser.` : 'Stored securely; value is never returned to the browser.';
+  $('#secretSource').textContent = '';
+  $('#advancedProvider').open = false;
   $('#discoverStatus').textContent = '';
   $('#testResults').innerHTML = '';
   renderPicker();
@@ -933,27 +1055,33 @@ function payload(p) {
 function renderPicker() {
   const all = [...new Set([...editor.detected, ...editor.selected])];
   for (const [i, m] of all.entries()) ensureModelMeta(m, i);
-  $('#modelPicker').innerHTML = all.length ? all.map((m, i) => {
+  const q = ($('#modelPickerSearch')?.value || '').trim().toLowerCase();
+  const visible = all.filter(m => !q || m.toLowerCase().includes(q));
+  $('#modelPicker').innerHTML = visible.length ? visible.map((m, i) => {
     const x = ensureModelMeta(m, i), c = x.capabilities || {};
-    return `<div class="model-option">
-      <div class="model-option-head"><input class="model-select" type="checkbox" data-model="${esc(m)}" ${editor.selected.has(m) ? 'checked' : ''}><strong>${esc(m)}</strong></div>
-      <div class="model-meta-grid">
-        <label>Aliases<input data-model="${esc(m)}" data-meta="aliases" value="${esc((x.aliases || []).join(', '))}" placeholder="coding, auto"></label>
-        <label>Priority<input data-model="${esc(m)}" data-meta="priority" type="number" value="${Number.isFinite(Number(x.priority)) ? Number(x.priority) : i}"></label>
-        <label>Weight<input data-model="${esc(m)}" data-meta="weight" type="number" min="0.01" step="0.1" value="${Number(x.weight) > 0 ? Number(x.weight) : 1}"></label>
-        <label>Context window<input data-model="${esc(m)}" data-meta="context_window" type="number" min="0" step="1000" value="${Number.isFinite(Number(x.context_window)) ? Number(x.context_window) : 0}" placeholder="e.g. 200000"></label>
-        <label>Input $/MTok<input data-model="${esc(m)}" data-meta="input_cost_per_mtok" type="number" min="0" step="0.01" value="${Number.isFinite(Number(x.input_cost_per_mtok)) ? Number(x.input_cost_per_mtok) : 0}"></label>
-        <label>Output $/MTok<input data-model="${esc(m)}" data-meta="output_cost_per_mtok" type="number" min="0" step="0.01" value="${Number.isFinite(Number(x.output_cost_per_mtok)) ? Number(x.output_cost_per_mtok) : 0}"></label>
-      </div>
-      <div class="model-cap-row">
-        <label><input data-model="${esc(m)}" data-cap="streaming" type="checkbox" ${c.streaming !== false ? 'checked' : ''}>Streaming</label>
-        <label><input data-model="${esc(m)}" data-cap="tools" type="checkbox" ${c.tools !== false ? 'checked' : ''}>Tools</label>
-        <label><input data-model="${esc(m)}" data-cap="vision" type="checkbox" ${c.vision ? 'checked' : ''}>Vision</label>
-        <label><input data-model="${esc(m)}" data-cap="reasoning" type="checkbox" ${c.reasoning ? 'checked' : ''}>Reasoning</label>
-      </div>
+    const savedOnly = editor.mode === 'edit' && editor.selected.has(m) && !editor.detected.includes(m);
+    return `<div class="model-option compact">
+      <label class="model-option-head"><input class="model-select" type="checkbox" data-model="${esc(m)}" ${editor.selected.has(m) ? 'checked' : ''}><span class="model-main"><strong>${esc(m)}</strong><small>${savedOnly ? 'Saved model · not currently discovered' : 'Detected model'}</small></span><span class="model-badges">${c.tools!==false?'<i>Tools</i>':''}${c.vision?'<i>Vision</i>':''}${c.reasoning?'<i>Reasoning</i>':''}${c.streaming!==false?'<i>Stream</i>':''}</span></label>
+      <details class="model-advanced"><summary>Advanced model settings</summary>
+        <div class="model-meta-grid">
+          <label>Aliases<input data-model="${esc(m)}" data-meta="aliases" value="${esc((x.aliases || []).join(', '))}" placeholder="coding, auto"></label>
+          <label>Priority<input data-model="${esc(m)}" data-meta="priority" type="number" value="${Number.isFinite(Number(x.priority)) ? Number(x.priority) : i}"></label>
+          <label>Weight<input data-model="${esc(m)}" data-meta="weight" type="number" min="0.01" step="0.1" value="${Number(x.weight) > 0 ? Number(x.weight) : 1}"></label>
+          <label>Context window<input data-model="${esc(m)}" data-meta="context_window" type="number" min="0" step="1000" value="${Number.isFinite(Number(x.context_window)) ? Number(x.context_window) : 0}"></label>
+          <label>Input $/MTok<input data-model="${esc(m)}" data-meta="input_cost_per_mtok" type="number" min="0" step="0.01" value="${Number.isFinite(Number(x.input_cost_per_mtok)) ? Number(x.input_cost_per_mtok) : 0}"></label>
+          <label>Output $/MTok<input data-model="${esc(m)}" data-meta="output_cost_per_mtok" type="number" min="0" step="0.01" value="${Number.isFinite(Number(x.output_cost_per_mtok)) ? Number(x.output_cost_per_mtok) : 0}"></label>
+        </div>
+        <div class="model-cap-row">
+          <label><input data-model="${esc(m)}" data-cap="streaming" type="checkbox" ${c.streaming !== false ? 'checked' : ''}>Streaming</label>
+          <label><input data-model="${esc(m)}" data-cap="tools" type="checkbox" ${c.tools !== false ? 'checked' : ''}>Tools</label>
+          <label><input data-model="${esc(m)}" data-cap="vision" type="checkbox" ${c.vision ? 'checked' : ''}>Vision</label>
+          <label><input data-model="${esc(m)}" data-cap="reasoning" type="checkbox" ${c.reasoning ? 'checked' : ''}>Reasoning</label>
+        </div>
+      </details>
     </div>`;
-  }).join('') : '<div class="model-empty" style="color:var(--muted);font-size:10px">No models selected yet — detect or add one.</div>';
-  $$('#modelPicker .model-select').forEach(x => x.onchange = () => x.checked ? editor.selected.add(x.dataset.model) : editor.selected.delete(x.dataset.model));
+  }).join('') : '<div class="model-empty">No models match this search. Detect models or add a model ID manually.</div>';
+  const updateCount = () => { if ($('#modelSelectedCount')) $('#modelSelectedCount').textContent = `${editor.selected.size} selected`; };
+  $$('#modelPicker .model-select').forEach(x => x.onchange = () => { x.checked ? editor.selected.add(x.dataset.model) : editor.selected.delete(x.dataset.model); updateCount(); });
   $$('#modelPicker [data-meta]').forEach(x => x.oninput = () => {
     const m = x.dataset.model, meta = ensureModelMeta(m);
     if (x.dataset.meta === 'aliases') meta.aliases = x.value.split(',').map(v => v.trim()).filter(Boolean);
@@ -968,7 +1096,25 @@ function renderPicker() {
     meta.capabilities = meta.capabilities || {};
     meta.capabilities[x.dataset.cap] = x.checked;
   });
+  updateCount();
 }
+$('#providerSearch')?.addEventListener('input', () => renderProviders(healthMap()));
+$('#languageSelect')?.addEventListener('change', e => applyLocale(e.target.value));
+$('#replaceCredentialBtn')?.addEventListener('click', () => {
+  $('#savedCredential').hidden = true;
+  $('#apiKeyField').hidden = false;
+  $('#pKey').focus();
+  editor.secretDirty = true;
+});
+$('#modelPickerSearch')?.addEventListener('input', renderPicker);
+$('#selectAllModels')?.addEventListener('click', () => { [...new Set([...editor.detected, ...editor.selected])].forEach(m => editor.selected.add(m)); renderPicker(); });
+$('#selectVisibleModels')?.addEventListener('click', () => {
+  const q = ($('#modelPickerSearch')?.value || '').trim().toLowerCase();
+  [...new Set([...editor.detected, ...editor.selected])].filter(m => !q || m.toLowerCase().includes(q)).forEach(m => editor.selected.add(m));
+  renderPicker();
+});
+$('#clearModels')?.addEventListener('click', () => { editor.selected.clear(); renderPicker(); });
+
 $('#addModelBtn').onclick = () => {
   const m = $('#manualModel').value.trim();
   if (!m) return;
@@ -1041,7 +1187,7 @@ $('#saveProviderBtn').onclick = async () => {
   finally { $('#saveProviderBtn').disabled = false; }
 };
 $('#deleteProviderBtn').onclick = async () => {
-  if (!confirm(`Delete provider "${editor.originalId}"?`)) return;
+  if (!(await showConfirm({title:'Delete provider?', message:`Delete provider "${editor.originalId}" and its configured deployments?`, accept:'Delete provider'}))) return;
   try {
     await api('/admin/api/providers/' + encodeURIComponent(editor.originalId), { method: 'DELETE' });
     toast('Provider deleted');
@@ -1053,216 +1199,167 @@ $('#deleteProviderBtn').onclick = async () => {
 /* ---------- virtual endpoints / route profiles / pools ---------- */
 function renderVirtual() {
   const ves = snap.virtual_endpoints || [];
-  const rows = ves.map(ve => {
-    const enabled = ve.enabled !== false;
-    const poolCount = ve.pool_member_count != null ? ve.pool_member_count : (ve.configured_candidate_count ?? ve.eligible ?? ve.eligible_deployments ?? '—');
-    return `<tr>
-      <td><strong>${esc(ve.id)}</strong><br><small>${esc(ve.name || '')}</small></td>
-      <td><code>${esc(ve.public_model || ve.id)}</code></td>
-      <td>${esc(ve.route_profile || '')}</td>
-      <td>${enabled ? '<span class=\"pill on\">Enabled</span>' : '<span class=\"pill\">Disabled</span>'}</td>
-      <td title="Configured pool members, not runtime eligible (health/compat filtered per-request)">${esc(poolCount)}</td>
-      <td><button class=\"btn secondary\" onclick=\"editVirtual('${esc(ve.id)}')\">Edit</button> <button class=\"btn danger-ghost\" onclick=\"deleteVirtual('${esc(ve.id)}')\">Del</button></td>
-    </tr>`;
-  });
-  $('#virtualRows').innerHTML = rows.join('') || '<tr><td colspan=\"6\" style=\"color:var(--muted)\">No virtual endpoints configured. Create one to get stable public model names.</td></tr>';
+  $('#virtualRows').innerHTML = ves.map(ve => `<tr><td><strong>${esc(ve.id)}</strong><br><small>${esc(ve.name||'')}</small></td><td><code>${esc(ve.public_model||ve.id)}</code></td><td>${esc(ve.route_profile||'')}</td><td>${ve.enabled!==false?'<span class="pill on">Enabled</span>':'<span class="pill">Disabled</span>'}</td><td>${esc(ve.pool_member_count ?? ve.configured_candidate_count ?? '—')}</td><td><button class="btn secondary" onclick="editVirtual('${esc(ve.id)}')">Edit</button> <button class="btn danger-ghost" onclick="deleteVirtual('${esc(ve.id)}')">Delete</button></td></tr>`).join('') || '<tr><td colspan="6" class="muted-cell">No virtual endpoints.</td></tr>';
 }
-
 function renderProfiles() {
-  const rps = snap.route_profiles || [];
   const globalStrat = snap.config?.routing?.strategy || 'ready_mesh';
-  const rows = rps.map(rp => {
-    const strat = rp.strategy ? rp.strategy : `inherit (${esc(globalStrat)})`;
-    return `<tr>
-      <td><strong>${esc(rp.id)}</strong><br><small>${esc(rp.name || '')}</small></td>
-      <td>${esc(rp.name || '')}</td>
-      <td>${esc(rp.candidate_pool || '')}</td>
-      <td>${esc(rp.fallback_chain || '—')}</td>
-      <td title="Phase B: per-profile strategy deferred to Phase E; inherits global">${esc(strat)}</td>
-      <td><button class=\"btn secondary\" onclick=\"editProfile('${esc(rp.id)}')\">Edit</button> <button class=\"btn danger-ghost\" onclick=\"deleteProfile('${esc(rp.id)}')\">Del</button></td>
-    </tr>`;
-  });
-  $('#profileRows').innerHTML = rows.join('') || '<tr><td colspan=\"6\" style=\"color:var(--muted)\">No route profiles. Create a profile to describe routing intent. Strategy inherits global.</td></tr>';
+  $('#profileRows').innerHTML = (snap.route_profiles||[]).map(rp => `<tr><td><strong>${esc(rp.id)}</strong></td><td>${esc(rp.name||'')}</td><td>${esc(rp.candidate_pool||'')}</td><td>${esc(rp.fallback_chain||'—')}</td><td>${esc(rp.strategy||`inherit (${globalStrat})`)}</td><td><button class="btn secondary" onclick="editProfile('${esc(rp.id)}')">Edit</button> <button class="btn danger-ghost" onclick="deleteProfile('${esc(rp.id)}')">Delete</button></td></tr>`).join('') || '<tr><td colspan="6" class="muted-cell">No route profiles.</td></tr>';
 }
-
 function renderPools() {
-  const cps = snap.candidate_pools || [];
-  const fcs = snap.fallback_chains || [];
-  const poolRows = cps.map(cp => {
-    const members = (cp.deployments || []).join(', ') || (cp.mode === 'all' ? '<em>all eligible</em>' : '<em>empty</em>');
-    const expanded = cp.expanded_count != null ? cp.expanded_count : (cp.expanded ? cp.expanded.length : '—');
-    return `<tr>
-      <td><strong>${esc(cp.id)}</strong><br><small>${esc(cp.name || '')}</small></td>
-      <td>${esc(cp.mode || 'explicit')}</td>
-      <td style=\"max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap\" title=\"${esc((cp.deployments || []).join(', '))}\">${members}</td>
-      <td>${esc(expanded)}</td>
-      <td><button class=\"btn secondary\" onclick=\"editPool('${esc(cp.id)}')\">Edit</button> <button class=\"btn danger-ghost\" onclick=\"deletePool('${esc(cp.id)}')\">Del</button></td>
-    </tr>`;
-  });
-  $('#poolRows').innerHTML = poolRows.join('') || '<tr><td colspan=\"5\" style=\"color:var(--muted)\">No candidate pools.</td></tr>';
+  $('#poolRows').innerHTML = (snap.candidate_pools||[]).map(cp => `<tr><td><strong>${esc(cp.id)}</strong></td><td>${esc(cp.mode||'explicit')}</td><td class="truncate-cell" title="${esc((cp.deployments||[]).join(', '))}">${esc((cp.deployments||[]).join(', ') || (cp.mode==='all'?'all eligible':'empty'))}</td><td>${esc(cp.expanded_count ?? cp.expanded?.length ?? '—')}</td><td><button class="btn secondary" onclick="editPool('${esc(cp.id)}')">Edit</button> <button class="btn danger-ghost" onclick="deletePool('${esc(cp.id)}')">Delete</button></td></tr>`).join('') || '<tr><td colspan="5" class="muted-cell">No candidate pools.</td></tr>';
+  $('#chainRows').innerHTML = (snap.fallback_chains||[]).map(fc => `<tr><td><strong>${esc(fc.id)}</strong></td><td>${esc((fc.pools||[]).join(' → '))}</td><td><button class="btn secondary" onclick="editChain('${esc(fc.id)}')">Edit</button> <button class="btn danger-ghost" onclick="deleteChain('${esc(fc.id)}')">Delete</button></td></tr>`).join('') || '<tr><td colspan="3" class="muted-cell">No fallback chains.</td></tr>';
+}
+async function editVirtual(id, create=false) {
+  const existing = (snap.virtual_endpoints||[]).find(v=>v.id===id);
+  const d = await showFormDialog({title: existing?'Edit virtual endpoint':'New virtual endpoint', subtitle:'Stable public model name backed by a route profile.', fields:[
+    {key:'id',label:'Internal ID',value:id||'',readonly:!!existing},
+    {key:'public_model',label:'Public model',value:existing?.public_model||'coding'},
+    {key:'route_profile',label:'Route profile',value:existing?.route_profile||'default'},
+    {key:'name',label:'Display name',value:existing?.name||''},
+    {key:'enabled',label:'Enabled',type:'checkbox',value:existing?.enabled!==false}
+  ]}); if(!d) return;
+  const body={id:d.id.trim(),public_model:d.public_model.trim(),route_profile:d.route_profile.trim(),name:d.name.trim()||undefined,enabled:d.enabled};
+  try { await api(existing?'/admin/api/virtual-endpoints/'+encodeURIComponent(existing.id):'/admin/api/virtual-endpoints',{method:existing?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); toast('Virtual endpoint saved'); await refresh(); } catch(e){toast(e.message,true);}
+}
+async function deleteVirtual(id){ if(!(await showConfirm({title:'Delete virtual endpoint?',message:`Clients using "${id}" will stop resolving through this endpoint.`,accept:'Delete'}))) return; try{await api('/admin/api/virtual-endpoints/'+encodeURIComponent(id),{method:'DELETE'});toast('Virtual endpoint deleted');await refresh();}catch(e){toast(e.message,true);} }
+async function editProfile(id){
+  const existing=(snap.route_profiles||[]).find(x=>x.id===id);
+  const pools=(snap.candidate_pools||[]).map(x=>({value:x.id,label:x.name?x.name+' · '+x.id:x.id}));
+  const chains=[{value:'',label:'No fallback chain'},...(snap.fallback_chains||[]).map(x=>({value:x.id,label:x.name?x.name+' · '+x.id:x.id}))];
+  const d=await showFormDialog({title:existing?'Edit route profile':'New route profile',subtitle:'A profile points the router at a candidate pool and optional fallback chain.',fields:[
+    {key:'id',label:'Internal ID',value:id||'',readonly:!!existing},{key:'name',label:'Display name',value:existing?.name||''},
+    {key:'candidate_pool',label:'Candidate pool',type:'select',value:existing?.candidate_pool||pools[0]?.value||'',options:pools},
+    {key:'fallback_chain',label:'Fallback chain',type:'select',value:existing?.fallback_chain||'',options:chains}
+  ]}); if(!d)return;
+  const body={id:d.id.trim(),name:d.name.trim()||undefined,candidate_pool:d.candidate_pool,fallback_chain:d.fallback_chain||undefined};
+  try{await api(existing?'/admin/api/route-profiles/'+encodeURIComponent(existing.id):'/admin/api/route-profiles',{method:existing?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});toast('Route profile saved');await refresh();}catch(e){toast(e.message,true);}
+}
+async function deleteProfile(id){if(!(await showConfirm({title:'Delete route profile?',message:`Delete route profile "${id}"? Endpoints referencing it must be changed first.`,accept:'Delete'})))return;try{await api('/admin/api/route-profiles/'+encodeURIComponent(id),{method:'DELETE'});toast('Route profile deleted');await refresh();}catch(e){toast(e.message,true);}}
+async function editPool(id){
+  const existing=(snap.candidate_pools||[]).find(x=>x.id===id);
+  const d=await showFormDialog({title:existing?'Edit candidate pool':'New candidate pool',subtitle:'Choose explicit deployment IDs or let the router consider all eligible deployments.',fields:[
+    {key:'id',label:'Internal ID',value:id||'',readonly:!!existing},{key:'name',label:'Display name',value:existing?.name||''},
+    {key:'mode',label:'Mode',type:'select',value:existing?.mode||'explicit',options:[{value:'explicit',label:'Explicit deployments'},{value:'all',label:'All eligible deployments'}]},
+    {key:'deployments',label:'Deployments (comma separated)',type:'textarea',value:(existing?.deployments||[]).join(', '),help:'Example: openai/gpt-5, anthropic/claude-sonnet'}
+  ]}); if(!d)return;
+  const body={id:d.id.trim(),name:d.name.trim()||undefined,mode:d.mode,deployments:d.mode==='all'?[]:d.deployments.split(',').map(x=>x.trim()).filter(Boolean)};
+  try{await api(existing?'/admin/api/candidate-pools/'+encodeURIComponent(existing.id):'/admin/api/candidate-pools',{method:existing?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});toast('Candidate pool saved');await refresh();}catch(e){toast(e.message,true);}
+}
+async function deletePool(id){if(!(await showConfirm({title:'Delete candidate pool?',message:`Delete pool "${id}"? Profiles using it must be changed first.`,accept:'Delete'})))return;try{await api('/admin/api/candidate-pools/'+encodeURIComponent(id),{method:'DELETE'});toast('Candidate pool deleted');await refresh();}catch(e){toast(e.message,true);}}
+async function editChain(id){
+  const existing=(snap.fallback_chains||[]).find(x=>x.id===id);
+  const d=await showFormDialog({title:existing?'Edit fallback chain':'New fallback chain',subtitle:'Order candidate pools from first choice to last resort.',fields:[
+    {key:'id',label:'Internal ID',value:id||'',readonly:!!existing},{key:'name',label:'Display name',value:existing?.name||''},
+    {key:'pools',label:'Pools in order (comma separated)',type:'textarea',value:(existing?.pools||[]).join(', '),help:'At least one existing pool is required.'}
+  ]}); if(!d)return;
+  const pools=d.pools.split(',').map(x=>x.trim()).filter(Boolean); if(!pools.length){toast('At least one pool is required',true);return;}
+  const body={id:d.id.trim(),name:d.name.trim()||undefined,pools};
+  try{await api(existing?'/admin/api/fallback-chains/'+encodeURIComponent(existing.id):'/admin/api/fallback-chains',{method:existing?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});toast('Fallback chain saved');await refresh();}catch(e){toast(e.message,true);}
+}
+async function deleteChain(id){if(!(await showConfirm({title:'Delete fallback chain?',message:`Delete fallback chain "${id}"?`,accept:'Delete'})))return;try{await api('/admin/api/fallback-chains/'+encodeURIComponent(id),{method:'DELETE'});toast('Fallback chain deleted');await refresh();}catch(e){toast(e.message,true);}}
 
-  const chainRows = fcs.map(fc => {
-    const pools = (fc.pools || []).join(' → ');
-    return `<tr>
-      <td><strong>${esc(fc.id)}</strong><br><small>${esc(fc.name || '')}</small></td>
-      <td>${esc(pools)}</td>
-      <td><button class=\"btn secondary\" onclick=\"editChain('${esc(fc.id)}')\">Edit</button> <button class=\"btn danger-ghost\" onclick=\"deleteChain('${esc(fc.id)}')\">Del</button></td>
-    </tr>`;
-  });
-  $('#chainRows').innerHTML = chainRows.join('') || '<tr><td colspan=\"3\" style=\"color:var(--muted)\">No fallback chains.</td></tr>';
-}
+window.editVirtual=editVirtual;window.deleteVirtual=deleteVirtual;window.editProfile=editProfile;window.deleteProfile=deleteProfile;window.editPool=editPool;window.deletePool=deletePool;window.editChain=editChain;window.deleteChain=deleteChain;
 
-// Simple prompt-based editors for Phase B (keep UI simple)
-async function editVirtual(id) {
-  try {
-    const existing = (snap.virtual_endpoints || []).find(v => v.id === id);
-    const pub = prompt('Public model name (client-facing):', existing ? existing.public_model : 'nexa-code');
-    if (pub === null) return;
-    const profile = prompt('Route profile ID:', existing ? existing.route_profile : 'default');
-    if (profile === null) return;
-    const name = prompt('Display name:', existing ? (existing.name || '') : '');
-    if (name === null) return;
-    const enabledStr = prompt('Enabled? (true/false):', existing ? String(existing.enabled !== false) : 'true');
-    if (enabledStr === null) return;
-    const enabled = enabledStr.toLowerCase() !== 'false';
-    const body = { id, name: name || undefined, public_model: pub.trim(), route_profile: profile.trim(), enabled };
-    if (existing) {
-      await api('/admin/api/virtual-endpoints/' + encodeURIComponent(id), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    } else {
-      await api('/admin/api/virtual-endpoints', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    }
-    toast('Virtual endpoint saved');
-    await refresh();
-  } catch (e) { toast(e.message, true); }
-}
-async function deleteVirtual(id) {
-  if (!confirm(`Delete virtual endpoint \"${id}\"?`)) return;
-  try {
-    await api('/admin/api/virtual-endpoints/' + encodeURIComponent(id), { method: 'DELETE' });
-    toast('Virtual endpoint deleted');
-    await refresh();
-  } catch (e) { toast(e.message, true); }
-}
-async function editProfile(id) {
-  try {
-    const existing = (snap.route_profiles || []).find(p => p.id === id);
-    const pool = prompt('Candidate pool ID:', existing ? existing.candidate_pool : 'default');
-    if (pool === null) return;
-    const fallback = prompt('Fallback chain ID (optional):', existing ? (existing.fallback_chain || '') : '');
-    if (fallback === null) return;
-    const name = prompt('Display name:', existing ? (existing.name || '') : '');
-    if (name === null) return;
-    // Phase B: strategy inherits global routing strategy. Per-profile override deferred to Phase E.
-    // Do not prompt for strategy; always inherit.
-    const body = { id, name: name || undefined, candidate_pool: pool.trim(), fallback_chain: fallback.trim() || undefined };
-    if (existing) {
-      await api('/admin/api/route-profiles/' + encodeURIComponent(id), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    } else {
-      await api('/admin/api/route-profiles', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    }
-    toast('Route profile saved (strategy inherits global: ' + (snap.config?.routing?.strategy || 'ready_mesh') + ')');
-    await refresh();
-  } catch (e) { toast(e.message, true); }
-}
-async function deleteProfile(id) {
-  if (!confirm(`Delete route profile \"${id}\"?`)) return;
-  try {
-    await api('/admin/api/route-profiles/' + encodeURIComponent(id), { method: 'DELETE' });
-    toast('Route profile deleted');
-    await refresh();
-  } catch (e) { toast(e.message, true); }
-}
-async function editPool(id) {
-  try {
-    const existing = (snap.candidate_pools || []).find(p => p.id === id);
-    const mode = prompt('Mode (explicit or all):', existing ? (existing.mode || 'explicit') : 'explicit');
-    if (mode === null) return;
-    let deployments = [];
-    if (mode.trim().toLowerCase() !== 'all') {
-      const depStr = prompt('Deployments (comma separated, e.g. provider-a/model-a, provider-b/model-b or model names):', existing ? (existing.deployments || []).join(', ') : '');
-      if (depStr === null) return;
-      deployments = depStr.split(',').map(s => s.trim()).filter(Boolean);
-    }
-    const name = prompt('Display name:', existing ? (existing.name || '') : '');
-    if (name === null) return;
-    const body = { id, name: name || undefined, mode: mode.trim().toLowerCase(), deployments };
-    if (existing) {
-      await api('/admin/api/candidate-pools/' + encodeURIComponent(id), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    } else {
-      await api('/admin/api/candidate-pools', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    }
-    toast('Candidate pool saved');
-    await refresh();
-  } catch (e) { toast(e.message, true); }
-}
-async function deletePool(id) {
-  if (!confirm(`Delete candidate pool \"${id}\"?`)) return;
-  try {
-    await api('/admin/api/candidate-pools/' + encodeURIComponent(id), { method: 'DELETE' });
-    toast('Candidate pool deleted');
-    await refresh();
-  } catch (e) { toast(e.message, true); }
-}
-async function editChain(id) {
-  try {
-    const existing = (snap.fallback_chains || []).find(c => c.id === id);
-    const poolsStr = prompt('Pools in order (comma separated pool IDs):', existing ? (existing.pools || []).join(', ') : '');
-    if (poolsStr === null) return;
-    const pools = poolsStr.split(',').map(s => s.trim()).filter(Boolean);
-    if (!pools.length) { alert('At least one pool required'); return; }
-    const name = prompt('Display name:', existing ? (existing.name || '') : '');
-    if (name === null) return;
-    const body = { id, name: name || undefined, pools };
-    if (existing) {
-      await api('/admin/api/fallback-chains/' + encodeURIComponent(id), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    } else {
-      await api('/admin/api/fallback-chains', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    }
-    toast('Fallback chain saved');
-    await refresh();
-  } catch (e) { toast(e.message, true); }
-}
-async function deleteChain(id) {
-  if (!confirm(`Delete fallback chain \"${id}\"?`)) return;
-  try {
-    await api('/admin/api/fallback-chains/' + encodeURIComponent(id), { method: 'DELETE' });
-    toast('Fallback chain deleted');
-    await refresh();
-  } catch (e) { toast(e.message, true); }
-}
+$('#addVirtualBtn')?.addEventListener('click',()=>editVirtual(`endpoint-${(snap.virtual_endpoints||[]).length+1}`,true));
+$('#addProfileBtn')?.addEventListener('click',()=>editProfile(`profile-${(snap.route_profiles||[]).length+1}`));
+$('#addPoolBtn')?.addEventListener('click',()=>editPool(`pool-${(snap.candidate_pools||[]).length+1}`));
+$('#addChainBtn')?.addEventListener('click',()=>editChain(`fallback-${(snap.fallback_chains||[]).length+1}`));
 
-// Expose for inline onclick
-window.editVirtual = editVirtual;
-window.deleteVirtual = deleteVirtual;
-window.editProfile = editProfile;
-window.deleteProfile = deleteProfile;
-window.editPool = editPool;
-window.deletePool = deletePool;
-window.editChain = editChain;
-window.deleteChain = deleteChain;
-
-$('#addVirtualBtn')?.addEventListener('click', async () => {
-  const id = prompt('New virtual endpoint ID (letters, digits, -, _, .):', 'coding-prod');
-  if (!id) return;
-  await editVirtual(id.trim());
-});
-$('#addProfileBtn')?.addEventListener('click', async () => {
-  const id = prompt('New route profile ID:', 'coding-smart');
-  if (!id) return;
-  await editProfile(id.trim());
-});
-$('#addPoolBtn')?.addEventListener('click', async () => {
-  const id = prompt('New candidate pool ID:', 'coding');
-  if (!id) return;
-  await editPool(id.trim());
-});
-$('#addChainBtn')?.addEventListener('click', async () => {
-  const id = prompt('New fallback chain ID:', 'coding-fallback');
-  if (!id) return;
-  await editChain(id.trim());
-});
-
+/* ---------- simple route composer ---------- */
+let routeEditor={mode:'add',originalId:'',selected:new Set()};
+function routeParts(ve){
+  const rp=(snap.route_profiles||[]).find(x=>x.id===ve.route_profile);
+  const pool=(snap.candidate_pools||[]).find(x=>x.id===rp?.candidate_pool);
+  return {rp,pool};
+}
+function renderRouting(){
+  const ves=snap.virtual_endpoints||[];
+  $('#routeEmpty').hidden=!!ves.length;
+  $('#routeCards').innerHTML=ves.map(ve=>{
+    const {rp,pool}=routeParts(ve), members=pool?.mode==='all'?['All eligible deployments']:(pool?.deployments||[]);
+    return `<article class="route-card"><div class="route-card-head"><div><span class="route-public">${esc(ve.public_model||ve.id)}</span><h3>${esc(ve.name||ve.id)}</h3></div><span class="pill ${ve.enabled!==false?'on':''}">${ve.enabled!==false?'Enabled':'Disabled'}</span></div><p>${members.length?members.slice(0,3).map(esc).join(' · '):'No model members'}${members.length>3?` · +${members.length-3} more`:''}</p><div class="route-card-meta"><span>${esc(snap.config?.routing?.strategy||'ready_mesh')}</span><span>${members.length} member${members.length===1?'':'s'}</span></div><div class="route-card-actions"><button class="btn secondary edit-simple-route" data-id="${esc(ve.id)}">Edit</button><button class="btn ghost copy-route" data-model="${esc(ve.public_model||ve.id)}">Copy model</button></div></article>`;
+  }).join('');
+  $$('.edit-simple-route').forEach(b=>b.onclick=()=>openRouteEditor(b.dataset.id));
+  $$('.copy-route').forEach(b=>b.onclick=e=>copyText(b.dataset.model,e.currentTarget));
+}
+function setRouteModal(open){const m=$('#routeModal');m.classList.toggle('open',open);m.setAttribute('aria-hidden',open?'false':'true');document.body.classList.toggle('modal-open',open);}
+function routeDeployments(){
+  const q=($('#routeModelSearch')?.value||'').trim().toLowerCase();
+  return (snap.deployments||[]).filter(d=>!q||d.model.toLowerCase().includes(q)||(d.provider_name||d.provider_id||'').toLowerCase().includes(q)||d.id.toLowerCase().includes(q));
+}
+function renderRouteModelPicker(){
+  const h=healthMap(), rows=routeDeployments();
+  $('#routeModelPicker').innerHTML=rows.map(d=>{const st=(h[d.id]||{}).status||'unknown';return `<label class="route-model-row"><input type="checkbox" data-route-dep="${esc(d.id)}" ${routeEditor.selected.has(d.id)?'checked':''}><span><strong>${esc(d.model)}</strong><small>${esc(d.provider_name||d.provider_id)} · ${esc(d.id)}</small></span><i class="status-dot ${esc(st)}"></i><em>${esc(st)}</em></label>`;}).join('')||'<div class="model-empty">No saved deployments match.</div>';
+  $$('[data-route-dep]').forEach(x=>x.onchange=()=>{x.checked?routeEditor.selected.add(x.dataset.routeDep):routeEditor.selected.delete(x.dataset.routeDep);$('#routeSelectionCount').textContent=`${routeEditor.selected.size} selected`;});
+  $('#routeSelectionCount').textContent=`${routeEditor.selected.size} selected`;
+}
+function uniqueRouteId(base){
+  const stem=slug(base||'route'); let id=stem,n=2; const ids=new Set((snap.virtual_endpoints||[]).map(x=>x.id)); while(ids.has(id)){id=`${stem}-${n++}`;} return id;
+}
+function openRouteEditor(id=''){
+  const existing=(snap.virtual_endpoints||[]).find(x=>x.id===id);
+  const {pool}=existing?routeParts(existing):{};
+  routeEditor={mode:existing?'edit':'add',originalId:existing?.id||'',selected:new Set(pool?.mode==='all'?(snap.deployments||[]).map(d=>d.id):(pool?.deployments||[]))};
+  $('#routeFormTitle').textContent=existing?'Edit route':'Create route';
+  $('#routeName').value=existing?.name||'Coding';
+  $('#routePublicModel').value=existing?.public_model||'coding';
+  $('#routeId').value=existing?.id||uniqueRouteId('coding');
+  $('#routeId').readOnly=!!existing;
+  $('#routeEnabled').value=String(existing?.enabled!==false);
+  $('#routeMode').value='automatic';
+  $('#deleteRouteBtn').classList.toggle('hidden',!existing);
+  $('#routeFormError').textContent=''; $('#routeModelSearch').value='';
+  renderRouteModelPicker(); setRouteModal(true);
+}
+async function saveSimpleRoute(){
+  const name=$('#routeName').value.trim()||'Route', pub=$('#routePublicModel').value.trim(), id=$('#routeId').value.trim()||uniqueRouteId(pub);
+  if(!pub){$('#routeFormError').textContent='Public model is required.';return;}
+  if(!routeEditor.selected.size){$('#routeFormError').textContent='Select at least one model deployment.';return;}
+  const poolId=`${id}-pool`, profileId=`${id}-profile`;
+  const poolBody={id:poolId,name:`${name} models`,mode:'explicit',deployments:[...routeEditor.selected]};
+  const profileBody={id:profileId,name:`${name} route`,candidate_pool:poolId};
+  const endpointBody={id,name,public_model:pub,route_profile:profileId,enabled:$('#routeEnabled').value==='true'};
+  $('#saveRouteBtn').disabled=true; $('#routeFormError').textContent='';
+  try{
+    const existing=(snap.virtual_endpoints||[]).find(x=>x.id===routeEditor.originalId);
+    const old=existing?routeParts(existing):{};
+    if(existing){
+      const actualPoolId=old.pool?.id||poolId, actualProfileId=old.rp?.id||profileId;
+      poolBody.id=actualPoolId; profileBody.id=actualProfileId; profileBody.candidate_pool=actualPoolId; endpointBody.route_profile=actualProfileId;
+      if(old.pool) await api('/admin/api/candidate-pools/'+encodeURIComponent(actualPoolId),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(poolBody)}); else await api('/admin/api/candidate-pools',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(poolBody)});
+      if(old.rp) await api('/admin/api/route-profiles/'+encodeURIComponent(actualProfileId),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(profileBody)}); else await api('/admin/api/route-profiles',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(profileBody)});
+      await api('/admin/api/virtual-endpoints/'+encodeURIComponent(existing.id),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(endpointBody)});
+    }else{
+      await api('/admin/api/candidate-pools',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(poolBody)});
+      await api('/admin/api/route-profiles',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(profileBody)});
+      await api('/admin/api/virtual-endpoints',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(endpointBody)});
+    }
+    toast(existing?'Route updated':'Route created'); setRouteModal(false); await refresh();
+  }catch(e){$('#routeFormError').textContent=e.message;toast(e.message,true);}finally{$('#saveRouteBtn').disabled=false;}
+}
+async function deleteSimpleRoute(){
+  const existing=(snap.virtual_endpoints||[]).find(x=>x.id===routeEditor.originalId); if(!existing)return;
+  if(!(await showConfirm({title:'Delete route?',message:`Delete route "${existing.name||existing.public_model}" and its dedicated routing primitives?`,accept:'Delete route'})))return;
+  const {rp,pool}=routeParts(existing);
+  try{
+    await api('/admin/api/virtual-endpoints/'+encodeURIComponent(existing.id),{method:'DELETE'});
+    if(rp) await api('/admin/api/route-profiles/'+encodeURIComponent(rp.id),{method:'DELETE'});
+    if(pool) await api('/admin/api/candidate-pools/'+encodeURIComponent(pool.id),{method:'DELETE'});
+    setRouteModal(false);toast('Route deleted');await refresh();
+  }catch(e){toast(e.message,true);}
+}
+$('#addRouteBtn')?.addEventListener('click',()=>openRouteEditor());
+$('#addFirstRouteBtn')?.addEventListener('click',()=>openRouteEditor());
+$('#closeRouteModal')?.addEventListener('click',()=>setRouteModal(false));
+$('#cancelRouteBtn')?.addEventListener('click',()=>setRouteModal(false));
+$$('[data-close-route]').forEach(x=>x.onclick=()=>setRouteModal(false));
+$('#saveRouteBtn')?.addEventListener('click',saveSimpleRoute);
+$('#deleteRouteBtn')?.addEventListener('click',deleteSimpleRoute);
+$('#routeModelSearch')?.addEventListener('input',renderRouteModelPicker);
+$('#routeSelectAll')?.addEventListener('click',()=>{routeDeployments().forEach(d=>routeEditor.selected.add(d.id));renderRouteModelPicker();});
+$('#routeClearAll')?.addEventListener('click',()=>{routeEditor.selected.clear();renderRouteModelPicker();});
 /* ---------- boot ---------- */
+applyLocale();
 (async () => {
   try {
     const d = await api('/admin/api/provider-presets');
