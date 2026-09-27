@@ -217,12 +217,12 @@ function render() {
   $('#coreSub').textContent = (snap.config?.routing?.strategy || 'ready_mesh').replace(/_/g, ' ');
   $('#sDeploy').textContent = fmtInt(snap.deployment_total ?? ds.length);
   const c = healthCounts();
-  const ok = Number(c.healthy || 0), cd = Number(c.cooldown || 0);
+  const ok = Number(c.healthy || 0), cd = Number(c.cooldown || 0), retired = Number(c.retired || 0);
   const total = snap.deployment_total ?? ds.length;
   $('#sHealthy').textContent = fmtInt(ok);
   $('#sCooldown').textContent = fmtInt(cd);
   $('#sHealthBar').style.width = total ? Math.round(ok / total * 100) + '%' : '0%';
-  $('#sCooldownSub').textContent = cd ? 'recovering in background' : 'none recovering';
+  $('#sCooldownSub').textContent = retired ? `${cd} cooling · ${retired} retired` : (cd ? 'recovering in background' : 'none recovering');
   $('#sSessions').textContent = fmtInt(snap.session_count ?? 0);
   const ls = (snap.events || []).filter(e => e.kind === 'route_ok' && e.latency_ms).map(e => e.latency_ms);
   const avg = ls.length ? Math.round(ls.reduce((a, b) => a + b, 0) / ls.length) : 0;
@@ -232,6 +232,7 @@ function render() {
   renderProviders(h);
   renderModels(ds, h);
   renderHealthTab(h);
+  renderRoutingObservatory(h, ds);
   if ($('#compat').classList.contains('active')) renderCompat();
   if ($('#virtual').classList.contains('active')) renderVirtual();
   if ($('#profiles').classList.contains('active')) renderProfiles();
@@ -276,7 +277,7 @@ function renderRing(ds, h) {
     const l = document.createElementNS('http://www.w3.org/2000/svg', 'line');
     for (const [k, v] of Object.entries({
       x1: cx, y1: cy, x2: x, y2: y,
-      stroke: st === 'healthy' ? 'rgba(63,224,140,.4)' : st === 'cooldown' ? 'rgba(255,110,125,.4)' : st === 'degraded' ? 'rgba(255,200,97,.4)' : st === 'half_open' ? 'rgba(201,184,255,.4)' : 'rgba(70,98,138,.3)',
+      stroke: st === 'healthy' ? 'rgba(63,224,140,.4)' : st === 'cooldown' ? 'rgba(255,110,125,.4)' : st === 'retired' ? 'rgba(142,151,168,.32)' : st === 'degraded' ? 'rgba(255,200,97,.4)' : st === 'half_open' ? 'rgba(201,184,255,.4)' : 'rgba(70,98,138,.3)',
       'stroke-width': 1.2, 'stroke-dasharray': '3 6'
     })) l.setAttribute(k, v);
     svg.appendChild(l);
@@ -296,7 +297,8 @@ function renderDonut(counts, total) {
     ['donutUnknown', 'unknown', counts.unknown || 0, '#5c718a'],
     ['donutDegraded', 'degraded', counts.degraded || 0, 'var(--warn)'],
     ['donutHalfOpen', 'half_open', counts.half_open || 0, '#c9b8ff'],
-    ['donutCooldown', 'cooldown', counts.cooldown || 0, 'var(--bad)']
+    ['donutCooldown', 'cooldown', counts.cooldown || 0, 'var(--bad)'],
+    ['donutRetired', 'retired', counts.retired || 0, '#8e97a8']
   ];
   const r = 48, circ = 2 * Math.PI * r;
   let offset = 0;
@@ -412,11 +414,102 @@ function renderHealthTab(h) {
   }).join('') || '<p class="hint">No capability-scoped failures observed. Scopes activate when streaming, tools, vision or reasoning requests fail on a deployment.</p>';
 }
 
+/* ---------- routing observatory ---------- */
+function renderRoutingObservatory(h, ds) {
+  const all = snap.events || [];
+  const routeKinds = new Set(['route_attempt', 'route_fail', 'failover', 'route_ok', 'route_timeout', 'model_unavailable', 'model_retired', 'candidate_exhausted', 'response_decode_fail', 'stream_fail_precommit', 'stream_fail']);
+  const latest = [...all].reverse().find(e => e.request_id && routeKinds.has(e.kind));
+  const byID = Object.fromEntries(ds.map(d => [d.id, d]));
+  const modelLabel = id => {
+    const d = byID[id];
+    if (!d) return id || 'gateway';
+    return d.model || d.id;
+  };
+
+  let requestEvents = [];
+  if (latest) requestEvents = all.filter(e => e.request_id === latest.request_id && routeKinds.has(e.kind));
+
+  const publicEvent = [...requestEvents].reverse().find(e => e.public_model);
+  $('#obsRequest').textContent = latest?.request_id ? latest.request_id.slice(0, 22) : '—';
+  $('#obsPublic').textContent = publicEvent?.public_model || '—';
+
+  const failures = requestEvents.filter(e => e.kind === 'route_fail' || e.kind === 'route_timeout' || e.kind === 'response_decode_fail' || e.kind === 'stream_fail_precommit');
+  $('#obsAbsorbed').textContent = fmtInt(failures.length);
+
+  const success = requestEvents.some(e => e.kind === 'route_ok');
+  const exhausted = requestEvents.some(e => e.kind === 'candidate_exhausted');
+  const result = success ? 'SUCCESS' : exhausted ? 'EXHAUSTED' : requestEvents.length ? 'ACTIVE' : 'IDLE';
+  $('#obsResult').textContent = result;
+  $('#obsResult').className = result.toLowerCase();
+
+  const stateByDeployment = {};
+  for (const e of requestEvents) {
+    if (!e.deployment) continue;
+    if (e.kind === 'model_retired') stateByDeployment[e.deployment] = 'retired';
+    else if (e.kind === 'model_unavailable') stateByDeployment[e.deployment] = 'unavailable';
+    else if (e.kind === 'route_ok') stateByDeployment[e.deployment] = 'success';
+    else if (e.kind === 'route_fail' || e.kind === 'route_timeout' || e.kind === 'response_decode_fail' || e.kind === 'stream_fail_precommit') {
+      stateByDeployment[e.deployment] = e.error_type === 'provider_rate_limited' ? 'cooldown' : 'failed';
+    }
+  }
+  const attempts = requestEvents.filter(e => e.kind === 'route_attempt');
+  $('#routeFlow').innerHTML = attempts.length ? attempts.slice(-10).map((e, i) => {
+    const st = stateByDeployment[e.deployment] || (i === attempts.length - 1 && !success ? 'active' : 'failed');
+    const d = byID[e.deployment] || {};
+    return `<div class="route-hop ${esc(st)}" title="${esc(e.deployment || '')}">
+      <strong>${esc(modelLabel(e.deployment))}</strong>
+      <small>${esc(d.provider_name || d.provider_id || e.deployment || '')}</small>
+      <em>${esc(st.replace(/_/g, ' '))}</em>
+    </div>`;
+  }).join('') : '<div class="obs-empty">No routed request yet.</div>';
+
+  const journey = requestEvents.filter(e => routeKinds.has(e.kind)).slice(-12);
+  $('#routeJourney').innerHTML = journey.length ? journey.map(e => {
+    const tm = e.time ? new Date(e.time).toLocaleTimeString('en-US', { hour12: false }) : '—';
+    const dep = e.deployment ? modelLabel(e.deployment) : (e.public_model || 'gateway');
+    return `<div class="journey-row">
+      <time>${esc(tm)}</time><span class="jkind">${esc(e.kind)}</span>
+      <span class="jdep" title="${esc(e.deployment || '')}">${esc(dep)}</span>
+      <span class="jerr">${esc(e.error_type || (e.latency_ms ? e.latency_ms + ' ms' : ''))}</span>
+    </div>`;
+  }).join('') : '<div class="obs-empty">Routing events will appear here.</div>';
+
+  const supervisorStates = new Set(['degraded', 'half_open', 'cooldown', 'retired']);
+  const supervisor = Object.values(h).filter(x => supervisorStates.has(x.status)).sort((a, b) => {
+    const rank = { retired: 0, cooldown: 1, half_open: 2, degraded: 3 };
+    return (rank[a.status] ?? 9) - (rank[b.status] ?? 9);
+  }).slice(0, 12);
+  $('#supervisorList').innerHTML = supervisor.length ? supervisor.map(x => {
+    const d = byID[x.deployment] || {};
+    let detail = x.last_error_class || (x.status === 'retired' ? 'model_retired' : x.status);
+    if (x.status === 'cooldown' && x.cooldown_until) {
+      const seconds = Math.max(0, Math.ceil((new Date(x.cooldown_until).getTime() - Date.now()) / 1000));
+      detail = seconds ? `retry in ${seconds}s` : 'ready for half-open';
+    } else if (x.recovery_failures) {
+      detail = `recovery ${x.recovery_failures}/${snap.config?.probe?.recovery_attempts || 5}`;
+    }
+    return `<div class="supervisor-item ${esc(x.status)}">
+      <strong title="${esc(x.deployment)}">${esc(d.model || x.deployment)}</strong><span class="sstate">${esc(x.status)}</span>
+      <small>${esc(d.provider_name || d.provider_id || '')}</small><small>${esc(detail)}</small>
+    </div>`;
+  }).join('') : '<div class="obs-empty">No recovery, cooldown or retirement work.</div>';
+
+  const failureCounts = {};
+  for (const e of all.slice(-100)) {
+    let key = e.error_type || '';
+    if (!key && (e.kind === 'model_retired' || e.kind === 'model_unavailable' || e.kind === 'candidate_exhausted')) key = e.kind;
+    if (!key) continue;
+    failureCounts[key] = (failureCounts[key] || 0) + 1;
+  }
+  const radar = Object.entries(failureCounts).sort((a, b) => b[1] - a[1]).slice(0, 9);
+  $('#failureRadar').innerHTML = radar.length ? radar.map(([k, n]) => `<span class="radar-chip">${esc(k)} <b>${fmtInt(n)}</b></span>`).join('') : '<div class="obs-empty">No recent failures.</div>';
+}
+
 /* ---------- console ---------- */
 const consoleKinds = {
-  routes: new Set(['route_ok', 'route_attempt', 'route_fail', 'route_skip', 'route_timeout', 'failover', 'client_disconnect', 'response_decode_fail', 'stream_fail', 'gateway_overloaded']),
-  errors: new Set(['route_fail', 'route_timeout', 'stream_fail', 'stream_fail_precommit', 'response_decode_fail', 'gateway_overloaded', 'internal_panic', 'client_disconnect', 'probe_fail', 'probe_quarantine', 'recovery_fail', 'recovery_queue_full']),
-  probes: new Set(['probe_ready', 'probe_fail', 'probe_quarantine', 'recovery_ready', 'recovery_fail', 'recovery_wait', 'recovery_deferred', 'recovery_cooldown', 'recovery_queue_full', 'stream_fail_precommit'])
+  routes: new Set(['route_ok', 'route_attempt', 'route_fail', 'route_skip', 'route_timeout', 'failover', 'model_unavailable', 'model_retired', 'candidate_exhausted', 'client_disconnect', 'response_decode_fail', 'stream_fail', 'gateway_overloaded']),
+  errors: new Set(['route_fail', 'route_timeout', 'model_unavailable', 'model_retired', 'candidate_exhausted', 'stream_fail', 'stream_fail_precommit', 'response_decode_fail', 'gateway_overloaded', 'internal_panic', 'client_disconnect', 'probe_fail', 'probe_quarantine', 'recovery_fail', 'recovery_queue_full']),
+  probes: new Set(['probe_ready', 'probe_fail', 'probe_quarantine', 'recovery_ready', 'recovery_fail', 'recovery_wait', 'recovery_deferred', 'recovery_cooldown', 'recovery_queue_full', 'model_unavailable', 'model_retired', 'stream_fail_precommit'])
 };
 function renderConsole() {
   const box = $('#consoleLog');

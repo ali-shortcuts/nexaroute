@@ -44,6 +44,11 @@ type StreamResult struct {
 // Outcome is one recorded model behavior. It is *evidence*, not a prompt: it is
 // produced outside the request path (operator harness, probe, or a previous
 // evaluation) and replayed deterministically here.
+//
+// Every field is bounded. Bounds matter here because the fields that survive a
+// run — ErrorType most of all — are copied into the case result, which is what
+// the store keeps, what the state file persists and what the admin surface
+// returns.
 type Outcome struct {
 	CaseID       string          `json:"case_id"`
 	Status       string          `json:"status"`
@@ -82,6 +87,9 @@ func (o Outcome) Validate() error {
 	}
 	if o.ToolCall != nil && (len(o.ToolCall.Name) > 256 || len(o.ToolCall.Arguments) > MaxOutputBytes) {
 		return fmt.Errorf("artifact %q tool call exceeds safe limit", o.CaseID)
+	}
+	if len(o.ErrorType) > MaxReasonBytes {
+		return fmt.Errorf("artifact %q error_type exceeds safe limit", o.CaseID)
 	}
 	if o.LatencyMS < 0 || o.TTFTMS < 0 {
 		return fmt.Errorf("artifact %q has negative timing", o.CaseID)
@@ -311,81 +319,83 @@ func (r *Runner) RunWithExecutor(ctx context.Context, req Request, exec Executor
 		if err := ctx.Err(); err != nil {
 			return Result{}, err
 		}
-		caseCtx := ctx
-		var cancel context.CancelFunc
-		if caseTimeout > 0 {
-			caseCtx, cancel = context.WithTimeout(ctx, caseTimeout)
-		}
-		outcome, err := exec.Execute(caseCtx, c)
-		if cancel != nil {
-			cancel()
-		}
-		cr := CaseResult{CaseID: c.ID, Weight: c.Weight}
-		if err != nil {
-			// Missing artifact and executor failures are recorded honestly: no
-			// verdict is invented, and nothing is scored.
-			cr.Verdict = VerdictMissing
-			cr.Resolution = "no-evidence"
-			switch {
-			case errors.Is(err, errNoArtifact):
-				cr.ErrorType = "missing_artifact"
-			case errors.Is(err, context.DeadlineExceeded):
+		// One closure per case keeps the per-case context scoped to the case. The
+		// context covers execution *and* grading, and it is cancelled only when
+		// both are finished: CaseTimeoutMS is the bound on one case, and a judge
+		// — the one evaluator this runner does not control — must not be able to
+		// outlive it.
+		cr := func() CaseResult {
+			caseCtx := ctx
+			if caseTimeout > 0 {
+				var cancel context.CancelFunc
+				caseCtx, cancel = context.WithTimeout(ctx, caseTimeout)
+				defer cancel()
+			}
+			outcome, err := exec.Execute(caseCtx, c)
+			cr := CaseResult{CaseID: c.ID, Weight: c.Weight}
+			if err != nil {
+				// Missing artifact and executor failures are recorded honestly: no
+				// verdict is invented, and nothing is scored.
+				cr.Verdict = VerdictMissing
+				cr.Resolution = "no-evidence"
+				switch {
+				case errors.Is(err, errNoArtifact):
+					cr.ErrorType = "missing_artifact"
+				case errors.Is(err, context.DeadlineExceeded):
+					cr.Verdict = VerdictError
+					cr.Resolution = "timeout"
+					cr.ErrorType = "case_timeout"
+				default:
+					cr.Verdict = VerdictError
+					cr.Resolution = "executor-error"
+					cr.ErrorType = "executor_error"
+				}
+				return cr
+			}
+			if err := outcome.Validate(); err != nil {
 				cr.Verdict = VerdictError
-				cr.Resolution = "timeout"
-				cr.ErrorType = "case_timeout"
-			default:
-				cr.Verdict = VerdictError
-				cr.Resolution = "executor-error"
-				cr.ErrorType = "executor_error"
+				cr.Resolution = "invalid-artifact"
+				cr.ErrorType = "invalid_artifact"
+				return cr
 			}
-			res.Counts[cr.Verdict]++
-			res.Cases = append(res.Cases, cr)
-			continue
-		}
-		if err := outcome.Validate(); err != nil {
-			cr.Verdict = VerdictError
-			cr.Resolution = "invalid-artifact"
-			cr.ErrorType = "invalid_artifact"
-			res.Counts[cr.Verdict]++
-			res.Cases = append(res.Cases, cr)
-			continue
-		}
-		if outcome.LatencyMS > 0 {
-			latencies = append(latencies, float64(outcome.LatencyMS))
-		}
-		if outcome.Status != "" {
-			statusSamples++
-			if outcome.Status == OutcomeOK {
-				okSamples++
+			if outcome.LatencyMS > 0 {
+				latencies = append(latencies, float64(outcome.LatencyMS))
 			}
-		}
-		var verdicts []VerdictResult
-		for _, e := range r.registry.Deterministic() {
-			if !e.Supports(c.Expectation.Kind) {
-				continue
+			if outcome.Status != "" {
+				statusSamples++
+				if outcome.Status == OutcomeOK {
+					okSamples++
+				}
 			}
-			if len(verdicts) >= MaxVerdictsPerCase {
-				break
+			var verdicts []VerdictResult
+			for _, e := range r.registry.Deterministic() {
+				if !e.Supports(c.Expectation.Kind) {
+					continue
+				}
+				if len(verdicts) >= MaxVerdictsPerCase {
+					break
+				}
+				verdicts = append(verdicts, e.Evaluate(caseCtx, c, outcome))
 			}
-			verdicts = append(verdicts, e.Evaluate(ctx, c, outcome))
-		}
-		for _, e := range r.registry.Judges() {
-			if len(verdicts) >= MaxVerdictsPerCase {
-				break
+			for _, e := range r.registry.Judges() {
+				if len(verdicts) >= MaxVerdictsPerCase {
+					break
+				}
+				vr := e.Evaluate(caseCtx, c, outcome)
+				if vr.Verdict != VerdictUnjudged {
+					res.JudgeUsed = true
+				}
+				verdicts = append(verdicts, vr)
 			}
-			vr := e.Evaluate(ctx, c, outcome)
-			if vr.Verdict != VerdictUnjudged {
-				res.JudgeUsed = true
-			}
-			verdicts = append(verdicts, vr)
-		}
-		verdict, resolution := Resolve(verdicts, req.JudgeEnabled)
-		cr.Verdict = verdict
-		cr.Resolution = resolution
-		cr.Verdicts = verdicts
-		cr.LatencyMS = outcome.LatencyMS
-		cr.ErrorType = outcome.ErrorType
-		res.Counts[verdict]++
+			verdict, resolution := Resolve(verdicts, req.JudgeEnabled)
+			cr.Verdict = verdict
+			cr.Resolution = resolution
+			cr.Verdicts = verdicts
+			cr.LatencyMS = outcome.LatencyMS
+			cr.ErrorType = outcome.ErrorType
+			return cr
+		}()
+		res.Counts[cr.Verdict]++
 		res.Cases = append(res.Cases, cr)
 	}
 

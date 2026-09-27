@@ -84,3 +84,71 @@ func TestTrackerUnknownDeploymentBucketed(t *testing.T) {
 		t.Fatalf("empty deployment id must map to unknown bucket: %+v", s.ByDeployment)
 	}
 }
+
+// TestTrackerSaturatesAbsurdTokenCounts is the overflow regression: an upstream
+// is untrusted input, and a hostile or broken provider can report token counts
+// that are nowhere near a real response (MaxInt64, or values that sum past
+// MaxInt64). Cumulative counters must never wrap to negative, and the global
+// totals must always equal the sum of the surviving per-deployment rows.
+func TestTrackerSaturatesAbsurdTokenCounts(t *testing.T) {
+	tr := New()
+	tr.Record("d1", 1<<62, 1<<62)
+	tr.Record("d1", 1<<62, 1<<62)
+	tr.Record("d1", 1<<62, 1<<62)
+	s := tr.Snapshot(nil)
+
+	if s.TotalPromptTokens < 0 || s.TotalCompletionTokens < 0 {
+		t.Fatalf("counters wrapped to negative: prompt=%d completion=%d", s.TotalPromptTokens, s.TotalCompletionTokens)
+	}
+	if s.TotalRequests != 3 {
+		t.Fatalf("requests = %d, want 3", s.TotalRequests)
+	}
+	if len(s.ByDeployment) != 1 {
+		t.Fatalf("expected one deployment row, got %d", len(s.ByDeployment))
+	}
+	row := s.ByDeployment[0]
+	if row.PromptTokens != s.TotalPromptTokens || row.CompletionTok != s.TotalCompletionTokens {
+		t.Fatalf("global totals diverge from the rows: row=%+v totals=(%d,%d)", row, s.TotalPromptTokens, s.TotalCompletionTokens)
+	}
+	// Every recorded response is clamped to one record ceiling before it is
+	// accumulated, so three absurd records are exactly three ceilings.
+	if want := int64(3) * maxTokensPerRecord; row.PromptTokens != want || row.CompletionTok != want {
+		t.Fatalf("tokens = (%d,%d), want (%d,%d)", row.PromptTokens, row.CompletionTok, want, want)
+	}
+}
+
+// TestTrackerMaxInt64DoesNotWrap pins the pathological input: the largest token
+// count a JSON number can carry, recorded repeatedly.
+func TestTrackerMaxInt64DoesNotWrap(t *testing.T) {
+	tr := New()
+	for i := 0; i < 4; i++ {
+		tr.Record("d1", 1<<63-1, 1<<63-1)
+	}
+	s := tr.Snapshot(nil)
+	if s.TotalPromptTokens < 0 || s.TotalCompletionTokens < 0 {
+		t.Fatalf("MaxInt64 records wrapped the counters: %+v", s)
+	}
+	if s.TotalRequests != 4 {
+		t.Fatalf("requests = %d, want 4", s.TotalRequests)
+	}
+}
+
+// TestTrackerRetainKeepsTotalsConsistentAfterOverflow guards the second half of
+// the invariant: Retain rebalances the global counters, so dropping a deployment
+// whose row was clamped must not produce negative or divergent totals.
+func TestTrackerRetainKeepsTotalsConsistentAfterOverflow(t *testing.T) {
+	tr := New()
+	tr.Record("keep", 1<<62, 1<<62)
+	tr.Record("drop", 1<<62, 1<<62)
+	tr.Retain(map[string]struct{}{"keep": {}})
+	s := tr.Snapshot(nil)
+	if s.TotalPromptTokens < 0 || s.TotalCompletionTokens < 0 {
+		t.Fatalf("retain produced negative totals: %+v", s)
+	}
+	if len(s.ByDeployment) != 1 {
+		t.Fatalf("retain left %d rows", len(s.ByDeployment))
+	}
+	if s.ByDeployment[0].PromptTokens != s.TotalPromptTokens {
+		t.Fatalf("totals diverge from rows after retain: %+v", s)
+	}
+}

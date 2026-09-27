@@ -43,6 +43,16 @@ Before exposing the UI/admin API beyond a trusted local machine:
 
 The administrator can configure arbitrary HTTP(S) provider/proxy URLs. This is powerful and also means an authorized admin could intentionally point NexaRoute at internal services. A strict SSRF allow/deny policy is not yet built in, so do not give admin access to untrusted users.
 
+## Remote decision transport (SSRF hardening)
+
+The outbound remote-decision HTTP client (`internal/decision/remote`) is hardened against SSRF:
+
+- every connection is made only to an IP address that was resolved and approved once per connection attempt (DNS pinning). The original hostname is never re-resolved at dial time, which closes the DNS-rebinding/TOCTOU window. TLS SNI and certificate verification still use the original hostname, and HTTP Host semantics are unchanged;
+- loopback (v4/v6), `localhost`/`*.localhost`, RFC1918, IPv6 unique-local, link-local (including `169.254.169.254` and cloud metadata endpoints such as `metadata.google.internal`), multicast, unspecified, reserved/CGNAT ranges and degenerate numeric "IP" spellings are rejected, before DNS and again for every resolved address. Mixed public/private DNS answers are rejected as a whole;
+- redirects are validated on every destination and are never followed, so Authorization credentials cannot leak across targets and redirect chains cannot walk toward internal services;
+- environment proxy variables (`HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`) are deliberately **not** honored by this client. With an implicit proxy, NexaRoute would only validate the connection to the proxy while the proxy itself could reach blocked targets, silently voiding the SSRF guarantee. Traverse proxies via an egress gateway with its own enforced policy instead of re-enabling `http.ProxyFromEnvironment`;
+- TLS verification cannot be disabled (no `InsecureSkipVerify`), the minimum version is TLS 1.2, and response bodies are size-bounded.
+
 Do not insert unrelated browser-session tokens into provider configuration unless the target service explicitly supports that use and you accept the account/security implications.
 
 ## Log retention and sensitive output

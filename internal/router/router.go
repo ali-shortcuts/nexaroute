@@ -264,6 +264,11 @@ func (r *Router) eligibleDeployment(d Deployment, req Requirement, cfg config.Co
 		healthScopes = scopes
 	}
 	hs, scopesReady := r.health.GetWithScopes(d.ID, healthScopes)
+	// Retired/EOL deployments are permanently ineligible until their deployment
+	// identity is invalidated by a config/model change.
+	if hs.Status == health.Retired {
+		return Scored{}, false
+	}
 	if IsReadyStrategy(cfg.Routing.Strategy) {
 		if hs.Status != health.Healthy {
 			return Scored{}, false

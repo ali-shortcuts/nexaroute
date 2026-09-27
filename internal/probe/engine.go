@@ -35,6 +35,7 @@ type Result struct {
 	SkippedMissing  int   `json:"skipped_missing_adapter"`
 	SkippedRecovery int   `json:"skipped_recovery"`
 	SkippedReady    int   `json:"skipped_ready"`
+	SkippedRetired  int   `json:"skipped_retired,omitempty"`
 	Canceled        int   `json:"canceled,omitempty"`
 	DurationMS      int64 `json:"duration_ms"`
 }
@@ -244,6 +245,9 @@ func (e *Engine) Recover(id string) {
 	if id == "" {
 		return
 	}
+	if e.hm.Get(id).Status == health.Retired {
+		return
+	}
 	ctx := e.context()
 	if ctx == nil || ctx.Err() != nil {
 		return
@@ -405,6 +409,10 @@ func (e *Engine) processRecoveryTask(ctx context.Context, task recoveryTask) {
 	}
 
 	st := e.hm.Get(task.id)
+	if st.Status == health.Retired {
+		e.clearRecoveryTask(task)
+		return
+	}
 	if st.Status == health.Healthy {
 		e.clearRecoveryTask(task)
 		return
@@ -644,6 +652,8 @@ func (e *Engine) runOnce(ctx context.Context, force bool) Result {
 			return 3
 		case health.Cooldown:
 			return 4
+		case health.Retired:
+			return 5
 		default:
 			return 3
 		}
@@ -668,6 +678,10 @@ func (e *Engine) runOnce(ctx context.Context, force bool) Result {
 	failedIDs := make([]string, 0)
 	for idx, job := range jobs {
 		d := job.d
+		if job.state.Status == health.Retired {
+			result.SkippedRetired++
+			continue
+		}
 		if !force && readySupervisor {
 			switch job.state.Status {
 			case health.Healthy:

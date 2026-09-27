@@ -14,30 +14,34 @@ import (
 type ErrorClass string
 
 const (
-	ClassAuthError            ErrorClass = "auth_error"
-	ClassInvalidKey           ErrorClass = "invalid_key"
-	ClassQuotaExhausted       ErrorClass = "quota_exhausted"
-	ClassRateLimit            ErrorClass = "rate_limit"
-	ClassModelNotFound        ErrorClass = "model_not_found"
-	ClassEndpointNotFound     ErrorClass = "endpoint_not_found"
-	ClassUnsupportedParameter ErrorClass = "unsupported_parameter"
-	ClassUnsupportedTools     ErrorClass = "unsupported_tool_calling"
-	ClassUnsupportedReasoning ErrorClass = "unsupported_reasoning"
-	ClassUnsupportedVision    ErrorClass = "unsupported_vision"
-	ClassContextOverflow      ErrorClass = "context_overflow"
-	ClassInvalidRequestSchema ErrorClass = "invalid_request_schema"
-	ClassUpstreamOverload     ErrorClass = "upstream_overload"
-	ClassUpstreamInternal     ErrorClass = "upstream_internal_error"
-	ClassTimeout              ErrorClass = "timeout"
-	ClassNetworkError         ErrorClass = "network_error"
-	ClassStreamProtocolError  ErrorClass = "stream_protocol_error"
-	ClassMalformedResponse    ErrorClass = "malformed_response"
-	ClassUnknown              ErrorClass = "unknown"
+	ClassAuthError                   ErrorClass = "auth_error"
+	ClassInvalidKey                  ErrorClass = "invalid_key"
+	ClassQuotaExhausted              ErrorClass = "quota_exhausted"
+	ClassRateLimit                   ErrorClass = "rate_limit"
+	ClassModelRetired                ErrorClass = "model_retired"
+	ClassModelTemporarilyUnavailable ErrorClass = "model_temporarily_unavailable"
+	ClassModelNotFound               ErrorClass = "model_not_found"
+	ClassEndpointNotFound            ErrorClass = "endpoint_not_found"
+	ClassUnsupportedParameter        ErrorClass = "unsupported_parameter"
+	ClassUnsupportedTools            ErrorClass = "unsupported_tool_calling"
+	ClassUnsupportedReasoning        ErrorClass = "unsupported_reasoning"
+	ClassUnsupportedVision           ErrorClass = "unsupported_vision"
+	ClassContextOverflow             ErrorClass = "context_overflow"
+	ClassInvalidRequestSchema        ErrorClass = "invalid_request_schema"
+	ClassUpstreamOverload            ErrorClass = "upstream_overload"
+	ClassUpstreamInternal            ErrorClass = "upstream_internal_error"
+	ClassTimeout                     ErrorClass = "timeout"
+	ClassNetworkError                ErrorClass = "network_error"
+	ClassStreamProtocolError         ErrorClass = "stream_protocol_error"
+	ClassMalformedResponse           ErrorClass = "malformed_response"
+	ClassUnknown                     ErrorClass = "unknown"
 )
 
 // Classified is the verdict of the error classifier.
 type Classified struct {
 	Class ErrorClass `json:"class"`
+	Code  string     `json:"provider_code,omitempty"`
+	Type  string     `json:"provider_type,omitempty"`
 	// Parameter names the offending request field for parameter-family
 	// classes (e.g. "temperature", "reasoning_effort", "stream_options").
 	Parameter string `json:"parameter,omitempty"`
@@ -137,11 +141,89 @@ var classPatterns = []struct {
 	{regexp.MustCompile(`(?i)(not found|does not exist|unknown url|invalid url|no such endpoint|404)`), ClassEndpointNotFound, ""},
 }
 
+var modelRetiredPattern = regexp.MustCompile(`(?i)(reached (?:its )?end of life|end[ -]of[ -](?:life|support)|\beol\b|retired|decommissioned|discontinued|sunset|withdrawn|no longer available|permanently unavailable)`)
+var modelUnavailablePattern = regexp.MustCompile(`(?i)(model.{0,80}(?:currently|temporarily) unavailable|(?:currently|temporarily) unavailable.{0,80}model|model is unavailable)`)
+
+func providerErrorFields(body []byte) (code, typ, msg string) {
+	if len(body) == 0 {
+		return "", "", ""
+	}
+	var root struct {
+		Code    string          `json:"code"`
+		Type    string          `json:"type"`
+		Message string          `json:"message"`
+		Detail  string          `json:"detail"`
+		Title   string          `json:"title"`
+		Error   json.RawMessage `json:"error"`
+	}
+	if err := json.Unmarshal(body, &root); err != nil {
+		return "", "", string(body)
+	}
+	code, typ, msg = root.Code, root.Type, root.Message
+	if msg == "" {
+		msg = root.Detail
+	}
+	if msg == "" && root.Title != "" && !strings.EqualFold(root.Title, "gone") {
+		msg = root.Title
+	}
+	if len(root.Error) > 0 && string(root.Error) != "null" {
+		var nested struct {
+			Code    string `json:"code"`
+			Type    string `json:"type"`
+			Message string `json:"message"`
+		}
+		if json.Unmarshal(root.Error, &nested) == nil {
+			if nested.Code != "" {
+				code = nested.Code
+			}
+			if nested.Type != "" {
+				typ = nested.Type
+			}
+			if nested.Message != "" {
+				msg = nested.Message
+			}
+		} else {
+			var plain string
+			if json.Unmarshal(root.Error, &plain) == nil && plain != "" {
+				msg = plain
+			}
+		}
+	}
+	if msg == "" {
+		msg = string(body)
+	}
+	return strings.ToLower(strings.TrimSpace(code)), strings.ToLower(strings.TrimSpace(typ)), strings.TrimSpace(msg)
+}
+
+func providerModelClass(status int, code, typ, msg string) (ErrorClass, bool) {
+	text := strings.ToLower(strings.TrimSpace(code + " " + typ + " " + msg))
+	if strings.Contains(code, "model_eol") || strings.Contains(code, "model_retired") ||
+		strings.Contains(code, "model_decommissioned") || strings.Contains(typ, "model_retired") ||
+		(modelMentioned(text) && modelRetiredPattern.MatchString(text)) {
+		return ClassModelRetired, true
+	}
+	if strings.Contains(code, "model_unavailable") || strings.Contains(code, "model_temporarily_unavailable") ||
+		strings.Contains(typ, "model_unavailable") || (modelMentioned(text) && modelUnavailablePattern.MatchString(text)) {
+		return ClassModelTemporarilyUnavailable, true
+	}
+	if status == http.StatusGone && modelMentioned(text) && modelRetiredPattern.MatchString(text) {
+		return ClassModelRetired, true
+	}
+	return "", false
+}
+
 // ClassifyUpstreamError maps an upstream HTTP failure onto the taxonomy.
 // body may be nil (transport errors use status 0 conventions separately).
 func ClassifyUpstreamError(status int, body []byte) Classified {
-	msg := messageFromBody(body)
-	c := Classified{StatusCode: status, Message: truncateMessage(msg)}
+	code, typ, msg := providerErrorFields(body)
+	c := Classified{StatusCode: status, Message: truncateMessage(msg), Code: truncateMessage(code), Type: truncateMessage(typ)}
+	if class, ok := providerModelClass(status, code, typ, msg); ok {
+		c.Class = class
+		if class == ClassModelTemporarilyUnavailable {
+			c.RetryableSamePayload = true
+		}
+		return c
+	}
 	switch status {
 	case http.StatusUnauthorized:
 		c.Class = ClassAuthError
@@ -180,6 +262,9 @@ func ClassifyUpstreamError(status int, body []byte) Classified {
 		} else {
 			c.Class = ClassEndpointNotFound
 		}
+		return c
+	case http.StatusGone:
+		c.Class = ClassEndpointNotFound
 		return c
 	}
 	if status == http.StatusBadRequest || status == http.StatusUnprocessableEntity {
@@ -436,6 +521,10 @@ func (c Classified) Policy() PolicyFromError {
 		return PolicyFromError{ErrorType: "provider_billing", Failover: true, QuarantineDeployment: true, SignalProvider: true, HardCooldown: true}
 	case ClassRateLimit:
 		return PolicyFromError{ErrorType: "provider_rate_limited", Failover: true, QuarantineDeployment: true, SignalProvider: true, HardCooldown: true}
+	case ClassModelRetired:
+		return PolicyFromError{ErrorType: "model_retired", Failover: true, QuarantineDeployment: false}
+	case ClassModelTemporarilyUnavailable:
+		return PolicyFromError{ErrorType: "model_temporarily_unavailable", Failover: true, QuarantineDeployment: true}
 	case ClassModelNotFound:
 		return PolicyFromError{ErrorType: "provider_model_not_found", Failover: true, QuarantineDeployment: true}
 	case ClassEndpointNotFound:
