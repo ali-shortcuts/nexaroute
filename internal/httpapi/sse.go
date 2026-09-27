@@ -2,9 +2,12 @@ package httpapi
 
 import (
 	"bufio"
+	"fmt"
 	"io"
 	"strings"
 )
+
+const maxSSEEventBytes = 8 << 20
 
 // sseEvent is one decoded Server-Sent Event frame.
 type sseEvent struct {
@@ -19,11 +22,12 @@ type sseEvent struct {
 // Naive line-by-line "data:" scanning drops multi-line payloads, which real
 // providers and proxy layers occasionally emit.
 type sseReader struct {
-	sc     *bufio.Scanner
-	event  string
-	data   strings.Builder
-	hasAny bool
-	sawCR  bool
+	sc         *bufio.Scanner
+	event      string
+	data       strings.Builder
+	eventBytes int
+	hasAny     bool
+	sawCR      bool
 }
 
 func newSSEReader(r io.Reader) *sseReader {
@@ -45,6 +49,7 @@ func (s *sseReader) Next() (ev sseEvent, done bool, err error) {
 			ev := sseEvent{name: s.event, data: s.data.String()}
 			s.event = ""
 			s.data.Reset()
+			s.eventBytes = 0
 			s.hasAny = false
 			return ev, false, nil
 		case strings.HasPrefix(line, ":"):
@@ -57,13 +62,25 @@ func (s *sseReader) Next() (ev sseEvent, done bool, err error) {
 			value = strings.TrimPrefix(value, " ")
 			switch field {
 			case "event":
+				if s.eventBytes+len(value) > maxSSEEventBytes {
+					return sseEvent{}, false, fmt.Errorf("SSE event exceeds %d bytes", maxSSEEventBytes)
+				}
 				s.event = value
+				s.eventBytes += len(value)
 				s.hasAny = true
 			case "data":
+				add := len(value)
+				if s.data.Len() > 0 {
+					add++
+				}
+				if s.eventBytes+add > maxSSEEventBytes {
+					return sseEvent{}, false, fmt.Errorf("SSE event exceeds %d bytes", maxSSEEventBytes)
+				}
 				if s.data.Len() > 0 {
 					s.data.WriteByte('\n')
 				}
 				s.data.WriteString(value)
+				s.eventBytes += add
 				s.hasAny = true
 			}
 		}
@@ -76,6 +93,7 @@ func (s *sseReader) Next() (ev sseEvent, done bool, err error) {
 		ev := sseEvent{name: s.event, data: s.data.String()}
 		s.event = ""
 		s.data.Reset()
+		s.eventBytes = 0
 		s.hasAny = false
 		return ev, false, nil
 	}

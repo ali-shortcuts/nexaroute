@@ -508,7 +508,9 @@ func (c *Config) ApplyEnvOverrides() error {
 	if v, ok := os.LookupEnv("NEXAROUTE_ADMIN_KEY"); ok {
 		// An empty value (e.g. Environment=NEXAROUTE_ADMIN_KEY= in a systemd
 		// unit) must not silently disable key auth over a file-provided key.
-		c.Admin.APIKey = strings.TrimSpace(v)
+		if v = strings.TrimSpace(v); v != "" {
+			c.Admin.APIKey = v
+		}
 	}
 	if v, ok := os.LookupEnv("NEXAROUTE_ADMIN_BIND_LOCAL_ONLY"); ok {
 		b, err := strconv.ParseBool(strings.TrimSpace(v))
@@ -1740,16 +1742,30 @@ func (c Config) RetryBackoff() time.Duration {
 }
 
 func RemoveStaleBackup(path string) error {
-	err := os.Remove(path + ".bak")
-	if err == nil || os.IsNotExist(err) {
-		return nil
-	}
-	return fmt.Errorf("remove stale config backup: %w", err)
+	// Never delete an operator-created backup based only on its filename.
+	return nil
 }
 
 func SaveAtomic(path string, c Config) error {
-	if err := RemoveStaleBackup(path); err != nil {
-		return err
+	// Load the raw on-disk document only to preserve fields controlled by the
+	// process environment. The effective runtime config must never turn a
+	// temporary environment override into durable configuration.
+	if raw, err := os.ReadFile(path); err == nil {
+		var base Config
+		if json.Unmarshal(raw, &base) == nil {
+			if strings.TrimSpace(os.Getenv("NEXAROUTE_LISTEN")) != "" {
+				c.Listen = base.Listen
+			}
+			if _, ok := os.LookupEnv("NEXAROUTE_ADMIN_KEY"); ok {
+				c.Admin.APIKey = base.Admin.APIKey
+			}
+			if _, ok := os.LookupEnv("NEXAROUTE_ADMIN_BIND_LOCAL_ONLY"); ok {
+				c.Admin.BindLocalOnly = base.Admin.BindLocalOnly
+			}
+			if _, ok := os.LookupEnv("NEXAROUTE_LOG_FILE"); ok {
+				c.Logging.File = base.Logging.File
+			}
+		}
 	}
 	c.ApplyDefaults()
 	if err := c.Validate(); err != nil {

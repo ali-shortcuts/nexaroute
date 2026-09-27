@@ -25,7 +25,7 @@ Saved provider credentials are write-only: the provider editor/API never returns
 
 ## Client-facing authentication boundary
 
-NexaRoute does **not** provide a separate built-in authentication policy for the client-facing `/v1/*` data plane. Provider credentials are never treated as client credentials. If the listener is reachable from an untrusted network, put the client-facing routes behind a trusted reverse proxy/API gateway, firewall, VPN, or equivalent access-control layer.
+NexaRoute provides optional static-key client authentication and per-key RPM limits when `client_auth.enabled=true`; this is defense in depth, not a replacement for TLS, a reverse proxy/API gateway, network policy, identity/RBAC, firewall, or VPN. Provider credentials are never treated as client credentials. If the listener is reachable from an untrusted network, use those controls together.
 
 The Admin API is a separate boundary: it remains loopback-only by default or requires the configured Admin key when remote administration is intentionally enabled.
 

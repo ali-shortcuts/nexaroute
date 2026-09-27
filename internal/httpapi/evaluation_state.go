@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ali-shortcuts/nexaroute/internal/eval"
@@ -27,6 +28,8 @@ type evaluationState struct {
 	Runs       []eval.Result          `json:"runs"`
 	Scorecards []scorecards.Scorecard `json:"scorecards,omitempty"`
 }
+
+var evaluationPersistMu sync.Mutex
 
 // loadState reads the configured state file into the plane. A malformed state
 // file is reported and rejected as a whole: partially trusted evidence is worse
@@ -103,6 +106,8 @@ func (p *evaluationPlane) loadState(path string) error {
 // fsync, rename, 0600). It never panics and never returns an error that a caller
 // must act on: a run is valid whether or not it could be written to disk.
 func (p *evaluationPlane) persist() error {
+	evaluationPersistMu.Lock()
+	defer evaluationPersistMu.Unlock()
 	cfg := p.config()
 	path := strings.TrimSpace(cfg.StatePath)
 	if path == "" {

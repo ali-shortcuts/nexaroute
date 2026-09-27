@@ -188,7 +188,7 @@ main
 
 ## KNOWN LIMITATIONS
 
-1. **Linux-only installer** (amd64/arm64). macOS/Windows users must build from source or use the Docker image.
+1. **Linux-only runtime/installer** (amd64/arm64). The desktop process lock currently requires Linux; macOS/Windows source builds are not supported as a runtime claim until platform-specific locking is implemented.
 2. **Plaintext configuration at rest** — config dir `0700`, config file `0600`; no OS keyring or encrypted vault.
 3. **Single-process runtime** — health, breaker, affinity, quota and scorecard state are in-memory; no distributed/multi-node coordination.
 4. **No built-in TLS** — use a reverse proxy for any non-loopback exposure.

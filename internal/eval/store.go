@@ -1,9 +1,22 @@
 package eval
 
 import (
+	"encoding/json"
 	"sort"
 	"sync"
 )
+
+func cloneResult(in Result) Result {
+	b, err := json.Marshal(in)
+	if err != nil {
+		return Result{}
+	}
+	var out Result
+	if json.Unmarshal(b, &out) != nil {
+		return Result{}
+	}
+	return out
+}
 
 // Store bounds for stored evaluation runs.
 const (
@@ -46,7 +59,7 @@ func (s *Store) Save(run Result) error {
 			}
 		}
 	}
-	s.byID[run.RunID] = run
+	s.byID[run.RunID] = cloneResult(run)
 	s.order = append(s.order, run.RunID)
 	if len(s.order) > s.maxRuns {
 		drop := s.order[:len(s.order)-s.maxRuns]
@@ -63,7 +76,7 @@ func (s *Store) Save(run Result) error {
 func (s *Store) snapshotLocked() []Result {
 	out := make([]Result, 0, len(s.order))
 	for _, id := range s.order {
-		out = append(out, s.byID[id])
+		out = append(out, cloneResult(s.byID[id]))
 	}
 	return out
 }
@@ -77,7 +90,7 @@ func (s *Store) Recent(limit int) []Result {
 	}
 	out := make([]Result, 0, limit)
 	for i := len(s.order) - 1; i >= 0 && len(out) < limit; i-- {
-		out = append(out, s.byID[s.order[i]])
+		out = append(out, cloneResult(s.byID[s.order[i]]))
 	}
 	return out
 }
@@ -94,7 +107,7 @@ func (s *Store) Get(runID string) (Result, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	run, ok := s.byID[runID]
-	return run, ok
+	return cloneResult(run), ok
 }
 
 // Len returns the number of stored runs.

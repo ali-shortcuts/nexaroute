@@ -52,6 +52,7 @@ type SSEReader struct {
 	done       bool
 	eventName  string
 	dataBuffer []string
+	eventBytes int
 }
 
 // NewSSEReader wraps an upstream body.
@@ -72,6 +73,7 @@ func (sr *SSEReader) Next() (name, data string, done bool, err error) {
 			if len(sr.dataBuffer) > 0 {
 				payload := strings.Join(sr.dataBuffer, "\n")
 				sr.dataBuffer = sr.dataBuffer[:0]
+				sr.eventBytes = 0
 				evName := sr.eventName
 				sr.eventName = ""
 				return evName, payload, false, nil

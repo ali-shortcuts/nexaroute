@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestSaveAtomicModeAndNoBackup(t *testing.T) {
+func TestSaveAtomicModeAndPreservesUserBackup(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
 	cfg := Default()
@@ -29,8 +29,8 @@ func TestSaveAtomicModeAndNoBackup(t *testing.T) {
 	if err := SaveAtomic(path, cfg); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(path + ".bak"); !os.IsNotExist(err) {
-		t.Fatalf("backup file must not be created; stat err=%v", err)
+	if _, err := os.Stat(path + ".bak"); err != nil {
+		t.Fatalf("user backup was removed: %v", err)
 	}
 	leftovers, err := filepath.Glob(filepath.Join(dir, ".config.json.tmp-*"))
 	if err != nil {

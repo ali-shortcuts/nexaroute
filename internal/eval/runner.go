@@ -251,6 +251,30 @@ func (r Result) Validate() error {
 	if !finite01(r.Score) {
 		return errors.New("evaluation score must be finite and between 0 and 1")
 	}
+	if len(r.Reason) > MaxReasonBytes || len(r.Cases) > MaxOutcomesPerRun {
+		return errors.New("evaluation result metadata exceeds safe limit")
+	}
+	for _, c := range r.Cases {
+		if strings.TrimSpace(c.CaseID) == "" || len(c.CaseID) > 256 || len(c.ErrorType) > MaxReasonBytes || len(c.Verdicts) > MaxVerdictsPerCase {
+			return errors.New("evaluation case exceeds safe limit")
+		}
+		if c.Weight < 0 || math.IsNaN(c.Weight) || math.IsInf(c.Weight, 0) {
+			return errors.New("evaluation case weight is invalid")
+		}
+		for _, v := range c.Verdicts {
+			if len(v.EvaluatorID) > 256 || len(v.Reason) > MaxReasonBytes || !v.Verdict.Valid() {
+				return errors.New("evaluation verdict is invalid")
+			}
+		}
+	}
+	if r.Quality != nil && (!finite01(r.Quality.Score) || !finite01(r.Quality.Confidence) || r.Quality.Samples < 0) {
+		return errors.New("evaluation quality dimension is invalid")
+	}
+	for _, d := range r.Extra {
+		if !finite01(d.Score) || !finite01(d.Confidence) || d.Samples < 0 {
+			return errors.New("evaluation dimension is invalid")
+		}
+	}
 	return nil
 }
 
@@ -341,6 +365,8 @@ func (r *Runner) RunWithExecutor(ctx context.Context, req Request, exec Executor
 				switch {
 				case errors.Is(err, errNoArtifact):
 					cr.ErrorType = "missing_artifact"
+				case strings.Contains(err.Error(), "missing prompt"):
+					cr.ErrorType = "missing_prompt"
 				case errors.Is(err, context.DeadlineExceeded):
 					cr.Verdict = VerdictError
 					cr.Resolution = "timeout"
@@ -377,15 +403,17 @@ func (r *Runner) RunWithExecutor(ctx context.Context, req Request, exec Executor
 				}
 				verdicts = append(verdicts, e.Evaluate(caseCtx, c, outcome))
 			}
-			for _, e := range r.registry.Judges() {
-				if len(verdicts) >= MaxVerdictsPerCase {
-					break
+			if req.JudgeEnabled {
+				for _, e := range r.registry.Judges() {
+					if len(verdicts) >= MaxVerdictsPerCase {
+						break
+					}
+					vr := e.Evaluate(caseCtx, c, outcome)
+					if vr.Verdict != VerdictUnjudged {
+						res.JudgeUsed = true
+					}
+					verdicts = append(verdicts, vr)
 				}
-				vr := e.Evaluate(caseCtx, c, outcome)
-				if vr.Verdict != VerdictUnjudged {
-					res.JudgeUsed = true
-				}
-				verdicts = append(verdicts, vr)
 			}
 			verdict, resolution := Resolve(verdicts, req.JudgeEnabled)
 			cr.Verdict = verdict

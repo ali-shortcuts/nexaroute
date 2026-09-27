@@ -189,10 +189,8 @@ func main() {
 		}
 	}()
 	if cfg.Probe.Enabled && cfg.Probe.OnStart {
-		go func() {
-			result := pe.Prime(ctx)
-			logger.Printf("startup_probe total=%d ready=%d failed=%d cooldown=%d duration_ms=%d", result.Total, result.Passed, result.Failed, result.SkippedCooldown, result.DurationMS)
-		}()
+		result := pe.Prime(ctx)
+		logger.Printf("startup_probe total=%d ready=%d failed=%d cooldown=%d duration_ms=%d", result.Total, result.Passed, result.Failed, result.SkippedCooldown, result.DurationMS)
 	}
 	pe.Start(ctx)
 	<-ctx.Done()

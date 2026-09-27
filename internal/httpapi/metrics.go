@@ -337,9 +337,7 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 	// Simpler: emit aggregated step totals without provider_type dimension (or with type="jev" placeholder) to keep bounded
 	for _, o := range stepOutcomes {
 		if v, ok := decisionMetrics[o.key]; ok && v > 0 {
-			fmt.Fprintf(w, "nexaroute_decision_chain_steps_total{provider_type=\"jev\",outcome=%q} %d\n", o.outcome, v)
-			fmt.Fprintf(w, "nexaroute_decision_chain_steps_total{provider_type=\"policy\",outcome=%q} %d\n", o.outcome, v)
-			fmt.Fprintf(w, "nexaroute_decision_chain_steps_total{provider_type=\"local\",outcome=%q} %d\n", o.outcome, v)
+			fmt.Fprintf(w, "nexaroute_decision_chain_steps_total{provider_type=\"all\",outcome=%q} %d\n", o.outcome, v)
 		}
 	}
 

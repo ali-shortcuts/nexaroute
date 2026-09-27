@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/ali-shortcuts/nexaroute/internal/core"
@@ -561,14 +562,20 @@ func EncodeOpenAIChatResponse(in Response, requestedModel string) core.OpenAIRes
 	}
 }
 
-var messageClockNanos = time.Now().UnixNano()
+var messageClockNanos atomic.Int64
+
+func init() { messageClockNanos.Store(time.Now().UnixNano()) }
 
 // messageClock yields compact monotonic ids for stream/message identifiers.
 func messageClock() int64 {
 	n := time.Now().UnixNano()
-	if n <= messageClockNanos {
-		n = messageClockNanos + 1
+	for {
+		last := messageClockNanos.Load()
+		if n <= last {
+			n = last + 1
+		}
+		if messageClockNanos.CompareAndSwap(last, n) {
+			return n
+		}
 	}
-	messageClockNanos = n
-	return n / 1000000
 }
