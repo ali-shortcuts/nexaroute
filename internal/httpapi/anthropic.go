@@ -871,11 +871,17 @@ func rewriteAnthropicSSEModelLine(line []byte, model string) []byte {
 	return bytes.Join([][]byte{leading, []byte("data: "), encoded, ending}, nil)
 }
 
+const (
+	maxTranslatedStreamTools     = 128
+	maxTranslatedToolIndex       = 4096
+	maxTranslatedToolNameBytes   = 1024
+	maxTranslatedArgsDeltaBytes  = 1 << 20
+)
+
 type openAIToolStreamState struct {
 	anthIndex int
 	id, name  string
 	started   bool
-	pending   strings.Builder
 }
 
 // streamOpenAIToAnthropic translates an OpenAI Chat Completions SSE stream
@@ -954,10 +960,6 @@ func streamOpenAIToAnthropicWithUsage(w http.ResponseWriter, resp *http.Response
 			st.id = fmt.Sprintf("tool_%d", st.anthIndex)
 		}
 		emit("content_block_start", map[string]any{"type": "content_block_start", "index": st.anthIndex, "content_block": map[string]any{"type": "tool_use", "id": st.id, "name": nm.Reverse(st.name), "input": map[string]any{}}})
-		if st.pending.Len() > 0 {
-			emit("content_block_delta", map[string]any{"type": "content_block_delta", "index": st.anthIndex, "delta": map[string]any{"type": "input_json_delta", "partial_json": st.pending.String()}})
-			st.pending.Reset()
-		}
 	}
 	emitText := func(txt string) {
 		startText()
@@ -1045,8 +1047,18 @@ func streamOpenAIToAnthropicWithUsage(w http.ResponseWriter, resp *http.Response
 			}
 		}
 		for _, tc := range ch.Delta.ToolCalls {
+			if tc.Index < 0 || tc.Index > maxTranslatedToolIndex {
+				err := fmt.Errorf("upstream stream tool index exceeds safe limit")
+				emit("error", map[string]any{"type": "error", "error": map[string]any{"type": "api_error", "message": err.Error()}})
+				return err
+			}
 			st := tools[tc.Index]
 			if st == nil {
+				if len(tools) >= maxTranslatedStreamTools {
+					err := fmt.Errorf("upstream stream exceeds safe tool count %d", maxTranslatedStreamTools)
+					emit("error", map[string]any{"type": "error", "error": map[string]any{"type": "api_error", "message": err.Error()}})
+					return err
+				}
 				st = &openAIToolStreamState{anthIndex: -1}
 				tools[tc.Index] = st
 			}
@@ -1054,16 +1066,29 @@ func streamOpenAIToAnthropicWithUsage(w http.ResponseWriter, resp *http.Response
 				st.id = tc.ID
 			}
 			if tc.Function.Name != "" {
+				if len(st.name)+len(tc.Function.Name) > maxTranslatedToolNameBytes {
+					err := fmt.Errorf("upstream stream tool name exceeds safe limit")
+					emit("error", map[string]any{"type": "error", "error": map[string]any{"type": "api_error", "message": err.Error()}})
+					return err
+				}
 				st.name += tc.Function.Name
 			}
-			if tc.Function.Arguments != "" {
-				if st.started {
-					emit("content_block_delta", map[string]any{"type": "content_block_delta", "index": st.anthIndex, "delta": map[string]any{"type": "input_json_delta", "partial_json": tc.Function.Arguments}})
-				} else {
-					st.pending.WriteString(tc.Function.Arguments)
-				}
-			}
+			// Start as soon as a valid name is known. We deliberately never buffer
+			// arguments waiting for metadata: that was an unbounded memory sink.
 			startTool(st)
+			if tc.Function.Arguments != "" {
+				if len(tc.Function.Arguments) > maxTranslatedArgsDeltaBytes {
+					err := fmt.Errorf("upstream stream tool argument delta exceeds safe limit")
+					emit("error", map[string]any{"type": "error", "error": map[string]any{"type": "api_error", "message": err.Error()}})
+					return err
+				}
+				if !st.started {
+					err := fmt.Errorf("upstream stream tool arguments arrived before tool name")
+					emit("error", map[string]any{"type": "error", "error": map[string]any{"type": "api_error", "message": err.Error()}})
+					return err
+				}
+				emit("content_block_delta", map[string]any{"type": "content_block_delta", "index": st.anthIndex, "delta": map[string]any{"type": "input_json_delta", "partial_json": tc.Function.Arguments}})
+			}
 		}
 		if writeErr != nil {
 			return writeErr
