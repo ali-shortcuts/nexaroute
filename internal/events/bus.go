@@ -7,23 +7,23 @@ import (
 )
 
 type Event struct {
-	Time            time.Time `json:"time"`
-	RequestID       string    `json:"request_id,omitempty"`
-	Kind            string    `json:"kind"`
-	Deployment      string    `json:"deployment,omitempty"`
-	Message         string    `json:"message"`
-	LatencyMS       int64     `json:"latency_ms,omitempty"`
-	StatusCode      int       `json:"status_code,omitempty"`
-	ErrorType       string    `json:"error_type,omitempty"`
-	FailureClass    string    `json:"failure_class,omitempty"`
-	SupervisorState string    `json:"supervisor_state,omitempty"`
-	SupervisorAttempt int     `json:"supervisor_attempt,omitempty"`
-	SupervisorTerminal bool   `json:"supervisor_terminal,omitempty"`
-	StreamPhase     string    `json:"stream_phase,omitempty"`
-	VirtualEndpoint string    `json:"virtual_endpoint,omitempty"`
-	PublicModel     string    `json:"public_model,omitempty"`
-	RouteProfile    string    `json:"route_profile,omitempty"`
-	Pool            string    `json:"pool,omitempty"`
+	Time               time.Time `json:"time"`
+	RequestID          string    `json:"request_id,omitempty"`
+	Kind               string    `json:"kind"`
+	Deployment         string    `json:"deployment,omitempty"`
+	Message            string    `json:"message"`
+	LatencyMS          int64     `json:"latency_ms,omitempty"`
+	StatusCode         int       `json:"status_code,omitempty"`
+	ErrorType          string    `json:"error_type,omitempty"`
+	FailureClass       string    `json:"failure_class,omitempty"`
+	SupervisorState    string    `json:"supervisor_state,omitempty"`
+	SupervisorAttempt  int       `json:"supervisor_attempt,omitempty"`
+	SupervisorTerminal bool      `json:"supervisor_terminal,omitempty"`
+	StreamPhase        string    `json:"stream_phase,omitempty"`
+	VirtualEndpoint    string    `json:"virtual_endpoint,omitempty"`
+	PublicModel        string    `json:"public_model,omitempty"`
+	RouteProfile       string    `json:"route_profile,omitempty"`
+	Pool               string    `json:"pool,omitempty"`
 	// Phase C — task classification (privacy-safe, bounded)
 	TaskType          string  `json:"task_type,omitempty"`
 	TaskComplexity    string  `json:"task_complexity,omitempty"`

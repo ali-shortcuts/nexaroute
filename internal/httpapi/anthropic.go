@@ -520,8 +520,8 @@ func proxyValidatedJSONResponse(w http.ResponseWriter, resp *http.Response, vali
 }
 
 type nativeSSETracker struct {
-	protocol string
-	terminal bool
+	protocol  string
+	terminal  bool
 	doneToken bool
 
 	// Usage is emitted only after a protocol-valid terminal frame.
@@ -919,17 +919,17 @@ func proxyNativeSSEWithModel(w http.ResponseWriter, resp *http.Response, protoco
 			writeNativeSSEError(w, protocol, fl)
 			return err
 		}
-			if err := tracker.consume(frame); err != nil {
-				writeNativeSSEError(w, protocol, fl)
-				return err
-			}
-			if err := writeFrame(frame); err != nil {
-				return err
-			}
-			if (protocol == "anthropic" && tracker.terminal) || (protocol == "openai" && tracker.doneToken) {
-				return tracker.finish()
-			}
+		if err := tracker.consume(frame); err != nil {
+			writeNativeSSEError(w, protocol, fl)
+			return err
 		}
+		if err := writeFrame(frame); err != nil {
+			return err
+		}
+		if (protocol == "anthropic" && tracker.terminal) || (protocol == "openai" && tracker.doneToken) {
+			return tracker.finish()
+		}
+	}
 }
 
 func rewriteAnthropicResponseModel(body []byte, model string) ([]byte, error) {
@@ -1249,13 +1249,13 @@ func streamOpenAIToAnthropicWithUsage(w http.ResponseWriter, resp *http.Response
 			emit("error", map[string]any{"type": "error", "error": map[string]any{"type": "api_error", "message": "upstream stream sent an invalid event"}})
 			return fmt.Errorf("invalid OpenAI SSE JSON: %w", err)
 		}
-			if er, ok := raw["error"]; ok && er != nil {
-				emit("error", map[string]any{"type": "error", "error": map[string]any{"type": "api_error", "message": "upstream stream failed"}})
-				if writeErr != nil {
-					return writeErr
-				}
-				return fmt.Errorf("openai stream error")
+		if er, ok := raw["error"]; ok && er != nil {
+			emit("error", map[string]any{"type": "error", "error": map[string]any{"type": "api_error", "message": "upstream stream failed"}})
+			if writeErr != nil {
+				return writeErr
 			}
+			return fmt.Errorf("openai stream error")
+		}
 		var obj struct {
 			Choices []struct {
 				Delta struct {

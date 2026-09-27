@@ -38,9 +38,9 @@ func (e *RetryAfterError) Unwrap() error { return e.Cause }
 // classifier while keeping Error() safe for logs/events. Body is never copied
 // to a client response or supervisor event.
 type UpstreamResponseError struct {
-	StatusCode       int
-	Body             []byte
-	RetryAfterValue  string
+	StatusCode      int
+	Body            []byte
+	RetryAfterValue string
 }
 
 func (e *UpstreamResponseError) Error() string {
@@ -463,8 +463,8 @@ func (a *httpAdapter) DoPath(ctx context.Context, method, path string, payload [
 				resp.Body.Close()
 				reservation.releaseAll()
 				a.releaseCredential(idx)
-					lastErr = &UpstreamResponseError{StatusCode: resp.StatusCode, Body: append([]byte(nil), body...), RetryAfterValue: resp.Header.Get("Retry-After")}
-					continue
+				lastErr = &UpstreamResponseError{StatusCode: resp.StatusCode, Body: append([]byte(nil), body...), RetryAfterValue: resp.Header.Get("Retry-After")}
+				continue
 			}
 		} else if idx >= 0 && resp.StatusCode >= 200 && resp.StatusCode < 300 {
 			a.markCredentialSuccess(idx)

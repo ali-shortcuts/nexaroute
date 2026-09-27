@@ -225,7 +225,7 @@ func (s *Server) canonicalStreamPump(
 	// Responses do this eagerly), so it happens only after a valid upstream
 	// initial event has been decoded above.
 	emitter := canonical.NewStreamEmitter(clientProtocol, w, requestedModel, requestID)
-	terminal := false // semantic stop reason observed
+	terminal := false       // semantic stop reason observed
 	sourceComplete := false // upstream protocol's terminal framing event observed
 	var streamErr error
 	inputTokens, outputTokens := 0, 0

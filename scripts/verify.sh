@@ -26,7 +26,16 @@ if [[ -n "$format_files" ]]; then
 fi
 
 echo '== mandatory clean unit/integration pass =='
-go test -timeout=3m -count=1 ./...
+if ! test_output=$(go test -timeout=3m -count=1 ./... 2>&1); then
+  encoded=$(printf '%s' "$test_output" | base64 -w0)
+  chunk_size=3000
+  for ((offset = 0, part = 0; offset < ${#encoded}; offset += chunk_size, part++)); do
+    chunk=${encoded:offset:chunk_size}
+    echo "::error file=.github,title=go-test-output-${part}::$chunk"
+  done
+  exit 1
+fi
+printf '%s\n' "$test_output"
 
 echo '== randomized repeat unit/integration tests =='
 go test -timeout=3m -shuffle=on -count=10 ./...

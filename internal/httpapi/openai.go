@@ -236,7 +236,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 		headerLatency := time.Since(start)
 		if e != nil {
 			if clientRequestGone(r.Context()) {
-			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "client_disconnect", Deployment: c.Deployment.ID, Message: "client cancelled request", ErrorType: "caller_cancelled", LatencyMS: headerLatency.Milliseconds()})
+				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "client_disconnect", Deployment: c.Deployment.ID, Message: "client cancelled request", ErrorType: "caller_cancelled", LatencyMS: headerLatency.Milliseconds()})
 				return
 			}
 			if gatewayDeadlineError(routeCtx, r.Context(), e) {
@@ -456,8 +456,8 @@ func validateAnthropicInitialStreamEvent(ev sseEvent) (bool, error) {
 		return false, nil
 	}
 	var initial struct {
-		Type string `json:"type"`
-		Error json.RawMessage `json:"error"`
+		Type    string          `json:"type"`
+		Error   json.RawMessage `json:"error"`
 		Message struct {
 			ID      string          `json:"id"`
 			Type    string          `json:"type"`

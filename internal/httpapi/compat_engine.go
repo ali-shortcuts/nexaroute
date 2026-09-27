@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"errors"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -351,7 +351,7 @@ func (s *Server) applyClassifiedFailure(d router.Deployment, cls compat.Classifi
 	policy := upstreamFailurePolicy{
 		ErrorType: cls.Policy().ErrorType, Failover: cls.Policy().Failover,
 		QuarantineDeployment: cls.Policy().QuarantineDeployment,
-		SignalProvider: cls.Policy().SignalProvider, HardCooldown: cls.Policy().HardCooldown,
+		SignalProvider:       cls.Policy().SignalProvider, HardCooldown: cls.Policy().HardCooldown,
 		RetireDeployment: cls.Policy().RetireDeployment,
 	}
 	current, ok := s.rt.Deployment(d.ID)

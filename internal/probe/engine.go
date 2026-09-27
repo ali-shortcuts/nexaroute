@@ -520,7 +520,7 @@ func (e *Engine) processRecoveryTask(ctx context.Context, task recoveryTask) {
 			}
 		}
 		e.bus.Add(events.Event{Kind: "recovery_stale", Deployment: task.id,
-			Message: "recovery success was superseded by newer deployment health evidence",
+			Message:      "recovery success was superseded by newer deployment health evidence",
 			FailureClass: currentHealth.LastErrorClass, SupervisorState: "recovering", StatusCode: status})
 		e.scheduleRecovery(ctx, task, delay)
 		return
@@ -538,7 +538,7 @@ func (e *Engine) processRecoveryTask(ctx context.Context, task recoveryTask) {
 	}
 	if classified.CapabilityFailure || classified.CallerError || classified.Class == compat.ClassContextOverflow {
 		e.bus.Add(events.Event{Kind: "recovery_inconclusive", Deployment: task.id,
-			Message: "recovery probe request was rejected; deployment remains quarantined",
+			Message:   "recovery probe request was rejected; deployment remains quarantined",
 			ErrorType: string(classified.Class), FailureClass: string(classified.Class), SupervisorState: "quarantined", StatusCode: status})
 		e.clearRecoveryTask(task)
 		return
@@ -733,10 +733,10 @@ func (e *Engine) runOnce(ctx context.Context, force bool) Result {
 		case health.Healthy:
 			return 3
 		case health.Cooldown:
-				return 4
-			case health.Retired:
-				return 5
-			default:
+			return 4
+		case health.Retired:
+			return 5
+		default:
 			return 3
 		}
 	}
@@ -758,41 +758,41 @@ func (e *Engine) runOnce(ctx context.Context, force bool) Result {
 	var wg sync.WaitGroup
 	var resultMu sync.Mutex
 	failedIDs := make([]string, 0)
-		for idx, job := range jobs {
-			d := job.d
-			if job.state.Status == health.Retired {
-				result.SkippedRetired++
-				continue
+	for idx, job := range jobs {
+		d := job.d
+		if job.state.Status == health.Retired {
+			result.SkippedRetired++
+			continue
+		}
+		if job.state.Quarantined {
+			if job.state.Status == health.Cooldown {
+				result.SkippedCooldown++
+			} else {
+				result.SkippedRecovery++
 			}
-			if job.state.Quarantined {
-				if job.state.Status == health.Cooldown {
-					result.SkippedCooldown++
-				} else {
-					result.SkippedRecovery++
+			e.Recover(d.ID)
+			continue
+		}
+		if !force && readySupervisor {
+			switch job.state.Status {
+			case health.Healthy:
+				if !readyLeaseExpired(job.state, sweepNow, readyLease) {
+					result.SkippedReady++
+					continue
 				}
+			case health.Cooldown:
+				result.SkippedCooldown++
+				continue
+			case health.Degraded, health.HalfOpen:
+				result.SkippedRecovery++
 				e.Recover(d.ID)
 				continue
 			}
-			if !force && readySupervisor {
-				switch job.state.Status {
-				case health.Healthy:
-					if !readyLeaseExpired(job.state, sweepNow, readyLease) {
-						result.SkippedReady++
-						continue
-					}
-				case health.Cooldown:
-					result.SkippedCooldown++
-					continue
-				case health.Degraded, health.HalfOpen:
-					result.SkippedRecovery++
-					e.Recover(d.ID)
-					continue
-				}
-			} else if job.state.Status == health.Cooldown {
-				result.SkippedCooldown++
-				continue
-			}
-			if readySupervisor && e.isRecovering(d.ID) {
+		} else if job.state.Status == health.Cooldown {
+			result.SkippedCooldown++
+			continue
+		}
+		if readySupervisor && e.isRecovering(d.ID) {
 			result.SkippedRecovery++
 			continue
 		}
@@ -848,7 +848,7 @@ func (e *Engine) runOnce(ctx context.Context, force bool) Result {
 				policy := classified.Policy()
 				if classified.CapabilityFailure || classified.CallerError || classified.Class == compat.ClassContextOverflow {
 					e.bus.Add(events.Event{Kind: "probe_inconclusive", Deployment: d.ID,
-						Message: "probe request was rejected; deployment health remains unchanged",
+						Message:   "probe request was rejected; deployment health remains unchanged",
 						ErrorType: string(classified.Class), FailureClass: string(classified.Class), SupervisorState: "unchanged", StatusCode: status})
 					resultMu.Lock()
 					result.Failed++

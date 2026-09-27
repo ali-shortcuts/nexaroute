@@ -132,13 +132,13 @@ func deploymentIdentity(p config.ProviderConfig, m config.ModelConfig) string {
 	identity := struct {
 		Provider struct {
 			ID, Name, Type, Dialect, BaseURL, APIKeyEnv, AuthMode string
-			Headers                                            map[string]string
-			ForwardHeaders                                     []string
-			ProxyURL, ChatPath, MessagesPath, ModelsPath        string
-			CountTokensPath, ResponsesPath                    string
-			MaxConcurrency, StreamIdleTimeoutSeconds           int
-			CredentialConfig                                   []credentialIdentity
-			ResolvedAuthFingerprint                            string
+			Headers                                               map[string]string
+			ForwardHeaders                                        []string
+			ProxyURL, ChatPath, MessagesPath, ModelsPath          string
+			CountTokensPath, ResponsesPath                        string
+			MaxConcurrency, StreamIdleTimeoutSeconds              int
+			CredentialConfig                                      []credentialIdentity
+			ResolvedAuthFingerprint                               string
 		}
 		Model config.ModelConfig
 	}{Model: m}
