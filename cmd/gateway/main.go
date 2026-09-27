@@ -27,7 +27,7 @@ import (
 )
 
 // version is set at build time via -ldflags "-X main.version=...".
-var version = "0.7.0"
+var version = "dev"
 
 func ensureConfig(path string) error {
 	if _, err := os.Stat(path); err == nil {
