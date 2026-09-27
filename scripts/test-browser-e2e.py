@@ -295,7 +295,7 @@ def main() -> None:
                 page.locator('[data-route-edit="route-coding"]').click()
                 page.locator("#cpRouteMode").select_option("ordered")
                 page.locator('[data-dialog-value="save"]').click()
-                expect(page.locator("#cpDialogHost")).not_to_have_class(lambda value: "open" in value)
+                wait_class_state(page, "#cpDialogHost", "open", False)
                 snapshot = api_json(base, "/admin/api/snapshot?limit=500&events=100")
                 route = next(v for v in snapshot["virtual_endpoints"] if v["id"] == "route-coding")
                 profile = next(p for p in snapshot["route_profiles"] if p["id"] == route["route_profile"])
