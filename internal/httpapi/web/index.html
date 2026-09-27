@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="color-scheme" content="dark">
+<meta name="color-scheme" content="dark light">
 <title>NexaRoute — Control Plane</title>
 <link rel="stylesheet" href="/styles.css">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%2338e0c8'/%3E%3Cstop offset='1' stop-color='%237a7df2'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='8' fill='%23070d16'/%3E%3Cpath d='M9 23V9l14 14V9' stroke='url(%23g)' stroke-width='3.4' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
@@ -345,6 +345,13 @@
             <em>Stored in sessionStorage only; closing this browser session clears it.</em>
           </label>
           <div class="settings-actions"><button id="saveAdminKey" class="btn secondary">Save for session</button></div>
+        </div>
+        <div class="form-section">
+          <div class="section-kicker">Advanced tools</div>
+          <div class="advanced-tool-grid">
+            <button id="openCompatBtn" class="advanced-tool-card"><strong>Compatibility lab</strong><span>Capability contracts, repairs and agent tests.</span></button>
+            <button id="openAdvancedRoutingBtn" class="advanced-tool-card"><strong>Advanced routing</strong><span>Open pools, profiles, endpoints and fallback chains.</span></button>
+          </div>
         </div>
         <details class="raw-config"><summary>Current config snapshot</summary><pre id="settingsJson"></pre></details>
       </div>
