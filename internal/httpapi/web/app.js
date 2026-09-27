@@ -21,9 +21,9 @@ async function apiFetch(url, opt = {}) {
   opt = { ...opt, headers: { ...(opt.headers || {}) } };
   if (adminKey) opt.headers['x-admin-key'] = adminKey;
   let r = await window.fetch(url, opt);
-  if (r.status === 401) {
-    const k = prompt('Admin API key required');
-    if (k !== null) {
+  if (r.status === 401 && window.NexaUI?.requestAdminKey) {
+    const k = await window.NexaUI.requestAdminKey();
+    if (k) {
       adminKey = k.trim();
       sessionStorage.setItem('nexaroute_admin_key', adminKey);
       $('#adminKey').value = adminKey;
@@ -443,13 +443,18 @@ function renderRoutingObservatory(h, ds) {
   $('#obsResult').className = result.toLowerCase();
 
   const stateByDeployment = {};
+  const statePriority = { retired: 50, unavailable: 40, cooldown: 30, success: 25, failed: 20, active: 10 };
+  const setDeploymentState = (deployment, next) => {
+    const current = stateByDeployment[deployment];
+    if (!current || (statePriority[next] || 0) >= (statePriority[current] || 0)) stateByDeployment[deployment] = next;
+  };
   for (const e of requestEvents) {
     if (!e.deployment) continue;
-    if (e.kind === 'model_retired') stateByDeployment[e.deployment] = 'retired';
-    else if (e.kind === 'model_unavailable') stateByDeployment[e.deployment] = 'unavailable';
-    else if (e.kind === 'route_ok') stateByDeployment[e.deployment] = 'success';
+    if (e.kind === 'model_retired') setDeploymentState(e.deployment, 'retired');
+    else if (e.kind === 'model_unavailable') setDeploymentState(e.deployment, 'unavailable');
+    else if (e.kind === 'route_ok') setDeploymentState(e.deployment, 'success');
     else if (e.kind === 'route_fail' || e.kind === 'route_timeout' || e.kind === 'response_decode_fail' || e.kind === 'stream_fail_precommit') {
-      stateByDeployment[e.deployment] = e.error_type === 'provider_rate_limited' ? 'cooldown' : 'failed';
+      setDeploymentState(e.deployment, e.error_type === 'provider_rate_limited' ? 'cooldown' : 'failed');
     }
   }
   const attempts = requestEvents.filter(e => e.kind === 'route_attempt');
@@ -1041,7 +1046,8 @@ $('#saveProviderBtn').onclick = async () => {
   finally { $('#saveProviderBtn').disabled = false; }
 };
 $('#deleteProviderBtn').onclick = async () => {
-  if (!confirm(`Delete provider "${editor.originalId}"?`)) return;
+  const ok = window.NexaUI?.confirm ? await window.NexaUI.confirm('Delete provider', `Delete provider "${editor.originalId}"?`) : false;
+  if (!ok) return;
   try {
     await api('/admin/api/providers/' + encodeURIComponent(editor.originalId), { method: 'DELETE' });
     toast('Provider deleted');
@@ -1112,124 +1118,16 @@ function renderPools() {
   $('#chainRows').innerHTML = chainRows.join('') || '<tr><td colspan=\"3\" style=\"color:var(--muted)\">No fallback chains.</td></tr>';
 }
 
-// Simple prompt-based editors for Phase B (keep UI simple)
-async function editVirtual(id) {
-  try {
-    const existing = (snap.virtual_endpoints || []).find(v => v.id === id);
-    const pub = prompt('Public model name (client-facing):', existing ? existing.public_model : 'nexa-code');
-    if (pub === null) return;
-    const profile = prompt('Route profile ID:', existing ? existing.route_profile : 'default');
-    if (profile === null) return;
-    const name = prompt('Display name:', existing ? (existing.name || '') : '');
-    if (name === null) return;
-    const enabledStr = prompt('Enabled? (true/false):', existing ? String(existing.enabled !== false) : 'true');
-    if (enabledStr === null) return;
-    const enabled = enabledStr.toLowerCase() !== 'false';
-    const body = { id, name: name || undefined, public_model: pub.trim(), route_profile: profile.trim(), enabled };
-    if (existing) {
-      await api('/admin/api/virtual-endpoints/' + encodeURIComponent(id), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    } else {
-      await api('/admin/api/virtual-endpoints', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    }
-    toast('Virtual endpoint saved');
-    await refresh();
-  } catch (e) { toast(e.message, true); }
-}
-async function deleteVirtual(id) {
-  if (!confirm(`Delete virtual endpoint \"${id}\"?`)) return;
-  try {
-    await api('/admin/api/virtual-endpoints/' + encodeURIComponent(id), { method: 'DELETE' });
-    toast('Virtual endpoint deleted');
-    await refresh();
-  } catch (e) { toast(e.message, true); }
-}
-async function editProfile(id) {
-  try {
-    const existing = (snap.route_profiles || []).find(p => p.id === id);
-    const pool = prompt('Candidate pool ID:', existing ? existing.candidate_pool : 'default');
-    if (pool === null) return;
-    const fallback = prompt('Fallback chain ID (optional):', existing ? (existing.fallback_chain || '') : '');
-    if (fallback === null) return;
-    const name = prompt('Display name:', existing ? (existing.name || '') : '');
-    if (name === null) return;
-    // Phase B: strategy inherits global routing strategy. Per-profile override deferred to Phase E.
-    // Do not prompt for strategy; always inherit.
-    const body = { id, name: name || undefined, candidate_pool: pool.trim(), fallback_chain: fallback.trim() || undefined };
-    if (existing) {
-      await api('/admin/api/route-profiles/' + encodeURIComponent(id), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    } else {
-      await api('/admin/api/route-profiles', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    }
-    toast('Route profile saved (strategy inherits global: ' + (snap.config?.routing?.strategy || 'ready_mesh') + ')');
-    await refresh();
-  } catch (e) { toast(e.message, true); }
-}
-async function deleteProfile(id) {
-  if (!confirm(`Delete route profile \"${id}\"?`)) return;
-  try {
-    await api('/admin/api/route-profiles/' + encodeURIComponent(id), { method: 'DELETE' });
-    toast('Route profile deleted');
-    await refresh();
-  } catch (e) { toast(e.message, true); }
-}
-async function editPool(id) {
-  try {
-    const existing = (snap.candidate_pools || []).find(p => p.id === id);
-    const mode = prompt('Mode (explicit or all):', existing ? (existing.mode || 'explicit') : 'explicit');
-    if (mode === null) return;
-    let deployments = [];
-    if (mode.trim().toLowerCase() !== 'all') {
-      const depStr = prompt('Deployments (comma separated, e.g. provider-a/model-a, provider-b/model-b or model names):', existing ? (existing.deployments || []).join(', ') : '');
-      if (depStr === null) return;
-      deployments = depStr.split(',').map(s => s.trim()).filter(Boolean);
-    }
-    const name = prompt('Display name:', existing ? (existing.name || '') : '');
-    if (name === null) return;
-    const body = { id, name: name || undefined, mode: mode.trim().toLowerCase(), deployments };
-    if (existing) {
-      await api('/admin/api/candidate-pools/' + encodeURIComponent(id), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    } else {
-      await api('/admin/api/candidate-pools', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    }
-    toast('Candidate pool saved');
-    await refresh();
-  } catch (e) { toast(e.message, true); }
-}
-async function deletePool(id) {
-  if (!confirm(`Delete candidate pool \"${id}\"?`)) return;
-  try {
-    await api('/admin/api/candidate-pools/' + encodeURIComponent(id), { method: 'DELETE' });
-    toast('Candidate pool deleted');
-    await refresh();
-  } catch (e) { toast(e.message, true); }
-}
-async function editChain(id) {
-  try {
-    const existing = (snap.fallback_chains || []).find(c => c.id === id);
-    const poolsStr = prompt('Pools in order (comma separated pool IDs):', existing ? (existing.pools || []).join(', ') : '');
-    if (poolsStr === null) return;
-    const pools = poolsStr.split(',').map(s => s.trim()).filter(Boolean);
-    if (!pools.length) { alert('At least one pool required'); return; }
-    const name = prompt('Display name:', existing ? (existing.name || '') : '');
-    if (name === null) return;
-    const body = { id, name: name || undefined, pools };
-    if (existing) {
-      await api('/admin/api/fallback-chains/' + encodeURIComponent(id), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    } else {
-      await api('/admin/api/fallback-chains', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    }
-    toast('Fallback chain saved');
-    await refresh();
-  } catch (e) { toast(e.message, true); }
-}
-async function deleteChain(id) {
-  if (!confirm(`Delete fallback chain \"${id}\"?`)) return;
-  try {
-    await api('/admin/api/fallback-chains/' + encodeURIComponent(id), { method: 'DELETE' });
-    toast('Fallback chain deleted');
-    await refresh();
-  } catch (e) { toast(e.message, true); }
-}
+// Control Plane v2 owns the human-friendly editors. These compatibility
+// shims keep legacy inline handlers working without native browser dialogs.
+async function editVirtual(id) { return window.NexaUI?.advancedVirtual?.(id); }
+async function deleteVirtual(id) { return window.NexaUI?.deleteAdvanced?.('/admin/api/virtual-endpoints', id, 'virtual endpoint'); }
+async function editProfile(id) { return window.NexaUI?.advancedProfile?.(id); }
+async function deleteProfile(id) { return window.NexaUI?.deleteAdvanced?.('/admin/api/route-profiles', id, 'route profile'); }
+async function editPool(id) { return window.NexaUI?.advancedPool?.(id); }
+async function deletePool(id) { return window.NexaUI?.deleteAdvanced?.('/admin/api/candidate-pools', id, 'candidate pool'); }
+async function editChain(id) { return window.NexaUI?.advancedChain?.(id); }
+async function deleteChain(id) { return window.NexaUI?.deleteAdvanced?.('/admin/api/fallback-chains', id, 'fallback chain'); }
 
 // Expose for inline onclick
 window.editVirtual = editVirtual;
@@ -1241,26 +1139,7 @@ window.deletePool = deletePool;
 window.editChain = editChain;
 window.deleteChain = deleteChain;
 
-$('#addVirtualBtn')?.addEventListener('click', async () => {
-  const id = prompt('New virtual endpoint ID (letters, digits, -, _, .):', 'coding-prod');
-  if (!id) return;
-  await editVirtual(id.trim());
-});
-$('#addProfileBtn')?.addEventListener('click', async () => {
-  const id = prompt('New route profile ID:', 'coding-smart');
-  if (!id) return;
-  await editProfile(id.trim());
-});
-$('#addPoolBtn')?.addEventListener('click', async () => {
-  const id = prompt('New candidate pool ID:', 'coding');
-  if (!id) return;
-  await editPool(id.trim());
-});
-$('#addChainBtn')?.addEventListener('click', async () => {
-  const id = prompt('New fallback chain ID:', 'coding-fallback');
-  if (!id) return;
-  await editChain(id.trim());
-});
+// Add/edit actions are installed by control-plane-v2.js after app.js loads.
 
 /* ---------- boot ---------- */
 (async () => {
