@@ -1,0 +1,42 @@
+name: Format hardening branch
+
+on:
+  push:
+    branches:
+      - arena/nexaroute-hardening-final
+
+permissions:
+  contents: write
+
+jobs:
+  gofmt:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: arena/nexaroute-hardening-final
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Format Go files
+        run: |
+          set -euo pipefail
+          files="$(git ls-files '*.go')"
+          if [ -n "$files" ]; then
+            gofmt -w $files
+          fi
+      - name: Commit formatting if needed
+        run: |
+          set -euo pipefail
+          if git diff --quiet; then
+            echo "No formatting changes needed"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- '*.go'
+          git commit -m "style: gofmt hardening changes"
+          git push origin HEAD:arena/nexaroute-hardening-final
