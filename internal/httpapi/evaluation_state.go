@@ -23,6 +23,11 @@ const (
 	maxEvaluationStateBytes = 8 << 20
 )
 
+// Plane instances are replaced on config reload, so persistence coordination
+// must outlive any one plane. A package-wide mutex serializes snapshot->rename
+// and prevents an older in-flight writer from overwriting newer durable state.
+var evaluationStatePersistMu sync.Mutex
+
 type evaluationState struct {
 	Version    int                    `json:"version"`
 	Runs       []eval.Result          `json:"runs"`
@@ -113,6 +118,8 @@ func (p *evaluationPlane) persist() error {
 	if path == "" {
 		return nil
 	}
+	evaluationStatePersistMu.Lock()
+	defer evaluationStatePersistMu.Unlock()
 	doc := evaluationState{
 		Version:    evaluationStateVersion,
 		Runs:       p.store.All(),

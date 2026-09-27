@@ -92,9 +92,6 @@ func main() {
 	if err := ensureConfig(*configPath); err != nil {
 		bootstrap.Fatal(err)
 	}
-	if err := config.RemoveStaleBackup(*configPath); err != nil {
-		bootstrap.Fatal(err)
-	}
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		bootstrap.Fatal(err)
@@ -189,6 +186,9 @@ func main() {
 		}
 	}()
 	if cfg.Probe.Enabled && cfg.Probe.OnStart {
+		// Claim and complete the one startup sweep before Start launches the
+		// periodic runner. This removes the Prime/Start race that could issue two
+		// simultaneous startup probe sweeps.
 		result := pe.Prime(ctx)
 		logger.Printf("startup_probe total=%d ready=%d failed=%d cooldown=%d duration_ms=%d", result.Total, result.Passed, result.Failed, result.SkippedCooldown, result.DurationMS)
 	}

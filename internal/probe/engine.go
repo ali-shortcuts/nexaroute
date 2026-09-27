@@ -445,7 +445,7 @@ func (e *Engine) processRecoveryTask(ctx context.Context, task recoveryTask) {
 		return
 	}
 	cfg = e.current()
-	if !e.acquireProbe(ctx, cfg.Probe.Concurrency) {
+	if !e.acquireProbe(ctx) {
 		e.clearRecoveryTask(task)
 		return
 	}
@@ -499,11 +499,15 @@ func (e *Engine) processRecoveryTask(ctx context.Context, task recoveryTask) {
 	e.scheduleRecovery(ctx, task, cooldown)
 }
 
-func (e *Engine) acquireProbe(ctx context.Context, limit int) bool {
-	if limit < 1 {
-		limit = 1
-	}
+func (e *Engine) acquireProbe(ctx context.Context) bool {
 	for {
+		// Re-read the live limit on every wake-up. Reload closes limitChanged,
+		// so an increased concurrency value takes effect immediately even for
+		// a sweep that started under the previous configuration.
+		limit := e.current().Probe.Concurrency
+		if limit < 1 {
+			limit = 1
+		}
 		e.limitMu.Lock()
 		if e.activeProbes < limit {
 			e.activeProbes++
@@ -712,7 +716,7 @@ func (e *Engine) runOnce(ctx context.Context, force bool) Result {
 			continue
 		}
 
-		if !e.acquireProbe(ctx, cfg.Probe.Concurrency) {
+		if !e.acquireProbe(ctx) {
 			if ctx.Err() != nil {
 				resultMu.Lock()
 				result.Canceled += len(jobs) - idx

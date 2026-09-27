@@ -838,22 +838,15 @@ func secretSource(p config.ProviderConfig) string {
 // back; when the submitted literal equals the current env value the literal
 // is dropped and the env reference kept.
 func dropEnvResolvedLiteral(in *config.ProviderConfig, old config.ProviderConfig) {
-	if in.APIKey == "" {
+	if in.APIKeyEnv == "" || in.APIKey == "" {
 		return
 	}
-	envName := in.APIKeyEnv
-	if envName == "" {
-		envName = old.APIKeyEnv
-	}
-	resolved := os.Getenv(envName)
-	if resolved == "" && envName != "" && old.APIKeyEnv == envName && old.APIKey == in.APIKey {
-		resolved = old.APIKey
-	}
+	// Only a value actually sourced from the environment may cause the
+	// submitted literal to be elided. A saved literal fallback must survive
+	// preserve_secret when the referenced environment variable is unset.
+	resolved := os.Getenv(in.APIKeyEnv)
 	if resolved != "" && subtle.ConstantTimeCompare([]byte(in.APIKey), []byte(resolved)) == 1 {
 		in.APIKey = ""
-		if in.APIKeyEnv == "" {
-			in.APIKeyEnv = envName
-		}
 	}
 }
 

@@ -127,6 +127,10 @@ func (e *MissingPromptError) Error() string {
 	return fmt.Sprintf("no live prompt for case %q", e.CaseID)
 }
 
+// Unwrap classifies an absent operator-supplied prompt as missing evidence, not
+// an executor/infrastructure failure.
+func (e *MissingPromptError) Unwrap() error { return eval.ErrMissingEvidence }
+
 // ErrNoAdapter is returned when a deployment's provider has no usable adapter.
 var ErrNoAdapter = errors.New("live evaluation deployment has no provider adapter")
 

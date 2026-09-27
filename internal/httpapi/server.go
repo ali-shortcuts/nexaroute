@@ -38,7 +38,8 @@ var webFS embed.FS
 type Server struct {
 	applyMu         sync.Mutex
 	runtimeMu       sync.RWMutex
-	cfg             config.Config
+	cfg             config.Config // effective runtime config (base + env overlay)
+	baseCfg         config.Config // durable file config, never contains runtime env overlays
 	configPath      string
 	reg             *providers.Registry
 	rt              *router.Router
@@ -173,8 +174,14 @@ func New(cfg config.Config, configPath string, reg *providers.Registry, rt *rout
 		cfg.ProviderFailureWindow(),
 		cfg.ProviderCooldown(),
 	)
+	baseCfg := cloneConfig(cfg)
+	if strings.TrimSpace(configPath) != "" {
+		if loaded, err := config.LoadBase(configPath); err == nil {
+			baseCfg = loaded
+		}
+	}
 	s := &Server{
-		cfg: cfg, configPath: configPath, reg: reg, rt: rt, hm: hm, bus: bus, probe: pe, log: l,
+		cfg: cfg, baseCfg: baseCfg, configPath: configPath, reg: reg, rt: rt, hm: hm, bus: bus, probe: pe, log: l,
 		respCache:       cache.New(cfg.CacheTTL(), cfg.Cache.MaxEntries, int64(cfg.Cache.MaxBodyBytes)),
 		cacheGeneration: 1,
 		usage:           usage.New(),
@@ -421,7 +428,15 @@ func changedDeploymentIDs(oldCfg, newCfg config.Config) map[string]struct{} {
 // applyConfig validates and persists first, then swaps the in-memory provider
 // registry/router under one short lock. Existing Adapter pointers already taken
 // by in-flight requests remain valid after the registry map is replaced.
-func (s *Server) applyConfigLocked(cfg config.Config) error {
+func (s *Server) applyConfigLocked(baseCfg config.Config) error {
+	baseCfg.ApplyDefaults()
+	if err := baseCfg.Validate(); err != nil {
+		return err
+	}
+	cfg := cloneConfig(baseCfg)
+	if err := cfg.ApplyEnvOverrides(); err != nil {
+		return err
+	}
 	cfg.ApplyDefaults()
 	if err := cfg.Validate(); err != nil {
 		return err
@@ -464,7 +479,7 @@ func (s *Server) applyConfigLocked(cfg config.Config) error {
 	if err != nil {
 		return err
 	}
-	if err := config.SaveAtomic(s.configPath, cfg); err != nil {
+	if err := config.SaveAtomic(s.configPath, baseCfg); err != nil {
 		return err
 	}
 	// Phase H: prepare the next evaluation plane outside the runtime lock so an
@@ -542,6 +557,7 @@ func (s *Server) applyConfigLocked(cfg config.Config) error {
 	}
 
 	s.cfg = cfg
+	s.baseCfg = cloneConfig(baseCfg)
 	// Phase G: update decision orchestrator with chains and health (coherent snapshot)
 	if s.decisionOrchestrator != nil {
 		// Preserve provider state across unrelated reloads: compare old vs new identity
@@ -675,7 +691,9 @@ func (s *Server) mutateConfig(fn func(*config.Config) error) (config.Config, err
 	s.applyMu.Lock()
 	defer s.applyMu.Unlock()
 
-	cfg := s.currentConfig()
+	s.runtimeMu.RLock()
+	cfg := cloneConfig(s.baseCfg)
+	s.runtimeMu.RUnlock()
 	if err := fn(&cfg); err != nil {
 		return config.Config{}, err
 	}
