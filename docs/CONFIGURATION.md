@@ -171,6 +171,17 @@ For Docker/LAN access, set an admin key and put TLS/reverse-proxy controls in fr
 - `capability_failure_threshold` — consecutive scoped failures before a capability circuit opens; default `2`.
 - `capability_cooldown_seconds` — scoped circuit cooldown; default `300`.
 
+Cooldowns are intentionally tiered by scope:
+
+- `routing.cooldown_seconds` — per-deployment recovery cooldown; default `1800` seconds.
+- `routing.provider_cooldown_seconds` — provider-wide cooldown that blocks a whole provider; default `30` seconds.
+- `decision_provider_health.cooldown_seconds` — decision-plane provider cooldown; default `60` seconds.
+
+Each tier accepts an explicit per-configuration override within its validation
+range. Provider-level values remain short because they quarantine more traffic
+than a single deployment; the deployment value is longer because it controls
+supervised recovery for one route target.
+
 Provider presets are served by the gateway itself through the Admin API so the Web UI does not maintain a second hard-coded provider catalog. Custom Provider remains fully editable. `models_path` may be a normal path or an absolute URL for compatible providers whose discovery endpoint lives on a different host/path.
 
 **Test connection** checks endpoint reachability/auth separately from **Test selected models**, which performs actual minimal model inference.

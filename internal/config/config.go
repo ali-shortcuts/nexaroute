@@ -84,7 +84,7 @@ type DecisionConfig struct {
 type DecisionProviderHealthConfig struct {
 	FailureThreshold     int `json:"failure_threshold,omitempty"`      // consecutive failures in window to open cooldown (default 3)
 	FailureWindowSeconds int `json:"failure_window_seconds,omitempty"` // window seconds (default 30)
-	CooldownSeconds      int `json:"cooldown_seconds,omitempty"`       // cooldown duration seconds (default 60)
+	CooldownSeconds      int `json:"cooldown_seconds,omitempty"`       // decision-provider cooldown duration seconds (default 60)
 }
 
 type DecisionChainStep struct {

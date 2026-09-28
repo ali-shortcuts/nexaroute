@@ -9,6 +9,12 @@ let paused = false;
 let consoleFilter = 'all';
 let consoleUnread = 0;
 let latencyHistory = [];
+const ringNodes = new Map();
+const ringLinks = new Map();
+let ringMore = null;
+let liveSeq = 0;
+let liveEventsAbort = null;
+let liveTransport = 'polling';
 
 const $ = q => document.querySelector(q), $$ = q => [...document.querySelectorAll(q)];
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[c]));
@@ -39,6 +45,50 @@ async function api(url, opt = {}) {
   try { b = await r.json(); } catch {}
   if (!r.ok) throw new Error(b?.error?.message || `HTTP ${r.status}`);
   return b;
+}
+function setLiveTransport(mode) {
+  liveTransport = mode;
+  $$('.live').forEach(el => { el.textContent = mode === 'sse' ? 'LIVE' : 'POLLING'; el.classList.toggle('polling', mode !== 'sse'); });
+}
+async function consumeLiveEvents() {
+  if (liveEventsAbort) liveEventsAbort.abort();
+  liveEventsAbort = new AbortController();
+  while (!liveEventsAbort.signal.aborted) {
+    try {
+      const q = liveSeq ? `?since=${encodeURIComponent(liveSeq)}&limit=100` : '?limit=100';
+      const response = await apiFetch('/admin/api/events/stream' + q, { signal: liveEventsAbort.signal });
+      if (!response.ok) throw new Error('event stream HTTP ' + response.status);
+      setLiveTransport('sse');
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error('event stream body unavailable');
+      const decoder = new TextDecoder(); let buffer = '';
+      while (true) {
+        const part = await reader.read();
+        if (part.done) throw new Error('event stream closed');
+        buffer += decoder.decode(part.value, { stream: true });
+        let cut;
+        while ((cut = buffer.indexOf('\n\n')) >= 0) {
+          const frame = buffer.slice(0, cut); buffer = buffer.slice(cut + 2);
+          if (frame.startsWith(':')) continue;
+          const dataLine = frame.split('\n').find(x => x.startsWith('data: '));
+          const idLine = frame.split('\n').find(x => x.startsWith('id: '));
+          if (!dataLine) continue;
+          try {
+            const event = JSON.parse(dataLine.slice(6));
+            const seq = Number(idLine?.slice(4) || event.seq || 0);
+            if (seq && seq <= liveSeq) continue;
+            if (seq) liveSeq = seq;
+            snap.events = [...(snap.events || []).filter(x => x.seq !== event.seq), event].slice(-100);
+            render();
+          } catch {}
+        }
+      }
+    } catch (err) {
+      if (liveEventsAbort.signal.aborted) return;
+      setLiveTransport('polling');
+      await new Promise(resolve => setTimeout(resolve, 1500));
+    }
+  }
 }
 function toast(m, bad = false) {
   const t = $('#toast');
@@ -254,11 +304,11 @@ function render() {
 
 function renderRing(ds, h) {
   const ring = $('#ring');
-  [...ring.querySelectorAll('.node')].forEach(x => x.remove());
   const svg = $('#links');
-  svg.innerHTML = '';
   const shown = ds.slice(0, 100), W = ring.clientWidth, H = ring.clientHeight, cx = W / 2, cy = H / 2;
   ring.classList.toggle('dense', shown.length > 24);
+  const active = new Set(shown.map(d => d.id));
+  for (const [id, node] of ringNodes) if (!active.has(id)) { node.remove(); ringNodes.delete(id); ringLinks.get(id)?.remove(); ringLinks.delete(id); }
   const ringCount = Math.max(1, Math.min(4, Math.ceil(shown.length / 25)));
   shown.forEach((d, i) => {
     const ri = Math.floor(i / 25), start = ri * 25, count = Math.min(25, shown.length - start), pos = i - start;
@@ -268,27 +318,26 @@ function renderRing(ds, h) {
     const ry = shown.length > 24 ? 60 + frac * Math.min(H * .31, 210) : Math.min(H * .36, 190);
     const x = cx + Math.cos(a) * rx, y = cy + Math.sin(a) * ry;
     const st = (h[d.id] || {}).status || 'unknown';
-    const n = document.createElement('div');
+    let n = ringNodes.get(d.id);
+    if (!n) { n = document.createElement('div'); n.className = 'node'; ringNodes.set(d.id, n); ring.appendChild(n); }
     n.className = 'node ' + st;
     n.style.left = x + 'px'; n.style.top = y + 'px';
     n.title = `${d.model} • ${d.provider_name || d.provider_id} • ${st} • ${fmtMs((h[d.id] || {}).ewma_latency_ms)}`;
     n.innerHTML = `<strong>${esc(d.model)}</strong><small>${esc(d.provider_name || d.provider_id)}</small><span class="badge">${esc(st)}</span>`;
-    ring.appendChild(n);
-    const l = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    let l = ringLinks.get(d.id);
+    if (!l) { l = document.createElementNS('http://www.w3.org/2000/svg', 'line'); ringLinks.set(d.id, l); svg.appendChild(l); }
     for (const [k, v] of Object.entries({
       x1: cx, y1: cy, x2: x, y2: y,
       stroke: st === 'healthy' ? 'rgba(63,224,140,.4)' : st === 'cooldown' ? 'rgba(255,110,125,.4)' : st === 'retired' ? 'rgba(142,151,168,.32)' : st === 'degraded' ? 'rgba(255,200,97,.4)' : st === 'half_open' ? 'rgba(201,184,255,.4)' : 'rgba(70,98,138,.3)',
       'stroke-width': 1.2, 'stroke-dasharray': '3 6'
     })) l.setAttribute(k, v);
-    svg.appendChild(l);
   });
+  for (const [id, l] of ringLinks) if (!active.has(id)) { l.remove(); ringLinks.delete(id); }
   if (ds.length > 100) {
-    const n = document.createElement('div');
-    n.className = 'node degraded';
-    n.style.left = cx + 'px'; n.style.top = (H - 30) + 'px';
-    n.innerHTML = `<strong>+${ds.length - 100} more</strong><small>See Models table</small>`;
-    ring.appendChild(n);
-  }
+    if (!ringMore) { ringMore = document.createElement('div'); ringMore.className = 'node degraded'; ring.appendChild(ringMore); }
+    ringMore.style.left = cx + 'px'; ringMore.style.top = (H - 30) + 'px';
+    ringMore.innerHTML = `<strong>+${ds.length - 100} more</strong><small>See Models table</small>`;
+  } else if (ringMore) { ringMore.remove(); ringMore = null; }
 }
 
 function renderDonut(counts, total) {
@@ -550,6 +599,7 @@ async function refresh() {
       api('/admin/api/providers')
     ]);
     snap = s;
+    liveSeq = Math.max(liveSeq, ...(snap.events || []).map(e => Number(e.seq || 0)));
     providerSummaries = p.providers || [];
     // latency timeline from recent successful routes
     const lats = (snap.events || []).filter(e => e.kind === 'route_ok' && e.latency_ms).map(e => e.latency_ms).slice(0, 60).reverse();
@@ -1148,10 +1198,11 @@ window.deleteChain = deleteChain;
     const d = await api('/admin/api/provider-presets');
     serverPresets = d.presets || null;
   } catch { serverPresets = null; }
-  fillPresetSelect();
-  renderCLI();
-  tick();
-})();
+    fillPresetSelect();
+    renderCLI();
+    tick();
+    consumeLiveEvents();
+  })();
 
 
 /* ---------- compatibility matrix (Universal Compatibility Engine) ---------- */

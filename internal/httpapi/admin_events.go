@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/ali-shortcuts/nexaroute/internal/events"
 )
@@ -31,7 +32,23 @@ func (s *Server) adminEventStream(w http.ResponseWriter, r *http.Request) {
 		}
 		limit = parsed
 	}
-	snapshot, live, cancel, ok := s.bus.SubscribeSnapshot(limit)
+	var since uint64
+	if raw := r.URL.Query().Get("since"); raw != "" {
+		parsed, err := strconv.ParseUint(raw, 10, 64)
+		if err != nil {
+			errorJSON(w, http.StatusBadRequest, "since must be a non-negative sequence number")
+			return
+		}
+		since = parsed
+	} else if raw := r.Header.Get("Last-Event-ID"); raw != "" {
+		parsed, err := strconv.ParseUint(raw, 10, 64)
+		if err != nil {
+			errorJSON(w, http.StatusBadRequest, "Last-Event-ID must be a non-negative sequence number")
+			return
+		}
+		since = parsed
+	}
+	snapshot, live, cancel, ok := s.bus.SubscribeSnapshotSince(since, limit)
 	if !ok {
 		errorJSON(w, http.StatusServiceUnavailable, "admin event subscriber capacity reached")
 		return
@@ -56,7 +73,7 @@ func (s *Server) adminEventStream(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return false
 		}
-		if _, err := fmt.Fprintf(w, "event: event\ndata: %s\n\n", payload); err != nil {
+		if _, err := fmt.Fprintf(w, "id: %d\nevent: event\ndata: %s\n\n", e.Seq, payload); err != nil {
 			return false
 		}
 		if flusher != nil {
@@ -69,6 +86,8 @@ func (s *Server) adminEventStream(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	keepalive := time.NewTicker(20 * time.Second)
+	defer keepalive.Stop()
 	for {
 		select {
 		case <-r.Context().Done():
@@ -76,6 +95,13 @@ func (s *Server) adminEventStream(w http.ResponseWriter, r *http.Request) {
 		case e, open := <-live:
 			if !open || !emit(e) {
 				return
+			}
+		case <-keepalive.C:
+			if _, err := fmt.Fprint(w, ": keepalive\n\n"); err != nil {
+				return
+			}
+			if flusher != nil {
+				flusher.Flush()
 			}
 		}
 	}

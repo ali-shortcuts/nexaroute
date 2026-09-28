@@ -7,6 +7,7 @@ import (
 )
 
 type Event struct {
+	Seq             uint64    `json:"seq"`
 	Time            time.Time `json:"time"`
 	RequestID       string    `json:"request_id,omitempty"`
 	Kind            string    `json:"kind"`
@@ -130,6 +131,7 @@ type Bus struct {
 	errorCounts map[string]uint64
 	subscribers map[uint64]chan Event
 	nextSubID   uint64
+	nextSeq     uint64
 }
 
 func New(max int) *Bus {
@@ -143,6 +145,12 @@ func (b *Bus) Add(e Event) {
 	defer b.mu.Unlock()
 	if e.Time.IsZero() {
 		e.Time = time.Now()
+	}
+	if e.Seq == 0 {
+		b.nextSeq++
+		e.Seq = b.nextSeq
+	} else if e.Seq > b.nextSeq {
+		b.nextSeq = e.Seq
 	}
 	e.RequestID = boundedString(e.RequestID, maxEventRequestID)
 	e.Kind = boundedString(e.Kind, maxEventKind)
@@ -197,6 +205,28 @@ func (b *Bus) SnapshotLimit(limit int) []Event {
 	return b.snapshotLimitLocked(limit)
 }
 
+// SnapshotSince returns bounded events whose sequence is strictly greater
+// than since. Events older than the bounded ring are naturally unavailable.
+func (b *Bus) SnapshotSince(since uint64, limit int) []Event {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.snapshotSinceLocked(since, limit)
+}
+
+func (b *Bus) snapshotSinceLocked(since uint64, limit int) []Event {
+	out := make([]Event, 0, b.count)
+	for i := 0; i < b.count; i++ {
+		e := b.items[(b.start+i)%b.max]
+		if e.Seq > since {
+			out = append(out, e)
+		}
+	}
+	if limit > 0 && len(out) > limit {
+		out = out[len(out)-limit:]
+	}
+	return out
+}
+
 func (b *Bus) snapshotLimitLocked(limit int) []Event {
 	count := b.count
 	if limit > 0 && count > limit {
@@ -214,6 +244,12 @@ func (b *Bus) snapshotLimitLocked(limit int) []Event {
 // subscriber. The idempotent cancel function must be called when the consumer
 // disconnects. A false result means the fixed subscriber budget is full.
 func (b *Bus) SubscribeSnapshot(limit int) ([]Event, <-chan Event, func(), bool) {
+	return b.SubscribeSnapshotSince(0, limit)
+}
+
+// SubscribeSnapshotSince atomically captures events after since and adds one
+// bounded live subscriber, preventing a disconnect/reconnect gap.
+func (b *Bus) SubscribeSnapshotSince(since uint64, limit int) ([]Event, <-chan Event, func(), bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if len(b.subscribers) >= maxLiveSubscribers {
@@ -226,7 +262,7 @@ func (b *Bus) SubscribeSnapshot(limit int) ([]Event, <-chan Event, func(), bool)
 	id := b.nextSubID
 	ch := make(chan Event, liveSubscriberBuffer)
 	b.subscribers[id] = ch
-	snapshot := b.snapshotLimitLocked(limit)
+	snapshot := b.snapshotSinceLocked(since, limit)
 	var once sync.Once
 	cancel := func() {
 		once.Do(func() {

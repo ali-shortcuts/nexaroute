@@ -111,6 +111,20 @@ func TestSubscribeSnapshotDeliversHistoryThenLiveEvents(t *testing.T) {
 	}
 }
 
+func TestEventSequenceIsMonotonicAndResumable(t *testing.T) {
+	b := New(10)
+	b.Add(Event{Kind: "one"})
+	b.Add(Event{Kind: "two"})
+	all := b.Snapshot()
+	if len(all) != 2 || all[0].Seq == 0 || all[1].Seq != all[0].Seq+1 {
+		t.Fatalf("unexpected sequence values: %+v", all)
+	}
+	resumed := b.SnapshotSince(all[0].Seq, 10)
+	if len(resumed) != 1 || resumed[0].Kind != "two" {
+		t.Fatalf("unexpected resumed events: %+v", resumed)
+	}
+}
+
 func TestLiveSubscribersAreBoundedAndNeverBlockProducers(t *testing.T) {
 	b := New(10)
 	cancels := make([]func(), 0, maxLiveSubscribers)

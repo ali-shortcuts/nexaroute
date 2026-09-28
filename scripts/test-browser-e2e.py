@@ -70,7 +70,16 @@ def main() -> None:
                 console_errors: list[str] = []
                 page.on("pageerror", lambda exc: console_errors.append(str(exc) + "\n" + (exc.stack or "")))
                 page.on("console", lambda msg: console_errors.append(msg.text) if msg.type == "error" and "Failed to load resource" not in msg.text else None)
-                page.goto(base + "/", wait_until="networkidle")
+                # The dashboard intentionally keeps an authenticated SSE
+                # connection open, so networkidle can never be reached.
+                page.goto(base + "/", wait_until="domcontentloaded")
+                page.locator("#apiState").wait_for(state="visible", timeout=10000)
+                evidence = Path(os.environ.get("NEXAROUTE_BROWSER_EVIDENCE", str(tmp_path / "browser-evidence")))
+                evidence.mkdir(parents=True, exist_ok=True)
+                for width, name in ((1440, "desktop"), (1024, "tablet"), (390, "phone")):
+                    page.set_viewport_size({"width": width, "height": 900 if width > 500 else 844})
+                    page.screenshot(path=str(evidence / f"dashboard-{name}.png"), full_page=True)
+                page.set_viewport_size({"width": 1440, "height": 900})
                 # The v2 bootstrap intentionally shortens the active Overview
                 # label after mounting the control-plane chrome.
                 assert page.locator("#title").inner_text() == "Overview"

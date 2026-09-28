@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -55,6 +56,9 @@ func TestAdminEventStreamRequiresAuthAndStreamsSnapshotAndLive(t *testing.T) {
 	if err := json.Unmarshal([]byte(first.data), &historical); err != nil || historical.Kind != "historical_event" {
 		t.Fatalf("snapshot event=%+v err=%v", historical, err)
 	}
+	if first.id == "" || first.id != fmt.Sprint(historical.Seq) {
+		t.Fatalf("snapshot id=%q event seq=%d", first.id, historical.Seq)
+	}
 
 	s.bus.Add(events.Event{Kind: "live_event", Message: "after connect"})
 	second, done, err := reader.Next()
@@ -65,8 +69,29 @@ func TestAdminEventStreamRequiresAuthAndStreamsSnapshotAndLive(t *testing.T) {
 	if err := json.Unmarshal([]byte(second.data), &live); err != nil || live.Kind != "live_event" {
 		t.Fatalf("live event=%+v err=%v", live, err)
 	}
+	if second.id != fmt.Sprint(live.Seq) || live.Seq <= historical.Seq {
+		t.Fatalf("live id=%q event=%+v", second.id, live)
+	}
 	cancel()
 	_ = resp.Body.Close()
+
+	resumeCtx, resumeCancel := context.WithCancel(context.Background())
+	defer resumeCancel()
+	resumeReq, _ := http.NewRequestWithContext(resumeCtx, http.MethodGet, server.URL+"/admin/api/events/stream?limit=8", nil)
+	resumeReq.Header.Set("x-admin-key", cfg.Admin.APIKey)
+	resumeReq.Header.Set("Last-Event-ID", fmt.Sprint(historical.Seq))
+	resumeResp, err := server.Client().Do(resumeReq)
+	if err != nil {
+		t.Fatalf("resume event stream: %v", err)
+	}
+	defer resumeResp.Body.Close()
+	resumeEvent, done, err := newSSEReader(resumeResp.Body).Next()
+	if err != nil || done || resumeEvent.name != "event" {
+		t.Fatalf("resume frame=%+v done=%t err=%v", resumeEvent, done, err)
+	}
+	if resumeEvent.id != fmt.Sprint(live.Seq) {
+		t.Fatalf("resume id=%q want %d", resumeEvent.id, live.Seq)
+	}
 }
 
 func TestAdminEventStreamRejectsInvalidLimit(t *testing.T) {

@@ -114,3 +114,48 @@ Results:
 | `624ab37` | Withhold unvalidated canonical streamed tool calls from clients. |
 
 The branch is pushed to `origin/finish/final-build`.
+
+## Follow-up handoff verification
+
+The subsequent handoff audit identified and addressed these concrete gaps:
+
+- Events now carry a monotonic `seq` value assigned inside the bounded event bus.
+- `GET /admin/api/events/stream` now supports `since` and `Last-Event-ID`, emits SSE `id` fields, and sends bounded keepalive comments.
+- Resume ordering and authenticated stream behavior are covered by `TestEventSequenceIsMonotonicAndResumable` and `TestAdminEventStreamRequiresAuthAndStreamsSnapshotAndLive`.
+- The dashboard consumes the authenticated SSE stream and falls back to its existing snapshot polling when the stream is unavailable.
+- Ring nodes and links are reconciled by deployment ID instead of being removed and rebuilt on every refresh.
+- The literal `\\n` between dashboard stylesheet links was replaced with a real newline.
+- Cooldown documentation now distinguishes per-deployment (`1800s`), provider (`30s`), and decision-provider (`60s`) tiers. The stale per-deployment comment was corrected.
+
+Independent command evidence:
+
+```text
+go build ./... && go vet ./... && go test ./... -race
+PASS
+
+go test -coverprofile=/tmp/canonical.cover ./internal/protocol/canonical
+coverage: 83.9% of statements
+
+NEXAROUTE_SOAK_ROUNDS=1 ./scripts/soak.sh
+SOAK PASS
+
+bash -n scripts/*.sh
+python3 -m py_compile scripts/test-browser-e2e.py scripts/test-install.py
+PASS
+
+python3 scripts/test-install.py
+INSTALL PASS
+
+python3 scripts/test-browser-e2e.py
+BROWSER E2E PASS: clean startup, navigation, provider drawer, theme, Persian RTL, pause/resume, settings
+```
+
+Browser evidence was captured at three widths:
+
+- [Desktop screenshot](browser-evidence/dashboard-desktop.png)
+- [Tablet screenshot](browser-evidence/dashboard-tablet.png)
+- [Phone screenshot](browser-evidence/dashboard-phone.png)
+
+The browser E2E fixture is intentionally provider-free, so it proves UI startup,
+navigation, responsive rendering, and management empty states; it does not claim
+real upstream route-animation evidence without a configured provider fixture.

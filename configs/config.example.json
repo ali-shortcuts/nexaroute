@@ -14,6 +14,7 @@
     "max_inflight_requests": 128,
     "failure_threshold": 5,
     "cooldown_seconds": 1800,
+    "provider_cooldown_seconds": 30,
     "capability_failure_threshold": 2,
     "capability_cooldown_seconds": 300,
     "request_timeout_ms": 120000,

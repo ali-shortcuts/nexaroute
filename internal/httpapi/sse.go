@@ -13,6 +13,7 @@ const maxSSEEventBytes = 8 << 20
 type sseEvent struct {
 	name string
 	data string
+	id   string
 }
 
 // sseReader decodes an SSE stream according to the framing rules of the
@@ -24,6 +25,7 @@ type sseEvent struct {
 type sseReader struct {
 	sc         *bufio.Scanner
 	event      string
+	id         string
 	data       strings.Builder
 	eventBytes int
 	hasAny     bool
@@ -46,8 +48,9 @@ func (s *sseReader) Next() (ev sseEvent, done bool, err error) {
 			if !s.hasAny {
 				continue
 			}
-			ev := sseEvent{name: s.event, data: s.data.String()}
+			ev := sseEvent{name: s.event, data: s.data.String(), id: s.id}
 			s.event = ""
+			s.id = ""
 			s.data.Reset()
 			s.eventBytes = 0
 			s.hasAny = false
@@ -61,6 +64,9 @@ func (s *sseReader) Next() (ev sseEvent, done bool, err error) {
 			}
 			value = strings.TrimPrefix(value, " ")
 			switch field {
+			case "id":
+				s.id = value
+				s.hasAny = true
 			case "event":
 				if s.eventBytes+len(value) > maxSSEEventBytes {
 					return sseEvent{}, false, fmt.Errorf("SSE event exceeds safe limit of %d bytes", maxSSEEventBytes)
@@ -90,8 +96,9 @@ func (s *sseReader) Next() (ev sseEvent, done bool, err error) {
 	}
 	// Tolerate a final frame that was flushed without a trailing blank line.
 	if s.hasAny {
-		ev := sseEvent{name: s.event, data: s.data.String()}
+		ev := sseEvent{name: s.event, data: s.data.String(), id: s.id}
 		s.event = ""
+		s.id = ""
 		s.data.Reset()
 		s.eventBytes = 0
 		s.hasAny = false
