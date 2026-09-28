@@ -9,8 +9,11 @@ on:
 jobs:
   opencode:
     if: |
-      contains(github.event.comment.body, '/oc') ||
-      contains(github.event.comment.body, '/opencode')
+      github.actor != 'opencode-agent[bot]' &&
+      (
+        contains(github.event.comment.body, '/oc') ||
+        contains(github.event.comment.body, '/opencode')
+      )
 
     runs-on: ubuntu-latest
 
@@ -27,4 +30,4 @@ jobs:
       - name: Run OpenCode
         uses: anomalyco/opencode/github@latest
         with:
-          model: opencode/mimo-v2.6-flash
+          model: opencode/mimo-v2.6-flash-free
