@@ -112,10 +112,11 @@ func TestCanonicalStreamPumpRejectsMalformedToolArgumentsAcrossMappings(t *testi
 		clientProtocol string
 		failureMarker  string
 		successMarker  string
+		toolMarker     string
 	}{
-		{name: "openai-compatible", kind: "openai_chat", clientProtocol: "openai_chat", failureMarker: `"invalid_request_error"`, successMarker: "data: [DONE]"},
-		{name: "anthropic-compatible", kind: "anthropic", clientProtocol: "anthropic", failureMarker: "event: error", successMarker: "event: message_stop"},
-		{name: "responses", kind: "openai_responses", clientProtocol: "openai_responses", failureMarker: "event: response.failed", successMarker: "event: response.completed"},
+		{name: "openai-compatible", kind: "openai_chat", clientProtocol: "openai_chat", failureMarker: `"invalid_request_error"`, successMarker: "data: [DONE]", toolMarker: `"tool_calls"`},
+		{name: "anthropic-compatible", kind: "anthropic", clientProtocol: "anthropic", failureMarker: "event: error", successMarker: "event: message_stop", toolMarker: "event: content_block_start"},
+		{name: "responses", kind: "openai_responses", clientProtocol: "openai_responses", failureMarker: "event: response.failed", successMarker: "event: response.completed", toolMarker: "event: response.output_item.added"},
 	}
 	malformed := []struct {
 		name   string
@@ -164,6 +165,9 @@ func TestCanonicalStreamPumpRejectsMalformedToolArgumentsAcrossMappings(t *testi
 					}
 					if strings.Contains(out, mapping.successMarker) {
 						t.Fatalf("stream emitted success terminal %q after validation failure: %s", mapping.successMarker, out)
+					}
+					if strings.Contains(out, mapping.toolMarker) {
+						t.Fatalf("stream exposed invalid tool invocation before validation: %s", out)
 					}
 				})
 			}

@@ -125,6 +125,8 @@ func (s *Server) canonicalStreamPump(
 	anthropicToolBlocks := map[int]bool{}
 	assembledArgs := map[int]*strings.Builder{}
 	toolNames := map[int]string{}
+	pendingToolStarts := map[int]canonical.StreamEvent{}
+	pendingToolOrder := make([]int, 0, 4)
 	validateTool := func(toolIndex int) error {
 		args := ""
 		if b, ok := assembledArgs[toolIndex]; ok {
@@ -142,7 +144,42 @@ func (s *Server) canonicalStreamPump(
 		if err := canonical.ValidateResponseBlocks([]canonical.Block{block}, toolDefs, meta); err != nil {
 			return err
 		}
+		return nil
+	}
+	ensurePendingTool := func(ev canonical.StreamEvent) {
+		if _, ok := pendingToolStarts[ev.ToolIndex]; !ok {
+			pendingToolStarts[ev.ToolIndex] = canonical.StreamEvent{Type: canonical.StreamToolStart, ToolIndex: ev.ToolIndex, ToolID: ev.ToolID, ToolName: ev.ToolName}
+			pendingToolOrder = append(pendingToolOrder, ev.ToolIndex)
+		}
+		if _, ok := assembledArgs[ev.ToolIndex]; !ok {
+			assembledArgs[ev.ToolIndex] = &strings.Builder{}
+		}
+		if ev.ToolName != "" {
+			toolNames[ev.ToolIndex] = ev.ToolName
+		}
+	}
+	emitValidatedTool := func(toolIndex int) error {
+		start, ok := pendingToolStarts[toolIndex]
+		if !ok {
+			return nil
+		}
+		start.ToolName = toolNames[toolIndex]
+		active := ensureEmitter()
+		if err := active.Emit(start); err != nil {
+			return err
+		}
+		args := assembledArgs[toolIndex].String()
+		if args != "" {
+			if err := active.Emit(canonical.StreamEvent{Type: canonical.StreamToolDelta, ToolIndex: toolIndex, ToolName: start.ToolName, ArgsDelta: args}); err != nil {
+				return err
+			}
+		}
+		if err := active.Emit(canonical.StreamEvent{Type: canonical.StreamToolEnd, ToolIndex: toolIndex, ToolName: start.ToolName}); err != nil {
+			return err
+		}
+		delete(pendingToolStarts, toolIndex)
 		delete(assembledArgs, toolIndex)
+		delete(toolNames, toolIndex)
 		return nil
 	}
 	for {
@@ -182,7 +219,7 @@ func (s *Server) canonicalStreamPump(
 				emitTerminalError(ev)
 				break
 			}
-			ensureEmitter()
+			deferClientEvent := false
 			if kind == "anthropic" && ev.Type == canonical.StreamEnd && terminal {
 				continue
 			}
@@ -199,16 +236,10 @@ func (s *Server) canonicalStreamPump(
 			}
 			switch ev.Type {
 			case canonical.StreamToolStart:
-				if _, ok := assembledArgs[ev.ToolIndex]; !ok {
-					assembledArgs[ev.ToolIndex] = &strings.Builder{}
-				}
-				if ev.ToolName != "" {
-					toolNames[ev.ToolIndex] = ev.ToolName
-				}
+				ensurePendingTool(ev)
+				deferClientEvent = true
 			case canonical.StreamToolDelta:
-				if _, ok := assembledArgs[ev.ToolIndex]; !ok {
-					assembledArgs[ev.ToolIndex] = &strings.Builder{}
-				}
+				ensurePendingTool(ev)
 				if assembledArgs[ev.ToolIndex].Len()+len(ev.ArgsDelta) > 1<<20 {
 					msg := fmt.Sprintf("tool=%s field=arguments expected=object actual=too_large stage=%s protocol=%s streaming=true provider=%s: args exceed 1MB limit", toolNames[ev.ToolIndex], kind+"_to_canonical", kind, kind)
 					emitTerminalError(canonical.StreamEvent{Type: canonical.StreamError, ErrorCode: "invalid_request_error", ErrorMsg: msg})
@@ -216,21 +247,32 @@ func (s *Server) canonicalStreamPump(
 					break
 				}
 				assembledArgs[ev.ToolIndex].WriteString(ev.ArgsDelta)
+				deferClientEvent = true
 			case canonical.StreamToolEnd:
 				if err := validateTool(ev.ToolIndex); err != nil {
 					emitTerminalError(canonical.StreamEvent{Type: canonical.StreamError, ErrorCode: "invalid_request_error", ErrorMsg: err.Error()})
 					streamErr = err
 					break
 				}
+				if err := emitValidatedTool(ev.ToolIndex); err != nil {
+					return err
+				}
+				deferClientEvent = true
 			case canonical.StreamEnd:
 				// OpenAI-compatible streams signal only a finish reason and do
 				// not emit a distinct per-tool completion frame. Validate every
 				// still-open tool before allowing a successful terminal frame.
-				for toolIndex := range assembledArgs {
+				for _, toolIndex := range pendingToolOrder {
+					if _, pending := pendingToolStarts[toolIndex]; !pending {
+						continue
+					}
 					if err := validateTool(toolIndex); err != nil {
 						emitTerminalError(canonical.StreamEvent{Type: canonical.StreamError, ErrorCode: "invalid_request_error", ErrorMsg: err.Error()})
 						streamErr = err
 						break
+					}
+					if err := emitValidatedTool(toolIndex); err != nil {
+						return err
 					}
 				}
 			}
@@ -251,8 +293,10 @@ func (s *Server) canonicalStreamPump(
 			if ev.Type == canonical.StreamEnd {
 				terminal = true
 			}
-			if emitErr := emitter.Emit(ev); emitErr != nil {
-				return emitErr
+			if !deferClientEvent {
+				if emitErr := ensureEmitter().Emit(ev); emitErr != nil {
+					return emitErr
+				}
 			}
 		}
 		if streamErr != nil {
