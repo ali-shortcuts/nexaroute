@@ -9,7 +9,7 @@ on:
 jobs:
   opencode:
     if: |
-      github.actor != 'opencode-agent[bot]' &&
+      github.actor == 'ali-shortcuts' &&
       (
         contains(github.event.comment.body, '/oc') ||
         contains(github.event.comment.body, '/opencode')
@@ -20,6 +20,13 @@ jobs:
     permissions:
       id-token: write
 
+    strategy:
+      fail-fast: false
+      matrix:
+        model:
+          - opencode/mimo-v2.6-flash-free
+          - opencode/muse-spark-1.3-contributor-free
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -27,7 +34,7 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Run OpenCode
+      - name: Run OpenCode (${{ matrix.model }})
         uses: anomalyco/opencode/github@latest
         with:
-          model: opencode/mimo-v2.6-flash-free
+          model: ${{ matrix.model }}
