@@ -183,7 +183,20 @@ function fillRuntimeSettings() {
   $('#prRecoveryAttempts').value = p.recovery_attempts || 5;
   $('#prRecoveryRetry').value = Number.isFinite(p.recovery_retry_ms) ? p.recovery_retry_ms : 500;
 }
+function validateRuntimeSettingsForm() {
+  const controls = $('#settings input[type="number"], #settings select');
+  for (const el of controls) {
+    if (el.checkValidity()) continue;
+    const label = el.closest('.field')?.querySelector(':scope > span')?.textContent?.trim() || el.id || 'runtime setting';
+    toast('Invalid runtime setting: ' + label, true);
+    el.focus();
+    if (typeof el.reportValidity === 'function') el.reportValidity();
+    return false;
+  }
+  return true;
+}
 $('#saveRuntimeSettings').onclick = async () => {
+  if (!validateRuntimeSettingsForm()) return;
   const old = snap.config || {}, r = old.routing || {}, p = old.probe || {};
   const body = {
     routing: {
