@@ -1,62 +1,33 @@
-name: Security
+name: opencode
 
 on:
-  push:
-    branches: ["main"]
-  pull_request:
-    branches: ["main"]
-  schedule:
-    - cron: "23 5 * * 1"
-  workflow_dispatch:
-
-permissions:
-  contents: read
-
-concurrency:
-  group: security-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
 
 jobs:
-  govulncheck:
-    name: Go vulnerability scan
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Check reachable Go vulnerabilities
-        uses: golang/govulncheck-action@v1
-        with:
-          go-version-input: '1.27.x'
-          go-package: ./...
-          cache: false
+  opencode:
+    if: |
+      github.actor != 'opencode-agent[bot]' &&
+      (
+        contains(github.event.comment.body, '/oc') ||
+        contains(github.event.comment.body, '/opencode')
+      )
 
-  codeql:
-    name: CodeQL (Go)
-    # Forked PRs cannot upload code-scanning results with the restricted token.
-    # The normal CI workflow still runs all tests for those PRs.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+
     permissions:
-      contents: read
-      security-events: write
+      id-token: write
+
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - name: Checkout repository
+        uses: actions/checkout@v6
         with:
-          go-version: '1.27.x'
-          cache: false
-      - name: Initialize CodeQL
-        uses: github/codeql-action/init@v4
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Run OpenCode
+        uses: anomalyco/opencode/github@latest
         with:
-          languages: go
-          build-mode: manual
-      - name: Build Go packages for analysis
-        run: go build ./...
-      - name: Upload CodeQL results
-        uses: github/codeql-action/analyze@v4
-        with:
-          category: "/language:go"
+          model: opencode/mimo-v2.6-flash-free
