@@ -834,6 +834,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/responses", s.openAIResponses)
 
 	mux.HandleFunc("/admin/api/snapshot", s.adminSnapshot)
+	mux.HandleFunc("/admin/api/events/stream", s.adminEventStream)
 	mux.HandleFunc("/admin/api/probe", s.adminProbe)
 	mux.HandleFunc("/admin/api/providers", s.adminProviders)
 	mux.HandleFunc("/admin/api/providers/", s.adminProviderByID)

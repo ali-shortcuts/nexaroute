@@ -57,6 +57,8 @@ type Event struct {
 
 const (
 	maxCounterKeys       = 256
+	maxLiveSubscribers   = 64
+	liveSubscriberBuffer = 32
 	maxEventRequestID    = 128
 	maxEventKind         = 128
 	maxEventDeployment   = 512
@@ -126,13 +128,15 @@ type Bus struct {
 	count       int
 	counts      map[string]uint64
 	errorCounts map[string]uint64
+	subscribers map[uint64]chan Event
+	nextSubID   uint64
 }
 
 func New(max int) *Bus {
 	if max < 10 {
 		max = 10
 	}
-	return &Bus{max: max, items: make([]Event, max), counts: map[string]uint64{}, errorCounts: map[string]uint64{}}
+	return &Bus{max: max, items: make([]Event, max), counts: map[string]uint64{}, errorCounts: map[string]uint64{}, subscribers: map[uint64]chan Event{}}
 }
 func (b *Bus) Add(e Event) {
 	b.mu.Lock()
@@ -174,6 +178,14 @@ func (b *Bus) Add(e Event) {
 	}
 	incrementBoundedCounter(b.counts, e.Kind)
 	incrementBoundedCounter(b.errorCounts, e.ErrorType)
+	// Observability must never apply backpressure to the request path. Slow
+	// live subscribers receive only the events their bounded channel can hold.
+	for _, ch := range b.subscribers {
+		select {
+		case ch <- e:
+		default:
+		}
+	}
 }
 func (b *Bus) Snapshot() []Event {
 	return b.SnapshotLimit(0)
@@ -182,6 +194,10 @@ func (b *Bus) Snapshot() []Event {
 func (b *Bus) SnapshotLimit(limit int) []Event {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
+	return b.snapshotLimitLocked(limit)
+}
+
+func (b *Bus) snapshotLimitLocked(limit int) []Event {
 	count := b.count
 	if limit > 0 && count > limit {
 		count = limit
@@ -192,6 +208,37 @@ func (b *Bus) SnapshotLimit(limit int) []Event {
 		out[i] = b.items[(b.start+offset+i)%b.max]
 	}
 	return out
+}
+
+// SubscribeSnapshot atomically captures recent events and adds one bounded live
+// subscriber. The idempotent cancel function must be called when the consumer
+// disconnects. A false result means the fixed subscriber budget is full.
+func (b *Bus) SubscribeSnapshot(limit int) ([]Event, <-chan Event, func(), bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if len(b.subscribers) >= maxLiveSubscribers {
+		return nil, nil, func() {}, false
+	}
+	if b.subscribers == nil {
+		b.subscribers = map[uint64]chan Event{}
+	}
+	b.nextSubID++
+	id := b.nextSubID
+	ch := make(chan Event, liveSubscriberBuffer)
+	b.subscribers[id] = ch
+	snapshot := b.snapshotLimitLocked(limit)
+	var once sync.Once
+	cancel := func() {
+		once.Do(func() {
+			b.mu.Lock()
+			if current, ok := b.subscribers[id]; ok {
+				delete(b.subscribers, id)
+				close(current)
+			}
+			b.mu.Unlock()
+		})
+	}
+	return snapshot, ch, cancel, true
 }
 
 func (b *Bus) Counts() map[string]uint64 {

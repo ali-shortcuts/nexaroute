@@ -213,6 +213,15 @@ For an eligible Anthropic-compatible upstream, `/v1/messages/count_tokens` first
 
 Native SSE passthrough explicitly flushes chunks. Cross-protocol SSE emits deterministic content-block indices. Stream adapters cancel upstream work when the client disconnects or the configured stream idle deadline is exceeded.
 
+### Operator event stream
+
+`GET /admin/api/events/stream?limit=64` is an authenticated Server-Sent Event
+feed for the operator plane. It atomically returns a bounded recent snapshot and
+then live, privacy-safe lifecycle events (routing attempts, failover, cooldown,
+recovery, and stream failures). The bus allows at most 64 live subscribers with
+a 32-event buffer per subscriber; a slow dashboard can drop its own excess
+events but can never backpressure request routing or grow memory without bound.
+
 ## Web UI topology
 
 The UI is embedded into the binary with `go:embed`. The model topology shows deployment state around the router core, with concentric rings for dense pools. A separate table remains the authoritative complete list.

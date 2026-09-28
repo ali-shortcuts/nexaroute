@@ -87,3 +87,52 @@ func TestBusConcurrentFloodRemainsBounded(t *testing.T) {
 		t.Fatal("counter maps escaped their fixed bounds")
 	}
 }
+
+func TestSubscribeSnapshotDeliversHistoryThenLiveEvents(t *testing.T) {
+	b := New(10)
+	b.Add(Event{Kind: "historical", Message: "first"})
+	snapshot, live, cancel, ok := b.SubscribeSnapshot(10)
+	if !ok || len(snapshot) != 1 || snapshot[0].Kind != "historical" {
+		t.Fatalf("subscription snapshot=%+v ok=%t", snapshot, ok)
+	}
+	b.Add(Event{Kind: "live", Message: "second"})
+	select {
+	case got := <-live:
+		if got.Kind != "live" || got.Message != "second" {
+			t.Fatalf("live event=%+v", got)
+		}
+	default:
+		t.Fatal("live event was not delivered")
+	}
+	cancel()
+	cancel()
+	if _, open := <-live; open {
+		t.Fatal("cancelled subscription channel remains open")
+	}
+}
+
+func TestLiveSubscribersAreBoundedAndNeverBlockProducers(t *testing.T) {
+	b := New(10)
+	cancels := make([]func(), 0, maxLiveSubscribers)
+	for i := 0; i < maxLiveSubscribers; i++ {
+		_, _, cancel, ok := b.SubscribeSnapshot(1)
+		if !ok {
+			t.Fatalf("subscription %d unexpectedly rejected", i)
+		}
+		cancels = append(cancels, cancel)
+	}
+	if _, _, _, ok := b.SubscribeSnapshot(1); ok {
+		t.Fatal("subscriber budget exceeded")
+	}
+	for i := 0; i < liveSubscriberBuffer*4; i++ {
+		b.Add(Event{Kind: "burst", Message: fmt.Sprintf("%d", i)})
+	}
+	for _, cancel := range cancels {
+		cancel()
+	}
+	if _, _, cancel, ok := b.SubscribeSnapshot(1); !ok {
+		t.Fatal("subscriber capacity was not released")
+	} else {
+		cancel()
+	}
+}

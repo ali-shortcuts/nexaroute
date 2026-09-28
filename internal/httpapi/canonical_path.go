@@ -54,9 +54,34 @@ func (s *Server) buildCanonicalAttempt(cand router.Scored, req router.Requiremen
 	return s.finishCanonicalAttempt(bundle, canReq)
 }
 
+// streamCommitWriter observes client-visible canonical emitter writes. It is
+// deliberately independent of the outer middleware so direct handler tests and
+// production statusWriter wrappers share the same pre-commit boundary.
+type streamCommitWriter struct {
+	http.ResponseWriter
+	committed bool
+}
+
+func (w *streamCommitWriter) WriteHeader(status int) {
+	w.committed = true
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *streamCommitWriter) Write(p []byte) (int, error) {
+	w.committed = true
+	return w.ResponseWriter.Write(p)
+}
+
+func (w *streamCommitWriter) Flush() {
+	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
 // canonicalStreamPump decodes an upstream SSE stream into canonical events and
 // re-encodes them into the client's dialect. It returns the transport error,
-// if any, after emitting a terminal client-side error frame.
+// if any, after emitting a terminal client-side error frame only when client
+// bytes were already committed; otherwise the handler may fail over safely.
 //
 // Defense-in-depth: it assembles tool args per index and validates them on
 // tool_end to catch string->unknown coercion, double-encoding, and malformed
@@ -70,8 +95,28 @@ func (s *Server) canonicalStreamPump(
 	usageHook func(input, output int),
 ) error {
 	defer resp.Body.Close()
-	fl, _ := w.(http.Flusher)
-	emitter := canonical.NewStreamEmitter(clientProtocol, w, requestedModel, requestID)
+	streamWriter := &streamCommitWriter{ResponseWriter: w}
+	var emitter canonical.StreamEmitter
+	ensureEmitter := func() canonical.StreamEmitter {
+		if emitter == nil {
+			emitter = canonical.NewStreamEmitter(clientProtocol, streamWriter, requestedModel, requestID)
+		}
+		return emitter
+	}
+	committed := func() bool { return streamWriter.committed || responseCommitted(w) }
+	_, precommitFailoverAware := w.(interface{ Committed() bool })
+	emitTerminalError := func(ev canonical.StreamEvent) {
+		if emitter != nil && committed() {
+			_ = emitter.Emit(ev)
+			return
+		}
+		// Direct unit calls have no surrounding candidate loop. Retain their
+		// terminal diagnostic while production handlers preserve failover before
+		// their first client-visible write.
+		if !precommitFailoverAware {
+			_ = ensureEmitter().Emit(ev)
+		}
+	}
 	reader := canonical.NewSSEReader(resp.Body)
 	terminal := false
 	var streamErr error
@@ -104,7 +149,7 @@ func (s *Server) canonicalStreamPump(
 		name, data, done, err := reader.Next()
 		if err != nil {
 			if !terminal {
-				_ = emitter.Emit(canonical.StreamEvent{Type: canonical.StreamError, ErrorMsg: "upstream stream read failed: " + err.Error()})
+				emitTerminalError(canonical.StreamEvent{Type: canonical.StreamError, ErrorMsg: "upstream stream read failed: " + err.Error()})
 			}
 			streamErr = err
 			break
@@ -124,11 +169,20 @@ func (s *Server) canonicalStreamPump(
 			evs, terminal, err = canonical.DecodeOpenAIStreamChunk(data)
 		}
 		if err != nil {
-			_ = emitter.Emit(canonical.StreamEvent{Type: canonical.StreamError, ErrorMsg: "upstream stream protocol violation: " + err.Error()})
+			// No client-visible frame has been emitted yet, so preserve the
+			// pre-commit failover opportunity rather than committing a terminal
+			// error from this candidate.
+			emitTerminalError(canonical.StreamEvent{Type: canonical.StreamError, ErrorMsg: "upstream stream protocol violation: " + err.Error()})
 			streamErr = err
 			break
 		}
 		for _, ev := range evs {
+			if ev.Type == canonical.StreamError {
+				streamErr = fmt.Errorf("upstream stream error: %s", ev.ErrorMsg)
+				emitTerminalError(ev)
+				break
+			}
+			ensureEmitter()
 			if kind == "anthropic" && ev.Type == canonical.StreamEnd && terminal {
 				continue
 			}
@@ -157,14 +211,14 @@ func (s *Server) canonicalStreamPump(
 				}
 				if assembledArgs[ev.ToolIndex].Len()+len(ev.ArgsDelta) > 1<<20 {
 					msg := fmt.Sprintf("tool=%s field=arguments expected=object actual=too_large stage=%s protocol=%s streaming=true provider=%s: args exceed 1MB limit", toolNames[ev.ToolIndex], kind+"_to_canonical", kind, kind)
-					_ = emitter.Emit(canonical.StreamEvent{Type: canonical.StreamError, ErrorCode: "invalid_request_error", ErrorMsg: msg})
+					emitTerminalError(canonical.StreamEvent{Type: canonical.StreamError, ErrorCode: "invalid_request_error", ErrorMsg: msg})
 					streamErr = fmt.Errorf("%s", msg)
 					break
 				}
 				assembledArgs[ev.ToolIndex].WriteString(ev.ArgsDelta)
 			case canonical.StreamToolEnd:
 				if err := validateTool(ev.ToolIndex); err != nil {
-					_ = emitter.Emit(canonical.StreamEvent{Type: canonical.StreamError, ErrorCode: "invalid_request_error", ErrorMsg: err.Error()})
+					emitTerminalError(canonical.StreamEvent{Type: canonical.StreamError, ErrorCode: "invalid_request_error", ErrorMsg: err.Error()})
 					streamErr = err
 					break
 				}
@@ -174,7 +228,7 @@ func (s *Server) canonicalStreamPump(
 				// still-open tool before allowing a successful terminal frame.
 				for toolIndex := range assembledArgs {
 					if err := validateTool(toolIndex); err != nil {
-						_ = emitter.Emit(canonical.StreamEvent{Type: canonical.StreamError, ErrorCode: "invalid_request_error", ErrorMsg: err.Error()})
+						emitTerminalError(canonical.StreamEvent{Type: canonical.StreamError, ErrorCode: "invalid_request_error", ErrorMsg: err.Error()})
 						streamErr = err
 						break
 					}
@@ -194,9 +248,6 @@ func (s *Server) canonicalStreamPump(
 					usageSeen = true
 				}
 			}
-			if ev.Type == canonical.StreamError {
-				streamErr = fmt.Errorf("upstream stream error: %s", ev.ErrorMsg)
-			}
 			if ev.Type == canonical.StreamEnd {
 				terminal = true
 			}
@@ -210,17 +261,16 @@ func (s *Server) canonicalStreamPump(
 	}
 	if !terminal && streamErr == nil {
 		streamErr = io.ErrUnexpectedEOF
-		_ = emitter.Emit(canonical.StreamEvent{Type: canonical.StreamError, ErrorMsg: "upstream stream ended before completion"})
+		emitTerminalError(canonical.StreamEvent{Type: canonical.StreamError, ErrorMsg: "upstream stream ended before completion"})
 	}
 	if streamErr == nil && terminal {
-		if finErr := emitter.Finish(); finErr != nil {
+		if finErr := ensureEmitter().Finish(); finErr != nil {
 			streamErr = finErr
 		}
 	}
 	if streamErr == nil && terminal && usageHook != nil && usageSeen {
 		usageHook(inputTokens, outputTokens)
 	}
-	_ = fl
 	return streamErr
 }
 
