@@ -7,34 +7,65 @@ on:
     types: [created]
 
 jobs:
-  opencode:
+  muse-audit:
     if: |
       github.actor == 'ali-shortcuts' &&
       (
         contains(github.event.comment.body, '/oc') ||
         contains(github.event.comment.body, '/opencode')
       )
-
     runs-on: ubuntu-latest
-
+    timeout-minutes: 120
     permissions:
       id-token: write
-
-    strategy:
-      fail-fast: false
-      matrix:
-        model:
-          - opencode/mimo-v2.6-flash-free
-          - opencode/muse-spark-1.3-contributor-free
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
         with:
-          fetch-depth: 1
+          fetch-depth: 0
           persist-credentials: false
 
-      - name: Run OpenCode (${{ matrix.model }})
+      - name: Muse Spark audit
         uses: anomalyco/opencode/github@latest
         with:
-          model: ${{ matrix.model }}
+          model: opencode/muse-spark-1.3-contributor-free
+          prompt: |
+            ROLE: Independent architecture, UI/UX, test, and release auditor.
+            Read the entire GitHub issue/PR thread and the repository before answering.
+            First prove the current state with real commands and source inspection.
+            Do not modify files, do not push, do not create a branch, and do not open a PR in this audit stage.
+            Produce a precise implementation blueprint, identify contradictions or risks, map every requested requirement to concrete files/tests, and post an evidence-based acceptance checklist for the implementation agent.
+            Treat the user's latest comment as the authoritative task specification.
+
+  mimo-implementation:
+    needs: muse-audit
+    if: |
+      github.actor == 'ali-shortcuts' &&
+      (
+        contains(github.event.comment.body, '/oc') ||
+        contains(github.event.comment.body, '/opencode')
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    permissions:
+      id-token: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: MiMo implementation
+        uses: anomalyco/opencode/github@latest
+        with:
+          model: opencode/mimo-v2.6-flash-free
+          prompt: |
+            ROLE: Primary implementation and delivery agent.
+            Read the entire GitHub issue/PR thread, including the Muse Spark audit posted by the preceding job.
+            Treat the user's latest task specification as authoritative.
+            Prove what already exists before changing it. Implement only what is missing or broken.
+            Work on a unique feature branch, never force-push or rewrite history, preserve public APIs unless the issue explicitly requires an additive migration, run the required tests, commit and push changes, and open a PR to main.
+            Do not delete tags or published releases. Delete stale merged temporary branches only when their deletion is clearly safe and requested.
+            Never merge unless all required CI and Security checks are conclusively green; if you cannot verify that, leave the PR open and report the exact blocker.
+            For release work, use the repository release workflow; never upload release binaries by hand.
