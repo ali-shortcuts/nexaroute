@@ -184,7 +184,7 @@ function fillRuntimeSettings() {
   $('#prRecoveryRetry').value = Number.isFinite(p.recovery_retry_ms) ? p.recovery_retry_ms : 500;
 }
 function validateRuntimeSettingsForm() {
-  const controls = $('#settings input[type="number"], #settings select');
+  const controls = $$('#settings input[type="number"], #settings select');
   for (const el of controls) {
     if (el.checkValidity()) continue;
     const label = el.closest('.field')?.querySelector(':scope > span')?.textContent?.trim() || el.id || 'runtime setting';
