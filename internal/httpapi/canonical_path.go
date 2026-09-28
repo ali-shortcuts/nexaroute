@@ -66,6 +66,7 @@ func (s *Server) canonicalStreamPump(
 	w http.ResponseWriter,
 	resp *http.Response,
 	kind, clientProtocol, requestedModel, requestID string,
+	toolDefs []canonical.ToolDef,
 	usageHook func(input, output int),
 ) error {
 	defer resp.Body.Close()
@@ -79,6 +80,26 @@ func (s *Server) canonicalStreamPump(
 	anthropicToolBlocks := map[int]bool{}
 	assembledArgs := map[int]*strings.Builder{}
 	toolNames := map[int]string{}
+	validateTool := func(toolIndex int) error {
+		args := ""
+		if b, ok := assembledArgs[toolIndex]; ok {
+			args = b.String()
+		}
+		meta := canonical.ValidationMeta{
+			Stage:     kind + "_to_canonical",
+			Protocol:  kind,
+			Streaming: true,
+			Provider:  kind,
+		}
+		block := canonical.Block{Type: canonical.PartToolCall, ToolCall: &canonical.ToolCall{
+			Name: toolNames[toolIndex], Arguments: args,
+		}}
+		if err := canonical.ValidateResponseBlocks([]canonical.Block{block}, toolDefs, meta); err != nil {
+			return err
+		}
+		delete(assembledArgs, toolIndex)
+		return nil
+	}
 	for {
 		name, data, done, err := reader.Next()
 		if err != nil {
@@ -142,17 +163,17 @@ func (s *Server) canonicalStreamPump(
 				}
 				assembledArgs[ev.ToolIndex].WriteString(ev.ArgsDelta)
 			case canonical.StreamToolEnd:
-				if b, ok := assembledArgs[ev.ToolIndex]; ok && b.Len() > 0 {
-					meta := canonical.ValidationMeta{
-						Stage:     kind + "_to_canonical",
-						Protocol:  kind,
-						Streaming: true,
-						Provider:  kind,
-					}
-					if err := canonical.ValidateRawArguments(b.String(), meta); err != nil {
-						if ve, ok := err.(*canonical.ToolCallValidationError); ok && ve.Tool == "" {
-							ve.Tool = toolNames[ev.ToolIndex]
-						}
+				if err := validateTool(ev.ToolIndex); err != nil {
+					_ = emitter.Emit(canonical.StreamEvent{Type: canonical.StreamError, ErrorCode: "invalid_request_error", ErrorMsg: err.Error()})
+					streamErr = err
+					break
+				}
+			case canonical.StreamEnd:
+				// OpenAI-compatible streams signal only a finish reason and do
+				// not emit a distinct per-tool completion frame. Validate every
+				// still-open tool before allowing a successful terminal frame.
+				for toolIndex := range assembledArgs {
+					if err := validateTool(toolIndex); err != nil {
 						_ = emitter.Emit(canonical.StreamEvent{Type: canonical.StreamError, ErrorCode: "invalid_request_error", ErrorMsg: err.Error()})
 						streamErr = err
 						break
@@ -210,10 +231,11 @@ func (s *Server) handleCanonicalResponse(
 	resp *http.Response,
 	kind, clientProtocol, requestedModel, requestID string,
 	stream bool,
+	toolDefs []canonical.ToolDef,
 	usageHook func(input, output int),
 ) error {
 	if stream {
-		return s.canonicalStreamPump(w, resp, kind, clientProtocol, requestedModel, requestID, usageHook)
+		return s.canonicalStreamPump(w, resp, kind, clientProtocol, requestedModel, requestID, toolDefs, usageHook)
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	resp.Body.Close()
@@ -241,7 +263,7 @@ func (s *Server) handleCanonicalResponse(
 			Streaming: false,
 			Provider:  kind,
 		}
-		if err := canonical.ValidateResponseBlocks(canResp.Blocks, nil, meta); err != nil {
+		if err := canonical.ValidateResponseBlocks(canResp.Blocks, toolDefs, meta); err != nil {
 			return fmt.Errorf("tool call validation failed: %w", err)
 		}
 	}
@@ -489,10 +511,10 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 		sent := sentPayload
 		var usageErr error
 		if canReq.Stream {
-			usageErr = s.canonicalStreamPump(w, resp, bundle.canonicalKind, "openai_responses", in.Model, r.Header.Get("x-request-id"),
+			usageErr = s.canonicalStreamPump(w, resp, bundle.canonicalKind, "openai_responses", in.Model, r.Header.Get("x-request-id"), bundle.toolDefs,
 				func(input, output int) { s.usage.Record(deploy.ID, int64(input), int64(output)) })
 		} else {
-			usageErr = s.handleCanonicalResponse(w, resp, bundle.canonicalKind, "openai_responses", in.Model, r.Header.Get("x-request-id"), false,
+			usageErr = s.handleCanonicalResponse(w, resp, bundle.canonicalKind, "openai_responses", in.Model, r.Header.Get("x-request-id"), false, bundle.toolDefs,
 				func(input, output int) { s.usage.Record(deploy.ID, int64(input), int64(output)) })
 		}
 		total := time.Since(start)

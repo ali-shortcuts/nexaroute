@@ -197,6 +197,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 		c, a, nm = primary.c, primary.a, primary.nm
 		payload := primary.payload
 		kind := primary.canonicalKind
+		toolDefs := primary.toolDefs
 		attempts++
 		attemptIndex := attempts - 1
 		s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_attempt", Deployment: c.Deployment.ID, Message: fmt.Sprintf("attempt=%d score=%.2f health=%s pressure=%.3f", attempts, c.Score, c.Health.Status, c.CapacityPressure)})
@@ -220,6 +221,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 			c, a, nm = winner.c, winner.a, winner.nm
 			kind = winner.canonicalKind
 			payload = winner.payload
+			toolDefs = winner.toolDefs
 			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_attempt", Deployment: c.Deployment.ID, Message: fmt.Sprintf("attempt=%d score=%.2f health=%s pressure=%.3f (hedged winner)", attempts, c.Score, c.Health.Status, c.CapacityPressure)})
 		}
 		resp, e := out.resp, out.err
@@ -360,10 +362,10 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 			// Canonical-IR upstream (Gemini / Responses-native) decoded through
 			// the IR and re-encoded for the OpenAI client.
 			if in.Stream {
-				e = s.canonicalStreamPump(w, resp, kind, "openai_chat", in.Model, r.Header.Get("x-request-id"),
+				e = s.canonicalStreamPump(w, resp, kind, "openai_chat", in.Model, r.Header.Get("x-request-id"), toolDefs,
 					func(input, output int) { s.usage.Record(c.Deployment.ID, int64(input), int64(output)) })
 			} else {
-				e = s.handleCanonicalResponse(w, resp, kind, "openai_chat", in.Model, r.Header.Get("x-request-id"), false,
+				e = s.handleCanonicalResponse(w, resp, kind, "openai_chat", in.Model, r.Header.Get("x-request-id"), false, toolDefs,
 					func(input, output int) { s.usage.Record(c.Deployment.ID, int64(input), int64(output)) })
 			}
 		case c.Deployment.ProviderType == "openai_compatible":

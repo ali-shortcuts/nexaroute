@@ -44,7 +44,6 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		anthropicErrorJSON(w, 400, "model and messages are required")
 		return
 	}
-
 	// Phase C: feature extraction + task classification (observational, routing-neutral)
 	hasSystem := false
 	if in.System != nil {
@@ -188,6 +187,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		var payload []byte
 		kind := primary.canonicalKind
 		c, a, nm, streamOptionsInjected, payload = primary.c, primary.a, primary.nm, primary.injected, primary.payload
+		toolDefs := primary.toolDefs
 		attempts++
 		attemptIndex := attempts - 1
 		s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_attempt", Deployment: c.Deployment.ID, Message: fmt.Sprintf("attempt=%d score=%.2f health=%s pressure=%.3f", attempts, c.Score, c.Health.Status, c.CapacityPressure)})
@@ -210,6 +210,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		if out.secondaryWon {
 			kind = winner.canonicalKind
 			c, a, nm, streamOptionsInjected, payload = winner.c, winner.a, winner.nm, winner.injected, winner.payload
+			toolDefs = winner.toolDefs
 			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_attempt", Deployment: c.Deployment.ID, Message: fmt.Sprintf("attempt=%d score=%.2f health=%s pressure=%.3f (hedged winner)", attempts, c.Score, c.Health.Status, c.CapacityPressure)})
 		}
 		resp, e := out.resp, out.err
@@ -367,10 +368,10 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 			// Canonical-IR upstream (Gemini / Responses-native): decode into
 			// canonical events/blocks and re-encode for the Anthropic client.
 			if in.Stream {
-				e = s.canonicalStreamPump(w, resp, kind, "anthropic", in.Model, r.Header.Get("x-request-id"),
+				e = s.canonicalStreamPump(w, resp, kind, "anthropic", in.Model, r.Header.Get("x-request-id"), toolDefs,
 					func(input, output int) { s.usage.Record(c.Deployment.ID, int64(input), int64(output)) })
 			} else {
-				e = s.handleCanonicalResponse(w, resp, kind, "anthropic", in.Model, r.Header.Get("x-request-id"), false,
+				e = s.handleCanonicalResponse(w, resp, kind, "anthropic", in.Model, r.Header.Get("x-request-id"), false, toolDefs,
 					func(input, output int) { s.usage.Record(c.Deployment.ID, int64(input), int64(output)) })
 			}
 		case c.Deployment.ProviderType == "anthropic_compatible":

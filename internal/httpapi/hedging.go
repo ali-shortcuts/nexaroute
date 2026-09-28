@@ -198,6 +198,10 @@ type hedgeAttemptBundle struct {
 	a       providers.Adapter
 	payload []byte
 	nm      *translate.NameMap
+	// toolDefs are the client schemas attached to this canonical attempt.
+	// They travel with the bundle so a hedge winner retains schema-aware
+	// response validation rather than falling back to name-based checks.
+	toolDefs []canonical.ToolDef
 	// buildErr is safe, bounded context for an unsupported cross-protocol
 	// mapping. It is returned to the ingress handler instead of silently
 	// reducing the request to a generic "payload could not be built" failure.

@@ -503,6 +503,10 @@ func (s *Server) finishCanonicalAttempt(bundle hedgeAttemptBundle, canReq canoni
 	if !ok {
 		return bundle, false
 	}
+	// The response validator must use the exact client-provided schemas that
+	// produced this attempt. Keep definitions with the bundle so retries and
+	// hedged winner rebinding cannot accidentally lose them.
+	bundle.toolDefs = append([]canonical.ToolDef(nil), canReq.Tools...)
 	kind := upstreamKindFor(p.Type)
 	bundle.canonicalKind = kind
 	var payload []byte

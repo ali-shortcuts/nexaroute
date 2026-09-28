@@ -30,7 +30,7 @@ func TestCanonicalStreamPumpClosesBodyOnProtocolError(t *testing.T) {
 	}
 	rr := httptest.NewRecorder()
 	s := &Server{}
-	err := s.canonicalStreamPump(rr, resp, "openai_chat", "openai_chat", "client-model", "req-close", nil)
+	err := s.canonicalStreamPump(rr, resp, "openai_chat", "openai_chat", "client-model", "req-close", nil, nil)
 	if err == nil {
 		t.Fatal("expected canonical stream protocol error")
 	}
@@ -112,7 +112,7 @@ func TestCanonicalStreamUsageRecordedOnceAfterSuccessfulTerminal(t *testing.T) {
 	rr := httptest.NewRecorder()
 	calls := 0
 	gotInput, gotOutput := 0, 0
-	err := (&Server{}).canonicalStreamPump(rr, resp, "anthropic", "openai_chat", "client-model", "req-usage",
+	err := (&Server{}).canonicalStreamPump(rr, resp, "anthropic", "openai_chat", "client-model", "req-usage", nil,
 		func(input, output int) {
 			calls++
 			gotInput, gotOutput = input, output
@@ -152,7 +152,7 @@ func TestAnthropicTextBlockStopDoesNotBecomeResponsesToolEnd(t *testing.T) {
 		Body:       io.NopCloser(strings.NewReader(stream)),
 	}
 	rr := httptest.NewRecorder()
-	err := (&Server{}).canonicalStreamPump(rr, resp, "anthropic", "openai_responses", "client-model", "req-text-stop", nil)
+	err := (&Server{}).canonicalStreamPump(rr, resp, "anthropic", "openai_responses", "client-model", "req-text-stop", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,7 +173,7 @@ func TestCanonicalStreamErrorDoesNotAppendSuccessTail(t *testing.T) {
 		Body:       io.NopCloser(strings.NewReader(stream)),
 	}
 	rr := httptest.NewRecorder()
-	err := (&Server{}).canonicalStreamPump(rr, resp, "openai_chat", "openai_responses", "client-model", "req-stream-error", nil)
+	err := (&Server{}).canonicalStreamPump(rr, resp, "openai_chat", "openai_responses", "client-model", "req-stream-error", nil, nil)
 	if err == nil {
 		t.Fatal("expected upstream stream error")
 	}
@@ -213,7 +213,7 @@ func TestAnthropicMessageStopDoesNotOverwriteToolUseReason(t *testing.T) {
 		Body:       io.NopCloser(strings.NewReader(stream)),
 	}
 	rr := httptest.NewRecorder()
-	err := (&Server{}).canonicalStreamPump(rr, resp, "anthropic", "openai_chat", "client-model", "req-tool-stop", nil)
+	err := (&Server{}).canonicalStreamPump(rr, resp, "anthropic", "openai_chat", "client-model", "req-tool-stop", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
