@@ -321,7 +321,10 @@ func ValidateResponseBlocks(blocks []Block, toolDefs []ToolDef, meta ValidationM
 		}
 		// If we have a def for this tool, do schema-aware validation
 		if def, ok := defMap[b.ToolCall.Name]; ok {
-			if err := ValidateToolCallWithMeta(def, *b.ToolCall, meta); err != nil {
+			if err := ValidateToolCallArguments(def.Parameters, b.ToolCall.Arguments, meta); err != nil {
+				if ve, ok := err.(*ToolCallValidationError); ok && ve.Tool == "unknown" {
+					ve.Tool = b.ToolCall.Name
+				}
 				return err
 			}
 		} else {

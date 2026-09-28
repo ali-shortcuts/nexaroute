@@ -294,3 +294,69 @@ func TestCanonicalRepairKeepsClientToolSchemas(t *testing.T) {
 		t.Fatalf("client received malformed successful tool call after repair: %s", rr.Body.String())
 	}
 }
+
+func TestCanonicalPoisonedStreamFailsClosedAfterCommit(t *testing.T) {
+	failing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, strings.Join([]string{
+			`event: response.output_text.delta`,
+			`data: {"type":"response.output_text.delta","delta":"partial"}`,
+			``,
+			`event: response.output_item.added`,
+			`data: {"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","call_id":"call_1","name":"WriteFile"}}`,
+			``,
+			`event: response.function_call_arguments.delta`,
+			`data: {"type":"response.function_call_arguments.delta","output_index":0,"delta":"{\"content\":{}}"}`,
+			``,
+			`event: response.output_item.done`,
+			`data: {"type":"response.output_item.done","output_index":0,"item":{"type":"function_call"}}`,
+			``,
+			`event: response.completed`,
+			`data: {"type":"response.completed","response":{"status":"completed","output":[]}}`,
+			``,
+		}, "\n"))
+	}))
+	defer failing.Close()
+
+	fallbackCalls := 0
+	fallback := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fallbackCalls++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"fallback","model":"fallback","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"fallback output"}]}],"usage":{"input_tokens":1,"output_tokens":1}}`)
+	}))
+	defer fallback.Close()
+
+	cfg := config.Default()
+	cfg.Probe.Enabled = false
+	cfg.Routing.MaxAttempts = 2
+	cfg.Providers = []config.ProviderConfig{
+		{ID: "a", Name: "Poisoned", Type: "openai_responses", BaseURL: failing.URL, AuthMode: "none", Enabled: true, Models: []config.ModelConfig{{ID: "m", Model: "upstream-a", Enabled: true, Weight: 1, Priority: 0, Capabilities: config.Capabilities{Tools: true, Streaming: true}}}},
+		{ID: "b", Name: "Fallback", Type: "openai_responses", BaseURL: fallback.URL, AuthMode: "none", Enabled: true, Models: []config.ModelConfig{{ID: "m", Model: "upstream-b", Enabled: true, Weight: 1, Priority: 1, Capabilities: config.Capabilities{Tools: true, Streaming: true}}}},
+	}
+	s := testGateway(t, cfg)
+	s.SyncCapabilityContracts()
+	body := `{"model":"m","stream":true,"messages":[{"role":"user","content":"write"}],"tools":[{"type":"function","function":{"name":"WriteFile","parameters":{"type":"object","properties":{"content":{"type":"string"}},"required":["content"]}}}]}`
+	req := httptest.NewRequest(http.MethodPost, "http://gateway/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("X-Request-ID", "poisoned-stream")
+	rr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	out := rr.Body.String()
+	if !strings.Contains(out, "partial") || !strings.Contains(out, `"invalid_request_error"`) {
+		t.Fatalf("committed stream did not expose text then structured terminal error: %s", out)
+	}
+	if strings.Contains(out, "fallback output") || strings.Contains(out, "data: [DONE]") {
+		t.Fatalf("mid-stream failure blended or completed a response: %s", out)
+	}
+	if fallbackCalls != 0 {
+		t.Fatalf("fallback upstream was called after client-visible bytes: %d", fallbackCalls)
+	}
+	for _, ev := range s.bus.SnapshotLimit(64) {
+		if ev.RequestID == "poisoned-stream" && ev.Kind == "route_ok" {
+			t.Fatalf("poisoned stream recorded route_ok: %+v", ev)
+		}
+	}
+}
