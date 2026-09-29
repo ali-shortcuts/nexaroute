@@ -1177,7 +1177,7 @@ func TestSavedProviderCredentialsAreWriteOnly(t *testing.T) {
 	cfg := config.Default()
 	cfg.Probe.Enabled = false
 	cfg.Admin.BindLocalOnly = false
-	cfg.Providers = []config.ProviderConfig{{ID: "private", Type: "openai_compatible", BaseURL: "http://127.0.0.1:9/v1", APIKey: "primary-secret", APIKeyEnv: "WRITE_ONLY_TEST_KEY", AuthMode: "bearer", Headers: map[string]string{"X-Token": "header-secret"}, ProxyURL: "http://user:proxy-secret@127.0.0.1:9998", Credentials: []config.CredentialConfig{{Name: "extra", APIKey: "pool-secret", Enabled: true}}, Models: []config.ModelConfig{{ID: "m", Model: "m", Enabled: true, Weight: 1}}}}
+	cfg.Providers = []config.ProviderConfig{{ID: "private", Type: "openai_compatible", BaseURL: "http://127.0.0.1:9/v1", APIKey: "primary-secret", APIKeyEnv: "WRITE_ONLY_TEST_KEY", AuthMode: "bearer", Headers: map[string]string{"X-Token": "header-secret"}, ProxyURL: "http://127.0.0.1:9998", Credentials: []config.CredentialConfig{{Name: "extra", APIKey: "pool-secret", Enabled: true}}, Models: []config.ModelConfig{{ID: "m", Model: "m", Enabled: true, Weight: 1}}}}
 	s := testGateway(t, cfg)
 	for _, path := range []string{"/admin/api/providers/private", "/admin/api/providers/private?reveal=1", "/admin/api/providers/private?reveal=true", "/admin/api/providers", "/admin/api/snapshot"} {
 		rr := httptest.NewRecorder()
@@ -1187,7 +1187,11 @@ func TestSavedProviderCredentialsAreWriteOnly(t *testing.T) {
 		if rr.Code != 200 {
 			t.Fatalf("%s: %d %s", path, rr.Code, rr.Body.String())
 		}
-		for _, secret := range []string{"primary-secret", "environment-secret", "pool-secret", "header-secret", "proxy-secret", "resolved_api_key"} {
+		// NOTE (audit item 4): user:pass@ credentials embedded in proxy_url
+		// are now rejected at validation time, so this fixture uses a
+		// credential-free proxy URL; proxy write-only behavior is still
+		// covered by the preserve_proxy assertions below.
+		for _, secret := range []string{"primary-secret", "environment-secret", "pool-secret", "header-secret", "resolved_api_key"} {
 			if strings.Contains(rr.Body.String(), secret) {
 				t.Fatalf("%s leaked %s", path, secret)
 			}
@@ -1207,7 +1211,7 @@ func TestSavedProviderCredentialsAreWriteOnly(t *testing.T) {
 		t.Fatalf("%d %s", rr.Code, rr.Body.String())
 	}
 	got = s.currentConfig().Providers[0]
-	if got.APIKey != "primary-secret" || got.Credentials[0].APIKey != "pool-secret" || got.Headers["X-Token"] != "header-secret" || !strings.Contains(got.ProxyURL, "proxy-secret") {
+	if got.APIKey != "primary-secret" || got.Credentials[0].APIKey != "pool-secret" || got.Headers["X-Token"] != "header-secret" || got.ProxyURL != "http://127.0.0.1:9998" {
 		t.Fatal("edit lost saved secrets")
 	}
 }
