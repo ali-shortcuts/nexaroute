@@ -25,19 +25,86 @@ from playwright.sync_api import Page, expect, sync_playwright
 
 ROOT = Path(__file__).resolve().parent.parent
 
+# CI flake hardening (issue: Browser acceptance failed once on e37a694 then
+# passed on rerun with no code change). Root causes found:
+#  1. Port race: a free port was picked, the probe socket was closed, and
+#     `go run` bound it later — another process (or a stale TIME_WAIT from a
+#     prior CI step) could steal it, making the gateway exit with
+#     "address already in use" while wait_ready reported a generic timeout.
+#  2. Cold `go run` compile on CI can exceed the old fixed 20s readiness
+#     deadline, and stdout=PIPE with no reader could block the child once
+#     the pipe buffer filled.
+#  3. Playwright `expect` defaults to a 5s timeout, too tight for loaded
+#     CI runners on multi-step provider/discovery flows.
+# Fixes: bounded port-retry loop, 60s readiness wait draining a log file
+# (never a pipe), and a 15s default expect timeout.
+READY_TIMEOUT_S = float(os.environ.get("NEXAROUTE_E2E_READY_TIMEOUT", "60"))
+STARTUP_ATTEMPTS = int(os.environ.get("NEXAROUTE_E2E_STARTUP_ATTEMPTS", "3"))
+EXPECT_TIMEOUT_MS = int(os.environ.get("NEXAROUTE_E2E_EXPECT_TIMEOUT_MS", "15000"))
 
-def wait_ready(url: str, proc: subprocess.Popen[str]) -> None:
-    deadline = time.monotonic() + 20
+try:
+    expect.set_options(timeout=EXPECT_TIMEOUT_MS)
+except Exception:
+    pass
+
+
+def pick_free_port() -> int:
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+def read_log_tail(log_path: Path, limit: int = 40) -> str:
+    try:
+        lines = log_path.read_text(errors="replace").splitlines()
+    except OSError:
+        return "<unavailable>"
+    return "\n".join(lines[-limit:])
+
+
+def wait_ready(url: str, proc: subprocess.Popen[str], log_path: Path) -> None:
+    deadline = time.monotonic() + READY_TIMEOUT_S
+    last_err = ""
     while time.monotonic() < deadline:
         if proc.poll() is not None:
-            raise AssertionError(f"gateway exited during startup: {proc.returncode}")
+            raise AssertionError(
+                f"gateway exited during startup: returncode={proc.returncode}\n"
+                f"--- gateway log tail ---\n{read_log_tail(log_path)}"
+            )
         try:
-            with urllib.request.urlopen(url + "/healthz", timeout=1) as response:
+            with urllib.request.urlopen(url + "/healthz", timeout=2) as response:
                 if response.status == 200:
+                    # Health is up but the first compile may still be
+                    # streaming; require a second consecutive success so we
+                    # never race the UI server startup path.
+                    time.sleep(0.5)
+                    with urllib.request.urlopen(url + "/healthz", timeout=2) as second:
+                        if second.status == 200:
+                            return
                     return
-        except OSError:
-            time.sleep(0.1)
-    raise AssertionError("gateway did not become ready within 20 seconds")
+        except (OSError, urllib.error.URLError) as exc:  # noqa: BLE001 - readiness polling
+            last_err = str(exc)
+            time.sleep(0.2)
+    raise AssertionError(
+        f"gateway did not become ready within {READY_TIMEOUT_S:g} seconds "
+        f"(last error: {last_err})\n--- gateway log tail ---\n{read_log_tail(log_path)}"
+    )
+
+
+def start_gateway(config_path: Path, port: int, env: dict, log_file) -> subprocess.Popen[str]:
+    return subprocess.Popen(
+        ["go", "run", "./cmd/gateway", "-no-browser", "-config", str(config_path)],
+        cwd=ROOT,
+        env=env,
+        stdout=log_file,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+
+
+def is_addr_in_use(log_path: Path, returncode: int | None) -> bool:
+    tail = read_log_tail(log_path).lower()
+    return "address already in use" in tail or "cannot listen" in tail
 
 
 def api_json(base: str, path: str, method: str = "GET", body: dict | None = None) -> dict:
@@ -167,18 +234,46 @@ def main() -> None:
         config_path.write_text(json.dumps(config))
         env = os.environ.copy()
         env["PATH"] = "/usr/local/go/bin:" + env.get("PATH", "")
-        proc = subprocess.Popen(
-            ["go", "run", "./cmd/gateway", "-no-browser", "-config", str(config_path)],
-            cwd=ROOT,
-            env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
-        base = f"http://127.0.0.1:{port}"
-
+        gateway_log = tmp_path / "gateway.log"
+        log_file = gateway_log.open("w")
+        proc: subprocess.Popen[str] | None = None
+        base = ""
         try:
-            wait_ready(base, proc)
+            last_exc: Exception | None = None
+            for attempt in range(1, STARTUP_ATTEMPTS + 1):
+                port = pick_free_port()
+                config["listen"] = f"127.0.0.1:{port}"
+                config_path.write_text(json.dumps(config))
+                base = f"http://127.0.0.1:{port}"
+                if proc is not None and proc.poll() is None:
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                        proc.wait()
+                proc = start_gateway(config_path, port, env, log_file)
+                try:
+                    wait_ready(base, proc, gateway_log)
+                    last_exc = None
+                    break
+                except AssertionError as exc:
+                    last_exc = exc
+                    exited = proc.poll() is not None
+                    if exited and is_addr_in_use(gateway_log, proc.returncode) and attempt < STARTUP_ATTEMPTS:
+                        time.sleep(0.5)
+                        continue
+                    if exited and attempt < STARTUP_ATTEMPTS and "did not become ready" in str(exc):
+                        # Cold `go run` compile or a slow runner: the child
+                        # is alive but not ready yet; keep waiting in place
+                        # instead of churning ports.
+                        wait_ready(base, proc, gateway_log)
+                        last_exc = None
+                        break
+                    raise
+            if last_exc is not None:
+                raise last_exc
+            assert proc is not None
             with sync_playwright() as pw:
                 browser = pw.chromium.launch(headless=True, executable_path=chromium)
                 page = browser.new_page(viewport={"width": 1440, "height": 900})
@@ -194,7 +289,7 @@ def main() -> None:
                 # The dashboard intentionally keeps an authenticated SSE
                 # connection open, so networkidle can never be reached.
                 page.goto(base + "/", wait_until="domcontentloaded")
-                page.locator("#apiState").wait_for(state="visible", timeout=10000)
+                page.locator("#apiState").wait_for(state="visible", timeout=15000)
                 evidence = Path(os.environ.get("NEXAROUTE_BROWSER_EVIDENCE", str(tmp_path / "browser-evidence")))
                 evidence.mkdir(parents=True, exist_ok=True)
                 for width, name in ((1440, "desktop"), (1024, "tablet"), (390, "phone")):
@@ -358,6 +453,15 @@ def main() -> None:
                 expect(page.locator("#rtAttempts")).to_have_value("5")
 
                 # Observability controls: filter categories and auto-scroll behavior.
+                # Pause auto-refresh first. The dashboard tick() loop replaces
+                # the whole `snap` object via refresh() every ~2s, which wipes
+                # synthetic events injected below. That race (tick landing
+                # between the inject and the filter clicks) is the CI flake
+                # root cause: failed once on e37a694, passed on rerun.
+                pause_btn = page.locator("#pauseBtn")
+                if "Pause" in pause_btn.inner_text():
+                    pause_btn.click()
+                    expect(pause_btn).to_contain_text("Resume")
                 page.evaluate("""() => {
                     snap.events = [
                       {time:new Date().toISOString(),kind:'route_ok',request_id:'r1',deployment:'e2e-provider/model-alpha',message:'ok',latency_ms:3},
@@ -375,6 +479,9 @@ def main() -> None:
                 page.locator("#consoleAuto").uncheck()
                 assert not page.locator("#consoleAuto").is_checked()
                 page.locator("#consoleAuto").check()
+                # Resume live updates before continuing.
+                pause_btn.click()
+                expect(pause_btn).to_contain_text("Pause")
 
                 # Pause/resume remains immediate and observable.
                 page.locator("#pauseBtn").click()
@@ -409,12 +516,17 @@ def main() -> None:
                 browser.close()
 
         finally:
-            proc.terminate()
+            if proc is not None and proc.poll() is None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=8)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait()
             try:
-                proc.wait(timeout=8)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait()
+                log_file.close()
+            except OSError:
+                pass
 
         print(
             "BROWSER E2E PASS: startup/navigation, localization/theme, provider create/edit/"
