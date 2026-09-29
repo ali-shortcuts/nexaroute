@@ -21,6 +21,20 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/router"
 )
 
+// routeContext builds the per-request upstream budget.
+//
+//   - Streaming requests deliberately use WithCancel (no deadline): a stream
+//     may legitimately stay open far beyond any fixed timeout, and the parent
+//     HTTP request context already bounds it via client disconnect.
+//   - A non-positive timeout on a NON-streaming request is a configuration
+//     error path, not a silent infinite budget: it also falls back to
+//     WithCancel so the handler stays fail-closed (parent-scoped) rather
+//     than inventing an arbitrary deadline.
+//
+// Cancel ownership: the CALLER owns the returned CancelFunc and MUST defer
+// cancel() immediately (all three callers — anthropic.go, openai.go,
+// canonical_path.go — do so on the line after this call). Failing to cancel
+// leaks the timer/context until the parent request context is done.
 func routeContext(parent context.Context, streaming bool, timeout time.Duration) (context.Context, context.CancelFunc) {
 	if streaming || timeout <= 0 {
 		return context.WithCancel(parent)

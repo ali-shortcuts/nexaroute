@@ -16,7 +16,22 @@ let liveSeq = 0;
 let liveEventsAbort = null;
 let liveTransport = 'polling';
 
-const $ = q => document.querySelector(q), $$ = q => [...document.querySelectorAll(q)];
+const __missingWarned = new Set();
+function __nullStub() {
+  // Detached element absorbs textContent/value/checked/style/classList writes
+  // without throwing, so one renamed/missing ID cannot kill the render loop.
+  const el = document.createElement('div');
+  return el;
+}
+const $ = q => {
+  let el = null;
+  try { el = document.querySelector(q); } catch { el = null; }
+  if (el) return el;
+  if (!__missingWarned.has(q)) { __missingWarned.add(q); try { console.warn('[nexaroute] missing element for selector:', q); } catch {} }
+  return __nullStub();
+};
+const $$ = q => { try { return [...document.querySelectorAll(q)]; } catch { return []; } };
+function requireEl(q) { const el = document.querySelector(q); if (!el) throw new Error('missing required element: ' + q); return el; }
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[c]));
 const fmtInt = n => Number(n || 0).toLocaleString('en-US');
 const fmtCompact = n => { if (!Number.isFinite(n) || n <= 0) return '0'; if (n >= 1e9) return (n / 1e9).toFixed(1) + 'B'; if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M'; if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K'; return String(n); };
@@ -39,8 +54,13 @@ async function apiFetch(url, opt = {}) {
   }
   return r;
 }
+// Single source of truth for the dashboard auth flow (item 14): v2 layer
+// delegates to this via window.NexaRoute.apiFetch instead of overriding it.
+window.NexaRoute = window.NexaRoute || {};
+window.NexaRoute.apiFetch = apiFetch;
+window.NexaRoute.requestAdminKey = () => window.NexaUI?.requestAdminKey?.() ?? Promise.resolve('');
 async function api(url, opt = {}) {
-  const r = await apiFetch(url, opt);
+  const r = await window.NexaRoute.apiFetch(url, opt);
   let b = {};
   try { b = await r.json(); } catch {}
   if (!r.ok) throw new Error(b?.error?.message || `HTTP ${r.status}`);
@@ -50,15 +70,30 @@ function setLiveTransport(mode) {
   liveTransport = mode;
   $$('.live').forEach(el => { el.textContent = mode === 'sse' ? 'LIVE' : 'POLLING'; el.classList.toggle('polling', mode !== 'sse'); });
 }
+let sseFailures = 0;
+let sseMalformedFrames = 0;
+let sseRetryGeneration = 0;
+function sseBackoffDelay(attempt) {
+  const capped = Math.min(Math.max(0, attempt), 6);
+  const base = Math.min(1500 * Math.pow(2, capped), 30000);
+  return base / 2 + Math.random() * (base / 2);
+}
+function stopLiveEvents() {
+  sseRetryGeneration++;
+  if (liveEventsAbort) { try { liveEventsAbort.abort(); } catch {} liveEventsAbort = null; }
+}
 async function consumeLiveEvents() {
   if (liveEventsAbort) liveEventsAbort.abort();
   liveEventsAbort = new AbortController();
-  while (!liveEventsAbort.signal.aborted) {
+  const generation = ++sseRetryGeneration;
+  sseFailures = 0;
+  while (liveEventsAbort && !liveEventsAbort.signal.aborted && generation === sseRetryGeneration) {
     try {
       const q = liveSeq ? `?since=${encodeURIComponent(liveSeq)}&limit=100` : '?limit=100';
       const response = await apiFetch('/admin/api/events/stream' + q, { signal: liveEventsAbort.signal });
       if (!response.ok) throw new Error('event stream HTTP ' + response.status);
       setLiveTransport('sse');
+      sseFailures = 0;
       const reader = response.body?.getReader();
       if (!reader) throw new Error('event stream body unavailable');
       const decoder = new TextDecoder(); let buffer = '';
@@ -72,26 +107,34 @@ async function consumeLiveEvents() {
           if (frame.startsWith(':')) continue;
           const dataLine = frame.split('\n').find(x => x.startsWith('data: '));
           const idLine = frame.split('\n').find(x => x.startsWith('id: '));
-          if (!dataLine) continue;
+          if (!dataLine) { sseMalformedFrames++; continue; }
           try {
             const event = JSON.parse(dataLine.slice(6));
             const seq = Number(idLine?.slice(4) || event.seq || 0);
             if (seq && seq <= liveSeq) continue;
             if (seq) liveSeq = seq;
             snap.events = [...(snap.events || []).filter(x => x.seq !== event.seq), event].slice(-100);
-            render();
-          } catch {}
+            safeRender(render, 'live-render');
+          } catch { sseMalformedFrames++; }
         }
       }
     } catch (err) {
-      if (liveEventsAbort.signal.aborted) return;
+      if (!liveEventsAbort || liveEventsAbort.signal.aborted || generation !== sseRetryGeneration) return;
+      sseFailures++;
       setLiveTransport('polling');
-      await new Promise(resolve => setTimeout(resolve, 1500));
+      if (sseFailures === 3 || sseFailures % 10 === 0) {
+        toast(`Live events reconnecting (attempt ${sseFailures}, malformed frames: ${sseMalformedFrames})`, sseFailures >= 10);
+      }
+      await new Promise(resolve => setTimeout(resolve, sseBackoffDelay(sseFailures)));
     }
   }
 }
+function safeRender(fn, name) {
+  try { fn(); } catch (err) { try { console.error('[nexaroute] render section failed:', name, err); } catch {} }
+}
 function toast(m, bad = false) {
-  const t = $('#toast');
+  const t = document.querySelector('#toast');
+  if (!t) { try { console[bad ? 'error' : 'log']('[nexaroute] ' + m); } catch {} return; }
   t.textContent = m;
   t.className = 'toast show ' + (bad ? 'bad' : '');
   clearTimeout(toast.t);
@@ -148,7 +191,8 @@ $('#pauseBtn').onclick = () => {
 
 /* ---------- runtime settings ---------- */
 function intVal(id, fallback, min = 0) {
-  const n = parseInt($(id).value, 10);
+  const raw = document.querySelector(id)?.value;
+  const n = parseInt(raw, 10);
   return Number.isFinite(n) ? Math.max(min, n) : fallback;
 }
 function fillRuntimeSettings() {
@@ -290,17 +334,17 @@ function render() {
   const ls = (snap.events || []).filter(e => e.kind === 'route_ok' && e.latency_ms).map(e => e.latency_ms);
   const avg = ls.length ? Math.round(ls.reduce((a, b) => a + b, 0) / ls.length) : 0;
   $('#sLatency').textContent = avg ? avg + ' ms' : '—';
-  renderRing(ds, h);
-  renderDonut(c, total);
-  renderProviders(h);
-  renderModels(ds, h);
-  renderHealthTab(h);
-  renderRoutingObservatory(h, ds);
-  if ($('#compat').classList.contains('active')) renderCompat();
-  if ($('#virtual').classList.contains('active')) renderVirtual();
-  if ($('#profiles').classList.contains('active')) renderProfiles();
-  if ($('#pools').classList.contains('active')) renderPools();
-  renderConsole();
+  safeRender(() => renderRing(ds, h), 'ring');
+  safeRender(() => renderDonut(c, total), 'donut');
+  safeRender(() => renderProviders(h), 'providers');
+  safeRender(() => renderModels(ds, h), 'models');
+  safeRender(() => renderHealthTab(h), 'health');
+  safeRender(() => renderRoutingObservatory(h, ds), 'observatory');
+  try { if (document.querySelector('#compat')?.classList.contains('active')) renderCompat(); } catch (e) { try { console.error('[nexaroute] render section failed:', 'compat', e); } catch {} }
+  try { if (document.querySelector('#virtual')?.classList.contains('active')) renderVirtual(); } catch (e) { try { console.error('[nexaroute] render section failed:', 'virtual', e); } catch {} }
+  try { if (document.querySelector('#profiles')?.classList.contains('active')) renderProfiles(); } catch (e) { try { console.error('[nexaroute] render section failed:', 'profiles', e); } catch {} }
+  try { if (document.querySelector('#pools')?.classList.contains('active')) renderPools(); } catch (e) { try { console.error('[nexaroute] render section failed:', 'pools', e); } catch {} }
+  safeRender(renderConsole, 'console');
   $('#settingsJson').textContent = JSON.stringify(snap.config || {}, null, 2);
   // Cache + usage KPI cards (v0.5)
   const ch = Number(snap.cache?.hits ?? 0), cm = Number(snap.cache?.misses ?? 0);
@@ -316,6 +360,7 @@ function render() {
 }
 
 function renderRing(ds, h) {
+  if (!document.querySelector('#ring') || !document.querySelector('#links')) return;
   const ring = $('#ring');
   const svg = $('#links');
   const shown = ds.slice(0, 100), W = ring.clientWidth, H = ring.clientHeight, cx = W / 2, cy = H / 2;
@@ -417,7 +462,7 @@ function renderProviders(h) {
 }
 
 function renderModels(ds, h) {
-  const q = ($('#modelSearch').value || '').toLowerCase();
+  const q = (document.querySelector('#modelSearch')?.value || '').toLowerCase();
   const rows = ds.filter(d => !q || d.id.toLowerCase().includes(q) || (d.provider_id || '').toLowerCase().includes(q) || (d.model || '').toLowerCase().includes(q));
   const maxLat = Math.max(1, ...ds.map(d => Number((h[d.id] || {}).ewma_latency_ms || 0)));
   $('#modelRows').innerHTML = rows.map(d => {
@@ -579,9 +624,10 @@ const consoleKinds = {
   probes: new Set(['probe_ready', 'probe_fail', 'probe_quarantine', 'recovery_ready', 'recovery_fail', 'recovery_wait', 'recovery_deferred', 'recovery_cooldown', 'recovery_queue_full', 'model_unavailable', 'model_retired', 'stream_fail_precommit'])
 };
 function renderConsole() {
-  const box = $('#consoleLog');
+  const box = document.querySelector('#consoleLog');
   if (!box) return;
-  const stick = $('#consoleAuto').checked && (box.scrollHeight - box.scrollTop - box.clientHeight < 60);
+  const auto = document.querySelector('#consoleAuto');
+  const stick = !!auto?.checked && (box.scrollHeight - box.scrollTop - box.clientHeight < 60);
   const es = (snap.events || []).slice().reverse().filter(e => {
     if (consoleFilter === 'routes') return consoleKinds.routes.has(e.kind);
     if (consoleFilter === 'errors') return consoleKinds.errors.has(e.kind);
@@ -654,32 +700,53 @@ async function tick() {
     const had = (snap.events || []).length;
     await refresh();
     const now = (snap.events || []).length;
-    if (now > had && !$('#console').classList.contains('active') && (snap.events || []).some(e => consoleKinds.errors.has(e.kind))) {
-      $('#consoleDot').hidden = false;
+    if (now > had && !document.querySelector('#console')?.classList.contains('active') && (snap.events || []).some(e => consoleKinds.errors.has(e.kind))) {
+      const dot = document.querySelector('#consoleDot');
+      if (dot) dot.hidden = false;
       consoleUnread++;
     }
-    if ($('#console').classList.contains('active')) { consoleUnread = 0; $('#consoleDot').hidden = true; }
+    if (document.querySelector('#console')?.classList.contains('active')) { consoleUnread = 0; const dot = document.querySelector('#consoleDot'); if (dot) dot.hidden = true; }
   }
   const n = snap.deployment_total ?? (snap.deployments || []).length;
   const delay = n > 5000 ? 15000 : n > 1000 ? 8000 : n > 250 ? 4000 : 1800;
   setTimeout(tick, delay);
 }
-window.addEventListener('resize', () => { renderRing(snap.deployments || [], healthMap()); });
-setInterval(() => { $('#footClock').textContent = new Date().toLocaleTimeString('en-US', { hour12: false }); }, 1000);
+window.addEventListener('resize', () => { try { renderRing(snap.deployments || [], healthMap()); } catch (e) { try { console.error('[nexaroute] resize render failed', e); } catch {} } });
+const footClockTimer = setInterval(() => { const el = document.querySelector('#footClock'); if (el) el.textContent = new Date().toLocaleTimeString('en-US', { hour12: false }); }, 1000);
+// Lifecycle cleanup: stop live-event polling, clock interval, and observers on pagehide.
+let __ringObserver = null;
+try {
+  if ('ResizeObserver' in window && document.querySelector('#ring')) {
+    __ringObserver = new ResizeObserver(() => { try { renderRing(snap.deployments || [], healthMap()); } catch {} });
+    __ringObserver.observe(document.querySelector('#ring'));
+  }
+} catch {}
+window.addEventListener('pagehide', () => {
+  try { stopLiveEvents(); } catch {}
+  try { clearInterval(footClockTimer); } catch {}
+  try { if (__ringObserver) __ringObserver.disconnect(); } catch {}
+  try { window.removeEventListener('resize', renderRing); } catch {}
+});
+window.NexaRoute = window.NexaRoute || {};
+window.NexaRoute.stopLiveEvents = stopLiveEvents;
+window.NexaRoute.sseStats = () => ({ failures: sseFailures, malformedFrames: sseMalformedFrames });
 
 /* ---------- CLI tools tab ---------- */
 function cliSnippet(kind) {
   const base = location.origin;
   const ves = snap.virtual_endpoints || [];
   const firstVE = ves.length ? ves[0] : null;
-  const veModel = firstVE ? (firstVE.public_model || firstVE.id) : 'nexa-code';
-  const veList = ves.length ? ves.map(v => v.public_model || v.id).join(', ') : 'auto, claude-auto';
+  // XSS hardening: public_model names are operator-controlled and rendered
+  // through innerHTML below, so escape every interpolated value here.
+  const veModel = esc(firstVE ? (firstVE.public_model || firstVE.id) : 'nexa-code');
+  const veList = esc(ves.length ? ves.map(v => v.public_model || v.id).join(', ') : 'auto, claude-auto');
+  const baseEsc = esc(base);
   if (kind === 'claude') return {
     title: 'Claude Code / Anthropic clients (virtual endpoint)',
     note: ves.length ? `Virtual endpoints: ${veList}. Using ${veModel} routes through your configured pools without client reconfiguration.` : 'The placeholder key exists only for clients that require a non-empty value. Virtual endpoints provide stable public names.',
     body:
 `<span class="c"># Anthropic-compatible ingress via virtual endpoint</span>
-export ANTHROPIC_BASE_URL=${base}
+export ANTHROPIC_BASE_URL=${baseEsc}
 export ANTHROPIC_AUTH_TOKEN=local-placeholder
 export ANTHROPIC_MODEL=${veModel}
 
@@ -691,11 +758,11 @@ export ANTHROPIC_MODEL=${veModel}
     note: ves.length ? `Virtual endpoint ${veModel} → Route Profile → Pool → existing router. Pool ∩ Eligibility = routable set.` : 'Chat Completions requests flow through the same routing plane and the same bulletproof protocol translation.',
     body:
 `<span class="c"># OpenAI Chat Completions ingress via virtual endpoint</span>
-export OPENAI_BASE_URL=${base}/v1
+export OPENAI_BASE_URL=${baseEsc}/v1
 export OPENAI_API_KEY=local-placeholder
 
 <span class="c"># direct curl with virtual model</span>
-curl ${base}/v1/chat/completions \\
+curl ${baseEsc}/v1/chat/completions \\
   -H "Content-Type: application/json" \\
   -d '{"model":"${veModel}","messages":[{"role":"user","content":"hi"}]}'
 
@@ -706,10 +773,10 @@ curl ${base}/v1/chat/completions \\
     note: ves.length ? `Use virtual model ${veModel} for stable client identity.` : 'Drop this into .zshrc / .bashrc for the current machine.',
     body:
 `<span class="c"># NexaRoute client environment (virtual endpoint)</span>
-export ANTHROPIC_BASE_URL=${base}
+export ANTHROPIC_BASE_URL=${baseEsc}
 export ANTHROPIC_AUTH_TOKEN=local-placeholder
 export ANTHROPIC_MODEL=${veModel}
-export OPENAI_BASE_URL=${base}/v1
+export OPENAI_BASE_URL=${baseEsc}/v1
 export OPENAI_API_KEY=local-placeholder`
   };
   return {
@@ -717,16 +784,16 @@ export OPENAI_API_KEY=local-placeholder`
     note: 'Useful endpoints for monitoring and CI checks.',
     body:
 `<span class="c"># process liveness</span>
-curl -s ${base}/healthz
+curl -s ${baseEsc}/healthz
 
 <span class="c"># routing readiness (ready queue populated)</span>
-curl -s ${base}/readyz
+curl -s ${baseEsc}/readyz
 
 <span class="c"># Prometheus metrics</span>
-curl -s ${base}/metrics
+curl -s ${baseEsc}/metrics
 
 <span class="c"># exposed models and aliases</span>
-curl -s ${base}/v1/models
+curl -s ${baseEsc}/v1/models
 
 <span class="c"># virtual endpoints</span>
 curl -s ${base}/admin/api/virtual-endpoints -H "x-admin-key: $ADMIN_KEY"

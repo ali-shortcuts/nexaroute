@@ -595,7 +595,18 @@ func TestPhaseH_LiveScorecardsHaveZeroRoutingInfluence(t *testing.T) {
 	pol := &capturingProvider{inner: newCountingChainProvider("policy", decision.DecisionResult{
 		Action: decision.ActionAbstain, Abstained: true, Confidence: 1,
 		ReasonCodes: []decision.ReasonCode{decision.ReasonExistingOrderPreserved}}, nil)}
+	// Deterministic policy invocation (audit item 12): jev-main points at an
+	// unreachable stub host, so without an abstaining override the chain may
+	// short-circuit before policy. Register the same abstaining jev-main stub
+	// used by the instrumentation test so the policy provider is always
+	// invoked and payload inspection below is deterministic.
+	jev := &countingProvider{inner: newCountingChainProvider("jev-main", decision.DecisionResult{
+		Action: decision.ActionAbstain, Abstained: true, Confidence: 1,
+		ReasonCodes: []decision.ReasonCode{decision.ReasonExistingOrderPreserved}}, nil)}
+	loc := &countingProvider{inner: &decision.LocalProvider{}}
+	s.decisionRegistry.Register(jev)
 	s.decisionRegistry.Register(pol)
+	s.decisionRegistry.Register(loc)
 
 	body := `{"model":"nexa-chain","messages":[{"role":"user","content":"neutrality probe"}]}`
 	before := prodChat(t, s, body)
@@ -637,9 +648,11 @@ func TestPhaseH_LiveScorecardsHaveZeroRoutingInfluence(t *testing.T) {
 		t.Fatalf("routing changed after extreme scorecards: %q -> %q (Phase H scorecards must have zero routing influence)", deploymentBefore, got)
 	}
 
-	// Scorecards must not be handed to the policy provider either.
+	// Scorecards must not be handed to the policy provider either. The
+	// abstaining jev-main stub above guarantees the policy provider is
+	// invoked, so a zero count is a hard failure, not a skip.
 	if pol.Calls() == 0 {
-		t.Skip("policy provider was never invoked; cannot inspect its request payload")
+		t.Fatal("policy provider was never invoked; chain wiring must invoke it deterministically for payload inspection")
 	}
 	// Only the candidate payload can carry quality: the request also carries
 	// task features whose field names legitimately contain other words.

@@ -479,8 +479,5 @@ func (p *Provider) String() string {
 	return fmt.Sprintf("jev provider %s enabled=%t key_configured=%t", id, enabled, keyConfigured)
 }
 
-// Ensure no raw prompt leakage: BuildTaskSummary and BuildCandidateDescription already enforce metadata_only
-func init() {
-	// Ensure privacy mode constant
-	_ = strings.ToLower("metadata_only")
-}
+// Ensure no raw prompt leakage: BuildTaskSummary and BuildCandidateDescription already enforce metadata_only.
+// (No runtime init needed; the privacy-mode constant is enforced in NewProviderFromConfig/UpdateFromConfig.)

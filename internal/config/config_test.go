@@ -109,6 +109,54 @@ func TestValidateRejectsProxyWithoutHost(t *testing.T) {
 	}
 }
 
+// Audit item 4: credentials embedded in URLs and metadata/private proxy
+// targets must be rejected at validation time, not docs-only.
+func TestValidateRejectsEmbeddedCredentialsAndSSRFTargets(t *testing.T) {
+	cases := []struct {
+		name    string
+		base    string
+		proxy   string
+		wantSub string
+	}{
+		{"base userinfo", "https://user:pass@example.com/v1", "", "must not embed credentials"},
+		{"proxy userinfo", "https://example.com", "https://user:pass@proxy.example.com", "must not embed credentials"},
+		{"base metadata ip", "http://169.254.169.254/latest", "", "metadata"},
+		{"proxy metadata ip", "https://example.com", "http://169.254.169.254/", "metadata"},
+		{"proxy metadata hostname", "https://example.com", "http://metadata.google.internal/", "metadata"},
+		{"proxy private ip", "https://example.com", "http://10.0.0.5:8080/", "private-IP"},
+		{"proxy private 192.168", "https://example.com", "http://192.168.1.1:8080/", "private-IP"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := Default()
+			p := ProviderConfig{ID: "p", Name: "P", Type: "openai_compatible", BaseURL: tc.base, ProxyURL: tc.proxy, Enabled: true}
+			p.ApplyDefaults()
+			cfg.Providers = []ProviderConfig{p}
+			err := cfg.Validate()
+			if err == nil || !strings.Contains(err.Error(), tc.wantSub) {
+				t.Fatalf("want error containing %q, got %v", tc.wantSub, err)
+			}
+		})
+	}
+}
+
+func TestValidateAllowsLoopbackProxyAndLANBase(t *testing.T) {
+	cfg := Default()
+	p := ProviderConfig{ID: "p", Name: "P", Type: "openai_compatible",
+		BaseURL: "http://192.168.1.50:11434/v1", ProxyURL: "http://127.0.0.1:8080",
+		AuthMode: "none", Enabled: true,
+		Models: []ModelConfig{{ID: "m", Model: "m", Enabled: true}},
+	}
+	p.ApplyDefaults()
+	cfg.Providers = []ProviderConfig{p}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("loopback proxy + LAN base should validate: %v", err)
+	}
+	if err := ValidateProviderConfig(p); err != nil {
+		t.Fatalf("ValidateProviderConfig should accept: %v", err)
+	}
+}
+
 func TestReadyMeshRecoveryDefaults(t *testing.T) {
 	cfg := Default()
 	if cfg.Routing.Strategy != "ready_mesh" {

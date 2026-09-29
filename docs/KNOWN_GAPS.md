@@ -47,11 +47,71 @@ Implemented:
 - secret-preserving provider edit
 - credentials stripped on all admin read surfaces (never revealed after save, even to admin GET / snapshot / metrics)
 
+The `api_key_env` NAME (not its value) is intentionally visible on admin-only
+surfaces (`GET /admin/api/providers*`): operators need to know which
+environment variable feeds a provider. It never appears on non-admin surfaces
+(`/v1/*`, `/healthz`, `/readyz`, `/metrics`), and no log or error line ever
+pairs it with a secret value. A guard test
+(`TestAPIKeyEnvNameIsAdminOnlyAndNeverPairedWithValue`) locks this in.
+
 Not implemented:
 
 - encrypted-at-rest secret vault / OS keyring integration
 
 Saved provider keys are now write-only, including literal, pool, and environment keys. Headers and proxy URLs are also write-only. Editing a credential field replaces the whole credential set; individual saved pool keys cannot be revealed. Do not store credentials in base URLs or other public metadata. Do not expose the admin surface to untrusted networks.
+
+## URL validation (SSRF/credential enforcement)
+
+`Config.Validate` (and therefore `ValidateProviderConfig`) now enforces what
+was previously docs-only guidance:
+
+- `base_url` and `proxy_url` must not embed `user:pass@` credentials;
+- cloud-metadata targets (`169.254.169.254`, `metadata.google.internal`, …)
+  are rejected for both `base_url` and `proxy_url`;
+- non-loopback private-IP proxy targets are rejected (loopback stays allowed
+  for local development and tests; LAN `base_url` targets such as on-prem
+  inference servers remain allowed).
+
+Transport-layer dial guards remain the second line of defense; validation is
+the first.
+
+## Panic policy
+
+The HTTP middleware is fail-closed: any handler panic other than
+`http.ErrAbortHandler` is contained as HTTP 500 plus an `internal_panic` bus
+event (visible in the console and the failure radar). `http.ErrAbortHandler`
+is deliberately re-raised per the `net/http` contract — the server owns that
+response path. A regression test (`TestMiddlewarePanicIsFailClosed`) pins
+this behavior.
+
+## Config strictness
+
+Silent defaults are now surfaced: `LoadWithWarnings` reports empty
+routing/probe sections, `probe.max_tokens==0`, empty `routing.strategy`,
+missing `probe.interval_seconds`, and legacy `routing.public_model`
+auto-migration. Warnings go to stderr on every load; `--strict-config`
+(or `NEXAROUTE_STRICT_CONFIG=1`) turns them into hard errors.
+
+## Frontend hardening
+
+The dashboard no longer trusts element presence: the `$` helper returns a
+detached absorbing stub (with a one-time console warning) for missing
+selectors, and every render section is isolated so one bad panel cannot kill
+the render loop. CLI snippets escape all interpolated values (`veModel`,
+`veList`, origin) before `innerHTML` insertion. The live-event consumer uses
+capped exponential backoff with jitter, an error counter with operator
+toasts, and a surfaced malformed-frame counter
+(`window.NexaRoute.sseStats()`), instead of a fixed silent 1500 ms retry.
+
+## Test-coverage posture
+
+Audit-driven coverage work (see the `audit_coverage_test.go` files):
+`internal/core` 30.4% → 100%, `internal/route` 56.3% → 91.4%,
+`internal/feature` 59.4% → 71%+, `internal/compat` 51.6% → 63%+,
+`cmd/gateway` 12.9% → 20%+ (dashboard-URL, strict-config, UI-fallback
+branches). Stress/soak checks (`NEXAROUTE_STRESS=1`, `NEXAROUTE_SOAK=1`)
+remain opt-in and are intended for nightly CI rather than every push;
+workflow files are owned by a separate process and were not touched here.
 
 ## Admin security
 

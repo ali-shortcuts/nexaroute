@@ -49,12 +49,16 @@ func main() {
 	configPath := flag.String("config", defaultConfigPath(), "path to JSON config")
 	noBrowser := flag.Bool("no-browser", false, "do not automatically open the Web UI")
 	showVersion := flag.Bool("version", false, "print version and exit")
+	strictConfig := flag.Bool("strict-config", false, "turn implicit config defaults into hard errors (same as NEXAROUTE_STRICT_CONFIG=1)")
 	flag.Parse()
 	if *showVersion {
 		fmt.Println("NexaRoute v" + version)
 		return
 	}
 	bootstrap := log.New(os.Stderr, "nexaroute ", log.LstdFlags|log.Lmicroseconds)
+	if *strictConfig {
+		_ = os.Setenv("NEXAROUTE_STRICT_CONFIG", "1")
+	}
 	if *configPath == "" {
 		bootstrap.Fatal("cannot locate user config directory; set HOME, XDG_CONFIG_HOME, or NEXAROUTE_CONFIG")
 	}

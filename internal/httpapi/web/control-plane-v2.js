@@ -738,6 +738,11 @@
   });
 
   function installAdminKeyFlow(){
+    // Deduplicated auth flow (audit item 14): app.js owns window.NexaRoute.apiFetch.
+    if (window.NexaRoute && typeof window.NexaRoute.apiFetch === 'function') {
+      apiFetch = window.NexaRoute.apiFetch;
+      return;
+    }
     apiFetch=async function(url,opt={}){
       opt={...opt,headers:{...(opt.headers||{})}};
       if(adminKey)opt.headers['x-admin-key']=adminKey;

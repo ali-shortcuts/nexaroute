@@ -976,6 +976,10 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
 		defer func() {
 			if recovered := recover(); recovered != nil {
+				// Fail-closed panic policy: http.ErrAbortHandler MUST propagate
+				// per the net/http contract (the server suppresses the response
+				// itself); every other panic is contained as HTTP 500 plus an
+				// internal_panic bus event so the dashboard stays observable.
 				if recovered == http.ErrAbortHandler {
 					panic(recovered)
 				}

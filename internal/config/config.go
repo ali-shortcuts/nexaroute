@@ -446,6 +446,48 @@ func validHeaderValue(s string) bool {
 	return true
 }
 
+// cloudMetadataHosts are well-known endpoints that serve instance credentials.
+// They must never be a provider base_url or proxy_url target (SSRF risk).
+var cloudMetadataHostSet = map[string]bool{
+	"metadata.google.internal": true,
+	"metadata.google.com":      true,
+	"instance-data":            true,
+	"instance-data-compute":    true,
+	"rancher-metadata":         true,
+}
+
+// isCloudMetadataHost reports whether host is a cloud-metadata endpoint,
+// either by well-known name or as the 169.254.169.254 link-local address
+// (including IPv4-mapped IPv6 forms).
+func isCloudMetadataHost(host string) bool {
+	h := strings.ToLower(strings.TrimSpace(strings.TrimSuffix(host, ".")))
+	if h == "" {
+		return false
+	}
+	if cloudMetadataHostSet[h] {
+		return true
+	}
+	if ip := net.ParseIP(h); ip != nil {
+		if v4 := ip.To4(); v4 != nil {
+			return v4.Equal(net.ParseIP("169.254.169.254"))
+		}
+		return ip.IsLinkLocalUnicast() && strings.Contains(h, "169.254.169.254")
+	}
+	return false
+}
+
+// isNonLoopbackPrivateIP reports whether host is a literal private-IP address
+// that is not loopback. Only literal IPs are evaluated here (no DNS
+// resolution inside Validate); hostnames are left to the transport-layer
+// SSRF dial guard.
+func isNonLoopbackPrivateIP(host string) bool {
+	ip := net.ParseIP(strings.TrimSpace(host))
+	if ip == nil || ip.IsLoopback() {
+		return false
+	}
+	return ip.IsPrivate()
+}
+
 func Default() Config {
 	return Config{
 		Listen: "127.0.0.1:8080",
@@ -502,18 +544,81 @@ func LoadBase(path string) (Config, error) {
 }
 
 func Load(path string) (Config, error) {
-	cfg, err := LoadBase(path)
+	cfg, warnings, err := LoadWithWarnings(path)
+	for _, w := range warnings {
+		fmt.Fprintf(os.Stderr, "nexaroute config warning: %s\n", w)
+	}
 	if err != nil {
 		return cfg, err
 	}
+	return cfg, nil
+}
+
+// LoadWithWarnings behaves like Load but also returns the list of silent
+// defaults that fired (audit item 5). Operators should treat these as
+// prompts to make the config explicit; --strict-config turns them into
+// hard errors instead.
+func LoadWithWarnings(path string) (Config, []string, error) {
+	cfg, err := LoadBase(path)
+	if err != nil {
+		return cfg, nil, err
+	}
 	if err := cfg.ApplyEnvOverrides(); err != nil {
-		return cfg, err
+		return cfg, nil, err
 	}
 	cfg.ApplyDefaults()
 	if err := cfg.Validate(); err != nil {
-		return cfg, err
+		return cfg, nil, err
 	}
-	return cfg, nil
+	raw, readErr := os.ReadFile(path)
+	if readErr != nil {
+		return cfg, nil, nil
+	}
+	warnings := InspectRawDefaults(raw)
+	if StrictMode() && len(warnings) > 0 {
+		return cfg, warnings, fmt.Errorf("strict-config: %d implicit default(s): %s", len(warnings), strings.Join(warnings, "; "))
+	}
+	return cfg, warnings, nil
+}
+
+// StrictMode reports whether implicit config defaults must be hard errors.
+// Enabled by --strict-config (cmd/gateway) or NEXAROUTE_STRICT_CONFIG=1.
+func StrictMode() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("NEXAROUTE_STRICT_CONFIG"))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+// InspectRawDefaults decodes raw config JSON without applying defaults and
+// reports every silent default that Load would apply implicitly.
+func InspectRawDefaults(b []byte) []string {
+	var raw Config
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return nil
+	}
+	var warnings []string
+	if raw.Routing == (RoutingConfig{}) {
+		warnings = append(warnings, "routing section is empty; all routing defaults were applied implicitly")
+	}
+	if raw.Probe == (ProbeConfig{}) {
+		warnings = append(warnings, "probe section is empty; all probe defaults were applied implicitly")
+	}
+	if raw.Probe.MaxTokens == 0 {
+		warnings = append(warnings, "probe.max_tokens is 0/missing; defaulting to 1 implicitly")
+	}
+	if strings.TrimSpace(raw.Routing.PublicModel) != "" && len(raw.VirtualEndpoints) == 0 {
+		warnings = append(warnings, "legacy routing.public_model auto-migration fired; define virtual_endpoints explicitly")
+	}
+	if strings.TrimSpace(raw.Routing.Strategy) == "" {
+		warnings = append(warnings, "routing.strategy is empty; defaulting to ready_mesh implicitly")
+	}
+	if raw.Probe.IntervalSeconds == 0 {
+		warnings = append(warnings, "probe.interval_seconds is 0/missing; defaulting implicitly")
+	}
+	return warnings
 }
 
 func (c *Config) ApplyEnvOverrides() error {
@@ -1067,10 +1172,31 @@ func (c Config) Validate() error {
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 			return fmt.Errorf("provider %q has invalid base_url", p.ID)
 		}
+		// Credential/SSRF enforcement (audit item 4): credentials must never be
+		// embedded in URLs (they leak into logs/metrics), and cloud-metadata
+		// endpoints must never be a provider target.
+		if u.User != nil {
+			return fmt.Errorf("provider %q base_url must not embed credentials (user:pass@); use api_key / credentials instead", p.ID)
+		}
+		if isCloudMetadataHost(u.Hostname()) {
+			return fmt.Errorf("provider %q base_url targets a cloud-metadata endpoint, which is rejected as an SSRF risk", p.ID)
+		}
 		if p.ProxyURL != "" {
-			u, err := url.Parse(p.ProxyURL)
-			if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			pu, err := url.Parse(p.ProxyURL)
+			if err != nil || (pu.Scheme != "http" && pu.Scheme != "https") || pu.Host == "" {
 				return fmt.Errorf("provider %q has invalid proxy_url", p.ID)
+			}
+			if pu.User != nil {
+				return fmt.Errorf("provider %q proxy_url must not embed credentials (user:pass@); use api_key / credentials instead", p.ID)
+			}
+			if isCloudMetadataHost(pu.Hostname()) {
+				return fmt.Errorf("provider %q proxy_url targets a cloud-metadata endpoint, which is rejected as an SSRF risk", p.ID)
+			}
+			// A proxy sees all upstream traffic, so a non-loopback private-IP
+			// proxy target is rejected: it is almost always a misconfiguration
+			// or an SSRF pivot. Loopback stays allowed for local dev/tests.
+			if isNonLoopbackPrivateIP(pu.Hostname()) {
+				return fmt.Errorf("provider %q proxy_url targets a private-IP host %q; proxies must be public or loopback", p.ID, pu.Hostname())
 			}
 		}
 		if p.AuthMode != "" && p.AuthMode != "bearer" && p.AuthMode != "x-api-key" && p.AuthMode != "x-goog-api-key" && p.AuthMode != "none" {
