@@ -47,6 +47,10 @@ terminator, `id == data.seq == 1`, `Content-Type: text/event-stream`.
 - `scripts/verify.sh` → see gate log below (full suite + race + fuzz +
   benchmarks + linux builds).
 
+Final gate (this branch, commit `517236c`): `scripts/verify.sh` → `VERIFY PASS`
+(full clean + shuffle unit/integration, vet, full race + shuffle race,
+fuzz smoke, benchmark smoke, linux amd64 + arm64 builds).
+
 ## Overlap note vs broad PR #68
 
 `origin/fix/sse-resume-and-benchmarks-v2` overlaps in intent (resume tests)
