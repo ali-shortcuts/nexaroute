@@ -61,3 +61,8 @@ jobs:
             - Do not merge unless required CI and Security checks are conclusively green.
             - If permissions prevent push/PR/merge/release, stop safely and report the exact blocker.
             - For releases, use the repository release workflow; never upload release binaries manually.
+            - IMPORTANT: Never use /tmp or any path outside the checked-out repository for screenshots, browser evidence, test artifacts, generated reports, or files that must later be read/copied/committed.
+            - Create all evidence directly under repository-owned paths such as docs/browser-evidence/, docs/reports/, .artifacts/, or another tracked/in-repo directory.
+            - Do not perform any action that can trigger an interactive permission prompt in GitHub Actions. If a command would require permission to access an external directory, change the command/path so everything stays inside the repository.
+            - Browser screenshots must be written directly to docs/browser-evidence/ from the test command itself; do not write them to /tmp and copy afterward.
+            - Before long-running final gates, commit and push a coherent checkpoint branch so completed work is not lost if a later test times out or the runner is cancelled.
