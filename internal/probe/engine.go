@@ -45,6 +45,12 @@ const (
 	maxRecoveryQueue    = 20000
 )
 
+// probeTokenBudget is the fixed health-check generation budget. It is a
+// constant (not the configurable probe.max_tokens value) so that no
+// configuration, admin edit, or hot reload can ever raise the cost of a
+// synthetic availability probe above one token.
+const probeTokenBudget = 1
+
 type recoveryTask struct {
 	id         string
 	attempt    int
@@ -450,7 +456,7 @@ func (e *Engine) processRecoveryTask(ctx context.Context, task recoveryTask) {
 		return
 	}
 	pctx, cancel := context.WithTimeout(ctx, cfg.ProbeTimeout())
-	lat, status, err := a.Probe(pctx, d.Model, cfg.Probe.MaxTokens)
+	lat, status, err := a.Probe(pctx, d.Model, probeTokenBudget)
 	cancel()
 	e.releaseProbe()
 
@@ -733,7 +739,7 @@ func (e *Engine) runOnce(ctx context.Context, force bool) Result {
 			defer wg.Done()
 			defer e.releaseProbe()
 			pctx, cancel := context.WithTimeout(ctx, cfg.ProbeTimeout())
-			lat, status, err := a.Probe(pctx, d.Model, cfg.Probe.MaxTokens)
+			lat, status, err := a.Probe(pctx, d.Model, probeTokenBudget)
 			cancel()
 
 			if err != nil {
