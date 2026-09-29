@@ -93,8 +93,10 @@
             <div><h2>Live model ring</h2><p>Models orbit the router — health and probes update automatically.</p></div>
             <div class="panelhead-side"><span class="strategy-chip" id="routerStrategyLabel">ready_mesh</span><span class="live">LIVE</span></div>
           </div>
-          <div id="ring" class="ring"><svg id="links" aria-hidden="true"></svg>
-            <div class="core"><i class="core-orbit"></i><i class="core-orbit o2"></i><strong>ROUTER</strong><small id="coreSub">ready mesh</small></div>
+          <div id="ring" class="ring" role="img" aria-label="Live routing ring: deployments orbit the Nexa router"><svg id="ringSvg" aria-hidden="true"><g id="ringGuides"></g><g id="links"></g><g id="ringFx"></g><g id="ringParticles"></g></svg>
+            <div class="core" id="ringCore"><i class="core-orbit"></i><i class="core-orbit o2"></i><strong>NEXA ROUTER</strong><small id="coreSub">ready mesh</small></div>
+            <div id="ringCoalesced" class="ring-coalesced" hidden></div>
+            <div id="ringStatus" class="ring-status" role="status" aria-live="polite"></div>
           </div>
           <div class="legend">
             <span><i class="dot good"></i>healthy</span><span><i class="dot unknown"></i>unknown</span><span><i class="dot degraded"></i>degraded</span><span><i class="dot half"></i>half-open</span><span><i class="dot bad"></i>cooldown</span><span><i class="dot retired"></i>retired</span>

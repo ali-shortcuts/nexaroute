@@ -49,16 +49,42 @@ async function api(url, opt = {}) {
 function setLiveTransport(mode) {
   liveTransport = mode;
   $$('.live').forEach(el => { el.textContent = mode === 'sse' ? 'LIVE' : 'POLLING'; el.classList.toggle('polling', mode !== 'sse'); });
+  const rs = document.querySelector('#ringStatus');
+  if (rs) rs.dataset.transport = mode;
+  updateRingStatus();
+}
+async function pollLiveEventsFallback(signal) {
+  // Polling fallback: reuse the authoritative snapshot endpoint. Only new
+  // seqs animate the ring (de-duplicated by seq/request_id in drainRingEvent).
+  try {
+    const b = await api('/admin/api/snapshot?limit=20&events=40');
+    const evs = b.events || [];
+    let maxSeq = liveSeq;
+    for (const e of evs) {
+      const seq = Number(e.seq || 0);
+      if (seq) maxSeq = Math.max(maxSeq, seq);
+    }
+    const fresh = evs.filter(e => Number(e.seq || 0) > liveSeq);
+    liveSeq = maxSeq;
+    if (fresh.length && !paused) {
+      snap.events = [...(snap.events || []), ...fresh.filter(e => !(snap.events || []).some(x => x.seq === e.seq))].slice(-100);
+      for (const e of fresh) drainRingEvent(e);
+      render();
+    }
+  } catch {}
+  void signal;
 }
 async function consumeLiveEvents() {
   if (liveEventsAbort) liveEventsAbort.abort();
   liveEventsAbort = new AbortController();
+  let consecutiveFailures = 0;
   while (!liveEventsAbort.signal.aborted) {
     try {
       const q = liveSeq ? `?since=${encodeURIComponent(liveSeq)}&limit=100` : '?limit=100';
       const response = await apiFetch('/admin/api/events/stream' + q, { signal: liveEventsAbort.signal });
       if (!response.ok) throw new Error('event stream HTTP ' + response.status);
       setLiveTransport('sse');
+      consecutiveFailures = 0;
       const reader = response.body?.getReader();
       if (!reader) throw new Error('event stream body unavailable');
       const decoder = new TextDecoder(); let buffer = '';
@@ -78,15 +104,22 @@ async function consumeLiveEvents() {
             const seq = Number(idLine?.slice(4) || event.seq || 0);
             if (seq && seq <= liveSeq) continue;
             if (seq) liveSeq = seq;
+            else if (event.request_id && ringAnim.seenReq.has(event.request_id + '|' + event.kind + '|' + (event.deployment || ''))) continue;
             snap.events = [...(snap.events || []).filter(x => x.seq !== event.seq), event].slice(-100);
+            drainRingEvent(event);
             render();
           } catch {}
         }
       }
     } catch (err) {
       if (liveEventsAbort.signal.aborted) return;
+      consecutiveFailures++;
       setLiveTransport('polling');
-      await new Promise(resolve => setTimeout(resolve, 1500));
+      // Polling fallback drives the ring from real snapshot events only —
+      // never synthetic timers. Back off gently while SSE is unavailable.
+      await pollLiveEventsFallback(liveEventsAbort.signal);
+      const wait = Math.min(8000, 1500 + consecutiveFailures * 1000);
+      await new Promise(resolve => setTimeout(resolve, wait));
     }
   }
 }
@@ -315,41 +348,284 @@ function render() {
   $('#brandVersion').textContent = 'v' + (snap.version || '0.5') + ' • control plane';
 }
 
+/* ---------- live routing ring v2: persistent SVG topology + real-event animation ----------
+   Ring is reconciled by deployment id (no full teardown per refresh). Nodes sit
+   on a tilted perspective ellipse. Animation is driven ONLY by real routing
+   events from the SSE stream (snapshot polling fallback); particle drift is the
+   sole ambient motion and honors prefers-reduced-motion. */
+const ringAnim = {
+  active: new Map(), inflight: new Map(), seenSeq: new Set(), seenReq: new Set(),
+  coalesced: 0, lastAnimatedSeq: 0, particleT: 0, particleRaf: 0, particleLast: 0,
+  geom: null, maxAnims: 12
+};
+function ringReducedMotion() {
+  try { return window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch { return false; }
+}
+function ringTilt() { return -18 * Math.PI / 180; }
+function ringGeometry(W, H, count) {
+  const cx = W / 2, cy = H / 2;
+  const base = count > 24 ? Math.min(W * 0.36, 330) : Math.min(W * 0.38, 360);
+  const rx = Math.max(90, base);
+  const ry = Math.max(52, rx * 0.52);
+  return { cx, cy, rx, ry, tilt: ringTilt() };
+}
+function ringNodePos(i, count, g) {
+  const a = Math.PI * 2 * i / Math.max(count, 1) - Math.PI / 2;
+  const ex = Math.cos(a) * g.rx, ey = Math.sin(a) * g.ry;
+  const c = Math.cos(g.tilt), s = Math.sin(g.tilt);
+  const depth = (Math.sin(a) + 1) / 2;
+  return { x: g.cx + ex * c - ey * s, y: g.cy + ex * s + ey * c, depth };
+}
+function ensureRingLayers() {
+  const svgNS = 'http://www.w3.org/2000/svg';
+  let svg = document.querySelector('#ringSvg');
+  if (!svg) return null;
+  const ensure = (id, tag) => {
+    let el = document.querySelector('#' + id);
+    if (!el) { el = document.createElementNS(svgNS, tag); el.setAttribute('id', id); svg.appendChild(el); }
+    return el;
+  };
+  ensure('ringGuides', 'g'); ensure('links', 'g'); ensure('ringFx', 'g'); ensure('ringParticles', 'g');
+  return svg;
+}
+function layoutRingGuides(g) {
+  const guides = document.querySelector('#ringGuides');
+  if (!guides) return;
+  // Persistent guide ellipses: update attributes in place, never rebuild.
+  const svgNS = 'http://www.w3.org/2000/svg';
+  while (guides.childElementCount < 2) {
+    const e = document.createElementNS(svgNS, 'ellipse');
+    e.setAttribute('class', 'ring-guide');
+    guides.appendChild(e);
+  }
+  const [o1, o2] = [...guides.children];
+  for (const [el, k] of [[o1, 1], [o2, 0.68]]) {
+    el.setAttribute('cx', g.cx); el.setAttribute('cy', g.cy);
+    el.setAttribute('rx', g.rx * k); el.setAttribute('ry', g.ry * k);
+    el.setAttribute('transform', `rotate(${(g.tilt * 180 / Math.PI).toFixed(1)} ${g.cx} ${g.cy})`);
+  }
+}
+function startRingParticles() {
+  if (ringAnim.particleRaf || ringReducedMotion()) return;
+  const svgNS = 'http://www.w3.org/2000/svg';
+  const layer = document.querySelector('#ringParticles');
+  if (!layer) return;
+  const N = 14;
+  while (layer.childElementCount < N) {
+    const c = document.createElementNS(svgNS, 'circle');
+    c.setAttribute('r', '2'); c.setAttribute('class', 'ring-particle');
+    layer.appendChild(c);
+  }
+  ringAnim.particleLast = performance.now();
+  const step = now => {
+    ringAnim.particleRaf = requestAnimationFrame(step);
+    if (document.hidden || ringReducedMotion()) { ringAnim.particleLast = now; return; }
+    const dt = Math.min(0.1, (now - ringAnim.particleLast) / 1000);
+    ringAnim.particleLast = now;
+    ringAnim.particleT = (ringAnim.particleT + dt * 0.07) % 1;
+    const g = ringAnim.geom;
+    if (!g) return;
+    const dots = layer.children;
+    for (let i = 0; i < dots.length; i++) {
+      const t = (ringAnim.particleT + i / dots.length) % 1;
+      const a = t * Math.PI * 2 - Math.PI / 2;
+      const ex = Math.cos(a) * g.rx, ey = Math.sin(a) * g.ry;
+      const c = Math.cos(g.tilt), s = Math.sin(g.tilt);
+      dots[i].setAttribute('cx', (g.cx + ex * c - ey * s).toFixed(1));
+      dots[i].setAttribute('cy', (g.cy + ex * s + ey * c).toFixed(1));
+      dots[i].setAttribute('opacity', (0.25 + 0.55 * ((Math.sin(a) + 1) / 2)).toFixed(2));
+    }
+  };
+  ringAnim.particleRaf = requestAnimationFrame(step);
+}
+function updateRingStatus() {
+  const el = document.querySelector('#ringStatus');
+  if (!el) return;
+  const inflight = ringAnim.inflight.size;
+  const transport = (el.dataset && el.dataset.transport) || liveTransport || 'polling';
+  const extra = ringAnim.coalesced > 0 ? ` · +${ringAnim.coalesced} coalesced` : '';
+  el.textContent = `${transport === 'sse' ? 'live' : 'polling'} · ${inflight} in flight${extra}`;
+}
+function updateRingCoalesced() {
+  const el = document.querySelector('#ringCoalesced');
+  if (!el) return;
+  if (ringAnim.coalesced > 0) { el.hidden = false; el.textContent = `+${ringAnim.coalesced} coalesced`; }
+  else { el.hidden = true; el.textContent = ''; }
+  updateRingStatus();
+}
+function brightenRingLinks() {
+  for (const [id, l] of ringLinks) {
+    const hot = ringAnim.inflight.has(id) || [...ringAnim.inflight.values()].some(v => (v.deployments || []).includes(id));
+    l.setAttribute('opacity', hot ? '1' : '0.22');
+    l.setAttribute('stroke-width', hot ? '2' : '1.1');
+    if (hot) l.classList.add('link-hot'); else l.classList.remove('link-hot');
+  }
+}
+function ringAnimKey(e) {
+  const seq = Number(e.seq || 0);
+  if (seq) return 'seq:' + seq;
+  return `req:${e.request_id || ''}|${e.kind}|${e.deployment || ''}|${e.message || ''}|${e.latency_ms || 0}`;
+}
+function drainRingEvent(e) {
+  if (!e || !e.kind) return;
+  const kinds = new Set(['route_attempt', 'route_skip', 'route_fail', 'route_timeout', 'stream_fail', 'stream_fail_precommit', 'response_decode_fail', 'failover', 'route_ok', 'candidate_exhausted']);
+  if (!kinds.has(e.kind)) return;
+  const key = ringAnimKey(e);
+  if (ringAnim.seenReq.has(key)) return;
+  ringAnim.seenReq.add(key);
+  if (ringAnim.seenReq.size > 2000) { const first = ringAnim.seenReq.values().next().value; ringAnim.seenReq.delete(first); }
+  const seq = Number(e.seq || 0);
+  if (seq) {
+    if (seq <= ringAnim.lastAnimatedSeq) return;
+    ringAnim.lastAnimatedSeq = Math.max(ringAnim.lastAnimatedSeq, seq);
+  }
+  if (ringReducedMotion()) { trackRingInflight(e); return; }
+  if (ringAnim.active.size >= ringAnim.maxAnims) {
+    ringAnim.coalesced++;
+    updateRingCoalesced();
+    trackRingInflight(e);
+    return;
+  }
+  applyRingEvent(e);
+}
+function trackRingInflight(e) {
+  const rid = e.request_id || '';
+  if (!rid) { brightenRingLinks(); return; }
+  let rec = ringAnim.inflight.get(rid);
+  if (!rec) { rec = { deployments: [], updated: Date.now() }; ringAnim.inflight.set(rid, rec); }
+  if (e.deployment && !rec.deployments.includes(e.deployment)) rec.deployments.push(e.deployment);
+  rec.updated = Date.now();
+  const terminal = e.kind === 'route_ok' || e.kind === 'candidate_exhausted';
+  if (terminal) {
+    const dep = e.deployment, id = rid;
+    setTimeout(() => {
+      const r = ringAnim.inflight.get(id);
+      if (!r) return;
+      if (dep) r.deployments = r.deployments.filter(d => d !== dep);
+      if (!r.deployments.length || e.kind === 'candidate_exhausted') ringAnim.inflight.delete(id);
+      brightenRingLinks(); updateRingStatus();
+    }, 2500);
+  }
+  if (ringAnim.inflight.size > 64) {
+    const oldest = [...ringAnim.inflight.entries()].sort((a, b) => a[1].updated - b[1].updated)[0];
+    if (oldest) ringAnim.inflight.delete(oldest[0]);
+  }
+  brightenRingLinks(); updateRingStatus();
+}
+function ringNodeLabel(n, icon, text) {
+  let tag = n.querySelector('.ring-anim');
+  if (!tag) { tag = document.createElement('span'); tag.className = 'ring-anim'; n.appendChild(tag); }
+  tag.textContent = `${icon} ${text}`;
+}
+function applyRingEvent(e) {
+  trackRingInflight(e);
+  const finish = (id, ms) => {
+    const t = setTimeout(() => {
+      ringAnim.active.delete(id);
+      const n = id === '__core__' ? document.querySelector('#ringCore') : ringNodes.get(id);
+      if (n) n.classList.remove('anim-attempt', 'anim-skip', 'anim-fail', 'anim-failover', 'anim-ok');
+      if (ringAnim.coalesced > 0) { ringAnim.coalesced--; updateRingCoalesced(); }
+      brightenRingLinks(); updateRingStatus();
+    }, ms);
+    ringAnim.active.set(id, t);
+  };
+  if (e.kind === 'candidate_exhausted') {
+    const core = document.querySelector('#ringCore');
+    if (core) {
+      const id = '__core__';
+      if (ringAnim.active.has(id)) { clearTimeout(ringAnim.active.get(id)); ringAnim.active.delete(id); }
+      core.classList.remove('anim-exhausted'); void core.offsetWidth;
+      core.classList.add('anim-exhausted');
+      ringNodeLabel(core, '!', 'exhausted');
+      finish(id, 1600);
+    }
+    return;
+  }
+  const dep = e.deployment;
+  if (!dep) return;
+  const n = ringNodes.get(dep);
+  const l = ringLinks.get(dep);
+  if (l) { l.setAttribute('opacity', '1'); l.setAttribute('stroke-width', '2'); l.classList.add('link-hot'); }
+  if (!n) return;
+  const animId = dep + '|' + e.kind + '|' + (e.request_id || '') + '|' + (e.seq || Math.random());
+  const reduced = ringReducedMotion();
+  const clearPrev = () => n.classList.remove('anim-attempt', 'anim-skip', 'anim-fail', 'anim-failover', 'anim-ok');
+  if (e.kind === 'route_attempt') {
+    clearPrev(); n.classList.add('anim-attempt'); ringNodeLabel(n, '●', 'attempt');
+    if (!reduced) { void n.offsetWidth; }
+    finish(animId, 1400);
+  } else if (e.kind === 'route_skip') {
+    clearPrev(); n.classList.add('anim-skip'); ringNodeLabel(n, '≫', 'skip');
+    finish(animId, 1200);
+  } else if (e.kind === 'route_fail' || e.kind === 'stream_fail' || e.kind === 'route_timeout' || e.kind === 'stream_fail_precommit' || e.kind === 'response_decode_fail' || e.error_type === 'provider_timeout') {
+    clearPrev(); n.classList.add('anim-fail'); ringNodeLabel(n, '✕', e.error_type || 'fail');
+    finish(animId, 1800);
+  } else if (e.kind === 'failover') {
+    clearPrev(); n.classList.add('anim-failover'); ringNodeLabel(n, '↻', 'failover → next');
+    finish(animId, 1600);
+  } else if (e.kind === 'route_ok') {
+    clearPrev(); n.classList.add('anim-ok');
+    const lat = Number(e.latency_ms || 0);
+    ringNodeLabel(n, '✓', lat ? `${lat} ms` : 'ok');
+    finish(animId, 2000);
+  }
+  brightenRingLinks(); updateRingStatus();
+}
 function renderRing(ds, h) {
   const ring = $('#ring');
-  const svg = $('#links');
-  const shown = ds.slice(0, 100), W = ring.clientWidth, H = ring.clientHeight, cx = W / 2, cy = H / 2;
+  if (!ring) return;
+  ensureRingLayers();
+  const svg = document.querySelector('#ringSvg');
+  const linkLayer = document.querySelector('#links');
+  const shown = ds.slice(0, 100), W = ring.clientWidth || 600, H = ring.clientHeight || 420;
+  const g = ringGeometry(W, H, shown.length);
+  ringAnim.geom = g;
   ring.classList.toggle('dense', shown.length > 24);
+  const cx = g.cx, cy = g.cy;
+  // Reconcile nodes/links by deployment id: add/update/remove deltas only.
   const active = new Set(shown.map(d => d.id));
-  for (const [id, node] of ringNodes) if (!active.has(id)) { node.remove(); ringNodes.delete(id); ringLinks.get(id)?.remove(); ringLinks.delete(id); }
-  const ringCount = Math.max(1, Math.min(4, Math.ceil(shown.length / 25)));
+  for (const [id, node] of [...ringNodes]) if (!active.has(id)) { node.remove(); ringNodes.delete(id); const l = ringLinks.get(id); if (l) l.remove(); ringLinks.delete(id); }
+  for (const [id, l] of [...ringLinks]) if (!active.has(id)) { l.remove(); ringLinks.delete(id); }
   shown.forEach((d, i) => {
-    const ri = Math.floor(i / 25), start = ri * 25, count = Math.min(25, shown.length - start), pos = i - start;
-    const a = Math.PI * 2 * pos / Math.max(count, 1) - Math.PI / 2;
-    const frac = ringCount === 1 ? 1 : (ri + 1) / ringCount;
-    const rx = shown.length > 24 ? 110 + frac * Math.min(W * .34, 300) : Math.min(W * .38, 360);
-    const ry = shown.length > 24 ? 60 + frac * Math.min(H * .31, 210) : Math.min(H * .36, 190);
-    const x = cx + Math.cos(a) * rx, y = cy + Math.sin(a) * ry;
+    const p = ringNodePos(i, shown.length, g);
     const st = (h[d.id] || {}).status || 'unknown';
     let n = ringNodes.get(d.id);
-    if (!n) { n = document.createElement('div'); n.className = 'node'; ringNodes.set(d.id, n); ring.appendChild(n); }
-    n.className = 'node ' + st;
-    n.style.left = x + 'px'; n.style.top = y + 'px';
+    if (!n) {
+      n = document.createElement('div');
+      n.dataset.depid = d.id;
+      n.setAttribute('role', 'listitem');
+      ringNodes.set(d.id, n);
+      ring.appendChild(n);
+    }
+    // Preserve live animation classes across refresh (do not wipe anim-*).
+    const anims = [...n.classList].filter(c => c.startsWith('anim-'));
+    n.className = 'node ' + st + (anims.length ? ' ' + anims.join(' ') : '');
+    n.style.left = p.x + 'px'; n.style.top = p.y + 'px';
+    n.style.zIndex = String(10 + Math.round(p.depth * 20));
+    n.style.opacity = (0.82 + p.depth * 0.18).toFixed(2);
+    const scale = (0.88 + p.depth * 0.12).toFixed(3);
+    n.style.transform = `translate(-50%,-50%) scale(${scale})`;
     n.title = `${d.model} • ${d.provider_name || d.provider_id} • ${st} • ${fmtMs((h[d.id] || {}).ewma_latency_ms)}`;
+    const prevAnim = n.querySelector('.ring-anim');
+    const prevText = prevAnim ? prevAnim.textContent : '';
     n.innerHTML = `<strong>${esc(d.model)}</strong><small>${esc(d.provider_name || d.provider_id)}</small><span class="badge">${esc(st)}</span>`;
+    if (prevText) { const tag = document.createElement('span'); tag.className = 'ring-anim'; tag.textContent = prevText; n.appendChild(tag); }
     let l = ringLinks.get(d.id);
-    if (!l) { l = document.createElementNS('http://www.w3.org/2000/svg', 'line'); ringLinks.set(d.id, l); svg.appendChild(l); }
+    if (!l) { l = document.createElementNS('http://www.w3.org/2000/svg', 'line'); l.dataset.depid = d.id; ringLinks.set(d.id, l); (linkLayer || svg).appendChild(l); }
     for (const [k, v] of Object.entries({
-      x1: cx, y1: cy, x2: x, y2: y,
+      x1: cx, y1: cy, x2: p.x, y2: p.y,
       stroke: st === 'healthy' ? 'rgba(63,224,140,.4)' : st === 'cooldown' ? 'rgba(255,110,125,.4)' : st === 'retired' ? 'rgba(142,151,168,.32)' : st === 'degraded' ? 'rgba(255,200,97,.4)' : st === 'half_open' ? 'rgba(201,184,255,.4)' : 'rgba(70,98,138,.3)',
-      'stroke-width': 1.2, 'stroke-dasharray': '3 6'
+      'stroke-width': 1.1, 'stroke-dasharray': '3 6', opacity: '0.22'
     })) l.setAttribute(k, v);
   });
-  for (const [id, l] of ringLinks) if (!active.has(id)) { l.remove(); ringLinks.delete(id); }
+  layoutRingGuides(g);
+  startRingParticles();
+  brightenRingLinks();
+  updateRingStatus();
   if (ds.length > 100) {
-    if (!ringMore) { ringMore = document.createElement('div'); ringMore.className = 'node degraded'; ring.appendChild(ringMore); }
+    if (!ringMore) { ringMore = document.createElement('div'); ringMore.className = 'node degraded'; ringMore.setAttribute('role', 'listitem'); ring.appendChild(ringMore); }
     ringMore.style.left = cx + 'px'; ringMore.style.top = (H - 30) + 'px';
-    ringMore.innerHTML = `<strong>+${ds.length - 100} more</strong><small>See Models table</small>`;
+    ringMore.innerHTML = `<strong>+${ds.length - 100} more</strong><small>See Models table</small><span class="badge">+${ds.length - 100} more</span>`;
   } else if (ringMore) { ringMore.remove(); ringMore = null; }
 }
 
@@ -611,9 +887,18 @@ async function refresh() {
       api('/admin/api/snapshot?limit=500&events=100'),
       api('/admin/api/providers')
     ]);
-    snap = s;
-    liveSeq = Math.max(liveSeq, ...(snap.events || []).map(e => Number(e.seq || 0)));
+    // Animate only genuinely new polled events (polling fallback path);
+    // SSE path already drains live. De-duplicated by seq/request_id.
+    const prevMax = liveSeq;
+    const incoming = s.events || [];
     providerSummaries = p.providers || [];
+    snap = s;
+    liveSeq = Math.max(liveSeq, ...incoming.map(e => Number(e.seq || 0)));
+    for (const e of incoming) {
+      const seq = Number(e.seq || 0);
+      if (seq && seq > prevMax) drainRingEvent(e);
+      else if (!seq && e.request_id) drainRingEvent(e);
+    }
     // latency timeline from recent successful routes
     const lats = (snap.events || []).filter(e => e.kind === 'route_ok' && e.latency_ms).map(e => e.latency_ms).slice(0, 60).reverse();
     if (lats.length) {
@@ -664,7 +949,14 @@ async function tick() {
   const delay = n > 5000 ? 15000 : n > 1000 ? 8000 : n > 250 ? 4000 : 1800;
   setTimeout(tick, delay);
 }
-window.addEventListener('resize', () => { renderRing(snap.deployments || [], healthMap()); });
+let ringResizeQueued = false;
+window.addEventListener('resize', () => {
+  // Reposition only: never tear down nodes/links, never restart particle
+  // progress or clear in-flight animation classes.
+  if (ringResizeQueued) return;
+  ringResizeQueued = true;
+  requestAnimationFrame(() => { ringResizeQueued = false; renderRing(snap.deployments || [], healthMap()); });
+});
 setInterval(() => { $('#footClock').textContent = new Date().toLocaleTimeString('en-US', { hour12: false }); }, 1000);
 
 /* ---------- CLI tools tab ---------- */
