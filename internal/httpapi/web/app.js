@@ -296,6 +296,10 @@ function render() {
   renderModels(ds, h);
   renderHealthTab(h);
   renderRoutingObservatory(h, ds);
+  renderLiveTicker();
+  renderLiveEventsList();
+  renderRoutingShare(ds);
+  renderRequestJourneyDetail(ds);
   if ($('#compat').classList.contains('active')) renderCompat();
   if ($('#virtual').classList.contains('active')) renderVirtual();
   if ($('#profiles').classList.contains('active')) renderProfiles();
@@ -335,8 +339,14 @@ function renderRing(ds, h) {
     if (!n) { n = document.createElement('div'); n.className = 'node'; ringNodes.set(d.id, n); ring.appendChild(n); }
     n.className = 'node ' + st;
     n.style.left = x + 'px'; n.style.top = y + 'px';
+    n.tabIndex = 0;
+    n.dataset.deployment = d.id;
     n.title = `${d.model} • ${d.provider_name || d.provider_id} • ${st} • ${fmtMs((h[d.id] || {}).ewma_latency_ms)}`;
     n.innerHTML = `<strong>${esc(d.model)}</strong><small>${esc(d.provider_name || d.provider_id)}</small><span class="badge">${esc(st)}</span>`;
+    n.onmouseenter = () => showNodePopover(d.id);
+    n.onfocus = () => showNodePopover(d.id);
+    n.onclick = ev => { ev.stopPropagation(); showNodePopover(d.id, true); };
+    n.onmouseleave = () => { if (!popoverPinned) hideNodePopover(); };
     let l = ringLinks.get(d.id);
     if (!l) { l = document.createElementNS('http://www.w3.org/2000/svg', 'line'); ringLinks.set(d.id, l); svg.appendChild(l); }
     for (const [k, v] of Object.entries({
@@ -572,6 +582,135 @@ function renderRoutingObservatory(h, ds) {
   $('#failureRadar').innerHTML = radar.length ? radar.map(([k, n]) => `<span class="radar-chip">${esc(k)} <b>${fmtInt(n)}</b></span>`).join('') : '<div class="obs-empty">No recent failures.</div>';
 }
 
+/* ---------- node detail popover (real health only) ---------- */
+let popoverPinned = false;
+function fmtTime(v) {
+  if (!v) return '—';
+  try { const t = new Date(v); return Number.isNaN(t.getTime()) ? '—' : t.toLocaleString('en-US', { hour12: false }); } catch { return '—'; }
+}
+function showNodePopover(deploymentId, pinned = false) {
+  const pop = $('#nodePopover');
+  if (!pop) return;
+  popoverPinned = pinned;
+  const h = healthMap();
+  const d = (snap.deployments || []).find(x => x.id === deploymentId);
+  if (!d) { hideNodePopover(); return; }
+  const x = h[deploymentId] || { status: 'unknown' };
+  const errRate = Number.isFinite(Number(x.ewma_failure_rate)) ? (Number(x.ewma_failure_rate) * 100).toFixed(1) + '%' : '—';
+  pop.hidden = false;
+  pop.innerHTML = `
+    <div class="np-head"><strong title="${esc(d.id)}">${esc(d.model || d.id)}</strong><span class="status ${esc(x.status || 'unknown')}">${esc(x.status || 'unknown')}</span></div>
+    <dl class="np-grid">
+      <div><dt>Provider</dt><dd>${esc(d.provider_name || d.provider_id || '—')}</dd></div>
+      <div><dt>Latency (EWMA)</dt><dd>${esc(fmtMs(Number(x.ewma_latency_ms || 0)))}</dd></div>
+      <div><dt>Error rate (EWMA)</dt><dd>${esc(errRate)}</dd></div>
+      <div><dt>Cooldown until</dt><dd>${esc(x.cooldown_until ? fmtTime(x.cooldown_until) : '—')}</dd></div>
+      <div><dt>Last success</dt><dd>${esc(x.last_success ? fmtTime(x.last_success) : '—')}</dd></div>
+      <div><dt>Last failure</dt><dd>${esc(x.last_failure ? fmtTime(x.last_failure) : '—')}</dd></div>
+    </dl>
+    ${x.last_error ? `<div class="np-err">${esc(String(x.last_error).slice(0, 280))}</div>` : ''}
+    <div class="np-foot">${esc(x.consecutive_failures || 0)} consecutive failures · ${esc(fmtInt(x.successes || 0))} successes / ${esc(fmtInt(x.failures || 0))} failures</div>`;
+}
+function hideNodePopover() {
+  popoverPinned = false;
+  const pop = $('#nodePopover');
+  if (pop) pop.hidden = true;
+}
+document.addEventListener('click', ev => {
+  if (popoverPinned && !ev.target.closest('.node') && !ev.target.closest('#nodePopover')) hideNodePopover();
+});
+document.addEventListener('keydown', ev => { if (ev.key === 'Escape') hideNodePopover(); });
+
+/* ---------- ToolCallValidationError: readable diagnostics ---------- */
+function parseToolValidation(e) {
+  if (e.tool_name || e.tool_field || e.expected_type || e.actual_type) {
+    return { tool: e.tool_name || '', field: e.tool_field || '', expected: e.expected_type || '', actual: e.actual_type || '' };
+  }
+  const m = String(e.message || '');
+  const get = k => {
+    const r = m.match(new RegExp(k + '=([^\\s]+)'));
+    return r ? r[1] : '';
+  };
+  const tool = get('tool'), field = get('field'), expected = get('expected'), actual = get('actual');
+  if (!tool && !field && !expected && !actual) return null;
+  return { tool, field, expected, actual };
+}
+function toolValidationHTML(e) {
+  const p = parseToolValidation(e);
+  if (!p) return esc(e.message || '');
+  const chip = (label, v) => v ? `<span class="vchip"><em>${esc(label)}</em>${esc(v)}</span>` : '';
+  return `<span class="vdiag" title="${esc(e.message || '')}">${chip('tool', p.tool)}${chip('field', p.field)}${chip('expected', p.expected)}${chip('actual', p.actual)}</span>`;
+}
+
+/* ---------- telemetry panels v2 (REAL data only) ---------- */
+function renderLiveTicker() {
+  const el = $('#liveTicker');
+  if (!el) return;
+  const es = (snap.events || []).slice(-12).reverse();
+  if (!es.length) { el.innerHTML = '<div class="obs-empty">No events yet — route a request or run a probe.</div>'; return; }
+  el.innerHTML = es.map(e => {
+    const tm = e.time ? new Date(e.time).toLocaleTimeString('en-US', { hour12: false }) : '—';
+    return `<span class="ticker-item"><time>${esc(tm)}</time><b>${esc(e.kind)}</b><i>${esc(e.deployment || e.public_model || 'gateway')}</i>${e.latency_ms ? `<em>${e.latency_ms} ms</em>` : ''}</span>`;
+  }).join('');
+}
+function renderLiveEventsList() {
+  const el = $('#liveEventsList');
+  if (!el) return;
+  const es = (snap.events || []).slice(-15).reverse();
+  if (!es.length) { el.innerHTML = '<div class="obs-empty">No events yet.</div>'; return; }
+  el.innerHTML = es.map(e => {
+    const tm = e.time ? new Date(e.time).toLocaleTimeString('en-US', { hour12: false }) : '—';
+    const diag = (e.tool_name || e.tool_field || e.expected_type || e.actual_type || /tool=.*field=.*expected=.*actual=/.test(e.message || '')) ? `<div class="live-diag">${toolValidationHTML(e)}</div>` : '';
+    return `<div class="live-row"><time>${esc(tm)}</time><span class="jkind">${esc(e.kind)}</span><span class="jdep">${esc(e.deployment || e.public_model || 'gateway')}</span><span class="jerr">${esc(e.error_type || (e.latency_ms ? e.latency_ms + ' ms' : ''))}</span>${diag}</div>`;
+  }).join('');
+}
+function renderRoutingShare(ds) {
+  const el = $('#routingShare');
+  if (!el) return;
+  const byID = Object.fromEntries((ds || []).map(d => [d.id, d]));
+  let rows = Array.isArray(snap.routing_share) ? snap.routing_share : null;
+  if (!rows) {
+    // Fallback: aggregate live route_ok events only — never synthesize.
+    const counts = {};
+    for (const e of (snap.events || [])) if (e.kind === 'route_ok' && e.deployment) counts[e.deployment] = (counts[e.deployment] || 0) + 1;
+    const total = Object.values(counts).reduce((a, b) => a + b, 0);
+    rows = Object.entries(counts).map(([deployment, successes]) => ({ deployment, successes, failures: 0, share: total ? successes / total : 0, avg_latency_ms: 0, total_tokens: 0 }));
+    rows.sort((a, b) => b.successes - a.successes);
+  }
+  const active = rows.filter(r => (r.successes || 0) > 0 || (r.failures || 0) > 0 || (r.total_tokens || 0) > 0).slice(0, 12);
+  if (!active.length) { el.innerHTML = '<div class="obs-empty">No routed traffic yet — shares appear after real route_ok events.</div>'; return; }
+  el.innerHTML = active.map(r => {
+    const d = byID[r.deployment] || {};
+    const pct = Math.round(Number(r.share || 0) * 100);
+    const label = d.model || r.deployment;
+    return `<div class="share-row" title="${esc(r.deployment)} · ${esc(fmtInt(r.successes))} successes · ${esc(fmtInt(r.failures))} failures · avg ${esc(fmtMs(Number(r.avg_latency_ms || 0)))}">
+      <div class="share-top"><strong>${esc(label)}</strong><span>${esc(pct)}% · ${esc(fmtInt(r.successes))} ok</span></div>
+      <div class="share-track"><i style="width:${pct}%"></i></div>
+      <div class="share-meta">${esc(d.provider_name || d.provider_id || '')} · ${esc(fmtInt(r.total_tokens || 0))} tokens</div>
+    </div>`;
+  }).join('');
+}
+function renderRequestJourneyDetail(ds) {
+  const el = $('#journeyDetail');
+  if (!el) return;
+  const byID = Object.fromEntries((ds || []).map(d => [d.id, d]));
+  const label = id => (byID[id] || {}).model || id || 'gateway';
+  const j = snap.recent_journey;
+  if (!j || !j.request_id) { el.innerHTML = '<div class="obs-empty">No routed request yet.</div>'; return; }
+  const cands = (j.candidates || []).map(c => `<span class="jchip">${esc(label(c))}</span>`).join('<span class="jarrow">→</span>') || '<span class="obs-empty">no candidates</span>';
+  const atts = (j.attempts || []).map((a, i) => `<span class="jchip attempt">#${i + 1} ${esc(label(a.deployment))}</span>`).join('<span class="jarrow">→</span>') || '—';
+  const fails = (j.failures || []).length ? j.failures.map(f => {
+    const diag = (f.tool || f.field || f.expected_type || f.actual_type) ? `<span class="vdiag"><span class="vchip"><em>tool</em>${esc(f.tool || '—')}</span><span class="vchip"><em>field</em>${esc(f.field || '—')}</span><span class="vchip"><em>expected</em>${esc(f.expected_type || '—')}</span><span class="vchip"><em>actual</em>${esc(f.actual_type || '—')}</span></span>` : esc(f.error_type || f.kind || '');
+    return `<div class="jfail"><strong>${esc(label(f.deployment))}</strong><span>${diag}</span></div>`;
+  }).join('') : '<span class="obs-empty">no failures absorbed</span>';
+  el.innerHTML = `
+    <div class="jsec"><div class="jkicker">Request <span class="jreq">${esc(j.request_id.slice(0, 24))}</span> · public model <b>${esc(j.public_model || '—')}</b></div></div>
+    <div class="jsec"><div class="jkicker">Candidates (${(j.candidates || []).length})</div><div class="jchips">${cands}</div></div>
+    <div class="jsec"><div class="jkicker">Attempts (${(j.attempts || []).length})</div><div class="jchips">${atts}</div></div>
+    <div class="jsec"><div class="jkicker">Failures absorbed (${(j.failures || []).length})</div><div class="jfails">${fails}</div></div>
+    <div class="jsec final"><div class="jkicker">Final</div><div class="jfinal"><strong>${esc(j.final_model ? label(j.final_model) : '—')}</strong><span>${j.success ? 'SUCCESS' : 'NO SUCCESS YET'}</span><span>${j.latency_ms ? j.latency_ms + ' ms' : '—'}</span></div></div>`;
+}
+
 /* ---------- console ---------- */
 const consoleKinds = {
   routes: new Set(['route_ok', 'route_attempt', 'route_fail', 'route_skip', 'route_timeout', 'failover', 'model_unavailable', 'model_retired', 'candidate_exhausted', 'client_disconnect', 'response_decode_fail', 'stream_fail', 'gateway_overloaded']),
@@ -592,7 +731,9 @@ function renderConsole() {
     const kind = esc(e.kind);
     const dep = e.deployment ? `<span class="dep">${esc(e.deployment)}</span> ` : '';
     const err = e.error_type ? ` <span style="color:#54687f">[${esc(e.error_type)}]</span>` : '';
-    return `<div class="cline k-${kind}"><time>${new Date(e.time).toLocaleTimeString('en-US', { hour12: false })}</time><span class="ckind">▸ ${kind}</span><span class="cmsg">${dep}${esc(e.message || '')}${err}</span><span class="clat">${e.latency_ms ? e.latency_ms + ' ms' : ''}</span></div>`;
+    const hasValidation = e.tool_name || e.tool_field || e.expected_type || e.actual_type || /tool=.*field=.*expected=.*actual=/.test(e.message || '');
+    const msg = hasValidation ? toolValidationHTML(e) : esc(e.message || '');
+    return `<div class="cline k-${kind}"><time>${new Date(e.time).toLocaleTimeString('en-US', { hour12: false })}</time><span class="ckind">▸ ${kind}</span><span class="cmsg">${dep}${msg}${err}</span><span class="clat">${e.latency_ms ? e.latency_ms + ' ms' : ''}</span></div>`;
   }).join('') || '<p style="color:#54687f;padding:8px">No events yet — route a request or run a probe.</p>';
   $('#consoleCount').textContent = fmtInt(es.length) + ' events';
   if (stick) box.scrollTop = box.scrollHeight;

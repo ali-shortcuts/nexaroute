@@ -368,6 +368,14 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Telemetry panels v2: real-data-only aggregates for the dashboard.
+	// routing_share counts route_ok per deployment in the bounded event window;
+	// recent_journey describes the most recent routed request
+	// (candidates -> attempts -> failures -> final model -> latency).
+	eventSnap := s.bus.SnapshotLimit(eventLimit)
+	shareSnap := routingShare(eventSnap, usageSnap)
+	journeySnap := recentJourney(eventSnap)
+
 	writeJSON(w, 200, map[string]any{
 		"deployments":        deployments,
 		"deployment_total":   totalDeployments,
@@ -375,7 +383,9 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 		"health":             healthAll,
 		"health_counts":      healthCounts,
 		"provider_health":    s.hm.ProviderSnapshot(),
-		"events":             s.bus.SnapshotLimit(eventLimit),
+		"events":             eventSnap,
+		"routing_share":      shareSnap,
+		"recent_journey":     journeySnap,
 		"provider_stats":     s.reg.Stats(),
 		"provider_pressure":  providerPressure(s.reg.Stats()),
 		"scope_health":       scopeHealthRows(healthAll),

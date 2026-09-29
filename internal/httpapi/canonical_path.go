@@ -625,6 +625,14 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 				} else {
 					s.hm.RecordFailure(deploy.ID, lastErr, total)
 				}
+				kind := "response_decode_fail"
+				if canReq.Stream {
+					kind = "stream_fail_precommit"
+				}
+				evFail := events.Event{RequestID: r.Header.Get("x-request-id"), Kind: kind, Deployment: deploy.ID,
+					Message: lastErr, ErrorType: string(cls.Class), LatencyMS: total.Milliseconds()}
+				enrichToolValidation(&evFail, usageErr)
+				s.bus.Add(evFail)
 				if attempts < max && i+1 < len(candidates) {
 					s.retryPause(routeCtx, r.Header.Get("x-request-id"), cfg, attempts-1, max)
 					continue
@@ -632,8 +640,10 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 				canonicalErrorJSON(w, "openai_responses", http.StatusBadGateway, "api_error", "upstream returned an invalid response")
 				return
 			}
-			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "stream_fail", Deployment: deploy.ID,
-				Message: lastErr, ErrorType: string(cls.Class), LatencyMS: total.Milliseconds()})
+			evStream := events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "stream_fail", Deployment: deploy.ID,
+				Message: lastErr, ErrorType: string(cls.Class), LatencyMS: total.Milliseconds()}
+			enrichToolValidation(&evStream, usageErr)
+			s.bus.Add(evStream)
 			return
 		}
 		s.recordRouteSuccess(req, deploy.ID, deploy.ProviderID, time.Since(start))

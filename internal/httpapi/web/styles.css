@@ -619,3 +619,53 @@ tbody tr:hover{background:rgba(73,102,139,.11)}
 @media(max-width:420px){
   .kpi-grid{grid-template-columns:1fr}
 }
+
+/* ---------- telemetry panels v2: ticker, share, journey, popover, validation ---------- */
+.live.polling{border-color:rgba(255,200,97,.5);color:var(--warn);background:rgba(50,38,10,.35)}
+.live-ticker{display:flex;gap:8px;overflow-x:auto;padding:6px 2px;min-height:44px}
+.ticker-item{flex:0 0 auto;display:inline-flex;align-items:center;gap:8px;border:1px solid var(--line);border-radius:999px;padding:6px 12px;background:rgba(5,11,20,.72);font-size:10.5px}
+.ticker-item time{color:#54687f;font-family:ui-monospace,Menlo,monospace}
+.ticker-item b{color:var(--cyan)}
+.ticker-item i{color:var(--muted);font-style:normal;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ticker-item em{color:#54687f;font-style:normal;font-variant-numeric:tabular-nums}
+.telemetry-grid{margin-bottom:14px}
+.share-list{display:grid;gap:10px;max-height:320px;overflow:auto}
+.share-row{border:1px solid rgba(27,44,65,.8);border-radius:11px;padding:10px 12px;background:rgba(5,11,20,.6)}
+.share-top{display:flex;justify-content:space-between;gap:10px;font-size:11px;margin-bottom:7px}
+.share-top strong{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.share-top span{color:var(--muted);font-variant-numeric:tabular-nums;flex:none}
+.share-track{height:6px;border-radius:6px;background:rgba(255,255,255,.07);overflow:hidden}
+.share-track i{display:block;height:100%;background:linear-gradient(90deg,var(--cyan),#7a7df2)}
+.share-meta{color:var(--muted);font-size:9.5px;margin-top:6px}
+.live-events{display:grid;gap:5px;max-height:320px;overflow:auto;font-family:ui-monospace,Menlo,monospace;font-size:10px}
+.live-row{display:grid;grid-template-columns:64px 130px minmax(100px,1fr) auto;gap:8px;border-bottom:1px solid rgba(30,46,66,.55);padding:5px 2px;align-items:center}
+.live-row time{color:#536a82}
+.live-diag{grid-column:1/-1}
+.journey-panel{margin-bottom:14px}
+.journey-detail{display:grid;gap:12px}
+.jsec{border:1px solid rgba(27,44,65,.8);border-radius:11px;padding:10px 12px;background:rgba(5,11,20,.6)}
+.jkicker{color:#668099;font-size:9px;letter-spacing:.12em;font-weight:800;text-transform:uppercase;margin-bottom:8px}
+.jreq{font-family:ui-monospace,Menlo,monospace;color:#9fc3ea}
+.jchips{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.jchip{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:4px 10px;font-size:10px;background:rgba(12,22,36,.8)}
+.jchip.attempt{border-color:rgba(56,224,200,.4);color:var(--cyan)}
+.jarrow{color:#54687f}
+.jfails{display:grid;gap:6px}
+.jfail{display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:10.5px}
+.jfail strong{color:#ffb060}
+.jfinal{display:flex;gap:14px;align-items:center;font-size:12px}
+.jfinal strong{color:var(--good)}
+.jsec.final{border-color:rgba(63,224,140,.35)}
+.node-popover{position:absolute;right:12px;top:12px;z-index:5;width:min(320px,86%);border:1px solid var(--line-2);border-radius:14px;background:rgba(7,13,23,.97);box-shadow:var(--shadow);padding:14px}
+.np-head{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:10px}
+.np-head strong{font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.np-grid{display:grid;gap:8px;margin:0}
+.np-grid>div{display:grid;grid-template-columns:118px minmax(0,1fr);gap:8px;font-size:10.5px}
+.np-grid dt{color:var(--muted)}
+.np-grid dd{margin:0;word-break:break-word}
+.np-err{margin-top:10px;font-size:9.5px;color:#ffb0a8;background:rgba(255,110,125,.08);border:1px solid rgba(255,110,125,.3);border-radius:9px;padding:8px;white-space:pre-wrap;word-break:break-word}
+.np-foot{margin-top:10px;color:var(--muted);font-size:9.5px}
+.vdiag{display:inline-flex;flex-wrap:wrap;gap:5px;vertical-align:middle}
+.vchip{display:inline-flex;gap:5px;align-items:center;border:1px solid rgba(56,224,200,.4);border-radius:999px;padding:2px 8px;font-size:9.5px;background:rgba(10,30,34,.6);color:#c9f5ec}
+.vchip em{font-style:normal;color:var(--cyan);font-weight:700}
+.topology{position:relative}

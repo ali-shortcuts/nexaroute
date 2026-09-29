@@ -62,6 +62,14 @@
 
       <div class="panel route-observatory">
         <div class="panelhead">
+          <div><h2>Live event ticker</h2><p>Most recent routing activity — real gateway events only, no synthetic metrics.</p></div>
+          <div class="panelhead-side"><span class="live" id="tickerLive">LIVE</span></div>
+        </div>
+        <div id="liveTicker" class="live-ticker" aria-live="polite"><div class="obs-empty">No events yet — route a request or run a probe.</div></div>
+      </div>
+
+      <div class="panel route-observatory">
+        <div class="panelhead">
           <div><h2>Live routing observatory</h2><p>Claude-facing requests stay stable while NexaRoute absorbs failures, fails over and supervises recovery.</p></div>
           <div class="panelhead-side"><span class="strategy-chip">SUPERVISOR</span><span class="live">LIVE</span></div>
         </div>
@@ -96,6 +104,8 @@
           <div id="ring" class="ring"><svg id="links" aria-hidden="true"></svg>
             <div class="core"><i class="core-orbit"></i><i class="core-orbit o2"></i><strong>ROUTER</strong><small id="coreSub">ready mesh</small></div>
           </div>
+          <div id="nodePopover" class="node-popover" hidden></div>
+          <p class="hint">Hover or select a node for state, latency, error rate, cooldown, provider and last success/failure. Data is live health only.</p>
           <div class="legend">
             <span><i class="dot good"></i>healthy</span><span><i class="dot unknown"></i>unknown</span><span><i class="dot degraded"></i>degraded</span><span><i class="dot half"></i>half-open</span><span><i class="dot bad"></i>cooldown</span><span><i class="dot retired"></i>retired</span>
           </div>
@@ -118,6 +128,22 @@
             <div class="chart-meta"><span id="chartLast">last: —</span><span id="chartMax">peak: —</span></div>
           </div>
         </div>
+      </div>
+
+      <div class="grid-2-1 telemetry-grid">
+        <div class="panel">
+          <div class="panelhead"><div><h2>Routing share per model</h2><p>Share of successful routes in the live event window — real route_ok counts only.</p></div><span class="live">LIVE</span></div>
+          <div id="routingShare" class="share-list"><div class="obs-empty">No routed traffic yet.</div></div>
+        </div>
+        <div class="panel">
+          <div class="panelhead"><div><h2>Live events</h2><p>Newest gateway events first — same real stream as the console.</p></div><span class="live">LIVE</span></div>
+          <div id="liveEventsList" class="live-events"><div class="obs-empty">No events yet.</div></div>
+        </div>
+      </div>
+
+      <div class="panel journey-panel">
+        <div class="panelhead"><div><h2>Request journey — most recent request</h2><p>Candidates → attempts → failures → final model → latency. Real routing events only.</p></div><span class="live">LIVE</span></div>
+        <div id="journeyDetail" class="journey-detail"><div class="obs-empty">No routed request yet.</div></div>
       </div>
     </section>
 

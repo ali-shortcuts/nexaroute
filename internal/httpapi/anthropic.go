@@ -441,7 +441,9 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 				if req.Streaming {
 					kind = "stream_fail_precommit"
 				}
-				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: kind, Deployment: c.Deployment.ID, Message: lastErr, ErrorType: "provider_invalid_response", LatencyMS: totalLatency.Milliseconds(), StatusCode: resp.StatusCode})
+				ev := events.Event{RequestID: r.Header.Get("x-request-id"), Kind: kind, Deployment: c.Deployment.ID, Message: lastErr, ErrorType: "provider_invalid_response", LatencyMS: totalLatency.Milliseconds(), StatusCode: resp.StatusCode}
+				enrichToolValidation(&ev, e)
+				s.bus.Add(ev)
 				if attempts < max && i+1 < len(candidates) {
 					s.retryPause(routeCtx, r.Header.Get("x-request-id"), cfg, attemptIndex, max)
 					continue
@@ -458,7 +460,9 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 				s.hm.RecordFailure(c.Deployment.ID, lastErr, totalLatency)
 			}
 			s.hm.RecordProviderFailure(c.Deployment.ProviderID, c.Deployment.ID, lastErr)
-			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "stream_fail", Deployment: c.Deployment.ID, Message: lastErr, ErrorType: "provider_stream_error", LatencyMS: totalLatency.Milliseconds(), StatusCode: resp.StatusCode})
+			evFail := events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "stream_fail", Deployment: c.Deployment.ID, Message: lastErr, ErrorType: "provider_stream_error", LatencyMS: totalLatency.Milliseconds(), StatusCode: resp.StatusCode}
+			enrichToolValidation(&evFail, e)
+			s.bus.Add(evFail)
 			// Once a successful upstream response has begun, do not attempt fake mid-stream failover.
 			return
 		}

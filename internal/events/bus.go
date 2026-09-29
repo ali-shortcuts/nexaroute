@@ -54,6 +54,12 @@ type Event struct {
 	DecisionChainOutcome     string `json:"decision_chain_outcome,omitempty"`
 	DecisionChainCalls       int    `json:"decision_chain_calls,omitempty"`
 	DecisionSelectedProvider string `json:"decision_selected_provider,omitempty"`
+	// Tool-call validation diagnostics (structured; rendered readably by the
+	// dashboard instead of a raw Go error string).
+	ToolName     string `json:"tool_name,omitempty"`
+	ToolField    string `json:"tool_field,omitempty"`
+	ExpectedType string `json:"expected_type,omitempty"`
+	ActualType   string `json:"actual_type,omitempty"`
 }
 
 const (
@@ -86,6 +92,10 @@ const (
 	// Phase G chain bounds
 	maxEventDecisionChainID      = 128
 	maxEventDecisionChainOutcome = 32
+	// Tool validation bounds
+	maxEventToolName = 256
+	maxEventToolField = 256
+	maxEventTypeName = 64
 )
 
 func boundedString(s string, max int) string {
@@ -176,6 +186,10 @@ func (b *Bus) Add(e Event) {
 	e.DecisionChainOutcome = boundedString(e.DecisionChainOutcome, maxEventDecisionChainOutcome)
 	// DecisionSelectedProvider reuses provider bound
 	e.DecisionSelectedProvider = boundedString(e.DecisionSelectedProvider, maxEventDecisionProvider)
+	e.ToolName = boundedString(e.ToolName, maxEventToolName)
+	e.ToolField = boundedString(e.ToolField, maxEventToolField)
+	e.ExpectedType = boundedString(e.ExpectedType, maxEventTypeName)
+	e.ActualType = boundedString(e.ActualType, maxEventTypeName)
 	if b.count < b.max {
 		idx := (b.start + b.count) % b.max
 		b.items[idx] = e
