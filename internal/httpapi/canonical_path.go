@@ -504,8 +504,8 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		start := time.Now()
-		s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_attempt", Deployment: deployment.ID,
-			Message: fmt.Sprintf("attempt=%d kind=%s score=%.2f", attempts, bundle.canonicalKind, c.Score)})
+		// Noisy per-request route_attempt log removed; production observability
+		// uses request_failover/route_changed/model_* lifecycle events only.
 		resp, sentPayload, repair, derr := s.doUpstreamWithRepair(
 			routeCtx, r.Header.Get("x-request-id"), bundle.a, deployment,
 			bundle.payload, req.Streaming, forward, dialect, profile,
@@ -529,13 +529,16 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 				s.hm.RecordFailure(deployment.ID, lastErr, time.Since(start))
 				if policy.HardCooldown {
 					s.hm.ForceCooldown(deployment.ID, lastErr, cfg.Cooldown())
+					s.emitProductionEvent(r.Header.Get("x-request-id"), ProductionEventModelCooldown, deployment.ID, lastErr, events.Event{ErrorType: policy.ErrorType})
 				}
 			}
+			s.emitProductionEvent(r.Header.Get("x-request-id"), ProductionEventModelFailed, deployment.ID, lastErr, events.Event{ErrorType: policy.ErrorType, LatencyMS: time.Since(start).Milliseconds()})
 			if gatewayDeadlineExceeded(routeCtx, r.Context()) {
 				canonicalErrorJSON(w, "openai_responses", http.StatusGatewayTimeout, "timeout", "gateway request timeout")
 				return
 			}
 			if attempts < max && i+1 < len(candidates) {
+				s.emitProductionEvent(r.Header.Get("x-request-id"), ProductionEventRequestFailover, deployment.ID, "transport failure; trying next eligible candidate", events.Event{})
 				s.retryPause(routeCtx, r.Header.Get("x-request-id"), cfg, attempts-1, max)
 				continue
 			}
@@ -565,6 +568,7 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "model_unavailable", Deployment: deployment.ID, Message: "upstream model temporarily unavailable", ErrorType: string(cls.Class), StatusCode: resp.StatusCode})
 			}
 			s.recordProviderFailure(deployment.ProviderID, deployment.ID, safeMessage, policy)
+			cooldownEntered := false
 			if !cls.CapabilityFailure && cls.Class != compat.ClassModelRetired {
 				if router.IsReadyStrategy(cfg.Routing.Strategy) {
 					if policy.QuarantineDeployment {
@@ -577,13 +581,22 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 						d = retryAfterDuration(resp.Header, time.Duration(cfg.Routing.MaxRetryAfterSeconds)*time.Second)
 					}
 					s.hm.ForceCooldown(deployment.ID, safeMessage, d)
+					cooldownEntered = true
 				} else if policy.QuarantineDeployment {
 					s.hm.RecordFailure(deployment.ID, safeMessage, time.Since(start))
 				}
 			}
 			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_fail", Deployment: deployment.ID,
 				Message: cls.CapabilityLabel() + ": " + safeMessage, ErrorType: policy.ErrorType, LatencyMS: time.Since(start).Milliseconds(), StatusCode: lastStatus})
+			s.emitProductionEvent(r.Header.Get("x-request-id"), ProductionEventModelFailed, deployment.ID, safeMessage, events.Event{ErrorType: policy.ErrorType, LatencyMS: time.Since(start).Milliseconds(), StatusCode: lastStatus})
+			if lastStatus == http.StatusTooManyRequests {
+				s.emitProductionEvent(r.Header.Get("x-request-id"), ProductionEventProviderRateLimited, deployment.ID, safeMessage, events.Event{ErrorType: policy.ErrorType, StatusCode: lastStatus})
+			}
+			if cooldownEntered {
+				s.emitProductionEvent(r.Header.Get("x-request-id"), ProductionEventModelCooldown, deployment.ID, safeMessage, events.Event{ErrorType: policy.ErrorType, StatusCode: lastStatus})
+			}
 			if (policy.Failover || cls.CapabilityFailure) && attempts < max && i+1 < len(candidates) {
+				s.emitProductionEvent(r.Header.Get("x-request-id"), ProductionEventRequestFailover, deployment.ID, fmt.Sprintf("HTTP %d; trying next eligible candidate", lastStatus), events.Event{StatusCode: lastStatus})
 				s.retryPause(routeCtx, r.Header.Get("x-request-id"), cfg, attempts-1, max)
 				continue
 			}
@@ -636,6 +649,7 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 				Message: lastErr, ErrorType: string(cls.Class), LatencyMS: total.Milliseconds()})
 			return
 		}
+		prevStatus := s.hm.Get(deploy.ID).Status
 		s.recordRouteSuccess(req, deploy.ID, deploy.ProviderID, time.Since(start))
 		s.learnFromSuccess(deploy.ID, deploy.ProviderID, deploy, sent, &canReq)
 		ev := events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_ok", Deployment: deploy.ID,
@@ -647,6 +661,18 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 			ev.Pool = resolvedRoute.PrimaryPoolID
 		}
 		s.bus.Add(ev)
+		if prevStatus != "healthy" {
+			s.emitProductionEvent(r.Header.Get("x-request-id"), ProductionEventModelHealthy, deploy.ID, "deployment healthy", events.Event{LatencyMS: total.Milliseconds()})
+		}
+		if attempts > 1 {
+			firstID := ""
+			if len(candidates) > 0 {
+				firstID = candidates[0].Deployment.ID
+			}
+			if firstID != "" && firstID != deploy.ID {
+				s.emitProductionEvent(r.Header.Get("x-request-id"), ProductionEventRouteChanged, deploy.ID, "route changed to "+deploy.ID, events.Event{LatencyMS: total.Milliseconds()})
+			}
+		}
 		return
 	}
 	if gatewayDeadlineExceeded(routeCtx, r.Context()) {
