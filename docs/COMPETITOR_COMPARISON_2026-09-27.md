@@ -160,3 +160,40 @@ NexaRoute را انتخاب کنید اگر اولویت شما این‌هاس�
 [28] [NexaRoute tool-fidelity audit](https://github.com/ali-shortcuts/nexaroute/blob/dcaeba7993bfb08d9b51e698624da1033899d5a0/TOOL_FIDELITY_AUDIT_REPORT.md).
 
 [29] [NexaRoute CI](https://raw.githubusercontent.com/ali-shortcuts/nexaroute/dcaeba7993bfb08d9b51e698624da1033899d5a0/.github/workflows/ci.yml)؛ [security workflow](https://raw.githubusercontent.com/ali-shortcuts/nexaroute/dcaeba7993bfb08d9b51e698624da1033899d5a0/.github/workflows/security.yml)؛ [LiteLLM CodeQL](https://raw.githubusercontent.com/BerriAI/litellm/main/.github/workflows/codeql.yml).
+
+---
+
+## Addendum 2026-09-29 — OpenRouter fallbacks, claude-code-router, Portkey gateway
+
+Scope: three additional maintained gateways/routers reviewed at the docs/code
+level (no live provider calls, no fabricated latency/throughput numbers).
+For each: source, observed pattern, whether NexaRoute adopts it, why, and the
+NexaRoute test that proves anything adopted. All NexaRoute tests below pass
+under `go test ./... -race`.
+
+| Gateway | Source reviewed | Pattern observed | Adopted | Why | Proving test |
+|---|---|---|---|---|---|
+| **OpenRouter** (managed) | [model fallbacks](https://openrouter.ai/docs/guides/routing/model-fallbacks), [provider selection](https://openrouter.ai/docs/guides/routing/provider-selection) | Ordered `models`/`fallbacks` failover: any error (context-length, moderation, rate-limit, downtime) tries the next model in priority order; at most 3 fallback entries; billed on the model actually used; provider-level routing (`order`/`allow_fallbacks`/`sort`) is a separate stacked layer; transparent mid-stream failover documented as impossible | **Yes — local equivalent** | Ordered pre-stream failover is the correct local analogue; mid-stream splicing stays fail-closed for the same reason OpenRouter states | `TestPolicy_FallbackE2E_Strict`, `TestVirtualEndpointFallbackChain`, `TestFallbackChainMaxAttemptsSemantics`, `TestFallbackChainDeduplication` (all in `internal/httpapi`) |
+| **claude-code-router** (`musistudio/claude-code-router`, MIT, ~37k stars) | [repo](https://github.com/musistudio/claude-code-router), [basic config (CLI)](https://musistudio.github.io/claude-code-router/docs/cli/config/basic), [basic config (server)](https://musistudio.github.io/claude-code-router/docs/server/config/basic) | Providers added via Web UI (`ccr ui` → Providers → save) or `~/.claude-code-router/config.json` with `apiKey`/`baseUrl` (or `$ENV` interpolation); every update auto-backs-up config; `GET /api/config` to view | **Yes — write-only secrets + preserve-on-save** | Dashboard save/reopen is exactly where "API key/base URL vanish" bugs breed (UI echoes an empty secret, server overwrites the stored one). NexaRoute closes it server-side: secrets are write-only on every read surface and the editor round-trips them via `preserve_secret`/`preserve_headers`/`preserve_proxy`; env-sourced literals are never persisted (`dropEnvResolvedLiteral`) | `TestProviderKeyAndBaseURLSurviveSaveReopen` (round-trip + functional upstream-auth proof), `TestProviderSecretsPersistButAreNeverReturnedByAdminSurfaces` |
+| **Portkey AI Gateway** (open-source, maintained) | [gateway repo](https://github.com/Portkey-AI/gateway), [fallbacks](https://portkey.ai/docs/virtual_key_old/product/ai-gateway/fallbacks), [automatic retries](https://portkey.ai/docs/product/ai-gateway/automatic-retries) | `strategy: {mode: fallback}` with ordered targets + `on_status_codes` gating; retries up to 5 attempts with exponential backoff (1/2/4/8/16s), optional `use_retry_after_headers`, 60s cumulative cap; load-balance/conditional modes and hosted analytics on top | **Partially** | Adopted: per-status failover gating (`policyForStatus`: 404 isolates deployment only, 503 also signals provider incident, 409 fails over without poisoning health), bounded jittered backoff, `Retry-After` honoring. Not adopted: load-balance/conditional routing modes and hosted analytics — out of scope for a single-binary local gateway with deterministic deployment-level routing | `TestFailurePolicySeparatesModelAndProviderFailures`, `TestRetryAfterDurationIsBoundedAndOverflowSafe`, `TestJitteredRetryBackoffCapsHugeDurationsWithoutOverflow`, `TestAdminEventStreamSlowClientDropsInsteadOfBlocking` (bounded observability under load) |
+
+### Audit note — claude-code-router "fields vanish after save/reopen"
+
+What was actually checked: CCR's documented provider flow (Web UI save →
+`~/.claude-code-router/config.json` with `apiKey`/`baseUrl` or `$ENV`
+references, timestamped backup per update, view via `GET /api/config`) at the
+sources above. What was **not** done: running CCR's Electron/CLI UI live, so
+no vanish/no-vanish verdict on CCR itself is claimed here — that would require
+executing its UI, which was out of scope for this pass.
+
+What is claimed instead is the NexaRoute side of the audit: the equivalent
+failure mode cannot silently happen here, because (1) `GET
+/admin/api/providers/{id}` redacts `api_key`/`headers`/`proxy_url` while
+always returning `base_url`; (2) the embedded editor sends preserved secrets
+back via explicit flags rather than echoed values (`web/app.js` provider save
+path); (3) the server merges preserved fields instead of overwriting
+(`mergePreservedFields` in `internal/httpapi/admin.go`); and (4)
+`TestProviderKeyAndBaseURLSurviveSaveReopen` proves end-to-end that after a
+save/reopen cycle the base URL is intact and the original key still
+authenticates against the upstream. If a future UI change breaks that
+contract, that test fails first.

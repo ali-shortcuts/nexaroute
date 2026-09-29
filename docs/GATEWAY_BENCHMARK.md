@@ -1,5 +1,41 @@
 # AI Gateway Benchmark: NexaRoute Context
 
+## Measured routing hot-path benchmark (2026-09-29)
+
+Loopback rig, no external providers. Method: `go test ./internal/httpapi/ -run NONE
+-bench 'BenchmarkRoutingHotPath|BenchmarkDirectUpstreamCall|BenchmarkGatewayChatCompletionsE2E'
+-benchtime 5000x -count=5 -benchmem`. Benchmarks live in
+`internal/httpapi/routing_bench_test.go`. Upstream is an `httptest` stub
+returning a canned OpenAI chat completion; the gateway rig uses two
+`openai_compatible` providers x three models. Environment:
+`linux/amd64, AMD EPYC 9V74 (4 test threads)`.
+
+| Benchmark | Median (5 x 5000 ops) | Range | Allocs |
+|---|---|---|---|
+| `BenchmarkRoutingHotPath` (pure routing decision: candidate filter + score + order, no I/O) | ~1.6 µs/op | 1397–1842 ns/op | 1628 B/op, 5 allocs/op |
+| `BenchmarkDirectUpstreamCall` (direct POST to loopback upstream, no gateway) | ~69 µs/op | 60196–70709 ns/op | ~7250 B/op, 84 allocs/op |
+| `BenchmarkGatewayChatCompletionsE2E` (full gateway data plane: admission + routing + upstream round-trip + validation/rewrite) | ~168 µs/op | 165711–168744 ns/op | ~40415 B/op, 428 allocs/op |
+
+Raw output (median run of each group shown; full runs all passed):
+
+```text
+BenchmarkRoutingHotPath-4              5000   1557 ns/op   1628 B/op   5 allocs/op
+BenchmarkDirectUpstreamCall-4          5000  68996 ns/op   7246 B/op  84 allocs/op
+BenchmarkGatewayChatCompletionsE2E-4   5000 168271 ns/op  40413 B/op 428 allocs/op
+```
+
+Reading: on loopback the gateway adds roughly ~99 µs per non-streaming chat
+request over a direct upstream call (~168 µs vs ~69 µs). The pure routing
+decision is ~1.6 µs — about 1% of that overhead — so the gateway cost is
+dominated by the extra HTTP hop, JSON decode/validate/rewrite, and
+observability bookkeeping, not by candidate selection. Against real
+upstreams (10–1000+ ms model latency) the relative overhead is negligible.
+Re-run with `go test ./internal/httpapi/ -run NONE -bench
+'BenchmarkRoutingHotPath|BenchmarkDirectUpstreamCall|BenchmarkGatewayChatCompletionsE2E'
+-benchmem .` to reproduce on your hardware.
+
+---
+
 > **Scope:** a concise product-architecture comparison of NexaRoute with four widely used AI gateways. This is not a feature-scorecard or pricing comparison; it highlights operational tradeoffs relevant to multi-provider LLM routing. Sources were reviewed on 2026-09-28.
 
 | Gateway | Routing and resilience model | Observability and deployment | Best fit | Material tradeoff |
