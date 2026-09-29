@@ -120,8 +120,11 @@ func TestNodeTelemetryDegraded(t *testing.T) {
 	if row.LastFailure == nil || row.LastFailure.Source != "health.state.last_failure" || row.LastFailure.ObservedAt == "" || row.LastFailure.AgeMS == nil {
 		t.Fatalf("last failure needs source+freshness: %+v", row.LastFailure)
 	}
-	if row.LastFailure.Detail != "boom" {
-		t.Fatalf("last failure detail must carry real error, got %+v", row.LastFailure)
+	// Regression guard: raw LastError must never surface in node_telemetry.
+	// last_failure carries timestamp/source/freshness only, no error text.
+	rawRow, _ := json.Marshal(row)
+	if strings.Contains(string(rawRow), "boom") {
+		t.Fatalf("last failure must not amplify raw LastError text: %s", rawRow)
 	}
 	if row.LatencyMS != nil {
 		t.Fatalf("latency omitted with no latency sample: %+v", row.LatencyMS)
@@ -327,5 +330,154 @@ func TestNodeTelemetryViewModelOmitsAbsent(t *testing.T) {
 		if strings.Contains(s, absent) {
 			t.Fatalf("round-trip must omit %q: %s", absent, s)
 		}
+	}
+}
+
+// Regression: raw LastError (possibly upstream-controlled response text) must
+// never appear in node_telemetry JSON or the node popover output, while the
+// last-failure timestamp/source/freshness contract is preserved and no
+// replacement message is fabricated.
+func TestNodeTelemetryNeverExposesRawLastError(t *testing.T) {
+	const canary = "CANARY_NT_7f3a9c1e_UPSTREAM_RESPONSE_BODY_DO_NOT_DISPLAY_<sk>secret</sk>"
+	now := time.Now().UTC()
+	lastFail := now.Add(-30 * time.Second)
+	states := []health.State{{
+		Deployment: "p1/m1", Status: health.Degraded,
+		Successes: 0, Failures: 1, ConsecutiveFailures: 1,
+		EWMAFailureRate: 1.0,
+		LastChecked:     lastFail, LastFailure: lastFail, LastError: canary,
+	}}
+	out := buildNodeTelemetry(testDeployments(), states, now)
+	if len(out) == 0 {
+		t.Fatal("expected node_telemetry rows")
+	}
+	var row *NodeTelemetry
+	for i := range out {
+		if out[i].Deployment == "p1/m1" {
+			row = &out[i]
+		}
+	}
+	if row == nil {
+		t.Fatalf("missing p1/m1 row: %+v", out)
+	}
+	// Timestamp/source/freshness for last failure must be preserved from real data.
+	if row.LastFailure == nil {
+		t.Fatal("last_failure must be present when LastFailure is set")
+	}
+	if row.LastFailure.Value == "" || row.LastFailure.Source != "health.state.last_failure" {
+		t.Fatalf("last_failure must carry real timestamp+source: %+v", row.LastFailure)
+	}
+	if row.LastFailure.ObservedAt == "" || row.LastFailure.AgeMS == nil {
+		t.Fatalf("last_failure must carry freshness: %+v", row.LastFailure)
+	}
+	// No raw error text anywhere in the new node_telemetry JSON.
+	raw, err := json.Marshal(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), canary) {
+		t.Fatalf("node_telemetry JSON must never contain raw LastError canary: %s", raw)
+	}
+	if strings.Contains(string(raw), `"detail"`) {
+		t.Fatalf("node_telemetry JSON must not contain a detail field: %s", raw)
+	}
+	// The new popover renderer must not amplify/display raw error text.
+	js, err := webFS.ReadFile("web/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	popover := string(js)
+	// Extract only the B3 popover renderer to avoid false positives from
+	// unrelated UI (e.g. capability detail lines).
+	start := strings.Index(popover, "function nodeTelemetryRowHTML")
+	if start < 0 {
+		t.Fatal("app.js missing nodeTelemetryRowHTML")
+	}
+	end := strings.Index(popover[start:], "\nfunction showNodeTelemetryPopover")
+	if end < 0 {
+		t.Fatal("app.js popover renderer boundary not found")
+	}
+	renderer := popover[start : start+end]
+	if strings.Contains(renderer, "last_failure.detail") || strings.Contains(renderer, "lastFailure.detail") {
+		t.Fatalf("popover renderer must not read last_failure detail")
+	}
+	if strings.Contains(renderer, canary) {
+		t.Fatalf("popover renderer must not embed raw error canary")
+	}
+	if strings.Contains(renderer, "nt-err") {
+		t.Fatalf("popover renderer must not render a raw-error element (nt-err)")
+	}
+}
+
+// End-to-end: admin snapshot node_telemetry must preserve last_failure
+// timestamp/source/freshness without leaking raw error text.
+func TestAdminSnapshotNodeTelemetryHidesRawLastError(t *testing.T) {
+	const canary = "CANARY_NT_SNAPSHOT_4b8d2f6a_UPSTREAM_ERROR_BODY_DO_NOT_DISPLAY"
+	cfg := config.Default()
+	cfg.Probe.Enabled = false
+	cfg.Providers = []config.ProviderConfig{{
+		ID: "p1", Name: "P One", Type: "openai_compatible",
+		BaseURL: "http://127.0.0.1:1", AuthMode: "none", Enabled: true,
+		Models: []config.ModelConfig{
+			{ID: "m1", Model: "m1", Enabled: true, Weight: 1},
+		},
+	}}
+	srv := testGateway(t, cfg)
+	now := time.Now()
+	srv.hm.SetNowFunc(func() time.Time { return now })
+	srv.hm.RecordFailure("p1/m1", canary, 0)
+	req := httptest.NewRequest(http.MethodGet, "http://gateway/admin/api/snapshot", nil)
+	req.Host = "127.0.0.1"
+	req.RemoteAddr = "127.0.0.1:12345"
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("snapshot status=%d", rr.Code)
+	}
+	raw := rr.Body.String()
+	if strings.Contains(raw, canary) {
+		// The canary may legitimately exist in the pre-existing health view;
+		// it must never appear inside the new node_telemetry section.
+		var body map[string]any
+		if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		ntRaw, _ := json.Marshal(body["node_telemetry"])
+		if strings.Contains(string(ntRaw), canary) {
+			t.Fatalf("snapshot node_telemetry must never contain raw LastError canary: %s", ntRaw)
+		}
+		var body2 map[string]any
+		_ = body2
+	} else {
+		var body map[string]any
+		if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		ntRaw, _ := json.Marshal(body["node_telemetry"])
+		if strings.Contains(string(ntRaw), `"detail"`) {
+			t.Fatalf("snapshot node_telemetry must not contain detail: %s", ntRaw)
+		}
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	rows, _ := body["node_telemetry"].([]any)
+	found := false
+	for _, r := range rows {
+		m, _ := r.(map[string]any)
+		if m["deployment"] == "p1/m1" {
+			found = true
+			lf, _ := m["last_failure"].(map[string]any)
+			if lf == nil || lf["value"] == nil || lf["source"] == nil {
+				t.Fatalf("last_failure timestamp/source must be preserved: %+v", m)
+			}
+			if _, ok := lf["detail"]; ok {
+				t.Fatalf("last_failure must not carry detail: %+v", lf)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("missing p1/m1 in node_telemetry: %v", rows)
 	}
 }

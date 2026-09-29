@@ -35,15 +35,32 @@ func TestNodeTelemetryPopoverContracts(t *testing.T) {
 			t.Fatalf("app.js missing B3 node-telemetry contract %q", want)
 		}
 	}
-	// The popover must omit absent KPIs, never synthesize values.
+	// The popover must omit absent KPIs, never synthesize values, and never
+	// render raw upstream error text (LastError) in the new surface.
 	for _, forbidden := range []string{
 		"fakeNodeTelemetry(",
 		"syntheticNodeTelemetry(",
 		"Math.random() * 100",
+		"last_failure.detail",
+		"lastFailure.detail",
+		"nt-err",
 	} {
 		if strings.Contains(string(js), forbidden) {
 			t.Fatalf("app.js contains forbidden synthetic telemetry %q", forbidden)
 		}
+	}
+	// Scope the renderer check to the B3 popover so unrelated UI detail
+	// strings cannot cause false positives/negatives.
+	if start := strings.Index(string(js), "function nodeTelemetryRowHTML"); start >= 0 {
+		end := strings.Index(string(js)[start:], "\nfunction showNodeTelemetryPopover")
+		if end > 0 {
+			renderer := string(js)[start : start+end]
+			if strings.Contains(renderer, ".detail") {
+				t.Fatalf("nodeTelemetryRowHTML must not render raw error detail text")
+			}
+		}
+	} else {
+		t.Fatal("app.js missing nodeTelemetryRowHTML for detail guard")
 	}
 
 	css, err := webFS.ReadFile("web/styles.css")

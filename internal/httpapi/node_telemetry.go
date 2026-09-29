@@ -26,7 +26,10 @@ import (
 //	error rate       | error_rate      | health.State.EWMAFailureRate
 //	cooldown until   | cooldown_until  | health.State.CooldownUntil
 //	last success     | last_success    | health.State.LastSuccess
-//	last failure     | last_failure    | health.State.LastFailure (+ LastError as detail)
+//	last failure     | last_failure    | health.State.LastFailure only (timestamp/source/freshness;
+//	                     |                 | LastError is intentionally excluded: it may contain
+//	                     |                 | upstream-controlled response text and is not part of
+//	                     |                 | the last-failure timestamp contract)
 //
 // Freshness: every present KPI carries source plus observed_at (RFC3339 of
 // the underlying observation) and age_ms (now minus observed_at, floored at
@@ -66,13 +69,15 @@ type NodeTelemetryFloat struct {
 	AgeMS      *int64  `json:"age_ms,omitempty"`
 }
 
-// NodeTelemetryTime is a timestamp KPI with provenance.
+// NodeTelemetryTime is a timestamp KPI with provenance. It carries only the
+// timestamp value, its source, and freshness. It intentionally has no Detail
+// / error-text field: health.State.LastError may contain upstream-controlled
+// response text and must never be amplified into this UI surface.
 type NodeTelemetryTime struct {
 	Value      string `json:"value"`
 	Source     string `json:"source"`
 	ObservedAt string `json:"observed_at,omitempty"`
 	AgeMS      *int64 `json:"age_ms,omitempty"`
-	Detail     string `json:"detail,omitempty"`
 }
 
 // NodeTelemetry is the per-node popover view-model. Pointer fields use
@@ -216,9 +221,9 @@ func buildNodeTelemetry(deployments []router.Deployment, states []health.State, 
 				ObservedAt: telemetryObservedAt(st.LastFailure),
 				AgeMS:      telemetryAgeMS(now, st.LastFailure),
 			}
-			if st.LastError != "" {
-				lf.Detail = st.LastError
-			}
+			// Intentionally no LastError copy: LastError may hold
+			// upstream-controlled response text; this surface exposes
+			// only the timestamp/source/freshness contract.
 			row.LastFailure = lf
 		}
 		out = append(out, row)

@@ -1649,7 +1649,7 @@ function nodeTelemetryRowHTML(r) {
   };
   const prov = r.provider ? esc(r.provider.value) + (r.provider_name ? ' · ' + esc(r.provider_name.value) : '') : '';
   const provSrc = r.provider ? `<dd class="nt-src">src: ${esc(r.provider.source || 'unknown')}</dd>` : '';
-  const failExtra = r.last_failure && r.last_failure.detail ? `<div class="nt-err">${esc(String(r.last_failure.detail).slice(0, 280))}</div>` : '';
+  // No raw error text is rendered: last_failure exposes only timestamp/source/freshness.
   return `<div class="nt-head"><strong>${esc(r.deployment)}</strong>` +
     (r.state ? `<span class="status ${esc(String(r.state.value).toLowerCase())}">${esc(r.state.value)}</span>` : '<span class="status unknown">UNKNOWN</span>') + '</div>' +
     `<dl class="nt-grid">` +
@@ -1660,7 +1660,7 @@ function nodeTelemetryRowHTML(r) {
     nodeTelemetryKpiRow('Last success', r.last_success, fmtTimeB3) +
     nodeTelemetryKpiRow('Last failure', r.last_failure, fmtTimeB3) +
     (r.state ? `<div><dt>State source</dt><dd class="nt-src">${esc(r.state.source || 'unknown')}${nodeTelemetryAgeText(r.state) ? ` · ${esc(nodeTelemetryAgeText(r.state))}` : ''}</dd></div>` : '') +
-    `</dl>` + failExtra;
+    `</dl>`;
 }
 function showNodeTelemetryPopover(deploymentId, pinned = false) {
   const pop = document.querySelector('#nodeTelemetryPopover');
