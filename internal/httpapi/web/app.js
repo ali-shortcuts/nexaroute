@@ -849,7 +849,7 @@ function applyPreset(k) {
   $('#pCountPath').value = '/v1/messages/count_tokens';
 }
 $('#addProviderBtn').onclick = () => {
-  editor = { mode: 'add', originalId: '', provider: emptyProvider(), detected: [], selected: new Set(), modelMeta: new Map(), secretDirty: true, secretSource: 'none' };
+  editor = { mode: 'add', originalId: '', provider: emptyProvider(), detected: [], selected: new Set(), modelMeta: new Map(), secretDirty: true, headersDirty: true, proxyDirty: true, secretSource: 'none', headerNames: [], proxyDisplay: '', hasSecret: false, hasProxy: false };
   fillForm(); modal(true);
 };
 $('#closeProviderModal').onclick = () => modal(false);
@@ -857,11 +857,28 @@ $('#cancelProviderBtn').onclick = () => modal(false);
 $$('[data-close-modal]').forEach(x => x.onclick = () => modal(false));
 document.addEventListener('keydown', e => { if (e.key === 'Escape') modal(false); });
 $('#togglePKey').onclick = () => toggleSecret('#pKey', '#togglePKey');
-$('#pKey').oninput = () => editor.secretDirty = true;
-$('#pKeyEnv').oninput = () => editor.secretDirty = true;
-$('#pCredentials').oninput = () => editor.secretDirty = true;
-$('#pHeaders').oninput = () => editor.headersDirty = true;
-$('#pProxy').oninput = () => editor.proxyDirty = true;
+{
+  const rb = $('#replaceKeyBtn');
+  if (rb) rb.onclick = () => {
+    const k = $('#pKey');
+    k.value = '';
+    k.placeholder = 'Enter replacement key';
+    k.focus();
+    if (editor) editor.secretDirty = true;
+    rb.classList.add('hidden');
+  };
+}
+$('#pKey').oninput = () => {
+  if (!editor) return;
+  editor.secretDirty = true;
+  const rb = $('#replaceKeyBtn');
+  // Once the admin starts typing a replacement, the Replace action has served its purpose.
+  if (rb && $('#pKey').value) rb.classList.add('hidden');
+};
+$('#pKeyEnv').oninput = () => { if (editor) editor.secretDirty = true; };
+$('#pCredentials').oninput = () => { if (editor) editor.secretDirty = true; };
+$('#pHeaders').oninput = () => { if (editor) editor.headersDirty = true; };
+$('#pProxy').oninput = () => { if (editor) editor.proxyDirty = true; };
 $('#pPreset').onchange = () => applyPreset($('#pPreset').value);
 $('#pType').onchange = () => {
   const a = $('#pAuth'), typ = $('#pType').value;
@@ -873,17 +890,26 @@ async function openEdit(id) {
   try {
     const d = await api('/admin/api/providers/' + encodeURIComponent(id)), p = d.provider;
     // Saved keys never leave the server. Blank, untouched fields preserve them.
+    // Base URL and models DO prefill from the read response; headers/proxy/keys stay write-only with structure-only hints.
     p.api_key = '';
     editor = {
       mode: 'edit', originalId: id, provider: p,
       detected: (p.models || []).map(m => m.model),
       selected: new Set((p.models || []).map(m => m.model)),
       modelMeta: new Map((p.models || []).map(m => [m.model, m])),
-      secretDirty: false, secretSource: d.secret_source || 'none'
+      secretDirty: false, headersDirty: false, proxyDirty: false,
+      secretSource: d.secret_source || 'none',
+      hasSecret: !!d.has_secret,
+      headerNames: Array.isArray(d.header_names) ? d.header_names : [],
+      hasProxy: !!d.has_proxy,
+      proxyDisplay: d.proxy_display || '',
+      proxyScheme: d.proxy_scheme || '',
+      proxyHost: d.proxy_host || ''
     };
     fillForm(); modal(true);
   } catch (e) { toast(e.message, true); }
 }
+if (typeof window !== 'undefined') window.NexaProviderEdit = { openEdit };
 function fillForm() {
   const p = editor.provider;
   $('#pPreset').value = 'custom';
@@ -896,15 +922,41 @@ function fillForm() {
   $('#pBase').value = p.base_url || '';
   $('#pAuth').value = p.auth_mode || 'bearer';
   $('#pEnabled').checked = p.enabled !== false;
-  $('#pKey').value = p.api_key || '';
-  $('#pKey').placeholder = editor.mode === 'edit' ? 'Saved key is write-only; leave untouched to keep' : '';
+  $('#pKey').value = '';
+  // Masked placeholder: never a real secret, signals "a key is saved; use Replace key to rotate".
+  $('#pKey').placeholder = editor.mode === 'edit' ? (editor.hasSecret ? '******** (saved — use Replace key to rotate)' : 'No saved key — enter one') : '';
   $('#pKey').type = 'password';
   $('#togglePKey').textContent = 'Show';
+  const replaceBtn = $('#replaceKeyBtn');
+  if (replaceBtn) replaceBtn.classList.toggle('hidden', !(editor.mode === 'edit' && editor.hasSecret));
   $('#pKeyEnv').value = p.api_key_env || '';
-  $('#pHeaders').value = Object.keys(p.headers || {}).length ? JSON.stringify(p.headers, null, 2) : '';
+  $('#pHeaders').value = '';
   $('#pProxy').value = '';
-  $('#pProxy').placeholder = editor.mode === 'edit' ? 'Write-only; leave untouched to keep saved proxy' : '';
-  $('#pHeaders').placeholder = editor.mode === 'edit' ? 'Write-only; leave untouched to keep saved headers' : '{}';
+  $('#pProxy').placeholder = editor.mode === 'edit' ? (editor.hasProxy ? 'Write-only; leave untouched to keep saved proxy' : 'No saved proxy') : '';
+  $('#pHeaders').placeholder = editor.mode === 'edit' ? 'Write-only; leave untouched to keep saved headers, or enter a complete replacement JSON' : '{}';
+  // Read-only structure views: header NAMES only, proxy scheme+host only. Never values/credentials.
+  const hs = $('#headersStructure');
+  if (hs) {
+    if (editor.mode === 'edit' && Array.isArray(editor.headerNames) && editor.headerNames.length) {
+      hs.textContent = `Saved headers (${editor.headerNames.length}): ${editor.headerNames.join(', ')} — values are write-only`;
+    } else if (editor.mode === 'edit') {
+      hs.textContent = 'No saved custom headers.';
+    } else {
+      hs.textContent = '';
+    }
+  }
+  const ps = $('#proxyStructure');
+  if (ps) {
+    if (editor.mode === 'edit' && editor.hasProxy && editor.proxyDisplay) {
+      ps.textContent = `Saved proxy: ${editor.proxyDisplay} — credentials are never shown`;
+    } else if (editor.mode === 'edit' && editor.hasProxy) {
+      ps.textContent = 'Saved proxy is configured (details withheld) — leave untouched to keep';
+    } else if (editor.mode === 'edit') {
+      ps.textContent = 'No saved proxy.';
+    } else {
+      ps.textContent = '';
+    }
+  }
   $('#pConcurrency').value = p.max_concurrency || 32;
   $('#pStreamIdle').value = p.stream_idle_timeout_seconds || 180;
   $('#pChatPath').value = p.chat_path || '/v1/chat/completions';
@@ -974,10 +1026,13 @@ function readForm() {
       capabilities: { streaming: c.streaming !== false, tools: c.tools !== false, vision: !!c.vision, reasoning: !!c.reasoning }
     };
   });
+  let keyVal = $('#pKey').value;
+  // The masked "********" placeholder is never a real key; treat it as untouched.
+  if (keyVal === '********') keyVal = '';
   const p = {
     id: $('#pId').value.trim(), name: $('#pName').value.trim(), type: $('#pType').value,
     dialect: editor.provider?.dialect || '',
-    base_url: $('#pBase').value.trim(), api_key: $('#pKey').value, api_key_env: $('#pKeyEnv').value.trim(),
+    base_url: $('#pBase').value.trim(), api_key: keyVal, api_key_env: $('#pKeyEnv').value.trim(),
     credentials: creds, auth_mode: $('#pAuth').value, headers: hs,
     forward_headers: (() => {
       const v = $('#pForwardHeaders').value.split(',').map(x => x.trim()).filter(Boolean);

@@ -399,16 +399,16 @@
       <div class="form-section">
         <div class="section-kicker">Credentials</div>
         <label class="field"><span>API Key <small id="secretSource"></small></span>
-          <div class="secret-row"><input id="pKey" type="password" autocomplete="off" placeholder="sk-..."><button id="togglePKey" class="icon-btn">Show</button></div>
+          <div class="secret-row"><input id="pKey" type="password" autocomplete="off" placeholder="sk-..."><button id="togglePKey" class="icon-btn">Show</button><button id="replaceKeyBtn" type="button" class="icon-btn hidden">Replace key</button></div>
           <em>Saved credentials are write-only. Leave fields untouched to keep them; editing a credential field replaces the complete key/pool set.</em>
         </label>
         <label class="field"><span>API key environment variable <small>(optional)</small></span><input id="pKeyEnv" spellcheck="false" placeholder="CHAT2API_KEY"></label>
-        <label class="field"><span>Extra headers JSON <small>(optional)</small></span><textarea id="pHeaders" rows="3" spellcheck="false" placeholder='{"X-Custom":"value"}'></textarea></label>
+        <label class="field"><span>Extra headers JSON <small>(optional)</small></span><textarea id="pHeaders" rows="3" spellcheck="false" placeholder='{"X-Custom":"value"}'></textarea><div id="headersStructure" class="inline-status" aria-live="polite"></div></label>
       </div>
       <div class="form-section">
         <div class="section-kicker">Advanced provider controls</div>
         <div class="form-grid two">
-          <label class="field"><span>Proxy URL <small>(optional)</small></span><input id="pProxy" spellcheck="false" placeholder="http://127.0.0.1:7890"></label>
+          <label class="field"><span>Proxy URL <small>(optional)</small></span><input id="pProxy" spellcheck="false" placeholder="http://127.0.0.1:7890"><div id="proxyStructure" class="inline-status" aria-live="polite"></div></label>
           <label class="field"><span>Max concurrency</span><input id="pConcurrency" type="number" min="1" max="512" value="32"></label>
         </div>
         <label class="field"><span>Stream idle timeout (seconds)</span><input id="pStreamIdle" type="number" min="1" max="86400" value="180">
