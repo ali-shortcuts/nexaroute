@@ -569,6 +569,12 @@ func (s *Server) adminProviderByID(w http.ResponseWriter, r *http.Request) {
 		}
 		p := cfg.Providers[idx]
 		// Saved credentials are write-only, even for legacy ?reveal=1 callers.
+		// B5a additive structure: header NAMES only and proxy scheme+host only.
+		// Values, credentials, query strings and auth tokens never leave the backend.
+		headerNames := providerHeaderNames(cfg.Providers[idx])
+		hasHeaders := len(headerNames) > 0
+		proxyScheme, proxyHost, proxyDisplay := proxyStructure(cfg.Providers[idx].ProxyURL)
+		hasProxy := strings.TrimSpace(cfg.Providers[idx].ProxyURL) != ""
 		source, hasSecret := secretSource(p), len(p.ResolvedCredentials()) > 0
 		p.APIKey = ""
 		p.Headers = nil // custom authorization headers can also contain secrets
@@ -577,7 +583,19 @@ func (s *Server) adminProviderByID(w http.ResponseWriter, r *http.Request) {
 		for i := range p.Credentials {
 			p.Credentials[i].APIKey = ""
 		}
-		payload := map[string]any{"provider": p, "secret_source": source, "has_secret": hasSecret}
+		payload := map[string]any{
+			"provider":         p,
+			"secret_source":    source,
+			"has_secret":       hasSecret,
+			"has_headers":      hasHeaders,
+			"header_names":     headerNames,
+			"header_count":     len(headerNames),
+			"has_proxy":        hasProxy,
+			"proxy_scheme":     proxyScheme,
+			"proxy_host":       proxyHost,
+			"proxy_display":    proxyDisplay,
+			"credential_count": len(cfg.Providers[idx].ResolvedCredentials()),
+		}
 		writeJSON(w, 200, payload)
 
 	case http.MethodPut:
@@ -831,6 +849,35 @@ func secretSource(p config.ProviderConfig) string {
 		return "literal"
 	}
 	return "none"
+}
+
+// providerHeaderNames returns only custom header NAMES (no values) so admin
+// clients can show configured structure without recovering secrets. Sorted
+// for a stable additive contract. Never includes values or auth tokens.
+func providerHeaderNames(p config.ProviderConfig) []string {
+	names := make([]string, 0, len(p.Headers))
+	for k := range p.Headers {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// proxyStructure returns only scheme + host for display. Credentials
+// (userinfo), path, query and fragment are never exposed.
+func proxyStructure(raw string) (scheme, host, display string) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", "", ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return "", "", ""
+	}
+	scheme = strings.ToLower(u.Scheme)
+	host = u.Host
+	display = scheme + "://" + host
+	return scheme, host, display
 }
 
 // dropEnvResolvedLiteral prevents an environment-provided secret from being
