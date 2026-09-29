@@ -128,7 +128,7 @@ builds for amd64 and arm64. See [CONTRIBUTING.md](CONTRIBUTING.md).
 - [ARCHITECTURE.md](ARCHITECTURE.md) — design and component overview
 - [docs/KNOWN_GAPS.md](docs/KNOWN_GAPS.md) — honest boundaries
 - [SECURITY.md](SECURITY.md) — security model
-- [docs/FINAL_ACCEPTANCE_REPORT.md](docs/FINAL_ACCEPTANCE_REPORT.md) — release acceptance
+- [docs/reports/FINAL_ACCEPTANCE_REPORT.md](docs/reports/FINAL_ACCEPTANCE_REPORT.md) — release acceptance
 
 ## What is deliberately not claimed
 
