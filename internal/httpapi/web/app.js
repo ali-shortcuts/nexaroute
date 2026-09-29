@@ -1607,6 +1607,85 @@ async function runCompatSuite(mode) {
 
 $('#compatTestFull').onclick = () => runCompatSuite('full');
 $('#compatTestAgent').onclick = () => runCompatSuite('claude_code');
+
+/* ---------- B3 node telemetry popover (additive, real data only) ----------
+   Consumes the additive snap.node_telemetry contract (see
+   internal/httpapi/node_telemetry.go). Every displayed KPI shows its source
+   and freshness; absent KPIs are omitted, never guessed. No routing decision
+   input is read or written here. */
+let nodeTelemetryPinned = false;
+function nodeTelemetryById() {
+  const m = {};
+  for (const r of snap.node_telemetry || []) { if (r && r.deployment) m[r.deployment] = r; }
+  return m;
+}
+function nodeTelemetryAgeText(kpi) {
+  if (!kpi) return '';
+  if (Number.isFinite(Number(kpi.age_ms))) {
+    const s = Math.max(0, Math.round(Number(kpi.age_ms) / 1000));
+    if (s < 1) return 'just now';
+    if (s < 60) return s + 's ago';
+    const min = Math.floor(s / 60);
+    if (min < 60) return min + 'm ago';
+    return Math.floor(min / 60) + 'h ago';
+  }
+  if (kpi.observed_at) {
+    try { return new Date(kpi.observed_at).toLocaleString('en-US', { hour12: false }); } catch { return ''; }
+  }
+  return '';
+}
+function nodeTelemetryKpiRow(label, kpi, fmt) {
+  if (!kpi || kpi.value === undefined || kpi.value === null || kpi.value === '') return '';
+  const fresh = nodeTelemetryAgeText(kpi);
+  return `<div><dt>${esc(label)}</dt><dd>${esc(fmt(kpi.value))}</dd>` +
+    `<dd class="nt-src">src: ${esc(kpi.source || 'unknown')}${fresh ? ` · ${esc(fresh)}` : ''}</dd></div>`;
+}
+function nodeTelemetryRowHTML(r) {
+  if (!r) return '';
+  const fmtPct = v => (Number.isFinite(Number(v)) ? (Number(v) * 100).toFixed(1) + '%' : '—');
+  const fmtTimeB3 = v => {
+    if (!v) return '—';
+    try { const t = new Date(v); return Number.isNaN(t.getTime()) ? '—' : t.toLocaleString('en-US', { hour12: false }); } catch { return '—'; }
+  };
+  const prov = r.provider ? esc(r.provider.value) + (r.provider_name ? ' · ' + esc(r.provider_name.value) : '') : '';
+  const provSrc = r.provider ? `<dd class="nt-src">src: ${esc(r.provider.source || 'unknown')}</dd>` : '';
+  const failExtra = r.last_failure && r.last_failure.detail ? `<div class="nt-err">${esc(String(r.last_failure.detail).slice(0, 280))}</div>` : '';
+  return `<div class="nt-head"><strong>${esc(r.deployment)}</strong>` +
+    (r.state ? `<span class="status ${esc(String(r.state.value).toLowerCase())}">${esc(r.state.value)}</span>` : '<span class="status unknown">UNKNOWN</span>') + '</div>' +
+    `<dl class="nt-grid">` +
+    (prov ? `<div><dt>Provider</dt><dd>${prov}</dd>${provSrc}</div>` : '') +
+    nodeTelemetryKpiRow('Latency (EWMA)', r.latency_ms, v => fmtMs(Number(v))) +
+    nodeTelemetryKpiRow('Error rate (EWMA)', r.error_rate, fmtPct) +
+    nodeTelemetryKpiRow('Cooldown until', r.cooldown_until, fmtTimeB3) +
+    nodeTelemetryKpiRow('Last success', r.last_success, fmtTimeB3) +
+    nodeTelemetryKpiRow('Last failure', r.last_failure, fmtTimeB3) +
+    (r.state ? `<div><dt>State source</dt><dd class="nt-src">${esc(r.state.source || 'unknown')}${nodeTelemetryAgeText(r.state) ? ` · ${esc(nodeTelemetryAgeText(r.state))}` : ''}</dd></div>` : '') +
+    `</dl>` + failExtra;
+}
+function showNodeTelemetryPopover(deploymentId, pinned = false) {
+  const pop = document.querySelector('#nodeTelemetryPopover');
+  if (!pop) return;
+  nodeTelemetryPinned = !!pinned;
+  const row = nodeTelemetryById()[deploymentId];
+  if (!row) { hideNodeTelemetryPopover(); return; }
+  pop.hidden = false;
+  pop.innerHTML = nodeTelemetryRowHTML(row);
+}
+function hideNodeTelemetryPopover() {
+  nodeTelemetryPinned = false;
+  const pop = document.querySelector('#nodeTelemetryPopover');
+  if (pop) pop.hidden = true;
+}
+document.addEventListener('click', ev => {
+  const node = ev.target && ev.target.closest ? ev.target.closest('#ring .node') : null;
+  if (node && node.dataset && node.dataset.depid) {
+    ev.stopPropagation();
+    showNodeTelemetryPopover(node.dataset.depid, true);
+    return;
+  }
+  if (nodeTelemetryPinned && !(ev.target.closest && ev.target.closest('#nodeTelemetryPopover'))) hideNodeTelemetryPopover();
+});
+document.addEventListener('keydown', ev => { if (ev.key === 'Escape') hideNodeTelemetryPopover(); });
 $('#compatReset').onclick = async () => {
   try {
     await api('/admin/api/compat/reset', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ deployment: 'all' }) });

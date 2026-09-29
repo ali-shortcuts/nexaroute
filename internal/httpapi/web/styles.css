@@ -652,3 +652,14 @@ tbody tr:hover{background:rgba(73,102,139,.11)}
   .ring-particle{display:none}
   #links line{transition:none}
 }
+
+/* ---------- B3 node telemetry popover (additive): real data only, source + freshness per KPI ---------- */
+.node-telemetry-popover{position:absolute;right:12px;bottom:34px;z-index:40;max-width:330px;min-width:250px;padding:12px 14px;border-radius:12px;border:1px solid var(--line);background:rgba(10,18,30,.96);box-shadow:0 12px 32px rgba(0,0,0,.5);font-size:12px}
+.nt-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px}
+.nt-head strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.nt-grid{display:grid;gap:8px;margin:0}
+.nt-grid>div{display:grid;gap:2px}
+.nt-grid dt{font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.nt-grid dd{margin:0}
+.nt-src{font-size:10px;color:var(--muted)}
+.nt-err{margin-top:8px;padding:6px 8px;border-radius:8px;background:rgba(255,110,125,.1);border:1px solid rgba(255,110,125,.3);font-size:11px;overflow-wrap:anywhere}
