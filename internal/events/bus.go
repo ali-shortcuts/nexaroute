@@ -56,6 +56,33 @@ type Event struct {
 	DecisionSelectedProvider string `json:"decision_selected_provider,omitempty"`
 }
 
+// Production log event kinds. Production stderr + bus lifecycle observability
+// is limited to exactly these eight transitions; per-request/per-attempt
+// diagnostic kinds (route_attempt, route_skip, ...) were removed from the
+// request path to eliminate log noise.
+const (
+	ProductionEventModelHealthy        = "model_healthy"
+	ProductionEventModelFailed         = "model_failed"
+	ProductionEventModelRecovered      = "model_recovered"
+	ProductionEventModelCooldown       = "model_cooldown"
+	ProductionEventProviderRateLimited = "provider_rate_limited"
+	ProductionEventRouteChanged        = "route_changed"
+	ProductionEventRequestFailover     = "request_failover"
+	ProductionEventRecoveryFailed      = "recovery_failed"
+)
+
+// ProductionEventKinds is the authoritative production set.
+var ProductionEventKinds = []string{
+	ProductionEventModelHealthy,
+	ProductionEventModelFailed,
+	ProductionEventModelRecovered,
+	ProductionEventModelCooldown,
+	ProductionEventProviderRateLimited,
+	ProductionEventRouteChanged,
+	ProductionEventRequestFailover,
+	ProductionEventRecoveryFailed,
+}
+
 const (
 	maxCounterKeys       = 256
 	maxLiveSubscribers   = 64

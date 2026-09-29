@@ -180,7 +180,8 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 		}
 		fresh, a, ok := s.currentRouteCandidate(c.Deployment.ID, reqEligible)
 		if !ok {
-			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_skip", Deployment: c.Deployment.ID, Message: "candidate is no longer eligible or provider changed"})
+			// Noisy per-request skip log removed; production logs carry only
+			// lifecycle transitions (request_failover/route_changed/...).
 			continue
 		}
 		c = fresh
@@ -200,7 +201,8 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 		toolDefs := primary.toolDefs
 		attempts++
 		attemptIndex := attempts - 1
-		s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_attempt", Deployment: c.Deployment.ID, Message: fmt.Sprintf("attempt=%d score=%.2f health=%s pressure=%.3f", attempts, c.Score, c.Health.Status, c.CapacityPressure)})
+		// Noisy per-request route_attempt log removed; production observability
+		// uses request_failover/route_changed/model_* lifecycle events only.
 		start := time.Now()
 		out, winner, hedgeLaunched := s.doAttemptWithHedge(routeCtx, r.Header.Get("x-request-id"), cfg, candidates, i, attempts, max, primary,
 			func(idx int) (hedgeAttemptBundle, bool) {
@@ -222,7 +224,6 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 			kind = winner.canonicalKind
 			payload = winner.payload
 			toolDefs = winner.toolDefs
-			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_attempt", Deployment: c.Deployment.ID, Message: fmt.Sprintf("attempt=%d score=%.2f health=%s pressure=%.3f (hedged winner)", attempts, c.Score, c.Health.Status, c.CapacityPressure)})
 		}
 		resp, e := out.resp, out.err
 		start = out.start
@@ -262,8 +263,10 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 				s.hm.RecordFailure(c.Deployment.ID, lastErr, headerLatency)
 			}
 			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_fail", Deployment: c.Deployment.ID, Message: lastErr, ErrorType: "provider_connection_failed", LatencyMS: headerLatency.Milliseconds()})
+			s.emitProductionEvent(r.Header.Get("x-request-id"), ProductionEventModelFailed, c.Deployment.ID, lastErr, events.Event{ErrorType: "provider_connection_failed", LatencyMS: headerLatency.Milliseconds()})
 			if attempts < max && i+1 < len(candidates) {
 				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "failover", Deployment: c.Deployment.ID, Message: "transport failure; trying next eligible candidate"})
+				s.emitProductionEvent(r.Header.Get("x-request-id"), ProductionEventRequestFailover, c.Deployment.ID, "transport failure; trying next eligible candidate", events.Event{})
 			}
 			s.retryPause(routeCtx, r.Header.Get("x-request-id"), cfg, attemptIndex, max)
 			continue
@@ -311,6 +314,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "model_unavailable", Deployment: c.Deployment.ID, Message: "upstream model temporarily unavailable", ErrorType: string(cls.Class), StatusCode: resp.StatusCode})
 			}
 			s.recordProviderFailure(c.Deployment.ProviderID, c.Deployment.ID, lastErr, policy)
+			cooldownEntered := false
 			if router.IsReadyStrategy(cfg.Routing.Strategy) {
 				if policy.QuarantineDeployment {
 					s.hm.Quarantine(c.Deployment.ID, lastErr, headerLatency)
@@ -322,12 +326,21 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 					d = retryAfterDuration(resp.Header, time.Duration(cfg.Routing.MaxRetryAfterSeconds)*time.Second)
 				}
 				s.hm.ForceCooldown(c.Deployment.ID, lastErr, d)
+				cooldownEntered = true
 			} else if policy.QuarantineDeployment {
 				s.hm.RecordFailure(c.Deployment.ID, lastErr, headerLatency)
 			}
 			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_fail", Deployment: c.Deployment.ID, Message: lastErr, ErrorType: policy.ErrorType, LatencyMS: headerLatency.Milliseconds(), StatusCode: resp.StatusCode})
+			s.emitProductionEvent(r.Header.Get("x-request-id"), ProductionEventModelFailed, c.Deployment.ID, lastErr, events.Event{ErrorType: policy.ErrorType, LatencyMS: headerLatency.Milliseconds(), StatusCode: resp.StatusCode})
+			if resp.StatusCode == http.StatusTooManyRequests {
+				s.emitProductionEvent(r.Header.Get("x-request-id"), ProductionEventProviderRateLimited, c.Deployment.ID, lastErr, events.Event{ErrorType: policy.ErrorType, StatusCode: resp.StatusCode})
+			}
+			if cooldownEntered {
+				s.emitProductionEvent(r.Header.Get("x-request-id"), ProductionEventModelCooldown, c.Deployment.ID, lastErr, events.Event{ErrorType: policy.ErrorType, StatusCode: resp.StatusCode})
+			}
 			if (policy.Failover || cls.CapabilityFailure) && attempts < max && i+1 < len(candidates) {
 				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "failover", Deployment: c.Deployment.ID, Message: fmt.Sprintf("HTTP %d; trying next eligible candidate", resp.StatusCode), StatusCode: resp.StatusCode})
+				s.emitProductionEvent(r.Header.Get("x-request-id"), ProductionEventRequestFailover, c.Deployment.ID, fmt.Sprintf("HTTP %d; trying next eligible candidate", resp.StatusCode), events.Event{StatusCode: resp.StatusCode})
 				s.retryPause(routeCtx, r.Header.Get("x-request-id"), cfg, attemptIndex, max)
 				continue
 			}
@@ -435,6 +448,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "stream_fail", Deployment: c.Deployment.ID, Message: lastErr, ErrorType: "provider_stream_error", LatencyMS: total.Milliseconds(), StatusCode: resp.StatusCode})
 			return
 		}
+		prevStatus := s.hm.Get(c.Deployment.ID).Status
 		s.recordRouteSuccess(req, c.Deployment.ID, c.Deployment.ProviderID, headerLatency)
 		s.learnFromSuccess(c.Deployment.ID, c.Deployment.ProviderID, c.Deployment, payload, nil)
 		ev := events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_ok", Deployment: c.Deployment.ID, Message: "request completed", LatencyMS: total.Milliseconds(), StatusCode: resp.StatusCode}
@@ -445,6 +459,18 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 			ev.Pool = resolvedRoute.PrimaryPoolID
 		}
 		s.bus.Add(ev)
+		if prevStatus != "healthy" {
+			s.emitProductionEvent(r.Header.Get("x-request-id"), ProductionEventModelHealthy, c.Deployment.ID, "deployment healthy", events.Event{LatencyMS: total.Milliseconds(), StatusCode: resp.StatusCode})
+		}
+		if attempts > 1 {
+			firstID := ""
+			if len(candidates) > 0 {
+				firstID = candidates[0].Deployment.ID
+			}
+			if firstID != "" && firstID != c.Deployment.ID {
+				s.emitProductionEvent(r.Header.Get("x-request-id"), ProductionEventRouteChanged, c.Deployment.ID, "route changed to "+c.Deployment.ID, events.Event{LatencyMS: total.Milliseconds(), StatusCode: resp.StatusCode})
+			}
+		}
 		return
 	}
 	if gatewayTimedOut || gatewayDeadlineExceeded(routeCtx, r.Context()) {

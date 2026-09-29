@@ -462,6 +462,7 @@ func (e *Engine) processRecoveryTask(ctx context.Context, task recoveryTask) {
 		e.hm.RecordSuccess(task.id, lat)
 		e.hm.RecordProviderSuccess(d.ProviderID)
 		e.bus.Add(events.Event{Kind: "recovery_ready", Deployment: task.id, Message: fmt.Sprintf("recovered on attempt %d/%d", task.attempt, attempts), LatencyMS: lat.Milliseconds(), StatusCode: status})
+		e.bus.Add(events.Event{Kind: "model_recovered", Deployment: task.id, Message: fmt.Sprintf("recovered on attempt %d/%d", task.attempt, attempts), LatencyMS: lat.Milliseconds(), StatusCode: status})
 		e.clearRecoveryTask(task)
 		return
 	}
@@ -475,6 +476,9 @@ func (e *Engine) processRecoveryTask(ctx context.Context, task recoveryTask) {
 			wait = maxWait
 		}
 		e.bus.Add(events.Event{Kind: "recovery_deferred", Deployment: task.id, Message: fmt.Sprintf("credential rate-limit cooldown; retry after %s", wait), StatusCode: status})
+		if status == http.StatusTooManyRequests {
+			e.bus.Add(events.Event{Kind: "provider_rate_limited", Deployment: task.id, Message: fmt.Sprintf("credential rate-limit cooldown; retry after %s", wait), StatusCode: status})
+		}
 		e.scheduleRecovery(ctx, task, wait)
 		return
 	}
@@ -485,6 +489,7 @@ func (e *Engine) processRecoveryTask(ctx context.Context, task recoveryTask) {
 	}
 	e.hm.RecordRecoveryFailure(task.id, lastErr, lat)
 	e.bus.Add(events.Event{Kind: "recovery_fail", Deployment: task.id, Message: fmt.Sprintf("attempt %d/%d: %s", task.attempt, attempts, lastErr), LatencyMS: lat.Milliseconds(), StatusCode: status})
+	e.bus.Add(events.Event{Kind: "recovery_failed", Deployment: task.id, Message: fmt.Sprintf("attempt %d/%d: %s", task.attempt, attempts, lastErr), LatencyMS: lat.Milliseconds(), StatusCode: status})
 
 	if task.attempt < attempts {
 		task.attempt++
@@ -495,6 +500,7 @@ func (e *Engine) processRecoveryTask(ctx context.Context, task recoveryTask) {
 	cooldown := cfg.Cooldown()
 	e.hm.EnterCooldown(task.id, lastErr, cooldown)
 	e.bus.Add(events.Event{Kind: "recovery_cooldown", Deployment: task.id, Message: fmt.Sprintf("%d recovery attempts failed; retry after %s", attempts, cooldown), LatencyMS: lat.Milliseconds(), StatusCode: status})
+	e.bus.Add(events.Event{Kind: "model_cooldown", Deployment: task.id, Message: fmt.Sprintf("%d recovery attempts failed; retry after %s", attempts, cooldown), LatencyMS: lat.Milliseconds(), StatusCode: status})
 	task.attempt = 1
 	e.scheduleRecovery(ctx, task, cooldown)
 }
@@ -749,6 +755,10 @@ func (e *Engine) runOnce(ctx context.Context, force bool) Result {
 				if readySupervisor {
 					e.hm.Quarantine(d.ID, err.Error(), lat)
 					e.bus.Add(events.Event{Kind: "probe_quarantine", Deployment: d.ID, Message: err.Error(), LatencyMS: lat.Milliseconds(), StatusCode: status})
+					e.bus.Add(events.Event{Kind: "model_failed", Deployment: d.ID, Message: err.Error(), LatencyMS: lat.Milliseconds(), StatusCode: status})
+					if status == http.StatusTooManyRequests {
+						e.bus.Add(events.Event{Kind: "provider_rate_limited", Deployment: d.ID, Message: err.Error(), LatencyMS: lat.Milliseconds(), StatusCode: status})
+					}
 					resultMu.Lock()
 					failedIDs = append(failedIDs, d.ID)
 					resultMu.Unlock()
@@ -759,10 +769,15 @@ func (e *Engine) runOnce(ctx context.Context, force bool) Result {
 							cooldown = time.Minute
 						}
 						e.hm.ForceCooldown(d.ID, err.Error(), cooldown)
+						e.bus.Add(events.Event{Kind: "model_cooldown", Deployment: d.ID, Message: err.Error(), LatencyMS: lat.Milliseconds(), StatusCode: status})
 					} else {
 						e.hm.RecordFailure(d.ID, err.Error(), lat)
 					}
 					e.bus.Add(events.Event{Kind: "probe_fail", Deployment: d.ID, Message: err.Error(), LatencyMS: lat.Milliseconds(), StatusCode: status})
+					e.bus.Add(events.Event{Kind: "model_failed", Deployment: d.ID, Message: err.Error(), LatencyMS: lat.Milliseconds(), StatusCode: status})
+					if status == 429 {
+						e.bus.Add(events.Event{Kind: "provider_rate_limited", Deployment: d.ID, Message: err.Error(), LatencyMS: lat.Milliseconds(), StatusCode: status})
+					}
 				}
 				resultMu.Lock()
 				result.Failed++
@@ -773,6 +788,7 @@ func (e *Engine) runOnce(ctx context.Context, force bool) Result {
 			e.hm.RecordSuccess(d.ID, lat)
 			e.hm.RecordProviderSuccess(d.ProviderID)
 			e.bus.Add(events.Event{Kind: "probe_ready", Deployment: d.ID, Message: fmt.Sprintf("ready after probe (%d)", status), LatencyMS: lat.Milliseconds(), StatusCode: status})
+			e.bus.Add(events.Event{Kind: "model_healthy", Deployment: d.ID, Message: fmt.Sprintf("ready after probe (%d)", status), LatencyMS: lat.Milliseconds(), StatusCode: status})
 			e.maybeProbeCapabilities(ctx, d, a)
 			resultMu.Lock()
 			result.Passed++
