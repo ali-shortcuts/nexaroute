@@ -22,6 +22,50 @@ const fmtInt = n => Number(n || 0).toLocaleString('en-US');
 const fmtCompact = n => { if (!Number.isFinite(n) || n <= 0) return '0'; if (n >= 1e9) return (n / 1e9).toFixed(1) + 'B'; if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M'; if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K'; return String(n); };
 const fmtMs = n => (Number.isFinite(Number(n)) && Number(n) > 0) ? Math.round(Number(n)) + ' ms' : '—';
 
+/* ---------- F1: section-level fault isolation for missing DOM nodes ----------
+   `$()` stays a direct querySelector (no fake elements). Callers that need a
+   missing-node tolerant read use needEl()/setText() below, which record a
+   bounded diagnostic (selector + short message only, never values/payloads/
+   secrets) and return null/false. render()/tick() wrap each section in
+   uiSection() so one absent/renamed node aborts only its own section. */
+const uiFaults = { count: 0, lastSection: '', lastError: '' };
+function uiWarn(section, err) {
+  const name = String(section || 'ui').slice(0, 64);
+  let msg = '';
+  try { msg = String((err && err.message) || err || 'ui fault'); } catch { msg = 'ui fault'; }
+  msg = msg.slice(0, 120);
+  uiFaults.count++;
+  uiFaults.lastSection = name;
+  uiFaults.lastError = msg;
+  try { if (console && typeof console.warn === 'function') console.warn('[nexaroute:' + name + '] ' + msg); } catch {}
+}
+function uiSection(name, fn) {
+  try { fn(); } catch (e) { uiWarn(name, e); }
+}
+function needEl(sel, section) {
+  let el = null;
+  try { el = document.querySelector(sel); } catch (e) { uiWarn(section || sel, e); return null; }
+  if (!el) uiWarn(section || sel, 'missing element ' + String(sel).slice(0, 64));
+  return el;
+}
+function setText(sel, val, section) {
+  const el = needEl(sel, section || sel);
+  if (!el) return false;
+  try { el.textContent = val; return true; } catch (e) { uiWarn(section || sel, e); return false; }
+}
+function bind(sel, prop, fn, section) {
+  const el = needEl(sel, section || ('bind:' + sel));
+  if (!el) return null;
+  try {
+    el[prop] = (...a) => uiSection(section || sel, () => {
+      const r = fn(...a);
+      if (r && typeof r.catch === 'function') r.catch(e => uiWarn(section || sel, e));
+    });
+  } catch (e) { uiWarn(section || sel, e); return null; }
+  return el;
+}
+function uiResetFaults() { uiFaults.count = 0; uiFaults.lastSection = ''; uiFaults.lastError = ''; }
+
 let adminKey = sessionStorage.getItem('nexaroute_admin_key') || '';
 async function apiFetch(url, opt = {}) {
   opt = { ...opt, headers: { ...(opt.headers || {}) } };
@@ -212,11 +256,14 @@ async function consumeLiveEvents() {
   }
 }
 function toast(m, bad = false) {
-  const t = $('#toast');
-  t.textContent = m;
-  t.className = 'toast show ' + (bad ? 'bad' : '');
-  clearTimeout(toast.t);
-  toast.t = setTimeout(() => t.className = 'toast', 2600);
+  const t = needEl('#toast', 'toast');
+  if (!t) return;
+  try {
+    t.textContent = m;
+    t.className = 'toast show ' + (bad ? 'bad' : '');
+    clearTimeout(toast.t);
+    toast.t = setTimeout(() => { try { t.className = 'toast'; } catch (e) { uiWarn('toast', e); } }, 2600);
+  } catch (e) { uiWarn('toast', e); }
 }
 function copyText(text, btn) {
   const done = () => { if (btn) { const o = btn.textContent; btn.textContent = 'Copied ✓'; setTimeout(() => btn.textContent = o, 1400); } toast('Copied to clipboard'); };
@@ -245,31 +292,35 @@ const subtitles = {
   settings: 'Hot-reloaded routing and probe configuration.',
   compat: 'Universal Compatibility Engine: verified model capabilities, repairs and the Claude Code scorecard.'
 };
-$$('nav button').forEach(b => b.onclick = () => {
+$$('nav button').forEach(b => { b.onclick = () => uiSection('nav', () => {
   $$('nav button').forEach(x => x.classList.remove('active'));
   b.classList.add('active');
   $$('.tab').forEach(x => x.classList.remove('active'));
-  $('#' + b.dataset.tab).classList.add('active');
-  $('#title').textContent = b.dataset.title;
-  $('#subtitle').textContent = subtitles[b.dataset.tab] || '';
-  if (b.dataset.tab === 'settings') fillRuntimeSettings();
-  if (b.dataset.tab === 'console') { consoleUnread = 0; $('#consoleDot').hidden = true; renderConsole(); }
-  if (b.dataset.tab === 'cli') renderCLI();
-  if (b.dataset.tab === 'compat') loadCompat();
-  if (b.dataset.tab === 'virtual') renderVirtual();
-  if (b.dataset.tab === 'profiles') renderProfiles();
-  if (b.dataset.tab === 'pools') renderPools();
-});
-$('#pauseBtn').onclick = () => {
+  const tab = needEl('#' + b.dataset.tab, 'nav');
+  if (tab) tab.classList.add('active');
+  setText('#title', b.dataset.title, 'nav');
+  setText('#subtitle', subtitles[b.dataset.tab] || '', 'nav');
+  if (b.dataset.tab === 'settings') uiSection('settings', fillRuntimeSettings);
+  if (b.dataset.tab === 'console') { consoleUnread = 0; const d = needEl('#consoleDot', 'nav'); if (d) d.hidden = true; uiSection('console', renderConsole); }
+  if (b.dataset.tab === 'cli') uiSection('cli', renderCLI);
+  if (b.dataset.tab === 'compat') uiSection('compat', loadCompat);
+  if (b.dataset.tab === 'virtual') uiSection('virtual', renderVirtual);
+  if (b.dataset.tab === 'profiles') uiSection('profiles', renderProfiles);
+  if (b.dataset.tab === 'pools') uiSection('pools', renderPools);
+}); });
+bind('#pauseBtn', 'onclick', () => {
   paused = !paused;
-  $('#pauseBtn').textContent = paused ? '▶ Resume' : '⏸ Pause';
-  $('#pauseBtn').classList.toggle('active-btn', paused);
+  setText('#pauseBtn', paused ? '▶ Resume' : '⏸ Pause', 'pause');
+  const pb = needEl('#pauseBtn', 'pause');
+  if (pb && pb.classList) pb.classList.toggle('active-btn', paused);
   if (!paused) tick();
-};
+}, 'pause');
 
 /* ---------- runtime settings ---------- */
 function intVal(id, fallback, min = 0) {
-  const n = parseInt($(id).value, 10);
+  const el = document.querySelector(id);
+  if (!el) { uiWarn('settings', 'missing element ' + String(id).slice(0, 64)); return fallback; }
+  const n = parseInt(el.value, 10);
   return Number.isFinite(n) ? Math.max(min, n) : fallback;
 }
 function fillRuntimeSettings() {
@@ -316,7 +367,7 @@ function validateRuntimeSettingsForm() {
   }
   return true;
 }
-$('#saveRuntimeSettings').onclick = async () => {
+bind('#saveRuntimeSettings', 'onclick', async () => {
   if (!validateRuntimeSettingsForm()) return;
   const old = snap.config || {}, r = old.routing || {}, p = old.probe || {};
   const body = {
@@ -357,33 +408,36 @@ $('#saveRuntimeSettings').onclick = async () => {
     }
   };
   try {
-    $('#saveRuntimeSettings').disabled = true;
+    const saveBtn = needEl('#saveRuntimeSettings', 'settings');
+    if (saveBtn) saveBtn.disabled = true;
     await api('/admin/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     toast('Runtime settings saved and reloaded');
     await refresh();
-    fillRuntimeSettings();
+    uiSection('settings', fillRuntimeSettings);
   } catch (e) { toast(e.message, true); }
-  finally { $('#saveRuntimeSettings').disabled = false; }
-};
-$('#adminKey').value = adminKey;
-$('#saveAdminKey').onclick = () => {
-  adminKey = $('#adminKey').value.trim();
+  finally { const rb = document.querySelector('#saveRuntimeSettings'); if (rb) { try { rb.disabled = false; } catch (e) { uiWarn('settings', e); } } }
+}, 'settings');
+{ const ak = needEl('#adminKey', 'settings'); if (ak) { try { ak.value = adminKey; } catch (e) { uiWarn('settings', e); } } }
+bind('#saveAdminKey', 'onclick', () => {
+  const ak = needEl('#adminKey', 'settings');
+  adminKey = ak ? ak.value.trim() : '';
   sessionStorage.setItem('nexaroute_admin_key', adminKey);
   toast('Admin key saved for this browser session');
-};
-$('#toggleAdminKey').onclick = () => toggleSecret('#adminKey', '#toggleAdminKey');
+}, 'settings');
+bind('#toggleAdminKey', 'onclick', () => toggleSecret('#adminKey', '#toggleAdminKey'), 'settings');
 
-$('#probeBtn').onclick = async () => {
+bind('#probeBtn', 'onclick', async () => {
   try {
-    $('#probeBtn').disabled = true;
-    $('#probeBtn').textContent = 'Probing…';
+    const pb = needEl('#probeBtn', 'probe');
+    if (pb) { pb.disabled = true; }
+    setText('#probeBtn', 'Probing…', 'probe');
     const d = await api('/admin/api/probe?wait=1', { method: 'POST' });
     const r = d.result || {};
     toast(`Probe complete: ${r.passed || 0}/${r.total || 0} passed${r.skipped_cooldown ? `, ${r.skipped_cooldown} cooldown` : ''}`, !!r.failed);
     await refresh();
   } catch (e) { toast(e.message, true); }
-  finally { $('#probeBtn').disabled = false; $('#probeBtn').textContent = '⚡ Probe all models'; }
-};
+  finally { const pb2 = document.querySelector('#probeBtn'); if (pb2) { try { pb2.disabled = false; pb2.textContent = '⚡ Probe all models'; } catch (e) { uiWarn('probe', e); } } }
+}, 'probe');
 
 /* ---------- derived state helpers ---------- */
 function healthMap() { const m = {}; for (const h of snap.health || []) m[h.deployment] = h; return m; }
@@ -397,43 +451,55 @@ function healthCounts() {
 /* ---------- render ---------- */
 function render() {
   const h = healthMap(), ds = snap.deployments || [];
-  $('#routerStrategyLabel').textContent = snap.config?.routing?.strategy || 'ready_mesh';
-  $('#coreSub').textContent = (snap.config?.routing?.strategy || 'ready_mesh').replace(/_/g, ' ');
-  $('#sDeploy').textContent = fmtInt(snap.deployment_total ?? ds.length);
+  uiSection('render:core', () => {
+    setText('#routerStrategyLabel', snap.config?.routing?.strategy || 'ready_mesh', 'render:core');
+    setText('#coreSub', (snap.config?.routing?.strategy || 'ready_mesh').replace(/_/g, ' '), 'render:core');
+    setText('#sDeploy', fmtInt(snap.deployment_total ?? ds.length), 'render:core');
+  });
   const c = healthCounts();
   const ok = Number(c.healthy || 0), cd = Number(c.cooldown || 0), retired = Number(c.retired || 0);
   const total = snap.deployment_total ?? ds.length;
-  $('#sHealthy').textContent = fmtInt(ok);
-  $('#sCooldown').textContent = fmtInt(cd);
-  $('#sHealthBar').style.width = total ? Math.round(ok / total * 100) + '%' : '0%';
-  $('#sCooldownSub').textContent = retired ? `${cd} cooling · ${retired} retired` : (cd ? 'recovering in background' : 'none recovering');
-  $('#sSessions').textContent = fmtInt(snap.session_count ?? 0);
-  const ls = (snap.events || []).filter(e => e.kind === 'route_ok' && e.latency_ms).map(e => e.latency_ms);
-  const avg = ls.length ? Math.round(ls.reduce((a, b) => a + b, 0) / ls.length) : 0;
-  $('#sLatency').textContent = avg ? avg + ' ms' : '—';
-  renderRing(ds, h);
-  renderDonut(c, total);
-  renderProviders(h);
-  renderModels(ds, h);
-  renderHealthTab(h);
-  renderRoutingObservatory(h, ds);
-  if ($('#compat').classList.contains('active')) renderCompat();
-  if ($('#virtual').classList.contains('active')) renderVirtual();
-  if ($('#profiles').classList.contains('active')) renderProfiles();
-  if ($('#pools').classList.contains('active')) renderPools();
-  renderConsole();
-  $('#settingsJson').textContent = JSON.stringify(snap.config || {}, null, 2);
-  // Cache + usage KPI cards (v0.5)
-  const ch = Number(snap.cache?.hits ?? 0), cm = Number(snap.cache?.misses ?? 0);
-  const rate = (ch + cm) ? Math.round(ch / (ch + cm) * 100) + '%' : '—';
-  $('#sCacheRate').textContent = rate;
-  $('#sCacheSub').textContent = snap.cache?.hits != null ? (fmtInt(ch) + ' hits / ' + fmtInt(cm) + ' misses') : 'exact-match cache off';
-  const up = Number(snap.usage?.total_prompt_tokens ?? 0), ucp = Number(snap.usage?.total_completion_tokens ?? 0);
-  $('#sTokens').textContent = fmtCompact(up + ucp);
-  const cost = Number(snap.usage?.total_estimated_cost_usd ?? 0);
-  $('#sSpendSub').textContent = cost > 0 ? ('~$' + (cost >= 1 ? cost.toFixed(2) : cost.toFixed(4)) + ' est. spend') : 'no pricing configured';
-  $('#footRequests').textContent = fmtInt(snap.request_total ?? 0) + ' requests';
-  $('#brandVersion').textContent = 'v' + (snap.version || '0.5') + ' • control plane';
+  uiSection('render:health-kpi', () => {
+    setText('#sHealthy', fmtInt(ok), 'render:health-kpi');
+    setText('#sCooldown', fmtInt(cd), 'render:health-kpi');
+    const bar = needEl('#sHealthBar', 'render:health-kpi');
+    if (bar && bar.style) bar.style.width = total ? Math.round(ok / total * 100) + '%' : '0%';
+    setText('#sCooldownSub', retired ? `${cd} cooling · ${retired} retired` : (cd ? 'recovering in background' : 'none recovering'), 'render:health-kpi');
+    setText('#sSessions', fmtInt(snap.session_count ?? 0), 'render:health-kpi');
+    const ls = (snap.events || []).filter(e => e.kind === 'route_ok' && e.latency_ms).map(e => e.latency_ms);
+    const avg = ls.length ? Math.round(ls.reduce((a, b) => a + b, 0) / ls.length) : 0;
+    setText('#sLatency', avg ? avg + ' ms' : '—', 'render:health-kpi');
+  });
+  uiSection('render:ring', () => renderRing(ds, h));
+  uiSection('render:donut', () => renderDonut(c, total));
+  uiSection('render:providers', () => renderProviders(h));
+  uiSection('render:models', () => renderModels(ds, h));
+  uiSection('render:health', () => renderHealthTab(h));
+  uiSection('render:observatory', () => renderRoutingObservatory(h, ds));
+  uiSection('render:tabs', () => {
+    const compat = document.querySelector('#compat');
+    if (compat && compat.classList && compat.classList.contains('active')) renderCompat();
+    const virt = document.querySelector('#virtual');
+    if (virt && virt.classList && virt.classList.contains('active')) renderVirtual();
+    const prof = document.querySelector('#profiles');
+    if (prof && prof.classList && prof.classList.contains('active')) renderProfiles();
+    const pools = document.querySelector('#pools');
+    if (pools && pools.classList && pools.classList.contains('active')) renderPools();
+  });
+  uiSection('render:console', () => renderConsole());
+  uiSection('render:meta', () => {
+    setText('#settingsJson', JSON.stringify(snap.config || {}, null, 2), 'render:meta');
+    const ch = Number(snap.cache?.hits ?? 0), cm = Number(snap.cache?.misses ?? 0);
+    const rate = (ch + cm) ? Math.round(ch / (ch + cm) * 100) + '%' : '—';
+    setText('#sCacheRate', rate, 'render:meta');
+    setText('#sCacheSub', snap.cache?.hits != null ? (fmtInt(ch) + ' hits / ' + fmtInt(cm) + ' misses') : 'exact-match cache off', 'render:meta');
+    const up = Number(snap.usage?.total_prompt_tokens ?? 0), ucp = Number(snap.usage?.total_completion_tokens ?? 0);
+    setText('#sTokens', fmtCompact(up + ucp), 'render:meta');
+    const cost = Number(snap.usage?.total_estimated_cost_usd ?? 0);
+    setText('#sSpendSub', cost > 0 ? ('~$' + (cost >= 1 ? cost.toFixed(2) : cost.toFixed(4)) + ' est. spend') : 'no pricing configured', 'render:meta');
+    setText('#footRequests', fmtInt(snap.request_total ?? 0) + ' requests', 'render:meta');
+    setText('#brandVersion', 'v' + (snap.version || '0.5') + ' • control plane', 'render:meta');
+  });
 }
 
 /* ---------- live routing ring v2: persistent SVG topology + real-event animation ----------
@@ -730,7 +796,8 @@ function renderDonut(counts, total) {
   let offset = 0;
   const legend = [];
   for (const [id, label, count, color] of segs) {
-    const el = $('#' + id);
+    const el = needEl('#' + id, 'render:donut');
+    if (!el) { if (count > 0 || label === 'healthy') legend.push(`<li><i style="background:${color}"></i>${label}<b>${fmtInt(count)}</b></li>`); continue; }
     const frac = total ? count / total : 0;
     const len = frac * circ;
     el.setAttribute('stroke-dasharray', `${len} ${circ - len}`);
@@ -738,9 +805,10 @@ function renderDonut(counts, total) {
     offset += len;
     if (count > 0 || label === 'healthy') legend.push(`<li><i style="background:${color}"></i>${label}<b>${fmtInt(count)}</b></li>`);
   }
-  $('#donutLegend').innerHTML = legend.join('');
+  const dl = needEl('#donutLegend', 'render:donut');
+  if (dl) dl.innerHTML = legend.join('');
   const readyPct = total ? Math.round((counts.healthy || 0) / total * 100) : 0;
-  $('#donutPct').textContent = readyPct + '%';
+  setText('#donutPct', readyPct + '%', 'render:donut');
 }
 
 function providerColor(id) {
@@ -754,7 +822,9 @@ function providerColor(id) {
 function renderProviders(h) {
   const incidents = Object.fromEntries((snap.provider_health || []).map(x => [x.provider, x]));
   const stats = Object.fromEntries((snap.provider_stats || []).map(x => [x.id, x]));
-  $('#providerGrid').innerHTML = providerSummaries.map(p => {
+  const grid = needEl('#providerGrid', 'render:providers');
+  if (!grid) return;
+  grid.innerHTML = providerSummaries.map(p => {
     const ds = (snap.deployments || []).filter(d => d.provider_id === p.id);
     const ok = ds.filter(d => (h[d.id] || {}).status === 'healthy').length;
     const pct = ds.length ? Math.round(ok / ds.length * 100) : 0;
@@ -781,10 +851,14 @@ function renderProviders(h) {
 }
 
 function renderModels(ds, h) {
-  const q = ($('#modelSearch').value || '').toLowerCase();
+  const search = document.querySelector('#modelSearch');
+  const q = ((search && search.value) || '').toLowerCase();
+  if (!search) uiWarn('render:models', 'missing element #modelSearch');
   const rows = ds.filter(d => !q || d.id.toLowerCase().includes(q) || (d.provider_id || '').toLowerCase().includes(q) || (d.model || '').toLowerCase().includes(q));
   const maxLat = Math.max(1, ...ds.map(d => Number((h[d.id] || {}).ewma_latency_ms || 0)));
-  $('#modelRows').innerHTML = rows.map(d => {
+  const body = needEl('#modelRows', 'render:models');
+  if (!body) return;
+  body.innerHTML = rows.map(d => {
     const x = h[d.id] || { status: 'unknown' };
     const lat = Number(x.ewma_latency_ms || 0);
     return `<tr>
@@ -798,13 +872,14 @@ function renderModels(ds, h) {
     </tr>`;
   }).join('') || '<tr><td colspan="7" style="color:var(--muted)">No deployments match.</td></tr>';
 }
-$('#modelSearch').oninput = () => renderModels(snap.deployments || [], healthMap());
+bind('#modelSearch', 'oninput', () => renderModels(snap.deployments || [], healthMap()), 'render:models');
 
 function renderHealthTab(h) {
   const incidents = Object.fromEntries((snap.provider_health || []).map(x => [x.provider, x]));
   const stats = Object.fromEntries((snap.provider_stats || []).map(x => [x.id, x]));
   const rows = (snap.provider_pressure || []);
-  $('#providerHealthRows').innerHTML = rows.map(p => {
+  const phBody = needEl('#providerHealthRows', 'render:health');
+  if (phBody) phBody.innerHTML = rows.map(p => {
     const id = p.provider_id || p.provider;
     const inc = incidents[id] || { status: 'unknown' };
     const st = stats[id] || {};
@@ -829,7 +904,8 @@ function renderHealthTab(h) {
   }).join('') || '<tr><td colspan="9" style="color:var(--muted)">No provider pressure data.</td></tr>';
 
   const scopes = snap.scope_health || [];
-  $('#scopeHealthList').innerHTML = scopes.map(s => {
+  const scopeBody = needEl('#scopeHealthList', 'render:health');
+  if (scopeBody) scopeBody.innerHTML = scopes.map(s => {
     const st = s.status || 'unknown';
     return `<div class="scope-row">
       <div><strong>${esc(s.deployment)}</strong><br><small>scope: ${esc((s.scopes || []).join(', '))}</small></div>
@@ -856,17 +932,19 @@ function renderRoutingObservatory(h, ds) {
   if (latest) requestEvents = all.filter(e => e.request_id === latest.request_id && routeKinds.has(e.kind));
 
   const publicEvent = [...requestEvents].reverse().find(e => e.public_model);
-  $('#obsRequest').textContent = latest?.request_id ? latest.request_id.slice(0, 22) : '—';
-  $('#obsPublic').textContent = publicEvent?.public_model || '—';
+  setText('#obsRequest', latest?.request_id ? latest.request_id.slice(0, 22) : '—', 'render:observatory');
+  setText('#obsPublic', publicEvent?.public_model || '—', 'render:observatory');
 
   const failures = requestEvents.filter(e => e.kind === 'route_fail' || e.kind === 'route_timeout' || e.kind === 'response_decode_fail' || e.kind === 'stream_fail_precommit');
-  $('#obsAbsorbed').textContent = fmtInt(failures.length);
+  setText('#obsAbsorbed', fmtInt(failures.length), 'render:observatory');
 
   const success = requestEvents.some(e => e.kind === 'route_ok');
   const exhausted = requestEvents.some(e => e.kind === 'candidate_exhausted');
   const result = success ? 'SUCCESS' : exhausted ? 'EXHAUSTED' : requestEvents.length ? 'ACTIVE' : 'IDLE';
-  $('#obsResult').textContent = result;
-  $('#obsResult').className = result.toLowerCase();
+  setText('#obsResult', result, 'render:observatory');
+  const obsRes = document.querySelector('#obsResult');
+  if (obsRes) { try { obsRes.className = result.toLowerCase(); } catch (e) { uiWarn('render:observatory', e); } }
+  else uiWarn('render:observatory', 'missing element #obsResult');
 
   const stateByDeployment = {};
   const statePriority = { retired: 50, unavailable: 40, cooldown: 30, success: 25, failed: 20, active: 10 };
@@ -884,7 +962,8 @@ function renderRoutingObservatory(h, ds) {
     }
   }
   const attempts = requestEvents.filter(e => e.kind === 'route_attempt');
-  $('#routeFlow').innerHTML = attempts.length ? attempts.slice(-10).map((e, i) => {
+  const flow = needEl('#routeFlow', 'render:observatory');
+  if (flow) flow.innerHTML = attempts.length ? attempts.slice(-10).map((e, i) => {
     const st = stateByDeployment[e.deployment] || (i === attempts.length - 1 && !success ? 'active' : 'failed');
     const d = byID[e.deployment] || {};
     return `<div class="route-hop ${esc(st)}" title="${esc(e.deployment || '')}">
@@ -895,7 +974,8 @@ function renderRoutingObservatory(h, ds) {
   }).join('') : '<div class="obs-empty">No routed request yet.</div>';
 
   const journey = requestEvents.filter(e => routeKinds.has(e.kind)).slice(-12);
-  $('#routeJourney').innerHTML = journey.length ? journey.map(e => {
+  const journeyEl = needEl('#routeJourney', 'render:observatory');
+  if (journeyEl) journeyEl.innerHTML = journey.length ? journey.map(e => {
     const tm = e.time ? new Date(e.time).toLocaleTimeString('en-US', { hour12: false }) : '—';
     const dep = e.deployment ? modelLabel(e.deployment) : (e.public_model || 'gateway');
     return `<div class="journey-row">
@@ -910,7 +990,8 @@ function renderRoutingObservatory(h, ds) {
     const rank = { retired: 0, cooldown: 1, half_open: 2, degraded: 3 };
     return (rank[a.status] ?? 9) - (rank[b.status] ?? 9);
   }).slice(0, 12);
-  $('#supervisorList').innerHTML = supervisor.length ? supervisor.map(x => {
+  const supEl = needEl('#supervisorList', 'render:observatory');
+  if (supEl) supEl.innerHTML = supervisor.length ? supervisor.map(x => {
     const d = byID[x.deployment] || {};
     let detail = x.last_error_class || (x.status === 'retired' ? 'model_retired' : x.status);
     if (x.status === 'cooldown' && x.cooldown_until) {
@@ -933,7 +1014,8 @@ function renderRoutingObservatory(h, ds) {
     failureCounts[key] = (failureCounts[key] || 0) + 1;
   }
   const radar = Object.entries(failureCounts).sort((a, b) => b[1] - a[1]).slice(0, 9);
-  $('#failureRadar').innerHTML = radar.length ? radar.map(([k, n]) => `<span class="radar-chip">${esc(k)} <b>${fmtInt(n)}</b></span>`).join('') : '<div class="obs-empty">No recent failures.</div>';
+  const radarEl = needEl('#failureRadar', 'render:observatory');
+  if (radarEl) radarEl.innerHTML = radar.length ? radar.map(([k, n]) => `<span class="radar-chip">${esc(k)} <b>${fmtInt(n)}</b></span>`).join('') : '<div class="obs-empty">No recent failures.</div>';
 }
 
 /* ---------- console ---------- */
@@ -943,9 +1025,11 @@ const consoleKinds = {
   probes: new Set(['probe_ready', 'probe_fail', 'probe_quarantine', 'recovery_ready', 'recovery_fail', 'recovery_wait', 'recovery_deferred', 'recovery_cooldown', 'recovery_queue_full', 'model_unavailable', 'model_retired', 'stream_fail_precommit'])
 };
 function renderConsole() {
-  const box = $('#consoleLog');
+  const box = needEl('#consoleLog', 'render:console');
   if (!box) return;
-  const stick = $('#consoleAuto').checked && (box.scrollHeight - box.scrollTop - box.clientHeight < 60);
+  const auto = document.querySelector('#consoleAuto');
+  const stick = auto ? (auto.checked && (box.scrollHeight - box.scrollTop - box.clientHeight < 60)) : false;
+  if (!auto) uiWarn('render:console', 'missing element #consoleAuto');
   const es = (snap.events || []).slice().reverse().filter(e => {
     if (consoleFilter === 'routes') return consoleKinds.routes.has(e.kind);
     if (consoleFilter === 'errors') return consoleKinds.errors.has(e.kind);
@@ -958,15 +1042,15 @@ function renderConsole() {
     const err = e.error_type ? ` <span style="color:#54687f">[${esc(e.error_type)}]</span>` : '';
     return `<div class="cline k-${kind}"><time>${new Date(e.time).toLocaleTimeString('en-US', { hour12: false })}</time><span class="ckind">▸ ${kind}</span><span class="cmsg">${dep}${esc(e.message || '')}${err}</span><span class="clat">${e.latency_ms ? e.latency_ms + ' ms' : ''}</span></div>`;
   }).join('') || '<p style="color:#54687f;padding:8px">No events yet — route a request or run a probe.</p>';
-  $('#consoleCount').textContent = fmtInt(es.length) + ' events';
-  if (stick) box.scrollTop = box.scrollHeight;
+  setText('#consoleCount', fmtInt(es.length) + ' events', 'render:console');
+  if (stick) { try { box.scrollTop = box.scrollHeight; } catch (e) { uiWarn('render:console', e); } }
 }
-$$('#consoleFilter button').forEach(b => b.onclick = () => {
+$$('#consoleFilter button').forEach(b => { b.onclick = () => uiSection('console', () => {
   $$('#consoleFilter button').forEach(x => x.classList.remove('active'));
   b.classList.add('active');
   consoleFilter = b.dataset.f;
   renderConsole();
-});
+}); });
 
 /* ---------- data refresh loop ---------- */
 async function refresh() {
@@ -991,16 +1075,26 @@ async function refresh() {
     const lats = (snap.events || []).filter(e => e.kind === 'route_ok' && e.latency_ms).map(e => e.latency_ms).slice(0, 60).reverse();
     if (lats.length) {
       latencyHistory = lats;
-      drawChart(lats);
+      uiSection('render:chart', () => drawChart(lats));
     }
-    const st = $('#apiState');
-    st.className = 'conn ok';
-    st.querySelector('.conn-text').textContent = 'connected';
+    uiSection('render:conn', () => {
+      const st = needEl('#apiState', 'render:conn');
+      if (!st) return;
+      st.className = 'conn ok';
+      const txt = st.querySelector ? st.querySelector('.conn-text') : null;
+      if (txt) txt.textContent = 'connected';
+      else uiWarn('render:conn', 'missing element .conn-text');
+    });
     render();
   } catch (e) {
-    const st = $('#apiState');
-    st.className = 'conn err';
-    st.querySelector('.conn-text').textContent = 'disconnected';
+    uiSection('render:conn', () => {
+      const st = needEl('#apiState', 'render:conn');
+      if (!st) return;
+      st.className = 'conn err';
+      const txt = st.querySelector ? st.querySelector('.conn-text') : null;
+      if (txt) txt.textContent = 'disconnected';
+      else uiWarn('render:conn', 'missing element .conn-text');
+    });
   }
 }
 function drawChart(vals) {
@@ -1008,34 +1102,51 @@ function drawChart(vals) {
   const step = vals.length > 1 ? W / (vals.length - 1) : W;
   const pts = vals.map((v, i) => [i * step, H - 6 - (v / max) * (H - 16)]);
   const line = pts.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ' ' + p[1].toFixed(1)).join(' ');
-  $('#chartLine').setAttribute('d', line);
-  $('#chartArea').setAttribute('d', line + ` L ${W} ${H} L 0 ${H} Z`);
+  const cl = needEl('#chartLine', 'render:chart');
+  if (cl && cl.setAttribute) cl.setAttribute('d', line);
+  const ca = needEl('#chartArea', 'render:chart');
+  if (ca && ca.setAttribute) ca.setAttribute('d', line + ` L ${W} ${H} L 0 ${H} Z`);
   const last = vals[vals.length - 1];
-  $('#chartLast').textContent = 'last: ' + Math.round(last) + ' ms';
-  $('#chartMax').textContent = 'peak: ' + Math.round(max) + ' ms';
+  setText('#chartLast', 'last: ' + Math.round(last) + ' ms', 'render:chart');
+  setText('#chartMax', 'peak: ' + Math.round(max) + ' ms', 'render:chart');
   // KPI sparkline
   const sw = 120, sh = 28;
   const smax = Math.max(...vals, 1);
   const sstep = vals.length > 1 ? sw / (vals.length - 1) : sw;
   const spts = vals.map((v, i) => [i * sstep, sh - 2 - (v / smax) * (sh - 6)]);
   const sline = spts.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ' ' + p[1].toFixed(1)).join(' ');
-  $('#latencySpark .spark-line').setAttribute('d', sline);
-  $('#latencySpark .spark-area').setAttribute('d', sline + ` L ${sw} ${sh} L 0 ${sh} Z`);
+  const sl = document.querySelector('#latencySpark .spark-line');
+  if (sl && sl.setAttribute) sl.setAttribute('d', sline);
+  else uiWarn('render:chart', 'missing element #latencySpark .spark-line');
+  const sa = document.querySelector('#latencySpark .spark-area');
+  if (sa && sa.setAttribute) sa.setAttribute('d', sline + ` L ${sw} ${sh} L 0 ${sh} Z`);
+  else uiWarn('render:chart', 'missing element #latencySpark .spark-area');
 }
 async function tick() {
-  if (!paused) {
-    const had = (snap.events || []).length;
-    await refresh();
-    const now = (snap.events || []).length;
-    if (now > had && !$('#console').classList.contains('active') && (snap.events || []).some(e => consoleKinds.errors.has(e.kind))) {
-      $('#consoleDot').hidden = false;
-      consoleUnread++;
+  try {
+    if (!paused) {
+      const had = (snap.events || []).length;
+      await uiSectionAsync('tick:refresh', refresh);
+      uiSection('tick:dot', () => {
+        const now = (snap.events || []).length;
+        const consoleTab = document.querySelector('#console');
+        if (!consoleTab || !consoleTab.classList) { uiWarn('tick:dot', 'missing element #console'); return; }
+        const dot = document.querySelector('#consoleDot');
+        if (now > had && !consoleTab.classList.contains('active') && (snap.events || []).some(e => consoleKinds.errors.has(e.kind))) {
+          if (dot) dot.hidden = false;
+          else uiWarn('tick:dot', 'missing element #consoleDot');
+          consoleUnread++;
+        }
+        if (consoleTab.classList.contains('active')) { consoleUnread = 0; if (dot) dot.hidden = true; }
+      });
     }
-    if ($('#console').classList.contains('active')) { consoleUnread = 0; $('#consoleDot').hidden = true; }
-  }
+  } catch (e) { uiWarn('tick', e); }
   const n = snap.deployment_total ?? (snap.deployments || []).length;
   const delay = n > 5000 ? 15000 : n > 1000 ? 8000 : n > 250 ? 4000 : 1800;
   setTimeout(tick, delay);
+}
+async function uiSectionAsync(name, fn) {
+  try { await fn(); } catch (e) { uiWarn(name, e); }
 }
 let ringResizeQueued = false;
 window.addEventListener('resize', () => {
@@ -1043,9 +1154,9 @@ window.addEventListener('resize', () => {
   // progress or clear in-flight animation classes.
   if (ringResizeQueued) return;
   ringResizeQueued = true;
-  requestAnimationFrame(() => { ringResizeQueued = false; renderRing(snap.deployments || [], healthMap()); });
+  requestAnimationFrame(() => { ringResizeQueued = false; uiSection('render:ring', () => renderRing(snap.deployments || [], healthMap())); });
 });
-setInterval(() => { $('#footClock').textContent = new Date().toLocaleTimeString('en-US', { hour12: false }); }, 1000);
+setInterval(() => uiSection('tick:clock', () => { setText('#footClock', new Date().toLocaleTimeString('en-US', { hour12: false }), 'tick:clock'); }), 1000);
 
 /* ---------- CLI tools tab ---------- */
 function cliSnippet(kind) {
@@ -1117,21 +1228,27 @@ curl -s ${base}/admin/api/virtual-endpoints -H "x-admin-key: $ADMIN_KEY"
 
 function renderCLI() {
   const tabs = $$('#cliTabs button');
-  const active = tabs.find(b => b.classList.contains('active')) || tabs[0];
+  const active = tabs.find(b => b.classList && b.classList.contains('active')) || tabs[0];
+  if (!active) { uiWarn('render:cli', 'missing element #cliTabs button'); return; }
   const s = cliSnippet(active.dataset.cli);
-  $('#cliBody').innerHTML = `
+  const body = needEl('#cliBody', 'render:cli');
+  if (!body) return;
+  body.innerHTML = `
     <div class="cli-card">
       <div class="cli-card-head"><span>${esc(s.title)}</span><button class="copy-btn" id="cliCopy">Copy</button></div>
       <pre>${s.body}</pre>
     </div>
     <p class="cli-note">${esc(s.note)}</p>`;
-  $('#cliCopy').onclick = e => copyText($('#cliBody pre').innerText, e.target);
+  bind('#cliCopy', 'onclick', e => {
+    const pre = document.querySelector('#cliBody pre');
+    copyText(pre ? pre.innerText : '', e.target);
+  }, 'render:cli');
 }
-$$('#cliTabs button').forEach(b => b.onclick = () => {
+$$('#cliTabs button').forEach(b => { b.onclick = () => uiSection('cli', () => {
   $$('#cliTabs button').forEach(x => x.classList.remove('active'));
   b.classList.add('active');
   renderCLI();
-});
+}); });
 
 /* ---------- provider editor ---------- */
 function emptyProvider() {
@@ -1144,14 +1261,22 @@ function emptyProvider() {
   };
 }
 function modal(open) {
-  $('#providerModal').classList.toggle('open', open);
-  $('#providerModal').setAttribute('aria-hidden', open ? 'false' : 'true');
-  document.body.classList.toggle('modal-open', open);
+  const m = needEl('#providerModal', 'modal');
+  if (!m) return;
+  try {
+    m.classList.toggle('open', open);
+    m.setAttribute('aria-hidden', open ? 'false' : 'true');
+    if (document.body && document.body.classList) document.body.classList.toggle('modal-open', open);
+  } catch (e) { uiWarn('modal', e); }
 }
 function toggleSecret(i, b) {
-  const el = $(i);
-  el.type = el.type === 'password' ? 'text' : 'password';
-  $(b).textContent = el.type === 'password' ? 'Show' : 'Hide';
+  const el = needEl(i, 'secret');
+  const btn = needEl(b, 'secret');
+  if (!el || !btn) return;
+  try {
+    el.type = el.type === 'password' ? 'text' : 'password';
+    btn.textContent = el.type === 'password' ? 'Show' : 'Hide';
+  } catch (e) { uiWarn('secret', e); }
 }
 const providerPresets = {
   custom: null,
@@ -1169,7 +1294,8 @@ const providerPresets = {
   vllm: { name: 'vLLM', id: 'vllm', type: 'openai_compatible', base: 'http://127.0.0.1:8000/v1', auth: 'none', local: true }
 };
 function fillPresetSelect() {
-  const sel = $('#pPreset');
+  const sel = needEl('#pPreset', 'boot:presets');
+  if (!sel) return;
   const current = sel.value;
   const apiEntries = [];
   const localEntries = [];
@@ -1228,27 +1354,29 @@ function applyPreset(k) {
   $('#pModelsPath').value = '/v1/models';
   $('#pCountPath').value = '/v1/messages/count_tokens';
 }
-$('#addProviderBtn').onclick = () => {
+bind('#addProviderBtn', 'onclick', () => {
   editor = { mode: 'add', originalId: '', provider: emptyProvider(), detected: [], selected: new Set(), modelMeta: new Map(), secretDirty: true, secretSource: 'none' };
   fillForm(); modal(true);
-};
-$('#closeProviderModal').onclick = () => modal(false);
-$('#cancelProviderBtn').onclick = () => modal(false);
-$$('[data-close-modal]').forEach(x => x.onclick = () => modal(false));
-document.addEventListener('keydown', e => { if (e.key === 'Escape') modal(false); });
-$('#togglePKey').onclick = () => toggleSecret('#pKey', '#togglePKey');
-$('#pKey').oninput = () => editor.secretDirty = true;
-$('#pKeyEnv').oninput = () => editor.secretDirty = true;
-$('#pCredentials').oninput = () => editor.secretDirty = true;
-$('#pHeaders').oninput = () => editor.headersDirty = true;
-$('#pProxy').oninput = () => editor.proxyDirty = true;
-$('#pPreset').onchange = () => applyPreset($('#pPreset').value);
-$('#pType').onchange = () => {
-  const a = $('#pAuth'), typ = $('#pType').value;
+}, 'provider');
+bind('#closeProviderModal', 'onclick', () => modal(false), 'provider');
+bind('#cancelProviderBtn', 'onclick', () => modal(false), 'provider');
+$$('[data-close-modal]').forEach(x => { x.onclick = () => uiSection('provider', () => modal(false)); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') uiSection('provider', () => modal(false)); });
+bind('#togglePKey', 'onclick', () => toggleSecret('#pKey', '#togglePKey'), 'provider');
+bind('#pKey', 'oninput', () => { if (editor) editor.secretDirty = true; }, 'provider');
+bind('#pKeyEnv', 'oninput', () => { if (editor) editor.secretDirty = true; }, 'provider');
+bind('#pCredentials', 'oninput', () => { if (editor) editor.secretDirty = true; }, 'provider');
+bind('#pHeaders', 'oninput', () => { if (editor) editor.headersDirty = true; }, 'provider');
+bind('#pProxy', 'oninput', () => { if (editor) editor.proxyDirty = true; }, 'provider');
+bind('#pPreset', 'onchange', () => { const s = document.querySelector('#pPreset'); if (s) applyPreset(s.value); }, 'provider');
+bind('#pType', 'onchange', () => {
+  const a = document.querySelector('#pAuth'), t = document.querySelector('#pType');
+  if (!a || !t) { uiWarn('provider', 'missing element #pAuth/#pType'); return; }
+  const typ = t.value;
   if (typ === 'anthropic_compatible' && (a.value === 'bearer' || a.value === 'x-goog-api-key')) a.value = 'x-api-key';
   if (typ === 'gemini' && (a.value === 'bearer' || a.value === 'x-api-key')) a.value = 'x-goog-api-key';
   if ((typ === 'openai_compatible' || typ === 'openai_responses') && (a.value === 'x-api-key' || a.value === 'x-goog-api-key')) a.value = 'bearer';
-};
+}, 'provider');
 async function openEdit(id) {
   try {
     const d = await api('/admin/api/providers/' + encodeURIComponent(id)), p = d.provider;
@@ -1418,78 +1546,85 @@ function renderPicker() {
     meta.capabilities[x.dataset.cap] = x.checked;
   });
 }
-$('#addModelBtn').onclick = () => {
-  const m = $('#manualModel').value.trim();
+bind('#addModelBtn', 'onclick', () => {
+  const inp = document.querySelector('#manualModel');
+  if (!inp) { uiWarn('provider', 'missing element #manualModel'); return; }
+  const m = inp.value.trim();
   if (!m) return;
   editor.detected = [...new Set([...editor.detected, m])];
   editor.selected.add(m);
   ensureModelMeta(m, editor.detected.length - 1);
-  $('#manualModel').value = '';
+  inp.value = '';
   renderPicker();
-};
-$('#manualModel').onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); $('#addModelBtn').click(); } };
-$('#discoverBtn').onclick = async () => {
+}, 'provider');
+bind('#manualModel', 'onkeydown', e => { if (e.key === 'Enter') { e.preventDefault(); const b = document.querySelector('#addModelBtn'); if (b && b.click) b.click(); } }, 'provider');
+bind('#discoverBtn', 'onclick', async () => {
   try {
     const p = readForm();
-    $('#discoverBtn').disabled = true;
-    $('#discoverStatus').textContent = 'Detecting…';
+    const db = document.querySelector('#discoverBtn');
+    if (db) db.disabled = true;
+    setText('#discoverStatus', 'Detecting…', 'provider');
     const d = await api('/admin/api/provider-discover', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload(p)) });
     if (!d.ok) throw new Error(d.error || 'No models discovered');
     editor.detected = [...new Set([...(d.models || []), ...editor.detected])];
     (d.models || []).forEach((m, i) => ensureModelMeta(m, i));
     if (editor.selected.size === 0) (d.models || []).forEach(m => editor.selected.add(m));
     renderPicker();
-    $('#discoverStatus').textContent = `Found ${(d.models || []).length} model(s).`;
+    setText('#discoverStatus', `Found ${(d.models || []).length} model(s).`, 'provider');
   } catch (e) {
-    $('#discoverStatus').textContent = e.message;
+    setText('#discoverStatus', String(e.message || e).slice(0, 120), 'provider');
     toast(e.message, true);
-  } finally { $('#discoverBtn').disabled = false; }
-};
-$('#checkConnectionBtn').onclick = async () => {
+  } finally { const db2 = document.querySelector('#discoverBtn'); if (db2) db2.disabled = false; }
+}, 'provider');
+bind('#checkConnectionBtn', 'onclick', async () => {
   try {
     const p = readForm();
-    $('#checkConnectionBtn').disabled = true;
-    $('#connectionStatus').textContent = 'Checking…';
+    const cb = document.querySelector('#checkConnectionBtn');
+    if (cb) cb.disabled = true;
+    setText('#connectionStatus', 'Checking…', 'provider');
     const d = await api('/admin/api/provider-check', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload(p)) });
-    $('#connectionStatus').textContent = d.ok ? `OK — reachable (${d.status_code || 200})` : `Failed: ${d.error || 'unreachable'}`;
-    $('#connectionStatus').className = 'inline-status ' + (d.ok ? '' : 'badtext');
+    setText('#connectionStatus', d.ok ? `OK — reachable (${d.status_code || 200})` : `Failed: ${d.error || 'unreachable'}`, 'provider');
+    const cs = document.querySelector('#connectionStatus');
+    if (cs) cs.className = 'inline-status ' + (d.ok ? '' : 'badtext');
   } catch (e) {
-    $('#connectionStatus').textContent = e.message;
-    $('#connectionStatus').className = 'inline-status badtext';
-  } finally { $('#checkConnectionBtn').disabled = false; }
-};
-$('#testProviderBtn').onclick = async () => {
+    setText('#connectionStatus', String(e.message || e).slice(0, 120), 'provider');
+    const cs2 = document.querySelector('#connectionStatus');
+    if (cs2) cs2.className = 'inline-status badtext';
+  } finally { const cb2 = document.querySelector('#checkConnectionBtn'); if (cb2) cb2.disabled = false; }
+}, 'provider');
+bind('#testProviderBtn', 'onclick', async () => {
   try {
     const p = readForm();
     if (!editor.selected.size) throw new Error('Select at least one model');
-    $('#testProviderBtn').disabled = true;
-    $('#testResults').innerHTML = '<div class="inline-status">Testing…</div>';
+    const tb = document.querySelector('#testProviderBtn');
+    if (tb) tb.disabled = true;
+    const tr = needEl('#testResults', 'provider');
+    if (tr) tr.innerHTML = '<div class="inline-status">Testing…</div>';
     const d = await api('/admin/api/provider-test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload(p)) });
-    $('#testResults').innerHTML = (d.results || []).map(x => `<div class="test-row ${x.ok ? 'ok' : 'fail'}"><strong>${esc(x.model)}</strong><span>${x.ok ? 'PASS' : 'FAIL'}</span><span>${x.status_code || '—'}</span><span>${x.latency_ms} ms</span><small>${esc(x.error || '')}</small></div>`).join('');
+    if (tr) tr.innerHTML = (d.results || []).map(x => `<div class="test-row ${x.ok ? 'ok' : 'fail'}"><strong>${esc(x.model)}</strong><span>${x.ok ? 'PASS' : 'FAIL'}</span><span>${x.status_code || '—'}</span><span>${x.latency_ms} ms</span><small>${esc(x.error || '')}</small></div>`).join('');
     toast(d.ok ? 'All selected models passed' : `${d.passed}/${d.total} models passed`, !d.ok);
   } catch (e) {
-    $('#testResults').innerHTML = `<div class="inline-status badtext">${esc(e.message)}</div>`;
+    const tr2 = document.querySelector('#testResults');
+    if (tr2) tr2.innerHTML = `<div class="inline-status badtext">${esc(String(e.message || e).slice(0, 120))}</div>`;
     toast(e.message, true);
-  } finally { $('#testProviderBtn').disabled = false; }
-};
-$('#saveProviderBtn').onclick = async () => {
+  } finally { const tb2 = document.querySelector('#testProviderBtn'); if (tb2) tb2.disabled = false; }
+}, 'provider');
+bind('#saveProviderBtn', 'onclick', async () => {
   try {
     const p = readForm(), b = JSON.stringify(payload(p));
-    $('#saveProviderBtn').disabled = true;
+    const sb = document.querySelector('#saveProviderBtn');
+    if (sb) sb.disabled = true;
     if (editor.mode === 'add') await api('/admin/api/providers', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: b });
     else await api('/admin/api/providers/' + encodeURIComponent(editor.originalId), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: b });
     toast('Provider saved and runtime reloaded');
-    $('#pKey').value = '';
-    $('#pCredentials').value = '';
-    $('#pHeaders').value = '';
-    $('#pProxy').value = '';
+    for (const id of ['#pKey', '#pCredentials', '#pHeaders', '#pProxy']) { const f = document.querySelector(id); if (f) f.value = ''; }
     editor = null;
     modal(false);
     await refresh();
   } catch (e) { toast(e.message, true); }
-  finally { $('#saveProviderBtn').disabled = false; }
-};
-$('#deleteProviderBtn').onclick = async () => {
+  finally { const sb2 = document.querySelector('#saveProviderBtn'); if (sb2) sb2.disabled = false; }
+}, 'provider');
+bind('#deleteProviderBtn', 'onclick', async () => {
   const ok = window.NexaUI?.confirm ? await window.NexaUI.confirm('Delete provider', `Delete provider "${editor.originalId}"?`) : false;
   if (!ok) return;
   try {
@@ -1498,10 +1633,12 @@ $('#deleteProviderBtn').onclick = async () => {
     modal(false);
     await refresh();
   } catch (e) { toast(e.message, true); }
-};
+}, 'provider');
 
 /* ---------- virtual endpoints / route profiles / pools ---------- */
 function renderVirtual() {
+  const tgt = needEl('#virtualRows', 'render:virtual');
+  if (!tgt) return;
   const ves = snap.virtual_endpoints || [];
   const rows = ves.map(ve => {
     const enabled = ve.enabled !== false;
@@ -1515,10 +1652,12 @@ function renderVirtual() {
       <td><button class=\"btn secondary\" onclick=\"editVirtual('${esc(ve.id)}')\">Edit</button> <button class=\"btn danger-ghost\" onclick=\"deleteVirtual('${esc(ve.id)}')\">Del</button></td>
     </tr>`;
   });
-  $('#virtualRows').innerHTML = rows.join('') || '<tr><td colspan=\"6\" style=\"color:var(--muted)\">No virtual endpoints configured. Create one to get stable public model names.</td></tr>';
+  tgt.innerHTML = rows.join('') || '<tr><td colspan="6" style="color:var(--muted)">No virtual endpoints configured. Create one to get stable public model names.</td></tr>';
 }
 
 function renderProfiles() {
+  const tgt = needEl('#profileRows', 'render:profiles');
+  if (!tgt) return;
   const rps = snap.route_profiles || [];
   const globalStrat = snap.config?.routing?.strategy || 'ready_mesh';
   const rows = rps.map(rp => {
@@ -1532,10 +1671,13 @@ function renderProfiles() {
       <td><button class=\"btn secondary\" onclick=\"editProfile('${esc(rp.id)}')\">Edit</button> <button class=\"btn danger-ghost\" onclick=\"deleteProfile('${esc(rp.id)}')\">Del</button></td>
     </tr>`;
   });
-  $('#profileRows').innerHTML = rows.join('') || '<tr><td colspan=\"6\" style=\"color:var(--muted)\">No route profiles. Create a profile to describe routing intent. Strategy inherits global.</td></tr>';
+  tgt.innerHTML = rows.join('') || '<tr><td colspan="6" style="color:var(--muted)">No route profiles. Create a profile to describe routing intent. Strategy inherits global.</td></tr>';
 }
 
 function renderPools() {
+  const poolTgt = needEl('#poolRows', 'render:pools');
+  const chainTgt = needEl('#chainRows', 'render:pools');
+  if (!poolTgt || !chainTgt) return;
   const cps = snap.candidate_pools || [];
   const fcs = snap.fallback_chains || [];
   const poolRows = cps.map(cp => {
@@ -1549,7 +1691,7 @@ function renderPools() {
       <td><button class=\"btn secondary\" onclick=\"editPool('${esc(cp.id)}')\">Edit</button> <button class=\"btn danger-ghost\" onclick=\"deletePool('${esc(cp.id)}')\">Del</button></td>
     </tr>`;
   });
-  $('#poolRows').innerHTML = poolRows.join('') || '<tr><td colspan=\"5\" style=\"color:var(--muted)\">No candidate pools.</td></tr>';
+  poolTgt.innerHTML = poolRows.join('') || '<tr><td colspan="5" style="color:var(--muted)">No candidate pools.</td></tr>';
 
   const chainRows = fcs.map(fc => {
     const pools = (fc.pools || []).join(' → ');
@@ -1559,7 +1701,7 @@ function renderPools() {
       <td><button class=\"btn secondary\" onclick=\"editChain('${esc(fc.id)}')\">Edit</button> <button class=\"btn danger-ghost\" onclick=\"deleteChain('${esc(fc.id)}')\">Del</button></td>
     </tr>`;
   });
-  $('#chainRows').innerHTML = chainRows.join('') || '<tr><td colspan=\"3\" style=\"color:var(--muted)\">No fallback chains.</td></tr>';
+  chainTgt.innerHTML = chainRows.join('') || '<tr><td colspan="3" style="color:var(--muted)">No fallback chains.</td></tr>';
 }
 
 // Control Plane v2 owns the human-friendly editors. These compatibility
@@ -1591,8 +1733,8 @@ window.deleteChain = deleteChain;
     const d = await api('/admin/api/provider-presets');
     serverPresets = d.presets || null;
   } catch { serverPresets = null; }
-    fillPresetSelect();
-    renderCLI();
+    uiSection('boot:presets', fillPresetSelect);
+    uiSection('boot:cli', renderCLI);
     tick();
     consumeLiveEvents();
   })();
@@ -1617,13 +1759,16 @@ function statusChip(st) {
 async function loadCompat() {
   try {
     compatData = await api('/admin/api/compat');
-    renderCompat();
+    uiSection('render:compat', renderCompat);
   } catch (e) {
-    $('#compatRows').innerHTML = `<tr><td colspan="13">${esc(e.message)}</td></tr>`;
+    const tgt = needEl('#compatRows', 'render:compat');
+    if (tgt) tgt.innerHTML = `<tr><td colspan="13">${esc(String(e.message || e).slice(0, 120))}</td></tr>`;
   }
 }
 
 function renderCompat() {
+  const tgt = needEl('#compatRows', 'render:compat');
+  if (!tgt) return;
   const rows = (compatData.deployments || []).map(d => {
     const c = d.scorecard?.capabilities || {};
     const sc = d.scorecard || {};
@@ -1645,7 +1790,7 @@ function renderCompat() {
       <td>${esc(repair.length > 40 ? repair.slice(0, 40) + '…' : repair) || '<span class="cap na">—</span>'}</td>
     </tr>`;
   });
-  $('#compatRows').innerHTML = rows.join('') || '<tr><td colspan="13">No deployments configured.</td></tr>';
+  tgt.innerHTML = rows.join('') || '<tr><td colspan="13">No deployments configured.</td></tr>';
 }
 
 function reportText(r) {
@@ -1663,10 +1808,10 @@ async function runCompatSuite(mode) {
   const providers = (cfg.providers || []).filter(p => p.enabled);
   if (!providers.length) { toast('No enabled providers to test', true); return; }
   compatBusy = true;
-  const buttons = [$('#compatTestFull'), $('#compatTestAgent')];
+  const buttons = [document.querySelector('#compatTestFull'), document.querySelector('#compatTestAgent')];
   buttons.forEach(b => b && (b.disabled = true));
-  $('#compatReport').hidden = false;
-  $('#compatReport').textContent = `Running ${mode} suite… (this can take a while; bounded per deployment)`;
+  const report = needEl('#compatReport', 'compat');
+  if (report) { try { report.hidden = false; report.textContent = `Running ${mode} suite… (this can take a while; bounded per deployment)`; } catch (e) { uiWarn('compat', e); } }
   try {
     const blocks = [];
     for (const p of providers) {
@@ -1681,11 +1826,11 @@ async function runCompatSuite(mode) {
         blocks.push(reportText(r) || `${x.model}: ${x.ok ? 'PASS' : 'FAIL'} ${x.error || ''}`);
       });
     }
-    $('#compatReport').textContent = blocks.join('\n\n') || 'No models to test.';
+    setText('#compatReport', blocks.join('\n\n') || 'No models to test.', 'compat');
     await loadCompat();
     toast(mode === 'full' ? 'Full capability suite finished' : 'Agent loop test finished');
   } catch (e) {
-    $('#compatReport').textContent = 'Test failed: ' + e.message;
+    setText('#compatReport', 'Test failed: ' + String(e.message || e).slice(0, 120), 'compat');
     toast(e.message, true);
   } finally {
     compatBusy = false;
@@ -1693,8 +1838,8 @@ async function runCompatSuite(mode) {
   }
 }
 
-$('#compatTestFull').onclick = () => runCompatSuite('full');
-$('#compatTestAgent').onclick = () => runCompatSuite('claude_code');
+bind('#compatTestFull', 'onclick', () => runCompatSuite('full'), 'compat');
+bind('#compatTestAgent', 'onclick', () => runCompatSuite('claude_code'), 'compat');
 
 /* ---------- B3 node telemetry popover (additive, real data only) ----------
    Consumes the additive snap.node_telemetry contract (see
@@ -1774,13 +1919,19 @@ document.addEventListener('click', ev => {
   if (nodeTelemetryPinned && !(ev.target.closest && ev.target.closest('#nodeTelemetryPopover'))) hideNodeTelemetryPopover();
 });
 document.addEventListener('keydown', ev => { if (ev.key === 'Escape') hideNodeTelemetryPopover(); });
-$('#compatReset').onclick = async () => {
+bind('#compatReset', 'onclick', async () => {
   try {
     await api('/admin/api/compat/reset', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ deployment: 'all' }) });
     toast('Capability cache reset; fresh probes will re-run');
     await loadCompat();
   } catch (e) { toast(e.message, true); }
-};
+}, 'compat');
+
+/* ---------- F1 test hooks (additive; render/snap/faults only) ---------- */
+function f1SetSnap(v) { snap = v; }
+function f1SetProviders(v) { providerSummaries = v; }
+function f1Snap() { return snap; }
+function f1Faults() { return { count: uiFaults.count, lastSection: uiFaults.lastSection, lastError: uiFaults.lastError }; }
 
 /* ---------- F8 status API (safe counts/transport only; never payloads/secrets) ---------- */
 try {
@@ -1796,5 +1947,12 @@ try {
     _consumeLiveEvents: consumeLiveEvents,
     _liveSeq: () => liveSeq,
     _sseHooks: sseHooks,
+    _render: render,
+    _setSnap: f1SetSnap,
+    _setProviders: f1SetProviders,
+    _snap: f1Snap,
+    _uiFaults: f1Faults,
+    _uiReset: uiResetFaults,
+    _uiSection: uiSection,
   });
 } catch {}
