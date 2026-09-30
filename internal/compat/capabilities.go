@@ -451,6 +451,9 @@ func (s *Store) LearnNumeric(deploymentID string, contextWindow, maxOutput int) 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	c := s.contracts[deploymentID]
+	if c.Evidence == nil {
+		c.Evidence = map[string]Evidence{}
+	}
 	if contextWindow > 0 {
 		c.Capabilities.ContextWindow = contextWindow
 	}
