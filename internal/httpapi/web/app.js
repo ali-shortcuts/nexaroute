@@ -1,6 +1,90 @@
 /* NexaRoute control plane — dashboard logic (vanilla JS, no dependencies) */
 'use strict';
 
+const DashboardLifecycle = (() => {
+  const intervals = new Set();
+  const timeouts = new Set();
+  const abortControllers = new Set();
+  const animationFrames = new Set();
+  const eventListeners = new Set();
+  const mutationObservers = new Set();
+  let tornDown = false;
+
+  function trackInterval(id) { if (!tornDown) intervals.add(id); return id; }
+  function trackTimeout(id) { if (!tornDown) timeouts.add(id); return id; }
+  function trackAbortController(ac) { if (!tornDown) abortControllers.add(ac); return ac; }
+  function trackAnimationFrame(id) { if (!tornDown) animationFrames.add(id); return id; }
+  function trackEventListener(target, type, listener, options) {
+    if (tornDown) return;
+    target.addEventListener(type, listener, options);
+    eventListeners.add({ target, type, listener, options });
+  }
+  function trackMutationObserver(observer) { if (!tornDown) mutationObservers.add(observer); return observer; }
+
+  function untrackInterval(id) { intervals.delete(id); }
+  function untrackTimeout(id) { timeouts.delete(id); }
+  function untrackAbortController(ac) { abortControllers.delete(ac); }
+  function untrackAnimationFrame(id) { animationFrames.delete(id); }
+  function untrackEventListener(target, type, listener, options) {
+    target.removeEventListener(type, listener, options);
+    for (const entry of eventListeners) {
+      if (entry.target === target && entry.type === type && entry.listener === listener && entry.options === options) {
+        eventListeners.delete(entry);
+        break;
+      }
+    }
+  }
+  function untrackMutationObserver(observer) { mutationObservers.delete(observer); }
+
+  function teardown() {
+    if (tornDown) return;
+    tornDown = true;
+
+    for (const id of intervals) clearInterval(id);
+    intervals.clear();
+
+    for (const id of timeouts) clearTimeout(id);
+    timeouts.clear();
+
+    for (const ac of abortControllers) {
+      try { ac.abort(); } catch {}
+    }
+    abortControllers.clear();
+
+    for (const id of animationFrames) cancelAnimationFrame(id);
+    animationFrames.clear();
+
+    for (const { target, type, listener, options } of eventListeners) {
+      try { target.removeEventListener(type, listener, options); } catch {}
+    }
+    eventListeners.clear();
+
+    for (const observer of mutationObservers) {
+      try { observer.disconnect(); } catch {}
+    }
+    mutationObservers.clear();
+  }
+
+  function isTornDown() { return tornDown; }
+
+  return {
+    trackInterval,
+    trackTimeout,
+    trackAbortController,
+    trackAnimationFrame,
+    trackEventListener,
+    trackMutationObserver,
+    untrackInterval,
+    untrackTimeout,
+    untrackAbortController,
+    untrackAnimationFrame,
+    untrackEventListener,
+    untrackMutationObserver,
+    teardown,
+    isTornDown
+  };
+})();
+
 let snap = { deployments: [], health: [], events: [], config: {} };
 let providerSummaries = [];
 let editor = { mode: 'add', originalId: '', provider: null, detected: [], selected: new Set(), modelMeta: new Map(), secretDirty: false, secretSource: 'none' };
@@ -167,7 +251,7 @@ async function pollLiveEventsFallback(signal) {
 }
 async function consumeLiveEvents() {
   if (liveEventsAbort) liveEventsAbort.abort();
-  liveEventsAbort = new AbortController();
+  liveEventsAbort = DashboardLifecycle.trackAbortController(new AbortController());
   while (liveEventsAbort && !liveEventsAbort.signal.aborted) {
     try {
       const q = liveSeq ? `?since=${encodeURIComponent(liveSeq)}&limit=100` : '?limit=100';
@@ -216,7 +300,7 @@ function toast(m, bad = false) {
   t.textContent = m;
   t.className = 'toast show ' + (bad ? 'bad' : '');
   clearTimeout(toast.t);
-  toast.t = setTimeout(() => t.className = 'toast', 2600);
+  toast.t = DashboardLifecycle.trackTimeout(setTimeout(() => t.className = 'toast', 2600));
 }
 function copyText(text, btn) {
   const done = () => { if (btn) { const o = btn.textContent; btn.textContent = 'Copied ✓'; setTimeout(() => btn.textContent = o, 1400); } toast('Copied to clipboard'); };
@@ -245,27 +329,31 @@ const subtitles = {
   settings: 'Hot-reloaded routing and probe configuration.',
   compat: 'Universal Compatibility Engine: verified model capabilities, repairs and the Claude Code scorecard.'
 };
-$$('nav button').forEach(b => b.onclick = () => {
-  $$('nav button').forEach(x => x.classList.remove('active'));
-  b.classList.add('active');
-  $$('.tab').forEach(x => x.classList.remove('active'));
-  $('#' + b.dataset.tab).classList.add('active');
-  $('#title').textContent = b.dataset.title;
-  $('#subtitle').textContent = subtitles[b.dataset.tab] || '';
-  if (b.dataset.tab === 'settings') fillRuntimeSettings();
-  if (b.dataset.tab === 'console') { consoleUnread = 0; $('#consoleDot').hidden = true; renderConsole(); }
-  if (b.dataset.tab === 'cli') renderCLI();
-  if (b.dataset.tab === 'compat') loadCompat();
-  if (b.dataset.tab === 'virtual') renderVirtual();
-  if (b.dataset.tab === 'profiles') renderProfiles();
-  if (b.dataset.tab === 'pools') renderPools();
-});
-$('#pauseBtn').onclick = () => {
+function navHandler(b) {
+  return () => {
+    $$('nav button').forEach(x => x.classList.remove('active'));
+    b.classList.add('active');
+    $$('.tab').forEach(x => x.classList.remove('active'));
+    $('#' + b.dataset.tab).classList.add('active');
+    $('#title').textContent = b.dataset.title;
+    $('#subtitle').textContent = subtitles[b.dataset.tab] || '';
+    if (b.dataset.tab === 'settings') fillRuntimeSettings();
+    if (b.dataset.tab === 'console') { consoleUnread = 0; $('#consoleDot').hidden = true; renderConsole(); }
+    if (b.dataset.tab === 'cli') renderCLI();
+    if (b.dataset.tab === 'compat') loadCompat();
+    if (b.dataset.tab === 'virtual') renderVirtual();
+    if (b.dataset.tab === 'profiles') renderProfiles();
+    if (b.dataset.tab === 'pools') renderPools();
+  };
+}
+$$('nav button').forEach(b => DashboardLifecycle.trackEventListener(b, 'click', navHandler(b)));
+function pauseHandler() {
   paused = !paused;
   $('#pauseBtn').textContent = paused ? '▶ Resume' : '⏸ Pause';
   $('#pauseBtn').classList.toggle('active-btn', paused);
   if (!paused) tick();
-};
+}
+DashboardLifecycle.trackEventListener($('#pauseBtn'), 'click', pauseHandler);
 
 /* ---------- runtime settings ---------- */
 function intVal(id, fallback, min = 0) {
@@ -316,7 +404,7 @@ function validateRuntimeSettingsForm() {
   }
   return true;
 }
-$('#saveRuntimeSettings').onclick = async () => {
+async function saveRuntimeSettingsHandler() {
   if (!validateRuntimeSettingsForm()) return;
   const old = snap.config || {}, r = old.routing || {}, p = old.probe || {};
   const body = {
@@ -364,16 +452,18 @@ $('#saveRuntimeSettings').onclick = async () => {
     fillRuntimeSettings();
   } catch (e) { toast(e.message, true); }
   finally { $('#saveRuntimeSettings').disabled = false; }
-};
+}
+DashboardLifecycle.trackEventListener($('#saveRuntimeSettings'), 'click', saveRuntimeSettingsHandler);
 $('#adminKey').value = adminKey;
-$('#saveAdminKey').onclick = () => {
+function saveAdminKeyHandler() {
   adminKey = $('#adminKey').value.trim();
   sessionStorage.setItem('nexaroute_admin_key', adminKey);
   toast('Admin key saved for this browser session');
-};
-$('#toggleAdminKey').onclick = () => toggleSecret('#adminKey', '#toggleAdminKey');
+}
+DashboardLifecycle.trackEventListener($('#saveAdminKey'), 'click', saveAdminKeyHandler);
+DashboardLifecycle.trackEventListener($('#toggleAdminKey'), 'click', () => toggleSecret('#adminKey', '#toggleAdminKey'));
 
-$('#probeBtn').onclick = async () => {
+async function probeHandler() {
   try {
     $('#probeBtn').disabled = true;
     $('#probeBtn').textContent = 'Probing…';
@@ -383,7 +473,8 @@ $('#probeBtn').onclick = async () => {
     await refresh();
   } catch (e) { toast(e.message, true); }
   finally { $('#probeBtn').disabled = false; $('#probeBtn').textContent = '⚡ Probe all models'; }
-};
+}
+DashboardLifecycle.trackEventListener($('#probeBtn'), 'click', probeHandler);
 
 /* ---------- derived state helpers ---------- */
 function healthMap() { const m = {}; for (const h of snap.health || []) m[h.deployment] = h; return m; }
@@ -506,7 +597,7 @@ function startRingParticles() {
   }
   ringAnim.particleLast = performance.now();
   const step = now => {
-    ringAnim.particleRaf = requestAnimationFrame(step);
+    ringAnim.particleRaf = DashboardLifecycle.trackAnimationFrame(requestAnimationFrame(step));
     if (document.hidden || ringReducedMotion()) { ringAnim.particleLast = now; return; }
     const dt = Math.min(0.1, (now - ringAnim.particleLast) / 1000);
     ringAnim.particleLast = now;
@@ -524,7 +615,7 @@ function startRingParticles() {
       dots[i].setAttribute('opacity', (0.25 + 0.55 * ((Math.sin(a) + 1) / 2)).toFixed(2));
     }
   };
-  ringAnim.particleRaf = requestAnimationFrame(step);
+  ringAnim.particleRaf = DashboardLifecycle.trackAnimationFrame(requestAnimationFrame(step));
 }
 function updateRingStatus() {
   const el = document.querySelector('#ringStatus');
@@ -586,13 +677,13 @@ function trackRingInflight(e) {
   const terminal = e.kind === 'route_ok' || e.kind === 'candidate_exhausted';
   if (terminal) {
     const dep = e.deployment, id = rid;
-    setTimeout(() => {
+    DashboardLifecycle.trackTimeout(setTimeout(() => {
       const r = ringAnim.inflight.get(id);
       if (!r) return;
       if (dep) r.deployments = r.deployments.filter(d => d !== dep);
       if (!r.deployments.length || e.kind === 'candidate_exhausted') ringAnim.inflight.delete(id);
       brightenRingLinks(); updateRingStatus();
-    }, 2500);
+    }, 2500));
   }
   if (ringAnim.inflight.size > 64) {
     const oldest = [...ringAnim.inflight.entries()].sort((a, b) => a[1].updated - b[1].updated)[0];
@@ -608,13 +699,13 @@ function ringNodeLabel(n, icon, text) {
 function applyRingEvent(e) {
   trackRingInflight(e);
   const finish = (id, ms) => {
-    const t = setTimeout(() => {
+    const t = DashboardLifecycle.trackTimeout(setTimeout(() => {
       ringAnim.active.delete(id);
       const n = id === '__core__' ? document.querySelector('#ringCore') : ringNodes.get(id);
       if (n) n.classList.remove('anim-attempt', 'anim-skip', 'anim-fail', 'anim-failover', 'anim-ok');
       if (ringAnim.coalesced > 0) { ringAnim.coalesced--; updateRingCoalesced(); }
       brightenRingLinks(); updateRingStatus();
-    }, ms);
+    }, ms));
     ringAnim.active.set(id, t);
   };
   if (e.kind === 'candidate_exhausted') {
@@ -961,12 +1052,12 @@ function renderConsole() {
   $('#consoleCount').textContent = fmtInt(es.length) + ' events';
   if (stick) box.scrollTop = box.scrollHeight;
 }
-$$('#consoleFilter button').forEach(b => b.onclick = () => {
+$$('#consoleFilter button').forEach(b => DashboardLifecycle.trackEventListener(b, 'click', () => {
   $$('#consoleFilter button').forEach(x => x.classList.remove('active'));
   b.classList.add('active');
   consoleFilter = b.dataset.f;
   renderConsole();
-});
+}));
 
 /* ---------- data refresh loop ---------- */
 async function refresh() {
@@ -1035,17 +1126,16 @@ async function tick() {
   }
   const n = snap.deployment_total ?? (snap.deployments || []).length;
   const delay = n > 5000 ? 15000 : n > 1000 ? 8000 : n > 250 ? 4000 : 1800;
-  setTimeout(tick, delay);
+  DashboardLifecycle.trackTimeout(setTimeout(tick, delay));
 }
 let ringResizeQueued = false;
-window.addEventListener('resize', () => {
-  // Reposition only: never tear down nodes/links, never restart particle
-  // progress or clear in-flight animation classes.
+function handleResize() {
   if (ringResizeQueued) return;
   ringResizeQueued = true;
   requestAnimationFrame(() => { ringResizeQueued = false; renderRing(snap.deployments || [], healthMap()); });
-});
-setInterval(() => { $('#footClock').textContent = new Date().toLocaleTimeString('en-US', { hour12: false }); }, 1000);
+}
+DashboardLifecycle.trackEventListener(window, 'resize', handleResize);
+DashboardLifecycle.trackInterval(setInterval(() => { $('#footClock').textContent = new Date().toLocaleTimeString('en-US', { hour12: false }); }, 1000));
 
 /* ---------- CLI tools tab ---------- */
 function cliSnippet(kind) {
@@ -1125,13 +1215,16 @@ function renderCLI() {
       <pre>${s.body}</pre>
     </div>
     <p class="cli-note">${esc(s.note)}</p>`;
-  $('#cliCopy').onclick = e => copyText($('#cliBody pre').innerText, e.target);
+  DashboardLifecycle.trackEventListener($('#cliCopy'), 'click', e => copyText($('#cliBody pre').innerText, e.target));
 }
-$$('#cliTabs button').forEach(b => b.onclick = () => {
-  $$('#cliTabs button').forEach(x => x.classList.remove('active'));
-  b.classList.add('active');
-  renderCLI();
-});
+function cliTabHandler(b) {
+  return () => {
+    $$('#cliTabs button').forEach(x => x.classList.remove('active'));
+    b.classList.add('active');
+    renderCLI();
+  };
+}
+$$('#cliTabs button').forEach(b => DashboardLifecycle.trackEventListener(b, 'click', cliTabHandler(b)));
 
 /* ---------- provider editor ---------- */
 function emptyProvider() {
@@ -1228,27 +1321,28 @@ function applyPreset(k) {
   $('#pModelsPath').value = '/v1/models';
   $('#pCountPath').value = '/v1/messages/count_tokens';
 }
-$('#addProviderBtn').onclick = () => {
+function addProviderHandler() {
   editor = { mode: 'add', originalId: '', provider: emptyProvider(), detected: [], selected: new Set(), modelMeta: new Map(), secretDirty: true, secretSource: 'none' };
   fillForm(); modal(true);
-};
-$('#closeProviderModal').onclick = () => modal(false);
-$('#cancelProviderBtn').onclick = () => modal(false);
-$$('[data-close-modal]').forEach(x => x.onclick = () => modal(false));
-document.addEventListener('keydown', e => { if (e.key === 'Escape') modal(false); });
-$('#togglePKey').onclick = () => toggleSecret('#pKey', '#togglePKey');
+}
+DashboardLifecycle.trackEventListener($('#addProviderBtn'), 'click', addProviderHandler);
+DashboardLifecycle.trackEventListener($('#closeProviderModal'), 'click', () => modal(false));
+DashboardLifecycle.trackEventListener($('#cancelProviderBtn'), 'click', () => modal(false));
+$$('[data-close-modal]').forEach(x => DashboardLifecycle.trackEventListener(x, 'click', () => modal(false)));
+DashboardLifecycle.trackEventListener(document, 'keydown', e => { if (e.key === 'Escape') modal(false); });
+DashboardLifecycle.trackEventListener($('#togglePKey'), 'click', () => toggleSecret('#pKey', '#togglePKey'));
 $('#pKey').oninput = () => editor.secretDirty = true;
 $('#pKeyEnv').oninput = () => editor.secretDirty = true;
 $('#pCredentials').oninput = () => editor.secretDirty = true;
 $('#pHeaders').oninput = () => editor.headersDirty = true;
 $('#pProxy').oninput = () => editor.proxyDirty = true;
-$('#pPreset').onchange = () => applyPreset($('#pPreset').value);
-$('#pType').onchange = () => {
+DashboardLifecycle.trackEventListener($('#pPreset'), 'change', () => applyPreset($('#pPreset').value));
+DashboardLifecycle.trackEventListener($('#pType'), 'change', () => {
   const a = $('#pAuth'), typ = $('#pType').value;
   if (typ === 'anthropic_compatible' && (a.value === 'bearer' || a.value === 'x-goog-api-key')) a.value = 'x-api-key';
   if (typ === 'gemini' && (a.value === 'bearer' || a.value === 'x-api-key')) a.value = 'x-goog-api-key';
   if ((typ === 'openai_compatible' || typ === 'openai_responses') && (a.value === 'x-api-key' || a.value === 'x-goog-api-key')) a.value = 'bearer';
-};
+});
 async function openEdit(id) {
   try {
     const d = await api('/admin/api/providers/' + encodeURIComponent(id)), p = d.provider;
@@ -1402,23 +1496,23 @@ function renderPicker() {
       </div>
     </div>`;
   }).join('') : '<div class="model-empty" style="color:var(--muted);font-size:10px">No models selected yet — detect or add one.</div>';
-  $$('#modelPicker .model-select').forEach(x => x.onchange = () => x.checked ? editor.selected.add(x.dataset.model) : editor.selected.delete(x.dataset.model));
-  $$('#modelPicker [data-meta]').forEach(x => x.oninput = () => {
-    const m = x.dataset.model, meta = ensureModelMeta(m);
-    if (x.dataset.meta === 'aliases') meta.aliases = x.value.split(',').map(v => v.trim()).filter(Boolean);
-    else if (x.dataset.meta === 'priority') meta.priority = parseInt(x.value || '0', 10);
-    else if (x.dataset.meta === 'weight') meta.weight = Math.max(.01, parseFloat(x.value || '1'));
-    else if (x.dataset.meta === 'context_window') meta.context_window = Math.max(0, parseInt(x.value || '0', 10));
-    else if (x.dataset.meta === 'input_cost_per_mtok') meta.input_cost_per_mtok = Math.max(0, parseFloat(x.value || '0'));
-    else if (x.dataset.meta === 'output_cost_per_mtok') meta.output_cost_per_mtok = Math.max(0, parseFloat(x.value || '0'));
-  });
-  $$('#modelPicker [data-cap]').forEach(x => x.onchange = () => {
-    const meta = ensureModelMeta(x.dataset.model);
-    meta.capabilities = meta.capabilities || {};
-    meta.capabilities[x.dataset.cap] = x.checked;
-  });
+  $$('#modelPicker .model-select').forEach(x => DashboardLifecycle.trackEventListener(x, 'change', () => x.checked ? editor.selected.add(x.dataset.model) : editor.selected.delete(x.dataset.model)));
+$$('#modelPicker [data-meta]').forEach(x => DashboardLifecycle.trackEventListener(x, 'input', () => {
+  const m = x.dataset.model, meta = ensureModelMeta(m);
+  if (x.dataset.meta === 'aliases') meta.aliases = x.value.split(',').map(v => v.trim()).filter(Boolean);
+  else if (x.dataset.meta === 'priority') meta.priority = parseInt(x.value || '0', 10);
+  else if (x.dataset.meta === 'weight') meta.weight = Math.max(.01, parseFloat(x.value || '1'));
+  else if (x.dataset.meta === 'context_window') meta.context_window = Math.max(0, parseInt(x.value || '0', 10));
+  else if (x.dataset.meta === 'input_cost_per_mtok') meta.input_cost_per_mtok = Math.max(0, parseFloat(x.value || '0'));
+  else if (x.dataset.meta === 'output_cost_per_mtok') meta.output_cost_per_mtok = Math.max(0, parseFloat(x.value || '0'));
+}));
+$$('#modelPicker [data-cap]').forEach(x => DashboardLifecycle.trackEventListener(x, 'change', () => {
+  const meta = ensureModelMeta(x.dataset.model);
+  meta.capabilities = meta.capabilities || {};
+  meta.capabilities[x.dataset.cap] = x.checked;
+}));
 }
-$('#addModelBtn').onclick = () => {
+DashboardLifecycle.trackEventListener($('#addModelBtn'), 'click', () => {
   const m = $('#manualModel').value.trim();
   if (!m) return;
   editor.detected = [...new Set([...editor.detected, m])];
@@ -1426,9 +1520,9 @@ $('#addModelBtn').onclick = () => {
   ensureModelMeta(m, editor.detected.length - 1);
   $('#manualModel').value = '';
   renderPicker();
-};
-$('#manualModel').onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); $('#addModelBtn').click(); } };
-$('#discoverBtn').onclick = async () => {
+});
+DashboardLifecycle.trackEventListener($('#manualModel'), 'keydown', e => { if (e.key === 'Enter') { e.preventDefault(); $('#addModelBtn').click(); } });
+async function discoverHandler() {
   try {
     const p = readForm();
     $('#discoverBtn').disabled = true;
@@ -1444,8 +1538,9 @@ $('#discoverBtn').onclick = async () => {
     $('#discoverStatus').textContent = e.message;
     toast(e.message, true);
   } finally { $('#discoverBtn').disabled = false; }
-};
-$('#checkConnectionBtn').onclick = async () => {
+}
+DashboardLifecycle.trackEventListener($('#discoverBtn'), 'click', discoverHandler);
+async function checkConnectionHandler() {
   try {
     const p = readForm();
     $('#checkConnectionBtn').disabled = true;
@@ -1457,8 +1552,9 @@ $('#checkConnectionBtn').onclick = async () => {
     $('#connectionStatus').textContent = e.message;
     $('#connectionStatus').className = 'inline-status badtext';
   } finally { $('#checkConnectionBtn').disabled = false; }
-};
-$('#testProviderBtn').onclick = async () => {
+}
+DashboardLifecycle.trackEventListener($('#checkConnectionBtn'), 'click', checkConnectionHandler);
+async function testProviderHandler() {
   try {
     const p = readForm();
     if (!editor.selected.size) throw new Error('Select at least one model');
@@ -1471,8 +1567,9 @@ $('#testProviderBtn').onclick = async () => {
     $('#testResults').innerHTML = `<div class="inline-status badtext">${esc(e.message)}</div>`;
     toast(e.message, true);
   } finally { $('#testProviderBtn').disabled = false; }
-};
-$('#saveProviderBtn').onclick = async () => {
+}
+DashboardLifecycle.trackEventListener($('#testProviderBtn'), 'click', testProviderHandler);
+async function saveProviderHandler() {
   try {
     const p = readForm(), b = JSON.stringify(payload(p));
     $('#saveProviderBtn').disabled = true;
@@ -1488,8 +1585,9 @@ $('#saveProviderBtn').onclick = async () => {
     await refresh();
   } catch (e) { toast(e.message, true); }
   finally { $('#saveProviderBtn').disabled = false; }
-};
-$('#deleteProviderBtn').onclick = async () => {
+}
+DashboardLifecycle.trackEventListener($('#saveProviderBtn'), 'click', saveProviderHandler);
+async function deleteProviderHandler() {
   const ok = window.NexaUI?.confirm ? await window.NexaUI.confirm('Delete provider', `Delete provider "${editor.originalId}"?`) : false;
   if (!ok) return;
   try {
@@ -1498,7 +1596,8 @@ $('#deleteProviderBtn').onclick = async () => {
     modal(false);
     await refresh();
   } catch (e) { toast(e.message, true); }
-};
+}
+DashboardLifecycle.trackEventListener($('#deleteProviderBtn'), 'click', deleteProviderHandler);
 
 /* ---------- virtual endpoints / route profiles / pools ---------- */
 function renderVirtual() {
@@ -1597,6 +1696,11 @@ window.deleteChain = deleteChain;
     consumeLiveEvents();
   })();
 
+/* ---------- page lifecycle teardown ---------- */
+DashboardLifecycle.trackEventListener(window, 'pagehide', () => DashboardLifecycle.teardown());
+// Expose for testing
+window.NexaDashboardLifecycle = DashboardLifecycle;
+
 
 /* ---------- compatibility matrix (Universal Compatibility Engine) ---------- */
 let compatData = { deployments: [] };
@@ -1693,8 +1797,8 @@ async function runCompatSuite(mode) {
   }
 }
 
-$('#compatTestFull').onclick = () => runCompatSuite('full');
-$('#compatTestAgent').onclick = () => runCompatSuite('claude_code');
+DashboardLifecycle.trackEventListener($('#compatTestFull'), 'click', () => runCompatSuite('full'));
+DashboardLifecycle.trackEventListener($('#compatTestAgent'), 'click', () => runCompatSuite('claude_code'));
 
 /* ---------- B3 node telemetry popover (additive, real data only) ----------
    Consumes the additive snap.node_telemetry contract (see
@@ -1764,7 +1868,8 @@ function hideNodeTelemetryPopover() {
   const pop = document.querySelector('#nodeTelemetryPopover');
   if (pop) pop.hidden = true;
 }
-document.addEventListener('click', ev => {
+document.addEventListener('keydown', ev => { if (ev.key === 'Escape') hideNodeTelemetryPopover(); });
+DashboardLifecycle.trackEventListener(document, 'click', ev => {
   const node = ev.target && ev.target.closest ? ev.target.closest('#ring .node') : null;
   if (node && node.dataset && node.dataset.depid) {
     ev.stopPropagation();
@@ -1773,14 +1878,15 @@ document.addEventListener('click', ev => {
   }
   if (nodeTelemetryPinned && !(ev.target.closest && ev.target.closest('#nodeTelemetryPopover'))) hideNodeTelemetryPopover();
 });
-document.addEventListener('keydown', ev => { if (ev.key === 'Escape') hideNodeTelemetryPopover(); });
-$('#compatReset').onclick = async () => {
+DashboardLifecycle.trackEventListener(document, 'keydown', ev => { if (ev.key === 'Escape') hideNodeTelemetryPopover(); });
+async function compatResetHandler() {
   try {
     await api('/admin/api/compat/reset', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ deployment: 'all' }) });
     toast('Capability cache reset; fresh probes will re-run');
     await loadCompat();
   } catch (e) { toast(e.message, true); }
-};
+}
+DashboardLifecycle.trackEventListener($('#compatReset'), 'click', compatResetHandler);
 
 /* ---------- F8 status API (safe counts/transport only; never payloads/secrets) ---------- */
 try {

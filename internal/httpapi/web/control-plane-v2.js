@@ -295,7 +295,11 @@
     const routes=snap.virtual_endpoints||[];
     if(!routes.length){
       list.innerHTML=`<div class="cp-empty"><strong>${h(T('noRoutes'))}</strong><span>${h(T('noRoutesCopy'))}</span><button class="btn primary" id="cpEmptyRoute">+ ${h(T('addRoute'))}</button></div>`;
-      q('#cpEmptyRoute')?.addEventListener('click',()=>openRouteDialog());
+      const emptyRouteBtn = q('#cpEmptyRoute');
+      if (emptyRouteBtn) {
+        emptyRouteBtn.addEventListener('click',()=>openRouteDialog());
+        if (window.NexaDashboardLifecycle) window.NexaDashboardLifecycle.trackEventListener(emptyRouteBtn, 'click', ()=>openRouteDialog());
+      }
       return;
     }
     list.innerHTML=routes.map(ve=>{
@@ -446,8 +450,16 @@
         <div class="cp-hero-check"><i>${(snap.deployments||[]).length?'✓':'2'}</i><span>${h(T('models'))}: ${(snap.deployments||[]).length}</span></div>
         <div class="cp-hero-check"><i>${routes.length?'✓':'3'}</i><span>${h(T('routing'))}: ${routes.length}</span></div>
       </div>`;
-    q('#cpHeroProvider')?.addEventListener('click',()=>q('#addProviderBtn')?.click());
-    q('#cpHeroRoute')?.addEventListener('click',()=>{activateTab('routing',T('routing'));openRouteDialog();});
+    const heroProvider = q('#cpHeroProvider');
+    if (heroProvider) {
+      heroProvider.addEventListener('click',()=>q('#addProviderBtn')?.click());
+      if (window.NexaDashboardLifecycle) window.NexaDashboardLifecycle.trackEventListener(heroProvider, 'click', ()=>q('#addProviderBtn')?.click());
+    }
+    const heroRoute = q('#cpHeroRoute');
+    if (heroRoute) {
+      heroRoute.addEventListener('click',()=>{activateTab('routing',T('routing'));openRouteDialog();});
+      if (window.NexaDashboardLifecycle) window.NexaDashboardLifecycle.trackEventListener(heroRoute, 'click', ()=>{activateTab('routing',T('routing'));openRouteDialog();});
+    }
   }
 
   function installProviderSearch() {
@@ -457,7 +469,9 @@
     const search=document.createElement('input');search.id='cpProviderSearch';search.className='search cp-provider-search';search.type='search';search.placeholder=T('searchProviders');
     search.oninput=()=>{state.providerSearch=search.value.toLowerCase();filterProviderCards();};
     oldBtn?.before(actions);actions.append(search);if(oldBtn)actions.append(oldBtn);
-    const observer=new MutationObserver(()=>filterProviderCards());observer.observe(q('#providerGrid'),{childList:true});
+    const observer=new MutationObserver(()=>filterProviderCards());
+    observer.observe(q('#providerGrid'),{childList:true});
+    if (window.NexaDashboardLifecycle) window.NexaDashboardLifecycle.trackMutationObserver(observer);
   }
   function filterProviderCards(){
     const s=state.providerSearch;
@@ -825,7 +839,11 @@
     window.deletePool=id=>deleteAdvanced('/admin/api/candidate-pools',id,'candidate pool');
     window.deleteChain=id=>deleteAdvanced('/admin/api/fallback-chains',id,'fallback chain');
     const binds=[['#addVirtualBtn',()=>advancedVirtual()],['#addProfileBtn',()=>advancedProfile()],['#addPoolBtn',()=>advancedPool()],['#addChainBtn',()=>advancedChain()]];
-    for(const [sel,fn] of binds){const el=q(sel);if(!el)continue;el.addEventListener('click',e=>{e.preventDefault();e.stopImmediatePropagation();fn();},true);}
+    for(const [sel,fn] of binds){const el=q(sel);if(!el)continue;
+      const handler = e=>{e.preventDefault();e.stopImmediatePropagation();fn();};
+      el.addEventListener('click', handler, true);
+      if (window.NexaDashboardLifecycle) window.NexaDashboardLifecycle.trackEventListener(el, 'click', handler, true);
+    }
   }
   async function deleteAdvanced(path,id,label){
     if(!await UI.confirm(T('confirmDelete'),`${T('destructive')}\n${label}: ${id}`))return;
@@ -904,8 +922,10 @@
     syncNavA11y();
     const nav=q('#nav');
     if(nav){
-      new MutationObserver(syncNavA11y).observe(nav,{subtree:true,attributes:true,attributeFilter:['class']});
-      nav.addEventListener('keydown',e=>{
+      const navObserver=new MutationObserver(syncNavA11y);
+      navObserver.observe(nav,{subtree:true,attributes:true,attributeFilter:['class']});
+      if (window.NexaDashboardLifecycle) window.NexaDashboardLifecycle.trackMutationObserver(navObserver);
+      const navKeydownHandler = e=>{
         if(!['ArrowDown','ArrowUp','ArrowRight','ArrowLeft'].includes(e.key)) return;
         const buttons=qa('button:not(.cp-hidden-nav)',nav).filter(b=>b.offsetParent!==null);
         const current=document.activeElement;
@@ -913,10 +933,12 @@
         const forward=e.key==='ArrowDown'||e.key==='ArrowRight';
         const next=buttons[(i+(forward?1:-1)+buttons.length)%buttons.length];
         if(next){e.preventDefault();next.focus();}
-      });
+      };
+      nav.addEventListener('keydown', navKeydownHandler);
+      if (window.NexaDashboardLifecycle) window.NexaDashboardLifecycle.trackEventListener(nav, 'keydown', navKeydownHandler);
     }
 
-    document.addEventListener('keydown',e=>{
+    const docKeydownHandler = e=>{
       if(e.key==='Escape'){
         const host=q('#cpDialogHost.open');
         if(host) q('[data-dialog-close]',host)?.click();
@@ -925,7 +947,9 @@
         const search=q('#providerSearch')||q('#modelSearch');
         if(search && search.offsetParent!==null){e.preventDefault();search.focus();}
       }
-    });
+    };
+    document.addEventListener('keydown', docKeydownHandler);
+    if (window.NexaDashboardLifecycle) window.NexaDashboardLifecycle.trackEventListener(document, 'keydown', docKeydownHandler);
 
     qa('table').forEach(table=>{
       if(!table.getAttribute('role')) table.setAttribute('role','table');
@@ -942,5 +966,10 @@
     renderRoutingStudio();renderOnboarding();enhanceProviderCards();
   }
 
-  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();
+  if(document.readyState==='loading'){
+    document.addEventListener('DOMContentLoaded', init);
+    if (window.NexaDashboardLifecycle) window.NexaDashboardLifecycle.trackEventListener(document, 'DOMContentLoaded', init);
+  } else {
+    init();
+  }
 })();
