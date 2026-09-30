@@ -185,6 +185,12 @@ type Config struct {
 	RouteProfiles          []RouteProfileConfig         `json:"route_profiles,omitempty"`
 	CandidatePools         []CandidatePoolConfig        `json:"candidate_pools,omitempty"`
 	FallbackChains         []FallbackChainConfig        `json:"fallback_chains,omitempty"`
+	// Warnings collects secret-safe diagnostics about implicit defaults and
+	// legacy migrations applied while loading. It is never serialized to
+	// disk or returned by the admin API. Each entry identifies a config key
+	// and the behavior chosen for it; it never contains secret values,
+	// credentials, or full URLs.
+	Warnings []string `json:"-"`
 }
 
 type LoggingConfig struct {
@@ -513,6 +519,15 @@ func Load(path string) (Config, error) {
 		return cfg, err
 	}
 	cfg.ApplyDefaults()
+	strict, err := strictConfigEnabled()
+	if err != nil {
+		return cfg, err
+	}
+	if strict {
+		if err := cfg.ValidateStrict(); err != nil {
+			return cfg, err
+		}
+	}
 	if err := cfg.Validate(); err != nil {
 		return cfg, err
 	}
@@ -546,93 +561,163 @@ func (c *Config) ApplyEnvOverrides() error {
 	return nil
 }
 
+// warnDefault records a secret-safe implicit-default or migration
+// diagnostic. Entries are deduplicated so repeated ApplyDefaults calls
+// (file load plus the runtime environment overlay) do not emit the same
+// warning twice. Messages identify the config key and the chosen behavior;
+// they never include secret values, credentials, or full URLs.
+func (c *Config) warnDefault(key, behavior string) {
+	msg := key + ": " + behavior
+	for _, w := range c.Warnings {
+		if w == msg {
+			return
+		}
+	}
+	c.Warnings = append(c.Warnings, msg)
+}
+
+// strictConfigEnabled reports whether opt-in strict config validation is
+// enabled via NEXAROUTE_STRICT_CONFIG. The value must be a valid boolean,
+// matching the convention used by NEXAROUTE_ADMIN_BIND_LOCAL_ONLY.
+func strictConfigEnabled() (bool, error) {
+	v, ok := os.LookupEnv("NEXAROUTE_STRICT_CONFIG")
+	if !ok {
+		return false, nil
+	}
+	b, err := strconv.ParseBool(strings.TrimSpace(v))
+	if err != nil {
+		return false, fmt.Errorf("NEXAROUTE_STRICT_CONFIG must be a valid boolean: %w", err)
+	}
+	return b, nil
+}
+
+// ValidateStrict fails deterministically when the loaded config relied on an
+// implicit default or a legacy migration. It is only meaningful after
+// ApplyDefaults has populated Warnings. The message is actionable: it names
+// each config key and the behavior that strict mode rejects.
+func (c Config) ValidateStrict() error {
+	if len(c.Warnings) == 0 {
+		return nil
+	}
+	return fmt.Errorf("strict config validation failed: %s", strings.Join(c.Warnings, "; "))
+}
+
 func (c *Config) ApplyDefaults() {
 	if c.Listen == "" {
 		c.Listen = "127.0.0.1:8080"
+		c.warnDefault("listen", "not set; defaulted to 127.0.0.1:8080")
 	}
 	if c.Logging.File == "" {
 		c.Logging.File = "auto"
+		c.warnDefault("logging.file", "not set; defaulted to auto")
 	}
 	if c.Logging.MaxSizeMB == 0 {
 		c.Logging.MaxSizeMB = 32
+		c.warnDefault("logging.max_size_mb", "not set; defaulted to 32")
 	}
 	if c.Logging.AccessMode == "" {
 		c.Logging.AccessMode = "sampled"
+		c.warnDefault("logging.access_mode", "not set; defaulted to sampled")
 	}
 	if c.Logging.SuccessSampleEvery == 0 {
 		c.Logging.SuccessSampleEvery = 1000
+		c.warnDefault("logging.success_sample_every", "not set; defaulted to 1000")
 	}
 	if c.Routing.Strategy == "" {
 		c.Routing.Strategy = "ready_mesh"
+		c.warnDefault("routing.strategy", "not set; defaulted to ready_mesh")
 	}
 	if c.Routing.SessionTTLSeconds == 0 {
 		c.Routing.SessionTTLSeconds = 3600
+		c.warnDefault("routing.session_ttl_seconds", "not set; defaulted to 3600")
 	}
 	if c.Routing.P2CWindow == 0 {
 		c.Routing.P2CWindow = 8
+		c.warnDefault("routing.p2c_window", "not set; defaulted to 8")
 	}
 	if c.Routing.MaxAttempts == 0 {
 		c.Routing.MaxAttempts = 4
+		c.warnDefault("routing.max_attempts", "not set; defaulted to 4")
 	}
 	if c.Routing.MaxInflightRequests == 0 {
 		c.Routing.MaxInflightRequests = 128
+		c.warnDefault("routing.max_inflight_requests", "not set; defaulted to 128")
 	}
 	if c.Routing.FailureThreshold == 0 {
 		c.Routing.FailureThreshold = 5
+		c.warnDefault("routing.failure_threshold", "not set; defaulted to 5")
 	}
 	if c.Routing.CooldownSeconds == 0 {
 		c.Routing.CooldownSeconds = 1800
+		c.warnDefault("routing.cooldown_seconds", "not set; defaulted to 1800")
 	}
 	if c.Routing.ProviderFailureThreshold == 0 {
 		c.Routing.ProviderFailureThreshold = 3
+		c.warnDefault("routing.provider_failure_threshold", "not set; defaulted to 3")
 	}
 	if c.Routing.ProviderFailureWindowSeconds == 0 {
 		c.Routing.ProviderFailureWindowSeconds = 20
+		c.warnDefault("routing.provider_failure_window_seconds", "not set; defaulted to 20")
 	}
 	if c.Routing.ProviderCooldownSeconds == 0 {
 		c.Routing.ProviderCooldownSeconds = 30
+		c.warnDefault("routing.provider_cooldown_seconds", "not set; defaulted to 30")
 	}
 	if c.Routing.CapabilityFailureThreshold == 0 {
 		c.Routing.CapabilityFailureThreshold = 2
+		c.warnDefault("routing.capability_failure_threshold", "not set; defaulted to 2")
 	}
 	if c.Routing.HedgingDelayMS == 0 {
 		c.Routing.HedgingDelayMS = 1500
+		c.warnDefault("routing.hedging_delay_ms", "not set; defaulted to 1500")
 	}
 	if c.Cache.TTLSeconds == 0 {
 		c.Cache.TTLSeconds = 300
+		c.warnDefault("cache.ttl_seconds", "not set; defaulted to 300")
 	}
 	if c.Cache.MaxEntries == 0 {
 		c.Cache.MaxEntries = 256
+		c.warnDefault("cache.max_entries", "not set; defaulted to 256")
 	}
 	if c.Cache.MaxBodyBytes == 0 {
 		c.Cache.MaxBodyBytes = 1 << 20
+		c.warnDefault("cache.max_body_bytes", "not set; defaulted to 1048576")
 	}
 	if c.Routing.CapabilityCooldownSeconds == 0 {
 		c.Routing.CapabilityCooldownSeconds = 300
+		c.warnDefault("routing.capability_cooldown_seconds", "not set; defaulted to 300")
 	}
 	if c.Routing.RequestTimeoutMS == 0 {
 		c.Routing.RequestTimeoutMS = 120000
+		c.warnDefault("routing.request_timeout_ms", "not set; defaulted to 120000")
 	}
 	if c.Routing.MaxRetryAfterSeconds == 0 {
 		c.Routing.MaxRetryAfterSeconds = 60
+		c.warnDefault("routing.max_retry_after_seconds", "not set; defaulted to 60")
 	}
 	if c.Probe.IntervalSeconds == 0 {
 		c.Probe.IntervalSeconds = 120
+		c.warnDefault("probe.interval_seconds", "not set; defaulted to 120")
 	}
 	if c.Probe.ReadyLeaseSeconds == 0 {
 		c.Probe.ReadyLeaseSeconds = 300
+		c.warnDefault("probe.ready_lease_seconds", "not set; defaulted to 300")
 	}
 	if c.Probe.TimeoutMS == 0 {
 		c.Probe.TimeoutMS = 8000
+		c.warnDefault("probe.timeout_ms", "not set; defaulted to 8000")
 	}
 	if c.Probe.MaxTokens == 0 {
 		c.Probe.MaxTokens = 1
+		c.warnDefault("probe.max_tokens", "0 is not a valid value; defaulted to 1")
 	}
 	if c.Probe.Concurrency == 0 {
 		c.Probe.Concurrency = 16
+		c.warnDefault("probe.concurrency", "not set; defaulted to 16")
 	}
 	if c.Probe.RecoveryAttempts == 0 {
 		c.Probe.RecoveryAttempts = 5
+		c.warnDefault("probe.recovery_attempts", "not set; defaulted to 5")
 	}
 	for i := range c.Providers {
 		c.Providers[i].ApplyDefaults()
@@ -674,6 +759,7 @@ func (c *Config) ApplyDefaults() {
 		cp.Mode = strings.TrimSpace(strings.ToLower(cp.Mode))
 		if cp.Mode == "" {
 			cp.Mode = "explicit"
+			c.warnDefault(fmt.Sprintf("candidate_pools[%d].mode", i), "not set; defaulted to explicit")
 		}
 		for j := range cp.Deployments {
 			cp.Deployments[j] = strings.TrimSpace(cp.Deployments[j])
@@ -692,18 +778,21 @@ func (c *Config) ApplyDefaults() {
 	c.Evaluation.StatePath = strings.TrimSpace(c.Evaluation.StatePath)
 	if c.Evaluation.MaxRuns == 0 {
 		c.Evaluation.MaxRuns = 64
+		c.warnDefault("evaluation.max_runs", "not set; defaulted to 64")
 	}
 	if c.Evaluation.MaxRuns > maxEvaluationRuns {
 		c.Evaluation.MaxRuns = maxEvaluationRuns
 	}
 	if c.Evaluation.MaxScorecards == 0 {
 		c.Evaluation.MaxScorecards = 1024
+		c.warnDefault("evaluation.max_scorecards", "not set; defaulted to 1024")
 	}
 	if c.Evaluation.MaxScorecards > maxEvaluationScorecards {
 		c.Evaluation.MaxScorecards = maxEvaluationScorecards
 	}
 	if c.Evaluation.MaxArtifacts == 0 {
 		c.Evaluation.MaxArtifacts = 128
+		c.warnDefault("evaluation.max_artifacts", "not set; defaulted to 128")
 	}
 	if c.Evaluation.MaxArtifacts > maxEvaluationArtifacts {
 		c.Evaluation.MaxArtifacts = maxEvaluationArtifacts
@@ -716,12 +805,15 @@ func (c *Config) ApplyDefaults() {
 	c.Decision.Chain = strings.TrimSpace(c.Decision.Chain)
 	if c.Decision.Mode == "" {
 		c.Decision.Mode = "off"
+		c.warnDefault("decision.mode", "not set; defaulted to off")
 	}
 	if c.Decision.Provider == "" {
 		c.Decision.Provider = "local"
+		c.warnDefault("decision.provider", "not set; defaulted to local")
 	}
 	if c.Decision.TimeoutMS == 0 {
 		c.Decision.TimeoutMS = 10
+		c.warnDefault("decision.timeout_ms", "not set; defaulted to 10")
 	}
 	// MaxProviderCalls default: for hybrid default to chain length bounded, else 1
 	// Keep 0 as explicit unset for validation; default handling below after chains normalized
@@ -734,12 +826,15 @@ func (c *Config) ApplyDefaults() {
 	// Decision provider health defaults
 	if c.DecisionProviderHealth.FailureThreshold == 0 {
 		c.DecisionProviderHealth.FailureThreshold = 3
+		c.warnDefault("decision_provider_health.failure_threshold", "not set; defaulted to 3")
 	}
 	if c.DecisionProviderHealth.FailureWindowSeconds == 0 {
 		c.DecisionProviderHealth.FailureWindowSeconds = 30
+		c.warnDefault("decision_provider_health.failure_window_seconds", "not set; defaulted to 30")
 	}
 	if c.DecisionProviderHealth.CooldownSeconds == 0 {
 		c.DecisionProviderHealth.CooldownSeconds = 60
+		c.warnDefault("decision_provider_health.cooldown_seconds", "not set; defaulted to 60")
 	}
 	// Hybrid max_provider_calls default: if hybrid and 0, default to chain length (bounded)
 	if c.Decision.Mode == "hybrid" && c.Decision.MaxProviderCalls == 0 {
@@ -755,6 +850,7 @@ func (c *Config) ApplyDefaults() {
 		if c.Decision.MaxProviderCalls > maxDecisionChainSteps {
 			c.Decision.MaxProviderCalls = maxDecisionChainSteps
 		}
+		c.warnDefault("decision.max_provider_calls", "not set; defaulted to "+strconv.Itoa(c.Decision.MaxProviderCalls))
 	}
 	for i := range c.DecisionPolicies {
 		dp := &c.DecisionPolicies[i]
@@ -763,6 +859,7 @@ func (c *Config) ApplyDefaults() {
 		dp.SelectionMode = strings.TrimSpace(strings.ToLower(dp.SelectionMode))
 		if dp.SelectionMode == "" {
 			dp.SelectionMode = "select_first"
+			c.warnDefault(fmt.Sprintf("decision_policies[%d].selection_mode", i), "not set; defaulted to select_first")
 		}
 		// Normalize task override keys to lowercase trimmed
 		if len(dp.TaskOverrides) > 0 {
@@ -787,6 +884,7 @@ func (c *Config) ApplyDefaults() {
 		dp.BaseURL = strings.TrimRight(strings.TrimSpace(dp.BaseURL), "/")
 		if dp.PrivacyMode == "" {
 			dp.PrivacyMode = "metadata_only"
+			c.warnDefault(fmt.Sprintf("decision_providers[%d].privacy_mode", i), "not set; defaulted to metadata_only")
 		}
 		if dp.Enabled == nil {
 			t := true
@@ -796,6 +894,7 @@ func (c *Config) ApplyDefaults() {
 
 	// Backward compatibility: legacy public_model → default virtual endpoint.
 	if c.Routing.PublicModel != "" && len(c.VirtualEndpoints) == 0 {
+		c.warnDefault("routing.public_model", "legacy key; will be auto-migrated to a virtual endpoint")
 		t := true
 		// Only synthesize if legacy model is valid; validation will catch invalid.
 		if len(c.CandidatePools) == 0 {

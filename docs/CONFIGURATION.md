@@ -8,7 +8,25 @@ NEXAROUTE_LISTEN                  override listen address
 NEXAROUTE_ADMIN_KEY               override admin API key
 NEXAROUTE_ADMIN_BIND_LOCAL_ONLY   true/false override
 NEXAROUTE_LOG_FILE                override bounded log path; "off" disables the app-owned file sink
+NEXAROUTE_STRICT_CONFIG           true/false opt-in strict config validation (see below)
 ```
+
+## Implicit-default warnings and opt-in strict config
+
+When a config value is absent or set to an invalid zero value, NexaRoute
+applies a documented default so existing configurations keep booting. To keep
+those silent defaults visible, every applied default and every legacy
+migration emits a secret-safe warning on startup that names the config key and
+the behavior chosen for it (for example `probe.max_tokens: 0 is not a valid
+value; defaulted to 1`). Warnings never print secret values, credentials, or
+full URLs, and they never change the applied default.
+
+Set `NEXAROUTE_STRICT_CONFIG=true` to opt into strict config validation. In
+strict mode the gateway refuses to boot when the loaded config relied on an
+implicit default or on the legacy `routing.public_model` migration, failing
+with an actionable message that names each offending key. Default mode
+behavior is unchanged: without the variable the same configuration boots with
+warnings exactly as before.
 
 ## Bounded logging and long-running stability
 
