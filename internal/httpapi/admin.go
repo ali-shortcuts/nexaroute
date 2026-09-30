@@ -22,6 +22,8 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/providers"
 )
 
+const maskedPlaceholder = "••••••••"
+
 var (
 	errAdminProviderNotFound = errors.New("provider not found")
 	errAdminProviderExists   = errors.New("provider id already exists")
@@ -32,6 +34,7 @@ type providerForm struct {
 	PreserveSecret  bool                  `json:"preserve_secret"`
 	PreserveHeaders bool                  `json:"preserve_headers"`
 	PreserveProxy   bool                  `json:"preserve_proxy"`
+	ReplaceKey      bool                  `json:"replace_key"`
 	TestModels      []string              `json:"test_models,omitempty"`
 	// Mode selects the probe depth: quick (default, availability),
 	// full (Level B capability suite) or claude_code (agent-loop
@@ -577,6 +580,8 @@ func (s *Server) adminProviderByID(w http.ResponseWriter, r *http.Request) {
 		proxyScheme, proxyHost, proxyDisplay := proxyStructure(cfg.Providers[idx].ProxyURL)
 		hasProxy := strings.TrimSpace(cfg.Providers[idx].ProxyURL) != ""
 		source, hasSecret := secretSource(p), len(p.ResolvedCredentials()) > 0
+		// Determine if there's a secret to mask (API key, env var, or credentials)
+		hasAPIKeySecret := p.APIKey != "" || p.APIKeyEnv != "" || len(p.Credentials) > 0
 		p.APIKey = ""
 		p.Headers = nil // custom authorization headers can also contain secrets
 		p.ProxyURL = "" // proxy URLs may contain passwords
@@ -584,8 +589,14 @@ func (s *Server) adminProviderByID(w http.ResponseWriter, r *http.Request) {
 		for i := range p.Credentials {
 			p.Credentials[i].APIKey = ""
 		}
+		// Add masked placeholder for API key if secret exists
+		apiKeyMasked := ""
+		if hasAPIKeySecret {
+			apiKeyMasked = maskedPlaceholder
+		}
 		payload := map[string]any{
 			"provider":         p,
+			"api_key_masked":   apiKeyMasked,
 			"secret_source":    source,
 			"has_secret":       hasSecret,
 			"has_headers":      hasHeaders,
@@ -618,7 +629,22 @@ func (s *Server) adminProviderByID(w http.ResponseWriter, r *http.Request) {
 			if in.Provider.ID != old.ID && cfg.ProviderIndex(in.Provider.ID) >= 0 {
 				return errAdminProviderExists
 			}
+			// B5b: explicit replace-key behavior
+			// Priority: PreserveSecret > ReplaceKey > masked placeholder check > default preserve
 			if in.PreserveSecret {
+				in.Provider.APIKey = old.APIKey
+				in.Provider.APIKeyEnv = old.APIKeyEnv
+				in.Provider.Credentials = old.Credentials
+			} else if in.ReplaceKey {
+				// Explicit replacement: use new values from request (already in in.Provider)
+				// No action needed - new values are already set
+			} else if in.Provider.APIKey == maskedPlaceholder {
+				// Masked placeholder submitted without explicit replace_key: treat as untouched
+				in.Provider.APIKey = old.APIKey
+				in.Provider.APIKeyEnv = old.APIKeyEnv
+				in.Provider.Credentials = old.Credentials
+			} else {
+				// Default: preserve secret (backwards compatible)
 				in.Provider.APIKey = old.APIKey
 				in.Provider.APIKeyEnv = old.APIKeyEnv
 				in.Provider.Credentials = old.Credentials

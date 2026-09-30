@@ -1437,12 +1437,17 @@ bind('#cancelProviderBtn', 'onclick', () => modal(false), 'provider');
 $$('[data-close-modal]').forEach(x => { x.onclick = () => uiSection('provider', () => modal(false)); });
 document.addEventListener('keydown', e => { if (e.key === 'Escape') uiSection('provider', () => modal(false)); });
 bind('#togglePKey', 'onclick', () => toggleSecret('#pKey', '#togglePKey'), 'provider');
+bind('#replacePKey', 'onclick', () => {
+  $('#pKey').value = '';
+  $('#pKey').focus();
+  if (editor) { editor.replaceKey = true; editor.secretDirty = true; }
+}, 'provider');
 bind('#pKey', 'oninput', () => { if (editor) editor.secretDirty = true; }, 'provider');
 bind('#pKeyEnv', 'oninput', () => { if (editor) editor.secretDirty = true; }, 'provider');
 bind('#pCredentials', 'oninput', () => { if (editor) editor.secretDirty = true; }, 'provider');
 bind('#pHeaders', 'oninput', () => { if (editor) editor.headersDirty = true; }, 'provider');
 bind('#pProxy', 'oninput', () => { if (editor) editor.proxyDirty = true; }, 'provider');
-bind('#pPreset', 'onchange', () => { const s = document.querySelector('#pPreset'); if (s) applyPreset(s.value); }, 'provider');
+bind('#pPreset', 'onchange', () => { const el = document.querySelector('#pPreset'); if (el) applyPreset(el.value); }, 'provider');
 bind('#pType', 'onchange', () => {
   const a = document.querySelector('#pAuth'), t = document.querySelector('#pType');
   if (!a || !t) { uiWarn('provider', 'missing element #pAuth/#pType'); return; }
@@ -1455,13 +1460,16 @@ async function openEdit(id) {
   try {
     const d = await api('/admin/api/providers/' + encodeURIComponent(id)), p = d.provider;
     // Saved keys never leave the server. Blank, untouched fields preserve them.
+    // Store masked placeholder for display; actual key is never sent.
     p.api_key = '';
     editor = {
       mode: 'edit', originalId: id, provider: p,
       detected: (p.models || []).map(m => m.model),
       selected: new Set((p.models || []).map(m => m.model)),
       modelMeta: new Map((p.models || []).map(m => [m.model, m])),
-      secretDirty: false, secretSource: d.secret_source || 'none'
+      secretDirty: false, secretSource: d.secret_source || 'none',
+      apiKeyMasked: d.api_key_masked || '',
+      replaceKey: false
     };
     fillForm(); modal(true);
   } catch (e) { toast(e.message, true); }
@@ -1478,10 +1486,14 @@ function fillForm() {
   $('#pBase').value = p.base_url || '';
   $('#pAuth').value = p.auth_mode || 'bearer';
   $('#pEnabled').checked = p.enabled !== false;
-  $('#pKey').value = p.api_key || '';
+  // B5b: show masked placeholder if available, otherwise empty
+  const masked = editor.apiKeyMasked || '';
+  $('#pKey').value = masked;
   $('#pKey').placeholder = editor.mode === 'edit' ? 'Saved key is write-only; leave untouched to keep' : '';
   $('#pKey').type = 'password';
   $('#togglePKey').textContent = 'Show';
+  // Show Replace button only in edit mode when there's a saved secret
+  $('#replacePKey').style.display = (editor.mode === 'edit' && masked) ? 'inline-block' : 'none';
   $('#pKeyEnv').value = p.api_key_env || '';
   $('#pHeaders').value = Object.keys(p.headers || {}).length ? JSON.stringify(p.headers, null, 2) : '';
   $('#pProxy').value = '';
@@ -1579,7 +1591,7 @@ function readForm() {
   return p;
 }
 function payload(p) {
-  return { provider: p, preserve_secret: editor.mode === 'edit' && !editor.secretDirty, preserve_headers: editor.mode === 'edit' && !editor.headersDirty, preserve_proxy: editor.mode === 'edit' && !editor.proxyDirty, test_models: [...editor.selected] };
+  return { provider: p, preserve_secret: editor.mode === 'edit' && !editor.secretDirty && !editor.replaceKey, preserve_headers: editor.mode === 'edit' && !editor.headersDirty, preserve_proxy: editor.mode === 'edit' && !editor.proxyDirty, replace_key: editor.replaceKey, test_models: [...editor.selected] };
 }
 function renderPicker() {
   const all = [...new Set([...editor.detected, ...editor.selected])];
