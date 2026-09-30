@@ -53,6 +53,97 @@ function setLiveTransport(mode) {
   if (rs) rs.dataset.transport = mode;
   updateRingStatus();
 }
+/* ---------- F8: bounded SSE retry with jitter + malformed-frame status ----------
+   Client-only. The server resume protocol (?since=liveSeq) and the snapshot
+   polling fallback are unchanged. Retry delays stay within
+   [SSE_RETRY_MIN_MS, SSE_RETRY_MAX_MS] and subtract a small random jitter so
+   reconnecting tabs do not thunder. Malformed frames only bump a counter —
+   valid events keep flowing. No raw payloads or secrets are ever logged or
+   exposed; sseStats() returns counts and transport state only. */
+const SSE_RETRY_BASE_MS = 1500;
+const SSE_RETRY_STEP_MS = 1000;
+const SSE_RETRY_MAX_MS = 8000;
+const SSE_RETRY_MIN_MS = 250;
+const SSE_RETRY_JITTER_MS = 500;
+const SSE_DEGRADED_TOAST_MS = 15000;
+const sseHooks = {
+  rand: () => Math.random(),
+  sleep: ms => new Promise(resolve => setTimeout(resolve, ms)),
+  now: () => Date.now(),
+};
+const sseStatsState = {
+  state: 'idle',
+  consecutiveFailures: 0,
+  malformedFrames: 0,
+  lastRetryMs: 0,
+  lastError: '',
+  degradedToastAt: 0,
+};
+function sseRetryDelayMs(failures, randFn) {
+  const r = typeof randFn === 'function' ? randFn : sseHooks.rand;
+  const n = Math.max(0, Math.floor(Number(failures) || 0));
+  const base = Math.min(SSE_RETRY_MAX_MS, SSE_RETRY_BASE_MS + n * SSE_RETRY_STEP_MS);
+  let jitter = 0;
+  try { jitter = Math.floor(Number(r()) * SSE_RETRY_JITTER_MS); } catch { jitter = 0; }
+  if (!Number.isFinite(jitter) || jitter < 0) jitter = 0;
+  return Math.max(SSE_RETRY_MIN_MS, Math.min(SSE_RETRY_MAX_MS, base - jitter));
+}
+function sseParseFrame(frame) {
+  if (frame == null || String(frame).startsWith(':')) return { skip: true };
+  const lines = String(frame).split('\n');
+  const dataLine = lines.find(x => x.startsWith('data: '));
+  if (!dataLine) return { skip: true };
+  const idLine = lines.find(x => x.startsWith('id: '));
+  try {
+    return { event: JSON.parse(dataLine.slice(6)), idLine };
+  } catch {
+    // Count only; never log the raw payload (it may carry request content).
+    sseStatsState.malformedFrames++;
+    return { malformed: true };
+  }
+}
+function sseStats() {
+  return {
+    transport: liveTransport,
+    state: sseStatsState.state,
+    consecutiveFailures: sseStatsState.consecutiveFailures,
+    malformedFrames: sseStatsState.malformedFrames,
+    lastRetryMs: sseStatsState.lastRetryMs,
+    lastError: sseStatsState.lastError,
+  };
+}
+function sseResetStats() {
+  sseStatsState.consecutiveFailures = 0;
+  sseStatsState.malformedFrames = 0;
+  sseStatsState.lastRetryMs = 0;
+  sseStatsState.lastError = '';
+  sseStatsState.degradedToastAt = 0;
+  if (sseStatsState.state !== 'live') sseStatsState.state = 'idle';
+}
+function stopLiveEvents() {
+  try { if (liveEventsAbort) liveEventsAbort.abort(); } catch {}
+  liveEventsAbort = null;
+  sseStatsState.state = 'idle';
+}
+function sseNoteOpen() {
+  const wasDegraded = sseStatsState.consecutiveFailures > 0;
+  sseStatsState.consecutiveFailures = 0;
+  sseStatsState.lastRetryMs = 0;
+  sseStatsState.lastError = '';
+  sseStatsState.state = 'live';
+  if (wasDegraded) { try { toast('Live events reconnected'); } catch {} }
+}
+function sseNoteFailure(message) {
+  sseStatsState.consecutiveFailures++;
+  sseStatsState.lastError = String(message || 'stream failed').slice(0, 120);
+  sseStatsState.state = 'reconnecting';
+  const now = sseHooks.now();
+  if (now - sseStatsState.degradedToastAt >= SSE_DEGRADED_TOAST_MS) {
+    sseStatsState.degradedToastAt = now;
+    try { toast('Live events reconnecting — showing polled snapshot', true); } catch {}
+  }
+  return sseRetryDelayMs(sseStatsState.consecutiveFailures);
+}
 async function pollLiveEventsFallback(signal) {
   // Polling fallback: reuse the authoritative snapshot endpoint. Only new
   // seqs animate the ring (de-duplicated by seq/request_id in drainRingEvent).
@@ -77,14 +168,13 @@ async function pollLiveEventsFallback(signal) {
 async function consumeLiveEvents() {
   if (liveEventsAbort) liveEventsAbort.abort();
   liveEventsAbort = new AbortController();
-  let consecutiveFailures = 0;
-  while (!liveEventsAbort.signal.aborted) {
+  while (liveEventsAbort && !liveEventsAbort.signal.aborted) {
     try {
       const q = liveSeq ? `?since=${encodeURIComponent(liveSeq)}&limit=100` : '?limit=100';
       const response = await apiFetch('/admin/api/events/stream' + q, { signal: liveEventsAbort.signal });
       if (!response.ok) throw new Error('event stream HTTP ' + response.status);
       setLiveTransport('sse');
-      consecutiveFailures = 0;
+      sseNoteOpen();
       const reader = response.body?.getReader();
       if (!reader) throw new Error('event stream body unavailable');
       const decoder = new TextDecoder(); let buffer = '';
@@ -95,13 +185,11 @@ async function consumeLiveEvents() {
         let cut;
         while ((cut = buffer.indexOf('\n\n')) >= 0) {
           const frame = buffer.slice(0, cut); buffer = buffer.slice(cut + 2);
-          if (frame.startsWith(':')) continue;
-          const dataLine = frame.split('\n').find(x => x.startsWith('data: '));
-          const idLine = frame.split('\n').find(x => x.startsWith('id: '));
-          if (!dataLine) continue;
+          const parsed = sseParseFrame(frame);
+          if (parsed.skip || parsed.malformed) continue;
           try {
-            const event = JSON.parse(dataLine.slice(6));
-            const seq = Number(idLine?.slice(4) || event.seq || 0);
+            const event = parsed.event;
+            const seq = Number(parsed.idLine?.slice(4) || event.seq || 0);
             if (seq && seq <= liveSeq) continue;
             if (seq) liveSeq = seq;
             else if (event.request_id && ringAnim.seenReq.has(event.request_id + '|' + event.kind + '|' + (event.deployment || ''))) continue;
@@ -112,14 +200,14 @@ async function consumeLiveEvents() {
         }
       }
     } catch (err) {
-      if (liveEventsAbort.signal.aborted) return;
-      consecutiveFailures++;
+      if (!liveEventsAbort || liveEventsAbort.signal.aborted) return;
       setLiveTransport('polling');
       // Polling fallback drives the ring from real snapshot events only —
       // never synthetic timers. Back off gently while SSE is unavailable.
       await pollLiveEventsFallback(liveEventsAbort.signal);
-      const wait = Math.min(8000, 1500 + consecutiveFailures * 1000);
-      await new Promise(resolve => setTimeout(resolve, wait));
+      const wait = sseNoteFailure(err && err.message);
+      sseStatsState.lastRetryMs = wait;
+      await sseHooks.sleep(wait);
     }
   }
 }
@@ -1693,3 +1781,20 @@ $('#compatReset').onclick = async () => {
     await loadCompat();
   } catch (e) { toast(e.message, true); }
 };
+
+/* ---------- F8 status API (safe counts/transport only; never payloads/secrets) ---------- */
+try {
+  const sseScope = typeof window !== 'undefined' ? window : globalThis;
+  sseScope.NexaRoute = Object.assign(sseScope.NexaRoute || {}, {
+    sseStats,
+    sseRetryDelayMs,
+    _sseParseFrame: sseParseFrame,
+    _sseNoteOpen: sseNoteOpen,
+    _sseNoteFailure: sseNoteFailure,
+    _sseResetStats: sseResetStats,
+    _stopLiveEvents: stopLiveEvents,
+    _consumeLiveEvents: consumeLiveEvents,
+    _liveSeq: () => liveSeq,
+    _sseHooks: sseHooks,
+  });
+} catch {}
