@@ -637,9 +637,12 @@ func TestPhaseH_LiveScorecardsHaveZeroRoutingInfluence(t *testing.T) {
 		t.Fatalf("routing changed after extreme scorecards: %q -> %q (Phase H scorecards must have zero routing influence)", deploymentBefore, got)
 	}
 
-	// Scorecards must not be handed to the policy provider either.
+	// Scorecards must not be handed to the policy provider either. The policy
+	// provider is an injected local fake, so invocation is deterministic and
+	// offline; a zero call count means the payload assertions below would be
+	// vacuous, which is a wiring regression, not a skip condition.
 	if pol.Calls() == 0 {
-		t.Skip("policy provider was never invoked; cannot inspect its request payload")
+		t.Fatalf("policy provider was never invoked; cannot inspect its request payload")
 	}
 	// Only the candidate payload can carry quality: the request also carries
 	// task features whose field names legitimately contain other words.
