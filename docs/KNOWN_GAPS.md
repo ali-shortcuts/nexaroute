@@ -145,3 +145,94 @@ explicitly bounded:
   order candidates, change weights/priorities, gate failover or alter health by
   scorecard content, and a structural guard test keeps the dependency direction
   that way.
+
+## Audit follow-up record (top-15 audit #57, recorded via #178)
+
+Status labels used below: `open` means an unresolved defect/boundary with no
+fix on `main`; `intentional boundary` means the behavior is deliberate and is
+not a bug; `verified fixed` would require a merged fix plus test evidence and
+is not claimed for any item here. Nothing below is marked fixed merely because
+it is documented. Evidence snapshot date: 2026-09-30. Parent audit: #57.
+Audit follow-up set: #169, #170, #171, #172, #173, #174, #175, #176, #177.
+Full re-verification report: `docs/reports/audit-top15-issue57.md`.
+
+### Panic boundary contract — `intentional boundary`
+
+`internal/httpapi/server.go` recovers handler panics, emits an `internal_panic`
+bus event plus a `request_id=... handler_panic` log line, and returns HTTP 500
+(`"internal gateway error"`) — except for `http.ErrAbortHandler`, which is
+re-panicked as required by the `net/http` contract. Converting the abort path
+to a 500 would break connection handling, so the re-panic is deliberate policy,
+not a bug.
+
+- Impact: ordinary handler panics are fail-closed 500s with an audit event; the
+  abort path never produces a response by design.
+- Mitigation/workaround: none required; operators monitor `internal_panic`
+  events and `handler_panic` log lines.
+- Owner: audit finding F3; follow-up set #169–#177.
+
+### Provider/proxy URL credential and egress/SSRF policy — `open`
+
+Finding F4, tracked by #125. On `main`, `ValidateProviderConfig`
+(`internal/config/config.go`) checks `base_url`/`proxy_url` only for
+`http`/`https` scheme and non-empty host; it does not reject `user:pass@`
+userinfo, private-IP targets, or cloud-metadata targets at config-validation
+time.
+
+- Impact: a credential embedded in a base/proxy URL, or a proxy pointing at
+  internal/metadata targets, is not rejected by config validation.
+- Mitigation/workaround: store credentials only in the dedicated credential
+  fields or environment references (write-only, never revealed on admin read
+  surfaces); do not embed `user:pass@` in URLs; do not expose the admin surface
+  to untrusted networks.
+- Owner: #125 (finding F4); follow-up set #169–#177.
+
+### Stress/soak tests opt-in — `intentional boundary` (CI budget)
+
+The bounded stress checks (`NEXAROUTE_STRESS=1`) and long-form soak checks
+(`NEXAROUTE_SOAK=1`) in `internal/router`, `internal/events`,
+`internal/probe`, `internal/logging`, `internal/eval`, and `internal/httpapi`
+skip by default so routine `go test ./...` and CI stay within budget. Opting
+the whole suite into CI would require a workflow change and is deliberately
+out of scope here.
+
+- Impact: default test runs do not exercise the stress/soak paths.
+- Mitigation/workaround: run them explicitly, e.g.
+  `NEXAROUTE_STRESS=1 go test ./...`, `NEXAROUTE_SOAK=1 go test ./...`, or via
+  `scripts/stress.sh` / `scripts/soak.sh`.
+- Owner: audit finding F11; follow-up set #169–#177.
+
+### Dashboard missing-DOM resilience and CLI-snippet injection — `open`
+
+Findings F1/F2, in `internal/httpapi/web/app.js`. The `$` helper
+(`document.querySelector` wrapper) has no missing-element guard, so one
+renamed/missing element ID can throw inside the dashboard render loop. The
+`cliSnippet()` body interpolates `location.origin`, the virtual-endpoint model
+name, and the endpoint list into `innerHTML` without escaping (title/note are
+escaped; the snippet body is not), so an attacker-influenced `public_model`
+value is a stored-HTML-injection path.
+
+- Impact: dashboard render fragility (F1); potential script execution via a
+  crafted model/endpoint name rendered in the CLI snippet card (F2).
+- Mitigation/workaround: treat virtual-endpoint `public_model` names as
+  admin-controlled input; restrict the admin surface to trusted operators on a
+  trusted network (loopback-only admin mode by default). No in-product
+  rendering guard exists yet.
+- Owner: audit findings F1/F2; follow-up set #169–#177.
+
+### Package coverage gaps and targets — `open`
+
+Finding F7. Measured on `main` 2026-09-30 via
+`go test ./internal/compat/ ./internal/route/ ./internal/feature/ ./internal/core/ ./cmd/gateway/ -cover`:
+
+- `internal/compat`: 51.6%
+- `internal/route`: 56.3%
+- `internal/feature`: 59.4%
+- `internal/core`: 30.4%
+- `cmd/gateway`: 12.9%
+
+- Impact: thinner regression protection in the listed packages, notably
+  `internal/core` and `cmd/gateway`.
+- Mitigation/workaround: none in-product; re-measure with the same `-cover`
+  command when raising coverage per package.
+- Owner: audit finding F7; follow-up set #169–#177.
