@@ -1049,11 +1049,11 @@ setInterval(() => { $('#footClock').textContent = new Date().toLocaleTimeString(
 
 /* ---------- CLI tools tab ---------- */
 function cliSnippet(kind) {
-  const base = location.origin;
+  const base = esc(location.origin);
   const ves = snap.virtual_endpoints || [];
   const firstVE = ves.length ? ves[0] : null;
-  const veModel = firstVE ? (firstVE.public_model || firstVE.id) : 'nexa-code';
-  const veList = ves.length ? ves.map(v => v.public_model || v.id).join(', ') : 'auto, claude-auto';
+  const veModel = esc(firstVE ? (firstVE.public_model || firstVE.id) : 'nexa-code');
+  const veList = esc(ves.length ? ves.map(v => v.public_model || v.id).join(', ') : 'auto, claude-auto');
   if (kind === 'claude') return {
     title: 'Claude Code / Anthropic clients (virtual endpoint)',
     note: ves.length ? `Virtual endpoints: ${veList}. Using ${veModel} routes through your configured pools without client reconfiguration.` : 'The placeholder key exists only for clients that require a non-empty value. Virtual endpoints provide stable public names.',
