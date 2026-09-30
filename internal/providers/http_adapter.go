@@ -823,9 +823,11 @@ func parseRetryAfterBounded(v string, fallback, cap time.Duration) time.Duration
 }
 
 func (a *httpAdapter) Probe(ctx context.Context, model string, maxTokens int) (time.Duration, int, error) {
-	if maxTokens < 1 {
-		maxTokens = 1
-	}
+	// Health-check token budget is permanently pinned to exactly one token.
+	// The maxTokens argument is accepted for interface compatibility but
+	// deliberately ignored so that no config value, provider metadata, or
+	// future caller can ever raise the cost of a synthetic probe.
+	maxTokens = 1
 	var body map[string]any
 	switch a.p.Type {
 	case "gemini":

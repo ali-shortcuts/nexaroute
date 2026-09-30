@@ -340,7 +340,10 @@ const (
 	maxProviderConcurrency    = 4096
 	maxProbeConcurrency       = 1024
 	maxRoutingAttempts        = 64
-	maxProbeTokens            = 64
+	// maxProbeTokens pins the health-check token budget to exactly one token.
+	// Synthetic availability probes must never spend real generation budget;
+	// validation rejects any attempt to raise it.
+	maxProbeTokens            = 1
 	maxStringIDBytes          = 256
 	maxURLBytes               = 4096
 	maxTotalDeployments       = 20000

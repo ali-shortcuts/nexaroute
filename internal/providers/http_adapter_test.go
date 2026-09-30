@@ -160,8 +160,10 @@ func TestResponsesProbeUsesResponsesPathAndPayload(t *testing.T) {
 	if got["input"] == nil {
 		t.Fatalf("Responses probe missing input: %#v", got)
 	}
-	if got["max_output_tokens"] != float64(3) {
-		t.Fatalf("max_output_tokens=%v want 3", got["max_output_tokens"])
+	// Health-check budget is permanently pinned to one token: even when the
+	// caller passes a larger budget, the wire payload must carry 1.
+	if got["max_output_tokens"] != float64(1) {
+		t.Fatalf("max_output_tokens=%v want 1 (health-check budget is pinned)", got["max_output_tokens"])
 	}
 }
 
