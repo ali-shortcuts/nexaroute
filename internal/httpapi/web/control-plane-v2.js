@@ -737,21 +737,17 @@
     q('[data-dialog-close]',q('#cpDialogHost')).onclick=()=>{resolve(null);close();};
   });
 
+  // F14: v2 owns no fetch/auth behavior. The canonical apiFetch lives on
+  // window.NexaRoute (defined in app.js, loaded before this file). This only
+  // delegates so both UI surfaces share headers, serialization, error
+  // handling and the 401/admin-key flow from a single implementation.
   function installAdminKeyFlow(){
-    apiFetch=async function(url,opt={}){
-      opt={...opt,headers:{...(opt.headers||{})}};
-      if(adminKey)opt.headers['x-admin-key']=adminKey;
-      let r=await window.fetch(url,opt);
-      if(r.status===401){
-        const key=await UI.requestAdminKey();
-        if(key){
-          adminKey=key;sessionStorage.setItem('nexaroute_admin_key',adminKey);
-          if(q('#adminKey'))q('#adminKey').value=adminKey;
-          opt.headers['x-admin-key']=adminKey;r=await window.fetch(url,opt);
-        }
+    try {
+      const canonical = window.NexaRoute && window.NexaRoute.apiFetch;
+      if (typeof canonical === 'function') {
+        apiFetch = function(url, opt) { return canonical(url, opt); };
       }
-      return r;
-    };
+    } catch {}
   }
 
   async function advancedVirtual(id=''){

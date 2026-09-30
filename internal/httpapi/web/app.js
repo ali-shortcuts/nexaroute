@@ -23,28 +23,56 @@ const fmtCompact = n => { if (!Number.isFinite(n) || n <= 0) return '0'; if (n >
 const fmtMs = n => (Number.isFinite(Number(n)) && Number(n) > 0) ? Math.round(Number(n)) + ' ms' : '—';
 
 let adminKey = sessionStorage.getItem('nexaroute_admin_key') || '';
-async function apiFetch(url, opt = {}) {
+/* ---------- F14: canonical admin apiFetch (single owner) ----------
+   One implementation owns fetch/auth behavior for both UI surfaces
+   (dashboard app.js and control-plane-v2.js): header merge, x-admin-key
+   attach, single 401 retry via window.NexaUI.requestAdminKey, sessionStorage
+   persistence and #adminKey sync. No secrets are logged or written to the
+   DOM beyond the existing admin-key input value. control-plane-v2.js must
+   delegate to window.NexaRoute.apiFetch and must not reimplement this. */
+function getAdminKey() { return adminKey; }
+function setAdminKey(k) {
+  adminKey = String(k ?? '').trim();
+  try { sessionStorage.setItem('nexaroute_admin_key', adminKey); } catch {}
+  try { const el = $('#adminKey'); if (el) el.value = adminKey; } catch {}
+}
+async function canonicalApiFetch(url, opt = {}) {
   opt = { ...opt, headers: { ...(opt.headers || {}) } };
   if (adminKey) opt.headers['x-admin-key'] = adminKey;
   let r = await window.fetch(url, opt);
   if (r.status === 401 && window.NexaUI?.requestAdminKey) {
     const k = await window.NexaUI.requestAdminKey();
     if (k) {
-      adminKey = k.trim();
-      sessionStorage.setItem('nexaroute_admin_key', adminKey);
-      $('#adminKey').value = adminKey;
+      setAdminKey(k);
       opt.headers['x-admin-key'] = adminKey;
       r = await window.fetch(url, opt);
     }
   }
   return r;
 }
-async function api(url, opt = {}) {
-  const r = await apiFetch(url, opt);
+async function canonicalApi(url, opt = {}) {
+  const r = await canonicalApiFetch(url, opt);
   let b = {};
   try { b = await r.json(); } catch {}
   if (!r.ok) throw new Error(b?.error?.message || `HTTP ${r.status}`);
   return b;
+}
+try {
+  const nrScope = typeof window !== 'undefined' ? window : globalThis;
+  nrScope.NexaRoute = Object.assign(nrScope.NexaRoute || {}, {
+    apiFetch: canonicalApiFetch,
+    api: canonicalApi,
+    getAdminKey,
+    setAdminKey,
+  });
+} catch {}
+/* Compatibility entry points: same names/behavior as before, now thin
+   delegates to the canonical implementation above. */
+async function apiFetch(url, opt = {}) {
+  return window.NexaRoute.apiFetch(url, opt);
+}
+async function api(url, opt = {}) {
+  return window.NexaRoute.api(url, opt);
 }
 function setLiveTransport(mode) {
   liveTransport = mode;
