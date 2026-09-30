@@ -343,12 +343,12 @@ const (
 	// maxProbeTokens pins the health-check token budget to exactly one token.
 	// Synthetic availability probes must never spend real generation budget;
 	// validation rejects any attempt to raise it.
-	maxProbeTokens            = 1
-	maxStringIDBytes          = 256
-	maxURLBytes               = 4096
-	maxTotalDeployments       = 20000
-	maxTotalAliases           = 100000
-	maxConfigBytes            = 16 << 20
+	maxProbeTokens      = 1
+	maxStringIDBytes    = 256
+	maxURLBytes         = 4096
+	maxTotalDeployments = 20000
+	maxTotalAliases     = 100000
+	maxConfigBytes      = 16 << 20
 	// Phase B limits
 	maxVirtualEndpoints    = 256
 	maxRouteProfiles       = 256
