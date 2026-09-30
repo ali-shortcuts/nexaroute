@@ -374,6 +374,7 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 		"snapshot_truncated": truncated,
 		"health":             enrichHealthForAdmin(healthAll),
 		"health_counts":      healthCounts,
+		"node_telemetry":     buildNodeTelemetry(deployments, healthAll, time.Now()),
 		"provider_health":    s.hm.ProviderSnapshot(),
 		"events":             s.bus.SnapshotLimit(eventLimit),
 		"provider_stats":     s.reg.Stats(),
