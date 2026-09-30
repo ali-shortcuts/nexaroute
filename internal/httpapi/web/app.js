@@ -1,6 +1,52 @@
 /* NexaRoute control plane — dashboard logic (vanilla JS, no dependencies) */
 'use strict';
 
+
+/* F15: dashboard lifecycle ownership. Every long-lived browser resource created
+   by the dashboard is registered here so pagehide teardown is deterministic,
+   idempotent, and safe when parts of the DOM are missing. */
+const DashboardLifecycle = (() => {
+  const intervals = new Set(), timeouts = new Set(), animationFrames = new Set();
+  const abortControllers = new Set(), listeners = new Set(), observers = new Set();
+  let tornDown = false;
+  const track = (set, value) => { if (!tornDown) set.add(value); return value; };
+  const untrack = (set, value) => set.delete(value);
+  function trackEventListener(target, type, listener, options) {
+    if (tornDown || !target?.addEventListener) return listener;
+    target.addEventListener(type, listener, options);
+    listeners.add({ target, type, listener, options });
+    return listener;
+  }
+  function untrackEventListener(target, type, listener, options) {
+    try { target?.removeEventListener?.(type, listener, options); } catch {}
+    for (const item of listeners) if (item.target === target && item.type === type && item.listener === listener) listeners.delete(item);
+  }
+  function trackMutationObserver(observer) { return track(observers, observer); }
+  function teardown() {
+    if (tornDown) return;
+    tornDown = true;
+    for (const id of intervals) clearInterval(id); intervals.clear();
+    for (const id of timeouts) clearTimeout(id); timeouts.clear();
+    for (const id of animationFrames) cancelAnimationFrame(id); animationFrames.clear();
+    for (const controller of abortControllers) { try { controller.abort(); } catch {} } abortControllers.clear();
+    for (const item of listeners) { try { item.target.removeEventListener(item.type, item.listener, item.options); } catch {} } listeners.clear();
+    for (const observer of observers) { try { observer.disconnect(); } catch {} } observers.clear();
+  }
+  const api = {
+    trackInterval: id => track(intervals, id), untrackInterval: id => untrack(intervals, id),
+    trackTimeout: id => track(timeouts, id), untrackTimeout: id => untrack(timeouts, id),
+    trackAnimationFrame: id => track(animationFrames, id), untrackAnimationFrame: id => untrack(animationFrames, id),
+    trackAbortController: c => track(abortControllers, c), untrackAbortController: c => untrack(abortControllers, c),
+    trackEventListener, untrackEventListener, trackMutationObserver,
+    teardown, isTornDown: () => tornDown,
+  };
+  if (typeof window !== 'undefined') {
+    window.addEventListener('pagehide', teardown, { once: true });
+    window.NexaDashboardLifecycle = api;
+  }
+  return api;
+})();
+
 let snap = { deployments: [], health: [], events: [], config: {} };
 let providerSummaries = [];
 let editor = { mode: 'add', originalId: '', provider: null, detected: [], selected: new Set(), modelMeta: new Map(), secretDirty: false, secretSource: 'none' };
@@ -239,7 +285,7 @@ async function pollLiveEventsFallback(signal) {
 }
 async function consumeLiveEvents() {
   if (liveEventsAbort) liveEventsAbort.abort();
-  liveEventsAbort = new AbortController();
+  liveEventsAbort = DashboardLifecycle.trackAbortController(new AbortController());
   while (liveEventsAbort && !liveEventsAbort.signal.aborted) {
     try {
       const q = liveSeq ? `?since=${encodeURIComponent(liveSeq)}&limit=100` : '?limit=100';
@@ -290,11 +336,11 @@ function toast(m, bad = false) {
     t.textContent = m;
     t.className = 'toast show ' + (bad ? 'bad' : '');
     clearTimeout(toast.t);
-    toast.t = setTimeout(() => { try { t.className = 'toast'; } catch (e) { uiWarn('toast', e); } }, 2600);
+    toast.t = DashboardLifecycle.trackTimeout(setTimeout(() => { try { t.className = 'toast'; } catch (e) { uiWarn('toast', e); } }, 2600));
   } catch (e) { uiWarn('toast', e); }
 }
 function copyText(text, btn) {
-  const done = () => { if (btn) { const o = btn.textContent; btn.textContent = 'Copied ✓'; setTimeout(() => btn.textContent = o, 1400); } toast('Copied to clipboard'); };
+  const done = () => { if (btn) { const o = btn.textContent; btn.textContent = 'Copied ✓'; DashboardLifecycle.trackTimeout(setTimeout(() => btn.textContent = o, 1400)); } toast('Copied to clipboard'); };
   if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text).then(done).catch(() => fallbackCopy(text, done));
   else fallbackCopy(text, done);
 }
@@ -600,7 +646,7 @@ function startRingParticles() {
   }
   ringAnim.particleLast = performance.now();
   const step = now => {
-    ringAnim.particleRaf = requestAnimationFrame(step);
+    ringAnim.particleRaf = DashboardLifecycle.trackAnimationFrame(requestAnimationFrame(step));
     if (document.hidden || ringReducedMotion()) { ringAnim.particleLast = now; return; }
     const dt = Math.min(0.1, (now - ringAnim.particleLast) / 1000);
     ringAnim.particleLast = now;
@@ -618,7 +664,7 @@ function startRingParticles() {
       dots[i].setAttribute('opacity', (0.25 + 0.55 * ((Math.sin(a) + 1) / 2)).toFixed(2));
     }
   };
-  ringAnim.particleRaf = requestAnimationFrame(step);
+  ringAnim.particleRaf = DashboardLifecycle.trackAnimationFrame(requestAnimationFrame(step));
 }
 function updateRingStatus() {
   const el = document.querySelector('#ringStatus');
@@ -680,13 +726,13 @@ function trackRingInflight(e) {
   const terminal = e.kind === 'route_ok' || e.kind === 'candidate_exhausted';
   if (terminal) {
     const dep = e.deployment, id = rid;
-    setTimeout(() => {
+    DashboardLifecycle.trackTimeout(setTimeout(() => {
       const r = ringAnim.inflight.get(id);
       if (!r) return;
       if (dep) r.deployments = r.deployments.filter(d => d !== dep);
       if (!r.deployments.length || e.kind === 'candidate_exhausted') ringAnim.inflight.delete(id);
       brightenRingLinks(); updateRingStatus();
-    }, 2500);
+    }, 2500));
   }
   if (ringAnim.inflight.size > 64) {
     const oldest = [...ringAnim.inflight.entries()].sort((a, b) => a[1].updated - b[1].updated)[0];
@@ -702,13 +748,13 @@ function ringNodeLabel(n, icon, text) {
 function applyRingEvent(e) {
   trackRingInflight(e);
   const finish = (id, ms) => {
-    const t = setTimeout(() => {
+    const t = DashboardLifecycle.trackTimeout(setTimeout(() => {
       ringAnim.active.delete(id);
       const n = id === '__core__' ? document.querySelector('#ringCore') : ringNodes.get(id);
       if (n) n.classList.remove('anim-attempt', 'anim-skip', 'anim-fail', 'anim-failover', 'anim-ok');
       if (ringAnim.coalesced > 0) { ringAnim.coalesced--; updateRingCoalesced(); }
       brightenRingLinks(); updateRingStatus();
-    }, ms);
+    }, ms));
     ringAnim.active.set(id, t);
   };
   if (e.kind === 'candidate_exhausted') {
@@ -1171,7 +1217,7 @@ async function tick() {
   } catch (e) { uiWarn('tick', e); }
   const n = snap.deployment_total ?? (snap.deployments || []).length;
   const delay = n > 5000 ? 15000 : n > 1000 ? 8000 : n > 250 ? 4000 : 1800;
-  setTimeout(tick, delay);
+  DashboardLifecycle.trackTimeout(setTimeout(tick, delay));
 }
 async function uiSectionAsync(name, fn) {
   try { await fn(); } catch (e) { uiWarn(name, e); }
@@ -1182,9 +1228,9 @@ window.addEventListener('resize', () => {
   // progress or clear in-flight animation classes.
   if (ringResizeQueued) return;
   ringResizeQueued = true;
-  requestAnimationFrame(() => { ringResizeQueued = false; uiSection('render:ring', () => renderRing(snap.deployments || [], healthMap())); });
+  DashboardLifecycle.trackAnimationFrame(requestAnimationFrame(() => { ringResizeQueued = false; uiSection('render:ring', () => renderRing(snap.deployments || [], healthMap())); }));
 });
-setInterval(() => uiSection('tick:clock', () => { setText('#footClock', new Date().toLocaleTimeString('en-US', { hour12: false }), 'tick:clock'); }), 1000);
+DashboardLifecycle.trackInterval(setInterval(() => uiSection('tick:clock', () => { setText('#footClock', new Date().toLocaleTimeString('en-US', { hour12: false }), 'tick:clock'); }), 1000));
 
 /* ---------- CLI tools tab ---------- */
 function cliSnippet(kind) {
@@ -1937,7 +1983,7 @@ function hideNodeTelemetryPopover() {
   const pop = document.querySelector('#nodeTelemetryPopover');
   if (pop) pop.hidden = true;
 }
-document.addEventListener('click', ev => {
+DashboardLifecycle.trackEventListener(document, 'click', ev => {
   const node = ev.target && ev.target.closest ? ev.target.closest('#ring .node') : null;
   if (node && node.dataset && node.dataset.depid) {
     ev.stopPropagation();
@@ -1946,7 +1992,7 @@ document.addEventListener('click', ev => {
   }
   if (nodeTelemetryPinned && !(ev.target.closest && ev.target.closest('#nodeTelemetryPopover'))) hideNodeTelemetryPopover();
 });
-document.addEventListener('keydown', ev => { if (ev.key === 'Escape') hideNodeTelemetryPopover(); });
+DashboardLifecycle.trackEventListener(document, 'keydown', ev => { if (ev.key === 'Escape') hideNodeTelemetryPopover(); });
 bind('#compatReset', 'onclick', async () => {
   try {
     await api('/admin/api/compat/reset', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ deployment: 'all' }) });

@@ -446,8 +446,8 @@
         <div class="cp-hero-check"><i>${(snap.deployments||[]).length?'✓':'2'}</i><span>${h(T('models'))}: ${(snap.deployments||[]).length}</span></div>
         <div class="cp-hero-check"><i>${routes.length?'✓':'3'}</i><span>${h(T('routing'))}: ${routes.length}</span></div>
       </div>`;
-    q('#cpHeroProvider')?.addEventListener('click',()=>q('#addProviderBtn')?.click());
-    q('#cpHeroRoute')?.addEventListener('click',()=>{activateTab('routing',T('routing'));openRouteDialog();});
+    window.NexaDashboardLifecycle?.trackEventListener(q('#cpHeroProvider'),'click',()=>q('#addProviderBtn')?.click());
+    window.NexaDashboardLifecycle?.trackEventListener(q('#cpHeroRoute'),'click',()=>{activateTab('routing',T('routing'));openRouteDialog();});
   }
 
   function installProviderSearch() {
@@ -457,7 +457,7 @@
     const search=document.createElement('input');search.id='cpProviderSearch';search.className='search cp-provider-search';search.type='search';search.placeholder=T('searchProviders');
     search.oninput=()=>{state.providerSearch=search.value.toLowerCase();filterProviderCards();};
     oldBtn?.before(actions);actions.append(search);if(oldBtn)actions.append(oldBtn);
-    const observer=new MutationObserver(()=>filterProviderCards());observer.observe(q('#providerGrid'),{childList:true});
+    const observer=window.NexaDashboardLifecycle?.trackMutationObserver(new MutationObserver(()=>filterProviderCards())) || new MutationObserver(()=>filterProviderCards());observer.observe(q('#providerGrid'),{childList:true});
   }
   function filterProviderCards(){
     const s=state.providerSearch;
@@ -900,8 +900,8 @@
     syncNavA11y();
     const nav=q('#nav');
     if(nav){
-      new MutationObserver(syncNavA11y).observe(nav,{subtree:true,attributes:true,attributeFilter:['class']});
-      nav.addEventListener('keydown',e=>{
+      const navObserver=window.NexaDashboardLifecycle?.trackMutationObserver(new MutationObserver(syncNavA11y)) || new MutationObserver(syncNavA11y);navObserver.observe(nav,{subtree:true,attributes:true,attributeFilter:['class']});
+      window.NexaDashboardLifecycle?.trackEventListener(nav,'keydown',e=>{
         if(!['ArrowDown','ArrowUp','ArrowRight','ArrowLeft'].includes(e.key)) return;
         const buttons=qa('button:not(.cp-hidden-nav)',nav).filter(b=>b.offsetParent!==null);
         const current=document.activeElement;
@@ -912,7 +912,7 @@
       });
     }
 
-    document.addEventListener('keydown',e=>{
+    window.NexaDashboardLifecycle?.trackEventListener(document,'keydown',e=>{
       if(e.key==='Escape'){
         const host=q('#cpDialogHost.open');
         if(host) q('[data-dialog-close]',host)?.click();
