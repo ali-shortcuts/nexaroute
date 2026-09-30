@@ -346,6 +346,9 @@ func cloneConfig(in config.Config) config.Config {
 	for i := range out.DecisionChains {
 		out.DecisionChains[i].Steps = append([]config.DecisionChainStep(nil), in.DecisionChains[i].Steps...)
 	}
+	if in.Warnings != nil {
+		out.Warnings = append([]string(nil), in.Warnings...)
+	}
 	// DecisionProviderHealth is value struct, already copied
 	return out
 }

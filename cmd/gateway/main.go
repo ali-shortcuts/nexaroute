@@ -96,6 +96,9 @@ func main() {
 	if err != nil {
 		bootstrap.Fatal(err)
 	}
+	for _, w := range cfg.Warnings {
+		fmt.Fprintf(os.Stderr, "nexaroute: config warning: %s\n", w)
+	}
 
 	var logWriters []io.Writer
 	var logFile *logging.RotatingWriter
