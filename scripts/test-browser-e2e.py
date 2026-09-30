@@ -397,6 +397,40 @@ def main() -> None:
                 cli_text = page.locator("#cliBody").inner_text()
                 assert "browser-secret-one" not in cli_text and "browser-secret-two" not in cli_text
 
+                # Regression test for issue #170: XSS via malicious public_model in CLI snippet.
+                # Find the route profile created by the simple route.
+                snapshot = api_json(base, "/admin/api/snapshot?limit=500&events=100")
+                route = next(v for v in snapshot["virtual_endpoints"] if v["id"] == "route-coding")
+                profile_id = route["route_profile"]
+                # Create a virtual endpoint with a harmless but malicious-looking public_model.
+                # Must avoid chars rejected by server validation: space, tab, \r, \n, ", ', `, $, \
+                xss_payload = 'xss-test-<script>alert(1)</script>-<img/src=x/onerror=alert(2)>'
+                api_json(base, "/admin/api/virtual-endpoints", "POST", {
+                    "id": "xss-test-endpoint",
+                    "name": "XSS Test Endpoint",
+                    "public_model": xss_payload,
+                    "route_profile": profile_id,
+                    "enabled": True,
+                })
+                page.evaluate("refresh()")
+                page.locator('button[data-tab="cli"]').click()
+                # The payload must appear literally in the text content, not as executable HTML.
+                cli_text = page.locator("#cliBody").inner_text()
+                assert xss_payload in cli_text, f"XSS payload not found literally in CLI text: {cli_text}"
+                # No script/img elements should have been created from the injection.
+                script_count = page.locator("#cliBody script").count()
+                img_count = page.locator("#cliBody img").count()
+                assert script_count == 0, f"Script element injected via public_model: {script_count}"
+                assert img_count == 0, f"IMG element injected via public_model: {img_count}"
+                # The pre element should contain the escaped text, not live elements.
+                # Escaped output uses HTML entities: <script> becomes <script>
+                pre_html = page.locator("#cliBody pre").inner_html()
+                assert "<script>" not in pre_html, "Unescaped script tag found in pre HTML"
+                assert "<img" not in pre_html, "Unescaped img tag found in pre HTML"
+                # Clean up test endpoint.
+                api_json(base, "/admin/api/virtual-endpoints/xss-test-endpoint", "DELETE")
+                page.evaluate("refresh()")
+
                 # Edit Simple Route to Ordered fallback and prove backend state persists.
                 page.locator('button[data-tab="routing"]').click()
                 page.locator('[data-route-edit="route-coding"]').click()
