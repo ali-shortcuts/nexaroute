@@ -326,6 +326,8 @@ def main() -> None:
                 advance_provider(page)
                 page.locator("#discoverBtn").click()
                 expect(page.locator("#discoverStatus")).to_contain_text("2")
+                # Discovery may preserve/preselect eligible models; clear explicitly before testing Select all.
+                page.locator("#cpClearAll").click()
                 expect(page.locator("#cpModelCount")).to_contain_text("0")
                 page.locator("#cpSelectAll").click()
                 expect(page.locator("#cpModelCount")).to_contain_text("2")
