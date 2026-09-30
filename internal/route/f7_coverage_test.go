@@ -111,7 +111,7 @@ func TestAllFilteredCandidatesDedupAndOrder(t *testing.T) {
 		PrimaryMode:        "explicit",
 		OrderedPoolIDs:     []string{"primary", "secondary"},
 		AllowedDeployments: map[string]struct{}{"prov-a/m1": {}},
-		FallbackAllowed:    []map[string]struct{}{{ "prov-a/m1": {}, "prov-b/m2": {} }},
+		FallbackAllowed:    []map[string]struct{}{{"prov-a/m1": {}, "prov-b/m2": {}}},
 	}
 	deduped := r.AllFilteredCandidates(candidates, overlap)
 	if len(deduped) != 2 {
