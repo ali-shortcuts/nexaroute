@@ -43,7 +43,13 @@ jobs:
           fi
 
       - name: Full verification
-        run: ./scripts/verify.sh
+        run: |
+          set -o pipefail
+          ./scripts/verify.sh 2>&1 | tee /tmp/verify.log || {
+            msg=$(tail -n 80 /tmp/verify.log | sed -e "s/%/%25/g" -e "s/\r//g" | tr "\n" "\001" | sed "s/\x01/%0A/g")
+            echo "::error title=verify-tail::${msg}"
+            exit 1
+          }
 
       - name: Bounded stress checks
         run: ./scripts/stress.sh
