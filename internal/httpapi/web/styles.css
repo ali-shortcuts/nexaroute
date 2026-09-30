@@ -114,11 +114,14 @@ main{padding:24px 30px 46px;min-width:0}
 .topology{overflow:hidden}
 .ring{position:relative;height:500px;max-width:940px;margin:0 auto}
 .ring svg{position:absolute;inset:0;width:100%;height:100%}
-.ring svg line{animation:linkPulse 3.2s ease-in-out infinite}
+.ring svg line{animation:none}
 @keyframes linkPulse{0%,100%{opacity:.55}50%{opacity:1}}
 .core{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:138px;height:138px;border-radius:50%;display:grid;place-items:center;align-content:center;background:radial-gradient(circle at 32% 28%,#1a3350,#0a1422 70%);border:1px solid rgba(80,130,180,.5);box-shadow:0 0 44px rgba(56,224,200,.14),inset 0 0 24px rgba(0,0,0,.5)}
-.core-orbit{position:absolute;inset:-13px;border:1px dashed rgba(70,150,170,.5);border-radius:50%;animation:spin 16s linear infinite}
+.core-orbit{position:absolute;inset:-13px;border:1px dashed rgba(70,150,170,.5);border-radius:50%;animation:none}
 .core-orbit.o2{inset:-26px;border-color:rgba(122,125,242,.3);animation-duration:26s;animation-direction:reverse}
+.ring.has-traffic .core-orbit{animation:spin 16s linear infinite}
+.ring.has-traffic .core-orbit.o2{animation-duration:26s}
+.ring.has-traffic svg line.link-hot{animation:linkPulse 1.4s ease-in-out infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
 .core strong{font-size:14px;letter-spacing:.16em}
 .core small{color:var(--cyan);font-size:9px;margin-top:4px;letter-spacing:.08em}

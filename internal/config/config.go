@@ -1165,14 +1165,12 @@ func (c Config) Validate() error {
 		if len(p.Headers) > maxProviderHeaders || len(p.ForwardHeaders) > maxProviderHeaders {
 			return fmt.Errorf("provider %q headers exceeds safe limit %d", p.ID, maxProviderHeaders)
 		}
-		u, err := url.Parse(p.BaseURL)
-		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-			return fmt.Errorf("provider %q has invalid base_url", p.ID)
+		if err := validateEndpointURL(p.BaseURL, fmt.Sprintf("provider %q base_url", p.ID), false); err != nil {
+			return err
 		}
 		if p.ProxyURL != "" {
-			u, err := url.Parse(p.ProxyURL)
-			if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-				return fmt.Errorf("provider %q has invalid proxy_url", p.ID)
+			if err := validateEndpointURL(p.ProxyURL, fmt.Sprintf("provider %q proxy_url", p.ID), true); err != nil {
+				return err
 			}
 		}
 		if p.AuthMode != "" && p.AuthMode != "bearer" && p.AuthMode != "x-api-key" && p.AuthMode != "x-goog-api-key" && p.AuthMode != "none" {
@@ -1794,6 +1792,24 @@ func ValidateProviderConfig(p ProviderConfig) error {
 	cfg := Default()
 	cfg.Providers = []ProviderConfig{p}
 	return cfg.Validate()
+}
+
+// validateEndpointURL keeps provider connection metadata separate from
+// credentials. Userinfo in a base/proxy URL is both surprising to operators
+// and easy to leak through logs or copied configuration, so reject it at the
+// control-plane boundary instead of relying on downstream redaction.
+func validateEndpointURL(raw, field string, allowUserinfo bool) error {
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.Hostname() == "" {
+		return fmt.Errorf("%s must be an absolute http(s) URL", field)
+	}
+	if u.User != nil && !allowUserinfo {
+		return fmt.Errorf("%s must not contain embedded credentials", field)
+	}
+	if u.Fragment != "" && !allowUserinfo {
+		return fmt.Errorf("%s must not contain a fragment", field)
+	}
+	return nil
 }
 
 func (p ProviderConfig) ResolvedAPIKey() string {

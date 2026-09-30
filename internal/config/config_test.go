@@ -109,6 +109,25 @@ func TestValidateRejectsProxyWithoutHost(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsEmbeddedEndpointCredentials(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		edit func(*ProviderConfig)
+	}{
+		{"base URL", func(p *ProviderConfig) { p.BaseURL = "https://user:secret@example.com/v1" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := Default()
+			p := ProviderConfig{ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "https://example.com", ProxyURL: "https://proxy.example.com", Enabled: true}
+			tc.edit(&p)
+			cfg.Providers = []ProviderConfig{p}
+			if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "embedded credentials") {
+				t.Fatalf("embedded credentials should fail validation, got %v", err)
+			}
+		})
+	}
+}
+
 func TestReadyMeshRecoveryDefaults(t *testing.T) {
 	cfg := Default()
 	if cfg.Routing.Strategy != "ready_mesh" {
