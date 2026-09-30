@@ -970,34 +970,34 @@ function cliSnippet(kind) {
     title: 'Claude Code / Anthropic clients (virtual endpoint)',
     note: ves.length ? `Virtual endpoints: ${veList}. Using ${veModel} routes through your configured pools without client reconfiguration.` : 'The placeholder key exists only for clients that require a non-empty value. Virtual endpoints provide stable public names.',
     body:
-`<span class="c"># Anthropic-compatible ingress via virtual endpoint</span>
+`# Anthropic-compatible ingress via virtual endpoint
 export ANTHROPIC_BASE_URL=${base}
 export ANTHROPIC_AUTH_TOKEN=local-placeholder
 export ANTHROPIC_MODEL=${veModel}
 
-<span class="c"># virtual endpoints available: ${veList}</span>
-<span class="c"># physical backend can change without client update</span>`
+# virtual endpoints available: ${veList}
+# physical backend can change without client update`
   };
   if (kind === 'openai') return {
     title: 'OpenAI-compatible tools (virtual endpoint)',
     note: ves.length ? `Virtual endpoint ${veModel} → Route Profile → Pool → existing router. Pool ∩ Eligibility = routable set.` : 'Chat Completions requests flow through the same routing plane and the same bulletproof protocol translation.',
     body:
-`<span class="c"># OpenAI Chat Completions ingress via virtual endpoint</span>
+`# OpenAI Chat Completions ingress via virtual endpoint
 export OPENAI_BASE_URL=${base}/v1
 export OPENAI_API_KEY=local-placeholder
 
-<span class="c"># direct curl with virtual model</span>
+# direct curl with virtual model
 curl ${base}/v1/chat/completions \\
   -H "Content-Type: application/json" \\
   -d '{"model":"${veModel}","messages":[{"role":"user","content":"hi"}]}'
 
-<span class="c"># virtual endpoints: ${veList}</span>`
+# virtual endpoints: ${veList}`
   };
   if (kind === 'env') return {
     title: 'Session environment block',
     note: ves.length ? `Use virtual model ${veModel} for stable client identity.` : 'Drop this into .zshrc / .bashrc for the current machine.',
     body:
-`<span class="c"># NexaRoute client environment (virtual endpoint)</span>
+`# NexaRoute client environment (virtual endpoint)
 export ANTHROPIC_BASE_URL=${base}
 export ANTHROPIC_AUTH_TOKEN=local-placeholder
 export ANTHROPIC_MODEL=${veModel}
@@ -1008,22 +1008,22 @@ export OPENAI_API_KEY=local-placeholder`
     title: 'Health & diagnostics',
     note: 'Useful endpoints for monitoring and CI checks.',
     body:
-`<span class="c"># process liveness</span>
+`# process liveness
 curl -s ${base}/healthz
 
-<span class="c"># routing readiness (ready queue populated)</span>
+# routing readiness (ready queue populated)
 curl -s ${base}/readyz
 
-<span class="c"># Prometheus metrics</span>
+# Prometheus metrics
 curl -s ${base}/metrics
 
-<span class="c"># exposed models and aliases</span>
+# exposed models and aliases
 curl -s ${base}/v1/models
 
-<span class="c"># virtual endpoints</span>
+# virtual endpoints
 curl -s ${base}/admin/api/virtual-endpoints -H "x-admin-key: $ADMIN_KEY"
 
-<span class="c"># example: ${veModel} → pool (configured) → router eligibility → physical deployment</span>`
+# example: ${veModel} → pool (configured) → router eligibility → physical deployment`
   };
 }
 
@@ -1031,10 +1031,17 @@ function renderCLI() {
   const tabs = $$('#cliTabs button');
   const active = tabs.find(b => b.classList.contains('active')) || tabs[0];
   const s = cliSnippet(active.dataset.cli);
+  // The snippet body is plain text: escape every line through esc() and only
+  // wrap static "#"-comment lines in the comment span. Dynamic values (base,
+  // veModel, veList) can therefore never become markup or event handlers,
+  // while innerText of the <pre> keeps the exact copyable command.
+  const bodyHTML = s.body.split('\n').map(line => (
+    line.startsWith('#') ? `<span class="c">${esc(line)}</span>` : esc(line)
+  )).join('\n');
   $('#cliBody').innerHTML = `
     <div class="cli-card">
       <div class="cli-card-head"><span>${esc(s.title)}</span><button class="copy-btn" id="cliCopy">Copy</button></div>
-      <pre>${s.body}</pre>
+      <pre>${bodyHTML}</pre>
     </div>
     <p class="cli-note">${esc(s.note)}</p>`;
   $('#cliCopy').onclick = e => copyText($('#cliBody pre').innerText, e.target);
