@@ -562,7 +562,7 @@
       box.querySelector('button').onclick=()=>{
         q('.secret-row',field)?.classList.remove('cp-secret-replace-hidden');
         env?.classList.remove('cp-secret-replace-hidden');
-        key.focus();editor.secretDirty=true;box.remove();
+        key.focus();editor.secretDirty=true;editor.replaceKey=true;box.remove();
       };
     }else{
       q('.secret-row',field)?.classList.remove('cp-secret-replace-hidden');

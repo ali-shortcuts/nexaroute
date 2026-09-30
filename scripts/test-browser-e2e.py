@@ -341,7 +341,9 @@ def main() -> None:
                 # Edit preserves write-only secret when untouched.
                 page.locator('.edit-provider[data-id="e2e-provider"]').click()
                 expect(page.locator("#providerModal")).to_be_visible()
-                expect(page.locator("#pKey")).to_have_value("")
+                # The server never returns the credential; the UI shows only a
+                # fixed mask so operators can distinguish "saved" from empty.
+                expect(page.locator("#pKey")).to_have_value("••••••••")
                 expect(page.locator(".cp-secret-saved")).to_be_visible()
                 page.locator("#pName").fill("Browser E2E Provider Renamed")
                 advance_provider(page)
