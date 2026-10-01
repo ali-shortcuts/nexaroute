@@ -1,8 +1,12 @@
 # NexaRoute v0.13.0 — Post-release Bug Audit
 
-**Status:** local hardening pass complete; remote PR/CI pending  
-**Baseline:** `main` / `v0.13.0` / `b650608b77e2339459f55c0a688869a215440fa4`  
+**Status:** complete; fix merged and post-merge CI/Security green
+**Baseline:** `main` / `v0.13.0` / `b650608b77e2339459f55c0a688869a215440fa4`
 **Branch:** `bugfix/v0.13-production-hardening`
+
+**PR:** [#205](https://github.com/ali-shortcuts/nexaroute/pull/205)
+**Fix commit:** `f21d4b922c501b2704d8d72f1714113e1393f488`
+**Merge commit:** `ff67724f5a5ed05c99a7ab30b35e96c57475d614`
 
 ## Scope and method
 
@@ -12,7 +16,7 @@ This pass started from a fresh clone of current `main` and verified the publishe
 
 | Bug ID | Area | Severity | Reproduction | Root cause | Fix | Regression test | Status |
 |---|---|---:|---|---|---|---|---|
-| HARDEN-001 | Context-window error parsing | Medium | `ParseContextTokens("maximum context length is 8192 tokens, however you requested 9000 tokens")` returned `8192000,9000000` on the production baseline. | The parser checked whether the complete regex match contained `k`; the word `tokens` itself contains the letter `k`, so plain counts were multiplied by 1000. | Capture the optional `k` suffix as its own regex group and scale only when that group is present. | `TestParseContextTokens` now covers both `128k/200k` and plain `8192/9000` values. | Fixed locally; awaiting PR CI/merge. |
+| HARDEN-001 | Context-window error parsing | Medium | `ParseContextTokens("maximum context length is 8192 tokens, however you requested 9000 tokens")` returned `8192000,9000000` on the production baseline. | The parser checked whether the complete regex match contained `k`; the word `tokens` itself contains the letter `k`, so plain counts were multiplied by 1000. | Capture the optional `k` suffix as its own regex group and scale only when that group is present. | `TestParseContextTokens` now covers both `128k/200k` and plain `8192/9000` values. | Fixed, merged in PR #205; post-merge gates green. |
 
 ## B. Confirmed bugs still open
 
@@ -38,7 +42,7 @@ Documented product/security boundaries remain in `docs/KNOWN_GAPS.md`: plaintext
 
 - Real OpenAI-compatible, Anthropic-compatible, and Gemini provider smoke traffic: no secure external credentials were available; deterministic mock providers covered the same protocol/error paths.
 - Local gitleaks scan: `gitleaks` is not installed in the sandbox; remote Security/CodeQL remains mandatory.
-- Docker build/runtime: to be recorded after checking Docker availability on the current execution device.
+- Docker build/runtime: Docker CLI is unavailable on this sandbox device; the mandatory PR CI Docker gate passed where the repository runner provides Docker.
 - A literal 30–60 minute idle run is not practical in the bounded task window; a 60-second equivalent was run, plus the repository's explicit stress/soak suites and repeated browser acceptance.
 
 ## Verification evidence
@@ -94,18 +98,18 @@ Idle observation passed with zero runtime events, stable log line count, and no 
 
 | Gate | Local result | Remote result |
 |---|---:|---:|
-| Unit/integration | PASS | pending PR |
-| Race | PASS | pending PR |
-| Vet/format/diff | PASS | pending PR |
-| Frontend/browser E2E | PASS, repeated 3x | pending PR |
-| Stress/soak | PASS | pending PR |
-| Installer lifecycle | PASS | pending PR |
-| CodeQL | baseline release green; rerun required | pending PR |
-| govulncheck | baseline release green; rerun required | pending PR |
-| Secret scan | local tool unavailable | pending PR |
-| Docker | pending device check | pending PR |
-| Release build/checksum | v0.13.0 baseline verified | do not publish a new release until PR gates pass |
+| Unit/integration | PASS | PASS — [CI #36921750303](https://github.com/ali-shortcuts/nexaroute/actions/runs/36921750303), post-merge [#36923007033](https://github.com/ali-shortcuts/nexaroute/actions/runs/36923007033) |
+| Race | PASS | PASS — included in CI verify |
+| Vet/format/diff | PASS | PASS — included in CI verify |
+| Frontend/browser E2E | PASS, repeated 3x | PASS — included in CI verify |
+| Stress/soak | PASS | PASS — [Soak #36921776987](https://github.com/ali-shortcuts/nexaroute/actions/runs/36921776987) |
+| Installer lifecycle | PASS | PASS — included in CI verify |
+| CodeQL | baseline release green; rerun required | PASS — [Security #36921750196](https://github.com/ali-shortcuts/nexaroute/actions/runs/36921750196) and [CodeQL #36921772570](https://github.com/ali-shortcuts/nexaroute/actions/runs/36921772570) |
+| govulncheck | baseline release green; rerun required | PASS — [Security #36921750196](https://github.com/ali-shortcuts/nexaroute/actions/runs/36921750196) |
+| Secret scan | local tool unavailable | Remote security gates PASS; no local gitleaks binary |
+| Docker | Docker CLI unavailable locally | PASS — covered by CI verify |
+| Release build/checksum | v0.13.0 baseline verified | No new release created, per audit instructions |
 
 ## Delivery plan
 
-The fix is intentionally isolated to the parser and its regression test. The branch must receive a real PR, pass mandatory CI/Security checks, and only then be considered for a patch release recommendation such as `v0.13.1`. No new release is created merely because this audit is complete.
+The fix was intentionally isolated to the parser, its regression test, and release-documentation pointers. PR #205 passed CI, Security, CodeQL and govulncheck, was merged, and post-merge CI/Security also passed. No new release was created merely because this audit completed; `v0.13.1` remains a recommendation only if repository release policy later calls for publishing the fix.
