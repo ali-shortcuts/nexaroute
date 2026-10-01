@@ -569,14 +569,14 @@ func (c Classified) HTTPStatus() int {
 // ParseContextTokens extracts a token count from context-overflow messages
 // like "maximum context length is 8192 tokens, however you requested 9000".
 func ParseContextTokens(msg string) (limit, requested int) {
-	re := regexp.MustCompile(`(\d{2,12})\s*(?:k\+?|k\b)?\s*tokens?`)
+	re := regexp.MustCompile(`(\d{2,12})\s*(k\+?|k\b)?\s*tokens?`)
 	nums := re.FindAllStringSubmatch(msg, -1)
 	for _, n := range nums {
 		v, err := strconv.Atoi(n[1])
 		if err != nil {
 			continue
 		}
-		if strings.Contains(strings.ToLower(n[0]), "k") {
+		if n[2] != "" {
 			v *= 1000
 		}
 		if limit == 0 {
