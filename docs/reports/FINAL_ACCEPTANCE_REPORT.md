@@ -1,4 +1,6 @@
-# NexaRoute Current Acceptance Report
+# NexaRoute Historical Acceptance Report
+
+> **Historical snapshot:** this report records the acceptance state available on 2026-09-27. It is not the current production release report. See [POST_RELEASE_BUG_AUDIT_v0.13.0.md](POST_RELEASE_BUG_AUDIT_v0.13.0.md) for the current hardening pass.
 
 Date: 2026-09-27
 

@@ -238,12 +238,12 @@ func TestHTTPStatusAndCapabilityLabel(t *testing.T) {
 }
 
 func TestParseContextTokens(t *testing.T) {
-	// NOTE: "8192 tokens" currently scales by 1000 because the "k" check
-	// matches the 'k' in "tokens" (known quirk, documented in
-	// docs/reports/audit-top15-issue57.md; not changed by this coverage PR).
 	limit, req := ParseContextTokens("maximum context length is 128k tokens, however you requested 200k tokens")
 	if limit != 128000 || req != 200000 {
 		t.Fatalf("got %d,%d", limit, req)
+	}
+	if limit, req := ParseContextTokens("maximum context length is 8192 tokens, however you requested 9000 tokens"); limit != 8192 || req != 9000 {
+		t.Fatalf("plain token counts must not be scaled: got %d,%d", limit, req)
 	}
 	if limit, req := ParseContextTokens("no numbers here"); limit != 0 || req != 0 {
 		t.Fatalf("empty should yield zeros: %d,%d", limit, req)
