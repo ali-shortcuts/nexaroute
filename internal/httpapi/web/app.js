@@ -634,7 +634,7 @@ function layoutRingGuides(g) {
   }
 }
 function startRingParticles() {
-  if (ringAnim.particleRaf || ringReducedMotion()) return;
+  if (ringAnim.particleRaf || ringAnim.inflight.size === 0 || ringReducedMotion()) return;
   const svgNS = 'http://www.w3.org/2000/svg';
   const layer = document.querySelector('#ringParticles');
   if (!layer) return;
@@ -666,13 +666,28 @@ function startRingParticles() {
   };
   ringAnim.particleRaf = DashboardLifecycle.trackAnimationFrame(requestAnimationFrame(step));
 }
+function stopRingParticles() {
+  if (!ringAnim.particleRaf) return;
+  try { cancelAnimationFrame(ringAnim.particleRaf); } catch {}
+  DashboardLifecycle.untrackAnimationFrame(ringAnim.particleRaf);
+  ringAnim.particleRaf = null;
+  const layer = document.querySelector('#ringParticles');
+  if (layer) while (layer.firstChild) layer.removeChild(layer.firstChild);
+}
 function updateRingStatus() {
   const el = document.querySelector('#ringStatus');
   if (!el) return;
   const inflight = ringAnim.inflight.size;
+  const ring = document.querySelector('#ring');
+  if (ring) ring.classList.toggle('has-traffic', inflight > 0);
+  const coreSub = document.querySelector('#coreSub');
+  if (coreSub) coreSub.textContent = inflight > 0 ? 'Routing request' : 'Waiting for requests';
+  if (inflight > 0) startRingParticles(); else stopRingParticles();
   const transport = (el.dataset && el.dataset.transport) || liveTransport || 'polling';
   const extra = ringAnim.coalesced > 0 ? ` · +${ringAnim.coalesced} coalesced` : '';
-  el.textContent = `${transport === 'sse' ? 'live' : 'polling'} · ${inflight} in flight${extra}`;
+  el.textContent = inflight > 0
+    ? `${transport === 'sse' ? 'live' : 'polling'} · ${inflight} in flight${extra}`
+    : `${transport === 'sse' ? 'live' : 'polling'} · waiting for requests`;
 }
 function updateRingCoalesced() {
   const el = document.querySelector('#ringCoalesced');

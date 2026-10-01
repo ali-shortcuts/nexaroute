@@ -393,8 +393,10 @@ def main() -> None:
                 wait_class_state(page, "#cpDialogHost", "open", False)
                 expect(page.locator("#cpRouteList")).to_contain_text("coding")
 
-                # Connect/CLI must use public model and must never expose provider secrets.
-                page.locator('button[data-tab="cli"]').click()
+                # Connect/CLI is intentionally contextual, not a top-level page.
+                # Open it from the simple Routing surface so the default nav stays focused.
+                page.locator('button[data-tab="routing"]').click()
+                page.locator('button[data-open-advanced="cli"]').click()
                 expect(page.locator("#cliBody")).to_contain_text("ANTHROPIC_MODEL=coding")
                 cli_text = page.locator("#cliBody").inner_text()
                 assert "browser-secret-one" not in cli_text and "browser-secret-two" not in cli_text
@@ -415,7 +417,8 @@ def main() -> None:
                     "enabled": True,
                 })
                 page.evaluate("refresh()")
-                page.locator('button[data-tab="cli"]').click()
+                page.locator('button[data-tab="routing"]').click()
+                page.locator('button[data-open-advanced="cli"]').click()
                 # The payload must appear literally in the text content, not as executable HTML.
                 cli_text = page.locator("#cliBody").inner_text()
                 assert xss_payload in cli_text, f"XSS payload not found literally in CLI text: {cli_text}"

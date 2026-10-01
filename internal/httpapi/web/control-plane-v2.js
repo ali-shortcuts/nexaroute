@@ -211,7 +211,10 @@
 
   function simplifyNavigation() {
     const nav=q('#nav'); if(!nav || q('nav button[data-tab="routing"]')) return;
-    for(const tab of ['virtual','profiles','pools','compat']) q(`nav button[data-tab="${tab}"]`)?.classList.add('cp-hidden-nav');
+    // Keep the default surface focused on user intent. Backend primitives stay
+    // available from Routing → Advanced instead of competing with Providers
+    // and Activity as top-level destinations.
+    for(const tab of ['models','virtual','profiles','pools','health','compat','cli']) q(`nav button[data-tab="${tab}"]`)?.classList.add('cp-hidden-nav');
     const modelsBtn=q('nav button[data-tab="models"]');
     const routeBtn=document.createElement('button');
     routeBtn.dataset.tab='routing'; routeBtn.dataset.title='Routing';
@@ -219,9 +222,7 @@
     nav.insertBefore(routeBtn,modelsBtn);
     routeBtn.onclick=()=>activateTab('routing',T('routing'),T('simpleRouting'));
     const consoleBtn=q('nav button[data-tab="console"]');
-    if(consoleBtn) consoleBtn.dataset.title=T('observability');
-    const cliBtn=q('nav button[data-tab="cli"]');
-    if(cliBtn) cliBtn.dataset.title=T('connect');
+    if(consoleBtn) { consoleBtn.textContent=''; consoleBtn.innerHTML='<span class="nav-ico">▤</span>'+h(T('observability')); consoleBtn.dataset.title=T('observability'); }
   }
 
   function installRoutingSection() {
@@ -242,10 +243,13 @@
             <h3>${h(T('advancedRouting'))}</h3>
             <p>${h(T('advancedRoutingCopy'))}</p>
             <div class="cp-advanced-links">
+              <button class="btn secondary" data-open-advanced="models">Models</button>
               <button class="btn secondary" data-open-advanced="pools">${h(T('candidatePools'))}</button>
               <button class="btn secondary" data-open-advanced="profiles">${h(T('routeProfiles'))}</button>
               <button class="btn secondary" data-open-advanced="virtual">${h(T('endpoints'))}</button>
+              <button class="btn secondary" data-open-advanced="health">Health</button>
               <button class="btn secondary" data-open-advanced="compat">Compatibility</button>
+              <button class="btn secondary" data-open-advanced="cli">${h(T('connect'))}</button>
             </div>
           </div>
           <div class="cp-help-card">
