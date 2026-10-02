@@ -18,17 +18,11 @@
       <div class="brand-copy"><strong>NexaRoute</strong><small id="brandVersion">control plane</small></div>
     </div>
     <nav id="nav">
-      <button class="active" data-tab="overview" data-title="Routing Overview"><span class="nav-ico">◎</span>Overview</button>
-      <button data-tab="console" data-title="Activity"><span class="nav-ico">▤</span>Activity<span class="nav-dot" id="consoleDot" hidden></span></button>
+      <button class="active" data-tab="overview" data-title="Overview"><span class="nav-ico">◎</span>Overview</button>
       <button data-tab="providers" data-title="Providers"><span class="nav-ico">◈</span>Providers</button>
-      <button data-tab="models" data-title="Model Deployments"><span class="nav-ico">▦</span>Models</button>
-      <button data-tab="virtual" data-title="Virtual Endpoints"><span class="nav-ico">◐</span>Endpoints</button>
-      <button data-tab="profiles" data-title="Route Profiles"><span class="nav-ico">⬙</span>Profiles</button>
-      <button data-tab="pools" data-title="Candidate Pools"><span class="nav-ico">⬡</span>Pools</button>
-      <button data-tab="health" data-title="Health &amp; Pressure"><span class="nav-ico">♥</span>Health</button>
-      <button data-tab="compat" data-title="Compatibility Matrix"><span class="nav-ico">⧉</span>Compat</button>
-      <button data-tab="cli" data-title="CLI Tools"><span class="nav-ico">⌘</span>CLI Tools</button>
-      <button data-tab="settings" data-title="Runtime Settings"><span class="nav-ico">⚙</span>Settings</button>
+      <button data-tab="routing" data-title="Routing"><span class="nav-ico">⇄</span>Routing</button>
+      <button data-tab="console" data-title="Activity"><span class="nav-ico">▤</span>Activity<span class="nav-dot" id="consoleDot" hidden></span></button>
+      <button data-tab="settings" data-title="Settings"><span class="nav-ico">⚙</span>Settings</button>
     </nav>
     <div class="sidefoot">
       <div class="conn" id="apiState"><span class="conn-dot"></span><span class="conn-text">connecting</span></div>
@@ -259,7 +253,7 @@
     <!-- ============ CLI ============ -->
     <section id="cli" class="tab">
       <div class="panel cli-panel">
-        <div class="panelhead"><div><h2>CLI Tools</h2><p>Point coding agents at NexaRoute — Ready Mesh handles the upstream pool.</p></div></div>
+        <div class="panelhead"><div><h2>Connect</h2><p>Connect Claude Code and compatible clients using the current gateway, client authentication state and public model.</p></div></div>
         <div class="cli-tabs" id="cliTabs">
           <button class="active" data-cli="claude">Claude Code</button>
           <button data-cli="openai">OpenAI-compatible</button>
@@ -380,7 +374,7 @@
           <em>Loaded from the server-side compatible-provider catalog. Every field remains editable.</em></label>
         <div class="form-grid two">
           <label class="field"><span>Name</span><input id="pName" placeholder="Chat2API"></label>
-          <label class="field"><span>Internal ID</span><input id="pId" placeholder="chat2api"></label>
+          <label class="field expert-field"><span>Internal ID</span><input id="pId" placeholder="chat2api"></label>
         </div>
         <label class="field"><span>Endpoint type</span><select id="pType">
           <option value="openai_compatible">OpenAI Compatible — Chat Completions</option>
@@ -405,13 +399,13 @@
           <div class="secret-row"><input id="pKey" type="password" autocomplete="off" placeholder="sk-..."><button id="togglePKey" class="icon-btn">Show</button><button id="replacePKey" class="icon-btn" style="display:none;">Replace</button></div>
           <em>Saved credentials are write-only. Leave fields untouched to keep them; editing a credential field replaces the complete key/pool set.</em>
         </label>
-        <label class="field"><span>API key environment variable <small>(optional)</small></span><input id="pKeyEnv" spellcheck="false" placeholder="CHAT2API_KEY"></label>
-        <label class="field"><span>Extra headers JSON <small>(optional)</small></span><textarea id="pHeaders" rows="3" spellcheck="false" placeholder='{"X-Custom":"value"}'></textarea></label>
+        <label class="field expert-field"><span>API key environment variable <small>(optional)</small></span><input id="pKeyEnv" spellcheck="false" placeholder="CHAT2API_KEY"></label>
+        <label class="field expert-field"><span>Extra headers JSON <small>(optional)</small></span><textarea id="pHeaders" rows="3" spellcheck="false" placeholder='{"X-Custom":"value"}'></textarea></label>
       </div>
-      <div class="form-section">
-        <div class="section-kicker">Advanced provider controls</div>
+      <details class="form-section expert-fields">
+        <summary class="section-kicker">Expert provider overrides</summary>
         <div class="form-grid two">
-          <label class="field"><span>Proxy URL <small>(optional)</small></span><input id="pProxy" spellcheck="false" placeholder="http://127.0.0.1:7890"></label>
+          <label class="field expert-field"><span>Proxy URL <small>(optional)</small></span><input id="pProxy" spellcheck="false" placeholder="http://127.0.0.1:7890"></label>
           <label class="field"><span>Max concurrency</span><input id="pConcurrency" type="number" min="1" max="512" value="32"></label>
         </div>
         <label class="field"><span>Stream idle timeout (seconds)</span><input id="pStreamIdle" type="number" min="1" max="86400" value="180">
@@ -429,6 +423,7 @@
         <label class="field"><span>Credential pool JSON <small>(optional)</small></span><textarea id="pCredentials" rows="5" spellcheck="false" placeholder='[{"name":"key-2","api_key_env":"SECOND_KEY","enabled":true}]'></textarea>
           <em>Additional keys rotate automatically. 401/402/403/429 can temporarily cool down only the failing key.</em></label>
       </div>
+      </details>
       <div class="form-section">
         <div class="section-row">
           <div><div class="section-kicker">Models</div><p class="hint">Detect models or add a model ID manually.</p></div>
