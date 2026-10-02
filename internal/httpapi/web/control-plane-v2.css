@@ -612,3 +612,14 @@ button:disabled{cursor:not-allowed;opacity:.55;transform:none!important}
   .cp-toolbar{border:0;margin:0;padding:0}
   .cp-language{min-width:64px}
 }
+
+/* v0.14 normal UX keeps implementation fields behind Expert controls. */
+body.cp-v2 .expert-field{display:none!important}
+body.cp-v2 details.expert-fields{border:1px solid var(--line);border-radius:12px;padding:12px}
+body.cp-v2 details.expert-fields>summary{cursor:pointer;color:var(--muted);font-weight:700}
+body.cp-v2 .connect-state{display:grid;grid-template-columns:auto 1fr;gap:10px 16px;margin-top:16px;padding:16px;border:1px solid var(--line);border-radius:12px;background:rgba(56,224,200,.04)}
+body.cp-v2 .connect-state strong{color:var(--muted);font-size:.78rem;text-transform:uppercase;letter-spacing:.08em}
+body.cp-v2 .connect-state code{color:var(--text);overflow-wrap:anywhere}
+body.cp-v2 .model-test{margin-left:auto;padding:5px 10px;font-size:.75rem}
+body.cp-v2 .model-test-ok{color:var(--good);border-color:var(--good)}
+body.cp-v2 .model-test-fail{color:var(--bad);border-color:var(--bad)}

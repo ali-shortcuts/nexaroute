@@ -18,7 +18,7 @@
 
   const tr = {
     en: {
-      overview:'Overview', providers:'Providers', routing:'Routing', models:'Models', observability:'Observability', health:'Health', connect:'Connect', settings:'Settings',
+      overview:'Overview', providers:'Providers', routing:'Routing', models:'Models', activity:'Activity', observability:'Activity', health:'Health', connect:'Connect', settings:'Settings',
       product:'Control Plane', addProvider:'Add provider', addRoute:'Create route', searchProviders:'Search providers…',
       welcome:'Connect your first AI provider', welcomeCopy:'Add an endpoint and credential, detect models, choose what you want to use, then create a stable route for Claude Code or any compatible client.',
       connectProvider:'Add your first provider', createRoute:'Create your first route', ready:'Ready', notReady:'Not ready',
@@ -45,7 +45,7 @@
       displayName:'Display name', fallback:'Fallback chain', pool:'Candidate pool', profile:'Route profile'
     },
     fa: {
-      overview:'نمای کلی', providers:'ارائه‌دهنده‌ها', routing:'مسیریابی', models:'مدل‌ها', observability:'نظارت زنده', health:'سلامت', connect:'اتصال', settings:'تنظیمات',
+      overview:'نمای کلی', providers:'ارائه‌دهنده‌ها', routing:'مسیریابی', models:'مدل‌ها', activity:'فعالیت', observability:'فعالیت', health:'سلامت', connect:'اتصال', settings:'تنظیمات',
       product:'مرکز کنترل', addProvider:'افزودن ارائه‌دهنده', addRoute:'ساخت مسیر', searchProviders:'جستجوی ارائه‌دهنده…',
       welcome:'اولین ارائه‌دهندهٔ هوش مصنوعی را وصل کنید', welcomeCopy:'آدرس API و کلید را وارد کنید، مدل‌ها را شناسایی و انتخاب کنید، سپس یک مسیر پایدار برای Claude Code یا هر کلاینت سازگار بسازید.',
       connectProvider:'افزودن اولین ارائه‌دهنده', createRoute:'ساخت اولین مسیر', ready:'آماده', notReady:'آماده نیست',
@@ -150,7 +150,7 @@
       const dot = b.querySelector('.nav-dot')?.outerHTML || '';
       b.innerHTML = ico + h(T(key)) + dot;
     }
-    const titleKeys={overview:'overview',console:'observability',providers:'providers',models:'models',health:'health',cli:'connect',settings:'settings',routing:'routing'};
+    const titleKeys={overview:'overview',console:'activity',providers:'providers',models:'models',health:'health',cli:'connect',settings:'settings',routing:'routing'};
     for(const [tab,key] of Object.entries(titleKeys)){const b=q(`nav button[data-tab="${tab}"]`);if(b)b.dataset.title=T(key);}
     if(typeof subtitles!=='undefined'){
       if(state.lang==='fa'){
@@ -210,7 +210,9 @@
   }
 
   function simplifyNavigation() {
-    const nav=q('#nav'); if(!nav || q('nav button[data-tab="routing"]')) return;
+    const nav=q('#nav'); if(!nav) return;
+    const existing=q('nav button[data-tab="routing"]');
+    if(existing){ existing.onclick=()=>activateTab('routing',T('routing'),T('simpleRouting')); return; }
     // Keep the default surface focused on user intent. Backend primitives stay
     // available from Routing → Advanced instead of competing with Providers
     // and Activity as top-level destinations.
@@ -479,6 +481,7 @@
     const progress=document.createElement('div');progress.id='cpProviderProgress';progress.className='cp-provider-progress';
     progress.innerHTML=[['connection',1],['modelsStep',2],['verify',3]].map(([k,n])=>`<button type="button" class="cp-step" data-provider-step="${n-1}"><span>${n}</span><b>${h(T(k))}</b></button>`).join('');
     q('.drawer-head',drawer).after(progress);
+    progress.style.display='none';
     const sections=qa('.drawer-scroll > .form-section',drawer);
     sections.forEach((s,i)=>{s.classList.add('cp-wizard-section');s.dataset.providerSection=String(i);});
     if(sections[2]){
@@ -546,6 +549,7 @@
       state.autoProtocol=false;
     }
     syncProtocolMode();
+    ['#pId','#pKeyEnv','#pHeaders','#pProxy','#pConcurrency','#pStreamIdle','#pChatPath','#pResponsesPath','#pMessagesPath','#pCountPath','#pModelsPath','#pForwardHeaders','#pCredentials'].forEach(sel=>{const el=q(sel); const field=el?.closest('.field'); if(field) field.classList.add('expert-field');});
     installSecretSavedState();
     enhanceModelPicker();
     translateProviderFields();
@@ -583,9 +587,11 @@
       const visible=state.providerStep===0 ? [0,1,2].includes(raw) : state.providerStep===1 ? raw===3 : raw===4;
       el.classList.toggle('cp-step-hidden',!visible);
     });
-    q('#cpProviderBack').style.display=state.providerStep?'inline-flex':'none';
-    q('#cpProviderNext').style.display=state.providerStep<2?'inline-flex':'none';
-    q('#saveProviderBtn').style.display=state.providerStep===2?'inline-flex':'none';
+    // v0.14 normal provider creation is a single page, not a Connection → Models → Verify wizard.
+    qa('#providerModal .cp-wizard-section, #providerModal .cp-advanced-toggle').forEach(el=>el.classList.remove('cp-step-hidden'));
+    q('#cpProviderBack').style.display='none';
+    q('#cpProviderNext').style.display='none';
+    q('#saveProviderBtn').style.display='inline-flex';
     q('#cancelProviderBtn').style.display='inline-flex';
     q('#providerModal .drawer-scroll').scrollTop=0;
     updateProviderWizardText();

@@ -1255,12 +1255,12 @@ function cliSnippet(kind) {
   const veModel = esc(firstVE ? (firstVE.public_model || firstVE.id) : 'nexa-code');
   const veList = esc(ves.length ? ves.map(v => v.public_model || v.id).join(', ') : 'auto, claude-auto');
   if (kind === 'claude') return {
-    title: 'Claude Code / Anthropic clients (virtual endpoint)',
-    note: ves.length ? `Virtual endpoints: ${veList}. Using ${veModel} routes through your configured pools without client reconfiguration.` : 'The placeholder key exists only for clients that require a non-empty value. Virtual endpoints provide stable public names.',
+    title: 'Claude Code',
+    note: ves.length ? `Gateway: ${base} · Public model: ${veModel} · Client authentication: ${snap.client_auth?.enabled ? 'enabled' : 'disabled'}. Provider credentials are never exposed here.` : 'Create a route first to generate a stable public model.',
     body:
 `<span class="c"># Anthropic-compatible ingress via virtual endpoint</span>
 export ANTHROPIC_BASE_URL=${base}
-export ANTHROPIC_AUTH_TOKEN=local-placeholder
+export ANTHROPIC_AUTH_TOKEN=${snap.client_auth?.enabled ? '<client-auth-token-managed-by-nexaroute>' : ''}
 export ANTHROPIC_MODEL=${veModel}
 
 <span class="c"># virtual endpoints available: ${veList}</span>
@@ -1272,7 +1272,7 @@ export ANTHROPIC_MODEL=${veModel}
     body:
 `<span class="c"># OpenAI Chat Completions ingress via virtual endpoint</span>
 export OPENAI_BASE_URL=${base}/v1
-export OPENAI_API_KEY=local-placeholder
+export OPENAI_API_KEY=${snap.client_auth?.enabled ? '<client-auth-token-managed-by-nexaroute>' : ''}
 
 <span class="c"># direct curl with virtual model</span>
 curl ${base}/v1/chat/completions \\
@@ -1287,10 +1287,10 @@ curl ${base}/v1/chat/completions \\
     body:
 `<span class="c"># NexaRoute client environment (virtual endpoint)</span>
 export ANTHROPIC_BASE_URL=${base}
-export ANTHROPIC_AUTH_TOKEN=local-placeholder
+export ANTHROPIC_AUTH_TOKEN=${snap.client_auth?.enabled ? '<client-auth-token-managed-by-nexaroute>' : ''}
 export ANTHROPIC_MODEL=${veModel}
 export OPENAI_BASE_URL=${base}/v1
-export OPENAI_API_KEY=local-placeholder`
+export OPENAI_API_KEY=${snap.client_auth?.enabled ? '<client-auth-token-managed-by-nexaroute>' : ''}`
   };
   return {
     title: 'Health & diagnostics',
@@ -1324,13 +1324,20 @@ function renderCLI() {
   if (!body) return;
   body.innerHTML = `
     <div class="cli-card">
-      <div class="cli-card-head"><span>${esc(s.title)}</span><button class="copy-btn" id="cliCopy">Copy</button></div>
+      <div class="cli-card-head"><span>${esc(s.title)}</span><button class="copy-btn" id="cliCopy">Copy setup</button></div>
       <pre>${s.body}</pre>
     </div>
-    <p class="cli-note">${esc(s.note)}</p>`;
+    <p class="cli-note">${esc(s.note)}</p>
+    ${active.dataset.cli==='claude' ? `<div class="connect-state"><strong>Gateway Base URL</strong><code>${esc(location.origin)}</code><strong>Client Auth</strong><span>${snap.client_auth?.enabled ? 'Enabled · managed credential' : 'Client authentication disabled'}</span><strong>Public Model</strong><code>${veModel}</code><button class="btn secondary" id="testClientConnection">Test connection</button></div>` : ''}`;
   bind('#cliCopy', 'onclick', e => {
     const pre = document.querySelector('#cliBody pre');
     copyText(pre ? pre.innerText : '', e.target);
+  }, 'render:cli');
+  bind('#testClientConnection', 'onclick', async e => {
+    e.target.disabled=true; e.target.textContent='Testing…';
+    try { const r=await api('/admin/api/endpoint'); e.target.textContent=r.enabled ? 'Connection ready' : 'Authentication disabled'; }
+    catch(err){ e.target.textContent='Connection check failed'; }
+    finally { setTimeout(()=>{e.target.disabled=false; e.target.textContent='Test connection';},1800); }
   }, 'render:cli');
 }
 $$('#cliTabs button').forEach(b => { b.onclick = () => uiSection('cli', () => {
@@ -1614,7 +1621,7 @@ function renderPicker() {
   $('#modelPicker').innerHTML = all.length ? all.map((m, i) => {
     const x = ensureModelMeta(m, i), c = x.capabilities || {};
     return `<div class="model-option">
-      <div class="model-option-head"><input class="model-select" type="checkbox" data-model="${esc(m)}" ${editor.selected.has(m) ? 'checked' : ''}><strong>${esc(m)}</strong></div>
+      <div class="model-option-head"><input class="model-select" type="checkbox" data-model="${esc(m)}" ${editor.selected.has(m) ? 'checked' : ''}><strong>${esc(m)}</strong><button type="button" class="btn ghost model-test" data-test-model="${esc(m)}">Test</button></div>
       <div class="model-meta-grid">
         <label>Aliases<input data-model="${esc(m)}" data-meta="aliases" value="${esc((x.aliases || []).join(', '))}" placeholder="coding, auto"></label>
         <label>Priority<input data-model="${esc(m)}" data-meta="priority" type="number" value="${Number.isFinite(Number(x.priority)) ? Number(x.priority) : i}"></label>
@@ -1632,6 +1639,19 @@ function renderPicker() {
     </div>`;
   }).join('') : '<div class="model-empty" style="color:var(--muted);font-size:10px">No models selected yet — detect or add one.</div>';
   $$('#modelPicker .model-select').forEach(x => x.onchange = () => x.checked ? editor.selected.add(x.dataset.model) : editor.selected.delete(x.dataset.model));
+  $$('#modelPicker .model-test').forEach(btn => btn.onclick = async () => {
+    const model = btn.dataset.testModel, original = btn.textContent;
+    try {
+      btn.disabled = true; btn.textContent = 'Testing…';
+      const p = readForm();
+      const d = await api('/admin/api/provider-test', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({...payload(p), test_models:[model]})});
+      const result = (d.results || [])[0];
+      btn.textContent = result?.ok ? 'Working' : 'Failed';
+      btn.classList.toggle('model-test-ok', !!result?.ok);
+      btn.classList.toggle('model-test-fail', !result?.ok);
+    } catch (e) { btn.textContent = 'Failed'; btn.classList.add('model-test-fail'); }
+    finally { setTimeout(()=>{btn.disabled=false;},1200); }
+  });
   $$('#modelPicker [data-meta]').forEach(x => x.oninput = () => {
     const m = x.dataset.model, meta = ensureModelMeta(m);
     if (x.dataset.meta === 'aliases') meta.aliases = x.value.split(',').map(v => v.trim()).filter(Boolean);
