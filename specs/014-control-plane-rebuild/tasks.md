@@ -29,3 +29,11 @@
 - [ ] Docker image build; blocked because Docker CLI/daemon is unavailable in the sandbox.
 - [ ] Human visual acceptance with a configured real provider.
 - [ ] Merge/release review; no merge or release performed.
+
+## Live Visual Agent continuation
+
+- [x] Complete current-state audit and event matrix.
+- [x] Add bounded shared frontend execution tracker and Overview renderer.
+- [x] Add LVA sub-spec and acceptance mapping.
+- [ ] Add deterministic real-request/failover browser evidence.
+- [ ] Complete performance evidence, epoch/cursor reconciliation, and human visual acceptance.

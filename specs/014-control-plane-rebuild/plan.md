@@ -23,3 +23,7 @@ Move low-level controls behind explicit Advanced/Expert surfaces. Add keyboard n
 ## Phase 5 — Convergence
 
 Run unit/integration/browser E2E, screenshots from the running application, security/performance checks, requirement matrix, and PR update. Do not release.
+
+## Phase 6 — Live Visual Agent continuation
+
+The bounded LVA sub-spec under `live-visual-agent/` governs event correlation, static execution topology, presentation-only motion, accessibility, reduced motion, and performance evidence. Attempt-start and epoch semantics remain explicit backend capability gates rather than inferred UI behavior.

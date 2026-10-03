@@ -20,3 +20,5 @@
 | R16 | Convergence / Release Review | Requirement matrix PASS/BLOCKED/NOT IMPLEMENTED |
 
 Implementation is bounded by workstream. No merge or release occurs before R16 and human visual acceptance.
+
+| R17 | Live Visual Agent | Shared event tracker, evidence-backed Overview execution surface, bounded motion, accessibility, real-request screenshots, and convergence matrix |

@@ -6,7 +6,7 @@
 
 ## Safe event fields
 
-The Go event bus exposes sequence/epoch/time plus request identity, kind, deployment, message, status, latency, error type and bounded routing metadata. It must not expose authorization keys, provider credentials, raw prompt text or raw response bodies.
+The Go event bus exposes sequence/time plus request identity, kind, deployment, message, status, latency, error type and bounded routing metadata. It must not expose authorization keys, provider credentials, raw prompt text or raw response bodies.
 
 ## Operational kinds
 
@@ -15,3 +15,7 @@ The production lifecycle set is `model_healthy`, `model_failed`, `model_recovere
 ## Client behavior
 
 One SSE owner, one bounded retry loop, no duplicate subscriptions, no aggressive polling. Idle Overview is static. Only real events animate a route path. Hidden tabs pause expensive rendering.
+
+## Live Visual Agent capability boundary
+
+The current `events.Event` wire object exposes `seq` but not `epoch`; the current frontend implementation must therefore deduplicate by sequence within one process and must not claim restart-safe epoch reconciliation. Per-request `route_attempt` is not consistently emitted by the current request path. The Live Visual Agent maps only request-correlated events that are actually emitted and records these gaps in `live-visual-agent/event-mapping.md`.

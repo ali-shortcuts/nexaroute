@@ -32,3 +32,7 @@ No fake data, fake movement, fake health, fake routing, fake credentials, sample
 - SETTINGS-01 through SETTINGS-03 intent/expert separation.
 - A11Y-01 through A11Y-06 keyboard, ARIA, focus, reduced motion, contrast, responsive.
 - E2E-01 through E2E-08 deterministic provider/route/connect/request/activity flow.
+
+## Live Visual Agent additions
+
+The Overview topology is the primary Live Visual Agent surface. See `live-visual-agent/spec.md` for immutable LVA requirements. The agent is idle without real request events, consumes the same normalized execution state as Activity, and never selects or computes routes.
