@@ -6,18 +6,25 @@
 |---|---|---|
 | Go unit/integration suite | PASS | `go test ./...` |
 | HTTP API race suite | PASS | `go test -race ./internal/httpapi` |
-| Go vet | PASS | `go vet ./...` |
-| Embedded binary build | PASS | `CGO_ENABLED=0 go build -o /tmp/nexaroute-v014 ./cmd/gateway` |
+| Full repository verification | PASS | `./scripts/verify.sh` |
+| Go vet | PASS | Included in `verify.sh` |
+| Full race suite | PASS | Included in `verify.sh` |
+| Fuzz checks | PASS | HTTP API and core fuzz targets completed successfully |
+| amd64/arm64 builds | PASS | Included in `verify.sh` |
 | Frontend syntax | PASS | `node --check internal/httpapi/web/app.js` |
 | Diff hygiene | PASS | `git diff --check` |
-| Local UI smoke | PASS | `http://127.0.0.1:19090/` served `NexaRoute`, `/styles.css`, `/app.js`, and five `data-page` items |
-| Local authenticated admin smoke | PASS | Snapshot returned 28 fields; 0 deployments, 0 events and 0 providers in empty config; provider response had no `api_key`, `secret_value` or `password` values |
-| Public UI smoke | PASS | `https://19090-i2dvphx2tj4rke8kcqfw0-fbb19148.us4.manus.computer/` served the new UI |
+| Local UI smoke | PASS | Embedded page served the five-section shell |
+| Local authenticated admin smoke | PASS | Snapshot returned 28 fields; empty provider response contained no `api_key`, `secret_value` or `password` values |
+| Browser E2E | PASS | Real Chromium/Playwright flow covered navigation, provider discovery, provider persistence, route persistence, Settings and Activity |
+| Browser screenshot | PASS | [`control-plane-e2e.png`](control-plane-e2e.png) |
+| Installer E2E | PASS | Clean install, checksum rejection, upgrade and config preservation |
+| Dockerfile static validation | PASS | Required build/runtime directives checked |
+| Public UI smoke | PASS | Temporary public URL served the new UI |
 
-## Limitation
+## Blocked or pending
 
-The sandbox public edge served the page but did not forward the custom `x-admin-key` header to admin API requests; public API checks therefore returned 401/429. The local authenticated API path passed and is the authoritative backend smoke result. Browser E2E screenshots and human visual acceptance remain required before merge/release.
+The Docker image build is **BLOCKED** because Docker CLI/daemon is unavailable in the sandbox. The public edge served the page but did not forward the custom `x-admin-key` header to admin API requests; public API checks therefore returned 401/429. The local authenticated admin API path passed and is the authoritative backend smoke result.
 
-## Not claimed
+Human visual acceptance remains required before merge/release. Browser E2E uses a real running Go backend and real persistence, but provider discovery/check/test calls are intercepted at the browser boundary to avoid contacting a paid external provider. No paid upstream request was generated.
 
-No provider was configured in the smoke environment, so no paid upstream request, model discovery, provider test, route request, or real SSE event was generated. No release or publication was performed.
+No release or publication was performed.

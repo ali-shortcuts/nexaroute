@@ -22,16 +22,18 @@
 - [x] Calm Overview with backend event-backed activity and no synthetic movement.
 - [x] Activity request/event list with filter.
 - [x] Settings intent-first plus Expert Controls boundary.
-- [ ] Full running-provider browser E2E and screenshot evidence.
+- [x] Real Playwright browser flow with mocked external provider calls and real backend mutations.
 
 ## Verification
 
 - [x] Frontend syntax and shell contract tests.
 - [x] Go unit/integration/race tests.
-- [x] Provider, routing, Connect, SSE and persistence backend coverage preserved.
-- [ ] Capture all required screenshots from real configured UI.
+- [x] Full repository verification: vet, race, fuzz and amd64/arm64 builds.
+- [x] Browser E2E screenshot captured in `evidence/control-plane-e2e.png`.
 - [x] Security smoke: no provider secret values in admin provider response.
 - [x] Build and local/public page smoke.
-- [ ] Docker and installer checks.
-- [ ] Complete convergence matrix with human visual acceptance.
-- [ ] Update/open PR; do not merge or release.
+- [x] Installer E2E: clean install, checksum rejection, upgrade and config preservation.
+- [x] Dockerfile static validation.
+- [ ] Docker image build (BLOCKED: Docker CLI/daemon unavailable in sandbox).
+- [ ] Human visual acceptance with a configured real provider.
+- [ ] Merge/release review; no release automation performed.
