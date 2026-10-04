@@ -191,8 +191,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		toolDefs := primary.toolDefs
 		attempts++
 		attemptIndex := attempts - 1
-		// Noisy per-request route_attempt log removed; production observability
-		// uses request_failover/route_changed/model_* lifecycle events only.
+		s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_attempt", Deployment: c.Deployment.ID})
 		start := time.Now()
 		out, winner, hedgeLaunched := s.doAttemptWithHedge(routeCtx, r.Header.Get("x-request-id"), cfg, candidates, i, attempts, max, primary,
 			func(idx int) (hedgeAttemptBundle, bool) {

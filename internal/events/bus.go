@@ -2,11 +2,15 @@ package events
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 )
 
+var epochCounter uint64
+
 type Event struct {
+	Epoch           uint64    `json:"epoch"`
 	Seq             uint64    `json:"seq"`
 	Time            time.Time `json:"time"`
 	RequestID       string    `json:"request_id,omitempty"`
@@ -57,9 +61,8 @@ type Event struct {
 }
 
 // Production log event kinds. Production stderr + bus lifecycle observability
-// is limited to exactly these eight transitions; per-request/per-attempt
-// diagnostic kinds (route_attempt, route_skip, ...) were removed from the
-// request path to eliminate log noise.
+// is limited to exactly these eight transitions. Request-correlated events
+// such as route_attempt remain on the bounded dashboard bus only.
 const (
 	ProductionEventModelHealthy        = "model_healthy"
 	ProductionEventModelFailed         = "model_failed"
@@ -150,6 +153,7 @@ func incrementBoundedCounter(m map[string]uint64, key string) {
 
 type Bus struct {
 	mu          sync.RWMutex
+	epoch       uint64
 	max         int
 	items       []Event
 	start       int
@@ -165,13 +169,20 @@ func New(max int) *Bus {
 	if max < 10 {
 		max = 10
 	}
-	return &Bus{max: max, items: make([]Event, max), counts: map[string]uint64{}, errorCounts: map[string]uint64{}, subscribers: map[uint64]chan Event{}}
+	epoch := uint64(time.Now().UnixNano()) + atomic.AddUint64(&epochCounter, 1)
+	if epoch == 0 {
+		epoch = 1
+	}
+	return &Bus{epoch: epoch, max: max, items: make([]Event, max), counts: map[string]uint64{}, errorCounts: map[string]uint64{}, subscribers: map[uint64]chan Event{}}
 }
 func (b *Bus) Add(e Event) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if e.Time.IsZero() {
 		e.Time = time.Now()
+	}
+	if e.Epoch == 0 {
+		e.Epoch = b.epoch
 	}
 	if e.Seq == 0 {
 		b.nextSeq++

@@ -20,9 +20,12 @@ echo '== mandatory clean race pass =='
 go test -race -timeout=3m -count=1 ./...
 echo '== web ui javascript syntax =='
 node --check internal/httpapi/web/app.js
+node --check internal/httpapi/web/visual-agent.js
 echo '== real browser control-plane acceptance =='
 if command -v chromium >/dev/null 2>&1 && python3 -c 'import playwright' >/dev/null 2>&1; then
   python3 scripts/test-browser-e2e.py
+  echo '== real browser Live Visual Agent acceptance =='
+  python3 scripts/test-live-visual-agent.py
 else
   echo 'WARN: Chromium + Python Playwright unavailable; skipping browser acceptance' >&2
 fi

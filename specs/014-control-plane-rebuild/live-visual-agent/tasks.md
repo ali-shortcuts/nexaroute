@@ -9,8 +9,9 @@
 - [x] Add idle calm state and reduced-motion CSS.
 - [x] Add accessible status equivalent.
 - [x] Bound executions and terminal settle cleanup.
-- [ ] Add cursor/gap/epoch handling consistent with a corrected backend contract.
-- [ ] Add deterministic browser request/failover screenshots from a real running app.
-- [ ] Measure idle/active/burst/long-run/background performance.
+- [x] Add process epoch, cursor resume, sequence-gap snapshot resync, and reconnect.
+- [x] Add request-correlated route_attempt events at primary and hedge boundaries.
+- [x] Add deterministic real-upstream browser request/failover acceptance.
+- [x] Capture idle, failover, success, Activity correlation, and performance evidence.
 - [ ] Complete human visual acceptance.
-- [ ] Update PR #208; do not merge or release.
+- [ ] Update PR review status; do not merge or release automatically.

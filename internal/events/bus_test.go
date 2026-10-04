@@ -125,6 +125,24 @@ func TestEventSequenceIsMonotonicAndResumable(t *testing.T) {
 	}
 }
 
+func TestBusEpochIsStableAndSeparatesInstances(t *testing.T) {
+	first := New(10)
+	second := New(10)
+	first.Add(Event{Kind: "one"})
+	first.Add(Event{Kind: "two"})
+	second.Add(Event{Kind: "one"})
+	firstEvents, secondEvents := first.Snapshot(), second.Snapshot()
+	if firstEvents[0].Epoch == 0 || secondEvents[0].Epoch == 0 {
+		t.Fatal("events must carry a non-zero process epoch")
+	}
+	if firstEvents[0].Epoch != firstEvents[1].Epoch {
+		t.Fatalf("epoch changed within one bus: %+v", firstEvents)
+	}
+	if firstEvents[0].Epoch == secondEvents[0].Epoch {
+		t.Fatalf("independent buses unexpectedly share epoch: %d", firstEvents[0].Epoch)
+	}
+}
+
 func TestLiveSubscribersAreBoundedAndNeverBlockProducers(t *testing.T) {
 	b := New(10)
 	cancels := make([]func(), 0, maxLiveSubscribers)
