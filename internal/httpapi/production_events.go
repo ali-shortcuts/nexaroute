@@ -6,10 +6,8 @@ import (
 
 // Production log event kinds. These are the only structured production log
 // events emitted on the data-plane request path and the recovery path.
-// Legacy diagnostic bus kinds (route_ok, route_fail, failover, probe_*,
-// recovery_*, ...) are retained for backward compatibility with existing
-// dashboards/tests, but per-attempt noisy events (route_attempt, route_skip)
-// were removed so production logs carry only lifecycle transitions.
+// Request-correlated dashboard events (route_attempt, route_ok, route_fail,
+// failover) remain on the bounded bus but are not mirrored to production logs.
 const (
 	ProductionEventModelHealthy        = "model_healthy"
 	ProductionEventModelFailed         = "model_failed"

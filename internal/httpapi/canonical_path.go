@@ -504,8 +504,7 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		start := time.Now()
-		// Noisy per-request route_attempt log removed; production observability
-		// uses request_failover/route_changed/model_* lifecycle events only.
+		s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_attempt", Deployment: deployment.ID})
 		resp, sentPayload, repair, derr := s.doUpstreamWithRepair(
 			routeCtx, r.Header.Get("x-request-id"), bundle.a, deployment,
 			bundle.payload, req.Streaming, forward, dialect, profile,

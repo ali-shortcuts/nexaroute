@@ -1,0 +1,18 @@
+{
+  "idle": {
+    "dom_nodes": 159,
+    "execution_status": "idle",
+    "reduced_motion": true,
+    "heap_bytes": 2135201
+  },
+  "active": {
+    "dom_nodes": 217,
+    "execution_status": "failover",
+    "heap_bytes": 3219610
+  },
+  "success": {
+    "dom_nodes": 211,
+    "execution_status": "success",
+    "heap_bytes": 3338470
+  }
+}

@@ -132,6 +132,7 @@ func (s *Server) hedgedUpstreamDo(
 			return
 		}
 		secondaryLeg = startHedgeLeg(routeCtx, secondary)
+		s.bus.Add(events.Event{RequestID: requestID, Kind: "route_attempt", Deployment: secondaryID, Message: "hedged attempt started"})
 		s.bus.Add(events.Event{RequestID: requestID, Kind: "hedge_launch", Deployment: secondaryID,
 			Message: "primary slow to response headers; racing next eligible deployment"})
 	}
