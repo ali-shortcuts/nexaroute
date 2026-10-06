@@ -105,6 +105,8 @@ def main() -> None:
                 expect(page.locator(".modal-body")).to_contain_text("ANTHROPIC_MODEL")
                 page.locator('[data-action="test-gateway"]').click()
                 expect(page.locator("#connect-test-result")).to_contain_text("Online")
+                page.locator('[data-action="test-api"]').click()
+                expect(page.locator("#api-test-result")).to_contain_text("API online")
                 page.locator('[data-action="close-modal"]').first.click()
                 page.locator('[data-page="settings"]').click()
                 expect(page.locator("#setting-strategy")).to_be_visible()
