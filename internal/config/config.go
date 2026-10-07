@@ -177,6 +177,8 @@ type Config struct {
 	Probe                  ProbeConfig                  `json:"probe"`
 	Cache                  CacheConfig                  `json:"cache"`
 	ClientAuth             ClientAuthConfig             `json:"client_auth"`
+	ControlPlane           ControlPlaneConfig           `json:"control_plane,omitempty"`
+	Guardrails             GuardrailConfig              `json:"guardrails,omitempty"`
 	Evaluation             EvaluationConfig             `json:"evaluation,omitempty"`
 	Decision               DecisionConfig               `json:"decision,omitempty"`
 	DecisionPolicies       []DecisionPolicyConfig       `json:"decision_policies,omitempty"`
@@ -261,9 +263,74 @@ type CacheConfig struct {
 // per-key request-per-minute ceiling. Disabled by default so local single-user
 // deployments keep working without configuration.
 type ClientAuthConfig struct {
-	Enabled bool     `json:"enabled"`
-	Keys    []string `json:"keys"`
-	RPM     int      `json:"rpm"`
+	Enabled     bool               `json:"enabled"`
+	Keys        []string           `json:"keys"`
+	RPM         int                `json:"rpm"`
+	Tenants     []TenantConfig     `json:"tenants,omitempty"`
+	VirtualKeys []VirtualKeyConfig `json:"virtual_keys,omitempty"`
+}
+
+// ControlPlaneConfig enables the optional shared control plane. Connection
+// strings are never stored in durable config; only environment variable names
+// are persisted.
+type ControlPlaneConfig struct {
+	Enabled          bool   `json:"enabled,omitempty"`
+	PostgresDSNEnv   string `json:"postgres_dsn_env,omitempty"`
+	RedisURLEnv      string `json:"redis_url_env,omitempty"`
+	ConfigFailure    string `json:"config_failure,omitempty"`
+	IdentityFailure  string `json:"identity_failure,omitempty"`
+	BudgetFailure    string `json:"budget_failure,omitempty"`
+	RateLimitFailure string `json:"rate_limit_failure,omitempty"`
+}
+
+type GuardrailConfig struct {
+	Mode                  string `json:"mode,omitempty"` // off | audit | block
+	RejectPII             bool   `json:"reject_pii,omitempty"`
+	RejectSecrets         bool   `json:"reject_secrets,omitempty"`
+	RejectPromptInjection bool   `json:"reject_prompt_injection,omitempty"`
+	MaxBodyBytes          int    `json:"max_body_bytes,omitempty"`
+}
+
+// TenantConfig is the isolation boundary for consumer data-plane access.
+// The gateway keeps this metadata local and secret-free; deployments that need
+// shared identity state can later project it into a durable control plane.
+type TenantConfig struct {
+	ID       string          `json:"id"`
+	Name     string          `json:"name,omitempty"`
+	Projects []ProjectConfig `json:"projects,omitempty"`
+}
+
+type ProjectConfig struct {
+	ID            string       `json:"id"`
+	Name          string       `json:"name,omitempty"`
+	Teams         []TeamConfig `json:"teams,omitempty"`
+	AllowedModels []string     `json:"allowed_models,omitempty"`
+	AllowedRoutes []string     `json:"allowed_routes,omitempty"`
+}
+
+type TeamConfig struct {
+	ID            string   `json:"id"`
+	Name          string   `json:"name,omitempty"`
+	AllowedModels []string `json:"allowed_models,omitempty"`
+	AllowedRoutes []string `json:"allowed_routes,omitempty"`
+}
+
+// VirtualKeyConfig stores only the SHA-256 digest of a consumer key. The
+// plaintext is returned exactly once by the admin create/rotate operation.
+type VirtualKeyConfig struct {
+	ID            string   `json:"id"`
+	Name          string   `json:"name,omitempty"`
+	KeyHash       string   `json:"key_hash"`
+	TenantID      string   `json:"tenant_id,omitempty"`
+	ProjectID     string   `json:"project_id,omitempty"`
+	TeamID        string   `json:"team_id,omitempty"`
+	Role          string   `json:"role,omitempty"`
+	AllowedModels []string `json:"allowed_models,omitempty"`
+	AllowedRoutes []string `json:"allowed_routes,omitempty"`
+	ExpiresAt     string   `json:"expires_at,omitempty"`
+	Revoked       bool     `json:"revoked,omitempty"`
+	RPM           int      `json:"rpm,omitempty"`
+	TPM           int      `json:"tpm,omitempty"`
 }
 
 type ProbeConfig struct {
@@ -458,6 +525,20 @@ func validHeaderValue(s string) bool {
 	return true
 }
 
+func validEnvName(s string) bool {
+	if s == "" || len(s) > 256 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (i > 0 && c >= '0' && c <= '9') || c == '_' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
 func Default() Config {
 	return Config{
 		Listen: "127.0.0.1:8080",
@@ -480,6 +561,7 @@ func Default() Config {
 		Probe:                  ProbeConfig{Enabled: true, OnStart: true, IntervalSeconds: 120, ReadyLeaseSeconds: 300, TimeoutMS: 8000, MaxTokens: 1, Concurrency: 16, RecoveryAttempts: 5, RecoveryRetryMS: 500, CapabilityProbes: true},
 		Cache:                  CacheConfig{Enabled: false, TTLSeconds: 300, MaxEntries: 256, MaxBodyBytes: 1 << 20},
 		ClientAuth:             ClientAuthConfig{Enabled: false, RPM: 0},
+		Guardrails:             GuardrailConfig{Mode: "off", MaxBodyBytes: 2 << 20},
 		Decision:               DecisionConfig{Mode: "off", Provider: "local", TimeoutMS: 10},
 		Evaluation:             EvaluationConfig{Enabled: false, MaxRuns: 64, MaxScorecards: 1024, MaxArtifacts: 128},
 		DecisionProviderHealth: DecisionProviderHealthConfig{FailureThreshold: 3, FailureWindowSeconds: 30, CooldownSeconds: 60},
@@ -610,6 +692,26 @@ func (c Config) ValidateStrict() error {
 
 func (c *Config) ApplyDefaults() {
 	c.ClientBaseURL = strings.TrimRight(strings.TrimSpace(c.ClientBaseURL), "/")
+	if c.ControlPlane.Enabled {
+		if c.ControlPlane.ConfigFailure == "" {
+			c.ControlPlane.ConfigFailure = "last_known_good"
+		}
+		if c.ControlPlane.IdentityFailure == "" {
+			c.ControlPlane.IdentityFailure = "fail_closed"
+		}
+		if c.ControlPlane.BudgetFailure == "" {
+			c.ControlPlane.BudgetFailure = "fail_closed"
+		}
+		if c.ControlPlane.RateLimitFailure == "" {
+			c.ControlPlane.RateLimitFailure = "fail_closed"
+		}
+	}
+	if c.Guardrails.Mode == "" {
+		c.Guardrails.Mode = "off"
+	}
+	if c.Guardrails.MaxBodyBytes == 0 {
+		c.Guardrails.MaxBodyBytes = 2 << 20
+	}
 	if c.Listen == "" {
 		c.Listen = "127.0.0.1:8080"
 		c.warnDefault("listen", "not set; defaulted to 127.0.0.1:8080")
@@ -1080,8 +1182,14 @@ func (c Config) Validate() error {
 	if c.Cache.MaxBodyBytes < 1024 || c.Cache.MaxBodyBytes > 64<<20 {
 		return errors.New("cache.max_body_bytes must be between 1024 and 67108864")
 	}
+	if c.Guardrails.Mode != "off" && c.Guardrails.Mode != "audit" && c.Guardrails.Mode != "block" {
+		return errors.New("guardrails.mode must be off, audit, or block")
+	}
+	if c.Guardrails.MaxBodyBytes < 1024 || c.Guardrails.MaxBodyBytes > 64<<20 {
+		return errors.New("guardrails.max_body_bytes must be between 1024 and 67108864")
+	}
 	if c.ClientAuth.Enabled {
-		if len(c.ClientAuth.Keys) == 0 {
+		if len(c.ClientAuth.Keys) == 0 && len(c.ClientAuth.VirtualKeys) == 0 {
 			return errors.New("client_auth.keys must not be empty when client_auth is enabled")
 		}
 		if len(c.ClientAuth.Keys) > 1024 {
@@ -1094,6 +1202,79 @@ func (c Config) Validate() error {
 		}
 		if c.ClientAuth.RPM < 0 || c.ClientAuth.RPM > 1000000 {
 			return errors.New("client_auth.rpm must be between 0 and 1000000")
+		}
+	}
+	if c.ControlPlane.Enabled {
+		if !validEnvName(c.ControlPlane.PostgresDSNEnv) || !validEnvName(c.ControlPlane.RedisURLEnv) {
+			return errors.New("control_plane requires valid postgres_dsn_env and redis_url_env names")
+		}
+		for name, mode := range map[string]string{
+			"control_plane.config_failure":     c.ControlPlane.ConfigFailure,
+			"control_plane.identity_failure":   c.ControlPlane.IdentityFailure,
+			"control_plane.budget_failure":     c.ControlPlane.BudgetFailure,
+			"control_plane.rate_limit_failure": c.ControlPlane.RateLimitFailure,
+		} {
+			if mode != "fail_open" && mode != "fail_closed" && mode != "last_known_good" {
+				return fmt.Errorf("%s must be fail_open, fail_closed, or last_known_good", name)
+			}
+		}
+	}
+	if len(c.ClientAuth.Tenants) > 1024 {
+		return errors.New("client_auth.tenants exceeds safe limit 1024")
+	}
+	if len(c.ClientAuth.VirtualKeys) > 10000 {
+		return errors.New("client_auth.virtual_keys exceeds safe limit 10000")
+	}
+	seenTenants := map[string]bool{}
+	for _, tenant := range c.ClientAuth.Tenants {
+		if !validLocalID(tenant.ID) || len(tenant.ID) > maxStringIDBytes {
+			return fmt.Errorf("client_auth.tenant id %q is invalid", tenant.ID)
+		}
+		if seenTenants[tenant.ID] {
+			return fmt.Errorf("duplicate client_auth.tenant id %q", tenant.ID)
+		}
+		seenTenants[tenant.ID] = true
+		seenProjects := map[string]bool{}
+		for _, project := range tenant.Projects {
+			if !validLocalID(project.ID) || len(project.ID) > maxStringIDBytes {
+				return fmt.Errorf("client_auth.project id %q is invalid", project.ID)
+			}
+			if seenProjects[project.ID] {
+				return fmt.Errorf("duplicate project id %q in tenant %q", project.ID, tenant.ID)
+			}
+			seenProjects[project.ID] = true
+			seenTeams := map[string]bool{}
+			for _, team := range project.Teams {
+				if !validLocalID(team.ID) || seenTeams[team.ID] {
+					return fmt.Errorf("invalid or duplicate team id %q in project %q", team.ID, project.ID)
+				}
+				seenTeams[team.ID] = true
+			}
+		}
+	}
+	seenKeys := map[string]bool{}
+	for _, key := range c.ClientAuth.VirtualKeys {
+		if !validLocalID(key.ID) || seenKeys[key.ID] {
+			return fmt.Errorf("invalid or duplicate client_auth.virtual_key id %q", key.ID)
+		}
+		seenKeys[key.ID] = true
+		if len(key.KeyHash) != 64 {
+			return fmt.Errorf("client_auth.virtual_key %q key_hash must be SHA-256 hex", key.ID)
+		}
+		for _, role := range []string{"owner", "admin", "operator", "developer", "viewer"} {
+			if key.Role == role {
+				goto validRole
+			}
+		}
+		if key.Role != "" {
+			return fmt.Errorf("client_auth.virtual_key %q has unsupported role %q", key.ID, key.Role)
+		}
+	validRole:
+		if key.RPM < 0 || key.RPM > 1000000 {
+			return fmt.Errorf("client_auth.virtual_key %q rpm must be between 0 and 1000000", key.ID)
+		}
+		if key.TPM < 0 || key.TPM > 1000000000 {
+			return fmt.Errorf("client_auth.virtual_key %q tpm must be between 0 and 1000000000", key.ID)
 		}
 	}
 	for name, v := range map[string]float64{

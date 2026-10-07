@@ -11,6 +11,31 @@ NEXAROUTE_LOG_FILE                override bounded log path; "off" disables the 
 NEXAROUTE_STRICT_CONFIG           true/false opt-in strict config validation (see below)
 ```
 
+## Optional shared control plane
+
+The shared control plane is disabled by default. When enabled, connection
+strings are read only from environment variables named by the durable config;
+the connection strings themselves are never written to JSON:
+
+```json
+{
+  "control_plane": {
+    "enabled": true,
+    "postgres_dsn_env": "NEXAROUTE_PG_DSN",
+    "redis_url_env": "NEXAROUTE_REDIS_URL",
+    "config_failure": "last_known_good",
+    "identity_failure": "fail_closed",
+    "budget_failure": "fail_closed",
+    "rate_limit_failure": "fail_closed"
+  }
+}
+```
+
+The supported failure modes are `fail_open`, `fail_closed`, and
+`last_known_good`. The PostgreSQL migration runner uses an advisory lock and
+checksum verification. Runtime connection wiring is opt-in and must not be
+enabled without PostgreSQL/Redis availability and integration tests.
+
 ## Implicit-default warnings and opt-in strict config
 
 When a config value is absent or set to an invalid zero value, NexaRoute

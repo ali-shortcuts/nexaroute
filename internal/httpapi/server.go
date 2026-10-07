@@ -49,6 +49,9 @@ type Server struct {
 	log             *log.Logger
 	requestSeq      atomic.Uint64
 	requestTotal    atomic.Uint64
+	configRevision  atomic.Uint64
+	configHistory   []config.Config
+	draining        atomic.Bool
 	inflight        atomic.Int64
 	overloadRejects atomic.Uint64
 	adminRL         sync.Mutex
@@ -61,6 +64,7 @@ type Server struct {
 	respCache            *cache.Cache
 	cacheGeneration      uint64 // guarded by runtimeMu; scopes cache keys to a config snapshot
 	usage                *usage.Tracker
+	identityUsage        *usage.IdentityTracker
 	capStore             *compat.Store
 	routeResolver        *route.Resolver
 	// Phase H: evaluation plane (scorecards + deterministic evaluation). Admin
@@ -185,9 +189,11 @@ func New(cfg config.Config, configPath string, reg *providers.Registry, rt *rout
 		respCache:       cache.New(cfg.CacheTTL(), cfg.Cache.MaxEntries, int64(cfg.Cache.MaxBodyBytes)),
 		cacheGeneration: 1,
 		usage:           usage.New(),
+		identityUsage:   usage.NewIdentityTracker(),
 		capStore:        compat.NewStore(),
 		taskClassCounts: make(map[string]uint64, 32),
 	}
+	s.configRevision.Store(1)
 	s.decisionRegistry = decision.NewRegistry()
 	// Phase E: register deterministic policy provider
 	policies := convertDecisionPolicies(cfg.DecisionPolicies)
@@ -288,6 +294,24 @@ func (s *Server) adminConfigSnapshot() config.AdminConfig {
 func cloneConfig(in config.Config) config.Config {
 	out := in
 	out.ClientAuth.Keys = append([]string(nil), in.ClientAuth.Keys...)
+	out.ClientAuth.VirtualKeys = append([]config.VirtualKeyConfig(nil), in.ClientAuth.VirtualKeys...)
+	out.ClientAuth.Tenants = append([]config.TenantConfig(nil), in.ClientAuth.Tenants...)
+	for i := range out.ClientAuth.Tenants {
+		out.ClientAuth.Tenants[i].Projects = append([]config.ProjectConfig(nil), in.ClientAuth.Tenants[i].Projects...)
+		for j := range out.ClientAuth.Tenants[i].Projects {
+			out.ClientAuth.Tenants[i].Projects[j].Teams = append([]config.TeamConfig(nil), in.ClientAuth.Tenants[i].Projects[j].Teams...)
+			out.ClientAuth.Tenants[i].Projects[j].AllowedModels = append([]string(nil), in.ClientAuth.Tenants[i].Projects[j].AllowedModels...)
+			out.ClientAuth.Tenants[i].Projects[j].AllowedRoutes = append([]string(nil), in.ClientAuth.Tenants[i].Projects[j].AllowedRoutes...)
+			for k := range out.ClientAuth.Tenants[i].Projects[j].Teams {
+				out.ClientAuth.Tenants[i].Projects[j].Teams[k].AllowedModels = append([]string(nil), in.ClientAuth.Tenants[i].Projects[j].Teams[k].AllowedModels...)
+				out.ClientAuth.Tenants[i].Projects[j].Teams[k].AllowedRoutes = append([]string(nil), in.ClientAuth.Tenants[i].Projects[j].Teams[k].AllowedRoutes...)
+			}
+		}
+	}
+	for i := range out.ClientAuth.VirtualKeys {
+		out.ClientAuth.VirtualKeys[i].AllowedModels = append([]string(nil), in.ClientAuth.VirtualKeys[i].AllowedModels...)
+		out.ClientAuth.VirtualKeys[i].AllowedRoutes = append([]string(nil), in.ClientAuth.VirtualKeys[i].AllowedRoutes...)
+	}
 	out.Providers = append([]config.ProviderConfig(nil), in.Providers...)
 	for i := range out.Providers {
 		if in.Providers[i].Headers != nil {
@@ -700,11 +724,20 @@ func (s *Server) mutateConfig(fn func(*config.Config) error) (config.Config, err
 	if err := fn(&cfg); err != nil {
 		return config.Config{}, err
 	}
+	if len(s.configHistory) >= 8 {
+		s.configHistory = append(s.configHistory[1:], cloneConfig(s.baseCfg))
+	} else {
+		s.configHistory = append(s.configHistory, cloneConfig(s.baseCfg))
+	}
 	if err := s.applyConfigLocked(cfg); err != nil {
+		s.configHistory = s.configHistory[:len(s.configHistory)-1]
 		return config.Config{}, err
 	}
+	s.configRevision.Add(1)
 	return cfg, nil
 }
+
+func (s *Server) currentConfigRevision() uint64 { return s.configRevision.Load() }
 
 // routeSnapshot returns the request-path view of the runtime config. The
 // map/slice-bearing fields (Providers) are stripped: unlike currentConfig()
@@ -848,6 +881,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/admin/api/compat/reset", s.adminCompatReset)
 	mux.HandleFunc("/admin/api/provider-discover", s.adminProviderDiscover)
 	mux.HandleFunc("/admin/api/settings", s.adminSettings)
+	mux.HandleFunc("/admin/api/client-keys", s.adminClientKeys)
+	mux.HandleFunc("/admin/api/client-keys/", s.adminClientKeyByID)
+	mux.HandleFunc("/admin/api/usage/identities", s.adminIdentityUsage)
+	mux.HandleFunc("/admin/api/config/history", s.adminConfigHistory)
+	mux.HandleFunc("/admin/api/drain", s.adminDrain)
 	// Phase B: Virtual Endpoints, Route Profiles, Candidate Pools, Fallback Chains
 	mux.HandleFunc("/admin/api/virtual-endpoints", s.adminVirtualEndpoints)
 	mux.HandleFunc("/admin/api/virtual-endpoints/", s.adminVirtualEndpointByID)
@@ -975,7 +1013,12 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 			rid = fmt.Sprintf("nexaroute-%x-%x", time.Now().UnixNano(), s.requestSeq.Add(1))
 			r.Header.Set("x-request-id", rid)
 		}
+		trace := newTraceContext(r.Header.Get("traceparent"))
+		r = r.WithContext(withTrace(r.Context(), trace))
+		r.Header.Set("traceparent", trace.Traceparent())
 		w.Header().Set("x-request-id", rid)
+		w.Header().Set("traceparent", trace.Traceparent())
+		w.Header().Set("x-trace-id", trace.TraceID)
 		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
 		defer func() {
 			if recovered := recover(); recovered != nil {
@@ -991,7 +1034,7 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 			duration := time.Since(start)
 			streaming := strings.Contains(strings.ToLower(sw.Header().Get("Content-Type")), "text/event-stream")
 			if s.shouldLogRequest(sw.status, duration, streaming, requestNumber) {
-				s.log.Printf("request_id=%s method=%s path=%s status=%d duration=%s", rid, r.Method, r.URL.Path, sw.status, duration)
+				s.log.Printf("request_id=%s trace_id=%s span_id=%s method=%s path=%s status=%d duration=%s", rid, trace.TraceID, trace.SpanID, r.Method, r.URL.Path, sw.status, duration)
 			}
 		}()
 		if strings.HasPrefix(r.URL.Path, "/admin/api/") {
@@ -1012,6 +1055,11 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 				errorJSON(sw, http.StatusUnauthorized, "admin authorization required")
 				return
 			}
+		}
+		if isDataPlaneRequest(r) && s.draining.Load() {
+			sw.Header().Set("Retry-After", "5")
+			errorJSON(sw, http.StatusServiceUnavailable, "gateway is draining; retry on another instance")
+			return
 		}
 		if isDataPlaneRequest(r) {
 			if !s.tryAcquireDataPlane() {

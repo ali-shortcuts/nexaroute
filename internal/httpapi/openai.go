@@ -375,29 +375,29 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 			// the IR and re-encoded for the OpenAI client.
 			if in.Stream {
 				e = s.canonicalStreamPump(w, resp, kind, "openai_chat", in.Model, r.Header.Get("x-request-id"), toolDefs,
-					func(input, output int) { s.usage.Record(c.Deployment.ID, int64(input), int64(output)) })
+					func(input, output int) { s.recordUsage(r, c.Deployment.ID, int64(input), int64(output)) })
 			} else {
 				e = s.handleCanonicalResponse(w, resp, kind, "openai_chat", in.Model, r.Header.Get("x-request-id"), false, toolDefs,
-					func(input, output int) { s.usage.Record(c.Deployment.ID, int64(input), int64(output)) })
+					func(input, output int) { s.recordUsage(r, c.Deployment.ID, int64(input), int64(output)) })
 			}
 		case c.Deployment.ProviderType == "openai_compatible":
 			if in.Stream {
 				e = proxyNativeSSE(w, resp, "openai", func(prompt, completion int) {
-					s.usage.Record(c.Deployment.ID, int64(prompt), int64(completion))
+					s.recordUsage(r, c.Deployment.ID, int64(prompt), int64(completion))
 				})
 			} else {
-				e = s.proxyOpenAINativeJSON(w, resp, c.Deployment.ID, cacheKey, cacheGeneration, cacheable)
+				e = s.proxyOpenAINativeJSON(w, r, resp, c.Deployment.ID, cacheKey, cacheGeneration, cacheable)
 			}
 		case in.Stream:
 			e = streamAnthropicToOpenAIWithUsage(w, resp, in.Model, nm, func(prompt, completion int) {
-				s.usage.Record(c.Deployment.ID, int64(prompt), int64(completion))
+				s.recordUsage(r, c.Deployment.ID, int64(prompt), int64(completion))
 			}, r.Header.Get("x-request-id"))
 		default:
 			var an core.AnthResponse
 			e = decodeValidatedJSONLimited(resp.Body, &an, validateAnthropicResponseJSON)
 			resp.Body.Close()
 			if e == nil {
-				s.usage.Record(c.Deployment.ID, int64(an.Usage.InputTokens), int64(an.Usage.OutputTokens))
+				s.recordUsage(r, c.Deployment.ID, int64(an.Usage.InputTokens), int64(an.Usage.OutputTokens))
 				translated := translate.AnthropicResponseToOpenAI(an, in.Model, nm)
 				if b, merr := json.Marshal(translated); merr == nil {
 					s.cacheStoreResponse(cacheKey, cacheGeneration, cacheable, c.Deployment.ID, 200, "application/json", b)

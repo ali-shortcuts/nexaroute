@@ -618,10 +618,10 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 		var usageErr error
 		if canReq.Stream {
 			usageErr = s.canonicalStreamPump(w, resp, bundle.canonicalKind, "openai_responses", in.Model, r.Header.Get("x-request-id"), bundle.toolDefs,
-				func(input, output int) { s.usage.Record(deploy.ID, int64(input), int64(output)) })
+				func(input, output int) { s.recordUsage(r, deploy.ID, int64(input), int64(output)) })
 		} else {
 			usageErr = s.handleCanonicalResponse(w, resp, bundle.canonicalKind, "openai_responses", in.Model, r.Header.Get("x-request-id"), false, bundle.toolDefs,
-				func(input, output int) { s.usage.Record(deploy.ID, int64(input), int64(output)) })
+				func(input, output int) { s.recordUsage(r, deploy.ID, int64(input), int64(output)) })
 		}
 		total := time.Since(start)
 		if usageErr != nil {

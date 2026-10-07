@@ -381,15 +381,15 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 			// canonical events/blocks and re-encode for the Anthropic client.
 			if in.Stream {
 				e = s.canonicalStreamPump(w, resp, kind, "anthropic", in.Model, r.Header.Get("x-request-id"), toolDefs,
-					func(input, output int) { s.usage.Record(c.Deployment.ID, int64(input), int64(output)) })
+					func(input, output int) { s.recordUsage(r, c.Deployment.ID, int64(input), int64(output)) })
 			} else {
 				e = s.handleCanonicalResponse(w, resp, kind, "anthropic", in.Model, r.Header.Get("x-request-id"), false, toolDefs,
-					func(input, output int) { s.usage.Record(c.Deployment.ID, int64(input), int64(output)) })
+					func(input, output int) { s.recordUsage(r, c.Deployment.ID, int64(input), int64(output)) })
 			}
 		case c.Deployment.ProviderType == "anthropic_compatible":
 			if in.Stream {
 				e = proxyNativeSSEWithModel(w, resp, "anthropic", in.Model, func(prompt, completion int) {
-					s.usage.Record(c.Deployment.ID, int64(prompt), int64(completion))
+					s.recordUsage(r, c.Deployment.ID, int64(prompt), int64(completion))
 				})
 			} else {
 				var b []byte
@@ -403,7 +403,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 				}
 				if e == nil {
 					if p, ct, ok := extractAnthropicUsage(b); ok {
-						s.usage.Record(c.Deployment.ID, int64(p), int64(ct))
+						s.recordUsage(r, c.Deployment.ID, int64(p), int64(ct))
 					}
 					s.cacheStoreResponse(cacheKey, cacheGeneration, cacheable, c.Deployment.ID, resp.StatusCode, "application/json", b)
 					copyUpstreamResponseHeaders(w, resp, false)
@@ -413,14 +413,14 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 			}
 		case in.Stream:
 			e = streamOpenAIToAnthropicWithUsage(w, resp, in.Model, nm, func(prompt, completion int) {
-				s.usage.Record(c.Deployment.ID, int64(prompt), int64(completion))
+				s.recordUsage(r, c.Deployment.ID, int64(prompt), int64(completion))
 			}, r.Header.Get("x-request-id"))
 		default:
 			var o core.OpenAIResponse
 			e = decodeValidatedJSONLimited(resp.Body, &o, validateOpenAIResponseJSON)
 			resp.Body.Close()
 			if e == nil {
-				s.usage.Record(c.Deployment.ID, int64(o.Usage.PromptTokens), int64(o.Usage.CompletionTokens))
+				s.recordUsage(r, c.Deployment.ID, int64(o.Usage.PromptTokens), int64(o.Usage.CompletionTokens))
 				var translated core.AnthResponse
 				translated, e = translate.OpenAIResponseToAnthropic(o, in.Model, nm)
 				if e == nil {

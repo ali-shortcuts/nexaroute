@@ -1,6 +1,15 @@
 {
 	"listen": "127.0.0.1:8080",
 	"client_base_url": "",
+	"control_plane": {
+	  "enabled": false,
+	  "postgres_dsn_env": "NEXAROUTE_PG_DSN",
+	  "redis_url_env": "NEXAROUTE_REDIS_URL",
+	  "config_failure": "last_known_good",
+	  "identity_failure": "fail_closed",
+	  "budget_failure": "fail_closed",
+	  "rate_limit_failure": "fail_closed"
+	},
 	"admin": {
     "bind_local_only": true,
     "api_key": ""

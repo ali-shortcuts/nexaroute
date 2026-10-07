@@ -408,6 +408,11 @@ func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 405, "method not allowed")
 		return
 	}
+	if s.draining.Load() {
+		w.Header().Set("Retry-After", "5")
+		errorJSON(w, http.StatusServiceUnavailable, "gateway is draining")
+		return
+	}
 	routingCfg, _ := s.runtimeSettingsSnapshot()
 	total, usable := s.rt.Readiness(routingCfg.Strategy)
 	if total == 0 {

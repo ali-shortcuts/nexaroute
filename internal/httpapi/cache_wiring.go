@@ -125,7 +125,7 @@ func (s *Server) cacheStoreResponse(key string, generation uint64, cacheable boo
 
 // proxyOpenAINativeJSON performs the validated non-stream passthrough while
 // observing real usage and feeding the response cache.
-func (s *Server) proxyOpenAINativeJSON(w http.ResponseWriter, resp *http.Response, deploymentID, cacheKey string, generation uint64, cacheable bool) error {
+func (s *Server) proxyOpenAINativeJSON(w http.ResponseWriter, r *http.Request, resp *http.Response, deploymentID, cacheKey string, generation uint64, cacheable bool) error {
 	defer resp.Body.Close()
 	b, err := readJSONLimited(resp.Body)
 	if err != nil {
@@ -135,7 +135,7 @@ func (s *Server) proxyOpenAINativeJSON(w http.ResponseWriter, resp *http.Respons
 		return err
 	}
 	if p, c, ok := extractOpenAIUsage(b); ok {
-		s.usage.Record(deploymentID, int64(p), int64(c))
+		s.recordUsage(r, deploymentID, int64(p), int64(c))
 	}
 	s.cacheStoreResponse(cacheKey, generation, cacheable, deploymentID, resp.StatusCode, "application/json", b)
 	copyUpstreamResponseHeaders(w, resp, false)

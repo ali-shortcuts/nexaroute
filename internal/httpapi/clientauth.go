@@ -1,26 +1,23 @@
 package httpapi
 
 import (
+	"bytes"
+	"context"
+	"crypto/rand"
 	"crypto/sha256"
-	"crypto/subtle"
+	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
-)
 
-// Client API keys (opt-in)
-//
-// Cloudflare AI Gateway, Kong and BricksLLM all gate the data plane with
-// per-client keys and per-client rate ceilings. NexaRoute keeps local
-// single-user deployments frictionless by default, but operators exposing the
-// gateway beyond loopback can enable static key authentication with an
-// optional per-key request-per-minute ceiling without deploying a reverse
-// proxy just for auth.
-//
-// Comparison is constant-time over SHA-256 digests so timing cannot reveal a
-// configured key. Buckets are bounded and idle-pruned like the admin buckets.
+	"github.com/ali-shortcuts/nexaroute/internal/config"
+	"github.com/ali-shortcuts/nexaroute/internal/events"
+	"github.com/ali-shortcuts/nexaroute/internal/guardrail"
+)
 
 const (
 	clientBucketIdle = 10 * time.Minute
@@ -35,6 +32,31 @@ type clientBucket struct {
 type clientAuthState struct {
 	mu      sync.Mutex
 	buckets map[string]*clientBucket
+}
+
+type clientIdentity struct {
+	ID        string
+	TenantID  string
+	ProjectID string
+	TeamID    string
+	Role      string
+	Virtual   bool
+}
+
+type clientIdentityContextKey struct{}
+
+func clientIdentityFromRequest(r *http.Request) (clientIdentity, bool) {
+	v, ok := r.Context().Value(clientIdentityContextKey{}).(clientIdentity)
+	return v, ok
+}
+
+func newVirtualClientKey() (string, string, error) {
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		return "", "", err
+	}
+	plain := "nrk_" + base64.RawURLEncoding.EncodeToString(buf)
+	return plain, keyDigest(plain), nil
 }
 
 func (s *Server) clientAuthConfig() (bool, []string, int) {
@@ -61,19 +83,180 @@ func keyDigest(key string) string {
 	return hex.EncodeToString(h[:])
 }
 
-// clientKeyMatches reports whether the presented key matches any configured
-// key in constant time relative to the configured key count (which is public
-// configuration, not secret material).
 func clientKeyMatches(keys []string, presented string) bool {
 	digest := keyDigest(presented)
 	matched := 0
 	for _, k := range keys {
 		want := keyDigest(k)
-		if subtle.ConstantTimeCompare([]byte(want), []byte(digest)) == 1 {
+		if subtleConstantTimeCompare(want, digest) {
 			matched++
 		}
 	}
 	return matched > 0
+}
+
+// Kept as a tiny wrapper so the key comparison policy is easy to audit.
+func subtleConstantTimeCompare(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	var diff byte
+	for i := range a {
+		diff |= a[i] ^ b[i]
+	}
+	return diff == 0
+}
+
+func (s *Server) findClientIdentity(presented string) (clientIdentity, config.VirtualKeyConfig, bool) {
+	cfg := s.currentConfig()
+	digest := keyDigest(presented)
+	now := time.Now().UTC()
+	for _, key := range cfg.ClientAuth.VirtualKeys {
+		if key.Revoked || !subtleConstantTimeCompare(key.KeyHash, digest) {
+			continue
+		}
+		if key.ExpiresAt != "" {
+			if expiry, err := time.Parse(time.RFC3339, key.ExpiresAt); err != nil || !now.Before(expiry) {
+				continue
+			}
+		}
+		return clientIdentity{ID: key.ID, TenantID: key.TenantID, ProjectID: key.ProjectID, TeamID: key.TeamID, Role: key.Role, Virtual: true}, key, true
+	}
+	if clientKeyMatches(cfg.ClientAuth.Keys, presented) {
+		return clientIdentity{ID: "legacy", Role: "admin"}, config.VirtualKeyConfig{}, true
+	}
+	return clientIdentity{}, config.VirtualKeyConfig{}, false
+}
+
+func requestModel(r *http.Request) string {
+	if r.Body == nil || r.Method == http.MethodGet || r.Method == http.MethodHead {
+		return ""
+	}
+	b, err := io.ReadAll(io.LimitReader(r.Body, 2<<20))
+	if err != nil {
+		return ""
+	}
+	r.Body = io.NopCloser(bytes.NewReader(b))
+	var envelope struct {
+		Model string `json:"model"`
+	}
+	if json.Unmarshal(b, &envelope) != nil {
+		return ""
+	}
+	return strings.TrimSpace(envelope.Model)
+}
+
+func requestTokenEstimate(r *http.Request) int {
+	if r.Body == nil {
+		return 1
+	}
+	b, err := io.ReadAll(io.LimitReader(r.Body, 2<<20))
+	if err != nil {
+		return 1
+	}
+	r.Body = io.NopCloser(bytes.NewReader(b))
+	var envelope struct {
+		MaxTokens       int `json:"max_tokens"`
+		MaxOutputTokens int `json:"max_output_tokens"`
+	}
+	_ = json.Unmarshal(b, &envelope)
+	output := envelope.MaxTokens
+	if envelope.MaxOutputTokens > output {
+		output = envelope.MaxOutputTokens
+	}
+	estimate := len(b)/4 + output
+	if estimate < 1 {
+		estimate = 1
+	}
+	if estimate > 1<<30 {
+		estimate = 1 << 30
+	}
+	return estimate
+}
+
+func (s *Server) applyGuardrails(w http.ResponseWriter, r *http.Request, anthropicStyle bool) bool {
+	cfg := s.currentConfig().Guardrails
+	if cfg.Mode == "off" || r.Body == nil {
+		return true
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, int64(cfg.MaxBodyBytes)+1))
+	r.Body = io.NopCloser(bytes.NewReader(body))
+	if err != nil || len(body) > cfg.MaxBodyBytes {
+		if anthropicStyle {
+			anthropicErrorJSON(w, http.StatusRequestEntityTooLarge, "request exceeds guardrail body limit")
+		} else {
+			errorJSON(w, http.StatusRequestEntityTooLarge, "request exceeds guardrail body limit")
+		}
+		return false
+	}
+	findings := guardrail.Scan(body)
+	filtered := findings[:0]
+	for _, finding := range findings {
+		if strings.HasPrefix(finding.Kind, "pii_") && cfg.RejectPII || finding.Kind == "secret_api_key" && cfg.RejectSecrets || finding.Kind == "prompt_injection" && cfg.RejectPromptInjection {
+			filtered = append(filtered, finding)
+		}
+	}
+	findings = filtered
+	if len(findings) == 0 {
+		return true
+	}
+	if cfg.Mode == "audit" {
+		s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "guardrail_audit", Message: "request matched privacy/safety guardrail"})
+		return true
+	}
+	if anthropicStyle {
+		anthropicErrorJSON(w, http.StatusForbidden, "request blocked by gateway guardrail")
+	} else {
+		errorJSON(w, http.StatusForbidden, "request blocked by gateway guardrail")
+	}
+	return false
+}
+
+func listAllows(list []string, value string) bool {
+	if len(list) == 0 {
+		return true
+	}
+	for _, item := range list {
+		if item == "*" || item == value {
+			return true
+		}
+	}
+	return false
+}
+
+func identityPolicyAllows(cfg config.Config, id clientIdentity, key config.VirtualKeyConfig, path, model string) bool {
+	if !id.Virtual {
+		return true
+	}
+	models := append([]string(nil), key.AllowedModels...)
+	routes := append([]string(nil), key.AllowedRoutes...)
+	for _, tenant := range cfg.ClientAuth.Tenants {
+		if tenant.ID != key.TenantID {
+			continue
+		}
+		for _, project := range tenant.Projects {
+			if project.ID != key.ProjectID {
+				continue
+			}
+			if len(models) == 0 {
+				models = project.AllowedModels
+			}
+			if len(routes) == 0 {
+				routes = project.AllowedRoutes
+			}
+			for _, team := range project.Teams {
+				if team.ID == key.TeamID {
+					if len(models) == 0 {
+						models = team.AllowedModels
+					}
+					if len(routes) == 0 {
+						routes = team.AllowedRoutes
+					}
+				}
+			}
+		}
+	}
+	return listAllows(routes, path) && listAllows(models, model)
 }
 
 // clientRPMAllow enforces the per-key requests-per-minute ceiling with a
@@ -115,15 +298,43 @@ func (s *Server) clientRPMAllow(presented string, rpm int) bool {
 	return true
 }
 
-// clientAuthAllowed gates one data-plane request. It writes the protocol
-// shaped error itself and returns false when the request must stop.
+func (s *Server) clientTPMAllow(presented string, tpm, estimated int) bool {
+	if tpm <= 0 || estimated <= 0 {
+		return true
+	}
+	id := keyDigest(presented) + "#tpm"
+	now := time.Now()
+	s.clientRL.Lock()
+	defer s.clientRL.Unlock()
+	if s.clientBuckets == nil {
+		s.clientBuckets = map[string]*clientBucket{}
+	}
+	capacity := float64(tpm)
+	refill := capacity / 60
+	b := s.clientBuckets[id]
+	if b == nil || now.Sub(b.last) > clientBucketIdle {
+		b = &clientBucket{tokens: capacity, last: now}
+		s.clientBuckets[id] = b
+	}
+	b.tokens += now.Sub(b.last).Seconds() * refill
+	if b.tokens > capacity {
+		b.tokens = capacity
+	}
+	b.last = now
+	if float64(estimated) > b.tokens {
+		return false
+	}
+	b.tokens -= float64(estimated)
+	return true
+}
+
 func (s *Server) clientAuthAllowed(w http.ResponseWriter, r *http.Request, anthropicStyle bool) bool {
-	enabled, keys, rpm := s.clientAuthConfig()
+	enabled, keys, globalRPM := s.clientAuthConfig()
 	if !enabled {
 		return true
 	}
-	key := extractClientKey(r)
-	if key == "" || !clientKeyMatches(keys, key) {
+	keyText := extractClientKey(r)
+	if keyText == "" {
 		if anthropicStyle {
 			anthropicErrorJSON(w, http.StatusUnauthorized, "invalid or missing API key")
 		} else {
@@ -131,7 +342,38 @@ func (s *Server) clientAuthAllowed(w http.ResponseWriter, r *http.Request, anthr
 		}
 		return false
 	}
-	if !s.clientRPMAllow(key, rpm) {
+	identity, virtualKey, ok := s.findClientIdentity(keyText)
+	if !ok && !clientKeyMatches(keys, keyText) {
+		if anthropicStyle {
+			anthropicErrorJSON(w, http.StatusUnauthorized, "invalid or missing API key")
+		} else {
+			errorJSON(w, http.StatusUnauthorized, "invalid or missing API key")
+		}
+		return false
+	}
+	if !ok {
+		identity = clientIdentity{ID: "legacy", Role: "admin"}
+	}
+	cfg := s.currentConfig()
+	if !s.applyGuardrails(w, r, anthropicStyle) {
+		return false
+	}
+	model := requestModel(r)
+	if !identityPolicyAllows(cfg, identity, virtualKey, r.URL.Path, model) {
+		if anthropicStyle {
+			anthropicErrorJSON(w, http.StatusForbidden, "client key is not authorized for this model or route")
+		} else {
+			errorJSON(w, http.StatusForbidden, "client key is not authorized for this model or route")
+		}
+		return false
+	}
+	r2 := r.WithContext(contextWithClientIdentity(r.Context(), identity))
+	*r = *r2
+	rpm := globalRPM
+	if virtualKey.RPM > 0 {
+		rpm = virtualKey.RPM
+	}
+	if !s.clientRPMAllow(keyText, rpm) {
 		w.Header().Set("Retry-After", "60")
 		if anthropicStyle {
 			anthropicErrorJSON(w, http.StatusTooManyRequests, "client rate limit exceeded; retry after 60 seconds")
@@ -140,5 +382,18 @@ func (s *Server) clientAuthAllowed(w http.ResponseWriter, r *http.Request, anthr
 		}
 		return false
 	}
+	if !s.clientTPMAllow(keyText, virtualKey.TPM, requestTokenEstimate(r)) {
+		w.Header().Set("Retry-After", "60")
+		if anthropicStyle {
+			anthropicErrorJSON(w, http.StatusTooManyRequests, "client token limit exceeded; retry after 60 seconds")
+		} else {
+			errorJSON(w, http.StatusTooManyRequests, "client token limit exceeded; retry after 60 seconds")
+		}
+		return false
+	}
 	return true
+}
+
+func contextWithClientIdentity(ctx context.Context, id clientIdentity) context.Context {
+	return context.WithValue(ctx, clientIdentityContextKey{}, id)
 }
