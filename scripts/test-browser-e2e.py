@@ -69,6 +69,8 @@ def main() -> None:
                 page.route("**/admin/api/provider-test", lambda route: route.fulfill(status=200, content_type="application/json", body=json.dumps({"ok": True, "passed": 1, "total": 1, "results": [{"model": "model-alpha", "ok": True, "latency_ms": 1}]})))
                 page.goto(base + "/", wait_until="domcontentloaded")
                 expect(page.locator("#content")).to_contain_text("No real activity yet")
+                expect(page.locator("#content")).to_contain_text("Quick setup")
+                expect(page.locator("#content")).to_contain_text("Production path")
                 expect(page.locator("#primary-nav")).to_contain_text("Overview")
                 expect(page.locator("#primary-nav")).to_contain_text("Providers")
                 expect(page.locator("#primary-nav")).to_contain_text("Routing")
