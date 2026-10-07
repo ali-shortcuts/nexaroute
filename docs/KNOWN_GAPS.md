@@ -65,7 +65,7 @@ Implemented:
 
 Not implemented as a full internet-facing control plane:
 
-- per-client quotas beyond the RPM ceiling, key lifecycle UI (create/revoke from the dashboard), hashed-at-rest client keys;
+- per-client quotas beyond the RPM and TPM ceilings, hashed-at-rest client keys;
 - built-in TLS
 - RBAC/multi-user accounts
 - CSRF session framework
