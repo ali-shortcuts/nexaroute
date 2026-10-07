@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Browser acceptance for the v0.15.0 backend-driven control plane.
+"""Browser acceptance for the v0.16.1 backend-driven control plane.
 
 The Go gateway, persistence, routing mutations and snapshot reads are real. Only
 provider discovery/check/test calls are intercepted at the browser boundary so

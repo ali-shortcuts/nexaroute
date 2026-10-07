@@ -1,6 +1,6 @@
-# NexaRoute v0.15.0 Operations Manual
+# NexaRoute v0.16.1 Operations Manual
 
-Version: v0.15.0
+Version: v0.16.1
 Target: Gateway Operators & Administrators
 
 ---
@@ -92,7 +92,7 @@ NexaRoute handles `SIGINT` and `SIGTERM` signals gracefully:
 3. Health micro-probe loops and SSE subscriber channels close cleanly.
 
 ### 5.2 Safe Rollback Guidance
-- **Backward Compatibility**: v0.15.0 maintains backward-compatible configuration loading with earlier NexaRoute config files configuration schemas.
+- **Backward Compatibility**: v0.16.1 maintains backward-compatible configuration loading with earlier NexaRoute configuration schemas.
 - **Rollback Process**:
   1. Stop v0.12.0 gateway instance (`kill -TERM <pid>`).
   2. Restore binary to previous version (e.g. `v0.11.0`).
