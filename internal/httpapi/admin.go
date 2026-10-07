@@ -24,6 +24,13 @@ import (
 
 const maskedPlaceholder = "••••••••"
 
+func clientBaseURLSource(baseURL string) string {
+	if strings.TrimSpace(baseURL) == "" {
+		return "browser-origin-fallback"
+	}
+	return "configured"
+}
+
 var (
 	errAdminProviderNotFound = errors.New("provider not found")
 	errAdminProviderExists   = errors.New("provider id already exists")
@@ -393,6 +400,13 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 			"enabled": cfgFull.ClientAuth.Enabled,
 			"keys":    len(cfgFull.ClientAuth.Keys),
 			"rpm":     cfgFull.ClientAuth.RPM,
+		},
+		"client_access": map[string]any{
+			"base_url":          cfgFull.ClientBaseURL,
+			"configured":        cfgFull.ClientBaseURL != "",
+			"source":            clientBaseURLSource(cfgFull.ClientBaseURL),
+			"messages_path":     "/v1/messages",
+			"count_tokens_path": "/v1/messages/count_tokens",
 		},
 		"virtual_endpoints": veList,
 		"route_profiles":    rpList,

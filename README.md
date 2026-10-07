@@ -61,7 +61,7 @@ details: [docs/INSTALLATION.md](docs/INSTALLATION.md).
 
 ```bash
 export ANTHROPIC_BASE_URL="http://127.0.0.1:8080"
-export ANTHROPIC_AUTH_TOKEN="local-gateway"
+export ANTHROPIC_AUTH_TOKEN="your-nexaroute-client-key"
 export ANTHROPIC_MODEL="coding"
 claude
 ```

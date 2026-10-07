@@ -6,15 +6,17 @@ import (
 )
 
 type settingsForm struct {
-	Routing config.RoutingConfig `json:"routing"`
-	Probe   config.ProbeConfig   `json:"probe"`
+	ClientBaseURL string               `json:"client_base_url,omitempty"`
+	Routing       config.RoutingConfig `json:"routing"`
+	Probe         config.ProbeConfig   `json:"probe"`
 }
 
 func (s *Server) adminSettings(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		routingCfg, probeCfg := s.runtimeSettingsSnapshot()
-		writeJSON(w, 200, settingsForm{Routing: routingCfg, Probe: probeCfg})
+		cfg := s.currentConfig()
+		writeJSON(w, 200, settingsForm{ClientBaseURL: cfg.ClientBaseURL, Routing: routingCfg, Probe: probeCfg})
 	case http.MethodPut:
 		var in settingsForm
 		if _, err := readJSON(r, &in); err != nil {
@@ -22,6 +24,7 @@ func (s *Server) adminSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		cfg, err := s.mutateConfig(func(cfg *config.Config) error {
+			cfg.ClientBaseURL = in.ClientBaseURL
 			cfg.Routing = in.Routing
 			cfg.Probe = in.Probe
 			cfg.ApplyDefaults()
@@ -31,7 +34,7 @@ func (s *Server) adminSettings(w http.ResponseWriter, r *http.Request) {
 			errorJSON(w, 400, err.Error())
 			return
 		}
-		writeJSON(w, 200, map[string]any{"saved": true, "routing": cfg.Routing, "probe": cfg.Probe})
+		writeJSON(w, 200, map[string]any{"saved": true, "client_base_url": cfg.ClientBaseURL, "routing": cfg.Routing, "probe": cfg.Probe})
 	default:
 		errorJSON(w, 405, "method not allowed")
 	}

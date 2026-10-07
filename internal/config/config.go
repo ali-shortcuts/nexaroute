@@ -167,7 +167,10 @@ type EvaluationConfig struct {
 }
 
 type Config struct {
-	Listen                 string                       `json:"listen"`
+	Listen string `json:"listen"`
+	// ClientBaseURL is the address client processes should use to reach the
+	// gateway. Empty means the UI may show same-origin as an explicit fallback.
+	ClientBaseURL          string                       `json:"client_base_url,omitempty"`
 	Admin                  AdminConfig                  `json:"admin"`
 	Logging                LoggingConfig                `json:"logging"`
 	Routing                RoutingConfig                `json:"routing"`
@@ -538,6 +541,9 @@ func (c *Config) ApplyEnvOverrides() error {
 	if v := strings.TrimSpace(os.Getenv("NEXAROUTE_LISTEN")); v != "" {
 		c.Listen = v
 	}
+	if v, ok := os.LookupEnv("NEXAROUTE_CLIENT_BASE_URL"); ok && strings.TrimSpace(v) != "" {
+		c.ClientBaseURL = strings.TrimRight(strings.TrimSpace(v), "/")
+	}
 	if v, ok := os.LookupEnv("NEXAROUTE_ADMIN_KEY"); ok {
 		// Empty/whitespace environment values never erase a durable admin key.
 		// Deliberate key removal must happen through an explicit config edit.
@@ -603,6 +609,7 @@ func (c Config) ValidateStrict() error {
 }
 
 func (c *Config) ApplyDefaults() {
+	c.ClientBaseURL = strings.TrimRight(strings.TrimSpace(c.ClientBaseURL), "/")
 	if c.Listen == "" {
 		c.Listen = "127.0.0.1:8080"
 		c.warnDefault("listen", "not set; defaulted to 127.0.0.1:8080")
@@ -969,6 +976,9 @@ func (p *ProviderConfig) ApplyDefaults() {
 }
 
 func (c Config) Validate() error {
+	if err := ValidateClientBaseURL(c.ClientBaseURL); err != nil {
+		return err
+	}
 	if strings.TrimSpace(c.Listen) == "" {
 		return errors.New("listen is required")
 	}
@@ -1840,6 +1850,34 @@ func (p ProviderConfig) ResolvedCredentials() []string {
 	return out
 }
 
+// ValidateClientBaseURL validates the client-facing URL independently from
+// provider upstream URLs. Path prefixes are allowed, but credentials and
+// query/fragment data are never valid in a URL shown to clients.
+func ValidateClientBaseURL(raw string) error {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" || u.Host == "" || u.Opaque != "" {
+		return errors.New("client_base_url must be an absolute HTTP(S) URL")
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return errors.New("client_base_url must use http or https")
+	}
+	if u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return errors.New("client_base_url must not contain userinfo, query, or fragment")
+	}
+	if u.Scheme == "http" {
+		host := u.Hostname()
+		ip := net.ParseIP(host)
+		if host != "localhost" && (ip == nil || !ip.IsLoopback()) {
+			return errors.New("client_base_url may use http only for loopback/local development; use https for remote access")
+		}
+	}
+	return nil
+}
+
 func (c Config) RequestTimeout() time.Duration {
 	return time.Duration(c.Routing.RequestTimeoutMS) * time.Millisecond
 }
@@ -1886,6 +1924,9 @@ func SaveAtomic(path string, c Config) error {
 		if json.Unmarshal(raw, &base) == nil {
 			if strings.TrimSpace(os.Getenv("NEXAROUTE_LISTEN")) != "" {
 				c.Listen = base.Listen
+			}
+			if _, ok := os.LookupEnv("NEXAROUTE_CLIENT_BASE_URL"); ok {
+				c.ClientBaseURL = base.ClientBaseURL
 			}
 			if _, ok := os.LookupEnv("NEXAROUTE_ADMIN_KEY"); ok {
 				c.Admin.APIKey = base.Admin.APIKey

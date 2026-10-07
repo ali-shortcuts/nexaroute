@@ -1,6 +1,7 @@
 {
-  "listen": "127.0.0.1:8080",
-  "admin": {
+	"listen": "127.0.0.1:8080",
+	"client_base_url": "",
+	"admin": {
     "bind_local_only": true,
     "api_key": ""
   },
