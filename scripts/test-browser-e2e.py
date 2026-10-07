@@ -100,6 +100,9 @@ def main() -> None:
                 page.locator('[data-action="close-modal"]').first.click()
                 page.locator('[data-page="settings"]').click()
                 expect(page.locator("#setting-strategy")).to_be_visible()
+                expect(page.locator("#content")).to_contain_text("Create virtual key")
+                expect(page.locator("#content")).to_contain_text("Start graceful drain")
+                expect(page.locator("#content")).to_contain_text("Download CSV")
                 page.locator('[data-page="activity"]').click()
                 expect(page.locator("#content")).to_contain_text("No real activity yet")
                 evidence = ROOT / "specs/014-control-plane-rebuild/evidence/control-plane-e2e.png"
