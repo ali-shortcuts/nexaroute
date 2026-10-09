@@ -24,6 +24,8 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/probe"
 	"github.com/ali-shortcuts/nexaroute/internal/providers"
 	"github.com/ali-shortcuts/nexaroute/internal/router"
+	videoDomain "github.com/ali-shortcuts/nexaroute/internal/video"
+	videoRuntime "github.com/ali-shortcuts/nexaroute/internal/video/runtime"
 )
 
 // version is set at build time via -ldflags "-X main.version=...".
@@ -143,6 +145,18 @@ func main() {
 	bus := events.New(500)
 	pe := probe.New(cfg, reg, rt, hm, bus)
 	api := httpapi.New(cfg, *configPath, reg, rt, hm, bus, pe, logger)
+	var videoRT *videoRuntime.Runtime
+	if cfg.Video.Enabled {
+		videoRT, err = videoRuntime.New(videoDomain.Config{
+			Enabled: cfg.Video.Enabled, StorePath: cfg.Video.StorePath, StorageRoot: cfg.Video.StorageRoot,
+			QueueSize: cfg.Video.QueueSize, Workers: cfg.Video.Workers, AuthTokenEnv: cfg.Video.AuthTokenEnv,
+			DevelopmentFakeProvider: cfg.Video.DevelopmentFakeProvider,
+		}, filepath.Dir(*configPath))
+		if err != nil {
+			bootstrap.Fatalf("cannot initialize video gateway: %v", err)
+		}
+		api.AttachVideoHandler(videoRT.Handler)
+	}
 	api.SyncCapabilityContracts()
 	pe.SetCapabilityStore(api.CapabilityStore())
 	srv := &http.Server{
@@ -154,6 +168,10 @@ func main() {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
+	if videoRT != nil {
+		videoRT.Start(ctx)
+		defer videoRT.Close()
+	}
 	listener, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
 		bootstrap.Fatalf("cannot listen on %s (another instance may be running): %v", cfg.Listen, err)

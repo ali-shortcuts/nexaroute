@@ -16,6 +16,6 @@ The repository now contains an isolated `internal/video` domain and provider con
 
 ## Important limits
 
-The handler is currently a standalone package and is not yet wired into `cmd/gateway`. The JSON store is single-process and is not multi-node safe; use PostgreSQL/Redis only after an implementation and concurrency test exist. No real provider adapter is enabled or claimed verified. Provider credentials must come from environment variables when adapters are implemented; never use account rotation or quota bypass. The current CLI is a local development tool and does not yet attach to a running gateway's durable store.
+When `video.enabled` is true, `cmd/gateway` creates the Video Runtime, mounts `/v1/video/` on the primary HTTP server, starts bounded workers, and closes the queue during shutdown. When it is false (the default), no video route or worker is created and the LLM data plane is unchanged. The JSON store is single-process and is not multi-node safe; use PostgreSQL/Redis only after an implementation and concurrency test exist. No real provider adapter is enabled or claimed verified. Provider credentials must come from environment variables when adapters are implemented; never use account rotation or quota bypass. The current CLI is still a local development tool and does not yet attach to a running gateway's durable store.
 
 Run focused tests with `go test ./internal/video/...` and the full suite with `go test ./...`.

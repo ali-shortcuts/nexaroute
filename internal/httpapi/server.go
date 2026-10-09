@@ -75,6 +75,7 @@ type Server struct {
 	taskClassCounts    map[string]uint64 // key: task_type|complexity
 	taskAnalysisTotal  atomic.Uint64
 	taskAnalysisErrors atomic.Uint64
+	videoHandler       http.Handler
 }
 
 // adminBucket is a compact token bucket keyed by remote address. Capacity 90
@@ -855,6 +856,9 @@ func (s *Server) currentRouteCandidate(id string, req router.Requirement) (route
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	if s.videoHandler != nil {
+		mux.Handle("/v1/video/", s.videoHandler)
+	}
 	mux.HandleFunc("/api/hello", s.hello)
 	mux.HandleFunc("/version", s.hello)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -910,6 +914,10 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("/", http.FileServer(http.FS(sub)))
 	return s.middleware(mux)
 }
+
+// AttachVideoHandler mounts the optional Video Gateway without changing any
+// existing LLM route. Call it once during startup before Handler is served.
+func (s *Server) AttachVideoHandler(h http.Handler) { s.videoHandler = h }
 
 func isDataPlaneRequest(r *http.Request) bool {
 	if r.Method != http.MethodPost {

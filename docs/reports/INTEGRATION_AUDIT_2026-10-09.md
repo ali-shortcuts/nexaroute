@@ -74,3 +74,19 @@ The coverage run was not interpreted as a repository-wide 85% result. Several pa
 ## Highest-priority follow-up
 
 The next reviewable PR should integrate the security stack in the order above rather than adding a second implementation. Separately, the next Video PR should wire the standalone handler through an explicit feature flag and durable-store configuration, with an integration test proving that existing LLM routes are unchanged. Until those changes land and pass fresh integrated gates, the system must not be described as production-complete Video Gateway support.
+
+## Subsequent integration checkpoint
+
+On the audit branch, the optional Video Runtime was attached to `cmd/gateway` without changing existing LLM routes. `video.enabled=false` remains the default and creates no video handler or workers. When enabled, the gateway mounts `/v1/video/`, initializes the single-process durable JSON job store, starts bounded workers, and closes the queue during shutdown. The development fake provider is opt-in only and no real provider is claimed verified.
+
+Fresh evidence after this integration:
+
+```text
+go test -count=1 ./...                         PASS
+go vet ./...                                  PASS
+go test -race -count=1 ./internal/video/... ./internal/config ./internal/httpapi ./cmd/gateway  PASS
+./scripts/verify.sh                           PASS
+git diff --check                               PASS
+```
+
+This closes the “standalone handler not mounted” gap, but does not close the multi-node store, real-provider, full episode composition, or production admin/API gaps listed above.
