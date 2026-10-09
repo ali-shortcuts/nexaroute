@@ -162,6 +162,7 @@ func requestTopLevelField(body []byte, wanted string) json.RawMessage {
 	if err != nil || token != json.Delim('{') {
 		return nil
 	}
+	var found json.RawMessage
 	for dec.More() {
 		token, err = dec.Token()
 		if err != nil {
@@ -175,20 +176,22 @@ func requestTopLevelField(body []byte, wanted string) json.RawMessage {
 		if err := dec.Decode(&value); err != nil {
 			return nil
 		}
+		// encoding/json's struct decoding uses the last duplicate field.
+		// Match that behavior for token estimation, rather than letting an
+		// earlier low limit hide a later larger output-token request.
 		if key == wanted {
-			return value
+			found = append(json.RawMessage(nil), value...)
 		}
 	}
-	return nil
-}
-
-func requestTopLevelString(body []byte, field string) string {
-	raw := requestTopLevelField(body, field)
-	var value string
-	if len(raw) == 0 || json.Unmarshal(raw, &value) != nil {
-		return ""
+	token, err = dec.Token()
+	if err != nil || token != json.Delim('}') {
+		return nil
 	}
-	return strings.TrimSpace(value)
+	var trailing json.RawMessage
+	if err := dec.Decode(&trailing); err != io.EOF {
+		return nil
+	}
+	return found
 }
 
 func requestTopLevelInt(body []byte, field string) int {
@@ -205,18 +208,20 @@ func requestModel(r *http.Request) string {
 		return ""
 	}
 	prefix, truncated, err := readRequestPrefix(r, requestMetadataReadLimit)
-	if err != nil {
+	if err != nil || truncated {
+		// Model authorization must not trust a prefix that cannot prove which
+		// duplicate top-level "model" field the upstream will consume. The
+		// identity policy treats an unknown model as unauthorized when any
+		// key/project/team has a model allow-list.
 		return ""
 	}
-	if !truncated {
-		var envelope struct {
-			Model string `json:"model"`
-		}
-		if json.Unmarshal(prefix, &envelope) == nil {
-			return strings.TrimSpace(envelope.Model)
-		}
+	var envelope struct {
+		Model string `json:"model"`
 	}
-	return requestTopLevelString(prefix, "model")
+	if json.Unmarshal(prefix, &envelope) != nil {
+		return ""
+	}
+	return strings.TrimSpace(envelope.Model)
 }
 
 func requestTokenEstimate(r *http.Request) int {
@@ -224,8 +229,9 @@ func requestTokenEstimate(r *http.Request) int {
 		return 1
 	}
 	prefix, truncated, err := readRequestPrefix(r, requestMetadataReadLimit)
-	if err != nil {
-		// When a TPM policy is active, inspection failure should be conservative.
+	if err != nil || truncated {
+		// A partial prefix cannot prove the effective value of duplicated
+		// output-token fields. Fail closed for TPM-limited keys.
 		return 1 << 30
 	}
 	output := requestTopLevelInt(prefix, "max_tokens")
