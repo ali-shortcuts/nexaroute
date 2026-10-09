@@ -15,24 +15,7 @@ func TestIdentityUsageLedgerAndCSVExport(t *testing.T) {
 	cfg := singleProviderOpenAI(t, up.URL, "m", config.ModelConfig{})
 	cfg.Admin.APIKey = "admin-secret"
 	cfg.Admin.BindLocalOnly = false
-	cfg.ClientAuth = config.ClientAuthConfig{
-		Enabled: true,
-		Tenants: []config.TenantConfig{{
-			ID:       "acme",
-			Projects: []config.ProjectConfig{{
-				ID:    "p1",
-				Teams: []config.TeamConfig{{
-					ID:            "t1",
-					AllowedModels: []string{"m"},
-				}},
-			}},
-		}},
-		VirtualKeys: []config.VirtualKeyConfig{{
-			ID: "vk-ledger", KeyHash: keyDigest("nrk_ledger"),
-			TenantID: "acme", ProjectID: "p1", TeamID: "t1",
-			AllowedModels: []string{"m"},
-		}},
-	}
+	cfg.ClientAuth = config.ClientAuthConfig{Enabled: true, VirtualKeys: []config.VirtualKeyConfig{{ID: "vk-ledger", KeyHash: keyDigest("nrk_ledger"), TenantID: "acme", ProjectID: "p1", TeamID: "t1", AllowedModels: []string{"m"}}}}
 	s := testGateway(t, cfg)
 	req := httptest.NewRequest(http.MethodPost, "http://gateway/v1/chat/completions", strings.NewReader(`{"model":"m","messages":[{"role":"user","content":"hi"}]}`))
 	req.Header.Set("Authorization", "Bearer nrk_ledger")
