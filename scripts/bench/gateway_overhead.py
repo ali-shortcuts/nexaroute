@@ -14,8 +14,8 @@ import os
 import resource
 import socket
 import subprocess
+import shutil
 import tempfile
-import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from http.client import HTTPConnection
@@ -26,6 +26,7 @@ FIXED_LATENCY = 0.015
 STREAM_GAP = 0.010
 REQUESTS = 1000
 CONCURRENCIES = (1, 16, 64)
+CAPS = (32, 128, 256)
 BODY = json.dumps({"model": "bench", "messages": [{"role": "user", "content": "ping"}], "stream": False}).encode()
 STREAM_BODY = json.dumps({"model": "bench", "messages": [{"role": "user", "content": "ping"}], "stream": True}).encode()
 GO_MOCK = r'''
@@ -119,6 +120,9 @@ def one_request(conn: HTTPConnection, path: str, stream: bool = False) -> tuple[
     started = time.perf_counter()
     conn.request("POST", path, payload, headers)
     response = conn.getresponse()
+    if response.status != 200:
+        error_body = response.read(512)
+        raise RuntimeError(f"benchmark request returned HTTP {response.status}: {error_body!r}")
     first = None
     while True:
         chunk = response.read(256)
@@ -187,15 +191,21 @@ def process_hwm_kb(pid: int) -> int | None:
     return None
 
 
-def gateway_config(path: Path, listen: str, upstream: str) -> None:
+def gateway_config(path: Path, listen: str, upstream: str, config_name: str, provider_max_concurrency: int) -> None:
+    if config_name == "ready_mesh_default":
+        routing = {"max_inflight_requests": 128}
+        probe = {"enabled": True, "on_start": True, "capability_probes": False}
+    else:
+        routing = {"strategy": "adaptive", "max_attempts": 1, "max_inflight_requests": 128}
+        probe = {"enabled": False, "on_start": False}
     config = {
         "listen": listen,
         "admin": {"bind_local_only": True, "api_key": ""},
-        "probe": {"enabled": False, "on_start": False},
-        "routing": {"strategy": "adaptive", "max_attempts": 1, "max_inflight_requests": 128},
+        "probe": probe,
+        "routing": routing,
         "providers": [{
             "id": "mock", "name": "benchmark mock", "type": "openai_compatible", "base_url": upstream,
-            "auth_mode": "none", "enabled": True, "models": [{
+            "auth_mode": "none", "enabled": True, "max_concurrency": provider_max_concurrency, "models": [{
                 "id": "bench", "model": "bench", "aliases": ["bench"], "enabled": True, "priority": 1,
                 "weight": 1, "capabilities": {"streaming": True, "tools": False, "vision": False, "reasoning": False},
             }],
@@ -230,6 +240,24 @@ def build_mock(go: str, directory: Path) -> Path:
     return binary
 
 
+def stop_process(process: subprocess.Popen[str] | None) -> None:
+    if process is None:
+        return
+    process.terminate()
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
+
+
+def profiling_status() -> dict[str, object]:
+    perf = shutil.which("perf")
+    if not perf:
+        return {"attempted": True, "tool": "perf", "available": False, "status": "cause not determined"}
+    return {"attempted": True, "tool": perf, "available": True, "status": "not captured: benchmark sandbox did not permit attaching perf"}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--requests", type=int, default=REQUESTS)
@@ -238,62 +266,70 @@ def main() -> None:
     if args.requests < 1000:
         raise SystemExit("--requests must be at least 1000")
     go = os.environ.get("NEXAROUTE_GO", "/usr/local/go/bin/go")
-    mock_port, gateway_port = free_port(), free_port()
     result: dict[str, object] = {
         "method": {
             "fixed_upstream_latency_ms": FIXED_LATENCY * 1000,
             "stream_gap_ms": STREAM_GAP * 1000,
             "requests_per_concurrency": args.requests,
             "concurrency_levels": list(CONCURRENCIES),
+            "provider_caps": list(CAPS),
             "warmup_requests_per_connection": 2,
             "persistent_connections": True,
             "mock": "compiled Go net/http server; TCP_NODELAY; one write per non-streaming response",
             "workload": "OpenAI Chat Completions over persistent HTTP/1.1; direct vs gateway; local loopback",
         },
         "environment": {"python": os.sys.version.split()[0], "platform": os.uname().machine, "cpu_count": os.cpu_count(), "go": go},
+        "routing_configs": {
+            "adaptive_no_probe": {"strategy": "adaptive", "max_attempts": 1, "probe_enabled": False, "default": False},
+            "ready_mesh_default": {"strategy": "ready_mesh", "max_attempts": 4, "probe_enabled": True, "probe_on_start": True, "default": True},
+        },
+        "profiling": profiling_status(),
     }
-    proc = None
     with tempfile.TemporaryDirectory(prefix="nexaroute-bench-") as tmp:
         directory = Path(tmp)
+        mock_port = free_port()
         mock_binary = build_mock(go, directory)
         mock_log = open(directory / "mock.log", "w", encoding="utf-8")
         mock = subprocess.Popen([str(mock_binary), str(mock_port)], stdout=mock_log, stderr=subprocess.STDOUT)
         try:
             upstream_url = f"http://127.0.0.1:{mock_port}/v1"
             direct_url = upstream_url + "/chat/completions"
-            gateway_url = f"http://127.0.0.1:{gateway_port}/v1/chat/completions"
             wait_ready(f"http://127.0.0.1:{mock_port}", mock)
             result["direct"] = {str(level): run_series(direct_url, args.requests, level) for level in CONCURRENCIES}
             direct_stream = stream_once(direct_url)
-            config_path = directory / "config.json"
-            gateway_config(config_path, f"127.0.0.1:{gateway_port}", upstream_url)
-            gateway_log = open(directory / "gateway.log", "w", encoding="utf-8")
-            proc = subprocess.Popen([go, "run", "./cmd/gateway", "-no-browser", "-config", str(config_path)], cwd=Path(__file__).parents[2], stdout=gateway_log, stderr=subprocess.STDOUT)
-            wait_ready(f"http://127.0.0.1:{gateway_port}", proc)
-            result["gateway"] = {str(level): run_series(gateway_url, args.requests, level) for level in CONCURRENCIES}
-            gateway_stream = stream_once(gateway_url)
-            result["streaming"] = {"direct": direct_stream, "gateway": gateway_stream, "ttft_overhead_ms": gateway_stream["ttft_ms"] - direct_stream["ttft_ms"]}
-            result["overhead"] = {
-                str(level): {key: result["gateway"][str(level)][key] - result["direct"][str(level)][key] for key in ("p50_ms", "p95_ms", "p99_ms")}
-                for level in CONCURRENCIES
-            }
-            result["memory"] = {"benchmark_process_maxrss_kb": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss, "gateway_vm_hwm_kb": process_hwm_kb(proc.pid)}
-            gateway_log.close()
+            result["streaming"] = {"direct": direct_stream}
+            result["runs"] = {}
+            for config_name in ("adaptive_no_probe", "ready_mesh_default"):
+                config_runs: dict[str, object] = {}
+                for provider_cap in CAPS:
+                    gateway_port = free_port()
+                    config_path = directory / f"{config_name}-{provider_cap}.json"
+                    gateway_config(config_path, f"127.0.0.1:{gateway_port}", upstream_url, config_name, provider_cap)
+                    gateway_log = open(directory / f"gateway-{config_name}-{provider_cap}.log", "w", encoding="utf-8")
+                    proc = subprocess.Popen([go, "run", "./cmd/gateway", "-no-browser", "-config", str(config_path)], cwd=Path(__file__).parents[2], stdout=gateway_log, stderr=subprocess.STDOUT)
+                    try:
+                        gateway_url = f"http://127.0.0.1:{gateway_port}/v1/chat/completions"
+                        wait_ready(f"http://127.0.0.1:{gateway_port}", proc)
+                        levels = CONCURRENCIES if provider_cap == 32 else (64,)
+                        gateway_results = {str(level): run_series(gateway_url, args.requests, level) for level in levels}
+                        cap_result: dict[str, object] = {"provider_max_concurrency": provider_cap, "gateway": gateway_results}
+                        cap_result["overhead"] = {
+                            str(level): {key: gateway_results[str(level)][key] - result["direct"][str(level)][key] for key in ("p50_ms", "p95_ms", "p99_ms")}
+                            for level in levels
+                        }
+                        if provider_cap == 32:
+                            gateway_stream = stream_once(gateway_url)
+                            result["streaming"][config_name] = {"gateway": gateway_stream, "ttft_overhead_ms": gateway_stream["ttft_ms"] - direct_stream["ttft_ms"]}
+                        cap_result["gateway_vm_hwm_kb"] = process_hwm_kb(proc.pid)
+                        config_runs[str(provider_cap)] = cap_result
+                    finally:
+                        stop_process(proc)
+                        gateway_log.close()
+                result["runs"][config_name] = config_runs
         finally:
-            if proc is not None:
-                proc.terminate()
-                try:
-                    proc.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                    proc.wait()
-            mock.terminate()
-            try:
-                mock.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                mock.kill()
-                mock.wait()
+            stop_process(mock)
             mock_log.close()
+    result["memory"] = {"benchmark_process_maxrss_kb": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss}
     print(json.dumps(result, indent=2))
     if args.output:
         args.output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")

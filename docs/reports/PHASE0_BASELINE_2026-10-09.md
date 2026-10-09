@@ -147,7 +147,7 @@ Packages below 70% are explicitly listed: **`cmd/gateway` (22.9%), `internal/com
 Command:
 
 ```bash
-python3 scripts/bench/gateway_overhead.py --requests 1000 --output /tmp/nexaroute-benchmark-v2.json
+python3 scripts/bench/gateway_overhead.py --requests 1000 --output /tmp/nexaroute-benchmark-v4.json
 ```
 
 Method and hardware:
@@ -157,36 +157,57 @@ Method and hardware:
 - Mock connections use `TCP_NODELAY`; each non-streaming response is written in one write.
 - Python client uses persistent HTTP/1.1 connections and two warm-up requests per connection.
 - 1,000 measured requests at concurrency **1, 16, and 64**.
+- Provider `max_concurrency` is explicit in every generated config: **32, 128, and 256**.
 - Streaming test retained with three chunks and 10 ms inter-chunk gap.
-- Direct and gateway paths use the same mock upstream.
+- Every measured request now requires HTTP 200; failed/error responses are rejected rather than timed.
+
+The benchmark compares these configurations:
+
+1. `adaptive_no_probe`: explicit `strategy=adaptive`, `max_attempts=1`, probes disabled.
+2. `ready_mesh_default`: **default** `strategy=ready_mesh`, default `max_attempts=4`, probes enabled and run on start.
 
 The prior 100-request Python-server result was discarded. Its approximately +44 ms result was a harness delayed-ACK artifact caused by separate header/body writes, not a NexaRoute latency claim.
 
-| Concurrency | Direct p50/p95/p99 ms | Gateway p50/p95/p99 ms | Added p50/p95/p99 ms | Direct RPS | Gateway RPS |
-|---:|---:|---:|---:|---:|---:|
-| 1 | 15.576 / 15.809 / 15.989 | 15.983 / 16.320 / 16.685 | 0.407 / 0.511 / 0.696 | 63.96 | 62.27 |
-| 16 | 16.186 / 17.263 / 17.726 | 16.495 / 17.622 / 18.233 | 0.309 / 0.358 / 0.507 | 939.57 | 919.66 |
-| 64 | 16.320 / 18.364 / 19.553 | 31.975 / 34.125 / 35.024 | 15.655 / 15.761 / 15.470 | 3037.51 | 1688.76 |
+Direct baseline across the run: p50/p95/p99 was **15.607 / 15.725 / 15.794 ms** at concurrency 1, **16.283 / 17.704 / 18.369 ms** at 16, and **16.876 / 19.272 / 20.476 ms** at 64.
 
-The concurrency-64 result shows gateway saturation/queueing under this local configuration; it is not collapsed into a single latency claim. Streaming result:
+### Concurrency 64: all provider caps
 
-- Direct total/TTFT: **46.219 / 46.217 ms**.
-- Gateway total/TTFT: **46.446 / 46.445 ms**.
-- Streaming TTFT overhead: **0.228 ms**.
-- Gateway process VmHWM: **29,168 KB**.
+| Routing config | Provider cap | Gateway p50/p95/p99 ms | Added p50/p95/p99 ms | Gateway RPS |
+|---|---:|---:|---:|---:|
+| `adaptive_no_probe` | 32 | 31.914 / 35.785 / 37.460 | 15.038 / 16.513 / 16.984 | 1676.34 |
+| `adaptive_no_probe` | 128 | 17.688 / 21.597 / 25.098 | 0.812 / 2.326 / 4.622 | 2599.71 |
+| `adaptive_no_probe` | 256 | 18.310 / 24.078 / 28.878 | 1.434 / 4.806 / 8.402 | 2521.68 |
+| `ready_mesh_default` (**default**) | 32 | 31.748 / 35.018 / 36.805 | 14.871 / 15.746 / 16.329 | 1708.86 |
+| `ready_mesh_default` (**default**) | 128 | 17.611 / 20.790 / 39.771 | 0.734 / 1.518 / 19.295 | 2536.88 |
+| `ready_mesh_default` (**default**) | 256 | 18.899 / 25.313 / 29.967 | 2.023 / 6.041 / 9.491 | 2452.49 |
 
-The JSON artifact contains the raw measurements. These are local reproducible baselines, not universal performance claims or competitor comparisons.
+At concurrency 1 and 16 with provider cap 32, the corresponding gateway p50/p95/p99 values were **16.154 / 16.346 / 16.625 ms** and **16.652 / 18.136 / 18.907 ms** for `adaptive_no_probe`; for `ready_mesh_default` they were **16.190 / 16.436 / 16.869 ms** and **16.596 / 17.831 / 18.484 ms**.
 
-## 6. Competitor matrix and unverified cells
+Streaming result at provider cap 32:
 
-The matrix remains conservative. The following competitor cells are explicitly **unverified** because the reviewed official documentation was insufficient for a defensible claim:
+- Direct total/TTFT: **46.345 / 46.344 ms**.
+- `adaptive_no_probe` gateway total/TTFT: **46.811 / 46.809 ms**; TTFT overhead **0.465 ms**.
+- `ready_mesh_default` gateway total/TTFT: **46.917 / 46.915 ms**; TTFT overhead **0.572 ms**.
 
-- **Portkey AI Gateway:** per-deployment health and capability filtering; release artifacts/checksums.
-- **Kong AI Gateway:** semantic cache.
-- **Bifrost:** multi-user RBAC/SSO; exact response cache; semantic cache.
-- **Envoy AI Gateway:** multi-user RBAC/SSO; exact response cache; semantic cache; encrypted secrets at rest; MCP/tool gateway.
+### CPU profiling and interpretation
 
-No unverified cell is treated as evidence that a competitor lacks the capability.
+The harness attempted to use `perf` during the gateway run. `perf` was not available in the Manus Sandbox, so no CPU profile or hotspot list was produced: **cause not determined**. The observed cap-dependent differences are reported as measurements, not as a proven causal explanation. In particular, the prior wording “saturation/queueing” has been removed; provider-cap-constrained latency and remaining unexplained variance are the supported statements.
+
+The JSON artifact contains the raw measurements and records the profiling result. These are local reproducible baselines, not universal performance claims or competitor comparisons.
+
+## 6. Competitor matrix and cell counts
+
+The matrix now treats generic landing pages as insufficient evidence and avoids negative claims about competitors. Counts cover 16 competitor capability cells per competitor:
+
+| Competitor | Verified | Unverified | Total |
+|---|---:|---:|---:|
+| LiteLLM | 10 | 6 | 16 |
+| Portkey AI Gateway | 2 | 14 | 16 |
+| Kong AI Gateway | 0 | 16 | 16 |
+| Bifrost | 5 | 11 | 16 |
+| Envoy AI Gateway | 1 | 15 | 16 |
+
+The complete unverified-cell list and the deep-link evidence are in `docs/CAPABILITY_MATRIX.md`. In particular, every competitor cell in **Single-binary zero-dependency default** is `unverified`.
 
 ## 7. What was not done
 
@@ -195,6 +216,7 @@ No unverified cell is treated as evidence that a competitor lacks the capability
 - No `.github/workflows/*` file was changed.
 - `scripts/verify.sh` was not changed.
 - No competitor performance benchmark was run.
+- No CPU hotspot was claimed because profiling was unavailable; cause remains not determined.
 - No universal performance, parity, or superiority claim was made.
 - No release/tag was created.
 - No production deployment, account change, or external destructive action was performed.
