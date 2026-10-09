@@ -94,7 +94,6 @@ func TestClientRateLimitBucketsEvictIdleEntries(t *testing.T) {
 	}
 }
 
-
 func TestRequestModelRejectsDuplicateModelFields(t *testing.T) {
 	body := `{"model":"allowed","model":"forbidden","messages":[]}`
 	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
