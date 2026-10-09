@@ -1,7 +1,8 @@
 name: Release
 
 # Canonical stable release pipeline. A v* tag pushed on main publishes the
-# exact tested tag commit as a GitHub Release with the four required assets.
+# exact tested tag commit as a GitHub Release with the integrated gateway,
+# videogen utility, installer, configuration and documentation bundle.
 # workflow_dispatch runs the identical verification without publishing.
 
 on:
@@ -77,6 +78,9 @@ jobs:
       - name: Build release assets
         run: ./scripts/build-release.sh "${{ steps.version.outputs.version }}"
 
+      - name: Integrated release smoke
+        run: ./scripts/release-smoke.sh dist
+
       - name: Installer lifecycle tests
         run: ./scripts/test-install.sh
 
@@ -85,7 +89,7 @@ jobs:
         run: |
           set -euo pipefail
           (cd dist && sha256sum -c SHA256SUMS)
-          required="nexaroute-linux-amd64 nexaroute-linux-arm64 install.sh SHA256SUMS"
+          required="nexaroute-linux-amd64 nexaroute-linux-arm64 nexaroute-videogen-linux-amd64 nexaroute-videogen-linux-arm64 install.sh video.example.json VIDEO_GATEWAY.md RELEASE_NOTES.md SHA256SUMS"
           for f in $required; do
             [[ -s "dist/$f" ]] || { echo "missing release asset: $f" >&2; exit 1; }
           done
@@ -105,6 +109,12 @@ jobs:
             echo "binary version mismatch: got '$got' want 'v${want#v}'" >&2
             exit 1
           }
+          videogen_got="$(./dist/nexaroute-videogen-linux-amd64 -version)"
+          echo "$videogen_got"
+          [[ "$videogen_got" == *"v${want#v}"* ]] || {
+            echo "videogen version mismatch: got '$videogen_got' want 'v${want#v}'" >&2
+            exit 1
+          }
 
       - name: Upload release assets
         uses: actions/upload-artifact@v4
@@ -113,7 +123,12 @@ jobs:
           path: |
             dist/nexaroute-linux-amd64
             dist/nexaroute-linux-arm64
+            dist/nexaroute-videogen-linux-amd64
+            dist/nexaroute-videogen-linux-arm64
             dist/install.sh
+            dist/video.example.json
+            dist/VIDEO_GATEWAY.md
+            dist/RELEASE_NOTES.md
             dist/SHA256SUMS
           if-no-files-found: error
 
@@ -164,5 +179,10 @@ jobs:
             --latest \
             dist/nexaroute-linux-amd64 \
             dist/nexaroute-linux-arm64 \
+            dist/nexaroute-videogen-linux-amd64 \
+            dist/nexaroute-videogen-linux-arm64 \
             dist/install.sh \
+            dist/video.example.json \
+            dist/VIDEO_GATEWAY.md \
+            dist/RELEASE_NOTES.md \
             dist/SHA256SUMS
