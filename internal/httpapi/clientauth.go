@@ -351,15 +351,15 @@ func identityPolicyAllows(cfg config.Config, id clientIdentity, key config.Virtu
 		return false
 	}
 
-	// A team is nested inside a project, and a project is nested inside a
-	// tenant. Missing parent identifiers make the requested scope ambiguous.
+	// When no tenant hierarchy is configured, tenant/project/team IDs are
+	// legacy billing metadata and the key's own allow-lists remain authoritative.
+	// Once a hierarchy is configured, every supplied scope must resolve and each
+	// parent policy is a ceiling that the child key cannot widen.
+	if len(cfg.ClientAuth.Tenants) == 0 {
+		return true
+	}
 	if key.TeamID != "" && key.ProjectID == "" {
 		return false
-	}
-	if key.ProjectID == "" {
-		// Tenant-only identifiers are supported as metadata for existing
-		// deployments; in that case the key's own allow-lists are authoritative.
-		return key.TeamID == ""
 	}
 	if key.TenantID == "" {
 		return false
@@ -368,6 +368,9 @@ func identityPolicyAllows(cfg config.Config, id clientIdentity, key config.Virtu
 	for _, tenant := range cfg.ClientAuth.Tenants {
 		if tenant.ID != key.TenantID {
 			continue
+		}
+		if key.ProjectID == "" {
+			return true
 		}
 		for _, project := range tenant.Projects {
 			if project.ID != key.ProjectID {
@@ -391,7 +394,7 @@ func identityPolicyAllows(cfg config.Config, id clientIdentity, key config.Virtu
 		// The key's project must belong to the selected tenant.
 		return false
 	}
-	// A project-scoped key may not rely on an unconfigured tenant.
+	// Scoped keys may not rely on an unconfigured tenant.
 	return false
 }
 
