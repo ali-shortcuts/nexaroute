@@ -22,7 +22,7 @@ func TestIdentityUsageLedgerAndCSVExport(t *testing.T) {
 			Projects: []config.ProjectConfig{{
 				ID:    "p1",
 				Teams: []config.TeamConfig{{
-					ID: "t1",
+					ID:            "t1",
 					AllowedModels: []string{"m"},
 				}},
 			}},
