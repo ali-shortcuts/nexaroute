@@ -128,43 +128,123 @@ func (s *Server) findClientIdentity(presented string) (clientIdentity, config.Vi
 	return clientIdentity{}, config.VirtualKeyConfig{}, false
 }
 
-func requestModel(r *http.Request) string {
-	if r.Body == nil || r.Method == http.MethodGet || r.Method == http.MethodHead {
+const requestMetadataReadLimit = 2 << 20
+
+// readRequestPrefix reads only a bounded prefix for metadata inspection and
+// restores every consumed byte in front of the unread request body. In
+// particular, the inspection limit must never become an accidental upstream
+// payload limit.
+func readRequestPrefix(r *http.Request, limit int64) ([]byte, bool, error) {
+	if r == nil || r.Body == nil {
+		return nil, false, nil
+	}
+	consumed, err := io.ReadAll(io.LimitReader(r.Body, limit+1))
+	// Restore the bytes even on read error: a metadata inspection failure must
+	// not mutate the request that the data plane will subsequently consume.
+	r.Body = io.NopCloser(io.MultiReader(bytes.NewReader(consumed), r.Body))
+	if err != nil {
+		return nil, false, err
+	}
+	truncated := int64(len(consumed)) > limit
+	prefix := consumed
+	if truncated {
+		prefix = consumed[:int(limit)]
+	}
+	return prefix, truncated, nil
+}
+
+// requestTopLevelField decodes one top-level JSON field without requiring the
+// entire document to fit in the inspection prefix. This lets us find "model"
+// before a large messages/images field while still preserving the full body.
+func requestTopLevelField(body []byte, wanted string) json.RawMessage {
+	dec := json.NewDecoder(bytes.NewReader(body))
+	token, err := dec.Token()
+	if err != nil || token != json.Delim('{') {
+		return nil
+	}
+	for dec.More() {
+		token, err = dec.Token()
+		if err != nil {
+			return nil
+		}
+		key, ok := token.(string)
+		if !ok {
+			return nil
+		}
+		var value json.RawMessage
+		if err := dec.Decode(&value); err != nil {
+			return nil
+		}
+		if key == wanted {
+			return value
+		}
+	}
+	return nil
+}
+
+func requestTopLevelString(body []byte, field string) string {
+	raw := requestTopLevelField(body, field)
+	var value string
+	if len(raw) == 0 || json.Unmarshal(raw, &value) != nil {
 		return ""
 	}
-	b, err := io.ReadAll(io.LimitReader(r.Body, 2<<20))
+	return strings.TrimSpace(value)
+}
+
+func requestTopLevelInt(body []byte, field string) int {
+	raw := requestTopLevelField(body, field)
+	var value int
+	if len(raw) == 0 || json.Unmarshal(raw, &value) != nil || value < 0 {
+		return 0
+	}
+	return value
+}
+
+func requestModel(r *http.Request) string {
+	if r == nil || r.Body == nil || r.Method == http.MethodGet || r.Method == http.MethodHead {
+		return ""
+	}
+	prefix, truncated, err := readRequestPrefix(r, requestMetadataReadLimit)
 	if err != nil {
 		return ""
 	}
-	r.Body = io.NopCloser(bytes.NewReader(b))
-	var envelope struct {
-		Model string `json:"model"`
+	if !truncated {
+		var envelope struct {
+			Model string `json:"model"`
+		}
+		if json.Unmarshal(prefix, &envelope) == nil {
+			return strings.TrimSpace(envelope.Model)
+		}
 	}
-	if json.Unmarshal(b, &envelope) != nil {
-		return ""
-	}
-	return strings.TrimSpace(envelope.Model)
+	return requestTopLevelString(prefix, "model")
 }
 
 func requestTokenEstimate(r *http.Request) int {
-	if r.Body == nil {
+	if r == nil || r.Body == nil {
 		return 1
 	}
-	b, err := io.ReadAll(io.LimitReader(r.Body, 2<<20))
+	prefix, truncated, err := readRequestPrefix(r, requestMetadataReadLimit)
 	if err != nil {
-		return 1
+		// When a TPM policy is active, inspection failure should be conservative.
+		return 1 << 30
 	}
-	r.Body = io.NopCloser(bytes.NewReader(b))
-	var envelope struct {
-		MaxTokens       int `json:"max_tokens"`
-		MaxOutputTokens int `json:"max_output_tokens"`
+	output := requestTopLevelInt(prefix, "max_tokens")
+	if n := requestTopLevelInt(prefix, "max_output_tokens"); n > output {
+		output = n
 	}
-	_ = json.Unmarshal(b, &envelope)
-	output := envelope.MaxTokens
-	if envelope.MaxOutputTokens > output {
-		output = envelope.MaxOutputTokens
+	inputBytes := len(prefix)
+	if r.ContentLength >= 0 && r.ContentLength > int64(inputBytes) {
+		if r.ContentLength > int64(1<<30) {
+			inputBytes = 1 << 30
+		} else {
+			inputBytes = int(r.ContentLength)
+		}
+	} else if truncated && r.ContentLength < 0 {
+		// A chunked/unknown-length body beyond the inspection limit cannot be
+		// estimated safely from its prefix; fail closed for TPM-limited keys.
+		return 1 << 30
 	}
-	estimate := len(b)/4 + output
+	estimate := inputBytes/4 + output
 	if estimate < 1 {
 		estimate = 1
 	}
@@ -259,6 +339,35 @@ func identityPolicyAllows(cfg config.Config, id clientIdentity, key config.Virtu
 	return listAllows(routes, path) && listAllows(models, model)
 }
 
+// clientBucketLocked returns a live bucket while holding clientRL. Both RPM
+// and TPM buckets share one hard memory bound so expired/rotated keys cannot
+// grow the map indefinitely. A full table fails closed for a new identity.
+func (s *Server) clientBucketLocked(id string, capacity float64, now time.Time) *clientBucket {
+	if s.clientBuckets == nil {
+		s.clientBuckets = make(map[string]*clientBucket)
+	}
+	if b := s.clientBuckets[id]; b != nil {
+		if now.Sub(b.last) > clientBucketIdle {
+			b.tokens = capacity
+			b.last = now
+		}
+		return b
+	}
+	if len(s.clientBuckets) >= maxClientBuckets {
+		for key, b := range s.clientBuckets {
+			if now.Sub(b.last) > clientBucketIdle {
+				delete(s.clientBuckets, key)
+			}
+		}
+	}
+	if len(s.clientBuckets) >= maxClientBuckets {
+		return nil
+	}
+	b := &clientBucket{tokens: capacity, last: now}
+	s.clientBuckets[id] = b
+	return b
+}
+
 // clientRPMAllow enforces the per-key requests-per-minute ceiling with a
 // token bucket. RPM 0 means unlimited.
 func (s *Server) clientRPMAllow(presented string, rpm int) bool {
@@ -269,23 +378,12 @@ func (s *Server) clientRPMAllow(presented string, rpm int) bool {
 	now := time.Now()
 	s.clientRL.Lock()
 	defer s.clientRL.Unlock()
-	if s.clientBuckets == nil {
-		s.clientBuckets = map[string]*clientBucket{}
-	}
-	if len(s.clientBuckets) >= maxClientBuckets {
-		for k, b := range s.clientBuckets {
-			if now.Sub(b.last) > clientBucketIdle {
-				delete(s.clientBuckets, k)
-			}
-		}
-	}
 	capacity := float64(rpm)
-	refill := float64(rpm) / 60.0
-	b, ok := s.clientBuckets[id]
-	if !ok || now.Sub(b.last) > clientBucketIdle {
-		b = &clientBucket{tokens: capacity, last: now}
-		s.clientBuckets[id] = b
+	b := s.clientBucketLocked(id, capacity, now)
+	if b == nil {
+		return false
 	}
+	refill := float64(rpm) / 60.0
 	b.tokens += now.Sub(b.last).Seconds() * refill
 	if b.tokens > capacity {
 		b.tokens = capacity
@@ -306,16 +404,12 @@ func (s *Server) clientTPMAllow(presented string, tpm, estimated int) bool {
 	now := time.Now()
 	s.clientRL.Lock()
 	defer s.clientRL.Unlock()
-	if s.clientBuckets == nil {
-		s.clientBuckets = map[string]*clientBucket{}
-	}
 	capacity := float64(tpm)
-	refill := capacity / 60
-	b := s.clientBuckets[id]
-	if b == nil || now.Sub(b.last) > clientBucketIdle {
-		b = &clientBucket{tokens: capacity, last: now}
-		s.clientBuckets[id] = b
+	b := s.clientBucketLocked(id, capacity, now)
+	if b == nil {
+		return false
 	}
+	refill := capacity / 60
 	b.tokens += now.Sub(b.last).Seconds() * refill
 	if b.tokens > capacity {
 		b.tokens = capacity
@@ -382,7 +476,7 @@ func (s *Server) clientAuthAllowed(w http.ResponseWriter, r *http.Request, anthr
 		}
 		return false
 	}
-	if !s.clientTPMAllow(keyText, virtualKey.TPM, requestTokenEstimate(r)) {
+	if virtualKey.TPM > 0 && !s.clientTPMAllow(keyText, virtualKey.TPM, requestTokenEstimate(r)) {
 		w.Header().Set("Retry-After", "60")
 		if anthropicStyle {
 			anthropicErrorJSON(w, http.StatusTooManyRequests, "client token limit exceeded; retry after 60 seconds")
