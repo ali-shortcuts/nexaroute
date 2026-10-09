@@ -18,9 +18,9 @@ func TestIdentityUsageLedgerAndCSVExport(t *testing.T) {
 	cfg.ClientAuth = config.ClientAuthConfig{
 		Enabled: true,
 		Tenants: []config.TenantConfig{{
-			ID: "acme",
+			ID:       "acme",
 			Projects: []config.ProjectConfig{{
-				ID: "p1",
+				ID:    "p1",
 				Teams: []config.TeamConfig{{
 					ID: "t1",
 					AllowedModels: []string{"m"},
