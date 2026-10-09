@@ -156,51 +156,76 @@ func readRequestPrefix(r *http.Request, limit int64) ([]byte, bool, error) {
 // requestTopLevelField decodes one top-level JSON field without requiring the
 // entire document to fit in the inspection prefix. This lets us find "model"
 // before a large messages/images field while still preserving the full body.
-func requestTopLevelField(body []byte, wanted string) json.RawMessage {
+// requestTopLevelValues parses a complete JSON object and retains every
+// occurrence of a top-level field. Duplicate security-relevant fields are
+// handled conservatively because upstream providers may choose different
+// duplicate-key semantics.
+func requestTopLevelValues(body []byte, wanted string) ([]json.RawMessage, bool) {
 	dec := json.NewDecoder(bytes.NewReader(body))
 	token, err := dec.Token()
 	if err != nil || token != json.Delim('{') {
-		return nil
+		return nil, false
 	}
-	var found json.RawMessage
+	var found []json.RawMessage
 	for dec.More() {
 		token, err = dec.Token()
 		if err != nil {
-			return nil
+			return nil, false
 		}
 		key, ok := token.(string)
 		if !ok {
-			return nil
+			return nil, false
 		}
 		var value json.RawMessage
 		if err := dec.Decode(&value); err != nil {
-			return nil
+			return nil, false
 		}
-		// encoding/json's struct decoding uses the last duplicate field.
-		// Match that behavior for token estimation, rather than letting an
-		// earlier low limit hide a later larger output-token request.
 		if key == wanted {
-			found = append(json.RawMessage(nil), value...)
+			found = append(found, append(json.RawMessage(nil), value...))
 		}
 	}
 	token, err = dec.Token()
 	if err != nil || token != json.Delim('}') {
-		return nil
+		return nil, false
 	}
 	var trailing json.RawMessage
 	if err := dec.Decode(&trailing); err != io.EOF {
-		return nil
+		return nil, false
 	}
-	return found
+	return found, true
 }
 
-func requestTopLevelInt(body []byte, field string) int {
-	raw := requestTopLevelField(body, field)
-	var value int
-	if len(raw) == 0 || json.Unmarshal(raw, &value) != nil || value < 0 {
-		return 0
+func requestTopLevelString(body []byte, field string) (string, bool) {
+	values, ok := requestTopLevelValues(body, field)
+	if !ok || len(values) != 1 {
+		return "", false
 	}
-	return value
+	var value string
+	if json.Unmarshal(values[0], &value) != nil {
+		return "", false
+	}
+	return strings.TrimSpace(value), true
+}
+
+// requestTopLevelMaxInt returns the maximum duplicate value, not just the
+// first/last. This makes token-budget enforcement conservative across JSON
+// parsers with differing duplicate-key behavior.
+func requestTopLevelMaxInt(body []byte, field string) (int, bool) {
+	values, ok := requestTopLevelValues(body, field)
+	if !ok {
+		return 0, false
+	}
+	maxValue := 0
+	for _, raw := range values {
+		var value int
+		if json.Unmarshal(raw, &value) != nil || value < 0 {
+			return 0, false
+		}
+		if value > maxValue {
+			maxValue = value
+		}
+	}
+	return maxValue, true
 }
 
 func requestModel(r *http.Request) string {
@@ -215,13 +240,11 @@ func requestModel(r *http.Request) string {
 		// key/project/team has a model allow-list.
 		return ""
 	}
-	var envelope struct {
-		Model string `json:"model"`
-	}
-	if json.Unmarshal(prefix, &envelope) != nil {
+	model, ok := requestTopLevelString(prefix, "model")
+	if !ok {
 		return ""
 	}
-	return strings.TrimSpace(envelope.Model)
+	return model
 }
 
 func requestTokenEstimate(r *http.Request) int {
@@ -234,9 +257,16 @@ func requestTokenEstimate(r *http.Request) int {
 		// output-token fields. Fail closed for TPM-limited keys.
 		return 1 << 30
 	}
-	output := requestTopLevelInt(prefix, "max_tokens")
-	if n := requestTopLevelInt(prefix, "max_output_tokens"); n > output {
-		output = n
+	output, ok := requestTopLevelMaxInt(prefix, "max_tokens")
+	if !ok {
+		return 1 << 30
+	}
+	maxOutput, ok := requestTopLevelMaxInt(prefix, "max_output_tokens")
+	if !ok {
+		return 1 << 30
+	}
+	if maxOutput > output {
+		output = maxOutput
 	}
 	inputBytes := len(prefix)
 	if r.ContentLength >= 0 && r.ContentLength > int64(inputBytes) {
