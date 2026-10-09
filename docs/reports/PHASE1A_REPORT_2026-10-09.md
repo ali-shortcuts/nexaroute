@@ -49,6 +49,10 @@ All commands below exited `0`. The exact stdout/stderr transcript—including pa
 - `go tool cover -func=/tmp/nexaroute-phase1a-closeout-cover.out | tail -1` — `total: (statements) 77.3%`; exit `0`.
 - `git diff --check` — empty stdout; exit `0`.
 
+## GitHub CI follow-up
+
+The first GitHub `verify` run failed only in `scripts/smoke-local.sh`: its disk assertion still expected a literal plaintext API key, which contradicted Phase 1a's encrypted-at-rest behavior. The smoke test now requires the `nxs1:` ciphertext prefix, confirms the plaintext canary is absent from the config file, and checks the 32-byte master-key file is mode `0600`. After that correction, `./scripts/verify.sh` passed locally (unit/integration and race suites, browser checks, fuzz checks, and both Linux builds); `./scripts/smoke-local.sh` was then run separately and also passed all local-runtime/UI/Admin persistence checks. Both exact transcripts are included in [PHASE1A_CI_FIX_RAW_2026-10-09.txt](PHASE1A_CI_FIX_RAW_2026-10-09.txt). GitHub's new PR check is pending until this follow-up commit is pushed and the workflow reruns.
+
 ## Remaining limits
 
 Phase 1a does not add OS-keyring integration or an externally managed key-rotation workflow; the CLI rotates only its auto-managed sibling key. `.key.previous` retains only the most recent previous key unless the operator backs it up. Routine runtime/Admin saves are atomic but do not create backup copies. TLS/mTLS and the Admin CSRF/cookie-session protections remain Phase 1b work, not Phase 1a claims. No PR was merged.

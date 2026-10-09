@@ -125,14 +125,20 @@ assert x['provider'].get('api_key', '') == '', x
 assert x.get('has_secret') is True, x
 PY
 
-# The UI must never retrieve a saved key. Verify preservation only on local disk.
+# The UI must never retrieve a saved key. Verify ciphertext at rest and key permissions.
 python3 - "$TMP/config.json" <<'PYSECRET'
 import json, os, sys
-cfg = json.load(open(sys.argv[1]))
+path = sys.argv[1]
+raw = open(path, 'rb').read()
+cfg = json.loads(raw)
 p = next(p for p in cfg['providers'] if p['id'] == 'smoke-openai')
-assert p['api_key'] == 'secret-one'
+assert p['api_key'].startswith('nxs1:'), p.get('api_key', '')[:5]
+assert b'secret-one' not in raw
 assert p['name'] == 'Smoke Renamed'
-assert os.stat(sys.argv[1]).st_mode & 0o777 == 0o600
+assert os.stat(path).st_mode & 0o777 == 0o600
+key_path = path + '.key'
+assert len(open(key_path, 'rb').read()) == 32
+assert os.stat(key_path).st_mode & 0o777 == 0o600
 PYSECRET
 
 expect_status 200 "$(status DELETE "$BASE/admin/api/providers/smoke-openai")" "provider delete"
