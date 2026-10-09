@@ -1,0 +1,19 @@
+{
+  "video": {
+    "enabled": false,
+    "queue_size": 32,
+    "workers": 2,
+    "storage_root": "./video-data",
+    "providers": [
+      {
+        "id": "provider-a",
+        "adapter": "generic_rest",
+        "base_url": "https://documented-provider.example/v1",
+        "api_key_env": "VIDEO_PROVIDER_A_API_KEY",
+        "enabled": false,
+        "models": ["documented-model"],
+        "price_per_second_usd": 0.10
+      }
+    ]
+  }
+}
