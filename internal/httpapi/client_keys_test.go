@@ -123,7 +123,6 @@ func TestAdminClientKeyCreateRotateListNeverReturnsHash(t *testing.T) {
 	}
 }
 
-
 func TestVirtualKeyScopesIntersectInsteadOfWidening(t *testing.T) {
 	cfg := config.Default()
 	cfg.ClientAuth.Tenants = []config.TenantConfig{{
@@ -141,9 +140,9 @@ func TestVirtualKeyScopesIntersectInsteadOfWidening(t *testing.T) {
 	}}
 	id := clientIdentity{ID: "vk1", TenantID: "acme", ProjectID: "platform", TeamID: "engineering", Role: "developer", Virtual: true}
 	key := config.VirtualKeyConfig{
-		TenantID:     "acme",
-		ProjectID:    "platform",
-		TeamID:       "engineering",
+		TenantID:      "acme",
+		ProjectID:     "platform",
+		TeamID:        "engineering",
 		AllowedModels: []string{"*"},
 		AllowedRoutes: []string{"*"},
 	}
@@ -171,7 +170,7 @@ func TestVirtualKeyProjectReferencesFailClosed(t *testing.T) {
 	cfg.ClientAuth.Tenants = []config.TenantConfig{{
 		ID: "acme",
 		Projects: []config.ProjectConfig{{
-			ID: "platform",
+			ID:            "platform",
 			AllowedModels: []string{"safe"},
 		}},
 	}}
