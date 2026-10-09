@@ -260,3 +260,111 @@ func TestRandomSourceFailures(t *testing.T) {
 		t.Fatal("key-generation random failure ignored")
 	}
 }
+
+func TestOpenRejectsTruncatedWrappedKey(t *testing.T) {
+	key := []byte("01234567890123456789012345678901")
+	nonce := base64.RawStdEncoding.EncodeToString(make([]byte, 12))
+	// 44 bytes passed the old length check but could not contain the wrapped
+	// 32-byte DEK plus its GCM tag; Open previously sliced beyond this payload.
+	shortPayload := base64.RawStdEncoding.EncodeToString(make([]byte, 44))
+	text := Prefix + keyID(key) + ":" + nonce + ":" + shortPayload
+	if _, err := Open(key, nil, text); err == nil {
+		t.Fatal("truncated wrapped key accepted")
+	}
+}
+
+func TestKeyRecoversConfigCommittedBeforeKeyPromotion(t *testing.T) {
+	t.Setenv("NEXAROUTE_MASTER_KEY", "")
+	t.Setenv("NEXAROUTE_MASTER_KEY_FILE", "")
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	keyPath := configPath + ".key"
+	oldKey := []byte("01234567890123456789012345678901")
+	newKey := []byte("abcdefghijklmnopqrstuvwxyzABCDEF")
+	raw := []byte(`{"providers":[{"id":"p","api_key":"rotation-canary"}]}`)
+	rotated, _, err := TransformConfig(raw, newKey, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(configPath, rotated, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(keyPath, oldKey, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(keyPath+".previous", oldKey, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(keyPath+".next", newKey, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, _, err := Key(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(newKey) {
+		t.Fatal("did not recover the key matching the committed encrypted config")
+	}
+	if _, err = os.Stat(keyPath + ".next"); !os.IsNotExist(err) {
+		t.Fatalf("staged key was not promoted: %v", err)
+	}
+	mode, err := os.Stat(keyPath)
+	if err != nil || mode.Mode().Perm() != 0600 {
+		t.Fatalf("promoted key mode=%v err=%v", mode, err)
+	}
+	plain, _, err := TransformConfig(rotated, got, false)
+	if err != nil || !strings.Contains(string(plain), "rotation-canary") {
+		t.Fatalf("recovered config unreadable: %v", err)
+	}
+}
+
+func TestKeyIgnoresUncommittedStagedRotation(t *testing.T) {
+	t.Setenv("NEXAROUTE_MASTER_KEY", "")
+	t.Setenv("NEXAROUTE_MASTER_KEY_FILE", "")
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	keyPath := configPath + ".key"
+	oldKey := []byte("01234567890123456789012345678901")
+	newKey := []byte("abcdefghijklmnopqrstuvwxyzABCDEF")
+	raw, _, err := TransformConfig([]byte(`{"admin":{"api_key":"old-key"}}`), oldKey, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(configPath, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(keyPath, oldKey, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(keyPath+".next", newKey, 0600); err != nil {
+		t.Fatal(err)
+	}
+	got, _, err := Key(configPath)
+	if err != nil || string(got) != string(oldKey) {
+		t.Fatalf("staged but uncommitted key became active: %v", err)
+	}
+	if _, err = os.Stat(keyPath + ".next"); err != nil {
+		t.Fatalf("uncommitted staged key should remain available for retry: %v", err)
+	}
+}
+
+func TestMissingKeyDoesNotCreateReplacementForEncryptedConfig(t *testing.T) {
+	t.Setenv("NEXAROUTE_MASTER_KEY", "")
+	t.Setenv("NEXAROUTE_MASTER_KEY_FILE", "")
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	key := []byte("01234567890123456789012345678901")
+	ciphertext, _, err := TransformConfig([]byte(`{"admin":{"api_key":"missing-key-canary"}}`), key, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(configPath, ciphertext, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = Key(configPath); err == nil {
+		t.Fatal("missing key silently generated a replacement")
+	}
+	if _, err = os.Stat(configPath + ".key"); !os.IsNotExist(err) {
+		t.Fatalf("unexpected replacement key created: %v", err)
+	}
+}

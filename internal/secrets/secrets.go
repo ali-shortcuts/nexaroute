@@ -31,8 +31,9 @@ func Key(configPath string) ([]byte, string, error) {
 		}
 		return b, keyID(b), nil
 	}
-	p := os.Getenv("NEXAROUTE_MASTER_KEY_FILE")
-	if p == "" {
+	explicitFile := os.Getenv("NEXAROUTE_MASTER_KEY_FILE")
+	p := explicitFile
+	if explicitFile == "" {
 		p = configPath + ".key"
 	}
 	b, e := os.ReadFile(p)
@@ -47,13 +48,24 @@ func Key(configPath string) ([]byte, string, error) {
 		if len(b) != 32 {
 			return nil, "", fmt.Errorf("master key file must contain exactly 32 raw bytes: %s", p)
 		}
+		if explicitFile == "" {
+			return recoverPendingRotation(configPath, p, b)
+		}
 		return b, keyID(b), nil
 	}
 	if !os.IsNotExist(e) {
 		return nil, "", errors.New("cannot read master key file; check path and permissions")
 	}
-	if os.Getenv("NEXAROUTE_MASTER_KEY_FILE") != "" {
+	if explicitFile != "" {
 		return nil, "", fmt.Errorf("master key file not found; create a 32-byte key at %s or set NEXAROUTE_MASTER_KEY", p)
+	}
+	if key, ok, err := recoverMissingRotationKey(configPath, p); err != nil {
+		return nil, "", err
+	} else if ok {
+		return key, keyID(key), nil
+	}
+	if raw, err := os.ReadFile(configPath); err == nil && strings.Contains(string(raw), Prefix) {
+		return nil, "", errors.New("master key file is missing for encrypted configuration; restore the matching key before starting")
 	}
 	if e = os.MkdirAll(filepath.Dir(p), 0700); e != nil {
 		return nil, "", errors.New("cannot create config directory for master key")
@@ -82,6 +94,81 @@ func Key(configPath string) ([]byte, string, error) {
 		_ = d.Close()
 	}
 	return b, keyID(b), nil
+}
+
+// recoverPendingRotation resolves the only ambiguous state in file-based key
+// rotation: the config has been atomically replaced but the staged key has not
+// yet been renamed into place. It does not treat a wrong current key as fatal;
+// the normal config decrypt path will return its generic authentication error.
+func recoverPendingRotation(configPath, keyPath string, current []byte) ([]byte, string, error) {
+	nextPath := keyPath + ".next"
+	next, err := readRotationKey(nextPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return current, keyID(current), nil
+		}
+		return nil, "", errors.New("cannot inspect staged master key")
+	}
+	raw, err := os.ReadFile(configPath)
+	if err != nil {
+		return current, keyID(current), nil
+	}
+	if _, _, err = TransformConfig(raw, current, false); err == nil {
+		return current, keyID(current), nil
+	}
+	if _, _, err = TransformConfig(raw, next, false); err != nil {
+		return current, keyID(current), nil
+	}
+	if err = os.Rename(nextPath, keyPath); err != nil {
+		return nil, "", errors.New("encrypted config uses the staged key but key recovery could not be completed")
+	}
+	syncDirectory(filepath.Dir(keyPath))
+	return next, keyID(next), nil
+}
+
+func recoverMissingRotationKey(configPath, keyPath string) ([]byte, bool, error) {
+	nextPath := keyPath + ".next"
+	next, err := readRotationKey(nextPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, false, nil
+		}
+		return nil, false, errors.New("cannot inspect staged master key")
+	}
+	raw, err := os.ReadFile(configPath)
+	if err != nil || !strings.Contains(string(raw), Prefix) {
+		return nil, false, nil
+	}
+	if _, _, err = TransformConfig(raw, next, false); err != nil {
+		return nil, false, nil
+	}
+	if err = os.Rename(nextPath, keyPath); err != nil {
+		return nil, false, errors.New("encrypted config uses the staged key but key recovery could not be completed")
+	}
+	syncDirectory(filepath.Dir(keyPath))
+	return next, true, nil
+}
+
+func readRotationKey(path string) ([]byte, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	st, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	if st.Mode().Perm() != 0600 || len(b) != 32 {
+		return nil, errors.New("invalid staged master key")
+	}
+	return b, nil
+}
+
+func syncDirectory(path string) {
+	if d, err := os.Open(path); err == nil {
+		_ = d.Sync()
+		_ = d.Close()
+	}
 }
 func keyID(k []byte) string { s := sha256.Sum256(k); return hex.EncodeToString(s[:8]) }
 func seal(key []byte, aad, plain []byte) (string, error) {
@@ -141,16 +228,17 @@ func Open(key []byte, aad []byte, text string) ([]byte, error) {
 	if e != nil {
 		return nil, e
 	}
-	if len(nonce) != 12 || len(p) < g.NonceSize()+g.Overhead()+16 {
+	wrappedKeyLen := 32 + g.Overhead()
+	if len(nonce) != 12 || len(p) < g.NonceSize()+wrappedKeyLen+g.Overhead() {
 		return nil, errors.New("invalid ciphertext length")
 	}
 	wn := p[:g.NonceSize()]
-	wrapped := p[g.NonceSize() : g.NonceSize()+32+g.Overhead()]
+	wrapped := p[g.NonceSize() : g.NonceSize()+wrappedKeyLen]
 	dek, e := g.Open(nil, wn, wrapped, []byte(parts[1]))
 	if e != nil {
 		return nil, errors.New("ciphertext authentication failed; restore the correct master key")
 	}
-	dc := p[g.NonceSize()+32+g.Overhead():]
+	dc := p[g.NonceSize()+wrappedKeyLen:]
 	db, _ := aes.NewCipher(dek)
 	dg, _ := cipher.NewGCM(db)
 	return dg.Open(nil, nonce, dc, aad)

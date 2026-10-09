@@ -28,6 +28,7 @@ import (
 
 // version is set at build time via -ldflags "-X main.version=...".
 var version = "dev"
+var notifyGatewayContext = signal.NotifyContext
 
 func ensureConfig(path string) error {
 	if _, err := os.Stat(path); err == nil {
@@ -53,10 +54,11 @@ func main() {
 		}
 		return
 	}
-	configPath := flag.String("config", defaultConfigPath(), "path to JSON config")
-	noBrowser := flag.Bool("no-browser", false, "do not automatically open the Web UI")
-	showVersion := flag.Bool("version", false, "print version and exit")
-	flag.Parse()
+	flags := flag.NewFlagSet("nexaroute", flag.ExitOnError)
+	configPath := flags.String("config", defaultConfigPath(), "path to JSON config")
+	noBrowser := flags.Bool("no-browser", false, "do not automatically open the Web UI")
+	showVersion := flags.Bool("version", false, "print version and exit")
+	_ = flags.Parse(os.Args[1:])
 	if *showVersion {
 		fmt.Println("NexaRoute v" + version)
 		return
@@ -159,7 +161,7 @@ func main() {
 		IdleTimeout:       180 * time.Second,
 		MaxHeaderBytes:    128 << 10,
 	}
-	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	ctx, cancel := notifyGatewayContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 	listener, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {

@@ -120,15 +120,23 @@ func runSecrets(args []string) error {
 		}
 		kp := *path + ".key"
 		oldCopy := kp + ".previous"
-		if e = os.WriteFile(oldCopy, old, 0600); e != nil {
+		nextPath := kp + ".next"
+		if e = writeRotateFile(oldCopy, old); e != nil {
 			return errors.New("cannot retain recovery copy of prior key")
+		}
+		// Persist the new key before replacing the config. If the process stops
+		// after the config rename, Key() can authenticate the staged key against
+		// the config and atomically promote it on the next startup.
+		if e = writeRotateFile(nextPath, next); e != nil {
+			return errors.New("cannot stage replacement master key")
 		}
 		if e = writeRotateFile(*path, append(encrypted, '\n')); e != nil {
 			return e
 		}
-		if e = writeRotateFile(kp, next); e != nil {
-			return fmt.Errorf("config rotated but key activation failed; restore %s: %w", oldCopy, e)
+		if e = os.Rename(nextPath, kp); e != nil {
+			return fmt.Errorf("config rotated but key activation is pending; restart will attempt recovery using %s: %w", filepath.Base(nextPath), e)
 		}
+		syncRotateDirectory(filepath.Dir(kp))
 		fmt.Println("master key rotated; recovery copy retained at " + filepath.Base(oldCopy))
 		return nil
 	default:
@@ -161,9 +169,13 @@ func writeRotateFile(path string, b []byte) error {
 	if e = os.Rename(n, path); e != nil {
 		return e
 	}
-	if x, e := os.Open(d); e == nil {
+	syncRotateDirectory(d)
+	return nil
+}
+
+func syncRotateDirectory(path string) {
+	if x, err := os.Open(path); err == nil {
 		_ = x.Sync()
 		_ = x.Close()
 	}
-	return nil
 }

@@ -45,13 +45,15 @@ Implemented:
 - credential rotation/failover/cooldown
 - rewritten config mode `0600`
 - AES-256-GCM encrypted-at-rest provider, credential-pool, decision-provider, admin, client-auth, header and proxy secrets; random per-secret data keys, master-key wrapping and field-bound AAD (`internal/secrets`, `internal/config`)
-- atomic plaintext-config migration with an encrypted timestamped backup; `nexaroute secrets status|verify|rotate|decrypt` operator commands (`docs/SECURITY.md`)
+- atomic plaintext-config migration with an authenticated encrypted timestamped backup; `nexaroute secrets status|verify|rotate|decrypt` operator commands
+- fail-closed missing/wrong-key and tamper handling; durable staged-key promotion recovers an interrupted auto-managed rotation when the staged key authenticates the config
 - secret-preserving provider edit
-- credentials stripped on all admin read surfaces (never revealed after save, even to admin GET / snapshot / metrics)
+- plaintext credentials are not returned by Admin read surfaces, snapshots, event/log surfaces, or metrics; see the secret-canary regression coverage and [`docs/SECURITY.md`](SECURITY.md)
 
 Not implemented:
 
-- OS keyring integration (future work); the auto-generated master key is stored beside the config, so compromise or loss of both files defeats recovery; see `docs/SECURITY.md`
+- OS keyring integration (future work); an auto-generated master key is stored beside the config, so compromise of both files defeats confidentiality and loss of the only matching key makes encrypted values unrecoverable
+- a keyring-backed or externally managed key-rotation workflow; `nexaroute secrets rotate` currently supports only the auto-managed sibling key and retains only the most recent `.key.previous` file
 
 Saved provider keys are write-only, including literal, pool, and environment keys. Headers and proxy URLs are also write-only. Editing a credential field replaces the whole credential set; individual saved pool keys cannot be revealed. Do not store credentials in base URLs or other public metadata. Do not expose the admin surface to untrusted networks.
 
@@ -62,7 +64,7 @@ Implemented:
 - loopback-only admin mode by default
 - optional admin API key
 - constant-time admin-key comparison
-- session-only browser storage for the entered admin key
+- in-memory browser UI state for the entered Admin key (it is lost on page reload)
 - optional data-plane client API keys (`client_auth`) with constant-time digest comparison and an optional per-key RPM ceiling
 
 Not implemented as a full internet-facing control plane:
@@ -79,7 +81,7 @@ Discovery parses several common result shapes, but model-list APIs are not stand
 
 ## State and HA
 
-Runtime and health state are single-process/in-memory. Provider configuration is persisted atomically to the active JSON file without creating backup copies. Distributed state, Redis/Postgres coordination, and multi-node breaker synchronization are not implemented.
+Runtime and health state are single-process/in-memory. Routine Admin/runtime config saves are persisted atomically but do not create backup copies; the initial plaintext-to-encrypted migration separately writes an authenticated encrypted timestamped backup. Distributed state, Redis/Postgres coordination, and multi-node breaker synchronization are not implemented.
 
 
 ## Response cache boundaries

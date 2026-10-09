@@ -1,6 +1,6 @@
-# Capability matrix — Phase 0 baseline
+# Capability matrix — Phase 0 baseline, updated through Phase 1a
 
-**Baseline:** NexaRoute `v0.16.3` (`f30fc8b`, 2026-10-09). This is a documentation and measurement artifact; Phase 0 does not implement product features.
+**Baseline snapshot:** NexaRoute `v0.16.3` (`f30fc8b`, 2026-10-09). This matrix preserves Phase 0's dated competitor-evidence baseline; NexaRoute capability cells and prioritized gaps are updated as subsequent phases close. Phase 1a adds encrypted secret storage and its operator workflow; it does not change the retained competitor evidence counts below.
 
 ## Reading the table
 
@@ -26,7 +26,7 @@ Generic landing pages do not count as evidence. Competitor cells marked verified
 | Streaming and tool-call handling | **done** — `internal/translate`, tool fidelity tests | **unverified** — supported-endpoints page does not explicitly establish tool-call fidelity | **unverified** — generic gateway page | **unverified** — generic AI Gateway page | **verified** — [streaming](https://docs.getbifrost.ai/quickstart/gateway/streaming) | **unverified** — generic AI Gateway page |
 | OpenTelemetry / Prometheus observability | **partial** — Prometheus-style metrics and W3C propagation; OTLP exporter not claimed | **verified** — [observability](https://docs.litellm.ai/docs/proxy/observability) | **unverified** — generic gateway page | **unverified** — generic AI Gateway page | **verified** — [default observability](https://docs.getbifrost.ai/features/observability/default) | **unverified** — generic AI Gateway page |
 | Durable control plane / HA state | **partial** — versioned store contracts in `internal/controlplane`; adapters not runtime default | **unverified** — deployment page does not explicitly establish durable HA state | **unverified** — generic deployment page | **unverified** — generic AI Gateway page | **unverified** — generic overview page | **unverified** — generic AI Gateway page |
-| Encrypted secrets at rest | **done** — `internal/secrets`; envelope/tamper/AAD/fuzz tests in `internal/secrets/secrets_test.go`; migration/idempotency in `internal/config/secrets_test.go`; admin non-disclosure in `internal/httpapi/admin_secret_test.go` | **verified** — [secret managers](https://docs.litellm.ai/docs/secret_managers/overview) | **unverified** — generic security page | **unverified** — generic security page | **unverified** — generic security page | **unverified** — generic AI Gateway page |
+| Encrypted secrets at rest | **done** — AES-256-GCM secret envelopes, field-bound AAD, atomic plaintext migration with encrypted backup, fail-closed key errors, crash-safe auto-managed key rotation/recovery, redacted Admin/API/log/metric surfaces; `internal/secrets`, `internal/config`, `cmd/gateway` tests and `nexaroute secrets` CLI. See [`docs/SECURITY.md`](SECURITY.md) | **verified** — [secret managers](https://docs.litellm.ai/docs/secret_managers/overview) | **unverified** — generic security page | **unverified** — generic security page | **unverified** — generic security page | **unverified** — generic AI Gateway page |
 | Built-in TLS / mTLS | **missing** — reverse-proxy hardening currently required | **unverified** — security page does not explicitly establish built-in TLS/mTLS | **unverified** — generic security page | **unverified** — generic security page | **unverified** — generic security page | **unverified** — generic security page |
 | MCP/tool gateway | **missing** — roadmap item | **verified** — [MCP support](https://docs.litellm.ai/docs/completion/mcp) | **unverified** — generic integrations page | **unverified** — generic AI Gateway page | **unverified** — generic feature page | **unverified** — generic AI Gateway page |
 | Single-binary zero-dependency default | **done** — `README.md`, `go.mod`, release workflow | **unverified** — no capability-specific deployment-model evidence retained here | **unverified** — gateway deployment model not established by a capability-specific page | **unverified** — deployment model not established by a capability-specific page | **unverified** — official binary/npx fact requires a capability-specific deployment page not retained here | **unverified** — deployment model not established by a capability-specific page |
@@ -52,14 +52,14 @@ The old 100-request Python mock result was discarded because its separate header
 
 ## Prioritized gap list from Phase 0
 
-1. **P0 security:** encrypted secret storage, key rotation, TLS/mTLS, CSRF/session security, RBAC/SSO and strict egress policy.
-2. **P0 operations:** make durable store adapters runtime-integrated, define multi-replica consistency, backups and `config validate/diff/dry-run` CLI contracts.
+1. **P0 security:** built-in TLS/mTLS, CSRF/session hardening, RBAC/SSO and strict provider egress policy; OS keyring integration and externally managed key-rotation workflows remain future work.
+2. **P0 operations:** make durable store adapters runtime-integrated, define multi-replica consistency and tested backup/restore, and implement `config validate/diff/dry-run` CLI contracts.
 3. **P1 economics:** invoice-accurate price book, hard budget enforcement and durable cost/usage settlement across processes.
 4. **P1 protocol breadth:** native Bedrock, Vertex, Azure semantics, embeddings, rerank, image and audio endpoints.
 5. **P1 intelligence:** semantic cache, quality-aware routing, canary/shadow/weighted rollout and explainable hedging budgets.
 6. **P1 platform:** MCP gateway with deny-by-default tool policy and per-tenant audit.
 7. **P2 observability:** OTLP exporter, GenAI semantic conventions, cardinality limits and packaged Grafana assets.
-8. **P2 quality:** raise overall coverage from the measured baseline and close low-coverage packages before adding broad feature surface.
+8. **P2 quality:** continue raising overall coverage from the measured baseline and close low-coverage packages before adding broad feature surface.
 
 ## Baseline limitations
 
