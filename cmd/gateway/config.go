@@ -125,7 +125,9 @@ func configDiff(left, right config.Config) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	keys := make(map[string]struct{}, len(leftValues)+len(rightValues))
+	// Do not size this map from untrusted config-derived lengths; the set is
+	// bounded by the actual keys inserted and the sum could overflow int.
+	keys := make(map[string]struct{})
 	for key := range leftValues {
 		keys[key] = struct{}{}
 	}
