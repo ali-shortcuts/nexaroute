@@ -183,7 +183,9 @@ func main() {
 	}
 	go func() {
 		scheme := "http"
-		if secureListener { scheme = "https" }
+		if secureListener {
+			scheme = "https"
+		}
 		logger.Printf("version=%s config=%s listening=%s://%s", version, *configPath, scheme, cfg.Listen)
 		if err := srv.Serve(serveListener); err != nil && err != http.ErrServerClosed {
 			serverErr <- err
