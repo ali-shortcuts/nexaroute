@@ -304,12 +304,31 @@ func listAllows(list []string, value string) bool {
 	return false
 }
 
+// identityPolicyAllows applies every configured scope as a constraint.
+// Key-level restrictions may narrow project/team access, but must never widen
+// it: an explicit "*" on a key cannot override a narrower parent policy.
 func identityPolicyAllows(cfg config.Config, id clientIdentity, key config.VirtualKeyConfig, path, model string) bool {
 	if !id.Virtual {
 		return true
 	}
-	models := append([]string(nil), key.AllowedModels...)
-	routes := append([]string(nil), key.AllowedRoutes...)
+	if !listAllows(key.AllowedRoutes, path) || !listAllows(key.AllowedModels, model) {
+		return false
+	}
+
+	// A team is nested inside a project, and a project is nested inside a
+	// tenant. Missing parent identifiers make the requested scope ambiguous.
+	if key.TeamID != "" && key.ProjectID == "" {
+		return false
+	}
+	if key.ProjectID == "" {
+		// Tenant-only identifiers are supported as metadata for existing
+		// deployments; in that case the key's own allow-lists are authoritative.
+		return key.TeamID == ""
+	}
+	if key.TenantID == "" {
+		return false
+	}
+
 	for _, tenant := range cfg.ClientAuth.Tenants {
 		if tenant.ID != key.TenantID {
 			continue
@@ -318,25 +337,26 @@ func identityPolicyAllows(cfg config.Config, id clientIdentity, key config.Virtu
 			if project.ID != key.ProjectID {
 				continue
 			}
-			if len(models) == 0 {
-				models = project.AllowedModels
+			if !listAllows(project.AllowedRoutes, path) || !listAllows(project.AllowedModels, model) {
+				return false
 			}
-			if len(routes) == 0 {
-				routes = project.AllowedRoutes
+			if key.TeamID == "" {
+				return true
 			}
 			for _, team := range project.Teams {
-				if team.ID == key.TeamID {
-					if len(models) == 0 {
-						models = team.AllowedModels
-					}
-					if len(routes) == 0 {
-						routes = team.AllowedRoutes
-					}
+				if team.ID != key.TeamID {
+					continue
 				}
+				return listAllows(team.AllowedRoutes, path) && listAllows(team.AllowedModels, model)
 			}
+			// A key may not name a team outside its selected project.
+			return false
 		}
+		// The key's project must belong to the selected tenant.
+		return false
 	}
-	return listAllows(routes, path) && listAllows(models, model)
+	// A project-scoped key may not rely on an unconfigured tenant.
+	return false
 }
 
 // clientBucketLocked returns a live bucket while holding clientRL. Both RPM
