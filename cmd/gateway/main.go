@@ -46,6 +46,13 @@ func ensureConfig(path string) error {
 }
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "secrets" {
+		if err := runSecrets(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "nexaroute: secrets command failed:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	configPath := flag.String("config", defaultConfigPath(), "path to JSON config")
 	noBrowser := flag.Bool("no-browser", false, "do not automatically open the Web UI")
 	showVersion := flag.Bool("version", false, "print version and exit")
