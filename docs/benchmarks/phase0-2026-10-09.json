@@ -2,50 +2,117 @@
   "method": {
     "fixed_upstream_latency_ms": 15.0,
     "stream_gap_ms": 10.0,
-    "requests": 100,
-    "workload": "non-streaming OpenAI Chat Completions; sequential; local loopback"
+    "requests_per_concurrency": 1000,
+    "concurrency_levels": [
+      1,
+      16,
+      64
+    ],
+    "warmup_requests_per_connection": 2,
+    "persistent_connections": true,
+    "mock": "compiled Go net/http server; TCP_NODELAY; one write per non-streaming response",
+    "workload": "OpenAI Chat Completions over persistent HTTP/1.1; direct vs gateway; local loopback"
   },
   "environment": {
     "python": "3.12.3",
     "platform": "x86_64",
-    "cpu_count": 6
+    "cpu_count": 6,
+    "go": "/usr/local/go/bin/go"
   },
   "direct": {
-    "count": 100,
-    "p50_ms": 15.930114000184403,
-    "p95_ms": 16.15746690076776,
-    "p99_ms": 18.155898440873074,
-    "throughput_rps": 61.74734574142302,
-    "min_ms": 15.786859999934677,
-    "max_ms": 34.89189200081455
+    "1": {
+      "count": 1000,
+      "concurrency": 1,
+      "p50_ms": 15.576360498926078,
+      "p95_ms": 15.80906429935567,
+      "p99_ms": 15.988768281058583,
+      "throughput_rps": 63.96040654758042,
+      "min_ms": 15.417184000398265,
+      "max_ms": 16.63420500153734
+    },
+    "16": {
+      "count": 1000,
+      "concurrency": 16,
+      "p50_ms": 16.185886999664945,
+      "p95_ms": 17.26344925018566,
+      "p99_ms": 17.725834209431923,
+      "throughput_rps": 939.568624162399,
+      "min_ms": 15.239934000419453,
+      "max_ms": 18.312096999579808
+    },
+    "64": {
+      "count": 1000,
+      "concurrency": 64,
+      "p50_ms": 16.32025400067505,
+      "p95_ms": 18.3640001009735,
+      "p99_ms": 19.553339969133958,
+      "throughput_rps": 3037.5145962027314,
+      "min_ms": 15.194403000350576,
+      "max_ms": 21.474912000485347
+    }
   },
   "gateway": {
-    "count": 100,
-    "p50_ms": 59.95229499967536,
-    "p95_ms": 60.06764185103748,
-    "p99_ms": 60.61125051013734,
-    "throughput_rps": 16.661363165945996,
-    "min_ms": 57.879250998666976,
-    "max_ms": 63.99720000081288
+    "1": {
+      "count": 1000,
+      "concurrency": 1,
+      "p50_ms": 15.983422500539746,
+      "p95_ms": 16.319928849588905,
+      "p99_ms": 16.68470464872371,
+      "throughput_rps": 62.27484521538567,
+      "min_ms": 15.800307999597862,
+      "max_ms": 20.353006999357603
+    },
+    "16": {
+      "count": 1000,
+      "concurrency": 16,
+      "p50_ms": 16.494672499902663,
+      "p95_ms": 17.621896049331554,
+      "p99_ms": 18.232750000533997,
+      "throughput_rps": 919.6643325609745,
+      "min_ms": 15.56529199842771,
+      "max_ms": 19.05108999926597
+    },
+    "64": {
+      "count": 1000,
+      "concurrency": 64,
+      "p50_ms": 31.974930500837218,
+      "p95_ms": 34.12479954868103,
+      "p99_ms": 35.02375386966378,
+      "throughput_rps": 1688.7637462402156,
+      "min_ms": 15.768288998515345,
+      "max_ms": 36.78140000010899
+    }
   },
   "streaming": {
     "direct": {
-      "total_ms": 46.32048799976474,
-      "ttft_ms": 46.20513299960294
+      "total_ms": 46.2185349988431,
+      "ttft_ms": 46.21741599839879
     },
     "gateway": {
-      "total_ms": 46.59367899876088,
-      "ttft_ms": 46.590279998781625
+      "total_ms": 46.4460710009007,
+      "ttft_ms": 46.44499800087942
     },
-    "ttft_overhead_ms": 0.3851469991786871
+    "ttft_overhead_ms": 0.22758200248063076
   },
   "overhead": {
-    "p50_ms": 44.022180999490956,
-    "p95_ms": 43.91017495026972,
-    "p99_ms": 42.455352069264265
+    "1": {
+      "p50_ms": 0.40706200161366723,
+      "p95_ms": 0.5108645502332347,
+      "p99_ms": 0.6959363676651265
+    },
+    "16": {
+      "p50_ms": 0.3087855002377182,
+      "p95_ms": 0.35844679914589506,
+      "p99_ms": 0.5069157911020739
+    },
+    "64": {
+      "p50_ms": 15.654676500162168,
+      "p95_ms": 15.760799447707534,
+      "p99_ms": 15.47041390052982
+    }
   },
   "memory": {
-    "benchmark_process_maxrss_kb": 24172,
-    "gateway_vm_hwm_kb": 28296
+    "benchmark_process_maxrss_kb": 23104,
+    "gateway_vm_hwm_kb": 29168
   }
 }

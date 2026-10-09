@@ -1,36 +1,110 @@
-# Phase 0 baseline report — 2026-10-09
+# Phase 0 baseline report — follow-up 2026-10-09
 
 ## 1. Phase and PR status
 
 - **Phase:** 0 — baseline and honest capability matrix.
-- **PR:** not opened; the phase was executed on a local feature branch only.
-- **Implementation status:** no product feature was implemented. Phase 0 produced documentation and a reproducible benchmark harness.
+- **Branch:** `phase0-baseline`.
+- **PR:** opened after this report update; not merged.
+- **Implementation status:** no Phase 1 product feature was implemented. This follow-up corrected the benchmark harness and its evidence.
 
 ## 2. Acceptance matrix
 
 | Acceptance item | Status | Evidence |
 |---|---|---|
-| Run `./scripts/verify.sh` | **DONE** | Baseline job `job_TeCyTvNL`; verify printed `VERIFY PASS`. |
-| Measure package coverage | **DONE** | Baseline job `job_VH4YLlUG`; package coverage recorded below. |
-| Create capability matrix | **DONE with conservative evidence** | `docs/CAPABILITY_MATRIX.md`; competitor cells link official docs and use `unverified` where evidence was insufficient. |
-| Create reproducible gateway benchmark | **DONE** | `scripts/bench/gateway_overhead.py`; result `docs/benchmarks/phase0-2026-10-09.json`. |
-| Publish comparable competitor performance numbers | **NOT DONE** | Deliberately not attempted; no same-hardware competitor runs were performed. |
+| Push Phase 0 branch and open one PR | **DONE** | PR link/number is recorded in the PR and final commit metadata. No merge performed. |
+| Correct benchmark transport and workload | **DONE** | `scripts/bench/gateway_overhead.py`; Go mock, TCP_NODELAY, persistent connections, warm-up, 1/16/64 concurrency, 1,000 requests per level. |
+| Replace obsolete benchmark JSON | **DONE** | `docs/benchmarks/phase0-2026-10-09.json`. |
+| Report total and per-package coverage | **DONE** | `go tool cover -func=/tmp/nexaroute-cover.out | tail -1` returned `total: (statements) 75.0%`. |
+| Exact browser-test evidence | **DONE** | Tests ran in the Manus Sandbox; command and result are recorded below. |
+| Conservative competitor matrix | **DONE** | Every cell not supported by sufficient reviewed official documentation remains `unverified`; list is recorded below. |
 
 ## 3. Verification output summary
 
-- `gofmt -l .`: pass.
-- `go vet ./...`: pass.
-- `go test -count=1 ./...`: pass.
-- `go test -race -count=1 ./...`: pass inside `scripts/verify.sh`.
-- JavaScript syntax checks: pass.
-- Browser control-plane acceptance: pass where Chromium/Playwright were available.
-- Short fuzz checks: pass.
-- Linux amd64 and arm64 builds: pass.
-- Final repository baseline before Phase 0 artifacts: `v0.16.3`, commit `f30fc8b403df4e13cdd3cc6133164a54e67e7835`, clean `main`.
+All commands below ran in the Manus Sandbox checkout `/home/ubuntu/nexaroute` with `/usr/local/go/bin` on `PATH`.
 
-## 4. Coverage baseline
+### Raw formatting output
 
-The requested 85% overall target is **not met** by the current repository baseline. The measured package values were:
+```text
+$ gofmt -l .
+<no output>
+exit 0
+```
+
+### Raw vet output
+
+```text
+$ go vet ./...
+<no output>
+exit 0
+```
+
+### Race-test summary
+
+```text
+$ go test -race -timeout=3m -count=1 ./...
+ok   github.com/ali-shortcuts/nexaroute/cmd/gateway
+ok   github.com/ali-shortcuts/nexaroute/internal/budget
+ok   github.com/ali-shortcuts/nexaroute/internal/cache
+ok   github.com/ali-shortcuts/nexaroute/internal/compat
+ok   github.com/ali-shortcuts/nexaroute/internal/config
+ok   github.com/ali-shortcuts/nexaroute/internal/controlplane
+ok   github.com/ali-shortcuts/nexaroute/internal/core
+ok   github.com/ali-shortcuts/nexaroute/internal/decision
+ok   github.com/ali-shortcuts/nexaroute/internal/decision/jev
+ok   github.com/ali-shortcuts/nexaroute/internal/decision/policy
+ok   github.com/ali-shortcuts/nexaroute/internal/decision/providerstate
+ok   github.com/ali-shortcuts/nexaroute/internal/decision/remote
+ok   github.com/ali-shortcuts/nexaroute/internal/desktop
+ok   github.com/ali-shortcuts/nexaroute/internal/doccheck
+ok   github.com/ali-shortcuts/nexaroute/internal/eval
+ok   github.com/ali-shortcuts/nexaroute/internal/evallive
+ok   github.com/ali-shortcuts/nexaroute/internal/events
+ok   github.com/ali-shortcuts/nexaroute/internal/feature
+?    github.com/ali-shortcuts/nexaroute/internal/guardrail [no test files]
+ok   github.com/ali-shortcuts/nexaroute/internal/health
+ok   github.com/ali-shortcuts/nexaroute/internal/httpapi
+ok   github.com/ali-shortcuts/nexaroute/internal/logging
+ok   github.com/ali-shortcuts/nexaroute/internal/probe
+ok   github.com/ali-shortcuts/nexaroute/internal/protocol/canonical
+ok   github.com/ali-shortcuts/nexaroute/internal/providers
+ok   github.com/ali-shortcuts/nexaroute/internal/route
+ok   github.com/ali-shortcuts/nexaroute/internal/router
+ok   github.com/ali-shortcuts/nexaroute/internal/scorecards
+ok   github.com/ali-shortcuts/nexaroute/internal/taskprofile
+ok   github.com/ali-shortcuts/nexaroute/internal/translate
+ok   github.com/ali-shortcuts/nexaroute/internal/usage
+exit 0
+```
+
+The full `./scripts/verify.sh` gate also passed, including JavaScript checks, fuzz checks, browser tests, and Linux amd64/arm64 builds: `VERIFY PASS`.
+
+### Browser test location, commands, and results
+
+These tests **ran in the Manus Sandbox** (not the user's local browser):
+
+```text
+$ python3 scripts/test-browser-e2e.py
+BROWSER E2E PASS
+
+$ python3 scripts/test-live-visual-agent.py
+LIVE VISUAL AGENT E2E PASS
+```
+
+They were invoked by `./scripts/verify.sh` after confirming both `chromium` and the Python `playwright` module were available.
+
+## 4. Coverage
+
+Repository-wide coverage command and raw total:
+
+```text
+$ export PATH="/usr/local/go/bin:$PATH"
+$ go test ./... -coverprofile=/tmp/nexaroute-cover.out
+... all packages passed ...
+$ go tool cover -func=/tmp/nexaroute-cover.out | tail -1
+total:                                          (statements)                  75.0%
+```
+
+The required 85% overall target is **not met**. Per-package measurements:
 
 ```text
 cmd/gateway 22.9%
@@ -42,10 +116,11 @@ internal/controlplane 40.2%
 internal/core 100.0%
 internal/decision 68.0%
 internal/decision/jev 80.8%
-internal/decision/policy 83.9%
+internal/decision/policy 83.7%
 internal/decision/providerstate 85.1%
 internal/decision/remote 85.2%
 internal/desktop 70.9%
+internal/doccheck no statements
 internal/eval 88.0%
 internal/evallive 81.5%
 internal/events 94.3%
@@ -65,42 +140,65 @@ internal/translate 80.9%
 internal/usage 65.3%
 ```
 
-The low or zero coverage packages are recorded as a Phase 0 gap, not hidden by averaging or by excluding packages.
+Packages below 70% are explicitly listed: **`cmd/gateway` (22.9%), `internal/compat` (64.5%), `internal/controlplane` (40.2%), `internal/decision` (68.0%), `internal/providers` (64.0%), `internal/usage` (65.3%), and `internal/guardrail` (0.0%)**. `internal/guardrail` has no test files and is not excluded from the gap list.
 
-## 5. Benchmark run
+## 5. Corrected benchmark
 
 Command:
 
 ```bash
-python3 scripts/bench/gateway_overhead.py --requests 100 --output /tmp/nexaroute-benchmark.json
+python3 scripts/bench/gateway_overhead.py --requests 1000 --output /tmp/nexaroute-benchmark-v2.json
 ```
 
-Method: local loopback mock upstream, fixed 15 ms response delay, sequential OpenAI Chat Completions requests, plus a three-chunk streaming response with 10 ms inter-chunk delay. The direct path and gateway path used the same mock. Hardware reported by the harness: Linux x86_64, 6 CPUs, Python 3.12.3.
+Method and hardware:
 
-Results from `docs/benchmarks/phase0-2026-10-09.json`:
+- Manus Sandbox, Linux `x86_64`, **6 CPUs**, Python **3.12.3**, Go at `/usr/local/go/bin/go`.
+- Compiled Go `net/http` mock upstream with fixed 15 ms delay.
+- Mock connections use `TCP_NODELAY`; each non-streaming response is written in one write.
+- Python client uses persistent HTTP/1.1 connections and two warm-up requests per connection.
+- 1,000 measured requests at concurrency **1, 16, and 64**.
+- Streaming test retained with three chunks and 10 ms inter-chunk gap.
+- Direct and gateway paths use the same mock upstream.
 
-- Direct p50/p95/p99: **15.93 / 16.16 / 18.16 ms**.
-- Through NexaRoute p50/p95/p99: **59.95 / 60.07 / 60.61 ms**.
-- Added p50/p95/p99: **44.02 / 43.91 / 42.46 ms** for this specific cold local mock configuration.
-- Direct throughput: **61.75 RPS**; gateway throughput: **16.66 RPS** in the sequential workload.
-- Streaming TTFT overhead: **0.39 ms** in this run.
-- Gateway process VmHWM: **28,296 kB**; this is process high-water memory, not a complete system memory profile.
+The prior 100-request Python-server result was discarded. Its approximately +44 ms result was a harness delayed-ACK artifact caused by separate header/body writes, not a NexaRoute latency claim.
 
-These values are a reproducible local baseline, not a universal performance claim. Competitor comparisons require running the same harness against each product and configuration.
+| Concurrency | Direct p50/p95/p99 ms | Gateway p50/p95/p99 ms | Added p50/p95/p99 ms | Direct RPS | Gateway RPS |
+|---:|---:|---:|---:|---:|---:|
+| 1 | 15.576 / 15.809 / 15.989 | 15.983 / 16.320 / 16.685 | 0.407 / 0.511 / 0.696 | 63.96 | 62.27 |
+| 16 | 16.186 / 17.263 / 17.726 | 16.495 / 17.622 / 18.233 | 0.309 / 0.358 / 0.507 | 939.57 | 919.66 |
+| 64 | 16.320 / 18.364 / 19.553 | 31.975 / 34.125 / 35.024 | 15.655 / 15.761 / 15.470 | 3037.51 | 1688.76 |
 
-## 6. Documentation and gap delta
+The concurrency-64 result shows gateway saturation/queueing under this local configuration; it is not collapsed into a single latency claim. Streaming result:
 
-- Added `docs/CAPABILITY_MATRIX.md` with NexaRoute evidence and official competitor links.
-- Added `scripts/bench/gateway_overhead.py` and its JSON result artifact.
-- Added `docs/benchmarks/phase0-2026-10-09.json`.
-- Added the prioritized gap list in the capability matrix. Existing `docs/KNOWN_GAPS.md` already records the major security, HA, protocol, economics and observability boundaries; no product gap was silently marked fixed.
+- Direct total/TTFT: **46.219 / 46.217 ms**.
+- Gateway total/TTFT: **46.446 / 46.445 ms**.
+- Streaming TTFT overhead: **0.228 ms**.
+- Gateway process VmHWM: **29,168 KB**.
 
-## 7. Not done or not verifiable
+The JSON artifact contains the raw measurements. These are local reproducible baselines, not universal performance claims or competitor comparisons.
 
-- The structured competitor workflow completed the LiteLLM subtask but four competitor subtasks were stopped by the session credit limit. Existing official links from the repository's prior comparison were reused where available; otherwise matrix cells are explicitly `unverified`.
-- No Phase 1 implementation was started. In particular, there is no claim that encrypted secret storage, RBAC/SSO, TLS/mTLS, durable runtime adapters, or audit-chain security is complete.
+## 6. Competitor matrix and unverified cells
+
+The matrix remains conservative. The following competitor cells are explicitly **unverified** because the reviewed official documentation was insufficient for a defensible claim:
+
+- **Portkey AI Gateway:** per-deployment health and capability filtering; release artifacts/checksums.
+- **Kong AI Gateway:** semantic cache.
+- **Bifrost:** multi-user RBAC/SSO; exact response cache; semantic cache.
+- **Envoy AI Gateway:** multi-user RBAC/SSO; exact response cache; semantic cache; encrypted secrets at rest; MCP/tool gateway.
+
+No unverified cell is treated as evidence that a competitor lacks the capability.
+
+## 7. What was not done
+
+- The PR was **not merged**.
+- No Phase 1 work was started.
+- No `.github/workflows/*` file was changed.
+- `scripts/verify.sh` was not changed.
 - No competitor performance benchmark was run.
+- No universal performance, parity, or superiority claim was made.
+- No release/tag was created.
+- No production deployment, account change, or external destructive action was performed.
 
-## 8. Recommended next phase
+## 8. Next phase boundary
 
-Phase 1 should be split into small concerns, beginning with encrypted-at-rest secrets and migration tests. It must preserve zero-dependency default builds, add fuzz/property tests for parsers and migration logic, update `docs/KNOWN_GAPS.md` and `docs/CAPABILITY_MATRIX.md`, and run the full verification gate before any release decision.
+Phase 1 remains out of scope for this follow-up. Its planned work is encrypted-at-rest secrets, runtime integration of durable stores, and identity-model expansion, subject to a separate user instruction.

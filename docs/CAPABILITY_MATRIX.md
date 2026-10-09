@@ -34,9 +34,13 @@ Competitor cells link to official documentation. NexaRoute cells point to the lo
 
 ## Phase 0 benchmark and baseline
 
-The reproducible benchmark is [scripts/bench/gateway_overhead.py](../scripts/bench/gateway_overhead.py). It starts a local mock upstream with fixed 15 ms response latency and a three-chunk streaming response, then compares direct upstream calls with the same calls through NexaRoute. It reports p50/p95/p99 latency, sequential throughput, RSS, total streaming latency and TTFT overhead. It does not compare competitors and does not claim a universal performance result.
+The reproducible benchmark is [scripts/bench/gateway_overhead.py](../scripts/bench/gateway_overhead.py). It compiles a local Go `net/http` mock upstream with fixed 15 ms response latency, `TCP_NODELAY`, and one write per non-streaming response. The Python client uses persistent HTTP/1.1 connections, two warm-up requests per connection, and 1,000 measured requests at concurrency 1, 16, and 64. It reports p50/p95/p99 latency and requests/second for direct and gateway paths, plus streaming TTFT. It does not compare competitors and does not claim a universal performance result.
 
-The first run exposed and fixed a harness portability issue: the child process inherited an environment without `go` on `PATH`; the harness now uses `/usr/local/go/bin/go` by default and accepts `NEXAROUTE_GO` for other installations. A benchmark number is only published after a successful run on the current machine.
+The benchmark also accepts `NEXAROUTE_GO` and defaults to `/usr/local/go/bin/go`. The old 100-request Python mock result was discarded because its separate header/body writes produced a delayed-ACK artifact; it must not be used as a gateway-latency claim.
+
+### Cells left unverified
+
+The following competitor cells remain explicitly **unverified** because the reviewed official documentation was insufficient for a defensible claim: **Portkey AI Gateway — per-deployment health and capability filtering; Bifrost — multi-user RBAC/SSO, exact response cache, semantic cache; Envoy AI Gateway — multi-user RBAC/SSO, exact response cache, semantic cache, encrypted secrets at rest, MCP/tool gateway; Kong AI Gateway — semantic cache; Portkey AI Gateway — release artifacts/checksums.**
 
 ## Prioritized gap list from Phase 0
 
