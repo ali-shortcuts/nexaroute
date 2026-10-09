@@ -44,14 +44,16 @@ Implemented:
 - multiple credentials per provider
 - credential rotation/failover/cooldown
 - rewritten config mode `0600`
+- AES-256-GCM encrypted-at-rest provider, credential-pool, decision-provider, admin, client-auth, header and proxy secrets; random per-secret data keys, master-key wrapping and field-bound AAD (`internal/secrets`, `internal/config`)
+- atomic plaintext-config migration with an encrypted timestamped backup; `nexaroute secrets status|verify|rotate|decrypt` operator commands (`docs/SECURITY.md`)
 - secret-preserving provider edit
 - credentials stripped on all admin read surfaces (never revealed after save, even to admin GET / snapshot / metrics)
 
 Not implemented:
 
-- encrypted-at-rest secret vault / OS keyring integration
+- OS keyring integration (future work); the auto-generated master key is stored beside the config, so compromise or loss of both files defeats recovery; see `docs/SECURITY.md`
 
-Saved provider keys are now write-only, including literal, pool, and environment keys. Headers and proxy URLs are also write-only. Editing a credential field replaces the whole credential set; individual saved pool keys cannot be revealed. Do not store credentials in base URLs or other public metadata. Do not expose the admin surface to untrusted networks.
+Saved provider keys are write-only, including literal, pool, and environment keys. Headers and proxy URLs are also write-only. Editing a credential field replaces the whole credential set; individual saved pool keys cannot be revealed. Do not store credentials in base URLs or other public metadata. Do not expose the admin surface to untrusted networks.
 
 ## Admin security
 
