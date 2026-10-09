@@ -240,7 +240,39 @@ For local-only use, the default is safest:
 {"bind_local_only": true, "api_key": ""}
 ```
 
-For Docker/LAN access, set an admin key and put TLS/reverse-proxy controls in front if the environment is not fully trusted.
+For Docker/LAN access, set an admin key. Built-in TLS is optional and protects the shared HTTP listener (UI, Admin API, and data plane); a trusted reverse proxy remains supported.
+
+### Built-in TLS and optional mTLS
+
+TLS is off by default. When enabled, NexaRoute serves HTTPS on the configured `listen` address and enforces TLS 1.2 or newer. Certificate, key, and CA paths may be absolute or relative to the directory containing the config file. NexaRoute validates the PEM materials at startup/config validation and reloads them for each new TLS handshake, so atomically replacing the files updates new connections without restarting. Existing connections keep their established TLS session.
+
+```json
+{
+  "listen": "0.0.0.0:8443",
+  "admin": { "bind_local_only": false, "api_key": "set-a-long-random-admin-key" },
+  "tls": {
+    "enabled": true,
+    "cert_file": "tls/server.crt",
+    "key_file": "tls/server.key",
+    "client_ca_file": "tls/client-ca.crt",
+    "require_client_cert_admin": true,
+    "require_client_cert_data_plane": false
+  }
+}
+```
+
+`client_ca_file` is required when either client-certificate flag is enabled. Client certificates are verified against that CA during the TLS handshake; NexaRoute then requires a verified certificate for `/admin/api/*` and/or `/v1/*` according to the corresponding flag. Use a CA and certificates dedicated to the intended clients. The Admin API still requires its configured Admin key when remote administration is enabled; mTLS does not replace authorization. Keep certificate/key files readable by the gateway process and protect the private key with restrictive filesystem permissions.
+
+### Read-only configuration commands
+
+```bash
+nexaroute config validate --config /etc/nexaroute/config.json
+nexaroute config diff --config /etc/nexaroute/config.json
+nexaroute config diff --config /etc/nexaroute/config.json --against /etc/nexaroute/staging.json
+nexaroute config dry-run --config /etc/nexaroute/config.json
+```
+
+`validate` checks the schema and configured TLS material. `diff` compares with built-in defaults unless `--against` names a second config; changed secret fields are reported only as redacted markers. `dry-run` validates and prepares provider adapters without opening a listener, probing providers, or making upstream requests. Config loading may perform a required on-disk format migration for a legacy config when such a migration is enabled; otherwise these commands do not alter runtime settings. Exit codes: **0** valid/no differences, **1** invalid config or preparation/runtime error, **2** usage error.
 
 
 ### Ready-mesh controls

@@ -1,14 +1,17 @@
 package httpapi
 
 import (
+	"crypto/rand"
 	"crypto/subtle"
 	"embed"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"io/fs"
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"reflect"
 	"runtime/debug"
@@ -870,6 +873,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/responses", s.openAIResponses)
 
 	mux.HandleFunc("/admin/api/snapshot", s.adminSnapshot)
+	mux.HandleFunc("/admin/api/csrf-token", s.adminCSRFToken)
 	mux.HandleFunc("/admin/api/events/stream", s.adminEventStream)
 	mux.HandleFunc("/admin/api/probe", s.adminProbe)
 	mux.HandleFunc("/admin/api/providers", s.adminProviders)
@@ -1055,6 +1059,17 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 				errorJSON(sw, http.StatusUnauthorized, "admin authorization required")
 				return
 			}
+			if !s.adminClientCertificateAuthorized(r) {
+				errorJSON(sw, http.StatusForbidden, "a verified client certificate is required for admin access")
+				return
+			}
+			if isStateChanging(r.Method) && !adminCSRFAllowed(r) {
+				errorJSON(sw, http.StatusForbidden, "same-origin request and valid CSRF token required")
+				return
+			}
+		} else if strings.HasPrefix(r.URL.Path, "/v1/") && !s.dataPlaneClientCertificateAuthorized(r) {
+			errorJSON(sw, http.StatusForbidden, "a verified client certificate is required for data-plane access")
+			return
 		}
 		if isDataPlaneRequest(r) && s.draining.Load() {
 			sw.Header().Set("Retry-After", "5")
@@ -1150,4 +1165,98 @@ func (s *Server) adminAuthorized(r *http.Request) bool {
 	// addressed to a loopback name so a DNS-rebound browser origin cannot
 	// silently read privileged admin data.
 	return isLoopback && adminHostAllowed(r)
+}
+
+const adminCSRFCookie = "nexaroute_admin_csrf"
+
+func isStateChanging(method string) bool {
+	switch method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
+		return false
+	default:
+		return true
+	}
+}
+
+func requestIsSecure(r *http.Request) bool {
+	return r.TLS != nil || strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")), "https")
+}
+
+func sameOrigin(r *http.Request) bool {
+	raw := strings.TrimSpace(r.Header.Get("Origin"))
+	if raw == "" {
+		raw = strings.TrimSpace(r.Header.Get("Referer"))
+	}
+	if raw == "" {
+		return true // non-browser API clients are protected by their admin credential
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" || u.User != nil || (u.Scheme != "http" && u.Scheme != "https") {
+		return false
+	}
+	if !strings.EqualFold(u.Host, r.Host) {
+		return false
+	}
+	if requestIsSecure(r) {
+		return u.Scheme == "https"
+	}
+	return u.Scheme == "http"
+}
+
+func adminCSRFAllowed(r *http.Request) bool {
+	if !sameOrigin(r) {
+		return false
+	}
+	_, cookieErr := r.Cookie(adminCSRFCookie)
+	needsToken := cookieErr == nil || r.Header.Get("Origin") != "" || r.Header.Get("Referer") != ""
+	if !needsToken {
+		return true
+	}
+	cookie, err := r.Cookie(adminCSRFCookie)
+	if err != nil || cookie.Value == "" {
+		return false
+	}
+	got := r.Header.Get("X-NexaRoute-CSRF")
+	return len(got) == len(cookie.Value) && subtle.ConstantTimeCompare([]byte(got), []byte(cookie.Value)) == 1
+}
+
+func (s *Server) adminClientCertificateAuthorized(r *http.Request) bool {
+	s.runtimeMu.RLock()
+	required := s.cfg.TLS.RequireClientCertAdmin
+	s.runtimeMu.RUnlock()
+	return !required || (r.TLS != nil && len(r.TLS.VerifiedChains) > 0)
+}
+
+func (s *Server) dataPlaneClientCertificateAuthorized(r *http.Request) bool {
+	s.runtimeMu.RLock()
+	required := s.cfg.TLS.RequireClientCertDataPlane
+	s.runtimeMu.RUnlock()
+	return !required || (r.TLS != nil && len(r.TLS.VerifiedChains) > 0)
+}
+
+func (s *Server) adminCSRFToken(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		errorJSON(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	token := ""
+	if cookie, err := r.Cookie(adminCSRFCookie); err == nil {
+		token = cookie.Value
+	}
+	if token == "" {
+		var raw [32]byte
+		if _, err := rand.Read(raw[:]); err != nil {
+			errorJSON(w, http.StatusInternalServerError, "could not initialize CSRF protection")
+			return
+		}
+		token = base64.RawURLEncoding.EncodeToString(raw[:])
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name: adminCSRFCookie, Value: token, Path: "/admin/api/",
+		HttpOnly: true, Secure: requestIsSecure(r), SameSite: http.SameSiteStrictMode,
+		Expires: time.Now().Add(12 * time.Hour), MaxAge: 12 * 60 * 60,
+	})
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Type", "application/json")
+	fmt.Fprintf(w, `{"token":%q}`, token)
 }

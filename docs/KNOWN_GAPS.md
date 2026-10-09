@@ -70,9 +70,8 @@ Implemented:
 Not implemented as a full internet-facing control plane:
 
 - per-client quotas beyond the RPM and TPM ceilings, hashed-at-rest client keys;
-- built-in TLS
 - RBAC/multi-user accounts
-- CSRF session framework
+- cookie-backed Admin login/session identity (Admin authorization remains API-key or local-loopback based); browser state-changing calls are protected by same-origin checks and a CSRF token cookie/header, while stateless non-browser clients authenticate with the Admin key;
 - enterprise SSO
 
 ## Model discovery

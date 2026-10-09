@@ -59,3 +59,8 @@ Keep log directories private. App-owned rotating logs are mode `0600` and bounde
 The Admin key comparison is constant-time; client headers are not blindly propagated upstream; provider auth is applied after custom headers; provider client-header forwarding uses an allowlist; provider concurrency and global data-plane in-flight work are bounded; and a stream-idle watchdog cancels stalled upstream work. These controls do not replace host access control, network segmentation, TLS, or key backups.
 
 For configuration examples and operator procedures, see [docs/CONFIGURATION.md](CONFIGURATION.md), [docs/OPERATIONS.md](OPERATIONS.md), and [docs/KNOWN_GAPS.md](KNOWN_GAPS.md).
+
+## Built-in TLS, mTLS, and browser CSRF
+The shared listener optionally serves HTTPS with TLS 1.2 minimum using `tls.enabled`, `tls.cert_file`, and `tls.key_file`; certificate and key material is re-read for each new handshake, so atomically replacing the files updates new connections without restarting. Optional client certificates can be required independently for `/admin/api/*` and `/v1/*` using `tls.client_ca_file`, `tls.require_client_cert_admin`, and `tls.require_client_cert_data_plane`. mTLS is an additional peer check and does not replace the Admin API key.
+
+Browser state-changing Admin requests require same-origin `Origin`/`Referer` validation plus a random `HttpOnly`, `SameSite=Strict` CSRF cookie mirrored in `X-NexaRoute-CSRF`; the cookie is `Secure` for HTTPS. Stateless non-browser Admin clients without browser origin metadata continue to use Admin-key authentication. This is not cookie-backed identity, RBAC, or SSO.
