@@ -27,19 +27,28 @@ Saved provider credentials are write-only: the provider editor/API never returns
 
 NexaRoute provides **optional static client API-key authentication** for the client-facing `/v1/*` data plane through `client_auth.enabled` and `client_auth.keys`, with an optional per-key RPM limit. It is disabled by default. Provider credentials are never treated as client credentials and client keys are never forwarded upstream.
 
-This built-in control is intentionally small: shared static keys plus a bounded rate limit are not a replacement for TLS, network policy, identity-aware access, rotation infrastructure, or RBAC. If the listener is reachable from an untrusted network, use a trusted reverse proxy/API gateway, firewall, VPN, or equivalent access-control layer as appropriate.
+This built-in control is intentionally small: shared static keys plus a bounded rate limit are not a replacement for network policy, identity-aware access, rotation infrastructure, or RBAC. Optional built-in TLS/mTLS is available, but remote deployments still need a trusted network boundary and appropriate access controls.
 
 The Admin API is a separate boundary: it remains loopback-only by default or requires the configured Admin key when remote administration is intentionally enabled.
+
+## Built-in TLS and mTLS
+
+The shared listener can optionally serve HTTPS using `tls.enabled`, `tls.cert_file`, and `tls.key_file`. TLS 1.2 is the minimum. Certificate and optional client-CA PEM files are validated on startup and re-read for each new TLS handshake; atomically replacing the files updates new connections without restarting. Relative paths resolve from the config directory. Optional mTLS can independently require a verified client certificate for `/admin/api/*` and `/v1/*`; both the certificate chain and the Admin API key are required for remote Admin access. TLS protects this listener, not provider-to-upstream connections.
+
+## Browser Admin CSRF protection
+
+The dashboard uses a random CSRF token in an `HttpOnly`, `SameSite=Strict` cookie and mirrors the token in `X-NexaRoute-CSRF` on state-changing Admin API requests. Browser mutations also require a matching same-origin `Origin` or `Referer`. The cookie is marked `Secure` when the connection is HTTPS; a TLS-terminating reverse proxy must overwrite `X-Forwarded-Proto` for HTTPS requests. Non-browser stateless clients authenticated with the Admin key and without browser origin metadata or a CSRF cookie do not use this browser token. NexaRoute does not provide cookie-backed Admin login/session identity, RBAC, or SSO.
 
 ## Remote exposure
 
 Before exposing the UI/admin API beyond a trusted local machine:
 
 - set a strong `NEXAROUTE_ADMIN_KEY` / `admin.api_key`;
-- use TLS through a trusted reverse proxy;
+- enable built-in TLS or use TLS through a trusted reverse proxy;
 - restrict source networks/firewall rules;
 - do not publish the admin endpoint directly to the internet;
-- consider additional CSRF/RBAC/SSO controls outside NexaRoute.
+- retain the Admin key requirement; mTLS is an additional peer-identity check, not a replacement;
+- add RBAC/SSO and a full cookie-backed identity system externally if required.
 
 ## Base URLs and proxies
 

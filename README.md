@@ -50,8 +50,9 @@ details: [docs/INSTALLATION.md](docs/INSTALLATION.md).
   systems), asynchronous provider probing that never blocks the UI, and
   self-rotating bounded logs.
 - **Security:** provider credentials, custom headers, and proxy URLs are
-  write-only — never returned by any API, snapshot, metric, or log. See
-  [SECURITY.md](SECURITY.md).
+  write-only — never returned by any API, snapshot, metric, or log. Optional
+  built-in TLS/mTLS and browser CSRF defenses protect remote deployments. See
+  [SECURITY.md](SECURITY.md) and [the operations guide](docs/OPERATIONS.md).
 - **Web UI:** provider/model management with write-only secret editing, model
   discovery and testing, candidate pools / route profiles / virtual endpoints,
   live health topology, event feed, manual probes, routing settings, quota and
@@ -124,6 +125,7 @@ builds for amd64 and arm64. See [CONTRIBUTING.md](CONTRIBUTING.md).
 - [docs/QUICKSTART.md](docs/QUICKSTART.md) — first configuration and routes
 - [docs/CLAUDE_CODE.md](docs/CLAUDE_CODE.md) — Claude Code connection
 - [docs/CONFIGURATION.md](docs/CONFIGURATION.md) — configuration reference
+- [docs/OPERATIONS.md](docs/OPERATIONS.md) — secure operations, TLS/mTLS and config CLI
 - [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) — protocol compatibility matrix
 - [ARCHITECTURE.md](ARCHITECTURE.md) — design and component overview
 - [docs/KNOWN_GAPS.md](docs/KNOWN_GAPS.md) — honest boundaries
@@ -137,9 +139,11 @@ builds for amd64 and arm64. See [CONTRIBUTING.md](CONTRIBUTING.md).
 NexaRoute is **not** a universal implementation of every LLM protocol. Native
 Gemini `generateContent` beyond the implemented adapter, Bedrock, Vertex AI,
 Azure-specific deployment semantics, embeddings/rerank, encrypted-at-rest
-secret vaults, distributed state, invoice-perfect cost optimization, hard
-budget enforcement, and full internet-facing RBAC/CSRF hardening are not
-implemented. Cross-protocol reasoning/thinking metadata can be
+secret vaults (until the separate Phase 1a change is merged), distributed state,
+invoice-perfect cost optimization, hard budget enforcement, and full
+internet-facing RBAC/SSO or cookie-backed Admin identity are not implemented.
+Browser state-changing Admin calls do have same-origin and CSRF-token checks.
+Cross-protocol reasoning/thinking metadata can be
 provider-specific; native passthrough is the safest path for provider-only
 fields. Read [docs/KNOWN_GAPS.md](docs/KNOWN_GAPS.md) and
 [SECURITY.md](SECURITY.md) before treating NexaRoute as production

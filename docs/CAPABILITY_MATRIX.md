@@ -1,6 +1,6 @@
-# Capability matrix — Phase 0 baseline
+# Capability matrix — NexaRoute
 
-**Baseline:** NexaRoute `v0.16.3` (`f30fc8b`, 2026-10-09). This is a documentation and measurement artifact; Phase 0 does not implement product features.
+**Code snapshot:** NexaRoute `v0.16.3` (`f30fc8b`, 2026-10-09) plus the Phase 1b transport/session changes on `phase1b-transport-and-session`. The competitor cells remain evidence-conservative; this matrix is updated as implementation changes land.
 
 ## Reading the table
 
@@ -27,7 +27,7 @@ Generic landing pages do not count as evidence. Competitor cells marked verified
 | OpenTelemetry / Prometheus observability | **partial** — Prometheus-style metrics and W3C propagation; OTLP exporter not claimed | **verified** — [observability](https://docs.litellm.ai/docs/proxy/observability) | **unverified** — generic gateway page | **unverified** — generic AI Gateway page | **verified** — [default observability](https://docs.getbifrost.ai/features/observability/default) | **unverified** — generic AI Gateway page |
 | Durable control plane / HA state | **partial** — versioned store contracts in `internal/controlplane`; adapters not runtime default | **unverified** — deployment page does not explicitly establish durable HA state | **unverified** — generic deployment page | **unverified** — generic AI Gateway page | **unverified** — generic overview page | **unverified** — generic AI Gateway page |
 | Encrypted secrets at rest | **missing** — explicit boundary in `docs/KNOWN_GAPS.md` | **verified** — [secret managers](https://docs.litellm.ai/docs/secret_managers/overview) | **unverified** — generic security page | **unverified** — generic security page | **unverified** — generic security page | **unverified** — generic AI Gateway page |
-| Built-in TLS / mTLS | **missing** — reverse-proxy hardening currently required | **unverified** — security page does not explicitly establish built-in TLS/mTLS | **unverified** — generic security page | **unverified** — generic security page | **unverified** — generic security page | **unverified** — generic security page |
+| Built-in TLS / mTLS | **done** — optional TLS 1.2+ on shared listener, reloadable certificate files, route-scoped client certificate enforcement (`internal/transport`, `internal/httpapi`) | **unverified** — security page does not explicitly establish built-in TLS/mTLS | **unverified** — generic security page | **unverified** — generic security page | **unverified** — generic security page | **unverified** — generic security page |
 | MCP/tool gateway | **missing** — roadmap item | **verified** — [MCP support](https://docs.litellm.ai/docs/completion/mcp) | **unverified** — generic integrations page | **unverified** — generic AI Gateway page | **unverified** — generic feature page | **unverified** — generic AI Gateway page |
 | Single-binary zero-dependency default | **done** — `README.md`, `go.mod`, release workflow | **unverified** — no capability-specific deployment-model evidence retained here | **unverified** — gateway deployment model not established by a capability-specific page | **unverified** — deployment model not established by a capability-specific page | **unverified** — official binary/npx fact requires a capability-specific deployment page not retained here | **unverified** — deployment model not established by a capability-specific page |
 | Release artifacts/checksums | **done** — `.github/workflows/release.yml`, v0.16.3 assets | **verified** — [signed Docker images](https://docs.litellm.ai/docs/proxy/docker_image_security) | **unverified** — no capability-specific official release-process page retained | **unverified** — generic AI Gateway page | **verified** — [Bifrost releases](https://github.com/maximhq/bifrost/releases) | **verified** — [Envoy releases](https://github.com/envoyproxy/ai-gateway/releases) |
@@ -50,10 +50,10 @@ The reproducible benchmark is [scripts/bench/gateway_overhead.py](../scripts/ben
 
 The old 100-request Python mock result was discarded because its separate header/body writes produced a delayed-ACK artifact; it must not be used as a gateway-latency claim.
 
-## Prioritized gap list from Phase 0
+## Prioritized remaining gap list
 
-1. **P0 security:** encrypted secret storage, key rotation, TLS/mTLS, CSRF/session security, RBAC/SSO and strict egress policy.
-2. **P0 operations:** make durable store adapters runtime-integrated, define multi-replica consistency, backups and `config validate/diff/dry-run` CLI contracts.
+1. **P0 security:** encrypted secret storage/key custody, RBAC/SSO, cookie-backed Admin identity, and strict egress policy. Built-in TLS/mTLS and browser CSRF checks are implemented; see `docs/KNOWN_GAPS.md` for remaining boundaries.
+2. **P0 operations:** make durable store adapters runtime-integrated, define multi-replica consistency and backups. `config validate/diff/dry-run` is implemented as a local read-only CLI.
 3. **P1 economics:** invoice-accurate price book, hard budget enforcement and durable cost/usage settlement across processes.
 4. **P1 protocol breadth:** native Bedrock, Vertex, Azure semantics, embeddings, rerank, image and audio endpoints.
 5. **P1 intelligence:** semantic cache, quality-aware routing, canary/shadow/weighted rollout and explainable hedging budgets.

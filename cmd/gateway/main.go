@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"flag"
 	"fmt"
 	"io"
@@ -24,6 +25,7 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/probe"
 	"github.com/ali-shortcuts/nexaroute/internal/providers"
 	"github.com/ali-shortcuts/nexaroute/internal/router"
+	"github.com/ali-shortcuts/nexaroute/internal/transport"
 )
 
 // version is set at build time via -ldflags "-X main.version=...".
@@ -46,6 +48,9 @@ func ensureConfig(path string) error {
 }
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "config" {
+		os.Exit(runConfig(os.Args[2:], os.Stdout, os.Stderr))
+	}
 	configPath := flag.String("config", defaultConfigPath(), "path to JSON config")
 	noBrowser := flag.Bool("no-browser", false, "do not automatically open the Web UI")
 	showVersion := flag.Bool("version", false, "print version and exit")
@@ -152,6 +157,7 @@ func main() {
 		IdleTimeout:       180 * time.Second,
 		MaxHeaderBytes:    128 << 10,
 	}
+	secureListener := cfg.TLS.Enabled
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 	listener, err := net.Listen("tcp", cfg.Listen)
@@ -159,16 +165,29 @@ func main() {
 		bootstrap.Fatalf("cannot listen on %s (another instance may be running): %v", cfg.Listen, err)
 	}
 	defer listener.Close()
+	var serveListener net.Listener = listener
+	if cfg.TLS.Enabled {
+		tlsConfig, tlsErr := transport.ServerTLSConfig(cfg.TLS, filepath.Dir(*configPath))
+		if tlsErr != nil {
+			bootstrap.Fatalf("TLS configuration is invalid: %v", tlsErr)
+		}
+		srv.TLSConfig = tlsConfig
+		serveListener = tls.NewListener(listener, tlsConfig)
+	}
 	serverErr := make(chan error, 1)
 	go func() {
-		logger.Printf("version=%s config=%s listening=http://%s", version, *configPath, cfg.Listen)
-		if err := srv.Serve(listener); err != nil && err != http.ErrServerClosed {
+		scheme := "http"
+		if secureListener {
+			scheme = "https"
+		}
+		logger.Printf("version=%s config=%s listening=%s://%s", version, *configPath, scheme, cfg.Listen)
+		if err := srv.Serve(serveListener); err != nil && err != http.ErrServerClosed {
 			serverErr <- err
 			cancel()
 		}
 	}()
 	// Compute the UI URL from the actual listener address (handles port 0).
-	url := uiURL(listener.Addr())
+	url := uiURLWithScheme(listener.Addr(), secureListener)
 	fmt.Fprintf(os.Stderr, "NexaRoute UI: %s\nConfig: %s\nPress Ctrl+C to stop.\n", url, *configPath)
 	// Browser launch: wait for UI readiness, then open browser if enabled.
 	go func() {
@@ -237,7 +256,11 @@ func dashboardURL(configPath string) string {
 	if host == "" || host == "0.0.0.0" || host == "::" {
 		host = "127.0.0.1"
 	}
-	return "http://" + net.JoinHostPort(host, port) + "/"
+	scheme := "http"
+	if cfg.TLS.Enabled {
+		scheme = "https"
+	}
+	return scheme + "://" + net.JoinHostPort(host, port) + "/"
 }
 
 func openExistingUI(url string, output io.Writer) {

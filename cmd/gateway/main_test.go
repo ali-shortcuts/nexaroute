@@ -54,4 +54,7 @@ func TestUIURL(t *testing.T) {
 			t.Fatalf("got %s", got)
 		}
 	}
+	if got := uiURLWithScheme(&net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 8443}, true); got != "https://127.0.0.1:8443/" {
+		t.Fatalf("secure UI URL=%s", got)
+	}
 }

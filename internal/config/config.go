@@ -167,7 +167,8 @@ type EvaluationConfig struct {
 }
 
 type Config struct {
-	Listen string `json:"listen"`
+	Listen string    `json:"listen"`
+	TLS    TLSConfig `json:"tls,omitempty"`
 	// ClientBaseURL is the address client processes should use to reach the
 	// gateway. Empty means the UI may show same-origin as an explicit fallback.
 	ClientBaseURL          string                       `json:"client_base_url,omitempty"`
@@ -211,6 +212,31 @@ type LoggingConfig struct {
 type AdminConfig struct {
 	BindLocalOnly bool   `json:"bind_local_only"`
 	APIKey        string `json:"api_key"`
+}
+
+// TLSConfig enables the built-in HTTPS listener. Certificate files are read
+// on each TLS handshake so renewal can be installed without restarting.
+type TLSConfig struct {
+	Enabled                    bool   `json:"enabled,omitempty"`
+	CertFile                   string `json:"cert_file,omitempty"`
+	KeyFile                    string `json:"key_file,omitempty"`
+	ClientCAFile               string `json:"client_ca_file,omitempty"`
+	RequireClientCertAdmin     bool   `json:"require_client_cert_admin,omitempty"`
+	RequireClientCertDataPlane bool   `json:"require_client_cert_data_plane,omitempty"`
+}
+
+func (c TLSConfig) Validate() error {
+	if c.Enabled {
+		if strings.TrimSpace(c.CertFile) == "" || strings.TrimSpace(c.KeyFile) == "" {
+			return errors.New("tls.cert_file and tls.key_file are required when tls.enabled is true")
+		}
+	} else if c.RequireClientCertAdmin || c.RequireClientCertDataPlane {
+		return errors.New("tls client-certificate requirements need tls.enabled=true")
+	}
+	if (c.RequireClientCertAdmin || c.RequireClientCertDataPlane) && strings.TrimSpace(c.ClientCAFile) == "" {
+		return errors.New("tls.client_ca_file is required when client certificates are required")
+	}
+	return nil
 }
 
 type RoutingConfig struct {
@@ -1079,6 +1105,9 @@ func (p *ProviderConfig) ApplyDefaults() {
 
 func (c Config) Validate() error {
 	if err := ValidateClientBaseURL(c.ClientBaseURL); err != nil {
+		return err
+	}
+	if err := c.TLS.Validate(); err != nil {
 		return err
 	}
 	if strings.TrimSpace(c.Listen) == "" {
