@@ -104,3 +104,29 @@ PASS provider delete (200)
 PASS atomic config persistence preserves operator backups
 SMOKE PASS — local runtime, UI, admin persistence and token-count fallback are operational.
 exit=0
+
+$ ./scripts/build-release.sh v0.7.0
+nexaroute-linux-amd64: OK
+nexaroute-linux-arm64: OK
+install.sh: OK
+Prepared v0.7.0 in dist/. Nothing published.
+exit=0
+
+$ ./scripts/test-install.sh
+PASS clean install, PATH, architecture selection, checksum/download rejection
+PASS UI/browser readiness while provider probes are blocked; -no-browser
+PASS real startup, headless/browser launch, duplicate/port exclusion, upgrade/reinstall, restart persistence, write-only secrets, crash recovery
+INSTALL PASS
+== testing clean install ==
+Installed NexaRoute v0.7.0 to /tmp/tmp.Xsde6Nefs7/install-bin/nexaroute
+Config (created on first run): /tmp/tmp.Xsde6Nefs7/config-home/nexaroute/config.json
+Run: nexaroute
+Upgrading? Stop and restart NexaRoute to use the new binary.
+== testing checksum mismatch rejection ==
+== testing upgrade flow and config preservation ==
+Installed NexaRoute v0.7.1 to /tmp/tmp.Xsde6Nefs7/install-bin/nexaroute
+Config (created on first run): /tmp/tmp.Xsde6Nefs7/config-home/nexaroute/config.json
+Run: nexaroute
+Upgrading? Stop and restart NexaRoute to use the new binary.
+INSTALLER E2E PASS
+exit=0

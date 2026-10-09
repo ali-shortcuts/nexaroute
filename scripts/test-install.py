@@ -181,9 +181,16 @@ shutil.copyfile(pathlib.Path(os.environ["TEST_FIXTURE"]) / url.rsplit("/", 1)[1]
         check(browser_log.read_text() == base, "browser URL")
         data = json.loads(request(base + "admin/api/providers/test")[1])
         check(data["provider"]["name"] == "Renamed" and data["has_secret"], "provider restart persistence")
-        stored = json.loads(cfg.read_text())
-        check(stored["providers"][0]["api_key"] == "literal-secret-123", "primary secret lost")
-        check(stored["providers"][0]["credentials"][0]["api_key"] == "pool-secret-456", "pool secret lost")
+        disk_raw = cfg.read_bytes()
+        stored = json.loads(disk_raw)
+        stored_provider = stored["providers"][0]
+        check(stored_provider["api_key"].startswith("nxs1:"), "primary secret not encrypted at rest")
+        check(stored_provider["credentials"][0]["api_key"].startswith("nxs1:"), "pool secret not encrypted at rest")
+        check(b"literal-secret-123" not in disk_raw and b"pool-secret-456" not in disk_raw,
+              "plaintext secret found in config file")
+        key_path = Path(str(cfg) + ".key")
+        check(key_path.exists() and len(key_path.read_bytes()) == 32, "master key missing or malformed")
+        check(key_path.stat().st_mode & 0o777 == 0o600, "master key mode is not 0600")
         snapshot = json.loads(request(base + "admin/api/snapshot")[1])
         for key in ("candidate_pools", "route_profiles", "virtual_endpoints"):
             check(any(x["id"] == "coding" for x in snapshot[key]), key + " restart persistence")

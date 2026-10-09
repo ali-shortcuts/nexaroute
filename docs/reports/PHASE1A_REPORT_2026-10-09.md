@@ -51,7 +51,7 @@ All commands below exited `0`. The exact stdout/stderr transcript—including pa
 
 ## GitHub CI follow-up
 
-The first GitHub `verify` run failed only in `scripts/smoke-local.sh`: its disk assertion still expected a literal plaintext API key, which contradicted Phase 1a's encrypted-at-rest behavior. The smoke test now requires the `nxs1:` ciphertext prefix, confirms the plaintext canary is absent from the config file, and checks the 32-byte master-key file is mode `0600`. After that correction, `./scripts/verify.sh` passed locally (unit/integration and race suites, browser checks, fuzz checks, and both Linux builds); `./scripts/smoke-local.sh` was then run separately and also passed all local-runtime/UI/Admin persistence checks. Both exact transcripts are included in [PHASE1A_CI_FIX_RAW_2026-10-09.txt](PHASE1A_CI_FIX_RAW_2026-10-09.txt). GitHub's new PR check is pending until this follow-up commit is pushed and the workflow reruns.
+GitHub CI exposed two stale harness assumptions that expected literal plaintext secrets on disk, contrary to Phase 1a's encrypted-at-rest behavior: one in `scripts/smoke-local.sh`, and one in the installer lifecycle test. Both now require the `nxs1:` ciphertext prefix, verify the plaintext canaries are absent, and check the 32-byte master-key file is mode `0600`. After the corrections, `./scripts/verify.sh`, `./scripts/smoke-local.sh`, `./scripts/build-release.sh v0.7.0`, and `./scripts/test-install.sh` all passed locally. The exact rerun transcripts are included in [PHASE1A_CI_FIX_RAW_2026-10-09.txt](PHASE1A_CI_FIX_RAW_2026-10-09.txt). GitHub's checks are pending until this follow-up commit is pushed and the workflows rerun.
 
 ## Remaining limits
 
