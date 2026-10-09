@@ -1,0 +1,51 @@
+{
+  "method": {
+    "fixed_upstream_latency_ms": 15.0,
+    "stream_gap_ms": 10.0,
+    "requests": 100,
+    "workload": "non-streaming OpenAI Chat Completions; sequential; local loopback"
+  },
+  "environment": {
+    "python": "3.12.3",
+    "platform": "x86_64",
+    "cpu_count": 6
+  },
+  "direct": {
+    "count": 100,
+    "p50_ms": 15.930114000184403,
+    "p95_ms": 16.15746690076776,
+    "p99_ms": 18.155898440873074,
+    "throughput_rps": 61.74734574142302,
+    "min_ms": 15.786859999934677,
+    "max_ms": 34.89189200081455
+  },
+  "gateway": {
+    "count": 100,
+    "p50_ms": 59.95229499967536,
+    "p95_ms": 60.06764185103748,
+    "p99_ms": 60.61125051013734,
+    "throughput_rps": 16.661363165945996,
+    "min_ms": 57.879250998666976,
+    "max_ms": 63.99720000081288
+  },
+  "streaming": {
+    "direct": {
+      "total_ms": 46.32048799976474,
+      "ttft_ms": 46.20513299960294
+    },
+    "gateway": {
+      "total_ms": 46.59367899876088,
+      "ttft_ms": 46.590279998781625
+    },
+    "ttft_overhead_ms": 0.3851469991786871
+  },
+  "overhead": {
+    "p50_ms": 44.022180999490956,
+    "p95_ms": 43.91017495026972,
+    "p99_ms": 42.455352069264265
+  },
+  "memory": {
+    "benchmark_process_maxrss_kb": 24172,
+    "gateway_vm_hwm_kb": 28296
+  }
+}
