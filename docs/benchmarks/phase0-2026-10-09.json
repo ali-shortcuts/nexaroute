@@ -1,0 +1,307 @@
+{
+  "method": {
+    "fixed_upstream_latency_ms": 15.0,
+    "stream_gap_ms": 10.0,
+    "requests_per_concurrency": 1000,
+    "concurrency_levels": [
+      1,
+      16,
+      64
+    ],
+    "provider_caps": [
+      32,
+      128,
+      256
+    ],
+    "warmup_requests_per_connection": 2,
+    "persistent_connections": true,
+    "mock": "compiled Go net/http server; TCP_NODELAY; one write per non-streaming response",
+    "workload": "OpenAI Chat Completions over persistent HTTP/1.1; direct vs gateway; local loopback"
+  },
+  "environment": {
+    "python": "3.12.3",
+    "platform": "x86_64",
+    "cpu_count": 6,
+    "go": "/usr/local/go/bin/go"
+  },
+  "routing_configs": {
+    "adaptive_no_probe": {
+      "strategy": "adaptive",
+      "max_attempts": 1,
+      "probe_enabled": false,
+      "default": false
+    },
+    "ready_mesh_default": {
+      "strategy": "ready_mesh",
+      "max_attempts": 4,
+      "probe_enabled": true,
+      "probe_on_start": true,
+      "default": true
+    }
+  },
+  "profiling": {
+    "attempted": true,
+    "tool": "perf",
+    "available": false,
+    "status": "cause not determined"
+  },
+  "direct": {
+    "1": {
+      "count": 1000,
+      "concurrency": 1,
+      "p50_ms": 15.60700999925757,
+      "p95_ms": 15.724655500071092,
+      "p99_ms": 15.794244581065868,
+      "throughput_rps": 63.903966464760124,
+      "min_ms": 15.432780999617535,
+      "max_ms": 16.891827999643283
+    },
+    "16": {
+      "count": 1000,
+      "concurrency": 16,
+      "p50_ms": 16.28288499887276,
+      "p95_ms": 17.703565148894995,
+      "p99_ms": 18.369336480045604,
+      "throughput_rps": 927.9259810225947,
+      "min_ms": 15.214818000458763,
+      "max_ms": 19.358139999894775
+    },
+    "64": {
+      "count": 1000,
+      "concurrency": 64,
+      "p50_ms": 16.876392500307702,
+      "p95_ms": 19.27192524908605,
+      "p99_ms": 20.47596138063454,
+      "throughput_rps": 3021.709426048325,
+      "min_ms": 15.345976000389783,
+      "max_ms": 21.654733000104898
+    }
+  },
+  "streaming": {
+    "direct": {
+      "total_ms": 46.34515599900624,
+      "ttft_ms": 46.34375000023283
+    },
+    "adaptive_no_probe": {
+      "gateway": {
+        "total_ms": 46.81073500069033,
+        "ttft_ms": 46.809188001134316
+      },
+      "ttft_overhead_ms": 0.4654380009014858
+    },
+    "ready_mesh_default": {
+      "gateway": {
+        "total_ms": 46.916555000279914,
+        "ttft_ms": 46.915257998989546
+      },
+      "ttft_overhead_ms": 0.5715079987567151
+    }
+  },
+  "runs": {
+    "adaptive_no_probe": {
+      "32": {
+        "provider_max_concurrency": 32,
+        "gateway": {
+          "1": {
+            "count": 1000,
+            "concurrency": 1,
+            "p50_ms": 16.153889499946672,
+            "p95_ms": 16.345850200104906,
+            "p99_ms": 16.62456501117049,
+            "throughput_rps": 61.70476402634251,
+            "min_ms": 15.931394000290311,
+            "max_ms": 17.16263100024662
+          },
+          "16": {
+            "count": 1000,
+            "concurrency": 16,
+            "p50_ms": 16.651989999445505,
+            "p95_ms": 18.136165550640726,
+            "p99_ms": 18.90735761005999,
+            "throughput_rps": 907.3474376897144,
+            "min_ms": 15.572824000628316,
+            "max_ms": 20.07727199998044
+          },
+          "64": {
+            "count": 1000,
+            "concurrency": 64,
+            "p50_ms": 31.91393950055499,
+            "p95_ms": 35.78472764856997,
+            "p99_ms": 37.459622970636694,
+            "throughput_rps": 1676.3365020206961,
+            "min_ms": 16.76428500104521,
+            "max_ms": 40.07224399902043
+          }
+        },
+        "overhead": {
+          "1": {
+            "p50_ms": 0.5468795006891014,
+            "p95_ms": 0.6211947000338132,
+            "p99_ms": 0.8303204301046208
+          },
+          "16": {
+            "p50_ms": 0.36910500057274476,
+            "p95_ms": 0.4326004017457308,
+            "p99_ms": 0.5380211300143856
+          },
+          "64": {
+            "p50_ms": 15.037547000247287,
+            "p95_ms": 16.51280239948392,
+            "p99_ms": 16.983661590002153
+          }
+        },
+        "gateway_vm_hwm_kb": 28700
+      },
+      "128": {
+        "provider_max_concurrency": 128,
+        "gateway": {
+          "64": {
+            "count": 1000,
+            "concurrency": 64,
+            "p50_ms": 17.688391000774573,
+            "p95_ms": 21.597449000182678,
+            "p99_ms": 25.09813330043471,
+            "throughput_rps": 2599.7059098315763,
+            "min_ms": 15.580581000904203,
+            "max_ms": 30.18978500040248
+          }
+        },
+        "overhead": {
+          "64": {
+            "p50_ms": 0.8119985004668706,
+            "p95_ms": 2.325523751096629,
+            "p99_ms": 4.62217191980017
+          }
+        },
+        "gateway_vm_hwm_kb": 30184
+      },
+      "256": {
+        "provider_max_concurrency": 256,
+        "gateway": {
+          "64": {
+            "count": 1000,
+            "concurrency": 64,
+            "p50_ms": 18.310165500224684,
+            "p95_ms": 24.077902550561703,
+            "p99_ms": 28.87802521989215,
+            "throughput_rps": 2521.6762661451526,
+            "min_ms": 15.627954000592581,
+            "max_ms": 39.751395999701344
+          }
+        },
+        "overhead": {
+          "64": {
+            "p50_ms": 1.4337729999169824,
+            "p95_ms": 4.805977301475654,
+            "p99_ms": 8.402063839257611
+          }
+        },
+        "gateway_vm_hwm_kb": 29392
+      }
+    },
+    "ready_mesh_default": {
+      "32": {
+        "provider_max_concurrency": 32,
+        "gateway": {
+          "1": {
+            "count": 1000,
+            "concurrency": 1,
+            "p50_ms": 16.189514500183577,
+            "p95_ms": 16.436147950389568,
+            "p99_ms": 16.869436690867587,
+            "throughput_rps": 61.51351528311597,
+            "min_ms": 15.927496000585961,
+            "max_ms": 23.321719001614838
+          },
+          "16": {
+            "count": 1000,
+            "concurrency": 16,
+            "p50_ms": 16.5963979998196,
+            "p95_ms": 17.831489200671058,
+            "p99_ms": 18.483717219169193,
+            "throughput_rps": 908.9324970292041,
+            "min_ms": 15.492780999920797,
+            "max_ms": 19.35364299970388
+          },
+          "64": {
+            "count": 1000,
+            "concurrency": 64,
+            "p50_ms": 31.747515499773726,
+            "p95_ms": 35.01754839999194,
+            "p99_ms": 36.80509559058919,
+            "throughput_rps": 1708.8599248563999,
+            "min_ms": 16.255369999271352,
+            "max_ms": 38.82995300045877
+          }
+        },
+        "overhead": {
+          "1": {
+            "p50_ms": 0.5825045009260066,
+            "p95_ms": 0.7114924503184756,
+            "p99_ms": 1.0751921098017192
+          },
+          "16": {
+            "p50_ms": 0.3135130009468412,
+            "p95_ms": 0.1279240517760627,
+            "p99_ms": 0.11438073912358959
+          },
+          "64": {
+            "p50_ms": 14.871122999466024,
+            "p95_ms": 15.745623150905889,
+            "p99_ms": 16.32913420995465
+          }
+        },
+        "gateway_vm_hwm_kb": 29636
+      },
+      "128": {
+        "provider_max_concurrency": 128,
+        "gateway": {
+          "64": {
+            "count": 1000,
+            "concurrency": 64,
+            "p50_ms": 17.610559500099043,
+            "p95_ms": 20.789862850142526,
+            "p99_ms": 39.77095973014,
+            "throughput_rps": 2536.876210169671,
+            "min_ms": 15.662376999898697,
+            "max_ms": 53.097838001122
+          }
+        },
+        "overhead": {
+          "64": {
+            "p50_ms": 0.7341669997913414,
+            "p95_ms": 1.5179376010564773,
+            "p99_ms": 19.29499834950546
+          }
+        },
+        "gateway_vm_hwm_kb": 29136
+      },
+      "256": {
+        "provider_max_concurrency": 256,
+        "gateway": {
+          "64": {
+            "count": 1000,
+            "concurrency": 64,
+            "p50_ms": 18.899197500104492,
+            "p95_ms": 25.312822099658657,
+            "p99_ms": 29.96714786057055,
+            "throughput_rps": 2452.4926243543414,
+            "min_ms": 15.709391000200412,
+            "max_ms": 38.30314699916926
+          }
+        },
+        "overhead": {
+          "64": {
+            "p50_ms": 2.02280499979679,
+            "p95_ms": 6.040896850572608,
+            "p99_ms": 9.491186479936008
+          }
+        },
+        "gateway_vm_hwm_kb": 29416
+      }
+    }
+  },
+  "memory": {
+    "benchmark_process_maxrss_kb": 23520
+  }
+}
