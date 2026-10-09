@@ -1,0 +1,37 @@
+$ gofmt -l .
+$ go test -race -count=1 ./internal/httpapi
+ok  	github.com/ali-shortcuts/nexaroute/internal/httpapi	10.487s
+$ go test ./...
+ok  	github.com/ali-shortcuts/nexaroute/cmd/gateway	8.114s
+ok  	github.com/ali-shortcuts/nexaroute/internal/budget	0.015s
+ok  	github.com/ali-shortcuts/nexaroute/internal/cache	0.036s
+ok  	github.com/ali-shortcuts/nexaroute/internal/compat	0.028s
+ok  	github.com/ali-shortcuts/nexaroute/internal/config	0.110s
+ok  	github.com/ali-shortcuts/nexaroute/internal/controlplane	0.005s
+ok  	github.com/ali-shortcuts/nexaroute/internal/core	0.006s
+ok  	github.com/ali-shortcuts/nexaroute/internal/decision	0.407s
+ok  	github.com/ali-shortcuts/nexaroute/internal/decision/jev	0.224s
+ok  	github.com/ali-shortcuts/nexaroute/internal/decision/policy	0.022s
+ok  	github.com/ali-shortcuts/nexaroute/internal/decision/providerstate	0.002s
+ok  	github.com/ali-shortcuts/nexaroute/internal/decision/remote	4.388s
+ok  	github.com/ali-shortcuts/nexaroute/internal/desktop	0.029s
+ok  	github.com/ali-shortcuts/nexaroute/internal/doccheck	0.002s
+ok  	github.com/ali-shortcuts/nexaroute/internal/eval	0.213s
+ok  	github.com/ali-shortcuts/nexaroute/internal/evallive	0.423s
+ok  	github.com/ali-shortcuts/nexaroute/internal/events	0.221s
+ok  	github.com/ali-shortcuts/nexaroute/internal/feature	0.028s
+ok  	github.com/ali-shortcuts/nexaroute/internal/guardrail	0.003s
+ok  	github.com/ali-shortcuts/nexaroute/internal/health	0.124s
+ok  	github.com/ali-shortcuts/nexaroute/internal/httpapi	6.443s
+ok  	github.com/ali-shortcuts/nexaroute/internal/logging	0.094s
+ok  	github.com/ali-shortcuts/nexaroute/internal/probe	1.479s
+ok  	github.com/ali-shortcuts/nexaroute/internal/protocol/canonical	0.157s
+ok  	github.com/ali-shortcuts/nexaroute/internal/providers	0.262s
+ok  	github.com/ali-shortcuts/nexaroute/internal/route	0.003s
+ok  	github.com/ali-shortcuts/nexaroute/internal/router	0.109s
+ok  	github.com/ali-shortcuts/nexaroute/internal/scorecards	0.035s
+ok  	github.com/ali-shortcuts/nexaroute/internal/secrets	0.019s
+ok  	github.com/ali-shortcuts/nexaroute/internal/taskprofile	0.003s
+ok  	github.com/ali-shortcuts/nexaroute/internal/translate	0.004s
+ok  	github.com/ali-shortcuts/nexaroute/internal/usage	0.002s
+$ git diff --check
