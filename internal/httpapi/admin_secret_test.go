@@ -62,8 +62,8 @@ func TestProviderSecretsPersistButAreNeverReturnedByAdminSurfaces(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(cfgOnDisk), primary) || !strings.Contains(string(cfgOnDisk), secondary) {
-		t.Fatal("saved configuration did not preserve provider credentials")
+	if strings.Contains(string(cfgOnDisk), primary) || strings.Contains(string(cfgOnDisk), secondary) || !strings.Contains(string(cfgOnDisk), "nxs1:") {
+		t.Fatal("saved configuration must preserve credentials only as encrypted ciphertext")
 	}
 	info, err := os.Stat(s.configPath)
 	if err != nil || info.Mode().Perm() != 0o600 {
