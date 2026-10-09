@@ -4,7 +4,7 @@
 
 - **Phase:** 0 — baseline and honest capability matrix.
 - **Branch:** `phase0-baseline`.
-- **PR:** opened after this report update; not merged.
+- **PR:** [#210](https://github.com/ali-shortcuts/nexaroute/pull/210); not merged.
 - **Implementation status:** no Phase 1 product feature was implemented. This follow-up corrected the benchmark harness and its evidence.
 
 ## 2. Acceptance matrix
