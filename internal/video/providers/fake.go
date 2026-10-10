@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"sync"
-	"time"
 
 	"github.com/ali-shortcuts/nexaroute/internal/video"
 )
@@ -48,7 +47,7 @@ func (f *Fake) GetJob(_ context.Context, id string) (video.ProviderJobStatus, er
 	defer f.mu.Unlock()
 	n, ok := f.jobs[id]
 	if !ok {
-		return video.ProviderJobStatus{}, fmt.Errorf("unknown fake job %s", id)
+		return video.ProviderJobStatus{}, fmt.Errorf("unknown fake job")
 	}
 	if f.Cancelled[id] {
 		return video.ProviderJobStatus{ProviderJobID: id, State: video.StateCancelled}, nil
@@ -56,7 +55,7 @@ func (f *Fake) GetJob(_ context.Context, id string) (video.ProviderJobStatus, er
 	n++
 	f.jobs[id] = n
 	if n >= f.PollsToComplete {
-		return video.ProviderJobStatus{ProviderJobID: id, State: video.StateCompleted, Progress: 1, Outputs: []video.Asset{{ID: id + "-output", Kind: "video", Filename: "output.mp4", ContentType: "video/mp4"}}}, nil
+		return video.ProviderJobStatus{ProviderJobID: id, State: video.StateCompleted, Progress: 1, Outputs: []video.Asset{{ID: id + "-output", Kind: "development-placeholder", Filename: "fake-output.txt", ContentType: "text/plain"}}}, nil
 	}
 	return video.ProviderJobStatus{ProviderJobID: id, State: video.StateProcessing, Progress: float64(n) / float64(f.PollsToComplete)}, nil
 }
@@ -64,13 +63,33 @@ func (f *Fake) CancelJob(_ context.Context, id string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if _, ok := f.jobs[id]; !ok {
-		return fmt.Errorf("unknown fake job %s", id)
+		return fmt.Errorf("unknown fake job")
 	}
 	f.Cancelled[id] = true
 	return nil
 }
-func (f *Fake) DownloadOutputs(_ context.Context, s video.ProviderJobStatus, _ video.AssetSink) ([]video.Asset, error) {
-	return s.Outputs, nil
+func (f *Fake) DownloadOutputs(ctx context.Context, status video.ProviderJobStatus, sink video.AssetSink) ([]video.Asset, error) {
+	if sink == nil {
+		return nil, fmt.Errorf("asset sink is not configured")
+	}
+	if len(status.Outputs) == 0 {
+		return nil, fmt.Errorf("fake job has no outputs")
+	}
+	out := make([]video.Asset, 0, len(status.Outputs))
+	for _, asset := range status.Outputs {
+		if asset.Filename == "" {
+			asset.Filename = "fake-output.txt"
+		}
+		asset.Kind = "development-placeholder"
+		asset.ContentType = "text/plain"
+		data := []byte("NexaRoute development fake-provider artifact. This is not a playable video.\n")
+		saved, err := sink.Put(ctx, asset, data)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, saved)
+	}
+	return out, nil
 }
 func (f *Fake) RegisterWebhook(context.Context, video.WebhookRegistration) error { return nil }
 func (f *Fake) VerifyWebhook(*http.Request) error                                { return nil }
@@ -79,4 +98,3 @@ func (f *Fake) ParseWebhook(*http.Request) (video.ProviderJobStatus, error) {
 }
 
 var _ video.VideoProvider = (*Fake)(nil)
-var _ = time.Now

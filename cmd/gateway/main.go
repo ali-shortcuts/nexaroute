@@ -158,7 +158,7 @@ func main() {
 		videoRT, err = videoRuntime.New(videoDomain.Config{
 			Enabled: cfg.Video.Enabled, StorePath: cfg.Video.StorePath, StorageRoot: cfg.Video.StorageRoot,
 			QueueSize: cfg.Video.QueueSize, Workers: cfg.Video.Workers, AuthTokenEnv: cfg.Video.AuthTokenEnv,
-			DevelopmentFakeProvider: cfg.Video.DevelopmentFakeProvider,
+			MaxAssetBytes: cfg.Video.MaxAssetBytes, DevelopmentFakeProvider: cfg.Video.DevelopmentFakeProvider,
 		}, filepath.Dir(*configPath))
 		if err != nil {
 			bootstrap.Fatalf("cannot initialize video gateway: %v", err)
@@ -177,7 +177,9 @@ func main() {
 	ctx, cancel := notifyGatewayContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 	if videoRT != nil {
-		videoRT.Start(ctx)
+		if err := videoRT.Start(ctx); err != nil {
+			bootstrap.Fatalf("cannot recover video jobs: %v", err)
+		}
 		defer videoRT.Close()
 	}
 	listener, err := net.Listen("tcp", cfg.Listen)

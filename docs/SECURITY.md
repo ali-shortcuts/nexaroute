@@ -52,8 +52,20 @@ Keep log directories private. App-owned rotating logs are mode `0600` and bounde
 - Browser CSRF-token and same-origin checks are implemented for state-changing Admin requests. A hardened server-side cookie-session identity framework is not implemented: the dashboard keeps an entered Admin key in in-memory JavaScript state, which is lost on reload. Do not expose the Admin UI/API to untrusted origins or networks.
 - The fail-closed RBAC matrix in `internal/authz` is wired to Admin API route families; unknown Admin API paths are denied. The existing static Admin key and loopback-only mode still map solely to a break-glass owner identity. There is not yet an authenticator for viewer/operator identities, nor OIDC/SAML, server-side SSO sessions, role-claim mapping, or durable audit storage. Do not describe the current Admin API-key boundary as SSO or multi-user RBAC.
 - Virtual-key tenant/project/team policy is an intersection, not a union: configured parent allow-lists are ceilings, unresolved scope references deny, and duplicate model/token metadata is handled conservatively. These checks are authorization hardening, not a replacement for RBAC/SSO.
-- The opt-in video data-plane handler supports constant-time bearer-token comparison when `video.auth_token_env` resolves to a token. The token is not stored in the browser's admin state; the local-development fake provider is not a production trust boundary.
-- Multi-user RBAC, SSO, and identity-aware access are not complete. The route permission map is server-side, but without an SSO/session identity provider every accepted Admin credential remains the break-glass owner. Optional client auth provides shared static keys and bounded RPM controls, not user identity or a complete enterprise access system.
+- The opt-in video data-plane handler requires `video.auth_token_env` to resolve
+to a non-empty token and compares bearer tokens in constant time. Keep the token
+in the process environment/secret injector, not in browser Admin state. Video
+jobs and worker shutdown are bounded to a single process; the local-development
+fake provider is not a production provider or trust boundary. No real external
+provider adapter is claimed verified.
+- The fail-closed RBAC matrix in `internal/authz` is wired to Admin API route
+families; unknown Admin API paths are denied. The existing static Admin key and
+loopback-only mode still map solely to a break-glass owner identity. Multi-user
+role assignment, OIDC/SAML, server-side SSO sessions, role-claim mapping, and
+durable audit storage are not implemented. Do not describe the current Admin
+API-key boundary as SSO or multi-user RBAC. Optional client auth provides shared
+static keys and bounded RPM controls, not user identity or a complete enterprise
+access system.
 - Administrators may configure arbitrary provider/proxy URLs. A general provider egress allow/deny policy is not built in, so an authorized admin can point a provider at internal services. Do not give admin access to untrusted users.
 - The separate remote-decision HTTP client (`internal/decision/remote`) is hardened against SSRF: it resolves and pins approved IPs per connection, rejects loopback/private/link-local/reserved destinations and mixed public/private DNS answers, rejects redirects, ignores environment proxy variables, requires TLS verification with TLS 1.2 minimum, and bounds response bodies. These protections do not imply that arbitrary provider URLs are similarly restricted.
 

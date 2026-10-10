@@ -156,4 +156,4 @@ infrastructure.
 ### Transport and configuration hardening
 Optional built-in TLS/mTLS and browser CSRF protection are documented in [docs/SECURITY.md](docs/SECURITY.md). Virtual-key tenant/project/team scopes intersect fail-closed; child wildcards cannot widen parent policy and unresolved references deny. The `config validate`, `config diff`, and `config dry-run` commands provide read-only preflight checks; see [docs/OPERATIONS.md](docs/OPERATIONS.md).
 
-The optional asynchronous video gateway is documented in [docs/VIDEO_GATEWAY.md](docs/VIDEO_GATEWAY.md). It provides a bounded local queue and test/development fake provider; no real external video provider is claimed verified.
+The optional asynchronous video gateway is documented in [docs/VIDEO_GATEWAY.md](docs/VIDEO_GATEWAY.md). It requires a bearer-token environment variable, uses a bounded single-process queue and an atomic local JSON job store with restart recovery, and includes a test/development-only fake provider. No real external video provider is claimed verified; see [docs/KNOWN_GAPS.md](docs/KNOWN_GAPS.md) for storage, recovery, and provider boundaries.
