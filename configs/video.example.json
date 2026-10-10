@@ -1,0 +1,11 @@
+{
+  "video": {
+    "enabled": false,
+    "store_path": "video-jobs.json",
+    "storage_root": "video-data",
+    "queue_size": 32,
+    "workers": 2,
+    "auth_token_env": "NEXAROUTE_VIDEO_TOKEN",
+    "development_fake_provider": false
+  }
+}

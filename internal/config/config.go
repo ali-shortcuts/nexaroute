@@ -183,6 +183,7 @@ type Config struct {
 	ControlPlane           ControlPlaneConfig           `json:"control_plane,omitempty"`
 	Guardrails             GuardrailConfig              `json:"guardrails,omitempty"`
 	Evaluation             EvaluationConfig             `json:"evaluation,omitempty"`
+	Video                  VideoConfig                  `json:"video,omitempty"`
 	Decision               DecisionConfig               `json:"decision,omitempty"`
 	DecisionPolicies       []DecisionPolicyConfig       `json:"decision_policies,omitempty"`
 	DecisionProviders      []DecisionProviderConfig     `json:"decision_providers,omitempty"`
@@ -199,6 +200,18 @@ type Config struct {
 	// and the behavior chosen for it; it never contains secret values,
 	// credentials, or full URLs.
 	Warnings []string `json:"-"`
+}
+
+// VideoConfig controls the optional, isolated Video Gateway. It is disabled
+// by default and does not affect the LLM data plane when disabled.
+type VideoConfig struct {
+	Enabled                 bool   `json:"enabled,omitempty"`
+	StorePath               string `json:"store_path,omitempty"`
+	StorageRoot             string `json:"storage_root,omitempty"`
+	QueueSize               int    `json:"queue_size,omitempty"`
+	Workers                 int    `json:"workers,omitempty"`
+	AuthTokenEnv            string `json:"auth_token_env,omitempty"`
+	DevelopmentFakeProvider bool   `json:"development_fake_provider,omitempty"`
 }
 
 type LoggingConfig struct {

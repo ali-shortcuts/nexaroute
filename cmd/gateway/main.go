@@ -26,6 +26,8 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/providers"
 	"github.com/ali-shortcuts/nexaroute/internal/router"
 	"github.com/ali-shortcuts/nexaroute/internal/transport"
+	videoDomain "github.com/ali-shortcuts/nexaroute/internal/video"
+	videoRuntime "github.com/ali-shortcuts/nexaroute/internal/video/runtime"
 )
 
 // version is set at build time via -ldflags "-X main.version=...".
@@ -73,7 +75,6 @@ func main() {
 	if err != nil {
 		bootstrap.Fatal(err)
 	}
-	// Resolve aliases before taking the sibling lock.
 	if err := os.MkdirAll(filepath.Dir(absolute), 0o700); err != nil {
 		bootstrap.Fatal(err)
 	}
@@ -87,8 +88,6 @@ func main() {
 	}
 	*configPath = absolute
 
-	// Single-instance detection: if another instance is already running for
-	// this config, open its UI instead of starting a duplicate listener.
 	processLock, acquired, err := desktop.Acquire(*configPath + ".lock")
 	if err != nil {
 		bootstrap.Fatalf("cannot acquire local gateway lock: %v", err)
@@ -154,6 +153,18 @@ func main() {
 	bus := events.New(500)
 	pe := probe.New(cfg, reg, rt, hm, bus)
 	api := httpapi.New(cfg, *configPath, reg, rt, hm, bus, pe, logger)
+	var videoRT *videoRuntime.Runtime
+	if cfg.Video.Enabled {
+		videoRT, err = videoRuntime.New(videoDomain.Config{
+			Enabled: cfg.Video.Enabled, StorePath: cfg.Video.StorePath, StorageRoot: cfg.Video.StorageRoot,
+			QueueSize: cfg.Video.QueueSize, Workers: cfg.Video.Workers, AuthTokenEnv: cfg.Video.AuthTokenEnv,
+			DevelopmentFakeProvider: cfg.Video.DevelopmentFakeProvider,
+		}, filepath.Dir(*configPath))
+		if err != nil {
+			bootstrap.Fatalf("cannot initialize video gateway: %v", err)
+		}
+		api.AttachVideoHandler(videoRT.Handler)
+	}
 	api.SyncCapabilityContracts()
 	pe.SetCapabilityStore(api.CapabilityStore())
 	srv := &http.Server{
@@ -165,6 +176,10 @@ func main() {
 	}
 	ctx, cancel := notifyGatewayContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
+	if videoRT != nil {
+		videoRT.Start(ctx)
+		defer videoRT.Close()
+	}
 	listener, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
 		bootstrap.Fatalf("cannot listen on %s (another instance may be running): %v", cfg.Listen, err)
@@ -192,10 +207,8 @@ func main() {
 			cancel()
 		}
 	}()
-	// Compute the UI URL from the actual listener address (handles port 0).
 	url := uiURLWithScheme(listener.Addr(), secureListener)
 	fmt.Fprintf(os.Stderr, "NexaRoute UI: %s\nConfig: %s\nPress Ctrl+C to stop.\n", url, *configPath)
-	// Browser launch: wait for UI readiness, then open browser if enabled.
 	go func() {
 		readyCtx, readyCancel := context.WithTimeout(ctx, 10*time.Second)
 		defer readyCancel()
@@ -214,18 +227,11 @@ func main() {
 		}
 	}()
 	if cfg.Probe.Enabled && cfg.Probe.OnStart {
-		// Claim and complete the one startup sweep before Start launches the
-		// periodic runner. This removes the Prime/Start race that could issue two
-		// simultaneous startup probe sweeps.
 		result := pe.Prime(ctx)
 		logger.Printf("startup_probe total=%d ready=%d failed=%d cooldown=%d duration_ms=%d", result.Total, result.Passed, result.Failed, result.SkippedCooldown, result.DurationMS)
 	}
 	pe.Start(ctx)
 	<-ctx.Done()
-	// The drain window must cover the longest permitted in-flight request:
-	// non-streaming requests up to request_timeout_ms and streams whose idle
-	// timeout can exceed it. A fixed 10s deadline would SIGTERM-cut active
-	// responses mid-flight.
 	drain := cfg.RequestTimeout()
 	for _, p := range cfg.Providers {
 		if sd := time.Duration(p.StreamIdleTimeoutSeconds) * time.Second; sd > drain {
@@ -248,8 +254,6 @@ func main() {
 	}
 }
 
-// dashboardURL computes a user-facing URL from the config listen address.
-// Used when opening the UI for an already-running instance.
 func dashboardURL(configPath string) string {
 	cfg, err := config.Load(configPath)
 	if err != nil {
