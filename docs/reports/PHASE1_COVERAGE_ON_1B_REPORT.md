@@ -41,7 +41,7 @@ All requested local gates passed and their raw output is in `docs/reports/phase1
 - `go test -count=1 -coverprofile=/tmp/phase2.cover ./...` — PASS
 - `go tool cover -func=/tmp/phase2.cover | tail -1` — **79.0%**
 
-The final profile remains in `/tmp` only. Final raw test, function, and per-package outputs are `phase1-coverage-on-1b-final-tests.raw.txt`, `phase1-coverage-on-1b-final-func.raw.txt`, and `phase1-coverage-on-1b-final-packages.raw.txt` under `docs/reports/`; `*.cover` is ignored by Git.
+The final profile and function dump remain in `/tmp` only. The committed final raw outputs are `phase1-coverage-on-1b-final-tests.raw.txt` and `phase1-coverage-on-1b-final-packages.raw.txt` under `docs/reports/`; `*.cover` and function dumps are ignored/kept out of Git.
 
 ## PR status at audit time
 
