@@ -9,6 +9,7 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/video/queue"
 	"github.com/ali-shortcuts/nexaroute/internal/video/storage"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -64,5 +65,15 @@ func TestLocalStorageRejectsTraversal(t *testing.T) {
 	}
 	if _, err = s.Read(video.Asset{URI: dir + "/../escape"}); err == nil {
 		t.Fatal("expected traversal rejection")
+	}
+	outside := filepath.Join(t.TempDir(), "outside.txt")
+	if err := os.WriteFile(outside, []byte("secret"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "linked-outside.txt")
+	if err := os.Symlink(outside, link); err == nil {
+		if _, err := s.Read(video.Asset{URI: link}); err == nil {
+			t.Fatal("expected symlink traversal rejection")
+		}
 	}
 }
