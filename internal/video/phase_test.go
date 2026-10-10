@@ -9,6 +9,7 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/video/queue"
 	"github.com/ali-shortcuts/nexaroute/internal/video/storage"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -18,7 +19,11 @@ func TestOrchestratorIdempotencyAndPolling(t *testing.T) {
 	st := queue.NewMemoryStore()
 	q := queue.New(2)
 	p := providers.NewFake(1)
-	o := &orchestrator.Orchestrator{Store: st, Queue: q, Providers: orchestrator.Registry{"fake": p}, PollInterval: time.Millisecond, MaxPolls: 3}
+	sink, err := storage.NewLocal(t.TempDir(), 1024*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := &orchestrator.Orchestrator{Store: st, Queue: q, Providers: orchestrator.Registry{"fake": p}, Ledger: &cost.Ledger{}, Assets: sink, PollInterval: time.Millisecond, MaxPolls: 3}
 	r := video.VideoRequest{ProjectID: "p", Prompt: "x", DurationSeconds: 1, Mode: video.ModeTextToVideo, ProviderPreference: "fake", IdempotencyKey: "same"}
 	j, err := o.Create(ctx, r)
 	if err != nil {
@@ -60,5 +65,15 @@ func TestLocalStorageRejectsTraversal(t *testing.T) {
 	}
 	if _, err = s.Read(video.Asset{URI: dir + "/../escape"}); err == nil {
 		t.Fatal("expected traversal rejection")
+	}
+	outside := filepath.Join(t.TempDir(), "outside.txt")
+	if err := os.WriteFile(outside, []byte("secret"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "linked-outside.txt")
+	if err := os.Symlink(outside, link); err == nil {
+		if _, err := s.Read(video.Asset{URI: link}); err == nil {
+			t.Fatal("expected symlink traversal rejection")
+		}
 	}
 }
