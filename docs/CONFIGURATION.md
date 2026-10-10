@@ -9,7 +9,46 @@ NEXAROUTE_ADMIN_KEY               override admin API key
 NEXAROUTE_ADMIN_BIND_LOCAL_ONLY   true/false override
 NEXAROUTE_LOG_FILE                override bounded log path; "off" disables the app-owned file sink
 NEXAROUTE_STRICT_CONFIG           true/false opt-in strict config validation (see below)
+NEXAROUTE_MASTER_KEY              base64-encoded 32-byte master key (overrides file sources)
+NEXAROUTE_MASTER_KEY_FILE         path to a raw 32-byte master key with mode 0600
 ```
+
+## Encrypted secrets and master-key setup
+
+Secret-bearing provider, decision-provider, Admin, client-auth, custom-header,
+and proxy values are encrypted at rest as AES-256-GCM envelopes. Environment
+variable *references* stay references; environment-injected key values are not
+copied into the JSON file. See the canonical [security model](SECURITY.md) for
+the cryptographic format, fail-closed behavior, and crash-recovery details.
+
+By default the first config load creates `<config-path>.key` as a raw 32-byte
+key with mode `0600`; the config directory defaults to mode `0700`. For managed
+deployments, prefer an explicit, separately protected key file or inject
+`NEXAROUTE_MASTER_KEY` as base64 of exactly 32 bytes. Environment key values
+take precedence over `NEXAROUTE_MASTER_KEY_FILE`, which takes precedence over
+the automatic sibling key. Do not copy the key into the same backup location
+as the encrypted config without independent access controls.
+
+The first plaintext-to-encrypted migration creates an authenticated encrypted
+`<config-path>.<UTC timestamp>.enc.bak` before atomically replacing the config.
+For regular backups, save the encrypted config together with its exact matching
+master key in separately protected storage; an encrypted config alone cannot
+be restored. To rotate an auto-managed key, run:
+
+```bash
+nexaroute secrets status --config "$CONFIG"
+nexaroute secrets verify --config "$CONFIG"
+nexaroute secrets rotate --config "$CONFIG"
+nexaroute secrets verify --config "$CONFIG"
+```
+
+Rotation refuses when either master-key environment override is active. It
+retains the previous key at `<config-path>.key.previous` and stages the new key
+at `.key.next` so startup can complete an interrupted key activation. Keep a
+secure offline copy of each config/key pair before rotating again; the fixed
+`.key.previous` filename is overwritten by the next rotation. Never delete or
+regenerate a key to recover a config. See [the operations runbook](OPERATIONS.md)
+for backup, restore, and interruption procedures.
 
 ## Optional shared control plane
 

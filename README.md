@@ -127,7 +127,8 @@ builds for amd64 and arm64. See [CONTRIBUTING.md](CONTRIBUTING.md).
 - [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) — protocol compatibility matrix
 - [ARCHITECTURE.md](ARCHITECTURE.md) — design and component overview
 - [docs/KNOWN_GAPS.md](docs/KNOWN_GAPS.md) — honest boundaries
-- [SECURITY.md](SECURITY.md) — security model
+- [docs/SECURITY.md](docs/SECURITY.md) — canonical security model and secret-key custody
+- [docs/OPERATIONS.md](docs/OPERATIONS.md) — operations and secret backup/rotation runbook
 - [docs/reports/REBUILD_COMPLETION_REPORT.md](docs/reports/REBUILD_COMPLETION_REPORT.md) — end-to-end rebuild evidence and remaining environment limits
 - [docs/reports/POST_RELEASE_BUG_AUDIT_v0.13.0.md](docs/reports/POST_RELEASE_BUG_AUDIT_v0.13.0.md) — current post-release hardening and bug evidence
 - [docs/reports/FINAL_ACCEPTANCE_REPORT.md](docs/reports/FINAL_ACCEPTANCE_REPORT.md) — release acceptance
@@ -136,10 +137,11 @@ builds for amd64 and arm64. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 NexaRoute is **not** a universal implementation of every LLM protocol. Native
 Gemini `generateContent` beyond the implemented adapter, Bedrock, Vertex AI,
-Azure-specific deployment semantics, embeddings/rerank, encrypted-at-rest
-secret vaults, distributed state, invoice-perfect cost optimization, hard
-budget enforcement, and full internet-facing RBAC/CSRF hardening are not
-implemented. Cross-protocol reasoning/thinking metadata can be
+Azure-specific deployment semantics, embeddings/rerank, distributed state,
+invoice-perfect cost optimization, hard budget enforcement, and full
+internet-facing TLS/mTLS, RBAC, and CSRF/session hardening are not implemented.
+Secret-bearing configuration fields are encrypted at rest; keyring integration
+and externally managed key-rotation workflows remain future work. Cross-protocol reasoning/thinking metadata can be
 provider-specific; native passthrough is the safest path for provider-only
 fields. Read [docs/KNOWN_GAPS.md](docs/KNOWN_GAPS.md) and
 [SECURITY.md](SECURITY.md) before treating NexaRoute as production

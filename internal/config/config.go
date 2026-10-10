@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/ali-shortcuts/nexaroute/internal/secrets"
 )
 
 type VirtualEndpointConfig struct {
@@ -584,6 +586,33 @@ func LoadBase(path string) (Config, error) {
 	}
 	if len(b) > maxConfigBytes {
 		return cfg, fmt.Errorf("config exceeds safe limit %d bytes", maxConfigBytes)
+	}
+	if strings.Contains(string(b), secrets.Prefix) || hasSecretValues(b) {
+		key, _, keyErr := secrets.Key(path)
+		if keyErr != nil {
+			return cfg, keyErr
+		}
+		plain, _, transformErr := secrets.TransformConfig(b, key, false)
+		if transformErr != nil {
+			return cfg, transformErr
+		}
+		enc, migrated, encErr := secrets.TransformConfig(b, key, true)
+		if encErr != nil {
+			return cfg, errors.New("cannot encrypt legacy configuration secrets")
+		}
+		if migrated > 0 { // Legacy plaintext: migrate atomically and retain only an encrypted backup.
+			backup, e := secrets.EncryptedBackup(key, b)
+			if e != nil {
+				return cfg, errors.New("cannot create encrypted migration backup")
+			}
+			if e = writeAtomic(secrets.BackupName(path), backup); e != nil {
+				return cfg, errors.New("cannot persist encrypted migration backup")
+			}
+			if e = writeAtomic(path, append(enc, '\n')); e != nil {
+				return cfg, errors.New("cannot atomically migrate configuration secrets")
+			}
+		}
+		b = plain
 	}
 	if err := json.Unmarshal(b, &cfg); err != nil {
 		return cfg, err
@@ -2128,10 +2157,75 @@ func SaveAtomic(path string, c Config) error {
 	if err != nil {
 		return err
 	}
+	if hasSecretValues(b) {
+		key, _, keyErr := secrets.Key(path)
+		if keyErr != nil {
+			return keyErr
+		}
+		b, _, err = secrets.TransformConfig(b, key, true)
+		if err != nil {
+			return errors.New("cannot encrypt configuration secrets")
+		}
+	}
 	if len(b) > maxConfigBytes {
 		return fmt.Errorf("serialized config exceeds safe limit %d bytes", maxConfigBytes)
 	}
 
+	return writeAtomic(path, append(b, '\n'))
+}
+
+func hasSecretValues(raw []byte) bool {
+	var v map[string]any
+	if json.Unmarshal(raw, &v) != nil {
+		return false
+	}
+	for _, top := range []string{"providers", "decision_providers"} {
+		if xs, ok := v[top].([]any); ok {
+			for _, x := range xs {
+				if m, ok := x.(map[string]any); ok {
+					for _, k := range []string{"api_key", "proxy_url"} {
+						if s, _ := m[k].(string); s != "" {
+							return true
+						}
+					}
+					if hs, ok := m["headers"].(map[string]any); ok {
+						for _, v := range hs {
+							if s, _ := v.(string); s != "" {
+								return true
+							}
+						}
+					}
+					if cs, ok := m["credentials"].([]any); ok {
+						for _, c := range cs {
+							if cm, ok := c.(map[string]any); ok {
+								if s, _ := cm["api_key"].(string); s != "" {
+									return true
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	if m, ok := v["admin"].(map[string]any); ok {
+		if s, _ := m["api_key"].(string); s != "" {
+			return true
+		}
+	}
+	if m, ok := v["client_auth"].(map[string]any); ok {
+		if xs, ok := m["keys"].([]any); ok {
+			for _, x := range xs {
+				if s, _ := x.(string); s != "" {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func writeAtomic(path string, data []byte) error {
 	dir := filepath.Dir(path)
 	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
 	if err != nil {
@@ -2146,7 +2240,7 @@ func SaveAtomic(path string, c Config) error {
 	if err := tmp.Chmod(0o600); err != nil {
 		return err
 	}
-	if _, err := tmp.Write(append(b, '\n')); err != nil {
+	if _, err := tmp.Write(data); err != nil {
 		return err
 	}
 	if err := tmp.Sync(); err != nil {
