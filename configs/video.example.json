@@ -3,6 +3,7 @@
     "enabled": false,
     "store_path": "video-jobs.json",
     "storage_root": "video-data",
+    "max_asset_bytes": 536870912,
     "queue_size": 32,
     "workers": 2,
     "auth_token_env": "NEXAROUTE_VIDEO_TOKEN",

@@ -431,3 +431,33 @@ Unknown fields, unknown suites, unknown deployments, mismatched
 run that produced too little evidence to meet the suite's minimum sample count
 stores the run but writes **no** scorecard (`scorecard_written: false`). Model
 outputs never appear in events, metrics or the admin snapshot.
+
+## Optional asynchronous video gateway
+
+The video gateway is disabled by default. When enabled, `auth_token_env` must
+name a non-empty bearer-token environment variable in the gateway process; the
+runtime refuses to start otherwise. Keep the token in the deployment's secret
+injector, not in a literal config value. The example configuration is
+[`configs/video.example.json`](../configs/video.example.json).
+
+```json
+"video": {
+  "enabled": false,
+  "store_path": "video-jobs.json",
+  "storage_root": "video-data",
+  "max_asset_bytes": 536870912,
+  "queue_size": 32,
+  "workers": 2,
+  "auth_token_env": "NEXAROUTE_VIDEO_TOKEN",
+  "development_fake_provider": false
+}
+```
+
+`store_path` and `storage_root` may be absolute or relative to the gateway's
+runtime base directory. The JSON store, queue and cost ledger are single-process;
+the local asset sink enforces a per-file limit (default 512 MiB, configurable
+from 1 byte through 8 GiB). Startup recovers queued jobs and resumes jobs with
+known provider job IDs; ambiguous submissions without a provider job ID require
+manual action instead of automatic resubmission. The fake provider is for tests
+and local development only, writes a text placeholder, and is not a real video
+provider. See [Video Gateway](VIDEO_GATEWAY.md) and [Known Gaps](KNOWN_GAPS.md).
