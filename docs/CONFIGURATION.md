@@ -159,6 +159,30 @@ Per provider:
 - `max_concurrency`
 - `stream_idle_timeout_seconds`
 
+## Provider data-handling class and route/key privacy requirement
+
+Providers may declare a descriptive data-handling class (config, validation,
+and admin read surface only; it does not change routing):
+
+```json
+"data_handling": {
+  "trains_on_data": "unknown",
+  "retention": "unknown",
+  "note": ""
+}
+```
+
+- `trains_on_data`: `yes` | `no` | `unknown` (empty normalizes to `unknown`).
+- `retention`: `none` | `limited` | `unknown` (empty normalizes to `unknown`).
+- `note`: at most 200 characters, no control characters.
+- `data_handling` is exposed on provider list/detail Admin API responses; it
+  is not a secret. Secrets stay write-only.
+
+Routes and keys may express a privacy requirement:
+
+- `route_profiles[].privacy`: `""` or `any` (no requirement) | `no_training`.
+- `client_auth.virtual_keys[].require_privacy`: same values.
+
 ## Model aliases
 
 Several deployments can share one alias:
