@@ -139,7 +139,7 @@ func (o *Orchestrator) Recover(ctx context.Context) error {
 			job.State == video.StateFailed || job.State == video.StateCancelled || job.State == video.StateNeedsManualAction { continue }
 		switch job.State {
 		case video.StateQueued:
-			if err := o.Queue.Enqueue(ctx, job); err != nil { return fmt.Errorf("recover queued video job %s: %w", job.JobID, err) }
+			if err := o.enqueueWithBackpressure(ctx, job); err != nil { return fmt.Errorf("recover queued video job %s: %w", job.JobID, err) }
 		case video.StateAdmitted:
 			if job.ProviderJobID == "" {
 				if err := o.markNeedsManual(ctx, job, "previous submission outcome is unknown; automatic resubmission is disabled to avoid duplicate provider charges"); err != nil { return err }
@@ -147,13 +147,13 @@ func (o *Orchestrator) Recover(ctx context.Context) error {
 			}
 			if err := job.Transition(video.StateSubmitted); err != nil { return fmt.Errorf("recover video job %s state: %w", job.JobID, err) }
 			if err := o.Store.Update(ctx, job); err != nil { return fmt.Errorf("persist recovered video job %s: %w", job.JobID, err) }
-			if err := o.Queue.Enqueue(ctx, job); err != nil { return fmt.Errorf("enqueue recovered video job %s: %w", job.JobID, err) }
+			if err := o.enqueueWithBackpressure(ctx, job); err != nil { return fmt.Errorf("enqueue recovered video job %s: %w", job.JobID, err) }
 		case video.StateSubmitted, video.StateProcessing, video.StatePolling, video.StateUploading, video.StateCancelRequested:
 			if job.ProviderJobID == "" {
 				if err := o.markNeedsManual(ctx, job, "active job has no provider job ID; automatic resubmission is disabled"); err != nil { return err }
 				continue
 			}
-			if err := o.Queue.Enqueue(ctx, job); err != nil { return fmt.Errorf("enqueue recovered video job %s: %w", job.JobID, err) }
+			if err := o.enqueueWithBackpressure(ctx, job); err != nil { return fmt.Errorf("enqueue recovered video job %s: %w", job.JobID, err) }
 		case video.StatePlanning, video.StateWaitingForBudget, video.StateComposing:
 			if err := o.markNeedsManual(ctx, job, "this pipeline stage is not restart-resumable yet"); err != nil { return err }
 		default:
@@ -161,6 +161,38 @@ func (o *Orchestrator) Recover(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func (o *Orchestrator) enqueueWithBackpressure(ctx context.Context, job video.VideoJob) error {
+	for {
+		err := o.Queue.Enqueue(ctx, job)
+		if !errors.Is(err, queue.ErrFull) {
+			return err
+		}
+		timer := time.NewTimer(10 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func (o *Orchestrator) scheduleRetry(ctx context.Context, job video.VideoJob, delay time.Duration) {
+	if o.Queue == nil || ctx.Err() != nil {
+		return
+	}
+	go func() {
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+		}
+		_ = o.enqueueWithBackpressure(ctx, job)
+	}()
 }
 
 func (o *Orchestrator) markNeedsManual(ctx context.Context, j video.VideoJob, reason string) error {
@@ -277,7 +309,14 @@ func (o *Orchestrator) pollAndFinalize(ctx context.Context, p video.VideoProvide
 			if o.Ledger != nil { o.Ledger.ReleaseForJob(j.JobID) }
 			return nil
 		case video.StateCompleted:
-			return o.downloadAndComplete(ctx, p, j, st)
+			if err := o.downloadAndComplete(ctx, p, j, st); err != nil {
+				latest, getErr := o.Store.Get(ctx, j.JobID)
+				if getErr == nil && latest.State == video.StateUploading {
+					o.scheduleRetry(ctx, latest, interval)
+				}
+				return err
+			}
+			return nil
 		case video.StateSubmitted, video.StateProcessing, video.StatePolling:
 			if j.State == video.StateUploading { return o.markNeedsManualAndError(ctx, j, "provider status regressed after output upload began") }
 			if st.State == video.StateSubmitted && (j.State == video.StateProcessing || j.State == video.StatePolling) {
@@ -293,6 +332,7 @@ func (o *Orchestrator) pollAndFinalize(ctx context.Context, p video.VideoProvide
 	}
 	j.LastError = "polling deadline reached; remote job remains resumable"
 	if err := o.Store.Update(ctx, j); err != nil { return fmt.Errorf("polling deadline reached and job state could not be saved: %w", err) }
+	o.scheduleRetry(ctx, j, interval)
 	return errors.New(j.LastError)
 }
 
