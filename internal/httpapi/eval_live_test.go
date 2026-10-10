@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -72,7 +73,16 @@ func liveGateway(t *testing.T, cfg config.Config, logs *syncLog) *Server {
 	}
 	bus := events.New(500)
 	pe := probe.New(cfg, reg, rt, hm, bus)
-	return New(cfg, t.TempDir()+"/config.json", reg, rt, hm, bus, pe, log.New(logs, "", 0))
+	configDir := t.TempDir()
+	if err := os.Chmod(configDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	srv := New(cfg, configDir+"/config.json", reg, rt, hm, bus, pe, log.New(logs, "", 0))
+	if err := srv.SecurityStoreError(); err != nil {
+		t.Fatalf("create live-evaluation security store: %v", err)
+	}
+	t.Cleanup(func() { _ = srv.CloseSecurityStore() })
+	return srv
 }
 
 // countingProvider wraps a DecisionProvider and counts every Decide call. The

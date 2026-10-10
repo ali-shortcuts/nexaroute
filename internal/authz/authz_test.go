@@ -25,24 +25,66 @@ func TestRolePermissionMatrix(t *testing.T) {
 	}
 }
 
+func TestOIDCRoleMatrixIsLeastPrivilege(t *testing.T) {
+	cases := []struct {
+		role  Role
+		allow []Permission
+		deny  []Permission
+	}{
+		{
+			RoleViewer,
+			[]Permission{ReadConfig, ReadProviders, ReadRouting, ReadUsage},
+			[]Permission{WriteConfig, WriteProviders, WriteRouting, RunEvaluation, ReadAudit, ManageKeys, ManageVideo},
+		},
+		{
+			RoleOperator,
+			[]Permission{ReadConfig, ReadProviders, ReadRouting, ReadUsage, WriteRouting, RunEvaluation, ManageVideo},
+			[]Permission{WriteConfig, WriteProviders, ReadAudit, ManageKeys},
+		},
+		{
+			RoleAdmin,
+			[]Permission{ReadConfig, WriteConfig, ReadProviders, WriteProviders, ReadRouting, WriteRouting, ReadUsage, RunEvaluation, ReadAudit, ManageKeys, ManageVideo},
+			nil,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(string(tc.role), func(t *testing.T) {
+			identity := Identity{Subject: "verified-subject", Issuer: "https://id.example", Roles: []Role{tc.role}}
+			for _, permission := range tc.allow {
+				if !identity.Authorize(permission) {
+					t.Errorf("%s should allow %s", tc.role, permission)
+				}
+			}
+			for _, permission := range tc.deny {
+				if identity.Authorize(permission) {
+					t.Errorf("%s must deny %s", tc.role, permission)
+				}
+			}
+		})
+	}
+}
+
 func TestAuthorizationFailsClosedWithoutAuthentication(t *testing.T) {
 	if (Identity{Roles: []Role{RoleOwner}}).Authorize(WriteConfig) {
 		t.Fatal("roles without a subject must not authorize")
 	}
 }
 
-func TestClaimedWildcardPermission(t *testing.T) {
-	id := Identity{Subject: "sso-user", Permissions: []Permission{"video.*"}}
-	if !id.Authorize(ManageVideo) {
-		t.Fatal("video wildcard should authorize video.manage")
-	}
-	if id.Authorize(WriteConfig) {
-		t.Fatal("video wildcard must not authorize config.write")
-	}
-}
-
 func TestPermissionsForUnknownRoleIsEmpty(t *testing.T) {
 	if got := PermissionsFor(Role("unknown")); len(got) != 0 {
 		t.Fatalf("unknown role permissions = %v", got)
+	}
+}
+
+func TestIdentityHasRole(t *testing.T) {
+	identity := Identity{Subject: "user-1", Roles: []Role{RoleViewer, RoleOperator}}
+	if !identity.HasRole(RoleViewer) || !identity.HasRole(RoleOperator) {
+		t.Fatal("identity must report each assigned role")
+	}
+	if identity.HasRole(RoleAdmin) {
+		t.Fatal("identity must not report an unassigned role")
+	}
+	if (Identity{Subject: "user-2"}).HasRole(RoleViewer) {
+		t.Fatal("identity without roles must not report any role")
 	}
 }

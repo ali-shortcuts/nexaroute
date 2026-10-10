@@ -24,7 +24,7 @@ func TestCoveragePhase3AdminCRUDValidationAndReferences(t *testing.T) {
 		{"virtual missing id", http.MethodPost, "/admin/api/virtual-endpoints", `{"public_model":"m","route_profile":"profile"}`, 400},
 		{"virtual mismatch", http.MethodPut, "/admin/api/virtual-endpoints/ve", `{"id":"other"}`, 400},
 		{"virtual missing", http.MethodGet, "/admin/api/virtual-endpoints/missing", "", 404},
-		{"virtual method", http.MethodPatch, "/admin/api/virtual-endpoints/ve", "", 405},
+		{"virtual method denied by route matrix", http.MethodPatch, "/admin/api/virtual-endpoints/ve", "", 403},
 		{"profile mismatch", http.MethodPut, "/admin/api/route-profiles/profile", `{"id":"other"}`, 400},
 		{"profile missing", http.MethodGet, "/admin/api/route-profiles/missing", "", 404},
 		{"pool referenced", http.MethodDelete, "/admin/api/candidate-pools/pool", "", 409},
@@ -32,7 +32,7 @@ func TestCoveragePhase3AdminCRUDValidationAndReferences(t *testing.T) {
 		{"pool missing", http.MethodGet, "/admin/api/candidate-pools/missing", "", 404},
 		{"chain missing", http.MethodGet, "/admin/api/fallback-chains/missing", "", 404},
 		{"fallback missing pools", http.MethodPost, "/admin/api/fallback-chains", `{"id":"new"}`, 400},
-		{"fallback method", http.MethodPatch, "/admin/api/fallback-chains/chain", "", 405},
+		{"fallback method denied by route matrix", http.MethodPatch, "/admin/api/fallback-chains/chain", "", 403},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -77,7 +77,7 @@ func TestCoveragePhase3LegacyAdminEndpoint(t *testing.T) {
 			t.Fatalf("body=%s status=%d want %d response=%s", tc.body, rr.Code, tc.status, rr.Body.String())
 		}
 	}
-	if rr := adminRequest(s, http.MethodPatch, "/admin/api/endpoint", ""); rr.Code != 405 {
+	if rr := adminRequest(s, http.MethodPatch, "/admin/api/endpoint", ""); rr.Code != 403 {
 		t.Fatalf("method=%d", rr.Code)
 	}
 }

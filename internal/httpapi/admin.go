@@ -16,8 +16,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ali-shortcuts/nexaroute/internal/authz"
 	"github.com/ali-shortcuts/nexaroute/internal/compat"
 	"github.com/ali-shortcuts/nexaroute/internal/config"
+	"github.com/ali-shortcuts/nexaroute/internal/events"
 	"github.com/ali-shortcuts/nexaroute/internal/health"
 	"github.com/ali-shortcuts/nexaroute/internal/providers"
 )
@@ -135,6 +137,7 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 	}
 	routingCfg, probeCfg := s.runtimeSettingsSnapshot()
 	limit := parseLimit("limit", 5000)
+	identity := adminIdentityFromRequest(r)
 	deployments, totalDeployments := s.rt.AllLimit(limit)
 	healthAll := s.hm.Snapshot()
 	healthCounts := map[health.Status]int{}
@@ -158,6 +161,10 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 	eventLimit := parseLimit("events", 500)
 	cfgFull := s.currentConfig()
 	usageSnap := s.usageSnapshotWithPrices(cfgFull)
+	snapshotEvents := s.bus.SnapshotLimit(eventLimit)
+	if !identity.Authorize(authz.ReadAudit) {
+		snapshotEvents = []events.Event{}
+	}
 	// Virtual endpoint observability: include expanded counts
 	s.runtimeMu.RLock()
 	resolver := s.routeResolver
@@ -386,7 +393,7 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 		"health_counts":      healthCounts,
 		"node_telemetry":     buildNodeTelemetry(deployments, healthAll, time.Now()),
 		"provider_health":    s.hm.ProviderSnapshot(),
-		"events":             s.bus.SnapshotLimit(eventLimit),
+		"events":             snapshotEvents,
 		"provider_stats":     s.reg.Stats(),
 		"provider_pressure":  providerPressure(s.reg.Stats()),
 		"scope_health":       scopeHealthRows(healthAll),

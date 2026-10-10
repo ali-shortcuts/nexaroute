@@ -128,6 +128,9 @@ func TestGatewayStartsWithTLSAndEncryptedConfig(t *testing.T) {
 	t.Setenv("NEXAROUTE_ADMIN_KEY", "")
 	t.Setenv("NEXAROUTE_LOG_FILE", "off")
 	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	configPath := makeEncryptedTLSConfig(t, dir)
 	loaded, err := config.Load(configPath)
 	if err != nil {
@@ -169,8 +172,9 @@ func TestGatewayStartsWithTLSAndEncryptedConfig(t *testing.T) {
 	for time.Now().Before(deadline) {
 		resp, getErr := client.Get("https://" + address + "/healthz")
 		if getErr == nil {
+			_, readErr := io.Copy(io.Discard, resp.Body)
 			_ = resp.Body.Close()
-			if resp.StatusCode == http.StatusOK {
+			if readErr == nil && resp.StatusCode == http.StatusOK {
 				ready = true
 				break
 			}

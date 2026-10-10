@@ -226,8 +226,29 @@ type LoggingConfig struct {
 }
 
 type AdminConfig struct {
-	BindLocalOnly bool   `json:"bind_local_only"`
-	APIKey        string `json:"api_key"`
+	BindLocalOnly          bool       `json:"bind_local_only"`
+	APIKey                 string     `json:"api_key,omitempty"`
+	EmergencyAccessEnabled bool       `json:"emergency_access_enabled"`
+	SecurityStorePath      string     `json:"security_store_path,omitempty"`
+	SessionTTLSeconds      int        `json:"session_ttl_seconds,omitempty"`
+	IdleTimeoutSeconds     int        `json:"idle_timeout_seconds,omitempty"`
+	AuditRetentionDays     int        `json:"audit_retention_days,omitempty"`
+	AuditMaxEvents         int        `json:"audit_max_events,omitempty"`
+	OIDC                   OIDCConfig `json:"oidc,omitempty"`
+}
+
+// OIDCConfig defines a provider-agnostic Authorization Code + PKCE client.
+// ClientSecretEnv names an environment variable; client secrets never belong
+// in the configuration file.
+type OIDCConfig struct {
+	Enabled         bool              `json:"enabled,omitempty"`
+	IssuerURL       string            `json:"issuer_url,omitempty"`
+	ClientID        string            `json:"client_id,omitempty"`
+	ClientSecretEnv string            `json:"client_secret_env,omitempty"`
+	RedirectURL     string            `json:"redirect_url,omitempty"`
+	Audience        string            `json:"audience,omitempty"`
+	RoleClaim       string            `json:"role_claim,omitempty"`
+	RoleMappings    map[string]string `json:"role_mappings,omitempty"`
 }
 
 // TLSConfig enables the built-in HTTPS listener. Certificate files are read
@@ -584,7 +605,11 @@ func validEnvName(s string) bool {
 func Default() Config {
 	return Config{
 		Listen: "127.0.0.1:8080",
-		Admin:  AdminConfig{BindLocalOnly: true},
+		Admin: AdminConfig{
+			BindLocalOnly: true, EmergencyAccessEnabled: true,
+			SessionTTLSeconds: 8 * 60 * 60, IdleTimeoutSeconds: 30 * 60,
+			AuditRetentionDays: 365, AuditMaxEvents: 100000,
+		},
 		Logging: LoggingConfig{
 			File: "auto", MaxSizeMB: 32, MaxBackups: 3,
 			AccessMode: "sampled", SuccessSampleEvery: 1000, SlowRequestMS: 5000,
@@ -656,6 +681,18 @@ func LoadBase(path string) (Config, error) {
 	}
 	if err := json.Unmarshal(b, &cfg); err != nil {
 		return cfg, err
+	}
+	// A newly generated config writes the emergency switch explicitly. Old
+	// config files did not have this opt-in and must not inherit the in-memory
+	// Default value when loaded.
+	var explicitAdmin struct {
+		Admin map[string]json.RawMessage `json:"admin"`
+	}
+	if json.Unmarshal(b, &explicitAdmin) == nil {
+		if _, ok := explicitAdmin.Admin["emergency_access_enabled"]; !ok {
+			cfg.Admin.EmergencyAccessEnabled = false
+			cfg.warnDefault("admin.emergency_access_enabled", "not explicitly configured; emergency access disabled")
+		}
 	}
 	cfg.ApplyDefaults()
 	if err := cfg.Validate(); err != nil {
@@ -761,6 +798,31 @@ func (c Config) ValidateStrict() error {
 
 func (c *Config) ApplyDefaults() {
 	c.ClientBaseURL = strings.TrimRight(strings.TrimSpace(c.ClientBaseURL), "/")
+	c.Admin.OIDC.IssuerURL = strings.TrimSpace(c.Admin.OIDC.IssuerURL)
+	c.Admin.OIDC.ClientID = strings.TrimSpace(c.Admin.OIDC.ClientID)
+	c.Admin.OIDC.ClientSecretEnv = strings.TrimSpace(c.Admin.OIDC.ClientSecretEnv)
+	c.Admin.OIDC.RedirectURL = strings.TrimSpace(c.Admin.OIDC.RedirectURL)
+	c.Admin.OIDC.Audience = strings.TrimSpace(c.Admin.OIDC.Audience)
+	c.Admin.OIDC.RoleClaim = strings.TrimSpace(c.Admin.OIDC.RoleClaim)
+	if c.Admin.SessionTTLSeconds == 0 {
+		c.Admin.SessionTTLSeconds = 8 * 60 * 60
+	}
+	if c.Admin.IdleTimeoutSeconds == 0 {
+		c.Admin.IdleTimeoutSeconds = 30 * 60
+	}
+	if c.Admin.AuditRetentionDays == 0 {
+		c.Admin.AuditRetentionDays = 365
+	}
+	if c.Admin.AuditMaxEvents == 0 {
+		c.Admin.AuditMaxEvents = 100000
+	}
+	if c.Admin.OIDC.RoleMappings != nil {
+		mappings := make(map[string]string, len(c.Admin.OIDC.RoleMappings))
+		for claim, role := range c.Admin.OIDC.RoleMappings {
+			mappings[claim] = role
+		}
+		c.Admin.OIDC.RoleMappings = mappings
+	}
 	if c.ControlPlane.Enabled {
 		if c.ControlPlane.ConfigFailure == "" {
 			c.ControlPlane.ConfigFailure = "last_known_good"
@@ -1151,6 +1213,24 @@ func (c Config) Validate() error {
 		return err
 	}
 	if err := c.TLS.Validate(); err != nil {
+		return err
+	}
+	if c.Admin.SessionTTLSeconds < 300 || c.Admin.SessionTTLSeconds > 30*24*60*60 {
+		return errors.New("admin.session_ttl_seconds must be between 300 and 2592000")
+	}
+	if c.Admin.IdleTimeoutSeconds < 60 || c.Admin.IdleTimeoutSeconds > c.Admin.SessionTTLSeconds {
+		return errors.New("admin.idle_timeout_seconds must be between 60 and admin.session_ttl_seconds")
+	}
+	if c.Admin.AuditRetentionDays < 1 || c.Admin.AuditRetentionDays > 3650 {
+		return errors.New("admin.audit_retention_days must be between 1 and 3650")
+	}
+	if c.Admin.AuditMaxEvents < 100 || c.Admin.AuditMaxEvents > 1_000_000 {
+		return errors.New("admin.audit_max_events must be between 100 and 1000000")
+	}
+	if len(c.Admin.SecurityStorePath) > 4096 || strings.ContainsAny(c.Admin.SecurityStorePath, "\r\n\x00") {
+		return errors.New("admin.security_store_path is invalid or too long")
+	}
+	if err := c.Admin.OIDC.Validate(); err != nil {
 		return err
 	}
 	if c.Video.Enabled {

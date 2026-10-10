@@ -1,70 +1,35 @@
-# WP4 — RBAC and SSO design
+# WP4 — RBAC, OIDC, secure sessions, and durable audit
 
-## Decision
+## Decision and implementation
 
-NexaRoute will separate **authentication** from **authorization**. The new
-`internal/authz` package is the transport-independent authorization contract;
-HTTP, OIDC, SAML, and legacy Admin-key adapters must produce an immutable
-`authz.Identity` and call `Authorize(permission)`. No adapter may infer a role
-from an untrusted browser header.
+Authentication is separate from authorization. `internal/authz` defines the permission contract; `internal/httpapi` authenticates a verified OIDC identity or an explicitly enabled emergency owner, then the central middleware maps each registered Admin route and HTTP method to permission checks. Request headers never supply trusted identity, role, or permission claims.
 
-The existing Admin API key remains the backward-compatible bootstrap path until
-an SSO provider is configured. It is not an identity system and therefore must
-be treated as the owner/bootstrap principal, not as a source of arbitrary role
-claims.
+The OIDC client is provider-agnostic and uses maintained libraries: `github.com/coreos/go-oidc/v3` for discovery and ID-token verification, and `golang.org/x/oauth2` for authorization-code exchange and PKCE S256. The client requires an exact issuer match, secure discovery endpoints (HTTPS, except loopback HTTP for local development), configured client ID and expected audience, a valid signing key/signature, token expiry, nonce, and a single-use state bound to an HttpOnly browser cookie. The callback does not accept caller-controlled return URLs. The state, nonce, PKCE verifier, and browser binding are one-time and bounded by a short pending-login lifetime.
+
+OIDC role values are explicitly allowlisted through `admin.oidc.role_mappings`; a verified identity must resolve to exactly one of `viewer`, `operator`, or `admin`. Unknown, missing, malformed, or conflicting mapped claims fail closed. Role permissions are enforced server-side and documented in `docs/CONFIGURATION.md`.
+
+The web UI uses opaque 32-byte session identifiers in HttpOnly cookies; only their SHA-256 hashes and server-verified session records are persisted. Login rotates any previous session atomically with its audit record; logout revokes the session atomically with its audit record. Absolute and idle expiry are validated and enforced, and a policy fingerprint change invalidates existing sessions. Browser mutations require the existing same-origin and double-submit CSRF protections.
+
+A local bbolt store persists sessions and structured audit events. It uses transactions, restrictive 0700 parent/0600 file permissions, rejects unsafe existing paths, and survives process restart on the same host. The audit schema excludes request bodies and secrets. Privileged actions require a durable pre-action record; audit-write failure prevents the action. Completion events are also written when possible, while the pre-action record remains the durable intent if a completion write fails.
 
 ## Role matrix
 
-| Role | Read | Write | Sensitive operations |
-|---|---|---|---|
-| `owner` | config, providers, routing, usage, audit | config, providers, routing | keys, evaluation, video |
-| `admin` | same as owner | same as owner | keys, evaluation, video |
-| `operator` | config, providers, routing, usage, audit | routing | evaluation, video |
-| `developer` | config, providers, routing, usage, audit | none | evaluation only |
-| `viewer` | config, providers, routing, usage, audit | none | none |
+| Role | Read permissions | Write / privileged permissions |
+|---|---|---|
+| `viewer` | config, providers, routing, usage | none |
+| `operator` | config, providers, routing, usage | routing, run evaluation, video management |
+| `admin` | config, providers, routing, usage, audit | config, providers, routing, run evaluation, client keys, video management |
 
-The matrix is fail-closed. Unknown roles, unauthenticated identities, and
-unrecognized permissions are denied. External permission claims are additive
-only and support a bounded namespace wildcard such as `video.*`.
+The emergency `owner` identity is not mapped from OIDC. It is available only when `admin.emergency_access_enabled` is explicitly true, OIDC is disabled, and the configured key/keyless-loopback circumstances apply. It is audited. OIDC provider failure never silently downgrades to emergency authentication.
 
-## SSO contract
+## Automated evidence
 
-The future SSO adapter must:
+An in-process `httptest` provider supplies real discovery, JWKS, authorization/token endpoints, RSA-signed ID tokens, and controllable negative responses. Integration tests exercise the actual handlers/middleware and cover PKCE, issuer/client-ID/audience/signature/expiry/nonce, state replay/tampering/browser binding, endpoint metadata, role mapping, session rotation/expiry/logout, CSRF, forged cookies/headers, emergency behavior, audit redaction, and audit-store failures.
 
-1. validate the issuer, signature, audience, expiry, nonce/state, and PKCE for
-   OIDC; or validate the signed assertion, audience restriction, recipient,
-   clock skew, and `InResponseTo` for SAML;
-2. map a stable `(issuer, subject)` pair to an internal identity;
-3. map only allow-listed group/claim values to the five roles;
-4. reject missing or ambiguous mappings; and
-5. emit audit events for login, logout, denied permission, role-map changes, and
-   emergency bootstrap use without logging tokens or assertions.
+The provider is test-only; no external IdP credentials are needed to run tests. Real-provider interoperability remains a deployment smoke test and is not represented as having been performed.
 
-Session cookies should be opaque, `HttpOnly`, `Secure` under TLS,
-`SameSite=Lax/Strict` as the deployment requires, rotated after login, and
-revoked server-side. The existing CSRF token remains mandatory for browser
-state-changing requests. Bearer/API-key clients continue to use the stateless
-path and do not receive browser sessions.
+## Operational limitations and acceptance
 
-## Migration plan
-
-1. Keep `Admin.APIKey` as the local bootstrap owner while the SSO adapter is
-   disabled.
-2. Add an explicit SSO configuration block containing issuer/metadata URL,
-   client ID, redirect URI, allowed issuers/audiences, role claim, and an
-   environment-variable name for the client secret. Never persist client
-   secrets or refresh tokens in plaintext config.
-3. Wire the HTTP middleware to create `authz.Identity`; preserve legacy key
-   authentication only for the bootstrap owner and emit a deprecation warning
-   when SSO is enabled.
-4. Add endpoint-level permission requirements from the matrix, with negative
-   tests for every write and sensitive route.
-5. Add provider-backed conformance tests before claiming OIDC/SAML support.
-
-## Current implementation boundary
-
-WP4 delivers and tests the authorization core and this contract. OIDC/SAML
-network clients, token validation, server-side sessions, and endpoint wiring
-remain intentionally unimplemented until provider choice and deployment
-metadata are supplied. This prevents a misleading “SSO enabled” claim and
-keeps the existing gateway behavior stable.
+- The security DB and pending OIDC login transactions are single-host. Do not share the DB over a network filesystem or use multiple gateway processes without a future distributed backend. Complete an OIDC round-trip on the instance that initiated it.
+- SAML, automated identity provisioning/deprovisioning, and distributed session/audit stores are not implemented.
+- WP4 meets its local coverage and exact-revision verification gates on head `aa5a864`: repository-wide coverage is 85.12%, and fresh GitHub `CI/verify`, vulnerability scan, CodeQL (Go), and CodeQL checks passed. PR #224 is ready for review but remains unmerged. Any follow-up commit requires fresh checks before merge. The store remains single-host and real-provider IdP interoperability was not tested; current evidence is recorded in `WP4_RBAC_HTTP_PARTIAL.md`.

@@ -7,6 +7,7 @@ NEXAROUTE_CONFIG                  config path used by the CLI default resolver
 NEXAROUTE_LISTEN                  override listen address
 NEXAROUTE_ADMIN_KEY               override admin API key
 NEXAROUTE_ADMIN_BIND_LOCAL_ONLY   true/false override
+NEXAROUTE_OIDC_CLIENT_SECRET      example secret name; set the exact name configured by admin.oidc.client_secret_env
 NEXAROUTE_LOG_FILE                override bounded log path; "off" disables the app-owned file sink
 NEXAROUTE_STRICT_CONFIG           true/false opt-in strict config validation (see below)
 NEXAROUTE_MASTER_KEY              base64-encoded 32-byte master key (overrides file sources)
@@ -240,7 +241,69 @@ For local-only use, the default is safest:
 {"bind_local_only": true, "api_key": ""}
 ```
 
-For Docker/LAN access, set an admin key. Built-in TLS is optional and protects the shared HTTP listener (UI, Admin API, and data plane); a trusted reverse proxy remains supported.
+The default config explicitly enables the restricted emergency path for local setup. For a deployment, set the policy intentionally. `emergency_access_enabled` controls the static Admin API key and keyless loopback compatibility identity; if the flag is absent from an older config file, loading defaults it to `false` and emits a migration warning. Explicit `false` is preserved when the config is saved. Emergency access maps only to the fixed owner identity and every use is audited. When OIDC is enabled, emergency credentials cannot bypass OIDC discovery/authentication failures.
+
+### OIDC, sessions, and security audit store
+
+For normal human administration, enable one trusted OIDC issuer and configure a callback URL that exactly matches the provider registration. The client secret is read from the named process environment variable, never from JSON. Example (replace host, issuer, IDs, and claim values with the provider's actual registration):
+
+Discovery authorization, token, and JWKS endpoints must be absolute HTTPS URLs. HTTP is accepted only when the configured issuer and all affected endpoints are loopback addresses for local development; URLs with user information or fragments are rejected. A malformed discovery document or unsafe endpoint fails startup closed.
+
+```json
+{
+  "admin": {
+    "bind_local_only": false,
+    "emergency_access_enabled": false,
+    "security_store_path": "/var/lib/nexaroute/security.db",
+    "session_ttl_seconds": 28800,
+    "idle_timeout_seconds": 1800,
+    "audit_retention_days": 365,
+    "audit_max_events": 100000,
+    "oidc": {
+      "enabled": true,
+      "issuer_url": "https://identity.example.com",
+      "client_id": "nexaroute-control-plane",
+      "client_secret_env": "NEXAROUTE_OIDC_CLIENT_SECRET",
+      "redirect_url": "https://gateway.example.com/admin/auth/oidc/callback",
+      "audience": "nexaroute-control-plane",
+      "role_claim": "groups",
+      "role_mappings": {
+        "nexaroute-viewers": "viewer",
+        "nexaroute-operators": "operator",
+        "nexaroute-admins": "admin"
+      }
+    }
+  }
+}
+```
+
+When `security_store_path` is relative, it is resolved against the directory containing the config file. If omitted, the default is `security/nexaroute-security.db`, so the application creates a dedicated private `security/` child directory instead of placing the database directly beside the config. Missing parent directories are created as mode `0700`; an already existing parent that is not private is rejected and must be fixed by the operator.
+
+Set the secret outside the config, for example with your service manager/secret injector (do not put its value in shell history):
+
+```text
+NEXAROUTE_OIDC_CLIENT_SECRET=<secret supplied by the identity provider>
+```
+
+`issuer_url`, `client_id`, `redirect_url`, `audience`, `role_claim`, and a 1–100-entry `role_mappings` allowlist are required when OIDC is enabled. HTTPS is required except HTTP loopback URLs for local development/tests. Discovery metadata's issuer must exactly match `issuer_url`. The ID token must include both the OIDC client ID and configured expected audience in `aud`, and the OIDC library validates signature, issuer, client ID, expiry, and authorized-party rules. Only a string or array of strings at `role_claim` is accepted. Every mapped value must resolve to exactly one internal role (`viewer`, `operator`, or `admin`); unknown values, ambiguous/conflicting mapped roles, malformed claims, or untrusted HTTP role headers never grant access. Registered Admin route/method pairs are checked server-side and unknown paths/methods deny by default.
+
+The verified OIDC role permissions are:
+
+| Role | Read | Write / privileged actions |
+|---|---|---|
+| `viewer` | config, providers, routing, usage | none |
+| `operator` | config, providers, routing, usage | routing; evaluation; video management |
+| `admin` | config, providers, routing, usage, audit | config, providers, routing; evaluation; keys; video management |
+
+Only `admin` can read the durable audit API or manage client keys. The emergency `owner` identity is not an OIDC-mapped role and is available only through the explicit break-glass policy. These permissions are checked by the API middleware, not by frontend visibility.
+
+The login uses Authorization Code + PKCE S256, single-use random state and nonce, and a separate HttpOnly browser-binding cookie. The fixed callback path is `/admin/auth/oidc/callback`; redirects return to `/`, not to a caller-provided `next` URL. OIDC discovery is performed at gateway startup and needs outbound access to the configured issuer; startup records an unavailable provider and all Admin access fails closed. `nexaroute config validate` checks local schema/limits but does not replace a successful runtime discovery check.
+
+The server-side session identifier is a 32-byte random opaque value; only its SHA-256 hash and verified subject/roles/policy fingerprint are stored in the security DB. Absolute TTL and idle timeout are validated (TTL 5 minutes–30 days; idle timeout 1 minute–TTL). Session and audit writes use local bbolt transactions and survive process restart on the same host. The DB file must be mode `0600`; its parent directory must be a real, private `0700` directory. New parent directories are created with mode `0700`, but an existing unsafe parent is rejected rather than chmod'd automatically. Prepare it before service startup, for example with `install -d -m 0700 /var/lib/nexaroute`. Startup also rejects a symlink DB file. Place it on durable local storage and back it up under the same controls as other security records. Audit history is bounded by both `audit_retention_days` and `audit_max_events`; event records omit request bodies, passwords, tokens, codes, cookies, and session identifiers. If a required audit write fails, privileged actions fail with HTTP 503.
+
+This backend is **single-host only**: do not use a network filesystem or point multiple gateway processes/hosts at the same database. Pending OIDC transactions are in memory and the callback must return to the same process that started login; use a single instance or sticky routing. Distributed sessions/audit are not implemented. Keep a separately protected recovery procedure: an OIDC outage does not silently enable break-glass. If policy permits emergency recovery, an operator with trusted filesystem/service access must explicitly disable OIDC, explicitly enable emergency access, set a strong key, and restart; restore the OIDC configuration after recovery.
+
+For local development, the validator permits `http://localhost` or loopback IPs for the issuer and callback. Automated tests use an in-process `httptest` provider with signed RSA ID tokens and real discovery/JWKS/token endpoints; that test provider is not a runtime mode or a production identity service.
 
 ### Built-in TLS and optional mTLS
 
@@ -261,7 +324,7 @@ TLS is off by default. When enabled, NexaRoute serves HTTPS on the configured `l
 }
 ```
 
-`client_ca_file` is required when either client-certificate flag is enabled. Client certificates are verified against that CA during the TLS handshake; NexaRoute then requires a verified certificate for `/admin/api/*` and/or `/v1/*` according to the corresponding flag. Use a CA and certificates dedicated to the intended clients. The Admin API still requires its configured Admin key when remote administration is enabled; mTLS does not replace authorization. Keep certificate/key files readable by the gateway process and protect the private key with restrictive filesystem permissions.
+`client_ca_file` is required when either client-certificate flag is enabled. Client certificates are verified against that CA during the TLS handshake; NexaRoute then requires a verified certificate for `/admin/api/*` and/or `/v1/*` according to the corresponding flag. Use a CA and certificates dedicated to the intended clients. mTLS is an additional peer check and does not replace OIDC role authorization or the explicitly configured emergency-access policy. Keep certificate/key files readable by the gateway process and protect the private key with restrictive filesystem permissions.
 
 ### Read-only configuration commands
 

@@ -70,7 +70,9 @@ func newRoutingBenchGateway(tb testing.TB, upstreamURL string) *Server {
 	}
 	bus := events.New(100)
 	pe := probe.New(cfg, reg, rt, hm, bus)
-	return New(cfg, tb.TempDir()+"/config.json", reg, rt, hm, bus, pe, log.New(io.Discard, "", 0))
+	srv := New(cfg, tb.TempDir()+"/config.json", reg, rt, hm, bus, pe, log.New(io.Discard, "", 0))
+	tb.Cleanup(func() { _ = srv.CloseSecurityStore() })
+	return srv
 }
 
 // BenchmarkRouting_Gateway exercises the real routing hot path through the

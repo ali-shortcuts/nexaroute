@@ -1,0 +1,247 @@
+WP4_PARTIAL_GATE start 2026-10-10T04:18:01Z HEAD=c4c022c45bee3813fb8eebc9921a018f295785e3
+ok  	github.com/ali-shortcuts/nexaroute/cmd/gateway	9.477s
+?   	github.com/ali-shortcuts/nexaroute/cmd/videogen	[no test files]
+ok  	github.com/ali-shortcuts/nexaroute/internal/authz	1.024s
+ok  	github.com/ali-shortcuts/nexaroute/internal/budget	1.018s
+ok  	github.com/ali-shortcuts/nexaroute/internal/cache	1.030s
+ok  	github.com/ali-shortcuts/nexaroute/internal/compat	1.072s
+ok  	github.com/ali-shortcuts/nexaroute/internal/config	1.467s
+ok  	github.com/ali-shortcuts/nexaroute/internal/controlplane	1.016s
+ok  	github.com/ali-shortcuts/nexaroute/internal/core	1.014s
+ok  	github.com/ali-shortcuts/nexaroute/internal/decision	1.438s
+ok  	github.com/ali-shortcuts/nexaroute/internal/decision/jev	1.329s
+ok  	github.com/ali-shortcuts/nexaroute/internal/decision/policy	1.092s
+ok  	github.com/ali-shortcuts/nexaroute/internal/decision/providerstate	1.016s
+ok  	github.com/ali-shortcuts/nexaroute/internal/decision/remote	5.445s
+ok  	github.com/ali-shortcuts/nexaroute/internal/desktop	1.040s
+ok  	github.com/ali-shortcuts/nexaroute/internal/doccheck	1.014s
+ok  	github.com/ali-shortcuts/nexaroute/internal/eval	1.675s
+ok  	github.com/ali-shortcuts/nexaroute/internal/evallive	1.461s
+ok  	github.com/ali-shortcuts/nexaroute/internal/events	1.979s
+ok  	github.com/ali-shortcuts/nexaroute/internal/feature	1.302s
+ok  	github.com/ali-shortcuts/nexaroute/internal/guardrail	1.016s
+ok  	github.com/ali-shortcuts/nexaroute/internal/health	1.141s
+ok  	github.com/ali-shortcuts/nexaroute/internal/httpapi	12.009s
+ok  	github.com/ali-shortcuts/nexaroute/internal/logging	1.051s
+ok  	github.com/ali-shortcuts/nexaroute/internal/probe	2.630s
+ok  	github.com/ali-shortcuts/nexaroute/internal/protocol/canonical	1.899s
+ok  	github.com/ali-shortcuts/nexaroute/internal/providers	1.311s
+ok  	github.com/ali-shortcuts/nexaroute/internal/route	1.015s
+ok  	github.com/ali-shortcuts/nexaroute/internal/router	1.532s
+ok  	github.com/ali-shortcuts/nexaroute/internal/scorecards	1.070s
+ok  	github.com/ali-shortcuts/nexaroute/internal/secrets	1.038s
+ok  	github.com/ali-shortcuts/nexaroute/internal/taskprofile	1.018s
+ok  	github.com/ali-shortcuts/nexaroute/internal/translate	1.025s
+ok  	github.com/ali-shortcuts/nexaroute/internal/transport	1.026s
+ok  	github.com/ali-shortcuts/nexaroute/internal/usage	1.017s
+ok  	github.com/ali-shortcuts/nexaroute/internal/video	1.026s
+?   	github.com/ali-shortcuts/nexaroute/internal/video/api	[no test files]
+?   	github.com/ali-shortcuts/nexaroute/internal/video/composer	[no test files]
+?   	github.com/ali-shortcuts/nexaroute/internal/video/cost	[no test files]
+?   	github.com/ali-shortcuts/nexaroute/internal/video/orchestrator	[no test files]
+?   	github.com/ali-shortcuts/nexaroute/internal/video/providers	[no test files]
+?   	github.com/ali-shortcuts/nexaroute/internal/video/queue	[no test files]
+ok  	github.com/ali-shortcuts/nexaroute/internal/video/runtime	1.021s
+?   	github.com/ali-shortcuts/nexaroute/internal/video/storage	[no test files]
+== go version ==
+go version go1.26.8 linux/amd64
+== shell syntax ==
+== formatting ==
+== mandatory clean unit/integration pass ==
+ok  	github.com/ali-shortcuts/nexaroute/cmd/gateway	8.547s
+?   	github.com/ali-shortcuts/nexaroute/cmd/videogen	[no test files]
+ok  	github.com/ali-shortcuts/nexaroute/internal/authz	0.002s
+ok  	github.com/ali-shortcuts/nexaroute/internal/budget	0.002s
+ok  	github.com/ali-shortcuts/nexaroute/internal/cache	0.016s
+ok  	github.com/ali-shortcuts/nexaroute/internal/compat	0.012s
+ok  	github.com/ali-shortcuts/nexaroute/internal/config	0.101s
+ok  	github.com/ali-shortcuts/nexaroute/internal/controlplane	0.005s
+ok  	github.com/ali-shortcuts/nexaroute/internal/core	0.006s
+ok  	github.com/ali-shortcuts/nexaroute/internal/decision	0.410s
+ok  	github.com/ali-shortcuts/nexaroute/internal/decision/jev	0.227s
+ok  	github.com/ali-shortcuts/nexaroute/internal/decision/policy	0.016s
+ok  	github.com/ali-shortcuts/nexaroute/internal/decision/providerstate	0.003s
+ok  	github.com/ali-shortcuts/nexaroute/internal/decision/remote	4.383s
+ok  	github.com/ali-shortcuts/nexaroute/internal/desktop	0.025s
+ok  	github.com/ali-shortcuts/nexaroute/internal/doccheck	0.002s
+ok  	github.com/ali-shortcuts/nexaroute/internal/eval	0.223s
+ok  	github.com/ali-shortcuts/nexaroute/internal/evallive	0.418s
+ok  	github.com/ali-shortcuts/nexaroute/internal/events	0.228s
+ok  	github.com/ali-shortcuts/nexaroute/internal/feature	0.034s
+ok  	github.com/ali-shortcuts/nexaroute/internal/guardrail	0.003s
+ok  	github.com/ali-shortcuts/nexaroute/internal/health	0.124s
+ok  	github.com/ali-shortcuts/nexaroute/internal/httpapi	6.447s
+ok  	github.com/ali-shortcuts/nexaroute/internal/logging	0.047s
+ok  	github.com/ali-shortcuts/nexaroute/internal/probe	1.491s
+ok  	github.com/ali-shortcuts/nexaroute/internal/protocol/canonical	0.138s
+ok  	github.com/ali-shortcuts/nexaroute/internal/providers	0.265s
+ok  	github.com/ali-shortcuts/nexaroute/internal/route	0.004s
+ok  	github.com/ali-shortcuts/nexaroute/internal/router	0.148s
+ok  	github.com/ali-shortcuts/nexaroute/internal/scorecards	0.015s
+ok  	github.com/ali-shortcuts/nexaroute/internal/secrets	0.009s
+ok  	github.com/ali-shortcuts/nexaroute/internal/taskprofile	0.003s
+ok  	github.com/ali-shortcuts/nexaroute/internal/translate	0.005s
+ok  	github.com/ali-shortcuts/nexaroute/internal/transport	0.006s
+ok  	github.com/ali-shortcuts/nexaroute/internal/usage	0.003s
+ok  	github.com/ali-shortcuts/nexaroute/internal/video	0.006s
+?   	github.com/ali-shortcuts/nexaroute/internal/video/api	[no test files]
+?   	github.com/ali-shortcuts/nexaroute/internal/video/composer	[no test files]
+?   	github.com/ali-shortcuts/nexaroute/internal/video/cost	[no test files]
+?   	github.com/ali-shortcuts/nexaroute/internal/video/orchestrator	[no test files]
+?   	github.com/ali-shortcuts/nexaroute/internal/video/providers	[no test files]
+?   	github.com/ali-shortcuts/nexaroute/internal/video/queue	[no test files]
+ok  	github.com/ali-shortcuts/nexaroute/internal/video/runtime	0.004s
+?   	github.com/ali-shortcuts/nexaroute/internal/video/storage	[no test files]
+== go vet ==
+== mandatory clean race pass ==
+ok  	github.com/ali-shortcuts/nexaroute/cmd/gateway	9.593s
+?   	github.com/ali-shortcuts/nexaroute/cmd/videogen	[no test files]
+ok  	github.com/ali-shortcuts/nexaroute/internal/authz	1.017s
+ok  	github.com/ali-shortcuts/nexaroute/internal/budget	1.015s
+ok  	github.com/ali-shortcuts/nexaroute/internal/cache	1.028s
+ok  	github.com/ali-shortcuts/nexaroute/internal/compat	1.097s
+ok  	github.com/ali-shortcuts/nexaroute/internal/config	1.510s
+ok  	github.com/ali-shortcuts/nexaroute/internal/controlplane	1.021s
+ok  	github.com/ali-shortcuts/nexaroute/internal/core	1.015s
+ok  	github.com/ali-shortcuts/nexaroute/internal/decision	1.442s
+ok  	github.com/ali-shortcuts/nexaroute/internal/decision/jev	1.335s
+ok  	github.com/ali-shortcuts/nexaroute/internal/decision/policy	1.080s
+ok  	github.com/ali-shortcuts/nexaroute/internal/decision/providerstate	1.015s
+ok  	github.com/ali-shortcuts/nexaroute/internal/decision/remote	5.438s
+ok  	github.com/ali-shortcuts/nexaroute/internal/desktop	1.041s
+ok  	github.com/ali-shortcuts/nexaroute/internal/doccheck	1.018s
+ok  	github.com/ali-shortcuts/nexaroute/internal/eval	1.840s
+ok  	github.com/ali-shortcuts/nexaroute/internal/evallive	1.502s
+ok  	github.com/ali-shortcuts/nexaroute/internal/events	1.833s
+ok  	github.com/ali-shortcuts/nexaroute/internal/feature	1.288s
+ok  	github.com/ali-shortcuts/nexaroute/internal/guardrail	1.018s
+ok  	github.com/ali-shortcuts/nexaroute/internal/health	1.142s
+ok  	github.com/ali-shortcuts/nexaroute/internal/httpapi	12.365s
+ok  	github.com/ali-shortcuts/nexaroute/internal/logging	1.051s
+ok  	github.com/ali-shortcuts/nexaroute/internal/probe	2.635s
+ok  	github.com/ali-shortcuts/nexaroute/internal/protocol/canonical	1.921s
+ok  	github.com/ali-shortcuts/nexaroute/internal/providers	1.325s
+ok  	github.com/ali-shortcuts/nexaroute/internal/route	1.020s
+ok  	github.com/ali-shortcuts/nexaroute/internal/router	1.408s
+ok  	github.com/ali-shortcuts/nexaroute/internal/scorecards	1.072s
+ok  	github.com/ali-shortcuts/nexaroute/internal/secrets	1.029s
+ok  	github.com/ali-shortcuts/nexaroute/internal/taskprofile	1.016s
+ok  	github.com/ali-shortcuts/nexaroute/internal/translate	1.023s
+ok  	github.com/ali-shortcuts/nexaroute/internal/transport	1.021s
+ok  	github.com/ali-shortcuts/nexaroute/internal/usage	1.015s
+ok  	github.com/ali-shortcuts/nexaroute/internal/video	1.024s
+?   	github.com/ali-shortcuts/nexaroute/internal/video/api	[no test files]
+?   	github.com/ali-shortcuts/nexaroute/internal/video/composer	[no test files]
+?   	github.com/ali-shortcuts/nexaroute/internal/video/cost	[no test files]
+?   	github.com/ali-shortcuts/nexaroute/internal/video/orchestrator	[no test files]
+?   	github.com/ali-shortcuts/nexaroute/internal/video/providers	[no test files]
+?   	github.com/ali-shortcuts/nexaroute/internal/video/queue	[no test files]
+ok  	github.com/ali-shortcuts/nexaroute/internal/video/runtime	1.019s
+?   	github.com/ali-shortcuts/nexaroute/internal/video/storage	[no test files]
+== web ui javascript syntax ==
+== real browser control-plane acceptance ==
+BROWSER E2E PASS
+== real browser Live Visual Agent acceptance ==
+LIVE VISUAL AGENT E2E PASS
+== short fuzz checks ==
+fuzz: elapsed: 0s, gathering baseline coverage: 0/2 completed
+fuzz: elapsed: 0s, gathering baseline coverage: 2/2 completed, now fuzzing with 2 workers
+fuzz: elapsed: 2s, execs: 7460 (3720/sec), new interesting: 40 (total: 42)
+PASS
+ok  	github.com/ali-shortcuts/nexaroute/internal/httpapi	2.024s
+fuzz: elapsed: 0s, gathering baseline coverage: 0/3 completed
+fuzz: elapsed: 0s, gathering baseline coverage: 3/3 completed, now fuzzing with 2 workers
+fuzz: elapsed: 2s, execs: 77475 (37397/sec), new interesting: 75 (total: 78)
+PASS
+ok  	github.com/ali-shortcuts/nexaroute/internal/core	2.078s
+== linux amd64 build ==
+== linux arm64 build ==
+VERIFY PASS
+PASS embedded Web UI (200)
+PASS runtime hello (200)
+PASS model list (200)
+PASS admin snapshot (200)
+PASS count_tokens fallback (200)
+PASS provider create (201)
+PASS legacy reveal remains redacted (200)
+PASS provider edit (200)
+PASS provider re-open stays redacted (200)
+PASS provider redacted read (200)
+PASS provider delete (200)
+PASS atomic config persistence preserves operator backups
+SMOKE PASS — local runtime, UI, admin persistence and token-count fallback are operational.
+nexaroute-linux-amd64: OK
+nexaroute-linux-arm64: OK
+nexaroute-videogen-linux-amd64: OK
+nexaroute-videogen-linux-arm64: OK
+install.sh: OK
+video.example.json: OK
+VIDEO_GATEWAY.md: OK
+RELEASE_NOTES.md: OK
+Prepared v0.7.0 in dist/ with gateway, videogen, installer, config and docs. Nothing published.
+PASS clean install, PATH, architecture selection, checksum/download rejection
+PASS UI/browser readiness while provider probes are blocked; -no-browser
+PASS real startup, headless/browser launch, duplicate/port exclusion, upgrade/reinstall, restart persistence, write-only secrets, crash recovery
+INSTALL PASS
+== testing clean install ==
+
+Installed NexaRoute v0.7.0 to /tmp/tmp.rRE6RruTMo/install-bin/nexaroute
+Config (created on first run): /tmp/tmp.rRE6RruTMo/config-home/nexaroute/config.json
+
+Run: nexaroute
+Upgrading? Stop and restart NexaRoute to use the new binary.
+== testing checksum mismatch rejection ==
+== testing upgrade flow and config preservation ==
+
+Installed NexaRoute v0.7.1 to /tmp/tmp.rRE6RruTMo/install-bin/nexaroute
+Config (created on first run): /tmp/tmp.rRE6RruTMo/config-home/nexaroute/config.json
+
+Run: nexaroute
+Upgrading? Stop and restart NexaRoute to use the new binary.
+INSTALLER E2E PASS
+ok  	github.com/ali-shortcuts/nexaroute/cmd/gateway	8.357s	coverage: 74.1% of statements
+	github.com/ali-shortcuts/nexaroute/cmd/videogen		coverage: 0.0% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/authz	0.007s	coverage: 73.7% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/budget	0.003s	coverage: 86.2% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/cache	0.017s	coverage: 87.4% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/compat	0.021s	coverage: 76.0% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/config	0.137s	coverage: 78.1% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/controlplane	0.013s	coverage: 83.8% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/core	0.004s	coverage: 100.0% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/decision	0.412s	coverage: 76.4% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/decision/jev	0.225s	coverage: 80.8% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/decision/policy	0.020s	coverage: 86.3% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/decision/providerstate	0.004s	coverage: 85.1% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/decision/remote	4.387s	coverage: 87.6% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/desktop	0.026s	coverage: 85.5% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/doccheck	0.003s	coverage: [no statements]
+ok  	github.com/ali-shortcuts/nexaroute/internal/eval	0.233s	coverage: 88.0% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/evallive	0.419s	coverage: 81.5% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/events	0.226s	coverage: 94.3% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/feature	0.034s	coverage: 79.6% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/guardrail	0.003s	coverage: 100.0% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/health	0.126s	coverage: 83.2% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/httpapi	6.575s	coverage: 75.6% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/logging	0.043s	coverage: 81.8% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/probe	1.470s	coverage: 72.1% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/protocol/canonical	0.130s	coverage: 83.9% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/providers	0.270s	coverage: 83.8% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/route	0.004s	coverage: 94.8% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/router	0.109s	coverage: 81.6% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/scorecards	0.014s	coverage: 88.6% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/secrets	0.020s	coverage: 85.1% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/taskprofile	0.004s	coverage: 84.6% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/translate	0.006s	coverage: 80.9% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/transport	0.007s	coverage: 90.6% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/usage	0.003s	coverage: 95.8% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/video	0.006s	coverage: 66.7% of statements
+	github.com/ali-shortcuts/nexaroute/internal/video/api		coverage: 0.0% of statements
+	github.com/ali-shortcuts/nexaroute/internal/video/composer		coverage: 0.0% of statements
+	github.com/ali-shortcuts/nexaroute/internal/video/cost		coverage: 0.0% of statements
+	github.com/ali-shortcuts/nexaroute/internal/video/orchestrator		coverage: 0.0% of statements
+	github.com/ali-shortcuts/nexaroute/internal/video/providers		coverage: 0.0% of statements
+	github.com/ali-shortcuts/nexaroute/internal/video/queue		coverage: 0.0% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/video/runtime	0.007s	coverage: 80.0% of statements
+	github.com/ali-shortcuts/nexaroute/internal/video/storage		coverage: 0.0% of statements
+total:											(statements)				77.5%
+WP4_PARTIAL_GATE PASS 2026-10-10T04:19:48Z

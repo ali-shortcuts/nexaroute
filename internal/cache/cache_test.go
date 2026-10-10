@@ -118,3 +118,21 @@ func TestCacheKeyIncludesContext(t *testing.T) {
 		t.Fatal("same request context must produce a stable cache key")
 	}
 }
+
+func TestCacheBypassIsCountedWithoutChangingEntries(t *testing.T) {
+	c := New(time.Minute, 8, 1<<20)
+	c.Store("live", Entry{Body: []byte("response"), CreatedAt: time.Now()})
+	c.Bypass()
+	c.Bypass()
+
+	stats := c.Stats()
+	if stats.Bypasses != 2 {
+		t.Fatalf("bypasses = %d, want 2", stats.Bypasses)
+	}
+	if stats.Entries != 1 || stats.BytesStored != int64(len("response")) {
+		t.Fatalf("bypass must not change cache contents: %+v", stats)
+	}
+	if _, ok := c.Lookup("live"); !ok {
+		t.Fatal("bypassing a request must leave existing entries available")
+	}
+}

@@ -153,6 +153,10 @@ func main() {
 	bus := events.New(500)
 	pe := probe.New(cfg, reg, rt, hm, bus)
 	api := httpapi.New(cfg, *configPath, reg, rt, hm, bus, pe, logger)
+	if err := api.SecurityStoreError(); err != nil {
+		bootstrap.Fatalf("cannot initialize admin security store: %v", err)
+	}
+	defer api.CloseSecurityStore()
 	var videoRT *videoRuntime.Runtime
 	if cfg.Video.Enabled {
 		videoRT, err = videoRuntime.New(videoDomain.Config{

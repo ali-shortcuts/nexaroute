@@ -86,9 +86,23 @@ A deployment must satisfy the configured health and capability requirements befo
 
 ## 5. Admin surface, events, and logs
 
-Admin API access is privileged. Keep it loopback-only unless a strong key and external network/TLS controls are in place. Provider keys, pooled credentials, custom header values, and proxy URLs are write-only and redacted on Admin reads and exports. The event feed uses Server-Sent Events; clients can reconnect with `Last-Event-ID`, and should refresh the snapshot after an epoch change or sequence gap.
+Admin API access is privileged. Keep it loopback-only unless OIDC, TLS, and external network controls are configured. Provider keys, pooled credentials, custom header values, and proxy URLs are write-only and redacted on Admin reads and exports. The event feed uses Server-Sent Events; clients can reconnect with `Last-Event-ID`, and should refresh the snapshot after an epoch change or sequence gap.
 
 The default app-owned file sink is bounded and mode `0600`; console mirroring is rate-limited. Request/response bodies are not written as normal access-log fields. Preserve log rotation limits and restrict access to the log directory.
+
+### OIDC and session operations
+
+When `admin.oidc.enabled` is true, human users sign in through the configured Authorization Code + PKCE flow. Before rollout:
+
+1. Register the exact HTTPS redirect URI `/admin/auth/oidc/callback` with the issuer and provision the named client-secret environment variable through the service manager/secret injector.
+2. Configure `issuer_url`, `client_id`, `audience`, and a reviewed `role_mappings` allowlist. The discovered issuer must match exactly. Do not map unreviewed provider groups to `admin`.
+3. Set `emergency_access_enabled` deliberately. It is not a provider-outage fallback; with OIDC enabled, the API key is not accepted if discovery/login is unavailable. Old configs missing this explicit flag load with emergency access disabled.
+4. Place `security_store_path` on durable local storage. Relative paths are resolved against the config directory; the default is `security/nexaroute-security.db`, whose missing `security/` child is created mode `0700`. For an explicit absolute path, create a private parent when needed (for example, `install -d -m 0700 /var/lib/nexaroute`). Startup creates a 0600 bbolt file and fails if an existing parent is not private or the file is a symlink/group/world-readable. Back it up using access controls appropriate for identity and audit records. Do not share this DB over NFS or across gateway instances.
+5. Use one gateway instance or sticky routing for the full OIDC login round-trip: pending state/nonce/PKCE/browser-binding data is process-local. Server-side sessions and audit records survive restarts on the same host, but distributed session/audit coordination is not implemented.
+
+The UI session cookie is opaque, `HttpOnly`, `SameSite=Lax`, scoped to `/admin/`, and `Secure` on HTTPS. The server stores only its hash and the verified identity/roles. `session_ttl_seconds` sets the absolute lifetime; `idle_timeout_seconds` revokes idle sessions. Browser mutations and logout require same-origin validation and the strict CSRF cookie/header pair. Login rotates any prior session; logout revokes the server-side record before clearing cookies. A changed OIDC policy fingerprint invalidates old sessions.
+
+Structured audit records contain request ID, actor, action, target, method/path, outcome, status, permission, and authentication method; no body, code, token, cookie, or session ID is recorded. Retention is limited by both `audit_retention_days` and `audit_max_events`. The security-store HTTP API is admin-only. A failed required audit write returns 503 and stops the protected action; investigate disk permissions, free space, filesystem health, and DB lock state rather than disabling audit. A recovery from provider outage requires a trusted operator to change configuration explicitly, restart, and restore OIDC after break-glass use; do not rely on silent fallback.
 
 ## 6. Graceful shutdown and rollback
 
@@ -113,16 +127,21 @@ nexaroute config dry-run --config /etc/nexaroute/config.json
 
 The Phase 1 hardening work is complete on `main`: encrypted secret storage,
 TLS/mTLS, browser CSRF checks, and the read-only `config validate|diff|dry-run`
-preflight commands are implemented and covered by the repository gates. The
-measured repository test coverage is 79.6%; see [`docs/KNOWN_GAPS.md`](KNOWN_GAPS.md)
-for the below-80% package list and the next coverage targets.
+preflight commands are implemented and covered by repository gates. Current
+coverage and WP4 acceptance status are recorded in PR #224 and
+[`docs/reports/WP4B_REVIEW.md`](reports/WP4B_REVIEW.md); do not use older
+baseline percentages in this manual as a current measurement.
 
-Phase 2 is **in progress**. The asynchronous video runtime is opt-in and
-partial: its local fake provider is for development/tests, and no real external
-provider is claimed verified. In particular, complete RBAC/SSO, strict provider
-egress policy, runtime-integrated distributed store adapters, and OS keyring or
-external KMS integration are not implemented. Do not treat transport security
-or client keys as an enterprise identity, egress-policy, or distributed-state
+Phase 2 is **in progress**. The opt-in video runtime is partial: its local fake
+provider is for development/tests, and no real external provider is claimed
+verified. PR #224 implements OIDC-backed `viewer`/`operator`/`admin` sessions,
+route/method RBAC, and a local durable security/audit store; it remains
+unmerged until its complete required verification and coverage target pass and
+fresh GitHub checks are green. Live external-IdP interoperability is unverified.
+SAML, distributed sessions/audit, strict
+provider egress policy, runtime-integrated durable store adapters, and OS
+keyring or external KMS integration are not implemented. Do not treat
+transport security or client keys as an egress-policy or distributed-state
 substitute.
 
 Virtual-key tenant/project/team scopes are evaluated as parent-to-child

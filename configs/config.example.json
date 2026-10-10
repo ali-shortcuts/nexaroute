@@ -12,7 +12,27 @@
 	},
 	"admin": {
     "bind_local_only": true,
-    "api_key": ""
+    "api_key": "",
+    "emergency_access_enabled": true,
+    "security_store_path": "security/nexaroute-security.db",
+    "session_ttl_seconds": 28800,
+    "idle_timeout_seconds": 1800,
+    "audit_retention_days": 365,
+    "audit_max_events": 100000,
+    "oidc": {
+      "enabled": false,
+      "issuer_url": "https://identity.example.com",
+      "client_id": "nexaroute-control-plane",
+      "client_secret_env": "NEXAROUTE_OIDC_CLIENT_SECRET",
+      "redirect_url": "https://gateway.example.com/admin/auth/oidc/callback",
+      "audience": "nexaroute-control-plane",
+      "role_claim": "groups",
+      "role_mappings": {
+        "nexaroute-viewers": "viewer",
+        "nexaroute-operators": "operator",
+        "nexaroute-admins": "admin"
+      }
+    }
   },
   "routing": {
     "strategy": "ready_mesh",

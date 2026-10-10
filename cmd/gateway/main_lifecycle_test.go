@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -27,7 +28,11 @@ func TestMainStartsHealthyGatewayAndShutsDownOnContextCancellation(t *testing.T)
 	}
 	address := reservation.Addr().String()
 	_ = reservation.Close()
-	configPath := filepath.Join(t.TempDir(), "config.json")
+	configDir := t.TempDir()
+	if err := os.Chmod(configDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(configDir, "config.json")
 	cfg := config.Default()
 	cfg.Listen = address
 	cfg.Probe.Enabled = false
@@ -68,8 +73,9 @@ func TestMainStartsHealthyGatewayAndShutsDownOnContextCancellation(t *testing.T)
 	for time.Now().Before(deadline) {
 		resp, getErr := client.Get("http://" + address + "/healthz")
 		if getErr == nil {
+			_, readErr := io.Copy(io.Discard, resp.Body)
 			_ = resp.Body.Close()
-			if resp.StatusCode == http.StatusOK {
+			if readErr == nil && resp.StatusCode == http.StatusOK {
 				ready = true
 				break
 			}

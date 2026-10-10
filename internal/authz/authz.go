@@ -36,9 +36,6 @@ type Identity struct {
 	Subject string
 	Issuer  string
 	Roles   []Role
-	// Permissions are optional additive claims from an external IdP. They may
-	// never reduce a role's permissions and are matched exactly or by suffix *.
-	Permissions []Permission
 }
 
 var rolePermissions = map[Role]map[Permission]bool{
@@ -54,7 +51,7 @@ var rolePermissions = map[Role]map[Permission]bool{
 	},
 	RoleOperator: {
 		ReadConfig: true, ReadProviders: true, ReadRouting: true, WriteRouting: true,
-		ReadUsage: true, RunEvaluation: true, ReadAudit: true, ManageVideo: true,
+		ReadUsage: true, RunEvaluation: true, ManageVideo: true,
 	},
 	RoleDeveloper: {
 		ReadConfig: true, ReadProviders: true, ReadRouting: true, ReadUsage: true,
@@ -62,7 +59,6 @@ var rolePermissions = map[Role]map[Permission]bool{
 	},
 	RoleViewer: {
 		ReadConfig: true, ReadProviders: true, ReadRouting: true, ReadUsage: true,
-		ReadAudit: true,
 	},
 }
 
@@ -83,11 +79,6 @@ func (i Identity) Authorize(permission Permission) bool {
 	}
 	for _, role := range i.Roles {
 		if rolePermissions[role][permission] {
-			return true
-		}
-	}
-	for _, claimed := range i.Permissions {
-		if claimed == permission || strings.HasSuffix(string(claimed), ".*") && strings.HasPrefix(string(permission), strings.TrimSuffix(string(claimed), "*")) {
 			return true
 		}
 	}

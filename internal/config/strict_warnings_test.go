@@ -102,7 +102,7 @@ func TestStrictModeDeterministic(t *testing.T) {
 }
 
 func TestStrictModeAllowsValidConfig(t *testing.T) {
-	path := writeConfig(t, `{"listen": "127.0.0.1:8080", `+testProviders+`}`)
+	path := writeConfig(t, `{"listen": "127.0.0.1:8080", "admin":{"emergency_access_enabled":false}, `+testProviders+`}`)
 	t.Setenv("NEXAROUTE_STRICT_CONFIG", "true")
 	cfg, err := Load(path)
 	if err != nil {
@@ -128,7 +128,7 @@ func TestDefaultModePreservesLegacyBehavior(t *testing.T) {
 }
 
 func TestDefaultModeValidConfigNoWarnings(t *testing.T) {
-	path := writeConfig(t, `{"listen": "127.0.0.1:8080", `+testProviders+`}`)
+	path := writeConfig(t, `{"listen": "127.0.0.1:8080", "admin":{"emergency_access_enabled":false}, `+testProviders+`}`)
 	cfg, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
@@ -188,7 +188,7 @@ func TestWarningsNeverContainSecretValues(t *testing.T) {
 }
 
 func TestWarningsNotSerializedToDisk(t *testing.T) {
-	path := writeConfig(t, `{"listen": "127.0.0.1:8080", "probe": {"max_tokens": 0}, `+testProviders+`}`)
+	path := writeConfig(t, `{"listen": "127.0.0.1:8080", "admin":{"emergency_access_enabled":false}, "probe": {"max_tokens": 0}, `+testProviders+`}`)
 	cfg, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
@@ -202,6 +202,9 @@ func TestWarningsNotSerializedToDisk(t *testing.T) {
 	}
 	if strings.Contains(string(raw), "probe.max_tokens: 0 is not a valid value") {
 		t.Fatalf("warnings must not be persisted to disk: %s", raw)
+	}
+	if !strings.Contains(string(raw), `"emergency_access_enabled": false`) {
+		t.Fatalf("explicit emergency-access denial was not persisted: %s", raw)
 	}
 	reloaded, err := Load(path)
 	if err != nil {
