@@ -453,6 +453,7 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 	req.MaxOutputTokens = in.MaxOutputTokens
 	req.MinContextWindow = req.EstimatedInputTokens + req.MaxOutputTokens
 	req = s.prepareRequirement(req, r, ti.Features.BodySessionKey)
+	req = s.applyPrivacyRequirement(req, r)
 	cfg, candidates, resolvedRoute, resolveErr := s.candidatesForRequirement(req, "openai_responses")
 	if resolveErr != nil {
 		if strings.Contains(resolveErr.Error(), "disabled") {
@@ -464,6 +465,10 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 	}
 	s.emitTaskClassified(r.Header.Get("x-request-id"), ti, resolvedRoute)
 	if len(candidates) == 0 {
+		if s.isPrivacyUnavailable(req, "openai_responses", resolvedRoute, r.Header.Get("x-request-id")) {
+			responsesPrivacyUnavailable(w)
+			return
+		}
 		canonicalErrorJSON(w, "openai_responses", http.StatusServiceUnavailable, "server_error", "no compatible healthy deployment")
 		return
 	}

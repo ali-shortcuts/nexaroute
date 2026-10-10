@@ -45,6 +45,7 @@ func (s *Server) countTokens(w http.ResponseWriter, r *http.Request) {
 			req.ProviderType = "anthropic_compatible"
 		}
 		req = s.prepareRequirement(req, r, inspection.BodySessionKey)
+		req = s.applyPrivacyRequirement(req, r)
 		_, candidates := s.routeSnapshot(req)
 		forward := copySelectedRequestHeaders(r)
 		for _, c := range candidates {

@@ -364,6 +364,19 @@ func (s *Server) applyDecisionPlane(
 		return candidates
 	}
 
+	// Fail-closed privacy: external decision providers must only be handed
+	// eligible candidates. Candidates arriving here are already filtered by
+	// router.eligibleDeployment, but re-filter defensively so a future
+	// caller can never leak an ineligible deployment to a decision engine.
+	if req.RequireNoTraining {
+		filtered := candidates[:0]
+		for _, c := range candidates {
+			if router.SatisfiesNoTraining(c.Deployment.TrainsOnData) {
+				filtered = append(filtered, c)
+			}
+		}
+		candidates = filtered
+	}
 	// Even if orchestrator handles empty/single, we keep wiring fast path for efficiency,
 	// but orchestrator itself must also handle it correctly for safety outside HTTP wiring.
 	if len(candidates) <= 1 {

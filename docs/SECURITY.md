@@ -79,6 +79,32 @@ provider adapter is claimed verified.
 - Administrators may configure arbitrary provider/proxy URLs. A general provider egress allow/deny policy is not built in, so an authorized admin can point a provider at internal services. Do not give admin access to untrusted users.
 - The separate remote-decision HTTP client (`internal/decision/remote`) is hardened against SSRF: it resolves and pins approved IPs per connection, rejects loopback/private/link-local/reserved destinations and mixed public/private DNS answers, rejects redirects, ignores environment proxy variables, requires TLS verification with TLS 1.2 minimum, and bounds response bodies. These protections do not imply that arbitrary provider URLs are similarly restricted.
 
+## Privacy tiers
+
+A route profile may set `privacy: "no_training"` and a virtual key may set
+`require_privacy: "no_training"` (strictest wins). When either requires
+`no_training`, routing is fail-closed: only deployments whose provider
+declares `data_handling.trains_on_data: "no"` are eligible. `"unknown"` and
+`"yes"` are both ineligible; there is no fallback to a lower privacy class.
+When nothing is eligible solely because of this rule, the OpenAI, Anthropic,
+and Responses ingresses return HTTP 503 with error type
+`privacy_unavailable` and message
+`no deployment satisfies the required privacy class`, without naming
+providers. A `candidate_exhausted` bus event with reason code
+`privacy_excluded` records the excluded count (no prompt content).
+
+What is guaranteed: a request carrying a `no_training` requirement is never
+sent to a provider flagged `trains_on_data: yes` or `unknown`, on initial
+selection, retry/failover, fallback chains/candidate pools, session-affinity
+pins (re-checked every request), hedged/raced legs, credential selection
+(which only runs for an eligible deployment), or decision-engine candidate
+lists (external decision providers only receive eligible candidates).
+
+What is NOT guaranteed: NexaRoute does not verify provider claims. The
+`trains_on_data` label is operator-configured metadata about the provider's
+stated policy; the gateway cannot audit whether a provider actually trains
+on data, retains prompts, or honors its own policy.
+
 ## Other implemented controls and limitations
 
 The Admin key comparison is constant-time; client headers are not blindly propagated upstream; provider auth is applied after custom headers; provider client-header forwarding uses an allowlist; provider concurrency and global data-plane in-flight work are bounded; and a stream-idle watchdog cancels stalled upstream work. These controls do not replace host access control, network segmentation, TLS, or key backups.

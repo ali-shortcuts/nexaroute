@@ -107,6 +107,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 	req.MaxOutputTokens = maxOut
 	req.MinContextWindow = req.EstimatedInputTokens + req.MaxOutputTokens
 	req = s.prepareRequirement(req, r, ti.Features.BodySessionKey)
+	req = s.applyPrivacyRequirement(req, r)
 	cfg, candidates, resolvedRoute, resolveErr := s.candidatesForRequirement(req, "openai")
 	if resolveErr != nil {
 		if strings.Contains(resolveErr.Error(), "disabled") {
@@ -128,6 +129,10 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 	// Emit task_classified event (privacy-safe, no raw prompt) after final route resolution
 	s.emitTaskClassified(r.Header.Get("x-request-id"), ti, resolvedRoute)
 	if len(candidates) == 0 {
+		if s.isPrivacyUnavailable(req, "openai", resolvedRoute, r.Header.Get("x-request-id")) {
+			openAIPrivacyUnavailable(w)
+			return
+		}
 		errorJSON(w, 503, "no compatible healthy deployment")
 		return
 	}
