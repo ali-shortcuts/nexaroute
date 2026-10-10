@@ -128,16 +128,17 @@ nexaroute config dry-run --config /etc/nexaroute/config.json
 The Phase 1 hardening work is complete on `main`: encrypted secret storage,
 TLS/mTLS, browser CSRF checks, and the read-only `config validate|diff|dry-run`
 preflight commands are implemented and covered by repository gates. Current
-coverage and WP4 acceptance status are recorded in the draft PR #224 report and
-[`docs/KNOWN_GAPS.md`](KNOWN_GAPS.md); do not use older baseline percentages in
-this manual as a current measurement.
+coverage and WP4 acceptance status are recorded in PR #224 and
+[`docs/reports/WP4B_REVIEW.md`](reports/WP4B_REVIEW.md); do not use older
+baseline percentages in this manual as a current measurement.
 
 Phase 2 is **in progress**. The opt-in video runtime is partial: its local fake
 provider is for development/tests, and no real external provider is claimed
-verified. Draft PR #224 implements OIDC-backed `viewer`/`operator`/`admin`
-sessions, route/method RBAC, and a local durable security/audit store; it remains
-unaccepted until its complete required verification and coverage target pass
-and fresh GitHub checks are green. SAML, distributed sessions/audit, strict
+verified. PR #224 implements OIDC-backed `viewer`/`operator`/`admin` sessions,
+route/method RBAC, and a local durable security/audit store; it remains
+unmerged until its complete required verification and coverage target pass and
+fresh GitHub checks are green. Live external-IdP interoperability is unverified.
+SAML, distributed sessions/audit, strict
 provider egress policy, runtime-integrated durable store adapters, and OS
 keyring or external KMS integration are not implemented. Do not treat
 transport security or client keys as an egress-policy or distributed-state

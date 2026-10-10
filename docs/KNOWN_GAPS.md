@@ -64,7 +64,7 @@ Implemented:
 - loopback-only admin mode by default
 - explicitly controlled emergency Admin API key/keyless-loopback compatibility identity
 - constant-time admin-key comparison
-- OIDC Authorization Code + PKCE S256, verified claim-to-role allowlist, opaque server-side sessions, CSRF-protected browser mutations, logout/revocation, and durable local structured audit on the WP4 draft branch/PR #224
+- OIDC Authorization Code + PKCE S256, verified claim-to-role allowlist, opaque server-side sessions, CSRF-protected browser mutations, logout/revocation, and durable local structured audit on PR #224's configured single-issuer implementation
 - optional data-plane client API keys (`client_auth`) with constant-time digest comparison and an optional per-key RPM ceiling
 
 WP4 implementation boundaries and acceptance status:
@@ -82,11 +82,11 @@ WP4 implementation boundaries and acceptance status:
   backend: do not share it between hosts or through a network filesystem;
   OIDC pending transactions are process-local and the callback must return to
   the initiating instance.
-- **WP4 verification gates passed on PR #224 head `aa5a864`**: local coverage is
-  85.12% and all four fresh GitHub checks (`CI/verify`, vulnerability scan,
-  CodeQL Go, and CodeQL) are green. The PR is ready for review, not merged.
-  Any subsequent push requires fresh checks before merge. See
-  `docs/reports/WP4_RBAC_HTTP_PARTIAL.md` for the latest evidence.
+- **WP4b security review evidence is in `docs/reports/WP4B_REVIEW.md`**. The
+  in-process OIDC provider and negative security tests pass locally; all four
+  inspected GitHub checks (`CI/verify`, vulnerability scan, CodeQL Go, and
+  CodeQL) were green on the reviewed PR head. Any subsequent push requires
+  fresh checks before merge. Live external-IdP interoperability is unverified.
 
 - per-client quotas beyond the RPM and TPM ceilings, hashed-at-rest client keys;
 - SAML and enterprise identity protocols other than the configured single OIDC issuer;
@@ -131,13 +131,14 @@ Runtime and health state are single-process/in-memory. Routine Admin/runtime con
 
 ## RBAC and SSO
 
-The WP4 branch wires the permission matrix in `internal/authz` to every
-registered Admin API route/method and denies unknown combinations. OIDC session
-roles are derived only from verified issuer claims using the explicit config
-allowlist. The web UI's visibility is a convenience only; the server middleware
-is authoritative. The local bbolt store is single-host. The 85% project
-coverage target is met at 85.12%, and required checks passed on head `aa5a864`.
-PR #224 is ready for review but unmerged; any later head needs fresh checks.
+PR #224 wires the permission matrix in `internal/authz` to every registered
+Admin API route/method and denies unknown combinations. OIDC session roles are
+derived only from verified issuer claims using the explicit config allowlist.
+The web UI's visibility is a convenience only; the server middleware is
+authoritative. The local bbolt store is single-host. The project-wide 85%
+coverage target is a separate WP3 acceptance target and must be measured again
+after WP4b–WP7. PR #224 remains unmerged until its current head has passed the
+full required gate and fresh GitHub checks.
 
 
 ## Response cache boundaries

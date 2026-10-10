@@ -51,9 +51,10 @@ details: [docs/INSTALLATION.md](docs/INSTALLATION.md).
   self-rotating bounded logs.
 - **Security:** provider credentials, custom headers, and proxy URLs are
   write-only — never returned by any API, snapshot, metric, or log. Admin API
-  route permissions are enforced server-side with unknown routes denied. The
-  WP4 draft adds OIDC role-based sessions and a durable local security/audit
-  store; acceptance and CI are still pending on PR #224. See [SECURITY.md](SECURITY.md).
+  route permissions are enforced server-side with unknown routes denied. PR
+  #224 adds configured single-issuer OIDC role-based sessions, CSRF, and a
+  durable local security/audit store; it remains unmerged pending the final
+  gate and fresh checks. See [SECURITY.md](SECURITY.md).
 - **Web UI:** provider/model management with write-only secret editing, model
   discovery and testing, candidate pools / route profiles / virtual endpoints,
   live health topology, event feed, manual probes, routing settings, quota and
@@ -144,9 +145,10 @@ NexaRoute is **not** a universal implementation of every LLM protocol. Native
 Gemini `generateContent` beyond the implemented adapter, Bedrock, Vertex AI,
 Azure-specific deployment semantics, embeddings/rerank, distributed state,
 invoice-perfect cost optimization, and hard budget enforcement are not
-implemented. The WP4 draft provides OIDC-backed Admin sessions and RBAC, but it
-is single-host, is not yet accepted until its required verification/coverage/CI
-gates pass, and is not a distributed enterprise identity platform. Admin
+implemented. PR #224 provides OIDC-backed Admin sessions and RBAC, but it is
+single-host, remains unmerged pending its required verification/coverage/CI
+gates, and is not a distributed enterprise identity platform. Live external-IdP
+interoperability is unverified. Admin
 authorization, TLS/mTLS, CSRF protections, and network segmentation remain
 separate required controls.
 Secret-bearing configuration fields are encrypted at rest; keyring integration
