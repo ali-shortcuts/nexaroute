@@ -1032,6 +1032,7 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 		w.Header().Set("traceparent", trace.Traceparent())
 		w.Header().Set("x-trace-id", trace.TraceID)
 		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
+		adminActor := "unknown"
 		defer func() {
 			if recovered := recover(); recovered != nil {
 				if recovered == http.ErrAbortHandler {
@@ -1044,6 +1045,9 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 				}
 			}
 			duration := time.Since(start)
+			if s.log != nil && strings.HasPrefix(r.URL.Path, "/admin/api/") && (isStateChanging(r.Method) || sw.status == http.StatusForbidden) {
+				s.log.Printf("audit action method=%s path=%q actor=%s status=%d request_id=%s", r.Method, r.URL.Path, adminActor, sw.status, rid)
+			}
 			streaming := strings.Contains(strings.ToLower(sw.Header().Get("Content-Type")), "text/event-stream")
 			if s.shouldLogRequest(sw.status, duration, streaming, requestNumber) {
 				s.log.Printf("request_id=%s trace_id=%s span_id=%s method=%s path=%s status=%d duration=%s", rid, trace.TraceID, trace.SpanID, r.Method, r.URL.Path, sw.status, duration)
@@ -1065,6 +1069,13 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 			}
 			if !s.adminAuthorized(r) {
 				errorJSON(sw, http.StatusUnauthorized, "admin authorization required")
+				return
+			}
+			adminActor = "legacy-admin-break-glass"
+			permission, mapped := adminPermissionForRequest(r)
+			identity := legacyAdminIdentity()
+			if !mapped || !identity.Authorize(permission) {
+				errorJSON(sw, http.StatusForbidden, "admin permission denied")
 				return
 			}
 			if !s.adminClientCertificateAuthorized(r) {

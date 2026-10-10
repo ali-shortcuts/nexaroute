@@ -50,8 +50,10 @@ details: [docs/INSTALLATION.md](docs/INSTALLATION.md).
   systems), asynchronous provider probing that never blocks the UI, and
   self-rotating bounded logs.
 - **Security:** provider credentials, custom headers, and proxy URLs are
-  write-only — never returned by any API, snapshot, metric, or log. See
-  [SECURITY.md](SECURITY.md).
+  write-only — never returned by any API, snapshot, metric, or log. Admin API
+  route permissions are enforced server-side with unknown routes denied; the
+  existing Admin key remains a break-glass owner credential. Multi-user SSO is
+  not yet implemented. See [SECURITY.md](SECURITY.md).
 - **Web UI:** provider/model management with write-only secret editing, model
   discovery and testing, candidate pools / route profiles / virtual endpoints,
   live health topology, event feed, manual probes, routing settings, quota and
@@ -139,8 +141,9 @@ NexaRoute is **not** a universal implementation of every LLM protocol. Native
 Gemini `generateContent` beyond the implemented adapter, Bedrock, Vertex AI,
 Azure-specific deployment semantics, embeddings/rerank, distributed state,
 invoice-perfect cost optimization, hard budget enforcement, cookie-backed
-identity, RBAC/SSO, and a complete internet-facing identity/session framework
-are not implemented. Built-in TLS/mTLS and browser CSRF checks are implemented,
+identity, multi-user RBAC/SSO, and a complete internet-facing identity/session
+framework are not implemented. Admin route-level permission checks, built-in
+TLS/mTLS and browser CSRF checks are implemented,
 but they do not replace Admin authorization, network segmentation, or an
 enterprise identity system.
 Secret-bearing configuration fields are encrypted at rest; keyring integration

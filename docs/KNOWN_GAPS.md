@@ -67,17 +67,27 @@ Implemented:
 - in-memory browser UI state for the entered Admin key (it is lost on page reload)
 - optional data-plane client API keys (`client_auth`) with constant-time digest comparison and an optional per-key RPM ceiling
 
-Not implemented as a full internet-facing control plane:
+Implemented in the HTTP boundary, but not yet a full multi-user control plane:
+
+- Admin API route families are mapped server-side to the fail-closed
+  `internal/authz` permission matrix; unmapped `/admin/api/*` paths deny by
+  default. The legacy static Admin key and existing keyless loopback mode map
+  only to the break-glass owner identity. Assignment/authentication of
+  viewer/operator/admin identities is not yet implemented.
+- audit log lines record state-changing Admin API attempts without request
+  bodies or credentials; the event feed is not a durable audit store.
 
 - per-client quotas beyond the RPM and TPM ceilings, hashed-at-rest client keys;
-- RBAC/multi-user accounts
-- cookie-backed Admin login/session identity (Admin authorization remains API-key or local-loopback based); browser state-changing calls are protected by same-origin checks and a CSRF token cookie/header, while stateless non-browser clients authenticate with the Admin key;
-- enterprise SSO
+- non-owner RBAC identity assignment and multi-user accounts;
+- cookie-backed Admin login/session identity (browser state-changing calls
+  remain protected by same-origin checks and a CSRF token cookie/header);
+- OIDC/enterprise SSO, role-claim mapping, and server-side session revocation.
 
 Virtual-key tenant/project/team policy intersection is implemented fail-closed:
 child key wildcards cannot widen a configured parent allow-list, unresolved
 scope references deny access, and duplicate model/token fields are inspected
-conservatively. This does not provide RBAC or SSO; those remain Phase 2 work.
+conservatively. This is separate from Admin RBAC and SSO; those remain
+incomplete Phase 2 work.
 
 ## Model discovery
 
@@ -97,11 +107,13 @@ Runtime and health state are single-process/in-memory. Routine Admin/runtime con
 
 ## RBAC and SSO
 
-The transport-independent RBAC permission matrix is implemented and tested in
-`internal/authz`, but the HTTP server still uses the legacy Admin API-key
-boundary. OIDC/SAML validation, server-side identity sessions, and endpoint
-permission wiring are not enabled until an explicit IdP configuration and
-provider conformance tests exist.
+The permission matrix in `internal/authz` is wired to registered Admin API
+route families and unknown admin paths fail closed. Current authentication
+still supplies only the legacy break-glass owner identity (static Admin key,
+or existing loopback-only mode); no viewer/operator identity can yet be
+assigned. OIDC/SAML validation, server-side sessions, role mapping and durable
+audit storage remain unimplemented. The web UI's authorization continues to
+derive from its Admin API calls, not client-side role claims.
 
 
 ## Response cache boundaries

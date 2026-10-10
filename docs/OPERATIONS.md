@@ -117,10 +117,13 @@ preflight commands are implemented and covered by the repository gates. The
 measured repository test coverage is 79.6%; see [`docs/KNOWN_GAPS.md`](KNOWN_GAPS.md)
 for the below-80% package list and the next coverage targets.
 
-Phase 2 has **not started**. In particular, RBAC/SSO, strict provider egress
+Phase 2 is **partially started**. Admin API permission mapping and default-deny
+handling for unknown Admin routes are implemented, but all accepted Admin
+credentials still act as the break-glass owner. Non-owner role assignment,
+OIDC/SSO and cookie-backed sessions are not implemented. Strict provider egress
 policy, runtime-integrated durable store adapters, and OS keyring or external
-KMS integration are not implemented. Do not treat Phase 1 transport security
-or client keys as an enterprise identity, egress-policy, or distributed-state
+KMS integration are also not implemented. Do not treat transport security or
+client keys as an enterprise identity, egress-policy, or distributed-state
 substitute.
 
 Virtual-key tenant/project/team scopes are evaluated as parent-to-child
