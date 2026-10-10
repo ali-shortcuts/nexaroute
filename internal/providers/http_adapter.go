@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/ali-shortcuts/nexaroute/internal/config"
+	"github.com/ali-shortcuts/nexaroute/internal/egress"
 )
 
 type credentialState struct {
@@ -103,19 +104,26 @@ func newHTTPAdapterWithRetryCap(p config.ProviderConfig, timeout, retryAfterCap 
 	if idlePerHost > 512 {
 		idlePerHost = 512
 	}
-	tr := &http.Transport{
-		MaxIdleConns: maxIdle, MaxIdleConnsPerHost: idlePerHost, MaxConnsPerHost: mc,
-		IdleConnTimeout: 90 * time.Second, TLSHandshakeTimeout: 15 * time.Second,
-		ResponseHeaderTimeout: timeout, ExpectContinueTimeout: time.Second,
-		ForceAttemptHTTP2: true,
+	base, err := url.Parse(p.BaseURL)
+	if err != nil {
+		return nil, fmt.Errorf("provider %s base URL: %w", p.ID, err)
+	}
+	allowedHosts := append([]string(nil), p.AllowedHosts...)
+	if len(allowedHosts) == 0 {
+		allowedHosts = []string{base.Hostname()}
 	}
 	if p.ProxyURL != "" {
-		u, err := url.Parse(p.ProxyURL)
-		if err != nil {
-			return nil, fmt.Errorf("provider %s proxy: %w", p.ID, err)
+		if proxy, proxyErr := url.Parse(p.ProxyURL); proxyErr == nil && proxy.Hostname() != "" {
+			allowedHosts = append(allowedHosts, proxy.Hostname())
 		}
-		tr.Proxy = http.ProxyURL(u)
 	}
+	policy := egress.Policy{AllowedHosts: allowedHosts, AllowLoopback: base.Scheme == "http"}
+	tr, err := policy.NewTransport(p.BaseURL, p.ProxyURL)
+	if err != nil {
+		return nil, fmt.Errorf("provider %s egress policy: %w", p.ID, err)
+	}
+	tr.MaxIdleConns, tr.MaxIdleConnsPerHost, tr.MaxConnsPerHost = maxIdle, idlePerHost, mc
+	tr.ResponseHeaderTimeout = timeout
 	checkRedirect := func(req *http.Request, via []*http.Request) error {
 		if len(via) == 0 {
 			return nil
