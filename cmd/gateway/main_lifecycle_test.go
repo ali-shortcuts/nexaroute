@@ -82,6 +82,7 @@ func TestMainStartsHealthyGatewayAndShutsDownOnContextCancellation(t *testing.T)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
+	client.CloseIdleConnections()
 	cancel()
 	select {
 	case <-done:
