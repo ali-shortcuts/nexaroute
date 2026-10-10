@@ -28,6 +28,7 @@ type Runtime struct {
 	Orchestrator *orchestrator.Orchestrator
 	startMu sync.Mutex
 	started bool
+	workerCancel context.CancelFunc
 }
 
 func New(cfg video.Config, baseDir string) (*Runtime, error) {
@@ -99,21 +100,37 @@ func (r *Runtime) Start(ctx context.Context) error {
 		return errors.New("video runtime has already been started")
 	}
 	r.started = true
+	workerCtx, workerCancel := context.WithCancel(ctx)
+	r.workerCancel = workerCancel
 	r.startMu.Unlock()
-	go r.Workers.Run(ctx)
+	go r.Workers.Run(workerCtx)
 	select {
 	case <-r.Workers.Ready():
-	case <-ctx.Done():
-		return ctx.Err()
+	case <-workerCtx.Done():
+		workerCancel()
+		return workerCtx.Err()
 	}
-	if err := r.Orchestrator.Recover(ctx); err != nil {
+	if err := r.Orchestrator.Recover(workerCtx); err != nil {
+		workerCancel()
+		r.Queue.Close()
 		return fmt.Errorf("recover persisted video jobs: %w", err)
 	}
 	return nil
 }
 
 func (r *Runtime) Close() {
-	if r != nil && r.Queue != nil {
+	if r == nil {
+		return
+	}
+	r.startMu.Lock()
+	cancel := r.workerCancel
+	r.startMu.Unlock()
+	// Cancel the worker context before closing the queue so buffered queued jobs
+	// cannot start new provider submissions during shutdown.
+	if cancel != nil {
+		cancel()
+	}
+	if r.Queue != nil {
 		r.Queue.Close()
 	}
 }
