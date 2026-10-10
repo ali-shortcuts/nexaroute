@@ -117,9 +117,11 @@ preflight commands are implemented and covered by the repository gates. The
 measured repository test coverage is 79.6%; see [`docs/KNOWN_GAPS.md`](KNOWN_GAPS.md)
 for the below-80% package list and the next coverage targets.
 
-Phase 2 has **not started**. In particular, RBAC/SSO, strict provider egress
-policy, runtime-integrated durable store adapters, and OS keyring or external
-KMS integration are not implemented. Do not treat Phase 1 transport security
+Phase 2 is **in progress**. The asynchronous video runtime is opt-in and
+partial: its local fake provider is for development/tests, and no real external
+provider is claimed verified. In particular, complete RBAC/SSO, strict provider
+egress policy, runtime-integrated distributed store adapters, and OS keyring or
+external KMS integration are not implemented. Do not treat transport security
 or client keys as an enterprise identity, egress-policy, or distributed-state
 substitute.
 
@@ -129,9 +131,14 @@ allow-list; unknown or inconsistent references deny the request. Keep these
 scopes explicit in configuration and test the deny path before exposing the
 data plane.
 
-The video runtime is opt-in through `video.enabled`. It uses a bounded worker
-queue and atomic local JSON job store; that store is single-process and is not
-a multi-node coordination mechanism. Use the fake provider only for local
-development/tests, keep any future provider token in an environment variable,
-and do not claim a real provider integration until its adapter and integration
-tests are available.
+The video runtime is opt-in through `video.enabled` and fails closed unless
+`video.auth_token_env` names a non-empty bearer token in the process environment.
+It uses a bounded worker queue and an atomic local JSON job store; that store is
+single-process and is not a multi-node coordination mechanism. On restart,
+queued jobs are recovered, known provider job IDs are resumed, and ambiguous
+submissions without a provider job ID require manual action rather than risking
+a duplicate billable submission. Shutdown cancels and joins the worker pool
+before returning. Use the fake provider only for local development/tests; no
+real external provider integration is claimed verified. See
+[`docs/VIDEO_GATEWAY.md`](VIDEO_GATEWAY.md) and [`docs/KNOWN_GAPS.md`](KNOWN_GAPS.md)
+for the supported surface and remaining limits.
