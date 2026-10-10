@@ -1,0 +1,14 @@
+--- internal/decision ---
+ok  	github.com/ali-shortcuts/nexaroute/internal/decision	0.408s	coverage: 76.4% of statements
+--- internal/config ---
+ok  	github.com/ali-shortcuts/nexaroute/internal/config	0.368s	coverage: 74.8% of statements
+--- internal/compat ---
+ok  	github.com/ali-shortcuts/nexaroute/internal/compat	0.011s	coverage: 71.8% of statements
+--- internal/httpapi ---
+ok  	github.com/ali-shortcuts/nexaroute/internal/httpapi	6.729s	coverage: 74.1% of statements
+--- internal/probe ---
+ok  	github.com/ali-shortcuts/nexaroute/internal/probe	1.463s	coverage: 72.1% of statements
+--- internal/logging ---
+ok  	github.com/ali-shortcuts/nexaroute/internal/logging	(cached)	coverage: 81.8% of statements
+--- internal/desktop ---
+ok  	github.com/ali-shortcuts/nexaroute/internal/desktop	(cached)	coverage: 85.5% of statements
