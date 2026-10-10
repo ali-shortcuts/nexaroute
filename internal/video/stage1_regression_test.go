@@ -3,6 +3,7 @@ package video_test
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -88,4 +89,45 @@ func TestRunJobPersistsOutputBeforeCompletionAndSettlesEstimate(t *testing.T) {
 	if !strings.Contains(string(data),"not a playable video") || got.OutputAssets[0].Kind!="development-placeholder" { t.Fatal("fake provider output was misrepresented as a real video") }
 	if ledger.Reserved()!=0 || ledger.EstimatedSpent()!=got.EstimatedCostUSD { t.Fatalf("reservation not settled: reserved=%.2f estimated=%.2f",ledger.Reserved(),ledger.EstimatedSpent()) }
 	time.Sleep(time.Millisecond)
+}
+
+
+func TestFileStoreRollsBackMemoryAfterDurabilityFailure(t *testing.T) {
+	ctx := context.Background()
+	root := filepath.Join(t.TempDir(), "jobs")
+	if err := os.Mkdir(root, 0700); err != nil { t.Fatal(err) }
+	store, err := queue.NewFileStore(filepath.Join(root, "jobs.json"))
+	if err != nil { t.Fatal(err) }
+	first := video.NewJob("first", video.VideoRequest{ProjectID:"p", Prompt:"one", DurationSeconds:1, Mode:video.ModeTextToVideo})
+	if err := store.Create(ctx, first); err != nil { t.Fatal(err) }
+
+	if err := os.RemoveAll(root); err != nil { t.Fatal(err) }
+	if err := os.WriteFile(root, []byte("block directory creation"), 0600); err != nil { t.Fatal(err) }
+	updated := first
+	updated.State = video.StateProcessing
+	if err := store.Update(ctx, updated); err == nil { t.Fatal("expected update persistence failure") }
+	got, err := store.Get(ctx, first.JobID)
+	if err != nil { t.Fatal(err) }
+	if got.State != first.State { t.Fatalf("failed update leaked into memory: %s want %s", got.State, first.State) }
+
+	second := video.NewJob("second", video.VideoRequest{ProjectID:"p", Prompt:"two", DurationSeconds:1, Mode:video.ModeTextToVideo, IdempotencyKey:"second-key"})
+	if err := store.Create(ctx, second); err == nil { t.Fatal("expected create persistence failure") }
+	if _, err := store.Get(ctx, second.JobID); !errors.Is(err, queue.ErrNotFound) { t.Fatalf("failed create leaked into memory: %v", err) }
+	if _, err := store.GetByIdempotency(ctx, "second-key"); !errors.Is(err, queue.ErrNotFound) { t.Fatalf("failed create leaked idempotency index: %v", err) }
+}
+
+func TestCancelledContextDoesNotSubmitQueuedProviderJob(t *testing.T) {
+	bg := context.Background()
+	st, q, p := queue.NewMemoryStore(), queue.New(2), providers.NewFake(1)
+	o := &orchestrator.Orchestrator{Store:st, Queue:q, Providers:orchestrator.Registry{"fake":p}, Ledger:&cost.Ledger{}}
+	created, err := o.Create(bg, video.VideoRequest{ProjectID:"p", Prompt:"scene", DurationSeconds:1, Mode:video.ModeTextToVideo, ProviderPreference:"fake"})
+	if err != nil { t.Fatal(err) }
+	queued, err := q.Next(bg)
+	if err != nil { t.Fatal(err) }
+	ctx, cancel := context.WithCancel(bg)
+	cancel()
+	if err := o.RunJob(ctx, queued); !errors.Is(err, context.Canceled) { t.Fatalf("RunJob error=%v want context.Canceled",err) }
+	got, err := st.Get(bg, created.JobID)
+	if err != nil { t.Fatal(err) }
+	if got.State != video.StateQueued || p.NextID != 0 { t.Fatalf("cancelled queued work was submitted or mutated: state=%s creates=%d",got.State,p.NextID) }
 }
