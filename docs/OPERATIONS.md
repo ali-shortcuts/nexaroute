@@ -84,6 +84,28 @@ If the process stops during rotation, preserve the config, `.key`, `.key.next`, 
 
 A deployment must satisfy the configured health and capability requirements before it is eligible for traffic. See [configuration](CONFIGURATION.md) for probe cadence, leases, and recovery behavior.
 
+### Shared control-plane state
+
+The optional `control_plane` section defaults to the atomic local `file`
+backend. Its state path is relative to the config directory unless absolute;
+the file and parent directory are created with restrictive permissions. The
+gateway writes versioned snapshots with optimistic revisions and never logs
+the contents of environment-provided DSNs or URLs. `memory` is test-only.
+
+Before changing a backend, copy the current state file to a protected backup:
+
+```bash
+install -m 0600 "$CONFIG.controlplane.json" "$BACKUP_DIR/controlplane.json"
+```
+
+Set `control_plane.migration_dry_run=true` for a startup validation without a
+write. To roll back a failed local migration, stop the gateway, restore the
+validated backup to the configured state path with mode `0600`, run
+`config validate` and restart. A partial temp file is not a committed state;
+never delete the last valid backup until the replacement has been verified.
+Postgres and Redis adapters are present as contracts but their live runtime
+client/driver integration is deployment-dependent and remains **unverified**.
+
 ## 5. Admin surface, events, and logs
 
 Admin API access is privileged. Keep it loopback-only unless OIDC, TLS, and external network controls are configured. Provider keys, pooled credentials, custom header values, and proxy URLs are write-only and redacted on Admin reads and exports. The event feed uses Server-Sent Events; clients can reconnect with `Last-Event-ID`, and should refresh the snapshot after an epoch change or sequence gap.
@@ -135,14 +157,12 @@ baseline percentages in this manual as a current measurement.
 Phase 2 is **in progress**. The opt-in video runtime is partial: its local fake
 provider is for development/tests, and no real external provider is claimed
 verified. PR #224 implements OIDC-backed `viewer`/`operator`/`admin` sessions,
-route/method RBAC, and a local durable security/audit store; it remains
-unmerged until its complete required verification and coverage target pass and
-fresh GitHub checks are green. Live external-IdP interoperability is unverified.
-SAML, distributed sessions/audit, strict
-provider egress policy, runtime-integrated durable store adapters, and OS
-keyring or external KMS integration are not implemented. Do not treat
-transport security or client keys as an egress-policy or distributed-state
-substitute.
+route/method RBAC, and a local durable security/audit store; live
+external-IdP interoperability is unverified. The provider egress policy and
+local control-plane file backend are merged, while distributed sessions/audit,
+live Postgres/Redis runtime interoperability, and real external KMS/keyring
+interoperability remain unverified. Do not treat transport security or client
+keys as an egress-policy or distributed-state substitute.
 
 Virtual-key tenant/project/team scopes are evaluated as parent-to-child
 intersections. A wildcard on a child key cannot widen a configured parent

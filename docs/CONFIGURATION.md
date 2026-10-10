@@ -61,6 +61,9 @@ the connection strings themselves are never written to JSON:
 {
   "control_plane": {
     "enabled": true,
+    "backend": "file",
+    "state_path": "controlplane/state.json",
+    "migration_dry_run": false,
     "postgres_dsn_env": "NEXAROUTE_PG_DSN",
     "redis_url_env": "NEXAROUTE_REDIS_URL",
     "config_failure": "last_known_good",
@@ -71,10 +74,14 @@ the connection strings themselves are never written to JSON:
 }
 ```
 
-The supported failure modes are `fail_open`, `fail_closed`, and
-`last_known_good`. The PostgreSQL migration runner uses an advisory lock and
-checksum verification. Runtime connection wiring is opt-in and must not be
-enabled without PostgreSQL/Redis availability and integration tests.
+`backend` defaults to `file` and may be `file`, `memory`, `postgres`, or
+`redis`. File state is written atomically with mode `0600`; relative
+`state_path` values resolve against the config directory. `memory` is for
+tests only. `postgres` and `redis` require the named environment variable and
+fail closed at startup until a runtime client/driver is registered; DSNs and
+URLs are never stored or logged. `migration_dry_run` validates backend
+selection without writing a snapshot. Failure modes are `fail_open`,
+`fail_closed`, and `last_known_good`.
 
 ## Implicit-default warnings and opt-in strict config
 
