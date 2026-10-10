@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -68,8 +69,9 @@ func TestMainStartsHealthyGatewayAndShutsDownOnContextCancellation(t *testing.T)
 	for time.Now().Before(deadline) {
 		resp, getErr := client.Get("http://" + address + "/healthz")
 		if getErr == nil {
+			_, readErr := io.Copy(io.Discard, resp.Body)
 			_ = resp.Body.Close()
-			if resp.StatusCode == http.StatusOK {
+			if readErr == nil && resp.StatusCode == http.StatusOK {
 				ready = true
 				break
 			}
