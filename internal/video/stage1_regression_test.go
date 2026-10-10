@@ -2,6 +2,8 @@ package video_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"os"
 	"path/filepath"
@@ -92,7 +94,11 @@ func TestRecoverAvoidsResubmittingAmbiguousAdmission(t *testing.T) {
 
 func TestRecoverResumesKnownProviderJobWithoutCreatingAnother(t *testing.T) {
 	ctx := context.Background()
-	st := queue.NewMemoryStore()
+	storePath := filepath.Join(t.TempDir(), "jobs.json")
+	st, err := queue.NewFileStore(storePath)
+	if err != nil {
+		t.Fatal(err)
+	}
 	q := queue.New(4)
 	p := providers.NewFake(2)
 	providerJob, err := p.CreateJob(ctx, video.VideoRequest{ProjectID: "p", Prompt: "scene", DurationSeconds: 1, Mode: video.ModeTextToVideo})
@@ -106,7 +112,12 @@ func TestRecoverResumesKnownProviderJobWithoutCreatingAnother(t *testing.T) {
 	if err := st.Create(ctx, job); err != nil {
 		t.Fatal(err)
 	}
-	o := &orchestrator.Orchestrator{Store: st, Queue: q, Providers: orchestrator.Registry{"fake": p}}
+	// Re-open the disk store to model a process restart.
+	reopened, err := queue.NewFileStore(storePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := &orchestrator.Orchestrator{Store: reopened, Queue: q, Providers: orchestrator.Registry{"fake": p}}
 	if err := o.Recover(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -178,6 +189,10 @@ func TestRunJobDownloadsAssetsBeforeMarkingComplete(t *testing.T) {
 	if !strings.Contains(string(bytes), "not a playable video") {
 		t.Fatalf("fake provider artifact wasn't transparently marked: %q", bytes)
 	}
+	sum := sha256.Sum256(bytes)
+	if got.OutputAssets[0].SHA256 != hex.EncodeToString(sum[:]) {
+		t.Fatalf("stored checksum does not match output bytes: got=%s", got.OutputAssets[0].SHA256)
+	}
 	if l.Reserved() != 0 || l.EstimatedSpent() != got.EstimatedCostUSD {
 		t.Fatalf("cost reservation not settled: reserved=%.2f estimate_spent=%.2f expected=%.2f", l.Reserved(), l.EstimatedSpent(), got.EstimatedCostUSD)
 	}
@@ -230,5 +245,34 @@ func TestFileStoreRollsBackMemoryOnPersistenceFailure(t *testing.T) {
 	}
 	if _, err := store.GetByIdempotency(ctx, "second-key"); !errors.Is(err, queue.ErrNotFound) {
 		t.Fatalf("failed create leaked idempotency index: %v", err)
+	}
+}
+
+
+func TestCancelledContextDoesNotSubmitQueuedProviderJob(t *testing.T) {
+	bg := context.Background()
+	st := queue.NewMemoryStore()
+	q := queue.New(2)
+	p := providers.NewFake(1)
+	o := &orchestrator.Orchestrator{Store: st, Queue: q, Providers: orchestrator.Registry{"fake": p}, Ledger: &cost.Ledger{}}
+	created, err := o.Create(bg, video.VideoRequest{ProjectID: "p", Prompt: "scene", DurationSeconds: 1, Mode: video.ModeTextToVideo, ProviderPreference: "fake"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	queued, err := q.Next(bg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(bg)
+	cancel()
+	if err := o.RunJob(ctx, queued); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled execution returned %v, want context.Canceled", err)
+	}
+	got, err := st.Get(bg, created.JobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != video.StateQueued || p.NextID != 0 {
+		t.Fatalf("shutdown changed or submitted queued work: state=%s provider_creates=%d", got.State, p.NextID)
 	}
 }
