@@ -218,13 +218,13 @@ non-critical nodes no longer abort unrelated sections.
 
 ### Package coverage gaps and targets — `open`
 
-The merged Phase 1 coverage work measures **79.4% repository-wide** on the
+The merged Phase 1 coverage work measures **79.6% repository-wide** on the
 resulting `main` (`go test -count=1 -coverprofile=/tmp/main.cover ./...`).
 Packages below 80% in that reproducible run are:
 
 - `cmd/gateway`: 73.8%
 - `internal/compat`: 76.0%
-- `internal/config`: 75.5%
+- `internal/config`: 78.1%
 - `internal/decision`: 76.4%
 - `internal/feature`: 79.6%
 - `internal/httpapi`: 75.4%

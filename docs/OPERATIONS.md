@@ -114,7 +114,7 @@ nexaroute config dry-run --config /etc/nexaroute/config.json
 The Phase 1 hardening work is complete on `main`: encrypted secret storage,
 TLS/mTLS, browser CSRF checks, and the read-only `config validate|diff|dry-run`
 preflight commands are implemented and covered by the repository gates. The
-measured repository test coverage is 79.4%; see [`docs/KNOWN_GAPS.md`](KNOWN_GAPS.md)
+measured repository test coverage is 79.6%; see [`docs/KNOWN_GAPS.md`](KNOWN_GAPS.md)
 for the below-80% package list and the next coverage targets.
 
 Phase 2 has **not started**. In particular, RBAC/SSO, strict provider egress
