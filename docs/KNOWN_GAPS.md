@@ -233,9 +233,11 @@ Packages below 80% in that reproducible run are:
 The remaining work is meaningful behavior coverage only; no assertion-free
 padding is acceptable. The next planned coverage pass targets the uncovered
 configuration, admin/virtual endpoint, compatibility, protocol-path,
-orchestrator, and gateway branches.
+orchestrator, and gateway branches, including the historically thin
+`internal/core` package tracked by audit finding **F7**.
 
 - Impact: thinner regression protection in the listed packages.
 - Mitigation/workaround: run the full coverage command above and inspect the
   per-file function report before adding behavior tests.
-- Owner: Phase 1 coverage follow-up.
+- Owner: Phase 1 coverage follow-up; audit finding **F7** and follow-up set
+  #169–#177 remain the historical tracking reference.
