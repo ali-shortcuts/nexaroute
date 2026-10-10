@@ -126,3 +126,8 @@ This checkpoint supersedes earlier coverage/local-gate statements above, while r
 - `./scripts/smoke-local.sh`, `./scripts/build-release.sh v0.7.0`, and `./scripts/test-install.sh` also passed; artifacts were prepared locally only and nothing was published. The current sandbox does not expose `govulncheck`; the earlier dependency scan and GitHub checks were green on the older PR head, so require fresh vulnerability/CodeQL/verify checks on the exact pushed head.
 - Update the existing draft PR only after committing the validated worktree; do not mark it ready or merge until fresh GitHub checks on that exact head pass. No merge, release/tag, repository-setting change, or unrelated repository modification is authorized by this checkpoint.
 - Broader roadmap remains open: WP5 provider egress/SSRF controls; WP6 runtime-integrated durable/shared state; WP7 keyring/KMS; and WP8 final clean-clone acceptance/docs/branch audit. No live third-party IdP or real external video provider was tested. Do not describe the entire project as complete; only the current WP4 branch's local 85%/functional gates have been closed.
+
+
+## Remote verification checkpoint — 2026-10-10T13:58+04:30
+
+After commit `9a837a89ca04b2115687b613e3e5bb7e5716eea1` was pushed to the existing WP4 branch for PR #224, GitHub reported all four checks successful on that exact head: `CI/verify` (including the Docker runtime smoke), `Go vulnerability scan`, `CodeQL (Go)`, and `CodeQL`. The PR was still Draft at the time of this checkpoint and was not merged. The local 85.12% measurement and full local gates are recorded above. Any subsequent commit changes the proposed head and requires fresh checks before acceptance; do not merge the PR as part of this checkpoint.
