@@ -211,6 +211,7 @@ type VideoConfig struct {
 	QueueSize               int    `json:"queue_size,omitempty"`
 	Workers                 int    `json:"workers,omitempty"`
 	AuthTokenEnv            string `json:"auth_token_env,omitempty"`
+	MaxAssetBytes           int64  `json:"max_asset_bytes,omitempty"`
 	DevelopmentFakeProvider bool   `json:"development_fake_provider,omitempty"`
 }
 
@@ -1151,6 +1152,14 @@ func (c Config) Validate() error {
 	}
 	if err := c.TLS.Validate(); err != nil {
 		return err
+	}
+	if c.Video.Enabled {
+		if strings.TrimSpace(c.Video.AuthTokenEnv) == "" {
+			return errors.New("video.auth_token_env is required when video.enabled is true")
+		}
+		if c.Video.MaxAssetBytes < 0 || c.Video.MaxAssetBytes > 8<<30 {
+			return errors.New("video.max_asset_bytes must be between 0 and 8589934592")
+		}
 	}
 	if strings.TrimSpace(c.Listen) == "" {
 		return errors.New("listen is required")
