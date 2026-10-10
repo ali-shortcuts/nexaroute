@@ -75,3 +75,16 @@ func TestPermissionsForUnknownRoleIsEmpty(t *testing.T) {
 		t.Fatalf("unknown role permissions = %v", got)
 	}
 }
+
+func TestIdentityHasRole(t *testing.T) {
+	identity := Identity{Subject: "user-1", Roles: []Role{RoleViewer, RoleOperator}}
+	if !identity.HasRole(RoleViewer) || !identity.HasRole(RoleOperator) {
+		t.Fatal("identity must report each assigned role")
+	}
+	if identity.HasRole(RoleAdmin) {
+		t.Fatal("identity must not report an unassigned role")
+	}
+	if (Identity{Subject: "user-2"}).HasRole(RoleViewer) {
+		t.Fatal("identity without roles must not report any role")
+	}
+}

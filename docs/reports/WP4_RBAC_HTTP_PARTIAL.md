@@ -33,14 +33,14 @@ All commands below passed on Go 1.26.9 unless otherwise stated:
 | `go test ./...` | **PASS** |
 | `go test -race ./...` | **PASS** |
 | `go vet ./...` | **PASS** |
-| `govulncheck -C . ./...` | **PASS** — 0 reachable vulnerabilities |
+| `govulncheck -C . ./...` | Not available in this sandbox run; the previous local scan on the unchanged production dependency tree found 0 reachable vulnerabilities. A fresh GitHub scan is still required on the proposed head. |
 | `./scripts/verify.sh` | **PASS** — formatting/syntax, full tests and race checks, browser control-plane and Live Visual Agent acceptance, bounded fuzz checks, Linux amd64/arm64 builds |
 | `./scripts/smoke-local.sh` | **PASS** |
 | `./scripts/build-release.sh v0.7.0` | **PASS** |
 | `./scripts/test-install.sh` | **PASS** — installer end-to-end including checksum rejection and upgrade/config-preservation paths |
 | `git diff --check` | **PASS** |
 
-The measured aggregate statement coverage is **75.6%**, using `go test -coverprofile=... ./...` followed by `go tool cover -func=...`; this remains **9.4 percentage points below the stated 85% target**. No narrower package subset or executable 85% CI gate was found in the repository; this report treats the target as repository-wide. The Go test output separately identifies subpackages with no test files or 0% package coverage. The target is not met and must not be described as passing.
+The latest uncached, repository-wide statement coverage measurement after the behavioral test additions is **85.12% (16,885/19,837 statements)**, using `go test -count=1 -coverprofile=... ./...` followed by `go tool cover -func=...`; this meets the documented **85% target**. The earlier 75.6% measurement is historical and superseded. No narrower package subset or executable 85% CI gate was found in the repository, so this report treats the target as repository-wide. Preserve the measurement only for this exact source tree; any later code changes require remeasurement.
 
 ## Deployment boundaries
 
@@ -48,4 +48,4 @@ The bbolt session/audit backend and pending OIDC transactions are single-host/pr
 
 ## Acceptance status
 
-**Implementation substantially delivered; WP4 acceptance remains pending.** Keep PR #224 in draft and do not merge or describe the work package as accepted until (1) repository-wide measured coverage reaches the documented 85% target and (2) fresh required GitHub checks—including Docker runtime smoke and the Go vulnerability scan—complete successfully on the exact proposed head. Local functional, security, browser, fuzz, race, and build gates passing does not waive the unmet coverage target or replace fresh remote checks.
+**Implementation delivered; local acceptance gates pass; remote acceptance remains pending.** Keep PR #224 in draft and do not merge until the exact updated head is pushed and fresh required GitHub checks—including Docker runtime smoke, vulnerability scan, and CodeQL—complete successfully. The local coverage criterion is met at 85.12%; local `verify.sh`, race, smoke, release-build, and installer E2E passed. A live third-party IdP was not configured or tested, and local govulncheck was unavailable in this run; neither should be represented as newly verified by this checkpoint.
