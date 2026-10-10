@@ -50,4 +50,23 @@ func TestCommandProviderProtocolAndInvalidOutput(t *testing.T) {
 	if _, err := (CommandProvider{Command: bad}).Load(context.Background(), "ref"); err == nil {
 		t.Fatal("accepted malformed command output")
 	}
+	if err := (CommandProvider{Command: script}).Store(context.Background(), "ref", []byte("short")); err == nil {
+		t.Fatal("accepted short key for command store")
+	}
+}
+
+func TestConfiguredProviderRejectsUnknownAndKeyringDoesNotFallback(t *testing.T) {
+	t.Setenv("NEXAROUTE_KEY_PROVIDER", "unknown")
+	if _, _, _, err := configuredProvider(); err == nil {
+		t.Fatal("accepted unknown key provider")
+	}
+	t.Setenv("NEXAROUTE_KEY_PROVIDER", "keyring")
+	p, ref, enabled, err := configuredProvider()
+	if err != nil || !enabled || ref == "" || p == nil {
+		t.Fatalf("keyring selection: provider=%T ref=%q enabled=%v err=%v", p, ref, enabled, err)
+	}
+	// A missing/unavailable OS keyring must be an error, never a file fallback.
+	if _, err := p.Load(context.Background(), ref); err == nil {
+		t.Fatal("keyring unexpectedly fell back or returned a key")
+	}
 }
