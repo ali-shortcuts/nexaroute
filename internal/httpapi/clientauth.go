@@ -35,12 +35,13 @@ type clientAuthState struct {
 }
 
 type clientIdentity struct {
-	ID        string
-	TenantID  string
-	ProjectID string
-	TeamID    string
-	Role      string
-	Virtual   bool
+	ID             string
+	TenantID       string
+	ProjectID      string
+	TeamID         string
+	Role           string
+	Virtual        bool
+	RequirePrivacy string
 }
 
 type clientIdentityContextKey struct{}
@@ -120,7 +121,7 @@ func (s *Server) findClientIdentity(presented string) (clientIdentity, config.Vi
 				continue
 			}
 		}
-		return clientIdentity{ID: key.ID, TenantID: key.TenantID, ProjectID: key.ProjectID, TeamID: key.TeamID, Role: key.Role, Virtual: true}, key, true
+		return clientIdentity{ID: key.ID, TenantID: key.TenantID, ProjectID: key.ProjectID, TeamID: key.TeamID, Role: key.Role, Virtual: true, RequirePrivacy: key.RequirePrivacy}, key, true
 	}
 	if clientKeyMatches(cfg.ClientAuth.Keys, presented) {
 		return clientIdentity{ID: "legacy", Role: "admin"}, config.VirtualKeyConfig{}, true

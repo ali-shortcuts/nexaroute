@@ -28,6 +28,10 @@ type Deployment struct {
 	InputCostPerMTok  float64             `json:"input_cost_per_mtok,omitempty"`
 	OutputCostPerMTok float64             `json:"output_cost_per_mtok,omitempty"`
 	Capabilities      config.Capabilities `json:"capabilities"`
+	// TrainsOnData is the provider's declared data-handling class
+	// ("yes" | "no" | "unknown"). It is fail-closed metadata: privacy
+	// routing only trusts the exact value "no".
+	TrainsOnData string `json:"trains_on_data,omitempty"`
 }
 
 type ProviderLoad struct {
@@ -53,6 +57,12 @@ type Requirement struct {
 	MinContextWindow     int
 	EstimatedInputTokens int
 	MaxOutputTokens      int
+	// RequireNoTraining is true when the matched route profile has
+	// privacy "no_training" OR the authenticated virtual key has
+	// require_privacy "no_training" (strictest wins). When true, only
+	// deployments whose provider declares trains_on_data="no" are
+	// eligible. "unknown" and "yes" are both ineligible (fail closed).
+	RequireNoTraining bool
 }
 
 func (r Requirement) Scopes() []string {
@@ -100,6 +110,13 @@ type Router struct {
 	sessions  map[string]sessionPin
 }
 
+// SatisfiesNoTraining reports whether a provider trains_on_data value meets
+// a no_training requirement. Only the exact value "no" (case-insensitive,
+// trimmed) satisfies it. "unknown", "yes", and "" all fail closed.
+func SatisfiesNoTraining(trainsOnData string) bool {
+	return strings.ToLower(strings.TrimSpace(trainsOnData)) == "no"
+}
+
 func New(cfg config.Config, hm *health.Manager) *Router {
 	r := &Router{health: hm, sessions: map[string]sessionPin{}}
 	r.Reload(cfg)
@@ -118,6 +135,10 @@ func (r *Router) Reload(cfg config.Config) {
 		if !p.Enabled {
 			continue
 		}
+		trains := strings.ToLower(strings.TrimSpace(p.DataHandling.TrainsOnData))
+		if trains == "" {
+			trains = "unknown"
+		}
 		for _, m := range p.Models {
 			if !m.Enabled {
 				continue
@@ -126,7 +147,7 @@ func (r *Router) Reload(cfg config.Config) {
 			if w <= 0 {
 				w = 1
 			}
-			d := Deployment{ID: p.ID + "/" + m.ID, ProviderID: p.ID, ProviderName: p.Name, ProviderType: p.Type, Model: m.Model, Aliases: m.Aliases, Priority: m.Priority, Weight: w, ContextWindow: m.ContextWindow, InputCostPerMTok: m.InputCostPerMTok, OutputCostPerMTok: m.OutputCostPerMTok, Capabilities: m.Capabilities}
+			d := Deployment{ID: p.ID + "/" + m.ID, ProviderID: p.ID, ProviderName: p.Name, ProviderType: p.Type, Model: m.Model, Aliases: m.Aliases, Priority: m.Priority, Weight: w, ContextWindow: m.ContextWindow, InputCostPerMTok: m.InputCostPerMTok, OutputCostPerMTok: m.OutputCostPerMTok, Capabilities: m.Capabilities, TrainsOnData: trains}
 			all = append(all, d)
 			byID[d.ID] = d
 			valid[d.ID] = struct{}{}
@@ -246,6 +267,17 @@ func (r *Router) eligibleDeployment(d Deployment, req Requirement, cfg config.Co
 	if req.ProviderType != "" && d.ProviderType != req.ProviderType {
 		return Scored{}, false
 	}
+	// Fail-closed privacy gate: a no_training requirement only trusts
+	// providers that declare trains_on_data="no". "unknown" is NOT
+	// acceptable. This single gate covers every path that picks a
+	// deployment because all of them funnel through eligibleDeployment
+	// (initial selection, retry/failover, fallback chains/candidate pools
+	// via Candidates, session-affinity re-checks via Eligible, hedged
+	// partners via currentRouteCandidate, and credential selection which
+	// only runs after a deployment is deemed eligible).
+	if req.RequireNoTraining && !SatisfiesNoTraining(d.TrainsOnData) {
+		return Scored{}, false
+	}
 	if !r.health.ProviderAvailable(d.ProviderID) {
 		return Scored{}, false
 	}
@@ -287,7 +319,11 @@ func (r *Router) affinityBucket(req Requirement) string {
 		return ""
 	}
 	h := sha256.Sum256([]byte(req.SessionKey))
-	return hex.EncodeToString(h[:16]) + "|" + req.Model + "|" + req.ProviderType + "|" + strings.Join(req.Scopes(), ",")
+	privacy := "any"
+	if req.RequireNoTraining {
+		privacy = "no_training"
+	}
+	return hex.EncodeToString(h[:16]) + "|" + req.Model + "|" + req.ProviderType + "|" + strings.Join(req.Scopes(), ",") + "|" + privacy
 }
 func (r *Router) pinned(req Requirement, cfg config.Config) string {
 	if !cfg.Routing.SessionAffinity {

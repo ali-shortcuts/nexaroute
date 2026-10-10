@@ -96,6 +96,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 	req.MaxOutputTokens = in.MaxTokens
 	req.MinContextWindow = req.EstimatedInputTokens + req.MaxOutputTokens
 	req = s.prepareRequirement(req, r, ti.Features.BodySessionKey)
+	req = s.applyPrivacyRequirement(req, r)
 	cfg, candidates, resolvedRoute, resolveErr := s.candidatesForRequirement(req, "anthropic")
 	if resolveErr != nil {
 		// Disabled endpoint or protocol not allowed
@@ -118,6 +119,10 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 	// Emit task_classified event (privacy-safe) after final resolution
 	s.emitTaskClassified(r.Header.Get("x-request-id"), ti, resolvedRoute)
 	if len(candidates) == 0 {
+		if s.isPrivacyUnavailable(req, "anthropic", resolvedRoute, r.Header.Get("x-request-id")) {
+			anthropicPrivacyUnavailable(w)
+			return
+		}
 		anthropicErrorJSON(w, 503, "no compatible healthy deployment")
 		return
 	}
