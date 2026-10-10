@@ -85,11 +85,24 @@ Discovery parses several common result shapes, but model-list APIs are not stand
 
 ## Video gateway boundaries
 
-The video gateway is a bounded, opt-in Phase 2 workstream. The local JSON job
-store is single-process, the fake provider is for tests/development only, and
-no real external video provider adapter is claimed verified. The runtime mounts
-video routes only when `video.enabled` is true; production provider credentials,
-multi-node durable coordination, and a running-gateway CLI remain unimplemented.
+The video gateway is opt-in. When enabled, runtime startup fails closed if the
+configured bearer-token environment variable is missing or empty. The local
+JSON job store, queue, and cost ledger remain single-process. Restart recovery
+re-enqueues queued jobs and resumes known provider job IDs; ambiguous
+submissions without a provider job ID move to `needs_manual_action` to avoid
+an unsafe duplicate billable submission. Output assets are written through the
+configured local asset sink and must include a URI, non-zero size, and SHA-256
+metadata before jobs are marked complete. Cost-estimation failures or malformed
+estimates are rejected before admission.
+
+No real external video provider adapter is currently claimed verified. The
+fake provider writes a text placeholder, not a playable video. The asset-size
+cap does not yet provide streaming-memory protection because the current
+provider interface passes byte slices. Multi-node durable coordination,
+provider-specific idempotent submission recovery, the running-gateway CLI,
+multi-shot production of ten-minute videos, audio/dialogue composition, subtitle
+burn-in, and actual-vs-estimated cost reconciliation for every provider remain
+unimplemented. The current in-process ledger is not durable or distributed.
 
 ## State and HA
 
