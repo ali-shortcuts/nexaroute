@@ -84,6 +84,8 @@ Deleted from the remote after verification:
 Kept deliberately:
 
 - `phase0-baseline` — not an ancestor of main and has a broad historical tree difference; it was not deleted because full content equivalence was not established;
+- `phase1-coverage-85` — merged coverage branch, intentionally kept because it was created after the original authorized deletion list and the instruction was to delete **only** the named branches;
+- `docs/phase1-reality` — merged documentation branch, intentionally kept for the same explicit “delete only” reason;
 - `chore/video-gateway-audit-hardening` — explicitly out of scope, not merged/closed/deleted;
 - `fix/virtual-key-policy-intersection` — explicitly out of scope, not merged/closed/deleted;
 - `main` — never deleted.
