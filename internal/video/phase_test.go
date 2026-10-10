@@ -18,7 +18,11 @@ func TestOrchestratorIdempotencyAndPolling(t *testing.T) {
 	st := queue.NewMemoryStore()
 	q := queue.New(2)
 	p := providers.NewFake(1)
-	o := &orchestrator.Orchestrator{Store: st, Queue: q, Providers: orchestrator.Registry{"fake": p}, PollInterval: time.Millisecond, MaxPolls: 3}
+	sink, err := storage.NewLocal(t.TempDir(), 1024*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := &orchestrator.Orchestrator{Store: st, Queue: q, Providers: orchestrator.Registry{"fake": p}, Ledger: &cost.Ledger{}, Assets: sink, PollInterval: time.Millisecond, MaxPolls: 3}
 	r := video.VideoRequest{ProjectID: "p", Prompt: "x", DurationSeconds: 1, Mode: video.ModeTextToVideo, ProviderPreference: "fake", IdempotencyKey: "same"}
 	j, err := o.Create(ctx, r)
 	if err != nil {
