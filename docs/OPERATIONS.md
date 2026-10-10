@@ -97,3 +97,14 @@ NexaRoute handles `SIGINT` and `SIGTERM` by stopping new accepts, canceling back
 A binary rollback must account for encrypted config compatibility. Do not point a pre-encryption binary at an `nxs1` config. Prefer restoring a pre-upgrade config/key pair. If the only usable source is encrypted, use the current binary's explicitly gated decrypt command to create a temporary private plaintext config, protect it as mode `0600`, and follow the older binary's documented config path; after the rollback window, remove the plaintext file according to the host's accepted data-sanitization policy (unlinking alone may not securely erase flash-backed storage). Test this process before relying on it in production.
 
 For unresolved network exposure, keyring, CSRF/session, RBAC, or provider-egress limits, consult [docs/KNOWN_GAPS.md](KNOWN_GAPS.md) and [docs/SECURITY.md](SECURITY.md).
+
+## 7. TLS, mTLS, and config preflight
+The shared listener can be configured for HTTPS with `tls.enabled`, certificate/key paths, and optional `client_ca_file`. TLS 1.2 is the minimum; certificate files are re-read for new handshakes. `require_client_cert_admin` and `require_client_cert_data_plane` independently protect the Admin and `/v1/*` routes. Keep the Admin API key enabled: a client certificate does not replace authorization.
+
+Before rollout, use the read-only checks with the exact config path:
+```bash
+nexaroute config validate --config /etc/nexaroute/config.json
+nexaroute config diff --config /etc/nexaroute/config.json --against /etc/nexaroute/previous.json
+nexaroute config dry-run --config /etc/nexaroute/config.json
+```
+`diff` emits paths/status only and never secret values. `dry-run` opens no listener and sends no probes. Loading a legacy plaintext config may perform the documented encrypted migration side effect; this is the only expected on-disk mutation.

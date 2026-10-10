@@ -19,6 +19,10 @@ func defaultConfigPath() string {
 }
 
 func uiURL(addr net.Addr) string {
+	return uiURLWithScheme(addr, false)
+}
+
+func uiURLWithScheme(addr net.Addr, secure bool) string {
 	host, port, _ := net.SplitHostPort(addr.String())
 	if host == "" || host == "0.0.0.0" {
 		host = "127.0.0.1"
@@ -26,5 +30,9 @@ func uiURL(addr net.Addr) string {
 	if host == "::" {
 		host = "::1"
 	}
-	return "http://" + net.JoinHostPort(host, port) + "/"
+	scheme := "http"
+	if secure {
+		scheme = "https"
+	}
+	return scheme + "://" + net.JoinHostPort(host, port) + "/"
 }

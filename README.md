@@ -146,3 +146,6 @@ provider-specific; native passthrough is the safest path for provider-only
 fields. Read [docs/KNOWN_GAPS.md](docs/KNOWN_GAPS.md) and
 [SECURITY.md](SECURITY.md) before treating NexaRoute as production
 infrastructure.
+
+### Transport and configuration hardening
+Optional built-in TLS/mTLS and browser CSRF protection are documented in [docs/SECURITY.md](docs/SECURITY.md). The `config validate`, `config diff`, and `config dry-run` commands provide read-only preflight checks; see [docs/OPERATIONS.md](docs/OPERATIONS.md).
