@@ -87,7 +87,7 @@ func CanTransition(from, to JobState) bool {
 	case StateComposing:
 		return to == StateUploading || to == StateCompleted || to == StateFailed || to == StateNeedsManualAction
 	case StateUploading:
-		return to == StateCompleted || to == StateFailed || to == StateNeedsManualAction
+		return to == StateCompleted || to == StateCancelled || to == StateFailed || to == StateNeedsManualAction
 	case StateCancelRequested:
 		return to == StateCancelled || to == StateFailed || to == StateNeedsManualAction
 	case StateNeedsManualAction:
