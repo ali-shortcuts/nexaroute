@@ -23,6 +23,7 @@ const (
 	StateCancelled         JobState = "cancelled"
 	StateExpired           JobState = "expired"
 	StateNeedsManualAction JobState = "needs_manual_action"
+	StateDryRun            JobState = "dry_run"
 )
 
 type AuditEvent struct {
@@ -72,23 +73,25 @@ func CanTransition(from, to JobState) bool {
 	}
 	switch from {
 	case StateQueued:
-		return to == StateAdmitted || to == StateWaitingForBudget || to == StateFailed || to == StateCancelled
+		return to == StateAdmitted || to == StateWaitingForBudget || to == StateFailed || to == StateCancelled || to == StateNeedsManualAction
 	case StateAdmitted:
-		return to == StatePlanning || to == StateSubmitted || to == StateFailed || to == StateCancelRequested
+		return to == StatePlanning || to == StateSubmitted || to == StateFailed || to == StateCancelRequested || to == StateNeedsManualAction
 	case StatePlanning:
-		return to == StateSubmitted || to == StateFailed
+		return to == StateSubmitted || to == StateFailed || to == StateNeedsManualAction
 	case StateWaitingForBudget:
-		return to == StateQueued || to == StateFailed
+		return to == StateQueued || to == StateFailed || to == StateNeedsManualAction
 	case StateSubmitted:
-		return to == StateProcessing || to == StatePolling || to == StateCompleted || to == StateCancelRequested || to == StateCancelled || to == StateFailed
+		return to == StateProcessing || to == StatePolling || to == StateCompleted || to == StateComposing || to == StateUploading || to == StateCancelRequested || to == StateCancelled || to == StateFailed || to == StateNeedsManualAction
 	case StateProcessing, StatePolling:
-		return to == StateProcessing || to == StatePolling || to == StateComposing || to == StateCompleted || to == StateCancelRequested || to == StateCancelled || to == StateFailed || to == StateExpired
+		return to == StateProcessing || to == StatePolling || to == StateComposing || to == StateUploading || to == StateCompleted || to == StateCancelRequested || to == StateCancelled || to == StateFailed || to == StateExpired || to == StateNeedsManualAction
 	case StateComposing:
-		return to == StateUploading || to == StateCompleted || to == StateFailed
+		return to == StateUploading || to == StateCompleted || to == StateFailed || to == StateNeedsManualAction
 	case StateUploading:
-		return to == StateCompleted || to == StateFailed
+		return to == StateCompleted || to == StateCancelled || to == StateFailed || to == StateNeedsManualAction
 	case StateCancelRequested:
-		return to == StateCancelled || to == StateFailed
+		return to == StateCancelled || to == StateFailed || to == StateNeedsManualAction
+	case StateNeedsManualAction:
+		return to == StateCancelled
 	case StateFailed:
 		return to == StateQueued || to == StateCancelled
 	default:
