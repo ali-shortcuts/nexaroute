@@ -10,6 +10,7 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/video/storage"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -75,5 +76,26 @@ func TestLocalStorageRejectsTraversal(t *testing.T) {
 		if _, err := s.Read(video.Asset{URI: link}); err == nil {
 			t.Fatal("expected symlink traversal rejection")
 		}
+	}
+}
+
+
+func TestQueueConcurrentCloseDoesNotPanicOrAcceptWorkAfterClose(t *testing.T) {
+	q := queue.New(1)
+	job := video.NewJob("queue-close", video.VideoRequest{ProjectID:"p", Prompt:"scene", DurationSeconds:1, Mode:video.ModeTextToVideo})
+	var wg sync.WaitGroup
+	for i:=0; i<8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j:=0; j<100; j++ {
+				_ = q.Enqueue(context.Background(), job)
+			}
+		}()
+	}
+	q.Close()
+	wg.Wait()
+	if err := q.Enqueue(context.Background(), job); !errors.Is(err, queue.ErrClosed) {
+		t.Fatalf("enqueue after close returned %v, want ErrClosed", err)
 	}
 }
