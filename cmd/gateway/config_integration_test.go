@@ -118,6 +118,9 @@ func TestTLSAndEncryptedConfigLoadsTogether(t *testing.T) {
 }
 
 func TestGatewayStartsWithTLSAndEncryptedConfig(t *testing.T) {
+	const videoTokenEnv = "NEXAROUTE_TEST_VIDEO_TOKEN"
+	const videoToken = "test-video-token-for-gateway-runtime"
+	t.Setenv(videoTokenEnv, videoToken)
 	t.Setenv("NEXAROUTE_MASTER_KEY", "")
 	t.Setenv("NEXAROUTE_MASTER_KEY_FILE", "")
 	t.Setenv("NEXAROUTE_STRICT_CONFIG", "false")
@@ -131,6 +134,7 @@ func TestGatewayStartsWithTLSAndEncryptedConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	loaded.Video.Enabled = true
+	loaded.Video.AuthTokenEnv = videoTokenEnv
 	loaded.Video.DevelopmentFakeProvider = true
 	loaded.Video.StorePath = filepath.Join(dir, "video-jobs.json")
 	if err := config.SaveAtomic(configPath, loaded); err != nil {
@@ -178,7 +182,12 @@ func TestGatewayStartsWithTLSAndEncryptedConfig(t *testing.T) {
 		<-done
 		t.Fatal("TLS gateway did not become healthy")
 	}
-	videoResp, videoErr := client.Get("https://" + address + "/v1/video/providers")
+	videoReq, requestErr := http.NewRequestWithContext(context.Background(), http.MethodGet, "https://"+address+"/v1/video/providers", nil)
+	if requestErr != nil {
+		t.Fatal(requestErr)
+	}
+	videoReq.Header.Set("Authorization", "Bearer "+videoToken)
+	videoResp, videoErr := client.Do(videoReq)
 	if videoErr != nil {
 		t.Fatal("video route over TLS failed:", videoErr)
 	}
