@@ -74,6 +74,11 @@ Not implemented as a full internet-facing control plane:
 - cookie-backed Admin login/session identity (Admin authorization remains API-key or local-loopback based); browser state-changing calls are protected by same-origin checks and a CSRF token cookie/header, while stateless non-browser clients authenticate with the Admin key;
 - enterprise SSO
 
+Virtual-key tenant/project/team policy intersection is implemented fail-closed:
+child key wildcards cannot widen a configured parent allow-list, unresolved
+scope references deny access, and duplicate model/token fields are inspected
+conservatively. This does not provide RBAC or SSO; those remain Phase 2 work.
+
 ## Model discovery
 
 Discovery parses several common result shapes, but model-list APIs are not standardized. Providers that omit or customize discovery may require manual model IDs.
