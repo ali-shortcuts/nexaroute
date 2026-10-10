@@ -98,3 +98,11 @@ This checkpoint supersedes earlier WP4 status statements above where they confli
 - Exact coverage measurement: `go test -coverprofile=... ./...` + `go tool cover -func=...` = **75.6% aggregate statement coverage**, versus the repository's documented 85% target. No explicitly defined narrower package subset or executable 85% CI gate was found. The target is still **not met**; do not claim WP4 acceptance or mark the PR ready.
 - Remaining blockers to acceptance: raise the repository-wide measurement to at least 85%; push the final branch state and require fresh GitHub checks on that exact head. Keep PR #224 draft/unmerged until both blockers are closed. Do not merge, release/tag, alter repository settings, or change/delete any other work.
 - Detailed implementation, security boundary, and verification evidence: `docs/reports/WP4_RBAC_HTTP_PARTIAL.md` and `docs/reports/WP4_RBAC_SSO_DESIGN.md`.
+
+
+## WP4 remote-check remediation checkpoint — 2026-10-10T11:34+04:30
+
+- Remote PR checks for the prior head `ef777138961794cee2a25fcc2df3a7d0949f008c` failed in two places: Docker runtime `/healthz` could not connect, and govulncheck reported reachable GO-2026-4945 through `go-jose/v4@v4.0.5`. CodeQL and CodeQL Go passed. The prior head must not be used as evidence of clean CI.
+- The current local source tree upgrades `go-jose/v4` to `v4.1.4` (the Go vulnerability record's fixed release), raises the minimum Go version to 1.24, updates the Docker builder, enforces `0700` on the container config/security-store directory, and prints container logs if the Docker health probe fails. Local `govulncheck` on Go 1.26.9 reports 0 reachable vulnerabilities; the full local tests, race, vet, verify, smoke, release build, installer E2E, and diff checks pass.
+- Local measured coverage remains **75.6%**, below the 85% repo-wide target. This is still an acceptance blocker. The sandbox has no Docker daemon, so only fresh GitHub CI can confirm the Docker runtime fix.
+- At the time of this checkpoint these corrections are in the worktree and the remote head is still `ef77713`; commit/push them, then require new CI and security checks on the resulting exact PR head. Keep PR #224 draft/unmerged, and make no release or unrelated repository changes.

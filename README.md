@@ -113,7 +113,7 @@ enabled emergency path, not the normal identity system. See
 
 ## Build and verify from source (contributors)
 
-Go 1.23+ is required for development only; end users need neither Go nor git.
+Go 1.24+ is required for development only; end users need neither Go nor git.
 
 ```bash
 ./scripts/verify.sh
