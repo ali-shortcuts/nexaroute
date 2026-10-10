@@ -195,18 +195,24 @@ func (o *Orchestrator) RunJob(ctx context.Context, queued video.VideoJob) error 
 			if err := o.markNeedsManual(ctx, j, "provider submission outcome is unknown; automatic resubmission is disabled"); err != nil { return err }
 			return fmt.Errorf("provider submission outcome is unknown: %w", submitErr)
 		}
-		if !submitted.Accepted || strings.TrimSpace(submitted.ProviderJobID) == "" {
+		if strings.TrimSpace(submitted.ProviderJobID) == "" {
 			if err := o.markNeedsManual(ctx, j, "provider returned no confirmed job ID; automatic resubmission is disabled"); err != nil { return err }
 			return errors.New("provider did not confirm a job ID; manual action is required")
 		}
-		j.ProviderJobID = submitted.ProviderJobID
-		if submitted.Provider != "" { j.Provider = submitted.Provider }
-		if j.Provider == "" { j.Provider = p.ID() }
+		// Keep the selected provider as the canonical owner of this submission.
+		// Even an inconsistent response must not discard a returned job ID and
+		// accidentally trigger another billable submission after restart.
+		j.ProviderJobID = strings.TrimSpace(submitted.ProviderJobID)
+		j.Provider = p.ID()
 		if submitted.Model != "" { j.Model = submitted.Model }
 		now := time.Now().UTC()
 		j.SubmittedAt = &now
 		if err := j.Transition(video.StateSubmitted); err != nil { return err }
-		if err := o.Store.Update(ctx, j); err != nil { return fmt.Errorf("provider accepted job but its ID was not durably saved; do not resubmit: %w", err) }
+		if err := o.Store.Update(ctx, j); err != nil { return fmt.Errorf("provider returned a job ID but it was not durably saved; do not resubmit: %w", err) }
+		if !submitted.Accepted || (submitted.Provider != "" && submitted.Provider != p.ID()) || (submitted.Model != "" && submitted.Model != j.Request.ModelPreference) {
+			if err := o.markNeedsManual(ctx, j, "provider submission response was inconsistent; the known provider job ID is retained and automatic retry is disabled"); err != nil { return err }
+			return errors.New("provider submission response was inconsistent; manual action is required")
+		}
 	case video.StateAdmitted:
 		if j.ProviderJobID == "" {
 			if err := o.markNeedsManual(ctx, j, "provider submission outcome is unknown; automatic resubmission is disabled"); err != nil { return err }
@@ -316,6 +322,14 @@ func (o *Orchestrator) downloadAndComplete(ctx context.Context, p video.VideoPro
 		if len(a.SHA256) != 64 { return o.markNeedsManualAndError(ctx, j, "provider output was not persisted with a SHA-256 checksum") }
 		if _, err := hex.DecodeString(a.SHA256); err != nil { return o.markNeedsManualAndError(ctx, j, "provider output checksum is malformed") }
 	}
+	var actualCost *float64
+	if raw := strings.TrimSpace(st.Usage["actual_cost_usd"]); raw != "" {
+		actual, parseErr := strconv.ParseFloat(raw, 64)
+		if parseErr == nil && actual >= 0 && !math.IsNaN(actual) && !math.IsInf(actual, 0) {
+			actualCost = &actual
+			j.ActualCostUSD = actual
+		}
+	}
 	j.OutputAssets = assets
 	j.Progress = 1
 	j.LastError = ""
@@ -324,13 +338,11 @@ func (o *Orchestrator) downloadAndComplete(ctx context.Context, p video.VideoPro
 	if err := j.Transition(video.StateCompleted); err != nil { return err }
 	if err := o.Store.Update(ctx, j); err != nil { return fmt.Errorf("outputs were persisted but completion state could not be saved: %w", err) }
 	if o.Ledger != nil {
-		if raw := strings.TrimSpace(st.Usage["actual_cost_usd"]); raw != "" {
-			actual, parseErr := strconv.ParseFloat(raw, 64)
-			if parseErr == nil && actual >= 0 && !math.IsNaN(actual) && !math.IsInf(actual, 0) {
-				j.ActualCostUSD = actual
-				if err := o.Ledger.SettleActual(j.JobID, actual, j.EstimatedCostUSD); err != nil { return fmt.Errorf("video completed but actual-cost settlement failed: %w", err) }
-			} else if err := o.Ledger.SettleEstimate(j.JobID, j.EstimatedCostUSD); err != nil { return err }
-		} else if err := o.Ledger.SettleEstimate(j.JobID, j.EstimatedCostUSD); err != nil { return err }
+		if actualCost != nil {
+			if err := o.Ledger.SettleActual(j.JobID, *actualCost, j.EstimatedCostUSD); err != nil { return fmt.Errorf("video completed but actual-cost settlement failed: %w", err) }
+		} else if err := o.Ledger.SettleEstimate(j.JobID, j.EstimatedCostUSD); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -353,7 +365,10 @@ func (o *Orchestrator) Cancel(ctx context.Context, id string) error {
 		return errors.New("video job is already terminal")
 	}
 	p, ok := o.Providers.Get(j.Provider)
-	if ok && j.ProviderJobID != "" {
+	if j.ProviderJobID != "" {
+		if !ok {
+			return errors.New("provider for active video job is unavailable; refusing to mark remote work cancelled")
+		}
 		if err = p.CancelJob(ctx, j.ProviderJobID); err != nil { return err }
 	}
 	if err := j.Transition(video.StateCancelled); err != nil { return err }
