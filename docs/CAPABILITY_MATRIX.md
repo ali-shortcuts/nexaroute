@@ -1,6 +1,6 @@
-# Capability matrix — Phase 0 baseline, updated through Phase 1a
+# Capability matrix — Phase 0 baseline, updated through Phase 1
 
-**Baseline snapshot:** NexaRoute `v0.16.3` (`f30fc8b`, 2026-10-09). This matrix preserves Phase 0's dated competitor-evidence baseline; NexaRoute capability cells and prioritized gaps are updated as subsequent phases close. Phase 1a adds encrypted secret storage and its operator workflow; it does not change the retained competitor evidence counts below.
+**Baseline snapshot:** NexaRoute `v0.16.3` (`f30fc8b`, 2026-10-09). This matrix preserves Phase 0's dated competitor-evidence baseline; NexaRoute capability cells and prioritized gaps are updated as subsequent phases close. Phase 1 now includes encrypted secrets, built-in TLS/mTLS, browser CSRF checks, and the read-only configuration preflight CLI.
 
 ## Reading the table
 

@@ -48,8 +48,8 @@ Keep log directories private. App-owned rotating logs are mode `0600` and bounde
 
 ## Network and browser security
 
-- Built-in TLS and mTLS for Admin/data plane are not implemented. Use a trusted reverse proxy or equivalent for untrusted networks.
-- A complete CSRF-token and hardened server-side cookie-session framework is not implemented. The dashboard currently keeps an entered Admin key in in-memory JavaScript state, which is lost on reload. Do not expose the Admin UI/API to untrusted origins or networks.
+- Built-in TLS and mTLS for Admin/data plane are implemented and can be scoped independently, but they do not replace a trusted network boundary or Admin authorization. Use a trusted reverse proxy, firewall/network policy, VPN, or equivalent for untrusted networks.
+- Browser CSRF-token and same-origin checks are implemented for state-changing Admin requests. A hardened server-side cookie-session identity framework is not implemented: the dashboard keeps an entered Admin key in in-memory JavaScript state, which is lost on reload. Do not expose the Admin UI/API to untrusted origins or networks.
 - Multi-user RBAC, SSO, and identity-aware access are not implemented. Optional client auth provides shared static keys and bounded RPM controls, not user identity or a complete enterprise access system.
 - Administrators may configure arbitrary provider/proxy URLs. A general provider egress allow/deny policy is not built in, so an authorized admin can point a provider at internal services. Do not give admin access to untrusted users.
 - The separate remote-decision HTTP client (`internal/decision/remote`) is hardened against SSRF: it resolves and pins approved IPs per connection, rejects loopback/private/link-local/reserved destinations and mixed public/private DNS answers, rejects redirects, ignores environment proxy variables, requires TLS verification with TLS 1.2 minimum, and bounds response bodies. These protections do not imply that arbitrary provider URLs are similarly restricted.

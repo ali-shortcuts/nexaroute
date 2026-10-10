@@ -138,8 +138,11 @@ builds for amd64 and arm64. See [CONTRIBUTING.md](CONTRIBUTING.md).
 NexaRoute is **not** a universal implementation of every LLM protocol. Native
 Gemini `generateContent` beyond the implemented adapter, Bedrock, Vertex AI,
 Azure-specific deployment semantics, embeddings/rerank, distributed state,
-invoice-perfect cost optimization, hard budget enforcement, and full
-internet-facing TLS/mTLS, RBAC, and CSRF/session hardening are not implemented.
+invoice-perfect cost optimization, hard budget enforcement, cookie-backed
+identity, RBAC/SSO, and a complete internet-facing identity/session framework
+are not implemented. Built-in TLS/mTLS and browser CSRF checks are implemented,
+but they do not replace Admin authorization, network segmentation, or an
+enterprise identity system.
 Secret-bearing configuration fields are encrypted at rest; keyring integration
 and externally managed key-rotation workflows remain future work. Cross-protocol reasoning/thinking metadata can be
 provider-specific; native passthrough is the safest path for provider-only
