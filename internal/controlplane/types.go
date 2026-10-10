@@ -43,6 +43,19 @@ type Availability struct {
 	RateLimit FailureMode `json:"rate_limit"`
 }
 
+type ReconcileResult struct {
+	Namespace string `json:"namespace"`
+	Revision  uint64 `json:"revision"`
+	Source    string `json:"source"` // durable | last_known_good
+}
+
+type Health struct {
+	Loads       uint64 `json:"loads"`
+	Saves       uint64 `json:"saves"`
+	Unavailable uint64 `json:"unavailable"`
+	Conflicts   uint64 `json:"conflicts"`
+}
+
 func (a Availability) Validate() error {
 	if !a.Config.Valid() || !a.Identity.Valid() || !a.Budget.Valid() || !a.RateLimit.Valid() {
 		return errors.New("all control-plane failure modes must be fail_open, fail_closed, or last_known_good")
