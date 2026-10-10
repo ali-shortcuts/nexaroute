@@ -74,6 +74,7 @@ def main() -> None:
                 expect(page.locator("#primary-nav")).to_contain_text("Overview")
                 expect(page.locator("#primary-nav")).to_contain_text("Providers")
                 expect(page.locator("#primary-nav")).to_contain_text("Routing")
+                expect(page.locator("#primary-nav")).to_contain_text("Video Studio")
                 expect(page.locator("#primary-nav")).to_contain_text("Activity")
                 expect(page.locator("#primary-nav")).to_contain_text("Settings")
                 page.locator('[data-page="providers"]').click()
@@ -106,6 +107,9 @@ def main() -> None:
                 expect(page.locator("#content")).to_contain_text("Start graceful drain")
                 expect(page.locator("#content")).to_contain_text("Download CSV")
                 expect(page.locator("#content")).to_contain_text("Identity usage")
+                page.locator('[data-page="video"]').click()
+                expect(page.locator("#content")).to_contain_text("Async production workspace")
+                expect(page.locator("#content")).to_contain_text("Create first job")
                 page.locator('[data-page="activity"]').click()
                 expect(page.locator("#content")).to_contain_text("No real activity yet")
                 evidence = ROOT / "specs/014-control-plane-rebuild/evidence/control-plane-e2e.png"
