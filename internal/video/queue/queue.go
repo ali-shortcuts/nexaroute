@@ -28,6 +28,9 @@ func New(size int) *Queue {
 }
 
 func (q *Queue) Enqueue(ctx context.Context, j video.VideoJob) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	q.mu.RLock()
 	defer q.mu.RUnlock()
 	if q.closed {
