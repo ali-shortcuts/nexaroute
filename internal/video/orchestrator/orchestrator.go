@@ -31,6 +31,7 @@ type Orchestrator struct {
 }
 
 func (o *Orchestrator) Create(ctx context.Context, r video.VideoRequest) (video.VideoJob, error) {
+	if err := ctx.Err(); err != nil { return video.VideoJob{}, err }
 	r = r.Normalized()
 	if err := r.Validate(); err != nil { return video.VideoJob{}, err }
 	if o.Store == nil || o.Queue == nil || o.Providers == nil {
@@ -209,6 +210,7 @@ func (o *Orchestrator) markNeedsManualAndError(ctx context.Context, j video.Vide
 }
 
 func (o *Orchestrator) RunJob(ctx context.Context, queued video.VideoJob) error {
+	if err := ctx.Err(); err != nil { return err }
 	if o.Store == nil || o.Providers == nil { return errors.New("video orchestrator is not fully configured") }
 	j, err := o.Store.Get(ctx, queued.JobID)
 	if err != nil { return fmt.Errorf("load video job before execution: %w", err) }
