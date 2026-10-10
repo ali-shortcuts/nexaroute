@@ -8,11 +8,16 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/video"
 )
 
-var ErrFull = errors.New("video queue is full")
+var (
+	ErrFull   = errors.New("video queue is full")
+	ErrClosed = errors.New("video queue is closed")
+)
 
 type Queue struct {
 	jobs chan video.VideoJob
 	once sync.Once
+	mu sync.RWMutex
+	closed bool
 }
 
 func New(size int) *Queue {
@@ -21,7 +26,13 @@ func New(size int) *Queue {
 	}
 	return &Queue{jobs: make(chan video.VideoJob, size)}
 }
+
 func (q *Queue) Enqueue(ctx context.Context, j video.VideoJob) error {
+	q.mu.RLock()
+	defer q.mu.RUnlock()
+	if q.closed {
+		return ErrClosed
+	}
 	select {
 	case q.jobs <- j:
 		return nil
@@ -31,6 +42,7 @@ func (q *Queue) Enqueue(ctx context.Context, j video.VideoJob) error {
 		return ErrFull
 	}
 }
+
 func (q *Queue) Next(ctx context.Context) (video.VideoJob, error) {
 	select {
 	case j, ok := <-q.jobs:
@@ -42,37 +54,51 @@ func (q *Queue) Next(ctx context.Context) (video.VideoJob, error) {
 		return video.VideoJob{}, ctx.Err()
 	}
 }
+
 func (q *Queue) Len() int { return len(q.jobs) }
-func (q *Queue) Close()   { q.once.Do(func() { close(q.jobs) }) }
+
+func (q *Queue) Close() {
+	q.once.Do(func() {
+		q.mu.Lock()
+		defer q.mu.Unlock()
+		q.closed = true
+		close(q.jobs)
+	})
+}
 
 type Handler func(context.Context, video.VideoJob) error
+
 type WorkerPool struct {
-	q       *Queue
+	q *Queue
 	workers int
 	handler Handler
+	ready chan struct{}
+	readyOnce sync.Once
 }
 
 func NewWorkerPool(q *Queue, workers int, handler Handler) *WorkerPool {
 	if workers < 1 {
 		workers = 1
 	}
-	return &WorkerPool{q: q, workers: workers, handler: handler}
+	return &WorkerPool{q:q,workers:workers,handler:handler,ready:make(chan struct{})}
 }
+
+func (p *WorkerPool) Ready() <-chan struct{} { return p.ready }
+
 func (p *WorkerPool) Run(ctx context.Context) {
 	var wg sync.WaitGroup
-	for i := 0; i < p.workers; i++ {
+	for i:=0; i<p.workers; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for {
 				j, err := p.q.Next(ctx)
-				if err != nil {
-					return
-				}
-				_ = p.handler(ctx, j)
+				if err != nil { return }
+				_ = p.handler(ctx,j)
 			}
 		}()
 	}
+	p.readyOnce.Do(func(){close(p.ready)})
 	<-ctx.Done()
 	wg.Wait()
 }
