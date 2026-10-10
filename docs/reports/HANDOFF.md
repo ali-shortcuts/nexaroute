@@ -3,9 +3,9 @@
 ## Verified main
 
 - Repository: `ali-shortcuts/nexaroute`
-- Final main SHA at this checkpoint: `befedc5a0bb74f089d480635055543ea3d49de61`
+- Final main SHA at this checkpoint: `032c394336586e77233e6a96e93f368cdd0d6346`
 - PR #229 (control-plane reconciliation health contract) merged with merge SHA `32e50af2234aaf57c5b911903980260588caffd7`.
-- PR #230 (pluggable key custody providers) merged with merge SHA `befedc5a0bb74f089d480635055543ea3d49de61`.
+- PR #230 (pluggable key custody providers) merged with merge SHA `032c394336586e77233e6a96e93f368cdd0d6346`.
 - Working tree is clean after restoring generated browser evidence.
 
 ## Acceptance status

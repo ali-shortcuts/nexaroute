@@ -2,7 +2,7 @@
 
 Date: 2026-10-10  
 Repository: `ali-shortcuts/nexaroute`  
-Final main: `befedc5a0bb74f089d480635055543ea3d49de61`
+Final main: `032c394336586e77233e6a96e93f368cdd0d6346`
 
 ## Acceptance matrix
 
@@ -14,7 +14,7 @@ Final main: `befedc5a0bb74f089d480635055543ea3d49de61`
 | WP4b | DONE | #224 / recorded in `docs/reports/WP4B_REVIEW.md` | OIDC/PKCE, RBAC, sessions, CSRF and durable local audit merged and reviewed. |
 | WP5 | DONE | #228 / `b84f689` parent merge recorded by GitHub | Provider egress policy merged; external provider interoperability is not claimed. |
 | WP6 | PARTIAL | #229 / `32e50af2234aaf57c5b911903980260588caffd7` | Reconciliation health contract and control-plane primitives merged. Runtime backend selection/migration and live SQL/Redis verification remain. |
-| WP7 | DONE (scope-limited) | #230 / `befedc5a0bb74f089d480635055543ea3d49de61` | File, environment, command/KMS and Linux keyring custody paths are implemented and tested. External service interoperability is unverified. |
+| WP7 | DONE (scope-limited) | #230 / `032c394336586e77233e6a96e93f368cdd0d6346` | File, environment, command/KMS and Linux keyring custody paths are implemented and tested. External service interoperability is unverified. |
 | WP3 | PARTIAL | No separate final PR | Aggregate coverage is 84.9%, not 85.0%; no padding tests were used. |
 | WP8 | PARTIAL | This report | Final evidence and handoff are written. Branch deletion was deliberately not performed without the required per-branch tree audit. |
 
