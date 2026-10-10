@@ -95,6 +95,14 @@ multi-node durable coordination, and a running-gateway CLI remain unimplemented.
 
 Runtime and health state are single-process/in-memory. Routine Admin/runtime config saves are persisted atomically but do not create backup copies; the initial plaintext-to-encrypted migration separately writes an authenticated encrypted timestamped backup. Distributed state, Redis/Postgres coordination, and multi-node breaker synchronization are not implemented.
 
+## RBAC and SSO
+
+The transport-independent RBAC permission matrix is implemented and tested in
+`internal/authz`, but the HTTP server still uses the legacy Admin API-key
+boundary. OIDC/SAML validation, server-side identity sessions, and endpoint
+permission wiring are not enabled until an explicit IdP configuration and
+provider conformance tests exist.
+
 
 ## Response cache boundaries
 
