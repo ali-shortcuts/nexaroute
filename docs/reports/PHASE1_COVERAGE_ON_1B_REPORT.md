@@ -1,78 +1,56 @@
-# Phase 1 Coverage on `phase1b-on-1a`
+# Phase 1 coverage on `phase1-coverage-on-1b`
 
 **Branch:** `phase1-coverage-on-1b`
 **Base:** `origin/phase1b-on-1a` at `c986bda`
-**Scope:** meaningful behavior tests only; no merge, history rewrite, Phase 2, or expansion into controlplane/providers/usage/guardrail
+**Scope:** meaningful behavior tests only; no merge, history rewrite, Phase 2, or production-code changes.
 
-## Summary
+## Result
 
-The baseline was measured directly on `origin/phase1b-on-1a`, not on `main`:
+Coverage was re-measured after expanding into the previously approved packages. The reproducible final total is **79.0%**, up from the branch's recorded **78.5%** before this continuation. The requested **85.0%** threshold was not reached; no assertion-free or synthetic padding was added.
 
-- Baseline total: **77.4%**
-- Final total: **78.5%**
-- Improvement: **+1.1 percentage points**
-- Remaining gap to 85%: **6.5 percentage points**
+| Package | Earlier recorded final | Current final | Change in this continuation |
+|---|---:|---:|---:|
+| `cmd/gateway` | 73.6% | 73.6% | 0.0pp |
+| `internal/compat` | 71.8% | 76.0% | +4.2pp |
+| `internal/config` | 74.8% | 75.5% | +0.7pp |
+| `internal/controlplane` | 83.8% | 83.8% | 0.0pp |
+| `internal/guardrail` | 100.0% | 100.0% | 0.0pp |
+| `internal/httpapi` | 74.0% | 74.1% | +0.1pp |
+| `internal/providers` | 79.9% | 83.8% | +3.9pp |
+| `internal/usage` | 95.8% | 95.8% | 0.0pp |
+| **Repository total** | **78.5%** | **79.0%** | **+0.5pp** |
 
-All 19 added tests have unique names relative to the Phase 1b base. No duplicate test names were found and no assertions were weakened.
+The added tests exercise config validation/environment/strict-mode behavior, OpenAI Responses probe request/response translation, tool and multimodal probe payloads, provider retry/redaction/endpoint/origin behavior, and streaming-body release/cancellation behavior.
 
-## Per-package coverage
+## Why 85% was not reached
 
-| Package | Baseline on `phase1b-on-1a` | Final | Change | Gap to 85% |
-|---|---:|---:|---:|---:|
-| `internal/decision` | 68.0% | 76.4% | +8.4pp | 8.6pp |
-| `internal/config` | 70.7% | 74.8% | +4.1pp | 10.2pp |
-| `internal/compat` | 70.2% | 71.8% | +1.6pp | 13.2pp |
-| `internal/httpapi` | 73.8% | 74.0% | +0.2pp | 11.0pp |
-| `internal/probe` | 71.8% | 72.1% | +0.3pp | 12.9pp |
-| `internal/logging` | 72.7% | 81.8% | +9.1pp | 3.2pp |
-| `internal/desktop` | 70.9% | 85.5% | +14.6pp | 0pp |
-| **Repository total** | **77.4%** | **78.5%** | **+1.1pp** | **6.5pp** |
+The largest remaining measured statement gaps are in behavior-heavy paths that were not covered by the existing suites: `internal/config/config.go` (280 uncovered profile statements), `internal/httpapi/admin.go` (276), `internal/httpapi/virtual.go` (272), `internal/compat/probes.go` (167), `internal/httpapi/anthropic.go` (162), `internal/httpapi/canonical_path.go` (153), and `internal/decision/orchestrator.go` (130). The current total therefore requires a substantial additional HTTP admin/virtual endpoint and protocol integration suite, not a small safe patch. No production bug was exposed by the continuation, so production code was not changed.
 
-## Ported test files
+## Gates and evidence
 
-- `internal/compat/coverage_behavior_test.go`
-- `internal/config/coverage_behavior_test.go`
-- `internal/decision/coverage_behavior_test.go`
-- `internal/decision/orchestrator_behavior_test.go`
-- `internal/decision/policy/coverage_behavior_test.go`
-- `internal/decision/remote/coverage_behavior_test.go`
-- `internal/desktop/coverage_behavior_test.go`
-- `internal/httpapi/coverage_history_test.go`
-- `internal/logging/coverage_behavior_test.go`
-- `internal/probe/coverage_behavior_test.go`
-
-The tests cover configuration persistence and credentials, compatibility sanitizer/classifier behavior, decision registry/result/orchestrator contracts, typed remote errors, policy reload/cancellation, config-history revision guards, logging bounds/failures, browser fallback/locking, probe lease behavior, and desktop lifecycle edge cases.
-
-## Required gates
-
-All required gates passed on `phase1-coverage-on-1b`:
+All requested local gates passed and their raw output is in `docs/reports/phase1-coverage-on-1b-gates.raw.txt`:
 
 - `gofmt -l .` — empty output
 - `go vet ./...` — PASS
 - `go test -race -count=1 ./...` — PASS
 - `./scripts/verify.sh` — `VERIFY PASS`
 - `./scripts/smoke-local.sh` — `SMOKE PASS`
-- `./scripts/build-release.sh v0.7.0` — amd64/arm64 artifacts and checksums valid
+- `./scripts/build-release.sh v0.7.0` — amd64/arm64 artifacts valid
 - `./scripts/test-install.sh` — `INSTALL PASS` and installer E2E PASS
-- `go test -count=1 -coverprofile=... ./...` — PASS
-- `go tool cover -func ... | tail -1` — **78.5%**
-- `git diff --check` — empty output
+- `git diff --check` — PASS after report cleanup
+- `go test -count=1 -coverprofile=/tmp/phase2.cover ./...` — PASS
+- `go tool cover -func=/tmp/phase2.cover | tail -1` — **79.0%**
 
-## Why 85% remains unreachable within this scope
+The final profile remains in `/tmp` only. Final raw test, function, and per-package outputs are `phase1-coverage-on-1b-final-tests.raw.txt`, `phase1-coverage-on-1b-final-func.raw.txt`, and `phase1-coverage-on-1b-final-packages.raw.txt` under `docs/reports/`; `*.cover` is ignored by Git.
 
-The target cannot be reached by the listed priority packages alone without adding large new suites for behavior outside this request. The repository still contains substantial statement volume in packages and paths explicitly excluded from this task, including provider/control-plane and other non-priority surfaces. Adding assertion-free tests would be invalid, and expanding into those excluded areas requires separate confirmation. Therefore this PR stops at the measured, reproducible **78.5%**.
+## PR status at audit time
 
-## Raw evidence
+PR #211 (`phase1a-encrypted-secrets`) and PR #215 (`phase1b-on-1a`) were open and all reported checks were successful. PR #212 (`phase1b-transport-and-session`) was also open with successful checks. PR #214 (`phase1a-client-auth-body-fix`) was open with its `verify` check successful. The exact merge order requested remains **#211 -> #215 -> coverage PR**; #212 is the change represented by the #215 stack and #214 is redundant with the already-present client-auth body fix, so both are safe to close only after confirming the corresponding commits are present in the intended stack.
 
-- `phase1-coverage-on-1b-before-tests.raw.txt`
-- `phase1-coverage-on-1b-before-cover.raw.txt`
-- `phase1-coverage-on-1b-before-func.raw.txt`
-- `phase1-coverage-on-1b-before-packages.raw.txt`
-- `phase1-coverage-on-1b-after-cover.raw.txt`
-- `phase1-coverage-on-1b-after-func.raw.txt`
-- `phase1-coverage-on-1b-after-packages.raw.txt`
-- `phase1-coverage-on-1b-final.cover`
-- `phase1-coverage-on-1b-final-func.raw.txt`
-- `phase1-coverage-on-1b-final-cover.raw.txt`
-- `phase1-coverage-on-1b-gates.raw.txt`
-- `phase1-coverage-on-1b-release-gates.raw.txt`
+## Other branches
+
+The read-only audit is in `docs/reports/OTHER_BRANCHES_AUDIT.md`. No branch was merged. The video gateway branch passed its own full test suite but has trial-merge conflicts in `cmd/gateway/main.go` and `internal/httpapi/web/app.js`; the virtual-key policy branch passed its full suite and trial-merged cleanly, but remains a separate policy/security change.
+
+## Explicitly not completed
+
+The repository total did not reach 85%. No PR was merged, and CI for the new coverage PR is pending until the branch is pushed and the PR exists. No CI-only failure was changed. The branch is left at a clean commit boundary with the remaining coverage work and exact uncovered-file hotspots documented above.
