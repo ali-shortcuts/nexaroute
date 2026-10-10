@@ -1,6 +1,7 @@
 package secrets
 
 import (
+	"context"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
@@ -24,6 +25,18 @@ var cryptoRead = rand.Read
 // NEXAROUTE_MASTER_KEY is a base64-encoded 32-byte key; otherwise
 // NEXAROUTE_MASTER_KEY_FILE may select a key file, or <config>.key is used.
 func Key(configPath string) ([]byte, string, error) {
+	if provider, ref, enabled, err := configuredProvider(); err != nil {
+		return nil, "", err
+	} else if enabled {
+		key, loadErr := provider.Load(context.Background(), ref)
+		if loadErr != nil {
+			return nil, "", loadErr
+		}
+		if len(key) != 32 {
+			return nil, "", errors.New("configured key provider returned an invalid key")
+		}
+		return key, keyID(key), nil
+	}
 	if v := os.Getenv("NEXAROUTE_MASTER_KEY"); v != "" {
 		b, e := base64.StdEncoding.DecodeString(v)
 		if e != nil || len(b) != 32 {

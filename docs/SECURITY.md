@@ -23,7 +23,17 @@ The source precedence is:
 2. `NEXAROUTE_MASTER_KEY_FILE`: a path to a raw 32-byte key file. The file must have exactly mode `0600`; invalid length or looser permissions fail closed.
 3. With neither override, NexaRoute creates `<config-path>.key` with mode `0600` on first use. The config itself is atomically written with mode `0600`; the default config directory is created with mode `0700`.
 
-A colocated automatically managed key protects against disclosure of the config file alone. It does **not** protect against theft of both files, a compromised host/root account, or a storage snapshot containing both. Back up the encrypted config and its exact matching key as separately protected objects. There is no OS keyring integration in this release.
+A colocated automatically managed key protects against disclosure of the config file alone. It does **not** protect against theft of both files, a compromised host/root account, or a storage snapshot containing both. Back up the encrypted config and its exact matching key as separately protected objects.
+
+Deployments may select an external custody provider with `NEXAROUTE_KEY_PROVIDER=keyring|env|command`.
+The Linux keyring adapter uses `secret-tool` and stores only base64-encoded 32-byte keys. The `env`
+provider reads a base64 key from the variable named by `NEXAROUTE_KEY_PROVIDER_ENV`. The `command`
+(or `kms`) provider sends a small stdin protocol (`get REF` / `put REF`) to
+`NEXAROUTE_KEY_PROVIDER_COMMAND`; the command path and reference are configuration, while key values
+are never placed in argv or logs. Missing, malformed, unavailable, or wrong keys fail closed. External
+providers are read-only from the `secrets rotate` command; rotate them in the custody system first and
+then run `secrets verify`. Real KMS/keyring service interoperability is deployment-dependent and remains
+unverified unless exercised in the target environment.
 
 ### Migration and failure behavior
 
