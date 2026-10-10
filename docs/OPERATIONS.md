@@ -122,3 +122,9 @@ policy, runtime-integrated durable store adapters, and OS keyring or external
 KMS integration are not implemented. Do not treat Phase 1 transport security
 or client keys as an enterprise identity, egress-policy, or distributed-state
 substitute.
+
+Virtual-key tenant/project/team scopes are evaluated as parent-to-child
+intersections. A wildcard on a child key cannot widen a configured parent
+allow-list; unknown or inconsistent references deny the request. Keep these
+scopes explicit in configuration and test the deny path before exposing the
+data plane.

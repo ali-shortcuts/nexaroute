@@ -156,48 +156,76 @@ func readRequestPrefix(r *http.Request, limit int64) ([]byte, bool, error) {
 // requestTopLevelField decodes one top-level JSON field without requiring the
 // entire document to fit in the inspection prefix. This lets us find "model"
 // before a large messages/images field while still preserving the full body.
-func requestTopLevelField(body []byte, wanted string) json.RawMessage {
+// requestTopLevelValues parses a complete JSON object and retains every
+// occurrence of a top-level field. Duplicate security-relevant fields are
+// handled conservatively because upstream providers may choose different
+// duplicate-key semantics.
+func requestTopLevelValues(body []byte, wanted string) ([]json.RawMessage, bool) {
 	dec := json.NewDecoder(bytes.NewReader(body))
 	token, err := dec.Token()
 	if err != nil || token != json.Delim('{') {
-		return nil
+		return nil, false
 	}
+	var found []json.RawMessage
 	for dec.More() {
 		token, err = dec.Token()
 		if err != nil {
-			return nil
+			return nil, false
 		}
 		key, ok := token.(string)
 		if !ok {
-			return nil
+			return nil, false
 		}
 		var value json.RawMessage
 		if err := dec.Decode(&value); err != nil {
-			return nil
+			return nil, false
 		}
 		if key == wanted {
-			return value
+			found = append(found, append(json.RawMessage(nil), value...))
 		}
 	}
-	return nil
+	token, err = dec.Token()
+	if err != nil || token != json.Delim('}') {
+		return nil, false
+	}
+	var trailing json.RawMessage
+	if err := dec.Decode(&trailing); err != io.EOF {
+		return nil, false
+	}
+	return found, true
 }
 
-func requestTopLevelString(body []byte, field string) string {
-	raw := requestTopLevelField(body, field)
+func requestTopLevelString(body []byte, field string) (string, bool) {
+	values, ok := requestTopLevelValues(body, field)
+	if !ok || len(values) != 1 {
+		return "", false
+	}
 	var value string
-	if len(raw) == 0 || json.Unmarshal(raw, &value) != nil {
-		return ""
+	if json.Unmarshal(values[0], &value) != nil {
+		return "", false
 	}
-	return strings.TrimSpace(value)
+	return strings.TrimSpace(value), true
 }
 
-func requestTopLevelInt(body []byte, field string) int {
-	raw := requestTopLevelField(body, field)
-	var value int
-	if len(raw) == 0 || json.Unmarshal(raw, &value) != nil || value < 0 {
-		return 0
+// requestTopLevelMaxInt returns the maximum duplicate value, not just the
+// first/last. This makes token-budget enforcement conservative across JSON
+// parsers with differing duplicate-key behavior.
+func requestTopLevelMaxInt(body []byte, field string) (int, bool) {
+	values, ok := requestTopLevelValues(body, field)
+	if !ok {
+		return 0, false
 	}
-	return value
+	maxValue := 0
+	for _, raw := range values {
+		var value int
+		if json.Unmarshal(raw, &value) != nil || value < 0 {
+			return 0, false
+		}
+		if value > maxValue {
+			maxValue = value
+		}
+	}
+	return maxValue, true
 }
 
 func requestModel(r *http.Request) string {
@@ -205,18 +233,18 @@ func requestModel(r *http.Request) string {
 		return ""
 	}
 	prefix, truncated, err := readRequestPrefix(r, requestMetadataReadLimit)
-	if err != nil {
+	if err != nil || truncated {
+		// Model authorization must not trust a prefix that cannot prove which
+		// duplicate top-level "model" field the upstream will consume. The
+		// identity policy treats an unknown model as unauthorized when any
+		// key/project/team has a model allow-list.
 		return ""
 	}
-	if !truncated {
-		var envelope struct {
-			Model string `json:"model"`
-		}
-		if json.Unmarshal(prefix, &envelope) == nil {
-			return strings.TrimSpace(envelope.Model)
-		}
+	model, ok := requestTopLevelString(prefix, "model")
+	if !ok {
+		return ""
 	}
-	return requestTopLevelString(prefix, "model")
+	return model
 }
 
 func requestTokenEstimate(r *http.Request) int {
@@ -224,13 +252,21 @@ func requestTokenEstimate(r *http.Request) int {
 		return 1
 	}
 	prefix, truncated, err := readRequestPrefix(r, requestMetadataReadLimit)
-	if err != nil {
-		// When a TPM policy is active, inspection failure should be conservative.
+	if err != nil || truncated {
+		// A partial prefix cannot prove the effective value of duplicated
+		// output-token fields. Fail closed for TPM-limited keys.
 		return 1 << 30
 	}
-	output := requestTopLevelInt(prefix, "max_tokens")
-	if n := requestTopLevelInt(prefix, "max_output_tokens"); n > output {
-		output = n
+	output, ok := requestTopLevelMaxInt(prefix, "max_tokens")
+	if !ok {
+		return 1 << 30
+	}
+	maxOutput, ok := requestTopLevelMaxInt(prefix, "max_output_tokens")
+	if !ok {
+		return 1 << 30
+	}
+	if maxOutput > output {
+		output = maxOutput
 	}
 	inputBytes := len(prefix)
 	if r.ContentLength >= 0 && r.ContentLength > int64(inputBytes) {
@@ -304,39 +340,62 @@ func listAllows(list []string, value string) bool {
 	return false
 }
 
+// identityPolicyAllows applies every configured scope as a constraint.
+// Key-level restrictions may narrow project/team access, but must never widen
+// it: an explicit "*" on a key cannot override a narrower parent policy.
 func identityPolicyAllows(cfg config.Config, id clientIdentity, key config.VirtualKeyConfig, path, model string) bool {
 	if !id.Virtual {
 		return true
 	}
-	models := append([]string(nil), key.AllowedModels...)
-	routes := append([]string(nil), key.AllowedRoutes...)
+	if !listAllows(key.AllowedRoutes, path) || !listAllows(key.AllowedModels, model) {
+		return false
+	}
+
+	// When no tenant hierarchy is configured, tenant/project/team IDs are
+	// legacy billing metadata and the key's own allow-lists remain authoritative.
+	// Once a hierarchy is configured, every supplied scope must resolve and each
+	// parent policy is a ceiling that the child key cannot widen.
+	if len(cfg.ClientAuth.Tenants) == 0 {
+		return true
+	}
+	if key.TeamID != "" && key.ProjectID == "" {
+		return false
+	}
+	if key.TenantID == "" {
+		return false
+	}
+
 	for _, tenant := range cfg.ClientAuth.Tenants {
 		if tenant.ID != key.TenantID {
 			continue
+		}
+		if key.ProjectID == "" {
+			return true
 		}
 		for _, project := range tenant.Projects {
 			if project.ID != key.ProjectID {
 				continue
 			}
-			if len(models) == 0 {
-				models = project.AllowedModels
+			if !listAllows(project.AllowedRoutes, path) || !listAllows(project.AllowedModels, model) {
+				return false
 			}
-			if len(routes) == 0 {
-				routes = project.AllowedRoutes
+			if key.TeamID == "" {
+				return true
 			}
 			for _, team := range project.Teams {
-				if team.ID == key.TeamID {
-					if len(models) == 0 {
-						models = team.AllowedModels
-					}
-					if len(routes) == 0 {
-						routes = team.AllowedRoutes
-					}
+				if team.ID != key.TeamID {
+					continue
 				}
+				return listAllows(team.AllowedRoutes, path) && listAllows(team.AllowedModels, model)
 			}
+			// A key may not name a team outside its selected project.
+			return false
 		}
+		// The key's project must belong to the selected tenant.
+		return false
 	}
-	return listAllows(routes, path) && listAllows(models, model)
+	// Scoped keys may not rely on an unconfigured tenant.
+	return false
 }
 
 // clientBucketLocked returns a live bucket while holding clientRL. Both RPM

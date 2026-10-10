@@ -151,4 +151,4 @@ fields. Read [docs/KNOWN_GAPS.md](docs/KNOWN_GAPS.md) and
 infrastructure.
 
 ### Transport and configuration hardening
-Optional built-in TLS/mTLS and browser CSRF protection are documented in [docs/SECURITY.md](docs/SECURITY.md). The `config validate`, `config diff`, and `config dry-run` commands provide read-only preflight checks; see [docs/OPERATIONS.md](docs/OPERATIONS.md).
+Optional built-in TLS/mTLS and browser CSRF protection are documented in [docs/SECURITY.md](docs/SECURITY.md). Virtual-key tenant/project/team scopes intersect fail-closed; child wildcards cannot widen parent policy and unresolved references deny. The `config validate`, `config diff`, and `config dry-run` commands provide read-only preflight checks; see [docs/OPERATIONS.md](docs/OPERATIONS.md).
