@@ -6,6 +6,7 @@ config.local.json
 /dist/
 coverage.out
 *.prof
+*.cover
 scripts/__pycache__/
 __pycache__/
 *.pyc
