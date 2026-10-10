@@ -28,7 +28,7 @@ The full requested gate run was executed on `main` at `e5e631c` after the three 
 - `./scripts/build-release.sh v0.7.0` — amd64/arm64 artifacts valid
 - `./scripts/test-install.sh` — `INSTALL PASS` and installer E2E PASS
 - `go test -count=1 -coverprofile=/tmp/main.cover ./...` — PASS
-- `go tool cover -func=/tmp/main.cover | tail -1` — **79.4%**
+- `go tool cover -func=/tmp/main.cover | tail -1` — **79.4%** at the merge point
 - `git diff --check` — PASS
 
 The `.cover` profile remains in `/tmp` and is not committed.
@@ -65,7 +65,9 @@ will be recorded here with the exact deletion result.
 
 A small documentation PR updates `docs/CAPABILITY_MATRIX.md`, `docs/KNOWN_GAPS.md`,
 `README.md`, and `docs/OPERATIONS.md` to reflect Phase 1 completion, the measured
-79.4% coverage, and the fact that Phase 2 (RBAC/SSO, strict egress policy,
-durable store adapters, and keyring/external KMS) has not started. A separate
-coverage PR from the updated main is required for the next meaningful coverage
-pass; it must stop at the best honest number if 85% cannot be reached.
+79.4% coverage at the merge point, and the fact that Phase 2 (RBAC/SSO, strict
+egress policy, durable store adapters, and keyring/external KMS) has not started.
+Coverage PR #220 (`phase1-coverage-85`) then added meaningful `Config.Validate`
+behavior tests, raised total coverage from 79.4% to **79.6%**, and passed the
+complete local gate set. The 85% target was not reached without padding; the
+exact remaining hotspots are documented in `docs/KNOWN_GAPS.md`.
