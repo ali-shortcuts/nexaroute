@@ -874,6 +874,7 @@ func providerSummary(p config.ProviderConfig) map[string]any {
 		"name":             p.Name,
 		"type":             p.Type,
 		"base_url":         p.BaseURL,
+		"data_handling":    p.DataHandling,
 		"auth_mode":        p.AuthMode,
 		"enabled":          p.Enabled,
 		"models":           models,

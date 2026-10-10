@@ -129,6 +129,10 @@
       "name": "Chat2API",
       "type": "openai_compatible",
       "base_url": "http://127.0.0.1:5000/v1",
+      "data_handling": {
+        "trains_on_data": "unknown",
+        "retention": "unknown"
+      },
       "api_key_env": "CHAT2API_KEY",
       "credentials": [],
       "auth_mode": "bearer",

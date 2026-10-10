@@ -40,6 +40,7 @@ type RouteProfileConfig struct {
 	FallbackChain  string `json:"fallback_chain,omitempty"`
 	Strategy       string `json:"strategy,omitempty"`
 	DecisionPolicy string `json:"decision_policy,omitempty"` // Phase E: optional policy ID
+	Privacy        string `json:"privacy,omitempty"`         // "" | "any" | "no_training"
 }
 
 type CandidatePoolConfig struct {
@@ -384,19 +385,20 @@ type TeamConfig struct {
 // VirtualKeyConfig stores only the SHA-256 digest of a consumer key. The
 // plaintext is returned exactly once by the admin create/rotate operation.
 type VirtualKeyConfig struct {
-	ID            string   `json:"id"`
-	Name          string   `json:"name,omitempty"`
-	KeyHash       string   `json:"key_hash"`
-	TenantID      string   `json:"tenant_id,omitempty"`
-	ProjectID     string   `json:"project_id,omitempty"`
-	TeamID        string   `json:"team_id,omitempty"`
-	Role          string   `json:"role,omitempty"`
-	AllowedModels []string `json:"allowed_models,omitempty"`
-	AllowedRoutes []string `json:"allowed_routes,omitempty"`
-	ExpiresAt     string   `json:"expires_at,omitempty"`
-	Revoked       bool     `json:"revoked,omitempty"`
-	RPM           int      `json:"rpm,omitempty"`
-	TPM           int      `json:"tpm,omitempty"`
+	ID             string   `json:"id"`
+	Name           string   `json:"name,omitempty"`
+	KeyHash        string   `json:"key_hash"`
+	TenantID       string   `json:"tenant_id,omitempty"`
+	ProjectID      string   `json:"project_id,omitempty"`
+	TeamID         string   `json:"team_id,omitempty"`
+	Role           string   `json:"role,omitempty"`
+	AllowedModels  []string `json:"allowed_models,omitempty"`
+	AllowedRoutes  []string `json:"allowed_routes,omitempty"`
+	ExpiresAt      string   `json:"expires_at,omitempty"`
+	Revoked        bool     `json:"revoked,omitempty"`
+	RPM            int      `json:"rpm,omitempty"`
+	TPM            int      `json:"tpm,omitempty"`
+	RequirePrivacy string   `json:"require_privacy,omitempty"` // "" | "any" | "no_training"
 }
 
 type ProbeConfig struct {
@@ -430,12 +432,23 @@ func (c CredentialConfig) Resolved() string {
 	return c.APIKey
 }
 
+// DataHandlingConfig declares the provider data-handling class. It is
+// descriptive metadata only (no routing change) and is safe to expose
+// on admin read surfaces. Empty trains_on_data/retention normalize to
+// "unknown" in ApplyDefaults.
+type DataHandlingConfig struct {
+	TrainsOnData string `json:"trains_on_data,omitempty"` // yes | no | unknown
+	Retention    string `json:"retention,omitempty"`      // none | limited | unknown
+	Note         string `json:"note,omitempty"`           // max 200 chars, no control characters
+}
+
 type ProviderConfig struct {
 	ID                       string             `json:"id"`
 	Name                     string             `json:"name"`
 	Type                     string             `json:"type"`              // openai_compatible | anthropic_compatible | gemini | openai_responses
 	Dialect                  string             `json:"dialect,omitempty"` // optional dialect override (see compat.Dialects)
 	BaseURL                  string             `json:"base_url"`
+	DataHandling             DataHandlingConfig `json:"data_handling,omitempty"`
 	APIKey                   string             `json:"api_key,omitempty"`
 	APIKeyEnv                string             `json:"api_key_env,omitempty"`
 	Credentials              []CredentialConfig `json:"credentials,omitempty"`
@@ -996,6 +1009,7 @@ func (c *Config) ApplyDefaults() {
 		rp.FallbackChain = strings.TrimSpace(rp.FallbackChain)
 		rp.Strategy = strings.TrimSpace(strings.ToLower(rp.Strategy))
 		rp.DecisionPolicy = strings.TrimSpace(rp.DecisionPolicy)
+		rp.Privacy = strings.ToLower(strings.TrimSpace(rp.Privacy))
 		// Phase B: only empty (inherit) is functional. Normalize "inherit" to empty for storage.
 		if rp.Strategy == "inherit" {
 			rp.Strategy = ""
@@ -1021,6 +1035,9 @@ func (c *Config) ApplyDefaults() {
 		for j := range fc.Pools {
 			fc.Pools[j] = strings.TrimSpace(fc.Pools[j])
 		}
+	}
+	for i := range c.ClientAuth.VirtualKeys {
+		c.ClientAuth.VirtualKeys[i].RequirePrivacy = strings.ToLower(strings.TrimSpace(c.ClientAuth.VirtualKeys[i].RequirePrivacy))
 	}
 	// Evaluation defaults (Phase H)
 	c.Evaluation.ImportPath = strings.TrimSpace(c.Evaluation.ImportPath)
@@ -1168,6 +1185,14 @@ func (p *ProviderConfig) ApplyDefaults() {
 	p.ID = strings.TrimSpace(p.ID)
 	p.Name = strings.TrimSpace(p.Name)
 	p.BaseURL = strings.TrimRight(strings.TrimSpace(p.BaseURL), "/")
+	p.DataHandling.TrainsOnData = strings.ToLower(strings.TrimSpace(p.DataHandling.TrainsOnData))
+	if p.DataHandling.TrainsOnData == "" {
+		p.DataHandling.TrainsOnData = "unknown"
+	}
+	p.DataHandling.Retention = strings.ToLower(strings.TrimSpace(p.DataHandling.Retention))
+	if p.DataHandling.Retention == "" {
+		p.DataHandling.Retention = "unknown"
+	}
 	if p.Name == "" {
 		p.Name = p.ID
 	}
@@ -1455,6 +1480,9 @@ func (c Config) Validate() error {
 		if key.TPM < 0 || key.TPM > 1000000000 {
 			return fmt.Errorf("client_auth.virtual_key %q tpm must be between 0 and 1000000000", key.ID)
 		}
+		if key.RequirePrivacy != "" && key.RequirePrivacy != "any" && key.RequirePrivacy != "no_training" {
+			return fmt.Errorf("client_auth.virtual_key %q require_privacy must be \"\", \"any\", or \"no_training\" (got %q)", key.ID, key.RequirePrivacy)
+		}
 	}
 	for name, v := range map[string]float64{
 		"routing.latency_weight":  c.Routing.LatencyWeight,
@@ -1545,6 +1573,9 @@ func (c Config) Validate() error {
 		}
 		if p.AuthMode != "" && p.AuthMode != "bearer" && p.AuthMode != "x-api-key" && p.AuthMode != "x-goog-api-key" && p.AuthMode != "none" {
 			return fmt.Errorf("provider %q has unsupported auth_mode %q", p.ID, p.AuthMode)
+		}
+		if err := validateDataHandling(p.DataHandling, fmt.Sprintf("provider %q", p.ID)); err != nil {
+			return err
 		}
 		if p.MaxConcurrency < 1 || p.MaxConcurrency > maxProviderConcurrency {
 			return fmt.Errorf("provider %q max_concurrency must be between 1 and %d", p.ID, maxProviderConcurrency)
@@ -2087,6 +2118,9 @@ func (c Config) Validate() error {
 				return fmt.Errorf("route profile %q references unknown decision policy %q", rp.ID, rp.DecisionPolicy)
 			}
 		}
+		if rp.Privacy != "" && rp.Privacy != "any" && rp.Privacy != "no_training" {
+			return fmt.Errorf("route profile %q privacy must be \"\", \"any\", or \"no_training\" (got %q)", rp.ID, rp.Privacy)
+		}
 	}
 
 	// Virtual endpoints
@@ -2149,6 +2183,28 @@ func (c Config) Validate() error {
 				}
 				return fmt.Errorf("virtual endpoint %q protocol %q invalid", ve.ID, proto)
 			}
+		}
+	}
+	return nil
+}
+
+func validateDataHandling(d DataHandlingConfig, ctx string) error {
+	switch d.TrainsOnData {
+	case "", "yes", "no", "unknown":
+	default:
+		return fmt.Errorf("%s data_handling.trains_on_data must be \"yes\", \"no\", or \"unknown\" (got %q)", ctx, d.TrainsOnData)
+	}
+	switch d.Retention {
+	case "", "none", "limited", "unknown":
+	default:
+		return fmt.Errorf("%s data_handling.retention must be \"none\", \"limited\", or \"unknown\" (got %q)", ctx, d.Retention)
+	}
+	if len([]rune(d.Note)) > 200 {
+		return fmt.Errorf("%s data_handling.note must be at most 200 characters", ctx)
+	}
+	for _, r := range d.Note {
+		if r < 0x20 || r == 0x7f {
+			return fmt.Errorf("%s data_handling.note must not contain control characters", ctx)
 		}
 	}
 	return nil
