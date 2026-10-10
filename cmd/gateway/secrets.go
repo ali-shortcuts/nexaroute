@@ -95,8 +95,8 @@ func runSecrets(args []string) error {
 		_, e = os.Stdout.Write(append(plain, '\n'))
 		return e
 	case "rotate":
-		if os.Getenv("NEXAROUTE_MASTER_KEY") != "" || os.Getenv("NEXAROUTE_MASTER_KEY_FILE") != "" {
-			return errors.New("rotate currently requires the auto-managed <config>.key file; clear master-key environment overrides after safely arranging key custody")
+		if os.Getenv("NEXAROUTE_MASTER_KEY") != "" || os.Getenv("NEXAROUTE_MASTER_KEY_FILE") != "" || strings.TrimSpace(os.Getenv("NEXAROUTE_KEY_PROVIDER")) != "" && os.Getenv("NEXAROUTE_KEY_PROVIDER") != "file" {
+			return errors.New("rotate requires the auto-managed <config>.key file; external key providers must perform rotation in their custody system")
 		}
 		b, e := os.ReadFile(*path)
 		if e != nil {

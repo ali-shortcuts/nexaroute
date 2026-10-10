@@ -50,10 +50,10 @@ Implemented:
 - secret-preserving provider edit
 - plaintext credentials are not returned by Admin read surfaces, snapshots, event/log surfaces, or metrics; see the secret-canary regression coverage and [`docs/SECURITY.md`](SECURITY.md)
 
-Not implemented:
+Boundaries:
 
-- OS keyring integration (future work); an auto-generated master key is stored beside the config, so compromise of both files defeats confidentiality and loss of the only matching key makes encrypted values unrecoverable
-- a keyring-backed or externally managed key-rotation workflow; `nexaroute secrets rotate` currently supports only the auto-managed sibling key and retains only the most recent `.key.previous` file
+- OS keyring and external command/KMS custody adapters are implemented behind `NEXAROUTE_KEY_PROVIDER`; service interoperability and deployment-specific KMS semantics remain unverified
+- externally managed rotation is intentionally performed by the custody system; `nexaroute secrets rotate` refuses to rewrite an external provider and retains only the most recent `.key.previous` file for the local provider
 
 Saved provider keys are write-only, including literal, pool, and environment keys. Headers and proxy URLs are also write-only. Editing a credential field replaces the whole credential set; individual saved pool keys cannot be revealed. Do not store credentials in base URLs or other public metadata. Do not expose the admin surface to untrusted networks.
 
@@ -127,7 +127,7 @@ unimplemented. The current in-process ledger is not durable or distributed.
 
 ## State and HA
 
-Runtime and health state are single-process/in-memory. Routine Admin/runtime config saves are persisted atomically but do not create backup copies; the initial plaintext-to-encrypted migration separately writes an authenticated encrypted timestamped backup. Distributed state, Redis/Postgres coordination, and multi-node breaker synchronization are not implemented.
+Runtime and health state are single-process/in-memory. Routine Admin/runtime config saves are persisted atomically but do not create backup copies; the initial plaintext-to-encrypted migration separately writes an authenticated encrypted timestamped backup. Control-plane snapshot contracts, optimistic revisions, reconciliation health, and Redis lease primitives exist, but gateway runtime selection/migration to external Redis/Postgres is not yet wired or verified. Multi-node breaker synchronization is not implemented.
 
 ## RBAC and SSO
 
