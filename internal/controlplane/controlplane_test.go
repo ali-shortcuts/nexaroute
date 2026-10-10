@@ -99,6 +99,31 @@ func TestManagerFailClosedDoesNotUseStaleSnapshot(t *testing.T) {
 	}
 }
 
+func TestManagerReconcileReportsDurableAndLastKnownGoodSources(t *testing.T) {
+	store := NewMemoryStore()
+	manager, err := NewManager(store, LastKnownGood)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if _, err := manager.Save(ctx, "config", 0, []byte("good")); err != nil {
+		t.Fatal(err)
+	}
+	result, err := manager.Reconcile(ctx, "config")
+	if err != nil || result.Source != "durable" || result.Revision != 1 {
+		t.Fatalf("durable reconcile=%+v err=%v", result, err)
+	}
+	store.SetUnavailable(true)
+	result, err = manager.Reconcile(ctx, "config")
+	if err != nil || result.Source != "last_known_good" || result.Revision != 1 {
+		t.Fatalf("fallback reconcile=%+v err=%v", result, err)
+	}
+	health := manager.Health()
+	if health.Saves != 1 || health.Unavailable != 1 {
+		t.Fatalf("health=%+v", health)
+	}
+}
+
 func TestMigrationRegistryRejectsTamperingAndOrdersVersions(t *testing.T) {
 	registry, err := NewMigrationRegistry(Migration{Version: 2, Name: "second", Up: "up2"}, Migration{Version: 1, Name: "first", Up: "up1"})
 	if err != nil {
