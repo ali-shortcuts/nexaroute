@@ -1,0 +1,179 @@
+=== gofmt -l . ===
+exit=
+=== go vet ./... ===
+exit=
+=== go test -race -count=1 ./... ===
+ok  	github.com/ali-shortcuts/nexaroute/cmd/gateway	10.132s
+ok  	github.com/ali-shortcuts/nexaroute/internal/budget	1.019s
+ok  	github.com/ali-shortcuts/nexaroute/internal/cache	1.026s
+ok  	github.com/ali-shortcuts/nexaroute/internal/compat	1.076s
+ok  	github.com/ali-shortcuts/nexaroute/internal/config	1.508s
+ok  	github.com/ali-shortcuts/nexaroute/internal/controlplane	1.021s
+ok  	github.com/ali-shortcuts/nexaroute/internal/core	1.016s
+ok  	github.com/ali-shortcuts/nexaroute/internal/decision	1.446s
+ok  	github.com/ali-shortcuts/nexaroute/internal/decision/jev	1.321s
+ok  	github.com/ali-shortcuts/nexaroute/internal/decision/policy	1.067s
+ok  	github.com/ali-shortcuts/nexaroute/internal/decision/providerstate	1.016s
+ok  	github.com/ali-shortcuts/nexaroute/internal/decision/remote	5.464s
+ok  	github.com/ali-shortcuts/nexaroute/internal/desktop	1.040s
+ok  	github.com/ali-shortcuts/nexaroute/internal/doccheck	1.015s
+ok  	github.com/ali-shortcuts/nexaroute/internal/eval	1.711s
+ok  	github.com/ali-shortcuts/nexaroute/internal/evallive	1.459s
+ok  	github.com/ali-shortcuts/nexaroute/internal/events	1.920s
+ok  	github.com/ali-shortcuts/nexaroute/internal/feature	1.275s
+ok  	github.com/ali-shortcuts/nexaroute/internal/guardrail	1.018s
+ok  	github.com/ali-shortcuts/nexaroute/internal/health	1.141s
+ok  	github.com/ali-shortcuts/nexaroute/internal/httpapi	12.006s
+ok  	github.com/ali-shortcuts/nexaroute/internal/logging	1.059s
+ok  	github.com/ali-shortcuts/nexaroute/internal/probe	2.694s
+ok  	github.com/ali-shortcuts/nexaroute/internal/protocol/canonical	1.923s
+ok  	github.com/ali-shortcuts/nexaroute/internal/providers	1.330s
+ok  	github.com/ali-shortcuts/nexaroute/internal/route	1.018s
+ok  	github.com/ali-shortcuts/nexaroute/internal/router	1.680s
+ok  	github.com/ali-shortcuts/nexaroute/internal/scorecards	1.094s
+ok  	github.com/ali-shortcuts/nexaroute/internal/secrets	1.038s
+ok  	github.com/ali-shortcuts/nexaroute/internal/taskprofile	1.018s
+ok  	github.com/ali-shortcuts/nexaroute/internal/translate	1.026s
+ok  	github.com/ali-shortcuts/nexaroute/internal/transport	1.028s
+ok  	github.com/ali-shortcuts/nexaroute/internal/usage	1.015s
+exit=
+=== ./scripts/verify.sh ===
+== go version ==
+go version go1.23.12 linux/amd64
+== shell syntax ==
+== formatting ==
+== mandatory clean unit/integration pass ==
+ok  	github.com/ali-shortcuts/nexaroute/cmd/gateway	8.767s
+ok  	github.com/ali-shortcuts/nexaroute/internal/budget	0.002s
+ok  	github.com/ali-shortcuts/nexaroute/internal/cache	0.013s
+ok  	github.com/ali-shortcuts/nexaroute/internal/compat	0.011s
+ok  	github.com/ali-shortcuts/nexaroute/internal/config	0.307s
+ok  	github.com/ali-shortcuts/nexaroute/internal/controlplane	0.003s
+ok  	github.com/ali-shortcuts/nexaroute/internal/core	0.006s
+ok  	github.com/ali-shortcuts/nexaroute/internal/decision	0.419s
+ok  	github.com/ali-shortcuts/nexaroute/internal/decision/jev	0.233s
+ok  	github.com/ali-shortcuts/nexaroute/internal/decision/policy	0.018s
+ok  	github.com/ali-shortcuts/nexaroute/internal/decision/providerstate	0.003s
+ok  	github.com/ali-shortcuts/nexaroute/internal/decision/remote	4.386s
+ok  	github.com/ali-shortcuts/nexaroute/internal/desktop	0.026s
+ok  	github.com/ali-shortcuts/nexaroute/internal/doccheck	0.003s
+ok  	github.com/ali-shortcuts/nexaroute/internal/eval	0.244s
+ok  	github.com/ali-shortcuts/nexaroute/internal/evallive	0.425s
+ok  	github.com/ali-shortcuts/nexaroute/internal/events	0.255s
+ok  	github.com/ali-shortcuts/nexaroute/internal/feature	0.059s
+ok  	github.com/ali-shortcuts/nexaroute/internal/guardrail	0.004s
+ok  	github.com/ali-shortcuts/nexaroute/internal/health	0.125s
+ok  	github.com/ali-shortcuts/nexaroute/internal/httpapi	6.450s
+ok  	github.com/ali-shortcuts/nexaroute/internal/logging	0.039s
+ok  	github.com/ali-shortcuts/nexaroute/internal/probe	1.482s
+ok  	github.com/ali-shortcuts/nexaroute/internal/protocol/canonical	0.156s
+ok  	github.com/ali-shortcuts/nexaroute/internal/providers	0.266s
+ok  	github.com/ali-shortcuts/nexaroute/internal/route	0.004s
+ok  	github.com/ali-shortcuts/nexaroute/internal/router	0.146s
+ok  	github.com/ali-shortcuts/nexaroute/internal/scorecards	0.017s
+ok  	github.com/ali-shortcuts/nexaroute/internal/secrets	0.015s
+ok  	github.com/ali-shortcuts/nexaroute/internal/taskprofile	0.003s
+ok  	github.com/ali-shortcuts/nexaroute/internal/translate	0.005s
+ok  	github.com/ali-shortcuts/nexaroute/internal/transport	0.009s
+ok  	github.com/ali-shortcuts/nexaroute/internal/usage	0.002s
+== go vet ==
+== mandatory clean race pass ==
+ok  	github.com/ali-shortcuts/nexaroute/cmd/gateway	9.568s
+ok  	github.com/ali-shortcuts/nexaroute/internal/budget	1.019s
+ok  	github.com/ali-shortcuts/nexaroute/internal/cache	1.028s
+ok  	github.com/ali-shortcuts/nexaroute/internal/compat	1.083s
+ok  	github.com/ali-shortcuts/nexaroute/internal/config	1.581s
+ok  	github.com/ali-shortcuts/nexaroute/internal/controlplane	1.020s
+ok  	github.com/ali-shortcuts/nexaroute/internal/core	1.019s
+ok  	github.com/ali-shortcuts/nexaroute/internal/decision	1.448s
+ok  	github.com/ali-shortcuts/nexaroute/internal/decision/jev	1.315s
+ok  	github.com/ali-shortcuts/nexaroute/internal/decision/policy	1.080s
+ok  	github.com/ali-shortcuts/nexaroute/internal/decision/providerstate	1.020s
+ok  	github.com/ali-shortcuts/nexaroute/internal/decision/remote	5.486s
+ok  	github.com/ali-shortcuts/nexaroute/internal/desktop	1.041s
+ok  	github.com/ali-shortcuts/nexaroute/internal/doccheck	1.015s
+ok  	github.com/ali-shortcuts/nexaroute/internal/eval	1.722s
+ok  	github.com/ali-shortcuts/nexaroute/internal/evallive	1.459s
+ok  	github.com/ali-shortcuts/nexaroute/internal/events	2.117s
+ok  	github.com/ali-shortcuts/nexaroute/internal/feature	1.304s
+ok  	github.com/ali-shortcuts/nexaroute/internal/guardrail	1.022s
+ok  	github.com/ali-shortcuts/nexaroute/internal/health	1.146s
+ok  	github.com/ali-shortcuts/nexaroute/internal/httpapi	11.469s
+ok  	github.com/ali-shortcuts/nexaroute/internal/logging	1.055s
+ok  	github.com/ali-shortcuts/nexaroute/internal/probe	2.634s
+ok  	github.com/ali-shortcuts/nexaroute/internal/protocol/canonical	1.876s
+ok  	github.com/ali-shortcuts/nexaroute/internal/providers	1.324s
+ok  	github.com/ali-shortcuts/nexaroute/internal/route	1.020s
+ok  	github.com/ali-shortcuts/nexaroute/internal/router	1.675s
+ok  	github.com/ali-shortcuts/nexaroute/internal/scorecards	1.110s
+ok  	github.com/ali-shortcuts/nexaroute/internal/secrets	1.046s
+ok  	github.com/ali-shortcuts/nexaroute/internal/taskprofile	1.022s
+ok  	github.com/ali-shortcuts/nexaroute/internal/translate	1.024s
+ok  	github.com/ali-shortcuts/nexaroute/internal/transport	1.023s
+ok  	github.com/ali-shortcuts/nexaroute/internal/usage	1.014s
+== web ui javascript syntax ==
+== real browser control-plane acceptance ==
+BROWSER E2E PASS
+== real browser Live Visual Agent acceptance ==
+LIVE VISUAL AGENT E2E PASS
+== short fuzz checks ==
+fuzz: elapsed: 0s, gathering baseline coverage: 0/55 completed
+fuzz: elapsed: 0s, gathering baseline coverage: 55/55 completed, now fuzzing with 2 workers
+fuzz: elapsed: 3s, execs: 9212 (3071/sec), new interesting: 15 (total: 70)
+fuzz: elapsed: 3s, execs: 9212 (0/sec), new interesting: 15 (total: 70)
+PASS
+ok  	github.com/ali-shortcuts/nexaroute/internal/httpapi	3.032s
+fuzz: elapsed: 0s, gathering baseline coverage: 0/94 completed
+fuzz: elapsed: 0s, gathering baseline coverage: 94/94 completed, now fuzzing with 2 workers
+fuzz: elapsed: 2s, execs: 67241 (29786/sec), new interesting: 32 (total: 126)
+PASS
+ok  	github.com/ali-shortcuts/nexaroute/internal/core	2.272s
+== linux amd64 build ==
+== linux arm64 build ==
+VERIFY PASS
+exit=
+=== ./scripts/smoke-local.sh ===
+PASS embedded Web UI (200)
+PASS runtime hello (200)
+PASS model list (200)
+PASS admin snapshot (200)
+PASS count_tokens fallback (200)
+PASS provider create (201)
+PASS legacy reveal remains redacted (200)
+PASS provider edit (200)
+PASS provider re-open stays redacted (200)
+PASS provider redacted read (200)
+PASS provider delete (200)
+PASS atomic config persistence preserves operator backups
+SMOKE PASS — local runtime, UI, admin persistence and token-count fallback are operational.
+exit=
+=== ./scripts/build-release.sh v0.7.0 ===
+nexaroute-linux-amd64: OK
+nexaroute-linux-arm64: OK
+install.sh: OK
+Prepared v0.7.0 in dist/. Nothing published.
+exit=
+=== ./scripts/test-install.sh ===
+PASS clean install, PATH, architecture selection, checksum/download rejection
+PASS UI/browser readiness while provider probes are blocked; -no-browser
+PASS real startup, headless/browser launch, duplicate/port exclusion, upgrade/reinstall, restart persistence, write-only secrets, crash recovery
+INSTALL PASS
+== testing clean install ==
+
+Installed NexaRoute v0.7.0 to /tmp/tmp.1ckMWyD6XS/install-bin/nexaroute
+Config (created on first run): /tmp/tmp.1ckMWyD6XS/config-home/nexaroute/config.json
+
+Run: nexaroute
+Upgrading? Stop and restart NexaRoute to use the new binary.
+== testing checksum mismatch rejection ==
+== testing upgrade flow and config preservation ==
+
+Installed NexaRoute v0.7.1 to /tmp/tmp.1ckMWyD6XS/install-bin/nexaroute
+Config (created on first run): /tmp/tmp.1ckMWyD6XS/config-home/nexaroute/config.json
+
+Run: nexaroute
+Upgrading? Stop and restart NexaRoute to use the new binary.
+INSTALLER E2E PASS
+exit=
+=== git diff --check ===
+exit=

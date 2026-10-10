@@ -1,0 +1,69 @@
+== final go test coverage ==
+ok  	github.com/ali-shortcuts/nexaroute/cmd/gateway	8.338s	coverage: 73.8% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/budget	0.005s	coverage: 86.2% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/cache	0.014s	coverage: 87.4% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/compat	0.013s	coverage: 71.8% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/config	0.273s	coverage: 74.8% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/controlplane	0.005s	coverage: 83.8% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/core	0.007s	coverage: 100.0% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/decision	0.411s	coverage: 76.4% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/decision/jev	0.232s	coverage: 80.8% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/decision/policy	0.020s	coverage: 86.9% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/decision/providerstate	0.003s	coverage: 85.1% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/decision/remote	4.384s	coverage: 87.6% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/desktop	0.027s	coverage: 85.5% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/doccheck	0.002s	coverage: [no statements]
+ok  	github.com/ali-shortcuts/nexaroute/internal/eval	0.219s	coverage: 88.0% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/evallive	0.423s	coverage: 81.5% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/events	0.223s	coverage: 94.3% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/feature	0.039s	coverage: 79.6% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/guardrail	0.003s	coverage: 100.0% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/health	0.125s	coverage: 83.2% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/httpapi	6.678s	coverage: 74.0% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/logging	0.042s	coverage: 81.8% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/probe	1.475s	coverage: 72.1% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/protocol/canonical	0.242s	coverage: 83.9% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/providers	0.266s	coverage: 79.9% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/route	0.004s	coverage: 94.8% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/router	0.134s	coverage: 81.6% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/scorecards	0.042s	coverage: 88.6% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/secrets	0.016s	coverage: 85.1% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/taskprofile	0.003s	coverage: 84.6% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/translate	0.005s	coverage: 80.9% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/transport	0.012s	coverage: 90.6% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/usage	0.003s	coverage: 95.8% of statements
+== final go tool cover ==
+total:											(statements)				78.5%
+== git diff check ==
+== status ==
+## [32mphase1-coverage-on-1b[m...[31morigin/phase1b-on-1a[m
+ [31mM[m specs/014-control-plane-rebuild/evidence/control-plane-e2e.png
+ [31mM[m specs/014-control-plane-rebuild/live-visual-agent/evidence/lva-active-failover.png
+ [31mM[m specs/014-control-plane-rebuild/live-visual-agent/evidence/lva-activity-correlation.png
+ [31mM[m specs/014-control-plane-rebuild/live-visual-agent/evidence/lva-idle.png
+ [31mM[m specs/014-control-plane-rebuild/live-visual-agent/evidence/lva-performance.json
+ [31mM[m specs/014-control-plane-rebuild/live-visual-agent/evidence/lva-success.png
+[31m??[m docs/reports/phase1-coverage-on-1b-after-cover.raw.txt
+[31m??[m docs/reports/phase1-coverage-on-1b-after-func.raw.txt
+[31m??[m docs/reports/phase1-coverage-on-1b-after-packages.raw.txt
+[31m??[m docs/reports/phase1-coverage-on-1b-after.cover
+[31m??[m docs/reports/phase1-coverage-on-1b-before-cover.raw.txt
+[31m??[m docs/reports/phase1-coverage-on-1b-before-func.raw.txt
+[31m??[m docs/reports/phase1-coverage-on-1b-before-packages.raw.txt
+[31m??[m docs/reports/phase1-coverage-on-1b-before-tests.raw.txt
+[31m??[m docs/reports/phase1-coverage-on-1b-before.cover
+[31m??[m docs/reports/phase1-coverage-on-1b-final-cover.raw.txt
+[31m??[m docs/reports/phase1-coverage-on-1b-final-func.raw.txt
+[31m??[m docs/reports/phase1-coverage-on-1b-final.cover
+[31m??[m docs/reports/phase1-coverage-on-1b-gates.raw.txt
+[31m??[m docs/reports/phase1-coverage-on-1b-release-gates.raw.txt
+[31m??[m internal/compat/coverage_behavior_test.go
+[31m??[m internal/config/coverage_behavior_test.go
+[31m??[m internal/decision/coverage_behavior_test.go
+[31m??[m internal/decision/orchestrator_behavior_test.go
+[31m??[m internal/decision/policy/coverage_behavior_test.go
+[31m??[m internal/decision/remote/coverage_behavior_test.go
+[31m??[m internal/desktop/coverage_behavior_test.go
+[31m??[m internal/httpapi/coverage_history_test.go
+[31m??[m internal/logging/coverage_behavior_test.go
+[31m??[m internal/probe/coverage_behavior_test.go

@@ -1,0 +1,53 @@
+nexaroute: warning: all logging is disabled (logging.file=off and console_max_lines_per_minute=0)
+NexaRoute UI: https://127.0.0.1:43337/
+Config: /tmp/TestGatewayStartsWithTLSAndEncryptedConfig1951182201/001/config.json
+Press Ctrl+C to stop.
+2026/10/10 01:41:41 http: TLS handshake error from 127.0.0.1:33356: remote error: tls: bad certificate
+nexaroute: warning: all logging is disabled (logging.file=off and console_max_lines_per_minute=0)
+NexaRoute UI: http://127.0.0.1:38075/
+Config: /tmp/TestMainStartsHealthyGatewayAndShutsDownOnContextCancellation2222742381/001/config.json
+Press Ctrl+C to stop.
+--- FAIL: TestMainStartsHealthyGatewayAndShutsDownOnContextCancellation (5.01s)
+    main_lifecycle_test.go:83: gateway did not complete graceful shutdown
+encrypted_fields=1
+OK provider:private.api_key
+verified_fields=1
+master key rotated; recovery copy retained at config.json.key.previous
+OK provider:private.api_key
+verified_fields=1
+FAIL
+coverage: 73.6% of statements
+FAIL	github.com/ali-shortcuts/nexaroute/cmd/gateway	13.416s
+ok  	github.com/ali-shortcuts/nexaroute/internal/budget	0.007s	coverage: 86.2% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/cache	0.016s	coverage: 87.4% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/compat	0.015s	coverage: 71.8% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/config	0.267s	coverage: 74.8% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/controlplane	0.013s	coverage: 83.8% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/core	0.003s	coverage: 100.0% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/decision	0.415s	coverage: 76.4% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/decision/jev	0.222s	coverage: 80.8% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/decision/policy	0.015s	coverage: 86.9% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/decision/providerstate	0.003s	coverage: 85.1% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/decision/remote	4.381s	coverage: 87.6% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/desktop	0.025s	coverage: 85.5% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/doccheck	0.002s	coverage: [no statements]
+ok  	github.com/ali-shortcuts/nexaroute/internal/eval	0.212s	coverage: 88.0% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/evallive	0.419s	coverage: 81.5% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/events	0.243s	coverage: 94.3% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/feature	0.032s	coverage: 79.6% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/guardrail	0.002s	coverage: 100.0% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/health	0.125s	coverage: 83.2% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/httpapi	7.028s	coverage: 74.1% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/logging	0.049s	coverage: 81.8% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/probe	1.482s	coverage: 72.1% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/protocol/canonical	0.205s	coverage: 83.9% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/providers	0.265s	coverage: 79.9% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/route	0.004s	coverage: 94.8% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/router	0.139s	coverage: 81.6% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/scorecards	0.056s	coverage: 88.6% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/secrets	0.015s	coverage: 85.1% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/taskprofile	0.004s	coverage: 84.6% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/translate	0.005s	coverage: 80.9% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/transport	0.008s	coverage: 90.6% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/usage	0.003s	coverage: 95.8% of statements
+FAIL
