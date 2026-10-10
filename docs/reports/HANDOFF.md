@@ -31,3 +31,8 @@ The latest complete local gate passed: gofmt; video tests under the race detecto
 WP2b is ready for one new PR from `wp2b-video-hardening` to `main` after a final full gate on the documentation-final tree and fresh GitHub checks. Do not merge until GitHub checks are green, and preserve the repository's merge-commit-only policy. The older video PR #225 must not remain as a second active WP2b PR once the replacement PR is opened; keep historical branch refs intact unless the later branch audit proves they are safe to remove.
 
 WP4b(1) remains **BLOCKED**, not completed or merged. Its PR #224 has server-side Admin route authorization but awaits WP2b landing and a successful complete gate against the resulting `main`; afterward merge `main` into the WP4 branch (no rebase), rerun the complete gate, and require fresh GitHub checks before merge. OIDC/PKCE, state/nonce/issuer/audience/signature/expiry validation, role mapping, and server-side session/revocation remain outstanding WP4b(2) scope.
+
+
+## PR routing checkpoint — 2026-10-10T09:47+04:30
+
+The replacement WP2b PR is open: **#226** (`wp2b-video-hardening` → `main`, initial head `bff1ab1fce3979a06746c8d9c0ef0c1e2840d0be`). The initial `verify`, vulnerability scan, and CodeQL checks were in progress when inspected. The prior v2 PR **#225 was closed unmerged** as superseded; its branch history remains intact. Do not merge #226 unless every check for its latest head completes successfully, and use a merge commit only. PR #224 remains open and unmerged for the documented WP4b(1) block.
