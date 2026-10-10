@@ -380,3 +380,45 @@ func TestLoggingValidationRejectsUnsafeRetention(t *testing.T) {
 		t.Fatal("unknown access logging mode should be rejected")
 	}
 }
+
+
+func TestVideoEnabledRequiresAuthEnvAndBoundsAssetSize(t *testing.T) {
+	cfg := Default()
+	cfg.Video.Enabled = true
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "video.auth_token_env") {
+		t.Fatalf("enabled video should require an auth environment name, got %v", err)
+	}
+	cfg.Video.AuthTokenEnv = "NEXAROUTE_VIDEO_TOKEN"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("video with an auth environment name should validate: %v", err)
+	}
+	cfg.Video.MaxAssetBytes = -1
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "video.max_asset_bytes") {
+		t.Fatalf("negative video asset cap should fail validation, got %v", err)
+	}
+	cfg.Video.MaxAssetBytes = 9 << 30
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "video.max_asset_bytes") {
+		t.Fatalf("asset cap above 8 GiB should fail validation, got %v", err)
+	}
+}
+
+
+func TestVideoEnabledRequiresAuthEnvAndBoundsAssetSize(t *testing.T) {
+	cfg := Default()
+	cfg.Video.Enabled = true
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "video.auth_token_env") {
+		t.Fatalf("enabled video should require an auth environment name, got %v", err)
+	}
+	cfg.Video.AuthTokenEnv = "NEXAROUTE_VIDEO_TOKEN"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("video with an auth environment name should validate: %v", err)
+	}
+	cfg.Video.MaxAssetBytes = -1
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "video.max_asset_bytes") {
+		t.Fatalf("negative video asset cap should fail validation, got %v", err)
+	}
+	cfg.Video.MaxAssetBytes = 9 << 30
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "video.max_asset_bytes") {
+		t.Fatalf("asset cap above 8 GiB should fail validation, got %v", err)
+	}
+}
