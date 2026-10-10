@@ -73,3 +73,15 @@ WP4b(1) remains **BLOCKED**, not completed or merged. Its PR #224 has server-sid
 ## PR routing checkpoint — 2026-10-10T09:47+04:30
 
 The replacement WP2b PR is open: **#226** (`wp2b-video-hardening` → `main`, initial head `bff1ab1fce3979a06746c8d9c0ef0c1e2840d0be`). The initial `verify`, vulnerability scan, and CodeQL checks were in progress when inspected. The prior v2 PR **#225 was closed unmerged** as superseded; its branch history remains intact. Do not merge #226 unless every check for its latest head completes successfully, and use a merge commit only. PR #224 remains open and unmerged for the documented WP4b(1) block.
+
+
+## Latest WP4 continuation checkpoint — 2026-10-10T10:06+04:30
+
+This checkpoint supersedes earlier status statements above where they conflict.
+
+- Live `main` is `73977e7113949fc6b7083ab22db68c95b5e5047d` (merge PR #226 / WP2b). PR #224 remains open as a draft on `wp4-rbac-sso-runtime`.
+- The latest `main` was merged into the WP4 branch without rebase. Merge commit: `6a3dce1` (`Merge remote-tracking branch 'origin/main' into wp4-rbac-sso-runtime`). Three documentation conflicts were resolved by preserving the current WP2b/Phase-2 statements together with accurate WP4 boundaries and the preceding handoff history.
+- After that merge, `./scripts/verify.sh` passed in full on Go 1.26.8: shell syntax, formatting, all unit/integration tests, `go vet`, full race suite, browser control-plane E2E, Live Visual Agent E2E, two bounded fuzz targets, and Linux amd64/arm64 builds for gateway and videogen. Fresh GitHub checks still need to run after pushing this merge commit.
+- WP4b(1) (route permission enforcement) is refreshed and locally verified. WP4 as a whole remains **PARTIAL**: no OIDC/PKCE validation, role-claim mapping, identity-provider login, server-side session/revocation, mock OIDC conformance suite, or durable structured audit store. PR #224 must remain draft and unmerged until the identity/session scope is implemented and tested; do not claim SSO or multi-user RBAC.
+- Coverage goal remains unresolved: a fresh post-merge `go test -coverprofile` measurement reports 75.6%, below 85%. WP5 provider-egress policy, WP6 runtime-integrated durable stores, and WP7 keyring/KMS remain distinct open work packages.
+- No release, tag, repository setting, secret, or unrelated repository was changed.
