@@ -77,6 +77,17 @@ The next reviewable PR should integrate the security stack in the order above ra
 
 ## Subsequent integration checkpoint
 
+The sections above are the historical 2026-10-09 audit snapshot and retain
+their original classifications. On 2026-10-10, WP2 integrated this video
+branch onto the Phase 1 main line after resolving the real conflicts in
+`cmd/gateway/main.go` and `internal/httpapi/web/app.js`. The resolution keeps
+TLS/mTLS, encrypted-config loading, browser CSRF, and the video runtime/UI.
+
+The new gateway integration test starts from an encrypted config with TLS and
+`video.enabled=true`, enables only the development fake provider, then proves
+that `/healthz` and `/v1/video/providers` are reachable over HTTPS. No real
+provider or multi-node store is claimed verified.
+
 On the audit branch, the optional Video Runtime was attached to `cmd/gateway` without changing existing LLM routes. `video.enabled=false` remains the default and creates no video handler or workers. When enabled, the gateway mounts `/v1/video/`, initializes the single-process durable JSON job store, starts bounded workers, and closes the queue during shutdown. The development fake provider is opt-in only and no real provider is claimed verified.
 
 Fresh evidence after this integration:

@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"io"
 	"math/big"
 	"net"
 	"net/http"
@@ -129,6 +130,16 @@ func TestGatewayStartsWithTLSAndEncryptedConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	loaded.Video.Enabled = true
+	loaded.Video.DevelopmentFakeProvider = true
+	loaded.Video.StorePath = filepath.Join(dir, "video-jobs.json")
+	if err := config.SaveAtomic(configPath, loaded); err != nil {
+		t.Fatal("save encrypted video/TLS config:", err)
+	}
+	loaded, err = config.Load(configPath)
+	if err != nil {
+		t.Fatal("reload encrypted video/TLS config:", err)
+	}
 	address := loaded.Listen
 	oldArgs, oldStdout, oldNotify := os.Args, os.Stdout, notifyGatewayContext
 	defer func() { os.Args, os.Stdout, notifyGatewayContext = oldArgs, oldStdout, oldNotify }()
@@ -162,13 +173,24 @@ func TestGatewayStartsWithTLSAndEncryptedConfig(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
+	if !ready {
+		cancel()
+		<-done
+		t.Fatal("TLS gateway did not become healthy")
+	}
+	videoResp, videoErr := client.Get("https://" + address + "/v1/video/providers")
+	if videoErr != nil {
+		t.Fatal("video route over TLS failed:", videoErr)
+	}
+	videoBody, readErr := io.ReadAll(videoResp.Body)
+	_ = videoResp.Body.Close()
+	if readErr != nil || videoResp.StatusCode != http.StatusOK || !bytes.Contains(videoBody, []byte(`"fake"`)) {
+		t.Fatalf("video providers over TLS status=%d body=%s err=%v", videoResp.StatusCode, videoBody, readErr)
+	}
 	cancel()
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("TLS gateway did not shut down")
-	}
-	if !ready {
-		t.Fatal("TLS gateway did not become healthy")
 	}
 }

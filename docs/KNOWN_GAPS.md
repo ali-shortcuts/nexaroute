@@ -83,6 +83,14 @@ conservatively. This does not provide RBAC or SSO; those remain Phase 2 work.
 
 Discovery parses several common result shapes, but model-list APIs are not standardized. Providers that omit or customize discovery may require manual model IDs.
 
+## Video gateway boundaries
+
+The video gateway is a bounded, opt-in Phase 2 workstream. The local JSON job
+store is single-process, the fake provider is for tests/development only, and
+no real external video provider adapter is claimed verified. The runtime mounts
+video routes only when `video.enabled` is true; production provider credentials,
+multi-node durable coordination, and a running-gateway CLI remain unimplemented.
+
 ## State and HA
 
 Runtime and health state are single-process/in-memory. Routine Admin/runtime config saves are persisted atomically but do not create backup copies; the initial plaintext-to-encrypted migration separately writes an authenticated encrypted timestamped backup. Distributed state, Redis/Postgres coordination, and multi-node breaker synchronization are not implemented.

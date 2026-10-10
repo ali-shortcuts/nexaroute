@@ -128,3 +128,10 @@ intersections. A wildcard on a child key cannot widen a configured parent
 allow-list; unknown or inconsistent references deny the request. Keep these
 scopes explicit in configuration and test the deny path before exposing the
 data plane.
+
+The video runtime is opt-in through `video.enabled`. It uses a bounded worker
+queue and atomic local JSON job store; that store is single-process and is not
+a multi-node coordination mechanism. Use the fake provider only for local
+development/tests, keep any future provider token in an environment variable,
+and do not claim a real provider integration until its adapter and integration
+tests are available.
