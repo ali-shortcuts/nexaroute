@@ -53,4 +53,8 @@ The read-only audit is in `docs/reports/OTHER_BRANCHES_AUDIT.md`. No branch was 
 
 ## Explicitly not completed
 
-The repository total did not reach 85%. No PR was merged, and CI for the new coverage PR is pending until the branch is pushed and the PR exists. No CI-only failure was changed. The branch is left at a clean commit boundary with the remaining coverage work and exact uncovered-file hotspots documented above.
+The repository total did not reach 85%. Coverage PR **#218** was created with base `phase1b-on-1a`; it has not been merged. Its GitHub checks are tracked separately below and were not modified by this work. No CI-only failure was changed. The branch is left at a clean commit boundary with the remaining coverage work and exact uncovered-file hotspots documented above.
+
+## Coverage PR checks
+
+At the time of this report, PR #218 had been created and its checks were still pending; the final check names/results must be refreshed with `gh pr checks 218` before merge.
