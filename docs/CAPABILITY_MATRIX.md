@@ -53,7 +53,7 @@ The old 100-request Python mock result was discarded because its separate header
 
 ## Prioritized gap list from Phase 0
 
-1. **P0 security:** draft PR #224 implements OIDC-backed `viewer`/`operator`/`admin` sessions, server-side route/method RBAC, CSRF, and a local durable session/audit store; acceptance is still pending the required 85% coverage and exact-revision gates. Distributed identity/session stores, strict provider egress policy, OS keyring integration, and externally managed key-rotation workflows remain future work; built-in TLS/mTLS and browser CSRF checks are implemented.
+1. **P0 security:** PR #224 implements OIDC-backed `viewer`/`operator`/`admin` sessions, server-side route/method RBAC, CSRF, and a local durable session/audit store. Coverage is 85.12% and all required checks passed on head `aa5a864`; the PR is ready for review but not merged. Distributed identity/session stores, strict provider egress policy, OS keyring integration, and externally managed key-rotation workflows remain future work; built-in TLS/mTLS and browser CSRF checks are implemented.
 2. **P0 operations:** make durable store adapters runtime-integrated and define multi-replica consistency and tested backup/restore; `config validate/diff/dry-run` is implemented as a local read-only CLI.
 3. **P1 economics:** invoice-accurate price book, hard budget enforcement and durable cost/usage settlement across processes.
 4. **P1 protocol breadth:** native Bedrock, Vertex, Azure semantics, embeddings, rerank, image and audio endpoints.

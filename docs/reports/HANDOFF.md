@@ -131,3 +131,11 @@ This checkpoint supersedes earlier coverage/local-gate statements above, while r
 ## Remote verification checkpoint — 2026-10-10T13:58+04:30
 
 After commit `9a837a89ca04b2115687b613e3e5bb7e5716eea1` was pushed to the existing WP4 branch for PR #224, GitHub reported all four checks successful on that exact head: `CI/verify` (including the Docker runtime smoke), `Go vulnerability scan`, `CodeQL (Go)`, and `CodeQL`. The PR was still Draft at the time of this checkpoint and was not merged. The local 85.12% measurement and full local gates are recorded above. Any subsequent commit changes the proposed head and requires fresh checks before acceptance; do not merge the PR as part of this checkpoint.
+
+
+## Ready-for-review checkpoint — 2026-10-10T14:12+04:30
+
+- Latest checked WP4 head at this checkpoint: `aa5a86459ccd74449ec8aa45190513f4e997c259`. Repository-wide coverage remains **85.12% (16,885/19,837)**. All four fresh GitHub checks passed on this exact head: `CI/verify`, `Go vulnerability scan`, `CodeQL (Go)`, and `CodeQL`.
+- PR #224 was marked **Ready for review** and remains unmerged. No release/tag was published, and `main` was not modified.
+- The current follow-up aligns status documentation with the ready-for-review state. Because any documentation commit changes the proposed head, rerun the required checks on the resulting head before merge; do not treat the `aa5a864` check set as evidence for a later commit.
+- WP5 provider egress/SSRF policy, WP6 runtime-integrated shared/durable state, WP7 keyring/KMS, and WP8 final clean-clone/repository audit remain open. The whole product roadmap is not complete.

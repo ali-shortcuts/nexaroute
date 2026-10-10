@@ -82,10 +82,11 @@ WP4 implementation boundaries and acceptance status:
   backend: do not share it between hosts or through a network filesystem;
   OIDC pending transactions are process-local and the callback must return to
   the initiating instance.
-- **Acceptance remains pending on draft PR #224** until fresh GitHub CI/security
-  checks pass on the exact updated head. Local repository-wide coverage now
-  measures 85.12% and the complete local verification passes on this test-only
-  checkpoint. See `docs/reports/WP4_RBAC_HTTP_PARTIAL.md` for the latest evidence.
+- **WP4 verification gates passed on PR #224 head `aa5a864`**: local coverage is
+  85.12% and all four fresh GitHub checks (`CI/verify`, vulnerability scan,
+  CodeQL Go, and CodeQL) are green. The PR is ready for review, not merged.
+  Any subsequent push requires fresh checks before merge. See
+  `docs/reports/WP4_RBAC_HTTP_PARTIAL.md` for the latest evidence.
 
 - per-client quotas beyond the RPM and TPM ceilings, hashed-at-rest client keys;
 - SAML and enterprise identity protocols other than the configured single OIDC issuer;
@@ -96,8 +97,8 @@ Virtual-key tenant/project/team policy intersection is implemented fail-closed:
 child key wildcards cannot widen a configured parent allow-list, unresolved
 scope references deny access, and duplicate model/token fields are inspected
 conservatively. This is separate from Admin RBAC and OIDC sessions. The latter
-implementation is on draft PR #224; the local coverage target is now met, while
-fresh required GitHub checks remain pending.
+implementation is on PR #224, marked ready after the gates passed on head
+`aa5a864`; it remains unmerged. Any later push must pass fresh required checks.
 
 ## Model discovery
 
@@ -130,13 +131,13 @@ Runtime and health state are single-process/in-memory. Routine Admin/runtime con
 
 ## RBAC and SSO
 
-The draft WP4 branch wires the permission matrix in `internal/authz` to every
+The WP4 branch wires the permission matrix in `internal/authz` to every
 registered Admin API route/method and denies unknown combinations. OIDC session
 roles are derived only from verified issuer claims using the explicit config
 allowlist. The web UI's visibility is a convenience only; the server middleware
 is authoritative. The local bbolt store is single-host. The 85% project
-coverage target is met locally at 85.12%; PR #224 remains unaccepted until fresh
-required checks pass on its exact updated head.
+coverage target is met at 85.12%, and required checks passed on head `aa5a864`.
+PR #224 is ready for review but unmerged; any later head needs fresh checks.
 
 
 ## Response cache boundaries

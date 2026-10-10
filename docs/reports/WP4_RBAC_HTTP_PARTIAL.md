@@ -33,7 +33,7 @@ All commands below passed on Go 1.26.9 unless otherwise stated:
 | `go test ./...` | **PASS** |
 | `go test -race ./...` | **PASS** |
 | `go vet ./...` | **PASS** |
-| `govulncheck -C . ./...` | Not available in this sandbox run; the previous local scan on the unchanged production dependency tree found 0 reachable vulnerabilities. A fresh GitHub scan is still required on the proposed head. |
+| `govulncheck -C . ./...` | Not available locally in this sandbox; the fresh GitHub vulnerability scan passed on head `aa5a864`. Any later pushed commit requires a new scan. |
 | `./scripts/verify.sh` | **PASS** — formatting/syntax, full tests and race checks, browser control-plane and Live Visual Agent acceptance, bounded fuzz checks, Linux amd64/arm64 builds |
 | `./scripts/smoke-local.sh` | **PASS** |
 | `./scripts/build-release.sh v0.7.0` | **PASS** |
@@ -48,4 +48,4 @@ The bbolt session/audit backend and pending OIDC transactions are single-host/pr
 
 ## Acceptance status
 
-**Implementation delivered; local acceptance gates pass; remote acceptance remains pending.** Keep PR #224 in draft and do not merge until the exact updated head is pushed and fresh required GitHub checks—including Docker runtime smoke, vulnerability scan, and CodeQL—complete successfully. The local coverage criterion is met at 85.12%; local `verify.sh`, race, smoke, release-build, and installer E2E passed. A live third-party IdP was not configured or tested, and local govulncheck was unavailable in this run; neither should be represented as newly verified by this checkpoint.
+**Implementation delivered; local and remote verification gates passed on head `aa5a864`.** PR #224 is ready for review and remains unmerged. Coverage is 85.12%; the fresh GitHub `CI/verify` (including Docker runtime), vulnerability scan, CodeQL (Go), and CodeQL checks all passed. This documentation-only status sync changes the proposed head, so require fresh checks on that new head before merge. A live third-party IdP was not configured or tested, and local govulncheck was unavailable in this sandbox.
