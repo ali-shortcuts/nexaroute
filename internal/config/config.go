@@ -338,6 +338,9 @@ type ClientAuthConfig struct {
 // are persisted.
 type ControlPlaneConfig struct {
 	Enabled          bool   `json:"enabled,omitempty"`
+	Backend          string `json:"backend,omitempty"` // file | memory | postgres | redis
+	StatePath        string `json:"state_path,omitempty"`
+	MigrationDryRun  bool   `json:"migration_dry_run,omitempty"`
 	PostgresDSNEnv   string `json:"postgres_dsn_env,omitempty"`
 	RedisURLEnv      string `json:"redis_url_env,omitempty"`
 	ConfigFailure    string `json:"config_failure,omitempty"`
@@ -825,6 +828,11 @@ func (c *Config) ApplyDefaults() {
 		c.Admin.OIDC.RoleMappings = mappings
 	}
 	if c.ControlPlane.Enabled {
+		if c.ControlPlane.Backend == "" {
+			c.ControlPlane.Backend = "file"
+		}
+		c.ControlPlane.Backend = strings.ToLower(strings.TrimSpace(c.ControlPlane.Backend))
+		c.ControlPlane.StatePath = strings.TrimSpace(c.ControlPlane.StatePath)
 		if c.ControlPlane.ConfigFailure == "" {
 			c.ControlPlane.ConfigFailure = "last_known_good"
 		}
@@ -1366,8 +1374,18 @@ func (c Config) Validate() error {
 		}
 	}
 	if c.ControlPlane.Enabled {
-		if !validEnvName(c.ControlPlane.PostgresDSNEnv) || !validEnvName(c.ControlPlane.RedisURLEnv) {
-			return errors.New("control_plane requires valid postgres_dsn_env and redis_url_env names")
+		switch c.ControlPlane.Backend {
+		case "file", "memory":
+		case "postgres":
+			if !validEnvName(c.ControlPlane.PostgresDSNEnv) {
+				return errors.New("control_plane postgres backend requires valid postgres_dsn_env")
+			}
+		case "redis":
+			if !validEnvName(c.ControlPlane.RedisURLEnv) {
+				return errors.New("control_plane redis backend requires valid redis_url_env")
+			}
+		default:
+			return errors.New("control_plane.backend must be file, memory, postgres, or redis")
 		}
 		for name, mode := range map[string]string{
 			"control_plane.config_failure":     c.ControlPlane.ConfigFailure,

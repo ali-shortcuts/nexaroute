@@ -127,7 +127,13 @@ unimplemented. The current in-process ledger is not durable or distributed.
 
 ## State and HA
 
-Runtime and health state are single-process/in-memory. Routine Admin/runtime config saves are persisted atomically but do not create backup copies; the initial plaintext-to-encrypted migration separately writes an authenticated encrypted timestamped backup. Control-plane snapshot contracts, optimistic revisions, reconciliation health, and Redis lease primitives exist, but gateway runtime selection/migration to external Redis/Postgres is not yet wired or verified. Multi-node breaker synchronization is not implemented.
+The optional control-plane runtime now selects an atomic local file store or an
+explicit test-only memory store and reconciles a versioned startup snapshot.
+Postgres/Redis contracts remain available, but no runtime client/driver is
+registered in this binary, so selecting either backend fails closed rather than
+falling back silently. Migration dry-run and local backup/restore procedures
+are documented; live external Redis/Postgres and multi-node breaker
+synchronization remain unverified/unimplemented.
 
 ## RBAC and SSO
 

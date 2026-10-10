@@ -109,6 +109,9 @@ func main() {
 	for _, w := range cfg.Warnings {
 		fmt.Fprintf(os.Stderr, "nexaroute: config warning: %s\n", w)
 	}
+	if _, err := openControlPlaneRuntime(cfg.ControlPlane, *configPath); err != nil {
+		bootstrap.Fatalf("cannot initialize control-plane runtime: %v", err)
+	}
 
 	var logWriters []io.Writer
 	var logFile *logging.RotatingWriter
