@@ -440,6 +440,7 @@ type ProviderConfig struct {
 	Headers                  map[string]string  `json:"headers,omitempty"`
 	ForwardHeaders           []string           `json:"forward_headers"`
 	ProxyURL                 string             `json:"proxy_url,omitempty"`
+	AllowedHosts             []string           `json:"allowed_hosts,omitempty"`
 	ChatPath                 string             `json:"chat_path,omitempty"`
 	MessagesPath             string             `json:"messages_path,omitempty"`
 	ModelsPath               string             `json:"models_path,omitempty"`
