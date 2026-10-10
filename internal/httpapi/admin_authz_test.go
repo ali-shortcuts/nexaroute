@@ -26,9 +26,11 @@ func TestAdminPermissionForRequest(t *testing.T) {
 		{"client key management", http.MethodDelete, "/admin/api/client-keys/k1", authz.ManageKeys, true},
 		{"route change", http.MethodPost, "/admin/api/simple-routes", authz.WriteRouting, true},
 		{"evaluation run", http.MethodPost, "/admin/api/evaluation/run", authz.RunEvaluation, true},
+		{"audit read", http.MethodGet, "/admin/api/audit", authz.ReadAudit, true},
 		{"unknown admin path", http.MethodGet, "/admin/api/unregistered", "", false},
-		{"unsupported provider method remains authenticated", http.MethodOptions, "/admin/api/providers", authz.WriteProviders, true},
-		{"unsupported snapshot method remains authenticated", http.MethodTrace, "/admin/api/snapshot", authz.ReadConfig, true},
+		{"unsupported provider method denied", http.MethodOptions, "/admin/api/providers", "", false},
+		{"unsupported snapshot method denied", http.MethodTrace, "/admin/api/snapshot", "", false},
+		{"viewer cannot stream audit", http.MethodGet, "/admin/api/events/stream", authz.ReadAudit, true},
 	}
 
 	for _, tt := range tests {

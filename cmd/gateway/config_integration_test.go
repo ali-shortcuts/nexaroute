@@ -128,6 +128,9 @@ func TestGatewayStartsWithTLSAndEncryptedConfig(t *testing.T) {
 	t.Setenv("NEXAROUTE_ADMIN_KEY", "")
 	t.Setenv("NEXAROUTE_LOG_FILE", "off")
 	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	configPath := makeEncryptedTLSConfig(t, dir)
 	loaded, err := config.Load(configPath)
 	if err != nil {

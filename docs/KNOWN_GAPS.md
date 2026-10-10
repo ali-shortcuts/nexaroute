@@ -62,32 +62,42 @@ Saved provider keys are write-only, including literal, pool, and environment key
 Implemented:
 
 - loopback-only admin mode by default
-- optional admin API key
+- explicitly controlled emergency Admin API key/keyless-loopback compatibility identity
 - constant-time admin-key comparison
-- in-memory browser UI state for the entered Admin key (it is lost on page reload)
+- OIDC Authorization Code + PKCE S256, verified claim-to-role allowlist, opaque server-side sessions, CSRF-protected browser mutations, logout/revocation, and durable local structured audit on the WP4 draft branch/PR #224
 - optional data-plane client API keys (`client_auth`) with constant-time digest comparison and an optional per-key RPM ceiling
 
-Implemented in the HTTP boundary, but not yet a full multi-user control plane:
+WP4 implementation boundaries and acceptance status:
 
-- Admin API route families are mapped server-side to the fail-closed
-  `internal/authz` permission matrix; unmapped `/admin/api/*` paths deny by
-  default. The legacy static Admin key and existing keyless loopback mode map
-  only to the break-glass owner identity. Assignment/authentication of
-  viewer/operator/admin identities is not yet implemented.
-- audit log lines record state-changing Admin API attempts without request
-  bodies or credentials; the event feed is not a durable audit store.
+- Every registered Admin API route/method maps server-side to a permission;
+  unknown paths and unsupported methods deny by default. OIDC claim mapping
+  accepts only explicit viewer/operator/admin values; emergency `owner` is not
+  an OIDC role.
+- OIDC discovery issuer, client ID, configured audience, signature/JWKS,
+  expiry, nonce, state, PKCE, and browser-binding are verified. Login/logout,
+  denied access, and privileged action intent/completion are structured audit
+  records; required audit failures stop the protected action.
+- bbolt sessions/audit survive process restart on the same host. The store is
+  mode 0600 and fail-closed on unsafe file permissions. It is not a distributed
+  backend: do not share it between hosts or through a network filesystem;
+  OIDC pending transactions are process-local and the callback must return to
+  the initiating instance.
+- **Acceptance remains pending on draft PR #224** until the complete local
+  verification, the repository-wide 85% coverage target, and fresh GitHub CI/
+  security checks pass on the latest proposed commit. See
+  `docs/reports/WP4_RBAC_HTTP_PARTIAL.md` for measured evidence and exact gaps.
 
 - per-client quotas beyond the RPM and TPM ceilings, hashed-at-rest client keys;
-- non-owner RBAC identity assignment and multi-user accounts;
-- cookie-backed Admin login/session identity (browser state-changing calls
-  remain protected by same-origin checks and a CSRF token cookie/header);
-- OIDC/enterprise SSO, role-claim mapping, and server-side session revocation.
+- SAML and enterprise identity protocols other than the configured single OIDC issuer;
+- distributed/shared session and audit storage, cross-instance pending OIDC transactions;
+- enterprise provisioning/deprovisioning and automated role/group lifecycle beyond the explicit claim mapping.
 
 Virtual-key tenant/project/team policy intersection is implemented fail-closed:
 child key wildcards cannot widen a configured parent allow-list, unresolved
 scope references deny access, and duplicate model/token fields are inspected
-conservatively. This is separate from Admin RBAC and SSO; those remain
-incomplete Phase 2 work.
+conservatively. This is separate from Admin RBAC and OIDC sessions. The latter
+implementation is on draft PR #224; acceptance remains pending the documented
+coverage and verification gates.
 
 ## Model discovery
 
@@ -120,13 +130,13 @@ Runtime and health state are single-process/in-memory. Routine Admin/runtime con
 
 ## RBAC and SSO
 
-The permission matrix in `internal/authz` is wired to registered Admin API
-route families and unknown admin paths fail closed. Current authentication
-still supplies only the legacy break-glass owner identity (static Admin key,
-or existing loopback-only mode); no viewer/operator identity can yet be
-assigned. OIDC/SAML validation, server-side sessions, role mapping and durable
-audit storage remain unimplemented. The web UI's authorization continues to
-derive from its Admin API calls, not client-side role claims.
+The draft WP4 branch wires the permission matrix in `internal/authz` to every
+registered Admin API route/method and denies unknown combinations. OIDC session
+roles are derived only from verified issuer claims using the explicit config
+allowlist. The web UI's visibility is a convenience only; the server middleware
+is authoritative. The local bbolt store is single-host, and PR #224 must remain
+unaccepted until the recorded 85% project coverage target and all required
+checks are satisfied.
 
 
 ## Response cache boundaries

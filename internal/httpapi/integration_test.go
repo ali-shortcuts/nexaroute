@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -41,7 +42,16 @@ func testGateway(t *testing.T, cfg config.Config) *Server {
 	}
 	bus := events.New(100)
 	pe := probe.New(cfg, reg, rt, hm, bus)
-	return New(cfg, t.TempDir()+"/config.json", reg, rt, hm, bus, pe, log.New(io.Discard, "", 0))
+	configDir := t.TempDir()
+	if err := os.Chmod(configDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	srv := New(cfg, configDir+"/config.json", reg, rt, hm, bus, pe, log.New(io.Discard, "", 0))
+	if err := srv.SecurityStoreError(); err != nil {
+		t.Fatalf("create test security store: %v", err)
+	}
+	t.Cleanup(func() { _ = srv.CloseSecurityStore() })
+	return srv
 }
 
 func TestAnthropicNativePreservesUnknownFieldsAndBetaHeader(t *testing.T) {

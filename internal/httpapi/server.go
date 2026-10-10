@@ -32,6 +32,7 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/providers"
 	"github.com/ali-shortcuts/nexaroute/internal/route"
 	"github.com/ali-shortcuts/nexaroute/internal/router"
+	"github.com/ali-shortcuts/nexaroute/internal/securitystore"
 	"github.com/ali-shortcuts/nexaroute/internal/usage"
 )
 
@@ -79,6 +80,10 @@ type Server struct {
 	taskAnalysisTotal  atomic.Uint64
 	taskAnalysisErrors atomic.Uint64
 	videoHandler       http.Handler
+	securityDB         *securitystore.Store
+	securityErr        error
+	oidc               *oidcAuthenticator
+	oidcErr            error
 }
 
 // adminBucket is a compact token bucket keyed by remote address. Capacity 90
@@ -171,6 +176,7 @@ func adminHostAllowed(r *http.Request) bool {
 }
 
 func New(cfg config.Config, configPath string, reg *providers.Registry, rt *router.Router, hm *health.Manager, bus *events.Bus, pe *probe.Engine, l *log.Logger) *Server {
+	cfg.ApplyDefaults()
 	hm.ConfigureAdvanced(
 		cfg.Routing.FailureThreshold,
 		cfg.Cooldown(),
@@ -196,6 +202,23 @@ func New(cfg config.Config, configPath string, reg *providers.Registry, rt *rout
 		identityUsage:   usage.NewIdentityTracker(),
 		capStore:        compat.NewStore(),
 		taskClassCounts: make(map[string]uint64, 32),
+	}
+	securityPath, securityPathErr := adminSecurityStorePath(cfg.Admin.SecurityStorePath, configPath)
+	if securityPathErr != nil {
+		s.securityErr = securityPathErr
+	} else if securityPath != "" {
+		s.securityDB, s.securityErr = securitystore.Open(securityPath, cfg.Admin.AuditMaxEvents, cfg.Admin.AuditRetentionDays)
+	} else {
+		s.securityErr = fmt.Errorf("admin security store path cannot be resolved")
+	}
+	if s.securityErr != nil && l != nil {
+		l.Printf("admin_security_store_unavailable=true; protected admin requests will fail closed")
+	}
+	if cfg.Admin.OIDC.Enabled {
+		s.oidc, s.oidcErr = newOIDCAuthenticator(nil, cfg.Admin.OIDC)
+		if s.oidcErr != nil && l != nil {
+			l.Printf("admin_oidc_unavailable=true; protected admin requests will fail closed")
+		}
 	}
 	s.configRevision.Store(1)
 	s.decisionRegistry = decision.NewRegistry()
@@ -297,6 +320,12 @@ func (s *Server) adminConfigSnapshot() config.AdminConfig {
 
 func cloneConfig(in config.Config) config.Config {
 	out := in
+	if in.Admin.OIDC.RoleMappings != nil {
+		out.Admin.OIDC.RoleMappings = make(map[string]string, len(in.Admin.OIDC.RoleMappings))
+		for claim, role := range in.Admin.OIDC.RoleMappings {
+			out.Admin.OIDC.RoleMappings[claim] = role
+		}
+	}
 	out.ClientAuth.Keys = append([]string(nil), in.ClientAuth.Keys...)
 	out.ClientAuth.VirtualKeys = append([]config.VirtualKeyConfig(nil), in.ClientAuth.VirtualKeys...)
 	out.ClientAuth.Tenants = append([]config.TenantConfig(nil), in.ClientAuth.Tenants...)
@@ -876,8 +905,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/chat/completions", s.openAIChat)
 	mux.HandleFunc("/v1/responses", s.openAIResponses)
 
+	mux.HandleFunc("/admin/auth/login", s.authLogin)
+	mux.HandleFunc("/admin/auth/oidc/callback", s.authCallback)
+	mux.HandleFunc("/admin/auth/status", s.adminAuthStatus)
+	mux.HandleFunc("/admin/auth/logout", s.adminAuthLogout)
 	mux.HandleFunc("/admin/api/snapshot", s.adminSnapshot)
 	mux.HandleFunc("/admin/api/csrf-token", s.adminCSRFToken)
+	mux.HandleFunc("/admin/api/audit", s.adminAuditRecords)
 	mux.HandleFunc("/admin/api/events/stream", s.adminEventStream)
 	mux.HandleFunc("/admin/api/probe", s.adminProbe)
 	mux.HandleFunc("/admin/api/providers", s.adminProviders)
@@ -1056,36 +1090,69 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 		if strings.HasPrefix(r.URL.Path, "/admin/api/") {
 			w.Header().Set("Cache-Control", "no-store")
 			w.Header().Set("Pragma", "no-cache")
+			identity, authentication, authenticated, authErr := s.authenticateAdmin(r)
 			cost := 1.0
-			if !s.adminAuthorized(r) {
-				// Failed attempts burn a chunk of the bucket so an online
-				// key brute force collapses to a handful of guesses per IP
-				// while the dashboard's own polling stays unaffected.
+			if !authenticated && authErr == nil {
 				cost = adminBucketCapacity
 			}
 			if !s.adminAllow(adminRemoteIP(r), cost) {
 				errorJSON(sw, http.StatusTooManyRequests, "admin rate limit exceeded")
 				return
 			}
-			if !s.adminAuthorized(r) {
-				errorJSON(sw, http.StatusUnauthorized, "admin authorization required")
+			if s.securityErr != nil || s.securityDB == nil {
+				errorJSON(sw, http.StatusServiceUnavailable, "admin security store unavailable")
 				return
 			}
-			adminActor = "legacy-admin-break-glass"
+			if authErr != nil {
+				s.denyAdminRequest(sw, r, identity, authentication, "", http.StatusServiceUnavailable, "admin authentication is unavailable")
+				return
+			}
+			if !authenticated {
+				s.denyAdminRequest(sw, r, identity, authentication, "", http.StatusUnauthorized, "admin authentication required")
+				return
+			}
+			adminActor = identity.Subject
 			permission, mapped := adminPermissionForRequest(r)
-			identity := legacyAdminIdentity()
 			if !mapped || !identity.Authorize(permission) {
-				errorJSON(sw, http.StatusForbidden, "admin permission denied")
+				s.denyAdminRequest(sw, r, identity, authentication, permission, http.StatusForbidden, "admin permission denied")
 				return
 			}
 			if !s.adminClientCertificateAuthorized(r) {
-				errorJSON(sw, http.StatusForbidden, "a verified client certificate is required for admin access")
+				s.denyAdminRequest(sw, r, identity, authentication, permission, http.StatusForbidden, "a verified client certificate is required for admin access")
 				return
 			}
-			if isStateChanging(r.Method) && !adminCSRFAllowed(r) {
-				errorJSON(sw, http.StatusForbidden, "same-origin request and valid CSRF token required")
-				return
+			if isStateChanging(r.Method) {
+				csrfOK := adminCSRFAllowed(r)
+				if authentication == "oidc-session" {
+					csrfOK = strictSessionCSRFAllowed(r)
+				}
+				if !csrfOK {
+					s.denyAdminRequest(sw, r, identity, authentication, permission, http.StatusForbidden, "same-origin request and valid CSRF token required")
+					return
+				}
 			}
+			auditOperation := authentication == "emergency" || isStateChanging(r.Method)
+			if auditOperation {
+				event := auditEvent(r, identity.Subject, "admin.operation.authorized", "attempt", 0, authentication, permission)
+				if err := s.recordAudit(event); err != nil {
+					errorJSON(sw, http.StatusServiceUnavailable, "admin audit store unavailable")
+					return
+				}
+			}
+			next.ServeHTTP(sw, withAdminIdentity(r, identity))
+			if auditOperation {
+				outcome := "success"
+				if sw.status >= http.StatusBadRequest {
+					outcome = "failed"
+				}
+				event := auditEvent(r, identity.Subject, "admin.operation.completed", outcome, sw.status, authentication, permission)
+				if err := s.recordAudit(event); err != nil && s.log != nil {
+					// The durable pre-operation record remains available, so a
+					// completion-write failure cannot erase the authorized intent.
+					s.log.Printf("admin_audit_completion_unavailable=true request_id=%s", rid)
+				}
+			}
+			return
 		} else if strings.HasPrefix(r.URL.Path, "/v1/") && !s.dataPlaneClientCertificateAuthorized(r) {
 			errorJSON(sw, http.StatusForbidden, "a verified client certificate is required for data-plane access")
 			return
@@ -1158,32 +1225,6 @@ func (w *statusWriter) ReadFrom(r io.Reader) (int64, error) {
 		return rf.ReadFrom(r)
 	}
 	return io.Copy(w.ResponseWriter, r)
-}
-
-func (s *Server) adminAuthorized(r *http.Request) bool {
-	cfg := s.adminConfigSnapshot()
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		host = r.RemoteAddr
-	}
-	ip := net.ParseIP(host)
-	isLoopback := ip != nil && ip.IsLoopback()
-	if cfg.BindLocalOnly && !isLoopback {
-		return false
-	}
-	if cfg.APIKey != "" {
-		got := r.Header.Get("x-admin-key")
-		if got == "" {
-			if v := r.Header.Get("Authorization"); strings.HasPrefix(v, "Bearer ") {
-				got = strings.TrimPrefix(v, "Bearer ")
-			}
-		}
-		return len(got) == len(cfg.APIKey) && subtle.ConstantTimeCompare([]byte(got), []byte(cfg.APIKey)) == 1
-	}
-	// Keyless mode trusts the loopback; make sure the request was actually
-	// addressed to a loopback name so a DNS-rebound browser origin cannot
-	// silently read privileged admin data.
-	return isLoopback && adminHostAllowed(r)
 }
 
 const adminCSRFCookie = "nexaroute_admin_csrf"
@@ -1271,7 +1312,7 @@ func (s *Server) adminCSRFToken(w http.ResponseWriter, r *http.Request) {
 		token = base64.RawURLEncoding.EncodeToString(raw[:])
 	}
 	http.SetCookie(w, &http.Cookie{
-		Name: adminCSRFCookie, Value: token, Path: "/admin/api/",
+		Name: adminCSRFCookie, Value: token, Path: "/admin/",
 		HttpOnly: true, Secure: requestIsSecure(r), SameSite: http.SameSiteStrictMode,
 		Expires: time.Now().Add(12 * time.Hour), MaxAge: 12 * 60 * 60,
 	})

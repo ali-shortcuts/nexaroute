@@ -51,9 +51,9 @@ details: [docs/INSTALLATION.md](docs/INSTALLATION.md).
   self-rotating bounded logs.
 - **Security:** provider credentials, custom headers, and proxy URLs are
   write-only — never returned by any API, snapshot, metric, or log. Admin API
-  route permissions are enforced server-side with unknown routes denied; the
-  existing Admin key remains a break-glass owner credential. Multi-user SSO is
-  not yet implemented. See [SECURITY.md](SECURITY.md).
+  route permissions are enforced server-side with unknown routes denied. The
+  WP4 draft adds OIDC role-based sessions and a durable local security/audit
+  store; acceptance and CI are still pending on PR #224. See [SECURITY.md](SECURITY.md).
 - **Web UI:** provider/model management with write-only secret editing, model
   discovery and testing, candidate pools / route profiles / virtual endpoints,
   live health topology, event feed, manual probes, routing settings, quota and
@@ -106,7 +106,10 @@ docker run --rm -p 8080:8080 \
   nexaroute:local
 ```
 
-Set an admin key before exposing the UI/admin API beyond loopback.
+For remote human administration, use the documented OIDC configuration, HTTPS,
+and a trusted network boundary; the static Admin key is only an explicitly
+enabled emergency path, not the normal identity system. See
+[docs/CONFIGURATION.md](docs/CONFIGURATION.md).
 
 ## Build and verify from source (contributors)
 
@@ -140,12 +143,12 @@ builds for amd64 and arm64. See [CONTRIBUTING.md](CONTRIBUTING.md).
 NexaRoute is **not** a universal implementation of every LLM protocol. Native
 Gemini `generateContent` beyond the implemented adapter, Bedrock, Vertex AI,
 Azure-specific deployment semantics, embeddings/rerank, distributed state,
-invoice-perfect cost optimization, hard budget enforcement, cookie-backed
-identity, multi-user RBAC/SSO, and a complete internet-facing identity/session
-framework are not implemented. Admin route-level permission checks, built-in
-TLS/mTLS and browser CSRF checks are implemented,
-but they do not replace Admin authorization, network segmentation, or an
-enterprise identity system.
+invoice-perfect cost optimization, and hard budget enforcement are not
+implemented. The WP4 draft provides OIDC-backed Admin sessions and RBAC, but it
+is single-host, is not yet accepted until its required verification/coverage/CI
+gates pass, and is not a distributed enterprise identity platform. Admin
+authorization, TLS/mTLS, CSRF protections, and network segmentation remain
+separate required controls.
 Secret-bearing configuration fields are encrypted at rest; keyring integration
 and externally managed key-rotation workflows remain future work. Cross-protocol reasoning/thinking metadata can be
 provider-specific; native passthrough is the safest path for provider-only

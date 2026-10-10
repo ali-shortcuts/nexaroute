@@ -28,7 +28,11 @@ func TestMainStartsHealthyGatewayAndShutsDownOnContextCancellation(t *testing.T)
 	}
 	address := reservation.Addr().String()
 	_ = reservation.Close()
-	configPath := filepath.Join(t.TempDir(), "config.json")
+	configDir := t.TempDir()
+	if err := os.Chmod(configDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(configDir, "config.json")
 	cfg := config.Default()
 	cfg.Listen = address
 	cfg.Probe.Enabled = false

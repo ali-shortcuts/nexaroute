@@ -85,3 +85,16 @@ This checkpoint supersedes earlier status statements above where they conflict.
 - WP4b(1) (route permission enforcement) is refreshed and locally verified. WP4 as a whole remains **PARTIAL**: no OIDC/PKCE validation, role-claim mapping, identity-provider login, server-side session/revocation, mock OIDC conformance suite, or durable structured audit store. PR #224 must remain draft and unmerged until the identity/session scope is implemented and tested; do not claim SSO or multi-user RBAC.
 - Coverage goal remains unresolved: a fresh post-merge `go test -coverprofile` measurement reports 75.6%, below 85%. WP5 provider-egress policy, WP6 runtime-integrated durable stores, and WP7 keyring/KMS remain distinct open work packages.
 - No release, tag, repository setting, secret, or unrelated repository was changed.
+
+
+## WP4 OIDC/RBAC implementation checkpoint — 2026-10-10T11:17+04:30
+
+This checkpoint supersedes earlier WP4 status statements above where they conflict. Earlier notes are preserved as historical handoffs.
+
+- `main` remains `73977e7113949fc6b7083ab22db68c95b5e5047d`; the current work is on `wp4-rbac-sso-runtime`, derived from that main through the existing merge commit (no rebase). PR #224 remains open and draft.
+- The formerly partial route-level RBAC branch now includes maintained OIDC Authorization Code + PKCE, verified issuer/audience/JWKS/nonce/state/browser binding, strict endpoint URL policy, allowlisted viewer/operator/admin mapping, server-side opaque sessions and CSRF, absolute/idle expiry and rotation/revocation, opt-in non-downgrade break-glass, durable local bbolt sessions/audit, web login/logout, and updated configuration/security/operations docs.
+- Added end-to-end tests using an in-process OIDC provider, middleware/actual-handler permission tests for all three roles, audit failure/durability coverage, secure-cookie/expiry tests, and config URL/role validation tests. No live third-party IdP was configured or tested.
+- Final local gates on this source tree passed: `gofmt`, `go test ./...`, `go test -race ./...`, `go vet ./...`, `./scripts/verify.sh` (browser control-plane acceptance, Live Visual Agent, bounded fuzz, Linux amd64/arm64 builds), `./scripts/smoke-local.sh`, `./scripts/build-release.sh v0.7.0`, `./scripts/test-install.sh` (installer/checksum/upgrade/config preservation), and `git diff --check`.
+- Exact coverage measurement: `go test -coverprofile=... ./...` + `go tool cover -func=...` = **75.6% aggregate statement coverage**, versus the repository's documented 85% target. No explicitly defined narrower package subset or executable 85% CI gate was found. The target is still **not met**; do not claim WP4 acceptance or mark the PR ready.
+- Remaining blockers to acceptance: raise the repository-wide measurement to at least 85%; push the final branch state and require fresh GitHub checks on that exact head. Keep PR #224 draft/unmerged until both blockers are closed. Do not merge, release/tag, alter repository settings, or change/delete any other work.
+- Detailed implementation, security boundary, and verification evidence: `docs/reports/WP4_RBAC_HTTP_PARTIAL.md` and `docs/reports/WP4_RBAC_SSO_DESIGN.md`.
