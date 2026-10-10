@@ -122,3 +122,74 @@ func TestAdminClientKeyCreateRotateListNeverReturnsHash(t *testing.T) {
 		t.Fatalf("rotation did not create a new one-time key: %+v", second)
 	}
 }
+
+func TestVirtualKeyScopesIntersectInsteadOfWidening(t *testing.T) {
+	cfg := config.Default()
+	cfg.ClientAuth.Tenants = []config.TenantConfig{{
+		ID: "acme",
+		Projects: []config.ProjectConfig{{
+			ID:            "platform",
+			AllowedModels: []string{"safe", "team-model"},
+			AllowedRoutes: []string{"/v1/chat/completions"},
+			Teams: []config.TeamConfig{{
+				ID:            "engineering",
+				AllowedModels: []string{"team-model"},
+				AllowedRoutes: []string{"/v1/chat/completions"},
+			}},
+		}},
+	}}
+	id := clientIdentity{ID: "vk1", TenantID: "acme", ProjectID: "platform", TeamID: "engineering", Role: "developer", Virtual: true}
+	key := config.VirtualKeyConfig{
+		TenantID:      "acme",
+		ProjectID:     "platform",
+		TeamID:        "engineering",
+		AllowedModels: []string{"*"},
+		AllowedRoutes: []string{"*"},
+	}
+	for _, tc := range []struct {
+		name  string
+		path  string
+		model string
+		want  bool
+	}{
+		{"allowed by every scope", "/v1/chat/completions", "team-model", true},
+		{"project denies despite key wildcard", "/v1/chat/completions", "other-model", false},
+		{"team denies despite key wildcard", "/v1/chat/completions", "safe", false},
+		{"project route denies despite key wildcard", "/v1/messages", "team-model", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := identityPolicyAllows(cfg, id, key, tc.path, tc.model); got != tc.want {
+				t.Fatalf("identityPolicyAllows(%q, %q) = %t, want %t", tc.path, tc.model, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestVirtualKeyProjectReferencesFailClosed(t *testing.T) {
+	cfg := config.Default()
+	cfg.ClientAuth.Tenants = []config.TenantConfig{{
+		ID: "acme",
+		Projects: []config.ProjectConfig{{
+			ID:            "platform",
+			AllowedModels: []string{"safe"},
+		}},
+	}}
+	base := clientIdentity{ID: "vk1", Role: "developer", Virtual: true}
+	cases := []struct {
+		name string
+		key  config.VirtualKeyConfig
+	}{
+		{"unknown tenant", config.VirtualKeyConfig{TenantID: "missing", ProjectID: "platform", AllowedModels: []string{"*"}}},
+		{"unknown project", config.VirtualKeyConfig{TenantID: "acme", ProjectID: "missing", AllowedModels: []string{"*"}}},
+		{"team without project", config.VirtualKeyConfig{TenantID: "acme", TeamID: "engineering", AllowedModels: []string{"*"}}},
+		{"unknown team", config.VirtualKeyConfig{TenantID: "acme", ProjectID: "platform", TeamID: "missing", AllowedModels: []string{"*"}}},
+		{"project without tenant", config.VirtualKeyConfig{ProjectID: "platform", AllowedModels: []string{"*"}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if identityPolicyAllows(cfg, base, tc.key, "/v1/chat/completions", "safe") {
+				t.Fatal("misconfigured scope unexpectedly authorized request")
+			}
+		})
+	}
+}

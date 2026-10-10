@@ -14,8 +14,10 @@ func TestRequestModelPreservesLargeRequestBody(t *testing.T) {
 	body := []byte(`{"model":"vision-large","messages":[{"role":"user","content":"` + strings.Repeat("x", (2<<20)+256) + `"}]}`)
 	req := httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewReader(body))
 
-	if got := requestModel(req); got != "vision-large" {
-		t.Fatalf("requestModel() = %q, want %q", got, "vision-large")
+	// For bodies beyond the bounded inspection prefix, a key with a model
+	// allow-list must not rely on metadata that could be duplicated later.
+	if got := requestModel(req); got != "" {
+		t.Fatalf("requestModel() = %q, want fail-closed empty model", got)
 	}
 	restored, err := io.ReadAll(req.Body)
 	if err != nil {
@@ -89,5 +91,36 @@ func TestClientRateLimitBucketsEvictIdleEntries(t *testing.T) {
 				t.Fatalf("bucket count after idle eviction = %d, want 1", got)
 			}
 		})
+	}
+}
+
+func TestRequestModelRejectsDuplicateModelFields(t *testing.T) {
+	body := `{"model":"allowed","model":"forbidden","messages":[]}`
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
+	if got := requestModel(req); got != "" {
+		t.Fatalf("requestModel() = %q, want fail-closed empty model for duplicate fields", got)
+	}
+	restored, err := io.ReadAll(req.Body)
+	if err != nil {
+		t.Fatalf("read restored body: %v", err)
+	}
+	if string(restored) != body {
+		t.Fatalf("request body changed: got %q, want %q", string(restored), body)
+	}
+}
+
+func TestRequestTokenEstimateUsesMaximumDuplicateOutputLimit(t *testing.T) {
+	body := `{"model":"m","max_tokens":2000,"max_tokens":1,"max_output_tokens":2,"messages":[]}`
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
+	got := requestTokenEstimate(req)
+	if got < 2000 {
+		t.Fatalf("requestTokenEstimate() = %d, want >= 2000 for duplicate max_tokens", got)
+	}
+	restored, err := io.ReadAll(req.Body)
+	if err != nil {
+		t.Fatalf("read restored body: %v", err)
+	}
+	if string(restored) != body {
+		t.Fatalf("request body changed: got %q, want %q", string(restored), body)
 	}
 }
