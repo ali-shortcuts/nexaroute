@@ -14,7 +14,7 @@
     "bind_local_only": true,
     "api_key": "",
     "emergency_access_enabled": true,
-    "security_store_path": "nexaroute-security.db",
+    "security_store_path": "security/nexaroute-security.db",
     "session_ttl_seconds": 28800,
     "idle_timeout_seconds": 1800,
     "audit_retention_days": 365,

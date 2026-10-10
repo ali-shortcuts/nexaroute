@@ -277,6 +277,8 @@ Discovery authorization, token, and JWKS endpoints must be absolute HTTPS URLs. 
 }
 ```
 
+When `security_store_path` is relative, it is resolved against the directory containing the config file. If omitted, the default is `security/nexaroute-security.db`, so the application creates a dedicated private `security/` child directory instead of placing the database directly beside the config. Missing parent directories are created as mode `0700`; an already existing parent that is not private is rejected and must be fixed by the operator.
+
 Set the secret outside the config, for example with your service manager/secret injector (do not put its value in shell history):
 
 ```text

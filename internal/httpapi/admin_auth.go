@@ -33,7 +33,7 @@ func adminSecurityStorePath(configuredPath, configPath string) (string, error) {
 		if configPath == "" {
 			return "", errors.New("admin security store path is required when no config file path is available")
 		}
-		configuredPath = configPath + ".security.db"
+		configuredPath = filepath.Join("security", "nexaroute-security.db")
 	}
 	if filepath.IsAbs(configuredPath) {
 		return filepath.Clean(configuredPath), nil

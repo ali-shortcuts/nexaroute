@@ -75,6 +75,27 @@ func TestSessionAndAuditLifecycleIsTransactional(t *testing.T) {
 	}
 }
 
+func TestOpenCreatesPrivateLeafUnderWritableParent(t *testing.T) {
+	parent := t.TempDir()
+	if err := os.Chmod(parent, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(parent, "security", "nexaroute-security.db")
+	store, err := Open(path, 100, 30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	info, err := os.Stat(filepath.Dir(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.IsDir() || info.Mode().Perm() != 0o700 {
+		t.Fatalf("created security directory mode = %v, want directory 0700", info.Mode())
+	}
+}
+
 func TestFailedLoginAuditRollsBackSessionCreation(t *testing.T) {
 	store, err := Open(filepath.Join(t.TempDir(), "private", "security.db"), 100, 30)
 	if err != nil {

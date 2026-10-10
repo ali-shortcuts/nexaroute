@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -42,6 +43,18 @@ func installTestOIDCSession(t *testing.T, srv *Server, role authz.Role) string {
 		t.Fatal(err)
 	}
 	return rawID
+}
+
+func TestAdminSecurityStorePathDefaultsToPrivateConfigSubdirectory(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	got, err := adminSecurityStorePath("", configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(filepath.Dir(configPath), "security", "nexaroute-security.db")
+	if got != want {
+		t.Fatalf("default security-store path = %q, want %q", got, want)
+	}
 }
 
 func TestViewerSessionCanReadConfigButNotKeysOrAudit(t *testing.T) {
