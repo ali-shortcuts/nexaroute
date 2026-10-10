@@ -57,4 +57,4 @@ The repository total did not reach 85%. Coverage PR **#218** was created with ba
 
 ## Coverage PR checks
 
-At the time of this report, PR #218 had been created and its checks were still pending; the final check names/results must be refreshed with `gh pr checks 218` before merge.
+`gh pr checks 218` and the PR status rollup report **no checks** for `phase1-coverage-on-1b` (`checks: []`), so there is no check name or result to report for #218. This is distinct from #211 and #215, whose reported checks were `verify`, `Go vulnerability scan`, `CodeQL (Go)`, and `CodeQL`, all successful at audit time. PR #214 reported `verify` successful; #212 reported the same four successful checks.
