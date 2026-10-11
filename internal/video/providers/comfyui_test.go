@@ -294,7 +294,6 @@ func TestComfyUIRejectsCrossOriginRedirects(t *testing.T) {
 	}
 }
 
-
 func TestComfyUIRejectsUnsupportedRequestFieldsInsteadOfIgnoringThem(t *testing.T) {
 	cfg := comfyTestConfig(comfyWorkflowFile(t), "http://127.0.0.1:8188")
 	cfg.ComfyUINegativeNodeID = ""
