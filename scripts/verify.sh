@@ -8,7 +8,6 @@ echo '== shell syntax =='
 bash -n scripts/*.sh
 echo '== formatting =='
 if out=$(gofmt -l .) && [[ -n "$out" ]]; then
-  gofmt -d internal/video/orchestrator/episode.go >&2
   echo 'gofmt check failed for:' >&2
   echo "$out" >&2
   exit 1
