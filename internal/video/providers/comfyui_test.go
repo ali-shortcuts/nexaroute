@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/ali-shortcuts/nexaroute/internal/video"
@@ -261,5 +262,35 @@ func TestComfyUIOutputLimitAndCapabilities(t *testing.T) {
 	}
 	if err := provider.RegisterWebhook(context.Background(), video.WebhookRegistration{}); err == nil {
 		t.Fatal("unsupported webhook registration accepted")
+	}
+}
+
+
+func TestComfyUIRejectsCrossOriginRedirects(t *testing.T) {
+	var targetHit atomic.Bool
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		targetHit.Store(true)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"prompt_id":"should-not-be-sent"}`))
+	}))
+	defer target.Close()
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL+"/prompt", http.StatusTemporaryRedirect)
+	}))
+	defer source.Close()
+
+	provider, err := NewComfyUI(comfyTestConfig(comfyWorkflowFile(t), source.URL), 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = provider.CreateJob(context.Background(), video.VideoRequest{
+		ProjectID: "p", Prompt: "private prompt", Mode: video.ModeTextToVideo,
+		DurationSeconds: 1, AspectRatio: video.Aspect16x9,
+	})
+	if err == nil {
+		t.Fatal("cross-origin redirect unexpectedly accepted")
+	}
+	if targetHit.Load() {
+		t.Fatal("ComfyUI prompt was forwarded to a different origin")
 	}
 }
