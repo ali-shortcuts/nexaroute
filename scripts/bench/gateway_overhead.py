@@ -15,6 +15,7 @@ import resource
 import socket
 import subprocess
 import shutil
+import sys
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -251,6 +252,17 @@ def stop_process(process: subprocess.Popen[str] | None) -> None:
         process.wait()
 
 
+def print_log_tail(log_path: Path, limit: int = 80) -> None:
+    try:
+        lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError as error:
+        print(f"could not read diagnostic log {log_path}: {error}", file=sys.stderr)
+        return
+    print(f"--- last {limit} lines of {log_path} ---", file=sys.stderr)
+    for line in lines[-limit:]:
+        print(line, file=sys.stderr)
+
+
 def profiling_status() -> dict[str, object]:
     perf = shutil.which("perf")
     if not perf:
@@ -265,6 +277,9 @@ def main() -> None:
     args = parser.parse_args()
     if args.requests < 1000:
         raise SystemExit("--requests must be at least 1000")
+    output_dir = args.output.parent if args.output else Path.cwd()
+    logs_dir = output_dir / (f"{args.output.stem}-logs" if args.output else "benchmark-logs")
+    logs_dir.mkdir(parents=True, exist_ok=True)
     go = os.environ.get("NEXAROUTE_GO", "/usr/local/go/bin/go")
     result: dict[str, object] = {
         "method": {
@@ -289,7 +304,8 @@ def main() -> None:
         directory = Path(tmp)
         mock_port = free_port()
         mock_binary = build_mock(go, directory)
-        mock_log = open(directory / "mock.log", "w", encoding="utf-8")
+        mock_log_path = logs_dir / "mock-upstream.log"
+        mock_log = open(mock_log_path, "w", encoding="utf-8")
         mock = subprocess.Popen([str(mock_binary), str(mock_port)], stdout=mock_log, stderr=subprocess.STDOUT)
         try:
             upstream_url = f"http://127.0.0.1:{mock_port}/v1"
@@ -305,7 +321,8 @@ def main() -> None:
                     gateway_port = free_port()
                     config_path = directory / f"{config_name}-{provider_cap}.json"
                     gateway_config(config_path, f"127.0.0.1:{gateway_port}", upstream_url, config_name, provider_cap)
-                    gateway_log = open(directory / f"gateway-{config_name}-{provider_cap}.log", "w", encoding="utf-8")
+                    gateway_log_path = logs_dir / f"gateway-{config_name}-{provider_cap}.log"
+                    gateway_log = open(gateway_log_path, "w", encoding="utf-8")
                     proc = subprocess.Popen([go, "run", "./cmd/gateway", "-no-browser", "-config", str(config_path)], cwd=Path(__file__).parents[2], stdout=gateway_log, stderr=subprocess.STDOUT)
                     try:
                         gateway_url = f"http://127.0.0.1:{gateway_port}/v1/chat/completions"
@@ -322,6 +339,10 @@ def main() -> None:
                             result["streaming"][config_name] = {"gateway": gateway_stream, "ttft_overhead_ms": gateway_stream["ttft_ms"] - direct_stream["ttft_ms"]}
                         cap_result["gateway_vm_hwm_kb"] = process_hwm_kb(proc.pid)
                         config_runs[str(provider_cap)] = cap_result
+                    except Exception:
+                        print(f"gateway benchmark failed; diagnostic log retained at {gateway_log_path}", file=sys.stderr)
+                        print_log_tail(gateway_log_path)
+                        raise
                     finally:
                         stop_process(proc)
                         gateway_log.close()
