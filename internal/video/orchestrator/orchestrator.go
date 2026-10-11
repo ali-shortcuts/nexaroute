@@ -169,7 +169,7 @@ func validateProviderRequest(r video.VideoRequest, caps video.Capabilities) (vid
 		return r, errors.New("provider has no verified maximum duration; refusing to assume support")
 	}
 	if r.DurationSeconds > caps.MaxDurationSeconds {
-		return r, fmt.Errorf("requested duration %.2fs exceeds provider maximum %.2fs; split into supported clips only after multi-shot orchestration is implemented", r.DurationSeconds, caps.MaxDurationSeconds)
+		return r, fmt.Errorf("requested clip duration %.2fs exceeds provider maximum %.2fs", r.DurationSeconds, caps.MaxDurationSeconds)
 	}
 	if r.ModelPreference == "" {
 		if len(caps.Models) == 0 {
