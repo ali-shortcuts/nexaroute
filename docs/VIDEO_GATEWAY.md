@@ -6,7 +6,7 @@ The repository now contains an isolated `internal/video` domain and provider con
 - bounded in-memory queue and job store with idempotency lookup;
 - durable JSON job store with atomic replacement and restart recovery;
 - explicit state-transition validation, persisted request manifests, and webhook deduplication;
-- orchestrator skeleton with provider submission, bounded polling, cancellation, and budget gate;
+- orchestrator with per-shot provider submission, durable checkpoints, bounded polling, cancellation, aggregate cost admission, and final episode composition;
 - secure local filesystem asset sink with atomic writes, SHA-256 metadata, and traversal protection;
 - deterministic FFmpeg normalize/concat helpers with command manifest;
 - standalone HTTP handler for create/get/cancel/provider listing;
