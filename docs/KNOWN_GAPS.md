@@ -122,15 +122,15 @@ workflow; its HTTP contract is covered by fixtures, but actual model inference
 on a real ComfyUI installation is not part of CI. The fake provider writes a
 text placeholder, not a playable video. The asset-size cap does not yet provide
 streaming-memory protection because the current provider interface passes byte
-slices. Multi-node durable coordination, provider-specific idempotent
-submission recovery, persistent per-shot checkpoint orchestration, automatic
-handoff from generated shots into the local composer, multi-shot production of
-ten-minute videos, audio/dialogue generation, and actual-vs-estimated cost
-reconciliation for external providers remain unimplemented. The local
-`videogen compose` helper can assemble manually supplied clips with optional
-narration, music, and SRT subtitles, but is not yet a persistent gateway job or
-a Video Studio action. The current in-process ledger is not durable or
-distributed.
+slices. Multi-node durable coordination, provider-native idempotent recovery
+after an ambiguous submission, verified production workloads for ten-minute
+episodes, Gateway-side narration/dialogue generation and audio/subtitle
+composition, and actual-vs-estimated cost reconciliation for external providers
+remain unimplemented. The Gateway now persists per-shot checkpoints and
+automatically composes generated shot assets into a final silent MP4; the local
+`videogen compose` command can additionally mix existing narration/music and
+burn in SRT subtitles. The compose action is not yet exposed in Video Studio,
+and the current in-process ledger is not durable or distributed.
 
 ## State and HA
 
