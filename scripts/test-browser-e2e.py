@@ -48,18 +48,31 @@ def main() -> None:
     chromium = shutil.which("chromium") or shutil.which("google-chrome")
     if not chromium:
         raise SystemExit("SKIP: Chromium is not installed")
+    evidence_setting = os.environ.get("NEXAROUTE_BROWSER_EVIDENCE_DIR")
+    evidence_root = Path(evidence_setting) if evidence_setting else None
+    if evidence_root and not evidence_root.is_absolute():
+        evidence_root = ROOT / evidence_root
     with tempfile.TemporaryDirectory(prefix="nexaroute-browser-") as tmp:
         tmp_path = Path(tmp)
         config = json.loads((ROOT / "configs/config.example.json").read_text())
         config.update({"providers": [], "virtual_endpoints": [], "route_profiles": [], "candidate_pools": [], "fallback_chains": []})
         config["probe"]["enabled"] = False
         config["probe"]["on_start"] = False
+        test_video_token = "m2-1-local-only-test-token"
+        video_config = config.setdefault("video", {})
+        video_config.update({
+            "enabled": True,
+            "auth_token_env": "NEXAROUTE_TEST_VIDEO_TOKEN",
+            "development_fake_provider": True,
+            "store_path": str(tmp_path / "video-jobs.json"),
+        })
         port = free_port()
         config["listen"] = f"127.0.0.1:{port}"
         config_path = tmp_path / "config.json"
         config_path.write_text(json.dumps(config))
         env = os.environ.copy()
         env["PATH"] = "/usr/local/go/bin:" + env.get("PATH", "")
+        env["NEXAROUTE_TEST_VIDEO_TOKEN"] = test_video_token
         log = (tmp_path / "gateway.log").open("w")
         proc = subprocess.Popen(["go", "run", "./cmd/gateway", "-no-browser", "-config", str(config_path)], cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT, text=True)
         base = f"http://127.0.0.1:{port}"
@@ -69,6 +82,7 @@ def main() -> None:
                 browser = pw.chromium.launch(headless=True, executable_path=chromium)
                 page = browser.new_page(viewport={"width": 1440, "height": 900})
                 page.set_default_timeout(12000)
+                page.add_init_script(f"sessionStorage.setItem('nexaroute_video_token', {json.dumps(test_video_token)});")
                 
                 console_msgs = []
                 page.on("console", lambda msg: console_msgs.append((msg.type, msg.text)))
@@ -201,7 +215,7 @@ def main() -> None:
                 expect(page.locator("#content")).to_contain_text("No real activity yet")
                 
                 # --- Screenshots for evidence ---
-                evidence_dir = ROOT / "docs/browser-evidence/privacy"
+                evidence_dir = evidence_root or ROOT / "docs/browser-evidence/privacy"
                 evidence_dir.mkdir(parents=True, exist_ok=True)
                 
                 # 1440x900 dark
@@ -289,6 +303,7 @@ def main() -> None:
                 page.set_viewport_size({"width": 1440, "height": 900})
                 page.evaluate("() => { document.documentElement.dataset.theme = 'dark'; localStorage.setItem('nexaroute_theme', 'dark'); }")
                 content_tops = {}
+                title_tops = {}
                 for dest, title in titles.items():
                     page.locator(f'[data-page="{dest}"]').click()
                     page.wait_for_load_state("domcontentloaded")
@@ -305,47 +320,60 @@ def main() -> None:
                       return els.length;
                     }""", title)
                     assert count == 1, f"page {dest}: expected exactly one visible title {title!r}, got {count}"
-                    top = page.evaluate("() => { const n = document.querySelector('#notice'); if (n) n.hidden = true; window.scrollTo(0, 0); return document.querySelector('#content').getBoundingClientRect().top; }")
-                    content_tops[dest] = top
+                    metrics = page.evaluate("""() => {
+                      const n = document.querySelector('#notice'); if (n) n.hidden = true;
+                      window.scrollTo(0, 0);
+                      return {
+                        title: document.querySelector('#page-title').getBoundingClientRect().top,
+                        content: document.querySelector('#content').getBoundingClientRect().top
+                      };
+                    }""")
+                    title_tops[dest] = metrics["title"]
+                    content_tops[dest] = metrics["content"]
                 tops = list(content_tops.values())
                 assert max(tops) - min(tops) <= 2, f"inconsistent content top offset: {content_tops}"
-                # Empty-state rhythm probe: description-to-button gap must be >= 12px
+                title_offsets = list(title_tops.values())
+                assert max(title_offsets) - min(title_offsets) <= 2, f"inconsistent title top offset: {title_tops}"
+                # Check the real Video Studio empty-state CTA, not a synthetic probe.
+                page.locator('[data-page="video"]').click()
+                page.wait_for_load_state("domcontentloaded")
+                expect(page.locator(".video-empty")).to_be_visible()
+                expect(page.locator(".video-orbit")).to_contain_text("available")
                 gap = page.evaluate("""() => {
-                  const host = document.querySelector('#content');
-                  const probe = document.createElement('div');
-                  probe.className = 'empty-state';
-                  probe.innerHTML = '<p>Probe description</p><button class=\"button primary\">Probe action</button>';
-                  host.appendChild(probe);
-                  const p = probe.querySelector('p');
-                  const b = probe.querySelector('button');
+                  const empty = document.querySelector('.video-empty');
+                  const p = empty?.querySelector('p');
+                  const b = empty?.querySelector('button');
+                  if (!p || !b) return null;
                   const pr = p.getBoundingClientRect();
                   const br = b.getBoundingClientRect();
-                  const g = br.top - pr.bottom;
-                  probe.remove();
-                  return g;
+                  return br.top - pr.bottom;
                 }""")
-                assert gap >= 12, f"empty-state button touches description: gap={gap}px"
-                # Badge styles: yes=warn, no=good, unknown=neutral (dark)
+                assert gap is not None and gap >= 12, f"Video Studio empty-state button touches description: gap={gap}px"
+                # Badge labels must map to the expected semantic class, with a distinct color per state.
                 page.locator('[data-page="providers"]').click()
                 page.wait_for_load_state("domcontentloaded")
                 time.sleep(0.3)
-                assert page.locator(".provider-tile .status.warn").count() >= 1, "missing warn badge (trains=yes)"
-                assert page.locator(".provider-tile .status.good").count() >= 1, "missing good badge (trains=no)"
-                assert page.locator(".provider-tile .status.neutral").count() >= 1, "missing neutral badge (unknown)"
-                warn_color = page.evaluate("() => getComputedStyle(document.querySelector('.provider-tile .status.warn')).color")
-                neutral_color = page.evaluate("() => getComputedStyle(document.querySelector('.provider-tile .status.neutral')).color")
-                good_color = page.evaluate("() => getComputedStyle(document.querySelector('.provider-tile .status.good')).color")
-                assert warn_color != neutral_color, f"unknown badge must not reuse warning style: {warn_color}"
-                assert good_color != neutral_color, f"unknown badge must differ from safe style: {good_color}"
-                # Same badge classes in light theme
+                def assert_privacy_badges() -> dict[str, str]:
+                    expected = {"Trains on data": "warn", "Does not train": "good", "Training unknown": "neutral"}
+                    states = page.locator(".provider-tile .data-handling > .status:first-child").evaluate_all(
+                        "els => els.map(e => ({label: e.textContent.trim(), classes: [...e.classList]}))"
+                    )
+                    observed = set()
+                    for state in states:
+                        label = state["label"]
+                        observed.add(label)
+                        assert expected.get(label) in state["classes"], f"badge mapping is wrong: {state}"
+                    assert observed == set(expected), f"expected all privacy states, observed {observed}"
+                    colors = page.evaluate("""() => Object.fromEntries(
+                      ['warn', 'good', 'neutral'].map(k => [k, getComputedStyle(document.querySelector(`.data-handling > .status.${k}`)).color])
+                    )""")
+                    assert len(set(colors.values())) == 3, f"privacy badge colors must be distinct: {colors}"
+                    return colors
+                dark_colors = assert_privacy_badges()  # dark theme
+                # Same semantic mapping and distinct colors in light theme.
                 page.evaluate("() => { document.documentElement.dataset.theme = 'light'; localStorage.setItem('nexaroute_theme', 'light'); }")
                 time.sleep(0.3)
-                assert page.locator(".provider-tile .status.warn").count() >= 1
-                assert page.locator(".provider-tile .status.good").count() >= 1
-                assert page.locator(".provider-tile .status.neutral").count() >= 1
-                warn_l = page.evaluate("() => getComputedStyle(document.querySelector('.provider-tile .status.warn')).color")
-                neutral_l = page.evaluate("() => getComputedStyle(document.querySelector('.provider-tile .status.neutral')).color")
-                assert warn_l != neutral_l, "light theme: unknown badge must not reuse warning style"
+                light_colors = assert_privacy_badges()
                 page.evaluate("() => { document.documentElement.dataset.theme = 'dark'; localStorage.setItem('nexaroute_theme', 'dark'); }")
                 # Mobile 390x844: every nav destination visible/clickable, no horizontal overflow
                 page.set_viewport_size({"width": 390, "height": 844})
@@ -367,10 +395,12 @@ def main() -> None:
                     bw = page.evaluate("() => document.body.scrollWidth")
                     vw = page.evaluate("() => window.innerWidth")
                     assert bw <= vw + 1, f"horizontal overflow on {dest} at 390px: body={bw} viewport={vw}"
-                # UI FIX screenshots: 5 pages x 2 sizes x 2 themes under docs/browser-evidence/ui-fix/
-                fix_dir = ROOT / "docs/browser-evidence/ui-fix"
+                # Versioned override lets acceptance runs commit their own browser evidence.
+                # Default paths remain stable for the existing CI acceptance job.
+                fix_dir = evidence_root or ROOT / "docs/browser-evidence/ui-fix"
                 fix_dir.mkdir(parents=True, exist_ok=True)
-                for dest in ["overview", "providers", "routing", "activity", "settings"]:
+                page.evaluate("() => { const n = document.querySelector('#notice'); if (n) n.hidden = true; }")
+                for dest in ["overview", "providers", "routing", "video", "activity", "settings"]:
                     page.set_viewport_size({"width": 1440, "height": 900})
                     page.evaluate("() => { document.documentElement.dataset.theme = 'dark'; localStorage.setItem('nexaroute_theme', 'dark'); }")
                     page.locator(f'[data-page="{dest}"]').click()
@@ -427,6 +457,21 @@ def main() -> None:
                 page.set_viewport_size({"width": 390, "height": 844})
                 time.sleep(0.4)
                 page.screenshot(path=str(video_dir / "providers-390x844-dark.png"))
+
+                # Full-page provider captures keep the unknown badge visible with the other two.
+                page.set_viewport_size({"width": 1440, "height": 900})
+                page.locator('[data-page="providers"]').click()
+                page.wait_for_load_state("domcontentloaded")
+                for theme in ("dark", "light"):
+                    page.evaluate("(t) => { document.documentElement.dataset.theme = t; localStorage.setItem('nexaroute_theme', t); window.scrollTo(0, 0); }", theme)
+                    time.sleep(0.3)
+                    page.screenshot(path=str(fix_dir / f"providers-privacy-badges-fullpage-{theme}.png"), full_page=True)
+
+                print(f"M2-1 title offsets: {title_tops}")
+                print(f"M2-1 content offsets: {content_tops}")
+                print(f"M2-1 Video Studio empty-state CTA gap: {gap:.1f}px")
+                print(f"M2-1 privacy badge colors: dark={dark_colors}, light={light_colors}")
+                print(f"M2-1 screenshots: {len(list(fix_dir.glob('*.png')))} (24 viewport + 2 full-page badge proofs)")
 
                 browser.close()
         finally:
