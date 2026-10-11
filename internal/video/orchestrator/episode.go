@@ -212,6 +212,9 @@ func (o *Orchestrator) runEpisodeJob(ctx context.Context, j video.VideoJob) erro
 			addSourceAsset(&j, *shot.OutputAsset)
 			continue
 		}
+		if run.ProviderJobID == "" && strings.TrimSpace(j.ProviderJobID) != "" {
+			return o.markNeedsManualAndError(ctx, j, "parent job has an active provider ID without a matching shot checkpoint")
+		}
 		if run.State == video.StateCompleted && run.ProviderJobID == "" {
 			return o.markNeedsManualAndError(ctx, j, fmt.Sprintf("shot %q is marked complete without a persisted output asset", run.ShotID))
 		}
