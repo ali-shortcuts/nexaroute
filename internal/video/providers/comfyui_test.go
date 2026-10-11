@@ -265,7 +265,6 @@ func TestComfyUIOutputLimitAndCapabilities(t *testing.T) {
 	}
 }
 
-
 func TestComfyUIRejectsCrossOriginRedirects(t *testing.T) {
 	var targetHit atomic.Bool
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
