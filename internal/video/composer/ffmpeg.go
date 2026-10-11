@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // Preflight verifies that FFmpeg is executable and includes the H.264 encoder
@@ -16,6 +17,8 @@ func (r *Runner) Preflight(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
 	binary := strings.TrimSpace(r.Binary)
 	if binary == "" {
 		return fmt.Errorf("ffmpeg binary is required")
