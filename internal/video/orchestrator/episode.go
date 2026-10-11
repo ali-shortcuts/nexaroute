@@ -95,6 +95,7 @@ func buildShotRequest(parent video.VideoRequest, shot video.Shot, index int) vid
 	r.Prompt = shotPrompt(shot)
 	r.NegativePrompt = shot.NegativePrompt
 	r.DurationSeconds = shot.DurationSeconds
+	r.MaxCostUSD = 0 // the episode-level budget is enforced against the aggregate estimate
 	r.ShotPlan = nil
 	r.ProviderPreference = parent.ProviderPreference
 	if shot.Provider != "" {
