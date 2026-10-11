@@ -49,33 +49,33 @@ type ShotExecution struct {
 }
 
 type VideoJob struct {
-	SchemaVersion    string            `json:"schema_version"`
-	JobID            string            `json:"job_id"`
-	IdempotencyKey   string            `json:"idempotency_key,omitempty"`
-	ProjectID        string            `json:"project_id"`
-	EpisodeID        string            `json:"episode_id,omitempty"`
-	ParentJobID      string            `json:"parent_job_id,omitempty"`
-	Request          VideoRequest      `json:"request"`
-	Provider         string            `json:"provider,omitempty"`
-	Model            string            `json:"model,omitempty"`
-	ProviderJobID    string            `json:"provider_job_id,omitempty"`
-	State            JobState          `json:"state"`
-	Progress         float64           `json:"progress"`
-	CreatedAt        time.Time         `json:"created_at"`
-	SubmittedAt      *time.Time        `json:"submitted_at,omitempty"`
-	CompletedAt      *time.Time        `json:"completed_at,omitempty"`
-	LastError        string            `json:"last_error,omitempty"`
-	RetryCount       int               `json:"retry_count"`
-	CompositionRetryCount int          `json:"composition_retry_count,omitempty"`
-	CurrentShot      int               `json:"current_shot,omitempty"`
-	TotalShots       int               `json:"total_shots,omitempty"`
-	ShotExecutions   []ShotExecution   `json:"shot_executions,omitempty"`
-	OutputAssets     []Asset           `json:"output_assets,omitempty"`
-	SourceAssets     []Asset           `json:"source_assets,omitempty"`
-	EstimatedCostUSD float64           `json:"estimated_cost_usd,omitempty"`
-	ActualCostUSD    float64           `json:"actual_cost_usd,omitempty"`
-	UsageMetadata    map[string]string `json:"usage_metadata,omitempty"`
-	AuditEvents      []AuditEvent      `json:"audit_events,omitempty"`
+	SchemaVersion         string            `json:"schema_version"`
+	JobID                 string            `json:"job_id"`
+	IdempotencyKey        string            `json:"idempotency_key,omitempty"`
+	ProjectID             string            `json:"project_id"`
+	EpisodeID             string            `json:"episode_id,omitempty"`
+	ParentJobID           string            `json:"parent_job_id,omitempty"`
+	Request               VideoRequest      `json:"request"`
+	Provider              string            `json:"provider,omitempty"`
+	Model                 string            `json:"model,omitempty"`
+	ProviderJobID         string            `json:"provider_job_id,omitempty"`
+	State                 JobState          `json:"state"`
+	Progress              float64           `json:"progress"`
+	CreatedAt             time.Time         `json:"created_at"`
+	SubmittedAt           *time.Time        `json:"submitted_at,omitempty"`
+	CompletedAt           *time.Time        `json:"completed_at,omitempty"`
+	LastError             string            `json:"last_error,omitempty"`
+	RetryCount            int               `json:"retry_count"`
+	CompositionRetryCount int               `json:"composition_retry_count,omitempty"`
+	CurrentShot           int               `json:"current_shot,omitempty"`
+	TotalShots            int               `json:"total_shots,omitempty"`
+	ShotExecutions        []ShotExecution   `json:"shot_executions,omitempty"`
+	OutputAssets          []Asset           `json:"output_assets,omitempty"`
+	SourceAssets          []Asset           `json:"source_assets,omitempty"`
+	EstimatedCostUSD      float64           `json:"estimated_cost_usd,omitempty"`
+	ActualCostUSD         float64           `json:"actual_cost_usd,omitempty"`
+	UsageMetadata         map[string]string `json:"usage_metadata,omitempty"`
+	AuditEvents            []AuditEvent      `json:"audit_events,omitempty"`
 }
 
 func NewJob(id string, req VideoRequest) VideoJob {
