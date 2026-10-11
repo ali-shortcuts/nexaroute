@@ -1,15 +1,15 @@
-# NOT COMPLETE — completion checklist
+# NOT COMPLETE — completion checklist (M1-1 DONE; 49 items remain)
 
-Repository: `ali-shortcuts/nexaroute`  
-Baseline: `main` at `dcb9f9b3c0352d23f1dfa599ea58450b072406c0`  
-Source: the operator-provided FULL COMPLETION PROGRAM.  
+Repository: `ali-shortcuts/nexaroute`
+Baseline: `main` at `dcb9f9b3c0352d23f1dfa599ea58450b072406c0`
+Source: the operator-provided FULL COMPLETION PROGRAM.
 Status vocabulary: `NOT STARTED`, `IN PROGRESS`, `DONE`, `UNVERIFIED`, `UNSUPPORTED`.
 
 This is the source of truth. Rows are updated after each item reaches a clean boundary. `DONE`, `UNVERIFIED`, and `UNSUPPORTED` require evidence/technical rationale as specified by the program. No item is represented as complete merely because it is listed here.
 
 | ID | item | state | PR | evidence path | notes |
 |---|---|---|---|---|---|
-| M1-1 | Measure current total coverage, explain historical figures, reach 85% and new-package threshold | NOT STARTED | — | — | Exact required command |
+| M1-1 | Measure current total coverage, explain historical figures, reach 85% and new-package threshold | DONE | #255 | `docs/reports/M1-1_COVERAGE.md`; `docs/reports/m1-1-coverage.raw.txt`; `docs/reports/m1-1-verify.raw.txt` | 85.1% on `dcb9f9b`; verify.sh PASS |
 | M1-2 | Complete sourced competitor capability cells/counts | NOT STARTED | — | — | Official deep links only |
 | M1-3 | Repair and run benchmark harness; publish full measurements/profile | NOT STARTED | — | — | Preserve diagnostics |
 | M1-4 | Fix actionable top benchmark hotspot or record none | NOT STARTED | — | — | Depends on M1-3 |
@@ -62,6 +62,7 @@ This is the source of truth. Rows are updated after each item reaches a clean bo
 
 ## Progress notes
 
-- Bootstrap: checklist initialized from the full supplied item list before execution.
+- Bootstrap: checklist initialized from the full supplied item list before execution (draft PR #254).
+- M1-1 completed: fresh total coverage 85.1% on starting main `dcb9f9b`; historical snapshots explained; `./scripts/verify.sh` passed on PR #255 head. No coverage profile committed.
 - Execution order: M1 → M3 → M2 → M4 → M5 → M6.
 - Branches are never merged or deleted by this work; the operator performs merges.
