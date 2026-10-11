@@ -85,7 +85,12 @@ def main() -> None:
                 page.add_init_script(f"sessionStorage.setItem('nexaroute_video_token', {json.dumps(test_video_token)});")
                 
                 console_msgs = []
-                page.on("console", lambda msg: console_msgs.append((msg.type, msg.text)))
+                expected_disabled_404 = {"active": False}
+                def record_console(msg):
+                    if msg.type == "error" and expected_disabled_404["active"] and "404 (Not Found)" in msg.text:
+                        return
+                    console_msgs.append((msg.type, msg.text))
+                page.on("console", record_console)
                 
                 page.route("**/admin/api/provider-discover", lambda route: route.fulfill(status=200, content_type="application/json", body=json.dumps({"ok": True, "models": ["model-alpha", "model-beta"]})))
                 page.route("**/admin/api/provider-check", lambda route: route.fulfill(status=200, content_type="application/json", body=json.dumps({"ok": True, "status_code": 200, "latency_ms": 1})))
@@ -422,6 +427,7 @@ def main() -> None:
                 # Isolate the disabled-state assertions from the fake provider enabled for M2-1 above.
                 def disabled_video_providers(route):
                     route.fulfill(status=404, content_type="application/json", body=json.dumps({"code": "not_found", "message": "Video gateway is not enabled"}))
+                expected_disabled_404["active"] = True
                 page.route("**/v1/video/providers", disabled_video_providers)
                 page.set_viewport_size({"width": 1440, "height": 900})
                 page.evaluate("() => { document.documentElement.dataset.theme = 'dark'; localStorage.setItem('nexaroute_theme', 'dark'); }")
@@ -449,6 +455,7 @@ def main() -> None:
                 errors = [m for m in console_msgs if m[0] == "error"]
                 assert not errors, f"Console errors after video checks: {errors}"
                 page.unroute("**/v1/video/providers", disabled_video_providers)
+                expected_disabled_404["active"] = False
                 # Evidence: Providers with video disabled (dark, both sizes).
                 video_dir = ROOT / "docs/browser-evidence/video-disabled"
                 video_dir.mkdir(parents=True, exist_ok=True)
