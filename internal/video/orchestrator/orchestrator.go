@@ -50,6 +50,10 @@ func (o *Orchestrator) Create(ctx context.Context, r video.VideoRequest) (video.
 	for i := range r.ShotPlan {
 		r.ShotPlan[i].OutputAsset = nil
 	}
+	if err := o.validateNarrationIntent(r); err != nil {
+		return video.VideoJob{}, err
+	}
+	needsNarration := requestNeedsNarration(r)
 	if len(r.ShotPlan) == 1 {
 		shot := r.ShotPlan[0]
 		if strings.TrimSpace(shot.ShotID) == "" {
@@ -82,12 +86,16 @@ func (o *Orchestrator) Create(ctx context.Context, r video.VideoRequest) (video.
 		r.Prompt = shotPrompt(shot)
 		r.NegativePrompt = shot.NegativePrompt
 		r.DurationSeconds = shot.DurationSeconds
-		r.ReferenceAssets = append(r.ReferenceAssets, shot.RequiredReferences...)
 		r.AudioRequested = r.AudioRequested || len(shot.SoundRequirements) > 0
-		if shot.NarrationSegment != "" {
+		if shot.NarrationSegment != "" && strings.TrimSpace(r.NarrationText) == "" {
 			r.NarrationText = shot.NarrationSegment
 		}
-		r.ShotPlan = nil
+		if needsNarration {
+			r.ShotPlan[0] = shot
+		} else {
+			r.ReferenceAssets = append(r.ReferenceAssets, shot.RequiredReferences...)
+			r.ShotPlan = nil
+		}
 	}
 	if len(r.ShotPlan) > 1 {
 		totalDuration := 0.0
@@ -106,10 +114,14 @@ func (o *Orchestrator) Create(ctx context.Context, r video.VideoRequest) (video.
 		r.DurationSeconds = totalDuration
 	}
 	r = r.Normalized()
+	if needsNarration && len(r.ShotPlan) == 0 {
+		r.ShotPlan = []video.Shot{{ShotID: "shot-01", Prompt: r.Prompt, DurationSeconds: r.DurationSeconds}}
+	}
 	if err := r.Validate(); err != nil {
 		return video.VideoJob{}, err
 	}
-	if len(r.ShotPlan) > 1 {
+	episodeJob := len(r.ShotPlan) > 1 || requestNeedsNarration(r)
+	if episodeJob {
 		width, height := episodeDimensions(r)
 		if width%2 != 0 || height%2 != 0 {
 			return video.VideoJob{}, errors.New("multi-shot episode dimensions must be even for H.264 composition")
@@ -137,9 +149,9 @@ func (o *Orchestrator) Create(ctx context.Context, r video.VideoRequest) (video.
 		return video.VideoJob{}, fmt.Errorf("read provider capabilities: %w", err)
 	}
 	var estimate video.CostEstimate
-	if len(r.ShotPlan) > 1 {
+	if episodeJob {
 		if !r.DryRun && (o.Composer == nil || o.Assets == nil) {
-			return video.VideoJob{}, errors.New("multi-shot video jobs require an episode composer and asset sink")
+			return video.VideoJob{}, errors.New("episode jobs require an episode composer and asset sink")
 		}
 		if !r.DryRun {
 			if preflight, ok := o.Composer.(interface{ Preflight(context.Context) error }); ok {
