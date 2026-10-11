@@ -1,0 +1,28 @@
+File: nexaroute-gateway
+Build ID: fb44e7b71af129dcf890b32e5c5d903784b95853
+Type: cpu
+Time: 2026-10-11 04:27:54 UTC
+Duration: 664.14ms, Total samples = 770ms (115.94%)
+Showing nodes accounting for 400ms, 51.95% of 770ms total
+Showing top 20 nodes out of 285
+      flat  flat%   sum%        cum   cum%
+     150ms 19.48% 19.48%      150ms 19.48%  internal/runtime/syscall/linux.Syscall6
+      40ms  5.19% 24.68%       40ms  5.19%  runtime.futex
+      20ms  2.60% 27.27%       20ms  2.60%  aeshashbody
+      20ms  2.60% 29.87%       30ms  3.90%  encoding/json.checkValid
+      20ms  2.60% 32.47%       20ms  2.60%  runtime.nextFreeFast (inline)
+      10ms  1.30% 33.77%       40ms  5.19%  bufio.(*Reader).fill
+      10ms  1.30% 35.06%       10ms  1.30%  bufio.(*Writer).Available
+      10ms  1.30% 36.36%       10ms  1.30%  encoding/json.(*decodeState).rescanLiteral
+      10ms  1.30% 37.66%       10ms  1.30%  encoding/json.(*decodeState).skip
+      10ms  1.30% 38.96%       10ms  1.30%  encoding/json.(*scanner).eof
+      10ms  1.30% 40.26%       10ms  1.30%  fmt.(*pp).printArg
+      10ms  1.30% 41.56%       10ms  1.30%  github.com/ali-shortcuts/nexaroute/internal/httpapi.cloneConfig
+      10ms  1.30% 42.86%       10ms  1.30%  indexbytebody
+      10ms  1.30% 44.16%       10ms  1.30%  internal/chacha8rand.(*State).Refill
+      10ms  1.30% 45.45%       10ms  1.30%  internal/poll.(*fdMutex).rwlock
+      10ms  1.30% 46.75%       10ms  1.30%  internal/poll.convertErr (inline)
+      10ms  1.30% 48.05%       10ms  1.30%  internal/runtime/atomic.(*Uint32).CompareAndSwap
+      10ms  1.30% 49.35%       10ms  1.30%  memeqbody
+      10ms  1.30% 50.65%       20ms  2.60%  net.newTCPConn
+      10ms  1.30% 51.95%       10ms  1.30%  net/http.(*Request).write

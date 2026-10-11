@@ -1,0 +1,45 @@
+{
+  "listen": "127.0.0.1:38871",
+  "admin": {
+    "bind_local_only": true,
+    "api_key": ""
+  },
+  "probe": {
+    "enabled": false,
+    "on_start": false
+  },
+  "routing": {
+    "strategy": "adaptive",
+    "max_attempts": 1,
+    "max_inflight_requests": 512
+  },
+  "providers": [
+    {
+      "id": "mock",
+      "name": "benchmark mock",
+      "type": "openai_compatible",
+      "base_url": "http://127.0.0.1:41559/v1",
+      "auth_mode": "none",
+      "enabled": true,
+      "models": [
+        {
+          "id": "bench",
+          "model": "bench",
+          "aliases": [
+            "bench"
+          ],
+          "enabled": true,
+          "priority": 1,
+          "weight": 1,
+          "capabilities": {
+            "streaming": true,
+            "tools": false,
+            "vision": false,
+            "reasoning": false
+          }
+        }
+      ],
+      "max_concurrency": 32
+    }
+  ]
+}

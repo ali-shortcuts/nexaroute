@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	runtimepprof "runtime/pprof"
 	"strings"
 	"syscall"
 	"time"
@@ -62,6 +63,7 @@ func main() {
 	configPath := flags.String("config", defaultConfigPath(), "path to JSON config")
 	noBrowser := flags.Bool("no-browser", false, "do not automatically open the Web UI")
 	showVersion := flags.Bool("version", false, "print version and exit")
+	cpuProfile := flags.String("cpuprofile", "", "write a Go CPU profile to this file (opt-in)")
 	_ = flags.Parse(os.Args[1:])
 	if *showVersion {
 		fmt.Println("NexaRoute v" + version)
@@ -240,6 +242,20 @@ func main() {
 		logger.Printf("startup_probe total=%d ready=%d failed=%d cooldown=%d duration_ms=%d", result.Total, result.Passed, result.Failed, result.SkippedCooldown, result.DurationMS)
 	}
 	pe.Start(ctx)
+	if profilePath := strings.TrimSpace(*cpuProfile); profilePath != "" {
+		profileFile, profileErr := os.Create(profilePath)
+		if profileErr != nil {
+			bootstrap.Fatalf("cannot create CPU profile: %v", profileErr)
+		}
+		if profileErr = runtimepprof.StartCPUProfile(profileFile); profileErr != nil {
+			_ = profileFile.Close()
+			bootstrap.Fatalf("cannot start CPU profile: %v", profileErr)
+		}
+		defer func() {
+			runtimepprof.StopCPUProfile()
+			_ = profileFile.Close()
+		}()
+	}
 	<-ctx.Done()
 	drain := cfg.RequestTimeout()
 	for _, p := range cfg.Providers {

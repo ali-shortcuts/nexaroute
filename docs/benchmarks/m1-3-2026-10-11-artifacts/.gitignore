@@ -1,0 +1,6 @@
+/mock-upstream
+/nexaroute-gateway
+/nexaroute.log
+/security/
+*.lock
+/build-*.log

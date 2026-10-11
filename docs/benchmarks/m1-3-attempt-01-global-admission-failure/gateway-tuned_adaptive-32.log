@@ -1,0 +1,34 @@
+nexaroute: config warning: admin.emergency_access_enabled: not explicitly configured; emergency access disabled
+nexaroute 2026/10/11 04:23:01.106561 bounded_log_file=/home/ubuntu/nexaroute/docs/benchmarks/m1-3-2026-10-11-artifacts/nexaroute.log max_mb=32 backups=3
+NexaRoute UI: http://127.0.0.1:58725/
+Config: /home/ubuntu/nexaroute/docs/benchmarks/m1-3-2026-10-11-artifacts/config-tuned_adaptive-32.json
+Press Ctrl+C to stop.
+nexaroute 2026/10/11 04:23:01.108802 version=dev config=/home/ubuntu/nexaroute/docs/benchmarks/m1-3-2026-10-11-artifacts/config-tuned_adaptive-32.json listening=http://127.0.0.1:58725
+nexaroute 2026/10/11 04:23:01.220231 event=model_healthy deployment=mock/bench request_id=nexaroute-18dd5ee8e95a4267-3 msg="deployment healthy"
+nexaroute 2026/10/11 04:23:17.594043 request_id=nexaroute-18dd5eecb953b4f1-3e8 trace_id=e7d91c82a72aa4c8db478b0539f65ac6 span_id=ad6ec25181893750 method=POST path=/v1/chat/completions status=200 duration=16.152586ms
+nexaroute 2026/10/11 04:23:18.759750 request_id=nexaroute-18dd5eecfec09346-7d0 trace_id=becd77c9b8e72e103260c7172b39924f span_id=0f12b19702acc33a method=POST path=/v1/chat/completions status=200 duration=17.097325ms
+nexaroute 2026/10/11 04:23:19.309129 request_id=nexaroute-18dd5eed1eb9dfe4-bb8 trace_id=817020db7522ffa4c568a8cd69f1875c span_id=ca25cd6ecb22c0fa method=POST path=/v1/chat/completions status=200 duration=30.044562ms
+nexaroute 2026/10/11 04:23:19.492475 request_id=nexaroute-18dd5eed2b71a29a-d7d trace_id=7d94ab409fea7d4f666e6cbdeebf8dec span_id=36d16fe5f09ecd50 method=POST path=/v1/chat/completions status=503 duration=21.876µs
+nexaroute 2026/10/11 04:23:19.492551 request_id=nexaroute-18dd5eed2b72fc49-d7e trace_id=1b06054e964d9a83d3da49f5bb4312eb span_id=56558623c97e4e4a method=POST path=/v1/chat/completions status=503 duration=9.566µs
+nexaroute 2026/10/11 04:23:19.492698 request_id=nexaroute-18dd5eed2b75015d-d7f trace_id=ee173ea456ef04b93f4397f1986f8d4c span_id=5c219deed9903bbb method=POST path=/v1/chat/completions status=503 duration=23.69µs
+nexaroute 2026/10/11 04:23:19.493644 request_id=nexaroute-18dd5eed2b839962-d80 trace_id=254471a83e8da4951d04b071f81ab14c span_id=279e0502d12f23eb method=POST path=/v1/chat/completions status=503 duration=13.931µs
+nexaroute 2026/10/11 04:23:19.494426 request_id=nexaroute-18dd5eed2b8f76f2-d81 trace_id=4da401679f148d0c7c1251275a94528c span_id=99c1a02035245a12 method=POST path=/v1/chat/completions status=503 duration=17.066µs
+nexaroute 2026/10/11 04:23:19.494598 request_id=nexaroute-18dd5eed2b92387f-d82 trace_id=dbea026ba64247eeb4d5e109fd0e4e10 span_id=43736f8f8dea2650 method=POST path=/v1/chat/completions status=503 duration=9.925µs
+nexaroute 2026/10/11 04:23:19.494633 request_id=nexaroute-18dd5eed2b92a9c1-d83 trace_id=1df07b5c7508f33312e75d7d63a4dbaf span_id=8fdadc0b6a9cc727 method=POST path=/v1/chat/completions status=503 duration=15.789µs
+nexaroute 2026/10/11 04:23:19.495513 request_id=nexaroute-18dd5eed2ba00fc3-d84 trace_id=625201e38fd6037558e3b30aa5f69806 span_id=e98ce507d6b71191 method=POST path=/v1/chat/completions status=503 duration=17.484µs
+nexaroute 2026/10/11 04:23:19.495908 request_id=nexaroute-18dd5eed2ba6187b-d85 trace_id=b7fc0b8e8d22b6b0f065a9d802de85e0 span_id=c7006e0a123f8a34 method=POST path=/v1/chat/completions status=503 duration=17.572µs
+nexaroute 2026/10/11 04:23:19.496137 request_id=nexaroute-18dd5eed2ba9b561-d86 trace_id=830d7d4cd00f711913136845710cf660 span_id=d09529a166716960 method=POST path=/v1/chat/completions status=503 duration=9.777µs
+nexaroute 2026/10/11 04:23:19.504564 request_id=nexaroute-18dd5eed2c29f742-da4 trace_id=7918ad650099b4a7f3fa767a5e61c2f7 span_id=b9079b99b5fcd2e9 method=POST path=/v1/chat/completions status=503 duration=30.102µs
+nexaroute 2026/10/11 04:23:19.504786 request_id=nexaroute-18dd5eed2c2d8a21-da5 trace_id=6c61985203ad1e7142210b60d3857775 span_id=19862efcfc564fd5 method=POST path=/v1/chat/completions status=503 duration=18.67µs
+nexaroute 2026/10/11 04:23:19.505112 request_id=nexaroute-18dd5eed2c326ec3-da6 trace_id=05d59f2a195c0ad03c1c046a5672e17f span_id=b9c38c441705d0b2 method=POST path=/v1/chat/completions status=503 duration=24.12µs
+nexaroute 2026/10/11 04:23:19.505329 request_id=nexaroute-18dd5eed2c35d59d-da7 trace_id=fdb48e989bf718e825d134fba8358d7d span_id=a47c3559fb653b47 method=POST path=/v1/chat/completions status=503 duration=17.853µs
+nexaroute 2026/10/11 04:23:19.507330 request_id=nexaroute-18dd5eed2c545999-daa trace_id=f4159a1b44e49036d9c41028dd4c3c1d span_id=e5700c7451dcafb5 method=POST path=/v1/chat/completions status=503 duration=19.73µs
+nexaroute 2026/10/11 04:23:19.507744 request_id=nexaroute-18dd5eed2c5ab136-dab trace_id=e98af0ef2ee0649af7165ba8dfa7f688 span_id=3d205f2e7763b8e1 method=POST path=/v1/chat/completions status=503 duration=17.295µs
+nexaroute 2026/10/11 04:23:19.508157 request_id=nexaroute-18dd5eed2c610018-dad trace_id=b5e2d8317415c69a0e625be91cfd56cc span_id=1a2bb644f730a285 method=POST path=/v1/chat/completions status=503 duration=17.016µs
+nexaroute 2026/10/11 04:23:19.509021 request_id=nexaroute-18dd5eed2c6e2340-dae trace_id=6559a03f9da27d2127e6b87b96937790 span_id=186a8cff2f5f3d6c method=POST path=/v1/chat/completions status=503 duration=19.813µs
+nexaroute 2026/10/11 04:23:19.509318 request_id=nexaroute-18dd5eed2c72b4fe-daf trace_id=338f5bade831db0806a648f8e68f701f span_id=b3f8eacab8fb914c method=POST path=/v1/chat/completions status=503 duration=17.615µs
+nexaroute 2026/10/11 04:23:19.510530 request_id=nexaroute-18dd5eed2c85361d-db0 trace_id=b09e43a76bad39e56fa9162982bd2e3b span_id=51ef28e25062082d method=POST path=/v1/chat/completions status=503 duration=16.636µs
+nexaroute 2026/10/11 04:23:19.510864 request_id=nexaroute-18dd5eed2c8a4cbf-db1 trace_id=afe44ce4a48c1f02505aa72045d3caa3 span_id=dd45beb668b6346e method=POST path=/v1/chat/completions status=503 duration=17.687µs
+nexaroute 2026/10/11 04:23:19.511162 request_id=nexaroute-18dd5eed2c8ec370-db2 trace_id=3d27307bc78f24e930be195bedcc23b7 span_id=a0f410a86746a309 method=POST path=/v1/chat/completions status=503 duration=22.964µs
+nexaroute 2026/10/11 04:23:19.511404 request_id=nexaroute-18dd5eed2c9270be-db3 trace_id=eeb3a2a4c1978baea0c53aabd0779713 span_id=8be6a094c997b8ab method=POST path=/v1/chat/completions status=503 duration=23.688µs
+nexaroute 2026/10/11 04:23:19.511813 request_id=nexaroute-18dd5eed2c98cb9d-db4 trace_id=8997252f95edde6e5eb94b3497e628c4 span_id=9bf5de2d873f3027 method=POST path=/v1/chat/completions status=503 duration=16.979µs
