@@ -1305,7 +1305,7 @@ func (c Config) Validate() error {
 			}
 			for key, value := range map[string]string{
 				"comfyui_prompt_node_id": c.Video.ComfyUIPromptNodeID,
-				"comfyui_width_node_id": c.Video.ComfyUIWidthNodeID,
+				"comfyui_width_node_id":  c.Video.ComfyUIWidthNodeID,
 				"comfyui_height_node_id": c.Video.ComfyUIHeightNodeID,
 				"comfyui_frames_node_id": c.Video.ComfyUIFramesNodeID,
 			} {
