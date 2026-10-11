@@ -1,4 +1,4 @@
-# NOT COMPLETE — completion checklist (M1-1 through M1-5 DONE; 45 items remain)
+# NOT COMPLETE — completion checklist (M1-1 through M1-6 DONE; 44 items remain)
 
 Repository: `ali-shortcuts/nexaroute`
 Baseline: `main` at `dcb9f9b3c0352d23f1dfa599ea58450b072406c0`
@@ -14,7 +14,7 @@ This is the source of truth. Rows are updated after each item reaches a clean bo
 | M1-3 | Repair and run benchmark harness; publish full measurements/profile | DONE | #257 | `docs/benchmarks/m1-3-2026-10-11/M1-3_BENCHMARK_REPORT.md`; `benchmark.json`; `verify.stdout.txt` | 16 × 1,000 gateway runs; orphan child/security-store lock fixed; pprof 404: cause not determined; verify.sh PASS |
 | M1-4 | Fix actionable top benchmark hotspot or record none | DONE | #258 | `docs/reports/M1-4_HOTSPOT_DECISION.md`; `docs/reports/m1-4-verify.raw.txt` | None actionable; pprof unavailable; verify.sh PASS |
 | M1-5 | Default-config concurrency integration test (>32 upstream in-flight) | DONE | #259 | `docs/reports/M1-5_DEFAULT_CONCURRENCY.md`; `docs/reports/m1-5-target-race.raw.txt`; `docs/reports/m1-5-verify.raw.txt` | 64 requests; peak 47 under race; verify.sh PASS |
-| M1-6 | Release workflow dispatch dry-run upload/download without publish | NOT STARTED | — | — | Run or mark UNVERIFIED |
+| M1-6 | Release workflow dispatch dry-run upload/download without publish | DONE | #260 | `docs/reports/M1-6_RELEASE_DRY_RUN.md`; `docs/reports/m1-6-retry-check.raw.txt`; `docs/reports/m1-6-retry-workflow.raw.txt` | Run #38125574996 passed; artifact checksums pass; publish skipped; no tag/release |
 | M1-7 | Audit every remote branch for containment; propose, do not delete | NOT STARTED | — | — | Evidence table |
 | M1-8 | Align dependency policy with go.mod; check-deps and govulncheck instructions | NOT STARTED | — | — | — |
 | M2-1 | Verify/fix existing UI defects and dark/light badge states | NOT STARTED | — | — | Browser evidence |
