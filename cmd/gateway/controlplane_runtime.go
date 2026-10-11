@@ -67,15 +67,13 @@ func openControlPlaneRuntime(cfg config.ControlPlaneConfig, configPath string) (
 	if err != nil {
 		return nil, err
 	}
-	current, err := manager.Load(context.Background(), controlPlaneNamespace)
+	_, err = manager.Load(context.Background(), controlPlaneNamespace)
 	if errors.Is(err, controlplane.ErrNotFound) {
 		if _, err = manager.Save(context.Background(), controlPlaneNamespace, 0, payload); err != nil {
 			return nil, fmt.Errorf("initialize control-plane snapshot: %w", err)
 		}
 	} else if err != nil {
 		return nil, fmt.Errorf("load control-plane snapshot: %w", err)
-	} else if _, err = manager.Save(context.Background(), controlPlaneNamespace, current.Revision, payload); err != nil {
-		return nil, fmt.Errorf("reconcile control-plane snapshot: %w", err)
 	}
 	return &controlPlaneRuntime{manager: manager}, nil
 }

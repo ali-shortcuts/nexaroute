@@ -26,14 +26,15 @@
 - [x] No-native-dialog and stale-legacy-architecture audit.
 - [x] Installer, race, fuzz and cross-architecture gates from the previous completion pass.
 - [x] Updated dashboard screenshot evidence.
-- [ ] Docker image build; blocked because Docker CLI/daemon is unavailable in the sandbox.
+- [ ] Docker image build; **BLOCKED** because Docker CLI/daemon is unavailable in the sandbox.
 - [ ] Human visual acceptance with a configured real provider.
-- [ ] Merge/release review; no merge or release performed.
+- [x] Release rehearsal; `workflow_dispatch` verification is run without publishing.
 
 ## Live Visual Agent continuation
 
 - [x] Complete current-state audit and event matrix.
 - [x] Add bounded shared frontend execution tracker and Overview renderer.
 - [x] Add LVA sub-spec and acceptance mapping.
-- [ ] Add deterministic real-request/failover browser evidence.
-- [ ] Complete performance evidence, epoch/cursor reconciliation, and human visual acceptance.
+- [x] Add deterministic real-request/failover browser evidence.
+- [x] Complete performance evidence and epoch/cursor reconciliation evidence.
+- [ ] Human visual acceptance with a configured real provider; **NOT VERIFIED**.
