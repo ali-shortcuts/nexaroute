@@ -124,7 +124,7 @@ func (o *Orchestrator) Create(ctx context.Context, r video.VideoRequest) (video.
 	if episodeJob {
 		width, height := episodeDimensions(r)
 		if width%2 != 0 || height%2 != 0 {
-			return video.VideoJob{}, errors.New("multi-shot episode dimensions must be even for H.264 composition")
+			return video.VideoJob{}, errors.New("episode composition dimensions must be even for H.264")
 		}
 	}
 	if o.Store == nil || o.Queue == nil || o.Providers == nil {
@@ -793,3 +793,76 @@ func (o *Orchestrator) Cancel(ctx context.Context, id string) error {
 	}
 	return nil
 }
+
+func requestNeedsNarration(r video.VideoRequest) bool {
+	if strings.TrimSpace(r.NarrationText) != "" || r.AudioRequested || r.DialogueRequested || strings.TrimSpace(r.SubtitleLanguage) != "" || len(r.SoundRequirements) > 0 {
+		return true
+	}
+	for _, shot := range r.ShotPlan {
+		if strings.TrimSpace(shot.NarrationSegment) != "" || len(shot.SoundRequirements) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func (o *Orchestrator) validateNarrationIntent(r video.VideoRequest) error {
+	parentText := strings.TrimSpace(r.NarrationText)
+	hasSegments := false
+	for _, shot := range r.ShotPlan {
+		if strings.TrimSpace(shot.NarrationSegment) != "" {
+			hasSegments = true
+		}
+		if len(shot.SoundRequirements) > 0 {
+			return errors.New("per-shot sound_requirements are not supported yet; use narration_segment with local Piper")
+		}
+	}
+	if len(r.SoundRequirements) > 0 {
+		return errors.New("sound_requirements are not supported yet; ambient audio generation is not configured")
+	}
+	if parentText != "" && hasSegments {
+		return errors.New("provide narration_text or per-shot narration_segment values, not both")
+	}
+	if r.DialogueRequested {
+		return errors.New("dialogue generation is not supported yet")
+	}
+	hasText := parentText != "" || hasSegments
+	if r.AudioRequested && !hasText {
+		return errors.New("audio_requested requires narration_text or at least one narration_segment")
+	}
+	if strings.TrimSpace(r.SubtitleLanguage) != "" && !hasText {
+		return errors.New("subtitle_language requires narration_text or at least one narration_segment")
+	}
+	if hasText && (o == nil || o.Narrator == nil) {
+		return errors.New("narration requested but local Piper is not enabled; configure video.piper_enabled and video.piper_model_path")
+	}
+	return nil
+}
+
+func visualOnlyRequest(r video.VideoRequest) video.VideoRequest {
+	r.NarrationText = ""
+	r.AudioRequested = false
+	r.DialogueRequested = false
+	r.SubtitleLanguage = ""
+	r.SoundRequirements = nil
+	for i := range r.ShotPlan {
+		r.ShotPlan[i].NarrationSegment = ""
+		r.ShotPlan[i].SoundRequirements = nil
+	}
+	return r
+}
+
+func episodeNarrationText(r video.VideoRequest) string {
+	parent := strings.TrimSpace(r.NarrationText)
+	if parent != "" {
+		return parent
+	}
+	segments := make([]string, 0, len(r.ShotPlan))
+	for _, shot := range r.ShotPlan {
+		if segment := strings.TrimSpace(shot.NarrationSegment); segment != "" {
+			segments = append(segments, segment)
+		}
+	}
+	return strings.TrimSpace(strings.Join(segments, "\n"))
+}
+
