@@ -123,10 +123,14 @@ on a real ComfyUI installation is not part of CI. The fake provider writes a
 text placeholder, not a playable video. The asset-size cap does not yet provide
 streaming-memory protection because the current provider interface passes byte
 slices. Multi-node durable coordination, provider-specific idempotent
-submission recovery, multi-shot production of ten-minute videos, audio/dialogue
-composition, subtitle burn-in, and actual-vs-estimated cost reconciliation for
-every provider remain unimplemented. The current in-process ledger is not
-durable or distributed.
+submission recovery, persistent per-shot checkpoint orchestration, automatic
+handoff from generated shots into the local composer, multi-shot production of
+ten-minute videos, audio/dialogue generation, and actual-vs-estimated cost
+reconciliation for external providers remain unimplemented. The local
+`videogen compose` helper can assemble manually supplied clips with optional
+narration, music, and SRT subtitles, but is not yet a persistent gateway job or
+a Video Studio action. The current in-process ledger is not durable or
+distributed.
 
 ## State and HA
 
