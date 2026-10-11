@@ -15,7 +15,15 @@ The current direct dependency set is intentionally small and pinned in `go.mod`;
 | [`go.etcd.io/bbolt`](https://github.com/etcd-io/bbolt) | `v1.4.3` | Embedded, transactional local persistence for OIDC sessions and security audit records. | The store is single-host and must not be represented as distributed; preserve permission, atomicity, restart and fail-closed tests. |
 | [`golang.org/x/oauth2`](https://pkg.go.dev/golang.org/x/oauth2) | `v0.30.0` | OIDC Authorization Code exchange and PKCE S256 flow support. | Preserve state, nonce, browser binding, verifier and token-exchange protections; do not log authorization codes, tokens or secrets. |
 
-These entries describe the direct module requirements, not the full transitive graph. Transitive modules must also be reviewed and verified.
+These are the four direct module requirements in `go.mod`; they are not the full transitive graph. The module also has one explicit indirect requirement:
+
+## Explicit indirect requirement
+
+| Module | Current version | Purpose | Review boundary |
+|---|---:|---|---|
+| [`golang.org/x/sys`](https://pkg.go.dev/golang.org/x/sys) | `v0.31.0` | Explicit indirect requirement used by bbolt for Unix system calls (`go mod why -m golang.org/x/sys`: `internal/securitystore` → `go.etcd.io/bbolt` → `golang.org/x/sys/unix`). | Keep marked indirect unless application code imports it directly; review changes with the bbolt/module graph and platform-specific persistence tests. |
+
+Transitive modules must also be reviewed and verified.
 
 ## Dependency change and audit procedure
 
@@ -28,3 +36,15 @@ For every dependency addition, removal, replacement or version change:
 5. Record material rationale and security decisions in the PR. Upgrade promptly when a reachable vulnerability is fixed; do not suppress a finding without documenting reachability analysis and an approved mitigation.
 
 `./scripts/check-deps.sh` verifies the selected Go toolchain and module graph, checks downloaded module checksums, and runs `govulncheck` when available. It prints a warning when the optional local scanner is absent. CI remains authoritative for the configured vulnerability scan.
+
+## Run `govulncheck` locally
+
+From the repository root, install the scanner into the Go workspace, add the Go binary directory to `PATH`, then scan all packages:
+
+```sh
+go install golang.org/x/vuln/cmd/govulncheck@latest
+export PATH="$(go env GOPATH)/bin:$PATH"
+govulncheck ./...
+```
+
+Installing with the `@version` suffix does not add the scanner to this repository's `go.mod`. A compatible Go toolchain and network access are required; if the newest scanner release requires a newer toolchain, use the CI Go version (`1.27.x`) or pin a scanner release compatible with the local Go version. Once installed, `./scripts/check-deps.sh` runs `govulncheck ./...` as part of the dependency gate.
