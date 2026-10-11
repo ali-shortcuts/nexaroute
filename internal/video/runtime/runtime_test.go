@@ -110,7 +110,6 @@ func TestRuntimeFakeProviderEndToEndAuthenticatedAndPersistsArtifact(t *testing.
 	t.Fatal("fake video job did not complete and persist its placeholder artifact")
 }
 
-
 func TestRuntimeComfyUIProviderEndToEndPersistsPlayableVideoAsset(t *testing.T) {
 	const tokenEnv = "NEXAROUTE_TEST_COMFYUI_TOKEN"
 	const token = "test-comfyui-token"
