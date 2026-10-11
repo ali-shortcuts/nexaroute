@@ -282,3 +282,28 @@ func TestSingleShotPollingAcceptsProviderQueuedState(t *testing.T) {
 		t.Fatalf("state=%s status calls=%d, want completed after queued then completed", got.State, provider.statusCalls)
 	}
 }
+
+
+type failingPreflightComposer struct{ *episodeTestComposer }
+
+func (c *failingPreflightComposer) Preflight(context.Context) error {
+	return errors.New("ffmpeg executable missing")
+}
+
+func TestMultiShotAdmissionFailsBeforeProviderEstimateWhenComposerUnavailable(t *testing.T) {
+	provider := &episodeTestProvider{fakeProvider: providerWithDefaults()}
+	store := queue.NewMemoryStore()
+	q := queue.New(10)
+	comp := &failingPreflightComposer{episodeTestComposer: &episodeTestComposer{}}
+	orch := newEpisodeOrchestrator(t, store, q, provider, &episodeTestSink{root: t.TempDir()}, comp)
+	if _, err := orch.Create(context.Background(), episodeRequest()); err == nil || !strings.Contains(err.Error(), "preflight failed") {
+		t.Fatalf("Create error=%v, want composer preflight failure", err)
+	}
+	jobs, err := store.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(jobs) != 0 || q.Len() != 0 || provider.nextID != 0 {
+		t.Fatalf("failed preflight admitted work: stored=%d queued=%d provider submissions=%d", len(jobs), q.Len(), provider.nextID)
+	}
+}
