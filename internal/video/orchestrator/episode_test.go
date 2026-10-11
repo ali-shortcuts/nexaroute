@@ -262,7 +262,6 @@ func TestRecoveryQuarantinesAmbiguousShotSubmission(t *testing.T) {
 	}
 }
 
-
 func TestSingleShotPollingAcceptsProviderQueuedState(t *testing.T) {
 	provider := providerWithDefaults()
 	provider.statuses = []video.ProviderJobStatus{
@@ -290,7 +289,6 @@ func TestSingleShotPollingAcceptsProviderQueuedState(t *testing.T) {
 		t.Fatalf("state=%s status calls=%d, want completed after queued then completed", got.State, provider.statusCalls)
 	}
 }
-
 
 type failingPreflightComposer struct{ *episodeTestComposer }
 
