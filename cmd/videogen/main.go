@@ -54,30 +54,30 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	if (command == "create" || command == "compose") && strings.TrimSpace(*file) == "" {
-		fmt.Fprintf(stderr, "%s requires --file\\n", command)
+		fmt.Fprintf(stderr, "%s requires --file\n", command)
 		return 2
 	}
 	if command == "compose" {
 		data, err := os.ReadFile(*file)
 		if err != nil {
-			fmt.Fprintf(stderr, "compose: read episode manifest: %v\\n", err)
+			fmt.Fprintf(stderr, "compose: read episode manifest: %v\n", err)
 			return 1
 		}
 		var spec composer.EpisodeSpec
 		if err := json.Unmarshal(data, &spec); err != nil {
-			fmt.Fprintf(stderr, "compose: decode episode manifest: %v\\n", err)
+			fmt.Fprintf(stderr, "compose: decode episode manifest: %v\n", err)
 			return 1
 		}
 		runner := composer.New(defaultFFmpegBinary(), "")
 		result, err := runner.ComposeEpisode(context.Background(), spec)
 		if err != nil {
-			fmt.Fprintf(stderr, "compose: %v\\n", err)
+			fmt.Fprintf(stderr, "compose: %v\n", err)
 			return 1
 		}
 		enc := json.NewEncoder(stdout)
 		enc.SetIndent("", "  ")
 		if err := enc.Encode(result); err != nil {
-			fmt.Fprintf(stderr, "encode compose result: %v\\n", err)
+			fmt.Fprintf(stderr, "encode compose result: %v\n", err)
 			return 1
 		}
 		return 0
