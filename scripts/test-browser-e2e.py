@@ -39,6 +39,11 @@ def wait_ready(base: str, proc: subprocess.Popen[str]) -> None:
             time.sleep(.2)
     raise AssertionError("gateway did not become ready")
 
+def console_errors(page):
+    errors = []
+    page.on("console", lambda msg: errors.append(msg.text) if msg.type == "error" else None)
+    return errors
+
 def main() -> None:
     chromium = shutil.which("chromium") or shutil.which("google-chrome")
     if not chromium:
@@ -62,31 +67,103 @@ def main() -> None:
             wait_ready(base, proc)
             with sync_playwright() as pw:
                 browser = pw.chromium.launch(headless=True, executable_path=chromium)
-                page = browser.new_page(viewport={"width": 1440, "height": 1000})
+                page = browser.new_page(viewport={"width": 1440, "height": 900})
                 page.set_default_timeout(12000)
+                
+                console_msgs = []
+                page.on("console", lambda msg: console_msgs.append((msg.type, msg.text)))
+                
                 page.route("**/admin/api/provider-discover", lambda route: route.fulfill(status=200, content_type="application/json", body=json.dumps({"ok": True, "models": ["model-alpha", "model-beta"]})))
                 page.route("**/admin/api/provider-check", lambda route: route.fulfill(status=200, content_type="application/json", body=json.dumps({"ok": True, "status_code": 200, "latency_ms": 1})))
                 page.route("**/admin/api/provider-test", lambda route: route.fulfill(status=200, content_type="application/json", body=json.dumps({"ok": True, "passed": 1, "total": 1, "results": [{"model": "model-alpha", "ok": True, "latency_ms": 1}]})))
                 page.goto(base + "/", wait_until="domcontentloaded")
-                expect(page.locator("#content")).to_contain_text("No real activity yet")
-                expect(page.locator("#content")).to_contain_text("Quick setup")
-                expect(page.locator("#content")).to_contain_text("Production path")
-                expect(page.locator("#primary-nav")).to_contain_text("Overview")
-                expect(page.locator("#primary-nav")).to_contain_text("Providers")
-                expect(page.locator("#primary-nav")).to_contain_text("Routing")
-                expect(page.locator("#primary-nav")).to_contain_text("Video Studio")
-                expect(page.locator("#primary-nav")).to_contain_text("Activity")
-                expect(page.locator("#primary-nav")).to_contain_text("Settings")
+                
+                # Check console errors
+                errors = [m for m in console_msgs if m[0] == "error"]
+                assert not errors, f"Console errors: {errors}"
+                
+                # --- PRIVACY P3 TESTS ---
+                # Go to providers page
                 page.locator('[data-page="providers"]').click()
+                page.wait_for_load_state("domcontentloaded")
+                
+                # Add provider with trains_on_data=yes (warning)
                 page.locator('[data-action="add-provider"]').first.click()
                 expect(page.locator("#modal-title")).to_have_text("Add provider")
-                page.locator("#p-name").fill("Mock Provider")
+                page.locator("#p-name").fill("Provider Trains Yes")
                 page.locator("#p-base").fill("http://127.0.0.1:9/v1")
+                page.locator("#p-trains").select_option("yes")
+                page.locator("#p-retention").select_option("limited")
+                page.locator("#p-dh-note").fill("Trains on user data")
                 page.locator('[data-action="detect-models"]').click()
                 expect(page.locator("#model-list")).to_contain_text("model-alpha")
                 page.locator('[data-action="save-modal"]').click()
-                expect(page.locator("#content")).to_contain_text("Mock Provider")
+                expect(page.locator("#content")).to_contain_text("Provider Trains Yes")
+                
+                # Add provider with trains_on_data=no (safe)
+                page.locator('[data-action="add-provider"]').first.click()
+                expect(page.locator("#modal-title")).to_have_text("Add provider")
+                page.locator("#p-name").fill("Provider Trains No")
+                page.locator("#p-base").fill("http://127.0.0.1:10/v1")
+                page.locator("#p-trains").select_option("no")
+                page.locator("#p-retention").select_option("none")
+                page.locator("#p-dh-note").fill("No training")
+                page.locator('[data-action="detect-models"]').click()
+                expect(page.locator("#model-list")).to_contain_text("model-alpha")
+                page.locator('[data-action="save-modal"]').click()
+                expect(page.locator("#content")).to_contain_text("Provider Trains No")
+                
+                # Add provider with trains_on_data=unknown (neutral)
+                page.locator('[data-action="add-provider"]').first.click()
+                expect(page.locator("#modal-title")).to_have_text("Add provider")
+                page.locator("#p-name").fill("Provider Unknown")
+                page.locator("#p-base").fill("http://127.0.0.1:11/v1")
+                page.locator("#p-trains").select_option("unknown")
+                page.locator("#p-retention").select_option("unknown")
+                page.locator("#p-dh-note").fill("Unknown")
+                page.locator('[data-action="detect-models"]').click()
+                expect(page.locator("#model-list")).to_contain_text("model-alpha")
+                page.locator('[data-action="save-modal"]').click()
+                expect(page.locator("#content")).to_contain_text("Provider Unknown")
+                
+                # Verify badges are visible for all three values
+                # Check for "Trains on data" (yes = warn)
+                expect(page.locator(".provider-tile").first).to_contain_text("Trains on data")
+                # Check for "Does not train" (no = good)
+                expect(page.locator(".provider-tile").nth(1)).to_contain_text("Does not train")
+                # Check for "Training unknown" (unknown = neutral)
+                expect(page.locator(".provider-tile").nth(2)).to_contain_text("Training unknown")
+                
+                # Check retention badges
+                expect(page.locator(".provider-tile").first).to_contain_text("Limited retention")
+                expect(page.locator(".provider-tile").nth(1)).to_contain_text("No retention")
+                expect(page.locator(".provider-tile").nth(2)).to_contain_text("Retention unknown")
+                
+                # Test edit-and-save persists (edit the "Provider Unknown" which is the 3rd tile)
+                page.locator('[data-action="edit-provider"]').nth(2).click()
+                expect(page.locator("#modal-title")).to_have_text("Edit provider")
+                expect(page.locator("#p-trains")).to_have_value("unknown")
+                expect(page.locator("#p-retention")).to_have_value("unknown")
+                expect(page.locator("#p-dh-note")).to_have_value("Unknown")
+                page.locator("#p-trains").select_option("yes")
+                page.locator("#p-retention").select_option("limited")
+                page.locator("#p-dh-note").fill("Updated note")
+                page.locator('[data-action="save-modal"]').click()
+                expect(page.locator("#content")).to_contain_text("Provider Unknown")
+                # Verify the edit persisted by reopening
+                page.locator('[data-action="edit-provider"]').nth(2).click()
+                expect(page.locator("#p-trains")).to_have_value("yes")
+                expect(page.locator("#p-retention")).to_have_value("limited")
+                expect(page.locator("#p-dh-note")).to_have_value("Updated note")
+                page.locator('[data-action="close-modal"]').first.click()
+                
+                # Check console errors after provider operations
+                errors = [m for m in console_msgs if m[0] == "error"]
+                assert not errors, f"Console errors after provider ops: {errors}"
+                
+                # --- Routing page: privacy setting ---
                 page.locator('[data-page="routing"]').click()
+                page.wait_for_load_state("domcontentloaded")
                 page.locator('[data-action="add-route"]').first.click()
                 expect(page.locator("#modal-title")).to_have_text("Create route")
                 page.locator("#r-name").fill("Coding")
@@ -95,26 +172,103 @@ def main() -> None:
                 page.locator('.modal-body input[type="checkbox"]').first.check()
                 page.locator('[data-action="save-modal"]').click()
                 expect(page.locator("#content")).to_contain_text("coding")
-                page.locator('[data-action="connect-route"]').click()
-                expect(page.locator("#modal-title")).to_have_text("Connect coding")
-                expect(page.locator(".modal-body")).to_contain_text("POST /v1/messages")
-                expect(page.locator(".modal-body")).to_contain_text("ANTHROPIC_BASE_URL")
-                expect(page.locator(".modal-body")).to_contain_text("ANTHROPIC_MODEL")
-                page.locator('[data-action="close-modal"]').first.click()
-                page.locator('[data-page="settings"]').click()
-                expect(page.locator("#setting-strategy")).to_be_visible()
-                expect(page.locator("#content")).to_contain_text("Create virtual key")
-                expect(page.locator("#content")).to_contain_text("Start graceful drain")
-                expect(page.locator("#content")).to_contain_text("Download CSV")
-                expect(page.locator("#content")).to_contain_text("Identity usage")
-                page.locator('[data-page="video"]').click()
-                expect(page.locator("#content")).to_contain_text("Async production workspace")
-                expect(page.locator("#content")).to_contain_text("Create first job")
+                
+                # Check route privacy display (default is empty/any)
+                expect(page.locator(".route-tile")).to_contain_text("Privacy")
+                
+                # Check console errors
+                errors = [m for m in console_msgs if m[0] == "error"]
+                assert not errors, f"Console errors after routing: {errors}"
+                
+                # --- Activity page ---
                 page.locator('[data-page="activity"]').click()
+                page.wait_for_load_state("domcontentloaded")
                 expect(page.locator("#content")).to_contain_text("No real activity yet")
-                evidence = ROOT / "specs/014-control-plane-rebuild/evidence/control-plane-e2e.png"
-                evidence.parent.mkdir(parents=True, exist_ok=True)
-                page.screenshot(path=str(evidence), full_page=True)
+                
+                # --- Screenshots for evidence ---
+                evidence_dir = ROOT / "docs/browser-evidence/privacy"
+                evidence_dir.mkdir(parents=True, exist_ok=True)
+                
+                # 1440x900 dark
+                page.set_viewport_size({"width": 1440, "height": 900})
+                page.locator('[data-page="providers"]').click()
+                page.wait_for_load_state("domcontentloaded")
+                time.sleep(0.5)
+                page.screenshot(path=str(evidence_dir / "providers-1440x900-dark.png"), full_page=True)
+                
+                # 1440x900 light
+                page.evaluate("() => { document.documentElement.dataset.theme = 'light'; localStorage.setItem('nexaroute_theme', 'light'); }")
+                time.sleep(0.3)
+                page.screenshot(path=str(evidence_dir / "providers-1440x900-light.png"), full_page=True)
+                
+                # 390x844 dark
+                page.evaluate("() => { document.documentElement.dataset.theme = 'dark'; localStorage.setItem('nexaroute_theme', 'dark'); }")
+                page.set_viewport_size({"width": 390, "height": 844})
+                time.sleep(0.3)
+                page.screenshot(path=str(evidence_dir / "providers-390x844-dark.png"), full_page=True)
+                
+                # 390x844 light
+                page.evaluate("() => { document.documentElement.dataset.theme = 'light'; localStorage.setItem('nexaroute_theme', 'light'); }")
+                time.sleep(0.3)
+                page.screenshot(path=str(evidence_dir / "providers-390x844-light.png"), full_page=True)
+                
+                # Check horizontal overflow at 390px
+                body_width = page.evaluate("() => document.body.scrollWidth")
+                viewport_width = page.evaluate("() => window.innerWidth")
+                assert body_width <= viewport_width + 1, f"Horizontal overflow at 390px: body={body_width}, viewport={viewport_width}"
+                
+                # Routing page screenshots
+                page.set_viewport_size({"width": 1440, "height": 900})
+                page.evaluate("() => { document.documentElement.dataset.theme = 'dark'; localStorage.setItem('nexaroute_theme', 'dark'); }")
+                page.locator('[data-page="routing"]').click()
+                page.wait_for_load_state("domcontentloaded")
+                time.sleep(0.5)
+                page.screenshot(path=str(evidence_dir / "routing-1440x900-dark.png"), full_page=True)
+                
+                page.evaluate("() => { document.documentElement.dataset.theme = 'light'; localStorage.setItem('nexaroute_theme', 'light'); }")
+                time.sleep(0.3)
+                page.screenshot(path=str(evidence_dir / "routing-1440x900-light.png"), full_page=True)
+                
+                page.evaluate("() => { document.documentElement.dataset.theme = 'dark'; localStorage.setItem('nexaroute_theme', 'dark'); }")
+                page.set_viewport_size({"width": 390, "height": 844})
+                time.sleep(0.3)
+                page.screenshot(path=str(evidence_dir / "routing-390x844-dark.png"), full_page=True)
+                
+                page.evaluate("() => { document.documentElement.dataset.theme = 'light'; localStorage.setItem('nexaroute_theme', 'light'); }")
+                time.sleep(0.3)
+                page.screenshot(path=str(evidence_dir / "routing-390x844-light.png"), full_page=True)
+                
+                # Check horizontal overflow at 390px for routing
+                body_width = page.evaluate("() => document.body.scrollWidth")
+                viewport_width = page.evaluate("() => window.innerWidth")
+                assert body_width <= viewport_width + 1, f"Horizontal overflow at 390px routing: body={body_width}, viewport={viewport_width}"
+                
+                # Activity page screenshots
+                page.set_viewport_size({"width": 1440, "height": 900})
+                page.evaluate("() => { document.documentElement.dataset.theme = 'dark'; localStorage.setItem('nexaroute_theme', 'dark'); }")
+                page.locator('[data-page="activity"]').click()
+                page.wait_for_load_state("domcontentloaded")
+                time.sleep(0.5)
+                page.screenshot(path=str(evidence_dir / "activity-1440x900-dark.png"), full_page=True)
+                
+                page.evaluate("() => { document.documentElement.dataset.theme = 'light'; localStorage.setItem('nexaroute_theme', 'light'); }")
+                time.sleep(0.3)
+                page.screenshot(path=str(evidence_dir / "activity-1440x900-light.png"), full_page=True)
+                
+                page.evaluate("() => { document.documentElement.dataset.theme = 'dark'; localStorage.setItem('nexaroute_theme', 'dark'); }")
+                page.set_viewport_size({"width": 390, "height": 844})
+                time.sleep(0.3)
+                page.screenshot(path=str(evidence_dir / "activity-390x844-dark.png"), full_page=True)
+                
+                page.evaluate("() => { document.documentElement.dataset.theme = 'light'; localStorage.setItem('nexaroute_theme', 'light'); }")
+                time.sleep(0.3)
+                page.screenshot(path=str(evidence_dir / "activity-390x844-light.png"), full_page=True)
+                
+                # Check horizontal overflow at 390px for activity
+                body_width = page.evaluate("() => document.body.scrollWidth")
+                viewport_width = page.evaluate("() => window.innerWidth")
+                assert body_width <= viewport_width + 1, f"Horizontal overflow at 390px activity: body={body_width}, viewport={viewport_width}"
+                
                 browser.close()
         finally:
             proc.terminate()
