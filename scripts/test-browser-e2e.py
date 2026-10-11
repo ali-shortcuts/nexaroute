@@ -419,7 +419,10 @@ def main() -> None:
                     page.screenshot(path=str(fix_dir / f"{dest}-390x844-light.png"))
 
                 # --- ISSUE #246: disabled video gateway must not raise a global banner ---
-                # Gateway under test has no `video` config, so /v1/video/* is unmounted (HTTP 404).
+                # Isolate the disabled-state assertions from the fake provider enabled for M2-1 above.
+                def disabled_video_providers(route):
+                    route.fulfill(status=404, content_type="application/json", body=json.dumps({"code": "not_found", "message": "Video gateway is not enabled"}))
+                page.route("**/v1/video/providers", disabled_video_providers)
                 page.set_viewport_size({"width": 1440, "height": 900})
                 page.evaluate("() => { document.documentElement.dataset.theme = 'dark'; localStorage.setItem('nexaroute_theme', 'dark'); }")
                 for dest in ["overview", "providers", "routing", "activity", "settings"]:
@@ -445,6 +448,7 @@ def main() -> None:
                 assert "Video API" not in banner, f"stale Video API banner after leaving video: {banner!r}"
                 errors = [m for m in console_msgs if m[0] == "error"]
                 assert not errors, f"Console errors after video checks: {errors}"
+                page.unroute("**/v1/video/providers", disabled_video_providers)
                 # Evidence: Providers with video disabled (dark, both sizes).
                 video_dir = ROOT / "docs/browser-evidence/video-disabled"
                 video_dir.mkdir(parents=True, exist_ok=True)
