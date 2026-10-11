@@ -63,14 +63,18 @@ func (p *Piper) Synthesize(ctx context.Context, text, outputPath string) error {
 	if strings.TrimSpace(text) == "" {
 		return errors.New("narration text is empty")
 	}
-	outputPath, err := filepath.Abs(strings.TrimSpace(outputPath))
-	if err != nil || strings.TrimSpace(outputPath) == "" {
+	outputPath = strings.TrimSpace(outputPath)
+	if outputPath == "" {
+		return errors.New("narration output path is required")
+	}
+	outputPath, err := filepath.Abs(outputPath)
+	if err != nil {
 		return errors.New("narration output path is invalid")
 	}
 	if info, err := os.Stat(filepath.Dir(outputPath)); err != nil || !info.IsDir() {
 		return errors.New("narration output directory does not exist")
 	}
-	if _, err := os.Stat(outputPath); err == nil {
+	if _, err := os.Lstat(outputPath); err == nil {
 		return errors.New("narration output already exists; refusing to overwrite")
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return errors.New("narration output path could not be checked")
@@ -104,6 +108,9 @@ func (p *Piper) Synthesize(ctx context.Context, text, outputPath string) error {
 	cmd.Stdout = io.Discard
 	if err := cmd.Run(); err != nil {
 		_ = os.Remove(outputPath)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		message := strings.TrimSpace(stderr.String())
 		message = strings.ReplaceAll(message, p.ModelPath, "[voice-model]")
 		message = strings.ReplaceAll(message, inputPath, "[input-file]")
