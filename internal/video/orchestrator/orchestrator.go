@@ -42,7 +42,13 @@ func (o *Orchestrator) Create(ctx context.Context, r video.VideoRequest) (video.
 	if len(r.ShotPlan) > 1 {
 		totalDuration := 0.0
 		for _, shot := range r.ShotPlan {
+			if shot.DurationSeconds <= 0 || math.IsNaN(shot.DurationSeconds) || math.IsInf(shot.DurationSeconds, 0) {
+				return video.VideoJob{}, fmt.Errorf("shot %q has an invalid duration", shot.ShotID)
+			}
 			totalDuration += shot.DurationSeconds
+		}
+		if r.DurationSeconds < 0 || math.IsNaN(r.DurationSeconds) || math.IsInf(r.DurationSeconds, 0) {
+			return video.VideoJob{}, errors.New("duration_seconds is invalid")
 		}
 		if r.DurationSeconds > 0 && math.Abs(r.DurationSeconds-totalDuration) > 0.05 {
 			return video.VideoJob{}, fmt.Errorf("duration_seconds %.2f does not match total shot duration %.2f", r.DurationSeconds, totalDuration)
@@ -76,7 +82,7 @@ func (o *Orchestrator) Create(ctx context.Context, r video.VideoRequest) (video.
 	}
 	var estimate video.CostEstimate
 	if len(r.ShotPlan) > 1 {
-		if o.Composer == nil || o.Assets == nil {
+		if !r.DryRun && (o.Composer == nil || o.Assets == nil) {
 			return video.VideoJob{}, errors.New("multi-shot video jobs require an episode composer and asset sink")
 		}
 		r, estimate, err = validateShotPlanRequest(r, p, caps)
