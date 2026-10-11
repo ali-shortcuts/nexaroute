@@ -324,3 +324,28 @@ func TestMultiShotAdmissionFailsBeforeProviderEstimateWhenComposerUnavailable(t 
 		t.Fatalf("failed preflight admitted work: stored=%d queued=%d provider submissions=%d", len(jobs), q.Len(), provider.nextID)
 	}
 }
+
+func TestSingleShotPlanNormalizesToSingleProviderRequest(t *testing.T) {
+	provider := providerWithDefaults()
+	store := queue.NewMemoryStore()
+	orch := &Orchestrator{
+		Store: store, Queue: queue.New(4), Providers: Registry{"fake": provider},
+		Assets: &episodeTestSink{root: t.TempDir()},
+	}
+	request := requestWithDefaults()
+	request.Prompt = ""
+	request.ShotPlan = []video.Shot{{
+		ShotID: "single", Prompt: "A single shot", CameraMovement: "slow pan",
+		DurationSeconds: request.DurationSeconds,
+	}}
+	job, err := orch.Create(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Create single-shot plan: %v", err)
+	}
+	if len(job.Request.ShotPlan) != 0 || !strings.Contains(job.Request.Prompt, "A single shot") || !strings.Contains(job.Request.Prompt, "Camera movement: slow pan") {
+		t.Fatalf("single shot was not normalized into provider request: %+v", job.Request)
+	}
+	if len(job.ShotExecutions) != 0 {
+		t.Fatalf("single shot should use the ordinary provider path, got checkpoints %+v", job.ShotExecutions)
+	}
+}
