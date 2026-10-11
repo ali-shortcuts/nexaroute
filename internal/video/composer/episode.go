@@ -16,16 +16,16 @@ const maxSubtitleBytes = 16 << 20
 // EpisodeSpec describes the local assembly stage after individual shot videos
 // have been generated. All input paths are local files; output is an MP4.
 type EpisodeSpec struct {
-	Shots           []string
-	NarrationPath   string
-	MusicPath       string
-	SubtitlePath    string
-	OutputPath      string
-	Width           int
-	Height          int
-	FPS             int
-	NarrationVolume float64
-	MusicVolume     float64
+	Shots           []string `json:"shots"`
+	NarrationPath   string   `json:"narration_path,omitempty"`
+	MusicPath       string   `json:"music_path,omitempty"`
+	SubtitlePath    string   `json:"subtitle_path,omitempty"`
+	OutputPath      string   `json:"output_path"`
+	Width           int      `json:"width"`
+	Height          int      `json:"height"`
+	FPS             int      `json:"fps"`
+	NarrationVolume float64  `json:"narration_volume,omitempty"`
+	MusicVolume     float64  `json:"music_volume,omitempty"`
 }
 
 // ComposeEpisode normalizes every shot, concatenates them in the requested
