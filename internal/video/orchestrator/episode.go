@@ -330,7 +330,7 @@ func (o *Orchestrator) runEpisodeJob(ctx context.Context, j video.VideoJob) erro
 			return o.markNeedsManualAndError(ctx, j, fmt.Sprintf("shot %q must produce exactly one video asset; got %d", run.ShotID, len(assets)))
 		}
 		asset := assets[0]
-	if strings.TrimSpace(asset.URI) == "" || strings.TrimSpace(asset.ContentType) == "" || asset.SizeBytes <= 0 || len(asset.SHA256) != 64 {
+		if strings.TrimSpace(asset.URI) == "" || strings.TrimSpace(asset.ContentType) == "" || asset.SizeBytes <= 0 || len(asset.SHA256) != 64 {
 			return o.markNeedsManualAndError(ctx, j, fmt.Sprintf("shot %q output was not durably persisted with URI, type, size, and SHA-256", run.ShotID))
 		}
 		if _, err := hex.DecodeString(asset.SHA256); err != nil {
