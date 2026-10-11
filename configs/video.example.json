@@ -7,6 +7,25 @@
     "queue_size": 32,
     "workers": 2,
     "auth_token_env": "NEXAROUTE_VIDEO_TOKEN",
-    "development_fake_provider": false
+    "development_fake_provider": false,
+    "comfyui_enabled": false,
+    "comfyui_base_url": "http://127.0.0.1:8188",
+    "comfyui_workflow_path": "comfyui-api-workflow.json",
+    "comfyui_model": "comfyui-workflow",
+    "comfyui_max_duration_seconds": 60,
+    "comfyui_prompt_node_id": "",
+    "comfyui_prompt_input": "text",
+    "comfyui_negative_node_id": "",
+    "comfyui_negative_input": "text",
+    "comfyui_width_node_id": "",
+    "comfyui_width_input": "width",
+    "comfyui_height_node_id": "",
+    "comfyui_height_input": "height",
+    "comfyui_frames_node_id": "",
+    "comfyui_frames_input": "length",
+    "comfyui_fps_node_id": "",
+    "comfyui_fps_input": "frame_rate",
+    "comfyui_seed_node_id": "",
+    "comfyui_seed_input": "noise_seed"
   }
 }
