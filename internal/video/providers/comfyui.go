@@ -235,31 +235,31 @@ func (p *ComfyUI) CreateJob(ctx context.Context, r video.VideoRequest) (video.Pr
 		return video.ProviderJob{}, err
 	}
 	if strings.TrimSpace(p.cfg.ComfyUINegativeNodeID) != "" {
-		if err := setWorkflowInput(workflow, r, p.cfg.ComfyUINegativeNodeID, p.negativeInput, r.NegativePrompt); err != nil {
+		if err := setWorkflowInput(workflow, p.cfg.ComfyUINegativeNodeID, p.negativeInput, r.NegativePrompt); err != nil {
 			return video.ProviderJob{}, err
 		}
 	}
 	width, height := outputDimensions(r)
-	if err := setWorkflowInput(workflow, r, p.cfg.ComfyUIWidthNodeID, p.widthInput, width); err != nil {
+	if err := setWorkflowInput(workflow, p.cfg.ComfyUIWidthNodeID, p.widthInput, width); err != nil {
 		return video.ProviderJob{}, err
 	}
-	if err := setWorkflowInput(workflow, r, p.cfg.ComfyUIHeightNodeID, p.heightInput, height); err != nil {
+	if err := setWorkflowInput(workflow, p.cfg.ComfyUIHeightNodeID, p.heightInput, height); err != nil {
 		return video.ProviderJob{}, err
 	}
 	frames := int(math.Round(r.DurationSeconds * float64(r.FPS)))
 	if frames < 1 {
 		frames = 1
 	}
-	if err := setWorkflowInput(workflow, r, p.cfg.ComfyUIFramesNodeID, p.framesInput, frames); err != nil {
+	if err := setWorkflowInput(workflow, p.cfg.ComfyUIFramesNodeID, p.framesInput, frames); err != nil {
 		return video.ProviderJob{}, err
 	}
 	if strings.TrimSpace(p.cfg.ComfyUIFPSNodeID) != "" {
-		if err := setWorkflowInput(workflow, r, p.cfg.ComfyUIFPSNodeID, p.fpsInput, r.FPS); err != nil {
+		if err := setWorkflowInput(workflow, p.cfg.ComfyUIFPSNodeID, p.fpsInput, r.FPS); err != nil {
 			return video.ProviderJob{}, err
 		}
 	}
 	if r.Seed != nil && strings.TrimSpace(p.cfg.ComfyUISeedNodeID) != "" {
-		if err := setWorkflowInput(workflow, r, p.cfg.ComfyUISeedNodeID, p.seedInput, *r.Seed); err != nil {
+		if err := setWorkflowInput(workflow, p.cfg.ComfyUISeedNodeID, p.seedInput, *r.Seed); err != nil {
 			return video.ProviderJob{}, err
 		}
 	}
