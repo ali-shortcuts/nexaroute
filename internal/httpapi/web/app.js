@@ -96,7 +96,7 @@
     const form = '<p class="muted">Jobs run asynchronously. Select an explicit configured provider. For an episode, paste a JSON array of shots; the Gateway checkpoints each clip and composes a final silent MP4.</p>' +
       '<div class="form-grid">' +
       '<div class="field full"><label for="v-prompt">Creative brief <span class="muted">optional when shot plan is supplied</span></label><textarea id="v-prompt" rows="4" placeholder="A time-travelling guide introduces Persepolis at sunrise…"></textarea></div>' +
-      '<div class="field"><label for="v-mode">Mode</label><select id="v-mode"><option value="text_to_video">Text to video</option><option value="image_to_video">Image to video</option><option value="video_to_video">Video to video</option></select></div>' +
+      '<div class="field"><label for="v-mode">Mode</label><select id="v-mode"><option value="text_to_video">Text to video</option></select><small class="muted">The configured ComfyUI adapter currently supports text-to-video only.</small></div>' +
       '<div class="field"><label for="v-duration">Duration (seconds)</label><input id="v-duration" type="number" min="1" max="3600" value="8"><small class="muted">Overridden by the sum of shot durations when a plan is supplied.</small></div>' +
       '<div class="field"><label for="v-aspect">Aspect ratio</label><select id="v-aspect"><option>16:9</option><option>9:16</option><option>1:1</option></select></div>' +
       '<div class="field"><label for="v-provider">Provider</label><select id="v-provider">' + providerOptions + '</select></div>' +
