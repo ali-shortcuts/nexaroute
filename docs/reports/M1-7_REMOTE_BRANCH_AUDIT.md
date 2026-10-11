@@ -93,9 +93,14 @@ The `completion/m1-7-remote-branch-audit` row records its remote tip at the audi
 - `phase0-baseline` — tip `d6a090ba0d70` has 4 branch-only commit(s), tree equal to main: NO; no open PR. Do not delete until an owner reviews the unique history.
 - `phase1-coverage-on-1b` — tip `0b23b91f0bd6` has 2 branch-only commit(s), tree equal to main: NO; no open PR. Do not delete until an owner reviews the unique history.
 
-Branches with open PRs are marked **Keep** in the table. The report proposes cleanup only for tips proven to be in main history and without an open PR. **No GitHub branch-delete API, `git push --delete`, or other branch-deletion operation was run.**
+Branches with open PRs are marked **Keep** in the table. The report proposes cleanup only for tips proven to be in main history and without an open PR. No pre-existing remote branch was changed. **No GitHub branch-delete API, `git push --delete`, or other branch-deletion operation was run.**
+
+## Verification
+
+`./scripts/verify.sh` — **VERIFY PASS** on the M1-7 branch, including the clean test pass, race pass, vet, browser acceptance, fuzz checks, and linux amd64/arm64 builds. Raw output is committed below.
 
 ## Evidence files
 
 - `docs/reports/m1-7-remote-branch-audit.raw.tsv` — complete snapshot, all 42 full tip SHAs, ancestry/tree hashes, ahead/behind counts, PR mapping, and proposals.
+- `docs/reports/m1-7-verify.raw.txt` — complete `verify.sh` output ending in `VERIFY PASS`.
 - `docs/reports/M1-7_REMOTE_BRANCH_AUDIT.md` — this summary and complete review table.
