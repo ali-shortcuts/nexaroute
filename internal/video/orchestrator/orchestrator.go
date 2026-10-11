@@ -65,6 +65,12 @@ func (o *Orchestrator) Create(ctx context.Context, r video.VideoRequest) (video.
 	if err := r.Validate(); err != nil {
 		return video.VideoJob{}, err
 	}
+	if len(r.ShotPlan) > 1 {
+		width, height := episodeDimensions(r)
+		if width%2 != 0 || height%2 != 0 {
+			return video.VideoJob{}, errors.New("multi-shot episode dimensions must be even for H.264 composition")
+		}
+	}
 	if o.Store == nil || o.Queue == nil || o.Providers == nil {
 		return video.VideoJob{}, errors.New("video orchestrator is not fully configured")
 	}
