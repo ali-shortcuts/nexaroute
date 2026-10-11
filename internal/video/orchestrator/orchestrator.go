@@ -19,6 +19,10 @@ import (
 type ProviderRegistry interface {
 	Get(string) (video.VideoProvider, bool)
 }
+type NarrationSynthesizer interface {
+	Synthesize(ctx context.Context, text, outputPath string) error
+}
+
 type Registry map[string]video.VideoProvider
 
 func (r Registry) Get(id string) (video.VideoProvider, bool) { p, ok := r[id]; return p, ok }
@@ -30,6 +34,7 @@ type Orchestrator struct {
 	Ledger        *cost.Ledger
 	Assets        video.AssetSink
 	Composer      EpisodeComposer
+	Narrator      NarrationSynthesizer
 	MaxAssetBytes int64
 	PollInterval  time.Duration
 	MaxPolls      int
