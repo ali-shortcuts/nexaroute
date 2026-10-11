@@ -6,7 +6,7 @@ The repository now contains an isolated `internal/video` domain and provider con
 - bounded in-memory queue and job store with idempotency lookup;
 - durable JSON job store with atomic replacement and restart recovery;
 - explicit state-transition validation, persisted request manifests, and webhook deduplication;
-- orchestrator skeleton with provider submission, bounded polling, cancellation, and budget gate;
+- orchestrator with per-shot provider submission, durable checkpoints, bounded polling, cancellation, aggregate cost admission, and final episode composition;
 - secure local filesystem asset sink with atomic writes, SHA-256 metadata, and traversal protection;
 - deterministic FFmpeg normalize/concat helpers with command manifest;
 - standalone HTTP handler for create/get/cancel/provider listing;
@@ -48,6 +48,40 @@ Add the following fields to the existing `video` object in the NexaRoute config.
 - The adapter's estimated provider API cost is USD 0 because it runs locally; that estimate excludes electricity, hardware depreciation, model downloads, and other infrastructure costs. It is not a guarantee of zero total operating cost.
 - Plain HTTP is accepted only for loopback addresses. Use HTTPS for a remote ComfyUI endpoint.
 
+## Multi-shot Gateway request
+
+A multi-shot request uses one provider/model for the episode. `duration_seconds` must equal the sum of the individual shot durations, and every shot must fit the selected provider's per-clip limit. The Gateway stores each shot checkpoint and returns one final MP4 asset after composition.
+
+Example request file for `videogen create --file episode-request.json`:
+
+```json
+{
+  "project_id": "persepolis-history",
+  "episode_id": "persepolis-001",
+  "prompt": "",
+  "mode": "text_to_video",
+  "provider_preference": "comfyui",
+  "duration_seconds": 8,
+  "aspect_ratio": "16:9",
+  "shot_plan": [
+    {
+      "shot_id": "arrival",
+      "duration_seconds": 4,
+      "prompt": "Wide establishing shot of Persepolis at sunrise, historically grounded ancient Persian architecture",
+      "camera_movement": "slow cinematic pan"
+    },
+    {
+      "shot_id": "walkthrough",
+      "duration_seconds": 4,
+      "prompt": "A time-travelling guide walks toward the monumental staircase at Persepolis",
+      "subject_action": "walks forward while looking at the reliefs"
+    }
+  ]
+}
+```
+
+Set `NEXAROUTE_URL` to the Gateway base URL and `NEXAROUTE_VIDEO_TOKEN` to the bearer token configured by `video.auth_token_env`. The CLI reads the token from the environment and does not print it. Do not include `shot_plan[].output_asset` in a client request; output assets are server-owned checkpoints and caller-supplied values are discarded.
+
 ## Local episode assembly
 
 After generated shot clips and optional audio/subtitle files exist on disk, the local CLI can assemble them into one MP4:
@@ -73,15 +107,17 @@ Example `episode.json`:
 }
 ```
 
-Paths are resolved relative to the current working directory. Install FFmpeg on the host or set `NEXAROUTE_FFMPEG` to its executable path. This local command does not require a Video Gateway token. A zero volume field selects its default (narration 1.0, music 0.12).
+Paths are resolved relative to the current working directory. Install FFmpeg with the `libx264` encoder or set `NEXAROUTE_FFMPEG` to its executable path. This local command does not require a Video Gateway token. A zero volume field selects its default (narration 1.0, music 0.12). The Gateway preflights FFmpeg and `libx264` before admitting multi-shot work, so a missing encoder fails before any provider job is submitted.
 
-This is a local composition building block, **not yet a persistent Video Gateway episode job or a Video Studio action**. The gateway does not yet create/checkpoint one provider job per shot and automatically hand all shot assets to this composer.
+For a Gateway request with more than one `shot_plan` entry, the orchestrator validates and estimates each shot separately, persists each provider job ID and output asset, then composes the ordered clips into a final silent MP4. Restart recovery resumes known shot jobs or repeats composition from saved shot assets. If a crash leaves a shot in the pre-submission state without a durable provider job ID, the job moves to manual action rather than risking a duplicate billable submission. One episode currently uses one provider/model, and each individual shot must fit that provider's limits.
+
+The Gateway pipeline does not yet synthesize narration or generate dialogue, music, or subtitles. The local `videogen compose` command can mix existing narration/music and burn in an existing SRT file, but it is not yet a Video Studio action. Cancellation during local FFmpeg composition is intentionally rejected to avoid a race that could publish a partial result.
 
 ## Important limits
 
-When `video.enabled` is true, `cmd/gateway` creates the Video Runtime, mounts `/v1/video/` on the primary HTTP server, starts bounded workers, and cancels and joins the worker pool before shutdown returns. When it is false (the default), no video route or worker is created and the LLM data plane is unchanged. The JSON store is single-process and is not multi-node safe; use PostgreSQL/Redis only after an implementation and concurrency test exist. The opt-in ComfyUI adapter is local text-to-video only and requires a user-supplied API-format workflow; no commercial provider adapter is bundled. ComfyUI does not require provider API credentials. Any future external-provider credentials must come from environment variables; never use account rotation or quota bypass. The `videogen` CLI attaches to a running Gateway through the authenticated API and uses its configured job store.
+When `video.enabled` is true, `cmd/gateway` creates the Video Runtime, mounts `/v1/video/` on the primary HTTP server, starts bounded workers, and cancels and joins the worker pool before shutdown returns. When it is false (the default), no video route or worker is created and the LLM data plane is unchanged. The JSON store is single-process and is not multi-node safe; use PostgreSQL/Redis only after an implementation and concurrency test exist. The opt-in ComfyUI adapter is local text-to-video only and requires a user-supplied API-format workflow; no commercial provider adapter is bundled. ComfyUI does not require provider API credentials. Any future external-provider credentials must come from environment variables; never use account rotation or quota bypass. The `videogen` Gateway commands attach to a running Gateway through the authenticated API and use its configured job store; `videogen compose` is a local FFmpeg command and does not require a Gateway token.
 
-When enabled, runtime startup requires a non-empty bearer token from `video.auth_token_env`; the named environment variable must exist in the gateway process. The JSON job store, queue, and cost ledger remain single-process. Startup recovery re-enqueues queued jobs and resumes jobs with known provider job IDs; ambiguous submissions without a recorded provider job ID move to `needs_manual_action` rather than being resubmitted blindly.
+When enabled, runtime startup requires a non-empty bearer token from `video.auth_token_env`; the named environment variable must exist in the gateway process. The JSON job store, queue, and cost ledger remain single-process. Startup recovery re-enqueues queued jobs, resumes known single-shot provider jobs, and resumes multi-shot jobs from per-shot checkpoints or the composition stage. Ambiguous submissions without a recorded provider job ID move to `needs_manual_action` rather than being resubmitted blindly.
 
 Provider completion is not enough to mark a job complete: output files must be downloaded via the provider contract and persisted by the configured local asset sink with a URI, non-zero size, and SHA-256 metadata. The default per-file cap is 512 MiB; `video.max_asset_bytes` can be set from 1 byte through 8 GiB. This post-download sink cap does not replace streaming and Content-Length enforcement in a future real provider adapter because the current interface accepts byte slices.
 

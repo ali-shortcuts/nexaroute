@@ -24,22 +24,91 @@ type Registry map[string]video.VideoProvider
 func (r Registry) Get(id string) (video.VideoProvider, bool) { p, ok := r[id]; return p, ok }
 
 type Orchestrator struct {
-	Store        queue.JobStore
-	Queue        *queue.Queue
-	Providers    ProviderRegistry
-	Ledger       *cost.Ledger
-	Assets       video.AssetSink
-	PollInterval time.Duration
-	MaxPolls     int
+	Store         queue.JobStore
+	Queue         *queue.Queue
+	Providers     ProviderRegistry
+	Ledger        *cost.Ledger
+	Assets        video.AssetSink
+	Composer      EpisodeComposer
+	MaxAssetBytes int64
+	PollInterval  time.Duration
+	MaxPolls      int
 }
 
 func (o *Orchestrator) Create(ctx context.Context, r video.VideoRequest) (video.VideoJob, error) {
 	if err := ctx.Err(); err != nil {
 		return video.VideoJob{}, err
 	}
+	// OutputAsset is a server-owned checkpoint. Never trust caller-supplied
+	// values here, or a request could skip generation and point the composer at
+	// an arbitrary local path.
+	for i := range r.ShotPlan {
+		r.ShotPlan[i].OutputAsset = nil
+	}
+	if len(r.ShotPlan) == 1 {
+		shot := r.ShotPlan[0]
+		if strings.TrimSpace(shot.ShotID) == "" {
+			return video.VideoJob{}, errors.New("single shot requires shot_id")
+		}
+		if shot.Prompt == "" {
+			shot.Prompt = r.Prompt
+		}
+		if shot.NegativePrompt == "" {
+			shot.NegativePrompt = r.NegativePrompt
+		}
+		if shot.DurationSeconds <= 0 || math.IsNaN(shot.DurationSeconds) || math.IsInf(shot.DurationSeconds, 0) {
+			return video.VideoJob{}, fmt.Errorf("shot %q has an invalid duration", shot.ShotID)
+		}
+		if r.DurationSeconds > 0 && math.Abs(r.DurationSeconds-shot.DurationSeconds) > 0.05 {
+			return video.VideoJob{}, fmt.Errorf("duration_seconds %.2f does not match shot duration %.2f", r.DurationSeconds, shot.DurationSeconds)
+		}
+		if shot.Provider != "" {
+			if r.ProviderPreference != "" && r.ProviderPreference != shot.Provider {
+				return video.VideoJob{}, errors.New("single shot provider conflicts with provider_preference")
+			}
+			r.ProviderPreference = shot.Provider
+		}
+		if shot.Model != "" {
+			if r.ModelPreference != "" && r.ModelPreference != shot.Model {
+				return video.VideoJob{}, errors.New("single shot model conflicts with model_preference")
+			}
+			r.ModelPreference = shot.Model
+		}
+		r.Prompt = shotPrompt(shot)
+		r.NegativePrompt = shot.NegativePrompt
+		r.DurationSeconds = shot.DurationSeconds
+		r.ReferenceAssets = append(r.ReferenceAssets, shot.RequiredReferences...)
+		r.AudioRequested = r.AudioRequested || len(shot.SoundRequirements) > 0
+		if shot.NarrationSegment != "" {
+			r.NarrationText = shot.NarrationSegment
+		}
+		r.ShotPlan = nil
+	}
+	if len(r.ShotPlan) > 1 {
+		totalDuration := 0.0
+		for _, shot := range r.ShotPlan {
+			if shot.DurationSeconds <= 0 || math.IsNaN(shot.DurationSeconds) || math.IsInf(shot.DurationSeconds, 0) {
+				return video.VideoJob{}, fmt.Errorf("shot %q has an invalid duration", shot.ShotID)
+			}
+			totalDuration += shot.DurationSeconds
+		}
+		if r.DurationSeconds < 0 || math.IsNaN(r.DurationSeconds) || math.IsInf(r.DurationSeconds, 0) {
+			return video.VideoJob{}, errors.New("duration_seconds is invalid")
+		}
+		if r.DurationSeconds > 0 && math.Abs(r.DurationSeconds-totalDuration) > 0.05 {
+			return video.VideoJob{}, fmt.Errorf("duration_seconds %.2f does not match total shot duration %.2f", r.DurationSeconds, totalDuration)
+		}
+		r.DurationSeconds = totalDuration
+	}
 	r = r.Normalized()
 	if err := r.Validate(); err != nil {
 		return video.VideoJob{}, err
+	}
+	if len(r.ShotPlan) > 1 {
+		width, height := episodeDimensions(r)
+		if width%2 != 0 || height%2 != 0 {
+			return video.VideoJob{}, errors.New("multi-shot episode dimensions must be even for H.264 composition")
+		}
 	}
 	if o.Store == nil || o.Queue == nil || o.Providers == nil {
 		return video.VideoJob{}, errors.New("video orchestrator is not fully configured")
@@ -62,17 +131,34 @@ func (o *Orchestrator) Create(ctx context.Context, r video.VideoRequest) (video.
 	if err != nil {
 		return video.VideoJob{}, fmt.Errorf("read provider capabilities: %w", err)
 	}
-	r, err = validateProviderRequest(r, caps)
-	if err != nil {
-		return video.VideoJob{}, err
-	}
-	if err := p.ValidateRequest(r); err != nil {
-		return video.VideoJob{}, fmt.Errorf("provider rejected request: %w", err)
-	}
-
-	estimate, err := p.EstimateCost(r)
-	if err != nil {
-		return video.VideoJob{}, fmt.Errorf("cannot safely estimate video cost; refusing submission: %w", err)
+	var estimate video.CostEstimate
+	if len(r.ShotPlan) > 1 {
+		if !r.DryRun && (o.Composer == nil || o.Assets == nil) {
+			return video.VideoJob{}, errors.New("multi-shot video jobs require an episode composer and asset sink")
+		}
+		if !r.DryRun {
+			if preflight, ok := o.Composer.(interface{ Preflight(context.Context) error }); ok {
+				if err := preflight.Preflight(ctx); err != nil {
+					return video.VideoJob{}, fmt.Errorf("episode composer preflight failed before provider submission: %w", err)
+				}
+			}
+		}
+		r, estimate, err = validateShotPlanRequest(r, p, caps)
+		if err != nil {
+			return video.VideoJob{}, err
+		}
+	} else {
+		r, err = validateProviderRequest(r, caps)
+		if err != nil {
+			return video.VideoJob{}, err
+		}
+		if err := p.ValidateRequest(r); err != nil {
+			return video.VideoJob{}, fmt.Errorf("provider rejected request: %w", err)
+		}
+		estimate, err = p.EstimateCost(r)
+		if err != nil {
+			return video.VideoJob{}, fmt.Errorf("cannot safely estimate video cost; refusing submission: %w", err)
+		}
 	}
 	if !validEstimate(estimate) {
 		return video.VideoJob{}, cost.ErrInvalidEstimate
@@ -147,7 +233,7 @@ func validateProviderRequest(r video.VideoRequest, caps video.Capabilities) (vid
 		return r, errors.New("provider has no verified maximum duration; refusing to assume support")
 	}
 	if r.DurationSeconds > caps.MaxDurationSeconds {
-		return r, fmt.Errorf("requested duration %.2fs exceeds provider maximum %.2fs; split into supported clips only after multi-shot orchestration is implemented", r.DurationSeconds, caps.MaxDurationSeconds)
+		return r, fmt.Errorf("requested clip duration %.2fs exceeds provider maximum %.2fs", r.DurationSeconds, caps.MaxDurationSeconds)
 	}
 	if r.ModelPreference == "" {
 		if len(caps.Models) == 0 {
@@ -216,6 +302,47 @@ func (o *Orchestrator) Recover(ctx context.Context) error {
 	for _, job := range jobs {
 		if job.Request.DryRun || job.State == video.StateDryRun || job.State == video.StateCompleted ||
 			job.State == video.StateFailed || job.State == video.StateCancelled || job.State == video.StateNeedsManualAction {
+			continue
+		}
+		if len(job.Request.ShotPlan) > 1 {
+			if len(job.ShotExecutions) != len(job.Request.ShotPlan) {
+				if err := o.markNeedsManual(ctx, job, "multi-shot job has no complete durable shot checkpoint list"); err != nil {
+					return err
+				}
+				continue
+			}
+			ambiguous := false
+			if job.ProviderJobID != "" {
+				current := job.CurrentShot - 1
+				if current < 0 || current >= len(job.ShotExecutions) || job.ShotExecutions[current].ProviderJobID != job.ProviderJobID {
+					if err := o.markNeedsManual(ctx, job, "parent provider job ID does not match the current shot checkpoint"); err != nil {
+						return err
+					}
+					continue
+				}
+			}
+			for i, run := range job.ShotExecutions {
+				if job.Request.ShotPlan[i].OutputAsset == nil && run.ProviderJobID == "" && run.State != video.StateQueued {
+					if err := o.markNeedsManual(ctx, job, fmt.Sprintf("shot %q has an unknown submission checkpoint; automatic resubmission is disabled", run.ShotID)); err != nil {
+						return err
+					}
+					ambiguous = true
+					break
+				}
+			}
+			if ambiguous {
+				continue
+			}
+			switch job.State {
+			case video.StateQueued, video.StateAdmitted, video.StateSubmitted, video.StateProcessing, video.StatePolling, video.StateUploading, video.StateComposing, video.StateCancelRequested:
+				if err := o.enqueueWithBackpressure(ctx, job); err != nil {
+					return fmt.Errorf("enqueue recovered episode job %s: %w", job.JobID, err)
+				}
+			default:
+				if err := o.markNeedsManual(ctx, job, "multi-shot episode state is not restart-resumable"); err != nil {
+					return err
+				}
+			}
 			continue
 		}
 		switch job.State {
@@ -315,12 +442,18 @@ func (o *Orchestrator) RunJob(ctx context.Context, queued video.VideoJob) error 
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if o.Store == nil || o.Providers == nil {
+	if o.Store == nil {
 		return errors.New("video orchestrator is not fully configured")
 	}
 	j, err := o.Store.Get(ctx, queued.JobID)
 	if err != nil {
 		return fmt.Errorf("load video job before execution: %w", err)
+	}
+	if len(j.Request.ShotPlan) > 1 {
+		return o.runEpisodeJob(ctx, j)
+	}
+	if o.Providers == nil {
+		return errors.New("video orchestrator is not fully configured")
 	}
 	switch j.State {
 	case video.StateCompleted, video.StateFailed, video.StateCancelled, video.StateDryRun:
@@ -455,7 +588,9 @@ func (o *Orchestrator) pollAndFinalize(ctx context.Context, p video.VideoProvide
 		if math.IsNaN(st.Progress) || math.IsInf(st.Progress, 0) || st.Progress < 0 || st.Progress > 1 {
 			return o.markNeedsManualAndError(ctx, j, "provider returned invalid progress metadata")
 		}
-		j.Progress = st.Progress
+		if st.Progress > j.Progress {
+			j.Progress = st.Progress
+		}
 		j.UsageMetadata = mergeUsage(j.UsageMetadata, st.Usage)
 		switch st.State {
 		case video.StateFailed:
@@ -481,11 +616,13 @@ func (o *Orchestrator) pollAndFinalize(ctx context.Context, p video.VideoProvide
 				return err
 			}
 			return nil
-		case video.StateSubmitted, video.StateProcessing, video.StatePolling:
+		case video.StateQueued, video.StateSubmitted, video.StateProcessing, video.StatePolling:
 			if j.State == video.StateUploading {
 				return o.markNeedsManualAndError(ctx, j, "provider status regressed after output upload began")
 			}
-			if st.State == video.StateSubmitted && (j.State == video.StateProcessing || j.State == video.StatePolling) {
+			if st.State == video.StateQueued {
+				// Queued is a valid remote status; never regress the persisted parent job.
+			} else if st.State == video.StateSubmitted && (j.State == video.StateProcessing || j.State == video.StatePolling) {
 				// A stale provider response must not regress persisted state.
 			} else if err := j.Transition(st.State); err != nil {
 				return o.markNeedsManualAndError(ctx, j, "provider returned an unsupported state transition")
@@ -604,12 +741,18 @@ func (o *Orchestrator) Cancel(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
+	if len(j.Request.ShotPlan) > 1 && j.State == video.StateComposing {
+		return errors.New("episode is composing locally; cancellation during FFmpeg composition is not supported")
+	}
 	switch j.State {
 	case video.StateCompleted, video.StateFailed, video.StateCancelled, video.StateDryRun:
 		return errors.New("video job is already terminal")
 	}
-	p, ok := o.Providers.Get(j.Provider)
 	if j.ProviderJobID != "" {
+		if o.Providers == nil {
+			return errors.New("provider registry for active video job is unavailable; refusing to mark remote work cancelled")
+		}
+		p, ok := o.Providers.Get(j.Provider)
 		if !ok {
 			return errors.New("provider for active video job is unavailable; refusing to mark remote work cancelled")
 		}

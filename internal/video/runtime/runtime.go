@@ -11,6 +11,7 @@ import (
 
 	"github.com/ali-shortcuts/nexaroute/internal/video"
 	"github.com/ali-shortcuts/nexaroute/internal/video/api"
+	"github.com/ali-shortcuts/nexaroute/internal/video/composer"
 	"github.com/ali-shortcuts/nexaroute/internal/video/cost"
 	"github.com/ali-shortcuts/nexaroute/internal/video/orchestrator"
 	"github.com/ali-shortcuts/nexaroute/internal/video/providers"
@@ -95,7 +96,14 @@ func New(cfg video.Config, baseDir string) (*Runtime, error) {
 		return nil, fmt.Errorf("video asset store: %w", err)
 	}
 	ledger := &cost.Ledger{}
-	orch := &orchestrator.Orchestrator{Store: store, Queue: q, Providers: reg, Ledger: ledger, Assets: assetSink}
+	ffmpegBinary := strings.TrimSpace(os.Getenv("NEXAROUTE_FFMPEG"))
+	if ffmpegBinary == "" {
+		ffmpegBinary = "ffmpeg"
+	}
+	orch := &orchestrator.Orchestrator{
+		Store: store, Queue: q, Providers: reg, Ledger: ledger, Assets: assetSink,
+		Composer: composer.New(ffmpegBinary, ""), MaxAssetBytes: maxBytes,
+	}
 	pool := queue.NewWorkerPool(q, cfg.Workers, orch.RunJob)
 	h := &api.Handler{Orch: orch, Store: store, Providers: reg, RequireAuth: true, BearerToken: token}
 	return &Runtime{Handler: h, Queue: q, Workers: pool, Store: store, Orchestrator: orch}, nil

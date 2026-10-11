@@ -8,7 +8,37 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
+
+// Preflight verifies that FFmpeg is executable and includes the H.264 encoder
+// used by the normalizer. Call this before admitting billable multi-shot jobs.
+func (r *Runner) Preflight(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	binary := strings.TrimSpace(r.Binary)
+	if binary == "" {
+		return fmt.Errorf("ffmpeg binary is required")
+	}
+	path, err := exec.LookPath(binary)
+	if err != nil {
+		return fmt.Errorf("ffmpeg executable %q not found: %w", binary, err)
+	}
+	if output, err := exec.CommandContext(ctx, path, "-version").CombinedOutput(); err != nil {
+		return fmt.Errorf("ffmpeg preflight failed: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	output, err := exec.CommandContext(ctx, path, "-hide_banner", "-encoders").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("inspect ffmpeg encoders: %w", err)
+	}
+	if !strings.Contains(string(output), "libx264") {
+		return fmt.Errorf("ffmpeg executable %q does not provide the required libx264 encoder", path)
+	}
+	return nil
+}
 
 type Runner struct {
 	Binary  string
