@@ -1286,12 +1286,37 @@ func (c Config) Validate() error {
 	if err := c.Admin.OIDC.Validate(); err != nil {
 		return err
 	}
+	if c.Video.ComfyUIEnabled && !c.Video.Enabled {
+		return errors.New("video.comfyui_enabled requires video.enabled")
+	}
 	if c.Video.Enabled {
 		if strings.TrimSpace(c.Video.AuthTokenEnv) == "" {
 			return errors.New("video.auth_token_env is required when video.enabled is true")
 		}
 		if c.Video.MaxAssetBytes < 0 || c.Video.MaxAssetBytes > 8<<30 {
 			return errors.New("video.max_asset_bytes must be between 0 and 8589934592")
+		}
+		if !c.Video.ComfyUIEnabled && !c.Video.DevelopmentFakeProvider {
+			return errors.New("video.enabled requires comfyui_enabled or development_fake_provider; no commercial video provider is bundled")
+		}
+		if c.Video.ComfyUIEnabled {
+			if strings.TrimSpace(c.Video.ComfyUIBaseURL) == "" || strings.TrimSpace(c.Video.ComfyUIWorkflowPath) == "" {
+				return errors.New("video.comfyui_base_url and video.comfyui_workflow_path are required when ComfyUI is enabled")
+			}
+			for key, value := range map[string]string{
+				"comfyui_prompt_node_id": c.Video.ComfyUIPromptNodeID,
+				"comfyui_width_node_id": c.Video.ComfyUIWidthNodeID,
+				"comfyui_height_node_id": c.Video.ComfyUIHeightNodeID,
+				"comfyui_frames_node_id": c.Video.ComfyUIFramesNodeID,
+			} {
+				if strings.TrimSpace(value) == "" {
+					return fmt.Errorf("video.%s is required when ComfyUI is enabled", key)
+				}
+			}
+			duration := c.Video.ComfyUIMaxDurationSeconds
+			if duration < 0 || duration > 3600 || math.IsNaN(duration) || math.IsInf(duration, 0) {
+				return errors.New("video.comfyui_max_duration_seconds must be between 0 and 3600")
+			}
 		}
 	}
 	if strings.TrimSpace(c.Listen) == "" {
