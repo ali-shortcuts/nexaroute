@@ -99,7 +99,7 @@ func TestRuntimeFakeProviderEndToEndAuthenticatedAndPersistsArtifact(t *testing.
 				if asset.URI == "" || len(asset.SHA256) != 64 || asset.SizeBytes <= 0 {
 					t.Fatalf("output was not durably stored and checksummed: %+v", asset)
 				}
-				if !strings.HasPrefix(asset.URI, "/v1/video/jobs/"+created.JobID+"/assets/") || filepath.IsAbs(asset.URI) {
+				if !strings.HasPrefix(asset.URI, "/v1/video/jobs/"+created.JobID+"/assets/") || strings.Contains(asset.URI, filepath.Join(dir, "assets")) {
 					t.Fatalf("public asset URI leaked a filesystem path or used an unexpected route: %s", asset.URI)
 				}
 				assetReq := httptest.NewRequest(http.MethodGet, asset.URI, nil)
