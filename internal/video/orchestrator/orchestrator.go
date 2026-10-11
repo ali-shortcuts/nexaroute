@@ -521,7 +521,9 @@ func (o *Orchestrator) pollAndFinalize(ctx context.Context, p video.VideoProvide
 		if math.IsNaN(st.Progress) || math.IsInf(st.Progress, 0) || st.Progress < 0 || st.Progress > 1 {
 			return o.markNeedsManualAndError(ctx, j, "provider returned invalid progress metadata")
 		}
-		j.Progress = st.Progress
+		if st.State != video.StateQueued || st.Progress > j.Progress {
+			j.Progress = st.Progress
+		}
 		j.UsageMetadata = mergeUsage(j.UsageMetadata, st.Usage)
 		switch st.State {
 		case video.StateFailed:
