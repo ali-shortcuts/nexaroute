@@ -681,8 +681,11 @@ func (o *Orchestrator) Cancel(ctx context.Context, id string) error {
 	case video.StateCompleted, video.StateFailed, video.StateCancelled, video.StateDryRun:
 		return errors.New("video job is already terminal")
 	}
-	p, ok := o.Providers.Get(j.Provider)
 	if j.ProviderJobID != "" {
+		if o.Providers == nil {
+			return errors.New("provider registry for active video job is unavailable; refusing to mark remote work cancelled")
+		}
+		p, ok := o.Providers.Get(j.Provider)
 		if !ok {
 			return errors.New("provider for active video job is unavailable; refusing to mark remote work cancelled")
 		}
