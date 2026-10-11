@@ -156,6 +156,26 @@ func (o *Orchestrator) runEpisodeJob(ctx context.Context, j video.VideoJob) erro
 	if err != nil {
 		return fmt.Errorf("read provider capabilities while resuming episode: %w", err)
 	}
+	if j.State == video.StateCancelRequested {
+		if strings.TrimSpace(j.ProviderJobID) == "" {
+			return o.markNeedsManualAndError(ctx, j, "episode cancellation was requested without a known active provider job ID")
+		}
+		if err := p.CancelJob(ctx, j.ProviderJobID); err != nil {
+			return err
+		}
+		if err := j.Transition(video.StateCancelled); err != nil {
+			return err
+		}
+		j.ProviderJobID = ""
+		j.LastError = ""
+		if err := o.Store.Update(ctx, j); err != nil {
+			return err
+		}
+		if o.Ledger != nil {
+			o.Ledger.ReleaseForJob(j.JobID)
+		}
+		return nil
+	}
 	if j.State == video.StateQueued {
 		if err := j.Transition(video.StateAdmitted); err != nil {
 			return err
