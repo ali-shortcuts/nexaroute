@@ -1296,9 +1296,6 @@ func (c Config) Validate() error {
 		if c.Video.MaxAssetBytes < 0 || c.Video.MaxAssetBytes > 8<<30 {
 			return errors.New("video.max_asset_bytes must be between 0 and 8589934592")
 		}
-		if !c.Video.ComfyUIEnabled && !c.Video.DevelopmentFakeProvider {
-			return errors.New("video.enabled requires comfyui_enabled or development_fake_provider; no commercial video provider is bundled")
-		}
 		if c.Video.ComfyUIEnabled {
 			if strings.TrimSpace(c.Video.ComfyUIBaseURL) == "" || strings.TrimSpace(c.Video.ComfyUIWorkflowPath) == "" {
 				return errors.New("video.comfyui_base_url and video.comfyui_workflow_path are required when ComfyUI is enabled")
