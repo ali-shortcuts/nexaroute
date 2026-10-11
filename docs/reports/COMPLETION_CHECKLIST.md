@@ -1,4 +1,4 @@
-# NOT COMPLETE — completion checklist (M1-1 and M1-2 DONE; 48 items remain)
+# NOT COMPLETE — completion checklist (M1-1 through M1-3 DONE; 47 items remain)
 
 Repository: `ali-shortcuts/nexaroute`
 Baseline: `main` at `dcb9f9b3c0352d23f1dfa599ea58450b072406c0`
@@ -11,7 +11,7 @@ This is the source of truth. Rows are updated after each item reaches a clean bo
 |---|---|---|---|---|---|
 | M1-1 | Measure current total coverage, explain historical figures, reach 85% and new-package threshold | DONE | #255 | `docs/reports/M1-1_COVERAGE.md`; `docs/reports/m1-1-coverage.raw.txt`; `docs/reports/m1-1-verify.raw.txt` | 85.1% on `dcb9f9b`; verify.sh PASS |
 | M1-2 | Complete sourced competitor capability cells/counts | DONE | #256 | `docs/CAPABILITY_MATRIX.md`; `docs/reports/M1-2_MATRIX_EVIDENCE.md`; `docs/reports/m1-2-verify.raw.txt` | 17 rows; 55 verified / 30 unverified |
-| M1-3 | Repair and run benchmark harness; publish full measurements/profile | NOT STARTED | — | — | Preserve diagnostics |
+| M1-3 | Repair and run benchmark harness; publish full measurements/profile | DONE | #257 | `docs/benchmarks/m1-3-2026-10-11/M1-3_BENCHMARK_REPORT.md`; `benchmark.json`; `verify.stdout.txt` | 16 × 1,000 gateway runs; orphan child/security-store lock fixed; pprof 404: cause not determined; verify.sh PASS |
 | M1-4 | Fix actionable top benchmark hotspot or record none | NOT STARTED | — | — | Depends on M1-3 |
 | M1-5 | Default-config concurrency integration test (>32 upstream in-flight) | NOT STARTED | — | — | Must pass under race |
 | M1-6 | Release workflow dispatch dry-run upload/download without publish | NOT STARTED | — | — | Run or mark UNVERIFIED |
