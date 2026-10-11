@@ -15,7 +15,7 @@ jobs:
         startsWith(github.event.comment.body, '/oc ')
       )
 
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 360
 
     permissions:
@@ -27,7 +27,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -52,11 +52,38 @@ jobs:
           echo "Using model: $model"
           echo "model=$model" >> "$GITHUB_OUTPUT"
 
-      - name: OpenCode implementation
-        uses: anomalyco/opencode/github@latest
+      - name: Get OpenCode version
+        id: opencode-version
+        shell: bash
+        run: |
+          VERSION=$(curl -sf https://api.github.com/repos/anomalyco/opencode/releases/latest | grep -o '"tag_name": *"[^"]*"' | cut -d'"' -f4)
+          echo "version=${VERSION:-latest}" >> "$GITHUB_OUTPUT"
+
+      - name: Cache OpenCode
+        id: opencode-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          model: ${{ steps.pick.outputs.model }}
-          prompt: |
+          path: ~/.opencode/bin
+          key: opencode-${{ runner.os }}-${{ runner.arch }}-${{ steps.opencode-version.outputs.version }}
+
+      - name: Install OpenCode
+        if: steps.opencode-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: curl -fsSL https://opencode.ai/install | bash
+
+      - name: Add OpenCode to PATH
+        shell: bash
+        run: echo "$HOME/.opencode/bin" >> "$GITHUB_PATH"
+
+      - name: OpenCode implementation
+        id: run-opencode
+        shell: bash
+        run: opencode github run
+        env:
+          MODEL: ${{ steps.pick.outputs.model }}
+          AGENT: ""
+          SHARE: ""
+          PROMPT: |
             You are the primary end-to-end implementation agent for NexaRoute.
 
             The user's authoritative task is the exact GitHub comment that triggered this workflow:
@@ -82,7 +109,11 @@ jobs:
             - If permissions prevent push/PR/merge/release, stop safely and report the exact blocker.
             - For releases, use the repository release workflow; never upload release binaries manually.
             - IMPORTANT: Never use /tmp or any path outside the checked-out repository for screenshots, browser evidence, test artifacts, generated reports, or files that must later be read/copied/committed.
-            - Create all evidence directly under repository-owned paths such as docs/browser-evidence/, docs/reports/, .artifacts/, or another tracked/in-repo directory.
+            - Create all evidence directly under repository-owned paths such as docs/browser-evidence/, docs/reports/, .artifacts/, or another tracked/in-repo path.
             - Do not perform any action that can trigger an interactive permission prompt in GitHub Actions. If a command would require permission to access an external directory, change the command/path so everything stays inside the repository.
             - Browser screenshots must be written directly to docs/browser-evidence/ from the test command itself; do not write them to /tmp and copy afterward.
             - Before long-running final gates, commit and push a coherent checkpoint branch so completed work is not lost if a later test times out or the runner is cancelled.
+          USE_GITHUB_TOKEN: "false"
+          MENTIONS: ""
+          VARIANT: ""
+          OIDC_BASE_URL: ""

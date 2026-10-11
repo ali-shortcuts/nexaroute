@@ -19,13 +19,13 @@ concurrency:
 jobs:
   govulncheck:
     name: Go vulnerability scan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Check reachable Go vulnerabilities
-        uses: golang/govulncheck-action@v1
+        uses: golang/govulncheck-action@032d45514ae346b1db93c04b0c90b841c370344f # v1.1.0
         with:
           go-version-input: '1.27.x'
           go-package: ./...
@@ -36,27 +36,27 @@ jobs:
     # Forked PRs cannot upload code-scanning results with the restricted token.
     # The normal CI workflow still runs all tests for those PRs.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     permissions:
       contents: read
       security-events: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.27.x'
           cache: false
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v4
+        uses: github/codeql-action/init@b1bff81932f5cdfc8695c7752dcee935dcd061c8 # v4.33.0
         with:
           languages: go
           build-mode: manual
       - name: Build Go packages for analysis
         run: go build ./...
       - name: Upload CodeQL results
-        uses: github/codeql-action/analyze@v4
+        uses: github/codeql-action/analyze@b1bff81932f5cdfc8695c7752dcee935dcd061c8 # v4.33.0
         with:
           category: "/language:go"
