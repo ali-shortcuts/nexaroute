@@ -45,7 +45,6 @@ type ShotExecution struct {
 	SubmittedAt    *time.Time        `json:"submitted_at,omitempty"`
 	CompletedAt    *time.Time        `json:"completed_at,omitempty"`
 	LastError      string            `json:"last_error,omitempty"`
-	ActualCostUSD  *float64          `json:"actual_cost_usd,omitempty"`
 	UsageMetadata  map[string]string `json:"usage_metadata,omitempty"`
 }
 
