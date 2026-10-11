@@ -431,9 +431,9 @@ func (o *Orchestrator) pollEpisodeShot(ctx context.Context, p video.VideoProvide
 			j.UsageMetadata[fmt.Sprintf("shot_%03d.%s", index+1, key)] = value
 		}
 		switch status.State {
-		case video.StateFailed:
-			run.State = video.StateFailed
-			return video.ProviderJobStatus{}, o.fail(ctx, *j, fmt.Sprintf("provider reported shot %q failure", run.ShotID))
+		case video.StateFailed, video.StateExpired:
+			run.State = status.State
+			return video.ProviderJobStatus{}, o.fail(ctx, *j, fmt.Sprintf("provider reported shot %q ended without a video output", run.ShotID))
 		case video.StateCancelled:
 			if j.State != video.StateCancelled {
 				if err := j.Transition(video.StateCancelled); err != nil {
