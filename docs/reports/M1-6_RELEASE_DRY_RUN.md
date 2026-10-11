@@ -14,8 +14,16 @@ The publish job condition is now explicit: it can run only for a tag **push** wh
 
 `./scripts/verify.sh` — **VERIFY PASS**; raw output is committed as `docs/reports/m1-6-verify.raw.txt`.
 
-## Dry-run plan
+## Initial dispatch and correction
 
-Dispatch `.github/workflows/release.yml` on `completion/m1-6-release-dry-run` with a unique dummy version such as `v0.0.0-dryrun-20261011`. Verify that the upload/download round-trip and checksums pass, the `publish` job is skipped, and the uploaded artifact contains only the expected build outputs. No release, tag, or publication is intended.
+The first manual run, [#38125153341](https://github.com/ali-shortcuts/nexaroute/actions/runs/38125153341), passed full verification, bounded stress, local runtime smoke, and release-asset builds, then failed at **Integrated release smoke** before artifact upload. The error was `video.auth_token_env is required when video.enabled is true`. The `publish` job was skipped; upload/download were not reached, and no tag or release was created.
 
-**Dispatch run ID, artifact metadata, and raw output will be added after execution.**
+The smoke fixture enabled the local development fake video provider but omitted its required auth-token environment name/value. `scripts/release-smoke.sh` now supplies a test-only process-scoped placeholder to that fake provider; it is not a production credential and is not sent to an external provider.
+
+The first local retry then returned HTTP 401 because the smoke's localhost client also omitted the fake provider's bearer header. The script now supplies the same test-only placeholder to the two authenticated video requests. After both fixes, `./scripts/release-smoke.sh dist` passed locally.
+
+The first-run step log is preserved as `docs/reports/m1-6-first-dispatch.failure.raw.txt`.
+
+## Retry plan
+
+After pushing this fix, rerun `.github/workflows/release.yml` on `completion/m1-6-release-dry-run` with a unique dummy version. Verify that upload/download byte-comparison and checksum checks pass, `publish` is skipped, and the artifact contains only the expected build outputs. No release, tag, or publication is intended. Record the retry run ID, artifact metadata, and raw output here.
