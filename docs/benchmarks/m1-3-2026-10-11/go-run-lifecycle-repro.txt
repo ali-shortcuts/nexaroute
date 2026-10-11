@@ -1,0 +1,3 @@
+go-run parent pid=48178; ready=yes
+go-run returned=-15; gateway processes still holding config=1
+orphan pid=48212: /home/ubuntu/.cache/go-build/25/25ce86e6976c1ebbc7a4abc5f40611869486743585f5d7b70b47246beda48506-d/gateway -no-browser -config /tmp/nexa-lifecycle-li1zyf1a/config.json
