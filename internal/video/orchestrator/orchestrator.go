@@ -47,6 +47,9 @@ func (o *Orchestrator) Create(ctx context.Context, r video.VideoRequest) (video.
 	}
 	if len(r.ShotPlan) == 1 {
 		shot := r.ShotPlan[0]
+		if strings.TrimSpace(shot.ShotID) == "" {
+			return video.VideoJob{}, errors.New("single shot requires shot_id")
+		}
 		if shot.Prompt == "" {
 			shot.Prompt = r.Prompt
 		}
