@@ -149,19 +149,26 @@ func (o *Orchestrator) runEpisodeJob(ctx context.Context, j video.VideoJob) erro
 	if o.Assets == nil || o.Composer == nil {
 		return o.markNeedsManualAndError(ctx, j, "multi-shot job requires an asset sink and episode composer")
 	}
-	p, ok := o.Providers.Get(j.Provider)
-	if !ok {
-		return o.fail(ctx, j, "provider unavailable")
-	}
-	caps, err := p.Capabilities(ctx)
-	if err != nil {
-		j.LastError = "provider capabilities unavailable; episode remains resumable"
-		if saveErr := o.Store.Update(ctx, j); saveErr != nil {
-			return fmt.Errorf("provider capabilities unavailable and episode state could not be saved: %w", saveErr)
+	var p video.VideoProvider
+	needsProvider := j.State == video.StateCancelRequested
+	for _, shot := range j.Request.ShotPlan {
+		if shot.OutputAsset == nil {
+			needsProvider = true
+			break
 		}
-		o.scheduleRetry(ctx, j, o.pollInterval())
-		return fmt.Errorf("read provider capabilities while resuming episode: %w", err)
 	}
+	if needsProvider {
+		if o.Providers == nil {
+			return o.markNeedsManualAndError(ctx, j, "provider registry is unavailable while episode shots remain")
+		}
+		var ok bool
+		p, ok = o.Providers.Get(j.Provider)
+		if !ok {
+			return o.fail(ctx, j, "provider unavailable")
+		}
+	}
+	var caps video.Capabilities
+	capsLoaded := false
 	if j.State == video.StateCancelRequested {
 		if strings.TrimSpace(j.ProviderJobID) == "" {
 			return o.markNeedsManualAndError(ctx, j, "episode cancellation was requested without a known active provider job ID")
@@ -211,6 +218,22 @@ func (o *Orchestrator) runEpisodeJob(ctx context.Context, j video.VideoJob) erro
 			return o.markNeedsManualAndError(ctx, j, fmt.Sprintf("shot %q may have been submitted before a crash; refusing automatic resubmission", run.ShotID))
 		}
 		if run.ProviderJobID == "" {
+			if p == nil {
+				return o.markNeedsManualAndError(ctx, j, "provider is unavailable while a shot still requires generation")
+			}
+			if !capsLoaded {
+				var err error
+				caps, err = p.Capabilities(ctx)
+				if err != nil {
+					j.LastError = "provider capabilities unavailable; episode remains resumable"
+					if saveErr := o.Store.Update(ctx, j); saveErr != nil {
+						return fmt.Errorf("provider capabilities unavailable and episode state could not be saved: %w", saveErr)
+					}
+					o.scheduleRetry(ctx, j, o.pollInterval())
+					return fmt.Errorf("read provider capabilities while submitting episode shot: %w", err)
+				}
+				capsLoaded = true
+			}
 			request := buildShotRequest(j.Request, *shot, i)
 			request.ProviderPreference = j.Provider
 			request.ModelPreference = j.Model
