@@ -139,9 +139,17 @@ func TestMultiShotEpisodePersistsPerShotAndComposesFinalMP4(t *testing.T) {
 	comp := &episodeTestComposer{}
 	orch := newEpisodeOrchestrator(t, store, q, provider, sink, comp)
 
-	job, err := orch.Create(context.Background(), episodeRequest())
+	request := episodeRequest()
+	request.ShotPlan[0].OutputAsset = &video.Asset{
+		ID: "caller-forged-checkpoint", URI: "/etc/passwd", Filename: "forged.mp4",
+		Kind: "video", ContentType: "video/mp4", SizeBytes: 1, SHA256: strings.Repeat("a", 64),
+	}
+	job, err := orch.Create(context.Background(), request)
 	if err != nil {
 		t.Fatalf("Create multi-shot episode: %v", err)
+	}
+	if job.Request.ShotPlan[0].OutputAsset != nil {
+		t.Fatal("caller-supplied shot output checkpoint was trusted")
 	}
 	if len(job.ShotExecutions) != 2 || job.TotalShots != 2 || job.EstimatedCostUSD != 4 {
 		t.Fatalf("created episode checkpoint/cost metadata: %+v", job)
