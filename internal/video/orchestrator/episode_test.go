@@ -32,7 +32,7 @@ func (p *episodeTestProvider) CreateJob(_ context.Context, request video.VideoRe
 
 func (p *episodeTestProvider) DownloadOutputs(ctx context.Context, status video.ProviderJobStatus, sink video.AssetSink) ([]video.Asset, error) {
 	asset := video.Asset{
-		ID: "clip-" + status.ProviderJobID, Filename: status.ProviderJobID + ".mp4",
+		ID: "shared-output", Filename: "output.mp4",
 		Kind: "video", ContentType: "video/mp4",
 	}
 	return []video.Asset{mustPutEpisodeAsset(ctx, sink, asset, []byte("clip for "+status.ProviderJobID))}, nil
@@ -172,6 +172,17 @@ func TestMultiShotEpisodePersistsPerShotAndComposesFinalMP4(t *testing.T) {
 	}
 	if len(got.OutputAssets) != 1 || got.OutputAssets[0].ContentType != "video/mp4" || got.OutputAssets[0].SHA256 == "" {
 		t.Fatalf("final episode asset invalid: %+v", got.OutputAssets)
+	}
+	if got.SourceAssets[0].URI == got.SourceAssets[1].URI {
+		t.Fatalf("shot checkpoints collided on one URI: %+v", got.SourceAssets)
+	}
+	firstClip, err := os.ReadFile(got.SourceAssets[0].URI)
+	if err != nil || string(firstClip) != "clip for remote-1" {
+		t.Fatalf("first shot checkpoint overwritten: content=%q err=%v", firstClip, err)
+	}
+	secondClip, err := os.ReadFile(got.SourceAssets[1].URI)
+	if err != nil || string(secondClip) != "clip for remote-2" {
+		t.Fatalf("second shot checkpoint content=%q err=%v", secondClip, err)
 	}
 	if provider.nextID != 2 || len(provider.requests) != 2 {
 		t.Fatalf("provider jobs=%d requests=%d, want one per shot", provider.nextID, len(provider.requests))
