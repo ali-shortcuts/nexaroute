@@ -240,27 +240,6 @@ func (o *Orchestrator) Recover(ctx context.Context) error {
 			job.State == video.StateFailed || job.State == video.StateCancelled || job.State == video.StateNeedsManualAction {
 			continue
 		}
-		switch job.State {
-		case video.StateQueued:
-			if err := o.enqueueWithBackpressure(ctx, job); err != nil {
-				return fmt.Errorf("recover queued video job %s: %w", job.JobID, err)
-			}
-		case video.StateAdmitted:
-			if job.ProviderJobID == "" {
-				if err := o.markNeedsManual(ctx, job, "previous submission outcome is unknown; automatic resubmission is disabled to avoid duplicate provider charges"); err != nil {
-					return err
-				}
-				continue
-			}
-			if err := job.Transition(video.StateSubmitted); err != nil {
-				return fmt.Errorf("recover video job %s state: %w", job.JobID, err)
-			}
-			if err := o.Store.Update(ctx, job); err != nil {
-				return fmt.Errorf("persist recovered video job %s: %w", job.JobID, err)
-			}
-			if err := o.enqueueWithBackpressure(ctx, job); err != nil {
-				return fmt.Errorf("enqueue recovered video job %s: %w", job.JobID, err)
-			}
 		if len(job.Request.ShotPlan) > 1 {
 			if len(job.ShotExecutions) != len(job.Request.ShotPlan) {
 				if err := o.markNeedsManual(ctx, job, "multi-shot job has no complete durable shot checkpoint list"); err != nil {
@@ -282,7 +261,7 @@ func (o *Orchestrator) Recover(ctx context.Context) error {
 				continue
 			}
 			switch job.State {
-			case video.StateQueued, video.StateAdmitted, video.StateSubmitted, video.StateProcessing, video.StatePolling, video.StateUploading, video.StateComposing:
+			case video.StateQueued, video.StateAdmitted, video.StateSubmitted, video.StateProcessing, video.StatePolling, video.StateUploading, video.StateComposing, video.StateCancelRequested:
 				if err := o.enqueueWithBackpressure(ctx, job); err != nil {
 					return fmt.Errorf("enqueue recovered episode job %s: %w", job.JobID, err)
 				}
@@ -294,6 +273,26 @@ func (o *Orchestrator) Recover(ctx context.Context) error {
 			continue
 		}
 		switch job.State {
+		case video.StateQueued:
+			if err := o.enqueueWithBackpressure(ctx, job); err != nil {
+				return fmt.Errorf("recover queued video job %s: %w", job.JobID, err)
+			}
+		case video.StateAdmitted:
+			if job.ProviderJobID == "" {
+				if err := o.markNeedsManual(ctx, job, "previous submission outcome is unknown; automatic resubmission is disabled to avoid duplicate provider charges"); err != nil {
+					return err
+				}
+				continue
+			}
+			if err := job.Transition(video.StateSubmitted); err != nil {
+				return fmt.Errorf("recover video job %s state: %w", job.JobID, err)
+			}
+			if err := o.Store.Update(ctx, job); err != nil {
+				return fmt.Errorf("persist recovered video job %s: %w", job.JobID, err)
+			}
+			if err := o.enqueueWithBackpressure(ctx, job); err != nil {
+				return fmt.Errorf("enqueue recovered video job %s: %w", job.JobID, err)
+			}
 		case video.StateSubmitted, video.StateProcessing, video.StatePolling, video.StateUploading, video.StateCancelRequested:
 			if job.ProviderJobID == "" {
 				if err := o.markNeedsManual(ctx, job, "active job has no provider job ID; automatic resubmission is disabled"); err != nil {
