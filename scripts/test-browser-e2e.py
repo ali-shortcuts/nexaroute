@@ -80,7 +80,7 @@ def main() -> None:
             wait_ready(base, proc)
             with sync_playwright() as pw:
                 browser = pw.chromium.launch(headless=True, executable_path=chromium)
-                page = browser.new_page(viewport={"width": 1440, "height": 900})
+                page = browser.new_page(viewport={"width": 1440, "height": 900}, accept_downloads=True)
                 page.set_default_timeout(12000)
                 page.add_init_script(f"sessionStorage.setItem('nexaroute_video_token', {json.dumps(test_video_token)});")
                 
@@ -422,6 +422,67 @@ def main() -> None:
                     page.evaluate("() => { document.documentElement.dataset.theme = 'light'; localStorage.setItem('nexaroute_theme', 'light'); }")
                     time.sleep(0.3)
                     page.screenshot(path=str(fix_dir / f"{dest}-390x844-light.png"))
+
+                # --- Video Studio multi-shot submission, status, and download regression ---
+                created_payload = {}
+                def mock_video_providers(route):
+                    route.fulfill(status=200, content_type="application/json", body=json.dumps({"providers": [{"id": "fake"}]}))
+                def mock_video_create(route):
+                    created_payload["request"] = json.loads(route.request.post_data or "{}")
+                    route.fulfill(status=202, content_type="application/json", body=json.dumps({
+                        "job_id": "ui-episode-1", "state": "queued", "progress": 0,
+                        "request": created_payload["request"],
+                    }))
+                def mock_video_job(route):
+                    route.fulfill(status=200, content_type="application/json", body=json.dumps({
+                        "job_id": "ui-episode-1", "state": "completed", "progress": 1,
+                        "current_shot": 2, "total_shots": 2, "provider": "fake",
+                        "created_at": "2026-10-12T00:00:00Z",
+                        "request": created_payload["request"],
+                        "output_assets": [{
+                            "id": "asset-1", "kind": "video", "filename": "episode.mp4",
+                            "content_type": "video/mp4", "size_bytes": 14,
+                            "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+                            "uri": "/v1/video/jobs/ui-episode-1/assets/asset-1",
+                        }],
+                    }))
+                def mock_video_asset(route):
+                    assert route.request.headers.get("authorization") == f"Bearer {test_video_token}"
+                    route.fulfill(status=200, headers={
+                        "Content-Type": "video/mp4",
+                        "Content-Disposition": "attachment; filename=episode.mp4",
+                    }, body=b"fake-mp4-bytes")
+                page.route("**/v1/video/providers", mock_video_providers)
+                page.route("**/v1/video/jobs", mock_video_create)
+                page.route("**/v1/video/jobs/ui-episode-1", mock_video_job)
+                page.route("**/v1/video/jobs/ui-episode-1/assets/asset-1", mock_video_asset)
+                page.set_viewport_size({"width": 1440, "height": 900})
+                page.locator('[data-page="video"]').click()
+                expect(page.locator('[data-action="create-video"]').first).to_be_visible()
+                page.locator('[data-action="create-video"]').first.click()
+                page.locator('[data-action="example-shot-plan"]').click()
+                page.locator("#v-episode").fill("noora-persepolis-01")
+                plan = json.loads(page.locator("#v-shot-plan").input_value())
+                assert len(plan) == 2, f"example shot plan length={len(plan)}"
+                page.get_by_role("button", name="Queue job").click()
+                expect(page.locator(".video-job-card")).to_contain_text("completed")
+                expect(page.locator(".video-job-card")).to_contain_text("Shot 2 / 2")
+                expect(page.get_by_role("button", name="Download episode.mp4")).to_be_visible()
+                submitted = created_payload["request"]
+                assert submitted.get("provider_preference") == "fake", f"provider preference={submitted.get('provider_preference')!r}"
+                assert submitted.get("prompt") == "", f"multi-shot parent prompt should be empty: {submitted.get('prompt')!r}"
+                assert len(submitted.get("shot_plan", [])) == 2, f"submitted shot plan={submitted.get('shot_plan')!r}"
+                assert submitted.get("duration_seconds") == 8, f"total duration={submitted.get('duration_seconds')!r}"
+                assert submitted.get("episode_id") == "noora-persepolis-01"
+                with page.expect_download(timeout=12000) as download_info:
+                    page.get_by_role("button", name="Download episode.mp4").click()
+                downloaded = tmp_path / "video-studio-download.mp4"
+                download_info.value.save_as(str(downloaded))
+                assert downloaded.read_bytes() == b"fake-mp4-bytes", "downloaded Video Studio asset bytes differ"
+                page.unroute("**/v1/video/providers", mock_video_providers)
+                page.unroute("**/v1/video/jobs", mock_video_create)
+                page.unroute("**/v1/video/jobs/ui-episode-1", mock_video_job)
+                page.unroute("**/v1/video/jobs/ui-episode-1/assets/asset-1", mock_video_asset)
 
                 # --- ISSUE #246: disabled video gateway must not raise a global banner ---
                 # Isolate the disabled-state assertions from the fake provider enabled for M2-1 above.

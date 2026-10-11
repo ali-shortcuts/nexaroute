@@ -73,3 +73,15 @@ html[data-theme="light"] .video-hero p,
 html[data-theme="light"] .video-orbit small { color: #cbd5e1; }
 html[data-theme="light"] .hero-panel .button.ghost,
 html[data-theme="light"] .video-hero .button.ghost { color: #e2e8f0; border-color: rgba(226, 232, 240, .38); }
+
+.video-progress{margin-top:14px;padding-top:12px;border-top:1px solid var(--border)}
+.video-progress-line{display:flex;align-items:center;gap:12px}
+.video-progress progress{appearance:none;flex:1;width:100%;height:8px;border:0;border-radius:999px;overflow:hidden;background:var(--surface-3)}
+.video-progress progress::-webkit-progress-bar{background:var(--surface-3)}
+.video-progress progress::-webkit-progress-value{background:var(--accent);border-radius:999px}
+.video-progress progress::-moz-progress-bar{background:var(--accent);border-radius:999px}
+.video-progress-line span{min-width:42px;text-align:right;font-variant-numeric:tabular-nums;color:var(--muted);font-size:.75rem}
+.video-progress small{display:block;margin-top:5px;color:var(--muted)}
+.video-assets{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+.field-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+@media(max-width:640px){.video-assets .button{width:100%}}

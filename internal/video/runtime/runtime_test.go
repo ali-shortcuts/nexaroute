@@ -99,8 +99,15 @@ func TestRuntimeFakeProviderEndToEndAuthenticatedAndPersistsArtifact(t *testing.
 				if asset.URI == "" || len(asset.SHA256) != 64 || asset.SizeBytes <= 0 {
 					t.Fatalf("output was not durably stored and checksummed: %+v", asset)
 				}
-				if !strings.HasPrefix(asset.URI, filepath.Join(dir, "assets")) {
-					t.Fatalf("output escaped configured storage root: %s", asset.URI)
+				if !strings.HasPrefix(asset.URI, "/v1/video/jobs/"+created.JobID+"/assets/") || strings.Contains(asset.URI, filepath.Join(dir, "assets")) {
+					t.Fatalf("public asset URI leaked a filesystem path or used an unexpected route: %s", asset.URI)
+				}
+				assetReq := httptest.NewRequest(http.MethodGet, asset.URI, nil)
+				assetReq.Header.Set("Authorization", "Bearer "+token)
+				assetRec := httptest.NewRecorder()
+				r.Handler.ServeHTTP(assetRec, assetReq)
+				if assetRec.Code != http.StatusOK || int64(assetRec.Body.Len()) != asset.SizeBytes {
+					t.Fatalf("asset download status=%d size=%d want=%d body=%q", assetRec.Code, assetRec.Body.Len(), asset.SizeBytes, assetRec.Body.String())
 				}
 				return
 			}
@@ -195,9 +202,15 @@ func TestRuntimeComfyUIProviderEndToEndPersistsPlayableVideoAsset(t *testing.T) 
 				if asset.Kind != "video" || asset.ContentType != "video/mp4" || asset.SizeBytes != int64(len(videoBytes)) || len(asset.SHA256) != 64 {
 					t.Fatalf("invalid persisted video asset: %+v", asset)
 				}
-				persisted, err := os.ReadFile(asset.URI)
-				if err != nil || string(persisted) != string(videoBytes) {
-					t.Fatalf("persisted video content=%q err=%v", persisted, err)
+				if !strings.HasPrefix(asset.URI, "/v1/video/jobs/"+created.JobID+"/assets/") || strings.Contains(asset.URI, filepath.Join(dir, "assets")) {
+					t.Fatalf("public asset URI leaked a filesystem path or used an unexpected route: %s", asset.URI)
+				}
+				assetReq := httptest.NewRequest(http.MethodGet, asset.URI, nil)
+				assetReq.Header.Set("Authorization", "Bearer "+token)
+				assetRec := httptest.NewRecorder()
+				r.Handler.ServeHTTP(assetRec, assetReq)
+				if assetRec.Code != http.StatusOK || string(assetRec.Body.Bytes()) != string(videoBytes) {
+					t.Fatalf("downloaded video content=%q status=%d", assetRec.Body.Bytes(), assetRec.Code)
 				}
 				return
 			}

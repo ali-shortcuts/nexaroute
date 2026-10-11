@@ -36,7 +36,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	baseURL := fs.String("base-url", defaultBaseURL(), "NexaRoute base URL (default: NEXAROUTE_URL or http://127.0.0.1:8080)")
 	tokenEnv := fs.String("token-env", "NEXAROUTE_VIDEO_TOKEN", "environment variable containing the Video Gateway bearer token")
 	file := fs.String("file", "", "JSON input file (create: VideoRequest; compose: EpisodeSpec)")
-	id := fs.String("id", "", "video job ID (job-get/job-cancel only)")
+	id := fs.String("id", "", "video job ID (job-get/job-cancel/asset-download)")
+	assetID := fs.String("asset-id", "", "stored asset ID (asset-download only)")
+	outPath := fs.String("out", "", "local output file (asset-download only)")
 	dryRun := fs.Bool("dry-run", false, "ask the gateway to estimate only; do not submit a provider job")
 	if err := fs.Parse(args[1:]); err != nil {
 		return 2
@@ -47,7 +49,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	switch command {
-	case "providers", "create", "job-get", "job-cancel", "compose":
+	case "providers", "create", "job-get", "job-cancel", "asset-download", "compose":
 	default:
 		fmt.Fprintf(stderr, "unknown command %q\n", command)
 		printUsage(stderr)
@@ -82,9 +84,19 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 		return 0
 	}
-	if (command == "job-get" || command == "job-cancel") && strings.TrimSpace(*id) == "" {
+	if (command == "job-get" || command == "job-cancel" || command == "asset-download") && strings.TrimSpace(*id) == "" {
 		fmt.Fprintf(stderr, "%s requires --id\n", command)
 		return 2
+	}
+	if command == "asset-download" {
+		if strings.TrimSpace(*assetID) == "" {
+			fmt.Fprintln(stderr, "asset-download requires --asset-id")
+			return 2
+		}
+		if strings.TrimSpace(*outPath) == "" {
+			fmt.Fprintln(stderr, "asset-download requires --out")
+			return 2
+		}
 	}
 	if strings.TrimSpace(*tokenEnv) == "" {
 		fmt.Fprintln(stderr, "--token-env must name an environment variable")
@@ -112,7 +124,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 			var req video.VideoRequest
 			err = json.Unmarshal(data, &req)
 			if err == nil {
-				req.DryRun = *dryRun
+				req.DryRun = req.DryRun || *dryRun
 				result, err = client.CreateJob(context.Background(), req)
 			}
 		}
@@ -120,6 +132,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 		result, err = client.GetJob(context.Background(), *id)
 	case "job-cancel":
 		result, err = client.CancelJob(context.Background(), *id)
+	case "asset-download":
+		err = client.DownloadAsset(context.Background(), *id, *assetID, *outPath)
+		if err == nil {
+			fmt.Fprintf(stdout, "Downloaded asset to %s\n", *outPath)
+			return 0
+		}
 	}
 	if err != nil {
 		fmt.Fprintf(stderr, "%s: %v\n", command, err)
@@ -149,9 +167,10 @@ func defaultBaseURL() string {
 }
 
 func printUsage(w io.Writer) {
-	fmt.Fprintln(w, "usage: videogen providers|create|job-get|job-cancel|compose [flags]")
+	fmt.Fprintln(w, "usage: videogen providers|create|job-get|job-cancel|asset-download|compose [flags]")
 	fmt.Fprintln(w, "common flags: --base-url URL --token-env ENV_NAME")
 	fmt.Fprintln(w, "create flags: --file REQUEST.json [--dry-run]")
 	fmt.Fprintln(w, "job-get/job-cancel flags: --id JOB_ID")
+	fmt.Fprintln(w, "asset-download flags: --id JOB_ID --asset-id ASSET_ID --out FILE")
 	fmt.Fprintln(w, "compose flags: --file EPISODE.json (local FFmpeg; no Gateway token required)")
 }

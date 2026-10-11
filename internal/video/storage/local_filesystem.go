@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -119,7 +120,12 @@ func writeMetadataAtomic(path string, data []byte) error {
 	return os.Rename(name, path)
 }
 
-func (s *Local) Read(a video.Asset) ([]byte, error) {
+// Open returns a regular asset file after validating that its resolved path
+// remains inside the configured storage root. The caller must close the file.
+func (s *Local) Open(a video.Asset) (*os.File, error) {
+	if s == nil || strings.TrimSpace(s.Root) == "" {
+		return nil, fmt.Errorf("storage root is not configured")
+	}
 	root, err := filepath.Abs(s.Root)
 	if err != nil {
 		return nil, err
@@ -144,7 +150,39 @@ func (s *Local) Read(a video.Asset) ([]byte, error) {
 	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
 		return nil, fmt.Errorf("asset symlink escapes storage root")
 	}
-	return os.ReadFile(resolvedPath)
+	info, err := os.Stat(resolvedPath)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("asset is not a regular file")
+	}
+	if s.MaxBytes > 0 && info.Size() > s.MaxBytes {
+		return nil, fmt.Errorf("asset exceeds size limit")
+	}
+	file, err := os.Open(resolvedPath)
+	if err != nil {
+		return nil, err
+	}
+	openedInfo, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+	if !openedInfo.Mode().IsRegular() || (s.MaxBytes > 0 && openedInfo.Size() > s.MaxBytes) {
+		_ = file.Close()
+		return nil, fmt.Errorf("asset is not a permitted regular file")
+	}
+	return file, nil
+}
+
+func (s *Local) Read(a video.Asset) ([]byte, error) {
+	file, err := s.Open(a)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	return io.ReadAll(file)
 }
 
 var _ video.AssetSink = (*Local)(nil)

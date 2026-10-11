@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,7 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/video/orchestrator"
 	"github.com/ali-shortcuts/nexaroute/internal/video/providers"
 	"github.com/ali-shortcuts/nexaroute/internal/video/queue"
+	"github.com/ali-shortcuts/nexaroute/internal/video/storage"
 )
 
 func newTestHandler(requireAuth bool) *Handler {
@@ -228,5 +230,84 @@ func TestHandlerCancelSuccessAndFailures(t *testing.T) {
 	public := newTestHandler(false)
 	if response := performJSON(public, http.MethodGet, "/v1/video/providers", nil, ""); response.Code != http.StatusOK {
 		t.Fatalf("public providers status=%d", response.Code)
+	}
+}
+
+func TestHandlerDownloadsOnlyStoredJobAssetsAndRedactsFilesystemPaths(t *testing.T) {
+	h := newTestHandler(true)
+	local, err := storage.NewLocal(t.TempDir(), 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.Assets = local
+	ctx := context.Background()
+	asset, err := local.Put(ctx, video.Asset{
+		ID: "episode-output", Kind: "video", Filename: "episode.mp4", ContentType: "video/mp4",
+		Metadata: map[string]string{"project_id": "project-1", "episode_id": "episode-1", "job_id": "job-download"},
+	}, []byte("video bytes"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := video.NewJob("job-download", validAPIRequest())
+	job.State = video.StateCompleted
+	job.OutputAssets = []video.Asset{asset}
+	if err := h.Store.Create(ctx, job); err != nil {
+		t.Fatal(err)
+	}
+
+	download := performJSON(h, http.MethodGet, "/v1/video/jobs/job-download/assets/episode-output", nil, "Bearer test-token")
+	if download.Code != http.StatusOK || download.Body.String() != "video bytes" {
+		t.Fatalf("download status=%d body=%q", download.Code, download.Body.String())
+	}
+	if got := download.Header().Get("Content-Type"); got != "video/mp4" {
+		t.Fatalf("Content-Type=%q, want video/mp4", got)
+	}
+	if got := download.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Fatalf("X-Content-Type-Options=%q", got)
+	}
+	if !strings.Contains(download.Header().Get("Content-Disposition"), "episode.mp4") {
+		t.Fatalf("Content-Disposition=%q", download.Header().Get("Content-Disposition"))
+	}
+	rangeRequest := httptest.NewRequest(http.MethodGet, "/v1/video/jobs/job-download/assets/episode-output", nil)
+	rangeRequest.Header.Set("Authorization", "Bearer test-token")
+	rangeRequest.Header.Set("Range", "bytes=0-3")
+	rangeResponse := httptest.NewRecorder()
+	h.ServeHTTP(rangeResponse, rangeRequest)
+	if rangeResponse.Code != http.StatusPartialContent || rangeResponse.Body.String() != "vide" {
+		t.Fatalf("range download status=%d body=%q", rangeResponse.Code, rangeResponse.Body.String())
+	}
+
+	public := performJSON(h, http.MethodGet, "/v1/video/jobs/job-download", nil, "Bearer test-token")
+	if public.Code != http.StatusOK {
+		t.Fatalf("public job status=%d body=%s", public.Code, public.Body.String())
+	}
+	var payload struct {
+		OutputAssets []video.Asset `json:"output_assets"`
+	}
+	if err := json.Unmarshal(public.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.OutputAssets) != 1 {
+		t.Fatalf("output assets=%+v", payload.OutputAssets)
+	}
+	wantURI := "/v1/video/jobs/job-download/assets/episode-output"
+	if payload.OutputAssets[0].URI != wantURI || strings.Contains(payload.OutputAssets[0].URI, local.Root) {
+		t.Fatalf("public asset URI=%q, want route %q without local filesystem path", payload.OutputAssets[0].URI, wantURI)
+	}
+	stored, err := h.Store.Get(ctx, "job-download")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.OutputAssets[0].URI != asset.URI {
+		t.Fatalf("public response mutated stored asset URI: stored=%q original=%q", stored.OutputAssets[0].URI, asset.URI)
+	}
+
+	unknown := performJSON(h, http.MethodGet, "/v1/video/jobs/job-download/assets/not-an-output", nil, "Bearer test-token")
+	if unknown.Code != http.StatusNotFound {
+		t.Fatalf("unknown asset status=%d body=%s", unknown.Code, unknown.Body.String())
+	}
+	unauthorized := performJSON(h, http.MethodGet, wantURI, nil, "")
+	if unauthorized.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized download status=%d", unauthorized.Code)
 	}
 }
