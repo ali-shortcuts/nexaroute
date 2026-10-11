@@ -24,15 +24,15 @@ type Registry map[string]video.VideoProvider
 func (r Registry) Get(id string) (video.VideoProvider, bool) { p, ok := r[id]; return p, ok }
 
 type Orchestrator struct {
-	Store        queue.JobStore
-	Queue        *queue.Queue
-	Providers    ProviderRegistry
-	Ledger       *cost.Ledger
-	Assets       video.AssetSink
-	Composer     EpisodeComposer
+	Store         queue.JobStore
+	Queue         *queue.Queue
+	Providers     ProviderRegistry
+	Ledger        *cost.Ledger
+	Assets        video.AssetSink
+	Composer      EpisodeComposer
 	MaxAssetBytes int64
-	PollInterval time.Duration
-	MaxPolls     int
+	PollInterval  time.Duration
+	MaxPolls      int
 }
 
 func (o *Orchestrator) Create(ctx context.Context, r video.VideoRequest) (video.VideoJob, error) {
