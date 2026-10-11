@@ -10,8 +10,12 @@ The existing `workflow_dispatch` path already built and uploaded release assets 
 
 The publish job condition is now explicit: it can run only for a tag **push** whose ref begins with `v`. A manual dispatch, including one dispatched against a branch with a version-like name, cannot publish a GitHub Release. The workflow's default `contents: read` permission remains in force for the verification job; only the tag-gated publish job has `contents: write`.
 
+## Local verification
+
+`./scripts/verify.sh` — **VERIFY PASS**; raw output is committed as `docs/reports/m1-6-verify.raw.txt`.
+
 ## Dry-run plan
 
-Once the PR is open, dispatch `.github/workflows/release.yml` on `completion/m1-6-release-dry-run` with a unique dummy version such as `v0.0.0-dryrun-20261011`. Verify that the upload/download round-trip and checksums pass, the `publish` job is skipped, and the uploaded artifact contains only the expected build outputs. No release, tag, or publication is intended.
+Dispatch `.github/workflows/release.yml` on `completion/m1-6-release-dry-run` with a unique dummy version such as `v0.0.0-dryrun-20261011`. Verify that the upload/download round-trip and checksums pass, the `publish` job is skipped, and the uploaded artifact contains only the expected build outputs. No release, tag, or publication is intended.
 
 **Dispatch run ID, artifact metadata, and raw output will be added after execution.**
