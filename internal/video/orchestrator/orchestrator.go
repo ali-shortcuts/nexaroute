@@ -663,6 +663,9 @@ func (o *Orchestrator) Cancel(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
+	if len(j.Request.ShotPlan) > 1 && j.State == video.StateComposing {
+		return errors.New("episode is composing locally; cancellation during FFmpeg composition is not supported")
+	}
 	switch j.State {
 	case video.StateCompleted, video.StateFailed, video.StateCancelled, video.StateDryRun:
 		return errors.New("video job is already terminal")
