@@ -358,7 +358,7 @@ func (o *Orchestrator) runEpisodeJob(ctx context.Context, j video.VideoJob) erro
 		run.CompletedAt = &now
 		addSourceAsset(&j, asset)
 		j.ProviderJobID = ""
-		j.Progress = float64(i+1) / float64(len(j.Request.ShotPlan)) * 0.8
+		j.Progress = math.Max(j.Progress, float64(i+1)/float64(len(j.Request.ShotPlan))*0.8)
 		if i+1 == len(j.Request.ShotPlan) {
 			if j.State != video.StateComposing {
 				if err := j.Transition(video.StateComposing); err != nil {
@@ -467,7 +467,7 @@ func (o *Orchestrator) pollEpisodeShot(ctx context.Context, p video.VideoProvide
 				}
 			}
 			total := float64(len(j.Request.ShotPlan))
-			j.Progress = math.Min(0.8, (float64(index)+status.Progress)/total*0.8)
+			j.Progress = math.Max(j.Progress, math.Min(0.8, (float64(index)+status.Progress)/total*0.8))
 			j.LastError = ""
 			if err := o.Store.Update(ctx, *j); err != nil {
 				return video.ProviderJobStatus{}, fmt.Errorf("persist shot progress: %w", err)
