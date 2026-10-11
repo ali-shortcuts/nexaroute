@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math"
@@ -300,14 +301,25 @@ func (o *Orchestrator) runEpisodeJob(ctx context.Context, j video.VideoJob) erro
 			return o.markNeedsManualAndError(ctx, j, fmt.Sprintf("shot %q must produce exactly one video asset; got %d", run.ShotID, len(assets)))
 		}
 		asset := assets[0]
-		if strings.TrimSpace(asset.URI) == "" || strings.TrimSpace(asset.ContentType) == "" || asset.SizeBytes <= 0 || len(asset.SHA256) != 64 {
+	if strings.TrimSpace(asset.URI) == "" || strings.TrimSpace(asset.ContentType) == "" || asset.SizeBytes <= 0 || len(asset.SHA256) != 64 {
 			return o.markNeedsManualAndError(ctx, j, fmt.Sprintf("shot %q output was not durably persisted with URI, type, size, and SHA-256", run.ShotID))
+		}
+		if _, err := hex.DecodeString(asset.SHA256); err != nil {
+			return o.markNeedsManualAndError(ctx, j, fmt.Sprintf("shot %q output checksum is malformed", run.ShotID))
+		}
+		maxBytes := o.MaxAssetBytes
+		if maxBytes <= 0 {
+			maxBytes = 512 << 20
+		}
+		if asset.SizeBytes > maxBytes {
+			return o.markNeedsManualAndError(ctx, j, fmt.Sprintf("shot %q output exceeds the configured asset limit", run.ShotID))
 		}
 		if !strings.HasPrefix(strings.ToLower(asset.ContentType), "video/") {
 			return o.markNeedsManualAndError(ctx, j, fmt.Sprintf("shot %q output is not a video asset", run.ShotID))
 		}
-		if _, err := os.Stat(asset.URI); err != nil {
-			return o.markNeedsManualAndError(ctx, j, fmt.Sprintf("shot %q asset is not a local file usable by the episode composer", run.ShotID))
+		info, err := os.Stat(asset.URI)
+		if err != nil || !info.Mode().IsRegular() || info.Size() != asset.SizeBytes {
+			return o.markNeedsManualAndError(ctx, j, fmt.Sprintf("shot %q asset is not a valid local file usable by the episode composer", run.ShotID))
 		}
 		asset.Kind = "video"
 		shot.OutputAsset = &asset
@@ -518,8 +530,11 @@ func (o *Orchestrator) composeEpisode(ctx context.Context, j *video.VideoJob) er
 		o.scheduleRetry(ctx, *j, o.pollInterval())
 		return fmt.Errorf("persist final episode: %w", err)
 	}
-	if strings.TrimSpace(saved.URI) == "" || saved.SizeBytes <= 0 || len(saved.SHA256) != 64 || !strings.HasPrefix(strings.ToLower(saved.ContentType), "video/") {
+	if strings.TrimSpace(saved.URI) == "" || saved.SizeBytes <= 0 || saved.SizeBytes > maxBytes || len(saved.SHA256) != 64 || !strings.HasPrefix(strings.ToLower(saved.ContentType), "video/") {
 		return o.markNeedsManualAndError(ctx, *j, "final episode was not persisted with valid URI, content type, size, and SHA-256")
+	}
+	if _, err := hex.DecodeString(saved.SHA256); err != nil {
+		return o.markNeedsManualAndError(ctx, *j, "final episode checksum is malformed")
 	}
 	j.OutputAssets = []video.Asset{saved}
 	j.Progress = 1
