@@ -75,7 +75,7 @@ type VideoJob struct {
 	EstimatedCostUSD      float64           `json:"estimated_cost_usd,omitempty"`
 	ActualCostUSD         float64           `json:"actual_cost_usd,omitempty"`
 	UsageMetadata         map[string]string `json:"usage_metadata,omitempty"`
-	AuditEvents            []AuditEvent      `json:"audit_events,omitempty"`
+	AuditEvents           []AuditEvent      `json:"audit_events,omitempty"`
 }
 
 func NewJob(id string, req VideoRequest) VideoJob {
