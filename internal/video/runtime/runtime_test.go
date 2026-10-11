@@ -202,7 +202,7 @@ func TestRuntimeComfyUIProviderEndToEndPersistsPlayableVideoAsset(t *testing.T) 
 				if asset.Kind != "video" || asset.ContentType != "video/mp4" || asset.SizeBytes != int64(len(videoBytes)) || len(asset.SHA256) != 64 {
 					t.Fatalf("invalid persisted video asset: %+v", asset)
 				}
-				if !strings.HasPrefix(asset.URI, "/v1/video/jobs/"+created.JobID+"/assets/") || filepath.IsAbs(asset.URI) {
+				if !strings.HasPrefix(asset.URI, "/v1/video/jobs/"+created.JobID+"/assets/") || strings.Contains(asset.URI, filepath.Join(dir, "assets")) {
 					t.Fatalf("public asset URI leaked a filesystem path or used an unexpected route: %s", asset.URI)
 				}
 				assetReq := httptest.NewRequest(http.MethodGet, asset.URI, nil)
