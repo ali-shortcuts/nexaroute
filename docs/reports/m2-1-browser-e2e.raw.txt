@@ -1,0 +1,6 @@
+M2-1 title offsets: {'overview': 53.9375, 'providers': 53.9375, 'routing': 53.9375, 'video': 53.9375, 'activity': 53.9375, 'settings': 53.9375}
+M2-1 content offsets: {'overview': 147.734375, 'providers': 147.734375, 'routing': 147.734375, 'video': 147.734375, 'activity': 147.734375, 'settings': 147.734375}
+M2-1 Video Studio empty-state CTA gap: 16.0px
+M2-1 privacy badge colors: dark={'warn': 'rgb(243, 199, 109)', 'good': 'rgb(88, 212, 154)', 'neutral': 'rgb(148, 163, 184)'}, light={'warn': 'rgb(162, 103, 9)', 'good': 'rgb(22, 134, 90)', 'neutral': 'rgb(75, 91, 110)'}
+M2-1 screenshots: 26 (24 viewport + 2 full-page badge proofs)
+BROWSER E2E PASS

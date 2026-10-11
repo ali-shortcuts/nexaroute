@@ -61,3 +61,15 @@ html[data-theme="light"] .status.neutral { color: #4b5b6e; border-color: #c4cfdb
   #primary-nav.primary-nav button span { width: auto; font-size: 14px; line-height: 1; }
   main { padding: var(--page-top) 13px 110px; }
 }
+
+/* Preserve readable text on dark gradient hero panels in light theme. */
+html[data-theme="light"] .hero-panel h2,
+html[data-theme="light"] .video-hero h2,
+html[data-theme="light"] .video-orbit b { color: #f8fafc; }
+html[data-theme="light"] .hero-panel .eyebrow,
+html[data-theme="light"] .video-hero .eyebrow,
+html[data-theme="light"] .video-orbit span { color: #aebdff; }
+html[data-theme="light"] .video-hero p,
+html[data-theme="light"] .video-orbit small { color: #cbd5e1; }
+html[data-theme="light"] .hero-panel .button.ghost,
+html[data-theme="light"] .video-hero .button.ghost { color: #e2e8f0; border-color: rgba(226, 232, 240, .38); }
