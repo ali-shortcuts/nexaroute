@@ -570,12 +570,12 @@ func (o *Orchestrator) composeEpisode(ctx context.Context, j *video.VideoJob) er
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		j.RetryCount++
+		j.CompositionRetryCount++
 		j.LastError = "episode composition failed; generated shot checkpoints are preserved"
 		if saveErr := o.Store.Update(ctx, *j); saveErr != nil {
 			return fmt.Errorf("episode composition failed and checkpoint could not be saved: %w", saveErr)
 		}
-		if j.RetryCount >= 3 {
+		if j.CompositionRetryCount >= 3 {
 			return o.fail(ctx, *j, "episode composition failed after repeated attempts")
 		}
 		o.scheduleRetry(ctx, *j, o.pollInterval())
