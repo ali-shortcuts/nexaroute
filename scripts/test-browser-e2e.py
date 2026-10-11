@@ -388,6 +388,46 @@ def main() -> None:
                     time.sleep(0.3)
                     page.screenshot(path=str(fix_dir / f"{dest}-390x844-light.png"))
 
+                # --- ISSUE #246: disabled video gateway must not raise a global banner ---
+                # Gateway under test has no `video` config, so /v1/video/* is unmounted (HTTP 404).
+                page.set_viewport_size({"width": 1440, "height": 900})
+                page.evaluate("() => { document.documentElement.dataset.theme = 'dark'; localStorage.setItem('nexaroute_theme', 'dark'); }")
+                for dest in ["overview", "providers", "routing", "activity", "settings"]:
+                    page.locator(f'[data-page="{dest}"]').click()
+                    page.wait_for_load_state("domcontentloaded")
+                    time.sleep(0.6)
+                    banner = page.evaluate("() => { const n = document.querySelector('#notice'); return (n && !n.hidden) ? n.textContent : ''; }")
+                    assert "Video API" not in banner, f"global Video API banner on {dest}: {banner!r}"
+                errors = [m for m in console_msgs if m[0] == "error"]
+                assert not errors, f"Console errors with video disabled: {errors}"
+                page.locator('[data-page="video"]').click()
+                page.wait_for_load_state("domcontentloaded")
+                expect(page.locator("#content")).to_contain_text("Video gateway is not enabled")
+                docs_link = page.locator('#content a[href*="VIDEO_GATEWAY"], #content a[href*="video"]').count()
+                assert docs_link >= 1, "Video disabled state must link to the docs section"
+                banner = page.evaluate("() => { const n = document.querySelector('#notice'); return (n && !n.hidden) ? n.textContent : ''; }")
+                assert "Video API" not in banner, f"global Video API banner on video page: {banner!r}"
+                # Leaving Video Studio must not leave a video banner behind.
+                page.locator('[data-page="providers"]').click()
+                page.wait_for_load_state("domcontentloaded")
+                time.sleep(0.6)
+                banner = page.evaluate("() => { const n = document.querySelector('#notice'); return (n && !n.hidden) ? n.textContent : ''; }")
+                assert "Video API" not in banner, f"stale Video API banner after leaving video: {banner!r}"
+                errors = [m for m in console_msgs if m[0] == "error"]
+                assert not errors, f"Console errors after video checks: {errors}"
+                # Evidence: Providers with video disabled (dark, both sizes).
+                video_dir = ROOT / "docs/browser-evidence/video-disabled"
+                video_dir.mkdir(parents=True, exist_ok=True)
+                page.set_viewport_size({"width": 1440, "height": 900})
+                page.evaluate("() => { document.documentElement.dataset.theme = 'dark'; localStorage.setItem('nexaroute_theme', 'dark'); }")
+                page.locator('[data-page="providers"]').click()
+                page.wait_for_load_state("domcontentloaded")
+                time.sleep(0.5)
+                page.screenshot(path=str(video_dir / "providers-1440x900-dark.png"))
+                page.set_viewport_size({"width": 390, "height": 844})
+                time.sleep(0.4)
+                page.screenshot(path=str(video_dir / "providers-390x844-dark.png"))
+
                 browser.close()
         finally:
             proc.terminate()
