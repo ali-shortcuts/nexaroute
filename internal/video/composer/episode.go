@@ -41,6 +41,20 @@ func (r *Runner) ComposeEpisode(ctx context.Context, spec EpisodeSpec) (Manifest
 	if spec.Width < 64 || spec.Height < 64 || spec.Width > 4096 || spec.Height > 4096 || spec.FPS < 1 || spec.FPS > 120 {
 		return Manifest{}, fmt.Errorf("episode dimensions must be 64..4096 pixels and fps must be 1..120")
 	}
+	narrationVolume := spec.NarrationVolume
+	if narrationVolume == 0 {
+		narrationVolume = 1
+	}
+	musicVolume := spec.MusicVolume
+	if musicVolume == 0 {
+		musicVolume = 0.12
+	}
+	if narrationVolume < 0 || narrationVolume > 4 || musicVolume < 0 || musicVolume > 4 ||
+		math.IsNaN(narrationVolume) || math.IsInf(narrationVolume, 0) ||
+		math.IsNaN(musicVolume) || math.IsInf(musicVolume, 0) {
+		return Manifest{}, fmt.Errorf("narration and music volume must be between 0 and 4")
+	}
+
 	output, err := r.resolvePath(spec.OutputPath)
 	if err != nil {
 		return Manifest{}, err
@@ -147,20 +161,6 @@ func (r *Runner) ComposeEpisode(ctx context.Context, spec EpisodeSpec) (Manifest
 			return Manifest{}, fmt.Errorf("stage subtitles: %w", err)
 		}
 		subtitles = copied
-	}
-
-	narrationVolume := spec.NarrationVolume
-	if narrationVolume == 0 {
-		narrationVolume = 1
-	}
-	musicVolume := spec.MusicVolume
-	if musicVolume == 0 {
-		musicVolume = 0.12
-	}
-	if narrationVolume < 0 || narrationVolume > 4 || musicVolume < 0 || musicVolume > 4 ||
-		math.IsNaN(narrationVolume) || math.IsInf(narrationVolume, 0) ||
-		math.IsNaN(musicVolume) || math.IsInf(musicVolume, 0) {
-		return Manifest{}, fmt.Errorf("narration and music volume must be between 0 and 4")
 	}
 
 	tmpOutput, err := temporaryOutputPath(output)
