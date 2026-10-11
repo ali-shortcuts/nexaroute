@@ -2,7 +2,7 @@
 
 **Date:** 2026-10-11
 
-**State:** IN PROGRESS — none actionable decision recorded
+**State:** DONE — none actionable
 
 ## Decision
 
@@ -17,6 +17,6 @@ The M1-3 benchmark remains the before-measurement record, but there is no after-
 - M1-3 profile attempt and complete measurements: `docs/benchmarks/m1-3-2026-10-11/benchmark.json` (PR #257).
 - M1-3 analysis, including status counts and pprof limitation: `docs/benchmarks/m1-3-2026-10-11/M1-3_BENCHMARK_REPORT.md` (PR #257).
 - Source scan on baseline `dcb9f9b` for `net/http/pprof`, `runtime/pprof`, and `StartCPUProfile` in `cmd/` and `internal/` found no registered profiling implementation.
-- `./scripts/verify.sh` is run for this item; its unmodified raw output will be committed as `docs/reports/m1-4-verify.raw.txt`.
+- `./scripts/verify.sh` — **VERIFY PASS**; raw output: `docs/reports/m1-4-verify.raw.txt`.
 
 No product code, runtime behavior, dependencies, `scripts/verify.sh`, or workflow files are changed by M1-4.
