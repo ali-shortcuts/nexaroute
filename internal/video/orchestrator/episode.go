@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/ali-shortcuts/nexaroute/internal/video"
-	"github.com/ali-shortcuts/nexaroute/internal/video/cost"
 	"github.com/ali-shortcuts/nexaroute/internal/video/composer"
+	"github.com/ali-shortcuts/nexaroute/internal/video/cost"
 )
 
 type EpisodeComposer interface {
