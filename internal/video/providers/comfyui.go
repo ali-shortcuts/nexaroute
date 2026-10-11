@@ -109,7 +109,18 @@ func NewComfyUI(cfg video.Config, maxOutputBytes int64) (*ComfyUI, error) {
 	}
 	p := &ComfyUI{
 		baseURL: base, workflow: workflow, model: model, maxDuration: maxDuration,
-		maxOutputBytes: maxOutputBytes, client: &http.Client{Timeout: 5 * time.Minute},
+		maxOutputBytes: maxOutputBytes, client: &http.Client{
+			Timeout: 5 * time.Minute,
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				if len(via) >= 5 {
+					return errors.New("too many ComfyUI redirects")
+				}
+				if !strings.EqualFold(req.URL.Scheme, u.Scheme) || !strings.EqualFold(req.URL.Host, u.Host) {
+					return http.ErrUseLastResponse
+				}
+				return nil
+			},
+		},
 		cfg: cfg, promptInput: defaultInput(cfg.ComfyUIPromptInput, "text"),
 		negativeInput: defaultInput(cfg.ComfyUINegativeInput, "text"),
 		widthInput: defaultInput(cfg.ComfyUIWidthInput, "width"),
