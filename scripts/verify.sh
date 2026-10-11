@@ -7,6 +7,7 @@ go version
 echo '== shell syntax =='
 bash -n scripts/*.sh
 echo '== formatting =='
+gofmt -d internal/video/api/handler.go
 if out=$(gofmt -l .) && [[ -n "$out" ]]; then
   echo 'gofmt check failed for:' >&2
   echo "$out" >&2
