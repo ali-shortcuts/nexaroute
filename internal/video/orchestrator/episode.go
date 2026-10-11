@@ -93,7 +93,9 @@ func validateShotPlanRequest(r video.VideoRequest, p video.VideoProvider, caps v
 func buildShotRequest(parent video.VideoRequest, shot video.Shot, index int) video.VideoRequest {
 	r := parent
 	r.Prompt = shotPrompt(shot)
-	r.NegativePrompt = shot.NegativePrompt
+	if strings.TrimSpace(shot.NegativePrompt) != "" {
+		r.NegativePrompt = shot.NegativePrompt
+	}
 	r.DurationSeconds = shot.DurationSeconds
 	r.MaxCostUSD = 0 // the episode-level budget is enforced against the aggregate estimate
 	r.ShotPlan = nil
@@ -108,7 +110,9 @@ func buildShotRequest(parent video.VideoRequest, shot video.Shot, index int) vid
 	r.ReferenceAssets = append([]video.Asset(nil), parent.ReferenceAssets...)
 	r.ReferenceAssets = append(r.ReferenceAssets, shot.RequiredReferences...)
 	r.AudioRequested = parent.AudioRequested || len(shot.SoundRequirements) > 0
-	r.NarrationText = shot.NarrationSegment
+	if strings.TrimSpace(shot.NarrationSegment) != "" {
+		r.NarrationText = shot.NarrationSegment
+	}
 	if parent.IdempotencyKey != "" {
 		r.IdempotencyKey = fmt.Sprintf("%s-shot-%03d", parent.IdempotencyKey, index+1)
 	}
