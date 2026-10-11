@@ -10,3 +10,6 @@ coverage.out
 scripts/__pycache__/
 __pycache__/
 *.pyc
+
+# Local Go coverage profiles
+*.cover

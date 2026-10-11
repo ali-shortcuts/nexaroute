@@ -109,3 +109,41 @@ func TestCoverageBehaviorSaveAtomicPreservesEnvironmentOwnedFields(t *testing.T)
 		}
 	}
 }
+
+func TestCoverageBehaviorConfigValidationMatrix(t *testing.T) {
+	cases := []struct {
+		name string
+		edit func(*Config)
+	}{
+		{"missing listen", func(c *Config) { c.Listen = "" }},
+		{"bad listen", func(c *Config) { c.Listen = "not a host port" }},
+		{"bad port", func(c *Config) { c.Listen = "127.0.0.1:70000" }},
+		{"logging size low", func(c *Config) { c.Logging.MaxSizeMB = 0 }},
+		{"logging backups high", func(c *Config) { c.Logging.MaxBackups = 21 }},
+		{"logging mode", func(c *Config) { c.Logging.AccessMode = "invalid" }},
+		{"logging sample", func(c *Config) { c.Logging.SuccessSampleEvery = 0 }},
+		{"logging slow negative", func(c *Config) { c.Logging.SlowRequestMS = -1 }},
+		{"client base url", func(c *Config) { c.ClientBaseURL = "file:///etc/passwd" }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := Default()
+			cfg.ApplyDefaults()
+			tc.edit(&cfg)
+			if err := cfg.Validate(); err == nil {
+				t.Fatal("invalid configuration was accepted")
+			}
+		})
+	}
+	var enabled, disabled bool
+	virtual := VirtualEndpointConfig{ID: "v", Enabled: &enabled}
+	decision := DecisionProviderConfig{ID: "d", Enabled: &disabled}
+	if virtual.IsEnabled() || decision.IsEnabled() {
+		t.Fatal("explicit enabled flags have wrong semantics")
+	}
+	step := DecisionChainStep{Provider: "jev", TimeoutMS: 10}
+	encoded, err := json.Marshal(step)
+	if err != nil || string(encoded) != `{"provider":"jev","timeout_ms":10}` {
+		t.Fatalf("step marshal=%s err=%v", encoded, err)
+	}
+}
