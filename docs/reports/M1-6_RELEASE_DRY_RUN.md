@@ -20,7 +20,7 @@ The release smoke fixture now supplies a test-only token to its development fake
 - Artifact: `nexaroute-release-v0.0.0-dryrun-20261011-retry1`.
 - Upload, download, byte-comparison, and downloaded checksum verification all passed. The artifact was also downloaded locally; its exact nine-file inventory matched the expected release outputs, and `sha256sum -c SHA256SUMS` passed for every listed asset.
 - Confirmed that neither a GitHub Release nor a Git tag exists for the dummy version.
-- PR #260 CI: all four checks successful, including `CI/verify`.
+- The implementation SHA passed all four PR checks before the full workflow transcript was added. That transcript echoed the repository guard's legacy-identifier scan command and caused a later docs-only CI run to fail; the transcript is being removed from committed docs, while the complete logs remain available from the linked GitHub Actions run.
 
 The artifact contained `nexaroute-linux-amd64`, `nexaroute-linux-arm64`, `nexaroute-videogen-linux-amd64`, `nexaroute-videogen-linux-arm64`, `install.sh`, `video.example.json`, `VIDEO_GATEWAY.md`, `RELEASE_NOTES.md`, and `SHA256SUMS`.
 
@@ -30,7 +30,7 @@ The first dispatch, [run #38125153341](https://github.com/ali-shortcuts/nexarout
 
 ## Evidence
 
-- Full successful workflow log: `docs/reports/m1-6-retry-workflow.raw.txt`.
+- Full successful workflow log: [GitHub Actions run #38125574996](https://github.com/ali-shortcuts/nexaroute/actions/runs/38125574996); the copied transcript was omitted from the repository because its echoed guard command trips the repository cleanliness scan.
 - Run status, artifact inventory, checksums, and release/tag absence: `docs/reports/m1-6-retry-check.raw.txt`.
 - First-run failure log: `docs/reports/m1-6-first-dispatch.failure.raw.txt`.
 - Local `verify.sh` preflight output: `docs/reports/m1-6-verify.raw.txt`.
