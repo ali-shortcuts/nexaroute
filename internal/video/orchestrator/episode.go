@@ -548,7 +548,7 @@ func (o *Orchestrator) composeEpisode(ctx context.Context, j *video.VideoJob) er
 	asset := video.Asset{
 		ID: j.JobID + "-episode", Kind: "video", Filename: j.JobID + ".mp4",
 		ContentType: "video/mp4",
-		Metadata: map[string]string{"project_id": j.ProjectID, "episode_id": j.EpisodeID, "job_id": j.JobID, "asset_role": "final_episode"},
+		Metadata:    map[string]string{"project_id": j.ProjectID, "episode_id": j.EpisodeID, "job_id": j.JobID, "asset_role": "final_episode"},
 	}
 	saved, err := o.Assets.Put(ctx, asset, data)
 	if err != nil {
