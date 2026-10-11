@@ -178,7 +178,6 @@ func TestInjectedMissingBinaryIsReported(t *testing.T) {
 	}
 }
 
-
 func TestComposerRequiresOutputExtension(t *testing.T) {
 	binary, _, _ := fakeFFmpeg(t)
 	runner := New(binary, "")
