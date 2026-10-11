@@ -66,8 +66,7 @@ func (r *Runner) Concat(ctx context.Context, inputs []string, output string) (Ma
 	defer os.Remove(list.Name())
 	for _, in := range inputs {
 		abs, _ := filepath.Abs(in)
-		if _, err = fmt.Fprintf(list, "file '%s'
-", strings.ReplaceAll(abs, "'", "'\\''")); err != nil {
+		if _, err = fmt.Fprintf(list, "file '%s'\n", strings.ReplaceAll(abs, "'", "'\\''")); err != nil {
 			list.Close()
 			return Manifest{}, err
 		}
