@@ -2,8 +2,6 @@ package composer
 
 import (
 	"context"
-	"os/exec"
-	"strings"
 	"encoding/json"
 	"fmt"
 	"os"
