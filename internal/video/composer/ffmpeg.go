@@ -66,7 +66,8 @@ func (r *Runner) Concat(ctx context.Context, inputs []string, output string) (Ma
 	defer os.Remove(list.Name())
 	for _, in := range inputs {
 		abs, _ := filepath.Abs(in)
-		if _, err = fmt.Fprintf(list, "file '%s'\n", strings.ReplaceAll(abs, "'", "'\\''")); err != nil {
+		if _, err = fmt.Fprintf(list, "file '%s'
+", strings.ReplaceAll(abs, "'", "'\\''")); err != nil {
 			list.Close()
 			return Manifest{}, err
 		}
@@ -87,7 +88,6 @@ func (r *Runner) Concat(ctx context.Context, inputs []string, output string) (Ma
 	return m, os.Rename(tmp, output)
 }
 func (m Manifest) JSON() []byte { b, _ := json.MarshalIndent(m, "", "  "); return b }
-
 
 // temporaryOutputPath preserves the container extension so FFmpeg can infer
 // the muxer from the temporary filename before the atomic rename.
