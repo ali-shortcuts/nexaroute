@@ -5,6 +5,8 @@ clients across many LLM providers and models — most commonly
 **Claude Code -> NexaRoute -> Chat2API / other OpenAI-compatible or
 Anthropic-compatible providers**.
 
+Current release: **v0.17.0** — see [release notes](docs/releases/v0.17.0.md).
+
 ## Install / Update
 
 ```bash

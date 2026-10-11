@@ -6,5 +6,8 @@ cd "$(dirname "$0")/.."
 # The Python suite installs real release binaries and exercises the full desktop
 # lifecycle; the shell suite independently checks clean install/upgrade failure
 # atomicity with minimal executable fixtures.
+if [[ ! -x dist/nexaroute-linux-amd64 ]]; then
+  ./scripts/build-release.sh v0.17.0
+fi
 python3 scripts/test-install.py
 ./scripts/test-installer-e2e.sh

@@ -1,7 +1,8 @@
 FROM golang:1.24-alpine AS build
 WORKDIR /src
+ARG VERSION=v0.17.0
 COPY . .
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/nexaroute ./cmd/gateway \
+RUN VERSION_NO_V="${VERSION#v}" && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.version=${VERSION_NO_V} -X github.com/ali-shortcuts/nexaroute/internal/httpapi.gatewayVersion=${VERSION_NO_V}" -o /out/nexaroute ./cmd/gateway \
     && mkdir -m 0700 -p /out/config \
     && cp configs/config.example.json /out/config/config.json \
     && chmod 0600 /out/config/config.json

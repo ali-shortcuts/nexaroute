@@ -3,12 +3,15 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/ali-shortcuts/nexaroute/internal/config"
+	"github.com/ali-shortcuts/nexaroute/internal/controlplane"
 )
 
 func TestControlPlaneRuntimeFileReconcilesWithoutSecrets(t *testing.T) {
@@ -46,5 +49,75 @@ func TestControlPlaneRuntimeDryRunAndExternalFailClosed(t *testing.T) {
 	}
 	if _, err := openControlPlaneRuntime(config.ControlPlaneConfig{Enabled: true, Backend: "postgres", PostgresDSNEnv: "PG_DSN"}, path); err == nil {
 		t.Fatal("postgres silently fell back")
+	}
+}
+
+func TestControlPlaneRuntimeMigratesExistingStateAndRecoversOnRestart(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	statePath := configPath + ".controlplane.json"
+	legacy, err := controlplane.NewFileStore(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed, err := legacy.Put(context.Background(), controlPlaneNamespace, 0, []byte(`{"legacy":"preserve"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rt, err := openControlPlaneRuntime(config.ControlPlaneConfig{Enabled: true, Backend: "file"}, configPath)
+	if err != nil {
+		t.Fatalf("migration startup: %v", err)
+	}
+	got, err := rt.manager.Load(context.Background(), controlPlaneNamespace)
+	if err != nil || string(got.Payload) != `{"legacy":"preserve"}` || got.Revision != seed.Revision {
+		t.Fatalf("migration replaced local state: got=%+v err=%v seed=%+v", got, err, seed)
+	}
+
+	restarted, err := openControlPlaneRuntime(config.ControlPlaneConfig{Enabled: true, Backend: "file"}, configPath)
+	if err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+	recovered, err := restarted.manager.Load(context.Background(), controlPlaneNamespace)
+	if err != nil || string(recovered.Payload) != `{"legacy":"preserve"}` || recovered.Revision != seed.Revision {
+		t.Fatalf("restart lost local state: got=%+v err=%v", recovered, err)
+	}
+}
+
+func TestControlPlaneRuntimeConcurrentWritesUseOptimisticRevision(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	rt, err := openControlPlaneRuntime(config.ControlPlaneConfig{Enabled: true, Backend: "file"}, configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial, err := rt.manager.Load(context.Background(), controlPlaneNamespace)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var wg sync.WaitGroup
+	results := make(chan error, 2)
+	for _, payload := range []string{`{"writer":1}`, `{"writer":2}`} {
+		wg.Add(1)
+		go func(payload string) {
+			defer wg.Done()
+			_, saveErr := rt.manager.Save(context.Background(), controlPlaneNamespace, initial.Revision, []byte(payload))
+			results <- saveErr
+		}(payload)
+	}
+	wg.Wait()
+	close(results)
+
+	var successes, conflicts int
+	for saveErr := range results {
+		if saveErr == nil {
+			successes++
+		} else if errors.Is(saveErr, controlplane.ErrConflict) {
+			conflicts++
+		} else {
+			t.Fatalf("unexpected concurrent write error: %v", saveErr)
+		}
+	}
+	if successes != 1 || conflicts != 1 {
+		t.Fatalf("concurrent writes: successes=%d conflicts=%d", successes, conflicts)
 	}
 }
