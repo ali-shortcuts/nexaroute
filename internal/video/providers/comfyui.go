@@ -108,8 +108,12 @@ func NewComfyUI(cfg video.Config, maxOutputBytes int64) (*ComfyUI, error) {
 		maxOutputBytes = comfyDefaultMaxOutput
 	}
 	p := &ComfyUI{
-		baseURL: base, workflow: workflow, model: model, maxDuration: maxDuration,
-		maxOutputBytes: maxOutputBytes, client: &http.Client{
+		baseURL:        base,
+		workflow:       workflow,
+		model:          model,
+		maxDuration:    maxDuration,
+		maxOutputBytes: maxOutputBytes,
+		client: &http.Client{
 			Timeout: 5 * time.Minute,
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
 				if len(via) >= 5 {
@@ -121,13 +125,14 @@ func NewComfyUI(cfg video.Config, maxOutputBytes int64) (*ComfyUI, error) {
 				return nil
 			},
 		},
-		cfg: cfg, promptInput: defaultInput(cfg.ComfyUIPromptInput, "text"),
+		cfg:           cfg,
+		promptInput:   defaultInput(cfg.ComfyUIPromptInput, "text"),
 		negativeInput: defaultInput(cfg.ComfyUINegativeInput, "text"),
-		widthInput: defaultInput(cfg.ComfyUIWidthInput, "width"),
-		heightInput: defaultInput(cfg.ComfyUIHeightInput, "height"),
-		framesInput: defaultInput(cfg.ComfyUIFramesInput, "length"),
-		fpsInput: defaultInput(cfg.ComfyUIFPSInput, "frame_rate"),
-		seedInput: defaultInput(cfg.ComfyUISeedInput, "noise_seed"),
+		widthInput:    defaultInput(cfg.ComfyUIWidthInput, "width"),
+		heightInput:   defaultInput(cfg.ComfyUIHeightInput, "height"),
+		framesInput:   defaultInput(cfg.ComfyUIFramesInput, "length"),
+		fpsInput:      defaultInput(cfg.ComfyUIFPSInput, "frame_rate"),
+		seedInput:     defaultInput(cfg.ComfyUISeedInput, "noise_seed"),
 	}
 	for _, required := range []struct{ id, input, label string }{
 		{cfg.ComfyUIPromptNodeID, p.promptInput, "prompt"},
