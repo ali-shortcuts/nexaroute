@@ -29,6 +29,8 @@ type Orchestrator struct {
 	Providers    ProviderRegistry
 	Ledger       *cost.Ledger
 	Assets       video.AssetSink
+	Composer     EpisodeComposer
+	MaxAssetBytes int64
 	PollInterval time.Duration
 	MaxPolls     int
 }
@@ -36,6 +38,16 @@ type Orchestrator struct {
 func (o *Orchestrator) Create(ctx context.Context, r video.VideoRequest) (video.VideoJob, error) {
 	if err := ctx.Err(); err != nil {
 		return video.VideoJob{}, err
+	}
+	if len(r.ShotPlan) > 1 {
+		totalDuration := 0.0
+		for _, shot := range r.ShotPlan {
+			totalDuration += shot.DurationSeconds
+		}
+		if r.DurationSeconds > 0 && math.Abs(r.DurationSeconds-totalDuration) > 0.05 {
+			return video.VideoJob{}, fmt.Errorf("duration_seconds %.2f does not match total shot duration %.2f", r.DurationSeconds, totalDuration)
+		}
+		r.DurationSeconds = totalDuration
 	}
 	r = r.Normalized()
 	if err := r.Validate(); err != nil {
@@ -62,17 +74,27 @@ func (o *Orchestrator) Create(ctx context.Context, r video.VideoRequest) (video.
 	if err != nil {
 		return video.VideoJob{}, fmt.Errorf("read provider capabilities: %w", err)
 	}
-	r, err = validateProviderRequest(r, caps)
-	if err != nil {
-		return video.VideoJob{}, err
-	}
-	if err := p.ValidateRequest(r); err != nil {
-		return video.VideoJob{}, fmt.Errorf("provider rejected request: %w", err)
-	}
-
-	estimate, err := p.EstimateCost(r)
-	if err != nil {
-		return video.VideoJob{}, fmt.Errorf("cannot safely estimate video cost; refusing submission: %w", err)
+	var estimate video.CostEstimate
+	if len(r.ShotPlan) > 1 {
+		if o.Composer == nil {
+			return video.VideoJob{}, errors.New("multi-shot video jobs require the episode composer")
+		}
+		r, estimate, err = validateShotPlanRequest(ctx, r, p, caps)
+		if err != nil {
+			return video.VideoJob{}, err
+		}
+	} else {
+		r, err = validateProviderRequest(r, caps)
+		if err != nil {
+			return video.VideoJob{}, err
+		}
+		if err := p.ValidateRequest(r); err != nil {
+			return video.VideoJob{}, fmt.Errorf("provider rejected request: %w", err)
+		}
+		estimate, err = p.EstimateCost(r)
+		if err != nil {
+			return video.VideoJob{}, fmt.Errorf("cannot safely estimate video cost; refusing submission: %w", err)
+		}
 	}
 	if !validEstimate(estimate) {
 		return video.VideoJob{}, cost.ErrInvalidEstimate
