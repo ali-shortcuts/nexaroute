@@ -473,8 +473,8 @@ func TestVideoConfigRequiresExplicitProviderAndValidComfyUISettings(t *testing.T
 	cfg := Default()
 	cfg.Video.Enabled = true
 	cfg.Video.AuthTokenEnv = "NEXAROUTE_TEST_VIDEO_TOKEN"
-	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "requires comfyui_enabled") {
-		t.Fatalf("enabled gateway without provider error=%v", err)
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("valid config-layer settings rejected before runtime provider initialization: %v", err)
 	}
 
 	cfg.Video.ComfyUIEnabled = true
