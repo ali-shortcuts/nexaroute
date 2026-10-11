@@ -85,6 +85,13 @@ func (o *Orchestrator) Create(ctx context.Context, r video.VideoRequest) (video.
 		if !r.DryRun && (o.Composer == nil || o.Assets == nil) {
 			return video.VideoJob{}, errors.New("multi-shot video jobs require an episode composer and asset sink")
 		}
+		if !r.DryRun {
+			if preflight, ok := o.Composer.(interface{ Preflight(context.Context) error }); ok {
+				if err := preflight.Preflight(ctx); err != nil {
+					return video.VideoJob{}, fmt.Errorf("episode composer preflight failed before provider submission: %w", err)
+				}
+			}
+		}
 		r, estimate, err = validateShotPlanRequest(r, p, caps)
 		if err != nil {
 			return video.VideoJob{}, err
