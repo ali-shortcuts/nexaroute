@@ -76,10 +76,10 @@ func (o *Orchestrator) Create(ctx context.Context, r video.VideoRequest) (video.
 	}
 	var estimate video.CostEstimate
 	if len(r.ShotPlan) > 1 {
-		if o.Composer == nil {
-			return video.VideoJob{}, errors.New("multi-shot video jobs require the episode composer")
+		if o.Composer == nil || o.Assets == nil {
+			return video.VideoJob{}, errors.New("multi-shot video jobs require an episode composer and asset sink")
 		}
-		r, estimate, err = validateShotPlanRequest(ctx, r, p, caps)
+		r, estimate, err = validateShotPlanRequest(r, p, caps)
 		if err != nil {
 			return video.VideoJob{}, err
 		}
@@ -261,6 +261,39 @@ func (o *Orchestrator) Recover(ctx context.Context) error {
 			if err := o.enqueueWithBackpressure(ctx, job); err != nil {
 				return fmt.Errorf("enqueue recovered video job %s: %w", job.JobID, err)
 			}
+		if len(job.Request.ShotPlan) > 1 {
+			if len(job.ShotExecutions) != len(job.Request.ShotPlan) {
+				if err := o.markNeedsManual(ctx, job, "multi-shot job has no complete durable shot checkpoint list"); err != nil {
+					return err
+				}
+				continue
+			}
+			ambiguous := false
+			for i, run := range job.ShotExecutions {
+				if job.Request.ShotPlan[i].OutputAsset == nil && run.ProviderJobID == "" && run.State != video.StateQueued {
+					if err := o.markNeedsManual(ctx, job, fmt.Sprintf("shot %q has an unknown submission checkpoint; automatic resubmission is disabled", run.ShotID)); err != nil {
+						return err
+					}
+					ambiguous = true
+					break
+				}
+			}
+			if ambiguous {
+				continue
+			}
+			switch job.State {
+			case video.StateQueued, video.StateAdmitted, video.StateSubmitted, video.StateProcessing, video.StatePolling, video.StateUploading, video.StateComposing:
+				if err := o.enqueueWithBackpressure(ctx, job); err != nil {
+					return fmt.Errorf("enqueue recovered episode job %s: %w", job.JobID, err)
+				}
+			default:
+				if err := o.markNeedsManual(ctx, job, "multi-shot episode state is not restart-resumable"); err != nil {
+					return err
+				}
+			}
+			continue
+		}
+		switch job.State {
 		case video.StateSubmitted, video.StateProcessing, video.StatePolling, video.StateUploading, video.StateCancelRequested:
 			if job.ProviderJobID == "" {
 				if err := o.markNeedsManual(ctx, job, "active job has no provider job ID; automatic resubmission is disabled"); err != nil {
@@ -343,6 +376,9 @@ func (o *Orchestrator) RunJob(ctx context.Context, queued video.VideoJob) error 
 	j, err := o.Store.Get(ctx, queued.JobID)
 	if err != nil {
 		return fmt.Errorf("load video job before execution: %w", err)
+	}
+	if len(j.Request.ShotPlan) > 1 {
+		return o.runEpisodeJob(ctx, j)
 	}
 	switch j.State {
 	case video.StateCompleted, video.StateFailed, video.StateCancelled, video.StateDryRun:
@@ -503,11 +539,13 @@ func (o *Orchestrator) pollAndFinalize(ctx context.Context, p video.VideoProvide
 				return err
 			}
 			return nil
-		case video.StateSubmitted, video.StateProcessing, video.StatePolling:
+		case video.StateQueued, video.StateSubmitted, video.StateProcessing, video.StatePolling:
 			if j.State == video.StateUploading {
 				return o.markNeedsManualAndError(ctx, j, "provider status regressed after output upload began")
 			}
-			if st.State == video.StateSubmitted && (j.State == video.StateProcessing || j.State == video.StatePolling) {
+			if st.State == video.StateQueued {
+				// Queued is a valid remote status; never regress the persisted parent job.
+			} else if st.State == video.StateSubmitted && (j.State == video.StateProcessing || j.State == video.StatePolling) {
 				// A stale provider response must not regress persisted state.
 			} else if err := j.Transition(st.State); err != nil {
 				return o.markNeedsManualAndError(ctx, j, "provider returned an unsupported state transition")
