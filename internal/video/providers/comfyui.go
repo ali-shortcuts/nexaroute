@@ -206,8 +206,40 @@ func (p *ComfyUI) ValidateRequest(r video.VideoRequest) error {
 	if r.ModelPreference != "" && r.ModelPreference != p.model {
 		return fmt.Errorf("ComfyUI workflow model must be %q", p.model)
 	}
-	if r.AudioRequested || r.DialogueRequested {
-		return errors.New("ComfyUI workflow adapter does not claim audio or dialogue support")
+	if r.AudioRequested || r.DialogueRequested || strings.TrimSpace(r.NarrationText) != "" || strings.TrimSpace(r.SubtitleLanguage) != "" {
+		return errors.New("ComfyUI workflow adapter does not claim audio, narration, or subtitle support")
+	}
+	if len(r.ShotPlan) > 1 {
+		return errors.New("ComfyUI adapter submits one workflow per job; multi-shot episode orchestration is not implemented")
+	}
+	if strings.TrimSpace(r.Prompt) == "" && (len(r.ShotPlan) != 1 || strings.TrimSpace(r.ShotPlan[0].Prompt) == "") {
+		return errors.New("ComfyUI requires a non-empty text prompt")
+	}
+	if len(r.ReferenceAssets) > 0 || r.FirstFrameAsset != nil || r.LastFrameAsset != nil ||
+		len(r.CharacterReferences) > 0 || len(r.LocationReferences) > 0 || len(r.StyleReferences) > 0 {
+		return errors.New("ComfyUI workflow adapter does not map reference or first/last-frame assets into the workflow")
+	}
+	if r.ContinuityContext != nil {
+		return errors.New("ComfyUI workflow adapter does not map continuity context into the workflow")
+	}
+	if strings.TrimSpace(r.CallbackURL) != "" {
+		return errors.New("ComfyUI provider does not support callbacks or webhooks")
+	}
+	if strings.ToLower(strings.TrimSpace(r.OutputFormat)) != "mp4" {
+		return errors.New("ComfyUI workflow adapter currently supports MP4 output only")
+	}
+	negativePrompt := strings.TrimSpace(r.NegativePrompt)
+	if negativePrompt == "" && len(r.ShotPlan) == 1 {
+		negativePrompt = strings.TrimSpace(r.ShotPlan[0].NegativePrompt)
+	}
+	if negativePrompt != "" && strings.TrimSpace(p.cfg.ComfyUINegativeNodeID) == "" {
+		return errors.New("negative_prompt requires a configured ComfyUI negative-prompt node")
+	}
+	if r.Seed != nil && strings.TrimSpace(p.cfg.ComfyUISeedNodeID) == "" {
+		return errors.New("seed requires a configured ComfyUI seed node")
+	}
+	if r.FPS != 24 && strings.TrimSpace(p.cfg.ComfyUIFPSNodeID) == "" {
+		return errors.New("non-default fps requires a configured ComfyUI FPS node")
 	}
 	if r.AspectRatio == video.AspectCustom && (r.Width < 1 || r.Height < 1) {
 		return errors.New("custom aspect ratio requires explicit positive width and height")
@@ -250,8 +282,12 @@ func (p *ComfyUI) CreateJob(ctx context.Context, r video.VideoRequest) (video.Pr
 	if err := setWorkflowInput(workflow, p.cfg.ComfyUIPromptNodeID, p.promptInput, prompt); err != nil {
 		return video.ProviderJob{}, err
 	}
+	negativePrompt := strings.TrimSpace(r.NegativePrompt)
+	if negativePrompt == "" && len(r.ShotPlan) == 1 {
+		negativePrompt = strings.TrimSpace(r.ShotPlan[0].NegativePrompt)
+	}
 	if strings.TrimSpace(p.cfg.ComfyUINegativeNodeID) != "" {
-		if err := setWorkflowInput(workflow, p.cfg.ComfyUINegativeNodeID, p.negativeInput, r.NegativePrompt); err != nil {
+		if err := setWorkflowInput(workflow, p.cfg.ComfyUINegativeNodeID, p.negativeInput, negativePrompt); err != nil {
 			return video.ProviderJob{}, err
 		}
 	}
@@ -341,7 +377,7 @@ func (p *ComfyUI) GetJob(ctx context.Context, id string) (video.ProviderJobStatu
 			outputs := collectComfyVideoOutputs(id, entry.Outputs)
 			if entry.Status.Completed {
 				if len(outputs) == 0 {
-					return video.ProviderJobStatus{ProviderJobID: id, State: video.StateFailed, Error: "ComfyUI workflow completed without an MP4/WebM/MOV/MKV output"}, nil
+					return video.ProviderJobStatus{ProviderJobID: id, State: video.StateFailed, Error: "ComfyUI workflow completed without an MP4 output"}, nil
 				}
 				return video.ProviderJobStatus{ProviderJobID: id, State: video.StateCompleted, Progress: 1, Outputs: outputs}, nil
 			}
@@ -388,9 +424,7 @@ func collectComfyVideoOutputs(promptID string, outputs map[string]map[string]jso
 			}
 			for _, file := range files {
 				ext := strings.ToLower(filepath.Ext(file.Filename))
-				switch ext {
-				case ".mp4", ".webm", ".mov", ".mkv":
-				default:
+				if ext != ".mp4" {
 					continue
 				}
 				id := promptID + "-" + nodeID + "-" + file.Filename
