@@ -66,6 +66,7 @@ type VideoJob struct {
 	CompletedAt      *time.Time        `json:"completed_at,omitempty"`
 	LastError        string            `json:"last_error,omitempty"`
 	RetryCount       int               `json:"retry_count"`
+	CompositionRetryCount int          `json:"composition_retry_count,omitempty"`
 	CurrentShot      int               `json:"current_shot,omitempty"`
 	TotalShots       int               `json:"total_shots,omitempty"`
 	ShotExecutions   []ShotExecution   `json:"shot_executions,omitempty"`
