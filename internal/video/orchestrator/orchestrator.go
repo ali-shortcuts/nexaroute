@@ -45,6 +45,42 @@ func (o *Orchestrator) Create(ctx context.Context, r video.VideoRequest) (video.
 	for i := range r.ShotPlan {
 		r.ShotPlan[i].OutputAsset = nil
 	}
+	if len(r.ShotPlan) == 1 {
+		shot := r.ShotPlan[0]
+		if shot.Prompt == "" {
+			shot.Prompt = r.Prompt
+		}
+		if shot.NegativePrompt == "" {
+			shot.NegativePrompt = r.NegativePrompt
+		}
+		if shot.DurationSeconds <= 0 || math.IsNaN(shot.DurationSeconds) || math.IsInf(shot.DurationSeconds, 0) {
+			return video.VideoJob{}, fmt.Errorf("shot %q has an invalid duration", shot.ShotID)
+		}
+		if r.DurationSeconds > 0 && math.Abs(r.DurationSeconds-shot.DurationSeconds) > 0.05 {
+			return video.VideoJob{}, fmt.Errorf("duration_seconds %.2f does not match shot duration %.2f", r.DurationSeconds, shot.DurationSeconds)
+		}
+		if shot.Provider != "" {
+			if r.ProviderPreference != "" && r.ProviderPreference != shot.Provider {
+				return video.VideoJob{}, errors.New("single shot provider conflicts with provider_preference")
+			}
+			r.ProviderPreference = shot.Provider
+		}
+		if shot.Model != "" {
+			if r.ModelPreference != "" && r.ModelPreference != shot.Model {
+				return video.VideoJob{}, errors.New("single shot model conflicts with model_preference")
+			}
+			r.ModelPreference = shot.Model
+		}
+		r.Prompt = shotPrompt(shot)
+		r.NegativePrompt = shot.NegativePrompt
+		r.DurationSeconds = shot.DurationSeconds
+		r.ReferenceAssets = append(r.ReferenceAssets, shot.RequiredReferences...)
+		r.AudioRequested = r.AudioRequested || len(shot.SoundRequirements) > 0
+		if shot.NarrationSegment != "" {
+			r.NarrationText = shot.NarrationSegment
+		}
+		r.ShotPlan = nil
+	}
 	if len(r.ShotPlan) > 1 {
 		totalDuration := 0.0
 		for _, shot := range r.ShotPlan {
