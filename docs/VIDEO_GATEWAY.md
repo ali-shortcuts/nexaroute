@@ -14,14 +14,6 @@ The repository now contains an isolated `internal/video` domain and provider con
 - bearer-token authentication support in the standalone data-plane handler;
 - timestamped HMAC webhook verification with replay-window checks.
 
-## Local episode assembly building block
-
-The `internal/video/composer.Runner.ComposeEpisode` helper assembles already-generated local shot files into an MP4: it normalizes each shot to a common resolution/FPS, concatenates shots in the supplied order, optionally mixes narration with looping background music, and optionally burns in an SRT subtitle file. It uses temporary files beside the destination, preserves the MP4 extension for FFmpeg's muxer detection, and removes temporary artifacts on return.
-
-The helper requires FFmpeg on the host and accepts an `EpisodeSpec` JSON shape with `shots` (ordered local file paths), optional `narration_path`, `music_path`, and `subtitle_path`, required `output_path`, `width`, `height`, and `fps`, plus optional `narration_volume` and `music_volume`. A zero audio-volume field selects its default (narration 1.0, music 0.12).
-
-This is currently a local composition building block, **not yet a persistent Video Gateway episode job or a Video Studio action**. The gateway does not yet create/checkpoint one provider job per shot and automatically hand all shot assets to this composer.
-
 ## Important limits
 
 When `video.enabled` is true, `cmd/gateway` creates the Video Runtime, mounts `/v1/video/` on the primary HTTP server, starts bounded workers, and cancels and joins the worker pool before shutdown returns. When it is false (the default), no video route or worker is created and the LLM data plane is unchanged. The JSON store is single-process and is not multi-node safe; use PostgreSQL/Redis only after an implementation and concurrency test exist. No real provider adapter is enabled or claimed verified. Provider credentials must come from environment variables when adapters are implemented; never use account rotation or quota bypass. The current CLI is still a local development tool and does not yet attach to a running gateway's durable store.
