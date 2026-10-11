@@ -48,6 +48,40 @@ Add the following fields to the existing `video` object in the NexaRoute config.
 - The adapter's estimated provider API cost is USD 0 because it runs locally; that estimate excludes electricity, hardware depreciation, model downloads, and other infrastructure costs. It is not a guarantee of zero total operating cost.
 - Plain HTTP is accepted only for loopback addresses. Use HTTPS for a remote ComfyUI endpoint.
 
+## Multi-shot Gateway request
+
+A multi-shot request uses one provider/model for the episode. `duration_seconds` must equal the sum of the individual shot durations, and every shot must fit the selected provider's per-clip limit. The Gateway stores each shot checkpoint and returns one final MP4 asset after composition.
+
+Example request file for `videogen create --file episode-request.json`:
+
+```json
+{
+  "project_id": "persepolis-history",
+  "episode_id": "persepolis-001",
+  "prompt": "",
+  "mode": "text_to_video",
+  "provider_preference": "comfyui",
+  "duration_seconds": 8,
+  "aspect_ratio": "16:9",
+  "shot_plan": [
+    {
+      "shot_id": "arrival",
+      "duration_seconds": 4,
+      "prompt": "Wide establishing shot of Persepolis at sunrise, historically grounded ancient Persian architecture",
+      "camera_movement": "slow cinematic pan"
+    },
+    {
+      "shot_id": "walkthrough",
+      "duration_seconds": 4,
+      "prompt": "A time-travelling guide walks toward the monumental staircase at Persepolis",
+      "subject_action": "walks forward while looking at the reliefs"
+    }
+  ]
+}
+```
+
+Set `NEXAROUTE_URL` to the Gateway base URL and `NEXAROUTE_VIDEO_TOKEN` to the bearer token configured by `video.auth_token_env`. The CLI reads the token from the environment and does not print it. Do not include `shot_plan[].output_asset` in a client request; output assets are server-owned checkpoints and caller-supplied values are discarded.
+
 ## Local episode assembly
 
 After generated shot clips and optional audio/subtitle files exist on disk, the local CLI can assemble them into one MP4:
