@@ -73,7 +73,7 @@ Example `episode.json`:
 }
 ```
 
-Paths are resolved relative to the current working directory. Install FFmpeg on the host or set `NEXAROUTE_FFMPEG` to its executable path. This local command does not require a Video Gateway token. A zero volume field selects its default (narration 1.0, music 0.12).
+Paths are resolved relative to the current working directory. Install FFmpeg with the `libx264` encoder or set `NEXAROUTE_FFMPEG` to its executable path. This local command does not require a Video Gateway token. A zero volume field selects its default (narration 1.0, music 0.12). The Gateway preflights FFmpeg and `libx264` before admitting multi-shot work, so a missing encoder fails before any provider job is submitted.
 
 For a Gateway request with more than one `shot_plan` entry, the orchestrator validates and estimates each shot separately, persists each provider job ID and output asset, then composes the ordered clips into a final silent MP4. Restart recovery resumes known shot jobs or repeats composition from saved shot assets. If a crash leaves a shot in the pre-submission state without a durable provider job ID, the job moves to manual action rather than risking a duplicate billable submission. One episode currently uses one provider/model, and each individual shot must fit that provider's limits.
 
