@@ -1,0 +1,631 @@
+{
+  "method": {
+    "fixed_upstream_latency_ms": 15.0,
+    "stream_gap_ms": 10.0,
+    "requests_per_concurrency": 1000,
+    "concurrency_levels": [
+      1,
+      16,
+      64,
+      256
+    ],
+    "provider_caps": {
+      "explicit_32": 32,
+      "default_256": 256
+    },
+    "default_max_inflight_requests": 128,
+    "warmup_requests_per_connection": 2,
+    "warmup_excluded_from_timed_window": true,
+    "persistent_connections": true,
+    "mock": "compiled Go net/http server; TCP_NODELAY; one write per non-streaming response",
+    "gateway": "compiled once; direct executable PID is sampled and terminated",
+    "workload": "OpenAI Chat Completions over persistent HTTP/1.1; direct vs gateway; local loopback",
+    "http_statuses": "all HTTP responses are measured and counted; success-only latency/RPS are reported separately"
+  },
+  "environment": {
+    "python": "3.12.3",
+    "platform": "x86_64",
+    "cpu_count": 6,
+    "go": "/usr/local/go/bin/go"
+  },
+  "routing_configs": {
+    "tuned_adaptive_no_probe": {
+      "strategy": "adaptive",
+      "max_attempts": 1,
+      "probe_enabled": false,
+      "default": false
+    },
+    "ready_mesh_default": {
+      "strategy": "ready_mesh",
+      "max_attempts": 4,
+      "probe_enabled": true,
+      "probe_on_start": true,
+      "capability_probes": true,
+      "default": true
+    }
+  },
+  "diagnostic_logs_dir": "/home/ubuntu/nexaroute/docs/benchmarks/m1-3-2026-10-11/benchmark-logs",
+  "profiling": {
+    "attempted": true,
+    "tool": "Go pprof CPU profile HTTP endpoint",
+    "endpoint": "/debug/pprof/profile?seconds=5",
+    "http_status": 404,
+    "status": "cause not determined",
+    "reason": "404 page not found\n",
+    "perf_available": false
+  },
+  "direct": {
+    "1": {
+      "count": 1000,
+      "concurrency": 1,
+      "status_counts": {
+        "200": 1000
+      },
+      "warmup_status_counts": {
+        "200": 2
+      },
+      "p50_ms": 16.018694499962294,
+      "p95_ms": 16.38321334983175,
+      "p99_ms": 17.717677420091597,
+      "throughput_rps": 62.12179430840829,
+      "success_count": 1000,
+      "success_rps": 62.12179430840829,
+      "success_p50_ms": 16.018694499962294,
+      "success_p95_ms": 16.38321334983175,
+      "success_p99_ms": 17.717677420091597,
+      "min_ms": 15.744800999982544,
+      "max_ms": 20.715664999897854
+    },
+    "16": {
+      "count": 1000,
+      "concurrency": 16,
+      "status_counts": {
+        "200": 1000
+      },
+      "warmup_status_counts": {
+        "200": 32
+      },
+      "p50_ms": 16.39482649989077,
+      "p95_ms": 18.05510119995688,
+      "p99_ms": 19.2780570801051,
+      "throughput_rps": 951.0217955061631,
+      "success_count": 1000,
+      "success_rps": 951.0217955061631,
+      "success_p50_ms": 16.39482649989077,
+      "success_p95_ms": 18.05510119995688,
+      "success_p99_ms": 19.2780570801051,
+      "min_ms": 15.302278000035585,
+      "max_ms": 20.936596999945323
+    },
+    "64": {
+      "count": 1000,
+      "concurrency": 64,
+      "status_counts": {
+        "200": 1000
+      },
+      "warmup_status_counts": {
+        "200": 128
+      },
+      "p50_ms": 17.08107600029507,
+      "p95_ms": 19.595540149975932,
+      "p99_ms": 21.183440159857128,
+      "throughput_rps": 3299.0054986291116,
+      "success_count": 1000,
+      "success_rps": 3299.0054986291116,
+      "success_p50_ms": 17.08107600029507,
+      "success_p95_ms": 19.595540149975932,
+      "success_p99_ms": 21.183440159857128,
+      "min_ms": 15.357440000116185,
+      "max_ms": 23.090953000064474
+    },
+    "256": {
+      "count": 1000,
+      "concurrency": 256,
+      "status_counts": {
+        "200": 1000
+      },
+      "warmup_status_counts": {
+        "200": 512
+      },
+      "p50_ms": 20.01917149982546,
+      "p95_ms": 28.096452549766582,
+      "p99_ms": 33.143955309737976,
+      "throughput_rps": 2651.7811864417286,
+      "success_count": 1000,
+      "success_rps": 2651.7811864417286,
+      "success_p50_ms": 20.01917149982546,
+      "success_p95_ms": 28.096452549766582,
+      "success_p99_ms": 33.143955309737976,
+      "min_ms": 15.460884999811242,
+      "max_ms": 39.463343000079476
+    }
+  },
+  "streaming": {
+    "direct": {
+      "total_ms": 46.79365099991628,
+      "ttft_ms": 46.79005900015909
+    },
+    "ready_mesh_default": {
+      "provider_cap": "default_256",
+      "gateway": {
+        "total_ms": 47.26041499998246,
+        "ttft_ms": 47.255509000024176
+      },
+      "ttft_overhead_ms": 0.4654499998650863
+    },
+    "tuned_adaptive_no_probe": {
+      "provider_cap": "default_256",
+      "gateway": {
+        "total_ms": 47.31275699987236,
+        "ttft_ms": 47.31031499977689
+      },
+      "ttft_overhead_ms": 0.5202559996178024
+    }
+  },
+  "runs": {
+    "ready_mesh_default": {
+      "explicit_32": {
+        "provider_cap_label": "explicit_32",
+        "provider_max_concurrency": 32,
+        "provider_cap_was_explicit": true,
+        "gateway": {
+          "1": {
+            "count": 1000,
+            "concurrency": 1,
+            "status_counts": {
+              "200": 1000
+            },
+            "warmup_status_counts": {
+              "200": 2
+            },
+            "p50_ms": 16.835159000038402,
+            "p95_ms": 17.31273099996997,
+            "p99_ms": 19.41225681996457,
+            "throughput_rps": 59.10007528505122,
+            "success_count": 1000,
+            "success_rps": 59.10007528505122,
+            "success_p50_ms": 16.835159000038402,
+            "success_p95_ms": 17.31273099996997,
+            "success_p99_ms": 19.41225681996457,
+            "min_ms": 16.334317999735504,
+            "max_ms": 28.395462999924348
+          },
+          "16": {
+            "count": 1000,
+            "concurrency": 16,
+            "status_counts": {
+              "200": 1000
+            },
+            "warmup_status_counts": {
+              "200": 32
+            },
+            "p50_ms": 17.384704499818326,
+            "p95_ms": 19.42426969974349,
+            "p99_ms": 20.962639319945993,
+            "throughput_rps": 895.1193035460497,
+            "success_count": 1000,
+            "success_rps": 895.1193035460497,
+            "success_p50_ms": 17.384704499818326,
+            "success_p95_ms": 19.42426969974349,
+            "success_p99_ms": 20.962639319945993,
+            "min_ms": 15.71594200004256,
+            "max_ms": 23.75507499982632
+          },
+          "64": {
+            "count": 1000,
+            "concurrency": 64,
+            "status_counts": {
+              "200": 1000
+            },
+            "warmup_status_counts": {
+              "200": 128
+            },
+            "p50_ms": 32.02467450000768,
+            "p95_ms": 34.37080745006824,
+            "p99_ms": 36.2916272797338,
+            "throughput_rps": 1909.6271072106215,
+            "success_count": 1000,
+            "success_rps": 1909.6271072106215,
+            "success_p50_ms": 32.02467450000768,
+            "success_p95_ms": 34.37080745006824,
+            "success_p99_ms": 36.2916272797338,
+            "min_ms": 15.93842800002676,
+            "max_ms": 39.593988000433455
+          },
+          "256": {
+            "count": 1000,
+            "concurrency": 256,
+            "status_counts": {
+              "200": 1000
+            },
+            "warmup_status_counts": {
+              "200": 512
+            },
+            "p50_ms": 29.302386999916052,
+            "p95_ms": 63.99445795000241,
+            "p99_ms": 100.3826684798605,
+            "throughput_rps": 1242.3442137347308,
+            "success_count": 1000,
+            "success_rps": 1242.3442137347308,
+            "success_p50_ms": 29.302386999916052,
+            "success_p95_ms": 63.99445795000241,
+            "success_p99_ms": 100.3826684798605,
+            "min_ms": 16.821692000121402,
+            "max_ms": 145.38639500005957
+          }
+        },
+        "gateway_vm_hwm_kb": 33852,
+        "successful_latency_overhead_ms": {
+          "1": {
+            "success_p50_ms": 0.8164645000761084,
+            "success_p95_ms": 0.9295176501382194,
+            "success_p99_ms": 1.6945793998729712
+          },
+          "16": {
+            "success_p50_ms": 0.9898779999275575,
+            "success_p95_ms": 1.3691684997866105,
+            "success_p99_ms": 1.6845822398408927
+          },
+          "64": {
+            "success_p50_ms": 14.943598499712607,
+            "success_p95_ms": 14.77526730009231,
+            "success_p99_ms": 15.108187119876675
+          },
+          "256": {
+            "success_p50_ms": 9.283215500090591,
+            "success_p95_ms": 35.89800540023583,
+            "success_p99_ms": 67.23871317012252
+          }
+        }
+      },
+      "default_256": {
+        "provider_cap_label": "default_256",
+        "provider_max_concurrency": 256,
+        "provider_cap_was_explicit": false,
+        "gateway": {
+          "1": {
+            "count": 1000,
+            "concurrency": 1,
+            "status_counts": {
+              "200": 1000
+            },
+            "warmup_status_counts": {
+              "200": 2
+            },
+            "p50_ms": 16.703924000012194,
+            "p95_ms": 17.424068649984292,
+            "p99_ms": 18.56676937989505,
+            "throughput_rps": 59.48198058417965,
+            "success_count": 1000,
+            "success_rps": 59.48198058417965,
+            "success_p50_ms": 16.703924000012194,
+            "success_p95_ms": 17.424068649984292,
+            "success_p99_ms": 18.56676937989505,
+            "min_ms": 16.31688599991321,
+            "max_ms": 20.898014000067633
+          },
+          "16": {
+            "count": 1000,
+            "concurrency": 16,
+            "status_counts": {
+              "200": 1000
+            },
+            "warmup_status_counts": {
+              "200": 32
+            },
+            "p50_ms": 16.94193600019389,
+            "p95_ms": 18.40893840010267,
+            "p99_ms": 19.509070609933588,
+            "throughput_rps": 922.0179791867025,
+            "success_count": 1000,
+            "success_rps": 922.0179791867025,
+            "success_p50_ms": 16.94193600019389,
+            "success_p95_ms": 18.40893840010267,
+            "success_p99_ms": 19.509070609933588,
+            "min_ms": 15.63615499981097,
+            "max_ms": 21.022332000029564
+          },
+          "64": {
+            "count": 1000,
+            "concurrency": 64,
+            "status_counts": {
+              "200": 1000
+            },
+            "warmup_status_counts": {
+              "200": 128
+            },
+            "p50_ms": 17.807825999852867,
+            "p95_ms": 33.224193650289635,
+            "p99_ms": 41.985966139986886,
+            "throughput_rps": 2949.574351200618,
+            "success_count": 1000,
+            "success_rps": 2949.574351200618,
+            "success_p50_ms": 17.807825999852867,
+            "success_p95_ms": 33.224193650289635,
+            "success_p99_ms": 41.985966139986886,
+            "min_ms": 15.627668999968591,
+            "max_ms": 49.44837199991525
+          },
+          "256": {
+            "count": 1000,
+            "concurrency": 256,
+            "status_counts": {
+              "200": 1000
+            },
+            "warmup_status_counts": {
+              "200": 512
+            },
+            "p50_ms": 20.34777800008669,
+            "p95_ms": 27.95446824986811,
+            "p99_ms": 31.15630624006371,
+            "throughput_rps": 2680.1406485294683,
+            "success_count": 1000,
+            "success_rps": 2680.1406485294683,
+            "success_p50_ms": 20.34777800008669,
+            "success_p95_ms": 27.95446824986811,
+            "success_p99_ms": 31.15630624006371,
+            "min_ms": 15.776525000092079,
+            "max_ms": 38.52514300024268
+          }
+        },
+        "gateway_vm_hwm_kb": 35176,
+        "successful_latency_overhead_ms": {
+          "1": {
+            "success_p50_ms": 0.6852295000498998,
+            "success_p95_ms": 1.0408553001525434,
+            "success_p99_ms": 0.8490919598034523
+          },
+          "16": {
+            "success_p50_ms": 0.5471095003031223,
+            "success_p95_ms": 0.3538372001457901,
+            "success_p99_ms": 0.23101352982848766
+          },
+          "64": {
+            "success_p50_ms": 0.7267499995577964,
+            "success_p95_ms": 13.628653500313703,
+            "success_p99_ms": 20.802525980129758
+          },
+          "256": {
+            "success_p50_ms": 0.3286065002612304,
+            "success_p95_ms": -0.14198429989847128,
+            "success_p99_ms": -1.9876490696742657
+          }
+        }
+      }
+    },
+    "tuned_adaptive_no_probe": {
+      "explicit_32": {
+        "provider_cap_label": "explicit_32",
+        "provider_max_concurrency": 32,
+        "provider_cap_was_explicit": true,
+        "gateway": {
+          "1": {
+            "count": 1000,
+            "concurrency": 1,
+            "status_counts": {
+              "200": 1000
+            },
+            "warmup_status_counts": {
+              "200": 2
+            },
+            "p50_ms": 16.817205000052127,
+            "p95_ms": 17.71916884974871,
+            "p99_ms": 20.042909170069834,
+            "throughput_rps": 58.90519269842871,
+            "success_count": 1000,
+            "success_rps": 58.90519269842871,
+            "success_p50_ms": 16.817205000052127,
+            "success_p95_ms": 17.71916884974871,
+            "success_p99_ms": 20.042909170069834,
+            "min_ms": 16.392491000260634,
+            "max_ms": 42.11357300027885
+          },
+          "16": {
+            "count": 1000,
+            "concurrency": 16,
+            "status_counts": {
+              "200": 1000
+            },
+            "warmup_status_counts": {
+              "200": 32
+            },
+            "p50_ms": 17.088255999851754,
+            "p95_ms": 18.6274670996454,
+            "p99_ms": 20.288912700225406,
+            "throughput_rps": 917.5122999060661,
+            "success_count": 1000,
+            "success_rps": 917.5122999060661,
+            "success_p50_ms": 17.088255999851754,
+            "success_p95_ms": 18.6274670996454,
+            "success_p99_ms": 20.288912700225406,
+            "min_ms": 15.694109000378376,
+            "max_ms": 23.000317999958497
+          },
+          "64": {
+            "count": 1000,
+            "concurrency": 64,
+            "status_counts": {
+              "200": 1000
+            },
+            "warmup_status_counts": {
+              "200": 128
+            },
+            "p50_ms": 32.16065250012434,
+            "p95_ms": 36.54655839993666,
+            "p99_ms": 38.87810667005397,
+            "throughput_rps": 1895.1829641857246,
+            "success_count": 1000,
+            "success_rps": 1895.1829641857246,
+            "success_p50_ms": 32.16065250012434,
+            "success_p95_ms": 36.54655839993666,
+            "success_p99_ms": 38.87810667005397,
+            "min_ms": 16.05882500007283,
+            "max_ms": 40.42840900001465
+          },
+          "256": {
+            "count": 1000,
+            "concurrency": 256,
+            "status_counts": {
+              "200": 881,
+              "503": 119
+            },
+            "warmup_status_counts": {
+              "200": 512
+            },
+            "p50_ms": 58.26109450003969,
+            "p95_ms": 71.06799014977695,
+            "p99_ms": 75.42769716986639,
+            "throughput_rps": 2146.766375292937,
+            "success_count": 881,
+            "success_rps": 1891.3011766330774,
+            "success_p50_ms": 60.44295299989244,
+            "success_p95_ms": 71.41901699969821,
+            "success_p99_ms": 76.7554645997734,
+            "min_ms": 0.450889999683568,
+            "max_ms": 87.73446100030924
+          }
+        },
+        "gateway_vm_hwm_kb": 40220,
+        "successful_latency_overhead_ms": {
+          "1": {
+            "success_p50_ms": 0.7985105000898329,
+            "success_p95_ms": 1.3359554999169596,
+            "success_p99_ms": 2.3252317499782365
+          },
+          "16": {
+            "success_p50_ms": 0.6934294999609847,
+            "success_p95_ms": 0.5723658996885206,
+            "success_p99_ms": 1.0108556201203065
+          },
+          "64": {
+            "success_p50_ms": 15.079576499829273,
+            "success_p95_ms": 16.951018249960725,
+            "success_p99_ms": 17.69466651019684
+          },
+          "256": {
+            "success_p50_ms": 40.42378150006698,
+            "success_p95_ms": 43.32256444993163,
+            "success_p99_ms": 43.61150929003543
+          }
+        }
+      },
+      "default_256": {
+        "provider_cap_label": "default_256",
+        "provider_max_concurrency": 256,
+        "provider_cap_was_explicit": false,
+        "gateway": {
+          "1": {
+            "count": 1000,
+            "concurrency": 1,
+            "status_counts": {
+              "200": 1000
+            },
+            "warmup_status_counts": {
+              "200": 2
+            },
+            "p50_ms": 16.737866499852316,
+            "p95_ms": 17.244160050177012,
+            "p99_ms": 17.716973209699063,
+            "throughput_rps": 59.6187916239848,
+            "success_count": 1000,
+            "success_rps": 59.6187916239848,
+            "success_p50_ms": 16.737866499852316,
+            "success_p95_ms": 17.244160050177012,
+            "success_p99_ms": 17.716973209699063,
+            "min_ms": 16.16869700001189,
+            "max_ms": 19.6714809999321
+          },
+          "16": {
+            "count": 1000,
+            "concurrency": 16,
+            "status_counts": {
+              "200": 1000
+            },
+            "warmup_status_counts": {
+              "200": 32
+            },
+            "p50_ms": 16.856532000019797,
+            "p95_ms": 18.3865354002819,
+            "p99_ms": 19.62917301984362,
+            "throughput_rps": 929.5856521339641,
+            "success_count": 1000,
+            "success_rps": 929.5856521339641,
+            "success_p50_ms": 16.856532000019797,
+            "success_p95_ms": 18.3865354002819,
+            "success_p99_ms": 19.62917301984362,
+            "min_ms": 15.606402000230446,
+            "max_ms": 20.614704999843525
+          },
+          "64": {
+            "count": 1000,
+            "concurrency": 64,
+            "status_counts": {
+              "200": 1000
+            },
+            "warmup_status_counts": {
+              "200": 128
+            },
+            "p50_ms": 17.51812249995055,
+            "p95_ms": 28.450761750173086,
+            "p99_ms": 38.40180477986905,
+            "throughput_rps": 3073.819323328742,
+            "success_count": 1000,
+            "success_rps": 3073.819323328742,
+            "success_p50_ms": 17.51812249995055,
+            "success_p95_ms": 28.450761750173086,
+            "success_p99_ms": 38.40180477986905,
+            "min_ms": 15.63813700022365,
+            "max_ms": 47.350101999654726
+          },
+          "256": {
+            "count": 1000,
+            "concurrency": 256,
+            "status_counts": {
+              "200": 1000
+            },
+            "warmup_status_counts": {
+              "200": 512
+            },
+            "p50_ms": 20.319761999871844,
+            "p95_ms": 27.361849099906976,
+            "p99_ms": 32.70600080990789,
+            "throughput_rps": 3007.028158524214,
+            "success_count": 1000,
+            "success_rps": 3007.028158524214,
+            "success_p50_ms": 20.319761999871844,
+            "success_p95_ms": 27.361849099906976,
+            "success_p99_ms": 32.70600080990789,
+            "min_ms": 15.619126000274264,
+            "max_ms": 36.93452100014838
+          }
+        },
+        "gateway_vm_hwm_kb": 36324,
+        "successful_latency_overhead_ms": {
+          "1": {
+            "success_p50_ms": 0.7191719998900226,
+            "success_p95_ms": 0.8609467003452629,
+            "success_p99_ms": -0.0007042103925343213
+          },
+          "16": {
+            "success_p50_ms": 0.4617055001290282,
+            "success_p95_ms": 0.33143420032502036,
+            "success_p99_ms": 0.35111593973851996
+          },
+          "64": {
+            "success_p50_ms": 0.43704649965548015,
+            "success_p95_ms": 8.855221600197154,
+            "success_p99_ms": 17.218364620011926
+          },
+          "256": {
+            "success_p50_ms": 0.30059050004638266,
+            "success_p95_ms": -0.7346034498596055,
+            "success_p99_ms": -0.4379544998300844
+          }
+        }
+      }
+    }
+  },
+  "memory": {
+    "benchmark_process_maxrss_kb": 26988
+  }
+}
