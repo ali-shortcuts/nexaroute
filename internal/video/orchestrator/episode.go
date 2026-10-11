@@ -21,7 +21,7 @@ type EpisodeComposer interface {
 }
 
 func validateShotPlanRequest(r video.VideoRequest, p video.VideoProvider, caps video.Capabilities) (video.VideoRequest, video.CostEstimate, error) {
-	if len(r.ShotPlan) < 2 {
+	if len(r.ShotPlan) < 1 {
 		return r, video.CostEstimate{}, errors.New("shot-plan validation requires at least two shots")
 	}
 	selectedModel := strings.TrimSpace(r.ModelPreference)
@@ -45,7 +45,7 @@ func validateShotPlanRequest(r video.VideoRequest, p video.VideoProvider, caps v
 			}
 			selectedModel = shot.Model
 		}
-		request := buildShotRequest(r, shot, i)
+		request := visualOnlyRequest(buildShotRequest(r, shot, i))
 		request.ProviderPreference = p.ID()
 		request.ModelPreference = selectedModel
 		normalized, err := validateProviderRequest(request, caps)
@@ -148,7 +148,7 @@ func (o *Orchestrator) runEpisodeJob(ctx context.Context, j video.VideoJob) erro
 	if j.State == video.StateNeedsManualAction {
 		return errors.New("video episode requires manual action")
 	}
-	if len(j.Request.ShotPlan) < 2 || len(j.ShotExecutions) != len(j.Request.ShotPlan) {
+	if len(j.Request.ShotPlan) < 1 || len(j.ShotExecutions) != len(j.Request.ShotPlan) {
 		return o.markNeedsManualAndError(ctx, j, "multi-shot job has no complete durable shot checkpoint list")
 	}
 	if o.Assets == nil || o.Composer == nil {
@@ -242,7 +242,7 @@ func (o *Orchestrator) runEpisodeJob(ctx context.Context, j video.VideoJob) erro
 				}
 				capsLoaded = true
 			}
-			request := buildShotRequest(j.Request, *shot, i)
+			request := visualOnlyRequest(buildShotRequest(j.Request, *shot, i))
 			request.ProviderPreference = j.Provider
 			request.ModelPreference = j.Model
 			normalized, err := validateProviderRequest(request, caps)
@@ -553,8 +553,8 @@ func (o *Orchestrator) composeEpisode(ctx context.Context, j *video.VideoJob) er
 		}
 		clips = append(clips, shot.OutputAsset.URI)
 	}
-	if len(clips) < 2 {
-		return o.markNeedsManualAndError(ctx, *j, "episode composition requires at least two persisted shot assets")
+	if len(clips) < 1 {
+		return o.markNeedsManualAndError(ctx, *j, "episode composition requires at least one persisted shot asset")
 	}
 	width, height := episodeDimensions(j.Request)
 	fps := j.Request.FPS
