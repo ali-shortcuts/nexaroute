@@ -76,7 +76,7 @@ func TestCoverageConfigSecurityHelpersAndDefaults(t *testing.T) {
 	} {
 		p := ProviderConfig{ID: "p", Type: tc.typ}
 		p.ApplyDefaults()
-		if p.AuthMode != tc.auth || p.Name != "p" || p.MaxConcurrency != 32 || p.StreamIdleTimeoutSeconds != 180 {
+		if p.AuthMode != tc.auth || p.Name != "p" || p.MaxConcurrency != 256 || p.StreamIdleTimeoutSeconds != 180 {
 			t.Fatalf("provider defaults for %s: %+v", tc.typ, p)
 		}
 	}

@@ -143,7 +143,6 @@
       "messages_path": "/v1/messages",
       "models_path": "/v1/models",
       "count_tokens_path": "/v1/messages/count_tokens",
-      "max_concurrency": 32,
       "stream_idle_timeout_seconds": 180,
       "enabled": false,
       "models": [
@@ -181,7 +180,6 @@
         "user-agent",
         "x-request-id"
       ],
-      "max_concurrency": 32,
       "stream_idle_timeout_seconds": 180,
       "enabled": false,
       "models": [

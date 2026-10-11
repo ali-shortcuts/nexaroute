@@ -156,7 +156,7 @@ Per provider:
 - `proxy_url`
 - `headers`
 - `forward_headers`
-- `max_concurrency`
+- `max_concurrency` — per-provider in-flight request cap. Default `256` (range `1..4096`). This limits the number of concurrent upstream requests to a single provider. For most providers the default is appropriate. For free or rate-limited providers, set an explicit lower value (for example `32` or `64`) to avoid triggering upstream quota exhaustion. When omitted or set to `0`, the default applies. Explicit values in the configuration are never changed.
 - `stream_idle_timeout_seconds`
 
 ## Provider data-handling class and route/key privacy requirement
