@@ -43,10 +43,39 @@ Add the following fields to the existing `video` object in the NexaRoute config.
 
 - Export the workflow from ComfyUI using **Save (API Format)** and place it at the configured path (relative paths resolve from the NexaRoute config directory).
 - The prompt, width, height, and frame-count node IDs are required. By default their input names are `text`, `width`, `height`, and `length`; FPS defaults to `frame_rate`, seed to `noise_seed`, and negative prompt to `text`. Override the corresponding `comfyui_*_input` setting if your workflow uses different input names.
-- Configure the output node to emit an actual `.mp4`, `.webm`, `.mov`, or `.mkv` file. Image-only outputs are deliberately not reported as completed videos.
-- The adapter currently supports text-to-video only. It does not claim audio/dialogue generation, remote webhooks, or safe interruption of an already-running ComfyUI prompt. A queued prompt can be removed; a running prompt is not globally interrupted because that could stop another user's work.
+- Configure the output node to emit an actual `.mp4` file. Other formats and image-only outputs are deliberately not reported as completed videos.
+- The adapter currently supports one text-to-video workflow per job and MP4 output only. It rejects multi-shot plans, reference/first/last-frame assets, narration/subtitle fields, callbacks, and unsupported negative-prompt/seed/FPS settings rather than silently ignoring them. It does not claim audio/dialogue generation, remote webhooks, or safe interruption of an already-running ComfyUI prompt. A queued prompt can be removed; a running prompt is not globally interrupted because that could stop another user's work.
 - The adapter's estimated provider API cost is USD 0 because it runs locally; that estimate excludes electricity, hardware depreciation, model downloads, and other infrastructure costs. It is not a guarantee of zero total operating cost.
 - Plain HTTP is accepted only for loopback addresses. Use HTTPS for a remote ComfyUI endpoint.
+
+## Local episode assembly
+
+After generated shot clips and optional audio/subtitle files exist on disk, the local CLI can assemble them into one MP4:
+
+```bash
+videogen compose --file episode.json
+```
+
+Example `episode.json`:
+
+```json
+{
+  "shots": ["assets/shot-01.mp4", "assets/shot-02.mp4"],
+  "narration_path": "audio/narration.wav",
+  "music_path": "audio/music.wav",
+  "subtitle_path": "subtitles/fa.srt",
+  "output_path": "renders/episode.mp4",
+  "width": 1920,
+  "height": 1080,
+  "fps": 24,
+  "narration_volume": 1.0,
+  "music_volume": 0.12
+}
+```
+
+Paths are resolved relative to the current working directory. Install FFmpeg on the host or set `NEXAROUTE_FFMPEG` to its executable path. This local command does not require a Video Gateway token. A zero volume field selects its default (narration 1.0, music 0.12).
+
+This is a local composition building block, **not yet a persistent Video Gateway episode job or a Video Studio action**. The gateway does not yet create/checkpoint one provider job per shot and automatically hand all shot assets to this composer.
 
 ## Important limits
 
