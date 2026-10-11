@@ -466,7 +466,7 @@ func (o *Orchestrator) RunJob(ctx context.Context, queued video.VideoJob) error 
 	if err != nil {
 		return fmt.Errorf("load video job before execution: %w", err)
 	}
-	if len(j.Request.ShotPlan) > 1 {
+	if len(j.Request.ShotPlan) > 1 || requestNeedsNarration(j.Request) {
 		return o.runEpisodeJob(ctx, j)
 	}
 	if o.Providers == nil {
