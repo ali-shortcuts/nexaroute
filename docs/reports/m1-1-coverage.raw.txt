@@ -1,0 +1,52 @@
+go: downloading go.etcd.io/bbolt v1.4.3
+go: downloading github.com/coreos/go-oidc/v3 v3.15.0
+go: downloading golang.org/x/oauth2 v0.30.0
+go: downloading github.com/go-jose/go-jose/v4 v4.1.4
+go: downloading golang.org/x/sys v0.31.0
+ok  	github.com/ali-shortcuts/nexaroute/cmd/gateway	8.488s	coverage: 74.9% of statements
+	github.com/ali-shortcuts/nexaroute/cmd/videogen		coverage: 0.0% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/authz	0.005s	coverage: 93.8% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/budget	0.006s	coverage: 86.2% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/cache	0.015s	coverage: 90.5% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/compat	0.324s	coverage: 86.6% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/config	0.229s	coverage: 89.9% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/controlplane	0.021s	coverage: 79.4% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/core	0.015s	coverage: 100.0% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/decision	0.420s	coverage: 87.6% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/decision/jev	0.227s	coverage: 80.8% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/decision/policy	0.018s	coverage: 86.9% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/decision/providerstate	0.003s	coverage: 85.1% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/decision/remote	4.405s	coverage: 87.6% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/desktop	0.026s	coverage: 85.7% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/doccheck	0.003s	coverage: [no statements]
+ok  	github.com/ali-shortcuts/nexaroute/internal/egress	0.004s	coverage: 51.6% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/eval	0.221s	coverage: 88.0% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/evallive	0.428s	coverage: 81.5% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/events	0.209s	coverage: 94.3% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/feature	0.052s	coverage: 94.0% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/guardrail	0.003s	coverage: 100.0% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/health	0.124s	coverage: 98.5% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/httpapi	10.098s	coverage: 83.3% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/logging	0.056s	coverage: 81.8% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/probe	1.489s	coverage: 89.5% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/protocol/canonical	0.146s	coverage: 83.9% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/providers	0.273s	coverage: 84.6% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/route	0.004s	coverage: 94.8% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/router	0.152s	coverage: 82.5% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/scorecards	0.017s	coverage: 88.6% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/secrets	0.071s	coverage: 77.6% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/securitystore	0.260s	coverage: 88.0% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/taskprofile	0.004s	coverage: 84.6% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/translate	0.013s	coverage: 80.9% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/transport	0.007s	coverage: 90.6% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/usage	0.003s	coverage: 98.9% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/video	0.147s	coverage: 67.2% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/video/api	0.005s	coverage: 100.0% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/video/composer	0.010s	coverage: 83.7% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/video/cost	0.005s	coverage: 93.7% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/video/orchestrator	0.028s	coverage: 87.3% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/video/providers	0.004s	coverage: 100.0% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/video/queue	0.029s	coverage: 89.3% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/video/runtime	0.272s	coverage: 76.2% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/video/storage	0.035s	coverage: 84.9% of statements
+total:											(statements)				85.1%
