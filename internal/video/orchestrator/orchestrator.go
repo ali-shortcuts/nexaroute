@@ -267,6 +267,15 @@ func (o *Orchestrator) Recover(ctx context.Context) error {
 				continue
 			}
 			ambiguous := false
+			if job.ProviderJobID != "" {
+				current := job.CurrentShot - 1
+				if current < 0 || current >= len(job.ShotExecutions) || job.ShotExecutions[current].ProviderJobID != job.ProviderJobID {
+					if err := o.markNeedsManual(ctx, job, "parent provider job ID does not match the current shot checkpoint"); err != nil {
+						return err
+					}
+					continue
+				}
+			}
 			for i, run := range job.ShotExecutions {
 				if job.Request.ShotPlan[i].OutputAsset == nil && run.ProviderJobID == "" && run.State != video.StateQueued {
 					if err := o.markNeedsManual(ctx, job, fmt.Sprintf("shot %q has an unknown submission checkpoint; automatic resubmission is disabled", run.ShotID)); err != nil {
