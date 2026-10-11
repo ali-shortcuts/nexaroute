@@ -10,6 +10,8 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -19,9 +21,10 @@ import (
 const maxAPIResponseBytes = 2 << 20
 
 type apiClient struct {
-	baseURL string
-	token   string
-	http    *http.Client
+	baseURL      string
+	token        string
+	http         *http.Client
+	downloadHTTP *http.Client
 }
 
 type providerList struct {
@@ -58,10 +61,14 @@ func newAPIClient(baseURL, token string, client *http.Client) (*apiClient, error
 	if strings.TrimSpace(token) == "" {
 		return nil, errors.New("bearer token is required")
 	}
+	downloadClient := client
 	if client == nil {
 		client = &http.Client{Timeout: 30 * time.Second}
+		// Large video downloads can legitimately take longer than JSON API calls.
+		// The request context still allows callers to cancel an in-progress transfer.
+		downloadClient = &http.Client{}
 	}
-	return &apiClient{baseURL: baseURL, token: token, http: client}, nil
+	return &apiClient{baseURL: baseURL, token: token, http: client, downloadHTTP: downloadClient}, nil
 }
 
 func (c *apiClient) Providers(ctx context.Context) (providerList, error) {
@@ -74,6 +81,92 @@ func (c *apiClient) CreateJob(ctx context.Context, req video.VideoRequest) (vide
 	var result video.VideoJob
 	err := c.request(ctx, http.MethodPost, "/v1/video/jobs", req, &result)
 	return result, err
+}
+
+func (c *apiClient) DownloadAsset(ctx context.Context, jobID, assetID, outPath string) error {
+	jobID = strings.TrimSpace(jobID)
+	assetID = strings.TrimSpace(assetID)
+	outPath = strings.TrimSpace(outPath)
+	if jobID == "" || assetID == "" {
+		return errors.New("job ID and asset ID are required")
+	}
+	if outPath == "" {
+		return errors.New("output path is required")
+	}
+	absolutePath, err := filepath.Abs(outPath)
+	if err != nil {
+		return fmt.Errorf("resolve output path: %w", err)
+	}
+	directory := filepath.Dir(absolutePath)
+	if info, err := os.Stat(directory); err != nil || !info.IsDir() {
+		return fmt.Errorf("output directory does not exist: %s", directory)
+	}
+	if _, err := os.Stat(absolutePath); err == nil {
+		return fmt.Errorf("output file already exists: %s", absolutePath)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("check output path: %w", err)
+	}
+	endpoint := c.baseURL + "/v1/video/jobs/" + url.PathEscape(jobID) + "/assets/" + url.PathEscape(assetID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return fmt.Errorf("build asset download request: %w", err)
+	}
+	req.Header.Set("Accept", "application/octet-stream, video/*")
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	client := c.downloadHTTP
+	if client == nil {
+		client = c.http
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("Video Gateway asset download failed: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		data, readErr := io.ReadAll(io.LimitReader(resp.Body, maxAPIResponseBytes+1))
+		if readErr == nil && len(data) <= maxAPIResponseBytes {
+			var apiErr apiError
+			if json.Unmarshal(data, &apiErr) == nil && strings.TrimSpace(apiErr.Message) != "" {
+				if apiErr.Code != "" {
+					return fmt.Errorf("Video Gateway HTTP %d (%s): %s", resp.StatusCode, apiErr.Code, apiErr.Message)
+				}
+				return fmt.Errorf("Video Gateway HTTP %d: %s", resp.StatusCode, apiErr.Message)
+			}
+		}
+		return fmt.Errorf("Video Gateway HTTP %d while downloading asset", resp.StatusCode)
+	}
+	tmp, err := os.CreateTemp(directory, ".nexaroute-download-*")
+	if err != nil {
+		return fmt.Errorf("create temporary download file: %w", err)
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if err := tmp.Chmod(0600); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("secure temporary download file: %w", err)
+	}
+	n, copyErr := io.Copy(tmp, resp.Body)
+	if copyErr == nil && n == 0 {
+		copyErr = errors.New("downloaded asset is empty")
+	}
+	if copyErr == nil {
+		copyErr = tmp.Sync()
+	}
+	if closeErr := tmp.Close(); copyErr == nil {
+		copyErr = closeErr
+	}
+	if copyErr != nil {
+		return fmt.Errorf("write downloaded asset: %w", copyErr)
+	}
+	if _, err := os.Stat(absolutePath); err == nil {
+		return fmt.Errorf("output file appeared during download; refusing to overwrite: %s", absolutePath)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("recheck output path: %w", err)
+	}
+	if err := os.Rename(tmpName, absolutePath); err != nil {
+		return fmt.Errorf("publish downloaded asset: %w", err)
+	}
+	return nil
 }
 
 func (c *apiClient) GetJob(ctx context.Context, id string) (video.VideoJob, error) {

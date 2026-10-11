@@ -64,6 +64,16 @@ func TestLocalPutPersistsSanitizedAssetAndMetadata(t *testing.T) {
 	if err != nil || string(read) != string(data) {
 		t.Fatalf("Read=%q err=%v", read, err)
 	}
+	opened, err := s.Open(asset)
+	if err != nil {
+		t.Fatalf("Open stored asset: %v", err)
+	}
+	openedBytes := make([]byte, len(data))
+	n, readErr := opened.Read(openedBytes)
+	closeErr := opened.Close()
+	if readErr != nil || closeErr != nil || n != len(data) || string(openedBytes) != string(data) {
+		t.Fatalf("Open read=%q n=%d readErr=%v closeErr=%v", openedBytes, n, readErr, closeErr)
+	}
 	metaBytes, err := os.ReadFile(asset.URI + ".json")
 	if err != nil {
 		t.Fatal(err)

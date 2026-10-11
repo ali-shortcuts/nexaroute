@@ -48,6 +48,19 @@ Add the following fields to the existing `video` object in the NexaRoute config.
 - The adapter's estimated provider API cost is USD 0 because it runs locally; that estimate excludes electricity, hardware depreciation, model downloads, and other infrastructure costs. It is not a guarantee of zero total operating cost.
 - Plain HTTP is accepted only for loopback addresses. Use HTTPS for a remote ComfyUI endpoint.
 
+## Asset downloads
+
+The authenticated endpoint `GET /v1/video/jobs/{job_id}/assets/{asset_id}` streams an asset only when its ID is present in that job's persisted output/source asset list. Downloads are constrained to the configured local storage root, regular files only, and the configured size limit. Responses support HTTP range requests and are sent as attachments with `nosniff` and `no-store` headers. Job JSON uses route-relative asset URIs; it does not disclose the server's absolute filesystem paths. A bearer token configured by `video.auth_token_env` is required for job and asset requests.
+
+Use the CLI to save a completed output without exposing the server's local path:
+
+```bash
+videogen job-get --id JOB_ID
+videogen asset-download --id JOB_ID --asset-id ASSET_ID --out ./episode.mp4
+```
+
+The `ASSET_ID` comes from the job's `output_assets` or `source_assets`. The command reads the bearer token from `NEXAROUTE_VIDEO_TOKEN` by default, creates the local output with mode `0600`, and refuses to overwrite an existing file.
+
 ## Multi-shot Gateway request
 
 A multi-shot request uses one provider/model for the episode. `duration_seconds` must equal the sum of the individual shot durations, and every shot must fit the selected provider's per-clip limit. The Gateway stores each shot checkpoint and returns one final MP4 asset after composition.

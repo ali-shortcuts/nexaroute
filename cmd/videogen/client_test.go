@@ -3,8 +3,11 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -135,5 +138,76 @@ func TestAPIClientValidatesArgumentsAndBaseURL(t *testing.T) {
 	}
 	if _, err := client.CancelJob(context.Background(), " "); err == nil {
 		t.Fatal("empty cancel job ID accepted")
+	}
+}
+
+func TestAPIClientDownloadsAssetToPrivateFileWithoutOverwriting(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/video/jobs/job-123/assets/asset-1" {
+			http.NotFound(w, r)
+			return
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer secret-token" {
+			t.Errorf("authorization=%q", got)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "video/mp4")
+		_, _ = w.Write([]byte("video bytes"))
+	}))
+	defer server.Close()
+
+	client, err := newAPIClient(server.URL, "secret-token", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(t.TempDir(), "episode.mp4")
+	if err := client.DownloadAsset(context.Background(), "job-123", "asset-1", out); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(out)
+	if err != nil || string(data) != "video bytes" {
+		t.Fatalf("download=%q err=%v", data, err)
+	}
+	info, err := os.Stat(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0600 {
+		t.Fatalf("download file mode=%o, want 0600", info.Mode().Perm())
+	}
+	if err := client.DownloadAsset(context.Background(), "job-123", "asset-1", out); err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("second download error=%v, want refusal to overwrite", err)
+	}
+	if requests != 1 {
+		t.Fatalf("requests=%d, existing output should fail before network request", requests)
+	}
+}
+
+func TestAPIClientDownloadAssetReportsGatewayErrorsAndValidatesPaths(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"code":"asset_not_found","message":"asset not found"}`))
+	}))
+	defer server.Close()
+	client, err := newAPIClient(server.URL, "secret-token", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(t.TempDir(), "missing.mp4")
+	if err := client.DownloadAsset(context.Background(), "job-123", "missing", out); err == nil || !strings.Contains(err.Error(), "asset not found") {
+		t.Fatalf("download error=%v, want asset-not-found message", err)
+	}
+	if _, err := os.Stat(out); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("output file unexpectedly exists, stat error=%v", err)
+	}
+	if err := client.DownloadAsset(context.Background(), " ", "asset", out); err == nil {
+		t.Fatal("empty job ID accepted")
+	}
+	if err := client.DownloadAsset(context.Background(), "job", "asset", " "); err == nil {
+		t.Fatal("empty output path accepted")
 	}
 }

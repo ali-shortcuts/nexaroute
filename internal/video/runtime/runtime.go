@@ -105,7 +105,7 @@ func New(cfg video.Config, baseDir string) (*Runtime, error) {
 		Composer: composer.New(ffmpegBinary, ""), MaxAssetBytes: maxBytes,
 	}
 	pool := queue.NewWorkerPool(q, cfg.Workers, orch.RunJob)
-	h := &api.Handler{Orch: orch, Store: store, Providers: reg, RequireAuth: true, BearerToken: token}
+	h := &api.Handler{Orch: orch, Store: store, Providers: reg, Assets: assetSink, RequireAuth: true, BearerToken: token}
 	return &Runtime{Handler: h, Queue: q, Workers: pool, Store: store, Orchestrator: orch}, nil
 }
 

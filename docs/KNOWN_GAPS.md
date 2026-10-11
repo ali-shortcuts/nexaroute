@@ -129,8 +129,7 @@ composition, and actual-vs-estimated cost reconciliation for external providers
 remain unimplemented. The Gateway now persists per-shot checkpoints and
 automatically composes generated shot assets into a final silent MP4; the local
 `videogen compose` command can additionally mix existing narration/music and
-burn in SRT subtitles. The compose action is not yet exposed in Video Studio,
-and the current in-process ledger is not durable or distributed.
+burn in SRT subtitles. Video Studio now accepts multi-shot plans, shows progress, and downloads persisted outputs. Manual audio/music/subtitle composition remains CLI-only, and the current in-process ledger is not durable or distributed.
 
 ## State and HA
 
