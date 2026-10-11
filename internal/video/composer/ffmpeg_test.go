@@ -110,10 +110,10 @@ func TestNormalizeUsesExpectedFFmpegArgumentsAndRenamesOutput(t *testing.T) {
 	}
 	args := readLines(t, argsCapture)
 	want := []string{"-y", "-i", "input clip.mp4", "-vf", "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,fps=30", "-pix_fmt", "yuv420p", "-c:v", "libx264", "-an"}
-	if len(args) != len(want)+1 || strings.Join(args[:len(want)], "\x00") != strings.Join(want, "\x00") || !strings.HasSuffix(args[len(args)-1], ".mp4.tmp") {
+	if len(args) != len(want)+1 || strings.Join(args[:len(want)], "\x00") != strings.Join(want, "\x00") || !strings.HasSuffix(args[len(args)-1], ".tmp.mp4") {
 		t.Fatalf("Normalize args=%q, want prefix=%q and temp output", args, want)
 	}
-	if _, err := os.Stat(output + ".tmp"); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(strings.TrimSuffix(output, filepath.Ext(output)) + ".tmp" + filepath.Ext(output)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("temporary output was not removed: %v", err)
 	}
 }
@@ -175,5 +175,18 @@ func TestInjectedMissingBinaryIsReported(t *testing.T) {
 	}
 	if _, err := runner.Concat(context.Background(), []string{"input.mp4"}, output); err == nil || !strings.Contains(err.Error(), "ffmpeg failed") {
 		t.Fatalf("Concat missing binary error=%v", err)
+	}
+}
+
+
+func TestComposerRequiresOutputExtension(t *testing.T) {
+	binary, _, _ := fakeFFmpeg(t)
+	runner := New(binary, "")
+	root := t.TempDir()
+	if err := runner.Normalize(context.Background(), "input.mp4", filepath.Join(root, "normalized"), 640, 360, 24); err == nil || !strings.Contains(err.Error(), "output path must include a media file extension") {
+		t.Fatalf("Normalize extension error=%v", err)
+	}
+	if _, err := runner.Concat(context.Background(), []string{"input.mp4"}, filepath.Join(root, "joined")); err == nil || !strings.Contains(err.Error(), "output path must include a media file extension") {
+		t.Fatalf("Concat extension error=%v", err)
 	}
 }
