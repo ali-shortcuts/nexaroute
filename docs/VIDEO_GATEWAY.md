@@ -78,6 +78,34 @@ The production adapter in this repository connects to a ComfyUI API server on yo
 
 The ComfyUI adapter currently supports text-to-video only; it does not synthesize narration, dialogue, music, or subtitles. Multi-shot jobs generate clips sequentially and compose a final **silent MP4** using FFmpeg. The configured `comfyui_max_duration_seconds` is a per-clip limit, not the total episode duration. Model/workflow requirements and licenses are managed by your local ComfyUI installation.
 
+## Local narration and burned-in subtitles
+
+The optional Piper adapter adds local speech synthesis without a paid API. Install Piper in a dedicated virtual environment and download a voice model from the official catalogue. The model and its matching `.onnx.json` sidecar are both required.
+
+```bash
+python3 -m venv ~/.local/share/nexaroute/piper-venv
+~/.local/share/nexaroute/piper-venv/bin/pip install --upgrade pip piper-tts
+mkdir -p ~/.local/share/nexaroute/voices
+VOICE_NAME="choose-a-voice-from-the-Piper-catalogue"
+~/.local/share/nexaroute/piper-venv/bin/python -m piper.download_voices --data-dir ~/.local/share/nexaroute/voices "$VOICE_NAME"
+```
+
+Set these fields in the gateway's `video` configuration:
+
+```json
+{
+  "piper_enabled": true,
+  "piper_binary": "/home/USER/.local/share/nexaroute/piper-venv/bin/piper",
+  "piper_model_path": "/home/USER/.local/share/nexaroute/voices/VOICE_NAME.onnx"
+}
+```
+
+Replace `USER` and `VOICE_NAME` with real values. If the gateway runs as a service or container, the binary and both model files must be readable inside that runtime. Restart the gateway after changing the configuration. Piper's official catalogue lists Persian (`fa_IR`) among supported languages, but voice quality, gender, and model licensing vary; review the selected voice's model card before publishing. The adapter invokes the local CLI once per episode, so the model is loaded for each narration job.
+
+In Video Studio, enter either the full `narration_text` or per-shot `narration_segment` values in the shot-plan JSON—not both. Select a subtitle language to generate an SRT file and burn the captions into the final MP4. Captions are timed heuristically from text length; they are not word-aligned and are not translated. The synthesized WAV and SRT are stored as source assets and can be downloaded through the same authenticated asset endpoint.
+
+Narration audio must fit inside the requested episode duration. If Piper produces speech longer than the total shot duration, the job fails with a clear error instead of silently truncating the narration; shorten the text or increase shot durations. Without Piper enabled, narration/subtitle requests fail before any video provider is submitted. Ambient sound, dialogue generation, music generation, and automatic translation remain unsupported.
+
 ## Asset downloads
 
 The authenticated endpoint `GET /v1/video/jobs/{job_id}/assets/{asset_id}` streams an asset only when its ID is present in that job's persisted output/source asset list. Downloads are constrained to the configured local storage root, regular files only, and the configured size limit. Responses support HTTP range requests and are sent as attachments with `nosniff` and `no-store` headers. Job JSON uses route-relative asset URIs; it does not disclose the server's absolute filesystem paths. A bearer token configured by `video.auth_token_env` is required for job and asset requests.
