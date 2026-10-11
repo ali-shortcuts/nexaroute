@@ -16,7 +16,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -194,6 +193,13 @@ func (p *ComfyUI) ValidateRequest(r video.VideoRequest) error {
 	if r.AudioRequested || r.DialogueRequested {
 		return errors.New("ComfyUI workflow adapter does not claim audio or dialogue support")
 	}
+	if r.AspectRatio == video.AspectCustom && (r.Width < 1 || r.Height < 1) {
+		return errors.New("custom aspect ratio requires explicit positive width and height")
+	}
+	width, height := outputDimensions(r)
+	if width < 64 || height < 64 || width > 4096 || height > 4096 {
+		return errors.New("ComfyUI output dimensions must be between 64 and 4096 pixels")
+	}
 	return nil
 }
 
@@ -225,7 +231,7 @@ func (p *ComfyUI) CreateJob(ctx context.Context, r video.VideoRequest) (video.Pr
 		}
 		prompt = strings.Join(parts, "\n")
 	}
-	if err := setWorkflowInput(workflow, r, p.cfg.ComfyUIPromptNodeID, p.promptInput, prompt); err != nil {
+	if err := setWorkflowInput(workflow, p.cfg.ComfyUIPromptNodeID, p.promptInput, prompt); err != nil {
 		return video.ProviderJob{}, err
 	}
 	if strings.TrimSpace(p.cfg.ComfyUINegativeNodeID) != "" {
@@ -289,7 +295,7 @@ func outputDimensions(r video.VideoRequest) (int, int) {
 	}
 }
 
-func setWorkflowInput(workflow map[string]map[string]any, r video.VideoRequest, nodeID, input string, value any) error {
+func setWorkflowInput(workflow map[string]map[string]any, nodeID, input string, value any) error {
 	node, ok := workflow[strings.TrimSpace(nodeID)]
 	if !ok {
 		return fmt.Errorf("ComfyUI workflow node %q disappeared while preparing request", nodeID)
@@ -446,6 +452,9 @@ func (p *ComfyUI) DownloadOutputs(ctx context.Context, status video.ProviderJobS
 				asset.ContentType = "video/mp4"
 			}
 		}
+		if !strings.HasPrefix(strings.ToLower(asset.ContentType), "video/") && asset.ContentType != "application/octet-stream" {
+			return nil, fmt.Errorf("ComfyUI output has non-video content type %q", asset.ContentType)
+		}
 		saved, err := sink.Put(ctx, asset, data)
 		if err != nil {
 			return nil, fmt.Errorf("persist ComfyUI video output: %w", err)
@@ -508,16 +517,3 @@ func (p *ComfyUI) doJSON(ctx context.Context, method, path string, payload, out 
 
 var _ video.VideoProvider = (*ComfyUI)(nil)
 
-// parseComfyQueueNumber is retained as a strict helper for queue fixtures and
-// future progress reporting; malformed values are never interpreted as zero.
-func parseComfyQueueNumber(raw json.RawMessage) (int, error) {
-	var n int
-	if err := json.Unmarshal(raw, &n); err == nil {
-		return n, nil
-	}
-	var s string
-	if err := json.Unmarshal(raw, &s); err != nil {
-		return 0, err
-	}
-	return strconv.Atoi(s)
-}
