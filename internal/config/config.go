@@ -1222,7 +1222,7 @@ func (p *ProviderConfig) ApplyDefaults() {
 		p.CountTokensPath = "/v1/messages/count_tokens"
 	}
 	if p.MaxConcurrency == 0 {
-		p.MaxConcurrency = 32
+		p.MaxConcurrency = 256
 	}
 	if p.StreamIdleTimeoutSeconds == 0 {
 		p.StreamIdleTimeoutSeconds = 180
