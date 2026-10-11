@@ -3,8 +3,6 @@ package providers
 import (
 	"context"
 	"encoding/json"
-	"errors"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -225,11 +223,8 @@ func TestComfyUIQueueStatusAndSafeCancellation(t *testing.T) {
 	if cancelled != "pending-1" {
 		t.Fatalf("cancelled=%q", cancelled)
 	}
-	if err := provider.CancelJob(context.Background(), "running-1"); err == nil || !strings.Contains(err.Error(), "absent from history and queue") {
-		// The mocked queue intentionally does not contain running-1; cancellation must fail closed.
-		if err == nil {
-			t.Fatal("unknown job cancellation unexpectedly succeeded")
-		}
+	if err := provider.CancelJob(context.Background(), "running-1"); err == nil || !strings.Contains(err.Error(), "not pending") {
+		t.Fatalf("unknown job cancellation error=%v, want fail-closed pending check", err)
 	}
 }
 
@@ -266,9 +261,5 @@ func TestComfyUIOutputLimitAndCapabilities(t *testing.T) {
 	}
 	if err := provider.RegisterWebhook(context.Background(), video.WebhookRegistration{}); err == nil {
 		t.Fatal("unsupported webhook registration accepted")
-	}
-	if !errors.Is(fmt.Errorf("x: %w", errors.New("marker")), errors.New("marker")) {
-		// This branch exists only to keep error wrapping imports exercised in a portable way.
-		t.Fatal("unexpected error helper behavior")
 	}
 }
