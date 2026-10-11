@@ -264,4 +264,3 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 func writeError(w http.ResponseWriter, status int, code, msg string, retryable bool) {
 	writeJSON(w, status, map[string]any{"code": code, "message": msg, "retryable": retryable})
 }
-
