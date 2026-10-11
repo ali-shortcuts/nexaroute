@@ -115,7 +115,7 @@ func episodeRequest() video.VideoRequest {
 	}
 }
 
-func newEpisodeOrchestrator(t *testing.T, store queue.JobStore, q *queue.Queue, provider *episodeTestProvider, sink *episodeTestSink, comp *episodeTestComposer) *Orchestrator {
+func newEpisodeOrchestrator(t *testing.T, store queue.JobStore, q *queue.Queue, provider *episodeTestProvider, sink *episodeTestSink, comp EpisodeComposer) *Orchestrator {
 	t.Helper()
 	return &Orchestrator{
 		Store: store, Queue: q, Providers: Registry{"fake": provider},
