@@ -64,8 +64,18 @@ func New(cfg video.Config, baseDir string) (*Runtime, error) {
 	if cfg.DevelopmentFakeProvider {
 		reg["fake"] = providers.NewFake(2)
 	}
+	if cfg.ComfyUIEnabled {
+		if strings.TrimSpace(cfg.ComfyUIWorkflowPath) != "" && !filepath.IsAbs(cfg.ComfyUIWorkflowPath) {
+			cfg.ComfyUIWorkflowPath = filepath.Join(baseDir, cfg.ComfyUIWorkflowPath)
+		}
+		comfy, err := providers.NewComfyUI(cfg, cfg.MaxAssetBytes)
+		if err != nil {
+			return nil, fmt.Errorf("initialize local ComfyUI provider: %w", err)
+		}
+		reg[comfy.ID()] = comfy
+	}
 	if len(reg) == 0 {
-		return nil, errors.New("video gateway is enabled but this build has no real video provider adapter; enable development_fake_provider only for local testing")
+		return nil, errors.New("video gateway is enabled but no provider is configured; configure the local ComfyUI workflow or enable development_fake_provider only for tests")
 	}
 	storageRoot := cfg.StorageRoot
 	if storageRoot == "" {

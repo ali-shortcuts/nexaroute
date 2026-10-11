@@ -163,9 +163,33 @@ func main() {
 	var videoRT *videoRuntime.Runtime
 	if cfg.Video.Enabled {
 		videoRT, err = videoRuntime.New(videoDomain.Config{
-			Enabled: cfg.Video.Enabled, StorePath: cfg.Video.StorePath, StorageRoot: cfg.Video.StorageRoot,
-			QueueSize: cfg.Video.QueueSize, Workers: cfg.Video.Workers, AuthTokenEnv: cfg.Video.AuthTokenEnv,
-			MaxAssetBytes: cfg.Video.MaxAssetBytes, DevelopmentFakeProvider: cfg.Video.DevelopmentFakeProvider,
+			Enabled:                   cfg.Video.Enabled,
+			StorePath:                 cfg.Video.StorePath,
+			StorageRoot:               cfg.Video.StorageRoot,
+			QueueSize:                 cfg.Video.QueueSize,
+			Workers:                   cfg.Video.Workers,
+			AuthTokenEnv:              cfg.Video.AuthTokenEnv,
+			MaxAssetBytes:             cfg.Video.MaxAssetBytes,
+			DevelopmentFakeProvider:   cfg.Video.DevelopmentFakeProvider,
+			ComfyUIEnabled:            cfg.Video.ComfyUIEnabled,
+			ComfyUIBaseURL:            cfg.Video.ComfyUIBaseURL,
+			ComfyUIWorkflowPath:       cfg.Video.ComfyUIWorkflowPath,
+			ComfyUIModel:              cfg.Video.ComfyUIModel,
+			ComfyUIMaxDurationSeconds: cfg.Video.ComfyUIMaxDurationSeconds,
+			ComfyUIPromptNodeID:       cfg.Video.ComfyUIPromptNodeID,
+			ComfyUIPromptInput:        cfg.Video.ComfyUIPromptInput,
+			ComfyUINegativeNodeID:     cfg.Video.ComfyUINegativeNodeID,
+			ComfyUINegativeInput:      cfg.Video.ComfyUINegativeInput,
+			ComfyUIWidthNodeID:        cfg.Video.ComfyUIWidthNodeID,
+			ComfyUIWidthInput:         cfg.Video.ComfyUIWidthInput,
+			ComfyUIHeightNodeID:       cfg.Video.ComfyUIHeightNodeID,
+			ComfyUIHeightInput:        cfg.Video.ComfyUIHeightInput,
+			ComfyUIFramesNodeID:       cfg.Video.ComfyUIFramesNodeID,
+			ComfyUIFramesInput:        cfg.Video.ComfyUIFramesInput,
+			ComfyUIFPSNodeID:          cfg.Video.ComfyUIFPSNodeID,
+			ComfyUIFPSInput:           cfg.Video.ComfyUIFPSInput,
+			ComfyUISeedNodeID:         cfg.Video.ComfyUISeedNodeID,
+			ComfyUISeedInput:          cfg.Video.ComfyUISeedInput,
 		}, filepath.Dir(*configPath))
 		if err != nil {
 			bootstrap.Fatalf("cannot initialize video gateway: %v", err)

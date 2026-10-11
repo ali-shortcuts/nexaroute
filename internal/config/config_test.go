@@ -468,3 +468,34 @@ func TestProviderMaxConcurrencyAllowsConcurrentRequestsAboveOldDefault(t *testin
 		t.Fatalf("default max_concurrency (%d) should allow 64 concurrent requests", cfg.Providers[0].MaxConcurrency)
 	}
 }
+
+func TestVideoConfigRequiresExplicitProviderAndValidComfyUISettings(t *testing.T) {
+	cfg := Default()
+	cfg.Video.Enabled = true
+	cfg.Video.AuthTokenEnv = "NEXAROUTE_TEST_VIDEO_TOKEN"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("valid config-layer settings rejected before runtime provider initialization: %v", err)
+	}
+
+	cfg.Video.ComfyUIEnabled = true
+	cfg.Video.ComfyUIBaseURL = "http://127.0.0.1:8188"
+	cfg.Video.ComfyUIWorkflowPath = "comfyui-api-workflow.json"
+	cfg.Video.ComfyUIPromptNodeID = "6"
+	cfg.Video.ComfyUIWidthNodeID = "8"
+	cfg.Video.ComfyUIHeightNodeID = "8"
+	cfg.Video.ComfyUIFramesNodeID = "12"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("valid local ComfyUI config rejected: %v", err)
+	}
+
+	cfg.Video.ComfyUIPromptNodeID = ""
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "comfyui_prompt_node_id") {
+		t.Fatalf("missing ComfyUI prompt node error=%v", err)
+	}
+
+	cfg = Default()
+	cfg.Video.ComfyUIEnabled = true
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "requires video.enabled") {
+		t.Fatalf("ComfyUI without Video Gateway error=%v", err)
+	}
+}
