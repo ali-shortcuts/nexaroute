@@ -155,6 +155,11 @@ func (o *Orchestrator) runEpisodeJob(ctx context.Context, j video.VideoJob) erro
 	}
 	caps, err := p.Capabilities(ctx)
 	if err != nil {
+		j.LastError = "provider capabilities unavailable; episode remains resumable"
+		if saveErr := o.Store.Update(ctx, j); saveErr != nil {
+			return fmt.Errorf("provider capabilities unavailable and episode state could not be saved: %w", saveErr)
+		}
+		o.scheduleRetry(ctx, j, o.pollInterval())
 		return fmt.Errorf("read provider capabilities while resuming episode: %w", err)
 	}
 	if j.State == video.StateCancelRequested {
