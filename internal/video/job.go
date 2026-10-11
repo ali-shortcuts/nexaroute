@@ -35,17 +35,17 @@ type AuditEvent struct {
 }
 
 type ShotExecution struct {
-	Index          int               `json:"index"`
-	ShotID         string            `json:"shot_id"`
-	State          JobState          `json:"state"`
-	Provider       string            `json:"provider,omitempty"`
-	Model          string            `json:"model,omitempty"`
-	ProviderJobID  string            `json:"provider_job_id,omitempty"`
-	Progress       float64           `json:"progress"`
-	SubmittedAt    *time.Time        `json:"submitted_at,omitempty"`
-	CompletedAt    *time.Time        `json:"completed_at,omitempty"`
-	LastError      string            `json:"last_error,omitempty"`
-	UsageMetadata  map[string]string `json:"usage_metadata,omitempty"`
+	Index         int               `json:"index"`
+	ShotID        string            `json:"shot_id"`
+	State         JobState          `json:"state"`
+	Provider      string            `json:"provider,omitempty"`
+	Model         string            `json:"model,omitempty"`
+	ProviderJobID string            `json:"provider_job_id,omitempty"`
+	Progress      float64           `json:"progress"`
+	SubmittedAt   *time.Time        `json:"submitted_at,omitempty"`
+	CompletedAt   *time.Time        `json:"completed_at,omitempty"`
+	LastError     string            `json:"last_error,omitempty"`
+	UsageMetadata map[string]string `json:"usage_metadata,omitempty"`
 }
 
 type VideoJob struct {
