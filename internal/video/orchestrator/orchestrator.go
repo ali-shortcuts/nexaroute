@@ -375,7 +375,7 @@ func (o *Orchestrator) RunJob(ctx context.Context, queued video.VideoJob) error 
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if o.Store == nil || o.Providers == nil {
+	if o.Store == nil {
 		return errors.New("video orchestrator is not fully configured")
 	}
 	j, err := o.Store.Get(ctx, queued.JobID)
@@ -384,6 +384,9 @@ func (o *Orchestrator) RunJob(ctx context.Context, queued video.VideoJob) error 
 	}
 	if len(j.Request.ShotPlan) > 1 {
 		return o.runEpisodeJob(ctx, j)
+	}
+	if o.Providers == nil {
+		return errors.New("video orchestrator is not fully configured")
 	}
 	switch j.State {
 	case video.StateCompleted, video.StateFailed, video.StateCancelled, video.StateDryRun:
