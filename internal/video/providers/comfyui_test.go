@@ -293,3 +293,48 @@ func TestComfyUIRejectsCrossOriginRedirects(t *testing.T) {
 		t.Fatal("ComfyUI prompt was forwarded to a different origin")
 	}
 }
+
+
+func TestComfyUIRejectsUnsupportedRequestFieldsInsteadOfIgnoringThem(t *testing.T) {
+	cfg := comfyTestConfig(comfyWorkflowFile(t), "http://127.0.0.1:8188")
+	cfg.ComfyUINegativeNodeID = ""
+	cfg.ComfyUIFPSNodeID = ""
+	cfg.ComfyUISeedNodeID = ""
+	provider, err := NewComfyUI(cfg, 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed := int64(7)
+	base := video.VideoRequest{
+		ProjectID: "p", Prompt: "Noora walks through Persepolis",
+		Mode: video.ModeTextToVideo, DurationSeconds: 1, AspectRatio: video.Aspect16x9,
+	}
+	cases := []struct {
+		name string
+		edit func(*video.VideoRequest)
+	}{
+		{name: "multi-shot plan", edit: func(r *video.VideoRequest) {
+			r.ShotPlan = []video.Shot{{ShotID: "one", Prompt: "one"}, {ShotID: "two", Prompt: "two"}}
+		}},
+		{name: "reference assets", edit: func(r *video.VideoRequest) {
+			r.ReferenceAssets = []video.Asset{{ID: "reference"}}
+		}},
+		{name: "narration text", edit: func(r *video.VideoRequest) { r.NarrationText = "hello" }},
+		{name: "subtitle language", edit: func(r *video.VideoRequest) { r.SubtitleLanguage = "fa" }},
+		{name: "callback URL", edit: func(r *video.VideoRequest) { r.CallbackURL = "https://example.test/callback" }},
+		{name: "non-MP4 output", edit: func(r *video.VideoRequest) { r.OutputFormat = "webm" }},
+		{name: "negative prompt without node", edit: func(r *video.VideoRequest) { r.NegativePrompt = "blurry" }},
+		{name: "seed without node", edit: func(r *video.VideoRequest) { r.Seed = &seed }},
+		{name: "non-default FPS without node", edit: func(r *video.VideoRequest) { r.FPS = 30 }},
+		{name: "continuity context", edit: func(r *video.VideoRequest) { r.ContinuityContext = &video.ContinuityContext{} }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			request := base
+			tc.edit(&request)
+			if err := provider.ValidateRequest(request); err == nil {
+				t.Fatalf("unsupported request was silently accepted: %+v", request)
+			}
+		})
+	}
+}
