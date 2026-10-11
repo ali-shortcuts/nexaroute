@@ -34,6 +34,21 @@ type AuditEvent struct {
 	Metadata map[string]string `json:"metadata,omitempty"`
 }
 
+type ShotExecution struct {
+	Index          int               `json:"index"`
+	ShotID         string            `json:"shot_id"`
+	State          JobState          `json:"state"`
+	Provider       string            `json:"provider,omitempty"`
+	Model          string            `json:"model,omitempty"`
+	ProviderJobID  string            `json:"provider_job_id,omitempty"`
+	Progress       float64           `json:"progress"`
+	SubmittedAt    *time.Time        `json:"submitted_at,omitempty"`
+	CompletedAt    *time.Time        `json:"completed_at,omitempty"`
+	LastError      string            `json:"last_error,omitempty"`
+	ActualCostUSD  *float64          `json:"actual_cost_usd,omitempty"`
+	UsageMetadata  map[string]string `json:"usage_metadata,omitempty"`
+}
+
 type VideoJob struct {
 	SchemaVersion    string            `json:"schema_version"`
 	JobID            string            `json:"job_id"`
@@ -54,6 +69,7 @@ type VideoJob struct {
 	RetryCount       int               `json:"retry_count"`
 	CurrentShot      int               `json:"current_shot,omitempty"`
 	TotalShots       int               `json:"total_shots,omitempty"`
+	ShotExecutions   []ShotExecution   `json:"shot_executions,omitempty"`
 	OutputAssets     []Asset           `json:"output_assets,omitempty"`
 	SourceAssets     []Asset           `json:"source_assets,omitempty"`
 	EstimatedCostUSD float64           `json:"estimated_cost_usd,omitempty"`
@@ -64,7 +80,18 @@ type VideoJob struct {
 
 func NewJob(id string, req VideoRequest) VideoJob {
 	now := time.Now().UTC()
-	return VideoJob{SchemaVersion: SchemaVersion, JobID: id, IdempotencyKey: req.IdempotencyKey, ProjectID: req.ProjectID, EpisodeID: req.EpisodeID, Request: req, State: StateQueued, CreatedAt: now, TotalShots: len(req.ShotPlan)}
+	j := VideoJob{
+		SchemaVersion: SchemaVersion, JobID: id, IdempotencyKey: req.IdempotencyKey,
+		ProjectID: req.ProjectID, EpisodeID: req.EpisodeID, Request: req,
+		State: StateQueued, CreatedAt: now, TotalShots: len(req.ShotPlan),
+	}
+	if len(req.ShotPlan) > 1 {
+		j.ShotExecutions = make([]ShotExecution, len(req.ShotPlan))
+		for i, shot := range req.ShotPlan {
+			j.ShotExecutions[i] = ShotExecution{Index: i + 1, ShotID: shot.ShotID, State: StateQueued}
+		}
+	}
+	return j
 }
 
 func CanTransition(from, to JobState) bool {
