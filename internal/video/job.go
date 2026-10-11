@@ -85,7 +85,7 @@ func NewJob(id string, req VideoRequest) VideoJob {
 		ProjectID: req.ProjectID, EpisodeID: req.EpisodeID, Request: req,
 		State: StateQueued, CreatedAt: now, TotalShots: len(req.ShotPlan),
 	}
-	if len(req.ShotPlan) > 1 {
+	if len(req.ShotPlan) > 0 {
 		j.ShotExecutions = make([]ShotExecution, len(req.ShotPlan))
 		for i, shot := range req.ShotPlan {
 			j.ShotExecutions[i] = ShotExecution{Index: i + 1, ShotID: shot.ShotID, State: StateQueued}
