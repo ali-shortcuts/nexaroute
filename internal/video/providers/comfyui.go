@@ -269,7 +269,7 @@ func (p *ComfyUI) CreateJob(ctx context.Context, r video.VideoRequest) (video.Pr
 	}
 	payload := map[string]any{"prompt": workflow, "client_id": hex.EncodeToString(clientIDBytes)}
 	var response struct {
-		PromptID  string          `json:"prompt_id"`
+		PromptID   string          `json:"prompt_id"`
 		NodeErrors json.RawMessage `json:"node_errors"`
 	}
 	if err := p.doJSON(ctx, http.MethodPost, "/prompt", payload, &response); err != nil {
