@@ -353,7 +353,58 @@ func (o *Orchestrator) runEpisodeJob(ctx context.Context, j video.VideoJob) erro
 		if err != nil || !info.Mode().IsRegular() || info.Size() != asset.SizeBytes {
 			return o.markNeedsManualAndError(ctx, j, fmt.Sprintf("shot %q asset is not a valid local file usable by the episode composer", run.ShotID))
 		}
+		// Re-store every clip under a unique filename before the next provider
+		// job runs. Providers commonly reuse names such as output.mp4; without
+		// this copy, a later shot could overwrite an earlier checkpoint.
+		rawClip, err := os.ReadFile(asset.URI)
+		if err != nil {
+			return o.markNeedsManualAndError(ctx, j, fmt.Sprintf("shot %q asset could not be read for checkpointing", run.ShotID))
+		}
+		baseName := filepath.Base(strings.TrimSpace(asset.Filename))
+		if baseName == "" || baseName == "." {
+			baseName = "clip.mp4"
+		}
+		asset.Filename = fmt.Sprintf("shot-%03d-%s", i+1, baseName)
+		baseID := strings.TrimSpace(asset.ID)
+		if baseID == "" {
+			baseID = j.JobID
+		}
+		asset.ID = fmt.Sprintf("%s-shot-%03d", baseID, i+1)
+		metadata := make(map[string]string, len(asset.Metadata)+5)
+		for key, value := range asset.Metadata {
+			metadata[key] = value
+		}
+		metadata["project_id"] = j.ProjectID
+		metadata["episode_id"] = j.EpisodeID
+		metadata["job_id"] = j.JobID
+		metadata["shot_id"] = run.ShotID
+		metadata["shot_index"] = fmt.Sprint(i + 1)
+		asset.Metadata = metadata
 		asset.Kind = "video"
+		savedClip, err := o.Assets.Put(ctx, asset, rawClip)
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			run.LastError = "unique shot checkpoint persistence failed; remote job remains resumable"
+			j.LastError = run.LastError
+			if saveErr := o.Store.Update(ctx, j); saveErr != nil {
+				return fmt.Errorf("shot checkpoint persistence failed and state could not be saved: %w", saveErr)
+			}
+			o.scheduleRetry(ctx, j, o.pollInterval())
+			return fmt.Errorf("persist unique output for shot %q: %w", run.ShotID, err)
+		}
+		asset = savedClip
+		if strings.TrimSpace(asset.URI) == "" || asset.SizeBytes != int64(len(rawClip)) || asset.SizeBytes <= 0 || asset.SizeBytes > maxBytes || len(asset.SHA256) != 64 {
+			return o.markNeedsManualAndError(ctx, j, fmt.Sprintf("shot %q unique checkpoint was not persisted with valid metadata", run.ShotID))
+		}
+		if _, err := hex.DecodeString(asset.SHA256); err != nil {
+			return o.markNeedsManualAndError(ctx, j, fmt.Sprintf("shot %q unique checkpoint checksum is malformed", run.ShotID))
+		}
+		info, err = os.Stat(asset.URI)
+		if err != nil || !info.Mode().IsRegular() || info.Size() != asset.SizeBytes {
+			return o.markNeedsManualAndError(ctx, j, fmt.Sprintf("shot %q unique checkpoint file is invalid", run.ShotID))
+		}
 		shot.OutputAsset = &asset
 		run.State = video.StateCompleted
 		run.Progress = 1
