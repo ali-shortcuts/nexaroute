@@ -567,8 +567,28 @@ func (o *Orchestrator) composeEpisode(ctx context.Context, j *video.VideoJob) er
 	}
 	defer os.RemoveAll(tempDir)
 	outputPath := filepath.Join(tempDir, "episode.mp4")
+	narrationPath, subtitlePath, narrationErr := o.prepareNarration(ctx, j, tempDir)
+	if narrationErr != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if errors.Is(narrationErr, errNarrationExceedsEpisodeDuration) {
+			return o.fail(ctx, *j, "narration exceeds episode duration; shorten the text or increase shot durations")
+		}
+		j.CompositionRetryCount++
+		j.LastError = "narration preparation failed; generated shot checkpoints are preserved"
+		if saveErr := o.Store.Update(ctx, *j); saveErr != nil {
+			return fmt.Errorf("narration preparation failed and checkpoint could not be saved: %w", saveErr)
+		}
+		if j.CompositionRetryCount >= 3 {
+			return o.fail(ctx, *j, "narration preparation failed after repeated attempts")
+		}
+		o.scheduleRetry(ctx, *j, o.pollInterval())
+		return fmt.Errorf("prepare episode narration: %w", narrationErr)
+	}
 	_, err = o.Composer.ComposeEpisode(ctx, composer.EpisodeSpec{
 		Shots: clips, OutputPath: outputPath, Width: width, Height: height, FPS: fps,
+		NarrationPath: narrationPath, SubtitlePath: subtitlePath,
 	})
 	if err != nil {
 		if ctx.Err() != nil {
