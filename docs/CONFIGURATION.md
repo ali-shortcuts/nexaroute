@@ -543,9 +543,30 @@ injector, not in a literal config value. The example configuration is
   "queue_size": 32,
   "workers": 2,
   "auth_token_env": "NEXAROUTE_VIDEO_TOKEN",
-  "development_fake_provider": false
+  "development_fake_provider": false,
+  "comfyui_enabled": false,
+  "comfyui_base_url": "http://127.0.0.1:8188",
+  "comfyui_workflow_path": "comfyui-api-workflow.json",
+  "comfyui_model": "comfyui-workflow",
+  "comfyui_max_duration_seconds": 60,
+  "comfyui_prompt_node_id": "",
+  "comfyui_prompt_input": "text",
+  "comfyui_negative_node_id": "",
+  "comfyui_negative_input": "text",
+  "comfyui_width_node_id": "",
+  "comfyui_width_input": "width",
+  "comfyui_height_node_id": "",
+  "comfyui_height_input": "height",
+  "comfyui_frames_node_id": "",
+  "comfyui_frames_input": "length",
+  "comfyui_fps_node_id": "",
+  "comfyui_fps_input": "frame_rate",
+  "comfyui_seed_node_id": "",
+  "comfyui_seed_input": "noise_seed"
 }
 ```
+
+When using the local ComfyUI adapter, set `comfyui_enabled` to `true`, point `comfyui_base_url` to the local ComfyUI API (default `http://127.0.0.1:8188`), and set `comfyui_workflow_path` to an API-format workflow JSON file readable by the gateway process. Fill the required prompt, width, height, and frame-count node IDs to match that workflow. Negative-prompt, FPS, and seed node IDs are optional; their input names default to the values shown above. The adapter currently supports text-to-video only and rejects requests asking it to synthesize narration, audio, dialogue, or subtitles. Plain HTTP ComfyUI endpoints are restricted to loopback; use HTTPS for remote endpoints.
 
 `store_path` and `storage_root` may be absolute or relative to the gateway's
 runtime base directory. The JSON store, queue and cost ledger are single-process;
