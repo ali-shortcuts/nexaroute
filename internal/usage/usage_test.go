@@ -85,6 +85,24 @@ func TestTrackerUnknownDeploymentBucketed(t *testing.T) {
 	}
 }
 
+func TestTrackerSaturatingAddAndNegativePriceAreFailSafe(t *testing.T) {
+	if got := saturatingAdd(10, 0); got != 10 {
+		t.Fatalf("zero delta changed total: %d", got)
+	}
+	if got := saturatingAdd(10, -1); got != 10 {
+		t.Fatalf("negative delta changed total: %d", got)
+	}
+	if got := saturatingAdd(int64(1<<63-2), 10); got != int64(1<<63-1) {
+		t.Fatalf("overflow was not saturated: %d", got)
+	}
+	tr := New()
+	tr.Record("priced", 1_000_000, 1_000_000)
+	s := tr.Snapshot(map[string]Price{"priced": {InputPerMTok: -4, OutputPerMTok: -8}})
+	if s.TotalEstimatedCostUSD != 0 || s.ByDeployment[0].EstimatedCost != 0 {
+		t.Fatalf("negative pricing was not clamped: %+v", s)
+	}
+}
+
 // TestTrackerSaturatesAbsurdTokenCounts is the overflow regression: an upstream
 // is untrusted input, and a hostile or broken provider can report token counts
 // that are nowhere near a real response (MaxInt64, or values that sum past

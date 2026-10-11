@@ -48,3 +48,18 @@ func TestCoverageBehaviorDecisionResultContractPredicates(t *testing.T) {
 		}
 	}
 }
+
+func TestCoverageBehaviorReasonCodeContract(t *testing.T) {
+	all := AllReasonCodes()
+	if len(all) < 40 {
+		t.Fatalf("reason code registry unexpectedly small: %d", len(all))
+	}
+	for _, code := range all {
+		if !IsValidReasonCode(code) || !IsValidReasonCodeString(string(code)) {
+			t.Fatalf("registered reason code rejected: %q", code)
+		}
+	}
+	if IsValidReasonCode(ReasonCode("provider supplied text")) || IsValidReasonCodeString("") {
+		t.Fatal("unregistered reason code accepted")
+	}
+}

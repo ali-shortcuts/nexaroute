@@ -1,7 +1,9 @@
 package compat
 
 import (
+	"context"
 	"encoding/json"
+	"net/http"
 	"strings"
 	"testing"
 )
@@ -110,5 +112,111 @@ func TestCoverageBehaviorStructuredMessagesAndPolicyMapping(t *testing.T) {
 		if p.ErrorType != tc.kind || p.Failover != tc.fail {
 			t.Fatalf("policy for %s=%+v", tc.class, p)
 		}
+	}
+}
+
+func TestResponsesAndAnthropicCapabilitySuitesUseProtocolAdapters(t *testing.T) {
+	responses := &responsesRecordingTransport{}
+	responsesReport := RunCapabilitySuiteResponses(context.Background(), responses, "dep", "model")
+	if responsesReport.Deployment != "dep" || responsesReport.Dialect != "openai_responses" || len(responsesReport.Outcomes) == 0 {
+		t.Fatalf("responses report=%+v", responsesReport)
+	}
+	for _, payload := range responses.payloads {
+		var body map[string]any
+		if err := json.Unmarshal(payload, &body); err != nil {
+			t.Fatal(err)
+		}
+		if body["input"] == nil || body["messages"] != nil {
+			t.Fatalf("invalid Responses payload=%s", payload)
+		}
+	}
+
+	anthropic := &anthropicCoverageTransport{}
+	anthropicReport := RunCapabilitySuiteAnthropic(context.Background(), anthropic, "dep", "model")
+	if anthropicReport.Deployment != "dep" || anthropicReport.Level != "capability" || len(anthropicReport.Outcomes) == 0 {
+		t.Fatalf("anthropic report=%+v", anthropicReport)
+	}
+	if anthropic.calls == 0 {
+		t.Fatal("Anthropic suite made no transport calls")
+	}
+}
+
+type anthropicCoverageTransport struct{ calls int }
+
+func (t *anthropicCoverageTransport) Do(_ context.Context, payload []byte, stream bool, _ http.Header) (*http.Response, error) {
+	t.calls++
+	if stream {
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: &stringReaderCloser{Reader: strings.NewReader("data: {}\n\n")}}, nil
+	}
+	body := `{"content":[{"type":"text","text":"OK"}],"usage":{"input_tokens":1,"output_tokens":1}}`
+	if strings.Contains(string(payload), `"tools"`) {
+		body = `{"content":[{"type":"tool_use","id":"call_1","name":"get_weather","input":{"city":"Paris"}}],"usage":{"input_tokens":1,"output_tokens":1}}`
+	}
+	return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: &stringReaderCloser{Reader: strings.NewReader(body)}}, nil
+}
+
+func (t *anthropicCoverageTransport) RedactBody(b []byte) []byte { return b }
+
+func TestResponsesProbeConversionHandlesContentVariantsAndInvalidBodies(t *testing.T) {
+	for _, input := range []any{
+		"plain text",
+		[]any{
+			map[string]any{"type": "text", "text": "hello"},
+			map[string]any{"type": "image_url", "image_url": map[string]any{"url": "data:image/png;base64,abc"}},
+			map[string]any{"type": "unknown"},
+		},
+		nil,
+	} {
+		got := responsesProbeContent(input)
+		if input != nil && got == nil {
+			t.Fatalf("content variant %T was dropped unexpectedly", input)
+		}
+	}
+	if _, err := chatProbePayloadToResponses([]byte("{")); err == nil {
+		t.Fatal("invalid chat probe JSON accepted")
+	}
+	if _, err := responsesProbeBodyToChat([]byte("{")); err == nil {
+		t.Fatal("invalid Responses body accepted")
+	}
+	if got := firstText(completionShape{}); got != "" {
+		t.Fatalf("empty completion text=%q", got)
+	}
+}
+
+func TestCoverageProbeVerdictsAndResponsesBodyConversion(t *testing.T) {
+	cases := []struct {
+		name    string
+		resp    fakeResp
+		cap     string
+		want    Support
+		wantErr bool
+	}{
+		{"text", fakeResp{status: 200, body: `{"choices":[{"message":{"content":"OK"}}]}`}, CapText, Supported, false},
+		{"tool", fakeResp{status: 200, body: `{"choices":[{"message":{"tool_calls":[{"id":"x"}]}}]}`}, CapTools, Supported, false},
+		{"unsupported", fakeResp{status: 400, body: `{"error":{"message":"temperature is not supported"}}`}, CapTemperature, Unsupported, false},
+		{"server error", fakeResp{status: 500, body: `{"error":{"message":"boom"}}`}, CapText, UnknownSupport, true},
+		{"malformed", fakeResp{status: 200, body: `not-json`}, CapText, UnknownSupport, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ft := &fakeTransport{resps: []fakeResp{tc.resp}}
+			expect := ExpectText
+			if tc.cap == CapTools {
+				expect = ExpectToolCall
+			}
+			got, err := runProbe(context.Background(), ft, []byte(`{"model":"m"}`), false, tc.cap, expect)
+			if got.Verdict != tc.want || (err != nil) != tc.wantErr {
+				t.Fatalf("outcome=%+v err=%v", got, err)
+			}
+		})
+	}
+	stream := &fakeTransport{resps: []fakeResp{{status: 200, sse: true}}}
+	got, err := runProbe(context.Background(), stream, nil, true, CapStreaming, ExpectText)
+	if err != nil || got.Verdict != Supported {
+		t.Fatalf("stream outcome=%+v err=%v", got, err)
+	}
+	converted, err := responsesProbeBodyToChat([]byte(`{"id":"r","model":"m","status":"incomplete","output":[{"type":"message","content":[{"type":"output_text","text":"hello"}]},{"type":"function_call","call_id":"c","name":"f","arguments":"{}"}],"usage":{"input_tokens":2,"output_tokens":3}}`))
+	if err != nil || !strings.Contains(string(converted), "tool_calls") || !strings.Contains(string(converted), "hello") {
+		t.Fatalf("converted body=%s err=%v", converted, err)
 	}
 }
