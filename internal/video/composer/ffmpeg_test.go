@@ -149,10 +149,10 @@ func TestConcatWritesEscapedListAndReturnsManifest(t *testing.T) {
 	args := readLines(t, argsCapture)
 	wantPrefix := []string{"-y", "-f", "concat", "-safe", "0", "-i"}
 	// The helper records the temporary list path, whose value is intentionally nondeterministic.
-	if len(args) != len(wantPrefix)+4 || strings.Join(args[:len(wantPrefix)], "\x00") != strings.Join(wantPrefix, "\x00") || args[len(wantPrefix)+1] != "-c" || args[len(wantPrefix)+2] != "copy" || !strings.HasSuffix(args[len(args)-1], ".mp4.tmp") {
+	if len(args) != len(wantPrefix)+4 || strings.Join(args[:len(wantPrefix)], "\x00") != strings.Join(wantPrefix, "\x00") || args[len(wantPrefix)+1] != "-c" || args[len(wantPrefix)+2] != "copy" || !strings.HasSuffix(args[len(args)-1], ".tmp.mp4") {
 		t.Fatalf("Concat args=%q", args)
 	}
-	if _, err := os.Stat(output + ".tmp"); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(strings.TrimSuffix(output, filepath.Ext(output)) + ".tmp" + filepath.Ext(output)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("temporary concat output was not removed: %v", err)
 	}
 }
