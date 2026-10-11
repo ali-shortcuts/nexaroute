@@ -189,11 +189,17 @@ func (o *Orchestrator) runEpisodeJob(ctx context.Context, j video.VideoJob) erro
 		shot := &j.Request.ShotPlan[i]
 		run := &j.ShotExecutions[i]
 		j.CurrentShot = i + 1
-		if shot.OutputAsset != nil && strings.TrimSpace(shot.OutputAsset.URI) != "" {
+		if shot.OutputAsset != nil {
+			if strings.TrimSpace(shot.OutputAsset.URI) == "" || shot.OutputAsset.SizeBytes <= 0 || len(shot.OutputAsset.SHA256) != 64 {
+				return o.markNeedsManualAndError(ctx, j, fmt.Sprintf("shot %q has an invalid persisted output asset checkpoint", run.ShotID))
+			}
 			run.State = video.StateCompleted
 			run.Progress = 1
 			addSourceAsset(&j, *shot.OutputAsset)
 			continue
+		}
+		if run.State == video.StateCompleted && run.ProviderJobID == "" {
+			return o.markNeedsManualAndError(ctx, j, fmt.Sprintf("shot %q is marked complete without a persisted output asset", run.ShotID))
 		}
 		if run.State == video.StatePlanning && run.ProviderJobID == "" {
 			return o.markNeedsManualAndError(ctx, j, fmt.Sprintf("shot %q may have been submitted before a crash; refusing automatic resubmission", run.ShotID))
@@ -466,6 +472,9 @@ func (o *Orchestrator) composeEpisode(ctx context.Context, j *video.VideoJob) er
 		Shots: clips, OutputPath: outputPath, Width: width, Height: height, FPS: fps,
 	})
 	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		j.RetryCount++
 		j.LastError = "episode composition failed; generated shot checkpoints are preserved"
 		if saveErr := o.Store.Update(ctx, *j); saveErr != nil {
@@ -499,6 +508,9 @@ func (o *Orchestrator) composeEpisode(ctx context.Context, j *video.VideoJob) er
 	}
 	saved, err := o.Assets.Put(ctx, asset, data)
 	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		j.LastError = "final episode persistence failed; shot checkpoints are preserved"
 		if saveErr := o.Store.Update(ctx, *j); saveErr != nil {
 			return fmt.Errorf("final episode persistence failed and checkpoint could not be saved: %w", saveErr)
