@@ -415,6 +415,9 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 			"messages_path":     "/v1/messages",
 			"count_tokens_path": "/v1/messages/count_tokens",
 		},
+		"video": map[string]any{
+			"enabled": s.videoHandler != nil,
+		},
 		"virtual_endpoints": veList,
 		"route_profiles":    rpList,
 		"candidate_pools":   cpList,
