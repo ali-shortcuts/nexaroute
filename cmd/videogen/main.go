@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -77,7 +78,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	var result any
 	switch command {
 	case "providers":
-		result, err = client.Providers(runContext())
+		result, err = client.Providers(context.Background())
 	case "create":
 		var data []byte
 		data, err = os.ReadFile(*file)
@@ -86,13 +87,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 			err = json.Unmarshal(data, &req)
 			if err == nil {
 				req.DryRun = *dryRun
-				result, err = client.CreateJob(runContext(), req)
+				result, err = client.CreateJob(context.Background(), req)
 			}
 		}
 	case "job-get":
-		result, err = client.GetJob(runContext(), *id)
+		result, err = client.GetJob(context.Background(), *id)
 	case "job-cancel":
-		result, err = client.CancelJob(runContext(), *id)
+		result, err = client.CancelJob(context.Background(), *id)
 	}
 	if err != nil {
 		fmt.Fprintf(stderr, "%s: %v\n", command, err)
