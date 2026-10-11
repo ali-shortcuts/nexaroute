@@ -39,12 +39,14 @@ For every dependency addition, removal, replacement or version change:
 
 ## Run `govulncheck` locally
 
-From the repository root, install the scanner into the Go workspace, add the Go binary directory to `PATH`, then scan all packages:
+From the repository root, select the current patched CI toolchain, install the scanner into the Go workspace using that same toolchain, add the Go binary directory to `PATH`, then scan all packages:
 
 ```sh
+# Example patch for the current 1.27.x CI line; update it as CI advances.
+export GOTOOLCHAIN=go1.27.2
 go install golang.org/x/vuln/cmd/govulncheck@latest
 export PATH="$(go env GOPATH)/bin:$PATH"
 govulncheck ./...
 ```
 
-Installing with the `@version` suffix does not add the scanner to this repository's `go.mod`. A compatible Go toolchain and network access are required; if the newest scanner release requires a newer toolchain, use the CI Go version (`1.27.x`) or pin a scanner release compatible with the local Go version. Once installed, `./scripts/check-deps.sh` runs `govulncheck ./...` as part of the dependency gate.
+Installing with the `@version` suffix does not add the scanner to this repository's `go.mod`. A compatible Go toolchain and network access are required. `govulncheck` evaluates the standard library from the selected Go toolchain as well as module dependencies, so keep that toolchain on a current security patch and build the scanner with the same toolchain. For example, [GO-2026-6617](https://pkg.go.dev/vuln/GO-2026-6617) affects Go 1.26 before 1.26.9 and Go 1.27 prereleases before 1.27.2; a stale local toolchain can therefore report standard-library findings even when `go.mod` is unchanged. Once installed, `./scripts/check-deps.sh` runs `govulncheck ./...` as part of the dependency gate.
