@@ -1,4 +1,4 @@
-# NOT COMPLETE — completion checklist (M1-1 DONE; 49 items remain)
+# NOT COMPLETE — completion checklist (M1-1 and M1-2 DONE; 48 items remain)
 
 Repository: `ali-shortcuts/nexaroute`
 Baseline: `main` at `dcb9f9b3c0352d23f1dfa599ea58450b072406c0`
@@ -10,7 +10,7 @@ This is the source of truth. Rows are updated after each item reaches a clean bo
 | ID | item | state | PR | evidence path | notes |
 |---|---|---|---|---|---|
 | M1-1 | Measure current total coverage, explain historical figures, reach 85% and new-package threshold | DONE | #255 | `docs/reports/M1-1_COVERAGE.md`; `docs/reports/m1-1-coverage.raw.txt`; `docs/reports/m1-1-verify.raw.txt` | 85.1% on `dcb9f9b`; verify.sh PASS |
-| M1-2 | Complete sourced competitor capability cells/counts | NOT STARTED | — | — | Official deep links only |
+| M1-2 | Complete sourced competitor capability cells/counts | DONE | #256 | `docs/CAPABILITY_MATRIX.md`; `docs/reports/M1-2_MATRIX_EVIDENCE.md`; `docs/reports/m1-2-verify.raw.txt` | 17 rows; 55 verified / 30 unverified |
 | M1-3 | Repair and run benchmark harness; publish full measurements/profile | NOT STARTED | — | — | Preserve diagnostics |
 | M1-4 | Fix actionable top benchmark hotspot or record none | NOT STARTED | — | — | Depends on M1-3 |
 | M1-5 | Default-config concurrency integration test (>32 upstream in-flight) | NOT STARTED | — | — | Must pass under race |
@@ -64,5 +64,6 @@ This is the source of truth. Rows are updated after each item reaches a clean bo
 
 - Bootstrap: checklist initialized from the full supplied item list before execution (draft PR #254).
 - M1-1 completed: fresh total coverage 85.1% on starting main `dcb9f9b`; historical snapshots explained; `./scripts/verify.sh` passed on PR #255 head. No coverage profile committed.
+- M1-2 completed: all 85 competitor cells audited against official deep links; 17 actual capability rows counted, 55 verified/30 unverified; structural audit and `./scripts/verify.sh` passed on PR #256 head.
 - Execution order: M1 → M3 → M2 → M4 → M5 → M6.
 - Branches are never merged or deleted by this work; the operator performs merges.
