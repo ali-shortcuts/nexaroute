@@ -26,6 +26,9 @@
     "comfyui_fps_node_id": "",
     "comfyui_fps_input": "frame_rate",
     "comfyui_seed_node_id": "",
-    "comfyui_seed_input": "noise_seed"
+    "comfyui_seed_input": "noise_seed",
+    "piper_enabled": false,
+    "piper_binary": "piper",
+    "piper_model_path": ""
   }
 }
