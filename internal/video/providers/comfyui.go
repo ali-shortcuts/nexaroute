@@ -187,8 +187,8 @@ func (p *ComfyUI) Capabilities(context.Context) (video.Capabilities, error) {
 	return video.Capabilities{
 		Modes: []video.Mode{video.ModeTextToVideo}, Models: []string{p.model},
 		MaxDurationSeconds: p.maxDuration,
-		AspectRatios: []video.AspectRatio{video.Aspect16x9, video.Aspect9x16, video.Aspect1x1},
-		SupportsAudio: false, SupportsCancel: false, SupportsWebhooks: false,
+		AspectRatios:       []video.AspectRatio{video.Aspect16x9, video.Aspect9x16, video.Aspect1x1},
+		SupportsAudio:      false, SupportsCancel: false, SupportsWebhooks: false,
 	}, nil
 }
 
@@ -532,4 +532,3 @@ func (p *ComfyUI) doJSON(ctx context.Context, method, path string, payload, out 
 }
 
 var _ video.VideoProvider = (*ComfyUI)(nil)
-
