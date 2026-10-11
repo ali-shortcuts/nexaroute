@@ -253,3 +253,32 @@ func TestRecoveryQuarantinesAmbiguousShotSubmission(t *testing.T) {
 		t.Fatalf("ambiguous recovery state=%s queue=%d submissions=%d", got.State, q.Len(), provider.nextID)
 	}
 }
+
+
+func TestSingleShotPollingAcceptsProviderQueuedState(t *testing.T) {
+	provider := providerWithDefaults()
+	provider.statuses = []video.ProviderJobStatus{
+		{ProviderJobID: "remote-1", State: video.StateQueued, Progress: 0},
+		{ProviderJobID: "remote-1", State: video.StateCompleted, Progress: 1, Outputs: []video.Asset{{ID: "output", Filename: "output.mp4", ContentType: "video/mp4"}}},
+	}
+	provider.downloaded = []video.Asset{validStoredAsset()}
+	store := queue.NewMemoryStore()
+	orch := &Orchestrator{
+		Store: store, Queue: queue.New(4), Providers: Registry{"fake": provider},
+		Assets: &episodeTestSink{root: t.TempDir()}, PollInterval: time.Nanosecond, MaxPolls: 3,
+	}
+	job, err := orch.Create(context.Background(), requestWithDefaults())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := orch.RunJob(context.Background(), job); err != nil {
+		t.Fatalf("queued provider status should remain resumable: %v", err)
+	}
+	got, err := store.Get(context.Background(), job.JobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != video.StateCompleted || provider.statusCalls != 2 {
+		t.Fatalf("state=%s status calls=%d, want completed after queued then completed", got.State, provider.statusCalls)
+	}
+}
