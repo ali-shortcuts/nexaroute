@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ali-shortcuts/nexaroute/internal/video"
+	"github.com/ali-shortcuts/nexaroute/internal/video/cost"
 	"github.com/ali-shortcuts/nexaroute/internal/video/composer"
 )
 
@@ -142,14 +143,14 @@ func (o *Orchestrator) runEpisodeJob(ctx context.Context, j video.VideoJob) erro
 		return errors.New("video episode requires manual action")
 	}
 	if len(j.Request.ShotPlan) < 2 || len(j.ShotExecutions) != len(j.Request.ShotPlan) {
-		return o.markNeedsManualAndError(ctx, &j, "multi-shot job has no complete durable shot checkpoint list")
+		return o.markNeedsManualAndError(ctx, j, "multi-shot job has no complete durable shot checkpoint list")
 	}
 	if o.Assets == nil || o.Composer == nil {
-		return o.markNeedsManualAndError(ctx, &j, "multi-shot job requires an asset sink and episode composer")
+		return o.markNeedsManualAndError(ctx, j, "multi-shot job requires an asset sink and episode composer")
 	}
 	p, ok := o.Providers.Get(j.Provider)
 	if !ok {
-		return o.fail(ctx, &j, "provider unavailable")
+		return o.fail(ctx, j, "provider unavailable")
 	}
 	caps, err := p.Capabilities(ctx)
 	if err != nil {
@@ -175,7 +176,7 @@ func (o *Orchestrator) runEpisodeJob(ctx context.Context, j video.VideoJob) erro
 			continue
 		}
 		if run.State == video.StatePlanning && run.ProviderJobID == "" {
-			return o.markNeedsManualAndError(ctx, &j, fmt.Sprintf("shot %q may have been submitted before a crash; refusing automatic resubmission", run.ShotID))
+			return o.markNeedsManualAndError(ctx, j, fmt.Sprintf("shot %q may have been submitted before a crash; refusing automatic resubmission", run.ShotID))
 		}
 		if run.ProviderJobID == "" {
 			request := buildShotRequest(j.Request, *shot, i)
@@ -183,10 +184,10 @@ func (o *Orchestrator) runEpisodeJob(ctx context.Context, j video.VideoJob) erro
 			request.ModelPreference = j.Model
 			normalized, err := validateProviderRequest(request, caps)
 			if err != nil {
-				return o.fail(ctx, &j, fmt.Sprintf("shot %q is no longer supported: %v", run.ShotID, err))
+				return o.fail(ctx, j, fmt.Sprintf("shot %q is no longer supported: %v", run.ShotID, err))
 			}
 			if err := p.ValidateRequest(normalized); err != nil {
-				return o.fail(ctx, &j, fmt.Sprintf("provider rejected shot %q: %v", run.ShotID, err))
+				return o.fail(ctx, j, fmt.Sprintf("provider rejected shot %q: %v", run.ShotID, err))
 			}
 			run.State = video.StatePlanning
 			run.Provider = p.ID()
@@ -197,10 +198,10 @@ func (o *Orchestrator) runEpisodeJob(ctx context.Context, j video.VideoJob) erro
 			}
 			submitted, submitErr := p.CreateJob(ctx, normalized)
 			if submitErr != nil {
-				return o.markNeedsManualAndError(ctx, &j, fmt.Sprintf("shot %q submission outcome is unknown; automatic resubmission is disabled", run.ShotID))
+				return o.markNeedsManualAndError(ctx, j, fmt.Sprintf("shot %q submission outcome is unknown; automatic resubmission is disabled", run.ShotID))
 			}
 			if strings.TrimSpace(submitted.ProviderJobID) == "" {
-				return o.markNeedsManualAndError(ctx, &j, fmt.Sprintf("provider returned no job ID for shot %q", run.ShotID))
+				return o.markNeedsManualAndError(ctx, j, fmt.Sprintf("provider returned no job ID for shot %q", run.ShotID))
 			}
 			run.ProviderJobID = strings.TrimSpace(submitted.ProviderJobID)
 			run.Provider = p.ID()
@@ -222,7 +223,7 @@ func (o *Orchestrator) runEpisodeJob(ctx context.Context, j video.VideoJob) erro
 				return fmt.Errorf("shot %q provider ID was returned but not durably saved; do not resubmit: %w", run.ShotID, err)
 			}
 			if !submitted.Accepted || (submitted.Provider != "" && submitted.Provider != p.ID()) || (submitted.Model != "" && submitted.Model != normalized.ModelPreference) {
-				return o.markNeedsManualAndError(ctx, &j, fmt.Sprintf("provider submission for shot %q was inconsistent; known job ID retained", run.ShotID))
+				return o.markNeedsManualAndError(ctx, j, fmt.Sprintf("provider submission for shot %q was inconsistent; known job ID retained", run.ShotID))
 			}
 		} else {
 			j.ProviderJobID = run.ProviderJobID
@@ -238,10 +239,10 @@ func (o *Orchestrator) runEpisodeJob(ctx context.Context, j video.VideoJob) erro
 			return nil
 		}
 		if status.State != video.StateCompleted {
-			return o.markNeedsManualAndError(ctx, &j, fmt.Sprintf("shot %q ended without a completed provider status", run.ShotID))
+			return o.markNeedsManualAndError(ctx, j, fmt.Sprintf("shot %q ended without a completed provider status", run.ShotID))
 		}
 		if len(status.Outputs) == 0 {
-			return o.markNeedsManualAndError(ctx, &j, fmt.Sprintf("provider completed shot %q without output assets", run.ShotID))
+			return o.markNeedsManualAndError(ctx, j, fmt.Sprintf("provider completed shot %q without output assets", run.ShotID))
 		}
 		run.State = video.StateUploading
 		if err := o.Store.Update(ctx, j); err != nil {
@@ -270,17 +271,17 @@ func (o *Orchestrator) runEpisodeJob(ctx context.Context, j video.VideoJob) erro
 			return fmt.Errorf("download shot %q output: %w", run.ShotID, err)
 		}
 		if len(assets) != 1 {
-			return o.markNeedsManualAndError(ctx, &j, fmt.Sprintf("shot %q must produce exactly one video asset; got %d", run.ShotID, len(assets)))
+			return o.markNeedsManualAndError(ctx, j, fmt.Sprintf("shot %q must produce exactly one video asset; got %d", run.ShotID, len(assets)))
 		}
 		asset := assets[0]
 		if strings.TrimSpace(asset.URI) == "" || strings.TrimSpace(asset.ContentType) == "" || asset.SizeBytes <= 0 || len(asset.SHA256) != 64 {
-			return o.markNeedsManualAndError(ctx, &j, fmt.Sprintf("shot %q output was not durably persisted with URI, type, size, and SHA-256", run.ShotID))
+			return o.markNeedsManualAndError(ctx, j, fmt.Sprintf("shot %q output was not durably persisted with URI, type, size, and SHA-256", run.ShotID))
 		}
 		if !strings.HasPrefix(strings.ToLower(asset.ContentType), "video/") {
-			return o.markNeedsManualAndError(ctx, &j, fmt.Sprintf("shot %q output is not a video asset", run.ShotID))
+			return o.markNeedsManualAndError(ctx, j, fmt.Sprintf("shot %q output is not a video asset", run.ShotID))
 		}
 		if _, err := os.Stat(asset.URI); err != nil {
-			return o.markNeedsManualAndError(ctx, &j, fmt.Sprintf("shot %q asset is not a local file usable by the episode composer", run.ShotID))
+			return o.markNeedsManualAndError(ctx, j, fmt.Sprintf("shot %q asset is not a local file usable by the episode composer", run.ShotID))
 		}
 		asset.Kind = "video"
 		shot.OutputAsset = &asset
@@ -349,10 +350,10 @@ func (o *Orchestrator) pollEpisodeShot(ctx context.Context, p video.VideoProvide
 			continue
 		}
 		if status.ProviderJobID != "" && status.ProviderJobID != run.ProviderJobID {
-			return video.ProviderJobStatus{}, o.markNeedsManualAndError(ctx, j, "provider returned a different shot job ID")
+			return video.ProviderJobStatus{}, o.markNeedsManualAndError(ctx, *j, "provider returned a different shot job ID")
 		}
 		if math.IsNaN(status.Progress) || math.IsInf(status.Progress, 0) || status.Progress < 0 || status.Progress > 1 {
-			return video.ProviderJobStatus{}, o.markNeedsManualAndError(ctx, j, "provider returned invalid shot progress metadata")
+			return video.ProviderJobStatus{}, o.markNeedsManualAndError(ctx, *j, "provider returned invalid shot progress metadata")
 		}
 		run.Progress = status.Progress
 		run.UsageMetadata = mergeUsage(run.UsageMetadata, status.Usage)
@@ -365,7 +366,7 @@ func (o *Orchestrator) pollEpisodeShot(ctx context.Context, p video.VideoProvide
 		switch status.State {
 		case video.StateFailed:
 			run.State = video.StateFailed
-			return video.ProviderJobStatus{}, o.fail(ctx, j, fmt.Sprintf("provider reported shot %q failure", run.ShotID))
+			return video.ProviderJobStatus{}, o.fail(ctx, *j, fmt.Sprintf("provider reported shot %q failure", run.ShotID))
 		case video.StateCancelled:
 			if j.State != video.StateCancelled {
 				if err := j.Transition(video.StateCancelled); err != nil {
@@ -406,7 +407,7 @@ func (o *Orchestrator) pollEpisodeShot(ctx context.Context, p video.VideoProvide
 				return video.ProviderJobStatus{}, fmt.Errorf("persist shot progress: %w", err)
 			}
 		default:
-			return video.ProviderJobStatus{}, o.markNeedsManualAndError(ctx, j, "provider returned an unsupported shot state")
+			return video.ProviderJobStatus{}, o.markNeedsManualAndError(ctx, *j, "provider returned an unsupported shot state")
 		}
 	}
 	j.RetryCount++
@@ -423,12 +424,12 @@ func (o *Orchestrator) composeEpisode(ctx context.Context, j *video.VideoJob) er
 	clips := make([]string, 0, len(j.Request.ShotPlan))
 	for _, shot := range j.Request.ShotPlan {
 		if shot.OutputAsset == nil || strings.TrimSpace(shot.OutputAsset.URI) == "" {
-			return o.markNeedsManualAndError(ctx, j, "episode composition is missing a persisted shot asset")
+			return o.markNeedsManualAndError(ctx, *j, "episode composition is missing a persisted shot asset")
 		}
 		clips = append(clips, shot.OutputAsset.URI)
 	}
 	if len(clips) < 2 {
-		return o.markNeedsManualAndError(ctx, j, "episode composition requires at least two persisted shot assets")
+		return o.markNeedsManualAndError(ctx, *j, "episode composition requires at least two persisted shot assets")
 	}
 	width, height := episodeDimensions(j.Request)
 	fps := j.Request.FPS
@@ -437,7 +438,7 @@ func (o *Orchestrator) composeEpisode(ctx context.Context, j *video.VideoJob) er
 	}
 	tempDir, err := os.MkdirTemp("", "nexaroute-episode-")
 	if err != nil {
-		return o.fail(ctx, j, "could not create episode composition workspace")
+		return o.fail(ctx, *j, "could not create episode composition workspace")
 	}
 	defer os.RemoveAll(tempDir)
 	outputPath := filepath.Join(tempDir, "episode.mp4")
@@ -451,25 +452,25 @@ func (o *Orchestrator) composeEpisode(ctx context.Context, j *video.VideoJob) er
 			return fmt.Errorf("episode composition failed and checkpoint could not be saved: %w", saveErr)
 		}
 		if j.RetryCount >= 3 {
-			return o.fail(ctx, j, "episode composition failed after repeated attempts")
+			return o.fail(ctx, *j, "episode composition failed after repeated attempts")
 		}
 		o.scheduleRetry(ctx, *j, o.pollInterval())
 		return fmt.Errorf("compose episode: %w", err)
 	}
 	info, err := os.Stat(outputPath)
 	if err != nil {
-		return o.fail(ctx, j, "episode composer reported success without an output file")
+		return o.fail(ctx, *j, "episode composer reported success without an output file")
 	}
 	maxBytes := o.MaxAssetBytes
 	if maxBytes <= 0 {
 		maxBytes = 512 << 20
 	}
 	if info.Size() <= 0 || info.Size() > maxBytes {
-		return o.fail(ctx, j, "composed episode is empty or exceeds the configured asset limit")
+		return o.fail(ctx, *j, "composed episode is empty or exceeds the configured asset limit")
 	}
 	data, err := os.ReadFile(outputPath)
 	if err != nil {
-		return o.fail(ctx, j, "could not read composed episode output")
+		return o.fail(ctx, *j, "could not read composed episode output")
 	}
 	asset := video.Asset{
 		ID: j.JobID + "-episode", Kind: "video", Filename: j.JobID + ".mp4",
@@ -486,7 +487,7 @@ func (o *Orchestrator) composeEpisode(ctx context.Context, j *video.VideoJob) er
 		return fmt.Errorf("persist final episode: %w", err)
 	}
 	if strings.TrimSpace(saved.URI) == "" || saved.SizeBytes <= 0 || len(saved.SHA256) != 64 || !strings.HasPrefix(strings.ToLower(saved.ContentType), "video/") {
-		return o.markNeedsManualAndError(ctx, j, "final episode was not persisted with valid URI, content type, size, and SHA-256")
+		return o.markNeedsManualAndError(ctx, *j, "final episode was not persisted with valid URI, content type, size, and SHA-256")
 	}
 	j.OutputAssets = []video.Asset{saved}
 	j.Progress = 1
