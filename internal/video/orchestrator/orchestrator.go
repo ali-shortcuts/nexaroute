@@ -39,6 +39,12 @@ func (o *Orchestrator) Create(ctx context.Context, r video.VideoRequest) (video.
 	if err := ctx.Err(); err != nil {
 		return video.VideoJob{}, err
 	}
+	// OutputAsset is a server-owned checkpoint. Never trust caller-supplied
+	// values here, or a request could skip generation and point the composer at
+	// an arbitrary local path.
+	for i := range r.ShotPlan {
+		r.ShotPlan[i].OutputAsset = nil
+	}
 	if len(r.ShotPlan) > 1 {
 		totalDuration := 0.0
 		for _, shot := range r.ShotPlan {
