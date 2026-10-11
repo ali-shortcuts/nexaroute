@@ -865,4 +865,3 @@ func episodeNarrationText(r video.VideoRequest) string {
 	}
 	return strings.TrimSpace(strings.Join(segments, "\n"))
 }
-
