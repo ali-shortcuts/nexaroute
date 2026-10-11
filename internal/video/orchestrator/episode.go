@@ -22,7 +22,7 @@ type EpisodeComposer interface {
 
 func validateShotPlanRequest(r video.VideoRequest, p video.VideoProvider, caps video.Capabilities) (video.VideoRequest, video.CostEstimate, error) {
 	if len(r.ShotPlan) < 1 {
-		return r, video.CostEstimate{}, errors.New("shot-plan validation requires at least two shots")
+		return r, video.CostEstimate{}, errors.New("episode validation requires at least one shot")
 	}
 	selectedModel := strings.TrimSpace(r.ModelPreference)
 	seen := make(map[string]struct{}, len(r.ShotPlan))
