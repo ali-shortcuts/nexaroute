@@ -1,0 +1,5 @@
+=== RUN   TestDefaultProviderMaxConcurrencyAllowsMoreThan32Inflight
+    stress_test.go:120: default provider cap=256; observed upstream peak=47 across 64 requests
+--- PASS: TestDefaultProviderMaxConcurrencyAllowsMoreThan32Inflight (0.09s)
+PASS
+ok  	github.com/ali-shortcuts/nexaroute/internal/httpapi	1.124s
