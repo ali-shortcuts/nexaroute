@@ -109,10 +109,12 @@ func buildShotRequest(parent video.VideoRequest, shot video.Shot, index int) vid
 	}
 	r.ReferenceAssets = append([]video.Asset(nil), parent.ReferenceAssets...)
 	r.ReferenceAssets = append(r.ReferenceAssets, shot.RequiredReferences...)
-	r.AudioRequested = parent.AudioRequested || len(shot.SoundRequirements) > 0
-	if strings.TrimSpace(shot.NarrationSegment) != "" {
-		r.NarrationText = shot.NarrationSegment
-	}
+	// Audio/narration is an episode-level post-processing stage. Keep the
+	// provider request limited to the supported silent video generation fields.
+	r.AudioRequested = false
+	r.DialogueRequested = false
+	r.NarrationText = ""
+	r.SubtitleLanguage = ""
 	if parent.IdempotencyKey != "" {
 		r.IdempotencyKey = fmt.Sprintf("%s-shot-%03d", parent.IdempotencyKey, index+1)
 	}
