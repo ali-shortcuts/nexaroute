@@ -1,0 +1,11 @@
+nexaroute: config warning: admin.emergency_access_enabled: not explicitly configured; emergency access disabled
+nexaroute 2026/10/11 08:14:20.332345 bounded_log_file=/home/ubuntu/nexaroute/docs/benchmarks/m1-3-2026-10-11/nexaroute-bench-xos9ni2_/nexaroute.log max_mb=32 backups=3
+NexaRoute UI: http://127.0.0.1:42767/
+Config: /home/ubuntu/nexaroute/docs/benchmarks/m1-3-2026-10-11/nexaroute-bench-xos9ni2_/ready_mesh_default-explicit_32.json
+Press Ctrl+C to stop.
+nexaroute 2026/10/11 08:14:20.339446 version=dev config=/home/ubuntu/nexaroute/docs/benchmarks/m1-3-2026-10-11/nexaroute-bench-xos9ni2_/ready_mesh_default-explicit_32.json listening=http://127.0.0.1:42767
+nexaroute 2026/10/11 08:14:20.596761 startup_probe total=1 ready=1 failed=0 cooldown=0 duration_ms=257
+nexaroute 2026/10/11 08:14:37.311499 request_id=nexaroute-18dd6b8c58f1dd6d-3e8 trace_id=27b04009fa6b9f294b363cdfe71c4a9f span_id=8152bba37c178abd method=POST path=/v1/chat/completions status=200 duration=16.333008ms
+nexaroute 2026/10/11 08:14:38.495321 request_id=nexaroute-18dd6b8c9f8717ca-7d0 trace_id=973b5265a5dbb8576900f1543f27da0c span_id=f7e1b4d70455eefa method=POST path=/v1/chat/completions status=200 duration=15.969987ms
+nexaroute 2026/10/11 08:14:39.093220 request_id=nexaroute-18dd6b8cc23aa0ba-bb8 trace_id=14db6ae2a7f5a00fb3bd9be3229cb6a8 span_id=c6d470142f549772 method=POST path=/v1/chat/completions status=200 duration=31.678209ms
+nexaroute 2026/10/11 08:14:39.905454 request_id=nexaroute-18dd6b8cf3055abc-fa0 trace_id=7f9c988d0e59a90ca6981d649eb9e233 span_id=59f28f76b1b6f5ef method=POST path=/v1/chat/completions status=200 duration=25.307543ms
