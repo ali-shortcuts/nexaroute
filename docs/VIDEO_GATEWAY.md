@@ -125,6 +125,18 @@ Example request file for `videogen create --file episode-request.json`:
 
 Set `NEXAROUTE_URL` to the Gateway base URL and `NEXAROUTE_VIDEO_TOKEN` to the bearer token configured by `video.auth_token_env`. The CLI reads the token from the environment and does not print it. Do not include `shot_plan[].output_asset` in a client request; output assets are server-owned checkpoints and caller-supplied values are discarded.
 
+## Local offline narration with Piper
+
+The standalone `videogen narrate` command can synthesize a narration WAV locally with a user-installed Piper CLI and ONNX voice model. It makes no network requests, requires no Gateway token, and downloads no voice/model files. Install Piper and a compatible voice model separately; keep the model and its companion configuration file together when required by that voice.
+
+```bash
+videogen narrate --text-file story-fa.txt --model /path/to/fa_IR-voice-medium.onnx --out narration.wav
+```
+
+Use `--piper-bin /path/to/piper` when the executable is not named `piper`. The text input must be non-empty UTF-8, the model must be a readable regular file, and the output must end in `.wav`. The command invokes Piper directly without a shell, bounds diagnostic output, applies a 30-minute timeout, validates the RIFF/WAVE header, writes the output with mode 0600, and atomically replaces the destination only after successful synthesis. A failed synthesis leaves an existing destination unchanged.
+
+Piper and the voice model are local dependencies, not bundled or downloaded by NexaRoute. Quality, language coverage, and runtime depend on the chosen model and hardware. The local synthesis command is a CLI step; it is not yet a Video Studio action or a Gateway-side persisted job stage.
+
 ## Local episode assembly
 
 After generated shot clips and optional audio/subtitle files exist on disk, the local CLI can assemble them into one MP4:
