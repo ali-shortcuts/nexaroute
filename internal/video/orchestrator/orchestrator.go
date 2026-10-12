@@ -118,8 +118,8 @@ func (o *Orchestrator) Create(ctx context.Context, r video.VideoRequest) (video.
 	if err := r.Validate(); err != nil {
 		return video.VideoJob{}, err
 	}
-	if strings.TrimSpace(r.SubtitleLanguage) != "" {
-		return video.VideoJob{}, errors.New("Gateway subtitle generation is not configured; use a local SRT subtitle file with videogen render")
+	if strings.TrimSpace(r.SubtitleLanguage) != "" && strings.TrimSpace(r.NarrationText) == "" {
+		return video.VideoJob{}, errors.New("subtitle_language requires narration_text or per-shot narration_segment values")
 	}
 	if strings.TrimSpace(r.NarrationText) != "" {
 		if len(r.ShotPlan) < 2 {
