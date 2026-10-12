@@ -103,7 +103,6 @@ func SynthesizePiper(ctx context.Context, opts PiperOptions) error {
 		_ = os.Remove(tmp)
 		return fmt.Errorf("close temporary narration output: %w", err)
 	}
-	_ = os.Remove(tmp)
 	defer os.Remove(tmp)
 
 	cmd := exec.CommandContext(runCtx, binary, "--model", modelPath, "--output_file", tmp)
