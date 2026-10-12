@@ -62,6 +62,8 @@ func (r VideoRequest) Normalized() VideoRequest {
 	r.ProjectID = strings.TrimSpace(r.ProjectID)
 	r.EpisodeID = strings.TrimSpace(r.EpisodeID)
 	r.Prompt = strings.TrimSpace(r.Prompt)
+	r.NarrationText = strings.TrimSpace(r.NarrationText)
+	r.SubtitleLanguage = strings.TrimSpace(r.SubtitleLanguage)
 	if r.Mode == "" {
 		r.Mode = ModeTextToVideo
 	}

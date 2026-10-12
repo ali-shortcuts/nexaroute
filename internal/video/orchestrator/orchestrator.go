@@ -19,11 +19,11 @@ import (
 type ProviderRegistry interface {
 	Get(string) (video.VideoProvider, bool)
 }
-type NarrationSynthesizer interface {
-	Synthesize(ctx context.Context, text, outputPath string) error
-}
-
 type Registry map[string]video.VideoProvider
+
+type Narrator interface {
+	Synthesize(context.Context, string, string) error
+}
 
 func (r Registry) Get(id string) (video.VideoProvider, bool) { p, ok := r[id]; return p, ok }
 
@@ -34,7 +34,7 @@ type Orchestrator struct {
 	Ledger        *cost.Ledger
 	Assets        video.AssetSink
 	Composer      EpisodeComposer
-	Narrator      NarrationSynthesizer
+	Narrator      Narrator
 	MaxAssetBytes int64
 	PollInterval  time.Duration
 	MaxPolls      int
@@ -50,10 +50,15 @@ func (o *Orchestrator) Create(ctx context.Context, r video.VideoRequest) (video.
 	for i := range r.ShotPlan {
 		r.ShotPlan[i].OutputAsset = nil
 	}
-	if err := o.validateNarrationIntent(r); err != nil {
-		return video.VideoJob{}, err
+	if len(r.ShotPlan) > 1 && strings.TrimSpace(r.NarrationText) == "" {
+		segments := make([]string, 0, len(r.ShotPlan))
+		for _, shot := range r.ShotPlan {
+			if segment := strings.TrimSpace(shot.NarrationSegment); segment != "" {
+				segments = append(segments, segment)
+			}
+		}
+		r.NarrationText = strings.Join(segments, "\n\n")
 	}
-	needsNarration := requestNeedsNarration(r)
 	if len(r.ShotPlan) == 1 {
 		shot := r.ShotPlan[0]
 		if strings.TrimSpace(shot.ShotID) == "" {
@@ -86,16 +91,12 @@ func (o *Orchestrator) Create(ctx context.Context, r video.VideoRequest) (video.
 		r.Prompt = shotPrompt(shot)
 		r.NegativePrompt = shot.NegativePrompt
 		r.DurationSeconds = shot.DurationSeconds
+		r.ReferenceAssets = append(r.ReferenceAssets, shot.RequiredReferences...)
 		r.AudioRequested = r.AudioRequested || len(shot.SoundRequirements) > 0
-		if shot.NarrationSegment != "" && strings.TrimSpace(r.NarrationText) == "" {
+		if shot.NarrationSegment != "" {
 			r.NarrationText = shot.NarrationSegment
 		}
-		if needsNarration {
-			r.ShotPlan[0] = shot
-		} else {
-			r.ReferenceAssets = append(r.ReferenceAssets, shot.RequiredReferences...)
-			r.ShotPlan = nil
-		}
+		r.ShotPlan = nil
 	}
 	if len(r.ShotPlan) > 1 {
 		totalDuration := 0.0
@@ -114,17 +115,32 @@ func (o *Orchestrator) Create(ctx context.Context, r video.VideoRequest) (video.
 		r.DurationSeconds = totalDuration
 	}
 	r = r.Normalized()
-	if needsNarration && len(r.ShotPlan) == 0 {
-		r.ShotPlan = []video.Shot{{ShotID: "shot-01", Prompt: r.Prompt, DurationSeconds: r.DurationSeconds}}
-	}
 	if err := r.Validate(); err != nil {
 		return video.VideoJob{}, err
 	}
-	episodeJob := len(r.ShotPlan) > 1 || requestNeedsNarration(r)
-	if episodeJob {
+	if strings.TrimSpace(r.SubtitleLanguage) != "" && strings.TrimSpace(r.NarrationText) == "" {
+		return video.VideoJob{}, errors.New("subtitle_language requires narration_text or per-shot narration_segment values")
+	}
+	if strings.TrimSpace(r.NarrationText) != "" {
+		if len(r.ShotPlan) < 2 {
+			return video.VideoJob{}, errors.New("Gateway narration requires a multi-shot episode with at least two shots")
+		}
+		if o.Narrator == nil {
+			return video.VideoJob{}, errors.New("narration_text requires video.piper_enabled with a valid local Piper model")
+		}
+		if r.AudioRequested || r.DialogueRequested {
+			return video.VideoJob{}, errors.New("local Piper supports narration only; provider audio and dialogue generation are not configured")
+		}
+		for _, shot := range r.ShotPlan {
+			if len(shot.SoundRequirements) > 0 {
+				return video.VideoJob{}, fmt.Errorf("shot %q requests sound effects but only narration synthesis is configured", shot.ShotID)
+			}
+		}
+	}
+	if len(r.ShotPlan) > 1 {
 		width, height := episodeDimensions(r)
 		if width%2 != 0 || height%2 != 0 {
-			return video.VideoJob{}, errors.New("episode composition dimensions must be even for H.264")
+			return video.VideoJob{}, errors.New("multi-shot episode dimensions must be even for H.264 composition")
 		}
 	}
 	if o.Store == nil || o.Queue == nil || o.Providers == nil {
@@ -149,9 +165,9 @@ func (o *Orchestrator) Create(ctx context.Context, r video.VideoRequest) (video.
 		return video.VideoJob{}, fmt.Errorf("read provider capabilities: %w", err)
 	}
 	var estimate video.CostEstimate
-	if episodeJob {
+	if len(r.ShotPlan) > 1 {
 		if !r.DryRun && (o.Composer == nil || o.Assets == nil) {
-			return video.VideoJob{}, errors.New("episode jobs require an episode composer and asset sink")
+			return video.VideoJob{}, errors.New("multi-shot video jobs require an episode composer and asset sink")
 		}
 		if !r.DryRun {
 			if preflight, ok := o.Composer.(interface{ Preflight(context.Context) error }); ok {
@@ -466,7 +482,7 @@ func (o *Orchestrator) RunJob(ctx context.Context, queued video.VideoJob) error 
 	if err != nil {
 		return fmt.Errorf("load video job before execution: %w", err)
 	}
-	if len(j.Request.ShotPlan) > 1 || requestNeedsNarration(j.Request) {
+	if len(j.Request.ShotPlan) > 1 {
 		return o.runEpisodeJob(ctx, j)
 	}
 	if o.Providers == nil {
@@ -792,76 +808,4 @@ func (o *Orchestrator) Cancel(ctx context.Context, id string) error {
 		}
 	}
 	return nil
-}
-
-func requestNeedsNarration(r video.VideoRequest) bool {
-	if strings.TrimSpace(r.NarrationText) != "" || r.AudioRequested || r.DialogueRequested || strings.TrimSpace(r.SubtitleLanguage) != "" || len(r.SoundRequirements) > 0 {
-		return true
-	}
-	for _, shot := range r.ShotPlan {
-		if strings.TrimSpace(shot.NarrationSegment) != "" || len(shot.SoundRequirements) > 0 {
-			return true
-		}
-	}
-	return false
-}
-
-func (o *Orchestrator) validateNarrationIntent(r video.VideoRequest) error {
-	parentText := strings.TrimSpace(r.NarrationText)
-	hasSegments := false
-	for _, shot := range r.ShotPlan {
-		if strings.TrimSpace(shot.NarrationSegment) != "" {
-			hasSegments = true
-		}
-		if len(shot.SoundRequirements) > 0 {
-			return errors.New("per-shot sound_requirements are not supported yet; use narration_segment with local Piper")
-		}
-	}
-	if len(r.SoundRequirements) > 0 {
-		return errors.New("sound_requirements are not supported yet; ambient audio generation is not configured")
-	}
-	if parentText != "" && hasSegments {
-		return errors.New("provide narration_text or per-shot narration_segment values, not both")
-	}
-	if r.DialogueRequested {
-		return errors.New("dialogue generation is not supported yet")
-	}
-	hasText := parentText != "" || hasSegments
-	if r.AudioRequested && !hasText {
-		return errors.New("audio_requested requires narration_text or at least one narration_segment")
-	}
-	if strings.TrimSpace(r.SubtitleLanguage) != "" && !hasText {
-		return errors.New("subtitle_language requires narration_text or at least one narration_segment")
-	}
-	if hasText && (o == nil || o.Narrator == nil) {
-		return errors.New("narration requested but local Piper is not enabled; configure video.piper_enabled and video.piper_model_path")
-	}
-	return nil
-}
-
-func visualOnlyRequest(r video.VideoRequest) video.VideoRequest {
-	r.NarrationText = ""
-	r.AudioRequested = false
-	r.DialogueRequested = false
-	r.SubtitleLanguage = ""
-	r.SoundRequirements = nil
-	for i := range r.ShotPlan {
-		r.ShotPlan[i].NarrationSegment = ""
-		r.ShotPlan[i].SoundRequirements = nil
-	}
-	return r
-}
-
-func episodeNarrationText(r video.VideoRequest) string {
-	parent := strings.TrimSpace(r.NarrationText)
-	if parent != "" {
-		return parent
-	}
-	segments := make([]string, 0, len(r.ShotPlan))
-	for _, shot := range r.ShotPlan {
-		if segment := strings.TrimSpace(shot.NarrationSegment); segment != "" {
-			segments = append(segments, segment)
-		}
-	}
-	return strings.TrimSpace(strings.Join(segments, "\n"))
 }

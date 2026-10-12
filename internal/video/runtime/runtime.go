@@ -11,6 +11,7 @@ import (
 
 	"github.com/ali-shortcuts/nexaroute/internal/video"
 	"github.com/ali-shortcuts/nexaroute/internal/video/api"
+	"github.com/ali-shortcuts/nexaroute/internal/video/tts"
 	"github.com/ali-shortcuts/nexaroute/internal/video/composer"
 	"github.com/ali-shortcuts/nexaroute/internal/video/cost"
 	"github.com/ali-shortcuts/nexaroute/internal/video/orchestrator"
@@ -95,6 +96,25 @@ func New(cfg video.Config, baseDir string) (*Runtime, error) {
 	assetSink, err := storage.NewLocal(storageRoot, maxBytes)
 	if err != nil {
 		return nil, fmt.Errorf("video asset store: %w", err)
+	}
+	var narrator orchestrator.Narrator
+	if cfg.PiperEnabled {
+		modelPath := strings.TrimSpace(cfg.PiperModelPath)
+		if modelPath == "" {
+			return nil, errors.New("video.piper_model_path is required when video.piper_enabled is true")
+		}
+		if !filepath.IsAbs(modelPath) {
+			modelPath = filepath.Join(baseDir, modelPath)
+		}
+		binary := strings.TrimSpace(cfg.PiperBinary)
+		if binary == "" {
+			binary = "piper"
+		}
+		piper, err := tts.NewPiper(binary, modelPath)
+		if err != nil {
+			return nil, fmt.Errorf("initialize local Piper narrator: %w", err)
+		}
+		narrator = piper
 	}
 	ledger := &cost.Ledger{}
 	ffmpegBinary := strings.TrimSpace(os.Getenv("NEXAROUTE_FFMPEG"))

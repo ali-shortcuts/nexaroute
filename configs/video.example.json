@@ -29,6 +29,6 @@
     "comfyui_seed_input": "noise_seed",
     "piper_enabled": false,
     "piper_binary": "piper",
-    "piper_model_path": ""
+    "piper_model_path": "models/voice.onnx"
   }
 }
