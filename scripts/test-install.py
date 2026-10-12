@@ -86,6 +86,7 @@ shutil.copyfile(pathlib.Path(os.environ["TEST_FIXTURE"]) / url.rsplit("/", 1)[1]
     check(binary.stat().st_mode & 0o777 == 0o755, "gateway binary permissions")
     check(video_binary.stat().st_mode & 0o777 == 0o755, "videogen binary permissions")
     check(subprocess.check_output(["bash", "-c", "command -v nexaroute"], env=env, text=True).strip() == str(binary), "PATH")
+    check(subprocess.check_output(["bash", "-c", "command -v videogen"], env=env, text=True).strip() == str(video_binary), "videogen PATH")
     check("NexaRoute v" in subprocess.check_output(["nexaroute", "-version"], env=env, text=True), "gateway version")
     check("videogen v" in subprocess.check_output(["videogen", "-version"], env=env, text=True).lower(), "videogen version")
     # Linux ARM64 asset selection, but don't execute it on the AMD64 host.
