@@ -15,24 +15,24 @@ esac
 RELEASE_DIR="$WORK/release-v1"
 mkdir -p "$RELEASE_DIR"
 
-# 1. Create mock release binaries for v0.20.0.
+# 1. Create mock release binaries for v0.20.1.
 cat <<'MOCK' > "$RELEASE_DIR/$ASSET_NAME"
 #!/usr/bin/env bash
 if [[ "${1:-}" == "-version" || "${1:-}" == "--version" ]]; then
-  echo "NexaRoute v0.20.0"
+  echo "NexaRoute v0.20.1"
   exit 0
 fi
-echo "NexaRoute v0.20.0 running"
+echo "NexaRoute v0.20.1 running"
 exit 0
 MOCK
 chmod 0755 "$RELEASE_DIR/$ASSET_NAME"
 cat <<'VIDEO_MOCK' > "$RELEASE_DIR/$VIDEO_ASSET_NAME"
 #!/usr/bin/env bash
 if [[ "${1:-}" == "-version" || "${1:-}" == "--version" ]]; then
-  echo "NexaRoute videogen v0.20.0"
+  echo "NexaRoute videogen v0.20.1"
   exit 0
 fi
-echo "NexaRoute videogen v0.20.0 running"
+echo "NexaRoute videogen v0.20.1 running"
 exit 0
 VIDEO_MOCK
 chmod 0755 "$RELEASE_DIR/$VIDEO_ASSET_NAME"
@@ -44,7 +44,7 @@ export NEXAROUTE_INSTALL_DIR="$INSTALL_BIN_DIR"
 export PATH="$INSTALL_BIN_DIR:$PATH"
 export XDG_CONFIG_HOME="$CONFIG_HOME"
 export NEXAROUTE_LOCAL_RELEASE_DIR="$RELEASE_DIR"
-export NEXAROUTE_LOCAL_RELEASE_TAG="v0.20.0"
+export NEXAROUTE_LOCAL_RELEASE_TAG="v0.20.1"
 
 # 2. Run clean install.
 echo "== testing clean install =="
@@ -63,9 +63,9 @@ CFG_DIR_MODE="$(stat -c '%a' "$CONFIG_HOME/nexaroute")"
 [[ "$CFG_DIR_MODE" == "700" ]] || { echo "config dir mode is $CFG_DIR_MODE; want 700" >&2; exit 1; }
 
 VERSION_OUT="$("$INSTALL_BIN_DIR/nexaroute" -version)"
-[[ "$VERSION_OUT" == *"v0.20.0"* ]] || { echo "gateway version output mismatch: $VERSION_OUT" >&2; exit 1; }
+[[ "$VERSION_OUT" == *"v0.20.1"* ]] || { echo "gateway version output mismatch: $VERSION_OUT" >&2; exit 1; }
 VIDEO_VERSION_OUT="$("$INSTALL_BIN_DIR/videogen" -version)"
-[[ "$VIDEO_VERSION_OUT" == *"v0.20.0"* ]] || { echo "Video CLI version output mismatch: $VIDEO_VERSION_OUT" >&2; exit 1; }
+[[ "$VIDEO_VERSION_OUT" == *"v0.20.1"* ]] || { echo "Video CLI version output mismatch: $VIDEO_VERSION_OUT" >&2; exit 1; }
 
 # 3. Test checksum verification rejection.
 echo "== testing checksum mismatch rejection =="
@@ -84,9 +84,9 @@ fi
 
 # Assert both existing binaries were not modified by the failed attempt.
 VERSION_CHECK="$("$INSTALL_BIN_DIR/nexaroute" -version)"
-[[ "$VERSION_CHECK" == *"v0.20.0"* ]] || { echo "gateway binary was corrupted by failed install" >&2; exit 1; }
+[[ "$VERSION_CHECK" == *"v0.20.1"* ]] || { echo "gateway binary was corrupted by failed install" >&2; exit 1; }
 VIDEO_VERSION_CHECK="$("$INSTALL_BIN_DIR/videogen" -version)"
-[[ "$VIDEO_VERSION_CHECK" == *"v0.20.0"* ]] || { echo "Video CLI binary was corrupted by failed install" >&2; exit 1; }
+[[ "$VIDEO_VERSION_CHECK" == *"v0.20.1"* ]] || { echo "Video CLI binary was corrupted by failed install" >&2; exit 1; }
 
 # 4. Test upgrade without config clobber.
 echo "== testing upgrade flow and config preservation =="
