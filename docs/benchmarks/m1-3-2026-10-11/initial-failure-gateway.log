@@ -1,0 +1,5 @@
+nexaroute: config warning: admin.emergency_access_enabled: not explicitly configured; emergency access disabled
+nexaroute 2026/10/11 08:09:30.976699 bounded_log_file=/tmp/nexaroute-bench-1fylwr2e/nexaroute.log max_mb=32 backups=3
+nexaroute 2026/10/11 08:09:32.935847 admin_security_store_unavailable=true; protected admin requests will fail closed
+nexaroute 2026/10/11 08:09:32.935977 cannot initialize admin security store: open security store: timeout
+exit status 1

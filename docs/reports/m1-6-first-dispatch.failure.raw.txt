@@ -1,0 +1,8 @@
+verify	Integrated release smoke	﻿2026-10-11T08:34:45.0408460Z ##[group]Run ./scripts/release-smoke.sh dist
+verify	Integrated release smoke	2026-10-11T08:34:45.0408812Z ^[[36;1m./scripts/release-smoke.sh dist^[[0m
+verify	Integrated release smoke	2026-10-11T08:34:45.0442100Z shell: /usr/bin/bash -e {0}
+verify	Integrated release smoke	2026-10-11T08:34:45.0442362Z env:
+verify	Integrated release smoke	2026-10-11T08:34:45.0442576Z   GOTOOLCHAIN: local
+verify	Integrated release smoke	2026-10-11T08:34:45.0442811Z ##[endgroup]
+verify	Integrated release smoke	2026-10-11T08:34:45.0752320Z nexaroute 2026/10/11 08:34:45.072263 video.auth_token_env is required when video.enabled is true
+verify	Integrated release smoke	2026-10-11T08:34:45.0772359Z ##[error]Process completed with exit code 1.

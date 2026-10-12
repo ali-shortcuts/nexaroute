@@ -23,6 +23,103 @@ func requireHTTPStress(t *testing.T) {
 	}
 }
 
+func TestDefaultProviderMaxConcurrencyAllowsMoreThan32Inflight(t *testing.T) {
+	const requests = 64
+
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseAll := func() { releaseOnce.Do(func() { close(release) }) }
+	defer releaseAll()
+	var active atomic.Int64
+	var peak atomic.Int64
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		current := active.Add(1)
+		defer active.Add(-1)
+		for {
+			old := peak.Load()
+			if current <= old || peak.CompareAndSwap(old, current) {
+				break
+			}
+		}
+		select {
+		case <-release:
+		case <-r.Context().Done():
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"x","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{}}`)
+	}))
+	defer upstream.Close()
+
+	cfg := config.Default()
+	cfg.Providers = []config.ProviderConfig{{
+		ID: "default-cap", Name: "Default cap", Type: "openai_compatible", BaseURL: upstream.URL,
+		AuthMode: "none", Enabled: true,
+		Models: []config.ModelConfig{{ID: "m", Model: "m", Enabled: true, Weight: 1}},
+	}}
+	s := testGateway(t, cfg)
+	if got := s.cfg.Providers[0].MaxConcurrency; got != 256 {
+		t.Fatalf("provider max_concurrency default=%d, want 256", got)
+	}
+	gateway := httptest.NewServer(s.Handler())
+	defer gateway.Close()
+
+	type result struct {
+		status int
+		err    error
+	}
+	results := make(chan result, requests)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	client := &http.Client{Timeout: 10 * time.Second}
+	for i := 0; i < requests; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			req, err := http.NewRequest(http.MethodPost, gateway.URL+"/v1/chat/completions",
+				strings.NewReader(`{"model":"m","messages":[{"role":"user","content":"hello"}]}`))
+			if err != nil {
+				results <- result{err: err}
+				return
+			}
+			req.Header.Set("Content-Type", "application/json")
+			resp, err := client.Do(req)
+			if err != nil {
+				results <- result{err: err}
+				return
+			}
+			_, _ = io.Copy(io.Discard, resp.Body)
+			_ = resp.Body.Close()
+			results <- result{status: resp.StatusCode}
+		}()
+	}
+	close(start)
+
+	deadline := time.Now().Add(5 * time.Second)
+	for peak.Load() <= 32 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	observedPeak := peak.Load()
+	releaseAll()
+	wg.Wait()
+	close(results)
+
+	if observedPeak <= 32 {
+		t.Fatalf("default provider cap did not exceed 32 upstream in-flight requests: peak=%d", observedPeak)
+	}
+	for got := range results {
+		if got.err != nil {
+			t.Errorf("request failed: %v", got.err)
+			continue
+		}
+		if got.status != http.StatusOK {
+			t.Errorf("request status=%d, want %d", got.status, http.StatusOK)
+		}
+	}
+	t.Logf("default provider cap=%d; observed upstream peak=%d across %d requests", s.cfg.Providers[0].MaxConcurrency, observedPeak, requests)
+}
+
 func TestStressGlobalAdmissionKeepsControlPlaneResponsive(t *testing.T) {
 	requireHTTPStress(t)
 

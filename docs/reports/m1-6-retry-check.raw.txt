@@ -1,0 +1,69 @@
+--- workflow run ---
+{
+  "conclusion": "success",
+  "databaseId": 38125574996,
+  "displayTitle": "Release",
+  "event": "workflow_dispatch",
+  "headBranch": "completion/m1-6-release-dry-run",
+  "headSha": "0402990120a34b5f91c443761be34b8ea253738d",
+  "jobs": [
+    {
+      "conclusion": "success",
+      "name": "verify",
+      "status": "completed"
+    },
+    {
+      "conclusion": "skipped",
+      "name": "publish",
+      "status": "completed"
+    }
+  ],
+  "status": "completed"
+}
+--- round-trip marker/log checksums ---
+verify	Upload release assets	dist/nexaroute-videogen-linux-arm64
+verify	Upload release assets	dist/SHA256SUMS
+verify	Verify workflow_dispatch artifact round-trip	﻿2026-10-11T08:42:42.0445243Z ##[group]Run set -euo pipefail
+verify	Verify workflow_dispatch artifact round-trip	2026-10-11T08:42:42.0445590Z ^[[36;1mset -euo pipefail^[[0m
+verify	Verify workflow_dispatch artifact round-trip	2026-10-11T08:42:42.0446455Z ^[[36;1mrequired="nexaroute-linux-amd64 nexaroute-linux-arm64 nexaroute-videogen-linux-amd64 nexaroute-videogen-linux-arm64 install.sh video.example.json VIDEO_GATEWAY.md RELEASE_NOTES.md SHA256SUMS"^[[0m
+verify	Verify workflow_dispatch artifact round-trip	2026-10-11T08:42:42.0447557Z ^[[36;1mfor f in $required; do^[[0m
+verify	Verify workflow_dispatch artifact round-trip	2026-10-11T08:42:42.0448008Z ^[[36;1m  [[ -s "dist-roundtrip/$f" ]] || { echo "missing downloaded release asset: $f" >&2; exit 1; }^[[0m
+verify	Verify workflow_dispatch artifact round-trip	2026-10-11T08:42:42.0448671Z ^[[36;1m  cmp -s "dist/$f" "dist-roundtrip/$f" || { echo "artifact round-trip changed: $f" >&2; exit 1; }^[[0m
+verify	Verify workflow_dispatch artifact round-trip	2026-10-11T08:42:42.0449386Z ^[[36;1mdone^[[0m
+verify	Verify workflow_dispatch artifact round-trip	2026-10-11T08:42:42.0449712Z ^[[36;1m(cd dist-roundtrip && sha256sum -c SHA256SUMS)^[[0m
+verify	Verify workflow_dispatch artifact round-trip	2026-10-11T08:42:42.0450213Z ^[[36;1mecho 'ARTIFACT ROUND-TRIP PASS — workflow_dispatch remains non-publishing.'^[[0m
+verify	Verify workflow_dispatch artifact round-trip	2026-10-11T08:42:42.0513295Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+verify	Verify workflow_dispatch artifact round-trip	2026-10-11T08:42:42.0513666Z env:
+verify	Verify workflow_dispatch artifact round-trip	2026-10-11T08:42:42.0513907Z   GOTOOLCHAIN: local
+verify	Verify workflow_dispatch artifact round-trip	2026-10-11T08:42:42.0514133Z ##[endgroup]
+verify	Verify workflow_dispatch artifact round-trip	2026-10-11T08:42:42.0939265Z nexaroute-linux-amd64: OK
+verify	Verify workflow_dispatch artifact round-trip	2026-10-11T08:42:42.1020234Z nexaroute-linux-arm64: OK
+verify	Verify workflow_dispatch artifact round-trip	2026-10-11T08:42:42.1054681Z nexaroute-videogen-linux-amd64: OK
+verify	Verify workflow_dispatch artifact round-trip	2026-10-11T08:42:42.1086523Z nexaroute-videogen-linux-arm64: OK
+verify	Verify workflow_dispatch artifact round-trip	2026-10-11T08:42:42.1087102Z install.sh: OK
+verify	Verify workflow_dispatch artifact round-trip	2026-10-11T08:42:42.1087495Z video.example.json: OK
+verify	Verify workflow_dispatch artifact round-trip	2026-10-11T08:42:42.1087919Z VIDEO_GATEWAY.md: OK
+verify	Verify workflow_dispatch artifact round-trip	2026-10-11T08:42:42.1088313Z RELEASE_NOTES.md: OK
+verify	Verify workflow_dispatch artifact round-trip	2026-10-11T08:42:42.1092566Z ARTIFACT ROUND-TRIP PASS — workflow_dispatch remains non-publishing.
+--- download artifact locally ---
+artifact_root=/tmp/m1-6-retry-artifacts/nexaroute-release-v0.0.0-dryrun-20261011-retry1
+RELEASE_NOTES.md
+SHA256SUMS
+VIDEO_GATEWAY.md
+install.sh
+nexaroute-linux-amd64
+nexaroute-linux-arm64
+nexaroute-videogen-linux-amd64
+nexaroute-videogen-linux-arm64
+video.example.json
+nexaroute-linux-amd64: OK
+nexaroute-linux-arm64: OK
+nexaroute-videogen-linux-amd64: OK
+nexaroute-videogen-linux-arm64: OK
+install.sh: OK
+video.example.json: OK
+VIDEO_GATEWAY.md: OK
+RELEASE_NOTES.md: OK
+--- release/tag absence ---
+No GitHub Release exists for the dry-run version (expected).
+No dry-run tag exists (expected).
