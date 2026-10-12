@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/ali-shortcuts/nexaroute/internal/video"
+	videoaudio "github.com/ali-shortcuts/nexaroute/internal/video/audio"
 	"github.com/ali-shortcuts/nexaroute/internal/video/composer"
 )
 
@@ -36,6 +37,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 	baseURL := fs.String("base-url", defaultBaseURL(), "NexaRoute base URL (default: NEXAROUTE_URL or http://127.0.0.1:8080)")
 	tokenEnv := fs.String("token-env", "NEXAROUTE_VIDEO_TOKEN", "environment variable containing the Video Gateway bearer token")
 	file := fs.String("file", "", "JSON input file (create: VideoRequest; compose: EpisodeSpec)")
+	textPath := fs.String("text-file", "", "UTF-8 narration text file (narrate only)")
+	modelPath := fs.String("model", "", "local Piper ONNX voice model path (narrate only)")
+	outputPath := fs.String("out", "", "output path (asset-download/narrate only)")
+	piperBin := fs.String("piper-bin", "piper", "Piper executable path (narrate only)")
 	id := fs.String("id", "", "video job ID (job-get/job-cancel/asset-download)")
 	assetID := fs.String("asset-id", "", "stored asset ID (asset-download only)")
 	outPath := fs.String("out", "", "local output file (asset-download only)")
@@ -49,7 +54,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	switch command {
-	case "providers", "create", "job-get", "job-cancel", "asset-download", "compose":
+	case "providers", "create", "job-get", "job-cancel", "asset-download", "compose", "narrate":
 	default:
 		fmt.Fprintf(stderr, "unknown command %q\n", command)
 		printUsage(stderr)
@@ -59,7 +64,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "%s requires --file\n", command)
 		return 2
 	}
-	if command == "compose" {
+	if command == "narrate" {\n\t\tif strings.TrimSpace(*textPath) == "" || strings.TrimSpace(*modelPath) == "" || strings.TrimSpace(*outputPath) == "" {\n\t\t\tfmt.Fprintln(stderr, "narrate requires --text-file, --model, and --out")\n\t\t\treturn 2\n\t\t}\n\t\tif err := videoaudio.SynthesizePiper(context.Background(), videoaudio.PiperOptions{Binary: *piperBin, TextPath: *textPath, ModelPath: *modelPath, Output: *outputPath}); err != nil {\n\t\t\tfmt.Fprintf(stderr, "narrate: %v\\n", err)\n\t\t\treturn 1\n\t\t}\n\t\tfmt.Fprintf(stdout, "Narration written to %s\\n", *outputPath)\n\t\treturn 0\n\t}\n\tif command == "compose" {
 		data, err := os.ReadFile(*file)
 		if err != nil {
 			fmt.Fprintf(stderr, "compose: read episode manifest: %v\n", err)
@@ -167,10 +172,10 @@ func defaultBaseURL() string {
 }
 
 func printUsage(w io.Writer) {
-	fmt.Fprintln(w, "usage: videogen providers|create|job-get|job-cancel|asset-download|compose [flags]")
+	fmt.Fprintln(w, "usage: videogen providers|create|job-get|job-cancel|asset-download|compose|narrate [flags]")
 	fmt.Fprintln(w, "common flags: --base-url URL --token-env ENV_NAME")
 	fmt.Fprintln(w, "create flags: --file REQUEST.json [--dry-run]")
-	fmt.Fprintln(w, "job-get/job-cancel flags: --id JOB_ID")
+	fmt.Fprintln(w, "job-get/job-cancel flags: --id JOB_ID")\n\tfmt.Fprintln(w, "narrate flags: --text-file story.txt --model voice.onnx --out narration.wav [--piper-bin piper]")
 	fmt.Fprintln(w, "asset-download flags: --id JOB_ID --asset-id ASSET_ID --out FILE")
 	fmt.Fprintln(w, "compose flags: --file EPISODE.json (local FFmpeg; no Gateway token required)")
 }
