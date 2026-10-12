@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
-version="${1:-v0.19.0}"
+version="${1:-v0.20.0}"
 [[ "$version" =~ ^v[0-9][a-zA-Z0-9._-]*$ ]] || { echo 'Usage: scripts/build-release.sh vVERSION' >&2; exit 1; }
 rm -rf dist
 mkdir -p dist

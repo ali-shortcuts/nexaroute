@@ -190,12 +190,12 @@ shutil.copyfile(pathlib.Path(os.environ["TEST_FIXTURE"]) / url.rsplit("/", 1)[1]
         video_upgrade_sum = hashlib.sha256(upgrade_videogen.read_bytes()).hexdigest()
         (fixture / "SHA256SUMS").write_text(upgrade_sum + f"  nexaroute-linux-{host_arch}\n" + video_upgrade_sum + f"  nexaroute-videogen-linux-{host_arch}\n")
         # Upgrade is an atomic executable replacement even while running.
-        install({"NEXAROUTE_VERSION": "v0.19.0"})
+        install({"NEXAROUTE_VERSION": "v0.20.0"})
         install()
         check(binary.read_bytes() != saved_binary, "upgrade did not replace gateway executable")
         check(video_binary.read_bytes() != saved_video_binary, "upgrade did not replace videogen executable")
         check(cfg.read_bytes() == original, "upgrade/reinstall changed config")
-        check("/download/v0.19.0/" in (tmp / "downloads").read_text(), "pinned release URL")
+        check("/download/v0.20.0/" in (tmp / "downloads").read_text(), "pinned release URL")
         stop(proc)
         check("no graphical desktop session" in (tmp / "gateway-0.log").read_text(), "headless fallback")
         # Verify configured browser launcher receives the ready UI URL.
