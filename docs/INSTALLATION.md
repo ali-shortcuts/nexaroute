@@ -109,7 +109,7 @@ accidentally run an old and a new installation against separate copies.
 
 ## Upgrade / reinstall / uninstall
 
-Run the same installer again. It atomically replaces only the executable and
+Run the same installer again. It atomically replaces both executables and
 leaves config unchanged, including when the old process is running. Stop and
 restart NexaRoute to use the new version; running processes keep their old
 executable. Check `command -v nexaroute` and `nexaroute -version` if multiple
