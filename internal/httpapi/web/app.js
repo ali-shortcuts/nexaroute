@@ -103,11 +103,13 @@
       '<div class="field"><label for="v-episode">Episode ID <span class="muted">optional</span></label><input id="v-episode" placeholder="noora-persepolis-01"></div>' +
       '<div class="field full"><label for="v-negative">Negative prompt <span class="muted">optional</span></label><input id="v-negative" placeholder="flicker, extra limbs, unreadable text"></div>' +
       '<div class="field full"><label for="v-narration">Narration script <span class="muted">optional</span></label><textarea id="v-narration" rows="4" placeholder="Noora introduces Persepolis and explains its history…"></textarea><small class="muted">Gateway narration requires video.piper_enabled and a local Piper voice model. Use a multi-shot plan. Per-shot narration_segment values are used if this field is empty.</small></div>' +
+      '<div class="field full"><label for="v-subtitle-language">Captions <span class="muted">optional</span></label><select id="v-subtitle-language"><option value="">No captions</option><option value="same-as-narration">Generate captions from narration script</option></select><small class="muted">Captions use the script as-is with estimated timing. They are not translated or word-aligned.</small></div>' +
       '<div class="field full"><label for="v-shot-plan">Shot plan JSON <span class="muted">optional</span></label><textarea id="v-shot-plan" rows="7" spellcheck="false" placeholder=\'[{"shot_id":"shot-01","duration_seconds":4,"prompt":"A wide establishing shot at sunrise"},{"shot_id":"shot-02","duration_seconds":4,"prompt":"The guide walks toward the ancient staircase"}]\'></textarea><small class="muted">Each shot needs a prompt and duration_seconds. The total duration is calculated automatically. Do not include output_asset; checkpoints are server-owned.</small><div class="field-actions"><button class="button ghost small" type="button" data-action="example-shot-plan">Insert two-shot example</button></div></div>' +
       '</div>';
     openModal('Create video job', form, async () => {
       const prompt = $('#v-prompt').value.trim();
       const narrationText = $('#v-narration').value.trim();
+      const subtitleLanguage = $('#v-subtitle-language').value;
       const rawPlan = $('#v-shot-plan').value.trim();
       let shotPlan = null;
       if (rawPlan) {
@@ -129,7 +131,8 @@
         });
       }
       if (!shotPlan && !prompt) throw Error('Creative brief is required unless a shot plan is supplied.');
-      if (narrationText && (!shotPlan || shotPlan.length < 2)) throw Error('Gateway narration requires a multi-shot plan with at least two shots.');
+      if ((narrationText || subtitleLanguage) && (!shotPlan || shotPlan.length < 2)) throw Error('Gateway narration and captions require a multi-shot plan with at least two shots.');
+      if (subtitleLanguage && !narrationText && !shotPlan.some((shot) => String(shot.narration_segment || '').trim())) throw Error('Captions require narration text or per-shot narration_segment values.');
       if (!state.videoProviders.length) throw Error('No Video Gateway provider is configured.');
       const provider = $('#v-provider').value;
       if (!provider) throw Error('Select a configured provider.');
@@ -147,6 +150,7 @@
       };
       if (shotPlan) req.shot_plan = shotPlan;
       if (narrationText) req.narration_text = narrationText;
+      if (subtitleLanguage) req.subtitle_language = subtitleLanguage;
       const res = await videoApi('/v1/video/jobs', { method: 'POST', ...body(req) });
       const id = res.id || res.job_id;
       if (id) rememberVideoJob(id);
