@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/ali-shortcuts/nexaroute/internal/video"
@@ -92,6 +93,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 			if strings.TrimSpace(spec.NarrationPath) != "" {
 				fmt.Fprintln(stderr, "render: use either narration_path or local Piper synthesis fields, not both")
 				return 2
+			}
+			for _, source := range append(append(append([]string{}, spec.Shots...), spec.MusicPath, spec.SubtitlePath), spec.OutputPath) {
+				if strings.TrimSpace(source) != "" && sameCleanPath(source, spec.NarrationOutputPath) {
+					fmt.Fprintf(stderr, "render: narration_output_path must not overwrite episode input or output %q\\n", source)
+					return 2
+				}
 			}
 			if err := videoaudio.SynthesizePiper(context.Background(), videoaudio.PiperOptions{Binary: *piperBin, TextPath: spec.NarrationTextPath, ModelPath: spec.PiperModelPath, Output: spec.NarrationOutputPath}); err != nil {
 				fmt.Fprintf(stderr, "render: narration synthesis failed: %v\n", err)
@@ -216,6 +223,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+
+func sameCleanPath(a, b string) bool {
+	absA, errA := filepath.Abs(strings.TrimSpace(a))
+	absB, errB := filepath.Abs(strings.TrimSpace(b))
+	return errA == nil && errB == nil && filepath.Clean(absA) == filepath.Clean(absB)
 }
 
 func defaultFFmpegBinary() string {
