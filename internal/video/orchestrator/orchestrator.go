@@ -21,6 +21,10 @@ type ProviderRegistry interface {
 }
 type Registry map[string]video.VideoProvider
 
+type Narrator interface {
+	Synthesize(context.Context, string, string) error
+}
+
 func (r Registry) Get(id string) (video.VideoProvider, bool) { p, ok := r[id]; return p, ok }
 
 type Orchestrator struct {
@@ -30,6 +34,7 @@ type Orchestrator struct {
 	Ledger        *cost.Ledger
 	Assets        video.AssetSink
 	Composer      EpisodeComposer
+	Narrator      Narrator
 	MaxAssetBytes int64
 	PollInterval  time.Duration
 	MaxPolls      int
@@ -44,6 +49,15 @@ func (o *Orchestrator) Create(ctx context.Context, r video.VideoRequest) (video.
 	// an arbitrary local path.
 	for i := range r.ShotPlan {
 		r.ShotPlan[i].OutputAsset = nil
+	}
+	if len(r.ShotPlan) > 1 && strings.TrimSpace(r.NarrationText) == "" {
+		segments := make([]string, 0, len(r.ShotPlan))
+		for _, shot := range r.ShotPlan {
+			if segment := strings.TrimSpace(shot.NarrationSegment); segment != "" {
+				segments = append(segments, segment)
+			}
+		}
+		r.NarrationText = strings.Join(segments, "\n\n")
 	}
 	if len(r.ShotPlan) == 1 {
 		shot := r.ShotPlan[0]
@@ -103,6 +117,25 @@ func (o *Orchestrator) Create(ctx context.Context, r video.VideoRequest) (video.
 	r = r.Normalized()
 	if err := r.Validate(); err != nil {
 		return video.VideoJob{}, err
+	}
+	if strings.TrimSpace(r.SubtitleLanguage) != "" {
+		return video.VideoJob{}, errors.New("Gateway subtitle generation is not configured; use a local SRT subtitle file with videogen render")
+	}
+	if strings.TrimSpace(r.NarrationText) != "" {
+		if len(r.ShotPlan) < 2 {
+			return video.VideoJob{}, errors.New("Gateway narration requires a multi-shot episode with at least two shots")
+		}
+		if o.Narrator == nil {
+			return video.VideoJob{}, errors.New("narration_text requires video.piper_enabled with a valid local Piper model")
+		}
+		if r.AudioRequested || r.DialogueRequested {
+			return video.VideoJob{}, errors.New("local Piper supports narration only; provider audio and dialogue generation are not configured")
+		}
+		for _, shot := range r.ShotPlan {
+			if len(shot.SoundRequirements) > 0 {
+				return video.VideoJob{}, fmt.Errorf("shot %q requests sound effects but only narration synthesis is configured", shot.ShotID)
+			}
+		}
 	}
 	if len(r.ShotPlan) > 1 {
 		width, height := episodeDimensions(r)
