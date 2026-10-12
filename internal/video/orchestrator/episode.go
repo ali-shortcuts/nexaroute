@@ -906,6 +906,13 @@ func (o *Orchestrator) retryEpisodeComposition(ctx context.Context, j *video.Vid
 	return errors.New(message)
 }
 
+func (o *Orchestrator) maxAssetBytes() int64 {
+	if o.MaxAssetBytes > 0 {
+		return o.MaxAssetBytes
+	}
+	return 512 << 20
+}
+
 func episodeDimensions(r video.VideoRequest) (int, int) {
 	if r.Width > 0 && r.Height > 0 {
 		return r.Width, r.Height
