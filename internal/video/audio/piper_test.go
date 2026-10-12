@@ -133,3 +133,51 @@ func TestSynthesizePiperHonorsTimeout(t *testing.T) {
 		t.Fatalf("timeout error=%v", err)
 	}
 }
+
+func TestConfiguredPiperSynthesizesTextForGateway(t *testing.T) {
+	root := t.TempDir()
+	modelPath := filepath.Join(root, "voice.onnx")
+	binary := filepath.Join(root, "fake-piper")
+	outputPath := filepath.Join(root, "narration.wav")
+	capturePath := filepath.Join(root, "captured.txt")
+	if err := os.WriteFile(modelPath, []byte("test model"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	script := "#!/bin/sh\nset -eu\nout=\nwhile [ $# -gt 0 ]; do\n  if [ \"$1\" = \"--output_file\" ]; then shift; out=$1; fi\n  shift\ndone\ncat > \"$PIPER_CAPTURE_PATH\"\nprintf 'RIFF....WAVE' > \"$out\"\n"
+	if err := os.WriteFile(binary, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PIPER_CAPTURE_PATH", capturePath)
+	piper := Piper{Binary: binary, ModelPath: modelPath}
+	if err := piper.Validate(); err != nil {
+		t.Fatalf("validate Piper: %v", err)
+	}
+	text := "Noora vertelt de geschiedenis van Persepolis."
+	if err := piper.Synthesize(context.Background(), text, outputPath); err != nil {
+		t.Fatalf("synthesize narration: %v", err)
+	}
+	captured, err := os.ReadFile(capturePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(captured) != text {
+		t.Fatalf("Piper received %q, want %q", captured, text)
+	}
+	if err := validateWAV(outputPath); err != nil {
+		t.Fatalf("output WAV: %v", err)
+	}
+}
+
+func TestConfiguredPiperValidationFailsClosed(t *testing.T) {
+	root := t.TempDir()
+	modelPath := filepath.Join(root, "voice.onnx")
+	if err := os.WriteFile(modelPath, []byte("model"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := (Piper{Binary: filepath.Join(root, "missing-piper"), ModelPath: modelPath}).Validate(); err == nil {
+		t.Fatal("missing Piper executable unexpectedly validated")
+	}
+	if err := (Piper{Binary: "piper", ModelPath: filepath.Join(root, "missing.onnx")}).Validate(); err == nil {
+		t.Fatal("missing voice model unexpectedly validated")
+	}
+}
