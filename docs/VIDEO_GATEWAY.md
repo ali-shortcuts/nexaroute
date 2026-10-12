@@ -137,6 +137,26 @@ Use `--piper-bin /path/to/piper` when the executable is not named `piper`. The t
 
 Piper and the voice model are local dependencies, not bundled or downloaded by NexaRoute. Quality, language coverage, and runtime depend on the chosen model and hardware. The local synthesis command is a CLI step; it is not yet a Video Studio action or a Gateway-side persisted job stage.
 
+For a single local narration-and-editing command, use `videogen render --file render.json --piper-bin /path/to/piper`. The JSON manifest contains the normal episode fields (`shots`, `music_path`, `subtitle_path`, `output_path`, `width`, `height`, `fps`) plus `narration_text_path`, `piper_model_path`, and `narration_output_path`. Supply all three narration fields together. The command first writes the WAV checkpoint, then runs FFmpeg composition; if composition fails, the narration WAV remains available for a retry. Alternatively, omit all three fields and provide an existing `narration_path`.
+
+Example:
+
+```json
+{
+  "shots": ["assets/shot-01.mp4", "assets/shot-02.mp4"],
+  "narration_text_path": "story-fa.txt",
+  "piper_model_path": "/models/fa_IR-voice-medium.onnx",
+  "narration_output_path": "audio/narration.wav",
+  "music_path": "audio/music.wav",
+  "subtitle_path": "subtitles/fa.srt",
+  "output_path": "renders/episode.mp4",
+  "width": 1920,
+  "height": 1080,
+  "fps": 24
+}
+```
+
+
 ## Local episode assembly
 
 After generated shot clips and optional audio/subtitle files exist on disk, the local CLI can assemble them into one MP4:
