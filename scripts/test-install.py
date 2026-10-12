@@ -190,7 +190,7 @@ shutil.copyfile(pathlib.Path(os.environ["TEST_FIXTURE"]) / url.rsplit("/", 1)[1]
         import hashlib
         upgrade_sum = hashlib.sha256(upgrade_gateway.read_bytes()).hexdigest()
         video_upgrade_sum = hashlib.sha256(upgrade_videogen.read_bytes()).hexdigest()
-        (fixture / "SHA256SUMS").write_text(upgrade_sum + f"  nexaroute-linux-{host_arch}\n" + video_upgrade_sum + f"  nexaroute-videogen-linux-{host_arch}\n")
+        (fixture / "SHA256SUMS").write_text(upgrade_sum + f"  nexaroute-linux-{asset_arch}\n" + video_upgrade_sum + f"  nexaroute-videogen-linux-{asset_arch}\n")
         # Upgrade is an atomic executable replacement even while running.
         install({"NEXAROUTE_VERSION": "v0.20.1"})
         install()
