@@ -46,6 +46,7 @@ type VideoRequest struct {
 	StyleReferences     []Asset            `json:"style_reference_assets,omitempty"`
 	ContinuityContext   *ContinuityContext `json:"continuity_context,omitempty"`
 	ShotPlan            []Shot             `json:"shot_plan,omitempty"`
+	SoundRequirements   []string           `json:"sound_requirements,omitempty"`
 	NarrationText       string             `json:"narration_text,omitempty"`
 	SubtitleLanguage    string             `json:"subtitle_language,omitempty"`
 	OutputFormat        string             `json:"output_format,omitempty"`
