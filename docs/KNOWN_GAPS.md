@@ -96,9 +96,9 @@ WP4 implementation boundaries and acceptance status:
 Virtual-key tenant/project/team policy intersection is implemented fail-closed:
 child key wildcards cannot widen a configured parent allow-list, unresolved
 scope references deny access, and duplicate model/token fields are inspected
-conservatively. This is separate from Admin RBAC and OIDC sessions. The latter
-implementation is on PR #224, marked ready after the gates passed on head
-`aa5a864`; it remains unmerged. Any later push must pass fresh required checks.
+conservatively. This is separate from Admin RBAC and OIDC sessions. PR #224 is
+merged; its single-host storage and unverified live external-IdP interoperability
+remain the documented boundaries.
 
 ## Model discovery
 
@@ -150,8 +150,8 @@ derived only from verified issuer claims using the explicit config allowlist.
 The web UI's visibility is a convenience only; the server middleware is
 authoritative. The local bbolt store is single-host. The project-wide 85%
 coverage target is a separate WP3 acceptance target and must be measured again
-after WP4b–WP7. PR #224 remains unmerged until its current head has passed the
-full required gate and fresh GitHub checks.
+after WP4b–WP7. PR #224 is merged; live external-IdP interoperability remains
+unverified.
 
 
 ## Response cache boundaries
