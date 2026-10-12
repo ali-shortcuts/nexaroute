@@ -11,7 +11,7 @@ import (
 
 	"github.com/ali-shortcuts/nexaroute/internal/video"
 	"github.com/ali-shortcuts/nexaroute/internal/video/api"
-	"github.com/ali-shortcuts/nexaroute/internal/video/audio"
+	"github.com/ali-shortcuts/nexaroute/internal/video/tts"
 	"github.com/ali-shortcuts/nexaroute/internal/video/composer"
 	"github.com/ali-shortcuts/nexaroute/internal/video/cost"
 	"github.com/ali-shortcuts/nexaroute/internal/video/orchestrator"
@@ -109,8 +109,8 @@ func New(cfg video.Config, baseDir string) (*Runtime, error) {
 		if binary == "" {
 			binary = "piper"
 		}
-		piper := audio.Piper{Binary: binary, ModelPath: modelPath}
-		if err := piper.Validate(); err != nil {
+		piper, err := tts.NewPiper(binary, modelPath)
+		if err != nil {
 			return nil, fmt.Errorf("initialize local Piper narrator: %w", err)
 		}
 		narrator = piper
