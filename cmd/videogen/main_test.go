@@ -127,12 +127,12 @@ func TestRenderCommandSynthesizesNarrationAndComposesWithoutGatewayToken(t *test
 
 	manifestPath := filepath.Join(root, "render.json")
 	spec := renderManifest{
-		EpisodeSpec:          composer.EpisodeSpec{
+		EpisodeSpec: composer.EpisodeSpec{
 			Shots: []string{shot}, OutputPath: output, Width: 640, Height: 360, FPS: 24,
 		},
-		NarrationTextPath:    textPath,
-		PiperModelPath:       modelPath,
-		NarrationOutputPath:  narration,
+		NarrationTextPath:   textPath,
+		PiperModelPath:      modelPath,
+		NarrationOutputPath: narration,
 	}
 	data, err := json.Marshal(spec)
 	if err != nil {
