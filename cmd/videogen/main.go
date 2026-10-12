@@ -17,8 +17,8 @@ import (
 
 type renderManifest struct {
 	composer.EpisodeSpec
-	NarrationTextPath    string `json:"narration_text_path,omitempty"`
-	PiperModelPath       string `json:"piper_model_path,omitempty"`
+	NarrationTextPath   string `json:"narration_text_path,omitempty"`
+	PiperModelPath      string `json:"piper_model_path,omitempty"`
 	NarrationOutputPath string `json:"narration_output_path,omitempty"`
 }
 
