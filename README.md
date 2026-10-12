@@ -21,8 +21,8 @@ nexaroute
 
 UI: <http://127.0.0.1:8080/>
 
-The installer supports Linux amd64 and arm64, verifies SHA256 checksums, and
-installs atomically. No Go, no git, no source compilation. Re-running the same
+The installer supports Linux amd64 and arm64, verifies SHA256 checksums for
+both binaries, and installs the Gateway and Video CLI atomically. No Go, no git, no source compilation. Re-running the same
 command upgrades or reinstalls without touching your configuration. Full
 details: [docs/INSTALLATION.md](docs/INSTALLATION.md).
 
