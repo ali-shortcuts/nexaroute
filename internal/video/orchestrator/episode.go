@@ -16,6 +16,7 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/video"
 	"github.com/ali-shortcuts/nexaroute/internal/video/composer"
 	"github.com/ali-shortcuts/nexaroute/internal/video/cost"
+	"github.com/ali-shortcuts/nexaroute/internal/video/tts"
 )
 
 type EpisodeComposer interface {
@@ -575,9 +576,13 @@ func (o *Orchestrator) composeEpisode(ctx context.Context, j *video.VideoJob) er
 	if err != nil {
 		return err
 	}
+	subtitlePath, err := o.ensureSubtitleAsset(ctx, j)
+	if err != nil {
+		return err
+	}
 	_, err = o.Composer.ComposeEpisode(ctx, composer.EpisodeSpec{
-		Shots: clips, NarrationPath: narrationPath, OutputPath: outputPath,
-		Width: width, Height: height, FPS: fps,
+		Shots: clips, NarrationPath: narrationPath, SubtitlePath: subtitlePath,
+		OutputPath: outputPath, Width: width, Height: height, FPS: fps,
 	})
 	if err != nil {
 		if ctx.Err() != nil {
