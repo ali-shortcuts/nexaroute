@@ -651,7 +651,6 @@ func (o *Orchestrator) composeEpisode(ctx context.Context, j *video.VideoJob) er
 	return nil
 }
 
-
 func (o *Orchestrator) ensureNarrationAsset(ctx context.Context, j *video.VideoJob, outputPath string) (string, error) {
 	text := strings.TrimSpace(j.Request.NarrationText)
 	if text == "" {

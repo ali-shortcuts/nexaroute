@@ -18,7 +18,7 @@ import (
 var safeName = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)
 
 type Local struct {
-	Root string
+	Root     string
 	MaxBytes int64
 }
 

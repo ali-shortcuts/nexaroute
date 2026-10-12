@@ -28,7 +28,7 @@ type Config struct {
 	ComfyUIFPSInput           string  `json:"comfyui_fps_input,omitempty"`
 	ComfyUISeedNodeID         string  `json:"comfyui_seed_node_id,omitempty"`
 	ComfyUISeedInput          string  `json:"comfyui_seed_input,omitempty"`
-	PiperEnabled   bool   `json:"piper_enabled,omitempty"`
-	PiperBinary    string `json:"piper_binary,omitempty"`
-	PiperModelPath string `json:"piper_model_path,omitempty"`
+	PiperEnabled              bool    `json:"piper_enabled,omitempty"`
+	PiperBinary               string  `json:"piper_binary,omitempty"`
+	PiperModelPath            string  `json:"piper_model_path,omitempty"`
 }

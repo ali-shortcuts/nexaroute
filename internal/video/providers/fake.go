@@ -10,11 +10,11 @@ import (
 )
 
 type Fake struct {
-	mu sync.Mutex
-	jobs map[string]int
-	NextID int
+	mu              sync.Mutex
+	jobs            map[string]int
+	NextID          int
 	PollsToComplete int
-	Cancelled map[string]bool
+	Cancelled       map[string]bool
 }
 
 func NewFake(polls int) *Fake {
@@ -92,7 +92,7 @@ func (f *Fake) DownloadOutputs(ctx context.Context, status video.ProviderJobStat
 	return out, nil
 }
 func (f *Fake) RegisterWebhook(context.Context, video.WebhookRegistration) error { return nil }
-func (f *Fake) VerifyWebhook(*http.Request) error { return nil }
+func (f *Fake) VerifyWebhook(*http.Request) error                                { return nil }
 func (f *Fake) ParseWebhook(*http.Request) (video.ProviderJobStatus, error) {
 	return video.ProviderJobStatus{}, fmt.Errorf("fake webhook parser not configured")
 }

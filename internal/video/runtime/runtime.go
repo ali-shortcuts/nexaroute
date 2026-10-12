@@ -11,7 +11,6 @@ import (
 
 	"github.com/ali-shortcuts/nexaroute/internal/video"
 	"github.com/ali-shortcuts/nexaroute/internal/video/api"
-	"github.com/ali-shortcuts/nexaroute/internal/video/tts"
 	"github.com/ali-shortcuts/nexaroute/internal/video/composer"
 	"github.com/ali-shortcuts/nexaroute/internal/video/cost"
 	"github.com/ali-shortcuts/nexaroute/internal/video/orchestrator"

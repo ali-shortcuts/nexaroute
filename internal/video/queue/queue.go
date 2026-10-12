@@ -90,14 +90,16 @@ func (p *WorkerPool) Ready() <-chan struct{} { return p.ready }
 
 func (p *WorkerPool) Run(ctx context.Context) {
 	var wg sync.WaitGroup
-	for i:=0; i<p.workers; i++ {
+	for i := 0; i < p.workers; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for {
 				j, err := p.q.Next(ctx)
-				if err != nil { return }
-				_ = p.handler(ctx,j)
+				if err != nil {
+					return
+				}
+				_ = p.handler(ctx, j)
 			}
 		}()
 	}

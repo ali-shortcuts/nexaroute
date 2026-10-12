@@ -16,7 +16,9 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/video/queue"
 )
 
-type ProviderRegistry interface { Get(string) (video.VideoProvider, bool) }
+type ProviderRegistry interface {
+	Get(string) (video.VideoProvider, bool)
+}
 type Registry map[string]video.VideoProvider
 
 type Narrator interface {
@@ -113,7 +115,9 @@ func (o *Orchestrator) Create(ctx context.Context, r video.VideoRequest) (video.
 		r.DurationSeconds = totalDuration
 	}
 	r = r.Normalized()
-	if err := r.Validate(); err != nil { return video.VideoJob{}, err }
+	if err := r.Validate(); err != nil {
+		return video.VideoJob{}, err
+	}
 	if o.Store == nil || o.Queue == nil || o.Providers == nil {
 		return video.VideoJob{}, errors.New("video orchestrator is not fully configured")
 	}
@@ -770,7 +774,9 @@ func (o *Orchestrator) fail(ctx context.Context, j video.VideoJob, msg string) e
 
 func (o *Orchestrator) Cancel(ctx context.Context, id string) error {
 	j, err := o.Store.Get(ctx, id)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	switch j.State {
 	case video.StateCompleted, video.StateFailed, video.StateCancelled, video.StateDryRun:
 		return errors.New("video job is already terminal")
@@ -793,14 +799,23 @@ func (o *Orchestrator) Cancel(ctx context.Context, id string) error {
 		if err = p.CancelJob(ctx, j.ProviderJobID); err != nil {
 			return err
 		}
-		if err = p.CancelJob(ctx, j.ProviderJobID); err != nil { return err }
+		if err = p.CancelJob(ctx, j.ProviderJobID); err != nil {
+			return err
+		}
 	}
-	if err := j.Transition(video.StateCancelled); err != nil { return err }
+	if err := j.Transition(video.StateCancelled); err != nil {
+		return err
+	}
 	j.LastError = ""
-	if err := o.Store.Update(ctx, j); err != nil { return err }
+	if err := o.Store.Update(ctx, j); err != nil {
+		return err
+	}
 	if o.Ledger != nil {
-		if j.ProviderJobID == "" { o.Ledger.ReleaseForJob(j.JobID)
-		} else { _ = o.Ledger.SettleEstimate(j.JobID, j.EstimatedCostUSD) }
+		if j.ProviderJobID == "" {
+			o.Ledger.ReleaseForJob(j.JobID)
+		} else {
+			_ = o.Ledger.SettleEstimate(j.JobID, j.EstimatedCostUSD)
+		}
 	}
 	j.LastError = ""
 	if err := o.Store.Update(ctx, j); err != nil {
