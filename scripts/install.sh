@@ -102,6 +102,8 @@ main() {
   (cd "$tmp" && sha256sum --check --status checksum.selected) || fail 'SHA256 mismatch; nothing installed.'
 
   "${sudo_cmd[@]}" mkdir -p -- "$dest"
+  [[ ! -d "$dest/nexaroute" ]] || fail "$dest/nexaroute is a directory; refusing to replace it."
+  [[ ! -d "$dest/videogen" ]] || fail "$dest/videogen is a directory; refusing to replace it."
   staged="$("${sudo_cmd[@]}" mktemp "$dest/.nexaroute-install.XXXXXX")"
   staged_video="$("${sudo_cmd[@]}" mktemp "$dest/.videogen-install.XXXXXX")"
   "${sudo_cmd[@]}" install -m 0755 "$tmp/$asset" "$staged"
