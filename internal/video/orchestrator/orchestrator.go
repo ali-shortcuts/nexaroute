@@ -784,10 +784,6 @@ func (o *Orchestrator) Cancel(ctx context.Context, id string) error {
 	if len(j.Request.ShotPlan) > 1 && j.State == video.StateComposing {
 		return errors.New("episode is composing locally; cancellation during FFmpeg composition is not supported")
 	}
-	switch j.State {
-	case video.StateCompleted, video.StateFailed, video.StateCancelled, video.StateDryRun:
-		return errors.New("video job is already terminal")
-	}
 	if j.ProviderJobID != "" {
 		if o.Providers == nil {
 			return errors.New("provider registry for active video job is unavailable; refusing to mark remote work cancelled")
@@ -795,9 +791,6 @@ func (o *Orchestrator) Cancel(ctx context.Context, id string) error {
 		p, ok := o.Providers.Get(j.Provider)
 		if !ok {
 			return errors.New("provider for active video job is unavailable; refusing to mark remote work cancelled")
-		}
-		if err = p.CancelJob(ctx, j.ProviderJobID); err != nil {
-			return err
 		}
 		if err = p.CancelJob(ctx, j.ProviderJobID); err != nil {
 			return err

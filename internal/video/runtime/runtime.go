@@ -120,21 +120,6 @@ func New(cfg video.Config, baseDir string) (*Runtime, error) {
 	if ffmpegBinary == "" {
 		ffmpegBinary = "ffmpeg"
 	}
-	var narrator orchestrator.NarrationSynthesizer
-	if cfg.PiperEnabled {
-		modelPath := strings.TrimSpace(cfg.PiperModelPath)
-		if modelPath == "" {
-			return nil, errors.New("video.piper_model_path is required when piper_enabled is true")
-		}
-		if !filepath.IsAbs(modelPath) {
-			modelPath = filepath.Join(baseDir, modelPath)
-		}
-		piper, err := tts.NewPiper(cfg.PiperBinary, modelPath)
-		if err != nil {
-			return nil, fmt.Errorf("configure local Piper narration: %w", err)
-		}
-		narrator = piper
-	}
 	orch := &orchestrator.Orchestrator{
 		Store: store, Queue: q, Providers: reg, Ledger: ledger, Assets: assetSink,
 		Composer: composer.New(ffmpegBinary, ""), Narrator: narrator, MaxAssetBytes: maxBytes,
@@ -181,7 +166,7 @@ func (r *Runtime) Start(ctx context.Context) error {
 
 func (r *Runtime) Close() {
 	if r == nil {
-		return nil
+		return
 	}
 	r.startMu.Lock()
 	cancel := r.workerCancel
