@@ -15,14 +15,13 @@ var ErrInvalidEstimate = errors.New("video cost estimate is invalid")
 
 type Price struct {
 	PerSecondUSD float64 `json:"per_second_usd"`
-	FixedUSD     float64 `json:"fixed_usd"`
-	Known        bool    `json:"known"`
+	FixedUSD float64 `json:"fixed_usd"`
+	Known bool `json:"known"`
 }
 type Book struct {
-	mu     sync.RWMutex
+	mu sync.RWMutex
 	prices map[string]Price
 }
-
 func NewBook() *Book { return &Book{prices: map[string]Price{}} }
 func (b *Book) Set(provider, model string, p Price) {
 	b.mu.Lock()

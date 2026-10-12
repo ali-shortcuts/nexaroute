@@ -182,7 +182,7 @@ func (r *Runtime) Start(ctx context.Context) error {
 
 func (r *Runtime) Close() {
 	if r == nil {
-		return
+		return nil
 	}
 	r.startMu.Lock()
 	cancel := r.workerCancel
