@@ -5,7 +5,7 @@ import (
 	"runtime"
 )
 
-var gatewayVersion = "0.17.0"
+var gatewayVersion = "0.17.1"
 
 func (s *Server) hello(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
