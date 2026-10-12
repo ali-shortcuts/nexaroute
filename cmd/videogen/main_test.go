@@ -154,3 +154,30 @@ func TestRenderCommandSynthesizesNarrationAndComposesWithoutGatewayToken(t *test
 		t.Fatalf("render result missing narration/composition metadata: %s", stdout.String())
 	}
 }
+
+func TestRenderRejectsNarrationOutputCollidingWithEpisodeInput(t *testing.T) {
+	root := t.TempDir()
+	manifestPath := filepath.Join(root, "render.json")
+	collision := filepath.Join(root, "shared.wav")
+	spec := renderManifest{
+		EpisodeSpec: composer.EpisodeSpec{
+			Shots: []string{collision}, OutputPath: filepath.Join(root, "episode.mp4"),
+			Width: 640, Height: 360, FPS: 24,
+		},
+		NarrationTextPath: filepath.Join(root, "story.txt"),
+		PiperModelPath: filepath.Join(root, "voice.onnx"),
+		NarrationOutputPath: collision,
+	}
+	data, err := json.Marshal(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifestPath, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"render", "--file", manifestPath}, &stdout, &stderr)
+	if code != 2 || !strings.Contains(stderr.String(), "must not overwrite episode input or output") {
+		t.Fatalf("render exit=%d stderr=%q", code, stderr.String())
+	}
+}
