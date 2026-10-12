@@ -31,7 +31,7 @@ This is the source of truth. Rows are updated after each item reaches a clean bo
 | M2-12 | English/Persian/Pashto i18n, RTL screenshots, persisted switcher | NOT STARTED | — | — | — |
 | M2-13 | Embedded assets only, size budget, localhost FMP under 1s | NOT STARTED | — | — | — |
 | M2-14 | Playwright all-page/flow evidence, responsive themes, a11y and diffs | NOT STARTED | — | — | Committed screenshots |
-| M3-1 | Privacy leak tests for every provider-egress/content path | NOT STARTED | — | — | Includes issue #246 exclusion |
+| M3-1 | Privacy leak tests for every provider-egress/content path | IN PROGRESS | pending | `internal/httpapi/privacy_p2_test.go`; `./scripts/verify.sh` = VERIFY PASS | Route-profile and virtual-key policies pass across OpenAI/Anthropic/Responses ingress and both provider protocols; issue #246 UI exclusion is already covered by M2-1; awaiting operator merge |
 | M3-2 | `nexaroute privacy audit` CLI | NOT STARTED | — | — | Never print secrets |
 | M3-3 | No-eligible-deployment warnings in config validation/dashboard | NOT STARTED | — | — | — |
 | M3-4 | Threat model with per-mitigation tests; SSRF/header/tool/key/config/privacy checks | NOT STARTED | — | — | — |
