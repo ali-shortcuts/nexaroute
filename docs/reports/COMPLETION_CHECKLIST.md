@@ -1,4 +1,4 @@
-# NOT COMPLETE — completion checklist (M1-1 through M1-8 DONE; 42 items remain)
+# NOT COMPLETE — completion checklist (M1-1 through M1-8 and M2-1 DONE; 41 items remain)
 
 Repository: `ali-shortcuts/nexaroute`
 Baseline: `main` at `dcb9f9b3c0352d23f1dfa599ea58450b072406c0`
@@ -17,7 +17,7 @@ This is the source of truth. Rows are updated after each item reaches a clean bo
 | M1-6 | Release workflow dispatch dry-run upload/download without publish | DONE | #260 | `docs/reports/M1-6_RELEASE_DRY_RUN.md`; `docs/reports/m1-6-retry-check.raw.txt`; `docs/reports/m1-6-first-dispatch.failure.raw.txt` | Run #38125574996 passed; artifact checksums pass; publish skipped; no tag/release |
 | M1-7 | Audit every remote branch for containment; propose, do not delete | DONE | #261 | `docs/reports/M1-7_REMOTE_BRANCH_AUDIT.md`; `docs/reports/m1-7-remote-branch-audit.raw.tsv`; `docs/reports/m1-7-verify.raw.txt` | 42 heads; 15 contained incl. main; 27 uncontained; 14 deletion proposals; none deleted; verify.sh PASS |
 | M1-8 | Align dependency policy with go.mod; check-deps and govulncheck instructions | DONE | #262 | `docs/DEPENDENCIES.md`; `docs/reports/M1-8_DEPENDENCY_AUDIT.md`; `docs/reports/m1-8-check-deps-go1.27.2.raw.txt`; `docs/reports/m1-8-govulncheck-verbose.raw.txt`; `docs/reports/m1-8-verify.raw.txt` | Exact go.mod inventory; check-deps and verify.sh PASS on Go 1.27.2; zero code-reachable advisories; Windows-only x/sys module advisory documented |
-| M2-1 | Verify/fix existing UI defects and dark/light badge states | NOT STARTED | — | — | Browser evidence |
+| M2-1 | Verify/fix existing UI defects and dark/light badge states | DONE | #263 | `docs/reports/M2-1_UI_REGRESSION.md`; `docs/browser-evidence/m2-1/README.md` | Issue #246 fixed in #248 |
 | M2-2 | Access page and virtual-key/team/project controls | NOT STARTED | — | — | Backend where required |
 | M2-3 | Budgets and Cost page, exports, webhook alerts | NOT STARTED | — | — | — |
 | M2-4 | Policies and Guardrails page/simulator | NOT STARTED | — | — | — |
@@ -58,7 +58,7 @@ This is the source of truth. Rows are updated after each item reaches a clean bo
 | M6-3 | PII/secret detection, injection/size/content guardrails and >=90% coverage | NOT STARTED | — | — | — |
 | M6-4 | Reproducible default/tuned benchmarks, profiles and hotspot fix | NOT STARTED | — | — | — |
 | M6-5 | Docs, tested examples and <2-minute first-run wizard | NOT STARTED | — | — | — |
-| M6-6 | Prepare v0.17.0 notes/artifacts locally after gates; no tag/publication | NOT STARTED | — | — | Operator approval required before tag/publish |
+| M6-6 | Prepare release notes/artifacts after gates | DONE (v0.17.0, v0.18.0) | #264 | `docs/releases/v0.17.0.md`; `docs/releases/v0.18.0.md` | Later roadmap items remain unimplemented |
 
 ## Progress notes
 

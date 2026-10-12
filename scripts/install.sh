@@ -20,7 +20,7 @@ main() {
 
   version="${NEXAROUTE_VERSION:-latest}"
   if [[ "$version" != latest ]]; then
-	    [[ "$version" =~ ^v[0-9][a-zA-Z0-9._-]*$ ]] || fail 'NEXAROUTE_VERSION must be a release tag such as v0.17.0.'
+	    [[ "$version" =~ ^v[0-9][a-zA-Z0-9._-]*$ ]] || fail 'NEXAROUTE_VERSION must be a release tag such as v0.18.0.'
   fi
 
   # /usr/local/bin is already in Ubuntu's PATH. A child shell cannot change the
