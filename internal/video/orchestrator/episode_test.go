@@ -47,7 +47,10 @@ func mustPutEpisodeAsset(ctx context.Context, sink video.AssetSink, asset video.
 	return saved
 }
 
-type episodeTestSink struct{ root string }
+type episodeTestSink struct {
+	root string
+	puts map[string]int
+}
 
 func (s *episodeTestSink) Put(_ context.Context, asset video.Asset, data []byte) (video.Asset, error) {
 	if len(data) == 0 {
@@ -56,6 +59,10 @@ func (s *episodeTestSink) Put(_ context.Context, asset video.Asset, data []byte)
 	if err := os.MkdirAll(s.root, 0700); err != nil {
 		return video.Asset{}, err
 	}
+	if s.puts == nil {
+		s.puts = map[string]int{}
+	}
+	s.puts[asset.ID]++
 	name := strings.NewReplacer("/", "_", "\\", "_", ":", "_").Replace(asset.ID)
 	if name == "" {
 		name = "asset"
@@ -484,6 +491,65 @@ func TestMultiShotNarrationCheckpointIsReusedAfterCompositionFailure(t *testing.
 		if req.NarrationText != "" || req.AudioRequested || req.DialogueRequested || req.SubtitleLanguage != "" {
 			t.Errorf("provider shot request %d received episode narration/audio fields: %+v", i, req)
 		}
+	}
+}
+
+func TestRegeneratedNarrationInvalidatesSubtitleCheckpoint(t *testing.T) {
+	root := t.TempDir()
+	base := providerWithDefaults()
+	base.statuses = []video.ProviderJobStatus{
+		{ProviderJobID: "remote-1", State: video.StateCompleted, Progress: 1, Outputs: []video.Asset{{ID: "out-1", Filename: "one.mp4", ContentType: "video/mp4"}}},
+		{ProviderJobID: "remote-2", State: video.StateCompleted, Progress: 1, Outputs: []video.Asset{{ID: "out-2", Filename: "two.mp4", ContentType: "video/mp4"}}},
+	}
+	provider := &episodeTestProvider{fakeProvider: base}
+	store := queue.NewMemoryStore()
+	sink := &episodeTestSink{root: filepath.Join(root, "assets")}
+	composer := &episodeTestComposer{fail: 1}
+	narrator := &episodeTestNarrator{}
+	orch := newEpisodeOrchestrator(t, store, queue.New(10), provider, sink, composer)
+	orch.Narrator = narrator
+
+	request := episodeRequest()
+	request.ShotPlan[0].NarrationSegment = "Part one tells the origin."
+	request.ShotPlan[1].NarrationSegment = "Part two describes the royal city."
+	request.SubtitleLanguage = "same-as-narration"
+	job, err := orch.Create(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Create narrated episode: %v", err)
+	}
+	if err := orch.RunJob(context.Background(), job); err == nil || !strings.Contains(err.Error(), "simulated FFmpeg failure") {
+		t.Fatalf("first composition error=%v, want simulated failure", err)
+	}
+	checkpoint, err := store.Get(context.Background(), job.JobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if checkpoint.NarrationAsset == nil || checkpoint.SubtitleAsset == nil {
+		t.Fatalf("missing checkpoints: narration=%+v subtitles=%+v", checkpoint.NarrationAsset, checkpoint.SubtitleAsset)
+	}
+	subtitleID := checkpoint.SubtitleAsset.ID
+	if sink.puts[subtitleID] != 1 {
+		t.Fatalf("subtitle writes after first attempt=%d, want 1", sink.puts[subtitleID])
+	}
+	// Corrupt the saved narration WAV so it must be regenerated on retry.
+	if err := os.WriteFile(checkpoint.NarrationAsset.URI, []byte("broken"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := orch.RunJob(context.Background(), checkpoint); err != nil {
+		t.Fatalf("retry episode composition: %v", err)
+	}
+	if narrator.calls != 2 {
+		t.Fatalf("narrator calls=%d, want regeneration after corruption", narrator.calls)
+	}
+	if sink.puts[subtitleID] != 2 {
+		t.Fatalf("subtitle writes=%d, want captions rebuilt for the regenerated narration", sink.puts[subtitleID])
+	}
+	got, err := store.Get(context.Background(), job.JobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != video.StateCompleted || len(got.SourceAssets) != 4 {
+		t.Fatalf("final state=%s source assets=%d, want completed with two clips, narration, and captions", got.State, len(got.SourceAssets))
 	}
 }
 

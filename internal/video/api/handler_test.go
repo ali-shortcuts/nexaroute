@@ -314,9 +314,9 @@ func TestHandlerDownloadsOnlyStoredJobAssetsAndRedactsFilesystemPaths(t *testing
 
 func TestPublicJobSanitizesNarrationAndSubtitleAssetURIs(t *testing.T) {
 	job := video.VideoJob{
-		JobID: "job-episode-1",
+		JobID:          "job-episode-1",
 		NarrationAsset: &video.Asset{ID: "job-episode-1-narration", URI: "/private/assets/narration.wav"},
-		SubtitleAsset: &video.Asset{ID: "job-episode-1-subtitles", URI: "/private/assets/subtitles.srt"},
+		SubtitleAsset:  &video.Asset{ID: "job-episode-1-subtitles", URI: "/private/assets/subtitles.srt"},
 	}
 	got := publicJob(job)
 	if got.NarrationAsset == nil || got.NarrationAsset.URI != publicAssetURI(job.JobID, job.NarrationAsset.ID) {

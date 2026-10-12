@@ -348,10 +348,7 @@ func (o *Orchestrator) runEpisodeJob(ctx context.Context, j video.VideoJob) erro
 		if _, err := hex.DecodeString(asset.SHA256); err != nil {
 			return o.markNeedsManualAndError(ctx, j, fmt.Sprintf("shot %q output checksum is malformed", run.ShotID))
 		}
-		maxBytes := o.MaxAssetBytes
-		if maxBytes <= 0 {
-			maxBytes = 512 << 20
-		}
+		maxBytes := o.maxAssetBytes()
 		if asset.SizeBytes > maxBytes {
 			return o.markNeedsManualAndError(ctx, j, fmt.Sprintf("shot %q output exceeds the configured asset limit", run.ShotID))
 		}
@@ -603,10 +600,7 @@ func (o *Orchestrator) composeEpisode(ctx context.Context, j *video.VideoJob) er
 	if err != nil {
 		return o.fail(ctx, *j, "episode composer reported success without an output file")
 	}
-	maxBytes := o.MaxAssetBytes
-	if maxBytes <= 0 {
-		maxBytes = 512 << 20
-	}
+	maxBytes := o.maxAssetBytes()
 	if info.Size() <= 0 || info.Size() > maxBytes {
 		return o.fail(ctx, *j, "composed episode is empty or exceeds the configured asset limit")
 	}
@@ -686,6 +680,10 @@ func (o *Orchestrator) ensureNarrationAsset(ctx context.Context, j *video.VideoJ
 		}
 		removeEpisodeSourceAsset(j, j.NarrationAsset.ID)
 		j.NarrationAsset = nil
+		// Caption timing is derived from the narration duration, so a
+		// regenerated WAV invalidates any previously saved SRT checkpoint.
+		removeEpisodeSourceAsset(j, j.JobID+"-subtitles")
+		j.SubtitleAsset = nil
 		if err := o.Store.Update(ctx, *j); err != nil {
 			return "", fmt.Errorf("persist invalid narration checkpoint removal: %w", err)
 		}
@@ -791,7 +789,7 @@ func (o *Orchestrator) ensureSubtitleAsset(ctx context.Context, j *video.VideoJo
 			"project_id": j.ProjectID, "episode_id": j.EpisodeID,
 			"job_id": j.JobID, "asset_role": "episode_subtitles",
 			"subtitle_language": strings.TrimSpace(j.Request.SubtitleLanguage),
-			"alignment": "estimated-by-text-length",
+			"alignment":         "estimated-by-text-length",
 		},
 	}
 	saved, err := o.Assets.Put(ctx, asset, data)
