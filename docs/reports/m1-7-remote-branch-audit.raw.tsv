@@ -1,0 +1,50 @@
+snapshot_utc	2026-10-11T08:48:33+00:00
+remote_head_count	42
+main_sha	dcb9f9b3c0352d23f1dfa599ea58450b072406c0
+main_tree	d7ec0aa6741421f493890d3254a4f3640e71ab02
+open_pr_count	15
+branch	tip_sha	tip_ancestor_of_main	tree_equals_main	main_only_commits	branch_only_commits	open_prs	recommendation	branch_tree
+chore/completion-checklist	a20be0e855bf8d9e87a8d2188b5dbcbc8aa73c1f	NO	NO	0	5	#250	KEEP — open PR #250	08b3807298681ec3ef96d110c887a816e59ed89b
+chore/m1-dependency-audit	e27609e06134dc883f597706ac5e99bad534412d	NO	NO	5	1	—	RETAIN/REVIEW — unique commits are not contained	86703894268f0fd990be23ab2d1101121c31388c
+chore/video-gateway-audit-hardening	376cd105b23da15d7aa0caf8d8ea98a107ef11d9	YES	NO	92	0	—	PROPOSE DELETE — tip is contained in main; no open PR	d3396f63939b38722caf6b0ac99c730e7e4697fa
+ci/m1-pin-github-actions	8e33f7a42fe7e6cb1d784eee75927bbfd79ed545	NO	NO	5	1	—	RETAIN/REVIEW — unique commits are not contained	9283cdf6c83154fef2cd42d1b64896eea2c96031
+completion/checklist-bootstrap	61ed040f643603b609ad28f04c567dcb0e0be651	NO	NO	0	7	#254	KEEP — open PR #254	2ebfdf7acad3d37bde71ec16232e321a16c8533e
+completion/m1-1-coverage	46d513a453a1db3946f4d7a3e27622e1c5039d76	NO	NO	0	2	#255	KEEP — open PR #255	cc9a71e1f19c7427bdd44cc24376d0d032bf9aa2
+completion/m1-2-competitor-matrix	cee533ebf3424c968513597fa548f5f205320f6a	NO	NO	0	2	#256	KEEP — open PR #256	5f1ac602938fcda3a4890220de3c19ad8617f286
+completion/m1-3-benchmark-harness	063039a069ba9b521e220466aee413e8290e5760	NO	NO	0	2	#257	KEEP — open PR #257	19885d6b7f42af8c6c9131e40d13446403528d10
+completion/m1-4-hotspot-decision	90cd218e4ab7df1fc6e30a6eed650b6f12857296	NO	NO	0	2	#258	KEEP — open PR #258	cc79e34da351af36c36b08be16c7590cc785a8c4
+completion/m1-5-default-concurrency-test	a7113ca53a0aebbfdb6d9b7a00f0ef7687be75b2	NO	NO	0	2	#259	KEEP — open PR #259	8e627784caf7633fca85747dd78bb80bb7253343
+completion/m1-6-release-dry-run	841d31c7e013da5e3e7c967cbf7923fc72a8c7ce	NO	NO	0	4	#260	KEEP — open PR #260	485af73031e635cfef65aba6f3c38f11039ef00a
+completion/m1-7-remote-branch-audit	2b941d3610b162f73dd219ac9c2e7d8904b3c1bf	NO	NO	0	1	#261	KEEP — open PR #261	4e2bf42beb00c71a3be8fcb33ab35fa06f22794e
+docs/completion-checklist-initial	e02044ef21ed7f57731bb88a38575f5fd65aa456	NO	NO	0	3	#247	KEEP — open PR #247	3f51d0e475857d8ce5d01ec6072345a6409afafe
+docs/m1-1-coverage	4030c85a4709f1d0b3d2954efbb48e3a3e6effa7	NO	NO	0	1	#251	KEEP — open PR #251	5a1578a553af38e7fbe17d3f29b0c8ae8e651de5
+docs/m1-2-competitor-evidence	01eb3b90ebb62dcda1b3da8d126d57914e2ed09f	NO	NO	0	1	#252	KEEP — open PR #252	cf8ce69b10f0ba4977eb9184c337c6dacc9b30b8
+docs/m1-remote-branch-audit	6a80f872c0c2f090729ba5b62401ae17ede86cea	NO	NO	5	1	—	RETAIN/REVIEW — unique commits are not contained	20b02561a181121a94deae9a7c64b57ccafbcf91
+docs/phase1-reality	3a02525223e49621d19505342adc1af6f259296e	YES	NO	71	0	—	PROPOSE DELETE — tip is contained in main; no open PR	c93a90647e249d6db0a7bb690dc67b81aac2cd50
+fix/gateway-shutdown-lifecycle	07cad291cd5a52feba668aba253a4e1fa503fde5	YES	NO	23	0	—	PROPOSE DELETE — tip is contained in main; no open PR	37f4c9a7becbb0fe34d18ac242d593521dfbb46e
+fix/video-runtime-p0-hardening	8b6bf134dfe0454abee8e33cfbc32cef0bebbbde	NO	NO	44	25	—	RETAIN/REVIEW — unique commits are not contained	a0995cbb42d63910ca790978b5406c4f6f368f2f
+fix/video-runtime-p0-hardening-v2	88e965c6e19c68932f4a777d6fa2ffe57db7f8a6	NO	NO	42	26	—	RETAIN/REVIEW — unique commits are not contained	48371d62b6dd6f4f6a70bb902088b39a6987207f
+fix/virtual-key-policy-intersection	f5f415f33d8f2b29df9206f4bc8936723a6e7720	YES	NO	84	0	—	PROPOSE DELETE — tip is contained in main; no open PR	6628f21eceb0d47113b265bbb1ca79508d7a1012
+main	dcb9f9b3c0352d23f1dfa599ea58450b072406c0	YES	YES	0	0	—	BASELINE	d7ec0aa6741421f493890d3254a4f3640e71ab02
+opencode/issue232-20261010142021	1bb893d64183f78dd5e0a415b76ab22f6b63d749	NO	NO	9	1	—	RETAIN/REVIEW — unique commits are not contained	6312ebe559b32aaef84b0c91122f9ab766505dee
+opencode/issue233-20261010142842	fa318f0584e28b4cf9f3a1d87e5bc7e8448e2929	NO	NO	8	1	—	RETAIN/REVIEW — unique commits are not contained	3c58141b63290fbdb62e93e4fa0df8b9bb610316
+opencode/issue234-20261010142842	4c1cb7ecf9af50f00f1793701f9e522fc9f51379	NO	NO	8	3	—	RETAIN/REVIEW — unique commits are not contained	6e21f85d0be56db796283bbdee8945f099dfd396
+opencode/issue242-20261011032653	e4ab8bed542dcd6b42f5d8df4a720ef204af04fc	NO	NO	2	1	—	RETAIN/REVIEW — unique commits are not contained	cbc76f48ddba8303cd7ea69760aafa4de2c2c0d7
+opencode/issue243-20261011032652	4a04ac9f43e929b25d3bd861211e6e24aaacc001	NO	NO	2	1	—	RETAIN/REVIEW — unique commits are not contained	87cc7f4bf64a3d45ea324bddc8438b5d4611de97
+opencode/issue246-20261011033909	b0537ae72bd61f1e3f02c5ab3155de484bd503e1	NO	NO	0	1	#248	KEEP — open PR #248	ee3fa75ebf05d3ec825d03c6133084e60f5f9ecd
+perf/m1-3-benchmark-harness	86312608d72d7b1e6f24836610c42fc8552e7491	NO	NO	0	1	#253	KEEP — open PR #253	bb874d65e0b3748954e7a0006a2ac380788378a8
+phase0-baseline	d6a090ba0d7073275005263670470175a67c09cd	NO	NO	98	4	—	RETAIN/REVIEW — unique commits are not contained	9c853bfef6e1a883924d6b5169f851af39df2f99
+phase1-coverage-85	f263e9487e199dc0bf7f36ee734e44c04b1d1dbc	YES	NO	69	0	—	PROPOSE DELETE — tip is contained in main; no open PR	e77d67a83e3dba74951223ba0d68e200b7449eab
+phase1-coverage-on-1b	0b23b91f0bd6b0dc46349c3af146e5d6737491ad	NO	NO	84	2	—	RETAIN/REVIEW — unique commits are not contained	056f7cb39ee2aa71f0b806d5dbcdd31c16c65600
+test/m1-1-current-coverage	d530de095f409bb38f1e8a9bbdc32af5b8ea8e72	NO	NO	0	1	#249	KEEP — open PR #249	ca4590982af2ccc1d4153e6c3ac206ac6bb25b43
+wp1-virtual-key-policy	1a503e2d7b2bf1fde992da3419ff1dd193989067	YES	NO	52	0	—	PROPOSE DELETE — tip is contained in main; no open PR	09724cd86e26a7515a9f64d9774b5b90aaeee654
+wp2-video-gateway	f5b74e6e7c691e0578cf2a47ec470cbfa1c813ca	YES	NO	45	0	—	PROPOSE DELETE — tip is contained in main; no open PR	b5a458170973b48ac191b18deaefffe3db4db51b
+wp2b-video-hardening	fce6214530eb625b205222993701da50a5129f7b	YES	NO	40	0	—	PROPOSE DELETE — tip is contained in main; no open PR	b359ed9ec32f14d29d94953948479004fc301b08
+wp4-rbac-sso	a3d6635413f3d9834190346a64b2c034243c0531	YES	NO	43	0	—	PROPOSE DELETE — tip is contained in main; no open PR	3c05d9d0199da9ce8c9633421ed92bee775a20fe
+wp4-rbac-sso-runtime	2a1d9f121157e5770128c6b8c796fb0b4b71ba40	YES	NO	25	0	—	PROPOSE DELETE — tip is contained in main; no open PR	6a6f1b7b98ff004620353fe0137e1432ef15d21f
+wp5-egress-policy	81b888c327d81b61dde4374dc4899ad49091e0ac	YES	NO	21	0	—	PROPOSE DELETE — tip is contained in main; no open PR	6a4781a2a7905d15ba5409ea6dac6acbcd93bcf9
+wp6-controlplane-reconcile	86463043440e9ef83464f37b01d2b12f70cfb17d	YES	NO	19	0	—	PROPOSE DELETE — tip is contained in main; no open PR	7759d930ee74adca61acf06f8fd616fc64be4c2d
+wp6-runtime-wiring	ac6517e3c3c51e9460ead026a02c9d9c66f0559f	YES	NO	10	0	—	PROPOSE DELETE — tip is contained in main; no open PR	b08be239cc86740feae82fbd22133cb77ea6d3d8
+wp7-key-custody	c4fb68ea6b987e98c8a1419099b1f845331b7368	YES	NO	16	0	—	PROPOSE DELETE — tip is contained in main; no open PR	3132e3e4a465e9328d50e41adb0a43b8a7f17a7e
+proposed_deletions	chore/video-gateway-audit-hardening,docs/phase1-reality,fix/gateway-shutdown-lifecycle,fix/virtual-key-policy-intersection,phase1-coverage-85,wp1-virtual-key-policy,wp2-video-gateway,wp2b-video-hardening,wp4-rbac-sso,wp4-rbac-sso-runtime,wp5-egress-policy,wp6-controlplane-reconcile,wp6-runtime-wiring,wp7-key-custody
+branches_with_unique_commits	chore/completion-checklist,chore/m1-dependency-audit,ci/m1-pin-github-actions,completion/checklist-bootstrap,completion/m1-1-coverage,completion/m1-2-competitor-matrix,completion/m1-3-benchmark-harness,completion/m1-4-hotspot-decision,completion/m1-5-default-concurrency-test,completion/m1-6-release-dry-run,completion/m1-7-remote-branch-audit,docs/completion-checklist-initial,docs/m1-1-coverage,docs/m1-2-competitor-evidence,docs/m1-remote-branch-audit,fix/video-runtime-p0-hardening,fix/video-runtime-p0-hardening-v2,opencode/issue232-20261010142021,opencode/issue233-20261010142842,opencode/issue234-20261010142842,opencode/issue242-20261011032653,opencode/issue243-20261011032652,opencode/issue246-20261011033909,perf/m1-3-benchmark-harness,phase0-baseline,phase1-coverage-on-1b,test/m1-1-current-coverage
