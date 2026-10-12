@@ -166,8 +166,8 @@ func TestRenderRejectsNarrationOutputCollidingWithEpisodeInput(t *testing.T) {
 			Shots: []string{collision}, OutputPath: filepath.Join(root, "episode.mp4"),
 			Width: 640, Height: 360, FPS: 24,
 		},
-		NarrationTextPath: filepath.Join(root, "story.txt"),
-		PiperModelPath: filepath.Join(root, "voice.onnx"),
+		NarrationTextPath:   filepath.Join(root, "story.txt"),
+		PiperModelPath:      filepath.Join(root, "voice.onnx"),
 		NarrationOutputPath: collision,
 	}
 	data, err := json.Marshal(spec)
