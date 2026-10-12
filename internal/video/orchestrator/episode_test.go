@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -104,6 +105,11 @@ func (c *episodeTestComposer) ComposeEpisode(_ context.Context, spec composer.Ep
 	if spec.NarrationPath != "" {
 		if _, err := os.Stat(spec.NarrationPath); err != nil {
 			return composer.Manifest{}, fmt.Errorf("narration asset %q missing: %w", spec.NarrationPath, err)
+		}
+	}
+	if spec.SubtitlePath != "" {
+		if _, err := os.Stat(spec.SubtitlePath); err != nil {
+			return composer.Manifest{}, fmt.Errorf("subtitle asset %q missing: %w", spec.SubtitlePath, err)
 		}
 	}
 	if err := os.WriteFile(spec.OutputPath, []byte("final composed episode"), 0600); err != nil {
@@ -370,7 +376,39 @@ func (n *episodeTestNarrator) Synthesize(ctx context.Context, text, outputPath s
 	}
 	n.calls++
 	n.text = text
-	return os.WriteFile(outputPath, []byte("RIFF....WAVE"), 0600)
+	return writeEpisodeTestWAV(outputPath)
+}
+
+func writeEpisodeTestWAV(path string) error {
+	const sampleRate = uint32(22050)
+	const dataSize = uint32(44100)
+	header := make([]byte, 44)
+	copy(header[0:4], "RIFF")
+	binary.LittleEndian.PutUint32(header[4:8], 36+dataSize)
+	copy(header[8:12], "WAVE")
+	copy(header[12:16], "fmt ")
+	binary.LittleEndian.PutUint32(header[16:20], 16)
+	binary.LittleEndian.PutUint16(header[20:22], 1)
+	binary.LittleEndian.PutUint16(header[22:24], 1)
+	binary.LittleEndian.PutUint32(header[24:28], sampleRate)
+	binary.LittleEndian.PutUint32(header[28:32], sampleRate*2)
+	binary.LittleEndian.PutUint16(header[32:34], 2)
+	binary.LittleEndian.PutUint16(header[34:36], 16)
+	copy(header[36:40], "data")
+	binary.LittleEndian.PutUint32(header[40:44], dataSize)
+	file, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	if _, err := file.Write(header); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if _, err := file.Write(make([]byte, dataSize)); err != nil {
+		_ = file.Close()
+		return err
+	}
+	return file.Close()
 }
 
 func TestMultiShotNarrationCheckpointIsReusedAfterCompositionFailure(t *testing.T) {
@@ -391,6 +429,7 @@ func TestMultiShotNarrationCheckpointIsReusedAfterCompositionFailure(t *testing.
 	request := episodeRequest()
 	request.ShotPlan[0].NarrationSegment = "Part one tells the origin."
 	request.ShotPlan[1].NarrationSegment = "Part two describes the royal city."
+	request.SubtitleLanguage = "same-as-narration"
 	job, err := orch.Create(context.Background(), request)
 	if err != nil {
 		t.Fatalf("Create narrated episode: %v", err)
@@ -412,6 +451,9 @@ func TestMultiShotNarrationCheckpointIsReusedAfterCompositionFailure(t *testing.
 	if narrator.calls != 1 || composer.calls != 1 {
 		t.Fatalf("narrator/composer calls after first attempt=%d/%d", narrator.calls, composer.calls)
 	}
+	if checkpoint.SubtitleAsset == nil || checkpoint.SubtitleAsset.ContentType != "application/x-subrip" || len(checkpoint.SubtitleAsset.SHA256) != 64 {
+		t.Fatalf("subtitle checkpoint missing or invalid: %+v", checkpoint.SubtitleAsset)
+	}
 	if err := orch.RunJob(context.Background(), checkpoint); err != nil {
 		t.Fatalf("retry episode composition: %v", err)
 	}
@@ -422,14 +464,21 @@ func TestMultiShotNarrationCheckpointIsReusedAfterCompositionFailure(t *testing.
 	if got.State != video.StateCompleted || got.NarrationAsset == nil || len(got.OutputAssets) != 1 {
 		t.Fatalf("final narrated episode state/assets: state=%s narration=%+v outputs=%+v", got.State, got.NarrationAsset, got.OutputAssets)
 	}
-	if len(got.SourceAssets) != 3 {
-		t.Fatalf("source assets=%d, want two clips and one narration checkpoint", len(got.SourceAssets))
+	if len(got.SourceAssets) != 4 {
+		t.Fatalf("source assets=%d, want two clips, narration, and captions", len(got.SourceAssets))
 	}
 	if narrator.calls != 1 {
 		t.Fatalf("narrator ran %d times after retry; expected checkpoint reuse", narrator.calls)
 	}
 	if len(composer.specs) != 2 || composer.specs[0].NarrationPath != got.NarrationAsset.URI || composer.specs[1].NarrationPath != got.NarrationAsset.URI {
 		t.Fatalf("composition did not reuse narration checkpoint: %+v", composer.specs)
+	}
+	if composer.specs[0].SubtitlePath != got.SubtitleAsset.URI || composer.specs[1].SubtitlePath != got.SubtitleAsset.URI {
+		t.Fatalf("composition did not reuse subtitle checkpoint: %+v", composer.specs)
+	}
+	srt, err := os.ReadFile(got.SubtitleAsset.URI)
+	if err != nil || !strings.Contains(string(srt), "Part one tells the origin.") || !strings.Contains(string(srt), "Part two describes the royal city.") {
+		t.Fatalf("generated SRT content=%q err=%v", srt, err)
 	}
 	for i, req := range provider.requests {
 		if req.NarrationText != "" || req.AudioRequested || req.DialogueRequested || req.SubtitleLanguage != "" {
