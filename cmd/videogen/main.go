@@ -237,7 +237,8 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "common flags: --base-url URL --token-env ENV_NAME")
 	fmt.Fprintln(w, "create flags: --file REQUEST.json [--dry-run]")
 	fmt.Fprintln(w, "job-get/job-cancel flags: --id JOB_ID")
-	fmt.Fprintln(w, "narrate flags: --text-file story.txt --model voice.onnx --out narration.wav [--piper-bin piper]\n	fmt.Fprintln(w, "render flags: --file EPISODE.json [--piper-bin piper] (local narration + composition)")")
+	fmt.Fprintln(w, "narrate flags: --text-file story.txt --model voice.onnx --out narration.wav [--piper-bin piper]")
+	fmt.Fprintln(w, "render flags: --file EPISODE.json [--piper-bin piper] (local narration + composition)")
 	fmt.Fprintln(w, "asset-download flags: --id JOB_ID --asset-id ASSET_ID --out FILE")
 	fmt.Fprintln(w, "compose flags: --file EPISODE.json (local FFmpeg; no Gateway token required)")
 }
