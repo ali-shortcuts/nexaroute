@@ -358,3 +358,103 @@ func TestSingleShotPlanNormalizesToSingleProviderRequest(t *testing.T) {
 		t.Fatalf("single shot should use the ordinary provider path, got checkpoints %+v", job.ShotExecutions)
 	}
 }
+
+type episodeTestNarrator struct {
+	calls int
+	text  string
+}
+
+func (n *episodeTestNarrator) Synthesize(ctx context.Context, text, outputPath string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	n.calls++
+	n.text = text
+	return os.WriteFile(outputPath, []byte("RIFF....WAVE"), 0600)
+}
+
+func TestMultiShotNarrationCheckpointIsReusedAfterCompositionFailure(t *testing.T) {
+	root := t.TempDir()
+	base := providerWithDefaults()
+	base.statuses = []video.ProviderJobStatus{
+		{ProviderJobID: "remote-1", State: video.StateCompleted, Progress: 1, Outputs: []video.Asset{{ID: "out-1", Filename: "one.mp4", ContentType: "video/mp4"}}},
+		{ProviderJobID: "remote-2", State: video.StateCompleted, Progress: 1, Outputs: []video.Asset{{ID: "out-2", Filename: "two.mp4", ContentType: "video/mp4"}}},
+	}
+	provider := &episodeTestProvider{fakeProvider: base}
+	store := queue.NewMemoryStore()
+	sink := &episodeTestSink{root: filepath.Join(root, "assets")}
+	composer := &episodeTestComposer{fail: 1}
+	narrator := &episodeTestNarrator{}
+	orch := newEpisodeOrchestrator(t, store, queue.New(10), provider, sink, composer)
+	orch.Narrator = narrator
+
+	request := episodeRequest()
+	request.ShotPlan[0].NarrationSegment = "Part one tells the origin."
+	request.ShotPlan[1].NarrationSegment = "Part two describes the royal city."
+	job, err := orch.Create(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Create narrated episode: %v", err)
+	}
+	wantText := "Part one tells the origin.\n\nPart two describes the royal city."
+	if job.Request.NarrationText != wantText {
+		t.Fatalf("narration script=%q, want %q", job.Request.NarrationText, wantText)
+	}
+	if err := orch.RunJob(context.Background(), job); err == nil || !strings.Contains(err.Error(), "simulated FFmpeg failure") {
+		t.Fatalf("first composition error=%v, want simulated failure", err)
+	}
+	checkpoint, err := store.Get(context.Background(), job.JobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if checkpoint.NarrationAsset == nil || checkpoint.NarrationAsset.ContentType != "audio/wav" || len(checkpoint.NarrationAsset.SHA256) != 64 {
+		t.Fatalf("narration checkpoint missing or invalid: %+v", checkpoint.NarrationAsset)
+	}
+	if narrator.calls != 1 || composer.calls != 1 {
+		t.Fatalf("narrator/composer calls after first attempt=%d/%d", narrator.calls, composer.calls)
+	}
+	if err := orch.RunJob(context.Background(), checkpoint); err != nil {
+		t.Fatalf("retry episode composition: %v", err)
+	}
+	got, err := store.Get(context.Background(), job.JobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != video.StateCompleted || got.NarrationAsset == nil || len(got.OutputAssets) != 1 {
+		t.Fatalf("final narrated episode state/assets: state=%s narration=%+v outputs=%+v", got.State, got.NarrationAsset, got.OutputAssets)
+	}
+	if len(got.SourceAssets) != 3 {
+		t.Fatalf("source assets=%d, want two clips and one narration checkpoint", len(got.SourceAssets))
+	}
+	if narrator.calls != 1 {
+		t.Fatalf("narrator ran %d times after retry; expected checkpoint reuse", narrator.calls)
+	}
+	if len(composer.specs) != 2 || composer.specs[0].NarrationPath != got.NarrationAsset.URI || composer.specs[1].NarrationPath != got.NarrationAsset.URI {
+		t.Fatalf("composition did not reuse narration checkpoint: %+v", composer.specs)
+	}
+	for i, req := range provider.requests {
+		if req.NarrationText != "" || req.AudioRequested || req.DialogueRequested || req.SubtitleLanguage != "" {
+			t.Errorf("provider shot request %d received episode narration/audio fields: %+v", i, req)
+		}
+	}
+}
+
+func TestNarrationRequiresConfiguredPiperAndMultiShotEpisode(t *testing.T) {
+	provider := &episodeTestProvider{fakeProvider: providerWithDefaults()}
+	store := queue.NewMemoryStore()
+	orch := newEpisodeOrchestrator(t, store, queue.New(10), provider, &episodeTestSink{root: t.TempDir()}, &episodeTestComposer{})
+	request := episodeRequest()
+	request.NarrationText = "Narrate this episode."
+	if _, err := orch.Create(context.Background(), request); err == nil || !strings.Contains(err.Error(), "video.piper_enabled") {
+		t.Fatalf("Create without narrator error=%v", err)
+	}
+	if provider.nextID != 0 {
+		t.Fatalf("provider received %d submissions before narration configuration was validated", provider.nextID)
+	}
+
+	orch.Narrator = &episodeTestNarrator{}
+	request = requestWithDefaults()
+	request.NarrationText = "Narrate a single shot."
+	if _, err := orch.Create(context.Background(), request); err == nil || !strings.Contains(err.Error(), "multi-shot episode") {
+		t.Fatalf("single-shot narration error=%v", err)
+	}
+}
