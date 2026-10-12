@@ -1,0 +1,81 @@
+Fetching vulnerabilities from the database...
+
+Checking the code against the vulnerabilities...
+
+The package pattern matched the following 46 root packages:
+  github.com/ali-shortcuts/nexaroute/internal/secrets
+  github.com/ali-shortcuts/nexaroute/internal/config
+  github.com/ali-shortcuts/nexaroute/internal/controlplane
+  github.com/ali-shortcuts/nexaroute/internal/desktop
+  github.com/ali-shortcuts/nexaroute/internal/events
+  github.com/ali-shortcuts/nexaroute/internal/health
+  github.com/ali-shortcuts/nexaroute/internal/authz
+  github.com/ali-shortcuts/nexaroute/internal/cache
+  github.com/ali-shortcuts/nexaroute/internal/compat
+  github.com/ali-shortcuts/nexaroute/internal/core
+  github.com/ali-shortcuts/nexaroute/internal/decision/providerstate
+  github.com/ali-shortcuts/nexaroute/internal/feature
+  github.com/ali-shortcuts/nexaroute/internal/taskprofile
+  github.com/ali-shortcuts/nexaroute/internal/decision
+  github.com/ali-shortcuts/nexaroute/internal/decision/remote
+  github.com/ali-shortcuts/nexaroute/internal/decision/jev
+  github.com/ali-shortcuts/nexaroute/internal/decision/policy
+  github.com/ali-shortcuts/nexaroute/internal/scorecards
+  github.com/ali-shortcuts/nexaroute/internal/eval
+  github.com/ali-shortcuts/nexaroute/internal/egress
+  github.com/ali-shortcuts/nexaroute/internal/providers
+  github.com/ali-shortcuts/nexaroute/internal/evallive
+  github.com/ali-shortcuts/nexaroute/internal/guardrail
+  github.com/ali-shortcuts/nexaroute/internal/router
+  github.com/ali-shortcuts/nexaroute/internal/probe
+  github.com/ali-shortcuts/nexaroute/internal/protocol/canonical
+  github.com/ali-shortcuts/nexaroute/internal/route
+  github.com/ali-shortcuts/nexaroute/internal/securitystore
+  github.com/ali-shortcuts/nexaroute/internal/translate
+  github.com/ali-shortcuts/nexaroute/internal/usage
+  github.com/ali-shortcuts/nexaroute/internal/httpapi
+  github.com/ali-shortcuts/nexaroute/internal/logging
+  github.com/ali-shortcuts/nexaroute/internal/transport
+  github.com/ali-shortcuts/nexaroute/internal/video
+  github.com/ali-shortcuts/nexaroute/internal/video/cost
+  github.com/ali-shortcuts/nexaroute/internal/video/queue
+  github.com/ali-shortcuts/nexaroute/internal/video/orchestrator
+  github.com/ali-shortcuts/nexaroute/internal/video/api
+  github.com/ali-shortcuts/nexaroute/internal/video/providers
+  github.com/ali-shortcuts/nexaroute/internal/video/storage
+  github.com/ali-shortcuts/nexaroute/internal/video/runtime
+  github.com/ali-shortcuts/nexaroute/cmd/gateway
+  github.com/ali-shortcuts/nexaroute/cmd/videogen
+  github.com/ali-shortcuts/nexaroute/internal/budget
+  github.com/ali-shortcuts/nexaroute/internal/doccheck
+  github.com/ali-shortcuts/nexaroute/internal/video/composer
+Govulncheck scanned the following 6 modules and the go1.27.2 standard library:
+  github.com/ali-shortcuts/nexaroute
+  github.com/coreos/go-oidc/v3@v3.15.0
+  github.com/go-jose/go-jose/v4@v4.1.4
+  go.etcd.io/bbolt@v1.4.3
+  golang.org/x/oauth2@v0.30.0
+  golang.org/x/sys@v0.31.0
+
+=== Symbol Results ===
+
+No vulnerabilities found.
+
+=== Package Results ===
+
+No other vulnerabilities found.
+
+=== Module Results ===
+
+Vulnerability #1: GO-2026-5024
+    Invoking integer overflow in NewNTUnicodeString in golang.org/x/sys/windows
+  More info: https://pkg.go.dev/vuln/GO-2026-5024
+  Module: golang.org/x/sys
+    Found in: golang.org/x/sys@v0.31.0
+    Fixed in: golang.org/x/sys@v0.44.0
+    Platforms: windows
+
+Your code is affected by 0 vulnerabilities.
+This scan also found 0 vulnerabilities in packages you import and 1
+vulnerability in modules you require, but your code doesn't appear to call these
+vulnerabilities.

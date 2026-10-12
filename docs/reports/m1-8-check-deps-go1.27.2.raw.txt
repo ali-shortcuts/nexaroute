@@ -1,0 +1,15 @@
+Go toolchain: 1.27.2 (module minimum: 1.24)
+Checking declared module graph...
+Verifying downloaded module checksums...
+all modules verified
+Running govulncheck...
+=== Symbol Results ===
+
+No vulnerabilities found.
+
+Your code is affected by 0 vulnerabilities.
+This scan also found 0 vulnerabilities in packages you import and 1
+vulnerability in modules you require, but your code doesn't appear to call these
+vulnerabilities.
+Use '-show verbose' for more details.
+DEPENDENCY AUDIT PASS
