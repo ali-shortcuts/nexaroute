@@ -56,7 +56,7 @@ with tempfile.TemporaryDirectory(prefix="nexaroute-install-test-") as tmp:
     home, tools, dest, fixture = [tmp / n for n in ("home", "tools", "bin", "release")]
     for d in (home, tools, dest, fixture):
         d.mkdir()
-    for name in ("nexaroute-linux-amd64", "nexaroute-linux-arm64", "SHA256SUMS"):
+    for name in ("nexaroute-linux-amd64", "nexaroute-linux-arm64", "nexaroute-videogen-linux-amd64", "nexaroute-videogen-linux-arm64", "SHA256SUMS"):
         shutil.copy2(ROOT / "dist" / name, fixture / name)
     executable(tools / "uname", '#!/bin/sh\nif [ "$1" = -s ]; then echo "${TEST_OS:-Linux}"; else echo "${TEST_ARCH:-x86_64}"; fi\n')
     executable(tools / "curl", '''#!/usr/bin/env python3
@@ -82,30 +82,46 @@ shutil.copyfile(pathlib.Path(os.environ["TEST_FIXTURE"]) / url.rsplit("/", 1)[1]
         return result
     install()
     binary = dest / "nexaroute"
-    check(binary.stat().st_mode & 0o777 == 0o755, "binary permissions")
+    video_binary = dest / "videogen"
+    check(binary.stat().st_mode & 0o777 == 0o755, "gateway binary permissions")
+    check(video_binary.stat().st_mode & 0o777 == 0o755, "videogen binary permissions")
     check(subprocess.check_output(["bash", "-c", "command -v nexaroute"], env=env, text=True).strip() == str(binary), "PATH")
-    check("NexaRoute v" in subprocess.check_output(["nexaroute", "-version"], env=env, text=True), "version")
+    check(subprocess.check_output(["bash", "-c", "command -v videogen"], env=env, text=True).strip() == str(video_binary), "videogen PATH")
+    check("NexaRoute v" in subprocess.check_output(["nexaroute", "-version"], env=env, text=True), "gateway version")
+    check("videogen v" in subprocess.check_output(["videogen", "-version"], env=env, text=True).lower(), "videogen version")
     # Linux ARM64 asset selection, but don't execute it on the AMD64 host.
     for arch in ("aarch64", "arm64"):
         install({"TEST_ARCH": arch})
-        check(binary.read_bytes() == (fixture / "nexaroute-linux-arm64").read_bytes(), "arm64 selection")
+        check(binary.read_bytes() == (fixture / "nexaroute-linux-arm64").read_bytes(), "gateway arm64 selection")
+        check(video_binary.read_bytes() == (fixture / "nexaroute-videogen-linux-arm64").read_bytes(), "videogen arm64 selection")
     for arch in ("x86_64", "amd64"):
         install({"TEST_ARCH": arch})
-        check(binary.read_bytes() == (fixture / "nexaroute-linux-amd64").read_bytes(), "amd64 selection")
+        check(binary.read_bytes() == (fixture / "nexaroute-linux-amd64").read_bytes(), "gateway amd64 selection")
+        check(video_binary.read_bytes() == (fixture / "nexaroute-videogen-linux-amd64").read_bytes(), "videogen amd64 selection")
     saved_binary = binary.read_bytes()
+    saved_video_binary = video_binary.read_bytes()
+    video_binary.unlink()
+    video_binary.mkdir()
+    install(ok=False)
+    video_binary.rmdir()
+    video_binary.write_bytes(saved_video_binary)
+    video_binary.chmod(0o755)
+    check(binary.read_bytes() == saved_binary, "directory collision changed gateway binary")
     install({"TEST_ARCH": "riscv64"}, ok=False)
     install({"TEST_OS": "Darwin"}, ok=False)
     install({"NEXAROUTE_INSTALL_DIR": str(tmp / "not-in-path")}, ok=False)
     install({"TEST_DOWNLOAD_FAIL": "1"}, ok=False)
     sums = (fixture / "SHA256SUMS").read_text()
-    (fixture / "SHA256SUMS").write_text("0" * 64 + "  nexaroute-linux-amd64\n")
+    video_sum_line = next(line for line in sums.splitlines() if line.endswith("  nexaroute-videogen-linux-amd64"))
+    (fixture / "SHA256SUMS").write_text("0" * 64 + "  nexaroute-linux-amd64\n" + video_sum_line + "\n")
     install(ok=False)
     (fixture / "SHA256SUMS").write_text(sums + sums)
     install(ok=False)
     (fixture / "SHA256SUMS").write_text("malformed manifest\n")
     install(ok=False)
     (fixture / "SHA256SUMS").write_text(sums)
-    check(binary.read_bytes() == saved_binary, "failed install changed binary")
+    check(binary.read_bytes() == saved_binary, "failed install changed gateway binary")
+    check(video_binary.read_bytes() == saved_video_binary, "failed install changed videogen binary")
     print("PASS clean install, PATH, architecture selection, checksum/download rejection")
 
     with socket.socket() as sock:
@@ -160,13 +176,17 @@ shutil.copyfile(pathlib.Path(os.environ["TEST_FIXTURE"]) / url.rsplit("/", 1)[1]
         # A distinguishable valid ELF fixture simulates a later release.
         with open(fixture / "nexaroute-linux-amd64", "ab") as f:
             f.write(b"\nrelease-upgrade-fixture\n")
+        with open(fixture / "nexaroute-videogen-linux-amd64", "ab") as f:
+            f.write(b"\nrelease-videogen-upgrade-fixture\n")
         import hashlib
         upgrade_sum = hashlib.sha256((fixture / "nexaroute-linux-amd64").read_bytes()).hexdigest()
-        (fixture / "SHA256SUMS").write_text(upgrade_sum + "  nexaroute-linux-amd64\n")
+        video_upgrade_sum = hashlib.sha256((fixture / "nexaroute-videogen-linux-amd64").read_bytes()).hexdigest()
+        (fixture / "SHA256SUMS").write_text(upgrade_sum + "  nexaroute-linux-amd64\n" + video_upgrade_sum + "  nexaroute-videogen-linux-amd64\n")
         # Upgrade is an atomic executable replacement even while running.
         install({"NEXAROUTE_VERSION": "v0.18.0"})
         install()
-        check(binary.read_bytes() != saved_binary, "upgrade did not replace executable")
+        check(binary.read_bytes() != saved_binary, "upgrade did not replace gateway executable")
+        check(video_binary.read_bytes() != saved_video_binary, "upgrade did not replace videogen executable")
         check(cfg.read_bytes() == original, "upgrade/reinstall changed config")
         check("/download/v0.18.0/" in (tmp / "downloads").read_text(), "pinned release URL")
         stop(proc)

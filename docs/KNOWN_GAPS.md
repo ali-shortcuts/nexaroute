@@ -96,9 +96,9 @@ WP4 implementation boundaries and acceptance status:
 Virtual-key tenant/project/team policy intersection is implemented fail-closed:
 child key wildcards cannot widen a configured parent allow-list, unresolved
 scope references deny access, and duplicate model/token fields are inspected
-conservatively. This is separate from Admin RBAC and OIDC sessions. The latter
-implementation is on PR #224, marked ready after the gates passed on head
-`aa5a864`; it remains unmerged. Any later push must pass fresh required checks.
+conservatively. This is separate from Admin RBAC and OIDC sessions. PR #224 is
+merged; its single-host storage and unverified live external-IdP interoperability
+remain the documented boundaries.
 
 ## Model discovery
 
@@ -124,9 +124,10 @@ text placeholder, not a playable video. The asset-size cap does not yet provide
 streaming-memory protection because the current provider interface passes byte
 slices. Multi-node durable coordination, provider-native idempotent recovery
 after an ambiguous submission, verified production workloads for ten-minute
-episodes, Gateway-side narration/dialogue generation and audio/subtitle
-composition, and actual-vs-estimated cost reconciliation for external providers
-remain unimplemented. The Gateway now persists per-shot checkpoints and
+episodes, Gateway-side narration/dialogue generation and automatic audio/subtitle
+composition remain unimplemented; the local CLI now supports optional Piper
+speech synthesis, existing narration/music mixing, and SRT subtitle burning.
+Actual-vs-estimated cost reconciliation for external providers remains unimplemented. The Gateway now persists per-shot checkpoints and
 automatically composes generated shot assets into a final silent MP4; the local
 `videogen compose` command can additionally mix existing narration/music and
 burn in SRT subtitles. Video Studio now accepts multi-shot plans, shows progress, and downloads persisted outputs. Manual audio/music/subtitle composition remains CLI-only, and the current in-process ledger is not durable or distributed.
@@ -149,8 +150,8 @@ derived only from verified issuer claims using the explicit config allowlist.
 The web UI's visibility is a convenience only; the server middleware is
 authoritative. The local bbolt store is single-host. The project-wide 85%
 coverage target is a separate WP3 acceptance target and must be measured again
-after WP4b–WP7. PR #224 remains unmerged until its current head has passed the
-full required gate and fresh GitHub checks.
+after WP4b–WP7. PR #224 is merged; live external-IdP interoperability remains
+unverified.
 
 
 ## Response cache boundaries

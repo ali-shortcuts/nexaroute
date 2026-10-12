@@ -21,8 +21,8 @@ nexaroute
 
 UI: <http://127.0.0.1:8080/>
 
-The installer supports Linux amd64 and arm64, verifies SHA256 checksums, and
-installs atomically. No Go, no git, no source compilation. Re-running the same
+The installer supports Linux amd64 and arm64, verifies SHA256 checksums for
+both binaries, and installs the Gateway and Video CLI atomically. No Go, no git, no source compilation. Re-running the same
 command upgrades or reinstalls without touching your configuration. Full
 details: [docs/INSTALLATION.md](docs/INSTALLATION.md).
 
@@ -163,4 +163,4 @@ infrastructure.
 ### Transport and configuration hardening
 Optional built-in TLS/mTLS and browser CSRF protection are documented in [docs/SECURITY.md](docs/SECURITY.md). Virtual-key tenant/project/team scopes intersect fail-closed; child wildcards cannot widen parent policy and unresolved references deny. The `config validate`, `config diff`, and `config dry-run` commands provide read-only preflight checks; see [docs/OPERATIONS.md](docs/OPERATIONS.md).
 
-The optional asynchronous video gateway is documented in [docs/VIDEO_GATEWAY.md](docs/VIDEO_GATEWAY.md). It requires a bearer-token environment variable, uses a bounded single-process queue and an atomic local JSON job store with restart recovery, and includes a test/development-only fake provider plus an opt-in local ComfyUI workflow adapter for text-to-video. Video Studio supports multi-shot JSON plans, live job progress, and authenticated output downloads. Multi-shot Gateway jobs persist per-shot provider IDs and outputs, automatically hand saved clips to the episode composer, and publish a final silent MP4. Audio/dialogue generation, Gateway-side music/subtitle composition, distributed storage, verified ten-minute production workloads, and safe cancellation during active ComfyUI inference or local FFmpeg composition remain limitations. The local `videogen compose` command can mix existing narration/music and burn in SRT subtitles. No commercial video API provider is bundled.
+The optional asynchronous video gateway is documented in [docs/VIDEO_GATEWAY.md](docs/VIDEO_GATEWAY.md). It requires a bearer-token environment variable, uses a bounded single-process queue and an atomic local JSON job store with restart recovery, and includes a test/development-only fake provider plus an opt-in local ComfyUI workflow adapter for text-to-video. Video Studio supports multi-shot JSON plans, live job progress, and authenticated output downloads. Multi-shot Gateway jobs persist per-shot provider IDs and outputs, automatically hand saved clips to the episode composer, and publish a final silent MP4. Gateway-side narration/dialogue generation and music/subtitle composition, distributed storage, verified ten-minute production workloads, and safe cancellation during active ComfyUI inference or local FFmpeg composition remain limitations. The local `videogen narrate` command can synthesize WAV narration with a separately installed Piper voice model; `videogen render` combines that local narration step with FFmpeg composition, music mixing, and SRT subtitle burning in one CLI workflow. No commercial video API provider is bundled.

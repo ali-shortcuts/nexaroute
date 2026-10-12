@@ -10,6 +10,9 @@ echo '== formatting =='
 if out=$(gofmt -l .) && [[ -n "$out" ]]; then
   echo 'gofmt check failed for:' >&2
   echo "$out" >&2
+  while IFS= read -r file; do
+    [[ -n "$file" ]] && gofmt -d "$file" >&2
+  done <<< "$out"
   exit 1
 fi
 echo '== mandatory clean unit/integration pass =='
