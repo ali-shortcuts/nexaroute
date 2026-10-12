@@ -73,6 +73,7 @@ type VideoJob struct {
 	OutputAssets          []Asset           `json:"output_assets,omitempty"`
 	SourceAssets          []Asset           `json:"source_assets,omitempty"`
 	NarrationAsset        *Asset            `json:"narration_asset,omitempty"`
+	SubtitleAsset         *Asset            `json:"subtitle_asset,omitempty"`
 	EstimatedCostUSD      float64           `json:"estimated_cost_usd,omitempty"`
 	ActualCostUSD         float64           `json:"actual_cost_usd,omitempty"`
 	UsageMetadata         map[string]string `json:"usage_metadata,omitempty"`
