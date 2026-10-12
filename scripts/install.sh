@@ -51,20 +51,25 @@ main() {
 
   tmp="$(mktemp -d)"
   staged=""
+  staged_video=""
   cleanup() {
     rm -rf -- "$tmp"
     if [[ -n "$staged" ]]; then "${sudo_cmd[@]}" rm -f -- "$staged"; fi
+    if [[ -n "$staged_video" ]]; then "${sudo_cmd[@]}" rm -f -- "$staged_video"; fi
   }
   trap cleanup EXIT
 
   asset="nexaroute-linux-$arch"
+  video_asset="nexaroute-videogen-linux-$arch"
   if [[ -n "${NEXAROUTE_LOCAL_RELEASE_DIR:-}" ]]; then
     release_dir="$NEXAROUTE_LOCAL_RELEASE_DIR"
     tag="${NEXAROUTE_LOCAL_RELEASE_TAG:-$version}"
     [[ -d "$release_dir" ]] || fail "Local release directory does not exist: $release_dir"
     [[ -f "$release_dir/$asset" ]] || fail "Local release asset not found: $release_dir/$asset"
+    [[ -f "$release_dir/$video_asset" ]] || fail "Local release asset not found: $release_dir/$video_asset"
     [[ -f "$release_dir/SHA256SUMS" ]] || fail "Local release checksum manifest not found: $release_dir/SHA256SUMS"
     cp -- "$release_dir/$asset" "$tmp/$asset"
+    cp -- "$release_dir/$video_asset" "$tmp/$video_asset"
     cp -- "$release_dir/SHA256SUMS" "$tmp/SHA256SUMS"
   else
     repo=https://github.com/ali-shortcuts/nexaroute/releases
@@ -82,28 +87,39 @@ main() {
     echo "Downloading NexaRoute $version ($arch)..."
     fetch "$base/SHA256SUMS" "$tmp/SHA256SUMS"
     fetch "$base/$asset" "$tmp/$asset"
+    fetch "$base/$video_asset" "$tmp/$video_asset"
   fi
 
-  # Verify exactly one checksum entry for the selected asset. Never execute a
+  # Verify exactly one checksum entry for each selected asset. Never execute a
   # path or filename supplied by the remote manifest.
-  expected="$(awk -v asset="$asset" '$2 == asset {print $1}' "$tmp/SHA256SUMS")"
-  [[ "$expected" =~ ^[0-9a-fA-F]{64}$ ]] || fail "Invalid, duplicate, or missing checksum for $asset."
-  printf '%s  %s\n' "$expected" "$asset" > "$tmp/checksum.selected"
+  : > "$tmp/checksum.selected"
+  for selected in "$asset" "$video_asset"; do
+    expected="$(awk -v asset="$selected" '$2 == asset {print $1}' "$tmp/SHA256SUMS")"
+    [[ "$expected" =~ ^[0-9a-fA-F]{64}$ ]] || fail "Invalid, duplicate, or missing checksum for $selected."
+    printf '%s  %s\n' "$expected" "$selected" >> "$tmp/checksum.selected"
+    [[ -s "$tmp/$selected" ]] || fail "Downloaded binary is empty: $selected"
+  done
   (cd "$tmp" && sha256sum --check --status checksum.selected) || fail 'SHA256 mismatch; nothing installed.'
-  [[ -s "$tmp/$asset" ]] || fail 'Downloaded binary is empty.'
 
   "${sudo_cmd[@]}" mkdir -p -- "$dest"
   staged="$("${sudo_cmd[@]}" mktemp "$dest/.nexaroute-install.XXXXXX")"
+  staged_video="$("${sudo_cmd[@]}" mktemp "$dest/.videogen-install.XXXXXX")"
   "${sudo_cmd[@]}" install -m 0755 "$tmp/$asset" "$staged"
-  # Atomic replacement works even while an older executable is running.
+  "${sudo_cmd[@]}" install -m 0755 "$tmp/$video_asset" "$staged_video"
+  # Each executable is atomically replaced; both are staged and verified first.
   "${sudo_cmd[@]}" mv -f -- "$staged" "$dest/nexaroute"
   staged=""
+  "${sudo_cmd[@]}" mv -f -- "$staged_video" "$dest/videogen"
+  staged_video=""
 
   mkdir -p -- "$(dirname "$cfg")"
   chmod 700 -- "$(dirname "$cfg")"
-  printf '\nInstalled NexaRoute %s to %s/nexaroute\nConfig (created on first run): %s\n\nRun: nexaroute\nUpgrading? Stop and restart NexaRoute to use the new binary.\n' "$tag" "$dest" "$cfg"
+  printf '\nInstalled NexaRoute %s to %s/nexaroute\nInstalled Video CLI to %s/videogen\nConfig (created on first run): %s\n\nRun: nexaroute\nVideo CLI: videogen --version\nUpgrading? Stop and restart NexaRoute to use the new binary.\n' "$tag" "$dest" "$dest" "$cfg"
   if [[ "$(command -v nexaroute 2>/dev/null || true)" != "$dest/nexaroute" ]]; then
     echo "WARNING: another nexaroute shadows this installation in PATH; use $dest/nexaroute or remove the older entry." >&2
+  fi
+  if [[ "$(command -v videogen 2>/dev/null || true)" != "$dest/videogen" ]]; then
+    echo "WARNING: another videogen shadows this installation in PATH; use $dest/videogen or remove the older entry." >&2
   fi
 }
 
