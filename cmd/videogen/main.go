@@ -96,7 +96,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 			}
 			for _, source := range append(append(append([]string{}, spec.Shots...), spec.MusicPath, spec.SubtitlePath), spec.OutputPath) {
 				if strings.TrimSpace(source) != "" && sameCleanPath(source, spec.NarrationOutputPath) {
-					fmt.Fprintf(stderr, "render: narration_output_path must not overwrite episode input or output %q\\n", source)
+					fmt.Fprintf(stderr, "render: narration_output_path must not overwrite episode input or output %q\n", source)
 					return 2
 				}
 			}
