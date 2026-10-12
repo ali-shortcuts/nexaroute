@@ -76,7 +76,7 @@ The production adapter in this repository connects to a ComfyUI API server on yo
    videogen asset-download --id JOB_ID --asset-id ASSET_ID --out ./episode.mp4
    ```
 
-The ComfyUI adapter currently supports text-to-video only; it does not synthesize narration, dialogue, music, or subtitles. Multi-shot jobs generate clips sequentially and compose a final **silent MP4** using FFmpeg. The configured `comfyui_max_duration_seconds` is a per-clip limit, not the total episode duration. Model/workflow requirements and licenses are managed by your local ComfyUI installation.
+The ComfyUI adapter currently supports silent text-to-video only; it does not generate provider-side dialogue, sound effects, or music. Multi-shot jobs can optionally add local Piper narration and script-derived SRT captions after the clips are saved, then compose the final MP4 using FFmpeg. The configured `comfyui_max_duration_seconds` is a per-clip limit, not the total episode duration. Model/workflow requirements and licenses are managed by your local ComfyUI installation.
 
 ## Local narration and burned-in subtitles
 
@@ -153,6 +153,22 @@ Example request file for `videogen create --file episode-request.json`:
 
 Set `NEXAROUTE_URL` to the Gateway base URL and `NEXAROUTE_VIDEO_TOKEN` to the bearer token configured by `video.auth_token_env`. The CLI reads the token from the environment and does not print it. Do not include `shot_plan[].output_asset` in a client request; output assets are server-owned checkpoints and caller-supplied values are discarded.
 
+## Gateway-side narration and captions
+
+To enable narration inside Video Studio, install Piper and a compatible ONNX voice model locally, then configure the Gateway's `video` object:
+
+```json
+{
+  "video": {
+    "piper_enabled": true,
+    "piper_binary": "piper",
+    "piper_model_path": "models/fa_IR-voice-medium.onnx"
+  }
+}
+```
+
+The model's companion `.onnx.json` sidecar must be next to the model. Relative model paths resolve from the NexaRoute config directory. NexaRoute does not download Piper or voice models. Restart after changing config. Provide a narration script in Video Studio or set `narration_segment` on individual shots; the orchestrator persists the narration WAV before composition and reuses it after a retry. Select **Generate captions from narration script** to persist an SRT checkpoint and burn approximate same-language captions into the final MP4. Caption timing is estimated from text length and does not translate or align words to speech.
+
 ## Local offline narration with Piper
 
 The standalone `videogen narrate` command can synthesize a narration WAV locally with a user-installed Piper CLI and ONNX voice model. It makes no network requests, requires no Gateway token, and downloads no voice/model files. Install Piper and a compatible voice model separately; keep the model and its companion configuration file together when required by that voice.
@@ -212,9 +228,9 @@ Example `episode.json`:
 
 Paths are resolved relative to the current working directory. Install FFmpeg with the `libx264` encoder or set `NEXAROUTE_FFMPEG` to its executable path. This local command does not require a Video Gateway token. A zero volume field selects its default (narration 1.0, music 0.12). The Gateway preflights FFmpeg and `libx264` before admitting multi-shot work, so a missing encoder fails before any provider job is submitted.
 
-For a Gateway request with more than one `shot_plan` entry, the orchestrator validates and estimates each shot separately, persists each provider job ID and output asset, then composes the ordered clips into a final silent MP4. Restart recovery resumes known shot jobs or repeats composition from saved shot assets. If a crash leaves a shot in the pre-submission state without a durable provider job ID, the job moves to manual action rather than risking a duplicate billable submission. One episode currently uses one provider/model, and each individual shot must fit that provider's limits.
+For a Gateway request with more than one `shot_plan` entry, the orchestrator validates and estimates each shot separately, persists each provider job ID and output asset, then composes the ordered clips into an MP4. If configured, the narration WAV and SRT captions are persisted as separate checkpoints and reused on restart or composition retry. If a crash leaves a shot in the pre-submission state without a durable provider job ID, the job moves to manual action rather than risking a duplicate billable submission. One episode currently uses one provider/model, and each individual shot must fit that provider's limits.
 
-The Gateway pipeline does not yet synthesize narration or generate dialogue, music, or subtitles. The local `videogen compose` command can mix existing narration/music and burn in an existing SRT file, but it is not yet a Video Studio action. Cancellation during local FFmpeg composition is intentionally rejected to avoid a race that could publish a partial result.
+When `video.piper_enabled` is true, the Gateway can synthesize narration for multi-shot episodes and optionally burn in approximate same-language SRT captions. Captions use estimated timing based on text length; they are not translated or word-aligned. Provider-generated dialogue, sound effects, and music remain unsupported. The local `videogen render`/`compose` commands can still mix user-supplied music and burn in an existing SRT. Cancellation during local FFmpeg composition is intentionally rejected to avoid a race that could publish a partial result.
 
 ## Important limits
 

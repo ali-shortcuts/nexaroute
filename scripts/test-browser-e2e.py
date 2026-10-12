@@ -462,6 +462,8 @@ def main() -> None:
                 page.locator('[data-action="create-video"]').first.click()
                 page.locator('[data-action="example-shot-plan"]').click()
                 page.locator("#v-episode").fill("noora-persepolis-01")
+                page.locator("#v-narration").fill("Noora introduces Persepolis and explains its history.")
+                page.locator("#v-subtitle-language").select_option("same-as-narration")
                 plan = json.loads(page.locator("#v-shot-plan").input_value())
                 assert len(plan) == 2, f"example shot plan length={len(plan)}"
                 page.get_by_role("button", name="Queue job").click()
@@ -474,6 +476,8 @@ def main() -> None:
                 assert len(submitted.get("shot_plan", [])) == 2, f"submitted shot plan={submitted.get('shot_plan')!r}"
                 assert submitted.get("duration_seconds") == 8, f"total duration={submitted.get('duration_seconds')!r}"
                 assert submitted.get("episode_id") == "noora-persepolis-01"
+                assert submitted.get("narration_text") == "Noora introduces Persepolis and explains its history.", f"narration text={submitted.get('narration_text')!r}"
+                assert submitted.get("subtitle_language") == "same-as-narration", f"subtitle language={submitted.get('subtitle_language')!r}"
                 with page.expect_download(timeout=12000) as download_info:
                     page.get_by_role("button", name="Download episode.mp4").click()
                 downloaded = tmp_path / "video-studio-download.mp4"

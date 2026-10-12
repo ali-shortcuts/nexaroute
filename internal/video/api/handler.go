@@ -231,6 +231,11 @@ func publicJob(job video.VideoJob) video.VideoJob {
 		asset.URI = publicAssetURI(job.JobID, asset.ID)
 		job.NarrationAsset = &asset
 	}
+	if job.SubtitleAsset != nil {
+		asset := *job.SubtitleAsset
+		asset.URI = publicAssetURI(job.JobID, asset.ID)
+		job.SubtitleAsset = &asset
+	}
 	job.Request.ShotPlan = append([]video.Shot(nil), job.Request.ShotPlan...)
 	for i := range job.Request.ShotPlan {
 		if job.Request.ShotPlan[i].OutputAsset != nil {

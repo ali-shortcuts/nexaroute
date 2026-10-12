@@ -124,9 +124,11 @@ text placeholder, not a playable video. The asset-size cap does not yet provide
 streaming-memory protection because the current provider interface passes byte
 slices. Multi-node durable coordination, provider-native idempotent recovery
 after an ambiguous submission, verified production workloads for ten-minute
-episodes, Gateway-side narration/dialogue generation and automatic audio/subtitle
-composition remain unimplemented; the local CLI now supports optional Piper
-speech synthesis, existing narration/music mixing, and SRT subtitle burning.
+episodes, Gateway-side Piper narration and estimated same-language SRT captions
+are now supported for multi-shot jobs when configured. Provider-generated
+dialogue/sound effects/music, translated or word-aligned subtitles, and distributed
+asset/job storage remain unimplemented; the local CLI also supports existing
+narration/music mixing and SRT subtitle burning.
 Actual-vs-estimated cost reconciliation for external providers remains unimplemented. The Gateway now persists per-shot checkpoints and
 automatically composes generated shot assets into a final silent MP4; the local
 `videogen compose` command can additionally mix existing narration/music and

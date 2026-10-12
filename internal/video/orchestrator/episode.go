@@ -16,6 +16,7 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/video"
 	"github.com/ali-shortcuts/nexaroute/internal/video/composer"
 	"github.com/ali-shortcuts/nexaroute/internal/video/cost"
+	"github.com/ali-shortcuts/nexaroute/internal/video/tts"
 )
 
 type EpisodeComposer interface {
@@ -347,10 +348,7 @@ func (o *Orchestrator) runEpisodeJob(ctx context.Context, j video.VideoJob) erro
 		if _, err := hex.DecodeString(asset.SHA256); err != nil {
 			return o.markNeedsManualAndError(ctx, j, fmt.Sprintf("shot %q output checksum is malformed", run.ShotID))
 		}
-		maxBytes := o.MaxAssetBytes
-		if maxBytes <= 0 {
-			maxBytes = 512 << 20
-		}
+		maxBytes := o.maxAssetBytes()
 		if asset.SizeBytes > maxBytes {
 			return o.markNeedsManualAndError(ctx, j, fmt.Sprintf("shot %q output exceeds the configured asset limit", run.ShotID))
 		}
@@ -575,9 +573,13 @@ func (o *Orchestrator) composeEpisode(ctx context.Context, j *video.VideoJob) er
 	if err != nil {
 		return err
 	}
+	subtitlePath, err := o.ensureSubtitleAsset(ctx, j)
+	if err != nil {
+		return err
+	}
 	_, err = o.Composer.ComposeEpisode(ctx, composer.EpisodeSpec{
-		Shots: clips, NarrationPath: narrationPath, OutputPath: outputPath,
-		Width: width, Height: height, FPS: fps,
+		Shots: clips, NarrationPath: narrationPath, SubtitlePath: subtitlePath,
+		OutputPath: outputPath, Width: width, Height: height, FPS: fps,
 	})
 	if err != nil {
 		if ctx.Err() != nil {
@@ -598,10 +600,7 @@ func (o *Orchestrator) composeEpisode(ctx context.Context, j *video.VideoJob) er
 	if err != nil {
 		return o.fail(ctx, *j, "episode composer reported success without an output file")
 	}
-	maxBytes := o.MaxAssetBytes
-	if maxBytes <= 0 {
-		maxBytes = 512 << 20
-	}
+	maxBytes := o.maxAssetBytes()
 	if info.Size() <= 0 || info.Size() > maxBytes {
 		return o.fail(ctx, *j, "composed episode is empty or exceeds the configured asset limit")
 	}
@@ -656,41 +655,58 @@ func (o *Orchestrator) ensureNarrationAsset(ctx context.Context, j *video.VideoJ
 	if text == "" {
 		return "", nil
 	}
+	maxBytes := o.maxAssetBytes()
+	recovered := false
+	if j.NarrationAsset == nil {
+		if asset := findEpisodeSourceAsset(j.SourceAssets, j.JobID+"-narration"); asset != nil {
+			j.NarrationAsset = asset
+			recovered = true
+		}
+	}
+	if j.NarrationAsset != nil {
+		if err := verifyNarrationAsset(*j.NarrationAsset, maxBytes); err == nil {
+			duration, durationErr := tts.WAVDuration(j.NarrationAsset.URI)
+			if durationErr == nil {
+				if err := checkNarrationDuration(*j, duration); err != nil {
+					return "", o.fail(ctx, *j, err.Error())
+				}
+				if recovered {
+					if err := o.Store.Update(ctx, *j); err != nil {
+						return "", fmt.Errorf("persist recovered narration checkpoint: %w", err)
+					}
+				}
+				return j.NarrationAsset.URI, nil
+			}
+		}
+		removeEpisodeSourceAsset(j, j.NarrationAsset.ID)
+		j.NarrationAsset = nil
+		// Caption timing is derived from the narration duration, so a
+		// regenerated WAV invalidates any previously saved SRT checkpoint.
+		removeEpisodeSourceAsset(j, j.JobID+"-subtitles")
+		j.SubtitleAsset = nil
+		if err := o.Store.Update(ctx, *j); err != nil {
+			return "", fmt.Errorf("persist invalid narration checkpoint removal: %w", err)
+		}
+	}
 	if o.Narrator == nil {
 		return "", o.markNeedsManualAndError(ctx, *j, "narration was requested but the configured local Piper narrator is unavailable")
 	}
 	if o.Assets == nil {
 		return "", o.markNeedsManualAndError(ctx, *j, "narration was requested but no asset sink is configured")
 	}
-	if j.NarrationAsset != nil {
-		if err := verifyNarrationAsset(*j.NarrationAsset, o.MaxAssetBytes); err == nil {
-			return j.NarrationAsset.URI, nil
-		}
-		// The persisted WAV checkpoint is missing or corrupt. Remove the stale
-		// reference and regenerate locally; provider video clips remain intact.
-		staleID := j.NarrationAsset.ID
-		j.NarrationAsset = nil
-		filtered := j.SourceAssets[:0]
-		for _, asset := range j.SourceAssets {
-			if asset.ID != staleID {
-				filtered = append(filtered, asset)
-			}
-		}
-		j.SourceAssets = filtered
-		if err := o.Store.Update(ctx, *j); err != nil {
-			return "", fmt.Errorf("persist invalid narration checkpoint removal: %w", err)
-		}
-	}
 	if err := o.Narrator.Synthesize(ctx, text, outputPath); err != nil {
 		return "", o.retryEpisodeComposition(ctx, j, "narration synthesis failed; generated shot checkpoints are preserved", fmt.Errorf("synthesize narration: %w", err))
 	}
 	info, err := os.Stat(outputPath)
-	maxBytes := o.MaxAssetBytes
-	if maxBytes <= 0 {
-		maxBytes = 512 << 20
-	}
 	if err != nil || !info.Mode().IsRegular() || info.Size() < 12 || info.Size() > maxBytes {
 		return "", o.markNeedsManualAndError(ctx, *j, "Piper did not produce a valid non-empty narration WAV within the asset limit")
+	}
+	duration, err := tts.WAVDuration(outputPath)
+	if err != nil {
+		return "", o.markNeedsManualAndError(ctx, *j, "Piper output is not a readable WAV with audio data")
+	}
+	if err := checkNarrationDuration(*j, duration); err != nil {
+		return "", o.fail(ctx, *j, err.Error())
 	}
 	data, err := os.ReadFile(outputPath)
 	if err != nil {
@@ -722,6 +738,106 @@ func (o *Orchestrator) ensureNarrationAsset(ctx context.Context, j *video.VideoJ
 	return saved.URI, nil
 }
 
+func (o *Orchestrator) ensureSubtitleAsset(ctx context.Context, j *video.VideoJob) (string, error) {
+	if strings.TrimSpace(j.Request.SubtitleLanguage) == "" {
+		return "", nil
+	}
+	if strings.TrimSpace(j.Request.NarrationText) == "" {
+		return "", o.markNeedsManualAndError(ctx, *j, "captions require narration text")
+	}
+	if j.NarrationAsset == nil {
+		return "", o.markNeedsManualAndError(ctx, *j, "captions require a persisted narration WAV checkpoint")
+	}
+	maxBytes := o.maxAssetBytes()
+	recovered := false
+	if j.SubtitleAsset == nil {
+		if asset := findEpisodeSourceAsset(j.SourceAssets, j.JobID+"-subtitles"); asset != nil {
+			j.SubtitleAsset = asset
+			recovered = true
+		}
+	}
+	if j.SubtitleAsset != nil {
+		if err := verifySubtitleAsset(*j.SubtitleAsset, maxBytes); err == nil {
+			if recovered {
+				if err := o.Store.Update(ctx, *j); err != nil {
+					return "", fmt.Errorf("persist recovered subtitle checkpoint: %w", err)
+				}
+			}
+			return j.SubtitleAsset.URI, nil
+		}
+		removeEpisodeSourceAsset(j, j.SubtitleAsset.ID)
+		j.SubtitleAsset = nil
+		if err := o.Store.Update(ctx, *j); err != nil {
+			return "", fmt.Errorf("persist invalid subtitle checkpoint removal: %w", err)
+		}
+	}
+	duration, err := tts.WAVDuration(j.NarrationAsset.URI)
+	if err != nil {
+		return "", o.markNeedsManualAndError(ctx, *j, "cannot determine narration duration for captions")
+	}
+	data := tts.BuildSRT(j.Request.NarrationText, duration)
+	if len(data) == 0 || int64(len(data)) > maxBytes {
+		return "", o.markNeedsManualAndError(ctx, *j, "caption generation produced an empty or oversized SRT file")
+	}
+	if o.Assets == nil {
+		return "", o.markNeedsManualAndError(ctx, *j, "captions were requested but no asset sink is configured")
+	}
+	asset := video.Asset{
+		ID: j.JobID + "-subtitles", Kind: "subtitle", Filename: "narration.srt",
+		ContentType: "application/x-subrip",
+		Metadata: map[string]string{
+			"project_id": j.ProjectID, "episode_id": j.EpisodeID,
+			"job_id": j.JobID, "asset_role": "episode_subtitles",
+			"subtitle_language": strings.TrimSpace(j.Request.SubtitleLanguage),
+			"alignment":         "estimated-by-text-length",
+		},
+	}
+	saved, err := o.Assets.Put(ctx, asset, data)
+	if err != nil {
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+		return "", o.retryEpisodeComposition(ctx, j, "subtitle persistence failed; generated shot and narration checkpoints are preserved", err)
+	}
+	if err := verifySubtitleAsset(saved, maxBytes); err != nil {
+		return "", o.markNeedsManualAndError(ctx, *j, "subtitle file was not persisted with valid URI, type, size, and SHA-256")
+	}
+	j.SubtitleAsset = &saved
+	addSourceAsset(j, saved)
+	if err := o.Store.Update(ctx, *j); err != nil {
+		return "", fmt.Errorf("subtitle file was persisted but checkpoint state could not be saved: %w", err)
+	}
+	return saved.URI, nil
+}
+
+func findEpisodeSourceAsset(assets []video.Asset, id string) *video.Asset {
+	for _, asset := range assets {
+		if asset.ID == id {
+			copy := asset
+			return &copy
+		}
+	}
+	return nil
+}
+
+func removeEpisodeSourceAsset(j *video.VideoJob, id string) {
+	filtered := j.SourceAssets[:0]
+	for _, asset := range j.SourceAssets {
+		if asset.ID != id {
+			filtered = append(filtered, asset)
+		}
+	}
+	j.SourceAssets = filtered
+}
+
+func checkNarrationDuration(j video.VideoJob, duration time.Duration) error {
+	requested := time.Duration(j.Request.DurationSeconds * float64(time.Second))
+	if requested > 0 && duration > requested+250*time.Millisecond {
+		return fmt.Errorf("narration exceeds episode duration: audio is %s but the episode is %s; shorten narration or increase shot durations", duration.Round(time.Millisecond), requested.Round(time.Millisecond))
+	}
+	return nil
+}
+
 func verifyNarrationAsset(asset video.Asset, maxBytes int64) error {
 	if strings.TrimSpace(asset.URI) == "" || !strings.HasPrefix(strings.ToLower(asset.ContentType), "audio/") ||
 		asset.SizeBytes < 12 || (maxBytes > 0 && asset.SizeBytes > maxBytes) || len(asset.SHA256) != 64 {
@@ -747,6 +863,31 @@ func verifyNarrationAsset(asset video.Asset, maxBytes int64) error {
 	return nil
 }
 
+func verifySubtitleAsset(asset video.Asset, maxBytes int64) error {
+	if strings.TrimSpace(asset.URI) == "" || !strings.EqualFold(strings.TrimSpace(asset.ContentType), "application/x-subrip") ||
+		asset.SizeBytes <= 0 || (maxBytes > 0 && asset.SizeBytes > maxBytes) || len(asset.SHA256) != 64 {
+		return errors.New("invalid subtitle asset metadata")
+	}
+	if _, err := hex.DecodeString(asset.SHA256); err != nil {
+		return errors.New("invalid subtitle asset checksum")
+	}
+	file, err := os.Open(asset.URI)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Size() != asset.SizeBytes {
+		return errors.New("subtitle file does not match persisted size")
+	}
+	hash := sha256.New()
+	n, err := io.Copy(hash, file)
+	if err != nil || n != asset.SizeBytes || hex.EncodeToString(hash.Sum(nil)) != asset.SHA256 {
+		return errors.New("subtitle file checksum does not match persisted metadata")
+	}
+	return nil
+}
+
 func (o *Orchestrator) retryEpisodeComposition(ctx context.Context, j *video.VideoJob, message string, cause error) error {
 	j.CompositionRetryCount++
 	j.LastError = message
@@ -761,6 +902,13 @@ func (o *Orchestrator) retryEpisodeComposition(ctx context.Context, j *video.Vid
 		return fmt.Errorf("%s: %w", message, cause)
 	}
 	return errors.New(message)
+}
+
+func (o *Orchestrator) maxAssetBytes() int64 {
+	if o.MaxAssetBytes > 0 {
+		return o.MaxAssetBytes
+	}
+	return 512 << 20
 }
 
 func episodeDimensions(r video.VideoRequest) (int, int) {

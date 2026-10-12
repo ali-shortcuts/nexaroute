@@ -311,3 +311,21 @@ func TestHandlerDownloadsOnlyStoredJobAssetsAndRedactsFilesystemPaths(t *testing
 		t.Fatalf("unauthorized download status=%d", unauthorized.Code)
 	}
 }
+
+func TestPublicJobSanitizesNarrationAndSubtitleAssetURIs(t *testing.T) {
+	job := video.VideoJob{
+		JobID:          "job-episode-1",
+		NarrationAsset: &video.Asset{ID: "job-episode-1-narration", URI: "/private/assets/narration.wav"},
+		SubtitleAsset:  &video.Asset{ID: "job-episode-1-subtitles", URI: "/private/assets/subtitles.srt"},
+	}
+	got := publicJob(job)
+	if got.NarrationAsset == nil || got.NarrationAsset.URI != publicAssetURI(job.JobID, job.NarrationAsset.ID) {
+		t.Fatalf("narration URI was not sanitized: %+v", got.NarrationAsset)
+	}
+	if got.SubtitleAsset == nil || got.SubtitleAsset.URI != publicAssetURI(job.JobID, job.SubtitleAsset.ID) {
+		t.Fatalf("subtitle URI was not sanitized: %+v", got.SubtitleAsset)
+	}
+	if strings.Contains(got.NarrationAsset.URI, "/private/") || strings.Contains(got.SubtitleAsset.URI, "/private/") {
+		t.Fatal("public job leaked private asset filesystem paths")
+	}
+}
