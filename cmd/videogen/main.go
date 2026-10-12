@@ -42,7 +42,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	piperBin := fs.String("piper-bin", "piper", "Piper executable path (narrate only)")
 	id := fs.String("id", "", "video job ID (job-get/job-cancel/asset-download)")
 	assetID := fs.String("asset-id", "", "stored asset ID (asset-download only)")
-	outPath := fs.String("out", "", "local output file (asset-download only)")
+	outPath := fs.String("out", "", "local output file (asset-download/narrate only)")
 	dryRun := fs.Bool("dry-run", false, "ask the gateway to estimate only; do not submit a provider job")
 	if err := fs.Parse(args[1:]); err != nil {
 		return 2
