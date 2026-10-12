@@ -222,3 +222,38 @@ func TestRuntimeComfyUIProviderEndToEndPersistsPlayableVideoAsset(t *testing.T) 
 	}
 	t.Fatal("ComfyUI job did not complete and persist the output video")
 }
+
+func TestRuntimePiperConfigurationValidatesLocalDependencies(t *testing.T) {
+	const tokenEnv = "NEXAROUTE_TEST_VIDEO_PIPER_TOKEN"
+	t.Setenv(tokenEnv, "test-token")
+	root := t.TempDir()
+	modelDir := filepath.Join(root, "models")
+	if err := os.MkdirAll(modelDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	modelPath := filepath.Join(modelDir, "voice.onnx")
+	if err := os.WriteFile(modelPath, []byte("test voice model"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	piperPath := filepath.Join(root, "piper")
+	if err := os.WriteFile(piperPath, []byte("#!/bin/sh\nexit 0\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	cfg := video.Config{
+		Enabled: true, AuthTokenEnv: tokenEnv, DevelopmentFakeProvider: true,
+		PiperEnabled: true, PiperBinary: piperPath, PiperModelPath: "models/voice.onnx",
+	}
+	r, err := runtime.New(cfg, root)
+	if err != nil {
+		t.Fatalf("runtime with valid local Piper dependencies: %v", err)
+	}
+	if r.Orchestrator.Narrator == nil {
+		t.Fatal("Piper narrator was not wired into the orchestrator")
+	}
+	r.Close()
+
+	cfg.PiperModelPath = "models/missing.onnx"
+	if _, err := runtime.New(cfg, root); err == nil || !strings.Contains(err.Error(), "voice model") {
+		t.Fatalf("missing voice model error=%v", err)
+	}
+}
