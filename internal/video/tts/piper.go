@@ -42,7 +42,7 @@ func NewPiper(binary, modelPath string) (*Piper, error) {
 	}
 	info, err := os.Stat(modelPath)
 	if err != nil || !info.Mode().IsRegular() {
-		return nil, errors.New("Piper model must be an existing regular file")
+		return nil, errors.New("Piper voice model must be an existing regular file")
 	}
 	configPath := modelPath + ".json"
 	configInfo, err := os.Stat(configPath)
