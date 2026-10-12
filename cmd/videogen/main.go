@@ -14,6 +14,13 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/video/composer"
 )
 
+type renderManifest struct {
+	composer.EpisodeSpec
+	NarrationTextPath   string `json:"narration_text_path,omitempty"`
+	PiperModelPath      string `json:"piper_model_path,omitempty"`
+	NarrationOutputPath string `json:"narration_output_path,omitempty"`
+}
+
 var version = "dev"
 
 func main() {
@@ -53,15 +60,58 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	switch command {
-	case "providers", "create", "job-get", "job-cancel", "asset-download", "compose", "narrate":
+	case "providers", "create", "job-get", "job-cancel", "asset-download", "compose", "narrate", "render":
 	default:
 		fmt.Fprintf(stderr, "unknown command %q\n", command)
 		printUsage(stderr)
 		return 2
 	}
-	if (command == "create" || command == "compose") && strings.TrimSpace(*file) == "" {
+	if (command == "create" || command == "compose" || command == "render") && strings.TrimSpace(*file) == "" {
 		fmt.Fprintf(stderr, "%s requires --file\n", command)
 		return 2
+	}
+	if command == "render" {
+		data, err := os.ReadFile(*file)
+		if err != nil {
+			fmt.Fprintf(stderr, "render: read episode manifest: %v\n", err)
+			return 1
+		}
+		var spec renderManifest
+		if err := json.Unmarshal(data, &spec); err != nil {
+			fmt.Fprintf(stderr, "render: decode episode manifest: %v\n", err)
+			return 1
+		}
+		hasNarrationText := strings.TrimSpace(spec.NarrationTextPath) != ""
+		hasPiperModel := strings.TrimSpace(spec.PiperModelPath) != ""
+		hasNarrationOutput := strings.TrimSpace(spec.NarrationOutputPath) != ""
+		if hasNarrationText || hasPiperModel || hasNarrationOutput {
+			if !hasNarrationText || !hasPiperModel || !hasNarrationOutput {
+				fmt.Fprintln(stderr, "render: narration_text_path, piper_model_path, and narration_output_path must be provided together")
+				return 2
+			}
+			if strings.TrimSpace(spec.NarrationPath) != "" {
+				fmt.Fprintln(stderr, "render: use either narration_path or local Piper synthesis fields, not both")
+				return 2
+			}
+			if err := videoaudio.SynthesizePiper(context.Background(), videoaudio.PiperOptions{Binary: *piperBin, TextPath: spec.NarrationTextPath, ModelPath: spec.PiperModelPath, Output: spec.NarrationOutputPath}); err != nil {
+				fmt.Fprintf(stderr, "render: narration synthesis failed: %v\n", err)
+				return 1
+			}
+			spec.NarrationPath = spec.NarrationOutputPath
+		}
+		runner := composer.New(defaultFFmpegBinary(), "")
+		result, err := runner.ComposeEpisode(context.Background(), spec.EpisodeSpec)
+		if err != nil {
+			fmt.Fprintf(stderr, "render: compose episode: %v\n", err)
+			return 1
+		}
+		enc := json.NewEncoder(stdout)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(map[string]any{"narration_path": spec.NarrationPath, "composition": result}); err != nil {
+			fmt.Fprintf(stderr, "encode render result: %v\n", err)
+			return 1
+		}
+		return 0
 	}
 	if command == "narrate" {
 		if strings.TrimSpace(*textPath) == "" || strings.TrimSpace(*modelPath) == "" || strings.TrimSpace(*outPath) == "" {
@@ -183,11 +233,11 @@ func defaultBaseURL() string {
 }
 
 func printUsage(w io.Writer) {
-	fmt.Fprintln(w, "usage: videogen providers|create|job-get|job-cancel|asset-download|compose|narrate [flags]")
+	fmt.Fprintln(w, "usage: videogen providers|create|job-get|job-cancel|asset-download|compose|narrate|render [flags]")
 	fmt.Fprintln(w, "common flags: --base-url URL --token-env ENV_NAME")
 	fmt.Fprintln(w, "create flags: --file REQUEST.json [--dry-run]")
 	fmt.Fprintln(w, "job-get/job-cancel flags: --id JOB_ID")
-	fmt.Fprintln(w, "narrate flags: --text-file story.txt --model voice.onnx --out narration.wav [--piper-bin piper]")
+	fmt.Fprintln(w, "narrate flags: --text-file story.txt --model voice.onnx --out narration.wav [--piper-bin piper]\n	fmt.Fprintln(w, "render flags: --file EPISODE.json [--piper-bin piper] (local narration + composition)")")
 	fmt.Fprintln(w, "asset-download flags: --id JOB_ID --asset-id ASSET_ID --out FILE")
 	fmt.Fprintln(w, "compose flags: --file EPISODE.json (local FFmpeg; no Gateway token required)")
 }
