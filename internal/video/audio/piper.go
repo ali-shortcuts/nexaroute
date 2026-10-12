@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 const (
@@ -78,7 +79,7 @@ func SynthesizePiper(ctx context.Context, opts PiperOptions) error {
 		return errors.New("narration text is empty")
 	}
 	// Reject binary/non-UTF-8 input instead of passing arbitrary bytes to TTS.
-	if !bytes.Equal([]byte(string(text)), text) || bytes.ContainsRune(text, '\u0000') {
+	if !utf8.Valid(text) || bytes.ContainsRune(text, '\u0000') {
 		return errors.New("narration text must be UTF-8 text without NUL bytes")
 	}
 
