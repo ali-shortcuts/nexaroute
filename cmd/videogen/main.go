@@ -186,7 +186,8 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "usage: videogen providers|create|job-get|job-cancel|asset-download|compose|narrate [flags]")
 	fmt.Fprintln(w, "common flags: --base-url URL --token-env ENV_NAME")
 	fmt.Fprintln(w, "create flags: --file REQUEST.json [--dry-run]")
-	fmt.Fprintln(w, "job-get/job-cancel flags: --id JOB_ID")\n\tfmt.Fprintln(w, "narrate flags: --text-file story.txt --model voice.onnx --out narration.wav [--piper-bin piper]")
+	fmt.Fprintln(w, "job-get/job-cancel flags: --id JOB_ID")
+	fmt.Fprintln(w, "narrate flags: --text-file story.txt --model voice.onnx --out narration.wav [--piper-bin piper]")
 	fmt.Fprintln(w, "asset-download flags: --id JOB_ID --asset-id ASSET_ID --out FILE")
 	fmt.Fprintln(w, "compose flags: --file EPISODE.json (local FFmpeg; no Gateway token required)")
 }
