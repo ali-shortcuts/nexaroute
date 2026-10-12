@@ -59,7 +59,11 @@ func (s *episodeTestSink) Put(_ context.Context, asset video.Asset, data []byte)
 	if name == "" {
 		name = "asset"
 	}
-	ext := filepath.Ext(asset.Filename)\n\tif ext == "" {\n\t\text = ".mp4"\n\t}\n\tpath := filepath.Join(s.root, name+ext)
+	ext := filepath.Ext(asset.Filename)
+	if ext == "" {
+		ext = ".mp4"
+	}
+	path := filepath.Join(s.root, name+ext)
 	if err := os.WriteFile(path, data, 0600); err != nil {
 		return video.Asset{}, err
 	}
