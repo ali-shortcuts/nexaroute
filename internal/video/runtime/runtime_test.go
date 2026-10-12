@@ -235,6 +235,9 @@ func TestRuntimePiperConfigurationValidatesLocalDependencies(t *testing.T) {
 	if err := os.WriteFile(modelPath, []byte("test voice model"), 0600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(modelPath+".json", []byte("{}"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	piperPath := filepath.Join(root, "piper")
 	if err := os.WriteFile(piperPath, []byte("#!/bin/sh\nexit 0\n"), 0700); err != nil {
 		t.Fatal(err)
