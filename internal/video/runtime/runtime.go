@@ -11,6 +11,7 @@ import (
 
 	"github.com/ali-shortcuts/nexaroute/internal/video"
 	"github.com/ali-shortcuts/nexaroute/internal/video/api"
+	"github.com/ali-shortcuts/nexaroute/internal/video/audio"
 	"github.com/ali-shortcuts/nexaroute/internal/video/composer"
 	"github.com/ali-shortcuts/nexaroute/internal/video/cost"
 	"github.com/ali-shortcuts/nexaroute/internal/video/orchestrator"
@@ -95,6 +96,25 @@ func New(cfg video.Config, baseDir string) (*Runtime, error) {
 	if err != nil {
 		return nil, fmt.Errorf("video asset store: %w", err)
 	}
+	var narrator orchestrator.Narrator
+	if cfg.PiperEnabled {
+		modelPath := strings.TrimSpace(cfg.PiperModelPath)
+		if modelPath == "" {
+			return nil, errors.New("video.piper_model_path is required when video.piper_enabled is true")
+		}
+		if !filepath.IsAbs(modelPath) {
+			modelPath = filepath.Join(baseDir, modelPath)
+		}
+		binary := strings.TrimSpace(cfg.PiperBinary)
+		if binary == "" {
+			binary = "piper"
+		}
+		piper := audio.Piper{Binary: binary, ModelPath: modelPath}
+		if err := piper.Validate(); err != nil {
+			return nil, fmt.Errorf("initialize local Piper narrator: %w", err)
+		}
+		narrator = piper
+	}
 	ledger := &cost.Ledger{}
 	ffmpegBinary := strings.TrimSpace(os.Getenv("NEXAROUTE_FFMPEG"))
 	if ffmpegBinary == "" {
@@ -102,7 +122,7 @@ func New(cfg video.Config, baseDir string) (*Runtime, error) {
 	}
 	orch := &orchestrator.Orchestrator{
 		Store: store, Queue: q, Providers: reg, Ledger: ledger, Assets: assetSink,
-		Composer: composer.New(ffmpegBinary, ""), MaxAssetBytes: maxBytes,
+		Composer: composer.New(ffmpegBinary, ""), Narrator: narrator, MaxAssetBytes: maxBytes,
 	}
 	pool := queue.NewWorkerPool(q, cfg.Workers, orch.RunJob)
 	h := &api.Handler{Orch: orch, Store: store, Providers: reg, Assets: assetSink, RequireAuth: true, BearerToken: token}
