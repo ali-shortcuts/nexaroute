@@ -16,12 +16,14 @@ Run the installer as your normal desktop user, **not with `sudo bash`**. It uses
 sudo only when installing the executable to `/usr/local/bin`, which is already
 in the default PATH. It never starts NexaRoute or installs/enables a service.
 
-The installer downloads exactly `nexaroute-linux-amd64` or
-`nexaroute-linux-arm64` plus `SHA256SUMS` over HTTPS, verifies the selected
-asset's SHA256, and atomically replaces the executable. Unsupported platforms,
+The installer downloads the matching gateway binary (`nexaroute-linux-amd64`
+or `nexaroute-linux-arm64`) and Video CLI binary
+(`nexaroute-videogen-linux-amd64` or `nexaroute-videogen-linux-arm64`) plus
+`SHA256SUMS` over HTTPS, verifies both selected assets, stages both files, and
+atomically replaces `nexaroute` and `videogen`. Unsupported platforms,
 failed downloads, missing/duplicate/malformed checksum entries, checksum
 mismatches, and unwritable paths fail clearly. A failed verification never
-replaces the installed executable.
+replaces either installed executable.
 
 SHA256 verifies integrity against the manifest, **not an independent
 signature**. The installer and manifest share the GitHub Release trust
@@ -82,7 +84,8 @@ not delete `.lock` files while a process is running.
 
 Default: `${XDG_CONFIG_HOME:-$HOME/.config}/nexaroute/config.json`.
 The installer creates the private directory but never seeds or overwrites
-configuration. The first run creates a clean config with **no providers/keys**.
+configuration. It installs both `nexaroute` and `videogen` into the selected
+binary directory; the Video CLI uses the same release version as the Gateway. The first run creates a clean config with **no providers/keys**.
 
 Priority: `-config /absolute/path/config.json` -> `NEXAROUTE_CONFIG` -> the
 default. Use absolute paths in environment variables. Logs are bounded/rotated
@@ -106,7 +109,7 @@ accidentally run an old and a new installation against separate copies.
 
 ## Upgrade / reinstall / uninstall
 
-Run the same installer again. It atomically replaces only the executable and
+Run the same installer again. It atomically replaces both executables and
 leaves config unchanged, including when the old process is running. Stop and
 restart NexaRoute to use the new version; running processes keep their old
 executable. Check `command -v nexaroute` and `nexaroute -version` if multiple
