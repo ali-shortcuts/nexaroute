@@ -16,6 +16,19 @@ import (
 
 var errNarrationExceedsEpisodeDuration = errors.New("narration exceeds episode duration")
 
+func episodeNarrationText(r video.VideoRequest) string {
+	if parent := strings.TrimSpace(r.NarrationText); parent != "" {
+		return parent
+	}
+	segments := make([]string, 0, len(r.ShotPlan))
+	for _, shot := range r.ShotPlan {
+		if segment := strings.TrimSpace(shot.NarrationSegment); segment != "" {
+			segments = append(segments, segment)
+		}
+	}
+	return strings.TrimSpace(strings.Join(segments, "\n"))
+}
+
 func (o *Orchestrator) prepareNarration(ctx context.Context, j *video.VideoJob, tempDir string) (string, string, error) {
 	text := episodeNarrationText(j.Request)
 	if text == "" {
