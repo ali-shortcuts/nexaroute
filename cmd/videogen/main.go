@@ -225,7 +225,6 @@ func run(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-
 func sameCleanPath(a, b string) bool {
 	absA, errA := filepath.Abs(strings.TrimSpace(a))
 	absB, errB := filepath.Abs(strings.TrimSpace(b))
