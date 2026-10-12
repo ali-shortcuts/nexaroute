@@ -75,7 +75,10 @@ func SynthesizePiper(ctx context.Context, opts PiperOptions) error {
 	if err != nil {
 		return fmt.Errorf("read narration text: %w", err)
 	}
-	if len(text) > maxNarrationTextBytes {\n\t\treturn fmt.Errorf("narration text exceeds %d bytes", maxNarrationTextBytes)\n\t}\n\tif len(bytes.TrimSpace(text)) == 0 {
+	if len(text) > maxNarrationTextBytes {
+		return fmt.Errorf("narration text exceeds %d bytes", maxNarrationTextBytes)
+	}
+	if len(bytes.TrimSpace(text)) == 0 {
 		return errors.New("narration text is empty")
 	}
 	// Reject binary/non-UTF-8 input instead of passing arbitrary bytes to TTS.
