@@ -562,9 +562,14 @@ injector, not in a literal config value. The example configuration is
   "comfyui_fps_node_id": "",
   "comfyui_fps_input": "frame_rate",
   "comfyui_seed_node_id": "",
-  "comfyui_seed_input": "noise_seed"
+  "comfyui_seed_input": "noise_seed",
+  "piper_enabled": false,
+  "piper_binary": "piper",
+  "piper_model_path": ""
 }
 ```
+
+For local narration, set `piper_enabled` to `true`, `piper_binary` to the installed Piper CLI path (or `piper` if it is on `PATH`), and `piper_model_path` to an existing `.onnx` voice model. Its matching `.onnx.json` sidecar must sit beside it. Model paths may be relative to the gateway configuration directory. Piper is optional; when disabled, requests containing narration text or subtitle intent fail before any video provider is submitted.
 
 When using the local ComfyUI adapter, set `comfyui_enabled` to `true`, point `comfyui_base_url` to the local ComfyUI API (default `http://127.0.0.1:8188`), and set `comfyui_workflow_path` to an API-format workflow JSON file readable by the gateway process. Fill the required prompt, width, height, and frame-count node IDs to match that workflow. Negative-prompt, FPS, and seed node IDs are optional; their input names default to the values shown above. The adapter currently supports text-to-video only and rejects requests asking it to synthesize narration, audio, dialogue, or subtitles. Plain HTTP ComfyUI endpoints are restricted to loopback; use HTTPS for remote endpoints.
 

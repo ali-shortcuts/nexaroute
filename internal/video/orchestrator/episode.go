@@ -21,8 +21,8 @@ type EpisodeComposer interface {
 }
 
 func validateShotPlanRequest(r video.VideoRequest, p video.VideoProvider, caps video.Capabilities) (video.VideoRequest, video.CostEstimate, error) {
-	if len(r.ShotPlan) < 2 {
-		return r, video.CostEstimate{}, errors.New("shot-plan validation requires at least two shots")
+	if len(r.ShotPlan) < 1 {
+		return r, video.CostEstimate{}, errors.New("episode validation requires at least one shot")
 	}
 	selectedModel := strings.TrimSpace(r.ModelPreference)
 	seen := make(map[string]struct{}, len(r.ShotPlan))
@@ -45,7 +45,7 @@ func validateShotPlanRequest(r video.VideoRequest, p video.VideoProvider, caps v
 			}
 			selectedModel = shot.Model
 		}
-		request := buildShotRequest(r, shot, i)
+		request := visualOnlyRequest(buildShotRequest(r, shot, i))
 		request.ProviderPreference = p.ID()
 		request.ModelPreference = selectedModel
 		normalized, err := validateProviderRequest(request, caps)
@@ -148,7 +148,7 @@ func (o *Orchestrator) runEpisodeJob(ctx context.Context, j video.VideoJob) erro
 	if j.State == video.StateNeedsManualAction {
 		return errors.New("video episode requires manual action")
 	}
-	if len(j.Request.ShotPlan) < 2 || len(j.ShotExecutions) != len(j.Request.ShotPlan) {
+	if len(j.Request.ShotPlan) < 1 || len(j.ShotExecutions) != len(j.Request.ShotPlan) {
 		return o.markNeedsManualAndError(ctx, j, "multi-shot job has no complete durable shot checkpoint list")
 	}
 	if o.Assets == nil || o.Composer == nil {
@@ -242,7 +242,7 @@ func (o *Orchestrator) runEpisodeJob(ctx context.Context, j video.VideoJob) erro
 				}
 				capsLoaded = true
 			}
-			request := buildShotRequest(j.Request, *shot, i)
+			request := visualOnlyRequest(buildShotRequest(j.Request, *shot, i))
 			request.ProviderPreference = j.Provider
 			request.ModelPreference = j.Model
 			normalized, err := validateProviderRequest(request, caps)
@@ -553,8 +553,8 @@ func (o *Orchestrator) composeEpisode(ctx context.Context, j *video.VideoJob) er
 		}
 		clips = append(clips, shot.OutputAsset.URI)
 	}
-	if len(clips) < 2 {
-		return o.markNeedsManualAndError(ctx, *j, "episode composition requires at least two persisted shot assets")
+	if len(clips) < 1 {
+		return o.markNeedsManualAndError(ctx, *j, "episode composition requires at least one persisted shot asset")
 	}
 	width, height := episodeDimensions(j.Request)
 	fps := j.Request.FPS
@@ -567,8 +567,28 @@ func (o *Orchestrator) composeEpisode(ctx context.Context, j *video.VideoJob) er
 	}
 	defer os.RemoveAll(tempDir)
 	outputPath := filepath.Join(tempDir, "episode.mp4")
+	narrationPath, subtitlePath, narrationErr := o.prepareNarration(ctx, j, tempDir)
+	if narrationErr != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if errors.Is(narrationErr, errNarrationExceedsEpisodeDuration) {
+			return o.fail(ctx, *j, "narration exceeds episode duration; shorten the text or increase shot durations")
+		}
+		j.CompositionRetryCount++
+		j.LastError = "narration preparation failed; generated shot checkpoints are preserved"
+		if saveErr := o.Store.Update(ctx, *j); saveErr != nil {
+			return fmt.Errorf("narration preparation failed and checkpoint could not be saved: %w", saveErr)
+		}
+		if j.CompositionRetryCount >= 3 {
+			return o.fail(ctx, *j, "narration preparation failed after repeated attempts")
+		}
+		o.scheduleRetry(ctx, *j, o.pollInterval())
+		return fmt.Errorf("prepare episode narration: %w", narrationErr)
+	}
 	_, err = o.Composer.ComposeEpisode(ctx, composer.EpisodeSpec{
 		Shots: clips, OutputPath: outputPath, Width: width, Height: height, FPS: fps,
+		NarrationPath: narrationPath, SubtitlePath: subtitlePath,
 	})
 	if err != nil {
 		if ctx.Err() != nil {
