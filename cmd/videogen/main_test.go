@@ -106,9 +106,9 @@ func TestRenderCommandSynthesizesNarrationAndComposesWithoutGatewayToken(t *test
 	narration := filepath.Join(root, "narration.wav")
 	output := filepath.Join(root, "episode.mp4")
 	for path, data := range map[string][]byte{
-		textPath: []byte("Noora tells the story of Persepolis."),
+		textPath:  []byte("Noora tells the story of Persepolis."),
 		modelPath: []byte("test model"),
-		shot: []byte("input clip"),
+		shot:      []byte("input clip"),
 	} {
 		if err := os.WriteFile(path, data, 0600); err != nil {
 			t.Fatal(err)
@@ -127,7 +127,7 @@ func TestRenderCommandSynthesizesNarrationAndComposesWithoutGatewayToken(t *test
 
 	manifestPath := filepath.Join(root, "render.json")
 	spec := renderManifest{
-		EpisodeSpec: composer.EpisodeSpec{
+		EpisodeSpec:          composer.EpisodeSpec{
 			Shots: []string{shot}, OutputPath: output, Width: 640, Height: 360, FPS: 24,
 		},
 		NarrationTextPath:   textPath,
