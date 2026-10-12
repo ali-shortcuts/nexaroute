@@ -39,7 +39,6 @@ func run(args []string, stdout, stderr io.Writer) int {
 	file := fs.String("file", "", "JSON input file (create: VideoRequest; compose: EpisodeSpec)")
 	textPath := fs.String("text-file", "", "UTF-8 narration text file (narrate only)")
 	modelPath := fs.String("model", "", "local Piper ONNX voice model path (narrate only)")
-	outputPath := fs.String("out", "", "output path (asset-download/narrate only)")
 	piperBin := fs.String("piper-bin", "piper", "Piper executable path (narrate only)")
 	id := fs.String("id", "", "video job ID (job-get/job-cancel/asset-download)")
 	assetID := fs.String("asset-id", "", "stored asset ID (asset-download only)")
@@ -64,7 +63,19 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "%s requires --file\n", command)
 		return 2
 	}
-	if command == "narrate" {\n\t\tif strings.TrimSpace(*textPath) == "" || strings.TrimSpace(*modelPath) == "" || strings.TrimSpace(*outputPath) == "" {\n\t\t\tfmt.Fprintln(stderr, "narrate requires --text-file, --model, and --out")\n\t\t\treturn 2\n\t\t}\n\t\tif err := videoaudio.SynthesizePiper(context.Background(), videoaudio.PiperOptions{Binary: *piperBin, TextPath: *textPath, ModelPath: *modelPath, Output: *outputPath}); err != nil {\n\t\t\tfmt.Fprintf(stderr, "narrate: %v\\n", err)\n\t\t\treturn 1\n\t\t}\n\t\tfmt.Fprintf(stdout, "Narration written to %s\\n", *outputPath)\n\t\treturn 0\n\t}\n\tif command == "compose" {
+	if command == "narrate" {
+		if strings.TrimSpace(*textPath) == "" || strings.TrimSpace(*modelPath) == "" || strings.TrimSpace(*outPath) == "" {
+			fmt.Fprintln(stderr, "narrate requires --text-file, --model, and --out")
+			return 2
+		}
+		if err := videoaudio.SynthesizePiper(context.Background(), videoaudio.PiperOptions{Binary: *piperBin, TextPath: *textPath, ModelPath: *modelPath, Output: *outPath}); err != nil {
+			fmt.Fprintf(stderr, "narrate: %v\n", err)
+			return 1
+		}
+		fmt.Fprintf(stdout, "Narration written to %s\n", *outPath)
+		return 0
+	}
+	if command == "compose" {
 		data, err := os.ReadFile(*file)
 		if err != nil {
 			fmt.Fprintf(stderr, "compose: read episode manifest: %v\n", err)
