@@ -71,7 +71,9 @@ if os.environ.get("TEST_DOWNLOAD_FAIL"): sys.exit(22)
 shutil.copyfile(pathlib.Path(os.environ["TEST_FIXTURE"]) / url.rsplit("/", 1)[1], args[args.index("-o")+1])
 ''')
     env = {k: v for k, v in os.environ.items() if not k.startswith("NEXAROUTE_")}
+    # uname reports x86_64/aarch64, but release assets are named amd64/arm64.
     host_arch = "arm64" if platform.machine() in ("aarch64", "arm64") else "x86_64"
+    asset_arch = "arm64" if host_arch == "arm64" else "amd64"
     env.update(HOME=str(home), XDG_CONFIG_HOME=str(home / ".config"),
                PATH=f"{dest}:{tools}:/usr/local/bin:/usr/bin:/bin", NEXAROUTE_INSTALL_DIR=str(dest),
                TEST_FIXTURE=str(fixture), TEST_URL_LOG=str(tmp / "downloads"), DISPLAY="", WAYLAND_DISPLAY="",
@@ -179,8 +181,8 @@ shutil.copyfile(pathlib.Path(os.environ["TEST_FIXTURE"]) / url.rsplit("/", 1)[1]
             request(base + "admin/api/" + route, "POST", body)
         original = cfg.read_bytes()
         # A distinguishable valid ELF fixture simulates a later release.
-        upgrade_gateway = fixture / f"nexaroute-linux-{host_arch}"
-        upgrade_videogen = fixture / f"nexaroute-videogen-linux-{host_arch}"
+        upgrade_gateway = fixture / f"nexaroute-linux-{asset_arch}"
+        upgrade_videogen = fixture / f"nexaroute-videogen-linux-{asset_arch}"
         with open(upgrade_gateway, "ab") as f:
             f.write(b"\nrelease-upgrade-fixture\n")
         with open(upgrade_videogen, "ab") as f:
@@ -188,7 +190,7 @@ shutil.copyfile(pathlib.Path(os.environ["TEST_FIXTURE"]) / url.rsplit("/", 1)[1]
         import hashlib
         upgrade_sum = hashlib.sha256(upgrade_gateway.read_bytes()).hexdigest()
         video_upgrade_sum = hashlib.sha256(upgrade_videogen.read_bytes()).hexdigest()
-        (fixture / "SHA256SUMS").write_text(upgrade_sum + f"  nexaroute-linux-{host_arch}\n" + video_upgrade_sum + f"  nexaroute-videogen-linux-{host_arch}\n")
+        (fixture / "SHA256SUMS").write_text(upgrade_sum + f"  nexaroute-linux-{asset_arch}\n" + video_upgrade_sum + f"  nexaroute-videogen-linux-{asset_arch}\n")
         # Upgrade is an atomic executable replacement even while running.
         install({"NEXAROUTE_VERSION": "v0.19.0"})
         install()
