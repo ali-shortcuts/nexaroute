@@ -46,13 +46,27 @@ func (s *Server) countTokens(w http.ResponseWriter, r *http.Request) {
 		}
 		req = s.prepareRequirement(req, r, inspection.BodySessionKey)
 		req = s.applyPrivacyRequirement(req, r)
-		_, candidates := s.routeSnapshot(req)
+		_, candidates, resolvedRoute, resolveErr := s.candidatesForRequirement(req, "anthropic")
+		if resolveErr != nil {
+			if strings.Contains(resolveErr.Error(), "disabled") {
+				anthropicErrorJSON(w, http.StatusNotFound, resolveErr.Error())
+			} else {
+				anthropicErrorJSON(w, http.StatusBadRequest, resolveErr.Error())
+			}
+			return
+		}
+		reqEligible := req
+		if resolvedRoute != nil {
+			// A virtual public model is resolved into its candidate pool before
+			// checking that the chosen deployment is still eligible.
+			reqEligible.Model = ""
+		}
 		forward := copySelectedRequestHeaders(r)
 		for _, c := range candidates {
 			if c.Deployment.ProviderType != "anthropic_compatible" {
 				continue
 			}
-			fresh, a, ok := s.currentRouteCandidate(c.Deployment.ID, req)
+			fresh, a, ok := s.currentRouteCandidate(c.Deployment.ID, reqEligible)
 			if !ok || fresh.Deployment.ProviderType != "anthropic_compatible" {
 				continue
 			}

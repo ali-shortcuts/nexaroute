@@ -23,6 +23,11 @@ func privacyMockUpstream(hits *atomic.Int64, fail *atomic.Bool) *httptest.Server
 			_, _ = io.WriteString(w, `{"error":{"message":"boom","type":"server_error"}}`)
 			return
 		}
+		if strings.HasSuffix(r.URL.Path, "/count_tokens") {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"input_tokens":7}`)
+			return
+		}
 		if strings.HasSuffix(r.URL.Path, "/messages") {
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = io.WriteString(w, `{"id":"msg","type":"message","role":"assistant","content":[{"type":"text","text":"ok"}],"model":"m","stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":1,"output_tokens":1}}`)
@@ -85,11 +90,13 @@ func newPrivacyLeakGatewayWithProviderType(t *testing.T, routePrivacy string, vk
 	caps := config.Capabilities{Streaming: true, Tools: true}
 	cfg.Providers = []config.ProviderConfig{
 		{ID: "pa", Name: "ProviderA", Type: providerType, BaseURL: upA.URL, AuthMode: "none", Enabled: true,
-			DataHandling: config.DataHandlingConfig{TrainsOnData: "yes"},
-			Models:       []config.ModelConfig{{ID: "m", Model: "phys-a", Enabled: true, Weight: 1, Capabilities: caps}}},
+			DataHandling:    config.DataHandlingConfig{TrainsOnData: "yes"},
+			CountTokensPath: "/v1/messages/count_tokens",
+			Models:          []config.ModelConfig{{ID: "m", Model: "phys-a", Enabled: true, Weight: 1, Capabilities: caps}}},
 		{ID: "pb", Name: "ProviderB", Type: providerType, BaseURL: upB.URL, AuthMode: "none", Enabled: true,
-			DataHandling: config.DataHandlingConfig{TrainsOnData: "no"},
-			Models:       []config.ModelConfig{{ID: "m", Model: "phys-b", Enabled: true, Weight: 1, Capabilities: caps}}},
+			DataHandling:    config.DataHandlingConfig{TrainsOnData: "no"},
+			CountTokensPath: "/v1/messages/count_tokens",
+			Models:          []config.ModelConfig{{ID: "m", Model: "phys-b", Enabled: true, Weight: 1, Capabilities: caps}}},
 	}
 	if vkPlain != "" {
 		cfg.ClientAuth.Enabled = true
@@ -314,24 +321,34 @@ func TestPrivacyP2ConcurrentLeakRace(t *testing.T) {
 
 func TestPrivacyP2EveryIngressAndProviderProtocolExcludesTrainingProvider(t *testing.T) {
 	ingresses := []struct {
-		name string
-		path string
-		body string
+		name          string
+		path          string
+		body          string
+		providerTypes []string
 	}{
 		{
-			name: "openai_chat",
-			path: "/v1/chat/completions",
-			body: `{"model":"nexa-private","messages":[{"role":"user","content":"privacy-canary-openai"}]}`,
+			name:          "openai_chat",
+			path:          "/v1/chat/completions",
+			body:          `{"model":"nexa-private","messages":[{"role":"user","content":"privacy-canary-openai"}]}`,
+			providerTypes: []string{"openai_compatible", "anthropic_compatible"},
 		},
 		{
-			name: "anthropic_messages",
-			path: "/v1/messages",
-			body: `{"model":"nexa-private","max_tokens":16,"messages":[{"role":"user","content":"privacy-canary-anthropic"}]}`,
+			name:          "anthropic_messages",
+			path:          "/v1/messages",
+			body:          `{"model":"nexa-private","max_tokens":16,"messages":[{"role":"user","content":"privacy-canary-anthropic"}]}`,
+			providerTypes: []string{"openai_compatible", "anthropic_compatible"},
 		},
 		{
-			name: "openai_responses",
-			path: "/v1/responses",
-			body: `{"model":"nexa-private","input":"privacy-canary-responses"}`,
+			name:          "openai_responses",
+			path:          "/v1/responses",
+			body:          `{"model":"nexa-private","input":"privacy-canary-responses"}`,
+			providerTypes: []string{"openai_compatible", "anthropic_compatible"},
+		},
+		{
+			name:          "anthropic_count_tokens",
+			path:          "/v1/messages/count_tokens",
+			body:          `{"model":"nexa-private","messages":[{"role":"user","content":"privacy-canary-count-tokens"}]}`,
+			providerTypes: []string{"anthropic_compatible"},
 		},
 	}
 	privacySources := []struct {
@@ -343,21 +360,23 @@ func TestPrivacyP2EveryIngressAndProviderProtocolExcludesTrainingProvider(t *tes
 		{name: "route_profile", routePrivacy: "no_training"},
 		{name: "virtual_key", vkRequirePrivacy: "no_training", vkPlain: "nrk_matrix_privacy_test_key"},
 	}
-	providerTypes := []string{"openai_compatible", "anthropic_compatible"}
 	for _, source := range privacySources {
-		for _, providerType := range providerTypes {
-			for _, ingress := range ingresses {
+		for _, ingress := range ingresses {
+			for _, providerType := range ingress.providerTypes {
 				t.Run(source.name+"/"+ingress.name+"_to_"+providerType, func(t *testing.T) {
 					f := newPrivacyLeakGatewayWithProviderType(t, source.routePrivacy, source.vkRequirePrivacy, source.vkPlain, providerType)
 					rr := f.doRequest(t, ingress.path, ingress.body, "", source.vkPlain)
 					if rr.Code != http.StatusOK {
 						t.Fatalf("status=%d want 200; body=%s", rr.Code, rr.Body.String())
 					}
+					if ingress.name == "anthropic_count_tokens" && !strings.Contains(rr.Body.String(), `"input_tokens":7`) {
+						t.Fatalf("count_tokens did not return the native upstream result: %s", rr.Body.String())
+					}
 					if got := f.hitsA.Load(); got != 0 {
 						t.Fatalf("privacy leak: training-enabled provider received %d requests for %s ingress", got, ingress.name)
 					}
 					if got := f.hitsB.Load(); got != 1 {
-						t.Fatalf("eligible no-training provider received %d requests, want exactly one", got)
+						t.Fatalf("eligible no-training provider received %d requests, want exactly one; response=%s", got, rr.Body.String())
 					}
 				})
 			}
