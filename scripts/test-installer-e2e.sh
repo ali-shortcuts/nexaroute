@@ -40,7 +40,7 @@ export NEXAROUTE_LOCAL_RELEASE_TAG="v0.18.0"
 echo "== testing clean install =="
 bash "$ROOT/scripts/install.sh"
 
-[[ -x "$INSTALL_BIN_DIR/nexaroute" ]] || { echo "installer did not create executable binary" >&2; exit 1; }
+[[ -x "$INSTALL_BIN_DIR/nexaroute" ]] || { echo "installer did not create gateway executable" >&2; exit 1; }\n[[ -x "$INSTALL_BIN_DIR/videogen" ]] || { echo "installer did not create Video CLI executable" >&2; exit 1; }
 [[ -d "$CONFIG_HOME/nexaroute" ]] || { echo "installer did not create config directory" >&2; exit 1; }
 
 BIN_MODE="$(stat -c '%a' "$INSTALL_BIN_DIR/nexaroute")"
