@@ -2,9 +2,11 @@ package orchestrator
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -569,8 +571,13 @@ func (o *Orchestrator) composeEpisode(ctx context.Context, j *video.VideoJob) er
 	}
 	defer os.RemoveAll(tempDir)
 	outputPath := filepath.Join(tempDir, "episode.mp4")
+	narrationPath, err := o.ensureNarrationAsset(ctx, j, filepath.Join(tempDir, "narration.wav"))
+	if err != nil {
+		return err
+	}
 	_, err = o.Composer.ComposeEpisode(ctx, composer.EpisodeSpec{
-		Shots: clips, OutputPath: outputPath, Width: width, Height: height, FPS: fps,
+		Shots: clips, NarrationPath: narrationPath, OutputPath: outputPath,
+		Width: width, Height: height, FPS: fps,
 	})
 	if err != nil {
 		if ctx.Err() != nil {
@@ -642,6 +649,119 @@ func (o *Orchestrator) composeEpisode(ctx context.Context, j *video.VideoJob) er
 		}
 	}
 	return nil
+}
+
+
+func (o *Orchestrator) ensureNarrationAsset(ctx context.Context, j *video.VideoJob, outputPath string) (string, error) {
+	text := strings.TrimSpace(j.Request.NarrationText)
+	if text == "" {
+		return "", nil
+	}
+	if o.Narrator == nil {
+		return "", o.markNeedsManualAndError(ctx, *j, "narration was requested but the configured local Piper narrator is unavailable")
+	}
+	if o.Assets == nil {
+		return "", o.markNeedsManualAndError(ctx, *j, "narration was requested but no asset sink is configured")
+	}
+	if j.NarrationAsset != nil {
+		if err := verifyNarrationAsset(*j.NarrationAsset, o.MaxAssetBytes); err == nil {
+			return j.NarrationAsset.URI, nil
+		}
+		// The persisted WAV checkpoint is missing or corrupt. Remove the stale
+		// reference and regenerate locally; provider video clips remain intact.
+		staleID := j.NarrationAsset.ID
+		j.NarrationAsset = nil
+		filtered := j.SourceAssets[:0]
+		for _, asset := range j.SourceAssets {
+			if asset.ID != staleID {
+				filtered = append(filtered, asset)
+			}
+		}
+		j.SourceAssets = filtered
+		if err := o.Store.Update(ctx, *j); err != nil {
+			return "", fmt.Errorf("persist invalid narration checkpoint removal: %w", err)
+		}
+	}
+	if err := o.Narrator.Synthesize(ctx, text, outputPath); err != nil {
+		return "", o.retryEpisodeComposition(ctx, j, "narration synthesis failed; generated shot checkpoints are preserved", fmt.Errorf("synthesize narration: %w", err))
+	}
+	info, err := os.Stat(outputPath)
+	maxBytes := o.MaxAssetBytes
+	if maxBytes <= 0 {
+		maxBytes = 512 << 20
+	}
+	if err != nil || !info.Mode().IsRegular() || info.Size() < 12 || info.Size() > maxBytes {
+		return "", o.markNeedsManualAndError(ctx, *j, "Piper did not produce a valid non-empty narration WAV within the asset limit")
+	}
+	data, err := os.ReadFile(outputPath)
+	if err != nil {
+		return "", o.retryEpisodeComposition(ctx, j, "narration output could not be read; generated shot checkpoints are preserved", err)
+	}
+	asset := video.Asset{
+		ID: j.JobID + "-narration", Kind: "audio", Filename: "narration.wav",
+		ContentType: "audio/wav",
+		Metadata: map[string]string{
+			"project_id": j.ProjectID, "episode_id": j.EpisodeID,
+			"job_id": j.JobID, "asset_role": "episode_narration",
+		},
+	}
+	saved, err := o.Assets.Put(ctx, asset, data)
+	if err != nil {
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+		return "", o.retryEpisodeComposition(ctx, j, "narration persistence failed; generated shot checkpoints are preserved", err)
+	}
+	if err := verifyNarrationAsset(saved, maxBytes); err != nil {
+		return "", o.markNeedsManualAndError(ctx, *j, "narration WAV was not persisted with valid URI, type, size, and SHA-256")
+	}
+	j.NarrationAsset = &saved
+	addSourceAsset(j, saved)
+	if err := o.Store.Update(ctx, *j); err != nil {
+		return "", fmt.Errorf("narration WAV was persisted but checkpoint state could not be saved: %w", err)
+	}
+	return saved.URI, nil
+}
+
+func verifyNarrationAsset(asset video.Asset, maxBytes int64) error {
+	if strings.TrimSpace(asset.URI) == "" || !strings.HasPrefix(strings.ToLower(asset.ContentType), "audio/") ||
+		asset.SizeBytes < 12 || (maxBytes > 0 && asset.SizeBytes > maxBytes) || len(asset.SHA256) != 64 {
+		return errors.New("invalid narration asset metadata")
+	}
+	if _, err := hex.DecodeString(asset.SHA256); err != nil {
+		return errors.New("invalid narration asset checksum")
+	}
+	file, err := os.Open(asset.URI)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Size() != asset.SizeBytes {
+		return errors.New("narration file does not match persisted size")
+	}
+	hash := sha256.New()
+	n, err := io.Copy(hash, file)
+	if err != nil || n != asset.SizeBytes || hex.EncodeToString(hash.Sum(nil)) != asset.SHA256 {
+		return errors.New("narration file checksum does not match persisted metadata")
+	}
+	return nil
+}
+
+func (o *Orchestrator) retryEpisodeComposition(ctx context.Context, j *video.VideoJob, message string, cause error) error {
+	j.CompositionRetryCount++
+	j.LastError = message
+	if err := o.Store.Update(ctx, *j); err != nil {
+		return fmt.Errorf("%s and checkpoint could not be saved: %w", message, err)
+	}
+	if j.CompositionRetryCount >= 3 {
+		return o.fail(ctx, *j, "episode narration or composition failed after repeated attempts")
+	}
+	o.scheduleRetry(ctx, *j, o.pollInterval())
+	if cause != nil {
+		return fmt.Errorf("%s: %w", message, cause)
+	}
+	return errors.New(message)
 }
 
 func episodeDimensions(r video.VideoRequest) (int, int) {
