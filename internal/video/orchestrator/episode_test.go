@@ -59,7 +59,7 @@ func (s *episodeTestSink) Put(_ context.Context, asset video.Asset, data []byte)
 	if name == "" {
 		name = "asset"
 	}
-	path := filepath.Join(s.root, name+".mp4")
+	ext := filepath.Ext(asset.Filename)\n\tif ext == "" {\n\t\text = ".mp4"\n\t}\n\tpath := filepath.Join(s.root, name+ext)
 	if err := os.WriteFile(path, data, 0600); err != nil {
 		return video.Asset{}, err
 	}
@@ -95,6 +95,11 @@ func (c *episodeTestComposer) ComposeEpisode(_ context.Context, spec composer.Ep
 	for _, path := range spec.Shots {
 		if _, err := os.Stat(path); err != nil {
 			return composer.Manifest{}, fmt.Errorf("shot asset %q missing: %w", path, err)
+		}
+	}
+	if spec.NarrationPath != "" {
+		if _, err := os.Stat(spec.NarrationPath); err != nil {
+			return composer.Manifest{}, fmt.Errorf("narration asset %q missing: %w", spec.NarrationPath, err)
 		}
 	}
 	if err := os.WriteFile(spec.OutputPath, []byte("final composed episode"), 0600); err != nil {
