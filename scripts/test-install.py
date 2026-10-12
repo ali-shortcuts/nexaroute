@@ -2,6 +2,7 @@
 """Isolated release-install + real process/API lifecycle tests (standard library only)."""
 import json
 import os
+import platform
 from pathlib import Path
 import shutil
 import socket
@@ -70,9 +71,11 @@ if os.environ.get("TEST_DOWNLOAD_FAIL"): sys.exit(22)
 shutil.copyfile(pathlib.Path(os.environ["TEST_FIXTURE"]) / url.rsplit("/", 1)[1], args[args.index("-o")+1])
 ''')
     env = {k: v for k, v in os.environ.items() if not k.startswith("NEXAROUTE_")}
+    host_arch = "arm64" if platform.machine() in ("aarch64", "arm64") else "x86_64"
     env.update(HOME=str(home), XDG_CONFIG_HOME=str(home / ".config"),
                PATH=f"{dest}:{tools}:/usr/local/bin:/usr/bin:/bin", NEXAROUTE_INSTALL_DIR=str(dest),
-               TEST_FIXTURE=str(fixture), TEST_URL_LOG=str(tmp / "downloads"), DISPLAY="", WAYLAND_DISPLAY="")
+               TEST_FIXTURE=str(fixture), TEST_URL_LOG=str(tmp / "downloads"), DISPLAY="", WAYLAND_DISPLAY="",
+               TEST_ARCH=host_arch)
     def install(extra=None, ok=True):
         # Exercise the exact canonical script copied into every GitHub Release.
         # Feeding it on stdin also proves the documented curl | bash mode.
@@ -89,7 +92,7 @@ shutil.copyfile(pathlib.Path(os.environ["TEST_FIXTURE"]) / url.rsplit("/", 1)[1]
     check(subprocess.check_output(["bash", "-c", "command -v videogen"], env=env, text=True).strip() == str(video_binary), "videogen PATH")
     check("NexaRoute v" in subprocess.check_output(["nexaroute", "-version"], env=env, text=True), "gateway version")
     check("videogen v" in subprocess.check_output(["videogen", "-version"], env=env, text=True).lower(), "videogen version")
-    # Linux ARM64 asset selection, but don't execute it on the AMD64 host.
+    # Exercise the alternate architecture selection without executing it.
     for arch in ("aarch64", "arm64"):
         install({"TEST_ARCH": arch})
         check(binary.read_bytes() == (fixture / "nexaroute-linux-arm64").read_bytes(), "gateway arm64 selection")
@@ -98,6 +101,8 @@ shutil.copyfile(pathlib.Path(os.environ["TEST_FIXTURE"]) / url.rsplit("/", 1)[1]
         install({"TEST_ARCH": arch})
         check(binary.read_bytes() == (fixture / "nexaroute-linux-amd64").read_bytes(), "gateway amd64 selection")
         check(video_binary.read_bytes() == (fixture / "nexaroute-videogen-linux-amd64").read_bytes(), "videogen amd64 selection")
+    env["TEST_ARCH"] = host_arch
+    install()
     saved_binary = binary.read_bytes()
     saved_video_binary = video_binary.read_bytes()
     video_binary.unlink()
@@ -174,14 +179,16 @@ shutil.copyfile(pathlib.Path(os.environ["TEST_FIXTURE"]) / url.rsplit("/", 1)[1]
             request(base + "admin/api/" + route, "POST", body)
         original = cfg.read_bytes()
         # A distinguishable valid ELF fixture simulates a later release.
-        with open(fixture / "nexaroute-linux-amd64", "ab") as f:
+        upgrade_gateway = fixture / f"nexaroute-linux-{host_arch}"
+        upgrade_videogen = fixture / f"nexaroute-videogen-linux-{host_arch}"
+        with open(upgrade_gateway, "ab") as f:
             f.write(b"\nrelease-upgrade-fixture\n")
-        with open(fixture / "nexaroute-videogen-linux-amd64", "ab") as f:
+        with open(upgrade_videogen, "ab") as f:
             f.write(b"\nrelease-videogen-upgrade-fixture\n")
         import hashlib
-        upgrade_sum = hashlib.sha256((fixture / "nexaroute-linux-amd64").read_bytes()).hexdigest()
-        video_upgrade_sum = hashlib.sha256((fixture / "nexaroute-videogen-linux-amd64").read_bytes()).hexdigest()
-        (fixture / "SHA256SUMS").write_text(upgrade_sum + "  nexaroute-linux-amd64\n" + video_upgrade_sum + "  nexaroute-videogen-linux-amd64\n")
+        upgrade_sum = hashlib.sha256(upgrade_gateway.read_bytes()).hexdigest()
+        video_upgrade_sum = hashlib.sha256(upgrade_videogen.read_bytes()).hexdigest()
+        (fixture / "SHA256SUMS").write_text(upgrade_sum + f"  nexaroute-linux-{host_arch}\n" + video_upgrade_sum + f"  nexaroute-videogen-linux-{host_arch}\n")
         # Upgrade is an atomic executable replacement even while running.
         install({"NEXAROUTE_VERSION": "v0.19.0"})
         install()
