@@ -7,7 +7,7 @@ cd "$(dirname "$0")/.."
 # lifecycle; the shell suite independently checks clean install/upgrade failure
 # atomicity with minimal executable fixtures.
 if [[ ! -x dist/nexaroute-linux-amd64 || ! -x dist/nexaroute-videogen-linux-amd64 ]]; then
-  ./scripts/build-release.sh v0.20.1
+  ./scripts/build-release.sh v0.20.2
 fi
 python3 scripts/test-install.py
 ./scripts/test-installer-e2e.sh
