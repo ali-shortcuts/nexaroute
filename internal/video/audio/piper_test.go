@@ -78,7 +78,7 @@ func TestSynthesizePiperPreservesExistingOutputOnFailure(t *testing.T) {
 
 func TestSynthesizePiperRejectsInvalidInputs(t *testing.T) {
 	root := t.TempDir()
-	textPath := filepath.Join(root, "story.txt")
+	textPath := filepath.Join(root, "story.wav")
 	modelPath := filepath.Join(root, "voice.onnx")
 	if err := os.WriteFile(textPath, []byte("Hello."), 0600); err != nil {
 		t.Fatal(err)
