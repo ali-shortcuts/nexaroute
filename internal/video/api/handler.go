@@ -226,6 +226,11 @@ func (h *Handler) providers(w http.ResponseWriter, _ *http.Request) {
 func publicJob(job video.VideoJob) video.VideoJob {
 	job.OutputAssets = publicAssets(job.JobID, job.OutputAssets)
 	job.SourceAssets = publicAssets(job.JobID, job.SourceAssets)
+	if job.NarrationAsset != nil {
+		asset := *job.NarrationAsset
+		asset.URI = publicAssetURI(job.JobID, asset.ID)
+		job.NarrationAsset = &asset
+	}
 	job.Request.ShotPlan = append([]video.Shot(nil), job.Request.ShotPlan...)
 	for i := range job.Request.ShotPlan {
 		if job.Request.ShotPlan[i].OutputAsset != nil {
