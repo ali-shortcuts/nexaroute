@@ -31,7 +31,7 @@ func TestPresetsExposeResponsesAndGeminiProtocols(t *testing.T) {
 func TestRegistryPrepareReusesUnchangedAdapter(t *testing.T) {
 	cfg := config.Default()
 	cfg.Providers = []config.ProviderConfig{{
-		ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "http://example.invalid",
+		ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "https://example.invalid",
 		Enabled: true,
 	}}
 	reg, err := NewRegistry(cfg)
@@ -55,7 +55,7 @@ func TestRegistryPrepareReusesUnchangedAdapter(t *testing.T) {
 func TestRegistryPrepareRebuildsChangedAdapter(t *testing.T) {
 	cfg := config.Default()
 	cfg.Providers = []config.ProviderConfig{{
-		ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "http://example.invalid",
+		ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "https://example.invalid",
 		Enabled: true,
 	}}
 	reg, err := NewRegistry(cfg)
@@ -89,7 +89,7 @@ func TestRegistryDetectsResolvedEnvironmentCredentialRotation(t *testing.T) {
 
 	cfg := config.Default()
 	cfg.Providers = []config.ProviderConfig{{
-		ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "http://example.invalid",
+		ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "https://example.invalid",
 		APIKeyEnv: envName, AuthMode: "bearer", Enabled: true,
 	}}
 	reg, err := NewRegistry(cfg)
@@ -132,7 +132,7 @@ func TestRegistryKeepsEnvAdapterWhenResolvedCredentialIsUnchanged(t *testing.T) 
 
 	cfg := config.Default()
 	cfg.Providers = []config.ProviderConfig{{
-		ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "http://example.invalid",
+		ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "https://example.invalid",
 		APIKeyEnv: envName, AuthMode: "bearer", Enabled: true,
 	}}
 	reg, err := NewRegistry(cfg)

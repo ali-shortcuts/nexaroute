@@ -26,7 +26,7 @@ func TestStressTenThousandDeploymentsConcurrentIndexedRouting(t *testing.T) {
 	for p := 0; p < 100; p++ {
 		pc := config.ProviderConfig{
 			ID: fmt.Sprintf("p%03d", p), Name: "P", Type: "openai_compatible",
-			BaseURL: "http://example.invalid", Enabled: true,
+			BaseURL: "https://example.invalid", Enabled: true,
 		}
 		for m := 0; m < 100; m++ {
 			pc.Models = append(pc.Models, config.ModelConfig{
@@ -93,7 +93,7 @@ func TestStressFullPoolAutoRoutingRemainsStable(t *testing.T) {
 	requireStress(t)
 	cfg := config.Default()
 	for p := 0; p < 40; p++ {
-		pc := config.ProviderConfig{ID: fmt.Sprintf("p%02d", p), Name: "P", Type: "openai_compatible", BaseURL: "http://example.invalid", Enabled: true}
+		pc := config.ProviderConfig{ID: fmt.Sprintf("p%02d", p), Name: "P", Type: "openai_compatible", BaseURL: "https://example.invalid", Enabled: true}
 		for m := 0; m < 50; m++ {
 			pc.Models = append(pc.Models, config.ModelConfig{ID: fmt.Sprintf("m%02d", m), Model: fmt.Sprintf("model-%02d-%02d", p, m), Aliases: []string{"coding"}, Enabled: true, Weight: 1})
 		}

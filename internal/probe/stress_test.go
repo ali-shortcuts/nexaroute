@@ -31,7 +31,7 @@ func TestStressRecoveryFloodFiveThousandDeploymentsStaysBounded(t *testing.T) {
 	for p := 0; p < 5; p++ {
 		pc := config.ProviderConfig{
 			ID: fmt.Sprintf("p%d", p), Name: "P", Type: "openai_compatible",
-			BaseURL: "http://example.invalid", AuthMode: "none", Enabled: true, MaxConcurrency: 64,
+			BaseURL: "https://example.invalid", AuthMode: "none", Enabled: true, MaxConcurrency: 64,
 		}
 		for i := 0; i < 1000; i++ {
 			pc.Models = append(pc.Models, config.ModelConfig{

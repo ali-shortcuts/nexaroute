@@ -32,8 +32,50 @@ func (p Policy) allowsHost(host string) bool {
 	return false
 }
 
+// blockedPrefixes lists special-purpose ranges that global-unicast and private
+// checks do not cover (IANA special-purpose registries, RFC 6890 and friends).
+// None of these are legitimate LLM provider addresses.
+var blockedPrefixes = []netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/8"),       // "this network" (RFC 1122)
+	netip.MustParsePrefix("100.64.0.0/10"),   // carrier-grade NAT shared space (RFC 6598)
+	netip.MustParsePrefix("192.0.0.0/24"),    // IETF protocol assignments (RFC 6890)
+	netip.MustParsePrefix("192.0.2.0/24"),    // TEST-NET-1 (RFC 5737)
+	netip.MustParsePrefix("192.88.99.0/24"),  // deprecated 6to4 relay anycast (RFC 7526)
+	netip.MustParsePrefix("198.18.0.0/15"),   // benchmarking (RFC 2544)
+	netip.MustParsePrefix("198.51.100.0/24"), // TEST-NET-2 (RFC 5737)
+	netip.MustParsePrefix("203.0.113.0/24"),  // TEST-NET-3 (RFC 5737)
+	netip.MustParsePrefix("240.0.0.0/4"),     // reserved + limited broadcast (RFC 1112)
+	netip.MustParsePrefix("::/96"),           // IPv4-compatible / unspecified / ::1 (deprecated)
+	netip.MustParsePrefix("100::/64"),        // discard-only (RFC 6666)
+	netip.MustParsePrefix("2001::/32"),       // Teredo (RFC 4380)
+	netip.MustParsePrefix("2001:db8::/32"),   // documentation (RFC 3849)
+	netip.MustParsePrefix("fec0::/10"),       // deprecated site-local (RFC 3879)
+	netip.MustParsePrefix("64:ff9b:1::/48"),  // NAT64 local-use (RFC 8215)
+}
+
+var (
+	nat64WellKnown = netip.MustParsePrefix("64:ff9b::/96") // RFC 6052
+	sixToFour      = netip.MustParsePrefix("2002::/16")    // RFC 3056
+)
+
+// embeddedIPv4 returns the IPv4 address carried inside a NAT64 (64:ff9b::/96)
+// or 6to4 (2002::/16) address. These forms are legitimate on IPv6-only
+// networks, so they are judged by the IPv4 address they translate to rather
+// than rejected outright; "public name -> synthesized NAT64 answer" keeps
+// working while "NAT64 form of 169.254.169.254" does not.
+func embeddedIPv4(ip netip.Addr) (netip.Addr, bool) {
+	b := ip.As16()
+	switch {
+	case nat64WellKnown.Contains(ip):
+		return netip.AddrFrom4([4]byte{b[12], b[13], b[14], b[15]}), true
+	case sixToFour.Contains(ip):
+		return netip.AddrFrom4([4]byte{b[2], b[3], b[4], b[5]}), true
+	}
+	return netip.Addr{}, false
+}
+
 func blocked(ip netip.Addr, allowLoopback bool) bool {
-	ip = ip.Unmap()
+	ip = ip.WithZone("").Unmap()
 	if !ip.IsValid() {
 		return true
 	}
@@ -43,7 +85,28 @@ func blocked(ip netip.Addr, allowLoopback bool) bool {
 	if !ip.IsGlobalUnicast() || ip.IsPrivate() {
 		return true
 	}
+	for _, prefix := range blockedPrefixes {
+		if prefix.Contains(ip) {
+			return true
+		}
+	}
+	if inner, ok := embeddedIPv4(ip); ok {
+		// Embedded loopback is never an allowed form, even with allowLoopback.
+		return blocked(inner, false)
+	}
 	return false
+}
+
+// isLoopbackHost reports whether a URL/dial host names the local machine
+// explicitly: a loopback IP literal, "localhost" or "*.localhost". An
+// arbitrary DNS name that merely resolves to 127.0.0.1 does NOT qualify.
+func isLoopbackHost(host string) bool {
+	host = strings.ToLower(strings.TrimSuffix(host, "."))
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return true
+	}
+	ip, err := netip.ParseAddr(host)
+	return err == nil && ip.WithZone("").Unmap().IsLoopback()
 }
 
 func (p Policy) validateURL(raw string) (*url.URL, error) {
@@ -51,8 +114,8 @@ func (p Policy) validateURL(raw string) (*url.URL, error) {
 	if err != nil || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		return nil, fmt.Errorf("egress target is malformed or contains credentials/query")
 	}
-	if u.Scheme != "https" && !(u.Scheme == "http" && p.AllowLoopback) {
-		return nil, fmt.Errorf("egress target must use https (http is only allowed for loopback development)")
+	if u.Scheme != "https" && !(u.Scheme == "http" && p.AllowLoopback && isLoopbackHost(u.Hostname())) {
+		return nil, fmt.Errorf("egress target must use https (http is only allowed for explicit loopback hosts)")
 	}
 	if !p.allowsHost(u.Hostname()) {
 		return nil, fmt.Errorf("egress host %q is not allow-listed", u.Hostname())
@@ -94,8 +157,12 @@ func (p Policy) NewTransport(target string, proxyURL string) (*http.Transport, e
 		if !p.allowsHost(host) {
 			return nil, fmt.Errorf("egress host %q is not allow-listed", host)
 		}
+		// Loopback is reachable only when the host is spelled as loopback
+		// (127.0.0.1, ::1, localhost). A public name that resolves to
+		// 127.0.0.1 is a rebinding/SSRF vector and stays blocked.
+		allowLoopback := p.AllowLoopback && isLoopbackHost(host)
 		if ip, parseErr := netip.ParseAddr(host); parseErr == nil {
-			if blocked(ip, p.AllowLoopback) {
+			if blocked(ip, allowLoopback) {
 				return nil, fmt.Errorf("egress address %q is blocked", host)
 			}
 			return dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
@@ -106,7 +173,7 @@ func (p Policy) NewTransport(target string, proxyURL string) (*http.Transport, e
 		}
 		for _, candidate := range ips {
 			ip, ok := netip.AddrFromSlice(candidate.IP)
-			if !ok || blocked(ip, p.AllowLoopback) {
+			if !ok || blocked(ip, allowLoopback) {
 				return nil, fmt.Errorf("egress DNS answer for %q is blocked", host)
 			}
 		}

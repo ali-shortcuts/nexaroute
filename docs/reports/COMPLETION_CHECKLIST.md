@@ -34,7 +34,7 @@ This is the source of truth. Rows are updated after each item reaches a clean bo
 | M3-1 | Privacy leak tests for every provider-egress/content path | NOT STARTED | — | — | Includes issue #246 exclusion |
 | M3-2 | `nexaroute privacy audit` CLI | NOT STARTED | — | — | Never print secrets |
 | M3-3 | No-eligible-deployment warnings in config validation/dashboard | NOT STARTED | — | — | — |
-| M3-4 | Threat model with per-mitigation tests; SSRF/header/tool/key/config/privacy checks | NOT STARTED | — | — | — |
+| M3-4 | Threat model with per-mitigation tests; SSRF/header/tool/key/config/privacy checks | IN PROGRESS | branch m3-4-egress-ssrf-matrix | egress/SSRF matrix | See docs/THREAT_MODEL.md; header/tool/key/config rows remain |
 | M3-5 | Admin/session negative tests and safe TLS/mTLS defaults | NOT STARTED | — | — | — |
 | M3-6 | Tamper-evident hash-chain audit log and verify CLI | NOT STARTED | — | — | — |
 | M3-7 | Release SBOM, checksums, signature and govulncheck | NOT STARTED | — | — | Signature may be UNVERIFIED if keys unavailable |

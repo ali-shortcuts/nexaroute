@@ -280,7 +280,7 @@ func TestParseRetryAfterBounded(t *testing.T) {
 
 func TestCredential429CooldownUsesConfiguredRetryAfterCap(t *testing.T) {
 	p := config.ProviderConfig{
-		ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "http://example.invalid",
+		ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "https://example.invalid",
 		MaxConcurrency: 1, Enabled: true, Credentials: []config.CredentialConfig{{Name: "k", APIKey: "secret", Enabled: true}},
 	}
 	a, err := newHTTPAdapterWithRetryCap(p, time.Second, 2*time.Second)
