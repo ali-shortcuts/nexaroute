@@ -289,26 +289,23 @@ non-critical nodes no longer abort unrelated sections.
 
 ### Package coverage gaps and targets — `open`
 
-Coverage measured **84.9% repository-wide** on current `main`
-(`go test -count=1 -coverprofile=/tmp/cover.out ./...`, 2026-10-13), against
+Coverage measured **85.3% repository-wide** on current `main`
+(`go test -count=1 -coverprofile=/tmp/cover.out ./...`, 2026-10-13), above
 the 85% policy target. Packages below 80% in that reproducible run are:
 
-- `cmd/videogen`: 70.5%
-- `internal/decision/providerstate`: 79.4%
-- `internal/router`: 79.7%
-- `internal/secrets`: 78.7%
+- `cmd/videogen`: 78.6%
 - `internal/taskprofile`: 69.5%
-- `internal/video`: 73.9%
 - `internal/video/orchestrator`: 78.1%
-- `internal/video/tts`: 72.6%
 
 Previously thin packages are now well covered: `internal/config` 93.0%,
 `internal/compat` 92.6%, `internal/decision` 93.1%, `internal/feature` 94.3%,
-`internal/probe` 95.9%, `internal/core` 100.0%, `cmd/gateway` 85.4%.
+`internal/probe` 95.9%, `internal/core` 100.0%, `cmd/gateway` 85.3%,
+`internal/router` 91.9%, `internal/video` 94.0%, `internal/video/tts` 85.1%,
+`internal/secrets` 81.1%.
 
 The remaining work is meaningful behavior coverage only; no assertion-free
 padding is acceptable. The next planned coverage pass targets the uncovered
-router, secrets, task-profile, and video-orchestrator branches.
+task-profile and video-orchestrator branches.
 
 - Impact: thinner regression protection in the listed packages.
 - Mitigation/workaround: run the full coverage command above and inspect the
