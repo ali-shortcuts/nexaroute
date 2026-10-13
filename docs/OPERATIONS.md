@@ -119,6 +119,8 @@ operator egress deny policy.
 
 A deployment must satisfy the configured health and capability requirements before it is eligible for traffic. See [configuration](CONFIGURATION.md) for probe cadence, leases, and recovery behavior.
 
+Separately from live health, the gateway computes **static eligibility warnings** (M3-3) from the configuration alone: no enabled model deployments, a referenced candidate pool that matches no enabled deployment, a route profile whose whole fallback chain is unusable, and `no_training` profiles or virtual keys with no deployment satisfying the fail-closed privacy rule. These warnings are printed at startup with the other config warnings, returned by `PUT /admin/api/settings`, and exposed in `GET /admin/api/snapshot` as `eligibility_warnings`. They are advisory only — they never fail config validation (including strict mode). The snapshot also carries `route_eligibility`: per-profile candidate counts with current health-based exclusion reasons (privacy-filtered, provider unavailable, retired, cooldown, health not yet established, not healthy). Those counts reflect pool membership and health only; per-request filters (model, capabilities, context window) are not applied.
+
 ### Shared control-plane state
 
 The optional `control_plane` section defaults to the atomic local `file`

@@ -406,6 +406,9 @@ func cloneConfig(in config.Config) config.Config {
 	if in.Warnings != nil {
 		out.Warnings = append([]string(nil), in.Warnings...)
 	}
+	if in.EligibilityWarnings != nil {
+		out.EligibilityWarnings = append([]string(nil), in.EligibilityWarnings...)
+	}
 	// DecisionProviderHealth is value struct, already copied
 	return out
 }

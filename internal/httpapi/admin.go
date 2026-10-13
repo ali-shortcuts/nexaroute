@@ -422,6 +422,10 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 		"route_profiles":    rpList,
 		"candidate_pools":   cpList,
 		"fallback_chains":   fcList,
+		// M3-3: static no-eligible-deployment warnings plus the runtime
+		// per-profile eligibility view (pool membership + current health).
+		"eligibility_warnings": eligibilityWarningsForSnapshot(cfgFull),
+		"route_eligibility":    s.routeEligibilityView(cfgFull, healthAll),
 		"decision": map[string]any{
 			"config":                      decisionCfg,
 			"metrics":                     decisionMetrics,
