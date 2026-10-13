@@ -311,6 +311,99 @@ func TestSnapshotConcurrentWithConfigReplacement(t *testing.T) {
 	_ = profileRow(t, snap, "prof-a-0")
 }
 
+func TestSnapshotRouteEligibilityCoherentAcrossConfigReplacement(t *testing.T) {
+	// Coherence regression (M3-3 final consistency fix): config
+	// replacement changes deployment membership (provider b removed and
+	// restored). Every snapshot taken during the swaps must reflect ONE
+	// runtime generation: for the profile row, eligible_now plus all
+	// exclusion buckets must sum to candidates. A view that mixed an
+	// old resolver expansion with a newer deployment list would
+	// silently drop members and break that sum.
+	cfgA := eligTestConfig() // providers a+b, pool [a/m, b/m]
+	cfgB := eligTestConfig()
+	cfgB.Providers = cfgB.Providers[:1] // provider a only
+	cfgB.CandidatePools[0].Deployments = []string{"a/m"}
+
+	s := testGateway(t, cfgA)
+
+	var wg sync.WaitGroup
+	errs := make(chan string, 128)
+	start := make(chan struct{})
+	// Writer: alternate membership-changing configs.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		<-start
+		for i := 0; i < 15; i++ {
+			cfg := cfgB
+			if i%2 == 1 {
+				cfg = cfgA
+			}
+			if err := s.applyConfig(cfg); err != nil {
+				errs <- "applyConfig: " + err.Error()
+				return
+			}
+		}
+	}()
+	// Readers: assert the coherence invariant on every snapshot.
+	// (No t.Fatalf inside goroutines; failures go through errs.)
+	for g := 0; g < 4; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			for i := 0; i < 8; i++ {
+				rr := adminDo(t, s, http.MethodGet, "/admin/api/snapshot", "")
+				if rr.Code != http.StatusOK {
+					errs <- "snapshot status " + rr.Body.String()
+					return
+				}
+				var snap map[string]any
+				if err := json.Unmarshal(rr.Body.Bytes(), &snap); err != nil {
+					errs <- "snapshot JSON: " + err.Error()
+					return
+				}
+				re, _ := snap["route_eligibility"].(map[string]any)
+				profiles, _ := re["profiles"].([]any)
+				var row map[string]any
+				for _, p := range profiles {
+					if r, _ := p.(map[string]any); r["profile_id"] == "r1" {
+						row = r
+					}
+				}
+				if row == nil {
+					errs <- "profile r1 missing from route_eligibility"
+					return
+				}
+				candidates, _ := row["candidates"].(float64)
+				if candidates != 1 && candidates != 2 {
+					errs <- "candidates neither generation's size"
+					return
+				}
+				eligible, _ := row["eligible_now"].(float64)
+				sum := eligible
+				if ex, ok := row["excluded"].(map[string]any); ok {
+					for _, v := range ex {
+						if n, ok := v.(float64); ok {
+							sum += n
+						}
+					}
+				}
+				if sum != candidates {
+					errs <- "incoherent row: eligible+excluded != candidates"
+					return
+				}
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for e := range errs {
+		t.Fatal(e)
+	}
+}
+
 func TestSettingsPutExposesEligibilityWarnings(t *testing.T) {
 	cfg := eligTestConfig()
 	cfg.CandidatePools[0].Deployments = []string{"ghost/model"}

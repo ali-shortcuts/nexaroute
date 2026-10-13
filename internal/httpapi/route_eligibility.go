@@ -20,20 +20,19 @@ import (
 // provider availability, then deployment health status (retired, then
 // the ready-strategy health requirement, then cooldown).
 //
-// cfg and resolver must come from one runtime snapshot captured under
-// runtimeMu by the caller (applyConfigLocked replaces both under that
-// lock), and healthAll must be the complete, untruncated health
-// snapshot. This helper never reads s.routeResolver itself.
-func (s *Server) routeEligibilityView(cfg config.Config, resolver *route.Resolver, healthAll []health.State) map[string]any {
+// cfg, resolver, and deployments must come from one runtime snapshot
+// captured under runtimeMu by the caller (applyConfigLocked replaces
+// all three under that lock), and healthAll must be the complete,
+// untruncated health snapshot. This helper never rereads mutable
+// router or resolver state itself.
+func (s *Server) routeEligibilityView(cfg config.Config, resolver *route.Resolver, deployments []router.Deployment, healthAll []health.State) map[string]any {
 	healthByID := make(map[string]health.State, len(healthAll))
 	for _, st := range healthAll {
 		healthByID[st.Deployment] = st
 	}
-	deploymentsByID := make(map[string]router.Deployment)
-	if s.rt != nil {
-		for _, d := range s.rt.All() {
-			deploymentsByID[d.ID] = d
-		}
+	deploymentsByID := make(map[string]router.Deployment, len(deployments))
+	for _, d := range deployments {
+		deploymentsByID[d.ID] = d
 	}
 	chainsByID := make(map[string]config.FallbackChainConfig, len(cfg.FallbackChains))
 	for _, ch := range cfg.FallbackChains {

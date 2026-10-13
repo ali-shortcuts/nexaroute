@@ -163,14 +163,18 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 		healthAll = filtered
 	}
 	eventLimit := parseLimit("events", 500)
-	// Capture the active config and route resolver as one consistent
-	// runtime snapshot: applyConfigLocked replaces both under
-	// runtimeMu, so reading them under separate locks could pair a new
-	// config with a stale resolver. The lock is released immediately;
-	// response building below runs on the captured values.
+	// Capture the active config, route resolver, and router deployment
+	// list as one consistent runtime snapshot: applyConfigLocked
+	// replaces all three under runtimeMu, so reading any of them later
+	// could pair an older config/resolver with a newer deployment
+	// generation and produce incoherent eligibility counts. The lock
+	// is released immediately; response building below runs on the
+	// captured values. (runtimeMu → router lock order matches
+	// applyConfigLocked.)
 	s.runtimeMu.RLock()
 	cfgFull := cloneConfig(s.cfg)
 	resolver := s.routeResolver
+	eligibilityDeployments := s.rt.All()
 	s.runtimeMu.RUnlock()
 	usageSnap := s.usageSnapshotWithPrices(cfgFull)
 	snapshotEvents := s.bus.SnapshotLimit(eventLimit)
@@ -434,7 +438,7 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 		// M3-3: static no-eligible-deployment warnings plus the runtime
 		// per-profile eligibility view (pool membership + current health).
 		"eligibility_warnings": eligibilityWarningsForSnapshot(cfgFull),
-		"route_eligibility":    s.routeEligibilityView(cfgFull, resolver, healthForEligibility),
+		"route_eligibility":    s.routeEligibilityView(cfgFull, resolver, eligibilityDeployments, healthForEligibility),
 		"decision": map[string]any{
 			"config":                      decisionCfg,
 			"metrics":                     decisionMetrics,
