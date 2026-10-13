@@ -436,7 +436,7 @@ func finishReasonToAnthropicStop(reason string) string {
 	case "content_filter":
 		return "refusal"
 	case "stop_sequence":
-		return "max_tokens"
+		return "stop_sequence"
 	default:
 		return "end_turn"
 	}
