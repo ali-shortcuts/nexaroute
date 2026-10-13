@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strconv"
 	"strings"
@@ -82,6 +83,21 @@ func newHTTPAdapter(p config.ProviderConfig, timeout time.Duration) (*httpAdapte
 	return newHTTPAdapterWithRetryCap(p, timeout, 60*time.Second)
 }
 
+// parseEgressCIDRs converts operator-configured CIDR strings into prefixes.
+// Bare IPs are treated as single-host prefixes. Invalid entries are ignored
+// here because config validation already rejects them at load time.
+func parseEgressCIDRs(cidrs []string) []netip.Prefix {
+	var out []netip.Prefix
+	for _, c := range cidrs {
+		if prefix, err := netip.ParsePrefix(c); err == nil {
+			out = append(out, prefix)
+		} else if addr, err := netip.ParseAddr(c); err == nil {
+			out = append(out, netip.PrefixFrom(addr, addr.BitLen()))
+		}
+	}
+	return out
+}
+
 func newHTTPAdapterWithRetryCap(p config.ProviderConfig, timeout, retryAfterCap time.Duration) (*httpAdapter, error) {
 	if retryAfterCap <= 0 {
 		retryAfterCap = 60 * time.Second
@@ -118,6 +134,8 @@ func newHTTPAdapterWithRetryCap(p config.ProviderConfig, timeout, retryAfterCap 
 		}
 	}
 	policy := egress.Policy{AllowedHosts: allowedHosts, AllowLoopback: base.Scheme == "http"}
+	policy.DenyHosts = p.EgressDenyHosts()
+	policy.DenyCIDRs = parseEgressCIDRs(p.EgressDenyCIDRs())
 	tr, err := policy.NewTransport(p.BaseURL, p.ProxyURL)
 	if err != nil {
 		return nil, fmt.Errorf("provider %s egress policy: %w", p.ID, err)

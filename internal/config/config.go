@@ -7,6 +7,7 @@ import (
 	"io"
 	"math"
 	"net"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -169,6 +170,21 @@ type EvaluationConfig struct {
 	TTFTTargetMS    float64 `json:"ttft_target_ms,omitempty"`    // optional scoring target for TTFT evidence
 }
 
+// EgressConfig controls the global egress security policy applied to all
+// provider connections. Deny lists take precedence over allow lists and over
+// the built-in special-purpose IP blocklist. This lets operators restrict
+// which hosts and networks providers may connect to, beyond the defaults.
+type EgressConfig struct {
+	// DenyHosts is an explicit deny-list of hostnames (exact, case-insensitive match).
+	DenyHosts []string `json:"deny_hosts,omitempty"`
+	// DenyCIDRs is an explicit deny-list of IP addresses or CIDR ranges.
+	DenyCIDRs []string `json:"deny_cidrs,omitempty"`
+	// AllowHosts adds hostnames to the per-provider allow-list.
+	AllowHosts []string `json:"allow_hosts,omitempty"`
+	// AllowCIDRs adds IP/CIDR ranges to the per-provider allow-list.
+	AllowCIDRs []string `json:"allow_cidrs,omitempty"`
+}
+
 type Config struct {
 	Listen string    `json:"listen"`
 	TLS    TLSConfig `json:"tls,omitempty"`
@@ -179,6 +195,7 @@ type Config struct {
 	Logging                LoggingConfig                `json:"logging"`
 	Routing                RoutingConfig                `json:"routing"`
 	Probe                  ProbeConfig                  `json:"probe"`
+	Egress                 EgressConfig                `json:"egress,omitempty"`
 	Cache                  CacheConfig                  `json:"cache"`
 	ClientAuth             ClientAuthConfig             `json:"client_auth"`
 	ControlPlane           ControlPlaneConfig           `json:"control_plane,omitempty"`
@@ -476,6 +493,12 @@ type ProviderConfig struct {
 	ForwardHeaders           []string           `json:"forward_headers"`
 	ProxyURL                 string             `json:"proxy_url,omitempty"`
 	AllowedHosts             []string           `json:"allowed_hosts,omitempty"`
+	// Resolved egress policy merged from global EgressConfig during Validate().
+	// Not serialized; populated at load time.
+	resolvedEgressDenyHosts  []string
+	resolvedEgressDenyCIDRs  []string
+	resolvedEgressAllowHosts []string
+	resolvedEgressAllowCIDRs []string
 	ChatPath                 string             `json:"chat_path,omitempty"`
 	MessagesPath             string             `json:"messages_path,omitempty"`
 	ModelsPath               string             `json:"models_path,omitempty"`
@@ -1002,6 +1025,10 @@ func (c *Config) ApplyDefaults() {
 	}
 	for i := range c.Providers {
 		c.Providers[i].ApplyDefaults()
+		c.Providers[i].resolvedEgressDenyHosts = append([]string(nil), c.Egress.DenyHosts...)
+		c.Providers[i].resolvedEgressDenyCIDRs = append([]string(nil), c.Egress.DenyCIDRs...)
+		c.Providers[i].resolvedEgressAllowHosts = append([]string(nil), c.Egress.AllowHosts...)
+		c.Providers[i].resolvedEgressAllowCIDRs = append([]string(nil), c.Egress.AllowCIDRs...)
 	}
 	// Normalize legacy public_model.
 	c.Routing.PublicModel = strings.TrimSpace(c.Routing.PublicModel)
@@ -1262,6 +1289,9 @@ func (p *ProviderConfig) ApplyDefaults() {
 }
 
 func (c Config) Validate() error {
+	if err := c.Egress.validate(); err != nil {
+		return err
+	}
 	if err := ValidateClientBaseURL(c.ClientBaseURL); err != nil {
 		return err
 	}
@@ -2260,6 +2290,38 @@ func ValidateProviderConfig(p ProviderConfig) error {
 	cfg.Providers = []ProviderConfig{p}
 	return cfg.Validate()
 }
+
+// validate checks that egress CIDR lists parse as valid IP prefixes.
+func (e EgressConfig) validate() error {
+	for _, cidr := range e.DenyCIDRs {
+		if _, err := netip.ParsePrefix(cidr); err != nil {
+			// Allow bare IPs as well as CIDRs.
+			if _, err2 := netip.ParseAddr(cidr); err2 != nil {
+				return fmt.Errorf("egress deny_cidrs entry %q is not a valid IP or CIDR", cidr)
+			}
+		}
+	}
+	for _, cidr := range e.AllowCIDRs {
+		if _, err := netip.ParsePrefix(cidr); err != nil {
+			if _, err2 := netip.ParseAddr(cidr); err2 != nil {
+				return fmt.Errorf("egress allow_cidrs entry %q is not a valid IP or CIDR", cidr)
+			}
+		}
+	}
+	return nil
+}
+
+// EgressDenyHosts returns the resolved global egress deny-host list for this provider.
+func (p ProviderConfig) EgressDenyHosts() []string { return p.resolvedEgressDenyHosts }
+
+// EgressDenyCIDRs returns the resolved global egress deny-CIDR list for this provider.
+func (p ProviderConfig) EgressDenyCIDRs() []string { return p.resolvedEgressDenyCIDRs }
+
+// EgressAllowHosts returns the resolved global egress allow-host list for this provider.
+func (p ProviderConfig) EgressAllowHosts() []string { return p.resolvedEgressAllowHosts }
+
+// EgressAllowCIDRs returns the resolved global egress allow-CIDR list for this provider.
+func (p ProviderConfig) EgressAllowCIDRs() []string { return p.resolvedEgressAllowCIDRs }
 
 // validateEndpointURL keeps provider connection metadata separate from
 // credentials. Userinfo in a base/proxy URL is both surprising to operators
