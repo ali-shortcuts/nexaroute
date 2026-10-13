@@ -195,7 +195,7 @@ type Config struct {
 	Logging                LoggingConfig                `json:"logging"`
 	Routing                RoutingConfig                `json:"routing"`
 	Probe                  ProbeConfig                  `json:"probe"`
-	Egress                 EgressConfig                `json:"egress,omitempty"`
+	Egress                 EgressConfig                 `json:"egress,omitempty"`
 	Cache                  CacheConfig                  `json:"cache"`
 	ClientAuth             ClientAuthConfig             `json:"client_auth"`
 	ControlPlane           ControlPlaneConfig           `json:"control_plane,omitempty"`
@@ -479,35 +479,35 @@ type DataHandlingConfig struct {
 }
 
 type ProviderConfig struct {
-	ID                       string             `json:"id"`
-	Name                     string             `json:"name"`
-	Type                     string             `json:"type"`              // openai_compatible | anthropic_compatible | gemini | openai_responses
-	Dialect                  string             `json:"dialect,omitempty"` // optional dialect override (see compat.Dialects)
-	BaseURL                  string             `json:"base_url"`
-	DataHandling             DataHandlingConfig `json:"data_handling,omitempty"`
-	APIKey                   string             `json:"api_key,omitempty"`
-	APIKeyEnv                string             `json:"api_key_env,omitempty"`
-	Credentials              []CredentialConfig `json:"credentials,omitempty"`
-	AuthMode                 string             `json:"auth_mode,omitempty"` // bearer | x-api-key | x-goog-api-key | none
-	Headers                  map[string]string  `json:"headers,omitempty"`
-	ForwardHeaders           []string           `json:"forward_headers"`
-	ProxyURL                 string             `json:"proxy_url,omitempty"`
-	AllowedHosts             []string           `json:"allowed_hosts,omitempty"`
+	ID             string             `json:"id"`
+	Name           string             `json:"name"`
+	Type           string             `json:"type"`              // openai_compatible | anthropic_compatible | gemini | openai_responses
+	Dialect        string             `json:"dialect,omitempty"` // optional dialect override (see compat.Dialects)
+	BaseURL        string             `json:"base_url"`
+	DataHandling   DataHandlingConfig `json:"data_handling,omitempty"`
+	APIKey         string             `json:"api_key,omitempty"`
+	APIKeyEnv      string             `json:"api_key_env,omitempty"`
+	Credentials    []CredentialConfig `json:"credentials,omitempty"`
+	AuthMode       string             `json:"auth_mode,omitempty"` // bearer | x-api-key | x-goog-api-key | none
+	Headers        map[string]string  `json:"headers,omitempty"`
+	ForwardHeaders []string           `json:"forward_headers"`
+	ProxyURL       string             `json:"proxy_url,omitempty"`
+	AllowedHosts   []string           `json:"allowed_hosts,omitempty"`
 	// Resolved egress policy merged from global EgressConfig during Validate().
 	// Not serialized; populated at load time.
 	resolvedEgressDenyHosts  []string
 	resolvedEgressDenyCIDRs  []string
 	resolvedEgressAllowHosts []string
 	resolvedEgressAllowCIDRs []string
-	ChatPath                 string             `json:"chat_path,omitempty"`
-	MessagesPath             string             `json:"messages_path,omitempty"`
-	ModelsPath               string             `json:"models_path,omitempty"`
-	CountTokensPath          string             `json:"count_tokens_path,omitempty"`
-	ResponsesPath            string             `json:"responses_path,omitempty"`
-	MaxConcurrency           int                `json:"max_concurrency,omitempty"`
-	StreamIdleTimeoutSeconds int                `json:"stream_idle_timeout_seconds,omitempty"`
-	Enabled                  bool               `json:"enabled"`
-	Models                   []ModelConfig      `json:"models"`
+	ChatPath                 string        `json:"chat_path,omitempty"`
+	MessagesPath             string        `json:"messages_path,omitempty"`
+	ModelsPath               string        `json:"models_path,omitempty"`
+	CountTokensPath          string        `json:"count_tokens_path,omitempty"`
+	ResponsesPath            string        `json:"responses_path,omitempty"`
+	MaxConcurrency           int           `json:"max_concurrency,omitempty"`
+	StreamIdleTimeoutSeconds int           `json:"stream_idle_timeout_seconds,omitempty"`
+	Enabled                  bool          `json:"enabled"`
+	Models                   []ModelConfig `json:"models"`
 }
 
 type ModelConfig struct {

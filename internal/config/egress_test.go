@@ -4,8 +4,8 @@ import "testing"
 
 func TestEgressConfigValidation(t *testing.T) {
 	valid := EgressConfig{
-		DenyHosts: []string{"evil.example.com"},
-		DenyCIDRs: []string{"203.0.113.0/24", "198.51.100.7"},
+		DenyHosts:  []string{"evil.example.com"},
+		DenyCIDRs:  []string{"203.0.113.0/24", "198.51.100.7"},
 		AllowHosts: []string{"trusted.example.com"},
 		AllowCIDRs: []string{"192.0.2.0/24"},
 	}
