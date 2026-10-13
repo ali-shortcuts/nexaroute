@@ -76,6 +76,41 @@ If the process stops during rotation, preserve the config, `.key`, `.key.next`, 
 - `nexaroute secrets decrypt --config PATH --to-stdout --allow-plaintext` is a deliberate plaintext export. Both flags are mandatory. Restrict terminal capture and shell redirection; if a plaintext file is unavoidable, create it in a private directory with mode `0600`, use it only for the specific migration/rollback, and securely remove it afterward.
 - The first load of a legacy plaintext config migrates it atomically and leaves a timestamped encrypted `.enc.bak`; normal runtime/Admin config saves do not create a backup copy.
 
+## 3b. Privacy audit CLI
+
+`nexaroute privacy audit --config PATH` inspects the configuration and the
+runtime policy surfaces derived from it (providers, route profiles,
+candidate pools, virtual keys, egress policy, cache, logging) and reports
+privacy problems that can be determined locally. It is **read-only**: it
+never decrypts, migrates, or rewrites the config file, and it sends no
+provider requests. Findings name configuration objects and fields only —
+the audit never prints API keys, credential values, authorization headers,
+URL userinfo, or request bodies.
+
+```bash
+nexaroute privacy audit --config "$CONFIG"              # human-readable findings
+nexaroute privacy audit --config "$CONFIG" --format json  # machine-readable report
+```
+
+Exit codes are deterministic:
+
+| Exit | Meaning |
+| --- | --- |
+| `0` | Audit completed; no error-severity findings |
+| `1` | Audit completed; at least one error-severity finding |
+| `2` | Usage error, or the config could not be read or parsed |
+
+Error findings include plaintext credentials stored in the config file
+(`PLAINTEXT_SECRET`), credentials embedded in provider URLs
+(`URL_CREDENTIALS`), cleartext `http://` endpoints on non-loopback hosts
+(`CLEARTEXT_ENDPOINT`), and `no_training` requirements (route profile or
+virtual key) that no reachable deployment can satisfy
+(`NO_TRAINING_UNSATISFIABLE`) — those requests fail closed at runtime, so
+the audit mirrors the runtime gate exactly. Warnings and infos cover
+partial `no_training` pools, `logging.access_mode=all`, an enabled
+response cache, undeclared provider data-handling classes, and an empty
+operator egress deny policy.
+
 ## 4. Health and status
 
 - `GET /healthz` is a liveness endpoint.
