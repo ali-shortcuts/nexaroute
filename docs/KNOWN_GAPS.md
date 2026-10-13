@@ -289,23 +289,26 @@ non-critical nodes no longer abort unrelated sections.
 
 ### Package coverage gaps and targets — `open`
 
-The merged Phase 1 coverage work measures **79.6% repository-wide** on the
-resulting `main` (`go test -count=1 -coverprofile=/tmp/main.cover ./...`).
-Packages below 80% in that reproducible run are:
+Coverage measured **84.9% repository-wide** on current `main`
+(`go test -count=1 -coverprofile=/tmp/cover.out ./...`, 2026-10-13), against
+the 85% policy target. Packages below 80% in that reproducible run are:
 
-- `cmd/gateway`: 73.8%
-- `internal/compat`: 76.0%
-- `internal/config`: 78.1%
-- `internal/decision`: 76.4%
-- `internal/feature`: 79.6%
-- `internal/httpapi`: 75.4%
-- `internal/probe`: 72.1%
+- `cmd/videogen`: 70.5%
+- `internal/decision/providerstate`: 79.4%
+- `internal/router`: 79.7%
+- `internal/secrets`: 78.7%
+- `internal/taskprofile`: 69.5%
+- `internal/video`: 73.9%
+- `internal/video/orchestrator`: 78.1%
+- `internal/video/tts`: 72.6%
+
+Previously thin packages are now well covered: `internal/config` 93.0%,
+`internal/compat` 92.6%, `internal/decision` 93.1%, `internal/feature` 94.3%,
+`internal/probe` 95.9%, `internal/core` 100.0%.
 
 The remaining work is meaningful behavior coverage only; no assertion-free
 padding is acceptable. The next planned coverage pass targets the uncovered
-configuration, admin/virtual endpoint, compatibility, protocol-path,
-orchestrator, and gateway branches, including the historically thin
-`internal/core` package tracked by audit finding **F7**.
+router, secrets, task-profile, and video-orchestrator branches.
 
 - Impact: thinner regression protection in the listed packages.
 - Mitigation/workaround: run the full coverage command above and inspect the
