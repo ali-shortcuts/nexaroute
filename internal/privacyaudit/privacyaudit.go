@@ -327,24 +327,24 @@ func (a *auditor) checkNoTrainingGuarantees() {
 
 	for _, rp := range a.cfg.RouteProfiles {
 		scope := "route_profile:" + rp.ID
-		if strings.TrimSpace(rp.CandidatePool) != "" {
-			if _, known := resolver.GetExpanded(rp.CandidatePool); !known {
-				a.add("PROFILE_POOL_UNKNOWN", SeverityError, scope,
-					"route profile %s references unknown candidate pool %q", rp.ID, rp.CandidatePool)
-				continue
-			}
+		poolID := strings.TrimSpace(rp.CandidatePool)
+		if poolID == "" {
+			// Candidate pool is required by Config.Validate and by the runtime
+			// resolver. Do not treat an absent pool as unrestricted: that would
+			// disagree with runtime behavior and could hide a broken route.
+			a.add("PROFILE_POOL_UNKNOWN", SeverityError, scope,
+				"route profile %s has no candidate_pool configured", rp.ID)
+			continue
+		}
+		if _, known := resolver.GetExpanded(poolID); !known {
+			a.add("PROFILE_POOL_UNKNOWN", SeverityError, scope,
+				"route profile %s references unknown candidate pool %q", rp.ID, poolID)
+			continue
 		}
 		if rp.Privacy != "no_training" {
 			continue
 		}
-		var total, satisfying int
-		if strings.TrimSpace(rp.CandidatePool) == "" {
-			// No pool restriction: the runtime gate applies to every
-			// deployment, so evaluate the whole set.
-			total, satisfying = len(all), totalSatisfying
-		} else {
-			total, satisfying, _ = poolSatisfaction(resolver, byID, rp.CandidatePool)
-		}
+		total, satisfying, _ := poolSatisfaction(resolver, byID, poolID)
 		a.noTrainingVerdict(scope,
 			fmt.Sprintf("route profile %s requires no_training", rp.ID),
 			total, satisfying, "requests will fail closed")

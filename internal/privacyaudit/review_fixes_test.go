@@ -221,3 +221,31 @@ func TestDisabledDecisionProviderPlaintextStillAudited(t *testing.T) {
 		t.Fatal("report must never contain decision provider secrets")
 	}
 }
+
+ 
+// --- Additional validation: required candidate_pool --- 
+
+func TestRouteProfileMissingCandidatePoolIsReported(t *testing.T) {
+	cfg := keyConfig(map[string]string{"a": "no"})
+	cfg.RouteProfiles = []config.RouteProfileConfig{
+		{ID: "missing-any"},
+		{ID: "missing-strict", Privacy: "no_training"},
+	}
+	rep := Audit(cfg)
+	for _, id := range []string{"missing-any", "missing-strict"} {
+		found := false
+		for _, f := range rep.Findings {
+			if f.Scope == "route_profile:"+id && f.Code == "PROFILE_POOL_UNKNOWN" && f.Severity == SeverityError {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("route profile %s with required candidate_pool missing must be an error; got %+v", id, rep.Findings)
+		}
+	}
+	for _, f := range rep.Findings {
+		if f.Scope == "route_profile:missing-strict" && f.Code == "NO_TRAINING_UNSATISFIABLE" {
+			t.Fatalf("missing candidate_pool must not be misrepresented as an unrestricted profile: %+v", f)
+		}
+	}
+}
