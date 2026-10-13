@@ -69,6 +69,19 @@ func runPrivacy(args []string, stdout, stderr io.Writer) int {
 		return privacyExitUsage
 	}
 
+	// The top-level document must be a JSON object. Without this check a
+	// literal `null` would silently unmarshal into the zero value and the
+	// audit would report on the built-in defaults instead of the file.
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &root); err != nil {
+		fmt.Fprintf(stderr, "nexaroute: privacy audit: malformed config: %v\n", err)
+		return privacyExitUsage
+	}
+	if root == nil {
+		fmt.Fprintln(stderr, "nexaroute: privacy audit: malformed config: top-level value must be a JSON object")
+		return privacyExitUsage
+	}
+
 	cfg := config.Default()
 	if err := json.Unmarshal(raw, &cfg); err != nil {
 		fmt.Fprintf(stderr, "nexaroute: privacy audit: malformed config: %v\n", err)

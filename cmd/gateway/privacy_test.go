@@ -109,6 +109,34 @@ func TestPrivacyAuditUsageErrors(t *testing.T) {
 	}
 }
 
+// TestPrivacyAuditRejectsNonObjectRoots covers Finding 4: a top-level
+// JSON null/array/scalar must be a usage error (exit 2), never a silent
+// audit of the built-in defaults; a valid empty object audits defaults.
+func TestPrivacyAuditRejectsNonObjectRoots(t *testing.T) {
+	for _, doc := range []string{"null", "[1,2,3]", "42", `"text"`, "true", ""} {
+		path := writeAuditConfig(t, doc)
+		var out, errBuf bytes.Buffer
+		code := runPrivacy([]string{"audit", "--config", path}, &out, &errBuf)
+		if code != privacyExitUsage {
+			t.Fatalf("root %q: expected exit 2, got %d", doc, code)
+		}
+		if strings.Contains(out.String(), "privacy audit:") {
+			t.Fatalf("root %q: must not produce an audit report", doc)
+		}
+	}
+
+	// Valid empty object: audited as the defaults (exit 0, summary line).
+	path := writeAuditConfig(t, "{}")
+	var out, errBuf bytes.Buffer
+	code := runPrivacy([]string{"audit", "--config", path}, &out, &errBuf)
+	if code != privacyExitOK {
+		t.Fatalf("empty object: expected exit 0 over defaults, got %d (stderr: %s)", code, errBuf.String())
+	}
+	if !strings.Contains(out.String(), "privacy audit: 0 error(s)") {
+		t.Fatalf("empty object: expected a defaults audit summary, got: %s", out.String())
+	}
+}
+
 // TestPrivacyAuditIsReadOnly proves the audit never rewrites the config
 // file, even for a legacy plaintext config that config.Load would migrate.
 func TestPrivacyAuditIsReadOnly(t *testing.T) {

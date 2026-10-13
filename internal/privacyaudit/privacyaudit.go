@@ -139,27 +139,56 @@ func (a *auditor) checkProviderSecretsAndURLs() {
 					"provider %s credentials[%d].api_key is plaintext in the config file; it will be encrypted at rest on next gateway start", p.ID, i)
 			}
 		}
+		// The persistence layer (secrets.TransformConfig) treats EVERY
+		// provider header value as secret-bearing and encrypts it at rest,
+		// regardless of the header name. The audit mirrors that contract:
+		// any non-empty, non-encrypted header value is a plaintext secret
+		// in the stored config. Only the header name is reported, never
+		// the value.
 		for name, v := range p.Headers {
-			lname := strings.ToLower(strings.TrimSpace(name))
-			if (lname == "authorization" || lname == "x-api-key" || lname == "api-key") && v != "" && !isEncryptedValue(v) {
+			if v != "" && !isEncryptedValue(v) {
 				a.add("PLAINTEXT_SECRET", SeverityError, scope,
-					"provider %s header %q carries a plaintext credential in the config file", p.ID, name)
+					"provider %s header %q stores a plaintext value in the config file; header values are encrypted at rest, so run the gateway once to migrate it", p.ID, name)
 			}
 		}
+		// proxy_url is likewise a secret-bearing field in the persistence
+		// contract (the whole value is encrypted at rest).
+		if p.ProxyURL != "" && !isEncryptedValue(p.ProxyURL) {
+			a.add("PLAINTEXT_SECRET", SeverityError, scope,
+				"provider %s proxy_url is plaintext in the config file; it is a secret-bearing field and will be encrypted at rest on next gateway start", p.ID)
+		}
 		a.checkURL(scope, "base_url", p.BaseURL)
-		a.checkURL(scope, "proxy_url", p.ProxyURL)
+		// For the proxy, only embedded credentials are flagged: the
+		// gateway's own egress policy accepts http proxies, so a
+		// cleartext scheme alone is not a finding here.
+		a.checkURLCredentials(scope, "proxy_url", p.ProxyURL)
+	}
+	a.checkStoredSecrets()
+}
+
+// checkStoredSecrets covers the remaining secret-bearing fields of the
+// persistence contract that live outside provider configs: the admin API
+// key and the plain client-auth keys. Virtual-key entries store only key
+// hashes and are not secret-bearing.
+func (a *auditor) checkStoredSecrets() {
+	if a.cfg.Admin.APIKey != "" && !isEncryptedValue(a.cfg.Admin.APIKey) {
+		a.add("PLAINTEXT_SECRET", SeverityError, "admin",
+			"the admin api_key is plaintext in the config file; it will be encrypted at rest on next gateway start")
+	}
+	for i, k := range a.cfg.ClientAuth.Keys {
+		if k != "" && !isEncryptedValue(k) {
+			a.add("PLAINTEXT_SECRET", SeverityError, "client_auth",
+				"client_auth.keys[%d] is plaintext in the config file; client keys are encrypted at rest, so run the gateway once to migrate it", i)
+		}
 	}
 }
 
 // checkURL flags embedded URL credentials (never printing the URL itself)
 // and cleartext http endpoints on non-loopback hosts.
 func (a *auditor) checkURL(scope, field, raw string) {
-	if strings.TrimSpace(raw) == "" {
+	u := parseURL(raw)
+	if u == nil {
 		return
-	}
-	u, err := url.Parse(raw)
-	if err != nil || u.Host == "" {
-		return // malformed URLs are a config-validation concern, reported elsewhere
 	}
 	if u.User != nil {
 		a.add("URL_CREDENTIALS", SeverityError, scope,
@@ -169,6 +198,29 @@ func (a *auditor) checkURL(scope, field, raw string) {
 		a.add("CLEARTEXT_ENDPOINT", SeverityError, scope,
 			"%s uses http:// with a non-loopback host; credentials and content would travel unencrypted", field)
 	}
+}
+
+// checkURLCredentials flags only embedded URL credentials.
+func (a *auditor) checkURLCredentials(scope, field, raw string) {
+	u := parseURL(raw)
+	if u == nil {
+		return
+	}
+	if u.User != nil {
+		a.add("URL_CREDENTIALS", SeverityError, scope,
+			"%s contains embedded userinfo credentials; move them to the dedicated credential fields", field)
+	}
+}
+
+func parseURL(raw string) *url.URL {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return nil // malformed URLs are a config-validation concern, reported elsewhere
+	}
+	return u
 }
 
 func isLoopbackHost(host string) bool {
@@ -182,13 +234,13 @@ func isLoopbackHost(host string) bool {
 	return addr.IsLoopback()
 }
 
-// checkDecisionProviders applies the same secret/URL checks to external
-// decision providers (they receive request metadata).
+// checkDecisionProviders applies the stored-secret and URL-credential
+// checks to external decision providers (they receive request metadata).
+// Stored-configuration checks run regardless of the enabled flag, matching
+// the persistence layer, which transforms decision-provider API keys
+// without consulting their enabled state.
 func (a *auditor) checkDecisionProviders() {
 	for _, d := range a.cfg.DecisionProviders {
-		if !d.IsEnabled() {
-			continue
-		}
 		scope := "decision_provider:" + d.ID
 		if d.APIKey != "" && !isEncryptedValue(d.APIKey) {
 			a.add("PLAINTEXT_SECRET", SeverityError, scope,
@@ -240,6 +292,24 @@ func poolSatisfaction(resolver *route.Resolver, byID map[string]router.Deploymen
 	return total, satisfying, true
 }
 
+// noTrainingVerdict emits the finding for one no_training requirement,
+// given the size of its reachable deployment set and how many members
+// satisfy the requirement. Route profiles and virtual keys share this
+// verdict so both surfaces report partial compliance consistently.
+func (a *auditor) noTrainingVerdict(scope, subject string, total, satisfying int, tail string) {
+	switch {
+	case total == 0:
+		a.add("NO_TRAINING_UNSATISFIABLE", SeverityError, scope,
+			"%s but it can reach no deployments; %s", subject, tail)
+	case satisfying == 0:
+		a.add("NO_TRAINING_UNSATISFIABLE", SeverityError, scope,
+			"%s but none of its %d reachable deployments declare trains_on_data=no; %s", subject, total, tail)
+	case satisfying < total:
+		a.add("NO_TRAINING_PARTIAL", SeverityWarning, scope,
+			"%s; %d of %d reachable deployments satisfy it and the rest are excluded at runtime", subject, satisfying, total)
+	}
+}
+
 // checkNoTrainingGuarantees cross-checks no_training requirements from
 // route profiles and virtual keys against the deployments they can reach.
 func (a *auditor) checkNoTrainingGuarantees() {
@@ -275,17 +345,9 @@ func (a *auditor) checkNoTrainingGuarantees() {
 		} else {
 			total, satisfying, _ = poolSatisfaction(resolver, byID, rp.CandidatePool)
 		}
-		switch {
-		case total == 0:
-			a.add("NO_TRAINING_UNSATISFIABLE", SeverityError, scope,
-				"route profile %s requires no_training but it can reach no deployments", rp.ID)
-		case satisfying == 0:
-			a.add("NO_TRAINING_UNSATISFIABLE", SeverityError, scope,
-				"route profile %s requires no_training but none of its %d candidate deployments declare trains_on_data=no; requests will fail closed", rp.ID, total)
-		case satisfying < total:
-			a.add("NO_TRAINING_PARTIAL", SeverityWarning, scope,
-				"route profile %s requires no_training; %d of %d candidate deployments satisfy it and the rest are excluded at runtime", rp.ID, satisfying, total)
-		}
+		a.noTrainingVerdict(scope,
+			fmt.Sprintf("route profile %s requires no_training", rp.ID),
+			total, satisfying, "requests will fail closed")
 	}
 
 	profilesByID := make(map[string]config.RouteProfileConfig, len(a.cfg.RouteProfiles))
@@ -298,23 +360,26 @@ func (a *auditor) checkNoTrainingGuarantees() {
 		}
 		scope := "virtual_key:" + k.ID
 		if len(k.AllowedRoutes) == 0 {
-			if totalSatisfying == 0 {
-				a.add("NO_TRAINING_UNSATISFIABLE", SeverityError, scope,
-					"virtual key %s requires no_training but no enabled deployment declares trains_on_data=no; its requests will fail closed", k.ID)
-			}
+			// Unrestricted key: the relevant set is every deployment.
+			a.noTrainingVerdict(scope,
+				fmt.Sprintf("virtual key %s requires no_training", k.ID),
+				len(all), totalSatisfying, "its requests will fail closed")
 			continue
 		}
-		// Union over the key's allowed route profiles' pools.
+		// Union over the key's allowed route profiles' pools, counting
+		// each deployment once even when routes overlap.
 		seen := map[string]bool{}
 		total, satisfying := 0, 0
 		for _, routeID := range k.AllowedRoutes {
 			rp, ok := profilesByID[routeID]
 			if !ok {
+				a.add("VIRTUAL_KEY_ROUTE_UNKNOWN", SeverityError, scope,
+					"virtual key %s lists allowed route %q, which does not match any configured route profile", k.ID, routeID)
 				continue
 			}
 			set, known := resolver.GetExpanded(rp.CandidatePool)
 			if !known {
-				continue
+				continue // the profile itself is reported via PROFILE_POOL_UNKNOWN
 			}
 			for id := range set {
 				if seen[id] {
@@ -329,10 +394,9 @@ func (a *auditor) checkNoTrainingGuarantees() {
 				}
 			}
 		}
-		if satisfying == 0 {
-			a.add("NO_TRAINING_UNSATISFIABLE", SeverityError, scope,
-				"virtual key %s requires no_training but none of the deployments reachable through its allowed routes declare trains_on_data=no; its requests will fail closed", k.ID)
-		}
+		a.noTrainingVerdict(scope,
+			fmt.Sprintf("virtual key %s requires no_training", k.ID),
+			total, satisfying, "its requests will fail closed")
 	}
 }
 
