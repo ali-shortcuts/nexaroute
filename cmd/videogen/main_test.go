@@ -183,3 +183,20 @@ func TestRenderRejectsNarrationOutputCollidingWithEpisodeInput(t *testing.T) {
 		t.Fatalf("render exit=%d stderr=%q", code, stderr.String())
 	}
 }
+
+func TestRunRejectsEmptyAndUnknownArgs(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if code := run(nil, &stdout, &stderr); code != 2 {
+		t.Fatalf("empty args: expected exit 2, got %d", code)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := run([]string{"bogus-command"}, &stdout, &stderr); code != 2 || !strings.Contains(stderr.String(), "unknown command") {
+		t.Fatalf("unknown command: code=%d stderr=%q", code, stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := run([]string{"providers", "extra-positional"}, &stdout, &stderr); code != 2 || !strings.Contains(stderr.String(), "unexpected positional arguments") {
+		t.Fatalf("positional args: code=%d stderr=%q", code, stderr.String())
+	}
+}
