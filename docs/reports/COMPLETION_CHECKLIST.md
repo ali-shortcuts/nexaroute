@@ -1,7 +1,7 @@
-# NOT COMPLETE — completion checklist (M1-1 through M1-8 and M2-1 DONE; 41 items remain)
+# NOT COMPLETE — completion checklist (11 DONE, 1 IN PROGRESS; 39 items remain)
 
 Repository: `ali-shortcuts/nexaroute`
-Baseline: `main` at `dcb9f9b3c0352d23f1dfa599ea58450b072406c0`
+Baseline: `main` at `24b675a0725d0b98b675159ee5b7a9d973b2a338` (reconciled 2026-10-13; previous baseline `dcb9f9b3c0352d23f1dfa599ea58450b072406c0`)
 Source: the operator-provided FULL COMPLETION PROGRAM.
 Status vocabulary: `NOT STARTED`, `IN PROGRESS`, `DONE`, `UNVERIFIED`, `UNSUPPORTED`.
 
@@ -34,7 +34,7 @@ This is the source of truth. Rows are updated after each item reaches a clean bo
 | M3-1 | Privacy leak tests for every provider-egress/content path | DONE (v0.21.0) | #280 (merged ac04486) | `internal/httpapi/privacy_p2_test.go`; `internal/httpapi/count_tokens.go`; `./scripts/verify.sh` = VERIFY PASS | Route-profile and virtual-key policies cover OpenAI Chat, Anthropic Messages, OpenAI Responses, and native Anthropic `count_tokens`; the latter now resolves virtual routes before upstream selection. Merged into main 2026-10-13. |
 | M3-2 | `nexaroute privacy audit` CLI | NOT STARTED | — | — | Never print secrets |
 | M3-3 | No-eligible-deployment warnings in config validation/dashboard | NOT STARTED | — | — | — |
-| M3-4 | Threat model with per-mitigation tests; SSRF/header/tool/key/config/privacy checks | DONE (v0.21.0, SSRF part) | #281 (merged f1a4225) | `internal/egress/ssrf_matrix_test.go` (61 cases); `docs/THREAT_MODEL.md` | SSRF blocklist complete (CGNAT, TEST-NETs, NAT64/6to4, Teredo, loopback tautology closed). Header/tool/key/config rows remain future work. Merged into main 2026-10-13. |
+| M3-4 | Threat model with per-mitigation tests; SSRF/header/tool/key/config/privacy checks | IN PROGRESS (SSRF portion DONE in v0.21.0) | #281 (merged f1a4225) | `internal/egress/ssrf_matrix_test.go` (61 cases); `docs/THREAT_MODEL.md` | SSRF blocklist complete (CGNAT, TEST-NETs, NAT64/6to4, Teredo, loopback tautology closed). Header allow-list, tool-definition, per-provider key isolation, config-validation and privacy-path mitigation tests remain outstanding (see `docs/THREAT_MODEL.md` known gaps); the item is therefore IN PROGRESS, not DONE. SSRF portion merged into main 2026-10-13. |
 | M3-5 | Admin/session negative tests and safe TLS/mTLS defaults | NOT STARTED | — | — | — |
 | M3-6 | Tamper-evident hash-chain audit log and verify CLI | NOT STARTED | — | — | — |
 | M3-7 | Release SBOM, checksums, signature and govulncheck | NOT STARTED | — | — | Signature may be UNVERIFIED if keys unavailable |
@@ -58,7 +58,7 @@ This is the source of truth. Rows are updated after each item reaches a clean bo
 | M6-3 | PII/secret detection, injection/size/content guardrails and >=90% coverage | NOT STARTED | — | — | — |
 | M6-4 | Reproducible default/tuned benchmarks, profiles and hotspot fix | NOT STARTED | — | — | — |
 | M6-5 | Docs, tested examples and <2-minute first-run wizard | NOT STARTED | — | — | — |
-| M6-6 | Prepare release notes/artifacts after gates | DONE (v0.17.0, v0.18.0) | #264 | `docs/releases/v0.17.0.md`; `docs/releases/v0.18.0.md` | Later roadmap items remain unimplemented |
+| M6-6 | Prepare release notes/artifacts after gates | DONE (per-release; latest v0.21.0) | #264 | `docs/releases/v0.17.0.md`; `docs/releases/v0.18.0.md`; `docs/releases/v0.21.0.md` | Per-release item, satisfied for each published release through v0.21.0 (notes exist for v0.19.0–v0.21.0 in `docs/releases/`). Later roadmap items remain unimplemented |
 
 ## Progress notes
 
@@ -66,4 +66,5 @@ This is the source of truth. Rows are updated after each item reaches a clean bo
 - M1-1 completed: fresh total coverage 85.1% on starting main `dcb9f9b`; historical snapshots explained; `./scripts/verify.sh` passed on PR #255 head. No coverage profile committed.
 - M1-2 completed: all 85 competitor cells audited against official deep links; 17 actual capability rows counted, 55 verified/30 unverified; structural audit and `./scripts/verify.sh` passed on PR #256 head.
 - Execution order: M1 → M3 → M2 → M4 → M5 → M6.
-- Branches are never merged or deleted by this work; the operator performs merges.
+- Branches are never merged or deleted by this work; the operator performs merges. [Historical bootstrap note: superseded for the 2026-10-13 continuation program, where the operator authorized agent merges once required CI is green, except units reserved for operator review.]
+- Reconciliation (2026-10-13, baseline `24b675a`): rows recounted directly from the table — 50 items total: 11 DONE, 1 IN PROGRESS (M3-4, corrected from DONE: only its SSRF portion is complete; header/tool/key/config/privacy mitigation tests are still outstanding per `docs/THREAT_MODEL.md`), 38 NOT STARTED; 39 items remain. The previous heading figure (41) was stale. All 23 evidence paths cited by DONE rows were checked and exist. Coverage reconciled with PR #290: 85.3% repository-wide on `24b675a`; packages below 80% are `cmd/videogen` 78.6%, `internal/taskprofile` 69.5%, `internal/video/orchestrator` 78.1% (M1-1's 85.1% figure is the historical measurement on `dcb9f9b`). CI and Security workflows are green at the baseline HEAD (runs 38416420800, 38416420840). Installer end-to-end suite (`./scripts/test-install.sh`) independently re-run and passed at this baseline. No application behavior changed by this reconciliation.
