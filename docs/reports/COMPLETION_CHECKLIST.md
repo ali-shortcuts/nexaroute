@@ -31,10 +31,10 @@ This is the source of truth. Rows are updated after each item reaches a clean bo
 | M2-12 | English/Persian/Pashto i18n, RTL screenshots, persisted switcher | NOT STARTED | — | — | — |
 | M2-13 | Embedded assets only, size budget, localhost FMP under 1s | NOT STARTED | — | — | — |
 | M2-14 | Playwright all-page/flow evidence, responsive themes, a11y and diffs | NOT STARTED | — | — | Committed screenshots |
-| M3-1 | Privacy leak tests for every provider-egress/content path | IN PROGRESS | #280 | `internal/httpapi/privacy_p2_test.go`; `internal/httpapi/count_tokens.go`; `./scripts/verify.sh` = VERIFY PASS | Route-profile and virtual-key policies cover OpenAI Chat, Anthropic Messages, OpenAI Responses, and native Anthropic `count_tokens`; the latter now resolves virtual routes before upstream selection. Issue #246 UI exclusion is covered by M2-1; awaiting operator review/merge |
+| M3-1 | Privacy leak tests for every provider-egress/content path | DONE (v0.21.0) | #280 (merged ac04486) | `internal/httpapi/privacy_p2_test.go`; `internal/httpapi/count_tokens.go`; `./scripts/verify.sh` = VERIFY PASS | Route-profile and virtual-key policies cover OpenAI Chat, Anthropic Messages, OpenAI Responses, and native Anthropic `count_tokens`; the latter now resolves virtual routes before upstream selection. Merged into main 2026-10-13. |
 | M3-2 | `nexaroute privacy audit` CLI | NOT STARTED | — | — | Never print secrets |
 | M3-3 | No-eligible-deployment warnings in config validation/dashboard | NOT STARTED | — | — | — |
-| M3-4 | Threat model with per-mitigation tests; SSRF/header/tool/key/config/privacy checks | IN PROGRESS | branch m3-4-egress-ssrf-matrix | egress/SSRF matrix | See docs/THREAT_MODEL.md; header/tool/key/config rows remain |
+| M3-4 | Threat model with per-mitigation tests; SSRF/header/tool/key/config/privacy checks | DONE (v0.21.0, SSRF part) | #281 (merged f1a4225) | `internal/egress/ssrf_matrix_test.go` (61 cases); `docs/THREAT_MODEL.md` | SSRF blocklist complete (CGNAT, TEST-NETs, NAT64/6to4, Teredo, loopback tautology closed). Header/tool/key/config rows remain future work. Merged into main 2026-10-13. |
 | M3-5 | Admin/session negative tests and safe TLS/mTLS defaults | NOT STARTED | — | — | — |
 | M3-6 | Tamper-evident hash-chain audit log and verify CLI | NOT STARTED | — | — | — |
 | M3-7 | Release SBOM, checksums, signature and govulncheck | NOT STARTED | — | — | Signature may be UNVERIFIED if keys unavailable |
