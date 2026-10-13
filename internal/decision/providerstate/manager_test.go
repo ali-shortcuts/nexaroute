@@ -306,3 +306,34 @@ func BenchmarkManager_RecordFailure(b *testing.B) {
 		m.RecordFailure("jev-main")
 	}
 }
+
+func TestManager_SnapshotHidesFailTimesAndConfig(t *testing.T) {
+	cfg := Config{FailureThreshold: 5, FailureWindow: 30 * time.Second, Cooldown: 60 * time.Second}
+	m := New(cfg, nil)
+	m.RecordFailure("p1")
+	m.RecordFailure("p1")
+
+	snap := m.Snapshot()
+	st, ok := snap["p1"]
+	if !ok {
+		t.Fatal("snapshot must contain p1")
+	}
+	if st.failTimes != nil {
+		t.Fatal("snapshot must not expose internal failTimes")
+	}
+	if st.ConsecutiveFailures != 2 || st.FailuresInWindow != 2 {
+		t.Fatalf("expected 2 recorded failures, got consecutive=%d window=%d", st.ConsecutiveFailures, st.FailuresInWindow)
+	}
+
+	// Mutating the snapshot must not affect the manager's internal state.
+	st.ConsecutiveFailures = 99
+	again, _ := m.SnapshotOne("p1")
+	if again.ConsecutiveFailures != 2 {
+		t.Fatalf("snapshot mutation leaked into manager state: %d", again.ConsecutiveFailures)
+	}
+
+	got := m.Config()
+	if got.FailureThreshold != 5 || got.Cooldown != 60*time.Second {
+		t.Fatalf("Config() must return the configured values, got %+v", got)
+	}
+}
