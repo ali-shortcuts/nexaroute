@@ -222,8 +222,8 @@ func TestDisabledDecisionProviderPlaintextStillAudited(t *testing.T) {
 	}
 }
 
- 
-// --- Additional validation: required candidate_pool --- 
+
+// --- Additional validation: required candidate_pool ---
 
 func TestRouteProfileMissingCandidatePoolIsReported(t *testing.T) {
 	cfg := keyConfig(map[string]string{"a": "no"})
