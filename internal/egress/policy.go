@@ -14,9 +14,24 @@ import (
 
 // Policy is the provider egress boundary. AllowedHosts is an optional exact
 // host allow-list; AllowLoopback permits only explicitly local HTTP providers.
+// DenyHosts and DenyCIDRs are operator-configured deny lists that take
+// precedence over everything except the built-in special-purpose blocklist.
 type Policy struct {
 	AllowedHosts  []string
 	AllowLoopback bool
+	DenyHosts     []string
+	DenyCIDRs     []netip.Prefix
+}
+
+// deniedHost reports whether a hostname is on the operator deny-list.
+func (p Policy) deniedHost(host string) bool {
+	host = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
+	for _, denied := range p.DenyHosts {
+		if strings.EqualFold(strings.TrimSuffix(strings.TrimSpace(denied), "."), host) {
+			return true
+		}
+	}
+	return false
 }
 
 func (p Policy) allowsHost(host string) bool {
@@ -100,6 +115,20 @@ func blocked(ip netip.Addr, allowLoopback bool) bool {
 // isLoopbackHost reports whether a URL/dial host names the local machine
 // explicitly: a loopback IP literal, "localhost" or "*.localhost". An
 // arbitrary DNS name that merely resolves to 127.0.0.1 does NOT qualify.
+// deniedIP reports whether an IP matches the operator deny-CIDR list.
+func (p Policy) deniedIP(ip netip.Addr) bool {
+	ip = ip.WithZone("").Unmap()
+	if !ip.IsValid() {
+		return false
+	}
+	for _, prefix := range p.DenyCIDRs {
+		if prefix.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
 func isLoopbackHost(host string) bool {
 	host = strings.ToLower(strings.TrimSuffix(host, "."))
 	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
@@ -117,11 +146,19 @@ func (p Policy) validateURL(raw string) (*url.URL, error) {
 	if u.Scheme != "https" && !(u.Scheme == "http" && p.AllowLoopback && isLoopbackHost(u.Hostname())) {
 		return nil, fmt.Errorf("egress target must use https (http is only allowed for explicit loopback hosts)")
 	}
+	if p.deniedHost(u.Hostname()) {
+		return nil, fmt.Errorf("egress host %q is denied by operator policy", u.Hostname())
+	}
 	if !p.allowsHost(u.Hostname()) {
 		return nil, fmt.Errorf("egress host %q is not allow-listed", u.Hostname())
 	}
-	if ip, err := netip.ParseAddr(u.Hostname()); err == nil && blocked(ip, p.AllowLoopback) {
-		return nil, fmt.Errorf("egress target %q is blocked", u.Hostname())
+	if ip, err := netip.ParseAddr(u.Hostname()); err == nil {
+		if p.deniedIP(ip) {
+			return nil, fmt.Errorf("egress target %q is denied by operator policy", u.Hostname())
+		}
+		if blocked(ip, p.AllowLoopback) {
+			return nil, fmt.Errorf("egress target %q is blocked", u.Hostname())
+		}
 	}
 	return u, nil
 }
@@ -154,6 +191,9 @@ func (p Policy) NewTransport(target string, proxyURL string) (*http.Transport, e
 		if err != nil {
 			return nil, err
 		}
+		if p.deniedHost(host) {
+			return nil, fmt.Errorf("egress host %q is denied by operator policy", host)
+		}
 		if !p.allowsHost(host) {
 			return nil, fmt.Errorf("egress host %q is not allow-listed", host)
 		}
@@ -162,6 +202,9 @@ func (p Policy) NewTransport(target string, proxyURL string) (*http.Transport, e
 		// 127.0.0.1 is a rebinding/SSRF vector and stays blocked.
 		allowLoopback := p.AllowLoopback && isLoopbackHost(host)
 		if ip, parseErr := netip.ParseAddr(host); parseErr == nil {
+			if p.deniedIP(ip) {
+				return nil, fmt.Errorf("egress address %q is denied by operator policy", host)
+			}
 			if blocked(ip, allowLoopback) {
 				return nil, fmt.Errorf("egress address %q is blocked", host)
 			}
@@ -173,7 +216,7 @@ func (p Policy) NewTransport(target string, proxyURL string) (*http.Transport, e
 		}
 		for _, candidate := range ips {
 			ip, ok := netip.AddrFromSlice(candidate.IP)
-			if !ok || blocked(ip, allowLoopback) {
+			if !ok || p.deniedIP(ip) || blocked(ip, allowLoopback) {
 				return nil, fmt.Errorf("egress DNS answer for %q is blocked", host)
 			}
 		}
