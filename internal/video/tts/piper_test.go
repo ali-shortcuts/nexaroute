@@ -99,3 +99,37 @@ func TestPiperRejectsEmptyTextAndSanitizesCommandErrors(t *testing.T) {
 		t.Fatalf("failed synthesis left output file, stat error=%v", err)
 	}
 }
+
+func TestCappedBufferWriteContract(t *testing.T) {
+	b := &cappedBuffer{}
+
+	// Small write is stored in full and reports its length.
+	n, err := b.Write([]byte("hello"))
+	if err != nil || n != 5 || b.String() != "hello" {
+		t.Fatalf("small write: n=%d err=%v buf=%q", n, err, b.String())
+	}
+
+	// A write larger than the remaining capacity is truncated in storage
+	// but must still report the ORIGINAL length so io.Copy callers and the
+	// subprocess stderr pump never see a short write or an error.
+	big := make([]byte, maxPiperStderr+1024)
+	for i := range big {
+		big[i] = 'x'
+	}
+	n, err = b.Write(big)
+	if err != nil {
+		t.Fatalf("big write error: %v", err)
+	}
+	if n != len(big) {
+		t.Fatalf("big write must report original length %d, got %d", len(big), n)
+	}
+	if b.Len() != maxPiperStderr {
+		t.Fatalf("buffer must cap at %d bytes, got %d", maxPiperStderr, b.Len())
+	}
+
+	// Writes after the cap is reached store nothing but still succeed fully.
+	n, err = b.Write([]byte("more"))
+	if err != nil || n != 4 || b.Len() != maxPiperStderr {
+		t.Fatalf("post-cap write: n=%d err=%v len=%d", n, err, b.Len())
+	}
+}
