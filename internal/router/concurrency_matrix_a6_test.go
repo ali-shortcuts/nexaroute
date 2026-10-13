@@ -66,7 +66,7 @@ func a6Config(n int, order []int) config.Config {
 		id := fmt.Sprintf("p%02d", idx)
 		cfg.Providers = append(cfg.Providers, config.ProviderConfig{
 			ID: id, Name: id, Type: "openai_compatible",
-			BaseURL: "http://example.invalid", AuthMode: "none", Enabled: true,
+			BaseURL: "https://example.invalid", AuthMode: "none", Enabled: true,
 			Models: []config.ModelConfig{{
 				ID: "m", Model: "shared-model", Aliases: []string{"coding"},
 				Enabled: true, Priority: 0, Weight: 1,

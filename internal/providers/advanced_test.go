@@ -99,7 +99,7 @@ func TestCredentialFailoverReturnsFinalTransportErrorNotClosedPriorResponse(t *t
 
 func TestSafeSnippetConcurrentWithCredentialStateChanges(t *testing.T) {
 	p := config.ProviderConfig{
-		ID: "p", Name: "p", Type: "openai_compatible", BaseURL: "http://example.invalid",
+		ID: "p", Name: "p", Type: "openai_compatible", BaseURL: "https://example.invalid",
 		APIKey:      "secret-a",
 		Credentials: []config.CredentialConfig{{Name: "b", APIKey: "secret-b", Enabled: true}},
 		AuthMode:    "bearer", Enabled: true,
@@ -173,7 +173,7 @@ func TestProviderRedirectDoesNotForwardSecretsAcrossOrigins(t *testing.T) {
 func TestRedactBodyIncludesConfiguredCustomHeaders(t *testing.T) {
 	p := config.ProviderConfig{
 		ID: "redact", Name: "redact", Type: "openai_compatible",
-		BaseURL: "http://example.invalid", AuthMode: "none",
+		BaseURL: "https://example.invalid", AuthMode: "none",
 		Headers: map[string]string{"X-Provider-Secret": "custom-secret"}, Enabled: true,
 	}
 	a, err := newHTTPAdapter(p, time.Second)
@@ -380,7 +380,7 @@ func TestRedactBodyCoversAdapterSnapshotAndRotatedEnvCredential(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := config.ProviderConfig{
-		ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "http://example.invalid",
+		ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "https://example.invalid",
 		APIKeyEnv: envName, AuthMode: "bearer", Enabled: true, MaxConcurrency: 1,
 	}
 	a, err := newHTTPAdapter(p, time.Second)
@@ -405,7 +405,7 @@ func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { retu
 
 func TestTransportErrorDoesNotFanOutAcrossCredentialPool(t *testing.T) {
 	p := config.ProviderConfig{
-		ID: "p", Name: "p", Type: "openai_compatible", BaseURL: "http://example.invalid",
+		ID: "p", Name: "p", Type: "openai_compatible", BaseURL: "https://example.invalid",
 		APIKey: "key-a",
 		Credentials: []config.CredentialConfig{
 			{Name: "b", APIKey: "key-b", Enabled: true},
@@ -458,7 +458,7 @@ func (t *idleCloseTrackingTransport) CloseIdleConnections() {
 
 func TestHTTPAdapterCloseIdleConnectionsReachesTransport(t *testing.T) {
 	p := config.ProviderConfig{
-		ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "http://example.invalid",
+		ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "https://example.invalid",
 		AuthMode: "none", Enabled: true, MaxConcurrency: 1,
 	}
 	a, err := newHTTPAdapter(p, time.Second)

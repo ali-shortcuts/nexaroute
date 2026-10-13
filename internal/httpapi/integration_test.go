@@ -810,7 +810,7 @@ func TestHotReloadInvalidatesHealthOnEnvironmentCredentialRotation(t *testing.T)
 	cfg := config.Default()
 	cfg.Probe.Enabled = false
 	cfg.Providers = []config.ProviderConfig{{
-		ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "http://example.invalid",
+		ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "https://example.invalid",
 		APIKeyEnv: envName, AuthMode: "bearer", Enabled: true,
 		Models: []config.ModelConfig{{ID: "m", Model: "m", Enabled: true, Weight: 1}},
 	}}
@@ -832,7 +832,7 @@ func TestHotReloadInvalidatesHealthWhenCapabilitiesChange(t *testing.T) {
 	cfg := config.Default()
 	cfg.Probe.Enabled = false
 	cfg.Providers = []config.ProviderConfig{{
-		ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "http://example.invalid",
+		ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "https://example.invalid",
 		AuthMode: "none", Enabled: true,
 		Models: []config.ModelConfig{{
 			ID: "m", Model: "m", Enabled: true, Weight: 1,
@@ -1144,7 +1144,7 @@ func TestRoutingOnlyReloadKeepsExistingAdapterPool(t *testing.T) {
 	cfg := config.Default()
 	cfg.Probe.Enabled = false
 	cfg.Providers = []config.ProviderConfig{{
-		ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "http://example.invalid",
+		ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "https://example.invalid",
 		AuthMode: "none", Enabled: true, MaxConcurrency: 2,
 		Models: []config.ModelConfig{{ID: "m", Model: "m", Enabled: true, Weight: 1}},
 	}}
@@ -1165,7 +1165,7 @@ func TestRetryAfterCapReloadRebuildsProviderAdapter(t *testing.T) {
 	cfg := config.Default()
 	cfg.Probe.Enabled = false
 	cfg.Providers = []config.ProviderConfig{{
-		ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "http://example.invalid",
+		ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "https://example.invalid",
 		AuthMode: "none", Enabled: true, MaxConcurrency: 2,
 		Models: []config.ModelConfig{{ID: "m", Model: "m", Enabled: true, Weight: 1}},
 	}}

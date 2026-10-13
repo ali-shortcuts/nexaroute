@@ -54,7 +54,7 @@ func TestFallbackOnUnknownClientModel(t *testing.T) {
 func TestFallbackDoesNotEscapeKnownUnavailableModel(t *testing.T) {
 	cfg := config.Default()
 	cfg.Routing.FallbackOnUnknownModel = true
-	cfg.Providers = []config.ProviderConfig{{ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "http://example.invalid", Enabled: true, Models: []config.ModelConfig{
+	cfg.Providers = []config.ProviderConfig{{ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "https://example.invalid", Enabled: true, Models: []config.ModelConfig{
 		{ID: "known", Model: "known-model", Enabled: true, Weight: 1, Capabilities: config.Capabilities{Streaming: true}},
 		{ID: "other", Model: "other-model", Enabled: true, Weight: 1, Capabilities: config.Capabilities{Streaming: true, Tools: true}},
 	}}}
@@ -71,7 +71,7 @@ func TestFallbackDoesNotEscapeKnownUnavailableModel(t *testing.T) {
 func TestFallbackDoesNotBypassKnownModelCapabilities(t *testing.T) {
 	cfg := config.Default()
 	cfg.Routing.FallbackOnUnknownModel = true
-	cfg.Providers = []config.ProviderConfig{{ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "http://example.invalid", Enabled: true, Models: []config.ModelConfig{
+	cfg.Providers = []config.ProviderConfig{{ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "https://example.invalid", Enabled: true, Models: []config.ModelConfig{
 		{ID: "known", Model: "known-model", Enabled: true, Weight: 1, Capabilities: config.Capabilities{Streaming: true, Tools: false}},
 		{ID: "other", Model: "other-model", Enabled: true, Weight: 1, Capabilities: config.Capabilities{Streaming: true, Tools: true}},
 	}}}
@@ -85,7 +85,7 @@ func TestFallbackDoesNotBypassKnownModelCapabilities(t *testing.T) {
 func TestRoundRobinRotatesAcrossHealthyCandidates(t *testing.T) {
 	cfg := config.Default()
 	cfg.Routing.Strategy = "round_robin"
-	cfg.Providers = []config.ProviderConfig{{ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "http://example.invalid", Enabled: true, Models: []config.ModelConfig{
+	cfg.Providers = []config.ProviderConfig{{ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "https://example.invalid", Enabled: true, Models: []config.ModelConfig{
 		{ID: "a", Model: "a", Aliases: []string{"auto"}, Enabled: true, Weight: 1},
 		{ID: "b", Model: "b", Aliases: []string{"auto"}, Enabled: true, Weight: 1},
 		{ID: "c", Model: "c", Aliases: []string{"auto"}, Enabled: true, Weight: 1},
@@ -111,7 +111,7 @@ func TestRoundRobinRotatesAcrossHealthyCandidates(t *testing.T) {
 func TestLeastLatencyPrefersMeasuredFastHealthy(t *testing.T) {
 	cfg := config.Default()
 	cfg.Routing.Strategy = "least_latency"
-	cfg.Providers = []config.ProviderConfig{{ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "http://example.invalid", Enabled: true, Models: []config.ModelConfig{
+	cfg.Providers = []config.ProviderConfig{{ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "https://example.invalid", Enabled: true, Models: []config.ModelConfig{
 		{ID: "slow", Model: "slow", Aliases: []string{"auto"}, Enabled: true, Weight: 1},
 		{ID: "fast", Model: "fast", Aliases: []string{"auto"}, Enabled: true, Weight: 1},
 	}}}
@@ -127,7 +127,7 @@ func TestLeastLatencyPrefersMeasuredFastHealthy(t *testing.T) {
 
 func TestClaudeAutoMatchesAllDeployments(t *testing.T) {
 	cfg := config.Default()
-	cfg.Providers = []config.ProviderConfig{{ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "http://example.invalid", Enabled: true, Models: []config.ModelConfig{{ID: "m", Model: "m", Enabled: true, Weight: 1}}}}
+	cfg.Providers = []config.ProviderConfig{{ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "https://example.invalid", Enabled: true, Models: []config.ModelConfig{{ID: "m", Model: "m", Enabled: true, Weight: 1}}}}
 	h := health.New(4, time.Hour)
 	r := New(cfg, h)
 	h.RecordSuccess("p/m", time.Millisecond)
@@ -139,7 +139,7 @@ func TestClaudeAutoMatchesAllDeployments(t *testing.T) {
 func TestRoundRobinNeverPromotesDegradedAheadOfHealthy(t *testing.T) {
 	cfg := config.Default()
 	cfg.Routing.Strategy = "round_robin"
-	cfg.Providers = []config.ProviderConfig{{ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "http://example.invalid", Enabled: true, Models: []config.ModelConfig{
+	cfg.Providers = []config.ProviderConfig{{ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "https://example.invalid", Enabled: true, Models: []config.ModelConfig{
 		{ID: "a", Model: "a", Aliases: []string{"auto"}, Enabled: true, Weight: 1},
 		{ID: "b", Model: "b", Aliases: []string{"auto"}, Enabled: true, Weight: 1},
 		{ID: "bad", Model: "bad", Aliases: []string{"auto"}, Enabled: true, Weight: 1},
@@ -163,7 +163,7 @@ func TestRoundRobinNeverPromotesDegradedAheadOfHealthy(t *testing.T) {
 func TestAdaptivePrefersConfiguredStrongHealthyDeployment(t *testing.T) {
 	cfg := config.Default()
 	cfg.Routing.Strategy = "adaptive"
-	cfg.Providers = []config.ProviderConfig{{ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "http://example.invalid", Enabled: true, Models: []config.ModelConfig{
+	cfg.Providers = []config.ProviderConfig{{ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "https://example.invalid", Enabled: true, Models: []config.ModelConfig{
 		{ID: "strong", Model: "strong", Aliases: []string{"coding"}, Enabled: true, Priority: 0, Weight: 2},
 		{ID: "weak", Model: "weak", Aliases: []string{"coding"}, Enabled: true, Priority: 10, Weight: 1},
 	}}}
@@ -180,7 +180,7 @@ func TestAdaptivePrefersConfiguredStrongHealthyDeployment(t *testing.T) {
 func TestAdaptiveNeverPromotesDegradedHighWeightAheadOfHealthy(t *testing.T) {
 	cfg := config.Default()
 	cfg.Routing.Strategy = "adaptive"
-	cfg.Providers = []config.ProviderConfig{{ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "http://example.invalid", Enabled: true, Models: []config.ModelConfig{
+	cfg.Providers = []config.ProviderConfig{{ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "https://example.invalid", Enabled: true, Models: []config.ModelConfig{
 		{ID: "healthy", Model: "healthy", Aliases: []string{"coding"}, Enabled: true, Priority: 100, Weight: 1},
 		{ID: "degraded", Model: "degraded", Aliases: []string{"coding"}, Enabled: true, Priority: 0, Weight: 100},
 	}}}
@@ -197,7 +197,7 @@ func TestAdaptiveNeverPromotesDegradedHighWeightAheadOfHealthy(t *testing.T) {
 func TestAdaptiveRoundRobinNeverPromotesDegradedHighWeightAheadOfHealthy(t *testing.T) {
 	cfg := config.Default()
 	cfg.Routing.Strategy = "adaptive_round_robin"
-	cfg.Providers = []config.ProviderConfig{{ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "http://example.invalid", Enabled: true, Models: []config.ModelConfig{
+	cfg.Providers = []config.ProviderConfig{{ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "https://example.invalid", Enabled: true, Models: []config.ModelConfig{
 		{ID: "healthy", Model: "healthy", Aliases: []string{"coding"}, Enabled: true, Priority: 100, Weight: 1},
 		{ID: "degraded", Model: "degraded", Aliases: []string{"coding"}, Enabled: true, Priority: 0, Weight: 100},
 	}}}
@@ -216,7 +216,7 @@ func TestAdaptiveRoundRobinNeverPromotesDegradedHighWeightAheadOfHealthy(t *test
 func TestReadyQueueRequiresSuccessfulHealthProofAndStaysSticky(t *testing.T) {
 	cfg := config.Default()
 	cfg.Routing.Strategy = "ready_queue"
-	cfg.Providers = []config.ProviderConfig{{ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "http://example.invalid", Enabled: true, Models: []config.ModelConfig{
+	cfg.Providers = []config.ProviderConfig{{ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "https://example.invalid", Enabled: true, Models: []config.ModelConfig{
 		{ID: "strong", Model: "strong", Aliases: []string{"coding"}, Enabled: true, Priority: 0, Weight: 2, Capabilities: config.Capabilities{Streaming: true}},
 		{ID: "weak", Model: "weak", Aliases: []string{"coding"}, Enabled: true, Priority: 10, Weight: 1, Capabilities: config.Capabilities{Streaming: true}},
 	}}}
@@ -336,7 +336,7 @@ func TestSessionAffinityTableRemainsBoundedUnderUniqueIDs(t *testing.T) {
 	cfg.Routing.Strategy = "ready_mesh"
 	cfg.Routing.SessionAffinity = true
 	cfg.Providers = []config.ProviderConfig{{
-		ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "http://example.invalid", Enabled: true,
+		ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "https://example.invalid", Enabled: true,
 		Models: []config.ModelConfig{{ID: "m", Model: "m", Enabled: true, Weight: 1}},
 	}}
 	h := health.New(5, time.Hour)
@@ -353,7 +353,7 @@ func TestSessionAffinityTableRemainsBoundedUnderUniqueIDs(t *testing.T) {
 func TestSpecificModelIndexCoversAllMatchForms(t *testing.T) {
 	cfg := config.Default()
 	cfg.Providers = []config.ProviderConfig{{
-		ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "http://example.invalid", Enabled: true,
+		ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "https://example.invalid", Enabled: true,
 		Models: []config.ModelConfig{{
 			ID: "short", Model: "vendor/model-v1", Aliases: []string{"coding", "fast"},
 			Enabled: true, Weight: 1, Capabilities: config.Capabilities{Streaming: true},
@@ -377,9 +377,9 @@ func TestSpecificModelIndexCoversAllMatchForms(t *testing.T) {
 func TestProviderTypeRequirementFiltersCandidates(t *testing.T) {
 	cfg := config.Default()
 	cfg.Providers = []config.ProviderConfig{
-		{ID: "o", Name: "O", Type: "openai_compatible", BaseURL: "http://example.invalid", Enabled: true,
+		{ID: "o", Name: "O", Type: "openai_compatible", BaseURL: "https://example.invalid", Enabled: true,
 			Models: []config.ModelConfig{{ID: "m", Model: "m", Aliases: []string{"coding"}, Enabled: true, Weight: 1, Capabilities: config.Capabilities{Reasoning: true}}}},
-		{ID: "a", Name: "A", Type: "anthropic_compatible", BaseURL: "http://example.invalid", Enabled: true,
+		{ID: "a", Name: "A", Type: "anthropic_compatible", BaseURL: "https://example.invalid", Enabled: true,
 			Models: []config.ModelConfig{{ID: "m", Model: "m", Aliases: []string{"coding"}, Enabled: true, Weight: 1, Capabilities: config.Capabilities{Reasoning: true}}}},
 	}
 	h := health.New(5, time.Hour)

@@ -34,7 +34,7 @@ This is the source of truth. Rows are updated after each item reaches a clean bo
 | M3-1 | Privacy leak tests for every provider-egress/content path | IN PROGRESS | #280 | `internal/httpapi/privacy_p2_test.go`; `internal/httpapi/count_tokens.go`; `./scripts/verify.sh` = VERIFY PASS | Route-profile and virtual-key policies cover OpenAI Chat, Anthropic Messages, OpenAI Responses, and native Anthropic `count_tokens`; the latter now resolves virtual routes before upstream selection. Issue #246 UI exclusion is covered by M2-1; awaiting operator review/merge |
 | M3-2 | `nexaroute privacy audit` CLI | NOT STARTED | — | — | Never print secrets |
 | M3-3 | No-eligible-deployment warnings in config validation/dashboard | NOT STARTED | — | — | — |
-| M3-4 | Threat model with per-mitigation tests; SSRF/header/tool/key/config/privacy checks | NOT STARTED | — | — | — |
+| M3-4 | Threat model with per-mitigation tests; SSRF/header/tool/key/config/privacy checks | IN PROGRESS | branch m3-4-egress-ssrf-matrix | egress/SSRF matrix | See docs/THREAT_MODEL.md; header/tool/key/config rows remain |
 | M3-5 | Admin/session negative tests and safe TLS/mTLS defaults | NOT STARTED | — | — | — |
 | M3-6 | Tamper-evident hash-chain audit log and verify CLI | NOT STARTED | — | — | — |
 | M3-7 | Release SBOM, checksums, signature and govulncheck | NOT STARTED | — | — | Signature may be UNVERIFIED if keys unavailable |

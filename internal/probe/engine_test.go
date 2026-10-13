@@ -348,7 +348,7 @@ func TestRecoverFloodUsesFixedWorkerPoolNotPerDeploymentGoroutines(t *testing.T)
 	cfg.Probe.Enabled = true
 	cfg.Probe.OnStart = false
 	cfg.Providers = []config.ProviderConfig{{
-		ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "http://example.invalid",
+		ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "https://example.invalid",
 		AuthMode: "none", Enabled: true, MaxConcurrency: 32,
 	}}
 	for i := 0; i < 500; i++ {
@@ -447,7 +447,7 @@ func TestReloadCancelsDelayedRecoveryAndPreventsStaleTimerABA(t *testing.T) {
 	cfg := config.Default()
 	cfg.Probe.Enabled = true
 	cfg.Providers = []config.ProviderConfig{{
-		ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "http://example.invalid",
+		ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "https://example.invalid",
 		AuthMode: "none", Enabled: true,
 		Models: []config.ModelConfig{{ID: "m", Model: "m", Enabled: true, Weight: 1}},
 	}}
