@@ -144,6 +144,27 @@ A provider may use a primary key plus additional credentials:
 
 Usable keys rotate. Auth/quota/rate-limit failures cool an individual credential so another key can be tried.
 
+## Global egress policy
+
+The top-level `egress` section lets operators restrict which hosts and networks
+providers may connect to, beyond the built-in special-purpose IP blocklist.
+Deny lists take precedence over everything else.
+
+```json
+{
+  "egress": {
+    "deny_hosts": ["internal.example.com"],
+    "deny_cidrs": ["10.0.0.0/8", "192.168.1.50"],
+    "allow_hosts": ["trusted-partner.example.com"],
+    "allow_cidrs": ["203.0.113.0/24"]
+  }
+}
+```
+
+- `deny_hosts` — hostnames (exact, case-insensitive) that providers may never connect to.
+- `deny_cidrs` — IP addresses or CIDR ranges that providers may never connect to. Checked at URL validation and again for every DNS-resolved address at dial time.
+- `allow_hosts` / `allow_cidrs` — additional hosts/networks added to the per-provider allow-list.
+
 ## Provider endpoint controls
 
 Per provider:
