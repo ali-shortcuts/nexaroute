@@ -1,5 +1,9 @@
 # Unreleased
 
+## Features
+
+- Admin-configurable egress allow/deny policy: a new top-level `egress` config section (`deny_hosts`, `deny_cidrs`, `allow_hosts`, `allow_cidrs`) lets operators restrict which hosts and networks providers may connect to, beyond the built-in special-purpose IP blocklist. Deny lists take precedence and are enforced at URL validation and again for every DNS-resolved address at dial time (PR #283). See `docs/CONFIGURATION.md` ("Global egress policy").
+
 ## Security
 
 - Provider egress now blocks the full IANA special-purpose space, including carrier-grade NAT (`100.64.0.0/10`, which contains the Alibaba metadata address `100.100.100.200`), TEST-NETs, benchmarking, reserved, Teredo, site-local and `::/96`. NAT64 (`64:ff9b::/96`) and 6to4 (`2002::/16`) addresses are judged by the IPv4 address they embed, so legitimate IPv6-only deployments keep working.
