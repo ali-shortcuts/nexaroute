@@ -304,7 +304,7 @@ the 85% policy target. Packages below 80% in that reproducible run are:
 
 Previously thin packages are now well covered: `internal/config` 93.0%,
 `internal/compat` 92.6%, `internal/decision` 93.1%, `internal/feature` 94.3%,
-`internal/probe` 95.9%, `internal/core` 100.0%.
+`internal/probe` 95.9%, `internal/core` 100.0%, `cmd/gateway` 85.4%.
 
 The remaining work is meaningful behavior coverage only; no assertion-free
 padding is acceptable. The next planned coverage pass targets the uncovered
