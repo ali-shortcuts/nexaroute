@@ -144,15 +144,6 @@ func TestSSRF_EnvProxy_NeverUsed(t *testing.T) {
 	// faked so the approved IP is unroutable and the dial fails fast.
 	dns := newFakeDNSServer(t)
 	dns.setA("proxytest.test", net.IPv4(192, 0, 2, 1))
-	orig := net.DefaultResolver
-	net.DefaultResolver = &net.Resolver{
-		PreferGo: true,
-		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
-			var d net.Dialer
-			return d.DialContext(ctx, network, dns.addr())
-		},
-	}
-	t.Cleanup(func() { net.DefaultResolver = orig })
 
 	tr := NewTransport()
 	t.Cleanup(tr.CloseIdleConnections)

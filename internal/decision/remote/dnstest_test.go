@@ -32,19 +32,52 @@ type fakeDNSServer struct {
 	aQueries map[string]int
 }
 
+var (
+	sharedDNSOnce sync.Once
+	sharedDNSInst *fakeDNSServer
+)
+
+// sharedFakeDNS returns the single package-wide fake DNS server, installing
+// it as net.DefaultResolver exactly once for the whole test binary.
+//
+// The resolver is deliberately never restored to the process default: the
+// standard library resolver reads net.DefaultResolver from its own internal
+// lookup goroutines, so a per-test save/restore races with any lookup still
+// in flight when the test ends (observed as DATA RACE warnings under
+// -race). Installing once removes the write side of that race entirely.
+// All scripted state lives behind the server mutex; newFakeDNSServer resets
+// it per test, and tests script unique hostnames.
+func sharedFakeDNS() *fakeDNSServer {
+	sharedDNSOnce.Do(func() {
+		pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+		if err != nil {
+			panic("fake DNS: listen udp: " + err.Error())
+		}
+		s := &fakeDNSServer{
+			conn:     pc,
+			seq:      map[string][]net.IP{},
+			aQueries: map[string]int{},
+		}
+		go s.serve()
+		sharedDNSInst = s
+		net.DefaultResolver = &net.Resolver{
+			PreferGo: true,
+			Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+				var d net.Dialer
+				return d.DialContext(ctx, network, s.addr())
+			},
+		}
+	})
+	return sharedDNSInst
+}
+
 func newFakeDNSServer(t *testing.T) *fakeDNSServer {
 	t.Helper()
-	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("fake DNS: listen udp: %v", err)
-	}
-	s := &fakeDNSServer{
-		conn:     pc,
-		seq:      map[string][]net.IP{},
-		aQueries: map[string]int{},
-	}
-	go s.serve()
-	t.Cleanup(func() { _ = s.conn.Close() })
+	s := sharedFakeDNS()
+	s.mu.Lock()
+	s.seq = map[string][]net.IP{}
+	s.aQueries = map[string]int{}
+	s.mu.Unlock()
 	return s
 }
 
