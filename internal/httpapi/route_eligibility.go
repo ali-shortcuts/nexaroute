@@ -3,6 +3,7 @@ package httpapi
 import (
 	"github.com/ali-shortcuts/nexaroute/internal/config"
 	"github.com/ali-shortcuts/nexaroute/internal/health"
+	"github.com/ali-shortcuts/nexaroute/internal/route"
 	"github.com/ali-shortcuts/nexaroute/internal/router"
 )
 
@@ -18,7 +19,12 @@ import (
 // router.eligibleDeployment: the fail-closed privacy gate first, then
 // provider availability, then deployment health status (retired, then
 // the ready-strategy health requirement, then cooldown).
-func (s *Server) routeEligibilityView(cfg config.Config, healthAll []health.State) map[string]any {
+//
+// cfg and resolver must come from one runtime snapshot captured under
+// runtimeMu by the caller (applyConfigLocked replaces both under that
+// lock), and healthAll must be the complete, untruncated health
+// snapshot. This helper never reads s.routeResolver itself.
+func (s *Server) routeEligibilityView(cfg config.Config, resolver *route.Resolver, healthAll []health.State) map[string]any {
 	healthByID := make(map[string]health.State, len(healthAll))
 	for _, st := range healthAll {
 		healthByID[st.Deployment] = st
@@ -47,9 +53,9 @@ func (s *Server) routeEligibilityView(cfg config.Config, healthAll []health.Stat
 		}
 
 		members := make(map[string]struct{})
-		if s.routeResolver != nil {
+		if resolver != nil {
 			for _, pid := range poolIDs {
-				if set, ok := s.routeResolver.GetExpanded(pid); ok {
+				if set, ok := resolver.GetExpanded(pid); ok {
 					for id := range set {
 						members[id] = struct{}{}
 					}

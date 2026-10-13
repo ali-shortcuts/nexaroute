@@ -140,6 +140,10 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 	identity := adminIdentityFromRequest(r)
 	deployments, totalDeployments := s.rt.AllLimit(limit)
 	healthAll := s.hm.Snapshot()
+	// Route eligibility always evaluates against the COMPLETE health
+	// snapshot; the limit-based truncation below applies only to the
+	// deployment/health fields of the response.
+	healthForEligibility := healthAll
 	healthCounts := map[health.Status]int{}
 	for _, st := range healthAll {
 		healthCounts[st.Status]++
@@ -159,16 +163,21 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 		healthAll = filtered
 	}
 	eventLimit := parseLimit("events", 500)
-	cfgFull := s.currentConfig()
+	// Capture the active config and route resolver as one consistent
+	// runtime snapshot: applyConfigLocked replaces both under
+	// runtimeMu, so reading them under separate locks could pair a new
+	// config with a stale resolver. The lock is released immediately;
+	// response building below runs on the captured values.
+	s.runtimeMu.RLock()
+	cfgFull := cloneConfig(s.cfg)
+	resolver := s.routeResolver
+	s.runtimeMu.RUnlock()
 	usageSnap := s.usageSnapshotWithPrices(cfgFull)
 	snapshotEvents := s.bus.SnapshotLimit(eventLimit)
 	if !identity.Authorize(authz.ReadAudit) {
 		snapshotEvents = []events.Event{}
 	}
 	// Virtual endpoint observability: include expanded counts
-	s.runtimeMu.RLock()
-	resolver := s.routeResolver
-	s.runtimeMu.RUnlock()
 	var veList any = cfgFull.VirtualEndpoints
 	var rpList any = cfgFull.RouteProfiles
 	var cpList any = cfgFull.CandidatePools
@@ -425,7 +434,7 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 		// M3-3: static no-eligible-deployment warnings plus the runtime
 		// per-profile eligibility view (pool membership + current health).
 		"eligibility_warnings": eligibilityWarningsForSnapshot(cfgFull),
-		"route_eligibility":    s.routeEligibilityView(cfgFull, healthAll),
+		"route_eligibility":    s.routeEligibilityView(cfgFull, resolver, healthForEligibility),
 		"decision": map[string]any{
 			"config":                      decisionCfg,
 			"metrics":                     decisionMetrics,

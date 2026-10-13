@@ -199,9 +199,9 @@ func TestEligibilityWarningsDeterministicDedupedSecretSafe(t *testing.T) {
 }
 
 func TestEligibilityWarningsDoNotFailStrictValidation(t *testing.T) {
-	// A fully explicit minimal config (no implicit defaults, so
-	// cfg.Warnings is empty) that nevertheless has an eligibility
-	// problem: ValidateStrict must stay advisory-only and pass.
+	// A config with a real eligibility problem: after ApplyDefaults its
+	// EligibilityWarnings are genuinely populated. ValidateStrict must
+	// stay advisory-only for them and pass.
 	cfg := Default()
 	cfg.Providers = []ProviderConfig{eligProvider("a", "no", eligModel("m", "model-a"))}
 	cfg.CandidatePools = []CandidatePoolConfig{{ID: "pool", Mode: "explicit", Deployments: []string{"ghost/model"}}}
@@ -210,22 +210,24 @@ func TestEligibilityWarningsDoNotFailStrictValidation(t *testing.T) {
 	if len(cfg.EligibilityWarnings) == 0 {
 		t.Fatal("test premise broken: expected eligibility warnings")
 	}
-	// Remove default-derived warnings (unrelated to this test) by keeping
-	// only configs whose Warnings may be non-empty: strict mode is about
-	// Warnings; eligibility warnings must never join that set.
+	// Eligibility warnings must never join the ordinary Warnings set
+	// that strict mode consults.
 	for _, w := range cfg.Warnings {
-		if strings.Contains(w, "candidate_pools") || strings.Contains(w, "route_profiles") {
+		if strings.Contains(w, "candidate_pools[") || strings.Contains(w, "route_profiles[") {
 			t.Fatalf("eligibility warning leaked into Warnings (strict set): %s", w)
 		}
 	}
-	strictCfg := Default()
-	strictCfg.Providers = cfg.Providers
-	strictCfg.CandidatePools = cfg.CandidatePools
-	strictCfg.RouteProfiles = cfg.RouteProfiles
-	// Zero out Warnings by using a config that produces none for defaults:
-	// emulate by clearing and confirming ValidateStrict only reads Warnings.
-	strictCfg.Warnings = nil
-	if err := strictCfg.ValidateStrict(); err != nil {
-		t.Fatalf("ValidateStrict must ignore eligibility warnings, got: %v", err)
+	// Validate a copy of THIS config — carrying its computed
+	// EligibilityWarnings — with only the unrelated ordinary Warnings
+	// (implicit-default notices from Default()) cleared, so strict mode
+	// has nothing else to reject. If ValidateStrict consulted the
+	// eligibility list, it would fail here.
+	strict := cfg
+	strict.Warnings = nil
+	if len(strict.EligibilityWarnings) == 0 {
+		t.Fatal("test premise broken: copy lost the computed eligibility warnings")
+	}
+	if err := strict.ValidateStrict(); err != nil {
+		t.Fatalf("ValidateStrict must ignore populated eligibility warnings, got: %v", err)
 	}
 }

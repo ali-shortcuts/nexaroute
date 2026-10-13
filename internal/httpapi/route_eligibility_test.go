@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -203,6 +204,111 @@ func TestSnapshotEligibilityWarningsExposed(t *testing.T) {
 	if row["candidates"] != float64(0) || row["state"] != "empty" {
 		t.Fatalf("expected empty profile state, got %v", row)
 	}
+}
+
+func TestSnapshotRouteEligibilityIgnoresLimitTruncation(t *testing.T) {
+	// Three healthy deployments in the pool, but the snapshot is
+	// requested with limit=1: the ordinary deployments list is
+	// truncated while route eligibility must still be computed from the
+	// complete health snapshot (M3-3 review finding 2).
+	cfg := eligTestConfig()
+	cfg.Providers = append(cfg.Providers, config.ProviderConfig{
+		ID: "c", Name: "C", Type: "openai_compatible", BaseURL: "https://c.example.com/v1", Enabled: true, APIKeyEnv: "K",
+		DataHandling: config.DataHandlingConfig{TrainsOnData: "no"},
+		Models:       []config.ModelConfig{{ID: "m", Model: "model-c", Enabled: true}},
+	})
+	cfg.CandidatePools[0].Deployments = []string{"a/m", "b/m", "c/m"}
+	s := testGateway(t, cfg)
+
+	rr := adminDo(t, s, http.MethodGet, "/admin/api/snapshot?limit=1", "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("snapshot status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	snap := decodeJSON(t, rr)
+	deployments, _ := snap["deployments"].([]any)
+	if len(deployments) != 1 {
+		t.Fatalf("expected limit-truncated deployments list of 1, got %d", len(deployments))
+	}
+	if snap["snapshot_truncated"] != true {
+		t.Fatalf("expected snapshot_truncated=true, got %v", snap["snapshot_truncated"])
+	}
+	row := profileRow(t, snap, "r1")
+	if row["candidates"] != float64(3) || row["eligible_now"] != float64(3) {
+		t.Fatalf("eligibility must ignore the output limit: expected 3/3, got %v", row)
+	}
+	if got := excludedCount(row, "health_not_established"); got != 0 {
+		t.Fatalf("truncated health must not fabricate health_not_established, got %v (row %v)", got, row)
+	}
+	if row["state"] != "ok" {
+		t.Fatalf("expected state ok, got %v", row["state"])
+	}
+}
+
+func TestSnapshotConcurrentWithConfigReplacement(t *testing.T) {
+	// Race regression (M3-3 review finding 1): admin snapshots read the
+	// config + route resolver pair while settings saves replace both
+	// under runtimeMu. Run with -race; the detector is the assertion.
+	// Many route profiles widen the per-request resolver-read window so
+	// an unsynchronized read cannot hide between lock acquisitions.
+	cfg := eligTestConfig()
+	cfg.RouteProfiles = nil
+	for i := 0; i < 200; i++ {
+		cfg.RouteProfiles = append(cfg.RouteProfiles, config.RouteProfileConfig{
+			ID: "prof-" + string(rune('a'+i%26)) + "-" + mustJSON(t, i), CandidatePool: "pool",
+		})
+	}
+	s := testGateway(t, cfg)
+	routing := mustJSON(t, s.currentConfig().Routing)
+	probe := mustJSON(t, s.currentConfig().Probe)
+	bodyA := `{"client_base_url":"https://a.example.com","routing":` + routing + `,"probe":` + probe + `}`
+	bodyB := `{"client_base_url":"https://b.example.com","routing":` + routing + `,"probe":` + probe + `}`
+
+	// Request volume stays under the per-IP admin token bucket
+	// (capacity 90) while still overlapping readers and writers.
+	var wg sync.WaitGroup
+	errs := make(chan string, 256)
+	start := make(chan struct{})
+	for g := 0; g < 4; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			for i := 0; i < 8; i++ {
+				rr := adminDo(t, s, http.MethodGet, "/admin/api/snapshot", "")
+				if rr.Code != http.StatusOK {
+					errs <- "snapshot status " + rr.Body.String()
+					return
+				}
+			}
+		}()
+	}
+	for g := 0; g < 2; g++ {
+		wg.Add(1)
+		go func(g int) {
+			defer wg.Done()
+			<-start
+			for i := 0; i < 15; i++ {
+				body := bodyA
+				if (i+g)%2 == 1 {
+					body = bodyB
+				}
+				rr := adminDo(t, s, http.MethodPut, "/admin/api/settings", body)
+				if rr.Code != http.StatusOK {
+					errs <- "settings status " + rr.Body.String()
+					return
+				}
+			}
+		}(g)
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for e := range errs {
+		t.Fatal(e)
+	}
+	// The server must still serve a coherent snapshot afterwards.
+	snap := getSnapshot(t, s)
+	_ = profileRow(t, snap, "prof-a-0")
 }
 
 func TestSettingsPutExposesEligibilityWarnings(t *testing.T) {
