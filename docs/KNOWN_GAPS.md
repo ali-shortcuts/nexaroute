@@ -120,9 +120,7 @@ No commercial external video provider adapter is bundled. The opt-in local
 ComfyUI adapter supports text-to-video through a user-supplied API-format
 workflow; its HTTP contract is covered by fixtures, but actual model inference
 on a real ComfyUI installation is not part of CI. The fake provider writes a
-text placeholder, not a playable video. The asset-size cap does not yet provide
-streaming-memory protection because the current provider interface passes byte
-slices. Multi-node durable coordination, provider-native idempotent recovery
+text placeholder, not a playable video. The asset-size cap is enforced with streaming-memory protection: the ComfyUI adapter reads downloads through `io.LimitReader` bounded at `maxOutputBytes+1`, so an oversized response cannot OOM the gateway before the cap applies. Multi-node durable coordination, provider-native idempotent recovery
 after an ambiguous submission, verified production workloads for ten-minute
 episodes, Gateway-side Piper narration and estimated same-language SRT captions
 are now supported for multi-shot jobs when configured. Provider-generated
