@@ -6,6 +6,8 @@ import (
 	"io"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -124,3 +126,61 @@ func TestRequestTokenEstimateUsesMaximumDuplicateOutputLimit(t *testing.T) {
 		t.Fatalf("request body changed: got %q, want %q", string(restored), body)
 	}
 }
+
+func TestClientTPMAdmissionIsolatedAndRetryDelayAccurate(t *testing.T) {
+	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	s := &Server{}
+
+	if allowed, retry := s.clientTPMAllowAt("client-a", 100, 80, now); !allowed || retry != 0 {
+		t.Fatalf("first client-a admission = (%t, %s), want (true, 0)", allowed, retry)
+	}
+	if allowed, retry := s.clientTPMAllowAt("client-b", 100, 80, now); !allowed || retry != 0 {
+		t.Fatalf("first client-b admission = (%t, %s), want (true, 0)", allowed, retry)
+	}
+
+	// A rejected estimate must not consume the 20 tokens remaining for client-a.
+	if allowed, retry := s.clientTPMAllowAt("client-a", 100, 21, now); allowed || retry != time.Second {
+		t.Fatalf("client-a over-budget admission = (%t, %s), want (false, 1s)", allowed, retry)
+	}
+	if allowed, retry := s.clientTPMAllowAt("client-a", 100, 20, now); !allowed || retry != 0 {
+		t.Fatalf("client-a exact remaining admission = (%t, %s), want (true, 0)", allowed, retry)
+	}
+	if allowed, retry := s.clientTPMAllowAt("client-b", 100, 20, now); !allowed || retry != 0 {
+		t.Fatalf("client-b must retain its independent 20-token balance; got (%t, %s)", allowed, retry)
+	}
+
+	// An estimate larger than the entire TPM capacity can never fit by waiting.
+	if allowed, retry := s.clientTPMAllowAt("client-c", 100, 101, now); allowed || retry != 0 {
+		t.Fatalf("oversized estimate admission = (%t, %s), want (false, 0)", allowed, retry)
+	}
+	if _, exists := s.clientBuckets[keyDigest("client-c")+"#tpm"]; exists {
+		t.Fatal("oversized request unexpectedly allocated a TPM bucket")
+	}
+}
+
+func TestClientTPMAdmissionIsAtomicUnderConcurrentRequests(t *testing.T) {
+	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	const capacity = 128
+	const attempts = capacity * 4
+	s := &Server{}
+	var wg sync.WaitGroup
+	var accepted atomic.Int32
+
+	for i := 0; i < attempts; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if allowed, _ := s.clientTPMAllowAt("shared-client", capacity, 1, now); allowed {
+				accepted.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+	if got := accepted.Load(); got != capacity {
+		t.Fatalf("accepted %d concurrent requests, want exactly %d", got, capacity)
+	}
+	if got := len(s.clientBuckets); got != 1 {
+		t.Fatalf("bucket count = %d, want 1 for one client", got)
+	}
+}
+
