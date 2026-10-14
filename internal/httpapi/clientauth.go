@@ -123,10 +123,22 @@ func (s *Server) findClientIdentity(presented string) (clientIdentity, config.Vi
 		}
 		return clientIdentity{ID: key.ID, TenantID: key.TenantID, ProjectID: key.ProjectID, TeamID: key.TeamID, Role: key.Role, Virtual: true, RequirePrivacy: key.RequirePrivacy}, key, true
 	}
-	if clientKeyMatches(cfg.ClientAuth.Keys, presented) {
+	if digestInList(cfg.ClientAuth.KeyHashes, digest) || clientKeyMatches(cfg.ClientAuth.Keys, presented) {
 		return clientIdentity{ID: "legacy", Role: "admin"}, config.VirtualKeyConfig{}, true
 	}
 	return clientIdentity{}, config.VirtualKeyConfig{}, false
+}
+
+// digestInList reports whether digest equals any stored key digest,
+// comparing every entry in constant time.
+func digestInList(hashes []string, digest string) bool {
+	matched := 0
+	for _, h := range hashes {
+		if subtleConstantTimeCompare(h, digest) {
+			matched++
+		}
+	}
+	return matched > 0
 }
 
 const requestMetadataReadLimit = 2 << 20
@@ -456,9 +468,33 @@ func (s *Server) clientRPMAllow(presented string, rpm int) bool {
 	return true
 }
 
-func (s *Server) clientTPMAllow(presented string, tpm, estimated int) bool {
+// tpmReservation is the per-request TPM charge made at admission from
+// the conservative request estimate. When the provider later reports
+// actual usage, clientTPMSettle reconciles the bucket to the actual
+// total. charged is guarded by s.clientRL.
+type tpmReservation struct {
+	bucketID string
+	capacity float64
+	charged  int64
+}
+
+type tpmReservationContextKey struct{}
+
+func contextWithTPMReservation(ctx context.Context, res *tpmReservation) context.Context {
+	return context.WithValue(ctx, tpmReservationContextKey{}, res)
+}
+
+func tpmReservationFromContext(ctx context.Context) *tpmReservation {
+	res, _ := ctx.Value(tpmReservationContextKey{}).(*tpmReservation)
+	return res
+}
+
+// clientTPMReserve charges the admission estimate against the client's
+// TPM bucket and returns the reservation to settle later. A nil
+// reservation with ok=true means no TPM ceiling applies.
+func (s *Server) clientTPMReserve(presented string, tpm, estimated int) (*tpmReservation, bool) {
 	if tpm <= 0 || estimated <= 0 {
-		return true
+		return nil, true
 	}
 	id := keyDigest(presented) + "#tpm"
 	now := time.Now()
@@ -467,7 +503,7 @@ func (s *Server) clientTPMAllow(presented string, tpm, estimated int) bool {
 	capacity := float64(tpm)
 	b := s.clientBucketLocked(id, capacity, now)
 	if b == nil {
-		return false
+		return nil, false
 	}
 	refill := capacity / 60
 	b.tokens += now.Sub(b.last).Seconds() * refill
@@ -476,10 +512,47 @@ func (s *Server) clientTPMAllow(presented string, tpm, estimated int) bool {
 	}
 	b.last = now
 	if float64(estimated) > b.tokens {
-		return false
+		return nil, false
 	}
 	b.tokens -= float64(estimated)
-	return true
+	return &tpmReservation{bucketID: id, capacity: capacity, charged: int64(estimated)}, true
+}
+
+func (s *Server) clientTPMAllow(presented string, tpm, estimated int) bool {
+	_, ok := s.clientTPMReserve(presented, tpm, estimated)
+	return ok
+}
+
+// clientTPMSettle reconciles a reservation with the actual total usage
+// a provider reported: an over-estimate is refunded, an under-estimate
+// is charged, clamped to the bucket. Repeated reports for one request
+// (streaming usage events) settle incrementally against the latest
+// total. A request that never reports usage keeps its reservation as
+// its charge (see specs/018-m3-8-hashed-keys-tpm).
+func (s *Server) clientTPMSettle(res *tpmReservation, actual int64) {
+	if res == nil || actual < 0 {
+		return
+	}
+	s.clientRL.Lock()
+	defer s.clientRL.Unlock()
+	b := s.clientBuckets[res.bucketID]
+	if b == nil {
+		return // bucket evicted; nothing left to reconcile
+	}
+	now := time.Now()
+	b.tokens += now.Sub(b.last).Seconds() * (res.capacity / 60)
+	if b.tokens > res.capacity {
+		b.tokens = res.capacity
+	}
+	b.last = now
+	b.tokens += float64(res.charged - actual)
+	if b.tokens > res.capacity {
+		b.tokens = res.capacity
+	}
+	if b.tokens < 0 {
+		b.tokens = 0
+	}
+	res.charged = actual
 }
 
 func (s *Server) clientAuthAllowed(w http.ResponseWriter, r *http.Request, anthropicStyle bool) bool {
@@ -536,14 +609,28 @@ func (s *Server) clientAuthAllowed(w http.ResponseWriter, r *http.Request, anthr
 		}
 		return false
 	}
-	if virtualKey.TPM > 0 && !s.clientTPMAllow(keyText, virtualKey.TPM, requestTokenEstimate(r)) {
-		w.Header().Set("Retry-After", "60")
-		if anthropicStyle {
-			anthropicErrorJSON(w, http.StatusTooManyRequests, "client token limit exceeded; retry after 60 seconds")
-		} else {
-			errorJSON(w, http.StatusTooManyRequests, "client token limit exceeded; retry after 60 seconds")
+	// Effective TPM: the virtual key's own ceiling wins; otherwise the
+	// global client_auth.tpm applies to every client class, so legacy
+	// clients are quota-bound too.
+	tpm := cfg.ClientAuth.TPM
+	if virtualKey.TPM > 0 {
+		tpm = virtualKey.TPM
+	}
+	if tpm > 0 {
+		res, allowed := s.clientTPMReserve(keyText, tpm, requestTokenEstimate(r))
+		if !allowed {
+			w.Header().Set("Retry-After", "60")
+			if anthropicStyle {
+				anthropicErrorJSON(w, http.StatusTooManyRequests, "client token limit exceeded; retry after 60 seconds")
+			} else {
+				errorJSON(w, http.StatusTooManyRequests, "client token limit exceeded; retry after 60 seconds")
+			}
+			return false
 		}
-		return false
+		if res != nil {
+			r2 := r.WithContext(contextWithTPMReservation(r.Context(), res))
+			*r = *r2
+		}
 	}
 	return true
 }

@@ -440,8 +440,10 @@ Only non-streaming requests with `temperature` absent/0 and `top_p` absent/1 are
 | Field | Default | Meaning |
 |---|---|---|
 | `enabled` | `false` | Gate `/v1/*` endpoints with static keys. |
-| `keys` | `[]` | 8–512 byte keys; presented via `Authorization: Bearer <key>` or `x-api-key`. |
+| `keys` | `[]` | Transitional plaintext input (8–512 byte keys; presented via `Authorization: Bearer <key>` or `x-api-key`). Converted to `key_hashes` on load and before every save — plaintext is never persisted. Prefer `virtual_keys` for new clients. |
+| `key_hashes` | `[]` | SHA-256 hex digests of legacy client keys (M3-8). This is the stored form; a listed digest authenticates the corresponding key exactly like a virtual key's `key_hash`. |
 | `rpm` | `0` | Per-key requests-per-minute ceiling; `0` disables the ceiling. |
+| `tpm` | `0` | Per-client tokens-per-minute ceiling for legacy clients (a virtual key's own `tpm` overrides it); `0` disables the ceiling. Admission reserves a conservative estimate (input bytes/4 + requested max output tokens); when the provider reports actual usage the reservation is settled to the actual total — over-estimates are refunded, under-estimates charged. Requests that never report usage keep the estimate as their charge. Quota state is per-process in-memory (see SECURITY.md). |
 
 ### In-flight quota reservations
 
