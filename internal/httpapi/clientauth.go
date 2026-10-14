@@ -31,19 +31,30 @@ type clientBucket struct {
 	last   time.Time
 }
 
+// clientTPMReservation tracks the pre-dispatch estimate charged to a single
+// request. A provider usage callback can adjust that charge once; when usage is
+// unavailable, the conservative admission estimate remains charged.
+type clientTPMReservation struct {
+	bucketID  string
+	limit     int
+	estimated int64
+	once      sync.Once
+}
+
 type clientAuthState struct {
 	mu      sync.Mutex
 	buckets map[string]*clientBucket
 }
 
 type clientIdentity struct {
-	ID             string
-	TenantID       string
-	ProjectID      string
-	TeamID         string
-	Role           string
-	Virtual        bool
-	RequirePrivacy string
+	ID              string
+	TenantID        string
+	ProjectID       string
+	TeamID          string
+	Role            string
+	Virtual         bool
+	RequirePrivacy  string
+	tpmReservation  *clientTPMReservation
 }
 
 type clientIdentityContextKey struct{}
@@ -508,6 +519,50 @@ func (s *Server) clientTPMAllowAt(presented string, tpm, estimated int, now time
 	return true, 0
 }
 
+// reconcileClientTPMUsage adjusts a request's estimated TPM charge using
+// authoritative provider-reported usage. The reservation is settled once so
+// duplicate callbacks cannot refund or charge the same request multiple times.
+// If no usage callback is received (for example, because a provider or stream
+// fails before reporting usage), the original conservative estimate is kept.
+func (s *Server) reconcileClientTPMUsage(reservation *clientTPMReservation, actual int64) {
+	s.reconcileClientTPMUsageAt(reservation, actual, time.Now())
+}
+
+func (s *Server) reconcileClientTPMUsageAt(reservation *clientTPMReservation, actual int64, now time.Time) {
+	if reservation == nil || actual < 0 {
+		return
+	}
+	reservation.once.Do(func() {
+		s.clientRL.Lock()
+		defer s.clientRL.Unlock()
+
+		b := s.clientBuckets[reservation.bucketID]
+		if b == nil {
+			// The bounded idle-bucket policy may have removed the admission
+			// bucket while a long request was in flight. Never apply its
+			// adjustment to a newly created bucket for a later quota window.
+			return
+		}
+		capacity := float64(reservation.limit)
+		refill := capacity / 60
+		if elapsed := now.Sub(b.last).Seconds(); elapsed > 0 {
+			b.tokens += elapsed * refill
+		}
+		if b.tokens > capacity {
+			b.tokens = capacity
+		}
+		b.last = now
+
+		// Positive delta refunds unused estimate; negative delta charges
+		// provider usage that exceeded the estimate. Negative balances are
+		// retained as debt so concurrent requests cannot evade the budget.
+		b.tokens += float64(reservation.estimated - actual)
+		if b.tokens > capacity {
+			b.tokens = capacity
+		}
+	})
+}
+
 func (s *Server) clientAuthAllowed(w http.ResponseWriter, r *http.Request, anthropicStyle bool) bool {
 	enabled, keys, globalRPM := s.clientAuthConfig()
 	if !enabled {
@@ -547,8 +602,6 @@ func (s *Server) clientAuthAllowed(w http.ResponseWriter, r *http.Request, anthr
 		}
 		return false
 	}
-	r2 := r.WithContext(contextWithClientIdentity(r.Context(), identity))
-	*r = *r2
 	rpm := globalRPM
 	if virtualKey.RPM > 0 {
 		rpm = virtualKey.RPM
@@ -562,8 +615,10 @@ func (s *Server) clientAuthAllowed(w http.ResponseWriter, r *http.Request, anthr
 		}
 		return false
 	}
+	var tpmReservation *clientTPMReservation
 	if virtualKey.TPM > 0 {
-		allowed, retryAfter := s.clientTPMAllowAt(keyText, virtualKey.TPM, requestTokenEstimate(r), time.Now())
+		estimated := requestTokenEstimate(r)
+		allowed, retryAfter := s.clientTPMAllowAt(keyText, virtualKey.TPM, estimated, time.Now())
 		if !allowed {
 			message := "client token limit exceeded; reduce request size or retry later"
 			if retryAfter > 0 {
@@ -578,7 +633,15 @@ func (s *Server) clientAuthAllowed(w http.ResponseWriter, r *http.Request, anthr
 			}
 			return false
 		}
+		tpmReservation = &clientTPMReservation{
+			bucketID: keyDigest(keyText) + "#tpm",
+			limit:    virtualKey.TPM,
+			estimated: int64(estimated),
+		}
 	}
+	identity.tpmReservation = tpmReservation
+	r2 := r.WithContext(contextWithClientIdentity(r.Context(), identity))
+	*r = *r2
 	return true
 }
 
