@@ -78,6 +78,9 @@ func TestPrivacyFailClosedWhenNoDeploymentSatisfies(t *testing.T) {
 			rr = f.doRequest(t, "/v1/messages", `{"model":"nexa-private","max_tokens":16,"messages":[{"role":"user","content":"secret prompt"}]}`, "", source.vkPlain)
 			assertPrivacyUnavailable(t, rr)
 
+			rr = f.doRequest(t, "/v1/responses", `{"model":"nexa-private","input":"secret prompt"}`, "", source.vkPlain)
+			assertPrivacyUnavailable(t, rr)
+
 			// count_tokens: local estimate, no upstream contact.
 			rr = f.doRequest(t, "/v1/messages/count_tokens", `{"model":"nexa-private","messages":[{"role":"user","content":"secret prompt"}]}`, "", source.vkPlain)
 			if rr.Code != http.StatusOK {

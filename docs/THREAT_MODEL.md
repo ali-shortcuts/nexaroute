@@ -1,4 +1,4 @@
-# NexaRoute threat model (M3-4, in progress)
+# NexaRoute threat model (M3-4, complete)
 
 Each mitigation names the test that proves it. A row without a test is a gap,
 not a claim.
@@ -52,7 +52,15 @@ not a claim.
 | No deployment satisfies the required privacy class | generation ingresses return `privacy_unavailable` (503) without contacting any upstream and without naming providers; `count_tokens` answers with its local estimate and likewise contacts no upstream | `TestPrivacyFailClosedWhenNoDeploymentSatisfies` |
 | Privacy failure responses or observability events disclose provider identities or prompt content | the `privacy_unavailable` envelope is generic and events record only the exclusion fact | `TestPrivacyP2PrivateRouteLeak` (response and event assertions), `TestDecision_PrivacyCanaryCompletePath` |
 
-## Known gaps (no test yet)
+## Known limitations / residual risks
 
-- Destination validation when an explicit provider proxy is configured: the
-  proxy resolves the final host, so the gateway cannot check it.
+- **Explicit-proxy final destination (unsupported gateway-level control).**
+  When an explicit provider proxy is configured, NexaRoute validates the
+  configured proxy endpoint and the target URL's shape, but it does **not**
+  independently validate the final destination: DNS resolution and the
+  connection to the final host are performed by the proxy itself (see
+  `Policy.NewTransport` in `internal/egress/policy.go`, where the dialer
+  sees only the proxy address). This limitation is **not fixed and not
+  mitigated** by the SSRF controls above. It is the operator's
+  responsibility to trust, restrict, and harden any configured proxy —
+  treat the proxy as part of the trusted egress boundary.
