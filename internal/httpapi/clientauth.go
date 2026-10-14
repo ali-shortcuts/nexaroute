@@ -9,7 +9,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"io"
+	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -457,29 +459,53 @@ func (s *Server) clientRPMAllow(presented string, rpm int) bool {
 }
 
 func (s *Server) clientTPMAllow(presented string, tpm, estimated int) bool {
+	allowed, _ := s.clientTPMAllowAt(presented, tpm, estimated, time.Now())
+	return allowed
+}
+
+// clientTPMAllowAt enforces the per-key estimated tokens-per-minute budget and
+// reports the earliest conservative retry delay when the request could fit in
+// the bucket after refill. A request larger than the bucket capacity cannot
+// become admissible merely by waiting, so it is rejected without Retry-After.
+// The explicit clock keeps admission and retry calculations deterministic in
+// tests. The estimate is a pre-dispatch reservation, not provider-reported
+// billing usage; actual usage remains recorded separately by recordUsage.
+func (s *Server) clientTPMAllowAt(presented string, tpm, estimated int, now time.Time) (bool, time.Duration) {
 	if tpm <= 0 || estimated <= 0 {
-		return true
+		return true, 0
 	}
+	capacity := float64(tpm)
+	if float64(estimated) > capacity {
+		return false, 0
+	}
+
 	id := keyDigest(presented) + "#tpm"
-	now := time.Now()
 	s.clientRL.Lock()
 	defer s.clientRL.Unlock()
-	capacity := float64(tpm)
 	b := s.clientBucketLocked(id, capacity, now)
 	if b == nil {
-		return false
+		return false, 0
 	}
+
 	refill := capacity / 60
-	b.tokens += now.Sub(b.last).Seconds() * refill
+	if elapsed := now.Sub(b.last).Seconds(); elapsed > 0 {
+		b.tokens += elapsed * refill
+	}
 	if b.tokens > capacity {
 		b.tokens = capacity
 	}
 	b.last = now
-	if float64(estimated) > b.tokens {
-		return false
+
+	needed := float64(estimated)
+	if needed > b.tokens {
+		waitSeconds := math.Ceil((needed - b.tokens) / refill)
+		if waitSeconds < 1 {
+			waitSeconds = 1
+		}
+		return false, time.Duration(waitSeconds) * time.Second
 	}
-	b.tokens -= float64(estimated)
-	return true
+	b.tokens -= needed
+	return true, 0
 }
 
 func (s *Server) clientAuthAllowed(w http.ResponseWriter, r *http.Request, anthropicStyle bool) bool {
@@ -536,14 +562,22 @@ func (s *Server) clientAuthAllowed(w http.ResponseWriter, r *http.Request, anthr
 		}
 		return false
 	}
-	if virtualKey.TPM > 0 && !s.clientTPMAllow(keyText, virtualKey.TPM, requestTokenEstimate(r)) {
-		w.Header().Set("Retry-After", "60")
-		if anthropicStyle {
-			anthropicErrorJSON(w, http.StatusTooManyRequests, "client token limit exceeded; retry after 60 seconds")
-		} else {
-			errorJSON(w, http.StatusTooManyRequests, "client token limit exceeded; retry after 60 seconds")
+	if virtualKey.TPM > 0 {
+		allowed, retryAfter := s.clientTPMAllowAt(keyText, virtualKey.TPM, requestTokenEstimate(r), time.Now())
+		if !allowed {
+			message := "client token limit exceeded; reduce request size or retry later"
+			if retryAfter > 0 {
+				seconds := int(retryAfter / time.Second)
+				w.Header().Set("Retry-After", strconv.Itoa(seconds))
+				message = "client token limit exceeded; retry after " + strconv.Itoa(seconds) + " seconds"
+			}
+			if anthropicStyle {
+				anthropicErrorJSON(w, http.StatusTooManyRequests, message)
+			} else {
+				errorJSON(w, http.StatusTooManyRequests, message)
+			}
+			return false
 		}
-		return false
 	}
 	return true
 }
