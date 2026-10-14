@@ -23,3 +23,5 @@
 - [x] T19 Confirm bbolt v1.4.3 allocator semantics from source (bucket header, commit-persisted, tx-rolled-back, SetSequence unchecked)
 - [x] T20 Allocator invariants in verifyChainTx: floor = max evidenced sequence; equality with head on chained/emptied logs; legacy/genesis exemptions
 - [x] T21 Allocator regression suite: below tail, reset to zero, above head, below anchor/head — verify failure + append refusal + byte-identical store and unchanged allocator; legacy-above-survivors and fully-pruned-legacy positives; rejection cases proven to fail pre-fix
+- [x] T22 Anchor-without-head on an empty retained bucket is an integrity failure in verifyChainTx
+- [x] T23 Regression test: intact fully pruned state verifies; deleting only the head fails verification explicitly, rejects append, leaves the store byte-identical (fails pre-fix)

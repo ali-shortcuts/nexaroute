@@ -107,3 +107,14 @@ from equality (pre-chain timestamp pruning legitimately leaves the
 allocator above the survivors), as are genesis and fully pruned
 legacy stores, where no evidence exists to judge the counter. The
 allocator is never reset, advanced, or reconstructed by the store.
+
+## Review hardening round 6 — fully pruned chained log requires its head
+An empty retained bucket with a valid pruning anchor but no chain
+head previously verified: the missing-head check only fired when
+chained records survived, and the allocator can legitimately still
+equal the anchor. Verification now treats anchor-without-head on an
+empty bucket as an integrity failure; a fully pruned chained log
+must retain head == anchor, with the allocator validated against
+that sequence. Genesis and fully pruned legacy-only stores (no chain
+metadata at all) remain valid. The append path already rejected
+this state; verification now agrees with it.

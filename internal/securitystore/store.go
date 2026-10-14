@@ -674,6 +674,14 @@ func verifyChainTx(tx *bolt.Tx) ChainReport {
 			if report.ChainedRecords > 0 {
 				problem("audit records are chained but chain head metadata is missing")
 			}
+			if len(records) == 0 && hasAnchor {
+				// A chained history pruned to empty must keep its
+				// head at the anchor; an anchor without a head means
+				// the head was deleted, and the allocator check
+				// alone (it may still equal the anchor) cannot
+				// stand in for the missing metadata.
+				problem("audit log was fully pruned to the pruning anchor seq %d but chain head metadata is missing; a fully pruned chained log must retain its head at the anchor", anchor.Seq)
+			}
 		}
 		// The bucket sequence allocator (bbolt persists it in the
 		// meta bucket header; SetSequence accepts any value) is

@@ -882,3 +882,33 @@ func plantLegacyRecords(t *testing.T, store *Store, n int, base time.Time) {
 		t.Fatal(err)
 	}
 }
+
+// --- PR #301 review round 6: fully pruned chained log requires its head ---
+
+func TestAuditChainFullyPrunedLogRequiresHead(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "private", "store.db")
+	store, err := Open(path, 100, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	past := time.Now().UTC().Add(-72 * time.Hour) // beyond the 1-day retention
+	appendChainEvents(t, store, 1, past)
+	appendChainEvents(t, store, 1, past.Add(time.Minute)) // prunes both; anchor/head at seq 2
+
+	report := verifyOK(t, store)
+	if report.TotalRecords != 0 || !report.HasAnchor || report.AnchorSeq != 2 {
+		t.Fatalf("intact fully pruned state must verify: %+v", report)
+	}
+
+	deleteMeta(t, store, keyChainHead) // anchor and allocator (== 2) untouched
+
+	report, err = store.VerifyAuditChain(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Verified || !strings.Contains(strings.Join(report.Problems, " "), "chain head metadata is missing") {
+		t.Fatalf("fully pruned log without its head must not verify: %+v", report)
+	}
+	assertAppendFailsClosedAndStoreUnchanged(t, store)
+}
