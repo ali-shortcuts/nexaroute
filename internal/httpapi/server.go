@@ -61,17 +61,17 @@ type Server struct {
 	adminRL         sync.Mutex
 	adminBuckets    map[string]*adminBucket
 	// Phase D: Decision plane
-	decisionRegistry     *decision.Registry
-	decisionOrchestrator *decision.Orchestrator
+	decisionRegistry       *decision.Registry
+	decisionOrchestrator   *decision.Orchestrator
 	clientRL               sync.Mutex
 	clientBuckets          map[string]*clientBucket
 	clientBucketGeneration uint64
 	respCache              *cache.Cache
-	cacheGeneration      uint64 // guarded by runtimeMu; scopes cache keys to a config snapshot
-	usage                *usage.Tracker
-	identityUsage        *usage.IdentityTracker
-	capStore             *compat.Store
-	routeResolver        *route.Resolver
+	cacheGeneration        uint64 // guarded by runtimeMu; scopes cache keys to a config snapshot
+	usage                  *usage.Tracker
+	identityUsage          *usage.IdentityTracker
+	capStore               *compat.Store
+	routeResolver          *route.Resolver
 	// Phase H: evaluation plane (scorecards + deterministic evaluation). Admin
 	// surface only; the data plane never reads it.
 	evaluation *evaluationPlane
