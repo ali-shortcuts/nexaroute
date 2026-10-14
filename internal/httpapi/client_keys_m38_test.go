@@ -185,9 +185,9 @@ func TestClientTPMRetryAfterUsesCalculatedRefill(t *testing.T) {
 	defer up.Close()
 	cfg := singleProviderOpenAI(t, up.URL, "m", config.ModelConfig{})
 	cfg.ClientAuth = config.ClientAuthConfig{
-		Enabled: true,
+		Enabled:   true,
 		KeyHashes: []string{config.ClientKeyDigest("legacy-retry")},
-		TPM: 125,
+		TPM:       125,
 	}
 	s := testGateway(t, cfg)
 
@@ -349,4 +349,3 @@ func TestClientTPMSettleIgnoresOlderQuotaAfterLimitChange(t *testing.T) {
 		t.Fatalf("late settlement changed new quota: tokens=%v capacity=%v, want 20/20", got, capacity)
 	}
 }
-
