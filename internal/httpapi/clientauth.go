@@ -577,7 +577,6 @@ func (s *Server) reconcileClientTPMUsageAt(reservation *clientTPMReservation, ac
 	}
 }
 
-
 func (s *Server) clientAuthAllowed(w http.ResponseWriter, r *http.Request, anthropicStyle bool) bool {
 	enabled, keys, globalRPM := s.clientAuthConfig()
 	if !enabled {
