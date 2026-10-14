@@ -12,9 +12,12 @@
 #
 # Usage: scripts/verify-release.sh [dist-dir] [version] [expected-commit]
 # The expected source commit may also be given as EXPECTED_SOURCE_COMMIT.
-# When one is provided, the SBOM namespace must record exactly that
-# commit — a well-formed but unrelated SHA (or "unknown") is rejected.
-# The release workflow always passes the commit it checked out.
+# When the version and the expected commit are both provided, the SBOM
+# namespace must equal
+#   https://github.com/ali-shortcuts/nexaroute/releases/<version>/sbom-<commit>
+# exactly — no substring matching, so an attacker-controlled host, a
+# wrong release version, a well-formed but unrelated SHA, or "unknown"
+# are all rejected. The release workflow always passes both.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 dist="${1:-dist}"
@@ -89,7 +92,11 @@ ns = doc.get("documentNamespace", "")
 if expected:
     if not re.fullmatch(r"[0-9a-f]{40}", expected):
         sys.exit(f"verify-release: expected source commit is not a 40-char hex SHA: {expected!r}")
-    if "github.com/ali-shortcuts/nexaroute" not in ns or not ns.endswith(f"sbom-{expected}"):
+    if version:
+        want_ns = f"https://github.com/ali-shortcuts/nexaroute/releases/{version}/sbom-{expected}"
+        if ns != want_ns:
+            sys.exit(f"verify-release: SBOM namespace is not the exact expected release namespace {want_ns}: {ns!r}")
+    elif "github.com/ali-shortcuts/nexaroute" not in ns or not ns.endswith(f"sbom-{expected}"):
         sys.exit(f"verify-release: SBOM namespace does not record the expected source commit {expected}: {ns!r}")
 elif version:
     if "github.com/ali-shortcuts/nexaroute" not in ns or not re.search(r"sbom-[0-9a-f]{40}$", ns):
