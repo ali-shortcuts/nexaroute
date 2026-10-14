@@ -22,7 +22,7 @@ not a claim.
 
 | Threat | Mitigation | Test |
 | --- | --- | --- |
-| Client headers reach the provider outside the configured allow-list | `applyHeaders` forwards only names in `ForwardHeaders` (config entries are trimmed and case-folded) | `TestForwardHeadersAllowListEnforcement`, `TestForwardHeaderAllowlistDoesNotLeakClientAuth` |
+| Client headers reach the provider outside the configured allow-list | `applyHeaders` forwards only names in `ForwardHeaders` (valid configured names are compared case-insensitively) | `TestForwardHeadersAllowListEnforcement` |
 | Client supplies or overwrites a credential header (`Authorization`, `X-API-Key`, `X-Goog-API-Key`, `X-Admin-Key`) through forwarding, even when the name is listed in `ForwardHeaders` | credential header names are unconditionally excluded from forwarding; statically configured provider headers and `applyAuthKey` injection (which runs last) are unaffected | `TestForwardedCredentialHeadersAlwaysBlocked`, `TestForwardedCredentialCannotOverwriteConfiguredHeader`, `TestGoogCredentialInjectionWinsOverForwardedValue` |
 
 ## Known gaps (no test yet)

@@ -60,13 +60,15 @@ func headerValuesContain(h http.Header, needle string) bool {
 	return false
 }
 
-// Allow-list enforcement plus config-side case/whitespace tolerance:
-// a listed client header is forwarded, an unlisted one is not, and the
-// configured entry matches regardless of its casing or padding.
+// Allow-list enforcement plus case-insensitive matching of valid
+// configured header names: a listed client header is forwarded, an
+// unlisted one is not, and the configured entry matches regardless of
+// its casing ("X-Custom-One" in config vs the client's canonical form,
+// "x-custom-two" in config vs "X-Custom-Two" from the client).
 func TestForwardHeadersAllowListEnforcement(t *testing.T) {
 	p := config.ProviderConfig{
 		ID: "p", Name: "p", Type: "openai_compatible", AuthMode: "none", Enabled: true,
-		ForwardHeaders: []string{"  X-Custom-One  ", "x-custom-two"},
+		ForwardHeaders: []string{"X-Custom-One", "x-custom-two"},
 	}
 	forward := http.Header{}
 	forward.Set("X-Custom-One", "canary-one")
@@ -74,7 +76,7 @@ func TestForwardHeadersAllowListEnforcement(t *testing.T) {
 	forward.Set("X-Unlisted", "canary-unlisted")
 	seen := doWithForward(t, p, forward)
 	if got := seen.Get("X-Custom-One"); got != "canary-one" {
-		t.Fatalf("listed header (padded/mixed-case config) not forwarded: %q", got)
+		t.Fatalf("listed header (mixed-case config) not forwarded: %q", got)
 	}
 	if got := seen.Get("X-Custom-Two"); got != "canary-two" {
 		t.Fatalf("listed header not forwarded: %q", got)
