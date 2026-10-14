@@ -448,7 +448,7 @@ Only non-streaming requests with `temperature` absent/0 and `top_p` absent/1 are
 
 The virtual-key TPM limiter is a local, in-memory token bucket. Admission charges a conservative estimate before dispatch: request-body bytes divided by four, plus the larger explicit `max_tokens` / `max_output_tokens` ceiling. Ambiguous or truncated token-limit metadata fails closed. Rejected admission does not debit the bucket. If an estimate exceeds the entire configured TPM capacity, the request is rejected without `Retry-After` because waiting cannot make that request fit. If the request could fit after refill, `Retry-After` reports the calculated refill delay rather than a fixed minute.
 
-This is an **estimated pre-dispatch admission charge**, not authoritative provider billing usage. Provider-reported usage is recorded separately, but the local TPM debit is not currently reconciled against that usage. The TPM/RPM buckets are process-local memory and are not shared across replicas; do not treat them as distributed quotas.
+This is an **estimated pre-dispatch admission charge**, not authoritative billing usage. When a supported response path provides authoritative usage, the first usage report replaces the estimate and later separately-reported upstream attempts are charged at their reported usage. If a provider or stream fails, is cancelled, or finishes without reporting usage, the conservative estimate remains charged. The reconciliation is process-local and best-effort; it does not turn in-memory TPM/RPM buckets into distributed quotas.
 
 ### In-flight quota reservations
 
