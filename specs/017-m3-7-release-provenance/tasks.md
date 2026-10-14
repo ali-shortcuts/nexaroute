@@ -7,4 +7,4 @@
 - [x] T7 release.yml: govulncheck gate, SBOM steps, round-trip, ephemeral dry-run signing test
 - [x] T8 release.yml publish: OIDC-scoped keyless sign + pinned-identity verify; SBOM + bundle shipped
 - [x] T9 RELEASE_VERIFICATION.md, README index, UNRELEASED, checklist M3-7 (IN PROGRESS; signing UNVERIFIED)
-- [ ] T10 PR checks + workflow_dispatch dry run on the PR branch
+- [x] T10 PR checks + workflow_dispatch dry run on the PR branch — PR #303 checks all success on 8efaf7a (CI 38584009614, Security 38584009535); dispatch dry run 38585681550 success (version v0.21.0: govulncheck gate, SBOM, checksums, round-trip and ephemeral signing steps all pass; publish skipped; no tag or Release created). First attempt 38584973425 with synthetic version v0.0.0-m37test failed in build-release.sh on the pre-existing per-version release-notes copy (docs/releases/<version>.md must exist) — not an M3-7 defect.
