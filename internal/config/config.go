@@ -257,7 +257,7 @@ func (c *Config) MigrateClientKeysToHashes() int {
 	if len(c.ClientAuth.Keys) == 0 {
 		return 0
 	}
-	seen := make(map[string]bool, len(c.ClientAuth.KeyHashes)+len(c.ClientAuth.Keys))
+	seen := make(map[string]bool)
 	for _, h := range c.ClientAuth.KeyHashes {
 		seen[h] = true
 	}
