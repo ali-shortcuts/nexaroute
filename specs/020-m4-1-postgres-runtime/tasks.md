@@ -1,6 +1,6 @@
 # M4-1 PostgreSQL runtime tasks
 
-- [x] T1 pgx driver pinned (v5.7.6, module stays on Go 1.24)
+- [x] T1 pgx driver pinned (v5.11.0 + x/text v0.41.0 govulncheck-fixed; Go floor raised 1.24 → 1.25, see spec)
 - [x] T2 DefaultMigrationRegistry (v1 snapshots table)
 - [x] T3 SQLStore.Put advisory-lock race fix + scripted-driver regression
 - [x] T4 Runtime wiring: env DSN, bounded pool, ping, migrations, Close lifecycle

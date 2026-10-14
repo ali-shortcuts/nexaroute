@@ -13,8 +13,8 @@ the config file.
 
 ## This unit
 
-- Runtime wiring: pgx v5.7.6 (`pgx/stdlib`, pinned in go.mod; the module
-  stays on Go 1.24) registered by the gateway binary — the controlplane
+- Runtime wiring: pgx v5.11.0 (`pgx/stdlib`, pinned in go.mod)
+  registered by the gateway binary — the controlplane
   package itself remains driver-agnostic. DSN resolved from the named
   environment variable only; bounded pool (10 open / 5 idle / 30m
   lifetime); startup ping with a 10s bounded context; versioned
