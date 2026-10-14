@@ -46,3 +46,17 @@ first chained record while they survive.
 ## Non-goals
 External anchoring/signing of checkpoints, distributed audit backends, and
 changes to event content or producers.
+
+## Review hardening (PR #301, round 2)
+- Verification fails closed when required storage structures are
+  absent: a missing `audit-v1` or `meta-v1` bucket is an integrity
+  failure, never VERIFIED. Legitimate empty history (both buckets
+  present, zero records) still verifies; pre-chain databases always
+  have both buckets because `Open` creates them.
+- The bootstrap predecessor for a pre-chain database is selected by
+  highest stored sequence, not by bbolt key order (keys sort by
+  timestamp first, so key order can disagree with chain order).
+- Verification validates storage-key consistency per record: key
+  length 16, key timestamp equal to the record timestamp at
+  nanosecond precision, and (chained records only) key sequence equal
+  to the record sequence. Key corruption is an integrity failure.

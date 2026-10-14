@@ -28,3 +28,12 @@
   `cmd/gateway/audit_test.go`.
 - Docs: `docs/OPERATIONS.md` audit-verification section;
   `docs/reports/COMPLETION_CHECKLIST.md` M3-6 row.
+
+## Review round 2 changes
+- `bootstrapPrevHash`: full scan selecting the maximum key sequence;
+  validates key length and record JSON with the store's existing
+  error contract.
+- `VerifyAuditChain`: missing-bucket problems recorded before the
+  walk; per-record key length/sequence/timestamp consistency checks
+  in the verification loop; total record count includes malformed
+  entries.

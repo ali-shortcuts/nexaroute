@@ -322,3 +322,175 @@ func TestAuditChainConcurrentAppendsStayLinear(t *testing.T) {
 		t.Fatalf("concurrent chain: %+v", report)
 	}
 }
+
+// --- PR #301 review fixes ---
+
+func TestAuditChainVerifyFailsClosedOnMissingBuckets(t *testing.T) {
+	base := time.Date(2026, 10, 14, 0, 0, 0, 0, time.UTC)
+
+	t.Run("audit bucket deleted", func(t *testing.T) {
+		store, _ := chainTestStore(t, 100)
+		defer store.Close()
+		appendChainEvents(t, store, 3, base)
+		if err := store.db.Update(func(tx *bolt.Tx) error { return tx.DeleteBucket(bucketAudit) }); err != nil {
+			t.Fatal(err)
+		}
+		report, err := store.VerifyAuditChain(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if report.Verified || !strings.Contains(strings.Join(report.Problems, " "), "audit bucket") {
+			t.Fatalf("missing audit bucket must fail closed: %+v", report)
+		}
+	})
+
+	t.Run("meta bucket deleted", func(t *testing.T) {
+		store, _ := chainTestStore(t, 100)
+		defer store.Close()
+		appendChainEvents(t, store, 3, base)
+		if err := store.db.Update(func(tx *bolt.Tx) error { return tx.DeleteBucket(bucketMeta) }); err != nil {
+			t.Fatal(err)
+		}
+		report, err := store.VerifyAuditChain(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if report.Verified || !strings.Contains(strings.Join(report.Problems, " "), "meta bucket") {
+			t.Fatalf("missing meta bucket must fail closed: %+v", report)
+		}
+	})
+
+	t.Run("tail truncation with meta bucket deleted", func(t *testing.T) {
+		store, _ := chainTestStore(t, 100)
+		defer store.Close()
+		appendChainEvents(t, store, 3, base)
+		deleteRecord(t, store, 2) // tail truncation
+		if err := store.db.Update(func(tx *bolt.Tx) error { return tx.DeleteBucket(bucketMeta) }); err != nil {
+			t.Fatal(err)
+		}
+		report, err := store.VerifyAuditChain(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if report.Verified {
+			t.Fatalf("truncated chain with missing meta must never verify: %+v", report)
+		}
+	})
+}
+
+func TestAuditChainBootstrapUsesHighestSequenceNotKeyOrder(t *testing.T) {
+	store, path := chainTestStore(t, 100)
+	base := time.Date(2026, 10, 14, 0, 0, 0, 0, time.UTC)
+	// Legacy records whose timestamps run OPPOSITE to their
+	// sequences: key order (timestamp-major) is seq 3, 2, 1, so a
+	// key-order Last() would wrongly pick seq 1 as the predecessor.
+	err := store.db.Update(func(tx *bolt.Tx) error {
+		meta := tx.Bucket(bucketMeta)
+		audit := tx.Bucket(bucketAudit)
+		for i := 0; i < 3; i++ {
+			seq, err := meta.NextSequence()
+			if err != nil {
+				return err
+			}
+			event := AuditEvent{
+				Timestamp: base.Add(time.Duration(30-10*i) * time.Second), // seq1:+30s seq2:+20s seq3:+10s
+				Actor:     "legacy", Action: "old", Outcome: "success", Status: 200,
+			}
+			encoded, err := json.Marshal(event)
+			if err != nil {
+				return err
+			}
+			k := make([]byte, 16)
+			binary.BigEndian.PutUint64(k[:8], uint64(event.Timestamp.UnixNano()))
+			binary.BigEndian.PutUint64(k[8:], seq)
+			if err := audit.Put(k, encoded); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(path, 100, 3650)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	appendChainEvents(t, reopened, 1, base.Add(40*time.Second))
+	report := verifyOK(t, reopened)
+	if report.LegacyRecords != 3 || report.ChainedRecords != 1 {
+		t.Fatalf("bootstrap report: %+v", report)
+	}
+}
+
+func moveRecordKey(t *testing.T, store *Store, pick int, newKey func(old []byte) []byte) {
+	t.Helper()
+	err := store.db.Update(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket(bucketAudit)
+		c := bucket.Cursor()
+		idx := 0
+		for k, raw := c.First(); k != nil; k, raw = c.Next() {
+			if idx == pick {
+				oldCopy := make([]byte, len(k))
+				copy(oldCopy, k)
+				rawCopy := make([]byte, len(raw))
+				copy(rawCopy, raw)
+				if err := bucket.Put(newKey(oldCopy), rawCopy); err != nil {
+					return err
+				}
+				return bucket.Delete(oldCopy)
+			}
+			idx++
+		}
+		return fmt.Errorf("record %d not found", pick)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAuditChainDetectsKeyTampering(t *testing.T) {
+	base := time.Date(2026, 10, 14, 0, 0, 0, 0, time.UTC)
+
+	t.Run("key sequence modified", func(t *testing.T) {
+		store, _ := chainTestStore(t, 100)
+		defer store.Close()
+		appendChainEvents(t, store, 3, base)
+		moveRecordKey(t, store, 1, func(old []byte) []byte {
+			k := make([]byte, 16)
+			copy(k, old)
+			binary.BigEndian.PutUint64(k[8:], binary.BigEndian.Uint64(old[8:])+100)
+			return k
+		})
+		report, err := store.VerifyAuditChain(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if report.Verified || !strings.Contains(strings.Join(report.Problems, " "), "storage key sequence") {
+			t.Fatalf("key sequence tampering not detected: %+v", report)
+		}
+	})
+
+	t.Run("key timestamp modified", func(t *testing.T) {
+		store, _ := chainTestStore(t, 100)
+		defer store.Close()
+		appendChainEvents(t, store, 3, base)
+		moveRecordKey(t, store, 1, func(old []byte) []byte {
+			k := make([]byte, 16)
+			copy(k, old)
+			binary.BigEndian.PutUint64(k[:8], binary.BigEndian.Uint64(old[:8])+uint64(time.Hour.Nanoseconds()))
+			return k
+		})
+		report, err := store.VerifyAuditChain(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if report.Verified || !strings.Contains(strings.Join(report.Problems, " "), "storage key timestamp") {
+			t.Fatalf("key timestamp tampering not detected: %+v", report)
+		}
+	})
+}

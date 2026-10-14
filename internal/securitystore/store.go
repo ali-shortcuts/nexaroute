@@ -85,6 +85,37 @@ func recordHash(e AuditEvent, keySeq uint64) string {
 	return canonicalAuditHash(legacy)
 }
 
+// bootstrapPrevHash finds the chain predecessor for the first
+// chained append to a database that has no persisted chain head yet
+// (a pre-chain database, or one whose head metadata was never
+// written). The predecessor is the stored record with the HIGHEST
+// sequence — storage keys sort by timestamp first, so the last key
+// in key order is not necessarily the newest record in chain order.
+func bootstrapPrevHash(audit *bolt.Bucket) (string, bool, error) {
+	var bestKey []byte
+	var bestRaw []byte
+	var bestSeq uint64
+	c := audit.Cursor()
+	for k, raw := c.First(); k != nil; k, raw = c.Next() {
+		if len(k) != 16 {
+			return "", false, errors.New("security store contains an invalid audit key")
+		}
+		if seq := auditKeySeq(k); bestKey == nil || seq > bestSeq {
+			bestKey = append(bestKey[:0], k...)
+			bestRaw = append(bestRaw[:0], raw...)
+			bestSeq = seq
+		}
+	}
+	if bestKey == nil {
+		return "", false, nil
+	}
+	var prev AuditEvent
+	if err := json.Unmarshal(bestRaw, &prev); err != nil {
+		return "", false, errors.New("security store contains a malformed audit record")
+	}
+	return recordHash(prev, bestSeq), true, nil
+}
+
 func auditKeySeq(key []byte) uint64 {
 	if len(key) != 16 {
 		return 0
@@ -499,6 +530,18 @@ func (s *Store) VerifyAuditChain(ctx context.Context) (ChainReport, error) {
 		}
 		meta := tx.Bucket(bucketMeta)
 		audit := tx.Bucket(bucketAudit)
+		// Fail closed on missing storage structures: a database whose
+		// audit or meta bucket is absent has lost integrity evidence
+		// and must never report VERIFIED. (A database with both
+		// buckets present but zero records is a legitimate empty
+		// history; pre-chain databases always have both buckets
+		// because Open creates them.)
+		if audit == nil {
+			problem("audit bucket (audit-v1) is missing; the audit history and its integrity evidence are absent")
+		}
+		if meta == nil {
+			problem("meta bucket (meta-v1) is missing; chain head and pruning anchor evidence are absent")
+		}
 		anchor, hasAnchor := chainRef{}, false
 		if meta != nil {
 			anchor, hasAnchor = loadChainRef(meta, keyChainAnchor)
@@ -517,6 +560,11 @@ func (s *Store) VerifyAuditChain(ctx context.Context) (ChainReport, error) {
 		var records []stored
 		c := audit.Cursor()
 		for k, raw := c.First(); k != nil; k, raw = c.Next() {
+			report.TotalRecords++
+			if len(k) != 16 {
+				problem("audit record with key %x has an invalid storage key length %d (want 16)", k, len(k))
+				continue
+			}
 			var event AuditEvent
 			if err := json.Unmarshal(raw, &event); err != nil {
 				problem("audit record with key %x is malformed and cannot be verified", k)
@@ -526,7 +574,6 @@ func (s *Store) VerifyAuditChain(ctx context.Context) (ChainReport, error) {
 			copy(keyCopy, k)
 			records = append(records, stored{event: event, key: keyCopy})
 		}
-		report.TotalRecords = len(records)
 		// Chain order is sequence order: stored Seq for chained
 		// records, key sequence for legacy records.
 		seqOf := func(r stored) uint64 {
@@ -543,6 +590,18 @@ func (s *Store) VerifyAuditChain(ctx context.Context) (ChainReport, error) {
 			seq := seqOf(r)
 			if prev != nil && seq <= prevSeq {
 				problem("audit sequence %d is duplicated or out of order", seq)
+			}
+			// Storage-key consistency: the key's timestamp must
+			// match the record's timestamp at the storage format's
+			// nanosecond precision, and for chained records the
+			// key's sequence must match the record's own sequence.
+			// (Legacy records carry no stored sequence; their key
+			// sequence is authoritative by definition.)
+			if keyTs := int64(binary.BigEndian.Uint64(r.key[:8])); keyTs != r.event.Timestamp.UnixNano() {
+				problem("audit record seq %d has a storage key timestamp that does not match its record timestamp (key corruption)", seq)
+			}
+			if r.event.Hash != "" && r.event.Seq != auditKeySeq(r.key) {
+				problem("audit record seq %d has a storage key sequence %d that does not match its record sequence (key corruption)", r.event.Seq, auditKeySeq(r.key))
 			}
 			if r.event.Hash == "" {
 				report.LegacyRecords++
@@ -636,15 +695,10 @@ func appendAuditTx(tx *bolt.Tx, s *Store, event AuditEvent) (AuditEvent, error) 
 	event.Seq = seq
 	if head, ok := loadChainRef(meta, keyChainHead); ok {
 		event.PrevHash = head.Hash
-	} else if lastKey, raw := audit.Cursor().Last(); lastKey != nil {
-		if len(lastKey) != 16 {
-			return AuditEvent{}, errors.New("security store contains an invalid audit key")
-		}
-		var prev AuditEvent
-		if err := json.Unmarshal(raw, &prev); err != nil {
-			return AuditEvent{}, errors.New("security store contains a malformed audit record")
-		}
-		event.PrevHash = recordHash(prev, auditKeySeq(lastKey))
+	} else if prevHash, found, err := bootstrapPrevHash(audit); err != nil {
+		return AuditEvent{}, err
+	} else if found {
+		event.PrevHash = prevHash
 	} else {
 		event.PrevHash = ""
 	}
