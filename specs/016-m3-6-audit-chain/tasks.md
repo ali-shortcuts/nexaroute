@@ -17,3 +17,6 @@
 - [x] T13 Append-time chain-state validation with fail-closed rollback (chainAppendPrev)
 - [x] T14 Chained-segment sequence continuity in VerifyAuditChain
 - [x] T15 Corrupt-head regression suite: tail-deleted (head intact / head removed), malformed head JSON, wrong head seq, wrong head hash, head removed with anchor — append error + verify failure + byte-identical store; false-verify scenario covered
+- [x] T16 Extract verifyChainTx shared by VerifyAuditChain and the append path; remove chainAppendPrev (subsumed)
+- [x] T17 Append gate: full verification + legacy/empty metadata distinction; prevHash derived from the verified report
+- [x] T18 Beyond-the-tail regression suite: tail/middle payload edits, PrevHash edit, middle removal with head intact, forged tail hash + matching head, corrupted anchor hash, corrupted first-record anchor link — append error + verify failure + byte-identical store, all proven to fail pre-fix

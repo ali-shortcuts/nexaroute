@@ -85,85 +85,6 @@ func recordHash(e AuditEvent, keySeq uint64) string {
 	return canonicalAuditHash(legacy)
 }
 
-// chainAppendPrev validates the persisted chain state and returns
-// the previous-hash for a new record. It fails closed — returning an
-// error that rolls back the caller's transaction without mutating
-// anything — whenever the state is not demonstrably one of the
-// legitimate ones:
-//
-//   - a completely empty store (genesis), or an emptied store whose
-//     head still equals its pruning anchor;
-//   - a pure pre-chain (legacy) database: records exist, none of
-//     them chained, and neither a chain head nor a pruning anchor
-//     was ever written. The predecessor is the record with the
-//     HIGHEST sequence — storage keys sort by timestamp first, so
-//     key order cannot be trusted to find it;
-//   - a chained database whose persisted head exactly matches the
-//     retained chain tail (highest-sequence surviving record).
-//
-// A malformed head or anchor, a missing head on a chained database,
-// a head that disagrees with the tail, or head/anchor metadata on a
-// legacy-only database are corruption, not bootstrap opportunities:
-// integrity metadata is never reconstructed from stored records.
-func chainAppendPrev(audit, meta *bolt.Bucket) (string, error) {
-	head, headState := loadChainRefState(meta, keyChainHead)
-	if headState == refMalformed {
-		return "", errors.New("security store chain head metadata is malformed; refusing to append audit records")
-	}
-	anchor, anchorState := loadChainRefState(meta, keyChainAnchor)
-	if anchorState == refMalformed {
-		return "", errors.New("security store chain anchor metadata is malformed; refusing to append audit records")
-	}
-	// Scan for the chain tail: highest sequence, chained or not.
-	var tailSeq uint64
-	var tailHash string
-	anyRecords := false
-	anyChained := false
-	c := audit.Cursor()
-	for k, raw := c.First(); k != nil; k, raw = c.Next() {
-		if len(k) != 16 {
-			return "", errors.New("security store contains an invalid audit key")
-		}
-		var record AuditEvent
-		if err := json.Unmarshal(raw, &record); err != nil {
-			return "", errors.New("security store contains a malformed audit record")
-		}
-		seq := auditKeySeq(k)
-		if !anyRecords || seq > tailSeq {
-			tailSeq = seq
-			tailHash = recordHash(record, seq)
-		}
-		anyRecords = true
-		if record.Hash != "" {
-			anyChained = true
-		}
-	}
-	switch {
-	case !anyRecords:
-		switch {
-		case headState == refAbsent && anchorState == refAbsent:
-			return "", nil // genesis: empty store
-		case headState == refValid && anchorState == refValid && head == anchor:
-			return anchor.Hash, nil // emptied by pruning; head kept at the anchor
-		default:
-			return "", errors.New("security store chain metadata is inconsistent with an empty audit log; refusing to append audit records")
-		}
-	case anyChained:
-		if headState == refAbsent {
-			return "", errors.New("security store chain head metadata is missing for a chained audit log; refusing to append audit records")
-		}
-		if head.Seq != tailSeq || head.Hash != tailHash {
-			return "", errors.New("security store chain head does not match the retained audit chain tail; refusing to append audit records")
-		}
-		return head.Hash, nil
-	default: // records exist, none chained: pre-chain legacy database
-		if headState != refAbsent || anchorState != refAbsent {
-			return "", errors.New("security store has chain metadata but no chained audit records; refusing to append audit records")
-		}
-		return tailHash, nil
-	}
-}
-
 func auditKeySeq(key []byte) uint64 {
 	if len(key) != 16 {
 		return 0
@@ -584,167 +505,178 @@ func (s *Store) VerifyAuditChain(ctx context.Context) (ChainReport, error) {
 	if err := ctx.Err(); err != nil {
 		return ChainReport{}, err
 	}
-	report := ChainReport{Verified: true}
-	problem := func(format string, args ...any) {
-		report.Verified = false
-		report.Problems = append(report.Problems, fmt.Sprintf(format, args...))
-	}
+	var report ChainReport
 	err := s.db.View(func(tx *bolt.Tx) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		meta := tx.Bucket(bucketMeta)
-		audit := tx.Bucket(bucketAudit)
-		// Fail closed on missing storage structures: a database whose
-		// audit or meta bucket is absent has lost integrity evidence
-		// and must never report VERIFIED. (A database with both
-		// buckets present but zero records is a legitimate empty
-		// history; pre-chain databases always have both buckets
-		// because Open creates them.)
-		if audit == nil {
-			problem("audit bucket (audit-v1) is missing; the audit history and its integrity evidence are absent")
-		}
-		if meta == nil {
-			problem("meta bucket (meta-v1) is missing; chain head and pruning anchor evidence are absent")
-		}
-		anchor, hasAnchor := chainRef{}, false
-		if meta != nil {
-			var anchorState refState
-			anchor, anchorState = loadChainRefState(meta, keyChainAnchor)
-			hasAnchor = anchorState == refValid
-			if anchorState == refMalformed {
-				problem("chain anchor metadata is malformed; pruning history cannot be trusted")
-			}
-		}
-		report.HasAnchor = hasAnchor
-		if hasAnchor {
-			report.AnchorSeq = anchor.Seq
-		}
-		if audit == nil {
-			return nil
-		}
-		type stored struct {
-			event AuditEvent
-			key   []byte
-		}
-		var records []stored
-		c := audit.Cursor()
-		for k, raw := c.First(); k != nil; k, raw = c.Next() {
-			report.TotalRecords++
-			if len(k) != 16 {
-				problem("audit record with key %x has an invalid storage key length %d (want 16)", k, len(k))
-				continue
-			}
-			var event AuditEvent
-			if err := json.Unmarshal(raw, &event); err != nil {
-				problem("audit record with key %x is malformed and cannot be verified", k)
-				continue
-			}
-			keyCopy := make([]byte, len(k))
-			copy(keyCopy, k)
-			records = append(records, stored{event: event, key: keyCopy})
-		}
-		// Chain order is sequence order: stored Seq for chained
-		// records, key sequence for legacy records.
-		seqOf := func(r stored) uint64 {
-			if r.event.Hash != "" {
-				return r.event.Seq
-			}
-			return auditKeySeq(r.key)
-		}
-		sort.SliceStable(records, func(i, j int) bool { return seqOf(records[i]) < seqOf(records[j]) })
-		var prev *stored
-		var prevSeq uint64
-		for i := range records {
-			r := records[i]
-			seq := seqOf(r)
-			if prev != nil && seq <= prevSeq {
-				problem("audit sequence %d is duplicated or out of order", seq)
-			}
-			// Storage-key consistency: the key's timestamp must
-			// match the record's timestamp at the storage format's
-			// nanosecond precision, and for chained records the
-			// key's sequence must match the record's own sequence.
-			// (Legacy records carry no stored sequence; their key
-			// sequence is authoritative by definition.)
-			if keyTs := int64(binary.BigEndian.Uint64(r.key[:8])); keyTs != r.event.Timestamp.UnixNano() {
-				problem("audit record seq %d has a storage key timestamp that does not match its record timestamp (key corruption)", seq)
-			}
-			if r.event.Hash != "" && r.event.Seq != auditKeySeq(r.key) {
-				problem("audit record seq %d has a storage key sequence %d that does not match its record sequence (key corruption)", r.event.Seq, auditKeySeq(r.key))
-			}
-			if r.event.Hash == "" {
-				report.LegacyRecords++
-				prev = &records[i]
-				prevSeq = seq
-				continue
-			}
-			report.ChainedRecords++
-			// Chained sequences are allocated from one monotonic
-			// counter shared with the legacy era, so within the
-			// chained segment surviving records must be contiguous.
-			// (Gaps inside the legacy segment are legitimate: the
-			// pre-chain store pruned by timestamp, not sequence.)
-			if prev != nil && prev.event.Hash != "" && seq != prevSeq+1 {
-				problem("sequence gap in chained audit records: seq %d follows seq %d; chained sequences must be contiguous", seq, prevSeq)
-			}
-			if got := canonicalAuditHash(r.event); got != r.event.Hash {
-				problem("audit record seq %d was modified after it was written (hash mismatch)", seq)
-			}
-			switch {
-			case prev != nil:
-				if want := recordHash(prev.event, auditKeySeq(prev.key)); r.event.PrevHash != want {
-					problem("audit record seq %d does not link to its predecessor (history was deleted, inserted, or reordered)", seq)
-				}
-			case hasAnchor:
-				if r.event.PrevHash != anchor.Hash {
-					problem("first surviving audit record seq %d does not link to the pruning anchor seq %d (history before the retained window was altered)", seq, anchor.Seq)
-				}
-				if seq != anchor.Seq+1 && report.LegacyRecords == 0 {
-					problem("gap between pruning anchor seq %d and first surviving audit record seq %d", anchor.Seq, seq)
-				}
-			default:
-				if r.event.PrevHash != "" {
-					problem("first chained audit record seq %d links to a predecessor that does not exist and no pruning anchor is recorded", seq)
-				}
-			}
-			prev = &records[i]
-			prevSeq = seq
-		}
-		if len(records) > 0 {
-			report.FirstSeq = seqOf(records[0])
-			last := records[len(records)-1]
-			report.LastSeq = seqOf(last)
-			report.HeadHash = recordHash(last.event, auditKeySeq(last.key))
-		}
-		if meta != nil {
-			head, headState := loadChainRefState(meta, keyChainHead)
-			switch headState {
-			case refMalformed:
-				problem("chain head metadata is malformed; the chain tail cannot be trusted")
-			case refValid:
-				switch {
-				case len(records) == 0:
-					// An emptied bucket keeps the head at the anchor.
-					if !hasAnchor || head != anchor {
-						problem("chain head metadata does not match the pruning anchor for an empty audit log")
-					}
-					report.HeadHash = head.Hash
-				case head.Seq != report.LastSeq || head.Hash != report.HeadHash:
-					problem("chain head metadata (seq %d) does not match the newest surviving audit record (seq %d); the newest records may have been truncated", head.Seq, report.LastSeq)
-				}
-			default: // refAbsent
-				if report.ChainedRecords > 0 {
-					problem("audit records are chained but chain head metadata is missing")
-				}
-			}
-		}
+		report = verifyChainTx(tx)
 		return nil
 	})
 	if err != nil {
 		return ChainReport{}, err
 	}
 	return report, nil
+}
+
+// verifyChainTx is the single chain-verification implementation,
+// shared by VerifyAuditChain (read transaction) and by the append
+// path (write transaction), so enforcement and reporting can never
+// drift semantically: an append is accepted only when this exact
+// verification passes on the pre-append state.
+func verifyChainTx(tx *bolt.Tx) ChainReport {
+	report := ChainReport{Verified: true}
+	problem := func(format string, args ...any) {
+		report.Verified = false
+		report.Problems = append(report.Problems, fmt.Sprintf(format, args...))
+	}
+	meta := tx.Bucket(bucketMeta)
+	audit := tx.Bucket(bucketAudit)
+	// Fail closed on missing storage structures: a database whose
+	// audit or meta bucket is absent has lost integrity evidence
+	// and must never report VERIFIED. (A database with both
+	// buckets present but zero records is a legitimate empty
+	// history; pre-chain databases always have both buckets
+	// because Open creates them.)
+	if audit == nil {
+		problem("audit bucket (audit-v1) is missing; the audit history and its integrity evidence are absent")
+	}
+	if meta == nil {
+		problem("meta bucket (meta-v1) is missing; chain head and pruning anchor evidence are absent")
+	}
+	anchor, hasAnchor := chainRef{}, false
+	if meta != nil {
+		var anchorState refState
+		anchor, anchorState = loadChainRefState(meta, keyChainAnchor)
+		hasAnchor = anchorState == refValid
+		if anchorState == refMalformed {
+			problem("chain anchor metadata is malformed; pruning history cannot be trusted")
+		}
+	}
+	report.HasAnchor = hasAnchor
+	if hasAnchor {
+		report.AnchorSeq = anchor.Seq
+	}
+	if audit == nil {
+		return report
+	}
+	type stored struct {
+		event AuditEvent
+		key   []byte
+	}
+	var records []stored
+	c := audit.Cursor()
+	for k, raw := c.First(); k != nil; k, raw = c.Next() {
+		report.TotalRecords++
+		if len(k) != 16 {
+			problem("audit record with key %x has an invalid audit key length %d (want 16)", k, len(k))
+			continue
+		}
+		var event AuditEvent
+		if err := json.Unmarshal(raw, &event); err != nil {
+			problem("audit record with key %x is malformed and cannot be verified", k)
+			continue
+		}
+		keyCopy := make([]byte, len(k))
+		copy(keyCopy, k)
+		records = append(records, stored{event: event, key: keyCopy})
+	}
+	// Chain order is sequence order: stored Seq for chained
+	// records, key sequence for legacy records.
+	seqOf := func(r stored) uint64 {
+		if r.event.Hash != "" {
+			return r.event.Seq
+		}
+		return auditKeySeq(r.key)
+	}
+	sort.SliceStable(records, func(i, j int) bool { return seqOf(records[i]) < seqOf(records[j]) })
+	var prev *stored
+	var prevSeq uint64
+	for i := range records {
+		r := records[i]
+		seq := seqOf(r)
+		if prev != nil && seq <= prevSeq {
+			problem("audit sequence %d is duplicated or out of order", seq)
+		}
+		// Storage-key consistency: the key's timestamp must
+		// match the record's timestamp at the storage format's
+		// nanosecond precision, and for chained records the
+		// key's sequence must match the record's own sequence.
+		// (Legacy records carry no stored sequence; their key
+		// sequence is authoritative by definition.)
+		if keyTs := int64(binary.BigEndian.Uint64(r.key[:8])); keyTs != r.event.Timestamp.UnixNano() {
+			problem("audit record seq %d has a storage key timestamp that does not match its record timestamp (key corruption)", seq)
+		}
+		if r.event.Hash != "" && r.event.Seq != auditKeySeq(r.key) {
+			problem("audit record seq %d has a storage key sequence %d that does not match its record sequence (key corruption)", r.event.Seq, auditKeySeq(r.key))
+		}
+		if r.event.Hash == "" {
+			report.LegacyRecords++
+			prev = &records[i]
+			prevSeq = seq
+			continue
+		}
+		report.ChainedRecords++
+		// Chained sequences are allocated from one monotonic
+		// counter shared with the legacy era, so within the
+		// chained segment surviving records must be contiguous.
+		// (Gaps inside the legacy segment are legitimate: the
+		// pre-chain store pruned by timestamp, not sequence.)
+		if prev != nil && prev.event.Hash != "" && seq != prevSeq+1 {
+			problem("sequence gap in chained audit records: seq %d follows seq %d; chained sequences must be contiguous", seq, prevSeq)
+		}
+		if got := canonicalAuditHash(r.event); got != r.event.Hash {
+			problem("audit record seq %d was modified after it was written (hash mismatch)", seq)
+		}
+		switch {
+		case prev != nil:
+			if want := recordHash(prev.event, auditKeySeq(prev.key)); r.event.PrevHash != want {
+				problem("audit record seq %d does not link to its predecessor (history was deleted, inserted, or reordered)", seq)
+			}
+		case hasAnchor:
+			if r.event.PrevHash != anchor.Hash {
+				problem("first surviving audit record seq %d does not link to the pruning anchor seq %d (history before the retained window was altered)", seq, anchor.Seq)
+			}
+			if seq != anchor.Seq+1 && report.LegacyRecords == 0 {
+				problem("gap between pruning anchor seq %d and first surviving audit record seq %d", anchor.Seq, seq)
+			}
+		default:
+			if r.event.PrevHash != "" {
+				problem("first chained audit record seq %d links to a predecessor that does not exist and no pruning anchor is recorded", seq)
+			}
+		}
+		prev = &records[i]
+		prevSeq = seq
+	}
+	if len(records) > 0 {
+		report.FirstSeq = seqOf(records[0])
+		last := records[len(records)-1]
+		report.LastSeq = seqOf(last)
+		report.HeadHash = recordHash(last.event, auditKeySeq(last.key))
+	}
+	if meta != nil {
+		head, headState := loadChainRefState(meta, keyChainHead)
+		switch headState {
+		case refMalformed:
+			problem("chain head metadata is malformed; the chain tail cannot be trusted")
+		case refValid:
+			switch {
+			case len(records) == 0:
+				// An emptied bucket keeps the head at the anchor.
+				if !hasAnchor || head != anchor {
+					problem("chain head metadata does not match the pruning anchor for an empty audit log")
+				}
+				report.HeadHash = head.Hash
+			case head.Seq != report.LastSeq || head.Hash != report.HeadHash:
+				problem("chain head metadata (seq %d) does not match the newest surviving audit record (seq %d); the newest records may have been truncated", head.Seq, report.LastSeq)
+			}
+		default: // refAbsent
+			if report.ChainedRecords > 0 {
+				problem("audit records are chained but chain head metadata is missing")
+			}
+		}
+	}
+	return report
 }
 
 func appendAuditTx(tx *bolt.Tx, s *Store, event AuditEvent) (AuditEvent, error) {
@@ -767,14 +699,39 @@ func appendAuditTx(tx *bolt.Tx, s *Store, event AuditEvent) (AuditEvent, error) 
 	}
 	meta := tx.Bucket(bucketMeta)
 	audit := tx.Bucket(bucketAudit)
-	// Validate the persisted chain state before writing anything:
-	// corrupt or inconsistent integrity metadata fails the whole
-	// transaction (including the sequence increment) instead of
-	// being silently reconstructed.
-	prevHash, err := chainAppendPrev(audit, meta)
-	if err != nil {
-		return AuditEvent{}, err
+	// Validate the FULL persisted chain before writing anything,
+	// using the same verification as VerifyAuditChain: a tail-only
+	// check cannot prove the chain intact, and an append must never
+	// silently extend a corrupted chain. Any problem fails the whole
+	// transaction (including the sequence increment); integrity
+	// metadata is never reconstructed from stored records.
+	report := verifyChainTx(tx)
+	if !report.Verified {
+		return AuditEvent{}, fmt.Errorf("audit chain failed verification (%s); refusing to append audit records", report.Problems[0])
 	}
+	// Two legitimate states need a distinction verification alone
+	// does not draw, because both can report VERIFIED: a pure legacy
+	// log must have no chain metadata at all, and an emptied log is
+	// legitimate only as genesis (no metadata) or with its head kept
+	// at the pruning anchor (equality already enforced above).
+	_, headState := loadChainRefState(meta, keyChainHead)
+	_, anchorState := loadChainRefState(meta, keyChainAnchor)
+	switch {
+	case report.TotalRecords == 0:
+		genesis := headState == refAbsent && anchorState == refAbsent
+		emptied := headState == refValid && anchorState == refValid
+		if !genesis && !emptied {
+			return AuditEvent{}, errors.New("security store chain metadata is inconsistent with an empty audit log; refusing to append audit records")
+		}
+	case report.ChainedRecords == 0:
+		if headState != refAbsent || anchorState != refAbsent {
+			return AuditEvent{}, errors.New("security store has chain metadata but no chained audit records; refusing to append audit records")
+		}
+	}
+	// Verified predecessor: the report's head hash is the retained
+	// tail's hash (chained or legacy), the anchor hash for an emptied
+	// log, and empty only for genesis.
+	prevHash := report.HeadHash
 	seq, err := meta.NextSequence()
 	if err != nil {
 		return AuditEvent{}, err

@@ -654,3 +654,70 @@ func TestAuditChainSequenceGapInChainedSegmentDetected(t *testing.T) {
 		t.Fatalf("chained sequence gap not detected: %+v", report)
 	}
 }
+
+// --- PR #301 review round 4: full-chain validation before append ---
+// A tail-only check cannot prove the chain intact: every case below
+// keeps the stored tail and/or head metadata looking consistent
+// while the chain itself is broken. Verification must fail, the
+// append must fail, and the store must stay byte-identical.
+
+func TestAuditChainAppendRejectsCorruptionBeyondTheTail(t *testing.T) {
+	base := time.Date(2026, 10, 14, 0, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name    string
+		corrupt func(t *testing.T, store *Store)
+	}{
+		{"tail payload modified, stored hash and head unchanged", func(t *testing.T, store *Store) {
+			rewriteRecord(t, store, 2, func(e *AuditEvent) { e.Actor = "mallory" })
+		}},
+		{"middle payload modified", func(t *testing.T, store *Store) {
+			rewriteRecord(t, store, 1, func(e *AuditEvent) { e.Actor = "mallory" })
+		}},
+		{"prev hash modified", func(t *testing.T, store *Store) {
+			rewriteRecord(t, store, 1, func(e *AuditEvent) { e.PrevHash = strings.Repeat("f", 64) })
+		}},
+		{"middle record removed, tail and head intact", func(t *testing.T, store *Store) {
+			deleteRecord(t, store, 1)
+		}},
+		{"tail hash replaced and head forged to match", func(t *testing.T, store *Store) {
+			fake := strings.Repeat("a", 64)
+			rewriteRecord(t, store, 2, func(e *AuditEvent) { e.Hash = fake })
+			putMeta(t, store, keyChainHead, []byte(fmt.Sprintf(`{"seq":3,"hash":%q}`, fake)))
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store, _ := chainTestStore(t, 100)
+			defer store.Close()
+			appendChainEvents(t, store, 3, base)
+			tc.corrupt(t, store)
+			assertAppendFailsClosedAndStoreUnchanged(t, store)
+		})
+	}
+
+	t.Run("pruning anchor hash corrupted", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "private", "store.db")
+		store, err := Open(path, 100, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer store.Close()
+		appendChainEvents(t, store, 3, time.Now().UTC().Add(-72*time.Hour))
+		appendChainEvents(t, store, 1, time.Now().UTC())
+		putMeta(t, store, keyChainAnchor, []byte(`{"seq":3,"hash":"0000000000000000000000000000000000000000000000000000000000000000"}`))
+		assertAppendFailsClosedAndStoreUnchanged(t, store)
+	})
+
+	t.Run("first retained record link to anchor corrupted", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "private", "store.db")
+		store, err := Open(path, 100, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer store.Close()
+		appendChainEvents(t, store, 3, time.Now().UTC().Add(-72*time.Hour))
+		appendChainEvents(t, store, 1, time.Now().UTC())
+		rewriteRecord(t, store, 0, func(e *AuditEvent) { e.PrevHash = strings.Repeat("b", 64) })
+		assertAppendFailsClosedAndStoreUnchanged(t, store)
+	})
+}

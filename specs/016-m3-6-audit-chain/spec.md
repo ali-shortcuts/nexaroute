@@ -75,3 +75,18 @@ never reconstructed from stored records. Within the chained segment,
 surviving sequences must be contiguous (the counter is shared and
 monotonic); legacy-segment gaps stay legitimate because the pre-chain
 store pruned by timestamp.
+
+## Review hardening round 4 — full-chain validation before append
+The append path runs the complete chain verification (the shared
+`verifyChainTx`, identical to `nexaroute audit verify`) on the
+pre-append state inside the write transaction and refuses to append
+unless it passes: every chained record's canonical hash is
+recomputed, every predecessor link and the anchor connection are
+validated, sequence continuity and storage-key consistency are
+checked, and the head is compared against the verified tail. A
+tail-only agreement check is not sufficient evidence of integrity.
+Two VERIFIED states keep an extra append-time distinction: a pure
+legacy log must carry no chain metadata, and an emptied log must be
+genesis or head==anchor. There is exactly one verification
+implementation; there is no second scan and no metadata
+reconstruction path.
