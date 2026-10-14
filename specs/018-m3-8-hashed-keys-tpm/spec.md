@@ -48,7 +48,14 @@
 4. **No secret exposure.** Keys and digests are never logged; error
    responses stay generic; admin list responses never return hashes
    (unchanged) or plaintext.
-5. **Compatibility.** Routing, provider failover, streaming, guardrails
+5. **Stale settlement protection.** Every TPM bucket has a unique
+   generation that changes when it is evicted/recreated, idle-reset, or
+   its configured capacity changes. A provider usage callback tied to an
+   older generation must not modify the current bucket for the same key.
+6. **Retry guidance.** A request estimate larger than the whole bucket
+   is rejected without a misleading `Retry-After`; when the estimate can
+   fit after refill, return a calculated conservative refill delay.
+7. **Compatibility.** Routing, provider failover, streaming, guardrails
    and the tenant/project/team policy intersection are unchanged. No
    new dependencies or external services. Quota state stays
    single-process in-memory (documented limitation, unchanged).
