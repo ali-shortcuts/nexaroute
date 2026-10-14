@@ -442,6 +442,13 @@ Only non-streaming requests with `temperature` absent/0 and `top_p` absent/1 are
 | `enabled` | `false` | Gate `/v1/*` endpoints with static keys. |
 | `keys` | `[]` | 8–512 byte keys; presented via `Authorization: Bearer <key>` or `x-api-key`. |
 | `rpm` | `0` | Per-key requests-per-minute ceiling; `0` disables the ceiling. |
+| `virtual_keys` | `[]` | Managed client identities. Each generated key's `key_hash` stores its SHA-256 digest; the plaintext is shown only once by the Admin create/rotate operation. |
+| `virtual_keys[].rpm` | `0` | Per-virtual-key requests-per-minute ceiling; `0` disables it. |
+| `virtual_keys[].tpm` | `0` | Per-virtual-key estimated tokens-per-minute admission budget; `0` disables it. |
+
+The virtual-key TPM limiter is a local, in-memory token bucket. Admission reserves a conservative estimate before dispatch: request-body bytes divided by four, plus the larger explicit `max_tokens` / `max_output_tokens` ceiling. Ambiguous or truncated token-limit metadata fails closed. Rejected admission does not debit the bucket. If an estimate exceeds the entire configured TPM capacity, the request is rejected without `Retry-After` because waiting cannot make that request fit. If the request could fit after refill, `Retry-After` reports the calculated refill delay rather than a fixed minute.
+
+This is an **estimated pre-dispatch admission budget**, not authoritative provider billing usage. Provider-reported usage is recorded separately. The TPM/RPM buckets are process-local memory and are not shared across replicas; do not treat them as distributed quotas.
 
 ### In-flight quota reservations
 
