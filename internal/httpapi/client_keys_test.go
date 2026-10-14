@@ -202,8 +202,8 @@ func TestVirtualKeyTPMAdmissionRetryAndOversizedRequest(t *testing.T) {
 	cfg.ClientAuth = config.ClientAuthConfig{
 		Enabled: true,
 		VirtualKeys: []config.VirtualKeyConfig{
-			{ID: "vk-tpm", KeyHash: keyDigest("nrk_tpm"), AllowedModels: []string{"m"}, TPM: 23},
-			{ID: "vk-tpm-large", KeyHash: keyDigest("nrk_tpm_large"), AllowedModels: []string{"m"}, TPM: 23},
+			{ID: "vk-tpm", KeyHash: keyDigest("nrk_tpm"), AllowedModels: []string{"m"}, TPM: 25},
+			{ID: "vk-tpm-large", KeyHash: keyDigest("nrk_tpm_large"), AllowedModels: []string{"m"}, TPM: 25},
 		},
 	}
 	s := testGateway(t, cfg)
@@ -217,10 +217,10 @@ func TestVirtualKeyTPMAdmissionRetryAndOversizedRequest(t *testing.T) {
 		return rr
 	}
 
-	if rr := call("nrk_tpm", "5"); rr.Code != http.StatusOK {
+	if rr := call("nrk_tpm", "7"); rr.Code != http.StatusOK {
 		t.Fatalf("first TPM-limited request status=%d body=%s", rr.Code, rr.Body.String())
 	}
-	limited := call("nrk_tpm", "5")
+	limited := call("nrk_tpm", "7")
 	if limited.Code != http.StatusTooManyRequests {
 		t.Fatalf("second TPM-limited request status=%d body=%s, want 429", limited.Code, limited.Body.String())
 	}
