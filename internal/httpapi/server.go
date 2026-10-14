@@ -65,6 +65,7 @@ type Server struct {
 	decisionOrchestrator *decision.Orchestrator
 	clientRL             sync.Mutex
 	clientBuckets        map[string]*clientBucket
+	clientBucketGeneration uint64
 	respCache            *cache.Cache
 	cacheGeneration      uint64 // guarded by runtimeMu; scopes cache keys to a config snapshot
 	usage                *usage.Tracker
