@@ -118,7 +118,8 @@ func main() {
 	for _, w := range cfg.EligibilityWarnings {
 		fmt.Fprintf(os.Stderr, "nexaroute: config warning: %s\n", w)
 	}
-	if _, err := openControlPlaneRuntime(cfg.ControlPlane, *configPath); err != nil {
+	cpRuntime, err := openControlPlaneRuntime(cfg.ControlPlane, *configPath)
+	if err != nil {
 		bootstrap.Fatalf("cannot initialize control-plane runtime: %v", err)
 	}
 
@@ -288,6 +289,11 @@ func main() {
 	defer shutdownCancel()
 	if err := srv.Shutdown(shutdown); err != nil {
 		logger.Printf("shutdown_error=%v", err)
+	}
+	if cpRuntime != nil {
+		if err := cpRuntime.Close(); err != nil {
+			logger.Printf("control_plane_close_error=%v", err)
+		}
 	}
 	select {
 	case err := <-serverErr:

@@ -48,6 +48,15 @@ func (s *SQLStore) Put(ctx context.Context, namespace string, expectedRevision u
 			_ = tx.Rollback()
 		}
 	}()
+	// Serialize writers per namespace for the whole transaction. A plain
+	// SELECT ... FOR UPDATE cannot lock a row that does not exist yet, so
+	// two competing first writes to a fresh namespace would both pass the
+	// revision check and one would leak a raw unique-violation at INSERT.
+	// The advisory transaction lock makes the loser observe the winner's
+	// committed row and fail with the deterministic ErrConflict instead.
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, namespace); err != nil {
+		return Snapshot{}, fmt.Errorf("lock control namespace: %w", err)
+	}
 	var current uint64
 	var schema int
 	scanErr := tx.QueryRowContext(ctx, `SELECT revision, schema_version FROM `+snapshotTable+` WHERE namespace = $1 FOR UPDATE`, namespace).Scan(&current, &schema)
