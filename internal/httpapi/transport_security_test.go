@@ -102,8 +102,8 @@ func TestMTLSRequirementsAreIndependentPerScope(t *testing.T) {
 		if rr := adminSecurityRequest(s, http.MethodGet, "/admin/api/snapshot", nil, nil, "", ""); rr.Code != http.StatusForbidden {
 			t.Fatalf("admin without certificate status=%d want 403", rr.Code)
 		}
-		if code := dataPlane(s, nil); code == http.StatusForbidden {
-			t.Fatalf("data plane without certificate was rejected although only admin requires one")
+		if code := dataPlane(s, nil); code != http.StatusOK {
+			t.Fatalf("data plane without certificate status=%d want 200 although only admin requires one", code)
 		}
 	})
 
@@ -120,8 +120,8 @@ func TestMTLSRequirementsAreIndependentPerScope(t *testing.T) {
 		if code := dataPlane(s, nil); code != http.StatusForbidden {
 			t.Fatalf("data plane without certificate status=%d want 403", code)
 		}
-		if code := dataPlane(s, verified); code == http.StatusForbidden {
-			t.Fatalf("data plane with verified certificate was rejected")
+		if code := dataPlane(s, verified); code != http.StatusOK {
+			t.Fatalf("data plane with verified certificate status=%d want 200", code)
 		}
 	})
 }
