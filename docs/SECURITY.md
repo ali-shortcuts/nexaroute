@@ -76,6 +76,19 @@ provider adapter is claimed verified.
   user identity or a complete enterprise access system. The Admin OIDC setup is
   a single-issuer authorization-code client; SAML and distributed session/audit
   backends are not implemented.
+- Client keys are hashed at rest (M3-8): virtual keys have always stored only
+  a SHA-256 digest, and legacy `client_auth.keys` plaintext is now migrated to
+  `client_auth.key_hashes` digests on load (persisted by the runtime load path)
+  and before every save, so the config file never holds a usable client
+  credential. Client keys are 256-bit random secrets, for which unsalted
+  SHA-256 is the appropriate construction; digests are compared in constant
+  time and never logged or returned by admin reads. Per-client TPM quotas are
+  enforced by a token bucket keyed per client: admission reserves a
+  conservative estimate and provider-reported usage settles it to the actual
+  total afterwards; requests without a usage report keep the estimate as
+  their charge. Buckets are bounded, idle-evicted, fail closed when full,
+  and live in process memory only — TPM/RPM enforcement is per-instance,
+  not distributed.
 - Administrators may configure arbitrary provider/proxy URLs. A general provider egress allow/deny policy is not built in, so an authorized admin can point a provider at internal services. Do not give admin access to untrusted users.
 - The separate remote-decision HTTP client (`internal/decision/remote`) is hardened against SSRF: it resolves and pins approved IPs per connection, rejects loopback/private/link-local/reserved destinations and mixed public/private DNS answers, rejects redirects, ignores environment proxy variables, requires TLS verification with TLS 1.2 minimum, and bounds response bodies. These protections do not imply that arbitrary provider URLs are similarly restricted.
 

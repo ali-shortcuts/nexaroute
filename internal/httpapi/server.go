@@ -63,9 +63,10 @@ type Server struct {
 	// Phase D: Decision plane
 	decisionRegistry     *decision.Registry
 	decisionOrchestrator *decision.Orchestrator
-	clientRL             sync.Mutex
-	clientBuckets        map[string]*clientBucket
-	respCache            *cache.Cache
+	clientRL               sync.Mutex
+	clientBuckets          map[string]*clientBucket
+	clientBucketGeneration uint64
+	respCache              *cache.Cache
 	cacheGeneration      uint64 // guarded by runtimeMu; scopes cache keys to a config snapshot
 	usage                *usage.Tracker
 	identityUsage        *usage.IdentityTracker
