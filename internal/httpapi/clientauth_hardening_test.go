@@ -242,4 +242,3 @@ func TestClientTPMUsageReconciliationIgnoresExpiredBucketGeneration(t *testing.T
 		t.Fatalf("balance in newer bucket generation changed to %v, want 10", got)
 	}
 }
-
