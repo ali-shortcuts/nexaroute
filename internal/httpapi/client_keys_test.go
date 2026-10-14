@@ -202,8 +202,8 @@ func TestVirtualKeyTPMAdmissionRetryAndOversizedRequest(t *testing.T) {
 	cfg.ClientAuth = config.ClientAuthConfig{
 		Enabled: true,
 		VirtualKeys: []config.VirtualKeyConfig{
-			{ID: "vk-tpm", KeyHash: keyDigest("nrk_tpm"), AllowedModels: []string{"m"}, TPM: 50},
-			{ID: "vk-tpm-large", KeyHash: keyDigest("nrk_tpm_large"), AllowedModels: []string{"m"}, TPM: 50},
+			{ID: "vk-tpm", KeyHash: keyDigest("nrk_tpm"), AllowedModels: []string{"m"}, TPM: 31},
+			{ID: "vk-tpm-large", KeyHash: keyDigest("nrk_tpm_large"), AllowedModels: []string{"m"}, TPM: 31},
 		},
 	}
 	s := testGateway(t, cfg)
