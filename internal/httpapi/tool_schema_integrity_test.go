@@ -376,4 +376,23 @@ func TestToolSchemaIntegrityRepairRetry(t *testing.T) {
 	if _, ok := bodies[1]["input"]; !ok {
 		t.Fatalf("repair retry lost the request input: %v", bodies[1])
 	}
+	// Strongest form of the claim: the retry body is the first
+	// attempt's body with ONLY temperature removed — every other
+	// field semantically identical. The expected representation is an
+	// independent deep copy (JSON round-trip), so the captured
+	// first-attempt map is never mutated.
+	rawCopy, err := json.Marshal(bodies[0])
+	if err != nil {
+		t.Fatalf("marshal first attempt copy: %v", err)
+	}
+	var expected map[string]any
+	if err := json.Unmarshal(rawCopy, &expected); err != nil {
+		t.Fatalf("unmarshal first attempt copy: %v", err)
+	}
+	delete(expected, "temperature")
+	if !reflect.DeepEqual(expected, bodies[1]) {
+		expectedJSON, _ := json.Marshal(expected)
+		actualJSON, _ := json.Marshal(bodies[1])
+		t.Fatalf("repair retry changed more than the unsupported field:\nexpected (attempt 1 minus temperature): %s\nactual retry body: %s", expectedJSON, actualJSON)
+	}
 }
