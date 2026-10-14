@@ -19,8 +19,14 @@ func TestPlaintextSecretMigrationEncryptedBackupAndIdempotency(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	if cfg.Admin.APIKey != "admin-canary" || cfg.Providers[0].APIKey != "provider-canary" || cfg.Providers[0].Credentials[0].APIKey != "pool-canary" || cfg.ClientAuth.Keys[0] != "client-canary" {
+	if cfg.Admin.APIKey != "admin-canary" || cfg.Providers[0].APIKey != "provider-canary" || cfg.Providers[0].Credentials[0].APIKey != "pool-canary" {
 		t.Fatal("migration failed to preserve runtime values")
+	}
+	// M3-8: the plaintext client key is preserved as its SHA-256 digest —
+	// the same secret keeps authenticating, but no usable credential is
+	// retained in the loaded config.
+	if len(cfg.ClientAuth.Keys) != 0 || len(cfg.ClientAuth.KeyHashes) != 1 || cfg.ClientAuth.KeyHashes[0] != ClientKeyDigest("client-canary") {
+		t.Fatal("client key was not migrated to its digest")
 	}
 	disk, e := os.ReadFile(p)
 	if e != nil {

@@ -9,7 +9,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"io"
+	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -25,8 +27,10 @@ const (
 )
 
 type clientBucket struct {
-	tokens float64
-	last   time.Time
+	tokens     float64
+	last       time.Time
+	capacity   float64
+	generation uint64
 }
 
 type clientAuthState struct {
@@ -123,10 +127,22 @@ func (s *Server) findClientIdentity(presented string) (clientIdentity, config.Vi
 		}
 		return clientIdentity{ID: key.ID, TenantID: key.TenantID, ProjectID: key.ProjectID, TeamID: key.TeamID, Role: key.Role, Virtual: true, RequirePrivacy: key.RequirePrivacy}, key, true
 	}
-	if clientKeyMatches(cfg.ClientAuth.Keys, presented) {
+	if digestInList(cfg.ClientAuth.KeyHashes, digest) || clientKeyMatches(cfg.ClientAuth.Keys, presented) {
 		return clientIdentity{ID: "legacy", Role: "admin"}, config.VirtualKeyConfig{}, true
 	}
 	return clientIdentity{}, config.VirtualKeyConfig{}, false
+}
+
+// digestInList reports whether digest equals any stored key digest,
+// comparing every entry in constant time.
+func digestInList(hashes []string, digest string) bool {
+	matched := 0
+	for _, h := range hashes {
+		if subtleConstantTimeCompare(h, digest) {
+			matched++
+		}
+	}
+	return matched > 0
 }
 
 const requestMetadataReadLimit = 2 << 20
@@ -407,9 +423,21 @@ func (s *Server) clientBucketLocked(id string, capacity float64, now time.Time) 
 		s.clientBuckets = make(map[string]*clientBucket)
 	}
 	if b := s.clientBuckets[id]; b != nil {
+		if b.capacity != capacity {
+			// A configuration change starts a new quota generation. A request
+			// admitted under the previous ceiling must not settle into this one.
+			b.capacity = capacity
+			if b.tokens > capacity {
+				b.tokens = capacity
+			}
+			s.clientBucketGeneration++
+			b.generation = s.clientBucketGeneration
+		}
 		if now.Sub(b.last) > clientBucketIdle {
 			b.tokens = capacity
 			b.last = now
+			s.clientBucketGeneration++
+			b.generation = s.clientBucketGeneration
 		}
 		return b
 	}
@@ -423,7 +451,8 @@ func (s *Server) clientBucketLocked(id string, capacity float64, now time.Time) 
 	if len(s.clientBuckets) >= maxClientBuckets {
 		return nil
 	}
-	b := &clientBucket{tokens: capacity, last: now}
+	s.clientBucketGeneration++
+	b := &clientBucket{tokens: capacity, last: now, capacity: capacity, generation: s.clientBucketGeneration}
 	s.clientBuckets[id] = b
 	return b
 }
@@ -456,30 +485,122 @@ func (s *Server) clientRPMAllow(presented string, rpm int) bool {
 	return true
 }
 
-func (s *Server) clientTPMAllow(presented string, tpm, estimated int) bool {
+// tpmReservation is the per-request TPM charge made at admission from
+// the conservative request estimate. When the provider later reports
+// actual usage, clientTPMSettle reconciles the bucket to the actual
+// total. charged is guarded by s.clientRL.
+type tpmReservation struct {
+	bucketID   string
+	capacity   float64
+	charged    int64
+	generation uint64
+}
+
+type tpmReservationContextKey struct{}
+
+func contextWithTPMReservation(ctx context.Context, res *tpmReservation) context.Context {
+	return context.WithValue(ctx, tpmReservationContextKey{}, res)
+}
+
+func tpmReservationFromContext(ctx context.Context) *tpmReservation {
+	res, _ := ctx.Value(tpmReservationContextKey{}).(*tpmReservation)
+	return res
+}
+
+// clientTPMReserve charges the admission estimate against the client's
+// TPM bucket and returns the reservation to settle later. A nil
+// reservation with ok=true means no TPM ceiling applies.
+func (s *Server) clientTPMReserve(presented string, tpm, estimated int) (*tpmReservation, bool) {
+	res, ok, _ := s.clientTPMReserveAt(presented, tpm, estimated, time.Now())
+	return res, ok
+}
+
+// clientTPMReserveAt provides a deterministic clock for tests and returns a
+// conservative Retry-After when refill could make the request admissible.
+// Requests larger than the entire bucket capacity cannot be admitted by
+// waiting; they fail without a Retry-After hint and do not allocate/debit a
+// bucket.
+func (s *Server) clientTPMReserveAt(presented string, tpm, estimated int, now time.Time) (*tpmReservation, bool, time.Duration) {
 	if tpm <= 0 || estimated <= 0 {
-		return true
+		return nil, true, 0
 	}
+	capacity := float64(tpm)
+	if float64(estimated) > capacity {
+		return nil, false, 0
+	}
+
 	id := keyDigest(presented) + "#tpm"
-	now := time.Now()
 	s.clientRL.Lock()
 	defer s.clientRL.Unlock()
-	capacity := float64(tpm)
 	b := s.clientBucketLocked(id, capacity, now)
 	if b == nil {
-		return false
+		return nil, false, 0
 	}
 	refill := capacity / 60
-	b.tokens += now.Sub(b.last).Seconds() * refill
+	if elapsed := now.Sub(b.last).Seconds(); elapsed > 0 {
+		b.tokens += elapsed * refill
+	}
 	if b.tokens > capacity {
 		b.tokens = capacity
 	}
 	b.last = now
-	if float64(estimated) > b.tokens {
-		return false
+	needed := float64(estimated)
+	if needed > b.tokens {
+		waitSeconds := math.Ceil((needed - b.tokens) / refill)
+		if waitSeconds < 1 {
+			waitSeconds = 1
+		}
+		return nil, false, time.Duration(waitSeconds) * time.Second
 	}
-	b.tokens -= float64(estimated)
-	return true
+	b.tokens -= needed
+	return &tpmReservation{
+		bucketID: id, capacity: capacity, charged: int64(estimated), generation: b.generation,
+	}, true, 0
+}
+
+func (s *Server) clientTPMAllow(presented string, tpm, estimated int) bool {
+	_, ok := s.clientTPMReserve(presented, tpm, estimated)
+	return ok
+}
+
+// clientTPMSettle reconciles a reservation with actual provider-reported
+// usage. It ignores stale reservations after bucket eviction, idle reset, or
+// quota configuration changes, so a late response cannot modify a new quota
+// window for the same client.
+func (s *Server) clientTPMSettle(res *tpmReservation, actual int64) {
+	s.clientTPMSettleAt(res, actual, time.Now())
+}
+
+func (s *Server) clientTPMSettleAt(res *tpmReservation, actual int64, now time.Time) {
+	if res == nil || actual < 0 {
+		return
+	}
+	s.clientRL.Lock()
+	defer s.clientRL.Unlock()
+	b := s.clientBuckets[res.bucketID]
+	if b == nil || b.generation != res.generation {
+		return // evicted/recreated or reset quota generation
+	}
+	capacity := b.capacity
+	if capacity <= 0 {
+		capacity = res.capacity
+	}
+	refill := capacity / 60
+	if elapsed := now.Sub(b.last).Seconds(); elapsed > 0 {
+		b.tokens += elapsed * refill
+	}
+	if b.tokens > capacity {
+		b.tokens = capacity
+	}
+	b.last = now
+	b.tokens += float64(res.charged - actual)
+	if b.tokens > capacity {
+		b.tokens = capacity
+	}
+	if b.tokens < 0 {
+		b.tokens = 0
+	}
+	res.charged = actual
 }
 
 func (s *Server) clientAuthAllowed(w http.ResponseWriter, r *http.Request, anthropicStyle bool) bool {
@@ -536,14 +657,33 @@ func (s *Server) clientAuthAllowed(w http.ResponseWriter, r *http.Request, anthr
 		}
 		return false
 	}
-	if virtualKey.TPM > 0 && !s.clientTPMAllow(keyText, virtualKey.TPM, requestTokenEstimate(r)) {
-		w.Header().Set("Retry-After", "60")
-		if anthropicStyle {
-			anthropicErrorJSON(w, http.StatusTooManyRequests, "client token limit exceeded; retry after 60 seconds")
-		} else {
-			errorJSON(w, http.StatusTooManyRequests, "client token limit exceeded; retry after 60 seconds")
+	// Effective TPM: the virtual key's own ceiling wins; otherwise the
+	// global client_auth.tpm applies to every client class, so legacy
+	// clients are quota-bound too.
+	tpm := cfg.ClientAuth.TPM
+	if virtualKey.TPM > 0 {
+		tpm = virtualKey.TPM
+	}
+	if tpm > 0 {
+		res, allowed, retryAfter := s.clientTPMReserveAt(keyText, tpm, requestTokenEstimate(r), time.Now())
+		if !allowed {
+			message := "client token limit exceeded; reduce request size or retry later"
+			if retryAfter > 0 {
+				seconds := int(retryAfter / time.Second)
+				w.Header().Set("Retry-After", strconv.Itoa(seconds))
+				message = "client token limit exceeded; retry after " + strconv.Itoa(seconds) + " seconds"
+			}
+			if anthropicStyle {
+				anthropicErrorJSON(w, http.StatusTooManyRequests, message)
+			} else {
+				errorJSON(w, http.StatusTooManyRequests, message)
+			}
+			return false
 		}
-		return false
+		if res != nil {
+			r2 := r.WithContext(contextWithTPMReservation(r.Context(), res))
+			*r = *r2
+		}
 	}
 	return true
 }

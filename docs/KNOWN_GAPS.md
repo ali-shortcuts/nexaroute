@@ -88,7 +88,7 @@ WP4 implementation boundaries and acceptance status:
   CodeQL) were green on the reviewed PR head. Any subsequent push requires
   fresh checks before merge. Live external-IdP interoperability is unverified.
 
-- per-client quotas beyond the RPM and TPM ceilings, hashed-at-rest client keys;
+- per-client quotas beyond the RPM and TPM ceilings (hashed-at-rest client keys landed with M3-8: legacy plaintext keys migrate to SHA-256 digests on load/save, and TPM reservations settle to provider-reported usage);
 - SAML and enterprise identity protocols other than the configured single OIDC issuer;
 - distributed/shared session and audit storage, cross-instance pending OIDC transactions;
 - enterprise provisioning/deprovisioning and automated role/group lifecycle beyond the explicit claim mapping.

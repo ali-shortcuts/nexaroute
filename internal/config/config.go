@@ -1,6 +1,8 @@
 package config
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -228,6 +230,55 @@ type Config struct {
 	// consulted by Validate or ValidateStrict: an intentionally
 	// incomplete configuration must remain loadable.
 	EligibilityWarnings []string `json:"-"`
+
+	// clientKeyMigrationPending counts legacy plaintext client keys that
+	// LoadBase converted to hashes in memory. The runtime Load path
+	// persists the migrated config and clears the counter; read-only
+	// loaders leave the file untouched. Never serialized.
+	clientKeyMigrationPending int `json:"-"`
+}
+
+// ClientKeyDigest returns the SHA-256 hex digest under which a client
+// key is stored and matched. Client keys are high-entropy random
+// secrets, so an unsalted fast hash is the appropriate construction
+// (the same one virtual keys have always used).
+func ClientKeyDigest(key string) string {
+	h := sha256.Sum256([]byte(key))
+	return hex.EncodeToString(h[:])
+}
+
+// MigrateClientKeysToHashes converts any legacy plaintext client keys
+// into SHA-256 digests (deduplicated, order-preserving) and clears the
+// plaintext list, so a Config that has passed through load or save
+// never carries usable client credentials. It returns the number of
+// plaintext keys converted. Authentication is unaffected: the same
+// secrets keep matching, now against digests.
+func (c *Config) MigrateClientKeysToHashes() int {
+	if len(c.ClientAuth.Keys) == 0 {
+		return 0
+	}
+	seen := make(map[string]bool)
+	for _, h := range c.ClientAuth.KeyHashes {
+		seen[h] = true
+	}
+	converted := 0
+	for _, k := range c.ClientAuth.Keys {
+		d := ClientKeyDigest(k)
+		if !seen[d] {
+			seen[d] = true
+			c.ClientAuth.KeyHashes = append(c.ClientAuth.KeyHashes, d)
+		}
+		converted++
+	}
+	c.ClientAuth.Keys = nil
+	c.clientKeyMigrationPending += converted
+	return converted
+}
+
+// ClientKeyMigrationPending reports how many plaintext client keys were
+// converted in memory and still need a persisted migration.
+func (c *Config) ClientKeyMigrationPending() int {
+	return c.clientKeyMigrationPending
 }
 
 // VideoConfig controls the optional, isolated Video Gateway. It is disabled
@@ -373,9 +424,15 @@ type CacheConfig struct {
 // per-key request-per-minute ceiling. Disabled by default so local single-user
 // deployments keep working without configuration.
 type ClientAuthConfig struct {
-	Enabled     bool               `json:"enabled"`
-	Keys        []string           `json:"keys"`
+	Enabled bool     `json:"enabled"`
+	Keys    []string `json:"keys"`
+	// KeyHashes holds SHA-256 digests of legacy client keys. Plaintext
+	// Keys are migrated into KeyHashes on load and before every save
+	// (MigrateClientKeysToHashes), so usable client credentials are
+	// never persisted. Keys remains only as a transitional input form.
+	KeyHashes   []string           `json:"key_hashes,omitempty"`
 	RPM         int                `json:"rpm"`
+	TPM         int                `json:"tpm,omitempty"`
 	Tenants     []TenantConfig     `json:"tenants,omitempty"`
 	VirtualKeys []VirtualKeyConfig `json:"virtual_keys,omitempty"`
 }
@@ -751,6 +808,10 @@ func LoadBase(path string) (Config, error) {
 	if err := json.Unmarshal(b, &cfg); err != nil {
 		return cfg, err
 	}
+	// Legacy plaintext client keys become hashes in memory immediately,
+	// for every consumer. Load (the runtime path) also persists the
+	// migration; read-only loaders never rewrite the file.
+	cfg.MigrateClientKeysToHashes()
 	// A newly generated config writes the emergency switch explicitly. Old
 	// config files did not have this opt-in and must not inherit the in-memory
 	// Default value when loaded.
@@ -774,6 +835,16 @@ func Load(path string) (Config, error) {
 	cfg, err := LoadBase(path)
 	if err != nil {
 		return cfg, err
+	}
+	if cfg.ClientKeyMigrationPending() > 0 {
+		// Persist the hashed-at-rest migration now, with the same
+		// fail-closed posture as the nxs1 secrets migration: the
+		// gateway must not keep running on a config whose file still
+		// holds usable plaintext client credentials.
+		if err := SaveAtomic(path, cfg); err != nil {
+			return cfg, fmt.Errorf("cannot persist migrated client key hashes: %w", err)
+		}
+		cfg.clientKeyMigrationPending = 0
 	}
 	if err := cfg.ApplyEnvOverrides(); err != nil {
 		return cfg, err
@@ -1465,7 +1536,7 @@ func (c Config) Validate() error {
 		return errors.New("guardrails.max_body_bytes must be between 1024 and 67108864")
 	}
 	if c.ClientAuth.Enabled {
-		if len(c.ClientAuth.Keys) == 0 && len(c.ClientAuth.VirtualKeys) == 0 {
+		if len(c.ClientAuth.Keys) == 0 && len(c.ClientAuth.KeyHashes) == 0 && len(c.ClientAuth.VirtualKeys) == 0 {
 			return errors.New("client_auth.keys must not be empty when client_auth is enabled")
 		}
 		if len(c.ClientAuth.Keys) > 1024 {
@@ -1476,8 +1547,22 @@ func (c Config) Validate() error {
 				return errors.New("client_auth.keys entries must be between 8 and 512 bytes")
 			}
 		}
+		if len(c.ClientAuth.KeyHashes) > 1024 {
+			return errors.New("client_auth.key_hashes exceeds safe limit 1024")
+		}
+		for _, h := range c.ClientAuth.KeyHashes {
+			if len(h) != 64 {
+				return errors.New("client_auth.key_hashes entries must be SHA-256 hex digests")
+			}
+			if _, err := hex.DecodeString(h); err != nil {
+				return errors.New("client_auth.key_hashes entries must be SHA-256 hex digests")
+			}
+		}
 		if c.ClientAuth.RPM < 0 || c.ClientAuth.RPM > 1000000 {
 			return errors.New("client_auth.rpm must be between 0 and 1000000")
+		}
+		if c.ClientAuth.TPM < 0 || c.ClientAuth.TPM > 1000000000 {
+			return errors.New("client_auth.tpm must be between 0 and 1000000000")
 		}
 	}
 	if c.ControlPlane.Enabled {
@@ -2447,6 +2532,9 @@ func RemoveStaleBackup(path string) error {
 	return nil
 }
 func SaveAtomic(path string, c Config) error {
+	// Plaintext client keys are hashed before anything else reads the
+	// config, so no save path can persist usable client credentials.
+	c.MigrateClientKeysToHashes()
 	// Load the raw on-disk document only to preserve fields controlled by the
 	// process environment. Runtime overrides must never become durable config.
 	if raw, err := os.ReadFile(path); err == nil {
