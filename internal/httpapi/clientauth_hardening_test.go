@@ -189,7 +189,7 @@ func TestClientTPMUsageReconciliationAdjustsEstimateOnce(t *testing.T) {
 	id := keyDigest("reconcile-client") + "#tpm"
 	s := &Server{
 		clientBuckets: map[string]*clientBucket{
-			id: {tokens: 20, last: now, generation: 42},
+			id: {tokens: 20, last: now, capacity: 100, generation: 42},
 		},
 	}
 	reservation := &clientTPMReservation{
@@ -214,7 +214,7 @@ func TestClientTPMUsageReconciliationChargesUsageAboveEstimate(t *testing.T) {
 	id := keyDigest("debt-client") + "#tpm"
 	s := &Server{
 		clientBuckets: map[string]*clientBucket{
-			id: {tokens: 10, last: now, generation: 9},
+			id: {tokens: 10, last: now, capacity: 100, generation: 9},
 		},
 	}
 	reservation := &clientTPMReservation{
@@ -231,7 +231,7 @@ func TestClientTPMUsageReconciliationIgnoresExpiredBucketGeneration(t *testing.T
 	id := keyDigest("generation-client") + "#tpm"
 	s := &Server{
 		clientBuckets: map[string]*clientBucket{
-			id: {tokens: 10, last: now, generation: 99},
+			id: {tokens: 10, last: now, capacity: 100, generation: 99},
 		},
 	}
 	reservation := &clientTPMReservation{
@@ -242,3 +242,31 @@ func TestClientTPMUsageReconciliationIgnoresExpiredBucketGeneration(t *testing.T
 		t.Fatalf("balance in newer bucket generation changed to %v, want 10", got)
 	}
 }
+
+func TestClientTPMConfigChangeInvalidatesOlderReservation(t *testing.T) {
+	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	id := keyDigest("changed-limit-client") + "#tpm"
+	s := &Server{
+		clientBuckets: map[string]*clientBucket{
+			id: {tokens: 50, last: now, capacity: 100, generation: 42},
+		},
+	}
+	oldRequest := &clientTPMReservation{
+		bucketID: id, limit: 100, estimated: 50, generation: 42,
+	}
+
+	// A new request observes a TPM configuration reduction from 100 to 20.
+	s.clientRL.Lock()
+	b := s.clientBucketLocked(id, 20, now)
+	s.clientRL.Unlock()
+	if b == nil || b.capacity != 20 || b.tokens > 20 || b.generation == 42 {
+		t.Fatalf("changed bucket = %#v, want capacity 20, tokens <= 20 and a fresh generation", b)
+	}
+
+	// The older response must not refund tokens into the new smaller quota.
+	s.reconcileClientTPMUsageAt(oldRequest, 10, now)
+	if got := s.clientBuckets[id].tokens; got != 20 {
+		t.Fatalf("old reservation changed new quota balance to %v, want 20", got)
+	}
+}
+
