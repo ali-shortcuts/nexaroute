@@ -243,4 +243,3 @@ func TestVirtualKeyTPMAdmissionRetryAndOversizedRequest(t *testing.T) {
 		t.Fatalf("oversized TPM request Retry-After=%q, want no retry hint for an inadmissible request size", got)
 	}
 }
-
