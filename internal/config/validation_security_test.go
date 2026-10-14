@@ -39,6 +39,9 @@ func TestValidateRejectsInvalidHeaderNames(t *testing.T) {
 		{"forward header entry with internal space", func(p *ProviderConfig) {
 			p.ForwardHeaders = []string{"X Trace"}
 		}, "invalid forward header"},
+		{"forward header entry with CRLF", func(p *ProviderConfig) {
+			p.ForwardHeaders = []string{"X-Trace\r\nInjected"}
+		}, "invalid forward header"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
