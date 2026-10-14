@@ -8,6 +8,8 @@
 
 ## Security
 
+- Release provenance (M3-7): releases now ship a Syft-generated SPDX SBOM covering the shipped binaries and their embedded Go module inventory, the SHA256SUMS manifest covers the SBOM as well, the manifest is signed with Sigstore keyless signing (GitHub Actions OIDC, verified against the pinned release-workflow identity before publication), and a govulncheck gate runs on the exact release revision in the release workflow. See docs/RELEASE_VERIFICATION.md. The keyless signing path is exercised end-to-end only by a real tag publish; `workflow_dispatch` dry runs test signing mechanics with an ephemeral in-job key that is never the release identity.
+
 - Provider egress now blocks the full IANA special-purpose space, including carrier-grade NAT (`100.64.0.0/10`, which contains the Alibaba metadata address `100.100.100.200`), TEST-NETs, benchmarking, reserved, Teredo, site-local and `::/96`. NAT64 (`64:ff9b::/96`) and 6to4 (`2002::/16`) addresses are judged by the IPv4 address they embed, so legitimate IPv6-only deployments keep working.
 - Loopback is reachable only when the provider host is spelled as loopback (`127.0.0.1`, `::1`, `localhost`). A public DNS name that resolves to loopback is rejected at dial time.
 

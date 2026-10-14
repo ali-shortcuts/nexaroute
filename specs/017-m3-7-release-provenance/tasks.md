@@ -1,0 +1,10 @@
+- [x] T1 Pin Syft 1.54.1 (official checksum) and cosign-installer v4.1.2 (commit SHA, cosign v3.1.3)
+- [x] T2 write-checksums.sh shared manifest writer; build-release.sh delegates
+- [x] T3 generate-sbom.sh with staging scan + traceability stamping
+- [x] T4 verify-release.sh (coverage, sha256sum -c, SBOM/go.mod validation)
+- [x] T5 Fixture tests for all tamper classes; wired into verify.sh
+- [x] T6 Local real run: build v0.21.0 dist, real SBOM, manifest, verification PASS
+- [x] T7 release.yml: govulncheck gate, SBOM steps, round-trip, ephemeral dry-run signing test
+- [x] T8 release.yml publish: OIDC-scoped keyless sign + pinned-identity verify; SBOM + bundle shipped
+- [x] T9 RELEASE_VERIFICATION.md, README index, UNRELEASED, checklist M3-7 (IN PROGRESS; signing UNVERIFIED)
+- [ ] T10 PR checks + workflow_dispatch dry run on the PR branch

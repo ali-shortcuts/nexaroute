@@ -18,5 +18,7 @@ install -m 0755 scripts/install.sh dist/install.sh
 cp configs/video.example.json dist/video.example.json
 cp docs/VIDEO_GATEWAY.md dist/VIDEO_GATEWAY.md
 	cp "docs/releases/${version}.md" dist/RELEASE_NOTES.md
-(cd dist && sha256sum nexaroute-linux-amd64 nexaroute-linux-arm64 nexaroute-videogen-linux-amd64 nexaroute-videogen-linux-arm64 install.sh video.example.json VIDEO_GATEWAY.md RELEASE_NOTES.md > SHA256SUMS && sha256sum -c SHA256SUMS)
+# The manifest is written by the shared writer so the release workflow
+# regenerates the identical manifest (now including the SBOM) later.
+./scripts/write-checksums.sh dist
 printf 'Prepared %s in dist/ with gateway, videogen, installer, config and docs. Nothing published.\n' "$version"
