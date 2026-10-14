@@ -48,7 +48,7 @@ func (s *Server) adminSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		rev := s.currentConfigRevision()
 		w.Header().Set("ETag", strconv.FormatUint(rev, 10))
-		writeJSON(w, 200, map[string]any{"saved": true, "revision": rev, "client_base_url": cfg.ClientBaseURL, "routing": cfg.Routing, "probe": cfg.Probe})
+		writeJSON(w, 200, map[string]any{"saved": true, "revision": rev, "client_base_url": cfg.ClientBaseURL, "routing": cfg.Routing, "probe": cfg.Probe, "eligibility_warnings": eligibilityWarningsForSnapshot(cfg)})
 	default:
 		errorJSON(w, 405, "method not allowed")
 	}

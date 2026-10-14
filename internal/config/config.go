@@ -218,6 +218,16 @@ type Config struct {
 	// and the behavior chosen for it; it never contains secret values,
 	// credentials, or full URLs.
 	Warnings []string `json:"-"`
+
+	// EligibilityWarnings collects advisory, secret-safe diagnostics about
+	// routes and pools that statically have no eligible deployments
+	// (M3-3). It is computed by ApplyDefaults from configuration alone —
+	// never from live health, request context, or request-specific
+	// capabilities — and is never serialized to disk. Unlike Warnings it
+	// is surfaced by the admin snapshot, and it is deliberately not
+	// consulted by Validate or ValidateStrict: an intentionally
+	// incomplete configuration must remain loadable.
+	EligibilityWarnings []string `json:"-"`
 }
 
 // VideoConfig controls the optional, isolated Video Gateway. It is disabled
@@ -1225,6 +1235,7 @@ func (c *Config) ApplyDefaults() {
 		}
 		c.VirtualEndpoints = []VirtualEndpointConfig{{ID: "default", Name: "Default", Enabled: &t, PublicModel: c.Routing.PublicModel, RouteProfile: profileID}}
 	}
+	c.computeEligibilityWarnings()
 }
 
 func (p *ProviderConfig) ApplyDefaults() {
