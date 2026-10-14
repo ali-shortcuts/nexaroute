@@ -90,3 +90,20 @@ legacy log must carry no chain metadata, and an emptied log must be
 genesis or head==anchor. There is exactly one verification
 implementation; there is no second scan and no metadata
 reconstruction path.
+
+## Review hardening round 5 — sequence allocator validation
+bbolt v1.4.3 keeps the bucket sequence in the persisted bucket
+header (`Bucket.Sequence`/`NextSequence`/`SetSequence`, bucket.go):
+it is saved on commit and restored on rollback, and `SetSequence`
+accepts any value with no floor check — so a lowered allocator is a
+durable corruption vector that record-level checks cannot see. The
+shared verification therefore also validates the meta bucket's
+allocator: it must never be below the highest sequence evidenced by
+retained records, the chain head, or the pruning anchor; and
+wherever a valid head exists on a chained or emptied log it must
+equal the head exactly (the allocation contract: one sequence per
+chained append, recorded as the head). Legacy-only logs are exempt
+from equality (pre-chain timestamp pruning legitimately leaves the
+allocator above the survivors), as are genesis and fully pruned
+legacy stores, where no evidence exists to judge the counter. The
+allocator is never reset, advanced, or reconstructed by the store.

@@ -20,3 +20,6 @@
 - [x] T16 Extract verifyChainTx shared by VerifyAuditChain and the append path; remove chainAppendPrev (subsumed)
 - [x] T17 Append gate: full verification + legacy/empty metadata distinction; prevHash derived from the verified report
 - [x] T18 Beyond-the-tail regression suite: tail/middle payload edits, PrevHash edit, middle removal with head intact, forged tail hash + matching head, corrupted anchor hash, corrupted first-record anchor link — append error + verify failure + byte-identical store, all proven to fail pre-fix
+- [x] T19 Confirm bbolt v1.4.3 allocator semantics from source (bucket header, commit-persisted, tx-rolled-back, SetSequence unchecked)
+- [x] T20 Allocator invariants in verifyChainTx: floor = max evidenced sequence; equality with head on chained/emptied logs; legacy/genesis exemptions
+- [x] T21 Allocator regression suite: below tail, reset to zero, above head, below anchor/head — verify failure + append refusal + byte-identical store and unchanged allocator; legacy-above-survivors and fully-pruned-legacy positives; rejection cases proven to fail pre-fix

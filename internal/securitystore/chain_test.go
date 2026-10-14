@@ -721,3 +721,164 @@ func TestAuditChainAppendRejectsCorruptionBeyondTheTail(t *testing.T) {
 		assertAppendFailsClosedAndStoreUnchanged(t, store)
 	})
 }
+
+// --- PR #301 review round 5: sequence allocator validation ---
+// bbolt persists the meta bucket's sequence counter in the bucket
+// header and SetSequence accepts any value, so a lowered allocator
+// is durable corruption: the next append would reuse a sequence.
+// Verification must catch it and appends must refuse.
+
+func setAllocator(t *testing.T, store *Store, v uint64) {
+	t.Helper()
+	if err := store.db.Update(func(tx *bolt.Tx) error { return tx.Bucket(bucketMeta).SetSequence(v) }); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func readAllocator(t *testing.T, store *Store) uint64 {
+	t.Helper()
+	var v uint64
+	if err := store.db.View(func(tx *bolt.Tx) error { v = tx.Bucket(bucketMeta).Sequence(); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	return v
+}
+
+func assertAllocatorRejected(t *testing.T, store *Store) {
+	t.Helper()
+	allocBefore := readAllocator(t, store)
+	before := snapshotStore(t, store)
+	report, err := store.VerifyAuditChain(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Verified || !strings.Contains(strings.Join(report.Problems, " "), "allocator") {
+		t.Fatalf("allocator inconsistency not reported: %+v", report)
+	}
+	err = store.AppendAudit(context.Background(), AuditEvent{
+		Timestamp: time.Date(2026, 10, 14, 1, 0, 0, 0, time.UTC),
+		Actor:     "alice", Action: "after-allocator-tamper", Outcome: "success", Status: 200,
+	})
+	if err == nil {
+		t.Fatal("append must fail closed on an inconsistent sequence allocator")
+	}
+	if got := readAllocator(t, store); got != allocBefore {
+		t.Fatalf("failed append changed the allocator: %d -> %d", allocBefore, got)
+	}
+	after := snapshotStore(t, store)
+	if len(before) != len(after) {
+		t.Fatalf("failed append mutated the store: before %d entries, after %d", len(before), len(after))
+	}
+	for k, v := range before {
+		if !bytes.Equal(v, after[k]) {
+			t.Fatalf("failed append mutated store entry %q", k)
+		}
+	}
+}
+
+func TestAuditChainAllocatorValidation(t *testing.T) {
+	base := time.Date(2026, 10, 14, 0, 0, 0, 0, time.UTC)
+
+	t.Run("allocator below tail sequence", func(t *testing.T) {
+		store, _ := chainTestStore(t, 100)
+		defer store.Close()
+		appendChainEvents(t, store, 3, base)
+		setAllocator(t, store, 1)
+		assertAllocatorRejected(t, store)
+	})
+
+	t.Run("allocator reset to zero", func(t *testing.T) {
+		store, _ := chainTestStore(t, 100)
+		defer store.Close()
+		appendChainEvents(t, store, 3, base)
+		setAllocator(t, store, 0)
+		assertAllocatorRejected(t, store)
+	})
+
+	t.Run("allocator above head violates the allocation contract", func(t *testing.T) {
+		store, _ := chainTestStore(t, 100)
+		defer store.Close()
+		appendChainEvents(t, store, 3, base)
+		setAllocator(t, store, 99)
+		assertAllocatorRejected(t, store)
+	})
+
+	t.Run("allocator inconsistent with pruning anchor and head", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "private", "store.db")
+		store, err := Open(path, 100, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer store.Close()
+		appendChainEvents(t, store, 3, time.Now().UTC().Add(-72*time.Hour))
+		appendChainEvents(t, store, 1, time.Now().UTC()) // anchor 3, head 4, allocator 4
+		setAllocator(t, store, 2)
+		assertAllocatorRejected(t, store)
+	})
+
+	t.Run("legacy allocator above surviving records is legitimate", func(t *testing.T) {
+		store, path := chainTestStore(t, 100)
+		defer store.Close()
+		plantLegacyRecords(t, store, 3, base)
+		// Pre-chain timestamp pruning may have retired the highest
+		// sequences: allocator 10 with survivors at 1..3 is valid.
+		setAllocator(t, store, 10)
+		report := verifyOK(t, store)
+		if report.LegacyRecords != 3 {
+			t.Fatalf("legacy report: %+v", report)
+		}
+		if err := store.Close(); err != nil {
+			t.Fatal(err)
+		}
+		reopened, err := Open(path, 100, 365)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer reopened.Close()
+		appendChainEvents(t, reopened, 1, base.Add(4*time.Minute))
+		got := verifyOK(t, reopened)
+		if got.ChainedRecords != 1 || got.LastSeq != 11 {
+			t.Fatalf("bootstrap after high legacy allocator: %+v", got)
+		}
+	})
+
+	t.Run("legacy history fully pruned before chain metadata existed", func(t *testing.T) {
+		store, _ := chainTestStore(t, 100)
+		defer store.Close()
+		setAllocator(t, store, 7) // all legacy records pruned; counter remains
+		verifyOK(t, store)
+		appendChainEvents(t, store, 1, base)
+		report := verifyOK(t, store)
+		if report.ChainedRecords != 1 || report.FirstSeq != 8 {
+			t.Fatalf("append after fully pruned legacy history: %+v", report)
+		}
+	})
+}
+
+func plantLegacyRecords(t *testing.T, store *Store, n int, base time.Time) {
+	t.Helper()
+	err := store.db.Update(func(tx *bolt.Tx) error {
+		audit := tx.Bucket(bucketAudit)
+		for i := 0; i < n; i++ {
+			ts := base.Add(time.Duration(i) * time.Minute)
+			ev := AuditEvent{
+				Timestamp: ts, Actor: "legacy", Action: fmt.Sprintf("legacy-%d", i),
+				Outcome: "success", Status: 200,
+			}
+			encoded, err := json.Marshal(ev)
+			if err != nil {
+				return err
+			}
+			key := make([]byte, 16)
+			binary.BigEndian.PutUint64(key[:8], uint64(ts.UnixNano()))
+			binary.BigEndian.PutUint64(key[8:], uint64(i+1))
+			if err := audit.Put(key, encoded); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}

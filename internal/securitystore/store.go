@@ -675,6 +675,33 @@ func verifyChainTx(tx *bolt.Tx) ChainReport {
 				problem("audit records are chained but chain head metadata is missing")
 			}
 		}
+		// The bucket sequence allocator (bbolt persists it in the
+		// meta bucket header; SetSequence accepts any value) is
+		// integrity evidence: if it ever falls below the highest
+		// sequence the retained records and chain metadata prove was
+		// allocated, the next append could reuse a sequence and
+		// corrupt the chain despite every record verifying.
+		allocator := meta.Sequence()
+		evidence := report.LastSeq
+		if hasAnchor && anchor.Seq > evidence {
+			evidence = anchor.Seq
+		}
+		if headState == refValid && head.Seq > evidence {
+			evidence = head.Seq
+		}
+		if allocator < evidence {
+			problem("audit sequence allocator is at %d, below the highest allocated sequence %d evidenced by retained records and chain metadata; the allocator must never be reconstructed or lowered", allocator, evidence)
+		}
+		// Allocation contract: every chained append allocates exactly
+		// one sequence and records it as the chain head, so wherever a
+		// valid head exists on a chained (or emptied) log the
+		// allocator must equal it exactly. Legacy-only logs are
+		// exempt: pre-chain timestamp pruning could retire the
+		// highest sequences, leaving the allocator legitimately above
+		// the surviving records.
+		if headState == refValid && (report.ChainedRecords > 0 || report.TotalRecords == 0) && allocator != head.Seq {
+			problem("audit sequence allocator is at %d but the chain head is at sequence %d; chained appends allocate exactly one sequence per record, so the allocator must equal the head", allocator, head.Seq)
+		}
 	}
 	return report
 }
