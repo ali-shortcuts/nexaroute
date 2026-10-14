@@ -27,18 +27,22 @@ const (
 )
 
 type clientBucket struct {
-	tokens float64
-	last   time.Time
+	tokens     float64
+	last       time.Time
+	generation uint64
 }
 
 // clientTPMReservation tracks the pre-dispatch estimate charged to a single
 // request. A provider usage callback can adjust that charge once; when usage is
 // unavailable, the conservative admission estimate remains charged.
 type clientTPMReservation struct {
-	bucketID  string
-	limit     int
-	estimated int64
-	once      sync.Once
+	bucketID   string
+	limit      int
+	estimated  int64
+	generation uint64
+
+	mu      sync.Mutex
+	settled bool
 }
 
 type clientAuthState struct {
@@ -47,14 +51,14 @@ type clientAuthState struct {
 }
 
 type clientIdentity struct {
-	ID              string
-	TenantID        string
-	ProjectID       string
-	TeamID          string
-	Role            string
-	Virtual         bool
-	RequirePrivacy  string
-	tpmReservation  *clientTPMReservation
+	ID             string
+	TenantID       string
+	ProjectID      string
+	TeamID         string
+	Role           string
+	Virtual        bool
+	RequirePrivacy string
+	tpmReservation *clientTPMReservation
 }
 
 type clientIdentityContextKey struct{}
@@ -423,6 +427,8 @@ func (s *Server) clientBucketLocked(id string, capacity float64, now time.Time) 
 		if now.Sub(b.last) > clientBucketIdle {
 			b.tokens = capacity
 			b.last = now
+			s.clientBucketGeneration++
+			b.generation = s.clientBucketGeneration
 		}
 		return b
 	}
@@ -436,7 +442,8 @@ func (s *Server) clientBucketLocked(id string, capacity float64, now time.Time) 
 	if len(s.clientBuckets) >= maxClientBuckets {
 		return nil
 	}
-	b := &clientBucket{tokens: capacity, last: now}
+	s.clientBucketGeneration++
+	b := &clientBucket{tokens: capacity, last: now, generation: s.clientBucketGeneration}
 	s.clientBuckets[id] = b
 	return b
 }
@@ -470,7 +477,7 @@ func (s *Server) clientRPMAllow(presented string, rpm int) bool {
 }
 
 func (s *Server) clientTPMAllow(presented string, tpm, estimated int) bool {
-	allowed, _ := s.clientTPMAllowAt(presented, tpm, estimated, time.Now())
+	allowed, _, _ := s.clientTPMAllowAt(presented, tpm, estimated, time.Now())
 	return allowed
 }
 
@@ -480,14 +487,14 @@ func (s *Server) clientTPMAllow(presented string, tpm, estimated int) bool {
 // become admissible merely by waiting, so it is rejected without Retry-After.
 // The explicit clock keeps admission and retry calculations deterministic in
 // tests. The estimate is a pre-dispatch admission charge, not provider-reported
-// billing usage; actual usage remains recorded separately by recordUsage.
-func (s *Server) clientTPMAllowAt(presented string, tpm, estimated int, now time.Time) (bool, time.Duration) {
+// billing usage; actual usage is recorded separately by recordUsage.
+func (s *Server) clientTPMAllowAt(presented string, tpm, estimated int, now time.Time) (bool, time.Duration, uint64) {
 	if tpm <= 0 || estimated <= 0 {
-		return true, 0
+		return true, 0, 0
 	}
 	capacity := float64(tpm)
 	if float64(estimated) > capacity {
-		return false, 0
+		return false, 0, 0
 	}
 
 	id := keyDigest(presented) + "#tpm"
@@ -495,7 +502,7 @@ func (s *Server) clientTPMAllowAt(presented string, tpm, estimated int, now time
 	defer s.clientRL.Unlock()
 	b := s.clientBucketLocked(id, capacity, now)
 	if b == nil {
-		return false, 0
+		return false, 0, 0
 	}
 
 	refill := capacity / 60
@@ -513,17 +520,17 @@ func (s *Server) clientTPMAllowAt(presented string, tpm, estimated int, now time
 		if waitSeconds < 1 {
 			waitSeconds = 1
 		}
-		return false, time.Duration(waitSeconds) * time.Second
+		return false, time.Duration(waitSeconds) * time.Second, 0
 	}
 	b.tokens -= needed
-	return true, 0
+	return true, 0, b.generation
 }
 
-// reconcileClientTPMUsage adjusts a request's estimated TPM charge using
-// authoritative provider-reported usage. The reservation is settled once so
-// duplicate callbacks cannot refund or charge the same request multiple times.
-// If no usage callback is received (for example, because a provider or stream
-// fails before reporting usage), the original conservative estimate is kept.
+// reconcileClientTPMUsage adjusts the pre-dispatch estimate using authoritative
+// provider-reported usage. The first usage report replaces the estimate;
+// subsequent reports (for example, additional upstream attempts) are charged at
+// actual usage. If no usage callback arrives because a provider/stream fails,
+// is cancelled, or omits usage, the conservative estimate remains charged.
 func (s *Server) reconcileClientTPMUsage(reservation *clientTPMReservation, actual int64) {
 	s.reconcileClientTPMUsageAt(reservation, actual, time.Now())
 }
@@ -532,36 +539,44 @@ func (s *Server) reconcileClientTPMUsageAt(reservation *clientTPMReservation, ac
 	if reservation == nil || actual < 0 {
 		return
 	}
-	reservation.once.Do(func() {
-		s.clientRL.Lock()
-		defer s.clientRL.Unlock()
 
-		b := s.clientBuckets[reservation.bucketID]
-		if b == nil {
-			// The bounded idle-bucket policy may have removed the admission
-			// bucket while a long request was in flight. Never apply its
-			// adjustment to a newly created bucket for a later quota window.
-			return
-		}
-		capacity := float64(reservation.limit)
-		refill := capacity / 60
-		if elapsed := now.Sub(b.last).Seconds(); elapsed > 0 {
-			b.tokens += elapsed * refill
-		}
-		if b.tokens > capacity {
-			b.tokens = capacity
-		}
-		b.last = now
+	reservation.mu.Lock()
+	adjustment := -actual
+	if !reservation.settled {
+		adjustment += reservation.estimated
+		reservation.settled = true
+	}
+	reservation.mu.Unlock()
 
-		// Positive delta refunds unused estimate; negative delta charges
-		// provider usage that exceeded the estimate. Negative balances are
-		// retained as debt so concurrent requests cannot evade the budget.
-		b.tokens += float64(reservation.estimated - actual)
-		if b.tokens > capacity {
-			b.tokens = capacity
-		}
-	})
+	s.clientRL.Lock()
+	defer s.clientRL.Unlock()
+	b := s.clientBuckets[reservation.bucketID]
+	if b == nil || b.generation != reservation.generation {
+		// The bounded idle-bucket policy may have removed or reset the admission
+		// bucket while a long request was in flight. Never apply an old request's
+		// adjustment to a new bucket or a later quota window.
+		return
+	}
+
+	capacity := float64(reservation.limit)
+	refill := capacity / 60
+	if elapsed := now.Sub(b.last).Seconds(); elapsed > 0 {
+		b.tokens += elapsed * refill
+	}
+	if b.tokens > capacity {
+		b.tokens = capacity
+	}
+	b.last = now
+
+	// Positive adjustment refunds unused estimate; negative adjustment charges
+	// usage above the estimate. Negative balances are retained as debt so
+	// concurrent requests cannot evade the TPM budget.
+	b.tokens += float64(adjustment)
+	if b.tokens > capacity {
+		b.tokens = capacity
+	}
 }
+
 
 func (s *Server) clientAuthAllowed(w http.ResponseWriter, r *http.Request, anthropicStyle bool) bool {
 	enabled, keys, globalRPM := s.clientAuthConfig()
@@ -618,7 +633,7 @@ func (s *Server) clientAuthAllowed(w http.ResponseWriter, r *http.Request, anthr
 	var tpmReservation *clientTPMReservation
 	if virtualKey.TPM > 0 {
 		estimated := requestTokenEstimate(r)
-		allowed, retryAfter := s.clientTPMAllowAt(keyText, virtualKey.TPM, estimated, time.Now())
+		allowed, retryAfter, generation := s.clientTPMAllowAt(keyText, virtualKey.TPM, estimated, time.Now())
 		if !allowed {
 			message := "client token limit exceeded; reduce request size or retry later"
 			if retryAfter > 0 {
@@ -634,9 +649,10 @@ func (s *Server) clientAuthAllowed(w http.ResponseWriter, r *http.Request, anthr
 			return false
 		}
 		tpmReservation = &clientTPMReservation{
-			bucketID: keyDigest(keyText) + "#tpm",
-			limit:    virtualKey.TPM,
-			estimated: int64(estimated),
+			bucketID:   keyDigest(keyText) + "#tpm",
+			limit:      virtualKey.TPM,
+			estimated:  int64(estimated),
+			generation: generation,
 		}
 	}
 	identity.tpmReservation = tpmReservation
