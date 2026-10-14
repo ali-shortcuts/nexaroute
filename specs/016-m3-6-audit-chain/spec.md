@@ -60,3 +60,18 @@ changes to event content or producers.
   length 16, key timestamp equal to the record timestamp at
   nanosecond precision, and (chained records only) key sequence equal
   to the record sequence. Key corruption is an integrity failure.
+
+## Review hardening round 3 — fail-closed chain-head recovery
+Appends validate the persisted chain state before writing and fail
+closed (whole transaction rolls back, store byte-identical) unless
+the state is demonstrably legitimate: genesis/empty; emptied-with-
+head-equal-to-anchor; pure legacy with no chain metadata ever
+written; or a chained log whose head exactly matches the retained
+chain tail. Absent and malformed metadata are distinct states
+(`refAbsent`/`refMalformed`/`refValid`); a malformed or missing head
+on a chained log, a head that disagrees with the tail, or chain
+metadata on a legacy-only log are corruption — integrity metadata is
+never reconstructed from stored records. Within the chained segment,
+surviving sequences must be contiguous (the counter is shared and
+monotonic); legacy-segment gaps stay legitimate because the pre-chain
+store pruned by timestamp.

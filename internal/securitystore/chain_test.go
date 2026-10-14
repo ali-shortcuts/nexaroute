@@ -1,6 +1,7 @@
 package securitystore
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -493,4 +494,163 @@ func TestAuditChainDetectsKeyTampering(t *testing.T) {
 			t.Fatalf("key timestamp tampering not detected: %+v", report)
 		}
 	})
+}
+
+// --- PR #301 review round 3: fail-closed chain-head recovery ---
+
+func snapshotStore(t *testing.T, store *Store) map[string][]byte {
+	t.Helper()
+	snap := map[string][]byte{}
+	err := store.db.View(func(tx *bolt.Tx) error {
+		for _, bucketName := range [][]byte{bucketAudit, bucketMeta} {
+			b := tx.Bucket(bucketName)
+			if b == nil {
+				snap[string(bucketName)+"::missing"] = nil
+				continue
+			}
+			if err := b.ForEach(func(k, v []byte) error {
+				snap[string(bucketName)+"/"+string(k)] = append([]byte(nil), v...)
+				return nil
+			}); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return snap
+}
+
+func assertAppendFailsClosedAndStoreUnchanged(t *testing.T, store *Store) {
+	t.Helper()
+	before := snapshotStore(t, store)
+	err := store.AppendAudit(context.Background(), AuditEvent{
+		Timestamp: time.Date(2026, 10, 14, 1, 0, 0, 0, time.UTC),
+		Actor:     "alice", Action: "after-corruption", Outcome: "success", Status: 200,
+	})
+	if err == nil {
+		t.Fatal("append must fail closed on corrupt chain state")
+	}
+	report, verr := store.VerifyAuditChain(context.Background())
+	if verr != nil {
+		t.Fatal(verr)
+	}
+	if report.Verified {
+		t.Fatalf("corrupt chain state must not verify: %+v", report)
+	}
+	after := snapshotStore(t, store)
+	if len(before) != len(after) {
+		t.Fatalf("failed append mutated the store: before %d entries, after %d", len(before), len(after))
+	}
+	for k, v := range before {
+		if !bytes.Equal(v, after[k]) {
+			t.Fatalf("failed append mutated store entry %q", k)
+		}
+	}
+}
+
+func putMeta(t *testing.T, store *Store, key, value []byte) {
+	t.Helper()
+	if err := store.db.Update(func(tx *bolt.Tx) error { return tx.Bucket(bucketMeta).Put(key, value) }); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func deleteMeta(t *testing.T, store *Store, key []byte) {
+	t.Helper()
+	if err := store.db.Update(func(tx *bolt.Tx) error { return tx.Bucket(bucketMeta).Delete(key) }); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAuditChainAppendFailsClosedOnCorruptHeadStates(t *testing.T) {
+	base := time.Date(2026, 10, 14, 0, 0, 0, 0, time.UTC)
+
+	t.Run("tail deleted, head intact", func(t *testing.T) {
+		store, _ := chainTestStore(t, 100)
+		defer store.Close()
+		appendChainEvents(t, store, 3, base)
+		deleteRecord(t, store, 2)
+		assertAppendFailsClosedAndStoreUnchanged(t, store)
+	})
+
+	t.Run("tail deleted and head removed (false-verify scenario)", func(t *testing.T) {
+		store, _ := chainTestStore(t, 100)
+		defer store.Close()
+		appendChainEvents(t, store, 3, base)
+		deleteRecord(t, store, 2)
+		deleteMeta(t, store, keyChainHead)
+		// On the pre-fix code this append silently bootstrapped a
+		// replacement head from the surviving records and the
+		// shortened chain then reported VERIFIED.
+		assertAppendFailsClosedAndStoreUnchanged(t, store)
+	})
+
+	t.Run("head JSON corrupted", func(t *testing.T) {
+		store, _ := chainTestStore(t, 100)
+		defer store.Close()
+		appendChainEvents(t, store, 3, base)
+		putMeta(t, store, keyChainHead, []byte("{"))
+		assertAppendFailsClosedAndStoreUnchanged(t, store)
+	})
+
+	t.Run("head with wrong sequence", func(t *testing.T) {
+		store, _ := chainTestStore(t, 100)
+		defer store.Close()
+		appendChainEvents(t, store, 3, base)
+		report := verifyOK(t, store)
+		putMeta(t, store, keyChainHead, []byte(fmt.Sprintf(`{"seq":99,"hash":%q}`, report.HeadHash)))
+		assertAppendFailsClosedAndStoreUnchanged(t, store)
+	})
+
+	t.Run("head with wrong hash", func(t *testing.T) {
+		store, _ := chainTestStore(t, 100)
+		defer store.Close()
+		appendChainEvents(t, store, 3, base)
+		putMeta(t, store, keyChainHead, []byte(`{"seq":3,"hash":"0000000000000000000000000000000000000000000000000000000000000000"}`))
+		assertAppendFailsClosedAndStoreUnchanged(t, store)
+	})
+
+	t.Run("head removed while pruning anchor exists", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "private", "store.db")
+		store, err := Open(path, 100, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer store.Close()
+		old := time.Now().UTC().Add(-72 * time.Hour)
+		appendChainEvents(t, store, 3, old)
+		appendChainEvents(t, store, 1, time.Now().UTC()) // prunes 1-3, anchor=3, head=4
+		if report := verifyOK(t, store); !report.HasAnchor {
+			t.Fatalf("expected a pruning anchor: %+v", report)
+		}
+		deleteMeta(t, store, keyChainHead)
+		assertAppendFailsClosedAndStoreUnchanged(t, store)
+	})
+}
+
+func TestAuditChainEmptyStoreAcceptsFirstEvent(t *testing.T) {
+	store, _ := chainTestStore(t, 100)
+	defer store.Close()
+	appendChainEvents(t, store, 1, time.Date(2026, 10, 14, 0, 0, 0, 0, time.UTC))
+	report := verifyOK(t, store)
+	if report.ChainedRecords != 1 || report.FirstSeq != 1 {
+		t.Fatalf("genesis report: %+v", report)
+	}
+}
+
+func TestAuditChainSequenceGapInChainedSegmentDetected(t *testing.T) {
+	store, _ := chainTestStore(t, 100)
+	defer store.Close()
+	appendChainEvents(t, store, 4, time.Date(2026, 10, 14, 0, 0, 0, 0, time.UTC))
+	deleteRecord(t, store, 2) // removes seq 3, leaving 1, 2, 4
+	report, err := store.VerifyAuditChain(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Verified || !strings.Contains(strings.Join(report.Problems, " "), "sequence gap") {
+		t.Fatalf("chained sequence gap not detected: %+v", report)
+	}
 }
