@@ -202,25 +202,25 @@ func TestVirtualKeyTPMAdmissionRetryAndOversizedRequest(t *testing.T) {
 	cfg.ClientAuth = config.ClientAuthConfig{
 		Enabled: true,
 		VirtualKeys: []config.VirtualKeyConfig{
-			{ID: "vk-tpm", KeyHash: keyDigest("nrk_tpm"), AllowedModels: []string{"m"}, TPM: 31},
-			{ID: "vk-tpm-large", KeyHash: keyDigest("nrk_tpm_large"), AllowedModels: []string{"m"}, TPM: 31},
+			{ID: "vk-tpm", KeyHash: keyDigest("nrk_tpm"), AllowedModels: []string{"m"}, TPM: 23},
+			{ID: "vk-tpm-large", KeyHash: keyDigest("nrk_tpm_large"), AllowedModels: []string{"m"}, TPM: 23},
 		},
 	}
 	s := testGateway(t, cfg)
 
 	call := func(key, maxTokens string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodPost, "http://gateway/v1/chat/completions",
-			strings.NewReader(`{"model":"m","max_tokens":`+maxTokens+`,"messages":[]}`))
+			strings.NewReader(`{"model":"m","max_tokens":`+maxTokens+`,"messages":[{"role":"user","content":"hi"}]}`))
 		req.Header.Set("Authorization", "Bearer "+key)
 		rr := httptest.NewRecorder()
 		s.Handler().ServeHTTP(rr, req)
 		return rr
 	}
 
-	if rr := call("nrk_tpm", "20"); rr.Code != http.StatusOK {
+	if rr := call("nrk_tpm", "5"); rr.Code != http.StatusOK {
 		t.Fatalf("first TPM-limited request status=%d body=%s", rr.Code, rr.Body.String())
 	}
-	limited := call("nrk_tpm", "20")
+	limited := call("nrk_tpm", "5")
 	if limited.Code != http.StatusTooManyRequests {
 		t.Fatalf("second TPM-limited request status=%d body=%s, want 429", limited.Code, limited.Body.String())
 	}
@@ -232,8 +232,8 @@ func TestVirtualKeyTPMAdmissionRetryAndOversizedRequest(t *testing.T) {
 	// The upstream fixture reports 18 actual tokens versus an estimated
 	// 30-token admission charge. Usage reconciliation should refund the
 	// estimate difference before this second request is evaluated.
-	if retryAfter >= 50 {
-		t.Fatalf("Retry-After = %d seconds; want less than 50 after reconciling the first response's 18 actual tokens", retryAfter)
+	if retryAfter >= 55 {
+		t.Fatalf("Retry-After = %d seconds; want less than 55 after reconciling the first response's 18 actual tokens", retryAfter)
 	}
 
 	// A request whose estimate exceeds the entire TPM bucket cannot be
