@@ -35,6 +35,13 @@ jobs:
           go-version: '1.27.x'
           cache: false
 
+      - name: Release vulnerability gate (govulncheck)
+        uses: golang/govulncheck-action@032d45514ae346b1db93c04b0c90b841c370344f # v1.1.0
+        with:
+          go-version-input: '1.27.x'
+          go-package: ./...
+          cache: false
+
       - name: Resolve version
         id: version
         shell: bash
@@ -78,6 +85,17 @@ jobs:
       - name: Build release assets
         run: ./scripts/build-release.sh "${{ steps.version.outputs.version }}"
 
+      - name: Generate SBOM (Syft, pinned and checksum-verified)
+        run: ./scripts/generate-sbom.sh "${{ steps.version.outputs.version }}"
+
+      - name: Finalize checksums (now including the SBOM)
+        run: ./scripts/write-checksums.sh dist
+
+      - name: Verify release artifacts (manifest coverage and SBOM contents)
+        env:
+          EXPECTED_SOURCE_COMMIT: ${{ github.sha }}
+        run: ./scripts/verify-release.sh dist "${{ steps.version.outputs.version }}"
+
       - name: Integrated release smoke
         run: ./scripts/release-smoke.sh dist
 
@@ -89,7 +107,7 @@ jobs:
         run: |
           set -euo pipefail
           (cd dist && sha256sum -c SHA256SUMS)
-          required="nexaroute-linux-amd64 nexaroute-linux-arm64 nexaroute-videogen-linux-amd64 nexaroute-videogen-linux-arm64 install.sh video.example.json VIDEO_GATEWAY.md RELEASE_NOTES.md SHA256SUMS"
+          required="nexaroute-linux-amd64 nexaroute-linux-arm64 nexaroute-videogen-linux-amd64 nexaroute-videogen-linux-arm64 install.sh video.example.json VIDEO_GATEWAY.md RELEASE_NOTES.md SHA256SUMS nexaroute-${{ steps.version.outputs.version }}-sbom.spdx.json"
           for f in $required; do
             [[ -s "dist/$f" ]] || { echo "missing release asset: $f" >&2; exit 1; }
           done
@@ -130,6 +148,7 @@ jobs:
             dist/VIDEO_GATEWAY.md
             dist/RELEASE_NOTES.md
             dist/SHA256SUMS
+            dist/nexaroute-${{ steps.version.outputs.version }}-sbom.spdx.json
           if-no-files-found: error
 
       - name: Download release artifact for workflow_dispatch dry-run
@@ -142,15 +161,43 @@ jobs:
       - name: Verify workflow_dispatch artifact round-trip
         if: github.event_name == 'workflow_dispatch'
         shell: bash
+        env:
+          EXPECTED_SOURCE_COMMIT: ${{ github.sha }}
         run: |
           set -euo pipefail
-          required="nexaroute-linux-amd64 nexaroute-linux-arm64 nexaroute-videogen-linux-amd64 nexaroute-videogen-linux-arm64 install.sh video.example.json VIDEO_GATEWAY.md RELEASE_NOTES.md SHA256SUMS"
+          required="nexaroute-linux-amd64 nexaroute-linux-arm64 nexaroute-videogen-linux-amd64 nexaroute-videogen-linux-arm64 install.sh video.example.json VIDEO_GATEWAY.md RELEASE_NOTES.md SHA256SUMS nexaroute-${{ steps.version.outputs.version }}-sbom.spdx.json"
           for f in $required; do
             [[ -s "dist-roundtrip/$f" ]] || { echo "missing downloaded release asset: $f" >&2; exit 1; }
             cmp -s "dist/$f" "dist-roundtrip/$f" || { echo "artifact round-trip changed: $f" >&2; exit 1; }
           done
           (cd dist-roundtrip && sha256sum -c SHA256SUMS)
+          ./scripts/verify-release.sh dist-roundtrip "${{ steps.version.outputs.version }}"
           echo 'ARTIFACT ROUND-TRIP PASS — workflow_dispatch remains non-publishing.'
+
+      - name: Install Cosign (dry-run signing mechanics test)
+        if: github.event_name == 'workflow_dispatch'
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: 'v3.1.3'
+
+      - name: Signing mechanics test (ephemeral key, NOT the release identity)
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        env:
+          COSIGN_PASSWORD: ""
+        run: |
+          set -euo pipefail
+          # Exercises sign + verify mechanics only. The ephemeral key is
+          # generated inside this job, never stored or uploaded, and is
+          # NOT the release identity; real releases are signed with
+          # Sigstore keyless OIDC in the publish job. Nothing produced
+          # here is published or attached to the release artifact set.
+          t="$(mktemp -d)"
+          cp dist/SHA256SUMS "$t/"
+          (cd "$t" && cosign generate-key-pair >/dev/null)
+          (cd "$t" && cosign sign-blob --key cosign.key --bundle SHA256SUMS.cosign.bundle --yes SHA256SUMS >/dev/null)
+          (cd "$t" && cosign verify-blob --key cosign.pub --bundle SHA256SUMS.cosign.bundle SHA256SUMS)
+          echo 'SIGNING MECHANICS PASS — ephemeral test key only; the keyless release path runs on tag publishes.'
 
   publish:
     needs: verify
@@ -159,6 +206,8 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: write
+      # Only this job may mint an OIDC token, for Sigstore keyless signing.
+      id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -186,6 +235,27 @@ jobs:
           set -euo pipefail
           (cd dist && sha256sum -c SHA256SUMS)
 
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: 'v3.1.3'
+
+      - name: Sign checksum manifest (Sigstore keyless via GitHub OIDC)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cosign sign-blob --bundle dist/SHA256SUMS.cosign.bundle --yes dist/SHA256SUMS
+
+      - name: Verify the signature against the pinned release-workflow identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          cosign verify-blob \
+            --bundle dist/SHA256SUMS.cosign.bundle \
+            --certificate-identity "https://github.com/${{ github.repository }}/.github/workflows/release.yml@refs/tags/${{ github.ref_name }}" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            dist/SHA256SUMS
+
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -205,4 +275,6 @@ jobs:
             dist/video.example.json \
             dist/VIDEO_GATEWAY.md \
             dist/RELEASE_NOTES.md \
-            dist/SHA256SUMS
+            dist/SHA256SUMS \
+            dist/nexaroute-${{ github.ref_name }}-sbom.spdx.json \
+            dist/SHA256SUMS.cosign.bundle
