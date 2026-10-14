@@ -18,9 +18,16 @@ not a claim.
 | Proxy URL carrying credentials/paths, or non-HTTP proxy schemes | proxy reduced to scheme+authority; only http/https accepted | `TestProxyConfigIsNormalised` |
 | Cross-origin redirect leaks keys/headers | `CheckRedirect` refuses cross-origin (internal/providers) | existing providers tests |
 
+## Provider header forwarding
+
+| Threat | Mitigation | Test |
+| --- | --- | --- |
+| Client headers reach the provider outside the configured allow-list | `applyHeaders` forwards only names in `ForwardHeaders` (valid configured names are compared case-insensitively) | `TestForwardHeadersAllowListEnforcement` |
+| Client supplies or overwrites a credential header (`Authorization`, `X-API-Key`, `X-Goog-API-Key`, `X-Admin-Key`) through forwarding, even when the name is listed in `ForwardHeaders` | credential header names are unconditionally excluded from forwarding; statically configured provider headers and `applyAuthKey` injection (which runs last) are unaffected | `TestForwardedCredentialHeadersAlwaysBlocked`, `TestForwardedCredentialCannotOverwriteConfiguredHeader`, `TestGoogCredentialInjectionWinsOverForwardedValue` |
+
 ## Known gaps (no test yet)
 
 - Destination validation when an explicit provider proxy is configured: the
   proxy resolves the final host, so the gateway cannot check it.
-- Header allow-list, tool-definition and per-provider key isolation tests.
+- Tool-definition and per-provider key isolation tests.
 - Config-validation and privacy-path checks (see M3-1, M3-2).

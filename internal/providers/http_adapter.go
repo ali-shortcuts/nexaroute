@@ -630,7 +630,12 @@ func (a *httpAdapter) applyHeaders(req *http.Request, forward http.Header) {
 	}
 	for k, vals := range forward {
 		lk := strings.ToLower(k)
-		if _, ok := a.forwardAllowed[lk]; !ok || lk == "authorization" || lk == "x-api-key" || lk == "x-admin-key" {
+		// Credential headers are never forwarded from client input, even
+		// when listed in ForwardHeaders: authorization, x-api-key,
+		// x-goog-api-key (the Gemini credential injected by applyAuthKey),
+		// and the gateway's own x-admin-key. Configured static provider
+		// headers and applyAuthKey injection are unaffected.
+		if _, ok := a.forwardAllowed[lk]; !ok || lk == "authorization" || lk == "x-api-key" || lk == "x-goog-api-key" || lk == "x-admin-key" {
 			continue
 		}
 		req.Header.Del(k)
