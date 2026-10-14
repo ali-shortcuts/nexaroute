@@ -81,7 +81,7 @@ type Server struct {
 	taskAnalysisTotal  atomic.Uint64
 	taskAnalysisErrors atomic.Uint64
 	videoHandler       http.Handler
-	securityDB         *securitystore.Store
+	securityDB         securitystore.Backend
 	securityErr        error
 	oidc               *oidcAuthenticator
 	oidcErr            error
@@ -208,7 +208,7 @@ func New(cfg config.Config, configPath string, reg *providers.Registry, rt *rout
 	if securityPathErr != nil {
 		s.securityErr = securityPathErr
 	} else if securityPath != "" {
-		s.securityDB, s.securityErr = securitystore.Open(securityPath, cfg.Admin.AuditMaxEvents, cfg.Admin.AuditRetentionDays)
+		s.securityDB, s.securityErr = securitystore.OpenBackend(cfg.Admin.SecurityStoreBackend, cfg.Admin.SecurityStoreURL, securityPath, cfg.Admin.AuditMaxEvents, cfg.Admin.AuditRetentionDays)
 	} else {
 		s.securityErr = fmt.Errorf("admin security store path cannot be resolved")
 	}

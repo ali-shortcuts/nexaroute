@@ -331,6 +331,8 @@ Discovery authorization, token, and JWKS endpoints must be absolute HTTPS URLs. 
 
 When `security_store_path` is relative, it is resolved against the directory containing the config file. If omitted, the default is `security/nexaroute-security.db`, so the application creates a dedicated private `security/` child directory instead of placing the database directly beside the config. Missing parent directories are created as mode `0700`; an already existing parent that is not private is rejected and must be fixed by the operator.
 
+`security_store_backend` selects the admin security-store backend (M4-1): `bbolt` (the default; local file at `security_store_path`, zero external services) — the `redis` and `postgres` adapters land with M4-2 behind the same `securitystore.Backend` interface. Selecting `redis`/`postgres` requires `security_store_url` and currently **fails closed at startup** with an explicit error: the gateway never silently substitutes a different store when the configured durable backend is unavailable. Only admin sessions and the audit chain live in this store; rate-limit buckets, provider health, caches and quota reservations are process-local by design (see `specs/019-m4-1-storage-backend/`).
+
 Set the secret outside the config, for example with your service manager/secret injector (do not put its value in shell history):
 
 ```text

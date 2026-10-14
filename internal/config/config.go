@@ -328,6 +328,8 @@ type AdminConfig struct {
 	APIKey                 string     `json:"api_key,omitempty"`
 	EmergencyAccessEnabled bool       `json:"emergency_access_enabled"`
 	SecurityStorePath      string     `json:"security_store_path,omitempty"`
+	SecurityStoreBackend   string     `json:"security_store_backend,omitempty"`
+	SecurityStoreURL       string     `json:"security_store_url,omitempty"`
 	SessionTTLSeconds      int        `json:"session_ttl_seconds,omitempty"`
 	IdleTimeoutSeconds     int        `json:"idle_timeout_seconds,omitempty"`
 	AuditRetentionDays     int        `json:"audit_retention_days,omitempty"`
@@ -1394,6 +1396,21 @@ func (c Config) Validate() error {
 	}
 	if len(c.Admin.SecurityStorePath) > 4096 || strings.ContainsAny(c.Admin.SecurityStorePath, "\r\n\x00") {
 		return errors.New("admin.security_store_path is invalid or too long")
+	}
+	switch c.Admin.SecurityStoreBackend {
+	case "", "bbolt":
+		if strings.TrimSpace(c.Admin.SecurityStoreURL) != "" {
+			return errors.New("admin.security_store_url must be empty for the bbolt security store backend")
+		}
+	case "redis", "postgres":
+		if strings.TrimSpace(c.Admin.SecurityStoreURL) == "" {
+			return errors.New("admin.security_store_url is required for the redis/postgres security store backend")
+		}
+		if len(c.Admin.SecurityStoreURL) > 2048 || strings.ContainsAny(c.Admin.SecurityStoreURL, "\r\n\x00") {
+			return errors.New("admin.security_store_url is invalid or too long")
+		}
+	default:
+		return errors.New("admin.security_store_backend must be bbolt, redis or postgres")
 	}
 	if err := c.Admin.OIDC.Validate(); err != nil {
 		return err
