@@ -468,7 +468,7 @@ func (s *Server) clientTPMAllow(presented string, tpm, estimated int) bool {
 // the bucket after refill. A request larger than the bucket capacity cannot
 // become admissible merely by waiting, so it is rejected without Retry-After.
 // The explicit clock keeps admission and retry calculations deterministic in
-// tests. The estimate is a pre-dispatch reservation, not provider-reported
+// tests. The estimate is a pre-dispatch admission charge, not provider-reported
 // billing usage; actual usage remains recorded separately by recordUsage.
 func (s *Server) clientTPMAllowAt(presented string, tpm, estimated int, now time.Time) (bool, time.Duration) {
 	if tpm <= 0 || estimated <= 0 {
