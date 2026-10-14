@@ -90,9 +90,16 @@ binary directory; the Video CLI uses the same release version as the Gateway. Th
 Priority: `-config /absolute/path/config.json` -> `NEXAROUTE_CONFIG` -> the
 default. Use absolute paths in environment variables. Logs are bounded/rotated
 beside the config by default. New config directories are mode 0700 and config
-files are mode 0600; secrets are plaintext at rest, so protect this directory
-and any backups you make yourself. UI saves are atomic and survive process
-restarts.
+files are mode 0600. Secret-bearing config fields are **encrypted at rest**
+(versioned `nxs1` AES-256-GCM envelopes); the master key comes from
+`NEXAROUTE_MASTER_KEY`, `NEXAROUTE_MASTER_KEY_FILE`, an external key provider,
+or the auto-managed `<config>.key` file (mode 0600) beside the config — see
+[docs/SECURITY.md](SECURITY.md) §"Encrypted secret storage" for key selection
+and failure behavior, and [docs/OPERATIONS.md](OPERATIONS.md) §"Secret storage,
+backup, and restore" for the backup/restore procedure. Protect this directory
+and any backups you make yourself: the config and its matching key are both
+required to recover the encrypted secrets. UI saves are atomic and survive
+process restarts.
 
 API keys (including credential pools and environment-resolved values) are
 write-only. Saved keys are never returned by provider read/list/save/snapshot

@@ -77,6 +77,55 @@ func TestAdminCSRFTokenCookieSecureOnTLS(t *testing.T) {
 	}
 }
 
+// The admin and data-plane client-certificate requirements are
+// independent scopes (M3-5): requiring a certificate on one plane
+// must not impose it on the other. The sibling test below covers the
+// both-required case.
+func TestMTLSRequirementsAreIndependentPerScope(t *testing.T) {
+	verified := &tls.ConnectionState{Version: tls.VersionTLS13, VerifiedChains: [][]*x509.Certificate{{{}}}}
+	dataPlane := func(s *Server, state *tls.ConnectionState) int {
+		req := httptest.NewRequest(http.MethodGet, "http://gateway/v1/models", nil)
+		req.RemoteAddr = "127.0.0.1:32100"
+		req.TLS = state
+		rr := httptest.NewRecorder()
+		s.Handler().ServeHTTP(rr, req)
+		return rr.Code
+	}
+
+	t.Run("admin only", func(t *testing.T) {
+		cfg := config.Default()
+		cfg.Admin.APIKey = "test-admin-key"
+		cfg.TLS.Enabled = true
+		cfg.TLS.RequireClientCertAdmin = true
+		s := testGateway(t, cfg)
+
+		if rr := adminSecurityRequest(s, http.MethodGet, "/admin/api/snapshot", nil, nil, "", ""); rr.Code != http.StatusForbidden {
+			t.Fatalf("admin without certificate status=%d want 403", rr.Code)
+		}
+		if code := dataPlane(s, nil); code == http.StatusForbidden {
+			t.Fatalf("data plane without certificate was rejected although only admin requires one")
+		}
+	})
+
+	t.Run("data plane only", func(t *testing.T) {
+		cfg := config.Default()
+		cfg.Admin.APIKey = "test-admin-key"
+		cfg.TLS.Enabled = true
+		cfg.TLS.RequireClientCertDataPlane = true
+		s := testGateway(t, cfg)
+
+		if rr := adminSecurityRequest(s, http.MethodGet, "/admin/api/snapshot", nil, nil, "", ""); rr.Code != http.StatusOK {
+			t.Fatalf("admin without certificate status=%d want 200 although only data plane requires one", rr.Code)
+		}
+		if code := dataPlane(s, nil); code != http.StatusForbidden {
+			t.Fatalf("data plane without certificate status=%d want 403", code)
+		}
+		if code := dataPlane(s, verified); code == http.StatusForbidden {
+			t.Fatalf("data plane with verified certificate was rejected")
+		}
+	})
+}
+
 func TestMTLSRequirementsAreScopedToAdminAndDataPlane(t *testing.T) {
 	cfg := config.Default()
 	cfg.Admin.APIKey = "test-admin-key"
