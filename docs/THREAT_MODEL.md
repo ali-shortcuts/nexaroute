@@ -33,8 +33,26 @@ not a claim.
 | Client tool definitions lose schema meaning (nested properties, required fields, enums, array item schemas, bounds, patterns) in routing, canonical translation, or provider request construction | tool schemas are carried as structured data through the canonical layer and re-emitted per provider wire shape; tests decode the actual upstream JSON and compare every tool's name, description and complete schema semantically across the OpenAI Chat, Anthropic Messages and OpenAI Responses ingresses and the native provider paths | `TestToolSchemaIntegrityCanonicalIngresses`, `TestToolSchemaIntegrityNativePaths` |
 | A canonical repair retry (dropping an unsupported field) mutates or drops client tool definitions | the retry removes exactly the unsupported field; the complete tool definitions survive unchanged | `TestToolSchemaIntegrityRepairRetry` |
 
+## Configuration validation
+
+| Threat | Mitigation | Test |
+| --- | --- | --- |
+| Header injection through provider header names or values (CRLF, whitespace) in static headers or the forward list | `Validate` enforces `validHeaderName`/`validHeaderValue` on static headers and `ForwardHeaders` entries | `TestValidateRejectsHeaderInjection`, `TestValidateRejectsInvalidHeaderNames` |
+| Credentials embedded in a provider base URL leak through logs or copied configuration | `validateEndpointURL` rejects userinfo in base URLs; the validation error names only the field, never the credential | `TestValidateRejectsEmbeddedEndpointCredentials`, `TestValidateEndpointErrorNeverContainsEmbeddedSecret` |
+| Invalid egress allow/deny configuration silently disables SSRF policy | egress hosts/CIDRs are validated at load; malformed CIDRs are rejected | `TestEgressConfigValidation` |
+| Unsafe resource limits (concurrency, in-flight caps) exhaust the gateway | provider and global limits are range-checked in `Validate` | `TestValidateRejectsUnsafeResourceLimits`, `TestValidateRejectsUnsafeGlobalInflightLimit` |
+| Mis-declared provider data-handling or privacy fields weaken privacy routing | data-handling and privacy fields are validated and normalized at load | `TestDataHandlingValidationTable`, `TestPrivacyFieldsValidationTable` |
+| Configuration warnings leak secret values | warnings are constructed without secret material | `TestWarningsNeverContainSecretValues` |
+
+## Privacy enforcement
+
+| Threat | Mitigation | Test |
+| --- | --- | --- |
+| A `no_training` route profile or virtual key sends prompts to a training provider, including via stale session pins, failover, hedging, or any ingress/provider protocol | eligibility filters deployments before every attempt; excluded providers receive zero requests; when the satisfying provider's breaker opens, requests fail closed instead of falling back | `TestPrivacyP2PrivateRouteLeak`, `TestPrivacyP2PrivateVirtualKeyLeak`, `TestPrivacyP2EveryIngressAndProviderProtocolExcludesTrainingProvider`, `TestPrivacyP2ConcurrentLeakRace` |
+| No deployment satisfies the required privacy class | generation ingresses return `privacy_unavailable` (503) without contacting any upstream and without naming providers; `count_tokens` answers with its local estimate and likewise contacts no upstream | `TestPrivacyFailClosedWhenNoDeploymentSatisfies` |
+| Privacy failure responses or observability events disclose provider identities or prompt content | the `privacy_unavailable` envelope is generic and events record only the exclusion fact | `TestPrivacyP2PrivateRouteLeak` (response and event assertions), `TestDecision_PrivacyCanaryCompletePath` |
+
 ## Known gaps (no test yet)
 
 - Destination validation when an explicit provider proxy is configured: the
   proxy resolves the final host, so the gateway cannot check it.
-- Config-validation and privacy-path checks (see M3-1, M3-2).
