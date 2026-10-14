@@ -269,4 +269,3 @@ func TestClientTPMConfigChangeInvalidatesOlderReservation(t *testing.T) {
 		t.Fatalf("old reservation changed new quota balance to %v, want 20", got)
 	}
 }
-
