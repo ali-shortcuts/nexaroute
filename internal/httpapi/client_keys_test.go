@@ -229,8 +229,11 @@ func TestVirtualKeyTPMAdmissionRetryAndOversizedRequest(t *testing.T) {
 		t.Fatalf("Retry-After = %q (parsed %d, err %v), want a calculated delay between 1 and 60 seconds",
 			limited.Header().Get("Retry-After"), retryAfter, err)
 	}
-	if retryAfter == 60 {
-		t.Fatalf("Retry-After remained a fixed 60 seconds; want calculated refill delay")
+	// The upstream fixture reports 18 actual tokens versus an estimated
+	// 30-token admission charge. Usage reconciliation should refund the
+	// estimate difference before this second request is evaluated.
+	if retryAfter >= 50 {
+		t.Fatalf("Retry-After = %d seconds; want less than 50 after reconciling the first response's 18 actual tokens", retryAfter)
 	}
 
 	// A request whose estimate exceeds the entire TPM bucket cannot be
