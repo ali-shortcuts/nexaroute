@@ -24,10 +24,11 @@ not a claim.
 | --- | --- | --- |
 | Client headers reach the provider outside the configured allow-list | `applyHeaders` forwards only names in `ForwardHeaders` (valid configured names are compared case-insensitively) | `TestForwardHeadersAllowListEnforcement` |
 | Client supplies or overwrites a credential header (`Authorization`, `X-API-Key`, `X-Goog-API-Key`, `X-Admin-Key`) through forwarding, even when the name is listed in `ForwardHeaders` | credential header names are unconditionally excluded from forwarding; statically configured provider headers and `applyAuthKey` injection (which runs last) are unaffected | `TestForwardedCredentialHeadersAlwaysBlocked`, `TestForwardedCredentialCannotOverwriteConfiguredHeader`, `TestGoogCredentialInjectionWinsOverForwardedValue` |
+| One provider's credential leaks into another provider's request, into a failover attempt, or into a client-facing error | credentials are selected per provider adapter from that provider's own configuration and re-derived per attempt; client-supplied credential headers are blocked at the gateway and adapter layers; client-facing error responses contain no provider keys, including when an upstream error body mentions its own provider's key | `TestProviderKeyIsolationAcrossAdapters`, `TestProviderCredentialRotationStaysWithinProvider`, `TestGatewayRoutesEachProviderOnlyItsOwnKey`, `TestGatewayFailoverDoesNotCrossProviderKeys`, `TestGatewayClientCredentialHeadersCannotContaminateProviders`, `TestGatewayErrorResponseContainsNoProviderKeys` |
 
 ## Known gaps (no test yet)
 
 - Destination validation when an explicit provider proxy is configured: the
   proxy resolves the final host, so the gateway cannot check it.
-- Tool-definition and per-provider key isolation tests.
+- Tool-definition tests.
 - Config-validation and privacy-path checks (see M3-1, M3-2).
