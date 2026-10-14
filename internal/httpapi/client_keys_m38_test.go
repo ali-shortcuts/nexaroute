@@ -265,3 +265,88 @@ func TestClientTPMSettleIgnoresOlderQuotaAfterLimitChange(t *testing.T) {
 	}
 }
 
+func TestClientTPMRetryAfterUsesCalculatedRefill(t *testing.T) {
+	up := openAIUpstream(openAIOKBody, 0, nil)
+	defer up.Close()
+	cfg := singleProviderOpenAI(t, up.URL, "m", config.ModelConfig{})
+	cfg.ClientAuth = config.ClientAuthConfig{
+		Enabled: true,
+		KeyHashes: []string{config.ClientKeyDigest("legacy-retry")},
+		TPM: 125,
+	}
+	s := testGateway(t, cfg)
+
+	if rr := m38Chat(t, s, "legacy-retry"); rr.Code != http.StatusOK {
+		t.Fatalf("first request: status=%d body=%s, want 200", rr.Code, rr.Body.String())
+	}
+	limited := m38Chat(t, s, "legacy-retry")
+	if limited.Code != http.StatusTooManyRequests {
+		t.Fatalf("second request status=%d body=%s, want 429", limited.Code, limited.Body.String())
+	}
+	seconds, err := strconv.Atoi(limited.Header().Get("Retry-After"))
+	if err != nil || seconds < 1 || seconds >= 60 {
+		t.Fatalf("Retry-After=%q (seconds=%d, err=%v), want calculated delay between 1 and 59 seconds",
+			limited.Header().Get("Retry-After"), seconds, err)
+	}
+}
+
+func TestClientTPMSettleIgnoresRecreatedBucketGeneration(t *testing.T) {
+	now := time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)
+	s := &Server{}
+	res, ok, retry := s.clientTPMReserveAt("stale-key", 100, 50, now)
+	if !ok || res == nil || retry != 0 {
+		t.Fatalf("initial reservation = (%v, %t, %s), want successful reservation", res, ok, retry)
+	}
+
+	s.clientRL.Lock()
+	delete(s.clientBuckets, res.bucketID)
+	fresh := s.clientBucketLocked(res.bucketID, 100, now.Add(time.Second))
+	if fresh == nil {
+		s.clientRL.Unlock()
+		t.Fatal("failed to create replacement bucket")
+	}
+	fresh.tokens = 30
+	newGeneration := fresh.generation
+	s.clientRL.Unlock()
+	if newGeneration == res.generation {
+		t.Fatal("recreated bucket reused the old generation")
+	}
+
+	s.clientTPMSettleAt(res, 10, now.Add(2*time.Second))
+	s.clientRL.Lock()
+	got := s.clientBuckets[res.bucketID].tokens
+	s.clientRL.Unlock()
+	if got != 30 {
+		t.Fatalf("late settlement changed fresh bucket balance to %v, want 30", got)
+	}
+}
+
+func TestClientTPMSettleIgnoresOlderQuotaAfterLimitChange(t *testing.T) {
+	now := time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)
+	s := &Server{}
+	res, ok, _ := s.clientTPMReserveAt("changed-limit-key", 100, 50, now)
+	if !ok || res == nil {
+		t.Fatal("initial reservation rejected")
+	}
+
+	s.clientRL.Lock()
+	changed := s.clientBucketLocked(res.bucketID, 20, now.Add(time.Second))
+	if changed == nil {
+		s.clientRL.Unlock()
+		t.Fatal("failed to apply smaller quota")
+	}
+	newGeneration := changed.generation
+	s.clientRL.Unlock()
+	if newGeneration == res.generation {
+		t.Fatal("quota change did not create a new generation")
+	}
+
+	s.clientTPMSettleAt(res, 10, now.Add(2*time.Second))
+	s.clientRL.Lock()
+	got, capacity := s.clientBuckets[res.bucketID].tokens, s.clientBuckets[res.bucketID].capacity
+	s.clientRL.Unlock()
+	if got != 20 || capacity != 20 {
+		t.Fatalf("late settlement changed new quota: tokens=%v capacity=%v, want 20/20", got, capacity)
+	}
+}
+
