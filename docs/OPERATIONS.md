@@ -76,6 +76,38 @@ If the process stops during rotation, preserve the config, `.key`, `.key.next`, 
 - `nexaroute secrets decrypt --config PATH --to-stdout --allow-plaintext` is a deliberate plaintext export. Both flags are mandatory. Restrict terminal capture and shell redirection; if a plaintext file is unavoidable, create it in a private directory with mode `0600`, use it only for the specific migration/rollback, and securely remove it afterward.
 - The first load of a legacy plaintext config migrates it atomically and leaves a timestamped encrypted `.enc.bak`; normal runtime/Admin config saves do not create a backup copy.
 
+## 3a. Audit chain verification
+
+Admin audit records in the security store form a tamper-evident hash
+chain (M3-6): every record carries a monotonic sequence, the previous
+record's hash, and its own SHA-256 hash over a canonical encoding of its
+fields. Retention/count pruning deletes only a prefix of the chain and
+records a pruning anchor (the newest pruned record's sequence and hash),
+so the surviving window stays verifiable.
+
+- `nexaroute audit verify --config PATH` opens the store **read-only**
+  and revalidates every record: hash recomputation, predecessor
+  linkage, sequence order, anchor linkage, and chain-head consistency
+  (which detects tail truncation). Exit codes: `0` verified, `1`
+  integrity problems (each printed), `2` usage/operational error.
+  `--format json` emits the structured report. Output is metadata only
+  (counts, sequences, head hash) — never event payloads.
+- The store is a single-writer bbolt file: while the gateway is
+  running it holds the lock and verification fails with exit `2`.
+  Stop the gateway for offline verification.
+- Records written before the chain existed are reported as a *legacy
+  pre-chain* segment. They are counted, never claimed as verified.
+- **Limits:** the chain is local and unanchored. It detects edits,
+  deletions, insertions, reordering, and truncation of the stored
+  records, but an attacker who controls the whole database file —
+  records *and* chain metadata — can rewrite history consistently.
+  Record the reported head hash in an external system (ticket, log
+  archive, second host) after each verification if you need evidence
+  that survives full-store compromise. Investigate any `FAILED`
+  result before trusting or rotating the store: preserve the file,
+  compare against your last externally recorded head hash, and treat
+  unexplained gaps as a security incident.
+
 ## 3b. Privacy audit CLI
 
 `nexaroute privacy audit --config PATH` inspects the configuration and the

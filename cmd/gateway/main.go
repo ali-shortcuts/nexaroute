@@ -54,6 +54,9 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "privacy" {
 		os.Exit(runPrivacy(os.Args[2:], os.Stdout, os.Stderr))
 	}
+	if len(os.Args) > 1 && os.Args[1] == "audit" {
+		os.Exit(runAudit(os.Args[2:], os.Stdout, os.Stderr))
+	}
 	if len(os.Args) > 1 && os.Args[1] == "secrets" {
 		if err := runSecrets(os.Args[2:]); err != nil {
 			fmt.Fprintln(os.Stderr, "nexaroute: secrets command failed:", err)
