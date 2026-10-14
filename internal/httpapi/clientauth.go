@@ -29,6 +29,7 @@ const (
 type clientBucket struct {
 	tokens     float64
 	last       time.Time
+	capacity   float64
 	generation uint64
 }
 
@@ -424,6 +425,16 @@ func (s *Server) clientBucketLocked(id string, capacity float64, now time.Time) 
 		s.clientBuckets = make(map[string]*clientBucket)
 	}
 	if b := s.clientBuckets[id]; b != nil {
+		if b.capacity != capacity {
+			// A quota configuration change starts a new generation. Any
+			// in-flight response tied to the previous limit must not adjust it.
+			b.capacity = capacity
+			if b.tokens > capacity {
+				b.tokens = capacity
+			}
+			s.clientBucketGeneration++
+			b.generation = s.clientBucketGeneration
+		}
 		if now.Sub(b.last) > clientBucketIdle {
 			b.tokens = capacity
 			b.last = now
@@ -443,7 +454,7 @@ func (s *Server) clientBucketLocked(id string, capacity float64, now time.Time) 
 		return nil
 	}
 	s.clientBucketGeneration++
-	b := &clientBucket{tokens: capacity, last: now, generation: s.clientBucketGeneration}
+	b := &clientBucket{tokens: capacity, last: now, capacity: capacity, generation: s.clientBucketGeneration}
 	s.clientBuckets[id] = b
 	return b
 }
@@ -558,7 +569,12 @@ func (s *Server) reconcileClientTPMUsageAt(reservation *clientTPMReservation, ac
 		return
 	}
 
-	capacity := float64(reservation.limit)
+	capacity := b.capacity
+	if capacity <= 0 {
+		// Defensive fallback for manually constructed test state; runtime
+		// buckets created by clientBucketLocked always carry their capacity.
+		capacity = float64(reservation.limit)
+	}
 	refill := capacity / 60
 	if elapsed := now.Sub(b.last).Seconds(); elapsed > 0 {
 		b.tokens += elapsed * refill
