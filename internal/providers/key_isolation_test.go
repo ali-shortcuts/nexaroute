@@ -75,25 +75,16 @@ func TestProviderKeyIsolationAcrossAdapters(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, tc := range []struct {
-		provider string
-		own      string
-		other    string
-		authHdr  string
-	}{
-		{"prov-a", "canary-key-alpha", "canary-key-bravo", "Authorization"},
-		{"prov-b", "canary-key-bravo", "canary-key-alpha", "X-Goog-Api-Key"},
-	} {
-		a, ok := reg.Get(tc.provider)
+	for _, provider := range []string{"prov-a", "prov-b"} {
+		a, ok := reg.Get(provider)
 		if !ok {
-			t.Fatalf("adapter %s missing", tc.provider)
+			t.Fatalf("adapter %s missing", provider)
 		}
 		resp, err := a.Do(context.Background(), []byte(`{"model":"x","messages":[]}`), false, nil)
 		if err != nil {
-			t.Fatalf("%s Do: %v", tc.provider, err)
+			t.Fatalf("%s Do: %v", provider, err)
 		}
 		resp.Body.Close()
-		_ = tc
 	}
 	seenA, seenB := capA.all(), capB.all()
 	if len(seenA) != 1 || len(seenB) != 1 {
@@ -115,17 +106,19 @@ func TestProviderKeyIsolationAcrossAdapters(t *testing.T) {
 
 // Credential rotation inside one provider (429 on the first key, the
 // adapter retries with the second) must use only that provider's own
-// credentials — the sequence observed upstream contains A keys only.
+// credentials. Every attempt's full header set is captured: the first
+// attempt authenticates with the first key, the successful retry with
+// the second, and neither key appears in any header other than
+// Authorization on any attempt.
 func TestProviderCredentialRotationStaysWithinProvider(t *testing.T) {
 	var mu sync.Mutex
-	var authSeen []string
+	var attempts []http.Header
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		auth := r.Header.Get("Authorization")
 		mu.Lock()
-		authSeen = append(authSeen, auth)
+		attempts = append(attempts, r.Header.Clone())
 		mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
-		if auth == "Bearer canary-rot-one" {
+		if r.Header.Get("Authorization") == "Bearer canary-rot-one" {
 			w.Header().Set("Retry-After", "0")
 			w.WriteHeader(http.StatusTooManyRequests)
 			io.WriteString(w, `{"error":"slow down"}`)
@@ -156,15 +149,29 @@ func TestProviderCredentialRotationStaysWithinProvider(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if len(authSeen) < 2 {
-		t.Fatalf("expected a credential rotation (multiple attempts), saw %v", authSeen)
+	if len(attempts) < 2 {
+		t.Fatalf("expected a credential rotation (multiple attempts), saw %d attempt(s)", len(attempts))
 	}
-	for _, auth := range authSeen {
+	if got := attempts[0].Get("Authorization"); got != "Bearer canary-rot-one" {
+		t.Fatalf("first attempt auth = %q, want the first credential", got)
+	}
+	if got := attempts[len(attempts)-1].Get("Authorization"); got != "Bearer canary-rot-two" {
+		t.Fatalf("final attempt auth = %q, want the second credential", got)
+	}
+	for i, h := range attempts {
+		auth := h.Get("Authorization")
 		if auth != "Bearer canary-rot-one" && auth != "Bearer canary-rot-two" {
-			t.Fatalf("attempt carried a foreign credential: %q (all: %v)", auth, authSeen)
+			t.Fatalf("attempt %d carried an unexpected credential: %q", i, auth)
 		}
-	}
-	if authSeen[len(authSeen)-1] != "Bearer canary-rot-two" {
-		t.Fatalf("final attempt should use the second credential, saw %v", authSeen)
+		for name, vals := range h {
+			if http.CanonicalHeaderKey(name) == "Authorization" {
+				continue
+			}
+			for _, v := range vals {
+				if strings.Contains(v, "canary-rot-one") || strings.Contains(v, "canary-rot-two") {
+					t.Fatalf("attempt %d leaks a rotation key in header %s: %q", i, name, v)
+				}
+			}
+		}
 	}
 }
