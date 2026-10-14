@@ -10,11 +10,16 @@
 #     inventory at the exact versions pinned in go.mod (the shipped
 #     binaries embed that inventory).
 #
-# Usage: scripts/verify-release.sh [dist-dir] [version]
+# Usage: scripts/verify-release.sh [dist-dir] [version] [expected-commit]
+# The expected source commit may also be given as EXPECTED_SOURCE_COMMIT.
+# When one is provided, the SBOM namespace must record exactly that
+# commit — a well-formed but unrelated SHA (or "unknown") is rejected.
+# The release workflow always passes the commit it checked out.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 dist="${1:-dist}"
 version="${2:-}"
+expected_commit="${3:-${EXPECTED_SOURCE_COMMIT:-}}"
 [[ -d "$dist" ]] || { echo "verify-release: no such directory: $dist" >&2; exit 1; }
 
 required=(
@@ -64,10 +69,10 @@ fi
   exit 1
 }
 
-python3 - "${sboms[0]}" "$version" <<'PYEOF'
+python3 - "${sboms[0]}" "$version" "$expected_commit" <<'PYEOF'
 import json, re, sys
 
-path, version = sys.argv[1], sys.argv[2]
+path, version, expected = sys.argv[1], sys.argv[2], sys.argv[3]
 try:
     with open(path) as fh:
         doc = json.load(fh)
@@ -78,10 +83,15 @@ if doc.get("spdxVersion") != "SPDX-2.3":
 creators = " ".join(doc.get("creationInfo", {}).get("creators", []))
 if "Tool: syft-" not in creators:
     sys.exit(f"verify-release: SBOM was not produced by Syft (creators: {creators!r})")
-if version:
-    if version not in doc.get("name", ""):
-        sys.exit(f"verify-release: SBOM document name {doc.get('name')!r} does not name {version}")
-    ns = doc.get("documentNamespace", "")
+if version and version not in doc.get("name", ""):
+    sys.exit(f"verify-release: SBOM document name {doc.get('name')!r} does not name {version}")
+ns = doc.get("documentNamespace", "")
+if expected:
+    if not re.fullmatch(r"[0-9a-f]{40}", expected):
+        sys.exit(f"verify-release: expected source commit is not a 40-char hex SHA: {expected!r}")
+    if "github.com/ali-shortcuts/nexaroute" not in ns or not ns.endswith(f"sbom-{expected}"):
+        sys.exit(f"verify-release: SBOM namespace does not record the expected source commit {expected}: {ns!r}")
+elif version:
     if "github.com/ali-shortcuts/nexaroute" not in ns or not re.search(r"sbom-[0-9a-f]{40}$", ns):
         sys.exit(f"verify-release: SBOM namespace lacks repository/commit traceability: {ns!r}")
 

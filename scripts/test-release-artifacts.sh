@@ -62,6 +62,26 @@ make_fixture "$good"
 ./scripts/verify-release.sh "$good" v9.9.9 >/dev/null
 echo "test-release-artifacts: intact fixture verifies"
 
+# Exact source-commit traceability: the fixture SBOM records commit
+# 0123456789abcdef0123456789abcdef01234567 in its namespace.
+fixture_commit="0123456789abcdef0123456789abcdef01234567"
+EXPECTED_SOURCE_COMMIT="$fixture_commit" ./scripts/verify-release.sh "$good" v9.9.9 >/dev/null
+./scripts/verify-release.sh "$good" v9.9.9 "$fixture_commit" >/dev/null
+echo "test-release-artifacts: correct expected source commit verifies (env and positional)"
+expect_fail "wrong expected source commit" env EXPECTED_SOURCE_COMMIT="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" ./scripts/verify-release.sh "$good" v9.9.9
+expect_fail "malformed expected source commit" env EXPECTED_SOURCE_COMMIT="unknown" ./scripts/verify-release.sh "$good" v9.9.9
+
+t="$work/unknownns"; make_fixture "$t"
+python3 - "$t" <<'PYEOF'
+import glob, json, sys
+p = glob.glob(sys.argv[1] + "/*-sbom.spdx.json")[0]
+doc = json.load(open(p))
+doc["documentNamespace"] = "https://github.com/ali-shortcuts/nexaroute/releases/v9.9.9/sbom-unknown"
+json.dump(doc, open(p, "w"), indent=2)
+PYEOF
+./scripts/write-checksums.sh "$t" >/dev/null
+expect_fail "SBOM namespace stamped unknown with an expected commit" env EXPECTED_SOURCE_COMMIT="$fixture_commit" ./scripts/verify-release.sh "$t" v9.9.9
+
 t="$work/tampered"; make_fixture "$t"; echo 'evil' >> "$t/nexaroute-linux-amd64"
 expect_fail "modified asset" ./scripts/verify-release.sh "$t" v9.9.9
 

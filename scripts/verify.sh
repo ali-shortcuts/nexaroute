@@ -23,6 +23,8 @@ echo '== mandatory clean race pass =='
 go test -race -timeout=3m -count=1 ./...
 echo '== release artifact manifest checks =='
 ./scripts/test-release-artifacts.sh
+echo '== SBOM generator trust-chain checks =='
+./scripts/test-generate-sbom.sh
 echo '== web ui javascript syntax =='
 node --check internal/httpapi/web/app.js
 node --check internal/httpapi/web/visual-agent.js

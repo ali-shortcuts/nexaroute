@@ -25,17 +25,38 @@ dist="${2:-dist}"
 }
 
 cache="${SYFT_CACHE_DIR:-$HOME/.cache/nexaroute-syft}/$SYFT_VERSION"
-syft="$cache/syft"
-if [[ ! -x "$syft" ]]; then
-  mkdir -p "$cache"
+mkdir -p "$cache"
+tarball="$cache/$SYFT_TARBALL"
+# SYFT_DOWNLOAD_BASE exists for offline regression tests; production
+# always uses the official release location.
+download_base="${SYFT_DOWNLOAD_BASE:-https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}}"
+tarball_ok() {
+  [[ -f "$tarball" ]] &&
+    (cd "$cache" && echo "$SYFT_SHA256  $SYFT_TARBALL" | sha256sum -c - >/dev/null 2>&1)
+}
+# Trust chain: the cached tarball is re-verified against the pinned
+# SHA-256 on EVERY invocation (a corrupt one is re-downloaded and
+# re-verified, and the script fails closed if it still does not
+# verify), and the Syft binary is always extracted fresh from the
+# verified tarball. A cached executable is never trusted merely for
+# existing — a tampered one is simply never executed.
+if ! tarball_ok; then
   echo "generate-sbom: downloading Syft $SYFT_VERSION (pinned, checksum-verified)"
-  curl -fsSL "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/${SYFT_TARBALL}" -o "$cache/$SYFT_TARBALL"
-  (cd "$cache" && echo "$SYFT_SHA256  $SYFT_TARBALL" | sha256sum -c - >/dev/null) || {
+  rm -f "$tarball"
+  curl -fsSL "$download_base/$SYFT_TARBALL" -o "$tarball" || {
+    echo "generate-sbom: Syft download failed" >&2
+    exit 1
+  }
+  tarball_ok || {
     echo "generate-sbom: Syft tarball checksum mismatch; refusing to use it" >&2
     exit 1
   }
-  tar --no-same-owner -xzf "$cache/$SYFT_TARBALL" -C "$cache" syft
 fi
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+mkdir -p "$work/syft"
+tar --no-same-owner -xzf "$tarball" -C "$work/syft" syft
+syft="$work/syft/syft"
 echo "generate-sbom: using $("$syft" version | head -1)"
 
 commit="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
@@ -44,8 +65,8 @@ out="$dist/nexaroute-${version}-sbom.spdx.json"
 # Scan a staging copy holding exactly the distributable assets, so the
 # SBOM never describes the checksum manifest (rewritten afterwards)
 # or a stale SBOM.
-stage="$(mktemp -d)"
-trap 'rm -rf "$stage"' EXIT
+stage="$work/stage"
+mkdir -p "$stage"
 for f in "$dist"/*; do
   case "$(basename "$f")" in
     SHA256SUMS|*-sbom.spdx.json|SHA256SUMS.cosign.bundle) ;;

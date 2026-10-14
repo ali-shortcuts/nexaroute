@@ -92,6 +92,8 @@ jobs:
         run: ./scripts/write-checksums.sh dist
 
       - name: Verify release artifacts (manifest coverage and SBOM contents)
+        env:
+          EXPECTED_SOURCE_COMMIT: ${{ github.sha }}
         run: ./scripts/verify-release.sh dist "${{ steps.version.outputs.version }}"
 
       - name: Integrated release smoke
@@ -159,6 +161,8 @@ jobs:
       - name: Verify workflow_dispatch artifact round-trip
         if: github.event_name == 'workflow_dispatch'
         shell: bash
+        env:
+          EXPECTED_SOURCE_COMMIT: ${{ github.sha }}
         run: |
           set -euo pipefail
           required="nexaroute-linux-amd64 nexaroute-linux-arm64 nexaroute-videogen-linux-amd64 nexaroute-videogen-linux-arm64 install.sh video.example.json VIDEO_GATEWAY.md RELEASE_NOTES.md SHA256SUMS nexaroute-${{ steps.version.outputs.version }}-sbom.spdx.json"
