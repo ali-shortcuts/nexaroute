@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -193,3 +194,53 @@ func TestVirtualKeyProjectReferencesFailClosed(t *testing.T) {
 		})
 	}
 }
+
+func TestVirtualKeyTPMAdmissionRetryAndOversizedRequest(t *testing.T) {
+	up := openAIUpstream(openAIOKBody, 0, nil)
+	defer up.Close()
+	cfg := singleProviderOpenAI(t, up.URL, "m", config.ModelConfig{})
+	cfg.ClientAuth = config.ClientAuthConfig{
+		Enabled: true,
+		VirtualKeys: []config.VirtualKeyConfig{
+			{ID: "vk-tpm", KeyHash: keyDigest("nrk_tpm"), AllowedModels: []string{"m"}, TPM: 50},
+			{ID: "vk-tpm-large", KeyHash: keyDigest("nrk_tpm_large"), AllowedModels: []string{"m"}, TPM: 50},
+		},
+	}
+	s := testGateway(t, cfg)
+
+	call := func(key, maxTokens string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "http://gateway/v1/chat/completions",
+			strings.NewReader(`{"model":"m","max_tokens":`+maxTokens+`,"messages":[]}`))
+		req.Header.Set("Authorization", "Bearer "+key)
+		rr := httptest.NewRecorder()
+		s.Handler().ServeHTTP(rr, req)
+		return rr
+	}
+
+	if rr := call("nrk_tpm", "20"); rr.Code != http.StatusOK {
+		t.Fatalf("first TPM-limited request status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	limited := call("nrk_tpm", "20")
+	if limited.Code != http.StatusTooManyRequests {
+		t.Fatalf("second TPM-limited request status=%d body=%s, want 429", limited.Code, limited.Body.String())
+	}
+	retryAfter, err := strconv.Atoi(limited.Header().Get("Retry-After"))
+	if err != nil || retryAfter < 1 || retryAfter > 60 {
+		t.Fatalf("Retry-After = %q (parsed %d, err %v), want a calculated delay between 1 and 60 seconds",
+			limited.Header().Get("Retry-After"), retryAfter, err)
+	}
+	if retryAfter == 60 {
+		t.Fatalf("Retry-After remained a fixed 60 seconds; want calculated refill delay")
+	}
+
+	// A request whose estimate exceeds the entire TPM bucket cannot be
+	// admitted by waiting. It must not advertise a misleading retry delay.
+	oversized := call("nrk_tpm_large", "100")
+	if oversized.Code != http.StatusTooManyRequests {
+		t.Fatalf("oversized TPM request status=%d body=%s, want 429", oversized.Code, oversized.Body.String())
+	}
+	if got := oversized.Header().Get("Retry-After"); got != "" {
+		t.Fatalf("oversized TPM request Retry-After=%q, want no retry hint for an inadmissible request size", got)
+	}
+}
+
