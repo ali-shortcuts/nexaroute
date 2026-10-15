@@ -10,6 +10,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -490,6 +491,20 @@ func (o *Orchestrator) pollEpisodeShot(ctx context.Context, p video.VideoProvide
 			}
 			j.UsageMetadata[fmt.Sprintf("shot_%03d.%s", index+1, key)] = value
 		}
+		// Capture the explicit provider actual alongside the legacy usage
+		// entry so episode composition can reconcile the summed actual.
+		if actual, ok := providerActualCost(status); ok {
+			if run.UsageMetadata == nil {
+				run.UsageMetadata = make(map[string]string)
+			}
+			run.UsageMetadata["actual_cost_usd"] = strconv.FormatFloat(actual, 'f', -1, 64)
+			if j.UsageMetadata == nil {
+				j.UsageMetadata = make(map[string]string)
+			}
+			j.UsageMetadata[fmt.Sprintf("shot_%03d.actual_cost_usd", index+1)] = strconv.FormatFloat(actual, 'f', -1, 64)
+			shotActual := actual
+			run.ActualCostUSD = &shotActual
+		}
 		switch status.State {
 		case video.StateFailed, video.StateExpired:
 			run.State = status.State
@@ -636,6 +651,10 @@ func (o *Orchestrator) composeEpisode(ctx context.Context, j *video.VideoJob) er
 	j.LastError = ""
 	now := time.Now().UTC()
 	j.CompletedAt = &now
+	// Episode reconciliation sums provider-reported per-shot actuals. All
+	// shots must report a valid actual; otherwise the episode keeps the
+	// aggregate estimate and stays explicitly unreconciled.
+	applyEpisodeCostReconciliation(j)
 	if err := j.Transition(video.StateCompleted); err != nil {
 		return err
 	}
@@ -643,11 +662,43 @@ func (o *Orchestrator) composeEpisode(ctx context.Context, j *video.VideoJob) er
 		return fmt.Errorf("final episode was persisted but completion state could not be saved: %w", err)
 	}
 	if o.Ledger != nil {
-		if err := o.Ledger.SettleEstimate(j.JobID, j.EstimatedCostUSD); err != nil {
+		if j.CostReconciled {
+			if err := o.Ledger.SettleActual(j.JobID, j.ActualCostUSD, j.EstimatedCostUSD); err != nil {
+				return fmt.Errorf("episode completed but actual-cost settlement failed: %w", err)
+			}
+		} else if err := o.Ledger.SettleEstimate(j.JobID, j.EstimatedCostUSD); err != nil {
 			return fmt.Errorf("episode completed but cost settlement failed: %w", err)
 		}
 	}
 	return nil
+}
+
+// applyEpisodeCostReconciliation sums per-shot provider actuals recorded on
+// the shot checkpoints. It mirrors applyCostReconciliation for the
+// multi-shot path without changing single-shot semantics.
+func applyEpisodeCostReconciliation(j *video.VideoJob) {
+	if len(j.ShotExecutions) == 0 {
+		applyCostReconciliation(j, nil)
+		return
+	}
+	total := 0.0
+	for i := range j.ShotExecutions {
+		run := &j.ShotExecutions[i]
+		var actual *float64
+		if run.ActualCostUSD != nil && validActualCost(*run.ActualCostUSD) {
+			actual = run.ActualCostUSD
+		} else if raw := strings.TrimSpace(run.UsageMetadata["actual_cost_usd"]); raw != "" {
+			if parsed, err := strconv.ParseFloat(raw, 64); err == nil && validActualCost(parsed) {
+				actual = &parsed
+			}
+		}
+		if actual == nil {
+			applyCostReconciliation(j, nil)
+			return
+		}
+		total += *actual
+	}
+	applyCostReconciliation(j, &total)
 }
 
 func (o *Orchestrator) ensureNarrationAsset(ctx context.Context, j *video.VideoJob, outputPath string) (string, error) {

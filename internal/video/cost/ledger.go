@@ -204,6 +204,26 @@ func (l *Ledger) SettleEstimate(jobID string, estimateUSD float64) error {
 func (l *Ledger) Spent() float64          { l.mu.Lock(); defer l.mu.Unlock(); return l.spent }
 func (l *Ledger) EstimatedSpent() float64 { l.mu.Lock(); defer l.mu.Unlock(); return l.estimatedSpent }
 func (l *Ledger) Reserved() float64       { l.mu.Lock(); defer l.mu.Unlock(); return l.reserved }
+
+// Reconciliation reports the per-job estimate-vs-actual state for operator
+// cost reporting. It is additive: existing Spent/EstimatedSpent/Reserved
+// semantics are unchanged. ok is false when the job has no ledger record.
+func (l *Ledger) Reconciliation(jobID string) (estimate, actual, delta float64, reconciled bool, ok bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	r, found := l.byJob[jobID]
+	if !found {
+		return 0, 0, 0, false, false
+	}
+	switch r.state {
+	case actualSettledState:
+		return r.estimate.EstimatedUSD, r.actual, r.actual - r.estimate.EstimatedUSD, true, true
+	case estimateSettledState:
+		return r.estimate.EstimatedUSD, 0, 0, false, true
+	default:
+		return r.estimate.EstimatedUSD, 0, 0, false, true
+	}
+}
 func (l *Ledger) Entries() []video.CostEstimate {
 	l.mu.Lock()
 	defer l.mu.Unlock()

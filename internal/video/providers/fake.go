@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strconv"
 	"sync"
 
 	"github.com/ali-shortcuts/nexaroute/internal/video"
@@ -15,6 +16,13 @@ type Fake struct {
 	NextID          int
 	PollsToComplete int
 	Cancelled       map[string]bool
+	// ActualCostUSD, when non-nil, is reported as the deterministic
+	// provider actual on every completed GetJob response (explicit field
+	// plus the legacy Usage["actual_cost_usd"] entry). Nil means the
+	// provider reports no actual cost, so jobs stay estimate-based and
+	// explicitly unreconciled. Additive test hook; defaults to nil to
+	// preserve existing behavior.
+	ActualCostUSD *float64
 }
 
 func NewFake(polls int) *Fake {
@@ -55,7 +63,16 @@ func (f *Fake) GetJob(_ context.Context, id string) (video.ProviderJobStatus, er
 	n++
 	f.jobs[id] = n
 	if n >= f.PollsToComplete {
-		return video.ProviderJobStatus{ProviderJobID: id, State: video.StateCompleted, Progress: 1, Outputs: []video.Asset{{ID: id + "-output", Kind: "development-placeholder", Filename: "fake-output.txt", ContentType: "text/plain"}}}, nil
+		status := video.ProviderJobStatus{ProviderJobID: id, State: video.StateCompleted, Progress: 1, Outputs: []video.Asset{{ID: id + "-output", Kind: "development-placeholder", Filename: "fake-output.txt", ContentType: "text/plain"}}}
+		if f.ActualCostUSD != nil {
+			actual := *f.ActualCostUSD
+			status.ActualCostUSD = &actual
+			if status.Usage == nil {
+				status.Usage = map[string]string{}
+			}
+			status.Usage["actual_cost_usd"] = strconv.FormatFloat(actual, 'f', -1, 64)
+		}
+		return status, nil
 	}
 	return video.ProviderJobStatus{ProviderJobID: id, State: video.StateProcessing, Progress: float64(n) / float64(f.PollsToComplete)}, nil
 }

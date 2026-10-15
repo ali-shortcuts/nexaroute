@@ -19,6 +19,11 @@ type ProviderJobStatus struct {
 	Error         string            `json:"error,omitempty"`
 	Usage         map[string]string `json:"usage,omitempty"`
 	Outputs       []Asset           `json:"outputs,omitempty"`
+	// ActualCostUSD is the provider-reported billed amount in USD, when the
+	// provider reports one. It is additive: providers that do not report a
+	// cost leave it nil, and the orchestrator falls back to the legacy
+	// Usage["actual_cost_usd"] entry before treating the job as unreconciled.
+	ActualCostUSD *float64 `json:"actual_cost_usd,omitempty"`
 }
 
 type WebhookRegistration struct {

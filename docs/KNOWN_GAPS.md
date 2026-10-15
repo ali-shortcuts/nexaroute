@@ -131,7 +131,22 @@ are now supported for multi-shot jobs when configured. Provider-generated
 dialogue/sound effects/music, translated or word-aligned subtitles, and distributed
 asset/job storage remain unimplemented; the local CLI also supports existing
 narration/music mixing and SRT subtitle burning.
-Actual-vs-estimated cost reconciliation for external providers remains unimplemented. The Gateway now persists per-shot checkpoints and
+Actual-vs-estimated cost reconciliation is implemented for completed jobs:
+provider-reported actuals (explicit `actual_cost_usd` on the provider job
+status, with the legacy `Usage["actual_cost_usd"]` entry honored for
+backwards compatibility) reconcile the ledger entry from estimate to actual,
+and completed jobs expose additive `actual_cost_usd`, `cost_reconciled`,
+`cost_delta_usd` (actual − estimate), and `cost_basis` (`"actual"` vs
+`"estimate"`) through the video job API and Video Studio. Jobs whose
+providers report no (or invalid) actual keep the estimate with
+`cost_reconciled: false` and `cost_basis: "estimate"`, never silently
+presented as actual. Episode completion reconciles the summed per-shot
+actuals only when every shot reports a valid actual. Completion is
+idempotent by job ID and terminal state (replayed completions and restart
+recovery never double-settle), and the fake provider reports a deterministic
+actual when its `ActualCostUSD` hook is set (nil by default). Live
+external-provider billing behavior stays UNVERIFIED, and the in-process
+ledger remains non-durable/non-distributed. The Gateway now persists per-shot checkpoints and
 automatically composes generated shot assets into a final silent MP4; the local
 `videogen compose` command can additionally mix existing narration/music and
 burn in SRT subtitles. Video Studio now accepts multi-shot plans, shows progress, and downloads persisted outputs. Manual audio/music/subtitle composition remains CLI-only, and the current in-process ledger is not durable or distributed.
