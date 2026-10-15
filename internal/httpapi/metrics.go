@@ -220,6 +220,22 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintln(w, "# TYPE nexaroute_cache_bytes gauge")
 	fmt.Fprintf(w, "nexaroute_cache_bytes %d\n", cs.BytesStored)
 
+	if len(s.mcpStats) > 0 {
+		fmt.Fprintln(w, "# HELP nexaroute_mcp_calls_total MCP tool calls brokered by the gateway, by server and result.")
+		fmt.Fprintln(w, "# TYPE nexaroute_mcp_calls_total counter")
+		s.mcpStatsMu.Lock()
+		keys := make([]string, 0, len(s.mcpStats))
+		for k := range s.mcpStats {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			server, result, _ := strings.Cut(k, "|")
+			fmt.Fprintf(w, "nexaroute_mcp_calls_total{server=%q,result=%q} %d\n", sanitizeMetricLabel(server), result, s.mcpStats[k])
+		}
+		s.mcpStatsMu.Unlock()
+	}
+
 	// Cumulative token accounting per deployment and estimated spend.
 	usageSnap := s.usageSnapshotWithPrices(s.currentConfig())
 	fmt.Fprintln(w, "# HELP nexaroute_deployment_tokens_total Cumulative upstream-reported tokens by deployment and kind.")
