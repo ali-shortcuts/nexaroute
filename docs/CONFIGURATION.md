@@ -220,6 +220,21 @@ Routes and keys may express a privacy requirement:
 - `route_profiles[].privacy`: `""` or `any` (no requirement) | `no_training`.
 - `client_auth.virtual_keys[].require_privacy`: same values.
 
+Route profiles can roll out a canary deployment (M5-3):
+
+- `route_profiles[].canary_deployment_id`: a deployment (`provider/model`)
+  from the profile's candidate pool.
+- `route_profiles[].canary_percent`: 0–100. Sessions are bucketed
+  deterministically by their stable key (session key, else selection
+  key): the same session always lands in the same arm. A bucketed
+  session gets the canary promoted to the front of its candidate
+  list — but only when the canary is already an eligible candidate
+  for that request (capabilities, health and the privacy gate all
+  apply first; rollout reorders eligibility, it never creates it).
+  Keyless requests are never rolled out. When the profile also
+  names a decision policy, the policy's selection still governs
+  the final pick.
+
 ## Model aliases
 
 Several deployments can share one alias:

@@ -5,4 +5,4 @@
 - [x] T3 Rollout tests (promotion, stickiness, distribution, ineligible canary, no-key)
 - [x] T4 Hedging-cap + quality-ordering + Retry-After-cap invariant tests
 - [x] T5 Privacy gate + leak battery tests
-- [ ] T6 Docs (CONFIGURATION rollout section, UNRELEASED), PR green; stop for owner
+- [x] T6 Docs (CONFIGURATION rollout section, UNRELEASED), PR green; stop for owner
