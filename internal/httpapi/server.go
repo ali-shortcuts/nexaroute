@@ -60,6 +60,7 @@ type Server struct {
 	overloadRejects atomic.Uint64
 	adminRL         sync.Mutex
 	adminBuckets    map[string]*adminBucket
+	revealRL        revealLimiter
 	// Phase D: Decision plane
 	decisionRegistry       *decision.Registry
 	decisionOrchestrator   *decision.Orchestrator
@@ -326,6 +327,10 @@ func cloneConfig(in config.Config) config.Config {
 		for claim, role := range in.Admin.OIDC.RoleMappings {
 			out.Admin.OIDC.RoleMappings[claim] = role
 		}
+	}
+	if in.Admin.AllowSecretReveal != nil {
+		reveal := *in.Admin.AllowSecretReveal
+		out.Admin.AllowSecretReveal = &reveal
 	}
 	out.ClientAuth.Keys = append([]string(nil), in.ClientAuth.Keys...)
 	out.ClientAuth.VirtualKeys = append([]config.VirtualKeyConfig(nil), in.ClientAuth.VirtualKeys...)

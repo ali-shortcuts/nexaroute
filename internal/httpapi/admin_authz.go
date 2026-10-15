@@ -52,6 +52,10 @@ func adminPermissionForRequest(r *http.Request) (authz.Permission, bool) {
 		return writeOnly(authz.WriteProviders)
 	case path == "/admin/api/compat":
 		return readWrite(authz.ReadProviders, authz.WriteProviders)
+	case strings.HasPrefix(path, "/admin/api/providers/") && strings.HasSuffix(path, "/reveal-secret"):
+		// Returning a saved credential is a key-management operation: POST only,
+		// owner/admin only. Every other method on this path is unmapped (denied).
+		return writeOnly(authz.ManageKeys)
 	case path == "/admin/api/providers" || strings.HasPrefix(path, "/admin/api/providers/"):
 		return readWrite(authz.ReadProviders, authz.WriteProviders)
 	case path == "/admin/api/settings" || path == "/admin/api/config/history" || path == "/admin/api/drain":
