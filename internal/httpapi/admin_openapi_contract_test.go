@@ -36,12 +36,41 @@ import (
 //     actually implements (everything that does not answer 405 or a
 //     mux 404) must equal the documented set exactly.
 
+type openAPIRef struct {
+	Ref string `yaml:"$ref"`
+}
+
+type openAPISchemaProperty struct {
+	Type    string      `yaml:"type"`
+	Format  string      `yaml:"format"`
+	Minimum float64     `yaml:"minimum"`
+	Items   openAPIRef  `yaml:"items"`
+}
+
+type openAPISchema struct {
+	Type       string                         `yaml:"type"`
+	Required   []string                       `yaml:"required"`
+	Properties map[string]openAPISchemaProperty `yaml:"properties"`
+}
+
+type openAPIResponseContent struct {
+	Schema openAPIRef `yaml:"schema"`
+}
+
+type openAPIResponse struct {
+	Content map[string]openAPIResponseContent `yaml:"content"`
+}
+
 type openAPIOperation struct {
-	Permission string `yaml:"x-permission"`
+	Permission string                     `yaml:"x-permission"`
+	Responses  map[string]openAPIResponse `yaml:"responses"`
 }
 
 type openAPIDoc struct {
 	Paths map[string]map[string]*openAPIOperation `yaml:"paths"`
+	Components struct {
+		Schemas map[string]openAPISchema `yaml:"schemas"`
+	} `yaml:"components"`
 }
 
 func loadAdminOpenAPI(t *testing.T) openAPIDoc {
@@ -106,6 +135,56 @@ func specPathByNorm(doc openAPIDoc) map[string]string {
 func sampleAdminPath(specPath string) string {
 	p := strings.ReplaceAll(specPath, "{id}", "contractprobe")
 	return strings.ReplaceAll(p, "{deployment}", "contractprobe")
+}
+
+func TestAdminOpenAPIClientKeyBudgetContract(t *testing.T) {
+	doc := loadAdminOpenAPI(t)
+
+	key, ok := doc.Components.Schemas["ClientKey"]
+	if !ok {
+		t.Fatal("spec is missing ClientKey schema")
+	}
+	budget, ok := key.Properties["budget_usd"]
+	if !ok || budget.Type != "number" || budget.Format != "double" || budget.Minimum < 0 {
+		t.Fatalf("ClientKey.budget_usd schema = %+v, want non-negative number/double", budget)
+	}
+	for _, required := range []string{"id", "budget_usd"} {
+		found := false
+		for _, field := range key.Required {
+			if field == required {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("ClientKey schema must require %q (budget_usd is always emitted; zero means unlimited)", required)
+		}
+	}
+
+	list, ok := doc.Components.Schemas["ClientKeyList"]
+	if !ok {
+		t.Fatal("spec is missing ClientKeyList schema")
+	}
+	keys := list.Properties["keys"]
+	if keys.Type != "array" || keys.Items.Ref != "#/components/schemas/ClientKey" {
+		t.Fatalf("ClientKeyList.keys = %+v, want array of ClientKey", keys)
+	}
+
+	collection := doc.Paths["/admin/api/client-keys"]
+	if collection["get"] == nil || collection["get"].Responses["200"].Content["application/json"].Schema.Ref != "#/components/schemas/ClientKeyList" {
+		t.Error("GET /admin/api/client-keys must return ClientKeyList")
+	}
+	if collection["post"] == nil || collection["post"].Responses["201"].Content["application/json"].Schema.Ref != "#/components/schemas/ClientKey" {
+		t.Error("POST /admin/api/client-keys must document its 201 Created ClientKey response")
+	}
+	if _, wrongStatus := collection["post"].Responses["200"]; wrongStatus {
+		t.Error("POST /admin/api/client-keys returns 201 Created, not 200")
+	}
+
+	rotate := doc.Paths["/admin/api/client-keys/{id}/rotate"]
+	if rotate["post"] == nil || rotate["post"].Responses["200"].Content["application/json"].Schema.Ref != "#/components/schemas/ClientKey" {
+		t.Error("POST /admin/api/client-keys/{id}/rotate must return ClientKey")
+	}
 }
 
 func TestAdminOpenAPISpecMatchesRegisteredRoutes(t *testing.T) {
