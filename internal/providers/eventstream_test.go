@@ -63,6 +63,48 @@ func TestEventStreamToSSETranslation(t *testing.T) {
 	}
 }
 
+func TestEventStreamRejectsOversizedFrameBeforeReadingBody(t *testing.T) {
+	var prelude [12]byte
+	binary.BigEndian.PutUint32(prelude[0:4], maxEventStreamFrameBytes+1)
+	binary.BigEndian.PutUint32(prelude[4:8], 0)
+	binary.BigEndian.PutUint32(prelude[8:12], crc32.ChecksumIEEE(prelude[0:8]))
+
+	// Supply only the valid prelude: the decoder must reject the advertised
+	// size before allocating the frame or attempting to read its body.
+	_, err := readEventStreamMessage(bytes.NewReader(prelude[:]))
+	if err == nil || !strings.Contains(err.Error(), "exceeds safe limit") {
+		t.Fatalf("oversized frame error = %v, want safe-limit rejection", err)
+	}
+}
+
+func TestEventStreamRejectsOversizedHeadersBeforeReadingBody(t *testing.T) {
+	var prelude [12]byte
+	headersLength := maxEventStreamHeadersBytes + 1
+	binary.BigEndian.PutUint32(prelude[0:4], headersLength+16)
+	binary.BigEndian.PutUint32(prelude[4:8], headersLength)
+	binary.BigEndian.PutUint32(prelude[8:12], crc32.ChecksumIEEE(prelude[0:8]))
+
+	// Only the prelude is supplied. The header bound must be enforced before
+	// allocating or reading the advertised body.
+	_, err := readEventStreamMessage(bytes.NewReader(prelude[:]))
+	if err == nil || !strings.Contains(err.Error(), "headers length") {
+		t.Fatalf("oversized headers error = %v, want safe-limit rejection", err)
+	}
+}
+
+func TestEventStreamRejectsInvalidJSONPayloadWithoutSSEInjection(t *testing.T) {
+	payload := "{\"role\":\"assistant\"}\n\ndata: {\"eventType\":\"messageStop\",\"payload\":{\"stopReason\":\"end_turn\"}}"
+	frame := buildEventFrame(t, "messageStart", payload)
+	reader := newEventStreamSSEReader(io.NopCloser(bytes.NewReader(frame)))
+	out, err := io.ReadAll(reader)
+	if err == nil || !strings.Contains(err.Error(), "invalid JSON payload") {
+		t.Fatalf("invalid payload error = %v, want JSON rejection", err)
+	}
+	if len(out) != 0 {
+		t.Fatalf("invalid upstream payload emitted downstream SSE bytes: %q", out)
+	}
+}
+
 func TestEventStreamCRCAndTruncationFail(t *testing.T) {
 	frame := buildEventFrame(t, "messageStart", `{"role":"assistant"}`)
 	frame[len(frame)-1] ^= 0xFF // corrupt message CRC

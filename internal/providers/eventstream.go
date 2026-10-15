@@ -4,10 +4,10 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"hash/crc32"
 	"io"
-	"strconv"
 )
 
 // AWS event stream decoding (M5-1b) for Bedrock ConverseStream
@@ -20,6 +20,16 @@ import (
 // Frame layout: total_length(4) headers_length(4) prelude_crc(4)
 // headers payload message_crc(4). Header value types follow the
 // AWS event stream spec.
+
+// maxEventStreamFrameBytes bounds allocation from the peer-controlled total_length
+// field. It leaves room for the 24 MiB EventStream payload limit plus headers,
+// while preventing a malformed length from requesting gigabytes of memory.
+const maxEventStreamFrameBytes uint32 = 32 << 20
+
+// maxEventStreamHeadersBytes bounds decoded-map amplification from the
+// peer-controlled headers_length field. AWS EventStream permits headers up
+// to 128 KiB; reject larger frames before allocating or parsing the header map.
+const maxEventStreamHeadersBytes uint32 = 128 << 10
 
 type eventStreamMessage struct {
 	EventType string
@@ -39,6 +49,12 @@ func readEventStreamMessage(r io.Reader) (*eventStreamMessage, error) {
 	}
 	if totalLength < 16 || headersLength > totalLength-16 {
 		return nil, fmt.Errorf("eventstream: invalid frame lengths (total=%d headers=%d)", totalLength, headersLength)
+	}
+	if totalLength > maxEventStreamFrameBytes {
+		return nil, fmt.Errorf("eventstream: frame length %d exceeds safe limit %d", totalLength, maxEventStreamFrameBytes)
+	}
+	if headersLength > maxEventStreamHeadersBytes {
+		return nil, fmt.Errorf("eventstream: headers length %d exceeds safe limit %d", headersLength, maxEventStreamHeadersBytes)
 	}
 	rest := make([]byte, totalLength-12)
 	if _, err := io.ReadFull(r, rest); err != nil {
@@ -161,16 +177,29 @@ func (r *eventStreamSSEReader) fill() {
 		}
 		return
 	}
-	// Envelope by concatenation: the payload is embedded raw, never
-	// re-marshaled.
-	r.pending.WriteString("data: {\"eventType\":")
-	r.pending.WriteString(strconv.Quote(msg.EventType))
-	r.pending.WriteString(",\"payload\":")
-	if len(msg.Payload) == 0 {
-		r.pending.WriteString("{}")
-	} else {
-		r.pending.Write(msg.Payload)
+	// Compact and validate the payload before emitting SSE. The upstream body is
+	// untrusted network input; writing it verbatim would allow embedded newlines
+	// and trailing bytes to inject additional SSE events into the client stream.
+	payload := msg.Payload
+	if len(payload) == 0 {
+		payload = []byte("{}")
 	}
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, payload); err != nil {
+		r.done = true
+		r.err = fmt.Errorf("eventstream: invalid JSON payload for %q: %w", msg.EventType, err)
+		return
+	}
+	eventType, err := json.Marshal(msg.EventType)
+	if err != nil {
+		r.done = true
+		r.err = fmt.Errorf("eventstream: encode event type: %w", err)
+		return
+	}
+	r.pending.WriteString(`data: {"eventType":`)
+	r.pending.Write(eventType)
+	r.pending.WriteString(`,"payload":`)
+	r.pending.Write(compact.Bytes())
 	r.pending.WriteString("}\n\n")
 }
 
