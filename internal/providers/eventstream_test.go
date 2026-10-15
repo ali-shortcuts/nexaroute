@@ -77,6 +77,21 @@ func TestEventStreamRejectsOversizedFrameBeforeReadingBody(t *testing.T) {
 	}
 }
 
+func TestEventStreamRejectsOversizedHeadersBeforeReadingBody(t *testing.T) {
+	var prelude [12]byte
+	headersLength := maxEventStreamHeadersBytes + 1
+	binary.BigEndian.PutUint32(prelude[0:4], headersLength+16)
+	binary.BigEndian.PutUint32(prelude[4:8], headersLength)
+	binary.BigEndian.PutUint32(prelude[8:12], crc32.ChecksumIEEE(prelude[0:8]))
+
+	// Only the prelude is supplied. The header bound must be enforced before
+	// allocating or reading the advertised body.
+	_, err := readEventStreamMessage(bytes.NewReader(prelude[:]))
+	if err == nil || !strings.Contains(err.Error(), "headers length") {
+		t.Fatalf("oversized headers error = %v, want safe-limit rejection", err)
+	}
+}
+
 func TestEventStreamRejectsInvalidJSONPayloadWithoutSSEInjection(t *testing.T) {
 	payload := "{\"role\":\"assistant\"}\n\ndata: {\"eventType\":\"messageStop\",\"payload\":{\"stopReason\":\"end_turn\"}}"
 	frame := buildEventFrame(t, "messageStart", payload)
