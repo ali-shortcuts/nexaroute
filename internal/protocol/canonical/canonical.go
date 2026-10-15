@@ -84,8 +84,11 @@ type Part struct {
 	Text string `json:"text,omitempty"`
 	// CacheControl carries a prompt-cache marker: "" (none),
 	// "ephemeral" (Anthropic default), or a TTL ("5m" / "1h").
-	// Only the Anthropic codec expresses per-block markers; other
-	// encoders drop it (documented in COMPATIBILITY.md).
+	// The Anthropic codec expresses per-block markers natively and
+	// the Bedrock codec expresses them as Converse cachePoint
+	// checkpoints (capped at BedrockMaxCacheCheckpoints per request;
+	// excess markers are dropped, content never is); other encoders
+	// drop it (documented in COMPATIBILITY.md).
 	CacheControl string      `json:"cache_control,omitempty"`
 	Image        *Image      `json:"image,omitempty"`
 	ToolCall     *ToolCall   `json:"tool_call,omitempty"`
