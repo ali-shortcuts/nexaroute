@@ -28,11 +28,11 @@ import (
 // only accelerate a request, never fail one.
 
 type semanticContext struct {
-	scope            string
-	vector           []float32
-	promptSHA256     string
-	embeddingDep     string
-	requireNoTrain   bool
+	scope          string
+	vector         []float32
+	promptSHA256   string
+	embeddingDep   string
+	requireNoTrain bool
 }
 
 // semanticPrepare computes the request's semantic context, or nil
