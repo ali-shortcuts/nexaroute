@@ -7,10 +7,11 @@ import (
 )
 
 var (
-	ErrNotFound        = errors.New("control-plane object not found")
-	ErrConflict        = errors.New("control-plane revision conflict")
-	ErrUnavailable     = errors.New("control-plane store unavailable")
-	ErrInvalidRevision = errors.New("invalid control-plane revision")
+	ErrNotFound          = errors.New("control-plane object not found")
+	ErrConflict          = errors.New("control-plane revision conflict")
+	ErrUnavailable       = errors.New("control-plane store unavailable")
+	ErrInvalidRevision   = errors.New("invalid control-plane revision")
+	ErrMalformedSnapshot = errors.New("malformed control-plane snapshot")
 )
 
 type FailureMode string
