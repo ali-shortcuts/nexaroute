@@ -242,12 +242,16 @@ func (d *doctor) checkExternal(name, envName string, ping func(ctx context.Conte
 // mixed state until recovered. Report-only (doctor never writes).
 func (d *doctor) checkRestoreJournals() {
 	journals := findInterruptedRestoreJournals()
-	if len(journals) == 0 {
+	uninspectable := findUninspectableRestoreJournals()
+	if len(journals) == 0 && len(uninspectable) == 0 {
 		d.report("PASS", "restore_journal", "no interrupted restore transactions")
 		return
 	}
 	for _, dir := range journals {
 		d.report("WARN", "restore_journal", fmt.Sprintf("interrupted restore journal at %s; run `nexaroute restore --recover %s` to roll it back", dir, dir))
+	}
+	for _, dir := range uninspectable {
+		d.report("WARN", "restore_journal", fmt.Sprintf("restore journal at %s has no readable manifest; it cannot be recovered automatically — inspect or remove it manually", dir))
 	}
 }
 

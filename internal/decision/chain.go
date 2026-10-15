@@ -306,11 +306,9 @@ func (e *ChainExecutor) Execute(
 				remaining := time.Until(deadline)
 				if stepTimeout < remaining {
 					stepCtx, stepCancel = context.WithTimeout(chainCtx, stepTimeout)
-					defer stepCancel()
 				}
 			} else {
 				stepCtx, stepCancel = context.WithTimeout(chainCtx, stepTimeout)
-				defer stepCancel()
 			}
 		}
 
@@ -346,6 +344,9 @@ func (e *ChainExecutor) Execute(
 
 		// Check timeout: step context deadline exceeded
 		if chainCtx.Err() == context.DeadlineExceeded || stepCtx.Err() == context.DeadlineExceeded {
+			if stepCancel != nil {
+				stepCancel()
+			}
 			stepTrace.Outcome = StepOutcomeTimeout
 			stepTrace.ReasonCodes = []ReasonCode{ReasonTimeout, ReasonExternalTimeout, ReasonChainStepFailed}
 			stepTrace.Action = ActionAbstain
@@ -378,6 +379,13 @@ func (e *ChainExecutor) Execute(
 			default:
 			}
 			continue
+		}
+		// The step is finished with its context: cancel now instead
+		// of deferring to Execute's return, which kept every earlier
+		// step's timer (and any provider teardown waiting on it)
+		// alive for the rest of the chain.
+		if stepCancel != nil {
+			stepCancel()
 		}
 
 		if decideErr != nil {
