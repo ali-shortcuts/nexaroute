@@ -31,6 +31,7 @@ func (s *Server) recordUsage(r *http.Request, deployment string, input, output i
 // settle wins inside the ledger). The TPM reservation reconciles
 // to input+output total tokens exactly as before.
 func (s *Server) recordUsageEx(r *http.Request, deployment string, counts usage.Counts, inputIncludesCache bool) {
+	noteSpanUsage(r.Context(), deployment, counts.Input, counts.Output)
 	cfg := s.currentConfig()
 	cost, version := s.recordCost(cfg, deployment, counts.Input, counts.Output, counts.CacheRead, counts.CacheWrite, inputIncludesCache)
 	s.usage.RecordEx(deployment, counts, cost, version)

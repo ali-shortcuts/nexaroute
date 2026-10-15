@@ -67,9 +67,16 @@ func (s *Server) providerConfigFor(providerID string) (config.ProviderConfig, bo
 // materially different key/scope invalidates stale contracts.
 func credentialScope(p config.ProviderConfig) string {
 	keys := p.ResolvedCredentials()
+	// codeql[go/weak-sensitive-data-hashing] This is a fingerprint, not a
+	// password verifier: the truncated (8-byte) digest only detects that the
+	// provider's credential set changed, so stale capability contracts are
+	// invalidated. It is never stored as a credential, never compared
+	// against user-supplied input for authentication, and provider API keys
+	// are high-entropy tokens, so a fast hash is the correct tool here; a
+	// slow KDF would add hot-path cost with no security gain.
 	h := sha256.New()
 	for _, k := range keys {
-		h.Write([]byte(k))
+		h.Write([]byte(k)) // codeql[go/weak-sensitive-data-hashing] fingerprint only — see note above credentialScope's hash setup.
 		h.Write([]byte{0})
 	}
 	sum := h.Sum(nil)
