@@ -127,3 +127,5 @@ a.button{text-decoration:none;display:inline-flex;align-items:center}
 .palette-backdrop[hidden]{display:none}
 
 [dir="rtl"] .sidebar{border-right:0;border-left:1px solid var(--border)}
+
+.lang-switch{border:1px solid var(--border);border-radius:7px;background:var(--surface-2);color:var(--text);padding:6px 8px;font:inherit}
