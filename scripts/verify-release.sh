@@ -108,9 +108,13 @@ elif version:
 # The Go module inventory pinned in go.mod must appear in the SBOM at
 # the same versions: the shipped binaries embed exactly this graph.
 gomod = {}
+main_module = ""
 in_require = False
 for line in open("go.mod"):
     line = line.strip()
+    module_match = re.match(r"^module\s+(\S+)\s*$", line)
+    if module_match:
+        main_module = module_match.group(1)
     if line.startswith("require ("):
         in_require = True
         continue
@@ -121,6 +125,25 @@ for line in open("go.mod"):
     if m and (in_require or m.group(1)):
         gomod[m.group(2)] = m.group(3)
 packages = {p.get("name"): p.get("versionInfo") for p in doc.get("packages", [])}
+
+# Syft can identify Go modules through SPDX purl external references.
+# Reject any such module that is not pinned by this repository's go.mod.
+# The main module and the Go standard library are expected exceptions.
+# This is deliberately limited to pkg:golang references so unrelated
+# package-manager ecosystems in a valid SPDX document remain unaffected.
+for package in doc.get("packages", []):
+    for ref in package.get("externalRefs") or []:
+        if ref.get("referenceType") != "purl":
+            continue
+        locator = ref.get("referenceLocator", "")
+        if not isinstance(locator, str) or not locator.startswith("pkg:golang/"):
+            continue
+        name = package.get("name", "")
+        if name not in gomod and name not in (main_module, "stdlib"):
+            sys.exit(
+                f"verify-release: SBOM lists Go module {name!r} that go.mod does not pin"
+            )
+
 # The modules that must appear in the SBOM are the ones actually
 # embedded in the shipped binaries (their Go build info). go.mod can
 # legitimately pin test-only modules (imported solely by *_test.go),
