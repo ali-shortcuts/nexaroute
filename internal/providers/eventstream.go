@@ -6,8 +6,8 @@ import (
 	"encoding/binary"
 	"fmt"
 	"hash/crc32"
-	"strconv"
 	"io"
+	"strconv"
 )
 
 // AWS event stream decoding (M5-1b) for Bedrock ConverseStream

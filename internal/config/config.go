@@ -548,25 +548,25 @@ type DataHandlingConfig struct {
 }
 
 type ProviderConfig struct {
-	ID             string             `json:"id"`
-	Name           string             `json:"name"`
-	Type           string             `json:"type"`              // openai_compatible | anthropic_compatible | gemini | openai_responses | azure_openai | vertex | bedrock
-	Dialect        string             `json:"dialect,omitempty"` // optional dialect override (see compat.Dialects)
-	BaseURL        string             `json:"base_url"`
-	DataHandling   DataHandlingConfig `json:"data_handling,omitempty"`
-	APIKey         string             `json:"api_key,omitempty"`
-	APIKeyEnv      string             `json:"api_key_env,omitempty"`
-	Credentials    []CredentialConfig `json:"credentials,omitempty"`
-	AuthMode       string             `json:"auth_mode,omitempty"` // bearer | x-api-key | x-goog-api-key | api-key | none
+	ID           string             `json:"id"`
+	Name         string             `json:"name"`
+	Type         string             `json:"type"`              // openai_compatible | anthropic_compatible | gemini | openai_responses | azure_openai | vertex | bedrock
+	Dialect      string             `json:"dialect,omitempty"` // optional dialect override (see compat.Dialects)
+	BaseURL      string             `json:"base_url"`
+	DataHandling DataHandlingConfig `json:"data_handling,omitempty"`
+	APIKey       string             `json:"api_key,omitempty"`
+	APIKeyEnv    string             `json:"api_key_env,omitempty"`
+	Credentials  []CredentialConfig `json:"credentials,omitempty"`
+	AuthMode     string             `json:"auth_mode,omitempty"` // bearer | x-api-key | x-goog-api-key | api-key | none
 	// Bedrock (M5-1b): region plus env-var NAMES for the SigV4 secret
 	// material. The secret itself is never a config value.
-	AWSRegion       string `json:"aws_region,omitempty"`
-	SecretKeyEnv    string `json:"secret_key_env,omitempty"`
-	SessionTokenEnv string `json:"session_token_env,omitempty"`
-	Headers        map[string]string  `json:"headers,omitempty"`
-	ForwardHeaders []string           `json:"forward_headers"`
-	ProxyURL       string             `json:"proxy_url,omitempty"`
-	AllowedHosts   []string           `json:"allowed_hosts,omitempty"`
+	AWSRegion       string            `json:"aws_region,omitempty"`
+	SecretKeyEnv    string            `json:"secret_key_env,omitempty"`
+	SessionTokenEnv string            `json:"session_token_env,omitempty"`
+	Headers         map[string]string `json:"headers,omitempty"`
+	ForwardHeaders  []string          `json:"forward_headers"`
+	ProxyURL        string            `json:"proxy_url,omitempty"`
+	AllowedHosts    []string          `json:"allowed_hosts,omitempty"`
 	// Resolved egress policy merged from global EgressConfig during Validate().
 	// Not serialized; populated at load time.
 	resolvedEgressDenyHosts  []string
