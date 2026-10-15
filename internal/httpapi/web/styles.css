@@ -85,3 +85,8 @@ html[data-theme="light"] .video-hero .button.ghost { color: #e2e8f0; border-colo
 .video-assets{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
 .field-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
 @media(max-width:640px){.video-assets .button{width:100%}}
+
+/* Budgets & Cost page (M2-3). */
+.cost-table .event-table-head,.cost-table .event-row{grid-template-columns:1.3fr .7fr 1.1fr .9fr 1fr}
+.cost-table .score-bar{align-self:center}
+@media(max-width:700px){.cost-table .event-row{grid-template-columns:1fr 1fr}}

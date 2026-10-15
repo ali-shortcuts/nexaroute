@@ -98,6 +98,23 @@ func parseEgressCIDRs(cidrs []string) []netip.Prefix {
 	return out
 }
 
+// maxAdapterConcurrency mirrors the config validation ceiling so the adapter
+// semaphore can never be sized from an unbounded value.
+const maxAdapterConcurrency = 4096
+
+// newConcurrencySem sizes the in-flight semaphore. The size is checked against
+// the ceiling at the allocation itself so no caller-influenced value can ever
+// reach make() unbounded.
+func newConcurrencySem(n int) chan struct{} {
+	if n >= 1 && n <= maxAdapterConcurrency {
+		return make(chan struct{}, n)
+	}
+	if n > maxAdapterConcurrency {
+		return make(chan struct{}, maxAdapterConcurrency)
+	}
+	return make(chan struct{}, 32)
+}
+
 func newHTTPAdapterWithRetryCap(p config.ProviderConfig, timeout, retryAfterCap time.Duration) (*httpAdapter, error) {
 	if retryAfterCap <= 0 {
 		retryAfterCap = 60 * time.Second
@@ -105,6 +122,9 @@ func newHTTPAdapterWithRetryCap(p config.ProviderConfig, timeout, retryAfterCap 
 	mc := p.MaxConcurrency
 	if mc <= 0 {
 		mc = 32
+	}
+	if mc > maxAdapterConcurrency {
+		mc = maxAdapterConcurrency
 	}
 	maxIdle := mc * 2
 	if maxIdle < 64 {
@@ -158,7 +178,7 @@ func newHTTPAdapterWithRetryCap(p config.ProviderConfig, timeout, retryAfterCap 
 	}
 	a := &httpAdapter{
 		p: p, c: &http.Client{Transport: tr, Timeout: timeout, CheckRedirect: checkRedirect}, streamC: &http.Client{Transport: tr, CheckRedirect: checkRedirect},
-		sem: make(chan struct{}, mc), forwardAllowed: make(map[string]struct{}, len(p.ForwardHeaders)),
+		sem: newConcurrencySem(mc), forwardAllowed: make(map[string]struct{}),
 		retryAfterCap: retryAfterCap,
 	}
 	a.requestLimit.Store(-1)
@@ -272,6 +292,29 @@ func sameHTTPOrigin(a, b *url.URL) bool {
 	return strings.EqualFold(a.Scheme, b.Scheme) && strings.EqualFold(a.Host, b.Host)
 }
 
+// hostAllowed reports whether the endpoint's host is one the operator
+// configured for this provider: the base URL host, or an entry in the
+// provider's allowed_hosts list (compared the way the egress policy
+// compares them: case-insensitive, ignoring surrounding spaces and a
+// trailing dot). It mirrors the dial-time allowlist at request-build
+// time; the transport remains the enforcement of last resort.
+func (a *httpAdapter) hostAllowed(u *url.URL) bool {
+	host := u.Hostname()
+	if host == "" {
+		return false
+	}
+	if len(a.p.AllowedHosts) == 0 {
+		base, err := url.Parse(a.p.BaseURL)
+		return err == nil && strings.EqualFold(strings.TrimSuffix(strings.TrimSpace(base.Hostname()), "."), strings.TrimSuffix(host, "."))
+	}
+	for _, allowed := range a.p.AllowedHosts {
+		if strings.EqualFold(strings.TrimSuffix(strings.TrimSpace(allowed), "."), strings.TrimSuffix(host, ".")) {
+			return true
+		}
+	}
+	return false
+}
+
 func endpoint(base, suffix string) string {
 	b := strings.TrimRight(base, "/")
 	suffix = strings.TrimSpace(suffix)
@@ -359,6 +402,32 @@ func (r *quotaReservation) releaseAll() {
 
 // geminiModelPath builds the model-in-path Gemini endpoint. Stream calls use
 // streamGenerateContent with the SSE alt parameter.
+// vertexModelPath builds the Vertex AI model-in-path endpoint for
+// the configured project/location. Vertex speaks the Gemini wire
+// format; streaming uses :streamGenerateContent with SSE.
+func (a *httpAdapter) vertexModelPath(model string, stream bool) string {
+	model = strings.TrimPrefix(strings.TrimSpace(model), "models/")
+	base := "/v1/projects/" + url.PathEscape(a.p.VertexProject) +
+		"/locations/" + url.PathEscape(a.p.VertexLocation) +
+		"/publishers/google/models/" + url.PathEscape(model)
+	if stream {
+		return base + ":streamGenerateContent?alt=sse"
+	}
+	return base + ":generateContent"
+}
+
+// azureDeploymentPath builds the Azure OpenAI per-deployment chat
+// endpoint with its api-version query. The model argument is the
+// Azure deployment name.
+func (a *httpAdapter) azureDeploymentPath(model string) string {
+	version := a.p.APIVersion
+	if version == "" {
+		version = "2024-10-21"
+	}
+	return "/openai/deployments/" + url.PathEscape(strings.TrimSpace(model)) +
+		"/chat/completions?api-version=" + url.QueryEscape(version)
+}
+
 func (a *httpAdapter) geminiModelPath(model string, stream bool) string {
 	model = strings.TrimPrefix(strings.TrimSpace(model), "models/")
 	if stream {
@@ -368,6 +437,17 @@ func (a *httpAdapter) geminiModelPath(model string, stream bool) string {
 }
 
 func (a *httpAdapter) Do(ctx context.Context, payload []byte, stream bool, forward http.Header) (*http.Response, error) {
+	if a.p.Type == "azure_openai" {
+		// Azure addresses deployments in the URL; the deployment name
+		// is the payload's model (the dispatch layer has already
+		// substituted the deployment's upstream model).
+		var probe struct {
+			Model string `json:"model"`
+		}
+		if err := json.Unmarshal(payload, &probe); err == nil && probe.Model != "" {
+			return a.DoPath(ctx, http.MethodPost, a.azureDeploymentPath(probe.Model), payload, stream, forward)
+		}
+	}
 	return a.DoPath(ctx, http.MethodPost, a.defaultPath(), payload, stream, forward)
 }
 
@@ -378,8 +458,22 @@ func (a *httpAdapter) CountTokens(ctx context.Context, payload []byte, forward h
 func (a *httpAdapter) DoPath(ctx context.Context, method, path string, payload []byte, stream bool, forward http.Header) (*http.Response, error) {
 	u := endpoint(a.p.BaseURL, path)
 	parsed, err := url.Parse(u)
-	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-		return nil, fmt.Errorf("invalid endpoint %q", u)
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return nil, errors.New("invalid endpoint: must be an absolute http(s) URL")
+	}
+	if parsed.User != nil {
+		// Credentials embedded in a URL would be sent as Basic auth to
+		// whatever host the endpoint names; provider auth is configured
+		// separately and never travels in the URL.
+		return nil, errors.New("invalid endpoint: user information is not allowed")
+	}
+	if !a.hostAllowed(parsed) {
+		// The destination host must be one the operator configured for
+		// this provider (the base URL host or an allowed_hosts entry).
+		// The egress transport enforces the same set at dial time;
+		// refusing here keeps a misdirected endpoint from ever carrying
+		// provider credentials.
+		return nil, errors.New("invalid endpoint: host is not in the provider's allowed hosts")
 	}
 
 	a.waiting.Add(1)
@@ -459,7 +553,17 @@ func (a *httpAdapter) DoPath(ctx context.Context, method, path string, payload [
 		}
 		reservation := a.reserveQuota(reqCtx)
 		quotaSeq := a.quotaDispatchSeq.Add(1)
-		resp, err := client.Do(req)
+		// The request URL is assembled only from operator-written provider
+		// configuration (base URL and path fields,
+		// validated at config load: http/https scheme, host required, userinfo
+		// rejected). Client request data never selects the host — model IDs
+		// enter as escaped path segments on those configured templates. The
+		// transport enforces the egress policy at dial time: destinations are
+		// pinned to the operator's allowed_hosts (default: the base URL host)
+		// minus deny hosts/CIDRs, and redirects refuse to cross origins. An
+		// absolute-URL path override is a tested operator feature and remains
+		// bounded by the same dial-time allowlist.
+		resp, err := client.Do(req) // codeql[go/request-forgery] operator-configured destination, egress-allowlisted at dial time — see block above.
 		if err != nil {
 			reservation.releaseAll()
 			if cancel != nil {
@@ -635,7 +739,7 @@ func (a *httpAdapter) applyHeaders(req *http.Request, forward http.Header) {
 		// x-goog-api-key (the Gemini credential injected by applyAuthKey),
 		// and the gateway's own x-admin-key. Configured static provider
 		// headers and applyAuthKey injection are unaffected.
-		if _, ok := a.forwardAllowed[lk]; !ok || lk == "authorization" || lk == "x-api-key" || lk == "x-goog-api-key" || lk == "x-admin-key" {
+		if _, ok := a.forwardAllowed[lk]; !ok || lk == "authorization" || lk == "x-api-key" || lk == "x-goog-api-key" || lk == "api-key" || lk == "x-admin-key" {
 			continue
 		}
 		req.Header.Del(k)
@@ -661,6 +765,8 @@ func (a *httpAdapter) applyAuthKey(req *http.Request, key string) {
 			mode = "x-api-key"
 		case "gemini":
 			mode = "x-goog-api-key"
+		case "azure_openai":
+			mode = "api-key"
 		default:
 			mode = "bearer"
 		}
@@ -670,6 +776,8 @@ func (a *httpAdapter) applyAuthKey(req *http.Request, key string) {
 		req.Header.Set("x-api-key", key)
 	case "x-goog-api-key":
 		req.Header.Set("x-goog-api-key", key)
+	case "api-key":
+		req.Header.Set("api-key", key)
 	default:
 		req.Header.Set("Authorization", "Bearer "+key)
 	}
@@ -861,7 +969,7 @@ func (a *httpAdapter) Probe(ctx context.Context, model string, maxTokens int) (t
 	maxTokens = 1
 	var body map[string]any
 	switch a.p.Type {
-	case "gemini":
+	case "gemini", "vertex":
 		body = map[string]any{
 			"contents":         []map[string]any{{"role": "user", "parts": []map[string]any{{"text": "OK"}}}},
 			"generationConfig": map[string]any{"maxOutputTokens": maxTokens},
@@ -882,6 +990,8 @@ func (a *httpAdapter) Probe(ctx context.Context, model string, maxTokens int) (t
 	var resp *http.Response
 	if a.p.Type == "gemini" {
 		resp, err = a.DoPath(ctx, http.MethodPost, a.geminiModelPath(model, false), b, false, nil)
+	} else if a.p.Type == "vertex" {
+		resp, err = a.DoPath(ctx, http.MethodPost, a.vertexModelPath(model, false), b, false, nil)
 	} else if a.p.Type == "openai_responses" {
 		resp, err = a.DoPath(ctx, http.MethodPost, a.p.ResponsesPath, b, false, nil)
 	} else {
@@ -948,7 +1058,7 @@ func (a *httpAdapter) validateProbeResponse(data []byte) error {
 		if err := json.Unmarshal(rawOutput, &output); err != nil {
 			return fmt.Errorf("probe returned invalid Responses output: %w", err)
 		}
-	case "gemini":
+	case "gemini", "vertex":
 		var candidates []map[string]json.RawMessage
 		raw := root["candidates"]
 		if len(raw) == 0 {
