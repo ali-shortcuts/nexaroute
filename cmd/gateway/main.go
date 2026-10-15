@@ -88,7 +88,10 @@ func dispatchSubcommand(args []string, stdout, stderr io.Writer) (int, bool) {
 
 func main() {
 	if code, handled := dispatchSubcommand(os.Args[1:], os.Stdout, os.Stderr); handled {
-		os.Exit(code)
+		if code != 0 {
+			os.Exit(code)
+		}
+		return
 	}
 	flags := flag.NewFlagSet("nexaroute", flag.ExitOnError)
 	configPath := flags.String("config", defaultConfigPath(), "path to JSON config")

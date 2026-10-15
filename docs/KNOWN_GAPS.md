@@ -134,13 +134,16 @@ burn in SRT subtitles. Video Studio now accepts multi-shot plans, shows progress
 
 ## State and HA
 
-The optional control-plane runtime now selects an atomic local file store or an
-explicit test-only memory store and reconciles a versioned startup snapshot.
-Postgres/Redis contracts remain available, but no runtime client/driver is
-registered in this binary, so selecting either backend fails closed rather than
-falling back silently. Migration dry-run and local backup/restore procedures
-are documented; live external Redis/Postgres and multi-node breaker
-synchronization remain unverified/unimplemented.
+The optional control-plane runtime selects an atomic local file store, an
+explicit test-only memory store, or the fully wired PostgreSQL (pgx) and
+Redis (go-redis) backends with fail-closed, secret-safe startup; the
+database backends are covered by real-service CI integration jobs
+(conformance, two-instance races, migrations for Postgres). The
+security/session store remains bbolt-only in this build (its
+Postgres/Redis adapters are M4-2 scope and selection fails closed).
+Migration dry-run is implemented, and backup/restore is a tested CLI
+(`nexaroute backup` / `nexaroute restore`, M4-3). Multi-node breaker
+synchronization remains unverified/unimplemented.
 
 ## RBAC and SSO
 

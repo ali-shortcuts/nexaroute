@@ -2,9 +2,14 @@
 
 ## Existing state (verified)
 
-`config validate|diff|dry-run` already exists (redacted diff, exit codes
+`config validate|diff|dry-run` is implemented (redacted diff, exit codes
 0/1/2), graceful shutdown with drain is implemented in the gateway, and
-safe reload goes through config validation. The genuine gaps (also the
+safe reload goes through config validation — BUT the implementation was
+unreachable: main() never dispatched the `config` subcommand, so the
+binary ignored it and started the gateway (defect found by the
+2026-10-15 Phase 0 audit and proven against a binary built from main).
+This unit fixes the dispatch behind one testable routing function with
+a regression test, and closes the remaining genuine gaps (also the
 deferred security-audit findings): no `doctor` diagnostics command, and
 backup/restore is a manual, untested file-copy procedure that does not
 cover the audit/security store.

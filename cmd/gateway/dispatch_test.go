@@ -32,12 +32,12 @@ func TestDispatchSubcommandRouting(t *testing.T) {
 
 	t.Run("every documented subcommand is handled", func(t *testing.T) {
 		for _, args := range [][]string{
-			{"privacy"},                                // usage -> nonzero, but handled
-			{"audit"},                                  // usage -> nonzero, but handled
-			{"config"},                                 // usage -> nonzero, but handled
-			{"doctor", "--config", configPath},        // healthy fixture -> 0
-			{"backup"},                                 // missing --out -> 2, but handled
-			{"restore"},                                // missing --bundle -> 2, but handled
+			{"privacy"},                        // usage -> nonzero, but handled
+			{"audit"},                          // usage -> nonzero, but handled
+			{"config"},                         // usage -> nonzero, but handled
+			{"doctor", "--config", configPath}, // healthy fixture -> 0
+			{"backup"},                         // missing --out -> 2, but handled
+			{"restore"},                        // missing --bundle -> 2, but handled
 			{"secrets", "definitely-not-a-subcommand"}, // error -> 1, but handled
 		} {
 			var stdout, stderr bytes.Buffer
