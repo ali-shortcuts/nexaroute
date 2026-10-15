@@ -13,10 +13,13 @@
 package controlplane
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"os"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -108,6 +111,16 @@ func TestRedisIntegrationStoreConformance(t *testing.T) {
 	if _, err := store.Get(ctx, ns); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("get after delete: %v", err)
 	}
+
+	binaryNS := uniqueRedisNamespace(t, client)
+	binaryPayload := []byte{0x00, 0xff, 0x01, 0x80, 0x00}
+	if _, err := store.Put(ctx, binaryNS, 0, binaryPayload); err != nil {
+		t.Fatalf("put binary payload: %v", err)
+	}
+	binarySnapshot, err := store.Get(ctx, binaryNS)
+	if err != nil || !bytes.Equal(binarySnapshot.Payload, binaryPayload) {
+		t.Fatalf("binary payload round trip: payload=%v err=%v", binarySnapshot.Payload, err)
+	}
 }
 
 // Two independent clients must observe each other's committed writes and
@@ -177,5 +190,94 @@ func TestRedisIntegrationConcurrentFirstWriteRace(t *testing.T) {
 	}
 	if successes != 1 || conflicts != writers-1 {
 		t.Fatalf("successes=%d conflicts=%d, want 1 and %d", successes, conflicts, writers-1)
+	}
+}
+
+func TestRedisIntegrationRejectsMalformedHashFields(t *testing.T) {
+	ctx := context.Background()
+	store, client := integrationRedisStore(t)
+	cases := []struct {
+		name   string
+		field  string
+		value  string
+		remove bool
+	}{
+		{name: "missing revision", field: "revision", remove: true},
+		{name: "noncanonical revision", field: "revision", value: "01"},
+		{name: "revision beyond uint64", field: "revision", value: "18446744073709551616"},
+		{name: "invalid schema", field: "schema", value: "0"},
+		{name: "empty payload", field: "payload", value: ""},
+		{name: "invalid timestamp", field: "updated_at", value: "not-a-time"},
+		{name: "invalid calendar timestamp", field: "updated_at", value: "2026-02-30T12:00:00Z"},
+		{name: "unexpected field", field: "unexpected", value: "value"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ns := uniqueRedisNamespace(t, client)
+			key := redisSnapshotPrefix + ns
+			fields := map[string]interface{}{
+				"revision": "1", "schema": "1", "payload": "payload",
+				"updated_at": time.Now().UTC().Format(time.RFC3339Nano),
+			}
+			if tc.remove {
+				delete(fields, tc.field)
+			} else {
+				fields[tc.field] = tc.value
+			}
+			if err := client.HSet(ctx, key, fields).Err(); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.Get(ctx, ns); !errors.Is(err, ErrMalformedSnapshot) {
+				t.Fatalf("Get malformed hash: %v, want ErrMalformedSnapshot", err)
+			}
+			if _, err := store.Put(ctx, ns, 0, []byte("overwrite")); !errors.Is(err, ErrMalformedSnapshot) {
+				t.Fatalf("Put malformed hash: %v, want ErrMalformedSnapshot", err)
+			}
+			if err := store.Delete(ctx, ns, 1); !errors.Is(err, ErrMalformedSnapshot) {
+				t.Fatalf("Delete malformed hash: %v, want ErrMalformedSnapshot", err)
+			}
+		})
+	}
+}
+
+func TestRedisIntegrationUint64RevisionBoundaries(t *testing.T) {
+	ctx := context.Background()
+	store, client := integrationRedisStore(t)
+	ns := uniqueRedisNamespace(t, client)
+	key := redisSnapshotPrefix + ns
+	fields := map[string]interface{}{
+		"revision": strconv.FormatUint(math.MaxUint64-1, 10),
+		"schema":   "1", "payload": "before",
+		"updated_at": time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	if err := client.HSet(ctx, key, fields).Err(); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := store.Put(ctx, ns, math.MaxUint64-1, []byte("at-max"))
+	if err != nil || updated.Revision != math.MaxUint64 {
+		t.Fatalf("write MaxUint64 revision: %+v %v", updated, err)
+	}
+	if _, err := store.Put(ctx, ns, math.MaxUint64, []byte("overflow")); !errors.Is(err, ErrInvalidRevision) {
+		t.Fatalf("write past MaxUint64: %v, want ErrInvalidRevision", err)
+	}
+	if err := store.Delete(ctx, ns, math.MaxUint64); err != nil {
+		t.Fatalf("delete at MaxUint64: %v", err)
+	}
+
+	precisionNS := uniqueRedisNamespace(t, client)
+	precisionKey := redisSnapshotPrefix + precisionNS
+	const current = uint64(9007199254740993)
+	if err := client.HSet(ctx, precisionKey, map[string]interface{}{
+		"revision": strconv.FormatUint(current, 10), "schema": "1", "payload": "x",
+		"updated_at": time.Now().UTC().Format(time.RFC3339Nano),
+	}).Err(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Put(ctx, precisionNS, current-1, []byte("stale")); !errors.Is(err, ErrConflict) {
+		t.Fatalf("adjacent stale revision above 2^53: %v, want ErrConflict", err)
+	}
+	updated, err = store.Put(ctx, precisionNS, current, []byte("next"))
+	if err != nil || updated.Revision != current+1 {
+		t.Fatalf("exact increment above 2^53: %+v %v", updated, err)
 	}
 }

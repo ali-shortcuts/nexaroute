@@ -72,6 +72,40 @@ type Manager struct {
 	states            map[string]State
 	providers         map[string]ProviderState
 	providerEvidence  map[string]map[string]time.Time
+	histograms        map[string]*deploymentHistograms
+}
+
+// histogramsFor returns the deployment's histogram set, creating it on
+// first use. Callers must hold m.mu.
+func (m *Manager) histogramsFor(id string) *deploymentHistograms {
+	if m.histograms == nil {
+		m.histograms = map[string]*deploymentHistograms{}
+	}
+	h, ok := m.histograms[id]
+	if !ok {
+		h = &deploymentHistograms{}
+		m.histograms[id] = h
+	}
+	return h
+}
+
+// Histograms returns copies of the deployment's latency and TTFT
+// histograms (M4-6), fed by the same samples as the EWMA gauges.
+func (m *Manager) Histograms(id string) (latency, ttft Histogram, ok bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	h, ok := m.histograms[id]
+	if !ok {
+		return Histogram{}, Histogram{}, false
+	}
+	cp := func(src Histogram) Histogram {
+		out := src
+		if src.Buckets != nil {
+			out.Buckets = append([]uint64(nil), src.Buckets...)
+		}
+		return out
+	}
+	return cp(h.Latency), cp(h.TTFT), true
 }
 
 func (m *Manager) now() time.Time {
@@ -248,6 +282,7 @@ func (m *Manager) RecordTTFT(id string, ttft time.Duration) {
 		st.EWMATTFTMS = st.EWMATTFTMS*0.75 + ms*0.25
 	}
 	m.states[id] = st
+	m.histogramsFor(id).TTFT.Observe(ms)
 }
 
 func (m *Manager) RecordSuccess(id string, latency time.Duration) {
@@ -259,6 +294,7 @@ func (m *Manager) RecordSuccess(id string, latency time.Duration) {
 	s.LastChecked = m.now()
 	s.LastSuccess = s.LastChecked
 	updateEWMA(&s, latency)
+	m.histogramsFor(id).Latency.Observe(float64(latency.Milliseconds()))
 	updateFailureEWMA(&s, false)
 	if s.Status == Retired {
 		// A success from a request that was already in flight before retirement
@@ -298,6 +334,7 @@ func (m *Manager) RecordFailure(id, errMsg string, latency time.Duration) {
 	s.LastFailure = s.LastChecked
 	s.LastError = errMsg
 	updateEWMA(&s, latency)
+	m.histogramsFor(id).Latency.Observe(float64(latency.Milliseconds()))
 	if s.Status == Cooldown && !s.CooldownUntil.IsZero() && s.LastChecked.Before(s.CooldownUntil) {
 		// Active hard cooldown: an in-flight failure observation must
 		// never downgrade the deployment back to Degraded (which would

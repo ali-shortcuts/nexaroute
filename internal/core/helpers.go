@@ -5,16 +5,23 @@ import (
 	"strings"
 )
 
+// AnthCacheControl is an Anthropic prompt-cache marker on a block.
+type AnthCacheControl struct {
+	Type string `json:"type"`
+	TTL  string `json:"ttl,omitempty"`
+}
+
 type AnthBlock struct {
-	Type      string          `json:"type"`
-	Text      string          `json:"text,omitempty"`
-	ID        string          `json:"id,omitempty"`
-	Name      string          `json:"name,omitempty"`
-	Input     map[string]any  `json:"input,omitempty"`
-	Source    map[string]any  `json:"source,omitempty"`
-	ToolUseID string          `json:"tool_use_id,omitempty"`
-	Content   json.RawMessage `json:"content,omitempty"`
-	IsError   bool            `json:"is_error,omitempty"`
+	Type         string            `json:"type"`
+	Text         string            `json:"text,omitempty"`
+	CacheControl *AnthCacheControl `json:"cache_control,omitempty"`
+	ID           string            `json:"id,omitempty"`
+	Name         string            `json:"name,omitempty"`
+	Input        map[string]any    `json:"input,omitempty"`
+	Source       map[string]any    `json:"source,omitempty"`
+	ToolUseID    string            `json:"tool_use_id,omitempty"`
+	Content      json.RawMessage   `json:"content,omitempty"`
+	IsError      bool              `json:"is_error,omitempty"`
 }
 
 func ParseAnthContent(raw json.RawMessage) ([]AnthBlock, error) {

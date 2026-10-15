@@ -44,6 +44,12 @@ type RouteProfileConfig struct {
 	Strategy       string `json:"strategy,omitempty"`
 	DecisionPolicy string `json:"decision_policy,omitempty"` // Phase E: optional policy ID
 	Privacy        string `json:"privacy,omitempty"`         // "" | "any" | "no_training"
+	// Canary rollout (M5-3): a deterministic bucket of keyed
+	// sessions (canary_percent of them, by session/selection key
+	// hash) gets CanaryDeploymentID promoted to the front of the
+	// candidate list when it is already eligible for the request.
+	CanaryDeploymentID string `json:"canary_deployment_id,omitempty"`
+	CanaryPercent      int    `json:"canary_percent,omitempty"`
 }
 
 type CandidatePoolConfig struct {
@@ -199,8 +205,11 @@ type Config struct {
 	Probe                  ProbeConfig                  `json:"probe"`
 	Egress                 EgressConfig                 `json:"egress,omitempty"`
 	Cache                  CacheConfig                  `json:"cache"`
+	MCP                    MCPConfig                    `json:"mcp,omitempty"`
+	Pricing                PricingConfig                `json:"pricing,omitempty"`
 	ClientAuth             ClientAuthConfig             `json:"client_auth"`
 	ControlPlane           ControlPlaneConfig           `json:"control_plane,omitempty"`
+	Telemetry              TelemetryConfig              `json:"telemetry,omitempty"`
 	Guardrails             GuardrailConfig              `json:"guardrails,omitempty"`
 	Evaluation             EvaluationConfig             `json:"evaluation,omitempty"`
 	Video                  VideoConfig                  `json:"video,omitempty"`
@@ -417,6 +426,52 @@ type RoutingConfig struct {
 	PublicModel string `json:"public_model,omitempty"`
 }
 
+// MCPConfig configures the MCP gateway (M6-1): a registry of
+// upstream Model Context Protocol servers brokered behind
+// POST /mcp.
+type MCPConfig struct {
+	Enabled            bool              `json:"enabled"`
+	RPM                int               `json:"rpm,omitempty"`
+	MaxResponseBytes   int               `json:"max_response_bytes,omitempty"`
+	CallTimeoutSeconds int               `json:"call_timeout_seconds,omitempty"`
+	Servers            []MCPServerConfig `json:"servers,omitempty"`
+}
+
+// MCPServerConfig is one registered upstream MCP server.
+// AuthEnv names an environment variable whose VALUE is sent
+// verbatim as the Authorization header (secrets are never inline).
+type MCPServerConfig struct {
+	ID             string   `json:"id"`
+	Name           string   `json:"name,omitempty"`
+	URL            string   `json:"url"`
+	Enabled        bool     `json:"enabled"`
+	AuthEnv        string   `json:"auth_env,omitempty"`
+	AllowedTenants []string `json:"allowed_tenants,omitempty"`
+	Tools          []string `json:"tools,omitempty"`
+}
+
+// PricingConfig is the versioned price book (M5-6). Each version
+// takes effect at effective_from and prices deployments by
+// "provider/model" ID. Costs are computed at record time under the
+// active version; a deployment missing from the book falls back to
+// its model-config prices (version label "config").
+type PricingConfig struct {
+	Versions []PriceVersionConfig `json:"versions,omitempty"`
+}
+
+type PriceVersionConfig struct {
+	Version       string                      `json:"version"`
+	EffectiveFrom string                      `json:"effective_from"`
+	Prices        map[string]PriceEntryConfig `json:"prices"`
+}
+
+type PriceEntryConfig struct {
+	InputPerMTok      float64  `json:"input_per_mtok"`
+	OutputPerMTok     float64  `json:"output_per_mtok"`
+	CacheReadPerMTok  *float64 `json:"cache_read_per_mtok,omitempty"`
+	CacheWritePerMTok *float64 `json:"cache_write_per_mtok,omitempty"`
+}
+
 // CacheConfig gates the exact-match response cache. It is deliberately
 // opt-in: a shared gateway serving mixed traffic must not memorize responses
 // unless the operator asked for it.
@@ -425,6 +480,33 @@ type CacheConfig struct {
 	TTLSeconds   int  `json:"ttl_seconds"`
 	MaxEntries   int  `json:"max_entries"`
 	MaxBodyBytes int  `json:"max_body_bytes"`
+	// Semantic is the opt-in semantic (embedding-similarity) cache
+	// layered beside the exact-match cache (M5-4). It is enabled
+	// independently and never activates unless an embedding
+	// deployment is configured.
+	Semantic SemanticCacheConfig `json:"semantic"`
+}
+
+// SemanticCacheConfig gates the semantic response cache. Entries
+// are matched by embedding cosine similarity inside an isolation
+// scope and carry privacy provenance (see internal/cache).
+type SemanticCacheConfig struct {
+	Enabled bool `json:"enabled"`
+	// EmbeddingDeployment names the "provider/model" deployment
+	// whose embeddings endpoint embeds prompts. The provider must
+	// be openai_compatible.
+	EmbeddingDeployment string `json:"embedding_deployment,omitempty"`
+	// EmbeddingPath overrides the embeddings path on that provider
+	// (default /v1/embeddings).
+	EmbeddingPath string `json:"embedding_path,omitempty"`
+	// Threshold is the minimum cosine similarity for a hit,
+	// in (0.5, 1]. Default 0.95 (conservative).
+	Threshold float64 `json:"threshold,omitempty"`
+	// MaxEntries bounds the semantic table independently of the
+	// exact-match cache. Default 1024.
+	MaxEntries int `json:"max_entries,omitempty"`
+	// TTLSeconds bounds entry lifetime; 0 reuses cache.ttl_seconds.
+	TTLSeconds int `json:"ttl_seconds,omitempty"`
 }
 
 // ClientAuthConfig enables optional per-key data-plane authentication with a
@@ -458,6 +540,15 @@ type ControlPlaneConfig struct {
 	IdentityFailure  string `json:"identity_failure,omitempty"`
 	BudgetFailure    string `json:"budget_failure,omitempty"`
 	RateLimitFailure string `json:"rate_limit_failure,omitempty"`
+}
+
+// TelemetryConfig enables the optional OTLP/HTTP span exporter (M4-6).
+// Like the control-plane backends, the collector URL is never stored in
+// durable config; only the name of the environment variable holding it
+// is persisted. Unset or empty means the exporter is disabled.
+type TelemetryConfig struct {
+	OTLPEndpointEnv string `json:"otlp_endpoint_env,omitempty"`
+	ServiceName     string `json:"service_name,omitempty"`
 }
 
 type GuardrailConfig struct {
@@ -509,6 +600,11 @@ type VirtualKeyConfig struct {
 	RPM            int      `json:"rpm,omitempty"`
 	TPM            int      `json:"tpm,omitempty"`
 	RequirePrivacy string   `json:"require_privacy,omitempty"` // "" | "any" | "no_training"
+	// BudgetUSD caps the key's cumulative recorded spend in USD
+	// (M5-6). 0 = unlimited. Enforced atomically at admission with
+	// a conservative estimate, settled to actual cost on the first
+	// usage report. Runtime state: resets on gateway restart.
+	BudgetUSD float64 `json:"budget_usd,omitempty"`
 }
 
 type ProbeConfig struct {
@@ -553,31 +649,47 @@ type DataHandlingConfig struct {
 }
 
 type ProviderConfig struct {
-	ID             string             `json:"id"`
-	Name           string             `json:"name"`
-	Type           string             `json:"type"`              // openai_compatible | anthropic_compatible | gemini | openai_responses
-	Dialect        string             `json:"dialect,omitempty"` // optional dialect override (see compat.Dialects)
-	BaseURL        string             `json:"base_url"`
-	DataHandling   DataHandlingConfig `json:"data_handling,omitempty"`
-	APIKey         string             `json:"api_key,omitempty"`
-	APIKeyEnv      string             `json:"api_key_env,omitempty"`
-	Credentials    []CredentialConfig `json:"credentials,omitempty"`
-	AuthMode       string             `json:"auth_mode,omitempty"` // bearer | x-api-key | x-goog-api-key | none
-	Headers        map[string]string  `json:"headers,omitempty"`
-	ForwardHeaders []string           `json:"forward_headers"`
-	ProxyURL       string             `json:"proxy_url,omitempty"`
-	AllowedHosts   []string           `json:"allowed_hosts,omitempty"`
+	ID           string             `json:"id"`
+	Name         string             `json:"name"`
+	Type         string             `json:"type"`              // openai_compatible | anthropic_compatible | gemini | openai_responses | azure_openai | vertex | bedrock
+	Dialect      string             `json:"dialect,omitempty"` // optional dialect override (see compat.Dialects)
+	BaseURL      string             `json:"base_url"`
+	DataHandling DataHandlingConfig `json:"data_handling,omitempty"`
+	APIKey       string             `json:"api_key,omitempty"`
+	APIKeyEnv    string             `json:"api_key_env,omitempty"`
+	Credentials  []CredentialConfig `json:"credentials,omitempty"`
+	AuthMode     string             `json:"auth_mode,omitempty"` // bearer | x-api-key | x-goog-api-key | api-key | none
+	// Bedrock (M5-1b): region plus env-var NAMES for the SigV4 secret
+	// material. The secret itself is never a config value.
+	AWSRegion       string            `json:"aws_region,omitempty"`
+	SecretKeyEnv    string            `json:"secret_key_env,omitempty"`
+	SessionTokenEnv string            `json:"session_token_env,omitempty"`
+	Headers         map[string]string `json:"headers,omitempty"`
+	ForwardHeaders  []string          `json:"forward_headers"`
+	ProxyURL        string            `json:"proxy_url,omitempty"`
+	AllowedHosts    []string          `json:"allowed_hosts,omitempty"`
 	// Resolved egress policy merged from global EgressConfig during Validate().
 	// Not serialized; populated at load time.
 	resolvedEgressDenyHosts  []string
 	resolvedEgressDenyCIDRs  []string
 	resolvedEgressAllowHosts []string
 	resolvedEgressAllowCIDRs []string
+	// Azure OpenAI: API version query value (default 2024-10-21).
+	APIVersion string `json:"api_version,omitempty"`
+	// Vertex AI: GCP project (required for type vertex) and location
+	// (default us-central1).
+	VertexProject            string        `json:"vertex_project,omitempty"`
+	VertexLocation           string        `json:"vertex_location,omitempty"`
 	ChatPath                 string        `json:"chat_path,omitempty"`
 	MessagesPath             string        `json:"messages_path,omitempty"`
 	ModelsPath               string        `json:"models_path,omitempty"`
 	CountTokensPath          string        `json:"count_tokens_path,omitempty"`
 	ResponsesPath            string        `json:"responses_path,omitempty"`
+	EmbeddingsPath           string        `json:"embeddings_path,omitempty"`
+	ImagesPath               string        `json:"images_path,omitempty"`
+	SpeechPath               string        `json:"speech_path,omitempty"`
+	TranscriptionsPath       string        `json:"transcriptions_path,omitempty"`
+	RerankPath               string        `json:"rerank_path,omitempty"`
 	MaxConcurrency           int           `json:"max_concurrency,omitempty"`
 	StreamIdleTimeoutSeconds int           `json:"stream_idle_timeout_seconds,omitempty"`
 	Enabled                  bool          `json:"enabled"`
@@ -1071,9 +1183,24 @@ func (c *Config) ApplyDefaults() {
 		c.Cache.MaxEntries = 256
 		c.warnDefault("cache.max_entries", "not set; defaulted to 256")
 	}
+	if c.MCP.MaxResponseBytes == 0 {
+		c.MCP.MaxResponseBytes = 1 << 20
+	}
+	if c.MCP.CallTimeoutSeconds == 0 {
+		c.MCP.CallTimeoutSeconds = 30
+	}
 	if c.Cache.MaxBodyBytes == 0 {
 		c.Cache.MaxBodyBytes = 1 << 20
 		c.warnDefault("cache.max_body_bytes", "not set; defaulted to 1048576")
+	}
+	if c.Cache.Semantic.EmbeddingPath == "" {
+		c.Cache.Semantic.EmbeddingPath = "/v1/embeddings"
+	}
+	if c.Cache.Semantic.Threshold == 0 {
+		c.Cache.Semantic.Threshold = 0.95
+	}
+	if c.Cache.Semantic.MaxEntries == 0 {
+		c.Cache.Semantic.MaxEntries = 1024
 	}
 	if c.Routing.CapabilityCooldownSeconds == 0 {
 		c.Routing.CapabilityCooldownSeconds = 300
@@ -1140,6 +1267,7 @@ func (c *Config) ApplyDefaults() {
 		rp.ID = strings.TrimSpace(rp.ID)
 		rp.Name = strings.TrimSpace(rp.Name)
 		rp.CandidatePool = strings.TrimSpace(rp.CandidatePool)
+		rp.CanaryDeploymentID = strings.TrimSpace(rp.CanaryDeploymentID)
 		rp.FallbackChain = strings.TrimSpace(rp.FallbackChain)
 		rp.Strategy = strings.TrimSpace(strings.ToLower(rp.Strategy))
 		rp.DecisionPolicy = strings.TrimSpace(rp.DecisionPolicy)
@@ -1337,9 +1465,20 @@ func (p *ProviderConfig) ApplyDefaults() {
 			p.AuthMode = "x-api-key"
 		case "gemini":
 			p.AuthMode = "x-goog-api-key"
+		case "azure_openai":
+			p.AuthMode = "api-key"
 		default:
 			p.AuthMode = "bearer"
 		}
+	}
+	if p.Type == "bedrock" && p.AWSRegion == "" {
+		p.AWSRegion = "us-east-1"
+	}
+	if p.Type == "azure_openai" && p.APIVersion == "" {
+		p.APIVersion = "2024-10-21"
+	}
+	if p.Type == "vertex" && p.VertexLocation == "" {
+		p.VertexLocation = "us-central1"
 	}
 	if p.ChatPath == "" {
 		p.ChatPath = "/v1/chat/completions"
@@ -1355,6 +1494,21 @@ func (p *ProviderConfig) ApplyDefaults() {
 	}
 	if p.CountTokensPath == "" {
 		p.CountTokensPath = "/v1/messages/count_tokens"
+	}
+	if p.EmbeddingsPath == "" {
+		p.EmbeddingsPath = "/v1/embeddings"
+	}
+	if p.ImagesPath == "" {
+		p.ImagesPath = "/v1/images/generations"
+	}
+	if p.SpeechPath == "" {
+		p.SpeechPath = "/v1/audio/speech"
+	}
+	if p.TranscriptionsPath == "" {
+		p.TranscriptionsPath = "/v1/audio/transcriptions"
+	}
+	if p.RerankPath == "" {
+		p.RerankPath = "/v1/rerank"
 	}
 	if p.MaxConcurrency == 0 {
 		p.MaxConcurrency = 256
@@ -1551,6 +1705,72 @@ func (c Config) Validate() error {
 	if c.Cache.MaxBodyBytes < 1024 || c.Cache.MaxBodyBytes > 64<<20 {
 		return errors.New("cache.max_body_bytes must be between 1024 and 67108864")
 	}
+	if sem := c.Cache.Semantic; sem.Enabled {
+		if sem.EmbeddingDeployment == "" {
+			return errors.New("cache.semantic.embedding_deployment is required when the semantic cache is enabled")
+		}
+		parts := strings.Split(sem.EmbeddingDeployment, "/")
+		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+			return fmt.Errorf("cache.semantic.embedding_deployment %q must be in provider/model form", sem.EmbeddingDeployment)
+		}
+		found := false
+		for _, p := range c.Providers {
+			if p.ID != parts[0] {
+				continue
+			}
+			if p.Type != "openai_compatible" {
+				return fmt.Errorf("cache.semantic.embedding_deployment provider %q must be openai_compatible (got %q)", p.ID, p.Type)
+			}
+			for _, m := range p.Models {
+				if m.ID == parts[1] {
+					found = true
+				}
+			}
+		}
+		if !found {
+			return fmt.Errorf("cache.semantic.embedding_deployment %q does not match a configured provider/model", sem.EmbeddingDeployment)
+		}
+		if sem.Threshold <= 0.5 || sem.Threshold > 1 {
+			return errors.New("cache.semantic.threshold must be in (0.5, 1]")
+		}
+		if sem.MaxEntries < 1 || sem.MaxEntries > 16384 {
+			return errors.New("cache.semantic.max_entries must be between 1 and 16384")
+		}
+		if sem.TTLSeconds < 0 {
+			return errors.New("cache.semantic.ttl_seconds must be >= 0")
+		}
+	}
+	if c.MCP.Enabled {
+		if len(c.MCP.Servers) == 0 {
+			return errors.New("mcp.enabled requires at least one server in mcp.servers")
+		}
+		seenMCP := map[string]bool{}
+		for _, srv := range c.MCP.Servers {
+			if !validLocalID(srv.ID) || seenMCP[srv.ID] {
+				return fmt.Errorf("mcp.servers: ids must be valid and unique (got %q)", srv.ID)
+			}
+			seenMCP[srv.ID] = true
+			u, err := url.Parse(srv.URL)
+			if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+				return fmt.Errorf("mcp.servers[%q].url must be an http(s) URL", srv.ID)
+			}
+			if u.User != nil {
+				return fmt.Errorf("mcp.servers[%q].url must not embed credentials; use auth_env", srv.ID)
+			}
+			if srv.AuthEnv != "" && !validEnvName(srv.AuthEnv) {
+				return fmt.Errorf("mcp.servers[%q].auth_env must name an environment variable", srv.ID)
+			}
+		}
+		if c.MCP.RPM < 0 || c.MCP.RPM > 1000000 {
+			return errors.New("mcp.rpm must be between 0 and 1000000")
+		}
+		if c.MCP.MaxResponseBytes < 1024 || c.MCP.MaxResponseBytes > 64<<20 {
+			return errors.New("mcp.max_response_bytes must be between 1024 and 67108864")
+		}
+		if c.MCP.CallTimeoutSeconds < 1 || c.MCP.CallTimeoutSeconds > 600 {
+			return errors.New("mcp.call_timeout_seconds must be between 1 and 600")
+		}
+	}
 	if c.Guardrails.Mode != "off" && c.Guardrails.Mode != "audit" && c.Guardrails.Mode != "block" {
 		return errors.New("guardrails.mode must be off, audit, or block")
 	}
@@ -1586,6 +1806,12 @@ func (c Config) Validate() error {
 		if c.ClientAuth.TPM < 0 || c.ClientAuth.TPM > 1000000000 {
 			return errors.New("client_auth.tpm must be between 0 and 1000000000")
 		}
+	}
+	if c.Telemetry.OTLPEndpointEnv != "" && !validEnvName(c.Telemetry.OTLPEndpointEnv) {
+		return errors.New("telemetry.otlp_endpoint_env must be a valid environment variable name")
+	}
+	if len(c.Telemetry.ServiceName) > 128 {
+		return errors.New("telemetry.service_name must be at most 128 characters")
 	}
 	if c.ControlPlane.Enabled {
 		switch c.ControlPlane.Backend {
@@ -1646,6 +1872,48 @@ func (c Config) Validate() error {
 		}
 	}
 	seenKeys := map[string]bool{}
+	{
+		seenVersions := map[string]bool{}
+		for _, v := range c.Pricing.Versions {
+			if strings.TrimSpace(v.Version) == "" || seenVersions[v.Version] {
+				return fmt.Errorf("pricing.versions: version names must be non-empty and unique (got %q)", v.Version)
+			}
+			seenVersions[v.Version] = true
+			if _, err := time.Parse(time.RFC3339, v.EffectiveFrom); err != nil {
+				return fmt.Errorf("pricing.versions[%q].effective_from must be RFC3339: %v", v.Version, err)
+			}
+			for dep, p := range v.Prices {
+				parts := strings.SplitN(dep, "/", 2)
+				if len(parts) != 2 {
+					return fmt.Errorf("pricing.versions[%q]: deployment %q must be provider/model", v.Version, dep)
+				}
+				found := false
+				for _, prov := range c.Providers {
+					if prov.ID != parts[0] {
+						continue
+					}
+					for _, m := range prov.Models {
+						if m.ID == parts[1] {
+							found = true
+						}
+					}
+				}
+				if !found {
+					return fmt.Errorf("pricing.versions[%q]: unknown deployment %q", v.Version, dep)
+				}
+				for name, rate := range map[string]float64{"input_per_mtok": p.InputPerMTok, "output_per_mtok": p.OutputPerMTok} {
+					if rate < 0 || rate > 1e6 {
+						return fmt.Errorf("pricing.versions[%q].prices[%q].%s must be between 0 and 1e6", v.Version, dep, name)
+					}
+				}
+				for name, rate := range map[string]*float64{"cache_read_per_mtok": p.CacheReadPerMTok, "cache_write_per_mtok": p.CacheWritePerMTok} {
+					if rate != nil && (*rate < 0 || *rate > 1e6) {
+						return fmt.Errorf("pricing.versions[%q].prices[%q].%s must be between 0 and 1e6", v.Version, dep, name)
+					}
+				}
+			}
+		}
+	}
 	for _, key := range c.ClientAuth.VirtualKeys {
 		if !validLocalID(key.ID) || seenKeys[key.ID] {
 			return fmt.Errorf("invalid or duplicate client_auth.virtual_key id %q", key.ID)
@@ -1668,6 +1936,9 @@ func (c Config) Validate() error {
 		}
 		if key.TPM < 0 || key.TPM > 1000000000 {
 			return fmt.Errorf("client_auth.virtual_key %q tpm must be between 0 and 1000000000", key.ID)
+		}
+		if key.BudgetUSD < 0 || key.BudgetUSD > 1e9 {
+			return fmt.Errorf("client_auth.virtual_key %q budget_usd must be between 0 and 1e9", key.ID)
 		}
 		if key.RequirePrivacy != "" && key.RequirePrivacy != "any" && key.RequirePrivacy != "no_training" {
 			return fmt.Errorf("client_auth.virtual_key %q require_privacy must be \"\", \"any\", or \"no_training\" (got %q)", key.ID, key.RequirePrivacy)
@@ -1730,11 +2001,23 @@ func (c Config) Validate() error {
 			return fmt.Errorf("duplicate provider id %q", p.ID)
 		}
 		seenP[p.ID] = true
-		if p.Type != "openai_compatible" && p.Type != "anthropic_compatible" && p.Type != "gemini" && p.Type != "openai_responses" {
+		if p.Type != "openai_compatible" && p.Type != "anthropic_compatible" && p.Type != "gemini" && p.Type != "openai_responses" && p.Type != "azure_openai" && p.Type != "vertex" && p.Type != "bedrock" {
 			return fmt.Errorf("provider %q has unsupported type %q", p.ID, p.Type)
+		}
+		if p.SecretKeyEnv != "" && !validEnvName(p.SecretKeyEnv) {
+			return fmt.Errorf("provider %q secret_key_env is not a valid environment variable name (the value is not echoed)", p.ID)
+		}
+		if p.SessionTokenEnv != "" && !validEnvName(p.SessionTokenEnv) {
+			return fmt.Errorf("provider %q session_token_env is not a valid environment variable name (the value is not echoed)", p.ID)
+		}
+		if p.Type == "bedrock" && p.SecretKeyEnv == "" {
+			return fmt.Errorf("provider %q of type bedrock requires secret_key_env naming the env var that holds the AWS secret access key", p.ID)
 		}
 		if p.BaseURL == "" {
 			return fmt.Errorf("provider %q base_url is required", p.ID)
+		}
+		if p.Type == "vertex" && strings.TrimSpace(p.VertexProject) == "" {
+			return fmt.Errorf("provider %q vertex_project is required for type vertex", p.ID)
 		}
 		if len(p.BaseURL) > maxURLBytes || len(p.ProxyURL) > maxURLBytes {
 			return fmt.Errorf("provider %q URL is too long", p.ID)
@@ -1760,7 +2043,7 @@ func (c Config) Validate() error {
 				return err
 			}
 		}
-		if p.AuthMode != "" && p.AuthMode != "bearer" && p.AuthMode != "x-api-key" && p.AuthMode != "x-goog-api-key" && p.AuthMode != "none" {
+		if p.AuthMode != "" && p.AuthMode != "bearer" && p.AuthMode != "x-api-key" && p.AuthMode != "x-goog-api-key" && p.AuthMode != "api-key" && p.AuthMode != "none" {
 			return fmt.Errorf("provider %q has unsupported auth_mode %q", p.ID, p.AuthMode)
 		}
 		if err := validateDataHandling(p.DataHandling, fmt.Sprintf("provider %q", p.ID)); err != nil {
@@ -2028,13 +2311,13 @@ func (c Config) Validate() error {
 		if dp.APIKeyEnv != "" {
 			// basic env var name validation: letters, digits, underscore, must not start with digit
 			if len(dp.APIKeyEnv) == 0 || (dp.APIKeyEnv[0] >= '0' && dp.APIKeyEnv[0] <= '9') {
-				return fmt.Errorf("decision provider %q api_key_env %q invalid", dp.ID, dp.APIKeyEnv)
+				return fmt.Errorf("decision provider %q api_key_env must be an environment variable name (letters, digits, underscore; not starting with a digit); the value is not shown because it may be a secret", dp.ID)
 			}
 			for _, ch := range dp.APIKeyEnv {
 				if (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '_' {
 					continue
 				}
-				return fmt.Errorf("decision provider %q api_key_env %q invalid", dp.ID, dp.APIKeyEnv)
+				return fmt.Errorf("decision provider %q api_key_env must be an environment variable name (letters, digits, underscore; not starting with a digit); the value is not shown because it may be a secret", dp.ID)
 			}
 		}
 		if len(dp.BaseURL) > maxURLBytes {
@@ -2284,6 +2567,29 @@ func (c Config) Validate() error {
 		}
 		if rp.CandidatePool == "" {
 			return fmt.Errorf("route profile %q candidate_pool is required", rp.ID)
+		}
+		if rp.CanaryPercent < 0 || rp.CanaryPercent > 100 {
+			return fmt.Errorf("route profile %q canary_percent must be between 0 and 100 (got %d)", rp.ID, rp.CanaryPercent)
+		}
+		if rp.CanaryPercent > 0 && rp.CanaryDeploymentID == "" {
+			return fmt.Errorf("route profile %q canary_percent > 0 requires canary_deployment_id", rp.ID)
+		}
+		if rp.CanaryDeploymentID != "" {
+			for _, cp := range c.CandidatePools {
+				if cp.ID != rp.CandidatePool || cp.Mode == "all" {
+					continue
+				}
+				found := false
+				for _, dep := range cp.Deployments {
+					if dep == rp.CanaryDeploymentID {
+						found = true
+						break
+					}
+				}
+				if !found {
+					return fmt.Errorf("route profile %q canary_deployment_id %q is not in candidate pool %q", rp.ID, rp.CanaryDeploymentID, rp.CandidatePool)
+				}
+			}
 		}
 		if _, ok := poolIDs[rp.CandidatePool]; !ok {
 			return fmt.Errorf("route profile %q references unknown candidate pool %q", rp.ID, rp.CandidatePool)
