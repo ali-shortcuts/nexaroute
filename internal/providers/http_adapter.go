@@ -102,6 +102,19 @@ func parseEgressCIDRs(cidrs []string) []netip.Prefix {
 // semaphore can never be sized from an unbounded value.
 const maxAdapterConcurrency = 4096
 
+// newConcurrencySem sizes the in-flight semaphore. The size is checked against
+// the ceiling at the allocation itself so no caller-influenced value can ever
+// reach make() unbounded.
+func newConcurrencySem(n int) chan struct{} {
+	if n >= 1 && n <= maxAdapterConcurrency {
+		return make(chan struct{}, n)
+	}
+	if n > maxAdapterConcurrency {
+		return make(chan struct{}, maxAdapterConcurrency)
+	}
+	return make(chan struct{}, 32)
+}
+
 func newHTTPAdapterWithRetryCap(p config.ProviderConfig, timeout, retryAfterCap time.Duration) (*httpAdapter, error) {
 	if retryAfterCap <= 0 {
 		retryAfterCap = 60 * time.Second
@@ -165,7 +178,7 @@ func newHTTPAdapterWithRetryCap(p config.ProviderConfig, timeout, retryAfterCap 
 	}
 	a := &httpAdapter{
 		p: p, c: &http.Client{Transport: tr, Timeout: timeout, CheckRedirect: checkRedirect}, streamC: &http.Client{Transport: tr, CheckRedirect: checkRedirect},
-		sem: make(chan struct{}, mc), forwardAllowed: make(map[string]struct{}),
+		sem: newConcurrencySem(mc), forwardAllowed: make(map[string]struct{}, len(p.ForwardHeaders)),
 		retryAfterCap: retryAfterCap,
 	}
 	a.requestLimit.Store(-1)
