@@ -453,6 +453,25 @@ Provider presets are served by the gateway itself through the Admin API so the W
 
 Only non-streaming requests with `temperature` absent/0 and `top_p` absent/1 are eligible. Every config swap invalidates the cache. Per-request bypass header: `x-nexaroute-no-cache: 1`.
 
+### guardrails (object, opt-in)
+
+Request-content guardrails, evaluated inside client authentication
+(so they are active when `client_auth.enabled` is true) on every
+data-plane request:
+
+| Field | Default | Meaning |
+|---|---|---|
+| `guardrails.mode` | `off` | `off` (no scanning), `audit` (scan; on a match, emit a `guardrail_audit` event naming the matched kinds and serve the request), or `block` (scan; reject matched classes with 403). |
+| `guardrails.reject_pii` | `false` | In block mode, reject PII classes: `pii_email`, `pii_phone`, `pii_credit_card` (Luhn-validated), `pii_ssn` (SSA structure-validated). |
+| `guardrails.reject_secrets` | `false` | In block mode, reject `secret_api_key`: sk-/AKIA/GitHub (classic + fine-grained)/Slack/Google key shapes, JWTs, PEM private-key blocks, connection strings with embedded passwords, and Bearer tokens. |
+| `guardrails.reject_prompt_injection` | `false` | In block mode, reject `prompt_injection` phrasings (ignore/disregard previous instructions, reveal/print the system prompt or instructions, jailbreak/developer mode, override safety, do anything now). |
+| `guardrails.max_body_bytes` | gateway default | Body size cap for scanning; larger requests fail 413. |
+
+Findings are classifications only — matched content is never
+logged, evented, or returned. Detection is pattern + validator
+based (no ML model); expect it to catch common shapes, not
+adversarial obfuscation.
+
 ### client_auth (new object, opt-in)
 
 | Field | Default | Meaning |
