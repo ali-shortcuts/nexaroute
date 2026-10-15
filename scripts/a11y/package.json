@@ -1,8 +1,9 @@
 {
-  "name": "nexaroute-a11y-tools",
+  "name": "nexaroute-browser-tools",
   "private": true,
-  "description": "Dev-only accessibility scan tooling (not shipped). Install: npm --prefix scripts/a11y install",
+  "description": "Dev-only browser evidence tooling (not shipped). Install: npm --prefix scripts/a11y install",
   "dependencies": {
-    "axe-core": "4.10.2"
+    "axe-core": "4.10.2",
+    "playwright-core": "^1.55.0"
   }
 }
