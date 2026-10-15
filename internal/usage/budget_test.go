@@ -1,6 +1,7 @@
 package usage
 
 import (
+	"math"
 	"math/rand"
 	"sync"
 	"testing"
@@ -47,8 +48,13 @@ func TestBudgetLedgerConcurrentInvariants(t *testing.T) {
 	if reserved != 0 {
 		t.Fatalf("reserved leaked: %v", reserved)
 	}
-	if committed != settled {
-		t.Fatalf("committed %v != settled sum %v", committed, settled)
+	// committed is summed inside the ledger in lock-acquisition order while the
+	// test accumulates settled in goroutine-completion order; float64 addition
+	// is order-sensitive at the last bit (~1e-14 observed). Conservation is
+	// the invariant under test, so compare with a tolerance well below any
+	// meaningful money epsilon.
+	if diff := math.Abs(committed - settled); diff > 1e-9 {
+		t.Fatalf("committed %v != settled sum %v (diff %v)", committed, settled, diff)
 	}
 }
 
