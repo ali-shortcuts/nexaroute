@@ -125,7 +125,7 @@ components:
           type: number
           format: double
           minimum: 0
-          description: Per-key dollar budget; always present. Zero means unlimited.
+          description: Per-key budget in US dollars; always present. A value of 0 means no cap (unlimited).
         key:
           type: string
           description: Plaintext key, returned only once when created or rotated.
