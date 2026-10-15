@@ -98,6 +98,10 @@ func parseEgressCIDRs(cidrs []string) []netip.Prefix {
 	return out
 }
 
+// maxAdapterConcurrency mirrors the config validation ceiling so the adapter
+// semaphore can never be sized from an unbounded value.
+const maxAdapterConcurrency = 4096
+
 func newHTTPAdapterWithRetryCap(p config.ProviderConfig, timeout, retryAfterCap time.Duration) (*httpAdapter, error) {
 	if retryAfterCap <= 0 {
 		retryAfterCap = 60 * time.Second
@@ -105,6 +109,9 @@ func newHTTPAdapterWithRetryCap(p config.ProviderConfig, timeout, retryAfterCap 
 	mc := p.MaxConcurrency
 	if mc <= 0 {
 		mc = 32
+	}
+	if mc > maxAdapterConcurrency {
+		mc = maxAdapterConcurrency
 	}
 	maxIdle := mc * 2
 	if maxIdle < 64 {
@@ -158,7 +165,7 @@ func newHTTPAdapterWithRetryCap(p config.ProviderConfig, timeout, retryAfterCap 
 	}
 	a := &httpAdapter{
 		p: p, c: &http.Client{Transport: tr, Timeout: timeout, CheckRedirect: checkRedirect}, streamC: &http.Client{Transport: tr, CheckRedirect: checkRedirect},
-		sem: make(chan struct{}, mc), forwardAllowed: make(map[string]struct{}, len(p.ForwardHeaders)),
+		sem: make(chan struct{}, mc), forwardAllowed: make(map[string]struct{}),
 		retryAfterCap: retryAfterCap,
 	}
 	a.requestLimit.Store(-1)
@@ -378,8 +385,14 @@ func (a *httpAdapter) CountTokens(ctx context.Context, payload []byte, forward h
 func (a *httpAdapter) DoPath(ctx context.Context, method, path string, payload []byte, stream bool, forward http.Header) (*http.Response, error) {
 	u := endpoint(a.p.BaseURL, path)
 	parsed, err := url.Parse(u)
-	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-		return nil, fmt.Errorf("invalid endpoint %q", u)
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return nil, errors.New("invalid endpoint: must be an absolute http(s) URL")
+	}
+	if parsed.User != nil {
+		// Credentials embedded in a URL would be sent as Basic auth to
+		// whatever host the endpoint names; provider auth is configured
+		// separately and never travels in the URL.
+		return nil, errors.New("invalid endpoint: user information is not allowed")
 	}
 
 	a.waiting.Add(1)
@@ -459,6 +472,16 @@ func (a *httpAdapter) DoPath(ctx context.Context, method, path string, payload [
 		}
 		reservation := a.reserveQuota(reqCtx)
 		quotaSeq := a.quotaDispatchSeq.Add(1)
+		// codeql[go/request-forgery] The request URL is assembled only from
+		// operator-written provider configuration (base URL and path fields,
+		// validated at config load: http/https scheme, host required, userinfo
+		// rejected). Client request data never selects the host — model IDs
+		// enter as escaped path segments on those configured templates. The
+		// transport enforces the egress policy at dial time: destinations are
+		// pinned to the operator's allowed_hosts (default: the base URL host)
+		// minus deny hosts/CIDRs, and redirects refuse to cross origins. An
+		// absolute-URL path override is a tested operator feature and remains
+		// bounded by the same dial-time allowlist.
 		resp, err := client.Do(req)
 		if err != nil {
 			reservation.releaseAll()

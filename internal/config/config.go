@@ -199,8 +199,10 @@ type Config struct {
 	Probe                  ProbeConfig                  `json:"probe"`
 	Egress                 EgressConfig                 `json:"egress,omitempty"`
 	Cache                  CacheConfig                  `json:"cache"`
+	Pricing                PricingConfig                `json:"pricing,omitempty"`
 	ClientAuth             ClientAuthConfig             `json:"client_auth"`
 	ControlPlane           ControlPlaneConfig           `json:"control_plane,omitempty"`
+	Telemetry              TelemetryConfig              `json:"telemetry,omitempty"`
 	Guardrails             GuardrailConfig              `json:"guardrails,omitempty"`
 	Evaluation             EvaluationConfig             `json:"evaluation,omitempty"`
 	Video                  VideoConfig                  `json:"video,omitempty"`
@@ -415,6 +417,28 @@ type RoutingConfig struct {
 // CacheConfig gates the exact-match response cache. It is deliberately
 // opt-in: a shared gateway serving mixed traffic must not memorize responses
 // unless the operator asked for it.
+// PricingConfig is the versioned price book (M5-6). Each version
+// takes effect at effective_from and prices deployments by
+// "provider/model" ID. Costs are computed at record time under the
+// active version; a deployment missing from the book falls back to
+// its model-config prices (version label "config").
+type PricingConfig struct {
+	Versions []PriceVersionConfig `json:"versions,omitempty"`
+}
+
+type PriceVersionConfig struct {
+	Version       string                      `json:"version"`
+	EffectiveFrom string                      `json:"effective_from"`
+	Prices        map[string]PriceEntryConfig `json:"prices"`
+}
+
+type PriceEntryConfig struct {
+	InputPerMTok      float64  `json:"input_per_mtok"`
+	OutputPerMTok     float64  `json:"output_per_mtok"`
+	CacheReadPerMTok  *float64 `json:"cache_read_per_mtok,omitempty"`
+	CacheWritePerMTok *float64 `json:"cache_write_per_mtok,omitempty"`
+}
+
 type CacheConfig struct {
 	Enabled      bool `json:"enabled"`
 	TTLSeconds   int  `json:"ttl_seconds"`
@@ -453,6 +477,15 @@ type ControlPlaneConfig struct {
 	IdentityFailure  string `json:"identity_failure,omitempty"`
 	BudgetFailure    string `json:"budget_failure,omitempty"`
 	RateLimitFailure string `json:"rate_limit_failure,omitempty"`
+}
+
+// TelemetryConfig enables the optional OTLP/HTTP span exporter (M4-6).
+// Like the control-plane backends, the collector URL is never stored in
+// durable config; only the name of the environment variable holding it
+// is persisted. Unset or empty means the exporter is disabled.
+type TelemetryConfig struct {
+	OTLPEndpointEnv string `json:"otlp_endpoint_env,omitempty"`
+	ServiceName     string `json:"service_name,omitempty"`
 }
 
 type GuardrailConfig struct {
@@ -504,6 +537,11 @@ type VirtualKeyConfig struct {
 	RPM            int      `json:"rpm,omitempty"`
 	TPM            int      `json:"tpm,omitempty"`
 	RequirePrivacy string   `json:"require_privacy,omitempty"` // "" | "any" | "no_training"
+	// BudgetUSD caps the key's cumulative recorded spend in USD
+	// (M5-6). 0 = unlimited. Enforced atomically at admission with
+	// a conservative estimate, settled to actual cost on the first
+	// usage report. Runtime state: resets on gateway restart.
+	BudgetUSD float64 `json:"budget_usd,omitempty"`
 }
 
 type ProbeConfig struct {
@@ -1582,6 +1620,12 @@ func (c Config) Validate() error {
 			return errors.New("client_auth.tpm must be between 0 and 1000000000")
 		}
 	}
+	if c.Telemetry.OTLPEndpointEnv != "" && !validEnvName(c.Telemetry.OTLPEndpointEnv) {
+		return errors.New("telemetry.otlp_endpoint_env must be a valid environment variable name")
+	}
+	if len(c.Telemetry.ServiceName) > 128 {
+		return errors.New("telemetry.service_name must be at most 128 characters")
+	}
 	if c.ControlPlane.Enabled {
 		switch c.ControlPlane.Backend {
 		case "file", "memory":
@@ -1641,6 +1685,48 @@ func (c Config) Validate() error {
 		}
 	}
 	seenKeys := map[string]bool{}
+	{
+		seenVersions := map[string]bool{}
+		for _, v := range c.Pricing.Versions {
+			if strings.TrimSpace(v.Version) == "" || seenVersions[v.Version] {
+				return fmt.Errorf("pricing.versions: version names must be non-empty and unique (got %q)", v.Version)
+			}
+			seenVersions[v.Version] = true
+			if _, err := time.Parse(time.RFC3339, v.EffectiveFrom); err != nil {
+				return fmt.Errorf("pricing.versions[%q].effective_from must be RFC3339: %v", v.Version, err)
+			}
+			for dep, p := range v.Prices {
+				parts := strings.SplitN(dep, "/", 2)
+				if len(parts) != 2 {
+					return fmt.Errorf("pricing.versions[%q]: deployment %q must be provider/model", v.Version, dep)
+				}
+				found := false
+				for _, prov := range c.Providers {
+					if prov.ID != parts[0] {
+						continue
+					}
+					for _, m := range prov.Models {
+						if m.ID == parts[1] {
+							found = true
+						}
+					}
+				}
+				if !found {
+					return fmt.Errorf("pricing.versions[%q]: unknown deployment %q", v.Version, dep)
+				}
+				for name, rate := range map[string]float64{"input_per_mtok": p.InputPerMTok, "output_per_mtok": p.OutputPerMTok} {
+					if rate < 0 || rate > 1e6 {
+						return fmt.Errorf("pricing.versions[%q].prices[%q].%s must be between 0 and 1e6", v.Version, dep, name)
+					}
+				}
+				for name, rate := range map[string]*float64{"cache_read_per_mtok": p.CacheReadPerMTok, "cache_write_per_mtok": p.CacheWritePerMTok} {
+					if rate != nil && (*rate < 0 || *rate > 1e6) {
+						return fmt.Errorf("pricing.versions[%q].prices[%q].%s must be between 0 and 1e6", v.Version, dep, name)
+					}
+				}
+			}
+		}
+	}
 	for _, key := range c.ClientAuth.VirtualKeys {
 		if !validLocalID(key.ID) || seenKeys[key.ID] {
 			return fmt.Errorf("invalid or duplicate client_auth.virtual_key id %q", key.ID)
@@ -1663,6 +1749,9 @@ func (c Config) Validate() error {
 		}
 		if key.TPM < 0 || key.TPM > 1000000000 {
 			return fmt.Errorf("client_auth.virtual_key %q tpm must be between 0 and 1000000000", key.ID)
+		}
+		if key.BudgetUSD < 0 || key.BudgetUSD > 1e9 {
+			return fmt.Errorf("client_auth.virtual_key %q budget_usd must be between 0 and 1e9", key.ID)
 		}
 		if key.RequirePrivacy != "" && key.RequirePrivacy != "any" && key.RequirePrivacy != "no_training" {
 			return fmt.Errorf("client_auth.virtual_key %q require_privacy must be \"\", \"any\", or \"no_training\" (got %q)", key.ID, key.RequirePrivacy)
@@ -2023,13 +2112,13 @@ func (c Config) Validate() error {
 		if dp.APIKeyEnv != "" {
 			// basic env var name validation: letters, digits, underscore, must not start with digit
 			if len(dp.APIKeyEnv) == 0 || (dp.APIKeyEnv[0] >= '0' && dp.APIKeyEnv[0] <= '9') {
-				return fmt.Errorf("decision provider %q api_key_env %q invalid", dp.ID, dp.APIKeyEnv)
+				return fmt.Errorf("decision provider %q api_key_env must be an environment variable name (letters, digits, underscore; not starting with a digit); the value is not shown because it may be a secret", dp.ID)
 			}
 			for _, ch := range dp.APIKeyEnv {
 				if (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '_' {
 					continue
 				}
-				return fmt.Errorf("decision provider %q api_key_env %q invalid", dp.ID, dp.APIKeyEnv)
+				return fmt.Errorf("decision provider %q api_key_env must be an environment variable name (letters, digits, underscore; not starting with a digit); the value is not shown because it may be a secret", dp.ID)
 			}
 		}
 		if len(dp.BaseURL) > maxURLBytes {

@@ -685,6 +685,27 @@ func (s *Server) clientAuthAllowed(w http.ResponseWriter, r *http.Request, anthr
 			*r = *r2
 		}
 	}
+	// Budget admission (M5-6): virtual keys with a USD budget
+	// reserve the conservative estimate atomically; the first
+	// usage report settles it to actual cost.
+	if virtualKey.BudgetUSD > 0 && s.budgets != nil {
+		inputEst, outputAllowance := requestBudgetParts(r)
+		if est, ok := s.budgetEstimateFor(cfg, model, inputEst, outputAllowance); ok {
+			id, allowed := s.budgets.Reserve(virtualKey.ID, virtualKey.BudgetUSD, est, time.Now())
+			if !allowed {
+				if anthropicStyle {
+					anthropicErrorJSON(w, 402, "client budget exceeded")
+				} else {
+					errorJSON(w, 402, "client budget exceeded")
+				}
+				return false
+			}
+			if id != 0 {
+				r2 := r.WithContext(contextWithBudgetReservation(r.Context(), &budgetReservation{keyID: virtualKey.ID, id: id}))
+				*r = *r2
+			}
+		}
+	}
 	return true
 }
 
