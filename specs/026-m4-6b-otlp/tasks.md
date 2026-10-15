@@ -5,4 +5,4 @@
 - [x] T3 httpapi wiring: span records via recordUsage/TTFT notes + middleware export
 - [x] T4 Gateway wiring: construct exporter (fail-closed), attach, close at shutdown
 - [x] T5 Docs: CONFIGURATION + OBSERVABILITY + UNRELEASED (no checklist edit)
-- [ ] T6 PR checks green; stop for owner merge decision
+- [x] T6 PR checks green; stop for owner merge decision
