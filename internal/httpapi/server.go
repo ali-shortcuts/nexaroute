@@ -28,11 +28,13 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/decision/policy"
 	"github.com/ali-shortcuts/nexaroute/internal/events"
 	"github.com/ali-shortcuts/nexaroute/internal/health"
+	"github.com/ali-shortcuts/nexaroute/internal/pricing"
 	"github.com/ali-shortcuts/nexaroute/internal/probe"
 	"github.com/ali-shortcuts/nexaroute/internal/providers"
 	"github.com/ali-shortcuts/nexaroute/internal/route"
 	"github.com/ali-shortcuts/nexaroute/internal/router"
 	"github.com/ali-shortcuts/nexaroute/internal/securitystore"
+	"github.com/ali-shortcuts/nexaroute/internal/telemetry"
 	"github.com/ali-shortcuts/nexaroute/internal/usage"
 )
 
@@ -40,26 +42,27 @@ import (
 var webFS embed.FS
 
 type Server struct {
-	applyMu         sync.Mutex
-	runtimeMu       sync.RWMutex
-	cfg             config.Config // effective runtime config (base + env overlay)
-	baseCfg         config.Config // durable file config, never contains runtime env overlays
-	configPath      string
-	reg             *providers.Registry
-	rt              *router.Router
-	hm              *health.Manager
-	bus             *events.Bus
-	probe           *probe.Engine
-	log             *log.Logger
-	requestSeq      atomic.Uint64
-	requestTotal    atomic.Uint64
-	configRevision  atomic.Uint64
-	configHistory   []config.Config
-	draining        atomic.Bool
-	inflight        atomic.Int64
-	overloadRejects atomic.Uint64
-	adminRL         sync.Mutex
-	adminBuckets    map[string]*adminBucket
+	applyMu           sync.Mutex
+	runtimeMu         sync.RWMutex
+	cfg               config.Config // effective runtime config (base + env overlay)
+	baseCfg           config.Config // durable file config, never contains runtime env overlays
+	configPath        string
+	reg               *providers.Registry
+	rt                *router.Router
+	hm                *health.Manager
+	bus               *events.Bus
+	probe             *probe.Engine
+	log               *log.Logger
+	requestSeq        atomic.Uint64
+	requestTotal      atomic.Uint64
+	configRevision    atomic.Uint64
+	telemetryExporter *telemetry.Exporter
+	configHistory     []config.Config
+	draining          atomic.Bool
+	inflight          atomic.Int64
+	overloadRejects   atomic.Uint64
+	adminRL           sync.Mutex
+	adminBuckets      map[string]*adminBucket
 	// Phase D: Decision plane
 	decisionRegistry       *decision.Registry
 	decisionOrchestrator   *decision.Orchestrator
@@ -68,8 +71,15 @@ type Server struct {
 	clientBucketGeneration uint64
 	respCache              *cache.Cache
 	semCache               *cache.SemanticCache
+	mcp                    *mcpBroker
+	mcpStatsMu             sync.Mutex
+	mcpStats               map[string]int64
 	cacheGeneration        uint64 // guarded by runtimeMu; scopes cache keys to a config snapshot
 	usage                  *usage.Tracker
+	budgets                *usage.BudgetLedger
+	bookMu                 sync.Mutex
+	bookCache              *pricing.Book
+	bookCacheRev           uint64
 	identityUsage          *usage.IdentityTracker
 	capStore               *compat.Store
 	routeResolver          *route.Resolver
@@ -198,10 +208,12 @@ func New(cfg config.Config, configPath string, reg *providers.Registry, rt *rout
 	}
 	s := &Server{
 		cfg: cfg, baseCfg: baseCfg, configPath: configPath, reg: reg, rt: rt, hm: hm, bus: bus, probe: pe, log: l,
+		mcp:             newMCPBroker(),
 		respCache:       cache.New(cfg.CacheTTL(), cfg.Cache.MaxEntries, int64(cfg.Cache.MaxBodyBytes)),
 		semCache:        newSemanticCache(cfg),
 		cacheGeneration: 1,
 		usage:           usage.New(),
+		budgets:         usage.NewBudgetLedger(),
 		identityUsage:   usage.NewIdentityTracker(),
 		capStore:        compat.NewStore(),
 		taskClassCounts: make(map[string]uint64, 32),
@@ -917,6 +929,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/readyz", s.ready)
 	mux.HandleFunc("/metrics", s.metrics)
 	mux.HandleFunc("/v1/models", s.models)
+	mux.HandleFunc("/mcp", s.mcpGateway)
 	mux.HandleFunc("/v1/messages", s.anthropicMessages)
 	mux.HandleFunc("/v1/messages/count_tokens", s.countTokens)
 	mux.HandleFunc("/v1/chat/completions", s.openAIChat)
@@ -1078,6 +1091,9 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 		}
 		trace := newTraceContext(r.Header.Get("traceparent"))
 		r = r.WithContext(withTrace(r.Context(), trace))
+		if s.telemetryExporter != nil && dataPlaneOperation(r.URL.Path) != "" {
+			r = r.WithContext(withSpanRecord(r.Context(), &spanRecord{}))
+		}
 		r.Header.Set("traceparent", trace.Traceparent())
 		w.Header().Set("x-request-id", rid)
 		w.Header().Set("traceparent", trace.Traceparent())
@@ -1096,6 +1112,7 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 				}
 			}
 			duration := time.Since(start)
+			s.exportSpan(r, trace, start, duration, sw.status)
 			if s.log != nil && strings.HasPrefix(r.URL.Path, "/admin/api/") && (isStateChanging(r.Method) || sw.status == http.StatusForbidden) {
 				s.log.Printf("audit action method=%s path=%q actor=%s status=%d request_id=%s", r.Method, r.URL.Path, adminActor, sw.status, rid)
 			}
