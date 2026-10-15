@@ -88,16 +88,26 @@ with a 10-second timeout, and the versioned control-plane migrations
 (checksum-verified, advisory-locked against concurrent replicas) are
 applied on startup. `redis` is also fully wired (go-redis client): the
 URL is read only from the environment variable named by `redis_url_env`,
-startup pings with a 10-second timeout, and snapshots are stored as
-per-namespace hashes guarded by atomic compare-and-set scripts with the
-same revision semantics as the other backends. **Redis durability
-warning:** this backend is only as durable as the operator's Redis —
-use it for durable control-plane state only with persistence enabled
-(AOF `appendonly yes` and/or RDB snapshots) and, where availability
-matters, replica/failover management; a default ephemeral Redis loses
-control-plane state on restart. `migration_dry_run` validates backend
-selection and readiness without writing state or applying migrations.
-Failure modes are `fail_open`, `fail_closed`, and `last_known_good`.
+connection timeouts/retries and the pool are bounded, and startup performs a
+10-second `PING`. Startup fails closed with a credential-safe error and never
+falls back to another backend. Snapshots are stored as per-namespace hashes
+guarded by atomic compare-and-set scripts. Revision comparisons and increments
+use exact decimal strings, so the full `uint64` range is not rounded by Lua
+numbers; malformed records fail deterministically, stale writes/deletes return
+`ErrConflict`, and deleting a missing snapshot returns `ErrNotFound`.
+`migration_dry_run` validates backend selection and readiness without reading or
+writing snapshot state (Redis does only the bounded `PING`) or applying
+migrations.
+
+**Redis durability warning:** this backend is only as durable as the operator's
+Redis configuration. For durable state, explicitly configure and test AOF
+(`appendonly yes`) and/or RDB snapshots, storage durability, replication,
+failover, and backup/restore against the deployment's recovery objectives. A
+default ephemeral Redis loses control-plane state on restart. Atomic revision
+checks apply on the Redis server executing the script; they do not imply
+multi-primary consistency, cross-replica safety, or durability beyond Redis's
+configured guarantees. Failure modes are `fail_open`, `fail_closed`, and
+`last_known_good`.
 
 ## Implicit-default warnings and opt-in strict config
 
