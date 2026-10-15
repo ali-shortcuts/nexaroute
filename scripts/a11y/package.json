@@ -1,0 +1,8 @@
+{
+  "name": "nexaroute-a11y-tools",
+  "private": true,
+  "description": "Dev-only accessibility scan tooling (not shipped). Install: npm --prefix scripts/a11y install",
+  "dependencies": {
+    "axe-core": "4.10.2"
+  }
+}
