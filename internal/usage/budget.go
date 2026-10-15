@@ -63,7 +63,13 @@ func (l *BudgetLedger) expireLocked(row *budgetRow, now time.Time) {
 			delete(row.reservations, id)
 		}
 	}
-	if row.reserved < 0 && row.reserved > -budgetEpsilon {
+	snapReserved(row)
+}
+
+// snapReserved zeroes floating-point dust around an empty hold so
+// a fully settled ledger reports exactly 0 reserved.
+func snapReserved(row *budgetRow) {
+	if row.reserved < budgetEpsilon && row.reserved > -budgetEpsilon {
 		row.reserved = 0
 	}
 }
@@ -110,9 +116,7 @@ func (l *BudgetLedger) Settle(key string, id uint64, actual float64) {
 		return
 	}
 	row.reserved -= res.amount
-	if row.reserved < 0 && row.reserved > -budgetEpsilon {
-		row.reserved = 0
-	}
+	snapReserved(row)
 	row.committed += actual
 	delete(row.reservations, id)
 }
@@ -134,9 +138,7 @@ func (l *BudgetLedger) Release(key string, id uint64) {
 		return
 	}
 	row.reserved -= res.amount
-	if row.reserved < 0 && row.reserved > -budgetEpsilon {
-		row.reserved = 0
-	}
+	snapReserved(row)
 	delete(row.reservations, id)
 }
 
