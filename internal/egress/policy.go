@@ -112,6 +112,47 @@ func blocked(ip netip.Addr, allowLoopback bool) bool {
 	return false
 }
 
+// ipBlocked reports whether dialing ip is forbidden under this
+// policy: the operator deny list applies to the address itself AND
+// to any IPv4 address embedded in it (NAT64 / 6to4), and the
+// built-in special-purpose blocklist applies via blocked (which
+// itself judges embedded addresses). The deny list is documented
+// to take precedence over everything except the built-in
+// blocklist; without the embedded check, a synthesized NAT64/6to4
+// DNS answer silently bypassed deny_cidrs for public ranges.
+func (p Policy) ipBlocked(ip netip.Addr, allowLoopback bool) bool {
+	if p.deniedIP(ip) {
+		return true
+	}
+	if inner, ok := embeddedIPv4(ip); ok && p.deniedIP(inner) {
+		return true
+	}
+	return blocked(ip, allowLoopback)
+}
+
+// checkDialAnswers validates the resolved addresses for one dial:
+// every answer must survive the deny list and the blocklist, and
+// when the host earned loopback exemptions by NAME (localhost or
+// *.localhost), every answer must actually be loopback — a
+// loopback-spelled name resolving to a public address would
+// otherwise send provider credentials over plaintext HTTP to a
+// remote host.
+func (p Policy) checkDialAnswers(host string, ips []netip.Addr, allowLoopback bool) error {
+	for _, ip := range ips {
+		if !ip.IsValid() || p.ipBlocked(ip, allowLoopback) {
+			return fmt.Errorf("egress DNS answer for %q is blocked", host)
+		}
+	}
+	if allowLoopback {
+		for _, ip := range ips {
+			if !ip.IsLoopback() {
+				return fmt.Errorf("egress DNS answer for %q is blocked", host)
+			}
+		}
+	}
+	return nil
+}
+
 // isLoopbackHost reports whether a URL/dial host names the local machine
 // explicitly: a loopback IP literal, "localhost" or "*.localhost". An
 // arbitrary DNS name that merely resolves to 127.0.0.1 does NOT qualify.
@@ -156,7 +197,7 @@ func (p Policy) validateURL(raw string) (*url.URL, error) {
 		if p.deniedIP(ip) {
 			return nil, fmt.Errorf("egress target %q is denied by operator policy", u.Hostname())
 		}
-		if blocked(ip, p.AllowLoopback) {
+		if p.ipBlocked(ip, p.AllowLoopback) {
 			return nil, fmt.Errorf("egress target %q is blocked", u.Hostname())
 		}
 	}
@@ -205,7 +246,7 @@ func (p Policy) NewTransport(target string, proxyURL string) (*http.Transport, e
 			if p.deniedIP(ip) {
 				return nil, fmt.Errorf("egress address %q is denied by operator policy", host)
 			}
-			if blocked(ip, allowLoopback) {
+			if p.ipBlocked(ip, allowLoopback) {
 				return nil, fmt.Errorf("egress address %q is blocked", host)
 			}
 			return dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
@@ -214,11 +255,13 @@ func (p Policy) NewTransport(target string, proxyURL string) (*http.Transport, e
 		if err != nil || len(ips) == 0 {
 			return nil, fmt.Errorf("egress DNS resolution failed for %q: %w", host, err)
 		}
+		addrs := make([]netip.Addr, 0, len(ips))
 		for _, candidate := range ips {
-			ip, ok := netip.AddrFromSlice(candidate.IP)
-			if !ok || p.deniedIP(ip) || blocked(ip, allowLoopback) {
-				return nil, fmt.Errorf("egress DNS answer for %q is blocked", host)
-			}
+			ip, _ := netip.AddrFromSlice(candidate.IP)
+			addrs = append(addrs, ip)
+		}
+		if err := p.checkDialAnswers(host, addrs, allowLoopback); err != nil {
+			return nil, err
 		}
 		var last error
 		for _, candidate := range ips {
