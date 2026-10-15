@@ -179,6 +179,11 @@ jobs:
           NEXAROUTE_TEST_REDIS_URL: "redis://127.0.0.1:6379/15"
         run: go test -tags integration ./internal/controlplane/ -run 'TestRedisIntegration' -count=1 -v
 
+      - name: Redis security-store integration tests
+        env:
+          NEXAROUTE_TEST_REDIS_URL: "redis://127.0.0.1:6379/15"
+        run: go test -tags integration ./internal/securitystore/ -run 'TestRedisSecurityStoreIntegration' -count=1 -v
+
   container:
     # Deployment evidence (M4-4): the distroless image builds for both
     # architectures on every run (build only — publishing stays with
