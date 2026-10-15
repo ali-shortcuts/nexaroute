@@ -90,3 +90,8 @@ html[data-theme="light"] .video-hero .button.ghost { color: #e2e8f0; border-colo
 .cost-table .event-table-head,.cost-table .event-row{grid-template-columns:1.3fr .7fr 1.1fr .9fr 1fr}
 .cost-table .score-bar{align-self:center}
 @media(max-width:700px){.cost-table .event-row{grid-template-columns:1fr 1fr}}
+
+/* Access page (M2-2): six-column key table on the event-table base. */
+.access-table .event-table-head,.access-table .event-row{grid-template-columns:1.2fr 1fr 1.15fr .9fr 76px auto}
+.access-table .tile-actions{margin-left:0}
+@media(max-width:700px){.access-table .event-row{grid-template-columns:1fr 1fr}}
