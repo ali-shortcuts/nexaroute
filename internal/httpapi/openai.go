@@ -150,6 +150,12 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 	if s.cacheServe(w, r, cacheKey, cacheable) {
 		return
 	}
+	// Semantic cache (M5-4, separately opt-in): only reached on an
+	// exact miss; any failure inside prepare bypasses silently.
+	semCtx := s.semanticPrepare(r, r.URL.Path, raw, in.Stream, in.Temperature, in.TopP, len(in.Tools) > 0, in.Model, req.RequireNoTraining, candidates)
+	if s.semanticServe(w, r, semCtx) {
+		return
+	}
 	// Phase D/E/G: Decision plane — rank within eligible set only, fail-open, chain-aware
 	candidates = s.applyDecisionPlane(r.Context(), candidates, ti, resolvedRoute, r.Header.Get("x-request-id"), req)
 	if resolvedRoute != nil {
@@ -391,7 +397,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 					s.recordUsage(r, c.Deployment.ID, int64(prompt), int64(completion))
 				})
 			} else {
-				e = s.proxyOpenAINativeJSON(w, r, resp, c.Deployment.ID, cacheKey, cacheGeneration, cacheable)
+				e = s.proxyOpenAINativeJSON(w, r, resp, c.Deployment.ID, cacheKey, cacheGeneration, cacheable, semCtx)
 			}
 		case in.Stream:
 			e = streamAnthropicToOpenAIWithUsage(w, resp, in.Model, nm, func(prompt, completion int) {
@@ -406,6 +412,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 				translated := translate.AnthropicResponseToOpenAI(an, in.Model, nm)
 				if b, merr := json.Marshal(translated); merr == nil {
 					s.cacheStoreResponse(cacheKey, cacheGeneration, cacheable, c.Deployment.ID, 200, "application/json", b)
+					s.semanticStore(semCtx, cacheGeneration, c.Deployment.ID, 200, b)
 				}
 				writeJSON(w, 200, translated)
 			}

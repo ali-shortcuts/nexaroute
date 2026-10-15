@@ -420,6 +420,33 @@ type CacheConfig struct {
 	TTLSeconds   int  `json:"ttl_seconds"`
 	MaxEntries   int  `json:"max_entries"`
 	MaxBodyBytes int  `json:"max_body_bytes"`
+	// Semantic is the opt-in semantic (embedding-similarity) cache
+	// layered beside the exact-match cache (M5-4). It is enabled
+	// independently and never activates unless an embedding
+	// deployment is configured.
+	Semantic SemanticCacheConfig `json:"semantic"`
+}
+
+// SemanticCacheConfig gates the semantic response cache. Entries
+// are matched by embedding cosine similarity inside an isolation
+// scope and carry privacy provenance (see internal/cache).
+type SemanticCacheConfig struct {
+	Enabled bool `json:"enabled"`
+	// EmbeddingDeployment names the "provider/model" deployment
+	// whose embeddings endpoint embeds prompts. The provider must
+	// be openai_compatible.
+	EmbeddingDeployment string `json:"embedding_deployment,omitempty"`
+	// EmbeddingPath overrides the embeddings path on that provider
+	// (default /v1/embeddings).
+	EmbeddingPath string `json:"embedding_path,omitempty"`
+	// Threshold is the minimum cosine similarity for a hit,
+	// in (0.5, 1]. Default 0.95 (conservative).
+	Threshold float64 `json:"threshold,omitempty"`
+	// MaxEntries bounds the semantic table independently of the
+	// exact-match cache. Default 1024.
+	MaxEntries int `json:"max_entries,omitempty"`
+	// TTLSeconds bounds entry lifetime; 0 reuses cache.ttl_seconds.
+	TTLSeconds int `json:"ttl_seconds,omitempty"`
 }
 
 // ClientAuthConfig enables optional per-key data-plane authentication with a
@@ -1070,6 +1097,15 @@ func (c *Config) ApplyDefaults() {
 		c.Cache.MaxBodyBytes = 1 << 20
 		c.warnDefault("cache.max_body_bytes", "not set; defaulted to 1048576")
 	}
+	if c.Cache.Semantic.EmbeddingPath == "" {
+		c.Cache.Semantic.EmbeddingPath = "/v1/embeddings"
+	}
+	if c.Cache.Semantic.Threshold == 0 {
+		c.Cache.Semantic.Threshold = 0.95
+	}
+	if c.Cache.Semantic.MaxEntries == 0 {
+		c.Cache.Semantic.MaxEntries = 1024
+	}
 	if c.Routing.CapabilityCooldownSeconds == 0 {
 		c.Routing.CapabilityCooldownSeconds = 300
 		c.warnDefault("routing.capability_cooldown_seconds", "not set; defaulted to 300")
@@ -1545,6 +1581,41 @@ func (c Config) Validate() error {
 	}
 	if c.Cache.MaxBodyBytes < 1024 || c.Cache.MaxBodyBytes > 64<<20 {
 		return errors.New("cache.max_body_bytes must be between 1024 and 67108864")
+	}
+	if sem := c.Cache.Semantic; sem.Enabled {
+		if sem.EmbeddingDeployment == "" {
+			return errors.New("cache.semantic.embedding_deployment is required when the semantic cache is enabled")
+		}
+		parts := strings.Split(sem.EmbeddingDeployment, "/")
+		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+			return fmt.Errorf("cache.semantic.embedding_deployment %q must be in provider/model form", sem.EmbeddingDeployment)
+		}
+		found := false
+		for _, p := range c.Providers {
+			if p.ID != parts[0] {
+				continue
+			}
+			if p.Type != "openai_compatible" {
+				return fmt.Errorf("cache.semantic.embedding_deployment provider %q must be openai_compatible (got %q)", p.ID, p.Type)
+			}
+			for _, m := range p.Models {
+				if m.ID == parts[1] {
+					found = true
+				}
+			}
+		}
+		if !found {
+			return fmt.Errorf("cache.semantic.embedding_deployment %q does not match a configured provider/model", sem.EmbeddingDeployment)
+		}
+		if sem.Threshold <= 0.5 || sem.Threshold > 1 {
+			return errors.New("cache.semantic.threshold must be in (0.5, 1]")
+		}
+		if sem.MaxEntries < 1 || sem.MaxEntries > 16384 {
+			return errors.New("cache.semantic.max_entries must be between 1 and 16384")
+		}
+		if sem.TTLSeconds < 0 {
+			return errors.New("cache.semantic.ttl_seconds must be >= 0")
+		}
 	}
 	if c.Guardrails.Mode != "off" && c.Guardrails.Mode != "audit" && c.Guardrails.Mode != "block" {
 		return errors.New("guardrails.mode must be off, audit, or block")

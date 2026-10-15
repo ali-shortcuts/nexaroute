@@ -67,6 +67,7 @@ type Server struct {
 	clientBuckets          map[string]*clientBucket
 	clientBucketGeneration uint64
 	respCache              *cache.Cache
+	semCache               *cache.SemanticCache
 	cacheGeneration        uint64 // guarded by runtimeMu; scopes cache keys to a config snapshot
 	usage                  *usage.Tracker
 	identityUsage          *usage.IdentityTracker
@@ -198,6 +199,7 @@ func New(cfg config.Config, configPath string, reg *providers.Registry, rt *rout
 	s := &Server{
 		cfg: cfg, baseCfg: baseCfg, configPath: configPath, reg: reg, rt: rt, hm: hm, bus: bus, probe: pe, log: l,
 		respCache:       cache.New(cfg.CacheTTL(), cfg.Cache.MaxEntries, int64(cfg.Cache.MaxBodyBytes)),
+		semCache:        newSemanticCache(cfg),
 		cacheGeneration: 1,
 		usage:           usage.New(),
 		identityUsage:   usage.NewIdentityTracker(),
@@ -284,6 +286,16 @@ func (s *Server) currentConfig() config.Config {
 	s.runtimeMu.RLock()
 	defer s.runtimeMu.RUnlock()
 	return cloneConfig(s.cfg)
+}
+
+// newSemanticCache builds the semantic cache from config. Its TTL
+// falls back to the exact cache's TTL when not set independently.
+func newSemanticCache(cfg config.Config) *cache.SemanticCache {
+	ttl := cfg.CacheTTL()
+	if cfg.Cache.Semantic.TTLSeconds > 0 {
+		ttl = time.Duration(cfg.Cache.Semantic.TTLSeconds) * time.Second
+	}
+	return cache.NewSemantic(ttl, cfg.Cache.Semantic.Threshold, cfg.Cache.Semantic.MaxEntries, 0)
 }
 
 func (s *Server) cacheGenerationSnapshot() uint64 {
@@ -589,6 +601,7 @@ func (s *Server) applyConfigLocked(baseCfg config.Config) error {
 	// Cached responses must never outlive the topology that produced them:
 	// any config swap invalidates the exact-match cache wholesale.
 	s.respCache.Invalidate()
+	s.semCache.Invalidate()
 
 	changedHealth := changedDeploymentIDs(oldCfg, cfg)
 	oldProvidersByID := make(map[string]config.ProviderConfig, len(oldCfg.Providers))

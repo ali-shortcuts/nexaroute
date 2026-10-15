@@ -188,6 +188,18 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintln(w, "# HELP nexaroute_cache_bytes Cached response bytes.")
 	fmt.Fprintln(w, "# TYPE nexaroute_cache_bytes gauge")
 	fmt.Fprintf(w, "nexaroute_cache_bytes %d\n", cs.BytesStored)
+	if s.semCache != nil {
+		ss := s.semCache.Stats()
+		fmt.Fprintln(w, "# HELP nexaroute_semantic_cache_hits_total Semantic response cache hits.")
+		fmt.Fprintln(w, "# TYPE nexaroute_semantic_cache_hits_total counter")
+		fmt.Fprintf(w, "nexaroute_semantic_cache_hits_total %d\n", ss.Hits)
+		fmt.Fprintln(w, "# HELP nexaroute_semantic_cache_misses_total Semantic response cache misses.")
+		fmt.Fprintln(w, "# TYPE nexaroute_semantic_cache_misses_total counter")
+		fmt.Fprintf(w, "nexaroute_semantic_cache_misses_total %d\n", ss.Misses)
+		fmt.Fprintln(w, "# HELP nexaroute_semantic_cache_entries Currently stored semantic cache responses.")
+		fmt.Fprintln(w, "# TYPE nexaroute_semantic_cache_entries gauge")
+		fmt.Fprintf(w, "nexaroute_semantic_cache_entries %d\n", ss.Entries)
+	}
 
 	// Cumulative token accounting per deployment and estimated spend.
 	usageSnap := s.usageSnapshotWithPrices(s.currentConfig())
