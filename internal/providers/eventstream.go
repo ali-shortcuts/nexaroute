@@ -26,9 +26,10 @@ import (
 // while preventing a malformed length from requesting gigabytes of memory.
 const maxEventStreamFrameBytes uint32 = 32 << 20
 
-// maxEventStreamHeadersBytes limits decoded-map amplification from a peer-
-// controlled headers_length while remaining well above ordinary Bedrock frames.
-const maxEventStreamHeadersBytes uint32 = 1 << 20
+// maxEventStreamHeadersBytes bounds decoded-map amplification from the
+// peer-controlled headers_length field. AWS EventStream permits headers up
+// to 128 KiB; reject larger frames before allocating or parsing the header map.
+const maxEventStreamHeadersBytes uint32 = 128 << 10
 
 type eventStreamMessage struct {
 	EventType string
