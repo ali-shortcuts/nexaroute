@@ -65,6 +65,10 @@ The master key is excluded by default: keep it as an independent secret (above) 
 
 `nexaroute restore` verifies the whole bundle — format, manifest, and every file's SHA-256 — *before* writing anything, then installs files atomically with mode `0600`. Existing different files are refused without `--force`, and a bundled key that would overwrite a different key warns loudly for the same reason.
 
+Restore failure behavior: files install in a fixed order (config, security store, control-plane state, master key). Before the first write, restore journals the previous bytes of every file it will replace; if any install step fails, it rolls back the files already written (journaled bytes restored, newly created files removed) and the error says so. Rollback is best-effort, not a filesystem transaction: a crash or power loss mid-restore can still leave a mixed installation, atomic rename cannot be made atomic *across* files, and a rollback write can itself fail (disk full, permissions changed mid-restore). When rollback is incomplete the error names every file that could not be restored — treat the installation as mixed, fix those files from a fresh restore or backup, and run `nexaroute doctor` before starting the gateway after any failed restore.
+
+Two related guarantees: `nexaroute backup` refuses an `--out` path that aliases any of its sources (the config, the master key, the security store, or the control-plane state — including symlink and hard-link aliases), because the bundle write atomically replaces the output path. And a backup never silently omits an unreadable source: only a genuinely absent security store, control-plane state file, or key file is skipped (and noted in the manifest); permission or I/O errors fail the backup.
+
 ```bash
 nexaroute restore --bundle "$BACKUP_DIR/nexaroute-backup.tar" --config "$CONFIG"
 nexaroute doctor --config "$CONFIG"   # read-only health + chain verification
