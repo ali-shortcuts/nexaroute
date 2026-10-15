@@ -63,6 +63,7 @@ type AnthUsage struct {
 // OpenAI-compatible chat completion wire types.
 type OpenAIRequest struct {
 	Model               string          `json:"model"`
+	PromptCacheKey      string          `json:"prompt_cache_key,omitempty"`
 	Messages            []OpenAIMessage `json:"messages"`
 	MaxTokens           int             `json:"max_tokens,omitempty"`
 	MaxCompletionTokens int             `json:"max_completion_tokens,omitempty"`

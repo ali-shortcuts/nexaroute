@@ -12,6 +12,7 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/core"
 	"github.com/ali-shortcuts/nexaroute/internal/events"
 	"github.com/ali-shortcuts/nexaroute/internal/feature"
+	"github.com/ali-shortcuts/nexaroute/internal/protocol/canonical"
 	"github.com/ali-shortcuts/nexaroute/internal/providers"
 	"github.com/ali-shortcuts/nexaroute/internal/router"
 	"github.com/ali-shortcuts/nexaroute/internal/translate"
@@ -148,6 +149,12 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 	// Phase F/G: Check cache BEFORE decision plane — on HIT, decision provider calls must be 0
 	cacheKey, cacheable := s.cacheLookupFor(r, r.URL.Path, raw, in.Stream, in.Temperature, in.TopP, candidates, cacheGeneration)
 	if s.cacheServe(w, r, cacheKey, cacheable) {
+		return
+	}
+	// Semantic cache (M5-4, separately opt-in): only reached on an
+	// exact miss; any failure inside prepare bypasses silently.
+	semCtx := s.semanticPrepare(r, r.URL.Path, raw, in.Stream, in.Temperature, in.TopP, len(in.Tools) > 0, in.Model, req.RequireNoTraining, candidates)
+	if s.semanticServe(w, r, semCtx) {
 		return
 	}
 	// Phase D/E/G: Decision plane — rank within eligible set only, fail-open, chain-aware
@@ -372,7 +379,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Gateway-Upstream-Model", c.Deployment.Model)
 		if in.Stream {
 			deploymentID := c.Deployment.ID
-			resp.Body = observeFirstByte(resp.Body, start, func(d time.Duration) { s.hm.RecordTTFT(deploymentID, d) })
+			resp.Body = observeFirstByte(resp.Body, start, func(d time.Duration) { s.hm.RecordTTFT(deploymentID, d); noteSpanTTFT(r.Context(), d) })
 		}
 		switch {
 		case kind != "":
@@ -380,10 +387,10 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 			// the IR and re-encoded for the OpenAI client.
 			if in.Stream {
 				e = s.canonicalStreamPump(w, resp, kind, "openai_chat", in.Model, r.Header.Get("x-request-id"), toolDefs,
-					func(input, output int) { s.recordUsage(r, c.Deployment.ID, int64(input), int64(output)) })
+					func(u canonical.Usage) { s.recordUsageCanonical(r, c.Deployment.ID, kind, u) })
 			} else {
 				e = s.handleCanonicalResponse(w, resp, kind, "openai_chat", in.Model, r.Header.Get("x-request-id"), false, toolDefs,
-					func(input, output int) { s.recordUsage(r, c.Deployment.ID, int64(input), int64(output)) })
+					func(u canonical.Usage) { s.recordUsageCanonical(r, c.Deployment.ID, kind, u) })
 			}
 		case c.Deployment.ProviderType == "openai_compatible":
 			if in.Stream {
@@ -391,7 +398,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 					s.recordUsage(r, c.Deployment.ID, int64(prompt), int64(completion))
 				})
 			} else {
-				e = s.proxyOpenAINativeJSON(w, r, resp, c.Deployment.ID, cacheKey, cacheGeneration, cacheable)
+				e = s.proxyOpenAINativeJSON(w, r, resp, c.Deployment.ID, cacheKey, cacheGeneration, cacheable, semCtx)
 			}
 		case in.Stream:
 			e = streamAnthropicToOpenAIWithUsage(w, resp, in.Model, nm, func(prompt, completion int) {
@@ -406,6 +413,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 				translated := translate.AnthropicResponseToOpenAI(an, in.Model, nm)
 				if b, merr := json.Marshal(translated); merr == nil {
 					s.cacheStoreResponse(cacheKey, cacheGeneration, cacheable, c.Deployment.ID, 200, "application/json", b)
+					s.semanticStore(semCtx, cacheGeneration, c.Deployment.ID, 200, b)
 				}
 				writeJSON(w, 200, translated)
 			}
