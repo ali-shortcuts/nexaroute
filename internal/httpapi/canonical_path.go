@@ -211,9 +211,17 @@ func (s *Server) canonicalStreamPump(
 			evs, bedrockTerminal, err = canonical.DecodeBedrockStreamChunk(data)
 			terminal = terminal || bedrockTerminal
 		case "openai_responses":
-			evs, terminal, err = canonical.DecodeResponsesStreamEvent(name, data)
+			// Terminal LATCHES, exactly as for Bedrock: a chunk decoded
+			// after the terminal one (e.g. a trailing usage-only chunk)
+			// reports its own terminal=false and must not un-end the
+			// stream.
+			var chunkTerminal bool
+			evs, chunkTerminal, err = canonical.DecodeResponsesStreamEvent(name, data)
+			terminal = terminal || chunkTerminal
 		default:
-			evs, terminal, err = canonical.DecodeOpenAIStreamChunk(data)
+			var chunkTerminal bool
+			evs, chunkTerminal, err = canonical.DecodeOpenAIStreamChunk(data)
+			terminal = terminal || chunkTerminal
 		}
 		if err != nil {
 			// No client-visible frame has been emitted yet, so preserve the
