@@ -105,9 +105,18 @@ func sanitizeMap(payload map[string]any, contract Contract, dialect DialectProfi
 		}
 		// Gemini token-budget alias: a Gemini-shaped payload that still
 		// carries an OpenAI-style top-level budget moves it into
-		// generationConfig.maxOutputTokens (the only Gemini knob).
+		// generationConfig.maxOutputTokens (the only Gemini knob) —
+		// unless a token capability is verified Unsupported, mirroring
+		// sanitizeGeminiGenerationConfig: then the key is dropped and
+		// recorded as removed, never re-added under the Gemini name.
+		tokenUnsupported := caps.Get(CapMaxCompletionTokens) == Unsupported || caps.Get(CapMaxTokens) == Unsupported
 		for _, topKey := range []string{"max_completion_tokens", "max_tokens", "max_output_tokens"} {
 			if v, ok := payload[topKey]; ok {
+				if tokenUnsupported {
+					delete(payload, topKey)
+					res.Removed = append(res.Removed, topKey)
+					continue
+				}
 				if gc, ok := generationConfigMap(payload, true); ok {
 					if _, exists := gc["maxOutputTokens"]; !exists {
 						gc["maxOutputTokens"] = v

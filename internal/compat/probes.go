@@ -1041,7 +1041,6 @@ func RunCapabilitySuiteGemini(ctx context.Context, t ProbeTransport, deploymentI
 		Deployment: deploymentID, Model: model, Dialect: "gemini",
 		Level: "capability", StartedAt: time.Now(),
 	}
-	_ = model
 	type probeSpec struct {
 		capability string
 		payload    []byte
