@@ -3,12 +3,14 @@
 Live cost data exists today: the admin snapshot carries the
 usage snapshot (total estimated cost + per-deployment totals),
 and the identities endpoint carries per-identity token totals
-with a CSV form. Since PR #329 (this PR's base), usage is
-priced WHEN RECORDED under the price-book version active at
-that time, falling back to model-config prices; records with
-no applicable price are labelled unpriced, and legacy records
-may still be estimated from model-config prices. History is
-never repriced when prices change. This unit adds the Cost
+with a CSV form. Since PR #329 (this PR's base), usage
+with a recorded cost is priced WHEN RECORDED under the
+price-book version active at that time; such recorded costs
+are NOT repriced when price-book versions or configured
+prices change. Records with no applicable price are labelled
+unpriced, and legacy/unpriced records are estimated from
+model-config prices — those fallback estimates MAY change
+when the fallback rates change. This unit adds the Cost
 page:
 
 - Totals strip (estimated cost, requests, tokens in/out).
