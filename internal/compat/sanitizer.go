@@ -48,6 +48,13 @@ const MaxRepairAttemptsDefault = 1
 
 // sanitizeMap applies capability-driven removals/renames to a payload map.
 // required fields are never removed. Dialect aliases drive renames.
+//
+// Gemini-native payloads carry sampling/structural knobs inside
+// `generationConfig` (temperature, topP/topK, maxOutputTokens,
+// stopSequences, responseMimeType/responseSchema). When the payload is
+// Gemini-shaped, the same capability-driven removals apply inside that
+// object with identical conservative semantics; non-Gemini payloads follow
+// the original top-level path byte-identically.
 func sanitizeMap(payload map[string]any, contract Contract, dialect DialectProfile, req RequirementProfile) (SanitizeResult, bool) {
 	res := SanitizeResult{Renamed: map[string]string{}}
 	caps := contract.Capabilities
@@ -92,10 +99,124 @@ func sanitizeMap(payload map[string]any, contract Contract, dialect DialectProfi
 			delete(payload, "max_completion_tokens")
 		}
 	}
+	if isGeminiPayload(payload) {
+		if changed := sanitizeGeminiGenerationConfig(payload, contract, req, &res); changed {
+			// fall through to changed check below
+		}
+		// Gemini token-budget alias: a Gemini-shaped payload that still
+		// carries an OpenAI-style top-level budget moves it into
+		// generationConfig.maxOutputTokens (the only Gemini knob).
+		for _, topKey := range []string{"max_completion_tokens", "max_tokens", "max_output_tokens"} {
+			if v, ok := payload[topKey]; ok {
+				if gc, ok := generationConfigMap(payload, true); ok {
+					if _, exists := gc["maxOutputTokens"]; !exists {
+						gc["maxOutputTokens"] = v
+						res.Renamed[topKey] = "generationConfig.maxOutputTokens"
+					}
+				}
+				delete(payload, topKey)
+				if _, already := res.Renamed[topKey]; !already {
+					res.Renamed[topKey] = "generationConfig.maxOutputTokens"
+				}
+			}
+		}
+	}
 	if len(res.Removed) == 0 && len(res.Renamed) == 0 {
 		return res, false
 	}
 	return res, true
+}
+
+// isGeminiPayload reports whether a decoded request body is Gemini-native:
+// a GenerateContent shape with contents and/or generationConfig. OpenAI and
+// Anthropic payloads use messages/input and never carry generationConfig,
+// so this gate keeps non-Gemini behavior byte-identical.
+func isGeminiPayload(payload map[string]any) bool {
+	if payload == nil {
+		return false
+	}
+	if gc, ok := payload["generationConfig"]; ok {
+		if _, isMap := gc.(map[string]any); isMap {
+			return true
+		}
+	}
+	if contents, ok := payload["contents"]; ok {
+		if _, isSlice := contents.([]any); isSlice {
+			return true
+		}
+	}
+	return false
+}
+
+// generationConfigMap returns the mutable generationConfig object, creating
+// it when create is true.
+func generationConfigMap(payload map[string]any, create bool) (map[string]any, bool) {
+	if raw, ok := payload["generationConfig"]; ok {
+		if m, isMap := raw.(map[string]any); isMap {
+			return m, true
+		}
+		return nil, false
+	}
+	if !create {
+		return nil, false
+	}
+	m := map[string]any{}
+	payload["generationConfig"] = m
+	return m, true
+}
+
+// sanitizeGeminiGenerationConfig removes verified-unsupported optional knobs
+// from generationConfig. Semantics-critical Gemini fields (contents, tools,
+// toolConfig when tool use is required, systemInstruction) are never dropped.
+func sanitizeGeminiGenerationConfig(payload map[string]any, contract Contract, req RequirementProfile, res *SanitizeResult) bool {
+	gc, ok := generationConfigMap(payload, false)
+	if !ok {
+		return false
+	}
+	changed := false
+	remove := func(key, capability string) {
+		if _, present := gc[key]; !present {
+			return
+		}
+		if contract.Capabilities.Get(capability) != Unsupported {
+			return
+		}
+		delete(gc, key)
+		res.Removed = append(res.Removed, "generationConfig."+key)
+		changed = true
+	}
+	remove("temperature", CapTemperature)
+	remove("topP", CapTopP)
+	remove("topK", CapTopP)
+	// Token budget: either token capability being unsupported means the
+	// single Gemini knob cannot be sent.
+	if _, present := gc["maxOutputTokens"]; present {
+		if contract.Capabilities.Get(CapMaxCompletionTokens) == Unsupported || contract.Capabilities.Get(CapMaxTokens) == Unsupported {
+			delete(gc, "maxOutputTokens")
+			res.Removed = append(res.Removed, "generationConfig.maxOutputTokens")
+			changed = true
+		}
+	}
+	if !req.Stop {
+		remove("stopSequences", CapStop)
+	}
+	// Structured output: dropping the MIME type alone is enough to fall back
+	// to text; the schema is dropped with it.
+	if _, hasMIME := gc["responseMimeType"]; hasMIME {
+		if contract.Capabilities.Get(CapStructuredOutput) == Unsupported || contract.Capabilities.Get(CapJSONObject) == Unsupported {
+			delete(gc, "responseMimeType")
+			res.Removed = append(res.Removed, "generationConfig.responseMimeType")
+			changed = true
+		}
+	}
+	if _, hasSchema := gc["responseSchema"]; hasSchema {
+		if contract.Capabilities.Get(CapStructuredOutput) == Unsupported || contract.Capabilities.Get(CapJSONSchema) == Unsupported {
+			delete(gc, "responseSchema")
+			res.Removed = append(res.Removed, "generationConfig.responseSchema")
+			changed = true
+		}
+	}
+	return changed
 }
 
 // Sanitize proactively adapts a provider payload before dispatch. It is a
@@ -120,10 +241,23 @@ func Sanitize(payload []byte, contract Contract, dialect DialectProfile, req Req
 
 // planRepair computes the deterministic repair rules for a classified
 // capability failure. It returns false when no safe repair exists.
+//
+// Gemini-native payloads are repaired inside `generationConfig` (and the
+// Gemini equivalents of repaired top-level fields) with the same audit and
+// event surfacing as existing repairs. Non-Gemini payloads follow the
+// original top-level path unchanged.
 func planRepair(cls Classified, payload map[string]any, dialect DialectProfile, req RequirementProfile) (RepairPlan, bool) {
 	plan := RepairPlan{}
 	if !cls.CapabilityFailure {
 		return plan, false
+	}
+	if isGeminiPayload(payload) {
+		if geminiPlan, ok := planGeminiRepair(cls, payload, req); ok {
+			return geminiPlan, true
+		}
+		// Fall through to the shared top-level repairs so a Gemini-shaped
+		// payload that still carries OpenAI-style top-level keys is repaired
+		// identically to today.
 	}
 	switch cls.Class {
 	case ClassUnsupportedParameter:
@@ -302,6 +436,239 @@ func planRepair(cls Classified, payload map[string]any, dialect DialectProfile, 
 		return plan, false
 	default:
 		return plan, false
+	}
+}
+
+// planGeminiRepair repairs Gemini-native payloads. It mirrors the existing
+// repair operations: sampling knobs and structural knobs inside
+// generationConfig, plus the Gemini equivalents of repaired top-level fields
+// (toolConfig for tool_choice, stopSequences for stop, maxOutputTokens for
+// token budgets, responseMimeType/responseSchema for response_format).
+// Semantics-critical fields (contents, tools, systemInstruction, toolConfig
+// when tool use is required, vision parts) are never stripped.
+func planGeminiRepair(cls Classified, payload map[string]any, req RequirementProfile) (RepairPlan, bool) {
+	plan := RepairPlan{}
+	if cls.Class != ClassUnsupportedParameter {
+		return plan, false
+	}
+	paramLower := lowerParam(cls.Parameter)
+	cap := cls.Capability
+	if cap == "" {
+		cap = capabilityMapping[paramLower]
+	}
+	gc, hasGC := generationConfigMap(payload, false)
+	dropGC := func(key, capability, description string) (RepairPlan, bool) {
+		if !hasGC {
+			return plan, false
+		}
+		if _, ok := gc[key]; !ok {
+			return plan, false
+		}
+		delete(gc, key)
+		plan.Rules = append(plan.Rules, RepairRule{
+			Name: "drop:generationConfig." + key, Capability: capability,
+			Description: description,
+		})
+		return plan, true
+	}
+	switch paramLower {
+	case "temperature":
+		if p, ok := dropGC("temperature", CapTemperature, "temperature removed (sampling default applies)"); ok {
+			return p, true
+		}
+	case "top_p", "topp":
+		if p, ok := dropGC("topP", CapTopP, "topP removed (sampling default applies)"); ok {
+			return p, true
+		}
+	case "top_k", "topk":
+		if p, ok := dropGC("topK", CapTopP, "topK removed (sampling default applies)"); ok {
+			return p, true
+		}
+	case "max_completion_tokens", "max_output_tokens", "max_tokens", "maxoutputtokens":
+		// Gemini has a single token knob; there is no alias to rename to,
+		// so the bounded repair drops it and records the capability fact.
+		if hasGC {
+			if _, ok := gc["maxOutputTokens"]; ok {
+				delete(gc, "maxOutputTokens")
+				plan.Rules = append(plan.Rules, RepairRule{
+					Name: "drop:generationConfig.maxOutputTokens", Capability: CapMaxCompletionTokens,
+					Description: "maxOutputTokens removed (token budget not enforced)",
+				})
+				return plan, true
+			}
+		}
+	case "stop", "stop_sequences", "stopsequences":
+		if p, ok := dropGC("stopSequences", CapStop, "stopSequences removed"); ok {
+			return p, true
+		}
+	case "response_format", "responsemimetype", "json_schema", "response_schema", "responseschema", "json_object", "json":
+		if hasGC {
+			removed := false
+			for _, key := range []string{"responseMimeType", "responseSchema"} {
+				if _, ok := gc[key]; ok {
+					delete(gc, key)
+					removed = true
+				}
+			}
+			if removed {
+				plan.Rules = append(plan.Rules, RepairRule{
+					Name: "drop:generationConfig.responseMimeType", Capability: CapStructuredOutput,
+					Description: "responseMimeType/responseSchema removed (structured output not enforced)",
+				})
+				return plan, true
+			}
+		}
+	case "tool_choice", "toolconfig", "functioncallingconfig":
+		if req.NeedsTool {
+			return plan, false
+		}
+		if _, ok := payload["toolConfig"]; ok {
+			delete(payload, "toolConfig")
+			plan.Rules = append(plan.Rules, RepairRule{
+				Name: "drop:toolConfig", Capability: CapToolChoiceAuto,
+				Description: "toolConfig removed (model decides tool usage)",
+			})
+			return plan, true
+		}
+	case "seed", "logprobs", "logit_bias", "user", "n", "frequency_penalty", "presence_penalty", "top_logprobs":
+		if _, ok := payload[paramLower]; ok {
+			// Top-level OpenAI-style key lingering in a Gemini payload.
+			delete(payload, paramLower)
+			plan.Rules = append(plan.Rules, RepairRule{
+				Name:        "drop:" + paramLower,
+				Description: paramLower + " removed",
+			})
+			return plan, true
+		}
+		// Canonical snake_case variants that may appear top-level.
+		if _, ok := payload[cls.Parameter]; ok {
+			delete(payload, cls.Parameter)
+			plan.Rules = append(plan.Rules, RepairRule{
+				Name:        "drop:" + cls.Parameter,
+				Description: cls.Parameter + " removed",
+			})
+			return plan, true
+		}
+		return plan, false
+	case "candidatecount", "candidate_count":
+		if p, ok := dropGC("candidateCount", cap, "candidateCount removed"); ok {
+			return p, true
+		}
+	default:
+		// Generic Gemini field: try generationConfig first (case-insensitive),
+		// then Gemini top-level optionals. Never strip semantics-critical
+		// fields.
+		if hasGC {
+			if actual, ok := geminiGCKeyForParam(paramLower); ok {
+				if _, exists := gc[actual]; exists {
+					switch actual {
+					case "candidateCount":
+						delete(gc, actual)
+						plan.Rules = append(plan.Rules, RepairRule{
+							Name:        "drop:generationConfig." + actual,
+							Description: actual + " removed (unknown field rejection)",
+						})
+						return plan, true
+					}
+				}
+			}
+		}
+		if paramLower != "" && !excludeFromParameter[paramLower] {
+			switch paramLower {
+			case "tools", "contents", "model", "stream", "systeminstruction", "system":
+				return plan, false
+			case "toolconfig":
+				if req.NeedsTool {
+					return plan, false
+				}
+			}
+			if _, ok := payload[cls.Parameter]; ok {
+				switch cls.Parameter {
+				case "tools", "contents", "model", "stream":
+					return plan, false
+				}
+				delete(payload, cls.Parameter)
+				plan.Rules = append(plan.Rules, RepairRule{
+					Name:        "drop:" + cls.Parameter,
+					Description: cls.Parameter + " removed (unknown field rejection)",
+				})
+				return plan, true
+			}
+			if _, ok := payload[paramLower]; ok {
+				delete(payload, paramLower)
+				plan.Rules = append(plan.Rules, RepairRule{
+					Name:        "drop:" + paramLower,
+					Description: paramLower + " removed (unknown field rejection)",
+				})
+				return plan, true
+			}
+			// Gemini top-level camelCase equivalents.
+			if actual, ok := geminiTopKeyForParam(paramLower); ok {
+				if _, exists := payload[actual]; exists {
+					delete(payload, actual)
+					plan.Rules = append(plan.Rules, RepairRule{
+						Name:        "drop:" + actual,
+						Description: actual + " removed (unknown field rejection)",
+					})
+					return plan, true
+				}
+			}
+		}
+		return plan, false
+	}
+	return plan, false
+}
+
+// lowerParam normalizes a classifier parameter for case-insensitive lookup.
+func lowerParam(p string) string {
+	lowered := ""
+	for _, r := range p {
+		if r >= 'A' && r <= 'Z' {
+			lowered += string(r + ('a' - 'A'))
+		} else {
+			lowered += string(r)
+		}
+	}
+	return lowered
+}
+
+// geminiGCKeyForParam maps a lowercased parameter onto its generationConfig
+// key for generic unknown-field repairs.
+func geminiGCKeyForParam(paramLower string) (string, bool) {
+	switch paramLower {
+	case "temperature":
+		return "temperature", true
+	case "top_p", "topp":
+		return "topP", true
+	case "top_k", "topk":
+		return "topK", true
+	case "max_tokens", "max_completion_tokens", "max_output_tokens", "maxoutputtokens":
+		return "maxOutputTokens", true
+	case "stop", "stop_sequences", "stopsequences":
+		return "stopSequences", true
+	case "response_format", "responsemimetype":
+		return "responseMimeType", true
+	case "json_schema", "response_schema", "responseschema":
+		return "responseSchema", true
+	case "candidatecount", "candidate_count":
+		return "candidateCount", true
+	default:
+		return "", false
+	}
+}
+
+// geminiTopKeyForParam maps a lowercased parameter onto a Gemini top-level
+// key for generic unknown-field repairs.
+func geminiTopKeyForParam(paramLower string) (string, bool) {
+	switch paramLower {
+	case "toolconfig", "tool_choice", "functioncallingconfig":
+		return "toolConfig", true
+	case "safetysettings", "safety_settings":
+		return "safetySettings", true
+	case "systeminstruction", "system_message", "system":
+		return "systemInstruction", true
+	default:
+		return "", false
 	}
 }
 

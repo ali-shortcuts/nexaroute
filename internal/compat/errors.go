@@ -62,17 +62,24 @@ type Classified struct {
 }
 
 // capabilityMapping maps offending parameter names onto contract
-// capabilities. Keys are lowercase.
+// capabilities. Keys are lowercase. Gemini-native camelCase keys are stored
+// in their lowercased form (e.g. topP -> "topp") because the classifier
+// lowercases extracted parameters; dotted generationConfig prefixes are
+// stripped in parameterFromBody before lookup.
 var capabilityMapping = map[string]string{
 	"temperature":           CapTemperature,
 	"top_p":                 CapTopP,
+	"topp":                  CapTopP,
 	"top_k":                 CapTopP,
+	"topk":                  CapTopP,
 	"stop":                  CapStop,
 	"stop_sequences":        CapStop,
+	"stopsequences":         CapStop,
 	"seed":                  CapSeed,
 	"max_tokens":            CapMaxTokens,
 	"max_completion_tokens": CapMaxCompletionTokens,
 	"max_output_tokens":     CapMaxCompletionTokens,
+	"maxoutputtokens":       CapMaxCompletionTokens,
 	"reasoning":             CapReasoning,
 	"reasoning_effort":      CapReasoningEffort,
 	"reasoning_content":     CapReasoning,
@@ -82,20 +89,27 @@ var capabilityMapping = map[string]string{
 	"include_usage":         CapStreaming,
 	"parallel_tool_calls":   CapParallelToolCalls,
 	"tool_choice":           CapToolChoiceAuto,
+	"toolconfig":            CapToolChoiceAuto,
+	"functioncallingconfig": CapToolChoiceAuto,
 	"tool":                  CapTools,
 	"tools":                 CapTools,
 	"functions":             CapTools,
 	"function_call":         CapTools,
+	"functioncall":          CapTools,
 	"response_format":       CapStructuredOutput,
+	"responsemimetype":      CapStructuredOutput,
 	"json_schema":           CapJSONSchema,
 	"response_schema":       CapJSONSchema,
+	"responseschema":        CapJSONSchema,
 	"json":                  CapJSONObject,
 	"image_url":             CapVision,
 	"image":                 CapVision,
 	"images":                CapVision,
 	"inline_data":           CapVision,
+	"inlinedata":            CapVision,
 	"system":                CapSystemMessage,
 	"system_message":        CapSystemMessage,
+	"systeminstruction":     CapSystemMessage,
 	"logit_bias":            "",
 	"logprobs":              "",
 	"top_logprobs":          "",
@@ -112,7 +126,7 @@ var parameterPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)['"]?([a-z_][a-z0-9_.]{1,40})['"]? (?:is|are) not (?:supported|allowed|recognized|available)`),
 	regexp.MustCompile(`(?i)does not (?:support|allow|recognize)(?: the)? ['"]?([a-z_][a-z0-9_.]{1,40})['"]?`),
 	regexp.MustCompile(`(?i)(?:use|using|set|setting|passing|supplying)['" ]+([a-z_][a-z0-9_.]{1,40})['"]? (?:is not|is currently|aren't) `),
-	regexp.MustCompile(`(?i)(temperature|top_p|top_k|stop|seed|max_tokens|max_completion_tokens|max_output_tokens|reasoning_effort|reasoning|thinking|stream_options|include_usage|parallel_tool_calls|tool_choice|tools|functions|function_call|response_format|json_schema|logprobs|logit_bias|frequency_penalty|presence_penalty|user|n)\b[^.]{0,80}(?:is not|are not|cannot|can't|not supported|unsupported|not allowed|unknown|unexpected|unrecognized|invalid)`),
+	regexp.MustCompile(`(?i)(temperature|top_p|topp|top_k|topk|stop|stopsequences|stop_sequences|seed|max_tokens|max_completion_tokens|max_output_tokens|maxoutputtokens|reasoning_effort|reasoning|thinking|stream_options|include_usage|parallel_tool_calls|tool_choice|toolconfig|functioncallingconfig|tools|functions|function_call|response_format|responsemimetype|responseschema|json_schema|logprobs|logit_bias|frequency_penalty|presence_penalty|user|n)\b[^.]{0,80}(?:is not|are not|cannot|can't|not supported|unsupported|not allowed|unknown|unexpected|unrecognized|invalid)`),
 	regexp.MustCompile(`(?i)(?:not supported|unsupported)[^.]{0,40}?['"]?([a-z_][a-z0-9_.]{1,40})['"]?`),
 }
 

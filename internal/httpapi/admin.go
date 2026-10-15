@@ -835,6 +835,8 @@ func (s *Server) adminProviderTest(w http.ResponseWriter, r *http.Request) {
 					report = compat.RunCapabilitySuiteAnthropic(ctx, adapterTransport{a: a}, in.Provider.ID, model)
 				case "openai_responses":
 					report = compat.RunCapabilitySuiteResponses(ctx, adapterTransport{a: a}, in.Provider.ID, model)
+				case "gemini", "vertex":
+					report = compat.RunCapabilitySuiteGemini(ctx, adapterTransport{a: a}, in.Provider.ID, model)
 				default:
 					report = compat.RunCapabilitySuite(ctx, adapterTransport{a: a}, in.Provider.ID, model, in.Provider.Dialect)
 				}
