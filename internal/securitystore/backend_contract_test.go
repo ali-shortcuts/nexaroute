@@ -137,11 +137,10 @@ func TestOpenBackendSelectionFailsClosed(t *testing.T) {
 	if _, err := OpenBackend(BackendBBolt, "redis://127.0.0.1:6379", contractStorePath(t, "b.db"), 1000, 365); err == nil {
 		t.Fatal("bbolt with a URL must fail")
 	}
-	// Redis is recognized but its adapter lands in the M4-2 follow-up:
-	// the factory must refuse, never substitute another store.
-	if _, err := OpenBackend(BackendRedis, "redis://127.0.0.1:6379", contractStorePath(t, "c.db"), 1000, 365); err == nil ||
-		!strings.Contains(err.Error(), "not available in this build") {
-		t.Fatalf("redis: err=%v, want fail-closed unavailability", err)
+	// Redis (M4-2b) likewise attempts a real connection and fails
+	// closed when the service is unreachable.
+	if _, err := OpenBackend(BackendRedis, "redis://127.0.0.1:1", contractStorePath(t, "c.db"), 1000, 365); err == nil {
+		t.Fatal("redis with an unreachable service must fail")
 	}
 	if _, err := OpenBackend(BackendRedis, "", contractStorePath(t, "c.db"), 1000, 365); err == nil {
 		t.Fatal("redis without URL must fail")

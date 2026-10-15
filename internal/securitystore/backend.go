@@ -79,10 +79,11 @@ func OpenBackend(backend, url, path string, maxAuditItems, retentionDays int) (B
 		}
 		return OpenPostgres(context.Background(), resolved, maxAuditItems, retentionDays)
 	case BackendRedis:
-		if strings.TrimSpace(url) == "" {
-			return nil, fmt.Errorf("securitystore: security_store_url is required for the %s backend", backend)
+		resolved, err := resolveStoreURL(url, backend)
+		if err != nil {
+			return nil, err
 		}
-		return nil, fmt.Errorf("securitystore: backend %q is not available in this build (the Redis adapter lands in the M4-2 follow-up); refusing to substitute a different store", backend)
+		return OpenRedis(context.Background(), resolved, maxAuditItems, retentionDays)
 	default:
 		return nil, fmt.Errorf("securitystore: unknown security_store_backend %q", backend)
 	}
