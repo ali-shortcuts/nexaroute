@@ -4,11 +4,27 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/ali-shortcuts/nexaroute/internal/health"
 	"github.com/ali-shortcuts/nexaroute/internal/router"
 )
+
+// renderPrometheusHistogram writes one histogram series set in the
+// Prometheus text format: cumulative buckets with `le` labels (bounds
+// in milliseconds), then _sum and _count.
+func renderPrometheusHistogram(w http.ResponseWriter, name, deployment, provider string, h health.Histogram) {
+	cumulative := h.Cumulative()
+	for i, bound := range health.LatencyHistogramBoundsMS {
+		fmt.Fprintf(w, "%s_bucket{deployment=%q,provider=%q,le=%q} %d\n",
+			name, deployment, provider, strconv.FormatFloat(bound, 'f', -1, 64), cumulative[i])
+	}
+	fmt.Fprintf(w, "%s_bucket{deployment=%q,provider=%q,le=\"+Inf\"} %d\n",
+		name, deployment, provider, cumulative[len(cumulative)-1])
+	fmt.Fprintf(w, "%s_sum{deployment=%q,provider=%q} %.3f\n", name, deployment, provider, h.SumMS)
+	fmt.Fprintf(w, "%s_count{deployment=%q,provider=%q} %d\n", name, deployment, provider, h.Count)
+}
 
 func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -82,6 +98,21 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "nexaroute_deployment_ewma_failure_rate{deployment=%q,provider=%q} %.6f\n", id, provider, h.EWMAFailureRate)
 		fmt.Fprintf(w, "nexaroute_deployment_successes_total{deployment=%q,provider=%q} %d\n", id, provider, h.Successes)
 		fmt.Fprintf(w, "nexaroute_deployment_failures_total{deployment=%q,provider=%q} %d\n", id, provider, h.Failures)
+	}
+
+	fmt.Fprintln(w, "# HELP nexaroute_deployment_request_latency_ms Observed per-attempt latency distribution by deployment (same samples as the EWMA latency gauge).")
+	fmt.Fprintln(w, "# TYPE nexaroute_deployment_request_latency_ms histogram")
+	fmt.Fprintln(w, "# HELP nexaroute_deployment_ttft_ms Streaming time-to-first-byte distribution by deployment (same samples as the EWMA TTFT gauge).")
+	fmt.Fprintln(w, "# TYPE nexaroute_deployment_ttft_ms histogram")
+	for _, d := range ds {
+		latency, ttft, ok := s.hm.Histograms(d.ID)
+		if !ok {
+			continue
+		}
+		id := sanitizeMetricLabel(d.ID)
+		provider := sanitizeMetricLabel(d.ProviderID)
+		renderPrometheusHistogram(w, "nexaroute_deployment_request_latency_ms", id, provider, latency)
+		renderPrometheusHistogram(w, "nexaroute_deployment_ttft_ms", id, provider, ttft)
 	}
 
 	fmt.Fprintln(w, "# HELP nexaroute_runtime_events_total Cumulative routing/probe/stream events.")
@@ -188,6 +219,34 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintln(w, "# HELP nexaroute_cache_bytes Cached response bytes.")
 	fmt.Fprintln(w, "# TYPE nexaroute_cache_bytes gauge")
 	fmt.Fprintf(w, "nexaroute_cache_bytes %d\n", cs.BytesStored)
+	if s.semCache != nil {
+		ss := s.semCache.Stats()
+		fmt.Fprintln(w, "# HELP nexaroute_semantic_cache_hits_total Semantic response cache hits.")
+		fmt.Fprintln(w, "# TYPE nexaroute_semantic_cache_hits_total counter")
+		fmt.Fprintf(w, "nexaroute_semantic_cache_hits_total %d\n", ss.Hits)
+		fmt.Fprintln(w, "# HELP nexaroute_semantic_cache_misses_total Semantic response cache misses.")
+		fmt.Fprintln(w, "# TYPE nexaroute_semantic_cache_misses_total counter")
+		fmt.Fprintf(w, "nexaroute_semantic_cache_misses_total %d\n", ss.Misses)
+		fmt.Fprintln(w, "# HELP nexaroute_semantic_cache_entries Currently stored semantic cache responses.")
+		fmt.Fprintln(w, "# TYPE nexaroute_semantic_cache_entries gauge")
+		fmt.Fprintf(w, "nexaroute_semantic_cache_entries %d\n", ss.Entries)
+	}
+
+	if len(s.mcpStats) > 0 {
+		fmt.Fprintln(w, "# HELP nexaroute_mcp_calls_total MCP tool calls brokered by the gateway, by server and result.")
+		fmt.Fprintln(w, "# TYPE nexaroute_mcp_calls_total counter")
+		s.mcpStatsMu.Lock()
+		keys := make([]string, 0, len(s.mcpStats))
+		for k := range s.mcpStats {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			server, result, _ := strings.Cut(k, "|")
+			fmt.Fprintf(w, "nexaroute_mcp_calls_total{server=%q,result=%q} %d\n", sanitizeMetricLabel(server), result, s.mcpStats[k])
+		}
+		s.mcpStatsMu.Unlock()
+	}
 
 	// Cumulative token accounting per deployment and estimated spend.
 	usageSnap := s.usageSnapshotWithPrices(s.currentConfig())
