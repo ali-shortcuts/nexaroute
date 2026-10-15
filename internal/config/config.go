@@ -572,9 +572,9 @@ type ProviderConfig struct {
 	APIVersion string `json:"api_version,omitempty"`
 	// Vertex AI: GCP project (required for type vertex) and location
 	// (default us-central1).
-	VertexProject  string `json:"vertex_project,omitempty"`
-	VertexLocation string `json:"vertex_location,omitempty"`
-	ChatPath       string `json:"chat_path,omitempty"`
+	VertexProject            string        `json:"vertex_project,omitempty"`
+	VertexLocation           string        `json:"vertex_location,omitempty"`
+	ChatPath                 string        `json:"chat_path,omitempty"`
 	MessagesPath             string        `json:"messages_path,omitempty"`
 	ModelsPath               string        `json:"models_path,omitempty"`
 	CountTokensPath          string        `json:"count_tokens_path,omitempty"`
