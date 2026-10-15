@@ -1,4 +1,5 @@
 # Unreleased
+- Command palette, keyboard navigation and undo toasts (M2-10): Ctrl/⌘+K opens a command palette over all pages (derived from the page registry) plus quick actions; Alt+1…N jumps between pages and ? opens a shortcuts dialog; destructive actions (revoke key, delete route) commit through a 5-second toast with an Undo button, so undoing leaves the server untouched.
 
 ## Features
 
