@@ -126,19 +126,23 @@ func (s *PostgresStore) withWriterTx(ctx context.Context, fn func(tx *sql.Tx) er
 
 func loadChainTx(ctx context.Context, tx *sql.Tx) (chainState, error) {
 	var st chainState
-	rows, err := tx.QueryContext(ctx, `SELECT record FROM `+securityAuditTable+` ORDER BY seq ASC`)
+	rows, err := tx.QueryContext(ctx, `SELECT seq, record FROM `+securityAuditTable+` ORDER BY seq ASC`)
 	if err != nil {
 		return st, fmt.Errorf("securitystore: load audit records: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
+		var seq int64
 		var raw []byte
-		if err := rows.Scan(&raw); err != nil {
+		if err := rows.Scan(&seq, &raw); err != nil {
 			return st, fmt.Errorf("securitystore: scan audit record: %w", err)
 		}
 		var event AuditEvent
 		if err := json.Unmarshal(raw, &event); err != nil {
 			return st, errors.New("security store contains a malformed audit record")
+		}
+		if seq < 0 || event.Seq != uint64(seq) {
+			return st, errors.New("security store contains an audit record whose sequence does not match its row")
 		}
 		st.Records = append(st.Records, event)
 	}
@@ -180,6 +184,16 @@ func parseChainRefMeta(raw []byte) (chainRef, refState) {
 	}
 	var ref chainRef
 	if err := json.Unmarshal(raw, &ref); err != nil {
+		return chainRef{}, refMalformed
+	}
+	// A stored ref that parses but is zero-valued (null, {}, or
+	// {"seq":0,"hash":""}) is malformed, exactly as the bbolt
+	// backend classifies it: no legitimate write path ever stores a
+	// zero ref (heads/anchors always carry Seq>=1 and a real hash).
+	// Accepting it let a zeroed metadata row pass chain
+	// verification as an "emptied" log and fork the audit chain on
+	// the next append on the Postgres/Redis backends.
+	if ref.Hash == "" || ref.Seq == 0 {
 		return chainRef{}, refMalformed
 	}
 	return ref, refValid
