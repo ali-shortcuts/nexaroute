@@ -94,3 +94,8 @@ html[data-theme="light"] .video-hero .button.ghost { color: #e2e8f0; border-colo
 .access-table .event-table-head,.access-table .event-row{grid-template-columns:1.2fr 1fr 1.15fr .9fr 76px auto}
 .access-table .tile-actions{margin-left:0}
 @media(max-width:700px){.access-table .event-row{grid-template-columns:1fr 1fr}}
+/* Audit page (M2-6). */
+.audit-table .event-table-head,.audit-table .event-row{grid-template-columns:92px 1.3fr 1fr .8fr .7fr}
+.field.inline{display:flex;align-items:center;gap:8px}
+.field.inline span{color:var(--muted);font-size:11px}
+@media(max-width:700px){.audit-table .event-row{grid-template-columns:1fr 1fr}}
