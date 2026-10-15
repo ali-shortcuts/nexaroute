@@ -44,6 +44,12 @@ type RouteProfileConfig struct {
 	Strategy       string `json:"strategy,omitempty"`
 	DecisionPolicy string `json:"decision_policy,omitempty"` // Phase E: optional policy ID
 	Privacy        string `json:"privacy,omitempty"`         // "" | "any" | "no_training"
+	// Canary rollout (M5-3): a deterministic bucket of keyed
+	// sessions (canary_percent of them, by session/selection key
+	// hash) gets CanaryDeploymentID promoted to the front of the
+	// candidate list when it is already eligible for the request.
+	CanaryDeploymentID string `json:"canary_deployment_id,omitempty"`
+	CanaryPercent      int    `json:"canary_percent,omitempty"`
 }
 
 type CandidatePoolConfig struct {
@@ -1215,6 +1221,7 @@ func (c *Config) ApplyDefaults() {
 		rp.ID = strings.TrimSpace(rp.ID)
 		rp.Name = strings.TrimSpace(rp.Name)
 		rp.CandidatePool = strings.TrimSpace(rp.CandidatePool)
+		rp.CanaryDeploymentID = strings.TrimSpace(rp.CanaryDeploymentID)
 		rp.FallbackChain = strings.TrimSpace(rp.FallbackChain)
 		rp.Strategy = strings.TrimSpace(strings.ToLower(rp.Strategy))
 		rp.DecisionPolicy = strings.TrimSpace(rp.DecisionPolicy)
@@ -2464,6 +2471,29 @@ func (c Config) Validate() error {
 		}
 		if rp.CandidatePool == "" {
 			return fmt.Errorf("route profile %q candidate_pool is required", rp.ID)
+		}
+		if rp.CanaryPercent < 0 || rp.CanaryPercent > 100 {
+			return fmt.Errorf("route profile %q canary_percent must be between 0 and 100 (got %d)", rp.ID, rp.CanaryPercent)
+		}
+		if rp.CanaryPercent > 0 && rp.CanaryDeploymentID == "" {
+			return fmt.Errorf("route profile %q canary_percent > 0 requires canary_deployment_id", rp.ID)
+		}
+		if rp.CanaryDeploymentID != "" {
+			for _, cp := range c.CandidatePools {
+				if cp.ID != rp.CandidatePool || cp.Mode == "all" {
+					continue
+				}
+				found := false
+				for _, dep := range cp.Deployments {
+					if dep == rp.CanaryDeploymentID {
+						found = true
+						break
+					}
+				}
+				if !found {
+					return fmt.Errorf("route profile %q canary_deployment_id %q is not in candidate pool %q", rp.ID, rp.CanaryDeploymentID, rp.CandidatePool)
+				}
+			}
 		}
 		if _, ok := poolIDs[rp.CandidatePool]; !ok {
 			return fmt.Errorf("route profile %q references unknown candidate pool %q", rp.ID, rp.CandidatePool)
