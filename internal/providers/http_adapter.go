@@ -98,6 +98,10 @@ func parseEgressCIDRs(cidrs []string) []netip.Prefix {
 	return out
 }
 
+// maxAdapterConcurrency mirrors the config validation ceiling so the adapter
+// semaphore can never be sized from an unbounded value.
+const maxAdapterConcurrency = 4096
+
 func newHTTPAdapterWithRetryCap(p config.ProviderConfig, timeout, retryAfterCap time.Duration) (*httpAdapter, error) {
 	if retryAfterCap <= 0 {
 		retryAfterCap = 60 * time.Second
@@ -105,6 +109,9 @@ func newHTTPAdapterWithRetryCap(p config.ProviderConfig, timeout, retryAfterCap 
 	mc := p.MaxConcurrency
 	if mc <= 0 {
 		mc = 32
+	}
+	if mc > maxAdapterConcurrency {
+		mc = maxAdapterConcurrency
 	}
 	maxIdle := mc * 2
 	if maxIdle < 64 {
@@ -378,8 +385,14 @@ func (a *httpAdapter) CountTokens(ctx context.Context, payload []byte, forward h
 func (a *httpAdapter) DoPath(ctx context.Context, method, path string, payload []byte, stream bool, forward http.Header) (*http.Response, error) {
 	u := endpoint(a.p.BaseURL, path)
 	parsed, err := url.Parse(u)
-	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-		return nil, fmt.Errorf("invalid endpoint %q", u)
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return nil, errors.New("invalid endpoint: must be an absolute http(s) URL")
+	}
+	if parsed.User != nil {
+		// Credentials embedded in a URL would be sent as Basic auth to
+		// whatever host the endpoint names; provider auth is configured
+		// separately and never travels in the URL.
+		return nil, errors.New("invalid endpoint: user information is not allowed")
 	}
 
 	a.waiting.Add(1)

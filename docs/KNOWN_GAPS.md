@@ -137,13 +137,25 @@ burn in SRT subtitles. Video Studio now accepts multi-shot plans, shows progress
 The optional control-plane runtime selects the atomic local file store, an
 explicit test-only memory store, PostgreSQL, or Redis and reconciles a versioned
 startup snapshot. Both database backends fail closed when unavailable; Redis
-uses atomic revision-aware Lua scripts and has disposable-service integration
-coverage. These adapter guarantees do not provide deployment-level persistence,
-replication, failover, or recovery guarantees, which remain operator-owned and
-must be separately configured and tested. The M4-2 security-store PostgreSQL/
-Redis adapters, crash/mid-write recovery, backup/restore, and two-gateway tests
-remain open. Cross-replica breaker synchronization is also unimplemented.
+uses atomic revision-aware Lua scripts and has real-service integration
+coverage. Adapter tests do not guarantee deployment-level persistence,
+replication, failover, or recovery; those remain operator-owned and must be
+separately configured and tested.
 
+The admin security/session store supports bbolt (default), PostgreSQL (M4-2a),
+and Redis (M4-2b). PostgreSQL serializes audit-chain writes and verifies the
+chain in transactions; Redis uses version-checked Lua compare-and-set and has
+real Redis integration coverage, including concurrent appends from two
+instances. Both external backends fail closed if unavailable.
+
+The M4-3 `nexaroute backup` / `restore` CLI is implemented and tested. Backup
+captures the config, audit/security-store snapshot, and file-backed control-plane
+state; restore verifies payloads before writing and uses a durable journal for
+rollback/recovery. This is a documented application-level recovery mechanism,
+not a claim that databases survive arbitrary infrastructure loss; deployment
+persistence, replication, failover and backup retention still require operator
+configuration and recovery testing. Cross-replica breaker synchronization is
+not implemented.
 ## RBAC and SSO
 
 PR #224 wires the permission matrix in `internal/authz` to every registered
