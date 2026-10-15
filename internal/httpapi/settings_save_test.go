@@ -36,10 +36,19 @@ func TestSaveSettingsHandlerHasNoSelfReference(t *testing.T) {
 		handler = handler[:1200]
 	}
 	// Anti-pattern: `const <name> = { ... Number(<name>.` — a binding used
-	// inside its own initializer.
-	selfRef := regexp.MustCompile(`(?s)const\s+(?P<name>[A-Za-z_$][\w$]*)\s*=\s*\{.{0,400}?Number\(\s*(?P=name)\.`)
-	if m := selfRef.FindStringSubmatch(handler); m != nil {
-		t.Fatalf("save-settings handler references %q inside its own const initializer (TDZ ReferenceError at runtime): %q", m[1], m[0])
+	// inside its own initializer. (Go's RE2 has no backreferences, so match
+	// each const-object binding and check its initializer window manually.)
+	bindings := regexp.MustCompile(`const\s+([A-Za-z_$][\w$]*)\s*=\s*\{`).FindAllStringSubmatchIndex(handler, -1)
+	for _, b := range bindings {
+		name := handler[b[2]:b[3]]
+		end := b[1] + 500
+		if end > len(handler) {
+			end = len(handler)
+		}
+		window := handler[b[0]:end]
+		if strings.Contains(window, "Number("+name+".") {
+			t.Fatalf("save-settings handler references %q inside its own const initializer (TDZ ReferenceError at runtime): %q", name, window)
+		}
 	}
 	// The handler must still send a numeric max_attempts derived from the
 	// previous routing snapshot, and still PUT to the settings endpoint.
