@@ -15,9 +15,11 @@ import (
 func TestDenyCIDRsApplyToEmbeddedIPv4(t *testing.T) {
 	p := Policy{DenyCIDRs: []netip.Prefix{netip.MustParsePrefix("8.8.8.0/24")}}
 	for _, addr := range []string{
-		"8.8.8.8",          // plain
-		"64:ff9b::808:808", // NAT64 embedding 8.8.8.8
-		"2002:808:808::",   // 6to4 embedding 8.8.8.8
+		"8.8.8.8",               // plain
+		"64:ff9b::808:808",      // NAT64 embedding 8.8.8.8
+		"2002:808:808::",        // 6to4 embedding 8.8.8.8
+		"64:ff9b::808:808%eth0", // zone-scoped NAT64 embedding 8.8.8.8
+		"2002:808:808::%eth0",   // zone-scoped 6to4 embedding 8.8.8.8
 	} {
 		if !p.ipBlocked(netip.MustParseAddr(addr), false) {
 			t.Errorf("ipBlocked(%s) = false, want true (denied directly or embedded)", addr)
@@ -25,8 +27,9 @@ func TestDenyCIDRsApplyToEmbeddedIPv4(t *testing.T) {
 	}
 	for _, addr := range []string{
 		"1.1.1.1",
-		"64:ff9b::101:101", // NAT64 embedding 1.1.1.1
-		"2002:101:101::",   // 6to4 embedding 1.1.1.1
+		"64:ff9b::101:101",      // NAT64 embedding 1.1.1.1
+		"2002:101:101::",        // 6to4 embedding 1.1.1.1
+		"64:ff9b::101:101%eth0", // zone-scoped NAT64 embedding 1.1.1.1
 	} {
 		if p.ipBlocked(netip.MustParseAddr(addr), false) {
 			t.Errorf("ipBlocked(%s) = true, want false (not denied, not blocklisted)", addr)

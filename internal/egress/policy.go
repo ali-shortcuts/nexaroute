@@ -124,7 +124,7 @@ func (p Policy) ipBlocked(ip netip.Addr, allowLoopback bool) bool {
 	if p.deniedIP(ip) {
 		return true
 	}
-	if inner, ok := embeddedIPv4(ip); ok && p.deniedIP(inner) {
+	if inner, ok := embeddedIPv4(ip.WithZone("")); ok && p.deniedIP(inner) {
 		return true
 	}
 	return blocked(ip, allowLoopback)
