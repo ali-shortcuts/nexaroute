@@ -69,6 +69,8 @@ func dispatchSubcommand(args []string, stdout, stderr io.Writer) (int, bool) {
 		return runPrivacy(rest, stdout, stderr), true
 	case "audit":
 		return runAudit(rest, stdout, stderr), true
+	case "policy":
+		return runPolicy(rest, stdout, stderr), true
 	case "config":
 		return runConfig(rest, stdout, stderr), true
 	case "doctor":
