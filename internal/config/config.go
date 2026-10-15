@@ -176,6 +176,14 @@ type EvaluationConfig struct {
 	MaxArtifacts    int     `json:"max_artifacts,omitempty"`     // per-run artifact bound
 	LatencyTargetMS float64 `json:"latency_target_ms,omitempty"` // optional scoring target for latency evidence
 	TTFTTargetMS    float64 `json:"ttft_target_ms,omitempty"`    // optional scoring target for TTFT evidence
+	SuitesPath      string  `json:"suites_path,omitempty"`       // optional operator suite pack: file or directory of suite JSON (existing suite format)
+	// TelemetryIngestEnabled is the opt-in gate for automatic production-telemetry
+	// ingestion. Off by default: completed gateway traffic never writes
+	// production_telemetry scorecards unless the operator turns this on.
+	TelemetryIngestEnabled bool `json:"telemetry_ingest_enabled,omitempty"`
+	// TelemetryMinSamples is the minimum aggregated samples before a
+	// production_telemetry scorecard is materialized. Zero means the default.
+	TelemetryMinSamples int `json:"telemetry_min_samples,omitempty"`
 }
 
 // EgressConfig controls the global egress security policy applied to all
@@ -803,11 +811,15 @@ const (
 	// Phase F limits
 	maxDecisionProviders = 16
 	// Phase H limits
-	maxEvaluationRuns        = 512
-	maxEvaluationScorecards  = 4096
-	maxEvaluationArtifacts   = 512
-	maxEvaluationImportBytes = 4096
-	maxEvaluationLatencyMS   = 600000
+	maxEvaluationRuns          = 512
+	maxEvaluationScorecards    = 4096
+	maxEvaluationArtifacts     = 512
+	maxEvaluationImportBytes   = 4096
+	maxEvaluationLatencyMS     = 600000
+	maxEvaluationSuites        = 32
+	maxEvaluationSuitesPath    = 4096
+	maxTelemetryMinSamples     = 1000000
+	defaultTelemetryMinSamples = 5
 	// Phase G limits
 	maxDecisionChains       = 64
 	maxDecisionChainSteps   = 8
@@ -927,7 +939,7 @@ func Default() Config {
 		BudgetAlerts:           BudgetAlertsConfig{TimeoutSeconds: 5},
 		Guardrails:             GuardrailConfig{Mode: "off", MaxBodyBytes: 2 << 20},
 		Decision:               DecisionConfig{Mode: "off", Provider: "local", TimeoutMS: 10},
-		Evaluation:             EvaluationConfig{Enabled: false, MaxRuns: 64, MaxScorecards: 1024, MaxArtifacts: 128},
+		Evaluation:             EvaluationConfig{Enabled: false, MaxRuns: 64, MaxScorecards: 1024, MaxArtifacts: 128, TelemetryMinSamples: defaultTelemetryMinSamples},
 		DecisionProviderHealth: DecisionProviderHealthConfig{FailureThreshold: 3, FailureWindowSeconds: 30, CooldownSeconds: 60},
 	}
 }
@@ -1374,6 +1386,13 @@ func (c *Config) ApplyDefaults() {
 	// Evaluation defaults (Phase H)
 	c.Evaluation.ImportPath = strings.TrimSpace(c.Evaluation.ImportPath)
 	c.Evaluation.StatePath = strings.TrimSpace(c.Evaluation.StatePath)
+	c.Evaluation.SuitesPath = strings.TrimSpace(c.Evaluation.SuitesPath)
+	if c.Evaluation.TelemetryMinSamples == 0 {
+		c.Evaluation.TelemetryMinSamples = defaultTelemetryMinSamples
+	}
+	if c.Evaluation.TelemetryMinSamples > maxTelemetryMinSamples {
+		c.Evaluation.TelemetryMinSamples = maxTelemetryMinSamples
+	}
 	if c.Evaluation.MaxRuns == 0 {
 		c.Evaluation.MaxRuns = 64
 		c.warnDefault("evaluation.max_runs", "not set; defaulted to 64")
@@ -2224,6 +2243,15 @@ func (c Config) Validate() error {
 	}
 	if len(c.Evaluation.StatePath) > maxEvaluationImportBytes {
 		return errors.New("evaluation.state_path is too long")
+	}
+	if len(c.Evaluation.SuitesPath) > maxEvaluationSuitesPath {
+		return errors.New("evaluation.suites_path is too long")
+	}
+	if strings.ContainsAny(c.Evaluation.SuitesPath, "\r\n\x00") {
+		return errors.New("evaluation.suites_path must be a plain path")
+	}
+	if c.Evaluation.TelemetryMinSamples < 1 || c.Evaluation.TelemetryMinSamples > maxTelemetryMinSamples {
+		return fmt.Errorf("evaluation.telemetry_min_samples must be between 1 and %d", maxTelemetryMinSamples)
 	}
 	for name, v := range map[string]float64{
 		"evaluation.latency_target_ms": c.Evaluation.LatencyTargetMS,

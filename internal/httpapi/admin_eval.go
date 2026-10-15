@@ -127,10 +127,25 @@ func (s *Server) adminEvaluationSuites(w http.ResponseWriter, r *http.Request) {
 			"max_output_tokens":   evallive.MaxOutputTokens,
 		}
 	}
+	suites := eval.Catalog()
+	if plane != nil {
+		suites = plane.SuiteCatalog()
+	}
+	suitesErr := ""
+	suitesPath := ""
+	operatorSuites := 0
+	if plane != nil {
+		suitesErr = plane.SuitesError()
+		suitesPath = plane.config().SuitesPath
+		operatorSuites = len(plane.OperatorSuites())
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"enabled":    plane != nil && plane.Enabled(),
-		"suites":     eval.Catalog(),
-		"evaluators": stats.Evaluators,
+		"enabled":         plane != nil && plane.Enabled(),
+		"suites":          suites,
+		"suites_path":     suitesPath,
+		"operator_suites": operatorSuites,
+		"suites_error":    suitesErr,
+		"evaluators":      stats.Evaluators,
 		"bounds": map[string]int{
 			"max_artifacts_per_run": eval.MaxOutcomesPerRun,
 			"max_cases_per_suite":   eval.MaxCasesPerSuite,
@@ -334,7 +349,7 @@ func (s *Server) adminEvaluationRun(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, http.StatusBadRequest, "model does not match deployment")
 		return
 	}
-	suite, ok := eval.LookupSuite(in.SuiteID)
+	suite, ok := plane.LookupSuite(in.SuiteID)
 	if !ok {
 		errorJSON(w, http.StatusBadRequest, "unknown suite_id: "+in.SuiteID)
 		return
@@ -432,7 +447,7 @@ func (s *Server) adminEvaluationRunLive(w http.ResponseWriter, r *http.Request, 
 		req.CaseTimeoutMS = eval.MaxRunTimeoutMS
 	}
 
-	run, err := plane.runner.RunWithExecutor(r.Context(), req, exec)
+	run, err := plane.runner.RunWithSuite(r.Context(), req, suite, exec)
 	if err != nil {
 		plane.runsRejected.Add(1)
 		errorJSON(w, http.StatusBadRequest, err.Error())
@@ -516,7 +531,7 @@ func (s *Server) adminEvaluationRunReplay(w http.ResponseWriter, r *http.Request
 		errorJSON(w, http.StatusBadRequest, execErr.Error())
 		return
 	}
-	run, err := plane.runner.RunWithExecutor(r.Context(), req, exec)
+	run, err := plane.runner.RunWithSuite(r.Context(), req, suite, exec)
 	if err != nil {
 		plane.runsRejected.Add(1)
 		errorJSON(w, http.StatusBadRequest, err.Error())

@@ -231,7 +231,10 @@
     "state_path": "",
     "max_artifacts": 128,
     "latency_target_ms": 0,
-    "ttft_target_ms": 0
+    "ttft_target_ms": 0,
+    "suites_path": "",
+    "telemetry_ingest_enabled": false,
+    "telemetry_min_samples": 5
   },
   "decision_providers": [
     {

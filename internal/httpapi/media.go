@@ -248,11 +248,13 @@ func (s *Server) serveMedia(w http.ResponseWriter, r *http.Request, kind mediaKi
 		if derr != nil {
 			lastErr = derr.Error()
 			s.hm.RecordFailure(c.Deployment.ID, lastErr, latency)
+			s.observeCompletedTelemetry(c.Deployment.ID, c.Deployment.ProviderID, false, 0, 0)
 			continue
 		}
 
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 			s.hm.RecordSuccess(c.Deployment.ID, latency)
+			s.observeCompletedTelemetry(c.Deployment.ID, c.Deployment.ProviderID, true, latency, 0)
 			w.Header().Set("X-Gateway-Deployment", c.Deployment.ID)
 			w.Header().Set("X-Gateway-Provider", c.Deployment.ProviderID)
 			w.Header().Set("X-Gateway-Upstream-Model", c.Deployment.Model)
@@ -283,6 +285,7 @@ func (s *Server) serveMedia(w http.ResponseWriter, r *http.Request, kind mediaKi
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		resp.Body.Close()
 		s.hm.RecordFailure(c.Deployment.ID, fmt.Sprintf("upstream http %d", resp.StatusCode), latency)
+		s.observeCompletedTelemetry(c.Deployment.ID, c.Deployment.ProviderID, false, 0, 0)
 		lastStatus, lastContentType, lastBody = resp.StatusCode, resp.Header.Get("Content-Type"), body
 		lastErr = fmt.Sprintf("upstream http %d", resp.StatusCode)
 	}

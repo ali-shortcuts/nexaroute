@@ -418,12 +418,19 @@ func (s *Server) recordRouteSuccess(req router.Requirement, deploymentID, provid
 	s.hm.RecordProviderSuccess(providerID)
 	s.hm.RecordScopeSuccess(deploymentID, req.Scopes())
 	s.rt.ObserveSession(req, deploymentID)
+	// Production-telemetry ingestion (opt-in, off by default): completed
+	// gateway traffic contributes aggregated operational values only
+	// (success + latency). Never affects routing or health.
+	s.observeCompletedTelemetry(deploymentID, providerID, true, latency, 0)
 }
 
 func (s *Server) recordProviderFailure(providerID, deploymentID, reason string, policy upstreamFailurePolicy) {
 	if policy.SignalProvider {
 		s.hm.RecordProviderFailure(providerID, deploymentID, reason)
 	}
+	// Production-telemetry ingestion (opt-in): a failed request contributes
+	// an aggregated failure sample only. No content, no error text.
+	s.observeCompletedTelemetry(deploymentID, providerID, false, 0, 0)
 }
 
 type firstByteBody struct {

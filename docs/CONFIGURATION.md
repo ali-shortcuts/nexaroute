@@ -746,6 +746,9 @@ and, while disabled, accepts no runs and writes no scorecards.
 | `max_artifacts` | `128` | 1–512 | Per-run artifact bound. |
 | `latency_target_ms` | `0` | 0–600000 | Optional latency scoring target. A latency value is only produced when a target exists. |
 | `ttft_target_ms` | `0` | 0–600000 | Optional TTFT scoring target, same rule. |
+| `suites_path` | `""` | ≤ 4096 bytes | Optional operator suite pack: a JSON file (one suite, an array of suites, or a `{"suites": [...]}` envelope) or a directory of `*.json` packs in the existing suite format. Loaded atomically: a malformed pack refuses the whole load with a `suites_error` and never partially registers, and ids colliding with built-ins are rejected. Operator suites list alongside built-ins in `GET /admin/api/evaluation/suites` (`source: "operator"`) and run through the same deterministic runner. |
+| `telemetry_ingest_enabled` | `false` | — | Opt-in automatic production-telemetry ingestion. While false (default), completed gateway traffic writes no `production_telemetry` scorecards. While true (and `enabled`), each completed request contributes one aggregated sample (success/failure + numeric latency/TTFT only — no prompts, responses, error text or user data) and scorecards materialize through the existing `FromTelemetry` constructor once `telemetry_min_samples` is reached. Ingestion never changes routing, health, or candidate order. |
+| `telemetry_min_samples` | `5` | 1–1000000 | Minimum aggregated samples per deployment before a `production_telemetry` scorecard is materialized. |
 
 ### Evaluation modes
 
@@ -770,9 +773,28 @@ and, while disabled, accepts no runs and writes no scorecards.
   "state_path": "/var/lib/nexaroute/evaluation-state.json",
   "max_artifacts": 128,
   "latency_target_ms": 2000,
-  "ttft_target_ms": 800
+  "ttft_target_ms": 800,
+  "suites_path": "/etc/nexaroute/eval-suites",
+  "telemetry_ingest_enabled": false,
+  "telemetry_min_samples": 5
 }
 ```
+
+### Operator suite pack shape (`suites_path`)
+
+A pack is one JSON suite in the existing suite format (same fields the
+built-in catalog uses):
+
+```json
+{"id": "operator-smoke", "version": "1", "dimension": "coding", "MinSamples": 1,
+ "cases": [{"id": "op-case-one", "weight": 1,
+            "expectation": {"kind": "exact_match", "expected": "ok"}}]}
+```
+
+A file may also hold an array of suites or a `{"suites": [...]}` envelope; a
+directory loads every `*.json` file in filename order (max 32 suites total,
+1 MiB per file). Unknown JSON fields, invalid expectations, duplicate case or
+suite ids, and ids colliding with built-ins reject the whole load.
 
 ### Scorecard artifact shape (`import_path`)
 
