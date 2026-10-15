@@ -87,6 +87,7 @@ func (l *BudgetLedger) Reserve(key string, limit, amount float64, now time.Time)
 	row := l.rowLocked(key)
 	l.expireLocked(row, now)
 	if row.committed+row.reserved+amount > limit+budgetEpsilon {
+		l.evictIfEmptyLocked(key, row)
 		return 0, false
 	}
 	l.seq++
@@ -119,6 +120,7 @@ func (l *BudgetLedger) Settle(key string, id uint64, actual float64) {
 	snapReserved(row)
 	row.committed += actual
 	delete(row.reservations, id)
+	l.evictIfEmptyLocked(key, row)
 }
 
 // Release drops a reservation without committing anything (used
@@ -140,6 +142,18 @@ func (l *BudgetLedger) Release(key string, id uint64) {
 	row.reserved -= res.amount
 	snapReserved(row)
 	delete(row.reservations, id)
+	l.evictIfEmptyLocked(key, row)
+}
+
+// evictIfEmptyLocked drops a row that carries no committed spend,
+// no hold and no live reservations, so the rows map cannot grow
+// without bound across rotated or ephemeral key IDs. A row with any
+// committed spend is the budget record itself and is never evicted.
+// Callers hold l.mu.
+func (l *BudgetLedger) evictIfEmptyLocked(key string, row *budgetRow) {
+	if row.committed == 0 && row.reserved == 0 && len(row.reservations) == 0 {
+		delete(l.rows, key)
+	}
 }
 
 // Snapshot returns the key's committed and currently-reserved

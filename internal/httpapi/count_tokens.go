@@ -24,6 +24,11 @@ func (s *Server) countTokens(w http.ResponseWriter, r *http.Request) {
 	if !s.clientAuthAllowed(w, r, true) {
 		return
 	}
+	// count_tokens records no usage anywhere: the admission hold is
+	// released when the handler returns, on every path (local
+	// estimate and provider-native count alike), instead of expiring
+	// into a committed charge at the chat-completion estimate.
+	defer s.budgetRelease(r)
 	var in core.AnthropicRequest
 	raw, err := readJSON(r, &in)
 	if err != nil {
