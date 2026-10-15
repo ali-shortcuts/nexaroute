@@ -168,11 +168,19 @@ The in-memory event feed is independently bounded: it keeps only the newest ring
 ## Provider types
 
 ```text
-openai_compatible
-anthropic_compatible
+openai_compatible     OpenAI wire format, bearer auth, {base_url}/v1/chat/completions
+anthropic_compatible  Anthropic wire format, x-api-key auth
+openai_responses      OpenAI Responses API
+gemini                Google Gemini wire format, x-goog-api-key auth
+azure_openai          Azure OpenAI (M5-1a)
+vertex                Google Vertex AI (M5-1a)
 ```
 
 A provider is generic; adding another OpenAI-compatible endpoint should normally require configuration, not a new code branch.
+
+**Azure OpenAI** (`azure_openai`) speaks the OpenAI wire format but addresses deployments in the URL: requests go to `{base_url}/openai/deployments/{deployment}/chat/completions?api-version={api_version}`, where `{deployment}` is the model's upstream `model` value and `api_version` is a provider field (default `2024-10-21`). Authentication is the `api-key` header (the default `auth_mode` for this type) using the provider's configured credential.
+
+**Vertex AI** (`vertex`) speaks the Gemini wire format at `{base_url}/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:generateContent` (or `:streamGenerateContent?alt=sse` when streaming). `vertex_project` is required; `vertex_location` defaults to `us-central1`. Authentication is a Bearer OAuth2 access token supplied as the provider credential. **Token minting and refresh are not built in**: the gateway uses the credential it is given, so supply a token through your platform's broker/sidecar (or a short-lived token via `api_key_env`) and rotate it externally — Google service-account ADC flows are an operator-side concern, and an expired token simply fails upstream calls until replaced.
 
 ## Provider credentials
 
