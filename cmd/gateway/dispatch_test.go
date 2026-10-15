@@ -21,7 +21,7 @@ func TestDispatchSubcommandRouting(t *testing.T) {
 
 	t.Run("config validate reaches runConfig", func(t *testing.T) {
 		var stdout, stderr bytes.Buffer
-		code, handled := dispatchSubcommand([]string{"config", "validate", "--config", configPath}, &stdout, &stderr)
+		code, handled := dispatchSubcommand([]string{"config", "validate", "--config", configPath}, strings.NewReader(""), &stdout, &stderr)
 		if !handled {
 			t.Fatal("config subcommand is not dispatched; the binary would start the gateway instead")
 		}
@@ -39,10 +39,11 @@ func TestDispatchSubcommandRouting(t *testing.T) {
 			{"backup"},                         // missing --out -> 2, but handled
 			{"restore"},                        // missing --bundle -> 2, but handled
 			{"secrets", "definitely-not-a-subcommand"}, // error -> 1, but handled
-			{"policy"}, // usage -> nonzero, but handled
+			{"init", "--out", configPath},              // existing file -> error, but handled
+			{"policy"},                                 // usage -> nonzero, but handled
 		} {
 			var stdout, stderr bytes.Buffer
-			if _, handled := dispatchSubcommand(args, &stdout, &stderr); !handled {
+			if _, handled := dispatchSubcommand(args, strings.NewReader(""), &stdout, &stderr); !handled {
 				t.Fatalf("%v is not dispatched", args)
 			}
 		}
@@ -56,7 +57,7 @@ func TestDispatchSubcommandRouting(t *testing.T) {
 			{"--no-browser"},
 		} {
 			var stdout, stderr bytes.Buffer
-			if _, handled := dispatchSubcommand(args, &stdout, &stderr); handled {
+			if _, handled := dispatchSubcommand(args, strings.NewReader(""), &stdout, &stderr); handled {
 				t.Fatalf("%v must fall through to gateway startup", args)
 			}
 		}

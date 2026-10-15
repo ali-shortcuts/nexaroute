@@ -59,12 +59,14 @@ func ensureConfig(path string) error {
 // direct calls, but main never dispatched it — running
 // `nexaroute config validate` silently started the gateway instead
 // (proven against a binary built from main, 2026-10-15).
-func dispatchSubcommand(args []string, stdout, stderr io.Writer) (int, bool) {
+func dispatchSubcommand(args []string, stdin io.Reader, stdout, stderr io.Writer) (int, bool) {
 	if len(args) == 0 {
 		return 0, false
 	}
 	rest := args[1:]
 	switch args[0] {
+	case "init":
+		return runInit(rest, stdin, stdout, stderr), true
 	case "privacy":
 		return runPrivacy(rest, stdout, stderr), true
 	case "audit":
@@ -90,7 +92,7 @@ func dispatchSubcommand(args []string, stdout, stderr io.Writer) (int, bool) {
 }
 
 func main() {
-	if code, handled := dispatchSubcommand(os.Args[1:], os.Stdout, os.Stderr); handled {
+	if code, handled := dispatchSubcommand(os.Args[1:], os.Stdin, os.Stdout, os.Stderr); handled {
 		if code != 0 {
 			os.Exit(code)
 		}
