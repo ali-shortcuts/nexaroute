@@ -344,6 +344,11 @@ type AdminConfig struct {
 	AuditRetentionDays     int        `json:"audit_retention_days,omitempty"`
 	AuditMaxEvents         int        `json:"audit_max_events,omitempty"`
 	OIDC                   OIDCConfig `json:"oidc,omitempty"`
+	// AllowSecretReveal controls whether the admin API may return a saved
+	// provider key on request (POST /admin/api/providers/{id}/reveal-secret).
+	// Nil means "default": allowed only when the listener is loopback-only.
+	// See Config.SecretRevealAllowed and docs/SECURITY.md.
+	AllowSecretReveal *bool `json:"allow_secret_reveal,omitempty"`
 }
 
 // OIDCConfig defines a provider-agnostic Authorization Code + PKCE client.

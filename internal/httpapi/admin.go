@@ -598,6 +598,10 @@ func (s *Server) adminProviders(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) adminProviderByID(w http.ResponseWriter, r *http.Request) {
+	if rest := strings.TrimPrefix(r.URL.Path, "/admin/api/providers/"); strings.HasSuffix(rest, "/reveal-secret") {
+		s.adminProviderRevealSecret(w, r, strings.TrimSuffix(rest, "/reveal-secret"))
+		return
+	}
 	id, err := url.PathUnescape(strings.TrimPrefix(r.URL.Path, "/admin/api/providers/"))
 	if err != nil || strings.TrimSpace(id) == "" {
 		errorJSON(w, 400, "provider id required")
@@ -613,7 +617,9 @@ func (s *Server) adminProviderByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		p := cfg.Providers[idx]
-		// Saved credentials are write-only, even for legacy ?reveal=1 callers.
+		// Saved credentials are never returned here, even for legacy ?reveal=1
+		// callers. Only a masked preview is exposed; the full key is available
+		// solely through POST .../reveal-secret (see admin_reveal.go).
 		// B5a additive structure: header NAMES only and proxy scheme+host only.
 		// Values, credentials, query strings and auth tokens never leave the backend.
 		headerNames := providerHeaderNames(cfg.Providers[idx])
@@ -621,6 +627,13 @@ func (s *Server) adminProviderByID(w http.ResponseWriter, r *http.Request) {
 		proxyScheme, proxyHost, proxyDisplay := proxyStructure(cfg.Providers[idx].ProxyURL)
 		hasProxy := strings.TrimSpace(cfg.Providers[idx].ProxyURL) != ""
 		source, hasSecret := secretSource(p), len(p.ResolvedCredentials()) > 0
+		// Preview only a stored literal key. A key that resolves from an
+		// environment variable lives outside the gateway config, so it gets none.
+		apiKeyPreview := ""
+		if p.APIKeyEnv == "" || os.Getenv(p.APIKeyEnv) == "" {
+			apiKeyPreview = secretPreview(p.APIKey)
+		}
+		credsMeta := credentialMeta(cfg.Providers[idx].Credentials)
 		// Determine if there's a secret to mask (API key, env var, or credentials)
 		hasAPIKeySecret := p.APIKey != "" || p.APIKeyEnv != "" || len(p.Credentials) > 0
 		p.APIKey = ""
@@ -638,6 +651,9 @@ func (s *Server) adminProviderByID(w http.ResponseWriter, r *http.Request) {
 		payload := map[string]any{
 			"provider":         p,
 			"api_key_masked":   apiKeyMasked,
+			"api_key_preview":  apiKeyPreview,
+			"credentials_meta": credsMeta,
+			"reveal_allowed":   cfg.SecretRevealAllowed(),
 			"secret_source":    source,
 			"has_secret":       hasSecret,
 			"has_headers":      hasHeaders,
