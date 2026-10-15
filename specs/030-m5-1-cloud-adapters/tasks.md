@@ -5,4 +5,4 @@
 - [x] T3 Canonical routing: upstreamKindFor(vertex)=gemini; bundle paths for vertex + azure
 - [x] T4 Presets (azure-openai, google-vertex)
 - [x] T5 Tests: adapter wire-shape, config validation, httpapi e2e (chat + stream, both types)
-- [ ] T6 Docs (CONFIGURATION, UNRELEASED), PR green; stop for owner
+- [x] T6 Docs (CONFIGURATION, UNRELEASED), PR green; stop for owner
