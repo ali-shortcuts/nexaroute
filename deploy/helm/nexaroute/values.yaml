@@ -1,0 +1,76 @@
+# NexaRoute Helm values.
+#
+# Scaling note: the default single replica keeps ALL state (master-key
+# file, session/audit store, file control-plane state) on one PVC.
+# replicaCount > 1 additionally requires the Postgres or Redis
+# control-plane backend (see controlPlane below) and still leaves the
+# session/audit store per-replica (bbolt) until the M4-2 adapters land;
+# the chart does not claim full HA before then.
+replicaCount: 1
+
+image:
+  repository: ghcr.io/ali-shortcuts/nexaroute
+  # Defaults to "v" + Chart.appVersion when empty.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+service:
+  type: ClusterIP
+  port: 8080
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: "1"
+    memory: 512Mi
+
+# All gateway state lives under /config on the PVC: the config file is
+# overlaid from a Secret, and the master-key file, security store and
+# file-backend control-plane state are written next to it.
+persistence:
+  enabled: true
+  size: 1Gi
+  storageClass: ""
+  accessMode: ReadWriteOnce
+  # Existing claim to reuse instead of provisioning one.
+  existingClaim: ""
+
+config:
+  # Name of an existing Secret with a `config.json` key holding the
+  # gateway configuration. When set, configJSON is ignored.
+  existingSecret: ""
+  # Gateway configuration JSON, rendered into a Secret by the chart.
+  # WARNING: values files are not a secret store — the rendered Secret
+  # is only base64-encoded. Prefer existingSecret managed by your
+  # secret tooling, and keep secret-bearing fields in the config
+  # encrypted at rest (nxs1 envelopes) as on any other install.
+  configJSON: |
+    {
+      "listen": "0.0.0.0:8080",
+      "providers": []
+    }
+
+# Control-plane database wiring. Connection values are referenced from
+# operator-managed Secrets — never put a DSN/URL in values.
+controlPlane:
+  postgresDSN:
+    secretName: ""
+    secretKey: "dsn"
+  redisURL:
+    secretName: ""
+    secretKey: "url"
+
+# Extra environment variables for the gateway container, as a list of
+# EnvVar objects (valueFrom supported, e.g. secretKeyRef).
+extraEnv: []
+
+podAnnotations: {}
+podLabels: {}
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
