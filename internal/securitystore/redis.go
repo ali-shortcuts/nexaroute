@@ -36,9 +36,36 @@ const (
 type RedisSecurityClient interface {
 	HGetAll(ctx context.Context, key string) (map[string]string, error)
 	HGet(ctx context.Context, key, field string) (string, bool, error)
+	// Snapshot returns the meta and audit hashes from ONE Lua call:
+	// reading them with separate commands can tear (a concurrent
+	// commit lands between the reads) and the chain gate would reject
+	// a healthy chain, so the pair is always read atomically.
+	Snapshot(ctx context.Context) (meta, audit map[string]string, err error)
 	Eval(ctx context.Context, script string, keys []string, args ...any) (any, error)
 	Ping(ctx context.Context) error
 	Close() error
+}
+
+// snapshotScript reads the meta and audit hashes in one atomic step.
+const snapshotScript = `
+local meta = redis.call('HGETALL', KEYS[1])
+local audit = redis.call('HGETALL', KEYS[2])
+return {meta, audit}`
+
+func parseHashPairs(v any) map[string]string {
+	out := map[string]string{}
+	pairs, ok := v.([]any)
+	if !ok {
+		return out
+	}
+	for i := 0; i+1 < len(pairs); i += 2 {
+		k, _ := pairs[i].(string)
+		val, _ := pairs[i+1].(string)
+		if k != "" {
+			out[k] = val
+		}
+	}
+	return out
 }
 
 type goRedisSecurityClient struct{ client *redis.Client }
@@ -60,6 +87,18 @@ func (a goRedisSecurityClient) HGet(ctx context.Context, key, field string) (str
 
 func (a goRedisSecurityClient) Eval(ctx context.Context, script string, keys []string, args ...any) (any, error) {
 	return a.client.Eval(ctx, script, keys, args...).Result()
+}
+
+func (a goRedisSecurityClient) Snapshot(ctx context.Context) (map[string]string, map[string]string, error) {
+	res, err := a.client.Eval(ctx, snapshotScript, []string{securityRedisMetaKey, securityRedisAuditKey}).Result()
+	if err != nil {
+		return nil, nil, err
+	}
+	parts, ok := res.([]any)
+	if !ok || len(parts) != 2 {
+		return nil, nil, errors.New("securitystore: unexpected snapshot response")
+	}
+	return parseHashPairs(parts[0]), parseHashPairs(parts[1]), nil
 }
 
 func (a goRedisSecurityClient) Ping(ctx context.Context) error {
@@ -159,16 +198,12 @@ func newRedisStoreWithClient(client RedisSecurityClient, maxAuditItems int, rete
 }
 
 // loadChain reads the full chain state plus the meta version used for
-// the CAS commit.
+// the CAS commit, as one atomic snapshot.
 func (s *RedisStore) loadChain(ctx context.Context) (chainState, string, error) {
 	st := chainState{}
-	meta, err := s.client.HGetAll(ctx, securityRedisMetaKey)
+	meta, audit, err := s.client.Snapshot(ctx)
 	if err != nil {
-		return st, "", fmt.Errorf("securitystore: load chain metadata: %w", err)
-	}
-	audit, err := s.client.HGetAll(ctx, securityRedisAuditKey)
-	if err != nil {
-		return st, "", fmt.Errorf("securitystore: load audit records: %w", err)
+		return st, "", fmt.Errorf("securitystore: load chain snapshot: %w", err)
 	}
 	seqs := make([]int, 0, len(audit))
 	bySeq := map[int]string{}

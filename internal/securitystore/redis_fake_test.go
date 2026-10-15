@@ -108,6 +108,19 @@ type fakeError struct{ msg string }
 
 func (e *fakeError) Error() string { return e.msg }
 
+func (f *fakeRedisClient) Snapshot(_ context.Context) (map[string]string, map[string]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	cp := func(key string) map[string]string {
+		out := map[string]string{}
+		for k, v := range f.hashes[key] {
+			out[k] = v
+		}
+		return out
+	}
+	return cp(securityRedisMetaKey), cp(securityRedisAuditKey), nil
+}
+
 func (f *fakeRedisClient) Ping(context.Context) error { return nil }
 func (f *fakeRedisClient) Close() error               { return nil }
 
@@ -149,6 +162,44 @@ func TestRedisCASRetriesThroughConflicts(t *testing.T) {
 	report, err := store.VerifyAuditChain(ctx)
 	if err != nil || !report.Verified || report.ChainedRecords != 1 {
 		t.Fatalf("report: err=%v %+v", err, report)
+	}
+}
+
+// Regression for the torn-snapshot failure the real-Redis CI suite
+// caught: meta and audit read in separate round trips can straddle a
+// concurrent commit (head seq N with records through N+1), and the
+// chain gate then refuses a healthy chain. The fake's per-call
+// locking allows exactly that tear, so this test fails against
+// non-atomic snapshot reads and passes with the Lua snapshot.
+func TestRedisTwoStoresConcurrentAgainstFake(t *testing.T) {
+	shared := newFakeRedisClient()
+	a := newRedisStoreWithClient(shared, 1000, 365*24*time.Hour)
+	b := newRedisStoreWithClient(shared, 1000, 365*24*time.Hour)
+	ctx := context.Background()
+	var wg sync.WaitGroup
+	errs := make(chan error, 50)
+	for _, store := range []*RedisStore{a, b} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 25; i++ {
+				if err := store.AppendAudit(ctx, AuditEvent{Actor: "writer", Action: "contract.concurrent", Outcome: "success", Status: 200}); err != nil {
+					errs <- err
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatalf("concurrent append: %v", err)
+	}
+	report, err := a.VerifyAuditChain(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !report.Verified || report.ChainedRecords != 50 {
+		t.Fatalf("chain after concurrent appends: %+v", report)
 	}
 }
 
