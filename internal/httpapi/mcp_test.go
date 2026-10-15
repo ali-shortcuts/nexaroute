@@ -17,13 +17,13 @@ import (
 // M6-1 fake MCP upstream: speaks initialize/tools/list/tools/call,
 // optionally over SSE, with a session header.
 type fakeMCP struct {
-	mu         sync.Mutex
-	methods    []string
-	sessions   []string
-	sse        bool
-	initCalls  atomic.Int64
-	listCalls  atomic.Int64
-	toolCalls  atomic.Int64
+	mu        sync.Mutex
+	methods   []string
+	sessions  []string
+	sse       bool
+	initCalls atomic.Int64
+	listCalls atomic.Int64
+	toolCalls atomic.Int64
 }
 
 func (f *fakeMCP) handler() http.HandlerFunc {
