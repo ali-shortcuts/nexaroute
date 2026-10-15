@@ -453,6 +453,36 @@ Provider presets are served by the gateway itself through the Admin API so the W
 
 Only non-streaming requests with `temperature` absent/0 and `top_p` absent/1 are eligible. Every config swap invalidates the cache. Per-request bypass header: `x-nexaroute-no-cache: 1`.
 
+### Semantic cache (`cache.semantic`, M5-4)
+
+A separately opt-in layer beside the exact-match cache. Prompts are
+embedded through a configured deployment and matched by cosine
+similarity, so paraphrases of a cached prompt can be served
+without an upstream call.
+
+- `cache.semantic.enabled`: default off; independent of `cache.enabled`.
+- `cache.semantic.embedding_deployment`: `provider/model`; the provider
+  must be `openai_compatible`. Embeddings go straight through that
+  provider's adapter (never through the gateway's own handlers), and
+  any embedder failure bypasses the cache silently.
+- `cache.semantic.embedding_path`: default `/v1/embeddings`.
+- `cache.semantic.threshold`: cosine in (0.5, 1]; default 0.95.
+- `cache.semantic.max_entries`: default 1024 (own LRU + byte bounds).
+- `cache.semantic.ttl_seconds`: default reuses `cache.ttl_seconds`.
+
+Eligibility mirrors the exact cache and adds: no tools, prompt text
+extractable and ≤ 32 KiB. Similarity is computed only inside an
+isolation scope (client-key digest + ingress path + model +
+forwarded-header context), so one client's entries never serve
+another. Every entry carries privacy provenance — origin
+deployment, origin provider's `trains_on_data`, whether the storing
+request required `no_training`, the embedding deployment — and a
+`no_training` request can only be served by an entry stored under
+`no_training` whose origin declares `trains_on_data: "no"`. Hits are
+observable: `X-NexaRoute-Cache: SEMANTIC-HIT`,
+`X-Gateway-Cache-Provenance`, a `semantic_cache_hit` event, and
+`nexaroute_semantic_cache_*` metrics.
+
 ### client_auth (new object, opt-in)
 
 | Field | Default | Meaning |
