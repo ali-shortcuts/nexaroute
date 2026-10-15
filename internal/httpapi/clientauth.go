@@ -334,7 +334,7 @@ func (s *Server) applyGuardrails(w http.ResponseWriter, r *http.Request, anthrop
 		return true
 	}
 	if cfg.Mode == "audit" {
-		s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "guardrail_audit", Message: "request matched privacy/safety guardrail"})
+		s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "guardrail_audit", Message: "request matched privacy/safety guardrail kinds=" + strings.Join(guardrail.Kinds(findings), ",")})
 		return true
 	}
 	if anthropicStyle {

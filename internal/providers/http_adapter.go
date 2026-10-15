@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/ali-shortcuts/nexaroute/internal/config"
 	"github.com/ali-shortcuts/nexaroute/internal/egress"
+	"github.com/ali-shortcuts/nexaroute/internal/protocol/canonical"
 )
 
 type credentialState struct {
@@ -51,6 +53,7 @@ type httpAdapter struct {
 	sem                chan struct{}
 	credMu             sync.RWMutex
 	creds              []credentialState
+	bedrockCreds       sigV4Credentials
 	rr                 uint64
 	forwardAllowed     map[string]struct{}
 	retryAfterCap      time.Duration
@@ -193,6 +196,31 @@ func newHTTPAdapterWithRetryCap(p config.ProviderConfig, timeout, retryAfterCap 
 	}
 	for _, k := range p.ResolvedCredentials() {
 		a.creds = append(a.creds, credentialState{Key: k})
+	}
+	if p.Type == "bedrock" {
+		// SigV4 needs the key pair. The secret comes only from the
+		// env var NAMED in config (never a config value) and adapter
+		// construction fails closed when it is unavailable — a
+		// silently unsigned Bedrock request would be a credential
+		// leak to a spoofed endpoint and a guaranteed 403 upstream.
+		secret := os.Getenv(p.SecretKeyEnv)
+		if p.SecretKeyEnv == "" || secret == "" {
+			// The configured value is deliberately not echoed: a misplaced
+			// literal secret in secret_key_env would otherwise reach logs.
+			return nil, fmt.Errorf("provider %s bedrock secret access key: env var named by secret_key_env is not set", p.ID)
+		}
+		accessKey := ""
+		if keys := p.ResolvedCredentials(); len(keys) > 0 {
+			accessKey = keys[0]
+		}
+		if accessKey == "" {
+			return nil, fmt.Errorf("provider %s bedrock access key id is not configured (api_key or api_key_env)", p.ID)
+		}
+		a.bedrockCreds = sigV4Credentials{
+			AccessKey:    accessKey,
+			SecretKey:    secret,
+			SessionToken: os.Getenv(p.SessionTokenEnv),
+		}
 	}
 	return a, nil
 }
@@ -400,8 +428,13 @@ func (r *quotaReservation) releaseAll() {
 	r.releaseTokens()
 }
 
-// geminiModelPath builds the model-in-path Gemini endpoint. Stream calls use
-// streamGenerateContent with the SSE alt parameter.
+// bedrockModelPath builds the Converse model-in-path endpoint (see
+// canonical.BedrockModelPath for the escaping rule that keeps the
+// wire path identical to the SigV4-canonicalized path).
+func bedrockModelPath(model string, stream bool) string {
+	return canonical.BedrockModelPath(model, stream)
+}
+
 // vertexModelPath builds the Vertex AI model-in-path endpoint for
 // the configured project/location. Vertex speaks the Gemini wire
 // format; streaming uses :streamGenerateContent with SSE.
@@ -428,6 +461,8 @@ func (a *httpAdapter) azureDeploymentPath(model string) string {
 		"/chat/completions?api-version=" + url.QueryEscape(version)
 }
 
+// geminiModelPath builds the model-in-path Gemini endpoint. Stream calls use
+// streamGenerateContent with the SSE alt parameter.
 func (a *httpAdapter) geminiModelPath(model string, stream bool) string {
 	model = strings.TrimPrefix(strings.TrimSpace(model), "models/")
 	if stream {
@@ -546,6 +581,13 @@ func (a *httpAdapter) DoPath(ctx context.Context, method, path string, payload [
 		if a.p.Type == "anthropic_compatible" && req.Header.Get("anthropic-version") == "" {
 			req.Header.Set("anthropic-version", "2023-06-01")
 		}
+		if a.p.Type == "bedrock" {
+			region := a.p.AWSRegion
+			if region == "" {
+				region = "us-east-1"
+			}
+			signV4(req, payload, a.bedrockCreds, region, "bedrock", time.Now())
+		}
 
 		client := a.c
 		if stream {
@@ -605,7 +647,13 @@ func (a *httpAdapter) DoPath(ctx context.Context, method, path string, payload [
 		// Provider and credential capacity both stay reserved until the body is
 		// fully consumed or closed. This makes key-level load balancing reflect
 		// long-lived SSE streams instead of only time-to-first-byte.
-		resp.Body = &releaseOnDoneBody{ReadCloser: resp.Body, release: func() {
+		inner := resp.Body
+		if a.p.Type == "bedrock" && stream {
+			// ConverseStream speaks the AWS binary event stream; the
+			// gateway's stream pump speaks SSE. Translate at the edge.
+			inner = newEventStreamSSEReader(inner)
+		}
+		resp.Body = &releaseOnDoneBody{ReadCloser: inner, release: func() {
 			reservation.releaseAll()
 			a.releaseCredential(idx)
 			release()
@@ -757,6 +805,9 @@ func (a *httpAdapter) applyAuthKey(req *http.Request, key string) {
 	}
 	if key == "" {
 		return
+	}
+	if a.p.Type == "bedrock" {
+		return // SigV4 signing in DoPath replaces static header auth.
 	}
 	mode := a.p.AuthMode
 	if mode == "" {
@@ -969,6 +1020,11 @@ func (a *httpAdapter) Probe(ctx context.Context, model string, maxTokens int) (t
 	maxTokens = 1
 	var body map[string]any
 	switch a.p.Type {
+	case "bedrock":
+		body = map[string]any{
+			"messages":        []map[string]any{{"role": "user", "content": []map[string]any{{"text": "OK"}}}},
+			"inferenceConfig": map[string]any{"maxTokens": maxTokens},
+		}
 	case "gemini", "vertex":
 		body = map[string]any{
 			"contents":         []map[string]any{{"role": "user", "parts": []map[string]any{{"text": "OK"}}}},
@@ -988,7 +1044,9 @@ func (a *httpAdapter) Probe(ctx context.Context, model string, maxTokens int) (t
 	}
 	start := time.Now()
 	var resp *http.Response
-	if a.p.Type == "gemini" {
+	if a.p.Type == "bedrock" {
+		resp, err = a.DoPath(ctx, http.MethodPost, bedrockModelPath(model, false), b, false, nil)
+	} else if a.p.Type == "gemini" {
 		resp, err = a.DoPath(ctx, http.MethodPost, a.geminiModelPath(model, false), b, false, nil)
 	} else if a.p.Type == "vertex" {
 		resp, err = a.DoPath(ctx, http.MethodPost, a.vertexModelPath(model, false), b, false, nil)
@@ -1028,6 +1086,10 @@ func (a *httpAdapter) validateProbeResponse(data []byte) error {
 		return fmt.Errorf("probe returned error envelope: %s", a.safeSnippet(raw))
 	}
 	switch a.p.Type {
+	case "bedrock":
+		if raw, ok := root["output"]; !ok || len(raw) == 0 {
+			return fmt.Errorf("probe returned no Bedrock output")
+		}
 	case "anthropic_compatible":
 		var typ, role string
 		if raw := root["type"]; len(raw) > 0 {

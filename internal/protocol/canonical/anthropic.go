@@ -299,7 +299,16 @@ func EncodeAnthropicRequest(in Request, upstreamModel string) (core.AnthropicReq
 		if len(blocks) == 0 {
 			blocks = []map[string]any{{"type": "text", "text": ""}}
 		}
-		out.Messages = append(out.Messages, core.AnthMessage{Role: m.Role, Content: mustJSON(blocks)})
+		// Anthropic has no "tool" role: tool results travel as
+		// tool_result blocks inside a USER turn (the IR keeps them in
+		// dedicated RoleTool messages for OpenAI-shaped dialects).
+		// Emitting role "tool" verbatim produced conversations the
+		// real Anthropic API rejects with a 400 (M5-2 conformance).
+		role := m.Role
+		if role != RoleAssistant {
+			role = RoleUser
+		}
+		out.Messages = append(out.Messages, core.AnthMessage{Role: role, Content: mustJSON(blocks)})
 	}
 	if len(in.Tools) > 0 {
 		names := make([]string, 0, len(in.Tools))
