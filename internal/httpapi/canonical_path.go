@@ -30,8 +30,10 @@ func upstreamKindFor(pType string) string {
 	switch pType {
 	case "anthropic_compatible":
 		return "anthropic"
-	case "gemini":
+	case "gemini", "vertex":
 		return "gemini"
+	case "bedrock":
+		return "bedrock"
 	case "openai_responses":
 		return "openai_responses"
 	default:
@@ -92,7 +94,7 @@ func (s *Server) canonicalStreamPump(
 	resp *http.Response,
 	kind, clientProtocol, requestedModel, requestID string,
 	toolDefs []canonical.ToolDef,
-	usageHook func(input, output int),
+	usageHook func(u canonical.Usage),
 ) error {
 	defer resp.Body.Close()
 	streamWriter := &streamCommitWriter{ResponseWriter: w}
@@ -121,6 +123,7 @@ func (s *Server) canonicalStreamPump(
 	terminal := false
 	var streamErr error
 	inputTokens, outputTokens := 0, 0
+	cacheReadTokens, cacheWriteTokens := 0, 0
 	usageSeen := false
 	anthropicToolBlocks := map[int]bool{}
 	assembledArgs := map[int]*strings.Builder{}
@@ -200,6 +203,13 @@ func (s *Server) canonicalStreamPump(
 			evs, err = canonical.DecodeAnthropicStreamEvent(name, data)
 		case "gemini":
 			evs, _, err = canonical.DecodeGeminiStreamChunk(data)
+		case "bedrock":
+			// Terminal LATCHES for Bedrock: Converse sends a metadata
+			// event (usage) AFTER messageStop, and that chunk's own
+			// terminal=false must not un-end the stream.
+			var bedrockTerminal bool
+			evs, bedrockTerminal, err = canonical.DecodeBedrockStreamChunk(data)
+			terminal = terminal || bedrockTerminal
 		case "openai_responses":
 			evs, terminal, err = canonical.DecodeResponsesStreamEvent(name, data)
 		default:
@@ -286,6 +296,12 @@ func (s *Server) canonicalStreamPump(
 				if ev.Usage.OutputTokens > outputTokens {
 					outputTokens = ev.Usage.OutputTokens
 				}
+				if ev.Usage.CacheReadTokens > cacheReadTokens {
+					cacheReadTokens = ev.Usage.CacheReadTokens
+				}
+				if ev.Usage.CacheWriteTokens > cacheWriteTokens {
+					cacheWriteTokens = ev.Usage.CacheWriteTokens
+				}
 				if ev.Usage.InputTokens > 0 || ev.Usage.OutputTokens > 0 {
 					usageSeen = true
 				}
@@ -313,7 +329,7 @@ func (s *Server) canonicalStreamPump(
 		}
 	}
 	if streamErr == nil && terminal && usageHook != nil && usageSeen {
-		usageHook(inputTokens, outputTokens)
+		usageHook(canonical.Usage{InputTokens: inputTokens, OutputTokens: outputTokens, CacheReadTokens: cacheReadTokens, CacheWriteTokens: cacheWriteTokens})
 	}
 	return streamErr
 }
@@ -326,7 +342,7 @@ func (s *Server) handleCanonicalResponse(
 	kind, clientProtocol, requestedModel, requestID string,
 	stream bool,
 	toolDefs []canonical.ToolDef,
-	usageHook func(input, output int),
+	usageHook func(u canonical.Usage),
 ) error {
 	if stream {
 		return s.canonicalStreamPump(w, resp, kind, clientProtocol, requestedModel, requestID, toolDefs, usageHook)
@@ -342,6 +358,8 @@ func (s *Server) handleCanonicalResponse(
 		canResp, err = canonical.DecodeAnthropicResponse(body)
 	case "gemini":
 		canResp, err = canonical.DecodeGeminiResponse(body)
+	case "bedrock":
+		canResp, err = canonical.DecodeBedrockResponse(body)
 	case "openai_responses":
 		canResp, err = canonical.DecodeResponsesResponse(body)
 	default:
@@ -362,7 +380,7 @@ func (s *Server) handleCanonicalResponse(
 		}
 	}
 	if usageHook != nil {
-		usageHook(canResp.Usage.InputTokens, canResp.Usage.OutputTokens)
+		usageHook(canResp.Usage)
 	}
 	switch clientProtocol {
 	case "anthropic":
@@ -616,17 +634,17 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if req.Streaming {
-			resp.Body = observeFirstByte(resp.Body, start, func(d time.Duration) { s.hm.RecordTTFT(deployment.ID, d) })
+			resp.Body = observeFirstByte(resp.Body, start, func(d time.Duration) { s.hm.RecordTTFT(deployment.ID, d); noteSpanTTFT(r.Context(), d) })
 		}
 		deploy := deployment
 		sent := sentPayload
 		var usageErr error
 		if canReq.Stream {
 			usageErr = s.canonicalStreamPump(w, resp, bundle.canonicalKind, "openai_responses", in.Model, r.Header.Get("x-request-id"), bundle.toolDefs,
-				func(input, output int) { s.recordUsage(r, deploy.ID, int64(input), int64(output)) })
+				func(u canonical.Usage) { s.recordUsageCanonical(r, deploy.ID, bundle.canonicalKind, u) })
 		} else {
 			usageErr = s.handleCanonicalResponse(w, resp, bundle.canonicalKind, "openai_responses", in.Model, r.Header.Get("x-request-id"), false, bundle.toolDefs,
-				func(input, output int) { s.recordUsage(r, deploy.ID, int64(input), int64(output)) })
+				func(u canonical.Usage) { s.recordUsageCanonical(r, deploy.ID, bundle.canonicalKind, u) })
 		}
 		total := time.Since(start)
 		if usageErr != nil {
