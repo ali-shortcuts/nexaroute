@@ -95,8 +95,8 @@ return 1`
 
 // redisChanges is the JSON payload of commitScript.
 type redisChanges struct {
-	AuditDel   []string `json:"audit_del,omitempty"`
-	AuditPut   *struct {
+	AuditDel []string `json:"audit_del,omitempty"`
+	AuditPut *struct {
 		Seq  string `json:"seq"`
 		JSON string `json:"json"`
 	} `json:"audit_put,omitempty"`
