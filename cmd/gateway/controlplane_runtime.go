@@ -6,11 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib" // PostgreSQL driver for the control-plane SQL store
+	"github.com/redis/go-redis/v9"
 
 	"github.com/ali-shortcuts/nexaroute/internal/config"
 	"github.com/ali-shortcuts/nexaroute/internal/controlplane"
@@ -31,16 +33,17 @@ const (
 
 type controlPlaneRuntime struct {
 	manager *controlplane.Manager
-	db      *sql.DB // non-nil only for the postgres backend
+	closer  io.Closer // non-nil for the postgres/redis backends
 }
 
-// Close releases backend resources (the PostgreSQL pool). File and memory
-// backends hold no external resources and close as a no-op.
+// Close releases backend resources (the PostgreSQL pool or the Redis
+// client). File and memory backends hold no external resources and close
+// as a no-op.
 func (r *controlPlaneRuntime) Close() error {
-	if r == nil || r.db == nil {
+	if r == nil || r.closer == nil {
 		return nil
 	}
-	return r.db.Close()
+	return r.closer.Close()
 }
 
 func openControlPlaneRuntime(cfg config.ControlPlaneConfig, configPath string) (*controlPlaneRuntime, error) {
@@ -52,7 +55,7 @@ func openControlPlaneRuntime(cfg config.ControlPlaneConfig, configPath string) (
 		backend = "file"
 	}
 	var store controlplane.Store
-	var db *sql.DB
+	var closer io.Closer
 	switch backend {
 	case "file":
 		path := cfg.StatePath
@@ -71,14 +74,18 @@ func openControlPlaneRuntime(cfg config.ControlPlaneConfig, configPath string) (
 		store = controlplane.NewMemoryStore()
 	case "postgres":
 		var err error
+		var db *sql.DB
 		store, db, err = openPostgresControlPlane(cfg)
 		if err != nil {
 			return nil, err
 		}
+		closer = db
 	case "redis":
-		// The Redis Store adapter is not wired yet (M4-1 follow-up). Refuse
-		// startup instead of silently falling back to memory.
-		return nil, errors.New("control_plane.backend=redis is configured but the Redis store adapter is not registered in this build; refusing unsafe fallback")
+		var err error
+		store, closer, err = openRedisControlPlane(cfg)
+		if err != nil {
+			return nil, err
+		}
 	default:
 		return nil, errors.New("unsupported control-plane backend")
 	}
@@ -88,12 +95,12 @@ func openControlPlaneRuntime(cfg config.ControlPlaneConfig, configPath string) (
 	}
 	manager, err := controlplane.NewManager(store, mode)
 	if err != nil {
-		if db != nil {
-			_ = db.Close()
+		if closer != nil {
+			_ = closer.Close()
 		}
 		return nil, err
 	}
-	rt := &controlPlaneRuntime{manager: manager, db: db}
+	rt := &controlPlaneRuntime{manager: manager, closer: closer}
 	if cfg.MigrationDryRun {
 		return rt, nil
 	}
@@ -169,4 +176,68 @@ func openPostgresControlPlane(cfg config.ControlPlaneConfig) (controlplane.Store
 		return nil, nil, err
 	}
 	return store, db, nil
+}
+
+// Bounded Redis settings for the control-plane store, mirroring the
+// PostgreSQL posture: small pool, bounded dial/read/write timeouts and
+// bounded retries so a sick Redis fails operations instead of hanging
+// the gateway.
+const (
+	controlPlaneRedisPoolSize    = 10
+	controlPlaneRedisDialTimeout = 5 * time.Second
+	controlPlaneRedisIOTimeout   = 5 * time.Second
+	controlPlaneRedisMaxRetries  = 2
+	controlPlaneRedisPingTimeout = 10 * time.Second
+)
+
+// redisHashAdapter adapts a go-redis client to the control plane's
+// minimal RedisHashClient contract.
+type redisHashAdapter struct{ client *redis.Client }
+
+func (a redisHashAdapter) HGetAll(ctx context.Context, key string) (map[string]string, error) {
+	return a.client.HGetAll(ctx, key).Result()
+}
+
+func (a redisHashAdapter) Eval(ctx context.Context, script string, keys []string, args ...any) (any, error) {
+	return a.client.Eval(ctx, script, keys, args...).Result()
+}
+
+// openRedisControlPlane wires the real Redis backend: the URL is
+// resolved only from the environment variable named by the configuration
+// (never persisted or logged), timeouts and retries are bounded, and
+// startup pings with a bounded context. Failures are fail-closed with
+// secret-safe errors; there is no fallback to another backend.
+func openRedisControlPlane(cfg config.ControlPlaneConfig) (controlplane.Store, io.Closer, error) {
+	envName := cfg.RedisURLEnv
+	if envName == "" {
+		return nil, nil, errors.New("control_plane.redis_url_env must name the environment variable holding the Redis URL")
+	}
+	rawURL := os.Getenv(envName)
+	if rawURL == "" {
+		return nil, nil, fmt.Errorf("environment variable %s named by control_plane.redis_url_env is not set or is empty", envName)
+	}
+	opts, err := redis.ParseURL(rawURL)
+	if err != nil {
+		// Parse errors can quote parts of the URL; report only the class.
+		return nil, nil, fmt.Errorf("the Redis URL in %s is invalid; expected a redis:// or rediss:// URL", envName)
+	}
+	opts.PoolSize = controlPlaneRedisPoolSize
+	opts.DialTimeout = controlPlaneRedisDialTimeout
+	opts.ReadTimeout = controlPlaneRedisIOTimeout
+	opts.WriteTimeout = controlPlaneRedisIOTimeout
+	opts.MaxRetries = controlPlaneRedisMaxRetries
+	client := redis.NewClient(opts)
+	pingCtx, cancel := context.WithTimeout(context.Background(), controlPlaneRedisPingTimeout)
+	err = client.Ping(pingCtx).Err()
+	cancel()
+	if err != nil {
+		_ = client.Close()
+		return nil, nil, fmt.Errorf("control-plane Redis is unreachable via the URL in %s; check network reachability and credentials", envName)
+	}
+	store, err := controlplane.NewRedisStore(redisHashAdapter{client: client})
+	if err != nil {
+		_ = client.Close()
+		return nil, nil, err
+	}
+	return store, client, nil
 }

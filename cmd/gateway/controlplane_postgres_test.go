@@ -48,11 +48,12 @@ func TestControlPlanePostgresFailsClosedAndRedacted(t *testing.T) {
 		t.Fatal("dry-run against unreachable PostgreSQL must fail closed")
 	}
 
-	// Redis remains a deliberate, explicit refusal until its Store
-	// adapter is registered.
+	// Redis with its URL env unset fails closed the same way, naming the
+	// variable and never falling back to another backend.
+	t.Setenv("NEXAROUTE_TEST_CP_REDIS_URL", "")
 	if _, err := openControlPlaneRuntime(config.ControlPlaneConfig{
 		Enabled: true, Backend: "redis", RedisURLEnv: "NEXAROUTE_TEST_CP_REDIS_URL",
-	}, path); err == nil || !strings.Contains(err.Error(), "refusing unsafe fallback") {
-		t.Fatalf("redis: err=%v, want the explicit fail-closed refusal", err)
+	}, path); err == nil || !strings.Contains(err.Error(), "NEXAROUTE_TEST_CP_REDIS_URL") {
+		t.Fatalf("redis without URL env: err=%v, want a fail-closed error naming the variable", err)
 	}
 }
