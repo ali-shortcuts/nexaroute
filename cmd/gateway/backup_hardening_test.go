@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -784,6 +786,292 @@ func TestBackupEnforcesLimitsDuringCreation(t *testing.T) {
 		}
 		if _, err := os.Stat(out); !os.IsNotExist(err) {
 			t.Fatal("no bundle may be produced when the aggregate overflows")
+		}
+	})
+}
+
+// --- Round 4 Blocker A: symlinked ancestor + nonexistent descendants ---
+//
+// canonicalPath previously resolved only the immediate parent of a
+// missing path. With an existing symlinked ancestor and one or more
+// nonexistent deeper components, two spellings of the SAME eventual
+// file produced different "canonical" strings and the collision
+// check passed — the second payload then overwrote the first.
+
+func TestCanonicalPathResolvesMissingDescendants(t *testing.T) {
+	root := t.TempDir()
+	real := filepath.Join(root, "real")
+	if err := os.MkdirAll(real, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	pairs := [][2]string{
+		{filepath.Join(link, "new", "config.json"), filepath.Join(real, "new", "config.json")},
+		{filepath.Join(link, "a", "b", "config.json"), filepath.Join(real, "a", "b", "config.json")},
+		{filepath.Join(link, "config.json"), filepath.Join(real, "config.json")},
+	}
+	for _, pair := range pairs {
+		a, err := canonicalPath(pair[0])
+		if err != nil {
+			t.Fatalf("canonicalPath(%s): %v", pair[0], err)
+		}
+		b, err := canonicalPath(pair[1])
+		if err != nil {
+			t.Fatalf("canonicalPath(%s): %v", pair[1], err)
+		}
+		if a != b {
+			t.Fatalf("aliases canonicalize differently:\n %s -> %s\n %s -> %s", pair[0], a, pair[1], b)
+		}
+	}
+	// A dangling symlink destination resolves through its target.
+	dangling := filepath.Join(root, "dangling")
+	if err := os.Symlink(filepath.Join(real, "future.json"), dangling); err != nil {
+		t.Fatal(err)
+	}
+	got, err := canonicalPath(dangling)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(real, "future.json"); got != want {
+		t.Fatalf("dangling symlink canonical=%s, want %s", got, want)
+	}
+	// A path under a regular file is an error, never a silent
+	// "canonical" fallback.
+	blocker := filepath.Join(root, "blocker")
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := canonicalPath(filepath.Join(blocker, "child.json")); err == nil {
+		t.Fatal("canonicalPath under a regular file must error, not fall back")
+	}
+}
+
+func TestRestoreRejectsSymlinkedAncestorAlias(t *testing.T) {
+	for _, deep := range []string{"new", filepath.Join("a", "b")} {
+		t.Run(deep, func(t *testing.T) {
+			root := t.TempDir()
+			real := filepath.Join(root, "real")
+			if err := os.MkdirAll(real, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			link := filepath.Join(root, "link")
+			if err := os.Symlink(real, link); err != nil {
+				t.Fatal(err)
+			}
+			viaLink := filepath.Join(link, deep, "config.json")
+			viaReal := filepath.Join(real, deep, "config.json")
+			cfgBytes := bundleConfigBytes(t, func(cfg *config.Config) {
+				cfg.Admin.SecurityStorePath = viaLink
+			})
+			bundle := writeTestBundle(t, map[string][]byte{
+				backupEntryConfig: cfgBytes, backupEntrySecurity: []byte("db-bytes"),
+			})
+			var stdout, stderr bytes.Buffer
+			code := runRestore([]string{"--bundle", bundle, "--config", viaReal}, &stdout, &stderr)
+			if code != 1 {
+				t.Fatalf("restore exit=%d, want 1 (collision) stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+			}
+			if !strings.Contains(stderr.String(), "collide") {
+				t.Fatalf("refusal must name the collision: %s", stderr.String())
+			}
+			if _, err := os.Stat(viaReal); !os.IsNotExist(err) {
+				t.Fatal("no restore target may be created by a refused restore")
+			}
+			if _, err := os.Stat(filepath.Join(real, deep)); !os.IsNotExist(err) {
+				t.Fatal("no destination directory may be created by a refused restore")
+			}
+		})
+	}
+}
+
+// --- Round 4 Blocker B: crash recovery from the durable journal ---
+//
+// Helper-process pattern: the test binary re-executes itself with
+// NR_CRASH_HELPER=1; the helper runs a real restore whose install
+// seam aborts the process with os.Exit AFTER the Nth install — no
+// defers run, the in-process rollback never fires, exactly like a
+// kill or crash. The parent then recovers from the journal the dead
+// process left behind and verifies every destination's prior state.
+
+func TestRestoreCrashRecovery(t *testing.T) {
+	if os.Getenv("NR_CRASH_HELPER") == "1" {
+		after, _ := strconv.Atoi(os.Getenv("NR_CRASH_AFTER"))
+		calls := 0
+		orig := restoreWriteFile
+		restoreWriteFile = func(path string, data []byte, perm os.FileMode) error {
+			err := orig(path, data, perm)
+			if err == nil {
+				calls++
+				if calls == after {
+					os.Exit(42) // abrupt termination mid-transaction
+				}
+			}
+			return err
+		}
+		var stdout, stderr bytes.Buffer
+		code := runRestore([]string{"--bundle", os.Getenv("NR_CRASH_BUNDLE"), "--config", os.Getenv("NR_CRASH_CONFIG"), "--force"}, &stdout, &stderr)
+		os.Exit(code)
+	}
+
+	// Source bundle: config + security store + master key.
+	_, configPath := opsFixture(t)
+	if err := os.WriteFile(configPath+".key", []byte("0123456789abcdef0123456789abcdef"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bundle := filepath.Join(t.TempDir(), "b.tar")
+	if code, stderr := runBackupCode(t, configPath, bundle, "--include-master-key"); code != 0 {
+		t.Fatalf("backup exit=%d stderr=%s", code, stderr)
+	}
+	bundleConfig, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Targets with three different prior states: an existing config
+	// (mode 0640), an existing SYMLINK as the security store, and an
+	// absent master key.
+	targetDir := t.TempDir()
+	targetConfig := filepath.Join(targetDir, "config.json")
+	preConfig := []byte("PRE-CRASH CONFIG")
+	if err := os.WriteFile(targetConfig, preConfig, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	pointee := filepath.Join(targetDir, "pointee.db")
+	pointeeBytes := []byte("POINTEE BYTES - NOT PART OF THE RESTORE")
+	if err := os.WriteFile(pointee, pointeeBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	secDir := filepath.Join(targetDir, "security")
+	if err := os.MkdirAll(secDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	dbPath := filepath.Join(secDir, "nexaroute-security.db")
+	if err := os.Symlink(pointee, dbPath); err != nil {
+		t.Fatal(err)
+	}
+
+	// Crash after the 2nd install (config + security store landed;
+	// the key install never runs).
+	cmd := exec.Command(os.Args[0], "-test.run", "^TestRestoreCrashRecovery$", "-test.count=1")
+	cmd.Env = append(os.Environ(),
+		"NR_CRASH_HELPER=1", "NR_CRASH_AFTER=2",
+		"NR_CRASH_BUNDLE="+bundle, "NR_CRASH_CONFIG="+targetConfig,
+	)
+	out, err := cmd.CombinedOutput()
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 42 {
+		t.Fatalf("helper must die with code 42 (crash simulation); err=%v output=%s", err, out)
+	}
+
+	// Post-crash state: config replaced, symlink replaced by a
+	// regular file, key still absent, journal left behind.
+	if got, _ := os.ReadFile(targetConfig); !bytes.Equal(got, bundleConfig) {
+		t.Fatal("post-crash config must hold the installed bundle bytes")
+	}
+	if info, err := os.Lstat(dbPath); err != nil || !info.Mode().IsRegular() {
+		t.Fatalf("post-crash security target must be a regular file (symlink replaced); err=%v", err)
+	}
+
+	var journalDir string
+	for _, dir := range findInterruptedRestoreJournals() {
+		if m, err := readJournalManifest(dir); err == nil && len(m.Entries) > 0 && strings.HasPrefix(m.Entries[0].Target, targetDir) {
+			journalDir = dir
+			break
+		}
+	}
+	if journalDir == "" {
+		t.Fatal("the crashed restore must leave a discoverable interrupted journal")
+	}
+
+	// Recover in a fresh invocation and verify every prior state.
+	var stdout, stderr bytes.Buffer
+	if code := runRestore([]string{"--recover", journalDir}, &stdout, &stderr); code != 0 {
+		t.Fatalf("recover exit=%d, want 0 (stderr=%s)", code, stderr.String())
+	}
+	if got, _ := os.ReadFile(targetConfig); !bytes.Equal(got, preConfig) {
+		t.Fatal("recovered config must hold its pre-restore bytes")
+	}
+	if info, err := os.Stat(targetConfig); err != nil || info.Mode().Perm() != 0o640 {
+		t.Fatalf("recovered config mode must be the journaled 0640; err=%v", err)
+	}
+	if info, err := os.Lstat(dbPath); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatal("recovered security target must be a symlink again")
+	}
+	if target, err := os.Readlink(dbPath); err != nil || target != pointee {
+		t.Fatalf("recovered symlink target=%q err=%v, want %q", target, err, pointee)
+	}
+	if got, _ := os.ReadFile(pointee); !bytes.Equal(got, pointeeBytes) {
+		t.Fatal("the symlink's pointee must never be touched")
+	}
+	if _, err := os.Stat(targetConfig + ".key"); !os.IsNotExist(err) {
+		t.Fatal("a destination absent before the transaction must be absent after recovery")
+	}
+	if _, err := os.Stat(journalDir); !os.IsNotExist(err) {
+		t.Fatal("a fully recovered journal must be removed")
+	}
+}
+
+func TestRestoreRecoverGuards(t *testing.T) {
+	writeJournal := func(t *testing.T, m *restoreJournalManifest) string {
+		t.Helper()
+		dir := filepath.Join(t.TempDir(), "nexaroute-restore-journal-test")
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := writeJournalManifest(dir, m); err != nil {
+			t.Fatal(err)
+		}
+		return dir
+	}
+
+	t.Run("completed journal is cleaned, never rolled back", func(t *testing.T) {
+		sentinel := filepath.Join(t.TempDir(), "config.json")
+		sentinelBytes := []byte("COMPLETED TX STATE - MUST SURVIVE")
+		if err := os.WriteFile(sentinel, sentinelBytes, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		dir := writeJournal(t, &restoreJournalManifest{
+			Format: restoreJournalFormat, ID: "done1", State: "completed",
+			Entries: []restoreJournalEntry{{Name: backupEntryConfig, Target: sentinel, Existed: true, Mode: 0o600, Saved: "entry-0", Installed: true}},
+		})
+		if err := os.WriteFile(filepath.Join(dir, "entry-0"), []byte("STALE PRE-STATE"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		var stdout, stderr bytes.Buffer
+		if code := runRestore([]string{"--recover", dir}, &stdout, &stderr); code != 0 {
+			t.Fatalf("recover(completed) exit=%d, want 0 (stderr=%s)", code, stderr.String())
+		}
+		if got, _ := os.ReadFile(sentinel); !bytes.Equal(got, sentinelBytes) {
+			t.Fatal("a completed transaction must never be rolled back")
+		}
+		if _, err := os.Stat(dir); !os.IsNotExist(err) {
+			t.Fatal("a completed journal must be cleaned up")
+		}
+	})
+
+	t.Run("unknown journal format is refused and preserved", func(t *testing.T) {
+		dir := writeJournal(t, &restoreJournalManifest{
+			Format: restoreJournalFormat, ID: "x", State: "installing",
+		})
+		// Corrupt the format field to an unknown future version.
+		manifestPath := filepath.Join(dir, "manifest.json")
+		raw, err := os.ReadFile(manifestPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw = bytes.Replace(raw, []byte(restoreJournalFormat), []byte("nexaroute-restore-journal/99"), 1)
+		if err := os.WriteFile(manifestPath, raw, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		var stdout, stderr bytes.Buffer
+		if code := runRestore([]string{"--recover", dir}, &stdout, &stderr); code != 1 {
+			t.Fatalf("recover(unknown format) exit=%d, want 1", code)
+		}
+		if _, err := os.Stat(manifestPath); err != nil {
+			t.Fatal("an unknown-format journal must be preserved, never replayed or deleted")
 		}
 	})
 }

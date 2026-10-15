@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -314,27 +315,89 @@ func refuseOutputCollision(outPath string, sources []string) error {
 // compares correctly against existing sources. A symlinked final
 // element is resolved through its target even when the target is
 // missing (EvalSymlinks fails on a dangling link).
+// canonicalPath resolves p to a canonical absolute path with a
+// component-wise walk (realpath semantics):
+//
+//   - "." and ".." are applied PHYSICALLY, against the resolved
+//     prefix — never lexically pre-collapsed across a symlink the way
+//     filepath.Abs/Clean would, because a symlinked component changes
+//     what ".." means.
+//   - Every existing component is Lstat'd; symlinks are expanded in
+//     place (relative targets resolve against the link's directory),
+//     with a resolution cap so symlink loops error out.
+//   - The walk stops at the first component that does not exist:
+//     nothing below it can exist either, so the remaining tail is
+//     appended lexically. This is the case the previous implementation
+//     got wrong — it resolved only the immediate parent, so
+//     link/new/file and real/new/file (link → real, new/ missing)
+//     canonicalized to DIFFERENT strings and alias detection missed
+//     the collision entirely.
+//   - Errors other than genuine non-existence (permission, a
+//     non-directory component, I/O) are PROPAGATED. They are never
+//     mistaken for a missing path and never papered over with an
+//     unresolved fallback: a destination that cannot be canonicalized
+//     cannot be proven distinct, so callers must refuse it.
 func canonicalPath(p string) (string, error) {
-	abs, err := filepath.Abs(p)
-	if err != nil {
-		return "", err
+	if p == "" {
+		return "", errors.New("empty path")
 	}
-	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
-		return resolved, nil
+	if !filepath.IsAbs(p) {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return "", err
+		}
+		p = cwd + string(os.PathSeparator) + p
 	}
-	if info, err := os.Lstat(abs); err == nil && info.Mode()&os.ModeSymlink != 0 {
-		if target, err := os.Readlink(abs); err == nil {
-			if !filepath.IsAbs(target) {
-				target = filepath.Join(filepath.Dir(abs), target)
+	const maxSymlinkResolutions = 40
+	resolved := string(os.PathSeparator)
+	rest := splitPathComponents(p)
+	resolutions := 0
+	for len(rest) > 0 {
+		comp := rest[0]
+		rest = rest[1:]
+		switch comp {
+		case ".":
+			continue
+		case "..":
+			resolved = filepath.Dir(resolved)
+			continue
+		}
+		candidate := filepath.Join(resolved, comp)
+		info, err := os.Lstat(candidate)
+		switch {
+		case err == nil:
+			if info.Mode()&os.ModeSymlink == 0 {
+				resolved = candidate
+				continue
 			}
-			return canonicalPath(target)
+			resolutions++
+			if resolutions > maxSymlinkResolutions {
+				return "", fmt.Errorf("canonicalize %s: too many symlink resolutions", p)
+			}
+			target, err := os.Readlink(candidate)
+			if err != nil {
+				return "", err
+			}
+			if filepath.IsAbs(target) {
+				resolved = string(os.PathSeparator)
+			}
+			// A relative target resolves against the link's own
+			// directory, which is exactly the current resolved
+			// prefix — so in both cases the target's components are
+			// simply queued next.
+			rest = append(splitPathComponents(target), rest...)
+		case errors.Is(err, os.ErrNotExist):
+			tail := append([]string{comp}, rest...)
+			return filepath.Join(append([]string{resolved}, tail...)...), nil
+		default:
+			return "", err
 		}
 	}
-	parent, err := filepath.EvalSymlinks(filepath.Dir(abs))
-	if err != nil {
-		return abs, nil // parent unresolvable: fall back to the absolute form
-	}
-	return filepath.Join(parent, filepath.Base(abs)), nil
+	return resolved, nil
+}
+
+func splitPathComponents(p string) []string {
+	return strings.FieldsFunc(p, func(r rune) bool { return r == os.PathSeparator })
 }
 
 // writeBundle writes manifest + staged payloads into a tar at outPath,
@@ -398,12 +461,23 @@ func runRestore(args []string, stdout, stderr io.Writer) int {
 	bundle := fs.String("bundle", "", "backup bundle path (required)")
 	configPath := fs.String("config", defaultConfigPath(), "target config path")
 	force := fs.Bool("force", false, "overwrite existing files at the target")
+	recoverDir := fs.String("recover", "", "recover an interrupted restore from its journal directory, then exit")
 	if err := fs.Parse(args); err != nil {
 		return 2
+	}
+	if strings.TrimSpace(*recoverDir) != "" {
+		if err := recoverRestoreJournal(*recoverDir, stdout); err != nil {
+			fmt.Fprintf(stderr, "nexaroute restore --recover failed: %v\n", err)
+			return 1
+		}
+		return 0
 	}
 	if strings.TrimSpace(*bundle) == "" {
 		fmt.Fprintln(stderr, "nexaroute restore: --bundle is required")
 		return 2
+	}
+	for _, dir := range findInterruptedRestoreJournals() {
+		fmt.Fprintf(stderr, "WARNING: an interrupted restore journal exists at %s; its transaction did not complete — run `nexaroute restore --recover %s` to roll it back before relying on the installation\n", dir, dir)
 	}
 	if err := restoreBundle(*bundle, *configPath, *force, stdout); err != nil {
 		fmt.Fprintf(stderr, "nexaroute restore failed: %v\n", err)
@@ -546,6 +620,189 @@ func restoreBundle(bundlePath, configPath string, force bool, stdout io.Writer) 
 // the destination path it installs to.
 type installItem struct{ name, target string }
 
+// Durable restore journal ("nexaroute-restore-journal/1").
+//
+// The journal is the restore transaction's recovery record, designed
+// to survive the process: a directory (mode 0700) holding one saved
+// copy per replaced regular file (mode 0600) plus manifest.json,
+// which maps every saved copy to its destination and records
+// everything needed to reconstruct the pre-restore state without the
+// original process: destination (absolute), whether it existed, its
+// permission bits, its symlink target when it was a link, and
+// per-entry install progress. The manifest is rewritten atomically
+// (temp + rename + fsync of file and directory) BEFORE the first
+// install, after every install, and when the transaction completes,
+// so a crash at any point leaves a journal whose state is truthful:
+// state is "prepared" (nothing knowingly installed), "installing"
+// (some installs may have landed — including one whose manifest
+// update never ran, which is why recovery restores EVERY entry's
+// journaled state rather than trusting the installed flags), or
+// "completed" (all installs landed; the journal is then removed, and
+// a leftover completed journal is never rolled back).
+//
+// Recovery is explicit: `nexaroute restore --recover <journal-dir>`
+// validates the format version (unknown formats are refused, never
+// replayed), rolls every destination back to its journaled state,
+// and removes the journal only when every destination was recovered;
+// otherwise the journal stays and the error names the destinations
+// that still need recovery. A normal restore (and doctor) reports
+// interrupted journals it finds, with the recovery command.
+const restoreJournalFormat = "nexaroute-restore-journal/1"
+
+type restoreJournalEntry struct {
+	Name      string      `json:"name"`              // bundle entry name
+	Target    string      `json:"target"`            // absolute destination path
+	Existed   bool        `json:"existed"`           // whether anything was there before
+	Mode      os.FileMode `json:"mode,omitempty"`    // pre-restore permission bits (regular files)
+	LinkTo    string      `json:"link_to,omitempty"` // pre-restore symlink target
+	Saved     string      `json:"saved,omitempty"`   // journal copy file name (regular files)
+	Installed bool        `json:"installed"`         // whether this install landed (progress marker)
+}
+
+type restoreJournalManifest struct {
+	Format    string                `json:"format"`
+	ID        string                `json:"id"`
+	CreatedAt time.Time             `json:"created_at"`
+	State     string                `json:"state"` // prepared | installing | completed
+	Entries   []restoreJournalEntry `json:"entries"`
+}
+
+// writeJournalManifest atomically replaces the journal manifest and
+// fsyncs both the file and its directory, so the on-disk state is as
+// durable as the platform allows before the operation it describes.
+func writeJournalManifest(journalDir string, m *restoreJournalManifest) error {
+	data, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(journalDir, ".manifest-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer func() { _ = os.Remove(tmpName) }()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpName, filepath.Join(journalDir, "manifest.json")); err != nil {
+		return err
+	}
+	return syncDir(journalDir)
+}
+
+func syncDir(dir string) error {
+	fh, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = fh.Close() }()
+	return fh.Sync()
+}
+
+func readJournalManifest(journalDir string) (*restoreJournalManifest, error) {
+	data, err := os.ReadFile(filepath.Join(journalDir, "manifest.json"))
+	if err != nil {
+		return nil, err
+	}
+	var m restoreJournalManifest
+	if err := json.Unmarshal(data, &m); err != nil {
+		return nil, fmt.Errorf("journal manifest does not parse: %w", err)
+	}
+	if m.Format != restoreJournalFormat {
+		return nil, fmt.Errorf("unknown restore journal format %q (this build reads %q); refusing to replay it", m.Format, restoreJournalFormat)
+	}
+	return &m, nil
+}
+
+// findInterruptedRestoreJournals scans the journal base directory for
+// leftover journals whose transaction did not complete — the durable
+// trace of a crashed or killed restore.
+func findInterruptedRestoreJournals() []string {
+	base := os.TempDir()
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		return nil
+	}
+	var found []string
+	for _, e := range entries {
+		if !e.IsDir() || !strings.HasPrefix(e.Name(), "nexaroute-restore-journal-") {
+			continue
+		}
+		dir := filepath.Join(base, e.Name())
+		m, err := readJournalManifest(dir)
+		if err != nil || m.State == "completed" {
+			continue
+		}
+		found = append(found, dir)
+	}
+	return found
+}
+
+// recoverRestoreJournal rolls every destination in a journal back to
+// its recorded pre-restore state (see the format comment above for why
+// the per-entry installed flags are not trusted). The journal is
+// removed only when every destination was recovered; otherwise it is
+// preserved and the returned error names the destinations that still
+// need recovery. A completed journal is cleaned up, never replayed.
+func recoverRestoreJournal(journalDir string, stdout io.Writer) error {
+	m, err := readJournalManifest(journalDir)
+	if err != nil {
+		return fmt.Errorf("read restore journal %s: %w", journalDir, err)
+	}
+	if m.State == "completed" {
+		if err := os.RemoveAll(journalDir); err != nil {
+			return fmt.Errorf("clean up completed restore journal %s: %w", journalDir, err)
+		}
+		fmt.Fprintf(stdout, "restore transaction %s completed before the interruption; journal cleaned up, nothing rolled back\n", m.ID)
+		return nil
+	}
+	var failures []string
+	for i := len(m.Entries) - 1; i >= 0; i-- {
+		entry := m.Entries[i]
+		var rerr error
+		switch {
+		case entry.LinkTo != "":
+			if rerr = os.Remove(entry.Target); rerr == nil || errors.Is(rerr, os.ErrNotExist) {
+				rerr = os.Symlink(entry.LinkTo, entry.Target)
+			}
+		case entry.Existed:
+			var data []byte
+			if data, rerr = os.ReadFile(filepath.Join(journalDir, entry.Saved)); rerr == nil {
+				rerr = restoreRollbackWriteFile(entry.Target, data, entry.Mode)
+			}
+		default:
+			if rerr = os.Remove(entry.Target); errors.Is(rerr, os.ErrNotExist) {
+				rerr = nil
+			}
+		}
+		if rerr != nil {
+			failures = append(failures, fmt.Sprintf("%s (%v)", entry.Target, rerr))
+		} else {
+			fmt.Fprintf(stdout, "recovered %s\n", entry.Target)
+		}
+	}
+	if len(failures) > 0 {
+		return fmt.Errorf("recovery INCOMPLETE for journal %s — could not restore: %s; the journal is preserved at %s with the pre-restore copies; fix those destinations from it (or from backup) before starting the gateway", m.ID, strings.Join(failures, ", "), journalDir)
+	}
+	if err := os.RemoveAll(journalDir); err != nil {
+		return fmt.Errorf("destinations recovered but journal %s could not be removed: %w", journalDir, err)
+	}
+	fmt.Fprintf(stdout, "restore transaction %s rolled back; journal removed\n", m.ID)
+	return nil
+}
+
 // restoreWriteFile installs one payload file during a restore, and
 // restoreRollbackWriteFile puts a journaled file back during
 // rollback. They are separate variables so tests can inject
@@ -562,13 +819,15 @@ var restoreRollbackWriteFile = writeFileAtomic
 // the failure and any rollback step that itself failed.
 //
 // Guarantee limits (also documented in docs/OPERATIONS.md): rollback
-// is best-effort, not a filesystem transaction. A crash or power loss
-// mid-install can still leave a mixed installation, per-file atomic
+// is best-effort, not a filesystem transaction — per-file atomic
 // rename cannot be made atomic ACROSS files, and a rollback write can
-// itself fail (disk full, permissions changed mid-restore) — in that
-// case the error names every file that could not be rolled back, and
-// the journal directory is removed only after rollback completes, so
-// a failed restore never silently pretends the target is untouched.
+// itself fail (disk full, permissions changed mid-restore), in which
+// case the error names every file that could not be rolled back. What
+// the durable journal (see restoreJournalManifest) adds on top: if the
+// PROCESS dies mid-install, the journal survives with the complete
+// pre-restore record, and `nexaroute restore --recover` rolls the
+// transaction back afterwards. Power-loss durability still depends on
+// the filesystem and hardware honoring fsync.
 func installWithRollback(installs []installItem, payloads map[string][]byte, stdout io.Writer) error {
 	if len(installs) == 0 {
 		return nil
@@ -588,16 +847,22 @@ func installWithRollback(installs []installItem, payloads map[string][]byte, std
 		}
 	}()
 
-	type journalEntry struct {
-		target  string
-		existed bool
-		saved   string      // journal copy of the pre-restore bytes (regular files)
-		mode    os.FileMode // pre-restore permission bits (regular files)
-		linkTo  string      // symlink target, when the pre-restore entry was a symlink
+	var idBytes [8]byte
+	if _, err := rand.Read(idBytes[:]); err != nil {
+		return fmt.Errorf("create restore journal: %w", err)
 	}
-	journal := make([]journalEntry, 0, len(installs))
+	manifest := &restoreJournalManifest{
+		Format:    restoreJournalFormat,
+		ID:        hex.EncodeToString(idBytes[:]),
+		CreatedAt: time.Now().UTC(),
+		State:     "prepared",
+	}
 	for i, it := range installs {
-		entry := journalEntry{target: it.target}
+		abs, err := filepath.Abs(it.target)
+		if err != nil {
+			return fmt.Errorf("journal restore target %s: %w", it.target, err)
+		}
+		entry := restoreJournalEntry{Name: it.name, Target: abs}
 		info, lerr := os.Lstat(it.target)
 		switch {
 		case errors.Is(lerr, os.ErrNotExist):
@@ -612,18 +877,21 @@ func installWithRollback(installs []installItem, payloads map[string][]byte, std
 			if rerr != nil {
 				return fmt.Errorf("journal restore target %s: %w", it.target, rerr)
 			}
-			entry.existed = true
-			entry.linkTo = target
+			entry.Existed = true
+			entry.LinkTo = target
 		case info.Mode().IsRegular():
 			data, rerr := os.ReadFile(it.target)
 			if rerr != nil {
 				return fmt.Errorf("journal restore target %s: %w", it.target, rerr)
 			}
-			entry.existed = true
-			entry.mode = info.Mode().Perm()
-			entry.saved = filepath.Join(journalDir, fmt.Sprintf("entry-%d", i))
-			if werr := os.WriteFile(entry.saved, data, 0o600); werr != nil {
+			entry.Existed = true
+			entry.Mode = info.Mode().Perm()
+			entry.Saved = fmt.Sprintf("entry-%d", i)
+			if werr := os.WriteFile(filepath.Join(journalDir, entry.Saved), data, 0o600); werr != nil {
 				return fmt.Errorf("journal restore target %s: %w", it.target, werr)
+			}
+			if serr := syncDir(journalDir); serr != nil {
+				return fmt.Errorf("journal restore target %s: %w", it.target, serr)
 			}
 		default:
 			// Directories, devices, sockets and other non-file
@@ -631,7 +899,16 @@ func installWithRollback(installs []installItem, payloads map[string][]byte, std
 			// writing anything instead of destroying them.
 			return fmt.Errorf("restore target %s has an unsupported type (%s); refusing to replace it", it.target, info.Mode().Type())
 		}
-		journal = append(journal, entry)
+		manifest.Entries = append(manifest.Entries, entry)
+	}
+	// The complete pre-restore record must be durable BEFORE the
+	// first destination is touched: prepared first, then installing.
+	if err := writeJournalManifest(journalDir, manifest); err != nil {
+		return fmt.Errorf("write restore journal: %w", err)
+	}
+	manifest.State = "installing"
+	if err := writeJournalManifest(journalDir, manifest); err != nil {
+		return fmt.Errorf("write restore journal: %w", err)
 	}
 
 	installed := 0
@@ -640,36 +917,47 @@ func installWithRollback(installs []installItem, payloads map[string][]byte, std
 			// Roll back everything installed so far, newest first.
 			var rbFailures []string
 			for j := installed - 1; j >= 0; j-- {
-				entry := journal[j]
+				entry := manifest.Entries[j]
+				target := installs[j].target
 				var rerr error
 				switch {
-				case entry.linkTo != "":
-					if rerr = os.Remove(entry.target); rerr == nil || errors.Is(rerr, os.ErrNotExist) {
-						rerr = os.Symlink(entry.linkTo, entry.target)
+				case entry.LinkTo != "":
+					if rerr = os.Remove(target); rerr == nil || errors.Is(rerr, os.ErrNotExist) {
+						rerr = os.Symlink(entry.LinkTo, target)
 					}
-				case entry.existed:
+				case entry.Existed:
 					var data []byte
-					if data, rerr = os.ReadFile(entry.saved); rerr == nil {
-						rerr = restoreRollbackWriteFile(entry.target, data, entry.mode)
+					if data, rerr = os.ReadFile(filepath.Join(journalDir, entry.Saved)); rerr == nil {
+						rerr = restoreRollbackWriteFile(target, data, entry.Mode)
 					}
 				default:
-					if rerr = os.Remove(entry.target); errors.Is(rerr, os.ErrNotExist) {
+					if rerr = os.Remove(target); errors.Is(rerr, os.ErrNotExist) {
 						rerr = nil
 					}
 				}
 				if rerr != nil {
-					rbFailures = append(rbFailures, fmt.Sprintf("%s (%v)", entry.target, rerr))
+					rbFailures = append(rbFailures, fmt.Sprintf("%s (%v)", entry.Target, rerr))
 				}
 			}
 			if len(rbFailures) > 0 {
 				preserveJournal = true
-				return fmt.Errorf("install %s failed: %w; rollback INCOMPLETE — could not restore: %s; the installation is in a mixed state. The pre-restore copies are preserved in the restore journal at %s — recover those targets from it (or from backup) before starting the gateway", it.target, err, strings.Join(rbFailures, ", "), journalDir)
+				return fmt.Errorf("install %s failed: %w; rollback INCOMPLETE — could not restore: %s; the installation is in a mixed state. The pre-restore copies are preserved in the restore journal at %s — recover those targets with `nexaroute restore --recover %s` (or from backup) before starting the gateway", it.target, err, strings.Join(rbFailures, ", "), journalDir, journalDir)
 			}
 			return fmt.Errorf("install %s failed: %w; all previously installed files were rolled back to their pre-restore state", it.target, err)
 		}
 		installed++
+		manifest.Entries[installed-1].Installed = true
+		if err := writeJournalManifest(journalDir, manifest); err != nil {
+			// The install landed but its progress could not be
+			// recorded durably — stop and keep the journal so the
+			// transaction can be recovered explicitly.
+			preserveJournal = true
+			return fmt.Errorf("installed %s but could not update the restore journal: %w; the journal is preserved at %s — run `nexaroute restore --recover %s` to roll back to the pre-restore state", it.target, err, journalDir, journalDir)
+		}
 		fmt.Fprintf(stdout, "restored %s\n", it.target)
 	}
+	manifest.State = "completed"
+	_ = writeJournalManifest(journalDir, manifest) // best effort: journal removal follows immediately
 	return nil
 }
 

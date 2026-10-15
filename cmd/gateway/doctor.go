@@ -38,6 +38,7 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	d.checkConfig(*configPath)
 	d.checkSecurityStore(*configPath)
 	d.checkControlPlane(*configPath)
+	d.checkRestoreJournals()
 	fmt.Fprintf(stdout, "doctor summary: %d pass, %d warn, %d fail\n", d.passes, d.warns, d.fails)
 	if d.fails > 0 {
 		return 1
@@ -234,6 +235,20 @@ func (d *doctor) checkExternal(name, envName string, ping func(ctx context.Conte
 		return
 	}
 	d.report("PASS", name, fmt.Sprintf("reachable via %s", envName))
+}
+
+// checkRestoreJournals reports leftover restore journals: an
+// interrupted restore transaction whose destinations may be in a
+// mixed state until recovered. Report-only (doctor never writes).
+func (d *doctor) checkRestoreJournals() {
+	journals := findInterruptedRestoreJournals()
+	if len(journals) == 0 {
+		d.report("PASS", "restore_journal", "no interrupted restore transactions")
+		return
+	}
+	for _, dir := range journals {
+		d.report("WARN", "restore_journal", fmt.Sprintf("interrupted restore journal at %s; run `nexaroute restore --recover %s` to roll it back", dir, dir))
+	}
 }
 
 // fsErrorClass reduces a filesystem error to a coarse, safe class
