@@ -380,7 +380,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Gateway-Upstream-Model", c.Deployment.Model)
 		if in.Stream {
 			deploymentID := c.Deployment.ID
-			resp.Body = observeFirstByte(resp.Body, start, func(d time.Duration) { s.hm.RecordTTFT(deploymentID, d) })
+			resp.Body = observeFirstByte(resp.Body, start, func(d time.Duration) { s.hm.RecordTTFT(deploymentID, d); noteSpanTTFT(r.Context(), d) })
 		}
 		switch {
 		case kind != "":

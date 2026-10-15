@@ -25,6 +25,7 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/probe"
 	"github.com/ali-shortcuts/nexaroute/internal/providers"
 	"github.com/ali-shortcuts/nexaroute/internal/router"
+	"github.com/ali-shortcuts/nexaroute/internal/telemetry"
 	"github.com/ali-shortcuts/nexaroute/internal/transport"
 	videoDomain "github.com/ali-shortcuts/nexaroute/internal/video"
 	videoRuntime "github.com/ali-shortcuts/nexaroute/internal/video/runtime"
@@ -197,6 +198,22 @@ func main() {
 	api := httpapi.New(cfg, *configPath, reg, rt, hm, bus, pe, logger)
 	if err := api.SecurityStoreError(); err != nil {
 		bootstrap.Fatalf("cannot initialize admin security store: %v", err)
+	}
+	// Optional OTLP span export (M4-6 part B). The collector URL comes
+	// only from the environment variable named in the config, mirroring
+	// the control-plane backends; unset means disabled. An invalid URL
+	// fails startup rather than silently dropping telemetry.
+	if cfg.Telemetry.OTLPEndpointEnv != "" {
+		endpoint := strings.TrimSpace(os.Getenv(cfg.Telemetry.OTLPEndpointEnv))
+		if endpoint != "" {
+			exporter, err := telemetry.New(endpoint, cfg.Telemetry.ServiceName)
+			if err != nil {
+				bootstrap.Fatalf("cannot initialize telemetry exporter: %v", err)
+			}
+			api.SetTelemetryExporter(exporter)
+			defer exporter.Close()
+			logger.Printf("telemetry_otlp_export enabled service=%s", cfg.Telemetry.ServiceName)
+		}
 	}
 	defer api.CloseSecurityStore()
 	var videoRT *videoRuntime.Runtime
