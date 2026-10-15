@@ -8,6 +8,7 @@ import (
 	"mime"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -19,11 +20,14 @@ import (
 // Media passthrough endpoints (M5-1c): embeddings, image
 // generations, text-to-speech, transcriptions and rerank. These are
 // OpenAI-wire APIs with no canonical-IR translation — the gateway
-// routes them by model to a deployment of an openai_compatible
-// provider and passes the payload through with the deployment's
-// model substituted, mirroring chat's failover, health recording and
-// error semantics. Per-cloud media addressing belongs at the
-// mediaUpstreamPath seam (documented follow-ups).
+// routes them by model to a deployment of an openai_compatible or
+// azure_openai provider and passes the payload through with the
+// deployment's model substituted, mirroring chat's failover, health
+// recording and error semantics. Azure deployments use native
+// per-deployment URLs (resolveMediaUpstream/azureMediaPath, same
+// deployment/api-version semantics as chat); Vertex/Bedrock and other
+// families have no byte-compatible native equivalent and are refused
+// explicitly rather than guessed.
 
 const (
 	maxMediaBodyBytes     = 32 << 20 // audio uploads exceed the JSON cap
@@ -75,6 +79,76 @@ func mediaUpstreamPath(p config.ProviderConfig, kind mediaKind) string {
 		return p.RerankPath
 	}
 	return ""
+}
+
+// resolveMediaUpstream resolves provider-native addressing for one
+// candidate deployment, mirroring how the canonical adapter addresses
+// chat/messages for the same provider type (deployment/resource/
+// location semantics as applicable per cloud).
+//
+//   - openai_compatible: per-kind provider path fields with OpenAI
+//     defaults (byte-identical to the original M5-1c behavior).
+//   - azure_openai: per-deployment URLs of the form
+//     /openai/deployments/{deployment}/{family}?api-version=…,
+//     exactly like azureDeploymentPath for chat. Only families with a
+//     documented Azure OpenAI equivalent are supported (embeddings,
+//     images/generations, audio/speech, audio/transcriptions); rerank
+//     has no Azure equivalent and is refused.
+//   - vertex / bedrock / gemini / anthropic_compatible /
+//     openai_responses / anything else: no byte-compatible native
+//     media equivalent exists (Vertex speaks Gemini embedContent,
+//     Bedrock speaks model-specific InvokeModel JSON — neither is the
+//     OpenAI wire shape this passthrough preserves), so every kind is
+//     refused rather than sending a mangled payload upstream.
+//
+// It returns ok=false for unsupported combinations; the caller skips
+// the candidate and, when no candidate is supported, refuses with the
+// same clear unsupported-capability 400 used elsewhere.
+func resolveMediaUpstream(p config.ProviderConfig, kind mediaKind, deploymentModel string) (string, bool) {
+	switch p.Type {
+	case "openai_compatible":
+		path := mediaUpstreamPath(p, kind)
+		if path == "" {
+			return "", false
+		}
+		return path, true
+	case "azure_openai":
+		return azureMediaPath(p, kind, deploymentModel)
+	default:
+		return "", false
+	}
+}
+
+// azureMediaPath builds the Azure OpenAI per-deployment media endpoint
+// with its api-version query. The model argument is the Azure
+// deployment name (the dispatch layer has already substituted the
+// deployment's upstream model, same as azureDeploymentPath for chat).
+func azureMediaPath(p config.ProviderConfig, kind mediaKind, deploymentModel string) (string, bool) {
+	dep := strings.TrimSpace(deploymentModel)
+	if dep == "" {
+		return "", false
+	}
+	version := p.APIVersion
+	if version == "" {
+		version = "2024-10-21"
+	}
+	base := "/openai/deployments/" + url.PathEscape(dep)
+	suffix := "?api-version=" + url.QueryEscape(version)
+	switch kind {
+	case mediaEmbeddings:
+		return base + "/embeddings" + suffix, true
+	case mediaImages:
+		return base + "/images/generations" + suffix, true
+	case mediaSpeech:
+		return base + "/audio/speech" + suffix, true
+	case mediaTranscriptions:
+		return base + "/audio/transcriptions" + suffix, true
+	case mediaRerank:
+		// Azure OpenAI has no rerank equivalent; refuse explicitly
+		// rather than guessing a URL shape.
+		return "", false
+	}
+	return "", false
 }
 
 func (s *Server) serveMedia(w http.ResponseWriter, r *http.Request, kind mediaKind) {
@@ -136,9 +210,13 @@ func (s *Server) serveMedia(w http.ResponseWriter, r *http.Request, kind mediaKi
 			continue
 		}
 		sawEligible = true
-		if c.Deployment.ProviderType != "openai_compatible" {
-			// Passthrough is defined for the OpenAI wire family only;
-			// never mangle another protocol's payload into it.
+		upstreamPath, supported := resolveMediaUpstream(p, kind, c.Deployment.Model)
+		if !supported {
+			// Per-cloud media addressing: Azure deployment URLs where
+			// a native equivalent exists, explicit refusal elsewhere
+			// (Vertex/Bedrock wire shapes differ; Azure rerank has no
+			// equivalent). Never mangle another protocol's payload
+			// into a guessed URL.
 			continue
 		}
 		sawSupported = true
@@ -165,7 +243,7 @@ func (s *Server) serveMedia(w http.ResponseWriter, r *http.Request, kind mediaKi
 
 		s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_attempt", Deployment: c.Deployment.ID})
 		start := time.Now()
-		resp, derr := a.DoPath(r.Context(), http.MethodPost, mediaUpstreamPath(p, kind), payload, false, forward)
+		resp, derr := a.DoPath(r.Context(), http.MethodPost, upstreamPath, payload, false, forward)
 		latency := time.Since(start)
 		if derr != nil {
 			lastErr = derr.Error()
@@ -211,7 +289,7 @@ func (s *Server) serveMedia(w http.ResponseWriter, r *http.Request, kind mediaKi
 
 	if sawEligible && !sawSupported {
 		errorJSON(w, http.StatusBadRequest,
-			"media endpoints are supported only for openai_compatible providers in this release")
+			"media endpoints are supported only for openai_compatible and azure_openai providers in this release")
 		return
 	}
 	if !sawEligible && lastStatus == 0 && lastErr == "" {
