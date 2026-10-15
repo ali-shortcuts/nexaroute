@@ -472,8 +472,8 @@ func (a *httpAdapter) DoPath(ctx context.Context, method, path string, payload [
 		}
 		reservation := a.reserveQuota(reqCtx)
 		quotaSeq := a.quotaDispatchSeq.Add(1)
-		// codeql[go/request-forgery] The request URL is assembled only from
-		// operator-written provider configuration (base URL and path fields,
+		// The request URL is assembled only from operator-written provider
+		// configuration (base URL and path fields,
 		// validated at config load: http/https scheme, host required, userinfo
 		// rejected). Client request data never selects the host — model IDs
 		// enter as escaped path segments on those configured templates. The
@@ -482,7 +482,7 @@ func (a *httpAdapter) DoPath(ctx context.Context, method, path string, payload [
 		// minus deny hosts/CIDRs, and redirects refuse to cross origins. An
 		// absolute-URL path override is a tested operator feature and remains
 		// bounded by the same dial-time allowlist.
-		resp, err := client.Do(req)
+		resp, err := client.Do(req) // codeql[go/request-forgery] operator-configured destination, egress-allowlisted at dial time — see block above.
 		if err != nil {
 			reservation.releaseAll()
 			if cancel != nil {
