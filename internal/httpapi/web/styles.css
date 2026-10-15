@@ -85,3 +85,14 @@ html[data-theme="light"] .video-hero .button.ghost { color: #e2e8f0; border-colo
 .video-assets{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
 .field-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
 @media(max-width:640px){.video-assets .button{width:100%}}
+
+/* i18n switcher + RTL shell mirroring (M2-12). */
+.lang-switch{padding:8px 9px;border:1px solid var(--border);border-radius:9px;background:transparent;color:var(--muted);font-weight:700}
+[dir="rtl"] .sidebar{border-right:0;border-left:1px solid var(--border)}
+[dir="rtl"] .primary-nav button{text-align:right}
+[dir="rtl"] .primary-nav button.active{box-shadow:inset -3px 0 var(--accent)}
+[dir="rtl"] .skip-link{left:auto;right:12px}
+[dir="rtl"] .sidebar-foot #version{margin-left:0;margin-right:auto}
+[dir="rtl"] .tile-actions{margin-left:0;margin-right:auto}
+[dir="rtl"] .health-layer{text-align:right}
+[dir="rtl"] .route-banner-count{margin-left:0!important;margin-right:auto!important}
