@@ -530,7 +530,7 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 		s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_attempt", Deployment: deployment.ID})
 		resp, sentPayload, repair, derr := s.doUpstreamWithRepair(
 			routeCtx, r.Header.Get("x-request-id"), bundle.a, deployment,
-			bundle.payload, req.Streaming, forward, dialect, profile,
+			bundle.payload, bundle.path, req.Streaming, forward, dialect, profile,
 			cfg.Routing.MaxRepairAttempts, &canReq,
 		)
 		if derr != nil {
