@@ -71,7 +71,32 @@ func TestCostPageBudgetPanelBehavior(t *testing.T) {
 	if start < 0 || end < 0 || end <= start {
 		t.Fatal("cost-page-logic block not found in app.js")
 	}
-	script := src[start:end] + `
+	// Extract the REAL authorization helpers verbatim so the role
+	// scenarios below execute production code, not a copy.
+	extractFunc := func(name string) string {
+		i := strings.Index(src, "function "+name+"(")
+		if i < 0 {
+			t.Fatalf("function %s not found in app.js", name)
+		}
+		open := strings.Index(src[i:], "{") + i
+		depth := 0
+		for j := open; j < len(src); j++ {
+			switch src[j] {
+			case '{':
+				depth++
+			case '}':
+				depth--
+				if depth == 0 {
+					return src[i : j+1]
+				}
+			}
+		}
+		t.Fatalf("function %s: unbalanced braces", name)
+		return ""
+	}
+	script := "var state = { auth: { roles: [], emergency_access_enabled: false, oidc_enabled: false, api_key_configured: true }, adminKey: '' };\n" +
+		extractFunc("hasRole") + "\n" + extractFunc("isEmergencyAdmin") + "\n" + extractFunc("canManageKeys") + "\n" +
+		src[start:end] + `
 function eq(got, want, msg) { if (got !== want) { console.error('FAIL ' + msg + ': got ' + JSON.stringify(got) + ', want ' + JSON.stringify(want)); process.exit(1); } }
 eq(budgetPanelState('forbidden', [{ budget_usd: 10 }]).kind, 'forbidden', 'a role that cannot see keys must not read budgets even from a stale list');
 eq(budgetPanelState('forbidden', []).budgeted.length, 0, 'forbidden lists nothing');
@@ -87,6 +112,17 @@ eq(budgetPanelState('ok', [{ id: 'a' }]).kind, 'legacy', 'budget field absent on
 eq(identityShownNote(100), '', 'no cap note at exactly 100 identities');
 const note = identityShownNote(250);
 if (!note.includes('100') || !note.includes('250')) { console.error('FAIL cap note must disclose shown and total counts, got: ' + note); process.exit(1); }
+// Role predicate (E4 sign-off Finding 1): the server grants
+// keys.manage to owner AND admin (internal/authz); the frontend
+// predicate must agree, and the panel outcome must follow it.
+function panelKindFor(roles, keys) { state.auth.roles = roles; state.auth.emergency_access_enabled = false; return budgetPanelState(canManageKeys() ? 'ok' : 'forbidden', keys).kind; }
+const budgetedKeys = [{ id: 'k1', budget_usd: 100 }];
+eq(panelKindFor(['owner'], budgetedKeys), 'some', 'owner fetches key records and sees configured budgets');
+eq(panelKindFor(['admin'], budgetedKeys), 'some', 'admin still sees configured budgets');
+eq(panelKindFor(['operator'], budgetedKeys), 'forbidden', 'operator without keys.manage gets the forbidden state, not an empty list');
+eq(panelKindFor(['viewer'], budgetedKeys), 'forbidden', 'viewer gets the forbidden state');
+state.auth.roles = []; state.auth.emergency_access_enabled = true; state.auth.api_key_configured = false;
+eq(canManageKeys(), true, 'emergency access still manages keys');
 console.log('cost page behavior OK');
 `
 	path := filepath.Join(t.TempDir(), "cost_page_behavior_test.js")
