@@ -48,6 +48,16 @@ the config file.
   disposable `postgres:16-alpine` service. Without the tag/env, these
   tests do not run and nothing is claimed.
 
+## Dependency note (Go floor 1.24 → 1.25)
+
+The first pin attempt (pgx v5.7.6 + x/text v0.27.0) kept the module on
+Go 1.24 but govulncheck flagged x/text v0.27.0 (fixed in v0.41.0). The
+shipped graph is therefore pgx v5.11.0 + x/text v0.41.0, whose minimum
+Go version is 1.25: go.mod, `scripts/check-deps.sh` and the Dockerfile
+build stage were raised to 1.25 together. CI and the release toolchain
+already build with Go 1.27; only source builders on Go 1.24 are
+affected, and a vulnerable driver was not an acceptable alternative.
+
 ## Remaining (M4-2 / follow-ups)
 
 Redis Store adapter (separate unit), crash/backup/two-process gateway
