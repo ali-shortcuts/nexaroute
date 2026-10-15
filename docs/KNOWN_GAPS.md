@@ -134,13 +134,15 @@ burn in SRT subtitles. Video Studio now accepts multi-shot plans, shows progress
 
 ## State and HA
 
-The optional control-plane runtime now selects an atomic local file store or an
-explicit test-only memory store and reconciles a versioned startup snapshot.
-Postgres/Redis contracts remain available, but no runtime client/driver is
-registered in this binary, so selecting either backend fails closed rather than
-falling back silently. Migration dry-run and local backup/restore procedures
-are documented; live external Redis/Postgres and multi-node breaker
-synchronization remain unverified/unimplemented.
+The optional control-plane runtime selects the atomic local file store, an
+explicit test-only memory store, PostgreSQL, or Redis and reconciles a versioned
+startup snapshot. Both database backends fail closed when unavailable; Redis
+uses atomic revision-aware Lua scripts and has disposable-service integration
+coverage. These adapter guarantees do not provide deployment-level persistence,
+replication, failover, or recovery guarantees, which remain operator-owned and
+must be separately configured and tested. The M4-2 security-store PostgreSQL/
+Redis adapters, crash/mid-write recovery, backup/restore, and two-gateway tests
+remain open. Cross-replica breaker synchronization is also unimplemented.
 
 ## RBAC and SSO
 
