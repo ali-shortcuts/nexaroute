@@ -20,6 +20,31 @@ nexaroute
 Keep the terminal open. Chrome/the available browser opens the UI. If no browser
 opens, visit **http://127.0.0.1:8080/** (or the URL printed in the terminal).
 
+## 2b. Fast path: the init wizard (under two minutes)
+
+Prefer a scripted setup? After installing, run:
+
+```bash
+nexaroute init
+```
+
+Four questions — provider base URL, the env var NAME holding the
+API key (the wizard never asks for the key value), the model to
+enable, and the listen address — every one with a default, so
+accepting the defaults takes seconds. `init` validates and writes
+the config atomically, and refuses to overwrite an existing
+config without `--force`. The same flow is fully flag-driven for
+scripts (`nexaroute init --base-url ... --api-key-env ... --model ...`
+asks nothing). Then start the gateway and send a request to
+`/v1/chat/completions` naming the model you enabled: install +
+init + start + smoke request is the under-two-minutes path.
+
+Ready-made configurations for common setups live in
+[`examples/`](../examples) (OpenAI, Anthropic, two-provider
+failover, local Ollama). Every example is loaded and validated
+by an automated test, so they always match the current config
+schema.
+
 ## 3. Add providers
 
 In **Providers → Add provider**:
