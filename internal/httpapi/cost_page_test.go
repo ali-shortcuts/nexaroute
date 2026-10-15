@@ -94,7 +94,47 @@ func TestCostPageBudgetPanelBehavior(t *testing.T) {
 		t.Fatalf("function %s: unbalanced braces", name)
 		return ""
 	}
-	script := "var state = { auth: { roles: [], emergency_access_enabled: false, oidc_enabled: false, api_key_configured: true }, adminKey: '' };\n" +
+	// #378: the cost-page logic now renders body copy through the BODY_I18N
+	// dictionary seam (bt). Extract the REAL dictionary and lookup verbatim
+	// so the scenarios below still execute production code, not a copy.
+	// String-aware: dictionary values contain '{n}'-style placeholders.
+	extractJSBlock := func(marker string) string {
+		i := strings.Index(src, marker)
+		if i < 0 {
+			t.Fatalf("marker %q not found in app.js", marker)
+		}
+		open := strings.Index(src[i:], "{") + i
+		depth := 0
+		var quote byte
+		for j := open; j < len(src); j++ {
+			c := src[j]
+			if quote != 0 {
+				if c == '\\' {
+					j++
+					continue
+				}
+				if c == quote {
+					quote = 0
+				}
+				continue
+			}
+			switch c {
+			case '\'', '"', '`':
+				quote = c
+			case '{':
+				depth++
+			case '}':
+				depth--
+				if depth == 0 {
+					return src[i : j+1]
+				}
+			}
+		}
+		t.Fatalf("marker %q: unbalanced braces", marker)
+		return ""
+	}
+	script := "var state = { lang: 'en', auth: { roles: [], emergency_access_enabled: false, oidc_enabled: false, api_key_configured: true }, adminKey: '' };\n" +
+		extractJSBlock("const BODY_I18N = {") + "\n" + extractJSBlock("const bt = (key, vars) =>") + "\n" +
 		extractFunc("hasRole") + "\n" + extractFunc("isEmergencyAdmin") + "\n" + extractFunc("canManageKeys") + "\n" +
 		src[start:end] + `
 function eq(got, want, msg) { if (got !== want) { console.error('FAIL ' + msg + ': got ' + JSON.stringify(got) + ', want ' + JSON.stringify(want)); process.exit(1); } }
