@@ -139,6 +139,10 @@ func (s *Server) semanticServe(w http.ResponseWriter, r *http.Request, sc *seman
 	if !ok {
 		return false
 	}
+	// A semantic hit is a zero-upstream-spend serve, exactly like an
+	// exact-match hit: the admission hold must be released, not left
+	// to expire into a committed charge 15 minutes later.
+	s.budgetRelease(r)
 	w.Header().Set("Content-Type", entry.ContentType)
 	w.Header().Set("X-NexaRoute-Cache", "SEMANTIC-HIT")
 	w.Header().Set("X-Gateway-Deployment", entry.Deployment)
