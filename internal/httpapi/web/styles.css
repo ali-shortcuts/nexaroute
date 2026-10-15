@@ -99,3 +99,14 @@ html[data-theme="light"] .video-hero .button.ghost { color: #e2e8f0; border-colo
 .field.inline{display:flex;align-items:center;gap:8px}
 .field.inline span{color:var(--muted);font-size:11px}
 @media(max-width:700px){.audit-table .event-row{grid-template-columns:1fr 1fr}}
+
+/* Evals + Observability pages (M2-7, M2-5). */
+.score-row{display:grid;grid-template-columns:1fr 90px 44px;gap:10px;align-items:center;padding:7px 0;border-bottom:1px solid var(--border)}
+.score-row:last-child{border-bottom:0}
+.score-row b,.score-row small{display:block}
+.score-row small{color:var(--muted);font-size:10px}
+.score-bar{height:6px;border-radius:3px;background:var(--surface-3);overflow:hidden}
+.score-bar i{display:block;height:100%;background:var(--accent);border-radius:3px}
+.obs-table .event-table-head,.obs-table .event-row{grid-template-columns:1.2fr .7fr 1fr 1.1fr 1fr}
+a.button{text-decoration:none;display:inline-flex;align-items:center}
+@media(max-width:700px){.obs-table .event-row{grid-template-columns:1fr 1fr}.score-row{grid-template-columns:1fr 60px 40px}}
