@@ -215,13 +215,27 @@ The last item is deliberate for the current data plane: a learned router would a
 
 Implemented but bounded by design:
 
-- Level B probing sends OpenAI-shaped or Anthropic-shaped probe payloads per
-  provider family. Gemini upstreams are served through the canonical path and
-  learn from real traffic and error classification; a dedicated
-  Gemini-shaped probe suite is future work.
-- The repair engine mutates OpenAI-style and Anthropic-style payload keys.
-  Gemini-native payloads carry parameters inside `generationConfig`, so
-  capability rejections there fail over instead of being repaired inline.
+- Level B probing sends OpenAI-shaped, Anthropic-shaped, or Gemini-shaped
+  (`GenerateContent` with `contents`/`systemInstruction`/`tools`/`toolConfig`
+  and `generationConfig`) probe payloads per provider family. Gemini and
+  Vertex upstreams are probed via `RunCapabilitySuiteGemini` (wired into the
+  probe engine and the admin test surface alongside the OpenAI/Anthropic
+  suites) and learn from both probes and real traffic with error
+  classification. Verdict vocabulary and conservative learning match the
+  other families: UNKNOWN upgrades to SUPPORTED only on positive evidence,
+  verified UNSUPPORTED never flips except via contract-reset paths.
+- The repair engine mutates OpenAI-style, Anthropic-style, and Gemini-native
+  payload keys. Gemini-native payloads are repaired inline inside
+  `generationConfig` (`temperature`, `topP`/`topK`, `maxOutputTokens`,
+  `stopSequences`, `responseMimeType`/`responseSchema`, `candidateCount`)
+  and the Gemini equivalents of repaired top-level fields (`toolConfig` for
+  `tool_choice`, OpenAI-style token keys aliased into
+  `generationConfig.maxOutputTokens`). Every Gemini repair uses the same
+  audit/event surfacing as existing repairs (`last_repair`, `compat_repair`
+  / `compat_sanitize` events, capability learning). Semantics-critical
+  Gemini fields (`contents`, `tools`, `systemInstruction`, required
+  `toolConfig`, vision parts) are never stripped; unrepairable capability
+  failures still fail over without marking health.
 - Runtime learning upgrades UNKNOWN to SUPPORTED conservatively and never
   flips verified UNSUPPORTED back; only a contract reset (identity change or
   `/admin/api/compat/reset`) re-opens the question.

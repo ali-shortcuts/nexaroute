@@ -593,12 +593,20 @@ func (e *Engine) maybeProbeCapabilities(ctx context.Context, d router.Deployment
 		report = compat.RunCapabilitySuiteAnthropic(cctx, t, d.ID, d.Model)
 	case "openai_responses":
 		report = compat.RunCapabilitySuiteResponses(cctx, t, d.ID, d.Model)
+	case "gemini", "vertex":
+		report = compat.RunCapabilitySuiteGemini(cctx, t, d.ID, d.Model)
 	default:
 		report = compat.RunCapabilitySuite(cctx, t, d.ID, d.Model, "")
 	}
 	for _, o := range report.Outcomes {
 		switch o.Verdict {
 		case compat.Supported:
+			// Conservative learning: UNKNOWN upgrades on positive evidence;
+			// verified UNSUPPORTED never flips except via contract-reset
+			// paths (identity change or /admin/api/compat/reset).
+			if e.capStore.Get(d.ID).Capabilities.Get(o.Capability) == compat.Unsupported {
+				continue
+			}
 			e.capStore.LearnSuccess(d.ID, o.Capability, compat.SourceProbe, o.Detail, "")
 		case compat.Unsupported:
 			e.capStore.LearnUnsupported(d.ID, o.Capability, compat.SourceProbe, o.Detail, "")

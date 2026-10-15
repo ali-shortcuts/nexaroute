@@ -225,6 +225,39 @@ func (s *Server) learnFromSuccess(deploymentID, providerID string, d router.Depl
 				s.capStore.LearnSuccess(deploymentID, capability, compat.SourceRuntime, "successful real traffic", key)
 			}
 		}
+		// Gemini-native payloads carry the same knobs inside
+		// generationConfig; learn from those without flipping verified
+		// UNSUPPORTED, mirroring the top-level rules above.
+		if gcRaw, ok := m["generationConfig"]; ok {
+			if gc, isMap := gcRaw.(map[string]any); isMap {
+				for param, capability := range map[string]string{
+					"temperature":      compat.CapTemperature,
+					"topP":             compat.CapTopP,
+					"topK":             compat.CapTopP,
+					"stopSequences":    compat.CapStop,
+					"maxOutputTokens":  compat.CapMaxCompletionTokens,
+					"responseMimeType": compat.CapStructuredOutput,
+					"responseSchema":   compat.CapJSONSchema,
+				} {
+					if _, present := gc[param]; present {
+						if s.capStore.Get(deploymentID).Capabilities.Get(capability) == compat.Unsupported {
+							continue
+						}
+						s.capStore.LearnSuccess(deploymentID, capability, compat.SourceRuntime, "successful real traffic", key)
+					}
+				}
+				if _, hasTools := m["tools"]; hasTools {
+					if s.capStore.Get(deploymentID).Capabilities.Get(compat.CapTools) != compat.Unsupported {
+						s.capStore.LearnSuccess(deploymentID, compat.CapTools, compat.SourceRuntime, "successful real traffic", key)
+					}
+				}
+				if _, hasToolConfig := m["toolConfig"]; hasToolConfig {
+					if s.capStore.Get(deploymentID).Capabilities.Get(compat.CapToolChoiceAuto) != compat.Unsupported {
+						s.capStore.LearnSuccess(deploymentID, compat.CapToolChoiceAuto, compat.SourceRuntime, "successful real traffic", key)
+					}
+				}
+			}
+		}
 	}
 	if canReq != nil {
 		if canReq.Reasoning != nil && !canReq.Reasoning.Disabled {

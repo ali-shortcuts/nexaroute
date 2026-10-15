@@ -873,3 +873,213 @@ func runProbeAnthropic(ctx context.Context, t ProbeTransport, payload []byte, st
 	out.Verdict, out.Detail = verdict(body, ExpectText)
 	return out, nil
 }
+
+// ---------- Gemini-shaped Level B probe suite ----------
+
+// geminiPayload builds a GenerateContent probe body. generationConfig holds
+// the sampled knob under test; contents always carries a minimal user turn
+// so the probe stays cheap (<=128 output tokens via maxOutputTokens).
+func geminiPayload(contents []map[string]any, systemInstruction string, tools []any, toolConfig map[string]any, generationConfig map[string]any) []byte {
+	m := map[string]any{"contents": contents}
+	if systemInstruction != "" {
+		m["systemInstruction"] = map[string]any{"parts": []map[string]any{{"text": systemInstruction}}}
+	}
+	if len(tools) > 0 {
+		m["tools"] = tools
+	}
+	if toolConfig != nil {
+		m["toolConfig"] = toolConfig
+	}
+	if generationConfig != nil {
+		m["generationConfig"] = generationConfig
+	}
+	b, _ := json.Marshal(m)
+	return b
+}
+
+func geminiTextContents(text string) []map[string]any {
+	return []map[string]any{{"role": "user", "parts": []map[string]any{{"text": text}}}}
+}
+
+func geminiFunctionTools() []any {
+	return []any{map[string]any{"functionDeclarations": []any{
+		map[string]any{
+			"name":        "get_weather",
+			"description": "Get the current weather for a city",
+			"parameters": map[string]any{
+				"type":       "object",
+				"properties": map[string]any{"city": map[string]any{"type": "string"}},
+				"required":   []string{"city"},
+			},
+		},
+	}}}
+}
+
+// geminiProbeResponse is the permissive GenerateContent shape used to
+// inspect probe replies.
+type geminiProbeResponse struct {
+	Candidates []struct {
+		Content *struct {
+			Parts []map[string]any `json:"parts"`
+		} `json:"content"`
+		FinishReason string `json:"finishReason"`
+	} `json:"candidates"`
+	PromptFeedback *struct {
+		BlockReason string `json:"blockReason"`
+	} `json:"promptFeedback"`
+}
+
+func geminiVerdict(body []byte, expect ToolExpectation) (Support, string) {
+	var probe geminiProbeResponse
+	if err := json.Unmarshal(body, &probe); err != nil {
+		return UnknownSupport, "unparseable gemini body"
+	}
+	if len(probe.Candidates) == 0 {
+		if probe.PromptFeedback != nil && probe.PromptFeedback.BlockReason != "" {
+			return UnknownSupport, "prompt blocked: " + probe.PromptFeedback.BlockReason
+		}
+		return UnknownSupport, "200 without candidates"
+	}
+	text := ""
+	toolCalls := 0
+	if content := probe.Candidates[0].Content; content != nil {
+		for _, part := range content.Parts {
+			if txt, _ := part["text"].(string); txt != "" {
+				if text == "" {
+					text = txt
+				} else {
+					text += "\n" + txt
+				}
+			}
+			if _, ok := part["functionCall"]; ok {
+				toolCalls++
+			}
+			if _, ok := part["function_call"]; ok {
+				toolCalls++
+			}
+		}
+	}
+	switch expect {
+	case ExpectToolCall:
+		if toolCalls >= 1 {
+			return Supported, "tool call produced"
+		}
+		return UnknownSupport, "200 without a function call"
+	case ExpectJSON:
+		trimmed := strings.TrimSpace(text)
+		if strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") {
+			return Supported, "JSON output verified"
+		}
+		return UnknownSupport, "200 but output is not JSON"
+	default:
+		if strings.TrimSpace(text) != "" {
+			return Supported, "generation verified"
+		}
+		if toolCalls > 0 {
+			return Supported, "generation verified (function call)"
+		}
+		return UnknownSupport, "200 without text content"
+	}
+}
+
+// runProbeGemini mirrors runProbe with a Gemini-shaped 2xx verdict;
+// failure classification flows through the same shared classifier so probes
+// and live traffic can never disagree.
+func runProbeGemini(ctx context.Context, t ProbeTransport, payload []byte, stream bool, capability string, expect ToolExpectation) (ProbeOutcome, error) {
+	out := ProbeOutcome{Capability: capability, Verdict: UnknownSupport}
+	start := time.Now()
+	defer func() { out.LatencyMS = time.Since(start).Milliseconds() }()
+	resp, err := t.Do(ctx, payload, stream, nil)
+	if err != nil {
+		out.Detail = "transport: " + err.Error()
+		return out, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 256<<10))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		cls := ClassifyUpstreamError(resp.StatusCode, body)
+		out.Detail = "http " + fmt.Sprint(resp.StatusCode) + ": " + cls.Message
+		if cls.CapabilityFailure && (cls.Capability == capability || mapsToCapability(cls.Parameter) == capability) {
+			out.Verdict = Unsupported
+			return out, nil
+		}
+		if cls.Class == ClassContextOverflow || cls.CallerError {
+			out.Detail += " (probe inconclusive: request rejected)"
+			return out, nil
+		}
+		return out, fmt.Errorf("probe transport status %d: %s", resp.StatusCode, cls.Message)
+	}
+	if stream {
+		if !strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
+			out.Detail = "200 but content-type is not event-stream"
+			return out, nil
+		}
+		out.Verdict = Supported
+		out.Detail = "SSE headers verified"
+		return out, nil
+	}
+	// A 2xx with an unparseable body is a malformed-response signal, not a
+	// capability verdict.
+	var raw json.RawMessage
+	if err := json.Unmarshal(body, &raw); err != nil {
+		out.Detail = "200 but body is not a parseable Gemini response: " + truncateMessage(string(body))
+		return out, fmt.Errorf("probe malformed response: %s", out.Detail)
+	}
+	out.Verdict, out.Detail = geminiVerdict(body, expect)
+	return out, nil
+}
+
+// RunCapabilitySuiteGemini executes the Level B suite against a
+// Gemini-native upstream using GenerateContent payloads. Verdict vocabulary
+// and conservative learning rules match the OpenAI/Anthropic families:
+// UNKNOWN upgrades to SUPPORTED only on positive evidence; verified
+// UNSUPPORTED is recorded only on classified capability rejections and is
+// re-opened only via the existing contract-reset paths (identity change or
+// /admin/api/compat/reset).
+func RunCapabilitySuiteGemini(ctx context.Context, t ProbeTransport, deploymentID, model string) ProbeReport {
+	report := ProbeReport{
+		Deployment: deploymentID, Model: model, Dialect: "gemini",
+		Level: "capability", StartedAt: time.Now(),
+	}
+	type probeSpec struct {
+		capability string
+		payload    []byte
+		stream     bool
+		expect     ToolExpectation
+	}
+	toolConfigRequired := map[string]any{"functionCallingConfig": map[string]any{"mode": "MODE_ANY"}}
+	specs := []probeSpec{
+		{CapText, geminiPayload(geminiTextContents("Reply with the single word: OK"), "", nil, nil, map[string]any{"maxOutputTokens": 16}), false, ExpectText},
+		{CapSystemMessage, geminiPayload(geminiTextContents("Reply with the single word: OK"), "You always answer in uppercase.", nil, nil, map[string]any{"maxOutputTokens": 16}), false, ExpectText},
+		{CapStreaming, geminiPayload(geminiTextContents("Reply with the single word: OK"), "", nil, nil, map[string]any{"maxOutputTokens": 16}), true, ExpectText},
+		{CapTools, geminiPayload([]map[string]any{{"role": "user", "parts": []map[string]any{{"text": "What is the weather in Paris right now? Use the get_weather tool."}}}}, "", geminiFunctionTools(), nil, map[string]any{"maxOutputTokens": 128}), false, ExpectToolCall},
+		{CapToolChoiceRequired, geminiPayload([]map[string]any{{"role": "user", "parts": []map[string]any{{"text": "What is the weather in Paris right now? Use the get_weather tool."}}}}, "", geminiFunctionTools(), toolConfigRequired, map[string]any{"maxOutputTokens": 128}), false, ExpectToolCall},
+		{CapTemperature, geminiPayload(geminiTextContents("Reply with the single word: OK"), "", nil, nil, map[string]any{"maxOutputTokens": 16, "temperature": 0.5}), false, ExpectText},
+		{CapTopP, geminiPayload(geminiTextContents("Reply with the single word: OK"), "", nil, nil, map[string]any{"maxOutputTokens": 16, "topP": 0.9}), false, ExpectText},
+		{CapStop, geminiPayload(geminiTextContents("Reply with the single word: OK. Do not write |END| yourself."), "", nil, nil, map[string]any{"maxOutputTokens": 16, "stopSequences": []string{"|END|"}}), false, ExpectText},
+		{CapMaxCompletionTokens, geminiPayload(geminiTextContents("Reply with the single word: OK"), "", nil, nil, map[string]any{"maxOutputTokens": 16}), false, ExpectText},
+		{CapJSONObject, geminiPayload([]map[string]any{{"role": "user", "parts": []map[string]any{{"text": "Return a JSON object with key ok and value true."}}}}, "", nil, nil, map[string]any{"maxOutputTokens": 64, "responseMimeType": "application/json"}), false, ExpectJSON},
+		{CapVision, geminiPayload([]map[string]any{{"role": "user", "parts": []map[string]any{
+			{"text": "What color is this image? Answer with one word."},
+			{"inlineData": map[string]any{"mimeType": "image/png", "data": tinyPNG}},
+		}}}, "", nil, nil, map[string]any{"maxOutputTokens": 32}), false, ExpectText},
+	}
+	for _, spec := range specs {
+		out, err := runProbeGemini(ctx, t, spec.payload, spec.stream, spec.capability, spec.expect)
+		switch {
+		case err != nil:
+			report.TransportFail++
+			report.Inconclusive++
+		case out.Verdict == Supported:
+			report.Passed++
+		case out.Verdict == Unsupported:
+			report.Failed++
+		default:
+			report.Inconclusive++
+		}
+		report.Outcomes = append(report.Outcomes, out)
+	}
+	report.FinishedAt = time.Now()
+	report.OK = report.TransportFail == 0
+	return report
+}
