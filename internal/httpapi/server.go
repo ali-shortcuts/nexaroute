@@ -28,6 +28,7 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/decision/policy"
 	"github.com/ali-shortcuts/nexaroute/internal/events"
 	"github.com/ali-shortcuts/nexaroute/internal/health"
+	"github.com/ali-shortcuts/nexaroute/internal/pricing"
 	"github.com/ali-shortcuts/nexaroute/internal/probe"
 	"github.com/ali-shortcuts/nexaroute/internal/providers"
 	"github.com/ali-shortcuts/nexaroute/internal/route"
@@ -69,6 +70,10 @@ type Server struct {
 	respCache              *cache.Cache
 	cacheGeneration        uint64 // guarded by runtimeMu; scopes cache keys to a config snapshot
 	usage                  *usage.Tracker
+	budgets                *usage.BudgetLedger
+	bookMu                 sync.Mutex
+	bookCache              *pricing.Book
+	bookCacheRev           uint64
 	identityUsage          *usage.IdentityTracker
 	capStore               *compat.Store
 	routeResolver          *route.Resolver
@@ -200,6 +205,7 @@ func New(cfg config.Config, configPath string, reg *providers.Registry, rt *rout
 		respCache:       cache.New(cfg.CacheTTL(), cfg.Cache.MaxEntries, int64(cfg.Cache.MaxBodyBytes)),
 		cacheGeneration: 1,
 		usage:           usage.New(),
+		budgets:         usage.NewBudgetLedger(),
 		identityUsage:   usage.NewIdentityTracker(),
 		capStore:        compat.NewStore(),
 		taskClassCounts: make(map[string]uint64, 32),
