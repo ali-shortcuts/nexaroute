@@ -2,9 +2,11 @@ package httpapi
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"embed"
 	"encoding/base64"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"io/fs"
@@ -883,9 +885,62 @@ func (s *Server) candidatesForRequirement(req router.Requirement, protocol strin
 	allCandidates := rt.Candidates(reqAll)
 	if resolver != nil {
 		filtered := resolver.AllFilteredCandidates(allCandidates, resolved)
-		return cfgCopy, filtered, &resolved, nil
+		return cfgCopy, applyRollout(cfgCopy, &resolved, req, filtered), &resolved, nil
 	}
 	return cfgCopy, allCandidates, &resolved, nil
+}
+
+// applyRollout implements route-profile canary rollout (M5-3).
+// Sessions are bucketed deterministically by their stable key
+// (session key, else selection key): the same key always lands in
+// the same arm, so a rollout never flaps a client between
+// deployments mid-conversation. When the bucket falls inside
+// canary_percent AND the canary deployment is already an eligible
+// candidate for this request, it is promoted to the front — the
+// remaining candidates stay as the fallback order. No key, no
+// canary configured, or an ineligible canary leaves the order
+// untouched: rollout can reorder eligibility, never create it.
+func applyRollout(cfg config.Config, resolved *route.ResolvedRoute, req router.Requirement, in []router.Scored) []router.Scored {
+	if resolved == nil || len(in) < 2 {
+		return in
+	}
+	var profile *config.RouteProfileConfig
+	for i := range cfg.RouteProfiles {
+		if cfg.RouteProfiles[i].ID == resolved.RouteProfileID {
+			profile = &cfg.RouteProfiles[i]
+			break
+		}
+	}
+	if profile == nil || profile.CanaryDeploymentID == "" || profile.CanaryPercent <= 0 {
+		return in
+	}
+	key := strings.TrimSpace(req.SessionKey)
+	if key == "" {
+		key = strings.TrimSpace(req.SelectionKey)
+	}
+	if key == "" {
+		return in
+	}
+	sum := sha256.Sum256([]byte("nexaroute-rollout\x00" + profile.ID + "\x00" + key))
+	bucket := int(binary.BigEndian.Uint64(sum[:8]) % 100)
+	if bucket >= profile.CanaryPercent {
+		return in
+	}
+	idx := -1
+	for i := range in {
+		if in[i].Deployment.ID == profile.CanaryDeploymentID {
+			idx = i
+			break
+		}
+	}
+	if idx <= 0 {
+		return in
+	}
+	out := make([]router.Scored, 0, len(in))
+	out = append(out, in[idx])
+	out = append(out, in[:idx]...)
+	out = append(out, in[idx+1:]...)
+	return out
 }
 
 func (s *Server) currentRouteCandidate(id string, req router.Requirement) (router.Scored, providers.Adapter, bool) {
