@@ -573,6 +573,11 @@ type ProviderConfig struct {
 	ModelsPath               string        `json:"models_path,omitempty"`
 	CountTokensPath          string        `json:"count_tokens_path,omitempty"`
 	ResponsesPath            string        `json:"responses_path,omitempty"`
+	EmbeddingsPath           string        `json:"embeddings_path,omitempty"`
+	ImagesPath               string        `json:"images_path,omitempty"`
+	SpeechPath               string        `json:"speech_path,omitempty"`
+	TranscriptionsPath       string        `json:"transcriptions_path,omitempty"`
+	RerankPath               string        `json:"rerank_path,omitempty"`
 	MaxConcurrency           int           `json:"max_concurrency,omitempty"`
 	StreamIdleTimeoutSeconds int           `json:"stream_idle_timeout_seconds,omitempty"`
 	Enabled                  bool          `json:"enabled"`
@@ -1350,6 +1355,21 @@ func (p *ProviderConfig) ApplyDefaults() {
 	}
 	if p.CountTokensPath == "" {
 		p.CountTokensPath = "/v1/messages/count_tokens"
+	}
+	if p.EmbeddingsPath == "" {
+		p.EmbeddingsPath = "/v1/embeddings"
+	}
+	if p.ImagesPath == "" {
+		p.ImagesPath = "/v1/images/generations"
+	}
+	if p.SpeechPath == "" {
+		p.SpeechPath = "/v1/audio/speech"
+	}
+	if p.TranscriptionsPath == "" {
+		p.TranscriptionsPath = "/v1/audio/transcriptions"
+	}
+	if p.RerankPath == "" {
+		p.RerankPath = "/v1/rerank"
 	}
 	if p.MaxConcurrency == 0 {
 		p.MaxConcurrency = 256

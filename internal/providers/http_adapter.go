@@ -448,6 +448,13 @@ func (a *httpAdapter) DoPath(ctx context.Context, method, path string, payload [
 			req.Header.Set("Accept", "text/event-stream")
 		}
 		a.applyHeaders(req, forward)
+		if ct := forward.Get("Content-Type"); ct != "" {
+			// Media uploads (multipart/form-data) must keep the
+			// client's content type — including its boundary — or the
+			// upstream cannot parse the form. The JSON default set
+			// above loses to an explicitly forwarded content type.
+			req.Header.Set("Content-Type", ct)
+		}
 		a.applyAuthKey(req, key)
 		if a.p.Type == "anthropic_compatible" && req.Header.Get("anthropic-version") == "" {
 			req.Header.Set("anthropic-version", "2023-06-01")
