@@ -54,9 +54,25 @@ fails if either asset references a series the gateway does not export.
 ## Tracing and OpenTelemetry
 
 Requests carry W3C `traceparent` propagation; trace/span ids are
-attached to gateway logs. A full OpenTelemetry pipeline is **not**
-bundled yet: the follow-up M4-6 work adds an opt-in OTLP/HTTP span
-exporter with GenAI semantic attributes (model, token usage, error
-class — never prompts or keys). Until that lands and is verified
-against a real collector, treat end-to-end OTel as **unverified** and
-rely on metrics + structured logs for operations.
+attached to gateway logs.
+
+An **opt-in OTLP/HTTP span exporter** (M4-6 part B) can be enabled with
+`telemetry.otlp_endpoint_env` (see CONFIGURATION.md). It emits one
+server span per data-plane LLM request, linked to the incoming
+traceparent, with GenAI semantic attributes:
+
+| Attribute | Source |
+|---|---|
+| `gen_ai.operation.name` | endpoint (`chat`, `responses`, `count_tokens`) |
+| `gen_ai.system` | serving provider (from the deployment id) |
+| `gen_ai.response.model` | serving model (from the deployment id) |
+| `gen_ai.usage.input_tokens` / `output_tokens` | the usage record for the request |
+| `http.status_code`, `http.route`, `http.request.method` | the response |
+| `nexaroute.deployment`, `nexaroute.ttft_ms` | routing / first-byte observation |
+
+Export is batched and non-blocking: a full queue or a failing
+collector drops spans (counted in-process) and never affects request
+handling. Spans never contain prompts, completions, API keys or
+client identities. The payload format is verified against a fake
+collector in tests; ingestion by a real collector
+(otelcol/Jaeger/Tempo) end-to-end remains **UNVERIFIED**.
