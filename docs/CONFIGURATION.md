@@ -484,6 +484,51 @@ The resulting **effective remaining** values feed quota pressure. This is intent
 | `input_cost_per_mtok` | `0` | USD per million input tokens, used for estimated-spend accounting. |
 | `output_cost_per_mtok` | `0` | USD per million output tokens, used for estimated-spend accounting. |
 
+### Versioned price book (`pricing.versions`, M5-6)
+
+A versioned price book overrides model prices for both cost-aware
+routing and spend accounting. Costs are computed **when usage is
+recorded**, under the version active at that moment — a later
+price change never reprices history, and the usage snapshot
+attributes spend per version (`cost_by_version_usd`).
+
+```yaml
+pricing:
+  versions:
+    - version: "2026-q4"
+      effective_from: "2026-10-01T00:00:00Z"
+      prices:
+        "provider/model": { input_per_mtok: 3, output_per_mtok: 15, cache_read_per_mtok: 0.3, cache_write_per_mtok: 3.75 }
+```
+
+- The active version for a deployment is the latest
+  `effective_from <= now` **that prices that deployment**; a
+  deployment missing from the book falls back to its model-config
+  prices (version label `config`), then to zero cost (label
+  `unpriced`; tokens are still counted).
+- `cache_read_per_mtok` / `cache_write_per_mtok` are optional; when
+  omitted, the input rate applies.
+- Cache billing conventions follow the providers: Anthropic's
+  `input_tokens` exclude cache tokens (priced additively);
+  OpenAI/Gemini counts include the cached share in the input
+  count, so the cached share is moved to the cache-read rate —
+  never double-charged.
+
+### Virtual-key budgets (`client_auth.virtual_keys[].budget_usd`, M5-6)
+
+A cumulative USD spend cap per virtual key (`0` = unlimited). At
+admission the gateway atomically reserves a conservative estimate
+(priced against the most expensive deployment serving the model:
+body-derived input estimate + the request's output allowance, or
+4096 tokens when unset). The first usage report settles the
+reservation to the **actual** recorded cost; cache hits release
+the hold (no upstream spend). A request is rejected with
+`402 client budget exceeded` when committed + reserved + estimate
+would exceed the budget. Reservations that never settle (e.g. a
+transport failure with no usage report) are committed at their
+estimate after 15 minutes. Budget state is runtime state, like
+the usage tracker itself: **it resets on gateway restart**.
+
 ## Model intelligence scorecards and evaluation
 
 The evaluation plane is an opt-in, admin-only observation plane. It never affects routing:
