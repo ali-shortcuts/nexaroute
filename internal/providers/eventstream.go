@@ -26,6 +26,10 @@ import (
 // while preventing a malformed length from requesting gigabytes of memory.
 const maxEventStreamFrameBytes uint32 = 32 << 20
 
+// maxEventStreamHeadersBytes limits decoded-map amplification from a peer-
+// controlled headers_length while remaining well above ordinary Bedrock frames.
+const maxEventStreamHeadersBytes uint32 = 1 << 20
+
 type eventStreamMessage struct {
 	EventType string
 	Payload   []byte
@@ -47,6 +51,9 @@ func readEventStreamMessage(r io.Reader) (*eventStreamMessage, error) {
 	}
 	if totalLength > maxEventStreamFrameBytes {
 		return nil, fmt.Errorf("eventstream: frame length %d exceeds safe limit %d", totalLength, maxEventStreamFrameBytes)
+	}
+	if headersLength > maxEventStreamHeadersBytes {
+		return nil, fmt.Errorf("eventstream: headers length %d exceeds safe limit %d", headersLength, maxEventStreamHeadersBytes)
 	}
 	rest := make([]byte, totalLength-12)
 	if _, err := io.ReadFull(r, rest); err != nil {
@@ -169,30 +176,30 @@ func (r *eventStreamSSEReader) fill() {
 		}
 		return
 	}
-	// Validate and compact the payload before emitting SSE. The upstream body is
+	// Compact and validate the payload before emitting SSE. The upstream body is
 	// untrusted network input; writing it verbatim would allow embedded newlines
 	// and trailing bytes to inject additional SSE events into the client stream.
 	payload := msg.Payload
 	if len(payload) == 0 {
 		payload = []byte("{}")
 	}
-	if !json.Valid(payload) {
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, payload); err != nil {
 		r.done = true
-		r.err = fmt.Errorf("eventstream: invalid JSON payload for %q", msg.EventType)
+		r.err = fmt.Errorf("eventstream: invalid JSON payload for %q: %w", msg.EventType, err)
 		return
 	}
-	frame, err := json.Marshal(struct {
-		EventType string          `json:"eventType"`
-		Payload   json.RawMessage `json:"payload"`
-	}{EventType: msg.EventType, Payload: payload})
+	eventType, err := json.Marshal(msg.EventType)
 	if err != nil {
 		r.done = true
-		r.err = fmt.Errorf("eventstream: encode SSE envelope: %w", err)
+		r.err = fmt.Errorf("eventstream: encode event type: %w", err)
 		return
 	}
-	r.pending.WriteString("data: ")
-	r.pending.Write(frame)
-	r.pending.WriteString("\n\n")
+	r.pending.WriteString(`data: {"eventType":`)
+	r.pending.Write(eventType)
+	r.pending.WriteString(`,"payload":`)
+	r.pending.Write(compact.Bytes())
+	r.pending.WriteString("}\n\n")
 }
 
 func (r *eventStreamSSEReader) Read(p []byte) (int, error) {
