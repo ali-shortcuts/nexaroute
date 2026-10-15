@@ -6,9 +6,13 @@
 #     extras, never the manifest itself or the signature bundle) and
 #     `sha256sum -c` passes;
 #   * the SBOM is valid SPDX JSON produced by Syft, names this
-#     release, records source traceability, and lists the Go module
-#     inventory at the exact versions pinned in go.mod (the shipped
-#     binaries embed that inventory).
+#     release, records source traceability, and describes the Go
+#     module inventory embedded in the shipped binaries at the exact
+#     versions pinned in go.mod. (go.mod also pins modules that are
+#     never linked into the binaries — test-only and tool-only
+#     requirements; those legitimately never appear in an SBOM of
+#     the shipped assets, so completeness is judged against the
+#     binaries' embedded inventory, not raw go.mod.)
 #
 # Usage: scripts/verify-release.sh [dist-dir] [version] [expected-commit]
 # The expected source commit may also be given as EXPECTED_SOURCE_COMMIT.
@@ -72,7 +76,19 @@ fi
   exit 1
 }
 
-python3 - "${sboms[0]}" "$version" "$expected_commit" <<'PYEOF'
+# Embedded module inventory of the shipped binaries (module, version)
+# pairs from `go version -m`. Empty when the files carry no Go build
+# info (the fixture harness uses text stand-ins) or when go is
+# unavailable to an operator verifying a download standalone; the
+# completeness check below is skipped then, while the drift and
+# invented-module checks still apply.
+embedded_file="$(mktemp)"
+trap 'rm -f "$embedded_file"' EXIT
+for b in nexaroute-linux-amd64 nexaroute-linux-arm64 nexaroute-videogen-linux-amd64 nexaroute-videogen-linux-arm64; do
+  go version -m "$dist/$b" 2>/dev/null | awk '$1 == "dep" && $3 != "(devel)" {print $2, $3}' || true
+done | sort -u > "$embedded_file"
+
+python3 - "${sboms[0]}" "$version" "$expected_commit" "$embedded_file" <<'PYEOF'
 import json, re, sys
 
 path, version, expected = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -102,11 +118,15 @@ elif version:
     if "github.com/ali-shortcuts/nexaroute" not in ns or not re.search(r"sbom-[0-9a-f]{40}$", ns):
         sys.exit(f"verify-release: SBOM namespace lacks repository/commit traceability: {ns!r}")
 
-# The Go module inventory pinned in go.mod must appear in the SBOM at
-# the same versions: the shipped binaries embed exactly this graph.
+# Version integrity against go.mod, in both directions, plus
+# completeness against the binaries' embedded inventory (argv[4]).
 gomod = {}
+main_module = ""
 in_require = False
 for line in open("go.mod"):
+    mm = re.match(r"^module\s+(\S+)\s*$", line.strip())
+    if mm:
+        main_module = mm.group(1)
     line = line.strip()
     if line.startswith("require ("):
         in_require = True
@@ -118,15 +138,33 @@ for line in open("go.mod"):
     if m and (in_require or m.group(1)):
         gomod[m.group(2)] = m.group(3)
 packages = {p.get("name"): p.get("versionInfo") for p in doc.get("packages", [])}
-missing = {m: v for m, v in gomod.items() if packages.get(m) != v}
-if missing:
-    sys.exit(f"verify-release: SBOM Go module inventory mismatch vs go.mod: {missing}")
+drift = {m: (packages[m], v) for m, v in gomod.items() if m in packages and packages[m] != v}
+if drift:
+    sys.exit(f"verify-release: SBOM module version drift vs go.mod (sbom, pinned): {drift}")
+for p in doc.get("packages", []):
+    for ref in p.get("externalRefs") or []:
+        if ref.get("referenceType") == "purl" and str(ref.get("referenceLocator", "")).startswith("pkg:golang/"):
+            if p.get("name") not in gomod and p.get("name") != main_module and p.get("name") != "stdlib":
+                sys.exit(f"verify-release: SBOM lists Go module {p.get('name')!r} that go.mod does not pin")
+embedded = {}
+try:
+    with open(sys.argv[4]) as fh:
+        for line in fh:
+            parts = line.split()
+            if len(parts) == 2:
+                embedded[parts[0]] = parts[1]
+except OSError:
+    embedded = {}
+if embedded:
+    absent = {m: v for m, v in embedded.items() if packages.get(m) != v}
+    if absent:
+        sys.exit(f"verify-release: SBOM misses modules embedded in the shipped binaries: {absent}")
 shipped = {"nexaroute-linux-amd64", "nexaroute-linux-arm64",
            "nexaroute-videogen-linux-amd64", "nexaroute-videogen-linux-arm64"}
 seen_files = {f.get("fileName", "").lstrip("./") for f in doc.get("files", [])}
 if not shipped <= seen_files:
     sys.exit(f"verify-release: SBOM does not describe all shipped binaries; missing {sorted(shipped - seen_files)}")
-print(f"verify-release: SBOM valid SPDX-2.3 by Syft; {len(gomod)} go.mod modules present at pinned versions; "
+print(f"verify-release: SBOM valid SPDX-2.3 by Syft; no drift vs go.mod pins; "
       f"{len(doc.get('packages', []))} packages, {len(doc.get('files', []))} files total")
 PYEOF
 echo "verify-release: PASS ($dist)"

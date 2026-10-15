@@ -124,4 +124,21 @@ PYEOF
 ./scripts/write-checksums.sh "$t" >/dev/null
 expect_fail "SBOM module version drift vs go.mod" ./scripts/verify-release.sh "$t" v9.9.9
 
+# Regression (v0.22.0 dry run, 2026-10-15): go.mod pins modules that
+# are never linked into the shipped binaries (test-only testify,
+# tool-only go.yaml.in/yaml/v3). An SBOM of the shipped assets
+# legitimately omits them; absence alone must not fail verification.
+# (Version DRIFT of a listed module must still fail — see above.)
+t="$work/unlinked"; make_fixture "$t"
+python3 - "$t" <<'PYEOF'
+import glob, json, sys
+p = glob.glob(sys.argv[1] + "/*-sbom.spdx.json")[0]
+doc = json.load(open(p))
+doc["packages"] = doc["packages"][:-1]
+json.dump(doc, open(p, "w"), indent=2)
+PYEOF
+./scripts/write-checksums.sh "$t" >/dev/null
+./scripts/verify-release.sh "$t" v9.9.9 >/dev/null
+echo "test-release-artifacts: go.mod module absent from SBOM (unlinked) verifies"
+
 echo "test-release-artifacts: PASS"
