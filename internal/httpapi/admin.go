@@ -451,6 +451,7 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 		"decision_provider_health": cfgFull.DecisionProviderHealth,
 		"scorecards":               scorecardsSection,
 		"evaluation":               evaluationSection,
+		"budget_alerts":            s.budgetAlertsSnapshot(),
 		"config": map[string]any{
 			"probe":    probeCfg,
 			"routing":  routingCfg,

@@ -203,6 +203,14 @@ func main() {
 	if err := api.SecurityStoreError(); err != nil {
 		bootstrap.Fatalf("cannot initialize admin security store: %v", err)
 	}
+	// Budget webhook alerts deduplicate across restarts on the durable
+	// control-plane store when one is configured (file, postgres,
+	// redis); otherwise the alerter falls back to budget_alerts
+	// state_path or in-memory marks. Wiring is best-effort: store
+	// errors never fail requests.
+	if cpRuntime != nil && cpRuntime.manager != nil {
+		api.SetBudgetAlertStore(httpapi.NewIOBudgetAlertStore(&controlPlaneBudgetAlertIO{runtime: cpRuntime}))
+	}
 	// Optional OTLP span export (M4-6 part B). The collector URL comes
 	// only from the environment variable named in the config, mirroring
 	// the control-plane backends; unset means disabled. An invalid URL

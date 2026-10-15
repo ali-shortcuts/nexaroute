@@ -40,6 +40,9 @@ func (s *Server) recordUsageEx(r *http.Request, deployment string, counts usage.
 	}
 	if bres := budgetReservationFromContext(r.Context()); bres != nil && s.budgets != nil {
 		s.budgets.Settle(bres.keyID, bres.id, cost)
+		// Threshold webhook alerts (best-effort, asynchronous): never
+		// affects accounting or the response on this path.
+		s.checkBudgetAlerts(bres.keyID)
 	}
 	if s.identityUsage == nil {
 		return
