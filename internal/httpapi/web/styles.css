@@ -85,3 +85,16 @@ html[data-theme="light"] .video-hero .button.ghost { color: #e2e8f0; border-colo
 .video-assets{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
 .field-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
 @media(max-width:640px){.video-assets .button{width:100%}}
+
+/* Command palette (M2-10). */
+.palette-backdrop{position:fixed;inset:0;background:rgba(4,7,12,.66);z-index:30;display:grid;justify-items:center;align-items:start;padding:12vh 16px 16px}
+.palette{width:min(560px,100%);border:1px solid var(--border);border-radius:14px;background:var(--surface);box-shadow:0 24px 80px rgba(0,0,0,.5);overflow:hidden}
+.palette input{width:100%;padding:14px 16px;border:0;border-bottom:1px solid var(--border);background:transparent;color:var(--text);font-size:15px;outline:none}
+.palette #palette-list{display:grid;max-height:320px;overflow:auto;padding:6px}
+.palette-item{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 11px;border:0;border-radius:8px;background:transparent;color:var(--text);text-align:left;font-weight:600}
+.palette-item small{color:var(--muted);font-weight:400}
+.palette-item.active,.palette-item:hover{background:var(--surface-3)}
+.palette-hint{margin:0;padding:9px 14px;border-top:1px solid var(--border);color:var(--muted);font-size:11px}
+.palette-empty{margin:0;padding:14px;color:var(--muted)}
+.notice .button{margin-left:8px}
+.palette-backdrop[hidden]{display:none}
