@@ -95,8 +95,45 @@ func runBackup(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+// readFileBounded reads a backup source without ever allocating more
+// than the per-entry bundle limit: the size is checked from Stat
+// BEFORE the read, and re-checked after it (a file that grew between
+// the two is rejected, never truncated).
+func readFileBounded(path, what string) ([]byte, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	if info.Size() > maxBackupEntryBytes {
+		return nil, fmt.Errorf("%s %s is %d bytes, exceeding the %d-byte bundle entry limit", what, path, info.Size(), maxBackupEntryBytes)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxBackupEntryBytes {
+		return nil, fmt.Errorf("%s %s grew past the %d-byte bundle entry limit while being read", what, path, maxBackupEntryBytes)
+	}
+	return data, nil
+}
+
+// boundedBuffer is an io.Writer that fails rather than buffering more
+// than its limit — used for the security-store snapshot, whose size is
+// known only as it is produced.
+type boundedBuffer struct {
+	buf   bytes.Buffer
+	limit int64
+}
+
+func (w *boundedBuffer) Write(p []byte) (int, error) {
+	if int64(w.buf.Len())+int64(len(p)) > w.limit {
+		return 0, fmt.Errorf("snapshot exceeds the %d-byte bundle entry limit", w.limit)
+	}
+	return w.buf.Write(p)
+}
+
 func createBackup(configPath, outPath string, includeKey bool, stdout io.Writer) error {
-	configBytes, err := os.ReadFile(configPath)
+	configBytes, err := readFileBounded(configPath, "config")
 	if err != nil {
 		return fmt.Errorf("read config: %w", err)
 	}
@@ -140,7 +177,18 @@ func createBackup(configPath, outPath string, includeKey bool, stdout io.Writer)
 	defer func() { _ = os.RemoveAll(stage) }()
 
 	manifest := backupManifest{Format: backupFormat, CreatedAt: time.Now().UTC(), GatewayVersion: version}
+	// The same per-entry and aggregate limits restore enforces are
+	// applied while staging, so a backup can never produce a bundle
+	// its own restore would reject for size.
+	var stagedTotal int64
 	add := func(name string, data []byte) error {
+		if int64(len(data)) > maxBackupEntryBytes {
+			return fmt.Errorf("backup entry %s is %d bytes, exceeding the %d-byte bundle entry limit", name, len(data), maxBackupEntryBytes)
+		}
+		stagedTotal += int64(len(data))
+		if stagedTotal > maxBackupTotalBytes {
+			return fmt.Errorf("backup payload exceeds the aggregate bundle limit of %d bytes at entry %s", maxBackupTotalBytes, name)
+		}
 		if err := os.WriteFile(filepath.Join(stage, name), data, 0o600); err != nil {
 			return err
 		}
@@ -162,18 +210,15 @@ func createBackup(configPath, outPath string, includeKey bool, stdout io.Writer)
 		if err != nil {
 			return fmt.Errorf("open security store for snapshot: %w", err)
 		}
-		var buf bytes.Buffer
+		snap := &boundedBuffer{limit: maxBackupEntryBytes}
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-		err = store.BackupTo(ctx, &buf)
+		err = store.BackupTo(ctx, snap)
 		cancel()
 		_ = store.Close()
 		if err != nil {
 			return fmt.Errorf("snapshot security store: %w", err)
 		}
-		if int64(buf.Len()) > maxBackupEntryBytes {
-			return fmt.Errorf("security store snapshot exceeds the %d-byte bundle entry limit", maxBackupEntryBytes)
-		}
-		if err := add(backupEntrySecurity, buf.Bytes()); err != nil {
+		if err := add(backupEntrySecurity, snap.buf.Bytes()); err != nil {
 			return err
 		}
 	} else if errors.Is(statErr, os.ErrNotExist) {
@@ -186,7 +231,7 @@ func createBackup(configPath, outPath string, includeKey bool, stdout io.Writer)
 	// missing state file is fine (nothing was ever persisted), an
 	// unreadable one fails the backup instead of being dropped.
 	if cpPath != "" {
-		data, err := os.ReadFile(cpPath)
+		data, err := readFileBounded(cpPath, "control-plane state")
 		if err == nil {
 			if err := add(backupEntryControl, data); err != nil {
 				return err
@@ -200,7 +245,7 @@ func createBackup(configPath, outPath string, includeKey bool, stdout io.Writer)
 	// explicit opt-in. An unreadable key file (permissions, a directory
 	// in its place) fails the backup rather than being misreported as
 	// "no master key file".
-	if keyBytes, err := os.ReadFile(keyPath); err == nil {
+	if keyBytes, err := readFileBounded(keyPath, "master key file"); err == nil {
 		manifest.MasterKeySHA256 = sha256Hex(keyBytes)
 		if includeKey {
 			if err := add(backupEntryKey, keyBytes); err != nil {
@@ -414,6 +459,53 @@ func restoreBundle(bundlePath, configPath string, force bool, stdout io.Writer) 
 		items = append(items, installItem{backupEntryKey, configPath + ".key"})
 	}
 
+	// Bundle/config consistency: a payload the bundled configuration
+	// does not describe a supported backend for is an inconsistent
+	// bundle (createBackup never produces one) — refuse it rather
+	// than installing state the gateway would fail closed on.
+	if _, ok := payloads[backupEntrySecurity]; ok {
+		switch bundled.Admin.SecurityStoreBackend {
+		case "", "bbolt":
+		default:
+			return fmt.Errorf("bundle contains a security store but the bundled config selects security store backend %q, which this build cannot restore (its adapters are M4-2 scope); refusing to restore", bundled.Admin.SecurityStoreBackend)
+		}
+	}
+	if _, ok := payloads[backupEntryControl]; ok {
+		if !bundled.ControlPlane.Enabled || (bundled.ControlPlane.Backend != "" && bundled.ControlPlane.Backend != "file") {
+			return fmt.Errorf("bundle contains control-plane state but the bundled config does not enable the file control-plane backend; refusing to restore an inconsistent bundle")
+		}
+	}
+
+	// Target collision prevention, BEFORE any filesystem write: two
+	// payloads installing to the same destination would silently
+	// overwrite each other in install order (e.g. a security store
+	// path that resolves onto the config file). Canonical-path
+	// equality catches relative spellings, "..", and symlinked paths;
+	// os.SameFile catches hard-linked targets whose canonical paths
+	// still differ.
+	seen := map[string]string{}
+	for _, it := range items {
+		canon, err := canonicalPath(it.target)
+		if err != nil {
+			return fmt.Errorf("resolve restore target %s: %w", it.target, err)
+		}
+		if prev, dup := seen[canon]; dup {
+			return fmt.Errorf("restore targets collide: bundle entries %q and %q both resolve to %s; refusing to restore", prev, it.name, canon)
+		}
+		seen[canon] = it.name
+	}
+	for i := range items {
+		infoI, errI := os.Stat(items[i].target)
+		if errI != nil {
+			continue
+		}
+		for j := i + 1; j < len(items); j++ {
+			if infoJ, errJ := os.Stat(items[j].target); errJ == nil && os.SameFile(infoI, infoJ) {
+				return fmt.Errorf("restore targets collide: bundle entries %q and %q are the same file (%s / %s); refusing to restore", items[i].name, items[j].name, items[i].target, items[j].target)
+			}
+		}
+	}
+
 	// Guards: never clobber an existing, different file without --force.
 	var installs []installItem
 	for _, it := range items {
@@ -454,11 +546,13 @@ func restoreBundle(bundlePath, configPath string, force bool, stdout io.Writer) 
 // the destination path it installs to.
 type installItem struct{ name, target string }
 
-// restoreWriteFile installs one payload file during a restore. It is
-// a variable so tests can inject deterministic install failures at a
-// chosen stage; rollback deliberately bypasses it and always uses the
-// real writeFileAtomic.
+// restoreWriteFile installs one payload file during a restore, and
+// restoreRollbackWriteFile puts a journaled file back during
+// rollback. They are separate variables so tests can inject
+// deterministic failures into either phase independently; in
+// production both are writeFileAtomic.
 var restoreWriteFile = writeFileAtomic
+var restoreRollbackWriteFile = writeFileAtomic
 
 // installWithRollback installs the planned files in order, journaling
 // the previous bytes of every target it will replace BEFORE the first
@@ -483,28 +577,59 @@ func installWithRollback(installs []installItem, payloads map[string][]byte, std
 	if err != nil {
 		return fmt.Errorf("create restore journal: %w", err)
 	}
-	defer func() { _ = os.RemoveAll(journalDir) }()
+	// The journal (mode 0700, entries 0600) is removed once the
+	// install succeeds or rollback completes. On INCOMPLETE rollback
+	// it is preserved and its path reported: it holds the only
+	// pre-restore copies of the files that could not be put back.
+	preserveJournal := false
+	defer func() {
+		if !preserveJournal {
+			_ = os.RemoveAll(journalDir)
+		}
+	}()
 
 	type journalEntry struct {
 		target  string
 		existed bool
-		saved   string // journal copy of the pre-restore bytes, when existed
+		saved   string      // journal copy of the pre-restore bytes (regular files)
+		mode    os.FileMode // pre-restore permission bits (regular files)
+		linkTo  string      // symlink target, when the pre-restore entry was a symlink
 	}
 	journal := make([]journalEntry, 0, len(installs))
 	for i, it := range installs {
 		entry := journalEntry{target: it.target}
-		data, err := os.ReadFile(it.target)
+		info, lerr := os.Lstat(it.target)
 		switch {
-		case err == nil:
-			entry.existed = true
-			entry.saved = filepath.Join(journalDir, fmt.Sprintf("entry-%d", i))
-			if err := os.WriteFile(entry.saved, data, 0o600); err != nil {
-				return fmt.Errorf("journal restore target %s: %w", it.target, err)
-			}
-		case errors.Is(err, os.ErrNotExist):
+		case errors.Is(lerr, os.ErrNotExist):
 			// Created by this restore; rollback removes it.
+		case lerr != nil:
+			return fmt.Errorf("journal restore target %s: %w", it.target, lerr)
+		case info.Mode()&os.ModeSymlink != 0:
+			// Installing replaces the link itself with a regular
+			// file; journal where it pointed so rollback can
+			// recreate the link exactly.
+			target, rerr := os.Readlink(it.target)
+			if rerr != nil {
+				return fmt.Errorf("journal restore target %s: %w", it.target, rerr)
+			}
+			entry.existed = true
+			entry.linkTo = target
+		case info.Mode().IsRegular():
+			data, rerr := os.ReadFile(it.target)
+			if rerr != nil {
+				return fmt.Errorf("journal restore target %s: %w", it.target, rerr)
+			}
+			entry.existed = true
+			entry.mode = info.Mode().Perm()
+			entry.saved = filepath.Join(journalDir, fmt.Sprintf("entry-%d", i))
+			if werr := os.WriteFile(entry.saved, data, 0o600); werr != nil {
+				return fmt.Errorf("journal restore target %s: %w", it.target, werr)
+			}
 		default:
-			return fmt.Errorf("journal restore target %s: %w", it.target, err)
+			// Directories, devices, sockets and other non-file
+			// targets cannot be journaled as bytes; refuse before
+			// writing anything instead of destroying them.
+			return fmt.Errorf("restore target %s has an unsupported type (%s); refusing to replace it", it.target, info.Mode().Type())
 		}
 		journal = append(journal, entry)
 	}
@@ -516,20 +641,29 @@ func installWithRollback(installs []installItem, payloads map[string][]byte, std
 			var rbFailures []string
 			for j := installed - 1; j >= 0; j-- {
 				entry := journal[j]
-				if entry.existed {
-					data, rerr := os.ReadFile(entry.saved)
-					if rerr == nil {
-						rerr = writeFileAtomic(entry.target, data, 0o600)
+				var rerr error
+				switch {
+				case entry.linkTo != "":
+					if rerr = os.Remove(entry.target); rerr == nil || errors.Is(rerr, os.ErrNotExist) {
+						rerr = os.Symlink(entry.linkTo, entry.target)
 					}
-					if rerr != nil {
-						rbFailures = append(rbFailures, fmt.Sprintf("%s (%v)", entry.target, rerr))
+				case entry.existed:
+					var data []byte
+					if data, rerr = os.ReadFile(entry.saved); rerr == nil {
+						rerr = restoreRollbackWriteFile(entry.target, data, entry.mode)
 					}
-				} else if rerr := os.Remove(entry.target); rerr != nil && !errors.Is(rerr, os.ErrNotExist) {
+				default:
+					if rerr = os.Remove(entry.target); errors.Is(rerr, os.ErrNotExist) {
+						rerr = nil
+					}
+				}
+				if rerr != nil {
 					rbFailures = append(rbFailures, fmt.Sprintf("%s (%v)", entry.target, rerr))
 				}
 			}
 			if len(rbFailures) > 0 {
-				return fmt.Errorf("install %s failed: %w; rollback INCOMPLETE — could not restore: %s; the installation is in a mixed state, fix these files from the journal of a fresh restore or from backup before starting the gateway", it.target, err, strings.Join(rbFailures, ", "))
+				preserveJournal = true
+				return fmt.Errorf("install %s failed: %w; rollback INCOMPLETE — could not restore: %s; the installation is in a mixed state. The pre-restore copies are preserved in the restore journal at %s — recover those targets from it (or from backup) before starting the gateway", it.target, err, strings.Join(rbFailures, ", "), journalDir)
 			}
 			return fmt.Errorf("install %s failed: %w; all previously installed files were rolled back to their pre-restore state", it.target, err)
 		}

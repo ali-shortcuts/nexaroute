@@ -415,6 +415,379 @@ func TestRestoreKeylessEncryptedConfig(t *testing.T) {
 	}
 }
 
+// --- Round 3 Fix 1: restore target collisions + inconsistent bundles ---
+
+func bundleConfigBytes(t *testing.T, mutate func(*config.Config)) []byte {
+	t.Helper()
+	cfg := config.Default()
+	mutate(&cfg)
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
+func TestRestoreRejectsCollidingTargets(t *testing.T) {
+	assertRefusedAndUnchanged := func(t *testing.T, bundle string, targetConfig string, sentinels map[string][]byte) {
+		t.Helper()
+		var stdout, stderr bytes.Buffer
+		if code := runRestore([]string{"--bundle", bundle, "--config", targetConfig, "--force"}, &stdout, &stderr); code != 1 {
+			t.Fatalf("restore exit=%d, want 1 (stderr=%s)", code, stderr.String())
+		}
+		if !strings.Contains(stderr.String(), "collide") {
+			t.Fatalf("refusal must name the collision: %s", stderr.String())
+		}
+		for path, want := range sentinels {
+			got, err := os.ReadFile(path)
+			if err != nil || !bytes.Equal(got, want) {
+				t.Fatalf("target %s changed by a refused restore (err=%v)", path, err)
+			}
+		}
+	}
+
+	t.Run("security store path resolves onto the config", func(t *testing.T) {
+		cfgBytes := bundleConfigBytes(t, func(cfg *config.Config) {
+			cfg.Admin.SecurityStorePath = "config.json"
+		})
+		bundle := writeTestBundle(t, map[string][]byte{
+			backupEntryConfig: cfgBytes, backupEntrySecurity: []byte("db-bytes"),
+		})
+		targetDir := t.TempDir()
+		targetConfig := filepath.Join(targetDir, "config.json")
+		sentinel := []byte("SENTINEL CONFIG")
+		if err := os.WriteFile(targetConfig, sentinel, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		assertRefusedAndUnchanged(t, bundle, targetConfig, map[string][]byte{targetConfig: sentinel})
+	})
+
+	t.Run("control-plane state path resolves onto the config", func(t *testing.T) {
+		cfgBytes := bundleConfigBytes(t, func(cfg *config.Config) {
+			cfg.ControlPlane.Enabled = true
+			cfg.ControlPlane.Backend = "file"
+			cfg.ControlPlane.StatePath = "config.json"
+		})
+		bundle := writeTestBundle(t, map[string][]byte{
+			backupEntryConfig: cfgBytes, backupEntryControl: []byte("{}"),
+		})
+		targetDir := t.TempDir()
+		targetConfig := filepath.Join(targetDir, "config.json")
+		sentinel := []byte("SENTINEL CONFIG")
+		if err := os.WriteFile(targetConfig, sentinel, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		assertRefusedAndUnchanged(t, bundle, targetConfig, map[string][]byte{targetConfig: sentinel})
+	})
+
+	t.Run("security store path resolves onto the master key", func(t *testing.T) {
+		cfgBytes := bundleConfigBytes(t, func(cfg *config.Config) {
+			cfg.Admin.SecurityStorePath = "config.json.key"
+		})
+		bundle := writeTestBundle(t, map[string][]byte{
+			backupEntryConfig: cfgBytes, backupEntrySecurity: []byte("db-bytes"),
+			backupEntryKey: []byte("key-bytes"),
+		})
+		targetDir := t.TempDir()
+		targetConfig := filepath.Join(targetDir, "config.json")
+		sentinel := []byte("SENTINEL CONFIG")
+		if err := os.WriteFile(targetConfig, sentinel, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		assertRefusedAndUnchanged(t, bundle, targetConfig, map[string][]byte{targetConfig: sentinel})
+		if _, err := os.Stat(targetConfig + ".key"); !os.IsNotExist(err) {
+			t.Fatal("no key file may be installed by a refused restore")
+		}
+	})
+
+	t.Run("security target is a symlink to the config", func(t *testing.T) {
+		cfgBytes := bundleConfigBytes(t, func(cfg *config.Config) {})
+		bundle := writeTestBundle(t, map[string][]byte{
+			backupEntryConfig: cfgBytes, backupEntrySecurity: []byte("db-bytes"),
+		})
+		targetDir := t.TempDir()
+		targetConfig := filepath.Join(targetDir, "config.json")
+		sentinel := []byte("SENTINEL CONFIG")
+		if err := os.WriteFile(targetConfig, sentinel, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		secDir := filepath.Join(targetDir, "security")
+		if err := os.MkdirAll(secDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		link := filepath.Join(secDir, "nexaroute-security.db")
+		if err := os.Symlink(targetConfig, link); err != nil {
+			t.Fatal(err)
+		}
+		assertRefusedAndUnchanged(t, bundle, targetConfig, map[string][]byte{targetConfig: sentinel})
+		if info, err := os.Lstat(link); err != nil || info.Mode()&os.ModeSymlink == 0 {
+			t.Fatal("the target symlink must survive a refused restore")
+		}
+	})
+
+	t.Run("security payload with a non-bbolt bundled backend", func(t *testing.T) {
+		cfgBytes := bundleConfigBytes(t, func(cfg *config.Config) {
+			cfg.Admin.SecurityStoreBackend = "redis"
+		})
+		bundle := writeTestBundle(t, map[string][]byte{
+			backupEntryConfig: cfgBytes, backupEntrySecurity: []byte("db-bytes"),
+		})
+		targetConfig := filepath.Join(t.TempDir(), "config.json")
+		var stdout, stderr bytes.Buffer
+		if code := runRestore([]string{"--bundle", bundle, "--config", targetConfig}, &stdout, &stderr); code != 1 {
+			t.Fatalf("restore exit=%d, want 1 (stderr=%s)", code, stderr.String())
+		}
+		if _, err := os.Stat(targetConfig); !os.IsNotExist(err) {
+			t.Fatal("an inconsistent bundle must not install anything")
+		}
+	})
+
+	t.Run("control payload without an enabled file backend", func(t *testing.T) {
+		cfgBytes := bundleConfigBytes(t, func(cfg *config.Config) {})
+		bundle := writeTestBundle(t, map[string][]byte{
+			backupEntryConfig: cfgBytes, backupEntryControl: []byte("{}"),
+		})
+		targetConfig := filepath.Join(t.TempDir(), "config.json")
+		var stdout, stderr bytes.Buffer
+		if code := runRestore([]string{"--bundle", bundle, "--config", targetConfig}, &stdout, &stderr); code != 1 {
+			t.Fatalf("restore exit=%d, want 1 (stderr=%s)", code, stderr.String())
+		}
+		if _, err := os.Stat(targetConfig); !os.IsNotExist(err) {
+			t.Fatal("an inconsistent bundle must not install anything")
+		}
+	})
+}
+
+// --- Round 3 Fix 2: journal survives an incomplete rollback ---
+
+func TestRestorePreservesJournalOnIncompleteRollback(t *testing.T) {
+	_, configPath := opsFixture(t)
+	if err := os.WriteFile(configPath+".key", []byte("0123456789abcdef0123456789abcdef"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bundle := filepath.Join(t.TempDir(), "b.tar")
+	if code, stderr := runBackupCode(t, configPath, bundle, "--include-master-key"); code != 0 {
+		t.Fatalf("backup exit=%d stderr=%s", code, stderr)
+	}
+
+	targetDir := t.TempDir()
+	targetConfig := filepath.Join(targetDir, "config.json")
+	preConfig := []byte("PRE-EXISTING CONFIG")
+	preDB := []byte("PRE-EXISTING DB")
+	if err := os.WriteFile(targetConfig, preConfig, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	dbPath := filepath.Join(targetDir, "security", "nexaroute-security.db")
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dbPath, preDB, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Installs: config, security, key. Fail the KEY install (stage 3)
+	// so both earlier files need rollback; then fail the rollback of
+	// the security store specifically. Config rollback still succeeds.
+	installCalls := 0
+	origInstall := restoreWriteFile
+	restoreWriteFile = func(path string, data []byte, perm os.FileMode) error {
+		installCalls++
+		if installCalls == 3 {
+			return errors.New("injected install failure at key stage")
+		}
+		return origInstall(path, data, perm)
+	}
+	defer func() { restoreWriteFile = origInstall }()
+	origRollback := restoreRollbackWriteFile
+	restoreRollbackWriteFile = func(path string, data []byte, perm os.FileMode) error {
+		if path == dbPath {
+			return errors.New("injected rollback failure")
+		}
+		return origRollback(path, data, perm)
+	}
+	defer func() { restoreRollbackWriteFile = origRollback }()
+
+	var stdout, stderr bytes.Buffer
+	code := runRestore([]string{"--bundle", bundle, "--config", targetConfig, "--force"}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("restore exit=%d, want 1 (stderr=%s)", code, stderr.String())
+	}
+	errText := stderr.String()
+	if !strings.Contains(errText, "rollback INCOMPLETE") {
+		t.Fatalf("error must report the incomplete rollback: %s", errText)
+	}
+	// Extract and verify the preserved journal.
+	const marker = "restore journal at "
+	idx := strings.Index(errText, marker)
+	if idx < 0 {
+		t.Fatalf("error must report the journal path: %s", errText)
+	}
+	journalPath := strings.Fields(errText[idx+len(marker):])[0]
+	journalPath = strings.TrimRight(journalPath, "—")
+	defer func() { _ = os.RemoveAll(journalPath) }()
+	info, err := os.Stat(journalPath)
+	if err != nil || !info.IsDir() {
+		t.Fatalf("journal must survive an incomplete rollback: stat err=%v", err)
+	}
+	if info.Mode().Perm() != 0o700 {
+		t.Fatalf("journal dir mode=%04o, want 0700", info.Mode().Perm())
+	}
+	entries, err := os.ReadDir(journalPath)
+	if err != nil || len(entries) == 0 {
+		t.Fatalf("journal must hold recovery copies: entries=%v err=%v", entries, err)
+	}
+	foundDB := false
+	for _, e := range entries {
+		data, err := os.ReadFile(filepath.Join(journalPath, e.Name()))
+		if err == nil && bytes.Equal(data, preDB) {
+			foundDB = true
+		}
+		if err == nil && bytes.Equal(data, preConfig) {
+			// present as well; fine either way
+		}
+	}
+	if !foundDB {
+		t.Fatal("journal must preserve the pre-restore security store bytes")
+	}
+	// The config WAS rolled back (its rollback step succeeded), with
+	// its original 0640 mode preserved by the journal metadata.
+	if got, _ := os.ReadFile(targetConfig); !bytes.Equal(got, preConfig) {
+		t.Fatal("config target must be rolled back to its pre-restore bytes")
+	}
+	if info, err := os.Stat(targetConfig); err != nil || info.Mode().Perm() != 0o640 {
+		t.Fatalf("rolled-back config mode=%v err=%v, want 0640 preserved", info.Mode().Perm(), err)
+	}
+	// The security store still holds the BUNDLED bytes (install
+	// succeeded, rollback failed) — exactly the mixed state the error
+	// reports, recoverable from the preserved journal.
+	bundleDB, _ := os.ReadFile(dbPath)
+	if bytes.Equal(bundleDB, preDB) {
+		t.Fatal("security target should still hold installed bytes after its rollback failed")
+	}
+}
+
+// --- Round 3 Fix 3: doctor absence vs real errors ---
+
+func TestDoctorFailsOnInaccessiblePaths(t *testing.T) {
+	t.Run("security store path under a regular file", func(t *testing.T) {
+		dir, configPath := opsFixture(t)
+		blocker := filepath.Join(dir, "blocker")
+		if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		rewriteFixtureConfig(t, configPath, func(cfg *config.Config) {
+			cfg.Admin.SecurityStorePath = filepath.Join(blocker, "store.db")
+		})
+		var stdout, stderr bytes.Buffer
+		if code := runDoctor([]string{"--config", configPath}, &stdout, &stderr); code != 1 {
+			t.Fatalf("doctor exit=%d, want 1\n%s", code, stdout.String())
+		}
+		if !strings.Contains(stdout.String(), "FAIL security_store:") {
+			t.Fatalf("doctor must FAIL the security store check:\n%s", stdout.String())
+		}
+	})
+
+	t.Run("control-plane state path under a regular file", func(t *testing.T) {
+		dir, configPath := opsFixture(t)
+		blocker := filepath.Join(dir, "blocker")
+		if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		rewriteFixtureConfig(t, configPath, func(cfg *config.Config) {
+			cfg.ControlPlane.Enabled = true
+			cfg.ControlPlane.Backend = "file"
+			cfg.ControlPlane.StatePath = filepath.Join(blocker, "cp.json")
+		})
+		var stdout, stderr bytes.Buffer
+		if code := runDoctor([]string{"--config", configPath}, &stdout, &stderr); code != 1 {
+			t.Fatalf("doctor exit=%d, want 1\n%s", code, stdout.String())
+		}
+		if !strings.Contains(stdout.String(), "FAIL control_plane:") {
+			t.Fatalf("doctor must FAIL the control plane check:\n%s", stdout.String())
+		}
+	})
+
+	t.Run("control-plane state path is a directory", func(t *testing.T) {
+		dir, configPath := opsFixture(t)
+		stateDir := filepath.Join(dir, "cpdir")
+		if err := os.Mkdir(stateDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		rewriteFixtureConfig(t, configPath, func(cfg *config.Config) {
+			cfg.ControlPlane.Enabled = true
+			cfg.ControlPlane.Backend = "file"
+			cfg.ControlPlane.StatePath = stateDir
+		})
+		var stdout, stderr bytes.Buffer
+		if code := runDoctor([]string{"--config", configPath}, &stdout, &stderr); code != 1 {
+			t.Fatalf("doctor exit=%d, want 1\n%s", code, stdout.String())
+		}
+		if !strings.Contains(stdout.String(), "FAIL control_plane:") {
+			t.Fatalf("doctor must FAIL the control plane check:\n%s", stdout.String())
+		}
+	})
+
+	t.Run("absent state still warns without failing", func(t *testing.T) {
+		_, configPath := opsFixture(t)
+		rewriteFixtureConfig(t, configPath, func(cfg *config.Config) {
+			cfg.ControlPlane.Enabled = true
+			cfg.ControlPlane.Backend = "file"
+			cfg.ControlPlane.StatePath = "never-created.json"
+		})
+		var stdout, stderr bytes.Buffer
+		if code := runDoctor([]string{"--config", configPath}, &stdout, &stderr); code != 0 {
+			t.Fatalf("doctor exit=%d, want 0 (absence is a WARN)\n%s", code, stdout.String())
+		}
+		if !strings.Contains(stdout.String(), "WARN control_plane:") {
+			t.Fatalf("absent state must stay a WARN:\n%s", stdout.String())
+		}
+	})
+}
+
+// --- Round 3 Fix 4: backup creation enforces the bundle limits ---
+
+func TestBackupEnforcesLimitsDuringCreation(t *testing.T) {
+	setLimits := func(entry, total int64) {
+		oldEntry, oldTotal := maxBackupEntryBytes, maxBackupTotalBytes
+		maxBackupEntryBytes, maxBackupTotalBytes = entry, total
+		t.Cleanup(func() { maxBackupEntryBytes, maxBackupTotalBytes = oldEntry, oldTotal })
+	}
+
+	t.Run("entry overflow", func(t *testing.T) {
+		_, configPath := opsFixture(t)
+		info, err := os.Stat(configPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Above the config (first entry stages fine) but below the
+		// security snapshot: creation must fail on a later entry.
+		setLimits(info.Size()+128, 1<<40)
+		out := filepath.Join(t.TempDir(), "b.tar")
+		if code, stderr := runBackupCode(t, configPath, out); code != 1 {
+			t.Fatalf("backup exit=%d, want 1 (stderr=%s)", code, stderr)
+		}
+		if _, err := os.Stat(out); !os.IsNotExist(err) {
+			t.Fatal("no bundle may be produced when an entry overflows")
+		}
+	})
+
+	t.Run("aggregate overflow", func(t *testing.T) {
+		_, configPath := opsFixture(t)
+		info, err := os.Stat(configPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		setLimits(1<<40, info.Size()+16)
+		out := filepath.Join(t.TempDir(), "b.tar")
+		if code, stderr := runBackupCode(t, configPath, out); code != 1 {
+			t.Fatalf("backup exit=%d, want 1 (stderr=%s)", code, stderr)
+		}
+		if _, err := os.Stat(out); !os.IsNotExist(err) {
+			t.Fatal("no bundle may be produced when the aggregate overflows")
+		}
+	})
+}
+
 // --- Fix 5: bundle payload bounds ---
 
 func TestRestoreRejectsOversizedBundles(t *testing.T) {

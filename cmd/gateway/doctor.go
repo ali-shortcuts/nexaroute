@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -67,7 +69,11 @@ func (d *doctor) checkConfig(configPath string) {
 		d.report("FAIL", "config", fmt.Sprintf("cannot read %s; run the gateway once or fix the path/permissions", configPath))
 		return
 	}
-	if info, statErr := os.Stat(configPath); statErr == nil && info.Mode().Perm()&0o077 != 0 {
+	if info, statErr := os.Stat(configPath); statErr != nil {
+		// Never touch info here: a failed Stat returns a nil
+		// FileInfo, and dereferencing it panics the whole run.
+		d.report("FAIL", "config_permissions", fmt.Sprintf("cannot stat %s (%s)", configPath, fsErrorClass(statErr)))
+	} else if info.Mode().Perm()&0o077 != 0 {
 		d.report("WARN", "config_permissions", fmt.Sprintf("%s is mode %04o; group/other access is discouraged for a file holding encrypted secrets", configPath, info.Mode().Perm()))
 	} else {
 		d.report("PASS", "config_permissions", fmt.Sprintf("%s mode %04o", configPath, info.Mode().Perm()))
@@ -114,7 +120,15 @@ func (d *doctor) checkSecurityStore(configPath string) {
 	}
 	info, err := os.Stat(path)
 	if err != nil {
-		d.report("WARN", "security_store", "not created yet; it is created with mode 0600 in a 0700 directory on first start")
+		// Only genuine absence is a benign "not created yet".
+		// Permission errors, a non-directory path component and any
+		// other filesystem failure mean an installation that cannot
+		// be inspected — a FAIL, never a reassuring WARN.
+		if errors.Is(err, os.ErrNotExist) {
+			d.report("WARN", "security_store", "not created yet; it is created with mode 0600 in a 0700 directory on first start")
+		} else {
+			d.report("FAIL", "security_store", fmt.Sprintf("cannot inspect %s (%s)", path, fsErrorClass(err)))
+		}
 		return
 	}
 	if info.Mode().Perm()&0o077 != 0 {
@@ -161,7 +175,11 @@ func (d *doctor) checkControlPlane(configPath string) {
 		}
 		raw, err := os.ReadFile(path)
 		if err != nil {
-			d.report("WARN", "control_plane", "file backend state not created yet")
+			if errors.Is(err, os.ErrNotExist) {
+				d.report("WARN", "control_plane", "file backend state not created yet")
+			} else {
+				d.report("FAIL", "control_plane", fmt.Sprintf("cannot read file backend state %s (%s)", path, fsErrorClass(err)))
+			}
 			return
 		}
 		var probe map[string]any
@@ -216,6 +234,25 @@ func (d *doctor) checkExternal(name, envName string, ping func(ctx context.Conte
 		return
 	}
 	d.report("PASS", name, fmt.Sprintf("reachable via %s", envName))
+}
+
+// fsErrorClass reduces a filesystem error to a coarse, safe class
+// for diagnostic output — no paths, values or wrapped internals, so
+// doctor output stays free of anything sensitive while still telling
+// the operator WHAT kind of problem to fix.
+func fsErrorClass(err error) string {
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return "not found"
+	case errors.Is(err, os.ErrPermission):
+		return "permission denied"
+	case errors.Is(err, syscall.ENOTDIR):
+		return "a path component is not a directory"
+	case errors.Is(err, syscall.EISDIR):
+		return "the path is a directory"
+	default:
+		return "filesystem error"
+	}
 }
 
 // resolveSecurityStorePath mirrors the server-side rule in
