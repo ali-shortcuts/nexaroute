@@ -90,7 +90,10 @@ func (f *fakeRedisHash) Eval(ctx context.Context, script string, keys []string, 
 		}
 		snapshot, err := parseRedisSnapshot(fields)
 		if err != nil {
-			return int64(-2), nil
+			// Mirror the script's repair path: a malformed record
+			// is deleted and reported with status 2.
+			delete(f.data, key)
+			return int64(2), nil
 		}
 		if strconv.FormatUint(snapshot.Revision, 10) != str(0) {
 			return int64(0), nil
@@ -180,7 +183,7 @@ func TestRedisStoreConformanceAgainstFake(t *testing.T) {
 	}
 }
 
-func TestRedisStoreMalformedRecordsAreNeverReadOrOverwritten(t *testing.T) {
+func TestRedisStoreMalformedRecordsFailClosedExceptDeleteRepair(t *testing.T) {
 	ctx := context.Background()
 	fake := newFakeRedisHash()
 	store, _ := NewRedisStore(fake)
@@ -217,8 +220,17 @@ func TestRedisStoreMalformedRecordsAreNeverReadOrOverwritten(t *testing.T) {
 			if _, err := store.Put(ctx, ns, 0, []byte("replace")); !errors.Is(err, ErrMalformedSnapshot) {
 				t.Fatalf("Put malformed: %v, want ErrMalformedSnapshot", err)
 			}
-			if err := store.Delete(ctx, ns, 1); !errors.Is(err, ErrMalformedSnapshot) {
-				t.Fatalf("Delete malformed: %v, want ErrMalformedSnapshot", err)
+			// Delete is the namespace-repair path (audit 2026-10-15):
+			// a malformed record can never be read or overwritten,
+			// and before this exception it could never be removed
+			// either, bricking the namespace until manual Redis
+			// surgery. Delete removes it and reports ErrNotFound
+			// (no valid snapshot existed).
+			if err := store.Delete(ctx, ns, 1); !errors.Is(err, ErrNotFound) {
+				t.Fatalf("Delete malformed: %v, want ErrNotFound (repair)", err)
+			}
+			if _, err := store.Get(ctx, ns); !errors.Is(err, ErrNotFound) {
+				t.Fatalf("Get after repair delete: %v, want ErrNotFound (record removed)", err)
 			}
 		})
 	}

@@ -232,10 +232,16 @@ func (s *RedisStore) Put(ctx context.Context, namespace string, expectedRevision
 
 // redisDeleteScript deletes only when the complete stored record is valid
 // and its exact decimal revision matches the caller's expected revision.
+// A MALFORMED record is the one exception: it is deleted and reported
+// with status 2, because otherwise the namespace would be bricked
+// forever — Put refuses to overwrite malformed content and Delete
+// refused to remove it, leaving manual Redis surgery as the only
+// recovery. The caller maps status 2 to ErrNotFound: no valid
+// snapshot existed.
 const redisDeleteScript = redisValidateFieldsLua + `
 local fields, status = read_record(KEYS[1])
 if status == -1 then return -1 end
-if status == -2 then return -2 end
+if status == -2 then redis.call('DEL', KEYS[1]) return 2 end
 if fields[1] ~= ARGV[1] then return 0 end
 return redis.call('DEL', KEYS[1])`
 
@@ -257,6 +263,10 @@ func (s *RedisStore) Delete(ctx context.Context, namespace string, expectedRevis
 	switch deleted {
 	case 1:
 		return nil
+	case 2:
+		// The stored record was malformed and has been removed:
+		// the namespace-repair path. No valid snapshot existed.
+		return ErrNotFound
 	case 0:
 		return ErrConflict
 	case -1:

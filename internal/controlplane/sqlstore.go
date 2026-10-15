@@ -96,6 +96,19 @@ func (s *SQLStore) Delete(ctx context.Context, namespace string, expectedRevisio
 		return fmt.Errorf("control delete result: %w", err)
 	}
 	if n == 0 {
+		// No row matched namespace+revision: distinguish a missing
+		// namespace (ErrNotFound, like every other backend) from a
+		// revision mismatch on an existing namespace (ErrConflict).
+		// Mapping both to ErrConflict made "delete something that
+		// was never created" look like a write conflict.
+		var probe int64
+		qerr := s.db.QueryRowContext(ctx, `SELECT revision FROM `+snapshotTable+` WHERE namespace=$1`, namespace).Scan(&probe)
+		if errors.Is(qerr, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		if qerr != nil {
+			return fmt.Errorf("delete control snapshot: %w", qerr)
+		}
 		return ErrConflict
 	}
 	return nil

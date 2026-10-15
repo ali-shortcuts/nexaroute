@@ -189,7 +189,8 @@ func TestSQLStoreDeleteResultAndFailureCases(t *testing.T) {
 		want  error
 	}{
 		{"deleted", &scriptedSQL{affected: 1}, nil},
-		{"stale revision", &scriptedSQL{affected: 0}, ErrConflict},
+		{"stale revision", &scriptedSQL{affected: 0, rowValues: []driver.Value{int64(7)}}, ErrConflict},
+		{"missing namespace", &scriptedSQL{affected: 0}, ErrNotFound},
 		{"exec error", &scriptedSQL{execErr: errors.New("write failed")}, errors.New("delete control snapshot")},
 		{"result error", &scriptedSQL{affectedErr: errors.New("rows affected unavailable")}, errors.New("control delete result")},
 	} {
