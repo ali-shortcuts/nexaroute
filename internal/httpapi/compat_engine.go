@@ -287,6 +287,7 @@ func (s *Server) doUpstreamWithRepair(
 	a providers.Adapter,
 	deployment router.Deployment,
 	payload []byte,
+	path string,
 	stream bool,
 	forward http.Header,
 	dialect compat.DialectProfile,
@@ -319,7 +320,18 @@ func (s *Server) doUpstreamWithRepair(
 		}
 	}
 	for {
-		resp, err := a.Do(ctx, payload, stream, forward)
+		// Model-in-path upstreams (Gemini, and the M5-1 cloud kinds)
+		// address through the bundle path; a.Do would fall back to
+		// the provider's chat path and strand the request (M5-2
+		// conformance: Responses ingress to Gemini hit
+		// /v1/chat/completions with a Gemini body).
+		var resp *http.Response
+		var err error
+		if path != "" {
+			resp, err = a.DoPath(ctx, http.MethodPost, path, payload, stream, forward)
+		} else {
+			resp, err = a.Do(ctx, payload, stream, forward)
+		}
 		if err != nil {
 			return nil, payload, out, err
 		}

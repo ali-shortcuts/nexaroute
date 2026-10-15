@@ -293,6 +293,21 @@ func EncodeOpenAIChatRequest(in Request, upstreamModel string, includeUsage bool
 				out.Messages = append(out.Messages, core.OpenAIMessage{Role: "user", Content: ""})
 				continue
 			}
+			rest := parts[:0:0]
+			for _, p := range parts {
+				if p.Type == PartToolResult && p.ToolResult != nil {
+					out.Messages = append(out.Messages, core.OpenAIMessage{
+						Role: "tool", ToolCallID: p.ToolResult.ToolUseID,
+						Content: toolResultToOpenAIContent(p.ToolResult),
+					})
+					continue
+				}
+				rest = append(rest, p)
+			}
+			parts = rest
+			if len(parts) == 0 {
+				continue
+			}
 			if len(parts) == 1 && parts[0].Type == PartText {
 				out.Messages = append(out.Messages, core.OpenAIMessage{Role: "user", Content: parts[0].Text})
 				continue
