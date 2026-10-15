@@ -13,3 +13,6 @@ __pycache__/
 
 # Local Go coverage profiles
 *.cover
+
+# Bare `go build ./cmd/gateway` output at repo root
+/gateway

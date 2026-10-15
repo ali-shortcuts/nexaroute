@@ -13,6 +13,7 @@ import (
 
 	"github.com/ali-shortcuts/nexaroute/internal/config"
 	"github.com/ali-shortcuts/nexaroute/internal/health"
+	"github.com/ali-shortcuts/nexaroute/internal/pricing"
 )
 
 type Deployment struct {
@@ -127,6 +128,12 @@ func IsReadyStrategy(s string) bool {
 }
 
 func (r *Router) Reload(cfg config.Config) {
+	// The versioned price book (M5-6) governs routing prices when
+	// it prices a deployment: the active version's rates replace
+	// the model-config rates at build time. Resolved per Reload,
+	// so a version flip takes effect on the next config swap.
+	priceBook := pricing.FromConfig(cfg)
+	bookNow := time.Now()
 	all := make([]Deployment, 0)
 	byID := map[string]Deployment{}
 	byModel := map[string][]Deployment{}
@@ -148,6 +155,10 @@ func (r *Router) Reload(cfg config.Config) {
 				w = 1
 			}
 			d := Deployment{ID: p.ID + "/" + m.ID, ProviderID: p.ID, ProviderName: p.Name, ProviderType: p.Type, Model: m.Model, Aliases: m.Aliases, Priority: m.Priority, Weight: w, ContextWindow: m.ContextWindow, InputCostPerMTok: m.InputCostPerMTok, OutputCostPerMTok: m.OutputCostPerMTok, Capabilities: m.Capabilities, TrainsOnData: trains}
+			if entry, _, ok := priceBook.Resolve(d.ID, bookNow); ok {
+				d.InputCostPerMTok = entry.InputPerMTok
+				d.OutputCostPerMTok = entry.OutputPerMTok
+			}
 			all = append(all, d)
 			byID[d.ID] = d
 			valid[d.ID] = struct{}{}
