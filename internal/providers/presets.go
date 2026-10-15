@@ -22,6 +22,8 @@ func Presets() []Preset {
 		{ID: "openai", Name: "OpenAI", Category: "Direct", Type: "openai_compatible", BaseURL: "https://api.openai.com/v1", AuthMode: "bearer"},
 		{ID: "openai-responses", Name: "OpenAI Responses", Category: "Direct", Type: "openai_responses", BaseURL: "https://api.openai.com/v1", AuthMode: "bearer", ResponsesPath: "/v1/responses", ModelsPath: "/v1/models"},
 		{ID: "amazon-bedrock", Name: "Amazon Bedrock", Category: "Direct", Type: "bedrock", BaseURL: "https://bedrock-runtime.us-east-1.amazonaws.com", ModelsPath: "/v1/models"},
+		{ID: "azure-openai", Name: "Azure OpenAI", Category: "Cloud", Type: "azure_openai", BaseURL: "https://YOUR-RESOURCE.openai.azure.com", AuthMode: "api-key"},
+		{ID: "google-vertex", Name: "Google Vertex AI", Category: "Cloud", Type: "vertex", BaseURL: "https://us-central1-aiplatform.googleapis.com", AuthMode: "bearer"},
 		{ID: "google-gemini", Name: "Google Gemini", Category: "Direct", Type: "gemini", BaseURL: "https://generativelanguage.googleapis.com", AuthMode: "x-goog-api-key", ModelsPath: "/v1beta/models"},
 		{ID: "openrouter", Name: "OpenRouter", Category: "Gateway", Type: "openai_compatible", BaseURL: "https://openrouter.ai/api/v1", AuthMode: "bearer"},
 		{ID: "deepseek", Name: "DeepSeek", Category: "Direct", Type: "openai_compatible", BaseURL: "https://api.deepseek.com/v1", AuthMode: "bearer"},

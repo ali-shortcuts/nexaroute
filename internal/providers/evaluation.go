@@ -225,7 +225,7 @@ func (a *httpAdapter) liveCompletionRequest(model, prompt string, maxOutputToken
 			"messages":        []map[string]any{{"role": "user", "content": []map[string]any{{"text": prompt}}}},
 			"inferenceConfig": map[string]any{"maxTokens": maxOutputTokens},
 		}
-	case "gemini":
+	case "gemini", "vertex":
 		body = map[string]any{
 			"contents":         []map[string]any{{"role": "user", "parts": []map[string]any{{"text": prompt}}}},
 			"generationConfig": map[string]any{"maxOutputTokens": maxOutputTokens},
@@ -256,6 +256,8 @@ func (a *httpAdapter) liveCompletionRequest(model, prompt string, maxOutputToken
 		return b, bedrockModelPath(model, false), nil
 	case "gemini":
 		return b, a.geminiModelPath(model, false), nil
+	case "vertex":
+		return b, a.vertexModelPath(model, false), nil
 	case "openai_responses":
 		return b, a.p.ResponsesPath, nil
 	case "anthropic_compatible":
@@ -347,7 +349,7 @@ func decodeLiveCompletion(kind string, data []byte) (string, int, int) {
 			text += c.Text
 		}
 		return text, usage.InputTokens, usage.OutputTokens
-	case "gemini":
+	case "gemini", "vertex":
 		var candidates []struct {
 			Content struct {
 				Parts []struct {

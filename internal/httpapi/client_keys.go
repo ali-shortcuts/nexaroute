@@ -36,12 +36,17 @@ type clientKeyResponse struct {
 	Revoked       bool     `json:"revoked,omitempty"`
 	RPM           int      `json:"rpm,omitempty"`
 	TPM           int      `json:"tpm,omitempty"`
-	Key           string   `json:"key,omitempty"`
-	KeyShownOnce  bool     `json:"key_shown_once,omitempty"`
+	// BudgetUSD is emitted ALWAYS (no omitempty): its mere presence
+	// tells clients the budget backend exposes per-key limits, while
+	// 0 means the key carries no budget cap. It is configuration
+	// metadata, never secret material.
+	BudgetUSD    float64 `json:"budget_usd"`
+	Key          string  `json:"key,omitempty"`
+	KeyShownOnce bool    `json:"key_shown_once,omitempty"`
 }
 
 func publicClientKey(k config.VirtualKeyConfig, plaintext string) clientKeyResponse {
-	return clientKeyResponse{ID: k.ID, Name: k.Name, TenantID: k.TenantID, ProjectID: k.ProjectID, TeamID: k.TeamID, Role: k.Role, AllowedModels: k.AllowedModels, AllowedRoutes: k.AllowedRoutes, ExpiresAt: k.ExpiresAt, Revoked: k.Revoked, RPM: k.RPM, TPM: k.TPM, Key: plaintext, KeyShownOnce: plaintext != ""}
+	return clientKeyResponse{ID: k.ID, Name: k.Name, TenantID: k.TenantID, ProjectID: k.ProjectID, TeamID: k.TeamID, Role: k.Role, AllowedModels: k.AllowedModels, AllowedRoutes: k.AllowedRoutes, ExpiresAt: k.ExpiresAt, Revoked: k.Revoked, RPM: k.RPM, TPM: k.TPM, BudgetUSD: k.BudgetUSD, Key: plaintext, KeyShownOnce: plaintext != ""}
 }
 
 func (s *Server) adminClientKeys(w http.ResponseWriter, r *http.Request) {

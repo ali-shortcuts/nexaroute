@@ -39,3 +39,21 @@ func TestControlPlaneRedisFailsClosedAndRedacted(t *testing.T) {
 		t.Fatalf("malformed URL: err=%v, want a redacted fail-closed error", err)
 	}
 }
+
+type redisCloseProbe struct{ calls int }
+
+func (p *redisCloseProbe) Close() error {
+	p.calls++
+	return nil
+}
+
+func TestControlPlaneRuntimeCloseClosesRedisResource(t *testing.T) {
+	probe := &redisCloseProbe{}
+	runtime := &controlPlaneRuntime{closer: probe}
+	if err := runtime.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if probe.calls != 1 {
+		t.Fatalf("closer invoked %d times, want 1", probe.calls)
+	}
+}

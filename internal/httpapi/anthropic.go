@@ -16,9 +16,11 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/core"
 	"github.com/ali-shortcuts/nexaroute/internal/events"
 	"github.com/ali-shortcuts/nexaroute/internal/feature"
+	"github.com/ali-shortcuts/nexaroute/internal/protocol/canonical"
 	"github.com/ali-shortcuts/nexaroute/internal/providers"
 	"github.com/ali-shortcuts/nexaroute/internal/router"
 	"github.com/ali-shortcuts/nexaroute/internal/translate"
+	"github.com/ali-shortcuts/nexaroute/internal/usage"
 )
 
 func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
@@ -378,7 +380,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Gateway-Upstream-Model", c.Deployment.Model)
 		if in.Stream {
 			deploymentID := c.Deployment.ID
-			resp.Body = observeFirstByte(resp.Body, start, func(d time.Duration) { s.hm.RecordTTFT(deploymentID, d) })
+			resp.Body = observeFirstByte(resp.Body, start, func(d time.Duration) { s.hm.RecordTTFT(deploymentID, d); noteSpanTTFT(r.Context(), d) })
 		}
 		switch {
 		case kind != "":
@@ -386,10 +388,10 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 			// canonical events/blocks and re-encode for the Anthropic client.
 			if in.Stream {
 				e = s.canonicalStreamPump(w, resp, kind, "anthropic", in.Model, r.Header.Get("x-request-id"), toolDefs,
-					func(input, output int) { s.recordUsage(r, c.Deployment.ID, int64(input), int64(output)) })
+					func(u canonical.Usage) { s.recordUsageCanonical(r, c.Deployment.ID, kind, u) })
 			} else {
 				e = s.handleCanonicalResponse(w, resp, kind, "anthropic", in.Model, r.Header.Get("x-request-id"), false, toolDefs,
-					func(input, output int) { s.recordUsage(r, c.Deployment.ID, int64(input), int64(output)) })
+					func(u canonical.Usage) { s.recordUsageCanonical(r, c.Deployment.ID, kind, u) })
 			}
 		case c.Deployment.ProviderType == "anthropic_compatible":
 			if in.Stream {
@@ -407,8 +409,8 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 					b, e = rewriteAnthropicResponseModel(b, in.Model)
 				}
 				if e == nil {
-					if p, ct, ok := extractAnthropicUsage(b); ok {
-						s.recordUsage(r, c.Deployment.ID, int64(p), int64(ct))
+					if p, ct, cw, cr, ok := extractAnthropicUsageFull(b); ok {
+						s.recordUsageEx(r, c.Deployment.ID, usage.Counts{Input: int64(p), Output: int64(ct), CacheRead: int64(cr), CacheWrite: int64(cw)}, false)
 					}
 					s.cacheStoreResponse(cacheKey, cacheGeneration, cacheable, c.Deployment.ID, resp.StatusCode, "application/json", b)
 					copyUpstreamResponseHeaders(w, resp, false)

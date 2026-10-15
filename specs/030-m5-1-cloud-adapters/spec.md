@@ -3,7 +3,19 @@
 Checklist row M5-1 bundles Bedrock/Vertex/Azure adapters and the
 embeddings/rerank/image/audio/TTS endpoints. It ships as focused PRs:
 
-- M5-1a (PR #322): Azure OpenAI + Vertex AI provider types.
+- **M5-1a (PR #322): Azure OpenAI + Vertex AI provider types.**
+  Both reuse existing wire protocols (OpenAI chat JSON; Gemini JSON)
+  and differ in URL construction, auth and configuration:
+  - `azure_openai`: per-deployment URL
+    `/openai/deployments/{deployment}/chat/completions?api-version=…`,
+    `api-key` header auth, `api_version` provider field
+    (default 2024-10-21).
+  - `vertex`: Gemini wire format at
+    `/v1/projects/{project}/locations/{location}/publishers/google/models/{model}:generateContent|:streamGenerateContent?alt=sse`,
+    Bearer auth with an operator-supplied OAuth access token
+    (`vertex_project` required, `vertex_location` default
+    us-central1). Token minting/refresh (ADC/service-account JWT
+    exchange) is NOT built in — documented boundary.
 - **M5-1b (this PR): Amazon Bedrock (Converse API).** A genuinely
   different wire protocol, integrated through the canonical IR as a
   new upstream kind `bedrock`:
@@ -27,3 +39,8 @@ embeddings/rerank/image/audio/TTS endpoints. It ships as focused PRs:
     encoded (Converse reasoning is model-specific); document blocks
     are not mapped.
 - M5-1c: media endpoints as scoped (separate PR).
+
+Existing protocol fidelity is preserved: the Azure OpenAI and Vertex types flow through
+the canonical translation paths unchanged; only kind mapping, path
+construction, auth defaults, probe requests and config validation
+are type-aware.
