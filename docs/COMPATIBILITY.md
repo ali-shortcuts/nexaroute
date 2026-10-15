@@ -100,3 +100,21 @@ Claude Code -> Anthropic /v1/messages -> NexaRoute -> OpenAI-compatible Chat2API
 ```
 
 plus native Anthropic-compatible passthrough.
+
+## Prompt caching (M5-5)
+
+| Mechanism | Anthropic | OpenAI Chat | OpenAI Responses | Gemini |
+|---|---|---|---|---|
+| Block markers (`cache_control`) | Native; preserved through the canonical codec (system + text/image/tool blocks, TTL `5m`/`1h` carried) | No equivalent — dropped on encode | No equivalent — dropped | No equivalent — dropped |
+| Request key (`prompt_cache_key`) | No equivalent — ignored | Mapped both ways (provider-dependent: honored by OpenAI and some compatibles) | Mapped both ways | Ignored |
+| Cache usage, read | `cache_read_input_tokens` | `prompt_tokens_details.cached_tokens` | `input_tokens_details.cached_tokens` | `cachedContentTokenCount` |
+| Cache usage, write | `cache_creation_input_tokens` | — (no write accounting) | — | — (implicit) |
+
+Rules: Anthropic block markers never translate into
+`prompt_cache_key` (different semantics: breakpoints vs a routing
+hint) and never leak into other dialects' payloads. Gemini prompt
+caching is implicit — the gateway cannot request it, only report
+its usage. Cache-token usage maps through the canonical IR in both
+directions for all four kinds and is pinned by tests. Bedrock
+`cachePoint` blocks join this matrix when the Bedrock adapter
+(PR #323) lands.

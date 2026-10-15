@@ -19,6 +19,7 @@ func DecodeOpenAIChatRequest(in core.OpenAIRequest, clientModel string) Request 
 	out := Request{
 		Model:          clientModel,
 		Stream:         in.Stream,
+		PromptCacheKey: in.PromptCacheKey,
 		ClientProtocol: "openai_chat",
 		Stop:           NormalizeStop(in.Stop),
 	}
@@ -202,11 +203,12 @@ func decodeOpenAIToolChoice(v any) *ToolChoice {
 // EncodeOpenAIChatRequest builds an OpenAI Chat Completions payload from the IR.
 func EncodeOpenAIChatRequest(in Request, upstreamModel string, includeUsage bool) (core.OpenAIRequest, error) {
 	out := core.OpenAIRequest{
-		Model:       upstreamModel,
-		Stream:      in.Stream,
-		Tools:       []core.OpenAITool{},
-		Temperature: in.Temperature,
-		TopP:        in.TopP,
+		Model:          upstreamModel,
+		PromptCacheKey: in.PromptCacheKey,
+		Stream:         in.Stream,
+		Tools:          []core.OpenAITool{},
+		Temperature:    in.Temperature,
+		TopP:           in.TopP,
 	}
 	if in.MaxOutputTokens > 0 {
 		out.MaxTokens = in.MaxOutputTokens
