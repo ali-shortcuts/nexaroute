@@ -334,7 +334,7 @@ func (s *Server) applyGuardrails(w http.ResponseWriter, r *http.Request, anthrop
 		return true
 	}
 	if cfg.Mode == "audit" {
-		s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "guardrail_audit", Message: "request matched privacy/safety guardrail"})
+		s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "guardrail_audit", Message: "request matched privacy/safety guardrail kinds=" + strings.Join(guardrail.Kinds(findings), ",")})
 		return true
 	}
 	if anthropicStyle {
@@ -683,6 +683,27 @@ func (s *Server) clientAuthAllowed(w http.ResponseWriter, r *http.Request, anthr
 		if res != nil {
 			r2 := r.WithContext(contextWithTPMReservation(r.Context(), res))
 			*r = *r2
+		}
+	}
+	// Budget admission (M5-6): virtual keys with a USD budget
+	// reserve the conservative estimate atomically; the first
+	// usage report settles it to actual cost.
+	if virtualKey.BudgetUSD > 0 && s.budgets != nil {
+		inputEst, outputAllowance := requestBudgetParts(r)
+		if est, ok := s.budgetEstimateFor(cfg, model, inputEst, outputAllowance); ok {
+			id, allowed := s.budgets.Reserve(virtualKey.ID, virtualKey.BudgetUSD, est, time.Now())
+			if !allowed {
+				if anthropicStyle {
+					anthropicErrorJSON(w, 402, "client budget exceeded")
+				} else {
+					errorJSON(w, 402, "client budget exceeded")
+				}
+				return false
+			}
+			if id != 0 {
+				r2 := r.WithContext(contextWithBudgetReservation(r.Context(), &budgetReservation{keyID: virtualKey.ID, id: id}))
+				*r = *r2
+			}
 		}
 	}
 	return true

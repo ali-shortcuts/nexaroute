@@ -79,6 +79,26 @@ the connection strings themselves are never written to JSON:
 `state_path` values resolve against the config directory. `memory` is for
 tests only. DSNs and URLs are never stored or logged.
 
+## Optional OTLP span export
+
+Span export is disabled by default. When `telemetry.otlp_endpoint_env`
+names an environment variable holding the full OTLP/HTTP traces URL
+(the same env-name-only pattern as the control-plane backends), the
+gateway exports one span per data-plane LLM request
+(`/v1/messages`, `/v1/messages/count_tokens`, `/v1/chat/completions`,
+`/v1/responses`) with GenAI semantic attributes. An invalid URL fails
+startup. Spans never contain prompts, completions, keys or client
+identities. See [OBSERVABILITY.md](OBSERVABILITY.md).
+
+```json
+{
+  "telemetry": {
+    "otlp_endpoint_env": "NEXAROUTE_OTLP_ENDPOINT",
+    "service_name": "nexaroute"
+  }
+}
+```
+
 `postgres` is fully wired (pgx driver): the DSN is read only from the
 environment variable named by `postgres_dsn_env`; startup fails closed
 with a secret-safe error when the variable is missing or the database is
@@ -88,16 +108,26 @@ with a 10-second timeout, and the versioned control-plane migrations
 (checksum-verified, advisory-locked against concurrent replicas) are
 applied on startup. `redis` is also fully wired (go-redis client): the
 URL is read only from the environment variable named by `redis_url_env`,
-startup pings with a 10-second timeout, and snapshots are stored as
-per-namespace hashes guarded by atomic compare-and-set scripts with the
-same revision semantics as the other backends. **Redis durability
-warning:** this backend is only as durable as the operator's Redis —
-use it for durable control-plane state only with persistence enabled
-(AOF `appendonly yes` and/or RDB snapshots) and, where availability
-matters, replica/failover management; a default ephemeral Redis loses
-control-plane state on restart. `migration_dry_run` validates backend
-selection and readiness without writing state or applying migrations.
-Failure modes are `fail_open`, `fail_closed`, and `last_known_good`.
+connection timeouts/retries and the pool are bounded, and startup performs a
+10-second `PING`. Startup fails closed with a credential-safe error and never
+falls back to another backend. Snapshots are stored as per-namespace hashes
+guarded by atomic compare-and-set scripts. Revision comparisons and increments
+use exact decimal strings, so the full `uint64` range is not rounded by Lua
+numbers; malformed records fail deterministically, stale writes/deletes return
+`ErrConflict`, and deleting a missing snapshot returns `ErrNotFound`.
+`migration_dry_run` validates backend selection and readiness without reading or
+writing snapshot state (Redis does only the bounded `PING`) or applying
+migrations.
+
+**Redis durability warning:** this backend is only as durable as the operator's
+Redis configuration. For durable state, explicitly configure and test AOF
+(`appendonly yes`) and/or RDB snapshots, storage durability, replication,
+failover, and backup/restore against the deployment's recovery objectives. A
+default ephemeral Redis loses control-plane state on restart. Atomic revision
+checks apply on the Redis server executing the script; they do not imply
+multi-primary consistency, cross-replica safety, or durability beyond Redis's
+configured guarantees. Failure modes are `fail_open`, `fail_closed`, and
+`last_known_good`.
 
 ## Implicit-default warnings and opt-in strict config
 
@@ -138,11 +168,31 @@ The in-memory event feed is independently bounded: it keeps only the newest ring
 ## Provider types
 
 ```text
-openai_compatible
-anthropic_compatible
+openai_compatible     OpenAI wire format, bearer auth, {base_url}/v1/chat/completions
+anthropic_compatible  Anthropic wire format, x-api-key auth
+openai_responses      OpenAI Responses API
+gemini                Google Gemini wire format, x-goog-api-key auth
+azure_openai          Azure OpenAI (M5-1a)
+vertex                Google Vertex AI (M5-1a)
+bedrock               Amazon Bedrock Converse API, SigV4 auth (M5-1b)
 ```
 
+(When the M5-1a PR also lands, this list gains `azure_openai` and `vertex`.)
+
 A provider is generic; adding another OpenAI-compatible endpoint should normally require configuration, not a new code branch.
+
+**Azure OpenAI** (`azure_openai`) speaks the OpenAI wire format but addresses deployments in the URL: requests go to `{base_url}/openai/deployments/{deployment}/chat/completions?api-version={api_version}`, where `{deployment}` is the model's upstream `model` value and `api_version` is a provider field (default `2024-10-21`). Authentication is the `api-key` header (the default `auth_mode` for this type) using the provider's configured credential.
+
+**Vertex AI** (`vertex`) speaks the Gemini wire format at `{base_url}/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:generateContent` (or `:streamGenerateContent?alt=sse` when streaming). `vertex_project` is required; `vertex_location` defaults to `us-central1`. Authentication is a Bearer OAuth2 access token supplied as the provider credential. **Token minting and refresh are not built in**: the gateway uses the credential it is given, so supply a token through your platform's broker/sidecar (or a short-lived token via `api_key_env`) and rotate it externally — Google service-account ADC flows are an operator-side concern, and an expired token simply fails upstream calls until replaced.
+
+**Amazon Bedrock** (`bedrock`, M5-1b) speaks the Converse API: requests are addressed per model at `{base_url}/model/{modelId}/converse` (or `/converse-stream` when streaming; the AWS binary event stream is translated by the gateway). Authentication is AWS SigV4, signed per request:
+
+- the access key ID comes from the provider's normal key fields (`api_key` or `api_key_env`);
+- the secret access key comes **only** from the environment variable named by the provider field `secret_key_env` (never a config value); adapter startup fails closed when it is unset or empty;
+- an optional session token comes from the env var named by `session_token_env`;
+- `aws_region` selects the signing region (default `us-east-1`) and should match the region in `base_url`.
+
+Documented limits: one credential pair per Bedrock provider (the credential-rotation pool does not apply); `tool_choice: "none"` withholds the tools because Converse has no none mode; reasoning/thinking blocks are not encoded to Converse (model-specific); document blocks are not mapped.
 
 ## Provider credentials
 
@@ -347,7 +397,7 @@ Discovery authorization, token, and JWKS endpoints must be absolute HTTPS URLs. 
 
 When `security_store_path` is relative, it is resolved against the directory containing the config file. If omitted, the default is `security/nexaroute-security.db`, so the application creates a dedicated private `security/` child directory instead of placing the database directly beside the config. Missing parent directories are created as mode `0700`; an already existing parent that is not private is rejected and must be fixed by the operator.
 
-`security_store_backend` selects the admin security-store backend (M4-1): `bbolt` (the default; local file at `security_store_path`, zero external services) — the `redis` and `postgres` adapters land with M4-2 behind the same `securitystore.Backend` interface. Selecting `redis`/`postgres` requires `security_store_url` and currently **fails closed at startup** with an explicit error: the gateway never silently substitutes a different store when the configured durable backend is unavailable. Only admin sessions and the audit chain live in this store; rate-limit buckets, provider health, caches and quota reservations are process-local by design (see `specs/019-m4-1-storage-backend/`).
+`security_store_backend` selects the admin security-store backend: `bbolt` (the default; local file at `security_store_path`, zero external services), `postgres` or `redis` (M4-2; sessions and the audit chain in the shared service, safe to share between gateway processes — the Redis adapter commits through version-checked Lua scripts, the PostgreSQL adapter through serialized transactions). Selecting `postgres`/`redis` requires `security_store_url`. `security_store_url` may be a literal connection string or `env:VARIABLE_NAME` to read it from the environment — the env form is recommended so credentials stay out of durable config. A configured backend that cannot be reached **fails closed at startup**: the gateway never silently substitutes a different store. Only admin sessions and the audit chain live in this store; rate-limit buckets, provider health, caches and quota reservations are process-local by design (see `specs/019-m4-1-storage-backend/`).
 
 Set the secret outside the config, for example with your service manager/secret injector (do not put its value in shell history):
 
@@ -453,6 +503,25 @@ Provider presets are served by the gateway itself through the Admin API so the W
 
 Only non-streaming requests with `temperature` absent/0 and `top_p` absent/1 are eligible. Every config swap invalidates the cache. Per-request bypass header: `x-nexaroute-no-cache: 1`.
 
+### guardrails (object, opt-in)
+
+Request-content guardrails, evaluated inside client authentication
+(so they are active when `client_auth.enabled` is true) on every
+data-plane request:
+
+| Field | Default | Meaning |
+|---|---|---|
+| `guardrails.mode` | `off` | `off` (no scanning), `audit` (scan; on a match, emit a `guardrail_audit` event naming the matched kinds and serve the request), or `block` (scan; reject matched classes with 403). |
+| `guardrails.reject_pii` | `false` | In block mode, reject PII classes: `pii_email`, `pii_phone`, `pii_credit_card` (Luhn-validated), `pii_ssn` (SSA structure-validated). |
+| `guardrails.reject_secrets` | `false` | In block mode, reject `secret_api_key`: sk-/AKIA/GitHub (classic + fine-grained)/Slack/Google key shapes, JWTs, PEM private-key blocks, connection strings with embedded passwords, and Bearer tokens. |
+| `guardrails.reject_prompt_injection` | `false` | In block mode, reject `prompt_injection` phrasings (ignore/disregard previous instructions, reveal/print the system prompt or instructions, jailbreak/developer mode, override safety, do anything now). |
+| `guardrails.max_body_bytes` | gateway default | Body size cap for scanning; larger requests fail 413. |
+
+Findings are classifications only — matched content is never
+logged, evented, or returned. Detection is pattern + validator
+based (no ML model); expect it to catch common shapes, not
+adversarial obfuscation.
+
 ### client_auth (new object, opt-in)
 
 | Field | Default | Meaning |
@@ -483,6 +552,54 @@ The resulting **effective remaining** values feed quota pressure. This is intent
 | `context_window` | `0` (unknown) | Advertised usable context window in tokens; requests estimated to exceed it skip this deployment. |
 | `input_cost_per_mtok` | `0` | USD per million input tokens, used for estimated-spend accounting. |
 | `output_cost_per_mtok` | `0` | USD per million output tokens, used for estimated-spend accounting. |
+
+### Versioned price book (`pricing.versions`, M5-6)
+
+A versioned price book overrides model prices for both cost-aware
+routing and spend accounting. Costs are computed **when usage is
+recorded**, under the version active at that moment — a later
+price change never reprices recorded costs, and the usage snapshot
+attributes spend per version (`cost_by_version_usd`). Usage without
+a recorded cost is estimated from model-config prices (see the
+fallback below), and those estimates can change when the fallback
+rates change.
+
+```yaml
+pricing:
+  versions:
+    - version: "2026-q4"
+      effective_from: "2026-10-01T00:00:00Z"
+      prices:
+        "provider/model": { input_per_mtok: 3, output_per_mtok: 15, cache_read_per_mtok: 0.3, cache_write_per_mtok: 3.75 }
+```
+
+- The active version for a deployment is the latest
+  `effective_from <= now` **that prices that deployment**; a
+  deployment missing from the book falls back to its model-config
+  prices (version label `config`), then to zero cost (label
+  `unpriced`; tokens are still counted).
+- `cache_read_per_mtok` / `cache_write_per_mtok` are optional; when
+  omitted, the input rate applies.
+- Cache billing conventions follow the providers: Anthropic's
+  `input_tokens` exclude cache tokens (priced additively);
+  OpenAI/Gemini counts include the cached share in the input
+  count, so the cached share is moved to the cache-read rate —
+  never double-charged.
+
+### Virtual-key budgets (`client_auth.virtual_keys[].budget_usd`, M5-6)
+
+A cumulative USD spend cap per virtual key (`0` = unlimited). At
+admission the gateway atomically reserves a conservative estimate
+(priced against the most expensive deployment serving the model:
+body-derived input estimate + the request's output allowance, or
+4096 tokens when unset). The first usage report settles the
+reservation to the **actual** recorded cost; cache hits release
+the hold (no upstream spend). A request is rejected with
+`402 client budget exceeded` when committed + reserved + estimate
+would exceed the budget. Reservations that never settle (e.g. a
+transport failure with no usage report) are committed at their
+estimate after 15 minutes. Budget state is runtime state, like
+the usage tracker itself: **it resets on gateway restart**.
 
 ## Model intelligence scorecards and evaluation
 
@@ -622,3 +739,32 @@ known provider job IDs; ambiguous submissions without a provider job ID require
 manual action instead of automatic resubmission. The fake provider is for tests
 and local development only, writes a text placeholder, and is not a real video
 provider. See [Video Gateway](VIDEO_GATEWAY.md) and [Known Gaps](KNOWN_GAPS.md).
+
+## MCP gateway (`mcp`, M6-1)
+
+When `mcp.enabled` is true, the gateway brokers registered Model
+Context Protocol servers behind `POST /mcp` (JSON-RPC 2.0,
+streamable HTTP), authenticated with the same client keys as the
+data plane.
+
+| Field | Default | Meaning |
+|---|---|---|
+| `mcp.enabled` | `false` | Master switch; `/mcp` returns 404 while off. |
+| `mcp.rpm` | `0` | Per-key MCP call rate (falls back to `client_auth.rpm`; 0 = unlimited). |
+| `mcp.max_response_bytes` | `1048576` | Cap on upstream response size (1024–67108864). |
+| `mcp.call_timeout_seconds` | `30` | Per-call upstream timeout (1–600). |
+| `mcp.servers[].id` | — | Unique server id; tools are exposed as `<id>__<tool>`. |
+| `mcp.servers[].url` | — | Upstream MCP endpoint (http/https; credentials in the URL are rejected). |
+| `mcp.servers[].auth_env` | — | Env var NAME whose value is sent verbatim as the `Authorization` header. Secrets are never inline. |
+| `mcp.servers[].allowed_tenants` | all | Tenant allowlist; other tenants cannot see or call the server's tools. |
+| `mcp.servers[].tools` | all | Tool allowlist for the server. |
+
+Behavior: tools/list aggregates all visible servers (a dead server
+is skipped, never fails the list; 30 s per-server cache);
+tools/call is brokered over a lazily-initialized per-server
+session with one re-initialize + retry on session loss. Every
+call emits an `mcp_tool_call` audit event (server, tool, tenant,
+result, argument byte count — never argument content) and
+`nexaroute_mcp_calls_total` metrics. Batch JSON-RPC requests are
+rejected. MCP server URLs are operator configuration and are
+dialed directly.
