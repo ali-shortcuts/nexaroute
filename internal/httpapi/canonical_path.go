@@ -30,7 +30,7 @@ func upstreamKindFor(pType string) string {
 	switch pType {
 	case "anthropic_compatible":
 		return "anthropic"
-	case "gemini":
+	case "gemini", "vertex":
 		return "gemini"
 	case "openai_responses":
 		return "openai_responses"
