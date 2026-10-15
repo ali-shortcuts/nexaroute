@@ -2096,13 +2096,13 @@ func (c Config) Validate() error {
 		if dp.APIKeyEnv != "" {
 			// basic env var name validation: letters, digits, underscore, must not start with digit
 			if len(dp.APIKeyEnv) == 0 || (dp.APIKeyEnv[0] >= '0' && dp.APIKeyEnv[0] <= '9') {
-				return fmt.Errorf("decision provider %q api_key_env %q invalid", dp.ID, dp.APIKeyEnv)
+				return fmt.Errorf("decision provider %q api_key_env must be an environment variable name (letters, digits, underscore; not starting with a digit); the value is not shown because it may be a secret", dp.ID)
 			}
 			for _, ch := range dp.APIKeyEnv {
 				if (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '_' {
 					continue
 				}
-				return fmt.Errorf("decision provider %q api_key_env %q invalid", dp.ID, dp.APIKeyEnv)
+				return fmt.Errorf("decision provider %q api_key_env must be an environment variable name (letters, digits, underscore; not starting with a digit); the value is not shown because it may be a secret", dp.ID)
 			}
 		}
 		if len(dp.BaseURL) > maxURLBytes {
