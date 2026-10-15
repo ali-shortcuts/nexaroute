@@ -255,4 +255,3 @@
   $('#auth-control')?.addEventListener('click', async () => { if (state.auth?.authenticated && state.auth?.oidc_enabled) { try { await api('/admin/auth/logout', { method: 'POST' }); state.csrfToken = ''; window.location.reload(); } catch (e) { notice(e.message, true); } } else if (state.auth?.authenticated) { state.adminKey = ''; state.csrfToken = ''; window.location.reload(); } else if (state.auth?.oidc_enabled) { window.location.assign('/admin/auth/login'); } else openAuth(); });
   document.documentElement.dataset.theme = state.theme; $('#theme-toggle').textContent = state.theme === 'dark' ? 'Light mode' : 'Dark mode'; render(); initializeAuth().then(ok => { if (ok) refresh(); }); window.addEventListener('pagehide', () => { state.sseAbort?.abort(); if (state.sseReconnect) clearTimeout(state.sseReconnect); });
 })();
-
