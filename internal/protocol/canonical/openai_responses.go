@@ -26,6 +26,7 @@ type ResponsesRequest struct {
 	Metadata           map[string]any  `json:"metadata,omitempty"`
 	Stop               any             `json:"stop,omitempty"`
 	PreviousResponseID string          `json:"previous_response_id,omitempty"`
+	PromptCacheKey     string          `json:"prompt_cache_key,omitempty"`
 	Store              *bool           `json:"store,omitempty"`
 	IncludeUsageHint   bool            `json:"-"`
 }
@@ -59,6 +60,7 @@ func DecodeResponsesRequest(in ResponsesRequest) (Request, error) {
 	out := Request{
 		Model:           in.Model,
 		Stream:          in.Stream,
+		PromptCacheKey:  in.PromptCacheKey,
 		MaxOutputTokens: in.MaxOutputTokens,
 		Temperature:     in.Temperature,
 		TopP:            in.TopP,
@@ -363,6 +365,9 @@ func EncodeResponsesRequest(in Request, upstreamModel string) ([]byte, error) {
 	}
 	if in.ParallelToolCalls != nil {
 		out["parallel_tool_calls"] = *in.ParallelToolCalls
+	}
+	if in.PromptCacheKey != "" {
+		out["prompt_cache_key"] = in.PromptCacheKey
 	}
 	if in.Reasoning != nil && !in.Reasoning.Disabled {
 		effort := in.Reasoning.Effort

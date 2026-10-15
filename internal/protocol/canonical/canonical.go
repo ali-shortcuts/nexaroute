@@ -80,12 +80,17 @@ type Thinking struct {
 
 // Part is one canonical content part.
 type Part struct {
-	Type       string      `json:"type"`
-	Text       string      `json:"text,omitempty"`
-	Image      *Image      `json:"image,omitempty"`
-	ToolCall   *ToolCall   `json:"tool_call,omitempty"`
-	ToolResult *ToolResult `json:"tool_result,omitempty"`
-	Thinking   *Thinking   `json:"thinking,omitempty"`
+	Type string `json:"type"`
+	Text string `json:"text,omitempty"`
+	// CacheControl carries a prompt-cache marker: "" (none),
+	// "ephemeral" (Anthropic default), or a TTL ("5m" / "1h").
+	// Only the Anthropic codec expresses per-block markers; other
+	// encoders drop it (documented in COMPATIBILITY.md).
+	CacheControl string      `json:"cache_control,omitempty"`
+	Image        *Image      `json:"image,omitempty"`
+	ToolCall     *ToolCall   `json:"tool_call,omitempty"`
+	ToolResult   *ToolResult `json:"tool_result,omitempty"`
+	Thinking     *Thinking   `json:"thinking,omitempty"`
 }
 
 // Message is one canonical conversation turn.
@@ -145,6 +150,10 @@ type Request struct {
 	Stop              []string        `json:"stop,omitempty"`
 	Stream            bool            `json:"stream,omitempty"`
 	Metadata          map[string]any  `json:"metadata,omitempty"`
+	// PromptCacheKey is the OpenAI-family request-level prompt
+	// cache routing key (Responses + Chat). Anthropic and Gemini
+	// have no equivalent; their encoders ignore it.
+	PromptCacheKey string `json:"prompt_cache_key,omitempty"`
 	// ClientProtocol records the ingress family the canonical request was
 	// decoded from (anthropic | openai_chat | openai_responses). Response
 	// encoders use it as the default target format.
