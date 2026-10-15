@@ -49,6 +49,13 @@ type inProcessOIDCProvider struct {
 	jwksURIOverride               string
 	discoveryMissingJWKS          bool
 	jwksUnavailable               bool
+	// JWKS rotation simulation (M4-7): a second signing key the
+	// provider can rotate to, with independent control over which
+	// keys the JWKS endpoint publishes.
+	rotatedKey           *rsa.PrivateKey
+	signWithRotated      bool
+	jwksPublishesRotated bool
+	jwksPublishesOrigin  bool
 }
 
 var oidcTestRequestIP atomic.Uint32
@@ -63,7 +70,11 @@ func newInProcessOIDCProvider(t *testing.T) *inProcessOIDCProvider {
 	if err != nil {
 		t.Fatal(err)
 	}
-	provider := &inProcessOIDCProvider{privateKey: key, wrongKey: wrongKey}
+	rotatedKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := &inProcessOIDCProvider{privateKey: key, wrongKey: wrongKey, rotatedKey: rotatedKey, jwksPublishesOrigin: true}
 	mux := http.NewServeMux()
 	provider.server = httptest.NewServer(mux)
 	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
@@ -100,12 +111,21 @@ func newInProcessOIDCProvider(t *testing.T) *inProcessOIDCProvider {
 	mux.HandleFunc("/jwks", func(w http.ResponseWriter, r *http.Request) {
 		provider.mu.Lock()
 		unavailable := provider.jwksUnavailable
+		publishOrigin := provider.jwksPublishesOrigin
+		publishRotated := provider.jwksPublishesRotated
 		provider.mu.Unlock()
 		if unavailable {
 			http.Error(w, "signing keys unavailable", http.StatusServiceUnavailable)
 			return
 		}
-		writeTestJSON(w, map[string]any{"keys": []any{rsaTestJWK(&provider.privateKey.PublicKey, "test-key")}})
+		keys := []any{}
+		if publishOrigin {
+			keys = append(keys, rsaTestJWK(&provider.privateKey.PublicKey, "test-key"))
+		}
+		if publishRotated {
+			keys = append(keys, rsaTestJWK(&provider.rotatedKey.PublicKey, "test-key-2"))
+		}
+		writeTestJSON(w, map[string]any{"keys": keys})
 	})
 	mux.HandleFunc("/authorize", func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "authorization is simulated by the test", http.StatusNotImplemented)
@@ -113,6 +133,16 @@ func newInProcessOIDCProvider(t *testing.T) *inProcessOIDCProvider {
 	mux.HandleFunc("/token", provider.token)
 	t.Cleanup(provider.server.Close)
 	return provider
+}
+
+// setRotation switches the signing key and JWKS publication set as
+// one step, modeling an IdP key rollover.
+func (p *inProcessOIDCProvider) setRotation(signRotated, publishOrigin, publishRotated bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.signWithRotated = signRotated
+	p.jwksPublishesOrigin = publishOrigin
+	p.jwksPublishesRotated = publishRotated
 }
 
 func (p *inProcessOIDCProvider) setFlow(flow oidcTestFlow) {
@@ -169,6 +199,13 @@ func (p *inProcessOIDCProvider) signedIDToken(flow oidcTestFlow) (string, error)
 	nonce := flow.nonce
 	expiry := now.Add(5 * time.Minute).Unix()
 	signingKey := p.privateKey
+	kid := "test-key"
+	p.mu.Lock()
+	if p.signWithRotated {
+		signingKey = p.rotatedKey
+		kid = "test-key-2"
+	}
+	p.mu.Unlock()
 	switch flow.mode {
 	case "wrong-issuer":
 		issuer = "https://attacker.example"
@@ -193,7 +230,7 @@ func (p *inProcessOIDCProvider) signedIDToken(flow oidcTestFlow) (string, error)
 	if err != nil {
 		return "", err
 	}
-	options := (&jose.SignerOptions{}).WithType("JWT").WithHeader(jose.HeaderKey("kid"), "test-key")
+	options := (&jose.SignerOptions{}).WithType("JWT").WithHeader(jose.HeaderKey("kid"), kid)
 	signer, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.RS256, Key: signingKey}, options)
 	if err != nil {
 		return "", err
@@ -615,5 +652,53 @@ func TestOIDCDiscoveryRejectsMalformedOrInsecureEndpoints(t *testing.T) {
 				t.Fatal("malformed or insecure OIDC discovery metadata was accepted")
 			}
 		})
+	}
+}
+
+// TestOIDCJWKSKeyRotation covers the real-IdP rollover sequence
+// (M4-7): tokens signed by the original key work; during rollover the
+// IdP signs with a NEW key while JWKS publishes both, and logins keep
+// working (the verifier must learn the new kid); after the rollover
+// completes and the old key leaves JWKS, tokens signed by the retired
+// key are rejected.
+func TestOIDCJWKSKeyRotation(t *testing.T) {
+	provider := newInProcessOIDCProvider(t)
+	srv := oidcTestGateway(t, provider)
+	handler := srv.Handler()
+
+	login := func(label string) *httptest.ResponseRecorder {
+		t.Helper()
+		state, nonce, location, loginResponse := beginOIDCTestLogin(t, handler, nil)
+		bindingCookie := oidcFlowCookie(t, loginResponse)
+		code := "rotation-code-" + label
+		provider.setFlow(oidcTestFlow{mode: "valid", nonce: nonce, challenge: location.Query().Get("code_challenge"), groups: []string{"nr-admins"}})
+		return finishOIDCTestLogin(t, handler, state, code, nil, bindingCookie)
+	}
+	hasSession := func(rr *httptest.ResponseRecorder) bool {
+		for _, cookie := range rr.Result().Cookies() {
+			if cookie.Name == adminSessionCookie && cookie.Value != "" {
+				return true
+			}
+		}
+		return false
+	}
+
+	if rr := login("original"); rr.Code != http.StatusSeeOther || !hasSession(rr) {
+		t.Fatalf("pre-rotation login: status=%d session=%v", rr.Code, hasSession(rr))
+	}
+	// Rollover: sign with the new key, publish both keys.
+	provider.setRotation(true, true, true)
+	if rr := login("rollover"); rr.Code != http.StatusSeeOther || !hasSession(rr) {
+		t.Fatalf("rollover login (new kid): status=%d session=%v", rr.Code, hasSession(rr))
+	}
+	// Completed rotation: only the new key is published.
+	provider.setRotation(true, false, true)
+	if rr := login("completed"); rr.Code != http.StatusSeeOther || !hasSession(rr) {
+		t.Fatalf("post-rotation login: status=%d session=%v", rr.Code, hasSession(rr))
+	}
+	// A token signed by the retired key must now be rejected.
+	provider.setRotation(false, false, true)
+	if rr := login("stale"); rr.Code == http.StatusSeeOther || hasSession(rr) {
+		t.Fatalf("retired-key token must not log in: status=%d session=%v", rr.Code, hasSession(rr))
 	}
 }

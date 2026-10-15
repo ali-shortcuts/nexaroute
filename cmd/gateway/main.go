@@ -25,6 +25,7 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/probe"
 	"github.com/ali-shortcuts/nexaroute/internal/providers"
 	"github.com/ali-shortcuts/nexaroute/internal/router"
+	"github.com/ali-shortcuts/nexaroute/internal/telemetry"
 	"github.com/ali-shortcuts/nexaroute/internal/transport"
 	videoDomain "github.com/ali-shortcuts/nexaroute/internal/video"
 	videoRuntime "github.com/ali-shortcuts/nexaroute/internal/video/runtime"
@@ -50,17 +51,50 @@ func ensureConfig(path string) error {
 	return config.SaveAtomic(path, cfg)
 }
 
+// dispatchSubcommand routes a known CLI subcommand and returns its exit
+// code with handled=true. Anything else (gateway flags such as --config
+// or --version, or no arguments) returns handled=false and main starts
+// the gateway. Keeping the routing in one testable function matters:
+// the `config` subcommand previously existed and was unit-tested via
+// direct calls, but main never dispatched it — running
+// `nexaroute config validate` silently started the gateway instead
+// (proven against a binary built from main, 2026-10-15).
+func dispatchSubcommand(args []string, stdin io.Reader, stdout, stderr io.Writer) (int, bool) {
+	if len(args) == 0 {
+		return 0, false
+	}
+	rest := args[1:]
+	switch args[0] {
+	case "init":
+		return runInit(rest, stdin, stdout, stderr), true
+	case "privacy":
+		return runPrivacy(rest, stdout, stderr), true
+	case "audit":
+		return runAudit(rest, stdout, stderr), true
+	case "policy":
+		return runPolicy(rest, stdout, stderr), true
+	case "config":
+		return runConfig(rest, stdout, stderr), true
+	case "doctor":
+		return runDoctor(rest, stdout, stderr), true
+	case "backup":
+		return runBackup(rest, stdout, stderr), true
+	case "restore":
+		return runRestore(rest, stdout, stderr), true
+	case "secrets":
+		if err := runSecrets(rest); err != nil {
+			fmt.Fprintln(stderr, "nexaroute: secrets command failed:", err)
+			return 1, true
+		}
+		return 0, true
+	}
+	return 0, false
+}
+
 func main() {
-	if len(os.Args) > 1 && os.Args[1] == "privacy" {
-		os.Exit(runPrivacy(os.Args[2:], os.Stdout, os.Stderr))
-	}
-	if len(os.Args) > 1 && os.Args[1] == "audit" {
-		os.Exit(runAudit(os.Args[2:], os.Stdout, os.Stderr))
-	}
-	if len(os.Args) > 1 && os.Args[1] == "secrets" {
-		if err := runSecrets(os.Args[2:]); err != nil {
-			fmt.Fprintln(os.Stderr, "nexaroute: secrets command failed:", err)
-			os.Exit(1)
+	if code, handled := dispatchSubcommand(os.Args[1:], os.Stdin, os.Stdout, os.Stderr); handled {
+		if code != 0 {
+			os.Exit(code)
 		}
 		return
 	}
@@ -168,6 +202,22 @@ func main() {
 	api := httpapi.New(cfg, *configPath, reg, rt, hm, bus, pe, logger)
 	if err := api.SecurityStoreError(); err != nil {
 		bootstrap.Fatalf("cannot initialize admin security store: %v", err)
+	}
+	// Optional OTLP span export (M4-6 part B). The collector URL comes
+	// only from the environment variable named in the config, mirroring
+	// the control-plane backends; unset means disabled. An invalid URL
+	// fails startup rather than silently dropping telemetry.
+	if cfg.Telemetry.OTLPEndpointEnv != "" {
+		endpoint := strings.TrimSpace(os.Getenv(cfg.Telemetry.OTLPEndpointEnv))
+		if endpoint != "" {
+			exporter, err := telemetry.New(endpoint, cfg.Telemetry.ServiceName)
+			if err != nil {
+				bootstrap.Fatalf("cannot initialize telemetry exporter: %v", err)
+			}
+			api.SetTelemetryExporter(exporter)
+			defer exporter.Close()
+			logger.Printf("telemetry_otlp_export enabled service=%s", cfg.Telemetry.ServiceName)
+		}
 	}
 	defer api.CloseSecurityStore()
 	var videoRT *videoRuntime.Runtime
