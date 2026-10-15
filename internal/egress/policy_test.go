@@ -1,7 +1,9 @@
 package egress
 
 import (
+	"context"
 	"net/http"
+	"net/netip"
 	"testing"
 )
 
@@ -30,12 +32,36 @@ func TestPolicyAllowsExplicitLoopbackHTTPOnly(t *testing.T) {
 }
 
 func TestPolicyValidatesExplicitProxyConfiguration(t *testing.T) {
-	tr, err := (Policy{}).NewTransport("https://api.example.com", "http://proxy.example.com:8080")
+	tr, err := (Policy{}).NewTransport("https://api.example.com", "http://user:pass@proxy.example.com:8080/path?q=x")
 	if err != nil || tr.Proxy == nil {
 		t.Fatalf("explicit proxy should be preserved: transport=%v err=%v", tr, err)
 	}
 	if _, err := (Policy{}).NewTransport("https://api.example.com", "not a url"); err == nil {
 		t.Fatal("malformed proxy must be rejected")
+	}
+	if _, err := (Policy{}).NewTransport("https://api.example.com", "file:///tmp/proxy"); err == nil {
+		t.Fatal("unsupported proxy scheme accepted")
+	}
+}
+
+func TestPolicyRejectsURLDecorationsAndBlockedAddressClasses(t *testing.T) {
+	p := Policy{AllowLoopback: true}
+	for _, raw := range []string{
+		"https://user:pass@example.com", "https://example.com/path?q=secret", "https://example.com/#fragment",
+		"ftp://example.com", "https://192.168.1.10:443",
+	} {
+		if _, err := p.NewTransport(raw, ""); err == nil {
+			t.Fatalf("accepted unsafe URL %q", raw)
+		}
+	}
+	if _, err := (Policy{}).NewTransport("http://example.com", ""); err == nil {
+		t.Fatal("HTTP external target accepted")
+	}
+	if _, err := (Policy{}).NewTransport("https://[::1]:443", ""); err == nil {
+		t.Fatal("loopback IPv6 accepted without opt-in")
+	}
+	if !blocked(netip.MustParseAddr("10.0.0.1"), false) || !blocked(netip.MustParseAddr("127.0.0.1"), false) || blocked(netip.MustParseAddr("8.8.8.8"), false) {
+		t.Fatal("unexpected address classification")
 	}
 }
 
@@ -47,5 +73,10 @@ func TestPolicyTransportIsHTTPTransport(t *testing.T) {
 	client := &http.Client{Transport: tr}
 	if client.Transport == nil {
 		t.Fatal("transport missing")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := tr.DialContext(ctx, "tcp", "api.example.com:443"); err == nil {
+		t.Fatal("cancelled dial unexpectedly succeeded")
 	}
 }
