@@ -85,3 +85,9 @@ html[data-theme="light"] .video-hero .button.ghost { color: #e2e8f0; border-colo
 .video-assets{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
 .field-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
 @media(max-width:640px){.video-assets .button{width:100%}}
+
+/* Audit page (M2-6). */
+.audit-table .event-table-head,.audit-table .event-row{grid-template-columns:92px 1.3fr 1fr .8fr .7fr}
+.field.inline{display:flex;align-items:center;gap:8px}
+.field.inline span{color:var(--muted);font-size:11px}
+@media(max-width:700px){.audit-table .event-row{grid-template-columns:1fr 1fr}}
