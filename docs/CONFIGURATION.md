@@ -86,10 +86,18 @@ unreachable, and never falls back to another backend. The connection
 pool is bounded (10 open / 5 idle / 30-minute lifetime), startup pings
 with a 10-second timeout, and the versioned control-plane migrations
 (checksum-verified, advisory-locked against concurrent replicas) are
-applied on startup. `redis` still fails closed at startup until its
-Store adapter lands. `migration_dry_run` validates backend selection and
-readiness without writing state or applying migrations. Failure modes
-are `fail_open`, `fail_closed`, and `last_known_good`.
+applied on startup. `redis` is also fully wired (go-redis client): the
+URL is read only from the environment variable named by `redis_url_env`,
+startup pings with a 10-second timeout, and snapshots are stored as
+per-namespace hashes guarded by atomic compare-and-set scripts with the
+same revision semantics as the other backends. **Redis durability
+warning:** this backend is only as durable as the operator's Redis —
+use it for durable control-plane state only with persistence enabled
+(AOF `appendonly yes` and/or RDB snapshots) and, where availability
+matters, replica/failover management; a default ephemeral Redis loses
+control-plane state on restart. `migration_dry_run` validates backend
+selection and readiness without writing state or applying migrations.
+Failure modes are `fail_open`, `fail_closed`, and `last_known_good`.
 
 ## Implicit-default warnings and opt-in strict config
 
