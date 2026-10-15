@@ -14,8 +14,10 @@ prices. This unit adds:
   range, deployments exist).
 - **Record-time costing**: usage is priced WHEN RECORDED with the
   version active then, and the tracker accumulates cost per price
-  version (Totals.cost_by_version_usd). History no longer reprices
-  when prices change. Cache read/write tokens join accounting
+  version (Totals.cost_by_version_usd). Recorded costs no longer
+  reprice when prices change; usage without a recorded cost is
+  estimated from model-config prices, and those estimates can
+  change when the fallback rates change. Cache read/write tokens join accounting
   where the path reports them (canonical + Anthropic native).
   Cost conventions per dialect (published billing semantics):
   Anthropic input EXCLUDES cache tokens; OpenAI/Gemini/Responses

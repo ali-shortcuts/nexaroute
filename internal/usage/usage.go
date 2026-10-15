@@ -22,7 +22,8 @@ type Totals struct {
 	// CacheReadTokens/CacheWriteTokens count prompt-cache tokens
 	// reported by upstreams (M5-6); RecordedCostUSD is cost computed
 	// AT RECORD TIME under the price version active then, with the
-	// per-version split in CostByVersion. History never reprices.
+	// per-version split in CostByVersion. Recorded costs are
+	// never repriced.
 	CacheReadTokens  int64              `json:"cache_read_tokens,omitempty"`
 	CacheWriteTokens int64              `json:"cache_write_tokens,omitempty"`
 	RecordedCostUSD  float64            `json:"recorded_cost_usd,omitempty"`
