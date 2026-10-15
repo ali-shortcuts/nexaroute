@@ -627,8 +627,10 @@ func (s *Server) adminProviderByID(w http.ResponseWriter, r *http.Request) {
 		proxyScheme, proxyHost, proxyDisplay := proxyStructure(cfg.Providers[idx].ProxyURL)
 		hasProxy := strings.TrimSpace(cfg.Providers[idx].ProxyURL) != ""
 		source, hasSecret := secretSource(p), len(p.ResolvedCredentials()) > 0
+		// Preview only a stored literal key. A key that resolves from an
+		// environment variable lives outside the gateway config, so it gets none.
 		apiKeyPreview := ""
-		if source == "literal" {
+		if p.APIKeyEnv == "" || os.Getenv(p.APIKeyEnv) == "" {
 			apiKeyPreview = secretPreview(p.APIKey)
 		}
 		credsMeta := credentialMeta(cfg.Providers[idx].Credentials)
