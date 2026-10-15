@@ -988,6 +988,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/messages", s.anthropicMessages)
 	mux.HandleFunc("/v1/messages/count_tokens", s.countTokens)
 	mux.HandleFunc("/v1/chat/completions", s.openAIChat)
+	mux.HandleFunc("/v1/embeddings", s.mediaEmbeddings)
+	mux.HandleFunc("/v1/images/generations", s.mediaImages)
+	mux.HandleFunc("/v1/audio/speech", s.mediaSpeech)
+	mux.HandleFunc("/v1/audio/transcriptions", s.mediaTranscriptions)
+	mux.HandleFunc("/v1/rerank", s.mediaRerank)
 	mux.HandleFunc("/v1/responses", s.openAIResponses)
 
 	mux.HandleFunc("/admin/auth/login", s.authLogin)
@@ -1047,7 +1052,7 @@ func isDataPlaneRequest(r *http.Request) bool {
 		return false
 	}
 	switch r.URL.Path {
-	case "/v1/messages", "/v1/messages/count_tokens", "/v1/chat/completions", "/v1/responses", "/v1/video/jobs":
+	case "/v1/messages", "/v1/messages/count_tokens", "/v1/chat/completions", "/v1/responses", "/v1/video/jobs", "/v1/embeddings", "/v1/images/generations", "/v1/audio/speech", "/v1/audio/transcriptions", "/v1/rerank":
 		return true
 	default:
 		return false
