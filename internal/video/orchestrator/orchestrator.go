@@ -326,6 +326,47 @@ func mergeUsage(dst, src map[string]string) map[string]string {
 	return dst
 }
 
+// validActualCost reports whether a provider-reported actual is billable.
+func validActualCost(v float64) bool {
+	return v >= 0 && !math.IsNaN(v) && !math.IsInf(v, 0)
+}
+
+// providerActualCost extracts the provider-reported actual from a completed
+// job status. The explicit ActualCostUSD field takes precedence; the legacy
+// Usage["actual_cost_usd"] entry is honored for backwards compatibility.
+// Invalid or absent values report ok=false so the job stays explicitly
+// unreconciled instead of failing or being misrepresented as an actual.
+func providerActualCost(st video.ProviderJobStatus) (float64, bool) {
+	if st.ActualCostUSD != nil && validActualCost(*st.ActualCostUSD) {
+		return *st.ActualCostUSD, true
+	}
+	if raw := strings.TrimSpace(st.Usage["actual_cost_usd"]); raw != "" {
+		if actual, err := strconv.ParseFloat(raw, 64); err == nil && validActualCost(actual) {
+			return actual, true
+		}
+	}
+	return 0, false
+}
+
+// applyCostReconciliation records the estimate → actual transition on the
+// job. Reconciled jobs carry ActualCostUSD, CostDeltaUSD (actual − estimate)
+// and CostBasis "actual"; unreconciled jobs keep the estimate with
+// CostReconciled=false, no delta, no actual, and CostBasis "estimate".
+func applyCostReconciliation(j *video.VideoJob, actual *float64) {
+	if actual != nil && validActualCost(*actual) {
+		delta := *actual - j.EstimatedCostUSD
+		j.ActualCostUSD = *actual
+		j.CostDeltaUSD = &delta
+		j.CostReconciled = true
+		j.CostBasis = "actual"
+		return
+	}
+	j.ActualCostUSD = 0
+	j.CostDeltaUSD = nil
+	j.CostReconciled = false
+	j.CostBasis = "estimate"
+}
+
 func (o *Orchestrator) Recover(ctx context.Context) error {
 	if o.Store == nil || o.Queue == nil {
 		return errors.New("video recovery requires a store and queue")
@@ -680,6 +721,12 @@ func (o *Orchestrator) pollAndFinalize(ctx context.Context, p video.VideoProvide
 }
 
 func (o *Orchestrator) downloadAndComplete(ctx context.Context, p video.VideoProvider, j video.VideoJob, st video.ProviderJobStatus) error {
+	// Idempotent by job ID and terminal state: a replayed completion for an
+	// already-completed job must not re-persist outputs or double-settle
+	// the ledger.
+	if j.State == video.StateCompleted {
+		return nil
+	}
 	if len(st.Outputs) == 0 {
 		return o.markNeedsManualAndError(ctx, j, "provider marked job complete but supplied no output assets")
 	}
@@ -726,13 +773,10 @@ func (o *Orchestrator) downloadAndComplete(ctx context.Context, p video.VideoPro
 		}
 	}
 	var actualCost *float64
-	if raw := strings.TrimSpace(st.Usage["actual_cost_usd"]); raw != "" {
-		actual, parseErr := strconv.ParseFloat(raw, 64)
-		if parseErr == nil && actual >= 0 && !math.IsNaN(actual) && !math.IsInf(actual, 0) {
-			actualCost = &actual
-			j.ActualCostUSD = actual
-		}
+	if actual, ok := providerActualCost(st); ok {
+		actualCost = &actual
 	}
+	applyCostReconciliation(&j, actualCost)
 	j.OutputAssets = assets
 	j.Progress = 1
 	j.LastError = ""

@@ -46,38 +46,53 @@ type ShotExecution struct {
 	CompletedAt   *time.Time        `json:"completed_at,omitempty"`
 	LastError     string            `json:"last_error,omitempty"`
 	UsageMetadata map[string]string `json:"usage_metadata,omitempty"`
+	// ActualCostUSD is the provider-reported actual for this shot, when the
+	// provider reports one. Additive: nil means the shot reported no actual.
+	ActualCostUSD *float64 `json:"actual_cost_usd,omitempty"`
 }
 
 type VideoJob struct {
-	SchemaVersion         string            `json:"schema_version"`
-	JobID                 string            `json:"job_id"`
-	IdempotencyKey        string            `json:"idempotency_key,omitempty"`
-	ProjectID             string            `json:"project_id"`
-	EpisodeID             string            `json:"episode_id,omitempty"`
-	ParentJobID           string            `json:"parent_job_id,omitempty"`
-	Request               VideoRequest      `json:"request"`
-	Provider              string            `json:"provider,omitempty"`
-	Model                 string            `json:"model,omitempty"`
-	ProviderJobID         string            `json:"provider_job_id,omitempty"`
-	State                 JobState          `json:"state"`
-	Progress              float64           `json:"progress"`
-	CreatedAt             time.Time         `json:"created_at"`
-	SubmittedAt           *time.Time        `json:"submitted_at,omitempty"`
-	CompletedAt           *time.Time        `json:"completed_at,omitempty"`
-	LastError             string            `json:"last_error,omitempty"`
-	RetryCount            int               `json:"retry_count"`
-	CompositionRetryCount int               `json:"composition_retry_count,omitempty"`
-	CurrentShot           int               `json:"current_shot,omitempty"`
-	TotalShots            int               `json:"total_shots,omitempty"`
-	ShotExecutions        []ShotExecution   `json:"shot_executions,omitempty"`
-	OutputAssets          []Asset           `json:"output_assets,omitempty"`
-	SourceAssets          []Asset           `json:"source_assets,omitempty"`
-	NarrationAsset        *Asset            `json:"narration_asset,omitempty"`
-	SubtitleAsset         *Asset            `json:"subtitle_asset,omitempty"`
-	EstimatedCostUSD      float64           `json:"estimated_cost_usd,omitempty"`
-	ActualCostUSD         float64           `json:"actual_cost_usd,omitempty"`
-	UsageMetadata         map[string]string `json:"usage_metadata,omitempty"`
-	AuditEvents           []AuditEvent      `json:"audit_events,omitempty"`
+	SchemaVersion         string          `json:"schema_version"`
+	JobID                 string          `json:"job_id"`
+	IdempotencyKey        string          `json:"idempotency_key,omitempty"`
+	ProjectID             string          `json:"project_id"`
+	EpisodeID             string          `json:"episode_id,omitempty"`
+	ParentJobID           string          `json:"parent_job_id,omitempty"`
+	Request               VideoRequest    `json:"request"`
+	Provider              string          `json:"provider,omitempty"`
+	Model                 string          `json:"model,omitempty"`
+	ProviderJobID         string          `json:"provider_job_id,omitempty"`
+	State                 JobState        `json:"state"`
+	Progress              float64         `json:"progress"`
+	CreatedAt             time.Time       `json:"created_at"`
+	SubmittedAt           *time.Time      `json:"submitted_at,omitempty"`
+	CompletedAt           *time.Time      `json:"completed_at,omitempty"`
+	LastError             string          `json:"last_error,omitempty"`
+	RetryCount            int             `json:"retry_count"`
+	CompositionRetryCount int             `json:"composition_retry_count,omitempty"`
+	CurrentShot           int             `json:"current_shot,omitempty"`
+	TotalShots            int             `json:"total_shots,omitempty"`
+	ShotExecutions        []ShotExecution `json:"shot_executions,omitempty"`
+	OutputAssets          []Asset         `json:"output_assets,omitempty"`
+	SourceAssets          []Asset         `json:"source_assets,omitempty"`
+	NarrationAsset        *Asset          `json:"narration_asset,omitempty"`
+	SubtitleAsset         *Asset          `json:"subtitle_asset,omitempty"`
+	EstimatedCostUSD      float64         `json:"estimated_cost_usd,omitempty"`
+	ActualCostUSD         float64         `json:"actual_cost_usd,omitempty"`
+	// CostReconciled reports whether the ledger entry for this job was
+	// reconciled from the admission estimate to a provider-reported actual.
+	// It has no omitempty so unreconciled jobs are explicitly marked false
+	// and never silently presented as actuals.
+	CostReconciled bool `json:"cost_reconciled"`
+	// CostDeltaUSD is actual − estimate, recorded only when CostReconciled
+	// is true. Additive: absent for unreconciled jobs.
+	CostDeltaUSD *float64 `json:"cost_delta_usd,omitempty"`
+	// CostBasis names which figure operator surfaces should treat as
+	// authoritative for this job: "actual" when reconciled, "estimate"
+	// otherwise. Additive.
+	CostBasis     string            `json:"cost_basis,omitempty"`
+	UsageMetadata map[string]string `json:"usage_metadata,omitempty"`
+	AuditEvents   []AuditEvent      `json:"audit_events,omitempty"`
 }
 
 func NewJob(id string, req VideoRequest) VideoJob {
