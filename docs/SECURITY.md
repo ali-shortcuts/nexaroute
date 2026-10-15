@@ -32,8 +32,12 @@ provider reads a base64 key from the variable named by `NEXAROUTE_KEY_PROVIDER_E
 `NEXAROUTE_KEY_PROVIDER_COMMAND`; the command path and reference are configuration, while key values
 are never placed in argv or logs. Missing, malformed, unavailable, or wrong keys fail closed. External
 providers are read-only from the `secrets rotate` command; rotate them in the custody system first and
-then run `secrets verify`. Real KMS/keyring service interoperability is deployment-dependent and remains
-unverified unless exercised in the target environment.
+then run `secrets verify`. For HashiCorp Vault, the shipped pattern is a KV v2 entry plus the reference
+command helper `scripts/key-provider-vault-kv.sh`; Vault Transit envelope mode is NOT implemented — the
+provider contract loads raw key material into the gateway process (see
+`docs/EXTERNAL_VERIFICATION.md` for the exact boundary and the operator verification procedures for a
+real IdP, Vault and headless keyring). Real KMS/keyring service interoperability is deployment-dependent
+and remains unverified unless exercised in the target environment.
 
 ### Migration and failure behavior
 
