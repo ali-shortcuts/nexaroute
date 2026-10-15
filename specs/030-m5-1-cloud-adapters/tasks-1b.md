@@ -6,4 +6,4 @@
 - [x] T4 Adapter wiring: signing hook, no bearer for bedrock, probe/eval builders, stream wrap
 - [x] T5 httpapi wiring: kind mapping, attempt cases, bundle path, pump/decode cases; preset
 - [x] T6 E2E tests (chat, tools, streaming via synthetic eventstream, SigV4 headers asserted)
-- [ ] T7 Docs (CONFIGURATION bedrock + limits, UNRELEASED), PR green; stop for owner
+- [x] T7 Docs (CONFIGURATION bedrock + limits, UNRELEASED), PR green; stop for owner

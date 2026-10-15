@@ -140,9 +140,23 @@ The in-memory event feed is independently bounded: it keeps only the newest ring
 ```text
 openai_compatible
 anthropic_compatible
+gemini
+openai_responses
+bedrock
 ```
 
+(When the M5-1a PR also lands, this list gains `azure_openai` and `vertex`.)
+
 A provider is generic; adding another OpenAI-compatible endpoint should normally require configuration, not a new code branch.
+
+**Amazon Bedrock** (`bedrock`, M5-1b) speaks the Converse API: requests are addressed per model at `{base_url}/model/{modelId}/converse` (or `/converse-stream` when streaming; the AWS binary event stream is translated by the gateway). Authentication is AWS SigV4, signed per request:
+
+- the access key ID comes from the provider's normal key fields (`api_key` or `api_key_env`);
+- the secret access key comes **only** from the environment variable named by the provider field `secret_key_env` (never a config value); adapter startup fails closed when it is unset or empty;
+- an optional session token comes from the env var named by `session_token_env`;
+- `aws_region` selects the signing region (default `us-east-1`) and should match the region in `base_url`.
+
+Documented limits: one credential pair per Bedrock provider (the credential-rotation pool does not apply); `tool_choice: "none"` withholds the tools because Converse has no none mode; reasoning/thinking blocks are not encoded to Converse (model-specific); document blocks are not mapped.
 
 ## Provider credentials
 
