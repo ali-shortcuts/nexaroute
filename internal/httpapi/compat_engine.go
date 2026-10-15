@@ -67,9 +67,16 @@ func (s *Server) providerConfigFor(providerID string) (config.ProviderConfig, bo
 // materially different key/scope invalidates stale contracts.
 func credentialScope(p config.ProviderConfig) string {
 	keys := p.ResolvedCredentials()
+	// codeql[go/weak-sensitive-data-hashing] This is a fingerprint, not a
+	// password verifier: the truncated (8-byte) digest only detects that the
+	// provider's credential set changed, so stale capability contracts are
+	// invalidated. It is never stored as a credential, never compared
+	// against user-supplied input for authentication, and provider API keys
+	// are high-entropy tokens, so a fast hash is the correct tool here; a
+	// slow KDF would add hot-path cost with no security gain.
 	h := sha256.New()
 	for _, k := range keys {
-		h.Write([]byte(k))
+		h.Write([]byte(k)) // codeql[go/weak-sensitive-data-hashing] fingerprint only — see note above credentialScope's hash setup.
 		h.Write([]byte{0})
 	}
 	sum := h.Sum(nil)
@@ -520,10 +527,26 @@ func (s *Server) finishCanonicalAttempt(bundle hedgeAttemptBundle, canReq canoni
 		}
 	case "gemini":
 		payload, _, err = canonical.EncodeGeminiRequest(canReq, bundle.c.Deployment.Model)
-		bundle.path = "/v1beta/models/" + strings.TrimPrefix(bundle.c.Deployment.Model, "models/") + ":streamGenerateContent?alt=sse"
-		if !canReq.Stream {
-			bundle.path = "/v1beta/models/" + strings.TrimPrefix(bundle.c.Deployment.Model, "models/") + ":generateContent"
+		if p.Type == "vertex" {
+			location := p.VertexLocation
+			if location == "" {
+				location = "us-central1"
+			}
+			bundle.path = "/v1/projects/" + p.VertexProject + "/locations/" + location +
+				"/publishers/google/models/" + strings.TrimPrefix(bundle.c.Deployment.Model, "models/") + ":streamGenerateContent?alt=sse"
+			if !canReq.Stream {
+				bundle.path = "/v1/projects/" + p.VertexProject + "/locations/" + location +
+					"/publishers/google/models/" + strings.TrimPrefix(bundle.c.Deployment.Model, "models/") + ":generateContent"
+			}
+		} else {
+			bundle.path = "/v1beta/models/" + strings.TrimPrefix(bundle.c.Deployment.Model, "models/") + ":streamGenerateContent?alt=sse"
+			if !canReq.Stream {
+				bundle.path = "/v1beta/models/" + strings.TrimPrefix(bundle.c.Deployment.Model, "models/") + ":generateContent"
+			}
 		}
+	case "bedrock":
+		payload, _, err = canonical.EncodeBedrockRequest(canReq, bundle.c.Deployment.Model)
+		bundle.path = canonical.BedrockModelPath(bundle.c.Deployment.Model, canReq.Stream)
 	case "openai_responses":
 		payload, err = canonical.EncodeResponsesRequest(canReq, bundle.c.Deployment.Model)
 		bundle.path = p.ResponsesPath
@@ -535,6 +558,13 @@ func (s *Server) finishCanonicalAttempt(bundle hedgeAttemptBundle, canReq canoni
 		oai, err = canonical.EncodeOpenAIChatRequest(canReq, bundle.c.Deployment.Model, canReq.Stream)
 		if err == nil {
 			payload, err = json.Marshal(oai)
+		}
+		if p.Type == "azure_openai" {
+			version := p.APIVersion
+			if version == "" {
+				version = "2024-10-21"
+			}
+			bundle.path = "/openai/deployments/" + bundle.c.Deployment.Model + "/chat/completions?api-version=" + version
 		}
 	}
 	if err != nil {

@@ -114,7 +114,7 @@ func OpenAIToAnthropic(in core.OpenAIRequest, model string) (core.AnthropicReque
 
 		switch role {
 		case "assistant":
-			assistantBlocks := make([]map[string]any, 0, len(blocks)+len(m.ToolCalls))
+			assistantBlocks := make([]map[string]any, 0, len(blocks))
 			assistantBlocks = append(assistantBlocks, blocks...)
 			for i, tc := range m.ToolCalls {
 				if strings.TrimSpace(tc.Function.Name) == "" {
