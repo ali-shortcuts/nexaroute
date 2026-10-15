@@ -302,3 +302,47 @@ func TestTelemetryIngest_DoesNotChangeRoutingOrHealth(t *testing.T) {
 		t.Fatalf("candidate order differs with ingestion on: %v vs %v", cands(sOff), cands(sOn))
 	}
 }
+
+func scorecardTotal(t *testing.T, s *Server) int {
+	t.Helper()
+	rr := adminDo(t, s, http.MethodGet, "/admin/api/scorecards", "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("scorecards status %d: %s", rr.Code, rr.Body.String())
+	}
+	body := decodeJSON(t, rr)
+	total, ok := body["total"].(float64)
+	if !ok {
+		t.Fatalf("scorecards missing total: %s", rr.Body.String())
+	}
+	return int(total)
+}
+
+// PR-B defect fix: the data-plane hook must only aggregate. Flushing
+// (bucket snapshots, per-bucket percentile sorts, registry upserts and
+// state-file persistence) is owned by the periodic loop, never by a request.
+func TestTelemetryIngest_HotPathDoesNotFlush(t *testing.T) {
+	cfg := phaseHConfig(filepath.Join(t.TempDir(), "state.json"), "")
+	cfg.Evaluation.TelemetryIngestEnabled = true
+	cfg.Evaluation.TelemetryMinSamples = 5
+	cfg.Evaluation.LatencyTargetMS = 1000
+	cfg.Evaluation.TTFTTargetMS = 500
+	s := testGateway(t, cfg)
+
+	// 4 successes + 1 failure through the real data-plane hooks: enough
+	// aggregated samples to flush, yet nothing may materialize until the
+	// periodic flush entry runs.
+	for i := 0; i < 4; i++ {
+		s.recordRouteSuccess(router.Requirement{Model: "model-a"}, "p1/m1", "p1", 200*time.Millisecond)
+	}
+	s.recordProviderFailure("p1", "p1/m1", "boom", upstreamFailurePolicy{SignalProvider: true})
+
+	if got := scorecardTotal(t, s); got != 0 {
+		t.Fatalf("hot path flushed telemetry: %d scorecards before any flush", got)
+	}
+
+	// The periodic flush entry still materializes the aggregates.
+	s.syncProductionTelemetry()
+	if got := scorecardTotal(t, s); got != 1 {
+		t.Fatalf("periodic flush wrote %d scorecards, want 1", got)
+	}
+}

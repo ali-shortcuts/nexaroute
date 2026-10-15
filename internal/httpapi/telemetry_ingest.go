@@ -29,6 +29,15 @@ const maxTelemetrySamplesPerDeployment = 256
 // maxTelemetryDeployments bounds the aggregator cardinality.
 const maxTelemetryDeployments = 4096
 
+// telemetryFlushInterval paces the background flush of production-telemetry
+// aggregates into production_telemetry scorecards. Flushing stays off the
+// data-plane hot path: per-request hooks only append aggregated samples to
+// the in-memory buckets, and a periodic tick materializes them. Each tick
+// reads the live evaluation plane and is a no-op unless ingestion is opt-in
+// enabled, so enabling ingestion by config reload takes effect without a
+// restart.
+const telemetryFlushInterval = time.Minute
+
 type telemetrySample struct {
 	success   bool
 	latencyMS float64
@@ -249,29 +258,13 @@ func (p *evaluationPlane) flushTelemetry(now time.Time) int {
 	return written
 }
 
-// observeProductionTelemetry records one completed gateway request as
-// aggregated operational values only. It is a no-op unless ingestion is
-// opt-in enabled, and it never affects routing or health.
-func (s *Server) observeProductionTelemetry(deploymentID, providerID, model string, success bool, latencyMS, ttftMS float64) {
-	plane := s.evaluationSnapshot()
-	if plane == nil {
-		return
-	}
-	cfg := plane.config()
-	if !cfg.Enabled || !cfg.TelemetryIngestEnabled {
-		return
-	}
-	if plane.telemetry == nil {
-		return
-	}
-	plane.telemetry.observe(deploymentID, providerID, model, success, latencyMS, ttftMS, time.Now().UTC())
-	plane.flushTelemetry(time.Now().UTC())
-}
-
 // observeCompletedTelemetry is the data-plane hook: one completed gateway
 // request contributes one aggregated sample (success/failure + numeric
 // timings only). Model attribution is resolved best-effort from the routing
-// table; an empty model is fine. Never affects routing or health.
+// table; an empty model is fine. It only aggregates: flushing is owned by the
+// periodic loop (startTelemetryFlushLoop), never the request path, so a
+// request never pays for bucket snapshots, percentile sorts, registry
+// upserts or state-file persistence. Never affects routing or health.
 func (s *Server) observeCompletedTelemetry(deploymentID, providerID string, success bool, latency, ttft time.Duration) {
 	plane := s.evaluationSnapshot()
 	if plane == nil {
@@ -282,16 +275,8 @@ func (s *Server) observeCompletedTelemetry(deploymentID, providerID string, succ
 		return
 	}
 	model := ""
-	s.runtimeMu.RLock()
-	rt := s.rt
-	s.runtimeMu.RUnlock()
-	if rt != nil {
-		for _, d := range rt.All() {
-			if d.ID == deploymentID {
-				model = d.Model
-				break
-			}
-		}
+	if d, ok := s.rt.Deployment(deploymentID); ok {
+		model = d.Model
 	}
 	latencyMS := float64(latency.Milliseconds())
 	ttftMS := float64(ttft.Milliseconds())
@@ -299,7 +284,6 @@ func (s *Server) observeCompletedTelemetry(deploymentID, providerID string, succ
 		return
 	}
 	plane.telemetry.observe(deploymentID, providerID, model, success, latencyMS, ttftMS, time.Now().UTC())
-	plane.flushTelemetry(time.Now().UTC())
 }
 
 // syncProductionTelemetry materializes pending telemetry aggregates into
@@ -311,6 +295,24 @@ func (s *Server) syncProductionTelemetry() {
 		return
 	}
 	plane.flushTelemetry(time.Now().UTC())
+}
+
+// startTelemetryFlushLoop starts the periodic flush of production-telemetry
+// aggregates into production_telemetry scorecards. The loop lives for the
+// life of the Server and survives config reloads: each tick reads the live
+// evaluation plane and is a no-op unless ingestion is opt-in enabled.
+func (s *Server) startTelemetryFlushLoop() {
+	ticker := time.NewTicker(telemetryFlushInterval)
+	go s.runTelemetryFlushLoop(ticker.C)
+}
+
+// runTelemetryFlushLoop materializes pending telemetry aggregates on every
+// tick. The channel form exists so tests can drive the wiring
+// deterministically.
+func (s *Server) runTelemetryFlushLoop(tick <-chan time.Time) {
+	for range tick {
+		s.syncProductionTelemetry()
+	}
 }
 
 // observeTelemetryTTFT records a time-to-first-token sample for streaming
