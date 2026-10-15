@@ -199,6 +199,7 @@ type Config struct {
 	Probe                  ProbeConfig                  `json:"probe"`
 	Egress                 EgressConfig                 `json:"egress,omitempty"`
 	Cache                  CacheConfig                  `json:"cache"`
+	MCP                    MCPConfig                    `json:"mcp,omitempty"`
 	Pricing                PricingConfig                `json:"pricing,omitempty"`
 	ClientAuth             ClientAuthConfig             `json:"client_auth"`
 	ControlPlane           ControlPlaneConfig           `json:"control_plane,omitempty"`
@@ -414,9 +415,30 @@ type RoutingConfig struct {
 	PublicModel string `json:"public_model,omitempty"`
 }
 
-// CacheConfig gates the exact-match response cache. It is deliberately
-// opt-in: a shared gateway serving mixed traffic must not memorize responses
-// unless the operator asked for it.
+// MCPConfig configures the MCP gateway (M6-1): a registry of
+// upstream Model Context Protocol servers brokered behind
+// POST /mcp.
+type MCPConfig struct {
+	Enabled            bool              `json:"enabled"`
+	RPM                int               `json:"rpm,omitempty"`
+	MaxResponseBytes   int               `json:"max_response_bytes,omitempty"`
+	CallTimeoutSeconds int               `json:"call_timeout_seconds,omitempty"`
+	Servers            []MCPServerConfig `json:"servers,omitempty"`
+}
+
+// MCPServerConfig is one registered upstream MCP server.
+// AuthEnv names an environment variable whose VALUE is sent
+// verbatim as the Authorization header (secrets are never inline).
+type MCPServerConfig struct {
+	ID             string   `json:"id"`
+	Name           string   `json:"name,omitempty"`
+	URL            string   `json:"url"`
+	Enabled        bool     `json:"enabled"`
+	AuthEnv        string   `json:"auth_env,omitempty"`
+	AllowedTenants []string `json:"allowed_tenants,omitempty"`
+	Tools          []string `json:"tools,omitempty"`
+}
+
 // PricingConfig is the versioned price book (M5-6). Each version
 // takes effect at effective_from and prices deployments by
 // "provider/model" ID. Costs are computed at record time under the
@@ -439,6 +461,9 @@ type PriceEntryConfig struct {
 	CacheWritePerMTok *float64 `json:"cache_write_per_mtok,omitempty"`
 }
 
+// CacheConfig gates the exact-match response cache. It is deliberately
+// opt-in: a shared gateway serving mixed traffic must not memorize responses
+// unless the operator asked for it.
 type CacheConfig struct {
 	Enabled      bool `json:"enabled"`
 	TTLSeconds   int  `json:"ttl_seconds"`
@@ -1110,6 +1135,12 @@ func (c *Config) ApplyDefaults() {
 		c.Cache.MaxEntries = 256
 		c.warnDefault("cache.max_entries", "not set; defaulted to 256")
 	}
+	if c.MCP.MaxResponseBytes == 0 {
+		c.MCP.MaxResponseBytes = 1 << 20
+	}
+	if c.MCP.CallTimeoutSeconds == 0 {
+		c.MCP.CallTimeoutSeconds = 30
+	}
 	if c.Cache.MaxBodyBytes == 0 {
 		c.Cache.MaxBodyBytes = 1 << 20
 		c.warnDefault("cache.max_body_bytes", "not set; defaulted to 1048576")
@@ -1597,6 +1628,37 @@ func (c Config) Validate() error {
 	}
 	if c.Cache.MaxBodyBytes < 1024 || c.Cache.MaxBodyBytes > 64<<20 {
 		return errors.New("cache.max_body_bytes must be between 1024 and 67108864")
+	}
+	if c.MCP.Enabled {
+		if len(c.MCP.Servers) == 0 {
+			return errors.New("mcp.enabled requires at least one server in mcp.servers")
+		}
+		seenMCP := map[string]bool{}
+		for _, srv := range c.MCP.Servers {
+			if !validLocalID(srv.ID) || seenMCP[srv.ID] {
+				return fmt.Errorf("mcp.servers: ids must be valid and unique (got %q)", srv.ID)
+			}
+			seenMCP[srv.ID] = true
+			u, err := url.Parse(srv.URL)
+			if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+				return fmt.Errorf("mcp.servers[%q].url must be an http(s) URL", srv.ID)
+			}
+			if u.User != nil {
+				return fmt.Errorf("mcp.servers[%q].url must not embed credentials; use auth_env", srv.ID)
+			}
+			if srv.AuthEnv != "" && !validEnvName(srv.AuthEnv) {
+				return fmt.Errorf("mcp.servers[%q].auth_env must name an environment variable", srv.ID)
+			}
+		}
+		if c.MCP.RPM < 0 || c.MCP.RPM > 1000000 {
+			return errors.New("mcp.rpm must be between 0 and 1000000")
+		}
+		if c.MCP.MaxResponseBytes < 1024 || c.MCP.MaxResponseBytes > 64<<20 {
+			return errors.New("mcp.max_response_bytes must be between 1024 and 67108864")
+		}
+		if c.MCP.CallTimeoutSeconds < 1 || c.MCP.CallTimeoutSeconds > 600 {
+			return errors.New("mcp.call_timeout_seconds must be between 1 and 600")
+		}
 	}
 	if c.Guardrails.Mode != "off" && c.Guardrails.Mode != "audit" && c.Guardrails.Mode != "block" {
 		return errors.New("guardrails.mode must be off, audit, or block")

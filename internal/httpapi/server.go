@@ -70,6 +70,9 @@ type Server struct {
 	clientBuckets          map[string]*clientBucket
 	clientBucketGeneration uint64
 	respCache              *cache.Cache
+	mcp                    *mcpBroker
+	mcpStatsMu             sync.Mutex
+	mcpStats               map[string]int64
 	cacheGeneration        uint64 // guarded by runtimeMu; scopes cache keys to a config snapshot
 	usage                  *usage.Tracker
 	budgets                *usage.BudgetLedger
@@ -204,6 +207,7 @@ func New(cfg config.Config, configPath string, reg *providers.Registry, rt *rout
 	}
 	s := &Server{
 		cfg: cfg, baseCfg: baseCfg, configPath: configPath, reg: reg, rt: rt, hm: hm, bus: bus, probe: pe, log: l,
+		mcp:             newMCPBroker(),
 		respCache:       cache.New(cfg.CacheTTL(), cfg.Cache.MaxEntries, int64(cfg.Cache.MaxBodyBytes)),
 		cacheGeneration: 1,
 		usage:           usage.New(),
@@ -912,6 +916,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/readyz", s.ready)
 	mux.HandleFunc("/metrics", s.metrics)
 	mux.HandleFunc("/v1/models", s.models)
+	mux.HandleFunc("/mcp", s.mcpGateway)
 	mux.HandleFunc("/v1/messages", s.anthropicMessages)
 	mux.HandleFunc("/v1/messages/count_tokens", s.countTokens)
 	mux.HandleFunc("/v1/chat/completions", s.openAIChat)

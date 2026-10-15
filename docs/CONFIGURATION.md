@@ -708,3 +708,32 @@ known provider job IDs; ambiguous submissions without a provider job ID require
 manual action instead of automatic resubmission. The fake provider is for tests
 and local development only, writes a text placeholder, and is not a real video
 provider. See [Video Gateway](VIDEO_GATEWAY.md) and [Known Gaps](KNOWN_GAPS.md).
+
+## MCP gateway (`mcp`, M6-1)
+
+When `mcp.enabled` is true, the gateway brokers registered Model
+Context Protocol servers behind `POST /mcp` (JSON-RPC 2.0,
+streamable HTTP), authenticated with the same client keys as the
+data plane.
+
+| Field | Default | Meaning |
+|---|---|---|
+| `mcp.enabled` | `false` | Master switch; `/mcp` returns 404 while off. |
+| `mcp.rpm` | `0` | Per-key MCP call rate (falls back to `client_auth.rpm`; 0 = unlimited). |
+| `mcp.max_response_bytes` | `1048576` | Cap on upstream response size (1024–67108864). |
+| `mcp.call_timeout_seconds` | `30` | Per-call upstream timeout (1–600). |
+| `mcp.servers[].id` | — | Unique server id; tools are exposed as `<id>__<tool>`. |
+| `mcp.servers[].url` | — | Upstream MCP endpoint (http/https; credentials in the URL are rejected). |
+| `mcp.servers[].auth_env` | — | Env var NAME whose value is sent verbatim as the `Authorization` header. Secrets are never inline. |
+| `mcp.servers[].allowed_tenants` | all | Tenant allowlist; other tenants cannot see or call the server's tools. |
+| `mcp.servers[].tools` | all | Tool allowlist for the server. |
+
+Behavior: tools/list aggregates all visible servers (a dead server
+is skipped, never fails the list; 30 s per-server cache);
+tools/call is brokered over a lazily-initialized per-server
+session with one re-initialize + retry on session loss. Every
+call emits an `mcp_tool_call` audit event (server, tool, tenant,
+result, argument byte count — never argument content) and
+`nexaroute_mcp_calls_total` metrics. Batch JSON-RPC requests are
+rejected. MCP server URLs are operator configuration and are
+dialed directly.
