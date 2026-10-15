@@ -233,8 +233,11 @@ func TestRedisIntegrationRejectsMalformedHashFields(t *testing.T) {
 			if _, err := store.Put(ctx, ns, 0, []byte("overwrite")); !errors.Is(err, ErrMalformedSnapshot) {
 				t.Fatalf("Put malformed hash: %v, want ErrMalformedSnapshot", err)
 			}
-			if err := store.Delete(ctx, ns, 1); !errors.Is(err, ErrMalformedSnapshot) {
-				t.Fatalf("Delete malformed hash: %v, want ErrMalformedSnapshot", err)
+			if err := store.Delete(ctx, ns, 1); !errors.Is(err, ErrNotFound) {
+				t.Fatalf("Delete malformed hash: %v, want ErrNotFound (repair removes the record)", err)
+			}
+			if _, err := store.Get(ctx, ns); !errors.Is(err, ErrNotFound) {
+				t.Fatalf("Get after repair delete: %v, want ErrNotFound", err)
 			}
 		})
 	}
