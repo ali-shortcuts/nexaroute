@@ -141,4 +141,51 @@ PYEOF
 ./scripts/verify-release.sh "$t" v9.9.9 >/dev/null
 echo "test-release-artifacts: go.mod module absent from SBOM (unlinked) verifies"
 
+# A Go-module purl for a package not pinned in go.mod must not be trusted,
+# even if the SBOM version and the checksums are internally consistent.
+t="$work/unpinned"; make_fixture "$t"
+python3 - "$t" <<'PYEOF'
+import glob, json, sys
+p = glob.glob(sys.argv[1] + "/*-sbom.spdx.json")[0]
+doc = json.load(open(p))
+doc["packages"].append({
+    "name": "example.com/unpinned/module",
+    "versionInfo": "v1.2.3",
+    "externalRefs": [{
+        "referenceCategory": "PACKAGE-MANAGER",
+        "referenceType": "purl",
+        "referenceLocator": "pkg:golang/example.com/unpinned/module@v1.2.3",
+    }],
+})
+json.dump(doc, open(p, "w"), indent=2)
+PYEOF
+./scripts/write-checksums.sh "$t" >/dev/null
+expect_fail "SBOM Go module package not pinned in go.mod" ./scripts/verify-release.sh "$t" v9.9.9
+
+# The Go main module and stdlib are legitimate pkg:golang entries and should
+# not be mistaken for third-party dependencies missing from go.mod.
+t="$work/known-golang"; make_fixture "$t"
+python3 - "$t" <<'PYEOF'
+import glob, json, sys
+p = glob.glob(sys.argv[1] + "/*-sbom.spdx.json")[0]
+doc = json.load(open(p))
+for name, version in (
+    ("github.com/ali-shortcuts/nexaroute", "v0.0.0"),
+    ("stdlib", "go1.25.0"),
+):
+    doc["packages"].append({
+        "name": name,
+        "versionInfo": version,
+        "externalRefs": [{
+            "referenceCategory": "PACKAGE-MANAGER",
+            "referenceType": "purl",
+            "referenceLocator": f"pkg:golang/{name}@{version}",
+        }],
+    })
+json.dump(doc, open(p, "w"), indent=2)
+PYEOF
+./scripts/write-checksums.sh "$t" >/dev/null
+./scripts/verify-release.sh "$t" v9.9.9 >/dev/null
+echo "test-release-artifacts: main module and stdlib purls are accepted"
+
 echo "test-release-artifacts: PASS"
