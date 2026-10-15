@@ -268,3 +268,54 @@ func scrapeFailureMetrics(t *testing.T, s *Server) string {
 	}
 	return rr.Body.String()
 }
+
+// F6: recovery semantics differ by strategy family, and both are
+// pinned. Under a non-ready strategy (priority), a deployment whose
+// cooldown has expired is re-admitted by a live trial request: the
+// first post-cooldown request reaches the upstream and its success
+// restores service — no probe engine required. (Under the default
+// ready_mesh strategy, eligibility requires Healthy and recovery is
+// probe-driven instead; see the flapping soak and
+// docs/FAILURE_SEMANTICS.md.)
+func TestFailureInjectionHalfOpenTrialRecovery(t *testing.T) {
+	var fail atomic.Bool
+	fail.Store(true)
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if fail.Load() {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = io.WriteString(w, `{"error":{"message":"down"}}`)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, failureOKBody)
+	}))
+	defer up.Close()
+	cfg := config.Default()
+	cfg.Probe.Enabled = false
+	cfg.Routing.Strategy = "priority"
+	cfg.Routing.MaxAttempts = 1
+	cfg.Routing.MaxRepairAttempts = 0
+	cfg.Routing.FailureThreshold = 1
+	cfg.Routing.CooldownSeconds = 1
+	cfg.Routing.ProviderFailureThreshold = 100 // isolate deployment-level behavior
+	cfg.Providers = []config.ProviderConfig{failureProvider("trial", up.URL, 100)}
+	s := failureGateway(t, cfg)
+
+	if rr := failureChatRequest(s, failureChatBody); rr.Code == http.StatusOK {
+		t.Fatalf("failing upstream must not succeed: %s", rr.Body.String())
+	}
+	fail.Store(false)
+	// Inside the cooldown the gateway still refuses without a trial.
+	if rr := failureChatRequest(s, failureChatBody); rr.Code == http.StatusOK {
+		t.Fatal("request inside cooldown must not succeed")
+	}
+	// After the cooldown, a live trial request re-admits the
+	// deployment and traffic flows again.
+	time.Sleep(1200 * time.Millisecond)
+	if rr := failureChatRequest(s, failureChatBody); rr.Code != http.StatusOK {
+		t.Fatalf("half-open trial status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	if rr := failureChatRequest(s, failureChatBody); rr.Code != http.StatusOK {
+		t.Fatalf("post-recovery request status=%d body=%s", rr.Code, rr.Body.String())
+	}
+}

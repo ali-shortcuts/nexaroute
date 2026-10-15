@@ -145,6 +145,9 @@ operator egress deny policy.
 
 ## 4. Health and status
 
+Failure behavior under upstream and platform faults — what clients see, how recovery works per routing strategy, and the tests that pin each behavior — is specified in [`docs/FAILURE_SEMANTICS.md`](FAILURE_SEMANTICS.md).
+
+
 - `GET /healthz` is a liveness endpoint.
 - `GET /readyz` reports whether an eligible deployment is ready.
 - `GET /admin/api/health` reports deployment-level health details and requires the configured Admin access boundary.
