@@ -307,23 +307,41 @@ non-critical nodes no longer abort unrelated sections.
 
 ### Package coverage gaps and targets — `open`
 
-Coverage measured **85.3% repository-wide** on current `main`
-(`go test -count=1 -coverprofile=/tmp/cover.out ./...`, 2026-10-13), above
-the 85% policy target. Packages below 80% in that reproducible run are:
+Coverage measured **84.2% repository-wide** on current `main`
+(`go test -count=1 -coverprofile=.artifacts/cover.out ./...`, 2026-10-15),
+below the 85% policy target. The three packages tracked by this coverage
+pass now meet the per-package bar:
 
-- `cmd/videogen`: 78.6%
-- `internal/taskprofile`: 69.5%
-- `internal/video/orchestrator`: 78.1%
+- `cmd/videogen`: 94.7% (`run` 100.0%; `main` entrypoint 0.0% by design —
+  unit tests exercise `run` directly; remaining `DownloadAsset` blocks are
+  `filepath.Abs` failure, non-`Exists`/`NotExist` stat errors, `Chmod`,
+  TOCTOU recheck/rename races, and response-body read errors)
+- `internal/taskprofile`: 100.0% (all functions 100%)
+- `internal/video/orchestrator`: 85.4% (`validateShotPlanRequest` 97.9%,
+  `buildShotRequest`/`shotPrompt`/`findEpisodeSourceAsset`/
+  `removeEpisodeSourceAsset`/`checkNarrationDuration`/`maxAssetBytes`/
+  `episodeDimensions`/`pollInterval`/`retryEpisodeComposition` 100%,
+  `composeEpisode` 68.6%, `ensureNarrationAsset` 78.2%,
+  `ensureSubtitleAsset` 69.8%, `runEpisodeJob` 75.3% remain the thinnest
+  functions; covered branches assert state transitions, persisted
+  checkpoints, error fencing, and emitted artifacts)
 
-Previously thin packages are now well covered: `internal/config` 93.0%,
-`internal/compat` 92.6%, `internal/decision` 93.1%, `internal/feature` 94.3%,
-`internal/probe` 95.9%, `internal/core` 100.0%, `cmd/gateway` 85.3%,
-`internal/router` 91.9%, `internal/video` 94.0%, `internal/video/tts` 85.1%,
-`internal/secrets` 81.1%.
+The 2026-10-13 baseline for the same command was 85.3% repository-wide
+with `cmd/videogen` 78.6%, `internal/taskprofile` 69.5%, and
+`internal/video/orchestrator` 78.1%; re-measured on current `main` before
+this pass the three packages stood at 63.8%, 84.6%, and 72.5%.
+
+Previously thin packages re-measured 2026-10-15: `internal/config` 89.9%,
+`internal/compat` 86.6%, `internal/decision` 87.7%, `internal/feature` 94.0%,
+`internal/probe` 89.5%, `internal/core` 100.0%, `internal/router` 90.2%,
+`internal/video` 95.6%, `internal/secrets` 85.6%. Since 2026-10-13,
+`cmd/gateway` moved to 73.3% and `internal/video/tts` to 76.9%; both are
+below the bar and remain open follow-ups outside this pass.
 
 The remaining work is meaningful behavior coverage only; no assertion-free
-padding is acceptable. The next planned coverage pass targets the uncovered
-task-profile and video-orchestrator branches.
+padding is acceptable. The task-profile and video-orchestrator branches
+targeted by the next planned pass are covered by this change; the remaining
+thin functions listed above stay open.
 
 - Impact: thinner regression protection in the listed packages.
 - Mitigation/workaround: run the full coverage command above and inspect the
