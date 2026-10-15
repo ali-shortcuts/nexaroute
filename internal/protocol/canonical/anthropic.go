@@ -91,12 +91,37 @@ func decodeAnthropicSystem(raw json.RawMessage) ([]Part, error) {
 	var parts []Part
 	for _, b := range blocks {
 		if b.Type == "text" {
-			parts = append(parts, Part{Type: PartText, Text: b.Text})
+			parts = append(parts, Part{Type: PartText, Text: b.Text, CacheControl: anthCacheValue(b.CacheControl)})
 		}
-		// Non-text system blocks (cache_control decorations etc.) carry no
-		// canonical meaning; they survive only on native passthrough.
+		// Non-text system blocks carry no canonical meaning; they
+		// survive only on native passthrough.
 	}
 	return parts, nil
+}
+
+// anthCacheValue flattens an Anthropic cache_control block marker
+// into the IR's string form: the TTL when one is set, otherwise
+// the marker type ("ephemeral").
+func anthCacheValue(cc *core.AnthCacheControl) string {
+	if cc == nil {
+		return ""
+	}
+	if cc.TTL != "" {
+		return cc.TTL
+	}
+	if cc.Type != "" {
+		return cc.Type
+	}
+	return "ephemeral"
+}
+
+// anthCacheBlock renders an IR marker back into wire form.
+func anthCacheBlock(v string) map[string]any {
+	out := map[string]any{"type": "ephemeral"}
+	if v == "1h" || v == "5m" {
+		out["ttl"] = v
+	}
+	return out
 }
 
 func decodeAnthropicContent(raw json.RawMessage) ([]Part, error) {
@@ -108,7 +133,7 @@ func decodeAnthropicContent(raw json.RawMessage) ([]Part, error) {
 	for _, m := range blocks {
 		switch m.Type {
 		case "text":
-			parts = append(parts, Part{Type: PartText, Text: m.Text})
+			parts = append(parts, Part{Type: PartText, Text: m.Text, CacheControl: anthCacheValue(m.CacheControl)})
 		case "image":
 			img := decodeAnthImage(m.Source)
 			if img == nil {
@@ -120,13 +145,13 @@ func decodeAnthropicContent(raw json.RawMessage) ([]Part, error) {
 			if err != nil {
 				return nil, fmt.Errorf("encode Anthropic tool input: %w", err)
 			}
-			parts = append(parts, Part{Type: PartToolCall, ToolCall: &ToolCall{ID: m.ID, Name: m.Name, Arguments: string(arg)}})
+			parts = append(parts, Part{Type: PartToolCall, ToolCall: &ToolCall{ID: m.ID, Name: m.Name, Arguments: string(arg)}, CacheControl: anthCacheValue(m.CacheControl)})
 		case "tool_result":
 			parts = append(parts, Part{Type: PartToolResult, ToolResult: &ToolResult{
 				ToolUseID: m.ToolUseID,
 				Content:   anthToolResultText(m),
 				IsError:   m.IsError,
-			}})
+			}, CacheControl: anthCacheValue(m.CacheControl)})
 		case "thinking", "redacted_thinking":
 			var tb struct {
 				Thinking         string `json:"thinking"`
@@ -281,17 +306,32 @@ func EncodeAnthropicRequest(in Request, upstreamModel string) (core.AnthropicReq
 		out.TopK = int(*in.TopK)
 	}
 	if len(in.System) > 0 {
-		var sb strings.Builder
+		marked := false
 		for _, p := range in.System {
-			if p.Type == PartText && p.Text != "" {
-				if sb.Len() > 0 {
-					sb.WriteByte('\n')
-				}
-				sb.WriteString(p.Text)
+			if p.CacheControl != "" {
+				marked = true
+				break
 			}
 		}
-		if sb.Len() > 0 {
-			out.System = json.RawMessage(mustJSON(sb.String()))
+		if marked {
+			// The joined-string system form cannot carry cache
+			// markers; emit blocks so the markers survive.
+			if blocks := encodeAnthBlocks(in.System); len(blocks) > 0 {
+				out.System = json.RawMessage(mustJSON(blocks))
+			}
+		} else {
+			var sb strings.Builder
+			for _, p := range in.System {
+				if p.Type == PartText && p.Text != "" {
+					if sb.Len() > 0 {
+						sb.WriteByte('\n')
+					}
+					sb.WriteString(p.Text)
+				}
+			}
+			if sb.Len() > 0 {
+				out.System = json.RawMessage(mustJSON(sb.String()))
+			}
 		}
 	}
 	for _, m := range in.Messages {
@@ -366,6 +406,7 @@ func EncodeAnthropicRequest(in Request, upstreamModel string) (core.AnthropicReq
 func encodeAnthBlocks(parts []Part) []map[string]any {
 	blocks := make([]map[string]any, 0, len(parts))
 	for _, p := range parts {
+		before := len(blocks)
 		switch p.Type {
 		case PartText:
 			blocks = append(blocks, map[string]any{"type": "text", "text": p.Text})
@@ -410,6 +451,11 @@ func encodeAnthBlocks(parts []Part) []map[string]any {
 			if p.Thinking != nil && p.Thinking.Signature != "" && p.Thinking.Signature != "redacted" {
 				blocks = append(blocks, map[string]any{"type": "thinking", "thinking": p.Thinking.Text, "signature": p.Thinking.Signature})
 			}
+		}
+		// A cache marker rides the block this part produced (text,
+		// image, tool_use, tool_result all accept cache_control).
+		if len(blocks) > before && p.CacheControl != "" {
+			blocks[len(blocks)-1]["cache_control"] = anthCacheBlock(p.CacheControl)
 		}
 	}
 	return blocks
