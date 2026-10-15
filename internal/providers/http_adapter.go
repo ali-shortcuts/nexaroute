@@ -178,7 +178,7 @@ func newHTTPAdapterWithRetryCap(p config.ProviderConfig, timeout, retryAfterCap 
 	}
 	a := &httpAdapter{
 		p: p, c: &http.Client{Transport: tr, Timeout: timeout, CheckRedirect: checkRedirect}, streamC: &http.Client{Transport: tr, CheckRedirect: checkRedirect},
-		sem: newConcurrencySem(mc), forwardAllowed: make(map[string]struct{}, len(p.ForwardHeaders)),
+		sem: newConcurrencySem(mc), forwardAllowed: make(map[string]struct{}),
 		retryAfterCap: retryAfterCap,
 	}
 	a.requestLimit.Store(-1)
@@ -290,6 +290,29 @@ func sameHTTPOrigin(a, b *url.URL) bool {
 		return false
 	}
 	return strings.EqualFold(a.Scheme, b.Scheme) && strings.EqualFold(a.Host, b.Host)
+}
+
+// hostAllowed reports whether the endpoint's host is one the operator
+// configured for this provider: the base URL host, or an entry in the
+// provider's allowed_hosts list (compared the way the egress policy
+// compares them: case-insensitive, ignoring surrounding spaces and a
+// trailing dot). It mirrors the dial-time allowlist at request-build
+// time; the transport remains the enforcement of last resort.
+func (a *httpAdapter) hostAllowed(u *url.URL) bool {
+	host := u.Hostname()
+	if host == "" {
+		return false
+	}
+	if len(a.p.AllowedHosts) == 0 {
+		base, err := url.Parse(a.p.BaseURL)
+		return err == nil && strings.EqualFold(strings.TrimSuffix(strings.TrimSpace(base.Hostname()), "."), strings.TrimSuffix(host, "."))
+	}
+	for _, allowed := range a.p.AllowedHosts {
+		if strings.EqualFold(strings.TrimSuffix(strings.TrimSpace(allowed), "."), strings.TrimSuffix(host, ".")) {
+			return true
+		}
+	}
+	return false
 }
 
 func endpoint(base, suffix string) string {
@@ -443,6 +466,14 @@ func (a *httpAdapter) DoPath(ctx context.Context, method, path string, payload [
 		// whatever host the endpoint names; provider auth is configured
 		// separately and never travels in the URL.
 		return nil, errors.New("invalid endpoint: user information is not allowed")
+	}
+	if !a.hostAllowed(parsed) {
+		// The destination host must be one the operator configured for
+		// this provider (the base URL host or an allowed_hosts entry).
+		// The egress transport enforces the same set at dial time;
+		// refusing here keeps a misdirected endpoint from ever carrying
+		// provider credentials.
+		return nil, errors.New("invalid endpoint: host is not in the provider's allowed hosts")
 	}
 
 	a.waiting.Add(1)
