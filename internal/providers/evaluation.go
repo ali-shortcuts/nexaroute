@@ -220,7 +220,7 @@ func LiveComplete(ctx context.Context, a Adapter, model, prompt string, maxOutpu
 func (a *httpAdapter) liveCompletionRequest(model, prompt string, maxOutputTokens int) ([]byte, string, error) {
 	var body map[string]any
 	switch a.p.Type {
-	case "gemini":
+	case "gemini", "vertex":
 		body = map[string]any{
 			"contents":         []map[string]any{{"role": "user", "parts": []map[string]any{{"text": prompt}}}},
 			"generationConfig": map[string]any{"maxOutputTokens": maxOutputTokens},
@@ -249,6 +249,8 @@ func (a *httpAdapter) liveCompletionRequest(model, prompt string, maxOutputToken
 	switch a.p.Type {
 	case "gemini":
 		return b, a.geminiModelPath(model, false), nil
+	case "vertex":
+		return b, a.vertexModelPath(model, false), nil
 	case "openai_responses":
 		return b, a.p.ResponsesPath, nil
 	case "anthropic_compatible":
@@ -317,7 +319,7 @@ func decodeLiveCompletion(kind string, data []byte) (string, int, int) {
 			_ = json.Unmarshal(raw, &usage)
 		}
 		return text, usage.InputTokens, usage.OutputTokens
-	case "gemini":
+	case "gemini", "vertex":
 		var candidates []struct {
 			Content struct {
 				Parts []struct {
