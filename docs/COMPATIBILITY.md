@@ -31,20 +31,20 @@ The canonical IR is the ceiling: fields with no IR representation
 do not cross protocols (native passthrough preserves them only on
 same-protocol pairs). Per upstream encoder:
 
-| Field | Anthropic | OpenAI Chat | OpenAI Responses | Gemini |
-|---|---|---|---|---|
-| `temperature` / `top_p` | mapped | mapped | mapped | mapped (generationConfig) |
-| `top_k` | mapped | **dropped** (no such knob) | **dropped** | mapped |
-| `max_output_tokens` | `max_tokens` (required; defaulted) | `max_tokens`/`max_completion_tokens` per dialect | `max_output_tokens` | `maxOutputTokens` |
-| stop sequences | mapped | mapped | mapped | **single stop only in practice** — list passed, Gemini honors up to 5 |
-| tools / tool results | tool_use / tool_result blocks | function / role:"tool" | function_call / function_call_output | functionCall / functionResponse |
-| `tool_choice` none | mapped (`{"type":"none"}`) | mapped | mapped | functionCallingConfig mode |
-| parallel tool calls flag | disable_parallel_tool_use | mapped | mapped | **dropped** (no equivalent knob) |
-| structured output (`response_format`) | **dropped** (no IR→Anthropic mapping in this build) | mapped | mapped (`text.format`) | mapped (responseMimeType/responseSchema) |
-| reasoning | `thinking` budget | `reasoning_effort` | `reasoning` object | **hints only** — no faithful budget mapping |
-| prompt-cache markers | native only | **not expressed cross-protocol** | **not expressed** | **not expressed** (see M5-5) |
-| seed / frequency & presence penalties | parsed into IR metadata by the OpenAI decoder; **not re-emitted as knobs** by the other encoders | same | same | same |
-| provider-native unknown fields | preserved on native passthrough | preserved on native passthrough | — | **dropped** on translation |
+| Field | Anthropic | OpenAI Chat | OpenAI Responses | Gemini | Bedrock (Converse) |
+|---|---|---|---|---|---|
+| `temperature` / `top_p` | mapped | mapped | mapped | mapped (generationConfig) | mapped (inferenceConfig) |
+| `top_k` | mapped | **dropped** (no such knob) | **dropped** | mapped | **dropped** (no such knob) |
+| `max_output_tokens` | `max_tokens` (required; defaulted) | `max_tokens`/`max_completion_tokens` per dialect | `max_output_tokens` | `maxOutputTokens` | `maxTokens` (inferenceConfig; passed through, no defaulting) |
+| stop sequences | mapped | mapped | mapped | **single stop only in practice** — list passed, Gemini honors up to 5 | mapped (stopSequences) |
+| tools / tool results | tool_use / tool_result blocks | function / role:"tool" | function_call / function_call_output | functionCall / functionResponse | toolUse / toolResult blocks, toolConfig |
+| `tool_choice` none | mapped (`{"type":"none"}`) | mapped | mapped | functionCallingConfig mode | withholds tools (no Converse none mode) |
+| parallel tool calls flag | disable_parallel_tool_use | mapped | mapped | **dropped** (no equivalent knob) | **dropped** (no equivalent knob) |
+| structured output (`response_format`) | **dropped** (no IR→Anthropic mapping in this build) | mapped | mapped (`text.format`) | mapped (responseMimeType/responseSchema) | **dropped** (no mapping) |
+| reasoning | `thinking` budget | `reasoning_effort` | `reasoning` object | **hints only** — no faithful budget mapping | **dropped** (thinking blocks not encoded) |
+| prompt-cache markers | native only | **not expressed cross-protocol** | **not expressed** | **not expressed** (see M5-5) | expressed as Converse `cachePoint` (system + message text/tool blocks, TTL `1h` carried; max 4/request, excess markers dropped, content kept) |
+| seed / frequency & presence penalties | parsed into IR metadata by the OpenAI decoder; **not re-emitted as knobs** by the other encoders | same | same | same | same |
+| provider-native unknown fields | preserved on native passthrough | preserved on native passthrough | — | **dropped** on translation | **dropped** on translation |
 
 Two IR shapes exist for tool results and both are supported by
 every encoder (regression-pinned): dedicated `tool` messages
@@ -103,18 +103,18 @@ plus native Anthropic-compatible passthrough.
 
 ## Prompt caching (M5-5)
 
-| Mechanism | Anthropic | OpenAI Chat | OpenAI Responses | Gemini |
-|---|---|---|---|---|
-| Block markers (`cache_control`) | Native; preserved through the canonical codec (system + text/image/tool blocks, TTL `5m`/`1h` carried) | No equivalent — dropped on encode | No equivalent — dropped | No equivalent — dropped |
-| Request key (`prompt_cache_key`) | No equivalent — ignored | Mapped both ways (provider-dependent: honored by OpenAI and some compatibles) | Mapped both ways | Ignored |
-| Cache usage, read | `cache_read_input_tokens` | `prompt_tokens_details.cached_tokens` | `input_tokens_details.cached_tokens` | `cachedContentTokenCount` |
-| Cache usage, write | `cache_creation_input_tokens` | — (no write accounting) | — | — (implicit) |
+| Mechanism | Anthropic | OpenAI Chat | OpenAI Responses | Gemini | Bedrock (Converse) |
+|---|---|---|---|---|---|
+| Block markers (`cache_control`) | Native; preserved through the canonical codec (system + text/image/tool blocks, TTL `5m`/`1h` carried) | No equivalent — dropped on encode | No equivalent — dropped | No equivalent — dropped | Expressed as `cachePoint` checkpoints after the marked system/message content (text + tool_use/tool_result; TTL `1h` carried, otherwise `{"type": "default"}`); max 4 per request — excess markers dropped, content kept; minimum prefix tokens enforced server-side by Bedrock |
+| Request key (`prompt_cache_key`) | No equivalent — ignored | Mapped both ways (provider-dependent: honored by OpenAI and some compatibles) | Mapped both ways | Ignored | Ignored (no equivalent) |
+| Cache usage, read | `cache_read_input_tokens` | `prompt_tokens_details.cached_tokens` | `input_tokens_details.cached_tokens` | `cachedContentTokenCount` | `cacheReadInputTokens` (note: Converse `inputTokens` excludes cached tokens) |
+| Cache usage, write | `cache_creation_input_tokens` | — (no write accounting) | — | — (implicit) | `cacheWriteInputTokens` |
 
 Rules: Anthropic block markers never translate into
 `prompt_cache_key` (different semantics: breakpoints vs a routing
 hint) and never leak into other dialects' payloads. Gemini prompt
 caching is implicit — the gateway cannot request it, only report
 its usage. Cache-token usage maps through the canonical IR in both
-directions for all four kinds and is pinned by tests. Bedrock
-`cachePoint` blocks join this matrix when the Bedrock adapter
-(PR #323) lands.
+directions for all five kinds and is pinned by tests. Live-Bedrock
+cache behavior is UNVERIFIED (no live AWS calls; mapping evidence
+is adapter unit tests plus the cited AWS field shapes).

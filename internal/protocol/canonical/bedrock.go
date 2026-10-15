@@ -31,6 +31,56 @@ type BedrockContentBlock struct {
 	Image      *BedrockImageBlock `json:"image,omitempty"`
 	ToolUse    *BedrockToolUse    `json:"toolUse,omitempty"`
 	ToolResult *BedrockToolResult `json:"toolResult,omitempty"`
+	// CachePoint is a Converse cache checkpoint (CachePointBlock):
+	// a standalone union member placed immediately AFTER the
+	// content it caches. Nil unless the IR part carried a
+	// prompt-cache marker, so unmarked requests encode
+	// byte-identically to before.
+	CachePoint *BedrockCachePoint `json:"cachePoint,omitempty"`
+}
+
+// BedrockCachePoint is the Converse CachePointBlock shape
+// (API_runtime_CachePointBlock): {"type": "default"} with an
+// optional "ttl" of "5m" | "1h".
+type BedrockCachePoint struct {
+	Type string `json:"type"`
+	TTL  string `json:"ttl,omitempty"`
+}
+
+// BedrockMaxCacheCheckpoints caps the cachePoint blocks emitted per
+// Converse request. The AWS prompt-caching table allows at most 4
+// cache checkpoints per request for the Claude and Nova families
+// (minimums 512-4096 tokens per checkpoint depending on model;
+// checkpoints are evaluated tools -> system -> messages in order).
+// Markers beyond the cap are dropped while their content is kept
+// (documented limit, same surfacing as the other encoder drops in
+// this file).
+const BedrockMaxCacheCheckpoints = 4
+
+// bedrockCachePoint maps an IR prompt-cache marker onto a Converse
+// CachePointBlock. The IR carries "ephemeral" (Anthropic default),
+// "5m", or "1h" (see anthCacheValue); Converse defaults to the
+// 5-minute behavior when "ttl" is omitted, so only "1h" sets it —
+// omitting the field is valid on every model, while sending
+// "ttl": "1h" to a 5-minute-only model is a ValidationException
+// (caller's responsibility, documented in COMPATIBILITY.md).
+func bedrockCachePoint(marker string) BedrockCachePoint {
+	if strings.TrimSpace(marker) == "1h" {
+		return BedrockCachePoint{Type: "default", TTL: "1h"}
+	}
+	return BedrockCachePoint{Type: "default"}
+}
+
+// appendBedrockCachePoint emits the checkpoint for one marked part
+// immediately after its content block. When the per-request cap is
+// exhausted the marker is dropped and the content is left untouched:
+// the returned count is unchanged and no block is appended.
+func appendBedrockCachePoint(blocks []BedrockContentBlock, marker string, emitted int) ([]BedrockContentBlock, int) {
+	if marker == "" || emitted >= BedrockMaxCacheCheckpoints {
+		return blocks, emitted
+	}
+	cp := bedrockCachePoint(marker)
+	return append(blocks, BedrockContentBlock{CachePoint: &cp}), emitted + 1
 }
 
 type BedrockImageBlock struct {
@@ -90,11 +140,21 @@ type BedrockToolChoice struct {
 // EncodeBedrockRequest builds a Converse payload from the IR. The
 // upstream model id is returned separately because Converse carries
 // it in the URL path.
+//
+// Prompt-cache markers (Part.CacheControl, decoded from Anthropic
+// cache_control) become standalone {"cachePoint": ...} blocks placed
+// immediately after the marked content, in system and in message
+// content (text and tool_use/tool_result blocks alike — all are
+// ContentBlock union members alongside cachePoint). The same encoder
+// serves streaming (ConverseStream) and non-streaming (Converse)
+// dispatches; only the URL path differs (BedrockModelPath).
 func EncodeBedrockRequest(in Request, upstreamModel string) ([]byte, string, error) {
 	out := BedrockRequest{}
+	emitted := 0 // cachePoint checkpoints emitted so far this request
 	for _, part := range in.System {
 		if part.Type == PartText && part.Text != "" {
 			out.System = append(out.System, BedrockContentBlock{Text: part.Text})
+			out.System, emitted = appendBedrockCachePoint(out.System, part.CacheControl, emitted)
 		}
 	}
 	for _, msg := range in.Messages {
@@ -107,6 +167,7 @@ func EncodeBedrockRequest(in Request, upstreamModel string) ([]byte, string, err
 			case PartText:
 				if part.Text != "" {
 					bm.Content = append(bm.Content, BedrockContentBlock{Text: part.Text})
+					bm.Content, emitted = appendBedrockCachePoint(bm.Content, part.CacheControl, emitted)
 				}
 			case PartImage:
 				if part.Image != nil && part.Image.Data != "" {
@@ -117,6 +178,10 @@ func EncodeBedrockRequest(in Request, upstreamModel string) ([]byte, string, err
 					img := &BedrockImageBlock{Format: format}
 					img.Source.Bytes = part.Image.Data
 					bm.Content = append(bm.Content, BedrockContentBlock{Image: img})
+					// Image parts rarely carry markers (the Anthropic
+					// decoder does not set them), but a directly built
+					// IR may; honor it like any other content block.
+					bm.Content, emitted = appendBedrockCachePoint(bm.Content, part.CacheControl, emitted)
 				}
 			case PartToolCall:
 				if part.ToolCall != nil {
@@ -127,6 +192,7 @@ func EncodeBedrockRequest(in Request, upstreamModel string) ([]byte, string, err
 					bm.Content = append(bm.Content, BedrockContentBlock{ToolUse: &BedrockToolUse{
 						ToolUseID: part.ToolCall.ID, Name: part.ToolCall.Name, Input: input,
 					}})
+					bm.Content, emitted = appendBedrockCachePoint(bm.Content, part.CacheControl, emitted)
 				}
 			case PartToolResult:
 				if part.ToolResult != nil {
@@ -142,6 +208,7 @@ func EncodeBedrockRequest(in Request, upstreamModel string) ([]byte, string, err
 						tr.Content = []BedrockResultContent{{Text: content}}
 					}
 					bm.Content = append(bm.Content, BedrockContentBlock{ToolResult: tr})
+					bm.Content, emitted = appendBedrockCachePoint(bm.Content, part.CacheControl, emitted)
 				}
 			}
 			// PartThinking is intentionally not encoded: Converse
@@ -192,6 +259,15 @@ func EncodeBedrockRequest(in Request, upstreamModel string) ([]byte, string, err
 	// ToolChoice "none" intentionally drops toolConfig: Converse has
 	// no none mode, and withholding the tools is the faithful mapping
 	// (documented limit).
+	//
+	// Two further documented limits on prompt caching: the Converse
+	// Tool union also accepts a cachePoint member, but the IR carries
+	// no per-tool-definition marker (ToolDef has no CacheControl, and
+	// the Anthropic decoder does not parse one), so no checkpoint is
+	// emitted in toolConfig; and per-checkpoint minimum token counts
+	// (512-4096 depending on model) are enforced server-side — Bedrock
+	// silently skips caching for a below-threshold prefix while still
+	// returning 200, so the encoder never drops content for it.
 	payload, err := json.Marshal(out)
 	if err != nil {
 		return nil, "", err
@@ -242,8 +318,10 @@ type bedrockResponse struct {
 	} `json:"output"`
 	StopReason string `json:"stopReason"`
 	Usage      struct {
-		InputTokens  int `json:"inputTokens"`
-		OutputTokens int `json:"outputTokens"`
+		InputTokens           int `json:"inputTokens"`
+		OutputTokens          int `json:"outputTokens"`
+		CacheReadInputTokens  int `json:"cacheReadInputTokens,omitempty"`
+		CacheWriteInputTokens int `json:"cacheWriteInputTokens,omitempty"`
 	} `json:"usage"`
 }
 
@@ -273,7 +351,13 @@ func DecodeBedrockResponse(b []byte) (Response, error) {
 	if sawTool && out.StopReason == StopEndTurn {
 		out.StopReason = StopToolUse
 	}
-	out.Usage = Usage{InputTokens: in.Usage.InputTokens, OutputTokens: in.Usage.OutputTokens}
+	out.Usage = Usage{InputTokens: in.Usage.InputTokens, OutputTokens: in.Usage.OutputTokens,
+		CacheReadTokens: in.Usage.CacheReadInputTokens, CacheWriteTokens: in.Usage.CacheWriteInputTokens}
+	// Note the Bedrock convention (prompt-caching user guide): when
+	// caching applies, inputTokens counts only NON-cached tokens, so
+	// total input = inputTokens + cacheReadInputTokens +
+	// cacheWriteInputTokens. The wire values are preserved verbatim
+	// here; per-dialect billing conventions live with the cost layer.
 	return out, nil
 }
 
@@ -357,8 +441,10 @@ func DecodeBedrockStreamChunk(data string) ([]StreamEvent, bool, error) {
 	case "metadata":
 		var p struct {
 			Usage struct {
-				InputTokens  int `json:"inputTokens"`
-				OutputTokens int `json:"outputTokens"`
+				InputTokens           int `json:"inputTokens"`
+				OutputTokens          int `json:"outputTokens"`
+				CacheReadInputTokens  int `json:"cacheReadInputTokens,omitempty"`
+				CacheWriteInputTokens int `json:"cacheWriteInputTokens,omitempty"`
 			} `json:"usage"`
 		}
 		if err := json.Unmarshal(env.Payload, &p); err != nil {
@@ -366,6 +452,7 @@ func DecodeBedrockStreamChunk(data string) ([]StreamEvent, bool, error) {
 		}
 		return []StreamEvent{{Type: StreamUsage, Usage: &Usage{
 			InputTokens: p.Usage.InputTokens, OutputTokens: p.Usage.OutputTokens,
+			CacheReadTokens: p.Usage.CacheReadInputTokens, CacheWriteTokens: p.Usage.CacheWriteInputTokens,
 		}}}, false, nil
 	default:
 		// Exception events (throttlingException, modelException, ...)

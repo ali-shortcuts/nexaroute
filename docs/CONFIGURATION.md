@@ -192,7 +192,7 @@ A provider is generic; adding another OpenAI-compatible endpoint should normally
 - an optional session token comes from the env var named by `session_token_env`;
 - `aws_region` selects the signing region (default `us-east-1`) and should match the region in `base_url`.
 
-Documented limits: one credential pair per Bedrock provider (the credential-rotation pool does not apply); `tool_choice: "none"` withholds the tools because Converse has no none mode; reasoning/thinking blocks are not encoded to Converse (model-specific); document blocks are not mapped.
+Documented limits: one credential pair per Bedrock provider (the credential-rotation pool does not apply); `tool_choice: "none"` withholds the tools because Converse has no none mode; reasoning/thinking blocks are not encoded to Converse (model-specific); document blocks are not mapped. Prompt-cache markers (`cache_control`) on system and message content (text and tool_use/tool_result blocks) are emitted as Converse `cachePoint` checkpoints (`{"type": "default"}`, plus `"ttl": "1h"` for 1h markers) on both `/converse` and `/converse-stream`; at most 4 checkpoints per request (excess markers are dropped, content never is); per-checkpoint minimum tokens are enforced server-side by Bedrock (below-threshold prefixes still return 200, just uncached); `ttl: 1h` requires a model that supports it. No per-tool-definition checkpoint is emitted (the IR carries no such marker).
 
 ## Provider credentials
 
