@@ -101,7 +101,9 @@ func TestBedrockAdapterMissingSecretFailsClosed(t *testing.T) {
 	if _, err := newHTTPAdapter(p, time.Second); err == nil {
 		t.Fatal("adapter construction must fail closed when the secret env var is unset")
 	} else if strings.Contains(err.Error(), "secret access key: env var") == false {
-		t.Fatalf("error should name the env var: %v", err)
+		t.Fatalf("error should identify the missing secret: %v", err)
+	} else if strings.Contains(err.Error(), "NEXAROUTE_TEST_AWS_SECRET_UNSET") {
+		t.Fatalf("error must not echo the configured env var value: %v", err)
 	}
 }
 

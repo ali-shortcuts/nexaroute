@@ -1840,10 +1840,10 @@ func (c Config) Validate() error {
 			return fmt.Errorf("provider %q has unsupported type %q", p.ID, p.Type)
 		}
 		if p.SecretKeyEnv != "" && !validEnvName(p.SecretKeyEnv) {
-			return fmt.Errorf("provider %q secret_key_env %q is not a valid environment variable name", p.ID, p.SecretKeyEnv)
+			return fmt.Errorf("provider %q secret_key_env is not a valid environment variable name (the value is not echoed)", p.ID)
 		}
 		if p.SessionTokenEnv != "" && !validEnvName(p.SessionTokenEnv) {
-			return fmt.Errorf("provider %q session_token_env %q is not a valid environment variable name", p.ID, p.SessionTokenEnv)
+			return fmt.Errorf("provider %q session_token_env is not a valid environment variable name (the value is not echoed)", p.ID)
 		}
 		if p.Type == "bedrock" && p.SecretKeyEnv == "" {
 			return fmt.Errorf("provider %q of type bedrock requires secret_key_env naming the env var that holds the AWS secret access key", p.ID)

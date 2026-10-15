@@ -205,7 +205,9 @@ func newHTTPAdapterWithRetryCap(p config.ProviderConfig, timeout, retryAfterCap 
 		// leak to a spoofed endpoint and a guaranteed 403 upstream.
 		secret := os.Getenv(p.SecretKeyEnv)
 		if p.SecretKeyEnv == "" || secret == "" {
-			return nil, fmt.Errorf("provider %s bedrock secret access key: env var %q is not set", p.ID, p.SecretKeyEnv)
+			// The configured value is deliberately not echoed: a misplaced
+			// literal secret in secret_key_env would otherwise reach logs.
+			return nil, fmt.Errorf("provider %s bedrock secret access key: env var named by secret_key_env is not set", p.ID)
 		}
 		accessKey := ""
 		if keys := p.ResolvedCredentials(); len(keys) > 0 {
