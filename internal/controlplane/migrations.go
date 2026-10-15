@@ -51,3 +51,15 @@ func (r MigrationRegistry) Pending(applied map[uint64]string) ([]Migration, erro
 }
 
 func (r MigrationRegistry) All() []Migration { return append([]Migration(nil), r.items...) }
+
+// DefaultMigrationRegistry returns the canonical control-plane schema
+// migrations applied by the gateway runtime when the PostgreSQL backend
+// is selected. Version 1 creates the snapshot table; the DDL is shared
+// with ControlPlaneSQLSchema so tests and runtime can never drift.
+func DefaultMigrationRegistry() (MigrationRegistry, error) {
+	return NewMigrationRegistry(Migration{
+		Version: 1,
+		Name:    "create control snapshots table",
+		Up:      ControlPlaneSQLSchema(),
+	})
+}

@@ -3,7 +3,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 export PATH="/usr/local/go/bin:$PATH"
 
-required_go="1.24"
+required_go="1.25"
 actual_go="$(go env GOVERSION | sed 's/^go//')"
 if [[ "$(printf '%s\n%s\n' "$required_go" "$actual_go" | sort -V | head -n1)" != "$required_go" ]]; then
   echo "dependency audit requires Go ${required_go} or newer; found ${actual_go}" >&2

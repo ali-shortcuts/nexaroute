@@ -154,14 +154,14 @@ func TestSQLStorePutInsertUpdateConflictAndRollback(t *testing.T) {
 	if err != nil || created.Revision != 1 || created.Schema != 1 || string(created.Payload) != "first" {
 		t.Fatalf("insert=%+v err=%v", created, err)
 	}
-	if len(insertState.execs) < 1 || !strings.Contains(insertState.execs[0], "INSERT INTO") || insertState.commits != 1 {
-		t.Fatalf("insert transaction not committed: %+v", insertState)
+	if len(insertState.execs) < 2 || !strings.Contains(insertState.execs[0], "pg_advisory_xact_lock") || !strings.Contains(insertState.execs[1], "INSERT INTO") || insertState.commits != 1 {
+		t.Fatalf("insert transaction must take the namespace lock before inserting and commit: %+v", insertState)
 	}
 
 	updateState := &scriptedSQL{rowValues: []driver.Value{int64(3), int64(7)}, affected: 1}
 	store, _ = NewSQLStore(openScriptedDB(t, updateState))
 	updated, err := store.Put(ctx, "config", 3, []byte("next"))
-	if err != nil || updated.Revision != 4 || updated.Schema != 7 || !strings.Contains(updateState.execs[0], "UPDATE") {
+	if err != nil || updated.Revision != 4 || updated.Schema != 7 || len(updateState.execs) < 2 || !strings.Contains(updateState.execs[0], "pg_advisory_xact_lock") || !strings.Contains(updateState.execs[1], "UPDATE") {
 		t.Fatalf("update=%+v err=%v execs=%v", updated, err, updateState.execs)
 	}
 
@@ -170,8 +170,8 @@ func TestSQLStorePutInsertUpdateConflictAndRollback(t *testing.T) {
 	if _, err = store.Put(ctx, "config", 2, []byte("stale")); !errors.Is(err, ErrConflict) {
 		t.Fatalf("stale update err=%v", err)
 	}
-	if staleState.rollbacks != 1 || len(staleState.execs) != 0 {
-		t.Fatalf("stale update wrote or failed to rollback: %+v", staleState)
+	if staleState.rollbacks != 1 || len(staleState.execs) != 1 || !strings.Contains(staleState.execs[0], "pg_advisory_xact_lock") {
+		t.Fatalf("stale update must take only the namespace lock, write nothing, and roll back: %+v", staleState)
 	}
 
 	if _, err = store.Put(ctx, "", 0, []byte("x")); !errors.Is(err, ErrNotFound) {

@@ -77,11 +77,19 @@ the connection strings themselves are never written to JSON:
 `backend` defaults to `file` and may be `file`, `memory`, `postgres`, or
 `redis`. File state is written atomically with mode `0600`; relative
 `state_path` values resolve against the config directory. `memory` is for
-tests only. `postgres` and `redis` require the named environment variable and
-fail closed at startup until a runtime client/driver is registered; DSNs and
-URLs are never stored or logged. `migration_dry_run` validates backend
-selection without writing a snapshot. Failure modes are `fail_open`,
-`fail_closed`, and `last_known_good`.
+tests only. DSNs and URLs are never stored or logged.
+
+`postgres` is fully wired (pgx driver): the DSN is read only from the
+environment variable named by `postgres_dsn_env`; startup fails closed
+with a secret-safe error when the variable is missing or the database is
+unreachable, and never falls back to another backend. The connection
+pool is bounded (10 open / 5 idle / 30-minute lifetime), startup pings
+with a 10-second timeout, and the versioned control-plane migrations
+(checksum-verified, advisory-locked against concurrent replicas) are
+applied on startup. `redis` still fails closed at startup until its
+Store adapter lands. `migration_dry_run` validates backend selection and
+readiness without writing state or applying migrations. Failure modes
+are `fail_open`, `fail_closed`, and `last_known_good`.
 
 ## Implicit-default warnings and opt-in strict config
 
