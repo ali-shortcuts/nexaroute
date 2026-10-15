@@ -97,6 +97,7 @@ func (s *Server) cacheServe(w http.ResponseWriter, r *http.Request, key string, 
 		return false
 	}
 	w.Header().Set("Content-Type", entry.ContentType)
+	s.budgetRelease(r)
 	w.Header().Set("X-NexaRoute-Cache", "HIT")
 	w.Header().Set("X-Gateway-Deployment", entry.Deployment)
 	w.WriteHeader(entry.Status)
@@ -125,7 +126,7 @@ func (s *Server) cacheStoreResponse(key string, generation uint64, cacheable boo
 
 // proxyOpenAINativeJSON performs the validated non-stream passthrough while
 // observing real usage and feeding the response cache.
-func (s *Server) proxyOpenAINativeJSON(w http.ResponseWriter, r *http.Request, resp *http.Response, deploymentID, cacheKey string, generation uint64, cacheable bool) error {
+func (s *Server) proxyOpenAINativeJSON(w http.ResponseWriter, r *http.Request, resp *http.Response, deploymentID, cacheKey string, generation uint64, cacheable bool, semCtx *semanticContext) error {
 	defer resp.Body.Close()
 	b, err := readJSONLimited(resp.Body)
 	if err != nil {
@@ -134,10 +135,11 @@ func (s *Server) proxyOpenAINativeJSON(w http.ResponseWriter, r *http.Request, r
 	if err := validateOpenAIResponseJSON(b); err != nil {
 		return err
 	}
-	if p, c, ok := extractOpenAIUsage(b); ok {
-		s.recordUsage(r, deploymentID, int64(p), int64(c))
+	if p, c, cached, ok := extractOpenAIUsageFull(b); ok {
+		s.recordUsageEx(r, deploymentID, usage.Counts{Input: int64(p), Output: int64(c), CacheRead: int64(cached)}, true)
 	}
 	s.cacheStoreResponse(cacheKey, generation, cacheable, deploymentID, resp.StatusCode, "application/json", b)
+	s.semanticStore(semCtx, generation, deploymentID, resp.StatusCode, b)
 	copyUpstreamResponseHeaders(w, resp, false)
 	w.WriteHeader(resp.StatusCode)
 	_, err = w.Write(b)
@@ -147,39 +149,63 @@ func (s *Server) proxyOpenAINativeJSON(w http.ResponseWriter, r *http.Request, r
 // extractOpenAIUsage pulls prompt/completion token counts from a complete
 // OpenAI Chat Completions response body.
 func extractOpenAIUsage(b []byte) (int, int, bool) {
+	p, c, _, ok := extractOpenAIUsageFull(b)
+	return p, c, ok
+}
+
+// extractOpenAIUsageFull additionally returns the cached-token
+// share of the prompt (prompt_tokens_details.cached_tokens).
+func extractOpenAIUsageFull(b []byte) (int, int, int, bool) {
 	var env struct {
 		Usage *struct {
-			PromptTokens     int `json:"prompt_tokens"`
-			CompletionTokens int `json:"completion_tokens"`
+			PromptTokens        int `json:"prompt_tokens"`
+			CompletionTokens    int `json:"completion_tokens"`
+			PromptTokensDetails *struct {
+				CachedTokens int `json:"cached_tokens"`
+			} `json:"prompt_tokens_details"`
 		} `json:"usage"`
 	}
 	if err := json.Unmarshal(b, &env); err != nil || env.Usage == nil {
-		return 0, 0, false
+		return 0, 0, 0, false
 	}
 	p, c := env.Usage.PromptTokens, env.Usage.CompletionTokens
 	if p <= 0 && c <= 0 {
-		return 0, 0, false
+		return 0, 0, 0, false
 	}
-	return p, c, true
+	cached := 0
+	if env.Usage.PromptTokensDetails != nil {
+		cached = env.Usage.PromptTokensDetails.CachedTokens
+	}
+	return p, c, cached, true
 }
 
 // extractAnthropicUsage pulls input/output token counts from a complete
 // Anthropic Messages response body.
 func extractAnthropicUsage(b []byte) (int, int, bool) {
+	p, c, _, _, ok := extractAnthropicUsageFull(b)
+	return p, c, ok
+}
+
+// extractAnthropicUsageFull additionally returns the cache
+// creation/read token counts (separate from input_tokens in the
+// Anthropic convention).
+func extractAnthropicUsageFull(b []byte) (int, int, int, int, bool) {
 	var env struct {
 		Usage *struct {
-			InputTokens  int `json:"input_tokens"`
-			OutputTokens int `json:"output_tokens"`
+			InputTokens              int `json:"input_tokens"`
+			OutputTokens             int `json:"output_tokens"`
+			CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+			CacheReadInputTokens     int `json:"cache_read_input_tokens"`
 		} `json:"usage"`
 	}
 	if err := json.Unmarshal(b, &env); err != nil || env.Usage == nil {
-		return 0, 0, false
+		return 0, 0, 0, 0, false
 	}
 	p, c := env.Usage.InputTokens, env.Usage.OutputTokens
-	if p <= 0 && c <= 0 {
-		return 0, 0, false
+	if p <= 0 && c <= 0 && env.Usage.CacheReadInputTokens <= 0 {
+		return 0, 0, 0, 0, false
 	}
-	return p, c, true
+	return p, c, env.Usage.CacheCreationInputTokens, env.Usage.CacheReadInputTokens, true
 }
 
 // usageSnapshotWithPrices builds the cumulative usage snapshot with estimated

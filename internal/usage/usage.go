@@ -19,6 +19,19 @@ type Totals struct {
 	CompletionTok int64   `json:"completion_tokens"`
 	Requests      int64   `json:"requests"`
 	EstimatedCost float64 `json:"estimated_cost_usd"`
+	// CacheReadTokens/CacheWriteTokens count prompt-cache tokens
+	// reported by upstreams (M5-6); RecordedCostUSD is cost computed
+	// AT RECORD TIME under the price version active then, with the
+	// per-version split in CostByVersion. Recorded costs are
+	// never repriced.
+	CacheReadTokens  int64              `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens int64              `json:"cache_write_tokens,omitempty"`
+	RecordedCostUSD  float64            `json:"recorded_cost_usd,omitempty"`
+	CostByVersion    map[string]float64 `json:"cost_by_version_usd,omitempty"`
+	// unpriced token counters back the legacy snapshot-time
+	// fallback for records made without record-time costing.
+	unpricedPrompt     int64
+	unpricedCompletion int64
 }
 
 // Snapshot is the point-in-time view of cumulative usage.
@@ -27,6 +40,9 @@ type Snapshot struct {
 	TotalCompletionTokens int64    `json:"total_completion_tokens"`
 	TotalRequests         int64    `json:"total_requests"`
 	TotalEstimatedCostUSD float64  `json:"total_estimated_cost_usd"`
+	TotalCacheReadTokens  int64    `json:"total_cache_read_tokens,omitempty"`
+	TotalCacheWriteTokens int64    `json:"total_cache_write_tokens,omitempty"`
+	TotalRecordedCostUSD  float64  `json:"total_recorded_cost_usd,omitempty"`
 	ByDeployment          []Totals `json:"by_deployment"`
 }
 
@@ -40,11 +56,14 @@ type Price struct {
 
 // Tracker is the concurrency-safe cumulative token accountant.
 type Tracker struct {
-	mu         sync.Mutex
-	byDeploy   map[string]*Totals
-	prompt     int64
-	completion int64
-	requests   int64
+	mu           sync.Mutex
+	byDeploy     map[string]*Totals
+	prompt       int64
+	completion   int64
+	requests     int64
+	cacheRead    int64
+	cacheWrite   int64
+	recordedCost float64
 }
 
 // maxDeployments bounds memory; the real deployment count is already capped
@@ -126,6 +145,68 @@ func (t *Tracker) Record(deploymentID string, promptTokens, completionTokens int
 	}
 	tot.Requests++
 	t.requests++
+	tot.unpricedPrompt = saturatingAdd(tot.unpricedPrompt, promptTokens)
+	tot.unpricedCompletion = saturatingAdd(tot.unpricedCompletion, completionTokens)
+}
+
+// Counts is one usage report's token accounting.
+type Counts struct {
+	Input      int64
+	Output     int64
+	CacheRead  int64
+	CacheWrite int64
+}
+
+// RecordEx accumulates one usage report WITH its record-time cost
+// (already priced by the caller under the price version active at
+// record time). The cost is attributed to `version` in the
+// per-version split. Token counts are sanitized exactly like
+// Record's.
+func (t *Tracker) RecordEx(deploymentID string, c Counts, costUSD float64, version string) {
+	c.Input = sanitizeTokenCount(c.Input)
+	c.Output = sanitizeTokenCount(c.Output)
+	c.CacheRead = sanitizeTokenCount(c.CacheRead)
+	c.CacheWrite = sanitizeTokenCount(c.CacheWrite)
+	if costUSD < 0 || costUSD != costUSD || costUSD > 1e18 {
+		costUSD = 0
+	}
+	if c.Input == 0 && c.Output == 0 && c.CacheRead == 0 && c.CacheWrite == 0 && costUSD == 0 {
+		return
+	}
+	if deploymentID == "" {
+		deploymentID = "unknown"
+	}
+	if version == "" {
+		version = "unpriced"
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	tot, ok := t.byDeploy[deploymentID]
+	if !ok {
+		if len(t.byDeploy) >= maxDeployments {
+			return
+		}
+		tot = &Totals{Deployment: deploymentID}
+		t.byDeploy[deploymentID] = tot
+	}
+	tot.PromptTokens = saturatingAdd(tot.PromptTokens, c.Input)
+	t.prompt = saturatingAdd(t.prompt, c.Input)
+	tot.CompletionTok = saturatingAdd(tot.CompletionTok, c.Output)
+	t.completion = saturatingAdd(t.completion, c.Output)
+	tot.CacheReadTokens = saturatingAdd(tot.CacheReadTokens, c.CacheRead)
+	t.cacheRead = saturatingAdd(t.cacheRead, c.CacheRead)
+	tot.CacheWriteTokens = saturatingAdd(tot.CacheWriteTokens, c.CacheWrite)
+	t.cacheWrite = saturatingAdd(t.cacheWrite, c.CacheWrite)
+	tot.Requests++
+	t.requests++
+	if costUSD > 0 {
+		tot.RecordedCostUSD += costUSD
+		t.recordedCost += costUSD
+		if tot.CostByVersion == nil {
+			tot.CostByVersion = map[string]float64{}
+		}
+		tot.CostByVersion[version] += costUSD
+	}
 }
 
 // Snapshot returns cumulative totals. Cost is estimated per deployment from
@@ -138,17 +219,31 @@ func (t *Tracker) Snapshot(prices map[string]Price) Snapshot {
 		TotalPromptTokens:     t.prompt,
 		TotalCompletionTokens: t.completion,
 		TotalRequests:         t.requests,
+		TotalCacheReadTokens:  t.cacheRead,
+		TotalCacheWriteTokens: t.cacheWrite,
+		TotalRecordedCostUSD:  t.recordedCost,
 		ByDeployment:          make([]Totals, 0, len(t.byDeploy)),
 	}
 	var totalCost float64
 	for _, tot := range t.byDeploy {
 		row := *tot
-		if p, ok := prices[row.Deployment]; ok {
-			row.EstimatedCost = (float64(row.PromptTokens)/1_000_000)*p.InputPerMTok +
-				(float64(row.CompletionTok)/1_000_000)*p.OutputPerMTok
-			if row.EstimatedCost < 0 {
-				row.EstimatedCost = 0
+		if tot.CostByVersion != nil {
+			cp := make(map[string]float64, len(tot.CostByVersion))
+			for k, v := range tot.CostByVersion {
+				cp[k] = v
 			}
+			row.CostByVersion = cp
+		}
+		// EstimatedCost = record-time cost (versioned, final) plus
+		// the snapshot-time fallback for any tokens recorded
+		// without record-time costing.
+		row.EstimatedCost = row.RecordedCostUSD
+		if p, ok := prices[row.Deployment]; ok {
+			row.EstimatedCost += (float64(tot.unpricedPrompt)/1_000_000)*p.InputPerMTok +
+				(float64(tot.unpricedCompletion)/1_000_000)*p.OutputPerMTok
+		}
+		if row.EstimatedCost < 0 {
+			row.EstimatedCost = 0
 		}
 		totalCost += row.EstimatedCost
 		out.ByDeployment = append(out.ByDeployment, row)
@@ -175,10 +270,14 @@ func (t *Tracker) Retain(valid map[string]struct{}) {
 	// a counter has saturated because the pre-saturation contribution is no
 	// longer recoverable from the saturated aggregate.
 	t.prompt, t.completion, t.requests = 0, 0, 0
+	t.cacheRead, t.cacheWrite, t.recordedCost = 0, 0, 0
 	for _, tot := range t.byDeploy {
 		t.prompt = saturatingAdd(t.prompt, tot.PromptTokens)
 		t.completion = saturatingAdd(t.completion, tot.CompletionTok)
 		t.requests = saturatingAdd(t.requests, tot.Requests)
+		t.cacheRead = saturatingAdd(t.cacheRead, tot.CacheReadTokens)
+		t.cacheWrite = saturatingAdd(t.cacheWrite, tot.CacheWriteTokens)
+		t.recordedCost += tot.RecordedCostUSD
 	}
 }
 
@@ -190,4 +289,7 @@ func (t *Tracker) Reset() {
 	t.prompt = 0
 	t.completion = 0
 	t.requests = 0
+	t.cacheRead = 0
+	t.cacheWrite = 0
+	t.recordedCost = 0
 }

@@ -2,9 +2,11 @@ package httpapi
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"embed"
 	"encoding/base64"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"io/fs"
@@ -28,11 +30,13 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/decision/policy"
 	"github.com/ali-shortcuts/nexaroute/internal/events"
 	"github.com/ali-shortcuts/nexaroute/internal/health"
+	"github.com/ali-shortcuts/nexaroute/internal/pricing"
 	"github.com/ali-shortcuts/nexaroute/internal/probe"
 	"github.com/ali-shortcuts/nexaroute/internal/providers"
 	"github.com/ali-shortcuts/nexaroute/internal/route"
 	"github.com/ali-shortcuts/nexaroute/internal/router"
 	"github.com/ali-shortcuts/nexaroute/internal/securitystore"
+	"github.com/ali-shortcuts/nexaroute/internal/telemetry"
 	"github.com/ali-shortcuts/nexaroute/internal/usage"
 )
 
@@ -40,26 +44,28 @@ import (
 var webFS embed.FS
 
 type Server struct {
-	applyMu         sync.Mutex
-	runtimeMu       sync.RWMutex
-	cfg             config.Config // effective runtime config (base + env overlay)
-	baseCfg         config.Config // durable file config, never contains runtime env overlays
-	configPath      string
-	reg             *providers.Registry
-	rt              *router.Router
-	hm              *health.Manager
-	bus             *events.Bus
-	probe           *probe.Engine
-	log             *log.Logger
-	requestSeq      atomic.Uint64
-	requestTotal    atomic.Uint64
-	configRevision  atomic.Uint64
-	configHistory   []config.Config
-	draining        atomic.Bool
-	inflight        atomic.Int64
-	overloadRejects atomic.Uint64
-	adminRL         sync.Mutex
-	adminBuckets    map[string]*adminBucket
+	applyMu           sync.Mutex
+	runtimeMu         sync.RWMutex
+	cfg               config.Config // effective runtime config (base + env overlay)
+	baseCfg           config.Config // durable file config, never contains runtime env overlays
+	configPath        string
+	reg               *providers.Registry
+	rt                *router.Router
+	hm                *health.Manager
+	bus               *events.Bus
+	probe             *probe.Engine
+	log               *log.Logger
+	requestSeq        atomic.Uint64
+	requestTotal      atomic.Uint64
+	configRevision    atomic.Uint64
+	telemetryExporter *telemetry.Exporter
+	configHistory     []config.Config
+	draining          atomic.Bool
+	inflight          atomic.Int64
+	overloadRejects   atomic.Uint64
+	adminRL           sync.Mutex
+	adminBuckets      map[string]*adminBucket
+	revealRL          revealLimiter
 	// Phase D: Decision plane
 	decisionRegistry       *decision.Registry
 	decisionOrchestrator   *decision.Orchestrator
@@ -67,8 +73,16 @@ type Server struct {
 	clientBuckets          map[string]*clientBucket
 	clientBucketGeneration uint64
 	respCache              *cache.Cache
+	semCache               *cache.SemanticCache
+	mcp                    *mcpBroker
+	mcpStatsMu             sync.Mutex
+	mcpStats               map[string]int64
 	cacheGeneration        uint64 // guarded by runtimeMu; scopes cache keys to a config snapshot
 	usage                  *usage.Tracker
+	budgets                *usage.BudgetLedger
+	bookMu                 sync.Mutex
+	bookCache              *pricing.Book
+	bookCacheRev           uint64
 	identityUsage          *usage.IdentityTracker
 	capStore               *compat.Store
 	routeResolver          *route.Resolver
@@ -197,9 +211,12 @@ func New(cfg config.Config, configPath string, reg *providers.Registry, rt *rout
 	}
 	s := &Server{
 		cfg: cfg, baseCfg: baseCfg, configPath: configPath, reg: reg, rt: rt, hm: hm, bus: bus, probe: pe, log: l,
+		mcp:             newMCPBroker(),
 		respCache:       cache.New(cfg.CacheTTL(), cfg.Cache.MaxEntries, int64(cfg.Cache.MaxBodyBytes)),
+		semCache:        newSemanticCache(cfg),
 		cacheGeneration: 1,
 		usage:           usage.New(),
+		budgets:         usage.NewBudgetLedger(),
 		identityUsage:   usage.NewIdentityTracker(),
 		capStore:        compat.NewStore(),
 		taskClassCounts: make(map[string]uint64, 32),
@@ -286,6 +303,16 @@ func (s *Server) currentConfig() config.Config {
 	return cloneConfig(s.cfg)
 }
 
+// newSemanticCache builds the semantic cache from config. Its TTL
+// falls back to the exact cache's TTL when not set independently.
+func newSemanticCache(cfg config.Config) *cache.SemanticCache {
+	ttl := cfg.CacheTTL()
+	if cfg.Cache.Semantic.TTLSeconds > 0 {
+		ttl = time.Duration(cfg.Cache.Semantic.TTLSeconds) * time.Second
+	}
+	return cache.NewSemantic(ttl, cfg.Cache.Semantic.Threshold, cfg.Cache.Semantic.MaxEntries, 0)
+}
+
 func (s *Server) cacheGenerationSnapshot() uint64 {
 	s.runtimeMu.RLock()
 	defer s.runtimeMu.RUnlock()
@@ -326,6 +353,10 @@ func cloneConfig(in config.Config) config.Config {
 		for claim, role := range in.Admin.OIDC.RoleMappings {
 			out.Admin.OIDC.RoleMappings[claim] = role
 		}
+	}
+	if in.Admin.AllowSecretReveal != nil {
+		reveal := *in.Admin.AllowSecretReveal
+		out.Admin.AllowSecretReveal = &reveal
 	}
 	out.ClientAuth.Keys = append([]string(nil), in.ClientAuth.Keys...)
 	out.ClientAuth.VirtualKeys = append([]config.VirtualKeyConfig(nil), in.ClientAuth.VirtualKeys...)
@@ -589,6 +620,7 @@ func (s *Server) applyConfigLocked(baseCfg config.Config) error {
 	// Cached responses must never outlive the topology that produced them:
 	// any config swap invalidates the exact-match cache wholesale.
 	s.respCache.Invalidate()
+	s.semCache.Invalidate()
 
 	changedHealth := changedDeploymentIDs(oldCfg, cfg)
 	oldProvidersByID := make(map[string]config.ProviderConfig, len(oldCfg.Providers))
@@ -871,9 +903,62 @@ func (s *Server) candidatesForRequirement(req router.Requirement, protocol strin
 	allCandidates := rt.Candidates(reqAll)
 	if resolver != nil {
 		filtered := resolver.AllFilteredCandidates(allCandidates, resolved)
-		return cfgCopy, filtered, &resolved, nil
+		return cfgCopy, applyRollout(cfgCopy, &resolved, req, filtered), &resolved, nil
 	}
 	return cfgCopy, allCandidates, &resolved, nil
+}
+
+// applyRollout implements route-profile canary rollout (M5-3).
+// Sessions are bucketed deterministically by their stable key
+// (session key, else selection key): the same key always lands in
+// the same arm, so a rollout never flaps a client between
+// deployments mid-conversation. When the bucket falls inside
+// canary_percent AND the canary deployment is already an eligible
+// candidate for this request, it is promoted to the front — the
+// remaining candidates stay as the fallback order. No key, no
+// canary configured, or an ineligible canary leaves the order
+// untouched: rollout can reorder eligibility, never create it.
+func applyRollout(cfg config.Config, resolved *route.ResolvedRoute, req router.Requirement, in []router.Scored) []router.Scored {
+	if resolved == nil || len(in) < 2 {
+		return in
+	}
+	var profile *config.RouteProfileConfig
+	for i := range cfg.RouteProfiles {
+		if cfg.RouteProfiles[i].ID == resolved.RouteProfileID {
+			profile = &cfg.RouteProfiles[i]
+			break
+		}
+	}
+	if profile == nil || profile.CanaryDeploymentID == "" || profile.CanaryPercent <= 0 {
+		return in
+	}
+	key := strings.TrimSpace(req.SessionKey)
+	if key == "" {
+		key = strings.TrimSpace(req.SelectionKey)
+	}
+	if key == "" {
+		return in
+	}
+	sum := sha256.Sum256([]byte("nexaroute-rollout\x00" + profile.ID + "\x00" + key))
+	bucket := int(binary.BigEndian.Uint64(sum[:8]) % 100)
+	if bucket >= profile.CanaryPercent {
+		return in
+	}
+	idx := -1
+	for i := range in {
+		if in[i].Deployment.ID == profile.CanaryDeploymentID {
+			idx = i
+			break
+		}
+	}
+	if idx <= 0 {
+		return in
+	}
+	out := make([]router.Scored, 0, len(in))
+	out = append(out, in[idx])
+	out = append(out, in[:idx]...)
+	out = append(out, in[idx+1:]...)
+	return out
 }
 
 func (s *Server) currentRouteCandidate(id string, req router.Requirement) (router.Scored, providers.Adapter, bool) {
@@ -904,9 +989,15 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/readyz", s.ready)
 	mux.HandleFunc("/metrics", s.metrics)
 	mux.HandleFunc("/v1/models", s.models)
+	mux.HandleFunc("/mcp", s.mcpGateway)
 	mux.HandleFunc("/v1/messages", s.anthropicMessages)
 	mux.HandleFunc("/v1/messages/count_tokens", s.countTokens)
 	mux.HandleFunc("/v1/chat/completions", s.openAIChat)
+	mux.HandleFunc("/v1/embeddings", s.mediaEmbeddings)
+	mux.HandleFunc("/v1/images/generations", s.mediaImages)
+	mux.HandleFunc("/v1/audio/speech", s.mediaSpeech)
+	mux.HandleFunc("/v1/audio/transcriptions", s.mediaTranscriptions)
+	mux.HandleFunc("/v1/rerank", s.mediaRerank)
 	mux.HandleFunc("/v1/responses", s.openAIResponses)
 
 	mux.HandleFunc("/admin/auth/login", s.authLogin)
@@ -966,7 +1057,7 @@ func isDataPlaneRequest(r *http.Request) bool {
 		return false
 	}
 	switch r.URL.Path {
-	case "/v1/messages", "/v1/messages/count_tokens", "/v1/chat/completions", "/v1/responses", "/v1/video/jobs":
+	case "/v1/messages", "/v1/messages/count_tokens", "/v1/chat/completions", "/v1/responses", "/v1/video/jobs", "/v1/embeddings", "/v1/images/generations", "/v1/audio/speech", "/v1/audio/transcriptions", "/v1/rerank":
 		return true
 	default:
 		return false
@@ -1065,6 +1156,9 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 		}
 		trace := newTraceContext(r.Header.Get("traceparent"))
 		r = r.WithContext(withTrace(r.Context(), trace))
+		if s.telemetryExporter != nil && dataPlaneOperation(r.URL.Path) != "" {
+			r = r.WithContext(withSpanRecord(r.Context(), &spanRecord{}))
+		}
 		r.Header.Set("traceparent", trace.Traceparent())
 		w.Header().Set("x-request-id", rid)
 		w.Header().Set("traceparent", trace.Traceparent())
@@ -1083,6 +1177,7 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 				}
 			}
 			duration := time.Since(start)
+			s.exportSpan(r, trace, start, duration, sw.status)
 			if s.log != nil && strings.HasPrefix(r.URL.Path, "/admin/api/") && (isStateChanging(r.Method) || sw.status == http.StatusForbidden) {
 				s.log.Printf("audit action method=%s path=%q actor=%s status=%d request_id=%s", r.Method, r.URL.Path, adminActor, sw.status, rid)
 			}

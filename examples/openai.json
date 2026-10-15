@@ -1,0 +1,16 @@
+{
+  "listen": "127.0.0.1:8080",
+  "providers": [
+    {
+      "id": "openai",
+      "name": "OpenAI",
+      "type": "openai_compatible",
+      "base_url": "https://api.openai.com",
+      "api_key_env": "OPENAI_API_KEY",
+      "enabled": true,
+      "models": [
+        {"id": "gpt-4o-mini", "model": "gpt-4o-mini", "enabled": true, "capabilities": {"streaming": true, "tools": true, "vision": true}}
+      ]
+    }
+  ]
+}
