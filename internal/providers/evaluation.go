@@ -220,6 +220,11 @@ func LiveComplete(ctx context.Context, a Adapter, model, prompt string, maxOutpu
 func (a *httpAdapter) liveCompletionRequest(model, prompt string, maxOutputTokens int) ([]byte, string, error) {
 	var body map[string]any
 	switch a.p.Type {
+	case "bedrock":
+		body = map[string]any{
+			"messages":        []map[string]any{{"role": "user", "content": []map[string]any{{"text": prompt}}}},
+			"inferenceConfig": map[string]any{"maxTokens": maxOutputTokens},
+		}
 	case "gemini":
 		body = map[string]any{
 			"contents":         []map[string]any{{"role": "user", "parts": []map[string]any{{"text": prompt}}}},
@@ -247,6 +252,8 @@ func (a *httpAdapter) liveCompletionRequest(model, prompt string, maxOutputToken
 		return nil, "", fmt.Errorf("live completion request encode: %w", err)
 	}
 	switch a.p.Type {
+	case "bedrock":
+		return b, bedrockModelPath(model, false), nil
 	case "gemini":
 		return b, a.geminiModelPath(model, false), nil
 	case "openai_responses":
@@ -315,6 +322,29 @@ func decodeLiveCompletion(kind string, data []byte) (string, int, int) {
 		}
 		if raw, ok := root["usage"]; ok {
 			_ = json.Unmarshal(raw, &usage)
+		}
+		return text, usage.InputTokens, usage.OutputTokens
+	case "bedrock":
+		var out struct {
+			Message struct {
+				Content []struct {
+					Text string `json:"text"`
+				} `json:"content"`
+			} `json:"message"`
+		}
+		var usage struct {
+			InputTokens  int `json:"inputTokens"`
+			OutputTokens int `json:"outputTokens"`
+		}
+		if raw, ok := root["output"]; ok {
+			_ = json.Unmarshal(raw, &out)
+		}
+		if raw, ok := root["usage"]; ok {
+			_ = json.Unmarshal(raw, &usage)
+		}
+		var text string
+		for _, c := range out.Message.Content {
+			text += c.Text
 		}
 		return text, usage.InputTokens, usage.OutputTokens
 	case "gemini":

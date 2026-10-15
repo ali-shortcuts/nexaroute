@@ -303,7 +303,7 @@ func (s *Server) buildOpenAIAttempt(cand router.Scored, req router.Requirement, 
 	bundle := hedgeAttemptBundle{c: fresh, a: a}
 	var err error
 	switch fresh.Deployment.ProviderType {
-	case "gemini", "openai_responses":
+	case "gemini", "openai_responses", "bedrock":
 		canReq := canonical.DecodeOpenAIChatRequest(in, in.Model)
 		bundle, ok = s.finishCanonicalAttempt(bundle, canReq)
 		if !ok {
@@ -343,7 +343,7 @@ func (s *Server) buildAnthropicAttempt(cand router.Scored, req router.Requiremen
 	bundle := hedgeAttemptBundle{c: fresh, a: a}
 	var err error
 	switch fresh.Deployment.ProviderType {
-	case "gemini", "openai_responses":
+	case "gemini", "openai_responses", "bedrock":
 		canReq, derr := canonical.DecodeAnthropicRequest(in, in.Model)
 		if derr != nil {
 			bundle.buildErr = boundedProtocolMappingError(derr)

@@ -339,13 +339,13 @@ func DecodeBedrockStreamChunk(data string) ([]StreamEvent, bool, error) {
 		}
 		return nil, false, nil
 	case "contentBlockStop":
-		var p struct {
-			ContentBlockIndex int `json:"contentBlockIndex"`
-		}
-		if err := json.Unmarshal(env.Payload, &p); err != nil {
-			return nil, false, fmt.Errorf("invalid Bedrock contentBlockStop: %w", err)
-		}
-		return []StreamEvent{{Type: StreamToolEnd, ToolIndex: p.ContentBlockIndex}}, false, nil
+		// Deliberately no event: the frame does not say whether the
+		// block was text or a tool call, and this decoder is stateless
+		// per chunk — emitting StreamToolEnd for a TEXT block would
+		// corrupt the client encoder's tool state (arguments-empty
+		// validation failure, observed in testing). Client encoders
+		// finalize open tool blocks at StreamEnd (messageStop).
+		return nil, false, nil
 	case "messageStop":
 		var p struct {
 			StopReason string `json:"stopReason"`
@@ -376,4 +376,31 @@ func DecodeBedrockStreamChunk(data string) ([]StreamEvent, bool, error) {
 		}
 		return nil, false, nil
 	}
+}
+
+// BedrockModelPath builds the Converse model-in-path endpoint. The
+// model id is escaped with the SigV4 unreserved rule (only
+// A-Z a-z 0-9 - . _ ~ pass through) so the path on the wire is
+// byte-identical to the path the SigV4 signer canonicalizes —
+// inference-profile ids contain ':' and ARN forms contain '/',
+// both of which must be percent-encoded in a single path segment.
+func BedrockModelPath(model string, stream bool) string {
+	if stream {
+		return "/model/" + bedrockEscapeSegment(model) + "/converse-stream"
+	}
+	return "/model/" + bedrockEscapeSegment(model) + "/converse"
+}
+
+func bedrockEscapeSegment(segment string) string {
+	var b strings.Builder
+	for i := 0; i < len(segment); i++ {
+		c := segment[i]
+		if c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9' ||
+			c == '-' || c == '.' || c == '_' || c == '~' {
+			b.WriteByte(c)
+		} else {
+			fmt.Fprintf(&b, "%%%02X", c)
+		}
+	}
+	return b.String()
 }
