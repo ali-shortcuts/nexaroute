@@ -1,0 +1,133 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "nexaroute.fullname" . }}
+  labels:
+    {{- include "nexaroute.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  # State is on a ReadWriteOnce volume (and per-replica bbolt stores);
+  # never run two pods against one claim during an upgrade.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "nexaroute.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "nexaroute.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "nexaroute.fullname" . }}
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: gateway
+          image: "{{ .Values.image.repository }}:{{ include "nexaroute.imageTag" . }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - -no-browser
+            - -config
+            - /config/config.json
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: NEXAROUTE_LISTEN
+              value: "0.0.0.0:8080"
+            - name: NEXAROUTE_ADMIN_BIND_LOCAL_ONLY
+              value: "false"
+            {{- if .Values.controlPlane.postgresDSN.secretName }}
+            - name: NEXAROUTE_CONTROL_PLANE_PG_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.controlPlane.postgresDSN.secretName }}
+                  key: {{ .Values.controlPlane.postgresDSN.secretKey }}
+            {{- end }}
+            {{- if .Values.controlPlane.redisURL.secretName }}
+            - name: NEXAROUTE_CONTROL_PLANE_REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.controlPlane.redisURL.secretName }}
+                  key: {{ .Values.controlPlane.redisURL.secretKey }}
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: state
+              mountPath: /config
+            - name: config
+              mountPath: /config/config.json
+              subPath: config.json
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: state
+          {{- if or .Values.persistence.enabled .Values.persistence.existingClaim }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.existingClaim | default (include "nexaroute.fullname" .) }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: config
+          secret:
+            secretName: {{ include "nexaroute.configSecretName" . }}
+            items:
+              - key: config.json
+                path: config.json
+        - name: tmp
+          emptyDir: {}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

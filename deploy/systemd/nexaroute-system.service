@@ -1,0 +1,56 @@
+[Unit]
+Description=NexaRoute Intelligent Multi-LLM Gateway
+Documentation=https://github.com/ali-shortcuts/nexaroute
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=nexaroute
+Group=nexaroute
+ExecStart=/usr/local/bin/nexaroute -no-browser -config /etc/nexaroute/config.json
+Restart=on-failure
+RestartSec=2
+UMask=0077
+
+# Filesystem layout: configuration in /etc/nexaroute (read-only to the
+# service), all writable state (master key, security store, logs) under
+# the systemd-managed state directory.
+ConfigurationDirectory=nexaroute
+ConfigurationDirectoryMode=0700
+StateDirectory=nexaroute
+StateDirectoryMode=0700
+WorkingDirectory=/var/lib/nexaroute
+Environment=NEXAROUTE_CONFIG=/etc/nexaroute/config.json
+ReadWritePaths=/var/lib/nexaroute /etc/nexaroute
+# The auto-managed master key lives next to the config file, so
+# /etc/nexaroute must stay writable by the service user only.
+
+# Sandboxing.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+RemoveIPC=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LogRateLimitIntervalSec=1min
+LogRateLimitBurst=30
+
+[Install]
+WantedBy=multi-user.target

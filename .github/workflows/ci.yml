@@ -173,3 +173,61 @@ jobs:
         env:
           NEXAROUTE_TEST_REDIS_URL: "redis://127.0.0.1:6379/15"
         run: go test -tags integration ./internal/controlplane/ -run 'TestRedisIntegration' -count=1 -v
+
+  container:
+    # Deployment evidence (M4-4): the distroless image builds for both
+    # architectures on every run (build only — publishing stays with
+    # the release workflow), the amd64 image smoke-runs `--version`,
+    # and the Helm chart lints + renders with its hardened posture
+    # asserted. No cluster is involved; live installs stay UNVERIFIED
+    # until exercised on one.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Build image (amd64 + arm64, no push)
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: false
+
+      - name: Build and smoke-run the amd64 image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          tags: nexaroute:ci
+          push: false
+
+      - name: Smoke run prints the version and runs as nonroot
+        run: |
+          docker run --rm --entrypoint /nexaroute nexaroute:ci --version
+          image_user="$(docker image inspect nexaroute:ci --format '{{.Config.User}}')"
+          test -n "$image_user" && test "$image_user" != "root" && test "$image_user" != "0"
+
+      - name: Set up Helm
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
+        with:
+          version: v3.19.0
+
+      - name: Lint and render the Helm chart, assert the hardened posture
+        run: |
+          helm lint deploy/helm/nexaroute
+          helm template rel deploy/helm/nexaroute > /tmp/rendered.yaml
+          grep -q "readOnlyRootFilesystem: true" /tmp/rendered.yaml
+          grep -q "allowPrivilegeEscalation: false" /tmp/rendered.yaml
+          grep -q "runAsNonRoot: true" /tmp/rendered.yaml
+          grep -q "path: /healthz" /tmp/rendered.yaml
+          grep -q "path: /readyz" /tmp/rendered.yaml
+          grep -q "automountServiceAccountToken: false" /tmp/rendered.yaml
+          if grep -qE "value: (redis|rediss|postgres)://" /tmp/rendered.yaml; then
+            echo "rendered chart contains a plaintext database URL" >&2
+            exit 1
+          fi

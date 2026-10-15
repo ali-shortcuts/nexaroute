@@ -1,0 +1,16 @@
+NexaRoute is deployed as {{ include "nexaroute.fullname" . }}.
+
+State (config-adjacent master key, session/audit store) lives on the
+/config volume. Back it up with the gateway's own tooling from a shell
+with cluster access:
+
+  kubectl exec deploy/{{ include "nexaroute.fullname" . }} -- /nexaroute backup --config /config/config.json --out /config/backup.tar
+
+Verify the installation:
+
+  kubectl exec deploy/{{ include "nexaroute.fullname" . }} -- /nexaroute doctor --config /config/config.json
+
+Note: `kubectl exec` runs the gateway binary inside the distroless
+image (no shell needed). Port-forward the API with:
+
+  kubectl port-forward svc/{{ include "nexaroute.fullname" . }} 8080:{{ .Values.service.port }}
