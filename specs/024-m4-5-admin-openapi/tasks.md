@@ -5,4 +5,4 @@
 - [x] T3 Contract test: live probes (auth envelope, CSRF flow, audit limit)
 - [x] T4 Trim spec where probes disagree with the matrix
 - [x] T5 Docs: README/docs index link + UNRELEASED (no checklist edit)
-- [ ] T6 PR checks green; stop for owner merge decision
+- [x] T6 PR checks green; stop for owner merge decision
