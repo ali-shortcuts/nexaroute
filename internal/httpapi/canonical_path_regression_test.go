@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/ali-shortcuts/nexaroute/internal/config"
+	"github.com/ali-shortcuts/nexaroute/internal/protocol/canonical"
 )
 
 type closeTrackingBody struct {
@@ -113,9 +114,9 @@ func TestCanonicalStreamUsageRecordedOnceAfterSuccessfulTerminal(t *testing.T) {
 	calls := 0
 	gotInput, gotOutput := 0, 0
 	err := (&Server{}).canonicalStreamPump(rr, resp, "anthropic", "openai_chat", "client-model", "req-usage", nil,
-		func(input, output int) {
+		func(u canonical.Usage) {
 			calls++
-			gotInput, gotOutput = input, output
+			gotInput, gotOutput = u.InputTokens, u.OutputTokens
 		})
 	if err != nil {
 		t.Fatalf("canonical stream failed: %v", err)

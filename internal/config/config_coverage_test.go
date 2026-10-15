@@ -336,3 +336,82 @@ func TestCoverageConfigLoadAndPersistenceSafetyBranches(t *testing.T) {
 		t.Fatal("chain step marshal unexpectedly empty")
 	}
 }
+
+func TestBedrockProviderValidationAndDefaults(t *testing.T) {
+	mk := func(edit func(*ProviderConfig)) Config {
+		p := validCoverageProvider()
+		p.ID = "br"
+		p.Type = "bedrock"
+		p.BaseURL = "https://bedrock-runtime.us-east-1.amazonaws.com"
+		edit(&p)
+		c := Default()
+		c.Providers = []ProviderConfig{p}
+		c.ApplyDefaults()
+		return c
+	}
+	if err := mk(func(p *ProviderConfig) {}).Validate(); err == nil ||
+		!strings.Contains(err.Error(), "secret_key_env") {
+		t.Fatalf("bedrock without secret_key_env must fail: err=%v", err)
+	}
+	c := mk(func(p *ProviderConfig) { p.SecretKeyEnv = "AWS_SECRET_ACCESS_KEY" })
+	if err := c.Validate(); err != nil {
+		t.Fatalf("bedrock with secret_key_env must validate: %v", err)
+	}
+	if got := c.Providers[0].AWSRegion; got != "us-east-1" {
+		t.Fatalf("aws_region default = %q, want us-east-1", got)
+	}
+	if err := mk(func(p *ProviderConfig) { p.SecretKeyEnv = "not a name!" }).Validate(); err == nil {
+		t.Fatal("invalid secret_key_env name must fail")
+	}
+	if err := mk(func(p *ProviderConfig) { p.SecretKeyEnv = "AWS_SECRET_ACCESS_KEY"; p.SessionTokenEnv = "bad name" }).Validate(); err == nil {
+		t.Fatal("invalid session_token_env name must fail")
+	}
+}
+
+func TestCloudProviderValidationAndDefaults(t *testing.T) {
+	template := validCoverageProvider()
+	mk := func(edit func(*ProviderConfig)) Config {
+		c := Default()
+		p := template
+		edit(&p)
+		c.Providers = []ProviderConfig{p}
+		c.ApplyDefaults()
+		return c
+	}
+	vertex := func(p *ProviderConfig) {
+		p.Type = "vertex"
+		p.BaseURL = "https://us-central1-aiplatform.googleapis.com"
+		p.VertexProject = ""
+		p.Models = []ModelConfig{{ID: "m", Model: "gemini-2.0-flash", Enabled: true}}
+	}
+	// Vertex without a project is rejected.
+	if err := mk(vertex).Validate(); err == nil || !strings.Contains(err.Error(), "vertex_project is required") {
+		t.Fatalf("vertex without project: err=%v", err)
+	}
+	// With a project it validates, and location/auth defaults apply.
+	c := mk(func(p *ProviderConfig) { vertex(p); p.VertexProject = "my-project" })
+	if err := c.Validate(); err != nil {
+		t.Fatalf("vertex with project: %v", err)
+	}
+	p := c.Providers[0]
+	if p.VertexLocation != "us-central1" {
+		t.Errorf("vertex location default=%q", p.VertexLocation)
+	}
+	if p.AuthMode != "bearer" {
+		t.Errorf("vertex auth default=%q", p.AuthMode)
+	}
+	// Azure defaults: api-key auth + a pinned default API version.
+	c2 := mk(func(p *ProviderConfig) {
+		p.Type = "azure_openai"
+		p.BaseURL = "https://res.openai.azure.com"
+		p.AuthMode = ""
+		p.APIVersion = ""
+		p.Models = []ModelConfig{{ID: "m", Model: "dep", Enabled: true}}
+	})
+	if err := c2.Validate(); err != nil {
+		t.Fatalf("azure validate: %v", err)
+	}
+	if c2.Providers[0].AuthMode != "api-key" || c2.Providers[0].APIVersion != "2024-10-21" {
+		t.Errorf("azure defaults: auth=%q version=%q", c2.Providers[0].AuthMode, c2.Providers[0].APIVersion)
+	}
+}

@@ -1,0 +1,15 @@
+{
+  "listen": "127.0.0.1:8080",
+  "providers": [
+    {
+      "id": "ollama",
+      "name": "Local Ollama",
+      "type": "openai_compatible",
+      "base_url": "http://127.0.0.1:11434",
+      "enabled": true,
+      "models": [
+        {"id": "llama3.1", "model": "llama3.1", "enabled": true, "capabilities": {"streaming": true, "tools": true}}
+      ]
+    }
+  ]
+}
