@@ -16,3 +16,4 @@ __pycache__/
 
 # Bare `go build ./cmd/gateway` output at repo root
 /gateway
+scripts/a11y/node_modules/
