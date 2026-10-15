@@ -30,13 +30,25 @@ upstream paths are provider fields with OpenAI defaults:
 `embeddings_path`, `images_path`, `speech_path`,
 `transcriptions_path`, `rerank_path`.
 
-Deployments of other provider types are skipped. When a model is
+**`azure_openai`** deployments use native per-deployment addressing,
+mirroring chat (`azureDeploymentPath`): the deployment name is the
+upstream model and `api_version` (default `2024-10-21`) rides in the
+query — `/openai/deployments/{deployment}/embeddings`,
+`/images/generations`, `/audio/speech`, `/audio/transcriptions`.
+Azure has no rerank equivalent, so rerank via Azure is refused. The
+OpenAI wire shape is preserved byte-for-byte on both families.
+
+Deployments of other provider types (`vertex`, `bedrock`, `gemini`,
+`anthropic_compatible`, `openai_responses`) are skipped: their native
+media wires (Gemini `embedContent`, Bedrock model-specific
+`InvokeModel` JSON) are not the OpenAI shape this passthrough
+preserves, so forwarding would mangle the payload. When a model is
 served only by unsupported types, the gateway answers
-`400 media endpoints are supported only for openai_compatible providers in this release`
-rather than sending a mangled payload upstream. Per-cloud media
-addressing — Azure deployment URLs (with M5-1a), Bedrock InvokeModel
-translation, Gemini embedContent — are follow-ups at the
-`mediaUpstreamPath` seam in `internal/httpapi/media.go`.
+`400 media endpoints are supported only for openai_compatible and azure_openai providers in this release`
+rather than guessing a URL shape.
+
+Live Azure/Vertex/Bedrock media behavior is UNVERIFIED (no live cloud
+calls in CI); addressing is pinned by fixture/config tests.
 
 ## Limits
 
