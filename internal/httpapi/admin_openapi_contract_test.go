@@ -41,15 +41,15 @@ type openAPIRef struct {
 }
 
 type openAPISchemaProperty struct {
-	Type    string      `yaml:"type"`
-	Format  string      `yaml:"format"`
-	Minimum float64     `yaml:"minimum"`
-	Items   openAPIRef  `yaml:"items"`
+	Type    string     `yaml:"type"`
+	Format  string     `yaml:"format"`
+	Minimum float64    `yaml:"minimum"`
+	Items   openAPIRef `yaml:"items"`
 }
 
 type openAPISchema struct {
-	Type       string                         `yaml:"type"`
-	Required   []string                       `yaml:"required"`
+	Type       string                           `yaml:"type"`
+	Required   []string                         `yaml:"required"`
 	Properties map[string]openAPISchemaProperty `yaml:"properties"`
 }
 
@@ -67,7 +67,7 @@ type openAPIOperation struct {
 }
 
 type openAPIDoc struct {
-	Paths map[string]map[string]*openAPIOperation `yaml:"paths"`
+	Paths      map[string]map[string]*openAPIOperation `yaml:"paths"`
 	Components struct {
 		Schemas map[string]openAPISchema `yaml:"schemas"`
 	} `yaml:"components"`
