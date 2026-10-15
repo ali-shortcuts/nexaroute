@@ -79,6 +79,26 @@ the connection strings themselves are never written to JSON:
 `state_path` values resolve against the config directory. `memory` is for
 tests only. DSNs and URLs are never stored or logged.
 
+## Optional OTLP span export
+
+Span export is disabled by default. When `telemetry.otlp_endpoint_env`
+names an environment variable holding the full OTLP/HTTP traces URL
+(the same env-name-only pattern as the control-plane backends), the
+gateway exports one span per data-plane LLM request
+(`/v1/messages`, `/v1/messages/count_tokens`, `/v1/chat/completions`,
+`/v1/responses`) with GenAI semantic attributes. An invalid URL fails
+startup. Spans never contain prompts, completions, keys or client
+identities. See [OBSERVABILITY.md](OBSERVABILITY.md).
+
+```json
+{
+  "telemetry": {
+    "otlp_endpoint_env": "NEXAROUTE_OTLP_ENDPOINT",
+    "service_name": "nexaroute"
+  }
+}
+```
+
 `postgres` is fully wired (pgx driver): the DSN is read only from the
 environment variable named by `postgres_dsn_env`; startup fails closed
 with a secret-safe error when the variable is missing or the database is

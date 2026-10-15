@@ -5,6 +5,7 @@ import (
 )
 
 func (s *Server) recordUsage(r *http.Request, deployment string, input, output int64) {
+	noteSpanUsage(r.Context(), deployment, input, output)
 	s.usage.Record(deployment, input, output)
 	// Reconcile the request's TPM reservation with the actual usage the
 	// provider reported (M3-8). Requests that never reach a usage

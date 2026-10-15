@@ -201,6 +201,7 @@ type Config struct {
 	Cache                  CacheConfig                  `json:"cache"`
 	ClientAuth             ClientAuthConfig             `json:"client_auth"`
 	ControlPlane           ControlPlaneConfig           `json:"control_plane,omitempty"`
+	Telemetry              TelemetryConfig              `json:"telemetry,omitempty"`
 	Guardrails             GuardrailConfig              `json:"guardrails,omitempty"`
 	Evaluation             EvaluationConfig             `json:"evaluation,omitempty"`
 	Video                  VideoConfig                  `json:"video,omitempty"`
@@ -453,6 +454,15 @@ type ControlPlaneConfig struct {
 	IdentityFailure  string `json:"identity_failure,omitempty"`
 	BudgetFailure    string `json:"budget_failure,omitempty"`
 	RateLimitFailure string `json:"rate_limit_failure,omitempty"`
+}
+
+// TelemetryConfig enables the optional OTLP/HTTP span exporter (M4-6).
+// Like the control-plane backends, the collector URL is never stored in
+// durable config; only the name of the environment variable holding it
+// is persisted. Unset or empty means the exporter is disabled.
+type TelemetryConfig struct {
+	OTLPEndpointEnv string `json:"otlp_endpoint_env,omitempty"`
+	ServiceName     string `json:"service_name,omitempty"`
 }
 
 type GuardrailConfig struct {
@@ -1581,6 +1591,12 @@ func (c Config) Validate() error {
 		if c.ClientAuth.TPM < 0 || c.ClientAuth.TPM > 1000000000 {
 			return errors.New("client_auth.tpm must be between 0 and 1000000000")
 		}
+	}
+	if c.Telemetry.OTLPEndpointEnv != "" && !validEnvName(c.Telemetry.OTLPEndpointEnv) {
+		return errors.New("telemetry.otlp_endpoint_env must be a valid environment variable name")
+	}
+	if len(c.Telemetry.ServiceName) > 128 {
+		return errors.New("telemetry.service_name must be at most 128 characters")
 	}
 	if c.ControlPlane.Enabled {
 		switch c.ControlPlane.Backend {
