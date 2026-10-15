@@ -2,7 +2,8 @@
 // list of price versions, each effective from a timestamp, mapping
 // deployments ("provider/model") to per-million-token rates.
 // Costs are computed when usage is RECORDED, under the version
-// active at that moment, so a price change never reprices history.
+// active at that moment, so a price change never reprices
+// recorded costs.
 package pricing
 
 import (

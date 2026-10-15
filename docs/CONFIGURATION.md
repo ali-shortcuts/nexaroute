@@ -489,8 +489,11 @@ The resulting **effective remaining** values feed quota pressure. This is intent
 A versioned price book overrides model prices for both cost-aware
 routing and spend accounting. Costs are computed **when usage is
 recorded**, under the version active at that moment — a later
-price change never reprices history, and the usage snapshot
-attributes spend per version (`cost_by_version_usd`).
+price change never reprices recorded costs, and the usage snapshot
+attributes spend per version (`cost_by_version_usd`). Usage without
+a recorded cost is estimated from model-config prices (see the
+fallback below), and those estimates can change when the fallback
+rates change.
 
 ```yaml
 pricing:
