@@ -382,3 +382,26 @@ func TestGeminiProbeVerdictFixtures(t *testing.T) {
 		t.Fatalf("malformed verdict=%v want unknown", v)
 	}
 }
+
+// TestGeminiRepairNeverStripsSystemInstructionViaSystemMessageAlias is a
+// regression test for PR #383 review finding B1: an upstream rejection of
+// the parameter name "system_message" (which parameterFromBody captures
+// verbatim) used to resolve through geminiTopKeyForParam to "systemInstruction"
+// and delete the semantics-critical field while the repair reported success.
+// The never-strip guard must reject this repair and leave systemInstruction
+// intact.
+func TestGeminiRepairNeverStripsSystemInstructionViaSystemMessageAlias(t *testing.T) {
+	payload := []byte(`{"model":"m","systemInstruction":{"parts":[{"text":"be nice"}]},"contents":[{"role":"user","parts":[{"text":"hi"}]}]}`)
+	cls := Classified{Class: ClassUnsupportedParameter, Parameter: "system_message", CapabilityFailure: true}
+	repaired, plan, ok := Repair(cls, payload, Dialects()[DialectGemini], RequirementProfile{})
+	if ok {
+		t.Fatalf("expected no repair for system_message alias of systemInstruction, got plan %+v applied to %s", plan.Rules, repaired)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(repaired, &m); err != nil {
+		t.Fatal(err)
+	}
+	if _, has := m["systemInstruction"]; !has {
+		t.Fatalf("systemInstruction was stripped by a system_message rejection: %s", repaired)
+	}
+}

@@ -584,7 +584,7 @@ func planGeminiRepair(cls Classified, payload map[string]any, req RequirementPro
 		}
 		if paramLower != "" && !excludeFromParameter[paramLower] {
 			switch paramLower {
-			case "tools", "contents", "model", "stream", "systeminstruction", "system":
+			case "tools", "contents", "model", "stream", "systeminstruction", "system", "system_message":
 				return plan, false
 			case "toolconfig":
 				if req.NeedsTool {
