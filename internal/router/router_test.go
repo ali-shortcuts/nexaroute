@@ -588,3 +588,30 @@ func TestCostAwareAffinityCannotOverrideHigherPriority(t *testing.T) {
 		t.Fatalf("lower-priority affinity pin overrode priority: %#v", got)
 	}
 }
+
+func TestCostAwareUsesPriceBookOverModelPrices(t *testing.T) {
+	// Model prices say "cheap" is cheaper; the ACTIVE price-book
+	// version reverses it (M5-6: the book governs routing prices).
+	cfg := config.Default()
+	cfg.Routing.Strategy = "cost_aware"
+	cfg.Routing.SessionAffinity = false
+	cfg.Providers = []config.ProviderConfig{{ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "http://x", Enabled: true, Models: []config.ModelConfig{
+		{ID: "expensive", Model: "expensive", Enabled: true, Priority: 0, Weight: 5, InputCostPerMTok: 10, OutputCostPerMTok: 30},
+		{ID: "cheap", Model: "cheap", Enabled: true, Priority: 0, Weight: 1, InputCostPerMTok: 1, OutputCostPerMTok: 2},
+	}}}
+	cfg.Pricing.Versions = []config.PriceVersionConfig{{
+		Version: "book-1", EffectiveFrom: "2020-01-01T00:00:00Z",
+		Prices: map[string]config.PriceEntryConfig{
+			"p/expensive": {InputPerMTok: 0.1, OutputPerMTok: 0.2},
+			"p/cheap":     {InputPerMTok: 50, OutputPerMTok: 60},
+		},
+	}}
+	h := health.New(5, time.Hour)
+	h.RecordSuccess("p/expensive", time.Millisecond)
+	h.RecordSuccess("p/cheap", time.Millisecond)
+	r := New(cfg, h)
+	got := r.Candidates(Requirement{Model: "auto", EstimatedInputTokens: 10_000, MaxOutputTokens: 2_000})
+	if len(got) != 2 || got[0].Deployment.ID != "p/expensive" {
+		t.Fatalf("price book did not govern cost-aware order: %#v", got)
+	}
+}

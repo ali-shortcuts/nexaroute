@@ -210,13 +210,32 @@ Before changing a backend, copy the current state file to a protected backup:
 install -m 0600 "$CONFIG.controlplane.json" "$BACKUP_DIR/controlplane.json"
 ```
 
-Set `control_plane.migration_dry_run=true` for a startup validation without a
-write. To roll back a failed local migration, stop the gateway, restore the
-validated backup to the configured state path with mode `0600`, run
-`config validate` and restart. A partial temp file is not a committed state;
-never delete the last valid backup until the replacement has been verified.
-Postgres and Redis adapters are present as contracts but their live runtime
-client/driver integration is deployment-dependent and remains **unverified**.
+Set `control_plane.migration_dry_run=true` for startup validation without a
+state write. For Redis this means only a bounded connectivity `PING`: dry-run
+does not read, initialize, or mutate a snapshot and does not validate the
+deployment's persistence or recovery configuration.
+
+Redis stores each namespace in a hash under
+`nexaroute:control:snapshot:<namespace>` with no expiration. Lua scripts apply
+revision checks atomically on the Redis server executing the script; they do
+not promise multi-primary consistency or cross-replica safety. A successful
+connection is not a durability guarantee. Configure, monitor, and test AOF
+and/or RDB persistence, durable storage, replication/failover, and backup/
+restore according to the deployment's recovery objectives. An acknowledged
+write may still be lost during a Redis failure or promotion depending on that
+configuration.
+
+The PostgreSQL and Redis control-plane clients are wired and have disposable-
+service integration coverage. These tests verify adapter behavior, not a
+deployment's recovery guarantees. Store switching does not automatically copy
+or convert state: preserve the previous backend and its protected backup until
+the destination state is verified. To roll back to the local file backend,
+stop the gateway, restore the validated file backup to the configured state
+path with mode `0600`, set `control_plane.backend` to `file`, run
+`config validate`, and restart. A partial temp file is not a committed state;
+never delete the last valid backup until the replacement has been verified. The
+Redis-backed admin security-store adapter and cross-replica breaker
+synchronization remain outside this control-plane implementation.
 
 ## 5. Admin surface, events, and logs
 
