@@ -68,7 +68,7 @@ type exportRequest struct {
 }
 
 type resourceSpans struct {
-	Resource  resource    `json:"resource"`
+	Resource   resource    `json:"resource"`
 	ScopeSpans []scopeSpan `json:"scopeSpans"`
 }
 
