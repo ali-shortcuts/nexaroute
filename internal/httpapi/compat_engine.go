@@ -520,9 +520,22 @@ func (s *Server) finishCanonicalAttempt(bundle hedgeAttemptBundle, canReq canoni
 		}
 	case "gemini":
 		payload, _, err = canonical.EncodeGeminiRequest(canReq, bundle.c.Deployment.Model)
-		bundle.path = "/v1beta/models/" + strings.TrimPrefix(bundle.c.Deployment.Model, "models/") + ":streamGenerateContent?alt=sse"
-		if !canReq.Stream {
-			bundle.path = "/v1beta/models/" + strings.TrimPrefix(bundle.c.Deployment.Model, "models/") + ":generateContent"
+		if p.Type == "vertex" {
+			location := p.VertexLocation
+			if location == "" {
+				location = "us-central1"
+			}
+			bundle.path = "/v1/projects/" + p.VertexProject + "/locations/" + location +
+				"/publishers/google/models/" + strings.TrimPrefix(bundle.c.Deployment.Model, "models/") + ":streamGenerateContent?alt=sse"
+			if !canReq.Stream {
+				bundle.path = "/v1/projects/" + p.VertexProject + "/locations/" + location +
+					"/publishers/google/models/" + strings.TrimPrefix(bundle.c.Deployment.Model, "models/") + ":generateContent"
+			}
+		} else {
+			bundle.path = "/v1beta/models/" + strings.TrimPrefix(bundle.c.Deployment.Model, "models/") + ":streamGenerateContent?alt=sse"
+			if !canReq.Stream {
+				bundle.path = "/v1beta/models/" + strings.TrimPrefix(bundle.c.Deployment.Model, "models/") + ":generateContent"
+			}
 		}
 	case "openai_responses":
 		payload, err = canonical.EncodeResponsesRequest(canReq, bundle.c.Deployment.Model)
@@ -535,6 +548,13 @@ func (s *Server) finishCanonicalAttempt(bundle hedgeAttemptBundle, canReq canoni
 		oai, err = canonical.EncodeOpenAIChatRequest(canReq, bundle.c.Deployment.Model, canReq.Stream)
 		if err == nil {
 			payload, err = json.Marshal(oai)
+		}
+		if p.Type == "azure_openai" {
+			version := p.APIVersion
+			if version == "" {
+				version = "2024-10-21"
+			}
+			bundle.path = "/openai/deployments/" + bundle.c.Deployment.Model + "/chat/completions?api-version=" + version
 		}
 	}
 	if err != nil {

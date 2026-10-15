@@ -550,14 +550,14 @@ type DataHandlingConfig struct {
 type ProviderConfig struct {
 	ID             string             `json:"id"`
 	Name           string             `json:"name"`
-	Type           string             `json:"type"`              // openai_compatible | anthropic_compatible | gemini | openai_responses
+	Type           string             `json:"type"`              // openai_compatible | anthropic_compatible | gemini | openai_responses | azure_openai | vertex
 	Dialect        string             `json:"dialect,omitempty"` // optional dialect override (see compat.Dialects)
 	BaseURL        string             `json:"base_url"`
 	DataHandling   DataHandlingConfig `json:"data_handling,omitempty"`
 	APIKey         string             `json:"api_key,omitempty"`
 	APIKeyEnv      string             `json:"api_key_env,omitempty"`
 	Credentials    []CredentialConfig `json:"credentials,omitempty"`
-	AuthMode       string             `json:"auth_mode,omitempty"` // bearer | x-api-key | x-goog-api-key | none
+	AuthMode       string             `json:"auth_mode,omitempty"` // bearer | x-api-key | x-goog-api-key | api-key | none
 	Headers        map[string]string  `json:"headers,omitempty"`
 	ForwardHeaders []string           `json:"forward_headers"`
 	ProxyURL       string             `json:"proxy_url,omitempty"`
@@ -568,7 +568,13 @@ type ProviderConfig struct {
 	resolvedEgressDenyCIDRs  []string
 	resolvedEgressAllowHosts []string
 	resolvedEgressAllowCIDRs []string
-	ChatPath                 string        `json:"chat_path,omitempty"`
+	// Azure OpenAI: API version query value (default 2024-10-21).
+	APIVersion string `json:"api_version,omitempty"`
+	// Vertex AI: GCP project (required for type vertex) and location
+	// (default us-central1).
+	VertexProject  string `json:"vertex_project,omitempty"`
+	VertexLocation string `json:"vertex_location,omitempty"`
+	ChatPath       string `json:"chat_path,omitempty"`
 	MessagesPath             string        `json:"messages_path,omitempty"`
 	ModelsPath               string        `json:"models_path,omitempty"`
 	CountTokensPath          string        `json:"count_tokens_path,omitempty"`
@@ -1332,9 +1338,17 @@ func (p *ProviderConfig) ApplyDefaults() {
 			p.AuthMode = "x-api-key"
 		case "gemini":
 			p.AuthMode = "x-goog-api-key"
+		case "azure_openai":
+			p.AuthMode = "api-key"
 		default:
 			p.AuthMode = "bearer"
 		}
+	}
+	if p.Type == "azure_openai" && p.APIVersion == "" {
+		p.APIVersion = "2024-10-21"
+	}
+	if p.Type == "vertex" && p.VertexLocation == "" {
+		p.VertexLocation = "us-central1"
 	}
 	if p.ChatPath == "" {
 		p.ChatPath = "/v1/chat/completions"
@@ -1725,11 +1739,14 @@ func (c Config) Validate() error {
 			return fmt.Errorf("duplicate provider id %q", p.ID)
 		}
 		seenP[p.ID] = true
-		if p.Type != "openai_compatible" && p.Type != "anthropic_compatible" && p.Type != "gemini" && p.Type != "openai_responses" {
+		if p.Type != "openai_compatible" && p.Type != "anthropic_compatible" && p.Type != "gemini" && p.Type != "openai_responses" && p.Type != "azure_openai" && p.Type != "vertex" {
 			return fmt.Errorf("provider %q has unsupported type %q", p.ID, p.Type)
 		}
 		if p.BaseURL == "" {
 			return fmt.Errorf("provider %q base_url is required", p.ID)
+		}
+		if p.Type == "vertex" && strings.TrimSpace(p.VertexProject) == "" {
+			return fmt.Errorf("provider %q vertex_project is required for type vertex", p.ID)
 		}
 		if len(p.BaseURL) > maxURLBytes || len(p.ProxyURL) > maxURLBytes {
 			return fmt.Errorf("provider %q URL is too long", p.ID)
@@ -1755,7 +1772,7 @@ func (c Config) Validate() error {
 				return err
 			}
 		}
-		if p.AuthMode != "" && p.AuthMode != "bearer" && p.AuthMode != "x-api-key" && p.AuthMode != "x-goog-api-key" && p.AuthMode != "none" {
+		if p.AuthMode != "" && p.AuthMode != "bearer" && p.AuthMode != "x-api-key" && p.AuthMode != "x-goog-api-key" && p.AuthMode != "api-key" && p.AuthMode != "none" {
 			return fmt.Errorf("provider %q has unsupported auth_mode %q", p.ID, p.AuthMode)
 		}
 		if err := validateDataHandling(p.DataHandling, fmt.Sprintf("provider %q", p.ID)); err != nil {
