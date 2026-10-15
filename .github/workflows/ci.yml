@@ -142,6 +142,11 @@ jobs:
           NEXAROUTE_TEST_POSTGRES_DSN: "postgres://nexaroute:nexaroute-ci-only@127.0.0.1:5432/nexaroute_test?sslmode=disable"
         run: go test -tags integration ./internal/controlplane/ -run 'TestPostgresIntegration' -count=1 -v
 
+      - name: PostgreSQL security-store integration tests
+        env:
+          NEXAROUTE_TEST_POSTGRES_DSN: "postgres://nexaroute:nexaroute-ci-only@127.0.0.1:5432/nexaroute_test?sslmode=disable"
+        run: go test -tags integration ./internal/securitystore/ -run 'TestPostgresSecurityStoreIntegration' -count=1 -v
+
   integration-redis:
     # Real-service integration evidence for the control-plane Redis
     # backend (M4-2): runs the build-tagged integration tests against a
