@@ -165,7 +165,7 @@ func newHTTPAdapterWithRetryCap(p config.ProviderConfig, timeout, retryAfterCap 
 	}
 	a := &httpAdapter{
 		p: p, c: &http.Client{Transport: tr, Timeout: timeout, CheckRedirect: checkRedirect}, streamC: &http.Client{Transport: tr, CheckRedirect: checkRedirect},
-		sem: make(chan struct{}, mc), forwardAllowed: make(map[string]struct{}, len(p.ForwardHeaders)),
+		sem: make(chan struct{}, mc), forwardAllowed: make(map[string]struct{}),
 		retryAfterCap: retryAfterCap,
 	}
 	a.requestLimit.Store(-1)
@@ -472,6 +472,16 @@ func (a *httpAdapter) DoPath(ctx context.Context, method, path string, payload [
 		}
 		reservation := a.reserveQuota(reqCtx)
 		quotaSeq := a.quotaDispatchSeq.Add(1)
+		// codeql[go/request-forgery] The request URL is assembled only from
+		// operator-written provider configuration (base URL and path fields,
+		// validated at config load: http/https scheme, host required, userinfo
+		// rejected). Client request data never selects the host — model IDs
+		// enter as escaped path segments on those configured templates. The
+		// transport enforces the egress policy at dial time: destinations are
+		// pinned to the operator's allowed_hosts (default: the base URL host)
+		// minus deny hosts/CIDRs, and redirects refuse to cross origins. An
+		// absolute-URL path override is a tested operator feature and remains
+		// bounded by the same dial-time allowlist.
 		resp, err := client.Do(req)
 		if err != nil {
 			reservation.releaseAll()
