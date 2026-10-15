@@ -57,119 +57,127 @@ const (
 func f64(v float64) *float64 { return &v }
 
 // Dialects returns the built-in dialect registry.
+// dialectTable is the built-in dialect registry, built once at
+// package init. It is effectively immutable: no code path mutates
+// the map or the profiles' ParameterAliases after construction,
+// and DialectProfile values are copied on lookup.
+var dialectTable = map[string]DialectProfile{
+	DialectGenericOpenAI: {
+		Name: DialectGenericOpenAI, Protocol: "openai_chat",
+		MaxTokensKey: "max_tokens", AuthStyle: "bearer",
+		ModelListPath: "/v1/models", StreamOptionsSupport: UnknownSupport,
+	},
+	DialectGenericAnthro: {
+		Name: DialectGenericAnthro, Protocol: "anthropic",
+		MaxTokensKey: "max_tokens", AuthStyle: "x-api-key",
+		ModelListPath: "/v1/models", StreamOptionsSupport: UnknownSupport,
+	},
+	DialectOpenAI: {
+		Name: DialectOpenAI, Protocol: "openai_chat",
+		MaxTokensKey: "max_completion_tokens", AuthStyle: "bearer",
+		ModelListPath: "/v1/models", StreamOptionsSupport: Supported,
+		Priors: ModelCapabilities{
+			Text: Supported, Streaming: Supported, SystemMessage: Supported,
+			Tools: Supported, ToolChoiceAuto: Supported, ToolChoiceRequired: Supported,
+			ParallelToolCalls: Supported, Temperature: Supported, TopP: Supported,
+			Stop: Supported, MaxTokens: Supported, MaxCompletionTokens: Supported,
+		},
+	},
+	DialectAnthropic: {
+		Name: DialectAnthropic, Protocol: "anthropic",
+		MaxTokensKey: "max_tokens", AuthStyle: "x-api-key",
+		ModelListPath: "/v1/models", StreamOptionsSupport: UnknownSupport,
+		ReasoningStyle: "anthropic",
+		Priors: ModelCapabilities{
+			Text: Supported, Streaming: Supported, SystemMessage: Supported,
+			Tools: Supported, ToolChoiceAuto: Supported, ToolChoiceRequired: Supported,
+			ParallelToolCalls: Supported, Temperature: Supported, TopP: Supported,
+			Stop: Supported, MaxTokens: Supported,
+		},
+	},
+	DialectNvidiaNIM: {
+		Name: DialectNvidiaNIM, Protocol: "openai_chat",
+		MaxTokensKey: "max_tokens", AuthStyle: "bearer",
+		ModelListPath: "/v1/models",
+		// NVIDIA NIM is a multi-tenant zoo: host-level endpoints accept
+		// OpenAI fields, individual models reject various subsets (notably
+		// temperature on reasoning builds and stream_options on several
+		// paths). Priors stay conservative; probes decide per model.
+		StreamOptionsSupport: UnknownSupport,
+		ReasoningStyle:       "reasoning_content",
+		Priors: ModelCapabilities{
+			Text: Supported, Streaming: Supported, SystemMessage: Supported, MaxTokens: Supported,
+		},
+	},
+	DialectDeepSeek: {
+		Name: DialectDeepSeek, Protocol: "openai_chat",
+		MaxTokensKey: "max_tokens", AuthStyle: "bearer",
+		ModelListPath:        "/v1/models",
+		StreamOptionsSupport: Supported,
+		ReasoningStyle:       "reasoning_content",
+		Priors: ModelCapabilities{
+			Text: Supported, Streaming: Supported, SystemMessage: Supported,
+			Tools: Supported, ToolChoiceAuto: Supported, Temperature: Supported,
+			TopP: Supported, Stop: Supported, MaxTokens: Supported,
+		},
+	},
+	DialectOpenRouter: {
+		Name: DialectOpenRouter, Protocol: "openai_chat",
+		MaxTokensKey: "max_tokens", AuthStyle: "bearer",
+		ModelListPath: "/v1/models", StreamOptionsSupport: Supported,
+		ReasoningStyle: "reasoning_content",
+		Priors: ModelCapabilities{
+			Text: Supported, Streaming: Supported, SystemMessage: Supported,
+			Tools: Supported, ToolChoiceAuto: Supported, Temperature: Supported,
+			TopP: Supported, Stop: Supported, MaxTokens: Supported,
+		},
+	},
+	DialectGroq: {
+		Name: DialectGroq, Protocol: "openai_chat",
+		MaxTokensKey: "max_completion_tokens", AuthStyle: "bearer",
+		ModelListPath: "/openai/v1/models", StreamOptionsSupport: Supported,
+		Priors: ModelCapabilities{
+			Text: Supported, Streaming: Supported, SystemMessage: Supported,
+			Tools: Supported, ToolChoiceAuto: Supported, Temperature: Supported,
+			TopP: Supported, Stop: Supported, MaxTokens: Supported,
+			MaxCompletionTokens: Supported,
+		},
+	},
+	DialectTogether: {
+		Name: DialectTogether, Protocol: "openai_chat",
+		MaxTokensKey: "max_tokens", AuthStyle: "bearer",
+		ModelListPath: "/v1/models", StreamOptionsSupport: UnknownSupport,
+		Priors: ModelCapabilities{
+			Text: Supported, Streaming: Supported, SystemMessage: Supported,
+			Tools: Supported, Temperature: Supported, TopP: Supported,
+			Stop: Supported, MaxTokens: Supported,
+		},
+	},
+	DialectGemini: {
+		Name: DialectGemini, Protocol: "gemini",
+		MaxTokensKey: "maxOutputTokens", AuthStyle: "x-goog-api-key",
+		ModelListPath: "/v1beta/models", StreamOptionsSupport: Unsupported,
+		Priors: ModelCapabilities{
+			Text: Supported, Streaming: Supported, SystemMessage: Supported,
+			Tools: Supported, Temperature: Supported, TopP: Supported,
+			Stop: Supported, MaxTokens: Supported, Vision: Supported,
+		},
+	},
+	DialectOpenAIResponse: {
+		Name: DialectOpenAIResponse, Protocol: "openai_responses",
+		MaxTokensKey: "max_output_tokens", AuthStyle: "bearer",
+		StreamOptionsSupport: Unsupported,
+		Priors: ModelCapabilities{
+			Text: Supported, Streaming: Supported, SystemMessage: Supported,
+			Tools: Supported, Reasoning: Supported, MaxTokens: Supported,
+		},
+	},
+}
+
+// Dialects returns the built-in dialect registry. The returned
+// map is shared and MUST NOT be mutated by callers.
 func Dialects() map[string]DialectProfile {
-	return map[string]DialectProfile{
-		DialectGenericOpenAI: {
-			Name: DialectGenericOpenAI, Protocol: "openai_chat",
-			MaxTokensKey: "max_tokens", AuthStyle: "bearer",
-			ModelListPath: "/v1/models", StreamOptionsSupport: UnknownSupport,
-		},
-		DialectGenericAnthro: {
-			Name: DialectGenericAnthro, Protocol: "anthropic",
-			MaxTokensKey: "max_tokens", AuthStyle: "x-api-key",
-			ModelListPath: "/v1/models", StreamOptionsSupport: UnknownSupport,
-		},
-		DialectOpenAI: {
-			Name: DialectOpenAI, Protocol: "openai_chat",
-			MaxTokensKey: "max_completion_tokens", AuthStyle: "bearer",
-			ModelListPath: "/v1/models", StreamOptionsSupport: Supported,
-			Priors: ModelCapabilities{
-				Text: Supported, Streaming: Supported, SystemMessage: Supported,
-				Tools: Supported, ToolChoiceAuto: Supported, ToolChoiceRequired: Supported,
-				ParallelToolCalls: Supported, Temperature: Supported, TopP: Supported,
-				Stop: Supported, MaxTokens: Supported, MaxCompletionTokens: Supported,
-			},
-		},
-		DialectAnthropic: {
-			Name: DialectAnthropic, Protocol: "anthropic",
-			MaxTokensKey: "max_tokens", AuthStyle: "x-api-key",
-			ModelListPath: "/v1/models", StreamOptionsSupport: UnknownSupport,
-			ReasoningStyle: "anthropic",
-			Priors: ModelCapabilities{
-				Text: Supported, Streaming: Supported, SystemMessage: Supported,
-				Tools: Supported, ToolChoiceAuto: Supported, ToolChoiceRequired: Supported,
-				ParallelToolCalls: Supported, Temperature: Supported, TopP: Supported,
-				Stop: Supported, MaxTokens: Supported,
-			},
-		},
-		DialectNvidiaNIM: {
-			Name: DialectNvidiaNIM, Protocol: "openai_chat",
-			MaxTokensKey: "max_tokens", AuthStyle: "bearer",
-			ModelListPath: "/v1/models",
-			// NVIDIA NIM is a multi-tenant zoo: host-level endpoints accept
-			// OpenAI fields, individual models reject various subsets (notably
-			// temperature on reasoning builds and stream_options on several
-			// paths). Priors stay conservative; probes decide per model.
-			StreamOptionsSupport: UnknownSupport,
-			ReasoningStyle:       "reasoning_content",
-			Priors: ModelCapabilities{
-				Text: Supported, Streaming: Supported, SystemMessage: Supported, MaxTokens: Supported,
-			},
-		},
-		DialectDeepSeek: {
-			Name: DialectDeepSeek, Protocol: "openai_chat",
-			MaxTokensKey: "max_tokens", AuthStyle: "bearer",
-			ModelListPath:        "/v1/models",
-			StreamOptionsSupport: Supported,
-			ReasoningStyle:       "reasoning_content",
-			Priors: ModelCapabilities{
-				Text: Supported, Streaming: Supported, SystemMessage: Supported,
-				Tools: Supported, ToolChoiceAuto: Supported, Temperature: Supported,
-				TopP: Supported, Stop: Supported, MaxTokens: Supported,
-			},
-		},
-		DialectOpenRouter: {
-			Name: DialectOpenRouter, Protocol: "openai_chat",
-			MaxTokensKey: "max_tokens", AuthStyle: "bearer",
-			ModelListPath: "/v1/models", StreamOptionsSupport: Supported,
-			ReasoningStyle: "reasoning_content",
-			Priors: ModelCapabilities{
-				Text: Supported, Streaming: Supported, SystemMessage: Supported,
-				Tools: Supported, ToolChoiceAuto: Supported, Temperature: Supported,
-				TopP: Supported, Stop: Supported, MaxTokens: Supported,
-			},
-		},
-		DialectGroq: {
-			Name: DialectGroq, Protocol: "openai_chat",
-			MaxTokensKey: "max_completion_tokens", AuthStyle: "bearer",
-			ModelListPath: "/openai/v1/models", StreamOptionsSupport: Supported,
-			Priors: ModelCapabilities{
-				Text: Supported, Streaming: Supported, SystemMessage: Supported,
-				Tools: Supported, ToolChoiceAuto: Supported, Temperature: Supported,
-				TopP: Supported, Stop: Supported, MaxTokens: Supported,
-				MaxCompletionTokens: Supported,
-			},
-		},
-		DialectTogether: {
-			Name: DialectTogether, Protocol: "openai_chat",
-			MaxTokensKey: "max_tokens", AuthStyle: "bearer",
-			ModelListPath: "/v1/models", StreamOptionsSupport: UnknownSupport,
-			Priors: ModelCapabilities{
-				Text: Supported, Streaming: Supported, SystemMessage: Supported,
-				Tools: Supported, Temperature: Supported, TopP: Supported,
-				Stop: Supported, MaxTokens: Supported,
-			},
-		},
-		DialectGemini: {
-			Name: DialectGemini, Protocol: "gemini",
-			MaxTokensKey: "maxOutputTokens", AuthStyle: "x-goog-api-key",
-			ModelListPath: "/v1beta/models", StreamOptionsSupport: Unsupported,
-			Priors: ModelCapabilities{
-				Text: Supported, Streaming: Supported, SystemMessage: Supported,
-				Tools: Supported, Temperature: Supported, TopP: Supported,
-				Stop: Supported, MaxTokens: Supported, Vision: Supported,
-			},
-		},
-		DialectOpenAIResponse: {
-			Name: DialectOpenAIResponse, Protocol: "openai_responses",
-			MaxTokensKey: "max_output_tokens", AuthStyle: "bearer",
-			StreamOptionsSupport: Unsupported,
-			Priors: ModelCapabilities{
-				Text: Supported, Streaming: Supported, SystemMessage: Supported,
-				Tools: Supported, Reasoning: Supported, MaxTokens: Supported,
-			},
-		},
-	}
+	return dialectTable
 }
 
 // DetectDialect resolves the dialect for a provider configuration. The
