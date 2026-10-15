@@ -85,6 +85,35 @@ fields. Retention/count pruning deletes only a prefix of the chain and
 records a pruning anchor (the newest pruned record's sequence and hash),
 so the surviving window stays verifiable.
 
+### Decision policy lifecycle (`nexaroute policy`, M6-2)
+
+Policies are code: they live in `decision_policies[]` and the
+active one is the `decision.policy` pointer. The lifecycle CLI
+never serves traffic:
+
+- `nexaroute policy simulate --config PATH --policy ID --fixtures FILE`
+  evaluates a policy against recorded-shape decision requests
+  (candidates + signals only) and prints the winner, the
+  effective order, the policy trace breakdown, and a SHA-256
+  digest of the canonical report — identical inputs always yield
+  the identical digest.
+- `nexaroute policy replay --config PATH --policy ID --traces FILE.jsonl`
+  re-evaluates recorded production decisions (`{request,
+  recorded_winner}` per line) under a candidate policy and
+  reports agreement plus every divergence. Review this before
+  promoting a policy change.
+- `nexaroute policy promote --config PATH --policy ID` validates
+  the whole config, then atomically points `decision.policy` at
+  ID and appends a record (timestamp, from/to, config SHA-256
+  before/after) to `<config>.policy-audit.jsonl`.
+- `nexaroute policy rollback --config PATH` restores the previous
+  pointer from the audit log. It refuses when the config file's
+  digest no longer matches the last audited action (out-of-band
+  change) unless `--force` is given.
+
+Whole-config rollback remains the admin API's config history;
+this CLI is the policy-pointer lifecycle on the config file.
+
 - `nexaroute audit verify --config PATH` opens the store **read-only**
   and revalidates every record: hash recomputation, predecessor
   linkage, sequence order, anchor linkage, and chain-head consistency
