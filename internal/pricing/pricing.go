@@ -16,9 +16,9 @@ import (
 // Cache rates are pointers: nil means "not priced separately" and
 // the input rate applies (the documented default rule).
 type Entry struct {
-	InputPerMTok     float64
-	OutputPerMTok    float64
-	CacheReadPerMTok *float64
+	InputPerMTok      float64
+	OutputPerMTok     float64
+	CacheReadPerMTok  *float64
 	CacheWritePerMTok *float64
 }
 

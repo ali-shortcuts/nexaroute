@@ -29,7 +29,7 @@ type Totals struct {
 	CostByVersion    map[string]float64 `json:"cost_by_version_usd,omitempty"`
 	// unpriced token counters back the legacy snapshot-time
 	// fallback for records made without record-time costing.
-	unpricedPrompt    int64
+	unpricedPrompt     int64
 	unpricedCompletion int64
 }
 
@@ -55,13 +55,13 @@ type Price struct {
 
 // Tracker is the concurrency-safe cumulative token accountant.
 type Tracker struct {
-	mu          sync.Mutex
-	byDeploy    map[string]*Totals
-	prompt      int64
-	completion  int64
-	requests    int64
-	cacheRead   int64
-	cacheWrite  int64
+	mu           sync.Mutex
+	byDeploy     map[string]*Totals
+	prompt       int64
+	completion   int64
+	requests     int64
+	cacheRead    int64
+	cacheWrite   int64
 	recordedCost float64
 }
 

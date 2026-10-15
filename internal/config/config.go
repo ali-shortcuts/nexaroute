@@ -426,9 +426,9 @@ type PricingConfig struct {
 }
 
 type PriceVersionConfig struct {
-	Version       string                       `json:"version"`
-	EffectiveFrom string                       `json:"effective_from"`
-	Prices        map[string]PriceEntryConfig  `json:"prices"`
+	Version       string                      `json:"version"`
+	EffectiveFrom string                      `json:"effective_from"`
+	Prices        map[string]PriceEntryConfig `json:"prices"`
 }
 
 type PriceEntryConfig struct {
