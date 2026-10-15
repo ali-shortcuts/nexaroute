@@ -137,16 +137,28 @@ func TestOpenBackendSelectionFailsClosed(t *testing.T) {
 	if _, err := OpenBackend(BackendBBolt, "redis://127.0.0.1:6379", contractStorePath(t, "b.db"), 1000, 365); err == nil {
 		t.Fatal("bbolt with a URL must fail")
 	}
-	// redis/postgres are recognized but unavailable in this build: the
-	// factory must refuse, never substitute another store.
-	for _, backend := range []string{BackendRedis, BackendPostgres} {
-		if _, err := OpenBackend(backend, "db://127.0.0.1:1", contractStorePath(t, "c.db"), 1000, 365); err == nil ||
-			!strings.Contains(err.Error(), "not available in this build") {
-			t.Fatalf("%s: err=%v, want fail-closed unavailability", backend, err)
-		}
-		if _, err := OpenBackend(backend, "", contractStorePath(t, "c.db"), 1000, 365); err == nil {
-			t.Fatalf("%s without URL must fail", backend)
-		}
+	// Redis is recognized but its adapter lands in the M4-2 follow-up:
+	// the factory must refuse, never substitute another store.
+	if _, err := OpenBackend(BackendRedis, "redis://127.0.0.1:6379", contractStorePath(t, "c.db"), 1000, 365); err == nil ||
+		!strings.Contains(err.Error(), "not available in this build") {
+		t.Fatalf("redis: err=%v, want fail-closed unavailability", err)
+	}
+	if _, err := OpenBackend(BackendRedis, "", contractStorePath(t, "c.db"), 1000, 365); err == nil {
+		t.Fatal("redis without URL must fail")
+	}
+	// PostgreSQL (M4-2a) attempts a real connection and fails closed
+	// when the service is unreachable — never a silent substitute.
+	if _, err := OpenBackend(BackendPostgres, "postgres://127.0.0.1:1/nexaroute", contractStorePath(t, "c.db"), 1000, 365); err == nil {
+		t.Fatal("postgres with an unreachable service must fail")
+	}
+	if _, err := OpenBackend(BackendPostgres, "", contractStorePath(t, "c.db"), 1000, 365); err == nil {
+		t.Fatal("postgres without URL must fail")
+	}
+	// env: indirection with an unset variable fails closed and names it.
+	t.Setenv("NEXAROUTE_TEST_UNSET_SECURITY_URL", "")
+	if _, err := OpenBackend(BackendPostgres, "env:NEXAROUTE_TEST_UNSET_SECURITY_URL", contractStorePath(t, "c.db"), 1000, 365); err == nil ||
+		!strings.Contains(err.Error(), "NEXAROUTE_TEST_UNSET_SECURITY_URL") {
+		t.Fatalf("postgres env: err=%v, want the unset variable named", err)
 	}
 	// Unknown backends fail closed too.
 	if _, err := OpenBackend("sqlite", "", contractStorePath(t, "d.db"), 1000, 365); err == nil {

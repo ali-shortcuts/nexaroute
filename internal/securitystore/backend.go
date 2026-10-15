@@ -3,6 +3,7 @@ package securitystore
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 )
@@ -53,12 +54,17 @@ func ValidBackend(name string) bool {
 
 // OpenBackend opens the security store for the selected backend.
 //
-// Fail-closed selection semantics: an adapter that is not part of this
-// build is an explicit error, never a silent fallback to a local or
-// in-memory store — an operator who configured a durable shared backend
-// must learn at startup that it is unavailable, not discover later that
-// sessions and audit records went somewhere else. The redis/postgres
-// adapters land with M4-2 behind this same factory.
+// Fail-closed selection semantics: an adapter that cannot be
+// constructed (bad or unreachable connection string, unknown name) is
+// an explicit error, never a silent fallback to a local or in-memory
+// store — an operator who configured a durable shared backend must
+// learn at startup that it is unavailable, not discover later that
+// sessions and audit records went somewhere else.
+//
+// The connection string may be given literally as security_store_url
+// or indirectly as env:VARIABLE_NAME, in which case it is read from
+// that environment variable (the M4-1 pattern: secrets stay out of
+// durable config).
 func OpenBackend(backend, url, path string, maxAuditItems, retentionDays int) (Backend, error) {
 	switch strings.TrimSpace(backend) {
 	case "", BackendBBolt:
@@ -66,12 +72,36 @@ func OpenBackend(backend, url, path string, maxAuditItems, retentionDays int) (B
 			return nil, fmt.Errorf("securitystore: security_store_url must be empty for the bbolt backend")
 		}
 		return Open(path, maxAuditItems, retentionDays)
-	case BackendRedis, BackendPostgres:
+	case BackendPostgres:
+		resolved, err := resolveStoreURL(url, backend)
+		if err != nil {
+			return nil, err
+		}
+		return OpenPostgres(context.Background(), resolved, maxAuditItems, retentionDays)
+	case BackendRedis:
 		if strings.TrimSpace(url) == "" {
 			return nil, fmt.Errorf("securitystore: security_store_url is required for the %s backend", backend)
 		}
-		return nil, fmt.Errorf("securitystore: backend %q is not available in this build (adapters land with M4-2); refusing to substitute a different store", backend)
+		return nil, fmt.Errorf("securitystore: backend %q is not available in this build (the Redis adapter lands in the M4-2 follow-up); refusing to substitute a different store", backend)
 	default:
 		return nil, fmt.Errorf("securitystore: unknown security_store_backend %q", backend)
 	}
+}
+
+// resolveStoreURL resolves the env:VARIABLE_NAME indirection for a
+// backend connection string.
+func resolveStoreURL(url, backend string) (string, error) {
+	url = strings.TrimSpace(url)
+	if url == "" {
+		return "", fmt.Errorf("securitystore: security_store_url is required for the %s backend", backend)
+	}
+	if name, ok := strings.CutPrefix(url, "env:"); ok {
+		name = strings.TrimSpace(name)
+		value := strings.TrimSpace(os.Getenv(name))
+		if value == "" {
+			return "", fmt.Errorf("securitystore: environment variable %s named by security_store_url is unset or empty", name)
+		}
+		return value, nil
+	}
+	return url, nil
 }
