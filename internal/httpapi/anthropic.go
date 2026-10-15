@@ -139,6 +139,11 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 	if s.cacheServe(w, r, cacheKey, cacheable) {
 		return
 	}
+	// Semantic cache (M5-4, separately opt-in): see openai.go.
+	semCtx := s.semanticPrepare(r, r.URL.Path, raw, in.Stream, in.Temperature, in.TopP, len(in.Tools) > 0, in.Model, req.RequireNoTraining, candidates)
+	if s.semanticServe(w, r, semCtx) {
+		return
+	}
 	// Phase D/E/G: Decision plane — rank within eligible set only, fail-open, chain-aware
 	candidates = s.applyDecisionPlane(r.Context(), candidates, ti, resolvedRoute, r.Header.Get("x-request-id"), req)
 	// For observability: if virtual endpoint, add headers
@@ -413,6 +418,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 						s.recordUsageEx(r, c.Deployment.ID, usage.Counts{Input: int64(p), Output: int64(ct), CacheRead: int64(cr), CacheWrite: int64(cw)}, false)
 					}
 					s.cacheStoreResponse(cacheKey, cacheGeneration, cacheable, c.Deployment.ID, resp.StatusCode, "application/json", b)
+					s.semanticStore(semCtx, cacheGeneration, c.Deployment.ID, resp.StatusCode, b)
 					copyUpstreamResponseHeaders(w, resp, false)
 					w.WriteHeader(resp.StatusCode)
 					_, e = w.Write(b)
@@ -433,6 +439,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 				if e == nil {
 					if b, merr := json.Marshal(translated); merr == nil {
 						s.cacheStoreResponse(cacheKey, cacheGeneration, cacheable, c.Deployment.ID, 200, "application/json", b)
+						s.semanticStore(semCtx, cacheGeneration, c.Deployment.ID, 200, b)
 					}
 					writeJSON(w, 200, translated)
 				}

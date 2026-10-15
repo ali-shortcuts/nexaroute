@@ -44,6 +44,12 @@ type RouteProfileConfig struct {
 	Strategy       string `json:"strategy,omitempty"`
 	DecisionPolicy string `json:"decision_policy,omitempty"` // Phase E: optional policy ID
 	Privacy        string `json:"privacy,omitempty"`         // "" | "any" | "no_training"
+	// Canary rollout (M5-3): a deterministic bucket of keyed
+	// sessions (canary_percent of them, by session/selection key
+	// hash) gets CanaryDeploymentID promoted to the front of the
+	// candidate list when it is already eligible for the request.
+	CanaryDeploymentID string `json:"canary_deployment_id,omitempty"`
+	CanaryPercent      int    `json:"canary_percent,omitempty"`
 }
 
 type CandidatePoolConfig struct {
@@ -469,6 +475,33 @@ type CacheConfig struct {
 	TTLSeconds   int  `json:"ttl_seconds"`
 	MaxEntries   int  `json:"max_entries"`
 	MaxBodyBytes int  `json:"max_body_bytes"`
+	// Semantic is the opt-in semantic (embedding-similarity) cache
+	// layered beside the exact-match cache (M5-4). It is enabled
+	// independently and never activates unless an embedding
+	// deployment is configured.
+	Semantic SemanticCacheConfig `json:"semantic"`
+}
+
+// SemanticCacheConfig gates the semantic response cache. Entries
+// are matched by embedding cosine similarity inside an isolation
+// scope and carry privacy provenance (see internal/cache).
+type SemanticCacheConfig struct {
+	Enabled bool `json:"enabled"`
+	// EmbeddingDeployment names the "provider/model" deployment
+	// whose embeddings endpoint embeds prompts. The provider must
+	// be openai_compatible.
+	EmbeddingDeployment string `json:"embedding_deployment,omitempty"`
+	// EmbeddingPath overrides the embeddings path on that provider
+	// (default /v1/embeddings).
+	EmbeddingPath string `json:"embedding_path,omitempty"`
+	// Threshold is the minimum cosine similarity for a hit,
+	// in (0.5, 1]. Default 0.95 (conservative).
+	Threshold float64 `json:"threshold,omitempty"`
+	// MaxEntries bounds the semantic table independently of the
+	// exact-match cache. Default 1024.
+	MaxEntries int `json:"max_entries,omitempty"`
+	// TTLSeconds bounds entry lifetime; 0 reuses cache.ttl_seconds.
+	TTLSeconds int `json:"ttl_seconds,omitempty"`
 }
 
 // ClientAuthConfig enables optional per-key data-plane authentication with a
@@ -611,20 +644,25 @@ type DataHandlingConfig struct {
 }
 
 type ProviderConfig struct {
-	ID             string             `json:"id"`
-	Name           string             `json:"name"`
-	Type           string             `json:"type"`              // openai_compatible | anthropic_compatible | gemini | openai_responses | azure_openai | vertex
-	Dialect        string             `json:"dialect,omitempty"` // optional dialect override (see compat.Dialects)
-	BaseURL        string             `json:"base_url"`
-	DataHandling   DataHandlingConfig `json:"data_handling,omitempty"`
-	APIKey         string             `json:"api_key,omitempty"`
-	APIKeyEnv      string             `json:"api_key_env,omitempty"`
-	Credentials    []CredentialConfig `json:"credentials,omitempty"`
-	AuthMode       string             `json:"auth_mode,omitempty"` // bearer | x-api-key | x-goog-api-key | api-key | none
-	Headers        map[string]string  `json:"headers,omitempty"`
-	ForwardHeaders []string           `json:"forward_headers"`
-	ProxyURL       string             `json:"proxy_url,omitempty"`
-	AllowedHosts   []string           `json:"allowed_hosts,omitempty"`
+	ID           string             `json:"id"`
+	Name         string             `json:"name"`
+	Type         string             `json:"type"`              // openai_compatible | anthropic_compatible | gemini | openai_responses | azure_openai | vertex | bedrock
+	Dialect      string             `json:"dialect,omitempty"` // optional dialect override (see compat.Dialects)
+	BaseURL      string             `json:"base_url"`
+	DataHandling DataHandlingConfig `json:"data_handling,omitempty"`
+	APIKey       string             `json:"api_key,omitempty"`
+	APIKeyEnv    string             `json:"api_key_env,omitempty"`
+	Credentials  []CredentialConfig `json:"credentials,omitempty"`
+	AuthMode     string             `json:"auth_mode,omitempty"` // bearer | x-api-key | x-goog-api-key | api-key | none
+	// Bedrock (M5-1b): region plus env-var NAMES for the SigV4 secret
+	// material. The secret itself is never a config value.
+	AWSRegion       string            `json:"aws_region,omitempty"`
+	SecretKeyEnv    string            `json:"secret_key_env,omitempty"`
+	SessionTokenEnv string            `json:"session_token_env,omitempty"`
+	Headers         map[string]string `json:"headers,omitempty"`
+	ForwardHeaders  []string          `json:"forward_headers"`
+	ProxyURL        string            `json:"proxy_url,omitempty"`
+	AllowedHosts    []string          `json:"allowed_hosts,omitempty"`
 	// Resolved egress policy merged from global EgressConfig during Validate().
 	// Not serialized; populated at load time.
 	resolvedEgressDenyHosts  []string
@@ -1145,6 +1183,15 @@ func (c *Config) ApplyDefaults() {
 		c.Cache.MaxBodyBytes = 1 << 20
 		c.warnDefault("cache.max_body_bytes", "not set; defaulted to 1048576")
 	}
+	if c.Cache.Semantic.EmbeddingPath == "" {
+		c.Cache.Semantic.EmbeddingPath = "/v1/embeddings"
+	}
+	if c.Cache.Semantic.Threshold == 0 {
+		c.Cache.Semantic.Threshold = 0.95
+	}
+	if c.Cache.Semantic.MaxEntries == 0 {
+		c.Cache.Semantic.MaxEntries = 1024
+	}
 	if c.Routing.CapabilityCooldownSeconds == 0 {
 		c.Routing.CapabilityCooldownSeconds = 300
 		c.warnDefault("routing.capability_cooldown_seconds", "not set; defaulted to 300")
@@ -1210,6 +1257,7 @@ func (c *Config) ApplyDefaults() {
 		rp.ID = strings.TrimSpace(rp.ID)
 		rp.Name = strings.TrimSpace(rp.Name)
 		rp.CandidatePool = strings.TrimSpace(rp.CandidatePool)
+		rp.CanaryDeploymentID = strings.TrimSpace(rp.CanaryDeploymentID)
 		rp.FallbackChain = strings.TrimSpace(rp.FallbackChain)
 		rp.Strategy = strings.TrimSpace(strings.ToLower(rp.Strategy))
 		rp.DecisionPolicy = strings.TrimSpace(rp.DecisionPolicy)
@@ -1412,6 +1460,9 @@ func (p *ProviderConfig) ApplyDefaults() {
 		default:
 			p.AuthMode = "bearer"
 		}
+	}
+	if p.Type == "bedrock" && p.AWSRegion == "" {
+		p.AWSRegion = "us-east-1"
 	}
 	if p.Type == "azure_openai" && p.APIVersion == "" {
 		p.APIVersion = "2024-10-21"
@@ -1628,6 +1679,41 @@ func (c Config) Validate() error {
 	}
 	if c.Cache.MaxBodyBytes < 1024 || c.Cache.MaxBodyBytes > 64<<20 {
 		return errors.New("cache.max_body_bytes must be between 1024 and 67108864")
+	}
+	if sem := c.Cache.Semantic; sem.Enabled {
+		if sem.EmbeddingDeployment == "" {
+			return errors.New("cache.semantic.embedding_deployment is required when the semantic cache is enabled")
+		}
+		parts := strings.Split(sem.EmbeddingDeployment, "/")
+		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+			return fmt.Errorf("cache.semantic.embedding_deployment %q must be in provider/model form", sem.EmbeddingDeployment)
+		}
+		found := false
+		for _, p := range c.Providers {
+			if p.ID != parts[0] {
+				continue
+			}
+			if p.Type != "openai_compatible" {
+				return fmt.Errorf("cache.semantic.embedding_deployment provider %q must be openai_compatible (got %q)", p.ID, p.Type)
+			}
+			for _, m := range p.Models {
+				if m.ID == parts[1] {
+					found = true
+				}
+			}
+		}
+		if !found {
+			return fmt.Errorf("cache.semantic.embedding_deployment %q does not match a configured provider/model", sem.EmbeddingDeployment)
+		}
+		if sem.Threshold <= 0.5 || sem.Threshold > 1 {
+			return errors.New("cache.semantic.threshold must be in (0.5, 1]")
+		}
+		if sem.MaxEntries < 1 || sem.MaxEntries > 16384 {
+			return errors.New("cache.semantic.max_entries must be between 1 and 16384")
+		}
+		if sem.TTLSeconds < 0 {
+			return errors.New("cache.semantic.ttl_seconds must be >= 0")
+		}
 	}
 	if c.MCP.Enabled {
 		if len(c.MCP.Servers) == 0 {
@@ -1890,8 +1976,17 @@ func (c Config) Validate() error {
 			return fmt.Errorf("duplicate provider id %q", p.ID)
 		}
 		seenP[p.ID] = true
-		if p.Type != "openai_compatible" && p.Type != "anthropic_compatible" && p.Type != "gemini" && p.Type != "openai_responses" && p.Type != "azure_openai" && p.Type != "vertex" {
+		if p.Type != "openai_compatible" && p.Type != "anthropic_compatible" && p.Type != "gemini" && p.Type != "openai_responses" && p.Type != "azure_openai" && p.Type != "vertex" && p.Type != "bedrock" {
 			return fmt.Errorf("provider %q has unsupported type %q", p.ID, p.Type)
+		}
+		if p.SecretKeyEnv != "" && !validEnvName(p.SecretKeyEnv) {
+			return fmt.Errorf("provider %q secret_key_env is not a valid environment variable name (the value is not echoed)", p.ID)
+		}
+		if p.SessionTokenEnv != "" && !validEnvName(p.SessionTokenEnv) {
+			return fmt.Errorf("provider %q session_token_env is not a valid environment variable name (the value is not echoed)", p.ID)
+		}
+		if p.Type == "bedrock" && p.SecretKeyEnv == "" {
+			return fmt.Errorf("provider %q of type bedrock requires secret_key_env naming the env var that holds the AWS secret access key", p.ID)
 		}
 		if p.BaseURL == "" {
 			return fmt.Errorf("provider %q base_url is required", p.ID)
@@ -2447,6 +2542,29 @@ func (c Config) Validate() error {
 		}
 		if rp.CandidatePool == "" {
 			return fmt.Errorf("route profile %q candidate_pool is required", rp.ID)
+		}
+		if rp.CanaryPercent < 0 || rp.CanaryPercent > 100 {
+			return fmt.Errorf("route profile %q canary_percent must be between 0 and 100 (got %d)", rp.ID, rp.CanaryPercent)
+		}
+		if rp.CanaryPercent > 0 && rp.CanaryDeploymentID == "" {
+			return fmt.Errorf("route profile %q canary_percent > 0 requires canary_deployment_id", rp.ID)
+		}
+		if rp.CanaryDeploymentID != "" {
+			for _, cp := range c.CandidatePools {
+				if cp.ID != rp.CandidatePool || cp.Mode == "all" {
+					continue
+				}
+				found := false
+				for _, dep := range cp.Deployments {
+					if dep == rp.CanaryDeploymentID {
+						found = true
+						break
+					}
+				}
+				if !found {
+					return fmt.Errorf("route profile %q canary_deployment_id %q is not in candidate pool %q", rp.ID, rp.CanaryDeploymentID, rp.CandidatePool)
+				}
+			}
 		}
 		if _, ok := poolIDs[rp.CandidatePool]; !ok {
 			return fmt.Errorf("route profile %q references unknown candidate pool %q", rp.ID, rp.CandidatePool)

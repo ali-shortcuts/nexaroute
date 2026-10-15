@@ -174,13 +174,25 @@ openai_responses      OpenAI Responses API
 gemini                Google Gemini wire format, x-goog-api-key auth
 azure_openai          Azure OpenAI (M5-1a)
 vertex                Google Vertex AI (M5-1a)
+bedrock               Amazon Bedrock Converse API, SigV4 auth (M5-1b)
 ```
+
+(When the M5-1a PR also lands, this list gains `azure_openai` and `vertex`.)
 
 A provider is generic; adding another OpenAI-compatible endpoint should normally require configuration, not a new code branch.
 
 **Azure OpenAI** (`azure_openai`) speaks the OpenAI wire format but addresses deployments in the URL: requests go to `{base_url}/openai/deployments/{deployment}/chat/completions?api-version={api_version}`, where `{deployment}` is the model's upstream `model` value and `api_version` is a provider field (default `2024-10-21`). Authentication is the `api-key` header (the default `auth_mode` for this type) using the provider's configured credential.
 
 **Vertex AI** (`vertex`) speaks the Gemini wire format at `{base_url}/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:generateContent` (or `:streamGenerateContent?alt=sse` when streaming). `vertex_project` is required; `vertex_location` defaults to `us-central1`. Authentication is a Bearer OAuth2 access token supplied as the provider credential. **Token minting and refresh are not built in**: the gateway uses the credential it is given, so supply a token through your platform's broker/sidecar (or a short-lived token via `api_key_env`) and rotate it externally — Google service-account ADC flows are an operator-side concern, and an expired token simply fails upstream calls until replaced.
+
+**Amazon Bedrock** (`bedrock`, M5-1b) speaks the Converse API: requests are addressed per model at `{base_url}/model/{modelId}/converse` (or `/converse-stream` when streaming; the AWS binary event stream is translated by the gateway). Authentication is AWS SigV4, signed per request:
+
+- the access key ID comes from the provider's normal key fields (`api_key` or `api_key_env`);
+- the secret access key comes **only** from the environment variable named by the provider field `secret_key_env` (never a config value); adapter startup fails closed when it is unset or empty;
+- an optional session token comes from the env var named by `session_token_env`;
+- `aws_region` selects the signing region (default `us-east-1`) and should match the region in `base_url`.
+
+Documented limits: one credential pair per Bedrock provider (the credential-rotation pool does not apply); `tool_choice: "none"` withholds the tools because Converse has no none mode; reasoning/thinking blocks are not encoded to Converse (model-specific); document blocks are not mapped.
 
 ## Provider credentials
 
@@ -257,6 +269,21 @@ Routes and keys may express a privacy requirement:
 
 - `route_profiles[].privacy`: `""` or `any` (no requirement) | `no_training`.
 - `client_auth.virtual_keys[].require_privacy`: same values.
+
+Route profiles can roll out a canary deployment (M5-3):
+
+- `route_profiles[].canary_deployment_id`: a deployment (`provider/model`)
+  from the profile's candidate pool.
+- `route_profiles[].canary_percent`: 0–100. Sessions are bucketed
+  deterministically by their stable key (session key, else selection
+  key): the same session always lands in the same arm. A bucketed
+  session gets the canary promoted to the front of its candidate
+  list — but only when the canary is already an eligible candidate
+  for that request (capabilities, health and the privacy gate all
+  apply first; rollout reorders eligibility, it never creates it).
+  Keyless requests are never rolled out. When the profile also
+  names a decision policy, the policy's selection still governs
+  the final pick.
 
 ## Model aliases
 
@@ -491,6 +518,35 @@ Provider presets are served by the gateway itself through the Admin API so the W
 
 Only non-streaming requests with `temperature` absent/0 and `top_p` absent/1 are eligible. Every config swap invalidates the cache. Per-request bypass header: `x-nexaroute-no-cache: 1`.
 
+### Semantic cache (`cache.semantic`, M5-4)
+
+A separately opt-in layer beside the exact-match cache. Prompts are
+embedded through a configured deployment and matched by cosine
+similarity, so paraphrases of a cached prompt can be served
+without an upstream call.
+
+- `cache.semantic.enabled`: default off; independent of `cache.enabled`.
+- `cache.semantic.embedding_deployment`: `provider/model`; the provider
+  must be `openai_compatible`. Embeddings go straight through that
+  provider's adapter (never through the gateway's own handlers), and
+  any embedder failure bypasses the cache silently.
+- `cache.semantic.embedding_path`: default `/v1/embeddings`.
+- `cache.semantic.threshold`: cosine in (0.5, 1]; default 0.95.
+- `cache.semantic.max_entries`: default 1024 (own LRU + byte bounds).
+- `cache.semantic.ttl_seconds`: default reuses `cache.ttl_seconds`.
+
+Eligibility mirrors the exact cache and adds: no tools, prompt text
+extractable and ≤ 32 KiB. Similarity is computed only inside an
+isolation scope (client-key digest + ingress path + model +
+forwarded-header context), so one client's entries never serve
+another. Every entry carries privacy provenance — origin
+deployment, origin provider's `trains_on_data`, whether the storing
+request required `no_training`, the embedding deployment — and a
+`no_training` request can only be served by an entry stored under
+`no_training` whose origin declares `trains_on_data: "no"`. Hits are
+observable: `X-NexaRoute-Cache: SEMANTIC-HIT`,
+`X-Gateway-Cache-Provenance`, a `semantic_cache_hit` event, and
+`nexaroute_semantic_cache_*` metrics.
 ### guardrails (object, opt-in)
 
 Request-content guardrails, evaluated inside client authentication

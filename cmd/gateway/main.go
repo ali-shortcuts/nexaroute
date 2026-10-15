@@ -71,6 +71,8 @@ func dispatchSubcommand(args []string, stdin io.Reader, stdout, stderr io.Writer
 		return runPrivacy(rest, stdout, stderr), true
 	case "audit":
 		return runAudit(rest, stdout, stderr), true
+	case "policy":
+		return runPolicy(rest, stdout, stderr), true
 	case "config":
 		return runConfig(rest, stdout, stderr), true
 	case "doctor":

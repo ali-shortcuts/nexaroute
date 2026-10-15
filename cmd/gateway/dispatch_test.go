@@ -40,6 +40,7 @@ func TestDispatchSubcommandRouting(t *testing.T) {
 			{"restore"},                        // missing --bundle -> 2, but handled
 			{"secrets", "definitely-not-a-subcommand"}, // error -> 1, but handled
 			{"init", "--out", configPath},              // existing file -> error, but handled
+			{"policy"},                                 // usage -> nonzero, but handled
 		} {
 			var stdout, stderr bytes.Buffer
 			if _, handled := dispatchSubcommand(args, strings.NewReader(""), &stdout, &stderr); !handled {

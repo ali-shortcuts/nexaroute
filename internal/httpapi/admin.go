@@ -753,7 +753,7 @@ func (s *Server) adminProviderTest(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 400, "provider id and base_url are required")
 		return
 	}
-	if in.Provider.Type != "openai_compatible" && in.Provider.Type != "anthropic_compatible" && in.Provider.Type != "gemini" && in.Provider.Type != "openai_responses" && in.Provider.Type != "azure_openai" && in.Provider.Type != "vertex" {
+	if in.Provider.Type != "openai_compatible" && in.Provider.Type != "anthropic_compatible" && in.Provider.Type != "gemini" && in.Provider.Type != "openai_responses" && in.Provider.Type != "azure_openai" && in.Provider.Type != "vertex" && in.Provider.Type != "bedrock" {
 		errorJSON(w, 400, "unsupported provider type")
 		return
 	}

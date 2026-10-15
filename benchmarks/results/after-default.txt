@@ -1,0 +1,116 @@
+# nexaroute benchmarks — profile=default label=after
+# date: 2026-10-15T07:47:03Z
+# go: go version go1.27.0 linux/amd64
+# cpu: AMD EPYC 9D25 126-Core Processor
+# nproc: 2
+# env: stock (GOMAXPROCS=)
+goos: linux
+goarch: amd64
+pkg: github.com/ali-shortcuts/nexaroute/internal/router
+cpu: AMD EPYC 9D25 126-Core Processor               
+BenchmarkCandidates10-2    	  119518	      9192 ns/op	    5389 B/op	       4 allocs/op
+BenchmarkCandidates10-2    	  152464	     11708 ns/op	    5390 B/op	       4 allocs/op
+BenchmarkCandidates10-2    	  124669	      8697 ns/op	    5389 B/op	       4 allocs/op
+BenchmarkCandidates10-2    	  128642	      9301 ns/op	    5389 B/op	       4 allocs/op
+BenchmarkCandidates10-2    	  145014	     13073 ns/op	    5390 B/op	       4 allocs/op
+BenchmarkCandidates100-2   	    8454	    171804 ns/op	   49676 B/op	       4 allocs/op
+BenchmarkCandidates100-2   	    8145	    175421 ns/op	   49676 B/op	       4 allocs/op
+BenchmarkCandidates100-2   	    9344	    146740 ns/op	   49676 B/op	       4 allocs/op
+BenchmarkCandidates100-2   	   10000	    115591 ns/op	   49676 B/op	       4 allocs/op
+BenchmarkCandidates100-2   	   11850	     94603 ns/op	   49676 B/op	       4 allocs/op
+PASS
+ok  	github.com/ali-shortcuts/nexaroute/internal/router	15.123s
+goos: linux
+goarch: amd64
+pkg: github.com/ali-shortcuts/nexaroute/internal/protocol/canonical
+cpu: AMD EPYC 9D25 126-Core Processor               
+BenchmarkAnthropicRoundTrip-2    	   32046	     37333 ns/op	   10729 B/op	     179 allocs/op
+BenchmarkAnthropicRoundTrip-2    	   32215	     39372 ns/op	   10729 B/op	     179 allocs/op
+BenchmarkAnthropicRoundTrip-2    	   32649	     37534 ns/op	   10730 B/op	     179 allocs/op
+BenchmarkAnthropicRoundTrip-2    	   33051	     36815 ns/op	   10729 B/op	     179 allocs/op
+BenchmarkAnthropicRoundTrip-2    	   31112	     38167 ns/op	   10728 B/op	     179 allocs/op
+BenchmarkOpenAIChatRoundTrip-2   	   49232	     24675 ns/op	    7951 B/op	     113 allocs/op
+BenchmarkOpenAIChatRoundTrip-2   	   49297	     24499 ns/op	    7951 B/op	     113 allocs/op
+BenchmarkOpenAIChatRoundTrip-2   	   49635	     24818 ns/op	    7951 B/op	     113 allocs/op
+BenchmarkOpenAIChatRoundTrip-2   	   49869	     23754 ns/op	    7951 B/op	     113 allocs/op
+BenchmarkOpenAIChatRoundTrip-2   	   48681	     25245 ns/op	    7951 B/op	     113 allocs/op
+PASS
+ok  	github.com/ali-shortcuts/nexaroute/internal/protocol/canonical	15.318s
+goos: linux
+goarch: amd64
+pkg: github.com/ali-shortcuts/nexaroute/internal/cache
+cpu: AMD EPYC 9D25 126-Core Processor               
+BenchmarkCacheKeyWithContext-2   	 2611279	       459.8 ns/op	     160 B/op	       3 allocs/op
+BenchmarkCacheKeyWithContext-2   	 2525803	       465.9 ns/op	     160 B/op	       3 allocs/op
+BenchmarkCacheKeyWithContext-2   	 2465215	       495.1 ns/op	     160 B/op	       3 allocs/op
+BenchmarkCacheKeyWithContext-2   	 1927320	       700.4 ns/op	     160 B/op	       3 allocs/op
+BenchmarkCacheKeyWithContext-2   	 2622342	       475.1 ns/op	     160 B/op	       3 allocs/op
+--- FAIL: BenchmarkCachePutGet
+    bench_test.go:30: cache miss
+FAIL
+exit status 1
+FAIL	github.com/ali-shortcuts/nexaroute/internal/cache	8.757s
+goos: linux
+goarch: amd64
+pkg: github.com/ali-shortcuts/nexaroute/internal/guardrail
+cpu: AMD EPYC 9D25 126-Core Processor               
+BenchmarkScanCleanBody-2          	    2964	    441358 ns/op	      96 B/op	       1 allocs/op
+BenchmarkScanCleanBody-2          	    2688	    469908 ns/op	     109 B/op	       1 allocs/op
+BenchmarkScanCleanBody-2          	    2875	    424775 ns/op	      96 B/op	       1 allocs/op
+BenchmarkScanCleanBody-2          	    2839	    442624 ns/op	     109 B/op	       1 allocs/op
+BenchmarkScanCleanBody-2          	    2732	    412573 ns/op	     109 B/op	       1 allocs/op
+BenchmarkScanBodyWithFindings-2   	   56995	     21441 ns/op	      96 B/op	       1 allocs/op
+BenchmarkScanBodyWithFindings-2   	   56761	     21301 ns/op	      96 B/op	       1 allocs/op
+BenchmarkScanBodyWithFindings-2   	   53763	     21337 ns/op	      96 B/op	       1 allocs/op
+BenchmarkScanBodyWithFindings-2   	   53610	     21610 ns/op	      96 B/op	       1 allocs/op
+BenchmarkScanBodyWithFindings-2   	   56108	     21455 ns/op	      96 B/op	       1 allocs/op
+PASS
+ok  	github.com/ali-shortcuts/nexaroute/internal/guardrail	14.282s
+goos: linux
+goarch: amd64
+pkg: github.com/ali-shortcuts/nexaroute/internal/decision/policy
+cpu: AMD EPYC 9D25 126-Core Processor               
+BenchmarkScoreCandidates_2-2     	  423925	      2900 ns/op	    2752 B/op	      19 allocs/op
+BenchmarkScoreCandidates_2-2     	  366424	      3494 ns/op	    2752 B/op	      19 allocs/op
+BenchmarkScoreCandidates_2-2     	  425134	      3197 ns/op	    2752 B/op	      19 allocs/op
+BenchmarkScoreCandidates_2-2     	  432494	      2975 ns/op	    2752 B/op	      19 allocs/op
+BenchmarkScoreCandidates_2-2     	  414709	      2855 ns/op	    2752 B/op	      19 allocs/op
+BenchmarkScoreCandidates_10-2    	   98532	     13764 ns/op	    9160 B/op	      57 allocs/op
+BenchmarkScoreCandidates_10-2    	   95220	     12652 ns/op	    9160 B/op	      57 allocs/op
+BenchmarkScoreCandidates_10-2    	  100602	     13073 ns/op	    9160 B/op	      57 allocs/op
+BenchmarkScoreCandidates_10-2    	  105907	     12577 ns/op	    9160 B/op	      57 allocs/op
+BenchmarkScoreCandidates_10-2    	   95871	     12184 ns/op	    9160 B/op	      57 allocs/op
+BenchmarkScoreCandidates_100-2   	   10717	    105235 ns/op	   82920 B/op	     249 allocs/op
+BenchmarkScoreCandidates_100-2   	   10000	    114967 ns/op	   82920 B/op	     249 allocs/op
+BenchmarkScoreCandidates_100-2   	   10000	    100834 ns/op	   82920 B/op	     249 allocs/op
+BenchmarkScoreCandidates_100-2   	   10000	    100252 ns/op	   82920 B/op	     249 allocs/op
+BenchmarkScoreCandidates_100-2   	   10000	    106525 ns/op	   82920 B/op	     249 allocs/op
+BenchmarkApplyWeights_2-2        	 3164140	       418.8 ns/op	     448 B/op	       1 allocs/op
+BenchmarkApplyWeights_2-2        	 2921918	       426.3 ns/op	     448 B/op	       1 allocs/op
+BenchmarkApplyWeights_2-2        	 2859328	       421.6 ns/op	     448 B/op	       1 allocs/op
+BenchmarkApplyWeights_2-2        	 3119443	       459.0 ns/op	     448 B/op	       1 allocs/op
+BenchmarkApplyWeights_2-2        	 2695004	       438.3 ns/op	     448 B/op	       1 allocs/op
+BenchmarkApplyWeights_10-2       	  644605	      1903 ns/op	    2304 B/op	       1 allocs/op
+BenchmarkApplyWeights_10-2       	  713428	      1670 ns/op	    2304 B/op	       1 allocs/op
+BenchmarkApplyWeights_10-2       	  763774	      1661 ns/op	    2304 B/op	       1 allocs/op
+BenchmarkApplyWeights_10-2       	  680188	      1566 ns/op	    2304 B/op	       1 allocs/op
+BenchmarkApplyWeights_10-2       	  766066	      1667 ns/op	    2304 B/op	       1 allocs/op
+BenchmarkApplyWeights_100-2      	   78777	     15936 ns/op	   24576 B/op	       1 allocs/op
+BenchmarkApplyWeights_100-2      	   71708	     17202 ns/op	   24576 B/op	       1 allocs/op
+BenchmarkApplyWeights_100-2      	   77469	     16643 ns/op	   24576 B/op	       1 allocs/op
+BenchmarkApplyWeights_100-2      	   67165	     18066 ns/op	   24576 B/op	       1 allocs/op
+BenchmarkApplyWeights_100-2      	   83718	     18705 ns/op	   24576 B/op	       1 allocs/op
+PASS
+ok  	github.com/ali-shortcuts/nexaroute/internal/decision/policy	43.730s
+goos: linux
+goarch: amd64
+pkg: github.com/ali-shortcuts/nexaroute/internal/httpapi
+cpu: AMD EPYC 9D25 126-Core Processor               
+BenchmarkRouting_Gateway-2   	    6092	    185823 ns/op	   32987 B/op	     355 allocs/op
+BenchmarkRouting_Gateway-2   	    5965	    194677 ns/op	   32977 B/op	     355 allocs/op
+BenchmarkRouting_Gateway-2   	    6820	    178827 ns/op	   32989 B/op	     355 allocs/op
+BenchmarkRouting_Gateway-2   	    5577	    188993 ns/op	   32990 B/op	     355 allocs/op
+BenchmarkRouting_Gateway-2   	    5703	    185561 ns/op	   33022 B/op	     355 allocs/op
+PASS
+ok  	github.com/ali-shortcuts/nexaroute/internal/httpapi	7.191s
+FAIL

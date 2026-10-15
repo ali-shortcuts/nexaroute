@@ -278,6 +278,26 @@ func EncodeResponsesRequest(in Request, upstreamModel string) ([]byte, error) {
 			if len(parts) == 0 {
 				continue
 			}
+			// Tool results embedded in a user-role message (the shape
+			// the Anthropic decoder produces) must become sibling
+			// function_call_output items; the content builder below
+			// has no representation for them and silently dropped
+			// them (M5-2 conformance).
+			rest := parts[:0:0]
+			for _, p := range parts {
+				if p.Type == PartToolResult && p.ToolResult != nil {
+					items = append(items, map[string]any{
+						"type": "function_call_output", "call_id": p.ToolResult.ToolUseID,
+						"output": p.ToolResult.Content,
+					})
+					continue
+				}
+				rest = append(rest, p)
+			}
+			parts = rest
+			if len(parts) == 0 {
+				continue
+			}
 			if len(parts) == 1 && parts[0].Type == PartText {
 				items = append(items, map[string]any{"type": "message", "role": m.Role, "content": parts[0].Text})
 				continue

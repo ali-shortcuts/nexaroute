@@ -32,6 +32,8 @@ func upstreamKindFor(pType string) string {
 		return "anthropic"
 	case "gemini", "vertex":
 		return "gemini"
+	case "bedrock":
+		return "bedrock"
 	case "openai_responses":
 		return "openai_responses"
 	default:
@@ -201,6 +203,13 @@ func (s *Server) canonicalStreamPump(
 			evs, err = canonical.DecodeAnthropicStreamEvent(name, data)
 		case "gemini":
 			evs, _, err = canonical.DecodeGeminiStreamChunk(data)
+		case "bedrock":
+			// Terminal LATCHES for Bedrock: Converse sends a metadata
+			// event (usage) AFTER messageStop, and that chunk's own
+			// terminal=false must not un-end the stream.
+			var bedrockTerminal bool
+			evs, bedrockTerminal, err = canonical.DecodeBedrockStreamChunk(data)
+			terminal = terminal || bedrockTerminal
 		case "openai_responses":
 			evs, terminal, err = canonical.DecodeResponsesStreamEvent(name, data)
 		default:
@@ -349,6 +358,8 @@ func (s *Server) handleCanonicalResponse(
 		canResp, err = canonical.DecodeAnthropicResponse(body)
 	case "gemini":
 		canResp, err = canonical.DecodeGeminiResponse(body)
+	case "bedrock":
+		canResp, err = canonical.DecodeBedrockResponse(body)
 	case "openai_responses":
 		canResp, err = canonical.DecodeResponsesResponse(body)
 	default:
@@ -519,7 +530,7 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 		s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_attempt", Deployment: deployment.ID})
 		resp, sentPayload, repair, derr := s.doUpstreamWithRepair(
 			routeCtx, r.Header.Get("x-request-id"), bundle.a, deployment,
-			bundle.payload, req.Streaming, forward, dialect, profile,
+			bundle.payload, bundle.path, req.Streaming, forward, dialect, profile,
 			cfg.Routing.MaxRepairAttempts, &canReq,
 		)
 		if derr != nil {
