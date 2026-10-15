@@ -611,20 +611,25 @@ type DataHandlingConfig struct {
 }
 
 type ProviderConfig struct {
-	ID             string             `json:"id"`
-	Name           string             `json:"name"`
-	Type           string             `json:"type"`              // openai_compatible | anthropic_compatible | gemini | openai_responses | azure_openai | vertex
-	Dialect        string             `json:"dialect,omitempty"` // optional dialect override (see compat.Dialects)
-	BaseURL        string             `json:"base_url"`
-	DataHandling   DataHandlingConfig `json:"data_handling,omitempty"`
-	APIKey         string             `json:"api_key,omitempty"`
-	APIKeyEnv      string             `json:"api_key_env,omitempty"`
-	Credentials    []CredentialConfig `json:"credentials,omitempty"`
-	AuthMode       string             `json:"auth_mode,omitempty"` // bearer | x-api-key | x-goog-api-key | api-key | none
-	Headers        map[string]string  `json:"headers,omitempty"`
-	ForwardHeaders []string           `json:"forward_headers"`
-	ProxyURL       string             `json:"proxy_url,omitempty"`
-	AllowedHosts   []string           `json:"allowed_hosts,omitempty"`
+	ID           string             `json:"id"`
+	Name         string             `json:"name"`
+	Type         string             `json:"type"`              // openai_compatible | anthropic_compatible | gemini | openai_responses | azure_openai | vertex | bedrock
+	Dialect      string             `json:"dialect,omitempty"` // optional dialect override (see compat.Dialects)
+	BaseURL      string             `json:"base_url"`
+	DataHandling DataHandlingConfig `json:"data_handling,omitempty"`
+	APIKey       string             `json:"api_key,omitempty"`
+	APIKeyEnv    string             `json:"api_key_env,omitempty"`
+	Credentials  []CredentialConfig `json:"credentials,omitempty"`
+	AuthMode     string             `json:"auth_mode,omitempty"` // bearer | x-api-key | x-goog-api-key | api-key | none
+	// Bedrock (M5-1b): region plus env-var NAMES for the SigV4 secret
+	// material. The secret itself is never a config value.
+	AWSRegion       string            `json:"aws_region,omitempty"`
+	SecretKeyEnv    string            `json:"secret_key_env,omitempty"`
+	SessionTokenEnv string            `json:"session_token_env,omitempty"`
+	Headers         map[string]string `json:"headers,omitempty"`
+	ForwardHeaders  []string          `json:"forward_headers"`
+	ProxyURL        string            `json:"proxy_url,omitempty"`
+	AllowedHosts    []string          `json:"allowed_hosts,omitempty"`
 	// Resolved egress policy merged from global EgressConfig during Validate().
 	// Not serialized; populated at load time.
 	resolvedEgressDenyHosts  []string
@@ -1413,6 +1418,9 @@ func (p *ProviderConfig) ApplyDefaults() {
 			p.AuthMode = "bearer"
 		}
 	}
+	if p.Type == "bedrock" && p.AWSRegion == "" {
+		p.AWSRegion = "us-east-1"
+	}
 	if p.Type == "azure_openai" && p.APIVersion == "" {
 		p.APIVersion = "2024-10-21"
 	}
@@ -1890,8 +1898,17 @@ func (c Config) Validate() error {
 			return fmt.Errorf("duplicate provider id %q", p.ID)
 		}
 		seenP[p.ID] = true
-		if p.Type != "openai_compatible" && p.Type != "anthropic_compatible" && p.Type != "gemini" && p.Type != "openai_responses" && p.Type != "azure_openai" && p.Type != "vertex" {
+		if p.Type != "openai_compatible" && p.Type != "anthropic_compatible" && p.Type != "gemini" && p.Type != "openai_responses" && p.Type != "azure_openai" && p.Type != "vertex" && p.Type != "bedrock" {
 			return fmt.Errorf("provider %q has unsupported type %q", p.ID, p.Type)
+		}
+		if p.SecretKeyEnv != "" && !validEnvName(p.SecretKeyEnv) {
+			return fmt.Errorf("provider %q secret_key_env is not a valid environment variable name (the value is not echoed)", p.ID)
+		}
+		if p.SessionTokenEnv != "" && !validEnvName(p.SessionTokenEnv) {
+			return fmt.Errorf("provider %q session_token_env is not a valid environment variable name (the value is not echoed)", p.ID)
+		}
+		if p.Type == "bedrock" && p.SecretKeyEnv == "" {
+			return fmt.Errorf("provider %q of type bedrock requires secret_key_env naming the env var that holds the AWS secret access key", p.ID)
 		}
 		if p.BaseURL == "" {
 			return fmt.Errorf("provider %q base_url is required", p.ID)

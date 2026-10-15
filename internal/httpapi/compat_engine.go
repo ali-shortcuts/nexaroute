@@ -544,6 +544,9 @@ func (s *Server) finishCanonicalAttempt(bundle hedgeAttemptBundle, canReq canoni
 				bundle.path = "/v1beta/models/" + strings.TrimPrefix(bundle.c.Deployment.Model, "models/") + ":generateContent"
 			}
 		}
+	case "bedrock":
+		payload, _, err = canonical.EncodeBedrockRequest(canReq, bundle.c.Deployment.Model)
+		bundle.path = canonical.BedrockModelPath(bundle.c.Deployment.Model, canReq.Stream)
 	case "openai_responses":
 		payload, err = canonical.EncodeResponsesRequest(canReq, bundle.c.Deployment.Model)
 		bundle.path = p.ResponsesPath

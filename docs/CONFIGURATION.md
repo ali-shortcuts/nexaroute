@@ -174,13 +174,25 @@ openai_responses      OpenAI Responses API
 gemini                Google Gemini wire format, x-goog-api-key auth
 azure_openai          Azure OpenAI (M5-1a)
 vertex                Google Vertex AI (M5-1a)
+bedrock               Amazon Bedrock Converse API, SigV4 auth (M5-1b)
 ```
+
+(When the M5-1a PR also lands, this list gains `azure_openai` and `vertex`.)
 
 A provider is generic; adding another OpenAI-compatible endpoint should normally require configuration, not a new code branch.
 
 **Azure OpenAI** (`azure_openai`) speaks the OpenAI wire format but addresses deployments in the URL: requests go to `{base_url}/openai/deployments/{deployment}/chat/completions?api-version={api_version}`, where `{deployment}` is the model's upstream `model` value and `api_version` is a provider field (default `2024-10-21`). Authentication is the `api-key` header (the default `auth_mode` for this type) using the provider's configured credential.
 
 **Vertex AI** (`vertex`) speaks the Gemini wire format at `{base_url}/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:generateContent` (or `:streamGenerateContent?alt=sse` when streaming). `vertex_project` is required; `vertex_location` defaults to `us-central1`. Authentication is a Bearer OAuth2 access token supplied as the provider credential. **Token minting and refresh are not built in**: the gateway uses the credential it is given, so supply a token through your platform's broker/sidecar (or a short-lived token via `api_key_env`) and rotate it externally — Google service-account ADC flows are an operator-side concern, and an expired token simply fails upstream calls until replaced.
+
+**Amazon Bedrock** (`bedrock`, M5-1b) speaks the Converse API: requests are addressed per model at `{base_url}/model/{modelId}/converse` (or `/converse-stream` when streaming; the AWS binary event stream is translated by the gateway). Authentication is AWS SigV4, signed per request:
+
+- the access key ID comes from the provider's normal key fields (`api_key` or `api_key_env`);
+- the secret access key comes **only** from the environment variable named by the provider field `secret_key_env` (never a config value); adapter startup fails closed when it is unset or empty;
+- an optional session token comes from the env var named by `session_token_env`;
+- `aws_region` selects the signing region (default `us-east-1`) and should match the region in `base_url`.
+
+Documented limits: one credential pair per Bedrock provider (the credential-rotation pool does not apply); `tool_choice: "none"` withholds the tools because Converse has no none mode; reasoning/thinking blocks are not encoded to Converse (model-specific); document blocks are not mapped.
 
 ## Provider credentials
 
