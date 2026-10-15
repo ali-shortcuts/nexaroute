@@ -21,13 +21,13 @@ import (
 // limit in docs/COMPATIBILITY.md and pin it here.
 
 type conformanceClient struct {
-	name    string // anthropic | openai_chat | openai_responses
-	path    string
-	text    func(t *testing.T, s *Server) *httptest.ResponseRecorder
-	tool    func(t *testing.T, s *Server) *httptest.ResponseRecorder
-	result  func(t *testing.T, s *Server) *httptest.ResponseRecorder
-	stream  func(t *testing.T, s *Server) *httptest.ResponseRecorder
-	extract func(t *testing.T, body string) (text string, toolName string)
+	name       string // anthropic | openai_chat | openai_responses
+	path       string
+	text       func(t *testing.T, s *Server) *httptest.ResponseRecorder
+	tool       func(t *testing.T, s *Server) *httptest.ResponseRecorder
+	result     func(t *testing.T, s *Server) *httptest.ResponseRecorder
+	stream     func(t *testing.T, s *Server) *httptest.ResponseRecorder
+	extract    func(t *testing.T, body string) (text string, toolName string)
 	streamText func(t *testing.T, body string) (assembled string, terminal bool)
 }
 
