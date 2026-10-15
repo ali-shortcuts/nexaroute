@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -261,6 +262,24 @@ func OpenReadOnly(path string) (*Store, error) {
 		return nil, fmt.Errorf("open security store read-only: %w", err)
 	}
 	return &Store{db: db, maxAuditItems: 1_000_000, retention: 0}, nil
+}
+
+// BackupTo writes a consistent snapshot of the whole database to w
+// (bbolt transaction copy). It is safe to call on a store opened
+// read-only while another process holds the writer lock, which is how
+// the backup CLI snapshots a running gateway's audit store. The
+// snapshot opens as a normal store file and its audit chain verifies.
+func (s *Store) BackupTo(ctx context.Context, w io.Writer) error {
+	if s == nil || s.db == nil {
+		return errors.New("security store is not open")
+	}
+	return s.db.View(func(tx *bolt.Tx) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		_, err := tx.WriteTo(w)
+		return err
+	})
 }
 
 func (s *Store) Close() error {

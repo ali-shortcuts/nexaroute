@@ -1,0 +1,39 @@
+name: Redis control-plane integration
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: integration-redis-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  integration-redis:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      redis:
+        image: redis:7.4.2-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.x'
+          cache: false
+      - name: Redis Store integration tests
+        env:
+          NEXAROUTE_TEST_REDIS_URL: redis://127.0.0.1:6379/0
+        run: go test -race -tags integration ./internal/controlplane/ -run 'TestRedisIntegration' -count=1 -v
+      - name: Redis gateway runtime integration tests
+        env:
+          NEXAROUTE_TEST_REDIS_URL: redis://127.0.0.1:6379/0
+        run: go test -race -tags integration ./cmd/gateway/ -run 'TestControlPlaneRedisIntegration' -count=1 -v

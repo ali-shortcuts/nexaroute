@@ -79,6 +79,26 @@ the connection strings themselves are never written to JSON:
 `state_path` values resolve against the config directory. `memory` is for
 tests only. DSNs and URLs are never stored or logged.
 
+## Optional OTLP span export
+
+Span export is disabled by default. When `telemetry.otlp_endpoint_env`
+names an environment variable holding the full OTLP/HTTP traces URL
+(the same env-name-only pattern as the control-plane backends), the
+gateway exports one span per data-plane LLM request
+(`/v1/messages`, `/v1/messages/count_tokens`, `/v1/chat/completions`,
+`/v1/responses`) with GenAI semantic attributes. An invalid URL fails
+startup. Spans never contain prompts, completions, keys or client
+identities. See [OBSERVABILITY.md](OBSERVABILITY.md).
+
+```json
+{
+  "telemetry": {
+    "otlp_endpoint_env": "NEXAROUTE_OTLP_ENDPOINT",
+    "service_name": "nexaroute"
+  }
+}
+```
+
 `postgres` is fully wired (pgx driver): the DSN is read only from the
 environment variable named by `postgres_dsn_env`; startup fails closed
 with a secret-safe error when the variable is missing or the database is
@@ -88,16 +108,26 @@ with a 10-second timeout, and the versioned control-plane migrations
 (checksum-verified, advisory-locked against concurrent replicas) are
 applied on startup. `redis` is also fully wired (go-redis client): the
 URL is read only from the environment variable named by `redis_url_env`,
-startup pings with a 10-second timeout, and snapshots are stored as
-per-namespace hashes guarded by atomic compare-and-set scripts with the
-same revision semantics as the other backends. **Redis durability
-warning:** this backend is only as durable as the operator's Redis —
-use it for durable control-plane state only with persistence enabled
-(AOF `appendonly yes` and/or RDB snapshots) and, where availability
-matters, replica/failover management; a default ephemeral Redis loses
-control-plane state on restart. `migration_dry_run` validates backend
-selection and readiness without writing state or applying migrations.
-Failure modes are `fail_open`, `fail_closed`, and `last_known_good`.
+connection timeouts/retries and the pool are bounded, and startup performs a
+10-second `PING`. Startup fails closed with a credential-safe error and never
+falls back to another backend. Snapshots are stored as per-namespace hashes
+guarded by atomic compare-and-set scripts. Revision comparisons and increments
+use exact decimal strings, so the full `uint64` range is not rounded by Lua
+numbers; malformed records fail deterministically, stale writes/deletes return
+`ErrConflict`, and deleting a missing snapshot returns `ErrNotFound`.
+`migration_dry_run` validates backend selection and readiness without reading or
+writing snapshot state (Redis does only the bounded `PING`) or applying
+migrations.
+
+**Redis durability warning:** this backend is only as durable as the operator's
+Redis configuration. For durable state, explicitly configure and test AOF
+(`appendonly yes`) and/or RDB snapshots, storage durability, replication,
+failover, and backup/restore against the deployment's recovery objectives. A
+default ephemeral Redis loses control-plane state on restart. Atomic revision
+checks apply on the Redis server executing the script; they do not imply
+multi-primary consistency, cross-replica safety, or durability beyond Redis's
+configured guarantees. Failure modes are `fail_open`, `fail_closed`, and
+`last_known_good`.
 
 ## Implicit-default warnings and opt-in strict config
 
@@ -138,11 +168,19 @@ The in-memory event feed is independently bounded: it keeps only the newest ring
 ## Provider types
 
 ```text
-openai_compatible
-anthropic_compatible
+openai_compatible     OpenAI wire format, bearer auth, {base_url}/v1/chat/completions
+anthropic_compatible  Anthropic wire format, x-api-key auth
+openai_responses      OpenAI Responses API
+gemini                Google Gemini wire format, x-goog-api-key auth
+azure_openai          Azure OpenAI (M5-1a)
+vertex                Google Vertex AI (M5-1a)
 ```
 
 A provider is generic; adding another OpenAI-compatible endpoint should normally require configuration, not a new code branch.
+
+**Azure OpenAI** (`azure_openai`) speaks the OpenAI wire format but addresses deployments in the URL: requests go to `{base_url}/openai/deployments/{deployment}/chat/completions?api-version={api_version}`, where `{deployment}` is the model's upstream `model` value and `api_version` is a provider field (default `2024-10-21`). Authentication is the `api-key` header (the default `auth_mode` for this type) using the provider's configured credential.
+
+**Vertex AI** (`vertex`) speaks the Gemini wire format at `{base_url}/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:generateContent` (or `:streamGenerateContent?alt=sse` when streaming). `vertex_project` is required; `vertex_location` defaults to `us-central1`. Authentication is a Bearer OAuth2 access token supplied as the provider credential. **Token minting and refresh are not built in**: the gateway uses the credential it is given, so supply a token through your platform's broker/sidecar (or a short-lived token via `api_key_env`) and rotate it externally — Google service-account ADC flows are an operator-side concern, and an expired token simply fails upstream calls until replaced.
 
 ## Provider credentials
 
@@ -347,7 +385,7 @@ Discovery authorization, token, and JWKS endpoints must be absolute HTTPS URLs. 
 
 When `security_store_path` is relative, it is resolved against the directory containing the config file. If omitted, the default is `security/nexaroute-security.db`, so the application creates a dedicated private `security/` child directory instead of placing the database directly beside the config. Missing parent directories are created as mode `0700`; an already existing parent that is not private is rejected and must be fixed by the operator.
 
-`security_store_backend` selects the admin security-store backend (M4-1): `bbolt` (the default; local file at `security_store_path`, zero external services) — the `redis` and `postgres` adapters land with M4-2 behind the same `securitystore.Backend` interface. Selecting `redis`/`postgres` requires `security_store_url` and currently **fails closed at startup** with an explicit error: the gateway never silently substitutes a different store when the configured durable backend is unavailable. Only admin sessions and the audit chain live in this store; rate-limit buckets, provider health, caches and quota reservations are process-local by design (see `specs/019-m4-1-storage-backend/`).
+`security_store_backend` selects the admin security-store backend: `bbolt` (the default; local file at `security_store_path`, zero external services), `postgres` or `redis` (M4-2; sessions and the audit chain in the shared service, safe to share between gateway processes — the Redis adapter commits through version-checked Lua scripts, the PostgreSQL adapter through serialized transactions). Selecting `postgres`/`redis` requires `security_store_url`. `security_store_url` may be a literal connection string or `env:VARIABLE_NAME` to read it from the environment — the env form is recommended so credentials stay out of durable config. A configured backend that cannot be reached **fails closed at startup**: the gateway never silently substitutes a different store. Only admin sessions and the audit chain live in this store; rate-limit buckets, provider health, caches and quota reservations are process-local by design (see `specs/019-m4-1-storage-backend/`).
 
 Set the secret outside the config, for example with your service manager/secret injector (do not put its value in shell history):
 
@@ -483,6 +521,54 @@ The resulting **effective remaining** values feed quota pressure. This is intent
 | `context_window` | `0` (unknown) | Advertised usable context window in tokens; requests estimated to exceed it skip this deployment. |
 | `input_cost_per_mtok` | `0` | USD per million input tokens, used for estimated-spend accounting. |
 | `output_cost_per_mtok` | `0` | USD per million output tokens, used for estimated-spend accounting. |
+
+### Versioned price book (`pricing.versions`, M5-6)
+
+A versioned price book overrides model prices for both cost-aware
+routing and spend accounting. Costs are computed **when usage is
+recorded**, under the version active at that moment — a later
+price change never reprices recorded costs, and the usage snapshot
+attributes spend per version (`cost_by_version_usd`). Usage without
+a recorded cost is estimated from model-config prices (see the
+fallback below), and those estimates can change when the fallback
+rates change.
+
+```yaml
+pricing:
+  versions:
+    - version: "2026-q4"
+      effective_from: "2026-10-01T00:00:00Z"
+      prices:
+        "provider/model": { input_per_mtok: 3, output_per_mtok: 15, cache_read_per_mtok: 0.3, cache_write_per_mtok: 3.75 }
+```
+
+- The active version for a deployment is the latest
+  `effective_from <= now` **that prices that deployment**; a
+  deployment missing from the book falls back to its model-config
+  prices (version label `config`), then to zero cost (label
+  `unpriced`; tokens are still counted).
+- `cache_read_per_mtok` / `cache_write_per_mtok` are optional; when
+  omitted, the input rate applies.
+- Cache billing conventions follow the providers: Anthropic's
+  `input_tokens` exclude cache tokens (priced additively);
+  OpenAI/Gemini counts include the cached share in the input
+  count, so the cached share is moved to the cache-read rate —
+  never double-charged.
+
+### Virtual-key budgets (`client_auth.virtual_keys[].budget_usd`, M5-6)
+
+A cumulative USD spend cap per virtual key (`0` = unlimited). At
+admission the gateway atomically reserves a conservative estimate
+(priced against the most expensive deployment serving the model:
+body-derived input estimate + the request's output allowance, or
+4096 tokens when unset). The first usage report settles the
+reservation to the **actual** recorded cost; cache hits release
+the hold (no upstream spend). A request is rejected with
+`402 client budget exceeded` when committed + reserved + estimate
+would exceed the budget. Reservations that never settle (e.g. a
+transport failure with no usage report) are committed at their
+estimate after 15 minutes. Budget state is runtime state, like
+the usage tracker itself: **it resets on gateway restart**.
 
 ## Model intelligence scorecards and evaluation
 

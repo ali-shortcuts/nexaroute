@@ -4,11 +4,27 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/ali-shortcuts/nexaroute/internal/health"
 	"github.com/ali-shortcuts/nexaroute/internal/router"
 )
+
+// renderPrometheusHistogram writes one histogram series set in the
+// Prometheus text format: cumulative buckets with `le` labels (bounds
+// in milliseconds), then _sum and _count.
+func renderPrometheusHistogram(w http.ResponseWriter, name, deployment, provider string, h health.Histogram) {
+	cumulative := h.Cumulative()
+	for i, bound := range health.LatencyHistogramBoundsMS {
+		fmt.Fprintf(w, "%s_bucket{deployment=%q,provider=%q,le=%q} %d\n",
+			name, deployment, provider, strconv.FormatFloat(bound, 'f', -1, 64), cumulative[i])
+	}
+	fmt.Fprintf(w, "%s_bucket{deployment=%q,provider=%q,le=\"+Inf\"} %d\n",
+		name, deployment, provider, cumulative[len(cumulative)-1])
+	fmt.Fprintf(w, "%s_sum{deployment=%q,provider=%q} %.3f\n", name, deployment, provider, h.SumMS)
+	fmt.Fprintf(w, "%s_count{deployment=%q,provider=%q} %d\n", name, deployment, provider, h.Count)
+}
 
 func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -82,6 +98,21 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "nexaroute_deployment_ewma_failure_rate{deployment=%q,provider=%q} %.6f\n", id, provider, h.EWMAFailureRate)
 		fmt.Fprintf(w, "nexaroute_deployment_successes_total{deployment=%q,provider=%q} %d\n", id, provider, h.Successes)
 		fmt.Fprintf(w, "nexaroute_deployment_failures_total{deployment=%q,provider=%q} %d\n", id, provider, h.Failures)
+	}
+
+	fmt.Fprintln(w, "# HELP nexaroute_deployment_request_latency_ms Observed per-attempt latency distribution by deployment (same samples as the EWMA latency gauge).")
+	fmt.Fprintln(w, "# TYPE nexaroute_deployment_request_latency_ms histogram")
+	fmt.Fprintln(w, "# HELP nexaroute_deployment_ttft_ms Streaming time-to-first-byte distribution by deployment (same samples as the EWMA TTFT gauge).")
+	fmt.Fprintln(w, "# TYPE nexaroute_deployment_ttft_ms histogram")
+	for _, d := range ds {
+		latency, ttft, ok := s.hm.Histograms(d.ID)
+		if !ok {
+			continue
+		}
+		id := sanitizeMetricLabel(d.ID)
+		provider := sanitizeMetricLabel(d.ProviderID)
+		renderPrometheusHistogram(w, "nexaroute_deployment_request_latency_ms", id, provider, latency)
+		renderPrometheusHistogram(w, "nexaroute_deployment_ttft_ms", id, provider, ttft)
 	}
 
 	fmt.Fprintln(w, "# HELP nexaroute_runtime_events_total Cumulative routing/probe/stream events.")
