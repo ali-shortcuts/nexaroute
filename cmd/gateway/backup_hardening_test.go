@@ -1034,8 +1034,8 @@ func TestRestoreRecoverGuards(t *testing.T) {
 			t.Fatal(err)
 		}
 		dir := writeJournal(t, &restoreJournalManifest{
-			Format: restoreJournalFormat, ID: "done1", State: "completed",
-			Entries: []restoreJournalEntry{{Name: backupEntryConfig, Target: sentinel, Existed: true, Mode: 0o600, Saved: "entry-0", Installed: true}},
+			Format: restoreJournalFormat, ID: "d00d1e7a", State: "completed",
+			Entries: []restoreJournalEntry{{Name: backupEntryConfig, Target: sentinel, Existed: true, Mode: 0o600, Saved: "entry-0", SavedSHA256: sha256Hex([]byte("STALE PRE-STATE")), Installed: true}},
 		})
 		if err := os.WriteFile(filepath.Join(dir, "entry-0"), []byte("STALE PRE-STATE"), 0o600); err != nil {
 			t.Fatal(err)
@@ -1074,6 +1074,399 @@ func TestRestoreRecoverGuards(t *testing.T) {
 			t.Fatal("an unknown-format journal must be preserved, never replayed or deleted")
 		}
 	})
+}
+
+// --- Round 5 Finding 1: journal preparation durability failures ---
+
+func journalDirsInTemp(t *testing.T) map[string]bool {
+	t.Helper()
+	out := map[string]bool{}
+	entries, err := os.ReadDir(os.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "nexaroute-restore-journal-") {
+			out[e.Name()] = true
+		}
+	}
+	return out
+}
+
+// A failed saved-copy write/sync must abort BEFORE any destination is
+// modified, and the unusable journal must be cleaned up.
+func TestRestoreAbortsWhenJournalCopyFails(t *testing.T) {
+	_, configPath := opsFixture(t)
+	bundle := filepath.Join(t.TempDir(), "b.tar")
+	if code, stderr := runBackupCode(t, configPath, bundle); code != 0 {
+		t.Fatalf("backup exit=%d stderr=%s", code, stderr)
+	}
+	targetConfig := filepath.Join(t.TempDir(), "config.json")
+	pre := []byte("PRE-EXISTING - MUST SURVIVE")
+	if err := os.WriteFile(targetConfig, pre, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	orig := writeJournalSavedCopy
+	writeJournalSavedCopy = func(string, []byte) error { return errors.New("injected saved-copy write failure") }
+	defer func() { writeJournalSavedCopy = orig }()
+
+	before := journalDirsInTemp(t)
+	var stdout, stderr bytes.Buffer
+	code := runRestore([]string{"--bundle", bundle, "--config", targetConfig, "--force"}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("restore exit=%d, want 1 (stderr=%s)", code, stderr.String())
+	}
+	if got, _ := os.ReadFile(targetConfig); !bytes.Equal(got, pre) {
+		t.Fatal("no destination may be modified when journal preparation fails")
+	}
+	for name := range journalDirsInTemp(t) {
+		if !before[name] {
+			t.Fatalf("failed journal preparation must clean up its journal; leftover: %s", name)
+		}
+	}
+}
+
+// If every install landed but the "completed" state cannot be
+// persisted, restore must NOT report success and must NOT delete the
+// journal: it stays "installing" on disk (recoverable = rollback).
+func TestRestoreCompletedPersistFailure(t *testing.T) {
+	_, configPath := opsFixture(t)
+	bundle := filepath.Join(t.TempDir(), "b.tar")
+	if code, stderr := runBackupCode(t, configPath, bundle); code != 0 {
+		t.Fatalf("backup exit=%d stderr=%s", code, stderr)
+	}
+	bundleConfig, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetConfig := filepath.Join(t.TempDir(), "config.json")
+	pre := []byte("PRE-RESTORE BYTES")
+	if err := os.WriteFile(targetConfig, pre, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	orig := persistJournalManifest
+	persistJournalManifest = func(dir string, m *restoreJournalManifest) error {
+		if m.State == "completed" {
+			return errors.New("injected completion persistence failure")
+		}
+		return orig(dir, m)
+	}
+	var stdout, stderr bytes.Buffer
+	code := runRestore([]string{"--bundle", bundle, "--config", targetConfig, "--force"}, &stdout, &stderr)
+	persistJournalManifest = orig
+
+	if code != 1 {
+		t.Fatalf("restore exit=%d, want 1 when completion cannot be persisted (stderr=%s)", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "could not be marked completed") {
+		t.Fatalf("stderr must explain the ambiguous completion, got: %s", stderr.String())
+	}
+	if got, _ := os.ReadFile(targetConfig); !bytes.Equal(got, bundleConfig) {
+		t.Fatal("installs DID land; the destination must hold the restored bytes")
+	}
+	// Locate the preserved journal and check its on-disk state.
+	var journalDir string
+	for _, dir := range findInterruptedRestoreJournals() {
+		if m, err := readJournalManifest(dir); err == nil && len(m.Entries) > 0 && m.Entries[0].Target == targetConfig {
+			journalDir = dir
+			break
+		}
+	}
+	if journalDir == "" {
+		t.Fatal("the journal must be preserved when completion cannot be persisted")
+	}
+	m, err := readJournalManifest(journalDir)
+	if err != nil || m.State != "installing" {
+		t.Fatalf("on-disk journal state=%q err=%v, want \"installing\"", m.State, err)
+	}
+	// The operator's documented option: roll the transaction back.
+	stdout.Reset()
+	stderr.Reset()
+	if code := runRestore([]string{"--recover", journalDir}, &stdout, &stderr); code != 0 {
+		t.Fatalf("recover exit=%d, want 0 (stderr=%s)", code, stderr.String())
+	}
+	if got, _ := os.ReadFile(targetConfig); !bytes.Equal(got, pre) {
+		t.Fatal("recovery after a failed completion must restore the pre-restore bytes")
+	}
+}
+
+// --- Round 5 Finding 2: strict journal validation (adversarial) ---
+
+func fabricateJournal(t *testing.T, m *restoreJournalManifest, saved map[string][]byte) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "nexaroute-restore-journal-fab")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for name, data := range saved {
+		if err := os.WriteFile(filepath.Join(dir, name), data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writeJournalManifest(dir, m); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+func validInstallingJournal(target string, pre []byte) (*restoreJournalManifest, map[string][]byte) {
+	return &restoreJournalManifest{
+		Format: restoreJournalFormat, ID: "abcdef0123456789", State: "installing",
+		Entries: []restoreJournalEntry{{Name: backupEntryConfig, Target: target, Existed: true, Mode: 0o600, Saved: "entry-0", SavedSHA256: sha256Hex(pre), Installed: true}},
+	}, map[string][]byte{"entry-0": pre}
+}
+
+func TestRestoreRecoverRejectsInvalidJournals(t *testing.T) {
+	sentinel := []byte("SENTINEL DESTINATION - MUST NOT CHANGE")
+	pre := []byte("journaled pre-state")
+
+	setup := func(t *testing.T) (target string) {
+		target = filepath.Join(t.TempDir(), "config.json")
+		if err := os.WriteFile(target, sentinel, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return target
+	}
+	assertRejected := func(t *testing.T, dir, target string) {
+		t.Helper()
+		var stdout, stderr bytes.Buffer
+		if code := runRestore([]string{"--recover", dir}, &stdout, &stderr); code != 1 {
+			t.Fatalf("recover exit=%d, want 1 (stderr=%s)", code, stderr.String())
+		}
+		if got, _ := os.ReadFile(target); !bytes.Equal(got, sentinel) {
+			t.Fatal("a rejected journal must not modify any destination")
+		}
+		if _, err := os.Stat(filepath.Join(dir, "manifest.json")); err != nil {
+			t.Fatal("a rejected journal must be preserved")
+		}
+	}
+
+	t.Run("unknown state", func(t *testing.T) {
+		target := setup(t)
+		m, saved := validInstallingJournal(target, pre)
+		m.State = "bogus"
+		assertRejected(t, fabricateJournal(t, m, saved), target)
+	})
+	t.Run("empty state", func(t *testing.T) {
+		target := setup(t)
+		m, saved := validInstallingJournal(target, pre)
+		m.State = ""
+		assertRejected(t, fabricateJournal(t, m, saved), target)
+	})
+	t.Run("malformed manifest JSON", func(t *testing.T) {
+		target := setup(t)
+		dir := filepath.Join(t.TempDir(), "nexaroute-restore-journal-fab")
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "manifest.json"), []byte("{not json"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		assertRejected(t, dir, target)
+	})
+	t.Run("missing transaction ID", func(t *testing.T) {
+		target := setup(t)
+		m, saved := validInstallingJournal(target, pre)
+		m.ID = ""
+		assertRejected(t, fabricateJournal(t, m, saved), target)
+	})
+	t.Run("zero entries", func(t *testing.T) {
+		target := setup(t)
+		m, _ := validInstallingJournal(target, pre)
+		m.Entries = nil
+		assertRejected(t, fabricateJournal(t, m, nil), target)
+	})
+	t.Run("saved name traversal", func(t *testing.T) {
+		target := setup(t)
+		m, saved := validInstallingJournal(target, pre)
+		m.Entries[0].Saved = "../escape"
+		assertRejected(t, fabricateJournal(t, m, saved), target)
+	})
+	t.Run("saved name absolute", func(t *testing.T) {
+		target := setup(t)
+		m, saved := validInstallingJournal(target, pre)
+		m.Entries[0].Saved = "/tmp/entry-0"
+		assertRejected(t, fabricateJournal(t, m, saved), target)
+	})
+	t.Run("saved copy is a symlink", func(t *testing.T) {
+		target := setup(t)
+		m, saved := validInstallingJournal(target, pre)
+		dir := fabricateJournal(t, m, saved)
+		victim := filepath.Join(t.TempDir(), "victim")
+		if err := os.WriteFile(victim, []byte("VICTIM"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		savedPath := filepath.Join(dir, "entry-0")
+		if err := os.Remove(savedPath); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(victim, savedPath); err != nil {
+			t.Fatal(err)
+		}
+		assertRejected(t, dir, target)
+		if got, _ := os.ReadFile(victim); string(got) != "VICTIM" {
+			t.Fatal("the symlinked victim must be untouched")
+		}
+	})
+	t.Run("saved copy is a directory", func(t *testing.T) {
+		target := setup(t)
+		m, saved := validInstallingJournal(target, pre)
+		dir := fabricateJournal(t, m, saved)
+		savedPath := filepath.Join(dir, "entry-0")
+		if err := os.Remove(savedPath); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Mkdir(savedPath, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		assertRejected(t, dir, target)
+	})
+	t.Run("duplicate targets", func(t *testing.T) {
+		target := setup(t)
+		m, saved := validInstallingJournal(target, pre)
+		m.Entries = append(m.Entries, restoreJournalEntry{Name: backupEntrySecurity, Target: target, Existed: true, Mode: 0o600, Saved: "entry-1", SavedSHA256: sha256Hex(pre)})
+		saved["entry-1"] = pre
+		assertRejected(t, fabricateJournal(t, m, saved), target)
+	})
+	t.Run("aliased targets via symlink", func(t *testing.T) {
+		target := setup(t)
+		alias := filepath.Join(t.TempDir(), "alias.json")
+		if err := os.Symlink(target, alias); err != nil {
+			t.Fatal(err)
+		}
+		m, saved := validInstallingJournal(target, pre)
+		m.Entries = append(m.Entries, restoreJournalEntry{Name: backupEntrySecurity, Target: alias, Existed: true, Mode: 0o600, Saved: "entry-1", SavedSHA256: sha256Hex(pre)})
+		saved["entry-1"] = pre
+		assertRejected(t, fabricateJournal(t, m, saved), target)
+		if link, err := os.Lstat(alias); err != nil || link.Mode()&os.ModeSymlink == 0 {
+			t.Fatal("the alias symlink itself must be untouched")
+		}
+	})
+	t.Run("missing saved copy", func(t *testing.T) {
+		target := setup(t)
+		m, _ := validInstallingJournal(target, pre)
+		assertRejected(t, fabricateJournal(t, m, nil), target)
+	})
+	t.Run("tampered saved copy fails checksum", func(t *testing.T) {
+		target := setup(t)
+		m, _ := validInstallingJournal(target, pre)
+		assertRejected(t, fabricateJournal(t, m, map[string][]byte{"entry-0": []byte("TAMPERED BYTES")}), target)
+	})
+	t.Run("absent entry with saved metadata", func(t *testing.T) {
+		target := setup(t)
+		m, saved := validInstallingJournal(target, pre)
+		m.Entries[0].Existed = false // contradicts Saved/SavedSHA256/Mode
+		assertRejected(t, fabricateJournal(t, m, saved), target)
+	})
+	t.Run("journal dir permissions too broad", func(t *testing.T) {
+		target := setup(t)
+		m, saved := validInstallingJournal(target, pre)
+		dir := fabricateJournal(t, m, saved)
+		if err := os.Chmod(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		assertRejected(t, dir, target)
+	})
+	t.Run("journal dir passed through a symlink", func(t *testing.T) {
+		target := setup(t)
+		m, saved := validInstallingJournal(target, pre)
+		realDir := fabricateJournal(t, m, saved)
+		link := filepath.Join(t.TempDir(), "journal-link")
+		if err := os.Symlink(realDir, link); err != nil {
+			t.Fatal(err)
+		}
+		var stdout, stderr bytes.Buffer
+		if code := runRestore([]string{"--recover", link}, &stdout, &stderr); code != 1 {
+			t.Fatalf("recover via symlinked journal dir exit=%d, want 1", code)
+		}
+		if got, _ := os.ReadFile(target); !bytes.Equal(got, sentinel) {
+			t.Fatal("destination must be unchanged")
+		}
+		if _, err := os.Stat(filepath.Join(realDir, "manifest.json")); err != nil {
+			t.Fatal("the real journal must be preserved")
+		}
+	})
+	t.Run("manifest is a symlink", func(t *testing.T) {
+		target := setup(t)
+		m, saved := validInstallingJournal(target, pre)
+		dir := fabricateJournal(t, m, saved)
+		manPath := filepath.Join(dir, "manifest.json")
+		raw, err := os.ReadFile(manPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		realMan := filepath.Join(t.TempDir(), "real-manifest.json")
+		if err := os.WriteFile(realMan, raw, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Remove(manPath); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(realMan, manPath); err != nil {
+			t.Fatal(err)
+		}
+		var stdout, stderr bytes.Buffer
+		if code := runRestore([]string{"--recover", dir}, &stdout, &stderr); code != 1 {
+			t.Fatalf("recover with symlinked manifest exit=%d, want 1", code)
+		}
+		if got, _ := os.ReadFile(target); !bytes.Equal(got, sentinel) {
+			t.Fatal("destination must be unchanged")
+		}
+		if _, err := os.Lstat(manPath); err != nil {
+			t.Fatal("the journal must be preserved")
+		}
+	})
+}
+
+// Recovery that fails midway must preserve the journal, name the
+// failed destination, and still recover the others.
+func TestRestoreRecoverFailurePreservesJournal(t *testing.T) {
+	dir1 := t.TempDir()
+	targetA := filepath.Join(dir1, "config.json")
+	targetB := filepath.Join(dir1, "security.db")
+	preA, preB := []byte("PRE A"), []byte("PRE B")
+	for _, target := range []string{targetA, targetB} {
+		if err := os.WriteFile(target, []byte("INSTALLED STATE"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m := &restoreJournalManifest{
+		Format: restoreJournalFormat, ID: "0123456789abcdef", State: "installing",
+		Entries: []restoreJournalEntry{
+			{Name: backupEntryConfig, Target: targetA, Existed: true, Mode: 0o600, Saved: "entry-0", SavedSHA256: sha256Hex(preA), Installed: true},
+			{Name: backupEntrySecurity, Target: targetB, Existed: true, Mode: 0o600, Saved: "entry-1", SavedSHA256: sha256Hex(preB), Installed: true},
+		},
+	}
+	journalDir := fabricateJournal(t, m, map[string][]byte{"entry-0": preA, "entry-1": preB})
+
+	orig := restoreRollbackWriteFile
+	restoreRollbackWriteFile = func(path string, data []byte, perm os.FileMode) error {
+		if path == targetB {
+			return errors.New("injected recovery write failure")
+		}
+		return orig(path, data, perm)
+	}
+	var stdout, stderr bytes.Buffer
+	code := runRestore([]string{"--recover", journalDir}, &stdout, &stderr)
+	restoreRollbackWriteFile = orig
+
+	if code != 1 {
+		t.Fatalf("recover exit=%d, want 1 (stderr=%s)", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), targetB) {
+		t.Fatalf("error must name the failed destination %s; got: %s", targetB, stderr.String())
+	}
+	if _, err := os.Stat(filepath.Join(journalDir, "manifest.json")); err != nil {
+		t.Fatal("an incomplete recovery must preserve the journal")
+	}
+	if got, _ := os.ReadFile(targetA); !bytes.Equal(got, preA) {
+		t.Fatal("the recoverable destination must still be recovered")
+	}
+	if got, _ := os.ReadFile(targetB); string(got) != "INSTALLED STATE" {
+		t.Fatal("the failed destination must be left as it was")
+	}
 }
 
 // --- Fix 5: bundle payload bounds ---

@@ -14,7 +14,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/ali-shortcuts/nexaroute/internal/config"
@@ -641,22 +643,25 @@ type installItem struct{ name, target string }
 // a leftover completed journal is never rolled back).
 //
 // Recovery is explicit: `nexaroute restore --recover <journal-dir>`
-// validates the format version (unknown formats are refused, never
-// replayed), rolls every destination back to its journaled state,
-// and removes the journal only when every destination was recovered;
-// otherwise the journal stays and the error names the destinations
-// that still need recovery. A normal restore (and doctor) reports
-// interrupted journals it finds, with the recovery command.
+// first STRICTLY validates the journal (validateJournal: format,
+// provenance, structure, and a verified SHA-256 per saved copy —
+// unknown or inconsistent journals are refused, never replayed),
+// rolls every destination back to its journaled state, and removes
+// the journal only when every destination was recovered; otherwise
+// the journal stays and the error names the destinations that still
+// need recovery. A normal restore (and doctor) reports interrupted
+// journals it finds, with the recovery command.
 const restoreJournalFormat = "nexaroute-restore-journal/1"
 
 type restoreJournalEntry struct {
-	Name      string      `json:"name"`              // bundle entry name
-	Target    string      `json:"target"`            // absolute destination path
-	Existed   bool        `json:"existed"`           // whether anything was there before
-	Mode      os.FileMode `json:"mode,omitempty"`    // pre-restore permission bits (regular files)
-	LinkTo    string      `json:"link_to,omitempty"` // pre-restore symlink target
-	Saved     string      `json:"saved,omitempty"`   // journal copy file name (regular files)
-	Installed bool        `json:"installed"`         // whether this install landed (progress marker)
+	Name        string      `json:"name"`                   // bundle entry name
+	Target      string      `json:"target"`                 // absolute destination path
+	Existed     bool        `json:"existed"`                // whether anything was there before
+	Mode        os.FileMode `json:"mode,omitempty"`         // pre-restore permission bits (regular files)
+	LinkTo      string      `json:"link_to,omitempty"`      // pre-restore symlink target
+	Saved       string      `json:"saved,omitempty"`        // journal copy file name (regular files)
+	SavedSHA256 string      `json:"saved_sha256,omitempty"` // SHA-256 of the journal copy; recovery verifies it before use
+	Installed   bool        `json:"installed"`              // whether this install landed (progress marker)
 }
 
 type restoreJournalManifest struct {
@@ -665,6 +670,51 @@ type restoreJournalManifest struct {
 	CreatedAt time.Time             `json:"created_at"`
 	State     string                `json:"state"` // prepared | installing | completed
 	Entries   []restoreJournalEntry `json:"entries"`
+}
+
+// persistJournalManifest is the seam through which installWithRollback
+// records journal state; tests can fail a chosen transition (notably
+// the final "completed" write). Production code uses
+// writeJournalManifest.
+var persistJournalManifest = writeJournalManifest
+
+// writeJournalSavedCopy is the seam for writing one saved pre-restore
+// copy; production uses writeSavedCopyDurable.
+var writeJournalSavedCopy = writeSavedCopyDurable
+
+// writeSavedCopyDurable writes a saved pre-restore copy through an
+// open handle, checking every step and fsyncing the FILE ITSELF
+// before returning: a recovery record whose bytes may still sit in a
+// page cache when the first destination is installed is not durable,
+// and a directory sync alone does not fix that.
+func writeSavedCopyDurable(path string, data []byte) error {
+	fh, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := fh.Write(data); err != nil {
+		_ = fh.Close()
+		return err
+	}
+	if err := fh.Chmod(0o600); err != nil {
+		_ = fh.Close()
+		return err
+	}
+	if err := fh.Sync(); err != nil {
+		_ = fh.Close()
+		return err
+	}
+	return fh.Close()
+}
+
+// removeJournalDir deletes a journal and then syncs the PARENT
+// directory (best effort) so the deletion itself is durable.
+func removeJournalDir(dir string) error {
+	if err := os.RemoveAll(dir); err != nil {
+		return err
+	}
+	_ = syncDir(filepath.Dir(dir))
+	return nil
 }
 
 // writeJournalManifest atomically replaces the journal manifest and
@@ -756,13 +806,188 @@ func findInterruptedRestoreJournals() []string {
 // removed only when every destination was recovered; otherwise it is
 // preserved and the returned error names the destinations that still
 // need recovery. A completed journal is cleaned up, never replayed.
+// validateJournal strictly validates a journal BEFORE recovery
+// mutates anything. A journal directory is untrusted input: a caller
+// can point --recover at any directory, so a manifest that merely
+// parses is never enough. The checks establish provenance and
+// internal consistency:
+//
+//   - the journal directory is a real directory (not a symlink) with
+//     no group/other access, owned by the current user where the
+//     platform exposes ownership, and the manifest is a regular,
+//     non-symlink file with no group/other access;
+//   - the transaction ID is hex, the state is one of the known
+//     states, and the entry list is non-empty, small, and uses only
+//     known bundle entry names, without duplicates;
+//   - every destination is an absolute path and no two destinations
+//     canonicalize to the same file (duplicates and aliases refused);
+//   - pre-state metadata is consistent: absent destinations carry no
+//     saved state; symlink entries carry a link target and no saved
+//     copy; regular-file entries carry a saved copy named exactly
+//     entry-<n>, a permission-only mode, and a SHA-256 that VERIFIES
+//     against the copy's content — and the copy itself is a regular,
+//     non-symlink, private file within the size limit.
+//
+// What this cannot do: prove a journal was written by NexaRoute
+// (there is no signature). A journal stays operator-trusted input —
+// anyone who can fabricate a fully consistent journal in a private
+// directory can direct recovery writes to its recorded destinations,
+// so journal directories belong inside the same trust boundary as the
+// config directory itself (documented in docs/OPERATIONS.md).
+func validateJournal(journalDir string, m *restoreJournalManifest) error {
+	dirInfo, err := os.Lstat(journalDir)
+	if err != nil {
+		return fmt.Errorf("stat journal directory: %w", err)
+	}
+	if dirInfo.Mode()&os.ModeSymlink != 0 || !dirInfo.IsDir() {
+		return errors.New("journal path is not a real directory")
+	}
+	if dirInfo.Mode().Perm()&0o077 != 0 {
+		return fmt.Errorf("journal directory permissions %04o are broader than 0700", dirInfo.Mode().Perm())
+	}
+	if err := checkJournalOwnership(dirInfo); err != nil {
+		return err
+	}
+	manInfo, err := os.Lstat(filepath.Join(journalDir, "manifest.json"))
+	if err != nil {
+		return fmt.Errorf("stat journal manifest: %w", err)
+	}
+	if manInfo.Mode()&os.ModeSymlink != 0 || !manInfo.Mode().IsRegular() {
+		return errors.New("journal manifest is not a regular file")
+	}
+	if manInfo.Mode().Perm()&0o077 != 0 {
+		return fmt.Errorf("journal manifest permissions %04o grant group/other access", manInfo.Mode().Perm())
+	}
+	if err := checkJournalOwnership(manInfo); err != nil {
+		return err
+	}
+
+	if m.Format != restoreJournalFormat {
+		return fmt.Errorf("unsupported journal format %q", m.Format)
+	}
+	if len(m.ID) < 8 || len(m.ID) > 64 {
+		return fmt.Errorf("journal transaction ID %q has an invalid length", m.ID)
+	}
+	for _, r := range m.ID {
+		if !(r >= '0' && r <= '9' || r >= 'a' && r <= 'f') {
+			return fmt.Errorf("journal transaction ID %q is not hexadecimal", m.ID)
+		}
+	}
+	switch m.State {
+	case "prepared", "installing", "completed":
+	default:
+		return fmt.Errorf("journal has unknown transaction state %q", m.State)
+	}
+	if len(m.Entries) == 0 || len(m.Entries) > 4 {
+		return fmt.Errorf("journal entry count %d is outside the valid range 1..4", len(m.Entries))
+	}
+	knownNames := map[string]bool{
+		backupEntryConfig: true, backupEntrySecurity: true,
+		backupEntryControl: true, backupEntryKey: true,
+	}
+	seenNames := map[string]bool{}
+	seenTargets := map[string]string{}
+	for i := range m.Entries {
+		e := &m.Entries[i]
+		if !knownNames[e.Name] {
+			return fmt.Errorf("journal entry %d has unknown name %q", i, e.Name)
+		}
+		if seenNames[e.Name] {
+			return fmt.Errorf("journal contains duplicate entries for %q", e.Name)
+		}
+		seenNames[e.Name] = true
+		if !filepath.IsAbs(e.Target) || strings.ContainsRune(e.Target, 0) {
+			return fmt.Errorf("journal entry %q target %q is not a valid absolute path", e.Name, e.Target)
+		}
+		canon, err := canonicalPath(e.Target)
+		if err != nil {
+			return fmt.Errorf("journal entry %q target cannot be canonicalized: %w", e.Name, err)
+		}
+		if prev, dup := seenTargets[canon]; dup {
+			return fmt.Errorf("journal entries %q and %q target the same destination", prev, e.Name)
+		}
+		seenTargets[canon] = e.Name
+		switch {
+		case !e.Existed:
+			if e.Saved != "" || e.SavedSHA256 != "" || e.LinkTo != "" || e.Mode != 0 {
+				return fmt.Errorf("journal entry %q claims the destination was absent but carries saved-state metadata", e.Name)
+			}
+		case e.LinkTo != "":
+			if e.Saved != "" || e.SavedSHA256 != "" {
+				return fmt.Errorf("journal entry %q is a symlink entry but carries a saved copy", e.Name)
+			}
+			if strings.ContainsRune(e.LinkTo, 0) {
+				return fmt.Errorf("journal entry %q has an invalid recorded link target", e.Name)
+			}
+		default: // pre-existing regular file
+			if !restoreJournalSavedNameRe.MatchString(e.Saved) {
+				return fmt.Errorf("journal entry %q has an invalid saved-copy name %q", e.Name, e.Saved)
+			}
+			if e.Mode&^os.FileMode(0o777) != 0 {
+				return fmt.Errorf("journal entry %q mode %v is not a permission mask", e.Name, e.Mode)
+			}
+			if len(e.SavedSHA256) != 64 {
+				return fmt.Errorf("journal entry %q is missing its saved-copy checksum", e.Name)
+			}
+			if _, err := hex.DecodeString(e.SavedSHA256); err != nil {
+				return fmt.Errorf("journal entry %q has a malformed saved-copy checksum", e.Name)
+			}
+			savedPath := filepath.Join(journalDir, e.Saved)
+			savedInfo, err := os.Lstat(savedPath)
+			if err != nil {
+				return fmt.Errorf("journal entry %q saved copy: %w", e.Name, err)
+			}
+			if savedInfo.Mode()&os.ModeSymlink != 0 || !savedInfo.Mode().IsRegular() {
+				return fmt.Errorf("journal entry %q saved copy is not a regular file", e.Name)
+			}
+			if savedInfo.Mode().Perm()&0o077 != 0 {
+				return fmt.Errorf("journal entry %q saved copy permissions %04o grant group/other access", e.Name, savedInfo.Mode().Perm())
+			}
+			if savedInfo.Size() > maxBackupEntryBytes {
+				return fmt.Errorf("journal entry %q saved copy exceeds the entry size limit", e.Name)
+			}
+			data, err := readFileBounded(savedPath, "journal saved copy")
+			if err != nil {
+				return fmt.Errorf("journal entry %q saved copy: %w", e.Name, err)
+			}
+			if sha256Hex(data) != e.SavedSHA256 {
+				return fmt.Errorf("journal entry %q saved copy fails checksum verification (corrupt or tampered)", e.Name)
+			}
+		}
+	}
+	return nil
+}
+
+// restoreJournalSavedNameRe is the only shape a saved-copy name may
+// take: exactly the names installWithRollback mints.
+var restoreJournalSavedNameRe = regexp.MustCompile(`^entry-[0-9]+$`)
+
+// checkJournalOwnership compares a journal file's owner with the
+// current user where the platform exposes it (Unix stat); elsewhere
+// it is a no-op — Go's portable FileInfo cannot express ownership.
+func checkJournalOwnership(info os.FileInfo) error {
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return nil
+	}
+	if int(st.Uid) != os.Geteuid() {
+		return fmt.Errorf("journal file %s is owned by uid %d, not the current user", info.Name(), st.Uid)
+	}
+	return nil
+}
+
 func recoverRestoreJournal(journalDir string, stdout io.Writer) error {
 	m, err := readJournalManifest(journalDir)
 	if err != nil {
 		return fmt.Errorf("read restore journal %s: %w", journalDir, err)
 	}
+	// The journal is untrusted input: validate provenance and every
+	// entry BEFORE any destination (or the journal itself) changes.
+	if err := validateJournal(journalDir, m); err != nil {
+		return fmt.Errorf("restore journal %s failed validation; nothing was changed and the journal is preserved: %w", journalDir, err)
+	}
 	if m.State == "completed" {
-		if err := os.RemoveAll(journalDir); err != nil {
+		if err := removeJournalDir(journalDir); err != nil {
 			return fmt.Errorf("clean up completed restore journal %s: %w", journalDir, err)
 		}
 		fmt.Fprintf(stdout, "restore transaction %s completed before the interruption; journal cleaned up, nothing rolled back\n", m.ID)
@@ -796,7 +1021,7 @@ func recoverRestoreJournal(journalDir string, stdout io.Writer) error {
 	if len(failures) > 0 {
 		return fmt.Errorf("recovery INCOMPLETE for journal %s — could not restore: %s; the journal is preserved at %s with the pre-restore copies; fix those destinations from it (or from backup) before starting the gateway", m.ID, strings.Join(failures, ", "), journalDir)
 	}
-	if err := os.RemoveAll(journalDir); err != nil {
+	if err := removeJournalDir(journalDir); err != nil {
 		return fmt.Errorf("destinations recovered but journal %s could not be removed: %w", journalDir, err)
 	}
 	fmt.Fprintf(stdout, "restore transaction %s rolled back; journal removed\n", m.ID)
@@ -843,13 +1068,29 @@ func installWithRollback(installs []installItem, payloads map[string][]byte, std
 	preserveJournal := false
 	defer func() {
 		if !preserveJournal {
-			_ = os.RemoveAll(journalDir)
+			_ = removeJournalDir(journalDir)
 		}
 	}()
+	// Make the journal directory entry itself durable before relying
+	// on it; if even that fails, no destination has been touched yet.
+	if err := syncDir(filepath.Dir(journalDir)); err != nil {
+		return fmt.Errorf("create restore journal: %w", err)
+	}
+	// failPrep handles failures BEFORE the first install: no
+	// destination has been modified, and an unmanifested journal
+	// cannot be recovered automatically, so it is removed — and if
+	// THAT fails the error says exactly what was left behind.
+	failPrep := func(err error) error {
+		if rmErr := os.RemoveAll(journalDir); rmErr != nil {
+			preserveJournal = true
+			return fmt.Errorf("%w; additionally the incomplete journal at %s could not be removed (%v) — it holds saved copies but no usable manifest; remove it manually", err, journalDir, rmErr)
+		}
+		return err
+	}
 
 	var idBytes [8]byte
 	if _, err := rand.Read(idBytes[:]); err != nil {
-		return fmt.Errorf("create restore journal: %w", err)
+		return failPrep(fmt.Errorf("create restore journal: %w", err))
 	}
 	manifest := &restoreJournalManifest{
 		Format:    restoreJournalFormat,
@@ -860,7 +1101,7 @@ func installWithRollback(installs []installItem, payloads map[string][]byte, std
 	for i, it := range installs {
 		abs, err := filepath.Abs(it.target)
 		if err != nil {
-			return fmt.Errorf("journal restore target %s: %w", it.target, err)
+			return failPrep(fmt.Errorf("journal restore target %s: %w", it.target, err))
 		}
 		entry := restoreJournalEntry{Name: it.name, Target: abs}
 		info, lerr := os.Lstat(it.target)
@@ -868,47 +1109,49 @@ func installWithRollback(installs []installItem, payloads map[string][]byte, std
 		case errors.Is(lerr, os.ErrNotExist):
 			// Created by this restore; rollback removes it.
 		case lerr != nil:
-			return fmt.Errorf("journal restore target %s: %w", it.target, lerr)
+			return failPrep(fmt.Errorf("journal restore target %s: %w", it.target, lerr))
 		case info.Mode()&os.ModeSymlink != 0:
 			// Installing replaces the link itself with a regular
 			// file; journal where it pointed so rollback can
 			// recreate the link exactly.
 			target, rerr := os.Readlink(it.target)
 			if rerr != nil {
-				return fmt.Errorf("journal restore target %s: %w", it.target, rerr)
+				return failPrep(fmt.Errorf("journal restore target %s: %w", it.target, rerr))
 			}
 			entry.Existed = true
 			entry.LinkTo = target
 		case info.Mode().IsRegular():
 			data, rerr := os.ReadFile(it.target)
 			if rerr != nil {
-				return fmt.Errorf("journal restore target %s: %w", it.target, rerr)
+				return failPrep(fmt.Errorf("journal restore target %s: %w", it.target, rerr))
 			}
 			entry.Existed = true
 			entry.Mode = info.Mode().Perm()
 			entry.Saved = fmt.Sprintf("entry-%d", i)
-			if werr := os.WriteFile(filepath.Join(journalDir, entry.Saved), data, 0o600); werr != nil {
-				return fmt.Errorf("journal restore target %s: %w", it.target, werr)
+			entry.SavedSHA256 = sha256Hex(data)
+			if werr := writeJournalSavedCopy(filepath.Join(journalDir, entry.Saved), data); werr != nil {
+				return failPrep(fmt.Errorf("journal restore target %s: %w", it.target, werr))
 			}
 			if serr := syncDir(journalDir); serr != nil {
-				return fmt.Errorf("journal restore target %s: %w", it.target, serr)
+				return failPrep(fmt.Errorf("journal restore target %s: %w", it.target, serr))
 			}
 		default:
 			// Directories, devices, sockets and other non-file
 			// targets cannot be journaled as bytes; refuse before
 			// writing anything instead of destroying them.
-			return fmt.Errorf("restore target %s has an unsupported type (%s); refusing to replace it", it.target, info.Mode().Type())
+			return failPrep(fmt.Errorf("restore target %s has an unsupported type (%s); refusing to replace it", it.target, info.Mode().Type()))
 		}
 		manifest.Entries = append(manifest.Entries, entry)
 	}
 	// The complete pre-restore record must be durable BEFORE the
 	// first destination is touched: prepared first, then installing.
-	if err := writeJournalManifest(journalDir, manifest); err != nil {
-		return fmt.Errorf("write restore journal: %w", err)
+	// A failure here aborts with every destination still untouched.
+	if err := persistJournalManifest(journalDir, manifest); err != nil {
+		return failPrep(fmt.Errorf("write restore journal: %w", err))
 	}
 	manifest.State = "installing"
-	if err := writeJournalManifest(journalDir, manifest); err != nil {
-		return fmt.Errorf("write restore journal: %w", err)
+	if err := persistJournalManifest(journalDir, manifest); err != nil {
+		return failPrep(fmt.Errorf("write restore journal: %w", err))
 	}
 
 	installed := 0
@@ -947,7 +1190,7 @@ func installWithRollback(installs []installItem, payloads map[string][]byte, std
 		}
 		installed++
 		manifest.Entries[installed-1].Installed = true
-		if err := writeJournalManifest(journalDir, manifest); err != nil {
+		if err := persistJournalManifest(journalDir, manifest); err != nil {
 			// The install landed but its progress could not be
 			// recorded durably — stop and keep the journal so the
 			// transaction can be recovered explicitly.
@@ -957,7 +1200,15 @@ func installWithRollback(installs []installItem, payloads map[string][]byte, std
 		fmt.Fprintf(stdout, "restored %s\n", it.target)
 	}
 	manifest.State = "completed"
-	_ = writeJournalManifest(journalDir, manifest) // best effort: journal removal follows immediately
+	if err := persistJournalManifest(journalDir, manifest); err != nil {
+		// Every install landed, but the completion could not be
+		// recorded. Never report success while silently deleting the
+		// only recovery record from an ambiguous state: preserve the
+		// journal (still "installing" on disk) and fail loudly with
+		// the exact situation and the operator's options.
+		preserveJournal = true
+		return fmt.Errorf("all destinations were installed, but the restore journal could not be marked completed: %w; the journal is preserved at %s with its on-disk state still \"installing\". The files on disk DO reflect the restored bundle; the transaction is merely not recorded as finished. Verify the installation with `nexaroute doctor`, then either roll it back with `nexaroute restore --recover %s` or remove the journal manually", err, journalDir, journalDir)
+	}
 	return nil
 }
 
