@@ -1,0 +1,62 @@
+# Prometheus alert rules for NexaRoute.
+#
+# Every expression references only series the gateway actually exports
+# from /metrics (enforced by a contract test in internal/httpapi).
+# Thresholds are starting points for a single-instance self-hosted
+# deployment; tune them to your traffic before paging on them.
+groups:
+  - name: nexaroute-availability
+    interval: 30s
+    rules:
+      - alert: NexaRouteNoHealthyDeployments
+        expr: sum(nexaroute_health_deployments{status="healthy"}) == 0 and nexaroute_deployments_total > 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "NexaRoute has no healthy deployments"
+          description: "Every configured deployment is degraded, cooling down or unknown; data-plane requests will fail or fall back."
+
+      - alert: NexaRouteHighFailureRate
+        expr: |
+          sum by (deployment) (rate(nexaroute_deployment_failures_total[5m]))
+            / clamp_min(sum by (deployment) (rate(nexaroute_deployment_failures_total[5m]) + rate(nexaroute_deployment_successes_total[5m])), 0.001)
+            > 0.25
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Deployment {{ $labels.deployment }} failure rate above 25%"
+          description: "More than a quarter of attempts against {{ $labels.deployment }} failed over the last 5 minutes."
+
+      - alert: NexaRouteOverloadRejections
+        expr: rate(nexaroute_overload_rejections_total[5m]) > 0.1
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "NexaRoute is rejecting requests at capacity"
+          description: "The global inflight admission limit is being hit; add capacity or raise routing.max_inflight_requests deliberately."
+
+  - name: nexaroute-latency
+    interval: 30s
+    rules:
+      - alert: NexaRouteHighTTFT
+        expr: |
+          histogram_quantile(0.95, sum by (deployment, le) (rate(nexaroute_deployment_ttft_ms_bucket[10m]))) > 8000
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Deployment {{ $labels.deployment }} p95 time-to-first-byte above 8s"
+          description: "Streaming users wait more than 8s for the first byte from {{ $labels.deployment }} at p95."
+
+      - alert: NexaRouteHighRequestLatency
+        expr: |
+          histogram_quantile(0.95, sum by (deployment, le) (rate(nexaroute_deployment_request_latency_ms_bucket[10m]))) > 30000
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Deployment {{ $labels.deployment }} p95 attempt latency above 30s"
+          description: "Per-attempt latency for {{ $labels.deployment }} is above 30s at p95 over the last 10 minutes."

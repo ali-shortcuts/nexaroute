@@ -139,6 +139,7 @@ builds for amd64 and arm64. See [CONTRIBUTING.md](CONTRIBUTING.md).
 - [docs/SECURITY.md](docs/SECURITY.md) — canonical security model and secret-key custody
 - [docs/OPERATIONS.md](docs/OPERATIONS.md) — operations and secret backup/rotation runbook
 - [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — container image, systemd units and Helm chart
+- [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md) — Prometheus metrics, latency/TTFT histograms, dashboards and alerts
 - [docs/RELEASE_VERIFICATION.md](docs/RELEASE_VERIFICATION.md) — verify release downloads, checksums, signatures and the SBOM
 - [docs/reports/REBUILD_COMPLETION_REPORT.md](docs/reports/REBUILD_COMPLETION_REPORT.md) — end-to-end rebuild evidence and remaining environment limits
 - [docs/reports/POST_RELEASE_BUG_AUDIT_v0.13.0.md](docs/reports/POST_RELEASE_BUG_AUDIT_v0.13.0.md) — current post-release hardening and bug evidence
