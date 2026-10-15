@@ -76,6 +76,15 @@ func newOIDCAuthenticator(ctx context.Context, cfg config.OIDCConfig) (*oidcAuth
 	for claimValue, roleValue := range cfg.RoleMappings {
 		roles[claimValue] = authz.Role(roleValue)
 	}
+	// Signing keys are resolved from the issuer's CURRENT JWKS
+	// document on every verification (see freshJWKSKeySet), so the
+	// JWKS URI validated during discovery is captured here.
+	var discoveryMeta struct {
+		JWKS string `json:"jwks_uri"`
+	}
+	if err := provider.Claims(&discoveryMeta); err != nil {
+		return nil, fmt.Errorf("OIDC provider discovery metadata is invalid: %w", err)
+	}
 	secretDigest := sha256.Sum256([]byte(secret))
 	policyData, _ := json.Marshal(struct {
 		Version      int               `json:"version"`
@@ -96,7 +105,7 @@ func newOIDCAuthenticator(ctx context.Context, cfg config.OIDCConfig) (*oidcAuth
 	}
 	return &oidcAuthenticator{
 		provider:   provider,
-		verifier:   provider.Verifier(&oidc.Config{ClientID: cfg.ClientID}),
+		verifier:   oidc.NewVerifier(cfg.IssuerURL, freshJWKSKeySet{jwksURL: discoveryMeta.JWKS}, &oidc.Config{ClientID: cfg.ClientID}),
 		oauth:      client,
 		issuer:     cfg.IssuerURL,
 		audience:   cfg.Audience,
@@ -105,6 +114,24 @@ func newOIDCAuthenticator(ctx context.Context, cfg config.OIDCConfig) (*oidcAuth
 		policyHash: hex.EncodeToString(policyDigest[:]),
 		pending:    make(map[string]pendingOIDCLogin),
 	}, nil
+}
+
+// freshJWKSKeySet verifies token signatures against the issuer's
+// CURRENT JWKS document: every verification builds a new remote key
+// set, forcing a fresh fetch. go-oidc's provider verifier caches the
+// JWKS indefinitely — a signing key an IdP has RETIRED (the usual
+// reason for rotation is compromise) would keep verifying tokens for
+// the life of the process. Admin login callbacks are rare, so one
+// bounded JWKS fetch per callback is the right price for honoring
+// key retirement immediately; a JWKS outage fails the callback
+// closed, as before.
+type freshJWKSKeySet struct {
+	jwksURL string
+}
+
+func (k freshJWKSKeySet) VerifySignature(ctx context.Context, jwt string) ([]byte, error) {
+	fetchCtx := oidc.ClientContext(context.Background(), &http.Client{Timeout: 10 * time.Second})
+	return oidc.NewRemoteKeySet(fetchCtx, k.jwksURL).VerifySignature(ctx, jwt)
 }
 
 func validateOIDCDiscovery(provider *oidc.Provider, issuer string) error {

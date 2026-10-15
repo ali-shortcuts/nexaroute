@@ -51,6 +51,50 @@ install -m 0600 "${CONFIG}.key" "$BACKUP_DIR/config.json.key"
 
 To restore, stop the gateway, restore the selected config and its matching key, set the key mode to `0600`, verify directory permissions, then run `nexaroute secrets verify --config "$CONFIG"` before starting the listener. Do not create a replacement key to troubleshoot authentication failures.
 
+### Backup and restore commands (preferred)
+
+`nexaroute backup` bundles everything an installation needs into one hash-verified archive (format `nexaroute-backup/1`): the config exactly as stored, a consistent online snapshot of the audit/security store (safe to run against a live gateway), and the file-backend control-plane state when present. The bundle is written atomically with mode `0600`; its manifest records a SHA-256 fingerprint of the master key so pairing can be checked later.
+
+```bash
+nexaroute backup --config "$CONFIG" --out "$BACKUP_DIR/nexaroute-backup.tar"
+# Only when the key must travel with the backup (store the bundle like a secret):
+nexaroute backup --config "$CONFIG" --out "$BACKUP_DIR/nexaroute-backup-with-key.tar" --include-master-key
+```
+
+The master key is excluded by default: keep it as an independent secret (above) unless the deployment deliberately accepts a combined bundle.
+
+`nexaroute restore` verifies the whole bundle — format, manifest, and every file's SHA-256 — *before* writing anything, then installs files atomically with mode `0600`. Existing different files are refused without `--force`, and a bundled key that would overwrite a different key warns loudly for the same reason.
+
+Restore failure behavior: files install in a fixed order (config, security store, control-plane state, master key). Before the first write, restore journals the previous bytes of every file it will replace — including its permission bits, and, for a target that is a symlink, the link target (installing replaces the link with a regular file; rollback recreates the link). Targets that are neither regular files nor symlinks (directories, devices) are refused before anything is written. If any install step fails, restore rolls back the files already written (journaled bytes and modes restored, newly created files removed, symlinks recreated) and the error says so.
+
+Crash recovery: the journal is a durable, versioned record (`nexaroute-restore-journal/1`). Each saved pre-restore copy is written through an open handle and **fsynced individually** (a directory sync alone does not make a file's bytes durable), the journal directory entry is synced after creation, and its manifest — destination paths, prior existence, modes, symlink targets, saved-copy names *and their SHA-256 checksums*, per-entry progress and a transaction state (`prepared` → `installing` → `completed`) — is written atomically and fsynced (file and directory) *before* the first install, after every install, and at completion; journal creation and deletion also sync the parent directory (best effort) so the journal's own existence is durable. If preparing the journal fails at any step, restore aborts with every destination still untouched. If the restore process is killed or crashes mid-install, the journal survives; the next `nexaroute restore` run and `nexaroute doctor` both report it, and
+
+```bash
+nexaroute restore --recover <journal-dir>
+```
+
+first *strictly validates* the journal, then rolls every destination back to its journaled pre-restore state (recovery restores *all* entries, because a crash can land between an install and its progress update) and removes the journal only when every destination was recovered — otherwise the journal is preserved and the error names the destinations that still need recovery. Validation treats the journal as untrusted input: the directory must be a real, private (`0700`) directory owned by the invoking user — not a symlink, not group/other-accessible — with a regular, private manifest; the state must be a known one, the ID well-formed, the entry list small and limited to the known backup entries without duplicates; every destination must be absolute, and no two may canonicalize to the same file; saved-state metadata must be consistent (an absent destination carries none, a symlink entry carries only its link target), and every saved copy must be a private regular file named exactly `entry-<n>` whose content **verifies against its recorded SHA-256**. Any failure refuses recovery before anything changes, and the journal is preserved. A journal whose transaction reached `completed` is cleaned up by `--recover`, never rolled back, and an unknown journal format is refused, never replayed. Validation cannot prove a journal was written by NexaRoute (journals are unsigned), so treat the journal directory as operator-trusted input inside the same trust boundary as the config directory: a fully self-consistent forged journal in a private directory could direct recovery writes to its recorded destinations.
+
+Destination durability: installing is more than a rename — after every destination mutation (install, in-process rollback, and `--recover` recovery alike), restore syncs the destination's parent directory (and its grandparent, which holds the parent's own entry when the install created it) before the transaction may advance, complete, or discard the journal. A failed directory sync is never read as "the mutation did not happen": a rename that landed counts as installed even when its sync fails (the destination joins the rollback scope and the transaction aborts), and a rollback or recovery mutation whose sync fails counts as *unconfirmed* — the destination is named, the journal is preserved, and the operation can simply be retried, because rollback and recovery are idempotent. The journal is removed only after every destination change has been made and synced.
+
+One edge is deliberately loud: if every install lands but the final `completed` state cannot be persisted, restore exits nonzero, keeps the journal (still `installing` on disk), and says so — the files on disk reflect the restored bundle, but the transaction is not recorded as finished. Verify with `nexaroute doctor`, then either roll back with `--recover` or remove the journal manually; restore never reports success while silently discarding the only recovery record.
+
+What is *not* guaranteed: rollback/recovery is best-effort, not a filesystem transaction — atomic rename cannot be made atomic *across* files, a rollback write can itself fail (disk full, permissions changed mid-restore), and power-loss durability extends only as far as the filesystem and hardware honor `fsync`. Run `nexaroute doctor` before starting the gateway after any failed or interrupted restore.
+
+TOCTOU scope: destination validation canonicalizes paths component-wise (symlinked ancestors and not-yet-existing deeper directories resolve correctly), the journal re-inspects every destination immediately before installing, and each install is an atomic rename that never writes *through* a final-component symlink. A concurrent process with write access to the destination directories could still swap a path between validation and install; closing that class completely would require file-descriptor-relative, no-follow I/O that portable Go does not expose, so restore's documented assumption is the same trust boundary as the installation itself: **the config directory and its subdirectories must not be writable by untrusted users** (the operational guidance elsewhere in this document keeps them at `0700`).
+
+Restore also refuses, before writing, any bundle whose payloads would install to aliased destinations (two entries resolving to the same path — including through symlinked ancestors with missing descendants, and hard links between existing targets) and any payload inconsistent with the bundled configuration's backends (for example a security-store payload when the bundled config selects a non-bbolt security store).
+
+Two related guarantees: `nexaroute backup` refuses an `--out` path that aliases any of its sources (the config, the master key, the security store, or the control-plane state — including symlink and hard-link aliases), because the bundle write atomically replaces the output path. And a backup never silently omits an unreadable source: only a genuinely absent security store, control-plane state file, or key file is skipped (and noted in the manifest); permission or I/O errors fail the backup.
+
+```bash
+nexaroute restore --bundle "$BACKUP_DIR/nexaroute-backup.tar" --config "$CONFIG"
+nexaroute doctor --config "$CONFIG"   # read-only health + chain verification
+```
+
+`nexaroute doctor` is the read-only diagnostics entry point: config load/validation, file permissions, master-key resolvability, security-store audit-chain verification (counts only), control-plane backend readiness (bounded ping for Postgres/Redis, failure classes only — never DSNs or URLs), and the listen address. Exit codes are `0` (no failures), `1` (a check failed), `2` (usage).
+
+
 ### Rotate the auto-managed key
 
 `nexaroute secrets rotate` currently supports the automatically managed sibling key only; it refuses while `NEXAROUTE_MASTER_KEY` or `NEXAROUTE_MASTER_KEY_FILE` is set. For environment/KMS-managed keys, use the deployment's approved key-management workflow; this CLI does not rotate those sources.
@@ -167,13 +211,32 @@ Before changing a backend, copy the current state file to a protected backup:
 install -m 0600 "$CONFIG.controlplane.json" "$BACKUP_DIR/controlplane.json"
 ```
 
-Set `control_plane.migration_dry_run=true` for a startup validation without a
-write. To roll back a failed local migration, stop the gateway, restore the
-validated backup to the configured state path with mode `0600`, run
-`config validate` and restart. A partial temp file is not a committed state;
-never delete the last valid backup until the replacement has been verified.
-Postgres and Redis adapters are present as contracts but their live runtime
-client/driver integration is deployment-dependent and remains **unverified**.
+Set `control_plane.migration_dry_run=true` for startup validation without a
+state write. For Redis this means only a bounded connectivity `PING`: dry-run
+does not read, initialize, or mutate a snapshot and does not validate the
+deployment's persistence or recovery configuration.
+
+Redis stores each namespace in a hash under
+`nexaroute:control:snapshot:<namespace>` with no expiration. Lua scripts apply
+revision checks atomically on the Redis server executing the script; they do
+not promise multi-primary consistency or cross-replica safety. A successful
+connection is not a durability guarantee. Configure, monitor, and test AOF
+and/or RDB persistence, durable storage, replication/failover, and backup/
+restore according to the deployment's recovery objectives. An acknowledged
+write may still be lost during a Redis failure or promotion depending on that
+configuration.
+
+The PostgreSQL and Redis control-plane clients are wired and have disposable-
+service integration coverage. These tests verify adapter behavior, not a
+deployment's recovery guarantees. Store switching does not automatically copy
+or convert state: preserve the previous backend and its protected backup until
+the destination state is verified. To roll back to the local file backend,
+stop the gateway, restore the validated file backup to the configured state
+path with mode `0600`, set `control_plane.backend` to `file`, run
+`config validate`, and restart. A partial temp file is not a committed state;
+never delete the last valid backup until the replacement has been verified. The
+Redis-backed admin security-store adapter and cross-replica breaker
+synchronization remain outside this control-plane implementation.
 
 ## 5. Admin surface, events, and logs
 
