@@ -13,3 +13,4 @@ __pycache__/
 
 # Local Go coverage profiles
 *.cover
+scripts/a11y/node_modules/
