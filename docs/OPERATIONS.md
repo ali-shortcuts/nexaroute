@@ -94,6 +94,7 @@ nexaroute doctor --config "$CONFIG"   # read-only health + chain verification
 
 `nexaroute doctor` is the read-only diagnostics entry point: config load/validation, file permissions, master-key resolvability, security-store audit-chain verification (counts only), control-plane backend readiness (bounded ping for Postgres/Redis, failure classes only — never DSNs or URLs), and the listen address. Exit codes are `0` (no failures), `1` (a check failed), `2` (usage).
 
+
 ### Rotate the auto-managed key
 
 `nexaroute secrets rotate` currently supports the automatically managed sibling key only; it refuses while `NEXAROUTE_MASTER_KEY` or `NEXAROUTE_MASTER_KEY_FILE` is set. For environment/KMS-managed keys, use the deployment's approved key-management workflow; this CLI does not rotate those sources.
