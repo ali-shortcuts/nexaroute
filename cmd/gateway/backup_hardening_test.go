@@ -1469,6 +1469,222 @@ func TestRestoreRecoverFailurePreservesJournal(t *testing.T) {
 	}
 }
 
+// --- Round 6: destination directory-sync failures ---
+//
+// A failed directory sync after a rename does NOT mean the mutation
+// did not happen. These tests inject sync failures at each stage and
+// pin the semantics: the landed mutation counts, rollback/recovery
+// scope includes it, and the journal survives whenever the outcome
+// is not durably established.
+
+// failSyncFor makes syncDirFn fail for one directory: times == 1
+// fails the next call only, times < 0 fails every call.
+func failSyncFor(t *testing.T, dir string, times int) {
+	t.Helper()
+	orig := syncDirFn
+	remaining := times
+	syncDirFn = func(d string) error {
+		if d == dir && remaining != 0 {
+			if remaining > 0 {
+				remaining--
+			}
+			return errors.New("injected directory sync failure")
+		}
+		return orig(d)
+	}
+	t.Cleanup(func() { syncDirFn = orig })
+}
+
+func twoEntryRestoreFixture(t *testing.T) (bundle, targetConfig, targetDB string, preConfig, preDB []byte) {
+	t.Helper()
+	_, configPath := opsFixture(t)
+	bundle = filepath.Join(t.TempDir(), "b.tar")
+	if code, stderr := runBackupCode(t, configPath, bundle); code != 0 {
+		t.Fatalf("backup exit=%d stderr=%s", code, stderr)
+	}
+	targetDir := t.TempDir()
+	targetConfig = filepath.Join(targetDir, "config.json")
+	preConfig = []byte("PRE CONFIG")
+	if err := os.WriteFile(targetConfig, preConfig, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	secDir := filepath.Join(targetDir, "security")
+	if err := os.MkdirAll(secDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	targetDB = filepath.Join(secDir, "nexaroute-security.db")
+	preDB = []byte("PRE DB")
+	if err := os.WriteFile(targetDB, preDB, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return bundle, targetConfig, targetDB, preConfig, preDB
+}
+
+func TestRestoreDirSyncFailureAfterInstall(t *testing.T) {
+	t.Run("transient failure: landed install is rolled back too", func(t *testing.T) {
+		bundle, targetConfig, targetDB, preConfig, preDB := twoEntryRestoreFixture(t)
+		// Fail only the FIRST sync of the security directory (the
+		// second install's durability confirmation).
+		failSyncFor(t, filepath.Dir(targetDB), 1)
+		before := journalDirsInTemp(t)
+		var stdout, stderr bytes.Buffer
+		code := runRestore([]string{"--bundle", bundle, "--config", targetConfig, "--force"}, &stdout, &stderr)
+		if code != 1 {
+			t.Fatalf("restore exit=%d, want 1 (stderr=%s)", code, stderr.String())
+		}
+		if !strings.Contains(stderr.String(), "syncing its directory failed") || !strings.Contains(stderr.String(), "rolled back") {
+			t.Fatalf("stderr must report the sync failure and the rollback, got: %s", stderr.String())
+		}
+		if got, _ := os.ReadFile(targetConfig); !bytes.Equal(got, preConfig) {
+			t.Fatal("config must be rolled back")
+		}
+		if got, _ := os.ReadFile(targetDB); !bytes.Equal(got, preDB) {
+			t.Fatal("the install whose rename LANDED before the failed sync must be rolled back, not skipped")
+		}
+		for name := range journalDirsInTemp(t) {
+			if !before[name] {
+				t.Fatalf("a fully rolled-back transaction must not leave a journal: %s", name)
+			}
+		}
+	})
+
+	t.Run("persistent failure: rollback lands but cannot confirm, journal preserved", func(t *testing.T) {
+		bundle, targetConfig, targetDB, preConfig, preDB := twoEntryRestoreFixture(t)
+		failSyncFor(t, filepath.Dir(targetDB), -1)
+		var stdout, stderr bytes.Buffer
+		code := runRestore([]string{"--bundle", bundle, "--config", targetConfig, "--force"}, &stdout, &stderr)
+		if code != 1 {
+			t.Fatalf("restore exit=%d, want 1 (stderr=%s)", code, stderr.String())
+		}
+		if !strings.Contains(stderr.String(), "rollback INCOMPLETE") || !strings.Contains(stderr.String(), targetDB) {
+			t.Fatalf("stderr must report incomplete rollback naming %s, got: %s", targetDB, stderr.String())
+		}
+		// The rollback mutations DID land (bytes are pre-state); only
+		// their durability is unconfirmed — hence the preserved journal.
+		if got, _ := os.ReadFile(targetDB); !bytes.Equal(got, preDB) {
+			t.Fatal("rollback mutation must have landed even though its sync failed")
+		}
+		if got, _ := os.ReadFile(targetConfig); !bytes.Equal(got, preConfig) {
+			t.Fatal("config must be rolled back")
+		}
+		found := false
+		for _, dir := range findInterruptedRestoreJournals() {
+			if m, err := readJournalManifest(dir); err == nil && len(m.Entries) > 0 && m.Entries[0].Target == targetConfig {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatal("the journal must be preserved when a rollback sync cannot confirm durability")
+		}
+	})
+}
+
+// An install-stage WRITE failure whose rollback hits a sync failure:
+// rollback is incomplete (journal preserved) even though the rollback
+// write itself landed.
+func TestRestoreRollbackDirSyncFailure(t *testing.T) {
+	bundle, targetConfig, _, preConfig, _ := twoEntryRestoreFixture(t)
+	targetDir := filepath.Dir(targetConfig)
+
+	armed := false
+	origWrite := restoreWriteFile
+	calls := 0
+	restoreWriteFile = func(path string, data []byte, perm os.FileMode) error {
+		calls++
+		if calls == 2 {
+			armed = true // arm the sync failure only once rollback begins
+			return errors.New("injected second-install failure")
+		}
+		return origWrite(path, data, perm)
+	}
+	defer func() { restoreWriteFile = origWrite }()
+
+	origSync := syncDirFn
+	syncDirFn = func(d string) error {
+		if armed && d == targetDir {
+			return errors.New("injected directory sync failure")
+		}
+		return origSync(d)
+	}
+	defer func() { syncDirFn = origSync }()
+
+	var stdout, stderr bytes.Buffer
+	code := runRestore([]string{"--bundle", bundle, "--config", targetConfig, "--force"}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("restore exit=%d, want 1 (stderr=%s)", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "rollback INCOMPLETE") || !strings.Contains(stderr.String(), targetConfig) {
+		t.Fatalf("stderr must report incomplete rollback naming %s, got: %s", targetConfig, stderr.String())
+	}
+	if got, _ := os.ReadFile(targetConfig); !bytes.Equal(got, preConfig) {
+		t.Fatal("the rollback write landed; only its directory sync failed")
+	}
+	found := false
+	for _, dir := range findInterruptedRestoreJournals() {
+		if m, err := readJournalManifest(dir); err == nil && len(m.Entries) > 0 && m.Entries[0].Target == targetConfig {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("journal must be preserved when rollback cannot confirm durability")
+	}
+}
+
+// A recovery whose per-destination sync fails: the destination's
+// bytes ARE restored (the mutation landed) but recovery reports it
+// as unconfirmed, preserves the journal, and a retry succeeds.
+func TestRestoreRecoverDirSyncFailure(t *testing.T) {
+	targetDir := t.TempDir()
+	targetA := filepath.Join(targetDir, "config.json")
+	targetB := filepath.Join(targetDir, "security.db")
+	preA, preB := []byte("PRE A"), []byte("PRE B")
+	for _, target := range []string{targetA, targetB} {
+		if err := os.WriteFile(target, []byte("INSTALLED STATE"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m := &restoreJournalManifest{
+		Format: restoreJournalFormat, ID: "0123456789abcdef", State: "installing",
+		Entries: []restoreJournalEntry{
+			{Name: backupEntryConfig, Target: targetA, Existed: true, Mode: 0o600, Saved: "entry-0", SavedSHA256: sha256Hex(preA), Installed: true},
+			{Name: backupEntrySecurity, Target: targetB, Existed: true, Mode: 0o600, Saved: "entry-1", SavedSHA256: sha256Hex(preB), Installed: true},
+		},
+	}
+	journalDir := fabricateJournal(t, m, map[string][]byte{"entry-0": preA, "entry-1": preB})
+
+	// Both targets share one parent directory here; fail its syncs
+	// during the first recovery attempt.
+	failSyncFor(t, targetDir, -1)
+	var stdout, stderr bytes.Buffer
+	code := runRestore([]string{"--recover", journalDir}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("recover exit=%d, want 1 (stderr=%s)", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), targetA) {
+		t.Fatalf("error must name the unconfirmed destinations, got: %s", stderr.String())
+	}
+	if _, err := os.Stat(filepath.Join(journalDir, "manifest.json")); err != nil {
+		t.Fatal("journal must be preserved when recovery syncs fail")
+	}
+	if got, _ := os.ReadFile(targetA); !bytes.Equal(got, preA) {
+		t.Fatal("recovery mutation landed even though its sync failed")
+	}
+
+	// Retry with sync healthy: idempotent, completes, journal removed.
+	syncDirFn = syncDir
+	stdout.Reset()
+	stderr.Reset()
+	if code := runRestore([]string{"--recover", journalDir}, &stdout, &stderr); code != 0 {
+		t.Fatalf("retry recover exit=%d, want 0 (stderr=%s)", code, stderr.String())
+	}
+	if got, _ := os.ReadFile(targetB); !bytes.Equal(got, preB) {
+		t.Fatal("retry must leave every destination at its pre-restore state")
+	}
+	if _, err := os.Stat(journalDir); !os.IsNotExist(err) {
+		t.Fatal("a fully confirmed recovery must remove the journal")
+	}
+}
+
 // --- Fix 5: bundle payload bounds ---
 
 func TestRestoreRejectsOversizedBundles(t *testing.T) {

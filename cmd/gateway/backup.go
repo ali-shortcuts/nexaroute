@@ -1012,6 +1012,14 @@ func recoverRestoreJournal(journalDir string, stdout io.Writer) error {
 				rerr = nil
 			}
 		}
+		if rerr == nil {
+			// The mutation landed; confirm its durability before
+			// this destination counts as recovered. A failed sync
+			// does NOT undo the mutation — it makes the outcome
+			// unconfirmed, so the entry is reported and the journal
+			// preserved for an idempotent retry.
+			rerr = syncDestDir(entry.Target)
+		}
 		if rerr != nil {
 			failures = append(failures, fmt.Sprintf("%s (%v)", entry.Target, rerr))
 		} else {
@@ -1053,6 +1061,65 @@ var restoreRollbackWriteFile = writeFileAtomic
 // pre-restore record, and `nexaroute restore --recover` rolls the
 // transaction back afterwards. Power-loss durability still depends on
 // the filesystem and hardware honoring fsync.
+// syncDirFn syncs a DESTINATION directory after a mutation; it is a
+// seam so tests can inject directory-sync failures. Journal-internal
+// syncs call syncDir directly and are not affected by the seam.
+var syncDirFn = syncDir
+
+// syncDestDir makes a destination mutation durable to the extent the
+// platform allows: it syncs the destination's parent directory (the
+// rename/removal/link creation lives there) and its grandparent
+// (which holds the parent's own entry when the install created the
+// parent directory).
+func syncDestDir(target string) error {
+	parent := filepath.Dir(target)
+	if err := syncDirFn(parent); err != nil {
+		return err
+	}
+	if grand := filepath.Dir(parent); grand != parent {
+		return syncDirFn(grand)
+	}
+	return nil
+}
+
+// rollbackInstalled restores the first count journaled destinations
+// to their pre-restore state, newest first, syncing each destination
+// directory after its mutation. It returns a description of every
+// destination that could not be FULLY restored — "fully" includes
+// the directory sync: a rollback mutation whose sync failed DID land,
+// but its durability is unconfirmed, so the destination is reported
+// and the caller preserves the journal for an idempotent retry.
+func rollbackInstalled(journalDir string, manifest *restoreJournalManifest, installs []installItem, count int) []string {
+	var failures []string
+	for j := count - 1; j >= 0; j-- {
+		entry := manifest.Entries[j]
+		target := installs[j].target
+		var rerr error
+		switch {
+		case entry.LinkTo != "":
+			if rerr = os.Remove(target); rerr == nil || errors.Is(rerr, os.ErrNotExist) {
+				rerr = os.Symlink(entry.LinkTo, target)
+			}
+		case entry.Existed:
+			var data []byte
+			if data, rerr = os.ReadFile(filepath.Join(journalDir, entry.Saved)); rerr == nil {
+				rerr = restoreRollbackWriteFile(target, data, entry.Mode)
+			}
+		default:
+			if rerr = os.Remove(target); errors.Is(rerr, os.ErrNotExist) {
+				rerr = nil
+			}
+		}
+		if rerr == nil {
+			rerr = syncDestDir(target)
+		}
+		if rerr != nil {
+			failures = append(failures, fmt.Sprintf("%s (%v)", entry.Target, rerr))
+		}
+	}
+	return failures
+}
+
 func installWithRollback(installs []installItem, payloads map[string][]byte, stdout io.Writer) error {
 	if len(installs) == 0 {
 		return nil
@@ -1158,36 +1225,16 @@ func installWithRollback(installs []installItem, payloads map[string][]byte, std
 	for _, it := range installs {
 		if err := restoreWriteFile(it.target, payloads[it.name], 0o600); err != nil {
 			// Roll back everything installed so far, newest first.
-			var rbFailures []string
-			for j := installed - 1; j >= 0; j-- {
-				entry := manifest.Entries[j]
-				target := installs[j].target
-				var rerr error
-				switch {
-				case entry.LinkTo != "":
-					if rerr = os.Remove(target); rerr == nil || errors.Is(rerr, os.ErrNotExist) {
-						rerr = os.Symlink(entry.LinkTo, target)
-					}
-				case entry.Existed:
-					var data []byte
-					if data, rerr = os.ReadFile(filepath.Join(journalDir, entry.Saved)); rerr == nil {
-						rerr = restoreRollbackWriteFile(target, data, entry.Mode)
-					}
-				default:
-					if rerr = os.Remove(target); errors.Is(rerr, os.ErrNotExist) {
-						rerr = nil
-					}
-				}
-				if rerr != nil {
-					rbFailures = append(rbFailures, fmt.Sprintf("%s (%v)", entry.Target, rerr))
-				}
-			}
-			if len(rbFailures) > 0 {
+			if rbFailures := rollbackInstalled(journalDir, manifest, installs, installed); len(rbFailures) > 0 {
 				preserveJournal = true
 				return fmt.Errorf("install %s failed: %w; rollback INCOMPLETE — could not restore: %s; the installation is in a mixed state. The pre-restore copies are preserved in the restore journal at %s — recover those targets with `nexaroute restore --recover %s` (or from backup) before starting the gateway", it.target, err, strings.Join(rbFailures, ", "), journalDir, journalDir)
 			}
 			return fmt.Errorf("install %s failed: %w; all previously installed files were rolled back to their pre-restore state", it.target, err)
 		}
+		// The rename LANDED. From here this destination counts as
+		// installed on every failure path — in particular, a failed
+		// directory sync below does NOT mean the install did not
+		// happen, and the destination joins the rollback scope.
 		installed++
 		manifest.Entries[installed-1].Installed = true
 		if err := persistJournalManifest(journalDir, manifest); err != nil {
@@ -1196,6 +1243,16 @@ func installWithRollback(installs []installItem, payloads map[string][]byte, std
 			// transaction can be recovered explicitly.
 			preserveJournal = true
 			return fmt.Errorf("installed %s but could not update the restore journal: %w; the journal is preserved at %s — run `nexaroute restore --recover %s` to roll back to the pre-restore state", it.target, err, journalDir, journalDir)
+		}
+		if err := syncDestDir(it.target); err != nil {
+			// The install is on disk but its durability is
+			// unconfirmed; the transaction must not be marked
+			// completed. Roll back INCLUDING this destination.
+			if rbFailures := rollbackInstalled(journalDir, manifest, installs, installed); len(rbFailures) > 0 {
+				preserveJournal = true
+				return fmt.Errorf("installed %s but syncing its directory failed: %w; rollback INCOMPLETE — could not restore: %s; the installation is in a mixed state. The pre-restore copies are preserved in the restore journal at %s — recover those targets with `nexaroute restore --recover %s` (or from backup) before starting the gateway", it.target, err, strings.Join(rbFailures, ", "), journalDir, journalDir)
+			}
+			return fmt.Errorf("installed %s but syncing its directory failed: %w; all installed files were rolled back to their pre-restore state", it.target, err)
 		}
 		fmt.Fprintf(stdout, "restored %s\n", it.target)
 	}
