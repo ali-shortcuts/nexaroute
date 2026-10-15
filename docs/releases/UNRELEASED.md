@@ -1,4 +1,5 @@
 # Unreleased
+- Internationalization (M2-12): the admin UI chrome — navigation, page titles/descriptions, brand, skip link, connection status, sign-in controls and theme toggle — is localized in English, Persian and Pashto with a persisted header switcher; Persian and Pashto switch the shell to RTL with mirrored layout rules. Page body copy remains English in this unit; the dictionary structure is the seam for extending it. RTL screenshots join the M2-14 browser evidence (UNVERIFIED in the sandbox, whose Chromium blocks loopback navigation).
 - Command palette, keyboard navigation and undo toasts (M2-10): Ctrl/⌘+K opens a command palette over all pages (derived from the page registry) plus quick actions; Alt+1…N jumps between pages and ? opens a shortcuts dialog; destructive actions (revoke key, delete route) commit through a 5-second toast with an Undo button, so undoing leaves the server untouched.
 
 ## Features
