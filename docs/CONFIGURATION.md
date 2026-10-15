@@ -655,6 +655,77 @@ transport failure with no usage report) are committed at their
 estimate after 15 minutes. Budget state is runtime state, like
 the usage tracker itself: **it resets on gateway restart**.
 
+### Budget threshold webhook alerts (`budget_alerts`, per-key overrides)
+
+When a budget's **recorded** spend crosses a configured threshold, the
+gateway POSTs a JSON alert to an operator-configured webhook endpoint —
+so an operator learns a budget is nearly exhausted without opening the
+Cost page. Alerts are **disabled by default**: with no webhook URL
+configured anywhere, no delivery is attempted and the zero-service
+self-hosted default works unchanged.
+
+```json
+"budget_alerts": {
+  "webhook_url": "https://alerts.example.com/nexaroute-budgets",
+  "thresholds": [50, 80, 100],
+  "timeout_seconds": 5,
+  "state_path": "/var/lib/nexaroute/budget-alerts.json"
+}
+```
+
+| Field | Default | Bounds | Meaning |
+|---|---|---|---|
+| `budget_alerts.webhook_url` | `""` (disabled) | ≤ 4096 bytes; https, or http for loopback hosts only; no userinfo/query/fragment | Global outbound target for all budgets. |
+| `budget_alerts.thresholds` | `[50, 80, 100]` when a target exists, else unset | 1–8 finite percentages in (0, 100]; duplicates merge | Spend ladder as percent of the budget limit. |
+| `budget_alerts.timeout_seconds` | `5` | 1–30 | Per-attempt delivery timeout. |
+| `budget_alerts.state_path` | `""` (in-memory) | ≤ 4096 bytes | Optional durability file for fired marks (atomic, mode-0600 JSON). |
+| `client_auth.virtual_keys[].budget_webhook_url` | `""` (inherits global) | same URL rules | Per-budget target override. |
+| `client_auth.virtual_keys[].budget_alert_thresholds` | inherits global | same threshold rules | Per-budget ladder override. |
+| `client_auth.virtual_keys[].budget_period` | `""` | `""` or `"monthly"` | Dedup period: lifetime of the current `budget_usd` value, or the UTC calendar month. |
+
+Semantics:
+
+- **Exactly once per (budget, threshold, budget period).** The default
+  period is the lifetime of the current `budget_usd` value: editing the
+  limit starts a new period and re-arms fired thresholds. `"monthly"`
+  uses the UTC calendar month (`2026-10`).
+- **Asynchronous, never blocking.** The usage-settle path only records
+  the mark; delivery runs in a background goroutine with the configured
+  timeout. Timeouts, connection failures and non-2xx responses are
+  logged and dropped — they never fail or delay a data-plane request.
+- **At-most-once delivery per period.** A failed attempt is not
+  retried later in the same period; the next period re-arms it.
+- **Egress/SSRF policy enforced.** Delivery goes through the same
+  egress machinery as provider connections: operator `deny_hosts` /
+  `deny_cidrs` take precedence, a configured `allow_hosts` list gates
+  the target, DNS-rebinding and embedded-IP (NAT64/6to4) tricks are
+  refused, redirects cannot downgrade to non-loopback http, and no
+  credentials, cookies, or request content are ever sent (the payload
+  carries no secrets, so none are forwarded).
+- **Payload** (JSON): `budget_id`, `budget_name`, `threshold_percent`,
+  `spend_usd`, `limit_usd`, `currency` (`"USD"`), `period`,
+  `timestamp` (RFC3339). No secrets, key hashes, or request content.
+- **Durability (honest).** Fired marks are deduplicated in memory;
+  across restarts they survive only where a durable store is
+  configured. Two options, in priority order: (1) the durable
+  control-plane backend (`control_plane` with file/postgres/redis —
+  wired automatically into the `budgets/alerts` namespace; remote writes
+  are best-effort background writes so a slow database never stalls the
+  data plane); (2) `budget_alerts.state_path` (synchronous local file
+  write). With the in-memory default a restart may re-fire alerts for
+  the same period. Note the interaction with budget state itself
+  resetting on restart: a persisted mark means a post-restart crossing
+  in the SAME period stays silent — exactly-once per period, not
+  at-least-once.
+- **Admin surface.** `GET /admin/api/client-keys` lists the per-key
+  `budget_webhook_url`, `budget_alert_thresholds` and `budget_period`
+  beside `budget_usd` (never secret material); `POST
+  /admin/api/client-keys` accepts the same three fields for new keys
+  (malformed targets are rejected with 400); `GET
+  /admin/api/snapshot` carries a `budget_alerts` section with policy,
+  per-budget spend vs. ladder, and fired marks for the current period.
+  The Budgets & Cost page itself is unchanged.
+
 ## Model intelligence scorecards and evaluation
 
 The evaluation plane is an opt-in, admin-only observation plane. It never affects routing:

@@ -16,9 +16,15 @@ import (
 
 	"github.com/ali-shortcuts/nexaroute/internal/config"
 	"github.com/ali-shortcuts/nexaroute/internal/controlplane"
+	"github.com/ali-shortcuts/nexaroute/internal/httpapi"
 )
 
 const controlPlaneNamespace = "gateway/runtime"
+
+// controlPlaneBudgetAlertNamespace is the durable namespace holding
+// fired budget-threshold webhook marks for exactly-once-per-period
+// delivery across restarts.
+const controlPlaneBudgetAlertNamespace = "budgets/alerts"
 
 // Bounded PostgreSQL settings for the control-plane store. The control
 // plane is low-volume metadata traffic; small pools keep a fleet of
@@ -123,6 +129,44 @@ func openControlPlaneRuntime(cfg config.ControlPlaneConfig, configPath string) (
 		return nil, fmt.Errorf("load control-plane snapshot: %w", err)
 	}
 	return rt, nil
+}
+
+// controlPlaneBudgetAlertIO adapts the durable control-plane manager
+// to httpapi.BudgetAlertSnapshotIO so budget webhook alerts
+// deduplicate across restarts on every control-plane backend (file,
+// postgres, redis). Control-plane errors map to the alerter's
+// sentinel errors; every failure is best-effort and never fails a
+// data-plane request.
+type controlPlaneBudgetAlertIO struct {
+	runtime *controlPlaneRuntime
+}
+
+func (a *controlPlaneBudgetAlertIO) Read(ctx context.Context) ([]byte, uint64, error) {
+	snap, err := a.runtime.manager.Load(ctx, controlPlaneBudgetAlertNamespace)
+	if err != nil {
+		if errors.Is(err, controlplane.ErrNotFound) {
+			return nil, 0, httpapi.ErrBudgetAlertStoreNotFound
+		}
+		if errors.Is(err, controlplane.ErrConflict) {
+			return nil, 0, httpapi.ErrBudgetAlertStoreConflict
+		}
+		return nil, 0, err
+	}
+	return append([]byte(nil), snap.Payload...), snap.Revision, nil
+}
+
+func (a *controlPlaneBudgetAlertIO) Write(ctx context.Context, payload []byte, expectedRevision uint64) (uint64, error) {
+	snap, err := a.runtime.manager.Save(ctx, controlPlaneBudgetAlertNamespace, expectedRevision, payload)
+	if err != nil {
+		if errors.Is(err, controlplane.ErrNotFound) {
+			return 0, httpapi.ErrBudgetAlertStoreNotFound
+		}
+		if errors.Is(err, controlplane.ErrConflict) {
+			return 0, httpapi.ErrBudgetAlertStoreConflict
+		}
+		return 0, err
+	}
+	return snap.Revision, nil
 }
 
 // openPostgresControlPlane wires the real PostgreSQL backend: the DSN is

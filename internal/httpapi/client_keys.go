@@ -21,6 +21,12 @@ type clientKeyCreateRequest struct {
 	ExpiresAt     string   `json:"expires_at"`
 	RPM           int      `json:"rpm"`
 	TPM           int      `json:"tpm"`
+	// Budget webhook alert overrides for the new key's budget (all
+	// optional; empty inherits the global budget_alerts policy).
+	// BudgetUSD itself is set through the config file.
+	BudgetWebhookURL      string    `json:"budget_webhook_url"`
+	BudgetAlertThresholds []float64 `json:"budget_alert_thresholds"`
+	BudgetPeriod          string    `json:"budget_period"`
 }
 
 type clientKeyResponse struct {
@@ -40,13 +46,19 @@ type clientKeyResponse struct {
 	// tells clients the budget backend exposes per-key limits, while
 	// 0 means the key carries no budget cap. It is configuration
 	// metadata, never secret material.
-	BudgetUSD    float64 `json:"budget_usd"`
-	Key          string  `json:"key,omitempty"`
-	KeyShownOnce bool    `json:"key_shown_once,omitempty"`
+	BudgetUSD float64 `json:"budget_usd"`
+	// Budget webhook alert overrides, mirroring the virtual-key
+	// config fields. The URL carries no credentials by validation
+	// and is operator configuration, safe for admin readers.
+	BudgetWebhookURL      string    `json:"budget_webhook_url,omitempty"`
+	BudgetAlertThresholds []float64 `json:"budget_alert_thresholds,omitempty"`
+	BudgetPeriod          string    `json:"budget_period,omitempty"`
+	Key                   string    `json:"key,omitempty"`
+	KeyShownOnce          bool      `json:"key_shown_once,omitempty"`
 }
 
 func publicClientKey(k config.VirtualKeyConfig, plaintext string) clientKeyResponse {
-	return clientKeyResponse{ID: k.ID, Name: k.Name, TenantID: k.TenantID, ProjectID: k.ProjectID, TeamID: k.TeamID, Role: k.Role, AllowedModels: k.AllowedModels, AllowedRoutes: k.AllowedRoutes, ExpiresAt: k.ExpiresAt, Revoked: k.Revoked, RPM: k.RPM, TPM: k.TPM, BudgetUSD: k.BudgetUSD, Key: plaintext, KeyShownOnce: plaintext != ""}
+	return clientKeyResponse{ID: k.ID, Name: k.Name, TenantID: k.TenantID, ProjectID: k.ProjectID, TeamID: k.TeamID, Role: k.Role, AllowedModels: k.AllowedModels, AllowedRoutes: k.AllowedRoutes, ExpiresAt: k.ExpiresAt, Revoked: k.Revoked, RPM: k.RPM, TPM: k.TPM, BudgetUSD: k.BudgetUSD, BudgetWebhookURL: k.BudgetWebhookURL, BudgetAlertThresholds: k.BudgetAlertThresholds, BudgetPeriod: k.BudgetPeriod, Key: plaintext, KeyShownOnce: plaintext != ""}
 }
 
 func (s *Server) adminClientKeys(w http.ResponseWriter, r *http.Request) {
@@ -79,7 +91,7 @@ func (s *Server) adminClientKeys(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		id := fmt.Sprintf("vk_%d", time.Now().UnixNano())
-		key := config.VirtualKeyConfig{ID: id, Name: strings.TrimSpace(in.Name), KeyHash: digest, TenantID: strings.TrimSpace(in.TenantID), ProjectID: strings.TrimSpace(in.ProjectID), TeamID: strings.TrimSpace(in.TeamID), Role: in.Role, AllowedModels: in.AllowedModels, AllowedRoutes: in.AllowedRoutes, ExpiresAt: in.ExpiresAt, RPM: in.RPM, TPM: in.TPM}
+		key := config.VirtualKeyConfig{ID: id, Name: strings.TrimSpace(in.Name), KeyHash: digest, TenantID: strings.TrimSpace(in.TenantID), ProjectID: strings.TrimSpace(in.ProjectID), TeamID: strings.TrimSpace(in.TeamID), Role: in.Role, AllowedModels: in.AllowedModels, AllowedRoutes: in.AllowedRoutes, ExpiresAt: in.ExpiresAt, RPM: in.RPM, TPM: in.TPM, BudgetWebhookURL: strings.TrimSpace(in.BudgetWebhookURL), BudgetAlertThresholds: in.BudgetAlertThresholds, BudgetPeriod: strings.ToLower(strings.TrimSpace(in.BudgetPeriod))}
 		if _, err := s.mutateConfig(func(cfg *config.Config) error {
 			cfg.ClientAuth.VirtualKeys = append(cfg.ClientAuth.VirtualKeys, key)
 			cfg.ClientAuth.Enabled = true

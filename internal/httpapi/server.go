@@ -80,6 +80,7 @@ type Server struct {
 	cacheGeneration        uint64 // guarded by runtimeMu; scopes cache keys to a config snapshot
 	usage                  *usage.Tracker
 	budgets                *usage.BudgetLedger
+	budgetAlerter          *budgetAlerter
 	bookMu                 sync.Mutex
 	bookCache              *pricing.Book
 	bookCacheRev           uint64
@@ -217,6 +218,7 @@ func New(cfg config.Config, configPath string, reg *providers.Registry, rt *rout
 		cacheGeneration: 1,
 		usage:           usage.New(),
 		budgets:         usage.NewBudgetLedger(),
+		budgetAlerter:   newBudgetAlerter(cfg, l),
 		identityUsage:   usage.NewIdentityTracker(),
 		capStore:        compat.NewStore(),
 		taskClassCounts: make(map[string]uint64, 32),
@@ -376,7 +378,9 @@ func cloneConfig(in config.Config) config.Config {
 	for i := range out.ClientAuth.VirtualKeys {
 		out.ClientAuth.VirtualKeys[i].AllowedModels = append([]string(nil), in.ClientAuth.VirtualKeys[i].AllowedModels...)
 		out.ClientAuth.VirtualKeys[i].AllowedRoutes = append([]string(nil), in.ClientAuth.VirtualKeys[i].AllowedRoutes...)
+		out.ClientAuth.VirtualKeys[i].BudgetAlertThresholds = append([]float64(nil), in.ClientAuth.VirtualKeys[i].BudgetAlertThresholds...)
 	}
+	out.BudgetAlerts.Thresholds = append([]float64(nil), in.BudgetAlerts.Thresholds...)
 	out.Providers = append([]config.ProviderConfig(nil), in.Providers...)
 	for i := range out.Providers {
 		if in.Providers[i].Headers != nil {
@@ -654,6 +658,11 @@ func (s *Server) applyConfigLocked(baseCfg config.Config) error {
 
 	s.cfg = cfg
 	s.baseCfg = cloneConfig(baseCfg)
+	// Budget webhook alerts follow the new policy without losing
+	// fired marks (a reload never re-arms an already-sent alert).
+	if s.budgetAlerter != nil {
+		s.budgetAlerter.reconfigure(cfg)
+	}
 	// Phase G: update decision orchestrator with chains and health (coherent snapshot)
 	if s.decisionOrchestrator != nil {
 		// Preserve provider state across unrelated reloads: compare old vs new identity

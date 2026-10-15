@@ -207,6 +207,7 @@ type Config struct {
 	Cache                  CacheConfig                  `json:"cache"`
 	MCP                    MCPConfig                    `json:"mcp,omitempty"`
 	Pricing                PricingConfig                `json:"pricing,omitempty"`
+	BudgetAlerts           BudgetAlertsConfig           `json:"budget_alerts,omitempty"`
 	ClientAuth             ClientAuthConfig             `json:"client_auth"`
 	ControlPlane           ControlPlaneConfig           `json:"control_plane,omitempty"`
 	Telemetry              TelemetryConfig              `json:"telemetry,omitempty"`
@@ -472,6 +473,43 @@ type PriceEntryConfig struct {
 	CacheWritePerMTok *float64 `json:"cache_write_per_mtok,omitempty"`
 }
 
+// BudgetAlertsConfig is the global budget-threshold webhook policy.
+// It is disabled by default: with no webhook URL configured anywhere,
+// no alert delivery is attempted and the zero-service self-hosted
+// default keeps working unchanged. A per-virtual-key webhook URL or
+// threshold list overrides the global policy for that budget.
+type BudgetAlertsConfig struct {
+	// WebhookURL is the operator-configured outbound target notified
+	// when a budget's recorded spend crosses a threshold. Empty means
+	// no global target. https is required; plain http is accepted
+	// only for explicit loopback hosts (localhost, *.localhost,
+	// loopback literals) for local receivers and tests. Userinfo,
+	// query strings and fragments are rejected: the payload carries
+	// no secrets, so credentials do not belong in the URL.
+	WebhookURL string `json:"webhook_url,omitempty"`
+	// Thresholds are spend percentages of the budget limit that fire
+	// an alert. Empty normalizes to DefaultBudgetAlertThresholds.
+	Thresholds []float64 `json:"thresholds,omitempty"`
+	// TimeoutSeconds bounds one alert delivery attempt. Default 5.
+	TimeoutSeconds int `json:"timeout_seconds,omitempty"`
+	// StatePath optionally persists fired (budget, threshold, period)
+	// marks to an atomically written, mode-0600 JSON document so a
+	// restart does not re-fire an already-sent alert. Empty means
+	// in-memory only: a restart may re-fire alerts for the same
+	// period (documented best-effort).
+	StatePath string `json:"state_path,omitempty"`
+}
+
+// DefaultBudgetAlertThresholds is the sensible default spend ladder.
+var DefaultBudgetAlertThresholds = []float64{50, 80, 100}
+
+// Budget alert bounds.
+const (
+	maxBudgetAlertThresholds   = 8
+	maxBudgetWebhookURLBytes   = 4096
+	maxBudgetAlertStatePathLen = 4096
+)
+
 // CacheConfig gates the exact-match response cache. It is deliberately
 // opt-in: a shared gateway serving mixed traffic must not memorize responses
 // unless the operator asked for it.
@@ -605,6 +643,19 @@ type VirtualKeyConfig struct {
 	// a conservative estimate, settled to actual cost on the first
 	// usage report. Runtime state: resets on gateway restart.
 	BudgetUSD float64 `json:"budget_usd,omitempty"`
+	// BudgetWebhookURL overrides the global budget_alerts.webhook_url
+	// for this budget. Empty inherits the global target; with neither
+	// set, no alert is sent for this budget.
+	BudgetWebhookURL string `json:"budget_webhook_url,omitempty"`
+	// BudgetAlertThresholds overrides the global budget_alerts
+	// thresholds for this budget. Empty inherits the global list
+	// (default 50/80/100).
+	BudgetAlertThresholds []float64 `json:"budget_alert_thresholds,omitempty"`
+	// BudgetPeriod selects the alert deduplication period for this
+	// budget: "" (default) is the lifetime of the current budget_usd
+	// value — changing the limit starts a new period and re-arms
+	// fired thresholds; "monthly" is the UTC calendar month.
+	BudgetPeriod string `json:"budget_period,omitempty"`
 }
 
 type ProbeConfig struct {
@@ -873,6 +924,7 @@ func Default() Config {
 		Probe:                  ProbeConfig{Enabled: true, OnStart: true, IntervalSeconds: 120, ReadyLeaseSeconds: 300, TimeoutMS: 8000, MaxTokens: 1, Concurrency: 16, RecoveryAttempts: 5, RecoveryRetryMS: 500, CapabilityProbes: true},
 		Cache:                  CacheConfig{Enabled: false, TTLSeconds: 300, MaxEntries: 256, MaxBodyBytes: 1 << 20},
 		ClientAuth:             ClientAuthConfig{Enabled: false, RPM: 0},
+		BudgetAlerts:           BudgetAlertsConfig{TimeoutSeconds: 5},
 		Guardrails:             GuardrailConfig{Mode: "off", MaxBodyBytes: 2 << 20},
 		Decision:               DecisionConfig{Mode: "off", Provider: "local", TimeoutMS: 10},
 		Evaluation:             EvaluationConfig{Enabled: false, MaxRuns: 64, MaxScorecards: 1024, MaxArtifacts: 128},
@@ -1300,6 +1352,24 @@ func (c *Config) ApplyDefaults() {
 	}
 	for i := range c.ClientAuth.VirtualKeys {
 		c.ClientAuth.VirtualKeys[i].RequirePrivacy = strings.ToLower(strings.TrimSpace(c.ClientAuth.VirtualKeys[i].RequirePrivacy))
+		c.ClientAuth.VirtualKeys[i].BudgetWebhookURL = strings.TrimSpace(c.ClientAuth.VirtualKeys[i].BudgetWebhookURL)
+		c.ClientAuth.VirtualKeys[i].BudgetPeriod = strings.ToLower(strings.TrimSpace(c.ClientAuth.VirtualKeys[i].BudgetPeriod))
+		c.ClientAuth.VirtualKeys[i].BudgetAlertThresholds = normalizeBudgetAlertThresholds(c.ClientAuth.VirtualKeys[i].BudgetAlertThresholds)
+	}
+	// Budget webhook alerts: disabled unless a webhook URL is
+	// configured. Thresholds default to 50/80/100 only when a target
+	// exists (globally or on at least one key); a fully unconfigured
+	// policy keeps a nil list so callers can tell "no alerts" apart
+	// from an explicit ladder.
+	c.BudgetAlerts.WebhookURL = strings.TrimSpace(c.BudgetAlerts.WebhookURL)
+	c.BudgetAlerts.StatePath = strings.TrimSpace(c.BudgetAlerts.StatePath)
+	if c.BudgetAlerts.TimeoutSeconds == 0 {
+		c.BudgetAlerts.TimeoutSeconds = 5
+	}
+	if len(c.BudgetAlerts.Thresholds) == 0 && (c.BudgetAlerts.WebhookURL != "" || anyBudgetWebhookConfigured(c.ClientAuth.VirtualKeys)) {
+		c.BudgetAlerts.Thresholds = append([]float64(nil), DefaultBudgetAlertThresholds...)
+	} else {
+		c.BudgetAlerts.Thresholds = normalizeBudgetAlertThresholds(c.BudgetAlerts.Thresholds)
 	}
 	// Evaluation defaults (Phase H)
 	c.Evaluation.ImportPath = strings.TrimSpace(c.Evaluation.ImportPath)
@@ -1838,6 +1908,18 @@ func (c Config) Validate() error {
 			}
 		}
 	}
+	if err := validateBudgetWebhookURL(c.BudgetAlerts.WebhookURL, "budget_alerts.webhook_url"); err != nil {
+		return err
+	}
+	if err := validateBudgetAlertThresholds(c.BudgetAlerts.Thresholds, "budget_alerts.thresholds"); err != nil {
+		return err
+	}
+	if c.BudgetAlerts.TimeoutSeconds < 1 || c.BudgetAlerts.TimeoutSeconds > 30 {
+		return errors.New("budget_alerts.timeout_seconds must be between 1 and 30")
+	}
+	if len(c.BudgetAlerts.StatePath) > maxBudgetAlertStatePathLen || strings.ContainsAny(c.BudgetAlerts.StatePath, "\r\n\x00") {
+		return errors.New("budget_alerts.state_path is invalid or too long")
+	}
 	if len(c.ClientAuth.Tenants) > 1024 {
 		return errors.New("client_auth.tenants exceeds safe limit 1024")
 	}
@@ -1939,6 +2021,15 @@ func (c Config) Validate() error {
 		}
 		if key.BudgetUSD < 0 || key.BudgetUSD > 1e9 {
 			return fmt.Errorf("client_auth.virtual_key %q budget_usd must be between 0 and 1e9", key.ID)
+		}
+		if err := validateBudgetWebhookURL(key.BudgetWebhookURL, fmt.Sprintf("client_auth.virtual_key %q budget_webhook_url", key.ID)); err != nil {
+			return err
+		}
+		if err := validateBudgetAlertThresholds(key.BudgetAlertThresholds, fmt.Sprintf("client_auth.virtual_key %q budget_alert_thresholds", key.ID)); err != nil {
+			return err
+		}
+		if key.BudgetPeriod != "" && key.BudgetPeriod != "monthly" {
+			return fmt.Errorf("client_auth.virtual_key %q budget_period must be \"\" or \"monthly\" (got %q)", key.ID, key.BudgetPeriod)
 		}
 		if key.RequirePrivacy != "" && key.RequirePrivacy != "any" && key.RequirePrivacy != "no_training" {
 			return fmt.Errorf("client_auth.virtual_key %q require_privacy must be \"\", \"any\", or \"no_training\" (got %q)", key.ID, key.RequirePrivacy)
@@ -2716,6 +2807,115 @@ func ValidateProviderConfig(p ProviderConfig) error {
 }
 
 // validate checks that egress CIDR lists parse as valid IP prefixes.
+// normalizeBudgetAlertThresholds sorts and dedupes a threshold ladder.
+// Out-of-range entries are KEPT (not silently dropped) so Validate
+// can reject them explicitly; duplicates merge to one entry. An empty
+// result stays nil so "unconfigured" remains distinguishable from an
+// explicit ladder.
+func normalizeBudgetAlertThresholds(in []float64) []float64 {
+	if len(in) == 0 {
+		return nil
+	}
+	seen := map[float64]bool{}
+	out := make([]float64, 0, len(in))
+	for _, t := range in {
+		if !seen[t] {
+			seen[t] = true
+			out = append(out, t)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	sortFloat64s(out)
+	return out
+}
+
+func sortFloat64s(v []float64) {
+	for i := 1; i < len(v); i++ {
+		for j := i; j > 0 && v[j] < v[j-1]; j-- {
+			v[j], v[j-1] = v[j-1], v[j]
+		}
+	}
+}
+
+func anyBudgetWebhookConfigured(keys []VirtualKeyConfig) bool {
+	for _, k := range keys {
+		if strings.TrimSpace(k.BudgetWebhookURL) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// validateBudgetWebhookURL enforces the operator-outbound-target shape
+// for budget webhooks: absolute http(s) URL, no userinfo/query/fragment
+// (the payload carries no secrets, so credentials do not belong in the
+// URL), https everywhere except explicit loopback hosts where plain http
+// is allowed for local receivers. DNS-time SSRF enforcement (deny-CIDRs,
+// host allowlists, rebinding checks) happens at delivery time through
+// the egress policy machinery, which rejects what this shape check
+// cannot see.
+func validateBudgetWebhookURL(raw, field string) error {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	if len(raw) > maxBudgetWebhookURLBytes {
+		return fmt.Errorf("%s exceeds %d bytes", field, maxBudgetWebhookURLBytes)
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" || u.Hostname() == "" {
+		return fmt.Errorf("%s must be an absolute http(s) URL", field)
+	}
+	if u.User != nil {
+		return fmt.Errorf("%s must not contain embedded credentials", field)
+	}
+	if u.RawQuery != "" || u.Fragment != "" {
+		return fmt.Errorf("%s must not contain query or fragment", field)
+	}
+	switch u.Scheme {
+	case "https":
+	case "http":
+		if !isBudgetWebhookLoopbackHost(u.Hostname()) {
+			return fmt.Errorf("%s may use http only for loopback hosts; use https for remote targets", field)
+		}
+	default:
+		return fmt.Errorf("%s must use http or https", field)
+	}
+	return nil
+}
+
+// isBudgetWebhookLoopbackHost mirrors the egress loopback spelling rule:
+// a loopback IP literal, "localhost" or "*.localhost". A public DNS name
+// that merely resolves to loopback does NOT qualify (delivery-time DNS
+// checks still refuse it).
+func isBudgetWebhookLoopbackHost(host string) bool {
+	host = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return true
+	}
+	if ip, err := netip.ParseAddr(host); err == nil {
+		return ip.WithZone("").Unmap().IsLoopback()
+	}
+	return false
+}
+
+// validateBudgetAlertThresholds bounds one explicit threshold ladder:
+// finite percentages in (0, 100] (duplicates are merged by
+// normalization before this runs), at most maxBudgetAlertThresholds
+// entries.
+func validateBudgetAlertThresholds(ts []float64, field string) error {
+	if len(ts) > maxBudgetAlertThresholds {
+		return fmt.Errorf("%s must list at most %d thresholds", field, maxBudgetAlertThresholds)
+	}
+	for _, t := range ts {
+		if math.IsNaN(t) || math.IsInf(t, 0) || t <= 0 || t > 100 {
+			return fmt.Errorf("%s entries must be percentages in (0, 100] (got %v)", field, t)
+		}
+	}
+	return nil
+}
+
 func (e EgressConfig) validate() error {
 	for _, cidr := range e.DenyCIDRs {
 		if _, err := netip.ParsePrefix(cidr); err != nil {
