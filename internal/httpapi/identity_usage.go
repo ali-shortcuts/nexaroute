@@ -21,12 +21,20 @@ func (s *Server) recordUsageCanonical(r *http.Request, deployment, kind string, 
 }
 
 func (s *Server) recordUsage(r *http.Request, deployment string, input, output int64) {
-	noteSpanUsage(r.Context(), deployment, input, output)
-	s.usage.Record(deployment, input, output)
-	// Reconcile the request's TPM reservation with the actual usage the
-	// provider reported (M3-8). Requests that never reach a usage
-	// report keep the admission estimate as their charge.
+	s.recordUsageEx(r, deployment, usage.Counts{Input: input, Output: output}, false)
+}
 
+// recordUsageEx is the single accounting funnel (M5-6): the usage
+// is priced AT RECORD TIME under the price-book version active
+// now, accumulated with its cache-token counts, and any budget
+// reservation on the request settles to this actual cost (first
+// settle wins inside the ledger). The TPM reservation reconciles
+// to input+output total tokens exactly as before.
+func (s *Server) recordUsageEx(r *http.Request, deployment string, counts usage.Counts, inputIncludesCache bool) {
+	noteSpanUsage(r.Context(), deployment, counts.Input, counts.Output)
+	cfg := s.currentConfig()
+	cost, version := s.recordCost(cfg, deployment, counts.Input, counts.Output, counts.CacheRead, counts.CacheWrite, inputIncludesCache)
+	s.usage.RecordEx(deployment, counts, cost, version)
 	if res := tpmReservationFromContext(r.Context()); res != nil {
 		s.clientTPMSettle(res, counts.Input+counts.Output)
 	}
