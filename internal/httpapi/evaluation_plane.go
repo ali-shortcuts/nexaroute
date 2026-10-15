@@ -17,10 +17,13 @@ import (
 // evaluationPlane owns Phase H state: the versioned scorecard registry, the
 // bounded evaluation run store and the deterministic runner.
 //
-// Isolation contract: the plane is written by the admin surface only. It is not
-// reachable from the data plane (no handler in the request path calls it), it does
-// not import the router/health/providers packages, and nothing reads scorecards
-// back into routing. Phase H therefore cannot change real routing.
+// Isolation contract: the plane is written by the admin surface, plus one
+// bounded exception — the data plane may submit aggregated operational
+// counters (success/failure counts, numeric latency/TTFT samples) through the
+// opt-in production-telemetry hook. That hook never reads scorecards, never
+// touches routing/health state and never carries prompt/response content, and
+// nothing reads scorecards back into routing. The evaluation plane therefore
+// cannot change real routing.
 type evaluationPlane struct {
 	mu     sync.RWMutex
 	cfg    config.EvaluationConfig
@@ -34,6 +37,14 @@ type evaluationPlane struct {
 	// loadedStatePath records which state file has already been read so a hot
 	// reload of unrelated settings cannot roll memory back to a stale file.
 	loadedStatePath string
+	// Operator-defined suites (PR-A). Loaded atomically from
+	// cfg.SuitesPath; a failed load never partially registers.
+	customSuites     []eval.Suite
+	suitesError      string
+	loadedSuitesPath string
+	// Production-telemetry ingestion state (PR-B). Aggregates completed
+	// gateway traffic into production_telemetry scorecards when opt-in.
+	telemetry *telemetryAggregator
 
 	stateWritesFailed atomic.Uint64
 	runsTotal         atomic.Uint64
@@ -41,6 +52,7 @@ type evaluationPlane struct {
 	runsRejected      atomic.Uint64
 	scorecardsWritten atomic.Uint64
 	importFailures    atomic.Uint64
+	telemetryIngested atomic.Uint64
 }
 
 func newEvaluationPlane(cfg config.EvaluationConfig, previous *evaluationPlane) *evaluationPlane {
@@ -57,8 +69,16 @@ func newEvaluationPlane(cfg config.EvaluationConfig, previous *evaluationPlane) 
 		p.scorecardsWritten.Store(previous.scorecardsWritten.Load())
 		p.stateWritesFailed.Store(previous.stateWritesFailed.Load())
 		p.importFailures.Store(previous.importFailures.Load())
+		p.telemetryIngested.Store(previous.telemetryIngested.Load())
 		p.imported = previous.imported
 		p.loadedStatePath = previous.loadedStatePath
+		p.customSuites = previous.OperatorSuites()
+		p.suitesError = previous.SuitesError()
+		p.loadedSuitesPath = previous.loadedSuitesPathValue()
+		p.telemetry = previous.telemetrySnapshot()
+	}
+	if p.telemetry == nil {
+		p.telemetry = newTelemetryAggregator()
 	}
 	if p.reg == nil {
 		p.reg = scorecards.NewRegistry(cfg.MaxScorecards, 4)
@@ -98,11 +118,12 @@ func (p *evaluationPlane) setConfig(cfg config.EvaluationConfig) {
 }
 
 // Configure applies a new evaluation config to the plane: it re-points the state
-// path, reloads the artifact import when the path changed, and keeps previously
-// recorded runs and scorecards.
+// path, reloads the artifact import when the path changed, reloads operator
+// suites when their path changed, and keeps previously recorded runs and
+// scorecards.
 func (p *evaluationPlane) Configure(cfg config.EvaluationConfig, l *log.Logger) {
 	p.setConfig(cfg)
-	if cfg.StatePath != "" && p.loadedStatePath != cfg.StatePath {
+	if cfg.StatePath != "" && p.loadedStatePathValue() != cfg.StatePath {
 		if err := p.loadState(cfg.StatePath); err != nil {
 			p.setImportError(fmt.Sprintf("evaluation state file: %v", err))
 			logf(l, "evaluation state file %q unusable: %v", cfg.StatePath, err)
@@ -110,6 +131,12 @@ func (p *evaluationPlane) Configure(cfg config.EvaluationConfig, l *log.Logger) 
 			p.mu.Lock()
 			p.loadedStatePath = cfg.StatePath
 			p.mu.Unlock()
+		}
+	}
+	if cfg.SuitesPath != p.loadedSuitesPathValue() {
+		if err := p.loadOperatorSuites(cfg.SuitesPath); err != nil {
+			p.importFailures.Add(1)
+			logf(l, "evaluation suites %q unusable: %v", cfg.SuitesPath, err)
 		}
 	}
 	if cfg.Enabled && cfg.ImportPath != "" {
@@ -120,6 +147,75 @@ func (p *evaluationPlane) Configure(cfg config.EvaluationConfig, l *log.Logger) 
 			return
 		}
 	}
+}
+
+// OperatorSuites returns a copy of the loaded operator-defined suites.
+func (p *evaluationPlane) OperatorSuites() []eval.Suite {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return append([]eval.Suite(nil), p.customSuites...)
+}
+
+// SuitesError returns the last operator-suite load error ("" on success).
+func (p *evaluationPlane) SuitesError() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.suitesError
+}
+
+func (p *evaluationPlane) loadedSuitesPathValue() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.loadedSuitesPath
+}
+
+func (p *evaluationPlane) loadedStatePathValue() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.loadedStatePath
+}
+
+func (p *evaluationPlane) telemetrySnapshot() *telemetryAggregator {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.telemetry
+}
+
+// loadOperatorSuites loads operator packs atomically: a malformed pack
+// refuses the whole load with a clear error and never partially registers.
+// An empty path clears operator suites.
+func (p *evaluationPlane) loadOperatorSuites(path string) error {
+	trimmed := path
+	if trimmed == "" {
+		p.mu.Lock()
+		p.customSuites = nil
+		p.suitesError = ""
+		p.loadedSuitesPath = ""
+		p.mu.Unlock()
+		return nil
+	}
+	list, err := eval.LoadSuitesFromPath(trimmed)
+	if err != nil {
+		p.mu.Lock()
+		p.suitesError = err.Error()
+		p.mu.Unlock()
+		return err
+	}
+	p.mu.Lock()
+	p.customSuites = list
+	p.suitesError = ""
+	p.loadedSuitesPath = trimmed
+	p.mu.Unlock()
+	return nil
+}
+
+// LookupSuite resolves a suite id against built-ins plus validated operator
+// suites. Built-ins always win because the loader rejects collisions.
+func (p *evaluationPlane) LookupSuite(id string) (eval.Suite, bool) {
+	p.mu.RLock()
+	custom := append([]eval.Suite(nil), p.customSuites...)
+	p.mu.RUnlock()
+	return eval.LookupWith(id, custom)
 }
 
 func (p *evaluationPlane) setImportError(msg string) {
@@ -198,49 +294,68 @@ func (p *evaluationPlane) loadImport(path string) error {
 func (p *evaluationPlane) Retain(valid map[string]struct{}) {
 	p.reg.Retain(valid)
 	p.store.Retain(valid)
+	if p.telemetry != nil {
+		p.telemetry.retain(valid)
+	}
 }
 
 // Stats is the bounded observability view of the evaluation plane.
 type evaluationStats struct {
-	Enabled           bool                 `json:"enabled"`
-	LiveEnabled       bool                 `json:"live_enabled"`
-	JudgeRegistered   bool                 `json:"judge_registered"`
-	ImportPath        string               `json:"import_path,omitempty"`
-	StatePath         string               `json:"state_path,omitempty"`
-	Imported          int                  `json:"imported_scorecards"`
-	ImportError       string               `json:"import_error,omitempty"`
-	Runs              int                  `json:"runs_stored"`
-	RunsTotal         uint64               `json:"runs_total"`
-	RunsInsufficient  uint64               `json:"runs_insufficient_samples"`
-	RunsRejected      uint64               `json:"runs_rejected"`
-	ScorecardsWritten uint64               `json:"scorecards_written"`
-	StateWritesFailed uint64               `json:"state_writes_failed"`
-	Scorecards        scorecards.Stats     `json:"scorecard_registry"`
-	VerdictCounts     map[eval.Verdict]int `json:"verdict_counts"`
-	SuiteRuns         map[string]int       `json:"suite_runs"`
-	Evaluators        []string             `json:"evaluators"`
+	Enabled              bool                 `json:"enabled"`
+	LiveEnabled          bool                 `json:"live_enabled"`
+	JudgeRegistered      bool                 `json:"judge_registered"`
+	ImportPath           string               `json:"import_path,omitempty"`
+	StatePath            string               `json:"state_path,omitempty"`
+	SuitesPath           string               `json:"suites_path,omitempty"`
+	OperatorSuites       int                  `json:"operator_suites"`
+	SuitesError          string               `json:"suites_error,omitempty"`
+	TelemetryIngest      bool                 `json:"telemetry_ingest_enabled"`
+	TelemetryIngested    uint64               `json:"telemetry_ingested"`
+	TelemetryDeployments int                  `json:"telemetry_deployments"`
+	Imported             int                  `json:"imported_scorecards"`
+	ImportError          string               `json:"import_error,omitempty"`
+	Runs                 int                  `json:"runs_stored"`
+	RunsTotal            uint64               `json:"runs_total"`
+	RunsInsufficient     uint64               `json:"runs_insufficient_samples"`
+	RunsRejected         uint64               `json:"runs_rejected"`
+	ScorecardsWritten    uint64               `json:"scorecards_written"`
+	StateWritesFailed    uint64               `json:"state_writes_failed"`
+	Scorecards           scorecards.Stats     `json:"scorecard_registry"`
+	VerdictCounts        map[eval.Verdict]int `json:"verdict_counts"`
+	SuiteRuns            map[string]int       `json:"suite_runs"`
+	Evaluators           []string             `json:"evaluators"`
 }
 
 func (p *evaluationPlane) Stats() evaluationStats {
 	cfg := p.config()
+	telemetryDeployments := 0
+	if p.telemetry != nil {
+		telemetryDeployments = p.telemetry.deployments()
+	}
 	st := evaluationStats{
-		Enabled:           cfg.Enabled,
-		LiveEnabled:       cfg.Enabled && cfg.LiveEnabled,
-		JudgeRegistered:   len(p.runner.Evaluators().Judges()) > 0,
-		ImportPath:        cfg.ImportPath,
-		StatePath:         cfg.StatePath,
-		Imported:          p.ImportedCount(),
-		ImportError:       p.ImportError(),
-		Runs:              p.store.Len(),
-		RunsTotal:         p.runsTotal.Load(),
-		RunsInsufficient:  p.runsInsufficient.Load(),
-		RunsRejected:      p.runsRejected.Load(),
-		ScorecardsWritten: p.scorecardsWritten.Load(),
-		StateWritesFailed: p.stateWritesFailed.Load(),
-		Scorecards:        p.reg.Stats(),
-		VerdictCounts:     p.store.Counts(),
-		SuiteRuns:         p.store.SuiteCounts(),
-		Evaluators:        p.runner.Evaluators().IDs(),
+		Enabled:              cfg.Enabled,
+		LiveEnabled:          cfg.Enabled && cfg.LiveEnabled,
+		JudgeRegistered:      len(p.runner.Evaluators().Judges()) > 0,
+		ImportPath:           cfg.ImportPath,
+		StatePath:            cfg.StatePath,
+		SuitesPath:           cfg.SuitesPath,
+		OperatorSuites:       len(p.OperatorSuites()),
+		SuitesError:          p.SuitesError(),
+		TelemetryIngest:      cfg.Enabled && cfg.TelemetryIngestEnabled,
+		TelemetryIngested:    p.telemetryIngested.Load(),
+		TelemetryDeployments: telemetryDeployments,
+		Imported:             p.ImportedCount(),
+		ImportError:          p.ImportError(),
+		Runs:                 p.store.Len(),
+		RunsTotal:            p.runsTotal.Load(),
+		RunsInsufficient:     p.runsInsufficient.Load(),
+		RunsRejected:         p.runsRejected.Load(),
+		ScorecardsWritten:    p.scorecardsWritten.Load(),
+		StateWritesFailed:    p.stateWritesFailed.Load(),
+		Scorecards:           p.reg.Stats(),
+		VerdictCounts:        p.store.Counts(),
+		SuiteRuns:            p.store.SuiteCounts(),
+		Evaluators:           p.runner.Evaluators().IDs(),
 	}
 	return st
 }
@@ -345,8 +460,11 @@ func (p *evaluationPlane) scorecardDetail(deploymentID string) (map[string]any, 
 	return row, true
 }
 
-// SuiteCatalog returns the deterministic suite catalog (bounded).
-func (p *evaluationPlane) SuiteCatalog() []eval.CatalogEntry { return eval.Catalog() }
+// SuiteCatalog returns the deterministic suite catalog (bounded): built-in
+// suites plus validated operator-defined suites.
+func (p *evaluationPlane) SuiteCatalog() []eval.CatalogEntry {
+	return eval.CatalogWith(p.OperatorSuites())
+}
 
 // provenanceCounts returns provenance-labelled value counts keyed by the
 // canonical provenance vocabulary (stable keys, bounded cardinality).

@@ -253,12 +253,23 @@ explicitly bounded:
 - no judge implementation ships. Deterministic evaluators decide every case; the
   judge path exists and is proven never to override a deterministic verdict, but
   the HTTP surface cannot enable it;
-- the suite catalog is built-in and versioned. Operator-defined suites and
-  custom case packs are not configurable yet;
-- `production_telemetry` provenance exists as a validated constructor
-  (`FromTelemetry`) but nothing ingests telemetry automatically; operational
-  values are only produced from a completed evaluation run (availability,
-  failure rate, and latency/TTFT when a target is configured);
+- the suite catalog is built-in and versioned, plus operator-defined suites
+  via `evaluation.suites_path` (a JSON file or a directory of `*.json` case
+  packs in the existing suite format, max 32 suites, 1 MiB per file). Packs
+  load atomically — a malformed pack refuses the whole load with a
+  `suites_error` and never partially registers — ids colliding with built-ins
+  are rejected, and operator suites list alongside built-ins in
+  `GET /admin/api/evaluation/suites` (`source: "operator"`) and run through
+  the same deterministic runner;
+- `production_telemetry` provenance is produced by the validated
+  (`FromTelemetry`) constructor from two sources: completed evaluation runs
+  (availability, failure rate, and latency/TTFT when a target is configured)
+  and opt-in automatic ingestion of completed gateway traffic
+  (`evaluation.telemetry_ingest_enabled`, off by default, minimum
+  `evaluation.telemetry_min_samples` aggregated samples). Ingestion carries
+  aggregated operational values only — success/failure counts and numeric
+  latency/TTFT samples; no prompts, responses, error text or user data — and
+  never changes routing, health, or candidate order;
 - scorecards are single-process state. `evaluation.state_path` gives one process
   durable runs/scorecards, but there is no shared/distributed scorecard store,
   no multi-node coordination and no history beyond the bounded version ring;

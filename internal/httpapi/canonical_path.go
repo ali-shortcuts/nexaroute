@@ -642,7 +642,11 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if req.Streaming {
-			resp.Body = observeFirstByte(resp.Body, start, func(d time.Duration) { s.hm.RecordTTFT(deployment.ID, d); noteSpanTTFT(r.Context(), d) })
+			resp.Body = observeFirstByte(resp.Body, start, func(d time.Duration) {
+				s.hm.RecordTTFT(deployment.ID, d)
+				s.observeTelemetryTTFT(deployment.ID, d)
+				noteSpanTTFT(r.Context(), d)
+			})
 		}
 		deploy := deployment
 		sent := sentPayload

@@ -362,6 +362,19 @@ func (r *Runner) RunWithExecutor(ctx context.Context, req Request, exec Executor
 	if !ok {
 		return Result{}, fmt.Errorf("unknown evaluation suite %q", req.SuiteID)
 	}
+	return r.RunWithSuite(ctx, req, suite, exec)
+}
+
+// RunWithSuite executes an already-resolved suite (built-in or validated
+// operator-defined) against an arbitrary executor. The suite is re-validated
+// so a caller can never run an unchecked pack.
+func (r *Runner) RunWithSuite(ctx context.Context, req Request, suite Suite, exec Executor) (Result, error) {
+	if suite.ID == "" {
+		return Result{}, fmt.Errorf("unknown evaluation suite %q", req.SuiteID)
+	}
+	if req.SuiteID != "" && req.SuiteID != suite.ID {
+		return Result{}, fmt.Errorf("unknown evaluation suite %q", req.SuiteID)
+	}
 	if err := ValidateSuite(suite); err != nil {
 		return Result{}, err
 	}

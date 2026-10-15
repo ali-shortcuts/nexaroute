@@ -109,6 +109,9 @@ type CatalogEntry struct {
 	Dimension  scorecards.Dimension `json:"dimension"`
 	MinSamples int                  `json:"min_samples"`
 	Cases      int                  `json:"cases"`
+	// Source is "builtin" or "operator". It defaults to "builtin" for the
+	// versioned catalog so existing readers keep working.
+	Source string `json:"source,omitempty"`
 }
 
 // Bounds for suites and runs.
@@ -196,13 +199,39 @@ func builtinSuites() []Suite {
 
 // Catalog returns the suite catalog in deterministic order.
 func Catalog() []CatalogEntry {
+	return CatalogWith(nil)
+}
+
+// CatalogWith returns the built-in catalog plus operator-defined suites in
+// deterministic order. Operator suites are validated by the loader; any id
+// that collides with a built-in is the loader's error, so this merge never
+// silently shadows a versioned built-in.
+func CatalogWith(operator []Suite) []CatalogEntry {
 	suites := builtinSuites()
-	out := make([]CatalogEntry, 0, len(suites))
+	out := make([]CatalogEntry, 0, len(suites)+len(operator))
 	for _, s := range suites {
-		out = append(out, CatalogEntry{ID: s.ID, Version: s.Version, Dimension: s.Dimension, MinSamples: s.MinSamples, Cases: len(s.Cases)})
+		out = append(out, CatalogEntry{ID: s.ID, Version: s.Version, Dimension: s.Dimension, MinSamples: s.MinSamples, Cases: len(s.Cases), Source: "builtin"})
+	}
+	for _, s := range operator {
+		out = append(out, CatalogEntry{ID: s.ID, Version: s.Version, Dimension: s.Dimension, MinSamples: s.MinSamples, Cases: len(s.Cases), Source: "operator"})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
+}
+
+// LookupWith returns a suite by id, searching operator suites first only when
+// they do not collide with built-ins (the loader rejects collisions, so a
+// built-in id always resolves to the versioned suite).
+func LookupWith(id string, operator []Suite) (Suite, bool) {
+	for _, s := range operator {
+		if s.ID == id {
+			if _, builtin := LookupSuite(id); builtin {
+				return Suite{}, false
+			}
+			return s, true
+		}
+	}
+	return LookupSuite(id)
 }
 
 // LookupSuite returns a built-in suite by id.

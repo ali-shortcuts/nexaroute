@@ -283,6 +283,9 @@ func New(cfg config.Config, configPath string, reg *providers.Registry, rt *rout
 	// Phase H: evaluation plane (opt-in, admin-only, never in the request path).
 	s.evaluation = newEvaluationPlane(cfg.Evaluation, nil)
 	s.evaluation.Configure(cfg.Evaluation, l)
+	// Production-telemetry flushes run on a periodic background tick, never
+	// on the data-plane hot path.
+	s.startTelemetryFlushLoop()
 	return s
 }
 
