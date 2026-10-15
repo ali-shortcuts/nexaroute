@@ -780,24 +780,43 @@ func readJournalManifest(journalDir string) (*restoreJournalManifest, error) {
 // leftover journals whose transaction did not complete — the durable
 // trace of a crashed or killed restore.
 func findInterruptedRestoreJournals() []string {
+	interrupted, _ := scanRestoreJournals()
+	return interrupted
+}
+
+// findUninspectableRestoreJournals returns journal directories whose
+// manifest cannot be read at all. The interrupted scan skips them
+// silently, which let doctor report a clean PASS while a
+// manifest-less journal — saved pre-restore copies written before
+// the first manifest persist, then a kill — sat undiscovered and
+// restore --recover failed on it opaquely.
+func findUninspectableRestoreJournals() []string {
+	_, uninspectable := scanRestoreJournals()
+	return uninspectable
+}
+
+func scanRestoreJournals() (interrupted, uninspectable []string) {
 	base := os.TempDir()
 	entries, err := os.ReadDir(base)
 	if err != nil {
-		return nil
+		return nil, nil
 	}
-	var found []string
 	for _, e := range entries {
 		if !e.IsDir() || !strings.HasPrefix(e.Name(), "nexaroute-restore-journal-") {
 			continue
 		}
 		dir := filepath.Join(base, e.Name())
 		m, err := readJournalManifest(dir)
-		if err != nil || m.State == "completed" {
+		if err != nil {
+			uninspectable = append(uninspectable, dir)
 			continue
 		}
-		found = append(found, dir)
+		if m.State == "completed" {
+			continue
+		}
+		interrupted = append(interrupted, dir)
 	}
-	return found
+	return interrupted, uninspectable
 }
 
 // recoverRestoreJournal rolls every destination in a journal back to

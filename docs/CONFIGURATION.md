@@ -245,6 +245,16 @@ Per provider:
 - `forward_headers`
 - `max_concurrency` — per-provider in-flight request cap. Default `256` (range `1..4096`). This limits the number of concurrent upstream requests to a single provider. For most providers the default is appropriate. For free or rate-limited providers, set an explicit lower value (for example `32` or `64`) to avoid triggering upstream quota exhaustion. When omitted or set to `0`, the default applies. Explicit values in the configuration are never changed.
 - `stream_idle_timeout_seconds`
+- `allowed_hosts` — the complete list of hosts this provider may be
+  dialed at, used for absolute-URL endpoint overrides and enforced
+  again at dial time by the egress transport. **Setting it replaces
+  the default**: when `allowed_hosts` is empty, only the `base_url`
+  host is allowed; when it is non-empty, only the listed hosts are
+  allowed — include the `base_url` host in the list if the provider
+  must keep using it, or every ordinary request will be refused as
+  not allow-listed. (The dial-time transport additionally permits
+  the `proxy_url` host, since it dials the proxy hop; request
+  building validates the final URL against `allowed_hosts` only.)
 
 ## Provider data-handling class and route/key privacy requirement
 

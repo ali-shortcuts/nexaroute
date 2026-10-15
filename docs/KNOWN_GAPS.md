@@ -10,13 +10,15 @@ Implemented runtime protocol classes are:
 - Anthropic-compatible Messages
 - OpenAI Responses (explicit `/v1/responses` path)
 - Gemini upstreams through the canonical adapter
+- AWS Bedrock, Google Vertex AI and Azure OpenAI provider types through
+  the canonical adapter (SigV4 / ADC / api-key custody respectively)
+- media passthrough endpoints: embeddings, images, audio, rerank,
+  files/batches and video, proxied per provider with canonical byte
+  preservation
 
-Not implemented as native protocol classes:
-
-- Bedrock
-- Vertex AI
-- Azure-specific deployment semantics
-- embeddings/rerank
+Not implemented as native protocol classes: none in the current
+scope. Provider-specific extensions that exceed the canonical IR are
+bounded by the cross-protocol fidelity notes below.
 
 ## Cross-protocol fidelity
 
@@ -90,7 +92,9 @@ WP4 implementation boundaries and acceptance status:
 
 - per-client quotas beyond the RPM and TPM ceilings (hashed-at-rest client keys landed with M3-8: legacy plaintext keys migrate to SHA-256 digests on load/save, and TPM reservations settle to provider-reported usage);
 - SAML and enterprise identity protocols other than the configured single OIDC issuer;
-- distributed/shared session and audit storage, cross-instance pending OIDC transactions;
+- cross-instance pending OIDC transactions (the transactions themselves
+  stay process-local; shared session/audit storage IS available via the
+  PostgreSQL/Redis security-store backends — see State and HA below);
 - enterprise provisioning/deprovisioning and automated role/group lifecycle beyond the explicit claim mapping.
 
 Virtual-key tenant/project/team policy intersection is implemented fail-closed:
@@ -170,7 +174,7 @@ unverified.
 
 ## Response cache boundaries
 
-The exact-match response cache is opt-in and deliberately narrow: non-streaming, deterministic-sampling requests only, bounded by entries/bytes/TTL, invalidated on every config swap. It is not a semantic cache; two requests that differ by one byte are different keys. Streaming responses are never cached, and cached entries are replayed with the deployment label that produced them so the dashboard stays honest about provenance.
+The exact-match response cache is opt-in and deliberately narrow: non-streaming, deterministic-sampling requests only, bounded by entries/bytes/TTL, invalidated on every config swap. Two requests that differ by one byte are different keys. A separate opt-in semantic cache (`cache.semantic`) matches by embedding similarity inside a per-client isolated scope and serves only entries whose training-data provenance satisfies the request's privacy requirement; it is off by default. Streaming responses are never cached by either cache, and cached entries are replayed with the deployment label that produced them so the dashboard stays honest about provenance.
 
 ## Probe cadence and model quality
 
