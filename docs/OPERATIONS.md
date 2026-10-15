@@ -51,6 +51,27 @@ install -m 0600 "${CONFIG}.key" "$BACKUP_DIR/config.json.key"
 
 To restore, stop the gateway, restore the selected config and its matching key, set the key mode to `0600`, verify directory permissions, then run `nexaroute secrets verify --config "$CONFIG"` before starting the listener. Do not create a replacement key to troubleshoot authentication failures.
 
+### Backup and restore commands (preferred)
+
+`nexaroute backup` bundles everything an installation needs into one hash-verified archive (format `nexaroute-backup/1`): the config exactly as stored, a consistent online snapshot of the audit/security store (safe to run against a live gateway), and the file-backend control-plane state when present. The bundle is written atomically with mode `0600`; its manifest records a SHA-256 fingerprint of the master key so pairing can be checked later.
+
+```bash
+nexaroute backup --config "$CONFIG" --out "$BACKUP_DIR/nexaroute-backup.tar"
+# Only when the key must travel with the backup (store the bundle like a secret):
+nexaroute backup --config "$CONFIG" --out "$BACKUP_DIR/nexaroute-backup-with-key.tar" --include-master-key
+```
+
+The master key is excluded by default: keep it as an independent secret (above) unless the deployment deliberately accepts a combined bundle.
+
+`nexaroute restore` verifies the whole bundle — format, manifest, and every file's SHA-256 — *before* writing anything, then installs files atomically with mode `0600`. Existing different files are refused without `--force`, and a bundled key that would overwrite a different key warns loudly for the same reason.
+
+```bash
+nexaroute restore --bundle "$BACKUP_DIR/nexaroute-backup.tar" --config "$CONFIG"
+nexaroute doctor --config "$CONFIG"   # read-only health + chain verification
+```
+
+`nexaroute doctor` is the read-only diagnostics entry point: config load/validation, file permissions, master-key resolvability, security-store audit-chain verification (counts only), control-plane backend readiness (bounded ping for Postgres/Redis, failure classes only — never DSNs or URLs), and the listen address. Exit codes are `0` (no failures), `1` (a check failed), `2` (usage).
+
 ### Rotate the auto-managed key
 
 `nexaroute secrets rotate` currently supports the automatically managed sibling key only; it refuses while `NEXAROUTE_MASTER_KEY` or `NEXAROUTE_MASTER_KEY_FILE` is set. For environment/KMS-managed keys, use the deployment's approved key-management workflow; this CLI does not rotate those sources.
