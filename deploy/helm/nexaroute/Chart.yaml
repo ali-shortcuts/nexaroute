@@ -3,7 +3,7 @@ name: nexaroute
 description: NexaRoute — self-hosted LLM gateway (Anthropic/OpenAI-compatible routing)
 type: application
 version: 0.1.0
-appVersion: "0.21.0"
+appVersion: "0.22.0"
 home: https://github.com/ali-shortcuts/nexaroute
 sources:
   - https://github.com/ali-shortcuts/nexaroute

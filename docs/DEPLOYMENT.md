@@ -16,7 +16,7 @@ binary) and seeds `/config/config.json` (mode 0600 in a 0700 directory)
 from `configs/config.example.json`.
 
 ```bash
-docker build -t nexaroute --build-arg VERSION=v0.21.0 .
+docker build -t nexaroute --build-arg VERSION=v0.22.0 .
 docker run -d --name nexaroute -p 8080:8080 \
   -v nexaroute-config:/config nexaroute
 ```
