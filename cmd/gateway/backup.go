@@ -577,40 +577,6 @@ func restoreBundle(bundlePath, configPath string, force bool, allowBrokenChain b
 		}
 	}
 
-	// The bundled audit chain is verified BEFORE anything is installed
-	// (#428, audit F4): restoring a tampered store would otherwise
-	// silently re-entomb a broken trail. Fail closed; the explicit
-	// override proceeds loudly and leaves a durable record next to the
-	// restored store (an audit event cannot be appended — the store
-	// refuses to extend a broken chain by design).
-	var brokenChainProblems []string
-	if secPayload, ok := payloads[backupEntrySecurity]; ok {
-		probeDir := filepath.Join(stage, "audit-verify")
-		if err := os.MkdirAll(probeDir, 0o700); err != nil {
-			return fmt.Errorf("stage bundled security store for audit verification: %w", err)
-		}
-		probePath := filepath.Join(probeDir, "security.db")
-		if err := os.WriteFile(probePath, secPayload, 0o600); err != nil {
-			return fmt.Errorf("stage bundled security store for audit verification: %w", err)
-		}
-		probe, err := securitystore.OpenReadOnly(probePath)
-		if err != nil {
-			return fmt.Errorf("open bundled security store for audit verification: %w", err)
-		}
-		report, verr := probe.VerifyAuditChain(context.Background())
-		_ = probe.Close()
-		if verr != nil {
-			return fmt.Errorf("verify bundled audit chain: %w", verr)
-		}
-		if !report.Verified {
-			if !allowBrokenChain {
-				return fmt.Errorf("bundled audit chain verification failed (%s); refusing to restore a tampered audit store — re-run with --allow-broken-audit-chain to override", report.Problems[0])
-			}
-			brokenChainProblems = report.Problems
-			fmt.Fprintf(stdout, "WARNING: bundled audit chain FAILED verification (%s); restoring anyway under --allow-broken-audit-chain — a durable override record will be written next to the restored store\n", report.Problems[0])
-		}
-	}
-
 	// Target collision prevention, BEFORE any filesystem write: two
 	// payloads installing to the same destination would silently
 	// overwrite each other in install order (e.g. a security store
@@ -663,6 +629,40 @@ func restoreBundle(bundlePath, configPath string, force bool, allowBrokenChain b
 			fmt.Fprintf(stdout, "WARNING: overwriting the existing master key at %s; the previous key may be the only copy able to decrypt other backups\n", it.target)
 		}
 		installs = append(installs, it)
+	}
+
+	// The bundled audit chain is verified BEFORE anything is installed
+	// (#428, audit F4): restoring a tampered store would otherwise
+	// silently re-entomb a broken trail. Fail closed; the explicit
+	// override proceeds loudly and leaves a durable record next to the
+	// restored store (an audit event cannot be appended — the store
+	// refuses to extend a broken chain by design).
+	var brokenChainProblems []string
+	if secPayload, ok := payloads[backupEntrySecurity]; ok {
+		probeDir := filepath.Join(stage, "audit-verify")
+		if err := os.MkdirAll(probeDir, 0o700); err != nil {
+			return fmt.Errorf("stage bundled security store for audit verification: %w", err)
+		}
+		probePath := filepath.Join(probeDir, "security.db")
+		if err := os.WriteFile(probePath, secPayload, 0o600); err != nil {
+			return fmt.Errorf("stage bundled security store for audit verification: %w", err)
+		}
+		probe, err := securitystore.OpenReadOnly(probePath)
+		if err != nil {
+			return fmt.Errorf("open bundled security store for audit verification: %w", err)
+		}
+		report, verr := probe.VerifyAuditChain(context.Background())
+		_ = probe.Close()
+		if verr != nil {
+			return fmt.Errorf("verify bundled audit chain: %w", verr)
+		}
+		if !report.Verified {
+			if !allowBrokenChain {
+				return fmt.Errorf("bundled audit chain verification failed (%s); refusing to restore a tampered audit store — re-run with --allow-broken-audit-chain to override", report.Problems[0])
+			}
+			brokenChainProblems = report.Problems
+			fmt.Fprintf(stdout, "WARNING: bundled audit chain FAILED verification (%s); restoring anyway under --allow-broken-audit-chain — a durable override record will be written next to the restored store\n", report.Problems[0])
+		}
 	}
 
 	if err := installWithRollback(installs, payloads, stdout); err != nil {
