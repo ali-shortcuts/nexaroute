@@ -135,14 +135,24 @@ func TestLeakDisconnect_MidStream(t *testing.T) {
 // request is dispatched, before any upstream bytes arrive.
 func TestLeakDisconnect_BeforeFirstByte(t *testing.T) {
 	release := make(chan struct{})
+	arrived := make(chan struct{})
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Admission reserves the budget hold strictly before the upstream
+		// dispatch, so an arrived upstream proves the hold is open.
+		close(arrived)
 		select {
 		case <-release:
 		case <-r.Context().Done():
 		case <-time.After(5 * time.Second): // safety net for cleanup
 		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"id":"c1","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":10}}`)
+		// Deliver NOTHING: the scenario is disconnect before the first
+		// upstream byte. The handler previously wrote a full JSON response
+		// (with usage) unconditionally after the select — even when the
+		// select woke on the cancelled client context. Under load the
+		// gateway could read those bytes and settle the hold on real
+		// usage, racing the disconnect unwind and flaking
+		// "reserved=0" (round-4 gate failure on head ab31af4), even though
+		// the test's premise is that no byte arrives.
 	}))
 	t.Cleanup(up.Close)
 	s := leakGateway(t, 5, leakOKChat(), func(cfg *config.Config) {
@@ -159,6 +169,18 @@ func TestLeakDisconnect_BeforeFirstByte(t *testing.T) {
 		s.Handler().ServeHTTP(httptest.NewRecorder(), req)
 	}()
 	time.Sleep(200 * time.Millisecond) // dispatch is in flight, upstream blocked
+	// Wait for the upstream to actually be reached instead of assuming it
+	// under a wall-clock bound: under flake-hunt CPU saturation the handler
+	// goroutine can be starved past the 200ms sleep and cancel() then wins
+	// the admission race — no hold is ever reserved (reserved=0), failing
+	// the assertion on a false premise even though nothing leaked
+	// (round-4 gate failure on head ab31af4). The arrived signal is
+	// deterministic: admission reserves the hold before dispatch.
+	select {
+	case <-arrived:
+	case <-time.After(15 * time.Second):
+		t.Fatal("guard: request never reached upstream (dispatch starved)")
+	}
 	cancel()
 	close(release)
 	select {
