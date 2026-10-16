@@ -77,7 +77,16 @@ the connection strings themselves are never written to JSON:
 `backend` defaults to `file` and may be `file`, `memory`, `postgres`, or
 `redis`. File state is written atomically with mode `0600`; relative
 `state_path` values resolve against the config directory. `memory` is for
-tests only. DSNs and URLs are never stored or logged.
+tests only. DSNs and URLs are never stored or logged. On Linux the file
+backend additionally serializes read-modify-write cycles across processes
+with an advisory lock file (`.controlplane.lock`) in the state directory, so
+two gateway processes may share one `state_path`: lock acquisition waits at
+most 30 seconds and then fails closed with a typed timeout error (never an
+indefinite hang, never an unlocked proceed), and concurrent writers observe
+optimistic-revision `ErrConflict` instead of silently losing updates.
+`BackupFileStore` writes backups atomically (temp + fsync + rename, `0600`)
+like the store itself. On platforms without `flock` support, file-backend
+writes fail closed with an explicit error while reads stay available.
 
 ## Optional OTLP span export
 
