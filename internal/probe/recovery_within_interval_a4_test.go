@@ -156,7 +156,8 @@ func TestA4_SupervisorFirstSuccessfulProbeRestoresRoutability(t *testing.T) {
 		t.Fatal(err)
 	}
 	rt := router.New(cfg, hm)
-	e := New(cfg, reg, rt, hm, events.New(100))
+	bus := events.New(100)
+	e := New(cfg, reg, rt, hm, bus)
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
@@ -183,14 +184,42 @@ func TestA4_SupervisorFirstSuccessfulProbeRestoresRoutability(t *testing.T) {
 
 	// Bounded polling only (5ms poll inside waitForState, 10s cap): the first
 	// successful recovery probe must restore health and routability.
+	//
+	// Deterministic design (issue #404): the old version waited for the
+	// background-scheduled recovery and then asserted the upstream had seen
+	// exactly 2 calls. Under load, the test's 5ms polling loop could be
+	// delayed while the recovery machinery kept running, so the exact-call
+	// assertion raced the worker. The recovery is now driven explicitly
+	// through the engine's own supervisor path: Prime's runOnce already
+	// enqueued the recovery task, and e.Recover deduplicates, so exactly one
+	// recovery task exists either way; on success the worker clears the task
+	// and schedules nothing further, so the call count is structural, not
+	// timing-dependent. waitForState remains because a queued worker
+	// goroutine being scheduled is genuinely eventual — its 10s bound is
+	// meaningless-but-generous and can only be exceeded by a broken scheduler.
+	callsBeforeRecover := calls.Load()
+	e.Recover("p/m")
 	st := waitForState(t, hm, "p/m", health.Healthy, 10*time.Second)
 	recoveredElapsed := time.Since(start)
 	got := rt.Candidates(req)
 	if len(got) != 1 || got[0].Deployment.ID != "p/m" {
 		t.Fatalf("recovered deployment not routable after first success probe: %#v (health=%+v)", got, st)
 	}
-	if n := calls.Load(); n != 2 {
-		t.Fatalf("upstream calls=%d want exactly 1 initial + 1 first-recovery probe", n)
+	if n := calls.Load(); n != callsBeforeRecover+1 {
+		t.Fatalf("upstream calls=%d want exactly one recovery probe after prime (had %d before)", n, callsBeforeRecover)
+	}
+	// Sync-path guard: the recovery must have gone through the engine's
+	// recovery worker (recovery_ready event), not a direct health-manager
+	// write — otherwise the supervisor path was never exercised.
+	recovered := false
+	for _, ev := range bus.Snapshot() {
+		if ev.Kind == "recovery_ready" && ev.Deployment == "p/m" {
+			recovered = true
+			break
+		}
+	}
+	if !recovered {
+		t.Fatal("no recovery_ready event for p/m: the engine recovery path was not exercised")
 	}
 	if recoveredElapsed >= cfg.ProbeInterval() {
 		t.Fatalf("recovery took %s, exceeding one health-check interval %s", recoveredElapsed, cfg.ProbeInterval())

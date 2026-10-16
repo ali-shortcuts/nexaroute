@@ -121,12 +121,21 @@ func TestSSEKeepaliveIsCommentNotDataEvent(t *testing.T) {
 
 // TestSSERepeatedConnectDisconnectLeakTolerance runs repeated connect/disconnect
 // cycles and verifies no goroutine or resource leaks under -race.
+//
+// Determinism design (issue #404): the bus spawns no goroutine per subscriber
+// and cancel() removes the subscriber synchronously, so disconnect accounting
+// is asserted exactly (NumSubscribers() == 0 — no timing involved). Goroutine
+// reclamation by the Go runtime is genuinely eventual, so the goroutine check
+// polls until the count converges instead of sampling once after a fixed
+// sleep: slow cleanup converges, a real leak never does. A fixed-tolerance
+// single sample was the load-flake (it failed twice under full verify.sh load).
 func TestSSERepeatedConnectDisconnectLeakTolerance(t *testing.T) {
 	b := New(100)
 	const cycles = 500 // Reduced to stay within subscriber limits with cleanup
 
 	var wg sync.WaitGroup
 	wg.Add(cycles)
+	var completed, rejected atomic.Int64
 
 	// Track active goroutines to detect leaks.
 	initialGoroutines := numGoroutines()
@@ -149,6 +158,7 @@ func TestSSERepeatedConnectDisconnectLeakTolerance(t *testing.T) {
 			}
 			if !ok {
 				// Could not subscribe after retries
+				rejected.Add(1)
 				return
 			}
 
@@ -181,6 +191,7 @@ func TestSSERepeatedConnectDisconnectLeakTolerance(t *testing.T) {
 			return
 
 		channelClosed:
+			completed.Add(1)
 			// Add an event after disconnect to verify bus still works
 			b.Add(Event{Kind: "test", Message: "iter"})
 		}(i)
@@ -188,14 +199,34 @@ func TestSSERepeatedConnectDisconnectLeakTolerance(t *testing.T) {
 
 	wg.Wait()
 
-	// Allow some grace for goroutine cleanup.
-	time.Sleep(50 * time.Millisecond)
+	// Exact cycle accounting: every iteration either disconnected cleanly or
+	// was rejected by the subscriber budget. This proves the disconnect path
+	// under test actually executed (guards against a vacuous pass).
+	if got := completed.Load() + rejected.Load(); got != cycles {
+		t.Fatalf("cycle accounting broken: completed=%d rejected=%d want total=%d", completed.Load(), rejected.Load(), cycles)
+	}
+	if completed.Load() == 0 {
+		t.Fatal("no connect/disconnect cycle completed; the leak path was not exercised")
+	}
 
-	finalGoroutines := numGoroutines()
-	// Tolerance: allow up to 10 extra goroutines for test runtime overhead.
-	// The critical assertion is that goroutines don't grow unbounded with cycles.
-	if finalGoroutines > initialGoroutines+10 {
-		t.Fatalf("goroutine leak detected: initial=%d final=%d (cycles=%d)", initialGoroutines, finalGoroutines, cycles)
+	// Deterministic: cancel() removes the subscriber synchronously, so after
+	// all cancels the subscriber map must be exactly empty. No timing involved.
+	if n := b.NumSubscribers(); n != 0 {
+		t.Fatalf("subscriber leak: %d live subscribers remain after all cancels", n)
+	}
+
+	// Eventual: goroutine reclamation by the runtime is genuinely eventual, so
+	// poll until the count converges instead of sampling once after a fixed
+	// sleep. Slow cleanup converges; a real leak never does. The +10 bound
+	// covers ambient runtime goroutines, not test activity.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if finalGoroutines := numGoroutines(); finalGoroutines <= initialGoroutines+10 {
+			break
+		} else if time.Now().After(deadline) {
+			t.Fatalf("goroutine leak detected: initial=%d final=%d (cycles=%d) — count did not converge", initialGoroutines, numGoroutines(), cycles)
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 
 	// Verify bus still functional after cycles - should have at least some events.
