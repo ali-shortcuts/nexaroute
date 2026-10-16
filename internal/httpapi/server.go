@@ -111,6 +111,13 @@ const (
 	adminAuthPenalty    = 10.0
 	adminBucketIdle     = 10 * time.Minute
 	maxAdminBuckets     = 4096
+	// oidcLoginStartCost is the token-bucket cost of one OIDC login
+	// start (F3, issue #425). A login start is a rare human action;
+	// cost 5 allows an 18-start burst per source address and sustains
+	// ~0.3 starts/s, while a pending-table filler needs ~7/s to hold
+	// the table full — and the per-IP pending cap (oidc.go) bounds
+	// the table itself regardless of rate.
+	oidcLoginStartCost = 5.0
 )
 
 type adminBucket struct {
@@ -1207,7 +1214,18 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 				cost = adminBucketCapacity
 			}
 			if !s.adminAllow(adminRemoteIP(r), cost) {
-				errorJSON(sw, http.StatusTooManyRequests, "admin rate limit exceeded")
+				// F11 (issue #425): a throttled unauthenticated request
+				// must not reveal whether this source address recently
+				// failed authentication. The request is still dropped
+				// before any work; only the status is uniform with a
+				// plain failed attempt (401), so 401-vs-429 can no
+				// longer be used as an auth-recency oracle. Throttled
+				// authenticated requests still get 429.
+				if !authenticated && authErr == nil {
+					errorJSON(sw, http.StatusUnauthorized, "admin authentication required")
+				} else {
+					errorJSON(sw, http.StatusTooManyRequests, "admin rate limit exceeded")
+				}
 				return
 			}
 			if s.securityErr != nil || s.securityDB == nil {

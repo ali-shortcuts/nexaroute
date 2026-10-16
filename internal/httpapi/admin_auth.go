@@ -359,6 +359,14 @@ func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, http.StatusServiceUnavailable, "OIDC authentication is unavailable")
 		return
 	}
+	// F3 (issue #425): throttle login starts per source IP on the
+	// shared admin token bucket BEFORE any crypto, pending-table, or
+	// audit-chain work happens. A throttled start never reaches Begin
+	// and never appends an audit event.
+	if !s.adminAllow(adminRemoteIP(r), oidcLoginStartCost) {
+		errorJSON(w, http.StatusTooManyRequests, "OIDC login start rate limit exceeded")
+		return
+	}
 	oldCookie, oldCookiePresent, oldCookieOK := cookieValue(r, adminSessionCookie)
 	if oldCookiePresent && !oldCookieOK {
 		errorJSON(w, http.StatusBadRequest, "invalid admin session cookie")
@@ -375,7 +383,7 @@ func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, http.StatusInternalServerError, "could not start OIDC authentication")
 		return
 	}
-	authorizationURL, _, err := s.oidc.Begin(oldHash, browserBinding)
+	authorizationURL, _, err := s.oidc.Begin(adminRemoteIP(r), oldHash, browserBinding)
 	if err != nil {
 		errorJSON(w, http.StatusServiceUnavailable, "could not start OIDC authentication")
 		return
