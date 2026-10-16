@@ -174,23 +174,27 @@ func TestSSERepeatedConnectDisconnectLeakTolerance(t *testing.T) {
 			// Disconnect - do this before adding events to avoid lock contention
 			cancel()
 
-			// Give time for cancel to complete (uses mutex internally)
-			// Poll until channel is closed to handle lock contention with concurrent Adds
-			deadline := time.Now().Add(100 * time.Millisecond)
-			for time.Now().Before(deadline) {
+			// cancel() removes the subscriber and closes its channel
+			// synchronously under the bus lock, so the channel is already
+			// closed at this point. Drain buffered events with a BLOCKING
+			// receive: a closed channel is always readable, so this converges
+			// with no wall-clock assumption at all — a slow scheduler can
+			// never produce a false failure. (The 100ms poll this replaces
+			// was the load-flake: under flake-hunt CPU saturation the poll
+			// loop could be starved past its deadline even though the channel
+			// was closed.) The watchdog fires only on a genuine never-closed
+			// defect, i.e. a real subscriber leak.
+			watchdog := time.After(30 * time.Second)
+			closed := false
+			for !closed {
 				select {
 				case _, open := <-live:
-					if !open {
-						goto channelClosed
-					}
-				default:
+					closed = !open
+				case <-watchdog:
+					t.Errorf("iteration %d: channel not closed after cancel", iter)
+					return
 				}
-				time.Sleep(100 * time.Microsecond)
 			}
-			t.Errorf("iteration %d: channel not closed after cancel", iter)
-			return
-
-		channelClosed:
 			completed.Add(1)
 			// Add an event after disconnect to verify bus still works
 			b.Add(Event{Kind: "test", Message: "iter"})
