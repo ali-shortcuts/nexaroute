@@ -172,6 +172,9 @@ func (s *Server) serveMedia(w http.ResponseWriter, r *http.Request, kind mediaKi
 
 	model, err := mediaRequestModel(r, raw, kind)
 	if err != nil {
+		// Gateway-side rejection before any upstream attempt: release
+		// the admission budget hold (Wave C-4).
+		s.budgetRelease(r)
 		errorJSON(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -179,6 +182,9 @@ func (s *Server) serveMedia(w http.ResponseWriter, r *http.Request, kind mediaKi
 	req := router.Requirement{Model: model}
 	_, candidates, _, resolveErr := s.candidatesForRequirement(req, "openai")
 	if resolveErr != nil {
+		// Gateway-side rejection before any upstream attempt: release
+		// the admission budget hold (Wave C-4).
+		s.budgetRelease(r)
 		if strings.Contains(resolveErr.Error(), "disabled") {
 			errorJSON(w, http.StatusNotFound, resolveErr.Error())
 		} else {
@@ -187,6 +193,9 @@ func (s *Server) serveMedia(w http.ResponseWriter, r *http.Request, kind mediaKi
 		return
 	}
 	if len(candidates) == 0 {
+		// Gateway-side rejection before any upstream attempt: release
+		// the admission budget hold (Wave C-4).
+		s.budgetRelease(r)
 		errorJSON(w, http.StatusServiceUnavailable, "no compatible healthy deployment")
 		return
 	}
@@ -197,6 +206,11 @@ func (s *Server) serveMedia(w http.ResponseWriter, r *http.Request, kind mediaKi
 	var lastErr string
 	sawEligible := false
 	sawSupported := false
+	// attemptedUpstream tracks whether any upstream call was made: the
+	// admission budget hold is released on tail returns only when the
+	// gateway can prove zero upstream spend (Wave C-4). When an attempt
+	// reached upstream, the documented TTL-expiry behavior applies.
+	attemptedUpstream := false
 
 	for i := range candidates {
 		c := candidates[i]
@@ -243,6 +257,7 @@ func (s *Server) serveMedia(w http.ResponseWriter, r *http.Request, kind mediaKi
 
 		s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_attempt", Deployment: c.Deployment.ID})
 		start := time.Now()
+		attemptedUpstream = true
 		resp, derr := a.DoPath(r.Context(), http.MethodPost, upstreamPath, payload, false, forward)
 		latency := time.Since(start)
 		if derr != nil {
@@ -291,13 +306,19 @@ func (s *Server) serveMedia(w http.ResponseWriter, r *http.Request, kind mediaKi
 	}
 
 	if sawEligible && !sawSupported {
+		// No upstream attempt was possible: release the admission
+		// budget hold (Wave C-4).
+		s.budgetRelease(r)
 		errorJSON(w, http.StatusBadRequest,
 			"media endpoints are supported only for openai_compatible and azure_openai providers in this release")
 		return
 	}
 	if !sawEligible && lastStatus == 0 && lastErr == "" {
 		// Every candidate fell out of eligibility between resolution
-		// and dispatch (e.g. the model is not served after all).
+		// and dispatch (e.g. the model is not served after all), so no
+		// upstream attempt was made: release the admission budget hold
+		// (Wave C-4).
+		s.budgetRelease(r)
 		errorJSON(w, http.StatusServiceUnavailable, "no compatible healthy deployment")
 		return
 	}
@@ -307,6 +328,11 @@ func (s *Server) serveMedia(w http.ResponseWriter, r *http.Request, kind mediaKi
 	}
 	if lastErr == "" {
 		lastErr = "no compatible healthy deployment"
+	}
+	if !attemptedUpstream {
+		// No upstream attempt was made: release the admission budget
+		// hold (Wave C-4).
+		s.budgetRelease(r)
 	}
 	errorJSON(w, http.StatusBadGateway, lastErr)
 }

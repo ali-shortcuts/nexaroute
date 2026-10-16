@@ -101,6 +101,10 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 	req = s.applyPrivacyRequirement(req, r)
 	cfg, candidates, resolvedRoute, resolveErr := s.candidatesForRequirement(req, "anthropic")
 	if resolveErr != nil {
+		// Gateway-side rejection before any upstream attempt: the
+		// admission budget hold must be released, not left to expire
+		// into a committed charge 15 minutes later (Wave C-4).
+		s.budgetRelease(r)
 		// Disabled endpoint or protocol not allowed
 		if strings.Contains(resolveErr.Error(), "disabled") {
 			anthropicErrorJSON(w, 404, resolveErr.Error())
@@ -121,10 +125,14 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 	// Emit task_classified event (privacy-safe) after final resolution
 	s.emitTaskClassified(r.Header.Get("x-request-id"), ti, resolvedRoute)
 	if len(candidates) == 0 {
+		// Gateway-side rejection before any upstream attempt: release
+		// the admission budget hold (Wave C-4).
 		if s.isPrivacyUnavailable(req, "anthropic", resolvedRoute, r.Header.Get("x-request-id")) {
+			s.budgetRelease(r)
 			anthropicPrivacyUnavailable(w)
 			return
 		}
+		s.budgetRelease(r)
 		anthropicErrorJSON(w, 503, "no compatible healthy deployment")
 		return
 	}

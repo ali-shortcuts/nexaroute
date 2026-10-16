@@ -156,6 +156,21 @@ func (l *BudgetLedger) evictIfEmptyLocked(key string, row *budgetRow) {
 	}
 }
 
+// Stats returns the number of key rows, the number of open
+// reservations, and the total currently-reserved spend. It is the
+// observability seam for leak-invariant soak tests (Wave C-4): a
+// healthy gateway shows all three at (or returning to) zero.
+func (l *BudgetLedger) Stats() (rows, reservations int, reserved float64) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, row := range l.rows {
+		rows++
+		reservations += len(row.reservations)
+		reserved += row.reserved
+	}
+	return rows, reservations, reserved
+}
+
 // Snapshot returns the key's committed and currently-reserved
 // spend after expiring stale reservations.
 func (l *BudgetLedger) Snapshot(key string, now time.Time) (committed, reserved float64) {

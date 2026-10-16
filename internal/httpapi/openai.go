@@ -111,6 +111,10 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 	req = s.applyPrivacyRequirement(req, r)
 	cfg, candidates, resolvedRoute, resolveErr := s.candidatesForRequirement(req, "openai")
 	if resolveErr != nil {
+		// Gateway-side rejection before any upstream attempt: the
+		// admission budget hold must be released, not left to expire
+		// into a committed charge 15 minutes later (Wave C-4).
+		s.budgetRelease(r)
 		if strings.Contains(resolveErr.Error(), "disabled") {
 			errorJSON(w, 404, resolveErr.Error())
 		} else {
@@ -130,10 +134,14 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 	// Emit task_classified event (privacy-safe, no raw prompt) after final route resolution
 	s.emitTaskClassified(r.Header.Get("x-request-id"), ti, resolvedRoute)
 	if len(candidates) == 0 {
+		// Gateway-side rejection before any upstream attempt: release
+		// the admission budget hold (Wave C-4).
 		if s.isPrivacyUnavailable(req, "openai", resolvedRoute, r.Header.Get("x-request-id")) {
+			s.budgetRelease(r)
 			openAIPrivacyUnavailable(w)
 			return
 		}
+		s.budgetRelease(r)
 		errorJSON(w, 503, "no compatible healthy deployment")
 		return
 	}
