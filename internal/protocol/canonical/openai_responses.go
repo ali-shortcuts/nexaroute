@@ -476,6 +476,7 @@ func DecodeResponsesResponse(b []byte) (Response, error) {
 	}
 	out := Response{ID: in.ID, Model: in.Model, StopReason: StopEndTurn, Raw: append(json.RawMessage(nil), b...)}
 	sawToolCall := false
+	textBlocks := 0 // PartText blocks appended so far; mirrors the encoder's textID counter
 	for _, item := range in.Output {
 		switch item.Type {
 		case "message":
@@ -493,6 +494,7 @@ func DecodeResponsesResponse(b []byte) (Response, error) {
 			}
 			if sb.Len() > 0 {
 				out.Blocks = append(out.Blocks, Block{Type: PartText, Text: sb.String()})
+				textBlocks++
 			}
 		case "function_call":
 			// A function call without a name is not dispatchable and no
@@ -507,8 +509,24 @@ func DecodeResponsesResponse(b []byte) (Response, error) {
 				continue
 			}
 			sawToolCall = true
+			// Canonicalize the two fields the encoder synthesizes when
+			// they are absent, so the IR already carries what
+			// encode(decode(x)) would produce: an ID-less call gets the
+			// encoder's call_<preceding text blocks> ID, and empty
+			// arguments become "{}" (the same normalization the request
+			// decoder applies, #447). Without this, a second decode
+			// drifts on both fields (FuzzResponseRoundTrip seed
+			// f3cf67c7e34a870b, found on main after #448 merged).
+			callID := item.CallID
+			if callID == "" {
+				callID = fmt.Sprintf("call_%d", textBlocks)
+			}
+			args := item.Arguments
+			if strings.TrimSpace(args) == "" {
+				args = "{}"
+			}
 			out.Blocks = append(out.Blocks, Block{Type: PartToolCall, ToolCall: &ToolCall{
-				ID: item.CallID, Name: item.Name, Arguments: item.Arguments,
+				ID: callID, Name: item.Name, Arguments: args,
 			}})
 		case "reasoning":
 			var sb strings.Builder
