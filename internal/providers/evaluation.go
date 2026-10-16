@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/ali-shortcuts/nexaroute/internal/egress"
 )
 
 // Phase H live evaluation support.
@@ -121,10 +123,22 @@ func (a *httpAdapter) evaluationTwin() *httpAdapter {
 	// The transport is deliberately shared: evaluation reuses the provider's
 	// connection pool, proxy and TLS configuration instead of creating a second
 	// client stack. Only the *state* the data plane observes is cloned.
+	// The redirect policy is inherited verbatim: the twin carries the same
+	// credentials, so a cross-origin redirect must be refused here exactly
+	// as in production (audit #371 F2). The shared guard is the fail-closed
+	// fallback if a hand-built adapter ever reaches the twin without one.
+	twinRedirect := a.c.CheckRedirect
+	if twinRedirect == nil {
+		twinRedirect = egress.RefuseCrossOriginRedirects(10, "provider evaluation")
+	}
+	twinStreamRedirect := a.streamC.CheckRedirect
+	if twinStreamRedirect == nil {
+		twinStreamRedirect = egress.RefuseCrossOriginRedirects(10, "provider evaluation")
+	}
 	t := &httpAdapter{
 		p:              a.p,
-		c:              &http.Client{Transport: a.c.Transport, Timeout: a.c.Timeout},
-		streamC:        &http.Client{Transport: a.streamC.Transport},
+		c:              &http.Client{Transport: a.c.Transport, Timeout: a.c.Timeout, CheckRedirect: twinRedirect},
+		streamC:        &http.Client{Transport: a.streamC.Transport, CheckRedirect: twinStreamRedirect},
 		sem:            make(chan struct{}, cap(a.sem)),
 		forwardAllowed: a.forwardAllowed,
 		retryAfterCap:  a.retryAfterCap,

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/ali-shortcuts/nexaroute/internal/config"
+	"github.com/ali-shortcuts/nexaroute/internal/egress"
 	"github.com/ali-shortcuts/nexaroute/internal/events"
 )
 
@@ -41,7 +42,14 @@ type mcpBroker struct {
 }
 
 func newMCPBroker() *mcpBroker {
-	return &mcpBroker{servers: map[string]*mcpServerState{}, client: &http.Client{}}
+	// Audit #371 F9: the broker attaches the operator's auth_env secret
+	// as Authorization; a plain redirect-following client would forward
+	// it to a cross-origin redirect target. Refuse cross-origin
+	// redirects, like the main provider adapter. URL validation
+	// (http(s), no userinfo) is unchanged.
+	return &mcpBroker{servers: map[string]*mcpServerState{}, client: &http.Client{
+		CheckRedirect: egress.RefuseCrossOriginRedirects(10, "mcp"),
+	}}
 }
 
 func (b *mcpBroker) stateFor(srv config.MCPServerConfig) *mcpServerState {
