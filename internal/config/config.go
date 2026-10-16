@@ -2153,7 +2153,7 @@ func (c Config) Validate() error {
 			if err := validateEndpointURL(p.ProxyURL, fmt.Sprintf("provider %q proxy_url", p.ID), true); err != nil {
 				return err
 			}
-			if reason := c.proxyEgressViolation(p.ProxyURL); reason != "" {
+			if reason := c.proxyEgressViolation(p); reason != "" {
 				return fmt.Errorf("provider %q proxy_url %s", p.ID, reason)
 			}
 		}
@@ -2991,12 +2991,23 @@ func (p ProviderConfig) EgressAllowCIDRs() []string { return p.resolvedEgressAll
 // which judges NAT64/6to4 literals by the address they embed). Hostnames
 // that resolve to blocked addresses are caught later at transport
 // construction and dial time, where resolution actually happens.
-func (c Config) proxyEgressViolation(raw string) string {
-	u, err := url.Parse(raw)
+func (c Config) proxyEgressViolation(p ProviderConfig) string {
+	u, err := url.Parse(p.ProxyURL)
 	if err != nil {
 		return "" // syntax is validateEndpointURL's job
 	}
 	host := u.Hostname()
+	// A loopback proxy for a loopback provider is the legitimate local
+	// setup the egress Policy itself permits (AllowLoopback follows the
+	// base URL's http scheme in the provider adapter, and the transport
+	// only honors it for loopback-spelled hosts). Deny lists above and
+	// below still apply; embedded loopback forms stay blocked.
+	localProvider := false
+	if base, berr := url.Parse(p.BaseURL); berr == nil && base.Scheme == "http" {
+		if bip, perr := netip.ParseAddr(base.Hostname()); perr == nil && bip.IsLoopback() {
+			localProvider = true
+		}
+	}
 	for _, denied := range c.Egress.DenyHosts {
 		if strings.EqualFold(strings.TrimSuffix(strings.TrimSpace(denied), "."), strings.TrimSuffix(host, ".")) {
 			return fmt.Sprintf("host %q is denied by egress policy", host)
@@ -3014,7 +3025,7 @@ func (c Config) proxyEgressViolation(raw string) string {
 			return fmt.Sprintf("%q is denied by egress policy", host)
 		}
 	}
-	if egress.BlockedIP(ip) {
+	if egress.BlockedIP(ip) && !(localProvider && ip.IsLoopback()) {
 		return fmt.Sprintf("%q is blocked by the built-in egress blocklist", host)
 	}
 	return ""

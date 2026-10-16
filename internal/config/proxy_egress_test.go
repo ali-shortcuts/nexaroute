@@ -38,6 +38,19 @@ func TestValidateRejectsProxyEgressViolations(t *testing.T) {
 		})
 	}
 
+	t.Run("loopback proxy accepted for loopback provider", func(t *testing.T) {
+		cfg := Default()
+		p := ProviderConfig{
+			ID: "p", Name: "P", Type: "openai_compatible",
+			BaseURL: "http://127.0.0.1:9999", ProxyURL: "http://127.0.0.1:8888",
+		}
+		p.ApplyDefaults()
+		cfg.Providers = []ProviderConfig{p}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("loopback proxy for a local provider should validate, got %v", err)
+		}
+	})
+
 	t.Run("public proxy accepted", func(t *testing.T) {
 		cfg := Default()
 		p := ProviderConfig{
