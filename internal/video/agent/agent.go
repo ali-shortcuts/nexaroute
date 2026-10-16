@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/ali-shortcuts/nexaroute/internal/video"
@@ -165,6 +166,13 @@ func ParsePlan(raw string) (video.Plan, error) {
 	var plan video.Plan
 	if err := dec.Decode(&plan); err != nil {
 		return video.Plan{}, fmt.Errorf("model output is not a valid video plan JSON: %w", err)
+	}
+	var extra any
+	if err := dec.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return video.Plan{}, errors.New("model output contains trailing JSON after the video plan")
+		}
+		return video.Plan{}, fmt.Errorf("model output contains trailing non-JSON content: %w", err)
 	}
 	return plan, nil
 }
