@@ -976,6 +976,7 @@
       (status === 'composing' ? '<small class="muted">Final composition is in progress; cancellation is disabled to protect the output.</small>' : '') + '</div></article>';
   }
   function openVideoCreate() {
+    const idempotencyKey = crypto.randomUUID?.() || Date.now() + Math.random();
     const providers = state.videoProviders.map((p, i) => '<option value="' + esc(p.id) + '"' + (i === 0 ? ' selected' : '') + '>' + esc(p.id) + '</option>').join('');
     const providerOptions = providers || '<option value="" disabled selected>No provider available</option>';
     const crProvider = state.videoProviders.find(p => p.id === 'code-render');
@@ -1001,6 +1002,8 @@
       '<div class="field full"><label for="v-narration">Narration script <span class="muted">optional</span></label><textarea id="v-narration" rows="4" placeholder="Noora introduces Persepolis and explains its history…"></textarea><small class="muted">Gateway narration requires video.piper_enabled and a local Piper voice model. Use a multi-shot plan. Per-shot narration_segment values are used if this field is empty.</small></div>' +
       '<div class="field full"><label for="v-subtitle-language">Captions <span class="muted">optional</span></label><select id="v-subtitle-language"><option value="">No captions</option><option value="same-as-narration">Generate captions from narration script</option></select><small class="muted">Captions use the script as-is with estimated timing. They are not translated or word-aligned.</small></div>' +
       '<div class="field full"><label for="v-shot-plan">Shot plan JSON <span class="muted">optional</span></label><textarea id="v-shot-plan" rows="7" spellcheck="false" placeholder=\'[{"shot_id":"shot-01","duration_seconds":4,"prompt":"A wide establishing shot at sunrise"},{"shot_id":"shot-02","duration_seconds":4,"prompt":"The guide walks toward the ancient staircase"}]\'></textarea><small class="muted">Each shot needs a prompt and duration_seconds. The total duration is calculated automatically. Do not include output_asset; checkpoints are server-owned.</small><div class="field-actions"><button class="button ghost small" type="button" data-action="example-shot-plan">Insert two-shot example</button></div></div>' +
+      '<div class="field"><label for="v-cap">USD cap</label><input id="v-cap" type="number" min=".01" step=".01"></div>' +
+      '<div class="field"><label><input id="v-dry" type="checkbox"> Dry run</label></div>' +
       universalFields +
       '</div>';
     openModal('Create video job', form, async () => {
@@ -1039,6 +1042,7 @@
       if (!Number.isFinite(duration) || duration <= 0 || duration > 3600) throw Error('Total video duration must be between 0 and 3600 seconds.');
       const req = {
         project_id: 'dashboard',
+        idempotency_key: idempotencyKey,
         episode_id: $('#v-episode').value.trim(),
         mode: $('#v-mode').value,
         prompt: shotPlan && shotPlan.length > 1 ? '' : (prompt || (shotPlan ? shotPlan[0].prompt : '')),
@@ -1047,6 +1051,9 @@
         negative_prompt: $('#v-negative').value.trim(),
         provider_preference: provider
       };
+      const maxCost = $('#v-cap').value;
+      if (maxCost && ((req.max_cost_usd = Number(maxCost)) <= 0 || !Number.isFinite(req.max_cost_usd))) throw Error('Invalid cap.');
+      if ($('#v-dry').checked) req.dry_run = true;
       if (shotPlan) req.shot_plan = shotPlan;
       if (narrationText) req.narration_text = narrationText;
       if (subtitleLanguage) req.subtitle_language = subtitleLanguage;
@@ -1063,7 +1070,12 @@
         }
         if (subtitleLanguage && $('#v-language').value.trim()) req.subtitle_language = $('#v-language').value.trim();
       }
-      const res = await videoApi('/v1/video/jobs', { method: 'POST', ...body(req) });
+      const saveButton = $('[data-action="save-modal"]');
+      if (saveButton?.disabled) return;
+      if (saveButton) saveButton.disabled = true;
+      let res;
+      try { res = await videoApi('/v1/video/jobs', { method: 'POST', ...body(req) }); }
+      catch (error) { if (saveButton) saveButton.disabled = false; throw error; }
       const id = res.id || res.job_id;
       if (id) rememberVideoJob(id);
       closeModal();

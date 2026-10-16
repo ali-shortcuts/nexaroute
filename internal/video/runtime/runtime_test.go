@@ -64,7 +64,7 @@ func TestRuntimeFakeProviderEndToEndAuthenticatedAndPersistsArtifact(t *testing.
 		t.Fatalf("unauthenticated create status=%d body=%s", rec.Code, rec.Body.String())
 	}
 
-	body = strings.NewReader("{\"project_id\":\"p\",\"prompt\":\"scene\",\"mode\":\"text_to_video\",\"duration_seconds\":1,\"provider_preference\":\"fake\"}")
+	body = strings.NewReader("{\"project_id\":\"p\",\"prompt\":\"scene\",\"mode\":\"text_to_video\",\"duration_seconds\":1,\"provider_preference\":\"fake\",\"idempotency_key\":\"dashboard-create-retry\"}")
 	req = httptest.NewRequest("POST", "/v1/video/jobs", body)
 	req.Header.Set("Authorization", "Bearer "+token)
 	rec = httptest.NewRecorder()
@@ -75,6 +75,21 @@ func TestRuntimeFakeProviderEndToEndAuthenticatedAndPersistsArtifact(t *testing.
 	var created video.VideoJob
 	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
 		t.Fatal(err)
+	}
+	body = strings.NewReader("{\"project_id\":\"p\",\"prompt\":\"scene\",\"mode\":\"text_to_video\",\"duration_seconds\":1,\"provider_preference\":\"fake\",\"idempotency_key\":\"dashboard-create-retry\"}")
+	req = httptest.NewRequest("POST", "/v1/video/jobs", body)
+	req.Header.Set("Authorization", "Bearer "+token)
+	retryRec := httptest.NewRecorder()
+	r.Handler.ServeHTTP(retryRec, req)
+	if retryRec.Code != http.StatusAccepted {
+		t.Fatalf("idempotent retry status=%d body=%s", retryRec.Code, retryRec.Body.String())
+	}
+	var retried video.VideoJob
+	if err := json.Unmarshal(retryRec.Body.Bytes(), &retried); err != nil {
+		t.Fatal(err)
+	}
+	if retried.JobID != created.JobID {
+		t.Fatalf("idempotent retry created job %q, want original %q", retried.JobID, created.JobID)
 	}
 
 	deadline := time.Now().Add(3 * time.Second)

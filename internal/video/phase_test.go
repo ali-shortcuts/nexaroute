@@ -35,6 +35,13 @@ func TestOrchestratorIdempotencyAndPolling(t *testing.T) {
 	if err != nil || j2.JobID != j.JobID {
 		t.Fatalf("idempotency: %#v %v", j2, err)
 	}
+	jobs, err := st.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(jobs) != 1 || q.Len() != 1 || len(o.Ledger.Entries()) != 1 || o.Ledger.Reserved() != j.EstimatedCostUSD {
+		t.Fatalf("duplicate idempotent create changed admission or reservation: jobs=%d queued=%d ledger_entries=%d reserved=%.4f estimated=%.4f", len(jobs), q.Len(), len(o.Ledger.Entries()), o.Ledger.Reserved(), j.EstimatedCostUSD)
+	}
 	queued, _ := q.Next(ctx)
 	if err = o.RunJob(ctx, queued); err != nil {
 		t.Fatal(err)
@@ -44,6 +51,24 @@ func TestOrchestratorIdempotencyAndPolling(t *testing.T) {
 		t.Fatalf("state=%s", done.State)
 	}
 }
+
+func TestOrchestratorRejectsRequestAboveMaxCost(t *testing.T) {
+	ctx := context.Background()
+	st, q, ledger := queue.NewMemoryStore(), queue.New(2), &cost.Ledger{}
+	o := &orchestrator.Orchestrator{Store: st, Queue: q, Providers: orchestrator.Registry{"fake": providers.NewFake(1)}, Ledger: ledger}
+	_, err := o.Create(ctx, video.VideoRequest{ProjectID: "p", Prompt: "scene", DurationSeconds: 1, Mode: video.ModeTextToVideo, ProviderPreference: "fake", IdempotencyKey: "capped", MaxCostUSD: 0.005})
+	if !errors.Is(err, cost.ErrBudgetExceeded) {
+		t.Fatalf("create error=%v, want ErrBudgetExceeded", err)
+	}
+	jobs, err := st.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(jobs) != 0 || q.Len() != 0 || ledger.Reserved() != 0 || len(ledger.Entries()) != 0 {
+		t.Fatalf("over-cap job was admitted or reserved: jobs=%d queued=%d reserved=%.4f ledger_entries=%d", len(jobs), q.Len(), ledger.Reserved(), len(ledger.Entries()))
+	}
+}
+
 func TestBudgetGate(t *testing.T) {
 	b := cost.NewBook()
 	b.Set("p", "m", cost.Price{PerSecondUSD: 2, Known: true})
