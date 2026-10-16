@@ -12,10 +12,9 @@
 
 # LIVE TEST BLOCKED
 
-A real end-to-end NexaRoute model test could not be started safely in this execution environment. The required NexaRoute runtime prerequisites were not available:
+**Follow-up status:** Go and local compilation blockers were removed; the live test remains blocked by missing authorized provider credentials, video bearer token, and bounded budget. Follow-up source: `bf3eef1bc8ced1640087a9de59485400a15e040c` (`origin/main`).
 
-- The Go toolchain is not installed (`go` was not found), so the gateway and `videogen` binaries could not be built or started.
-- No prebuilt `gateway` or `videogen` executable was present in the workspace.
+A real end-to-end NexaRoute model test could not be started safely in this execution environment. The initial smoke-test execution did not have the required NexaRoute runtime prerequisites. A follow-up environment preparation was performed and is recorded below; it removed the toolchain/binary blocker but did not establish an authorized live provider configuration.
 - No non-example NexaRoute runtime configuration was present. The repository contains only example configurations; the video example has `code_render_enabled: false`, no planning model, and no runtime bearer token.
 - A generic OpenAI-compatible environment is present in the sandbox, but it was not used directly. Calling it outside NexaRoute would bypass the gateway's provider routing, accounting, authentication, and video workflow, and would not satisfy this test.
 - No authorized NexaRoute provider/model configuration and bounded spending allowance were established for this smoke test.
@@ -45,13 +44,13 @@ No model identifier, latency, retry count, token usage, or cost can be reported 
 
 The prescribed English brief and Persian brief were **not submitted**, because doing so without an operational NexaRoute gateway and authorized provider configuration would not be a valid end-to-end test. No mock planner was substituted and no hand-written plan was counted as live-model evidence.
 
-## Fresh environment inspection
+## Initial smoke-test environment inspection
 
-The following checks were performed against the latest repository state:
+The following checks were performed during the initial blocked run against that repository state:
 
 ```text
 git fetch origin --prune                         PASS
-git show --no-patch origin/main                  d27669a953da318aa3a2de6b2d1531e1e16b42a4
+git show --no-patch origin/main                  d27669a953da318aa3a2de6b2d1531e1e16b42a4 (initial run)
 gh pr view 463                                    MERGED
 gh pr view 465                                    MERGED
 git cat-file checks for Universal Video files    PRESENT
@@ -97,11 +96,27 @@ Observed sample properties:
 
 This file is deterministic renderer evidence from the earlier audit, **not** evidence of a real model request, a live plan, a live job, or an authenticated live asset download. It is not counted in the live result totals above.
 
+## Follow-up environment preparation and fresh local verification
+
+A follow-up run installed the latest official Go 1.27.2 toolchain available from `go.dev/dl`, verified its published SHA-256 checksum, and built both binaries from the current `origin/main` source. The build succeeded:
+
+- `go build -trimpath -o /home/ubuntu/nexaroute-live-build/gateway ./cmd/gateway` — PASS.
+- `go build -trimpath -o /home/ubuntu/nexaroute-live-build/videogen ./cmd/videogen` — PASS.
+- `go test -count=1 ./internal/video/... ./cmd/gateway/... ./cmd/videogen/...` — PASS; all listed packages passed.
+- `./scripts/verify.sh` — PASS, including clean unit/integration tests, vet, race pass, release/SBOM checks, browser acceptance, fuzz smoke, and amd64/arm64 builds. The script banner reported `go1.26.8`; the direct build/test shell used verified Go 1.27.2.
+- A temporary non-production configuration passed `gateway config validate` and `gateway config dry-run`; dry-run explicitly opened no listener and made no upstream requests.
+
+A bounded gateway startup attempt with that temporary configuration failed before serving, with the redacted precise error:
+
+```text
+cannot initialize video gateway: video authentication token environment variable "UNCONFIGURED_VIDEO_TOKEN" is missing or empty
+```
+
+This confirms the remaining blocker is configuration/authorization, not inability to compile the current source. No real model request was made.
+
 ## Tests not run
 
-- `go test -count=1 ./internal/video/... ./cmd/gateway/... ./cmd/videogen/...` — blocked: Go is not installed.
-- `./scripts/verify.sh` — blocked: Go is not installed.
-- Gateway startup, authenticated planning, job creation, polling, asset download — not run: no gateway binary/toolchain or runtime configuration.
+- Gateway startup with a real authorized configuration, authenticated planning, job creation, polling, and asset download — blocked: no authorized provider/model configuration, bearer token, or approved spending allowance is available.
 - Three identical English model attempts — not run.
 - One Persian model attempt — not run.
 - Persian/Arabic joining, RTL ordering, punctuation, font coverage, alignment, clipping, and readability — not tested.
@@ -113,8 +128,8 @@ Previously recorded CI and scripted-planner results from the merged implementati
 
 To unblock a valid smoke test, the owner must provide or enable all of the following in an authorized test environment:
 
-1. A built NexaRoute `gateway` and `videogen` binary, or an installed Go toolchain capable of building them.
-2. A non-production NexaRoute configuration with `video.enabled: true`, `code_render_enabled: true`, a configured planning model, and the normal provider routing credentials supplied through their intended environment mechanism.
+1. A non-production NexaRoute configuration with `video.enabled: true`, `code_render_enabled: true`, and a configured planning model.
+2. Normal provider routing credentials supplied through the intended secret mechanism.
 3. A non-empty video bearer token and a local storage/work directory.
 4. A bounded, approved test budget sufficient for at most three identical English attempts and one Persian attempt.
 5. A supported font/Piper setup if Persian narration is to be tested.
