@@ -860,3 +860,47 @@ func canonicalToolSchema(raw json.RawMessage) json.RawMessage {
 	}
 	return compact
 }
+
+// TestDecodeResponsesRequestNormalizesEmptyArgs is the minimized regression
+// for the defect found by FuzzRequestRoundTrip (#447): the Responses request
+// decoder kept empty tool arguments verbatim while the request encoder
+// normalizes empty/whitespace arguments to "{}", so
+// decode(encode(decode(x))) drifted "" -> "{}". The decoder now keeps exactly
+// what the encoder converges to, mirroring anthToolInputArgs (#447).
+func TestDecodeResponsesRequestNormalizesEmptyArgs(t *testing.T) {
+	for _, tc := range []struct{ args, wire string }{
+		{"", `""`},
+		{"   ", `"   "`},
+		{"\t\n", `"\t\n"`},
+	} {
+		raw := []byte(`{"model":"m","input":[{"type":"function_call","name":"f","arguments":` + tc.wire + `}]}`)
+		req, ok := decodeFuzzRequest(2, raw)
+		if !ok {
+			t.Fatalf("decode declined for args %q", tc.args)
+		}
+		got := req.Messages[0].Parts[0].ToolCall.Arguments
+		if got != "{}" {
+			t.Fatalf("RED: empty args kept as %q, want canonical \"{}\"", got)
+		}
+		enc, ok := encodeFuzzRequest(2, req)
+		if !ok {
+			t.Fatalf("encode declined for args %q", tc.args)
+		}
+		req2, ok := decodeFuzzRequest(2, enc)
+		if !ok {
+			t.Fatalf("re-decode failed for args %q", tc.args)
+		}
+		if req2.Messages[0].Parts[0].ToolCall.Arguments != "{}" {
+			t.Fatalf("RED: request args unstable for %q", tc.args)
+		}
+	}
+	// Non-empty arguments pass through verbatim.
+	raw := []byte(`{"model":"m","input":[{"type":"function_call","name":"f","arguments":"{\"a\":1}"}]}`)
+	req, ok := decodeFuzzRequest(2, raw)
+	if !ok {
+		t.Fatal("decode declined")
+	}
+	if got := req.Messages[0].Parts[0].ToolCall.Arguments; got != `{"a":1}` {
+		t.Fatalf("non-empty args altered: %q", got)
+	}
+}

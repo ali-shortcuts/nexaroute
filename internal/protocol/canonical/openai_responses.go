@@ -203,9 +203,17 @@ func decodeResponsesInput(raw json.RawMessage) ([]Part, []Message, error) {
 			if item.Name == "" {
 				continue
 			}
+			// The request encoder normalizes empty/whitespace arguments to
+			// "{}", so the decoder keeps exactly that canonical form;
+			// otherwise decode(encode(decode(x))) drifts "" -> "{}" (#447,
+			// mirroring anthToolInputArgs).
+			args := item.Arguments
+			if strings.TrimSpace(args) == "" {
+				args = "{}"
+			}
 			messages = append(messages, Message{Role: RoleAssistant, Parts: []Part{{
 				Type:     PartToolCall,
-				ToolCall: &ToolCall{ID: item.CallID, Name: item.Name, Arguments: item.Arguments},
+				ToolCall: &ToolCall{ID: item.CallID, Name: item.Name, Arguments: args},
 			}}})
 		case "function_call_output":
 			messages = append(messages, Message{Role: RoleTool, Parts: []Part{{
