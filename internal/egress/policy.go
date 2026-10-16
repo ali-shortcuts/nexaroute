@@ -89,6 +89,17 @@ func embeddedIPv4(ip netip.Addr) (netip.Addr, bool) {
 	return netip.Addr{}, false
 }
 
+// BlockedIP reports whether ip is blocked by the built-in special-purpose
+// blocklist, judging NAT64 / 6to4 forms by the IPv4 address they embed
+// (embedded loopback is never an allowed form). It is the shared judgment
+// for callers outside this package that must classify a bare address
+// without an operator Policy — e.g. the remote-decision transport (#427,
+// audit F5: the two implementations had drifted and the decision transport
+// allowed 6to4/Teredo embeddings of blocked addresses).
+func BlockedIP(ip netip.Addr) bool {
+	return blocked(ip, false)
+}
+
 func blocked(ip netip.Addr, allowLoopback bool) bool {
 	ip = ip.WithZone("").Unmap()
 	if !ip.IsValid() {
@@ -223,6 +234,26 @@ func (p Policy) NewTransport(target string, proxyURL string) (*http.Transport, e
 		// egress layer reduces the runtime target to scheme plus authority.
 		proxyTarget.User = nil
 		proxyTarget.Path, proxyTarget.RawPath, proxyTarget.RawQuery, proxyTarget.Fragment = "", "", "", ""
+		// The proxy receives every provider request (with API keys), so it
+		// is policy-checked like a target (#427, audit F6): operator deny
+		// lists and the built-in blocklist apply to the proxy host at
+		// construction, not only later at dial time. Hostnames are
+		// additionally re-checked at dial time by the pinned dialer below,
+		// which sees the resolved addresses. (No allow-list check here:
+		// the proxy is itself an operator-chosen gateway and the provider
+		// adapter allow-lists its hostname explicitly.)
+		proxyHost := proxyTarget.Hostname()
+		if p.deniedHost(proxyHost) {
+			return nil, fmt.Errorf("provider proxy_url host %q is denied by operator policy", proxyHost)
+		}
+		if ip, parseErr := netip.ParseAddr(proxyHost); parseErr == nil {
+			if p.deniedIP(ip) {
+				return nil, fmt.Errorf("provider proxy_url %q is denied by operator policy", proxyHost)
+			}
+			if p.ipBlocked(ip, p.AllowLoopback && isLoopbackHost(proxyHost)) {
+				return nil, fmt.Errorf("provider proxy_url %q is blocked", proxyHost)
+			}
+		}
 		proxy = http.ProxyURL(proxyTarget)
 	}
 	resolver := net.DefaultResolver

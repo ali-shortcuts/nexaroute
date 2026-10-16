@@ -10,6 +10,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/ali-shortcuts/nexaroute/internal/egress"
 )
 
 // SSRF protection for the outbound remote-decision transport.
@@ -35,46 +37,16 @@ import (
 // request URL is never rewritten. Host header semantics are likewise
 // preserved.
 
-// blockedPrefixes lists additional non-routable/reserved ranges beyond the
-// category checks in isBlockedIP. 169.254.169.254 (cloud metadata) is covered
-// by the link-local check.
-var blockedPrefixes = []netip.Prefix{
-	netip.MustParsePrefix("0.0.0.0/8"),      // "this network" (RFC 1122)
-	netip.MustParsePrefix("100.64.0.0/10"),  // carrier-grade NAT shared space (RFC 6598)
-	netip.MustParsePrefix("192.0.0.0/24"),   // IETF protocol assignments (RFC 6890)
-	netip.MustParsePrefix("198.18.0.0/15"),  // benchmarking (RFC 2544)
-	netip.MustParsePrefix("240.0.0.0/4"),    // reserved + broadcast (RFC 1112)
-	netip.MustParsePrefix("64:ff9b::/96"),   // NAT64 well-known prefix (RFC 6052)
-	netip.MustParsePrefix("64:ff9b:1::/48"), // NAT64 local-use (RFC 8215)
-	netip.MustParsePrefix("100::/64"),       // discard-only (RFC 6666)
-}
-
-// isBlockedIP reports whether an address may not be connected to. IPv4-mapped
-// IPv6 addresses (::ffff:x.x.x.x) are unmapped first so they cannot evade the
-// IPv4 checks.
+// isBlockedIP reports whether an address may not be connected to. The
+// judgment is the shared egress blocklist (internal/egress.BlockedIP): one
+// implementation for every outbound path. This transport previously kept
+// its own copy, which had drifted — it judged NAT64 prefixes wholesale but
+// had no embedded-IPv4 recursion for 6to4 and no Teredo prefix, so a
+// decision-provider hostname rebinding to 2002:7f00:1:: (6to4 -> 127.0.0.1)
+// or the 6to4 form of 169.254.169.254 was allowed to connect with the
+// decision bearer key attached (#427, audit F5).
 func isBlockedIP(ip netip.Addr) bool {
-	ip = ip.Unmap()
-	if !ip.IsValid() {
-		return true
-	}
-	// Covers unspecified, loopback (127.0.0.0/8, ::1), link-local
-	// (169.254.0.0/16 incl. 169.254.169.254, fe80::/10) and multicast.
-	if !ip.IsGlobalUnicast() {
-		return true
-	}
-	// RFC 1918 + IPv6 unique-local addresses (fc00::/7).
-	if ip.IsPrivate() {
-		return true
-	}
-	if ip.IsLoopback() {
-		return true
-	}
-	for _, p := range blockedPrefixes {
-		if p.Contains(ip) {
-			return true
-		}
-	}
-	return false
+	return egress.BlockedIP(ip)
 }
 
 // parseIPLiteral parses host as an IP literal (optionally with a zone, e.g.

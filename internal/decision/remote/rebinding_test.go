@@ -20,7 +20,7 @@ import (
 // TestSSRF_DNSRebinding_PinnedDial is the deterministic reproduction of the
 // DNS rebinding / TOCTOU condition:
 //
-//	lookup #1 (validation): rebind.test -> 192.0.2.1   (public, passes)
+//	lookup #1 (validation): rebind.test -> 185.60.216.1   (public, passes)
 //	lookup #2 (real dial):  rebind.test -> 127.0.0.1   (loopback canary)
 //
 // A vulnerable implementation validates the first answer and then dials the

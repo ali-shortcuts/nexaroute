@@ -340,7 +340,7 @@ func TestSSRF_ResolverFailureFailsClosed(t *testing.T) {
 // attempted in order and the final error is returned.
 func TestSSRF_MultipleSafeIPs_AllTriedOnFailure(t *testing.T) {
 	resolver := newFakeResolver()
-	resolver.add("multi.test", "192.0.2.1", "192.0.2.2", "192.0.2.3")
+	resolver.add("multi.test", "185.60.216.1", "185.60.216.2", "185.60.216.3")
 	rec := &recordDialer{err: errors.New("connection refused")}
 	d := ssrfDialContext(resolver.lookupIPAddr, rec.dial)
 
@@ -348,7 +348,7 @@ func TestSSRF_MultipleSafeIPs_AllTriedOnFailure(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error when all dials fail")
 	}
-	want := []string{"192.0.2.1:443", "192.0.2.2:443", "192.0.2.3:443"}
+	want := []string{"185.60.216.1:443", "185.60.216.2:443", "185.60.216.3:443"}
 	got := rec.addrs()
 	if len(got) != len(want) {
 		t.Fatalf("expected %d dial attempts %v, got %v", len(want), want, got)
@@ -364,9 +364,9 @@ func TestSSRF_MultipleSafeIPs_AllTriedOnFailure(t *testing.T) {
 // are dialed and the loop stops at the first success.
 func TestSSRF_MultipleSafeIPs_FailoverToSecond(t *testing.T) {
 	resolver := newFakeResolver()
-	resolver.add("multi.test", "192.0.2.1", "192.0.2.2", "192.0.2.3")
+	resolver.add("multi.test", "185.60.216.1", "185.60.216.2", "185.60.216.3")
 	rec := &recordDialer{hook: func(network, addr string) (net.Conn, error) {
-		if addr == "192.0.2.1:443" {
+		if addr == "185.60.216.1:443" {
 			return nil, errors.New("connection refused")
 		}
 		return stubConn{}, nil
@@ -379,8 +379,8 @@ func TestSSRF_MultipleSafeIPs_FailoverToSecond(t *testing.T) {
 	}
 	_ = conn.Close()
 	got := rec.addrs()
-	if len(got) != 2 || got[0] != "192.0.2.1:443" || got[1] != "192.0.2.2:443" {
-		t.Fatalf("expected dials [192.0.2.1:443 192.0.2.2:443], got %v", got)
+	if len(got) != 2 || got[0] != "185.60.216.1:443" || got[1] != "185.60.216.2:443" {
+		t.Fatalf("expected dials [185.60.216.1:443 185.60.216.2:443], got %v", got)
 	}
 }
 
