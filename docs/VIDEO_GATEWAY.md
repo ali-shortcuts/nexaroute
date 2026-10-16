@@ -14,6 +14,38 @@ The repository now contains an isolated `internal/video` domain and provider con
 - bearer-token authentication support in the standalone data-plane handler;
 - timestamped HMAC webhook verification with replay-window checks.
 
+## Universal AI-to-Video (code-render)
+
+The `code-render` provider lets **any configured text or coding model** — DeepSeek, Claude, Gemini, OpenAI-compatible, or another configured deployment — create a real video, even though the model itself has no video-generation capability. The model acts as the creative planner; NexaRoute's deterministic renderer does the execution:
+
+`brief -> planning model -> validated video plan (video-plan.v1) -> scene renderer (FFmpeg) -> optional Piper narration/subtitles -> QC gate (ffprobe + frame checks) -> downloadable MP4`
+
+This is **programmatic video**: animated text and titles, motion graphics, charts, timelines, and diagrams. It is not native generative video — a text model does not gain a photorealistic video head. Requests for native generation are rejected with a pointer to a native provider (for example ComfyUI) instead of being silently downgraded. Creation modes are reported truthfully in job metadata (`usage_metadata.native_video=false`, `programmatic=true`, the planning model, and the tools used).
+
+Enable it in the existing `video` configuration object:
+
+```json
+{
+  "video": {
+    "enabled": true,
+    "auth_token_env": "NEXAROUTE_VIDEO_TOKEN",
+    "code_render_enabled": true,
+    "code_render_planner_model": "deepseek-chat",
+    "code_render_max_duration_seconds": 120
+  }
+}
+```
+
+- `code_render_planner_base_url` defaults to this gateway's own data plane on loopback, so the planning call reuses the existing provider configuration, routing, failover, budgets, and credentials. Point it at another OpenAI-compatible endpoint only when needed; plain HTTP is loopback-only. If that endpoint needs a bearer token, name its environment variable in `code_render_planner_api_key_env` (the value is never logged or returned).
+- `code_render_planner_models` optionally pins the selectable planning models; when empty, the gateway advertises its configured public model names, deployment models, and aliases. The user picks the planning model per job (`model_preference`); the engine never silently overrides that choice.
+- The planning model returns a declarative plan (schema `video-plan.v1`): ordered scenes with durations that must sum to the requested total, solid/gradient backgrounds, camera moves (`zoom_in`, `zoom_out`, `pan_left`, `pan_right`), transitions, text/shape/chart elements with bounded animations, captions, and narration text. Malformed output is repaired through bounded corrective prompts (3 attempts by default), then the job fails explicitly. The plan is data, never code: unknown fields are rejected, and no field can name a path, URL, or command.
+- A client may instead supply a reviewed plan directly as `video_plan` in the create request, or preview one first via `POST /v1/video/universal/plan` (same bearer auth) — Video Studio's **Generate plan for review** uses this endpoint, and the edited plan is validated again when the job is submitted.
+- Rendering is local and deterministic (FFmpeg `color`/`gradients` sources with `drawtext`/`drawbox`/`zoompan`, composed through the existing composer). A DejaVu/Noto/Liberation font must be installed, or set `NEXAROUTE_VIDEO_FONT` to a font file. Completion requires the QC gate: H.264 codec, plan-matching resolution and duration, and non-blank sampled frames for every scene. A failed check fails the job with the defect recorded; no asset is published.
+- Narration and burned-in subtitles work when Piper is configured (`piper_enabled`), reusing the local Piper integration: the plan's narration (or the request's `narration_text`) is synthesized, timed SRT captions are built from the narration/captions, and both are composed into the final MP4. Narration longer than the video fails the job explicitly.
+- Cost: rendering is local and the provider reports a USD 0 video-ledger estimate. The planning model's token usage is metered by the gateway's normal request accounting when the planner call passes through it — it is not free, and it is not double-counted in the video ledger. Local rendering still consumes compute and electricity.
+- Limits: total duration is capped by `code_render_max_duration_seconds` (default 120s) and by the plan contract (32 scenes, 120s per scene, 24 elements per scene). Reference/first/last-frame assets, dialogue, music generation, and image elements are not supported in this baseline and are rejected explicitly. Provider state is in-process: a gateway restart during rendering leaves the job resumable-or-manual under the normal recovery rules and never resubmits the planning call (it happens once, before job acceptance).
+- Test video: enable the provider, open Video Studio, choose `code-render`, pick a planning model, enter a brief (for example "A 6-second explainer: title slide, then a bar chart of quarterly growth"), queue the job, and download `episode.mp4` from the completed job card. From the API: `POST /v1/video/jobs` with `provider_preference: "code-render"`, `model_preference: "<a configured model>"`, `prompt`, `duration_seconds`, `aspect_ratio`, and `creation_mode: "programmatic"`.
+
 ## Local, no-provider-fee generation with ComfyUI
 
 The optional `comfyui` adapter lets the Video Gateway submit a saved ComfyUI **API-format workflow** to a local ComfyUI server. This avoids a commercial video API bill, but it still requires compatible models, GPU/CPU resources, disk space, and electricity. NexaRoute does not download models or invent a working workflow for a particular model family.

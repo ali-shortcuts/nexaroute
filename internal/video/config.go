@@ -31,4 +31,17 @@ type Config struct {
 	PiperEnabled              bool    `json:"piper_enabled,omitempty"`
 	PiperBinary               string  `json:"piper_binary,omitempty"`
 	PiperModelPath            string  `json:"piper_model_path,omitempty"`
+	// Universal AI-to-Video (code-render) provider, issue #461 Tier A.
+	// The planner endpoint is an OpenAI-compatible chat-completions base
+	// URL; in production it normally points back at this gateway's own
+	// data plane so any configured text/coding model can plan videos
+	// without a second credential store.
+	CodeRenderEnabled            bool     `json:"code_render_enabled,omitempty"`
+	CodeRenderPlannerBaseURL     string   `json:"code_render_planner_base_url,omitempty"`
+	CodeRenderPlannerAPIKeyEnv   string   `json:"code_render_planner_api_key_env,omitempty"`
+	CodeRenderPlannerModel       string   `json:"code_render_planner_model,omitempty"`
+	CodeRenderPlannerModels      []string `json:"code_render_planner_models,omitempty"`
+	CodeRenderPlannerJSONMode    bool     `json:"code_render_planner_json_mode,omitempty"`
+	CodeRenderMaxDurationSeconds float64  `json:"code_render_max_duration_seconds,omitempty"`
+	CodeRenderWorkRoot           string   `json:"code_render_work_root,omitempty"`
 }

@@ -330,6 +330,18 @@ type VideoConfig struct {
 	ComfyUIFPSInput           string  `json:"comfyui_fps_input,omitempty"`
 	ComfyUISeedNodeID         string  `json:"comfyui_seed_node_id,omitempty"`
 	ComfyUISeedInput          string  `json:"comfyui_seed_input,omitempty"`
+	PiperEnabled              bool    `json:"piper_enabled,omitempty"`
+	PiperBinary               string  `json:"piper_binary,omitempty"`
+	PiperModelPath            string  `json:"piper_model_path,omitempty"`
+	// Universal AI-to-Video (code-render) provider, issue #461 Tier A.
+	CodeRenderEnabled            bool     `json:"code_render_enabled,omitempty"`
+	CodeRenderPlannerBaseURL     string   `json:"code_render_planner_base_url,omitempty"`
+	CodeRenderPlannerAPIKeyEnv   string   `json:"code_render_planner_api_key_env,omitempty"`
+	CodeRenderPlannerModel       string   `json:"code_render_planner_model,omitempty"`
+	CodeRenderPlannerModels      []string `json:"code_render_planner_models,omitempty"`
+	CodeRenderPlannerJSONMode    bool     `json:"code_render_planner_json_mode,omitempty"`
+	CodeRenderMaxDurationSeconds float64  `json:"code_render_max_duration_seconds,omitempty"`
+	CodeRenderWorkRoot           string   `json:"code_render_work_root,omitempty"`
 }
 
 type LoggingConfig struct {
@@ -1666,6 +1678,22 @@ func (c Config) Validate() error {
 	}
 	if c.Video.ComfyUIEnabled && !c.Video.Enabled {
 		return errors.New("video.comfyui_enabled requires video.enabled")
+	}
+	if c.Video.CodeRenderEnabled && !c.Video.Enabled {
+		return errors.New("video.code_render_enabled requires video.enabled")
+	}
+	if c.Video.Enabled && c.Video.CodeRenderEnabled {
+		if strings.TrimSpace(c.Video.CodeRenderPlannerModel) == "" && len(c.Video.CodeRenderPlannerModels) == 0 {
+			return errors.New("video.code_render_planner_model or video.code_render_planner_models is required when code-render is enabled")
+		}
+		if d := c.Video.CodeRenderMaxDurationSeconds; d < 0 || d > 3600 || math.IsNaN(d) || math.IsInf(d, 0) {
+			return errors.New("video.code_render_max_duration_seconds must be between 0 and 3600")
+		}
+		if u := strings.TrimSpace(c.Video.CodeRenderPlannerBaseURL); u != "" {
+			if len(u) > maxURLBytes || strings.ContainsAny(u, "\r\n\x00") {
+				return errors.New("video.code_render_planner_base_url is invalid or too long")
+			}
+		}
 	}
 	if c.Video.Enabled {
 		if strings.TrimSpace(c.Video.AuthTokenEnv) == "" {
