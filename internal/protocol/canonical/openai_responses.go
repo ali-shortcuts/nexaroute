@@ -477,6 +477,17 @@ func DecodeResponsesResponse(b []byte) (Response, error) {
 				out.Blocks = append(out.Blocks, Block{Type: PartText, Text: sb.String()})
 			}
 		case "function_call":
+			// A function call without a name is not dispatchable and no
+			// encoder emits it (EncodeResponsesResponse drops nameless
+			// calls, as do the OpenAI-chat and Anthropic request encoders).
+			// Dropping it here keeps phantom blocks from a hostile or buggy
+			// upstream out of the IR: decode(encode(decode(x))) would
+			// otherwise silently lose the block and flip stop_reason
+			// tool_use -> end_turn (#447). Mirrors the nameless tool-call
+			// drop in DecodeOpenAIChatResponse (#403).
+			if item.Name == "" {
+				continue
+			}
 			sawToolCall = true
 			out.Blocks = append(out.Blocks, Block{Type: PartToolCall, ToolCall: &ToolCall{
 				ID: item.CallID, Name: item.Name, Arguments: item.Arguments,

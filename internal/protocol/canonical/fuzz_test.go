@@ -345,6 +345,71 @@ func TestDecodeAnthropicResponseNormalizesEmptyToolInput(t *testing.T) {
 	}
 }
 
+// TestDecodeResponsesResponseDropsNamelessFunctionCall is the minimized
+// regression for the defect found by FuzzResponseRoundTrip (#447): the
+// Responses decoder kept function_call items with an empty name in the IR
+// while EncodeResponsesResponse never emits them (no encoder emits a
+// nameless call), so decode(encode(decode(x))) silently lost the block and
+// flipped stop_reason tool_use -> end_turn. Mirrors
+// TestDecodeOpenAIChatResponseDropsNamelessToolCall (#403).
+func TestDecodeResponsesResponseDropsNamelessFunctionCall(t *testing.T) {
+	raw := []byte(`{"output":[{"tYpe":"function_call"}]}`)
+	resp, err := DecodeResponsesResponse(raw)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	for _, b := range resp.Blocks {
+		if b.Type == PartToolCall {
+			t.Fatalf("RED: nameless function_call kept in IR: %+v", b.ToolCall)
+		}
+	}
+	if resp.StopReason == StopToolUse {
+		t.Fatalf("RED: nameless function_call drove stop_reason to tool_use")
+	}
+	enc, ok := encodeFuzzResponse(2, resp)
+	if !ok {
+		t.Fatal("encode declined")
+	}
+	resp2, ok := decodeFuzzResponse(2, enc)
+	if !ok {
+		t.Fatal("re-decode of encoder output failed")
+	}
+	if !responseEqualSansRaw(resp, resp2) {
+		t.Fatalf("round-trip unstable after fix:\n%s\n%s", mustFuzzJSON(t, resp), mustFuzzJSON(t, resp2))
+	}
+}
+
+// TestAnthropicStopSequenceRoundTrips is the minimized regression for the
+// latent defect found while fixing #447: EncodeAnthropicResponse downgraded
+// StopStopSequence to "max_tokens", so decode(encode(decode(x))) reported a
+// truncation that never happened. The encoder now emits the true reason.
+func TestAnthropicStopSequenceRoundTrips(t *testing.T) {
+	raw := []byte(`{"id":"m1","type":"message","role":"assistant","model":"m","content":[{"type":"text","text":"hi"}],"stop_reason":"stop_sequence","usage":{"input_tokens":1,"output_tokens":2}}`)
+	resp, err := DecodeAnthropicResponse(raw)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.StopReason != StopStopSequence {
+		t.Fatalf("decode lost stop_sequence: %q", resp.StopReason)
+	}
+	out := EncodeAnthropicResponse(resp, "m")
+	if out.StopReason == nil || *out.StopReason != StopStopSequence {
+		got := "<nil>"
+		if out.StopReason != nil {
+			got = *out.StopReason
+		}
+		t.Fatalf("RED: encoder rewrote stop_sequence to %q", got)
+	}
+	body := mustJSON(out)
+	resp2, err := DecodeAnthropicResponse(body)
+	if err != nil {
+		t.Fatalf("re-decode: %v", err)
+	}
+	if !responseEqualSansRaw(resp, resp2) {
+		t.Fatalf("round-trip unstable after fix: %q -> %q", resp.StopReason, resp2.StopReason)
+	}
+}
+
 func FuzzResponseRoundTrip(f *testing.F) {
 	f.Add(byte(0), []byte(`{"id":"msg_1","type":"message","role":"assistant","model":"m","content":[{"type":"text","text":"hello"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":2}}`))
 	f.Add(byte(1), []byte(`{"id":"chatcmpl-1","object":"chat.completion","created":1,"model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3}}`))
@@ -354,6 +419,12 @@ func FuzzResponseRoundTrip(f *testing.F) {
 	// (case-variant keys) that the Anthropic decoder kept while the encoder
 	// drops, breaking decode(encode(decode(x))) stability (thinking -> text).
 	f.Add(byte(0), []byte(`{"Content":[{"tYpe":"thinking"}]}`))
+	// Minimized regression seeds for the two further #447 instabilities
+	// fixed on this branch: a nameless function_call the Responses decoder
+	// kept while the encoder drops (codec 2), and a stop_sequence reason
+	// the Anthropic encoder downgraded to max_tokens (codec 0).
+	f.Add(byte(2), []byte(`{"output":[{"tYpe":"function_call"}]}`))
+	f.Add(byte(0), []byte(`{"id":"m1","type":"message","role":"assistant","model":"m","content":[{"type":"text","text":"hi"}],"stop_reason":"stop_sequence","usage":{"input_tokens":1,"output_tokens":2}}`))
 	// tool_use with an empty input object: the decoder must canonicalize to
 	// "{}", matching what the encoder's `input,omitempty` converges to
 	// (missing/null/{} shapes are indistinguishable on the wire).

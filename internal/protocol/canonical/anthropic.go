@@ -533,9 +533,13 @@ func EncodeAnthropicResponse(in Response, requestedModel string) core.AnthRespon
 	if stop == "" {
 		stop = StopEndTurn
 	}
-	if stop == StopStopSequence {
-		stop = StopMaxTokens // Anthropic reports stop_sequence only with a sequence value.
-	}
+	// StopStopSequence is emitted verbatim: downgrading it to max_tokens
+	// (as was done before) claims a truncation that never happened — a
+	// client may wrongly grow max_tokens and retry — and it breaks
+	// decode(encode(decode(x))) stability (FuzzResponseRoundTrip #447).
+	// The matched sequence value is not carried in the IR; a bare
+	// stop_sequence reason with a null sequence is the honest encoding,
+	// and it re-decodes to StopStopSequence.
 	content := make([]core.AnthContentBlock, 0, len(in.Blocks))
 	for _, b := range in.Blocks {
 		switch b.Type {
