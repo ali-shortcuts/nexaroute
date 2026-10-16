@@ -506,9 +506,19 @@ func DecodeResponsesResponse(b []byte) (Response, error) {
 			if item.Name == "" {
 				continue
 			}
+			// The response encoder normalizes empty/whitespace
+			// arguments to "{}", so the decoder keeps exactly that
+			// canonical form; otherwise decode(encode(decode(x)))
+			// drifts "" -> "{}" (#447, CI seed f3cf67c7e34a870b;
+			// mirroring the request decoder's normalization and
+			// anthToolInputArgs).
+			args := item.Arguments
+			if strings.TrimSpace(args) == "" {
+				args = "{}"
+			}
 			sawToolCall = true
 			out.Blocks = append(out.Blocks, Block{Type: PartToolCall, ToolCall: &ToolCall{
-				ID: item.CallID, Name: item.Name, Arguments: item.Arguments,
+				ID: item.CallID, Name: item.Name, Arguments: args,
 			}})
 		case "reasoning":
 			var sb strings.Builder
