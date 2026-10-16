@@ -43,7 +43,7 @@ type ResponsesTool struct {
 type ResponsesItem struct {
 	Type      string           `json:"type,omitempty"`
 	Role      string           `json:"role,omitempty"`
-	Content   []map[string]any `json:"content,omitempty"`
+	Content   json.RawMessage  `json:"content,omitempty"`
 	Name      string           `json:"name,omitempty"`    // function name on function_call
 	CallID    string           `json:"call_id,omitempty"` // function_call / function_call_output
 	Output    string           `json:"output,omitempty"`  // function_call_output payload
@@ -211,9 +211,26 @@ func decodeResponsesInput(raw json.RawMessage) ([]Part, []Message, error) {
 	return standalone, messages, nil
 }
 
-func responsesContentToParts(content []map[string]any) []Part {
-	parts := make([]Part, 0, len(content))
-	for _, c := range content {
+func responsesContentToParts(content json.RawMessage) []Part {
+	// The Responses API allows message content as a plain string or as an
+	// array of content objects; the gateway's own encoder emits the compact
+	// string form, so the decoder must accept both (round-trip stability).
+	if len(content) == 0 || string(content) == "null" {
+		return nil
+	}
+	var text string
+	if err := json.Unmarshal(content, &text); err == nil {
+		if text == "" {
+			return nil
+		}
+		return []Part{{Type: PartText, Text: text}}
+	}
+	var arr []map[string]any
+	if err := json.Unmarshal(content, &arr); err != nil {
+		return nil
+	}
+	parts := make([]Part, 0, len(arr))
+	for _, c := range arr {
 		typ, _ := c["type"].(string)
 		switch typ {
 		case "", "input_text", "output_text", "text":

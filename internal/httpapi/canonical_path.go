@@ -197,6 +197,11 @@ func (s *Server) canonicalStreamPump(
 		if done {
 			break
 		}
+		// Wave C-2 (#403): terminal state latched BEFORE this frame is
+		// decoded. Tool events from frames after the terminal point are
+		// dropped below: a hostile or buggy upstream must not inject
+		// tool calls after the stream ended.
+		frameTerminal := terminal
 		var evs []canonical.StreamEvent
 		switch kind {
 		case "anthropic":
@@ -240,6 +245,12 @@ func (s *Server) canonicalStreamPump(
 			deferClientEvent := false
 			if kind == "anthropic" && ev.Type == canonical.StreamEnd && terminal {
 				continue
+			}
+			if frameTerminal {
+				switch ev.Type {
+				case canonical.StreamToolStart, canonical.StreamToolDelta, canonical.StreamToolEnd:
+					continue
+				}
 			}
 			if kind == "anthropic" {
 				switch ev.Type {

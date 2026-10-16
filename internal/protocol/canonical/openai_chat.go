@@ -501,6 +501,15 @@ func DecodeOpenAIChatResponse(b []byte) (Response, error) {
 			out.Blocks = append(out.Blocks, Block{Type: PartThinking, Thinking: &Thinking{Text: c.Message.ReasoningContent}})
 		}
 		for _, tc := range c.Message.ToolCalls {
+			// A tool call without a function name is not dispatchable and
+			// no encoder emits it (EncodeOpenAIChatResponse drops
+			// nameless calls, as does the Anthropic request encoder).
+			// Dropping it here keeps phantom blocks from a hostile or
+			// buggy upstream out of the IR: decode(encode(decode(x)))
+			// would otherwise silently lose the block (#403).
+			if tc.Function.Name == "" {
+				continue
+			}
 			out.Blocks = append(out.Blocks, Block{Type: PartToolCall, ToolCall: &ToolCall{
 				ID: tc.ID, Name: tc.Function.Name, Arguments: tc.Function.Arguments,
 			}})

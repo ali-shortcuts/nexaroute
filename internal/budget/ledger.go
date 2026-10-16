@@ -2,6 +2,7 @@ package budget
 
 import (
 	"errors"
+	"math"
 	"sort"
 	"sync"
 )
@@ -62,7 +63,7 @@ func (l *Ledger) Reserve(id, key string, amount int64) (Reservation, error) {
 	if !ok {
 		return Reservation{}, ErrBudgetExceeded
 	}
-	if l.used[key]+l.reserved[key]+amount > limit.Amount {
+	if amount > remainingBudget(limit.Amount, l.used[key], l.reserved[key]) {
 		return Reservation{}, ErrBudgetExceeded
 	}
 	r := Reservation{ID: id, Key: key, Reserved: amount}
@@ -85,7 +86,7 @@ func (l *Ledger) Settle(id string, actual int64) ([]Alert, error) {
 		return nil, ErrReservationClosed
 	}
 	l.reserved[r.Key] -= r.Reserved
-	l.used[r.Key] += actual
+	l.used[r.Key] = saturatingAdd(l.used[r.Key], actual)
 	r.Settled = actual
 	r.Closed = true
 	l.reservations[id] = r
@@ -122,7 +123,7 @@ func (l *Ledger) alertsLocked(key string) []Alert {
 	used := l.used[key]
 	out := []Alert{}
 	for _, threshold := range []int{50, 80, 95, 100} {
-		if used*100 >= limit*int64(threshold) && !l.alerted[key][threshold] {
+		if thresholdReached(used, limit, threshold) && !l.alerted[key][threshold] {
 			if l.alerted[key] == nil {
 				l.alerted[key] = map[int]bool{}
 			}
@@ -132,4 +133,41 @@ func (l *Ledger) alertsLocked(key string) []Alert {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Threshold < out[j].Threshold })
 	return out
+}
+
+// remainingBudget returns limit-used-reserved, or -1 when used+reserved
+// already exceeds limit. All inputs are non-negative (ledger invariant),
+// so limit-used and the final subtraction cannot overflow; the two
+// comparisons detect the overflow cases without wrapping.
+func remainingBudget(limit, used, reserved int64) int64 {
+	if used > limit {
+		return -1
+	}
+	if reserved > limit-used {
+		return -1
+	}
+	return limit - used - reserved
+}
+
+// saturatingAdd adds two non-negative amounts, pinning at MaxInt64 instead
+// of wrapping negative. The ledger's "never negative" invariant depends on
+// it: a huge settle must not wrap used below zero.
+func saturatingAdd(a, b int64) int64 {
+	if b > 0 && a > math.MaxInt64-b {
+		return math.MaxInt64
+	}
+	return a + b
+}
+
+// thresholdReached reports used*100 >= limit*threshold without the
+// multiplication ever overflowing: used >= ceil(limit*threshold/100),
+// computed as q*threshold + ceil(r*threshold/100) with limit = 100*q + r.
+// q <= MaxInt64/100 so q*threshold cannot overflow for threshold <= 100.
+func thresholdReached(used, limit int64, threshold int) bool {
+	q, r := limit/100, limit%100
+	need := q*int64(threshold) + r*int64(threshold)/100
+	if r*int64(threshold)%100 != 0 {
+		need++
+	}
+	return used >= need
 }
