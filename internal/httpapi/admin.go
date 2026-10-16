@@ -456,6 +456,16 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 			"probe":    probeCfg,
 			"routing":  routingCfg,
 			"decision": decisionCfg,
+			// UI-F1/F2 (#429): the Policies views read guardrails and
+			// decision_policies from the snapshot; both config structs
+			// serialize with exactly the field names the UI consumes.
+			"guardrails":        cfgFull.Guardrails,
+			"decision_policies": cfgFull.DecisionPolicies,
+			// UI-F3/F4 (#429): the Playground prices deployments and
+			// applies no-training exclusions from config.providers; the
+			// shape is built explicitly (model id + costs, data
+			// handling) so no credential field can ever ride along.
+			"providers": snapshotConfigProviders(cfgFull.Providers),
 		},
 	})
 }
@@ -904,6 +914,32 @@ func (s *Server) adminProviderDiscover(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{"ok": true, "status_code": status, "models": models})
+}
+
+// snapshotConfigProviders builds the minimal provider shape the admin
+// Playground consumes from the snapshot's config section (#429): the
+// provider id, its data-handling declaration, and per-model pricing
+// keyed by the upstream model name (the UI matches models on "id").
+// Deliberately excludes every other ProviderConfig field so credentials
+// and headers can never leak through the snapshot.
+func snapshotConfigProviders(providers []config.ProviderConfig) []map[string]any {
+	out := make([]map[string]any, 0, len(providers))
+	for _, p := range providers {
+		models := make([]map[string]any, 0, len(p.Models))
+		for _, m := range p.Models {
+			models = append(models, map[string]any{
+				"id":                   m.Model,
+				"input_cost_per_mtok":  m.InputCostPerMTok,
+				"output_cost_per_mtok": m.OutputCostPerMTok,
+			})
+		}
+		out = append(out, map[string]any{
+			"id":            p.ID,
+			"data_handling": p.DataHandling,
+			"models":        models,
+		})
+	}
+	return out
 }
 
 func providerSummary(p config.ProviderConfig) map[string]any {
