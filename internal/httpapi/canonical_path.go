@@ -197,6 +197,11 @@ func (s *Server) canonicalStreamPump(
 		if done {
 			break
 		}
+		// Wave C-2 (#403): terminal state latched BEFORE this frame is
+		// decoded. Tool events from frames after the terminal point are
+		// dropped below: a hostile or buggy upstream must not inject
+		// tool calls after the stream ended.
+		frameTerminal := terminal
 		var evs []canonical.StreamEvent
 		switch kind {
 		case "anthropic":
@@ -240,6 +245,12 @@ func (s *Server) canonicalStreamPump(
 			deferClientEvent := false
 			if kind == "anthropic" && ev.Type == canonical.StreamEnd && terminal {
 				continue
+			}
+			if frameTerminal {
+				switch ev.Type {
+				case canonical.StreamToolStart, canonical.StreamToolDelta, canonical.StreamToolEnd:
+					continue
+				}
 			}
 			if kind == "anthropic" {
 				switch ev.Type {
@@ -482,6 +493,10 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 	req = s.applyPrivacyRequirement(req, r)
 	cfg, candidates, resolvedRoute, resolveErr := s.candidatesForRequirement(req, "openai_responses")
 	if resolveErr != nil {
+		// Gateway-side rejection before any upstream attempt: the
+		// admission budget hold must be released, not left to expire
+		// into a committed charge 15 minutes later (Wave C-4).
+		s.budgetRelease(r)
 		if strings.Contains(resolveErr.Error(), "disabled") {
 			canonicalErrorJSON(w, "openai_responses", http.StatusNotFound, "invalid_request_error", resolveErr.Error())
 		} else {
@@ -491,10 +506,14 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 	}
 	s.emitTaskClassified(r.Header.Get("x-request-id"), ti, resolvedRoute)
 	if len(candidates) == 0 {
+		// Gateway-side rejection before any upstream attempt: release
+		// the admission budget hold (Wave C-4).
 		if s.isPrivacyUnavailable(req, "openai_responses", resolvedRoute, r.Header.Get("x-request-id")) {
+			s.budgetRelease(r)
 			responsesPrivacyUnavailable(w)
 			return
 		}
+		s.budgetRelease(r)
 		canonicalErrorJSON(w, "openai_responses", http.StatusServiceUnavailable, "server_error", "no compatible healthy deployment")
 		return
 	}

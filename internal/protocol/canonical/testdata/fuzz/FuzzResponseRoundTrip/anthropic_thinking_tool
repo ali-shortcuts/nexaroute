@@ -1,0 +1,3 @@
+go test fuzz v1
+byte('\x00')
+[]byte("{\"id\":\"msg_9\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-x\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"let me think\",\"signature\":\"sig9\"},{\"type\":\"text\",\"text\":\"done\"},{\"type\":\"tool_use\",\"id\":\"toolu_9\",\"name\":\"bash\",\"input\":{\"command\":\"ls\"}}],\"stop_reason\":\"tool_use\",\"usage\":{\"input_tokens\":40,\"output_tokens\":9,\"cache_read_input_tokens\":40}}")

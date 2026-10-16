@@ -1,0 +1,3 @@
+go test fuzz v1
+byte('\x04')
+[]byte("data: {\"eventType\":\"messageStart\",\"payload\":{\"role\":\"assistant\"}}\n\ndata: {\"eventType\":\"contentBlockDelta\",\"payload\":{\"contentBlockIndex\":0,\"delta\":{\"text\":\"Hi \"}}}\n\ndata: {\"eventType\":\"contentBlockDelta\",\"payload\":{\"contentBlockIndex\":0,\"delta\":{\"text\":\"there\"}}}\n\ndata: {\"eventType\":\"contentBlockStop\",\"payload\":{\"contentBlockIndex\":0}}\n\ndata: {\"eventType\":\"messageStop\",\"payload\":{\"stopReason\":\"end_turn\"}}\n\ndata: {\"eventType\":\"metadata\",\"payload\":{\"usage\":{\"inputTokens\":8,\"outputTokens\":4},\"metrics\":{\"latencyMs\":11}}}\n\n")

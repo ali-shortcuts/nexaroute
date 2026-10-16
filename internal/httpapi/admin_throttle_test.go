@@ -43,13 +43,17 @@ func TestAdminFailedAuthAttemptsAreThrottledPerIP(t *testing.T) {
 	if rr := adminThrottleRequest(s, "127.0.0.1", "wrong-key"); rr.Code != http.StatusUnauthorized {
 		t.Fatalf("first failed attempt status=%d want 401 body=%s", rr.Code, rr.Body.String())
 	}
-	// Second failed attempt: throttled.
+	// Second failed attempt: throttled — but F11 (issue #425) requires the
+	// response to be UNIFORM with a plain failed attempt, so the
+	// 401-vs-429 difference cannot be used as an auth-recency oracle
+	// for this source address. The request is still dropped before any
+	// authentication work happens.
 	rr := adminThrottleRequest(s, "127.0.0.1", "wrong-key")
-	if rr.Code != http.StatusTooManyRequests {
-		t.Fatalf("second failed attempt status=%d want 429 body=%s", rr.Code, rr.Body.String())
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("second failed attempt status=%d want 401 (uniform with first) body=%s", rr.Code, rr.Body.String())
 	}
-	if !strings.Contains(rr.Body.String(), "admin rate limit exceeded") {
-		t.Fatalf("throttle response should name the admin rate limit: %s", rr.Body.String())
+	if !strings.Contains(rr.Body.String(), "admin authentication required") {
+		t.Fatalf("throttled unauthenticated response should match a plain failed attempt: %s", rr.Body.String())
 	}
 	// Even the correct key from the drained address is briefly
 	// throttled (the failure cost is charged before credentials are
