@@ -671,6 +671,54 @@ func TestDecodeRequestsDropNamelessToolCalls(t *testing.T) {
 	}
 }
 
+// TestDecodeOpenAIChatRequestDropsSystemImage is the minimized regression
+// for the defect FuzzRequestRoundTrip found on PR #451's head (CI run
+// 38866096681, seed 858e6836af94573a): the chat decoder kept an image part
+// in a system message, but system content is text-only in every request
+// encoder here, so encode dropped it and the system prompt vanished on
+// the hop. The decoder now drops system images at the boundary (unknown
+// system part types were already dropped). System text and user images
+// must survive.
+func TestDecodeOpenAIChatRequestDropsSystemImage(t *testing.T) {
+	raw := []byte(`{"model":"m","messages":[{"role":"system","content":[{"type":"image_url","image_url":{"url":"0"}},{"type":"text","text":"be terse"}]},{"role":"user","content":[{"type":"image_url","image_url":{"url":"u1"}},{"type":"text","text":"hi"}]}]}`)
+	req, ok := decodeFuzzRequest(1, raw)
+	if !ok {
+		t.Fatal("decode declined")
+	}
+	for _, p := range req.System {
+		if p.Type == PartImage {
+			t.Fatalf("RED: system image kept in IR: %+v", p.Image)
+		}
+	}
+	if len(req.System) != 1 || req.System[0].Text != "be terse" {
+		t.Fatalf("system text lost or altered: %+v", req.System)
+	}
+	userImages := 0
+	for _, m := range req.Messages {
+		for _, p := range m.Parts {
+			if p.Type == PartImage {
+				userImages++
+			}
+		}
+	}
+	if userImages != 1 {
+		t.Fatalf("user image must survive decode, got %d", userImages)
+	}
+	enc, ok := encodeFuzzRequest(1, req)
+	if !ok {
+		t.Fatal("encode declined")
+	}
+	req2, ok := decodeFuzzRequest(1, enc)
+	if !ok {
+		t.Fatal("re-decode of encoder output failed")
+	}
+	a, _ := json.Marshal(normalizeRequest(1, req))
+	b, _ := json.Marshal(normalizeRequest(1, req2))
+	if !bytes.Equal(a, b) {
+		t.Fatalf("request round-trip unstable after fix:\n%s\n%s", a, b)
+	}
+}
+
 func FuzzRequestRoundTrip(f *testing.F) {
 	f.Add(byte(0), []byte(`{"model":"m","max_tokens":8,"messages":[{"role":"user","content":"hi"}]}`))
 	f.Add(byte(1), []byte(`{"model":"m","messages":[{"role":"user","content":"hi"}]}`))
@@ -679,6 +727,11 @@ func FuzzRequestRoundTrip(f *testing.F) {
 	// nameless Responses function_call input item whose assistant
 	// message vanished on re-encode.
 	f.Add(byte(2), []byte(`{"model":"m","input":[{"type":"function_call","call_id":"c1","name":"","arguments":"{}"}]}`))
+	// A system message carrying an image: system content is text-only in
+	// every request encoder, so the chat decoder must drop the image at
+	// the boundary or the system prompt vanishes on the hop (#447, CI
+	// seed 858e6836af94573a).
+	f.Add(byte(1), []byte(`{"model":"m","messages":[{"role":"system","content":[{"type":"image_url","image_url":{"url":"0"}}]},{"role":"user","content":"hi"}]}`))
 	f.Add(byte(2), []byte(`{"model":"m","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}]}`))
 	f.Fuzz(func(t *testing.T, codecByte byte, raw []byte) {
 		codec := int(codecByte) % 3
