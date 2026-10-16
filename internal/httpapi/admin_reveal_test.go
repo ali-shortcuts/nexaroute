@@ -52,8 +52,8 @@ func TestRevealSecretReturnsKeyAndGetStaysMasked(t *testing.T) {
 		t.Fatalf("GET exposed a full key: %s", rr.Body.String())
 	}
 	got := revealDecode(t, rr)
-	if got["api_key_preview"] != "REVEAL…abcd" {
-		t.Fatalf("api_key_preview = %v, want REVEAL…abcd", got["api_key_preview"])
+	if got["api_key_preview"] != maskedPlaceholder {
+		t.Fatalf("api_key_preview = %v, want an opaque mask", got["api_key_preview"])
 	}
 	if got["reveal_allowed"] != true {
 		t.Fatalf("reveal_allowed = %v, want true on a loopback listener", got["reveal_allowed"])
@@ -110,7 +110,7 @@ func TestRevealSecretPoolEntriesByIndex(t *testing.T) {
 		t.Fatalf("credentials_meta has %d entries, want 2: %s", len(meta), get.Body.String())
 	}
 	second, _ := meta[1].(map[string]any)
-	if second["preview"] != "POOL_C…bbbb" || second["source"] != "literal" {
+	if second["preview"] != maskedPlaceholder || second["source"] != "literal" {
 		t.Fatalf("unexpected pool metadata: %v", second)
 	}
 }
@@ -221,8 +221,8 @@ func TestSecretPreviewNeverExposesMostOfAShortKey(t *testing.T) {
 		"":                                  "",
 		"short":                             maskedPlaceholder,
 		"elevenchars":                       maskedPlaceholder,
-		"twelve_chars":                      "tw…rs",
-		"sk-abcdefghijklmnopqrstuvwxyz1234": "sk-abc…1234",
+		"twelve_chars":                      maskedPlaceholder,
+		"sk-abcdefghijklmnopqrstuvwxyz1234": maskedPlaceholder,
 	}
 	for in, want := range cases {
 		if got := secretPreview(in); got != want {
