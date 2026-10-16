@@ -163,6 +163,14 @@ func decodeAnthropicContent(raw json.RawMessage) ([]Part, error) {
 			}
 			parts = append(parts, Part{Type: PartImage, Image: img})
 		case "tool_use":
+			// Nameless tool_use blocks are dropped at decode: the
+			// Anthropic request encoder never emits them (it skips
+			// nameless PartToolCall parts), so keeping one breaks
+			// decode(encode(decode(x))) symmetry (#447, same class as
+			// the OpenAI nameless drops in #403).
+			if m.Name == "" {
+				continue
+			}
 			parts = append(parts, Part{Type: PartToolCall, ToolCall: &ToolCall{ID: m.ID, Name: m.Name, Arguments: anthToolInputArgs(m.Input)}, CacheControl: anthCacheValue(m.CacheControl)})
 		case "tool_result":
 			parts = append(parts, Part{Type: PartToolResult, ToolResult: &ToolResult{

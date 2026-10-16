@@ -193,6 +193,16 @@ func decodeResponsesInput(raw json.RawMessage) ([]Part, []Message, error) {
 				messages = append(messages, Message{Role: role, Parts: parts})
 			}
 		case "function_call":
+			// A nameless function_call is not dispatchable and no encoder
+			// emits it (EncodeResponsesRequest drops nameless calls), so
+			// the decoder drops it here: keeping it would let the whole
+			// assistant message vanish on re-encode, breaking
+			// decode(encode(decode(x))) stability (FuzzRequestRoundTrip
+			// CI seed 5d2d966a922a3918, #447). Mirrors the nameless drops
+			// in the OpenAI-chat decoders (#403).
+			if item.Name == "" {
+				continue
+			}
 			messages = append(messages, Message{Role: RoleAssistant, Parts: []Part{{
 				Type:     PartToolCall,
 				ToolCall: &ToolCall{ID: item.CallID, Name: item.Name, Arguments: item.Arguments},

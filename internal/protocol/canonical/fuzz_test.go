@@ -610,9 +610,69 @@ func mustFuzzJSON(t *testing.T, v any) string {
 	return string(b)
 }
 
+// TestDecodeRequestsDropNamelessToolCalls is the minimized regression for
+// the request-side twin of the #447 nameless-call asymmetry: all three
+// request decoders kept nameless tool calls that their encoders drop, so
+// the assistant message carrying one vanished on re-encode (CI failure on
+// PR #448 head 66cc47e, run 38862152078, FuzzRequestRoundTrip seed
+// 5d2d966a922a3918 — codec 2). Each decoder now drops exactly what its
+// encoder cannot emit, mirroring the response-side drops (#403/#447).
+func TestDecodeRequestsDropNamelessToolCalls(t *testing.T) {
+	cases := []struct {
+		name  string
+		codec int
+		raw   string
+	}{
+		{"responses", 2, `{"model":"m","input":[{"type":"function_call","call_id":"c1","name":"","arguments":"{}"}]}`},
+		{"chat", 1, `{"model":"m","messages":[{"role":"assistant","tool_calls":[{"id":"x","type":"function","function":{}}]}]}`},
+		{"anthropic", 0, `{"model":"m","max_tokens":8,"messages":[{"role":"assistant","content":[{"type":"tool_use","id":"x","input":{}}]}]}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req, ok := decodeFuzzRequest(tc.codec, []byte(tc.raw))
+			if !ok {
+				t.Fatal("decode failed")
+			}
+			for _, m := range req.Messages {
+				for _, p := range m.Parts {
+					if p.Type == PartToolCall {
+						t.Fatalf("RED: nameless tool call kept in IR: %+v", p.ToolCall)
+					}
+				}
+			}
+			enc, ok := encodeFuzzRequest(tc.codec, req)
+			if !ok {
+				t.Fatal("encode declined")
+			}
+			req2, ok := decodeFuzzRequest(tc.codec, enc)
+			if !ok {
+				t.Fatal("re-decode failed")
+			}
+			a, _ := json.Marshal(normalizeRequest(tc.codec, req))
+			b, _ := json.Marshal(normalizeRequest(tc.codec, req2))
+			if string(a) != string(b) {
+				t.Fatalf("request round-trip unstable:\nfirst:  %s\nsecond: %s", a, b)
+			}
+		})
+	}
+	// A named Responses function_call must survive verbatim.
+	req, ok := decodeFuzzRequest(2, []byte(`{"model":"m","input":[{"type":"function_call","call_id":"c1","name":"lookup","arguments":"{}"}]}`))
+	if !ok {
+		t.Fatal("named decode failed")
+	}
+	if len(req.Messages) != 1 || len(req.Messages[0].Parts) != 1 || req.Messages[0].Parts[0].ToolCall == nil || req.Messages[0].Parts[0].ToolCall.Name != "lookup" {
+		t.Fatalf("named function_call lost or altered: %+v", req.Messages)
+	}
+}
+
 func FuzzRequestRoundTrip(f *testing.F) {
 	f.Add(byte(0), []byte(`{"model":"m","max_tokens":8,"messages":[{"role":"user","content":"hi"}]}`))
 	f.Add(byte(1), []byte(`{"model":"m","messages":[{"role":"user","content":"hi"}]}`))
+	// Minimized regression seed for the CI failure on PR #448 head
+	// 66cc47e (testdata/fuzz/FuzzRequestRoundTrip/5d2d966a922a3918): a
+	// nameless Responses function_call input item whose assistant
+	// message vanished on re-encode.
+	f.Add(byte(2), []byte(`{"model":"m","input":[{"type":"function_call","call_id":"c1","name":"","arguments":"{}"}]}`))
 	f.Add(byte(2), []byte(`{"model":"m","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}]}`))
 	f.Fuzz(func(t *testing.T, codecByte byte, raw []byte) {
 		codec := int(codecByte) % 3
