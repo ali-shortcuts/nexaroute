@@ -926,6 +926,41 @@ func canonicalToolSchema(raw json.RawMessage) json.RawMessage {
 // normalizes empty/whitespace arguments to "{}", so
 // decode(encode(decode(x))) drifted "" -> "{}". The decoder now keeps exactly
 // what the encoder converges to, mirroring anthToolInputArgs (#447).
+// TestDecodeResponsesResponseCanonicalizesEmptyArgs was contributed by
+// PR #451 (commit 5b6ea2d) and folded into this branch when #451 was closed
+// as superseded: it is the unit-level regression for the empty-arguments
+// half of the post-#448 drift, complementing the fuzz seeds above.
+func TestDecodeResponsesResponseCanonicalizesEmptyArgs(t *testing.T) {
+	resp, err := DecodeResponsesResponse([]byte(`{"output":[{"tYpe":"function_call","nAme":"\b"}]}`))
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Blocks) != 1 || resp.Blocks[0].ToolCall == nil {
+		t.Fatalf("named function_call lost: %+v", resp.Blocks)
+	}
+	if got := resp.Blocks[0].ToolCall.Arguments; got != "{}" {
+		t.Fatalf("RED: empty arguments not canonicalized, args=%q", got)
+	}
+	enc, ok := encodeFuzzResponse(2, resp)
+	if !ok {
+		t.Fatal("encode declined")
+	}
+	resp2, ok := decodeFuzzResponse(2, enc)
+	if !ok {
+		t.Fatal("re-decode of encoder output failed")
+	}
+	if !responseEqualSansRaw(resp, resp2) {
+		t.Fatalf("round-trip unstable after fix:\n%s\n%s", mustFuzzJSON(t, resp), mustFuzzJSON(t, resp2))
+	}
+	named, err := DecodeResponsesResponse([]byte(`{"output":[{"type":"function_call","call_id":"c","name":"f","arguments":"{\"a\":1}"}]}`))
+	if err != nil {
+		t.Fatalf("non-empty decode: %v", err)
+	}
+	if got := named.Blocks[0].ToolCall.Arguments; got != `{"a":1}` {
+		t.Fatalf("non-empty arguments altered: args=%q", got)
+	}
+}
+
 func TestDecodeResponsesRequestNormalizesEmptyArgs(t *testing.T) {
 	for _, tc := range []struct{ args, wire string }{
 		{"", `""`},
