@@ -580,12 +580,16 @@ func deliverBudgetAlert(ctx context.Context, payload BudgetAlertPayload, webhook
 	if timeout <= 0 {
 		timeout = 5 * time.Second
 	}
+	// Shared cross-origin refusal (audit #371 F7): the payload must never
+	// be delivered to a different origin through an automatic redirect.
+	// Same-origin redirects keep the pre-existing scheme discipline below.
+	redirectGuard := egress.RefuseCrossOriginRedirects(5, "budget webhook")
 	client := &http.Client{
 		Transport: tr,
 		Timeout:   timeout,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 5 {
-				return fmt.Errorf("budget webhook: stopped after 5 redirects")
+			if err := redirectGuard(req, via); err != nil {
+				return err
 			}
 			target := req.URL.String()
 			u, perr := url.Parse(target)

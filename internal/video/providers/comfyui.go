@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ali-shortcuts/nexaroute/internal/egress"
 	"github.com/ali-shortcuts/nexaroute/internal/video"
 )
 
@@ -107,6 +108,21 @@ func NewComfyUI(cfg video.Config, maxOutputBytes int64) (*ComfyUI, error) {
 	if maxOutputBytes <= 0 {
 		maxOutputBytes = comfyDefaultMaxOutput
 	}
+	// Audit #371 F8: the client must route through the egress-guarded
+	// transport. Dials are pinned to the configured base host and every
+	// resolved address passes the deny lists and the special-purpose IP
+	// blocklist — https://169.254.169.254/ as comfyui_base_url is refused
+	// by the policy (at construction, before any dial) instead of being
+	// dialed. Loopback stays reachable: ComfyUI is a self-hosted
+	// operator tool and commonly runs on loopback; link-local, private
+	// and other special-purpose addresses stay blocked regardless.
+	tr, err := egress.Policy{
+		AllowedHosts:  []string{u.Hostname()},
+		AllowLoopback: true,
+	}.NewTransport(base, "")
+	if err != nil {
+		return nil, fmt.Errorf("ComfyUI egress policy: %w", err)
+	}
 	p := &ComfyUI{
 		baseURL:        base,
 		workflow:       workflow,
@@ -114,16 +130,9 @@ func NewComfyUI(cfg video.Config, maxOutputBytes int64) (*ComfyUI, error) {
 		maxDuration:    maxDuration,
 		maxOutputBytes: maxOutputBytes,
 		client: &http.Client{
-			Timeout: 5 * time.Minute,
-			CheckRedirect: func(req *http.Request, via []*http.Request) error {
-				if len(via) >= 5 {
-					return errors.New("too many ComfyUI redirects")
-				}
-				if !strings.EqualFold(req.URL.Scheme, u.Scheme) || !strings.EqualFold(req.URL.Host, u.Host) {
-					return http.ErrUseLastResponse
-				}
-				return nil
-			},
+			Transport:     tr,
+			Timeout:       5 * time.Minute,
+			CheckRedirect: egress.RefuseCrossOriginRedirects(5, "comfyui"),
 		},
 		cfg:           cfg,
 		promptInput:   defaultInput(cfg.ComfyUIPromptInput, "text"),
