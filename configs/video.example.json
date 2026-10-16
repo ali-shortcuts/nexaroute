@@ -29,6 +29,14 @@
     "comfyui_seed_input": "noise_seed",
     "piper_enabled": false,
     "piper_binary": "piper",
-    "piper_model_path": "models/voice.onnx"
+    "piper_model_path": "models/voice.onnx",
+    "code_render_enabled": false,
+    "code_render_planner_base_url": "",
+    "code_render_planner_api_key_env": "",
+    "code_render_planner_model": "",
+    "code_render_planner_models": [],
+    "code_render_planner_json_mode": false,
+    "code_render_max_duration_seconds": 120,
+    "code_render_work_root": ""
   }
 }

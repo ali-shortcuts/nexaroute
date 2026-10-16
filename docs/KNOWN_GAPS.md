@@ -120,6 +120,20 @@ configured local asset sink and must include a URI, non-zero size, and SHA-256
 metadata before jobs are marked complete. Cost-estimation failures or malformed
 estimates are rejected before admission.
 
+The opt-in `code-render` provider (Universal AI-to-Video, Tier A) lets any
+configured text/coding model author a validated declarative plan that a
+deterministic local FFmpeg renderer executes into a real MP4 (animated text,
+charts, diagrams, motion graphics; optional local Piper narration and
+burned-in SRT captions). Its boundaries are explicit: it is programmatic
+rendering, not native generative video — photoreal footage still requires a
+specialist video model; reference/first/last-frame assets, dialogue, music
+generation, and image elements are rejected rather than silently ignored;
+the planning model's token cost is metered by the gateway data plane, not
+the video ledger; QC is deterministic (ffprobe + blank-frame checks) with no
+vision-model verdict and no automatic plan repair after a QC failure yet;
+and live planning through a real external model is UNVERIFIED until run
+with an operator's configured model (CI uses a scripted planner).
+
 No commercial external video provider adapter is bundled. The opt-in local
 ComfyUI adapter supports text-to-video through a user-supplied API-format
 workflow; its HTTP contract is covered by fixtures, but actual model inference

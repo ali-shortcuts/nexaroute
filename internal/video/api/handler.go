@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/ali-shortcuts/nexaroute/internal/video"
+	"github.com/ali-shortcuts/nexaroute/internal/video/agent"
 	"github.com/ali-shortcuts/nexaroute/internal/video/orchestrator"
 	"github.com/ali-shortcuts/nexaroute/internal/video/queue"
 )
@@ -25,6 +26,12 @@ type Handler struct {
 	Assets      video.AssetSink
 	RequireAuth bool
 	BearerToken string
+	// Universal, when set, enables POST /v1/video/universal/plan: plan
+	// generation with any configured text/coding model for review-first
+	// workflows in Video Studio. Nil disables the endpoint (404 via the
+	// generic route handling, reported as video_unavailable).
+	Universal            *agent.Agent
+	UniversalMaxDuration float64
 }
 
 func (h *Handler) authorized(r *http.Request) bool {
@@ -51,6 +58,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.Method == http.MethodGet && r.URL.Path == "/v1/video/providers" {
 		h.providers(w, r)
+		return
+	}
+	if r.Method == http.MethodPost && r.URL.Path == "/v1/video/universal/plan" {
+		h.universalPlan(w, r)
 		return
 	}
 	parts, ok := requestPathParts(r)
@@ -205,9 +216,10 @@ func (h *Handler) getAsset(w http.ResponseWriter, r *http.Request, jobID, assetI
 	http.ServeContent(w, r, filename, time.Time{}, file)
 }
 
-func (h *Handler) providers(w http.ResponseWriter, _ *http.Request) {
+func (h *Handler) providers(w http.ResponseWriter, r *http.Request) {
 	type item struct {
-		ID string `json:"id"`
+		ID           string              `json:"id"`
+		Capabilities *video.Capabilities `json:"capabilities,omitempty"`
 	}
 	out := []item{}
 	if reg, ok := h.Providers.(orchestrator.Registry); ok {
@@ -217,10 +229,72 @@ func (h *Handler) providers(w http.ResponseWriter, _ *http.Request) {
 		}
 		sort.Strings(ids)
 		for _, id := range ids {
-			out = append(out, item{ID: id})
+			entry := item{ID: id}
+			if caps, err := reg[id].Capabilities(r.Context()); err == nil {
+				c := caps
+				entry.Capabilities = &c
+			}
+			out = append(out, entry)
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"providers": out})
+}
+
+// universalPlanRequest is the body of POST /v1/video/universal/plan.
+type universalPlanRequest struct {
+	Prompt          string  `json:"prompt"`
+	Model           string  `json:"model"`
+	DurationSeconds float64 `json:"duration_seconds,omitempty"`
+	AspectRatio     string  `json:"aspect_ratio,omitempty"`
+	Width           int     `json:"width,omitempty"`
+	Height          int     `json:"height,omitempty"`
+	FPS             int     `json:"fps,omitempty"`
+	Language        string  `json:"language,omitempty"`
+}
+
+// universalPlan generates (but does not execute) a validated video plan
+// with the requested configured text/coding model, so Video Studio users
+// can review and edit the plan before submitting it as a job.
+func (h *Handler) universalPlan(w http.ResponseWriter, r *http.Request) {
+	if h.Universal == nil {
+		writeError(w, http.StatusServiceUnavailable, "video_unavailable", "universal video planning is not configured", true)
+		return
+	}
+	defer r.Body.Close()
+	var req universalPlanRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_json", "request body is not valid JSON", false)
+		return
+	}
+	if strings.TrimSpace(req.Prompt) == "" || strings.TrimSpace(req.Model) == "" {
+		writeError(w, http.StatusBadRequest, "invalid_plan_request", "prompt and model are required", false)
+		return
+	}
+	width, height := req.Width, req.Height
+	if width == 0 && height == 0 {
+		switch req.AspectRatio {
+		case "9:16":
+			width, height = 720, 1280
+		case "1:1":
+			width, height = 960, 960
+		default:
+			width, height = 1280, 720
+		}
+	}
+	res, err := h.Universal.GeneratePlan(r.Context(), agent.Request{
+		Brief: req.Prompt, Model: req.Model, DurationSeconds: req.DurationSeconds,
+		Width: width, Height: height, FPS: req.FPS, AspectRatio: req.AspectRatio,
+		Language: req.Language, MaxDuration: h.UniversalMaxDuration,
+	})
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "plan_failed", err.Error(), true)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"plan": res.Plan, "model": res.Model, "attempts": res.Attempts,
+		"creation_mode": "programmatic",
+		"notice":        "This plan was authored by a text/coding model and will be executed by NexaRoute's deterministic renderer. It is not native generative video.",
+	})
 }
 
 func publicJob(job video.VideoJob) video.VideoJob {

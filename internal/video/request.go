@@ -50,11 +50,21 @@ type VideoRequest struct {
 	NarrationText       string             `json:"narration_text,omitempty"`
 	SubtitleLanguage    string             `json:"subtitle_language,omitempty"`
 	OutputFormat        string             `json:"output_format,omitempty"`
-	CallbackURL         string             `json:"callback_url,omitempty"`
-	IdempotencyKey      string             `json:"idempotency_key,omitempty"`
-	MaxCostUSD          float64            `json:"max_cost_usd,omitempty"`
-	DryRun              bool               `json:"dry_run,omitempty"`
-	Priority            Priority           `json:"priority,omitempty"`
+	// CreationMode is additive metadata for the Universal AI-to-Video
+	// engine: "", "auto", "programmatic", "native", or "hybrid". Providers
+	// that cannot honor the requested mode must reject the request
+	// explicitly instead of silently substituting another mode.
+	CreationMode string `json:"creation_mode,omitempty"`
+	// VideoPlan is an optional, client-supplied declarative plan (schema
+	// video-plan.v1) for review-first workflows. Providers that use it
+	// must validate it exactly like model-generated output. Server-owned:
+	// orchestrator checkpoints inside a plan are never trusted.
+	VideoPlan      *Plan    `json:"video_plan,omitempty"`
+	CallbackURL    string   `json:"callback_url,omitempty"`
+	IdempotencyKey string   `json:"idempotency_key,omitempty"`
+	MaxCostUSD     float64  `json:"max_cost_usd,omitempty"`
+	DryRun         bool     `json:"dry_run,omitempty"`
+	Priority       Priority `json:"priority,omitempty"`
 }
 
 func (r VideoRequest) Normalized() VideoRequest {

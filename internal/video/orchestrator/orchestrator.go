@@ -121,10 +121,22 @@ func (o *Orchestrator) Create(ctx context.Context, r video.VideoRequest) (video.
 	if o.Store == nil || o.Queue == nil || o.Providers == nil {
 		return video.VideoJob{}, errors.New("video orchestrator is not fully configured")
 	}
-	if strings.TrimSpace(r.SubtitleLanguage) != "" && strings.TrimSpace(r.NarrationText) == "" {
+	// A provider that handles narration itself (for example code-render,
+	// which composes Piper narration inside its own render pipeline) is
+	// exempt from the multi-shot Gateway narration gate; it validates
+	// narration support in its own ValidateRequest instead.
+	providerHandlesNarration := false
+	if o.Providers != nil && strings.TrimSpace(r.ProviderPreference) != "" {
+		if p, ok := o.Providers.Get(r.ProviderPreference); ok {
+			if hn, ok := p.(interface{ HandlesNarration() bool }); ok && hn.HandlesNarration() {
+				providerHandlesNarration = true
+			}
+		}
+	}
+	if strings.TrimSpace(r.SubtitleLanguage) != "" && strings.TrimSpace(r.NarrationText) == "" && !providerHandlesNarration {
 		return video.VideoJob{}, errors.New("subtitle_language requires narration_text or per-shot narration_segment values")
 	}
-	if strings.TrimSpace(r.NarrationText) != "" {
+	if strings.TrimSpace(r.NarrationText) != "" && !providerHandlesNarration {
 		if len(r.ShotPlan) < 2 {
 			return video.VideoJob{}, errors.New("Gateway narration requires a multi-shot episode with at least two shots")
 		}
@@ -317,13 +329,18 @@ func mergeUsage(dst, src map[string]string) map[string]string {
 	if len(src) == 0 {
 		return dst
 	}
-	if dst == nil {
-		dst = make(map[string]string, len(src))
+	// Never mutate dst in place: job stores may hand out shallow copies
+	// that share this map with concurrent readers (for example the API
+	// handler JSON-encoding a job while a worker merges provider usage).
+	// Merging into a fresh map keeps those readers race-free.
+	out := make(map[string]string, len(dst)+len(src))
+	for k, v := range dst {
+		out[k] = v
 	}
 	for k, v := range src {
-		dst[k] = v
+		out[k] = v
 	}
-	return dst
+	return out
 }
 
 // validActualCost reports whether a provider-reported actual is billable.
