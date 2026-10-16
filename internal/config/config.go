@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ali-shortcuts/nexaroute/internal/egress"
 	"github.com/ali-shortcuts/nexaroute/internal/secrets"
 )
 
@@ -2152,6 +2153,9 @@ func (c Config) Validate() error {
 			if err := validateEndpointURL(p.ProxyURL, fmt.Sprintf("provider %q proxy_url", p.ID), true); err != nil {
 				return err
 			}
+			if reason := c.proxyEgressViolation(p); reason != "" {
+				return fmt.Errorf("provider %q proxy_url %s", p.ID, reason)
+			}
 		}
 		if p.AuthMode != "" && p.AuthMode != "bearer" && p.AuthMode != "x-api-key" && p.AuthMode != "x-goog-api-key" && p.AuthMode != "api-key" && p.AuthMode != "none" {
 			return fmt.Errorf("provider %q has unsupported auth_mode %q", p.ID, p.AuthMode)
@@ -2979,6 +2983,54 @@ func (p ProviderConfig) EgressAllowCIDRs() []string { return p.resolvedEgressAll
 // credentials. Userinfo in a base/proxy URL is both surprising to operators
 // and easy to leak through logs or copied configuration, so reject it at the
 // control-plane boundary instead of relying on downstream redaction.
+// proxyEgressViolation reports why a provider proxy_url is forbidden by the
+// egress policy, or "" if it is allowed (#427, audit F6). The proxy receives
+// every provider request with its API key, so it is held to the same deny
+// lists as a base_url: operator-denied hosts, operator-denied CIDRs for IP
+// literals, and the built-in special-purpose blocklist (internal/egress,
+// which judges NAT64/6to4 literals by the address they embed). Hostnames
+// that resolve to blocked addresses are caught later at transport
+// construction and dial time, where resolution actually happens.
+func (c Config) proxyEgressViolation(p ProviderConfig) string {
+	u, err := url.Parse(p.ProxyURL)
+	if err != nil {
+		return "" // syntax is validateEndpointURL's job
+	}
+	host := u.Hostname()
+	// A loopback proxy for a loopback provider is the legitimate local
+	// setup the egress Policy itself permits (AllowLoopback follows the
+	// base URL's http scheme in the provider adapter, and the transport
+	// only honors it for loopback-spelled hosts). Deny lists above and
+	// below still apply; embedded loopback forms stay blocked.
+	localProvider := false
+	if base, berr := url.Parse(p.BaseURL); berr == nil && base.Scheme == "http" {
+		if bip, perr := netip.ParseAddr(base.Hostname()); perr == nil && bip.IsLoopback() {
+			localProvider = true
+		}
+	}
+	for _, denied := range c.Egress.DenyHosts {
+		if strings.EqualFold(strings.TrimSuffix(strings.TrimSpace(denied), "."), strings.TrimSuffix(host, ".")) {
+			return fmt.Sprintf("host %q is denied by egress policy", host)
+		}
+	}
+	ip, err := netip.ParseAddr(host)
+	if err != nil {
+		return "" // hostname: no literal checks apply
+	}
+	for _, entry := range c.Egress.DenyCIDRs {
+		if prefix, perr := netip.ParsePrefix(entry); perr == nil && prefix.Contains(ip) {
+			return fmt.Sprintf("%q is denied by egress policy", host)
+		}
+		if addr, aerr := netip.ParseAddr(entry); aerr == nil && addr == ip {
+			return fmt.Sprintf("%q is denied by egress policy", host)
+		}
+	}
+	if egress.BlockedIP(ip) && !(localProvider && ip.IsLoopback()) {
+		return fmt.Sprintf("%q is blocked by the built-in egress blocklist", host)
+	}
+	return ""
+}
+
 func validateEndpointURL(raw, field string, allowUserinfo bool) error {
 	u, err := url.Parse(raw)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.Hostname() == "" {

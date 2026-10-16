@@ -84,6 +84,7 @@ func runBackup(args []string, stdout, stderr io.Writer) int {
 	configPath := fs.String("config", defaultConfigPath(), "path to JSON config")
 	out := fs.String("out", "", "output bundle path (required)")
 	includeKey := fs.Bool("include-master-key", false, "include the master key file in the bundle (sensitive; default keeps it separate)")
+	allowBrokenChain := fs.Bool("allow-broken-audit-chain", false, "back up even when the audit chain fails verification (the failure and this override are recorded in the bundle manifest)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -91,7 +92,7 @@ func runBackup(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "nexaroute backup: --out is required")
 		return 2
 	}
-	if err := createBackup(*configPath, *out, *includeKey, stdout); err != nil {
+	if err := createBackup(*configPath, *out, *includeKey, *allowBrokenChain, stdout); err != nil {
 		fmt.Fprintf(stderr, "nexaroute backup failed: %v\n", err)
 		return 1
 	}
@@ -135,7 +136,7 @@ func (w *boundedBuffer) Write(p []byte) (int, error) {
 	return w.buf.Write(p)
 }
 
-func createBackup(configPath, outPath string, includeKey bool, stdout io.Writer) error {
+func createBackup(configPath, outPath string, includeKey bool, allowBrokenChain bool, stdout io.Writer) error {
 	configBytes, err := readFileBounded(configPath, "config")
 	if err != nil {
 		return fmt.Errorf("read config: %w", err)
@@ -215,6 +216,27 @@ func createBackup(configPath, outPath string, includeKey bool, stdout io.Writer)
 		}
 		snap := &boundedBuffer{limit: maxBackupEntryBytes}
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		// The audit chain is verified before it is snapshotted (#428,
+		// audit F4): a backup of a tampered store would otherwise look
+		// complete while carrying a broken trail. Fail closed; the
+		// explicit override is recorded in the manifest notes, which
+		// are part of the bundle.
+		report, verr := store.VerifyAuditChain(ctx)
+		if verr != nil {
+			cancel()
+			_ = store.Close()
+			return fmt.Errorf("verify audit chain for backup: %w", verr)
+		}
+		if !report.Verified {
+			first := report.Problems[0]
+			if !allowBrokenChain {
+				cancel()
+				_ = store.Close()
+				return fmt.Errorf("audit chain verification failed (%s); refusing to back up a tampered audit store — re-run with --allow-broken-audit-chain to override", first)
+			}
+			fmt.Fprintf(stdout, "WARNING: audit chain FAILED verification (%s); backing up anyway under --allow-broken-audit-chain — this override is recorded in the bundle manifest\n", first)
+			manifest.Notes += fmt.Sprintf("audit chain FAILED verification at backup time (%s); backed up under --allow-broken-audit-chain override; ", first)
+		}
 		err = store.BackupTo(ctx, snap)
 		cancel()
 		_ = store.Close()
@@ -463,6 +485,7 @@ func runRestore(args []string, stdout, stderr io.Writer) int {
 	bundle := fs.String("bundle", "", "backup bundle path (required)")
 	configPath := fs.String("config", defaultConfigPath(), "target config path")
 	force := fs.Bool("force", false, "overwrite existing files at the target")
+	allowBrokenChain := fs.Bool("allow-broken-audit-chain", false, "restore even when the bundled audit chain fails verification (a durable override record is written next to the restored store)")
 	recoverDir := fs.String("recover", "", "recover an interrupted restore from its journal directory, then exit")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -481,14 +504,14 @@ func runRestore(args []string, stdout, stderr io.Writer) int {
 	for _, dir := range findInterruptedRestoreJournals() {
 		fmt.Fprintf(stderr, "WARNING: an interrupted restore journal exists at %s; its transaction did not complete — run `nexaroute restore --recover %s` to roll it back before relying on the installation\n", dir, dir)
 	}
-	if err := restoreBundle(*bundle, *configPath, *force, stdout); err != nil {
+	if err := restoreBundle(*bundle, *configPath, *force, *allowBrokenChain, stdout); err != nil {
 		fmt.Fprintf(stderr, "nexaroute restore failed: %v\n", err)
 		return 1
 	}
 	return 0
 }
 
-func restoreBundle(bundlePath, configPath string, force bool, stdout io.Writer) error {
+func restoreBundle(bundlePath, configPath string, force bool, allowBrokenChain bool, stdout io.Writer) error {
 	stage, manifest, payloads, err := readAndVerifyBundle(bundlePath)
 	if err != nil {
 		return err
@@ -513,12 +536,14 @@ func restoreBundle(bundlePath, configPath string, force bool, stdout io.Writer) 
 	// control-plane state, master key) so failure behavior is
 	// deterministic and testable.
 	var items []installItem
+	var securityTarget string
 	items = append(items, installItem{backupEntryConfig, configPath})
 	if _, ok := payloads[backupEntrySecurity]; ok {
 		securityPath, err := resolveSecurityStorePath(bundled.Admin.SecurityStorePath, configPath)
 		if err != nil {
 			return err
 		}
+		securityTarget = securityPath
 		items = append(items, installItem{backupEntrySecurity, securityPath})
 	}
 	if _, ok := payloads[backupEntryControl]; ok {
@@ -606,8 +631,59 @@ func restoreBundle(bundlePath, configPath string, force bool, stdout io.Writer) 
 		installs = append(installs, it)
 	}
 
+	// The bundled audit chain is verified BEFORE anything is installed
+	// (#428, audit F4): restoring a tampered store would otherwise
+	// silently re-entomb a broken trail. Fail closed; the explicit
+	// override proceeds loudly and leaves a durable record next to the
+	// restored store (an audit event cannot be appended — the store
+	// refuses to extend a broken chain by design).
+	var brokenChainProblems []string
+	if secPayload, ok := payloads[backupEntrySecurity]; ok {
+		probeDir := filepath.Join(stage, "audit-verify")
+		if err := os.MkdirAll(probeDir, 0o700); err != nil {
+			return fmt.Errorf("stage bundled security store for audit verification: %w", err)
+		}
+		probePath := filepath.Join(probeDir, "security.db")
+		if err := os.WriteFile(probePath, secPayload, 0o600); err != nil {
+			return fmt.Errorf("stage bundled security store for audit verification: %w", err)
+		}
+		probe, err := securitystore.OpenReadOnly(probePath)
+		if err != nil {
+			return fmt.Errorf("open bundled security store for audit verification: %w", err)
+		}
+		report, verr := probe.VerifyAuditChain(context.Background())
+		_ = probe.Close()
+		if verr != nil {
+			return fmt.Errorf("verify bundled audit chain: %w", verr)
+		}
+		if !report.Verified {
+			if !allowBrokenChain {
+				return fmt.Errorf("bundled audit chain verification failed (%s); refusing to restore a tampered audit store — re-run with --allow-broken-audit-chain to override", report.Problems[0])
+			}
+			brokenChainProblems = report.Problems
+			fmt.Fprintf(stdout, "WARNING: bundled audit chain FAILED verification (%s); restoring anyway under --allow-broken-audit-chain — a durable override record will be written next to the restored store\n", report.Problems[0])
+		}
+	}
+
 	if err := installWithRollback(installs, payloads, stdout); err != nil {
 		return err
+	}
+	if len(brokenChainProblems) > 0 && securityTarget != "" {
+		record, merr := json.MarshalIndent(map[string]any{
+			"restored_at": time.Now().UTC(),
+			"bundle":      filepath.Base(bundlePath),
+			"override":    "--allow-broken-audit-chain",
+			"problems":    brokenChainProblems,
+			"note":        "the bundled audit chain failed verification and was restored under an explicit operator override; the store refuses to append to a broken chain, so this file is the audit record of the override",
+		}, "", "  ")
+		if merr == nil {
+			sidecar := securityTarget + ".restore-override.json"
+			if werr := os.WriteFile(sidecar, append(record, '\n'), 0o600); werr == nil {
+				fmt.Fprintf(stdout, "audit-chain override record written to %s\n", sidecar)
+			} else {
+				fmt.Fprintf(stdout, "WARNING: could not write the audit-chain override record next to %s: %v\n", securityTarget, werr)
+			}
+		}
 	}
 	if manifest.MasterKeySHA256 != "" && !manifest.MasterKeyIncluded {
 		if keyBytes, err := os.ReadFile(configPath + ".key"); err == nil && sha256Hex(keyBytes) != manifest.MasterKeySHA256 {

@@ -38,7 +38,7 @@ func TestSSRF_RedirectToPrivateLiteral_Rejected(t *testing.T) {
 	})
 
 	resolver := newFakeResolver()
-	resolver.add("safe.test", "192.0.2.10")
+	resolver.add("safe.test", "185.60.216.10")
 	rec := &recordDialer{hook: func(network, addr string) (net.Conn, error) {
 		return net.Dial(network, srv.addr)
 	}}
@@ -73,7 +73,7 @@ func TestSSRF_RedirectToMetadataHostname_Rejected(t *testing.T) {
 	})
 
 	resolver := newFakeResolver()
-	resolver.add("safe.test", "192.0.2.10")
+	resolver.add("safe.test", "185.60.216.10")
 	rec := &recordDialer{hook: func(network, addr string) (net.Conn, error) {
 		return net.Dial(network, srv.addr)
 	}}
@@ -106,7 +106,7 @@ func TestSSRF_RedirectToPrivateHostname_NotFollowed(t *testing.T) {
 	})
 
 	resolver := newFakeResolver()
-	resolver.add("safe.test", "192.0.2.10")
+	resolver.add("safe.test", "185.60.216.10")
 	resolver.add("internal.example", "10.0.0.5") // would be blocked at the dialer
 	rec := &recordDialer{hook: func(network, addr string) (net.Conn, error) {
 		return net.Dial(network, srv.addr)
@@ -164,13 +164,13 @@ func TestSSRF_RedirectChain_ToMetadata_TransportBlocks(t *testing.T) {
 	t.Cleanup(func() { _ = srvA.Close() })
 
 	resolver := newFakeResolver()
-	resolver.add("safe.test", "192.0.2.1")
-	resolver.add("relay.test", "192.0.2.2")
+	resolver.add("safe.test", "185.60.216.1")
+	resolver.add("relay.test", "185.60.216.2")
 	rec := &recordDialer{hook: func(network, addr string) (net.Conn, error) {
 		switch {
-		case addr == fmt.Sprintf("192.0.2.1:%d", portA):
+		case addr == fmt.Sprintf("185.60.216.1:%d", portA):
 			return net.Dial(network, lnA.Addr().String())
-		case addr == fmt.Sprintf("192.0.2.2:%d", portB):
+		case addr == fmt.Sprintf("185.60.216.2:%d", portB):
 			return net.Dial(network, lnB.Addr().String())
 		default:
 			return nil, fmt.Errorf("unexpected dial target %s", addr)
@@ -218,10 +218,10 @@ func TestSSRF_RedirectToPrivateHostname_FollowClientTransportBlocks(t *testing.T
 	t.Cleanup(func() { _ = srvA.Close() })
 
 	resolver := newFakeResolver()
-	resolver.add("safe.test", "192.0.2.1")
+	resolver.add("safe.test", "185.60.216.1")
 	resolver.add("internal.example", "10.0.0.5") // private answer
 	rec := &recordDialer{hook: func(network, addr string) (net.Conn, error) {
-		if addr == fmt.Sprintf("192.0.2.1:%d", portA) {
+		if addr == fmt.Sprintf("185.60.216.1:%d", portA) {
 			return net.Dial(network, lnA.Addr().String())
 		}
 		return nil, fmt.Errorf("unexpected dial target %s", addr)
@@ -255,7 +255,7 @@ func TestSSRF_RedirectUserinfoAndScheme_Rejected(t *testing.T) {
 	})
 
 	resolver := newFakeResolver()
-	resolver.add("safe.test", "192.0.2.10")
+	resolver.add("safe.test", "185.60.216.10")
 	rec := &recordDialer{hook: func(network, addr string) (net.Conn, error) {
 		return net.Dial(network, srv.addr)
 	}}
@@ -287,7 +287,7 @@ func TestSSRF_RedirectUserinfoAndScheme_Rejected(t *testing.T) {
 	// Keep-alive may share one connection across the calls; what matters is
 	// that only the pinned initial-hop IP was ever dialed.
 	for _, a := range rec.addrs() {
-		if a != "192.0.2.10:443" {
+		if a != "185.60.216.10:443" {
 			t.Fatalf("redirect destinations must never be dialed, got %v", rec.addrs())
 		}
 	}
