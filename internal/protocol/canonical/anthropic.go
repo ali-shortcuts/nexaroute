@@ -481,9 +481,23 @@ func DecodeAnthropicResponse(b []byte) (Response, error) {
 			arg, _ := json.Marshal(c.Input)
 			out.Blocks = append(out.Blocks, Block{Type: PartToolCall, ToolCall: &ToolCall{ID: c.ID, Name: c.Name, Arguments: string(arg)}})
 		case "thinking":
+			// Drop thinking the encoder cannot emit: EncodeAnthropicResponse
+			// only surfaces signed thinking (unsigned would poison replay,
+			// see COMPATIBILITY.md rule 2). Keeping an unsigned phantom here
+			// while the encoder drops it breaks decode(encode(decode(x)))
+			// stability (FuzzResponseRoundTrip #447: {"Content":
+			// [{"tYpe":"thinking"}]} decoded to a thinking block that
+			// re-decoded as text). This mirrors the nameless tool-call drop
+			// (#403): the decoder drops exactly what no encoder emits.
+			if c.Signature == "" || c.Signature == "redacted" {
+				continue
+			}
 			out.Blocks = append(out.Blocks, Block{Type: PartThinking, Thinking: &Thinking{Text: c.Thinking, Signature: c.Signature}})
 		case "redacted_thinking":
-			out.Blocks = append(out.Blocks, Block{Type: PartThinking, Thinking: &Thinking{Text: c.RedactedThinking, Signature: "redacted"}})
+			// Redacted thinking carries Signature "redacted", which the
+			// encoder never surfaces, so it is dropped here for the same
+			// round-trip reason as unsigned thinking above.
+			continue
 		}
 	}
 	if out.Blocks == nil {

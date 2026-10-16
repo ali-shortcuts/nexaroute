@@ -223,11 +223,73 @@ func TestDecodeOpenAIChatResponseDropsNamelessToolCall(t *testing.T) {
 	}
 }
 
+// TestDecodeAnthropicResponseDropsUnsignedThinking is the minimized
+// regression for the defect found by FuzzResponseRoundTrip (#447): the
+// decoder kept unsigned/redacted thinking blocks in the IR while the
+// encoder never emits them (EncodeAnthropicResponse only surfaces signed
+// thinking, since unsigned would poison replay per COMPATIBILITY.md rule
+// 2), so decode(encode(decode(x))) silently turned a thinking block into
+// a text padding block. The decoder now drops exactly what the encoder
+// cannot emit, mirroring the nameless tool-call drop (#403). Signed
+// thinking must survive verbatim: no block-type normalization.
+func TestDecodeAnthropicResponseDropsUnsignedThinking(t *testing.T) {
+	for _, raw := range []string{
+		`{"Content":[{"tYpe":"thinking"}]}`,
+		`{"content":[{"type":"thinking","thinking":"x"}]}`,
+		`{"content":[{"type":"thinking","thinking":"x","signature":""}]}`,
+		`{"content":[{"type":"redacted_thinking","redacted_thinking":"hidden"}]}`,
+	} {
+		resp, err := DecodeAnthropicResponse([]byte(raw))
+		if err != nil {
+			t.Fatalf("decode %s: %v", raw, err)
+		}
+		for _, b := range resp.Blocks {
+			if b.Type == PartThinking {
+				t.Fatalf("RED: unencodable thinking kept in IR for %s: %+v", raw, b.Thinking)
+			}
+		}
+		enc, ok := encodeFuzzResponse(0, resp)
+		if !ok {
+			t.Fatal("encode declined")
+		}
+		resp2, ok := decodeFuzzResponse(0, enc)
+		if !ok {
+			t.Fatalf("re-decode of encoder output failed for %s", raw)
+		}
+		if !responseEqualSansRaw(resp, resp2) {
+			t.Fatalf("round-trip unstable after fix for %s:\n%s\n%s", raw, mustFuzzJSON(t, resp), mustFuzzJSON(t, resp2))
+		}
+	}
+	// Signed thinking is meaningful and must survive verbatim.
+	signed, err := DecodeAnthropicResponse([]byte(`{"id":"m","type":"message","role":"assistant","model":"up","content":[{"type":"thinking","thinking":"why","signature":"sig"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":2}}`))
+	if err != nil {
+		t.Fatalf("signed decode: %v", err)
+	}
+	if len(signed.Blocks) != 1 || signed.Blocks[0].Type != PartThinking || signed.Blocks[0].Thinking.Text != "why" || signed.Blocks[0].Thinking.Signature != "sig" {
+		t.Fatalf("signed thinking lost or altered: %+v", signed.Blocks)
+	}
+	senc, ok := encodeFuzzResponse(0, signed)
+	if !ok {
+		t.Fatal("signed encode declined")
+	}
+	signed2, ok := decodeFuzzResponse(0, senc)
+	if !ok {
+		t.Fatal("signed re-decode failed")
+	}
+	if !responseEqualSansRaw(signed, signed2) {
+		t.Fatalf("signed round-trip unstable:\n%s\n%s", mustFuzzJSON(t, signed), mustFuzzJSON(t, signed2))
+	}
+}
+
 func FuzzResponseRoundTrip(f *testing.F) {
 	f.Add(byte(0), []byte(`{"id":"msg_1","type":"message","role":"assistant","model":"m","content":[{"type":"text","text":"hello"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":2}}`))
 	f.Add(byte(1), []byte(`{"id":"chatcmpl-1","object":"chat.completion","created":1,"model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3}}`))
 	f.Add(byte(2), []byte(`{"id":"resp_1","object":"response","status":"completed","model":"m","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hi"}]}],"usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3}}`))
 	f.Add(byte(3), []byte(`{"eventType":"messageStop","payload":{"stopReason":"end_turn"}}`))
+	// Minimized regression seed for #447: an unsigned thinking block
+	// (case-variant keys) that the Anthropic decoder kept while the encoder
+	// drops, breaking decode(encode(decode(x))) stability (thinking -> text).
+	f.Add(byte(0), []byte(`{"Content":[{"tYpe":"thinking"}]}`))
 	f.Fuzz(func(t *testing.T, codecByte byte, raw []byte) {
 		codec := int(codecByte) % 4
 		resp, ok := decodeFuzzResponse(codec, raw)
@@ -335,6 +397,23 @@ func responseEqualSansRaw(a, b Response) bool {
 	// padding shape is tolerated here.
 	a.Blocks = dropNullTextBlocks(a.Blocks)
 	b.Blocks = dropNullTextBlocks(b.Blocks)
+	// Tool-call IDs: the OpenAI-chat and Responses encoders mint call_<n>
+	// IDs for ID-less tool calls because their APIs require an ID
+	// (openai_chat.go, openai_responses.go). An absent tool-call ID may
+	// legitimately gain a minted one on the hop; a present ID must survive
+	// verbatim — mirroring the response-level ID rule above. Block types,
+	// names, and arguments must still match exactly; only the minted ID is
+	// folded, and only positionally (length mismatch still fails).
+	if len(a.Blocks) == len(b.Blocks) {
+		for i := range a.Blocks {
+			if a.Blocks[i].Type == PartToolCall && a.Blocks[i].ToolCall != nil && a.Blocks[i].ToolCall.ID == "" &&
+				b.Blocks[i].Type == PartToolCall && b.Blocks[i].ToolCall != nil {
+				cp := *b.Blocks[i].ToolCall
+				cp.ID = ""
+				b.Blocks[i].ToolCall = &cp
+			}
+		}
+	}
 	aj, aerr := json.Marshal(a)
 	bj, berr := json.Marshal(b)
 	return aerr == nil && berr == nil && bytes.Equal(aj, bj)
