@@ -529,9 +529,34 @@ func (s *Server) adminAuditRecords(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, http.StatusServiceUnavailable, "admin audit store unavailable")
 		return
 	}
+	// Chain integrity is surfaced on the read path (#428, audit F4):
+	// before this, a tampered record was served with no indication —
+	// verification existed only in the CLI. A failed or unverifiable
+	// chain is reported in the response body, never silently: the
+	// events remain available for inspection, and the integrity block
+	// says exactly how much they can be trusted.
+	integrity := map[string]any{"status": "unknown"}
+	if report, verr := s.securityDB.VerifyAuditChain(ctx); verr == nil {
+		status := "ok"
+		if !report.Verified {
+			status = "failed"
+		}
+		problems := report.Problems
+		if len(problems) > 10 {
+			problems = problems[:10]
+		}
+		integrity = map[string]any{
+			"status":          status,
+			"verified":        report.Verified,
+			"total_records":   report.TotalRecords,
+			"chained_records": report.ChainedRecords,
+			"legacy_records":  report.LegacyRecords,
+			"problems":        problems,
+		}
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
-	_ = json.NewEncoder(w).Encode(map[string]any{"events": events})
+	_ = json.NewEncoder(w).Encode(map[string]any{"events": events, "integrity": integrity})
 }
 
 func (s *Server) writeLoginFailure(w http.ResponseWriter, r *http.Request) {
