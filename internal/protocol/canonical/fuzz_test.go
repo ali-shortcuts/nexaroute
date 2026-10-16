@@ -429,6 +429,12 @@ func FuzzResponseRoundTrip(f *testing.F) {
 	// "{}", matching what the encoder's `input,omitempty` converges to
 	// (missing/null/{} shapes are indistinguishable on the wire).
 	f.Add(byte(0), []byte(`{"content":[{"type":"tool_use","id":"x","name":"n","input":{}}]}`))
+	// Responses function_call with a name but no call_id and no
+	// arguments: the decoder must assign the encoder's synthesized ID
+	// and canonical "{}" arguments, or the second decode drifts on both
+	// (found by the fixed-seed CI fuzz window on main after #448).
+	f.Add(byte(2), []byte(`{"output":[{"tYpe":"function_call","nAme":"\b"}]}`))
+	f.Add(byte(2), []byte(`{"id":"r1","object":"response","status":"completed","model":"m","output":[{"type":"function_call","name":"f"}],"usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3}}`))
 	f.Fuzz(func(t *testing.T, codecByte byte, raw []byte) {
 		codec := int(codecByte) % 4
 		resp, ok := decodeFuzzResponse(codec, raw)
