@@ -1526,7 +1526,6 @@ func TestRestoreDirSyncFailureAfterInstall(t *testing.T) {
 		// Fail only the FIRST sync of the security directory (the
 		// second install's durability confirmation).
 		failSyncFor(t, filepath.Dir(targetDB), 1)
-		before := journalDirsInTemp(t)
 		var stdout, stderr bytes.Buffer
 		code := runRestore([]string{"--bundle", bundle, "--config", targetConfig, "--force"}, &stdout, &stderr)
 		if code != 1 {
@@ -1541,9 +1540,22 @@ func TestRestoreDirSyncFailureAfterInstall(t *testing.T) {
 		if got, _ := os.ReadFile(targetDB); !bytes.Equal(got, preDB) {
 			t.Fatal("the install whose rename LANDED before the failed sync must be rolled back, not skipped")
 		}
-		for name := range journalDirsInTemp(t) {
-			if !before[name] {
-				t.Fatalf("a fully rolled-back transaction must not leave a journal: %s", name)
+		// Only a journal whose manifest targets THIS transaction's files
+		// can be this transaction's leak. Scanning the shared temp dir by
+		// name alone also flags journals owned by concurrent test
+		// processes (the round-2 flake-hunt failure on this subtest,
+		// #404) — foreign journals are not this rollback's residue. The
+		// persistent-failure subtest below already scopes by target the
+		// same way.
+		for _, dir := range findInterruptedRestoreJournals() {
+			m, err := readJournalManifest(dir)
+			if err != nil {
+				continue
+			}
+			for _, e := range m.Entries {
+				if e.Target == targetConfig || e.Target == targetDB {
+					t.Fatalf("a fully rolled-back transaction must not leave a journal: %s (target %s)", dir, e.Target)
+				}
 			}
 		}
 	})

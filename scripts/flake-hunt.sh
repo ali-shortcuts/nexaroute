@@ -30,6 +30,21 @@ fi
 LOGDIR="${FLAKE_HUNT_LOGDIR:-$(pwd)/.flake-hunt-logs}"
 mkdir -p "$LOGDIR"
 
+# Per-run TMPDIR isolation (#404, round-2 failure): several tests scan
+# os.TempDir() for artifacts they own (e.g. restore journals in
+# cmd/gateway), so a suite run that shares the machine-default temp dir
+# with ANY other test process — a parallel lane, a second suite, the
+# operator's own run — can observe foreign artifacts and fail on them.
+# Every iteration and every verify run below gets a fresh, private
+# TMPDIR/GOTMPDIR under the log dir, removed on success and kept with
+# the failing log on failure.
+fresh_tmpdir() {
+	local d="$LOGDIR/tmp-$1"
+	rm -rf "$d"
+	mkdir -p "$d"
+	printf '%s' "$d"
+}
+
 burners=()
 start_burners() {
 	local n
@@ -55,10 +70,12 @@ fail=0
 echo "== Phase 1: $ITERATIONS full-suite iterations under CPU load =="
 for ((i = 1; i <= ITERATIONS; i++)); do
 	log="$LOGDIR/iter-$(printf '%03d' "$i").log"
+	iter_tmp="$(fresh_tmpdir "iter-$(printf '%03d' "$i")")"
 	start_burners
-	if go test -count=1 -timeout=20m ./... >"$log" 2>&1; then
+	if TMPDIR="$iter_tmp" GOTMPDIR="$iter_tmp" go test -count=1 -timeout=20m ./... >"$log" 2>&1; then
 		pass=$((pass + 1))
 		rm -f "$log"
+		rm -rf "$iter_tmp"
 	else
 		fail=$((fail + 1))
 		echo "ITERATION $i FAILED (log: $log)"
@@ -77,9 +94,11 @@ echo "== Phase 2: $VERIFY_RUNS consecutive scripts/verify.sh runs (race-enabled)
 vpass=0
 for ((i = 1; i <= VERIFY_RUNS; i++)); do
 	log="$LOGDIR/verify-$(printf '%02d' "$i").log"
-	if ./scripts/verify.sh >"$log" 2>&1; then
+	verify_tmp="$(fresh_tmpdir "verify-$(printf '%02d' "$i")")"
+	if TMPDIR="$verify_tmp" GOTMPDIR="$verify_tmp" ./scripts/verify.sh >"$log" 2>&1; then
 		vpass=$((vpass + 1))
 		rm -f "$log"
+		rm -rf "$verify_tmp"
 		echo "-- verify run $i/$VERIFY_RUNS passed"
 	else
 		echo "VERIFY RUN $i FAILED (log: $log)"
