@@ -193,9 +193,27 @@ func decodeResponsesInput(raw json.RawMessage) ([]Part, []Message, error) {
 				messages = append(messages, Message{Role: role, Parts: parts})
 			}
 		case "function_call":
+			// A nameless function_call is not dispatchable and no encoder
+			// emits it (EncodeResponsesRequest drops nameless calls), so
+			// the decoder drops it here: keeping it would let the whole
+			// assistant message vanish on re-encode, breaking
+			// decode(encode(decode(x))) stability (FuzzRequestRoundTrip
+			// CI seed 5d2d966a922a3918, #447). Mirrors the nameless drops
+			// in the OpenAI-chat decoders (#403).
+			if item.Name == "" {
+				continue
+			}
+			// The request encoder normalizes empty/whitespace arguments to
+			// "{}", so the decoder keeps exactly that canonical form;
+			// otherwise decode(encode(decode(x))) drifts "" -> "{}" (#447,
+			// mirroring anthToolInputArgs).
+			args := item.Arguments
+			if strings.TrimSpace(args) == "" {
+				args = "{}"
+			}
 			messages = append(messages, Message{Role: RoleAssistant, Parts: []Part{{
 				Type:     PartToolCall,
-				ToolCall: &ToolCall{ID: item.CallID, Name: item.Name, Arguments: item.Arguments},
+				ToolCall: &ToolCall{ID: item.CallID, Name: item.Name, Arguments: args},
 			}}})
 		case "function_call_output":
 			messages = append(messages, Message{Role: RoleTool, Parts: []Part{{
@@ -477,6 +495,17 @@ func DecodeResponsesResponse(b []byte) (Response, error) {
 				out.Blocks = append(out.Blocks, Block{Type: PartText, Text: sb.String()})
 			}
 		case "function_call":
+			// A function call without a name is not dispatchable and no
+			// encoder emits it (EncodeResponsesResponse drops nameless
+			// calls, as do the OpenAI-chat and Anthropic request encoders).
+			// Dropping it here keeps phantom blocks from a hostile or buggy
+			// upstream out of the IR: decode(encode(decode(x))) would
+			// otherwise silently lose the block and flip stop_reason
+			// tool_use -> end_turn (#447). Mirrors the nameless tool-call
+			// drop in DecodeOpenAIChatResponse (#403).
+			if item.Name == "" {
+				continue
+			}
 			sawToolCall = true
 			out.Blocks = append(out.Blocks, Block{Type: PartToolCall, ToolCall: &ToolCall{
 				ID: item.CallID, Name: item.Name, Arguments: item.Arguments,
