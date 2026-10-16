@@ -59,7 +59,11 @@ func TestSSESlowClientEvictionWithoutBlockingPublishers(t *testing.T) {
 	}
 
 	// Add more events - producer must not block.
-	// Use a timeout to detect blocking.
+	// The property under test is "never blocks", not "finishes fast", so
+	// the watchdog is generous: under flake-hunt CPU saturation a 500ms
+	// wall-clock bound can starve the producer goroutine into a false
+	// failure even though Add is non-blocking. 30s fires only on a
+	// genuinely blocking producer.
 	done := make(chan struct{})
 	go func() {
 		for i := 0; i < liveSubscriberBuffer*4; i++ {
@@ -71,7 +75,7 @@ func TestSSESlowClientEvictionWithoutBlockingPublishers(t *testing.T) {
 	select {
 	case <-done:
 		// Producer completed without blocking.
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(30 * time.Second):
 		t.Fatal("producer blocked on slow subscriber (should be non-blocking)")
 	}
 
@@ -274,22 +278,30 @@ func TestSSEConcurrentConnectDisconnectRace(t *testing.T) {
 				// Disconnect - do this before adding events to avoid lock contention
 				cancel()
 
-				// Poll until channel is closed to handle lock contention with concurrent Adds
-				deadline := time.Now().Add(100 * time.Millisecond)
-				for time.Now().Before(deadline) {
+				// cancel() removes the subscriber and closes its channel
+				// synchronously under the bus lock, so the channel is already
+				// closed at this point. Drain buffered events with a BLOCKING
+				// receive: a closed channel is always readable, so this
+				// converges with no wall-clock assumption at all — a starved
+				// scheduler can never produce a false failure. (The 100ms
+				// poll this replaces was the flake-hunt round-3 failure on
+				// head 7798efd: under CPU saturation the poll loop was
+				// starved past its deadline even though the channel was
+				// closed, reporting 13 false errors.) The watchdog fires
+				// only on a genuine never-closed defect, i.e. a real
+				// subscriber leak, and still counts as an error below.
+				watchdog := time.After(30 * time.Second)
+				closed := false
+				for !closed {
 					select {
 					case _, open := <-live:
-						if !open {
-							goto channelClosed
-						}
-					default:
+						closed = !open
+					case <-watchdog:
+						errors.Add(1)
+						return
 					}
-					time.Sleep(100 * time.Microsecond)
 				}
-				errors.Add(1)
-				return
 
-			channelClosed:
 				// Add an event after disconnect to verify bus still works
 				b.Add(Event{Kind: "concurrent", Message: "x"})
 			}
