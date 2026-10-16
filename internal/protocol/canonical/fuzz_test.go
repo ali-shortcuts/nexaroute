@@ -719,9 +719,60 @@ func TestDecodeOpenAIChatRequestDropsSystemImage(t *testing.T) {
 	}
 }
 
+// Regression (fuzz-smoke failure on PR #459 head 5620ffb, run
+// 38884210003, seed 320a06b605cdba5b): an image_url part whose data: URL
+// carries a media type but an empty payload decoded to
+// Image{MediaType, Data:""}. Every request encoder requires a URL or
+// non-empty Data, so the part silently vanished on encode and the
+// round-trip was unstable. A payload-less data: image is not an image;
+// the decoder must drop it at the boundary (mirroring the Anthropic
+// decoder, which requires data != "" for base64 sources). A data: image
+// WITH a payload, and an ordinary URL image, must survive.
+func TestDecodeOpenAIImageDropsPayloadlessDataURL(t *testing.T) {
+	raw := []byte(`{"model":"m","messages":[{"role":"user","content":[{"type":"text","text":"hi"},{"type":"image_url","image_url":{"url":"data:0000000000000000;base64,"}},{"type":"image_url","image_url":{"url":"data:image/png;base64,AA=="}},{"type":"image_url","image_url":{"url":"https://example.com/x.png"}}]}]}`)
+	req, ok := decodeFuzzRequest(1, raw)
+	if !ok {
+		t.Fatal("decode declined")
+	}
+	images := 0
+	for _, m := range req.Messages {
+		for _, p := range m.Parts {
+			if p.Type == PartImage {
+				images++
+				if p.Image == nil || (p.Image.URL == "" && p.Image.Data == "") {
+					t.Fatalf("content-less image kept in IR: %+v", p.Image)
+				}
+			}
+		}
+	}
+	if images != 2 {
+		t.Fatalf("want exactly the 2 real images to survive decode, got %d", images)
+	}
+	enc, ok := encodeFuzzRequest(1, req)
+	if !ok {
+		t.Fatal("encode declined")
+	}
+	req2, ok := decodeFuzzRequest(1, enc)
+	if !ok {
+		t.Fatal("re-decode of encoder output failed")
+	}
+	a, _ := json.Marshal(normalizeRequest(1, req))
+	b, _ := json.Marshal(normalizeRequest(1, req2))
+	if !bytes.Equal(a, b) {
+		t.Fatalf("request round-trip unstable:\n%s\n%s", a, b)
+	}
+}
+
 func FuzzRequestRoundTrip(f *testing.F) {
 	f.Add(byte(0), []byte(`{"model":"m","max_tokens":8,"messages":[{"role":"user","content":"hi"}]}`))
 	f.Add(byte(1), []byte(`{"model":"m","messages":[{"role":"user","content":"hi"}]}`))
+	// Regression seed for the fuzz-smoke failure on PR #459 head 5620ffb
+	// (run 38884210003, testdata seed 320a06b605cdba5b): an image_url part
+	// whose data: URL carries a media type but an EMPTY payload decodes to
+	// Image{MediaType, Data:""}, which no request encoder can emit (the
+	// chat encoder requires Data != ""), so the part vanished on the hop.
+	// The decoder must drop payload-less data: images at the boundary.
+	f.Add(byte(1), []byte(`{"model":"m","messages":[{"role":"user","content":[{"type":"text","text":"hi"},{"type":"image_url","image_url":{"url":"data:0000000000000000;base64,"}}]}]}`))
 	// Minimized regression seed for the CI failure on PR #448 head
 	// 66cc47e (testdata/fuzz/FuzzRequestRoundTrip/5d2d966a922a3918): a
 	// nameless Responses function_call input item whose assistant
