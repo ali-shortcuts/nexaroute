@@ -83,6 +83,29 @@ func TestRenderPlanProducesPlayableMP4(t *testing.T) {
 	}
 }
 
+func TestRenderPlanResolvesRelativeJobDirectory(t *testing.T) {
+	r := requireFFmpeg(t)
+	root := t.TempDir()
+	original, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(original) })
+	res, err := r.RenderPlan(context.Background(), testPlan(), filepath.Join("relative", "job"))
+	if err != nil {
+		t.Fatalf("RenderPlan with relative directory: %v", err)
+	}
+	if _, err := os.Stat(res.OutputPath); err != nil {
+		t.Fatalf("relative render output %q: %v", res.OutputPath, err)
+	}
+	if _, err := r.Probe(context.Background(), res.OutputPath); err != nil {
+		t.Fatalf("Probe relative render output: %v", err)
+	}
+}
+
 func TestValidateOutputRejectsWrongDimensions(t *testing.T) {
 	r := requireFFmpeg(t)
 	dir := t.TempDir()

@@ -1,0 +1,70 @@
+{
+  "schema_version": "video-plan.v1",
+  "title": "Audit Evidence",
+  "duration_seconds": 4,
+  "width": 640,
+  "height": 360,
+  "fps": 12,
+  "aspect_ratio": "16:9",
+  "scenes": [
+    {
+      "id": "intro",
+      "duration_seconds": 2,
+      "background": "#101828",
+      "camera": "zoom_in",
+      "transition": "fade",
+      "elements": [
+        {
+          "type": "text",
+          "text": "NexaRoute audit",
+          "x": 0.5,
+          "y": 0.35,
+          "color": "#ffffff",
+          "font_size": 46,
+          "animation": "fade"
+        },
+        {
+          "type": "shape",
+          "shape": "rect",
+          "x": 0.15,
+          "y": 0.7,
+          "width": 0.7,
+          "height": 0.05,
+          "color": "#2e90fa"
+        }
+      ]
+    },
+    {
+      "id": "chart",
+      "duration_seconds": 2,
+      "background": "#0b4a6f",
+      "transition": "fade",
+      "elements": [
+        {
+          "type": "text",
+          "text": "Validated programmatic video",
+          "x": 0.5,
+          "y": 0.18,
+          "color": "#ffffff",
+          "font_size": 34,
+          "animation": "slide_up"
+        },
+        {
+          "type": "chart",
+          "x": 0.18,
+          "y": 0.35,
+          "width": 0.64,
+          "height": 0.48,
+          "color": "#f79009",
+          "animation": "slide_up",
+          "data": [
+            2,
+            5,
+            4,
+            8
+          ]
+        }
+      ]
+    }
+  ]
+}
