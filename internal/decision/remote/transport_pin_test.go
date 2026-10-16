@@ -26,7 +26,7 @@ func TestSSRF_TLSPinnedDial_SNIAndVerification(t *testing.T) {
 	})
 
 	resolver := newFakeResolver()
-	resolver.add("secure.test", "192.0.2.10")
+	resolver.add("secure.test", "185.60.216.10")
 	rec := &recordDialer{hook: func(network, addr string) (net.Conn, error) {
 		return net.Dial(network, srv.addr)
 	}}
@@ -49,8 +49,8 @@ func TestSSRF_TLSPinnedDial_SNIAndVerification(t *testing.T) {
 	}
 
 	// The socket must go to the approved IP literal (original port), not the hostname.
-	if got := rec.addrs(); len(got) != 1 || got[0] != "192.0.2.10:443" {
-		t.Fatalf("expected pinned dial to 192.0.2.10:443, got %v", got)
+	if got := rec.addrs(); len(got) != 1 || got[0] != "185.60.216.10:443" {
+		t.Fatalf("expected pinned dial to 185.60.216.10:443, got %v", got)
 	}
 	// SNI (and thus certificate verification) is keyed on the original hostname.
 	if got := srv.sniSeen(); got != "secure.test" {
@@ -70,7 +70,7 @@ func TestSSRF_TLSVerification_Enforced(t *testing.T) {
 	})
 
 	resolver := newFakeResolver()
-	resolver.add("secure.test", "192.0.2.10")
+	resolver.add("secure.test", "185.60.216.10")
 	rec := &recordDialer{hook: func(network, addr string) (net.Conn, error) {
 		return net.Dial(network, srv.addr)
 	}}
@@ -171,7 +171,7 @@ func TestSSRF_ClientDeadline_Timeout(t *testing.T) {
 		}
 	})
 	resolver := newFakeResolver()
-	resolver.add("slow.test", "192.0.2.10")
+	resolver.add("slow.test", "185.60.216.10")
 	rec := &recordDialer{hook: func(network, addr string) (net.Conn, error) {
 		return net.Dial(network, srv.addr)
 	}}
