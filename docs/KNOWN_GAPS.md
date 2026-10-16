@@ -153,13 +153,19 @@ burn in SRT subtitles. Video Studio now accepts multi-shot plans, shows progress
 
 ## State and HA
 
-The optional control-plane runtime selects the atomic local file store, an
+The optional control-plane runtime selects the atomic local file store (on
+Linux, cross-process safe via an advisory `.controlplane.lock` file in the
+state directory; file-backend writes fail closed on platforms without flock
+support), an
 explicit test-only memory store, PostgreSQL, or Redis and reconciles a versioned
 startup snapshot. Both database backends fail closed when unavailable; Redis
 uses atomic revision-aware Lua scripts and has real-service integration
 coverage. Adapter tests do not guarantee deployment-level persistence,
 replication, failover, or recovery; those remain operator-owned and must be
-separately configured and tested.
+separately configured and tested. The file store's advisory locking assumes a
+local filesystem honored by all writers; network filesystems with unreliable
+lock coordination are not covered — point every gateway process at the same
+local state directory.
 
 The admin security/session store supports bbolt (default), PostgreSQL (M4-2a),
 and Redis (M4-2b). PostgreSQL serializes audit-chain writes and verifies the
