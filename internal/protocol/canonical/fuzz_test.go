@@ -281,6 +281,70 @@ func TestDecodeAnthropicResponseDropsUnsignedThinking(t *testing.T) {
 	}
 }
 
+// TestDecodeAnthropicResponseNormalizesEmptyToolInput is the minimized
+// regression for the second defect FuzzResponseRoundTrip found on the #447
+// branch (CI seed 27b6689a0474e4ff): a tool_use block with an empty,
+// missing, or null input decoded to Arguments "{}"/"null" while the
+// encoder's `input,omitempty` drops empty maps, so the re-decode came back
+// "null" — decode(encode(decode(x))) unstable. The decoder now collapses
+// the indistinguishable shapes to "{}", the canonical form the encoder
+// converges to (mirrors the #447 unsigned-thinking fix).
+func TestDecodeAnthropicResponseNormalizesEmptyToolInput(t *testing.T) {
+	emptyShapes := []string{
+		`{"content":[{"type":"tool_use","id":"x","name":"n"}]}`,
+		`{"content":[{"type":"tool_use","id":"x","name":"n","input":null}]}`,
+		`{"content":[{"type":"tool_use","id":"x","name":"n","input":{}}]}`,
+	}
+	for _, raw := range emptyShapes {
+		t.Run(raw, func(t *testing.T) {
+			resp, err := DecodeAnthropicResponse([]byte(raw))
+			if err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if len(resp.Blocks) != 1 || resp.Blocks[0].Type != PartToolCall {
+				t.Fatalf("expected one tool_call block, got %+v", resp.Blocks)
+			}
+			if got := resp.Blocks[0].ToolCall.Arguments; got != "{}" {
+				t.Fatalf("RED: empty tool input not canonicalized, args=%q", got)
+			}
+			enc, ok := encodeFuzzResponse(0, resp)
+			if !ok {
+				t.Fatal("encode declined")
+			}
+			resp2, ok := decodeFuzzResponse(0, enc)
+			if !ok {
+				t.Fatal("re-decode of encoder output failed")
+			}
+			if got := resp2.Blocks[0].ToolCall.Arguments; got != "{}" {
+				t.Fatalf("round-trip drifted: args=%q", got)
+			}
+			if !responseEqualSansRaw(resp, resp2) {
+				t.Fatalf("round-trip unstable:\n%s\n%s", mustFuzzJSON(t, resp), mustFuzzJSON(t, resp2))
+			}
+		})
+	}
+	// Non-empty input must be preserved (canonical JSON form) and stable.
+	nonEmpty := `{"content":[{"type":"tool_use","id":"x","name":"n","input":{"b":2,"a":1}}]}`
+	resp, err := DecodeAnthropicResponse([]byte(nonEmpty))
+	if err != nil {
+		t.Fatalf("decode non-empty: %v", err)
+	}
+	if got := resp.Blocks[0].ToolCall.Arguments; got != `{"a":1,"b":2}` {
+		t.Fatalf("non-empty input altered: args=%q", got)
+	}
+	enc, ok := encodeFuzzResponse(0, resp)
+	if !ok {
+		t.Fatal("encode declined")
+	}
+	resp2, ok := decodeFuzzResponse(0, enc)
+	if !ok {
+		t.Fatal("re-decode failed")
+	}
+	if !responseEqualSansRaw(resp, resp2) {
+		t.Fatalf("non-empty round-trip unstable:\n%s\n%s", mustFuzzJSON(t, resp), mustFuzzJSON(t, resp2))
+	}
+}
+
 func FuzzResponseRoundTrip(f *testing.F) {
 	f.Add(byte(0), []byte(`{"id":"msg_1","type":"message","role":"assistant","model":"m","content":[{"type":"text","text":"hello"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":2}}`))
 	f.Add(byte(1), []byte(`{"id":"chatcmpl-1","object":"chat.completion","created":1,"model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3}}`))
@@ -290,6 +354,10 @@ func FuzzResponseRoundTrip(f *testing.F) {
 	// (case-variant keys) that the Anthropic decoder kept while the encoder
 	// drops, breaking decode(encode(decode(x))) stability (thinking -> text).
 	f.Add(byte(0), []byte(`{"Content":[{"tYpe":"thinking"}]}`))
+	// tool_use with an empty input object: the decoder must canonicalize to
+	// "{}", matching what the encoder's `input,omitempty` converges to
+	// (missing/null/{} shapes are indistinguishable on the wire).
+	f.Add(byte(0), []byte(`{"content":[{"type":"tool_use","id":"x","name":"n","input":{}}]}`))
 	f.Fuzz(func(t *testing.T, codecByte byte, raw []byte) {
 		codec := int(codecByte) % 4
 		resp, ok := decodeFuzzResponse(codec, raw)
