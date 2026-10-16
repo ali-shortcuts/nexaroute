@@ -1,0 +1,4 @@
+go test fuzz v1
+string("/v1/chat/completions")
+[]byte("{\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}")
+[]byte("dep-a")
