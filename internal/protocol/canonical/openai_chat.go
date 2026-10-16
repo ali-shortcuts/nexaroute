@@ -58,6 +58,13 @@ func DecodeOpenAIChatRequest(in core.OpenAIRequest, clientModel string) Request 
 				msg.Parts = append(msg.Parts, Part{Type: PartThinking, Thinking: &Thinking{Text: m.ReasoningContent}})
 			}
 			for _, tc := range m.ToolCalls {
+				// Nameless tool calls are not dispatchable and the
+				// request encoder drops them (EncodeOpenAIChatRequest),
+				// so drop them at decode for round-trip symmetry —
+				// same rule as the response decoder (#403/#447).
+				if tc.Function.Name == "" {
+					continue
+				}
 				msg.Parts = append(msg.Parts, Part{Type: PartToolCall, ToolCall: &ToolCall{
 					ID: tc.ID, Name: tc.Function.Name, Arguments: tc.Function.Arguments,
 				}})

@@ -124,6 +124,28 @@ func anthCacheBlock(v string) map[string]any {
 	return out
 }
 
+// anthToolInputArgs canonicalizes a decoded Anthropic tool_use input into
+// the IR arguments string. Both Anthropic encoders (EncodeAnthropicResponse
+// and encodeAnthBlocks) marshal arguments back through map[string]any with
+// `input,omitempty`, so missing, null, and empty-object inputs are all
+// indistinguishable on the wire — the input is simply omitted. If the
+// decoder kept them distinct ("null" vs "{}"), decode(encode(decode(x)))
+// would be unstable (FuzzResponseRoundTrip found exactly this: {} -> null).
+// Collapse those shapes to "{}", the canonical form the encoder converges
+// to, mirroring the unsigned-thinking fix: the decoder keeps exactly what
+// survives the encoder. Non-empty inputs are already canonical (the decode
+// unmarshal sorts keys and compacts), so they pass through verbatim.
+func anthToolInputArgs(in map[string]any) string {
+	if len(in) == 0 {
+		return "{}"
+	}
+	out, err := json.Marshal(in)
+	if err != nil {
+		return "{}" // unreachable for JSON-decoded input; fail closed
+	}
+	return string(out)
+}
+
 func decodeAnthropicContent(raw json.RawMessage) ([]Part, error) {
 	blocks, err := core.ParseAnthContent(raw)
 	if err != nil {
@@ -141,11 +163,15 @@ func decodeAnthropicContent(raw json.RawMessage) ([]Part, error) {
 			}
 			parts = append(parts, Part{Type: PartImage, Image: img})
 		case "tool_use":
-			arg, err := json.Marshal(m.Input)
-			if err != nil {
-				return nil, fmt.Errorf("encode Anthropic tool input: %w", err)
+			// Nameless tool_use blocks are dropped at decode: the
+			// Anthropic request encoder never emits them (it skips
+			// nameless PartToolCall parts), so keeping one breaks
+			// decode(encode(decode(x))) symmetry (#447, same class as
+			// the OpenAI nameless drops in #403).
+			if m.Name == "" {
+				continue
 			}
-			parts = append(parts, Part{Type: PartToolCall, ToolCall: &ToolCall{ID: m.ID, Name: m.Name, Arguments: string(arg)}, CacheControl: anthCacheValue(m.CacheControl)})
+			parts = append(parts, Part{Type: PartToolCall, ToolCall: &ToolCall{ID: m.ID, Name: m.Name, Arguments: anthToolInputArgs(m.Input)}, CacheControl: anthCacheValue(m.CacheControl)})
 		case "tool_result":
 			parts = append(parts, Part{Type: PartToolResult, ToolResult: &ToolResult{
 				ToolUseID: m.ToolUseID,
@@ -478,12 +504,29 @@ func DecodeAnthropicResponse(b []byte) (Response, error) {
 		case "text":
 			out.Blocks = append(out.Blocks, Block{Type: PartText, Text: c.Text})
 		case "tool_use":
-			arg, _ := json.Marshal(c.Input)
-			out.Blocks = append(out.Blocks, Block{Type: PartToolCall, ToolCall: &ToolCall{ID: c.ID, Name: c.Name, Arguments: string(arg)}})
+			// Normalize the input to the canonical form the encoder
+			// converges to (see anthToolInputArgs): missing, null, and
+			// empty-object inputs are indistinguishable on the wire once the
+			// encoder's `input,omitempty` drops them.
+			out.Blocks = append(out.Blocks, Block{Type: PartToolCall, ToolCall: &ToolCall{ID: c.ID, Name: c.Name, Arguments: anthToolInputArgs(c.Input)}})
 		case "thinking":
+			// Drop thinking the encoder cannot emit: EncodeAnthropicResponse
+			// only surfaces signed thinking (unsigned would poison replay,
+			// see COMPATIBILITY.md rule 2). Keeping an unsigned phantom here
+			// while the encoder drops it breaks decode(encode(decode(x)))
+			// stability (FuzzResponseRoundTrip #447: {"Content":
+			// [{"tYpe":"thinking"}]} decoded to a thinking block that
+			// re-decoded as text). This mirrors the nameless tool-call drop
+			// (#403): the decoder drops exactly what no encoder emits.
+			if c.Signature == "" || c.Signature == "redacted" {
+				continue
+			}
 			out.Blocks = append(out.Blocks, Block{Type: PartThinking, Thinking: &Thinking{Text: c.Thinking, Signature: c.Signature}})
 		case "redacted_thinking":
-			out.Blocks = append(out.Blocks, Block{Type: PartThinking, Thinking: &Thinking{Text: c.RedactedThinking, Signature: "redacted"}})
+			// Redacted thinking carries Signature "redacted", which the
+			// encoder never surfaces, so it is dropped here for the same
+			// round-trip reason as unsigned thinking above.
+			continue
 		}
 	}
 	if out.Blocks == nil {
@@ -498,9 +541,13 @@ func EncodeAnthropicResponse(in Response, requestedModel string) core.AnthRespon
 	if stop == "" {
 		stop = StopEndTurn
 	}
-	if stop == StopStopSequence {
-		stop = StopMaxTokens // Anthropic reports stop_sequence only with a sequence value.
-	}
+	// StopStopSequence is emitted verbatim: downgrading it to max_tokens
+	// (as was done before) claims a truncation that never happened — a
+	// client may wrongly grow max_tokens and retry — and it breaks
+	// decode(encode(decode(x))) stability (FuzzResponseRoundTrip #447).
+	// The matched sequence value is not carried in the IR; a bare
+	// stop_sequence reason with a null sequence is the honest encoding,
+	// and it re-decodes to StopStopSequence.
 	content := make([]core.AnthContentBlock, 0, len(in.Blocks))
 	for _, b := range in.Blocks {
 		switch b.Type {
