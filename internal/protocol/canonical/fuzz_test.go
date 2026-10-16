@@ -926,10 +926,12 @@ func canonicalToolSchema(raw json.RawMessage) json.RawMessage {
 // normalizes empty/whitespace arguments to "{}", so
 // decode(encode(decode(x))) drifted "" -> "{}". The decoder now keeps exactly
 // what the encoder converges to, mirroring anthToolInputArgs (#447).
-// TestDecodeResponsesResponseCanonicalizesEmptyArgs was contributed by
-// PR #451 (commit 5b6ea2d) and folded into this branch when #451 was closed
-// as superseded: it is the unit-level regression for the empty-arguments
-// half of the post-#448 drift, complementing the fuzz seeds above.
+// TestDecodeResponsesResponseCanonicalizesEmptyArgs pins the response-side
+// half of the empty-arguments normalization (implemented in #453): a named
+// Responses function_call with no arguments must decode to Arguments "{}",
+// the form EncodeResponsesResponse converges to, or the re-decode drifts
+// "" -> "{}" (CI seed f3cf67c7e34a870b on main cff74cb4, run 38865064044).
+// Non-empty arguments pass through verbatim.
 func TestDecodeResponsesResponseCanonicalizesEmptyArgs(t *testing.T) {
 	resp, err := DecodeResponsesResponse([]byte(`{"output":[{"tYpe":"function_call","nAme":"\b"}]}`))
 	if err != nil {
