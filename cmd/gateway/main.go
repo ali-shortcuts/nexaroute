@@ -230,34 +230,90 @@ func main() {
 	defer api.CloseSecurityStore()
 	var videoRT *videoRuntime.Runtime
 	if cfg.Video.Enabled {
+		// Universal video planner defaults: point the code-render planner
+		// back at this gateway's own data plane (loopback) so any
+		// configured text/coding model can author plans through the normal
+		// routing/credential machinery, and advertise the gateway's
+		// configured public/deployment model names as planning models when
+		// the operator did not pin an explicit list.
+		plannerBaseURL := cfg.Video.CodeRenderPlannerBaseURL
+		if cfg.Video.CodeRenderEnabled && strings.TrimSpace(plannerBaseURL) == "" {
+			host, port, splitErr := net.SplitHostPort(cfg.Listen)
+			if splitErr == nil {
+				if host == "" || host == "0.0.0.0" || host == "::" {
+					host = "127.0.0.1"
+				}
+				plannerBaseURL = "http://" + net.JoinHostPort(host, port)
+			}
+		}
+		plannerModels := cfg.Video.CodeRenderPlannerModels
+		if cfg.Video.CodeRenderEnabled && len(plannerModels) == 0 {
+			seen := map[string]bool{}
+			add := func(name string) {
+				name = strings.TrimSpace(name)
+				if name != "" && !seen[name] {
+					seen[name] = true
+					plannerModels = append(plannerModels, name)
+				}
+			}
+			add(cfg.Routing.PublicModel)
+			for _, ve := range cfg.VirtualEndpoints {
+				add(ve.PublicModel)
+			}
+			for _, p := range cfg.Providers {
+				if !p.Enabled {
+					continue
+				}
+				for _, m := range p.Models {
+					if !m.Enabled {
+						continue
+					}
+					add(m.Model)
+					for _, a := range m.Aliases {
+						add(a)
+					}
+				}
+			}
+		}
 		videoRT, err = videoRuntime.New(videoDomain.Config{
-			Enabled:                   cfg.Video.Enabled,
-			StorePath:                 cfg.Video.StorePath,
-			StorageRoot:               cfg.Video.StorageRoot,
-			QueueSize:                 cfg.Video.QueueSize,
-			Workers:                   cfg.Video.Workers,
-			AuthTokenEnv:              cfg.Video.AuthTokenEnv,
-			MaxAssetBytes:             cfg.Video.MaxAssetBytes,
-			DevelopmentFakeProvider:   cfg.Video.DevelopmentFakeProvider,
-			ComfyUIEnabled:            cfg.Video.ComfyUIEnabled,
-			ComfyUIBaseURL:            cfg.Video.ComfyUIBaseURL,
-			ComfyUIWorkflowPath:       cfg.Video.ComfyUIWorkflowPath,
-			ComfyUIModel:              cfg.Video.ComfyUIModel,
-			ComfyUIMaxDurationSeconds: cfg.Video.ComfyUIMaxDurationSeconds,
-			ComfyUIPromptNodeID:       cfg.Video.ComfyUIPromptNodeID,
-			ComfyUIPromptInput:        cfg.Video.ComfyUIPromptInput,
-			ComfyUINegativeNodeID:     cfg.Video.ComfyUINegativeNodeID,
-			ComfyUINegativeInput:      cfg.Video.ComfyUINegativeInput,
-			ComfyUIWidthNodeID:        cfg.Video.ComfyUIWidthNodeID,
-			ComfyUIWidthInput:         cfg.Video.ComfyUIWidthInput,
-			ComfyUIHeightNodeID:       cfg.Video.ComfyUIHeightNodeID,
-			ComfyUIHeightInput:        cfg.Video.ComfyUIHeightInput,
-			ComfyUIFramesNodeID:       cfg.Video.ComfyUIFramesNodeID,
-			ComfyUIFramesInput:        cfg.Video.ComfyUIFramesInput,
-			ComfyUIFPSNodeID:          cfg.Video.ComfyUIFPSNodeID,
-			ComfyUIFPSInput:           cfg.Video.ComfyUIFPSInput,
-			ComfyUISeedNodeID:         cfg.Video.ComfyUISeedNodeID,
-			ComfyUISeedInput:          cfg.Video.ComfyUISeedInput,
+			Enabled:                      cfg.Video.Enabled,
+			StorePath:                    cfg.Video.StorePath,
+			StorageRoot:                  cfg.Video.StorageRoot,
+			QueueSize:                    cfg.Video.QueueSize,
+			Workers:                      cfg.Video.Workers,
+			AuthTokenEnv:                 cfg.Video.AuthTokenEnv,
+			MaxAssetBytes:                cfg.Video.MaxAssetBytes,
+			DevelopmentFakeProvider:      cfg.Video.DevelopmentFakeProvider,
+			ComfyUIEnabled:               cfg.Video.ComfyUIEnabled,
+			ComfyUIBaseURL:               cfg.Video.ComfyUIBaseURL,
+			ComfyUIWorkflowPath:          cfg.Video.ComfyUIWorkflowPath,
+			ComfyUIModel:                 cfg.Video.ComfyUIModel,
+			ComfyUIMaxDurationSeconds:    cfg.Video.ComfyUIMaxDurationSeconds,
+			ComfyUIPromptNodeID:          cfg.Video.ComfyUIPromptNodeID,
+			ComfyUIPromptInput:           cfg.Video.ComfyUIPromptInput,
+			ComfyUINegativeNodeID:        cfg.Video.ComfyUINegativeNodeID,
+			ComfyUINegativeInput:         cfg.Video.ComfyUINegativeInput,
+			ComfyUIWidthNodeID:           cfg.Video.ComfyUIWidthNodeID,
+			ComfyUIWidthInput:            cfg.Video.ComfyUIWidthInput,
+			ComfyUIHeightNodeID:          cfg.Video.ComfyUIHeightNodeID,
+			ComfyUIHeightInput:           cfg.Video.ComfyUIHeightInput,
+			ComfyUIFramesNodeID:          cfg.Video.ComfyUIFramesNodeID,
+			ComfyUIFramesInput:           cfg.Video.ComfyUIFramesInput,
+			ComfyUIFPSNodeID:             cfg.Video.ComfyUIFPSNodeID,
+			ComfyUIFPSInput:              cfg.Video.ComfyUIFPSInput,
+			ComfyUISeedNodeID:            cfg.Video.ComfyUISeedNodeID,
+			ComfyUISeedInput:             cfg.Video.ComfyUISeedInput,
+			PiperEnabled:                 cfg.Video.PiperEnabled,
+			PiperBinary:                  cfg.Video.PiperBinary,
+			PiperModelPath:               cfg.Video.PiperModelPath,
+			CodeRenderEnabled:            cfg.Video.CodeRenderEnabled,
+			CodeRenderPlannerBaseURL:     plannerBaseURL,
+			CodeRenderPlannerAPIKeyEnv:   cfg.Video.CodeRenderPlannerAPIKeyEnv,
+			CodeRenderPlannerModel:       cfg.Video.CodeRenderPlannerModel,
+			CodeRenderPlannerModels:      plannerModels,
+			CodeRenderPlannerJSONMode:    cfg.Video.CodeRenderPlannerJSONMode,
+			CodeRenderMaxDurationSeconds: cfg.Video.CodeRenderMaxDurationSeconds,
+			CodeRenderWorkRoot:           cfg.Video.CodeRenderWorkRoot,
 		}, filepath.Dir(*configPath))
 		if err != nil {
 			bootstrap.Fatalf("cannot initialize video gateway: %v", err)
