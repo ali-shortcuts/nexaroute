@@ -27,4 +27,7 @@ NEXAROUTE_SOAK=1 go test -timeout=10m -count=1 ./internal/probe -run='^TestSoak'
 echo '== race-enabled soak =='
 GOMAXPROCS=4 NEXAROUTE_SOAK=1 go test -race -timeout=15m -count=1 ./internal/httpapi ./internal/probe -run='^TestSoak'
 
+echo '== budget leak slope soak (Wave C-4) =='
+NEXAROUTE_SOAK=1 go test -timeout=10m -count=1 -v ./internal/httpapi -run='^TestSoakBudgetLeakSlope$'
+
 echo 'SOAK PASS'
