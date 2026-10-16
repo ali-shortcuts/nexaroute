@@ -976,8 +976,7 @@
       (status === 'composing' ? '<small class="muted">Final composition is in progress; cancellation is disabled to protect the output.</small>' : '') + '</div></article>';
   }
   function openVideoCreate() {
-    const idempotencyKey = globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : `dashboard-video-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-    let submitting = false;
+    const idempotencyKey = crypto.randomUUID?.() || Date.now() + Math.random();
     const providers = state.videoProviders.map((p, i) => '<option value="' + esc(p.id) + '"' + (i === 0 ? ' selected' : '') + '>' + esc(p.id) + '</option>').join('');
     const providerOptions = providers || '<option value="" disabled selected>No provider available</option>';
     const crProvider = state.videoProviders.find(p => p.id === 'code-render');
@@ -1003,8 +1002,8 @@
       '<div class="field full"><label for="v-narration">Narration script <span class="muted">optional</span></label><textarea id="v-narration" rows="4" placeholder="Noora introduces Persepolis and explains its history…"></textarea><small class="muted">Gateway narration requires video.piper_enabled and a local Piper voice model. Use a multi-shot plan. Per-shot narration_segment values are used if this field is empty.</small></div>' +
       '<div class="field full"><label for="v-subtitle-language">Captions <span class="muted">optional</span></label><select id="v-subtitle-language"><option value="">No captions</option><option value="same-as-narration">Generate captions from narration script</option></select><small class="muted">Captions use the script as-is with estimated timing. They are not translated or word-aligned.</small></div>' +
       '<div class="field full"><label for="v-shot-plan">Shot plan JSON <span class="muted">optional</span></label><textarea id="v-shot-plan" rows="7" spellcheck="false" placeholder=\'[{"shot_id":"shot-01","duration_seconds":4,"prompt":"A wide establishing shot at sunrise"},{"shot_id":"shot-02","duration_seconds":4,"prompt":"The guide walks toward the ancient staircase"}]\'></textarea><small class="muted">Each shot needs a prompt and duration_seconds. The total duration is calculated automatically. Do not include output_asset; checkpoints are server-owned.</small><div class="field-actions"><button class="button ghost small" type="button" data-action="example-shot-plan">Insert two-shot example</button></div></div>' +
-      '<div class="field"><label for="v-max-cost">Maximum cost (USD) <span class="muted">optional</span></label><input id="v-max-cost" type="number" min="0.01" step="0.01" placeholder="No cap"><small class="muted">Requires the video cost ledger to be enabled.</small></div>' +
-      '<div class="field"><label><input id="v-dry-run" type="checkbox"> Estimate only (do not submit to provider)</label></div>' +
+      '<div class="field"><label for="v-cap">USD cap</label><input id="v-cap" type="number" min=".01" step=".01"></div>' +
+      '<div class="field"><label><input id="v-dry" type="checkbox"> Dry run</label></div>' +
       universalFields +
       '</div>';
     openModal('Create video job', form, async () => {
@@ -1052,13 +1051,9 @@
         negative_prompt: $('#v-negative').value.trim(),
         provider_preference: provider
       };
-      const maxCostRaw = $('#v-max-cost').value.trim();
-      if (maxCostRaw) {
-        const maxCost = Number(maxCostRaw);
-        if (!Number.isFinite(maxCost) || maxCost <= 0) throw Error('Maximum cost must be a positive USD amount.');
-        req.max_cost_usd = maxCost;
-      }
-      if ($('#v-dry-run').checked) req.dry_run = true;
+      const maxCost = $('#v-cap').value;
+      if (maxCost && ((req.max_cost_usd = Number(maxCost)) <= 0 || !Number.isFinite(req.max_cost_usd))) throw Error('Invalid cap.');
+      if ($('#v-dry').checked) req.dry_run = true;
       if (shotPlan) req.shot_plan = shotPlan;
       if (narrationText) req.narration_text = narrationText;
       if (subtitleLanguage) req.subtitle_language = subtitleLanguage;
@@ -1075,23 +1070,14 @@
         }
         if (subtitleLanguage && $('#v-language').value.trim()) req.subtitle_language = $('#v-language').value.trim();
       }
-      if (submitting) return;
-      submitting = true;
-      state.modal.submitting = true;
       const saveButton = $('[data-action="save-modal"]');
+      if (saveButton?.disabled) return;
       if (saveButton) saveButton.disabled = true;
       let res;
-      try {
-        res = await videoApi('/v1/video/jobs', { method: 'POST', ...body(req) });
-      } catch (error) {
-        submitting = false;
-        if (state.modal) state.modal.submitting = false;
-        if (saveButton?.isConnected) saveButton.disabled = false;
-        throw error;
-      }
+      try { res = await videoApi('/v1/video/jobs', { method: 'POST', ...body(req) }); }
+      catch (error) { if (saveButton) saveButton.disabled = false; throw error; }
       const id = res.id || res.job_id;
       if (id) rememberVideoJob(id);
-      if (state.modal) state.modal.submitting = false;
       closeModal();
       notice('Video job ' + (id || 'accepted') + ' queued.');
       await refreshVideo();
@@ -1170,7 +1156,7 @@
   function bindActivity() { $('#activity-filter')?.addEventListener('input', e => { state.activityQuery = e.target.value; render(); $('#activity-filter')?.focus(); }); $$('[data-activity-tab]').forEach(b => b.addEventListener('click', () => { state.activityTab = b.dataset.activityTab; render(); })); }
   function openAuth() { if (state.auth?.oidc_enabled) { window.location.assign('/admin/auth/login'); return; } if (!state.auth?.emergency_access_enabled || !state.auth?.api_key_configured) { notice('No browser emergency credential is configured.', true); return; } openModal('Emergency administrator access', `<p class=\"muted\">This explicit break-glass route is separate from SSO. Enter the configured <span class=\"code\">x-admin-key</span>; it stays in memory for this browser page only.</p><div class=\"field\"><label for=\"admin-key\">Emergency admin key</label><input id=\"admin-key\" type=\"password\" autocomplete=\"off\"></div>`, async () => { state.adminKey = $('#admin-key').value.trim(); closeModal(); const authenticated = await refresh(); if (authenticated) { state.auth = { ...state.auth, authenticated: true, subject: 'Emergency administrator', roles: ['admin'] }; renderAuthControl(); } else { state.adminKey = ''; state.csrfToken = ''; openAuth(); } }); }
   function openModal(title, content, save, label = 'Save') { state.modal = { save }; $('#dialog-root').innerHTML = `<div class="modal-backdrop" role="presentation"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title"><div class="modal-head"><div><span class="eyebrow">NexaRoute action</span><h2 id="modal-title">${esc(title)}</h2></div><button class="button ghost" data-action="close-modal" aria-label="Close">×</button></div><div class="modal-body">${content}</div><div class="modal-foot"><button class="button ghost" data-action="close-modal">Cancel</button>${save ? `<button class="button primary" data-action="save-modal">${esc(label)}</button>` : ''}</div></section></div>`; $('#dialog-root input, #dialog-root select')?.focus(); }
-  function closeModal() { if (state.modal?.submitting) return; state.modal = null; $('#dialog-root').innerHTML = ''; }
+  function closeModal() { state.modal = null; $('#dialog-root').innerHTML = ''; }
   function modelRow(m) { return `<label class="model-row"><input type="checkbox" value="${esc(m)}" checked><span><b>${esc(m)}</b><small>Available deployment</small></span><button type="button" class="button ghost small" data-action="test-model" data-model="${esc(m)}">Test</button></label>`; }
   function providerForm(p = {}) { const models = (p.models || []).map(m => typeof m === 'string' ? m : m.model).filter(Boolean); const dh = p.data_handling || {}; const trains = (dh.trains_on_data || 'unknown').toLowerCase(); const retention = (dh.retention || 'unknown').toLowerCase(); const note = dh.note || ''; return `<div class="form-grid"><div class="field"><label for="p-type">Provider protocol</label><select id="p-type"><option value="openai_compatible" ${p.type === 'openai_compatible' ? 'selected' : ''}>OpenAI compatible</option><option value="anthropic_compatible" ${p.type === 'anthropic_compatible' ? 'selected' : ''}>Anthropic compatible</option><option value="gemini" ${p.type === 'gemini' ? 'selected' : ''}>Gemini</option><option value="openai_responses" ${p.type === 'openai_responses' ? 'selected' : ''}>OpenAI Responses</option></select></div><div class="field"><label for="p-name">Display name</label><input id="p-name" value="${esc(p.name || '')}" required></div><div class="field full"><label for="p-base">Base URL</label><input id="p-base" type="url" value="${esc(p.base_url || '')}" required></div><div class="field"><label for="p-key">Upstream API key</label><input id="p-key" type="password" placeholder="${p.has_secret ? 'Saved credential — replace only if needed' : 'Enter upstream credential'}"></div><div class="field"><label for="p-auth">Authentication</label><select id="p-auth"><option value="bearer" ${p.auth_mode === 'bearer' ? 'selected' : ''}>Bearer</option><option value="x-api-key" ${p.auth_mode === 'x-api-key' ? 'selected' : ''}>x-api-key</option><option value="none" ${p.auth_mode === 'none' ? 'selected' : ''}>None</option></select></div><div class="field full"><fieldset class="data-handling-fieldset"><legend>Data handling</legend><div class="form-grid"><div class="field"><label for="p-trains">Trains on data</label><select id="p-trains"><option value="unknown" ${trains === 'unknown' ? 'selected' : ''}>Unknown</option><option value="yes" ${trains === 'yes' ? 'selected' : ''}>Yes</option><option value="no" ${trains === 'no' ? 'selected' : ''}>No</option></select></div><div class="field"><label for="p-retention">Retention</label><select id="p-retention"><option value="unknown" ${retention === 'unknown' ? 'selected' : ''}>Unknown</option><option value="none" ${retention === 'none' ? 'selected' : ''}>None</option><option value="limited" ${retention === 'limited' ? 'selected' : ''}>Limited</option></select></div><div class="field full"><label for="p-dh-note">Note <span class="muted">optional</span></label><input id="p-dh-note" type="text" maxlength="200" value="${esc(note)}" placeholder="Brief note on data handling (max 200 chars)"></div></div></fieldset></div><div class="field full"><div class="field-label-row"><label>Models and capabilities</label><button type="button" class="button ghost small" data-action="detect-models">Detect models</button></div><div id="model-list" class="check-list">${models.length ? models.map(modelRow).join('') : '<div class="muted model-empty">Detect models or add one manually below.</div>'}</div></div><div class="field full"><label for="p-manual">Add a model manually</label><div class="inline-input"><input id="p-manual" placeholder="model-id"><button type="button" class="button secondary small" data-action="add-manual-model">Add model</button></div></div></div><div class="secret-note"><span>●</span><span>Credentials are write-only. NexaRoute never returns upstream secrets to the browser after save.</span></div>`; }
   function readProvider(id) { const models = $$('#model-list input[type=checkbox]:checked').map(x => ({ id: x.value, model: x.value, enabled: true, priority: 0, weight: 1, capabilities: { streaming: true, tools: false, vision: false, reasoning: false } })), key = $('#p-key').value; const trains = $('#p-trains').value; const retention = $('#p-retention').value; const note = $('#p-dh-note').value.trim(); return { provider: { id: id || `provider-${Date.now()}`, name: $('#p-name').value.trim(), type: $('#p-type').value, base_url: $('#p-base').value.trim(), auth_mode: $('#p-auth').value, api_key: key, enabled: true, models, data_handling: { trains_on_data: trains, retention: retention, note: note } }, preserve_secret: !key, preserve_headers: true, preserve_proxy: true, replace_key: Boolean(key) }; }
