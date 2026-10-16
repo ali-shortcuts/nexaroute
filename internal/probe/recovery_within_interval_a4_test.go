@@ -211,11 +211,22 @@ func TestA4_SupervisorFirstSuccessfulProbeRestoresRoutability(t *testing.T) {
 	// Sync-path guard: the recovery must have gone through the engine's
 	// recovery worker (recovery_ready event), not a direct health-manager
 	// write — otherwise the supervisor path was never exercised.
+	// Poll-until-present, not a single snapshot: engine.go writes the
+	// health state BEFORE emitting the event on an independent lock, so a
+	// one-shot snapshot taken right after waitForState observes Healthy
+	// can miss the event under a descheduled worker. Convergence makes a
+	// missing event after the bound a genuine "path not exercised".
 	recovered := false
-	for _, ev := range bus.Snapshot() {
-		if ev.Kind == "recovery_ready" && ev.Deployment == "p/m" {
-			recovered = true
-			break
+	snapDeadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(snapDeadline) && !recovered {
+		for _, ev := range bus.Snapshot() {
+			if ev.Kind == "recovery_ready" && ev.Deployment == "p/m" {
+				recovered = true
+				break
+			}
+		}
+		if !recovered {
+			time.Sleep(5 * time.Millisecond)
 		}
 	}
 	if !recovered {
