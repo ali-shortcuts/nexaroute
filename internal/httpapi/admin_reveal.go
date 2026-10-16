@@ -88,21 +88,14 @@ type revealSecretRequest struct {
 	CredentialIndex *int `json:"credential_index,omitempty"`
 }
 
-// secretPreview returns a masked, non-reversible hint for a saved key. Long
-// keys show the first 6 and last 4 characters; shorter keys show less so the
-// preview never gives away most of a short secret.
+// secretPreview preserves the legacy response field without disclosing any
+// characters from the credential. Full values are available only through the
+// separately authorized, audited reveal operation.
 func secretPreview(secret string) string {
-	r := []rune(secret)
-	switch n := len(r); {
-	case n == 0:
+	if secret == "" {
 		return ""
-	case n >= 24:
-		return string(r[:6]) + "…" + string(r[n-4:])
-	case n >= 12:
-		return string(r[:2]) + "…" + string(r[n-2:])
-	default:
-		return maskedPlaceholder
 	}
+	return maskedPlaceholder
 }
 
 // credentialMeta describes pool entries without any secret value.
