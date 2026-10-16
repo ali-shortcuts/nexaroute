@@ -484,13 +484,36 @@ func (s *Store) AuditRecords(ctx context.Context, limit int) ([]AuditEvent, erro
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		// Order by sequence descending (append order), not storage-key
+		// order: the storage key is timestamp-major, so caller-supplied
+		// non-monotonic timestamps otherwise come back in a different
+		// order than the PostgreSQL/Redis adapters (which order by
+		// sequence). "Newest first" is the append order. Legacy
+		// (pre-chain) records carry no stored sequence; their key
+		// sequence is authoritative, as in verification.
+		type ordered struct {
+			event AuditEvent
+			seq   uint64
+		}
+		var all []ordered
 		c := tx.Bucket(bucketAudit).Cursor()
-		for k, raw := c.Last(); k != nil && len(out) < limit; k, raw = c.Prev() {
+		for k, raw := c.First(); k != nil; k, raw = c.Next() {
 			var event AuditEvent
 			if err := json.Unmarshal(raw, &event); err != nil {
 				return errors.New("security store contains a malformed audit record")
 			}
-			out = append(out, event)
+			seq := event.Seq
+			if event.Hash == "" {
+				seq = auditKeySeq(k)
+			}
+			all = append(all, ordered{event: event, seq: seq})
+		}
+		sort.SliceStable(all, func(i, j int) bool { return all[i].seq > all[j].seq })
+		for _, r := range all {
+			if len(out) >= limit {
+				break
+			}
+			out = append(out, r.event)
 		}
 		return nil
 	})
