@@ -832,8 +832,13 @@ func TestAdminRateLimitBlocksBurstAfterAuthFailures(t *testing.T) {
 		srv.Handler().ServeHTTP(rr, req)
 		last = rr.Code
 	}
-	if last != http.StatusTooManyRequests {
-		t.Fatalf("status=%d want 429 after sustained auth failures", last)
+	if last != http.StatusUnauthorized {
+		// F11 (issue #425): the burst IS still throttled — every one
+		// of these requests is dropped before any authentication work
+		// — but the status is now uniform with a plain failed attempt
+		// (401), so the 401-vs-429 difference can no longer be used
+		// as an auth-recency oracle for the source address.
+		t.Fatalf("status=%d want 401 (uniform) after sustained auth failures", last)
 	}
 	// A different IP is unaffected.
 	req := httptest.NewRequest(http.MethodGet, "http://gateway/admin/api/snapshot", nil)

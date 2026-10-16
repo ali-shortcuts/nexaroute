@@ -26,7 +26,13 @@ import (
 
 const (
 	maxPendingOIDCLogins = 4096
-	oidcLoginLifetime    = 10 * time.Minute
+	// maxPendingOIDCLoginsPerIP bounds how many pending login
+	// transactions one source address may hold at once (F3, issue
+	// #425). The global table is fail-closed at 4096 entries; without
+	// a per-IP bound a single attacker could fill it and lock out
+	// every legitimate admin login.
+	maxPendingOIDCLoginsPerIP = 32
+	oidcLoginLifetime         = 10 * time.Minute
 )
 
 type pendingOIDCLogin struct {
@@ -34,6 +40,7 @@ type pendingOIDCLogin struct {
 	verifier            string
 	previousSessionHash string
 	browserBindingHash  string
+	sourceIP            string
 	expiresAt           time.Time
 }
 
@@ -192,7 +199,7 @@ func hashState(state string) string {
 	return hex.EncodeToString(digest[:])
 }
 
-func (a *oidcAuthenticator) Begin(previousSessionHash, browserBinding string) (string, string, error) {
+func (a *oidcAuthenticator) Begin(ip, previousSessionHash, browserBinding string) (string, string, error) {
 	bindingBytes, err := base64.RawURLEncoding.DecodeString(browserBinding)
 	if err != nil || len(bindingBytes) != 32 || len(browserBinding) != 43 {
 		return "", "", errors.New("invalid OIDC browser binding")
@@ -208,18 +215,23 @@ func (a *oidcAuthenticator) Begin(previousSessionHash, browserBinding string) (s
 	verifier := oauth2.GenerateVerifier()
 	now := time.Now()
 	a.mu.Lock()
+	ipPending := 0
 	for key, value := range a.pending {
 		if !now.Before(value.expiresAt) {
 			delete(a.pending, key)
+			continue
+		}
+		if value.sourceIP == ip {
+			ipPending++
 		}
 	}
-	if len(a.pending) >= maxPendingOIDCLogins {
+	if len(a.pending) >= maxPendingOIDCLogins || ipPending >= maxPendingOIDCLoginsPerIP {
 		a.mu.Unlock()
 		return "", "", errors.New("too many pending OIDC login transactions")
 	}
 	a.pending[hashState(state)] = pendingOIDCLogin{
 		nonce: nonce, verifier: verifier, previousSessionHash: previousSessionHash,
-		browserBindingHash: hashState(browserBinding), expiresAt: now.Add(oidcLoginLifetime),
+		browserBindingHash: hashState(browserBinding), sourceIP: ip, expiresAt: now.Add(oidcLoginLifetime),
 	}
 	a.mu.Unlock()
 	url := a.oauth.AuthCodeURL(state, oidc.Nonce(nonce), oauth2.S256ChallengeOption(verifier))
