@@ -223,11 +223,212 @@ func TestDecodeOpenAIChatResponseDropsNamelessToolCall(t *testing.T) {
 	}
 }
 
+// TestDecodeAnthropicResponseDropsUnsignedThinking is the minimized
+// regression for the defect found by FuzzResponseRoundTrip (#447): the
+// decoder kept unsigned/redacted thinking blocks in the IR while the
+// encoder never emits them (EncodeAnthropicResponse only surfaces signed
+// thinking, since unsigned would poison replay per COMPATIBILITY.md rule
+// 2), so decode(encode(decode(x))) silently turned a thinking block into
+// a text padding block. The decoder now drops exactly what the encoder
+// cannot emit, mirroring the nameless tool-call drop (#403). Signed
+// thinking must survive verbatim: no block-type normalization.
+func TestDecodeAnthropicResponseDropsUnsignedThinking(t *testing.T) {
+	for _, raw := range []string{
+		`{"Content":[{"tYpe":"thinking"}]}`,
+		`{"content":[{"type":"thinking","thinking":"x"}]}`,
+		`{"content":[{"type":"thinking","thinking":"x","signature":""}]}`,
+		`{"content":[{"type":"redacted_thinking","redacted_thinking":"hidden"}]}`,
+	} {
+		resp, err := DecodeAnthropicResponse([]byte(raw))
+		if err != nil {
+			t.Fatalf("decode %s: %v", raw, err)
+		}
+		for _, b := range resp.Blocks {
+			if b.Type == PartThinking {
+				t.Fatalf("RED: unencodable thinking kept in IR for %s: %+v", raw, b.Thinking)
+			}
+		}
+		enc, ok := encodeFuzzResponse(0, resp)
+		if !ok {
+			t.Fatal("encode declined")
+		}
+		resp2, ok := decodeFuzzResponse(0, enc)
+		if !ok {
+			t.Fatalf("re-decode of encoder output failed for %s", raw)
+		}
+		if !responseEqualSansRaw(resp, resp2) {
+			t.Fatalf("round-trip unstable after fix for %s:\n%s\n%s", raw, mustFuzzJSON(t, resp), mustFuzzJSON(t, resp2))
+		}
+	}
+	// Signed thinking is meaningful and must survive verbatim.
+	signed, err := DecodeAnthropicResponse([]byte(`{"id":"m","type":"message","role":"assistant","model":"up","content":[{"type":"thinking","thinking":"why","signature":"sig"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":2}}`))
+	if err != nil {
+		t.Fatalf("signed decode: %v", err)
+	}
+	if len(signed.Blocks) != 1 || signed.Blocks[0].Type != PartThinking || signed.Blocks[0].Thinking.Text != "why" || signed.Blocks[0].Thinking.Signature != "sig" {
+		t.Fatalf("signed thinking lost or altered: %+v", signed.Blocks)
+	}
+	senc, ok := encodeFuzzResponse(0, signed)
+	if !ok {
+		t.Fatal("signed encode declined")
+	}
+	signed2, ok := decodeFuzzResponse(0, senc)
+	if !ok {
+		t.Fatal("signed re-decode failed")
+	}
+	if !responseEqualSansRaw(signed, signed2) {
+		t.Fatalf("signed round-trip unstable:\n%s\n%s", mustFuzzJSON(t, signed), mustFuzzJSON(t, signed2))
+	}
+}
+
+// TestDecodeAnthropicResponseNormalizesEmptyToolInput is the minimized
+// regression for the second defect FuzzResponseRoundTrip found on the #447
+// branch (CI seed 27b6689a0474e4ff): a tool_use block with an empty,
+// missing, or null input decoded to Arguments "{}"/"null" while the
+// encoder's `input,omitempty` drops empty maps, so the re-decode came back
+// "null" — decode(encode(decode(x))) unstable. The decoder now collapses
+// the indistinguishable shapes to "{}", the canonical form the encoder
+// converges to (mirrors the #447 unsigned-thinking fix).
+func TestDecodeAnthropicResponseNormalizesEmptyToolInput(t *testing.T) {
+	emptyShapes := []string{
+		`{"content":[{"type":"tool_use","id":"x","name":"n"}]}`,
+		`{"content":[{"type":"tool_use","id":"x","name":"n","input":null}]}`,
+		`{"content":[{"type":"tool_use","id":"x","name":"n","input":{}}]}`,
+	}
+	for _, raw := range emptyShapes {
+		t.Run(raw, func(t *testing.T) {
+			resp, err := DecodeAnthropicResponse([]byte(raw))
+			if err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if len(resp.Blocks) != 1 || resp.Blocks[0].Type != PartToolCall {
+				t.Fatalf("expected one tool_call block, got %+v", resp.Blocks)
+			}
+			if got := resp.Blocks[0].ToolCall.Arguments; got != "{}" {
+				t.Fatalf("RED: empty tool input not canonicalized, args=%q", got)
+			}
+			enc, ok := encodeFuzzResponse(0, resp)
+			if !ok {
+				t.Fatal("encode declined")
+			}
+			resp2, ok := decodeFuzzResponse(0, enc)
+			if !ok {
+				t.Fatal("re-decode of encoder output failed")
+			}
+			if got := resp2.Blocks[0].ToolCall.Arguments; got != "{}" {
+				t.Fatalf("round-trip drifted: args=%q", got)
+			}
+			if !responseEqualSansRaw(resp, resp2) {
+				t.Fatalf("round-trip unstable:\n%s\n%s", mustFuzzJSON(t, resp), mustFuzzJSON(t, resp2))
+			}
+		})
+	}
+	// Non-empty input must be preserved (canonical JSON form) and stable.
+	nonEmpty := `{"content":[{"type":"tool_use","id":"x","name":"n","input":{"b":2,"a":1}}]}`
+	resp, err := DecodeAnthropicResponse([]byte(nonEmpty))
+	if err != nil {
+		t.Fatalf("decode non-empty: %v", err)
+	}
+	if got := resp.Blocks[0].ToolCall.Arguments; got != `{"a":1,"b":2}` {
+		t.Fatalf("non-empty input altered: args=%q", got)
+	}
+	enc, ok := encodeFuzzResponse(0, resp)
+	if !ok {
+		t.Fatal("encode declined")
+	}
+	resp2, ok := decodeFuzzResponse(0, enc)
+	if !ok {
+		t.Fatal("re-decode failed")
+	}
+	if !responseEqualSansRaw(resp, resp2) {
+		t.Fatalf("non-empty round-trip unstable:\n%s\n%s", mustFuzzJSON(t, resp), mustFuzzJSON(t, resp2))
+	}
+}
+
+// TestDecodeResponsesResponseDropsNamelessFunctionCall is the minimized
+// regression for the defect found by FuzzResponseRoundTrip (#447): the
+// Responses decoder kept function_call items with an empty name in the IR
+// while EncodeResponsesResponse never emits them (no encoder emits a
+// nameless call), so decode(encode(decode(x))) silently lost the block and
+// flipped stop_reason tool_use -> end_turn. Mirrors
+// TestDecodeOpenAIChatResponseDropsNamelessToolCall (#403).
+func TestDecodeResponsesResponseDropsNamelessFunctionCall(t *testing.T) {
+	raw := []byte(`{"output":[{"tYpe":"function_call"}]}`)
+	resp, err := DecodeResponsesResponse(raw)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	for _, b := range resp.Blocks {
+		if b.Type == PartToolCall {
+			t.Fatalf("RED: nameless function_call kept in IR: %+v", b.ToolCall)
+		}
+	}
+	if resp.StopReason == StopToolUse {
+		t.Fatalf("RED: nameless function_call drove stop_reason to tool_use")
+	}
+	enc, ok := encodeFuzzResponse(2, resp)
+	if !ok {
+		t.Fatal("encode declined")
+	}
+	resp2, ok := decodeFuzzResponse(2, enc)
+	if !ok {
+		t.Fatal("re-decode of encoder output failed")
+	}
+	if !responseEqualSansRaw(resp, resp2) {
+		t.Fatalf("round-trip unstable after fix:\n%s\n%s", mustFuzzJSON(t, resp), mustFuzzJSON(t, resp2))
+	}
+}
+
+// TestAnthropicStopSequenceRoundTrips is the minimized regression for the
+// latent defect found while fixing #447: EncodeAnthropicResponse downgraded
+// StopStopSequence to "max_tokens", so decode(encode(decode(x))) reported a
+// truncation that never happened. The encoder now emits the true reason.
+func TestAnthropicStopSequenceRoundTrips(t *testing.T) {
+	raw := []byte(`{"id":"m1","type":"message","role":"assistant","model":"m","content":[{"type":"text","text":"hi"}],"stop_reason":"stop_sequence","usage":{"input_tokens":1,"output_tokens":2}}`)
+	resp, err := DecodeAnthropicResponse(raw)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.StopReason != StopStopSequence {
+		t.Fatalf("decode lost stop_sequence: %q", resp.StopReason)
+	}
+	out := EncodeAnthropicResponse(resp, "m")
+	if out.StopReason == nil || *out.StopReason != StopStopSequence {
+		got := "<nil>"
+		if out.StopReason != nil {
+			got = *out.StopReason
+		}
+		t.Fatalf("RED: encoder rewrote stop_sequence to %q", got)
+	}
+	body := mustJSON(out)
+	resp2, err := DecodeAnthropicResponse(body)
+	if err != nil {
+		t.Fatalf("re-decode: %v", err)
+	}
+	if !responseEqualSansRaw(resp, resp2) {
+		t.Fatalf("round-trip unstable after fix: %q -> %q", resp.StopReason, resp2.StopReason)
+	}
+}
+
 func FuzzResponseRoundTrip(f *testing.F) {
 	f.Add(byte(0), []byte(`{"id":"msg_1","type":"message","role":"assistant","model":"m","content":[{"type":"text","text":"hello"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":2}}`))
 	f.Add(byte(1), []byte(`{"id":"chatcmpl-1","object":"chat.completion","created":1,"model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3}}`))
 	f.Add(byte(2), []byte(`{"id":"resp_1","object":"response","status":"completed","model":"m","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hi"}]}],"usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3}}`))
 	f.Add(byte(3), []byte(`{"eventType":"messageStop","payload":{"stopReason":"end_turn"}}`))
+	// Minimized regression seed for #447: an unsigned thinking block
+	// (case-variant keys) that the Anthropic decoder kept while the encoder
+	// drops, breaking decode(encode(decode(x))) stability (thinking -> text).
+	f.Add(byte(0), []byte(`{"Content":[{"tYpe":"thinking"}]}`))
+	// Minimized regression seeds for the two further #447 instabilities
+	// fixed on this branch: a nameless function_call the Responses decoder
+	// kept while the encoder drops (codec 2), and a stop_sequence reason
+	// the Anthropic encoder downgraded to max_tokens (codec 0).
+	f.Add(byte(2), []byte(`{"output":[{"tYpe":"function_call"}]}`))
+	f.Add(byte(0), []byte(`{"id":"m1","type":"message","role":"assistant","model":"m","content":[{"type":"text","text":"hi"}],"stop_reason":"stop_sequence","usage":{"input_tokens":1,"output_tokens":2}}`))
+	// tool_use with an empty input object: the decoder must canonicalize to
+	// "{}", matching what the encoder's `input,omitempty` converges to
+	// (missing/null/{} shapes are indistinguishable on the wire).
+	f.Add(byte(0), []byte(`{"content":[{"type":"tool_use","id":"x","name":"n","input":{}}]}`))
 	f.Fuzz(func(t *testing.T, codecByte byte, raw []byte) {
 		codec := int(codecByte) % 4
 		resp, ok := decodeFuzzResponse(codec, raw)
@@ -335,6 +536,23 @@ func responseEqualSansRaw(a, b Response) bool {
 	// padding shape is tolerated here.
 	a.Blocks = dropNullTextBlocks(a.Blocks)
 	b.Blocks = dropNullTextBlocks(b.Blocks)
+	// Tool-call IDs: the OpenAI-chat and Responses encoders mint call_<n>
+	// IDs for ID-less tool calls because their APIs require an ID
+	// (openai_chat.go, openai_responses.go). An absent tool-call ID may
+	// legitimately gain a minted one on the hop; a present ID must survive
+	// verbatim — mirroring the response-level ID rule above. Block types,
+	// names, and arguments must still match exactly; only the minted ID is
+	// folded, and only positionally (length mismatch still fails).
+	if len(a.Blocks) == len(b.Blocks) {
+		for i := range a.Blocks {
+			if a.Blocks[i].Type == PartToolCall && a.Blocks[i].ToolCall != nil && a.Blocks[i].ToolCall.ID == "" &&
+				b.Blocks[i].Type == PartToolCall && b.Blocks[i].ToolCall != nil {
+				cp := *b.Blocks[i].ToolCall
+				cp.ID = ""
+				b.Blocks[i].ToolCall = &cp
+			}
+		}
+	}
 	aj, aerr := json.Marshal(a)
 	bj, berr := json.Marshal(b)
 	return aerr == nil && berr == nil && bytes.Equal(aj, bj)
@@ -392,9 +610,69 @@ func mustFuzzJSON(t *testing.T, v any) string {
 	return string(b)
 }
 
+// TestDecodeRequestsDropNamelessToolCalls is the minimized regression for
+// the request-side twin of the #447 nameless-call asymmetry: all three
+// request decoders kept nameless tool calls that their encoders drop, so
+// the assistant message carrying one vanished on re-encode (CI failure on
+// PR #448 head 66cc47e, run 38862152078, FuzzRequestRoundTrip seed
+// 5d2d966a922a3918 — codec 2). Each decoder now drops exactly what its
+// encoder cannot emit, mirroring the response-side drops (#403/#447).
+func TestDecodeRequestsDropNamelessToolCalls(t *testing.T) {
+	cases := []struct {
+		name  string
+		codec int
+		raw   string
+	}{
+		{"responses", 2, `{"model":"m","input":[{"type":"function_call","call_id":"c1","name":"","arguments":"{}"}]}`},
+		{"chat", 1, `{"model":"m","messages":[{"role":"assistant","tool_calls":[{"id":"x","type":"function","function":{}}]}]}`},
+		{"anthropic", 0, `{"model":"m","max_tokens":8,"messages":[{"role":"assistant","content":[{"type":"tool_use","id":"x","input":{}}]}]}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req, ok := decodeFuzzRequest(tc.codec, []byte(tc.raw))
+			if !ok {
+				t.Fatal("decode failed")
+			}
+			for _, m := range req.Messages {
+				for _, p := range m.Parts {
+					if p.Type == PartToolCall {
+						t.Fatalf("RED: nameless tool call kept in IR: %+v", p.ToolCall)
+					}
+				}
+			}
+			enc, ok := encodeFuzzRequest(tc.codec, req)
+			if !ok {
+				t.Fatal("encode declined")
+			}
+			req2, ok := decodeFuzzRequest(tc.codec, enc)
+			if !ok {
+				t.Fatal("re-decode failed")
+			}
+			a, _ := json.Marshal(normalizeRequest(tc.codec, req))
+			b, _ := json.Marshal(normalizeRequest(tc.codec, req2))
+			if string(a) != string(b) {
+				t.Fatalf("request round-trip unstable:\nfirst:  %s\nsecond: %s", a, b)
+			}
+		})
+	}
+	// A named Responses function_call must survive verbatim.
+	req, ok := decodeFuzzRequest(2, []byte(`{"model":"m","input":[{"type":"function_call","call_id":"c1","name":"lookup","arguments":"{}"}]}`))
+	if !ok {
+		t.Fatal("named decode failed")
+	}
+	if len(req.Messages) != 1 || len(req.Messages[0].Parts) != 1 || req.Messages[0].Parts[0].ToolCall == nil || req.Messages[0].Parts[0].ToolCall.Name != "lookup" {
+		t.Fatalf("named function_call lost or altered: %+v", req.Messages)
+	}
+}
+
 func FuzzRequestRoundTrip(f *testing.F) {
 	f.Add(byte(0), []byte(`{"model":"m","max_tokens":8,"messages":[{"role":"user","content":"hi"}]}`))
 	f.Add(byte(1), []byte(`{"model":"m","messages":[{"role":"user","content":"hi"}]}`))
+	// Minimized regression seed for the CI failure on PR #448 head
+	// 66cc47e (testdata/fuzz/FuzzRequestRoundTrip/5d2d966a922a3918): a
+	// nameless Responses function_call input item whose assistant
+	// message vanished on re-encode.
+	f.Add(byte(2), []byte(`{"model":"m","input":[{"type":"function_call","call_id":"c1","name":"","arguments":"{}"}]}`))
 	f.Add(byte(2), []byte(`{"model":"m","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}]}`))
 	f.Fuzz(func(t *testing.T, codecByte byte, raw []byte) {
 		codec := int(codecByte) % 3
@@ -581,4 +859,48 @@ func canonicalToolSchema(raw json.RawMessage) json.RawMessage {
 		return raw
 	}
 	return compact
+}
+
+// TestDecodeResponsesRequestNormalizesEmptyArgs is the minimized regression
+// for the defect found by FuzzRequestRoundTrip (#447): the Responses request
+// decoder kept empty tool arguments verbatim while the request encoder
+// normalizes empty/whitespace arguments to "{}", so
+// decode(encode(decode(x))) drifted "" -> "{}". The decoder now keeps exactly
+// what the encoder converges to, mirroring anthToolInputArgs (#447).
+func TestDecodeResponsesRequestNormalizesEmptyArgs(t *testing.T) {
+	for _, tc := range []struct{ args, wire string }{
+		{"", `""`},
+		{"   ", `"   "`},
+		{"\t\n", `"\t\n"`},
+	} {
+		raw := []byte(`{"model":"m","input":[{"type":"function_call","name":"f","arguments":` + tc.wire + `}]}`)
+		req, ok := decodeFuzzRequest(2, raw)
+		if !ok {
+			t.Fatalf("decode declined for args %q", tc.args)
+		}
+		got := req.Messages[0].Parts[0].ToolCall.Arguments
+		if got != "{}" {
+			t.Fatalf("RED: empty args kept as %q, want canonical \"{}\"", got)
+		}
+		enc, ok := encodeFuzzRequest(2, req)
+		if !ok {
+			t.Fatalf("encode declined for args %q", tc.args)
+		}
+		req2, ok := decodeFuzzRequest(2, enc)
+		if !ok {
+			t.Fatalf("re-decode failed for args %q", tc.args)
+		}
+		if req2.Messages[0].Parts[0].ToolCall.Arguments != "{}" {
+			t.Fatalf("RED: request args unstable for %q", tc.args)
+		}
+	}
+	// Non-empty arguments pass through verbatim.
+	raw := []byte(`{"model":"m","input":[{"type":"function_call","name":"f","arguments":"{\"a\":1}"}]}`)
+	req, ok := decodeFuzzRequest(2, raw)
+	if !ok {
+		t.Fatal("decode declined")
+	}
+	if got := req.Messages[0].Parts[0].ToolCall.Arguments; got != `{"a":1}` {
+		t.Fatalf("non-empty args altered: %q", got)
+	}
 }
