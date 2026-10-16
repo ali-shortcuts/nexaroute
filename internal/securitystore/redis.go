@@ -398,10 +398,13 @@ func (s *RedisStore) RotateSession(ctx context.Context, oldHash, hash string, va
 		// The existence check is sound inside the CAS loop: every
 		// session creator carries an audit event and therefore passes
 		// through the same version gate; a lost race replans and
-		// re-checks.
+		// re-checks. Rotating onto the same identifier it replaces
+		// (oldHash == hash) is a replace, exactly as the bbolt and
+		// PostgreSQL adapters behave (they delete first, then check);
+		// only a hash taken by a *different* live session collides.
 		if _, exists, err := s.client.HGet(ctx, securityRedisSessionsKey, hash); err != nil {
 			return nil, nil, fmt.Errorf("securitystore: check session: %w", err)
-		} else if exists {
+		} else if exists && hash != oldHash {
 			return nil, nil, errors.New("session identifier collision")
 		}
 		var del []string

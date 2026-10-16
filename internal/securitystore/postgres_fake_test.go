@@ -104,14 +104,43 @@ func (c *fakePGConn) beginTx(opts driver.TxOptions) (driver.Tx, error) {
 	if !opts.ReadOnly {
 		c.db.writerMu.Lock()
 		tx.write = true
+		// Snapshot for rollback: writer transactions are
+		// serialized, so restoring the snapshot on rollback
+		// emulates real transaction atomicity (a failed
+		// session rotation or audit append leaves no partial
+		// writes behind).
+		c.db.mu.Lock()
+		tx.snapSessions = cloneBytesMap(c.db.sessions)
+		tx.snapAudit = cloneAuditMap(c.db.audit)
+		tx.snapMeta = cloneBytesMap(c.db.meta)
+		c.db.mu.Unlock()
 	}
 	return tx, nil
 }
 
+func cloneBytesMap(m map[string][]byte) map[string][]byte {
+	out := make(map[string][]byte, len(m))
+	for k, v := range m {
+		out[k] = append([]byte(nil), v...)
+	}
+	return out
+}
+
+func cloneAuditMap(m map[int64][]byte) map[int64][]byte {
+	out := make(map[int64][]byte, len(m))
+	for k, v := range m {
+		out[k] = append([]byte(nil), v...)
+	}
+	return out
+}
+
 type fakePGTx struct {
-	db    *fakePGDB
-	write bool
-	done  bool
+	db           *fakePGDB
+	write        bool
+	done         bool
+	snapSessions map[string][]byte
+	snapAudit    map[int64][]byte
+	snapMeta     map[string][]byte
 }
 
 func (x *fakePGTx) finish() {
@@ -136,6 +165,13 @@ func (x *fakePGTx) Commit() error {
 }
 
 func (x *fakePGTx) Rollback() error {
+	if !x.done && x.write {
+		x.db.mu.Lock()
+		x.db.sessions = x.snapSessions
+		x.db.audit = x.snapAudit
+		x.db.meta = x.snapMeta
+		x.db.mu.Unlock()
+	}
 	x.finish()
 	return nil
 }
