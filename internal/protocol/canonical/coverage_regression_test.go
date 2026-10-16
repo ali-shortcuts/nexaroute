@@ -52,7 +52,12 @@ func TestCoveragePrimaryCodecs(t *testing.T) {
 		},
 		Tools: []core.OpenAITool{{Type: "function", Function: core.OpenAIFunction{Name: "WriteFile", Parameters: map[string]any{"type": "object"}}}}, ToolChoice: map[string]any{"type": "function", "function": map[string]any{"name": "WriteFile"}}, ParallelToolCalls: &parallel, ReasoningEffort: "low",
 	}, "client-openai")
-	if len(decodedOpenAI.System) != 2 || len(decodedOpenAI.Messages) != 3 || len(decodedOpenAI.Tools) != 1 {
+	// System length is 1, not 2: the fixture's system input_image is
+	// dropped at decode by design — system content is text-only in every
+	// request encoder here, so an unencodable system image must not enter
+	// the IR (FuzzRequestRoundTrip #447; see
+	// TestDecodeOpenAIChatRequestDropsSystemImage).
+	if len(decodedOpenAI.System) != 1 || len(decodedOpenAI.Messages) != 3 || len(decodedOpenAI.Tools) != 1 {
 		t.Fatalf("DecodeOpenAIChatRequest=%+v", decodedOpenAI)
 	}
 
