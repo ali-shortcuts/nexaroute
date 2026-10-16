@@ -110,6 +110,11 @@ func (r *Renderer) RenderPlan(ctx context.Context, plan video.Plan, dir string) 
 	if err := plan.Validate(0); err != nil {
 		return Result{}, err
 	}
+	absoluteDir, err := filepath.Abs(dir)
+	if err != nil {
+		return Result{}, fmt.Errorf("resolve render directory: %w", err)
+	}
+	dir = absoluteDir
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return Result{}, err
 	}

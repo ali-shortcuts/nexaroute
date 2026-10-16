@@ -102,3 +102,11 @@ func TestParsePlanRejectsNoJSON(t *testing.T) {
 		t.Fatal("expected error for non-JSON output")
 	}
 }
+
+func TestParsePlanRejectsTrailingContent(t *testing.T) {
+	for _, raw := range []string{goodPlanJSON + " trailing", goodPlanJSON + " {\"another\":true}"} {
+		if _, err := agent.ParsePlan(raw); err == nil {
+			t.Fatalf("expected trailing content to be rejected: %q", raw[len(goodPlanJSON):])
+		}
+	}
+}
