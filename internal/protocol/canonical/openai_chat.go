@@ -140,6 +140,15 @@ func openAIContentToParts(v any, system bool) []Part {
 					parts = append(parts, Part{Type: PartText, Text: txt})
 				}
 			case "image_url", "input_image":
+				// System content is text-only in every request encoder
+				// here (the chat and Anthropic encoders emit system as
+				// text; unknown system part types are already dropped
+				// below), so a system image must not enter the IR:
+				// decode(encode(decode(x))) would silently lose it
+				// (FuzzRequestRoundTrip #447, CI seed 858e6836af94573a).
+				if system {
+					continue
+				}
 				img := decodeOpenAIImage(m)
 				if img != nil {
 					parts = append(parts, Part{Type: PartImage, Image: img})
