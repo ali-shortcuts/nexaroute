@@ -30,7 +30,6 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/decision/policy"
 	"github.com/ali-shortcuts/nexaroute/internal/events"
 	"github.com/ali-shortcuts/nexaroute/internal/health"
-	"github.com/ali-shortcuts/nexaroute/internal/pricing"
 	"github.com/ali-shortcuts/nexaroute/internal/probe"
 	"github.com/ali-shortcuts/nexaroute/internal/providers"
 	"github.com/ali-shortcuts/nexaroute/internal/route"
@@ -46,8 +45,9 @@ var webFS embed.FS
 type Server struct {
 	applyMu           sync.Mutex
 	runtimeMu         sync.RWMutex
-	cfg               config.Config // effective runtime config (base + env overlay)
-	baseCfg           config.Config // durable file config, never contains runtime env overlays
+	cfg               config.Config                  // effective runtime config (base + env overlay)
+	cfgSnap           atomic.Pointer[configSnapshot] // immutable snapshot, swapped on reload (C1)
+	baseCfg           config.Config                  // durable file config, never contains runtime env overlays
 	configPath        string
 	reg               *providers.Registry
 	rt                *router.Router
@@ -81,9 +81,6 @@ type Server struct {
 	usage                  *usage.Tracker
 	budgets                *usage.BudgetLedger
 	budgetAlerter          *budgetAlerter
-	bookMu                 sync.Mutex
-	bookCache              *pricing.Book
-	bookCacheRev           uint64
 	identityUsage          *usage.IdentityTracker
 	capStore               *compat.Store
 	routeResolver          *route.Resolver
@@ -293,6 +290,9 @@ func New(cfg config.Config, configPath string, reg *providers.Registry, rt *rout
 	// Production-telemetry flushes run on a periodic background tick, never
 	// on the data-plane hot path.
 	s.startTelemetryFlushLoop()
+	// Publish the initial immutable config snapshot (C1): the request path
+	// reads this instead of deep-cloning per request.
+	s.cfgSnap.Store(newConfigSnapshot(cfg))
 	return s
 }
 
@@ -667,6 +667,9 @@ func (s *Server) applyConfigLocked(baseCfg config.Config) error {
 	}
 
 	s.cfg = cfg
+	// Publish the new immutable snapshot (C1) under the same runtime lock:
+	// in-flight requests keep the old snapshot, new requests see the new one.
+	s.cfgSnap.Store(newConfigSnapshot(cfg))
 	s.baseCfg = cloneConfig(baseCfg)
 	// Budget webhook alerts follow the new policy without losing
 	// fired marks (a reload never re-arms an already-sent alert).

@@ -74,11 +74,13 @@ func requestBudgetParts(r *http.Request) (int64, int64) {
 }
 
 // budgetEstimateFor prices the admission estimate against the most
-// expensive deployment serving `model` under the active price
-// book. ok=false when no deployment serves the model (routing will
-// reject the request on its own; no budget hold is taken).
-func (s *Server) budgetEstimateFor(cfg config.Config, model string, inputEst, outputAllowance int64) (float64, bool) {
-	book := pricing.FromConfig(cfg)
+// expensive deployment serving `model` under the snapshot's pre-built price
+// book (C1: one book per config revision, not one per admission). ok=false
+// when no deployment serves the model (routing will reject the request on
+// its own; no budget hold is taken).
+func (s *Server) budgetEstimateFor(snap *configSnapshot, model string, inputEst, outputAllowance int64) (float64, bool) {
+	cfg := snap.cfg
+	book := snap.book
 	now := time.Now()
 	found := false
 	var worst float64
@@ -120,26 +122,11 @@ func (s *Server) budgetRelease(r *http.Request) {
 	}
 }
 
-// priceBookFor returns the price book for the current config,
-// cached by config revision.
-func (s *Server) priceBookFor(cfg config.Config) *pricing.Book {
-	rev := s.currentConfigRevision()
-	s.bookMu.Lock()
-	defer s.bookMu.Unlock()
-	if s.bookCache != nil && s.bookCacheRev == rev {
-		return s.bookCache
-	}
-	book := pricing.FromConfig(cfg)
-	s.bookCache = book
-	s.bookCacheRev = rev
-	return book
-}
-
 // recordCost prices one usage report under the version active NOW
-// (record time) for the serving deployment.
-func (s *Server) recordCost(cfg config.Config, deploymentID string, input, output, cacheRead, cacheWrite int64, inputIncludesCache bool) (float64, string) {
-	book := s.priceBookFor(cfg)
-	entry, version := book.ResolveFor(cfg, deploymentID, time.Now())
+// (record time) for the serving deployment, using the snapshot's
+// pre-built price book (C1).
+func (s *Server) recordCost(snap *configSnapshot, deploymentID string, input, output, cacheRead, cacheWrite int64, inputIncludesCache bool) (float64, string) {
+	entry, version := snap.book.ResolveFor(snap.cfg, deploymentID, time.Now())
 	return pricing.Cost(entry, input, output, cacheRead, cacheWrite, inputIncludesCache), version
 }
 

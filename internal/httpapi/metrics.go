@@ -249,7 +249,7 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Cumulative token accounting per deployment and estimated spend.
-	usageSnap := s.usageSnapshotWithPrices(s.currentConfig())
+	usageSnap := s.usageSnapshotWithPrices(s.configSnapshot().cfg)
 	fmt.Fprintln(w, "# HELP nexaroute_deployment_tokens_total Cumulative upstream-reported tokens by deployment and kind.")
 	fmt.Fprintln(w, "# TYPE nexaroute_deployment_tokens_total counter")
 	for _, row := range usageSnap.ByDeployment {
