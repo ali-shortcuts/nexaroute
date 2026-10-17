@@ -68,14 +68,21 @@ type httpAdapter struct {
 	rateLimitResetUnix atomic.Int64
 	reservedRequests   atomic.Int64
 	reservedTokens     atomic.Int64
-	quotaDispatchSeq   atomic.Uint64
-	quotaMu            sync.Mutex
-	requestLimitSeq    uint64
-	requestRemainSeq   uint64
-	requestResetSeq    uint64
-	tokenLimitSeq      uint64
-	tokenRemainSeq     uint64
-	tokenResetSeq      uint64
+	// requestRemainObservedUnix / tokenRemainObservedUnix record when the
+	// stored remaining value for each resource was observed. Quota evidence
+	// is only valid for the provider window it was observed in; these
+	// timestamps let Stats and the rollover guard tell current-window
+	// evidence from a closed window's leftovers.
+	requestRemainObservedUnix atomic.Int64
+	tokenRemainObservedUnix   atomic.Int64
+	quotaDispatchSeq          atomic.Uint64
+	quotaMu                   sync.Mutex
+	requestLimitSeq           uint64
+	requestRemainSeq          uint64
+	requestResetSeq           uint64
+	tokenLimitSeq             uint64
+	tokenRemainSeq            uint64
+	tokenResetSeq             uint64
 	// evaluationOnly marks an adapter clone reserved for Phase H live
 	// evaluation. Live evaluation refuses to run against a production adapter,
 	// so this flag is what makes "isolation bypassed" a hard failure.
@@ -243,6 +250,17 @@ func (a *httpAdapter) Stats() ProviderStats {
 	}
 	remainingRequests := a.remainingRequests.Load()
 	remainingTokens := a.remainingTokens.Load()
+	// A remaining value observed at or before its window's reset belongs
+	// to a window that has since closed; once the reset has passed, that
+	// evidence is stale and reports as unknown. A value observed after
+	// the reset passed is current-window evidence and is kept.
+	nowUnix := now.Unix()
+	if reset := a.requestResetUnix.Load(); reset > 0 && nowUnix >= reset && a.requestRemainObservedUnix.Load() <= reset {
+		remainingRequests = -1
+	}
+	if reset := a.tokenResetUnix.Load(); reset > 0 && nowUnix >= reset && a.tokenRemainObservedUnix.Load() <= reset {
+		remainingTokens = -1
+	}
 	reservedRequests := a.reservedRequests.Load()
 	reservedTokens := a.reservedTokens.Load()
 	effectiveRequests := remainingRequests
@@ -745,30 +763,55 @@ func (a *httpAdapter) observeRateLimitHeaders(h http.Header, dispatchSeq uint64)
 	// field's dispatch sequence and value move together.
 	a.quotaMu.Lock()
 	defer a.quotaMu.Unlock()
+	nowUnix := time.Now().Unix()
 
 	if requestLimitOK && dispatchSeq >= a.requestLimitSeq {
 		a.requestLimitSeq = dispatchSeq
 		a.requestLimit.Store(requestLimit)
 	}
+	requestRemainingAccepted := false
 	if requestRemainingOK && dispatchSeq >= a.requestRemainSeq {
 		a.requestRemainSeq = dispatchSeq
 		a.remainingRequests.Store(requestRemaining)
+		a.requestRemainObservedUnix.Store(nowUnix)
+		requestRemainingAccepted = true
 	}
 	if requestResetOK && dispatchSeq >= a.requestResetSeq {
+		oldReset := a.requestResetUnix.Load()
 		a.requestResetSeq = dispatchSeq
 		a.requestResetUnix.Store(requestReset)
+		// Window rollover: the reset advanced past the previously known
+		// window boundary, but this response carries no fresh remaining
+		// for the resource. The stored remaining was observed in the
+		// closed window and must not be paired with the new window's
+		// future reset — stale evidence is unknown, never proof of
+		// exhaustion. Discard it (unless a newer dispatch already
+		// recorded fresher remaining evidence).
+		if oldReset > 0 && requestReset > oldReset && !requestRemainingAccepted && dispatchSeq >= a.requestRemainSeq {
+			a.remainingRequests.Store(-1)
+			a.requestRemainSeq = dispatchSeq
+		}
 	}
 	if tokenLimitOK && dispatchSeq >= a.tokenLimitSeq {
 		a.tokenLimitSeq = dispatchSeq
 		a.tokenLimit.Store(tokenLimit)
 	}
+	tokenRemainingAccepted := false
 	if tokenRemainingOK && dispatchSeq >= a.tokenRemainSeq {
 		a.tokenRemainSeq = dispatchSeq
 		a.remainingTokens.Store(tokenRemaining)
+		a.tokenRemainObservedUnix.Store(nowUnix)
+		tokenRemainingAccepted = true
 	}
 	if tokenResetOK && dispatchSeq >= a.tokenResetSeq {
+		oldReset := a.tokenResetUnix.Load()
 		a.tokenResetSeq = dispatchSeq
 		a.tokenResetUnix.Store(tokenReset)
+		// Same window-rollover rule as for requests, per resource.
+		if oldReset > 0 && tokenReset > oldReset && !tokenRemainingAccepted && dispatchSeq >= a.tokenRemainSeq {
+			a.remainingTokens.Store(-1)
+			a.tokenRemainSeq = dispatchSeq
+		}
 	}
 
 	// The legacy summary is always derived from the latest accepted
