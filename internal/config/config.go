@@ -454,6 +454,7 @@ type RoutingConfig struct {
 type MCPConfig struct {
 	Enabled            bool              `json:"enabled"`
 	RPM                int               `json:"rpm,omitempty"`
+	MaxRequestBytes    int               `json:"max_request_bytes,omitempty"`
 	MaxResponseBytes   int               `json:"max_response_bytes,omitempty"`
 	CallTimeoutSeconds int               `json:"call_timeout_seconds,omitempty"`
 	Servers            []MCPServerConfig `json:"servers,omitempty"`
@@ -1260,6 +1261,9 @@ func (c *Config) ApplyDefaults() {
 		c.Cache.MaxEntries = 256
 		c.warnDefault("cache.max_entries", "not set; defaulted to 256")
 	}
+	if c.MCP.MaxRequestBytes == 0 {
+		c.MCP.MaxRequestBytes = 1 << 20
+	}
 	if c.MCP.MaxResponseBytes == 0 {
 		c.MCP.MaxResponseBytes = 1 << 20
 	}
@@ -1881,6 +1885,9 @@ func (c Config) Validate() error {
 		}
 		if c.MCP.RPM < 0 || c.MCP.RPM > 1000000 {
 			return errors.New("mcp.rpm must be between 0 and 1000000")
+		}
+		if c.MCP.MaxRequestBytes < 1024 || c.MCP.MaxRequestBytes > 64<<20 {
+			return errors.New("mcp.max_request_bytes must be between 1024 and 67108864")
 		}
 		if c.MCP.MaxResponseBytes < 1024 || c.MCP.MaxResponseBytes > 64<<20 {
 			return errors.New("mcp.max_response_bytes must be between 1024 and 67108864")

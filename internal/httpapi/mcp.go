@@ -135,7 +135,7 @@ func (s *Server) mcpGateway(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 4<<20))
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, int64(cfg.MCP.MaxRequestBytes)))
 	if err != nil {
 		writeRPC(w, nil, nil, rpcErr(-32700, "request body unreadable or too large"))
 		return

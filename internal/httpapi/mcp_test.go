@@ -266,3 +266,21 @@ func TestMCPDisabledAndRateLimit(t *testing.T) {
 		t.Fatalf("rate-limited call error: %v", resp)
 	}
 }
+
+func TestMCPInboundRequestSizeLimit(t *testing.T) {
+	fake := &fakeMCP{}
+	s := mcpGatewayServer(t, fake, func(cfg *config.Config) {
+		cfg.MCP.MaxRequestBytes = 1024
+	})
+	payload := `{"jsonrpc":"2.0","id":1,"method":"ping","params":{"padding":"` + strings.Repeat("x", 2048) + `"}}`
+	code, resp := mcpCall(t, s, "", payload)
+	if code != http.StatusOK {
+		t.Fatalf("oversized request HTTP status=%d, want JSON-RPC response", code)
+	}
+	if e, _ := resp["error"].(map[string]any); e == nil || e["code"].(float64) != -32700 {
+		t.Fatalf("oversized request error=%v, want parse/size error", resp)
+	}
+	if fake.initCalls.Load() != 0 {
+		t.Fatalf("oversized request reached upstream initialize: %d calls", fake.initCalls.Load())
+	}
+}
