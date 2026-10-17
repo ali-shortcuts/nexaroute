@@ -224,7 +224,7 @@ Implemented routing intelligence is deterministic and observable: session affini
 
 Not implemented yet:
 
-- proactive quota headroom pressure and in-flight local reservations are implemented when provider quota evidence exists, but reservations are deliberately advisory: NexaRoute does not yet persist rolling-window quota debt after a completed response without fresh headers, hard-throttle traffic from inferred quota, or coordinate reservations across multiple gateway processes;
+- proactive quota headroom pressure and in-flight local reservations are implemented when provider quota evidence exists, but reservations are deliberately advisory: NexaRoute does not yet persist rolling-window quota debt after a completed response without fresh headers, hard-throttle traffic from inferred quota, or coordinate reservations across multiple gateway processes. Quota evidence is scoped to the window it was observed in — a window rollover reported without a fresh remaining value, or a reset that has since passed, degrades that resource's evidence to unknown instead of letting a closed window's value drive routing pressure or stats;
 - `cost_aware` routing uses configured base input/output prices and a bounded request estimate, but it is not invoice-perfect billing optimization (cache discounts, credits, batch pricing, taxes, and provider-specific billing rules remain outside the router);
 - shared/distributed affinity and breaker state across multiple NexaRoute processes;
 - an online learned semantic router that sends every prompt through another model/encoder.

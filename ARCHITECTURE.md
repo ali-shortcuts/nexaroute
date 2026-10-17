@@ -330,6 +330,20 @@ that resource immediately. If no fresh header is returned, the reservation is
 held until the response body is consumed or closed, so a long-lived stream
 continues to apply pressure while it occupies uncertain quota.
 
+Observed quota evidence is scoped to the provider window it was observed in.
+Per-field dispatch-sequence fencing already prevents an older response from
+overwriting a newer observation of the same field; window scoping covers the
+cross-field case. When a response advances a resource's reset past the
+previously known window boundary without carrying a fresh remaining value for
+that resource, the previous window's remaining is discarded as unknown rather
+than paired with the new window's future reset — a stale `remaining=0` must
+never pose as fresh proof of exhaustion for a whole new window. Likewise, once
+a window's reset has passed, provider stats report a remaining value observed
+during that window as unknown instead of presenting it as current headroom; a
+value observed after the reset passed is current-window evidence and is kept.
+Missing or stale quota evidence therefore always degrades to "unknown" (no
+pressure, no exhaustion signal), never to an invented or inherited value.
+
 This layer is advisory rather than authoritative throttling. It intentionally
 does not persist rolling-window debt after a completed response that supplied no
 fresh quota evidence, and it is process-local rather than distributed state.
