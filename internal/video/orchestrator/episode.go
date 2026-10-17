@@ -210,6 +210,14 @@ func (o *Orchestrator) runEpisodeJob(ctx context.Context, j video.VideoJob) erro
 	}
 
 	for i := range j.Request.ShotPlan {
+		latest, err := o.Store.Get(ctx, j.JobID)
+		if err != nil {
+			return fmt.Errorf("reload episode before shot %d: %w", i+1, err)
+		}
+		if latest.IsTerminal() || latest.State == video.StateFailed {
+			return nil
+		}
+		j = latest
 		shot := &j.Request.ShotPlan[i]
 		run := &j.ShotExecutions[i]
 		j.CurrentShot = i + 1
@@ -289,6 +297,7 @@ func (o *Orchestrator) runEpisodeJob(ctx context.Context, j video.VideoJob) erro
 				}
 			}
 			if err := o.Store.Update(ctx, j); err != nil {
+				bestEffortCancelProvider(ctx, p, run.ProviderJobID)
 				return fmt.Errorf("shot %q provider ID was returned but not durably saved; do not resubmit: %w", run.ShotID, err)
 			}
 			if !submitted.Accepted || (submitted.Provider != "" && submitted.Provider != p.ID()) || (submitted.Model != "" && submitted.Model != normalized.ModelPreference) {
@@ -646,29 +655,49 @@ func (o *Orchestrator) composeEpisode(ctx context.Context, j *video.VideoJob) er
 	if _, err := hex.DecodeString(saved.SHA256); err != nil {
 		return o.markNeedsManualAndError(ctx, *j, "final episode checksum is malformed")
 	}
+	unlock := lockVideoJobOperation(j.JobID)
+	defer unlock()
+	latest, err := o.Store.Get(ctx, j.JobID)
+	if err != nil {
+		return fmt.Errorf("reload episode before completion commit: %w", err)
+	}
+	if latest.IsTerminal() || latest.State == video.StateFailed {
+		// A force-fail or competing terminal transition won while composition
+		// was running. Keep the late file out of the authoritative job record.
+		return nil
+	}
+	*j = latest
+	// Episode reconciliation sums provider-reported per-shot actuals. All
+	// shots must report a valid actual; otherwise the episode keeps the
+	// aggregate estimate and stays explicitly unreconciled.
+	applyEpisodeCostReconciliation(j)
+	if o.Ledger != nil {
+		var settleErr error
+		if j.CostReconciled {
+			settleErr = o.Ledger.SettleActual(j.JobID, j.ActualCostUSD, j.EstimatedCostUSD)
+		} else {
+			settleErr = o.Ledger.SettleEstimate(j.JobID, j.EstimatedCostUSD)
+		}
+		if settleErr != nil {
+			applyCostReconciliation(j, nil)
+			j.LastError = "episode cost settlement failed; composition remains resumable"
+			if saveErr := o.Store.Update(ctx, *j); saveErr != nil {
+				return fmt.Errorf("episode cost settlement failed (%v) and resumable job state could not be saved: %w", settleErr, saveErr)
+			}
+			o.scheduleRetry(ctx, *j, o.pollInterval())
+			return fmt.Errorf("episode cost settlement failed: %w", settleErr)
+		}
+	}
 	j.OutputAssets = []video.Asset{saved}
 	j.Progress = 1
 	j.LastError = ""
 	now := time.Now().UTC()
 	j.CompletedAt = &now
-	// Episode reconciliation sums provider-reported per-shot actuals. All
-	// shots must report a valid actual; otherwise the episode keeps the
-	// aggregate estimate and stays explicitly unreconciled.
-	applyEpisodeCostReconciliation(j)
 	if err := j.Transition(video.StateCompleted); err != nil {
 		return err
 	}
 	if err := o.Store.Update(ctx, *j); err != nil {
 		return fmt.Errorf("final episode was persisted but completion state could not be saved: %w", err)
-	}
-	if o.Ledger != nil {
-		if j.CostReconciled {
-			if err := o.Ledger.SettleActual(j.JobID, j.ActualCostUSD, j.EstimatedCostUSD); err != nil {
-				return fmt.Errorf("episode completed but actual-cost settlement failed: %w", err)
-			}
-		} else if err := o.Ledger.SettleEstimate(j.JobID, j.EstimatedCostUSD); err != nil {
-			return fmt.Errorf("episode completed but cost settlement failed: %w", err)
-		}
 	}
 	return nil
 }

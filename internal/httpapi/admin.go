@@ -44,11 +44,32 @@ type providerForm struct {
 	PreserveHeaders bool                  `json:"preserve_headers"`
 	PreserveProxy   bool                  `json:"preserve_proxy"`
 	ReplaceKey      bool                  `json:"replace_key"`
-	TestModels      []string              `json:"test_models,omitempty"`
+	// CredentialPool is separate from Provider.Credentials because ordinary
+	// reads contain metadata only; an omitted entry secret must not erase the
+	// saved secret.
+	CredentialPool *credentialPoolUpdate `json:"credential_pool,omitempty"`
+	TestModels     []string              `json:"test_models,omitempty"`
 	// Mode selects the probe depth: quick (default, availability),
 	// full (Level B capability suite) or claude_code (agent-loop
 	// simulation). See docs/COMPATIBILITY.md.
 	Mode string `json:"mode,omitempty"`
+}
+
+type credentialPoolUpdate struct {
+	// Replace makes Entries the complete desired pool. Existing entries keep
+	// their secrets when addressed by index and omitted secret fields remain
+	// unchanged. An empty Entries slice therefore explicitly clears the pool.
+	Replace bool                  `json:"replace"`
+	Entries []credentialPoolEntry `json:"entries,omitempty"`
+	Remove  []int                 `json:"remove,omitempty"`
+}
+
+type credentialPoolEntry struct {
+	Index     *int   `json:"index,omitempty"`
+	Name      string `json:"name,omitempty"`
+	Enabled   *bool  `json:"enabled,omitempty"`
+	APIKey    string `json:"api_key,omitempty"`
+	APIKeyEnv string `json:"api_key_env,omitempty"`
 }
 
 type testResult struct {
@@ -698,9 +719,22 @@ func (s *Server) adminProviderByID(w http.ResponseWriter, r *http.Request) {
 			if in.Provider.ID != old.ID && cfg.ProviderIndex(in.Provider.ID) >= 0 {
 				return errAdminProviderExists
 			}
-			// B5b: explicit replace-key behavior
-			// Priority: PreserveSecret > ReplaceKey > masked placeholder check > default preserve
-			if in.PreserveSecret {
+			// Pool edits are additive to the old single-key contract. A pool
+			// update preserves the primary credential unless replace_key also
+			// explicitly asks to replace it, then applies only the requested
+			// indexed pool changes.
+			if in.CredentialPool != nil {
+				if !in.ReplaceKey {
+					in.Provider.APIKey = old.APIKey
+					in.Provider.APIKeyEnv = old.APIKeyEnv
+				}
+				pool, err := applyCredentialPoolUpdate(old.Credentials, *in.CredentialPool)
+				if err != nil {
+					return err
+				}
+				in.Provider.Credentials = pool
+			} else if in.PreserveSecret {
+				// B5b: explicit replace-key behavior
 				in.Provider.APIKey = old.APIKey
 				in.Provider.APIKeyEnv = old.APIKeyEnv
 				in.Provider.Credentials = old.Credentials
@@ -1059,6 +1093,110 @@ func normalizeProvider(p *config.ProviderConfig) {
 			p.Models[i].Weight = 1
 		}
 	}
+}
+
+func applyCredentialPoolUpdate(old []config.CredentialConfig, update credentialPoolUpdate) ([]config.CredentialConfig, error) {
+	applyEntry := func(entry credentialPoolEntry, existing *config.CredentialConfig) (config.CredentialConfig, error) {
+		if entry.APIKey != "" && entry.APIKeyEnv != "" {
+			return config.CredentialConfig{}, errors.New("a credential entry cannot include both api_key and api_key_env")
+		}
+		out := config.CredentialConfig{}
+		if existing != nil {
+			out = *existing
+		}
+		if entry.Name != "" {
+			out.Name = strings.TrimSpace(entry.Name)
+		}
+		if entry.Enabled != nil {
+			out.Enabled = *entry.Enabled
+		}
+		if entry.APIKey != "" {
+			out.APIKey, out.APIKeyEnv = entry.APIKey, ""
+		} else if entry.APIKeyEnv != "" {
+			out.APIKey, out.APIKeyEnv = "", strings.TrimSpace(entry.APIKeyEnv)
+		} else if existing == nil {
+			return config.CredentialConfig{}, errors.New("new credential entries require api_key or api_key_env")
+		}
+		if out.APIKey == "" && out.APIKeyEnv == "" {
+			return config.CredentialConfig{}, errors.New("credential entry must have api_key or api_key_env")
+		}
+		return out, nil
+	}
+	if update.Replace {
+		out := make([]config.CredentialConfig, 0, len(update.Entries))
+		seen := map[int]bool{}
+		for _, entry := range update.Entries {
+			var existing *config.CredentialConfig
+			if entry.Index != nil {
+				idx := *entry.Index
+				if idx < 0 || idx >= len(old) || seen[idx] {
+					return nil, fmt.Errorf("credential pool entry index %d is invalid or duplicated", idx)
+				}
+				seen[idx] = true
+				existing = &old[idx]
+			}
+			item, err := applyEntry(entry, existing)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, item)
+		}
+		return out, nil
+	}
+
+	remove := map[int]bool{}
+	for _, idx := range update.Remove {
+		if idx < 0 || idx >= len(old) || remove[idx] {
+			return nil, fmt.Errorf("credential pool removal index %d is invalid or duplicated", idx)
+		}
+		remove[idx] = true
+	}
+	seenUpdates := map[int]bool{}
+	for _, entry := range update.Entries {
+		if entry.Index == nil {
+			continue
+		}
+		idx := *entry.Index
+		if idx < 0 || idx >= len(old) {
+			return nil, fmt.Errorf("credential pool entry index %d is invalid", idx)
+		}
+		if seenUpdates[idx] {
+			return nil, fmt.Errorf("credential pool entry index %d is updated more than once", idx)
+		}
+		seenUpdates[idx] = true
+		if remove[idx] {
+			return nil, fmt.Errorf("credential pool entry index %d is both updated and removed", idx)
+		}
+	}
+	out := make([]config.CredentialConfig, 0, len(old)+len(update.Entries))
+	for idx, item := range old {
+		if !remove[idx] {
+			out = append(out, item)
+		}
+	}
+	for _, entry := range update.Entries {
+		if entry.Index == nil {
+			item, err := applyEntry(entry, nil)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, item)
+			continue
+		}
+		idx := *entry.Index
+		item, err := applyEntry(entry, &old[idx])
+		if err != nil {
+			return nil, err
+		}
+		retained := 0
+		for i := 0; i < idx; i++ {
+			if !remove[i] {
+				retained++
+			}
+		}
+		out[retained] = item
+	}
+	return out, nil
 }
 
 func slug(s string) string {

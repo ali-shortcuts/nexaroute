@@ -31,7 +31,7 @@ type Orchestrator struct {
 	Store         queue.JobStore
 	Queue         *queue.Queue
 	Providers     ProviderRegistry
-	Ledger        *cost.Ledger
+	Ledger        CostLedger
 	Assets        video.AssetSink
 	Composer      EpisodeComposer
 	Narrator      Narrator
@@ -592,6 +592,7 @@ func (o *Orchestrator) RunJob(ctx context.Context, queued video.VideoJob) error 
 			return err
 		}
 		if err := o.Store.Update(ctx, j); err != nil {
+			bestEffortCancelProvider(ctx, p, j.ProviderJobID)
 			return fmt.Errorf("provider returned a job ID but it was not durably saved; do not resubmit: %w", err)
 		}
 		if !submitted.Accepted || (submitted.Provider != "" && submitted.Provider != p.ID()) || (submitted.Model != "" && submitted.Model != j.Request.ModelPreference) {
@@ -789,9 +790,37 @@ func (o *Orchestrator) downloadAndComplete(ctx context.Context, p video.VideoPro
 			return o.markNeedsManualAndError(ctx, j, "provider output checksum is malformed")
 		}
 	}
+	unlock := lockVideoJobOperation(j.JobID)
+	defer unlock()
+	latest, err := o.Store.Get(ctx, j.JobID)
+	if err != nil {
+		return fmt.Errorf("reload video job before completion commit: %w", err)
+	}
+	if latest.IsTerminal() || latest.State == video.StateFailed {
+		// A force-fail or competing terminal transition won while the provider
+		// output was being downloaded. Ignore this late result; never settle it.
+		return nil
+	}
+	j = latest
 	var actualCost *float64
 	if actual, ok := providerActualCost(st); ok {
 		actualCost = &actual
+	}
+	if o.Ledger != nil {
+		var settleErr error
+		if actualCost != nil {
+			settleErr = o.Ledger.SettleActual(j.JobID, *actualCost, j.EstimatedCostUSD)
+		} else {
+			settleErr = o.Ledger.SettleEstimate(j.JobID, j.EstimatedCostUSD)
+		}
+		if settleErr != nil {
+			applyCostReconciliation(&j, nil)
+			j.LastError = "cost settlement failed; completed provider output remains resumable"
+			if saveErr := o.Store.Update(ctx, j); saveErr != nil {
+				return fmt.Errorf("cost settlement failed (%v) and resumable job state could not be saved: %w", settleErr, saveErr)
+			}
+			return fmt.Errorf("video completion cost settlement failed: %w", settleErr)
+		}
 	}
 	applyCostReconciliation(&j, actualCost)
 	j.OutputAssets = assets
@@ -805,16 +834,66 @@ func (o *Orchestrator) downloadAndComplete(ctx context.Context, p video.VideoPro
 	if err := o.Store.Update(ctx, j); err != nil {
 		return fmt.Errorf("outputs were persisted but completion state could not be saved: %w", err)
 	}
-	if o.Ledger != nil {
-		if actualCost != nil {
-			if err := o.Ledger.SettleActual(j.JobID, *actualCost, j.EstimatedCostUSD); err != nil {
-				return fmt.Errorf("video completed but actual-cost settlement failed: %w", err)
-			}
-		} else if err := o.Ledger.SettleEstimate(j.JobID, j.EstimatedCostUSD); err != nil {
-			return err
+	return nil
+}
+
+// ForceFail is the explicit operator escape hatch for jobs whose provider
+// refuses ordinary cancellation. Provider cancellation is best-effort; the
+// durable local failed state and reservation release are authoritative. The
+// returned booleans report whether cancellation was attempted and acknowledged.
+func (o *Orchestrator) ForceFail(ctx context.Context, id string) (attempted, confirmed bool, err error) {
+	if o == nil || o.Store == nil {
+		return false, false, errors.New("video orchestrator is not fully configured")
+	}
+	if err := ctx.Err(); err != nil {
+		return false, false, err
+	}
+	j, err := o.Store.Get(ctx, id)
+	if err != nil {
+		return false, false, err
+	}
+	if j.IsTerminal() || j.State == video.StateFailed {
+		return false, false, ErrForceFailNotActive
+	}
+	providerID := j.ProviderJobID
+	if providerID != "" && o.Providers != nil {
+		if p, ok := o.Providers.Get(j.Provider); ok {
+			attempted = true
+			cancelCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			cancelErr := p.CancelJob(cancelCtx, providerID)
+			cancel()
+			confirmed = cancelErr == nil
 		}
 	}
-	return nil
+
+	unlock := lockVideoJobOperation(id)
+	defer unlock()
+	// Re-read under the per-job commit lock. If completion or a normal cancel
+	// won while provider cancellation was in flight, do not override it.
+	j, err = o.Store.Get(ctx, id)
+	if err != nil {
+		return attempted, confirmed, err
+	}
+	if j.IsTerminal() || j.State == video.StateFailed {
+		return attempted, confirmed, ErrForceFailNotActive
+	}
+	j.State = video.StateFailed // privileged override; ordinary transitions stay strict.
+	j.OperatorForceFailed = true
+	switch {
+	case !attempted:
+		j.LastError = "Force-failed by operator before provider cancellation could be attempted; remote work may continue and costs may accrue."
+	case confirmed:
+		j.LastError = "Force-failed by operator; provider acknowledged cancellation."
+	default:
+		j.LastError = "Force-failed by operator; provider cancellation was not confirmed, so remote work may continue and costs may accrue."
+	}
+	if err := o.Store.Update(ctx, j); err != nil {
+		return attempted, confirmed, fmt.Errorf("persist operator force-fail: %w", err)
+	}
+	if o.Ledger != nil {
+		o.Ledger.ReleaseForJob(j.JobID)
+	}
+	return attempted, confirmed, nil
 }
 
 func (o *Orchestrator) fail(ctx context.Context, j video.VideoJob, msg string) error {

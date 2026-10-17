@@ -50,6 +50,8 @@ func adminPermissionForRequest(r *http.Request) (authz.Permission, bool) {
 		return writeOnly(authz.WriteProviders)
 	case path == "/admin/api/compat/reset":
 		return writeOnly(authz.WriteProviders)
+	case strings.HasPrefix(path, "/admin/api/video/jobs/") && strings.HasSuffix(path, "/force-fail"):
+		return writeOnly(authz.ManageVideo)
 	case path == "/admin/api/compat":
 		return readWrite(authz.ReadProviders, authz.WriteProviders)
 	case strings.HasPrefix(path, "/admin/api/providers/") && strings.HasSuffix(path, "/reveal-secret"):

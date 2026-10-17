@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/ali-shortcuts/nexaroute/internal/video"
-	"github.com/ali-shortcuts/nexaroute/internal/video/cost"
 )
 
 type WebhookProcessor struct {
@@ -25,7 +24,7 @@ type WebhookProcessor struct {
 	// Ledger is optional. When set, completed webhook events reconcile the
 	// estimate → actual transition; when nil, only the persisted job cost
 	// fields are updated. Additive and nil-safe.
-	Ledger *cost.Ledger
+	Ledger CostLedger
 	mu     sync.Mutex
 	seen   map[string]time.Time
 	MaxAge time.Duration
@@ -72,6 +71,26 @@ func (p *WebhookProcessor) Apply(ctx context.Context, eventID string, status vid
 		if j.ProviderJobID != status.ProviderJobID {
 			continue
 		}
+		unlock := lockVideoJobOperation(j.JobID)
+		defer unlock()
+		jobs, err = p.Store.List(ctx)
+		if err != nil {
+			return err
+		}
+		found := false
+		for _, current := range jobs {
+			if current.JobID == j.JobID {
+				j, found = current, true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("webhook job not found")
+		}
+		if j.OperatorForceFailed {
+			p.seen[eventID] = time.Now()
+			return nil
+		}
 		// Idempotent by terminal state and event ID: replaying a completion
 		// for an already-completed job is a no-op and never double-settles.
 		if j.State == video.StateCompleted && status.State == video.StateCompleted {
@@ -101,9 +120,6 @@ func (p *WebhookProcessor) Apply(ctx context.Context, eventID string, status vid
 				j.CostBasis = "estimate"
 			}
 		}
-		if err = p.Store.Update(ctx, j); err != nil {
-			return err
-		}
 		if status.State == video.StateCompleted && p.Ledger != nil {
 			if j.CostReconciled {
 				if err := p.Ledger.SettleActual(j.JobID, j.ActualCostUSD, j.EstimatedCostUSD); err != nil {
@@ -112,6 +128,9 @@ func (p *WebhookProcessor) Apply(ctx context.Context, eventID string, status vid
 			} else if err := p.Ledger.SettleEstimate(j.JobID, j.EstimatedCostUSD); err != nil {
 				return err
 			}
+		}
+		if err = p.Store.Update(ctx, j); err != nil {
+			return err
 		}
 		p.seen[eventID] = time.Now()
 		return nil

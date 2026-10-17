@@ -65,7 +65,7 @@ func newVirtualClientKey() (string, string, error) {
 }
 
 func (s *Server) clientAuthConfig() (bool, []string, int) {
-	cfg := s.currentConfig()
+	cfg := s.configSnapshot().cfg
 	return cfg.ClientAuth.Enabled, cfg.ClientAuth.Keys, cfg.ClientAuth.RPM
 }
 
@@ -113,7 +113,7 @@ func subtleConstantTimeCompare(a, b string) bool {
 }
 
 func (s *Server) findClientIdentity(presented string) (clientIdentity, config.VirtualKeyConfig, bool) {
-	cfg := s.currentConfig()
+	cfg := s.configSnapshot().cfg
 	digest := keyDigest(presented)
 	now := time.Now().UTC()
 	for _, key := range cfg.ClientAuth.VirtualKeys {
@@ -308,7 +308,7 @@ func requestTokenEstimate(r *http.Request) int {
 }
 
 func (s *Server) applyGuardrails(w http.ResponseWriter, r *http.Request, anthropicStyle bool) bool {
-	cfg := s.currentConfig().Guardrails
+	cfg := s.configSnapshot().cfg.Guardrails
 	if cfg.Mode == "off" || r.Body == nil {
 		return true
 	}
@@ -629,7 +629,8 @@ func (s *Server) clientAuthAllowed(w http.ResponseWriter, r *http.Request, anthr
 	if !ok {
 		identity = clientIdentity{ID: "legacy", Role: "admin"}
 	}
-	cfg := s.currentConfig()
+	snap := s.configSnapshot()
+	cfg := snap.cfg
 	if !s.applyGuardrails(w, r, anthropicStyle) {
 		return false
 	}
@@ -690,7 +691,7 @@ func (s *Server) clientAuthAllowed(w http.ResponseWriter, r *http.Request, anthr
 	// usage report settles it to actual cost.
 	if virtualKey.BudgetUSD > 0 && s.budgets != nil {
 		inputEst, outputAllowance := requestBudgetParts(r)
-		if est, ok := s.budgetEstimateFor(cfg, model, inputEst, outputAllowance); ok {
+		if est, ok := s.budgetEstimateFor(snap, model, inputEst, outputAllowance); ok {
 			id, allowed := s.budgets.Reserve(virtualKey.ID, virtualKey.BudgetUSD, est, time.Now())
 			if !allowed {
 				if anthropicStyle {
