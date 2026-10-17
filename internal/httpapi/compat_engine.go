@@ -43,7 +43,7 @@ func (s *Server) CapabilityStore() *compat.Store { return s.capStore }
 
 // dialectFor resolves the dialect profile for a deployment's provider.
 func (s *Server) dialectFor(providerID, providerType, baseURL string) compat.DialectProfile {
-	cfg := s.currentConfig()
+	cfg := s.configSnapshot().cfg
 	for _, p := range cfg.Providers {
 		if p.ID == providerID {
 			return compat.DetectDialect(p.ID, p.Type, p.BaseURL, p.Dialect)
@@ -54,7 +54,7 @@ func (s *Server) dialectFor(providerID, providerType, baseURL string) compat.Dia
 
 // providerConfigFor returns the current provider config for an adapter.
 func (s *Server) providerConfigFor(providerID string) (config.ProviderConfig, bool) {
-	cfg := s.currentConfig()
+	cfg := s.configSnapshot().cfg
 	for _, p := range cfg.Providers {
 		if p.ID == providerID {
 			return p, true
@@ -340,7 +340,7 @@ func (s *Server) doUpstreamWithRepair(
 	key := compat.InvalidationKey(p.BaseURL, dialect.Name, deployment.Model, credentialScope(p))
 	// Proactive sanitizer: skip the round trip entirely when the contract
 	// already knows the payload contains unsupported optional fields.
-	if s.currentConfig().Routing.SanitizeEnabled {
+	if s.configSnapshot().cfg.Routing.SanitizeEnabled {
 		contract := s.capStore.Get(deployment.ID)
 		if res, err := compat.Sanitize(payload, contract, dialect, profile); err == nil && res.Changed {
 			s.capStore.SetRepair(deployment.ID, "pre-dispatch: "+fmt.Sprintf("removed %v, renamed %v", res.Removed, res.Renamed))
@@ -625,7 +625,7 @@ func (s *Server) finishCanonicalAttempt(bundle hedgeAttemptBundle, canReq canoni
 // contract holds verified UNSUPPORTED entries for fields present in the
 // payload.
 func (s *Server) sanitizeOutgoingPayload(bundle hedgeAttemptBundle, payload []byte, req router.Requirement) []byte {
-	cfg := s.currentConfig()
+	cfg := s.configSnapshot().cfg
 	if !cfg.Routing.SanitizeEnabled {
 		return payload
 	}

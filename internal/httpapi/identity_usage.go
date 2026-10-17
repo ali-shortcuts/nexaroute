@@ -32,8 +32,8 @@ func (s *Server) recordUsage(r *http.Request, deployment string, input, output i
 // to input+output total tokens exactly as before.
 func (s *Server) recordUsageEx(r *http.Request, deployment string, counts usage.Counts, inputIncludesCache bool) {
 	noteSpanUsage(r.Context(), deployment, counts.Input, counts.Output)
-	cfg := s.currentConfig()
-	cost, version := s.recordCost(cfg, deployment, counts.Input, counts.Output, counts.CacheRead, counts.CacheWrite, inputIncludesCache)
+	snap := s.configSnapshot()
+	cost, version := s.recordCost(snap, deployment, counts.Input, counts.Output, counts.CacheRead, counts.CacheWrite, inputIncludesCache)
 	s.usage.RecordEx(deployment, counts, cost, version)
 	if res := tpmReservationFromContext(r.Context()); res != nil {
 		s.clientTPMSettle(res, counts.Input+counts.Output)

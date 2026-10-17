@@ -28,7 +28,7 @@ import (
 // header.
 
 func (s *Server) cacheLookupFor(r *http.Request, path string, body []byte, stream bool, temperature, topP *float64, candidates []router.Scored, generation uint64) (string, bool) {
-	cfg := s.currentConfig()
+	cfg := s.configSnapshot().cfg
 	if !cfg.Cache.Enabled || stream {
 		return "", false
 	}
@@ -211,8 +211,9 @@ func extractAnthropicUsageFull(b []byte) (int, int, int, int, bool) {
 // usageSnapshotWithPrices builds the cumulative usage snapshot with estimated
 // cost derived from the live model pricing configuration. Deployments without
 // configured pricing report tokens with zero cost rather than a guess.
+// The caller supplies the config view to price under (C1: the snapshot, so
+// the metrics path does not deep-clone per scrape).
 func (s *Server) usageSnapshotWithPrices(cfg config.Config) usage.Snapshot {
-	cfg = s.currentConfig()
 	prices := make(map[string]usage.Price, len(cfg.Providers)*4)
 	for _, p := range cfg.Providers {
 		for _, m := range p.Models {
