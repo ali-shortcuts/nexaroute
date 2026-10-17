@@ -52,22 +52,26 @@ type ShotExecution struct {
 }
 
 type VideoJob struct {
-	SchemaVersion         string          `json:"schema_version"`
-	JobID                 string          `json:"job_id"`
-	IdempotencyKey        string          `json:"idempotency_key,omitempty"`
-	ProjectID             string          `json:"project_id"`
-	EpisodeID             string          `json:"episode_id,omitempty"`
-	ParentJobID           string          `json:"parent_job_id,omitempty"`
-	Request               VideoRequest    `json:"request"`
-	Provider              string          `json:"provider,omitempty"`
-	Model                 string          `json:"model,omitempty"`
-	ProviderJobID         string          `json:"provider_job_id,omitempty"`
-	State                 JobState        `json:"state"`
-	Progress              float64         `json:"progress"`
-	CreatedAt             time.Time       `json:"created_at"`
-	SubmittedAt           *time.Time      `json:"submitted_at,omitempty"`
-	CompletedAt           *time.Time      `json:"completed_at,omitempty"`
-	LastError             string          `json:"last_error,omitempty"`
+	SchemaVersion  string       `json:"schema_version"`
+	JobID          string       `json:"job_id"`
+	IdempotencyKey string       `json:"idempotency_key,omitempty"`
+	ProjectID      string       `json:"project_id"`
+	EpisodeID      string       `json:"episode_id,omitempty"`
+	ParentJobID    string       `json:"parent_job_id,omitempty"`
+	Request        VideoRequest `json:"request"`
+	Provider       string       `json:"provider,omitempty"`
+	Model          string       `json:"model,omitempty"`
+	ProviderJobID  string       `json:"provider_job_id,omitempty"`
+	State          JobState     `json:"state"`
+	Progress       float64      `json:"progress"`
+	CreatedAt      time.Time    `json:"created_at"`
+	SubmittedAt    *time.Time   `json:"submitted_at,omitempty"`
+	CompletedAt    *time.Time   `json:"completed_at,omitempty"`
+	LastError      string       `json:"last_error,omitempty"`
+	// OperatorForceFailed marks a privileged force-fail transition. Unlike an
+	// ordinary failed job (which may be retried), this state is immutable so a
+	// late provider result cannot overwrite the operator's decision.
+	OperatorForceFailed   bool            `json:"operator_force_failed,omitempty"`
 	RetryCount            int             `json:"retry_count"`
 	CompositionRetryCount int             `json:"composition_retry_count,omitempty"`
 	CurrentShot           int             `json:"current_shot,omitempty"`
@@ -142,6 +146,21 @@ func CanTransition(from, to JobState) bool {
 		return false
 	}
 }
+
+// IsTerminalState reports states that cannot be left through the ordinary
+// state machine. Failed jobs are intentionally excluded because they may be
+// retried; operator-forced failures are separately fenced on VideoJob.
+func IsTerminalState(state JobState) bool {
+	switch state {
+	case StateCompleted, StateCancelled, StateExpired, StateDryRun:
+		return true
+	default:
+		return false
+	}
+}
+
+func (j VideoJob) IsTerminal() bool { return IsTerminalState(j.State) || j.OperatorForceFailed }
+
 func (j *VideoJob) Transition(to JobState) error {
 	if !CanTransition(j.State, to) {
 		return fmt.Errorf("invalid video job transition %s -> %s", j.State, to)

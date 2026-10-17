@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
@@ -146,6 +147,16 @@ func (h *Handler) cancel(w http.ResponseWriter, r *http.Request, id string) {
 		return
 	}
 	h.get(w, r, id)
+}
+
+// ForceFail is intentionally not routed by ServeHTTP. The gateway's admin
+// control plane invokes it only after admin authorization, CSRF validation,
+// durable audit intent recording, and explicit operator confirmation.
+func (h *Handler) ForceFail(ctx context.Context, id string) (attempted, confirmed bool, err error) {
+	if h == nil || h.Orch == nil {
+		return false, false, fmt.Errorf("video orchestration is not configured")
+	}
+	return h.Orch.ForceFail(ctx, id)
 }
 
 func (h *Handler) getAsset(w http.ResponseWriter, r *http.Request, jobID, assetID string) {

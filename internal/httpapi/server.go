@@ -1042,6 +1042,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/admin/api/usage/identities", s.adminIdentityUsage)
 	mux.HandleFunc("/admin/api/config/history", s.adminConfigHistory)
 	mux.HandleFunc("/admin/api/drain", s.adminDrain)
+	mux.HandleFunc("/admin/api/video/jobs/{id}/force-fail", s.adminVideoForceFail)
 	// Phase B: Virtual Endpoints, Route Profiles, Candidate Pools, Fallback Chains
 	mux.HandleFunc("/admin/api/virtual-endpoints", s.adminVirtualEndpoints)
 	mux.HandleFunc("/admin/api/virtual-endpoints/", s.adminVirtualEndpointByID)
