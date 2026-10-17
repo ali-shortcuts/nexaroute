@@ -14,8 +14,8 @@ import (
 var webAssetBudgets = map[string]int{
 	"web/index.html": 8 << 10,
 	// Issue #393 adds full redacted provider-edit metadata and explicit
-	// credential controls; keep the existing total-asset ceiling unchanged.
-	"web/app.js":          196 << 10,
+	// credential-pool controls; keep the aggregate asset ceiling unchanged.
+	"web/app.js":          200 << 10,
 	"web/styles.css":      96 << 10,
 	"web/visual-agent.js": 16 << 10,
 }
