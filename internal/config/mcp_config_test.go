@@ -15,7 +15,7 @@ func TestMCPConfigValidation(t *testing.T) {
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("valid MCP config rejected: %v", err)
 	}
-	if cfg.MCP.MaxResponseBytes != 1<<20 || cfg.MCP.CallTimeoutSeconds != 30 {
+	if cfg.MCP.MaxRequestBytes != 1<<20 || cfg.MCP.MaxResponseBytes != 1<<20 || cfg.MCP.CallTimeoutSeconds != 30 {
 		t.Fatalf("MCP defaults not applied: %+v", cfg.MCP)
 	}
 	cfg.MCP.Servers[0].URL = "https://user:secret@mcp.example.com/rpc"
@@ -42,5 +42,14 @@ func TestMCPConfigValidation(t *testing.T) {
 	cfg2.MCP.CallTimeoutSeconds = 9999
 	if err := cfg2.Validate(); err == nil {
 		t.Fatal("absurd call timeout accepted")
+	}
+	cfg2.MCP.CallTimeoutSeconds = 30
+	cfg2.MCP.MaxRequestBytes = 1023
+	if err := cfg2.Validate(); err == nil {
+		t.Fatal("MCP request limit below minimum accepted")
+	}
+	cfg2.MCP.MaxRequestBytes = 64<<20 + 1
+	if err := cfg2.Validate(); err == nil {
+		t.Fatal("MCP request limit above maximum accepted")
 	}
 }

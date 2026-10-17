@@ -917,6 +917,7 @@ data plane.
 |---|---|---|
 | `mcp.enabled` | `false` | Master switch; `/mcp` returns 404 while off. |
 | `mcp.rpm` | `0` | Per-key MCP call rate (falls back to `client_auth.rpm`; 0 = unlimited). |
+| `mcp.max_request_bytes` | `1048576` | Cap on inbound JSON-RPC request size (1024–67108864). Oversized requests are rejected before an upstream call. |
 | `mcp.max_response_bytes` | `1048576` | Cap on upstream response size (1024–67108864). |
 | `mcp.call_timeout_seconds` | `30` | Per-call upstream timeout (1–600). |
 | `mcp.servers[].id` | — | Unique server id; tools are exposed as `<id>__<tool>`. |

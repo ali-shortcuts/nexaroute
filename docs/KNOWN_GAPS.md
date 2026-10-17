@@ -298,6 +298,12 @@ explicitly bounded:
   scorecard content, and a structural guard test keeps the dependency direction
   that way.
 
+The MCP gateway enforces an operator-configurable inbound JSON-RPC request-size
+cap (`mcp.max_request_bytes`) before parsing or forwarding a request. This is a
+payload bound, not a content-safety or schema-validation policy; tool-specific
+argument validation remains the responsibility of the upstream MCP server and
+the configured server/tool authorization lists.
+
 ## Audit follow-up record (top-15 audit #57, recorded via #178)
 
 Status labels used below: `open` means an unresolved defect/boundary with no
