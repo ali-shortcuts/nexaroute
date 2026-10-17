@@ -131,17 +131,51 @@ packages = {p.get("name"): p.get("versionInfo") for p in doc.get("packages", [])
 # The main module and the Go standard library are expected exceptions.
 # This is deliberately limited to pkg:golang references so unrelated
 # package-manager ecosystems in a valid SPDX document remain unaffected.
+from urllib.parse import unquote
+
+def go_module_path_variants(path):
+    # PURL paths may percent-encode characters and Go module paths escape
+    # uppercase letters as ! followed by the lowercase letter.
+    decoded = unquote(path)
+    unescaped = re.sub(r"!([a-z])", lambda match: match.group(1).upper(), decoded)
+    escaped = re.sub(r"[A-Z]", lambda match: "!" + match.group(0).lower(), decoded)
+    return {decoded, unescaped, escaped}
+
 for package in doc.get("packages", []):
+    package_name = package.get("name", "")
+    package_version = package.get("versionInfo", "")
     for ref in package.get("externalRefs") or []:
         if ref.get("referenceType") != "purl":
             continue
         locator = ref.get("referenceLocator", "")
         if not isinstance(locator, str) or not locator.startswith("pkg:golang/"):
             continue
-        name = package.get("name", "")
-        if name not in gomod and name not in (main_module, "stdlib"):
+
+        # The SBOM package name alone is not authoritative: a tampered
+        # record could use a legitimate pinned name with a PURL pointing to
+        # an unrelated/unpinned module. Validate the PURL identity itself.
+        purl_identity = unquote(locator[len("pkg:golang/"):]).split("?", 1)[0].split("#", 1)[0]
+        if "@" in purl_identity:
+            purl_name, purl_version = purl_identity.split("@", 1)
+        else:
+            purl_name, purl_version = purl_identity, ""
+        if not purl_name:
+            sys.exit(f"verify-release: malformed Go module PURL: {locator!r}")
+        if not (go_module_path_variants(package_name) & go_module_path_variants(purl_name)):
             sys.exit(
-                f"verify-release: SBOM lists Go module {name!r} that go.mod does not pin"
+                f"verify-release: Go module PURL name {purl_name!r} does not match "
+                f"SBOM package name {package_name!r}"
+            )
+        if purl_version and package_version and package_version not in ("NOASSERTION", "UNKNOWN"):
+            if purl_version != package_version:
+                sys.exit(
+                    f"verify-release: Go module PURL version {purl_version!r} does not match "
+                    f"SBOM package version {package_version!r} for {package_name!r}"
+                )
+
+        if package_name not in gomod and package_name not in (main_module, "stdlib"):
+            sys.exit(
+                f"verify-release: SBOM lists Go module {package_name!r} that go.mod does not pin"
             )
 
 # The modules that must appear in the SBOM are the ones actually
