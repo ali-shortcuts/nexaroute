@@ -175,11 +175,16 @@ func TestLeakDisconnect_BeforeFirstByte(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	cancel()
-	close(release)
+	// Keep the upstream blocked until the handler has returned: the
+	// unwind decision must be made on the cancelled client context,
+	// not on a raced upstream response. Releasing first let a full
+	// upstream response win and settle the hold, failing the
+	// assertion with reserved=0 (verify -race, 2026-10-17).
 	select {
 	case <-done:
 	case <-time.After(15 * time.Second):
 		t.Fatal("guard: handler did not return after client cancel")
 	}
+	close(release)
 	leakAssertTTLExactlyOnce(t, s, "disconnect before first byte")
 }
