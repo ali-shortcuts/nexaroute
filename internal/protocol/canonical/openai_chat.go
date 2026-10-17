@@ -185,6 +185,15 @@ func decodeOpenAIImage(m map[string]any) *Image {
 	}
 	if strings.HasPrefix(s, "data:") {
 		if parsed := parseDataURL(s); parsed != nil {
+			// A data: URL with an empty payload carries no image
+			// content, and no request encoder can emit it (the chat
+			// encoder requires Data != ""), so it must not enter the
+			// IR or it vanishes on the hop (FuzzRequestRoundTrip,
+			// seed 320a06b605cdba5b). Mirrors decodeAnthImage, which
+			// requires data != "" for base64 sources.
+			if parsed.data == "" {
+				return nil
+			}
 			return &Image{MediaType: parsed.mediaType, Data: parsed.data}
 		}
 	}

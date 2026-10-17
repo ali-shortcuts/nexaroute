@@ -10,12 +10,14 @@ import (
 	"sync"
 
 	"github.com/ali-shortcuts/nexaroute/internal/video"
+	"github.com/ali-shortcuts/nexaroute/internal/video/agent"
 	"github.com/ali-shortcuts/nexaroute/internal/video/api"
 	"github.com/ali-shortcuts/nexaroute/internal/video/composer"
 	"github.com/ali-shortcuts/nexaroute/internal/video/cost"
 	"github.com/ali-shortcuts/nexaroute/internal/video/orchestrator"
 	"github.com/ali-shortcuts/nexaroute/internal/video/providers"
 	"github.com/ali-shortcuts/nexaroute/internal/video/queue"
+	"github.com/ali-shortcuts/nexaroute/internal/video/render"
 	"github.com/ali-shortcuts/nexaroute/internal/video/storage"
 	"github.com/ali-shortcuts/nexaroute/internal/video/tts"
 )
@@ -76,9 +78,6 @@ func New(cfg video.Config, baseDir string) (*Runtime, error) {
 		}
 		reg[comfy.ID()] = comfy
 	}
-	if len(reg) == 0 {
-		return nil, errors.New("video gateway is enabled but no provider is configured; configure the local ComfyUI workflow or enable development_fake_provider only for tests")
-	}
 	storageRoot := cfg.StorageRoot
 	if storageRoot == "" {
 		storageRoot = filepath.Join(baseDir, "video-assets")
@@ -115,6 +114,57 @@ func New(cfg video.Config, baseDir string) (*Runtime, error) {
 		}
 		narrator = piper
 	}
+	// Universal AI-to-Video (code-render) provider registration. The
+	// planner talks to an OpenAI-compatible chat-completions endpoint —
+	// normally this gateway's own data plane — so planning reuses the
+	// configured providers, routing, and credentials.
+	var universalAgent *agent.Agent
+	var codeRenderMaxDuration float64
+	if cfg.CodeRenderEnabled {
+		planner, err := agent.NewOpenAIPlanner(cfg.CodeRenderPlannerBaseURL, cfg.CodeRenderPlannerAPIKeyEnv, cfg.CodeRenderPlannerJSONMode)
+		if err != nil {
+			return nil, fmt.Errorf("initialize code-render planner: %w", err)
+		}
+		universalAgent = &agent.Agent{Planner: planner, MaxAttempts: 3}
+		models := append([]string(nil), cfg.CodeRenderPlannerModels...)
+		if m := strings.TrimSpace(cfg.CodeRenderPlannerModel); m != "" {
+			found := false
+			for _, x := range models {
+				if x == m {
+					found = true
+				}
+			}
+			if !found {
+				models = append([]string{m}, models...)
+			}
+		}
+		if len(models) == 0 {
+			return nil, errors.New("video.code_render_enabled requires at least one planning model (video.code_render_planner_model or video.code_render_planner_models)")
+		}
+		codeRenderMaxDuration = cfg.CodeRenderMaxDurationSeconds
+		if codeRenderMaxDuration <= 0 {
+			codeRenderMaxDuration = 120
+		}
+		workRoot := cfg.CodeRenderWorkRoot
+		if workRoot == "" {
+			workRoot = filepath.Join(storageRoot, "code-render-work")
+		} else if !filepath.IsAbs(workRoot) {
+			workRoot = filepath.Join(baseDir, workRoot)
+		}
+		if err := os.MkdirAll(workRoot, 0o700); err != nil {
+			return nil, fmt.Errorf("create code-render work root: %w", err)
+		}
+		ffmpegBinary := strings.TrimSpace(os.Getenv("NEXAROUTE_FFMPEG"))
+		if ffmpegBinary == "" {
+			ffmpegBinary = "ffmpeg"
+		}
+		cr := providers.NewCodeRender(universalAgent, &render.Renderer{FFmpeg: ffmpegBinary}, narrator, workRoot, models, codeRenderMaxDuration)
+		cr.MaxAssetBytes = maxBytes
+		reg[cr.ID()] = cr
+	}
+	if len(reg) == 0 {
+		return nil, errors.New("video gateway is enabled but no provider is configured; configure the local ComfyUI workflow, enable the code-render provider, or enable development_fake_provider only for tests")
+	}
 	ledger := &cost.Ledger{}
 	ffmpegBinary := strings.TrimSpace(os.Getenv("NEXAROUTE_FFMPEG"))
 	if ffmpegBinary == "" {
@@ -125,7 +175,7 @@ func New(cfg video.Config, baseDir string) (*Runtime, error) {
 		Composer: composer.New(ffmpegBinary, ""), Narrator: narrator, MaxAssetBytes: maxBytes,
 	}
 	pool := queue.NewWorkerPool(q, cfg.Workers, orch.RunJob)
-	h := &api.Handler{Orch: orch, Store: store, Providers: reg, Assets: assetSink, RequireAuth: true, BearerToken: token}
+	h := &api.Handler{Orch: orch, Store: store, Providers: reg, Assets: assetSink, RequireAuth: true, BearerToken: token, Universal: universalAgent, UniversalMaxDuration: codeRenderMaxDuration}
 	return &Runtime{Handler: h, Queue: q, Workers: pool, Store: store, Orchestrator: orch}, nil
 }
 

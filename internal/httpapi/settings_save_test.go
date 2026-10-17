@@ -50,10 +50,18 @@ func TestSaveSettingsHandlerHasNoSelfReference(t *testing.T) {
 			t.Fatalf("save-settings handler references %q inside its own const initializer (TDZ ReferenceError at runtime): %q", name, window)
 		}
 	}
-	// The handler must still send a numeric max_attempts derived from the
-	// previous routing snapshot, and still PUT to the settings endpoint.
-	if !strings.Contains(handler, "max_attempts: Number(") {
-		t.Error("save-settings handler no longer sends a numeric max_attempts")
+	// The handler must still send a numeric max_attempts and still PUT to
+	// the settings endpoint. Contract change (#430, UI-F5): max_attempts is
+	// no longer an unconditional snapshot preserve — the Settings Failover
+	// dropdown governs it (off -> 1; on -> the snapshot value when > 1,
+	// else the product default 4). The snapshot derivation must remain:
+	// with failover on, the value comes from Number(prevRouting.max_attempts),
+	// never from the payload object under construction.
+	if !strings.Contains(handler, "max_attempts: $('#setting-failover')") {
+		t.Error("save-settings handler no longer maps the Failover dropdown onto max_attempts (#430)")
+	}
+	if !strings.Contains(handler, "Number(prevRouting.max_attempts)") {
+		t.Error("save-settings handler no longer derives max_attempts from the routing snapshot")
 	}
 	if !strings.Contains(handler, "state.snap.config?.routing") {
 		t.Error("save-settings handler no longer derives routing from the config snapshot")

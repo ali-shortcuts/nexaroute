@@ -44,6 +44,13 @@ def console_errors(page):
     page.on("console", lambda msg: errors.append(msg.text) if msg.type == "error" else None)
     return errors
 
+def admin_json(base: str, path: str, method: str, body: dict | None = None) -> dict:
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(base + path, data=data, headers={"Content-Type": "application/json"}, method=method)
+    with urllib.request.urlopen(req, timeout=10) as response:
+        raw = response.read()
+        return json.loads(raw) if raw else {}
+
 def main() -> None:
     chromium = shutil.which("chromium") or shutil.which("google-chrome")
     if not chromium:
@@ -73,6 +80,8 @@ def main() -> None:
         env = os.environ.copy()
         env["PATH"] = "/usr/local/go/bin:" + env.get("PATH", "")
         env["NEXAROUTE_TEST_VIDEO_TOKEN"] = test_video_token
+        env["NEXA_ISSUE393_BROWSER_KEY"] = "ISSUE393_BROWSER_ENV_CANARY_9f31"
+        env["NEXA_ISSUE393_BROWSER_POOL"] = "ISSUE393_BROWSER_POOL_ENV_CANARY_2da4"
         log = (tmp_path / "gateway.log").open("w")
         proc = subprocess.Popen(["go", "run", "./cmd/gateway", "-no-browser", "-config", str(config_path)], cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT, text=True)
         base = f"http://127.0.0.1:{port}"
@@ -86,8 +95,11 @@ def main() -> None:
                 
                 console_msgs = []
                 expected_disabled_404 = {"active": False}
+                expected_issue393_validation = {"active": False}
                 def record_console(msg):
                     if msg.type == "error" and expected_disabled_404["active"] and "404 (Not Found)" in msg.text:
+                        return
+                    if msg.type == "error" and expected_issue393_validation["active"] and "400 (Bad Request)" in msg.text:
                         return
                     console_msgs.append((msg.type, msg.text))
                 page.on("console", record_console)
@@ -175,6 +187,7 @@ def main() -> None:
                 expect(page.locator("#p-retention")).to_have_value("limited")
                 expect(page.locator("#p-dh-note")).to_have_value("Updated note")
                 page.locator('[data-action="close-modal"]').first.click()
+
 
                 # UI FIX #242: ensure final Providers state has >=3 providers incl. one unknown
                 page.locator('[data-page="providers"]').click()
@@ -542,6 +555,133 @@ def main() -> None:
                     page.evaluate("(t) => { document.documentElement.dataset.theme = t; localStorage.setItem('nexaroute_theme', t); window.scrollTo(0, 0); }", theme)
                     time.sleep(0.3)
                     page.screenshot(path=str(fix_dir / f"providers-privacy-badges-fullpage-{theme}.png"), full_page=True)
+
+                # Issue #393: local-only provider fixture with sensitive fields
+                # and non-secret metadata; no external provider is contacted.
+                browser_secrets = [
+                    "ISSUE393_BROWSER_API_CANARY_591a",
+                    "ISSUE393_BROWSER_ENV_CANARY_9f31",
+                    "ISSUE393_BROWSER_POOL_CANARY_4c72",
+                    "ISSUE393_BROWSER_POOL_ENV_CANARY_2da4",
+                    "ISSUE393_BROWSER_HEADER_CANARY_0c41",
+                    "ISSUE393_BROWSER_PROXY_USER_88bc",
+                    "ISSUE393_BROWSER_PROXY_PASS_31ed",
+                    "ISSUE393_BROWSER_QUERY_CANARY_07fa",
+                ]
+                admin_json(base, "/admin/api/providers", "POST", {"provider": {
+                    "id": "issue393-roundtrip", "name": "Provider Round Trip",
+                    "type": "openai_compatible", "base_url": "http://127.0.0.1:9/v1",
+                    "api_key": browser_secrets[0], "api_key_env": "NEXA_ISSUE393_BROWSER_KEY",
+                    "auth_mode": "bearer", "enabled": False, "max_concurrency": 13,
+                    "stream_idle_timeout_seconds": 88, "chat_path": "/custom-chat",
+                    "forward_headers": ["x-client-id"], "allowed_hosts": ["127.0.0.1"],
+                    "headers": {"X-Private-Auth": browser_secrets[4], "X-Tenant": "tenant-393"},
+                    "proxy_url": "http://" + browser_secrets[5] + ":" + browser_secrets[6] + "@127.0.0.1:9997/proxy?" + browser_secrets[7] + "=1",
+                    "credentials": [
+                        {"name": "literal-pool", "api_key": browser_secrets[2], "enabled": True},
+                        {"name": "env-pool", "api_key_env": "NEXA_ISSUE393_BROWSER_POOL", "enabled": True},
+                    ],
+                    "data_handling": {"trains_on_data": "no", "retention": "limited", "note": "safe browser fixture"},
+                    "models": [{"id": "browser-alias", "model": "model-alpha", "aliases": ["friendly-alpha"],
+                                "enabled": True, "priority": 4, "weight": 2.5, "context_window": 4096,
+                                "input_cost_per_mtok": 3, "output_cost_per_mtok": 6,
+                                "capabilities": {"streaming": True, "tools": True, "vision": False, "reasoning": True}}],
+                }})
+                page.reload(wait_until="domcontentloaded")
+                page.locator('[data-page="providers"]').click()
+                browser_requests, browser_responses = [], []
+                def record_request(request):
+                    if "/admin/api/providers/issue393-roundtrip" in request.url:
+                        browser_requests.append(request.post_data or "")
+                def record_response(response):
+                    if "/admin/api/providers/issue393-roundtrip" in response.url:
+                        try:
+                            browser_responses.append(response.text())
+                        except Exception:
+                            pass
+                page.on("request", record_request)
+                page.on("response", record_response)
+
+                edit = page.locator('[data-action="edit-provider"][data-id="issue393-roundtrip"]')
+                edit.click()
+                expect(page.locator("#p-name")).to_have_value("Provider Round Trip")
+                expect(page.locator("#p-enabled")).not_to_be_checked()
+                expect(page.locator("#p-max-concurrency")).to_have_value("13")
+                expect(page.locator("#model-list")).to_contain_text("ID browser-alias")
+                expect(page.locator("#model-list")).to_contain_text("Aliases friendly-alpha")
+                expect(page.locator("#model-list")).to_contain_text("Priority 4")
+                expect(page.locator("#model-list")).to_contain_text("Weight 2.5")
+                expect(page.locator("#model-list")).to_contain_text("Capabilities streaming, tools, reasoning")
+                expect(page.locator("#dialog-root")).to_contain_text("X-Private-Auth")
+                expect(page.locator("#dialog-root")).to_contain_text("http://127.0.0.1:9997")
+                expect(page.locator("#dialog-root")).to_contain_text("literal-pool")
+                expect(page.locator("#dialog-root")).to_contain_text("env-pool")
+                for secret in browser_secrets:
+                    assert secret not in page.locator("#dialog-root").inner_text(), f"secret shown in edit UI: {secret}"
+
+                # Cancel must discard the edit draft; reopening rehydrates from
+                # the backend without loading any stored credential value.
+                page.locator("#p-name").fill("Cancelled draft")
+                page.locator('[data-action="close-modal"]').last.click()
+                edit.click()
+                expect(page.locator("#p-name")).to_have_value("Provider Round Trip")
+
+                # Validation failure must keep the modal open and not show a
+                # success state; retry with a valid URL then saves an unrelated field.
+                page.locator("#p-base").fill("not-a-url")
+                expected_issue393_validation["active"] = True
+                with page.expect_response(lambda response: "/admin/api/providers/issue393-roundtrip" in response.url and response.status == 400):
+                    page.locator('[data-action="save-modal"]').click()
+                expected_issue393_validation["active"] = False
+                expect(page.locator("#modal-title")).to_have_text("Edit provider")
+                page.locator("#p-base").fill("http://127.0.0.1:9/v1")
+                page.locator("#p-name").fill("Provider Round Trip Edited")
+                page.locator('[data-action="save-modal"]').click()
+                expect(page.locator("#dialog-root .modal")).to_have_count(0)
+
+                saved = admin_json(base, "/admin/api/providers/issue393-roundtrip", "GET")
+                safe_provider = saved["provider"]
+                assert safe_provider["name"] == "Provider Round Trip Edited"
+                assert safe_provider["enabled"] is False and safe_provider["max_concurrency"] == 13
+                assert safe_provider["stream_idle_timeout_seconds"] == 88 and safe_provider["chat_path"] == "/custom-chat"
+                assert safe_provider["forward_headers"] == ["x-client-id"] and safe_provider["allowed_hosts"] == ["127.0.0.1"]
+                assert safe_provider["models"][0]["id"] == "browser-alias"
+                assert safe_provider["models"][0]["aliases"] == ["friendly-alpha"]
+                assert safe_provider["models"][0]["priority"] == 4 and safe_provider["models"][0]["weight"] == 2.5
+                read_text = json.dumps(saved)
+                for secret in browser_secrets:
+                    assert secret not in read_text, f"read API leaked secret: {secret}"
+
+                # Explicit replacement is distinct from omission and returns
+                # only safe status metadata. The input is a test-only canary.
+                replacement = "ISSUE393_BROWSER_REPLACEMENT_CANARY_b18f"
+                page.locator('[data-action="edit-provider"][data-id="issue393-roundtrip"]').click()
+                page.locator("#p-key").fill(replacement)
+                page.locator('[data-action="save-modal"]').click()
+                expect(page.locator("#dialog-root .modal")).to_have_count(0)
+                replaced = admin_json(base, "/admin/api/providers/issue393-roundtrip", "GET")
+                assert replaced["credential_configured"] is True and replaced["secret_source"] == "literal"
+                assert replacement not in json.dumps(replaced)
+
+                # Explicit clear is separately selectable; reopening and
+                # clearing must update status without returning the old value.
+                page.locator('[data-action="edit-provider"][data-id="issue393-roundtrip"]').click()
+                page.locator("#p-clear-secret").check()
+                page.locator('[data-action="save-modal"]').click()
+                expect(page.locator("#dialog-root .modal")).to_have_count(0)
+                cleared = admin_json(base, "/admin/api/providers/issue393-roundtrip", "GET")
+                assert cleared["credential_configured"] is False and cleared["has_secret"] is False
+                all_responses = "\n".join(browser_responses)
+                for secret in browser_secrets + [replacement]:
+                    assert secret not in all_responses, f"browser response leaked secret: {secret}"
+                preserve_requests = "\n".join(browser_requests)
+                for secret in browser_secrets:
+                    assert secret not in preserve_requests, f"browser request unexpectedly contained stored secret: {secret}"
+                assert sum(replacement in request for request in browser_requests) == 1, "replacement should be sent only in the explicit replace request"
+                admin_json(base, "/admin/api/providers/issue393-roundtrip", "DELETE")
+
+                errors = [m for m in console_msgs if m[0] == "error"]
+                assert not errors, f"Console errors after Issue #393 browser flow: {errors}"
 
                 print(f"M2-1 title offsets: {title_tops}")
                 print(f"M2-1 content offsets: {content_tops}")

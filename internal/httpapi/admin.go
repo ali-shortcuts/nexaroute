@@ -638,12 +638,12 @@ func (s *Server) adminProviderByID(w http.ResponseWriter, r *http.Request) {
 		proxyScheme, proxyHost, proxyDisplay := proxyStructure(cfg.Providers[idx].ProxyURL)
 		hasProxy := strings.TrimSpace(cfg.Providers[idx].ProxyURL) != ""
 		source, hasSecret := secretSource(p), len(p.ResolvedCredentials()) > 0
-		// Preview only a stored literal key. A key that resolves from an
-		// environment variable lives outside the gateway config, so it gets none.
+		// Keep the legacy preview field but disclose no secret characters.
 		apiKeyPreview := ""
 		if p.APIKeyEnv == "" || os.Getenv(p.APIKeyEnv) == "" {
 			apiKeyPreview = secretPreview(p.APIKey)
 		}
+		credentialConfigured := p.APIKey != "" || p.APIKeyEnv != "" || len(p.Credentials) > 0
 		credsMeta := credentialMeta(cfg.Providers[idx].Credentials)
 		// Determine if there's a secret to mask (API key, env var, or credentials)
 		hasAPIKeySecret := p.APIKey != "" || p.APIKeyEnv != "" || len(p.Credentials) > 0
@@ -660,21 +660,22 @@ func (s *Server) adminProviderByID(w http.ResponseWriter, r *http.Request) {
 			apiKeyMasked = maskedPlaceholder
 		}
 		payload := map[string]any{
-			"provider":         p,
-			"api_key_masked":   apiKeyMasked,
-			"api_key_preview":  apiKeyPreview,
-			"credentials_meta": credsMeta,
-			"reveal_allowed":   cfg.SecretRevealAllowed(),
-			"secret_source":    source,
-			"has_secret":       hasSecret,
-			"has_headers":      hasHeaders,
-			"header_names":     headerNames,
-			"header_count":     len(headerNames),
-			"has_proxy":        hasProxy,
-			"proxy_scheme":     proxyScheme,
-			"proxy_host":       proxyHost,
-			"proxy_display":    proxyDisplay,
-			"credential_count": len(cfg.Providers[idx].ResolvedCredentials()),
+			"provider":              p,
+			"api_key_masked":        apiKeyMasked,
+			"api_key_preview":       apiKeyPreview,
+			"credentials_meta":      credsMeta,
+			"reveal_allowed":        cfg.SecretRevealAllowed(),
+			"secret_source":         source,
+			"has_secret":            hasSecret,
+			"credential_configured": credentialConfigured,
+			"has_headers":           hasHeaders,
+			"header_names":          headerNames,
+			"header_count":          len(headerNames),
+			"has_proxy":             hasProxy,
+			"proxy_scheme":          proxyScheme,
+			"proxy_host":            proxyHost,
+			"proxy_display":         proxyDisplay,
+			"credential_count":      len(cfg.Providers[idx].ResolvedCredentials()),
 		}
 		writeJSON(w, 200, payload)
 
