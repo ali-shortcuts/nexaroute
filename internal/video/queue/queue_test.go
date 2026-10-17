@@ -234,3 +234,68 @@ func TestFileStoreDurabilityFailureRollsBackCreateAndUpdate(t *testing.T) {
 		t.Fatalf("failed create leaked index: %v", err)
 	}
 }
+
+func TestTerminalAndForcedFailedRecordsRejectLateOverwrite(t *testing.T) {
+	ctx := context.Background()
+	factories := []struct {
+		name string
+		new  func(*testing.T) JobStore
+	}{
+		{name: "memory", new: func(*testing.T) JobStore { return NewMemoryStore() }},
+		{name: "file", new: func(t *testing.T) JobStore {
+			store, err := NewFileStore(filepath.Join(t.TempDir(), "jobs.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			return store
+		}},
+	}
+	for _, factory := range factories {
+		t.Run(factory.name, func(t *testing.T) {
+			store := factory.new(t)
+			job := queueJob("forced", "")
+			job.State = video.StateProcessing
+			if err := store.Create(ctx, job); err != nil {
+				t.Fatal(err)
+			}
+			forced := job
+			forced.State = video.StateFailed
+			forced.OperatorForceFailed = true
+			forced.LastError = "forced by operator"
+			if err := store.Update(ctx, forced); err != nil {
+				t.Fatal(err)
+			}
+			stale := forced
+			stale.OperatorForceFailed = false
+			stale.State = video.StateCompleted
+			stale.CostReconciled = true
+			if err := store.Update(ctx, stale); !errors.Is(err, ErrTerminalJob) {
+				t.Fatalf("late completion update error=%v, want ErrTerminalJob", err)
+			}
+			if err := store.Update(ctx, forced); err != nil {
+				t.Fatalf("exact idempotent update of terminal job: %v", err)
+			}
+			got, err := store.Get(ctx, forced.JobID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.State != video.StateFailed || !got.OperatorForceFailed || got.CostReconciled {
+				t.Fatalf("forced state changed after stale write: state=%s forced=%v reconciled=%v", got.State, got.OperatorForceFailed, got.CostReconciled)
+			}
+
+			// Ordinary failed jobs retain their existing retry lifecycle.
+			retryable := queueJob("retryable", "")
+			if err := store.Create(ctx, retryable); err != nil {
+				t.Fatal(err)
+			}
+			retryable.State = video.StateFailed
+			if err := store.Update(ctx, retryable); err != nil {
+				t.Fatal(err)
+			}
+			retryable.State = video.StateQueued
+			if err := store.Update(ctx, retryable); err != nil {
+				t.Fatalf("ordinary failed job should remain retryable: %v", err)
+			}
+		})
+	}
+}

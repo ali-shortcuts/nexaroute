@@ -3,12 +3,24 @@ package queue
 import (
 	"context"
 	"errors"
+	"reflect"
 	"sync"
 
 	"github.com/ali-shortcuts/nexaroute/internal/video"
 )
 
 var ErrNotFound = errors.New("video job not found")
+var ErrTerminalJob = errors.New("video job is already terminal and cannot be overwritten")
+
+func checkTerminalUpdate(current, next video.VideoJob) error {
+	if !current.IsTerminal() {
+		return nil
+	}
+	if reflect.DeepEqual(current, next) {
+		return nil
+	}
+	return ErrTerminalJob
+}
 
 type JobStore interface {
 	Create(context.Context, video.VideoJob) error
@@ -63,8 +75,12 @@ func (s *MemoryStore) GetByIdempotency(_ context.Context, key string) (video.Vid
 func (s *MemoryStore) Update(_ context.Context, j video.VideoJob) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.jobs[j.JobID]; !ok {
+	old, ok := s.jobs[j.JobID]
+	if !ok {
 		return ErrNotFound
+	}
+	if err := checkTerminalUpdate(old, j); err != nil {
+		return err
 	}
 	s.jobs[j.JobID] = j
 	return nil

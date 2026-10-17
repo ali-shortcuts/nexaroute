@@ -144,6 +144,9 @@ func (s *FileStore) Update(_ context.Context, j video.VideoJob) error {
 	if !ok {
 		return ErrNotFound
 	}
+	if err := checkTerminalUpdate(old, j); err != nil {
+		return err
+	}
 	s.jobs[j.JobID] = j
 	if err := s.persist(); err != nil {
 		s.jobs[j.JobID] = old

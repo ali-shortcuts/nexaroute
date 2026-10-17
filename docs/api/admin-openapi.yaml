@@ -782,6 +782,52 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '405':
           $ref: '#/components/responses/MethodNotAllowed'
+  /admin/api/video/jobs/{id}/force-fail:
+    post:
+      summary: Force-fail an active video job
+      description: Explicitly marks the local job failed and releases its reservation even if the provider refuses graceful cancellation. Remote work may continue if cancellation is not confirmed.
+      x-permission: video.manage
+      security:
+      - adminSession: []
+        csrfToken: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - confirm_job_id
+              properties:
+                confirm_job_id:
+                  type: string
+                  description: Must exactly match the path job ID as explicit operator confirmation.
+      responses:
+        '200':
+          description: Job was force-failed; provider cancellation result is reported separately.
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Includes local state, provider cancellation attempt/confirmation flags, and a warning when remote work may continue.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Video job was not found.
+        '409':
+          description: Video job is no longer active.
+        '503':
+          description: Video control or durable job persistence is unavailable.
   /admin/api/drain:
     get:
       summary: Drain status
