@@ -315,6 +315,16 @@ func (b *Bus) SubscribeSnapshotSince(since uint64, limit int) ([]Event, <-chan E
 	return snapshot, ch, cancel, true
 }
 
+// NumSubscribers reports the current number of live subscribers.
+// cancel() removes the subscriber synchronously, so after every cancel has
+// run the count is exactly zero — a deterministic, scheduling-independent
+// disconnect-accounting invariant for tests. It does not change behavior.
+func (b *Bus) NumSubscribers() int {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return len(b.subscribers)
+}
+
 func (b *Bus) Counts() map[string]uint64 {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
