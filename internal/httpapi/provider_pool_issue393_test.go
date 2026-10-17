@@ -68,6 +68,22 @@ func TestIssue393CredentialPoolEditingIsExplicitAndAtomic(t *testing.T) {
 		t.Fatalf("pool removal affected unintended entries: %+v", got.Credentials)
 	}
 
+	// A patch may address each saved index at most once. Conflicting update and
+	// removal operations are rejected before the cloned config is persisted.
+	before = got
+	rr = adminRequest(s, http.MethodPut, "/admin/api/providers/pool-provider", `{"provider":`+provider+`,"credential_pool":{"entries":[{"index":0,"enabled":false},{"index":0,"name":"duplicate"}]}}`)
+	if rr.Code < 400 {
+		t.Fatalf("duplicate indexed update status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	rr = adminRequest(s, http.MethodPut, "/admin/api/providers/pool-provider", `{"provider":`+provider+`,"credential_pool":{"entries":[{"index":0,"enabled":false}],"remove":[0]}}`)
+	if rr.Code < 400 {
+		t.Fatalf("update/remove conflict status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	got = s.currentConfig().Providers[0]
+	if got.APIKey != before.APIKey || len(got.Credentials) != len(before.Credentials) {
+		t.Fatalf("rejected pool conflicts corrupted saved config: %+v", got)
+	}
+
 	// An explicit replacement with no entries is different from omission.
 	rr = adminRequest(s, http.MethodPut, "/admin/api/providers/pool-provider", `{"provider":`+provider+`,"credential_pool":{"replace":true,"entries":[]}}`)
 	if rr.Code != http.StatusOK {

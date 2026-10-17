@@ -1151,9 +1151,21 @@ func applyCredentialPoolUpdate(old []config.CredentialConfig, update credentialP
 		}
 		remove[idx] = true
 	}
+	seenUpdates := map[int]bool{}
 	for _, entry := range update.Entries {
-		if entry.Index != nil && remove[*entry.Index] {
-			return nil, fmt.Errorf("credential pool entry index %d is both updated and removed", *entry.Index)
+		if entry.Index == nil {
+			continue
+		}
+		idx := *entry.Index
+		if idx < 0 || idx >= len(old) {
+			return nil, fmt.Errorf("credential pool entry index %d is invalid", idx)
+		}
+		if seenUpdates[idx] {
+			return nil, fmt.Errorf("credential pool entry index %d is updated more than once", idx)
+		}
+		seenUpdates[idx] = true
+		if remove[idx] {
+			return nil, fmt.Errorf("credential pool entry index %d is both updated and removed", idx)
 		}
 	}
 	out := make([]config.CredentialConfig, 0, len(old)+len(update.Entries))
@@ -1172,9 +1184,6 @@ func applyCredentialPoolUpdate(old []config.CredentialConfig, update credentialP
 			continue
 		}
 		idx := *entry.Index
-		if idx < 0 || idx >= len(old) {
-			return nil, fmt.Errorf("credential pool entry index %d is invalid", idx)
-		}
 		item, err := applyEntry(entry, &old[idx])
 		if err != nil {
 			return nil, err
