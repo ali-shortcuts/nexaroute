@@ -143,6 +143,49 @@ func TestQuotaRolloverDoesNotDiscardNewerRemainingFromLaterDispatch(t *testing.T
 	}
 }
 
+// Once a window's reset has passed, a remaining value that was observed
+// during that window is stale evidence: Stats must report it as unknown
+// rather than presenting the dead window's value as current headroom.
+func TestQuotaExpiredWindowEvidenceIsUnknownInStats(t *testing.T) {
+	a := &httpAdapter{}
+	now := time.Now().Unix()
+	reset := now - 60
+	a.remainingRequests.Store(0)
+	a.requestResetUnix.Store(reset)
+	a.requestRemainObservedUnix.Store(reset - 30)
+	a.remainingTokens.Store(0)
+	a.tokenResetUnix.Store(reset)
+	a.tokenRemainObservedUnix.Store(reset - 30)
+
+	st := a.Stats()
+	if st.RemainingRequests != -1 || st.EffectiveRemainingRequests != -1 {
+		t.Fatalf("expired request-window evidence not unknown: %+v", st)
+	}
+	if st.RemainingTokens != -1 || st.EffectiveRemainingTokens != -1 {
+		t.Fatalf("expired token-window evidence not unknown: %+v", st)
+	}
+	// The reset timestamps themselves remain recorded facts.
+	if st.RequestResetUnix != reset || st.TokenResetUnix != reset {
+		t.Fatalf("reset facts must be preserved: %+v", st)
+	}
+}
+
+// A remaining value observed AFTER the previous window's reset passed is
+// evidence for the current window (its own reset may simply not have been
+// reported yet) and must not be expired.
+func TestQuotaRemainingObservedAfterResetStaysKnown(t *testing.T) {
+	a := &httpAdapter{}
+	now := time.Now().Unix()
+	a.remainingRequests.Store(42)
+	a.requestResetUnix.Store(now - 60)
+	a.requestRemainObservedUnix.Store(now)
+
+	st := a.Stats()
+	if st.RemainingRequests != 42 || st.EffectiveRemainingRequests != 42 {
+		t.Fatalf("post-window remaining evidence was wrongly expired: %+v", st)
+	}
+}
+
 // Rollover of one resource must not touch the sibling resource's evidence.
 func TestQuotaWindowRolloverDiscardsOnlyRolledResource(t *testing.T) {
 	a := &httpAdapter{}
