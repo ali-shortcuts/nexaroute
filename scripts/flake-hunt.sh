@@ -47,7 +47,12 @@ fresh_tmpdir() {
 
 burners=()
 start_burners() {
-	local n
+	# `i` MUST be local: the main loop below uses the global `i` as its
+	# iteration counter, and bash function variables are global unless
+	# declared local. Without this, every call clobbered the counter
+	# (leaving it at nproc) and the harness looped on iteration 3
+	# forever — see scripts/test-flake-hunt.sh.
+	local n i
 	n=$(nproc 2>/dev/null || echo 2)
 	for ((i = 0; i < n; i++)); do
 		# Saturate one CPU with hashing; output discarded.
