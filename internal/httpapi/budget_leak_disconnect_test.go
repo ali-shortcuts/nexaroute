@@ -158,13 +158,33 @@ func TestLeakDisconnect_BeforeFirstByte(t *testing.T) {
 		defer close(done)
 		s.Handler().ServeHTTP(httptest.NewRecorder(), req)
 	}()
-	time.Sleep(200 * time.Millisecond) // dispatch is in flight, upstream blocked
+	// Wait for the admission hold to be acquired before cancelling.
+	// The old fixed 200ms sleep raced dispatch: under load the cancel
+	// could arrive before the hold existed, failing the test with
+	// "expected an open hold pending TTL expiry, reserved=0" instead of
+	// exercising the cancel-while-held path this test is about.
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		_, reserved := leakCommittedReserved(s)
+		if reserved > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("guard: budget hold was not acquired before cancel")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	cancel()
-	close(release)
+	// Keep the upstream blocked until the handler has returned: the
+	// unwind decision must be made on the cancelled client context,
+	// not on a raced upstream response. Releasing first let a full
+	// upstream response win and settle the hold, failing the
+	// assertion with reserved=0 (verify -race, 2026-10-17).
 	select {
 	case <-done:
 	case <-time.After(15 * time.Second):
 		t.Fatal("guard: handler did not return after client cancel")
 	}
+	close(release)
 	leakAssertTTLExactlyOnce(t, s, "disconnect before first byte")
 }
