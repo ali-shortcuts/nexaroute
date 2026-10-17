@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # Fixture tests for the release artifact scripts (no network, no real
-# binaries): a synthetic dist must verify, and each tampering must be
-# rejected — modified asset, missing SBOM, manifest entry dropped,
-# manifest self-reference, SBOM module-version drift vs go.mod.
+# binaries): a synthetic dist must verify, and tampering must be rejected —
+# including module-version drift and mismatched/unpinned Go-module PURLs.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -127,19 +126,23 @@ expect_fail "SBOM module version drift vs go.mod" ./scripts/verify-release.sh "$
 # Regression (v0.22.0 dry run, 2026-10-15): go.mod pins modules that
 # are never linked into the shipped binaries (test-only testify,
 # tool-only go.yaml.in/yaml/v3). An SBOM of the shipped assets
-# legitimately omits them; absence alone must not fail verification.
+# legitimately omits both; absence alone must not fail verification.
 # (Version DRIFT of a listed module must still fail — see above.)
 t="$work/unlinked"; make_fixture "$t"
 python3 - "$t" <<'PYEOF'
 import glob, json, sys
 p = glob.glob(sys.argv[1] + "/*-sbom.spdx.json")[0]
 doc = json.load(open(p))
-doc["packages"] = doc["packages"][:-1]
+unlinked = {"github.com/stretchr/testify", "go.yaml.in/yaml/v3"}
+present = {package.get("name") for package in doc["packages"]}
+if not unlinked <= present:
+    sys.exit(f"fixture missing expected go.mod pins: {sorted(unlinked - present)}")
+doc["packages"] = [package for package in doc["packages"] if package.get("name") not in unlinked]
 json.dump(doc, open(p, "w"), indent=2)
 PYEOF
 ./scripts/write-checksums.sh "$t" >/dev/null
 ./scripts/verify-release.sh "$t" v9.9.9 >/dev/null
-echo "test-release-artifacts: go.mod module absent from SBOM (unlinked) verifies"
+echo "test-release-artifacts: unlinked testify and yaml modules may be absent from SBOM"
 
 # A Go-module purl for a package not pinned in go.mod must not be trusted,
 # even if the SBOM version and the checksums are internally consistent.
@@ -161,6 +164,29 @@ json.dump(doc, open(p, "w"), indent=2)
 PYEOF
 ./scripts/write-checksums.sh "$t" >/dev/null
 expect_fail "SBOM Go module package not pinned in go.mod" ./scripts/verify-release.sh "$t" v9.9.9
+
+# A PURL must identify the same module as its SPDX package. Without
+# validating this relationship, a package can claim a pinned go.mod name
+# while its PURL points at an invented module, bypassing the unpinned-PURL
+# check above.
+t="$work/mismatched-purl"; make_fixture "$t"
+python3 - "$t" <<'PYEOF'
+import glob, json, sys
+p = glob.glob(sys.argv[1] + "/*-sbom.spdx.json")[0]
+doc = json.load(open(p))
+doc["packages"].append({
+    "name": "github.com/stretchr/testify",
+    "versionInfo": "v1.12.1",
+    "externalRefs": [{
+        "referenceCategory": "PACKAGE-MANAGER",
+        "referenceType": "purl",
+        "referenceLocator": "pkg:golang/example.com/forged-module@v1.12.1",
+    }],
+})
+json.dump(doc, open(p, "w"), indent=2)
+PYEOF
+./scripts/write-checksums.sh "$t" >/dev/null
+expect_fail "Go module PURL path disagrees with its pinned SBOM package name" ./scripts/verify-release.sh "$t" v9.9.9
 
 # The Go main module and stdlib are legitimate pkg:golang entries and should
 # not be mistaken for third-party dependencies missing from go.mod.
