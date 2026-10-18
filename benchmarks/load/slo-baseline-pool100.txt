@@ -1,0 +1,21 @@
+# issue437 load profile — label=slo-baseline-pool100
+# date: 2026-10-18T16:08:23Z
+# go: go version go1.27.0 linux/amd64
+# cpu: AMD EPYC 9D25 126-Core Processor
+# nproc: 2
+# args: pool=100 ops=1000 workers=16 seed=1 subscribers=2
+warning: both GOPATH and GOROOT are the same directory (/home/hatch/go); see https://go.dev/wiki/InstallTroubleshooting
+=== RUN   TestLoadProfileMixedWorkload
+    loadprofile_test.go:651: 
+        issue437 load profile
+        seed=1 pool=100 ops=1000 workers=16 subscribers=2
+        elapsed=492ms
+        upstream_calls short=408 stream=291 fail=3 fallback=154 rate=3 slow=44
+        gateway_overhead short p50=1.702ms p95=5.554ms n=408
+        gateway_ttft stream p50=1.664ms p95=5.802ms n=291
+        goroutines before=11 after=114
+        heap_alloc_mb before=1.69 after=3.32
+        sessions=0
+--- PASS: TestLoadProfileMixedWorkload (0.94s)
+PASS
+ok  	github.com/ali-shortcuts/nexaroute/internal/httpapi	0.944s
