@@ -68,6 +68,8 @@
     "concurrency": 16,
     "recovery_attempts": 5,
     "recovery_retry_ms": 500,
+    "recovery_success_threshold": 3,
+    "recovery_cooldown_seconds": 900,
     "capability_probes": true
   },
   "decision": {

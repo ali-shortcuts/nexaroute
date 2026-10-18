@@ -39,9 +39,11 @@ details: [docs/INSTALLATION.md](docs/INSTALLATION.md).
   provider-diverse failover ordering, optional request hedging, and opt-in
   cost-aware and quota-aware pressure handling.
 - **Resilience:** retries/failover before response bytes are committed,
-  per-deployment circuit breakers, supervised recovery (5 recovery probes,
-  then a 30-minute cooldown and automatic re-entry), provider incident
-  circuits, `Retry-After` handling, and bounded admission control.
+  per-deployment circuit breakers, supervised recovery (up to 5 recovery
+  probes with a 3-of-5 success threshold by default, then a 15-minute cooldown
+  and automatic re-entry; both thresholds and the cooldown are configurable),
+  provider incident circuits, classified probe failures, `Retry-After`
+  handling, and bounded admission control.
 - **Protocol translation:** full four-path matrix — Anthropic->Anthropic,
   Anthropic->OpenAI, OpenAI->OpenAI, OpenAI->Anthropic — with streaming,
   tool calls, tool results, reasoning/thinking handling, usage accounting,

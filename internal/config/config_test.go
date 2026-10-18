@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestSaveAtomicModeAndPreservesOperatorBackup(t *testing.T) {
@@ -144,6 +145,56 @@ func TestReadyMeshRecoveryDefaults(t *testing.T) {
 	}
 	if cfg.Probe.RecoveryAttempts != 5 || cfg.Probe.RecoveryRetryMS != 500 {
 		t.Fatalf("unexpected recovery defaults: %+v", cfg.Probe)
+	}
+	if cfg.Probe.RecoverySuccessThreshold != 3 {
+		t.Fatalf("recovery_success_threshold=%d want 3", cfg.Probe.RecoverySuccessThreshold)
+	}
+	if cfg.Probe.RecoveryCooldownSeconds != 900 {
+		t.Fatalf("recovery_cooldown_seconds=%d want 900", cfg.Probe.RecoveryCooldownSeconds)
+	}
+	if got := cfg.ProbeRecoverySuccessThreshold(); got != 3 {
+		t.Fatalf("ProbeRecoverySuccessThreshold()=%d want 3", got)
+	}
+	if got := cfg.ProbeRecoveryCooldown(); got != 15*time.Minute {
+		t.Fatalf("ProbeRecoveryCooldown()=%s want 15m", got)
+	}
+}
+
+func TestRecoveryPolicyDefaultsClampAndValidate(t *testing.T) {
+	// A lower attempt count with the default threshold must never fail startup:
+	// the threshold is clamped to the attempt count at load time.
+	cfg := Default()
+	cfg.ApplyDefaults()
+	cfg.Probe.RecoveryAttempts = 2
+	cfg.Probe.RecoverySuccessThreshold = 0
+	cfg.Probe.RecoveryCooldownSeconds = 0
+	cfg.ApplyDefaults()
+	if cfg.Probe.RecoverySuccessThreshold != 2 {
+		t.Fatalf("threshold=%d want clamped to attempts (2)", cfg.Probe.RecoverySuccessThreshold)
+	}
+	if cfg.Probe.RecoveryCooldownSeconds != 900 {
+		t.Fatalf("recovery cooldown default not applied: %d", cfg.Probe.RecoveryCooldownSeconds)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("clamped config must validate: %v", err)
+	}
+
+	invalid := []struct {
+		name string
+		edit func(*Config)
+	}{
+		{"threshold zero", func(c *Config) { c.Probe.RecoverySuccessThreshold = 0 }},
+		{"threshold above attempts", func(c *Config) { c.Probe.RecoveryAttempts = 5; c.Probe.RecoverySuccessThreshold = 6 }},
+		{"cooldown zero", func(c *Config) { c.Probe.RecoveryCooldownSeconds = 0 }},
+	}
+	for _, tc := range invalid {
+		t.Run(tc.name, func(t *testing.T) {
+			c := Default()
+			tc.edit(&c)
+			if err := c.Validate(); err == nil {
+				t.Fatalf("expected validation error for %s", tc.name)
+			}
+		})
 	}
 }
 
