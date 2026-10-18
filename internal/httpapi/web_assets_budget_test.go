@@ -21,7 +21,10 @@ var webAssetBudgets = map[string]int{
 	// Issue #399 (Phase 7) routes the provider and routing control-plane
 	// surfaces through the EN/FA/PS body-copy dictionary and adds the
 	// routing eligibility/decision view, so app.js grows by translated copy.
-	"web/app.js":          240 << 10,
+	// Issue #399 remainder adds the unified model inventory, status taxonomy,
+	// per-request decision timeline, bounded list rendering and the guided
+	// first-route wizard, each expanding the three-locale copy dictionary.
+	"web/app.js":          272 << 10,
 	"web/styles.css":      96 << 10,
 	"web/visual-agent.js": 16 << 10,
 }

@@ -997,7 +997,39 @@ func providerSummary(p config.ProviderConfig) map[string]any {
 		"credential_count": len(p.ResolvedCredentials()),
 		"has_proxy":        p.ProxyURL != "",
 		"max_concurrency":  p.MaxConcurrency,
+		// Phase 7 (#399) additive model-inventory contract: the unified model
+		// inventory needs provider-qualified model metadata (aliases,
+		// capabilities, context window, costs, enabled) that the legacy
+		// models []string form cannot express. No secret field rides along.
+		"models_meta":  providerModelsMeta(p),
+		"discoverable": strings.TrimSpace(p.ModelsPath) != "",
 	}
+}
+
+// providerModelsMeta exposes the non-secret per-model metadata the Phase 7
+// model inventory renders. It is additive: the legacy models []string list
+// stays for existing callers. Only structure is exposed — never credentials.
+func providerModelsMeta(p config.ProviderConfig) []map[string]any {
+	out := make([]map[string]any, 0, len(p.Models))
+	for _, m := range p.Models {
+		aliases := m.Aliases
+		if aliases == nil {
+			aliases = []string{}
+		}
+		out = append(out, map[string]any{
+			"id":                   m.ID,
+			"model":                m.Model,
+			"aliases":              aliases,
+			"enabled":              m.Enabled,
+			"priority":             m.Priority,
+			"weight":               m.Weight,
+			"context_window":       m.ContextWindow,
+			"input_cost_per_mtok":  m.InputCostPerMTok,
+			"output_cost_per_mtok": m.OutputCostPerMTok,
+			"capabilities":         m.Capabilities,
+		})
+	}
+	return out
 }
 
 func secretSource(p config.ProviderConfig) string {
