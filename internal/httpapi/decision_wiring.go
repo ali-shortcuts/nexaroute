@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ali-shortcuts/nexaroute/internal/config"
 	"github.com/ali-shortcuts/nexaroute/internal/decision"
 	"github.com/ali-shortcuts/nexaroute/internal/events"
 	"github.com/ali-shortcuts/nexaroute/internal/feature"
@@ -413,7 +414,13 @@ func (s *Server) applyDecisionPlane(
 	// the scorecards package). Evidence order: production feedback
 	// card, then a task-scoped registry card, then the
 	// deployment-wide registry card for the task's dimension.
-	if taskType := string(ti.Profile.Type); taskType != "" {
+	// Enrichment happens ONLY when the applicable policy opts in
+	// with a positive quality weight (globally or for this task):
+	// without an explicit operator opt-in, scorecard evidence is
+	// not even placed on the candidate payload — the Phase H
+	// zero-influence guarantee (TestPhaseH_LiveScorecardsHaveZero
+	// RoutingInfluence) is preserved exactly.
+	if taskType := string(ti.Profile.Type); taskType != "" && decisionQualityEnabled(cfgCopy, resolvedRoute, taskType) {
 		for i := range dc {
 			if score, samples, ok := s.taskQualityEvidence(taskType, dc[i].ID); ok {
 				dc[i].TaskQuality = score
@@ -566,4 +573,35 @@ func (s *Server) taskQualityEvidence(taskType, deploymentID string) (float64, in
 		return v.Score, v.SampleCount, true
 	}
 	return 0, 0, false
+}
+
+// decisionQualityEnabled reports whether the policy that will
+// decide this request opts into the quality component for this
+// task (a positive quality weight globally or in the task's
+// override). The applicable policy is resolved exactly as the
+// decision request resolves it below: the route profile's policy
+// wins over the global default.
+func decisionQualityEnabled(cfg config.Config, resolvedRoute *route.ResolvedRoute, taskType string) bool {
+	policyID := cfg.Decision.Policy
+	if resolvedRoute != nil && resolvedRoute.RouteProfileID != "" {
+		for _, rp := range cfg.RouteProfiles {
+			if rp.ID == resolvedRoute.RouteProfileID && rp.DecisionPolicy != "" {
+				policyID = rp.DecisionPolicy
+				break
+			}
+		}
+	}
+	for _, p := range cfg.DecisionPolicies {
+		if p.ID != policyID {
+			continue
+		}
+		if p.Weights.Quality > 0 {
+			return true
+		}
+		if ov, ok := p.TaskOverrides[taskType]; ok && ov.Quality > 0 {
+			return true
+		}
+		return false
+	}
+	return false
 }
