@@ -31,6 +31,28 @@ func BenchmarkOrchestrator_Local(b *testing.B) {
 	}
 }
 
+// BenchmarkOrchestrator_Local_100 extends the decision-plane
+// overhead corpus to the large end of the candidate-pool profile
+// set (#412): 100 eligible candidates through the local engine,
+// mirroring BenchmarkCandidates1000's pool-size ladder on the
+// router side. Together with BenchmarkOrchestrator_OffMode it
+// brackets the per-request cost the Phase 12 decision plane adds.
+func BenchmarkOrchestrator_Local_100(b *testing.B) {
+	ids := make([]string, 100)
+	for i := 0; i < 100; i++ {
+		ids[i] = string(rune('A'+i%26)) + string(rune('0'+i/26))
+	}
+	reg := NewRegistry()
+	orch := NewOrchestrator(reg, config.DecisionConfig{Mode: "local", Provider: "local", TimeoutMS: 10}, &Metrics{})
+	req := DecisionRequest{Candidates: makeEligible(ids...), Budget: DefaultBudget()}
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _, _ = orch.Decide(ctx, req)
+	}
+}
+
 func BenchmarkValidator_10(b *testing.B) {
 	eligible := makeEligible("A", "B", "C", "D", "E", "F", "G", "H", "I", "J")
 	result := DecisionResult{
