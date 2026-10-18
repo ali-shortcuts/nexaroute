@@ -319,10 +319,43 @@ func validateProviderRequest(r video.VideoRequest, caps video.Capabilities) (vid
 	if r.AudioRequested && !caps.SupportsAudio {
 		return r, errors.New("provider does not support requested audio generation")
 	}
-	if r.DialogueRequested && !caps.SupportsAudio {
+	if r.DialogueRequested && !caps.SupportsAudio && !caps.SupportsDialogueGeneration {
 		return r, errors.New("provider does not support requested dialogue/audio")
 	}
+	// Central capability admission: anything the provider does not
+	// declare must be rejected here, not left to each adapter. A request
+	// that asks for undeclared capabilities would otherwise be silently
+	// downgraded (for example reference frames dropped, or a callback
+	// URL accepted that can never fire).
+	if hasReferenceInputs(r) && !caps.SupportsReferenceFrames {
+		return r, errors.New("provider does not support reference/first/last-frame inputs")
+	}
+	if strings.TrimSpace(r.CallbackURL) != "" && !caps.SupportsWebhooks {
+		return r, errors.New("provider does not support webhooks/callbacks; refusing a callback that would never fire")
+	}
+	if len(r.SoundRequirements) > 0 && !caps.SupportsMusicGeneration && !caps.SupportsAudio {
+		return r, errors.New("provider does not support requested music/sound generation")
+	}
 	return r, nil
+}
+
+// hasReferenceInputs reports whether the request carries any
+// reference-type visual input: reference assets, first/last-frame
+// anchors, per-shot required references, or continuity context. Providers
+// that cannot consume such inputs must reject the request instead of
+// generating without them.
+func hasReferenceInputs(r video.VideoRequest) bool {
+	if len(r.ReferenceAssets) > 0 || r.FirstFrameAsset != nil || r.LastFrameAsset != nil ||
+		len(r.CharacterReferences) > 0 || len(r.LocationReferences) > 0 || len(r.StyleReferences) > 0 ||
+		r.ContinuityContext != nil {
+		return true
+	}
+	for _, shot := range r.ShotPlan {
+		if len(shot.RequiredReferences) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func mergeUsage(dst, src map[string]string) map[string]string {
@@ -938,17 +971,6 @@ func (o *Orchestrator) Cancel(ctx context.Context, id string) error {
 	}
 	if err := j.Transition(video.StateCancelled); err != nil {
 		return err
-	}
-	j.LastError = ""
-	if err := o.Store.Update(ctx, j); err != nil {
-		return err
-	}
-	if o.Ledger != nil {
-		if j.ProviderJobID == "" {
-			o.Ledger.ReleaseForJob(j.JobID)
-		} else {
-			_ = o.Ledger.SettleEstimate(j.JobID, j.EstimatedCostUSD)
-		}
 	}
 	j.LastError = ""
 	if err := o.Store.Update(ctx, j); err != nil {

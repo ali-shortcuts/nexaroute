@@ -92,7 +92,49 @@ nexaroute restore --bundle "$BACKUP_DIR/nexaroute-backup.tar" --config "$CONFIG"
 nexaroute doctor --config "$CONFIG"   # read-only health + chain verification
 ```
 
-`nexaroute doctor` is the read-only diagnostics entry point: config load/validation, file permissions, master-key resolvability, security-store audit-chain verification (counts only), control-plane backend readiness (bounded ping for Postgres/Redis, failure classes only — never DSNs or URLs), and the listen address. Exit codes are `0` (no failures), `1` (a check failed), `2` (usage).
+`nexaroute doctor` is the read-only diagnostics entry point: config load/validation, file permissions, master-key resolvability and its file permissions, pending/interrupted key rotation, security-store audit-chain verification (counts only), control-plane backend readiness (bounded ping for Postgres/Redis, failure classes only — never DSNs or URLs), and the listen address. With `--bundle PATH` it additionally preflights a backup bundle: integrity, freshness (`--max-age`), master-key/config pairing, and control-plane schema/migration compatibility. Exit codes are `0` (no failures), `1` (a check failed), `2` (usage).
+
+### Isolated restore verification and drills
+
+Restore is verified before it is trusted. `nexaroute restore --verify` performs the whole restore *read* path — bundle structure and per-file SHA-256, config decryption/validation (including route-profile/pool/provider referential integrity), audit-chain integrity, control-plane schema, master-key pairing, and external-store ownership — **without writing to any live target**. With `--into DIR` it also materializes the bundle into an empty disposable directory for inspection.
+
+```bash
+# Verify only; write a machine-readable report as auditable drill evidence.
+nexaroute restore --verify --bundle "$BACKUP_DIR/nexaroute-backup.tar" \
+  --config "$CONFIG" --report "$EVIDENCE/restore-verify.json" --max-age 24h
+
+# Verify and materialize the restored bytes into a disposable directory.
+nexaroute restore --verify --bundle "$BACKUP_DIR/nexaroute-backup.tar" \
+  --config "$CONFIG" --into "$DRILL_DIR" --report "$EVIDENCE/restore-verify.json" --max-age 24h
+```
+
+Each named check reports `PASS`, `FAIL`, `BLOCKED`, or `UNVERIFIED`; the command exits `0` only when nothing failed and nothing is blocked, and `1` when any check is `FAIL` or `BLOCKED`. The report (format `nexaroute-restore-verify/1`, mode `0600`) carries bundle/version references, per-file hashes, statuses and timings only — never secret values or ciphertext.
+
+Fail-closed semantics: an encrypted config with no key material available is `BLOCKED` (never `PASS`); a config that does not decrypt with a key that *is* available is `FAIL`; a tampered audit chain or an unsupported control-plane schema is `FAIL`. `--into` refuses a directory that is not a real, empty, private directory, so a drill can never overwrite production. `--max-age 0` (the default) leaves freshness `UNVERIFIED` rather than implying it was checked.
+
+### Recovery objectives (examples, not guarantees)
+
+NexaRoute does not promise RPO/RTO; the numbers below are placeholders an operator replaces with values **measured by a drill** on the actual deployment. Decide and record both a single-node and, when used, a multi-instance objective.
+
+- **Single-node, file backends.** The application bundle covers the encrypted config, a consistent bbolt security/audit snapshot, and file-backend control-plane state. Example objective: RPO = the backup interval (for example `24h`, and never more than the age recorded in the last `restore --verify` report); RTO = time to a `restore --verify` `PASS`, install, `nexaroute doctor` `PASS`, and service restart. Measure both by running the drill below and recording the timings in the report.
+- **Multi-instance or external state.** The application bundle does **not** snapshot external PostgreSQL, Redis, or video assets/jobs. RPO/RTO for those are owned by the database/object-store tooling (replication, PITR, snapshots) and must be measured separately. `restore --verify` reports `external_store_ownership` as `BLOCKED` when the config depends on them, so a bundle is never mistaken for full recovery.
+
+### Retention and backup rotation
+
+- Keep the backup directory `0700` and each bundle `0600`; store bundles on an encrypted, access-controlled target separate from the gateway host where practical.
+- Retain a small rotation set (for example 14 daily + 8 weekly) plus one known-good pre-upgrade bundle. Never delete the last verified bundle; a replacement only supersedes it after its own `restore --verify` returns `PASS`.
+- Bundles created with `--include-master-key` are secret material: keep them under the same custody as the key, or prefer independent key custody and exclude the key.
+- **An application bundle is not a database backup.** It captures only what `nexaroute backup` read: the config, the bbolt security/audit snapshot, and file-backend control-plane state. It never snapshots an external database, Redis, or video assets/jobs unless the operator separately included a configured database backup. Enumerate each external store and confirm its backup/replication independently.
+- Safe deletion: remove a superseded bundle only after its replacement verifies `PASS`; securely delete any bundle that ever carried a master key according to the key-custody policy.
+
+### Restore-drill runbook (repeatable)
+
+1. **Pre-upgrade backup.** `nexaroute backup --config "$CONFIG" --out "$B/pre-upgrade.tar"` (add `--include-master-key` only when key custody requires a combined bundle).
+2. **Isolated verification.** `nexaroute restore --verify --bundle "$B/pre-upgrade.tar" --config "$CONFIG" --into "$DRILL" --report "$EVIDENCE/drill.json" --max-age 24h`. Require status `PASS`; investigate any `BLOCKED`/`FAIL` before proceeding.
+3. **Prepared rollback.** Keep the current config, `.key`, and security store; if a real restore is interrupted, `nexaroute restore --recover <journal-dir>` rolls the transaction back.
+4. **Key recovery.** If decryption is `BLOCKED` or `FAIL`, restore the exact paired `<config>.key` (or the matching pre-rotation `.key.previous`); never generate a replacement key for an encrypted config.
+5. **Service restart.** Stop the gateway, install the verified bundle (`nexaroute restore --bundle ... --config "$CONFIG"`), then `nexaroute doctor --config "$CONFIG" --bundle "$B/pre-upgrade.tar" --max-age 24h` before starting.
+6. **Post-restore smoke.** Start against a local fake/loopback provider (no paid calls): confirm config loads, `nexaroute audit verify` passes, `nexaroute secrets verify` reports the expected fields, and a synthetic request succeeds.
 
 
 ### Rotate the auto-managed key
@@ -157,6 +199,23 @@ never serves traffic:
 
 Whole-config rollback remains the admin API's config history;
 this CLI is the policy-pointer lifecycle on the config file.
+
+**Policy versions and safe change (Phase 12).** A policy's effective version is
+its explicit `decision_policies[].version` label or, when unset, the derived
+content fingerprint `auto:<sha256[:8]>`. The applied version is recorded with
+every served decision (event, trace breakdown) and printed by `simulate` /
+`replay`; `replay` reports `version_mismatches` so a divergence explained only by
+a policy revision is distinguishable from a genuine behavior change. Set
+`decision_policies[].min_observations` to require a minimum success+failure
+sample count before a deployment's reliability evidence is trusted (below it the
+reliability score decays to neutral, preventing single-sample flapping; `0`
+disables the gate). Set `decision.shadow: true` (with `decision.mode` not `off`)
+to evaluate the configured policy on live traffic for observation only: the
+gateway emits `decision_shadow` events recording the proposed selection and
+whether it differs from the production primary, but never reorders served
+traffic and never issues extra inference. Use offline `policy replay` for
+recorded-traffic comparison and live shadow mode for a bounded window before
+promoting a policy pointer.
 
 - `nexaroute audit verify --config PATH` opens the store **read-only**
   and revalidates every record: hash recomputation, predecessor

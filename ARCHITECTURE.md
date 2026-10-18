@@ -119,7 +119,7 @@ half_open failure
     -> cooldown immediately
 ```
 
-Default ready-queue recovery is five supervisor probes. Any successful recovery probe immediately returns the deployment to `healthy`; five failed recovery probes enter a 30-minute cooldown, after which a fresh recovery cycle begins automatically.
+Default ready-queue recovery is up to five supervisor probes with a configurable success threshold (`probe.recovery_success_threshold`, default 3-of-5). A cycle that reaches the threshold returns the deployment to `healthy`; a cycle that does not (including five failed probes) enters a configurable cooldown (`probe.recovery_cooldown_seconds`, default 15 minutes), after which a fresh recovery cycle begins automatically. Setting the threshold equal to `probe.recovery_attempts` gives strict N-of-N recovery; setting it to 1 restores the previous first-success behavior. Probe failures are classified (credential, quota, rate-limit, provider incident, transient timeout/transport) for observability without conflating them with capability conformance.
 
 Pre-stream failover can occur on:
 
@@ -252,6 +252,65 @@ Ready Mesh keeps the request path deterministic and network-free at selection ti
 - The handler revalidates each candidate immediately before an attempt, closing the stale-candidate window during concurrent quarantine or hot reload.
 
 This is deliberately not an opaque learned router in the data plane. Task awareness comes from explicit request capabilities and configured aliases/profiles so routing decisions remain explainable and regression-testable.
+
+## Routing explainability and decision preview
+
+Every data-plane candidate selection funnels through a single evaluation pass whose
+verdicts can be traced: `Router.Explain` (admin route-preview) and the same funnel
+repay every deployment that was considered with either an ordered scored candidate
+or a stable redacted exclusion reason (`model_mismatch`, `provider_type`,
+`privacy_no_training`, `provider_circuit_open`, `context_window_too_small`,
+`capability_*_unsupported`, `retired`, `health_not_ready`,
+`capability_scope_not_ready`, `health_cooldown`). The trace contains only routing
+metadata — deployment/provider identity, scores, health status/latency and
+strategy — never user prompts, credentials or upstream error text.
+
+`GET /admin/api/route-preview` is a dry-run surface: it replays virtual endpoint
+resolution, the candidate funnel and the strategy ordering against live runtime
+state for an operator-supplied requirement (model/alias, protocol, tools, vision,
+streaming, reasoning, context bound, affinity key) without issuing any provider
+call and without mutating anything — no session pin, no probe, no admission
+counter. It reports the ordered candidate list, the selected provider/model, the
+matched virtual endpoint/pools, and per-deployment exclusion reasons. Exclusion
+reasons and the data plane share one evaluation path, so the trace cannot drift
+from real routing behavior.
+
+## Adaptive decision policies (Phase 12)
+
+The deterministic policy engine (`internal/decision/policy`) is the explainable
+decision plane: it scores eligible candidates with fixed, operator-visible
+weights and emits a `PolicyTrace` breakdown. Phase 12 makes each decision
+reproducible and observable without turning the data plane into an opaque
+learned router.
+
+Policy versioning: every policy carries a stable version. Operators may label a
+policy explicitly with `decision_policies[].version`; when unset the loader
+derives a content fingerprint (`auto:<sha256[:8]>`) over the policy id,
+selection mode, weights, task overrides and thresholds. The applied version is
+carried on the decision event, in the bounded `breakdown` payload
+(`policy_version`) and in the `policy simulate` / `policy replay` reports, so a
+served choice can be tied to the exact revision that produced it. Replay flags
+divergence that is explained by a policy-version mismatch (`version_mismatches`).
+
+Minimum-evidence hysteresis: `decision_policies[].min_observations` gates the
+reliability objective. Until a deployment has that many success+failure samples,
+its reliability score is blended toward the neutral baseline (exactly 0.5 at zero
+samples), so a single fast success or one failure cannot flap the route. The
+default of `0` disables the gate and preserves historical behavior.
+
+Classified fallback triggers: a `failover` event records a bounded
+`failover_class` — `transient_transport` for transport errors, otherwise the
+classified `policy.ErrorType` (e.g. `provider_rate_limited`,
+`provider_server_error`) — and the classification is retained on the request
+lifecycle and the failed attempt.
+
+Shadow/evaluation mode: `decision.shadow` runs the configured decision plane and
+records what it *would* have chosen (`decision_shadow` events carrying the
+proposed selection and whether it differs from the production primary) while the
+served candidate order is left exactly as the router produced it. Shadow mode
+issues no additional inference request; policy replay over recorded production
+decisions (`nexaroute policy replay`, with version comparison) remains the
+offline counterpart.
 
 
 ## Failure-domain-aware fallback ordering

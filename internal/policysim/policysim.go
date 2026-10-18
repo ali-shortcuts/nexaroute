@@ -36,6 +36,10 @@ type FixtureFile struct {
 type ReplayRecord struct {
 	Request        decision.DecisionRequest `json:"request"`
 	RecordedWinner string                   `json:"recorded_winner"`
+	// PolicyVersion is the policy version that produced RecordedWinner.
+	// When set, replay flags a mismatch against the loaded policy version so a
+	// decision can never be silently attributed to the wrong policy revision.
+	PolicyVersion string `json:"policy_version,omitempty"`
 }
 
 // CaseResult is one evaluated case.
@@ -51,9 +55,10 @@ type CaseResult struct {
 
 // Report is the canonical simulation output.
 type Report struct {
-	PolicyID string       `json:"policy_id"`
-	Cases    []CaseResult `json:"cases"`
-	Digest   string       `json:"digest"`
+	PolicyID      string       `json:"policy_id"`
+	PolicyVersion string       `json:"policy_version,omitempty"`
+	Cases         []CaseResult `json:"cases"`
+	Digest        string       `json:"digest"`
 }
 
 // ReplayCase is one replayed decision compared with history.
@@ -62,15 +67,20 @@ type ReplayCase struct {
 	Winner         string `json:"winner,omitempty"`
 	RecordedWinner string `json:"recorded_winner"`
 	Agree          bool   `json:"agree"`
+	// VersionMatch is true when the record carried no policy version or the
+	// recorded version equals the loaded policy version.
+	VersionMatch bool `json:"version_match"`
 }
 
 // ReplayReport summarizes a replay run.
 type ReplayReport struct {
-	PolicyID string       `json:"policy_id"`
-	Total    int          `json:"total"`
-	Agreed   int          `json:"agreed"`
-	Cases    []ReplayCase `json:"cases"`
-	Digest   string       `json:"digest"`
+	PolicyID          string       `json:"policy_id"`
+	PolicyVersion     string       `json:"policy_version,omitempty"`
+	Total             int          `json:"total"`
+	Agreed            int          `json:"agreed"`
+	VersionMismatches int          `json:"version_mismatches"`
+	Cases             []ReplayCase `json:"cases"`
+	Digest            string       `json:"digest"`
 }
 
 // LoadPolicies converts the config's decision policies into engine
@@ -149,11 +159,11 @@ func digestOf(v any) string {
 
 // Simulate evaluates every fixture under the named policy.
 func Simulate(ctx context.Context, cfg config.Config, policyID string, fixtures []Fixture) (Report, error) {
-	provider, _, err := providerFor(cfg, policyID)
+	provider, pol, err := providerFor(cfg, policyID)
 	if err != nil {
 		return Report{}, err
 	}
-	report := Report{PolicyID: policyID, Cases: make([]CaseResult, 0, len(fixtures))}
+	report := Report{PolicyID: policyID, PolicyVersion: pol.Version, Cases: make([]CaseResult, 0, len(fixtures))}
 	for _, fx := range fixtures {
 		req := fx.Request
 		req.PolicyID = policyID
@@ -162,38 +172,46 @@ func Simulate(ctx context.Context, cfg config.Config, policyID string, fixtures 
 		report.Cases = append(report.Cases, cr)
 	}
 	report.Digest = digestOf(struct {
-		PolicyID string       `json:"policy_id"`
-		Cases    []CaseResult `json:"cases"`
-	}{report.PolicyID, report.Cases})
+		PolicyID      string       `json:"policy_id"`
+		PolicyVersion string       `json:"policy_version,omitempty"`
+		Cases         []CaseResult `json:"cases"`
+	}{report.PolicyID, report.PolicyVersion, report.Cases})
 	return report, nil
 }
 
 // Replay re-evaluates recorded decisions under the named policy
 // and diffs the winners against history.
 func Replay(ctx context.Context, cfg config.Config, policyID string, records []ReplayRecord) (ReplayReport, error) {
-	provider, _, err := providerFor(cfg, policyID)
+	provider, pol, err := providerFor(cfg, policyID)
 	if err != nil {
 		return ReplayReport{}, err
 	}
-	report := ReplayReport{PolicyID: policyID, Total: len(records), Cases: make([]ReplayCase, 0, len(records))}
+	report := ReplayReport{PolicyID: policyID, PolicyVersion: pol.Version, Total: len(records), Cases: make([]ReplayCase, 0, len(records))}
 	for i, rec := range records {
 		req := rec.Request
 		req.PolicyID = policyID
 		cr := evaluate(ctx, provider, req)
+		versionMatch := rec.PolicyVersion == "" || rec.PolicyVersion == pol.Version
 		rc := ReplayCase{
 			Name:           fmt.Sprintf("case-%d", i+1),
 			Winner:         cr.Winner,
 			RecordedWinner: rec.RecordedWinner,
 			Agree:          cr.Winner == rec.RecordedWinner,
+			VersionMatch:   versionMatch,
 		}
 		if rc.Agree {
 			report.Agreed++
 		}
+		if !versionMatch {
+			report.VersionMismatches++
+		}
 		report.Cases = append(report.Cases, rc)
 	}
 	report.Digest = digestOf(struct {
-		PolicyID string       `json:"policy_id"`
-		Cases    []ReplayCase `json:"cases"`
-	}{report.PolicyID, report.Cases})
+		PolicyID          string       `json:"policy_id"`
+		PolicyVersion     string       `json:"policy_version,omitempty"`
+		Cases             []ReplayCase `json:"cases"`
+		VersionMismatches int          `json:"version_mismatches"`
+	}{report.PolicyID, report.PolicyVersion, report.Cases, report.VersionMismatches})
 	return report, nil
 }

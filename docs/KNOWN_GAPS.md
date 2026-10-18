@@ -190,11 +190,18 @@ instances. Both external backends fail closed if unavailable.
 The M4-3 `nexaroute backup` / `restore` CLI is implemented and tested. Backup
 captures the config, audit/security-store snapshot, and file-backed control-plane
 state; restore verifies payloads before writing and uses a durable journal for
-rollback/recovery. This is a documented application-level recovery mechanism,
-not a claim that databases survive arbitrary infrastructure loss; deployment
-persistence, replication, failover and backup retention still require operator
-configuration and recovery testing. Cross-replica breaker synchronization is
-not implemented.
+rollback/recovery. `nexaroute restore --verify` (optionally `--into` a disposable
+directory, `--report` a machine-readable `nexaroute-restore-verify/1` artifact)
+runs the whole restore read path — integrity, decryption, audit chain,
+control-plane schema, key pairing, freshness — without writing to a live target,
+and fails closed (`FAIL`/`BLOCKED`, nonzero exit) when secrets cannot be
+decrypted. `nexaroute doctor --bundle` is the matching preflight. This remains a
+documented application-level recovery mechanism, not a claim that databases
+survive arbitrary infrastructure loss: the bundle never snapshots an external
+PostgreSQL, Redis, or video assets/jobs, and `restore --verify` reports those as
+`BLOCKED` when the config depends on them. Deployment persistence, replication,
+failover, retention and measured RPO/RTO still require operator configuration and
+recovery drilling. Cross-replica breaker synchronization is not implemented.
 ## RBAC and SSO
 
 PR #224 wires the permission matrix in `internal/authz` to every registered

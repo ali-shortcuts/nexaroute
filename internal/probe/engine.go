@@ -2,6 +2,7 @@ package probe
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -25,6 +26,50 @@ func providerIncidentProbeFailure(status int) bool {
 		status == http.StatusRequestTimeout ||
 		status == http.StatusTooManyRequests ||
 		status >= 500
+}
+
+// probeFailureClass is a privacy-safe classification of a failed availability
+// probe. It separates ordinary health evidence from provider-wide incidents,
+// credential failures, quota/rate-limit waits, and transient transport
+// failures. Capability conformance is intentionally not represented here: it
+// is tracked separately by the compatibility store.
+type probeFailureClass string
+
+const (
+	classCredentialFailure  probeFailureClass = "credential_failure"
+	classQuotaExhausted     probeFailureClass = "quota_exhausted"
+	classRateLimited        probeFailureClass = "rate_limit"
+	classProviderIncident   probeFailureClass = "provider_incident"
+	classTransientTimeout   probeFailureClass = "transient_timeout"
+	classTransientTransport probeFailureClass = "transient_transport"
+)
+
+// classifyProbeFailure maps an HTTP status and transport error to a
+// deterministic recovery classification.
+func classifyProbeFailure(status int, err error) probeFailureClass {
+	switch status {
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return classCredentialFailure
+	case http.StatusPaymentRequired:
+		return classQuotaExhausted
+	case http.StatusTooManyRequests:
+		return classRateLimited
+	case http.StatusRequestTimeout, http.StatusGatewayTimeout:
+		return classTransientTimeout
+	}
+	if status == 0 {
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			return classTransientTimeout
+		}
+		return classProviderIncident
+	}
+	if status >= 500 {
+		return classProviderIncident
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return classTransientTimeout
+	}
+	return classTransientTransport
 }
 
 type Result struct {
@@ -54,7 +99,23 @@ const probeTokenBudget = 1
 type recoveryTask struct {
 	id         string
 	attempt    int
+	successes  int
 	generation uint64
+}
+
+// recoveryAttempts returns the bounded number of probes in one recovery cycle.
+func recoveryAttempts(cfg config.Config) int {
+	attempts := cfg.Probe.RecoveryAttempts
+	if attempts < 1 {
+		attempts = 5
+	}
+	return attempts
+}
+
+// recoveryThreshold returns how many successful probes are required within a
+// cycle before re-admission. It never exceeds the attempt count.
+func recoveryThreshold(cfg config.Config) int {
+	return cfg.ProbeRecoverySuccessThreshold()
 }
 
 type Engine struct {
@@ -427,20 +488,26 @@ func (e *Engine) processRecoveryTask(ctx context.Context, task recoveryTask) {
 		if wait := time.Until(st.CooldownUntil); wait > 0 {
 			e.bus.Add(events.Event{Kind: "recovery_wait", Deployment: task.id, Message: fmt.Sprintf("cooldown until %s", st.CooldownUntil.Format(time.RFC3339))})
 			task.attempt = 1
+			task.successes = 0
+			e.hm.SetNextRetry(task.id, st.CooldownUntil)
 			e.scheduleRecovery(ctx, task, wait)
 			return
 		}
 	}
 
-	attempts := cfg.Probe.RecoveryAttempts
-	if attempts < 1 {
-		attempts = 5
-	}
+	attempts := recoveryAttempts(cfg)
+	threshold := recoveryThreshold(cfg)
 	if task.attempt < 1 {
 		task.attempt = 1
 	}
 	if task.attempt > attempts {
 		task.attempt = attempts
+	}
+	if task.successes < 0 {
+		task.successes = 0
+	}
+	if task.successes > threshold {
+		task.successes = threshold
 	}
 
 	// Re-resolve immediately before the probe so hot reloads never keep a stale
@@ -465,11 +532,25 @@ func (e *Engine) processRecoveryTask(ctx context.Context, task recoveryTask) {
 		return
 	}
 	if err == nil {
-		e.hm.RecordSuccess(task.id, lat)
-		e.hm.RecordProviderSuccess(d.ProviderID)
-		e.bus.Add(events.Event{Kind: "recovery_ready", Deployment: task.id, Message: fmt.Sprintf("recovered on attempt %d/%d", task.attempt, attempts), LatencyMS: lat.Milliseconds(), StatusCode: status})
-		e.bus.Add(events.Event{Kind: "model_recovered", Deployment: task.id, Message: fmt.Sprintf("recovered on attempt %d/%d", task.attempt, attempts), LatencyMS: lat.Milliseconds(), StatusCode: status})
-		e.clearRecoveryTask(task)
+		task.successes++
+		if task.successes >= threshold {
+			e.hm.RecordSuccess(task.id, lat)
+			e.hm.RecordProviderSuccess(d.ProviderID)
+			e.bus.Add(events.Event{Kind: "recovery_ready", Deployment: task.id, Message: fmt.Sprintf("recovered on attempt %d/%d with %d/%d successful probes", task.attempt, attempts, task.successes, threshold), LatencyMS: lat.Milliseconds(), StatusCode: status})
+			e.bus.Add(events.Event{Kind: "model_recovered", Deployment: task.id, Message: fmt.Sprintf("recovered on attempt %d/%d with %d/%d successful probes", task.attempt, attempts, task.successes, threshold), LatencyMS: lat.Milliseconds(), StatusCode: status})
+			e.clearRecoveryTask(task)
+			return
+		}
+		e.hm.RecordRecoverySuccess(task.id, lat)
+		e.bus.Add(events.Event{Kind: "recovery_progress", Deployment: task.id, Message: fmt.Sprintf("attempt %d/%d: %d/%d successful probes; below threshold %d", task.attempt, attempts, task.successes, threshold, threshold), LatencyMS: lat.Milliseconds(), StatusCode: status})
+		if task.attempt < attempts {
+			task.attempt++
+			retry := cfg.ProbeRecoveryRetry()
+			e.hm.SetNextRetry(task.id, time.Now().Add(retry))
+			e.scheduleRecovery(ctx, task, retry)
+			return
+		}
+		e.enterRecoveryCooldown(ctx, task, cfg, fmt.Sprintf("only %d/%d successful probes (threshold %d)", task.successes, attempts, threshold), lat, status)
 		return
 	}
 
@@ -481,33 +562,46 @@ func (e *Engine) processRecoveryTask(ctx context.Context, task recoveryTask) {
 		if maxWait > 0 && wait > maxWait {
 			wait = maxWait
 		}
-		e.bus.Add(events.Event{Kind: "recovery_deferred", Deployment: task.id, Message: fmt.Sprintf("credential rate-limit cooldown; retry after %s", wait), StatusCode: status})
+		e.hm.SetNextRetry(task.id, time.Now().Add(wait))
+		e.bus.Add(events.Event{Kind: "recovery_deferred", Deployment: task.id, Message: fmt.Sprintf("credential rate-limit cooldown; retry after %s", wait), StatusCode: status, ErrorType: string(classRateLimited)})
 		if status == http.StatusTooManyRequests {
-			e.bus.Add(events.Event{Kind: "provider_rate_limited", Deployment: task.id, Message: fmt.Sprintf("credential rate-limit cooldown; retry after %s", wait), StatusCode: status})
+			e.bus.Add(events.Event{Kind: "provider_rate_limited", Deployment: task.id, Message: fmt.Sprintf("credential rate-limit cooldown; retry after %s", wait), StatusCode: status, ErrorType: string(classRateLimited)})
 		}
 		e.scheduleRecovery(ctx, task, wait)
 		return
 	}
 
+	class := classifyProbeFailure(status, err)
 	lastErr := err.Error()
 	if providerIncidentProbeFailure(status) {
 		e.hm.RecordProviderFailure(d.ProviderID, task.id, lastErr)
 	}
-	e.hm.RecordRecoveryFailure(task.id, lastErr, lat)
-	e.bus.Add(events.Event{Kind: "recovery_fail", Deployment: task.id, Message: fmt.Sprintf("attempt %d/%d: %s", task.attempt, attempts, lastErr), LatencyMS: lat.Milliseconds(), StatusCode: status})
-	e.bus.Add(events.Event{Kind: "recovery_failed", Deployment: task.id, Message: fmt.Sprintf("attempt %d/%d: %s", task.attempt, attempts, lastErr), LatencyMS: lat.Milliseconds(), StatusCode: status})
+	e.hm.RecordProbeFailure(task.id, lastErr, string(class), lat)
+	e.bus.Add(events.Event{Kind: "recovery_fail", Deployment: task.id, Message: fmt.Sprintf("attempt %d/%d: %s", task.attempt, attempts, lastErr), LatencyMS: lat.Milliseconds(), StatusCode: status, ErrorType: string(class)})
+	e.bus.Add(events.Event{Kind: "recovery_failed", Deployment: task.id, Message: fmt.Sprintf("attempt %d/%d: %s", task.attempt, attempts, lastErr), LatencyMS: lat.Milliseconds(), StatusCode: status, ErrorType: string(class)})
 
 	if task.attempt < attempts {
 		task.attempt++
-		e.scheduleRecovery(ctx, task, cfg.ProbeRecoveryRetry())
+		retry := cfg.ProbeRecoveryRetry()
+		e.hm.SetNextRetry(task.id, time.Now().Add(retry))
+		e.scheduleRecovery(ctx, task, retry)
 		return
 	}
 
-	cooldown := cfg.Cooldown()
-	e.hm.EnterCooldown(task.id, lastErr, cooldown)
-	e.bus.Add(events.Event{Kind: "recovery_cooldown", Deployment: task.id, Message: fmt.Sprintf("%d recovery attempts failed; retry after %s", attempts, cooldown), LatencyMS: lat.Milliseconds(), StatusCode: status})
-	e.bus.Add(events.Event{Kind: "model_cooldown", Deployment: task.id, Message: fmt.Sprintf("%d recovery attempts failed; retry after %s", attempts, cooldown), LatencyMS: lat.Milliseconds(), StatusCode: status})
+	e.enterRecoveryCooldown(ctx, task, cfg, fmt.Sprintf("%d recovery probes failed to reach the %d/%d success threshold", attempts, threshold, attempts), lat, status)
+}
+
+// enterRecoveryCooldown quarantines a deployment for the configured recovery
+// cooldown and schedules the next automatic cycle. The cooldown is deliberately
+// independent of the request circuit-breaker cooldown.
+func (e *Engine) enterRecoveryCooldown(ctx context.Context, task recoveryTask, cfg config.Config, reason string, lat time.Duration, status int) {
+	cooldown := cfg.ProbeRecoveryCooldown()
+	e.hm.EnterCooldown(task.id, reason, cooldown)
+	e.hm.SetNextRetry(task.id, time.Now().Add(cooldown))
+	e.bus.Add(events.Event{Kind: "recovery_cooldown", Deployment: task.id, Message: fmt.Sprintf("%s; retry after %s", reason, cooldown), LatencyMS: lat.Milliseconds(), StatusCode: status})
+	e.bus.Add(events.Event{Kind: "model_cooldown", Deployment: task.id, Message: fmt.Sprintf("%s; retry after %s", reason, cooldown), LatencyMS: lat.Milliseconds(), StatusCode: status})
 	task.attempt = 1
+	task.successes = 0
 	e.scheduleRecovery(ctx, task, cooldown)
 }
 
@@ -766,15 +860,17 @@ func (e *Engine) runOnce(ctx context.Context, force bool) Result {
 					resultMu.Unlock()
 					return
 				}
+				class := classifyProbeFailure(status, err)
 				if providerIncidentProbeFailure(status) {
 					e.hm.RecordProviderFailure(d.ProviderID, d.ID, err.Error())
 				}
 				if readySupervisor {
 					e.hm.Quarantine(d.ID, err.Error(), lat)
-					e.bus.Add(events.Event{Kind: "probe_quarantine", Deployment: d.ID, Message: err.Error(), LatencyMS: lat.Milliseconds(), StatusCode: status})
-					e.bus.Add(events.Event{Kind: "model_failed", Deployment: d.ID, Message: err.Error(), LatencyMS: lat.Milliseconds(), StatusCode: status})
+					e.hm.SetErrorClass(d.ID, string(class))
+					e.bus.Add(events.Event{Kind: "probe_quarantine", Deployment: d.ID, Message: err.Error(), LatencyMS: lat.Milliseconds(), StatusCode: status, ErrorType: string(class)})
+					e.bus.Add(events.Event{Kind: "model_failed", Deployment: d.ID, Message: err.Error(), LatencyMS: lat.Milliseconds(), StatusCode: status, ErrorType: string(class)})
 					if status == http.StatusTooManyRequests {
-						e.bus.Add(events.Event{Kind: "provider_rate_limited", Deployment: d.ID, Message: err.Error(), LatencyMS: lat.Milliseconds(), StatusCode: status})
+						e.bus.Add(events.Event{Kind: "provider_rate_limited", Deployment: d.ID, Message: err.Error(), LatencyMS: lat.Milliseconds(), StatusCode: status, ErrorType: string(class)})
 					}
 					resultMu.Lock()
 					failedIDs = append(failedIDs, d.ID)
@@ -786,14 +882,16 @@ func (e *Engine) runOnce(ctx context.Context, force bool) Result {
 							cooldown = time.Minute
 						}
 						e.hm.ForceCooldown(d.ID, err.Error(), cooldown)
-						e.bus.Add(events.Event{Kind: "model_cooldown", Deployment: d.ID, Message: err.Error(), LatencyMS: lat.Milliseconds(), StatusCode: status})
+						e.hm.SetErrorClass(d.ID, string(class))
+						e.bus.Add(events.Event{Kind: "model_cooldown", Deployment: d.ID, Message: err.Error(), LatencyMS: lat.Milliseconds(), StatusCode: status, ErrorType: string(class)})
 					} else {
 						e.hm.RecordFailure(d.ID, err.Error(), lat)
+						e.hm.SetErrorClass(d.ID, string(class))
 					}
-					e.bus.Add(events.Event{Kind: "probe_fail", Deployment: d.ID, Message: err.Error(), LatencyMS: lat.Milliseconds(), StatusCode: status})
-					e.bus.Add(events.Event{Kind: "model_failed", Deployment: d.ID, Message: err.Error(), LatencyMS: lat.Milliseconds(), StatusCode: status})
+					e.bus.Add(events.Event{Kind: "probe_fail", Deployment: d.ID, Message: err.Error(), LatencyMS: lat.Milliseconds(), StatusCode: status, ErrorType: string(class)})
+					e.bus.Add(events.Event{Kind: "model_failed", Deployment: d.ID, Message: err.Error(), LatencyMS: lat.Milliseconds(), StatusCode: status, ErrorType: string(class)})
 					if status == 429 {
-						e.bus.Add(events.Event{Kind: "provider_rate_limited", Deployment: d.ID, Message: err.Error(), LatencyMS: lat.Milliseconds(), StatusCode: status})
+						e.bus.Add(events.Event{Kind: "provider_rate_limited", Deployment: d.ID, Message: err.Error(), LatencyMS: lat.Milliseconds(), StatusCode: status, ErrorType: string(class)})
 					}
 				}
 				resultMu.Lock()

@@ -15,12 +15,29 @@ var webAssetBudgets = map[string]int{
 	"web/index.html": 8 << 10,
 	// Issue #393 adds full redacted provider-edit metadata and explicit
 	// credential-pool controls; keep the aggregate asset ceiling unchanged.
-	"web/app.js":          200 << 10,
+	// Issue #411 groups the primary nav, discloses rare controls behind
+	// Advanced, and splits Settings into tabs, adding new EN/FA/PS copy.
+	// Keep the aggregate asset ceiling unchanged.
+	// Issue #399 (Phase 7) routes the provider and routing control-plane
+	// surfaces through the EN/FA/PS body-copy dictionary and adds the
+	// routing eligibility/decision view, so app.js grows by translated copy.
+	// Issue #399 remainder adds the unified model inventory, status taxonomy,
+	// per-request decision timeline, bounded list rendering and the guided
+	// first-route wizard, each expanding the three-locale copy dictionary.
+	// Supervisor 2026-10-18: raised 272->336 KB after review. The Phase 7
+	// remainder merge also absorbed the Phase 10 (#410) live-activity UI
+	// (refresh/polling/detail drawer + EN/FA/PS copy), landing app.js at
+	// ~269 KB; 336 KB restores the ~25% headroom convention.
+	"web/app.js":          336 << 10,
 	"web/styles.css":      96 << 10,
 	"web/visual-agent.js": 16 << 10,
 }
 
-const webAssetTotalBudget = 320 << 10
+// Supervisor 2026-10-18: raised 320->410 KB after review. The aggregate
+// ceiling was set before the Phase 7 remainder (#399) and Phase 10 (#410)
+// UI growth landed together; 410 KB restores the ~25% headroom convention
+// over the current 336303-byte total.
+const webAssetTotalBudget = 410 << 10
 
 func TestWebAssetSizeBudget(t *testing.T) {
 	total := 0

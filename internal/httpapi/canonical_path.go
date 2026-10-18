@@ -269,6 +269,14 @@ func (s *Server) canonicalStreamPump(
 				deferClientEvent = true
 			case canonical.StreamToolDelta:
 				ensurePendingTool(ev)
+				// A final-arguments delta is a fallback for upstreams that
+				// never streamed argument fragments. Once any real delta
+				// has been recorded the final value is a duplicate and is
+				// discarded, so delta-emitting streams are never doubled.
+				if ev.ArgsFinal && assembledArgs[ev.ToolIndex].Len() > 0 {
+					deferClientEvent = true
+					break
+				}
 				if assembledArgs[ev.ToolIndex].Len()+len(ev.ArgsDelta) > 1<<20 {
 					msg := fmt.Sprintf("tool=%s field=arguments expected=object actual=too_large stage=%s protocol=%s streaming=true provider=%s: args exceed 1MB limit", toolNames[ev.ToolIndex], kind+"_to_canonical", kind, kind)
 					emitTerminalError(canonical.StreamEvent{Type: canonical.StreamError, ErrorCode: "invalid_request_error", ErrorMsg: msg})
@@ -482,6 +490,7 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 		canonicalErrorJSON(w, "openai_responses", http.StatusBadRequest, "invalid_request_error", "request JSON structure is too complex")
 		return
 	}
+	s.emitRequestAccepted(r, "openai_responses", in.Model, reqReqs.Streaming)
 	req := router.Requirement{
 		Model: in.Model, Tools: ti.Features.HasTools || reqReqs.Tools, Vision: ti.Features.HasVision || reqReqs.Vision,
 		Streaming: reqReqs.Streaming, Reasoning: ti.Features.HasReasoning || reqReqs.Reasoning,
@@ -505,6 +514,7 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.emitTaskClassified(r.Header.Get("x-request-id"), ti, resolvedRoute)
+	s.emitRouteResolved(r, "openai_responses", resolvedRoute, candidates)
 	if len(candidates) == 0 {
 		// Gateway-side rejection before any upstream attempt: release
 		// the admission budget hold (Wave C-4).
@@ -554,7 +564,11 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		start := time.Now()
-		s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_attempt", Deployment: deployment.ID})
+		attemptKind := attemptKindPrimary
+		if attempts > 1 {
+			attemptKind = attemptKindRetry
+		}
+		s.emitRouteAttempt(r.Header.Get("x-request-id"), "openai_responses", in.Model, attempts, c, attemptKind)
 		resp, sentPayload, repair, derr := s.doUpstreamWithRepair(
 			routeCtx, r.Header.Get("x-request-id"), bundle.a, deployment,
 			bundle.payload, bundle.path, req.Streaming, forward, dialect, profile,
@@ -587,6 +601,7 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if attempts < max && i+1 < len(candidates) {
+				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "failover", Deployment: deployment.ID, Message: "transport failure; trying next eligible candidate", FailoverClass: "transient_transport"})
 				s.emitProductionEvent(r.Header.Get("x-request-id"), ProductionEventRequestFailover, deployment.ID, "transport failure; trying next eligible candidate", events.Event{})
 				s.retryPause(routeCtx, r.Header.Get("x-request-id"), cfg, attempts-1, max)
 				continue
@@ -645,6 +660,7 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 				s.emitProductionEvent(r.Header.Get("x-request-id"), ProductionEventModelCooldown, deployment.ID, safeMessage, events.Event{ErrorType: policy.ErrorType, StatusCode: lastStatus})
 			}
 			if (policy.Failover || cls.CapabilityFailure) && attempts < max && i+1 < len(candidates) {
+				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "failover", Deployment: deployment.ID, Message: fmt.Sprintf("HTTP %d; trying next eligible candidate", lastStatus), StatusCode: lastStatus, FailoverClass: policy.ErrorType})
 				s.emitProductionEvent(r.Header.Get("x-request-id"), ProductionEventRequestFailover, deployment.ID, fmt.Sprintf("HTTP %d; trying next eligible candidate", lastStatus), events.Event{StatusCode: lastStatus})
 				s.retryPause(routeCtx, r.Header.Get("x-request-id"), cfg, attempts-1, max)
 				continue
@@ -665,17 +681,25 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 				s.hm.RecordTTFT(deployment.ID, d)
 				s.observeTelemetryTTFT(deployment.ID, d)
 				noteSpanTTFT(r.Context(), d)
+				s.emitStreamCommitted(r.Header.Get("x-request-id"), deployment.ID, deployment.ProviderID, "openai_responses", d)
 			})
 		}
 		deploy := deployment
 		sent := sentPayload
+		var inputTokens, outputTokens int
 		var usageErr error
 		if canReq.Stream {
 			usageErr = s.canonicalStreamPump(w, resp, bundle.canonicalKind, "openai_responses", in.Model, r.Header.Get("x-request-id"), bundle.toolDefs,
-				func(u canonical.Usage) { s.recordUsageCanonical(r, deploy.ID, bundle.canonicalKind, u) })
+				func(u canonical.Usage) {
+					inputTokens, outputTokens = u.InputTokens, u.OutputTokens
+					s.recordUsageCanonical(r, deploy.ID, bundle.canonicalKind, u)
+				})
 		} else {
 			usageErr = s.handleCanonicalResponse(w, resp, bundle.canonicalKind, "openai_responses", in.Model, r.Header.Get("x-request-id"), false, bundle.toolDefs,
-				func(u canonical.Usage) { s.recordUsageCanonical(r, deploy.ID, bundle.canonicalKind, u) })
+				func(u canonical.Usage) {
+					inputTokens, outputTokens = u.InputTokens, u.OutputTokens
+					s.recordUsageCanonical(r, deploy.ID, bundle.canonicalKind, u)
+				})
 		}
 		total := time.Since(start)
 		if usageErr != nil {
@@ -712,6 +736,11 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 			ev.PublicModel = resolvedRoute.PublicModel
 			ev.RouteProfile = resolvedRoute.RouteProfileID
 			ev.Pool = resolvedRoute.PrimaryPoolID
+		}
+		if inputTokens > 0 || outputTokens > 0 {
+			ev.InputTokens = inputTokens
+			ev.OutputTokens = outputTokens
+			ev.CostBasis = "actual"
 		}
 		s.bus.Add(ev)
 		if prevStatus != "healthy" {

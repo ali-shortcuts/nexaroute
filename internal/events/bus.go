@@ -47,6 +47,7 @@ type Event struct {
 	DecisionConfidence     float64 `json:"decision_confidence,omitempty"`
 	// Phase E — policy explainability (privacy-safe, bounded)
 	DecisionPolicyID        string  `json:"decision_policy_id,omitempty"`
+	DecisionPolicyVersion   string  `json:"decision_policy_version,omitempty"`
 	DecisionTaskType        string  `json:"decision_task_type,omitempty"`
 	DecisionOriginalPrimary string  `json:"decision_original_primary,omitempty"`
 	DecisionSelectedScore   float64 `json:"decision_selected_score,omitempty"`
@@ -58,6 +59,34 @@ type Event struct {
 	DecisionChainOutcome     string `json:"decision_chain_outcome,omitempty"`
 	DecisionChainCalls       int    `json:"decision_chain_calls,omitempty"`
 	DecisionSelectedProvider string `json:"decision_selected_provider,omitempty"`
+	// Phase 10 — request lifecycle (privacy-safe, bounded). These fields
+	// describe the observable lifecycle of a data-plane request: what was
+	// requested, what was resolved, which attempt/provider/adapter ran, and
+	// how it terminated. They carry routing metadata only — never prompts,
+	// completions, credentials, authorization headers or upstream error text.
+	CorrelationID   string `json:"correlation_id,omitempty"`
+	ParentRequestID string `json:"parent_request_id,omitempty"`
+	RequestedModel  string `json:"requested_model,omitempty"`
+	ResolvedModel   string `json:"resolved_model,omitempty"`
+	Provider        string `json:"provider,omitempty"`
+	Adapter         string `json:"adapter,omitempty"`
+	Phase           string `json:"phase,omitempty"`
+	Attempt         int    `json:"attempt,omitempty"`
+	AttemptKind     string `json:"attempt_kind,omitempty"`
+	TTFTMS          int64  `json:"ttft_ms,omitempty"`
+	AdmissionMS     int64  `json:"admission_ms,omitempty"`
+	Retryable       bool   `json:"retryable,omitempty"`
+	RetryAfterMS    int64  `json:"retry_after_ms,omitempty"`
+	// FailoverClass is a bounded, privacy-safe classification of the trigger
+	// that caused a fallback (for example auth_error, rate_limit, timeout,
+	// transport_error, capability_unsupported). It is never upstream error text.
+	FailoverClass   string `json:"failover_class,omitempty"`
+	Streaming       bool   `json:"streaming,omitempty"`
+	StreamCommitted bool   `json:"stream_committed,omitempty"`
+	Terminal        string `json:"terminal,omitempty"`
+	CostBasis       string `json:"cost_basis,omitempty"`
+	InputTokens     int    `json:"input_tokens,omitempty"`
+	OutputTokens    int    `json:"output_tokens,omitempty"`
 }
 
 // Production log event kinds. Production stderr + bus lifecycle observability
@@ -110,12 +139,25 @@ const (
 	maxEventDecisionReasonCodes = 512
 	// Phase E policy bounds
 	maxEventDecisionPolicyID        = 128
+	maxEventDecisionPolicyVersion   = 128
 	maxEventDecisionTaskType        = 32
 	maxEventDecisionOriginalPrimary = 512
 	maxEventDecisionBreakdown       = 4096
 	// Phase G chain bounds
 	maxEventDecisionChainID      = 128
 	maxEventDecisionChainOutcome = 32
+	// Phase 10 request lifecycle bounds
+	maxEventCorrelationID   = 128
+	maxEventRequestedModel  = 256
+	maxEventResolvedModel   = 512
+	maxEventProvider        = 128
+	maxEventAdapter         = 32
+	maxEventPhase           = 32
+	maxEventAttemptKind     = 32
+	maxEventTerminal        = 32
+	maxEventCostBasis       = 16
+	maxEventParentRequestID = 128
+	maxEventFailoverClass   = 64
 )
 
 func boundedString(s string, max int) string {
@@ -207,6 +249,7 @@ func (b *Bus) Add(e Event) {
 	e.DecisionSelected = boundedString(e.DecisionSelected, maxEventDecisionSelected)
 	e.DecisionReasonCodes = boundedString(e.DecisionReasonCodes, maxEventDecisionReasonCodes)
 	e.DecisionPolicyID = boundedString(e.DecisionPolicyID, maxEventDecisionPolicyID)
+	e.DecisionPolicyVersion = boundedString(e.DecisionPolicyVersion, maxEventDecisionPolicyVersion)
 	e.DecisionTaskType = boundedString(e.DecisionTaskType, maxEventDecisionTaskType)
 	e.DecisionOriginalPrimary = boundedString(e.DecisionOriginalPrimary, maxEventDecisionOriginalPrimary)
 	e.DecisionBreakdown = boundedString(e.DecisionBreakdown, maxEventDecisionBreakdown)
@@ -214,6 +257,23 @@ func (b *Bus) Add(e Event) {
 	e.DecisionChainOutcome = boundedString(e.DecisionChainOutcome, maxEventDecisionChainOutcome)
 	// DecisionSelectedProvider reuses provider bound
 	e.DecisionSelectedProvider = boundedString(e.DecisionSelectedProvider, maxEventDecisionProvider)
+	// Phase 10 request lifecycle bounds. Correlation defaults to the request id
+	// so fallback/hedge attempts remain linkable without a second identifier.
+	e.RequestID = boundedString(e.RequestID, maxEventRequestID)
+	e.CorrelationID = boundedString(e.CorrelationID, maxEventCorrelationID)
+	if e.CorrelationID == "" {
+		e.CorrelationID = e.RequestID
+	}
+	e.ParentRequestID = boundedString(e.ParentRequestID, maxEventParentRequestID)
+	e.RequestedModel = boundedString(e.RequestedModel, maxEventRequestedModel)
+	e.ResolvedModel = boundedString(e.ResolvedModel, maxEventResolvedModel)
+	e.Provider = boundedString(e.Provider, maxEventProvider)
+	e.Adapter = boundedString(e.Adapter, maxEventAdapter)
+	e.Phase = boundedString(e.Phase, maxEventPhase)
+	e.AttemptKind = boundedString(e.AttemptKind, maxEventAttemptKind)
+	e.FailoverClass = boundedString(e.FailoverClass, maxEventFailoverClass)
+	e.Terminal = boundedString(e.Terminal, maxEventTerminal)
+	e.CostBasis = boundedString(e.CostBasis, maxEventCostBasis)
 	if b.count < b.max {
 		idx := (b.start + b.count) % b.max
 		b.items[idx] = e
@@ -323,6 +383,21 @@ func (b *Bus) NumSubscribers() int {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	return len(b.subscribers)
+}
+
+// Epoch returns the stable process epoch every event from this bus carries.
+// A changed epoch tells a reconnecting dashboard that its cursor is invalid.
+func (b *Bus) Epoch() uint64 {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.epoch
+}
+
+// Cursor returns the highest sequence number assigned so far.
+func (b *Bus) Cursor() uint64 {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.nextSeq
 }
 
 func (b *Bus) Counts() map[string]uint64 {

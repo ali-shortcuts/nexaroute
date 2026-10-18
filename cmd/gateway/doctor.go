@@ -31,14 +31,20 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	configPath := fs.String("config", defaultConfigPath(), "path to JSON config")
+	bundlePath := fs.String("bundle", "", "also preflight this backup bundle (freshness, integrity, key pairing, migration compatibility)")
+	maxAge := fs.Duration("max-age", 0, "with --bundle, warn when the backup is older than this duration (e.g. 24h); 0 disables the freshness check")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 	d := &doctor{w: stdout}
 	d.checkConfig(*configPath)
+	d.checkMasterKey(*configPath)
 	d.checkSecurityStore(*configPath)
 	d.checkControlPlane(*configPath)
 	d.checkRestoreJournals()
+	if strings.TrimSpace(*bundlePath) != "" {
+		d.checkBackupBundle(*bundlePath, *configPath, *maxAge)
+	}
 	fmt.Fprintf(stdout, "doctor summary: %d pass, %d warn, %d fail\n", d.passes, d.warns, d.fails)
 	if d.fails > 0 {
 		return 1
@@ -235,6 +241,88 @@ func (d *doctor) checkExternal(name, envName string, ping func(ctx context.Conte
 		return
 	}
 	d.report("PASS", name, fmt.Sprintf("reachable via %s", envName))
+}
+
+// checkMasterKey inspects the auto-managed key file without revealing
+// its bytes: the key must be exactly 0600 (the loader fails closed
+// otherwise), and a leftover `.key.next`/`.key.previous` reveals an
+// interrupted or recent rotation that must be completed/recovered
+// before it is relied on.
+func (d *doctor) checkMasterKey(configPath string) {
+	keyPath := configPath + ".key"
+	if info, err := os.Stat(keyPath); err == nil {
+		if info.Mode().Perm() != 0o600 {
+			d.report("FAIL", "master_key_permissions", fmt.Sprintf("%s is mode %04o; the loader requires 0600", keyPath, info.Mode().Perm()))
+		} else {
+			d.report("PASS", "master_key_permissions", fmt.Sprintf("%s mode 0600", keyPath))
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		d.report("FAIL", "master_key_permissions", fmt.Sprintf("cannot inspect %s (%s)", keyPath, fsErrorClass(err)))
+	}
+	if _, err := os.Stat(keyPath + ".next"); err == nil {
+		d.report("WARN", "key_rotation", fmt.Sprintf("a staged replacement key exists at %s.next; restart or run `nexaroute secrets verify` to complete an interrupted rotation", keyPath))
+	}
+	if _, err := os.Stat(keyPath + ".previous"); err == nil {
+		d.report("PASS", "key_rotation", "prior-rotation recovery copy retained at "+filepath.Base(keyPath)+".previous")
+	}
+}
+
+// checkBackupBundle is the operator preflight for a backup bundle: it
+// verifies integrity, freshness, master-key pairing and control-plane
+// migration compatibility without writing anything and without printing
+// secret values.
+func (d *doctor) checkBackupBundle(bundlePath, configPath string, maxAge time.Duration) {
+	info, err := os.Stat(bundlePath)
+	if err != nil {
+		d.report("FAIL", "backup_bundle", fmt.Sprintf("cannot read %s (%s)", bundlePath, fsErrorClass(err)))
+		return
+	}
+	if info.Mode().Perm()&0o077 != 0 {
+		d.report("WARN", "backup_permissions", fmt.Sprintf("%s is mode %04o; want 0600 (the bundle may contain secrets)", bundlePath, info.Mode().Perm()))
+	} else {
+		d.report("PASS", "backup_permissions", fmt.Sprintf("%s mode %04o", bundlePath, info.Mode().Perm()))
+	}
+	stage, manifest, payloads, err := readAndVerifyBundle(bundlePath)
+	if err != nil {
+		d.report("FAIL", "backup_integrity", "bundle failed format/hash verification; do not rely on it for recovery")
+		return
+	}
+	defer func() { _ = os.RemoveAll(stage) }()
+	d.report("PASS", "backup_integrity", fmt.Sprintf("%d file(s) verified against the manifest", len(manifest.Files)))
+
+	if maxAge > 0 {
+		if age := time.Since(manifest.CreatedAt); age > maxAge {
+			d.report("WARN", "backup_freshness", fmt.Sprintf("backup is %s old, exceeding the %s bound", age.Round(time.Second), maxAge))
+		} else {
+			d.report("PASS", "backup_freshness", fmt.Sprintf("backup is %s old, within the %s bound", age.Round(time.Second), maxAge))
+		}
+	} else {
+		d.report("WARN", "backup_freshness", "no --max-age bound given; freshness not asserted")
+	}
+
+	pairing := checkMasterKeyPairing(manifest, payloads, configPath)
+	// doctor's report vocabulary is PASS/WARN/FAIL: translate the
+	// verify-domain statuses. BLOCKED/UNVERIFIED mean the fingerprint is
+	// not comparable on this host (external key provider, plaintext
+	// config, or no key material here) — a warning, not a failure.
+	switch pairing.Status {
+	case statusPass:
+		d.report("PASS", "backup_key_pairing", pairing.Detail)
+	case statusFail:
+		d.report("FAIL", "backup_key_pairing", pairing.Detail)
+	default:
+		d.report("WARN", "backup_key_pairing", pairing.Detail)
+	}
+
+	compat := checkControlPlaneState(payloads)
+	switch compat.Status {
+	case statusPass:
+		d.report("PASS", "backup_migration_compat", compat.Detail)
+	case statusUnverified:
+		d.report("WARN", "backup_migration_compat", compat.Detail)
+	default:
+		d.report("FAIL", "backup_migration_compat", compat.Detail)
+	}
 }
 
 // checkRestoreJournals reports leftover restore journals: an

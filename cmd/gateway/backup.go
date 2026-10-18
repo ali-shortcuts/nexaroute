@@ -487,6 +487,10 @@ func runRestore(args []string, stdout, stderr io.Writer) int {
 	force := fs.Bool("force", false, "overwrite existing files at the target")
 	allowBrokenChain := fs.Bool("allow-broken-audit-chain", false, "restore even when the bundled audit chain fails verification (a durable override record is written next to the restored store)")
 	recoverDir := fs.String("recover", "", "recover an interrupted restore from its journal directory, then exit")
+	verify := fs.Bool("verify", false, "isolated verification: verify the bundle without writing to any restore target")
+	into := fs.String("into", "", "with --verify, also materialize the bundle into this empty disposable directory")
+	report := fs.String("report", "", "with --verify, write the machine-readable JSON report to this path")
+	maxAge := fs.Duration("max-age", 0, "with --verify, fail a bundle older than this duration (e.g. 24h); 0 disables the freshness check")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -496,6 +500,13 @@ func runRestore(args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 		return 0
+	}
+	if *verify || strings.TrimSpace(*into) != "" {
+		return runRestoreVerify(*bundle, *configPath, strings.TrimSpace(*into), *report, *maxAge, stdout, stderr)
+	}
+	if strings.TrimSpace(*report) != "" {
+		fmt.Fprintln(stderr, "nexaroute restore: --report requires --verify")
+		return 2
 	}
 	if strings.TrimSpace(*bundle) == "" {
 		fmt.Fprintln(stderr, "nexaroute restore: --bundle is required")

@@ -159,6 +159,7 @@ func (p *Provider) Decide(ctx context.Context, req decision.DecisionRequest) (de
 				// Policy trace for affinity case
 				pt := &decision.PolicyTrace{
 					PolicyID:             pol.ID,
+					PolicyVersion:        pol.Version,
 					TaskType:             string(req.TaskProfile.Type),
 					OriginalPrimaryID:    originalPrimaryID(bandPool),
 					SelectedID:           c.ID,
@@ -213,6 +214,7 @@ func (p *Provider) Decide(ctx context.Context, req decision.DecisionRequest) (de
 		origID := originalPrimaryID(band)
 		pt := &decision.PolicyTrace{
 			PolicyID:             pol.ID,
+			PolicyVersion:        pol.Version,
 			TaskType:             string(req.TaskProfile.Type),
 			OriginalPrimaryID:    origID,
 			SelectedID:           band[0].ID,
@@ -247,8 +249,8 @@ func (p *Provider) Decide(ctx context.Context, req decision.DecisionRequest) (de
 		}
 	}
 
-	// Score candidates with request-relative context
-	scored := ScoreCandidates(band, required)
+	// Score candidates with request-relative context and minimum-evidence gate
+	scored := ScoreCandidatesWithObservations(band, required, pol.MinObservations)
 	scored = ApplyWeights(scored, effectiveWeights)
 
 	// Sort by weighted score desc, then OriginalRank asc for determinism
@@ -310,6 +312,7 @@ func (p *Provider) Decide(ctx context.Context, req decision.DecisionRequest) (de
 		rc = dedupReasonCodes(rc)
 		pt := &decision.PolicyTrace{
 			PolicyID:             pol.ID,
+			PolicyVersion:        pol.Version,
 			TaskType:             taskType,
 			OriginalPrimaryID:    origPrimaryID,
 			SelectedID:           origPrimaryID,
@@ -347,6 +350,7 @@ func (p *Provider) Decide(ctx context.Context, req decision.DecisionRequest) (de
 			rc = dedupReasonCodes(rc)
 			pt := &decision.PolicyTrace{
 				PolicyID:             pol.ID,
+				PolicyVersion:        pol.Version,
 				TaskType:             taskType,
 				OriginalPrimaryID:    origPrimaryID,
 				SelectedID:           topCandidate.Candidate.ID,
@@ -389,6 +393,7 @@ func (p *Provider) Decide(ctx context.Context, req decision.DecisionRequest) (de
 
 	pt := &decision.PolicyTrace{
 		PolicyID:             pol.ID,
+		PolicyVersion:        pol.Version,
 		TaskType:             taskType,
 		OriginalPrimaryID:    origPrimaryID,
 		SelectedID:           topCandidate.Candidate.ID,

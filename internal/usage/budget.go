@@ -1,6 +1,7 @@
 package usage
 
 import (
+	"math"
 	"sync"
 	"time"
 )
@@ -79,6 +80,9 @@ func snapReserved(row *budgetRow) {
 // limit <= 0 is an admitted no-op (id 0). Expiry for the key is
 // applied first, so stale holds never block fresh admissions.
 func (l *BudgetLedger) Reserve(key string, limit, amount float64, now time.Time) (uint64, bool) {
+	if math.IsNaN(amount) || math.IsInf(amount, 0) || math.IsNaN(limit) || math.IsInf(limit, 0) {
+		return 0, false
+	}
 	if amount <= 0 || limit <= 0 {
 		return 0, true
 	}
@@ -103,7 +107,7 @@ func (l *BudgetLedger) Settle(key string, id uint64, actual float64) {
 	if id == 0 {
 		return
 	}
-	if actual < 0 || actual != actual {
+	if actual < 0 || actual != actual || math.IsInf(actual, 0) {
 		actual = 0
 	}
 	l.mu.Lock()

@@ -339,7 +339,7 @@ Important controls:
 - `max_attempts`
 - `max_inflight_requests` — global admission limit for expensive data-plane POST requests; default `128`, range `1..10000`. Health, readiness, metrics, model listing, and Admin API remain observable when the data plane is saturated.
 - `failure_threshold` (legacy/other routing strategies)
-- `cooldown_seconds` (default `1800` for supervised ready-strategy recovery)
+- `cooldown_seconds` (default `1800`) — request-driven circuit-breaker cooldown. Recovery cooldown is configured separately via `probe.recovery_cooldown_seconds` (default `900`).
 - `request_timeout_ms`
 - `latency_weight`
 - `failure_weight`
@@ -367,10 +367,14 @@ With `routing.strategy = "ready_mesh"` (recommended/default):
 Supervised ready-strategy recovery adds:
 
 - `ready_lease_seconds` — maximum age of a healthy proof before an idle ready model is revalidated; default `300`
-- `recovery_attempts` — supervisor probes after a quarantined model fails; default `5`
-- `recovery_retry_ms` — delay between failed recovery probes; default `500`
-- a model returns to the verified ready pool immediately on the first successful recovery probe
-- after all recovery attempts fail, `routing.cooldown_seconds` is applied before the next recovery cycle
+- `recovery_attempts` — supervisor probes per recovery cycle after a quarantined model fails; default `5`
+- `recovery_retry_ms` — delay between recovery probes in a cycle; default `500`
+- `recovery_success_threshold` — successful probes required within the cycle before re-admission; default `3`. Set it equal to `recovery_attempts` for strict N-of-N recovery (for example `5` for strict 5-of-5). Values above `recovery_attempts` are clamped down at load so an upgrade never blocks startup.
+- `recovery_cooldown_seconds` — cooldown applied after a cycle fails to reach the threshold, before the next automatic cycle; default `900` (15 minutes). This is independent of `routing.cooldown_seconds` (default `1800`), which still governs request-driven circuit breaking.
+- a model returns to the verified ready pool once it reaches `recovery_success_threshold` successful probes in the cycle (the previous first-success behavior is available by setting the threshold to `1`)
+- after a cycle fails to reach the threshold, `recovery_cooldown_seconds` is applied before the next automatic recovery cycle
+
+Failure evidence from probes is classified (`credential_failure`, `quota_exhausted`, `rate_limit`, `provider_incident`, `transient_timeout`, `transient_transport`) and surfaced on health events (`error_type`) and deployment state (`last_error_class`). A tiny text probe never asserts tool, vision, or reasoning support; capability conformance remains a separate `capability_probes` concern.
 
 
 

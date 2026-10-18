@@ -126,16 +126,18 @@ func (s *Server) cacheStoreResponse(key string, generation uint64, cacheable boo
 
 // proxyOpenAINativeJSON performs the validated non-stream passthrough while
 // observing real usage and feeding the response cache.
-func (s *Server) proxyOpenAINativeJSON(w http.ResponseWriter, r *http.Request, resp *http.Response, deploymentID, cacheKey string, generation uint64, cacheable bool, semCtx *semanticContext) error {
+func (s *Server) proxyOpenAINativeJSON(w http.ResponseWriter, r *http.Request, resp *http.Response, deploymentID, cacheKey string, generation uint64, cacheable bool, semCtx *semanticContext) (int, int, error) {
 	defer resp.Body.Close()
 	b, err := readJSONLimited(resp.Body)
 	if err != nil {
-		return err
+		return 0, 0, err
 	}
 	if err := validateOpenAIResponseJSON(b); err != nil {
-		return err
+		return 0, 0, err
 	}
+	var inputTokens, outputTokens int
 	if p, c, cached, ok := extractOpenAIUsageFull(b); ok {
+		inputTokens, outputTokens = p, c
 		s.recordUsageEx(r, deploymentID, usage.Counts{Input: int64(p), Output: int64(c), CacheRead: int64(cached)}, true)
 	}
 	s.cacheStoreResponse(cacheKey, generation, cacheable, deploymentID, resp.StatusCode, "application/json", b)
@@ -143,7 +145,7 @@ func (s *Server) proxyOpenAINativeJSON(w http.ResponseWriter, r *http.Request, r
 	copyUpstreamResponseHeaders(w, resp, false)
 	w.WriteHeader(resp.StatusCode)
 	_, err = w.Write(b)
-	return err
+	return inputTokens, outputTokens, err
 }
 
 // extractOpenAIUsage pulls prompt/completion token counts from a complete

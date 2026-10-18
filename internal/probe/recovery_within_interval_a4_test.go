@@ -40,6 +40,10 @@ func a4TestConfig(intervalSeconds int) config.Config {
 	cfg.Probe.IntervalSeconds = intervalSeconds
 	cfg.Probe.RecoveryAttempts = 5
 	cfg.Probe.RecoveryRetryMS = 5
+	// A4 asserts the first successful probe restores routability within one
+	// interval. That is now the explicit threshold=1 escape hatch; the
+	// production default is 3-of-5.
+	cfg.Probe.RecoverySuccessThreshold = 1
 	cfg.Probe.CapabilityProbes = false
 	cfg.Routing.CooldownSeconds = 1800
 	cfg.Providers = []config.ProviderConfig{{
