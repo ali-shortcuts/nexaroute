@@ -261,6 +261,12 @@ func (a *httpAdapter) Stats() ProviderStats {
 	if reset := a.tokenResetUnix.Load(); reset > 0 && nowUnix >= reset && a.tokenRemainObservedUnix.Load() <= reset {
 		remainingTokens = -1
 	}
+	if obs := a.requestRemainObservedUnix.Load(); obs > 0 && nowUnix-obs > int64(quotaEvidenceMaxAge/time.Second) {
+		remainingRequests = -1
+	}
+	if obs := a.tokenRemainObservedUnix.Load(); obs > 0 && nowUnix-obs > int64(quotaEvidenceMaxAge/time.Second) {
+		remainingTokens = -1
+	}
 	reservedRequests := a.reservedRequests.Load()
 	reservedTokens := a.reservedTokens.Load()
 	effectiveRequests := remainingRequests
@@ -725,6 +731,17 @@ func parseQuotaResetHeader(h http.Header, names ...string) (int64, bool) {
 	}
 	return 0, false
 }
+
+// quotaEvidenceMaxAge bounds how long provider quota evidence
+// (remaining requests/tokens from rate-limit headers) stays
+// actionable (#435). Window-rollover invalidation handles the
+// case where a reset is known; this bound covers providers that
+// omit reset headers or report a far-future reset, where an
+// observation would otherwise steer routing and reporting
+// indefinitely. Rate-limit windows are minutes-to-hours and the
+// next response refreshes the evidence, so an hour-old
+// observation reports as unknown rather than as current fact.
+const quotaEvidenceMaxAge = time.Hour
 
 type quotaObservation struct {
 	RequestRemaining bool
