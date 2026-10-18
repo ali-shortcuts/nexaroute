@@ -19,12 +19,12 @@ func TestBrowserE2EVideoFailureScenarios(t *testing.T) {
 	}
 	text := string(script)
 	for _, want := range []string{
-		"ui-fail-1",                      // generation-failure job fixture
-		"Retry risks duplicate billing",  // retry-safety verdict assertion
-		"provider rejected the brief",    // error surfacing assertion
-		"{not-json",                      // malformed payload fixture
-		"ui-recover-1",                   // restart-recovery job fixture
-		"job resubmitted after reload",   // no-resubmission assertion
+		"ui-fail-1",                     // generation-failure job fixture
+		"Retry risks duplicate billing", // retry-safety verdict assertion
+		"provider rejected the brief",   // error surfacing assertion
+		"{not-json",                     // malformed payload fixture
+		"ui-recover-1",                  // restart-recovery job fixture
+		"job resubmitted after reload",  // no-resubmission assertion
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("browser E2E script missing item-9 scenario anchor %q", want)
