@@ -1,0 +1,70 @@
+{
+  "format": "nexaroute-restore-verify/1",
+  "generated_at": "2026-10-18T03:00:04.150346828Z",
+  "bundle": "b.tar",
+  "bundle_sha256": "67dc5c6d57681af2704b9a20c45df2daa48ac1a9659c1de7c926e1a13752b175",
+  "bundle_bytes": 31744,
+  "backup_created_at": "2026-10-18T03:00:04.1492344Z",
+  "backup_age_seconds": 0,
+  "gateway_version": "dev",
+  "master_key_included": false,
+  "materialized_into": "/home/runner/work/nexaroute/nexaroute/docs/reports/issue438-drill-scratch",
+  "checks": [
+    {
+      "name": "bundle_integrity",
+      "status": "PASS",
+      "detail": "3 file(s) verified against the manifest",
+      "duration_ms": 0
+    },
+    {
+      "name": "bundle_freshness",
+      "status": "PASS",
+      "detail": "backup is 0s old, within the 24h0m0s bound",
+      "duration_ms": 0
+    },
+    {
+      "name": "config_decryption",
+      "status": "PASS",
+      "detail": "config parses and validates",
+      "duration_ms": 0
+    },
+    {
+      "name": "route_usability",
+      "status": "PASS",
+      "detail": "config loads and validates route profiles, pools and providers",
+      "duration_ms": 0
+    },
+    {
+      "name": "master_key_pairing",
+      "status": "PASS",
+      "detail": "master key from host:config.json.key matches the backup fingerprint",
+      "duration_ms": 0
+    },
+    {
+      "name": "audit_chain",
+      "status": "PASS",
+      "detail": "audit chain verified: 2 record(s), 2 chained",
+      "duration_ms": 0
+    },
+    {
+      "name": "control_plane_state",
+      "status": "PASS",
+      "detail": "control-plane file-store schema is compatible with this build",
+      "duration_ms": 0
+    },
+    {
+      "name": "external_store_ownership",
+      "status": "PASS",
+      "detail": "no external store or video assets are referenced; the bundle is self-contained",
+      "duration_ms": 0
+    },
+    {
+      "name": "isolated_materialization",
+      "status": "PASS",
+      "detail": "bundle materialized into a disposable directory (production targets untouched)",
+      "duration_ms": 1
+    }
+  ],
+  "status": "PASS",
+  "total_duration_ms": 2
+}
