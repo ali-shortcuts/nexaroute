@@ -956,7 +956,26 @@ func (s *Server) candidatesForRequirement(req router.Requirement, protocol strin
 	allCandidates := rt.Candidates(reqAll)
 	if resolver != nil {
 		filtered := resolver.AllFilteredCandidates(allCandidates, resolved)
-		return cfgCopy, applyRollout(cfgCopy, &resolved, req, filtered), &resolved, nil
+		out := applyRollout(cfgCopy, &resolved, req, filtered)
+		// Session affinity (#421): the candidate fetch above blanks
+		// the model filter, and the router's affinity bucket is keyed
+		// by the request's model — so a pin recorded under the public
+		// model was invisible to that fetch and virtual-endpoint
+		// sessions silently lost their pin. Promote the pinned
+		// deployment from the ORIGINAL requirement (the same lookup
+		// the decision plane performs) when it survived eligibility
+		// and pool filtering.
+		if pin := rt.PinnedDeploymentID(req); pin != "" {
+			for i := range out {
+				if out[i].Deployment.ID == pin && i > 0 {
+					chosen := out[i]
+					copy(out[1:i+1], out[0:i])
+					out[0] = chosen
+					break
+				}
+			}
+		}
+		return cfgCopy, out, &resolved, nil
 	}
 	return cfgCopy, allCandidates, &resolved, nil
 }
