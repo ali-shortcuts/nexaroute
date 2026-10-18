@@ -45,6 +45,8 @@ On load, legacy plaintext secret fields are encrypted and the config is replaced
 
 Missing or wrong keys, malformed envelopes, tampering, or AAD mismatch fail closed. NexaRoute does not generate a replacement key for a config that contains encrypted secrets and does not start with partially decrypted settings or a plaintext fallback. Restore the exact matching key or restore an encrypted config backup together with its matching key. Loss of the only matching key makes those encrypted secrets unrecoverable.
 
+Restore is verification-first. `nexaroute restore --verify` (and `nexaroute doctor --bundle`) record only hashes, statuses and timings — never plaintext, ciphertext, or key material — and treat an undecryptable encrypted config as a failure or blocker rather than a pass: a missing key is `BLOCKED` (nonzero), a wrong key or tampered audit chain is `FAIL`. The master-key fingerprint stored in a backup manifest is a SHA-256 hash used only to detect a wrong key; it does not weaken the key. Key custody therefore stays independent of config/backup custody: `--include-master-key` bundles must be stored like secrets.
+
 ### Secrets CLI
 
 - `nexaroute secrets status --config PATH` reports ciphertext counts only; it does not print secret values.
