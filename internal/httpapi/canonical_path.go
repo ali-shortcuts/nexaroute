@@ -441,6 +441,7 @@ func canonicalErrorJSON(w http.ResponseWriter, clientProtocol string, status int
 
 // openAIResponses serves POST /v1/responses (OpenAI Responses API ingress).
 func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
+	defer s.clearAttemptSeq(r.Header.Get("x-request-id"))
 	if r.Method != http.MethodPost {
 		canonicalErrorJSON(w, "openai_responses", http.StatusMethodNotAllowed, "invalid_request_error", "method not allowed")
 		return
@@ -689,6 +690,9 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 				noteSpanTTFT(r.Context(), d)
 				s.emitStreamCommitted(r.Header.Get("x-request-id"), deployment.ID, deployment.ProviderID, "openai_responses", d)
 			})
+		}
+		if v := s.attemptsHeaderValue(r.Header.Get("x-request-id")); v != "" {
+			w.Header().Set("X-NexaRoute-Attempts", v)
 		}
 		deploy := deployment
 		sent := sentPayload
