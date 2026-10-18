@@ -272,35 +272,57 @@ func (r *Router) scored(d Deployment, hs health.State, req Requirement, cfg conf
 }
 
 func (r *Router) eligibleDeployment(d Deployment, req Requirement, cfg config.Config, ignoreModel bool, scopes []string) (Scored, bool) {
+	s, reason := r.evaluateDeployment(d, req, cfg, ignoreModel, scopes)
+	return s, reason == ""
+}
+
+// evaluateDeployment is the same funnel as eligibleDeployment but adds an
+// operator-facing exclusion reason, so explainability (Router.Explain and the
+// admin route-preview surface) can never disagree with what the data plane
+// actually routes. Everything that picks a deployment funnels through here
+// (initial selection, retry/failover, fallback chains/candidate pools via
+// Candidates, session-affinity re-checks via Eligible, hedged partners via
+// currentRouteCandidate, and credential selection which only runs after a
+// deployment is deemed eligible). A non-empty reason means excluded.
+func (r *Router) evaluateDeployment(d Deployment, req Requirement, cfg config.Config, ignoreModel bool, scopes []string) (Scored, string) {
 	if !ignoreModel && !matchesModel(d, req.Model) {
-		return Scored{}, false
+		return Scored{}, ExcludeModelMismatch
 	}
 	if req.ProviderType != "" && d.ProviderType != req.ProviderType {
-		return Scored{}, false
+		return Scored{}, ExcludeProviderType
 	}
 	// Fail-closed privacy gate: a no_training requirement only trusts
 	// providers that declare trains_on_data="no". "unknown" is NOT
 	// acceptable. This single gate covers every path that picks a
-	// deployment because all of them funnel through eligibleDeployment
+	// deployment because all of them funnel through evaluateDeployment
 	// (initial selection, retry/failover, fallback chains/candidate pools
 	// via Candidates, session-affinity re-checks via Eligible, hedged
 	// partners via currentRouteCandidate, and credential selection which
 	// only runs after a deployment is deemed eligible).
 	if req.RequireNoTraining && !SatisfiesNoTraining(d.TrainsOnData) {
-		return Scored{}, false
+		return Scored{}, ExcludePrivacyNoTraining
 	}
 	if !r.health.ProviderAvailable(d.ProviderID) {
-		return Scored{}, false
+		return Scored{}, ExcludeProviderCircuit
 	}
 	// Pre-call context check: skip deployments that advertise a context
 	// window too small for the estimated request. A guaranteed-failure
 	// attempt wastes one attempt budget and burns provider quota for an
 	// error the gateway can predict in microseconds.
 	if req.MinContextWindow > 0 && d.ContextWindow > 0 && d.ContextWindow < req.MinContextWindow {
-		return Scored{}, false
+		return Scored{}, ExcludeContextWindow
 	}
-	if req.Tools && !d.Capabilities.Tools || req.Vision && !d.Capabilities.Vision || req.Streaming && !d.Capabilities.Streaming || req.Reasoning && !d.Capabilities.Reasoning {
-		return Scored{}, false
+	if req.Tools && !d.Capabilities.Tools {
+		return Scored{}, ExcludeMissingTools
+	}
+	if req.Vision && !d.Capabilities.Vision {
+		return Scored{}, ExcludeMissingVision
+	}
+	if req.Streaming && !d.Capabilities.Streaming {
+		return Scored{}, ExcludeMissingStreaming
+	}
+	if req.Reasoning && !d.Capabilities.Reasoning {
+		return Scored{}, ExcludeMissingReasoning
 	}
 	healthScopes := []string(nil)
 	if cfg.Routing.Strategy == "ready_mesh" || cfg.Routing.Strategy == "cost_aware" {
@@ -310,19 +332,19 @@ func (r *Router) eligibleDeployment(d Deployment, req Requirement, cfg config.Co
 	// Retired/EOL deployments are permanently ineligible until their deployment
 	// identity is invalidated by a config/model change.
 	if hs.Status == health.Retired {
-		return Scored{}, false
+		return Scored{}, ExcludeRetired
 	}
 	if IsReadyStrategy(cfg.Routing.Strategy) {
 		if hs.Status != health.Healthy {
-			return Scored{}, false
+			return Scored{}, ExcludeNotReady
 		}
 		if cfg.Routing.Strategy == "ready_mesh" && !scopesReady {
-			return Scored{}, false
+			return Scored{}, ExcludeCapabilityScopeNotReady
 		}
 	} else if hs.Status == health.Cooldown {
-		return Scored{}, false
+		return Scored{}, ExcludeCooldown
 	}
-	return r.scored(d, hs, req, cfg), true
+	return r.scored(d, hs, req, cfg), ""
 }
 
 func (r *Router) affinityBucket(req Requirement) string {
@@ -602,6 +624,15 @@ func (r *Router) Candidates(req Requirement) []Scored {
 	if len(out) <= 1 {
 		return out
 	}
+	r.applyStrategy(out, req, cfg)
+	return out
+}
+
+// applyStrategy orders an already-eligibility-filtered candidate list with the
+// configured strategy. Extracted from Candidates so explainability surfaces
+// (Router.Explain / admin route preview) observe exactly the ordering the data
+// plane uses — never a second, drifting copy.
+func (r *Router) applyStrategy(out []Scored, req Requirement, cfg config.Config) {
 	switch cfg.Routing.Strategy {
 	case "ready_mesh":
 		r.orderReadyMesh(out, req, cfg)
@@ -695,7 +726,6 @@ func (r *Router) Candidates(req Requirement) []Scored {
 			return out[i].Score > out[j].Score
 		})
 	}
-	return out
 }
 
 func (r *Router) Eligible(id string, req Requirement) (Scored, bool) {

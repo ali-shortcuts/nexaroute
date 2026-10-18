@@ -253,6 +253,28 @@ Ready Mesh keeps the request path deterministic and network-free at selection ti
 
 This is deliberately not an opaque learned router in the data plane. Task awareness comes from explicit request capabilities and configured aliases/profiles so routing decisions remain explainable and regression-testable.
 
+## Routing explainability and decision preview
+
+Every data-plane candidate selection funnels through a single evaluation pass whose
+verdicts can be traced: `Router.Explain` (admin route-preview) and the same funnel
+repay every deployment that was considered with either an ordered scored candidate
+or a stable redacted exclusion reason (`model_mismatch`, `provider_type`,
+`privacy_no_training`, `provider_circuit_open`, `context_window_too_small`,
+`capability_*_unsupported`, `retired`, `health_not_ready`,
+`capability_scope_not_ready`, `health_cooldown`). The trace contains only routing
+metadata — deployment/provider identity, scores, health status/latency and
+strategy — never user prompts, credentials or upstream error text.
+
+`GET /admin/api/route-preview` is a dry-run surface: it replays virtual endpoint
+resolution, the candidate funnel and the strategy ordering against live runtime
+state for an operator-supplied requirement (model/alias, protocol, tools, vision,
+streaming, reasoning, context bound, affinity key) without issuing any provider
+call and without mutating anything — no session pin, no probe, no admission
+counter. It reports the ordered candidate list, the selected provider/model, the
+matched virtual endpoint/pools, and per-deployment exclusion reasons. Exclusion
+reasons and the data plane share one evaluation path, so the trace cannot drift
+from real routing behavior.
+
 
 ## Failure-domain-aware fallback ordering
 

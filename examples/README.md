@@ -8,6 +8,9 @@ names if needed, and start the gateway with it:
 - `anthropic.json` — a single Anthropic provider.
 - `failover.json` — the same public model on two providers;
   priority 0 serves first, priority 1 is the fallback.
+- `coding.json` — a stable public alias `coding` backed by an explicit
+  candidate pool spanning an OpenAI and an Anthropic deployment.
+  `/admin/api/route-preview?model=coding` shows how the pool is scheduled.
 - `local-ollama.json` — a local Ollama instance, no API key.
 
 Every example is loaded and validated by an automated test

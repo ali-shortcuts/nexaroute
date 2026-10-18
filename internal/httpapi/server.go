@@ -1038,6 +1038,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/admin/api/provider-test", s.adminProviderTest)
 	mux.HandleFunc("/admin/api/compat", s.adminCompatMatrix)
 	mux.HandleFunc("/admin/api/compat/reset", s.adminCompatReset)
+	mux.HandleFunc("/admin/api/route-preview", s.adminRoutePreview)
 	mux.HandleFunc("/admin/api/provider-discover", s.adminProviderDiscover)
 	mux.HandleFunc("/admin/api/settings", s.adminSettings)
 	mux.HandleFunc("/admin/api/client-keys", s.adminClientKeys)
