@@ -1,13 +1,18 @@
 package video
 
 type Config struct {
-	Enabled                   bool    `json:"enabled,omitempty"`
-	StorePath                 string  `json:"store_path,omitempty"`
-	StorageRoot               string  `json:"storage_root,omitempty"`
-	QueueSize                 int     `json:"queue_size,omitempty"`
-	Workers                   int     `json:"workers,omitempty"`
-	AuthTokenEnv              string  `json:"auth_token_env,omitempty"`
-	MaxAssetBytes             int64   `json:"max_asset_bytes,omitempty"`
+	Enabled       bool   `json:"enabled,omitempty"`
+	StorePath     string `json:"store_path,omitempty"`
+	StorageRoot   string `json:"storage_root,omitempty"`
+	QueueSize     int    `json:"queue_size,omitempty"`
+	Workers       int    `json:"workers,omitempty"`
+	AuthTokenEnv  string `json:"auth_token_env,omitempty"`
+	MaxAssetBytes int64  `json:"max_asset_bytes,omitempty"`
+	// JobRetentionDays bounds how long terminal video jobs stay
+	// in the job store (#420 item 5): terminal jobs whose
+	// completion is older than this are pruned by the runtime.
+	// Zero (the default) keeps terminal jobs forever.
+	JobRetentionDays          int     `json:"job_retention_days,omitempty"`
 	DevelopmentFakeProvider   bool    `json:"development_fake_provider,omitempty"`
 	ComfyUIEnabled            bool    `json:"comfyui_enabled,omitempty"`
 	ComfyUIBaseURL            string  `json:"comfyui_base_url,omitempty"`

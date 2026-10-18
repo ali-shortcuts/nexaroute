@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/ali-shortcuts/nexaroute/internal/video"
 	"github.com/ali-shortcuts/nexaroute/internal/video/agent"
@@ -34,6 +35,8 @@ type Runtime struct {
 	started      bool
 	workerCancel context.CancelFunc
 	workerDone   chan struct{}
+	jobRetention time.Duration
+	pruneDone    chan struct{}
 }
 
 func New(cfg video.Config, baseDir string) (*Runtime, error) {
@@ -183,7 +186,7 @@ func New(cfg video.Config, baseDir string) (*Runtime, error) {
 	}
 	pool := queue.NewWorkerPool(q, cfg.Workers, orch.RunJob)
 	h := &api.Handler{Orch: orch, Store: store, Providers: reg, Assets: assetSink, RequireAuth: true, BearerToken: token, Universal: universalAgent, UniversalMaxDuration: codeRenderMaxDuration}
-	return &Runtime{Handler: h, Queue: q, Workers: pool, Store: store, Orchestrator: orch}, nil
+	return &Runtime{Handler: h, Queue: q, Workers: pool, Store: store, Orchestrator: orch, jobRetention: time.Duration(cfg.JobRetentionDays) * 24 * time.Hour}, nil
 }
 
 func (r *Runtime) Start(ctx context.Context) error {
@@ -218,6 +221,28 @@ func (r *Runtime) Start(ctx context.Context) error {
 		<-workerDone
 		return fmt.Errorf("recover persisted video jobs: %w", err)
 	}
+	// Retention (#420 item 5): when configured, prune terminal
+	// jobs past the retention window once at startup and then
+	// hourly for the life of the runtime. Best-effort: a prune
+	// failure never blocks startup or stops the ticker.
+	if r.jobRetention > 0 {
+		_, _ = r.Orchestrator.PruneTerminalJobs(workerCtx, time.Now(), r.jobRetention)
+		pruneDone := make(chan struct{})
+		r.pruneDone = pruneDone
+		go func() {
+			defer close(pruneDone)
+			t := time.NewTicker(time.Hour)
+			defer t.Stop()
+			for {
+				select {
+				case <-workerCtx.Done():
+					return
+				case now := <-t.C:
+					_, _ = r.Orchestrator.PruneTerminalJobs(workerCtx, now, r.jobRetention)
+				}
+			}
+		}()
+	}
 	return nil
 }
 
@@ -228,6 +253,7 @@ func (r *Runtime) Close() {
 	r.startMu.Lock()
 	cancel := r.workerCancel
 	done := r.workerDone
+	pruneDone := r.pruneDone
 	r.startMu.Unlock()
 	// Cancel the worker context before closing the queue so buffered queued jobs
 	// cannot start new provider submissions during shutdown.
@@ -239,5 +265,8 @@ func (r *Runtime) Close() {
 	}
 	if done != nil {
 		<-done
+	}
+	if pruneDone != nil {
+		<-pruneDone
 	}
 }
