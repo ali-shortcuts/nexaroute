@@ -268,6 +268,30 @@ func TestGateHoldsPromotionWhenRequiredTelemetryCoverageIsMissing(t *testing.T) 
 	}
 }
 
+func TestGateHoldsMissingNoEligibleEvenWhenRateCeilingIsOne(t *testing.T) {
+	cfg := GateConfig{
+		MinSamples: 1, MinPromoteSamples: 1, MaxErrorRate: 0.2,
+		MaxFailoverRate: 1, MaxNoEligibleRate: 1, MaxBudgetAnomalies: 100,
+	}
+	candidate := Signals{
+		Requests: 1, Successes: 1, ErrorRate: 0,
+		BudgetAnomaliesObserved: 1,
+	}
+	res := EvaluateGate(candidate, Signals{}, cfg)
+	if res.Verdict != VerdictHold {
+		t.Fatalf("verdict=%s want hold when no-eligible telemetry is missing, even with ceiling=1", res.Verdict)
+	}
+	if len(res.Reasons) == 0 || res.Reasons[0] != "insufficient_no_eligible_signal_coverage:0<1" {
+		t.Fatalf("reasons=%v want missing no-eligible signal coverage", res.Reasons)
+	}
+
+	candidate.NoEligibleObserved = 1
+	res = EvaluateGate(candidate, Signals{}, cfg)
+	if res.Verdict != VerdictPromote {
+		t.Fatalf("verdict=%s reasons=%v want promotion after complete coverage", res.Verdict, res.Reasons)
+	}
+}
+
 func TestGateHoldsTTFTConfiguredWithoutTTFTSamples(t *testing.T) {
 	cfg := GateConfig{MinSamples: 1, MinPromoteSamples: 1, MaxErrorRate: 0.2, MaxTTFTP95MS: 100}
 	candidate := Signals{Requests: 1, Successes: 1, ErrorRate: 0, NoEligibleObserved: 1, BudgetAnomaliesObserved: 1}

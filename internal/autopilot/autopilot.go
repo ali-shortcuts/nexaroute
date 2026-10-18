@@ -397,7 +397,7 @@ func EvaluateGate(candidate, incumbent Signals, cfg GateConfig) GateResult {
 	// Missing telemetry is not a zero-rate observation. Rollback remains
 	// possible on known bad outcomes above, but promotion requires complete
 	// policy-attributed coverage for each required gate signal.
-	if cfg.MaxNoEligibleRate < 1 && candidate.NoEligibleObserved < candidate.Requests {
+	if candidate.NoEligibleObserved < candidate.Requests {
 		res.Reasons = []string{fmt.Sprintf("insufficient_no_eligible_signal_coverage:%d<%d", candidate.NoEligibleObserved, candidate.Requests)}
 		return res
 	}
