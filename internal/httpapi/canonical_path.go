@@ -479,9 +479,11 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 		Model:                  in.Model,
 		Streaming:              reqReqs.Streaming,
 		VisionType:             "input_image",
+		AudioType:              "input_audio",
 		ReasoningKeys:          []string{"reasoning"},
 		ContentFields:          []string{"input", "instructions"},
 		MaxOutputTokens:        in.MaxOutputTokens,
+		UserAgent:              r.Header.Get("User-Agent"),
 		ToolCountHint:          len(in.Tools),
 		ToolChoiceRequiredHint: toolChoiceRequired,
 		HasSystemPromptHint:    &hasSystem,
@@ -513,7 +515,9 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	s.emitTaskClassified(r.Header.Get("x-request-id"), ti, resolvedRoute)
+	// Apply task intelligence (route-profile mode off/suggest/apply) after final route resolution
+	taskRes, candidates, resolvedRoute := s.applyTaskIntel(r, req, cfg, candidates, resolvedRoute, ti)
+	s.emitTaskClassified(r.Header.Get("x-request-id"), ti, resolvedRoute, taskRes)
 	s.emitRouteResolved(r, "openai_responses", resolvedRoute, candidates)
 	if len(candidates) == 0 {
 		// Gateway-side rejection before any upstream attempt: release

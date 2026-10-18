@@ -19,6 +19,7 @@ import (
 
 	"github.com/ali-shortcuts/nexaroute/internal/egress"
 	"github.com/ali-shortcuts/nexaroute/internal/secrets"
+	"github.com/ali-shortcuts/nexaroute/internal/taskprofile"
 )
 
 type VirtualEndpointConfig struct {
@@ -51,6 +52,23 @@ type RouteProfileConfig struct {
 	// candidate list when it is already eligible for the request.
 	CanaryDeploymentID string `json:"canary_deployment_id,omitempty"`
 	CanaryPercent      int    `json:"canary_percent,omitempty"`
+	// Task intelligence (Phase 19, issue #419): per-route application of
+	// signal-based task classification. "" and "off" keep classification
+	// observational only (the default). "suggest" records the suggested
+	// task pool in the trace without changing routing. "apply" routes
+	// high-confidence classifications to the mapped task pool (operator
+	// opt-in). Raw prompt content is never a classification signal.
+	TaskIntelMode string `json:"task_intel_mode,omitempty"`
+	// TaskIntelMinConfidence gates application: below it the classifier
+	// degrades to the default profile. (0,1]; 0 selects the 0.60 default.
+	TaskIntelMinConfidence float64 `json:"task_intel_min_confidence,omitempty"`
+	// TaskPools maps a canonical task type (e.g. "coding") to the candidate
+	// pool that task should use as its primary pool.
+	TaskPools map[string]string `json:"task_pools,omitempty"`
+	// TaskOverride forces one task type for the whole route profile.
+	// The operator override always wins: over the client pin and over the
+	// classifier.
+	TaskOverride string `json:"task_override,omitempty"`
 }
 
 type CandidatePoolConfig struct {
@@ -2857,6 +2875,33 @@ func (c Config) Validate() error {
 		}
 		if rp.Privacy != "" && rp.Privacy != "any" && rp.Privacy != "no_training" {
 			return fmt.Errorf("route profile %q privacy must be \"\", \"any\", or \"no_training\" (got %q)", rp.ID, rp.Privacy)
+		}
+		// Phase 19 task intelligence: fail-closed validation of modes, pools, override.
+		switch rp.TaskIntelMode {
+		case "", "off", "suggest", "apply":
+		default:
+			return fmt.Errorf("route profile %q task_intel_mode must be \"\", \"off\", \"suggest\" or \"apply\" (got %q)", rp.ID, rp.TaskIntelMode)
+		}
+		if rp.TaskIntelMinConfidence < 0 || rp.TaskIntelMinConfidence > 1 {
+			return fmt.Errorf("route profile %q task_intel_min_confidence must be in [0,1] (got %v)", rp.ID, rp.TaskIntelMinConfidence)
+		}
+		for taskType, poolID := range rp.TaskPools {
+			if !taskprofile.TaskType(taskType).Valid() {
+				return fmt.Errorf("route profile %q task_pools has unknown task type %q", rp.ID, taskType)
+			}
+			if _, ok := poolIDs[poolID]; !ok {
+				return fmt.Errorf("route profile %q task_pools[%q] references unknown candidate pool %q", rp.ID, taskType, poolID)
+			}
+		}
+		if rp.TaskOverride != "" && !taskprofile.TaskType(rp.TaskOverride).Valid() {
+			return fmt.Errorf("route profile %q task_override has unknown task type %q", rp.ID, rp.TaskOverride)
+		}
+		mode := rp.TaskIntelMode
+		if mode == "" {
+			mode = "off"
+		}
+		if mode == "off" && (len(rp.TaskPools) > 0 || rp.TaskOverride != "") {
+			return fmt.Errorf("route profile %q configures task_pools/task_override with task_intel_mode off (set \"suggest\" or \"apply\")", rp.ID)
 		}
 	}
 

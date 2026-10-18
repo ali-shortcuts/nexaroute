@@ -119,5 +119,6 @@ const (
 	ReasonSystemPrompt       ReasonCode = "system_prompt"
 	ReasonStreaming          ReasonCode = "streaming"
 	ReasonHighImageCount     ReasonCode = "high_image_count"
+	ReasonAudioPresent       ReasonCode = "audio_present"
 	ReasonSimpleChat         ReasonCode = "simple_chat"
 )

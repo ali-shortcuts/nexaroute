@@ -11,9 +11,11 @@ type ExtractOptions struct {
 	Model           string
 	Streaming       bool
 	VisionType      string   // e.g. "image_url", "image", "input_image"
+	AudioType       string   // e.g. "input_audio"; empty disables audio detection
 	ReasoningKeys   []string // top-level keys that indicate reasoning
 	ContentFields   []string // fields to walk for conversation content (e.g. "messages", "input", "instructions")
 	MaxOutputTokens int
+	UserAgent       string // raw User-Agent header; only the bounded ClientClass is retained
 	// Optional hints from already-decoded protocol structs to avoid double counting.
 	ToolCountHint          int
 	ToolChoiceHint         bool
@@ -30,8 +32,12 @@ func NewExtractor() *Extractor { return &Extractor{} }
 // but also collects lexical signals from up to 64 KiB of *relevant* text only.
 func (e *Extractor) Extract(raw []byte, opts ExtractOptions) RequestFeatures {
 	out := RequestFeatures{
-		Protocol:  opts.Protocol,
-		Streaming: opts.Streaming,
+		Protocol:    opts.Protocol,
+		Streaming:   opts.Streaming,
+		ClientClass: ClassifyClient(opts.UserAgent),
+	}
+	if !out.ClientClass.Valid() {
+		out.ClientClass = ClientClassUnknown
 	}
 	if out.Protocol == "" {
 		out.Protocol = ProtocolUnknown
@@ -127,6 +133,8 @@ func (e *Extractor) Extract(raw []byte, opts ExtractOptions) RequestFeatures {
 		messageCount := 0
 		visionCount := 0
 		hasVision := false
+		audioCount := 0
+		hasAudio := false
 		hasToolResult := false
 		hasImageURL := false
 
@@ -151,6 +159,13 @@ func (e *Extractor) Extract(raw []byte, opts ExtractOptions) RequestFeatures {
 					visionCount++
 					if visionCount > maxVisionImageCount {
 						visionCount = maxVisionImageCount
+					}
+				}
+				if typ, _ := x["type"].(string); opts.AudioType != "" && strings.EqualFold(typ, opts.AudioType) {
+					hasAudio = true
+					audioCount++
+					if audioCount > maxAudioCount {
+						audioCount = maxAudioCount
 					}
 				}
 				// Detect tool_result and image URL presence for observability
@@ -192,6 +207,8 @@ func (e *Extractor) Extract(raw []byte, opts ExtractOptions) RequestFeatures {
 		}
 		out.HasVision = hasVision
 		out.VisionImageCount = boundInt(visionCount, 0, maxVisionImageCount)
+		out.HasAudio = hasAudio
+		out.AudioCount = boundInt(audioCount, 0, maxAudioCount)
 		out.MessageCount = boundInt(messageCount, 0, maxMessageCount)
 		out.TotalChars = boundInt(chars, 0, maxTotalChars)
 		out.EstimatedPromptTokens = chars/4 + messageCount*perMessageOverhead + defaultEstimatedTokens

@@ -17,6 +17,7 @@ func NewAnalyzer() *Analyzer { return &Analyzer{} }
 // No raw prompt is accessed.
 func (a *Analyzer) Analyze(f feature.RequestFeatures) TaskProfile {
 	profile := TaskProfile{
+		RuleVersion:            RuleVersion,
 		EstimatedContextTokens: f.EstimatedPromptTokens,
 		HasVision:              f.HasVision,
 		HasReasoning:           f.HasReasoning,
@@ -40,6 +41,9 @@ func (a *Analyzer) Analyze(f feature.RequestFeatures) TaskProfile {
 		if f.VisionImageCount > 3 {
 			reasons = append(reasons, ReasonHighImageCount)
 		}
+	}
+	if f.HasAudio {
+		reasons = append(reasons, ReasonAudioPresent)
 	}
 	if f.HasReasoning {
 		reasons = append(reasons, ReasonReasoningRequested)
