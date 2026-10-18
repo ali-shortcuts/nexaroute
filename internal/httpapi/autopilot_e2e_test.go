@@ -382,30 +382,33 @@ func TestAutopilotConfigReloadDetectsCandidateAndGateChanges(t *testing.T) {
 		Enabled: true, PolicyID: "balanced", CandidatePolicyID: "candidate-a",
 		CanaryPercent: 5, MinSamples: 20, MaxErrorRate: 0.1,
 	}
-	if autopilotConfigNeedsRebuild(ctrl, original, original, "balanced") {
+	if autopilotConfigNeedsRebuild(ctrl, original, original, "balanced", false) {
 		t.Fatal("unrelated reload should preserve the active controller")
 	}
 	candidateChanged := original
 	candidateChanged.CandidatePolicyID = "candidate-b"
-	if !autopilotConfigNeedsRebuild(ctrl, original, candidateChanged, "balanced") {
+	if !autopilotConfigNeedsRebuild(ctrl, original, candidateChanged, "balanced", false) {
 		t.Fatal("changing the candidate must rebuild the controller")
 	}
 	percentChanged := original
 	percentChanged.CanaryPercent = 0
-	if !autopilotConfigNeedsRebuild(ctrl, original, percentChanged, "balanced") {
+	if !autopilotConfigNeedsRebuild(ctrl, original, percentChanged, "balanced", false) {
 		t.Fatal("changing canary percentage must rebuild the controller")
 	}
 	requestLimitChanged := original
 	requestLimitChanged.CanaryMaxRequests = 50
-	if !autopilotConfigNeedsRebuild(ctrl, original, requestLimitChanged, "balanced") {
+	if !autopilotConfigNeedsRebuild(ctrl, original, requestLimitChanged, "balanced", false) {
 		t.Fatal("changing the canary request limit must rebuild the controller")
 	}
 	gateChanged := original
 	gateChanged.MaxErrorRate = 0.05
-	if !autopilotConfigNeedsRebuild(ctrl, original, gateChanged, "balanced") {
+	if !autopilotConfigNeedsRebuild(ctrl, original, gateChanged, "balanced", false) {
 		t.Fatal("changing the safety gate must rebuild the controller")
 	}
-	if !autopilotConfigNeedsRebuild(nil, original, original, "balanced") {
+	if !autopilotConfigNeedsRebuild(nil, original, original, "balanced", false) {
 		t.Fatal("an absent controller must be initialized when autopilot is enabled")
+	}
+	if !autopilotConfigNeedsRebuild(ctrl, original, original, "balanced", true) {
+		t.Fatal("changing a decision-policy definition must rebuild the controller")
 	}
 }

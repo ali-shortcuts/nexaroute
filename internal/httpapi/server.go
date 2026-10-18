@@ -738,7 +738,13 @@ func (s *Server) applyConfigLocked(baseCfg config.Config) error {
 				}
 				if !cfg.Autopilot.Enabled {
 					s.autopilot = nil
-				} else if autopilotConfigNeedsRebuild(s.autopilot, s.autopilotConfig, cfg.Autopilot, target) {
+				} else if autopilotConfigNeedsRebuild(
+					s.autopilot,
+					s.autopilotConfig,
+					cfg.Autopilot,
+					target,
+					!reflect.DeepEqual(oldCfg.DecisionPolicies, cfg.DecisionPolicies),
+				) {
 					s.autopilot = newAutopilotController(cfg, policies)
 				}
 				s.autopilotConfig = cfg.Autopilot

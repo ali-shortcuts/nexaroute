@@ -69,8 +69,8 @@ func newAutopilotController(cfg config.Config, policies []policy.Policy) *autopi
 	return ctrl
 }
 
-func autopilotConfigNeedsRebuild(current *autopilot.Controller, previous, next config.AutopilotConfig, target string) bool {
-	return current == nil || previous != next || current.TargetPolicyID() != target
+func autopilotConfigNeedsRebuild(current *autopilot.Controller, previous, next config.AutopilotConfig, target string, policyDefinitionsChanged bool) bool {
+	return current == nil || previous != next || current.TargetPolicyID() != target || policyDefinitionsChanged
 }
 
 func (s *Server) autopilotSnapshot() *autopilot.Controller {
