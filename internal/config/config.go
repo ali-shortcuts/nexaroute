@@ -791,6 +791,48 @@ type ModelConfig struct {
 	InputCostPerMTok  float64      `json:"input_cost_per_mtok,omitempty"`
 	OutputCostPerMTok float64      `json:"output_cost_per_mtok,omitempty"`
 	Capabilities      Capabilities `json:"capabilities"`
+	// Model onboarding provenance (issue #394). Source records how the
+	// model id arrived at the gateway ("manual" = operator entry, the
+	// legacy default when empty; "discovered" = accepted from a provider
+	// /models listing). TestState records the last positive connection
+	// test outcome for this specific model; only an actual bounded
+	// generation probe result may ever populate a non-untested value —
+	// URL reachability does not.
+	Source    string `json:"source,omitempty"`     // manual | discovered
+	TestState string `json:"test_state,omitempty"` // untested | passed | failed | degraded
+}
+
+// Model onboarding provenance states (issue #394). These are exhaustive
+// enums; anything else is rejected at load and save time so the admin UI
+// can render every value without an "unknown" fallback that hides state.
+const (
+	ModelSourceManual     = "manual"
+	ModelSourceDiscovered = "discovered"
+
+	ModelTestUntested = "untested"
+	ModelTestPassed   = "passed"
+	ModelTestFailed   = "failed"
+	ModelTestDegraded = "degraded"
+)
+
+// ValidModelSource reports whether a model onboarding source is one of the
+// supported provenance values. Empty is allowed and means manual (legacy).
+func ValidModelSource(v string) bool {
+	switch v {
+	case "", ModelSourceManual, ModelSourceDiscovered:
+		return true
+	}
+	return false
+}
+
+// ValidModelTestState reports whether a model test state is one of the
+// supported values. Empty is allowed and means untested (legacy).
+func ValidModelTestState(v string) bool {
+	switch v {
+	case "", ModelTestUntested, ModelTestPassed, ModelTestFailed, ModelTestDegraded:
+		return true
+	}
+	return false
 }
 
 type Capabilities struct {
@@ -2286,6 +2328,12 @@ func (c Config) Validate() error {
 			}
 			if math.IsNaN(m.Weight) || math.IsInf(m.Weight, 0) || m.Weight <= 0 || m.Weight > 1_000_000 {
 				return fmt.Errorf("deployment %q weight must be finite and between 0 and 1000000", p.ID+"/"+m.ID)
+			}
+			if !ValidModelSource(m.Source) {
+				return fmt.Errorf("deployment %q source %q must be manual or discovered", p.ID+"/"+m.ID, m.Source)
+			}
+			if !ValidModelTestState(m.TestState) {
+				return fmt.Errorf("deployment %q test_state %q must be untested, passed, failed or degraded", p.ID+"/"+m.ID, m.TestState)
 			}
 			if m.ContextWindow < 0 || m.ContextWindow > 100_000_000 {
 				return fmt.Errorf("deployment %q context_window must be between 0 and 100000000", p.ID+"/"+m.ID)

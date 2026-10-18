@@ -89,7 +89,19 @@ func (s *Server) adminProviderPresets(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 405, "method not allowed")
 		return
 	}
-	writeJSON(w, 200, map[string]any{"presets": providers.Presets()})
+	// Best-effort catalog filtering (issue #394): `q` searches preset
+	// identity fields, `category` filters exactly. Without parameters the
+	// response shape is unchanged ({"presets": [...]}) so existing callers
+	// keep working; new fields and query params are additive.
+	all := providers.Presets()
+	q := r.URL.Query().Get("q")
+	category := r.URL.Query().Get("category")
+	filtered := providers.FilterPresets(all, q, category)
+	writeJSON(w, 200, map[string]any{
+		"presets":    filtered,
+		"categories": providers.PresetCategories(all),
+		"total":      len(all),
+	})
 }
 
 func (s *Server) adminProviderCheck(w http.ResponseWriter, r *http.Request) {
@@ -979,8 +991,44 @@ func snapshotConfigProviders(providers []config.ProviderConfig) []map[string]any
 
 func providerSummary(p config.ProviderConfig) map[string]any {
 	models := make([]string, 0, len(p.Models))
+	details := make([]map[string]any, 0, len(p.Models))
+	// Onboarding-state counts (issue #394): how this provider's models were
+	// onboarded and what the last bounded connection test said. "manual" is
+	// the legacy default when source was absent; "untested" likewise.
+	states := map[string]int{"manual": 0, "discovered": 0, "count": len(p.Models)}
 	for _, m := range p.Models {
 		models = append(models, m.Model)
+		source := m.Source
+		if source == "" {
+			source = config.ModelSourceManual
+		}
+		test := m.TestState
+		if test == "" {
+			test = config.ModelTestUntested
+		}
+		switch source {
+		case config.ModelSourceDiscovered:
+			states["discovered"]++
+		default:
+			states["manual"]++
+		}
+		switch test {
+		case config.ModelTestPassed:
+			states["passed"]++
+			states["tested"]++
+		case config.ModelTestFailed:
+			states["failed"]++
+			states["tested"]++
+		case config.ModelTestDegraded:
+			states["degraded"]++
+		default:
+			states["untested"]++
+		}
+		details = append(details, map[string]any{
+			"model":      m.Model,
+			"source":     source,
+			"test_state": test,
+		})
 	}
 	return map[string]any{
 		"id":               p.ID,
@@ -991,6 +1039,8 @@ func providerSummary(p config.ProviderConfig) map[string]any {
 		"auth_mode":        p.AuthMode,
 		"enabled":          p.Enabled,
 		"models":           models,
+		"model_details":    details,
+		"model_states":     states,
 		"model_count":      len(models),
 		"has_secret":       len(p.ResolvedCredentials()) > 0,
 		"api_key_env":      p.APIKeyEnv,
@@ -1092,6 +1142,9 @@ func normalizeProvider(p *config.ProviderConfig) {
 		if p.Models[i].Weight == 0 {
 			p.Models[i].Weight = 1
 		}
+		// Onboarding provenance (issue #394) stays operator-supplied only:
+		// empty means manual/untested and is materialized in the summary
+		// layer, so legacy provider entries are never silently rewritten.
 	}
 }
 
