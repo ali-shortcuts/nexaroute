@@ -699,12 +699,14 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 				func(u canonical.Usage) {
 					inputTokens, outputTokens = u.InputTokens, u.OutputTokens
 					s.recordUsageCanonical(r, deploy.ID, bundle.canonicalKind, u)
+					s.rt.ObserveSessionCache(req, deploy.ID, u.InputTokens, u.CacheReadTokens)
 				})
 		} else {
 			usageErr = s.handleCanonicalResponse(w, resp, bundle.canonicalKind, "openai_responses", in.Model, r.Header.Get("x-request-id"), false, bundle.toolDefs,
 				func(u canonical.Usage) {
 					inputTokens, outputTokens = u.InputTokens, u.OutputTokens
 					s.recordUsageCanonical(r, deploy.ID, bundle.canonicalKind, u)
+					s.rt.ObserveSessionCache(req, deploy.ID, u.InputTokens, u.CacheReadTokens)
 				})
 		}
 		total := time.Since(start)

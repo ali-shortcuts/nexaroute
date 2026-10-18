@@ -109,6 +109,13 @@ type Scored struct {
 type sessionPin struct {
 	Deployment string
 	Expires    time.Time
+	// Cache economics (#421 item 1): how many turns this pin
+	// has served and the last turn's observed token counts, so
+	// the decision trace can price the warm prefix instead of
+	// merely naming the pin.
+	Turns               int
+	LastInputTokens     int
+	LastCacheReadTokens int
 }
 
 const maxSessionPins = 10000
@@ -454,8 +461,63 @@ func (r *Router) ObserveSession(req Requirement, id string) {
 			break
 		}
 	}
-	r.sessions[key] = sessionPin{Deployment: id, Expires: time.Now().Add(ttl)}
+	pin := r.sessions[key]
+	if pin.Deployment != id {
+		// The pin moved: the new deployment starts a fresh
+		// cache-economics record.
+		pin = sessionPin{Deployment: id}
+	}
+	pin.Expires = time.Now().Add(ttl)
+	pin.Turns++
+	r.sessions[key] = pin
 	r.sessionMu.Unlock()
+}
+
+// ObserveSessionCache records a completed turn's observed token
+// counts on the session pin (#421 item 1), so Explain can
+// quantify the cache benefit of keeping the pin. Only positive
+// observations update the record; a turn that reports no cache
+// reads does not erase the last measured warm prefix.
+func (r *Router) ObserveSessionCache(req Requirement, id string, inputTokens, cacheReadTokens int) {
+	r.mu.RLock()
+	cfg := r.cfg
+	r.mu.RUnlock()
+	if !cfg.Routing.SessionAffinity || strings.TrimSpace(req.SessionKey) == "" || id == "" {
+		return
+	}
+	key := r.affinityBucket(req)
+	r.sessionMu.Lock()
+	defer r.sessionMu.Unlock()
+	pin, ok := r.sessions[key]
+	if !ok || pin.Deployment != id {
+		return
+	}
+	if inputTokens > 0 {
+		pin.LastInputTokens = inputTokens
+	}
+	if cacheReadTokens > 0 {
+		pin.LastCacheReadTokens = cacheReadTokens
+	}
+	r.sessions[key] = pin
+}
+
+// sessionPinRecord returns the live pin record for a
+// requirement, or false when no unexpired pin exists.
+func (r *Router) sessionPinRecord(req Requirement, cfg config.Config) (sessionPin, bool) {
+	if !cfg.Routing.SessionAffinity {
+		return sessionPin{}, false
+	}
+	key := r.affinityBucket(req)
+	if key == "" {
+		return sessionPin{}, false
+	}
+	r.sessionMu.RLock()
+	defer r.sessionMu.RUnlock()
+	pin, ok := r.sessions[key]
+	if !ok || !time.Now().Before(pin.Expires) {
+		return sessionPin{}, false
+	}
+	return pin, true
 }
 func (r *Router) SessionCount() int {
 	r.sessionMu.Lock()
