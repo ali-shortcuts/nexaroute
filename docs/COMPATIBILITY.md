@@ -10,6 +10,44 @@ found three real translation defects on its first run (see
 "Conformance history" below); any future red cell is a defect to
 fix or a limit to document here — never a test to weaken.
 
+## Conformance manifest (single evidence source, #436)
+
+Per-dialect compatibility claims are recorded once, in the
+versioned manifest at `internal/providers/conformance.go`
+(`conformance.v1`). The table below is **generated from that
+manifest** and contract-checked by
+`TestCompatibilityDocMatchesManifest`: if the manifest and this
+document drift apart, CI fails with the expected table as the
+actionable diff. Evidence states: `FIXTURE-VERIFIED` (a named
+hermetic test exercises the claim), `LIVE-VERIFIED` (a bounded,
+opt-in live canary produced the evidence — none currently),
+`PARTIAL` (some evidence, known gaps), `UNTESTED` (no evidence;
+a preset or a `/models` response is never evidence), and
+`UNSUPPORTED` (no equivalent exists; the claim asserts absence).
+Verified and partial evidence older than 180 days computes to
+`STALE` (`EffectiveState`) — a fixture pass proves the contract
+on the day it ran, not forever. Native passthrough claims never
+imply lossless translation to other dialects.
+
+Refresh workflow when provider behavior changes: update the
+fixture or adapter, re-run the cited evidence, then update the
+manifest entry (state, evidence date, limitations) and
+regenerate this table from `RenderConformanceTable`. Live
+canaries stay opt-in, cost/rate bounded and secret-safe; they
+are never required in public CI.
+
+<!-- BEGIN GENERATED CONFORMANCE MANIFEST -->
+| Dialect | Status | Evidence date | addressing | auth | non_stream | streaming_sse | tool_calls | tool_results | parallel_tools | reasoning | structured_output | images_multimodal | usage_cache_tokens | finish_reasons | error_envelopes | retry_after | cancellation | idempotency |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| anthropic_compatible | FIXTURE-VERIFIED | 2026-10-18 | FIXTURE-VERIFIED | FIXTURE-VERIFIED | FIXTURE-VERIFIED | FIXTURE-VERIFIED | FIXTURE-VERIFIED | FIXTURE-VERIFIED | FIXTURE-VERIFIED | FIXTURE-VERIFIED | PARTIAL | FIXTURE-VERIFIED | FIXTURE-VERIFIED | FIXTURE-VERIFIED | FIXTURE-VERIFIED | FIXTURE-VERIFIED | PARTIAL | UNTESTED |
+| azure_openai | PARTIAL | 2026-10-18 | PARTIAL | PARTIAL | UNTESTED | UNTESTED | UNTESTED | UNTESTED | UNTESTED | UNTESTED | UNTESTED | UNTESTED | UNTESTED | UNTESTED | UNTESTED | UNTESTED | UNTESTED | UNTESTED |
+| bedrock | PARTIAL | 2026-10-18 | PARTIAL | PARTIAL | PARTIAL | PARTIAL | PARTIAL | PARTIAL | UNSUPPORTED | UNSUPPORTED | UNSUPPORTED | PARTIAL | PARTIAL | PARTIAL | PARTIAL | PARTIAL | UNTESTED | UNTESTED |
+| gemini | FIXTURE-VERIFIED | 2026-10-18 | FIXTURE-VERIFIED | FIXTURE-VERIFIED | FIXTURE-VERIFIED | FIXTURE-VERIFIED | FIXTURE-VERIFIED | FIXTURE-VERIFIED | UNSUPPORTED | PARTIAL | FIXTURE-VERIFIED | FIXTURE-VERIFIED | PARTIAL | FIXTURE-VERIFIED | FIXTURE-VERIFIED | FIXTURE-VERIFIED | PARTIAL | UNTESTED |
+| openai_compatible | FIXTURE-VERIFIED | 2026-10-18 | FIXTURE-VERIFIED | FIXTURE-VERIFIED | FIXTURE-VERIFIED | FIXTURE-VERIFIED | FIXTURE-VERIFIED | FIXTURE-VERIFIED | FIXTURE-VERIFIED | PARTIAL | FIXTURE-VERIFIED | FIXTURE-VERIFIED | FIXTURE-VERIFIED | FIXTURE-VERIFIED | FIXTURE-VERIFIED | FIXTURE-VERIFIED | PARTIAL | UNTESTED |
+| openai_responses | FIXTURE-VERIFIED | 2026-10-18 | FIXTURE-VERIFIED | FIXTURE-VERIFIED | FIXTURE-VERIFIED | FIXTURE-VERIFIED | FIXTURE-VERIFIED | FIXTURE-VERIFIED | FIXTURE-VERIFIED | FIXTURE-VERIFIED | FIXTURE-VERIFIED | FIXTURE-VERIFIED | FIXTURE-VERIFIED | FIXTURE-VERIFIED | FIXTURE-VERIFIED | FIXTURE-VERIFIED | PARTIAL | UNTESTED |
+| vertex | PARTIAL | 2026-10-18 | PARTIAL | PARTIAL | UNTESTED | UNTESTED | UNTESTED | UNTESTED | UNTESTED | UNTESTED | UNTESTED | UNTESTED | UNTESTED | UNTESTED | UNTESTED | UNTESTED | UNTESTED | UNTESTED |
+<!-- END GENERATED CONFORMANCE MANIFEST -->
+
 | Client ingress | Upstream | Text | Streaming | Tools | Tool-result turns | Reasoning | Images |
 |---|---|---:|---:|---:|---:|---:|---:|
 | Anthropic `/v1/messages` | Anthropic-compatible | Native | Native | Native | Native | Native | Provider-dependent |
