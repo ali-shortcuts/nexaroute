@@ -102,6 +102,49 @@ type DecisionConfig struct {
 	Shadow           bool   `json:"shadow,omitempty"`             // Phase 12: compute the decision but never apply it
 }
 
+// AutopilotConfig (Phase 18) drives the routing-policy change lifecycle:
+// a candidate policy version is canaried against the incumbent, judged by a
+// gate built from real signals, and promoted or automatically rolled back.
+// It is opt-in and changes routing policy only — never credentials, budgets or
+// stored data.
+type AutopilotConfig struct {
+	Enabled bool `json:"enabled,omitempty"`
+	// PolicyID is the routing policy under change. When empty, decision.policy
+	// is the target.
+	PolicyID string `json:"policy_id,omitempty"`
+	// CandidatePolicyID is the policy entry staged as the new version. It must
+	// reference an existing decision_policies[] entry. Empty means no canary is
+	// started at boot (the operator starts it explicitly).
+	CandidatePolicyID string `json:"candidate_policy_id,omitempty"`
+	// CanaryPercent is the bounded share of requests (0-100) that may be served
+	// by the candidate. 0 disables canary traffic.
+	CanaryPercent float64 `json:"canary_percent,omitempty"`
+	// CanaryMaxRequests additionally bounds the canary by request count
+	// (0 = unbounded by count).
+	CanaryMaxRequests int64 `json:"canary_max_requests,omitempty"`
+	// MinSamples is the minimum candidate request count before any verdict
+	// other than hold is allowed (no promotion on missing data).
+	MinSamples int `json:"min_samples,omitempty"`
+	// MinPromoteSamples is the sample count required before promotion.
+	MinPromoteSamples int `json:"min_promote_samples,omitempty"`
+	// MaxErrorRate is the candidate error rate that trips a rollback.
+	MaxErrorRate float64 `json:"max_error_rate,omitempty"`
+	// MaxErrorRateDelta is the candidate-minus-incumbent error-rate margin that
+	// trips a rollback (compared over the same window).
+	MaxErrorRateDelta float64 `json:"max_error_rate_delta,omitempty"`
+	// MaxFailoverRate is the candidate failover rate that trips a rollback.
+	MaxFailoverRate float64 `json:"max_failover_rate,omitempty"`
+	// MaxNoEligibleRate is the candidate no-eligible-candidate rate that trips a
+	// rollback.
+	MaxNoEligibleRate float64 `json:"max_no_eligible_rate,omitempty"`
+	// MaxBudgetAnomalies is the count of budget-reservation anomalies that trips
+	// a rollback.
+	MaxBudgetAnomalies int64 `json:"max_budget_anomalies,omitempty"`
+	// MaxLatencyP95MS and MaxTTFTP95MS are optional latency ceilings (0 disables).
+	MaxLatencyP95MS float64 `json:"max_latency_p95_ms,omitempty"`
+	MaxTTFTP95MS    float64 `json:"max_ttft_p95_ms,omitempty"`
+}
+
 type DecisionProviderHealthConfig struct {
 	FailureThreshold     int `json:"failure_threshold,omitempty"`      // consecutive failures in window to open cooldown (default 3)
 	FailureWindowSeconds int `json:"failure_window_seconds,omitempty"` // window seconds (default 30)
@@ -232,6 +275,7 @@ type Config struct {
 	Evaluation             EvaluationConfig             `json:"evaluation,omitempty"`
 	Video                  VideoConfig                  `json:"video,omitempty"`
 	Decision               DecisionConfig               `json:"decision,omitempty"`
+	Autopilot              AutopilotConfig              `json:"autopilot,omitempty"`
 	DecisionPolicies       []DecisionPolicyConfig       `json:"decision_policies,omitempty"`
 	DecisionProviders      []DecisionProviderConfig     `json:"decision_providers,omitempty"`
 	DecisionChains         []DecisionChainConfig        `json:"decision_chains,omitempty"`
@@ -867,6 +911,8 @@ const (
 	maxDecisionChains       = 64
 	maxDecisionChainSteps   = 8
 	maxDecisionChainIDBytes = 256
+	// Phase 18 autopilot limits
+	maxAutopilotSamples = 100000000
 )
 
 func validLocalID(s string) bool {
@@ -1575,6 +1621,8 @@ func (c *Config) ApplyDefaults() {
 			dp.TaskOverrides = norm
 		}
 	}
+	c.Autopilot.PolicyID = strings.TrimSpace(c.Autopilot.PolicyID)
+	c.Autopilot.CandidatePolicyID = strings.TrimSpace(c.Autopilot.CandidatePolicyID)
 	for i := range c.DecisionProviders {
 		dp := &c.DecisionProviders[i]
 		dp.ID = strings.TrimSpace(dp.ID)
@@ -2510,6 +2558,62 @@ func (c Config) Validate() error {
 		}
 		if len(c.DecisionPolicies) == 0 {
 			return fmt.Errorf("decision_policies must contain at least one policy when provider=policy")
+		}
+	}
+	// Phase 18: routing-policy canary autopilot. It only orchestrates existing
+	// policy entries, so every referenced policy must already exist.
+	if c.Autopilot.Enabled {
+		target := c.Autopilot.PolicyID
+		if target == "" {
+			target = c.Decision.Policy
+		}
+		if target == "" {
+			return fmt.Errorf("autopilot.policy_id is required (or set decision.policy)")
+		}
+		if len(target) > maxPolicyIDBytes || !validLocalID(target) {
+			return fmt.Errorf("autopilot policy id %q invalid", target)
+		}
+		if _, ok := seenPolicyIDs[target]; !ok {
+			return fmt.Errorf("autopilot.policy_id %q references unknown decision policy", target)
+		}
+		if c.Autopilot.CandidatePolicyID != "" {
+			if len(c.Autopilot.CandidatePolicyID) > maxPolicyIDBytes || !validLocalID(c.Autopilot.CandidatePolicyID) {
+				return fmt.Errorf("autopilot candidate policy id %q invalid", c.Autopilot.CandidatePolicyID)
+			}
+			if _, ok := seenPolicyIDs[c.Autopilot.CandidatePolicyID]; !ok {
+				return fmt.Errorf("autopilot.candidate_policy_id %q references unknown decision policy", c.Autopilot.CandidatePolicyID)
+			}
+			if c.Autopilot.CandidatePolicyID == target {
+				return fmt.Errorf("autopilot.candidate_policy_id must differ from the target policy")
+			}
+		}
+		if math.IsNaN(c.Autopilot.CanaryPercent) || math.IsInf(c.Autopilot.CanaryPercent, 0) || c.Autopilot.CanaryPercent < 0 || c.Autopilot.CanaryPercent > 100 {
+			return fmt.Errorf("autopilot.canary_percent must be finite and between 0 and 100")
+		}
+		if c.Autopilot.CanaryMaxRequests < 0 {
+			return fmt.Errorf("autopilot.canary_max_requests must not be negative")
+		}
+		if c.Autopilot.MinSamples < 0 || c.Autopilot.MinSamples > maxAutopilotSamples {
+			return fmt.Errorf("autopilot.min_samples must be between 0 and %d", maxAutopilotSamples)
+		}
+		if c.Autopilot.MinPromoteSamples < 0 || c.Autopilot.MinPromoteSamples > maxAutopilotSamples {
+			return fmt.Errorf("autopilot.min_promote_samples must be between 0 and %d", maxAutopilotSamples)
+		}
+		for name, v := range map[string]float64{
+			"autopilot.max_error_rate":       c.Autopilot.MaxErrorRate,
+			"autopilot.max_error_rate_delta": c.Autopilot.MaxErrorRateDelta,
+			"autopilot.max_failover_rate":    c.Autopilot.MaxFailoverRate,
+			"autopilot.max_no_eligible_rate": c.Autopilot.MaxNoEligibleRate,
+		} {
+			if math.IsNaN(v) || math.IsInf(v, 0) || v < 0 || v > 1 {
+				return fmt.Errorf("%s must be finite and between 0 and 1", name)
+			}
+		}
+		if c.Autopilot.MaxLatencyP95MS < 0 || c.Autopilot.MaxTTFTP95MS < 0 {
+			return fmt.Errorf("autopilot latency ceilings must not be negative")
+		}
+		if c.Autopilot.MaxBudgetAnomalies < 0 {
+			return fmt.Errorf("autopilot.max_budget_anomalies must not be negative")
 		}
 	}
 

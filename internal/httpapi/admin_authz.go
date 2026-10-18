@@ -50,10 +50,11 @@ func adminPermissionForRequest(r *http.Request) (authz.Permission, bool) {
 		return writeOnly(authz.WriteProviders)
 	case path == "/admin/api/compat/reset":
 		return writeOnly(authz.WriteProviders)
-	case path == "/admin/api/route-preview":
-		// Decision preview is strictly read-only; it writes nothing and
-		// issues no provider call, so it rides the routing-read permission.
-		// Non-GET methods are denied here before the handler runs.
+	case path == "/admin/api/route-preview" || path == "/admin/api/autopilot":
+		// Decision preview and the policy autopilot status block are strictly
+		// read-only; they write nothing and issue no provider call, so they ride
+		// the routing-read permission. Non-GET methods are denied here before
+		// the handler runs.
 		return readOnly(authz.ReadRouting)
 	case strings.HasPrefix(path, "/admin/api/video/jobs/") && strings.HasSuffix(path, "/force-fail"):
 		return writeOnly(authz.ManageVideo)
