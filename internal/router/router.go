@@ -560,6 +560,12 @@ func (r *Router) orderReadyMesh(out []Scored, req Requirement, cfg config.Config
 				copy(out[1:i+1], out[0:i])
 				out[0] = chosen
 				diversifyProviderFailover(out, 1, cfg.Routing.MaxAttempts)
+				// Session affinity stays authoritative when enabled
+				// (#421): a promoted pin must NOT be silently
+				// overridden by the P2C load-spreading choice below,
+				// or the pin's cache-warmth purpose is defeated in
+				// the default strategy (orderCostAware already
+				// returns here). Unpinned traffic keeps P2C.
 				return
 			}
 		}
