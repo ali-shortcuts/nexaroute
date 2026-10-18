@@ -78,6 +78,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		ReasoningKeys:          []string{"thinking", "reasoning"},
 		ContentFields:          []string{"messages"},
 		MaxOutputTokens:        in.MaxTokens,
+		UserAgent:              r.Header.Get("User-Agent"),
 		ToolCountHint:          len(in.Tools),
 		ToolChoiceHint:         in.ToolChoice != nil,
 		ToolChoiceRequiredHint: toolChoiceRequired,
@@ -123,8 +124,10 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 			resolvedRoute = rr2
 		}
 	}
+	// Apply task intelligence (route-profile mode off/suggest/apply) after final route resolution
+	taskRes, candidates, resolvedRoute := s.applyTaskIntel(r, req, cfg, candidates, resolvedRoute, ti)
 	// Emit task_classified event (privacy-safe) after final resolution
-	s.emitTaskClassified(r.Header.Get("x-request-id"), ti, resolvedRoute)
+	s.emitTaskClassified(r.Header.Get("x-request-id"), ti, resolvedRoute, taskRes)
 	s.emitRouteResolved(r, "anthropic", resolvedRoute, candidates)
 	if len(candidates) == 0 {
 		// Gateway-side rejection before any upstream attempt: release

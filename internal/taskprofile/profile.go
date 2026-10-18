@@ -2,6 +2,11 @@ package taskprofile
 
 import "math"
 
+// RuleVersion versions the deterministic rule set behind Analyze.
+// Same features + same rule version => same classification. The version is
+// stamped on every TaskProfile so traces stay interpretable across upgrades.
+const RuleVersion = "v1"
+
 // TaskProfile is the deterministic classification result.
 // It is derived solely from RequestFeatures, never from raw prompts.
 type TaskProfile struct {
@@ -9,6 +14,8 @@ type TaskProfile struct {
 	Complexity  Complexity   `json:"complexity"`
 	Confidence  float64      `json:"confidence"` // 0.0-1.0
 	ReasonCodes []ReasonCode `json:"reason_codes"`
+	// RuleVersion is the classifier rule-set version that produced this profile.
+	RuleVersion string `json:"rule_version,omitempty"`
 
 	EstimatedContextTokens int `json:"estimated_context_tokens"`
 

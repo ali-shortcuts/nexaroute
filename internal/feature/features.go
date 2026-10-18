@@ -15,13 +15,16 @@ const (
 // Only bounded booleans, counts, enums, and truncated lengths are allowed.
 type RequestFeatures struct {
 	// Identity / structural
-	Protocol       Protocol `json:"protocol"`
-	ModelRequested string   `json:"model_requested,omitempty"` // bounded to 256
-	Streaming      bool     `json:"streaming"`
+	Protocol       Protocol    `json:"protocol"`
+	ModelRequested string      `json:"model_requested,omitempty"` // bounded to 256
+	Streaming      bool        `json:"streaming"`
+	ClientClass    ClientClass `json:"client_class"` // bounded UA family, never the raw UA
 
 	// Capability signals (mirrors router.Requirement fields)
 	HasVision          bool `json:"has_vision"`
 	VisionImageCount   int  `json:"vision_image_count"` // bounded
+	HasAudio           bool `json:"has_audio"`
+	AudioCount         int  `json:"audio_count"` // bounded
 	HasReasoning       bool `json:"has_reasoning"`
 	HasTools           bool `json:"has_tools"`
 	ToolCount          int  `json:"tool_count"`  // capped
@@ -71,6 +74,7 @@ const (
 	maxSessionKeyLen       = 256
 	maxRelevantTextBytes   = 64 * 1024 // 64 KiB lexical scan budget
 	maxVisionImageCount    = 100
+	maxAudioCount          = 100
 	maxToolCount           = 128
 	maxCodeBlockCount      = 100
 	maxMessageCount        = 10000

@@ -15,6 +15,7 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/probe"
 	"github.com/ali-shortcuts/nexaroute/internal/providers"
 	"github.com/ali-shortcuts/nexaroute/internal/router"
+	"github.com/ali-shortcuts/nexaroute/internal/taskintel"
 	"github.com/ali-shortcuts/nexaroute/internal/taskprofile"
 )
 
@@ -324,7 +325,7 @@ func TestTaskClassification_Privacy_Canary(t *testing.T) {
 		Features: feat,
 		Profile:  profile,
 	}
-	s.emitTaskClassified("req-canary", ti, nil)
+	s.emitTaskClassified("req-canary", ti, nil, taskintel.Resolve(taskintel.Input{}))
 	evs := bus.Snapshot()
 	for _, ev := range evs {
 		if ev.Kind == "task_classified" {
@@ -389,7 +390,13 @@ func TestTaskClassification_EventEmission(t *testing.T) {
 			RequiresTools:          true,
 		},
 	}
-	s.emitTaskClassified("req-123", ti, nil)
+	// Suggest mode: the resolution is recorded in the trace without touching routing.
+	res := taskintel.Resolve(taskintel.Input{
+		Mode:      taskintel.ModeSuggest,
+		Profile:   ti.Profile,
+		TaskPools: map[string]string{"coding": "code-pool"},
+	})
+	s.emitTaskClassified("req-123", ti, nil, res)
 	evs := bus.Snapshot()
 	found := false
 	for _, ev := range evs {
@@ -404,8 +411,13 @@ func TestTaskClassification_EventEmission(t *testing.T) {
 			if ev.TaskReasonCodes == "" {
 				t.Fatalf("expected reason codes")
 			}
-			if ev.Message != "request classified" {
-				t.Fatalf("unexpected message")
+			// The message carries the intelligence decision in redacted form.
+			if !strings.Contains(ev.Message, "coding") || !strings.Contains(ev.Message, "suggested") {
+				t.Fatalf("message should describe the decision, got %q", ev.Message)
+			}
+			if ev.TaskIntelMode != "suggest" || ev.TaskIntelOutcome != "suggested" || ev.TaskIntelPool != "code-pool" {
+				t.Fatalf("task-intel fields not recorded: mode=%q outcome=%q pool=%q",
+					ev.TaskIntelMode, ev.TaskIntelOutcome, ev.TaskIntelPool)
 			}
 		}
 	}

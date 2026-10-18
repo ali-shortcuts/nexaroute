@@ -38,6 +38,14 @@ type Event struct {
 	TaskHasReasoning  bool    `json:"task_has_reasoning,omitempty"`
 	TaskHasTools      bool    `json:"task_has_tools,omitempty"`
 	TaskStructuredOut bool    `json:"task_structured_out,omitempty"`
+	// Phase 19 — task intelligence application (privacy-safe, bounded).
+	// These describe what the intelligence layer decided, never prompt content.
+	TaskIntelMode    string `json:"task_intel_mode,omitempty"`    // off | suggest | apply
+	TaskIntelOutcome string `json:"task_intel_outcome,omitempty"` // off | suggested | applied | pinned | overridden | low_confidence | unmapped
+	TaskIntelPool    string `json:"task_intel_pool,omitempty"`    // target pool for the effective task
+	TaskPin          string `json:"task_pin,omitempty"`           // validated client pin, if any
+	TaskClientClass  string `json:"task_client_class,omitempty"`  // bounded UA family
+	TaskHasAudio     bool   `json:"task_has_audio,omitempty"`
 	// Phase D — decision plane (privacy-safe, bounded)
 	DecisionProvider       string  `json:"decision_provider,omitempty"`
 	DecisionAction         string  `json:"decision_action,omitempty"`
@@ -131,7 +139,12 @@ const (
 	maxEventTaskType     = 32
 	maxEventTaskComplex  = 32
 	maxEventTaskReason   = 512
-	counterOverflowKey   = "__other__"
+	// Phase 19 task-intel bounds
+	maxEventTaskIntelMode    = 16
+	maxEventTaskIntelOutcome = 32
+	maxEventTaskPin          = 32
+	maxEventTaskClientClass  = 16
+	counterOverflowKey       = "__other__"
 	// Phase D decision bounds
 	maxEventDecisionProvider    = 128
 	maxEventDecisionAction      = 32
@@ -244,6 +257,11 @@ func (b *Bus) Add(e Event) {
 	e.TaskType = boundedString(e.TaskType, maxEventTaskType)
 	e.TaskComplexity = boundedString(e.TaskComplexity, maxEventTaskComplex)
 	e.TaskReasonCodes = boundedString(e.TaskReasonCodes, maxEventTaskReason)
+	e.TaskIntelMode = boundedString(e.TaskIntelMode, maxEventTaskIntelMode)
+	e.TaskIntelOutcome = boundedString(e.TaskIntelOutcome, maxEventTaskIntelOutcome)
+	e.TaskIntelPool = boundedString(e.TaskIntelPool, maxEventPool)
+	e.TaskPin = boundedString(e.TaskPin, maxEventTaskPin)
+	e.TaskClientClass = boundedString(e.TaskClientClass, maxEventTaskClientClass)
 	e.DecisionProvider = boundedString(e.DecisionProvider, maxEventDecisionProvider)
 	e.DecisionAction = boundedString(e.DecisionAction, maxEventDecisionAction)
 	e.DecisionSelected = boundedString(e.DecisionSelected, maxEventDecisionSelected)
