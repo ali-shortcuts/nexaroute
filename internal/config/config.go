@@ -690,6 +690,17 @@ type ProbeConfig struct {
 	Concurrency       int  `json:"concurrency"`
 	RecoveryAttempts  int  `json:"recovery_attempts"`
 	RecoveryRetryMS   int  `json:"recovery_retry_ms"`
+	// RecoverySuccessThreshold is how many successful recovery probes are
+	// required before a quarantined deployment re-enters the ready set. The
+	// default is 3 (threshold recovery out of RecoveryAttempts probes); set it
+	// equal to RecoveryAttempts for strict N-of-N recovery. Capped at
+	// RecoveryAttempts so a lower attempt count never blocks startup.
+	RecoverySuccessThreshold int `json:"recovery_success_threshold"`
+	// RecoveryCooldownSeconds is the cooldown applied after a full recovery
+	// cycle fails to reach RecoverySuccessThreshold. Default 900 (15 minutes).
+	// It is independent of routing.cooldown_seconds, which still governs
+	// request-driven circuit breaking.
+	RecoveryCooldownSeconds int `json:"recovery_cooldown_seconds"`
 	// CapabilityProbes enables Level B compatibility probing (bounded,
 	// cached per deployment) in addition to Level A availability probes.
 	CapabilityProbes bool `json:"capability_probes"`
@@ -797,6 +808,14 @@ const (
 	maxProviderConcurrency    = 4096
 	maxProbeConcurrency       = 1024
 	maxRoutingAttempts        = 64
+	// defaultRecoverySuccessThreshold is the default number of successful
+	// recovery probes required before a quarantined deployment is re-admitted.
+	// It is capped at probe.recovery_attempts at load time.
+	defaultRecoverySuccessThreshold = 3
+	// defaultRecoveryCooldownSeconds is the default cooldown applied after a
+	// recovery cycle fails to reach the success threshold before retrying.
+	defaultRecoveryCooldownSeconds = 900
+
 	// maxProbeTokens pins the health-check token budget to exactly one token.
 	// Synthetic availability probes must never spend real generation budget;
 	// validation rejects any attempt to raise it.
@@ -947,7 +966,7 @@ func Default() Config {
 			MaxRepairAttempts: 1, SanitizeEnabled: true,
 			HedgingEnabled: false, HedgingDelayMS: 1500,
 		},
-		Probe:                  ProbeConfig{Enabled: true, OnStart: true, IntervalSeconds: 120, ReadyLeaseSeconds: 300, TimeoutMS: 8000, MaxTokens: 1, Concurrency: 16, RecoveryAttempts: 5, RecoveryRetryMS: 500, CapabilityProbes: true},
+		Probe:                  ProbeConfig{Enabled: true, OnStart: true, IntervalSeconds: 120, ReadyLeaseSeconds: 300, TimeoutMS: 8000, MaxTokens: 1, Concurrency: 16, RecoveryAttempts: 5, RecoveryRetryMS: 500, RecoverySuccessThreshold: defaultRecoverySuccessThreshold, RecoveryCooldownSeconds: defaultRecoveryCooldownSeconds, CapabilityProbes: true},
 		Cache:                  CacheConfig{Enabled: false, TTLSeconds: 300, MaxEntries: 256, MaxBodyBytes: 1 << 20},
 		ClientAuth:             ClientAuthConfig{Enabled: false, RPM: 0},
 		BudgetAlerts:           BudgetAlertsConfig{TimeoutSeconds: 5},
@@ -1318,6 +1337,21 @@ func (c *Config) ApplyDefaults() {
 	if c.Probe.RecoveryAttempts == 0 {
 		c.Probe.RecoveryAttempts = 5
 		c.warnDefault("probe.recovery_attempts", "not set; defaulted to 5")
+	}
+	if c.Probe.RecoverySuccessThreshold == 0 {
+		c.Probe.RecoverySuccessThreshold = defaultRecoverySuccessThreshold
+		c.warnDefault("probe.recovery_success_threshold", "not set; defaulted to 3")
+	}
+	if c.Probe.RecoverySuccessThreshold > c.Probe.RecoveryAttempts {
+		// Compatibility: an operator who lowered recovery_attempts without
+		// setting the threshold must still start. Clamp instead of failing
+		// closed so an upgrade never bricks a running gateway.
+		c.Probe.RecoverySuccessThreshold = c.Probe.RecoveryAttempts
+		c.warnDefault("probe.recovery_success_threshold", "exceeds probe.recovery_attempts; clamped to the attempt count")
+	}
+	if c.Probe.RecoveryCooldownSeconds == 0 {
+		c.Probe.RecoveryCooldownSeconds = defaultRecoveryCooldownSeconds
+		c.warnDefault("probe.recovery_cooldown_seconds", "not set; defaulted to 900")
 	}
 	for i := range c.Providers {
 		c.Providers[i].ApplyDefaults()
@@ -2116,6 +2150,12 @@ func (c Config) Validate() error {
 	}
 	if c.Probe.RecoveryAttempts < 1 || c.Probe.RecoveryAttempts > 100 {
 		return errors.New("probe.recovery_attempts must be between 1 and 100")
+	}
+	if c.Probe.RecoverySuccessThreshold < 1 || c.Probe.RecoverySuccessThreshold > c.Probe.RecoveryAttempts {
+		return errors.New("probe.recovery_success_threshold must be between 1 and probe.recovery_attempts")
+	}
+	if c.Probe.RecoveryCooldownSeconds < 1 || c.Probe.RecoveryCooldownSeconds > 7*24*60*60 {
+		return errors.New("probe.recovery_cooldown_seconds must be between 1 and 604800")
 	}
 	if c.Probe.RecoveryRetryMS < 0 || c.Probe.RecoveryRetryMS > 60000 {
 		return errors.New("probe.recovery_retry_ms must be between 0 and 60000")
@@ -3165,6 +3205,31 @@ func (c Config) ProbeTimeout() time.Duration {
 }
 func (c Config) ProbeRecoveryRetry() time.Duration {
 	return time.Duration(c.Probe.RecoveryRetryMS) * time.Millisecond
+}
+
+// ProbeRecoverySuccessThreshold returns the number of successful recovery
+// probes required before re-admission. It is never less than one and never
+// greater than the configured attempt count.
+func (c Config) ProbeRecoverySuccessThreshold() int {
+	threshold := c.Probe.RecoverySuccessThreshold
+	if threshold < 1 {
+		threshold = defaultRecoverySuccessThreshold
+	}
+	if attempts := c.Probe.RecoveryAttempts; attempts > 0 && threshold > attempts {
+		threshold = attempts
+	}
+	return threshold
+}
+
+// ProbeRecoveryCooldown returns the cooldown applied after a recovery cycle
+// fails to reach the success threshold. It is independent of the request
+// circuit-breaker cooldown.
+func (c Config) ProbeRecoveryCooldown() time.Duration {
+	seconds := c.Probe.RecoveryCooldownSeconds
+	if seconds <= 0 {
+		seconds = defaultRecoveryCooldownSeconds
+	}
+	return time.Duration(seconds) * time.Second
 }
 func (c Config) RetryBackoff() time.Duration {
 	return time.Duration(c.Routing.RetryBackoffMS) * time.Millisecond
