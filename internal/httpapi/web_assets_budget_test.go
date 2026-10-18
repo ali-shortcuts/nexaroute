@@ -18,7 +18,10 @@ var webAssetBudgets = map[string]int{
 	// Issue #411 groups the primary nav, discloses rare controls behind
 	// Advanced, and splits Settings into tabs, adding new EN/FA/PS copy.
 	// Keep the aggregate asset ceiling unchanged.
-	"web/app.js":          208 << 10,
+	// Issue #399 (Phase 7) routes the provider and routing control-plane
+	// surfaces through the EN/FA/PS body-copy dictionary and adds the
+	// routing eligibility/decision view, so app.js grows by translated copy.
+	"web/app.js":          240 << 10,
 	"web/styles.css":      96 << 10,
 	"web/visual-agent.js": 16 << 10,
 }
