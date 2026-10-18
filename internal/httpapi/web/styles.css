@@ -237,3 +237,10 @@ button.metric-card:hover,button.metric-card:focus-visible{border-color:var(--lin
 .video-workflow li.wf-active{color:var(--warn);border-color:var(--warn)}
 .video-workflow li.wf-failed,.video-workflow li.wf-attention{color:var(--bad);border-color:var(--bad)}
 .video-workflow li.wf-skipped{opacity:.55;text-decoration:line-through}
+.pg-transcript{display:flex;flex-direction:column;gap:10px;margin:14px 0;max-height:480px;overflow:auto}
+.pg-msg{border:1px solid var(--border);border-radius:12px;padding:10px 12px}
+.pg-msg.user{background:var(--surface-2)}
+.pg-msg-role{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:4px}
+.pg-msg-text{white-space:pre-wrap;word-break:break-word}
+.pg-badge{margin-top:8px;font-size:11px;color:var(--muted);border-top:1px dashed var(--border);padding-top:6px}
+.pg-advanced{margin-top:12px}
