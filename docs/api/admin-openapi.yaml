@@ -409,6 +409,33 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '405':
           $ref: '#/components/responses/MethodNotAllowed'
+  /admin/api/autopilot:
+    get:
+      summary: |
+        Read the policy canary autopilot status block: the incumbent and
+        candidate policy versions, the current lifecycle state
+        (draft/shadow/canary/promoted/rolled_back), canary share, in-flight
+        leases, bounded transition history, and any rollback incidents. The
+        response includes unsupported_signals. In the current HTTP adapter,
+        no-eligible rate and budget-anomaly attribution are not yet sourced
+        per policy lease; the gate reports missing coverage and holds promotion
+        instead of treating missing telemetry as zero. GET only; no provider
+        call is made.
+      x-permission: routing.read
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Operation result; see the handler and the admin snapshot model.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
   /admin/api/route-preview:
     get:
       summary: |
