@@ -96,6 +96,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, http.StatusBadRequest, "request JSON structure is too complex")
 		return
 	}
+	s.emitRequestAccepted(r, "openai", in.Model, in.Stream)
 	req := router.Requirement{Model: in.Model, Tools: ti.Features.HasTools, Vision: ti.Features.HasVision, Streaming: in.Stream, Reasoning: ti.Features.HasReasoning}
 	if req.Reasoning {
 		req.ProviderType = "openai_compatible"
@@ -133,6 +134,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 	}
 	// Emit task_classified event (privacy-safe, no raw prompt) after final route resolution
 	s.emitTaskClassified(r.Header.Get("x-request-id"), ti, resolvedRoute)
+	s.emitRouteResolved(r, "openai", resolvedRoute, candidates)
 	if len(candidates) == 0 {
 		// Gateway-side rejection before any upstream attempt: release
 		// the admission budget hold (Wave C-4).
@@ -221,7 +223,11 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 		toolDefs := primary.toolDefs
 		attempts++
 		attemptIndex := attempts - 1
-		s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_attempt", Deployment: c.Deployment.ID})
+		attemptKind := attemptKindPrimary
+		if attemptIndex > 0 {
+			attemptKind = attemptKindRetry
+		}
+		s.emitRouteAttempt(r.Header.Get("x-request-id"), "openai", in.Model, attemptIndex+1, c, attemptKind)
 		start := time.Now()
 		out, winner, hedgeLaunched := s.doAttemptWithHedge(routeCtx, r.Header.Get("x-request-id"), cfg, candidates, i, attempts, max, primary,
 			func(idx int) (hedgeAttemptBundle, bool) {
@@ -391,29 +397,39 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 				s.hm.RecordTTFT(deploymentID, d)
 				s.observeTelemetryTTFT(deploymentID, d)
 				noteSpanTTFT(r.Context(), d)
+				s.emitStreamCommitted(r.Header.Get("x-request-id"), deploymentID, c.Deployment.ProviderID, "openai", d)
 			})
 		}
+		var inputTokens, outputTokens int
 		switch {
 		case kind != "":
 			// Canonical-IR upstream (Gemini / Responses-native) decoded through
 			// the IR and re-encoded for the OpenAI client.
 			if in.Stream {
 				e = s.canonicalStreamPump(w, resp, kind, "openai_chat", in.Model, r.Header.Get("x-request-id"), toolDefs,
-					func(u canonical.Usage) { s.recordUsageCanonical(r, c.Deployment.ID, kind, u) })
+					func(u canonical.Usage) {
+						inputTokens, outputTokens = u.InputTokens, u.OutputTokens
+						s.recordUsageCanonical(r, c.Deployment.ID, kind, u)
+					})
 			} else {
 				e = s.handleCanonicalResponse(w, resp, kind, "openai_chat", in.Model, r.Header.Get("x-request-id"), false, toolDefs,
-					func(u canonical.Usage) { s.recordUsageCanonical(r, c.Deployment.ID, kind, u) })
+					func(u canonical.Usage) {
+						inputTokens, outputTokens = u.InputTokens, u.OutputTokens
+						s.recordUsageCanonical(r, c.Deployment.ID, kind, u)
+					})
 			}
 		case c.Deployment.ProviderType == "openai_compatible":
 			if in.Stream {
 				e = proxyNativeSSE(w, resp, "openai", func(prompt, completion int) {
+					inputTokens, outputTokens = prompt, completion
 					s.recordUsage(r, c.Deployment.ID, int64(prompt), int64(completion))
 				})
 			} else {
-				e = s.proxyOpenAINativeJSON(w, r, resp, c.Deployment.ID, cacheKey, cacheGeneration, cacheable, semCtx)
+				inputTokens, outputTokens, e = s.proxyOpenAINativeJSON(w, r, resp, c.Deployment.ID, cacheKey, cacheGeneration, cacheable, semCtx)
 			}
 		case in.Stream:
 			e = streamAnthropicToOpenAIWithUsage(w, resp, in.Model, nm, func(prompt, completion int) {
+				inputTokens, outputTokens = prompt, completion
 				s.recordUsage(r, c.Deployment.ID, int64(prompt), int64(completion))
 			}, r.Header.Get("x-request-id"))
 		default:
@@ -421,6 +437,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 			e = decodeValidatedJSONLimited(resp.Body, &an, validateAnthropicResponseJSON)
 			resp.Body.Close()
 			if e == nil {
+				inputTokens, outputTokens = an.Usage.InputTokens, an.Usage.OutputTokens
 				s.recordUsage(r, c.Deployment.ID, int64(an.Usage.InputTokens), int64(an.Usage.OutputTokens))
 				translated := translate.AnthropicResponseToOpenAI(an, in.Model, nm)
 				if b, merr := json.Marshal(translated); merr == nil {
@@ -481,6 +498,11 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 			ev.PublicModel = resolvedRoute.PublicModel
 			ev.RouteProfile = resolvedRoute.RouteProfileID
 			ev.Pool = resolvedRoute.PrimaryPoolID
+		}
+		if inputTokens > 0 || outputTokens > 0 {
+			ev.InputTokens = inputTokens
+			ev.OutputTokens = outputTokens
+			ev.CostBasis = "actual"
 		}
 		s.bus.Add(ev)
 		if prevStatus != "healthy" {

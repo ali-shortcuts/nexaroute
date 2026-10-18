@@ -87,6 +87,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		anthropicErrorJSON(w, http.StatusBadRequest, "request JSON structure is too complex")
 		return
 	}
+	s.emitRequestAccepted(r, "anthropic", in.Model, in.Stream)
 	req := router.Requirement{Model: in.Model, Tools: ti.Features.HasTools, Vision: ti.Features.HasVision, Streaming: in.Stream, Reasoning: ti.Features.HasReasoning}
 	if req.Reasoning {
 		req.ProviderType = "anthropic_compatible"
@@ -124,6 +125,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	// Emit task_classified event (privacy-safe) after final resolution
 	s.emitTaskClassified(r.Header.Get("x-request-id"), ti, resolvedRoute)
+	s.emitRouteResolved(r, "anthropic", resolvedRoute, candidates)
 	if len(candidates) == 0 {
 		// Gateway-side rejection before any upstream attempt: release
 		// the admission budget hold (Wave C-4).
@@ -211,7 +213,11 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		toolDefs := primary.toolDefs
 		attempts++
 		attemptIndex := attempts - 1
-		s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_attempt", Deployment: c.Deployment.ID})
+		attemptKind := attemptKindPrimary
+		if attemptIndex > 0 {
+			attemptKind = attemptKindRetry
+		}
+		s.emitRouteAttempt(r.Header.Get("x-request-id"), "anthropic", in.Model, attemptIndex+1, c, attemptKind)
 		start := time.Now()
 		out, winner, hedgeLaunched := s.doAttemptWithHedge(routeCtx, r.Header.Get("x-request-id"), cfg, candidates, i, attempts, max, primary,
 			func(idx int) (hedgeAttemptBundle, bool) {
@@ -397,22 +403,31 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 				s.hm.RecordTTFT(deploymentID, d)
 				s.observeTelemetryTTFT(deploymentID, d)
 				noteSpanTTFT(r.Context(), d)
+				s.emitStreamCommitted(r.Header.Get("x-request-id"), deploymentID, c.Deployment.ProviderID, "anthropic", d)
 			})
 		}
+		var inputTokens, outputTokens int
 		switch {
 		case kind != "":
 			// Canonical-IR upstream (Gemini / Responses-native): decode into
 			// canonical events/blocks and re-encode for the Anthropic client.
 			if in.Stream {
 				e = s.canonicalStreamPump(w, resp, kind, "anthropic", in.Model, r.Header.Get("x-request-id"), toolDefs,
-					func(u canonical.Usage) { s.recordUsageCanonical(r, c.Deployment.ID, kind, u) })
+					func(u canonical.Usage) {
+						inputTokens, outputTokens = u.InputTokens, u.OutputTokens
+						s.recordUsageCanonical(r, c.Deployment.ID, kind, u)
+					})
 			} else {
 				e = s.handleCanonicalResponse(w, resp, kind, "anthropic", in.Model, r.Header.Get("x-request-id"), false, toolDefs,
-					func(u canonical.Usage) { s.recordUsageCanonical(r, c.Deployment.ID, kind, u) })
+					func(u canonical.Usage) {
+						inputTokens, outputTokens = u.InputTokens, u.OutputTokens
+						s.recordUsageCanonical(r, c.Deployment.ID, kind, u)
+					})
 			}
 		case c.Deployment.ProviderType == "anthropic_compatible":
 			if in.Stream {
 				e = proxyNativeSSEWithModel(w, resp, "anthropic", in.Model, func(prompt, completion int) {
+					inputTokens, outputTokens = prompt, completion
 					s.recordUsage(r, c.Deployment.ID, int64(prompt), int64(completion))
 				})
 			} else {
@@ -427,6 +442,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 				}
 				if e == nil {
 					if p, ct, cw, cr, ok := extractAnthropicUsageFull(b); ok {
+						inputTokens, outputTokens = p, ct
 						s.recordUsageEx(r, c.Deployment.ID, usage.Counts{Input: int64(p), Output: int64(ct), CacheRead: int64(cr), CacheWrite: int64(cw)}, false)
 					}
 					s.cacheStoreResponse(cacheKey, cacheGeneration, cacheable, c.Deployment.ID, resp.StatusCode, "application/json", b)
@@ -438,6 +454,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 			}
 		case in.Stream:
 			e = streamOpenAIToAnthropicWithUsage(w, resp, in.Model, nm, func(prompt, completion int) {
+				inputTokens, outputTokens = prompt, completion
 				s.recordUsage(r, c.Deployment.ID, int64(prompt), int64(completion))
 			}, r.Header.Get("x-request-id"))
 		default:
@@ -445,6 +462,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 			e = decodeValidatedJSONLimited(resp.Body, &o, validateOpenAIResponseJSON)
 			resp.Body.Close()
 			if e == nil {
+				inputTokens, outputTokens = o.Usage.PromptTokens, o.Usage.CompletionTokens
 				s.recordUsage(r, c.Deployment.ID, int64(o.Usage.PromptTokens), int64(o.Usage.CompletionTokens))
 				var translated core.AnthResponse
 				translated, e = translate.OpenAIResponseToAnthropic(o, in.Model, nm)
@@ -509,6 +527,11 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 			ev.PublicModel = resolvedRoute.PublicModel
 			ev.RouteProfile = resolvedRoute.RouteProfileID
 			ev.Pool = resolvedRoute.PrimaryPoolID
+		}
+		if inputTokens > 0 || outputTokens > 0 {
+			ev.InputTokens = inputTokens
+			ev.OutputTokens = outputTokens
+			ev.CostBasis = "actual"
 		}
 		s.bus.Add(ev)
 		if prevStatus != "healthy" {
