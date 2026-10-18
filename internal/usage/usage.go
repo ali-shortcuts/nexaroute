@@ -8,6 +8,7 @@
 package usage
 
 import (
+	"math"
 	"sort"
 	"sync"
 )
@@ -239,10 +240,18 @@ func (t *Tracker) Snapshot(prices map[string]Price) Snapshot {
 		// without record-time costing.
 		row.EstimatedCost = row.RecordedCostUSD
 		if p, ok := prices[row.Deployment]; ok {
-			row.EstimatedCost += (float64(tot.unpricedPrompt)/1_000_000)*p.InputPerMTok +
-				(float64(tot.unpricedCompletion)/1_000_000)*p.OutputPerMTok
+			inRate := p.InputPerMTok
+			outRate := p.OutputPerMTok
+			if math.IsNaN(inRate) || math.IsInf(inRate, 0) || inRate < 0 {
+				inRate = 0
+			}
+			if math.IsNaN(outRate) || math.IsInf(outRate, 0) || outRate < 0 {
+				outRate = 0
+			}
+			row.EstimatedCost += (float64(tot.unpricedPrompt)/1_000_000)*inRate +
+				(float64(tot.unpricedCompletion)/1_000_000)*outRate
 		}
-		if row.EstimatedCost < 0 {
+		if row.EstimatedCost < 0 || math.IsNaN(row.EstimatedCost) || math.IsInf(row.EstimatedCost, 0) {
 			row.EstimatedCost = 0
 		}
 		totalCost += row.EstimatedCost

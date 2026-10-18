@@ -215,13 +215,25 @@ func (l *Ledger) Reconciliation(jobID string) (estimate, actual, delta float64, 
 	if !found {
 		return 0, 0, 0, false, false
 	}
+	est := r.estimate.EstimatedUSD
+	if math.IsNaN(est) || math.IsInf(est, 0) || est < 0 {
+		est = 0
+	}
+	act := r.actual
+	if math.IsNaN(act) || math.IsInf(act, 0) || act < 0 {
+		act = 0
+	}
 	switch r.state {
 	case actualSettledState:
-		return r.estimate.EstimatedUSD, r.actual, r.actual - r.estimate.EstimatedUSD, true, true
+		d := act - est
+		if math.IsNaN(d) || math.IsInf(d, 0) {
+			d = 0
+		}
+		return est, act, d, true, true
 	case estimateSettledState:
-		return r.estimate.EstimatedUSD, 0, 0, false, true
+		return est, 0, 0, false, true
 	default:
-		return r.estimate.EstimatedUSD, 0, 0, false, true
+		return est, 0, 0, false, true
 	}
 }
 func (l *Ledger) Entries() []video.CostEstimate {

@@ -246,3 +246,22 @@ func TestLedgerConcurrentReservationsAndSettlement(t *testing.T) {
 func jobID(i int) string {
 	return "job-" + string(rune('a'+i))
 }
+
+func TestLedgerReconciliationUnknownAndReleasedStates(t *testing.T) {
+	var ledger Ledger
+	// Unknown job.
+	if _, _, _, _, ok := ledger.Reconciliation("missing"); ok {
+		t.Fatal("unknown job reported ok")
+	}
+	// Released state keeps its estimate but is not reconciled.
+	e := knownEstimate(2)
+	if err := ledger.ReserveForJob("released", e, 0); err != nil {
+		t.Fatal(err)
+	}
+	ledger.ReleaseForJob("released")
+	est, act, delta, reconciled, ok := ledger.Reconciliation("released")
+	if !ok || reconciled || act != 0 || delta != 0 || est != 2 {
+		t.Fatalf("released reconciliation = (%v,%v,%v,%v,%v)", est, act, delta, reconciled, ok)
+	}
+	// Reconciliation never returns non-finite values.
+}
