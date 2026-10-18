@@ -294,6 +294,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_fail", Deployment: c.Deployment.ID, Message: lastErr, ErrorType: "provider_connection_failed", FailoverClass: "transient_transport", LatencyMS: headerLatency.Milliseconds()})
 			s.emitProductionEvent(r.Header.Get("x-request-id"), ProductionEventModelFailed, c.Deployment.ID, lastErr, events.Event{ErrorType: "provider_connection_failed", LatencyMS: headerLatency.Milliseconds()})
 			if attempts < max && i+1 < len(candidates) {
+				s.autopilotRecordFailover(autopilotRequestKeyFromContext(r.Context(), r.Header.Get("x-request-id")))
 				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "failover", Deployment: c.Deployment.ID, Message: "transport failure; trying next eligible candidate", FailoverClass: "transient_transport"})
 				s.emitProductionEvent(r.Header.Get("x-request-id"), ProductionEventRequestFailover, c.Deployment.ID, "transport failure; trying next eligible candidate", events.Event{})
 			}
@@ -368,6 +369,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 				s.emitProductionEvent(r.Header.Get("x-request-id"), ProductionEventModelCooldown, c.Deployment.ID, lastErr, events.Event{ErrorType: policy.ErrorType, StatusCode: resp.StatusCode})
 			}
 			if (policy.Failover || cls.CapabilityFailure) && attempts < max && i+1 < len(candidates) {
+				s.autopilotRecordFailover(autopilotRequestKeyFromContext(r.Context(), r.Header.Get("x-request-id")))
 				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "failover", Deployment: c.Deployment.ID, Message: fmt.Sprintf("HTTP %d; trying next eligible candidate", resp.StatusCode), StatusCode: resp.StatusCode, FailoverClass: policy.ErrorType})
 				s.emitProductionEvent(r.Header.Get("x-request-id"), ProductionEventRequestFailover, c.Deployment.ID, fmt.Sprintf("HTTP %d; trying next eligible candidate", resp.StatusCode), events.Event{StatusCode: resp.StatusCode})
 				s.retryPause(routeCtx, r.Header.Get("x-request-id"), cfg, attemptIndex, max)
@@ -399,6 +401,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 			deploymentID := c.Deployment.ID
 			resp.Body = observeFirstByte(resp.Body, start, func(d time.Duration) {
 				s.hm.RecordTTFT(deploymentID, d)
+				s.autopilotRecordTTFT(autopilotRequestKeyFromContext(r.Context(), r.Header.Get("x-request-id")), d)
 				s.observeTelemetryTTFT(deploymentID, d)
 				noteSpanTTFT(r.Context(), d)
 				s.emitStreamCommitted(r.Header.Get("x-request-id"), deploymentID, c.Deployment.ProviderID, "openai", d)
@@ -490,6 +493,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 				s.hm.RecordFailure(c.Deployment.ID, lastErr, total)
 			}
 			s.hm.RecordProviderFailure(c.Deployment.ProviderID, c.Deployment.ID, lastErr)
+			s.autopilotMarkTerminalFailure(autopilotRequestKeyFromContext(r.Context(), r.Header.Get("x-request-id")))
 			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "stream_fail", Deployment: c.Deployment.ID, Message: lastErr, ErrorType: "provider_stream_error", LatencyMS: total.Milliseconds(), StatusCode: resp.StatusCode})
 			return
 		}
