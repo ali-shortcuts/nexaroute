@@ -32,6 +32,11 @@ func TestVideoStudioWorkflowWiring(t *testing.T) {
 		"j.retry_safety",                                       // server-derived assessment, never a client guess
 		"Retry risks duplicate billing",
 		"Needs manual action",
+		"syncCapabilityFields",    // #414 item 3: form re-gates on provider change
+		"capNote",                 // declared-capabilities note under the provider select
+		"modesOf",                 // modes offered come from declared capabilities
+		"asset-meta",              // #414 item 5: per-asset integrity line
+		"sha256 ",                  // checksum surfaced (prefix) on the asset line
 	} {
 		if !strings.Contains(appJS, want) {
 			t.Errorf("app.js missing video studio workflow wiring %q", want)

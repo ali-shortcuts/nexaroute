@@ -1722,7 +1722,7 @@
       (j.last_error ? '<p class="video-error" role="alert">' + esc(j.last_error) + '</p>' : '') +
       (activeStates.includes(status) && progress === 0 ? '<div class="video-progress"><div class="video-progress-line"><progress max="1"></progress><span>In progress — provider has not reported a percentage</span></div>' + (shotLabel ? '<small>' + esc(shotLabel) + '</small>' : '') + '</div>' : '<div class="video-progress"><div class="video-progress-line"><progress max="1" value="' + progress.toFixed(3) + '"></progress><span>' + progressLabel + '%</span></div>' + (shotLabel ? '<small>' + esc(shotLabel) + '</small>' : '') + '</div>') +
       (Array.isArray(j.workflow) && j.workflow.length ? '<ol class="video-workflow">' + j.workflow.map(st => '<li class="wf-' + esc(st.status) + '" title="' + esc(st.label + ': ' + st.status + (st.detail ? ' — ' + st.detail : '')) + '">' + esc(st.label) + '</li>').join('') + '</ol>' : '') + retrySafetyLine(j) +
-      (assets.length ? '<div class="video-assets">' + downloadButtons + '</div>' : '') + '</div><div class="tile-actions"><button class="button ghost small" data-action="copy" data-copy="' + esc(id) + '">Copy job ID</button>' +
+      (assets.length ? '<div class="video-assets">' + downloadButtons + assets.map(a => '<span class="asset-meta">' + esc(a.filename || a.id || 'asset') + (a.content_type ? ' · ' + esc(a.content_type) : '') + (a.size_bytes ? ' · ' + (a.size_bytes >= 1048576 ? (a.size_bytes / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(a.size_bytes / 1024)) + ' KB') : '') + (a.sha256 ? ' · sha256 ' + esc(String(a.sha256).slice(0, 12)) + '…' : '') + '</span>').join('') + '</div>' : '') + '</div><div class="tile-actions"><button class="button ghost small" data-action="copy" data-copy="' + esc(id) + '">Copy job ID</button>' +
       (canCancel ? '<button class="button danger small" data-action="cancel-video" data-id="' + esc(id) + '">Cancel</button>' : '') +
       (canForceFail && activeStates.includes(status) ? '<button class="button danger small" data-action="force-fail-video" data-id="' + esc(id) + '">Force fail</button>' : '') +
       (status === 'composing' ? '<small class="muted">Final composition is in progress; cancellation is disabled to protect the output.</small>' : '') + '</div></article>';
@@ -1735,6 +1735,14 @@
     const idempotencyKey = crypto.randomUUID?.() || Date.now() + Math.random();
     const providers = state.videoProviders.map((p, i) => '<option value="' + esc(p.id) + '"' + (i === 0 ? ' selected' : '') + '>' + esc(p.id) + (p.kind ? ' · ' + esc(p.kind) : '') + (p.production_ready === false ? ' · non-production' : '') + '</option>').join('');
     const providerOptions = providers || '<option value="" disabled selected>No provider available</option>';
+    const modeLabels = { text_to_video: 'Text to video', image_to_video: 'Image to video', video_to_video: 'Video to video (edit/extend)' };
+    const capsOf = p => (p && p.capabilities) || {};
+    const modesOf = p => { const m = capsOf(p).modes; return Array.isArray(m) && m.length ? m : ['text_to_video']; };
+    const aspectsOf = p => { const a = capsOf(p).aspect_ratios; return Array.isArray(a) && a.length ? a : ['16:9', '9:16', '1:1']; };
+    const modeOptions = (p, selected) => modesOf(p).map(m => '<option value="' + esc(m) + '"' + (m === selected ? ' selected' : '') + '>' + esc(modeLabels[m] || m) + '</option>').join('');
+    const aspectOptions = (p, selected) => aspectsOf(p).map(a => '<option' + (a === selected ? ' selected' : '') + '>' + esc(a) + '</option>').join('');
+    const capNote = p => { const c = capsOf(p); if (!p) return ''; if (!Array.isArray(c.modes) || !c.modes.length) return 'This provider declares no capability list — only text-to-video is offered and the server validates the request against the adapter.'; const parts = ['modes: ' + modesOf(p).map(m => modeLabels[m] || m).join(', ')]; if (c.max_duration_seconds) parts.push('max duration ' + c.max_duration_seconds + 's'); if (Array.isArray(c.aspect_ratios) && c.aspect_ratios.length) parts.push('aspects ' + c.aspect_ratios.join(', ')); if (Array.isArray(c.resolutions) && c.resolutions.length) parts.push('resolutions ' + c.resolutions.join(', ')); return 'Declared capabilities — ' + parts.join(' · ') + '. Controls list only what this adapter declares; the server re-validates.'; };
+    const firstProvider = state.videoProviders[0];
     const crProvider = state.videoProviders.find(p => p.id === 'code-render');
     const crModels = (crProvider && crProvider.capabilities && Array.isArray(crProvider.capabilities.models)) ? crProvider.capabilities.models : [];
     const crModelOptions = crModels.map((m, i) => '<option value="' + esc(m) + '"' + (i === 0 ? ' selected' : '') + '>' + esc(m) + '</option>').join('') || '<option value="" disabled selected>No planning model configured</option>';
@@ -1749,10 +1757,10 @@
     const form = '<p class="muted">Jobs run asynchronously. Select an explicit configured provider. For an episode, paste a JSON array of shots; the Gateway checkpoints each clip and composes a final silent MP4.</p>' +
       '<div class="form-grid">' +
       '<div class="field full"><label for="v-prompt">Creative brief <span class="muted">optional when shot plan is supplied</span></label><textarea id="v-prompt" rows="4" placeholder="A time-travelling guide introduces Persepolis at sunrise…"></textarea></div>' +
-      '<div class="field"><label for="v-mode">Mode</label><select id="v-mode"><option value="text_to_video">Text to video</option></select><small class="muted">The configured ComfyUI adapter currently supports text-to-video only.</small></div>' +
+      '<div class="field"><label for="v-mode">Mode</label><select id="v-mode">' + modeOptions(firstProvider, 'text_to_video') + '</select><small class="muted">Only modes the selected adapter declares are listed.</small></div>' +
       '<div class="field"><label for="v-duration">Duration (seconds)</label><input id="v-duration" type="number" min="1" max="3600" value="8"><small class="muted">Overridden by the sum of shot durations when a plan is supplied.</small></div>' +
-      '<div class="field"><label for="v-aspect">Aspect ratio</label><select id="v-aspect"><option>16:9</option><option>9:16</option><option>1:1</option></select></div>' +
-      '<div class="field"><label for="v-provider">Provider</label><select id="v-provider">' + providerOptions + '</select></div>' +
+      '<div class="field"><label for="v-aspect">Aspect ratio</label><select id="v-aspect">' + aspectOptions(firstProvider, '16:9') + '</select></div>' +
+      '<div class="field"><label for="v-provider">Provider</label><select id="v-provider">' + providerOptions + '</select><small class="muted" id="v-cap-note">' + esc(capNote(firstProvider)) + '</small></div>' +
       '<div class="field"><label for="v-episode">Episode ID <span class="muted">optional</span></label><input id="v-episode" placeholder="noora-persepolis-01"></div>' +
       '<div class="field full"><label for="v-negative">Negative prompt <span class="muted">optional</span></label><input id="v-negative" placeholder="flicker, extra limbs, unreadable text"></div>' +
       '<div class="field full"><label for="v-narration">Narration script <span class="muted">optional</span></label><textarea id="v-narration" rows="4" placeholder="Noora introduces Persepolis and explains its history…"></textarea><small class="muted">Gateway narration requires video.piper_enabled and a local Piper voice model. Use a multi-shot plan. Per-shot narration_segment values are used if this field is empty.</small></div>' +
@@ -1839,9 +1847,11 @@
       await refreshVideo();
     }, 'Queue job');
     const syncUniversalFields = () => { const box = $('#v-universal-fields'), sel = $('#v-provider'); if (box && sel) box.style.display = sel.value === 'code-render' ? '' : 'none'; };
+    const syncCapabilityFields = () => { const sel = $('#v-provider'); if (!sel) return; const p = state.videoProviders.find(x => x.id === sel.value); const modeSel = $('#v-mode'); if (modeSel) modeSel.innerHTML = modeOptions(p, modesOf(p).includes(modeSel.value) ? modeSel.value : modesOf(p)[0]); const aspectSel = $('#v-aspect'); if (aspectSel) aspectSel.innerHTML = aspectOptions(p, aspectsOf(p).includes(aspectSel.value) ? aspectSel.value : aspectsOf(p)[0]); const dur = $('#v-duration'); const capMax = Number(capsOf(p).max_duration_seconds); if (dur) { dur.max = capMax > 0 ? String(capMax) : '3600'; if (capMax > 0 && Number(dur.value) > capMax) dur.value = String(capMax); } const note = $('#v-cap-note'); if (note) note.textContent = capNote(p); };
     const providerSelect = $('#v-provider');
-    if (providerSelect) providerSelect.addEventListener('change', syncUniversalFields);
+    if (providerSelect) providerSelect.addEventListener('change', () => { syncUniversalFields(); syncCapabilityFields(); });
     syncUniversalFields();
+    syncCapabilityFields();
   }
   async function previewVideoPlan() {
     const model = $('#v-planning-model') ? $('#v-planning-model').value : '';
