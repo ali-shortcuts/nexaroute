@@ -252,9 +252,6 @@ func TestAutopilotRecordsFailoverTTFTAndPost200StreamFailure(t *testing.T) {
 	if _, exists := s.autopilotLeases.Load("signal-request"); exists {
 		t.Fatal("policy lease leaked after request finish")
 	}
-	if entry, exists := s.autopilotLeases.Load("signal-request"); exists {
-		t.Fatalf("request lease entry leaked after finish: %+v", entry)
-	}
 }
 
 func TestAutopilotLeasesDoNotCollideOnRepeatedExternalRequestID(t *testing.T) {
@@ -297,10 +294,10 @@ func TestAutopilotLeasesDoNotCollideOnRepeatedExternalRequestID(t *testing.T) {
 	if _, exists := s.autopilotLeases.Load(key2); exists {
 		t.Fatal("second request lease leaked")
 	}
-	if _, exists := s.autopilotSignalsFor(key1); exists {
+	if got := s.autopilotSignalsFor(key1); got != nil {
 		t.Fatal("first request signal state remained reachable after finish")
 	}
-	if _, exists := s.autopilotSignalsFor(key2); exists {
+	if got := s.autopilotSignalsFor(key2); got != nil {
 		t.Fatal("second request signal state remained reachable after finish")
 	}
 }
@@ -392,6 +389,16 @@ func TestAutopilotConfigReloadDetectsCandidateAndGateChanges(t *testing.T) {
 	candidateChanged.CandidatePolicyID = "candidate-b"
 	if !autopilotConfigNeedsRebuild(ctrl, original, candidateChanged, "balanced") {
 		t.Fatal("changing the candidate must rebuild the controller")
+	}
+	percentChanged := original
+	percentChanged.CanaryPercent = 0
+	if !autopilotConfigNeedsRebuild(ctrl, original, percentChanged, "balanced") {
+		t.Fatal("changing canary percentage must rebuild the controller")
+	}
+	requestLimitChanged := original
+	requestLimitChanged.CanaryMaxRequests = 50
+	if !autopilotConfigNeedsRebuild(ctrl, original, requestLimitChanged, "balanced") {
+		t.Fatal("changing the canary request limit must rebuild the controller")
 	}
 	gateChanged := original
 	gateChanged.MaxErrorRate = 0.05
