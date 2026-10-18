@@ -101,7 +101,14 @@ func TestActivityViewStaleNeverLive(t *testing.T) {
 	if !strings.Contains(live, "lc.state === 'stale' ? 'Stale — not live'") {
 		t.Errorf("live list must label stale requests explicitly: %s", live)
 	}
-	if !strings.Contains(live, "activityBucket(lc.state) === 'stale' ? 'warn'") {
-		t.Errorf("stale requests must use the non-live warning styling")
+	// #489 item 3: stale requests use the dedicated `stale` pill
+	// state (stronger than the previous generic warning styling the
+	// assertion used to pin); active requests use `live`. A stale
+	// request must never carry the live state.
+	if !strings.Contains(live, "lc.state === 'stale' ? 'stale'") {
+		t.Errorf("stale requests must use the dedicated stale pill state")
+	}
+	if !strings.Contains(live, "lc.state === 'active' ? 'live'") {
+		t.Errorf("active requests must use the live pill state")
 	}
 }
