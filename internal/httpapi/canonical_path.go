@@ -601,6 +601,7 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if attempts < max && i+1 < len(candidates) {
+				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "failover", Deployment: deployment.ID, Message: "transport failure; trying next eligible candidate", FailoverClass: "transient_transport"})
 				s.emitProductionEvent(r.Header.Get("x-request-id"), ProductionEventRequestFailover, deployment.ID, "transport failure; trying next eligible candidate", events.Event{})
 				s.retryPause(routeCtx, r.Header.Get("x-request-id"), cfg, attempts-1, max)
 				continue
@@ -659,6 +660,7 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 				s.emitProductionEvent(r.Header.Get("x-request-id"), ProductionEventModelCooldown, deployment.ID, safeMessage, events.Event{ErrorType: policy.ErrorType, StatusCode: lastStatus})
 			}
 			if (policy.Failover || cls.CapabilityFailure) && attempts < max && i+1 < len(candidates) {
+				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "failover", Deployment: deployment.ID, Message: fmt.Sprintf("HTTP %d; trying next eligible candidate", lastStatus), StatusCode: lastStatus, FailoverClass: policy.ErrorType})
 				s.emitProductionEvent(r.Header.Get("x-request-id"), ProductionEventRequestFailover, deployment.ID, fmt.Sprintf("HTTP %d; trying next eligible candidate", lastStatus), events.Event{StatusCode: lastStatus})
 				s.retryPause(routeCtx, r.Header.Get("x-request-id"), cfg, attempts-1, max)
 				continue

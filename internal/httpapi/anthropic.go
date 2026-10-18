@@ -292,10 +292,10 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 			} else {
 				s.hm.RecordFailure(c.Deployment.ID, lastErr, headerLatency)
 			}
-			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_fail", Deployment: c.Deployment.ID, Message: lastErr, ErrorType: "provider_connection_failed", LatencyMS: headerLatency.Milliseconds()})
+			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_fail", Deployment: c.Deployment.ID, Message: lastErr, ErrorType: "provider_connection_failed", FailoverClass: "transient_transport", LatencyMS: headerLatency.Milliseconds()})
 			s.emitProductionEvent(r.Header.Get("x-request-id"), ProductionEventModelFailed, c.Deployment.ID, lastErr, events.Event{ErrorType: "provider_connection_failed", LatencyMS: headerLatency.Milliseconds()})
 			if attempts < max && i+1 < len(candidates) {
-				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "failover", Deployment: c.Deployment.ID, Message: "transport failure; trying next eligible candidate"})
+				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "failover", Deployment: c.Deployment.ID, Message: "transport failure; trying next eligible candidate", FailoverClass: "transient_transport"})
 				s.emitProductionEvent(r.Header.Get("x-request-id"), ProductionEventRequestFailover, c.Deployment.ID, "transport failure; trying next eligible candidate", events.Event{})
 			}
 			s.retryPause(routeCtx, r.Header.Get("x-request-id"), cfg, attemptIndex, max)
@@ -369,7 +369,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 				s.emitProductionEvent(r.Header.Get("x-request-id"), ProductionEventModelCooldown, c.Deployment.ID, lastErr, events.Event{ErrorType: policy.ErrorType, StatusCode: resp.StatusCode})
 			}
 			if policy.Failover && attempts < max && i+1 < len(candidates) {
-				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "failover", Deployment: c.Deployment.ID, Message: fmt.Sprintf("HTTP %d; trying next eligible candidate", resp.StatusCode), StatusCode: resp.StatusCode})
+				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "failover", Deployment: c.Deployment.ID, Message: fmt.Sprintf("HTTP %d; trying next eligible candidate", resp.StatusCode), StatusCode: resp.StatusCode, FailoverClass: policy.ErrorType})
 				s.emitProductionEvent(r.Header.Get("x-request-id"), ProductionEventRequestFailover, c.Deployment.ID, fmt.Sprintf("HTTP %d; trying next eligible candidate", resp.StatusCode), events.Event{StatusCode: resp.StatusCode})
 				s.retryPause(routeCtx, r.Header.Get("x-request-id"), cfg, attemptIndex, max)
 				continue

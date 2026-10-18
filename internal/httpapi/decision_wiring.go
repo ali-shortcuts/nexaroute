@@ -173,7 +173,7 @@ func reorderScoredByDecision(original []router.Scored, ordered []decision.Candid
 }
 
 // emitDecisionEvent emits bounded decision plane events.
-func (s *Server) emitDecisionEvent(requestID string, result decision.DecisionResult, trace decision.DecisionTrace, resolvedRoute *route.ResolvedRoute, candidateCount int) {
+func (s *Server) emitDecisionEvent(requestID string, result decision.DecisionResult, trace decision.DecisionTrace, resolvedRoute *route.ResolvedRoute, candidateCount int, shadow bool) {
 	// Build bounded reason codes string
 	reasonStr := ""
 	if len(result.ReasonCodes) > 0 {
@@ -188,6 +188,8 @@ func (s *Server) emitDecisionEvent(requestID string, result decision.DecisionRes
 	if result.PolicyTrace != nil {
 		// Marshal selected and original breakdowns plus weights as privacy-safe JSON
 		type breakdownPayload struct {
+			PolicyID             string             `json:"policy_id,omitempty"`
+			PolicyVersion        string             `json:"policy_version,omitempty"`
 			SelectedID           string             `json:"selected_id,omitempty"`
 			OriginalPrimaryID    string             `json:"original_primary_id,omitempty"`
 			SelectedScore        float64            `json:"selected_score"`
@@ -197,6 +199,8 @@ func (s *Server) emitDecisionEvent(requestID string, result decision.DecisionRes
 			Weights              map[string]float64 `json:"weights,omitempty"`
 		}
 		payload := breakdownPayload{
+			PolicyID:             result.PolicyTrace.PolicyID,
+			PolicyVersion:        result.PolicyTrace.PolicyVersion,
 			SelectedID:           result.PolicyTrace.SelectedID,
 			OriginalPrimaryID:    result.PolicyTrace.OriginalPrimaryID,
 			SelectedScore:        result.PolicyTrace.SelectedScore,
@@ -210,6 +214,8 @@ func (s *Server) emitDecisionEvent(requestID string, result decision.DecisionRes
 		}
 	} else if trace.PolicyTrace != nil {
 		type breakdownPayload struct {
+			PolicyID             string             `json:"policy_id,omitempty"`
+			PolicyVersion        string             `json:"policy_version,omitempty"`
 			SelectedID           string             `json:"selected_id,omitempty"`
 			OriginalPrimaryID    string             `json:"original_primary_id,omitempty"`
 			SelectedScore        float64            `json:"selected_score"`
@@ -219,6 +225,8 @@ func (s *Server) emitDecisionEvent(requestID string, result decision.DecisionRes
 			Weights              map[string]float64 `json:"weights,omitempty"`
 		}
 		payload := breakdownPayload{
+			PolicyID:             trace.PolicyTrace.PolicyID,
+			PolicyVersion:        trace.PolicyTrace.PolicyVersion,
 			SelectedID:           trace.PolicyTrace.SelectedID,
 			OriginalPrimaryID:    trace.PolicyTrace.OriginalPrimaryID,
 			SelectedScore:        trace.PolicyTrace.SelectedScore,
@@ -282,6 +290,15 @@ func (s *Server) emitDecisionEvent(requestID string, result decision.DecisionRes
 			kind = "decision_ok"
 		}
 	}
+	// Shadow mode: a successfully computed decision is recorded as an
+	// observation (decision_shadow) rather than an applied decision. Engine
+	// failures keep their decision_fail/timeout/rejected kinds.
+	if shadow {
+		switch kind {
+		case "decision_ok", "decision_abstain":
+			kind = "decision_shadow"
+		}
+	}
 
 	ev := events.Event{
 		RequestID:              requestID,
@@ -312,6 +329,7 @@ func (s *Server) emitDecisionEvent(requestID string, result decision.DecisionRes
 	}
 	if result.PolicyTrace != nil {
 		ev.DecisionPolicyID = result.PolicyTrace.PolicyID
+		ev.DecisionPolicyVersion = result.PolicyTrace.PolicyVersion
 		ev.DecisionTaskType = result.PolicyTrace.TaskType
 		ev.DecisionOriginalPrimary = result.PolicyTrace.OriginalPrimaryID
 		ev.DecisionSelectedScore = result.PolicyTrace.SelectedScore
@@ -319,6 +337,7 @@ func (s *Server) emitDecisionEvent(requestID string, result decision.DecisionRes
 		ev.DecisionChangedPrimary = result.PolicyTrace.ChangedPrimary
 	} else if trace.PolicyTrace != nil {
 		ev.DecisionPolicyID = trace.PolicyTrace.PolicyID
+		ev.DecisionPolicyVersion = trace.PolicyTrace.PolicyVersion
 		ev.DecisionTaskType = trace.PolicyTrace.TaskType
 		ev.DecisionOriginalPrimary = trace.PolicyTrace.OriginalPrimaryID
 		ev.DecisionSelectedScore = trace.PolicyTrace.SelectedScore
@@ -453,7 +472,14 @@ func (s *Server) applyDecisionPlane(
 
 	ordered, result, trace := orch.Decide(ctx, decisionReq)
 	// Emit decision event (bounded, privacy-safe)
-	s.emitDecisionEvent(requestID, result, trace, resolvedRoute, len(candidates))
+	s.emitDecisionEvent(requestID, result, trace, resolvedRoute, len(candidates), cfgDecision.Shadow)
+
+	// Shadow/evaluation mode: observe what the policy would have chosen without
+	// changing served traffic. The comparison (DecisionChangedPrimary,
+	// DecisionSelected vs DecisionOriginalPrimary) is recorded on the event.
+	if cfgDecision.Shadow {
+		return candidates
+	}
 
 	if len(ordered) == 0 {
 		return candidates
