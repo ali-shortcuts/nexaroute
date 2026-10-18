@@ -424,8 +424,8 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 	autopilotSection := map[string]any{"enabled": false}
 	if ctrl := s.autopilotSnapshot(); ctrl != nil {
 		autopilotSection = map[string]any{
-			"enabled": true,
-			"status": ctrl.Status(),
+			"enabled":             true,
+			"status":              ctrl.Status(),
 			"unsupported_signals": []string{"no_eligible_rate", "budget_anomalies"},
 		}
 	}
