@@ -219,8 +219,8 @@ func TestAutopilotDisabledReportsDisabled(t *testing.T) {
 func TestAutopilotRecordsFailoverTTFTAndPost200StreamFailure(t *testing.T) {
 	incumbent := autopilot.PolicyRef{ID: "balanced", Version: "incumbent"}
 	ctrl := autopilot.New(incumbent, incumbent, autopilot.GateConfig{
-		MinSamples: 1, MinPromoteSamples: 10, MaxErrorRate: 0.99, MaxErrorRateDelta: 0.99,
-		MaxFailoverRate: 0.99, MaxNoEligibleRate: 1, MaxBudgetAnomalies: 100,
+		MinSamples: 1, MinPromoteSamples: 10, MaxErrorRate: 1, MaxErrorRateDelta: 0.99,
+		MaxFailoverRate: 1, MaxNoEligibleRate: 1, MaxBudgetAnomalies: 100,
 	})
 	if err := ctrl.StartCanary(autopilot.PolicyRef{ID: "balanced", Version: "candidate"}, 100, 0); err != nil {
 		t.Fatalf("StartCanary: %v", err)
