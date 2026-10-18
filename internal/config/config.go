@@ -842,7 +842,40 @@ type ModelConfig struct {
 	ContextWindow     int          `json:"context_window,omitempty"`
 	InputCostPerMTok  float64      `json:"input_cost_per_mtok,omitempty"`
 	OutputCostPerMTok float64      `json:"output_cost_per_mtok,omitempty"`
+	// Source records whether the model id was added manually or accepted
+	// from a provider inventory. TestState only records bounded per-model
+	// probe outcomes; URL reachability is never sufficient to mark health.
+	Source            string       `json:"source,omitempty"`     // manual | discovered
+	TestState         string       `json:"test_state,omitempty"` // untested | passed | failed | degraded
 	Capabilities      Capabilities `json:"capabilities"`
+}
+
+// Model onboarding provenance values. Empty values remain valid for legacy
+// config and are summarized as manual/untested without mutating saved config.
+const (
+	ModelSourceManual     = "manual"
+	ModelSourceDiscovered = "discovered"
+
+	ModelTestUntested = "untested"
+	ModelTestPassed   = "passed"
+	ModelTestFailed   = "failed"
+	ModelTestDegraded = "degraded"
+)
+
+func ValidModelSource(v string) bool {
+	switch v {
+	case "", ModelSourceManual, ModelSourceDiscovered:
+		return true
+	}
+	return false
+}
+
+func ValidModelTestState(v string) bool {
+	switch v {
+	case "", ModelTestUntested, ModelTestPassed, ModelTestFailed, ModelTestDegraded:
+		return true
+	}
+	return false
 }
 
 type Capabilities struct {
@@ -2367,6 +2400,12 @@ func (c Config) Validate() error {
 			}
 			if math.IsNaN(m.Weight) || math.IsInf(m.Weight, 0) || m.Weight <= 0 || m.Weight > 1_000_000 {
 				return fmt.Errorf("deployment %q weight must be finite and between 0 and 1000000", p.ID+"/"+m.ID)
+			}
+			if !ValidModelSource(m.Source) {
+				return fmt.Errorf("deployment %q source %q must be manual or discovered", p.ID+"/"+m.ID, m.Source)
+			}
+			if !ValidModelTestState(m.TestState) {
+				return fmt.Errorf("deployment %q test_state %q must be untested, passed, failed or degraded", p.ID+"/"+m.ID, m.TestState)
 			}
 			if m.ContextWindow < 0 || m.ContextWindow > 100_000_000 {
 				return fmt.Errorf("deployment %q context_window must be between 0 and 100000000", p.ID+"/"+m.ID)
