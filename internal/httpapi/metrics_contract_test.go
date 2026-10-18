@@ -189,6 +189,7 @@ var metricLabelAllowlist = map[string]bool{
 	"error_type": true, "le": true, "task": true, "complexity": true,
 	"outcome": true, "type": true, "verdict": true, "dimension": true,
 	"provenance": true, "source": true, "mode": true, "evaluator": true,
+	"state": true,
 }
 
 var labelPairRE = regexp.MustCompile(`(?:^|[{,])([a-z_]+)="`)

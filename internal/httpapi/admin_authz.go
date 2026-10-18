@@ -39,7 +39,7 @@ func adminPermissionForRequest(r *http.Request) (authz.Permission, bool) {
 	switch {
 	case path == "/admin/api/snapshot" || path == "/admin/api/csrf-token":
 		return readOnly(authz.ReadConfig)
-	case path == "/admin/api/audit" || path == "/admin/api/events/stream":
+	case path == "/admin/api/audit" || path == "/admin/api/events/stream" || path == "/admin/api/activity/requests":
 		return readOnly(authz.ReadAudit)
 	case path == "/admin/api/usage/identities":
 		return readOnly(authz.ReadUsage)
