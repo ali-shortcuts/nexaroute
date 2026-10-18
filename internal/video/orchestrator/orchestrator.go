@@ -330,6 +330,16 @@ func validateProviderRequest(r video.VideoRequest, caps video.Capabilities) (vid
 	if hasReferenceInputs(r) && !caps.SupportsReferenceFrames {
 		return r, errors.New("provider does not support reference/first/last-frame inputs")
 	}
+	// Edit/extend briefs need the granular capabilities, not just
+	// the video_to_video mode (#510 item 6): a provider that
+	// declares the mode but cannot edit or extend must never
+	// receive the job.
+	if r.HasSourceVideo() && !caps.SupportsVideoEditing {
+		return r, errors.New("provider does not support video editing (source-video brief)")
+	}
+	if r.IsContinuityExtension() && !caps.SupportsClipExtension {
+		return r, errors.New("provider does not support clip extension (continuity brief)")
+	}
 	if strings.TrimSpace(r.CallbackURL) != "" && !caps.SupportsWebhooks {
 		return r, errors.New("provider does not support webhooks/callbacks; refusing a callback that would never fire")
 	}
