@@ -72,7 +72,7 @@ func TestTaskUISurfacingWiring(t *testing.T) {
 		"function taskRulesPanel()",
 		"state.snap.task_rules",
 		"'route_rules_title'",
-		"task: ${esc(e.task_type || 'unknown')}",
+		"${bt('ev_task')}: ${esc(e.task_type || 'unknown')}",
 		"e.task_intel_outcome",
 		"'eval_gated'",
 		"${taskRulesPanel()}",
