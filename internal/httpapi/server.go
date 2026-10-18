@@ -2,7 +2,7 @@ package httpapi
 
 import (
 	"context"
-	"crypto/rand
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"embed"
@@ -24,7 +24,7 @@ import (
 	"time"
 
 	"github.com/ali-shortcuts/nexaroute/internal/autopilot"
-	"github.com/ali-shortcuts/nexaroute/internal/cache
+	"github.com/ali-shortcuts/nexaroute/internal/cache"
 	"github.com/ali-shortcuts/nexaroute/internal/compat"
 	"github.com/ali-shortcuts/nexaroute/internal/config"
 	"github.com/ali-shortcuts/nexaroute/internal/decision"
