@@ -47,6 +47,16 @@ type clientKeyResponse struct {
 	// 0 means the key carries no budget cap. It is configuration
 	// metadata, never secret material.
 	BudgetUSD float64 `json:"budget_usd"`
+	// Live budget state from this gateway's in-memory ledger,
+	// emitted ONLY for keys with a configured limit — remaining
+	// budget is shown only when a limit makes it calculable
+	// (#435). Committed is settled spend; Reserved is in-flight
+	// reservations not yet settled. Per-instance scope: these
+	// numbers describe THIS process's ledger, never a global
+	// cross-replica budget.
+	BudgetCommittedUSD *float64 `json:"budget_committed_usd,omitempty"`
+	BudgetReservedUSD  *float64 `json:"budget_reserved_usd,omitempty"`
+	BudgetRemainingUSD *float64 `json:"budget_remaining_usd,omitempty"`
 	// Budget webhook alert overrides, mirroring the virtual-key
 	// config fields. The URL carries no credentials by validation
 	// and is operator configuration, safe for admin readers.
@@ -67,7 +77,18 @@ func (s *Server) adminClientKeys(w http.ResponseWriter, r *http.Request) {
 		cfg := s.currentConfig()
 		out := make([]clientKeyResponse, 0, len(cfg.ClientAuth.VirtualKeys))
 		for _, key := range cfg.ClientAuth.VirtualKeys {
-			out = append(out, publicClientKey(key, ""))
+			resp := publicClientKey(key, "")
+			if key.BudgetUSD > 0 && s.budgets != nil {
+				committed, reserved := s.budgets.Snapshot(key.ID, time.Now())
+				remaining := key.BudgetUSD - committed - reserved
+				if remaining < 0 {
+					remaining = 0
+				}
+				resp.BudgetCommittedUSD = &committed
+				resp.BudgetReservedUSD = &reserved
+				resp.BudgetRemainingUSD = &remaining
+			}
+			out = append(out, resp)
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"keys": out})
 	case http.MethodPost:
