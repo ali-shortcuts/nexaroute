@@ -629,6 +629,86 @@ def main() -> None:
                 assert not errors, f"Console errors after video checks: {errors}"
                 page.unroute("**/v1/video/providers", disabled_video_providers)
                 expected_disabled_404["active"] = False
+
+                # ---- #417 item 8: WebChat browser E2E. One
+                # mode-switched dispatcher stays routed for the
+                # whole section (the #539 lesson: no unmocked
+                # window between sub-scenarios, so no stray
+                # console errors leak into other sections).
+                chat_mode = {"mode": "failover"}
+                def mock_chat(route):
+                    if chat_mode["mode"] == "failover":
+                        sse = (
+                            'data: {"id":"chatcmpl-e2e","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":"failover "},"finish_reason":null}]}\n\n'
+                            'data: {"id":"chatcmpl-e2e","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"answer"},"finish_reason":null}]}\n\n'
+                            'data: {"id":"chatcmpl-e2e","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"completion_tokens":2,"total_tokens":14}}\n\n'
+                            'data: [DONE]\n\n'
+                        )
+                        route.fulfill(status=200, content_type="text/event-stream", headers={
+                            "x-gateway-deployment": "fakeprov-b/m",
+                            "x-gateway-provider": "fakeprov-b",
+                            "x-gateway-upstream-model": "fake-model",
+                            "x-gateway-public-model": "coding",
+                            "x-nexaroute-attempts": "fakeprov-a/m>fakeprov-b/m",
+                            "x-nexaroute-cache": "miss",
+                            "x-request-id": "e2e-chat-failover",
+                        }, body=sse)
+                    else:
+                        sse = (
+                            'data: {"id":"chatcmpl-e2e2","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":"second answer"},"finish_reason":null}]}\n\n'
+                            'data: {"id":"chatcmpl-e2e2","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":30,"completion_tokens":2,"total_tokens":32}}\n\n'
+                            'data: [DONE]\n\n'
+                        )
+                        route.fulfill(status=200, content_type="text/event-stream", headers={
+                            "x-gateway-deployment": "fakeprov-b/m",
+                            "x-gateway-provider": "fakeprov-b",
+                            "x-gateway-upstream-model": "fake-model",
+                            "x-gateway-public-model": "coding",
+                            "x-nexaroute-attempts": "fakeprov-b/m",
+                            "x-nexaroute-cache": "hit",
+                            "x-request-id": "e2e-chat-second",
+                        }, body=sse)
+                page.route("**/v1/chat/completions", mock_chat)
+                page.locator('[data-page="playground"]').click()
+                page.wait_for_load_state("domcontentloaded")
+                expect(page.locator("#pg-model")).to_contain_text("coding")
+                # Privacy line is stated on the surface (acceptance:
+                # stated behaviour matches tab-only storage).
+                expect(page.locator("#content")).to_contain_text("kept only in this tab")
+                page.locator("#pg-prompt").fill("hello gateway")
+                page.locator("#pg-send").click()
+                assistant = page.locator(".pg-msg.assistant")
+                expect(assistant.first).to_contain_text("failover answer")
+                badge = assistant.first.locator(".pg-badge")
+                # The badge resolves to the deployment that actually
+                # answered, with the failover trail IN ORDER —
+                # fakeprov-a tried first, fakeprov-b answered.
+                expect(badge).to_contain_text("fakeprov-b / fake-model · fakeprov-b/m")
+                expect(badge).to_contain_text("attempts fakeprov-a/m → fakeprov-b/m")
+                expect(badge).to_contain_text("done")
+                # The session strip shows the same pin.
+                expect(page.locator("#pg-session")).to_contain_text("fakeprov-b/m")
+                # A second turn keeps the history: both exchanges
+                # stay in the transcript, and a single-attempt
+                # reply carries no attempts trail.
+                chat_mode["mode"] = "plain"
+                page.locator("#pg-prompt").fill("and again")
+                page.locator("#pg-send").click()
+                expect(assistant.nth(1)).to_contain_text("second answer")
+                expect(assistant.nth(1).locator(".pg-badge")).to_contain_text("cache hit")
+                assert "attempts" not in assistant.nth(1).locator(".pg-badge").inner_text(), "single-attempt reply must not render an attempts trail"
+                expect(page.locator("#pg-session")).to_contain_text("12 → 30")
+                # Reload: the conversation is tab-memory only, so
+                # the transcript honestly resets — no server-side
+                # history is invented.
+                page.reload(wait_until="domcontentloaded")
+                page.locator('[data-page="playground"]').click()
+                page.wait_for_load_state("domcontentloaded")
+                expect(page.locator("#pg-transcript")).to_contain_text("No request yet.")
+                page.unroute("**/v1/chat/completions", mock_chat)
+                errors = [m for m in console_msgs if m[0] == "error"]
+                assert not errors, f"Console errors after WebChat E2E: {errors}"
+
                 # Evidence: Providers with video disabled (dark, both sizes).
                 video_dir = ROOT / "docs/browser-evidence/video-disabled"
                 video_dir.mkdir(parents=True, exist_ok=True)

@@ -55,6 +55,9 @@ type Server struct {
 	rt                *router.Router
 	hm                *health.Manager
 	bus               *events.Bus
+	attemptSeqMu      sync.Mutex
+	attemptSeq        map[string][]string
+	attemptSeqOrder   []string
 	probe             *probe.Engine
 	log               *log.Logger
 	requestSeq        atomic.Uint64

@@ -36,6 +36,7 @@ func openAIStructuredRequested(v any) bool {
 }
 
 func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
+	defer s.clearAttemptSeq(r.Header.Get("x-request-id"))
 	if r.Method != http.MethodPost {
 		errorJSON(w, 405, "method not allowed")
 		return
@@ -416,6 +417,9 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Gateway-Deployment", c.Deployment.ID)
 		w.Header().Set("X-Gateway-Provider", c.Deployment.ProviderID)
 		w.Header().Set("X-Gateway-Upstream-Model", c.Deployment.Model)
+		if v := s.attemptsHeaderValue(r.Header.Get("x-request-id")); v != "" {
+			w.Header().Set("X-NexaRoute-Attempts", v)
+		}
 		if in.Stream {
 			deploymentID := c.Deployment.ID
 			resp.Body = observeFirstByte(resp.Body, start, func(d time.Duration) {
