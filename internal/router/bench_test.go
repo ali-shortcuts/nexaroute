@@ -11,7 +11,9 @@ import (
 
 // M6-4: candidate scoring is on every data-plane request. Pool
 // sizes 10 and 100 deployments bracket realistic self-hosted
-// installs.
+// installs. Issue #437 adds 1000 to prove routing overhead stays
+// sub-linear-per-request at the large end of the candidate-pool
+// profile set.
 
 func benchRouter(b *testing.B, deployments int) *Router {
 	b.Helper()
@@ -51,6 +53,22 @@ func BenchmarkCandidates100(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		if got := r.Candidates(req); len(got) != 100 {
+			b.Fatalf("candidates = %d", len(got))
+		}
+	}
+}
+
+// BenchmarkCandidates1000 is the large candidate-pool scale point for
+// issue #437. It exercises the same selection hot path as the 10/100
+// points and reports allocations so a bounded per-candidate cost can be
+// compared across pool sizes.
+func BenchmarkCandidates1000(b *testing.B) {
+	r := benchRouter(b, 1000)
+	req := Requirement{Model: "m", Tools: true, Streaming: true}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if got := r.Candidates(req); len(got) != 1000 {
 			b.Fatalf("candidates = %d", len(got))
 		}
 	}
