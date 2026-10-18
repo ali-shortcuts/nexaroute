@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"sync"
 	"time"
@@ -317,18 +318,87 @@ func classifyAutopilotStatus(status int) autopilot.ErrorClass {
 // the UI "Autopilot" block reads. It is fed entirely by controller state; when
 // autopilot is disabled it reports enabled=false rather than an assumed status.
 func (s *Server) adminAutopilot(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
+	switch r.Method {
+	case http.MethodGet:
+		ctrl := s.autopilotSnapshot()
+		if ctrl == nil {
+			writeJSON(w, http.StatusOK, map[string]any{"enabled": false})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"enabled":             true,
+			"autopilot":           ctrl.Status(),
+			"unsupported_signals": []string{"budget_anomalies"},
+		})
+	case http.MethodPost:
+		s.adminAutopilotAction(w, r)
+	default:
 		errorJSON(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
 	}
+}
+
+// adminAutopilotAction performs one operator gate action
+// (#418): evaluate (record the current gate decision without
+// changing state), promote (only when the gate itself permits
+// — the operator cannot override missing or failing evidence),
+// or rollback (withdraw the candidate, restoring the
+// incumbent; routing policy only, in-flight leases finish on
+// the version they started with). Every outcome — including
+// refusals — is returned with the gate decision that explains
+// it, and successful actions are visible in the controller's
+// transition/incident history.
+func (s *Server) adminAutopilotAction(w http.ResponseWriter, r *http.Request) {
 	ctrl := s.autopilotSnapshot()
 	if ctrl == nil {
-		writeJSON(w, http.StatusOK, map[string]any{"enabled": false})
+		errorJSON(w, http.StatusConflict, "autopilot is not enabled")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"enabled":             true,
-		"autopilot":           ctrl.Status(),
-		"unsupported_signals": []string{"budget_anomalies"},
-	})
+	var body struct {
+		Action string `json:"action"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		errorJSON(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	switch body.Action {
+	case "evaluate":
+		res := ctrl.Evaluate()
+		writeJSON(w, http.StatusOK, map[string]any{
+			"action":    "evaluate",
+			"gate":      res,
+			"autopilot": ctrl.Status(),
+		})
+	case "promote":
+		tr, ok := ctrl.Promote()
+		if !ok {
+			res := ctrl.Evaluate()
+			writeJSON(w, http.StatusConflict, map[string]any{
+				"error":     "gate does not permit promotion",
+				"gate":      res,
+				"autopilot": ctrl.Status(),
+			})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"action":     "promote",
+			"transition": tr,
+			"autopilot":  ctrl.Status(),
+		})
+	case "rollback":
+		inc, ok := ctrl.Rollback("operator_rollback")
+		if !ok {
+			writeJSON(w, http.StatusConflict, map[string]any{
+				"error":     "no candidate to roll back",
+				"autopilot": ctrl.Status(),
+			})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"action":    "rollback",
+			"incident":  inc,
+			"autopilot": ctrl.Status(),
+		})
+	default:
+		errorJSON(w, http.StatusBadRequest, "action must be one of: evaluate, promote, rollback")
+	}
 }

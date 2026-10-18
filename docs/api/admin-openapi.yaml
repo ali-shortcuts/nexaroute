@@ -439,6 +439,36 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '405':
           $ref: '#/components/responses/MethodNotAllowed'
+    post:
+      summary: |
+        Perform one operator gate action on the policy canary autopilot.
+        The JSON body names the action: "evaluate" records the current
+        gate decision without changing state; "promote" promotes the
+        candidate only when the gate itself permits (an operator cannot
+        override missing or failing evidence — a refusal returns 409
+        with the gate decision); "rollback" withdraws the candidate and
+        restores the incumbent (routing policy only; in-flight leases
+        finish on the version they started with). Successful actions
+        appear in the status block's transition/incident history.
+      x-permission: routing.write
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Action outcome with the gate decision or transition/incident and the refreshed autopilot status.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: Conflict — autopilot disabled, gate refuses promotion, or no candidate to roll back; the body carries the gate decision or current status explaining the refusal.
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
   /admin/api/route-preview:
     get:
       summary: |
