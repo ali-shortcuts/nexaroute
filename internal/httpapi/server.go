@@ -1207,6 +1207,11 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 		}
 		trace := newTraceContext(r.Header.Get("traceparent"))
 		r = r.WithContext(withTrace(r.Context(), trace))
+		// Request IDs from callers are correlation metadata, not unique
+		// identities. Keep autopilot leases/signals on a server-generated key so
+		// concurrent requests that share x-request-id cannot overwrite each other.
+		autopilotKey := fmt.Sprintf("autopilot-%x", requestNumber)
+		r = r.WithContext(context.WithValue(r.Context(), autopilotRequestKeyContext{}, autopilotKey))
 		if s.telemetryExporter != nil && dataPlaneOperation(r.URL.Path) != "" {
 			r = r.WithContext(withSpanRecord(r.Context(), &spanRecord{}))
 		}
@@ -1239,7 +1244,7 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 					terminal = events.TerminalFailed
 				}
 				s.emitRequestFinished(rid, sw.status, duration, terminal)
-				s.autopilotRecordFinish(rid, sw.status, terminal, duration)
+				s.autopilotRecordFinish(autopilotKey, sw.status, terminal, duration)
 			}
 			s.exportSpan(r, trace, start, duration, sw.status)
 			if s.log != nil && strings.HasPrefix(r.URL.Path, "/admin/api/") && (isStateChanging(r.Method) || sw.status == http.StatusForbidden) {

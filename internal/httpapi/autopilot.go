@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"net/http"
 	"sync"
 	"time"
@@ -72,6 +73,20 @@ func (s *Server) autopilotSnapshot() *autopilot.Controller {
 	s.runtimeMu.RLock()
 	defer s.runtimeMu.RUnlock()
 	return s.autopilot
+}
+
+// autopilotRequestKeyContext carries a gateway-generated per-request key. The
+// public x-request-id is caller controlled and must not be used as a map key
+// for in-flight leases because concurrent requests can legitimately reuse it.
+type autopilotRequestKeyContext struct{}
+
+func autopilotRequestKeyFromContext(ctx context.Context, fallback string) string {
+	if ctx != nil {
+		if key, ok := ctx.Value(autopilotRequestKeyContext{}).(string); ok && key != "" {
+			return key
+		}
+	}
+	return fallback
 }
 
 // autopilotSelectPolicy overrides the requested policy id with the autopilot's

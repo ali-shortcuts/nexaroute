@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -253,5 +254,47 @@ func TestAutopilotRecordsFailoverTTFTAndPost200StreamFailure(t *testing.T) {
 	}
 	if _, exists := s.autopilotRequestSignals.Load("signal-request"); exists {
 		t.Fatal("request signal state leaked after request finish")
+	}
+}
+
+func TestAutopilotLeasesDoNotCollideOnRepeatedExternalRequestID(t *testing.T) {
+	incumbent := autopilot.PolicyRef{ID: "balanced", Version: "incumbent"}
+	ctrl := autopilot.New(incumbent, incumbent, autopilot.GateConfig{
+		MinSamples: 1, MinPromoteSamples: 10, MaxErrorRate: 1, MaxErrorRateDelta: 1,
+		MaxFailoverRate: 1, MaxNoEligibleRate: 1, MaxBudgetAnomalies: 100,
+	})
+	if err := ctrl.StartCanary(autopilot.PolicyRef{ID: "balanced", Version: "candidate"}, 100, 0); err != nil {
+		t.Fatalf("StartCanary: %v", err)
+	}
+	s := &Server{autopilot: ctrl}
+
+	// Client-provided request IDs can repeat across concurrent requests; the
+	// middleware-generated context keys must remain distinct.
+	ctx1 := context.WithValue(context.Background(), autopilotRequestKeyContext{}, "autopilot-1")
+	ctx2 := context.WithValue(context.Background(), autopilotRequestKeyContext{}, "autopilot-2")
+	const externalID = "client-reused-request-id"
+	key1 := autopilotRequestKeyFromContext(ctx1, externalID)
+	key2 := autopilotRequestKeyFromContext(ctx2, externalID)
+	if key1 == key2 {
+		t.Fatalf("internal autopilot keys collided: %q", key1)
+	}
+	if _, leased := s.autopilotSelectPolicy("balanced", key1); !leased {
+		t.Fatal("first request did not receive a policy lease")
+	}
+	if _, leased := s.autopilotSelectPolicy("balanced", key2); !leased {
+		t.Fatal("second request did not receive a policy lease")
+	}
+
+	s.autopilotRecordFinish(key1, http.StatusOK, "succeeded", 5*time.Millisecond)
+	s.autopilotRecordFinish(key2, http.StatusOK, "succeeded", 7*time.Millisecond)
+	signals := ctrl.Status().CandidateSignals
+	if signals.Requests != 2 || signals.Successes != 2 {
+		t.Fatalf("reused external request ID lost/cross-attributed a lease: %+v", signals)
+	}
+	if _, exists := s.autopilotLeases.Load(key1); exists {
+		t.Fatal("first request lease leaked")
+	}
+	if _, exists := s.autopilotLeases.Load(key2); exists {
+		t.Fatal("second request lease leaked")
 	}
 }
