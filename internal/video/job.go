@@ -81,15 +81,16 @@ type VideoJob struct {
 	// JobType is the brief classification stamped at creation
 	// (#510 item 6): text_to_video | image_to_video | edit_extend |
 	// compose, with the reason codes that produced it. Additive.
-	JobType          JobType         `json:"job_type,omitempty"`
-	JobTypeReasons   []string        `json:"job_type_reasons,omitempty"`
-	ShotExecutions   []ShotExecution `json:"shot_executions,omitempty"`
-	OutputAssets     []Asset         `json:"output_assets,omitempty"`
-	SourceAssets     []Asset         `json:"source_assets,omitempty"`
-	NarrationAsset   *Asset          `json:"narration_asset,omitempty"`
-	SubtitleAsset    *Asset          `json:"subtitle_asset,omitempty"`
-	EstimatedCostUSD float64         `json:"estimated_cost_usd,omitempty"`
-	ActualCostUSD    float64         `json:"actual_cost_usd,omitempty"`
+	ProviderSelection string          `json:"provider_selection,omitempty"`
+	JobType           JobType         `json:"job_type,omitempty"`
+	JobTypeReasons    []string        `json:"job_type_reasons,omitempty"`
+	ShotExecutions    []ShotExecution `json:"shot_executions,omitempty"`
+	OutputAssets      []Asset         `json:"output_assets,omitempty"`
+	SourceAssets      []Asset         `json:"source_assets,omitempty"`
+	NarrationAsset    *Asset          `json:"narration_asset,omitempty"`
+	SubtitleAsset     *Asset          `json:"subtitle_asset,omitempty"`
+	EstimatedCostUSD  float64         `json:"estimated_cost_usd,omitempty"`
+	ActualCostUSD     float64         `json:"actual_cost_usd,omitempty"`
 	// CostReconciled reports whether the ledger entry for this job was
 	// reconciled from the admission estimate to a provider-reported actual.
 	// It has no omitempty so unreconciled jobs are explicitly marked false

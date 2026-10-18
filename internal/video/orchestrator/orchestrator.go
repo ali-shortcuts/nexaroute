@@ -276,6 +276,16 @@ func (o *Orchestrator) Create(ctx context.Context, r video.VideoRequest) (video.
 
 	j := video.NewJob(fmt.Sprintf("video-%d", time.Now().UnixNano()), r)
 	j.Provider, j.Model = p.ID(), r.ModelPreference
+	// Selection evidence (#420 item 6): why this adapter runs
+	// this job — the request's preference, the brief's
+	// classification, and the estimate basis — recorded on
+	// the job so its timeline can show it verbatim.
+	estimateBasis := "price unknown"
+	if estimate.PriceKnown {
+		estimateBasis = fmt.Sprintf("priced estimate $%.2f", estimate.EstimatedUSD)
+	}
+	j.ProviderSelection = fmt.Sprintf("request preference %q -> provider %q (model %q); brief classified %s; %s",
+		r.ProviderPreference, p.ID(), r.ModelPreference, string(j.JobType), estimateBasis)
 	j.EstimatedCostUSD = estimate.EstimatedUSD
 	if r.DryRun {
 		j.State = video.StateDryRun

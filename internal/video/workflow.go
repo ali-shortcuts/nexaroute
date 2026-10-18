@@ -87,6 +87,9 @@ func WorkflowSteps(j VideoJob) []WorkflowStep {
 	// Provider selection: the provider is stamped at admission.
 	if j.Provider != "" {
 		set("select", "done")
+		if j.ProviderSelection != "" {
+			detail("select", j.ProviderSelection)
+		}
 	} else if j.State != StateQueued {
 		set("select", "active")
 	}

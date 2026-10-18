@@ -50,6 +50,7 @@ type Aggregator struct {
 	maxDuration    float64
 	costPerSecond  float64
 	imageField     string
+	endImageField  string
 	maxOutputBytes int64
 	client         *http.Client
 }
@@ -113,6 +114,7 @@ func NewAggregator(cfg video.Config, maxOutputBytes int64) (*Aggregator, error) 
 		baseURL: base, model: model, apiKey: apiKey, authScheme: scheme,
 		maxDuration: maxDuration, costPerSecond: cfg.AggregatorCostPerSecondUSD,
 		imageField:     strings.TrimSpace(cfg.AggregatorImageField),
+		endImageField:  strings.TrimSpace(cfg.AggregatorEndImageField),
 		maxOutputBytes: maxOutputBytes,
 		client: &http.Client{
 			Transport:     tr,
@@ -181,8 +183,16 @@ func (p *Aggregator) ValidateRequest(r video.VideoRequest) error {
 	if len(r.ShotPlan) > 1 {
 		return errors.New("aggregator adapter submits one generation per job; multi-shot composition is a gateway pipeline")
 	}
-	if len(r.CharacterReferences) > 0 || len(r.LocationReferences) > 0 || len(r.StyleReferences) > 0 || r.LastFrameAsset != nil || r.ContinuityContext != nil {
-		return errors.New("aggregator adapter cannot consume character/location/style references, last-frame, or continuity inputs")
+	if len(r.CharacterReferences) > 0 || len(r.LocationReferences) > 0 || len(r.StyleReferences) > 0 || r.ContinuityContext != nil {
+		return errors.New("aggregator adapter cannot consume character/location/style references or continuity inputs")
+	}
+	if r.LastFrameAsset != nil {
+		if p.endImageField == "" {
+			return errors.New("aggregator adapter has no end-image input configured (aggregator_end_image_field); last-frame assets are not consumable")
+		}
+		if !isHTTPURL(r.LastFrameAsset.URI) {
+			return errors.New("first/last-frame interpolation requires a last-frame asset with an http(s) URI the provider can fetch")
+		}
 	}
 	if p.imageField == "" {
 		if len(r.ReferenceAssets) > 0 || r.FirstFrameAsset != nil {
@@ -245,6 +255,9 @@ func (p *Aggregator) submitBody(r video.VideoRequest) map[string]any {
 		if img := firstImageAsset(r); img != nil {
 			body[p.imageField] = img.URI
 		}
+	}
+	if p.endImageField != "" && r.LastFrameAsset != nil {
+		body[p.endImageField] = r.LastFrameAsset.URI
 	}
 	return body
 }

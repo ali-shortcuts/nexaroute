@@ -61,4 +61,5 @@ type Config struct {
 	AggregatorMaxDurationSeconds float64 `json:"aggregator_max_duration_seconds,omitempty"`
 	AggregatorCostPerSecondUSD   float64 `json:"aggregator_cost_per_second_usd,omitempty"`
 	AggregatorImageField         string  `json:"aggregator_image_field,omitempty"`
+	AggregatorEndImageField      string  `json:"aggregator_end_image_field,omitempty"`
 }
