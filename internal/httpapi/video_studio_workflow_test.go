@@ -28,6 +28,10 @@ func TestVideoStudioWorkflowWiring(t *testing.T) {
 		"video-workflow",                                       // stepper markup
 		"In progress — provider has not reported a percentage", // honest indeterminate progress
 		"progress === 0",                                       // the no-report condition gates the percentage bar
+		"retrySafetyLine(j)",                                   // #414 item 6: retry-safety line on the card
+		"j.retry_safety",                                       // server-derived assessment, never a client guess
+		"Retry risks duplicate billing",
+		"Needs manual action",
 	} {
 		if !strings.Contains(appJS, want) {
 			t.Errorf("app.js missing video studio workflow wiring %q", want)

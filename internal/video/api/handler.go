@@ -147,12 +147,13 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request, id string) {
 // fields are unchanged.
 type jobView struct {
 	video.VideoJob
-	Workflow []video.WorkflowStep `json:"workflow"`
+	Workflow    []video.WorkflowStep `json:"workflow"`
+	RetrySafety video.RetrySafety    `json:"retry_safety"`
 }
 
 func viewJob(j video.VideoJob) jobView {
 	pj := publicJob(j)
-	return jobView{VideoJob: pj, Workflow: video.WorkflowSteps(pj)}
+	return jobView{VideoJob: pj, Workflow: video.WorkflowSteps(pj), RetrySafety: video.RetrySafetyFor(pj)}
 }
 
 // storeDurability names what the configured job store actually

@@ -1698,6 +1698,8 @@
     }
     return 'Estimate ' + (hasEstimate ? fmtUSD(estimated) : '—') + ' · unreconciled';
   }
+  function retrySafetyLine(j) { const rs = j.retry_safety; if (!rs || !rs.verdict || rs.verdict === 'not_applicable') return ''; const kind = rs.verdict === 'safe' ? 'good' : rs.verdict === 'manual_action' ? 'warn' : 'bad'; const label = rs.verdict === 'safe' ? 'Retry safe' : rs.verdict === 'duplicate_risk' ? 'Retry risks duplicate billing' : rs.verdict === 'manual_action' ? 'Needs manual action' : 'Retry blocked'; return '<p class="video-job-retry">' + statusPill(label, kind) + ' <span>' + esc(rs.reason || '') + '</span></p>'; }
+
   function videoJobCard(j) {
     const status = videoJobState(j);
     const activeStates = ['queued','admitted','planning','waiting_for_budget','submitted','processing','polling','uploading','composing','cancel_requested'];
@@ -1719,7 +1721,7 @@
       (j.usage_metadata && (j.usage_metadata.tools_used || j.usage_metadata.planning_model) ? '<p class="muted">Tools used: ' + esc(j.usage_metadata.tools_used || '—') + (j.usage_metadata.native_video === 'false' ? ' · Programmatic rendering by a planning model — not native generative video.' : '') + '</p>' : '') +
       (j.last_error ? '<p class="video-error" role="alert">' + esc(j.last_error) + '</p>' : '') +
       (activeStates.includes(status) && progress === 0 ? '<div class="video-progress"><div class="video-progress-line"><progress max="1"></progress><span>In progress — provider has not reported a percentage</span></div>' + (shotLabel ? '<small>' + esc(shotLabel) + '</small>' : '') + '</div>' : '<div class="video-progress"><div class="video-progress-line"><progress max="1" value="' + progress.toFixed(3) + '"></progress><span>' + progressLabel + '%</span></div>' + (shotLabel ? '<small>' + esc(shotLabel) + '</small>' : '') + '</div>') +
-      (Array.isArray(j.workflow) && j.workflow.length ? '<ol class="video-workflow">' + j.workflow.map(st => '<li class="wf-' + esc(st.status) + '" title="' + esc(st.label + ': ' + st.status + (st.detail ? ' — ' + st.detail : '')) + '">' + esc(st.label) + '</li>').join('') + '</ol>' : '') +
+      (Array.isArray(j.workflow) && j.workflow.length ? '<ol class="video-workflow">' + j.workflow.map(st => '<li class="wf-' + esc(st.status) + '" title="' + esc(st.label + ': ' + st.status + (st.detail ? ' — ' + st.detail : '')) + '">' + esc(st.label) + '</li>').join('') + '</ol>' : '') + retrySafetyLine(j) +
       (assets.length ? '<div class="video-assets">' + downloadButtons + '</div>' : '') + '</div><div class="tile-actions"><button class="button ghost small" data-action="copy" data-copy="' + esc(id) + '">Copy job ID</button>' +
       (canCancel ? '<button class="button danger small" data-action="cancel-video" data-id="' + esc(id) + '">Cancel</button>' : '') +
       (canForceFail && activeStates.includes(status) ? '<button class="button danger small" data-action="force-fail-video" data-id="' + esc(id) + '">Force fail</button>' : '') +
