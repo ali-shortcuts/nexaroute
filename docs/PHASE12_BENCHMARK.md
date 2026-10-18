@@ -79,3 +79,37 @@ and the observed spread matters more than the third digit.
   evidence hysteresis and classified failover triggers (PR #495).
   Anything beyond that requires the proof programme described in
   the issue, design point 11.
+
+## Learned-adaptation proof gate — EVALUATED 2026-10-18 (verdict: do not adopt)
+
+Item 11 was run, not just cited. `TestLearnedAdaptationProofGate`
+(`internal/decision/policy/learned_eval_test.go`) replays a
+deterministic 800-step two-regime trace (deployment A degrades
+mid-trace: 100 ms/1% → 900 ms/20%; B improves: 300 ms → 120 ms)
+with bandit feedback through the **real** scorer, comparing
+frozen evidence (static), the shipped EWMA-evidence policy, and
+EWMA + online weight adaptation (weights shifted toward the
+dominant recent cost every 50 steps, clamped to [0.5×, 2×]).
+Outcome cost = latency-seconds + 5.0 per failure; the gate was
+stated before the run: adoption requires ≥ 5% lower total cost
+than EWMA without materially more flapping.
+
+| Chooser | Total realized cost | Flaps |
+| --- | --- | --- |
+| Oracle (expected) | 128.0 | — |
+| Static (frozen evidence) | 823.2 | 0 |
+| **EWMA evidence, fixed weights (shipped)** | **366.1** | **1** |
+| EWMA + adaptive weights (proposed) | 366.1 | 1 |
+
+**Findings.** (1) The shipped design's decaying evidence does
+the work: it cuts realized cost 56% versus frozen evidence and
+switches exactly once after the regime change — the hysteresis
+behaves as designed. (2) Weight adaptation changed **not one
+decision** on this trace (identical cost and flaps): once the
+evidence moves, the fixed inspectable weights already produce
+the right ranking, so the learned delta adds machinery, state
+and audit burden for zero measured benefit. **Verdict: the
+gate FAILS for the proposal; online learned adaptation is NOT
+adopted.** The evaluation stays in the tree as a regression
+artifact — if a future change flips the logged verdict, this
+section must be updated deliberately in the same PR.
