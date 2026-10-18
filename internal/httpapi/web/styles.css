@@ -171,3 +171,6 @@ button.metric-card:hover,button.metric-card:focus-visible{border-color:#3d536c;b
 .elig-warnings span{color:var(--muted);font-size:11px}
 @media(max-width:700px){.elig-grid{grid-template-columns:1fr}.eligibility-panel summary{flex-direction:column}.eligibility-panel summary small{max-width:none;text-align:left}}
 .chips-row{display:flex;gap:7px;flex-wrap:wrap;margin:0 0 13px}.chips-row .button{border-radius:999px}.chips-row .button.accent{border-color:rgba(113,215,202,.45);color:var(--accent)}.provider-facts.state-chips{gap:6px}.provider-facts.state-chips .status{padding:4px 9px;border-radius:999px;border:1px solid var(--border);font-size:10px}.preset-grid{grid-template-columns:repeat(4,minmax(0,1fr))}@media(max-width:1400px){.preset-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}.preset-tile .muted{margin:0;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* Provider preset catalog must not override the single-column mobile layout. */
+@media(max-width:700px){.preset-grid{grid-template-columns:1fr}}

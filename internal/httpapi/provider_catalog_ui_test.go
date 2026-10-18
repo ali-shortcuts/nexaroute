@@ -98,3 +98,23 @@ func TestModelOnboardingProvenanceWireFRoundTrip(t *testing.T) {
 		t.Error("readProvider must carry over per-model test outcomes from provider-test runs")
 	}
 }
+
+
+// The preset-grid rule is appended after the legacy responsive grid rules,
+// so it must explicitly restore one column on mobile instead of leaving the
+// catalog at three columns (which can overflow a 390px viewport).
+func TestProviderPresetGridCollapsesOnMobile(t *testing.T) {
+	css, err := webFS.ReadFile("web/styles.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(css)
+	threeCols := strings.Index(body, ".preset-grid{grid-template-columns:repeat(3,minmax(0,1fr))}")
+	mobileOneCol := strings.Index(body, "@media(max-width:700px){.preset-grid{grid-template-columns:1fr}}")
+	if threeCols < 0 {
+		t.Fatal("preset catalog tablet grid rule not found")
+	}
+	if mobileOneCol <= threeCols {
+		t.Fatal("mobile one-column rule must appear after the three-column catalog rule")
+	}
+}
