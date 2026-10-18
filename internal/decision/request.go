@@ -28,19 +28,28 @@ type Candidate struct {
 	PoolOrdinal int    `json:"pool_ordinal"`
 
 	// Phase E: router baseline and health
-	RouterScore      float64               `json:"router_score"`
-	HealthStatus     string                `json:"health_status,omitempty"`
-	EWMALatencyMS    float64               `json:"ewma_latency_ms,omitempty"`
-	EWMATTFTMS       float64               `json:"ewma_ttft_ms,omitempty"`
-	EWMAFailureRate  float64               `json:"ewma_failure_rate,omitempty"`
-	Successes        int64                 `json:"successes,omitempty"`
-	Failures         int64                 `json:"failures,omitempty"`
-	CapacityPressure float64               `json:"capacity_pressure,omitempty"`
-	EstimatedCostUSD float64               `json:"estimated_cost_usd,omitempty"`
-	PriceKnown       bool                  `json:"price_known,omitempty"`
-	ContextWindow    int                   `json:"context_window,omitempty"`
-	Capabilities     CandidateCapabilities `json:"capabilities,omitempty"`
-	OriginalRank     int                   `json:"original_rank"`
+	RouterScore      float64 `json:"router_score"`
+	HealthStatus     string  `json:"health_status,omitempty"`
+	EWMALatencyMS    float64 `json:"ewma_latency_ms,omitempty"`
+	EWMATTFTMS       float64 `json:"ewma_ttft_ms,omitempty"`
+	EWMAFailureRate  float64 `json:"ewma_failure_rate,omitempty"`
+	Successes        int64   `json:"successes,omitempty"`
+	Failures         int64   `json:"failures,omitempty"`
+	CapacityPressure float64 `json:"capacity_pressure,omitempty"`
+	// TaskQuality is per-(task, deployment) scorecard evidence
+	// converted at the HTTP boundary (#510 item 5): the raw score
+	// in [0,1] plus the effective sample count behind it. The
+	// policy scorer blends it toward neutral by sample confidence,
+	// so zero samples means exactly neutral. The decision plane
+	// deliberately does not import the scorecards package (Phase H
+	// isolation guard) — evidence crosses as plain values.
+	TaskQuality        float64               `json:"task_quality,omitempty"`
+	TaskQualitySamples int                   `json:"task_quality_samples,omitempty"`
+	EstimatedCostUSD   float64               `json:"estimated_cost_usd,omitempty"`
+	PriceKnown         bool                  `json:"price_known,omitempty"`
+	ContextWindow      int                   `json:"context_window,omitempty"`
+	Capabilities       CandidateCapabilities `json:"capabilities,omitempty"`
+	OriginalRank       int                   `json:"original_rank"`
 }
 
 // Constraints placeholder for Phase E policy constraints.

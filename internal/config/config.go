@@ -99,6 +99,10 @@ type DecisionPolicyWeights struct {
 	Capacity       float64 `json:"capacity,omitempty"`
 	Cost           float64 `json:"cost,omitempty"`
 	Context        float64 `json:"context,omitempty"`
+	// Quality weights per-task scorecard evidence (eval-derived
+	// and production-feedback cards, #510 item 5) in policy
+	// scoring. Zero disables the component.
+	Quality float64 `json:"quality,omitempty"`
 }
 
 type DecisionPolicyConfig struct {
@@ -990,6 +994,7 @@ func validateDecisionPolicyWeights(w DecisionPolicyWeights, ctx string) error {
 		ctx + ".capacity":        w.Capacity,
 		ctx + ".cost":            w.Cost,
 		ctx + ".context":         w.Context,
+		ctx + ".quality":         w.Quality,
 	} {
 		if math.IsNaN(v) || math.IsInf(v, 0) || v < 0 || v > 1_000_000 {
 			return fmt.Errorf("%s must be finite and between 0 and 1000000", name)
@@ -999,7 +1004,7 @@ func validateDecisionPolicyWeights(w DecisionPolicyWeights, ctx string) error {
 }
 
 func hasPositiveWeight(w DecisionPolicyWeights) bool {
-	return w.RouterBaseline > 0 || w.Reliability > 0 || w.Latency > 0 || w.TTFT > 0 || w.Capacity > 0 || w.Cost > 0 || w.Context > 0
+	return w.RouterBaseline > 0 || w.Reliability > 0 || w.Latency > 0 || w.TTFT > 0 || w.Capacity > 0 || w.Cost > 0 || w.Context > 0 || w.Quality > 0
 }
 
 func validHeaderName(s string) bool {
