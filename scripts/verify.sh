@@ -6,6 +6,8 @@ echo '== go version =='
 go version
 echo '== shell syntax =='
 bash -n scripts/*.sh
+echo '== flake-hunt harness regression checks =='
+bash scripts/test-flake-hunt.sh
 echo '== formatting =='
 if out=$(gofmt -l .) && [[ -n "$out" ]]; then
   echo 'gofmt check failed for:' >&2

@@ -541,31 +541,85 @@ func TestChain_GlobalDeadlineStopsChain(t *testing.T) {
 	// Alternate deterministic check: use context deadline inspection via provider
 	t.Run("remaining deadline not fresh", func(t *testing.T) {
 		eligible2 := makeChainEligible("A", "B")
-		var p1Dur time.Duration
-		var p2DeadlineRemaining time.Duration
-		p1c := newCountingProvider("jev-main")
-		p1c.delay = 80 * time.Millisecond
-		p1c.result = DecisionResult{Action: ActionAbstain, Abstained: true, ProviderID: "jev-main"}
+		// Deterministic design (issue #404): the old version slept a fixed
+		// 80ms in step 1, so under load the sleep could overshoot the 100ms
+		// global deadline and step 2 was never called ("p2 was not called").
+		// Instead, step 1 now consumes budget against the SAME deadline the
+		// executor derives step contexts from: it blocks until the chain
+		// context has at most consumeTo remaining, then abstains. The
+		// "not fresh" margin (consumeTo vs the 100ms budget) is enforced by
+		// the provider's own logic, not by wall-clock sleep, so the property
+		// holds at any scheduler speed; step 2 always runs with 60ms of
+		// budget left — far beyond any same-goroutine handoff jitter.
+		const global = 100 * time.Millisecond
+		const consumeTo = 60 * time.Millisecond
+		p1c := &deadlineConsumingProvider{id: "jev-main", consumeTo: consumeTo,
+			result: DecisionResult{Action: ActionAbstain, Abstained: true, ProviderID: "jev-main"}}
 		// p2 records remaining deadline
 		p2c := &deadlineInspectProvider{id: "policy", result: DecisionResult{Action: ActionSelect, SelectedID: "B", ProviderID: "policy"}, deadlineCh: make(chan time.Duration, 1)}
 		reg2 := chainRegistry(p1c, p2c)
 		exec2 := NewChainExecutor(reg2, providerstate.New(providerstate.DefaultConfig(), nil), &Metrics{})
-		start := time.Now()
-		exec2.Execute(context.Background(), ChainConfig{ID: "c2", Steps: []ChainStepConfig{{Provider: "jev-main"}, {Provider: "policy"}}}, DecisionRequest{Candidates: eligible2, Budget: defaultChainBudget(100*time.Millisecond, 2)}, defaultConstraints(eligible2), defaultChainBudget(100*time.Millisecond, 2), 100*time.Millisecond)
-		p1Dur = time.Since(start)
-		// p2 should have seen remaining < 30ms (since 80ms consumed)
+		exec2.Execute(context.Background(), ChainConfig{ID: "c2", Steps: []ChainStepConfig{{Provider: "jev-main"}, {Provider: "policy"}}}, DecisionRequest{Candidates: eligible2, Budget: defaultChainBudget(global, 2)}, defaultConstraints(eligible2), defaultChainBudget(global, 2), global)
+		// Sync-path guard: step 1 must have actually enforced its consumption
+		// threshold; otherwise the not-fresh property was never exercised.
+		if !p1c.consumed.Load() {
+			t.Fatal("step1 did not enforce its consumption threshold — the deadline-propagation property was not exercised")
+		}
 		select {
 		case rem := <-p2c.deadlineCh:
-			p2DeadlineRemaining = rem
-			if rem > 40*time.Millisecond {
-				t.Fatalf("step2 should receive only remaining global time, got remaining %v (p1Dur %v) — implies fresh budget", rem, p1Dur)
+			if rem <= 0 {
+				t.Fatalf("step2 saw an already-expired context (remaining %v)", rem)
+			}
+			// Deadlines are monotone and step 2 runs in the same goroutine
+			// microseconds after step 1 returned, so its remaining time is
+			// strictly below the 60ms step 1 enforced — deterministically far
+			// from a fresh 100ms budget.
+			if rem >= consumeTo {
+				t.Fatalf("step2 should receive only remaining global time, got remaining %v (want < %v) — implies fresh budget", rem, consumeTo)
 			}
 		default:
 			t.Fatalf("p2 was not called")
 		}
-		_ = p2DeadlineRemaining
 	})
 	_ = trace
+}
+
+// deadlineConsumingProvider blocks until the step context's remaining time
+// falls to (or below) consumeTo, then returns result. It makes the "elapsed"
+// portion of the global budget scheduler-independent: instead of sleeping a
+// fixed wall-clock duration (which can overshoot the global deadline under
+// load and skip later steps entirely), it enforces consumption against the
+// same deadline the chain executor derives step contexts from.
+type deadlineConsumingProvider struct {
+	id        string
+	consumeTo time.Duration
+	consumed  atomic.Bool
+	result    DecisionResult
+}
+
+func (d *deadlineConsumingProvider) ID() string { return d.id }
+func (d *deadlineConsumingProvider) Capabilities() Capabilities {
+	return Capabilities{CanSelect: true, CanRank: true}
+}
+func (d *deadlineConsumingProvider) Health() ProviderHealth {
+	return ProviderHealth{Status: HealthHealthy}
+}
+func (d *deadlineConsumingProvider) Decide(ctx context.Context, req DecisionRequest) (DecisionResult, error) {
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if deadline, ok := ctx.Deadline(); ok {
+			if rem := time.Until(deadline); rem <= d.consumeTo {
+				d.consumed.Store(true)
+				return d.result, nil
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return DecisionResult{Action: ActionAbstain, Abstained: true, ProviderID: d.id}, ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }
 
 type deadlineInspectProvider struct {
