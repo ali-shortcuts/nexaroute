@@ -226,6 +226,25 @@ func (s *Server) switchTaskPool(req router.Requirement, cfg config.Config, resol
 	return &switched, filtered, true
 }
 
+// taskRuleTableSnapshot projects the classifier's inspectable rule
+// table for the admin snapshot (#510 item 7): name, human condition,
+// signals, and produced task class. The executable probes stay in
+// the taskprofile package's own tests — the UI needs the readable
+// table, not the fixtures.
+func taskRuleTableSnapshot() map[string]any {
+	rules := taskprofile.RuleTable()
+	rows := make([]map[string]any, 0, len(rules))
+	for _, r := range rules {
+		rows = append(rows, map[string]any{
+			"name":     r.Name,
+			"when":     r.When,
+			"signals":  r.Signals,
+			"produces": string(r.Produces),
+		})
+	}
+	return map[string]any{"version": taskprofile.RuleVersion, "rules": rows}
+}
+
 // emitTaskClassified emits a privacy-safe task_classified event and records metrics.
 // The event contains no raw prompt, only bounded enums and counts. The
 // taskintel resolution (mode, outcome, target pool, pin) is recorded in
