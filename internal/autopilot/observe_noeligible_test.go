@@ -12,7 +12,7 @@ func TestObserveNoEligibleAttributionAndTrip(t *testing.T) {
 		t.Fatalf("StartCanary: %v", err)
 	}
 	for i := 0; i < 5; i++ {
-		c.ObserveNoEligible("req-key")
+		c.ObserveNoEligible("req-key", "")
 		if i < 4 && c.Status().State != StateCanary {
 			t.Fatalf("after %d observations state = %s, want canary", i+1, c.Status().State)
 		}
@@ -22,7 +22,7 @@ func TestObserveNoEligibleAttributionAndTrip(t *testing.T) {
 	}
 	// After the rollback the same call attributes to the
 	// incumbent window.
-	c.ObserveNoEligible("req-key")
+	c.ObserveNoEligible("req-key", "")
 	if got := c.Status().IncumbentSignals.NoEligibleObserved; got != 1 {
 		t.Fatalf("incumbent no-eligible observed = %d, want 1", got)
 	}

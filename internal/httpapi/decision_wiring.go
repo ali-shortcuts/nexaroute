@@ -482,6 +482,8 @@ func (s *Server) applyDecisionPlane(
 	// version. Non-target policies are never touched.
 	if leasedID, leased := s.autopilotSelectPolicy(policyID, autopilotRequestKeyFromContext(ctx, requestID)); leased {
 		policyID = leasedID
+		id, hasID := ctx.Value(clientIdentityContextKey{}).(clientIdentity)
+		s.autopilotNoteCaller(autopilotRequestKeyFromContext(ctx, requestID), autopilotCallerStratum(id, hasID))
 	}
 
 	decisionReq := decision.DecisionRequest{

@@ -23,6 +23,12 @@ func TestAutopilotActionWiring(t *testing.T) {
 		"bt('pol_auto_evaluate')",
 		"bt('pol_auto_promote')",
 		"bt('pol_auto_dorollback')",
+		// SLO surface: last gate decision + candidate vs
+		// incumbent signal comparison + per-caller strata.
+		"s.last_gate_decision",
+		"bt('pol_auto_gate')",
+		"s.candidate_signals?.strata",
+		"s.incumbent_signals",
 	} {
 		if !strings.Contains(appJS, want) {
 			t.Errorf("app.js missing autopilot action wiring %q", want)
