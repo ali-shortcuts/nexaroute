@@ -1,11 +1,15 @@
 package policy
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"math"
 	"strings"
 
 	"github.com/ali-shortcuts/nexaroute/internal/config"
+	"github.com/ali-shortcuts/nexaroute/internal/decision"
 )
 
 // Weights holds multi-objective weights for policy scoring.
@@ -25,10 +29,46 @@ type Weights struct {
 type Policy struct {
 	ID            string             `json:"id"`
 	Name          string             `json:"name,omitempty"`
+	Version       string             `json:"version"`        // explicit operator label, or derived content fingerprint
 	SelectionMode string             `json:"selection_mode"` // only select_first in Phase E
 	Weights       Weights            `json:"weights"`
 	TaskOverrides map[string]Weights `json:"task_overrides,omitempty"`
 	MinScoreDelta float64            `json:"min_score_delta"`
+	// MinObservations gates reliability evidence: below this many success+failure
+	// samples the reliability component decays toward the neutral baseline so a
+	// single sample cannot flap the route. Zero disables the gate.
+	MinObservations int `json:"min_observations,omitempty"`
+}
+
+// VersionPrefix marks a version string that was derived from policy content
+// rather than declared by the operator, so traces can tell them apart.
+const VersionPrefix = "auto:"
+
+// deriveVersion returns a stable, deterministic fingerprint of the effective
+// policy definition. Identical policy content always yields the identical
+// version; any weight, override or threshold change yields a new one.
+func deriveVersion(p Policy) string {
+	canonical := struct {
+		ID              string             `json:"id"`
+		SelectionMode   string             `json:"selection_mode"`
+		Weights         Weights            `json:"weights"`
+		TaskOverrides   map[string]Weights `json:"task_overrides,omitempty"`
+		MinScoreDelta   float64            `json:"min_score_delta"`
+		MinObservations int                `json:"min_observations,omitempty"`
+	}{
+		ID:              p.ID,
+		SelectionMode:   p.SelectionMode,
+		Weights:         p.Weights,
+		TaskOverrides:   p.TaskOverrides,
+		MinScoreDelta:   p.MinScoreDelta,
+		MinObservations: p.MinObservations,
+	}
+	raw, err := json.Marshal(canonical)
+	if err != nil {
+		return VersionPrefix + "unavailable"
+	}
+	sum := sha256.Sum256(raw)
+	return VersionPrefix + hex.EncodeToString(sum[:8])
 }
 
 // canonical task types (must match taskprofile.AllTaskTypes lowercased)
@@ -117,14 +157,41 @@ func FromConfig(c config.DecisionPolicyConfig) (Policy, error) {
 		}
 		overrides[nk] = ww
 	}
-	return Policy{
-		ID:            id,
-		Name:          strings.TrimSpace(c.Name),
-		SelectionMode: sel,
-		Weights:       w,
-		TaskOverrides: overrides,
-		MinScoreDelta: c.MinScoreDelta,
-	}, nil
+	if c.MinObservations < 0 {
+		return Policy{}, fmt.Errorf("policy %q min_observations must not be negative", id)
+	}
+	p := Policy{
+		ID:              id,
+		Name:            strings.TrimSpace(c.Name),
+		Version:         strings.TrimSpace(c.Version),
+		SelectionMode:   sel,
+		Weights:         w,
+		TaskOverrides:   overrides,
+		MinScoreDelta:   c.MinScoreDelta,
+		MinObservations: c.MinObservations,
+	}
+	if p.Version == "" {
+		p.Version = deriveVersion(p)
+	}
+	return p, nil
+}
+
+// EvidenceFor returns the [0,1] confidence in a deployment's reliability
+// evidence given its success+failure sample count. A zero gate means full
+// confidence (historical behavior). Below the gate the value scales linearly,
+// so one sample out of N contributes proportionally less.
+func (p Policy) EvidenceFor(c decision.Candidate) float64 {
+	if p.MinObservations <= 0 {
+		return 1
+	}
+	n := c.Successes + c.Failures
+	if n <= 0 {
+		return 0
+	}
+	if n >= int64(p.MinObservations) {
+		return 1
+	}
+	return float64(n) / float64(p.MinObservations)
 }
 
 // ResolveWeights returns effective weights for given task type and whether task-aware override was used.

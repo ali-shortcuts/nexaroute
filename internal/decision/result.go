@@ -14,7 +14,11 @@ const (
 // PolicyTrace is a bounded, privacy-safe explanation of policy scoring.
 // It contains only IDs, scores, and component breakdowns — no raw prompts, secrets, or chain-of-thought.
 type PolicyTrace struct {
-	PolicyID             string  `json:"policy_id,omitempty"`
+	PolicyID string `json:"policy_id,omitempty"`
+	// PolicyVersion is the applied policy version (explicit operator label or a
+	// derived content fingerprint). It is recorded in request traces so a
+	// decision can be reproduced against the exact policy that produced it.
+	PolicyVersion        string  `json:"policy_version,omitempty"`
 	TaskType             string  `json:"task_type,omitempty"`
 	OriginalPrimaryID    string  `json:"original_primary_id,omitempty"`
 	SelectedID           string  `json:"selected_id,omitempty"`

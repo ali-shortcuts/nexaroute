@@ -16,6 +16,10 @@ const (
 	CompCapacity       = "capacity"
 	CompCost           = "cost"
 	CompContext        = "context"
+	// CompEvidence is the [0,1] confidence in a deployment's reliability
+	// evidence. It is not a weighted objective component; it gates how much
+	// the reliability objective is trusted (see ScoreCandidatesWithObservations).
+	CompEvidence = "evidence"
 )
 
 // clamp01 clamps v to [0,1], returns 0.5 if not finite.
@@ -66,6 +70,9 @@ type ScoredCandidate struct {
 	Components    map[string]float64
 	WeightedScore float64
 	OriginalRank  int
+	// Evidence is the [0,1] confidence in the candidate's reliability sample.
+	// One means either the gate is disabled or the sample count met it.
+	Evidence float64
 }
 
 // computeRouterBaseline normalizes router scores across candidates to 0..1.
@@ -319,7 +326,17 @@ func computeContext(cands []decision.Candidate, required int) map[string]float64
 
 // ScoreCandidates computes component scores for each candidate and returns breakdown.
 // required is MinContextWindow (or EstimatedInput+MaxOutput) for request-relative headroom.
+// It is equivalent to ScoreCandidatesWithObservations with the evidence gate disabled.
 func ScoreCandidates(cands []decision.Candidate, required int) []ScoredCandidate {
+	return ScoreCandidatesWithObservations(cands, required, 0)
+}
+
+// ScoreCandidatesWithObservations is ScoreCandidates with a minimum-evidence
+// gate. When minObservations > 0, a candidate whose success+failure sample
+// count is below the gate has its reliability score decayed toward the neutral
+// 0.5 baseline in proportion to its evidence confidence. This prevents a single
+// sample from flapping the route while still letting long-run evidence dominate.
+func ScoreCandidatesWithObservations(cands []decision.Candidate, required, minObservations int) []ScoredCandidate {
 	if len(cands) == 0 {
 		return nil
 	}
@@ -333,14 +350,30 @@ func ScoreCandidates(cands []decision.Candidate, required int) []ScoredCandidate
 
 	out := make([]ScoredCandidate, 0, len(cands))
 	for _, c := range cands {
+		reliability := reliabilityScores[c.ID]
+		evidence := 1.0
+		if minObservations > 0 {
+			n := c.Successes + c.Failures
+			if n < int64(minObservations) {
+				if n <= 0 {
+					evidence = 0
+				} else {
+					evidence = float64(n) / float64(minObservations)
+				}
+				// Blend the reliability objective toward neutral as evidence
+				// confidence drops; at zero samples it is exactly neutral.
+				reliability = 0.5 + evidence*(reliability-0.5)
+			}
+		}
 		comp := map[string]float64{
 			CompRouterBaseline: routerScores[c.ID],
-			CompReliability:    reliabilityScores[c.ID],
+			CompReliability:    reliability,
 			CompLatency:        latencyScores[c.ID],
 			CompTTFT:           ttftScores[c.ID],
 			CompCapacity:       capacityScores[c.ID],
 			CompCost:           costScores[c.ID],
 			CompContext:        contextScores[c.ID],
+			CompEvidence:       evidence,
 		}
 		// Ensure all finite clamped
 		for k, v := range comp {
@@ -350,6 +383,7 @@ func ScoreCandidates(cands []decision.Candidate, required int) []ScoredCandidate
 			Candidate:    c,
 			Components:   comp,
 			OriginalRank: c.OriginalRank,
+			Evidence:     evidence,
 		})
 	}
 	return out
