@@ -124,3 +124,72 @@ func TestTaskIntelFieldsJSONRoundTrip(t *testing.T) {
 		t.Fatalf("fields not preserved: %+v", rp)
 	}
 }
+
+// Phase 19 eval gate (#510): task_eval_gates are validated fail-closed —
+// a gate needs a known task type, a bounded suite ID, and a mapped
+// pool for the same task, and cannot be configured with mode off.
+func TestTaskEvalGatesValidation(t *testing.T) {
+	cases := []struct {
+		name    string
+		profile RouteProfileConfig
+		wantErr string
+	}{
+		{
+			"gate ok",
+			RouteProfileConfig{ID: "r1", CandidatePool: "pool1", TaskIntelMode: "apply",
+				TaskPools:     map[string]string{"coding": "pool1"},
+				TaskEvalGates: map[string]string{"coding": "coding-suite"}},
+			"",
+		},
+		{
+			"gate unknown task type",
+			RouteProfileConfig{ID: "r1", CandidatePool: "pool1", TaskIntelMode: "apply",
+				TaskPools:     map[string]string{"coding": "pool1"},
+				TaskEvalGates: map[string]string{"codnig": "coding-suite"}},
+			"task_eval_gates has unknown task type",
+		},
+		{
+			"gate empty suite",
+			RouteProfileConfig{ID: "r1", CandidatePool: "pool1", TaskIntelMode: "apply",
+				TaskPools:     map[string]string{"coding": "pool1"},
+				TaskEvalGates: map[string]string{"coding": "  "}},
+			"must name an evaluation suite",
+		},
+		{
+			"gate without pool",
+			RouteProfileConfig{ID: "r1", CandidatePool: "pool1", TaskIntelMode: "apply",
+				TaskPools:     map[string]string{"coding": "pool1"},
+				TaskEvalGates: map[string]string{"long_context": "ctx-suite"}},
+			"has no task_pools entry to gate",
+		},
+		{
+			"gate with mode off rejected",
+			RouteProfileConfig{ID: "r1", CandidatePool: "pool1",
+				TaskPools:     map[string]string{"coding": "pool1"},
+				TaskEvalGates: map[string]string{"coding": "coding-suite"}},
+			"task_intel_mode off",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := Default()
+			cfg.Providers = []ProviderConfig{{
+				ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "http://127.0.0.1:9",
+				AuthMode: "bearer", Enabled: true,
+				Models: []ModelConfig{{ID: "m", Model: "m", Enabled: true, Weight: 1}},
+			}}
+			cfg.CandidatePools = []CandidatePoolConfig{{ID: "pool1", Mode: "all"}, {ID: "pool2", Mode: "all"}}
+			cfg.RouteProfiles = []RouteProfileConfig{tc.profile}
+			cfg.ApplyDefaults()
+			err := cfg.Validate()
+			if tc.wantErr == "" && err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("expected error containing %q, got %v", tc.wantErr, err)
+				}
+			}
+		})
+	}
+}

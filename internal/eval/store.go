@@ -102,6 +102,28 @@ func (s *Store) All() []Result {
 	return s.snapshotLocked()
 }
 
+// HasPassingEvidence reports whether the deployment currently has
+// passing eval evidence for the suite (Phase 19 eval gate, #510).
+// The LATEST stored run for the (suite, deployment) pair decides:
+// a fresh failing run revokes earlier glory. A run is passing
+// evidence only when it was scoreable and recorded at least one
+// pass verdict with zero fail and zero error verdicts — health or
+// liveness data never enters this store, so it can never satisfy
+// the gate.
+func (s *Store) HasPassingEvidence(suiteID, deploymentID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := len(s.order) - 1; i >= 0; i-- {
+		r := s.byID[s.order[i]]
+		if r.SuiteID != suiteID || r.DeploymentID != deploymentID {
+			continue
+		}
+		return r.Scoreable && r.Counts[VerdictPass] > 0 &&
+			r.Counts[VerdictFail] == 0 && r.Counts[VerdictError] == 0
+	}
+	return false
+}
+
 // Get returns one run by id.
 func (s *Store) Get(runID string) (Result, bool) {
 	s.mu.Lock()
