@@ -41,6 +41,15 @@ type StreamEvent struct {
 	Usage      *Usage `json:"usage,omitempty"`
 	ErrorCode  string `json:"error_code,omitempty"`
 	ErrorMsg   string `json:"error_msg,omitempty"`
+	// ArgsFinal marks a StreamToolDelta that carries the complete
+	// arguments for a tool rather than one incremental fragment. Some
+	// Responses-dialect upstreams (for example gpt-5.3-codex-spark)
+	// emit no argument deltas and put the full JSON only in
+	// response.function_call_arguments.done / output_item.done. The
+	// stream pump uses this to fall back to the complete value only
+	// when no delta was observed, so delta-emitting streams are never
+	// doubled.
+	ArgsFinal bool `json:"args_final,omitempty"`
 }
 
 // ---------- SSE reader ----------
@@ -832,10 +841,15 @@ type responsesEmitter struct {
 	writeErr   error
 	toolIdx    map[int]string
 	toolOutIdx map[int]int
+	toolName   map[int]string
+	toolArgs   map[int]*strings.Builder
 	nextOutIdx int
 	itemSeq    int
 	usage      *Usage
 	stop       string
+	msgOpen    bool
+	msgDone    bool
+	msgText    strings.Builder
 	finished   bool
 }
 
@@ -847,7 +861,9 @@ func NewResponsesEmitter(w http.ResponseWriter, model string) StreamEmitter {
 	w.Header().Set("X-Accel-Buffering", "no")
 	e := &responsesEmitter{
 		w: w, fl: fl, model: model, id: fmt.Sprintf("resp_%d", messageClock()),
-		toolIdx: map[int]string{}, toolOutIdx: map[int]int{}, nextOutIdx: 1,
+		toolIdx: map[int]string{}, toolOutIdx: map[int]int{},
+		toolName: map[int]string{}, toolArgs: map[int]*strings.Builder{},
+		nextOutIdx: 1,
 	}
 	created := float64(timeNow())
 	e.event("response.created", map[string]any{"type": "response.created", "response": map[string]any{
@@ -881,7 +897,14 @@ func (e *responsesEmitter) Emit(ev StreamEvent) error {
 		return e.writeErr
 	}
 	switch ev.Type {
+	case StreamStart:
+		// Anthropic reports input_tokens on message_start; without
+		// capturing it here the Responses usage (and Codex's
+		// total_tokens view) would only reflect the output side.
+		e.observeUsage(ev.Usage)
 	case StreamText:
+		e.openMessage()
+		e.msgText.WriteString(ev.Text)
 		e.event("response.output_text.delta", map[string]any{
 			"type": "response.output_text.delta", "item_id": "msg_0", "output_index": 0,
 			"content_index": 0, "delta": ev.Text,
@@ -898,6 +921,10 @@ func (e *responsesEmitter) Emit(ev StreamEvent) error {
 		if _, exists := e.toolIdx[ev.ToolIndex]; !exists && len(e.toolIdx) >= maxStreamTools {
 			return fmt.Errorf("stream exceeds safe tool count %d", maxStreamTools)
 		}
+		// A tool call is a distinct output item: finalize any open
+		// assistant message first so Codex sees the completed message
+		// item before the function_call item.
+		e.closeMessage()
 		callID := ev.ToolID
 		if callID == "" {
 			callID = fmt.Sprintf("call_%d", ev.ToolIndex)
@@ -906,6 +933,8 @@ func (e *responsesEmitter) Emit(ev StreamEvent) error {
 		e.nextOutIdx++
 		e.toolIdx[ev.ToolIndex] = callID
 		e.toolOutIdx[ev.ToolIndex] = outIdx
+		e.toolName[ev.ToolIndex] = ev.ToolName
+		e.toolArgs[ev.ToolIndex] = &strings.Builder{}
 		e.event("response.output_item.added", map[string]any{
 			"type": "response.output_item.added", "output_index": outIdx,
 			"item": map[string]any{"type": "function_call", "id": "fc_" + callID, "call_id": callID, "name": ev.ToolName, "arguments": "", "status": "in_progress"},
@@ -919,6 +948,9 @@ func (e *responsesEmitter) Emit(ev StreamEvent) error {
 		if !ok || !outOK {
 			return fmt.Errorf("stream tool delta arrived before tool start")
 		}
+		if b, ok := e.toolArgs[ev.ToolIndex]; ok {
+			b.WriteString(ev.ArgsDelta)
+		}
 		e.event("response.function_call_arguments.delta", map[string]any{
 			"type": "response.function_call_arguments.delta", "item_id": "fc_" + callID,
 			"output_index": outIdx, "delta": ev.ArgsDelta,
@@ -929,15 +961,24 @@ func (e *responsesEmitter) Emit(ev StreamEvent) error {
 		if !ok || !outOK {
 			return fmt.Errorf("stream tool end arrived before tool start")
 		}
+		name := e.toolName[ev.ToolIndex]
+		args := ""
+		if b, ok := e.toolArgs[ev.ToolIndex]; ok {
+			args = b.String()
+		}
 		e.event("response.function_call_arguments.done", map[string]any{
-			"type": "response.function_call_arguments.done", "item_id": "fc_" + callID, "output_index": outIdx, "arguments": "",
+			"type": "response.function_call_arguments.done", "item_id": "fc_" + callID,
+			"output_index": outIdx, "name": name, "arguments": args,
 		})
 		e.event("response.output_item.done", map[string]any{
 			"type": "response.output_item.done", "output_index": outIdx,
-			"item": map[string]any{"type": "function_call", "id": "fc_" + callID, "call_id": callID, "status": "completed"},
+			"item": map[string]any{
+				"type": "function_call", "id": "fc_" + callID, "call_id": callID,
+				"name": name, "arguments": args, "status": "completed",
+			},
 		})
 	case StreamUsage:
-		e.usage = ev.Usage
+		e.observeUsage(ev.Usage)
 	case StreamEnd:
 		e.stop = ev.StopReason
 	case StreamError:
@@ -948,27 +989,97 @@ func (e *responsesEmitter) Emit(ev StreamEvent) error {
 	return e.writeErr
 }
 
+// observeUsage merges usage observations, keeping the largest value seen
+// for each field so a later output-only event cannot erase input tokens
+// reported at stream start.
+func (e *responsesEmitter) observeUsage(u *Usage) {
+	if u == nil {
+		return
+	}
+	if e.usage == nil {
+		e.usage = &Usage{}
+	}
+	if u.InputTokens > e.usage.InputTokens {
+		e.usage.InputTokens = u.InputTokens
+	}
+	if u.OutputTokens > e.usage.OutputTokens {
+		e.usage.OutputTokens = u.OutputTokens
+	}
+	if u.CacheReadTokens > e.usage.CacheReadTokens {
+		e.usage.CacheReadTokens = u.CacheReadTokens
+	}
+	if u.ReasoningTokens > e.usage.ReasoningTokens {
+		e.usage.ReasoningTokens = u.ReasoningTokens
+	}
+}
+
+// openMessage lazily announces the assistant message item (Codex
+// reconstructs assistant turns from response.output_item.done, so the
+// item must be both added and completed).
+func (e *responsesEmitter) openMessage() {
+	if e.msgOpen {
+		return
+	}
+	e.msgOpen = true
+	e.event("response.output_item.added", map[string]any{
+		"type": "response.output_item.added", "output_index": 0,
+		"item": map[string]any{"id": "msg_0", "type": "message", "role": "assistant", "status": "in_progress", "content": []any{}},
+	})
+	e.event("response.content_part.added", map[string]any{
+		"type": "response.content_part.added", "item_id": "msg_0", "output_index": 0, "content_index": 0,
+		"part": map[string]any{"type": "output_text", "text": "", "annotations": []any{}},
+	})
+}
+
+// closeMessage finalizes the assistant message item with its full text.
+func (e *responsesEmitter) closeMessage() {
+	if !e.msgOpen || e.msgDone {
+		return
+	}
+	e.msgDone = true
+	text := e.msgText.String()
+	e.event("response.output_text.done", map[string]any{
+		"type": "response.output_text.done", "item_id": "msg_0", "output_index": 0,
+		"content_index": 0, "text": text,
+	})
+	e.event("response.content_part.done", map[string]any{
+		"type": "response.content_part.done", "item_id": "msg_0", "output_index": 0, "content_index": 0,
+		"part": map[string]any{"type": "output_text", "text": text, "annotations": []any{}},
+	})
+	e.event("response.output_item.done", map[string]any{
+		"type": "response.output_item.done", "output_index": 0,
+		"item": map[string]any{
+			"id": "msg_0", "type": "message", "role": "assistant", "status": "completed",
+			"content": []any{map[string]any{"type": "output_text", "text": text, "annotations": []any{}}},
+		},
+	})
+}
+
 func (e *responsesEmitter) Finish() error {
 	if e.finished || e.writeErr != nil {
 		return e.writeErr
 	}
 	e.finished = true
+	e.closeMessage()
 	status := "completed"
 	if e.stop == StopMaxTokens || e.stop == StopRefusal {
 		status = "incomplete"
 	}
-	resp := map[string]any{
-		"id": e.id, "object": "response", "status": status, "model": e.model,
-		"output": []any{}, "usage": map[string]any{
-			"input_tokens": 0, "output_tokens": 0,
-		},
+	usage := map[string]any{
+		"input_tokens": 0, "output_tokens": 0, "total_tokens": 0,
+		"input_tokens_details": map[string]any{"cached_tokens": 0}, "output_tokens_details": map[string]any{"reasoning_tokens": 0},
 	}
 	if e.usage != nil {
-		resp["usage"] = map[string]any{
+		usage = map[string]any{
 			"input_tokens": e.usage.InputTokens, "output_tokens": e.usage.OutputTokens,
+			"total_tokens":          e.usage.InputTokens + e.usage.OutputTokens,
 			"input_tokens_details":  map[string]any{"cached_tokens": e.usage.CacheReadTokens},
 			"output_tokens_details": map[string]any{"reasoning_tokens": e.usage.ReasoningTokens},
 		}
+	}
+	resp := map[string]any{
+		"id": e.id, "object": "response", "status": status, "model": e.model,
+		"output": []any{}, "usage": usage,
 	}
 	e.event("response.completed", map[string]any{"type": "response.completed", "response": resp})
 	return e.writeErr

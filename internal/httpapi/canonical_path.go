@@ -269,6 +269,14 @@ func (s *Server) canonicalStreamPump(
 				deferClientEvent = true
 			case canonical.StreamToolDelta:
 				ensurePendingTool(ev)
+				// A final-arguments delta is a fallback for upstreams that
+				// never streamed argument fragments. Once any real delta
+				// has been recorded the final value is a duplicate and is
+				// discarded, so delta-emitting streams are never doubled.
+				if ev.ArgsFinal && assembledArgs[ev.ToolIndex].Len() > 0 {
+					deferClientEvent = true
+					break
+				}
 				if assembledArgs[ev.ToolIndex].Len()+len(ev.ArgsDelta) > 1<<20 {
 					msg := fmt.Sprintf("tool=%s field=arguments expected=object actual=too_large stage=%s protocol=%s streaming=true provider=%s: args exceed 1MB limit", toolNames[ev.ToolIndex], kind+"_to_canonical", kind, kind)
 					emitTerminalError(canonical.StreamEvent{Type: canonical.StreamError, ErrorCode: "invalid_request_error", ErrorMsg: msg})

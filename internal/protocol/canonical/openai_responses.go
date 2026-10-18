@@ -460,6 +460,7 @@ type ResponsesOutputItem struct {
 type ResponsesUsage struct {
 	InputTokens         int `json:"input_tokens"`
 	OutputTokens        int `json:"output_tokens"`
+	TotalTokens         int `json:"total_tokens,omitempty"`
 	OutputTokensDetails *struct {
 		ReasoningTokens int `json:"reasoning_tokens"`
 	} `json:"output_tokens_details,omitempty"`
@@ -578,7 +579,7 @@ func EncodeResponsesResponse(in Response, requestedModel string) ResponsesRespon
 	out := ResponsesResponse{
 		ID: in.ID, Model: requestedModel, Status: status,
 		Output: []ResponsesOutputItem{},
-		Usage:  &ResponsesUsage{InputTokens: in.Usage.InputTokens, OutputTokens: in.Usage.OutputTokens},
+		Usage:  &ResponsesUsage{InputTokens: in.Usage.InputTokens, OutputTokens: in.Usage.OutputTokens, TotalTokens: in.Usage.InputTokens + in.Usage.OutputTokens},
 	}
 	if out.ID == "" {
 		out.ID = fmt.Sprintf("resp_%d", time.Now().UnixNano())
@@ -674,13 +675,37 @@ func DecodeResponsesStreamEvent(eventName, data string) ([]StreamEvent, bool, er
 		if json.Unmarshal([]byte(d), &ev) == nil && ev.Delta != "" {
 			return []StreamEvent{{Type: StreamToolDelta, ToolIndex: ev.OutputIndex, ArgsDelta: ev.Delta}}, false, nil
 		}
+	case "response.function_call_arguments.done":
+		// Some Responses-dialect upstreams (for example
+		// gpt-5.3-codex-spark) emit arguments only in this final event,
+		// with no preceding deltas. Carry them as a final-arguments
+		// delta so the pump can fall back to them when it saw no
+		// incremental fragments. Delta-emitting streams are never
+		// doubled because the pump ignores the final form once any
+		// delta has been recorded.
+		var ev struct {
+			OutputIndex int    `json:"output_index"`
+			Name        string `json:"name"`
+			Arguments   string `json:"arguments"`
+		}
+		if json.Unmarshal([]byte(d), &ev) == nil && ev.Arguments != "" {
+			return []StreamEvent{{Type: StreamToolDelta, ToolIndex: ev.OutputIndex, ToolName: ev.Name, ArgsDelta: ev.Arguments, ArgsFinal: true}}, false, nil
+		}
 	case "response.output_item.done":
 		var ev struct {
 			OutputIndex int                 `json:"output_index"`
 			Item        ResponsesOutputItem `json:"item"`
 		}
 		if json.Unmarshal([]byte(d), &ev) == nil && ev.Item.Type == "function_call" {
-			return []StreamEvent{{Type: StreamToolEnd, ToolIndex: ev.OutputIndex}}, false, nil
+			events := make([]StreamEvent, 0, 2)
+			if ev.Item.Arguments != "" {
+				events = append(events, StreamEvent{
+					Type: StreamToolDelta, ToolIndex: ev.OutputIndex, ToolID: ev.Item.CallID,
+					ToolName: ev.Item.Name, ArgsDelta: ev.Item.Arguments, ArgsFinal: true,
+				})
+			}
+			events = append(events, StreamEvent{Type: StreamToolEnd, ToolIndex: ev.OutputIndex})
+			return events, false, nil
 		}
 	case "response.incomplete":
 		var ev struct {
