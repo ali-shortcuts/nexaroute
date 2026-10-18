@@ -264,6 +264,61 @@ For a Gateway request with more than one `shot_plan` entry, the orchestrator val
 
 When `video.piper_enabled` is true, the Gateway can synthesize narration for multi-shot episodes and optionally burn in approximate same-language SRT captions. Captions use estimated timing based on text length; they are not translated or word-aligned. Provider-generated dialogue, sound effects, and music remain unsupported. The local `videogen render`/`compose` commands can still mix user-supplied music and burn in an existing SRT. Cancellation during local FFmpeg composition is intentionally rejected to avoid a race that could publish a partial result.
 
+## Provider capability model and adapter contract
+
+Every video provider declares an explicit, machine-readable capability
+surface (`video.Capabilities`, served per provider by
+`GET /v1/video/providers` together with `kind` and `production_ready`).
+Capabilities are provider-specific and transparent in both the API and
+Video Studio (the provider picker labels each entry with its kind and
+marks non-production backends).
+
+Provider kinds: `local` (runs on the operator's own machine, e.g. the
+ComfyUI adapter), `programmatic` (a model authors a plan, deterministic
+local infrastructure executes it, e.g. code-render), `commercial`
+(billed third-party video API — none is bundled), `test`
+(non-production test double, never counted as a production provider).
+
+| Capability | `fake` (test) | `comfyui` (local) | `code-render` (programmatic) |
+|---|---|---|---|
+| Modes | text_to_video, image_to_video | text_to_video | text_to_video |
+| Reference / first / last-frame inputs | no | no | no |
+| Clip extension | no | no | no |
+| Video editing / transform | no | no | no |
+| Multi-shot single submission | no | no | no |
+| Provider-side composition | no | no | yes (local scene concat) |
+| Subtitles | no | no | only with local Piper narrator |
+| Narration | no | no | only with local Piper narrator |
+| Music / sound-effect generation | no | no | no |
+| Dialogue generation | no | no | no |
+| Webhooks / callbacks | no | no | no |
+| Cancellation | yes (in-process) | no (queued prompt removable; running prompt not interrupted) | yes |
+| Production ready | **no — test double** | yes (local adapter) | yes (programmatic) |
+
+Admission is fail-closed and centralized in the orchestrator
+(`validateProviderRequest`): a request that exercises a capability the
+selected provider does not declare is rejected with an explicit error —
+reference/first/last-frame inputs, callback URLs against providers
+without webhook support, sound requirements against providers without
+music/audio generation, and dialogue against providers without
+dialogue/audio generation. Each adapter's own `ValidateRequest`
+additionally rejects what it cannot honor, so the boundary holds even
+for direct provider use.
+
+The adapter contract is enforced by conformance fixtures
+(`internal/video/providers/provider_contract_test.go`) that run the same
+assertions against every supported provider: deterministic capabilities,
+known provider kind (test-kind providers must never claim
+`production_ready`), mode/reference/webhook/sound/dialogue coherence
+between declared capabilities and `ValidateRequest`, fail-closed
+unknown job IDs, sane cost estimates, and invalid-request rejection
+before any provider state is touched.
+
+Multi-shot episodes do not require provider-side multi-shot support:
+the orchestrator submits each shot separately (each admission-checked)
+and composes locally; narration and captions are a Gateway-side local
+pipeline (Piper) unless the provider handles them itself (code-render).
+
 ## Important limits
 
 When `video.enabled` is true, `cmd/gateway` creates the Video Runtime, mounts `/v1/video/` on the primary HTTP server, starts bounded workers, and cancels and joins the worker pool before shutdown returns. When it is false (the default), no video route or worker is created and the LLM data plane is unchanged. The JSON store is single-process and is not multi-node safe; use PostgreSQL/Redis only after an implementation and concurrency test exist. The opt-in ComfyUI adapter is local text-to-video only and requires a user-supplied API-format workflow; no commercial provider adapter is bundled. ComfyUI does not require provider API credentials. Any future external-provider credentials must come from environment variables; never use account rotation or quota bypass. The `videogen` Gateway commands attach to a running Gateway through the authenticated API and use its configured job store; `videogen compose` is a local FFmpeg command and does not require a Gateway token.
