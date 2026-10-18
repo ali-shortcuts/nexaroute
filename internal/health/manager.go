@@ -54,7 +54,10 @@ type State struct {
 	LastError           string                `json:"last_error,omitempty"`
 	LastErrorClass      string                `json:"last_error_class,omitempty"`
 	CooldownUntil       time.Time             `json:"cooldown_until,omitempty"`
+	NextRetryAt         time.Time             `json:"next_retry_at,omitempty"`
 	RecoveryFailures    int                   `json:"recovery_failures,omitempty"`
+	RecoverySuccesses   int                   `json:"recovery_successes,omitempty"`
+	LastProbeDurationMS int64                 `json:"last_probe_duration_ms,omitempty"`
 	Scopes              map[string]ScopeState `json:"scopes,omitempty"`
 }
 
@@ -312,9 +315,13 @@ func (m *Manager) RecordSuccess(id string, latency time.Duration) {
 	}
 	s.ConsecutiveFailures = 0
 	s.RecoveryFailures = 0
+	s.RecoverySuccesses = 0
 	s.Status = Healthy
 	s.LastError = ""
+	s.LastErrorClass = ""
 	s.CooldownUntil = time.Time{}
+	s.NextRetryAt = time.Time{}
+	s.LastProbeDurationMS = latency.Milliseconds()
 	m.states[id] = s
 }
 
@@ -544,6 +551,14 @@ func (m *Manager) Quarantine(id, reason string, latency time.Duration) {
 }
 
 func (m *Manager) RecordRecoveryFailure(id, reason string, latency time.Duration) {
+	m.RecordProbeFailure(id, reason, "", latency)
+}
+
+// RecordProbeFailure records a failed availability probe as recovery
+// evidence. It preserves any accumulated threshold success count so a single
+// transient failure cannot reset a partially recovered cycle, and it records
+// the privacy-safe failure classification for observability.
+func (m *Manager) RecordProbeFailure(id, reason, class string, latency time.Duration) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	s := m.states[id]
@@ -560,8 +575,76 @@ func (m *Manager) RecordRecoveryFailure(id, reason string, latency time.Duration
 	s.LastChecked = m.now()
 	s.LastFailure = s.LastChecked
 	s.LastError = reason
+	if class != "" {
+		s.LastErrorClass = class
+	}
 	s.CooldownUntil = time.Time{}
+	s.NextRetryAt = time.Time{}
+	s.LastProbeDurationMS = latency.Milliseconds()
 	updateEWMA(&s, latency)
+	m.states[id] = s
+}
+
+// RecordRecoverySuccess records a successful probe that has not yet reached
+// the recovery success threshold. It must not re-admit the deployment: the
+// status stays under test until RecordSuccess is called once the threshold is
+// met.
+func (m *Manager) RecordRecoverySuccess(id string, latency time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s := m.states[id]
+	s.Deployment = id
+	if s.Status == Retired || s.Status == Healthy {
+		m.states[id] = s
+		return
+	}
+	s.Successes++
+	s.RecoverySuccesses++
+	s.LastChecked = m.now()
+	s.LastSuccess = s.LastChecked
+	s.LastProbeDurationMS = latency.Milliseconds()
+	updateEWMA(&s, latency)
+	updateFailureEWMA(&s, false)
+	if s.Status != HalfOpen {
+		s.Status = HalfOpen
+	}
+	s.LastError = ""
+	s.LastErrorClass = ""
+	s.NextRetryAt = time.Time{}
+	m.states[id] = s
+}
+
+// SetNextRetry records when the next automatic recovery attempt is expected.
+// It is a display/observability hint and never affects scheduling.
+func (m *Manager) SetNextRetry(id string, at time.Time) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s := m.states[id]
+	if s.Status == Retired {
+		m.states[id] = s
+		return
+	}
+	s.Deployment = id
+	s.NextRetryAt = at
+	m.states[id] = s
+}
+
+// SetErrorClass records a privacy-safe failure classification without changing
+// any counter or status. It is used by the background sweep, which applies its
+// own quarantine/cooldown policy.
+func (m *Manager) SetErrorClass(id, class string) {
+	if class == "" {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s := m.states[id]
+	if s.Status == Retired {
+		m.states[id] = s
+		return
+	}
+	s.Deployment = id
+	s.LastErrorClass = class
 	m.states[id] = s
 }
 

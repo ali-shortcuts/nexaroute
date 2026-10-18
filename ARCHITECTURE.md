@@ -119,7 +119,7 @@ half_open failure
     -> cooldown immediately
 ```
 
-Default ready-queue recovery is five supervisor probes. Any successful recovery probe immediately returns the deployment to `healthy`; five failed recovery probes enter a 30-minute cooldown, after which a fresh recovery cycle begins automatically.
+Default ready-queue recovery is up to five supervisor probes with a configurable success threshold (`probe.recovery_success_threshold`, default 3-of-5). A cycle that reaches the threshold returns the deployment to `healthy`; a cycle that does not (including five failed probes) enters a configurable cooldown (`probe.recovery_cooldown_seconds`, default 15 minutes), after which a fresh recovery cycle begins automatically. Setting the threshold equal to `probe.recovery_attempts` gives strict N-of-N recovery; setting it to 1 restores the previous first-success behavior. Probe failures are classified (credential, quota, rate-limit, provider incident, transient timeout/transport) for observability without conflating them with capability conformance.
 
 Pre-stream failover can occur on:
 
