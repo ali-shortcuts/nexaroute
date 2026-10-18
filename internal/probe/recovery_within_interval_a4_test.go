@@ -134,6 +134,38 @@ func TestA4_RecoveredRoutableWithinOneHealthInterval(t *testing.T) {
 		totalElapsed, interval, hm.Get("p/m").Status)
 }
 
+// waitForRecoveryQuiescent polls until the recovery lifecycle for id is fully
+// complete: the deployment is Healthy, a recovery_ready event was emitted for
+// it, and the engine cleared its recovery bookkeeping. All three are
+// required: Healthy alone can be observed while the worker is still between
+// RecordSuccess and clearRecoveryTask, and the event alone can precede the
+// bookkeeping clear. Poll-until-condition on state (5ms poll, bounded) —
+// never a fixed delay, never a mid-flight snapshot — so an absolute probe
+// count asserted afterwards is exact no matter when the worker was
+// scheduled. Exceeding the bound means the supervisor path genuinely stalled.
+func waitForRecoveryQuiescent(t *testing.T, hm *health.Manager, bus *events.Bus, e *Engine, id string, timeout time.Duration) health.State {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		st := hm.Get(id)
+		ready := false
+		for _, ev := range bus.Snapshot() {
+			if ev.Kind == "recovery_ready" && ev.Deployment == id {
+				ready = true
+				break
+			}
+		}
+		if st.Status == health.Healthy && ready && !e.isRecovering(id) {
+			return st
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	st := hm.Get(id)
+	t.Fatalf("recovery for %s did not reach quiescence within %s (status=%s recovering=%v)",
+		id, timeout, st.Status, e.isRecovering(id))
+	return st
+}
+
 func TestA4_SupervisorFirstSuccessfulProbeRestoresRoutability(t *testing.T) {
 	var calls atomic.Int32
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -160,7 +192,8 @@ func TestA4_SupervisorFirstSuccessfulProbeRestoresRoutability(t *testing.T) {
 		t.Fatal(err)
 	}
 	rt := router.New(cfg, hm)
-	e := New(cfg, reg, rt, hm, events.New(100))
+	bus := events.New(100)
+	e := New(cfg, reg, rt, hm, bus)
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
@@ -177,25 +210,56 @@ func TestA4_SupervisorFirstSuccessfulProbeRestoresRoutability(t *testing.T) {
 	if res.Total != 1 || res.Failed != 1 {
 		t.Fatalf("down sweep should fail the single deployment: %+v", res)
 	}
-	// Invariant regardless of the recovery-worker race: a deployment that is
-	// not Healthy must never be selected.
-	if st := hm.Get("p/m"); st.Status != health.Healthy {
-		if got := rt.Candidates(req); len(got) != 0 {
-			t.Fatalf("premature selection while status=%s: %#v", st.Status, got)
-		}
-	}
+	// NOTE (issue #404, round-7 post-mortem): the mid-flight "not Healthy =>
+	// not selected" check that used to live here was deleted. hm.Get and
+	// rt.Candidates are two non-atomic observations; the recovery worker may
+	// legitimately finish between them, so the deployment can be legally
+	// selectable at the moment Candidates runs while the earlier Get still
+	// showed Degraded. Asserting on that interleaving tests the test
+	// scheduler, not the product. Premature-selection coverage stays
+	// deterministic via the unprobed/Unknown check above (no engine worker
+	// exists yet at that point).
 
-	// Bounded polling only (5ms poll inside waitForState, 10s cap): the first
-	// successful recovery probe must restore health and routability.
-	st := waitForState(t, hm, "p/m", health.Healthy, 10*time.Second)
+	// Bounded polling only (5ms poll, 10s cap): the first successful
+	// recovery probe must restore health and routability.
+	//
+	// Deterministic design (issue #404, revised after the round-7 gate
+	// failure): the previous revision took an unsynchronized snapshot of the
+	// upstream call count and asserted exactly one more probe after it. That
+	// encoded "exactly one probe after my snapshot", not "exactly one
+	// recovery probe after prime": Prime's runOnce enqueues the recovery
+	// task before returning and the first attempt carries no delay, so the
+	// worker may legitimately finish before the test goroutine's next
+	// statement under load. The count is now absolute and taken only after
+	// quiescence — Healthy observed, recovery_ready emitted, and the
+	// engine's recovery bookkeeping cleared — via poll-until-condition on
+	// state, never a fixed delay and never a mid-flight snapshot. A
+	// legitimately early worker can no longer break the assertion, while a
+	// genuine duplicate probe still fails it (total 3+): the red/green
+	// proof is by mutation, see the fix commit.
+	//
+	// Prime's runOnce already enqueued the recovery task for the failed
+	// deployment; the explicit Recover below exercises the public supervisor
+	// path and either dedups (worker still in flight) or hits the Healthy
+	// guard (worker already done) — zero additional probes either way.
+	e.Recover("p/m")
+	st := waitForRecoveryQuiescent(t, hm, bus, e, "p/m", 10*time.Second)
 	recoveredElapsed := time.Since(start)
 	got := rt.Candidates(req)
 	if len(got) != 1 || got[0].Deployment.ID != "p/m" {
 		t.Fatalf("recovered deployment not routable after first success probe: %#v (health=%+v)", got, st)
 	}
+	// Absolute total, not snapshot-relative: exactly 1 prime probe (503)
+	// + exactly 1 recovery probe (200). Exactly one recovery task can exist
+	// (runOnce enqueues one per failed deployment; the explicit Recover
+	// above dedups), and on success the worker clears the task and
+	// schedules nothing further — so 2 is exact once quiescence holds.
 	if n := calls.Load(); n != 2 {
-		t.Fatalf("upstream calls=%d want exactly 1 initial + 1 first-recovery probe", n)
+		t.Fatalf("upstream calls=%d want exactly 1 prime probe + 1 recovery probe", n)
 	}
+	// Sync-path guard: quiescence already required the recovery_ready event,
+	// which proves the recovery went through the engine's recovery worker
+	// rather than a direct health-manager write.
 	if recoveredElapsed >= cfg.ProbeInterval() {
 		t.Fatalf("recovery took %s, exceeding one health-check interval %s", recoveredElapsed, cfg.ProbeInterval())
 	}

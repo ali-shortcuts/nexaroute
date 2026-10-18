@@ -56,9 +56,22 @@ func TestStressRecoveryFloodFiveThousandDeploymentsStaysBounded(t *testing.T) {
 		hm.ForceCooldown(d.ID, "stress", time.Minute)
 		e.Recover(d.ID)
 	}
-	time.Sleep(100 * time.Millisecond)
+	// Goroutine reclamation is genuinely eventual, so poll until the count
+	// converges instead of sampling once after a fixed sleep: slow cleanup
+	// converges, a real per-deployment goroutine leak never does. A
+	// single-sample assertion here was the same load-flake class as the
+	// events SSE test (issue #404).
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if delta := runtime.NumGoroutine() - before; delta <= recoveryWorkerCount+16 {
+			break
+		} else if time.Now().After(deadline) {
+			cancel()
+			t.Fatalf("goroutine delta=%d exceeds bounded worker design", runtime.NumGoroutine()-before)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 	stats := e.Stats()
-	after := runtime.NumGoroutine()
 	if stats.RecoveryTracked != 5000 {
 		cancel()
 		t.Fatalf("tracked=%d want 5000", stats.RecoveryTracked)
@@ -67,12 +80,8 @@ func TestStressRecoveryFloodFiveThousandDeploymentsStaysBounded(t *testing.T) {
 		cancel()
 		t.Fatalf("queue=%d exceeds %d", stats.RecoveryQueueDepth, maxRecoveryQueue)
 	}
-	if delta := after - before; delta > recoveryWorkerCount+16 {
-		cancel()
-		t.Fatalf("goroutine delta=%d exceeds bounded worker design", delta)
-	}
 	cancel()
-	deadline := time.Now().Add(2 * time.Second)
+	deadline = time.Now().Add(2 * time.Second)
 	for runtime.NumGoroutine() > before+16 && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
