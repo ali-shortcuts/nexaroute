@@ -80,7 +80,7 @@ var canonicalTasks = map[string]struct{}{
 	"simple_chat": {}, "coding": {}, "code_edit": {}, "debugging": {},
 	"repository_analysis": {}, "architecture_reasoning": {}, "deep_reasoning": {},
 	"tool_use": {}, "agentic_task": {}, "long_context": {}, "vision": {},
-	"structured_output": {}, "data_extraction": {}, "general": {}, "unknown": {},
+	"structured_output": {}, "data_extraction": {}, "general": {}, "background": {}, "unknown": {},
 }
 
 func validateWeights(w Weights, ctx string) error {

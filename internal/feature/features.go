@@ -66,6 +66,7 @@ type RequestFeatures struct {
 	HasArchKeywords       bool `json:"has_arch_keywords"`
 	HasAgentKeywords      bool `json:"has_agent_keywords"`
 	HasExtractionKeywords bool `json:"has_extraction_keywords"`
+	HasBackgroundKeywords bool `json:"has_background_keywords"`
 	HasCodeIdentifiers    bool `json:"has_code_identifiers"`
 }
 

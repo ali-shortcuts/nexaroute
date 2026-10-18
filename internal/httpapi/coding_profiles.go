@@ -32,7 +32,7 @@ type codingClass struct {
 
 var codingClasses = []codingClass{
 	{"primary_coding", "Primary coding", []taskprofile.TaskType{taskprofile.TaskCoding, taskprofile.TaskCodeEdit, taskprofile.TaskToolUse, taskprofile.TaskAgenticTask}, taskprofile.TaskCoding, "tools"},
-	{"background", "Inexpensive background tasks", []taskprofile.TaskType{taskprofile.TaskSimpleChat, taskprofile.TaskDataExtraction, taskprofile.TaskStructuredOutput}, taskprofile.TaskSimpleChat, "none"},
+	{"background", "Inexpensive background tasks", []taskprofile.TaskType{taskprofile.TaskBackground, taskprofile.TaskSimpleChat, taskprofile.TaskDataExtraction, taskprofile.TaskStructuredOutput}, taskprofile.TaskBackground, "none"},
 	{"long_context", "Long-context tasks", []taskprofile.TaskType{taskprofile.TaskLongContext, taskprofile.TaskRepositoryAnalysis}, taskprofile.TaskLongContext, "long_context"},
 	{"reasoning", "Reasoning-capable tasks", []taskprofile.TaskType{taskprofile.TaskDeepReasoning, taskprofile.TaskArchitectureReasoning, taskprofile.TaskDebugging}, taskprofile.TaskDeepReasoning, "reasoning"},
 	{"visual", "Visual tasks", []taskprofile.TaskType{taskprofile.TaskVision}, taskprofile.TaskVision, "vision"},

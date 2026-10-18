@@ -96,6 +96,9 @@ func (a *Analyzer) Analyze(f feature.RequestFeatures) TaskProfile {
 	if f.HasExtractionKeywords {
 		reasons = append(reasons, ReasonExtractionKeyword)
 	}
+	if f.HasBackgroundKeywords {
+		reasons = append(reasons, ReasonBackgroundChore)
+	}
 	if f.HasCodeIdentifiers {
 		reasons = append(reasons, ReasonCodeIdentifiers)
 	}
@@ -199,6 +202,14 @@ func classifyType(f feature.RequestFeatures) TaskType {
 	// Structured output as primary only when it's dominant and no other strong signals
 	if f.StructuredOutput && !f.HasCodeBlock && !f.HasStackTrace && !f.HasDiff && !f.HasFilePath && !f.HasTools && !f.HasVision {
 		return TaskStructuredOutput
+	}
+	// Background chores (#421 item 3): the agent's own cheap
+	// session housekeeping (titling, conversation summaries).
+	// The lexical signal is deliberately narrow, and any real
+	// work signal — code, tools, a stack trace, a diff, vision —
+	// has already won above or vetoes the classification here.
+	if f.HasBackgroundKeywords && !f.HasCodeBlock && !f.HasCodeIdentifiers && !f.HasTools && !f.HasStackTrace && !f.HasDiff && !f.HasVision {
+		return TaskBackground
 	}
 	// Long context as primary only when very long and no other strong signals
 	if f.EstimatedPromptTokens > 8000 && !f.HasCodeBlock && !f.HasStackTrace && !f.HasDiff && !f.HasFilePath && !f.HasTools && !f.HasVision {

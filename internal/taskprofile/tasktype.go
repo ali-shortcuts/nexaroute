@@ -18,6 +18,7 @@ const (
 	TaskStructuredOutput      TaskType = "structured_output"
 	TaskDataExtraction        TaskType = "data_extraction"
 	TaskGeneral               TaskType = "general"
+	TaskBackground            TaskType = "background"
 	TaskUnknown               TaskType = "unknown"
 
 	// Backward compatibility aliases for previous vocabulary
@@ -49,13 +50,14 @@ func AllTaskTypes() []TaskType {
 		TaskStructuredOutput,
 		TaskDataExtraction,
 		TaskGeneral,
+		TaskBackground,
 		TaskUnknown,
 	}
 }
 
 func (t TaskType) Valid() bool {
 	switch t {
-	case TaskSimpleChat, TaskCoding, TaskCodeEdit, TaskDebugging, TaskRepositoryAnalysis, TaskArchitectureReasoning, TaskDeepReasoning, TaskToolUse, TaskAgenticTask, TaskLongContext, TaskVision, TaskStructuredOutput, TaskDataExtraction, TaskGeneral, TaskUnknown:
+	case TaskSimpleChat, TaskCoding, TaskCodeEdit, TaskDebugging, TaskRepositoryAnalysis, TaskArchitectureReasoning, TaskDeepReasoning, TaskToolUse, TaskAgenticTask, TaskLongContext, TaskVision, TaskStructuredOutput, TaskDataExtraction, TaskGeneral, TaskBackground, TaskUnknown:
 		return true
 	default:
 		return false
@@ -121,4 +123,5 @@ const (
 	ReasonHighImageCount     ReasonCode = "high_image_count"
 	ReasonAudioPresent       ReasonCode = "audio_present"
 	ReasonSimpleChat         ReasonCode = "simple_chat"
+	ReasonBackgroundChore    ReasonCode = "background_chore"
 )

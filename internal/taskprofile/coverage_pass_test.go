@@ -177,8 +177,8 @@ func TestCoveragePassValidRejectsMalformedProfiles(t *testing.T) {
 
 func TestCoveragePassTaskTypeAndComplexityEnumerations(t *testing.T) {
 	types := AllTaskTypes()
-	if len(types) != 15 {
-		t.Fatalf("AllTaskTypes=%d, want 15", len(types))
+	if len(types) != 16 {
+		t.Fatalf("AllTaskTypes=%d, want 16", len(types))
 	}
 	seen := map[TaskType]bool{}
 	for _, typ := range types {

@@ -157,6 +157,15 @@ func RuleTable() []Rule {
 			},
 		},
 		{
+			Name:     "background-chore->background",
+			When:     "background keyword signal with no code/tools/stack-trace/diff/vision veto (#421 item 3)",
+			Signals:  []string{"HasBackgroundKeywords"},
+			Produces: TaskBackground,
+			Probe: feature.RequestFeatures{
+				HasBackgroundKeywords: true, MessageCount: 1, EstimatedPromptTokens: 120,
+			},
+		},
+		{
 			Name:     "fallback->general",
 			When:     "no rule above matched",
 			Signals:  []string{},
