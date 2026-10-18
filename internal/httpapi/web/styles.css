@@ -230,3 +230,15 @@ button.metric-card:hover,button.metric-card:focus-visible{border-color:var(--lin
 .waterfall-body small{display:block;margin-top:3px;color:var(--muted);font-size:10px}
 .waterfall-time{color:var(--muted);font-size:10px;font-variant-numeric:tabular-nums}
 @media(max-width:700px){.waterfall-step{grid-template-columns:26px 1fr}.waterfall-time{grid-column:2}}
+
+/* Provider preset catalog (issue #394): bounded, responsive searchable grid. */
+.chips-row{display:flex;gap:7px;flex-wrap:wrap;margin:0 0 13px}
+.chips-row .button{border-radius:999px}
+.chips-row .button.accent{border-color:rgba(113,215,202,.45);color:var(--accent)}
+.provider-facts.state-chips{gap:6px}
+.provider-facts.state-chips .status{padding:4px 9px;border-radius:999px;border:1px solid var(--border);font-size:10px}
+.preset-grid{grid-template-columns:repeat(4,minmax(0,1fr))}
+@media(max-width:1400px){.preset-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
+.preset-tile .muted{margin:0;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* Keep the catalog usable at the existing 390px browser acceptance width. */
+@media(max-width:700px){.preset-grid{grid-template-columns:1fr}}
