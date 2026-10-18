@@ -183,10 +183,22 @@ func New(cfg video.Config, baseDir string) (*Runtime, error) {
 	orch := &orchestrator.Orchestrator{
 		Store: store, Queue: q, Providers: reg, Ledger: ledger, Assets: assetSink,
 		Composer: composer.New(ffmpegBinary, ""), Narrator: narrator, MaxAssetBytes: maxBytes,
+		InstanceID: instanceID(),
 	}
 	pool := queue.NewWorkerPool(q, cfg.Workers, orch.RunJob)
 	h := &api.Handler{Orch: orch, Store: store, Providers: reg, Assets: assetSink, RequireAuth: true, BearerToken: token, Universal: universalAgent, UniversalMaxDuration: codeRenderMaxDuration}
 	return &Runtime{Handler: h, Queue: q, Workers: pool, Store: store, Orchestrator: orch, jobRetention: time.Duration(cfg.JobRetentionDays) * 24 * time.Hour}, nil
+}
+
+// instanceID names this process as a video job lease owner:
+// hostname + pid, so an operator reading a job's lease fields
+// can tell which replica holds it.
+func instanceID() string {
+	host, err := os.Hostname()
+	if err != nil || host == "" {
+		host = "unknown-host"
+	}
+	return fmt.Sprintf("%s/%d", host, os.Getpid())
 }
 
 func (r *Runtime) Start(ctx context.Context) error {

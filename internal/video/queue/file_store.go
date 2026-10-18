@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/ali-shortcuts/nexaroute/internal/video"
 )
@@ -177,6 +178,33 @@ func (s *FileStore) Delete(_ context.Context, id string) error {
 		return err
 	}
 	return nil
+}
+
+// TryClaim leases the job and persists the lease, rolling
+// back in memory when the write fails. Atomicity is
+// in-process: two processes sharing one store FILE are not
+// made safe by this (each keeps its own in-memory copy and
+// persists by whole-file overwrite — a pre-existing,
+// documented limit of the file store).
+func (s *FileStore) TryClaim(_ context.Context, id, owner string, ttl time.Duration, now time.Time) (video.VideoJob, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	j, ok := s.jobs[id]
+	if !ok {
+		return video.VideoJob{}, false, ErrNotFound
+	}
+	if !claimable(j, owner, now) {
+		return video.VideoJob{}, false, nil
+	}
+	prev := j
+	j.LeaseOwner = owner
+	j.LeaseUntil = now.Add(ttl)
+	s.jobs[id] = j
+	if err := s.persist(); err != nil {
+		s.jobs[id] = prev
+		return video.VideoJob{}, false, err
+	}
+	return j, true, nil
 }
 
 func (s *FileStore) List(_ context.Context) ([]video.VideoJob, error) {
