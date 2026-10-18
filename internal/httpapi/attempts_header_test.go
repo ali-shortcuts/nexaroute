@@ -108,6 +108,10 @@ func TestWebChatFailoverBadgeWiring(t *testing.T) {
 		"'x-nexaroute-attempts'",
 		"attempts: (th['x-nexaroute-attempts'] || '').split('>').filter(Boolean)",
 		"b.attempts.length > 1",
+		// pgPrices must EXIST (the browser E2E caught it
+		// missing: every completed reply flipped to 'failed').
+		"function pgPrices(dep)",
+		"m.input_cost_per_mtok",
 		"attempts ' + b.attempts.map(esc).join(' → ')",
 	} {
 		if !strings.Contains(appJS, want) {
