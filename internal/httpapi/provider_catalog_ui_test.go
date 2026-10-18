@@ -97,6 +97,12 @@ func TestModelOnboardingProvenanceWireFRoundTrip(t *testing.T) {
 	if !strings.Contains(manual, "modelTestResults") {
 		t.Error("readProvider must carry over per-model test outcomes from provider-test runs")
 	}
+	if !strings.Contains(js, "modelTestResults[model] = result ?") {
+		t.Error("per-model probe outcomes must be collected for the provider form before save")
+	}
+	if !strings.Contains(js, "save the provider to persist") {
+		t.Error("the UI must make clear that probe outcomes persist only when the provider is saved")
+	}
 }
 
 // The preset-grid rule is appended after the legacy responsive grid rules,

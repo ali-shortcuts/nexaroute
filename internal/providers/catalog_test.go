@@ -87,6 +87,9 @@ func TestPresetsCatalogDialectCapabilitiesAreHonest(t *testing.T) {
 	// URL would be the only "signal", which the catalog refuses to mix with
 	// inventory support.
 	for _, p := range Presets() {
+		if !p.SupportsDiscovery && contains(p.Capabilities, CapabilityModelsList) {
+			t.Errorf("preset %q advertises models_list without a real inventory endpoint", p.ID)
+		}
 		explOrDefault := p.ModelsPath != "" || ((!p.Custom) && (p.Type == "openai_compatible" || p.Type == "openai_responses"))
 		if p.SupportsDiscovery && !explOrDefault {
 			t.Errorf("preset %q claims discovery without any real inventory endpoint", p.ID)

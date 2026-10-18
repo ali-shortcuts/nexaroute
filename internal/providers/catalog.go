@@ -67,6 +67,18 @@ func finalizePreset(p Preset) Preset {
 	case "bedrock", "azure_openai", "vertex":
 		p.SupportsDiscovery = false
 	}
+	// models_list is only a capability claim when the catalog entry names a
+	// real inventory endpoint. A generic/custom template is not itself proof
+	// that a future configured endpoint exposes the models-list API.
+	if !p.SupportsDiscovery {
+		capabilities := p.Capabilities[:0]
+		for _, capability := range p.Capabilities {
+			if capability != CapabilityModelsList {
+				capabilities = append(capabilities, capability)
+			}
+		}
+		p.Capabilities = capabilities
+	}
 	if len(p.Capabilities) == 0 {
 		p.Status = PresetStatusPartial
 	} else {
