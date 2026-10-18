@@ -9,7 +9,9 @@ Each row maps a scenario to the invariant it proves. A scenario without an asser
 | `primary_killed_midstream` | streams terminate honestly; no mid-stream failover after bytes are committed | PASS |
 | `slow_loris_upstream` | a slow upstream times out and the gateway stays responsive for health probes | PASS |
 | `egress_dns_failure` | a dead/egress-failed upstream degrades to a normalized error with no leak | PASS |
+| `quota_exhaustion_cascade` | budget exhaustion degrades to clean 402s with no further provider submissions, holds settle exactly once, and other keys are unaffected | PASS |
+| `clock_skew_cooldown_cap` | a skewed or hostile Retry-After cannot extend a deployment's cooldown beyond the configured durations; expiry restores eligibility without a restart | PASS |
 
-**4/4 scenarios passed.**
+**6/6 scenarios passed.**
 
 All scenarios run against hermetic fake providers; no external services are contacted.
