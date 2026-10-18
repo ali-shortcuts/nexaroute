@@ -31,3 +31,31 @@ func TestBrowserE2EVideoFailureScenarios(t *testing.T) {
 		}
 	}
 }
+
+// #413 item 3: the CI browser E2E's core flows stay pinned —
+// provider CRUD with preservation, model detection, route
+// creation, the Activity empty state, evidence screenshots
+// and the suite's own pass marker. If a flow is dropped from
+// the script, this fails in the unit stage, long before the
+// browser job would be missed.
+func TestBrowserE2ECoreFlows(t *testing.T) {
+	script, err := os.ReadFile(filepath.Join("..", "..", "scripts", "test-browser-e2e.py"))
+	if err != nil {
+		t.Fatalf("read scripts/test-browser-e2e.py: %v", err)
+	}
+	text := string(script)
+	for _, want := range []string{
+		"PRIVACY P3 TESTS",             // provider privacy + preservation section
+		"Edit provider",                // edit flow opens with stored values
+		"detect-models",                // model discovery action
+		"Create route",                 // route creation flow
+		"No real activity yet",         // first-run Activity empty state
+		"providers-1440x900-dark.png",  // evidence screenshot (dark)
+		"providers-1440x900-light.png", // evidence screenshot (light)
+		"BROWSER E2E PASS",             // the suite's terminal pass marker
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("browser E2E script missing core-flow anchor %q", want)
+		}
+	}
+}
