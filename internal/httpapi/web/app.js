@@ -1754,13 +1754,15 @@
   function videoJobCostLabel(j) {
     const estimated = Number(j.estimated_cost_usd);
     const hasEstimate = Number.isFinite(estimated);
+    const cap = Number(j.request && j.request.max_cost_usd);
+    const capLabel = Number.isFinite(cap) && cap > 0 ? ' · cap ' + fmtUSD(cap) : '';
     if (j.cost_reconciled === true) {
       const actual = Number(j.actual_cost_usd);
       const delta = j.cost_delta_usd !== undefined && j.cost_delta_usd !== null ? Number(j.cost_delta_usd) : (Number.isFinite(actual) && hasEstimate ? actual - estimated : NaN);
       const deltaLabel = Number.isFinite(delta) ? ' (Δ ' + fmtUSD(delta) + ')' : '';
-      return 'Actual ' + fmtUSD(actual) + ' · est ' + (hasEstimate ? fmtUSD(estimated) : '—') + deltaLabel;
+      return 'Actual ' + fmtUSD(actual) + ' · est ' + (hasEstimate ? fmtUSD(estimated) : '—') + deltaLabel + capLabel;
     }
-    return 'Estimate ' + (hasEstimate ? fmtUSD(estimated) : '—') + ' · unreconciled';
+    return 'Estimate ' + (hasEstimate ? fmtUSD(estimated) : '—') + ' · unreconciled' + capLabel;
   }
   function retrySafetyLine(j) { const rs = j.retry_safety; if (!rs || !rs.verdict || rs.verdict === 'not_applicable') return ''; const kind = rs.verdict === 'safe' ? 'good' : rs.verdict === 'manual_action' ? 'warn' : 'bad'; const label = rs.verdict === 'safe' ? 'Retry safe' : rs.verdict === 'duplicate_risk' ? 'Retry risks duplicate billing' : rs.verdict === 'manual_action' ? 'Needs manual action' : 'Retry blocked'; return '<p class="video-job-retry">' + statusPill(label, kind) + ' <span>' + esc(rs.reason || '') + '</span></p>'; }
 
