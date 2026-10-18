@@ -536,13 +536,16 @@ def main() -> None:
                 expect(fail_card).to_contain_text("may bill twice")
                 page.unroute("**/v1/video/jobs**", mock_fail_list)
 
-                # (b) malformed providers payload -> inline error, app alive
+                # (b) malformed providers payload -> the Studio degrades
+                # to its no-provider state (videoApi tolerates an
+                # unparseable 200 body as an empty payload); the page
+                # must stay intact and the app navigable.
                 def mock_bad_providers(route):
                     route.fulfill(status=200, content_type="application/json", body="{not-json")
                 page.unroute("**/v1/video/providers", mock_fail_providers)
                 page.route("**/v1/video/providers", mock_bad_providers)
                 page.locator('[data-action="refresh-video"]').click()
-                expect(page.locator("#content > .video-error")).to_be_visible()
+                expect(page.locator("#content")).to_contain_text("No provider exposed")
                 page.locator('[data-page="providers"]').click()
                 expect(page.locator('[data-action="add-provider"]').first).to_be_visible()
                 page.unroute("**/v1/video/providers", mock_bad_providers)
