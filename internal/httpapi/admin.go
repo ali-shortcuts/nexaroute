@@ -467,6 +467,7 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 		"route_profiles":    rpList,
 		"task_rules":        taskRuleTableSnapshot(),
 		"coding_profiles":   codingProfilesSnapshot(cfgFull),
+		"deployment_report": s.deployment,
 		"conformance":       conformanceSnapshot(time.Now()),
 		"candidate_pools":   cpList,
 		"fallback_chains":   fcList,
