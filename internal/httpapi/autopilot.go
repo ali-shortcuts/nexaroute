@@ -143,6 +143,11 @@ type autopilotRequestSignals struct {
 	// never lease (the decision plane is never reached); their
 	// outcomes enter through Controller.ObserveNoEligible.
 	dispatched bool
+	// caller is the privacy-safe caller stratum label
+	// (virtual-key ID, tenant or project) captured when the
+	// lease was issued; samples are attributed to it so the
+	// gate's evidence can be broken down per caller (#418).
+	caller string
 }
 
 func (s *Server) autopilotSignalsFor(requestID string) *autopilotRequestSignals {
@@ -190,7 +195,43 @@ func (s *Server) autopilotNoteDispatched(requestID string) {
 // policy version the request would have been leased to. The
 // policy resolution mirrors applyDecisionPlane: the route
 // profile's decision policy wins over the global default.
-func (s *Server) autopilotObserveNoEligible(cfg config.Config, resolvedRoute *route.ResolvedRoute, requestKey string) {
+// autopilotCallerStratum derives the privacy-safe caller
+// stratum label from an authenticated client identity: the
+// virtual-key ID for virtual keys, else a tenant/project
+// label, else "anonymous". Key values and session keys are
+// never used.
+func autopilotCallerStratum(id clientIdentity, ok bool) string {
+	if !ok {
+		return "anonymous"
+	}
+	if id.Virtual && id.ID != "" {
+		return id.ID
+	}
+	if id.TenantID != "" {
+		return "tenant:" + id.TenantID
+	}
+	if id.ProjectID != "" {
+		return "project:" + id.ProjectID
+	}
+	if id.ID != "" {
+		return id.ID
+	}
+	return "anonymous"
+}
+
+// autopilotNoteCaller records the caller stratum label on a
+// leased request's signal record.
+func (s *Server) autopilotNoteCaller(requestID, label string) {
+	if signals := s.autopilotSignalsFor(requestID); signals != nil {
+		signals.mu.Lock()
+		if !signals.closed {
+			signals.caller = label
+		}
+		signals.mu.Unlock()
+	}
+}
+
+func (s *Server) autopilotObserveNoEligible(cfg config.Config, resolvedRoute *route.ResolvedRoute, requestKey, stratum string) {
 	ctrl := s.autopilotSnapshot()
 	if ctrl == nil {
 		return
@@ -207,7 +248,7 @@ func (s *Server) autopilotObserveNoEligible(cfg config.Config, resolvedRoute *ro
 	if !ctrl.TargetMatches(policyID) {
 		return
 	}
-	ctrl.ObserveNoEligible(requestKey)
+	ctrl.ObserveNoEligible(requestKey, stratum)
 }
 
 func (s *Server) autopilotRecordTTFT(requestID string, duration time.Duration) {
@@ -280,9 +321,11 @@ func (s *Server) autopilotRecordFinish(requestID string, status int, terminal st
 		errorClass = autopilot.ClassTransportError
 	}
 	var dispatched bool
+	var caller string
 	if signals := entry.signals; signals != nil {
 		signals.mu.Lock()
 		dispatched = signals.dispatched
+		caller = signals.caller
 		signals.mu.Unlock()
 	}
 	ctrl.Record(lease, autopilot.Sample{
@@ -294,6 +337,7 @@ func (s *Server) autopilotRecordFinish(requestID string, status int, terminal st
 		HasTTFT:             hasTTFT,
 		HasNoEligibleSignal: dispatched,
 		NoEligible:          false,
+		Stratum:             caller,
 	})
 }
 

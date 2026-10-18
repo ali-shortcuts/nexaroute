@@ -82,9 +82,14 @@ const (
 // It carries counters and latency only — never prompts, completions or
 // credentials.
 type Sample struct {
-	Success                bool
-	ErrorClass             ErrorClass
-	Failover               bool
+	Success    bool
+	ErrorClass ErrorClass
+	Failover   bool
+	// Stratum is a privacy-safe caller label (virtual-key ID,
+	// tenant or project — never a key value or session key)
+	// used for the bounded per-caller signal breakdown. Empty
+	// means unattributed.
+	Stratum                string
 	NoEligible             bool
 	HasNoEligibleSignal    bool
 	BudgetAnomaly          bool
@@ -116,6 +121,7 @@ type window struct {
 	budgetAnomaliesObserved int64
 	latencyMS               []float64
 	ttftMS                  []float64
+	strata                  map[string]*window
 }
 
 func (w *window) observe(s Sample) {
@@ -158,6 +164,41 @@ func (w *window) observe(s Sample) {
 	if s.HasTTFT && s.TTFTMS > 0 {
 		w.ttftMS = appendBounded(w.ttftMS, s.TTFTMS)
 	}
+	if s.Stratum != "" {
+		w.observeStratum(s)
+	}
+}
+
+// maxStrata bounds the per-caller breakdown: at most this many
+// distinct caller labels keep their own window; further labels
+// fold into a single "other" stratum so the breakdown can
+// never grow memory without bound.
+const maxStrata = 16
+
+func (w *window) observeStratum(s Sample) {
+	label := s.Stratum
+	if w.strata == nil {
+		w.strata = map[string]*window{}
+	}
+	sw, ok := w.strata[label]
+	if !ok {
+		if len(w.strata) >= maxStrata {
+			label = "other"
+			sw, ok = w.strata[label]
+			if !ok {
+				sw = &window{}
+				w.strata[label] = sw
+			}
+		} else {
+			sw = &window{}
+			w.strata[label] = sw
+		}
+	}
+	// Observe into the stratum window with the stratum field
+	// cleared so strata never recurse.
+	s2 := s
+	s2.Stratum = ""
+	sw.observe(s2)
 }
 
 func appendBounded(dst []float64, v float64) []float64 {
@@ -173,26 +214,35 @@ func appendBounded(dst []float64, v float64) []float64 {
 // evaluates. Rates are computed against Requests and are 0 when there is no
 // data — never an assumed value.
 type Signals struct {
-	Requests                int64   `json:"requests"`
-	Successes               int64   `json:"successes"`
-	Errors                  int64   `json:"errors"`
-	ErrorRate               float64 `json:"error_rate"`
-	ServerErrors            int64   `json:"server_errors"`
-	RateLimits              int64   `json:"rate_limits"`
-	AuthErrors              int64   `json:"auth_errors"`
-	Timeouts                int64   `json:"timeouts"`
-	TransportErrors         int64   `json:"transport_errors"`
-	NoEligible              int64   `json:"no_eligible"`
-	NoEligibleRate          float64 `json:"no_eligible_rate"`
-	NoEligibleObserved      int64   `json:"no_eligible_observed"`
-	Failovers               int64   `json:"failovers"`
-	FailoverRate            float64 `json:"failover_rate"`
-	BudgetAnomalies         int64   `json:"budget_anomalies"`
-	BudgetAnomaliesObserved int64   `json:"budget_anomalies_observed"`
-	LatencyP50MS            float64 `json:"latency_p50_ms"`
-	LatencyP95MS            float64 `json:"latency_p95_ms"`
-	TTFTCount               int64   `json:"ttft_count"`
-	TTFTP95MS               float64 `json:"ttft_p95_ms"`
+	Requests                int64            `json:"requests"`
+	Successes               int64            `json:"successes"`
+	Errors                  int64            `json:"errors"`
+	ErrorRate               float64          `json:"error_rate"`
+	ServerErrors            int64            `json:"server_errors"`
+	RateLimits              int64            `json:"rate_limits"`
+	AuthErrors              int64            `json:"auth_errors"`
+	Timeouts                int64            `json:"timeouts"`
+	TransportErrors         int64            `json:"transport_errors"`
+	NoEligible              int64            `json:"no_eligible"`
+	NoEligibleRate          float64          `json:"no_eligible_rate"`
+	NoEligibleObserved      int64            `json:"no_eligible_observed"`
+	Failovers               int64            `json:"failovers"`
+	FailoverRate            float64          `json:"failover_rate"`
+	BudgetAnomalies         int64            `json:"budget_anomalies"`
+	BudgetAnomaliesObserved int64            `json:"budget_anomalies_observed"`
+	LatencyP50MS            float64          `json:"latency_p50_ms"`
+	LatencyP95MS            float64          `json:"latency_p95_ms"`
+	TTFTCount               int64            `json:"ttft_count"`
+	TTFTP95MS               float64          `json:"ttft_p95_ms"`
+	Strata                  []StratumSignals `json:"strata,omitempty"`
+}
+
+// StratumSignals is one caller stratum's slice of a window:
+// the same signal shape, attributed to a privacy-safe caller
+// label.
+type StratumSignals struct {
+	Stratum string  `json:"stratum"`
+	Signals Signals `json:"signals"`
 }
 
 func (w *window) snapshot() Signals {
@@ -221,6 +271,16 @@ func (w *window) snapshot() Signals {
 	}
 	if w.noEligibleObserved > 0 {
 		s.NoEligibleRate = float64(w.noEligible) / float64(w.noEligibleObserved)
+	}
+	if len(w.strata) > 0 {
+		labels := make([]string, 0, len(w.strata))
+		for label := range w.strata {
+			labels = append(labels, label)
+		}
+		sort.Strings(labels)
+		for _, label := range labels {
+			s.Strata = append(s.Strata, StratumSignals{Stratum: label, Signals: w.strata[label].snapshot()})
+		}
 	}
 	return s
 }
@@ -667,10 +727,10 @@ func (c *Controller) Record(l Lease, s Sample) {
 // bound is not consumed by a request nobody served). The canary
 // gate is then re-evaluated exactly as Record does, so a
 // no-eligible storm trips an automatic rollback on its own.
-func (c *Controller) ObserveNoEligible(requestKey string) {
+func (c *Controller) ObserveNoEligible(requestKey, stratum string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	s := Sample{Success: false, ErrorClass: ClassNoEligible, NoEligible: true, HasNoEligibleSignal: true, At: c.now()}
+	s := Sample{Success: false, ErrorClass: ClassNoEligible, NoEligible: true, HasNoEligibleSignal: true, Stratum: stratum, At: c.now()}
 	if c.state == StateCanary && c.hasCandidate {
 		exhausted := c.canaryMaxRequests > 0 && c.canaryServed >= c.canaryMaxRequests
 		if !exhausted && c.shouldCanaryLocked(requestKey) {

@@ -166,7 +166,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.budgetRelease(r)
-		s.autopilotObserveNoEligible(cfg, resolvedRoute, autopilotRequestKeyFromContext(r.Context(), r.Header.Get("x-request-id")))
+		s.autopilotObserveNoEligible(cfg, resolvedRoute, autopilotRequestKeyFromContext(r.Context(), r.Header.Get("x-request-id")), autopilotCallerStratum(clientIdentityFromRequest(r)))
 		errorJSON(w, 503, "no compatible healthy deployment")
 		return
 	}
