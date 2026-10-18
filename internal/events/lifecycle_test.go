@@ -134,9 +134,13 @@ func TestSummarizeHandlesDuplicateAndOutOfOrderEvents(t *testing.T) {
 		ev(3, "route_ok", func(e *Event) { e.RequestID = rid; e.Deployment = "dep-a" }),
 		ev(1, "request_accepted", func(e *Event) { e.RequestID = rid; e.Phase = PhaseAccepted; e.RequestedModel = "m" }),
 		ev(2, "route_attempt", func(e *Event) { e.RequestID = rid; e.Phase = PhaseAttempt; e.Attempt = 1; e.Deployment = "dep-a" }),
-		// Replayed duplicates (as after an SSE resume) must be idempotent.
+		// Replayed duplicates (as after an SSE resume) must be idempotent,
+		// including mutations that append attempts or increment failovers.
 		ev(1, "request_accepted", func(e *Event) { e.RequestID = rid; e.Phase = PhaseAccepted; e.RequestedModel = "m" }),
+		ev(2, "route_attempt", func(e *Event) { e.RequestID = rid; e.Phase = PhaseAttempt; e.Attempt = 1; e.Deployment = "dep-a" }),
 		ev(3, "route_ok", func(e *Event) { e.RequestID = rid; e.Deployment = "dep-a" }),
+		ev(4, "failover", func(e *Event) { e.RequestID = rid; e.Deployment = "dep-a" }),
+		ev(4, "failover", func(e *Event) { e.RequestID = rid; e.Deployment = "dep-a" }),
 	}
 	got := Summarize(list, SummarizeOptions{Now: time.Unix(0, 100)})
 	if len(got) != 1 {
@@ -148,6 +152,9 @@ func TestSummarizeHandlesDuplicateAndOutOfOrderEvents(t *testing.T) {
 	}
 	if lc.State != TerminalSucceeded || lc.RequestedModel != "m" {
 		t.Fatalf("duplicate replay corrupted lifecycle: %+v", lc)
+	}
+	if lc.FailoverCount != 1 {
+		t.Fatalf("duplicate replay overcounted failovers: got %d want 1", lc.FailoverCount)
 	}
 }
 

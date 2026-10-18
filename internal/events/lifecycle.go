@@ -158,6 +158,23 @@ func Summarize(list []Event, opts SummarizeOptions) []RequestLifecycle {
 	}
 	sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].Seq < ordered[j].Seq })
 
+	// The same bus event can be replayed after an SSE reconnect. Sequence
+	// numbers are unique within one bus epoch, so drop repeated non-zero
+	// sequences before merging; otherwise replayed attempts and failovers
+	// would be counted twice even though the summary claims idempotence.
+	seenSeq := make(map[uint64]struct{}, len(ordered))
+	deduped := ordered[:0]
+	for _, e := range ordered {
+		if e.Seq != 0 {
+			if _, seen := seenSeq[e.Seq]; seen {
+				continue
+			}
+			seenSeq[e.Seq] = struct{}{}
+		}
+		deduped = append(deduped, e)
+	}
+	ordered = deduped
+
 	byKey := map[string]*RequestLifecycle{}
 	order := make([]string, 0, len(ordered))
 	for _, e := range ordered {
