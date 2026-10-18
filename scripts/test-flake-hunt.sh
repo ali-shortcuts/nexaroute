@@ -24,6 +24,10 @@ export STUB_TEMP_LOG="$SBX/tempdirs.log"
 cat > "$SBX/scripts/verify.sh" <<'STUB'
 #!/usr/bin/env bash
 printf 'verify|%s|%s\n' "${TMPDIR:-}" "${GOTMPDIR:-}" >> "$STUB_TEMP_LOG"
+if [ "${STUB_VERIFY_FAIL:-0}" = "1" ]; then
+  echo "gofmt rejected a generated file without a FAIL/panic prefix" >&2
+  exit 1
+fi
 exit 0
 STUB
 chmod +x "$SBX/scripts/verify.sh"
@@ -35,6 +39,10 @@ cat > "$SBX/bin/go" <<'STUB'
 #!/usr/bin/env bash
 echo "go $*" >> "$STUB_GO_LOG"
 printf 'go|%s|%s\n' "${TMPDIR:-}" "${GOTMPDIR:-}" >> "$STUB_TEMP_LOG"
+if [ "${STUB_GO_FAIL:-0}" = "1" ]; then
+  echo "compiler failed before tests without a FAIL/panic prefix" >&2
+  exit 2
+fi
 sleep 1
 echo "ok  \tgithub.com/ali-shortcuts/nexaroute/stub\t0.001s"
 exit 0
@@ -108,8 +116,22 @@ for n in 01 02; do
 done
 check "raw logs retained for both successful verify runs" "$verify_logs_ok"
 
+# Phase-1 toolchain failure with no FAIL/panic prefix must still emit ABORT.
+FAIL_SUITE_OUT="$SBX/fail-suite.out"
+PATH="$SBX/bin:$PATH" STUB_GO_FAIL=1 FLAKE_HUNT_ITERATIONS=1 FLAKE_HUNT_VERIFY_RUNS=1 FLAKE_HUNT_LOGDIR="$SBX/fail-suite-logs" FLAKE_HUNT_TMP_ROOT="$(dirname "$SBX")" timeout 10 bash "$SBX/scripts/flake-hunt.sh" >"$FAIL_SUITE_OUT" 2>&1
+suite_fail_rc=$?
+[ "$suite_fail_rc" -eq 1 ] && grep -q "flake-hunt: ABORTING on first failure" "$FAIL_SUITE_OUT"
+check "suite failure without FAIL/panic text emits ABORT and exits 1" $?
+
+# Phase-2 format/setup failure with no FAIL/panic prefix must also emit ABORT.
+FAIL_VERIFY_OUT="$SBX/fail-verify.out"
+PATH="$SBX/bin:$PATH" STUB_VERIFY_FAIL=1 FLAKE_HUNT_ITERATIONS=1 FLAKE_HUNT_VERIFY_RUNS=1 FLAKE_HUNT_LOGDIR="$SBX/fail-verify-logs" FLAKE_HUNT_TMP_ROOT="$(dirname "$SBX")" timeout 10 bash "$SBX/scripts/flake-hunt.sh" >"$FAIL_VERIFY_OUT" 2>&1
+verify_fail_rc=$?
+[ "$verify_fail_rc" -eq 1 ] && grep -q "flake-hunt: ABORTING on first failure" "$FAIL_VERIFY_OUT"
+check "verify failure without FAIL/panic text emits ABORT and exits 1" $?
+
 if [ "$failures" -gt 0 ]; then
 	echo "test-flake-hunt: $failures assertion(s) FAILED"
 	exit 1
 fi
-echo "test-flake-hunt: PASS (9 assertions)"
+echo "test-flake-hunt: PASS (11 assertions)"
