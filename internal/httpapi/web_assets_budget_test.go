@@ -15,7 +15,10 @@ var webAssetBudgets = map[string]int{
 	"web/index.html": 8 << 10,
 	// Issue #393 adds full redacted provider-edit metadata and explicit
 	// credential-pool controls; keep the aggregate asset ceiling unchanged.
-	"web/app.js":          200 << 10,
+	// Issue #411 groups the primary nav, discloses rare controls behind
+	// Advanced, and splits Settings into tabs, adding new EN/FA/PS copy.
+	// Keep the aggregate asset ceiling unchanged.
+	"web/app.js":          208 << 10,
 	"web/styles.css":      96 << 10,
 	"web/visual-agent.js": 16 << 10,
 }
