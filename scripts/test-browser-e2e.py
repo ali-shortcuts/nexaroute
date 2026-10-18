@@ -501,6 +501,93 @@ def main() -> None:
                 page.unroute("**/v1/video/jobs/ui-episode-1", mock_video_job)
                 page.unroute("**/v1/video/jobs/ui-episode-1/assets/asset-1", mock_video_asset)
 
+                # --- Issue #414 item 9: Video Studio failure scenarios ---
+                # (a) a failed job served from server history surfaces its
+                # error and its retry-safety verdict (no silent dead card);
+                # (b) a malformed providers payload degrades to the inline
+                # error and the app stays navigable; (c) after a browser
+                # restart (reload) a created job is recovered from server
+                # history with NO resubmission.
+                fail_job = {
+                    "job_id": "ui-fail-1", "state": "failed", "progress": 0,
+                    "provider": "fake", "created_at": "2026-10-12T00:00:00Z",
+                    "last_error": "provider rejected the brief: content policy",
+                    "retry_safety": {"verdict": "duplicate_risk",
+                                     "reason": "the provider accepted a submission; retrying may bill twice",
+                                     "provider_job_id_present": True,
+                                     "duplicate_billing_possible": True},
+                    "request": {"prompt": "a lighthouse at dawn", "provider_preference": "fake"},
+                }
+                def mock_fail_providers(route):
+                    route.fulfill(status=200, content_type="application/json", body=json.dumps({"providers": [{"id": "fake"}]}))
+                def mock_fail_list(route):
+                    if route.request.method == "GET":
+                        route.fulfill(status=200, content_type="application/json", body=json.dumps({"jobs": [fail_job], "durability": "file"}))
+                    else:
+                        route.fulfill(status=405, content_type="application/json", body="{}")
+                page.route("**/v1/video/providers", mock_fail_providers)
+                page.route("**/v1/video/jobs**", mock_fail_list)
+                page.locator('[data-page="video"]').click()
+                page.locator('[data-action="refresh-video"]').click()
+                expect(page.locator(".video-job-card")).to_contain_text("failed")
+                expect(page.locator(".video-job-card")).to_contain_text("provider rejected the brief")
+                expect(page.locator(".video-job-card")).to_contain_text("Retry risks duplicate billing")
+                expect(page.locator(".video-job-card")).to_contain_text("may bill twice")
+                page.unroute("**/v1/video/jobs**", mock_fail_list)
+
+                # (b) malformed providers payload -> inline error, app alive
+                def mock_bad_providers(route):
+                    route.fulfill(status=200, content_type="application/json", body="{not-json")
+                page.unroute("**/v1/video/providers", mock_fail_providers)
+                page.route("**/v1/video/providers", mock_bad_providers)
+                page.locator('[data-action="refresh-video"]').click()
+                expect(page.locator(".video-error")).to_be_visible()
+                page.locator('[data-page="providers"]').click()
+                expect(page.locator('[data-action="add-provider"]').first).to_be_visible()
+                page.unroute("**/v1/video/providers", mock_bad_providers)
+
+                # (c) restart recovery: create once, reload, history serves
+                # the job back and nothing is submitted twice.
+                recover_posts = {"n": 0}
+                recover_job = {
+                    "job_id": "ui-recover-1", "state": "completed", "progress": 1,
+                    "provider": "fake", "created_at": "2026-10-12T00:00:00Z",
+                    "request": {"prompt": "harbor timelapse", "provider_preference": "fake"},
+                    "output_assets": [],
+                }
+                def mock_recover_providers(route):
+                    route.fulfill(status=200, content_type="application/json", body=json.dumps({"providers": [{"id": "fake"}]}))
+                def mock_recover_jobs(route):
+                    if route.request.method == "POST":
+                        recover_posts["n"] += 1
+                        route.fulfill(status=202, content_type="application/json", body=json.dumps({
+                            "job_id": "ui-recover-1", "state": "queued", "progress": 0,
+                            "request": json.loads(route.request.post_data or "{}"),
+                        }))
+                    else:
+                        route.fulfill(status=200, content_type="application/json", body=json.dumps({"jobs": [recover_job], "durability": "file"}))
+                def mock_recover_job(route):
+                    route.fulfill(status=200, content_type="application/json", body=json.dumps(recover_job))
+                page.route("**/v1/video/providers", mock_recover_providers)
+                page.route("**/v1/video/jobs**", mock_recover_jobs)
+                page.route("**/v1/video/jobs/ui-recover-1", mock_recover_job)
+                page.locator('[data-page="video"]').click()
+                page.locator('[data-action="create-video"]').first.click()
+                page.locator('[data-action="example-shot-plan"]').click()
+                page.locator("#v-episode").fill("ui-recover-ep")
+                page.locator("#v-narration").fill("A harbor at dawn, boats leaving for the fishing grounds.")
+                page.locator("#v-subtitle-language").select_option("same-as-narration")
+                page.get_by_role("button", name="Queue job").click()
+                expect(page.locator(".video-job-card")).to_contain_text("completed")
+                assert recover_posts["n"] == 1, f"recover submissions={recover_posts['n']}"
+                page.reload(wait_until="domcontentloaded")
+                page.locator('[data-page="video"]').click()
+                expect(page.locator(".video-job-card")).to_contain_text("completed")
+                assert recover_posts["n"] == 1, f"job resubmitted after reload: posts={recover_posts['n']}"
+                page.unroute("**/v1/video/providers", mock_recover_providers)
+                page.unroute("**/v1/video/jobs**", mock_recover_jobs)
+                page.unroute("**/v1/video/jobs/ui-recover-1", mock_recover_job)
+
                 # --- ISSUE #246: disabled video gateway must not raise a global banner ---
                 # Isolate the disabled-state assertions from the fake provider enabled for M2-1 above.
                 def disabled_video_providers(route):
