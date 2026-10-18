@@ -950,16 +950,5 @@ func (o *Orchestrator) Cancel(ctx context.Context, id string) error {
 			_ = o.Ledger.SettleEstimate(j.JobID, j.EstimatedCostUSD)
 		}
 	}
-	j.LastError = ""
-	if err := o.Store.Update(ctx, j); err != nil {
-		return err
-	}
-	if o.Ledger != nil {
-		if j.ProviderJobID == "" {
-			o.Ledger.ReleaseForJob(j.JobID)
-		} else {
-			_ = o.Ledger.SettleEstimate(j.JobID, j.EstimatedCostUSD)
-		}
-	}
 	return nil
 }
