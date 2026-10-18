@@ -63,3 +63,36 @@ func TestWebChatBadgeWiring(t *testing.T) {
 		t.Error("styles.css missing badge styles")
 	}
 }
+
+// Phase 17 slice 2 (#417): a failed or stopped reply can be
+// retried from the message itself (the conversation truncates at
+// that turn and resends through the SAME pipeline — pgSend and
+// the retry share pgSendText), the conversation has an editable
+// title, and the transcript exports to Markdown from tab memory.
+func TestWebChatRetryExportWiring(t *testing.T) {
+	appBytes, err := webFS.ReadFile("web/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	appJS := string(appBytes)
+	for _, want := range []string{
+		"async function pgSendText(promptText)", // the one shared send pipeline
+		"return pgSendText(prompt);",            // textarea send goes through it
+		"async function pgRetry(i)",             // retry truncates and resends
+		"state.pgMessages.slice(0, u)",          // truncation at the failed turn
+		"data-action=\"pg-retry\"",              // per-message retry affordance
+		"startsWith('failed')",                  // retry only on failed/stopped attempts
+		"function pgExport()",                   // Markdown transcript export
+		"text/markdown",
+		`id="pg-title"`, // editable conversation title
+		"state.pgTitle",
+		"bt('pg_retry')",
+		"bt('pg_export')",
+		"'pg_retry': 'Retry'",
+		"'pg_retry': 'تلاش دوباره'",
+	} {
+		if !strings.Contains(appJS, want) {
+			t.Errorf("app.js missing WebChat slice-2 wiring %q", want)
+		}
+	}
+}
