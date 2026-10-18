@@ -144,3 +144,29 @@ button.metric-card:hover,button.metric-card:focus-visible{border-color:#3d536c;b
 .settings-panel .settings-card{min-height:0}
 @media(max-width:980px){.nav-group{display:none}}
 @media(max-width:700px){.nav-group{display:none}.settings-panel .settings-grid{grid-template-columns:1fr}}
+
+/* Phase 7 (#399): provider facts, provider health, routing eligibility. */
+.provider-facts{display:flex;gap:10px;flex-wrap:wrap;padding:10px 0 2px;border-top:1px solid var(--border)}
+.provider-facts span{display:grid;gap:2px;min-width:0;color:var(--text);font-size:11px}
+.provider-facts b{color:var(--subtle);font-size:9px;text-transform:uppercase;letter-spacing:.06em}
+.provider-health{display:flex;gap:9px;flex-wrap:wrap;color:var(--muted);font-size:10px}
+.provider-health-error{color:var(--bad)}
+.eligibility-panel{margin-top:16px;border:1px solid var(--border);border-radius:13px;background:var(--surface)}
+.eligibility-panel summary{display:flex;justify-content:space-between;gap:12px;padding:16px 18px;cursor:pointer;font-weight:800}
+.eligibility-panel summary small{max-width:70%;color:var(--muted);font-weight:400;text-align:right}
+.elig-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;padding:0 18px 18px}
+.elig-card{display:grid;gap:11px;padding:14px;border:1px solid var(--border);border-radius:12px;background:var(--surface-2)}
+.elig-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.elig-head b,.elig-head small{display:block}
+.elig-head small{margin-top:3px;color:var(--muted);font-size:10px}
+.elig-head code{color:var(--accent);font-size:10px}
+.elig-counts{display:flex;align-items:center;gap:14px;flex-wrap:wrap;color:var(--muted);font-size:10px}
+.elig-counts span{display:inline-flex;align-items:baseline;gap:5px}
+.elig-counts b{color:var(--text);font-size:12px}
+.elig-excluded{flex-wrap:wrap;gap:5px!important}
+.elig-reason{padding:3px 7px;border:1px solid rgba(255,127,145,.3);border-radius:999px;color:var(--bad);font-size:10px}
+.elig-reason.none{border-color:rgba(88,212,154,.3);color:var(--good)}
+.elig-warnings{display:grid;gap:6px;margin:0 18px 14px;padding:11px 13px;border:1px solid rgba(243,199,109,.35);border-radius:10px;background:rgba(243,199,109,.08)}
+.elig-warnings b{color:var(--warn);font-size:10px;text-transform:uppercase;letter-spacing:.06em}
+.elig-warnings span{color:var(--muted);font-size:11px}
+@media(max-width:700px){.elig-grid{grid-template-columns:1fr}.eligibility-panel summary{flex-direction:column}.eligibility-panel summary small{max-width:none;text-align:left}}
