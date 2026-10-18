@@ -213,3 +213,28 @@ sessions=0
 - No changes to protocol/UI contracts or browser E2E (#413).
 - No changes to policy lifecycle/canary (#418).
 - No change to `docs/reports/COMPLETION_CHECKLIST.md`.
+
+## 13. Verification
+
+Primary gate (`./scripts/verify.sh`), run locally on the environment of
+record, exit 0:
+
+```
+== formatting ==
+== mandatory clean unit/integration pass ==   (go test -timeout=3m -count=1 ./...)
+== go vet ==                                   (go vet ./...)
+== mandatory clean race pass ==                (go test -race -timeout=3m -count=1 ./...)
+== release artifact manifest checks ==         PASS
+== SBOM generator trust-chain checks ==        PASS
+== web ui javascript syntax ==                 (node --check)
+== real browser control-plane acceptance ==    WARN: Chromium + Python Playwright unavailable; skipping browser acceptance
+== short fuzz checks ==                         PASS
+== linux amd64 build == / == linux arm64 build ==
+VERIFY PASS
+```
+
+The browser acceptance steps were skipped because Chromium + Python
+Playwright are not installed on this runner; this is the script's
+documented warning path and not a failure. No test was skipped that this
+change depends on. The always-on deterministic contract test ran inside
+the clean and race passes of `./scripts/verify.sh`.
