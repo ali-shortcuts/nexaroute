@@ -268,10 +268,10 @@ func TestLedgerReconciliationUnknownAndReleasedStates(t *testing.T) {
 
 func TestLedgerReconciliationInvalidSettledAmountsStayUnknown(t *testing.T) {
 	cases := []struct {
-		name                              string
-		estimate, actual                  float64
+		name                                string
+		estimate, actual                    float64
 		wantEstimate, wantActual, wantDelta float64
-		wantReconciled                    bool
+		wantReconciled                      bool
 	}{
 		{name: "valid amounts", estimate: 2, actual: 3, wantEstimate: 2, wantActual: 3, wantDelta: 1, wantReconciled: true},
 		{name: "NaN actual", estimate: 2, actual: math.NaN(), wantEstimate: 2, wantActual: 0},
