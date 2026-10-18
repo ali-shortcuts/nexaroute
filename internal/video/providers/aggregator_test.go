@@ -18,14 +18,15 @@ import (
 // and malformed-output behaviour are proven without any paid
 // call or real key.
 type fakeAggregator struct {
-	mu         sync.Mutex
-	submits    int
-	cancels    int
-	statusStep map[string]int
-	failIDs    map[string]bool
-	badOutput  bool
-	authSeen   string
-	lastBody   map[string]any
+	mu          sync.Mutex
+	submits     int
+	cancels     int
+	statusStep  map[string]int
+	failIDs     map[string]bool
+	badOutput   bool
+	spoofOutput bool
+	authSeen    string
+	lastBody    map[string]any
 }
 
 func newFakeAggregator() *fakeAggregator {
@@ -88,6 +89,11 @@ func (f *fakeAggregator) handler(model string) http.Handler {
 		}
 	})
 	mux.HandleFunc("/files/out.mp4", func(w http.ResponseWriter, r *http.Request) {
+		if f.spoofOutput {
+			w.Header().Set("Content-Type", "video/mp4")
+			_, _ = w.Write([]byte("<html><body>definitely not a video</body></html>"))
+			return
+		}
 		if f.badOutput {
 			w.Header().Set("Content-Type", "text/plain")
 			_, _ = w.Write([]byte("this is not a video"))
@@ -308,5 +314,41 @@ func TestAggregatorConstructorFailsClosed(t *testing.T) {
 	bad.AggregatorModel = ""
 	if _, err := NewAggregator(bad, 0); err == nil {
 		t.Fatal("missing model accepted")
+	}
+}
+
+// #398 asset-security remainder: a served Content-Type header is
+// a claim, not proof. When the output host labels HTML bytes as
+// video/mp4, the download must be refused on the byte signature
+// and nothing may reach the sink.
+func TestAggregatorSpoofedContentTypeRefused(t *testing.T) {
+	fake := newFakeAggregator()
+	fake.spoofOutput = true
+	srv := httptest.NewServer(fake.handler("test/model-v1"))
+	defer srv.Close()
+	ctx := context.Background()
+	p := aggProvider(t, srv.URL)
+	job, err := p.CreateJob(ctx, video.VideoRequest{ProjectID: "p", Prompt: "x", DurationSeconds: 5, Mode: video.ModeTextToVideo})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var st video.ProviderJobStatus
+	for i := 0; i < 3; i++ {
+		st, err = p.GetJob(ctx, job.ProviderJobID)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if st.State != video.StateCompleted || len(st.Outputs) != 1 {
+		t.Fatalf("status = %+v", st)
+	}
+	sink := &aggSink{}
+	if _, err := p.DownloadOutputs(ctx, st, sink); err == nil {
+		t.Fatal("spoofed output (HTML bytes, video/mp4 header) was accepted")
+	} else if !strings.Contains(err.Error(), "do not look like a video container") {
+		t.Fatalf("error = %v, want the container-signature refusal", err)
+	}
+	if len(sink.saved) != 0 {
+		t.Fatalf("sink received %d assets from a spoofed output", len(sink.saved))
 	}
 }
