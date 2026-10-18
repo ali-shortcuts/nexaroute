@@ -269,6 +269,10 @@ When `video.piper_enabled` is true, the Gateway can synthesize narration for mul
 Every video provider declares an explicit, machine-readable capability
 surface (`video.Capabilities`, served per provider by
 `GET /v1/video/providers` together with `kind` and `production_ready`).
+
+### Job history and workflow (Phase 14)
+
+`GET /v1/video/jobs` returns the gateway's job history (newest first) with `state` and `q` filters and a clamped `limit` (default 50, max 200). The response names the job store's durability class — `file` (survives restarts on this host only; not distributed), `process` (in-memory; lost on restart) — and every job carries an additive `workflow` field: the nine-step production pipeline (validate → select → admit → submit → generate → validate output → compose → narrate → deliver) projected from recorded state, with inapplicable steps marked `skipped`. The Video Studio renders this history (searchable/filterable) instead of relying on browser-local tracking, and shows indeterminate progress — never an invented percentage — when a provider has reported none.
 Capabilities are provider-specific and transparent in both the API and
 Video Studio (the provider picker labels each entry with its kind and
 marks non-production backends).
