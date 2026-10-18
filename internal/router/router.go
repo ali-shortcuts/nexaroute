@@ -14,6 +14,7 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/config"
 	"github.com/ali-shortcuts/nexaroute/internal/health"
 	"github.com/ali-shortcuts/nexaroute/internal/pricing"
+	"github.com/ali-shortcuts/nexaroute/internal/providers"
 )
 
 type Deployment struct {
@@ -46,11 +47,18 @@ type ProviderLoad struct {
 type Requirement struct {
 	Model                               string
 	Tools, Vision, Streaming, Reasoning bool
-	ProviderType                        string
-	SessionKey                          string
-	SelectionKey                        string
-	ProviderLoad                        map[string]ProviderLoad
-	LoadForProvider                     func(string) ProviderLoad
+	// StructuredOutput and ParallelTools carry the request's
+	// dialect-sensitive demands (#436): a deployment whose
+	// provider dialect the conformance manifest marks
+	// UNSUPPORTED for a required dimension is ineligible, even
+	// when the model itself declares the capability — the flag
+	// would be dropped on encode.
+	StructuredOutput, ParallelTools bool
+	ProviderType                    string
+	SessionKey                      string
+	SelectionKey                    string
+	ProviderLoad                    map[string]ProviderLoad
+	LoadForProvider                 func(string) ProviderLoad
 	// MinContextWindow is the minimum usable context window a deployment
 	// must advertise to serve this request (estimated prompt tokens plus
 	// requested output). Zero disables the check. Deployments with an
@@ -79,6 +87,12 @@ func (r Requirement) Scopes() []string {
 	}
 	if r.Reasoning {
 		out = append(out, "reasoning")
+	}
+	if r.StructuredOutput {
+		out = append(out, "structured_output")
+	}
+	if r.ParallelTools {
+		out = append(out, "parallel_tools")
 	}
 	return out
 }
@@ -323,6 +337,23 @@ func (r *Router) evaluateDeployment(d Deployment, req Requirement, cfg config.Co
 	}
 	if req.Reasoning && !d.Capabilities.Reasoning {
 		return Scored{}, ExcludeMissingReasoning
+	}
+	// Conformance-manifest filter (#436): the manifest is the
+	// evidence contract for dialect-level claims. A dimension
+	// it marks UNSUPPORTED for this deployment's provider
+	// dialect cannot be honored by translation — the request
+	// must not be silently degraded, so the deployment is
+	// ineligible for requests that require the dimension.
+	if entry, ok := providers.ManifestEntry(d.ProviderType); ok {
+		if req.StructuredOutput && entry.Dimensions[providers.DimStructuredOutput].State == providers.StateUnsupported {
+			return Scored{}, ExcludeConformanceStructuredOutput
+		}
+		if req.ParallelTools && entry.Dimensions[providers.DimParallelTools].State == providers.StateUnsupported {
+			return Scored{}, ExcludeConformanceParallelTools
+		}
+		if req.Reasoning && entry.Dimensions[providers.DimReasoning].State == providers.StateUnsupported {
+			return Scored{}, ExcludeConformanceReasoning
+		}
 	}
 	healthScopes := []string(nil)
 	if cfg.Routing.Strategy == "ready_mesh" || cfg.Routing.Strategy == "cost_aware" {

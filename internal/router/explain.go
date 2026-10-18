@@ -20,7 +20,13 @@ const (
 	ExcludeRetired                 = "retired"
 	ExcludeNotReady                = "health_not_ready"
 	ExcludeCapabilityScopeNotReady = "capability_scope_not_ready"
-	ExcludeCooldown                = "health_cooldown"
+	// Conformance-manifest exclusions (#436): the deployment's
+	// provider dialect is marked UNSUPPORTED for a dimension
+	// the request requires, per the conformance manifest.
+	ExcludeConformanceStructuredOutput = "conformance_structured_output_unsupported"
+	ExcludeConformanceParallelTools    = "conformance_parallel_tools_unsupported"
+	ExcludeConformanceReasoning        = "conformance_reasoning_unsupported"
+	ExcludeCooldown                    = "health_cooldown"
 	// ExcludeFallbackSuperseded marks phase-1 (model-scoped) decisions that
 	// were re-evaluated ignoring the unknown model under
 	// Routing.FallbackOnUnknownModel; the trailing phase-2 decision is the
