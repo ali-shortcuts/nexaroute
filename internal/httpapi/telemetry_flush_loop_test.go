@@ -18,7 +18,7 @@ func TestTelemetryIngest_FlushLoopDrivesSync(t *testing.T) {
 	s := testGateway(t, cfg)
 
 	for i := 0; i < 5; i++ {
-		s.recordRouteSuccess(router.Requirement{Model: "model-a"}, "p1/m1", "p1", 200*time.Millisecond)
+		s.recordRouteSuccess(router.Requirement{Model: "model-a"}, "p1/m1", "p1", 200*time.Millisecond, "")
 	}
 	if got := scorecardTotal(t, s); got != 0 {
 		t.Fatalf("hot path flushed telemetry: %d scorecards before any flush", got)

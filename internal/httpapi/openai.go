@@ -275,6 +275,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 			if gatewayDeadlineError(routeCtx, r.Context(), e) {
 				gatewayTimedOut = true
 				s.hm.RecordProviderFailure(c.Deployment.ProviderID, c.Deployment.ID, lastErr)
+				s.observeTaskFeedback(string(ti.Profile.Type), c.Deployment.ID, false, headerLatency)
 				if router.IsReadyStrategy(cfg.Routing.Strategy) {
 					s.hm.Quarantine(c.Deployment.ID, lastErr, headerLatency)
 					s.probe.Recover(c.Deployment.ID)
@@ -285,6 +286,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 				break
 			}
 			s.hm.RecordProviderFailure(c.Deployment.ProviderID, c.Deployment.ID, lastErr)
+			s.observeTaskFeedback(string(ti.Profile.Type), c.Deployment.ID, false, headerLatency)
 			if router.IsReadyStrategy(cfg.Routing.Strategy) {
 				s.hm.Quarantine(c.Deployment.ID, lastErr, headerLatency)
 				s.probe.Recover(c.Deployment.ID)
@@ -343,7 +345,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 				policy.SignalProvider = false
 				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "model_unavailable", Deployment: c.Deployment.ID, Message: "upstream model temporarily unavailable", ErrorType: string(cls.Class), StatusCode: resp.StatusCode})
 			}
-			s.recordProviderFailure(c.Deployment.ProviderID, c.Deployment.ID, lastErr, policy)
+			s.recordProviderFailure(c.Deployment.ProviderID, c.Deployment.ID, lastErr, policy, string(ti.Profile.Type))
 			cooldownEntered := false
 			if router.IsReadyStrategy(cfg.Routing.Strategy) {
 				if policy.QuarantineDeployment {
@@ -493,12 +495,13 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 				s.hm.RecordFailure(c.Deployment.ID, lastErr, total)
 			}
 			s.hm.RecordProviderFailure(c.Deployment.ProviderID, c.Deployment.ID, lastErr)
+			s.observeTaskFeedback(string(ti.Profile.Type), c.Deployment.ID, false, total)
 			s.autopilotMarkTerminalFailure(autopilotRequestKeyFromContext(r.Context(), r.Header.Get("x-request-id")))
 			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "stream_fail", Deployment: c.Deployment.ID, Message: lastErr, ErrorType: "provider_stream_error", LatencyMS: total.Milliseconds(), StatusCode: resp.StatusCode})
 			return
 		}
 		prevStatus := s.hm.Get(c.Deployment.ID).Status
-		s.recordRouteSuccess(req, c.Deployment.ID, c.Deployment.ProviderID, headerLatency)
+		s.recordRouteSuccess(req, c.Deployment.ID, c.Deployment.ProviderID, headerLatency, string(ti.Profile.Type))
 		s.learnFromSuccess(c.Deployment.ID, c.Deployment.ProviderID, c.Deployment, payload, nil)
 		ev := events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_ok", Deployment: c.Deployment.ID, Message: "request completed", LatencyMS: total.Milliseconds(), StatusCode: resp.StatusCode}
 		if resolvedRoute != nil {
