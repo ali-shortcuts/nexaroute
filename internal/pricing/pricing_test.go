@@ -122,3 +122,18 @@ func TestPricingInclusiveConventionNoDoubleCharge(t *testing.T) {
 		t.Fatalf("exclusive cost = %v, want %v", exclusive, want)
 	}
 }
+
+func TestPricingRejectsNonFiniteAndNegativeRates(t *testing.T) {
+	e := Entry{InputPerMTok: math.NaN(), OutputPerMTok: math.Inf(1), CacheReadPerMTok: func() *float64 { v := -1.0; return &v }(), CacheWritePerMTok: func() *float64 { v := math.NaN(); return &v }()}
+	if got := Cost(e, 1000, 1000, 1000, 1000, true); got != 0 {
+		t.Fatalf("non-finite cost = %v, want 0", got)
+	}
+	if got := Estimate(e, 1000, 1000); got != 0 {
+		t.Fatalf("non-finite estimate = %v, want 0", got)
+	}
+	// Negative token counts are already sanitized; cost stays finite.
+	e2 := Entry{InputPerMTok: 10, OutputPerMTok: 30}
+	if got := Cost(e2, -5, -5, -5, -5, false); got != 0 {
+		t.Fatalf("negative tokens cost = %v, want 0", got)
+	}
+}
