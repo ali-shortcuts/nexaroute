@@ -1,6 +1,9 @@
 package usage
 
-import "testing"
+import (
+	"math"
+	"testing"
+)
 
 func TestTrackerIgnoresEmptyRecords(t *testing.T) {
 	tr := New()
@@ -168,5 +171,17 @@ func TestTrackerRetainKeepsTotalsConsistentAfterOverflow(t *testing.T) {
 	}
 	if s.ByDeployment[0].PromptTokens != s.TotalPromptTokens {
 		t.Fatalf("totals diverge from rows after retain: %+v", s)
+	}
+}
+
+func TestTrackerSnapshotClampsNonFinitePrices(t *testing.T) {
+	tr := New()
+	tr.Record("d1", 1_000_000, 1_000_000)
+	snap := tr.Snapshot(map[string]Price{"d1": {InputPerMTok: math.NaN(), OutputPerMTok: math.Inf(1)}})
+	if math.IsNaN(snap.TotalEstimatedCostUSD) || math.IsInf(snap.TotalEstimatedCostUSD, 0) || snap.TotalEstimatedCostUSD != 0 {
+		t.Fatalf("non-finite price leaked into snapshot: %v", snap.TotalEstimatedCostUSD)
+	}
+	if snap.ByDeployment[0].EstimatedCost != 0 {
+		t.Fatalf("row estimated cost = %v, want 0", snap.ByDeployment[0].EstimatedCost)
 	}
 }

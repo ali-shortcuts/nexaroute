@@ -246,3 +246,67 @@ func TestLedgerConcurrentReservationsAndSettlement(t *testing.T) {
 func jobID(i int) string {
 	return "job-" + string(rune('a'+i))
 }
+
+func TestLedgerReconciliationUnknownAndReleasedStates(t *testing.T) {
+	var ledger Ledger
+	// Unknown job.
+	if _, _, _, _, ok := ledger.Reconciliation("missing"); ok {
+		t.Fatal("unknown job reported ok")
+	}
+	// Released state keeps its estimate but is not reconciled.
+	e := knownEstimate(2)
+	if err := ledger.ReserveForJob("released", e, 0); err != nil {
+		t.Fatal(err)
+	}
+	ledger.ReleaseForJob("released")
+	est, act, delta, reconciled, ok := ledger.Reconciliation("released")
+	if !ok || reconciled || act != 0 || delta != 0 || est != 2 {
+		t.Fatalf("released reconciliation = (%v,%v,%v,%v,%v)", est, act, delta, reconciled, ok)
+	}
+	// Reconciliation never returns non-finite values.
+}
+
+func TestLedgerReconciliationInvalidSettledAmountsStayUnknown(t *testing.T) {
+	cases := []struct {
+		name                                string
+		estimate, actual                    float64
+		wantEstimate, wantActual, wantDelta float64
+		wantReconciled                      bool
+	}{
+		{name: "valid amounts", estimate: 2, actual: 3, wantEstimate: 2, wantActual: 3, wantDelta: 1, wantReconciled: true},
+		{name: "NaN actual", estimate: 2, actual: math.NaN(), wantEstimate: 2, wantActual: 0},
+		{name: "infinite actual", estimate: 2, actual: math.Inf(1), wantEstimate: 2, wantActual: 0},
+		{name: "negative actual", estimate: 2, actual: -1, wantEstimate: 2, wantActual: 0},
+		{name: "NaN estimate", estimate: math.NaN(), actual: 3, wantEstimate: 0, wantActual: 3},
+		{name: "infinite estimate", estimate: math.Inf(1), actual: 3, wantEstimate: 0, wantActual: 3},
+		{name: "negative estimate", estimate: -1, actual: 3, wantEstimate: 0, wantActual: 3},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ledger := Ledger{byJob: map[string]reservation{
+				"job": reservation{
+					estimate: knownEstimate(tc.estimate),
+					state:    actualSettledState,
+					actual:   tc.actual,
+				},
+			}}
+			gotEstimate, gotActual, gotDelta, reconciled, ok := ledger.Reconciliation("job")
+			if !ok {
+				t.Fatal("existing job reported missing")
+			}
+			if reconciled != tc.wantReconciled {
+				t.Fatalf("reconciled=%v, want %v", reconciled, tc.wantReconciled)
+			}
+			if gotEstimate != tc.wantEstimate || gotActual != tc.wantActual || gotDelta != tc.wantDelta {
+				t.Fatalf("amounts=(%v,%v,%v), want (%v,%v,%v)", gotEstimate, gotActual, gotDelta, tc.wantEstimate, tc.wantActual, tc.wantDelta)
+			}
+			for name, amount := range map[string]float64{
+				"estimate": gotEstimate, "actual": gotActual, "delta": gotDelta,
+			} {
+				if math.IsNaN(amount) || math.IsInf(amount, 0) {
+					t.Errorf("%s is non-finite: %v", name, amount)
+				}
+			}
+		})
+	}
+}

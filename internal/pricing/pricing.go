@@ -7,6 +7,7 @@
 package pricing
 
 import (
+	"math"
 	"sort"
 	"time"
 
@@ -73,8 +74,11 @@ func FromConfig(cfg config.Config) *Book {
 		}
 		versions = append(versions, Version{Name: v.Version, EffectiveFrom: from, Prices: prices})
 	}
-	sort.Slice(versions, func(i, j int) bool {
-		return versions[i].EffectiveFrom.Before(versions[j].EffectiveFrom)
+	sort.SliceStable(versions, func(i, j int) bool {
+		if !versions[i].EffectiveFrom.Equal(versions[j].EffectiveFrom) {
+			return versions[i].EffectiveFrom.Before(versions[j].EffectiveFrom)
+		}
+		return versions[i].Name < versions[j].Name
 	})
 	return &Book{versions: versions}
 }
@@ -133,6 +137,22 @@ func (b *Book) ResolveFor(cfg config.Config, deploymentID string, at time.Time) 
 // cache tokens and both are priced additively. Cache-write tokens
 // are always additive.
 func Cost(e Entry, input, output, cacheRead, cacheWrite int64, inputIncludesCache bool) float64 {
+	// Defense in depth: price rates are validated at config load, but a
+	// manually constructed or partially populated book must never turn
+	// into NaN/Inf/negative cost. Unknown or invalid rates price as zero
+	// (unknown), never as a fabricated number.
+	if math.IsNaN(e.InputPerMTok) || math.IsInf(e.InputPerMTok, 0) || e.InputPerMTok < 0 {
+		e.InputPerMTok = 0
+	}
+	if math.IsNaN(e.OutputPerMTok) || math.IsInf(e.OutputPerMTok, 0) || e.OutputPerMTok < 0 {
+		e.OutputPerMTok = 0
+	}
+	if e.CacheReadPerMTok != nil && (math.IsNaN(*e.CacheReadPerMTok) || math.IsInf(*e.CacheReadPerMTok, 0) || *e.CacheReadPerMTok < 0) {
+		e.CacheReadPerMTok = nil
+	}
+	if e.CacheWritePerMTok != nil && (math.IsNaN(*e.CacheWritePerMTok) || math.IsInf(*e.CacheWritePerMTok, 0) || *e.CacheWritePerMTok < 0) {
+		e.CacheWritePerMTok = nil
+	}
 	if input < 0 {
 		input = 0
 	}
@@ -156,7 +176,7 @@ func Cost(e Entry, input, output, cacheRead, cacheWrite int64, inputIncludesCach
 		float64(output)*e.OutputPerMTok +
 		float64(cacheRead)*e.CacheRead() +
 		float64(cacheWrite)*e.CacheWrite()) / 1_000_000
-	if cost < 0 {
+	if cost < 0 || math.IsNaN(cost) || math.IsInf(cost, 0) {
 		return 0
 	}
 	return cost
@@ -166,11 +186,21 @@ func Cost(e Entry, input, output, cacheRead, cacheWrite int64, inputIncludesCach
 // estimate plus the full output allowance at headline rates (cache
 // discounts unknown before the request runs).
 func Estimate(e Entry, estInputTokens, maxOutputTokens int64) float64 {
+	if math.IsNaN(e.InputPerMTok) || math.IsInf(e.InputPerMTok, 0) || e.InputPerMTok < 0 {
+		e.InputPerMTok = 0
+	}
+	if math.IsNaN(e.OutputPerMTok) || math.IsInf(e.OutputPerMTok, 0) || e.OutputPerMTok < 0 {
+		e.OutputPerMTok = 0
+	}
 	if estInputTokens < 0 {
 		estInputTokens = 0
 	}
 	if maxOutputTokens < 0 {
 		maxOutputTokens = 0
 	}
-	return (float64(estInputTokens)*e.InputPerMTok + float64(maxOutputTokens)*e.OutputPerMTok) / 1_000_000
+	v := (float64(estInputTokens)*e.InputPerMTok + float64(maxOutputTokens)*e.OutputPerMTok) / 1_000_000
+	if v < 0 || math.IsNaN(v) || math.IsInf(v, 0) {
+		return 0
+	}
+	return v
 }
