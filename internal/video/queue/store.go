@@ -28,6 +28,7 @@ type JobStore interface {
 	GetByIdempotency(context.Context, string) (video.VideoJob, error)
 	Update(context.Context, video.VideoJob) error
 	List(context.Context) ([]video.VideoJob, error)
+	Delete(context.Context, string) error
 }
 
 type MemoryStore struct {
@@ -54,6 +55,24 @@ func (s *MemoryStore) Create(_ context.Context, j video.VideoJob) error {
 	s.jobs[j.JobID] = j
 	return nil
 }
+
+// Delete removes a job and its idempotency mapping. It exists
+// for retention pruning of terminal jobs; deleting a missing
+// job is a no-op.
+func (s *MemoryStore) Delete(_ context.Context, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	j, ok := s.jobs[id]
+	if !ok {
+		return nil
+	}
+	delete(s.jobs, id)
+	if j.IdempotencyKey != "" {
+		delete(s.idem, j.IdempotencyKey)
+	}
+	return nil
+}
+
 func (s *MemoryStore) Get(_ context.Context, id string) (video.VideoJob, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

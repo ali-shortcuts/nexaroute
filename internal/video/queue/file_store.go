@@ -155,6 +155,30 @@ func (s *FileStore) Update(_ context.Context, j video.VideoJob) error {
 	return nil
 }
 
+// Delete removes a job and its idempotency mapping and
+// persists the removal, rolling back in memory when the write
+// fails. Deleting a missing job is a no-op.
+func (s *FileStore) Delete(_ context.Context, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	j, ok := s.jobs[id]
+	if !ok {
+		return nil
+	}
+	delete(s.jobs, id)
+	if j.IdempotencyKey != "" {
+		delete(s.idem, j.IdempotencyKey)
+	}
+	if err := s.persist(); err != nil {
+		s.jobs[id] = j
+		if j.IdempotencyKey != "" {
+			s.idem[j.IdempotencyKey] = id
+		}
+		return err
+	}
+	return nil
+}
+
 func (s *FileStore) List(_ context.Context) ([]video.VideoJob, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
