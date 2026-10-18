@@ -89,7 +89,15 @@ func (s *Server) adminProviderPresets(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 405, "method not allowed")
 		return
 	}
-	writeJSON(w, 200, map[string]any{"presets": providers.Presets()})
+	// Query filters are additive; existing callers still receive the complete
+	// presets collection when no filters are supplied.
+	all := providers.Presets()
+	filtered := providers.FilterPresets(all, r.URL.Query().Get("q"), r.URL.Query().Get("category"))
+	writeJSON(w, 200, map[string]any{
+		"presets":    filtered,
+		"categories": providers.PresetCategories(all),
+		"total":      len(all),
+	})
 }
 
 func (s *Server) adminProviderCheck(w http.ResponseWriter, r *http.Request) {
@@ -991,8 +999,40 @@ func snapshotConfigProviders(providers []config.ProviderConfig) []map[string]any
 
 func providerSummary(p config.ProviderConfig) map[string]any {
 	models := make([]string, 0, len(p.Models))
+	details := make([]map[string]any, 0, len(p.Models))
+	states := map[string]int{"manual": 0, "discovered": 0, "untested": 0, "passed": 0, "failed": 0, "degraded": 0, "tested": 0, "count": len(p.Models)}
 	for _, m := range p.Models {
 		models = append(models, m.Model)
+		source := m.Source
+		if source == "" {
+			source = config.ModelSourceManual
+		}
+		testState := m.TestState
+		if testState == "" {
+			testState = config.ModelTestUntested
+		}
+		if source == config.ModelSourceDiscovered {
+			states["discovered"]++
+		} else {
+			states["manual"]++
+		}
+		switch testState {
+		case config.ModelTestPassed:
+			states["passed"]++
+			states["tested"]++
+		case config.ModelTestFailed:
+			states["failed"]++
+			states["tested"]++
+		case config.ModelTestDegraded:
+			states["degraded"]++
+		default:
+			states["untested"]++
+		}
+		details = append(details, map[string]any{
+			"model":      m.Model,
+			"source":     source,
+			"test_state": testState,
+		})
 	}
 	return map[string]any{
 		"id":               p.ID,
@@ -1003,6 +1043,8 @@ func providerSummary(p config.ProviderConfig) map[string]any {
 		"auth_mode":        p.AuthMode,
 		"enabled":          p.Enabled,
 		"models":           models,
+		"model_details":    details,
+		"model_states":     states,
 		"model_count":      len(models),
 		"has_secret":       len(p.ResolvedCredentials()) > 0,
 		"api_key_env":      p.APIKeyEnv,
