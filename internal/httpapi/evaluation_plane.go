@@ -21,15 +21,22 @@ import (
 // bounded exception — the data plane may submit aggregated operational
 // counters (success/failure counts, numeric latency/TTFT samples) through the
 // opt-in production-telemetry hook. That hook never reads scorecards, never
-// touches routing/health state and never carries prompt/response content, and
-// nothing reads scorecards back into routing. The evaluation plane therefore
-// cannot change real routing.
+// touches routing/health state and never carries prompt/response content.
+// Phase 19 (#510 item 5) adds the one sanctioned read-back: the decision
+// wiring may convert per-(task, deployment) scorecard values into plain
+// candidate signals, which influence routing only when an operator gives
+// the policy quality component a positive weight. The decision plane
+// itself still never imports this plane or the scorecards package.
 type evaluationPlane struct {
 	mu     sync.RWMutex
 	cfg    config.EvaluationConfig
 	reg    *scorecards.Registry
 	runner *eval.Runner
 	store  *eval.Store
+	// feedback aggregates production outcomes per (task, deployment)
+	// with decay (#510 item 5); carried across hot reloads like the
+	// registry and store.
+	feedback *scorecards.FeedbackTracker
 	// importError records the last artifact import failure, if any, so the admin
 	// surface can show why scorecards are missing instead of pretending.
 	importError string
@@ -72,6 +79,7 @@ func newEvaluationPlane(cfg config.EvaluationConfig, previous *evaluationPlane) 
 		p.telemetryIngested.Store(previous.telemetryIngested.Load())
 		p.imported = previous.imported
 		p.loadedStatePath = previous.loadedStatePath
+		p.feedback = previous.feedback
 		p.customSuites = previous.OperatorSuites()
 		p.suitesError = previous.SuitesError()
 		p.loadedSuitesPath = previous.loadedSuitesPathValue()
@@ -89,6 +97,9 @@ func newEvaluationPlane(cfg config.EvaluationConfig, previous *evaluationPlane) 
 	if p.store == nil {
 		p.store = eval.NewStore(cfg.MaxRuns)
 	}
+	if p.feedback == nil {
+		p.feedback = scorecards.NewFeedbackTracker(scorecards.DefaultFeedbackHalfLife, 0)
+	}
 	return p
 }
 
@@ -97,6 +108,11 @@ func (p *evaluationPlane) Registry() *scorecards.Registry { return p.reg }
 
 // Store returns the bounded run store (thread-safe).
 func (p *evaluationPlane) Store() *eval.Store { return p.store }
+
+// Feedback returns the per-(task, deployment) feedback tracker
+// (#510 item 5). Producers report outcomes through it; the decision
+// wiring reads its cards as preference evidence.
+func (p *evaluationPlane) Feedback() *scorecards.FeedbackTracker { return p.feedback }
 
 // Enabled reports whether the plane is configured to accept runs and imports.
 func (p *evaluationPlane) Enabled() bool {

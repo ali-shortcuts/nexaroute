@@ -16,11 +16,34 @@ const (
 	CompCapacity       = "capacity"
 	CompCost           = "cost"
 	CompContext        = "context"
+	CompQuality        = "quality"
 	// CompEvidence is the [0,1] confidence in a deployment's reliability
 	// evidence. It is not a weighted objective component; it gates how much
 	// the reliability objective is trusted (see ScoreCandidatesWithObservations).
 	CompEvidence = "evidence"
 )
+
+const fullConfidenceSamples = 32
+
+// fullConfidenceSamples mirrors scorecards.FullConfidenceSamples:
+// the sample count at which measured evidence reaches full
+// confidence. It is restated here because the decision plane must
+// not import the scorecards package (Phase H isolation guard);
+// the two constants must stay in step.
+// qualityComponent blends a candidate's per-task scorecard score
+// toward the neutral 0.5 baseline in proportion to its sample
+// confidence, exactly like the reliability evidence gate: thin
+// data is shown as thin data and cannot flap a route.
+func qualityComponent(c decision.Candidate) float64 {
+	if c.TaskQualitySamples <= 0 {
+		return 0.5
+	}
+	conf := float64(c.TaskQualitySamples) / fullConfidenceSamples
+	if conf > 1 {
+		conf = 1
+	}
+	return 0.5 + conf*(clamp01(c.TaskQuality)-0.5)
+}
 
 // clamp01 clamps v to [0,1], returns 0.5 if not finite.
 func clamp01(v float64) float64 {
@@ -373,6 +396,7 @@ func ScoreCandidatesWithObservations(cands []decision.Candidate, required, minOb
 			CompCapacity:       capacityScores[c.ID],
 			CompCost:           costScores[c.ID],
 			CompContext:        contextScores[c.ID],
+			CompQuality:        qualityComponent(c),
 			CompEvidence:       evidence,
 		}
 		// Ensure all finite clamped
