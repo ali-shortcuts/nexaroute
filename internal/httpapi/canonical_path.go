@@ -496,6 +496,7 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 	req := router.Requirement{
 		Model: in.Model, Tools: ti.Features.HasTools || reqReqs.Tools, Vision: ti.Features.HasVision || reqReqs.Vision,
 		Streaming: reqReqs.Streaming, Reasoning: ti.Features.HasReasoning || reqReqs.Reasoning,
+		StructuredOutput: reqReqs.StructuredOutput, ParallelTools: reqReqs.ParallelTools,
 	}
 	req.EstimatedInputTokens = ti.Features.EstimatedPromptTokens
 	req.MaxOutputTokens = in.MaxOutputTokens

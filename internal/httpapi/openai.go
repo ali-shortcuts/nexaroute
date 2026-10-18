@@ -18,6 +18,23 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/translate"
 )
 
+// openAIStructuredRequested reports whether a raw OpenAI
+// response_format value demands structured output. The plain
+// text format (string "text" or {"type":"text"}) does not.
+func openAIStructuredRequested(v any) bool {
+	switch t := v.(type) {
+	case nil:
+		return false
+	case string:
+		return t != "" && t != "text"
+	case map[string]any:
+		ty, _ := t["type"].(string)
+		return ty != "" && ty != "text"
+	default:
+		return true
+	}
+}
+
 func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		errorJSON(w, 405, "method not allowed")
@@ -99,7 +116,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.emitRequestAccepted(r, "openai", in.Model, in.Stream)
-	req := router.Requirement{Model: in.Model, Tools: ti.Features.HasTools, Vision: ti.Features.HasVision, Streaming: in.Stream, Reasoning: ti.Features.HasReasoning}
+	req := router.Requirement{Model: in.Model, Tools: ti.Features.HasTools, Vision: ti.Features.HasVision, Streaming: in.Stream, Reasoning: ti.Features.HasReasoning, StructuredOutput: openAIStructuredRequested(in.ResponseFormatRaw), ParallelTools: in.ParallelToolCalls != nil && *in.ParallelToolCalls}
 	if req.Reasoning {
 		req.ProviderType = "openai_compatible"
 	}
