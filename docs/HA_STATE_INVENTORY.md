@@ -49,14 +49,63 @@ Scopes: `shared` (coherent across replicas via a shared store),
 
 ## Test evidence behind this inventory
 
-- `internal/controlplane` — `TestTwoInstanceFileStoreCoherence`
-  (two real FileStore instances over one store file: visibility,
-  typed `ErrConflict` on stale writes and deletes), plus the
-  existing cross-process flock tests and the real-service
-  PostgreSQL/Redis integration suites (opt-in, service-gated).
-- `internal/httpapi` — deployment report tests: the default
-  topology reports per-instance scopes and warnings; shared
-  backends upgrade only the subsystems they actually back.
+Scenario-by-scenario map for the #434 acceptance criterion —
+every multi-instance scenario names its proving test(s), or
+its documented non-claim. Integration tests are build-tagged
+(`integration`) and run in the CI `integration-postgres` /
+`integration-redis` jobs against real service containers;
+everything else runs in the ordinary unit suite.
+
+- **Concurrent updates to shared control-plane state** —
+  `TestPostgresIntegrationTwoInstancesAndRestart` and
+  `TestPostgresIntegrationConcurrentFirstWriteRace`
+  (PostgreSQL: cross-instance visibility, stale writes fail
+  with typed `ErrConflict`, never a lost update or a leaked
+  database error); `TestRedisIntegrationTwoClientsAndCorruption`
+  (the same semantics on Redis);
+  `TestPostgresIntegrationMigrationsIdempotentChecksumAndConcurrent`
+  (schema migrations under concurrency);
+  `TestPostgresIntegrationStoreConformance` /
+  `TestRedisIntegrationStoreConformance`; security-store
+  equivalents `TestPostgresSecurityStoreIntegration` /
+  `TestRedisSecurityStoreIntegration`. In-process:
+  `TestTwoInstanceFileStoreCoherence` (two FileStore instances
+  over one file, plus cross-process flock tests).
+- **Restart** — the restart leg of
+  `TestPostgresIntegrationTwoInstancesAndRestart` (a brand-new
+  connection pool sees exactly the committed state);
+  `TestFileStoreClaimPersistsAcrossReopen` (video leases).
+- **Duplicate job claims** — the video lease suite:
+  `TestTryClaimMatrix`, `TestTryClaimSingleWinnerUnderConcurrency`
+  (16 claimants, exactly one winner),
+  `TestFileStoreClaimPersistsAcrossReopen`,
+  `TestTwoInstancesNeverExecuteSameJob` (two orchestrators,
+  one store, exactly one provider submission). The lease is
+  cross-process only where the store's claim is atomic across
+  processes; no shared (PostgreSQL/Redis) job-store backend
+  exists yet — building one is an owner topology decision,
+  recorded on #434, and nothing in this document claims it.
+- **Cooldown visibility** — deliberately **per-instance**:
+  breaker/cooldown state is not shared, and
+  `TestDeploymentReportSharedControlPlane` pins that even
+  with a shared control-plane backend the report keeps
+  breaker/cooldown (and quota reservations) labeled
+  per-instance; `TestDeploymentReportDefaultIsPerInstance`
+  pins the default topology's labels and warnings.
+- **Reservation semantics** — deliberately **per-instance**:
+  `TestBudgetLedgerConcurrentInvariants`,
+  `TestBudgetLedgerAdmissionAndRelease` and
+  `TestBudgetLedgerExpiryCommitsEstimate` prove the local
+  ledger's exactly-once, bounded semantics; KNOWN_GAPS states
+  reservations are advisory and never coordinated across
+  processes, and the admin UI surfaces the answering
+  instance's own ledger as such. A shared reservation store
+  is the same owner topology decision as above (#435).
+- **Deployment observability** —
+  `TestHelloExposesDeploymentReport` (the report reaches
+  `/api/hello`) and the Overview deployment panel, so a
+  partially-shared topology is visible rather than implied
+  global.
 - Live multi-host behavior (real PG/Redis clusters, rolling
   deploys) remains **UNVERIFIED** in this tree; the integration
   suites are the strongest available evidence and are gated on
