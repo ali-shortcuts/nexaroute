@@ -10,6 +10,7 @@ package probe
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -324,6 +325,65 @@ func TestProbeSkipsDisabledDeployments(t *testing.T) {
 	}
 	if got := calls.Load(); got != 1 {
 		t.Fatalf("upstream calls=%d want 1 (disabled deployment must not be probed)", got)
+	}
+}
+
+// TestSingleFailingModelDoesNotDisableSiblingsOrProvider verifies that a probe
+// failure quarantines only the failing deployment and never ejects the whole
+// provider without corroborating evidence.
+func TestSingleFailingModelDoesNotDisableSiblingsOrProvider(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if model, _ := body["model"].(string); model == "bad" {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"error":"down"}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(okBody()))
+	}))
+	defer up.Close()
+
+	cfg := config.Default()
+	cfg.Routing.Strategy = "ready_queue"
+	cfg.Probe.Enabled = true
+	cfg.Probe.OnStart = false
+	cfg.Probe.CapabilityProbes = false
+	cfg.Probe.TimeoutMS = 1000
+	cfg.Providers = []config.ProviderConfig{{
+		ID: "p", Name: "P", Type: "openai_compatible", BaseURL: up.URL,
+		AuthMode: "none", Enabled: true,
+		Models: []config.ModelConfig{
+			{ID: "bad", Model: "bad", Enabled: true, Weight: 1},
+			{ID: "good", Model: "good", Enabled: true, Weight: 1},
+		},
+	}}
+	cfg.ApplyDefaults()
+
+	hm := health.New(cfg.Routing.FailureThreshold, cfg.Cooldown())
+	reg, err := providers.NewRegistry(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt := router.New(cfg, hm)
+	e := New(cfg, reg, rt, hm, events.New(100))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	e.setRunContext(ctx)
+
+	res := e.RunOnce(ctx)
+	if res.Passed != 1 || res.Failed != 1 {
+		t.Fatalf("sweep=%+v want one pass and one fail", res)
+	}
+	if st := hm.Get("p/good"); st.Status != health.Healthy {
+		t.Fatalf("unrelated sibling impaired by a peer failure: %+v", st)
+	}
+	if st := hm.Get("p/bad"); st.Status == health.Healthy {
+		t.Fatalf("failing deployment was not quarantined: %+v", st)
+	}
+	if !hm.ProviderAvailable("p") {
+		t.Fatal("provider ejected on a single deployment failure without evidence")
 	}
 }
 
