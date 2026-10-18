@@ -34,6 +34,11 @@ func recoveryFixture(t *testing.T, handler http.HandlerFunc, recoveryAttempts, c
 	cfg.Probe.TimeoutMS = 1000
 	cfg.Probe.RecoveryAttempts = recoveryAttempts
 	cfg.Probe.RecoveryRetryMS = 5
+	// These legacy tests exercise attempt counting and cooldown duration; pin
+	// first-success recovery (threshold 1) and keep the recovery cooldown
+	// aligned with the test's cooldown argument.
+	cfg.Probe.RecoverySuccessThreshold = 1
+	cfg.Probe.RecoveryCooldownSeconds = cooldownSeconds
 	cfg.Providers = []config.ProviderConfig{{
 		ID: "p", Name: "P", Type: "openai_compatible", BaseURL: up.URL,
 		AuthMode: "none", Enabled: true,
@@ -146,6 +151,7 @@ func TestSupervisorDoesNotConsumeRecoveryBudgetWhileCredentialRateLimited(t *tes
 	cfg.Probe.OnStart = true
 	cfg.Probe.RecoveryAttempts = 5
 	cfg.Probe.RecoveryRetryMS = 5
+	cfg.Probe.RecoverySuccessThreshold = 1
 	cfg.Probe.TimeoutMS = 1000
 	cfg.Providers = []config.ProviderConfig{{
 		ID: "p", Name: "P", Type: "openai_compatible", BaseURL: up.URL,
@@ -208,6 +214,8 @@ func TestSupervisorFakeClockFiveAttemptsAndCooldownExpiryReentry(t *testing.T) {
 	cfg.Probe.TimeoutMS = 1000
 	cfg.Probe.RecoveryAttempts = 5
 	cfg.Probe.RecoveryRetryMS = 5
+	cfg.Probe.RecoverySuccessThreshold = 1
+	cfg.Probe.RecoveryCooldownSeconds = 1800
 	cfg.Providers = []config.ProviderConfig{{
 		ID: "p", Name: "P", Type: "openai_compatible", BaseURL: up.URL,
 		AuthMode: "none", Enabled: true,

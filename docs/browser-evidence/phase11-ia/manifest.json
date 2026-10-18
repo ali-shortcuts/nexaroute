@@ -1,0 +1,983 @@
+{
+  "generated_at": "2026-10-18T02:40:25.001Z",
+  "base": "http://127.0.0.1:18741/",
+  "shots": [
+    {
+      "file": "dark-en-desktop/overview.png",
+      "page": "overview",
+      "theme": "dark",
+      "lang": "en",
+      "viewport": "desktop",
+      "sha256": "7cb5ded7222eab6e33990ceaf90d7c5ce1b08f7bb4f57912905456046ab5c7d4"
+    },
+    {
+      "file": "dark-en-desktop/providers.png",
+      "page": "providers",
+      "theme": "dark",
+      "lang": "en",
+      "viewport": "desktop",
+      "sha256": "ce7dbddb78f1f12a421ba2822917e01f3db8ac7c8cf1633c6b8d2a4797a69aa3"
+    },
+    {
+      "file": "dark-en-desktop/routing.png",
+      "page": "routing",
+      "theme": "dark",
+      "lang": "en",
+      "viewport": "desktop",
+      "sha256": "da04318be1837aa0b1002a0432d2f73aae44c1a9d9583368bb81cab0664dfd3a"
+    },
+    {
+      "file": "dark-en-desktop/video.png",
+      "page": "video",
+      "theme": "dark",
+      "lang": "en",
+      "viewport": "desktop",
+      "sha256": "291a98ebbd598025e012297feb8b122b3f406082f8d113ffe79af55678996060"
+    },
+    {
+      "file": "dark-en-desktop/activity.png",
+      "page": "activity",
+      "theme": "dark",
+      "lang": "en",
+      "viewport": "desktop",
+      "sha256": "857dd82d82e5c7f4fa2e90b3d3cf81c5d78910bb9256a98907d89071c6f75544"
+    },
+    {
+      "file": "dark-en-desktop/playground.png",
+      "page": "playground",
+      "theme": "dark",
+      "lang": "en",
+      "viewport": "desktop",
+      "sha256": "6e0f62c9b6566b5d776e517b1940d6769895d7de4a508e8cffa231fd2866dba8"
+    },
+    {
+      "file": "dark-en-desktop/policies.png",
+      "page": "policies",
+      "theme": "dark",
+      "lang": "en",
+      "viewport": "desktop",
+      "sha256": "4ef5126600653f775868fe210670a907213f7ddad583f48496f7e7d2050558ee"
+    },
+    {
+      "file": "dark-en-desktop/access.png",
+      "page": "access",
+      "theme": "dark",
+      "lang": "en",
+      "viewport": "desktop",
+      "sha256": "74f2e614ee0958a1878e9bc752e3240b315bd5be8f31e74e98d5f2d57886c566"
+    },
+    {
+      "file": "dark-en-desktop/audit.png",
+      "page": "audit",
+      "theme": "dark",
+      "lang": "en",
+      "viewport": "desktop",
+      "sha256": "95d7027cd5f1b33d61651daf990a6532e3f4acfd57c0d5236b7563fed3302d80"
+    },
+    {
+      "file": "dark-en-desktop/cost.png",
+      "page": "cost",
+      "theme": "dark",
+      "lang": "en",
+      "viewport": "desktop",
+      "sha256": "3449ec313e5be3277501cc203a08bc8600e09a62725eb817c390c972762951d8"
+    },
+    {
+      "file": "dark-en-desktop/evals.png",
+      "page": "evals",
+      "theme": "dark",
+      "lang": "en",
+      "viewport": "desktop",
+      "sha256": "1af5f0a6d3d8773b1955d8228524450a06197c9f5daf1afea66fa20e573e26ca"
+    },
+    {
+      "file": "dark-en-desktop/observability.png",
+      "page": "observability",
+      "theme": "dark",
+      "lang": "en",
+      "viewport": "desktop",
+      "sha256": "f11e94caafbe6a87f611707a58323116d1c8624f307b3532cbf21d38797450c7"
+    },
+    {
+      "file": "dark-en-desktop/settings.png",
+      "page": "settings",
+      "theme": "dark",
+      "lang": "en",
+      "viewport": "desktop",
+      "sha256": "ee272bc94f45e588655628d4925390b55e0b0a17242462e69c172d29d29f7005"
+    },
+    {
+      "file": "dark-en-mobile/overview.png",
+      "page": "overview",
+      "theme": "dark",
+      "lang": "en",
+      "viewport": "mobile",
+      "sha256": "70aacdf24342fa2a06ed24f15788be6e46132c0ff5a093e03092230728c3806c"
+    },
+    {
+      "file": "dark-en-mobile/providers.png",
+      "page": "providers",
+      "theme": "dark",
+      "lang": "en",
+      "viewport": "mobile",
+      "sha256": "54055323b4b1d6d4b87f87dcd1188a62b8071b640db2c7cd5fc953a8666dd0d6"
+    },
+    {
+      "file": "dark-en-mobile/routing.png",
+      "page": "routing",
+      "theme": "dark",
+      "lang": "en",
+      "viewport": "mobile",
+      "sha256": "307c2568620f3db4e1802bfe60d338d8c1320fc8e4a7d3b83e0132f6dfc7da72"
+    },
+    {
+      "file": "dark-en-mobile/video.png",
+      "page": "video",
+      "theme": "dark",
+      "lang": "en",
+      "viewport": "mobile",
+      "sha256": "5aac1d8d8c5c4f0206bc22dbd8366b4b37f6c144c38780dc2b9d10e278181fa1"
+    },
+    {
+      "file": "dark-en-mobile/activity.png",
+      "page": "activity",
+      "theme": "dark",
+      "lang": "en",
+      "viewport": "mobile",
+      "sha256": "1d84e58e3ca1530f2658825f5b3a26a5a2bcf48968ab14028814e4b12a9c758f"
+    },
+    {
+      "file": "dark-en-mobile/playground.png",
+      "page": "playground",
+      "theme": "dark",
+      "lang": "en",
+      "viewport": "mobile",
+      "sha256": "d91605a66151c70b6bc4766741ac870e0d05443ea426a4c54aeb1609a82541b5"
+    },
+    {
+      "file": "dark-en-mobile/policies.png",
+      "page": "policies",
+      "theme": "dark",
+      "lang": "en",
+      "viewport": "mobile",
+      "sha256": "b33c0fdfb11bebd4b2e7c8373a875bed892271b9ebf812f6d4f95fbfaf97e05a"
+    },
+    {
+      "file": "dark-en-mobile/access.png",
+      "page": "access",
+      "theme": "dark",
+      "lang": "en",
+      "viewport": "mobile",
+      "sha256": "4926e6be87257719a47351632de4393fd1e46171118adfbb4991a1df35897a48"
+    },
+    {
+      "file": "dark-en-mobile/audit.png",
+      "page": "audit",
+      "theme": "dark",
+      "lang": "en",
+      "viewport": "mobile",
+      "sha256": "ac07ab0e857e09904c75228edaa26815b8d7b33f326d9974b22977e5acffe2bc"
+    },
+    {
+      "file": "dark-en-mobile/cost.png",
+      "page": "cost",
+      "theme": "dark",
+      "lang": "en",
+      "viewport": "mobile",
+      "sha256": "8f41a9424d621f43ffdbd95af53fbed614dfe6e12924de946ebaf2284ef818a2"
+    },
+    {
+      "file": "dark-en-mobile/evals.png",
+      "page": "evals",
+      "theme": "dark",
+      "lang": "en",
+      "viewport": "mobile",
+      "sha256": "779a65e39d44b90a9f59f02cec244af7c1c396e63c0dd4dbb4c8640575043a45"
+    },
+    {
+      "file": "dark-en-mobile/observability.png",
+      "page": "observability",
+      "theme": "dark",
+      "lang": "en",
+      "viewport": "mobile",
+      "sha256": "f4cf53953f3d42a4e5992b73f5c558dc6253ab2d53adb5c0a8f76c107ee3e9ee"
+    },
+    {
+      "file": "dark-en-mobile/settings.png",
+      "page": "settings",
+      "theme": "dark",
+      "lang": "en",
+      "viewport": "mobile",
+      "sha256": "757d4f0f39d4a34bcb4fe113fe44068dfc2554bf05327ec9beafa3d3e029a0db"
+    },
+    {
+      "file": "dark-fa-desktop/overview.png",
+      "page": "overview",
+      "theme": "dark",
+      "lang": "fa",
+      "viewport": "desktop",
+      "sha256": "d4d547df0c02771d9269fae1bdb016b25f5c018f25b5c1b950e52ef64be83a6d"
+    },
+    {
+      "file": "dark-fa-desktop/providers.png",
+      "page": "providers",
+      "theme": "dark",
+      "lang": "fa",
+      "viewport": "desktop",
+      "sha256": "b6f5dd53730acf48a33b70451f3c5ab42922a0feaf03cb4d9789d48431b41405"
+    },
+    {
+      "file": "dark-fa-desktop/routing.png",
+      "page": "routing",
+      "theme": "dark",
+      "lang": "fa",
+      "viewport": "desktop",
+      "sha256": "820a3b37475db031cd926e92e978b4a3032475ddffffd50734c4ec2e2a06ba17"
+    },
+    {
+      "file": "dark-fa-desktop/video.png",
+      "page": "video",
+      "theme": "dark",
+      "lang": "fa",
+      "viewport": "desktop",
+      "sha256": "5438c3bb95bfea7dca1128f33f3670c263e70b3a0912e6193f3ecd7e00ace75c"
+    },
+    {
+      "file": "dark-fa-desktop/activity.png",
+      "page": "activity",
+      "theme": "dark",
+      "lang": "fa",
+      "viewport": "desktop",
+      "sha256": "251b10f8deab3830f1afa962734171e36d307d340e0fc906d2f55a28d92531e4"
+    },
+    {
+      "file": "dark-fa-desktop/playground.png",
+      "page": "playground",
+      "theme": "dark",
+      "lang": "fa",
+      "viewport": "desktop",
+      "sha256": "d4119e97c62b4764d65c9beb483dc629ab88224a2c7b7e79bebe4e87032eb782"
+    },
+    {
+      "file": "dark-fa-desktop/policies.png",
+      "page": "policies",
+      "theme": "dark",
+      "lang": "fa",
+      "viewport": "desktop",
+      "sha256": "e823b5efa9fdc709b2028e9c5f3afeba02d61909ca50819a40ec7e160704430d"
+    },
+    {
+      "file": "dark-fa-desktop/access.png",
+      "page": "access",
+      "theme": "dark",
+      "lang": "fa",
+      "viewport": "desktop",
+      "sha256": "0789d3a7dbd010cf8925388daaff1db270cca2456917766763e61298e53571a5"
+    },
+    {
+      "file": "dark-fa-desktop/audit.png",
+      "page": "audit",
+      "theme": "dark",
+      "lang": "fa",
+      "viewport": "desktop",
+      "sha256": "ab3120ba8d7205621da543bb5c69f588e32667f6e06fe0db18ed0682d34d5738"
+    },
+    {
+      "file": "dark-fa-desktop/cost.png",
+      "page": "cost",
+      "theme": "dark",
+      "lang": "fa",
+      "viewport": "desktop",
+      "sha256": "4eabbc33a39b819a8f370b3fd285f498a10e2ac21ea412549d4acb1dfefdad62"
+    },
+    {
+      "file": "dark-fa-desktop/evals.png",
+      "page": "evals",
+      "theme": "dark",
+      "lang": "fa",
+      "viewport": "desktop",
+      "sha256": "a5d2fa22aed6ec0d11a9b5cce8d495fc79744454ea464e7fb6788c0e1ee3e247"
+    },
+    {
+      "file": "dark-fa-desktop/observability.png",
+      "page": "observability",
+      "theme": "dark",
+      "lang": "fa",
+      "viewport": "desktop",
+      "sha256": "b4191972df8f69ae5d74489b73e022480d5052d124db4e6b98e80f54b34d8072"
+    },
+    {
+      "file": "dark-fa-desktop/settings.png",
+      "page": "settings",
+      "theme": "dark",
+      "lang": "fa",
+      "viewport": "desktop",
+      "sha256": "e7333fe601335d508e4a6ba176237a0dc9261e59a19d9787db885f81ba86736a"
+    },
+    {
+      "file": "dark-fa-mobile/overview.png",
+      "page": "overview",
+      "theme": "dark",
+      "lang": "fa",
+      "viewport": "mobile",
+      "sha256": "cbe5a3e442671747e17d89615b0b68ac2d9722a567d5682bc2a7eb601eae4121"
+    },
+    {
+      "file": "dark-fa-mobile/providers.png",
+      "page": "providers",
+      "theme": "dark",
+      "lang": "fa",
+      "viewport": "mobile",
+      "sha256": "c71bacad0013705495e98bbdffa5ecb83094a777fcb8e6aaab46eb65206791ea"
+    },
+    {
+      "file": "dark-fa-mobile/routing.png",
+      "page": "routing",
+      "theme": "dark",
+      "lang": "fa",
+      "viewport": "mobile",
+      "sha256": "216090750beb05848d0300c05b82cee5c5168ddd4a83690a4c25df131f94f4ba"
+    },
+    {
+      "file": "dark-fa-mobile/video.png",
+      "page": "video",
+      "theme": "dark",
+      "lang": "fa",
+      "viewport": "mobile",
+      "sha256": "aec8860e309eab94e2d12f1693b564bf3238093f5164c4e9ca80d40e4d1f84df"
+    },
+    {
+      "file": "dark-fa-mobile/activity.png",
+      "page": "activity",
+      "theme": "dark",
+      "lang": "fa",
+      "viewport": "mobile",
+      "sha256": "814ac887e3f7f71a2b98563e0bf230c10188e08a1e3bba15f2a62a49d8b8e0a4"
+    },
+    {
+      "file": "dark-fa-mobile/playground.png",
+      "page": "playground",
+      "theme": "dark",
+      "lang": "fa",
+      "viewport": "mobile",
+      "sha256": "16245360304f30fcbf762d41e34026d79ca15281b383fca345b6dc7ad79959e1"
+    },
+    {
+      "file": "dark-fa-mobile/policies.png",
+      "page": "policies",
+      "theme": "dark",
+      "lang": "fa",
+      "viewport": "mobile",
+      "sha256": "f03fe0883c28aae883dd5247d8b8bae974a3c57bf887cc2d7888abacd5432255"
+    },
+    {
+      "file": "dark-fa-mobile/access.png",
+      "page": "access",
+      "theme": "dark",
+      "lang": "fa",
+      "viewport": "mobile",
+      "sha256": "980ce73069fbff45ef8789fe1ba595d9441d3f99172a789470aa9d796083b97a"
+    },
+    {
+      "file": "dark-fa-mobile/audit.png",
+      "page": "audit",
+      "theme": "dark",
+      "lang": "fa",
+      "viewport": "mobile",
+      "sha256": "0ca6cd256654aabe250d6afe24c3a15251292535b0d4b4c4d18b708bfd2f6677"
+    },
+    {
+      "file": "dark-fa-mobile/cost.png",
+      "page": "cost",
+      "theme": "dark",
+      "lang": "fa",
+      "viewport": "mobile",
+      "sha256": "3f97de3b9f2b7929c4dfff1b2a1b2e89620dd2736856547e91e3d8ac96f8bd25"
+    },
+    {
+      "file": "dark-fa-mobile/evals.png",
+      "page": "evals",
+      "theme": "dark",
+      "lang": "fa",
+      "viewport": "mobile",
+      "sha256": "51b9f4536655d5f9d9cd4bcc7df98c25c43a6cff22a2b3460f8149906218ade6"
+    },
+    {
+      "file": "dark-fa-mobile/observability.png",
+      "page": "observability",
+      "theme": "dark",
+      "lang": "fa",
+      "viewport": "mobile",
+      "sha256": "e4f533d3b278050576060f2521eef05a0eefe96a49f8bdf5a781df187597f151"
+    },
+    {
+      "file": "dark-fa-mobile/settings.png",
+      "page": "settings",
+      "theme": "dark",
+      "lang": "fa",
+      "viewport": "mobile",
+      "sha256": "97b1c4ae24dc4448805a81d4e3c75a217cae4147fc9d3a15fc46ee04272206eb"
+    },
+    {
+      "file": "light-en-desktop/overview.png",
+      "page": "overview",
+      "theme": "light",
+      "lang": "en",
+      "viewport": "desktop",
+      "sha256": "955f2d00198ea725d07cc08a684292a0d21c21ed253df66505264a43c3542838"
+    },
+    {
+      "file": "light-en-desktop/providers.png",
+      "page": "providers",
+      "theme": "light",
+      "lang": "en",
+      "viewport": "desktop",
+      "sha256": "9594c3e265750898fd4f3fa0aecd554dc27d6edae36514f22bdb8bbba9702853"
+    },
+    {
+      "file": "light-en-desktop/routing.png",
+      "page": "routing",
+      "theme": "light",
+      "lang": "en",
+      "viewport": "desktop",
+      "sha256": "a62b791539289664b8f4b5cb20c64f086b87a3329d0a70b5bcfba53a4104b1e1"
+    },
+    {
+      "file": "light-en-desktop/video.png",
+      "page": "video",
+      "theme": "light",
+      "lang": "en",
+      "viewport": "desktop",
+      "sha256": "7072c96699765a880f94f3efcdcdefabb1c1cafbfc77963f143dd9e8e42b75a2"
+    },
+    {
+      "file": "light-en-desktop/activity.png",
+      "page": "activity",
+      "theme": "light",
+      "lang": "en",
+      "viewport": "desktop",
+      "sha256": "dc5dd6a6957af387b86bdcb8f73de147a17da78711fb90b09e077ce5420fd56c"
+    },
+    {
+      "file": "light-en-desktop/playground.png",
+      "page": "playground",
+      "theme": "light",
+      "lang": "en",
+      "viewport": "desktop",
+      "sha256": "dc0772199d64d4d5cae7868bda61c52229a1f3df140ce98c9925376697bb7faa"
+    },
+    {
+      "file": "light-en-desktop/policies.png",
+      "page": "policies",
+      "theme": "light",
+      "lang": "en",
+      "viewport": "desktop",
+      "sha256": "fb5d505069ff301ccb6300c90764fc8399c31110645a3cec852b83ea2a3e3f26"
+    },
+    {
+      "file": "light-en-desktop/access.png",
+      "page": "access",
+      "theme": "light",
+      "lang": "en",
+      "viewport": "desktop",
+      "sha256": "fc5d25f73c4f9da340c78bba9b092b175e83ae5d7838454e2a4ee433f45bbb10"
+    },
+    {
+      "file": "light-en-desktop/audit.png",
+      "page": "audit",
+      "theme": "light",
+      "lang": "en",
+      "viewport": "desktop",
+      "sha256": "dd3c1a8072efce4255f04afd354be15c30d86e3a1facf6dc259a548a7f7da514"
+    },
+    {
+      "file": "light-en-desktop/cost.png",
+      "page": "cost",
+      "theme": "light",
+      "lang": "en",
+      "viewport": "desktop",
+      "sha256": "4b9e38da072f02548670f8f7c9975823feaf0f9ec9b0069c16eebf871c6af6d4"
+    },
+    {
+      "file": "light-en-desktop/evals.png",
+      "page": "evals",
+      "theme": "light",
+      "lang": "en",
+      "viewport": "desktop",
+      "sha256": "87b2a80c7b5610b40bbceb2f834eb6d5e83f2e49563bf1e807262dca72f6ecf7"
+    },
+    {
+      "file": "light-en-desktop/observability.png",
+      "page": "observability",
+      "theme": "light",
+      "lang": "en",
+      "viewport": "desktop",
+      "sha256": "f103f8c380f1ccb86bd1cc8f8a1421ee9e58c2e7a7ded6c4a4300b74fe3cefb5"
+    },
+    {
+      "file": "light-en-desktop/settings.png",
+      "page": "settings",
+      "theme": "light",
+      "lang": "en",
+      "viewport": "desktop",
+      "sha256": "b8892c6b4985df21a983114f7c7765683c40f4a577016f9991198b0176338ad8"
+    },
+    {
+      "file": "light-en-mobile/overview.png",
+      "page": "overview",
+      "theme": "light",
+      "lang": "en",
+      "viewport": "mobile",
+      "sha256": "c7e0cef87ed2c4bc79b2bc937d6bf8e1cd1dd572839e06664d646a09369aa60d"
+    },
+    {
+      "file": "light-en-mobile/providers.png",
+      "page": "providers",
+      "theme": "light",
+      "lang": "en",
+      "viewport": "mobile",
+      "sha256": "82915a4abeb9547033f8e693832a2fb7693398bc59ec880aaf9491fb38ffb403"
+    },
+    {
+      "file": "light-en-mobile/routing.png",
+      "page": "routing",
+      "theme": "light",
+      "lang": "en",
+      "viewport": "mobile",
+      "sha256": "aadd282015f91f13d3a4c92d99b389af4f46e201e36828b7ab329f1c80c98462"
+    },
+    {
+      "file": "light-en-mobile/video.png",
+      "page": "video",
+      "theme": "light",
+      "lang": "en",
+      "viewport": "mobile",
+      "sha256": "4bade18876bb85d02090d1337ec34dd81510c41d4b7afc92ee25f9d171827111"
+    },
+    {
+      "file": "light-en-mobile/activity.png",
+      "page": "activity",
+      "theme": "light",
+      "lang": "en",
+      "viewport": "mobile",
+      "sha256": "eba35009ed21a111b0fa150e814fce68d90d8e46bc2ad0d25bb572d19b813eee"
+    },
+    {
+      "file": "light-en-mobile/playground.png",
+      "page": "playground",
+      "theme": "light",
+      "lang": "en",
+      "viewport": "mobile",
+      "sha256": "52b328eb1bb339bc87c6c14a373c35add95bf37628abe45b6d9080b5f1cde484"
+    },
+    {
+      "file": "light-en-mobile/policies.png",
+      "page": "policies",
+      "theme": "light",
+      "lang": "en",
+      "viewport": "mobile",
+      "sha256": "131e7da91b5d401e8f40adf3a1bb1f7f120f0aa97344bdfb5804bb6623f75363"
+    },
+    {
+      "file": "light-en-mobile/access.png",
+      "page": "access",
+      "theme": "light",
+      "lang": "en",
+      "viewport": "mobile",
+      "sha256": "4f74da06af83f361b69116e4023af548ac99a06a78a583f65e8885d5f52522dd"
+    },
+    {
+      "file": "light-en-mobile/audit.png",
+      "page": "audit",
+      "theme": "light",
+      "lang": "en",
+      "viewport": "mobile",
+      "sha256": "bc69b42b4bf95c06b2eee3fd3a0783e593a5fbd5284e948518180f24c371220c"
+    },
+    {
+      "file": "light-en-mobile/cost.png",
+      "page": "cost",
+      "theme": "light",
+      "lang": "en",
+      "viewport": "mobile",
+      "sha256": "d9a3c7e38448dcc65207bb0969bfea9e452be1c0221d29bf4e8292ec24e9e5b0"
+    },
+    {
+      "file": "light-en-mobile/evals.png",
+      "page": "evals",
+      "theme": "light",
+      "lang": "en",
+      "viewport": "mobile",
+      "sha256": "f815fbe7dfcba75e854eaa5ad024d22cecc99ec2f286d8e2e872bdfa32324103"
+    },
+    {
+      "file": "light-en-mobile/observability.png",
+      "page": "observability",
+      "theme": "light",
+      "lang": "en",
+      "viewport": "mobile",
+      "sha256": "34a3ed0f93fb9ea8a0c3c7b166ad3686a9ee627434b801e9554f661d0fb81c47"
+    },
+    {
+      "file": "light-en-mobile/settings.png",
+      "page": "settings",
+      "theme": "light",
+      "lang": "en",
+      "viewport": "mobile",
+      "sha256": "10d33228d58766c61e225c93b4973b417ab5dc93ff251ec5952638ab02673f85"
+    },
+    {
+      "file": "light-fa-desktop/overview.png",
+      "page": "overview",
+      "theme": "light",
+      "lang": "fa",
+      "viewport": "desktop",
+      "sha256": "d7a3d397e8073db571adcc01c9e975cda72a53990941ccd9924bb35d49e92edf"
+    },
+    {
+      "file": "light-fa-desktop/providers.png",
+      "page": "providers",
+      "theme": "light",
+      "lang": "fa",
+      "viewport": "desktop",
+      "sha256": "8e9d96da7dba6d6b6f513099f4d3a908d5acfcea4b655e6e80e39ff98fdac977"
+    },
+    {
+      "file": "light-fa-desktop/routing.png",
+      "page": "routing",
+      "theme": "light",
+      "lang": "fa",
+      "viewport": "desktop",
+      "sha256": "f2616971c0294590149bf04c8e5d96e3e7e791b27bb527d878ca4241fcc85c7c"
+    },
+    {
+      "file": "light-fa-desktop/video.png",
+      "page": "video",
+      "theme": "light",
+      "lang": "fa",
+      "viewport": "desktop",
+      "sha256": "d563ed8976d0db4f2bb791851314a80482f0b2393ed465ad9eb8f285dec0a783"
+    },
+    {
+      "file": "light-fa-desktop/activity.png",
+      "page": "activity",
+      "theme": "light",
+      "lang": "fa",
+      "viewport": "desktop",
+      "sha256": "e6f9dab6ff728db1400d3de27ae56cc3eb6a85d53c5b88efe97b88c25a4f10b0"
+    },
+    {
+      "file": "light-fa-desktop/playground.png",
+      "page": "playground",
+      "theme": "light",
+      "lang": "fa",
+      "viewport": "desktop",
+      "sha256": "592e1b2052f05897381e5ddf78f1d1f050e4c154216957a648649352dd59dfcc"
+    },
+    {
+      "file": "light-fa-desktop/policies.png",
+      "page": "policies",
+      "theme": "light",
+      "lang": "fa",
+      "viewport": "desktop",
+      "sha256": "184ce5d8b5072427435de568571eef5756ab8037139ae597b1225ddf472d300a"
+    },
+    {
+      "file": "light-fa-desktop/access.png",
+      "page": "access",
+      "theme": "light",
+      "lang": "fa",
+      "viewport": "desktop",
+      "sha256": "9716afe2d279b23a2f9abce75d36dd3fd5761e79c2c727d85ab35eea495b2012"
+    },
+    {
+      "file": "light-fa-desktop/audit.png",
+      "page": "audit",
+      "theme": "light",
+      "lang": "fa",
+      "viewport": "desktop",
+      "sha256": "8a62cd6da496784d4ea6f36cc739f24ccafac175699cc3c0eb69c3ece42da7b0"
+    },
+    {
+      "file": "light-fa-desktop/cost.png",
+      "page": "cost",
+      "theme": "light",
+      "lang": "fa",
+      "viewport": "desktop",
+      "sha256": "ec737212ef54c60723a410361d6400cc139a154f6b7c840660a66baed6020861"
+    },
+    {
+      "file": "light-fa-desktop/evals.png",
+      "page": "evals",
+      "theme": "light",
+      "lang": "fa",
+      "viewport": "desktop",
+      "sha256": "0680bf25baac933836170ad27608d296021385540c1c0d1cccde84e66633db44"
+    },
+    {
+      "file": "light-fa-desktop/observability.png",
+      "page": "observability",
+      "theme": "light",
+      "lang": "fa",
+      "viewport": "desktop",
+      "sha256": "94d034a1ffc9427bf0ac6fb1fff8378e57e6f511198cb68062d0921ba955edd8"
+    },
+    {
+      "file": "light-fa-desktop/settings.png",
+      "page": "settings",
+      "theme": "light",
+      "lang": "fa",
+      "viewport": "desktop",
+      "sha256": "d8f7976a1d0bdd2c20363c8fbad39c8808bc7f751d2a662c1a543af6fe821a70"
+    },
+    {
+      "file": "light-fa-mobile/overview.png",
+      "page": "overview",
+      "theme": "light",
+      "lang": "fa",
+      "viewport": "mobile",
+      "sha256": "e1c2e1c69fd7611003636c8a9c5ec1db5608adb82aa16de34c7ae6189f6447a4"
+    },
+    {
+      "file": "light-fa-mobile/providers.png",
+      "page": "providers",
+      "theme": "light",
+      "lang": "fa",
+      "viewport": "mobile",
+      "sha256": "3d6b50d6ab967f24a52beb9558788c28174908861b577664a84133df68f7b2ff"
+    },
+    {
+      "file": "light-fa-mobile/routing.png",
+      "page": "routing",
+      "theme": "light",
+      "lang": "fa",
+      "viewport": "mobile",
+      "sha256": "02d2ac9d0fcde95bcc1381c75e36006a3e912aacd50508996fc2f5a223107754"
+    },
+    {
+      "file": "light-fa-mobile/video.png",
+      "page": "video",
+      "theme": "light",
+      "lang": "fa",
+      "viewport": "mobile",
+      "sha256": "13f51cb29d03b3663c35fd53ca805237c647059aa799f1072572f13f96c7b64f"
+    },
+    {
+      "file": "light-fa-mobile/activity.png",
+      "page": "activity",
+      "theme": "light",
+      "lang": "fa",
+      "viewport": "mobile",
+      "sha256": "5056aea200169185ff3fb3f52ad164c32ba1735de09112412a7192b399359df4"
+    },
+    {
+      "file": "light-fa-mobile/playground.png",
+      "page": "playground",
+      "theme": "light",
+      "lang": "fa",
+      "viewport": "mobile",
+      "sha256": "a9aef3ce1f2dd11a7d2270c97e4a14ff0d2726611c01de791abfaa47f1361373"
+    },
+    {
+      "file": "light-fa-mobile/policies.png",
+      "page": "policies",
+      "theme": "light",
+      "lang": "fa",
+      "viewport": "mobile",
+      "sha256": "68c38cc4f6a0648c5e3577d712646cfa1cbbdf8b41a428c934a0b13d03efd933"
+    },
+    {
+      "file": "light-fa-mobile/access.png",
+      "page": "access",
+      "theme": "light",
+      "lang": "fa",
+      "viewport": "mobile",
+      "sha256": "a98618dc76d5a00cb1c037c600296fbce4e209405cc2a24a8638c0a84b49f4ba"
+    },
+    {
+      "file": "light-fa-mobile/audit.png",
+      "page": "audit",
+      "theme": "light",
+      "lang": "fa",
+      "viewport": "mobile",
+      "sha256": "f2d1b137a8a55a7ad046f214802421dba2b7b447823b52eb3082da3c53365a43"
+    },
+    {
+      "file": "light-fa-mobile/cost.png",
+      "page": "cost",
+      "theme": "light",
+      "lang": "fa",
+      "viewport": "mobile",
+      "sha256": "4bce9b475ac00b86d28ebcefed341a21fae32786ef9e96e264303ca3084656e1"
+    },
+    {
+      "file": "light-fa-mobile/evals.png",
+      "page": "evals",
+      "theme": "light",
+      "lang": "fa",
+      "viewport": "mobile",
+      "sha256": "5c548afe75ac8777d350271842fa788dbcc1487d63dce70c9609fdd6877a6936"
+    },
+    {
+      "file": "light-fa-mobile/observability.png",
+      "page": "observability",
+      "theme": "light",
+      "lang": "fa",
+      "viewport": "mobile",
+      "sha256": "090211ec180ccc92cc48351f8d13247813c470335832b32d5a5e02ee265dbd5f"
+    },
+    {
+      "file": "light-fa-mobile/settings.png",
+      "page": "settings",
+      "theme": "light",
+      "lang": "fa",
+      "viewport": "mobile",
+      "sha256": "9ce4493a1cc92f8d166cc45e6559b63c8b2500a0fb534cbd408cd5c1807d94fd"
+    }
+  ],
+  "axe": {
+    "dark/overview": [],
+    "dark/providers": [],
+    "dark/routing": [],
+    "dark/video": [],
+    "dark/activity": [],
+    "dark/playground": [
+      {
+        "id": "target-size",
+        "impact": "serious",
+        "nodes": 1
+      }
+    ],
+    "dark/policies": [],
+    "dark/access": [],
+    "dark/audit": [],
+    "dark/cost": [],
+    "dark/evals": [],
+    "dark/observability": [],
+    "dark/settings": [],
+    "light/overview": [
+      {
+        "id": "color-contrast",
+        "impact": "serious",
+        "nodes": 17
+      }
+    ],
+    "light/providers": [
+      {
+        "id": "color-contrast",
+        "impact": "serious",
+        "nodes": 19
+      }
+    ],
+    "light/routing": [
+      {
+        "id": "color-contrast",
+        "impact": "serious",
+        "nodes": 20
+      }
+    ],
+    "light/video": [
+      {
+        "id": "color-contrast",
+        "impact": "serious",
+        "nodes": 19
+      }
+    ],
+    "light/activity": [
+      {
+        "id": "color-contrast",
+        "impact": "serious",
+        "nodes": 17
+      }
+    ],
+    "light/playground": [
+      {
+        "id": "color-contrast",
+        "impact": "serious",
+        "nodes": 17
+      },
+      {
+        "id": "target-size",
+        "impact": "serious",
+        "nodes": 1
+      }
+    ],
+    "light/policies": [
+      {
+        "id": "color-contrast",
+        "impact": "serious",
+        "nodes": 17
+      }
+    ],
+    "light/access": [
+      {
+        "id": "color-contrast",
+        "impact": "serious",
+        "nodes": 19
+      }
+    ],
+    "light/audit": [
+      {
+        "id": "color-contrast",
+        "impact": "serious",
+        "nodes": 19
+      }
+    ],
+    "light/cost": [
+      {
+        "id": "color-contrast",
+        "impact": "serious",
+        "nodes": 18
+      }
+    ],
+    "light/evals": [
+      {
+        "id": "color-contrast",
+        "impact": "serious",
+        "nodes": 16
+      }
+    ],
+    "light/observability": [
+      {
+        "id": "color-contrast",
+        "impact": "serious",
+        "nodes": 18
+      }
+    ],
+    "light/settings": [
+      {
+        "id": "color-contrast",
+        "impact": "serious",
+        "nodes": 16
+      }
+    ]
+  },
+  "changed_since_previous": [
+    "light-en-desktop/overview.png",
+    "light-en-desktop/providers.png",
+    "light-en-desktop/routing.png",
+    "light-en-desktop/video.png",
+    "light-en-desktop/activity.png",
+    "light-en-desktop/playground.png",
+    "light-en-desktop/policies.png",
+    "light-en-desktop/access.png",
+    "light-en-desktop/audit.png",
+    "light-en-desktop/cost.png",
+    "light-en-desktop/evals.png",
+    "light-en-desktop/observability.png",
+    "light-en-desktop/settings.png",
+    "light-fa-desktop/overview.png",
+    "light-fa-desktop/providers.png",
+    "light-fa-desktop/routing.png",
+    "light-fa-desktop/video.png",
+    "light-fa-desktop/activity.png",
+    "light-fa-desktop/playground.png",
+    "light-fa-desktop/policies.png",
+    "light-fa-desktop/access.png",
+    "light-fa-desktop/audit.png",
+    "light-fa-desktop/cost.png",
+    "light-fa-desktop/evals.png",
+    "light-fa-desktop/observability.png",
+    "light-fa-desktop/settings.png"
+  ]
+}
