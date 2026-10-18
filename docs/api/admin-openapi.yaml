@@ -349,6 +349,35 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '405':
           $ref: '#/components/responses/MethodNotAllowed'
+  /admin/api/route-preview:
+    get:
+      summary: |
+        Preview a routing decision without any provider call. Replays the real
+        candidate funnel (virtual endpoint resolution, capability/health/privacy
+        gates, strategy ordering) against live runtime state for an
+        operator-supplied requirement. Returns the ordered candidate list, the
+        selected provider/model, and a redacted exclusion reason for every other
+        deployment. Accepts query parameters: model, protocol, provider_type,
+        tools, vision, stream, reasoning, min_context_window,
+        require_no_training, session_key and selection_key (affinity evaluation
+        only; keys are never echoed back). GET only; nothing is written.
+      x-permission: routing.read
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Operation result; see the handler and the admin snapshot model.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
   /admin/api/providers:
     get:
       summary: List providers

@@ -1,0 +1,69 @@
+{
+  "listen": "127.0.0.1:8080",
+  "routing": {
+    "strategy": "ready_mesh",
+    "session_affinity": true,
+    "max_attempts": 4
+  },
+  "providers": [
+    {
+      "id": "openai",
+      "name": "OpenAI",
+      "type": "openai_compatible",
+      "base_url": "https://api.openai.com",
+      "api_key_env": "OPENAI_API_KEY",
+      "enabled": true,
+      "models": [
+        {
+          "id": "gpt",
+          "model": "gpt-4.1",
+          "enabled": true,
+          "weight": 1,
+          "priority": 0,
+          "capabilities": {"streaming": true, "tools": true}
+        }
+      ]
+    },
+    {
+      "id": "anthropic",
+      "name": "Anthropic",
+      "type": "anthropic_compatible",
+      "base_url": "https://api.anthropic.com",
+      "api_key_env": "ANTHROPIC_API_KEY",
+      "enabled": true,
+      "models": [
+        {
+          "id": "claude",
+          "model": "claude-sonnet-4-5",
+          "enabled": true,
+          "weight": 1,
+          "priority": 0,
+          "capabilities": {"streaming": true, "tools": true}
+        }
+      ]
+    }
+  ],
+  "candidate_pools": [
+    {
+      "id": "coding-pool",
+      "name": "Coding pool",
+      "mode": "explicit",
+      "deployments": ["openai/gpt", "anthropic/claude"]
+    }
+  ],
+  "route_profiles": [
+    {
+      "id": "coding-profile",
+      "candidate_pool": "coding-pool"
+    }
+  ],
+  "virtual_endpoints": [
+    {
+      "id": "coding",
+      "public_model": "coding",
+      "route_profile": "coding-profile",
+      "enabled": true,
+      "protocols": ["openai", "anthropic"]
+    }
+  ]
+}
