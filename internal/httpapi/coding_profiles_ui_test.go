@@ -22,6 +22,10 @@ func TestCodingProfilesPanelWiring(t *testing.T) {
 		"'cp_title': 'پروفایل‌های ایجنت کدنویسی'",
 		"capability partial",
 		"No route profile maps ",
+		"data-action=\"cp-test\"", // #415 item 6: one-click connection test per mapping
+		"/admin/api/connection-test",
+		"state.cpTest", // the bounded test's report line renders in the panel
+		"bt('cp_test')",
 	} {
 		if !strings.Contains(appJS, want) {
 			t.Errorf("app.js missing coding profiles wiring %q", want)
