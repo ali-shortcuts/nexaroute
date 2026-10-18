@@ -54,6 +54,15 @@ var lifecycleKinds = map[string]bool{
 	"semantic_cache_hit":    true,
 	"model_retired":         true,
 	"model_unavailable":     true,
+	// Decision-plane events participate in the request lifecycle so the
+	// applied policy id and version are recorded in the request trace even
+	// though they carry no upstream attempt.
+	"decision_ok":       true,
+	"decision_abstain":  true,
+	"decision_timeout":  true,
+	"decision_rejected": true,
+	"decision_fail":     true,
+	"decision_shadow":   true,
 }
 
 // terminalKinds maps legacy request-correlated terminal event kinds to a
@@ -83,36 +92,46 @@ type LifecycleAttempt struct {
 	Retryable    bool      `json:"retryable,omitempty"`
 	RetryAfterMS int64     `json:"retry_after_ms,omitempty"`
 	Committed    bool      `json:"committed,omitempty"`
+	// FailoverClass is the bounded classification of the trigger that moved
+	// this attempt's traffic to the next candidate.
+	FailoverClass string `json:"failover_class,omitempty"`
 }
 
 // RequestLifecycle is the bounded, privacy-safe observable lifecycle of one
 // data-plane request. Events that share a correlation id (for example a
 // hedge or a later session turn) are grouped together.
 type RequestLifecycle struct {
-	RequestID       string             `json:"request_id"`
-	CorrelationID   string             `json:"correlation_id,omitempty"`
-	ParentRequestID string             `json:"parent_request_id,omitempty"`
-	RequestedModel  string             `json:"requested_model,omitempty"`
-	PublicModel     string             `json:"public_model,omitempty"`
-	ResolvedModel   string             `json:"resolved_model,omitempty"`
-	RouteProfile    string             `json:"route_profile,omitempty"`
-	VirtualEndpoint string             `json:"virtual_endpoint,omitempty"`
-	Pool            string             `json:"pool,omitempty"`
-	Adapter         string             `json:"adapter,omitempty"`
-	Streaming       bool               `json:"streaming,omitempty"`
-	State           string             `json:"state"`
-	Terminal        string             `json:"terminal,omitempty"`
-	StartedAt       time.Time          `json:"started_at"`
-	LastEventAt     time.Time          `json:"last_event_at"`
-	Attempts        []LifecycleAttempt `json:"attempts"`
-	AttemptCount    int                `json:"attempt_count"`
-	FailoverCount   int                `json:"failover_count"`
-	TTFTMS          int64              `json:"ttft_ms,omitempty"`
-	LatencyMS       int64              `json:"latency_ms,omitempty"`
-	StatusCode      int                `json:"status_code,omitempty"`
-	CostBasis       string             `json:"cost_basis,omitempty"`
-	InputTokens     int                `json:"input_tokens,omitempty"`
-	OutputTokens    int                `json:"output_tokens,omitempty"`
+	RequestID       string `json:"request_id"`
+	CorrelationID   string `json:"correlation_id,omitempty"`
+	ParentRequestID string `json:"parent_request_id,omitempty"`
+	RequestedModel  string `json:"requested_model,omitempty"`
+	PublicModel     string `json:"public_model,omitempty"`
+	ResolvedModel   string `json:"resolved_model,omitempty"`
+	RouteProfile    string `json:"route_profile,omitempty"`
+	VirtualEndpoint string `json:"virtual_endpoint,omitempty"`
+	Pool            string `json:"pool,omitempty"`
+	Adapter         string `json:"adapter,omitempty"`
+	Streaming       bool   `json:"streaming,omitempty"`
+	// DecisionPolicyID and DecisionPolicyVersion record the routing policy
+	// applied to this request, when a decision policy participated. Bounded
+	// IDs and version labels only — never prompts or credentials.
+	DecisionPolicyID      string `json:"decision_policy_id,omitempty"`
+	DecisionPolicyVersion string `json:"decision_policy_version,omitempty"`
+	// FailoverClass classifies the most recent fallback trigger, when any.
+	FailoverClass string             `json:"failover_class,omitempty"`
+	State         string             `json:"state"`
+	Terminal      string             `json:"terminal,omitempty"`
+	StartedAt     time.Time          `json:"started_at"`
+	LastEventAt   time.Time          `json:"last_event_at"`
+	Attempts      []LifecycleAttempt `json:"attempts"`
+	AttemptCount  int                `json:"attempt_count"`
+	FailoverCount int                `json:"failover_count"`
+	TTFTMS        int64              `json:"ttft_ms,omitempty"`
+	LatencyMS     int64              `json:"latency_ms,omitempty"`
+	StatusCode    int                `json:"status_code,omitempty"`
+	CostBasis     string             `json:"cost_basis,omitempty"`
+	InputTokens   int                `json:"input_tokens,omitempty"`
+	OutputTokens  int                `json:"output_tokens,omitempty"`
 }
 
 // SummarizeOptions bounds and time-scopes lifecycle aggregation.
@@ -241,6 +260,12 @@ func (lc *RequestLifecycle) merge(e Event) {
 	if e.Adapter != "" {
 		lc.Adapter = e.Adapter
 	}
+	if e.DecisionPolicyID != "" {
+		lc.DecisionPolicyID = e.DecisionPolicyID
+	}
+	if e.DecisionPolicyVersion != "" {
+		lc.DecisionPolicyVersion = e.DecisionPolicyVersion
+	}
 	if e.Streaming {
 		lc.Streaming = true
 	}
@@ -266,6 +291,12 @@ func (lc *RequestLifecycle) merge(e Event) {
 	}
 	if e.Kind == "failover" {
 		lc.FailoverCount++
+		if e.FailoverClass != "" {
+			lc.FailoverClass = e.FailoverClass
+			if a := lc.lastAttempt(e.Deployment); a != nil {
+				a.FailoverClass = e.FailoverClass
+			}
+		}
 	}
 
 	switch {
@@ -300,6 +331,9 @@ func (lc *RequestLifecycle) merge(e Event) {
 		if e.RetryAfterMS > 0 {
 			a.RetryAfterMS = e.RetryAfterMS
 		}
+		if e.FailoverClass != "" {
+			a.FailoverClass = e.FailoverClass
+		}
 		if e.StreamCommitted {
 			a.Committed = true
 		}
@@ -327,6 +361,19 @@ func (lc *RequestLifecycle) merge(e Event) {
 			lc.StatusCode = e.StatusCode
 		}
 	}
+}
+
+// lastAttempt returns the most recent attempt for a deployment regardless of
+// outcome, so a late classification event can still label the attempt it
+// describes. An empty deployment matches the most recent attempt.
+func (lc *RequestLifecycle) lastAttempt(deployment string) *LifecycleAttempt {
+	for i := len(lc.Attempts) - 1; i >= 0; i-- {
+		a := &lc.Attempts[i]
+		if deployment == "" || a.Deployment == "" || a.Deployment == deployment {
+			return a
+		}
+	}
+	return nil
 }
 
 // lastStartedAttempt returns the most recent attempt for a deployment whose

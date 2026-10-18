@@ -47,6 +47,7 @@ type Event struct {
 	DecisionConfidence     float64 `json:"decision_confidence,omitempty"`
 	// Phase E — policy explainability (privacy-safe, bounded)
 	DecisionPolicyID        string  `json:"decision_policy_id,omitempty"`
+	DecisionPolicyVersion   string  `json:"decision_policy_version,omitempty"`
 	DecisionTaskType        string  `json:"decision_task_type,omitempty"`
 	DecisionOriginalPrimary string  `json:"decision_original_primary,omitempty"`
 	DecisionSelectedScore   float64 `json:"decision_selected_score,omitempty"`
@@ -76,6 +77,10 @@ type Event struct {
 	AdmissionMS     int64  `json:"admission_ms,omitempty"`
 	Retryable       bool   `json:"retryable,omitempty"`
 	RetryAfterMS    int64  `json:"retry_after_ms,omitempty"`
+	// FailoverClass is a bounded, privacy-safe classification of the trigger
+	// that caused a fallback (for example auth_error, rate_limit, timeout,
+	// transport_error, capability_unsupported). It is never upstream error text.
+	FailoverClass   string `json:"failover_class,omitempty"`
 	Streaming       bool   `json:"streaming,omitempty"`
 	StreamCommitted bool   `json:"stream_committed,omitempty"`
 	Terminal        string `json:"terminal,omitempty"`
@@ -134,6 +139,7 @@ const (
 	maxEventDecisionReasonCodes = 512
 	// Phase E policy bounds
 	maxEventDecisionPolicyID        = 128
+	maxEventDecisionPolicyVersion   = 128
 	maxEventDecisionTaskType        = 32
 	maxEventDecisionOriginalPrimary = 512
 	maxEventDecisionBreakdown       = 4096
@@ -151,6 +157,7 @@ const (
 	maxEventTerminal        = 32
 	maxEventCostBasis       = 16
 	maxEventParentRequestID = 128
+	maxEventFailoverClass   = 64
 )
 
 func boundedString(s string, max int) string {
@@ -242,6 +249,7 @@ func (b *Bus) Add(e Event) {
 	e.DecisionSelected = boundedString(e.DecisionSelected, maxEventDecisionSelected)
 	e.DecisionReasonCodes = boundedString(e.DecisionReasonCodes, maxEventDecisionReasonCodes)
 	e.DecisionPolicyID = boundedString(e.DecisionPolicyID, maxEventDecisionPolicyID)
+	e.DecisionPolicyVersion = boundedString(e.DecisionPolicyVersion, maxEventDecisionPolicyVersion)
 	e.DecisionTaskType = boundedString(e.DecisionTaskType, maxEventDecisionTaskType)
 	e.DecisionOriginalPrimary = boundedString(e.DecisionOriginalPrimary, maxEventDecisionOriginalPrimary)
 	e.DecisionBreakdown = boundedString(e.DecisionBreakdown, maxEventDecisionBreakdown)
@@ -263,6 +271,7 @@ func (b *Bus) Add(e Event) {
 	e.Adapter = boundedString(e.Adapter, maxEventAdapter)
 	e.Phase = boundedString(e.Phase, maxEventPhase)
 	e.AttemptKind = boundedString(e.AttemptKind, maxEventAttemptKind)
+	e.FailoverClass = boundedString(e.FailoverClass, maxEventFailoverClass)
 	e.Terminal = boundedString(e.Terminal, maxEventTerminal)
 	e.CostBasis = boundedString(e.CostBasis, maxEventCostBasis)
 	if b.count < b.max {

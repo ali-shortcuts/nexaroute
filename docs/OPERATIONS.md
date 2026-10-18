@@ -200,6 +200,23 @@ never serves traffic:
 Whole-config rollback remains the admin API's config history;
 this CLI is the policy-pointer lifecycle on the config file.
 
+**Policy versions and safe change (Phase 12).** A policy's effective version is
+its explicit `decision_policies[].version` label or, when unset, the derived
+content fingerprint `auto:<sha256[:8]>`. The applied version is recorded with
+every served decision (event, trace breakdown) and printed by `simulate` /
+`replay`; `replay` reports `version_mismatches` so a divergence explained only by
+a policy revision is distinguishable from a genuine behavior change. Set
+`decision_policies[].min_observations` to require a minimum success+failure
+sample count before a deployment's reliability evidence is trusted (below it the
+reliability score decays to neutral, preventing single-sample flapping; `0`
+disables the gate). Set `decision.shadow: true` (with `decision.mode` not `off`)
+to evaluate the configured policy on live traffic for observation only: the
+gateway emits `decision_shadow` events recording the proposed selection and
+whether it differs from the production primary, but never reorders served
+traffic and never issues extra inference. Use offline `policy replay` for
+recorded-traffic comparison and live shadow mode for a bounded window before
+promoting a policy pointer.
+
 - `nexaroute audit verify --config PATH` opens the store **read-only**
   and revalidates every record: hash recomputation, predecessor
   linkage, sequence order, anchor linkage, and chain-head consistency
