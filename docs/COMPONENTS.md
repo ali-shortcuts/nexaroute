@@ -25,6 +25,30 @@ global `prefers-reduced-motion` rule neutralizes animations.
 | Loading state | `.state-loading` | pulsing skeleton block | Token-colored (`--muted` wash), `state-pulse` keyframes; the global reduced-motion rule reduces it to a static block. |
 | Error state | `.state-error` | — | Same geometry as `.empty-state`, `--bad` dashed border + wash; for panel-level load failures, not form validation. |
 
+## RTL mirroring (#489 item 4)
+
+Direction-carrying surfaces and how they mirror under
+`[dir=rtl]` (set from the UI language):
+
+- **Route topology (Overview):** the horizontal connector's
+  gradient flips (`90deg` → `270deg` under `[dir=rtl]`); the
+  ≤700px stacked variant keeps its vertical `180deg` fade via a
+  restoring rule inside the media block. The pulsing dot is a
+  scale animation — direction-agnostic.
+- **Attempt waterfall & request steps:** the state accent bar is
+  `border-inline-start-*` — it sits at the reading-start edge in
+  both directions with zero LTR change.
+- **Arrow glyphs:** directional arrows (`→` in the setup steps,
+  `↗` on the activity metric) are wrapped in `.dir-arrow`, which
+  flips via `transform: scaleX(-1)` under `[dir=rtl]`.
+- **Verified by construction (no rule needed):** the `.score-bar`
+  fill is a block box, so it grows from the inline-start edge in
+  both directions.
+- **Exempt:** `⇄` (symmetric), `↻` (rotation glyph), code and
+  numeric content (tabular figures, `.mono`), and the language
+  switcher's divider border (a symmetric separator between
+  buttons, not a chain element).
+
 ## Rules for new components
 
 1. Tokens only. Need a new color? Add a token inside the fence in
