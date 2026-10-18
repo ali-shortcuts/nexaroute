@@ -423,7 +423,11 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 	// state; when disabled it reports enabled=false rather than an assumed status.
 	autopilotSection := map[string]any{"enabled": false}
 	if ctrl := s.autopilotSnapshot(); ctrl != nil {
-		autopilotSection = map[string]any{"enabled": true, "status": ctrl.Status()}
+		autopilotSection = map[string]any{
+			"enabled": true,
+			"status": ctrl.Status(),
+			"unsupported_signals": []string{"no_eligible_rate", "budget_anomalies"},
+		}
 	}
 
 	writeJSON(w, 200, map[string]any{

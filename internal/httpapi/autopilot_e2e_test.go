@@ -215,3 +215,43 @@ func TestAutopilotDisabledReportsDisabled(t *testing.T) {
 		t.Fatalf("disabled payload=%s", rr.Body.String())
 	}
 }
+
+func TestAutopilotRecordsFailoverTTFTAndPost200StreamFailure(t *testing.T) {
+	incumbent := autopilot.PolicyRef{ID: "balanced", Version: "incumbent"}
+	ctrl := autopilot.New(incumbent, incumbent, autopilot.GateConfig{
+		MinSamples: 1, MinPromoteSamples: 10, MaxErrorRate: 0.99, MaxErrorRateDelta: 0.99,
+		MaxFailoverRate: 0.99, MaxNoEligibleRate: 1, MaxBudgetAnomalies: 100,
+	})
+	if err := ctrl.StartCanary(autopilot.PolicyRef{ID: "balanced", Version: "candidate"}, 100, 0); err != nil {
+		t.Fatalf("StartCanary: %v", err)
+	}
+	s := &Server{autopilot: ctrl}
+	if _, leased := s.autopilotSelectPolicy("balanced", "signal-request"); !leased {
+		t.Fatal("expected a policy lease")
+	}
+	s.autopilotRecordFailover("signal-request")
+	s.autopilotRecordTTFT("signal-request", 15*time.Millisecond)
+	s.autopilotMarkTerminalFailure("signal-request")
+	// HTTP 200 is intentional: a failed stream terminal must override status-only success.
+	s.autopilotRecordFinish("signal-request", http.StatusOK, "succeeded", 50*time.Millisecond)
+
+	signals := ctrl.Status().CandidateSignals
+	if signals.Requests != 1 || signals.Successes != 0 || signals.Errors != 1 || signals.TransportErrors != 1 {
+		t.Fatalf("terminal sample incorrectly classified: %+v", signals)
+	}
+	if signals.Failovers != 1 || signals.FailoverRate != 1 {
+		t.Fatalf("real failover not recorded: %+v", signals)
+	}
+	if signals.TTFTCount != 1 || signals.TTFTP95MS != 15 {
+		t.Fatalf("measured TTFT not recorded: %+v", signals)
+	}
+	if signals.NoEligibleObserved != 0 || signals.BudgetAnomaliesObserved != 0 {
+		t.Fatalf("unsupported signal dimensions were falsely counted as zero observations: %+v", signals)
+	}
+	if _, exists := s.autopilotLeases.Load("signal-request"); exists {
+		t.Fatal("policy lease leaked after request finish")
+	}
+	if _, exists := s.autopilotRequestSignals.Load("signal-request"); exists {
+		t.Fatal("request signal state leaked after request finish")
+	}
+}

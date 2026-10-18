@@ -220,7 +220,10 @@ func (s *Server) adminAutopilot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"enabled":   true,
+		"enabled": true,
 		"autopilot": ctrl.Status(),
+		// These dimensions cannot yet be attributed to a policy lease by the
+		// HTTP adapter. EvaluateGate reports missing coverage and holds promotion.
+		"unsupported_signals": []string{"no_eligible_rate", "budget_anomalies"},
 	})
 }
