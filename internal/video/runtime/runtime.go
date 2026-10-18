@@ -78,6 +78,13 @@ func New(cfg video.Config, baseDir string) (*Runtime, error) {
 		}
 		reg[comfy.ID()] = comfy
 	}
+	if cfg.AggregatorEnabled {
+		agg, err := providers.NewAggregator(cfg, cfg.MaxAssetBytes)
+		if err != nil {
+			return nil, fmt.Errorf("initialize aggregator provider: %w", err)
+		}
+		reg[agg.ID()] = agg
+	}
 	storageRoot := cfg.StorageRoot
 	if storageRoot == "" {
 		storageRoot = filepath.Join(baseDir, "video-assets")

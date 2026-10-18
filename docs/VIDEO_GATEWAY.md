@@ -80,6 +80,30 @@ Add the following fields to the existing `video` object in the NexaRoute config.
 - The adapter's estimated provider API cost is USD 0 because it runs locally; that estimate excludes electricity, hardware depreciation, model downloads, and other infrastructure costs. It is not a guarantee of zero total operating cost.
 - Plain HTTP is accepted only for loopback addresses. Use HTTPS for a remote ComfyUI endpoint.
 
+## Commercial generation via an async aggregator (fal.ai queue class)
+
+The `aggregator` adapter (Phase 20, issue #420) is the first real external generation path: a billed third-party API in the fal.ai queue class, reached over HTTPS with submit/poll/cancel. It is poll-only — no webhooks are claimed or accepted — and status/result URLs are derived from the provider job ID, so a gateway restart resumes polling the same provider job instead of resubmitting (and double-billing) it.
+
+```json
+"video": {
+  "enabled": true,
+  "aggregator_enabled": true,
+  "aggregator_base_url": "https://queue.fal.run",
+  "aggregator_model": "fal-ai/kling-video/v2.5-turbo/pro/text-to-video",
+  "aggregator_api_key_env": "FAL_KEY",
+  "aggregator_auth_scheme": "Key",
+  "aggregator_max_duration_seconds": 300,
+  "aggregator_cost_per_second_usd": 0.05,
+  "aggregator_image_field": "image_url"
+}
+```
+
+- The API key is read from the environment variable named by `aggregator_api_key_env`; the key itself never appears in configuration. `aggregator_auth_scheme` is `Key` (fal.ai style, the default) or `Bearer`.
+- `aggregator_cost_per_second_usd` is the operator's price book entry: with it set, estimates are priced from it; without it, estimates are honestly reported as unpriced. Per-job cost ceilings are enforced by the orchestrator's ledger exactly as for other providers.
+- `aggregator_image_field` is optional: set it to the aggregator model's image input field name to enable image-to-video (first-frame/reference image with a fetchable http(s) URL). Without it, image inputs are rejected rather than silently ignored. Reference sets, last-frame, continuity, audio/dialogue/narration, and multi-shot submissions stay rejected.
+- Outputs are downloaded through an egress-guarded client pinned to the output host, size-capped by `video.max_asset_bytes`, and refused when the declared or served content type is not a video type — a completed provider job whose payload is not a video never becomes a downloadable asset.
+- **Live verification status: UNVERIFIED.** The adapter passes the provider conformance contract and a full local lifecycle against a recording fake aggregator (submit → poll → complete, restart-resume with a submit-count assertion, failure propagation, malformed-output refusal, cancel). No live keyed run has been performed; run one with a real aggregator key and record the evidence on issue #420 before treating the path as live-proven.
+
 ## Local ComfyUI setup
 
 The production adapter in this repository connects to a ComfyUI API server on your machine. It does not download models or invent a workflow for you: export a workflow in ComfyUI's API format, make sure it produces a video output, and configure the node IDs used for prompt, width, height, and frame count. The configured workflow file must be readable by the NexaRoute gateway process.

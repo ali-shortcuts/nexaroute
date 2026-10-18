@@ -44,4 +44,16 @@ type Config struct {
 	CodeRenderPlannerJSONMode    bool     `json:"code_render_planner_json_mode,omitempty"`
 	CodeRenderMaxDurationSeconds float64  `json:"code_render_max_duration_seconds,omitempty"`
 	CodeRenderWorkRoot           string   `json:"code_render_work_root,omitempty"`
+	// Async aggregator adapter (Phase 20, issue #420): a
+	// fal.ai-queue-style commercial video API. The API key itself
+	// is never configured here — only the NAME of the environment
+	// variable that holds it.
+	AggregatorEnabled            bool    `json:"aggregator_enabled,omitempty"`
+	AggregatorBaseURL            string  `json:"aggregator_base_url,omitempty"`
+	AggregatorModel              string  `json:"aggregator_model,omitempty"`
+	AggregatorAPIKeyEnv          string  `json:"aggregator_api_key_env,omitempty"`
+	AggregatorAuthScheme         string  `json:"aggregator_auth_scheme,omitempty"`
+	AggregatorMaxDurationSeconds float64 `json:"aggregator_max_duration_seconds,omitempty"`
+	AggregatorCostPerSecondUSD   float64 `json:"aggregator_cost_per_second_usd,omitempty"`
+	AggregatorImageField         string  `json:"aggregator_image_field,omitempty"`
 }
