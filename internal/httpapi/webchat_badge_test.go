@@ -18,16 +18,20 @@ func TestWebChatBadgeWiring(t *testing.T) {
 	appJS := string(appBytes)
 	for _, want := range []string{
 		"playground: ['WebChat'",
-		"state.pgMessages",        // conversation model
-		"function pgBadgeHTML(m)", // per-message badge
-		"function pgHistory()",    // multi-turn history
-		"x-gateway-public-model",  // requested alias from the real response
-		"'connecting…'",           // attempt state before headers
-		"'streaming…'",            // attempt state while streaming
-		"'stopped'",               // honest terminal state for aborts
-		"AbortController",         // stop control
-		`id="pg-stop"`,            // stop button
-		"pg-advanced",             // one Advanced toggle for numeric controls
+		"state.pgMessages",                                       // conversation model
+		"function pgBadgeHTML(m)",                                // per-message badge
+		"function pgHistory()",                                   // multi-turn history
+		"x-gateway-public-model",                                 // requested alias from the real response
+		"'x-gateway-public-model', 'x-gateway-virtual-endpoint'", // the alias header is actually fetched (not a dead lookup)
+		"x-nexaroute-cache",                                      // cache state is read for the badge
+		"cache: th['x-nexaroute-cache']",
+		"'cache ' + esc(b.cache)",
+		"'connecting…'",   // attempt state before headers
+		"'streaming…'",    // attempt state while streaming
+		"'stopped'",       // honest terminal state for aborts
+		"AbortController", // stop control
+		`id="pg-stop"`,    // stop button
+		"pg-advanced",     // one Advanced toggle for numeric controls
 		"bt('pg_advanced')",
 		"bt('pg_local_only')", // privacy line: tab-memory only
 		"'pg_local_only': 'This conversation is kept only in this tab’s memory",
