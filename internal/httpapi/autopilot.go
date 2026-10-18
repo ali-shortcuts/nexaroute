@@ -89,9 +89,18 @@ func autopilotRequestKeyFromContext(ctx context.Context, fallback string) string
 	return fallback
 }
 
+// autopilotLeaseEntry pins each in-flight request to the controller that issued
+// its lease. Config reload may replace or disable Server.autopilot while the
+// request is still running; the terminal result must finish on the original
+// controller, not be folded into a newly configured policy window.
+type autopilotLeaseEntry struct {
+	controller *autopilot.Controller
+	lease      autopilot.Lease
+}
+
 // autopilotSelectPolicy overrides the requested policy id with the autopilot's
 // lease when the policy under change is the one selected for this request. It
-// stores the lease for outcome attribution at request finish.
+// stores the lease and issuing controller for outcome attribution at finish.
 func (s *Server) autopilotSelectPolicy(policyID, requestID string) (string, bool) {
 	ctrl := s.autopilotSnapshot()
 	if ctrl == nil || !ctrl.TargetMatches(policyID) {
@@ -99,7 +108,7 @@ func (s *Server) autopilotSelectPolicy(policyID, requestID string) (string, bool
 	}
 	lease := ctrl.Select(requestID)
 	if requestID != "" {
-		s.autopilotLeases.Store(requestID, lease)
+		s.autopilotLeases.Store(requestID, autopilotLeaseEntry{controller: ctrl, lease: lease})
 	}
 	return lease.Policy.ID, true
 }
@@ -166,14 +175,17 @@ func (s *Server) autopilotRecordFinish(requestID string, status int, terminal st
 	}
 	raw, leased := s.autopilotLeases.LoadAndDelete(requestID)
 	signalRaw, _ := s.autopilotRequestSignals.LoadAndDelete(requestID)
-	ctrl := s.autopilotSnapshot()
-	if ctrl == nil || !leased {
+	if !leased {
 		return
 	}
-	lease, ok := raw.(autopilot.Lease)
-	if !ok {
+	entry, ok := raw.(autopilotLeaseEntry)
+	if !ok || entry.controller == nil {
 		return
 	}
+	// Do not look up Server.autopilot here: a reload may have swapped it after
+	// this request acquired its lease. Complete on the controller that issued it.
+	ctrl := entry.controller
+	lease := entry.lease
 	if terminal == "cancelled" {
 		ctrl.Release(lease)
 		return

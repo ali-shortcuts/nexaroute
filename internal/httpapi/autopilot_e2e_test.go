@@ -298,3 +298,43 @@ func TestAutopilotLeasesDoNotCollideOnRepeatedExternalRequestID(t *testing.T) {
 		t.Fatal("second request lease leaked")
 	}
 }
+
+func TestAutopilotLeaseFinishesOnIssuingControllerAfterReload(t *testing.T) {
+	incumbent := autopilot.PolicyRef{ID: "balanced", Version: "incumbent"}
+	oldController := autopilot.New(incumbent, incumbent, autopilot.GateConfig{
+		MinSamples: 1, MinPromoteSamples: 10, MaxErrorRate: 1, MaxErrorRateDelta: 1,
+		MaxFailoverRate: 1, MaxNoEligibleRate: 1, MaxBudgetAnomalies: 100,
+	})
+	if err := oldController.StartCanary(autopilot.PolicyRef{ID: "balanced", Version: "candidate"}, 100, 0); err != nil {
+		t.Fatalf("StartCanary on old controller: %v", err)
+	}
+	server := &Server{autopilot: oldController}
+	if _, leased := server.autopilotSelectPolicy("balanced", "request-before-reload"); !leased {
+		t.Fatal("expected old controller to issue the request lease")
+	}
+
+	other := autopilot.PolicyRef{ID: "other-policy", Version: "other-incumbent"}
+	newController := autopilot.New(other, other, autopilot.GateConfig{
+		MinSamples: 1, MinPromoteSamples: 10, MaxErrorRate: 1, MaxErrorRateDelta: 1,
+		MaxFailoverRate: 1, MaxNoEligibleRate: 1, MaxBudgetAnomalies: 100,
+	})
+	if err := newController.StartCanary(autopilot.PolicyRef{ID: "other-policy", Version: "other-candidate"}, 100, 0); err != nil {
+		t.Fatalf("StartCanary on new controller: %v", err)
+	}
+	server.runtimeMu.Lock()
+	server.autopilot = newController
+	server.runtimeMu.Unlock()
+
+	server.autopilotRecordFinish("request-before-reload", http.StatusOK, "succeeded", 11*time.Millisecond)
+	oldSignals := oldController.Status().CandidateSignals
+	if oldSignals.Requests != 1 || oldSignals.Successes != 1 {
+		t.Fatalf("old issuing controller did not receive its lease outcome: %+v", oldSignals)
+	}
+	newStatus := newController.Status()
+	if newStatus.CandidateSignals.Requests != 0 || newStatus.IncumbentSignals.Requests != 0 {
+		t.Fatalf("old request outcome leaked into new controller: %+v", newStatus)
+	}
+	if newStatus.InFlight != 0 {
+		t.Fatalf("unexpected leases on replacement controller: %+v", newStatus)
+	}
+}
