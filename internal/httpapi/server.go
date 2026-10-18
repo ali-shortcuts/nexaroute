@@ -92,8 +92,8 @@ type Server struct {
 	evaluation *evaluationPlane
 	// Phase 18: routing-policy canary autopilot; data-plane policy selection only.
 	// Guarded by runtimeMu for replacement on reload.
-	autopilot               *autopilot.Controller
-	autopilotConfig         config.AutopilotConfig
+	autopilot       *autopilot.Controller
+	autopilotConfig config.AutopilotConfig
 	autopilotLeases sync.Map // internal request key -> autopilotLeaseEntry
 	// Phase C — task classification metrics (bounded cardinality)
 	taskMu             sync.Mutex
