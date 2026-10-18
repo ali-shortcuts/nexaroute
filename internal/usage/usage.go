@@ -29,6 +29,19 @@ type Totals struct {
 	CacheWriteTokens int64              `json:"cache_write_tokens,omitempty"`
 	RecordedCostUSD  float64            `json:"recorded_cost_usd,omitempty"`
 	CostByVersion    map[string]float64 `json:"cost_by_version_usd,omitempty"`
+	// CostBasis states what EstimatedCost actually is (#435):
+	// "recorded" — every token was costed at record time under a
+	// versioned price; "estimated" — the whole figure was priced at
+	// snapshot time from current prices; "mixed" — a recorded part
+	// plus a snapshot-priced or unpriceable part; "unknown" — tokens
+	// exist that no current price can value, so the figure is not a
+	// cost at all and must not be read as exact. CostCompleteness is
+	// "complete" when every token is valued, "partial" when some
+	// tokens have no price. UnpricedTokens exposes the unvalued
+	// quantity instead of hiding it inside a zero.
+	CostBasis        string `json:"cost_basis"`
+	CostCompleteness string `json:"cost_completeness"`
+	UnpricedTokens   int64  `json:"unpriced_tokens,omitempty"`
 	// unpriced token counters back the legacy snapshot-time
 	// fallback for records made without record-time costing.
 	unpricedPrompt     int64
@@ -37,14 +50,19 @@ type Totals struct {
 
 // Snapshot is the point-in-time view of cumulative usage.
 type Snapshot struct {
-	TotalPromptTokens     int64    `json:"total_prompt_tokens"`
-	TotalCompletionTokens int64    `json:"total_completion_tokens"`
-	TotalRequests         int64    `json:"total_requests"`
-	TotalEstimatedCostUSD float64  `json:"total_estimated_cost_usd"`
-	TotalCacheReadTokens  int64    `json:"total_cache_read_tokens,omitempty"`
-	TotalCacheWriteTokens int64    `json:"total_cache_write_tokens,omitempty"`
-	TotalRecordedCostUSD  float64  `json:"total_recorded_cost_usd,omitempty"`
-	ByDeployment          []Totals `json:"by_deployment"`
+	TotalPromptTokens     int64   `json:"total_prompt_tokens"`
+	TotalCompletionTokens int64   `json:"total_completion_tokens"`
+	TotalRequests         int64   `json:"total_requests"`
+	TotalEstimatedCostUSD float64 `json:"total_estimated_cost_usd"`
+	TotalCacheReadTokens  int64   `json:"total_cache_read_tokens,omitempty"`
+	TotalCacheWriteTokens int64   `json:"total_cache_write_tokens,omitempty"`
+	TotalRecordedCostUSD  float64 `json:"total_recorded_cost_usd,omitempty"`
+	// TotalCostBasis is the weakest per-row CostBasis (unknown >
+	// mixed > estimated > recorded); TotalUnpricedTokens sums the
+	// tokens no current price could value.
+	TotalCostBasis      string   `json:"total_cost_basis,omitempty"`
+	TotalUnpricedTokens int64    `json:"total_unpriced_tokens,omitempty"`
+	ByDeployment        []Totals `json:"by_deployment"`
 }
 
 // Price is the per-million-token pricing used to estimate cost at snapshot
@@ -210,9 +228,13 @@ func (t *Tracker) RecordEx(deploymentID string, c Counts, costUSD float64, versi
 	}
 }
 
-// Snapshot returns cumulative totals. Cost is estimated per deployment from
-// the provided price table (deployments missing from the table have zero
-// cost). The result is sorted by deployment ID for stable UI rendering.
+// Snapshot returns cumulative totals. Record-time costs are final;
+// tokens recorded without record-time costing fall back to the
+// provided price table at snapshot time, and deployments missing
+// from the table have their unpriced tokens reported through
+// CostBasis "unknown" and UnpricedTokens — never silently as an
+// exact zero cost. The result is sorted by deployment ID for stable
+// UI rendering.
 func (t *Tracker) Snapshot(prices map[string]Price) Snapshot {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -226,6 +248,9 @@ func (t *Tracker) Snapshot(prices map[string]Price) Snapshot {
 		ByDeployment:          make([]Totals, 0, len(t.byDeploy)),
 	}
 	var totalCost float64
+	basisRank := map[string]int{"recorded": 0, "estimated": 1, "mixed": 2, "unknown": 3}
+	weakestBasis := ""
+	var totalUnpriced int64
 	for _, tot := range t.byDeploy {
 		row := *tot
 		if tot.CostByVersion != nil {
@@ -239,6 +264,32 @@ func (t *Tracker) Snapshot(prices map[string]Price) Snapshot {
 		// the snapshot-time fallback for any tokens recorded
 		// without record-time costing.
 		row.EstimatedCost = row.RecordedCostUSD
+		row.UnpricedTokens = tot.unpricedPrompt + tot.unpricedCompletion
+		_, hasPrice := prices[row.Deployment]
+		hasRecorded := len(tot.CostByVersion) > 0 || tot.RecordedCostUSD > 0
+		switch {
+		case row.UnpricedTokens == 0:
+			row.CostBasis = "recorded"
+			row.CostCompleteness = "complete"
+		case !hasPrice && !hasRecorded:
+			// Nothing about this row's cost is known; the zero in
+			// EstimatedCost means "unvalued", never "free".
+			row.CostBasis = "unknown"
+			row.CostCompleteness = "partial"
+		case !hasPrice:
+			row.CostBasis = "mixed"
+			row.CostCompleteness = "partial"
+		case hasRecorded:
+			row.CostBasis = "mixed"
+			row.CostCompleteness = "complete"
+		default:
+			row.CostBasis = "estimated"
+			row.CostCompleteness = "complete"
+		}
+		totalUnpriced += row.UnpricedTokens
+		if weakestBasis == "" || basisRank[row.CostBasis] > basisRank[weakestBasis] {
+			weakestBasis = row.CostBasis
+		}
 		if p, ok := prices[row.Deployment]; ok {
 			inRate := p.InputPerMTok
 			outRate := p.OutputPerMTok
@@ -261,6 +312,8 @@ func (t *Tracker) Snapshot(prices map[string]Price) Snapshot {
 		return out.ByDeployment[i].Deployment < out.ByDeployment[j].Deployment
 	})
 	out.TotalEstimatedCostUSD = totalCost
+	out.TotalCostBasis = weakestBasis
+	out.TotalUnpricedTokens = totalUnpriced
 	return out
 }
 
