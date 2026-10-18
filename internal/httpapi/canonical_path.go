@@ -589,6 +589,7 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 			cls := compat.ClassifyTransportError(derr)
 			policy := cls.Policy()
 			s.hm.RecordProviderFailure(deployment.ProviderID, deployment.ID, lastErr)
+			s.observeTaskFeedback(string(ti.Profile.Type), deployment.ID, false, time.Since(start))
 			if router.IsReadyStrategy(cfg.Routing.Strategy) {
 				s.hm.Quarantine(deployment.ID, lastErr, time.Since(start))
 				s.probe.Recover(deployment.ID)
@@ -635,7 +636,7 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 				policy.SignalProvider = false
 				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "model_unavailable", Deployment: deployment.ID, Message: "upstream model temporarily unavailable", ErrorType: string(cls.Class), StatusCode: resp.StatusCode})
 			}
-			s.recordProviderFailure(deployment.ProviderID, deployment.ID, safeMessage, policy)
+			s.recordProviderFailure(deployment.ProviderID, deployment.ID, safeMessage, policy, string(ti.Profile.Type))
 			cooldownEntered := false
 			if !cls.CapabilityFailure && cls.Class != compat.ClassModelRetired {
 				if router.IsReadyStrategy(cfg.Routing.Strategy) {
@@ -731,7 +732,7 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		prevStatus := s.hm.Get(deploy.ID).Status
-		s.recordRouteSuccess(req, deploy.ID, deploy.ProviderID, time.Since(start))
+		s.recordRouteSuccess(req, deploy.ID, deploy.ProviderID, time.Since(start), string(ti.Profile.Type))
 		s.learnFromSuccess(deploy.ID, deploy.ProviderID, deploy, sent, &canReq)
 		ev := events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_ok", Deployment: deploy.ID,
 			Message: "request completed", LatencyMS: total.Milliseconds()}
