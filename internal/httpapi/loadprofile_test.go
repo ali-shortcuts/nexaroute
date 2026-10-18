@@ -279,26 +279,32 @@ func loadGatewayConfig(pool int, u *loadUpstreams) config.Config {
 }
 
 // startSlowDashboardSubscribers opens n admin event streams that read slowly.
-// It returns a wait function that blocks until all subscribers have observed
-// cancellation. Producers must never block on these subscribers.
-func startSlowDashboardSubscribers(ctx context.Context, baseURL string, n int) func() {
+// It returns a wait function, plus one readiness result per subscriber. A nil
+// readiness result means the HTTP stream is established before the caller starts
+// its inference workload. Producers must never block on these subscribers.
+func startSlowDashboardSubscribers(ctx context.Context, baseURL string, n int) (func(), <-chan error) {
 	var wg sync.WaitGroup
+	ready := make(chan error, n)
 	for i := 0; i < n; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/admin/api/events/stream?limit=16", nil)
 			if err != nil {
+				ready <- err
 				return
 			}
 			resp, err := http.DefaultClient.Do(req)
 			if err != nil {
+				ready <- err
 				return
 			}
 			defer resp.Body.Close()
 			if resp.StatusCode != http.StatusOK {
+				ready <- fmt.Errorf("events stream returned HTTP %d", resp.StatusCode)
 				return
 			}
+			ready <- nil
 			reader := newSSEReader(resp.Body)
 			for {
 				if _, done, err := reader.Next(); done || err != nil {
@@ -312,7 +318,19 @@ func startSlowDashboardSubscribers(ctx context.Context, baseURL string, n int) f
 			}
 		}()
 	}
-	return wg.Wait
+	return wg.Wait, ready
+}
+
+// waitForSlowDashboardSubscribers prevents the inference workload from starting
+// until every requested dashboard stream is established. Cleanup cancels and
+// joins the subscriber goroutines even when readiness fails.
+func waitForSlowDashboardSubscribers(t *testing.T, ready <-chan error, n int) {
+	t.Helper()
+	for i := 0; i < n; i++ {
+		if err := <-ready; err != nil {
+			t.Fatalf("dashboard subscriber %d failed to become ready: %v", i+1, err)
+		}
+	}
 }
 
 // TestSlowDashboardSubscribersDoNotBlockInference proves, deterministically
@@ -339,7 +357,12 @@ func TestSlowDashboardSubscribersDoNotBlockInference(t *testing.T) {
 	const slowSubscribers = 32
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	waitSubscribers := startSlowDashboardSubscribers(ctx, gw.URL, slowSubscribers)
+	waitSubscribers, subscribersReady := startSlowDashboardSubscribers(ctx, gw.URL, slowSubscribers)
+	t.Cleanup(func() {
+		cancel()
+		waitSubscribers()
+	})
+	waitForSlowDashboardSubscribers(t, subscribersReady, slowSubscribers)
 
 	client := &http.Client{Timeout: 15 * time.Second}
 	var failed atomic.Int64
@@ -549,7 +572,12 @@ func TestLoadProfileMixedWorkload(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	waitSubscribers := startSlowDashboardSubscribers(ctx, gw.URL, subscribers)
+	waitSubscribers, subscribersReady := startSlowDashboardSubscribers(ctx, gw.URL, subscribers)
+	t.Cleanup(func() {
+		cancel()
+		waitSubscribers()
+	})
+	waitForSlowDashboardSubscribers(t, subscribersReady, subscribers)
 
 	rng := rand.New(rand.NewSource(seed))
 	ops := make([]loadCategory, totalOps)
