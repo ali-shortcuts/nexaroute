@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reflect"
 	"sync"
+	"time"
 
 	"github.com/ali-shortcuts/nexaroute/internal/video"
 )
@@ -29,6 +30,13 @@ type JobStore interface {
 	Update(context.Context, video.VideoJob) error
 	List(context.Context) ([]video.VideoJob, error)
 	Delete(context.Context, string) error
+	// TryClaim atomically leases the job to owner until
+	// now+ttl (#434 item 6). It succeeds when the job exists
+	// and carries no live lease held by a DIFFERENT owner; a
+	// same-owner call renews. The returned job is the claimed
+	// record. Implementations must make the check-and-set
+	// atomic within their consistency domain.
+	TryClaim(ctx context.Context, id, owner string, ttl time.Duration, now time.Time) (video.VideoJob, bool, error)
 }
 
 type MemoryStore struct {
@@ -104,6 +112,33 @@ func (s *MemoryStore) Update(_ context.Context, j video.VideoJob) error {
 	s.jobs[j.JobID] = j
 	return nil
 }
+
+// claimable reports whether j may be leased to owner at now:
+// no lease, an expired lease, or a lease already held by the
+// same owner (renewal). A live foreign lease blocks.
+func claimable(j video.VideoJob, owner string, now time.Time) bool {
+	if j.LeaseOwner == "" || !j.LeaseUntil.After(now) {
+		return true
+	}
+	return j.LeaseOwner == owner
+}
+
+func (s *MemoryStore) TryClaim(_ context.Context, id, owner string, ttl time.Duration, now time.Time) (video.VideoJob, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	j, ok := s.jobs[id]
+	if !ok {
+		return video.VideoJob{}, false, ErrNotFound
+	}
+	if !claimable(j, owner, now) {
+		return video.VideoJob{}, false, nil
+	}
+	j.LeaseOwner = owner
+	j.LeaseUntil = now.Add(ttl)
+	s.jobs[id] = j
+	return j, true, nil
+}
+
 func (s *MemoryStore) List(_ context.Context) ([]video.VideoJob, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

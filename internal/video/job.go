@@ -55,6 +55,8 @@ type VideoJob struct {
 	SchemaVersion  string       `json:"schema_version"`
 	JobID          string       `json:"job_id"`
 	IdempotencyKey string       `json:"idempotency_key,omitempty"`
+	LeaseOwner     string       `json:"lease_owner,omitempty"`
+	LeaseUntil     time.Time    `json:"lease_until,omitempty"`
 	ProjectID      string       `json:"project_id"`
 	EpisodeID      string       `json:"episode_id,omitempty"`
 	ParentJobID    string       `json:"parent_job_id,omitempty"`
