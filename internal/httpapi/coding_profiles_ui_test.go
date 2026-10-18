@@ -32,3 +32,29 @@ func TestCodingProfilesPanelWiring(t *testing.T) {
 		}
 	}
 }
+
+// #415 item 5 remainder: every route-profile mapping row links to
+// the exact request history for that profile — the action opens
+// Activity's live view pre-filtered by the route profile ID,
+// which lifecycle records and events carry as route_profile.
+func TestCodingProfilesHistoryLinkWiring(t *testing.T) {
+	appBytes, err := webFS.ReadFile("web/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	appJS := string(appBytes)
+	for _, want := range []string{
+		`data-action="cp-history"`,
+		"data-profile",
+		"'cp-history': e =>",
+		"state.activityQuery = p",
+		"state.activityTab = 'live'",
+		"bt('cp_history')",
+		"'cp_history': 'History'",
+		"'cp_history': 'تاریخچه'",
+	} {
+		if !strings.Contains(appJS, want) {
+			t.Errorf("app.js missing profile history-link wiring %q", want)
+		}
+	}
+}
