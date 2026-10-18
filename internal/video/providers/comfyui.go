@@ -197,7 +197,24 @@ func (p *ComfyUI) Capabilities(context.Context) (video.Capabilities, error) {
 		Modes: []video.Mode{video.ModeTextToVideo}, Models: []string{p.model},
 		MaxDurationSeconds: p.maxDuration,
 		AspectRatios:       []video.AspectRatio{video.Aspect16x9, video.Aspect9x16, video.Aspect1x1},
-		SupportsAudio:      false, SupportsCancel: false, SupportsWebhooks: false,
+		// The ComfyUI adapter is a LOCAL backend: it submits a
+		// user-supplied API-format workflow to a ComfyUI server on the
+		// operator's own machine. It is production-ready as a local
+		// adapter, but it is not a commercial video API and must never
+		// be presented as one.
+		ProviderKind: video.ProviderKindLocal, ProductionReady: true,
+		// The adapter drives one text-to-video workflow per job. It
+		// cannot consume reference/first/last-frame inputs, extend
+		// clips, edit existing video, accept multi-shot submissions,
+		// compose provider-side, or generate any audio; narration and
+		// subtitles are a Gateway-side local pipeline, not a provider
+		// capability.
+		SupportsAudio: false, SupportsCancel: false, SupportsWebhooks: false,
+		SupportsReferenceFrames: false, SupportsClipExtension: false,
+		SupportsVideoEditing: false, SupportsMultiShot: false,
+		SupportsComposition: false, SupportsSubtitles: false,
+		SupportsNarration: false, SupportsMusicGeneration: false,
+		SupportsDialogueGeneration: false,
 	}, nil
 }
 
@@ -217,6 +234,9 @@ func (p *ComfyUI) ValidateRequest(r video.VideoRequest) error {
 	}
 	if r.AudioRequested || r.DialogueRequested || strings.TrimSpace(r.NarrationText) != "" || strings.TrimSpace(r.SubtitleLanguage) != "" {
 		return errors.New("ComfyUI workflow adapter does not claim audio, narration, or subtitle support")
+	}
+	if len(r.SoundRequirements) > 0 {
+		return errors.New("ComfyUI workflow adapter does not generate music or sound effects")
 	}
 	if len(r.ShotPlan) > 1 {
 		return errors.New("ComfyUI adapter submits one workflow per job; multi-shot episode orchestration is not implemented")

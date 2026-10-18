@@ -1666,7 +1666,7 @@
   }
   function openVideoCreate() {
     const idempotencyKey = crypto.randomUUID?.() || Date.now() + Math.random();
-    const providers = state.videoProviders.map((p, i) => '<option value="' + esc(p.id) + '"' + (i === 0 ? ' selected' : '') + '>' + esc(p.id) + '</option>').join('');
+    const providers = state.videoProviders.map((p, i) => '<option value="' + esc(p.id) + '"' + (i === 0 ? ' selected' : '') + '>' + esc(p.id) + (p.kind ? ' · ' + esc(p.kind) : '') + (p.production_ready === false ? ' · non-production' : '') + '</option>').join('');
     const providerOptions = providers || '<option value="" disabled selected>No provider available</option>';
     const crProvider = state.videoProviders.find(p => p.id === 'code-render');
     const crModels = (crProvider && crProvider.capabilities && Array.isArray(crProvider.capabilities.models)) ? crProvider.capabilities.models : [];
