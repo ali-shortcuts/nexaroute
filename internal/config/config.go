@@ -851,21 +851,21 @@ type ProviderConfig struct {
 }
 
 type ModelConfig struct {
-	ID                string       `json:"id"`
-	Model             string       `json:"model"`
-	Aliases           []string     `json:"aliases,omitempty"`
-	Enabled           bool         `json:"enabled"`
-	Priority          int          `json:"priority"`
-	Weight            float64      `json:"weight"`
-	ContextWindow     int          `json:"context_window,omitempty"`
-	InputCostPerMTok  float64      `json:"input_cost_per_mtok,omitempty"`
-	OutputCostPerMTok float64      `json:"output_cost_per_mtok,omitempty"`
+	ID                string   `json:"id"`
+	Model             string   `json:"model"`
+	Aliases           []string `json:"aliases,omitempty"`
+	Enabled           bool     `json:"enabled"`
+	Priority          int      `json:"priority"`
+	Weight            float64  `json:"weight"`
+	ContextWindow     int      `json:"context_window,omitempty"`
+	InputCostPerMTok  float64  `json:"input_cost_per_mtok,omitempty"`
+	OutputCostPerMTok float64  `json:"output_cost_per_mtok,omitempty"`
 	// Source is the onboarding origin (manual/discovered); TestState is the
 	// last bounded per-model generation-test outcome. Empty values remain
 	// valid for legacy configurations and mean manual/untested.
-	Source            string       `json:"source,omitempty"`
-	TestState         string       `json:"test_state,omitempty"`
-	Capabilities      Capabilities `json:"capabilities"`
+	Source       string       `json:"source,omitempty"`
+	TestState    string       `json:"test_state,omitempty"`
+	Capabilities Capabilities `json:"capabilities"`
 }
 
 // Model onboarding provenance values (issue #394).
