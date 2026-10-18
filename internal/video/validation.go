@@ -22,6 +22,17 @@ func (r VideoRequest) Validate() error {
 	default:
 		return fmt.Errorf("%w: unsupported mode %q", ErrInvalidRequest, n.Mode)
 	}
+	// A declared mode that contradicts the brief's hard asset
+	// evidence fails closed (#510 item 6): executing a brief with a
+	// first-frame asset as text-to-video (or a source-video brief
+	// as anything but video-to-video) would silently run the wrong
+	// job type. Soft classifications (storyboard, prompt-only) never
+	// contradict a declared mode.
+	if r.Mode != "" {
+		if cls := ClassifyBrief(r); cls.AssetEvidence && cls.Mode != r.Mode {
+			return fmt.Errorf("%w: declared mode %q contradicts the brief, which classifies as %q (%s)", ErrInvalidRequest, r.Mode, cls.Mode, strings.Join(cls.Reasons, ","))
+		}
+	}
 	if n.DurationSeconds <= 0 || n.DurationSeconds > 3600 {
 		return fmt.Errorf("%w: duration_seconds must be between 0 and 3600", ErrInvalidRequest)
 	}
