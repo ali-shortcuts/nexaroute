@@ -338,3 +338,28 @@ func TestAutopilotLeaseFinishesOnIssuingControllerAfterReload(t *testing.T) {
 		t.Fatalf("unexpected leases on replacement controller: %+v", newStatus)
 	}
 }
+
+func TestAutopilotConfigReloadDetectsCandidateAndGateChanges(t *testing.T) {
+	incumbent := autopilot.PolicyRef{ID: "balanced", Version: "v1"}
+	ctrl := autopilot.New(incumbent, incumbent, autopilot.GateConfig{})
+	original := config.AutopilotConfig{
+		Enabled: true, PolicyID: "balanced", CandidatePolicyID: "candidate-a",
+		CanaryPercent: 5, MinSamples: 20, MaxErrorRate: 0.1,
+	}
+	if autopilotConfigNeedsRebuild(ctrl, original, original, "balanced") {
+		t.Fatal("unrelated reload should preserve the active controller")
+	}
+	candidateChanged := original
+	candidateChanged.CandidatePolicyID = "candidate-b"
+	if !autopilotConfigNeedsRebuild(ctrl, original, candidateChanged, "balanced") {
+		t.Fatal("changing the candidate must rebuild the controller")
+	}
+	gateChanged := original
+	gateChanged.MaxErrorRate = 0.05
+	if !autopilotConfigNeedsRebuild(ctrl, original, gateChanged, "balanced") {
+		t.Fatal("changing the safety gate must rebuild the controller")
+	}
+	if !autopilotConfigNeedsRebuild(nil, original, original, "balanced") {
+		t.Fatal("an absent controller must be initialized when autopilot is enabled")
+	}
+}

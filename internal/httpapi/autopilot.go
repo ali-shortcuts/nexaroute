@@ -69,6 +69,11 @@ func newAutopilotController(cfg config.Config, policies []policy.Policy) *autopi
 	return ctrl
 }
 
+
+func autopilotConfigNeedsRebuild(current *autopilot.Controller, previous, next config.AutopilotConfig, target string) bool {
+	return current == nil || previous != next || current.TargetPolicyID() != target
+}
+
 func (s *Server) autopilotSnapshot() *autopilot.Controller {
 	s.runtimeMu.RLock()
 	defer s.runtimeMu.RUnlock()

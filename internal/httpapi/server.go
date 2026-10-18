@@ -93,6 +93,7 @@ type Server struct {
 	// Phase 18: routing-policy canary autopilot; data-plane policy selection only.
 	// Guarded by runtimeMu for replacement on reload.
 	autopilot               *autopilot.Controller
+	autopilotConfig         config.AutopilotConfig
 	autopilotLeases         sync.Map // internal request key -> autopilotLeaseEntry
 	autopilotRequestSignals sync.Map // internal request key -> *autopilotRequestSignals
 	// Phase C — task classification metrics (bounded cardinality)
@@ -262,6 +263,7 @@ func New(cfg config.Config, configPath string, reg *providers.Registry, rt *rout
 	// Phase 18: policy canary autopilot (opt-in). Build from the same validated
 	// policy entries used by the decision plane.
 	s.autopilot = newAutopilotController(cfg, policies)
+	s.autopilotConfig = cfg.Autopilot
 	// Phase F: register external providers (jev)
 	for _, extCfg := range cfg.DecisionProviders {
 		if !extCfg.IsEnabled() {
@@ -737,9 +739,10 @@ func (s *Server) applyConfigLocked(baseCfg config.Config) error {
 				}
 				if !cfg.Autopilot.Enabled {
 					s.autopilot = nil
-				} else if s.autopilot == nil || s.autopilot.TargetPolicyID() != target {
+				} else if autopilotConfigNeedsRebuild(s.autopilot, s.autopilotConfig, cfg.Autopilot, target) {
 					s.autopilot = newAutopilotController(cfg, policies)
 				}
+				s.autopilotConfig = cfg.Autopilot
 			}
 		}
 		// Phase F/G: hot-reload external providers (jev) — build immutable new adapters and swap atomically
