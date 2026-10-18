@@ -419,7 +419,12 @@ func TestCoverageGapCreateSingleShotValidation(t *testing.T) {
 		r.ShotPlan = []video.Shot{{
 			ShotID: "s", CameraMovement: "pan", DurationSeconds: 2,
 			Provider: "fake", Model: "model-a",
-			RequiredReferences: []video.Asset{{ID: "ref"}}, SoundRequirements: []string{"wind"},
+			// Note: per-shot RequiredReferences are rejected at
+			// admission unless the provider declares
+			// SupportsReferenceFrames (see capability_admission_test.go);
+			// they are intentionally absent from this fixture so the
+			// test keeps proving prompt/preference inheritance.
+			SoundRequirements: []string{"wind"},
 		}}
 		job, err := o.Create(ctx, r)
 		if err != nil {

@@ -83,15 +83,33 @@ func (p *CodeRender) HandlesNarration() bool { return p.Narrator != nil }
 
 func (p *CodeRender) Capabilities(context.Context) (video.Capabilities, error) {
 	models := append([]string(nil), p.Models...)
+	narrator := p.Narrator != nil
 	return video.Capabilities{
 		Modes:              []video.Mode{video.ModeTextToVideo},
 		Models:             models,
 		MaxDurationSeconds: p.MaxDurationSeconds,
 		Resolutions:        []string{"1280x720", "720x1280", "960x960"},
 		AspectRatios:       []video.AspectRatio{video.Aspect16x9, video.Aspect9x16, video.Aspect1x1},
-		SupportsAudio:      p.Narrator != nil,
-		SupportsWebhooks:   false,
-		SupportsCancel:     true,
+		// code-render is PROGRAMMATIC, not native generative video: a
+		// text/coding model authors a declarative scene plan and the
+		// local deterministic renderer executes it. It is
+		// production-ready as a programmatic backend, but it must never
+		// be presented as native generative video or a commercial API.
+		ProviderKind: video.ProviderKindProgrammatic, ProductionReady: true,
+		// One render per job (no provider-side multi-shot submission);
+		// the renderer composes scenes locally. Reference/first/last
+		// frames, clip extension, video editing, music and dialogue are
+		// not supported. Narration and subtitles exist only through the
+		// local Piper narrator; without it, audio is unsupported.
+		SupportsAudio:           narrator,
+		SupportsWebhooks:        false,
+		SupportsCancel:          true,
+		SupportsComposition:     true,
+		SupportsSubtitles:       narrator,
+		SupportsNarration:       narrator,
+		SupportsReferenceFrames: false, SupportsClipExtension: false,
+		SupportsVideoEditing: false, SupportsMultiShot: false,
+		SupportsMusicGeneration: false, SupportsDialogueGeneration: false,
 	}, nil
 }
 
@@ -120,6 +138,9 @@ func (p *CodeRender) ValidateRequest(r video.VideoRequest) error {
 	}
 	if r.DialogueRequested {
 		return errors.New("code-render does not generate dialogue; narration is supported when a local Piper narrator is configured")
+	}
+	if len(r.SoundRequirements) > 0 {
+		return errors.New("code-render does not generate music or sound effects; narration is supported when a local Piper narrator is configured")
 	}
 	if r.AudioRequested && p.Narrator == nil {
 		return errors.New("code-render audio is narration-only and requires a configured local Piper narrator (video.piper_enabled)")

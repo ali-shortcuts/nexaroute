@@ -75,8 +75,16 @@ func TestFakeCapabilitiesAndJobLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("capabilities: %v", err)
 	}
-	if len(capabilities.Modes) != 2 || capabilities.Modes[0] != video.ModeTextToVideo || capabilities.Modes[1] != video.ModeImageToVideo || len(capabilities.Models) != 1 || capabilities.Models[0] != "fake-video-1" || capabilities.MaxDurationSeconds != 60 || len(capabilities.AspectRatios) != 3 || !capabilities.SupportsAudio || !capabilities.SupportsCancel || !capabilities.SupportsWebhooks {
+	if len(capabilities.Modes) != 2 || capabilities.Modes[0] != video.ModeTextToVideo || capabilities.Modes[1] != video.ModeImageToVideo || len(capabilities.Models) != 1 || capabilities.Models[0] != "fake-video-1" || capabilities.MaxDurationSeconds != 60 || len(capabilities.AspectRatios) != 3 || !capabilities.SupportsAudio || !capabilities.SupportsCancel || capabilities.SupportsWebhooks {
 		t.Fatalf("unexpected capabilities: %+v", capabilities)
+	}
+	// The fake is a non-production test double: it must be labelled as
+	// such and never counted as a production provider.
+	if capabilities.ProviderKind != video.ProviderKindTest {
+		t.Fatalf("fake provider_kind=%q, want %q", capabilities.ProviderKind, video.ProviderKindTest)
+	}
+	if capabilities.ProductionReady {
+		t.Fatal("fake provider must not claim ProductionReady")
 	}
 
 	request := validProviderRequest()
@@ -160,11 +168,13 @@ func TestFakeCancellationAndOutputErrors(t *testing.T) {
 
 func TestFakeWebhookSurface(t *testing.T) {
 	provider := NewFake(1)
-	if err := provider.RegisterWebhook(context.Background(), video.WebhookRegistration{CallbackURL: "https://example.test/callback"}); err != nil {
-		t.Fatalf("RegisterWebhook: %v", err)
+	// The fake declares no webhook support, so registration and
+	// verification must fail loudly instead of pretending to work.
+	if err := provider.RegisterWebhook(context.Background(), video.WebhookRegistration{CallbackURL: "https://example.test/callback"}); err == nil {
+		t.Fatal("RegisterWebhook unexpectedly succeeded")
 	}
-	if err := provider.VerifyWebhook(httptest.NewRequest("POST", "https://example.test/webhook", nil)); err != nil {
-		t.Fatalf("VerifyWebhook: %v", err)
+	if err := provider.VerifyWebhook(httptest.NewRequest("POST", "https://example.test/webhook", nil)); err == nil {
+		t.Fatal("VerifyWebhook unexpectedly succeeded")
 	}
 	if _, err := provider.ParseWebhook(httptest.NewRequest("POST", "https://example.test/webhook", nil)); err == nil {
 		t.Fatal("ParseWebhook unexpectedly succeeded")
