@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/ali-shortcuts/nexaroute/internal/autopilot"
@@ -88,16 +89,70 @@ func (s *Server) autopilotSelectPolicy(policyID, requestID string) (string, bool
 	return lease.Policy.ID, true
 }
 
+// autopilotRequestSignals holds authoritative request-scoped observations until
+// the middleware closes the policy lease. It is separate from the controller
+// so signals are captured at the data-plane source of truth.
+type autopilotRequestSignals struct {
+	mu              sync.Mutex
+	failover        bool
+	terminalFailure bool
+	ttftMS          float64
+	hasTTFT         bool
+}
+
+func (s *Server) autopilotSignalsFor(requestID string) *autopilotRequestSignals {
+	if requestID == "" {
+		return nil
+	}
+	if _, leased := s.autopilotLeases.Load(requestID); !leased {
+		return nil
+	}
+	actual, _ := s.autopilotRequestSignals.LoadOrStore(requestID, &autopilotRequestSignals{})
+	signals, _ := actual.(*autopilotRequestSignals)
+	return signals
+}
+
+func (s *Server) autopilotRecordFailover(requestID string) {
+	if signals := s.autopilotSignalsFor(requestID); signals != nil {
+		signals.mu.Lock()
+		signals.failover = true
+		signals.mu.Unlock()
+	}
+}
+
+func (s *Server) autopilotRecordTTFT(requestID string, duration time.Duration) {
+	if duration < 0 {
+		return
+	}
+	if signals := s.autopilotSignalsFor(requestID); signals != nil {
+		signals.mu.Lock()
+		signals.ttftMS = float64(duration) / float64(time.Millisecond)
+		signals.hasTTFT = true
+		signals.mu.Unlock()
+	}
+}
+
+// This is called only when a stream has already committed headers, so HTTP 200
+// cannot be treated as proof that the upstream stream completed successfully.
+func (s *Server) autopilotMarkTerminalFailure(requestID string) {
+	if signals := s.autopilotSignalsFor(requestID); signals != nil {
+		signals.mu.Lock()
+		signals.terminalFailure = true
+		signals.mu.Unlock()
+	}
+}
+
 // autopilotRecordFinish attributes a data-plane request outcome to the policy
 // version it started under. Cancelled requests are released without being
 // counted as policy failures.
 func (s *Server) autopilotRecordFinish(requestID string, status int, terminal string, duration time.Duration) {
-	ctrl := s.autopilotSnapshot()
-	if ctrl == nil || requestID == "" {
+	if requestID == "" {
 		return
 	}
-	raw, ok := s.autopilotLeases.LoadAndDelete(requestID)
-	if !ok {
+	raw, leased := s.autopilotLeases.LoadAndDelete(requestID)
+	signalRaw, _ := s.autopilotRequestSignals.LoadAndDelete(requestID)
+	ctrl := s.autopilotSnapshot()
+	if ctrl == nil || !leased {
 		return
 	}
 	lease, ok := raw.(autopilot.Lease)
@@ -108,10 +163,29 @@ func (s *Server) autopilotRecordFinish(requestID string, status int, terminal st
 		ctrl.Release(lease)
 		return
 	}
+
+	var failover, terminalFailure, hasTTFT bool
+	var ttftMS float64
+	if signals, ok := signalRaw.(*autopilotRequestSignals); ok {
+		signals.mu.Lock()
+		failover = signals.failover
+		terminalFailure = signals.terminalFailure
+		hasTTFT = signals.hasTTFT
+		ttftMS = signals.ttftMS
+		signals.mu.Unlock()
+	}
+	failed := status >= http.StatusBadRequest || terminal == "failed" || terminalFailure
+	errorClass := classifyAutopilotStatus(status)
+	if failed && status < http.StatusBadRequest {
+		errorClass = autopilot.ClassTransportError
+	}
 	ctrl.Record(lease, autopilot.Sample{
-		Success:    status < http.StatusBadRequest,
+		Success:    !failed,
+		ErrorClass: errorClass,
+		Failover:   failover,
 		LatencyMS:  float64(duration.Milliseconds()),
-		ErrorClass: classifyAutopilotStatus(status),
+		TTFTMS:     ttftMS,
+		HasTTFT:    hasTTFT,
 	})
 }
 

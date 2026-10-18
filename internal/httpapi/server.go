@@ -91,8 +91,9 @@ type Server struct {
 	// Phase 18: routing-policy canary autopilot. It changes routing policy
 	// only; the data plane consults it to pick the served policy version.
 	// Guarded by runtimeMu for replacement on reload.
-	autopilot       *autopilot.Controller
-	autopilotLeases sync.Map // requestID string -> autopilot.Lease
+	autopilot               *autopilot.Controller
+	autopilotLeases         sync.Map // requestID string -> autopilot.Lease
+	autopilotRequestSignals sync.Map // requestID string -> *autopilotRequestSignals
 	// Phase C — task classification metrics (bounded cardinality)
 	taskMu             sync.Mutex
 	taskClassCounts    map[string]uint64 // key: task_type|complexity
