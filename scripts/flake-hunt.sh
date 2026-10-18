@@ -30,17 +30,27 @@ fi
 LOGDIR="${FLAKE_HUNT_LOGDIR:-$(pwd)/.flake-hunt-logs}"
 mkdir -p "$LOGDIR"
 
-# Per-run TMPDIR isolation (#404, round-2 failure): several tests scan
-# os.TempDir() for artifacts they own (e.g. restore journals in
-# cmd/gateway), so a suite run that shares the machine-default temp dir
-# with ANY other test process — a parallel lane, a second suite, the
-# operator's own run — can observe foreign artifacts and fail on them.
-# Every iteration and every verify run below gets a fresh, private
-# TMPDIR/GOTMPDIR under the log dir, removed on success and kept with
-# the failing log on failure.
+# Keep compiler/test scratch outside the repository tree. verify.sh runs
+# "gofmt -l ." recursively; placing GOTMPDIR beneath LOGDIR (which may be
+# in this checkout) lets Go-generated *_testmain.go and cgo files
+# contaminate the source tree and deterministically fail Phase 2.
+# The temp root is independently configurable for constrained workers,
+# but an in-repository root is rejected rather than silently poisoning verify.
+REPO_ROOT="$(pwd -P)"
+TMP_ROOT="${FLAKE_HUNT_TMP_ROOT:-/tmp}"
+mkdir -p "$TMP_ROOT"
+TMP_ROOT="$(cd "$TMP_ROOT" && pwd -P)"
+if [[ "$TMP_ROOT" == "$REPO_ROOT" || "$TMP_ROOT" == "$REPO_ROOT/"* ]]; then
+	echo "FLAKE_HUNT_TMP_ROOT must be outside repository root ($REPO_ROOT): $TMP_ROOT" >&2
+	exit 2
+fi
+
+# A unique per-invocation session prevents stale scratch files from killed
+# attempts being reused. Successful run dirs are removed; on failure or
+# interruption, their isolated scratch is retained outside the repository.
+TMP_SESSION="$(mktemp -d "$TMP_ROOT/nexaroute-flake-hunt.XXXXXXXX")"
 fresh_tmpdir() {
-	local d="$LOGDIR/tmp-$1"
-	rm -rf "$d"
+	local d="$TMP_SESSION/tmp-$1"
 	mkdir -p "$d"
 	printf '%s' "$d"
 }
@@ -76,8 +86,9 @@ echo "== Phase 1: $ITERATIONS full-suite iterations under CPU load =="
 for ((i = 1; i <= ITERATIONS; i++)); do
 	log="$LOGDIR/iter-$(printf '%03d' "$i").log"
 	iter_tmp="$(fresh_tmpdir "iter-$(printf '%03d' "$i")")"
+	echo "FLAKE_HUNT_TMPDIR=$iter_tmp" >"$log"
 	start_burners
-	if TMPDIR="$iter_tmp" GOTMPDIR="$iter_tmp" go test -count=1 -timeout=20m ./... >"$log" 2>&1; then
+	if TMPDIR="$iter_tmp" GOTMPDIR="$iter_tmp" go test -count=1 -timeout=20m ./... >>"$log" 2>&1; then
 		pass=$((pass + 1))
 		rm -f "$log"
 		rm -rf "$iter_tmp"
@@ -100,7 +111,8 @@ vpass=0
 for ((i = 1; i <= VERIFY_RUNS; i++)); do
 	log="$LOGDIR/verify-$(printf '%02d' "$i").log"
 	verify_tmp="$(fresh_tmpdir "verify-$(printf '%02d' "$i")")"
-	if TMPDIR="$verify_tmp" GOTMPDIR="$verify_tmp" ./scripts/verify.sh >"$log" 2>&1; then
+	echo "FLAKE_HUNT_TMPDIR=$verify_tmp" >"$log"
+	if TMPDIR="$verify_tmp" GOTMPDIR="$verify_tmp" ./scripts/verify.sh >>"$log" 2>&1; then
 		vpass=$((vpass + 1))
 		rm -f "$log"
 		rm -rf "$verify_tmp"
@@ -113,5 +125,5 @@ for ((i = 1; i <= VERIFY_RUNS; i++)); do
 	fi
 done
 echo "Phase 2: $vpass passed out of $VERIFY_RUNS"
-
+rmdir "$TMP_SESSION" 2>/dev/null || true
 echo "FLAKE-HUNT PASS: suite_iterations=$pass/$ITERATIONS verify_runs=$vpass/$VERIFY_RUNS"

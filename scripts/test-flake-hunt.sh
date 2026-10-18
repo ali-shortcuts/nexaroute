@@ -1,18 +1,10 @@
 #!/usr/bin/env bash
 # Hermetic contract test for scripts/flake-hunt.sh (issue #404).
 #
-# Regression coverage for the harness counter defect found in round 8:
-# start_burners() used the global `i` as its loop variable, clobbering the
-# main loop counter on every call. The iteration sequence degenerated to
-# 1, 3, 3, 3, ... — iteration 2 was skipped, iteration 3 repeated forever,
-# and the FLAKE-HUNT PASS marker was unreachable, so the gate could never
-# pass no matter how green the suite was.
-#
-# This test runs the real harness against stub `go` and `verify.sh`
-# binaries that always succeed, with small iteration counts, and asserts
-# the harness actually advances through every iteration and prints the
-# exact PASS marker with matching counts. Against the defective harness
-# the run never terminates (timeout) and the test fails.
+# Covers both known harness defects: the original global-loop-counter
+# clobbering bug, and Go build scratch being created under LOGDIR inside
+# the repo, where verify.sh's recursive gofmt check can see generated .go
+# files. The real harness is exercised against stub go/verify binaries.
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -25,9 +17,13 @@ trap 'rm -rf "$SBX"' EXIT
 mkdir -p "$SBX/scripts" "$SBX/bin" "$SBX/logs"
 cp "$HARNESS" "$SBX/scripts/flake-hunt.sh"
 
-# Stub verify.sh: always succeeds.
+# Both stubs record their TMPDIR/GOTMPDIR so the test can assert that all
+# five invocations use isolated scratch outside the simulated repository.
+export STUB_GO_LOG="$SBX/go-invocations.log"
+export STUB_TEMP_LOG="$SBX/tempdirs.log"
 cat > "$SBX/scripts/verify.sh" <<'STUB'
 #!/usr/bin/env bash
+printf 'verify|%s|%s\n' "${TMPDIR:-}" "${GOTMPDIR:-}" >> "$STUB_TEMP_LOG"
 exit 0
 STUB
 chmod +x "$SBX/scripts/verify.sh"
@@ -35,12 +31,12 @@ chmod +x "$SBX/scripts/verify.sh"
 # Stub go: records the invocation, throttles to 1s (so a defective,
 # non-advancing harness cannot spin unboundedly before the timeout),
 # prints a fake package result, and always succeeds.
-export STUB_GO_LOG="$SBX/go-invocations.log"
 cat > "$SBX/bin/go" <<'STUB'
 #!/usr/bin/env bash
 echo "go $*" >> "$STUB_GO_LOG"
+printf 'go|%s|%s\n' "${TMPDIR:-}" "${GOTMPDIR:-}" >> "$STUB_TEMP_LOG"
 sleep 1
-echo "ok  	github.com/ali-shortcuts/nexaroute/stub	0.001s"
+echo "ok  \tgithub.com/ali-shortcuts/nexaroute/stub\t0.001s"
 exit 0
 STUB
 chmod +x "$SBX/bin/go"
@@ -57,12 +53,12 @@ check() { # check <description> <0=pass>
 
 OUT="$SBX/harness.out"
 PATH="$SBX/bin:$PATH" FLAKE_HUNT_ITERATIONS=3 FLAKE_HUNT_VERIFY_RUNS=2 \
-	FLAKE_HUNT_LOGDIR="$SBX/logs" \
+	FLAKE_HUNT_LOGDIR="$SBX/logs" FLAKE_HUNT_TMP_ROOT="$(dirname "$SBX")" \
 	timeout 30 bash "$SBX/scripts/flake-hunt.sh" >"$OUT" 2>&1
 rc=$?
 
-[ $rc -eq 0 ]
-check "harness terminates with exit 0 (defective harness loops forever on iteration 3 and is killed by timeout, rc=$rc)" $?
+[ "$rc" -eq 0 ]
+check "harness terminates with exit 0 (the old loop-counter defect timed out, rc=$rc)" $?
 
 grep -q "Phase 1: 3 passed, 0 failed out of 3" "$OUT"
 check "phase 1 reports exactly 3/3 iterations passed" $?
@@ -76,8 +72,32 @@ check "stub go test invoked exactly once per iteration (3 total)" $?
 grep -q -- "-- verify run 2/2 passed" "$OUT"
 check "both verify runs executed" $?
 
-if [ $failures -gt 0 ]; then
+if [ "$(wc -l < "$STUB_TEMP_LOG")" -eq 5 ] && awk -F '|' -v root="$SBX" '
+	{
+		for (i = 2; i <= 3; i++) {
+			if ($i == root || index($i, root "/") == 1) bad = 1
+		}
+	}
+	END { exit bad }
+' "$STUB_TEMP_LOG"; then
+	temp_paths_ok=0
+else
+	temp_paths_ok=1
+fi
+check "TMPDIR and GOTMPDIR for all five runs stay outside the repository" "$temp_paths_ok"
+
+# A misconfigured temp root inside the checkout must fail closed before
+# launching any suite, rather than cause a later false verify failure.
+BAD_OUT="$SBX/bad-temp-root.out"
+PATH="$SBX/bin:$PATH" FLAKE_HUNT_ITERATIONS=1 FLAKE_HUNT_VERIFY_RUNS=1 \
+	FLAKE_HUNT_LOGDIR="$SBX/logs" FLAKE_HUNT_TMP_ROOT="$SBX/logs" \
+	timeout 5 bash "$SBX/scripts/flake-hunt.sh" >"$BAD_OUT" 2>&1
+bad_rc=$?
+[ "$bad_rc" -eq 2 ] && grep -q "must be outside repository root" "$BAD_OUT"
+check "in-repository temp root is rejected before the gate starts" $?
+
+if [ "$failures" -gt 0 ]; then
 	echo "test-flake-hunt: $failures assertion(s) FAILED"
 	exit 1
 fi
-echo "test-flake-hunt: PASS"
+echo "test-flake-hunt: PASS (7 assertions)"
