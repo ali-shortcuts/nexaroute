@@ -301,7 +301,18 @@ func (d *doctor) checkBackupBundle(bundlePath, configPath string, maxAge time.Du
 	}
 
 	pairing := checkMasterKeyPairing(manifest, payloads, configPath)
-	d.report(pairing.Status, "backup_key_pairing", pairing.Detail)
+	// doctor's report vocabulary is PASS/WARN/FAIL: translate the
+	// verify-domain statuses. BLOCKED/UNVERIFIED mean the fingerprint is
+	// not comparable on this host (external key provider, plaintext
+	// config, or no key material here) — a warning, not a failure.
+	switch pairing.Status {
+	case statusPass:
+		d.report("PASS", "backup_key_pairing", pairing.Detail)
+	case statusFail:
+		d.report("FAIL", "backup_key_pairing", pairing.Detail)
+	default:
+		d.report("WARN", "backup_key_pairing", pairing.Detail)
+	}
 
 	compat := checkControlPlaneState(payloads)
 	switch compat.Status {
