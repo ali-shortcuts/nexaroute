@@ -454,6 +454,13 @@ func (s *Server) applyDecisionPlane(
 		}
 	}
 
+	// Phase 18: policy canary. When the selected policy is the one under change
+	// the autopilot issues a lease that may resolve to a bounded-share candidate
+	// version. Non-target policies are never touched.
+	if leasedID, leased := s.autopilotSelectPolicy(policyID, requestID); leased {
+		policyID = leasedID
+	}
+
 	decisionReq := decision.DecisionRequest{
 		TaskProfile:          tp,
 		Features:             fp,
