@@ -202,6 +202,10 @@ PostgreSQL, Redis, or video assets/jobs, and `restore --verify` reports those as
 `BLOCKED` when the config depends on them. Deployment persistence, replication,
 failover, retention and measured RPO/RTO still require operator configuration and
 recovery drilling. Cross-replica breaker synchronization is not implemented.
+The full per-subsystem state inventory, scopes and failure-mode
+behavior live in `docs/HA_STATE_INVENTORY.md` (#434), and the same
+scopes are served machine-readably in the `/api/hello` deployment
+report.
 ## RBAC and SSO
 
 PR #224 wires the permission matrix in `internal/authz` to every registered
