@@ -49,6 +49,37 @@ Direction-carrying surfaces and how they mirror under
   switcher's divider border (a symmetric separator between
   buttons, not a chain element).
 
+## Motion audit (#489 item 5)
+
+Motion is functional only. The complete loop inventory, each
+justified in writing per the remove-or-justify rule:
+
+| Loop | Used by | Why it exists (function) |
+|---|---|---|
+| `state-pulse` (opacity) | `.state-loading` | Signals "content is loading" on the skeleton primitive. Static under reduced motion. |
+| `visual-pulse` (transform scale + shadow) | `.topology-line.active span` | Marks the route line that is carrying traffic *now* — a live-state signal, not decoration. |
+| `visual-walk` (transform rotate ±3°) | `.visual-agent` | The live-execution marker drawn by `visual-agent.js` from real routing events; the element exists only while executions are in flight, and the rocking is its "currently executing" cue. Bounded by the visualizer's execution tracking and 4 s terminal settle; the visualizer has its own `reduced` state. |
+
+Rules, enforced by `TestMotionContract`:
+
+1. **No layout-property animation.** Keyframes animate
+   `transform`/`opacity` only — never `width`, `height`, `top`,
+   `left`, `right`, `bottom`, `margin` or `padding`.
+2. **No all-property transitions.** The interactive cards
+   (`.health-layer`, `.provider-tile`, `.route-tile`,
+   `button.metric-card`) transition exactly the properties their
+   hover/focus states change: `transform`, `border-color`,
+   `box-shadow` (`.18s ease`). A bare `transition:` shorthand is
+   a contract failure.
+3. **`prefers-reduced-motion` is honored everywhere:** the
+   global rule collapses all animation/transition durations, and
+   a specific block disables the visualizer and topology
+   animations outright.
+4. A new loop lands with its justification row here in the same
+   PR — unlisted animation is a contract failure (every
+   `animation:` reference must resolve to a defined `@keyframes`,
+   and the defined set is exactly the table above).
+
 ## Rules for new components
 
 1. Tokens only. Need a new color? Add a token inside the fence in
