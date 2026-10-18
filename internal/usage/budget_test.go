@@ -145,3 +145,43 @@ func TestTrackerConcurrentRecordExReconciles(t *testing.T) {
 		t.Fatalf("estimated cost should equal recorded when fully priced: %v", row.EstimatedCost)
 	}
 }
+
+func TestBudgetLedgerRejectsNonFiniteReserveAndSettle(t *testing.T) {
+	ledger := NewBudgetLedger()
+	now := time.Now()
+	for _, tc := range []struct {
+		name   string
+		limit  float64
+		amount float64
+	}{
+		{"nan amount", 5, math.NaN()},
+		{"inf amount", 5, math.Inf(1)},
+		{"nan limit", math.NaN(), 1},
+		{"inf limit", math.Inf(1), 1},
+	} {
+		id, ok := ledger.Reserve("k", tc.limit, tc.amount, now)
+		if ok || id != 0 {
+			t.Fatalf("%s: reserve admitted invalid input: id=%v ok=%v", tc.name, id, ok)
+		}
+	}
+	// A finite reservation settles; a non-finite actual is clamped to zero
+	// rather than committing an infinite or NaN spend.
+	id, ok := ledger.Reserve("k", 5, 2, now)
+	if !ok || id == 0 {
+		t.Fatal("finite reserve rejected")
+	}
+	ledger.Settle("k", id, math.NaN())
+	committed, reserved := ledger.Snapshot("k", now)
+	if committed != 0 || reserved != 0 {
+		t.Fatalf("NaN settle left ledger=(%v,%v), want (0,0)", committed, reserved)
+	}
+	id2, ok := ledger.Reserve("k2", 5, 2, now)
+	if !ok || id2 == 0 {
+		t.Fatal("finite reserve rejected")
+	}
+	ledger.Settle("k2", id2, math.Inf(1))
+	committed2, _ := ledger.Snapshot("k2", now)
+	if committed2 != 0 {
+		t.Fatalf("Inf settle committed %v, want 0", committed2)
+	}
+}

@@ -1,0 +1,20 @@
+# issue437 load profile — label=scale-10
+# date: 2026-10-18T06:36:24Z
+# go: go version go1.25.0 linux/amd64
+# cpu: AMD EPYC 9V45 96-Core Processor
+# nproc: 4
+# args: pool=10 ops=1000 workers=16 seed=1 subscribers=2
+=== RUN   TestLoadProfileMixedWorkload
+    loadprofile_test.go:623: 
+        issue437 load profile
+        seed=1 pool=10 ops=1000 workers=16 subscribers=2
+        elapsed=400ms
+        upstream_calls short=408 stream=291 fail=2 fallback=154 rate=2 slow=44
+        gateway_overhead short p50=691µs p95=1.323ms n=408
+        gateway_ttft stream p50=742µs p95=1.365ms n=291
+        goroutines before=11 after=109
+        heap_alloc_mb before=1.54 after=3.15
+        sessions=0
+--- PASS: TestLoadProfileMixedWorkload (0.74s)
+PASS
+ok  	github.com/ali-shortcuts/nexaroute/internal/httpapi	0.750s
