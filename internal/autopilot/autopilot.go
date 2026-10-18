@@ -179,7 +179,7 @@ type Signals struct {
 	ErrorRate               float64 `json:"error_rate"`
 	ServerErrors            int64   `json:"server_errors"`
 	RateLimits              int64   `json:"rate_limits"`
-	AuthErrors               int64   `json:"auth_errors"`
+	AuthErrors              int64   `json:"auth_errors"`
 	Timeouts                int64   `json:"timeouts"`
 	TransportErrors         int64   `json:"transport_errors"`
 	NoEligible              int64   `json:"no_eligible"`
@@ -202,7 +202,7 @@ func (w *window) snapshot() Signals {
 		Errors:                  w.errors,
 		ServerErrors:            w.serverErrors,
 		RateLimits:              w.rateLimits,
-		AuthErrors:               w.authErrors,
+		AuthErrors:              w.authErrors,
 		Timeouts:                w.timeouts,
 		TransportErrors:         w.transportErrors,
 		NoEligible:              w.noEligible,
