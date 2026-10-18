@@ -99,7 +99,6 @@ func TestModelOnboardingProvenanceWireFRoundTrip(t *testing.T) {
 	}
 }
 
-
 // The preset-grid rule is appended after the legacy responsive grid rules,
 // so it must explicitly restore one column on mobile instead of leaving the
 // catalog at three columns (which can overflow a 390px viewport).
