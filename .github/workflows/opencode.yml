@@ -37,16 +37,25 @@ jobs:
         env:
           COMMENT_BODY: ${{ github.event.comment.body }}
         run: |
-          # Only the two requested current OpenCode free-catalog models are allowed.
-          # The model resolver suggested these exact IDs when the old Muse model failed.
-          # Default to GLM-5.3 Flash Free; select DeepSeek V4.1 Flash Free explicitly.
-          # Free endpoints may be rate-limited or withdrawn; never send secrets/confidential data.
+          # Free model IDs are taken from the live OpenCode model catalog (2026-10-18).
+          # Alias mapping is an explicit allowlist; do not pass arbitrary comment text to MODEL.
+          # Jev 1.13 Free is included for a compatibility canary, although it is a structured
+          # decision model rather than a conventional coding LLM. Its suitability must be measured.
+          # Free endpoints may be rate-limited, changed, or withdrawn; never send secrets/confidential data.
           first_line=$(printf '%s' "$COMMENT_BODY" | head -n1)
           alias=$(printf '%s' "$first_line" | grep -oE 'model=[a-z0-9.-]+' | head -n1 | cut -d= -f2 || true)
           case "$alias" in
             ""|glm53|glm-5.3-flash-free) model="opencode/glm-5.3-flash-free" ;;
             deepseek41|deepseek-v4.1-flash-free) model="opencode/deepseek-v4.1-flash-free" ;;
-            *) echo "Unknown model alias: $alias (allowed: glm53 deepseek41)"; exit 1 ;;
+            bigpickle|big-pickle) model="opencode/big-pickle" ;;
+            beam|beam-free) model="opencode/beam-free" ;;
+            longcat25|longcat-2.5-preview-free) model="opencode/longcat-2.5-preview-free" ;;
+            mimo26|mimo-v2.6-flash-free) model="opencode/mimo-v2.6-flash-free" ;;
+            nemotron35lightning|nemotron-3.5-lightning-free) model="opencode/nemotron-3.5-lightning-free" ;;
+            nemotron35supervl|nemotron-3.5-super-vl-free) model="opencode/nemotron-3.5-super-vl-free" ;;
+            spacebunny|space-bunny-free) model="opencode/space-bunny-free" ;;
+            jev113|jev-1.13-free) model="opencode/jev-1.13-free" ;;
+            *) echo "Unknown model alias: $alias (allowed: glm53 deepseek41 bigpickle beam longcat25 mimo26 nemotron35lightning nemotron35supervl spacebunny jev113)"; exit 1 ;;
           esac
           echo "Using model: $model"
           echo "model=$model" >> "$GITHUB_OUTPUT"
