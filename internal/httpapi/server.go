@@ -1,10 +1,10 @@
 package httpapi
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
-	"context"
 	"embed"
 	"encoding/base64"
 	"encoding/binary"
