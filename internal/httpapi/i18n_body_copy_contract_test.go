@@ -72,6 +72,14 @@ func TestBodyCopyI18nContract(t *testing.T) {
 		// Phase 7 provider and routing control plane (issue #399):
 		"providersView", "providerCard", "routingView", "routeEligibilityPanel",
 		"routeCard", "routePrivacyNotice",
+		// Phase 7 remainder (issue #399): provider form, route form, model
+		// discovery, status taxonomy, model inventory, decision timeline and
+		// the guided first-route wizard.
+		"providerForm", "openRoute", "detectModels",
+		"providerStatusTaxonomy", "modelStatusTaxonomy",
+		"statusTaxonomyLegend", "modelInventoryRows", "modelInventoryRow",
+		"modelsView", "requestDecisionTimeline", "requestDecisionRow",
+		"firstRouteCandidates", "firstRouteCostWarning", "openFirstRouteWizard",
 	}
 	for _, fn := range covered {
 		src := extractFunctionLine(t, js, fn)
@@ -103,6 +111,7 @@ var bodyCopyAllow = map[string]bool{
 	"nexaroute audit verify": true, "nexaroute policy": true,
 	"ready_mesh": true, "ready_queue": true, "adaptive": true,
 	"no_training": true,
+	"Bearer":      true, "x-api-key": true, "x-goog-api-key": true, "api-key": true,
 }
 
 func sortedKeys(m map[string]bool) []string {

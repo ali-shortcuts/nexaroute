@@ -186,6 +186,23 @@ button.metric-card:hover,button.metric-card:focus-visible{border-color:#3d536c;b
 .elig-warnings span{color:var(--muted);font-size:11px}
 @media(max-width:700px){.elig-grid{grid-template-columns:1fr}.eligibility-panel summary{flex-direction:column}.eligibility-panel summary small{max-width:none;text-align:left}}
 
+/* Phase 7 remainder (issue #399): status taxonomy legend, unified model
+   inventory and the per-request decision timeline. */
+.model-table .event-table-head,.model-table .event-row{grid-template-columns:.9fr 1fr .8fr .7fr .6fr 1.1fr}
+.status-legend{margin-top:16px}
+.legend-grid{display:flex;flex-wrap:wrap;gap:8px}
+.legend-item{display:inline-flex}
+.request-timeline{margin-top:16px}
+.request-card{padding:13px 17px;border-bottom:1px solid var(--border)}
+.request-card:last-of-type{border-bottom:0}
+.request-head{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.request-head code{color:var(--accent);font-family:ui-monospace,Menlo,monospace;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.request-steps{display:grid;gap:6px;margin:9px 0 0;padding:0;list-style:none}
+.request-steps li{display:flex;align-items:center;gap:9px;padding:7px 9px;border:1px solid var(--border);border-left:3px solid var(--good);border-radius:8px;background:var(--surface-2)}
+.request-steps li.retry{border-left-color:var(--warn)}
+.request-steps small{color:var(--muted);font-size:10px}
+.cost-warning{margin-top:6px}
+@media(max-width:700px){.model-table .event-row{grid-template-columns:1fr 1fr}}
 /* Phase 10 — Live request activity, waterfall and detail drawer. */
 .activity-filters{display:flex;flex-wrap:wrap;align-items:center;gap:14px;margin:0 0 12px;padding:11px 13px;border:1px solid rgba(255,255,255,.08);border-radius:10px;background:var(--surface-2)}
 .activity-filters .select-box{display:inline-flex;align-items:center;gap:7px;color:var(--muted);font-size:11px}
