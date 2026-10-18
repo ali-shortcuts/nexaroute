@@ -252,8 +252,8 @@ func TestAutopilotRecordsFailoverTTFTAndPost200StreamFailure(t *testing.T) {
 	if _, exists := s.autopilotLeases.Load("signal-request"); exists {
 		t.Fatal("policy lease leaked after request finish")
 	}
-	if _, exists := s.autopilotRequestSignals.Load("signal-request"); exists {
-		t.Fatal("request signal state leaked after request finish")
+	if entry, exists := s.autopilotLeases.Load("signal-request"); exists {
+		t.Fatalf("request lease entry leaked after finish: %+v", entry)
 	}
 }
 
@@ -297,6 +297,12 @@ func TestAutopilotLeasesDoNotCollideOnRepeatedExternalRequestID(t *testing.T) {
 	if _, exists := s.autopilotLeases.Load(key2); exists {
 		t.Fatal("second request lease leaked")
 	}
+	if _, exists := s.autopilotSignalsFor(key1); exists {
+		t.Fatal("first request signal state remained reachable after finish")
+	}
+	if _, exists := s.autopilotSignalsFor(key2); exists {
+		t.Fatal("second request signal state remained reachable after finish")
+	}
 }
 
 func TestAutopilotLeaseFinishesOnIssuingControllerAfterReload(t *testing.T) {
@@ -336,6 +342,39 @@ func TestAutopilotLeaseFinishesOnIssuingControllerAfterReload(t *testing.T) {
 	}
 	if newStatus.InFlight != 0 {
 		t.Fatalf("unexpected leases on replacement controller: %+v", newStatus)
+	}
+}
+
+func TestAutopilotSignalCallbacksAreIgnoredAfterFinish(t *testing.T) {
+	incumbent := autopilot.PolicyRef{ID: "balanced", Version: "incumbent"}
+	ctrl := autopilot.New(incumbent, incumbent, autopilot.GateConfig{
+		MinSamples: 1, MinPromoteSamples: 10, MaxErrorRate: 1, MaxErrorRateDelta: 1,
+		MaxFailoverRate: 1, MaxNoEligibleRate: 1, MaxBudgetAnomalies: 100,
+	})
+	if err := ctrl.StartCanary(autopilot.PolicyRef{ID: "balanced", Version: "candidate"}, 100, 0); err != nil {
+		t.Fatalf("StartCanary: %v", err)
+	}
+	server := &Server{autopilot: ctrl}
+	if _, leased := server.autopilotSelectPolicy("balanced", "signal-close"); !leased {
+		t.Fatal("expected a policy lease")
+	}
+	late := server.autopilotSignalsFor("signal-close")
+	if late == nil {
+		t.Fatal("expected request-scoped signal record")
+	}
+	server.autopilotRecordFinish("signal-close", http.StatusOK, "succeeded", time.Millisecond)
+	server.autopilotRecordFailover("signal-close")
+	server.autopilotRecordTTFT("signal-close", 2*time.Millisecond)
+	server.autopilotMarkTerminalFailure("signal-close")
+
+	late.mu.Lock()
+	closed, failover, terminalFailure, hasTTFT := late.closed, late.failover, late.terminalFailure, late.hasTTFT
+	late.mu.Unlock()
+	if !closed {
+		t.Fatal("signal record was not closed at request finish")
+	}
+	if failover || terminalFailure || hasTTFT {
+		t.Fatalf("late callback mutated a finished request: %+v", late)
 	}
 }
 

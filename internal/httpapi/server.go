@@ -94,8 +94,7 @@ type Server struct {
 	// Guarded by runtimeMu for replacement on reload.
 	autopilot               *autopilot.Controller
 	autopilotConfig         config.AutopilotConfig
-	autopilotLeases         sync.Map // internal request key -> autopilotLeaseEntry
-	autopilotRequestSignals sync.Map // internal request key -> *autopilotRequestSignals
+	autopilotLeases sync.Map // internal request key -> autopilotLeaseEntry
 	// Phase C — task classification metrics (bounded cardinality)
 	taskMu             sync.Mutex
 	taskClassCounts    map[string]uint64 // key: task_type|complexity

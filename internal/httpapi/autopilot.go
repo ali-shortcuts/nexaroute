@@ -69,7 +69,6 @@ func newAutopilotController(cfg config.Config, policies []policy.Policy) *autopi
 	return ctrl
 }
 
-
 func autopilotConfigNeedsRebuild(current *autopilot.Controller, previous, next config.AutopilotConfig, target string) bool {
 	return current == nil || previous != next || current.TargetPolicyID() != target
 }
@@ -101,6 +100,7 @@ func autopilotRequestKeyFromContext(ctx context.Context, fallback string) string
 type autopilotLeaseEntry struct {
 	controller *autopilot.Controller
 	lease      autopilot.Lease
+	signals    *autopilotRequestSignals
 }
 
 // autopilotSelectPolicy overrides the requested policy id with the autopilot's
@@ -113,7 +113,11 @@ func (s *Server) autopilotSelectPolicy(policyID, requestID string) (string, bool
 	}
 	lease := ctrl.Select(requestID)
 	if requestID != "" {
-		s.autopilotLeases.Store(requestID, autopilotLeaseEntry{controller: ctrl, lease: lease})
+		s.autopilotLeases.Store(requestID, autopilotLeaseEntry{
+			controller: ctrl,
+			lease:      lease,
+			signals:    &autopilotRequestSignals{},
+		})
 	}
 	return lease.Policy.ID, true
 }
@@ -123,6 +127,7 @@ func (s *Server) autopilotSelectPolicy(policyID, requestID string) (string, bool
 // so signals are captured at the data-plane source of truth.
 type autopilotRequestSignals struct {
 	mu              sync.Mutex
+	closed          bool
 	failover        bool
 	terminalFailure bool
 	ttftMS          float64
@@ -133,18 +138,23 @@ func (s *Server) autopilotSignalsFor(requestID string) *autopilotRequestSignals 
 	if requestID == "" {
 		return nil
 	}
-	if _, leased := s.autopilotLeases.Load(requestID); !leased {
+	raw, leased := s.autopilotLeases.Load(requestID)
+	if !leased {
 		return nil
 	}
-	actual, _ := s.autopilotRequestSignals.LoadOrStore(requestID, &autopilotRequestSignals{})
-	signals, _ := actual.(*autopilotRequestSignals)
-	return signals
+	entry, ok := raw.(autopilotLeaseEntry)
+	if !ok {
+		return nil
+	}
+	return entry.signals
 }
 
 func (s *Server) autopilotRecordFailover(requestID string) {
 	if signals := s.autopilotSignalsFor(requestID); signals != nil {
 		signals.mu.Lock()
-		signals.failover = true
+		if !signals.closed {
+			signals.failover = true
+		}
 		signals.mu.Unlock()
 	}
 }
@@ -155,8 +165,10 @@ func (s *Server) autopilotRecordTTFT(requestID string, duration time.Duration) {
 	}
 	if signals := s.autopilotSignalsFor(requestID); signals != nil {
 		signals.mu.Lock()
-		signals.ttftMS = float64(duration) / float64(time.Millisecond)
-		signals.hasTTFT = true
+		if !signals.closed {
+			signals.ttftMS = float64(duration) / float64(time.Millisecond)
+			signals.hasTTFT = true
+		}
 		signals.mu.Unlock()
 	}
 }
@@ -166,7 +178,9 @@ func (s *Server) autopilotRecordTTFT(requestID string, duration time.Duration) {
 func (s *Server) autopilotMarkTerminalFailure(requestID string) {
 	if signals := s.autopilotSignalsFor(requestID); signals != nil {
 		signals.mu.Lock()
-		signals.terminalFailure = true
+		if !signals.closed {
+			signals.terminalFailure = true
+		}
 		signals.mu.Unlock()
 	}
 }
@@ -179,7 +193,6 @@ func (s *Server) autopilotRecordFinish(requestID string, status int, terminal st
 		return
 	}
 	raw, leased := s.autopilotLeases.LoadAndDelete(requestID)
-	signalRaw, _ := s.autopilotRequestSignals.LoadAndDelete(requestID)
 	if !leased {
 		return
 	}
@@ -191,20 +204,24 @@ func (s *Server) autopilotRecordFinish(requestID string, status int, terminal st
 	// this request acquired its lease. Complete on the controller that issued it.
 	ctrl := entry.controller
 	lease := entry.lease
-	if terminal == "cancelled" {
-		ctrl.Release(lease)
-		return
-	}
 
 	var failover, terminalFailure, hasTTFT bool
 	var ttftMS float64
-	if signals, ok := signalRaw.(*autopilotRequestSignals); ok {
+	if signals := entry.signals; signals != nil {
+		// Close the signal record before snapshotting it. A late callback that
+		// already obtained this pointer cannot race a post-finish mutation into
+		// an outcome that has already been recorded.
 		signals.mu.Lock()
+		signals.closed = true
 		failover = signals.failover
 		terminalFailure = signals.terminalFailure
 		hasTTFT = signals.hasTTFT
 		ttftMS = signals.ttftMS
 		signals.mu.Unlock()
+	}
+	if terminal == "cancelled" {
+		ctrl.Release(lease)
+		return
 	}
 	failed := status >= http.StatusBadRequest || terminal == "failed" || terminalFailure
 	errorClass := classifyAutopilotStatus(status)
