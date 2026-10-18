@@ -58,6 +58,7 @@ type Server struct {
 	requestSeq        atomic.Uint64
 	requestTotal      atomic.Uint64
 	configRevision    atomic.Uint64
+	deployment        DeploymentReport
 	telemetryExporter *telemetry.Exporter
 	configHistory     []config.Config
 	draining          atomic.Bool
@@ -216,6 +217,7 @@ func New(cfg config.Config, configPath string, reg *providers.Registry, rt *rout
 	}
 	s := &Server{
 		cfg: cfg, baseCfg: baseCfg, configPath: configPath, reg: reg, rt: rt, hm: hm, bus: bus, probe: pe, log: l,
+		deployment:      deploymentReportForConfig(cfg),
 		mcp:             newMCPBroker(),
 		respCache:       cache.New(cfg.CacheTTL(), cfg.Cache.MaxEntries, int64(cfg.Cache.MaxBodyBytes)),
 		semCache:        newSemanticCache(cfg),
