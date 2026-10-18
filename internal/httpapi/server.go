@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -22,6 +23,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/ali-shortcuts/nexaroute/internal/autopilot"
 	"github.com/ali-shortcuts/nexaroute/internal/cache"
 	"github.com/ali-shortcuts/nexaroute/internal/compat"
 	"github.com/ali-shortcuts/nexaroute/internal/config"
@@ -88,6 +90,11 @@ type Server struct {
 	// Phase H: evaluation plane (scorecards + deterministic evaluation). Admin
 	// surface only; the data plane never reads it.
 	evaluation *evaluationPlane
+	// Phase 18: routing-policy canary autopilot; data-plane policy selection only.
+	// Guarded by runtimeMu for replacement on reload.
+	autopilot               *autopilot.Controller
+	autopilotConfig         config.AutopilotConfig
+	autopilotLeases sync.Map // internal request key -> autopilotLeaseEntry
 	// Phase C — task classification metrics (bounded cardinality)
 	taskMu             sync.Mutex
 	taskClassCounts    map[string]uint64 // key: task_type|complexity
@@ -252,6 +259,10 @@ func New(cfg config.Config, configPath string, reg *providers.Registry, rt *rout
 	policies := convertDecisionPolicies(cfg.DecisionPolicies)
 	policyProvider := policy.NewProvider(policies, cfg.Decision.Policy)
 	s.decisionRegistry.Register(policyProvider)
+	// Phase 18: policy canary autopilot (opt-in). Build from the same validated
+	// policy entries used by the decision plane.
+	s.autopilot = newAutopilotController(cfg, policies)
+	s.autopilotConfig = cfg.Autopilot
 	// Phase F: register external providers (jev)
 	for _, extCfg := range cfg.DecisionProviders {
 		if !extCfg.IsEnabled() {
@@ -719,6 +730,18 @@ func (s *Server) applyConfigLocked(baseCfg config.Config) error {
 			if updater, ok := pp.(interface{ UpdatePolicies([]policy.Policy, string) }); ok {
 				policies := convertDecisionPolicies(cfg.DecisionPolicies)
 				updater.UpdatePolicies(policies, cfg.Decision.Policy)
+				// Keep a canary across unrelated reloads, but rebuild when the target
+				// changes and disable it immediately when the feature is switched off.
+				target := cfg.Autopilot.PolicyID
+				if target == "" {
+					target = cfg.Decision.Policy
+				}
+				if !cfg.Autopilot.Enabled {
+					s.autopilot = nil
+				} else if autopilotConfigNeedsRebuild(s.autopilot, s.autopilotConfig, cfg.Autopilot, target) {
+					s.autopilot = newAutopilotController(cfg, policies)
+				}
+				s.autopilotConfig = cfg.Autopilot
 			}
 		}
 		// Phase F/G: hot-reload external providers (jev) — build immutable new adapters and swap atomically
@@ -1036,6 +1059,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/admin/api/probe", s.adminProbe)
 	mux.HandleFunc("/admin/api/providers", s.adminProviders)
 	mux.HandleFunc("/admin/api/providers/", s.adminProviderByID)
+	mux.HandleFunc("/admin/api/autopilot", s.adminAutopilot)
 	mux.HandleFunc("/admin/api/provider-presets", s.adminProviderPresets)
 	mux.HandleFunc("/admin/api/provider-check", s.adminProviderCheck)
 	mux.HandleFunc("/admin/api/provider-test", s.adminProviderTest)
@@ -1183,6 +1207,10 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 		}
 		trace := newTraceContext(r.Header.Get("traceparent"))
 		r = r.WithContext(withTrace(r.Context(), trace))
+		// The external x-request-id is caller-controlled and may repeat. Use a
+		// gateway-generated key for autopilot leases and signal attribution.
+		autopilotKey := fmt.Sprintf("autopilot-%x", requestNumber)
+		r = r.WithContext(context.WithValue(r.Context(), autopilotRequestKeyContext{}, autopilotKey))
 		if s.telemetryExporter != nil && dataPlaneOperation(r.URL.Path) != "" {
 			r = r.WithContext(withSpanRecord(r.Context(), &spanRecord{}))
 		}
@@ -1215,6 +1243,7 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 					terminal = events.TerminalFailed
 				}
 				s.emitRequestFinished(rid, sw.status, duration, terminal)
+				s.autopilotRecordFinish(autopilotKey, sw.status, terminal, duration)
 			}
 			s.exportSpan(r, trace, start, duration, sw.status)
 			if s.log != nil && strings.HasPrefix(r.URL.Path, "/admin/api/") && (isStateChanging(r.Method) || sw.status == http.StatusForbidden) {
