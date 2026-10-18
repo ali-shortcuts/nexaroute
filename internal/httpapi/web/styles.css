@@ -231,3 +231,9 @@ button.metric-card:hover,button.metric-card:focus-visible{border-color:var(--lin
 .waterfall-body small{display:block;margin-top:3px;color:var(--muted);font-size:10px}
 .waterfall-time{color:var(--muted);font-size:10px;font-variant-numeric:tabular-nums}
 @media(max-width:700px){.waterfall-step{grid-template-columns:26px 1fr}.waterfall-time{grid-column:2}}
+.video-workflow{display:flex;flex-wrap:wrap;gap:6px;list-style:none;margin:12px 0 0;padding:12px 0 0;border-top:1px solid var(--border)}
+.video-workflow li{font-size:11px;padding:3px 8px;border-radius:999px;border:1px solid var(--border);color:var(--muted)}
+.video-workflow li.wf-done{color:var(--good);border-color:var(--good)}
+.video-workflow li.wf-active{color:var(--warn);border-color:var(--warn)}
+.video-workflow li.wf-failed,.video-workflow li.wf-attention{color:var(--bad);border-color:var(--bad)}
+.video-workflow li.wf-skipped{opacity:.55;text-decoration:line-through}
