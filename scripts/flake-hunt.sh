@@ -90,7 +90,8 @@ for ((i = 1; i <= ITERATIONS; i++)); do
 	start_burners
 	if TMPDIR="$iter_tmp" GOTMPDIR="$iter_tmp" go test -count=1 -timeout=20m ./... >>"$log" 2>&1; then
 		pass=$((pass + 1))
-		rm -f "$log"
+		# Keep successful raw logs: the acceptance gate requires inspectable
+		# evidence for every one of the 50 loaded iterations.
 		rm -rf "$iter_tmp"
 	else
 		fail=$((fail + 1))
@@ -114,7 +115,7 @@ for ((i = 1; i <= VERIFY_RUNS; i++)); do
 	echo "FLAKE_HUNT_TMPDIR=$verify_tmp" >"$log"
 	if TMPDIR="$verify_tmp" GOTMPDIR="$verify_tmp" ./scripts/verify.sh >>"$log" 2>&1; then
 		vpass=$((vpass + 1))
-		rm -f "$log"
+		# Keep successful raw logs for all five mandatory verify passes.
 		rm -rf "$verify_tmp"
 		echo "-- verify run $i/$VERIFY_RUNS passed"
 	else

@@ -96,8 +96,20 @@ bad_rc=$?
 [ "$bad_rc" -eq 2 ] && grep -q "must be outside repository root" "$BAD_OUT"
 check "in-repository temp root is rejected before the gate starts" $?
 
+suite_logs_ok=0
+for n in 001 002 003; do
+	if [ ! -s "$SBX/logs/iter-$n.log" ]; then suite_logs_ok=1; fi
+done
+check "raw logs retained for all three successful suite iterations" "$suite_logs_ok"
+
+verify_logs_ok=0
+for n in 01 02; do
+	if [ ! -s "$SBX/logs/verify-$n.log" ]; then verify_logs_ok=1; fi
+done
+check "raw logs retained for both successful verify runs" "$verify_logs_ok"
+
 if [ "$failures" -gt 0 ]; then
 	echo "test-flake-hunt: $failures assertion(s) FAILED"
 	exit 1
 fi
-echo "test-flake-hunt: PASS (7 assertions)"
+echo "test-flake-hunt: PASS (9 assertions)"
