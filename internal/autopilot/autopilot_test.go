@@ -25,6 +25,10 @@ func newTestController(cfg GateConfig) *Controller {
 
 // ServeCandidates records n samples against the currently issued canary lease.
 func serveCanarySamples(c *Controller, n int, s Sample) []Lease {
+	// Unit samples are fully observed by construction. HTTP integration
+	// tests that lack a source leave these coverage bits unset and fail closed.
+	s.HasNoEligibleSignal = true
+	s.HasBudgetAnomalySignal = true
 	leases := make([]Lease, 0, n)
 	for i := 0; i < n; i++ {
 		l := c.Select("canary-key")
@@ -64,12 +68,12 @@ func TestGateNeverPromotesOnMissingData(t *testing.T) {
 
 func TestGatePromotesOnlyWhenSatisfied(t *testing.T) {
 	cfg := GateConfig{MinSamples: 10, MinPromoteSamples: 20, MaxErrorRate: 0.2}
-	good := Signals{Requests: 25, Successes: 24, Errors: 1, ErrorRate: 0.04}
+	good := Signals{Requests: 25, Successes: 24, Errors: 1, ErrorRate: 0.04, NoEligibleObserved: 25, BudgetAnomaliesObserved: 25}
 	res := EvaluateGate(good, Signals{}, cfg)
 	if res.Verdict != VerdictPromote {
 		t.Fatalf("verdict=%s reasons=%v want promote", res.Verdict, res.Reasons)
 	}
-	bad := Signals{Requests: 25, Errors: 10, ErrorRate: 0.4}
+	bad := Signals{Requests: 25, Errors: 10, ErrorRate: 0.4, NoEligibleObserved: 25, BudgetAnomaliesObserved: 25}
 	res = EvaluateGate(bad, Signals{}, cfg)
 	if res.Verdict != VerdictRollback {
 		t.Fatalf("verdict=%s reasons=%v want rollback", res.Verdict, res.Reasons)
@@ -78,8 +82,8 @@ func TestGatePromotesOnlyWhenSatisfied(t *testing.T) {
 
 func TestGateRollsBackOnIncumbentRegression(t *testing.T) {
 	cfg := GateConfig{MinSamples: 10, MinPromoteSamples: 20, MaxErrorRate: 0.9, MaxErrorRateDelta: 0.05}
-	cand := Signals{Requests: 30, Errors: 6, ErrorRate: 0.20}
-	inc := Signals{Requests: 30, Errors: 1, ErrorRate: 0.033}
+	cand := Signals{Requests: 30, Errors: 6, ErrorRate: 0.20, NoEligibleObserved: 30, BudgetAnomaliesObserved: 30}
+	inc := Signals{Requests: 30, Errors: 1, ErrorRate: 0.033, NoEligibleObserved: 30, BudgetAnomaliesObserved: 30}
 	res := EvaluateGate(cand, inc, cfg)
 	if res.Verdict != VerdictRollback {
 		t.Fatalf("verdict=%s reasons=%v want rollback", res.Verdict, res.Reasons)
@@ -242,5 +246,36 @@ func TestStatusHistoryIsBounded(t *testing.T) {
 	st := c.Status()
 	if len(st.Transitions) > maxHistory {
 		t.Fatalf("transitions=%d exceeds bound %d", len(st.Transitions), maxHistory)
+	}
+}
+
+func TestGateHoldsPromotionWhenRequiredTelemetryCoverageIsMissing(t *testing.T) {
+	cfg := GateConfig{MinSamples: 2, MinPromoteSamples: 2, MaxErrorRate: 0.2}
+	candidate := Signals{Requests: 2, Successes: 2, ErrorRate: 0}
+	res := EvaluateGate(candidate, Signals{}, cfg)
+	if res.Verdict != VerdictHold {
+		t.Fatalf("verdict=%s want hold for missing telemetry coverage", res.Verdict)
+	}
+	if len(res.Reasons) == 0 || res.Reasons[0] != "insufficient_no_eligible_signal_coverage:0<2" {
+		t.Fatalf("reasons=%v want missing no-eligible signal coverage", res.Reasons)
+	}
+
+	candidate.NoEligibleObserved = 2
+	candidate.BudgetAnomaliesObserved = 2
+	res = EvaluateGate(candidate, Signals{}, cfg)
+	if res.Verdict != VerdictPromote {
+		t.Fatalf("verdict=%s reasons=%v want promote with complete signal coverage", res.Verdict, res.Reasons)
+	}
+}
+
+func TestGateHoldsTTFTConfiguredWithoutTTFTSamples(t *testing.T) {
+	cfg := GateConfig{MinSamples: 1, MinPromoteSamples: 1, MaxErrorRate: 0.2, MaxTTFTP95MS: 100}
+	candidate := Signals{Requests: 1, Successes: 1, ErrorRate: 0, NoEligibleObserved: 1, BudgetAnomaliesObserved: 1}
+	res := EvaluateGate(candidate, Signals{}, cfg)
+	if res.Verdict != VerdictHold {
+		t.Fatalf("verdict=%s want hold for missing TTFT samples", res.Verdict)
+	}
+	if len(res.Reasons) == 0 || res.Reasons[0] != "insufficient_ttft_signal_coverage:0" {
+		t.Fatalf("reasons=%v want missing TTFT signal coverage", res.Reasons)
 	}
 }

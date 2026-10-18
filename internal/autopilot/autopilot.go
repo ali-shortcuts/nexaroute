@@ -82,15 +82,17 @@ const (
 // It carries counters and latency only — never prompts, completions or
 // credentials.
 type Sample struct {
-	Success       bool
-	ErrorClass    ErrorClass
-	Failover      bool
-	NoEligible    bool
-	BudgetAnomaly bool
-	LatencyMS     float64
-	TTFTMS        float64
-	HasTTFT       bool
-	At            time.Time
+	Success                bool
+	ErrorClass             ErrorClass
+	Failover               bool
+	NoEligible             bool
+	HasNoEligibleSignal    bool
+	BudgetAnomaly          bool
+	HasBudgetAnomalySignal bool
+	LatencyMS              float64
+	TTFTMS                 float64
+	HasTTFT                bool
+	At                     time.Time
 }
 
 const maxLatencySamples = 4096
@@ -107,10 +109,12 @@ type window struct {
 	authErrors      int64
 	timeouts        int64
 	transportErrors int64
-	noEligible      int64
-	failovers       int64
-	budgetAnomalies int64
-	latencyMS       []float64
+	noEligible              int64
+	noEligibleObserved      int64
+	failovers               int64
+	budgetAnomalies         int64
+	budgetAnomaliesObserved int64
+	latencyMS               []float64
 	ttftMS          []float64
 }
 
@@ -136,11 +140,17 @@ func (w *window) observe(s Sample) {
 	if s.Failover {
 		w.failovers++
 	}
-	if s.NoEligible {
-		w.noEligible++
+	if s.HasNoEligibleSignal {
+		w.noEligibleObserved++
+		if s.NoEligible {
+			w.noEligible++
+		}
 	}
-	if s.BudgetAnomaly {
-		w.budgetAnomalies++
+	if s.HasBudgetAnomalySignal {
+		w.budgetAnomaliesObserved++
+		if s.BudgetAnomaly {
+			w.budgetAnomalies++
+		}
 	}
 	if s.LatencyMS > 0 {
 		w.latencyMS = appendBounded(w.latencyMS, s.LatencyMS)
@@ -172,11 +182,13 @@ type Signals struct {
 	AuthErrors      int64   `json:"auth_errors"`
 	Timeouts        int64   `json:"timeouts"`
 	TransportErrors int64   `json:"transport_errors"`
-	NoEligible      int64   `json:"no_eligible"`
-	NoEligibleRate  float64 `json:"no_eligible_rate"`
-	Failovers       int64   `json:"failovers"`
-	FailoverRate    float64 `json:"failover_rate"`
-	BudgetAnomalies int64   `json:"budget_anomalies"`
+	NoEligible              int64   `json:"no_eligible"`
+	NoEligibleRate          float64 `json:"no_eligible_rate"`
+	NoEligibleObserved      int64   `json:"no_eligible_observed"`
+	Failovers               int64   `json:"failovers"`
+	FailoverRate            float64 `json:"failover_rate"`
+	BudgetAnomalies         int64   `json:"budget_anomalies"`
+	BudgetAnomaliesObserved int64   `json:"budget_anomalies_observed"`
 	LatencyP50MS    float64 `json:"latency_p50_ms"`
 	LatencyP95MS    float64 `json:"latency_p95_ms"`
 	TTFTCount       int64   `json:"ttft_count"`
@@ -193,9 +205,11 @@ func (w *window) snapshot() Signals {
 		AuthErrors:      w.authErrors,
 		Timeouts:        w.timeouts,
 		TransportErrors: w.transportErrors,
-		NoEligible:      w.noEligible,
-		Failovers:       w.failovers,
-		BudgetAnomalies: w.budgetAnomalies,
+		NoEligible:              w.noEligible,
+		NoEligibleObserved:      w.noEligibleObserved,
+		Failovers:               w.failovers,
+		BudgetAnomalies:         w.budgetAnomalies,
+		BudgetAnomaliesObserved: w.budgetAnomaliesObserved,
 		LatencyP50MS:    percentile(w.latencyMS, 0.50),
 		LatencyP95MS:    percentile(w.latencyMS, 0.95),
 		TTFTCount:       int64(len(w.ttftMS)),
@@ -203,8 +217,10 @@ func (w *window) snapshot() Signals {
 	}
 	if w.requests > 0 {
 		s.ErrorRate = float64(w.errors) / float64(w.requests)
-		s.NoEligibleRate = float64(w.noEligible) / float64(w.requests)
 		s.FailoverRate = float64(w.failovers) / float64(w.requests)
+	}
+	if w.noEligibleObserved > 0 {
+		s.NoEligibleRate = float64(w.noEligible) / float64(w.noEligibleObserved)
 	}
 	return s
 }
@@ -357,10 +373,10 @@ func EvaluateGate(candidate, incumbent Signals, cfg GateConfig) GateResult {
 	if candidate.FailoverRate > cfg.MaxFailoverRate {
 		violations = append(violations, fmt.Sprintf("failover_rate:%.4f>%.4f", candidate.FailoverRate, cfg.MaxFailoverRate))
 	}
-	if candidate.NoEligibleRate > cfg.MaxNoEligibleRate {
+	if candidate.NoEligibleObserved > 0 && candidate.NoEligibleRate > cfg.MaxNoEligibleRate {
 		violations = append(violations, fmt.Sprintf("no_eligible_rate:%.4f>%.4f", candidate.NoEligibleRate, cfg.MaxNoEligibleRate))
 	}
-	if candidate.BudgetAnomalies > cfg.MaxBudgetAnomalies {
+	if candidate.BudgetAnomaliesObserved > 0 && candidate.BudgetAnomalies > cfg.MaxBudgetAnomalies {
 		violations = append(violations, fmt.Sprintf("budget_anomalies:%d>%d", candidate.BudgetAnomalies, cfg.MaxBudgetAnomalies))
 	}
 	if cfg.MaxLatencyP95MS > 0 && candidate.LatencyP95MS > cfg.MaxLatencyP95MS {
@@ -376,6 +392,21 @@ func EvaluateGate(candidate, incumbent Signals, cfg GateConfig) GateResult {
 	}
 	if candidate.Requests < int64(cfg.MinPromoteSamples) {
 		res.Reasons = []string{fmt.Sprintf("awaiting_promotion_samples:%d<%d", candidate.Requests, cfg.MinPromoteSamples)}
+		return res
+	}
+	// Missing telemetry is not a zero-rate observation. Rollback remains
+	// possible on known bad outcomes above, but promotion requires complete
+	// policy-attributed coverage for each required gate signal.
+	if cfg.MaxNoEligibleRate < 1 && candidate.NoEligibleObserved < candidate.Requests {
+		res.Reasons = []string{fmt.Sprintf("insufficient_no_eligible_signal_coverage:%d<%d", candidate.NoEligibleObserved, candidate.Requests)}
+		return res
+	}
+	if candidate.BudgetAnomaliesObserved < candidate.Requests {
+		res.Reasons = []string{fmt.Sprintf("insufficient_budget_anomaly_signal_coverage:%d<%d", candidate.BudgetAnomaliesObserved, candidate.Requests)}
+		return res
+	}
+	if cfg.MaxTTFTP95MS > 0 && candidate.TTFTCount == 0 {
+		res.Reasons = []string{"insufficient_ttft_signal_coverage:0"}
 		return res
 	}
 	res.Verdict = VerdictPromote
