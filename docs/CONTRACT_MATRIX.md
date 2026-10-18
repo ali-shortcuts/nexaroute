@@ -127,13 +127,26 @@ Shell id inventory:
 - `theme-toggle`
 - `version`
 
-## Coverage, reported separately (#502 item 4)
+## Coverage, reported separately (#502 item 4, corrected 2026-10-18)
 
-- **Browser coverage:** NONE verified. The sandbox headless
-  Chromium cannot reach the loopback test server (verified
-  2026-10-18; see #502). Real-browser E2E remains item 1 of #502
-  and is **UNVERIFIED** until it runs in an environment whose
-  browser can load the gateway.
+- **Browser coverage (CI):** covered — `scripts/test-browser-e2e.py`
+  (Playwright, real Chromium against the real gateway handlers)
+  runs in the CI verify job on every PR and must print
+  `BROWSER E2E PASS`. Its sections: provider add/edit with
+  credential and privacy-metadata preservation, model
+  detection, route creation, Activity empty state, evidence
+  screenshots (dark/light, two viewports), Video Studio
+  multi-shot + failure scenarios + disabled-gateway behavior,
+  and the WebChat flow (badge, failover trail, session pinning,
+  context trend). The Go anchor tests
+  (`TestBrowserE2EVideoFailureScenarios`,
+  `TestBrowserE2EWebChatFlow`, `TestBrowserE2ECoreFlows`) pin
+  the sections so a dropped flow fails the unit stage too.
+- **Browser coverage (local sandbox):** **UNVERIFIED** — the
+  sandbox headless Chromium cannot reach the loopback test
+  server (verified 2026-10-18; see #502 item 1). Local visual
+  checks are not claimed; CI browser evidence above is the
+  operative record.
 - **Server API integration:** covered — Go contract/integration
   tests probe real handlers (above), including postgres/redis
   integration suites in CI.
@@ -142,3 +155,17 @@ Shell id inventory:
 - **Live external-provider coverage:** NONE in this matrix's
   scope — live tenants remain under their own UNVERIFIED
   boundaries (see EXTERNAL_VERIFICATION.md).
+
+## Flow-to-proof map (#413 item 3)
+
+| Browser flow | Proven by |
+| --- | --- |
+| First-run empty state | Browser E2E Activity section ("No real activity yet") + first-load assertions |
+| Add/edit provider; credential preserved on unrelated save | Browser E2E provider sections (privacy P3 + edit preservation) |
+| Discover/manual-add model, bounded test | Browser E2E model detection; connection-test handler suite (Go) |
+| Create route + fallback; inspect dry-run | Browser E2E routing section; route-preview contract tests (Go) |
+| Real request → live route trace | Browser E2E WebChat section (badge + attempt trail from response headers) |
+| Deterministic upstream failure → fallback attempt | Browser E2E WebChat trail (A 429 → B); Go failover suites |
+| Probe/cooldown/recovery state | Go failure-injection + soak suites and the #418 game-day suite (API level); not asserted through the browser UI |
+| Video job with fake provider: progress/output states | Browser E2E Video Studio sections (#414/#246) |
+| Permissions, privacy defaults, errors, RTL/EN/FA/PS | Browser E2E privacy sections + screenshots; Go i18n parity + RTL contract tests |
