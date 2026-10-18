@@ -9,6 +9,7 @@ package httpapi
 // documentation — it is regenerated from the real run.
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -56,6 +57,16 @@ func TestResilienceGameDay(t *testing.T) {
 			name:      "egress_dns_failure",
 			invariant: "a dead/egress-failed upstream degrades to a normalized error with no leak",
 			run:       gameDayEgressFailure,
+		},
+		{
+			name:      "quota_exhaustion_cascade",
+			invariant: "budget exhaustion degrades to clean 402s with no further provider submissions, holds settle exactly once, and other keys are unaffected",
+			run:       gameDayQuotaCascade,
+		},
+		{
+			name:      "clock_skew_cooldown_cap",
+			invariant: "a skewed or hostile Retry-After cannot extend a deployment's cooldown beyond the configured durations; expiry restores eligibility without a restart",
+			run:       gameDayClockSkew,
 		},
 	}
 
@@ -263,6 +274,150 @@ func gameDayEgressFailure(t *testing.T) error {
 		return fmt.Errorf("health status=%d after egress failure", hz.Code)
 	}
 	return nil
+}
+
+func gameDayQuotaCascade(t *testing.T) error {
+	var hits atomic.Int64
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"c1","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1000,"completion_tokens":100}}`))
+	}))
+	t.Cleanup(up.Close)
+	cfg := config.Default()
+	cfg.Probe.Enabled = false
+	cfg.ClientAuth.Enabled = true
+	cfg.ClientAuth.VirtualKeys = []config.VirtualKeyConfig{
+		{ID: "vk-q", Name: "cascade", KeyHash: keyDigest("quota-key"), BudgetUSD: 0.02},
+		{ID: "vk-other", Name: "bystander", KeyHash: keyDigest("other-key"), BudgetUSD: 10},
+	}
+	cfg.Providers = []config.ProviderConfig{{
+		ID: "llm", Type: "openai_compatible", BaseURL: up.URL, AuthMode: "none", Enabled: true,
+		Models: []config.ModelConfig{{ID: "m", Model: "chat-model", Enabled: true, Weight: 1,
+			InputCostPerMTok: 10, OutputCostPerMTok: 30,
+			Capabilities: config.Capabilities{Streaming: true}}},
+	}}
+	s := testGateway(t, cfg)
+	s.SyncCapabilityContracts()
+	chat := func(key string) int {
+		req := httptest.NewRequest(http.MethodPost, "http://gateway/v1/chat/completions", strings.NewReader(`{"model":"m","max_tokens":100,"messages":[{"role":"user","content":"hi"}]}`))
+		req.RemoteAddr = "127.0.0.1:12345"
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("x-api-key", key)
+		rr := httptest.NewRecorder()
+		s.Handler().ServeHTTP(rr, req)
+		return rr.Code
+	}
+	// $0.013 per request against a $0.02 budget: two admissions
+	// settle, then the cascade of rejections begins.
+	if code := chat("quota-key"); code != http.StatusOK {
+		return fmt.Errorf("req1 status=%d, want 200", code)
+	}
+	if code := chat("quota-key"); code != http.StatusOK {
+		return fmt.Errorf("req2 status=%d, want 200", code)
+	}
+	for i := 0; i < 5; i++ {
+		if code := chat("quota-key"); code != 402 {
+			return fmt.Errorf("cascade request %d status=%d, want 402", i, code)
+		}
+	}
+	if got := hits.Load(); got != 2 {
+		return fmt.Errorf("upstream submissions=%d, want exactly 2 (no submissions after exhaustion)", got)
+	}
+	// Holds settle exactly once: committed spend is the two
+	// settled requests and nothing remains reserved.
+	committed, reserved := s.budgets.Snapshot("vk-q", time.Now())
+	if reserved != 0 {
+		return fmt.Errorf("reserved=%v after cascade, want 0 (leaked hold)", reserved)
+	}
+	if committed < 0.025 || committed > 0.027 {
+		return fmt.Errorf("committed=%v, want ~0.026 (two settled requests)", committed)
+	}
+	// The cascade does not wedge the gateway or bystanders.
+	if code := chat("other-key"); code != http.StatusOK {
+		return fmt.Errorf("bystander key status=%d, want 200", code)
+	}
+	hz := httptest.NewRecorder()
+	s.Handler().ServeHTTP(hz, httptest.NewRequest(http.MethodGet, "http://gateway/healthz", nil))
+	if hz.Code != http.StatusOK {
+		return fmt.Errorf("health status=%d after quota cascade", hz.Code)
+	}
+	return nil
+}
+
+func gameDayClockSkew(t *testing.T) error {
+	var aHits, bHits atomic.Int64
+	upA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The first contact rate-limits with a skewed/hostile
+		// hint (retry after a full day); afterwards A is healthy
+		// for probes and traffic alike.
+		if aHits.Add(1) == 1 {
+			w.Header().Set("Retry-After", "86400")
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = w.Write([]byte(`{"error":{"message":"slow down"}}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"c1","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`))
+	}))
+	t.Cleanup(upA.Close)
+	upB := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		bHits.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"c1","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`))
+	}))
+	t.Cleanup(upB.Close)
+	cfg := config.Default()
+	// Production shape: recovery is probe-driven, so the probe
+	// engine runs; every cooldown knob is set to ~1s while the
+	// upstream hint demands 24h.
+	cfg.Probe.Enabled = true
+	cfg.Probe.OnStart = true
+	cfg.Probe.IntervalSeconds = 1
+	cfg.Probe.ReadyLeaseSeconds = 3
+	cfg.Probe.TimeoutMS = 2000
+	cfg.Probe.RecoveryAttempts = 100
+	cfg.Probe.RecoveryRetryMS = 200
+	cfg.Routing.MaxAttempts = 2
+	cfg.Routing.RetryBackoffMS = 0
+	cfg.Routing.MaxRetryAfterSeconds = 1
+	cfg.Routing.CooldownSeconds = 1
+	cfg.Routing.ProviderCooldownSeconds = 1
+	cfg.Routing.CapabilityCooldownSeconds = 1
+	cfg.Routing.FailureThreshold = 1
+	cfg.Routing.ProviderFailureThreshold = 1
+	cfg.Providers = []config.ProviderConfig{
+		{ID: "A", Type: "openai_compatible", BaseURL: upA.URL, AuthMode: "none", Enabled: true, Models: []config.ModelConfig{{ID: "m", Model: "a", Aliases: []string{"skew"}, Enabled: true, Weight: 1, Priority: 0}}},
+		{ID: "B", Type: "openai_compatible", BaseURL: upB.URL, AuthMode: "none", Enabled: true, Models: []config.ModelConfig{{ID: "m", Model: "b", Aliases: []string{"skew"}, Enabled: true, Weight: 1, Priority: 1}}},
+	}
+	s := testGateway(t, cfg)
+	probeCtx, stopProbe := context.WithCancel(context.Background())
+	defer stopProbe()
+	s.probe.Start(probeCtx)
+	body := `{"model":"skew","max_tokens":8,"messages":[{"role":"user","content":"hi"}]}`
+	if rr := gameDayPost(s, "/v1/chat/completions", body); rr.Code != http.StatusOK {
+		return fmt.Errorf("req1 status=%d, want 200 via failover", rr.Code)
+	}
+	if bHits.Load() != 1 {
+		return fmt.Errorf("after req1: B hits=%d, want 1 (failover served it)", bHits.Load())
+	}
+	// The configured ~1s cooldowns govern: within a few seconds
+	// (probe interval + recovery), NOT 24h, A must be back in
+	// rotation and serving real traffic again — no restart, no
+	// operator action.
+	deadline := time.Now().Add(8 * time.Second)
+	for time.Now().Before(deadline) {
+		rr := gameDayPost(s, "/v1/chat/completions", body)
+		if rr.Code != http.StatusOK {
+			return fmt.Errorf("recovery-window request status=%d, want 200", rr.Code)
+		}
+		if aHits.Load() >= 2 {
+			return nil
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	return fmt.Errorf("A never returned to rotation within 8s (hits=%d): the 24h Retry-After hint parked it beyond the configured caps", aHits.Load())
 }
 
 // writeGameDayScorecard emits the scenario × invariant × pass/fail matrix. It
