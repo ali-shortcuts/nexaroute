@@ -159,6 +159,10 @@ func coverageFixture(t *testing.T, status int, body string, strategy string, mod
 	cfg.Probe.CapabilityProbes = false
 	cfg.Probe.Concurrency = 2
 	cfg.Probe.TimeoutMS = 1000
+	// These coverage cases assert per-task mechanics; pin the pre-threshold
+	// first-success behavior (threshold 1) so the default 3-of-5 policy does
+	// not change their intent. Threshold-policy coverage lives separately.
+	cfg.Probe.RecoverySuccessThreshold = 1
 	pc := config.ProviderConfig{ID: "p", Name: "p", Type: "openai_compatible", BaseURL: up.URL, AuthMode: "none", Enabled: true}
 	for _, id := range modelIDs {
 		pc.Models = append(pc.Models, config.ModelConfig{ID: id, Model: id, Enabled: true, Weight: 1})
