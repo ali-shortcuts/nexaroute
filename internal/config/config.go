@@ -65,6 +65,13 @@ type RouteProfileConfig struct {
 	// TaskPools maps a canonical task type (e.g. "coding") to the candidate
 	// pool that task should use as its primary pool.
 	TaskPools map[string]string `json:"task_pools,omitempty"`
+	// TaskEvalGates maps a canonical task type to an evaluation suite ID
+	// (Phase 19 eval gate, #510). In apply mode the mapped task pool is
+	// used only when at least one deployment in it has passing eval
+	// evidence for that suite (latest run decides); otherwise routing
+	// stays on the route default and the decision is traced as
+	// eval_gated. A gate requires a task_pools entry for the same task.
+	TaskEvalGates map[string]string `json:"task_eval_gates,omitempty"`
 	// TaskOverride forces one task type for the whole route profile.
 	// The operator override always wins: over the client pin and over the
 	// classifier.
@@ -2997,6 +3004,17 @@ func (c Config) Validate() error {
 				return fmt.Errorf("route profile %q task_pools[%q] references unknown candidate pool %q", rp.ID, taskType, poolID)
 			}
 		}
+		for taskType, suiteID := range rp.TaskEvalGates {
+			if !taskprofile.TaskType(taskType).Valid() {
+				return fmt.Errorf("route profile %q task_eval_gates has unknown task type %q", rp.ID, taskType)
+			}
+			if strings.TrimSpace(suiteID) == "" || len(suiteID) > 128 {
+				return fmt.Errorf("route profile %q task_eval_gates[%q] must name an evaluation suite (1-128 chars)", rp.ID, taskType)
+			}
+			if _, ok := rp.TaskPools[taskType]; !ok {
+				return fmt.Errorf("route profile %q task_eval_gates[%q] has no task_pools entry to gate", rp.ID, taskType)
+			}
+		}
 		if rp.TaskOverride != "" && !taskprofile.TaskType(rp.TaskOverride).Valid() {
 			return fmt.Errorf("route profile %q task_override has unknown task type %q", rp.ID, rp.TaskOverride)
 		}
@@ -3004,8 +3022,8 @@ func (c Config) Validate() error {
 		if mode == "" {
 			mode = "off"
 		}
-		if mode == "off" && (len(rp.TaskPools) > 0 || rp.TaskOverride != "") {
-			return fmt.Errorf("route profile %q configures task_pools/task_override with task_intel_mode off (set \"suggest\" or \"apply\")", rp.ID)
+		if mode == "off" && (len(rp.TaskPools) > 0 || len(rp.TaskEvalGates) > 0 || rp.TaskOverride != "") {
+			return fmt.Errorf("route profile %q configures task_pools/task_eval_gates/task_override with task_intel_mode off (set \"suggest\" or \"apply\")", rp.ID)
 		}
 	}
 

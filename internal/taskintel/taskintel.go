@@ -71,6 +71,11 @@ const (
 	OutcomeLowConfidence Outcome = "low_confidence"
 	// OutcomeUnmapped: an effective task was chosen but no pool is mapped for it.
 	OutcomeUnmapped Outcome = "unmapped"
+	// OutcomeEvalGated: an eval gate is configured for the effective task
+	// and no deployment in the target pool has passing eval evidence for
+	// the gated suite; routing unchanged. Stamped by the HTTP layer —
+	// evidence is I/O, and Resolve stays pure (Phase 19 eval gate, #510).
+	OutcomeEvalGated Outcome = "eval_gated"
 )
 
 // DefaultMinConfidence is the classifier confidence required before a task

@@ -103,6 +103,18 @@ func (s *Server) applyTaskIntel(r *http.Request, req router.Requirement, cfg con
 	if !res.Applied || res.TargetPool == "" || res.TargetPool == resolved.PrimaryPoolID {
 		return res, candidates, resolved
 	}
+	// Eval gate (#510 item 4): when the effective task is gated, the
+	// task pool may only be claimed with passing eval evidence —
+	// health proves liveness, never quality. Without evidence the
+	// pool is treated as unmapped and the decision is traced.
+	if suiteID := strings.TrimSpace(profile.TaskEvalGates[string(res.EffectiveTask)]); suiteID != "" {
+		if !s.taskEvalGateSatisfied(res.TargetPool, suiteID) {
+			res.Outcome = taskintel.OutcomeEvalGated
+			res.Applied = false
+			res.Summary += fmt.Sprintf("; eval gate: no deployment in pool %q has passing evidence for suite %q, routing unchanged", res.TargetPool, suiteID)
+			return res, candidates, resolved
+		}
+	}
 	switched, switchedCandidates, ok := s.switchTaskPool(req, cfg, resolved, res.TargetPool)
 	if !ok {
 		res.Outcome = taskintel.OutcomeUnmapped
@@ -119,6 +131,35 @@ func (s *Server) applyTaskIntel(r *http.Request, req router.Requirement, cfg con
 		return res, candidates, resolved
 	}
 	return res, switchedCandidates, switched
+}
+
+// taskEvalGateSatisfied reports whether at least one deployment in
+// the pool has passing eval evidence for the suite (the latest run
+// for each deployment decides; see eval.Store.HasPassingEvidence).
+// No evaluation plane, no resolver, or an unknown pool all fail
+// closed: the gate is not satisfied.
+func (s *Server) taskEvalGateSatisfied(poolID, suiteID string) bool {
+	plane := s.evaluationSnapshot()
+	if plane == nil || plane.Store() == nil {
+		return false
+	}
+	s.runtimeMu.RLock()
+	resolver := s.routeResolver
+	s.runtimeMu.RUnlock()
+	if resolver == nil {
+		return false
+	}
+	expanded, ok := resolver.GetExpanded(poolID)
+	if !ok || len(expanded) == 0 {
+		return false
+	}
+	store := plane.Store()
+	for dep := range expanded {
+		if store.HasPassingEvidence(suiteID, dep) {
+			return true
+		}
+	}
+	return false
 }
 
 // switchTaskPool rebuilds the resolved route with the task pool as the new
