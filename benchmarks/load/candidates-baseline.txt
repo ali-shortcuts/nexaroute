@@ -1,0 +1,21 @@
+goos: linux
+goarch: amd64
+pkg: github.com/ali-shortcuts/nexaroute/internal/router
+cpu: AMD EPYC 9V45 96-Core Processor                
+BenchmarkCandidates10-4     	  267951	      4237 ns/op	    5423 B/op	       4 allocs/op
+BenchmarkCandidates10-4     	  281901	      4290 ns/op	    5423 B/op	       4 allocs/op
+BenchmarkCandidates10-4     	  279758	      4272 ns/op	    5423 B/op	       4 allocs/op
+BenchmarkCandidates10-4     	  267264	      4243 ns/op	    5422 B/op	       4 allocs/op
+BenchmarkCandidates10-4     	  275742	      4214 ns/op	    5423 B/op	       4 allocs/op
+BenchmarkCandidates100-4    	   24829	     46095 ns/op	   49708 B/op	       4 allocs/op
+BenchmarkCandidates100-4    	   25498	     46725 ns/op	   49708 B/op	       4 allocs/op
+BenchmarkCandidates100-4    	   25888	     46767 ns/op	   49708 B/op	       4 allocs/op
+BenchmarkCandidates100-4    	   25526	     46418 ns/op	   49708 B/op	       4 allocs/op
+BenchmarkCandidates100-4    	   26266	     47665 ns/op	   49708 B/op	       4 allocs/op
+BenchmarkCandidates1000-4   	    2365	    499953 ns/op	  467500 B/op	       4 allocs/op
+BenchmarkCandidates1000-4   	    2379	    520944 ns/op	  467500 B/op	       4 allocs/op
+BenchmarkCandidates1000-4   	    2269	    503000 ns/op	  467500 B/op	       4 allocs/op
+BenchmarkCandidates1000-4   	    2265	    508731 ns/op	  467500 B/op	       4 allocs/op
+BenchmarkCandidates1000-4   	    2281	    509750 ns/op	  467500 B/op	       4 allocs/op
+PASS
+ok  	github.com/ali-shortcuts/nexaroute/internal/router	20.586s
