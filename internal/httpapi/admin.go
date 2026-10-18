@@ -466,6 +466,7 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 		"virtual_endpoints": veList,
 		"route_profiles":    rpList,
 		"task_rules":        taskRuleTableSnapshot(),
+		"coding_profiles":   codingProfilesSnapshot(cfgFull),
 		"candidate_pools":   cpList,
 		"fallback_chains":   fcList,
 		// M3-3: static no-eligible-deployment warnings plus the runtime
