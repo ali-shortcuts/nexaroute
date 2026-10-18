@@ -229,8 +229,10 @@ func (h *Handler) getAsset(w http.ResponseWriter, r *http.Request, jobID, assetI
 
 func (h *Handler) providers(w http.ResponseWriter, r *http.Request) {
 	type item struct {
-		ID           string              `json:"id"`
-		Capabilities *video.Capabilities `json:"capabilities,omitempty"`
+		ID              string              `json:"id"`
+		Kind            string              `json:"kind,omitempty"`
+		ProductionReady bool                `json:"production_ready"`
+		Capabilities    *video.Capabilities `json:"capabilities,omitempty"`
 	}
 	out := []item{}
 	if reg, ok := h.Providers.(orchestrator.Registry); ok {
@@ -244,6 +246,8 @@ func (h *Handler) providers(w http.ResponseWriter, r *http.Request) {
 			if caps, err := reg[id].Capabilities(r.Context()); err == nil {
 				c := caps
 				entry.Capabilities = &c
+				entry.Kind = caps.ProviderKind
+				entry.ProductionReady = caps.ProductionReady
 			}
 			out = append(out, entry)
 		}
