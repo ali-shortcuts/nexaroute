@@ -16,6 +16,9 @@ type PolicyScoreBreakdown struct {
 	Components    map[string]float64 `json:"components"`
 	WeightedScore float64            `json:"weighted_score"`
 	Weights       Weights            `json:"weights"`
+	// Evidence is the [0,1] reliability evidence confidence (1 when the
+	// minimum-observation gate is disabled or satisfied).
+	Evidence float64 `json:"evidence"`
 }
 
 // Explain returns breakdowns for scored candidates, bounded and privacy-safe.
@@ -59,6 +62,7 @@ func Explain(scored []ScoredCandidate, w Weights) []PolicyScoreBreakdown {
 			Components:    comps,
 			WeightedScore: ws,
 			Weights:       w,
+			Evidence:      sc.Evidence,
 		})
 	}
 	return out

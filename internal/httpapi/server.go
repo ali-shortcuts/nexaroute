@@ -1030,6 +1030,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/admin/api/csrf-token", s.adminCSRFToken)
 	mux.HandleFunc("/admin/api/audit", s.adminAuditRecords)
 	mux.HandleFunc("/admin/api/events/stream", s.adminEventStream)
+	mux.HandleFunc("/admin/api/activity/requests", s.adminActivityRequests)
 	mux.HandleFunc("/admin/api/probe", s.adminProbe)
 	mux.HandleFunc("/admin/api/providers", s.adminProviders)
 	mux.HandleFunc("/admin/api/providers/", s.adminProviderByID)
@@ -1201,6 +1202,18 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 				}
 			}
 			duration := time.Since(start)
+			if isDataPlaneRequest(r) {
+				// Exactly one terminal lifecycle event per data-plane request,
+				// independent of which handler branch returned. Terminal state
+				// is derived from the committed status and caller cancellation.
+				terminal := events.TerminalSucceeded
+				if r.Context().Err() != nil {
+					terminal = events.TerminalCancelled
+				} else if sw.status >= http.StatusBadRequest {
+					terminal = events.TerminalFailed
+				}
+				s.emitRequestFinished(rid, sw.status, duration, terminal)
+			}
 			s.exportSpan(r, trace, start, duration, sw.status)
 			if s.log != nil && strings.HasPrefix(r.URL.Path, "/admin/api/") && (isStateChanging(r.Method) || sw.status == http.StatusForbidden) {
 				s.log.Printf("audit action method=%s path=%q actor=%s status=%d request_id=%s", r.Method, r.URL.Path, adminActor, sw.status, rid)

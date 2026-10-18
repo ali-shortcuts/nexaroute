@@ -37,6 +37,34 @@ func TestBusRingTracksErrorCountsAcrossEviction(t *testing.T) {
 	}
 }
 
+func TestBusBoundsLifecycleFieldsAndDefaultsCorrelation(t *testing.T) {
+	b := New(10)
+	long := strings.Repeat("x", 4096)
+	b.Add(Event{
+		RequestID:       long,
+		Phase:           long,
+		RequestedModel:  long,
+		ResolvedModel:   long,
+		Provider:        long,
+		Adapter:         long,
+		AttemptKind:     long,
+		Terminal:        long,
+		CostBasis:       long,
+		ParentRequestID: long,
+	})
+	e := b.Snapshot()[0]
+	if len(e.RequestID) > maxEventRequestID || len(e.Phase) > maxEventPhase ||
+		len(e.RequestedModel) > maxEventRequestedModel || len(e.ResolvedModel) > maxEventResolvedModel ||
+		len(e.Provider) > maxEventProvider || len(e.Adapter) > maxEventAdapter ||
+		len(e.AttemptKind) > maxEventAttemptKind || len(e.Terminal) > maxEventTerminal ||
+		len(e.CostBasis) > maxEventCostBasis || len(e.ParentRequestID) > maxEventParentRequestID {
+		t.Fatalf("lifecycle field exceeded bound: %+v", e)
+	}
+	if e.CorrelationID == "" || e.CorrelationID != e.RequestID {
+		t.Fatalf("correlation id must default to the bounded request id, got %q", e.CorrelationID)
+	}
+}
+
 func TestBusBoundsDynamicCounterKeysAndEventPayloads(t *testing.T) {
 	b := New(10)
 	huge := strings.Repeat("x", maxEventMessage*4)

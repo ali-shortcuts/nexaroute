@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/ali-shortcuts/nexaroute/internal/events"
 	"github.com/ali-shortcuts/nexaroute/internal/health"
 	"github.com/ali-shortcuts/nexaroute/internal/router"
 )
@@ -137,6 +138,34 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 	sort.Strings(errorTypes)
 	for _, k := range errorTypes {
 		fmt.Fprintf(w, "nexaroute_errors_total{error_type=%q} %d\n", sanitizeMetricLabel(k), errorCounts[k])
+	}
+
+	// Live request lifecycle counts. Label cardinality is fixed: `state` and
+	// `outcome` are closed enumerations. No request id, model, provider,
+	// deployment or any other per-request value is ever used as a label here,
+	// so the activity feed cannot explode the metrics series count.
+	lifecycles := events.Summarize(s.bus.SnapshotLimit(0), events.SummarizeOptions{StaleAfter: activityStaleAfter, MaxRequests: 100000})
+	stateCounts := map[string]int{}
+	attemptOutcomes := map[string]int{}
+	for _, lc := range lifecycles {
+		stateCounts[lc.State]++
+		for _, a := range lc.Attempts {
+			outcome := a.Outcome
+			if outcome == "" {
+				outcome = "started"
+			}
+			attemptOutcomes[outcome]++
+		}
+	}
+	fmt.Fprintln(w, "# HELP nexaroute_activity_requests Observable data-plane requests by lifecycle state.")
+	fmt.Fprintln(w, "# TYPE nexaroute_activity_requests gauge")
+	for _, st := range []string{events.StateActive, events.StateStale, events.TerminalSucceeded, events.TerminalFailed, events.TerminalCancelled} {
+		fmt.Fprintf(w, "nexaroute_activity_requests{state=%q} %d\n", st, stateCounts[st])
+	}
+	fmt.Fprintln(w, "# HELP nexaroute_activity_attempts Observable upstream attempts by outcome.")
+	fmt.Fprintln(w, "# TYPE nexaroute_activity_attempts gauge")
+	for _, outcome := range []string{"started", events.TerminalSucceeded, events.TerminalFailed, events.TerminalCancelled, "failover"} {
+		fmt.Fprintf(w, "nexaroute_activity_attempts{outcome=%q} %d\n", outcome, attemptOutcomes[outcome])
 	}
 
 	fmt.Fprintln(w, "# HELP nexaroute_provider_active_requests Requests currently holding a provider concurrency slot.")

@@ -678,6 +678,28 @@ def main() -> None:
                 for secret in browser_secrets:
                     assert secret not in preserve_requests, f"browser request unexpectedly contained stored secret: {secret}"
                 assert sum(replacement in request for request in browser_requests) == 1, "replacement should be sent only in the explicit replace request"
+
+                # Phase 7 remainder (#399): the unified model inventory renders
+                # provider-qualified rows and filters through the bounded window.
+                page.locator('[data-page="models"]').click()
+                expect(page.locator("#content")).to_contain_text("issue393-roundtrip/browser-alias")
+                expect(page.locator("#content")).to_contain_text("friendly-alpha")
+                page.locator("#model-inventory-filter").fill("no-such-model-xyz")
+                expect(page.locator("#content")).to_contain_text("No models match your search")
+                page.locator("#model-inventory-filter").fill("browser-alias")
+                expect(page.locator("#content")).to_contain_text("issue393-roundtrip/browser-alias")
+                page.locator("#model-inventory-filter").fill("")
+
+                # Phase 7 remainder (#399): the guided first-route wizard shows a
+                # cost warning derived from declared pricing before saving.
+                page.locator('[data-page="routing"]').click()
+                page.locator('[data-action="first-route-wizard"]').first.click()
+                expect(page.locator("#modal-title")).to_have_text("Guided first route")
+                expect(page.locator("#wz-cost .status")).to_be_visible()
+                expect(page.locator("#wz-model-list input[type=checkbox]").first).to_be_checked()
+                page.locator('[data-action="close-modal"]').first.click()
+                expect(page.locator("#dialog-root .modal")).to_have_count(0)
+
                 admin_json(base, "/admin/api/providers/issue393-roundtrip", "DELETE")
 
                 errors = [m for m in console_msgs if m[0] == "error"]

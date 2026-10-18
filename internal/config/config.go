@@ -79,10 +79,17 @@ type DecisionPolicyWeights struct {
 type DecisionPolicyConfig struct {
 	ID            string                           `json:"id"`
 	Name          string                           `json:"name,omitempty"`
+	Version       string                           `json:"version,omitempty"`        // optional operator label; derived fingerprint when empty
 	SelectionMode string                           `json:"selection_mode,omitempty"` // only select_first in Phase E
 	Weights       DecisionPolicyWeights            `json:"weights"`
 	TaskOverrides map[string]DecisionPolicyWeights `json:"task_overrides,omitempty"`  // key = canonical TaskType
 	MinScoreDelta float64                          `json:"min_score_delta,omitempty"` // [0,1]
+	// MinObservations is the minimum success+failure sample count before a
+	// deployment's reliability evidence is trusted for ranking. Below the
+	// threshold the reliability component decays to the neutral baseline, so a
+	// single fast or failed sample cannot flap the route. Zero disables the
+	// gate (historical behavior).
+	MinObservations int `json:"min_observations,omitempty"`
 }
 
 type DecisionConfig struct {
@@ -92,6 +99,7 @@ type DecisionConfig struct {
 	Policy           string `json:"policy,omitempty"`             // Phase E: global policy ID
 	Chain            string `json:"chain,omitempty"`              // Phase G: chain ID when mode=hybrid
 	MaxProviderCalls int    `json:"max_provider_calls,omitempty"` // Phase G: global chain call budget
+	Shadow           bool   `json:"shadow,omitempty"`             // Phase 12: compute the decision but never apply it
 }
 
 type DecisionProviderHealthConfig struct {
@@ -879,10 +887,12 @@ const (
 	maxPoolIDBytes         = 256
 	maxVirtualEndpointName = 256
 	// Phase E limits
-	maxDecisionPolicies   = 256
-	maxTaskOverrides      = 32
-	maxDecisionPolicyName = 256
-	maxPolicyIDBytes      = 256
+	maxDecisionPolicies      = 256
+	maxTaskOverrides         = 32
+	maxDecisionPolicyName    = 256
+	maxPolicyIDBytes         = 256
+	maxDecisionPolicyVersion = 128
+	maxPolicyMinObservations = 1000000
 	// Phase F limits
 	maxDecisionProviders = 16
 	// Phase H limits
@@ -912,6 +922,28 @@ func validLocalID(s string) bool {
 		}
 		switch c {
 		case '-', '_', '.':
+			continue
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// validPolicyVersion reports whether s is a safe policy version label. It
+// accepts letters, digits, '-', '_', '.', ':' and '/' so date-based labels
+// (2026-10-18.1), semver (1.2.3) and digest labels (sha256:abcd) are all
+// representable, while whitespace and control characters are rejected.
+func validPolicyVersion(s string) bool {
+	if s == "" {
+		return true
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+			continue
+		case c == '-', c == '_', c == '.', c == ':', c == '/':
 			continue
 		default:
 			return false
@@ -1566,6 +1598,7 @@ func (c *Config) ApplyDefaults() {
 		dp := &c.DecisionPolicies[i]
 		dp.ID = strings.TrimSpace(dp.ID)
 		dp.Name = strings.TrimSpace(dp.Name)
+		dp.Version = strings.TrimSpace(dp.Version)
 		dp.SelectionMode = strings.TrimSpace(strings.ToLower(dp.SelectionMode))
 		if dp.SelectionMode == "" {
 			dp.SelectionMode = "select_first"
@@ -2395,6 +2428,11 @@ func (c Config) Validate() error {
 	default:
 		return errors.New("decision.mode must be off, local, assisted, or hybrid")
 	}
+	// Shadow mode computes a decision for observation only; it needs an active
+	// decision plane to observe, so it is meaningless while mode=off.
+	if c.Decision.Shadow && strings.ToLower(strings.TrimSpace(c.Decision.Mode)) == "off" {
+		return errors.New("decision.shadow requires decision.mode to be local, assisted, or hybrid")
+	}
 	// Provider can be local, policy, or external ID (validated later against decision_providers)
 	// For local mode, provider must be local or policy (external not allowed)
 	// For assisted mode, provider must be external ID
@@ -2466,11 +2504,17 @@ func (c Config) Validate() error {
 		if len(dp.Name) > maxDecisionPolicyName {
 			return fmt.Errorf("decision policy %q name too long", dp.ID)
 		}
+		if len(dp.Version) > maxDecisionPolicyVersion || !validPolicyVersion(dp.Version) {
+			return fmt.Errorf("decision policy %q version %q invalid", dp.ID, dp.Version)
+		}
 		if dp.SelectionMode != "" && dp.SelectionMode != "select_first" {
 			return fmt.Errorf("decision policy %q selection_mode must be select_first", dp.ID)
 		}
 		if math.IsNaN(dp.MinScoreDelta) || math.IsInf(dp.MinScoreDelta, 0) || dp.MinScoreDelta < 0 || dp.MinScoreDelta > 1 {
 			return fmt.Errorf("decision policy %q min_score_delta must be finite and between 0 and 1", dp.ID)
+		}
+		if dp.MinObservations < 0 || dp.MinObservations > maxPolicyMinObservations {
+			return fmt.Errorf("decision policy %q min_observations must be between 0 and %d", dp.ID, maxPolicyMinObservations)
 		}
 		// Validate weights
 		if err := validateDecisionPolicyWeights(dp.Weights, fmt.Sprintf("decision policy %q weights", dp.ID)); err != nil {

@@ -405,3 +405,103 @@ func TestDoctorWarnsOnPendingKeyRotation(t *testing.T) {
 		t.Fatalf("doctor must warn about a staged replacement key:\n%s", stdout.String())
 	}
 }
+
+// Regression test: doctor's backup_key_pairing check must translate the
+// verify domain's BLOCKED/UNVERIFIED ("fingerprint not comparable on this
+// host") into doctor's WARN — never FAIL. Only a genuine fingerprint
+// mismatch is a FAIL.
+func TestDoctorBackupKeyPairingWarnsWhenNotComparable(t *testing.T) {
+	for _, env := range []string{"NEXAROUTE_MASTER_KEY", "NEXAROUTE_MASTER_KEY_FILE", "NEXAROUTE_KEY_PROVIDER"} {
+		t.Setenv(env, "")
+	}
+
+	// plainFixture mirrors fullDrillFixture but leaves key material to the
+	// caller, so tests can control exactly what the backup fingerprints
+	// and what the doctor host can compare against.
+	plainFixture := func(t *testing.T) (dir, configPath string) {
+		t.Helper()
+		dir, configPath = opsFixture(t)
+		rewriteFixtureConfig(t, configPath, func(cfg *config.Config) {
+			cfg.ControlPlane.Enabled = true
+			cfg.ControlPlane.Backend = "file"
+		})
+		state := []byte(`{"schema": 1, "snapshots": {}}`)
+		if err := os.WriteFile(configPath+".controlplane.json", state, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return dir, configPath
+	}
+
+	backup := func(t *testing.T, configPath string) string {
+		t.Helper()
+		bundle := filepath.Join(t.TempDir(), "b.tar")
+		if code, stderr := runBackupCode(t, configPath, bundle); code != 0 {
+			t.Fatalf("backup exit=%d stderr=%s", code, stderr)
+		}
+		return bundle
+	}
+
+	doctor := func(t *testing.T, configPath, bundle string) (int, string) {
+		t.Helper()
+		var stdout, stderr bytes.Buffer
+		code := runDoctor([]string{"--config", configPath, "--bundle", bundle}, &stdout, &stderr)
+		return code, stdout.String()
+	}
+
+	t.Run("unverified/plaintext config warns", func(t *testing.T) {
+		// No key file at backup time: the manifest records no fingerprint
+		// (external key provider or plaintext config).
+		_, configPath := plainFixture(t)
+		code, out := doctor(t, configPath, backup(t, configPath))
+		if code != 0 {
+			t.Fatalf("doctor exit=%d, want 0 (unverifiable pairing is a WARN)\n%s", code, out)
+		}
+		if !strings.Contains(out, "WARN backup_key_pairing:") {
+			t.Fatalf("doctor must WARN on unverifiable key pairing:\n%s", out)
+		}
+		if strings.Contains(out, "FAIL backup_key_pairing:") {
+			t.Fatalf("doctor must not FAIL an unverifiable key pairing:\n%s", out)
+		}
+	})
+
+	t.Run("blocked/no key on host warns", func(t *testing.T) {
+		// The backup recorded a fingerprint, but no key material is
+		// available on this host to compare against.
+		_, configPath := plainFixture(t)
+		if err := os.WriteFile(configPath+".key", bytes.Repeat([]byte{0x11}, 32), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		bundle := backup(t, configPath)
+		if err := os.Remove(configPath + ".key"); err != nil {
+			t.Fatal(err)
+		}
+		code, out := doctor(t, configPath, bundle)
+		if code != 0 {
+			t.Fatalf("doctor exit=%d, want 0 (blocked pairing is a WARN)\n%s", code, out)
+		}
+		if !strings.Contains(out, "WARN backup_key_pairing:") {
+			t.Fatalf("doctor must WARN on blocked key pairing:\n%s", out)
+		}
+		if strings.Contains(out, "FAIL backup_key_pairing:") {
+			t.Fatalf("doctor must not FAIL a blocked key pairing:\n%s", out)
+		}
+	})
+
+	t.Run("mismatched key still fails", func(t *testing.T) {
+		_, configPath := plainFixture(t)
+		if err := os.WriteFile(configPath+".key", bytes.Repeat([]byte{0x11}, 32), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		bundle := backup(t, configPath)
+		if err := os.WriteFile(configPath+".key", bytes.Repeat([]byte{0x22}, 32), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		code, out := doctor(t, configPath, bundle)
+		if code != 1 {
+			t.Fatalf("doctor exit=%d, want 1 (mismatched key is a FAIL)\n%s", code, out)
+		}
+		if !strings.Contains(out, "FAIL backup_key_pairing:") {
+			t.Fatalf("doctor must FAIL a mismatched key pairing:\n%s", out)
+		}
+	})
+}
