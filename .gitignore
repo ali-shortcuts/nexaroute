@@ -17,3 +17,6 @@ __pycache__/
 # Bare `go build ./cmd/gateway` output at repo root
 /gateway
 scripts/a11y/node_modules/
+
+# Local scratch space for browser-evidence builds
+/.artifacts/
