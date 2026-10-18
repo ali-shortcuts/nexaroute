@@ -221,7 +221,7 @@ func (s *Server) adminAutopilot(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"enabled":             true,
-		"autopilot":            ctrl.Status(),
+		"autopilot":           ctrl.Status(),
 		"unsupported_signals": []string{"no_eligible_rate", "budget_anomalies"},
 	})
 }
