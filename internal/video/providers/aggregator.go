@@ -443,7 +443,40 @@ func (p *Aggregator) download(ctx context.Context, rawURL string) ([]byte, strin
 	if !strings.HasPrefix(strings.ToLower(contentType), "video/") && contentType != "application/octet-stream" {
 		return nil, "", fmt.Errorf("aggregator output has non-video content type %q; refusing to store it as a video asset", contentType)
 	}
+	// A Content-Type header is a claim, not proof: a compromised
+	// or misbehaving output host can label anything video/*. The
+	// bytes must also look like a video container (#398 item 6).
+	if !looksLikeVideoContainer(data) {
+		return nil, "", errors.New("aggregator output bytes do not look like a video container; refusing to store them as a video asset")
+	}
 	return data, contentType, nil
+}
+
+// looksLikeVideoContainer reports whether the payload carries a
+// known video container signature (ISO-BMFF/MP4/MOV ftyp box,
+// WebM/Matroska EBML header, AVI RIFF, FLV, MPEG-TS sync byte,
+// MPEG-PS pack header) or sniffs as video/* via the standard
+// library's content detection.
+func looksLikeVideoContainer(data []byte) bool {
+	if len(data) >= 8 && string(data[4:8]) == "ftyp" {
+		return true // MP4 / MOV / AVIF-family ISO-BMFF
+	}
+	if len(data) >= 4 && data[0] == 0x1A && data[1] == 0x45 && data[2] == 0xDF && data[3] == 0xA3 {
+		return true // WebM / Matroska EBML
+	}
+	if len(data) >= 12 && string(data[0:4]) == "RIFF" && string(data[8:12]) == "AVI " {
+		return true // AVI
+	}
+	if len(data) >= 3 && string(data[0:3]) == "FLV" {
+		return true // FLV
+	}
+	if len(data) >= 4 && data[0] == 0x00 && data[1] == 0x00 && data[2] == 0x01 && data[3] == 0xBA {
+		return true // MPEG program stream
+	}
+	if len(data) >= 189 && data[0] == 0x47 && data[188] == 0x47 {
+		return true // MPEG-TS (sync byte repeats every 188 bytes)
+	}
+	return strings.HasPrefix(http.DetectContentType(data), "video/")
 }
 
 func (p *Aggregator) RegisterWebhook(context.Context, video.WebhookRegistration) error {
