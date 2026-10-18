@@ -46,7 +46,8 @@ func adminPermissionForRequest(r *http.Request) (authz.Permission, bool) {
 	case path == "/admin/api/provider-presets":
 		return readOnly(authz.ReadProviders)
 	case path == "/admin/api/provider-check" || path == "/admin/api/provider-test" ||
-		path == "/admin/api/provider-discover" || path == "/admin/api/probe":
+		path == "/admin/api/provider-discover" || path == "/admin/api/probe" ||
+		path == "/admin/api/connection-test":
 		return writeOnly(authz.WriteProviders)
 	case path == "/admin/api/compat/reset":
 		return writeOnly(authz.WriteProviders)

@@ -635,6 +635,29 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '405':
           $ref: '#/components/responses/MethodNotAllowed'
+  /admin/api/connection-test:
+    post:
+      summary: Bounded one-click connection test for a saved deployment
+      x-permission: providers.write
+      security:
+      - adminSession: []
+        csrfToken: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Connection test report; see the handler and the admin snapshot model.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
   /admin/api/provider-test:
     post:
       summary: Test a provider with a live request

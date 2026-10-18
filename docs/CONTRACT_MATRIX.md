@@ -58,6 +58,7 @@ spec by `TestContractMatrixDrift`.
 - `/admin/api/provider-presets`
 - `/admin/api/provider-check`
 - `/admin/api/provider-test`
+- `/admin/api/connection-test`
 - `/admin/api/provider-discover`
 - `/admin/api/compat`
 - `/admin/api/compat/reset`
