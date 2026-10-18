@@ -240,6 +240,7 @@ func (e *Extractor) Extract(raw []byte, opts ExtractOptions) RequestFeatures {
 	out.HasArchKeywords = lex.HasArchKeywords
 	out.HasAgentKeywords = lex.HasAgentKeywords
 	out.HasExtractionKeywords = lex.HasExtractionKeywords
+	out.HasBackgroundKeywords = lex.HasBackgroundKeywords
 	out.HasCodeIdentifiers = lex.HasCodeIdentifiers
 
 	return out
@@ -397,6 +398,7 @@ type lexicalResult struct {
 	HasArchKeywords       bool
 	HasAgentKeywords      bool
 	HasExtractionKeywords bool
+	HasBackgroundKeywords bool
 	HasCodeIdentifiers    bool
 }
 
@@ -721,6 +723,21 @@ func analyzeLexical(s string) lexicalResult {
 	// "design" alone should not trigger arch unless combined with system/component/diagram etc.
 
 	r.HasAgentKeywords = containsAny(lower, []string{"agent", "tool use", "function call", "autonomous", "multi-step", "multi step", "plan and execute"})
+
+	// Background chores (#421 item 3): cheap-task traffic an agent
+	// generates about its OWN session — titling the conversation
+	// or summarizing the conversation itself. Deliberately narrow:
+	// summarizing user content ("summarize this article") is the
+	// operator's main task (extraction), not a background chore.
+	r.HasBackgroundKeywords = containsAny(lower, []string{
+		"generate a title", "create a title", "suggest a title", "come up with a title",
+		"title for this conversation", "title for this chat", "title for this thread", "title for this session",
+		"name this conversation", "name this chat", "name this thread", "name this session",
+		"summarize this conversation", "summarize our conversation", "summarize the conversation",
+		"summarize this chat", "summarize this session", "summarize this thread",
+		"summary of this conversation", "summary of our conversation",
+		"tl;dr", "one-line summary", "one line summary", "one-sentence summary", "one sentence summary",
+	})
 
 	// Extraction: avoid "JSON is a data format" -> not extraction
 	// Require action words + format words
