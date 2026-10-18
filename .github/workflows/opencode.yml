@@ -37,27 +37,16 @@ jobs:
         env:
           COMMENT_BODY: ${{ github.event.comment.body }}
         run: |
-          # Usage: first line of the comment, e.g. "/opencode model=nemotron".
-          # No alias keeps the legacy default (muse). Aliases are an explicit allowlist:
-          # the model endpoint must exist in OpenCode Zen's current free catalog.
-          # Free offers can be withdrawn or rate-limited without notice.
-          # Avoid sending secrets or confidential data to third-party free model endpoints.
+          # Only the two requested current OpenCode free-catalog models are allowed.
+          # The model resolver suggested these exact IDs when the old Muse model failed.
+          # Default to GLM-5.3 Flash Free; select DeepSeek V4.1 Flash Free explicitly.
+          # Free endpoints may be rate-limited or withdrawn; never send secrets/confidential data.
           first_line=$(printf '%s' "$COMMENT_BODY" | head -n1)
           alias=$(printf '%s' "$first_line" | grep -oE 'model=[a-z0-9.-]+' | head -n1 | cut -d= -f2 || true)
           case "$alias" in
-            ""|muse)            model="opencode/muse-spark-1.3-contributor-free" ;;
-            nemotron)           model="opencode/nemotron-3-ultra-free" ;;
-            nemotron-lightning) model="opencode/nemotron-3.5-lightning-free" ;;
-            mimo|mimo26)        model="opencode/mimo-v2.6-flash-free" ;;
-            mimo25)             model="opencode/mimo-v2.5-free" ;;
-            ling)               model="opencode/ling-3.1-flash-free" ;;
-            ling30)             model="opencode/ling-3.0-flash-fin-free" ;;
-            longcat)            model="opencode/longcat-2.5-preview-free" ;;
-            space-bunny)        model="opencode/space-bunny-free" ;;
-            exo)                model="opencode/exo-free" ;;
-            fledge)             model="opencode/fledge-alpha-free" ;;
-            pickle)             model="opencode/big-pickle" ;;
-            *) echo "Unknown model alias: $alias (allowed: muse nemotron nemotron-lightning mimo mimo25 ling ling30 longcat space-bunny exo fledge pickle)"; exit 1 ;;
+            ""|glm53|glm-5.3-flash-free) model="opencode/glm-5.3-flash-free" ;;
+            deepseek41|deepseek-v4.1-flash-free) model="opencode/deepseek-v4.1-flash-free" ;;
+            *) echo "Unknown model alias: $alias (allowed: glm53 deepseek41)"; exit 1 ;;
           esac
           echo "Using model: $model"
           echo "model=$model" >> "$GITHUB_OUTPUT"
