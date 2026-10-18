@@ -88,6 +88,63 @@ func TestDesignTokenLayerContract(t *testing.T) {
 	}
 }
 
+// TestDesignTokenSingleSourceOfTruth (#489 item 1): after the full
+// literal migration, NO raw color literal may exist in styles.css
+// outside the token fence — the fence is the single source of truth.
+// Comments are stripped first: issue references like "#399" in prose
+// are not colors. Alpha variants of palette colors must be expressed
+// as color-mix over the themed token, one-off values as named tokens
+// defined inside the fence in both themes.
+func TestDesignTokenSingleSourceOfTruth(t *testing.T) {
+	css, err := webFS.ReadFile("web/styles.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(css)
+	end := strings.Index(s, "[tokens:end]")
+	if end < 0 {
+		t.Fatal("styles.css is missing the [tokens:end] fence marker")
+	}
+	rest := s[end:]
+	commentRe := regexp.MustCompile(`(?s)/\*.*?\*/`)
+	rest = commentRe.ReplaceAllString(rest, "")
+	litRe := regexp.MustCompile(`#[0-9a-fA-F]{3,8}\b|rgba?\([^)]*\)|hsla?\([^)]*\)`)
+	matches := litRe.FindAllString(rest, -1)
+	if len(matches) > 0 {
+		seen := map[string]int{}
+		for _, m := range matches {
+			seen[m]++
+		}
+		t.Errorf("styles.css has %d raw color literals outside the token fence (%d distinct), e.g. %v — migrate them into the fence as tokens or color-mix over tokens",
+			len(matches), len(seen), matches[:min(5, len(matches))])
+	}
+
+	// Full-fence parity, both directions: every token defined in the
+	// dark :root block must exist in the light block and vice versa.
+	fence := s[strings.Index(s, "[tokens:begin]"):end]
+	rootBlock := cssRuleBlock(fence, ":root{")
+	lightBlock := cssRuleBlock(fence, "html[data-theme=light]{")
+	propRe := regexp.MustCompile(`--[a-z0-9-]+:`)
+	names := func(block string) map[string]bool {
+		out := map[string]bool{}
+		for _, m := range propRe.FindAllString(block, -1) {
+			out[strings.TrimSuffix(m, ":")] = true
+		}
+		return out
+	}
+	rootNames, lightNames := names(rootBlock), names(lightBlock)
+	for n := range rootNames {
+		if !lightNames[n] {
+			t.Errorf("token %s defined in dark :root but missing in light theme", n)
+		}
+	}
+	for n := range lightNames {
+		if !rootNames[n] {
+			t.Errorf("token %s defined in light theme but missing in dark :root", n)
+		}
+	}
+}
+
 // cssRuleBlock extracts the first "selector{...}" rule for a flat
 // (brace-free declaration) rule. It is intentionally strict: nested rules
 // are out of scope for the token contract.
