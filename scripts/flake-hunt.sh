@@ -96,7 +96,9 @@ for ((i = 1; i <= ITERATIONS; i++)); do
 	else
 		fail=$((fail + 1))
 		echo "ITERATION $i FAILED (log: $log)"
-		grep -E "^(--- FAIL|FAIL|panic)" "$log" | head -20
+		# Diagnostic output is best-effort; tool/setup failures may not start with FAIL or panic.
+		# Do not let grep + pipefail suppress the required abort marker.
+		grep -E "^(--- FAIL|FAIL|panic)" "$log" | head -20 || true
 		echo "flake-hunt: ABORTING on first failure"
 		exit 1
 	fi
@@ -120,7 +122,9 @@ for ((i = 1; i <= VERIFY_RUNS; i++)); do
 		echo "-- verify run $i/$VERIFY_RUNS passed"
 	else
 		echo "VERIFY RUN $i FAILED (log: $log)"
-		grep -E "^(--- FAIL|FAIL|panic)" "$log" | head -20
+		# Diagnostic output is best-effort; tool/setup failures may not start with FAIL or panic.
+		# Do not let grep + pipefail suppress the required abort marker.
+		grep -E "^(--- FAIL|FAIL|panic)" "$log" | head -20 || true
 		echo "flake-hunt: ABORTING on first failure"
 		exit 1
 	fi
