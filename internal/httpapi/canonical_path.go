@@ -530,6 +530,7 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.budgetRelease(r)
+		s.autopilotObserveNoEligible(cfg, resolvedRoute, autopilotRequestKeyFromContext(r.Context(), r.Header.Get("x-request-id")))
 		canonicalErrorJSON(w, "openai_responses", http.StatusServiceUnavailable, "server_error", "no compatible healthy deployment")
 		return
 	}
@@ -574,6 +575,7 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 		if attempts > 1 {
 			attemptKind = attemptKindRetry
 		}
+		s.autopilotNoteDispatched(autopilotRequestKeyFromContext(r.Context(), r.Header.Get("x-request-id")))
 		s.emitRouteAttempt(r.Header.Get("x-request-id"), "openai_responses", in.Model, attempts, c, attemptKind)
 		resp, sentPayload, repair, derr := s.doUpstreamWithRepair(
 			routeCtx, r.Header.Get("x-request-id"), bundle.a, deployment,

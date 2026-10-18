@@ -417,8 +417,11 @@ paths:
         (draft/shadow/canary/promoted/rolled_back), canary share, in-flight
         leases, bounded transition history, and any rollback incidents. The
         response includes unsupported_signals. In the current HTTP adapter,
-        no-eligible rate and budget-anomaly attribution are not yet sourced
-        per policy lease; the gate reports missing coverage and holds promotion
+        the no-eligible rate is sourced from real data-plane outcomes
+        (leased requests count as observations; no-candidate rejections are
+        attributed to the policy version the request would have leased to),
+        while budget-anomaly attribution is not yet sourced per policy
+        lease; the gate reports missing coverage and holds promotion
         instead of treating missing telemetry as zero. GET only; no provider
         call is made.
       x-permission: routing.read

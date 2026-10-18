@@ -657,6 +657,31 @@ func (c *Controller) Record(l Lease, s Sample) {
 	}
 }
 
+// ObserveNoEligible records a no-eligible-candidate outcome for a
+// request that never reached dispatch. Such a request holds no
+// lease — leases are issued inside the decision plane, which an
+// empty candidate set never reaches — so the outcome is
+// attributed to the policy version the request WOULD have been
+// leased to: the same deterministic selection Select performs,
+// evaluated read-only (no lease is issued and the canary-served
+// bound is not consumed by a request nobody served). The canary
+// gate is then re-evaluated exactly as Record does, so a
+// no-eligible storm trips an automatic rollback on its own.
+func (c *Controller) ObserveNoEligible(requestKey string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	s := Sample{Success: false, ErrorClass: ClassNoEligible, NoEligible: true, HasNoEligibleSignal: true, At: c.now()}
+	if c.state == StateCanary && c.hasCandidate {
+		exhausted := c.canaryMaxRequests > 0 && c.canaryServed >= c.canaryMaxRequests
+		if !exhausted && c.shouldCanaryLocked(requestKey) {
+			c.candidateWindow.observe(s)
+			c.maybeAutoRollbackLocked()
+			return
+		}
+	}
+	c.incumbentWindow.observe(s)
+}
+
 // Release drops a lease without recording an outcome (for example a request
 // rejected before any attempt). It never mutates routing state.
 func (c *Controller) Release(l Lease) {

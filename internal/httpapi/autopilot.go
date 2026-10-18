@@ -9,6 +9,7 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/autopilot"
 	"github.com/ali-shortcuts/nexaroute/internal/config"
 	"github.com/ali-shortcuts/nexaroute/internal/decision/policy"
+	"github.com/ali-shortcuts/nexaroute/internal/route"
 )
 
 // Phase 18: routing-policy canary autopilot wiring.
@@ -132,6 +133,15 @@ type autopilotRequestSignals struct {
 	terminalFailure bool
 	ttftMS          float64
 	hasTTFT         bool
+	// dispatched records that the request reached candidate
+	// selection (at least one route attempt was emitted). It is
+	// the leased half of the gate's REAL no-eligible signal
+	// (#418): a leased request demonstrably found eligible
+	// candidates, so it counts as a no-eligible OBSERVATION
+	// with NoEligible=false. Requests that found NO candidates
+	// never lease (the decision plane is never reached); their
+	// outcomes enter through Controller.ObserveNoEligible.
+	dispatched bool
 }
 
 func (s *Server) autopilotSignalsFor(requestID string) *autopilotRequestSignals {
@@ -157,6 +167,46 @@ func (s *Server) autopilotRecordFailover(requestID string) {
 		}
 		signals.mu.Unlock()
 	}
+}
+
+// autopilotNoteDispatched records that a leased request reached
+// candidate selection (a route attempt was emitted for it).
+func (s *Server) autopilotNoteDispatched(requestID string) {
+	if signals := s.autopilotSignalsFor(requestID); signals != nil {
+		signals.mu.Lock()
+		if !signals.closed {
+			signals.dispatched = true
+		}
+		signals.mu.Unlock()
+	}
+}
+
+// autopilotObserveNoEligible attributes a no-compatible-healthy-
+// deployment rejection to the autopilot controller when the
+// request's route resolves to the policy under change. The
+// request holds no lease (the decision plane was never
+// reached), so the controller attributes the outcome to the
+// policy version the request would have been leased to. The
+// policy resolution mirrors applyDecisionPlane: the route
+// profile's decision policy wins over the global default.
+func (s *Server) autopilotObserveNoEligible(cfg config.Config, resolvedRoute *route.ResolvedRoute, requestKey string) {
+	ctrl := s.autopilotSnapshot()
+	if ctrl == nil {
+		return
+	}
+	policyID := cfg.Decision.Policy
+	if resolvedRoute != nil && resolvedRoute.RouteProfileID != "" {
+		for _, rp := range cfg.RouteProfiles {
+			if rp.ID == resolvedRoute.RouteProfileID && rp.DecisionPolicy != "" {
+				policyID = rp.DecisionPolicy
+				break
+			}
+		}
+	}
+	if !ctrl.TargetMatches(policyID) {
+		return
+	}
+	ctrl.ObserveNoEligible(requestKey)
 }
 
 func (s *Server) autopilotRecordTTFT(requestID string, duration time.Duration) {
@@ -228,13 +278,21 @@ func (s *Server) autopilotRecordFinish(requestID string, status int, terminal st
 	if failed && status < http.StatusBadRequest {
 		errorClass = autopilot.ClassTransportError
 	}
+	var dispatched bool
+	if signals := entry.signals; signals != nil {
+		signals.mu.Lock()
+		dispatched = signals.dispatched
+		signals.mu.Unlock()
+	}
 	ctrl.Record(lease, autopilot.Sample{
-		Success:    !failed,
-		ErrorClass: errorClass,
-		Failover:   failover,
-		LatencyMS:  float64(duration.Milliseconds()),
-		TTFTMS:     ttftMS,
-		HasTTFT:    hasTTFT,
+		Success:             !failed,
+		ErrorClass:          errorClass,
+		Failover:            failover,
+		LatencyMS:           float64(duration.Milliseconds()),
+		TTFTMS:              ttftMS,
+		HasTTFT:             hasTTFT,
+		HasNoEligibleSignal: dispatched,
+		NoEligible:          false,
 	})
 }
 
@@ -271,6 +329,6 @@ func (s *Server) adminAutopilot(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"enabled":             true,
 		"autopilot":           ctrl.Status(),
-		"unsupported_signals": []string{"no_eligible_rate", "budget_anomalies"},
+		"unsupported_signals": []string{"budget_anomalies"},
 	})
 }

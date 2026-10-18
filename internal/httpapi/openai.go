@@ -166,6 +166,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.budgetRelease(r)
+		s.autopilotObserveNoEligible(cfg, resolvedRoute, autopilotRequestKeyFromContext(r.Context(), r.Header.Get("x-request-id")))
 		errorJSON(w, 503, "no compatible healthy deployment")
 		return
 	}
@@ -249,6 +250,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 		if attemptIndex > 0 {
 			attemptKind = attemptKindRetry
 		}
+		s.autopilotNoteDispatched(autopilotRequestKeyFromContext(r.Context(), r.Header.Get("x-request-id")))
 		s.emitRouteAttempt(r.Header.Get("x-request-id"), "openai", in.Model, attemptIndex+1, c, attemptKind)
 		start := time.Now()
 		out, winner, hedgeLaunched := s.doAttemptWithHedge(routeCtx, r.Header.Get("x-request-id"), cfg, candidates, i, attempts, max, primary,
