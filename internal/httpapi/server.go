@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -22,6 +23,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/ali-shortcuts/nexaroute/internal/autopilot"
 	"github.com/ali-shortcuts/nexaroute/internal/cache"
 	"github.com/ali-shortcuts/nexaroute/internal/compat"
 	"github.com/ali-shortcuts/nexaroute/internal/config"
@@ -87,6 +89,12 @@ type Server struct {
 	// Phase H: evaluation plane (scorecards + deterministic evaluation). Admin
 	// surface only; the data plane never reads it.
 	evaluation *evaluationPlane
+	// Phase 18: routing-policy canary autopilot. It changes routing policy
+	// only; the data plane consults it to pick the served policy version.
+	// Guarded by runtimeMu for replacement on reload.
+	autopilot               *autopilot.Controller
+	autopilotLeases         sync.Map // requestID string -> autopilot.Lease
+	autopilotRequestSignals sync.Map // requestID string -> *autopilotRequestSignals
 	// Phase C — task classification metrics (bounded cardinality)
 	taskMu             sync.Mutex
 	taskClassCounts    map[string]uint64 // key: task_type|complexity
@@ -250,6 +258,10 @@ func New(cfg config.Config, configPath string, reg *providers.Registry, rt *rout
 	policies := convertDecisionPolicies(cfg.DecisionPolicies)
 	policyProvider := policy.NewProvider(policies, cfg.Decision.Policy)
 	s.decisionRegistry.Register(policyProvider)
+	// Phase 18: policy canary autopilot (opt-in). Built from the same policy
+	// entries the decision plane resolves, so a canary can only ever select an
+	// existing, validated policy version.
+	s.autopilot = newAutopilotController(cfg, policies)
 	// Phase F: register external providers (jev)
 	for _, extCfg := range cfg.DecisionProviders {
 		if !extCfg.IsEnabled() {
@@ -717,6 +729,20 @@ func (s *Server) applyConfigLocked(baseCfg config.Config) error {
 			if updater, ok := pp.(interface{ UpdatePolicies([]policy.Policy, string) }); ok {
 				policies := convertDecisionPolicies(cfg.DecisionPolicies)
 				updater.UpdatePolicies(policies, cfg.Decision.Policy)
+				// Phase 18: keep an in-flight canary across unrelated reloads;
+				// build it when it first becomes enabled and clear it when
+				// disabled. A changed target policy forces a rebuild so the
+				// controller never orchestrates a stale target.
+				target := cfg.Autopilot.PolicyID
+				if target == "" {
+					target = cfg.Decision.Policy
+				}
+				switch {
+				case !cfg.Autopilot.Enabled:
+					s.autopilot = nil
+				case s.autopilot == nil || s.autopilot.TargetPolicyID() != target:
+					s.autopilot = newAutopilotController(cfg, policies)
+				}
 			}
 		}
 		// Phase F/G: hot-reload external providers (jev) — build immutable new adapters and swap atomically
@@ -1034,6 +1060,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/admin/api/probe", s.adminProbe)
 	mux.HandleFunc("/admin/api/providers", s.adminProviders)
 	mux.HandleFunc("/admin/api/providers/", s.adminProviderByID)
+	mux.HandleFunc("/admin/api/autopilot", s.adminAutopilot)
 	mux.HandleFunc("/admin/api/provider-presets", s.adminProviderPresets)
 	mux.HandleFunc("/admin/api/provider-check", s.adminProviderCheck)
 	mux.HandleFunc("/admin/api/provider-test", s.adminProviderTest)
@@ -1181,6 +1208,11 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 		}
 		trace := newTraceContext(r.Header.Get("traceparent"))
 		r = r.WithContext(withTrace(r.Context(), trace))
+		// Request IDs from callers are correlation metadata, not unique
+		// identities. Keep autopilot leases/signals on a server-generated key so
+		// concurrent requests that share x-request-id cannot overwrite each other.
+		autopilotKey := fmt.Sprintf("autopilot-%x", requestNumber)
+		r = r.WithContext(context.WithValue(r.Context(), autopilotRequestKeyContext{}, autopilotKey))
 		if s.telemetryExporter != nil && dataPlaneOperation(r.URL.Path) != "" {
 			r = r.WithContext(withSpanRecord(r.Context(), &spanRecord{}))
 		}
@@ -1213,6 +1245,7 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 					terminal = events.TerminalFailed
 				}
 				s.emitRequestFinished(rid, sw.status, duration, terminal)
+				s.autopilotRecordFinish(autopilotKey, sw.status, terminal, duration)
 			}
 			s.exportSpan(r, trace, start, duration, sw.status)
 			if s.log != nil && strings.HasPrefix(r.URL.Path, "/admin/api/") && (isStateChanging(r.Method) || sw.status == http.StatusForbidden) {
