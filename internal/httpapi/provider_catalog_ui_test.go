@@ -124,7 +124,6 @@ func TestProviderPresetGridCollapsesOnMobile(t *testing.T) {
 	}
 }
 
-
 func TestProviderAdvancedSettingsCanBeEditedWithoutLeakingSavedSecrets(t *testing.T) {
 	js := readAppJS(t)
 	form := extractFunctionLine(t, js, "providerForm")
@@ -161,4 +160,3 @@ func TestProviderAdvancedSettingsCanBeEditedWithoutLeakingSavedSecrets(t *testin
 		}
 	}
 }
-
