@@ -160,7 +160,6 @@ func cssRuleBlock(s, selector string) string {
 	return s[i : i+j+1]
 }
 
-
 func TestLightThemeSidebarAndErrorTextUseContrastTokens(t *testing.T) {
 	css, err := webFS.ReadFile("web/styles.css")
 	if err != nil {
