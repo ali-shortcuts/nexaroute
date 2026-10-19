@@ -1,6 +1,8 @@
 package httpapi
 
 import (
+	"fmt"
+	"math"
 	"regexp"
 	"strings"
 	"testing"
@@ -31,6 +33,8 @@ func TestDesignTokenLayerContract(t *testing.T) {
 	required := []string{
 		// Semantic status tokens.
 		"--ok", "--degraded", "--down", "--live", "--stale", "--estimated", "--actual", "--bad-ink",
+		// Foreground tokens paired with saturated surfaces (buttons, banners).
+		"--accent-ink", "--violet-ink",
 		// Type scale.
 		"--fs-2xs", "--fs-xs", "--fs-sm", "--fs-md", "--fs-lg", "--fs-xl", "--fs-2xl",
 		// Spacing scale.
@@ -182,4 +186,104 @@ func TestLightThemeSidebarAndErrorTextUseContrastTokens(t *testing.T) {
 			t.Errorf("missing contrast rule %q", rule)
 		}
 	}
+}
+
+// Issue #489: browser-evidence run 39299669294 (axe, WCAG 2.2 AA) flagged
+// serious light-theme color-contrast violations after the sidebar fix:
+// primary buttons rendered --ink-text (#071015) on the light theme's deep
+// --accent (#12665f) at 2.82:1, secondary buttons rendered --tint-violet
+// (#c9c2ff) on light violet-tinted surfaces at 1.32:1, and route-banner
+// text sat at 4.27:1 / 4.44:1. This test computes the contrast of exactly
+// those token pairs so the defect cannot return without a browser run.
+func TestLightThemeButtonAndBannerContrastPairs(t *testing.T) {
+	css, err := webFS.ReadFile("web/styles.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(css)
+
+	for _, rule := range []string{
+		".button.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}",
+		"color:var(--violet-ink)}",
+		"html[data-theme=light] .route-banner > div > span { color: var(--subtle); }",
+		"html[data-theme=light] .route-banner-count { color: var(--violet-ink)!important; }",
+	} {
+		if !strings.Contains(s, rule) {
+			t.Errorf("missing contrast rule %q", rule)
+		}
+	}
+
+	fence := s[strings.Index(s, "[tokens:begin]"):strings.Index(s, "[tokens:end]")]
+	rootBlock := cssRuleBlock(fence, ":root{")
+	lightBlock := cssRuleBlock(fence, "html[data-theme=light]{")
+
+	token := func(block, name string) string {
+		v := cssTokenValue(block, name)
+		for strings.HasPrefix(v, "var(") {
+			v = cssTokenValue(block, strings.TrimSuffix(strings.TrimPrefix(v, "var("), ")"))
+		}
+		return v
+	}
+	pairs := []struct {
+		name string
+		fg   string
+		bg   string
+	}{
+		// Axe-computed surfaces from run 39299669294: the secondary
+		// button's violet-tinted background over light surfaces, the
+		// observability panel tint, and the route banner's tint.
+		{"light primary button", token(lightBlock, "--accent-ink"), token(lightBlock, "--accent")},
+		{"light secondary button", token(lightBlock, "--violet-ink"), "#e2e5f4"},
+		{"light violet action on panel tint", token(lightBlock, "--violet-ink"), "#ececf8"},
+		{"light route banner count", token(lightBlock, "--violet-ink"), "#e9ecf6"},
+		{"light route banner text", token(lightBlock, "--subtle"), "#e9ecf6"},
+		{"dark primary button", token(rootBlock, "--accent-ink"), token(rootBlock, "--accent")},
+		{"dark secondary button", token(rootBlock, "--violet-ink"), token(rootBlock, "--surface")},
+	}
+	for _, p := range pairs {
+		if p.fg == "" || p.bg == "" {
+			t.Errorf("%s: unresolved token pair fg=%q bg=%q", p.name, p.fg, p.bg)
+			continue
+		}
+		if got := wcagContrast(p.fg, p.bg); got < 4.5 {
+			t.Errorf("%s: contrast %s on %s = %.2f, want >= 4.5 (WCAG AA)", p.name, p.fg, p.bg, got)
+		}
+	}
+}
+
+var cssTokenRe = regexp.MustCompile(`(--[a-z0-9-]+):([^;]+);`)
+
+func cssTokenValue(block, name string) string {
+	for _, m := range cssTokenRe.FindAllStringSubmatch(block, -1) {
+		if m[1] == name {
+			return strings.TrimSpace(m[2])
+		}
+	}
+	return ""
+}
+
+func wcagContrast(fgHex, bgHex string) float64 {
+	l := func(hex string) float64 {
+		hex = strings.TrimPrefix(hex, "#")
+		if len(hex) == 3 {
+			hex = string([]byte{hex[0], hex[0], hex[1], hex[1], hex[2], hex[2]})
+		}
+		var rgb [3]float64
+		for i := 0; i < 3; i++ {
+			var v int
+			fmt.Sscanf(hex[i*2:i*2+2], "%02x", &v)
+			c := float64(v) / 255
+			if c <= 0.04045 {
+				rgb[i] = c / 12.92
+			} else {
+				rgb[i] = math.Pow((c+0.055)/1.055, 2.4)
+			}
+		}
+		return 0.2126*rgb[0] + 0.7152*rgb[1] + 0.0722*rgb[2]
+	}
+	lf, lb := l(fgHex), l(bgHex)
+	if lf < lb {
+		lf, lb = lb, lf
+	}
+	return (lf + 0.05) / (lb + 0.05)
 }
