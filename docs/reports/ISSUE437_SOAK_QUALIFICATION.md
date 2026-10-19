@@ -101,6 +101,26 @@ CI executes the same drills through the existing `integration-postgres`
 and `integration-redis` jobs against their service containers, so no new
 workflow dependency or secret is required.
 
+## Verification
+
+`./scripts/verify.sh` passed locally on this evidence tree (`VERIFY PASS`,
+exit 0): formatting, clean unit/integration suite, `go vet`, clean race
+suite, release artifact and SBOM trust-chain checks, JavaScript syntax,
+short fuzz checks and the Linux amd64/arm64 builds. Chromium plus Python
+Playwright were not installed on this runner, so the script's documented
+browser-acceptance warning path was used; browser acceptance was not run
+here. Raw log: `benchmarks/soak/verify-791a131.raw.txt`.
+
+```
+== mandatory clean unit/integration pass ==   PASS
+== mandatory clean race pass ==               PASS
+== release artifact manifest checks ==        PASS
+== SBOM generator trust-chain checks ==       PASS
+== short fuzz checks ==                       PASS
+== linux amd64 build == / arm64 build ==      PASS
+VERIFY PASS
+```
+
 ## Remaining / explicitly UNVERIFIED
 
 - **Multi-hour sustained soak**: the dispatchable workflow is bounded
