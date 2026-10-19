@@ -423,6 +423,7 @@ type VideoConfig struct {
 	CodeRenderPlannerJSONMode    bool     `json:"code_render_planner_json_mode,omitempty"`
 	CodeRenderMaxDurationSeconds float64  `json:"code_render_max_duration_seconds,omitempty"`
 	CodeRenderWorkRoot           string   `json:"code_render_work_root,omitempty"`
+	CodeRenderRetentionHours     int      `json:"code_render_retention_hours,omitempty"`
 }
 
 type LoggingConfig struct {
@@ -1842,6 +1843,9 @@ func (c Config) Validate() error {
 			if len(u) > maxURLBytes || strings.ContainsAny(u, "\r\n\x00") {
 				return errors.New("video.code_render_planner_base_url is invalid or too long")
 			}
+		}
+		if h := c.Video.CodeRenderRetentionHours; h > 24*365 {
+			return errors.New("video.code_render_retention_hours must be at most 8760 (one year) or negative to keep work forever")
 		}
 	}
 	if c.Video.Enabled {

@@ -49,6 +49,11 @@ type Config struct {
 	CodeRenderPlannerJSONMode    bool     `json:"code_render_planner_json_mode,omitempty"`
 	CodeRenderMaxDurationSeconds float64  `json:"code_render_max_duration_seconds,omitempty"`
 	CodeRenderWorkRoot           string   `json:"code_render_work_root,omitempty"`
+	// CodeRenderRetentionHours bounds how long a finished code-render
+	// job and its per-job work directory are kept before being
+	// reclaimed. Zero uses the provider default; a negative value
+	// keeps them forever.
+	CodeRenderRetentionHours int `json:"code_render_retention_hours,omitempty"`
 	// Async aggregator adapter (Phase 20, issue #420): a
 	// fal.ai-queue-style commercial video API. The API key itself
 	// is never configured here — only the NAME of the environment
