@@ -22,6 +22,10 @@ type Weights struct {
 	Capacity       float64 `json:"capacity"`
 	Cost           float64 `json:"cost"`
 	Context        float64 `json:"context"`
+	// Quality weights the per-task scorecard evidence component
+	// (#510 item 5), carried on candidates as TaskQuality with its
+	// sample count. Zero disables the component.
+	Quality float64 `json:"quality,omitempty"`
 }
 
 // Policy is the deterministic policy configuration.
@@ -76,7 +80,7 @@ var canonicalTasks = map[string]struct{}{
 	"simple_chat": {}, "coding": {}, "code_edit": {}, "debugging": {},
 	"repository_analysis": {}, "architecture_reasoning": {}, "deep_reasoning": {},
 	"tool_use": {}, "agentic_task": {}, "long_context": {}, "vision": {},
-	"structured_output": {}, "data_extraction": {}, "general": {}, "unknown": {},
+	"structured_output": {}, "data_extraction": {}, "general": {}, "background": {}, "unknown": {},
 }
 
 func validateWeights(w Weights, ctx string) error {
@@ -88,6 +92,7 @@ func validateWeights(w Weights, ctx string) error {
 		ctx + ".capacity":        w.Capacity,
 		ctx + ".cost":            w.Cost,
 		ctx + ".context":         w.Context,
+		ctx + ".quality":         w.Quality,
 	} {
 		if math.IsNaN(v) || math.IsInf(v, 0) || v < 0 || v > 1_000_000 {
 			return fmt.Errorf("%s must be finite and between 0 and 1000000", name)
@@ -97,7 +102,7 @@ func validateWeights(w Weights, ctx string) error {
 }
 
 func hasPositive(w Weights) bool {
-	return w.RouterBaseline > 0 || w.Reliability > 0 || w.Latency > 0 || w.TTFT > 0 || w.Capacity > 0 || w.Cost > 0 || w.Context > 0
+	return w.RouterBaseline > 0 || w.Reliability > 0 || w.Latency > 0 || w.TTFT > 0 || w.Capacity > 0 || w.Cost > 0 || w.Context > 0 || w.Quality > 0
 }
 
 // FromConfig converts config.DecisionPolicyConfig to Policy with validation.
@@ -124,6 +129,7 @@ func FromConfig(c config.DecisionPolicyConfig) (Policy, error) {
 		Capacity:       c.Weights.Capacity,
 		Cost:           c.Weights.Cost,
 		Context:        c.Weights.Context,
+		Quality:        c.Weights.Quality,
 	}
 	if err := validateWeights(w, fmt.Sprintf("policy %q weights", id)); err != nil {
 		return Policy{}, err
@@ -148,6 +154,7 @@ func FromConfig(c config.DecisionPolicyConfig) (Policy, error) {
 			Capacity:       vw.Capacity,
 			Cost:           vw.Cost,
 			Context:        vw.Context,
+			Quality:        vw.Quality,
 		}
 		if err := validateWeights(ww, fmt.Sprintf("policy %q task_overrides[%q]", id, nk)); err != nil {
 			return Policy{}, err
@@ -217,7 +224,7 @@ func (p Policy) ResolveWeights(taskType string) (Weights, bool) {
 
 // TotalWeight returns sum of positive weights.
 func (w Weights) TotalWeight() float64 {
-	sum := w.RouterBaseline + w.Reliability + w.Latency + w.TTFT + w.Capacity + w.Cost + w.Context
+	sum := w.RouterBaseline + w.Reliability + w.Latency + w.TTFT + w.Capacity + w.Cost + w.Context + w.Quality
 	if math.IsNaN(sum) || math.IsInf(sum, 0) {
 		return 0
 	}

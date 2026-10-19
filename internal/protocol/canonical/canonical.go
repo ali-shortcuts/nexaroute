@@ -224,8 +224,14 @@ type Requirements struct {
 	Vision    bool `json:"vision"`
 	Streaming bool `json:"streaming"`
 	Reasoning bool `json:"reasoning"`
-	Stop      bool `json:"stop"`
-	Seed      bool `json:"seed"`
+	// StructuredOutput is true when the request demands a
+	// non-text response_format (json_object / json_schema).
+	StructuredOutput bool `json:"structured_output"`
+	// ParallelTools is true when parallel tool calls are
+	// explicitly enabled for this request.
+	ParallelTools bool `json:"parallel_tools"`
+	Stop          bool `json:"stop"`
+	Seed          bool `json:"seed"`
 }
 
 // DetectRequirements derives the requirement profile from a canonical request.
@@ -257,6 +263,12 @@ func (r *Request) DetectRequirements() Requirements {
 	}
 	if r.Reasoning != nil && !r.Reasoning.Disabled {
 		out.Reasoning = true
+	}
+	if r.ResponseFormat != nil && r.ResponseFormat.Kind != "" && r.ResponseFormat.Kind != FormatText {
+		out.StructuredOutput = true
+	}
+	if r.ParallelToolCalls != nil && *r.ParallelToolCalls {
+		out.ParallelTools = true
 	}
 	out.Stop = len(r.Stop) > 0
 	return out

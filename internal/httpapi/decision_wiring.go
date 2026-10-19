@@ -6,11 +6,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ali-shortcuts/nexaroute/internal/config"
 	"github.com/ali-shortcuts/nexaroute/internal/decision"
 	"github.com/ali-shortcuts/nexaroute/internal/events"
 	"github.com/ali-shortcuts/nexaroute/internal/feature"
 	"github.com/ali-shortcuts/nexaroute/internal/route"
 	"github.com/ali-shortcuts/nexaroute/internal/router"
+	"github.com/ali-shortcuts/nexaroute/internal/scorecards"
 	"github.com/ali-shortcuts/nexaroute/internal/taskprofile"
 )
 
@@ -406,6 +408,27 @@ func (s *Server) applyDecisionPlane(
 	// Build decision request with extended Phase E signals
 	dc := decisionCandidates(candidates, resolvedRoute)
 
+	// Phase 19 feedback loop (#510 item 5): enrich candidates with
+	// per-(task, deployment) scorecard evidence, converted to plain
+	// values here at the boundary (the decision plane never imports
+	// the scorecards package). Evidence order: production feedback
+	// card, then a task-scoped registry card, then the
+	// deployment-wide registry card for the task's dimension.
+	// Enrichment happens ONLY when the applicable policy opts in
+	// with a positive quality weight (globally or for this task):
+	// without an explicit operator opt-in, scorecard evidence is
+	// not even placed on the candidate payload — the Phase H
+	// zero-influence guarantee (TestPhaseH_LiveScorecardsHaveZero
+	// RoutingInfluence) is preserved exactly.
+	if taskType := string(ti.Profile.Type); taskType != "" && decisionQualityEnabled(cfgCopy, resolvedRoute, taskType) {
+		for i := range dc {
+			if score, samples, ok := s.taskQualityEvidence(taskType, dc[i].ID); ok {
+				dc[i].TaskQuality = score
+				dc[i].TaskQualitySamples = samples
+			}
+		}
+	}
+
 	var veID, rpID, poolID string
 	if resolvedRoute != nil {
 		veID = resolvedRoute.VirtualEndpointID
@@ -454,6 +477,15 @@ func (s *Server) applyDecisionPlane(
 		}
 	}
 
+	// Phase 18: policy canary. When the selected policy is the one under change
+	// the autopilot issues a lease that may resolve to a bounded-share candidate
+	// version. Non-target policies are never touched.
+	if leasedID, leased := s.autopilotSelectPolicy(policyID, autopilotRequestKeyFromContext(ctx, requestID)); leased {
+		policyID = leasedID
+		id, hasID := ctx.Value(clientIdentityContextKey{}).(clientIdentity)
+		s.autopilotNoteCaller(autopilotRequestKeyFromContext(ctx, requestID), autopilotCallerStratum(id, hasID))
+	}
+
 	decisionReq := decision.DecisionRequest{
 		TaskProfile:          tp,
 		Features:             fp,
@@ -486,4 +518,92 @@ func (s *Server) applyDecisionPlane(
 	}
 	// Reorder scored
 	return reorderScoredByDecision(candidates, ordered)
+}
+
+// taskDimensionFor maps a task type to the scorecard quality
+// dimension that measures it (#510 item 5). Tasks without a
+// dedicated dimension return "" — only production-feedback
+// availability evidence applies to them.
+func taskDimensionFor(taskType string) scorecards.Dimension {
+	switch taskType {
+	case "coding", "code_edit":
+		return scorecards.DimCoding
+	case "debugging":
+		return scorecards.DimDebugging
+	case "deep_reasoning", "architecture_reasoning":
+		return scorecards.DimReasoning
+	case "long_context":
+		return scorecards.DimLongContext
+	case "structured_output":
+		return scorecards.DimStructuredOutput
+	case "tool_use":
+		return scorecards.DimToolCalling
+	}
+	return ""
+}
+
+// taskQualityEvidence resolves the best available per-(task,
+// deployment) quality evidence for the decision plane, in order:
+// the production feedback card's availability value, a task-scoped
+// registry card's task dimension, then the deployment-wide
+// registry card's task dimension. Missing evidence is ok=false —
+// nothing is substituted.
+func (s *Server) taskQualityEvidence(taskType, deploymentID string) (float64, int, bool) {
+	plane := s.evaluationSnapshot()
+	if plane == nil {
+		return 0, 0, false
+	}
+	if fb := plane.Feedback(); fb != nil {
+		if card, ok := fb.Card(taskType, deploymentID, time.Now()); ok {
+			if v, has := card.Values[scorecards.DimAvailability]; has {
+				return v.Score, v.SampleCount, true
+			}
+		}
+	}
+	dim := taskDimensionFor(taskType)
+	if dim == "" {
+		return 0, 0, false
+	}
+	reg := plane.Registry()
+	if reg == nil {
+		return 0, 0, false
+	}
+	if v, ok := reg.QualityForTask(taskType, deploymentID, dim); ok {
+		return v.Score, v.SampleCount, true
+	}
+	if v, ok := reg.Quality(deploymentID, dim); ok {
+		return v.Score, v.SampleCount, true
+	}
+	return 0, 0, false
+}
+
+// decisionQualityEnabled reports whether the policy that will
+// decide this request opts into the quality component for this
+// task (a positive quality weight globally or in the task's
+// override). The applicable policy is resolved exactly as the
+// decision request resolves it below: the route profile's policy
+// wins over the global default.
+func decisionQualityEnabled(cfg config.Config, resolvedRoute *route.ResolvedRoute, taskType string) bool {
+	policyID := cfg.Decision.Policy
+	if resolvedRoute != nil && resolvedRoute.RouteProfileID != "" {
+		for _, rp := range cfg.RouteProfiles {
+			if rp.ID == resolvedRoute.RouteProfileID && rp.DecisionPolicy != "" {
+				policyID = rp.DecisionPolicy
+				break
+			}
+		}
+	}
+	for _, p := range cfg.DecisionPolicies {
+		if p.ID != policyID {
+			continue
+		}
+		if p.Weights.Quality > 0 {
+			return true
+		}
+		if ov, ok := p.TaskOverrides[taskType]; ok && ov.Quality > 0 {
+			return true
+		}
+		return false
+	}
+	return false
 }

@@ -19,6 +19,7 @@ import (
 
 	"github.com/ali-shortcuts/nexaroute/internal/egress"
 	"github.com/ali-shortcuts/nexaroute/internal/secrets"
+	"github.com/ali-shortcuts/nexaroute/internal/taskprofile"
 )
 
 type VirtualEndpointConfig struct {
@@ -51,6 +52,30 @@ type RouteProfileConfig struct {
 	// candidate list when it is already eligible for the request.
 	CanaryDeploymentID string `json:"canary_deployment_id,omitempty"`
 	CanaryPercent      int    `json:"canary_percent,omitempty"`
+	// Task intelligence (Phase 19, issue #419): per-route application of
+	// signal-based task classification. "" and "off" keep classification
+	// observational only (the default). "suggest" records the suggested
+	// task pool in the trace without changing routing. "apply" routes
+	// high-confidence classifications to the mapped task pool (operator
+	// opt-in). Raw prompt content is never a classification signal.
+	TaskIntelMode string `json:"task_intel_mode,omitempty"`
+	// TaskIntelMinConfidence gates application: below it the classifier
+	// degrades to the default profile. (0,1]; 0 selects the 0.60 default.
+	TaskIntelMinConfidence float64 `json:"task_intel_min_confidence,omitempty"`
+	// TaskPools maps a canonical task type (e.g. "coding") to the candidate
+	// pool that task should use as its primary pool.
+	TaskPools map[string]string `json:"task_pools,omitempty"`
+	// TaskEvalGates maps a canonical task type to an evaluation suite ID
+	// (Phase 19 eval gate, #510). In apply mode the mapped task pool is
+	// used only when at least one deployment in it has passing eval
+	// evidence for that suite (latest run decides); otherwise routing
+	// stays on the route default and the decision is traced as
+	// eval_gated. A gate requires a task_pools entry for the same task.
+	TaskEvalGates map[string]string `json:"task_eval_gates,omitempty"`
+	// TaskOverride forces one task type for the whole route profile.
+	// The operator override always wins: over the client pin and over the
+	// classifier.
+	TaskOverride string `json:"task_override,omitempty"`
 }
 
 type CandidatePoolConfig struct {
@@ -74,6 +99,10 @@ type DecisionPolicyWeights struct {
 	Capacity       float64 `json:"capacity,omitempty"`
 	Cost           float64 `json:"cost,omitempty"`
 	Context        float64 `json:"context,omitempty"`
+	// Quality weights per-task scorecard evidence (eval-derived
+	// and production-feedback cards, #510 item 5) in policy
+	// scoring. Zero disables the component.
+	Quality float64 `json:"quality,omitempty"`
 }
 
 type DecisionPolicyConfig struct {
@@ -100,6 +129,49 @@ type DecisionConfig struct {
 	Chain            string `json:"chain,omitempty"`              // Phase G: chain ID when mode=hybrid
 	MaxProviderCalls int    `json:"max_provider_calls,omitempty"` // Phase G: global chain call budget
 	Shadow           bool   `json:"shadow,omitempty"`             // Phase 12: compute the decision but never apply it
+}
+
+// AutopilotConfig (Phase 18) drives the routing-policy change lifecycle:
+// a candidate policy version is canaried against the incumbent, judged by a
+// gate built from real signals, and promoted or automatically rolled back.
+// It is opt-in and changes routing policy only — never credentials, budgets or
+// stored data.
+type AutopilotConfig struct {
+	Enabled bool `json:"enabled,omitempty"`
+	// PolicyID is the routing policy under change. When empty, decision.policy
+	// is the target.
+	PolicyID string `json:"policy_id,omitempty"`
+	// CandidatePolicyID is the policy entry staged as the new version. It must
+	// reference an existing decision_policies[] entry. Empty means no canary is
+	// started at boot (the operator starts it explicitly).
+	CandidatePolicyID string `json:"candidate_policy_id,omitempty"`
+	// CanaryPercent is the bounded share of requests (0-100) that may be served
+	// by the candidate. 0 disables canary traffic.
+	CanaryPercent float64 `json:"canary_percent,omitempty"`
+	// CanaryMaxRequests additionally bounds the canary by request count
+	// (0 = unbounded by count).
+	CanaryMaxRequests int64 `json:"canary_max_requests,omitempty"`
+	// MinSamples is the minimum candidate request count before any verdict
+	// other than hold is allowed (no promotion on missing data).
+	MinSamples int `json:"min_samples,omitempty"`
+	// MinPromoteSamples is the sample count required before promotion.
+	MinPromoteSamples int `json:"min_promote_samples,omitempty"`
+	// MaxErrorRate is the candidate error rate that trips a rollback.
+	MaxErrorRate float64 `json:"max_error_rate,omitempty"`
+	// MaxErrorRateDelta is the candidate-minus-incumbent error-rate margin that
+	// trips a rollback (compared over the same window).
+	MaxErrorRateDelta float64 `json:"max_error_rate_delta,omitempty"`
+	// MaxFailoverRate is the candidate failover rate that trips a rollback.
+	MaxFailoverRate float64 `json:"max_failover_rate,omitempty"`
+	// MaxNoEligibleRate is the candidate no-eligible-candidate rate that trips a
+	// rollback.
+	MaxNoEligibleRate float64 `json:"max_no_eligible_rate,omitempty"`
+	// MaxBudgetAnomalies is the count of budget-reservation anomalies that trips
+	// a rollback.
+	MaxBudgetAnomalies int64 `json:"max_budget_anomalies,omitempty"`
+	// MaxLatencyP95MS and MaxTTFTP95MS are optional latency ceilings (0 disables).
+	MaxLatencyP95MS float64 `json:"max_latency_p95_ms,omitempty"`
+	MaxTTFTP95MS    float64 `json:"max_ttft_p95_ms,omitempty"`
 }
 
 type DecisionProviderHealthConfig struct {
@@ -232,6 +304,7 @@ type Config struct {
 	Evaluation             EvaluationConfig             `json:"evaluation,omitempty"`
 	Video                  VideoConfig                  `json:"video,omitempty"`
 	Decision               DecisionConfig               `json:"decision,omitempty"`
+	Autopilot              AutopilotConfig              `json:"autopilot,omitempty"`
 	DecisionPolicies       []DecisionPolicyConfig       `json:"decision_policies,omitempty"`
 	DecisionProviders      []DecisionProviderConfig     `json:"decision_providers,omitempty"`
 	DecisionChains         []DecisionChainConfig        `json:"decision_chains,omitempty"`
@@ -867,6 +940,8 @@ const (
 	maxDecisionChains       = 64
 	maxDecisionChainSteps   = 8
 	maxDecisionChainIDBytes = 256
+	// Phase 18 autopilot limits
+	maxAutopilotSamples = 100000000
 )
 
 func validLocalID(s string) bool {
@@ -919,6 +994,7 @@ func validateDecisionPolicyWeights(w DecisionPolicyWeights, ctx string) error {
 		ctx + ".capacity":        w.Capacity,
 		ctx + ".cost":            w.Cost,
 		ctx + ".context":         w.Context,
+		ctx + ".quality":         w.Quality,
 	} {
 		if math.IsNaN(v) || math.IsInf(v, 0) || v < 0 || v > 1_000_000 {
 			return fmt.Errorf("%s must be finite and between 0 and 1000000", name)
@@ -928,7 +1004,7 @@ func validateDecisionPolicyWeights(w DecisionPolicyWeights, ctx string) error {
 }
 
 func hasPositiveWeight(w DecisionPolicyWeights) bool {
-	return w.RouterBaseline > 0 || w.Reliability > 0 || w.Latency > 0 || w.TTFT > 0 || w.Capacity > 0 || w.Cost > 0 || w.Context > 0
+	return w.RouterBaseline > 0 || w.Reliability > 0 || w.Latency > 0 || w.TTFT > 0 || w.Capacity > 0 || w.Cost > 0 || w.Context > 0 || w.Quality > 0
 }
 
 func validHeaderName(s string) bool {
@@ -1575,6 +1651,8 @@ func (c *Config) ApplyDefaults() {
 			dp.TaskOverrides = norm
 		}
 	}
+	c.Autopilot.PolicyID = strings.TrimSpace(c.Autopilot.PolicyID)
+	c.Autopilot.CandidatePolicyID = strings.TrimSpace(c.Autopilot.CandidatePolicyID)
 	for i := range c.DecisionProviders {
 		dp := &c.DecisionProviders[i]
 		dp.ID = strings.TrimSpace(dp.ID)
@@ -2439,7 +2517,7 @@ func (c Config) Validate() error {
 		"simple_chat": {}, "coding": {}, "code_edit": {}, "debugging": {},
 		"repository_analysis": {}, "architecture_reasoning": {}, "deep_reasoning": {},
 		"tool_use": {}, "agentic_task": {}, "long_context": {}, "vision": {},
-		"structured_output": {}, "data_extraction": {}, "general": {}, "unknown": {},
+		"structured_output": {}, "data_extraction": {}, "general": {}, "background": {}, "unknown": {},
 	}
 	seenPolicyIDs := map[string]struct{}{}
 	for i, dp := range c.DecisionPolicies {
@@ -2510,6 +2588,62 @@ func (c Config) Validate() error {
 		}
 		if len(c.DecisionPolicies) == 0 {
 			return fmt.Errorf("decision_policies must contain at least one policy when provider=policy")
+		}
+	}
+	// Phase 18: routing-policy canary autopilot. It only orchestrates existing
+	// policy entries, so every referenced policy must already exist.
+	if c.Autopilot.Enabled {
+		target := c.Autopilot.PolicyID
+		if target == "" {
+			target = c.Decision.Policy
+		}
+		if target == "" {
+			return fmt.Errorf("autopilot.policy_id is required (or set decision.policy)")
+		}
+		if len(target) > maxPolicyIDBytes || !validLocalID(target) {
+			return fmt.Errorf("autopilot policy id %q invalid", target)
+		}
+		if _, ok := seenPolicyIDs[target]; !ok {
+			return fmt.Errorf("autopilot.policy_id %q references unknown decision policy", target)
+		}
+		if c.Autopilot.CandidatePolicyID != "" {
+			if len(c.Autopilot.CandidatePolicyID) > maxPolicyIDBytes || !validLocalID(c.Autopilot.CandidatePolicyID) {
+				return fmt.Errorf("autopilot candidate policy id %q invalid", c.Autopilot.CandidatePolicyID)
+			}
+			if _, ok := seenPolicyIDs[c.Autopilot.CandidatePolicyID]; !ok {
+				return fmt.Errorf("autopilot.candidate_policy_id %q references unknown decision policy", c.Autopilot.CandidatePolicyID)
+			}
+			if c.Autopilot.CandidatePolicyID == target {
+				return fmt.Errorf("autopilot.candidate_policy_id must differ from the target policy")
+			}
+		}
+		if math.IsNaN(c.Autopilot.CanaryPercent) || math.IsInf(c.Autopilot.CanaryPercent, 0) || c.Autopilot.CanaryPercent < 0 || c.Autopilot.CanaryPercent > 100 {
+			return fmt.Errorf("autopilot.canary_percent must be finite and between 0 and 100")
+		}
+		if c.Autopilot.CanaryMaxRequests < 0 {
+			return fmt.Errorf("autopilot.canary_max_requests must not be negative")
+		}
+		if c.Autopilot.MinSamples < 0 || c.Autopilot.MinSamples > maxAutopilotSamples {
+			return fmt.Errorf("autopilot.min_samples must be between 0 and %d", maxAutopilotSamples)
+		}
+		if c.Autopilot.MinPromoteSamples < 0 || c.Autopilot.MinPromoteSamples > maxAutopilotSamples {
+			return fmt.Errorf("autopilot.min_promote_samples must be between 0 and %d", maxAutopilotSamples)
+		}
+		for name, v := range map[string]float64{
+			"autopilot.max_error_rate":       c.Autopilot.MaxErrorRate,
+			"autopilot.max_error_rate_delta": c.Autopilot.MaxErrorRateDelta,
+			"autopilot.max_failover_rate":    c.Autopilot.MaxFailoverRate,
+			"autopilot.max_no_eligible_rate": c.Autopilot.MaxNoEligibleRate,
+		} {
+			if math.IsNaN(v) || math.IsInf(v, 0) || v < 0 || v > 1 {
+				return fmt.Errorf("%s must be finite and between 0 and 1", name)
+			}
+		}
+		if c.Autopilot.MaxLatencyP95MS < 0 || c.Autopilot.MaxTTFTP95MS < 0 {
+			return fmt.Errorf("autopilot latency ceilings must not be negative")
+		}
+		if c.Autopilot.MaxBudgetAnomalies < 0 {
+			return fmt.Errorf("autopilot.max_budget_anomalies must not be negative")
 		}
 	}
 
@@ -2857,6 +2991,44 @@ func (c Config) Validate() error {
 		}
 		if rp.Privacy != "" && rp.Privacy != "any" && rp.Privacy != "no_training" {
 			return fmt.Errorf("route profile %q privacy must be \"\", \"any\", or \"no_training\" (got %q)", rp.ID, rp.Privacy)
+		}
+		// Phase 19 task intelligence: fail-closed validation of modes, pools, override.
+		switch rp.TaskIntelMode {
+		case "", "off", "suggest", "apply":
+		default:
+			return fmt.Errorf("route profile %q task_intel_mode must be \"\", \"off\", \"suggest\" or \"apply\" (got %q)", rp.ID, rp.TaskIntelMode)
+		}
+		if rp.TaskIntelMinConfidence < 0 || rp.TaskIntelMinConfidence > 1 {
+			return fmt.Errorf("route profile %q task_intel_min_confidence must be in [0,1] (got %v)", rp.ID, rp.TaskIntelMinConfidence)
+		}
+		for taskType, poolID := range rp.TaskPools {
+			if !taskprofile.TaskType(taskType).Valid() {
+				return fmt.Errorf("route profile %q task_pools has unknown task type %q", rp.ID, taskType)
+			}
+			if _, ok := poolIDs[poolID]; !ok {
+				return fmt.Errorf("route profile %q task_pools[%q] references unknown candidate pool %q", rp.ID, taskType, poolID)
+			}
+		}
+		for taskType, suiteID := range rp.TaskEvalGates {
+			if !taskprofile.TaskType(taskType).Valid() {
+				return fmt.Errorf("route profile %q task_eval_gates has unknown task type %q", rp.ID, taskType)
+			}
+			if strings.TrimSpace(suiteID) == "" || len(suiteID) > 128 {
+				return fmt.Errorf("route profile %q task_eval_gates[%q] must name an evaluation suite (1-128 chars)", rp.ID, taskType)
+			}
+			if _, ok := rp.TaskPools[taskType]; !ok {
+				return fmt.Errorf("route profile %q task_eval_gates[%q] has no task_pools entry to gate", rp.ID, taskType)
+			}
+		}
+		if rp.TaskOverride != "" && !taskprofile.TaskType(rp.TaskOverride).Valid() {
+			return fmt.Errorf("route profile %q task_override has unknown task type %q", rp.ID, rp.TaskOverride)
+		}
+		mode := rp.TaskIntelMode
+		if mode == "" {
+			mode = "off"
+		}
+		if mode == "off" && (len(rp.TaskPools) > 0 || len(rp.TaskEvalGates) > 0 || rp.TaskOverride != "") {
+			return fmt.Errorf("route profile %q configures task_pools/task_eval_gates/task_override with task_intel_mode off (set \"suggest\" or \"apply\")", rp.ID)
 		}
 	}
 

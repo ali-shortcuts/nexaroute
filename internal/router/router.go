@@ -14,6 +14,7 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/config"
 	"github.com/ali-shortcuts/nexaroute/internal/health"
 	"github.com/ali-shortcuts/nexaroute/internal/pricing"
+	"github.com/ali-shortcuts/nexaroute/internal/providers"
 )
 
 type Deployment struct {
@@ -46,11 +47,18 @@ type ProviderLoad struct {
 type Requirement struct {
 	Model                               string
 	Tools, Vision, Streaming, Reasoning bool
-	ProviderType                        string
-	SessionKey                          string
-	SelectionKey                        string
-	ProviderLoad                        map[string]ProviderLoad
-	LoadForProvider                     func(string) ProviderLoad
+	// StructuredOutput and ParallelTools carry the request's
+	// dialect-sensitive demands (#436): a deployment whose
+	// provider dialect the conformance manifest marks
+	// UNSUPPORTED for a required dimension is ineligible, even
+	// when the model itself declares the capability — the flag
+	// would be dropped on encode.
+	StructuredOutput, ParallelTools bool
+	ProviderType                    string
+	SessionKey                      string
+	SelectionKey                    string
+	ProviderLoad                    map[string]ProviderLoad
+	LoadForProvider                 func(string) ProviderLoad
 	// MinContextWindow is the minimum usable context window a deployment
 	// must advertise to serve this request (estimated prompt tokens plus
 	// requested output). Zero disables the check. Deployments with an
@@ -80,6 +88,12 @@ func (r Requirement) Scopes() []string {
 	if r.Reasoning {
 		out = append(out, "reasoning")
 	}
+	if r.StructuredOutput {
+		out = append(out, "structured_output")
+	}
+	if r.ParallelTools {
+		out = append(out, "parallel_tools")
+	}
 	return out
 }
 
@@ -95,6 +109,13 @@ type Scored struct {
 type sessionPin struct {
 	Deployment string
 	Expires    time.Time
+	// Cache economics (#421 item 1): how many turns this pin
+	// has served and the last turn's observed token counts, so
+	// the decision trace can price the warm prefix instead of
+	// merely naming the pin.
+	Turns               int
+	LastInputTokens     int
+	LastCacheReadTokens int
 }
 
 const maxSessionPins = 10000
@@ -324,6 +345,23 @@ func (r *Router) evaluateDeployment(d Deployment, req Requirement, cfg config.Co
 	if req.Reasoning && !d.Capabilities.Reasoning {
 		return Scored{}, ExcludeMissingReasoning
 	}
+	// Conformance-manifest filter (#436): the manifest is the
+	// evidence contract for dialect-level claims. A dimension
+	// it marks UNSUPPORTED for this deployment's provider
+	// dialect cannot be honored by translation — the request
+	// must not be silently degraded, so the deployment is
+	// ineligible for requests that require the dimension.
+	if entry, ok := providers.ManifestEntry(d.ProviderType); ok {
+		if req.StructuredOutput && entry.Dimensions[providers.DimStructuredOutput].State == providers.StateUnsupported {
+			return Scored{}, ExcludeConformanceStructuredOutput
+		}
+		if req.ParallelTools && entry.Dimensions[providers.DimParallelTools].State == providers.StateUnsupported {
+			return Scored{}, ExcludeConformanceParallelTools
+		}
+		if req.Reasoning && entry.Dimensions[providers.DimReasoning].State == providers.StateUnsupported {
+			return Scored{}, ExcludeConformanceReasoning
+		}
+	}
 	healthScopes := []string(nil)
 	if cfg.Routing.Strategy == "ready_mesh" || cfg.Routing.Strategy == "cost_aware" {
 		healthScopes = scopes
@@ -423,8 +461,63 @@ func (r *Router) ObserveSession(req Requirement, id string) {
 			break
 		}
 	}
-	r.sessions[key] = sessionPin{Deployment: id, Expires: time.Now().Add(ttl)}
+	pin := r.sessions[key]
+	if pin.Deployment != id {
+		// The pin moved: the new deployment starts a fresh
+		// cache-economics record.
+		pin = sessionPin{Deployment: id}
+	}
+	pin.Expires = time.Now().Add(ttl)
+	pin.Turns++
+	r.sessions[key] = pin
 	r.sessionMu.Unlock()
+}
+
+// ObserveSessionCache records a completed turn's observed token
+// counts on the session pin (#421 item 1), so Explain can
+// quantify the cache benefit of keeping the pin. Only positive
+// observations update the record; a turn that reports no cache
+// reads does not erase the last measured warm prefix.
+func (r *Router) ObserveSessionCache(req Requirement, id string, inputTokens, cacheReadTokens int) {
+	r.mu.RLock()
+	cfg := r.cfg
+	r.mu.RUnlock()
+	if !cfg.Routing.SessionAffinity || strings.TrimSpace(req.SessionKey) == "" || id == "" {
+		return
+	}
+	key := r.affinityBucket(req)
+	r.sessionMu.Lock()
+	defer r.sessionMu.Unlock()
+	pin, ok := r.sessions[key]
+	if !ok || pin.Deployment != id {
+		return
+	}
+	if inputTokens > 0 {
+		pin.LastInputTokens = inputTokens
+	}
+	if cacheReadTokens > 0 {
+		pin.LastCacheReadTokens = cacheReadTokens
+	}
+	r.sessions[key] = pin
+}
+
+// sessionPinRecord returns the live pin record for a
+// requirement, or false when no unexpired pin exists.
+func (r *Router) sessionPinRecord(req Requirement, cfg config.Config) (sessionPin, bool) {
+	if !cfg.Routing.SessionAffinity {
+		return sessionPin{}, false
+	}
+	key := r.affinityBucket(req)
+	if key == "" {
+		return sessionPin{}, false
+	}
+	r.sessionMu.RLock()
+	defer r.sessionMu.RUnlock()
+	pin, ok := r.sessions[key]
+	if !ok || !time.Now().Before(pin.Expires) {
+		return sessionPin{}, false
+	}
+	return pin, true
 }
 func (r *Router) SessionCount() int {
 	r.sessionMu.Lock()
@@ -560,6 +653,12 @@ func (r *Router) orderReadyMesh(out []Scored, req Requirement, cfg config.Config
 				copy(out[1:i+1], out[0:i])
 				out[0] = chosen
 				diversifyProviderFailover(out, 1, cfg.Routing.MaxAttempts)
+				// Session affinity stays authoritative when enabled
+				// (#421): a promoted pin must NOT be silently
+				// overridden by the P2C load-spreading choice below,
+				// or the pin's cache-warmth purpose is defeated in
+				// the default strategy (orderCostAware already
+				// returns here). Unpinned traffic keeps P2C.
 				return
 			}
 		}

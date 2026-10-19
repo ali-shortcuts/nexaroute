@@ -256,14 +256,20 @@ type EvaluationRef struct {
 
 // Scorecard is a versioned claim about one deployment.
 type Scorecard struct {
-	DeploymentID string              `json:"deployment_id"`
-	ProviderID   string              `json:"provider_id,omitempty"`
-	Model        string              `json:"model,omitempty"`
-	Version      int                 `json:"version"`
-	GeneratedAt  time.Time           `json:"generated_at"`
-	Values       map[Dimension]Value `json:"values,omitempty"`
-	Evaluation   *EvaluationRef      `json:"evaluation,omitempty"`
-	Notes        []string            `json:"notes,omitempty"`
+	DeploymentID string `json:"deployment_id"`
+	// TaskType optionally scopes the claim to one task class
+	// (Phase 19 feedback loop, #510 item 5): a task-scoped card is
+	// keyed by (task_type, deployment_id) in the registry and never
+	// replaces the deployment-wide card. Empty means the claim is
+	// about the deployment as a whole.
+	TaskType    string              `json:"task_type,omitempty"`
+	ProviderID  string              `json:"provider_id,omitempty"`
+	Model       string              `json:"model,omitempty"`
+	Version     int                 `json:"version"`
+	GeneratedAt time.Time           `json:"generated_at"`
+	Values      map[Dimension]Value `json:"values,omitempty"`
+	Evaluation  *EvaluationRef      `json:"evaluation,omitempty"`
+	Notes       []string            `json:"notes,omitempty"`
 }
 
 var (
@@ -383,6 +389,9 @@ func ValidateValue(d Dimension, v Value) error {
 func (s Scorecard) Validate() error {
 	if !validIdentifier(s.DeploymentID, MaxStringBytes) {
 		return fmt.Errorf("scorecard deployment_id %q is invalid", s.DeploymentID)
+	}
+	if s.TaskType != "" && !validIdentifier(s.TaskType, 32) {
+		return fmt.Errorf("scorecard task_type %q is invalid", s.TaskType)
 	}
 	if s.ProviderID != "" && !validIdentifier(s.ProviderID, MaxStringBytes) {
 		return fmt.Errorf("scorecard provider_id %q is invalid", s.ProviderID)
@@ -770,8 +779,20 @@ func NewRegistry(maxDeployments, maxVersions int) *Registry {
 	}
 }
 
-// Upsert validates a scorecard, assigns it the next version for its deployment,
-// stores it as the current version and appends it to the bounded history.
+// registryKey is the storage key for a scorecard: the deployment
+// alone for deployment-wide cards, or (task, deployment) for
+// task-scoped cards (#510 item 5). The separator cannot appear in
+// a valid identifier, so the two namespaces can never collide.
+func registryKey(taskType, deploymentID string) string {
+	if taskType == "" {
+		return deploymentID
+	}
+	return taskType + "\x00" + deploymentID
+}
+
+// Upsert validates a scorecard, assigns it the next version for its
+// (task, deployment) key, stores it as the current version and
+// appends it to the bounded history.
 func (r *Registry) Upsert(sc Scorecard) (Scorecard, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -779,14 +800,15 @@ func (r *Registry) Upsert(sc Scorecard) (Scorecard, error) {
 	if sc.GeneratedAt.IsZero() {
 		sc.GeneratedAt = time.Now().UTC()
 	}
+	key := registryKey(sc.TaskType, sc.DeploymentID)
 	if len(r.current) >= r.maxDeployments {
-		if _, exists := r.current[sc.DeploymentID]; !exists {
+		if _, exists := r.current[key]; !exists {
 			r.rejected++
 			return Scorecard{}, fmt.Errorf("scorecard registry is full (%d deployments)", r.maxDeployments)
 		}
 	}
 	next := 1
-	if prev, ok := r.current[sc.DeploymentID]; ok {
+	if prev, ok := r.current[key]; ok {
 		next = prev.Version + 1
 	}
 	sc.Version = next
@@ -794,21 +816,27 @@ func (r *Registry) Upsert(sc Scorecard) (Scorecard, error) {
 		r.rejected++
 		return Scorecard{}, err
 	}
-	r.current[sc.DeploymentID] = sc
-	hist := append(r.history[sc.DeploymentID], sc)
+	r.current[key] = sc
+	hist := append(r.history[key], sc)
 	if len(hist) > r.maxVersions {
 		hist = append([]Scorecard(nil), hist[len(hist)-r.maxVersions:]...)
 	}
-	r.history[sc.DeploymentID] = hist
+	r.history[key] = hist
 	r.upserts++
 	return sc.Clone(), nil
 }
 
-// Get returns the current scorecard for a deployment.
+// Get returns the current deployment-wide scorecard for a deployment.
 func (r *Registry) Get(deploymentID string) (Scorecard, bool) {
+	return r.GetTask("", deploymentID)
+}
+
+// GetTask returns the current scorecard for a (task, deployment)
+// pair; an empty taskType reads the deployment-wide card.
+func (r *Registry) GetTask(taskType, deploymentID string) (Scorecard, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	sc, ok := r.current[deploymentID]
+	sc, ok := r.current[registryKey(taskType, deploymentID)]
 	if !ok {
 		return Scorecard{}, false
 	}
@@ -836,7 +864,12 @@ func (r *Registry) Snapshot() []Scorecard {
 	for _, sc := range r.current {
 		out = append(out, sc.Clone())
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].DeploymentID < out[j].DeploymentID })
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].DeploymentID != out[j].DeploymentID {
+			return out[i].DeploymentID < out[j].DeploymentID
+		}
+		return out[i].TaskType < out[j].TaskType
+	})
 	return out
 }
 
@@ -844,6 +877,19 @@ func (r *Registry) Snapshot() []Scorecard {
 // reported as ok=false; nothing is substituted.
 func (r *Registry) Quality(deploymentID string, d Dimension) (Value, bool) {
 	sc, ok := r.Get(deploymentID)
+	if !ok {
+		return Value{}, false
+	}
+	return sc.Quality(d)
+}
+
+// QualityForTask returns the current value for a dimension from
+// the task-scoped card for (taskType, deploymentID). Missing
+// evidence is reported as ok=false; nothing is substituted and
+// there is deliberately no fallback to the deployment-wide card —
+// callers decide their own fallback order.
+func (r *Registry) QualityForTask(taskType, deploymentID string, d Dimension) (Value, bool) {
+	sc, ok := r.GetTask(taskType, deploymentID)
 	if !ok {
 		return Value{}, false
 	}
@@ -895,10 +941,10 @@ type Stats struct {
 func (r *Registry) Retain(valid map[string]struct{}) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	for id := range r.current {
-		if _, ok := valid[id]; !ok {
-			delete(r.current, id)
-			delete(r.history, id)
+	for key, sc := range r.current {
+		if _, ok := valid[sc.DeploymentID]; !ok {
+			delete(r.current, key)
+			delete(r.history, key)
 		}
 	}
 }
@@ -919,10 +965,11 @@ func (r *Registry) Load(list []Scorecard) error {
 	prepared := make([]Scorecard, 0, len(list))
 	seen := map[string]struct{}{}
 	for _, sc := range list {
-		if _, dup := seen[sc.DeploymentID]; dup {
-			return fmt.Errorf("duplicate scorecard for deployment %q", sc.DeploymentID)
+		key := registryKey(sc.TaskType, sc.DeploymentID)
+		if _, dup := seen[key]; dup {
+			return fmt.Errorf("duplicate scorecard for deployment %q task %q", sc.DeploymentID, sc.TaskType)
 		}
-		seen[sc.DeploymentID] = struct{}{}
+		seen[key] = struct{}{}
 		c := sc.Clone()
 		if c.GeneratedAt.IsZero() {
 			return fmt.Errorf("scorecard %q has no generated_at", c.DeploymentID)
@@ -943,8 +990,9 @@ func (r *Registry) Load(list []Scorecard) error {
 	r.current = make(map[string]Scorecard, len(prepared))
 	r.history = make(map[string][]Scorecard, len(prepared))
 	for _, sc := range prepared {
-		r.current[sc.DeploymentID] = sc
-		r.history[sc.DeploymentID] = []Scorecard{sc}
+		key := registryKey(sc.TaskType, sc.DeploymentID)
+		r.current[key] = sc
+		r.history[key] = []Scorecard{sc}
 	}
 	return nil
 }

@@ -55,6 +55,8 @@ type VideoJob struct {
 	SchemaVersion  string       `json:"schema_version"`
 	JobID          string       `json:"job_id"`
 	IdempotencyKey string       `json:"idempotency_key,omitempty"`
+	LeaseOwner     string       `json:"lease_owner,omitempty"`
+	LeaseUntil     time.Time    `json:"lease_until,omitempty"`
 	ProjectID      string       `json:"project_id"`
 	EpisodeID      string       `json:"episode_id,omitempty"`
 	ParentJobID    string       `json:"parent_job_id,omitempty"`
@@ -71,18 +73,24 @@ type VideoJob struct {
 	// OperatorForceFailed marks a privileged force-fail transition. Unlike an
 	// ordinary failed job (which may be retried), this state is immutable so a
 	// late provider result cannot overwrite the operator's decision.
-	OperatorForceFailed   bool            `json:"operator_force_failed,omitempty"`
-	RetryCount            int             `json:"retry_count"`
-	CompositionRetryCount int             `json:"composition_retry_count,omitempty"`
-	CurrentShot           int             `json:"current_shot,omitempty"`
-	TotalShots            int             `json:"total_shots,omitempty"`
-	ShotExecutions        []ShotExecution `json:"shot_executions,omitempty"`
-	OutputAssets          []Asset         `json:"output_assets,omitempty"`
-	SourceAssets          []Asset         `json:"source_assets,omitempty"`
-	NarrationAsset        *Asset          `json:"narration_asset,omitempty"`
-	SubtitleAsset         *Asset          `json:"subtitle_asset,omitempty"`
-	EstimatedCostUSD      float64         `json:"estimated_cost_usd,omitempty"`
-	ActualCostUSD         float64         `json:"actual_cost_usd,omitempty"`
+	OperatorForceFailed   bool `json:"operator_force_failed,omitempty"`
+	RetryCount            int  `json:"retry_count"`
+	CompositionRetryCount int  `json:"composition_retry_count,omitempty"`
+	CurrentShot           int  `json:"current_shot,omitempty"`
+	TotalShots            int  `json:"total_shots,omitempty"`
+	// JobType is the brief classification stamped at creation
+	// (#510 item 6): text_to_video | image_to_video | edit_extend |
+	// compose, with the reason codes that produced it. Additive.
+	ProviderSelection string          `json:"provider_selection,omitempty"`
+	JobType           JobType         `json:"job_type,omitempty"`
+	JobTypeReasons    []string        `json:"job_type_reasons,omitempty"`
+	ShotExecutions    []ShotExecution `json:"shot_executions,omitempty"`
+	OutputAssets      []Asset         `json:"output_assets,omitempty"`
+	SourceAssets      []Asset         `json:"source_assets,omitempty"`
+	NarrationAsset    *Asset          `json:"narration_asset,omitempty"`
+	SubtitleAsset     *Asset          `json:"subtitle_asset,omitempty"`
+	EstimatedCostUSD  float64         `json:"estimated_cost_usd,omitempty"`
+	ActualCostUSD     float64         `json:"actual_cost_usd,omitempty"`
 	// CostReconciled reports whether the ledger entry for this job was
 	// reconciled from the admission estimate to a provider-reported actual.
 	// It has no omitempty so unreconciled jobs are explicitly marked false
@@ -101,10 +109,12 @@ type VideoJob struct {
 
 func NewJob(id string, req VideoRequest) VideoJob {
 	now := time.Now().UTC()
+	cls := ClassifyBrief(req)
 	j := VideoJob{
 		SchemaVersion: SchemaVersion, JobID: id, IdempotencyKey: req.IdempotencyKey,
 		ProjectID: req.ProjectID, EpisodeID: req.EpisodeID, Request: req,
 		State: StateQueued, CreatedAt: now, TotalShots: len(req.ShotPlan),
+		JobType: cls.Type, JobTypeReasons: cls.Reasons,
 	}
 	if len(req.ShotPlan) > 0 {
 		j.ShotExecutions = make([]ShotExecution, len(req.ShotPlan))

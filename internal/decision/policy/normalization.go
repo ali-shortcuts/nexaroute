@@ -19,6 +19,7 @@ func WeightedSum(components map[string]float64, w Weights) float64 {
 	sum += components[CompCapacity] * w.Capacity
 	sum += components[CompCost] * w.Cost
 	sum += components[CompContext] * w.Context
+	sum += components[CompQuality] * w.Quality
 
 	if math.IsNaN(sum) || math.IsInf(sum, 0) {
 		return 0.5

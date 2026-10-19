@@ -1,6 +1,11 @@
 package router
 
-import "github.com/ali-shortcuts/nexaroute/internal/config"
+import (
+	"time"
+
+	"github.com/ali-shortcuts/nexaroute/internal/config"
+	"github.com/ali-shortcuts/nexaroute/internal/pricing"
+)
 
 // Stable exclusion reason codes used by explainability surfaces
 // (Router.Explain and the admin route-preview endpoint). These are
@@ -20,7 +25,13 @@ const (
 	ExcludeRetired                 = "retired"
 	ExcludeNotReady                = "health_not_ready"
 	ExcludeCapabilityScopeNotReady = "capability_scope_not_ready"
-	ExcludeCooldown                = "health_cooldown"
+	// Conformance-manifest exclusions (#436): the deployment's
+	// provider dialect is marked UNSUPPORTED for a dimension
+	// the request requires, per the conformance manifest.
+	ExcludeConformanceStructuredOutput = "conformance_structured_output_unsupported"
+	ExcludeConformanceParallelTools    = "conformance_parallel_tools_unsupported"
+	ExcludeConformanceReasoning        = "conformance_reasoning_unsupported"
+	ExcludeCooldown                    = "health_cooldown"
 	// ExcludeFallbackSuperseded marks phase-1 (model-scoped) decisions that
 	// were re-evaluated ignoring the unknown model under
 	// Routing.FallbackOnUnknownModel; the trailing phase-2 decision is the
@@ -61,19 +72,27 @@ type CandidateDecision struct {
 // data plane would attempt. The same evaluateDeployment/applyStrategy paths
 // back both, so the trace cannot drift from real routing behavior.
 type Explanation struct {
-	Strategy                 string              `json:"strategy"`
-	Model                    string              `json:"model"`
-	KnownModel               bool                `json:"known_model"`
-	UsedUnknownModelFallback bool                `json:"used_unknown_model_fallback"`
-	SessionAffinityEnabled   bool                `json:"session_affinity_enabled"`
-	PinnedDeployment         string              `json:"pinned_deployment,omitempty"`
-	PinnedApplied            bool                `json:"pinned_applied"`
-	Candidates               []Scored            `json:"candidates,omitempty"`
-	CandidateCount           int                 `json:"candidate_count"`
-	IncludedCount            int                 `json:"included_count"`
-	Decisions                []CandidateDecision `json:"decisions"`
-	ConsideredCount          int                 `json:"considered_count"`
-	DecisionsTruncated       bool                `json:"decisions_truncated"`
+	Strategy                 string `json:"strategy"`
+	Model                    string `json:"model"`
+	KnownModel               bool   `json:"known_model"`
+	UsedUnknownModelFallback bool   `json:"used_unknown_model_fallback"`
+	SessionAffinityEnabled   bool   `json:"session_affinity_enabled"`
+	PinnedDeployment         string `json:"pinned_deployment,omitempty"`
+	PinnedApplied            bool   `json:"pinned_applied"`
+	// Cache-economics quantification (#421 item 1): what the
+	// pin is worth, priced from the session's own last turn.
+	// Zero when no cache evidence has been observed for the
+	// session or the pinned deployment is unpriced — the
+	// trace never invents a figure.
+	PinnedSessionTurns        int                 `json:"pinned_session_turns,omitempty"`
+	PinnedLastCacheReadTokens int                 `json:"pinned_last_cache_read_tokens,omitempty"`
+	PinnedCacheBenefitUSD     float64             `json:"pinned_cache_benefit_usd,omitempty"`
+	Candidates                []Scored            `json:"candidates,omitempty"`
+	CandidateCount            int                 `json:"candidate_count"`
+	IncludedCount             int                 `json:"included_count"`
+	Decisions                 []CandidateDecision `json:"decisions"`
+	ConsideredCount           int                 `json:"considered_count"`
+	DecisionsTruncated        bool                `json:"decisions_truncated"`
 }
 
 func decisionFromScored(s Scored) CandidateDecision {
@@ -124,6 +143,16 @@ func (r *Router) Explain(req Requirement) Explanation {
 	}
 	if exp.SessionAffinityEnabled {
 		exp.PinnedDeployment = r.pinned(req, cfg)
+		if pin, ok := r.sessionPinRecord(req, cfg); ok {
+			exp.PinnedSessionTurns = pin.Turns
+			exp.PinnedLastCacheReadTokens = pin.LastCacheReadTokens
+			if pin.LastCacheReadTokens > 0 {
+				entry, source := pricing.FromConfig(cfg).ResolveFor(cfg, pin.Deployment, time.Now())
+				if source != "unpriced" && entry.InputPerMTok > entry.CacheRead() {
+					exp.PinnedCacheBenefitUSD = float64(pin.LastCacheReadTokens) * (entry.InputPerMTok - entry.CacheRead()) / 1e6
+				}
+			}
+		}
 	}
 
 	verdicts := map[string]CandidateDecision{}

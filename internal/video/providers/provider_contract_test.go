@@ -67,6 +67,25 @@ func contractProviders(t *testing.T) []contractProvider {
 			valid: func() video.VideoRequest { return validComfyRequest() },
 		},
 		{
+			name: "aggregator",
+			id:   "aggregator",
+			build: func(t *testing.T) video.VideoProvider {
+				t.Helper()
+				t.Setenv("AGGREGATOR_CONTRACT_KEY", "contract-key")
+				p, err := NewAggregator(video.Config{
+					AggregatorBaseURL: "http://127.0.0.1:9", AggregatorModel: "test/model-v1",
+					AggregatorAPIKeyEnv: "AGGREGATOR_CONTRACT_KEY", AggregatorCostPerSecondUSD: 0.02,
+				}, 1024)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return p
+			},
+			valid: func() video.VideoRequest {
+				return video.VideoRequest{ProjectID: "p", Prompt: "x", DurationSeconds: 5, Mode: video.ModeTextToVideo}
+			},
+		},
+		{
 			name: "code-render",
 			id:   CodeRenderID,
 			build: func(t *testing.T) video.VideoProvider {

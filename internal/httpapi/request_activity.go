@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/ali-shortcuts/nexaroute/internal/events"
@@ -81,6 +82,7 @@ func (s *Server) emitRouteAttempt(requestID, protocol, requestedModel string, at
 	if requestID == "" {
 		return
 	}
+	s.recordAttemptSeq(requestID, c.Deployment.ID)
 	s.bus.Add(events.Event{
 		RequestID:      requestID,
 		CorrelationID:  requestID,
@@ -93,6 +95,56 @@ func (s *Server) emitRouteAttempt(requestID, protocol, requestedModel string, at
 		Adapter:        protocol,
 		RequestedModel: requestedModel,
 	})
+}
+
+// recordAttemptSeq appends one attempt to the bounded
+// per-request ledger behind the X-NexaRoute-Attempts response
+// header (#417 acceptance 2): the badge on a chat reply shows
+// the failover trail in the same order the #410 lifecycle
+// records it, because both are fed by emitRouteAttempt. The
+// ledger is in-flight only — handlers clear their entry when
+// the request ends — and hard-capped so a flood of unique
+// request IDs cannot grow it without bound.
+const maxAttemptSeqRequests = 4096
+
+func (s *Server) recordAttemptSeq(requestID, deploymentID string) {
+	if requestID == "" || deploymentID == "" {
+		return
+	}
+	s.attemptSeqMu.Lock()
+	defer s.attemptSeqMu.Unlock()
+	if s.attemptSeq == nil {
+		s.attemptSeq = map[string][]string{}
+	}
+	if _, ok := s.attemptSeq[requestID]; !ok {
+		if len(s.attemptSeqOrder) >= maxAttemptSeqRequests {
+			delete(s.attemptSeq, s.attemptSeqOrder[0])
+			s.attemptSeqOrder = s.attemptSeqOrder[1:]
+		}
+		s.attemptSeqOrder = append(s.attemptSeqOrder, requestID)
+	}
+	if seq := s.attemptSeq[requestID]; len(seq) == 0 || seq[len(seq)-1] != deploymentID {
+		s.attemptSeq[requestID] = append(seq, deploymentID)
+	}
+}
+
+// attemptsHeaderValue renders the recorded attempt sequence
+// for a request: deployment IDs in attempt order, joined by
+// ">". Empty when no attempt was recorded.
+func (s *Server) attemptsHeaderValue(requestID string) string {
+	s.attemptSeqMu.Lock()
+	defer s.attemptSeqMu.Unlock()
+	return strings.Join(s.attemptSeq[requestID], ">")
+}
+
+// clearAttemptSeq drops a finished request's ledger entry.
+func (s *Server) clearAttemptSeq(requestID string) {
+	if requestID == "" {
+		return
+	}
+	s.attemptSeqMu.Lock()
+	defer s.attemptSeqMu.Unlock()
+	delete(s.attemptSeq, requestID)
 }
 
 // emitStreamCommitted records that client-visible stream bytes were committed

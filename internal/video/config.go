@@ -1,13 +1,18 @@
 package video
 
 type Config struct {
-	Enabled                   bool    `json:"enabled,omitempty"`
-	StorePath                 string  `json:"store_path,omitempty"`
-	StorageRoot               string  `json:"storage_root,omitempty"`
-	QueueSize                 int     `json:"queue_size,omitempty"`
-	Workers                   int     `json:"workers,omitempty"`
-	AuthTokenEnv              string  `json:"auth_token_env,omitempty"`
-	MaxAssetBytes             int64   `json:"max_asset_bytes,omitempty"`
+	Enabled       bool   `json:"enabled,omitempty"`
+	StorePath     string `json:"store_path,omitempty"`
+	StorageRoot   string `json:"storage_root,omitempty"`
+	QueueSize     int    `json:"queue_size,omitempty"`
+	Workers       int    `json:"workers,omitempty"`
+	AuthTokenEnv  string `json:"auth_token_env,omitempty"`
+	MaxAssetBytes int64  `json:"max_asset_bytes,omitempty"`
+	// JobRetentionDays bounds how long terminal video jobs stay
+	// in the job store (#420 item 5): terminal jobs whose
+	// completion is older than this are pruned by the runtime.
+	// Zero (the default) keeps terminal jobs forever.
+	JobRetentionDays          int     `json:"job_retention_days,omitempty"`
 	DevelopmentFakeProvider   bool    `json:"development_fake_provider,omitempty"`
 	ComfyUIEnabled            bool    `json:"comfyui_enabled,omitempty"`
 	ComfyUIBaseURL            string  `json:"comfyui_base_url,omitempty"`
@@ -44,4 +49,17 @@ type Config struct {
 	CodeRenderPlannerJSONMode    bool     `json:"code_render_planner_json_mode,omitempty"`
 	CodeRenderMaxDurationSeconds float64  `json:"code_render_max_duration_seconds,omitempty"`
 	CodeRenderWorkRoot           string   `json:"code_render_work_root,omitempty"`
+	// Async aggregator adapter (Phase 20, issue #420): a
+	// fal.ai-queue-style commercial video API. The API key itself
+	// is never configured here — only the NAME of the environment
+	// variable that holds it.
+	AggregatorEnabled            bool    `json:"aggregator_enabled,omitempty"`
+	AggregatorBaseURL            string  `json:"aggregator_base_url,omitempty"`
+	AggregatorModel              string  `json:"aggregator_model,omitempty"`
+	AggregatorAPIKeyEnv          string  `json:"aggregator_api_key_env,omitempty"`
+	AggregatorAuthScheme         string  `json:"aggregator_auth_scheme,omitempty"`
+	AggregatorMaxDurationSeconds float64 `json:"aggregator_max_duration_seconds,omitempty"`
+	AggregatorCostPerSecondUSD   float64 `json:"aggregator_cost_per_second_usd,omitempty"`
+	AggregatorImageField         string  `json:"aggregator_image_field,omitempty"`
+	AggregatorEndImageField      string  `json:"aggregator_end_image_field,omitempty"`
 }

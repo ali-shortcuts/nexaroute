@@ -80,6 +80,30 @@ Add the following fields to the existing `video` object in the NexaRoute config.
 - The adapter's estimated provider API cost is USD 0 because it runs locally; that estimate excludes electricity, hardware depreciation, model downloads, and other infrastructure costs. It is not a guarantee of zero total operating cost.
 - Plain HTTP is accepted only for loopback addresses. Use HTTPS for a remote ComfyUI endpoint.
 
+## Commercial generation via an async aggregator (fal.ai queue class)
+
+The `aggregator` adapter (Phase 20, issue #420) is the first real external generation path: a billed third-party API in the fal.ai queue class, reached over HTTPS with submit/poll/cancel. It is poll-only — no webhooks are claimed or accepted — and status/result URLs are derived from the provider job ID, so a gateway restart resumes polling the same provider job instead of resubmitting (and double-billing) it.
+
+```json
+"video": {
+  "enabled": true,
+  "aggregator_enabled": true,
+  "aggregator_base_url": "https://queue.fal.run",
+  "aggregator_model": "fal-ai/kling-video/v2.5-turbo/pro/text-to-video",
+  "aggregator_api_key_env": "FAL_KEY",
+  "aggregator_auth_scheme": "Key",
+  "aggregator_max_duration_seconds": 300,
+  "aggregator_cost_per_second_usd": 0.05,
+  "aggregator_image_field": "image_url"
+}
+```
+
+- The API key is read from the environment variable named by `aggregator_api_key_env`; the key itself never appears in configuration. `aggregator_auth_scheme` is `Key` (fal.ai style, the default) or `Bearer`.
+- `aggregator_cost_per_second_usd` is the operator's price book entry: with it set, estimates are priced from it; without it, estimates are honestly reported as unpriced. Per-job cost ceilings are enforced by the orchestrator's ledger exactly as for other providers.
+- `aggregator_image_field` is optional: set it to the aggregator model's image input field name to enable image-to-video (first-frame/reference image with a fetchable http(s) URL). Without it, image inputs are rejected rather than silently ignored. `aggregator_end_image_field` works the same way for a job's last-frame asset (first/last-frame interpolation): set it to the model's end-image field name; without it, last-frame inputs are rejected. Reference sets, continuity, audio/dialogue/narration, and multi-shot submissions stay rejected.
+- Outputs are downloaded through an egress-guarded client pinned to the output host, size-capped by `video.max_asset_bytes`, and refused when the declared or served content type is not a video type — a completed provider job whose payload is not a video never becomes a downloadable asset.
+- **Live verification status: UNVERIFIED.** The adapter passes the provider conformance contract and a full local lifecycle against a recording fake aggregator (submit → poll → complete, restart-resume with a submit-count assertion, failure propagation, malformed-output refusal, cancel). No live keyed run has been performed; run one with a real aggregator key and record the evidence on issue #420 before treating the path as live-proven.
+
 ## Local ComfyUI setup
 
 The production adapter in this repository connects to a ComfyUI API server on your machine. It does not download models or invent a workflow for you: export a workflow in ComfyUI's API format, make sure it produces a video output, and configure the node IDs used for prompt, width, height, and frame count. The configured workflow file must be readable by the NexaRoute gateway process.
@@ -269,6 +293,10 @@ When `video.piper_enabled` is true, the Gateway can synthesize narration for mul
 Every video provider declares an explicit, machine-readable capability
 surface (`video.Capabilities`, served per provider by
 `GET /v1/video/providers` together with `kind` and `production_ready`).
+
+### Job history and workflow (Phase 14)
+
+`GET /v1/video/jobs` returns the gateway's job history (newest first) with `state` and `q` filters and a clamped `limit` (default 50, max 200). The response names the job store's durability class — `file` (survives restarts on this host only; not distributed), `process` (in-memory; lost on restart) — and every job carries an additive `workflow` field: the nine-step production pipeline (validate → select → admit → submit → generate → validate output → compose → narrate → deliver) projected from recorded state, with inapplicable steps marked `skipped`. The Video Studio renders this history (searchable/filterable) instead of relying on browser-local tracking, and shows indeterminate progress — never an invented percentage — when a provider has reported none.
 Capabilities are provider-specific and transparent in both the API and
 Video Studio (the provider picker labels each entry with its kind and
 marks non-production backends).
@@ -320,6 +348,10 @@ and composes locally; narration and captions are a Gateway-side local
 pipeline (Piper) unless the provider handles them itself (code-render).
 
 ## Important limits
+
+**Job retention:** terminal jobs (completed, cancelled, force-failed) stay in the job store forever by default. Set `job_retention_days` (video config) to prune terminal jobs whose completion is older than the window: the runtime prunes once at startup and then hourly. Non-terminal jobs — including ordinary failed jobs, which remain retryable — are never pruned, however old. Pruning removes the job and its idempotency mapping; output assets on disk are not deleted.
+
+**Job leases (multi-instance safety):** before an orchestrator executes a job it atomically claims a lease — `lease_owner` (the instance's hostname/pid) and `lease_until` on the job record — and renews it while polling. A second orchestrator over the same store skips jobs under a live foreign lease instead of double-submitting them to a provider, and an executor that loses its lease mid-poll stops rather than finalizing another instance's job. Expired leases (a crashed owner) become claimable automatically. The lease is exactly as strong as the store behind it: it is cross-process only when the store's claim is atomic across processes; pointing two processes at one store *file* remains unsupported (each process persists by whole-file overwrite).
 
 When `video.enabled` is true, `cmd/gateway` creates the Video Runtime, mounts `/v1/video/` on the primary HTTP server, starts bounded workers, and cancels and joins the worker pool before shutdown returns. When it is false (the default), no video route or worker is created and the LLM data plane is unchanged. The JSON store is single-process and is not multi-node safe; use PostgreSQL/Redis only after an implementation and concurrency test exist. The opt-in ComfyUI adapter is local text-to-video only and requires a user-supplied API-format workflow; no commercial provider adapter is bundled. ComfyUI does not require provider API credentials. Any future external-provider credentials must come from environment variables; never use account rotation or quota bypass. The `videogen` Gateway commands attach to a running Gateway through the authenticated API and use its configured job store; `videogen compose` is a local FFmpeg command and does not require a Gateway token.
 

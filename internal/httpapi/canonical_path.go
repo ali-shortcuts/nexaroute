@@ -441,6 +441,7 @@ func canonicalErrorJSON(w http.ResponseWriter, clientProtocol string, status int
 
 // openAIResponses serves POST /v1/responses (OpenAI Responses API ingress).
 func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
+	defer s.clearAttemptSeq(r.Header.Get("x-request-id"))
 	if r.Method != http.MethodPost {
 		canonicalErrorJSON(w, "openai_responses", http.StatusMethodNotAllowed, "invalid_request_error", "method not allowed")
 		return
@@ -479,9 +480,11 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 		Model:                  in.Model,
 		Streaming:              reqReqs.Streaming,
 		VisionType:             "input_image",
+		AudioType:              "input_audio",
 		ReasoningKeys:          []string{"reasoning"},
 		ContentFields:          []string{"input", "instructions"},
 		MaxOutputTokens:        in.MaxOutputTokens,
+		UserAgent:              r.Header.Get("User-Agent"),
 		ToolCountHint:          len(in.Tools),
 		ToolChoiceRequiredHint: toolChoiceRequired,
 		HasSystemPromptHint:    &hasSystem,
@@ -494,6 +497,7 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 	req := router.Requirement{
 		Model: in.Model, Tools: ti.Features.HasTools || reqReqs.Tools, Vision: ti.Features.HasVision || reqReqs.Vision,
 		Streaming: reqReqs.Streaming, Reasoning: ti.Features.HasReasoning || reqReqs.Reasoning,
+		StructuredOutput: reqReqs.StructuredOutput, ParallelTools: reqReqs.ParallelTools,
 	}
 	req.EstimatedInputTokens = ti.Features.EstimatedPromptTokens
 	req.MaxOutputTokens = in.MaxOutputTokens
@@ -513,7 +517,9 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	s.emitTaskClassified(r.Header.Get("x-request-id"), ti, resolvedRoute)
+	// Apply task intelligence (route-profile mode off/suggest/apply) after final route resolution
+	taskRes, candidates, resolvedRoute := s.applyTaskIntel(r, req, cfg, candidates, resolvedRoute, ti)
+	s.emitTaskClassified(r.Header.Get("x-request-id"), ti, resolvedRoute, taskRes)
 	s.emitRouteResolved(r, "openai_responses", resolvedRoute, candidates)
 	if len(candidates) == 0 {
 		// Gateway-side rejection before any upstream attempt: release
@@ -524,6 +530,7 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.budgetRelease(r)
+		s.autopilotObserveNoEligible(cfg, resolvedRoute, autopilotRequestKeyFromContext(r.Context(), r.Header.Get("x-request-id")), autopilotCallerStratum(clientIdentityFromRequest(r)))
 		canonicalErrorJSON(w, "openai_responses", http.StatusServiceUnavailable, "server_error", "no compatible healthy deployment")
 		return
 	}
@@ -568,6 +575,7 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 		if attempts > 1 {
 			attemptKind = attemptKindRetry
 		}
+		s.autopilotNoteDispatched(autopilotRequestKeyFromContext(r.Context(), r.Header.Get("x-request-id")))
 		s.emitRouteAttempt(r.Header.Get("x-request-id"), "openai_responses", in.Model, attempts, c, attemptKind)
 		resp, sentPayload, repair, derr := s.doUpstreamWithRepair(
 			routeCtx, r.Header.Get("x-request-id"), bundle.a, deployment,
@@ -585,6 +593,7 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 			cls := compat.ClassifyTransportError(derr)
 			policy := cls.Policy()
 			s.hm.RecordProviderFailure(deployment.ProviderID, deployment.ID, lastErr)
+			s.observeTaskFeedback(string(ti.Profile.Type), deployment.ID, false, time.Since(start))
 			if router.IsReadyStrategy(cfg.Routing.Strategy) {
 				s.hm.Quarantine(deployment.ID, lastErr, time.Since(start))
 				s.probe.Recover(deployment.ID)
@@ -631,7 +640,7 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 				policy.SignalProvider = false
 				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "model_unavailable", Deployment: deployment.ID, Message: "upstream model temporarily unavailable", ErrorType: string(cls.Class), StatusCode: resp.StatusCode})
 			}
-			s.recordProviderFailure(deployment.ProviderID, deployment.ID, safeMessage, policy)
+			s.recordProviderFailure(deployment.ProviderID, deployment.ID, safeMessage, policy, string(ti.Profile.Type))
 			cooldownEntered := false
 			if !cls.CapabilityFailure && cls.Class != compat.ClassModelRetired {
 				if router.IsReadyStrategy(cfg.Routing.Strategy) {
@@ -684,6 +693,9 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 				s.emitStreamCommitted(r.Header.Get("x-request-id"), deployment.ID, deployment.ProviderID, "openai_responses", d)
 			})
 		}
+		if v := s.attemptsHeaderValue(r.Header.Get("x-request-id")); v != "" {
+			w.Header().Set("X-NexaRoute-Attempts", v)
+		}
 		deploy := deployment
 		sent := sentPayload
 		var inputTokens, outputTokens int
@@ -693,12 +705,14 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 				func(u canonical.Usage) {
 					inputTokens, outputTokens = u.InputTokens, u.OutputTokens
 					s.recordUsageCanonical(r, deploy.ID, bundle.canonicalKind, u)
+					s.rt.ObserveSessionCache(req, deploy.ID, u.InputTokens, u.CacheReadTokens)
 				})
 		} else {
 			usageErr = s.handleCanonicalResponse(w, resp, bundle.canonicalKind, "openai_responses", in.Model, r.Header.Get("x-request-id"), false, bundle.toolDefs,
 				func(u canonical.Usage) {
 					inputTokens, outputTokens = u.InputTokens, u.OutputTokens
 					s.recordUsageCanonical(r, deploy.ID, bundle.canonicalKind, u)
+					s.rt.ObserveSessionCache(req, deploy.ID, u.InputTokens, u.CacheReadTokens)
 				})
 		}
 		total := time.Since(start)
@@ -727,7 +741,7 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		prevStatus := s.hm.Get(deploy.ID).Status
-		s.recordRouteSuccess(req, deploy.ID, deploy.ProviderID, time.Since(start))
+		s.recordRouteSuccess(req, deploy.ID, deploy.ProviderID, time.Since(start), string(ti.Profile.Type))
 		s.learnFromSuccess(deploy.ID, deploy.ProviderID, deploy, sent, &canReq)
 		ev := events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_ok", Deployment: deploy.ID,
 			Message: "request completed", LatencyMS: total.Milliseconds()}

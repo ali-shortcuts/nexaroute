@@ -143,8 +143,8 @@ func TestTelemetryIngest_DisabledByDefault(t *testing.T) {
 	}
 	s := testGateway(t, cfg)
 
-	s.recordRouteSuccess(router.Requirement{Model: "model-a"}, "p1/m1", "p1", 120*time.Millisecond)
-	s.recordProviderFailure("p1", "p1/m1", "boom", upstreamFailurePolicy{SignalProvider: true})
+	s.recordRouteSuccess(router.Requirement{Model: "model-a"}, "p1/m1", "p1", 120*time.Millisecond, "")
+	s.recordProviderFailure("p1", "p1/m1", "boom", upstreamFailurePolicy{SignalProvider: true}, "")
 	s.syncProductionTelemetry()
 
 	rr := adminDo(t, s, http.MethodGet, "/admin/api/scorecards", "")
@@ -171,9 +171,9 @@ func TestTelemetryIngest_AggregatedValuesOnly(t *testing.T) {
 	const secretCanary = "CANARY-PROMPT-RESPONSE-9f2c41"
 	// 4 successes + 1 failure = 5 samples: availability 0.8, failure 0.2.
 	for i := 0; i < 4; i++ {
-		s.recordRouteSuccess(router.Requirement{Model: "model-a"}, "p1/m1", "p1", 200*time.Millisecond)
+		s.recordRouteSuccess(router.Requirement{Model: "model-a"}, "p1/m1", "p1", 200*time.Millisecond, "")
 	}
-	s.recordProviderFailure("p1", "p1/m1", secretCanary, upstreamFailurePolicy{SignalProvider: true})
+	s.recordProviderFailure("p1", "p1/m1", secretCanary, upstreamFailurePolicy{SignalProvider: true}, "")
 	s.observeTelemetryTTFT("p1/m1", 100*time.Millisecond)
 	s.syncProductionTelemetry()
 
@@ -270,9 +270,9 @@ func TestTelemetryIngest_DoesNotChangeRoutingOrHealth(t *testing.T) {
 
 	traffic := func(s *Server) {
 		for i := 0; i < 4; i++ {
-			s.recordRouteSuccess(router.Requirement{Model: "model-a"}, "p1/m1", "p1", 120*time.Millisecond)
+			s.recordRouteSuccess(router.Requirement{Model: "model-a"}, "p1/m1", "p1", 120*time.Millisecond, "")
 		}
-		s.recordProviderFailure("p1", "p1/m1", "boom", upstreamFailurePolicy{SignalProvider: true})
+		s.recordProviderFailure("p1", "p1/m1", "boom", upstreamFailurePolicy{SignalProvider: true}, "")
 		s.syncProductionTelemetry()
 	}
 	traffic(sOff)
@@ -332,9 +332,9 @@ func TestTelemetryIngest_HotPathDoesNotFlush(t *testing.T) {
 	// aggregated samples to flush, yet nothing may materialize until the
 	// periodic flush entry runs.
 	for i := 0; i < 4; i++ {
-		s.recordRouteSuccess(router.Requirement{Model: "model-a"}, "p1/m1", "p1", 200*time.Millisecond)
+		s.recordRouteSuccess(router.Requirement{Model: "model-a"}, "p1/m1", "p1", 200*time.Millisecond, "")
 	}
-	s.recordProviderFailure("p1", "p1/m1", "boom", upstreamFailurePolicy{SignalProvider: true})
+	s.recordProviderFailure("p1", "p1/m1", "boom", upstreamFailurePolicy{SignalProvider: true}, "")
 
 	if got := scorecardTotal(t, s); got != 0 {
 		t.Fatalf("hot path flushed telemetry: %d scorecards before any flush", got)

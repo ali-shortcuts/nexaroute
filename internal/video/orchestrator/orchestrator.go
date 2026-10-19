@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -38,6 +39,58 @@ type Orchestrator struct {
 	MaxAssetBytes int64
 	PollInterval  time.Duration
 	MaxPolls      int
+	// InstanceID identifies this orchestrator as a job lease
+	// owner (#434 item 6). Empty means "derive a random one
+	// per process" — see owner().
+	InstanceID string
+	// LeaseTTL bounds how long a claim survives without
+	// renewal; zero uses DefaultLeaseTTL.
+	LeaseTTL time.Duration
+}
+
+// DefaultLeaseTTL is the video job lease length: long enough
+// to cover a submission plus several poll intervals, short
+// enough that a dead owner's jobs become claimable quickly.
+const DefaultLeaseTTL = 5 * time.Minute
+
+// owner returns this orchestrator's lease identity, deriving
+// and memoizing a random one when unset.
+func (o *Orchestrator) owner() string {
+	if o.InstanceID != "" {
+		return o.InstanceID
+	}
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err == nil {
+		o.InstanceID = "orch-" + hex.EncodeToString(b[:])
+	} else {
+		o.InstanceID = fmt.Sprintf("orch-%d", time.Now().UnixNano())
+	}
+	return o.InstanceID
+}
+
+func (o *Orchestrator) leaseTTL() time.Duration {
+	if o.LeaseTTL > 0 {
+		return o.LeaseTTL
+	}
+	return DefaultLeaseTTL
+}
+
+// ErrJobLeasedElsewhere marks a job another instance holds a
+// live lease on; workers treat it as a quiet skip.
+var ErrJobLeasedElsewhere = errors.New("video job is leased to another instance")
+
+// claim leases the job to this instance, returning the
+// claimed record. A live foreign lease yields
+// ErrJobLeasedElsewhere.
+func (o *Orchestrator) claim(ctx context.Context, id string) (video.VideoJob, error) {
+	claimed, ok, err := o.Store.TryClaim(ctx, id, o.owner(), o.leaseTTL(), time.Now())
+	if err != nil {
+		return video.VideoJob{}, fmt.Errorf("claim video job %s: %w", id, err)
+	}
+	if !ok {
+		return video.VideoJob{}, ErrJobLeasedElsewhere
+	}
+	return claimed, nil
 }
 
 func (o *Orchestrator) Create(ctx context.Context, r video.VideoRequest) (video.VideoJob, error) {
@@ -223,6 +276,16 @@ func (o *Orchestrator) Create(ctx context.Context, r video.VideoRequest) (video.
 
 	j := video.NewJob(fmt.Sprintf("video-%d", time.Now().UnixNano()), r)
 	j.Provider, j.Model = p.ID(), r.ModelPreference
+	// Selection evidence (#420 item 6): why this adapter runs
+	// this job — the request's preference, the brief's
+	// classification, and the estimate basis — recorded on
+	// the job so its timeline can show it verbatim.
+	estimateBasis := "price unknown"
+	if estimate.PriceKnown {
+		estimateBasis = fmt.Sprintf("priced estimate $%.2f", estimate.EstimatedUSD)
+	}
+	j.ProviderSelection = fmt.Sprintf("request preference %q -> provider %q (model %q); brief classified %s; %s",
+		r.ProviderPreference, p.ID(), r.ModelPreference, string(j.JobType), estimateBasis)
 	j.EstimatedCostUSD = estimate.EstimatedUSD
 	if r.DryRun {
 		j.State = video.StateDryRun
@@ -329,6 +392,16 @@ func validateProviderRequest(r video.VideoRequest, caps video.Capabilities) (vid
 	// URL accepted that can never fire).
 	if hasReferenceInputs(r) && !caps.SupportsReferenceFrames {
 		return r, errors.New("provider does not support reference/first/last-frame inputs")
+	}
+	// Edit/extend briefs need the granular capabilities, not just
+	// the video_to_video mode (#510 item 6): a provider that
+	// declares the mode but cannot edit or extend must never
+	// receive the job.
+	if r.HasSourceVideo() && !caps.SupportsVideoEditing {
+		return r, errors.New("provider does not support video editing (source-video brief)")
+	}
+	if r.IsContinuityExtension() && !caps.SupportsClipExtension {
+		return r, errors.New("provider does not support clip extension (continuity brief)")
 	}
 	if strings.TrimSpace(r.CallbackURL) != "" && !caps.SupportsWebhooks {
 		return r, errors.New("provider does not support webhooks/callbacks; refusing a callback that would never fire")
@@ -576,6 +649,17 @@ func (o *Orchestrator) RunJob(ctx context.Context, queued video.VideoJob) error 
 	if err != nil {
 		return fmt.Errorf("load video job before execution: %w", err)
 	}
+	// Lease before ANY provider work (#434 item 6): with two
+	// orchestrators over one store, exactly one wins the job;
+	// the other skips quietly instead of double-submitting
+	// billable work.
+	j, err = o.claim(ctx, j.JobID)
+	if err != nil {
+		if errors.Is(err, ErrJobLeasedElsewhere) {
+			return nil
+		}
+		return err
+	}
 	if len(j.Request.ShotPlan) > 1 {
 		return o.runEpisodeJob(ctx, j)
 	}
@@ -693,6 +777,14 @@ func (o *Orchestrator) pollAndFinalize(ctx context.Context, p video.VideoProvide
 		max = 300
 	}
 	for i := 0; i < max; i++ {
+		// Renew the lease every poll (#434 item 6): if another
+		// instance holds the job now, stop instead of
+		// finalizing work that is no longer ours.
+		claimed, cerr := o.claim(ctx, j.JobID)
+		if cerr != nil {
+			return fmt.Errorf("video job %s lease lost while polling: %w", j.JobID, cerr)
+		}
+		j.LeaseOwner, j.LeaseUntil = claimed.LeaseOwner, claimed.LeaseUntil
 		timer := time.NewTimer(interval)
 		select {
 		case <-ctx.Done():

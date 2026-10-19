@@ -409,6 +409,66 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '405':
           $ref: '#/components/responses/MethodNotAllowed'
+  /admin/api/autopilot:
+    get:
+      summary: |
+        Read the policy canary autopilot status block: the incumbent and
+        candidate policy versions, the current lifecycle state
+        (draft/shadow/canary/promoted/rolled_back), canary share, in-flight
+        leases, bounded transition history, and any rollback incidents. The
+        response includes unsupported_signals. In the current HTTP adapter,
+        the no-eligible rate is sourced from real data-plane outcomes
+        (leased requests count as observations; no-candidate rejections are
+        attributed to the policy version the request would have leased to),
+        while budget-anomaly attribution is not yet sourced per policy
+        lease; the gate reports missing coverage and holds promotion
+        instead of treating missing telemetry as zero. GET only; no provider
+        call is made.
+      x-permission: routing.read
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Operation result; see the handler and the admin snapshot model.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+    post:
+      summary: |
+        Perform one operator gate action on the policy canary autopilot.
+        The JSON body names the action: "evaluate" records the current
+        gate decision without changing state; "promote" promotes the
+        candidate only when the gate itself permits (an operator cannot
+        override missing or failing evidence — a refusal returns 409
+        with the gate decision); "rollback" withdraws the candidate and
+        restores the incumbent (routing policy only; in-flight leases
+        finish on the version they started with). Successful actions
+        appear in the status block's transition/incident history.
+      x-permission: routing.write
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Action outcome with the gate decision or transition/incident and the refreshed autopilot status.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: Conflict — autopilot disabled, gate refuses promotion, or no candidate to roll back; the body carries the gate decision or current status explaining the refusal.
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
   /admin/api/route-preview:
     get:
       summary: |
@@ -600,6 +660,29 @@ paths:
               schema:
                 type: object
                 description: Operation result; see the handler and the admin snapshot model.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+  /admin/api/connection-test:
+    post:
+      summary: Bounded one-click connection test for a saved deployment
+      x-permission: providers.write
+      security:
+      - adminSession: []
+        csrfToken: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Connection test report; see the handler and the admin snapshot model.
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':

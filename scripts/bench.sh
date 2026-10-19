@@ -23,10 +23,11 @@ BENCH_PKGS=(
   ./internal/protocol/canonical/
   ./internal/cache/
   ./internal/guardrail/
+  ./internal/decision/
   ./internal/decision/policy/
   ./internal/httpapi/
 )
-BENCH_RE='Benchmark(Candidates|AnthropicRoundTrip|OpenAIChatRoundTrip|Cache|Scan|Routing_Gateway|Score|Apply)'
+BENCH_RE='Benchmark(Candidates|AnthropicRoundTrip|OpenAIChatRoundTrip|Cache|Scan|Routing_Gateway|Score|Apply|Orchestrator)'
 
 run_profile() {
   local profile="$1"

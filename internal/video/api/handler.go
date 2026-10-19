@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -55,6 +56,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.Method == http.MethodPost && r.URL.Path == "/v1/video/jobs" {
 		h.create(w, r)
+		return
+	}
+	if r.Method == http.MethodGet && r.URL.Path == "/v1/video/jobs" {
+		h.list(w, r)
 		return
 	}
 	if r.Method == http.MethodGet && r.URL.Path == "/v1/video/providers" {
@@ -121,7 +126,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "video_create_failed", err.Error(), false)
 		return
 	}
-	writeJSON(w, http.StatusAccepted, publicJob(j))
+	writeJSON(w, http.StatusAccepted, viewJob(j))
 }
 
 func (h *Handler) get(w http.ResponseWriter, r *http.Request, id string) {
@@ -134,7 +139,87 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request, id string) {
 		writeError(w, http.StatusNotFound, "not_found", "job not found", false)
 		return
 	}
-	writeJSON(w, http.StatusOK, publicJob(j))
+	writeJSON(w, http.StatusOK, viewJob(j))
+}
+
+// jobView is the API representation of a job: the public job plus
+// its derived workflow steps (#414 item 1). Additive — existing
+// fields are unchanged.
+type jobView struct {
+	video.VideoJob
+	Workflow    []video.WorkflowStep         `json:"workflow"`
+	RetrySafety video.RetrySafety            `json:"retry_safety"`
+	Consistency []video.ConsistencyMechanism `json:"consistency"`
+}
+
+func viewJob(j video.VideoJob) jobView {
+	pj := publicJob(j)
+	return jobView{VideoJob: pj, Workflow: video.WorkflowSteps(pj), RetrySafety: video.RetrySafetyFor(pj), Consistency: video.ConsistencyMechanisms(pj)}
+}
+
+// storeDurability names what the configured job store actually
+// guarantees, so the Studio never implies distributed durability
+// for local state (#414 item 8): "file" survives a restart on
+// this host only; "process" is lost on restart.
+func storeDurability(s queue.JobStore) string {
+	switch s.(type) {
+	case *queue.FileStore:
+		return "file"
+	case *queue.MemoryStore:
+		return "process"
+	default:
+		return "store"
+	}
+}
+
+// list serves GET /v1/video/jobs: the server-side job history
+// the Studio renders (newest first), replacing the browser-only
+// localStorage tracking. Filters: state (exact), q (substring
+// over job id, provider, model, prompt). limit is clamped to
+// [1, 200], default 50.
+func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
+	if h.Store == nil {
+		writeError(w, http.StatusServiceUnavailable, "video_unavailable", "video job store is not configured", true)
+		return
+	}
+	jobs, err := h.Store.List(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "video_list_failed", "job list failed", true)
+		return
+	}
+	q := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
+	state := strings.TrimSpace(r.URL.Query().Get("state"))
+	limit := 50
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n >= 1 {
+			limit = n
+		}
+		if limit > 200 {
+			limit = 200
+		}
+	}
+	sort.SliceStable(jobs, func(a, b int) bool { return jobs[a].CreatedAt.After(jobs[b].CreatedAt) })
+	out := make([]jobView, 0, len(jobs))
+	for _, j := range jobs {
+		if state != "" && string(j.State) != state {
+			continue
+		}
+		if q != "" {
+			hay := strings.ToLower(j.JobID + " " + j.Provider + " " + j.Model + " " + j.Request.Prompt)
+			if !strings.Contains(hay, q) {
+				continue
+			}
+		}
+		out = append(out, viewJob(j))
+		if len(out) >= limit {
+			break
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"jobs":       out,
+		"total":      len(out),
+		"durability": storeDurability(h.Store),
+	})
 }
 
 func (h *Handler) cancel(w http.ResponseWriter, r *http.Request, id string) {

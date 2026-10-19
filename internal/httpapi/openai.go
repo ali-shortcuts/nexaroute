@@ -18,7 +18,25 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/translate"
 )
 
+// openAIStructuredRequested reports whether a raw OpenAI
+// response_format value demands structured output. The plain
+// text format (string "text" or {"type":"text"}) does not.
+func openAIStructuredRequested(v any) bool {
+	switch t := v.(type) {
+	case nil:
+		return false
+	case string:
+		return t != "" && t != "text"
+	case map[string]any:
+		ty, _ := t["type"].(string)
+		return ty != "" && ty != "text"
+	default:
+		return true
+	}
+}
+
 func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
+	defer s.clearAttemptSeq(r.Header.Get("x-request-id"))
 	if r.Method != http.MethodPost {
 		errorJSON(w, 405, "method not allowed")
 		return
@@ -84,9 +102,11 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 		Model:                  in.Model,
 		Streaming:              in.Stream,
 		VisionType:             "image_url",
+		AudioType:              "input_audio",
 		ReasoningKeys:          []string{"reasoning_effort", "reasoning"},
 		ContentFields:          []string{"messages"},
 		MaxOutputTokens:        maxOut,
+		UserAgent:              r.Header.Get("User-Agent"),
 		ToolCountHint:          len(in.Tools),
 		ToolChoiceHint:         in.ToolChoice != nil,
 		ToolChoiceRequiredHint: toolChoiceRequired,
@@ -97,7 +117,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.emitRequestAccepted(r, "openai", in.Model, in.Stream)
-	req := router.Requirement{Model: in.Model, Tools: ti.Features.HasTools, Vision: ti.Features.HasVision, Streaming: in.Stream, Reasoning: ti.Features.HasReasoning}
+	req := router.Requirement{Model: in.Model, Tools: ti.Features.HasTools, Vision: ti.Features.HasVision, Streaming: in.Stream, Reasoning: ti.Features.HasReasoning, StructuredOutput: openAIStructuredRequested(in.ResponseFormatRaw), ParallelTools: in.ParallelToolCalls != nil && *in.ParallelToolCalls}
 	if req.Reasoning {
 		req.ProviderType = "openai_compatible"
 	}
@@ -132,8 +152,10 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 			resolvedRoute = rr2
 		}
 	}
+	// Apply task intelligence (route-profile mode off/suggest/apply) after final route resolution
+	taskRes, candidates, resolvedRoute := s.applyTaskIntel(r, req, cfg, candidates, resolvedRoute, ti)
 	// Emit task_classified event (privacy-safe, no raw prompt) after final route resolution
-	s.emitTaskClassified(r.Header.Get("x-request-id"), ti, resolvedRoute)
+	s.emitTaskClassified(r.Header.Get("x-request-id"), ti, resolvedRoute, taskRes)
 	s.emitRouteResolved(r, "openai", resolvedRoute, candidates)
 	if len(candidates) == 0 {
 		// Gateway-side rejection before any upstream attempt: release
@@ -144,6 +166,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.budgetRelease(r)
+		s.autopilotObserveNoEligible(cfg, resolvedRoute, autopilotRequestKeyFromContext(r.Context(), r.Header.Get("x-request-id")), autopilotCallerStratum(clientIdentityFromRequest(r)))
 		errorJSON(w, 503, "no compatible healthy deployment")
 		return
 	}
@@ -227,6 +250,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 		if attemptIndex > 0 {
 			attemptKind = attemptKindRetry
 		}
+		s.autopilotNoteDispatched(autopilotRequestKeyFromContext(r.Context(), r.Header.Get("x-request-id")))
 		s.emitRouteAttempt(r.Header.Get("x-request-id"), "openai", in.Model, attemptIndex+1, c, attemptKind)
 		start := time.Now()
 		out, winner, hedgeLaunched := s.doAttemptWithHedge(routeCtx, r.Header.Get("x-request-id"), cfg, candidates, i, attempts, max, primary,
@@ -271,6 +295,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 			if gatewayDeadlineError(routeCtx, r.Context(), e) {
 				gatewayTimedOut = true
 				s.hm.RecordProviderFailure(c.Deployment.ProviderID, c.Deployment.ID, lastErr)
+				s.observeTaskFeedback(string(ti.Profile.Type), c.Deployment.ID, false, headerLatency)
 				if router.IsReadyStrategy(cfg.Routing.Strategy) {
 					s.hm.Quarantine(c.Deployment.ID, lastErr, headerLatency)
 					s.probe.Recover(c.Deployment.ID)
@@ -281,6 +306,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 				break
 			}
 			s.hm.RecordProviderFailure(c.Deployment.ProviderID, c.Deployment.ID, lastErr)
+			s.observeTaskFeedback(string(ti.Profile.Type), c.Deployment.ID, false, headerLatency)
 			if router.IsReadyStrategy(cfg.Routing.Strategy) {
 				s.hm.Quarantine(c.Deployment.ID, lastErr, headerLatency)
 				s.probe.Recover(c.Deployment.ID)
@@ -290,6 +316,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_fail", Deployment: c.Deployment.ID, Message: lastErr, ErrorType: "provider_connection_failed", FailoverClass: "transient_transport", LatencyMS: headerLatency.Milliseconds()})
 			s.emitProductionEvent(r.Header.Get("x-request-id"), ProductionEventModelFailed, c.Deployment.ID, lastErr, events.Event{ErrorType: "provider_connection_failed", LatencyMS: headerLatency.Milliseconds()})
 			if attempts < max && i+1 < len(candidates) {
+				s.autopilotRecordFailover(autopilotRequestKeyFromContext(r.Context(), r.Header.Get("x-request-id")))
 				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "failover", Deployment: c.Deployment.ID, Message: "transport failure; trying next eligible candidate", FailoverClass: "transient_transport"})
 				s.emitProductionEvent(r.Header.Get("x-request-id"), ProductionEventRequestFailover, c.Deployment.ID, "transport failure; trying next eligible candidate", events.Event{})
 			}
@@ -338,7 +365,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 				policy.SignalProvider = false
 				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "model_unavailable", Deployment: c.Deployment.ID, Message: "upstream model temporarily unavailable", ErrorType: string(cls.Class), StatusCode: resp.StatusCode})
 			}
-			s.recordProviderFailure(c.Deployment.ProviderID, c.Deployment.ID, lastErr, policy)
+			s.recordProviderFailure(c.Deployment.ProviderID, c.Deployment.ID, lastErr, policy, string(ti.Profile.Type))
 			cooldownEntered := false
 			if router.IsReadyStrategy(cfg.Routing.Strategy) {
 				if policy.QuarantineDeployment {
@@ -364,6 +391,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 				s.emitProductionEvent(r.Header.Get("x-request-id"), ProductionEventModelCooldown, c.Deployment.ID, lastErr, events.Event{ErrorType: policy.ErrorType, StatusCode: resp.StatusCode})
 			}
 			if (policy.Failover || cls.CapabilityFailure) && attempts < max && i+1 < len(candidates) {
+				s.autopilotRecordFailover(autopilotRequestKeyFromContext(r.Context(), r.Header.Get("x-request-id")))
 				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "failover", Deployment: c.Deployment.ID, Message: fmt.Sprintf("HTTP %d; trying next eligible candidate", resp.StatusCode), StatusCode: resp.StatusCode, FailoverClass: policy.ErrorType})
 				s.emitProductionEvent(r.Header.Get("x-request-id"), ProductionEventRequestFailover, c.Deployment.ID, fmt.Sprintf("HTTP %d; trying next eligible candidate", resp.StatusCode), events.Event{StatusCode: resp.StatusCode})
 				s.retryPause(routeCtx, r.Header.Get("x-request-id"), cfg, attemptIndex, max)
@@ -391,10 +419,14 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Gateway-Deployment", c.Deployment.ID)
 		w.Header().Set("X-Gateway-Provider", c.Deployment.ProviderID)
 		w.Header().Set("X-Gateway-Upstream-Model", c.Deployment.Model)
+		if v := s.attemptsHeaderValue(r.Header.Get("x-request-id")); v != "" {
+			w.Header().Set("X-NexaRoute-Attempts", v)
+		}
 		if in.Stream {
 			deploymentID := c.Deployment.ID
 			resp.Body = observeFirstByte(resp.Body, start, func(d time.Duration) {
 				s.hm.RecordTTFT(deploymentID, d)
+				s.autopilotRecordTTFT(autopilotRequestKeyFromContext(r.Context(), r.Header.Get("x-request-id")), d)
 				s.observeTelemetryTTFT(deploymentID, d)
 				noteSpanTTFT(r.Context(), d)
 				s.emitStreamCommitted(r.Header.Get("x-request-id"), deploymentID, c.Deployment.ProviderID, "openai", d)
@@ -410,12 +442,14 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 					func(u canonical.Usage) {
 						inputTokens, outputTokens = u.InputTokens, u.OutputTokens
 						s.recordUsageCanonical(r, c.Deployment.ID, kind, u)
+						s.rt.ObserveSessionCache(req, c.Deployment.ID, u.InputTokens, u.CacheReadTokens)
 					})
 			} else {
 				e = s.handleCanonicalResponse(w, resp, kind, "openai_chat", in.Model, r.Header.Get("x-request-id"), false, toolDefs,
 					func(u canonical.Usage) {
 						inputTokens, outputTokens = u.InputTokens, u.OutputTokens
 						s.recordUsageCanonical(r, c.Deployment.ID, kind, u)
+						s.rt.ObserveSessionCache(req, c.Deployment.ID, u.InputTokens, u.CacheReadTokens)
 					})
 			}
 		case c.Deployment.ProviderType == "openai_compatible":
@@ -486,11 +520,13 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 				s.hm.RecordFailure(c.Deployment.ID, lastErr, total)
 			}
 			s.hm.RecordProviderFailure(c.Deployment.ProviderID, c.Deployment.ID, lastErr)
+			s.observeTaskFeedback(string(ti.Profile.Type), c.Deployment.ID, false, total)
+			s.autopilotMarkTerminalFailure(autopilotRequestKeyFromContext(r.Context(), r.Header.Get("x-request-id")))
 			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "stream_fail", Deployment: c.Deployment.ID, Message: lastErr, ErrorType: "provider_stream_error", LatencyMS: total.Milliseconds(), StatusCode: resp.StatusCode})
 			return
 		}
 		prevStatus := s.hm.Get(c.Deployment.ID).Status
-		s.recordRouteSuccess(req, c.Deployment.ID, c.Deployment.ProviderID, headerLatency)
+		s.recordRouteSuccess(req, c.Deployment.ID, c.Deployment.ProviderID, headerLatency, string(ti.Profile.Type))
 		s.learnFromSuccess(c.Deployment.ID, c.Deployment.ProviderID, c.Deployment, payload, nil)
 		ev := events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_ok", Deployment: c.Deployment.ID, Message: "request completed", LatencyMS: total.Milliseconds(), StatusCode: resp.StatusCode}
 		if resolvedRoute != nil {

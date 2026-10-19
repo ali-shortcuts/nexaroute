@@ -75,7 +75,12 @@ func (r VideoRequest) Normalized() VideoRequest {
 	r.NarrationText = strings.TrimSpace(r.NarrationText)
 	r.SubtitleLanguage = strings.TrimSpace(r.SubtitleLanguage)
 	if r.Mode == "" {
-		r.Mode = ModeTextToVideo
+		// Derive the mode from the brief's own structure (#510
+		// item 6): a brief carrying a first-frame asset is an
+		// image-to-video job even when the client did not declare
+		// a mode; a plain prompt brief still defaults to
+		// text-to-video via the same classification.
+		r.Mode = ClassifyBrief(r).Mode
 	}
 	if r.AspectRatio == "" {
 		r.AspectRatio = Aspect16x9

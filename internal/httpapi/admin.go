@@ -419,6 +419,17 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Phase 18: policy canary autopilot status block. Fed entirely by controller
+	// state; when disabled it reports enabled=false rather than an assumed status.
+	autopilotSection := map[string]any{"enabled": false}
+	if ctrl := s.autopilotSnapshot(); ctrl != nil {
+		autopilotSection = map[string]any{
+			"enabled":             true,
+			"status":              ctrl.Status(),
+			"unsupported_signals": []string{"budget_anomalies"},
+		}
+	}
+
 	writeJSON(w, 200, map[string]any{
 		"deployments":        deployments,
 		"deployment_total":   totalDeployments,
@@ -454,6 +465,10 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 		},
 		"virtual_endpoints": veList,
 		"route_profiles":    rpList,
+		"task_rules":        taskRuleTableSnapshot(),
+		"coding_profiles":   codingProfilesSnapshot(cfgFull),
+		"deployment_report": s.deployment,
+		"conformance":       conformanceSnapshot(time.Now()),
 		"candidate_pools":   cpList,
 		"fallback_chains":   fcList,
 		// M3-3: static no-eligible-deployment warnings plus the runtime
@@ -472,6 +487,7 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 		"decision_provider_health": cfgFull.DecisionProviderHealth,
 		"scorecards":               scorecardsSection,
 		"evaluation":               evaluationSection,
+		"autopilot":                autopilotSection,
 		"budget_alerts":            s.budgetAlertsSnapshot(),
 		"config": map[string]any{
 			"probe":    probeCfg,

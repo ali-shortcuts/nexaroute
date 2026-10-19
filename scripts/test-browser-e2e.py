@@ -501,6 +501,101 @@ def main() -> None:
                 page.unroute("**/v1/video/jobs/ui-episode-1", mock_video_job)
                 page.unroute("**/v1/video/jobs/ui-episode-1/assets/asset-1", mock_video_asset)
 
+                # --- Issue #414 item 9: Video Studio failure scenarios ---
+                # (a) a failed job served from server history surfaces its
+                # error and its retry-safety verdict (no silent dead card);
+                # (b) a malformed providers payload degrades the Studio to
+                # its no-provider state with the app still navigable;
+                # (c) after a browser restart (reload) a created job is
+                # recovered from server history with NO resubmission.
+                # One dispatcher stays routed for the whole section so no
+                # background poll ever reaches the real (video-disabled)
+                # gateway and leaves a 404 console error behind.
+                fail_job = {
+                    "job_id": "ui-fail-1", "state": "failed", "progress": 0,
+                    "provider": "fake", "created_at": "2026-10-12T00:00:00Z",
+                    "last_error": "provider rejected the brief: content policy",
+                    "retry_safety": {"verdict": "duplicate_risk",
+                                     "reason": "the provider accepted a submission; retrying may bill twice",
+                                     "provider_job_id_present": True,
+                                     "duplicate_billing_possible": True},
+                    "request": {"prompt": "a lighthouse at dawn", "provider_preference": "fake"},
+                }
+                recover_job = {
+                    "job_id": "ui-recover-1", "state": "completed", "progress": 1,
+                    "provider": "fake", "created_at": "2026-10-12T00:00:00Z",
+                    "request": {"prompt": "harbor timelapse", "provider_preference": "fake"},
+                    "output_assets": [],
+                }
+                recover_posts = {"n": 0}
+                jobs_mode = {"mode": "fail"}
+                def mock_providers_ok(route):
+                    route.fulfill(status=200, content_type="application/json", body=json.dumps({"providers": [{"id": "fake"}]}))
+                def mock_jobs_dispatch(route):
+                    url = route.request.url
+                    if route.request.method == "POST":
+                        if jobs_mode["mode"] == "recover":
+                            recover_posts["n"] += 1
+                            route.fulfill(status=202, content_type="application/json", body=json.dumps({
+                                "job_id": "ui-recover-1", "state": "queued", "progress": 0,
+                                "request": json.loads(route.request.post_data or "{}"),
+                            }))
+                        else:
+                            route.fulfill(status=405, content_type="application/json", body="{}")
+                        return
+                    if "/jobs/" in url:
+                        jid = url.rsplit("/jobs/", 1)[-1].split("?")[0]
+                        job = recover_job if jid == "ui-recover-1" else {
+                            "job_id": jid, "state": "completed", "progress": 1,
+                            "provider": "fake", "created_at": "2026-10-12T00:00:00Z",
+                            "request": {}, "output_assets": [],
+                        }
+                        route.fulfill(status=200, content_type="application/json", body=json.dumps(job))
+                        return
+                    jobs = [fail_job] if jobs_mode["mode"] == "fail" else [recover_job]
+                    route.fulfill(status=200, content_type="application/json", body=json.dumps({"jobs": jobs, "durability": "file"}))
+                page.route("**/v1/video/providers", mock_providers_ok)
+                page.route("**/v1/video/jobs**", mock_jobs_dispatch)
+                page.locator('[data-page="video"]').click()
+                page.locator('[data-action="refresh-video"]').click()
+                fail_card = page.locator(".video-job-card", has_text="ui-fail-1")
+                expect(fail_card).to_contain_text("failed")
+                expect(fail_card).to_contain_text("provider rejected the brief")
+                expect(fail_card).to_contain_text("Retry risks duplicate billing")
+                expect(fail_card).to_contain_text("may bill twice")
+
+                # (b) malformed providers payload -> no-provider state
+                def mock_bad_providers(route):
+                    route.fulfill(status=200, content_type="application/json", body="{not-json")
+                page.unroute("**/v1/video/providers", mock_providers_ok)
+                page.route("**/v1/video/providers", mock_bad_providers)
+                page.locator('[data-action="refresh-video"]').click()
+                expect(page.locator("#content")).to_contain_text("No provider exposed")
+                page.locator('[data-page="providers"]').click()
+                expect(page.locator('[data-action="add-provider"]').first).to_be_visible()
+                page.unroute("**/v1/video/providers", mock_bad_providers)
+                page.route("**/v1/video/providers", mock_providers_ok)
+
+                # (c) restart recovery: create once, reload, history serves
+                # the job back and nothing is submitted twice.
+                jobs_mode["mode"] = "recover"
+                page.locator('[data-page="video"]').click()
+                page.locator('[data-action="create-video"]').first.click()
+                page.locator('[data-action="example-shot-plan"]').click()
+                page.locator("#v-episode").fill("ui-recover-ep")
+                page.locator("#v-narration").fill("A harbor at dawn, boats leaving for the fishing grounds.")
+                page.locator("#v-subtitle-language").select_option("same-as-narration")
+                page.get_by_role("button", name="Queue job").click()
+                recover_card = page.locator(".video-job-card", has_text="ui-recover-1")
+                expect(recover_card).to_contain_text("completed")
+                assert recover_posts["n"] == 1, f"recover submissions={recover_posts['n']}"
+                page.reload(wait_until="domcontentloaded")
+                page.locator('[data-page="video"]').click()
+                expect(page.locator(".video-job-card", has_text="ui-recover-1")).to_contain_text("completed")
+                assert recover_posts["n"] == 1, f"job resubmitted after reload: posts={recover_posts['n']}"
+                page.unroute("**/v1/video/providers", mock_providers_ok)
+                page.unroute("**/v1/video/jobs**", mock_jobs_dispatch)
+
                 # --- ISSUE #246: disabled video gateway must not raise a global banner ---
                 # Isolate the disabled-state assertions from the fake provider enabled for M2-1 above.
                 def disabled_video_providers(route):
@@ -534,6 +629,86 @@ def main() -> None:
                 assert not errors, f"Console errors after video checks: {errors}"
                 page.unroute("**/v1/video/providers", disabled_video_providers)
                 expected_disabled_404["active"] = False
+
+                # ---- #417 item 8: WebChat browser E2E. One
+                # mode-switched dispatcher stays routed for the
+                # whole section (the #539 lesson: no unmocked
+                # window between sub-scenarios, so no stray
+                # console errors leak into other sections).
+                chat_mode = {"mode": "failover"}
+                def mock_chat(route):
+                    if chat_mode["mode"] == "failover":
+                        sse = (
+                            'data: {"id":"chatcmpl-e2e","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":"failover "},"finish_reason":null}]}\n\n'
+                            'data: {"id":"chatcmpl-e2e","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"answer"},"finish_reason":null}]}\n\n'
+                            'data: {"id":"chatcmpl-e2e","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"completion_tokens":2,"total_tokens":14}}\n\n'
+                            'data: [DONE]\n\n'
+                        )
+                        route.fulfill(status=200, content_type="text/event-stream", headers={
+                            "x-gateway-deployment": "fakeprov-b/m",
+                            "x-gateway-provider": "fakeprov-b",
+                            "x-gateway-upstream-model": "fake-model",
+                            "x-gateway-public-model": "coding",
+                            "x-nexaroute-attempts": "fakeprov-a/m>fakeprov-b/m",
+                            "x-nexaroute-cache": "miss",
+                            "x-request-id": "e2e-chat-failover",
+                        }, body=sse)
+                    else:
+                        sse = (
+                            'data: {"id":"chatcmpl-e2e2","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":"second answer"},"finish_reason":null}]}\n\n'
+                            'data: {"id":"chatcmpl-e2e2","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":30,"completion_tokens":2,"total_tokens":32}}\n\n'
+                            'data: [DONE]\n\n'
+                        )
+                        route.fulfill(status=200, content_type="text/event-stream", headers={
+                            "x-gateway-deployment": "fakeprov-b/m",
+                            "x-gateway-provider": "fakeprov-b",
+                            "x-gateway-upstream-model": "fake-model",
+                            "x-gateway-public-model": "coding",
+                            "x-nexaroute-attempts": "fakeprov-b/m",
+                            "x-nexaroute-cache": "hit",
+                            "x-request-id": "e2e-chat-second",
+                        }, body=sse)
+                page.route("**/v1/chat/completions", mock_chat)
+                page.locator('[data-page="playground"]').click()
+                page.wait_for_load_state("domcontentloaded")
+                expect(page.locator("#pg-model")).to_contain_text("coding")
+                # Privacy line is stated on the surface (acceptance:
+                # stated behaviour matches tab-only storage).
+                expect(page.locator("#content")).to_contain_text("kept only in this tab")
+                page.locator("#pg-prompt").fill("hello gateway")
+                page.locator("#pg-send").click()
+                assistant = page.locator(".pg-msg.assistant")
+                expect(assistant.first).to_contain_text("failover answer")
+                badge = assistant.first.locator(".pg-badge")
+                # The badge resolves to the deployment that actually
+                # answered, with the failover trail IN ORDER —
+                # fakeprov-a tried first, fakeprov-b answered.
+                expect(badge).to_contain_text("fakeprov-b / fake-model · fakeprov-b/m")
+                expect(badge).to_contain_text("attempts fakeprov-a/m → fakeprov-b/m")
+                expect(badge).to_contain_text("done")
+                # The session strip shows the same pin.
+                expect(page.locator("#pg-session")).to_contain_text("fakeprov-b/m")
+                # A second turn keeps the history: both exchanges
+                # stay in the transcript, and a single-attempt
+                # reply carries no attempts trail.
+                chat_mode["mode"] = "plain"
+                page.locator("#pg-prompt").fill("and again")
+                page.locator("#pg-send").click()
+                expect(assistant.nth(1)).to_contain_text("second answer")
+                expect(assistant.nth(1).locator(".pg-badge")).to_contain_text("cache hit")
+                assert "attempts" not in assistant.nth(1).locator(".pg-badge").inner_text(), "single-attempt reply must not render an attempts trail"
+                expect(page.locator("#pg-session")).to_contain_text("12 → 30")
+                # Reload: the conversation is tab-memory only, so
+                # the transcript honestly resets — no server-side
+                # history is invented.
+                page.reload(wait_until="domcontentloaded")
+                page.locator('[data-page="playground"]').click()
+                page.wait_for_load_state("domcontentloaded")
+                expect(page.locator("#pg-transcript")).to_contain_text("No request yet.")
+                page.unroute("**/v1/chat/completions", mock_chat)
+                errors = [m for m in console_msgs if m[0] == "error"]
+                assert not errors, f"Console errors after WebChat E2E: {errors}"
+
                 # Evidence: Providers with video disabled (dark, both sizes).
                 video_dir = ROOT / "docs/browser-evidence/video-disabled"
                 video_dir.mkdir(parents=True, exist_ok=True)

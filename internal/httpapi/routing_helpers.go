@@ -19,6 +19,7 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/feature"
 	"github.com/ali-shortcuts/nexaroute/internal/providers"
 	"github.com/ali-shortcuts/nexaroute/internal/router"
+	"github.com/ali-shortcuts/nexaroute/internal/scorecards"
 )
 
 func routeContext(parent context.Context, streaming bool, timeout time.Duration) (context.Context, context.CancelFunc) {
@@ -413,7 +414,31 @@ func (s *Server) prepareRequirement(req router.Requirement, r *http.Request, bod
 	}
 	return req
 }
-func (s *Server) recordRouteSuccess(req router.Requirement, deploymentID, providerID string, latency time.Duration) {
+
+// observeTaskFeedback records one attempt outcome into the
+// per-(task, deployment) feedback tracker (#510 item 5 producer
+// wiring). It is best-effort and nil-safe: feedback must never
+// affect the request path. A zero latency contributes no latency
+// sample. Cost is not observed here — these call sites do not
+// know the priced cost (accounting settles it separately in
+// recordUsageEx); the tracker's availability/latency evidence is
+// what this wiring feeds.
+func (s *Server) observeTaskFeedback(taskType, deploymentID string, success bool, latency time.Duration) {
+	if taskType == "" || deploymentID == "" {
+		return
+	}
+	plane := s.evaluationSnapshot()
+	if plane == nil || plane.Feedback() == nil {
+		return
+	}
+	latencyMS := 0.0
+	if latency > 0 {
+		latencyMS = float64(latency.Microseconds()) / 1000.0
+	}
+	plane.Feedback().Observe(taskType, deploymentID, scorecards.FeedbackOutcome{Success: success, LatencyMS: latencyMS}, time.Now())
+}
+
+func (s *Server) recordRouteSuccess(req router.Requirement, deploymentID, providerID string, latency time.Duration, taskType string) {
 	s.hm.RecordSuccess(deploymentID, latency)
 	s.hm.RecordProviderSuccess(providerID)
 	s.hm.RecordScopeSuccess(deploymentID, req.Scopes())
@@ -422,15 +447,21 @@ func (s *Server) recordRouteSuccess(req router.Requirement, deploymentID, provid
 	// gateway traffic contributes aggregated operational values only
 	// (success + latency). Never affects routing or health.
 	s.observeCompletedTelemetry(deploymentID, providerID, true, latency, 0)
+	// Feedback loop (#510 item 5): the same completed attempt is a
+	// per-(task, deployment) success sample.
+	s.observeTaskFeedback(taskType, deploymentID, true, latency)
 }
 
-func (s *Server) recordProviderFailure(providerID, deploymentID, reason string, policy upstreamFailurePolicy) {
+func (s *Server) recordProviderFailure(providerID, deploymentID, reason string, policy upstreamFailurePolicy, taskType string) {
 	if policy.SignalProvider {
 		s.hm.RecordProviderFailure(providerID, deploymentID, reason)
 	}
 	// Production-telemetry ingestion (opt-in): a failed request contributes
 	// an aggregated failure sample only. No content, no error text.
 	s.observeCompletedTelemetry(deploymentID, providerID, false, 0, 0)
+	// Feedback loop (#510 item 5): one failure sample per classified
+	// failed attempt. The branch's latency is not available here.
+	s.observeTaskFeedback(taskType, deploymentID, false, 0)
 }
 
 type firstByteBody struct {
