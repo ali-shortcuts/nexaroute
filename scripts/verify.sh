@@ -33,6 +33,8 @@ node --check internal/httpapi/web/visual-agent.js
 echo '== real browser control-plane acceptance =='
 if command -v chromium >/dev/null 2>&1 && python3 -c 'import playwright' >/dev/null 2>&1; then
   python3 scripts/test-browser-e2e.py
+  echo '== isolated #502 browser acceptance =='
+  python3 scripts/test-browser-e2e-502.py
   echo '== real browser Live Visual Agent acceptance =='
   python3 scripts/test-live-visual-agent.py
 else
