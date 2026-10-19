@@ -117,6 +117,9 @@ def main() -> None:
         config.update({"providers": [], "virtual_endpoints": [], "route_profiles": [], "candidate_pools": [], "fallback_chains": []})
         config["probe"]["enabled"] = False
         config["probe"]["on_start"] = False
+        # Dynamic fake providers are intentionally unprobed in this test; use a strategy
+        # that admits Unknown health so the real upstream-failure fallback is exercised.
+        config["routing"]["strategy"] = "priority"
         test_video_token = "m2-1-local-only-test-token"
         video_config = config.setdefault("video", {})
         video_config.update({
@@ -288,9 +291,11 @@ def main() -> None:
                 page.locator('[data-action="detect-models"]').click()
                 expect(page.locator("#model-list")).to_contain_text("model-alpha")
                 expect(page.locator("#model-list")).to_contain_text("model-beta")
+                expect(page.locator('#model-list .model-select[value="model-alpha"]')).to_have_attribute("data-source", "discovered")
                 page.locator("#p-manual").fill("model-manual")
                 page.locator('[data-action="add-manual-model"]').click()
                 expect(page.locator("#model-list")).to_contain_text("model-manual")
+                expect(page.locator('#model-list .model-select[value="model-manual"]')).to_have_attribute("data-source", "manual")
                 page.locator('[data-action="test-model"][data-model="model-alpha"]').click()
                 expect(page.locator("#notice")).to_contain_text("model-alpha passed")
                 page.locator('[data-action="save-modal"]').click()
@@ -299,6 +304,14 @@ def main() -> None:
                 onboarding_tile.locator('[data-action="edit-provider"]').click()
                 expect(page.locator("#model-list")).to_contain_text("model-alpha")
                 expect(page.locator("#model-list")).to_contain_text("model-manual")
+                expect(page.locator('#model-list .model-select[value="model-alpha"]')).to_have_attribute("data-source", "discovered")
+                expect(page.locator('#model-list .model-select[value="model-manual"]')).to_have_attribute("data-source", "manual")
+                page.locator('[data-action="close-modal"]').first.click()
+
+                # The catalog CTA must open a prefilled add form, not silently do nothing.
+                page.locator('.preset-tile [data-action="use-preset"]').first.click()
+                expect(page.locator("#modal-title")).to_contain_text("Add provider —")
+                assert page.locator("#p-name").input_value().strip(), "Use preset must prefill the provider name"
                 page.locator('[data-action="close-modal"]').first.click()
                 errors = [m for m in console_msgs if m[0] == "error"]
                 assert not errors, f"Console errors after onboarding scenario: {errors}"
@@ -337,15 +350,18 @@ def main() -> None:
                         "id": pid, "name": pid, "type": "openai_compatible",
                         "base_url": f"http://127.0.0.1:{port}/v1",
                         "api_key": "e2e-fake-key", "auth_mode": "bearer", "enabled": True,
-                        "models": [{"id": "m", "model": "m", "enabled": True}],
+                        "models": [{"id": "m", "model": "m", "enabled": True, "capabilities": {"streaming": True}}],
                     }})
                 admin_json(base, "/admin/api/simple-routes", "POST", {
                     "id": "e2e-fb-route", "name": "E2E Fallback", "public_model": "e2e-fb",
                     "mode": "ordered", "deployments": ["e2e-prov-a/m", "e2e-prov-b/m"], "enabled": True,
                 })
+                # These API writes are outside the SPA. Reload so the initial snapshot includes them.
+                page.reload(wait_until="domcontentloaded")
                 page.locator('[data-page="routing"]').click()
                 page.wait_for_load_state("domcontentloaded")
                 fb_tile = page.locator(".route-tile", has_text="e2e-fb")
+                expect(fb_tile).to_be_visible()
                 expect(fb_tile).to_contain_text("Ordered fallback")
                 expect(fb_tile).to_contain_text("e2e-fb-route-stage-1 \u2192 e2e-fb-route-stage-2")
                 errors = [m for m in console_msgs if m[0] == "error"]
