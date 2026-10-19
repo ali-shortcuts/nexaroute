@@ -146,6 +146,9 @@ def main() -> None:
                 page.locator('[data-page="routing"]').click()
                 page.wait_for_load_state("domcontentloaded")
                 expect(page.locator(".empty-state")).to_contain_text("Create your first public route")
+                page.locator('[data-page="activity"]').click()
+                page.wait_for_load_state("domcontentloaded")
+                expect(page.locator(".empty-state")).to_contain_text("No real activity yet")
                 errors = [m for m in console_msgs if m[0] == "error"]
                 assert not errors, f"Console errors after first-run empty state: {errors}"
 
