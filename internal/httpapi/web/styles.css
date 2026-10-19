@@ -244,3 +244,28 @@ button.metric-card:hover,button.metric-card:focus-visible{border-color:var(--lin
 .pg-msg-text{white-space:pre-wrap;word-break:break-word}
 .pg-badge{margin-top:8px;font-size:11px;color:var(--muted);border-top:1px dashed var(--border);padding-top:6px}
 .pg-advanced{margin-top:12px}
+
+/* Provider preset catalog (issue #394): responsive, searchable cards. */
+.chips-row{display:flex;gap:7px;flex-wrap:wrap;margin:0 0 13px}
+.chips-row .button{border-radius:999px}
+.chips-row .button.accent{border-color:color-mix(in srgb,var(--accent) 45%,transparent);color:var(--accent)}
+.provider-facts.state-chips{gap:6px}
+.provider-facts.state-chips .status{padding:4px 9px;border-radius:999px;border:1px solid var(--border);font-size:10px}
+.preset-grid{grid-template-columns:repeat(4,minmax(0,1fr))}
+@media(max-width:1400px){.preset-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
+.preset-tile .muted{margin:0;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media(max-width:700px){.preset-grid{grid-template-columns:1fr}}
+
+/* Issue #394: editable model capabilities and secret-safe advanced provider settings. */
+.model-row{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:10px;min-width:0}
+.model-select-label{display:flex;align-items:center;gap:10px;min-width:0;cursor:pointer}
+.model-select-label>span{flex:1;min-width:0}
+.model-row input[type=checkbox]{width:auto;padding:0;accent-color:var(--accent)}
+.model-capability-editor{grid-column:1/-1;min-width:0;border-top:1px solid var(--border);padding-top:6px}
+.model-capability-editor summary{cursor:pointer;color:var(--muted);font-size:11px}
+.model-capabilities{display:flex;flex-wrap:wrap;gap:10px;padding:8px 0}
+.model-capabilities label{display:inline-flex;align-items:center;gap:5px;color:var(--muted);font-size:11px;font-weight:500;cursor:pointer}
+.field .inline-toggle{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:700}
+.field .inline-toggle input[type=checkbox]{width:auto;padding:0;flex:0 0 auto}
+.field textarea:disabled,.field input:disabled{opacity:.6;cursor:not-allowed}
+@media(max-width:700px){.model-row{grid-template-columns:minmax(0,1fr) auto}.model-row>.button{justify-self:end}.model-capabilities{gap:7px}}
