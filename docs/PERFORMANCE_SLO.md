@@ -85,9 +85,20 @@ mapping rather than duplicating coverage:
 - **Long-duration soak** (hours of sustained mixed load with
   periodic resource sampling): the profiles above run ~1 s per
   pool; no multi-hour soak evidence exists yet.
-- **Real database/Redis outage injection**: covered only by the
-  opt-in integration suites' skip-gated paths; no live outage
-  drill has been run.
+- **Real database/Redis outage injection**: bounded CI drills now run
+  against disposable real PostgreSQL/Redis services
+  (`TestPostgresIntegrationOutageRecoveryCancellationBackpressure`,
+  `TestRedisIntegrationOutageRecoveryCancellationBackpressure`) using a
+  TCP fault proxy that cuts live connections, rejects new ones, and then
+  restores the service. They verify last-known-good reads, cancellation,
+  bounded concurrent outage reads, state preservation and durable
+  recovery. A live production failover/outage drill has not been run and
+  remains UNVERIFIED. See
+  `docs/reports/ISSUE437_SOAK_QUALIFICATION.md`.
+- **Soak evidence**: `scripts/soak.sh` now records commit, rounds,
+  durations, peak RSS per stage, raw logs and a summary; the Soak workflow
+  publishes the summary and uploads the raw directory. The workflow is
+  bounded and is not a multi-hour soak.
 - **Production SLOs**: latency/error budgets for a real deployment
   must be set from that deployment's traffic, not from loopback
   profiles. The bands above are regression detectors for the

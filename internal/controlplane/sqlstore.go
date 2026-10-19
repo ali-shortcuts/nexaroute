@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 	"time"
 )
 
@@ -29,7 +28,7 @@ func (s *SQLStore) Get(ctx context.Context, namespace string) (Snapshot, error) 
 		return Snapshot{}, ErrNotFound
 	}
 	if err != nil {
-		return Snapshot{}, fmt.Errorf("get control snapshot: %w", err)
+		return Snapshot{}, wrapStoreError("get control snapshot", err)
 	}
 	return out, nil
 }
@@ -40,7 +39,7 @@ func (s *SQLStore) Put(ctx context.Context, namespace string, expectedRevision u
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return Snapshot{}, fmt.Errorf("begin control write: %w", err)
+		return Snapshot{}, wrapStoreError("begin control write", err)
 	}
 	committed := false
 	defer func() {
@@ -55,7 +54,7 @@ func (s *SQLStore) Put(ctx context.Context, namespace string, expectedRevision u
 	// The advisory transaction lock makes the loser observe the winner's
 	// committed row and fail with the deterministic ErrConflict instead.
 	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, namespace); err != nil {
-		return Snapshot{}, fmt.Errorf("lock control namespace: %w", err)
+		return Snapshot{}, wrapStoreError("lock control namespace", err)
 	}
 	var current uint64
 	var schema int
@@ -66,7 +65,7 @@ func (s *SQLStore) Put(ctx context.Context, namespace string, expectedRevision u
 		}
 		current, schema = 0, 1
 	} else if scanErr != nil {
-		return Snapshot{}, fmt.Errorf("lock control snapshot: %w", scanErr)
+		return Snapshot{}, wrapStoreError("lock control snapshot", scanErr)
 	} else if current != expectedRevision {
 		return Snapshot{}, ErrConflict
 	}
@@ -77,10 +76,10 @@ func (s *SQLStore) Put(ctx context.Context, namespace string, expectedRevision u
 		_, err = tx.ExecContext(ctx, `UPDATE `+snapshotTable+` SET revision=$2, schema_version=$3, payload=$4, updated_at=$5 WHERE namespace=$1 AND revision=$6`, namespace, next.Revision, next.Schema, next.Payload, next.UpdatedAt, expectedRevision)
 	}
 	if err != nil {
-		return Snapshot{}, fmt.Errorf("write control snapshot: %w", err)
+		return Snapshot{}, wrapStoreError("write control snapshot", err)
 	}
 	if err = tx.Commit(); err != nil {
-		return Snapshot{}, fmt.Errorf("commit control snapshot: %w", err)
+		return Snapshot{}, wrapStoreError("commit control snapshot", err)
 	}
 	committed = true
 	return next, nil
@@ -89,11 +88,11 @@ func (s *SQLStore) Put(ctx context.Context, namespace string, expectedRevision u
 func (s *SQLStore) Delete(ctx context.Context, namespace string, expectedRevision uint64) error {
 	result, err := s.db.ExecContext(ctx, `DELETE FROM `+snapshotTable+` WHERE namespace=$1 AND revision=$2`, namespace, expectedRevision)
 	if err != nil {
-		return fmt.Errorf("delete control snapshot: %w", err)
+		return wrapStoreError("delete control snapshot", err)
 	}
 	n, err := result.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("control delete result: %w", err)
+		return wrapStoreError("control delete result", err)
 	}
 	if n == 0 {
 		// No row matched namespace+revision: distinguish a missing
@@ -107,7 +106,7 @@ func (s *SQLStore) Delete(ctx context.Context, namespace string, expectedRevisio
 			return ErrNotFound
 		}
 		if qerr != nil {
-			return fmt.Errorf("delete control snapshot: %w", qerr)
+			return wrapStoreError("delete control snapshot", qerr)
 		}
 		return ErrConflict
 	}

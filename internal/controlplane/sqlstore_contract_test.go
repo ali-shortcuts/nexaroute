@@ -141,8 +141,14 @@ func TestSQLStoreGetMapsRowsAndErrors(t *testing.T) {
 
 	queryFailure := &scriptedSQL{queryErr: errors.New("database offline")}
 	store, _ = NewSQLStore(openScriptedDB(t, queryFailure))
-	if _, err = store.Get(context.Background(), "config"); err == nil || !strings.Contains(err.Error(), "get control snapshot") {
-		t.Fatalf("query failure not wrapped: %v", err)
+	if _, err = store.Get(context.Background(), "config"); !errors.Is(err, ErrUnavailable) || !strings.Contains(err.Error(), "get control snapshot") {
+		t.Fatalf("query failure mapping: %v, want ErrUnavailable with operation context", err)
+	}
+
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err = store.Get(canceled, "config"); !errors.Is(err, context.Canceled) || errors.Is(err, ErrUnavailable) {
+		t.Fatalf("canceled Get mapping: %v, want context.Canceled without ErrUnavailable", err)
 	}
 }
 
