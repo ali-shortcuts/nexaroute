@@ -1,0 +1,160 @@
+== go version ==
+go version go1.25.0 linux/amd64
+== shell syntax ==
+== formatting ==
+== mandatory clean unit/integration pass ==
+go: downloading go.yaml.in/yaml/v3 v3.0.5
+ok  	github.com/ali-shortcuts/nexaroute/cmd/gateway	36.170s
+ok  	github.com/ali-shortcuts/nexaroute/cmd/videogen	0.095s
+ok  	github.com/ali-shortcuts/nexaroute/internal/authz	0.002s
+ok  	github.com/ali-shortcuts/nexaroute/internal/autopilot	0.004s
+ok  	github.com/ali-shortcuts/nexaroute/internal/budget	0.003s
+ok  	github.com/ali-shortcuts/nexaroute/internal/cache	0.093s
+ok  	github.com/ali-shortcuts/nexaroute/internal/compat	0.293s
+ok  	github.com/ali-shortcuts/nexaroute/internal/config	0.206s
+ok  	github.com/ali-shortcuts/nexaroute/internal/controlplane	0.998s
+ok  	github.com/ali-shortcuts/nexaroute/internal/core	0.004s
+ok  	github.com/ali-shortcuts/nexaroute/internal/decision	7.947s
+ok  	github.com/ali-shortcuts/nexaroute/internal/decision/jev	0.230s
+ok  	github.com/ali-shortcuts/nexaroute/internal/decision/policy	0.038s
+ok  	github.com/ali-shortcuts/nexaroute/internal/decision/providerstate	0.002s
+ok  	github.com/ali-shortcuts/nexaroute/internal/decision/remote	0.378s
+ok  	github.com/ali-shortcuts/nexaroute/internal/desktop	0.025s
+ok  	github.com/ali-shortcuts/nexaroute/internal/doccheck	0.002s
+ok  	github.com/ali-shortcuts/nexaroute/internal/egress	0.193s
+ok  	github.com/ali-shortcuts/nexaroute/internal/eval	0.213s
+ok  	github.com/ali-shortcuts/nexaroute/internal/evallive	0.421s
+ok  	github.com/ali-shortcuts/nexaroute/internal/events	0.202s
+ok  	github.com/ali-shortcuts/nexaroute/internal/feature	0.040s
+ok  	github.com/ali-shortcuts/nexaroute/internal/guardrail	0.004s
+ok  	github.com/ali-shortcuts/nexaroute/internal/health	0.128s
+ok  	github.com/ali-shortcuts/nexaroute/internal/httpapi	31.905s
+ok  	github.com/ali-shortcuts/nexaroute/internal/logging	0.041s
+ok  	github.com/ali-shortcuts/nexaroute/internal/policysim	0.005s
+ok  	github.com/ali-shortcuts/nexaroute/internal/pricing	0.003s
+ok  	github.com/ali-shortcuts/nexaroute/internal/privacyaudit	0.004s
+ok  	github.com/ali-shortcuts/nexaroute/internal/probe	2.785s
+ok  	github.com/ali-shortcuts/nexaroute/internal/protocol/canonical	0.085s
+ok  	github.com/ali-shortcuts/nexaroute/internal/providers	0.267s
+ok  	github.com/ali-shortcuts/nexaroute/internal/route	0.003s
+ok  	github.com/ali-shortcuts/nexaroute/internal/router	15.303s
+ok  	github.com/ali-shortcuts/nexaroute/internal/scorecards	0.016s
+ok  	github.com/ali-shortcuts/nexaroute/internal/secrets	0.043s
+ok  	github.com/ali-shortcuts/nexaroute/internal/securitystore	10.483s
+ok  	github.com/ali-shortcuts/nexaroute/internal/taskintel	0.003s
+ok  	github.com/ali-shortcuts/nexaroute/internal/taskprofile	0.003s
+ok  	github.com/ali-shortcuts/nexaroute/internal/telemetry	0.007s
+ok  	github.com/ali-shortcuts/nexaroute/internal/translate	0.004s
+ok  	github.com/ali-shortcuts/nexaroute/internal/transport	0.007s
+ok  	github.com/ali-shortcuts/nexaroute/internal/usage	0.004s
+ok  	github.com/ali-shortcuts/nexaroute/internal/video	0.021s
+ok  	github.com/ali-shortcuts/nexaroute/internal/video/agent	0.006s
+ok  	github.com/ali-shortcuts/nexaroute/internal/video/api	0.010s
+ok  	github.com/ali-shortcuts/nexaroute/internal/video/audio	32.037s
+ok  	github.com/ali-shortcuts/nexaroute/internal/video/composer	0.062s
+ok  	github.com/ali-shortcuts/nexaroute/internal/video/cost	0.004s
+ok  	github.com/ali-shortcuts/nexaroute/internal/video/orchestrator	0.138s
+ok  	github.com/ali-shortcuts/nexaroute/internal/video/providers	0.065s
+ok  	github.com/ali-shortcuts/nexaroute/internal/video/queue	0.018s
+ok  	github.com/ali-shortcuts/nexaroute/internal/video/render	0.003s
+ok  	github.com/ali-shortcuts/nexaroute/internal/video/runtime	0.363s
+ok  	github.com/ali-shortcuts/nexaroute/internal/video/storage	0.007s
+ok  	github.com/ali-shortcuts/nexaroute/internal/video/tts	0.030s
+== go vet ==
+== mandatory clean race pass ==
+ok  	github.com/ali-shortcuts/nexaroute/cmd/gateway	36.528s
+ok  	github.com/ali-shortcuts/nexaroute/cmd/videogen	1.124s
+ok  	github.com/ali-shortcuts/nexaroute/internal/authz	1.016s
+ok  	github.com/ali-shortcuts/nexaroute/internal/autopilot	1.019s
+ok  	github.com/ali-shortcuts/nexaroute/internal/budget	1.018s
+ok  	github.com/ali-shortcuts/nexaroute/internal/cache	1.097s
+ok  	github.com/ali-shortcuts/nexaroute/internal/compat	1.411s
+ok  	github.com/ali-shortcuts/nexaroute/internal/config	1.540s
+ok  	github.com/ali-shortcuts/nexaroute/internal/controlplane	2.997s
+ok  	github.com/ali-shortcuts/nexaroute/internal/core	1.017s
+ok  	github.com/ali-shortcuts/nexaroute/internal/decision	10.157s
+ok  	github.com/ali-shortcuts/nexaroute/internal/decision/jev	1.282s
+ok  	github.com/ali-shortcuts/nexaroute/internal/decision/policy	1.114s
+ok  	github.com/ali-shortcuts/nexaroute/internal/decision/providerstate	1.012s
+ok  	github.com/ali-shortcuts/nexaroute/internal/decision/remote	1.431s
+ok  	github.com/ali-shortcuts/nexaroute/internal/desktop	1.036s
+ok  	github.com/ali-shortcuts/nexaroute/internal/doccheck	1.012s
+ok  	github.com/ali-shortcuts/nexaroute/internal/egress	1.737s
+ok  	github.com/ali-shortcuts/nexaroute/internal/eval	1.559s
+ok  	github.com/ali-shortcuts/nexaroute/internal/evallive	1.452s
+ok  	github.com/ali-shortcuts/nexaroute/internal/events	1.830s
+ok  	github.com/ali-shortcuts/nexaroute/internal/feature	1.309s
+ok  	github.com/ali-shortcuts/nexaroute/internal/guardrail	1.063s
+ok  	github.com/ali-shortcuts/nexaroute/internal/health	1.168s
+ok  	github.com/ali-shortcuts/nexaroute/internal/httpapi	49.616s
+ok  	github.com/ali-shortcuts/nexaroute/internal/logging	1.052s
+ok  	github.com/ali-shortcuts/nexaroute/internal/policysim	1.022s
+ok  	github.com/ali-shortcuts/nexaroute/internal/pricing	1.015s
+ok  	github.com/ali-shortcuts/nexaroute/internal/privacyaudit	1.015s
+ok  	github.com/ali-shortcuts/nexaroute/internal/probe	3.958s
+ok  	github.com/ali-shortcuts/nexaroute/internal/protocol/canonical	1.673s
+ok  	github.com/ali-shortcuts/nexaroute/internal/providers	1.320s
+ok  	github.com/ali-shortcuts/nexaroute/internal/route	1.012s
+ok  	github.com/ali-shortcuts/nexaroute/internal/router	42.906s
+ok  	github.com/ali-shortcuts/nexaroute/internal/scorecards	1.078s
+ok  	github.com/ali-shortcuts/nexaroute/internal/secrets	1.084s
+ok  	github.com/ali-shortcuts/nexaroute/internal/securitystore	38.689s
+ok  	github.com/ali-shortcuts/nexaroute/internal/taskintel	1.013s
+ok  	github.com/ali-shortcuts/nexaroute/internal/taskprofile	1.022s
+ok  	github.com/ali-shortcuts/nexaroute/internal/telemetry	1.020s
+ok  	github.com/ali-shortcuts/nexaroute/internal/translate	1.021s
+ok  	github.com/ali-shortcuts/nexaroute/internal/transport	1.022s
+ok  	github.com/ali-shortcuts/nexaroute/internal/usage	1.024s
+ok  	github.com/ali-shortcuts/nexaroute/internal/video	1.058s
+ok  	github.com/ali-shortcuts/nexaroute/internal/video/agent	1.029s
+ok  	github.com/ali-shortcuts/nexaroute/internal/video/api	1.043s
+ok  	github.com/ali-shortcuts/nexaroute/internal/video/audio	33.072s
+ok  	github.com/ali-shortcuts/nexaroute/internal/video/composer	1.122s
+ok  	github.com/ali-shortcuts/nexaroute/internal/video/cost	1.013s
+ok  	github.com/ali-shortcuts/nexaroute/internal/video/orchestrator	1.177s
+ok  	github.com/ali-shortcuts/nexaroute/internal/video/providers	1.272s
+ok  	github.com/ali-shortcuts/nexaroute/internal/video/queue	1.029s
+ok  	github.com/ali-shortcuts/nexaroute/internal/video/render	1.013s
+ok  	github.com/ali-shortcuts/nexaroute/internal/video/runtime	1.389s
+ok  	github.com/ali-shortcuts/nexaroute/internal/video/storage	1.027s
+ok  	github.com/ali-shortcuts/nexaroute/internal/video/tts	1.042s
+== release artifact manifest checks ==
+test-release-artifacts: intact fixture verifies
+test-release-artifacts: correct expected source commit verifies (env and positional)
+test-release-artifacts: rejected as required — wrong expected source commit
+test-release-artifacts: rejected as required — malformed expected source commit
+test-release-artifacts: rejected as required — SBOM namespace stamped unknown with an expected commit
+test-release-artifacts: rejected as required — attacker-controlled namespace host (substring bait)
+test-release-artifacts: rejected as required — namespace release version mismatch
+test-release-artifacts: rejected as required — malformed SBOM namespace
+test-release-artifacts: rejected as required — modified asset
+test-release-artifacts: rejected as required — missing SBOM
+test-release-artifacts: rejected as required — manifest entry dropped
+test-release-artifacts: rejected as required — manifest self-reference
+test-release-artifacts: rejected as required — SBOM module version drift vs go.mod
+test-release-artifacts: unlinked testify and yaml modules may be absent from SBOM
+test-release-artifacts: rejected as required — SBOM Go module package not pinned in go.mod
+test-release-artifacts: rejected as required — Go module PURL path disagrees with its pinned SBOM package name
+test-release-artifacts: main module and stdlib purls are accepted
+test-release-artifacts: PASS
+== SBOM generator trust-chain checks ==
+test-generate-sbom: corrupt cached tarball fails closed
+test-generate-sbom: tampered cached executable ignored; genuine Syft produced the SBOM
+test-generate-sbom: PASS
+== web ui javascript syntax ==
+== real browser control-plane acceptance ==
+WARN: Chromium + Python Playwright unavailable; skipping browser acceptance
+== short fuzz checks ==
+fuzz: elapsed: 0s, gathering baseline coverage: 0/2 completed
+fuzz: elapsed: 0s, gathering baseline coverage: 2/2 completed, now fuzzing with 2 workers
+fuzz: elapsed: 2s, execs: 5906 (2947/sec), new interesting: 31 (total: 33)
+PASS
+ok  	github.com/ali-shortcuts/nexaroute/internal/httpapi	2.016s
+fuzz: elapsed: 0s, gathering baseline coverage: 0/3 completed
+fuzz: elapsed: 0s, gathering baseline coverage: 3/3 completed, now fuzzing with 2 workers
+fuzz: elapsed: 2s, execs: 85162 (41371/sec), new interesting: 85 (total: 88)
+PASS
+ok  	github.com/ali-shortcuts/nexaroute/internal/core	2.062s
+== linux amd64 build ==
+== linux arm64 build ==
+VERIFY PASS

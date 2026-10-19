@@ -37,6 +37,7 @@
     "code_render_planner_models": [],
     "code_render_planner_json_mode": false,
     "code_render_max_duration_seconds": 120,
-    "code_render_work_root": ""
+    "code_render_work_root": "",
+    "code_render_retention_hours": 24
   }
 }

@@ -314,6 +314,7 @@ func main() {
 			CodeRenderPlannerJSONMode:    cfg.Video.CodeRenderPlannerJSONMode,
 			CodeRenderMaxDurationSeconds: cfg.Video.CodeRenderMaxDurationSeconds,
 			CodeRenderWorkRoot:           cfg.Video.CodeRenderWorkRoot,
+			CodeRenderRetentionHours:     cfg.Video.CodeRenderRetentionHours,
 		}, filepath.Dir(*configPath))
 		if err != nil {
 			bootstrap.Fatalf("cannot initialize video gateway: %v", err)

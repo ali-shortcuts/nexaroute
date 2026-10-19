@@ -131,6 +131,9 @@ generation, and image elements are rejected rather than silently ignored;
 the planning model's token cost is metered by the gateway data plane, not
 the video ledger; QC is deterministic (ffprobe + blank-frame checks) with no
 vision-model verdict and no automatic plan repair after a QC failure yet;
+finished jobs and their work directories are reclaimed after a configurable
+retention window (`code_render_retention_hours`, default 24, hourly sweep +
+opportunistic sweep on submission; non-terminal jobs are never pruned);
 and live planning through a real external model is UNVERIFIED until run
 with an operator's configured model (CI uses a scripted planner).
 

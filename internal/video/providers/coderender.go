@@ -22,6 +22,15 @@ import (
 // CodeRenderID is the provider ID of the Universal AI-to-Video engine.
 const CodeRenderID = "code-render"
 
+// DefaultCodeRenderRetention is the terminal-job and work-directory
+// retention applied when an operator does not configure one. It is
+// deliberately much longer than any poll interval or asset download:
+// the orchestrator polls and downloads within seconds of a job
+// finishing, so a day keeps restart recovery and replay working while
+// still reclaiming rendered frames, FFmpeg intermediates and per-job
+// scratch space. A non-positive Retention keeps terminal jobs forever.
+const DefaultCodeRenderRetention = 24 * time.Hour
+
 // CodeRender is the Tier-A "code-render" video provider (issue #461): a
 // configured text/coding model authors a validated declarative plan and the
 // deterministic local renderer turns it into a real MP4. The provider is
@@ -37,6 +46,12 @@ type CodeRender struct {
 	// HandlesNarrationFlag is kept unexported; see HandlesNarration.
 	MaxDurationSeconds float64
 	MaxAssetBytes      int64
+	// Retention bounds how long a terminal job and its per-job work
+	// directory stay available after the job finishes. It must exceed
+	// the orchestrator's poll-and-download window; the default is
+	// DefaultCodeRenderRetention. A non-positive value keeps terminal
+	// jobs and their directories forever.
+	Retention time.Duration
 
 	mu   sync.Mutex
 	jobs map[string]*codeRenderJob
@@ -60,6 +75,8 @@ type codeRenderJob struct {
 	output   string // final MP4 path, set only after QC passes
 	plan     video.Plan
 	usage    map[string]string
+	workDir  string    // per-job scratch directory, removable after retention
+	finished time.Time // set once the job reaches a terminal state
 }
 
 // NewCodeRender builds the provider. workRoot is created lazily per job.
@@ -70,7 +87,8 @@ func NewCodeRender(a *agent.Agent, r *render.Renderer, narrator Narrator, workRo
 	return &CodeRender{
 		Agent: a, Renderer: r, Narrator: narrator, WorkRoot: workRoot,
 		Models: append([]string(nil), models...), MaxDurationSeconds: maxDuration,
-		jobs: map[string]*codeRenderJob{},
+		Retention: DefaultCodeRenderRetention,
+		jobs:      map[string]*codeRenderJob{},
 	}
 }
 
@@ -189,6 +207,10 @@ func (p *CodeRender) CreateJob(ctx context.Context, r video.VideoRequest) (video
 	if err := p.Renderer.Preflight(ctx); err != nil {
 		return video.ProviderJob{}, fmt.Errorf("code-render preflight: %w", err)
 	}
+	// Opportunistic retention sweep: reclaim terminal jobs and their
+	// work directories without a separate scheduler. Best-effort by
+	// design — a removal failure never blocks a new job.
+	p.PruneTerminal(time.Now())
 	plan, attempts, err := p.resolvePlan(ctx, r)
 	if err != nil {
 		return video.ProviderJob{}, err
@@ -285,6 +307,7 @@ func (p *CodeRender) run(ctx context.Context, job *codeRenderJob, r video.VideoR
 		job.mu.Lock()
 		job.state = video.StateFailed
 		job.err = fmt.Sprintf(format, args...)
+		job.finished = time.Now()
 		job.mu.Unlock()
 	}
 	if strings.TrimSpace(p.WorkRoot) == "" {
@@ -304,6 +327,12 @@ func (p *CodeRender) run(ctx context.Context, job *codeRenderJob, r video.VideoR
 			return
 		}
 	}
+	// Record the scratch directory so terminal retention can remove it,
+	// but only after the completed output has been downloaded through
+	// the asset sink (the retention window is far longer than that).
+	job.mu.Lock()
+	job.workDir = dir
+	job.mu.Unlock()
 	plan := job.plan
 	// Persist the exact plan that is executed, for audit/reproducibility.
 	if data, mErr := json.MarshalIndent(plan, "", "  "); mErr == nil {
@@ -317,6 +346,7 @@ func (p *CodeRender) run(ctx context.Context, job *codeRenderJob, r video.VideoR
 		if ctx.Err() != nil {
 			job.mu.Lock()
 			job.state = video.StateCancelled
+			job.finished = time.Now()
 			job.mu.Unlock()
 			return
 		}
@@ -403,6 +433,7 @@ func (p *CodeRender) run(ctx context.Context, job *codeRenderJob, r video.VideoR
 	job.output = finalPath
 	job.state = video.StateCompleted
 	job.progress = 1
+	job.finished = time.Now()
 	job.mu.Unlock()
 }
 
@@ -463,8 +494,49 @@ func (p *CodeRender) CancelJob(_ context.Context, id string) error {
 	if job.state != video.StateCompleted {
 		job.state = video.StateCancelled
 	}
+	if job.finished.IsZero() {
+		job.finished = time.Now()
+	}
 	job.mu.Unlock()
 	return nil
+}
+
+// PruneTerminal removes terminal jobs whose finish time is older than
+// Retention and deletes their per-job work directories, returning the
+// number of jobs pruned. Non-terminal jobs are NEVER pruned, however
+// old, because a render may still be writing into its directory; and a
+// non-positive Retention keeps everything. It is safe to call
+// concurrently and repeatedly. The retention window must be longer than
+// the orchestrator's poll-and-download window: the output MP4 lives in
+// the work directory until DownloadOutputs persists it through the
+// asset sink.
+func (p *CodeRender) PruneTerminal(now time.Time) int {
+	p.mu.Lock()
+	retention := p.Retention
+	if retention <= 0 {
+		p.mu.Unlock()
+		return 0
+	}
+	cutoff := now.Add(-retention)
+	var dirs []string
+	pruned := 0
+	for id, job := range p.jobs {
+		job.mu.Lock()
+		terminal := job.state == video.StateCompleted || job.state == video.StateFailed || job.state == video.StateCancelled
+		if terminal && !job.finished.IsZero() && job.finished.Before(cutoff) {
+			delete(p.jobs, id)
+			if job.workDir != "" {
+				dirs = append(dirs, job.workDir)
+			}
+			pruned++
+		}
+		job.mu.Unlock()
+	}
+	p.mu.Unlock()
+	for _, dir := range dirs {
+		_ = os.RemoveAll(dir)
+	}
+	return pruned
 }
 
 // DownloadOutputs persists the QC-validated MP4 through the asset sink.

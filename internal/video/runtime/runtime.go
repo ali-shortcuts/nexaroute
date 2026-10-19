@@ -37,6 +37,11 @@ type Runtime struct {
 	workerDone   chan struct{}
 	jobRetention time.Duration
 	pruneDone    chan struct{}
+	// codeRender is the registered code-render provider (nil when
+	// disabled); codeRenderRetention is its terminal-job/work-dir
+	// retention window, pruned by the same hourly sweeper as jobs.
+	codeRender          *providers.CodeRender
+	codeRenderRetention time.Duration
 }
 
 func New(cfg video.Config, baseDir string) (*Runtime, error) {
@@ -130,6 +135,8 @@ func New(cfg video.Config, baseDir string) (*Runtime, error) {
 	// configured providers, routing, and credentials.
 	var universalAgent *agent.Agent
 	var codeRenderMaxDuration float64
+	var codeRender *providers.CodeRender
+	var codeRenderRetention time.Duration
 	if cfg.CodeRenderEnabled {
 		planner, err := agent.NewOpenAIPlanner(cfg.CodeRenderPlannerBaseURL, cfg.CodeRenderPlannerAPIKeyEnv, cfg.CodeRenderPlannerJSONMode)
 		if err != nil {
@@ -171,6 +178,16 @@ func New(cfg video.Config, baseDir string) (*Runtime, error) {
 		cr := providers.NewCodeRender(universalAgent, &render.Renderer{FFmpeg: ffmpegBinary}, narrator, workRoot, models, codeRenderMaxDuration)
 		cr.MaxAssetBytes = maxBytes
 		reg[cr.ID()] = cr
+		codeRender = cr
+		switch {
+		case cfg.CodeRenderRetentionHours < 0:
+			codeRenderRetention = 0 // keep terminal jobs and work dirs forever
+		case cfg.CodeRenderRetentionHours > 0:
+			codeRenderRetention = time.Duration(cfg.CodeRenderRetentionHours) * time.Hour
+		default:
+			codeRenderRetention = providers.DefaultCodeRenderRetention
+		}
+		cr.Retention = codeRenderRetention
 	}
 	if len(reg) == 0 {
 		return nil, errors.New("video gateway is enabled but no provider is configured; configure the local ComfyUI workflow, enable the code-render provider, or enable development_fake_provider only for tests")
@@ -187,7 +204,7 @@ func New(cfg video.Config, baseDir string) (*Runtime, error) {
 	}
 	pool := queue.NewWorkerPool(q, cfg.Workers, orch.RunJob)
 	h := &api.Handler{Orch: orch, Store: store, Providers: reg, Assets: assetSink, RequireAuth: true, BearerToken: token, Universal: universalAgent, UniversalMaxDuration: codeRenderMaxDuration}
-	return &Runtime{Handler: h, Queue: q, Workers: pool, Store: store, Orchestrator: orch, jobRetention: time.Duration(cfg.JobRetentionDays) * 24 * time.Hour}, nil
+	return &Runtime{Handler: h, Queue: q, Workers: pool, Store: store, Orchestrator: orch, jobRetention: time.Duration(cfg.JobRetentionDays) * 24 * time.Hour, codeRender: codeRender, codeRenderRetention: codeRenderRetention}, nil
 }
 
 // instanceID names this process as a video job lease owner:
@@ -233,12 +250,14 @@ func (r *Runtime) Start(ctx context.Context) error {
 		<-workerDone
 		return fmt.Errorf("recover persisted video jobs: %w", err)
 	}
-	// Retention (#420 item 5): when configured, prune terminal
-	// jobs past the retention window once at startup and then
-	// hourly for the life of the runtime. Best-effort: a prune
-	// failure never blocks startup or stops the ticker.
-	if r.jobRetention > 0 {
-		_, _ = r.Orchestrator.PruneTerminalJobs(workerCtx, time.Now(), r.jobRetention)
+	// Retention (#420 item 5; #461 code-render): when configured,
+	// prune terminal jobs past the retention window once at startup
+	// and then hourly for the life of the runtime, including
+	// code-render terminal jobs and their now-unneeded work
+	// directories. Best-effort: a prune failure never blocks startup
+	// or stops the ticker.
+	if r.jobRetention > 0 || r.codeRenderRetention > 0 {
+		r.pruneOnce(workerCtx, time.Now())
 		pruneDone := make(chan struct{})
 		r.pruneDone = pruneDone
 		go func() {
@@ -250,12 +269,24 @@ func (r *Runtime) Start(ctx context.Context) error {
 				case <-workerCtx.Done():
 					return
 				case now := <-t.C:
-					_, _ = r.Orchestrator.PruneTerminalJobs(workerCtx, now, r.jobRetention)
+					r.pruneOnce(workerCtx, now)
 				}
 			}
 		}()
 	}
 	return nil
+}
+
+// pruneOnce runs one best-effort retention sweep for terminal video
+// jobs and, when the code-render provider is registered, its terminal
+// provider jobs and work directories.
+func (r *Runtime) pruneOnce(ctx context.Context, now time.Time) {
+	if r.jobRetention > 0 {
+		_, _ = r.Orchestrator.PruneTerminalJobs(ctx, now, r.jobRetention)
+	}
+	if r.codeRender != nil && r.codeRenderRetention > 0 {
+		r.codeRender.PruneTerminal(now)
+	}
 }
 
 func (r *Runtime) Close() {
