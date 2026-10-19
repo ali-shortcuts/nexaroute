@@ -14,7 +14,10 @@ import shutil
 import socket
 import subprocess
 import tempfile
+import threading
 import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import urllib.error
 import urllib.request
 
 from playwright.sync_api import expect, sync_playwright
@@ -47,9 +50,27 @@ def console_errors(page):
 def admin_json(base: str, path: str, method: str, body: dict | None = None) -> dict:
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(base + path, data=data, headers={"Content-Type": "application/json"}, method=method)
-    with urllib.request.urlopen(req, timeout=10) as response:
-        raw = response.read()
-        return json.loads(raw) if raw else {}
+    # The complete browser suite deliberately drives many admin requests from
+    # one loopback source. Respect a short 429 cooldown for this out-of-browser
+    # verification helper rather than failing unrelated assertions because the
+    # shared test IP bucket was briefly exhausted. Browser fetches themselves
+    # are not intercepted/retried: a visible UI/API rate-limit error still fails
+    # the acceptance scenario.
+    for attempt in range(6):
+        try:
+            with urllib.request.urlopen(req, timeout=10) as response:
+                raw = response.read()
+                return json.loads(raw) if raw else {}
+        except urllib.error.HTTPError as exc:
+            if exc.code != 429 or attempt == 5:
+                raise
+            retry_after = exc.headers.get("Retry-After", "")
+            try:
+                delay = max(0.5, min(3.0, float(retry_after)))
+            except (TypeError, ValueError):
+                delay = min(3.0, 0.75 * (attempt + 1))
+            time.sleep(delay)
+    raise AssertionError("unreachable: bounded admin 429 retry loop exhausted")
 
 def main() -> None:
     chromium = shutil.which("chromium") or shutil.which("google-chrome")
@@ -113,6 +134,24 @@ def main() -> None:
                 errors = [m for m in console_msgs if m[0] == "error"]
                 assert not errors, f"Console errors: {errors}"
                 
+                # --- #502: first-run empty state (named scenario) ---
+                # The gateway booted with zero providers/routes, so the
+                # first-run surfaces must say so honestly before anything
+                # is created in this suite.
+                expect(page.locator("#content")).to_contain_text("Add and test your first")
+                page.locator('[data-page="providers"]').click()
+                page.wait_for_load_state("domcontentloaded")
+                expect(page.locator(".empty-state")).to_contain_text("Connect your first provider")
+                assert page.locator(".provider-tile:not(.preset-tile)").count() == 0, "first run must show no configured provider tiles"
+                page.locator('[data-page="routing"]').click()
+                page.wait_for_load_state("domcontentloaded")
+                expect(page.locator(".empty-state")).to_contain_text("Create your first public route")
+                page.locator('[data-page="activity"]').click()
+                page.wait_for_load_state("domcontentloaded")
+                expect(page.locator(".empty-state")).to_contain_text("No real activity yet")
+                errors = [m for m in console_msgs if m[0] == "error"]
+                assert not errors, f"Console errors after first-run empty state: {errors}"
+
                 # --- PRIVACY P3 TESTS ---
                 # Go to providers page
                 page.locator('[data-page="providers"]').click()
@@ -226,11 +265,6 @@ def main() -> None:
                 # Check console errors
                 errors = [m for m in console_msgs if m[0] == "error"]
                 assert not errors, f"Console errors after routing: {errors}"
-                
-                # --- Activity page ---
-                page.locator('[data-page="activity"]').click()
-                page.wait_for_load_state("domcontentloaded")
-                expect(page.locator("#content")).to_contain_text("No real activity yet")
                 
                 # --- Screenshots for evidence ---
                 evidence_dir = evidence_root or ROOT / "docs/browser-evidence/privacy"

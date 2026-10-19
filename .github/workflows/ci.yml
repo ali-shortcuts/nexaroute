@@ -62,6 +62,7 @@ jobs:
           python3 -m pip install --user playwright
           python3 -m playwright install --with-deps chromium
           python3 scripts/test-browser-e2e.py
+          python3 scripts/test-browser-e2e-502.py
 
       - name: Release packaging and installer lifecycle tests
         run: |

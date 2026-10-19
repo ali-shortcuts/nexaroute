@@ -91,8 +91,12 @@ func TestModelOnboardingProvenanceWireFRoundTrip(t *testing.T) {
 		t.Error("detectModels must tag discovered models with the discovered source")
 	}
 	manual := extractFunctionLine(t, js, "readProvider")
-	if !strings.Contains(manual, "source: 'manual'") {
-		t.Error("readProvider defaults manually entered models to the manual source")
+	if !strings.Contains(manual, "source: x.dataset.source || 'manual'") {
+		t.Error("readProvider must preserve discovered provenance and default manual entries to manual")
+	}
+	rows := extractFunctionLine(t, js, "modelRow")
+	if !strings.Contains(rows, `data-source="${esc(x.source || 'manual')}"`) {
+		t.Error("modelRow must carry source provenance into the saved model form")
 	}
 	if !strings.Contains(manual, "modelTestResults") {
 		t.Error("readProvider must carry over per-model test outcomes from provider-test runs")
