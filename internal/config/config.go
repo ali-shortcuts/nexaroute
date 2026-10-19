@@ -863,16 +863,48 @@ type ProviderConfig struct {
 }
 
 type ModelConfig struct {
-	ID                string       `json:"id"`
-	Model             string       `json:"model"`
-	Aliases           []string     `json:"aliases,omitempty"`
-	Enabled           bool         `json:"enabled"`
-	Priority          int          `json:"priority"`
-	Weight            float64      `json:"weight"`
-	ContextWindow     int          `json:"context_window,omitempty"`
-	InputCostPerMTok  float64      `json:"input_cost_per_mtok,omitempty"`
-	OutputCostPerMTok float64      `json:"output_cost_per_mtok,omitempty"`
-	Capabilities      Capabilities `json:"capabilities"`
+	ID                string   `json:"id"`
+	Model             string   `json:"model"`
+	Aliases           []string `json:"aliases,omitempty"`
+	Enabled           bool     `json:"enabled"`
+	Priority          int      `json:"priority"`
+	Weight            float64  `json:"weight"`
+	ContextWindow     int      `json:"context_window,omitempty"`
+	InputCostPerMTok  float64  `json:"input_cost_per_mtok,omitempty"`
+	OutputCostPerMTok float64  `json:"output_cost_per_mtok,omitempty"`
+	// Source is the onboarding origin (manual/discovered); TestState is the
+	// last bounded per-model generation-test outcome. Empty values remain
+	// valid for legacy configurations and mean manual/untested.
+	Source       string       `json:"source,omitempty"`
+	TestState    string       `json:"test_state,omitempty"`
+	Capabilities Capabilities `json:"capabilities"`
+}
+
+// Model onboarding provenance values (issue #394).
+const (
+	ModelSourceManual     = "manual"
+	ModelSourceDiscovered = "discovered"
+
+	ModelTestUntested = "untested"
+	ModelTestPassed   = "passed"
+	ModelTestFailed   = "failed"
+	ModelTestDegraded = "degraded"
+)
+
+func ValidModelSource(v string) bool {
+	switch v {
+	case "", ModelSourceManual, ModelSourceDiscovered:
+		return true
+	}
+	return false
+}
+
+func ValidModelTestState(v string) bool {
+	switch v {
+	case "", ModelTestUntested, ModelTestPassed, ModelTestFailed, ModelTestDegraded:
+		return true
+	}
+	return false
 }
 
 type Capabilities struct {
@@ -2401,6 +2433,12 @@ func (c Config) Validate() error {
 			}
 			if math.IsNaN(m.Weight) || math.IsInf(m.Weight, 0) || m.Weight <= 0 || m.Weight > 1_000_000 {
 				return fmt.Errorf("deployment %q weight must be finite and between 0 and 1000000", p.ID+"/"+m.ID)
+			}
+			if !ValidModelSource(m.Source) {
+				return fmt.Errorf("deployment %q source %q must be manual or discovered", p.ID+"/"+m.ID, m.Source)
+			}
+			if !ValidModelTestState(m.TestState) {
+				return fmt.Errorf("deployment %q test_state %q must be untested, passed, failed or degraded", p.ID+"/"+m.ID, m.TestState)
 			}
 			if m.ContextWindow < 0 || m.ContextWindow > 100_000_000 {
 				return fmt.Errorf("deployment %q context_window must be between 0 and 100000000", p.ID+"/"+m.ID)
