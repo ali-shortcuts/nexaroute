@@ -1,16 +1,27 @@
 name: Browser evidence
 
-# Manual evidence generation for #489 item 6: runs
+# Evidence generation for #489 item 6: runs
 # scripts/browser-evidence.mjs on a browser-capable runner (the
-# supervisor sandbox's Chromium refuses loopback navigations, so the
-# committed docs/browser-evidence/m2-14 matrix is produced here) and
+# supervisor sandbox's Chromium refuses loopback navigations) and
 # preserves the capture as a run artifact. A maintainer then commits
-# the artifact contents under docs/browser-evidence/m2-14/ in a
-# follow-up PR that cites this run as provenance. This workflow is
-# dispatch-only: it is not a merge gate and never writes to the repo.
+# a reviewed complete artifact under docs/browser-evidence/m2-14/ in
+# a follow-up PR that cites this run as provenance. Triggers are manual
+# or path-filtered main-only pushes; this is not a merge gate and never
+# writes to the repo.
 
 on:
   workflow_dispatch:
+  # Also preserve a fresh run artifact after browser UI/capture changes land on main.
+  # Artifact-only; deliberately not a required merge check and never writes to the repo.
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/browser-evidence.yml"
+      - "internal/httpapi/**"
+      - "cmd/gateway/**"
+      - "scripts/browser-evidence.mjs"
+      - "scripts/a11y/**"
+      - "docs/browser-evidence/m2-14/README.md"
 
 permissions:
   contents: read
