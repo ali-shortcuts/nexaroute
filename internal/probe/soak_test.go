@@ -32,7 +32,13 @@ func TestSoakRepeatedRecoveryCyclesReleaseState(t *testing.T) {
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		n := calls.Add(1)
 		w.Header().Set("Content-Type", "application/json")
-		if n%3 != 0 {
+		// Fail every third call. Recovery re-admission requires 3 successful
+		// probes within a 5-probe cycle (ProbeRecoverySuccessThreshold), so
+		// the failure density must leave at least 3 successes in any 5
+		// consecutive calls; failing 2 of 3 made the threshold unreachable
+		// by construction. One failure per cycle still exercises the
+		// recovery failure/progress accounting.
+		if n%3 == 0 {
 			w.WriteHeader(http.StatusBadGateway)
 			_, _ = io.WriteString(w, `{"error":"temporary"}`)
 			return
