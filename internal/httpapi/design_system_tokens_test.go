@@ -30,7 +30,7 @@ func TestDesignTokenLayerContract(t *testing.T) {
 
 	required := []string{
 		// Semantic status tokens.
-		"--ok", "--degraded", "--down", "--live", "--stale", "--estimated", "--actual",
+		"--ok", "--degraded", "--down", "--live", "--stale", "--estimated", "--actual", "--bad-ink",
 		// Type scale.
 		"--fs-2xs", "--fs-xs", "--fs-sm", "--fs-md", "--fs-lg", "--fs-xl", "--fs-2xl",
 		// Spacing scale.
@@ -158,4 +158,29 @@ func cssRuleBlock(s, selector string) string {
 		return ""
 	}
 	return s[i : i+j+1]
+}
+
+
+func TestLightThemeSidebarAndErrorTextUseContrastTokens(t *testing.T) {
+	css, err := webFS.ReadFile("web/styles.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(css)
+	required := []string{
+		"html[data-theme=light] .notice.error { color: var(--bad-ink); }",
+		"@media (min-width: 701px)",
+		"html[data-theme=light] .sidebar .brand strong { color: var(--slate-50); }",
+		"html[data-theme=light] .sidebar .brand small { color: var(--slate-300); }",
+		"html[data-theme=light] .sidebar .brand-mark { color: var(--tint-blue-2); }",
+		"html[data-theme=light] .sidebar .nav-group { color: var(--slate-300); }",
+		"html[data-theme=light] .sidebar .primary-nav button:not(.active) { color: var(--slate-300); }",
+		"html[data-theme=light] .sidebar .primary-nav button:not(.active) span { color: var(--tint-blue-2); }",
+		"html[data-theme=light] .sidebar .sidebar-foot #version { color: var(--slate-300); }",
+	}
+	for _, rule := range required {
+		if !strings.Contains(s, rule) {
+			t.Errorf("missing contrast rule %q", rule)
+		}
+	}
 }
