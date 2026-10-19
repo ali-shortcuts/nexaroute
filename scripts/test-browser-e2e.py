@@ -17,6 +17,7 @@ import tempfile
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import urllib.error
 import urllib.request
 
 from playwright.sync_api import expect, sync_playwright
@@ -49,9 +50,27 @@ def console_errors(page):
 def admin_json(base: str, path: str, method: str, body: dict | None = None) -> dict:
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(base + path, data=data, headers={"Content-Type": "application/json"}, method=method)
-    with urllib.request.urlopen(req, timeout=10) as response:
-        raw = response.read()
-        return json.loads(raw) if raw else {}
+    # The complete browser suite deliberately drives many admin requests from
+    # one loopback source. Respect a short 429 cooldown for this out-of-browser
+    # verification helper rather than failing unrelated assertions because the
+    # shared test IP bucket was briefly exhausted. Browser fetches themselves
+    # are not intercepted/retried: a visible UI/API rate-limit error still fails
+    # the acceptance scenario.
+    for attempt in range(6):
+        try:
+            with urllib.request.urlopen(req, timeout=10) as response:
+                raw = response.read()
+                return json.loads(raw) if raw else {}
+        except urllib.error.HTTPError as exc:
+            if exc.code != 429 or attempt == 5:
+                raise
+            retry_after = exc.headers.get("Retry-After", "")
+            try:
+                delay = max(0.5, min(3.0, float(retry_after)))
+            except (TypeError, ValueError):
+                delay = min(3.0, 0.75 * (attempt + 1))
+            time.sleep(delay)
+    raise AssertionError("unreachable: bounded admin 429 retry loop exhausted")
 
 def start_fake_upstream(kind: str) -> ThreadingHTTPServer:
     """Test-only local upstream for the #502 fallback scenario.
