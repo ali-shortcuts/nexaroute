@@ -2,6 +2,7 @@ package egress
 
 import (
 	"net/http"
+	"net/netip"
 	"testing"
 )
 
@@ -47,5 +48,27 @@ func TestPolicyTransportIsHTTPTransport(t *testing.T) {
 	client := &http.Client{Transport: tr}
 	if client.Transport == nil {
 		t.Fatal("transport missing")
+	}
+}
+
+func TestCheckDialAnswersPinsLoopbackSpelledNamesToLoopback(t *testing.T) {
+	loopback := netip.MustParseAddr("127.0.0.1")
+	public := netip.MustParseAddr("93.184.216.34")
+	private := netip.MustParseAddr("10.0.0.1")
+
+	if err := checkDialAnswers("localhost", []netip.Addr{loopback}, true); err != nil {
+		t.Fatalf("legit loopback answer rejected: %v", err)
+	}
+	if err := checkDialAnswers("localhost", []netip.Addr{public}, true); err == nil {
+		t.Fatal("loopback-spelled name resolving to a public address was allowed")
+	}
+	if err := checkDialAnswers("localhost", []netip.Addr{loopback, public}, true); err == nil {
+		t.Fatal("mixed loopback/public answers were allowed for a loopback-spelled name")
+	}
+	if err := checkDialAnswers("example.com", []netip.Addr{public}, false); err != nil {
+		t.Fatalf("ordinary public answer rejected: %v", err)
+	}
+	if err := checkDialAnswers("example.com", []netip.Addr{private}, false); err == nil {
+		t.Fatal("private answer was allowed")
 	}
 }

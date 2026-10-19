@@ -97,6 +97,23 @@ func blocked(ip netip.Addr, allowLoopback bool) bool {
 	return false
 }
 
+// checkDialAnswers validates the resolved addresses for one dial: every
+// answer must survive the blocklist, and when the host earned loopback
+// exemptions by NAME (localhost or *.localhost), every answer must actually
+// be loopback — a loopback-spelled name resolving to a public address would
+// otherwise send provider credentials over plaintext HTTP to a remote host.
+func checkDialAnswers(host string, ips []netip.Addr, allowLoopback bool) error {
+	for _, ip := range ips {
+		if !ip.IsValid() || blocked(ip, allowLoopback) {
+			return fmt.Errorf("egress DNS answer for %q is blocked", host)
+		}
+		if allowLoopback && !ip.IsLoopback() {
+			return fmt.Errorf("egress DNS answer for %q is blocked", host)
+		}
+	}
+	return nil
+}
+
 // isLoopbackHost reports whether a URL/dial host names the local machine
 // explicitly: a loopback IP literal, "localhost" or "*.localhost". An
 // arbitrary DNS name that merely resolves to 127.0.0.1 does NOT qualify.
@@ -171,11 +188,16 @@ func (p Policy) NewTransport(target string, proxyURL string) (*http.Transport, e
 		if err != nil || len(ips) == 0 {
 			return nil, fmt.Errorf("egress DNS resolution failed for %q: %w", host, err)
 		}
+		addrs := make([]netip.Addr, 0, len(ips))
 		for _, candidate := range ips {
 			ip, ok := netip.AddrFromSlice(candidate.IP)
-			if !ok || blocked(ip, allowLoopback) {
+			if !ok {
 				return nil, fmt.Errorf("egress DNS answer for %q is blocked", host)
 			}
+			addrs = append(addrs, ip)
+		}
+		if err := checkDialAnswers(host, addrs, allowLoopback); err != nil {
+			return nil, err
 		}
 		var last error
 		for _, candidate := range ips {

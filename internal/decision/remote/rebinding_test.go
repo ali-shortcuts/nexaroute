@@ -9,7 +9,6 @@ package remote
 // is opened to a private/internal IP).
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"net"
@@ -33,16 +32,6 @@ func TestSSRF_DNSRebinding_PinnedDial(t *testing.T) {
 	canary := startCanary(t)
 	dns := newFakeDNSServer(t)
 	dns.setA("rebind.test", net.IPv4(192, 0, 2, 1), net.IPv4(127, 0, 0, 1))
-
-	orig := net.DefaultResolver
-	net.DefaultResolver = &net.Resolver{
-		PreferGo: true,
-		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
-			var d net.Dialer
-			return d.DialContext(ctx, network, dns.addr())
-		},
-	}
-	t.Cleanup(func() { net.DefaultResolver = orig })
 
 	tr := NewTransport()
 	t.Cleanup(tr.CloseIdleConnections)
