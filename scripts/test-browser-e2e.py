@@ -173,7 +173,7 @@ def main() -> None:
                 page.locator('[data-page="providers"]').click()
                 page.wait_for_load_state("domcontentloaded")
                 expect(page.locator(".empty-state")).to_contain_text("Connect your first provider")
-                assert page.locator(".provider-tile").count() == 0, "first run must show no provider tiles"
+                assert page.locator(".provider-tile:not(.preset-tile)").count() == 0, "first run must show no configured provider tiles"
                 page.locator('[data-page="routing"]').click()
                 page.wait_for_load_state("domcontentloaded")
                 expect(page.locator(".empty-state")).to_contain_text("Create your first public route")
