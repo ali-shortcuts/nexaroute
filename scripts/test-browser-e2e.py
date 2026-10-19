@@ -297,44 +297,6 @@ def main() -> None:
                 errors = [m for m in console_msgs if m[0] == "error"]
                 assert not errors, f"Console errors after provider ops: {errors}"
                 
-                # --- #502: discover + manual-add model + bounded test ---
-                # Discovery is mocked at the browser boundary (deterministic,
-                # no paid upstream); the per-model bounded test persists its
-                # state onto the provider card via test_state (#394/#567).
-                page.locator('[data-page="providers"]').click()
-                page.wait_for_load_state("domcontentloaded")
-                page.locator('[data-action="add-provider"]').first.click()
-                expect(page.locator("#modal-title")).to_have_text("Add provider")
-                page.locator("#p-name").fill("E2E Onboarding")
-                page.locator("#p-base").fill("http://127.0.0.1:9/v1")
-                page.locator('[data-action="detect-models"]').click()
-                expect(page.locator("#model-list")).to_contain_text("model-alpha")
-                expect(page.locator("#model-list")).to_contain_text("model-beta")
-                expect(page.locator('#model-list .model-select[value="model-alpha"]')).to_have_attribute("data-source", "discovered")
-                page.locator("#p-manual").fill("model-manual")
-                page.locator('[data-action="add-manual-model"]').click()
-                expect(page.locator("#model-list")).to_contain_text("model-manual")
-                expect(page.locator('#model-list .model-select[value="model-manual"]')).to_have_attribute("data-source", "manual")
-                page.locator('[data-action="test-model"][data-model="model-alpha"]').click()
-                expect(page.locator("#notice")).to_contain_text("model-alpha passed")
-                page.locator('[data-action="save-modal"]').click()
-                onboarding_tile = page.locator(".provider-tile", has_text="E2E Onboarding")
-                expect(onboarding_tile).to_contain_text("1 Test passed")
-                onboarding_tile.locator('[data-action="edit-provider"]').click()
-                expect(page.locator("#model-list")).to_contain_text("model-alpha")
-                expect(page.locator("#model-list")).to_contain_text("model-manual")
-                expect(page.locator('#model-list .model-select[value="model-alpha"]')).to_have_attribute("data-source", "discovered")
-                expect(page.locator('#model-list .model-select[value="model-manual"]')).to_have_attribute("data-source", "manual")
-                page.locator('[data-action="close-modal"]').first.click()
-
-                # The catalog CTA must open a prefilled add form, not silently do nothing.
-                page.locator('.preset-tile [data-action="use-preset"]').first.click()
-                expect(page.locator("#modal-title")).to_contain_text("Add provider —")
-                assert page.locator("#p-name").input_value().strip(), "Use preset must prefill the provider name"
-                page.locator('[data-action="close-modal"]').first.click()
-                errors = [m for m in console_msgs if m[0] == "error"]
-                assert not errors, f"Console errors after onboarding scenario: {errors}"
-
                 # --- Routing page: privacy setting ---
                 page.locator('[data-page="routing"]').click()
                 page.wait_for_load_state("domcontentloaded")
@@ -353,43 +315,6 @@ def main() -> None:
                 # Check console errors
                 errors = [m for m in console_msgs if m[0] == "error"]
                 assert not errors, f"Console errors after routing: {errors}"
-                
-                # --- #502: route + fallback chain, inspect compiled route ---
-                # Two test-only local upstreams: A deterministically fails,
-                # B answers. Providers and the ordered route are created
-                # through the real admin API; the routing page must render
-                # the backend-compiled fallback chain in order (the dry-run
-                # inspection surface) before any traffic is sent.
-                fail_upstream = start_fake_upstream("fail")
-                ok_upstream = start_fake_upstream("ok")
-                fail_port = fail_upstream.server_address[1]
-                ok_port = ok_upstream.server_address[1]
-                for pid, port in (("e2e-prov-a", fail_port), ("e2e-prov-b", ok_port)):
-                    admin_json(base, "/admin/api/providers", "POST", {"provider": {
-                        "id": pid, "name": pid, "type": "openai_compatible",
-                        "base_url": f"http://127.0.0.1:{port}/v1",
-                        "api_key": "e2e-fake-key", "auth_mode": "bearer", "enabled": True,
-                        "models": [{"id": "m", "model": "m", "enabled": True, "capabilities": {"streaming": True}}],
-                    }})
-                admin_json(base, "/admin/api/simple-routes", "POST", {
-                    "id": "e2e-fb-route", "name": "E2E Fallback", "public_model": "e2e-fb",
-                    "mode": "ordered", "deployments": ["e2e-prov-a/m", "e2e-prov-b/m"], "enabled": True,
-                })
-                # These API writes are outside the SPA. Reload so the initial snapshot includes them.
-                page.reload(wait_until="domcontentloaded")
-                page.locator('[data-page="routing"]').click()
-                page.wait_for_load_state("domcontentloaded")
-                fb_tile = page.locator(".route-tile", has_text="e2e-fb")
-                expect(fb_tile).to_be_visible()
-                expect(fb_tile).to_contain_text("Ordered fallback")
-                expect(fb_tile).to_contain_text("e2e-fb-route-stage-1 \u2192 e2e-fb-route-stage-2")
-                errors = [m for m in console_msgs if m[0] == "error"]
-                assert not errors, f"Console errors after route/fallback inspection: {errors}"
-
-                # --- Activity page ---
-                page.locator('[data-page="activity"]').click()
-                page.wait_for_load_state("domcontentloaded")
-                expect(page.locator("#content")).to_contain_text("No real activity yet")
                 
                 # --- Screenshots for evidence ---
                 evidence_dir = evidence_root or ROOT / "docs/browser-evidence/privacy"
@@ -868,27 +793,6 @@ def main() -> None:
                 errors = [m for m in console_msgs if m[0] == "error"]
                 assert not errors, f"Console errors after WebChat E2E: {errors}"
 
-                # --- #502: deterministic upstream failure -> fallback ---
-                # No browser-boundary mock here: the request flows through
-                # the real gateway. e2e-prov-a's upstream always answers
-                # HTTP 500, so the ordered fallback chain must land on
-                # e2e-prov-b, and the WebChat badge must show the attempts
-                # trail in order (UI state matching the backend trace).
-                page.locator('[data-page="playground"]').click()
-                page.wait_for_load_state("domcontentloaded")
-                page.locator("#pg-model").select_option("e2e-fb")
-                page.locator("#pg-prompt").fill("prove the fallback")
-                page.locator("#pg-send").click()
-                fb_msg = page.locator(".pg-msg.assistant").last
-                expect(fb_msg).to_contain_text("fallback answer from B")
-                expect(fb_msg.locator(".pg-badge")).to_contain_text("e2e-prov-a/m \u2192 e2e-prov-b/m")
-                expect(fb_msg.locator(".pg-badge")).to_contain_text("e2e-prov-b")
-                page.locator('[data-page="activity"]').click()
-                page.wait_for_load_state("domcontentloaded")
-                expect(page.locator("#content")).to_contain_text("e2e-prov-b")
-                errors = [m for m in console_msgs if m[0] == "error"]
-                assert not errors, f"Console errors after fallback scenario: {errors}"
-
                 # Evidence: Providers with video disabled (dark, both sizes).
                 video_dir = ROOT / "docs/browser-evidence/video-disabled"
                 video_dir.mkdir(parents=True, exist_ok=True)
@@ -1059,6 +963,109 @@ def main() -> None:
 
                 errors = [m for m in console_msgs if m[0] == "error"]
                 assert not errors, f"Console errors after Issue #393 browser flow: {errors}"
+
+                # The remaining #502 acceptance flows run after legacy provider/security
+
+                # round-trips so their extra browser requests cannot starve earlier
+
+                # checks against the gateway's real loopback admin rate limiter.
+
+                # --- #502: discover + manual-add model + bounded test ---
+                # Discovery is mocked at the browser boundary (deterministic,
+                # no paid upstream); the per-model bounded test persists its
+                # state onto the provider card via test_state (#394/#567).
+                page.locator('[data-page="providers"]').click()
+                page.wait_for_load_state("domcontentloaded")
+                page.locator('[data-action="add-provider"]').first.click()
+                expect(page.locator("#modal-title")).to_have_text("Add provider")
+                page.locator("#p-name").fill("E2E Onboarding")
+                page.locator("#p-base").fill("http://127.0.0.1:9/v1")
+                page.locator('[data-action="detect-models"]').click()
+                expect(page.locator("#model-list")).to_contain_text("model-alpha")
+                expect(page.locator("#model-list")).to_contain_text("model-beta")
+                expect(page.locator('#model-list .model-select[value="model-alpha"]')).to_have_attribute("data-source", "discovered")
+                page.locator("#p-manual").fill("model-manual")
+                page.locator('[data-action="add-manual-model"]').click()
+                expect(page.locator("#model-list")).to_contain_text("model-manual")
+                expect(page.locator('#model-list .model-select[value="model-manual"]')).to_have_attribute("data-source", "manual")
+                page.locator('[data-action="test-model"][data-model="model-alpha"]').click()
+                expect(page.locator("#notice")).to_contain_text("model-alpha passed")
+                page.locator('[data-action="save-modal"]').click()
+                onboarding_tile = page.locator(".provider-tile", has_text="E2E Onboarding")
+                expect(onboarding_tile).to_contain_text("1 Test passed")
+                onboarding_tile.locator('[data-action="edit-provider"]').click()
+                expect(page.locator("#model-list")).to_contain_text("model-alpha")
+                expect(page.locator("#model-list")).to_contain_text("model-manual")
+                expect(page.locator('#model-list .model-select[value="model-alpha"]')).to_have_attribute("data-source", "discovered")
+                expect(page.locator('#model-list .model-select[value="model-manual"]')).to_have_attribute("data-source", "manual")
+                page.locator('[data-action="close-modal"]').first.click()
+
+                # The catalog CTA must open a prefilled add form, not silently do nothing.
+                page.locator('.preset-tile [data-action="use-preset"]').first.click()
+                expect(page.locator("#modal-title")).to_contain_text("Add provider —")
+                assert page.locator("#p-name").input_value().strip(), "Use preset must prefill the provider name"
+                page.locator('[data-action="close-modal"]').first.click()
+                errors = [m for m in console_msgs if m[0] == "error"]
+                assert not errors, f"Console errors after onboarding scenario: {errors}"
+
+                # --- #502: route + fallback chain, inspect compiled route ---
+                # Two test-only local upstreams: A deterministically fails,
+                # B answers. Providers and the ordered route are created
+                # through the real admin API; the routing page must render
+                # the backend-compiled fallback chain in order (the dry-run
+                # inspection surface) before any traffic is sent.
+                fail_upstream = start_fake_upstream("fail")
+                ok_upstream = start_fake_upstream("ok")
+                fail_port = fail_upstream.server_address[1]
+                ok_port = ok_upstream.server_address[1]
+                for pid, port in (("e2e-prov-a", fail_port), ("e2e-prov-b", ok_port)):
+                    admin_json(base, "/admin/api/providers", "POST", {"provider": {
+                        "id": pid, "name": pid, "type": "openai_compatible",
+                        "base_url": f"http://127.0.0.1:{port}/v1",
+                        "api_key": "e2e-fake-key", "auth_mode": "bearer", "enabled": True,
+                        "models": [{"id": "m", "model": "m", "enabled": True, "capabilities": {"streaming": True}}],
+                    }})
+                admin_json(base, "/admin/api/simple-routes", "POST", {
+                    "id": "e2e-fb-route", "name": "E2E Fallback", "public_model": "e2e-fb",
+                    "mode": "ordered", "deployments": ["e2e-prov-a/m", "e2e-prov-b/m"], "enabled": True,
+                })
+                # These API writes are outside the SPA. Reload so the initial snapshot includes them.
+                page.reload(wait_until="domcontentloaded")
+                page.locator('[data-page="routing"]').click()
+                page.wait_for_load_state("domcontentloaded")
+                fb_tile = page.locator(".route-tile", has_text="e2e-fb")
+                expect(fb_tile).to_be_visible()
+                expect(fb_tile).to_contain_text("Ordered fallback")
+                expect(fb_tile).to_contain_text("e2e-fb-route-stage-1 \u2192 e2e-fb-route-stage-2")
+                errors = [m for m in console_msgs if m[0] == "error"]
+                assert not errors, f"Console errors after route/fallback inspection: {errors}"
+
+                # --- Activity page ---
+                page.locator('[data-page="activity"]').click()
+                page.wait_for_load_state("domcontentloaded")
+                expect(page.locator("#content")).to_contain_text("No real activity yet")
+
+                # --- #502: deterministic upstream failure -> fallback ---
+                # No browser-boundary mock here: the request flows through
+                # the real gateway. e2e-prov-a's upstream always answers
+                # HTTP 500, so the ordered fallback chain must land on
+                # e2e-prov-b, and the WebChat badge must show the attempts
+                # trail in order (UI state matching the backend trace).
+                page.locator('[data-page="playground"]').click()
+                page.wait_for_load_state("domcontentloaded")
+                page.locator("#pg-model").select_option("e2e-fb")
+                page.locator("#pg-prompt").fill("prove the fallback")
+                page.locator("#pg-send").click()
+                fb_msg = page.locator(".pg-msg.assistant").last
+                expect(fb_msg).to_contain_text("fallback answer from B")
+                expect(fb_msg.locator(".pg-badge")).to_contain_text("e2e-prov-a/m \u2192 e2e-prov-b/m")
+                expect(fb_msg.locator(".pg-badge")).to_contain_text("e2e-prov-b")
+                page.locator('[data-page="activity"]').click()
+                page.wait_for_load_state("domcontentloaded")
+                expect(page.locator("#content")).to_contain_text("e2e-prov-b")
+                errors = [m for m in console_msgs if m[0] == "error"]
+                assert not errors, f"Console errors after fallback scenario: {errors}"
+
 
                 print(f"M2-1 title offsets: {title_tops}")
                 print(f"M2-1 content offsets: {content_tops}")
