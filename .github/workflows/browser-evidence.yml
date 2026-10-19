@@ -1,0 +1,56 @@
+name: Browser evidence
+
+# Manual evidence generation for #489 item 6: runs
+# scripts/browser-evidence.mjs on a browser-capable runner (the
+# supervisor sandbox's Chromium refuses loopback navigations, so the
+# committed docs/browser-evidence/m2-14 matrix is produced here) and
+# preserves the capture as a run artifact. A maintainer then commits
+# the artifact contents under docs/browser-evidence/m2-14/ in a
+# follow-up PR that cites this run as provenance. This workflow is
+# dispatch-only: it is not a merge gate and never writes to the repo.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: browser-evidence-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  evidence:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.x'
+          cache: false
+
+      # The runner image ships Node 20+ on PATH; no setup-node pin is
+      # used anywhere else in this repo, so none is introduced here.
+      - name: Show Node version
+        run: node --version
+
+      - name: Install browser evidence tools
+        run: npm --prefix scripts/a11y install
+
+      - name: Capture browser evidence matrix
+        env:
+          # The runner sources this file before building the gateway;
+          # an empty file keeps `go` resolution entirely with setup-go.
+          GO_ENV: /dev/null
+        run: node scripts/browser-evidence.mjs --out docs/browser-evidence/m2-14
+
+      - name: Preserve captured evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: browser-evidence-m2-14-${{ github.sha }}-${{ github.run_id }}
+          path: docs/browser-evidence/m2-14/
+          retention-days: 90
+          if-no-files-found: error
