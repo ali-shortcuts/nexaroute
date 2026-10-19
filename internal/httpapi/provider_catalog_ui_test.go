@@ -123,3 +123,42 @@ func TestProviderPresetGridCollapsesOnMobile(t *testing.T) {
 		t.Fatal("mobile one-column rule must appear after the three-column catalog rule")
 	}
 }
+
+
+func TestProviderAdvancedSettingsCanBeEditedWithoutLeakingSavedSecrets(t *testing.T) {
+	js := readAppJS(t)
+	form := extractFunctionLine(t, js, "providerForm")
+	for _, want := range []string{
+		"p-stream-idle-timeout", "stream_idle_timeout_seconds",
+		"p-edit-headers", "p-headers", "p-replace-proxy", "p-proxy",
+		"existing values are hidden", "Saved proxy credentials are never prefilled",
+	} {
+		if !strings.Contains(form, want) {
+			t.Errorf("providerForm is missing safe advanced-setting control %q", want)
+		}
+	}
+
+	read := extractFunctionLine(t, js, "readProvider")
+	for _, want := range []string{
+		"JSON.parse", "JSON object with string values",
+		"preserve_headers: !editHeaders", "preserve_proxy: !replaceProxy",
+		"provider.headers = headers", "provider.proxy_url",
+		"stream_idle_timeout_seconds", "#model-list .model-select:checked",
+		"data-model-capability",
+	} {
+		if !strings.Contains(read, want) {
+			t.Errorf("readProvider does not persist advanced setting %q", want)
+		}
+	}
+
+	row := extractFunctionLine(t, js, "modelRow")
+	for _, want := range []string{
+		"cap('streaming'", "cap('tools'", "cap('vision'", "cap('reasoning'",
+		"Model capabilities",
+	} {
+		if !strings.Contains(row, want) {
+			t.Errorf("modelRow lacks editable capability %q", want)
+		}
+	}
+}
+
