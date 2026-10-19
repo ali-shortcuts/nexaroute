@@ -130,7 +130,7 @@ func TestProviderAdvancedSettingsCanBeEditedWithoutLeakingSavedSecrets(t *testin
 	for _, want := range []string{
 		"p-stream-idle-timeout", "stream_idle_timeout_seconds",
 		"p-edit-headers", "p-headers", "p-replace-proxy", "p-proxy",
-		"existing values are hidden", "Saved proxy credentials are never prefilled",
+		"bt('pr_headers_edit')", "bt('pr_headers_hint')", "bt('pr_proxy_edit')", "bt('pr_proxy_hint')",
 	} {
 		if !strings.Contains(form, want) {
 			t.Errorf("providerForm is missing safe advanced-setting control %q", want)
@@ -153,7 +153,7 @@ func TestProviderAdvancedSettingsCanBeEditedWithoutLeakingSavedSecrets(t *testin
 	row := extractFunctionLine(t, js, "modelRow")
 	for _, want := range []string{
 		"cap('streaming'", "cap('tools'", "cap('vision'", "cap('reasoning'",
-		"Model capabilities",
+		"bt('pr_model_caps')",
 	} {
 		if !strings.Contains(row, want) {
 			t.Errorf("modelRow lacks editable capability %q", want)
