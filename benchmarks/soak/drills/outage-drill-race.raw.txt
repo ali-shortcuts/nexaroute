@@ -1,0 +1,6 @@
+=== RUN   TestPostgresIntegrationOutageRecoveryCancellationBackpressure
+--- PASS: TestPostgresIntegrationOutageRecoveryCancellationBackpressure (0.11s)
+=== RUN   TestRedisIntegrationOutageRecoveryCancellationBackpressure
+--- PASS: TestRedisIntegrationOutageRecoveryCancellationBackpressure (3.08s)
+PASS
+ok  	github.com/ali-shortcuts/nexaroute/internal/controlplane	4.219s

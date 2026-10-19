@@ -1,0 +1,58 @@
+
+== stress-round-1 ==
+$ env NEXAROUTE_STRESS=1 go test -timeout=3m -count=1 ./internal/router ./internal/probe ./internal/events ./internal/httpapi ./internal/logging -run=\^TestStress
+ok  	github.com/ali-shortcuts/nexaroute/internal/router	2.725s
+ok  	github.com/ali-shortcuts/nexaroute/internal/probe	0.136s
+ok  	github.com/ali-shortcuts/nexaroute/internal/events	0.940s
+ok  	github.com/ali-shortcuts/nexaroute/internal/httpapi	0.045s
+ok  	github.com/ali-shortcuts/nexaroute/internal/logging	0.095s
+== stress-round-1 status=0 duration=3s max_rss=302844 KB ==
+
+== stress-round-2 ==
+$ env NEXAROUTE_STRESS=1 go test -timeout=3m -count=1 ./internal/router ./internal/probe ./internal/events ./internal/httpapi ./internal/logging -run=\^TestStress
+ok  	github.com/ali-shortcuts/nexaroute/internal/router	2.749s
+ok  	github.com/ali-shortcuts/nexaroute/internal/probe	0.104s
+ok  	github.com/ali-shortcuts/nexaroute/internal/events	0.916s
+ok  	github.com/ali-shortcuts/nexaroute/internal/httpapi	0.060s
+ok  	github.com/ali-shortcuts/nexaroute/internal/logging	0.111s
+== stress-round-2 status=0 duration=3s max_rss=302124 KB ==
+
+== stress-round-3 ==
+$ env NEXAROUTE_STRESS=1 go test -timeout=3m -count=1 ./internal/router ./internal/probe ./internal/events ./internal/httpapi ./internal/logging -run=\^TestStress
+ok  	github.com/ali-shortcuts/nexaroute/internal/router	2.664s
+ok  	github.com/ali-shortcuts/nexaroute/internal/probe	0.119s
+ok  	github.com/ali-shortcuts/nexaroute/internal/events	0.859s
+ok  	github.com/ali-shortcuts/nexaroute/internal/httpapi	0.050s
+ok  	github.com/ali-shortcuts/nexaroute/internal/logging	0.091s
+== stress-round-3 status=0 duration=3s max_rss=304308 KB ==
+
+== http-hot-reload-soak ==
+$ env NEXAROUTE_SOAK=1 go test -timeout=10m -count=1 ./internal/httpapi -run=\^TestSoak
+ok  	github.com/ali-shortcuts/nexaroute/internal/httpapi	9.674s
+== http-hot-reload-soak status=0 duration=11s max_rss=300600 KB ==
+
+== recovery-soak ==
+$ env NEXAROUTE_SOAK=1 go test -timeout=10m -count=1 ./internal/probe -run=\^TestSoak
+ok  	github.com/ali-shortcuts/nexaroute/internal/probe	0.297s
+== recovery-soak status=0 duration=1s max_rss=146964 KB ==
+
+== race-soak ==
+$ env GOMAXPROCS=4 NEXAROUTE_SOAK=1 go test -race -timeout=15m -count=1 ./internal/httpapi ./internal/probe -run=\^TestSoak
+ok  	github.com/ali-shortcuts/nexaroute/internal/httpapi	13.267s
+ok  	github.com/ali-shortcuts/nexaroute/internal/probe	1.569s
+== race-soak status=0 duration=14s max_rss=342340 KB ==
+
+== budget-leak-slope ==
+$ env NEXAROUTE_SOAK=1 go test -timeout=10m -count=1 -v ./internal/httpapi -run=\^TestSoakBudgetLeakSlope\$
+=== RUN   TestSoakBudgetLeakSlope
+    budget_leak_soak_test.go:164: leak-slope report (per-round slope over 22 post-warmup rounds):
+    budget_leak_soak_test.go:167:   goroutines         slope=+0.000000 limit=±0.500000
+    budget_leak_soak_test.go:167:   budget_rows        slope=+0.000000 limit=±0.050000
+    budget_leak_soak_test.go:167:   budget_open        slope=+0.000000 limit=±0.050000
+    budget_leak_soak_test.go:167:   budget_reserved    slope=+0.000000 limit=±0.000000
+    budget_leak_soak_test.go:167:   exact_cache_entries slope=+0.000000 limit=±0.500000
+    budget_leak_soak_test.go:167:   sem_cache_entries  slope=+0.000000 limit=±0.500000
+--- PASS: TestSoakBudgetLeakSlope (1.68s)
+PASS
+ok  	github.com/ali-shortcuts/nexaroute/internal/httpapi	1.690s
+== budget-leak-slope status=0 duration=3s max_rss=312348 KB ==

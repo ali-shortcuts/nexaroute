@@ -53,8 +53,7 @@ fault-injection/game-day coverage.
 ## Measured local evidence
 
 Environment: Linux, AMD EPYC 7763, 4 vCPU, Go 1.25.0 linux/amd64. The
-soak run used the exact current tree before the evidence commit; the raw
-summary records that commit and the dirty-worktree count.
+soak run recorded commit `0d6ee04` with a clean worktree.
 
 Command:
 
@@ -66,15 +65,15 @@ Result: `SOAK PASS` (exit 0). All stages passed:
 
 | Stage | Duration | Max RSS |
 |---|---|---|
-| stress round 1 | 3s | 316192 KB |
-| stress round 2 | 4s | 310892 KB |
-| stress round 3 | 3s | 304668 KB |
-| HTTP hot-reload soak | 10s | 305384 KB |
-| recovery soak | 0s | 141444 KB |
-| race-enabled soak | 29s | 507280 KB |
-| budget leak slope | 3s | 300900 KB |
+| stress round 1 | 3s | 302844 KB |
+| stress round 2 | 3s | 302124 KB |
+| stress round 3 | 3s | 304308 KB |
+| HTTP hot-reload soak | 11s | 300600 KB |
+| recovery soak | 1s | 146964 KB |
+| race-enabled soak | 14s | 342340 KB |
+| budget leak slope | 3s | 312348 KB |
 
-Raw evidence: `benchmarks/soak/20261019T102215Z-f000824a6e3b/` (summary,
+Raw evidence: `benchmarks/soak/20261019T102722Z-0d6ee0408e3f/` (summary,
 per-stage logs and GNU `time -v` output). The race-enabled recovery soak
 also passed separately with `-count=3` before this fit-for-purpose run.
 
@@ -93,8 +92,10 @@ NEXAROUTE_TEST_REDIS_URL='redis://127.0.0.1:16379/15' \
   -count=5 -v
 ```
 
-Result: 10/10 drill executions passed (5 PostgreSQL + 5 Redis), including a
-race-enabled run. Raw output: `benchmarks/soak/drills/`.
+Result: 10/10 drill executions passed (5 PostgreSQL + 5 Redis), and both
+drills passed again under `-race`. Raw output:
+`benchmarks/soak/drills/outage-drill.raw.txt` and
+`benchmarks/soak/drills/outage-drill-race.raw.txt`.
 
 CI executes the same drills through the existing `integration-postgres`
 and `integration-redis` jobs against their service containers, so no new
