@@ -771,11 +771,14 @@ func (s *Server) adminProviderTest(w http.ResponseWriter, r *http.Request) {
 
 	results := make([]testResult, len(models))
 	var wg sync.WaitGroup
-	limit := in.Provider.MaxConcurrency
-	if limit < 1 || limit > 32 {
-		limit = 16
+	const (
+		defaultTestConcurrency = 16
+		maxTestConcurrency     = 32
+	)
+	sem := make(chan struct{}, defaultTestConcurrency)
+	if mc := in.Provider.MaxConcurrency; mc >= 1 && mc <= maxTestConcurrency {
+		sem = make(chan struct{}, mc)
 	}
-	sem := make(chan struct{}, limit)
 	parentCtx := r.Context()
 	for i, model := range models {
 		wg.Add(1)

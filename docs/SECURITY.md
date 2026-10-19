@@ -111,6 +111,10 @@ The Admin key comparison is constant-time; client headers are not blindly propag
 
 For configuration examples and operator procedures, see [docs/CONFIGURATION.md](CONFIGURATION.md), [docs/OPERATIONS.md](OPERATIONS.md), and [docs/KNOWN_GAPS.md](KNOWN_GAPS.md).
 
+## Code-scanning dispositions
+
+Two CodeQL findings are accepted as false positives for the reasons recorded at the flagged lines, where `codeql[...]` suppression comments keep the disposition with the code: `go/request-forgery` at the provider adapter's request dispatch (destinations come only from operator-written, load-validated provider configuration, and the transport's egress policy pins dialable hosts to the operator allowlist at connect time — see Network and browser security), and `go/weak-sensitive-data-hashing` at the credential-scope fingerprint (a truncated change-detection digest of high-entropy provider keys, never a password verifier). Any future alert is either fixed in code or dispositioned here with the same standard of justification — never dismissed silently.
+
 ## Built-in TLS, mTLS, and browser CSRF
 The shared listener optionally serves HTTPS with TLS 1.2 minimum using `tls.enabled`, `tls.cert_file`, and `tls.key_file`; certificate and key material is re-read for each new handshake, so atomically replacing the files updates new connections without restarting. Optional client certificates can be required independently for `/admin/api/*` and `/v1/*` using `tls.client_ca_file`, `tls.require_client_cert_admin`, and `tls.require_client_cert_data_plane`. mTLS is an additional peer check and does not replace OIDC authorization or the explicitly configured break-glass policy.
 
