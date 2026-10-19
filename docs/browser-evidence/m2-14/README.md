@@ -36,10 +36,19 @@ that explanation, writing **no** screenshots rather than empty
 evidence. The committed matrix above is produced on a standard
 Chromium host (developer machine or browser-capable CI).
 
+## Committed CI baseline
+
+The capture matrix above is now committed as CI-produced evidence:
+112 screenshots + `manifest.json` (SHA-256 per shot) + `PROVENANCE.md`,
+from the green `Browser evidence` run
+[39302326369](https://github.com/ali-shortcuts/nexaroute/actions/runs/39302326369)
+on `main` at `d33c5c7c` (axe: zero serious/critical violations).
+A re-run diffs against the committed manifest and reports drift.
+
 ## Flow-evidence index (coverage that exists today, per flow)
 
-Until the screenshots land, each UI flow is covered at the
-handler level by suites that run in `scripts/verify.sh` and CI:
+The committed screenshots are the visual baseline; each UI flow remains
+covered at the handler level by suites that run in `scripts/verify.sh` and CI:
 
 | UI flow | Covering tests |
 |---|---|
@@ -54,6 +63,6 @@ handler level by suites that run in `scripts/verify.sh` and CI:
 | UI shell + page wiring contracts | `internal/httpapi/control_plane_v2_test.go` + per-page asset tests (M2-2…M2-13 units) |
 | Asset budgets + theme contrast | `internal/httpapi/web_assets_budget_test.go` |
 
-These suites are the substitute evidence of record for the
-flows; the screenshots, when produced on a capable host,
-complement them — they do not replace them.
+These suites remain the functional evidence of record for the
+flows; the committed screenshots complement them as the visual
+baseline — they do not replace them.

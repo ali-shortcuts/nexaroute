@@ -1,0 +1,933 @@
+{
+  "generated_at": "2026-10-19T18:26:04.675Z",
+  "base": "http://127.0.0.1:18741/",
+  "shots": [
+    {
+      "file": "dark-en-desktop/overview.png",
+      "page": "overview",
+      "theme": "dark",
+      "lang": "en",
+      "viewport": "desktop",
+      "sha256": "2c8abcb24518184d3ac0b356d99bb2437423b822519995a04ee4451caa0758c2"
+    },
+    {
+      "file": "dark-en-desktop/providers.png",
+      "page": "providers",
+      "theme": "dark",
+      "lang": "en",
+      "viewport": "desktop",
+      "sha256": "873601416bb9dfc2c6a28a9dca51e7426b4f6321c1f15c604e8456cb8920e882"
+    },
+    {
+      "file": "dark-en-desktop/routing.png",
+      "page": "routing",
+      "theme": "dark",
+      "lang": "en",
+      "viewport": "desktop",
+      "sha256": "c6ab2ce9279e5fc93c5d48d65d7c69883f08c2f6f85e7cce8068f9afcf71afd9"
+    },
+    {
+      "file": "dark-en-desktop/models.png",
+      "page": "models",
+      "theme": "dark",
+      "lang": "en",
+      "viewport": "desktop",
+      "sha256": "9f336ac796c2ee5d3308083fa111ac1e6717c1a89c437dccf233fbbecd96490e"
+    },
+    {
+      "file": "dark-en-desktop/video.png",
+      "page": "video",
+      "theme": "dark",
+      "lang": "en",
+      "viewport": "desktop",
+      "sha256": "5b70a89340551475440b70db90ef433c53fa344f1a49cb763691047e14780066"
+    },
+    {
+      "file": "dark-en-desktop/activity.png",
+      "page": "activity",
+      "theme": "dark",
+      "lang": "en",
+      "viewport": "desktop",
+      "sha256": "a1d322fe12a913189eeaf1f6d86f6a67e3090a208d3811de53dad06c24aa0e50"
+    },
+    {
+      "file": "dark-en-desktop/playground.png",
+      "page": "playground",
+      "theme": "dark",
+      "lang": "en",
+      "viewport": "desktop",
+      "sha256": "41e51033ef55f1bf89d113d0b26944b67b84de95370f611f6c1b42eb203e159f"
+    },
+    {
+      "file": "dark-en-desktop/policies.png",
+      "page": "policies",
+      "theme": "dark",
+      "lang": "en",
+      "viewport": "desktop",
+      "sha256": "3ead0afe009daf67907261266d7773078565f931d84253d607df2a829e97e791"
+    },
+    {
+      "file": "dark-en-desktop/access.png",
+      "page": "access",
+      "theme": "dark",
+      "lang": "en",
+      "viewport": "desktop",
+      "sha256": "0b85e17a7eb477e50930fd70bfb24219ae0bdd6dd87ebdc1b6ccccfcbf80e890"
+    },
+    {
+      "file": "dark-en-desktop/audit.png",
+      "page": "audit",
+      "theme": "dark",
+      "lang": "en",
+      "viewport": "desktop",
+      "sha256": "8a030f156e761f1f903e41c51afa5ab27dc9ba7c5e30e5d15c16afc28579afa0"
+    },
+    {
+      "file": "dark-en-desktop/cost.png",
+      "page": "cost",
+      "theme": "dark",
+      "lang": "en",
+      "viewport": "desktop",
+      "sha256": "5d3835f223e4de80a4e90427808bb21a2a52d55e2a660d5c91ff6606d6aa58b5"
+    },
+    {
+      "file": "dark-en-desktop/evals.png",
+      "page": "evals",
+      "theme": "dark",
+      "lang": "en",
+      "viewport": "desktop",
+      "sha256": "baf9a27bc9a795d18a29ea2195d535f0c262d9d0f0b56448043d62c79442f1d0"
+    },
+    {
+      "file": "dark-en-desktop/observability.png",
+      "page": "observability",
+      "theme": "dark",
+      "lang": "en",
+      "viewport": "desktop",
+      "sha256": "b765af8c7728aefc88d4e2c5492b6622a6f4e7a82d125be27a46f5f85a1ef76a"
+    },
+    {
+      "file": "dark-en-desktop/settings.png",
+      "page": "settings",
+      "theme": "dark",
+      "lang": "en",
+      "viewport": "desktop",
+      "sha256": "f852c74c195d6646e7f2a0813973e8bfde9c7b66da7766203301e287677367c2"
+    },
+    {
+      "file": "dark-en-mobile/overview.png",
+      "page": "overview",
+      "theme": "dark",
+      "lang": "en",
+      "viewport": "mobile",
+      "sha256": "b155f4483e5681dfac86c1f1714f5149a37c45d01c3c3e1c81678f9b3152ef70"
+    },
+    {
+      "file": "dark-en-mobile/providers.png",
+      "page": "providers",
+      "theme": "dark",
+      "lang": "en",
+      "viewport": "mobile",
+      "sha256": "e9824f1f97b816878d1c1130f3b79369560a4acd08183c5afe9dc5735869b683"
+    },
+    {
+      "file": "dark-en-mobile/routing.png",
+      "page": "routing",
+      "theme": "dark",
+      "lang": "en",
+      "viewport": "mobile",
+      "sha256": "6bd742292a2a01e938d61e41566589900e897cc2a3110827f68b917c889b920a"
+    },
+    {
+      "file": "dark-en-mobile/models.png",
+      "page": "models",
+      "theme": "dark",
+      "lang": "en",
+      "viewport": "mobile",
+      "sha256": "240a38f14bc12d09360c250a4476bc904af4828e4f1b3010363517bac0c2a241"
+    },
+    {
+      "file": "dark-en-mobile/video.png",
+      "page": "video",
+      "theme": "dark",
+      "lang": "en",
+      "viewport": "mobile",
+      "sha256": "08056ab683f3830ee5cd95f79b12e1321c34daa6168e07c2801422db845bf74b"
+    },
+    {
+      "file": "dark-en-mobile/activity.png",
+      "page": "activity",
+      "theme": "dark",
+      "lang": "en",
+      "viewport": "mobile",
+      "sha256": "0c1b6e5a1aec3f4b5102107f6299939bfd9ee58048b05763859998105c90acdf"
+    },
+    {
+      "file": "dark-en-mobile/playground.png",
+      "page": "playground",
+      "theme": "dark",
+      "lang": "en",
+      "viewport": "mobile",
+      "sha256": "c41fa4c1ebfa7e2f10e619990e6e31620c0c4645a1757badf628b7910abe5d3e"
+    },
+    {
+      "file": "dark-en-mobile/policies.png",
+      "page": "policies",
+      "theme": "dark",
+      "lang": "en",
+      "viewport": "mobile",
+      "sha256": "5afe317f831bac92ceb4d719e85c9ecf38b05b687f5a75767e72825d571277a7"
+    },
+    {
+      "file": "dark-en-mobile/access.png",
+      "page": "access",
+      "theme": "dark",
+      "lang": "en",
+      "viewport": "mobile",
+      "sha256": "5437fae86185f561a394629ebe3d4f6514e76f269f1f34f9baa5271dc2aff352"
+    },
+    {
+      "file": "dark-en-mobile/audit.png",
+      "page": "audit",
+      "theme": "dark",
+      "lang": "en",
+      "viewport": "mobile",
+      "sha256": "3067a38c033bfccee30668c48d04fd334518e5001c1edbe5d7117a11bc8fbeef"
+    },
+    {
+      "file": "dark-en-mobile/cost.png",
+      "page": "cost",
+      "theme": "dark",
+      "lang": "en",
+      "viewport": "mobile",
+      "sha256": "097d31630ea8a0e26e1f78db39807792746a813a2d87b11070d00920ec3ab994"
+    },
+    {
+      "file": "dark-en-mobile/evals.png",
+      "page": "evals",
+      "theme": "dark",
+      "lang": "en",
+      "viewport": "mobile",
+      "sha256": "ad4f965491b6597afe5b0a47a4821617a81b5a22eb396736611bfc87160d7ba0"
+    },
+    {
+      "file": "dark-en-mobile/observability.png",
+      "page": "observability",
+      "theme": "dark",
+      "lang": "en",
+      "viewport": "mobile",
+      "sha256": "027f648bc70f3e8447b6238ea3b7f325205051dcfad526cd4072b0d3434a1210"
+    },
+    {
+      "file": "dark-en-mobile/settings.png",
+      "page": "settings",
+      "theme": "dark",
+      "lang": "en",
+      "viewport": "mobile",
+      "sha256": "6fef1c5df8d346f3cb6629bd8e9244ed06d57bdd50c284d33a02d7b823545e40"
+    },
+    {
+      "file": "dark-fa-desktop/overview.png",
+      "page": "overview",
+      "theme": "dark",
+      "lang": "fa",
+      "viewport": "desktop",
+      "sha256": "6a13849f27d3245aac0c31954126a0485e748bf475cc45de13b75d38c48ebc11"
+    },
+    {
+      "file": "dark-fa-desktop/providers.png",
+      "page": "providers",
+      "theme": "dark",
+      "lang": "fa",
+      "viewport": "desktop",
+      "sha256": "e32d5f38b7ad7c4934cd25d8d8d87d98b1c1f9ff7506ea3cead7c67b384083ed"
+    },
+    {
+      "file": "dark-fa-desktop/routing.png",
+      "page": "routing",
+      "theme": "dark",
+      "lang": "fa",
+      "viewport": "desktop",
+      "sha256": "2da45d43db196e66c9d84c0f1f76a862d16bf414a663fde7b5e60021bb6ffeaa"
+    },
+    {
+      "file": "dark-fa-desktop/models.png",
+      "page": "models",
+      "theme": "dark",
+      "lang": "fa",
+      "viewport": "desktop",
+      "sha256": "9f00d40c427fac05c134ea02dd00077a5530129b6347ba0b9dfa500676e4a36b"
+    },
+    {
+      "file": "dark-fa-desktop/video.png",
+      "page": "video",
+      "theme": "dark",
+      "lang": "fa",
+      "viewport": "desktop",
+      "sha256": "c06066e6b4bb611477c36779478db59de39670af0e470a23068e309a900729b2"
+    },
+    {
+      "file": "dark-fa-desktop/activity.png",
+      "page": "activity",
+      "theme": "dark",
+      "lang": "fa",
+      "viewport": "desktop",
+      "sha256": "3795102c5bbdeb90b80b7aec29401b22ecdfb5f49b67cb1ec88b41cd12c248ba"
+    },
+    {
+      "file": "dark-fa-desktop/playground.png",
+      "page": "playground",
+      "theme": "dark",
+      "lang": "fa",
+      "viewport": "desktop",
+      "sha256": "e661ff198d8f87f5b41f49ccd23425a0bc8eb5cd33a062fc29f71a9340aa2240"
+    },
+    {
+      "file": "dark-fa-desktop/policies.png",
+      "page": "policies",
+      "theme": "dark",
+      "lang": "fa",
+      "viewport": "desktop",
+      "sha256": "154e26284c4665e6ba5166b019ecd8358cc13fde898e2ddac791d535495dd78e"
+    },
+    {
+      "file": "dark-fa-desktop/access.png",
+      "page": "access",
+      "theme": "dark",
+      "lang": "fa",
+      "viewport": "desktop",
+      "sha256": "c8686cbb3f05a8c3506b134895df9301765af480e954618d872539b64834d691"
+    },
+    {
+      "file": "dark-fa-desktop/audit.png",
+      "page": "audit",
+      "theme": "dark",
+      "lang": "fa",
+      "viewport": "desktop",
+      "sha256": "ed8eab2e447ae397b4950a1f7163808c5678060e693077dff317f8ca23f089e2"
+    },
+    {
+      "file": "dark-fa-desktop/cost.png",
+      "page": "cost",
+      "theme": "dark",
+      "lang": "fa",
+      "viewport": "desktop",
+      "sha256": "00d130a78a3917613e4a369c7725f4df5ccebc79c182f2aa73af72d935c3b5e5"
+    },
+    {
+      "file": "dark-fa-desktop/evals.png",
+      "page": "evals",
+      "theme": "dark",
+      "lang": "fa",
+      "viewport": "desktop",
+      "sha256": "4cc8f083bcb62bee839c5e05e6abfd02dca177179d0a23ca9abfd0bce8436a0f"
+    },
+    {
+      "file": "dark-fa-desktop/observability.png",
+      "page": "observability",
+      "theme": "dark",
+      "lang": "fa",
+      "viewport": "desktop",
+      "sha256": "e4edeacb021bd5392f722b71de8c51bdbf1de8808c3ca4af3e067aa84f1c9810"
+    },
+    {
+      "file": "dark-fa-desktop/settings.png",
+      "page": "settings",
+      "theme": "dark",
+      "lang": "fa",
+      "viewport": "desktop",
+      "sha256": "ffe6a13bd57120e681e65fe93a02533a0d7723576b4c4422b2782b674a7f76e3"
+    },
+    {
+      "file": "dark-fa-mobile/overview.png",
+      "page": "overview",
+      "theme": "dark",
+      "lang": "fa",
+      "viewport": "mobile",
+      "sha256": "fa30a37ad3896d7853b14aa4d5197e4dcc229f9d9464ec6a4837cd645b19162f"
+    },
+    {
+      "file": "dark-fa-mobile/providers.png",
+      "page": "providers",
+      "theme": "dark",
+      "lang": "fa",
+      "viewport": "mobile",
+      "sha256": "d66d67f249aa689fae7fc3c765227fac0d702174db47a432a66afe1e1ae43770"
+    },
+    {
+      "file": "dark-fa-mobile/routing.png",
+      "page": "routing",
+      "theme": "dark",
+      "lang": "fa",
+      "viewport": "mobile",
+      "sha256": "362cf632f7fbd473327f13f7ef7304bf54c69c9360cb9c226019be59db6fa3a7"
+    },
+    {
+      "file": "dark-fa-mobile/models.png",
+      "page": "models",
+      "theme": "dark",
+      "lang": "fa",
+      "viewport": "mobile",
+      "sha256": "f0dd3962223295c9f5a78840cdd23f16bfa867961fbf13bcd85a9fee309c4e78"
+    },
+    {
+      "file": "dark-fa-mobile/video.png",
+      "page": "video",
+      "theme": "dark",
+      "lang": "fa",
+      "viewport": "mobile",
+      "sha256": "90366a4262f4af4e0ce7d6fe0a567af913fd30bc8fda339869489116be7a6683"
+    },
+    {
+      "file": "dark-fa-mobile/activity.png",
+      "page": "activity",
+      "theme": "dark",
+      "lang": "fa",
+      "viewport": "mobile",
+      "sha256": "f1607606d9534b0eef79e08fd37780832d81a3fd1041ae74ce9f30968801b99f"
+    },
+    {
+      "file": "dark-fa-mobile/playground.png",
+      "page": "playground",
+      "theme": "dark",
+      "lang": "fa",
+      "viewport": "mobile",
+      "sha256": "b9f92b1551bd34df4192a2e4a2e5291b7ea4d634d8ca8b89313419029c7ef928"
+    },
+    {
+      "file": "dark-fa-mobile/policies.png",
+      "page": "policies",
+      "theme": "dark",
+      "lang": "fa",
+      "viewport": "mobile",
+      "sha256": "cf9ca895f13dd6d6a5e6ea3b8f86309a634821029935355c7ca34fd93a452ca6"
+    },
+    {
+      "file": "dark-fa-mobile/access.png",
+      "page": "access",
+      "theme": "dark",
+      "lang": "fa",
+      "viewport": "mobile",
+      "sha256": "be2a5173c42891df6f571d495dbfd31eaaccd698822adc1c2abf6c70be3d553c"
+    },
+    {
+      "file": "dark-fa-mobile/audit.png",
+      "page": "audit",
+      "theme": "dark",
+      "lang": "fa",
+      "viewport": "mobile",
+      "sha256": "6facb86c007acb40133f9c0a6c23cefbbaed91669e99b8c5ea9cbedf3d8b6201"
+    },
+    {
+      "file": "dark-fa-mobile/cost.png",
+      "page": "cost",
+      "theme": "dark",
+      "lang": "fa",
+      "viewport": "mobile",
+      "sha256": "30d09b56d1a518cc00f8c27716057ba337a96b19ec038d11929a88e3de9758b9"
+    },
+    {
+      "file": "dark-fa-mobile/evals.png",
+      "page": "evals",
+      "theme": "dark",
+      "lang": "fa",
+      "viewport": "mobile",
+      "sha256": "3ef173e81e0df0e5ee31b890df1176f28d046cef7040b162b4457393d049a85a"
+    },
+    {
+      "file": "dark-fa-mobile/observability.png",
+      "page": "observability",
+      "theme": "dark",
+      "lang": "fa",
+      "viewport": "mobile",
+      "sha256": "fade24ae494b946df0eff88bc66e41c5e8dedf5b83b5bec44d943a6e4024b243"
+    },
+    {
+      "file": "dark-fa-mobile/settings.png",
+      "page": "settings",
+      "theme": "dark",
+      "lang": "fa",
+      "viewport": "mobile",
+      "sha256": "709335c992686cb1d0e8a5cd4a2078f0f8b499cd420d328f11ef7f727d74cf26"
+    },
+    {
+      "file": "light-en-desktop/overview.png",
+      "page": "overview",
+      "theme": "light",
+      "lang": "en",
+      "viewport": "desktop",
+      "sha256": "7dcfa290735f917138a62965606feba1fcb5b99aa509bf0da7917c404768e354"
+    },
+    {
+      "file": "light-en-desktop/providers.png",
+      "page": "providers",
+      "theme": "light",
+      "lang": "en",
+      "viewport": "desktop",
+      "sha256": "0f5ba4d4dc12c73e143c7dd8fa74226240d2f7abf88d82b33d296978be862d7d"
+    },
+    {
+      "file": "light-en-desktop/routing.png",
+      "page": "routing",
+      "theme": "light",
+      "lang": "en",
+      "viewport": "desktop",
+      "sha256": "c8f3183b23982f1980f417da9a0ecf67030f8c7d7cf347f794573bc1049835d2"
+    },
+    {
+      "file": "light-en-desktop/models.png",
+      "page": "models",
+      "theme": "light",
+      "lang": "en",
+      "viewport": "desktop",
+      "sha256": "cdac009257685dee983ef370c5490a95f580caba23896d6d5f03bfcec76e2de7"
+    },
+    {
+      "file": "light-en-desktop/video.png",
+      "page": "video",
+      "theme": "light",
+      "lang": "en",
+      "viewport": "desktop",
+      "sha256": "9865fa80726b0cef81dcdecc8a21866d73d9a8b0a9ca6bc58ebfd70ddd61b643"
+    },
+    {
+      "file": "light-en-desktop/activity.png",
+      "page": "activity",
+      "theme": "light",
+      "lang": "en",
+      "viewport": "desktop",
+      "sha256": "4e91b0be3a58c8af61ac51db96a3b2148bfde33c5ac37d4776e34dfccc7bee64"
+    },
+    {
+      "file": "light-en-desktop/playground.png",
+      "page": "playground",
+      "theme": "light",
+      "lang": "en",
+      "viewport": "desktop",
+      "sha256": "da1081fa4bf2ce2cd353f920431e3b7fe10400e7fe4f1594f8c27e64d30f3fe8"
+    },
+    {
+      "file": "light-en-desktop/policies.png",
+      "page": "policies",
+      "theme": "light",
+      "lang": "en",
+      "viewport": "desktop",
+      "sha256": "9e6099993fb046fa7b12ffcdacd21f05bbc50a9e87e859d8493876aa883fc0ec"
+    },
+    {
+      "file": "light-en-desktop/access.png",
+      "page": "access",
+      "theme": "light",
+      "lang": "en",
+      "viewport": "desktop",
+      "sha256": "53023bdbf98ac91bd3af483d71bc11ddaeafd4d41813d91097543572f70d0aa3"
+    },
+    {
+      "file": "light-en-desktop/audit.png",
+      "page": "audit",
+      "theme": "light",
+      "lang": "en",
+      "viewport": "desktop",
+      "sha256": "664dc6e5d6ff6b485067a9470cbd3f3123bfdbd5eaded73238d9c425f7f105b6"
+    },
+    {
+      "file": "light-en-desktop/cost.png",
+      "page": "cost",
+      "theme": "light",
+      "lang": "en",
+      "viewport": "desktop",
+      "sha256": "d39bd9b86b7d9b1970f6e19e53daede6bc783efe86d0ee54c3af5f27ea86fa84"
+    },
+    {
+      "file": "light-en-desktop/evals.png",
+      "page": "evals",
+      "theme": "light",
+      "lang": "en",
+      "viewport": "desktop",
+      "sha256": "836b937d038d55f35f5ed37fe7ab77590ff2f51a9be486478504970302ae784d"
+    },
+    {
+      "file": "light-en-desktop/observability.png",
+      "page": "observability",
+      "theme": "light",
+      "lang": "en",
+      "viewport": "desktop",
+      "sha256": "09d751714a7bb535e1188d063ab6eccbb8e56d274c29dfef93ed3307ba33cf76"
+    },
+    {
+      "file": "light-en-desktop/settings.png",
+      "page": "settings",
+      "theme": "light",
+      "lang": "en",
+      "viewport": "desktop",
+      "sha256": "120981406a16bedf60e844954c4a7d5bb884432d2b80ece452501afb313dfd68"
+    },
+    {
+      "file": "light-en-mobile/overview.png",
+      "page": "overview",
+      "theme": "light",
+      "lang": "en",
+      "viewport": "mobile",
+      "sha256": "41a8c820b2b2530413319ced72b8165fcf64d38e8f569264fe305e7ced96a1f2"
+    },
+    {
+      "file": "light-en-mobile/providers.png",
+      "page": "providers",
+      "theme": "light",
+      "lang": "en",
+      "viewport": "mobile",
+      "sha256": "5084472faa35550daa1ac2900b9618019318980bca87f34107e8cb00ff04851a"
+    },
+    {
+      "file": "light-en-mobile/routing.png",
+      "page": "routing",
+      "theme": "light",
+      "lang": "en",
+      "viewport": "mobile",
+      "sha256": "42e02579270136c70a229485c5e8812d4a018c39a2810aea22188e0327e6c3fd"
+    },
+    {
+      "file": "light-en-mobile/models.png",
+      "page": "models",
+      "theme": "light",
+      "lang": "en",
+      "viewport": "mobile",
+      "sha256": "41c35cc1da2e67354ac4d928e07590a8f9de750cc4bd0297cd13a1b26040c6f5"
+    },
+    {
+      "file": "light-en-mobile/video.png",
+      "page": "video",
+      "theme": "light",
+      "lang": "en",
+      "viewport": "mobile",
+      "sha256": "e34b8f9af5e42595c7f05ea51f0c5ad6f45ccc334962a2eac6ad879465f207ed"
+    },
+    {
+      "file": "light-en-mobile/activity.png",
+      "page": "activity",
+      "theme": "light",
+      "lang": "en",
+      "viewport": "mobile",
+      "sha256": "2786622e5e5e536953635cd30f90913b659ccaa9010fc4a32b4f8b41a8dddc07"
+    },
+    {
+      "file": "light-en-mobile/playground.png",
+      "page": "playground",
+      "theme": "light",
+      "lang": "en",
+      "viewport": "mobile",
+      "sha256": "b94095904a49d4118d3ec00bb03dcf3d4fffb79f94f59ab818b10a456f519103"
+    },
+    {
+      "file": "light-en-mobile/policies.png",
+      "page": "policies",
+      "theme": "light",
+      "lang": "en",
+      "viewport": "mobile",
+      "sha256": "6cebc5946526b3bb857ff00fa86219998007196f45b816c5a0d72e7cb55bf2e8"
+    },
+    {
+      "file": "light-en-mobile/access.png",
+      "page": "access",
+      "theme": "light",
+      "lang": "en",
+      "viewport": "mobile",
+      "sha256": "8c7dd4a018d921ddd6b68729eb4180efecec2c3e0a8b596a827a6e4e42616de3"
+    },
+    {
+      "file": "light-en-mobile/audit.png",
+      "page": "audit",
+      "theme": "light",
+      "lang": "en",
+      "viewport": "mobile",
+      "sha256": "1e586f4000b8646bc598f5f31736ad2949c5e0596b50fa2e0ffa63fb18fcc58d"
+    },
+    {
+      "file": "light-en-mobile/cost.png",
+      "page": "cost",
+      "theme": "light",
+      "lang": "en",
+      "viewport": "mobile",
+      "sha256": "3456dc518cd7d1a124bcd353a893771f12ce121cad653eb53069def2113664f3"
+    },
+    {
+      "file": "light-en-mobile/evals.png",
+      "page": "evals",
+      "theme": "light",
+      "lang": "en",
+      "viewport": "mobile",
+      "sha256": "433c31e6dc0e1f572eb369d2b57a923950ba58945a0a9846ae7c1a36431368d1"
+    },
+    {
+      "file": "light-en-mobile/observability.png",
+      "page": "observability",
+      "theme": "light",
+      "lang": "en",
+      "viewport": "mobile",
+      "sha256": "20e5164941fa4c3fc841370daa34f35c1e68e47809e832840f1450e86f141c6f"
+    },
+    {
+      "file": "light-en-mobile/settings.png",
+      "page": "settings",
+      "theme": "light",
+      "lang": "en",
+      "viewport": "mobile",
+      "sha256": "153a7ec0033f0d2fb0d0a8d4fd694b8f58763361e3746646c8daf06831981cb5"
+    },
+    {
+      "file": "light-fa-desktop/overview.png",
+      "page": "overview",
+      "theme": "light",
+      "lang": "fa",
+      "viewport": "desktop",
+      "sha256": "4356ec7048af1fef63f663a91419b6699b5776831a247c69e829a7e756dcabc6"
+    },
+    {
+      "file": "light-fa-desktop/providers.png",
+      "page": "providers",
+      "theme": "light",
+      "lang": "fa",
+      "viewport": "desktop",
+      "sha256": "1e371f69272a81ff408fe14e553f0d73f44ed20a0cba4590fc4c5ef43208976e"
+    },
+    {
+      "file": "light-fa-desktop/routing.png",
+      "page": "routing",
+      "theme": "light",
+      "lang": "fa",
+      "viewport": "desktop",
+      "sha256": "1c91d748b70f71a1cee136557fc662f7b59d96a1f6e3cba3f555b8d320daf72c"
+    },
+    {
+      "file": "light-fa-desktop/models.png",
+      "page": "models",
+      "theme": "light",
+      "lang": "fa",
+      "viewport": "desktop",
+      "sha256": "07b347507452a8232900818d77f25cd44d99d7b1497a8c6e191832bf9a9abbe7"
+    },
+    {
+      "file": "light-fa-desktop/video.png",
+      "page": "video",
+      "theme": "light",
+      "lang": "fa",
+      "viewport": "desktop",
+      "sha256": "e156a290831e765cb1b2fed92451be1736fce72295b564cf3a9e37d96d112a8b"
+    },
+    {
+      "file": "light-fa-desktop/activity.png",
+      "page": "activity",
+      "theme": "light",
+      "lang": "fa",
+      "viewport": "desktop",
+      "sha256": "5c7192ddb57f64f8e470f159aae8e01b72fe4a9a6daca982ae24438864c103bd"
+    },
+    {
+      "file": "light-fa-desktop/playground.png",
+      "page": "playground",
+      "theme": "light",
+      "lang": "fa",
+      "viewport": "desktop",
+      "sha256": "2402eccbbab8aae18d217428f810a36b6e2cdb0bb61048ce2943740dd42a0898"
+    },
+    {
+      "file": "light-fa-desktop/policies.png",
+      "page": "policies",
+      "theme": "light",
+      "lang": "fa",
+      "viewport": "desktop",
+      "sha256": "7c87700dc678c1adfc1f3f63da29d7fe5799e81f4a1c48ee2077713b051315cf"
+    },
+    {
+      "file": "light-fa-desktop/access.png",
+      "page": "access",
+      "theme": "light",
+      "lang": "fa",
+      "viewport": "desktop",
+      "sha256": "b102cffc5ef91af2b1ba50e3c2af6a0332d955fdad55ceebfd74adeae38a7948"
+    },
+    {
+      "file": "light-fa-desktop/audit.png",
+      "page": "audit",
+      "theme": "light",
+      "lang": "fa",
+      "viewport": "desktop",
+      "sha256": "9b9ded6c83f5cc11cc6e60f56a9684c34e69d3ed06b2799a87a69627785164ec"
+    },
+    {
+      "file": "light-fa-desktop/cost.png",
+      "page": "cost",
+      "theme": "light",
+      "lang": "fa",
+      "viewport": "desktop",
+      "sha256": "4b007af29eaedde343f4f5334d1440d97e9399f3ae310f0eb5b64d855936a939"
+    },
+    {
+      "file": "light-fa-desktop/evals.png",
+      "page": "evals",
+      "theme": "light",
+      "lang": "fa",
+      "viewport": "desktop",
+      "sha256": "74c884a2c5977fdcad371795fdc06cc6ef023af1026f98966cfcb87c386db830"
+    },
+    {
+      "file": "light-fa-desktop/observability.png",
+      "page": "observability",
+      "theme": "light",
+      "lang": "fa",
+      "viewport": "desktop",
+      "sha256": "0c5b9b82791c31ab9df14a754f345a50deccaa3eaaf8b4d7b10139497bf4a44a"
+    },
+    {
+      "file": "light-fa-desktop/settings.png",
+      "page": "settings",
+      "theme": "light",
+      "lang": "fa",
+      "viewport": "desktop",
+      "sha256": "0ab95b41cf8aed85aa23311bed2c335d61ecb584d31965623fb54051bd6c028c"
+    },
+    {
+      "file": "light-fa-mobile/overview.png",
+      "page": "overview",
+      "theme": "light",
+      "lang": "fa",
+      "viewport": "mobile",
+      "sha256": "bb5e74dcd586e159acd6e8303a80542cc3e4909b50ecbb2f117f1453e846d511"
+    },
+    {
+      "file": "light-fa-mobile/providers.png",
+      "page": "providers",
+      "theme": "light",
+      "lang": "fa",
+      "viewport": "mobile",
+      "sha256": "474ee8b1ccf2cd33fe635779c7b5daf76fc61cd39157b74decc961a6dc6411cd"
+    },
+    {
+      "file": "light-fa-mobile/routing.png",
+      "page": "routing",
+      "theme": "light",
+      "lang": "fa",
+      "viewport": "mobile",
+      "sha256": "9026bc6346a1464cccf1b5a34b72f678cc713c134dbf107ad8ebfd28134e5cba"
+    },
+    {
+      "file": "light-fa-mobile/models.png",
+      "page": "models",
+      "theme": "light",
+      "lang": "fa",
+      "viewport": "mobile",
+      "sha256": "efea7d88120cc9b5875d27fe3655d50eb10b78ef39f8932d3bc8c55e2a74fe3b"
+    },
+    {
+      "file": "light-fa-mobile/video.png",
+      "page": "video",
+      "theme": "light",
+      "lang": "fa",
+      "viewport": "mobile",
+      "sha256": "5a4f874f98c91b75ce7422158ebfd9a4f7aff56ec38fca56cecfc67c42893097"
+    },
+    {
+      "file": "light-fa-mobile/activity.png",
+      "page": "activity",
+      "theme": "light",
+      "lang": "fa",
+      "viewport": "mobile",
+      "sha256": "a79309adf9de545b0d44d227e84333a8ac8f2640aaecd5f8a6a05ac123a92cf4"
+    },
+    {
+      "file": "light-fa-mobile/playground.png",
+      "page": "playground",
+      "theme": "light",
+      "lang": "fa",
+      "viewport": "mobile",
+      "sha256": "78a69709788f9182a8c85bf677f5b67353f7a14fe77707f08bf772a4c9b7c2ed"
+    },
+    {
+      "file": "light-fa-mobile/policies.png",
+      "page": "policies",
+      "theme": "light",
+      "lang": "fa",
+      "viewport": "mobile",
+      "sha256": "8eac9af4576e2e1b0f1c3a7ac7895250b2d9d0413862e099363ef062b43dd366"
+    },
+    {
+      "file": "light-fa-mobile/access.png",
+      "page": "access",
+      "theme": "light",
+      "lang": "fa",
+      "viewport": "mobile",
+      "sha256": "0a46a0739c2b735e27d30618e8805c3cac7fcbfc19aaf93d369e1edd7acbc206"
+    },
+    {
+      "file": "light-fa-mobile/audit.png",
+      "page": "audit",
+      "theme": "light",
+      "lang": "fa",
+      "viewport": "mobile",
+      "sha256": "79f61f968817c5469b2387de45fee7fccc218878ef72498d16743254d1330b80"
+    },
+    {
+      "file": "light-fa-mobile/cost.png",
+      "page": "cost",
+      "theme": "light",
+      "lang": "fa",
+      "viewport": "mobile",
+      "sha256": "8df21b9c16ad197fcc18a741fa30b2f6363df54042bc17396ab32753ad577c96"
+    },
+    {
+      "file": "light-fa-mobile/evals.png",
+      "page": "evals",
+      "theme": "light",
+      "lang": "fa",
+      "viewport": "mobile",
+      "sha256": "3b53b093563e4a2468da8af1cfbace368d2028ca7a920c4dcb662330263a6558"
+    },
+    {
+      "file": "light-fa-mobile/observability.png",
+      "page": "observability",
+      "theme": "light",
+      "lang": "fa",
+      "viewport": "mobile",
+      "sha256": "8a00f3265e9558963e4d55295f7304ee020c8e0e977d26ff071c6788059092f0"
+    },
+    {
+      "file": "light-fa-mobile/settings.png",
+      "page": "settings",
+      "theme": "light",
+      "lang": "fa",
+      "viewport": "mobile",
+      "sha256": "11de1c7129801d74927a2e52130e507e4773b92a9076f38b30e2b1a5e626a159"
+    }
+  ],
+  "axe": {
+    "dark/overview": [],
+    "dark/providers": [],
+    "dark/routing": [],
+    "dark/models": [],
+    "dark/video": [],
+    "dark/activity": [],
+    "dark/playground": [],
+    "dark/policies": [],
+    "dark/access": [],
+    "dark/audit": [],
+    "dark/cost": [],
+    "dark/evals": [],
+    "dark/observability": [],
+    "dark/settings": [],
+    "light/overview": [],
+    "light/providers": [],
+    "light/routing": [],
+    "light/models": [],
+    "light/video": [],
+    "light/activity": [],
+    "light/playground": [],
+    "light/policies": [],
+    "light/access": [],
+    "light/audit": [],
+    "light/cost": [],
+    "light/evals": [],
+    "light/observability": [],
+    "light/settings": []
+  },
+  "changed_since_previous": []
+}
