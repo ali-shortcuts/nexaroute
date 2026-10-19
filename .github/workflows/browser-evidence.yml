@@ -39,18 +39,26 @@ jobs:
       - name: Install browser evidence tools
         run: npm --prefix scripts/a11y install
 
+      - name: Prepare isolated capture directory
+        env:
+          EVIDENCE_OUT: ${{ runner.temp }}/nexaroute-browser-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          rm -rf "$EVIDENCE_OUT"
+          mkdir -p "$EVIDENCE_OUT"
+          echo "EVIDENCE_OUT=$EVIDENCE_OUT" >> "$GITHUB_ENV"
+
       - name: Capture browser evidence matrix
         env:
           # The runner sources this file before building the gateway;
           # an empty file keeps `go` resolution entirely with setup-go.
           GO_ENV: /dev/null
-        run: node scripts/browser-evidence.mjs --out docs/browser-evidence/m2-14
+        run: node scripts/browser-evidence.mjs --out "$EVIDENCE_OUT"
 
       - name: Preserve captured evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: browser-evidence-m2-14-${{ github.sha }}-${{ github.run_id }}
-          path: docs/browser-evidence/m2-14/
+          name: browser-evidence-m2-14-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/nexaroute-browser-evidence-${{ github.run_id }}-${{ github.run_attempt }}/
           retention-days: 90
           if-no-files-found: error
