@@ -11,6 +11,17 @@ name: Browser evidence
 
 on:
   workflow_dispatch:
+  # Also preserve a fresh run artifact after browser UI/capture changes land on main.
+  # Artifact-only; deliberately not a required merge check and never writes to the repo.
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/browser-evidence.yml"
+      - "internal/httpapi/**"
+      - "cmd/gateway/**"
+      - "scripts/browser-evidence.mjs"
+      - "scripts/a11y/**"
+      - "docs/browser-evidence/m2-14/README.md"
 
 permissions:
   contents: read
