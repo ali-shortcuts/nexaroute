@@ -1,0 +1,2 @@
+ok  	github.com/ali-shortcuts/nexaroute/internal/httpapi	13.267s
+ok  	github.com/ali-shortcuts/nexaroute/internal/probe	1.569s

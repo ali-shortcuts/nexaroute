@@ -1,0 +1,11 @@
+=== RUN   TestSoakBudgetLeakSlope
+    budget_leak_soak_test.go:164: leak-slope report (per-round slope over 22 post-warmup rounds):
+    budget_leak_soak_test.go:167:   goroutines         slope=+0.000000 limit=±0.500000
+    budget_leak_soak_test.go:167:   budget_rows        slope=+0.000000 limit=±0.050000
+    budget_leak_soak_test.go:167:   budget_open        slope=+0.000000 limit=±0.050000
+    budget_leak_soak_test.go:167:   budget_reserved    slope=+0.000000 limit=±0.000000
+    budget_leak_soak_test.go:167:   exact_cache_entries slope=+0.000000 limit=±0.500000
+    budget_leak_soak_test.go:167:   sem_cache_entries  slope=+0.000000 limit=±0.500000
+--- PASS: TestSoakBudgetLeakSlope (1.68s)
+PASS
+ok  	github.com/ali-shortcuts/nexaroute/internal/httpapi	1.690s

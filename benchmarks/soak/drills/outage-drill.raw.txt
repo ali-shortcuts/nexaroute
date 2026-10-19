@@ -1,0 +1,28 @@
+# control-plane real-service outage drill
+# date: 2026-10-19T10:28:08Z
+# commit: 0d6ee0408e3f47dadc092e13f65d8770c57979fc
+# go: go version go1.25.0 linux/amd64
+# postgres: postgres:16-alpine on 127.0.0.1:15432
+# redis: redis:7-alpine on 127.0.0.1:16379
+=== RUN   TestPostgresIntegrationOutageRecoveryCancellationBackpressure
+--- PASS: TestPostgresIntegrationOutageRecoveryCancellationBackpressure (0.05s)
+=== RUN   TestRedisIntegrationOutageRecoveryCancellationBackpressure
+--- PASS: TestRedisIntegrationOutageRecoveryCancellationBackpressure (3.10s)
+=== RUN   TestPostgresIntegrationOutageRecoveryCancellationBackpressure
+--- PASS: TestPostgresIntegrationOutageRecoveryCancellationBackpressure (0.06s)
+=== RUN   TestRedisIntegrationOutageRecoveryCancellationBackpressure
+--- PASS: TestRedisIntegrationOutageRecoveryCancellationBackpressure (3.00s)
+=== RUN   TestPostgresIntegrationOutageRecoveryCancellationBackpressure
+--- PASS: TestPostgresIntegrationOutageRecoveryCancellationBackpressure (0.05s)
+=== RUN   TestRedisIntegrationOutageRecoveryCancellationBackpressure
+--- PASS: TestRedisIntegrationOutageRecoveryCancellationBackpressure (3.00s)
+=== RUN   TestPostgresIntegrationOutageRecoveryCancellationBackpressure
+--- PASS: TestPostgresIntegrationOutageRecoveryCancellationBackpressure (0.05s)
+=== RUN   TestRedisIntegrationOutageRecoveryCancellationBackpressure
+--- PASS: TestRedisIntegrationOutageRecoveryCancellationBackpressure (3.15s)
+=== RUN   TestPostgresIntegrationOutageRecoveryCancellationBackpressure
+--- PASS: TestPostgresIntegrationOutageRecoveryCancellationBackpressure (0.05s)
+=== RUN   TestRedisIntegrationOutageRecoveryCancellationBackpressure
+--- PASS: TestRedisIntegrationOutageRecoveryCancellationBackpressure (2.91s)
+PASS
+ok  	github.com/ali-shortcuts/nexaroute/internal/controlplane	15.415s

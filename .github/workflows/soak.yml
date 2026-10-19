@@ -43,7 +43,17 @@ jobs:
           bad_files="$(git ls-files | grep -Ei '(^|/)(backup|backups|old|legacy)(/|$)|\.bak$|\.orig$|\.rej$|~$' || true)"
           test -z "$bad_files"
 
-      - name: Soak
+      - name: Soak (record reproducible evidence)
         env:
           NEXAROUTE_SOAK_ROUNDS: ${{ inputs.rounds }}
+          NEXAROUTE_SOAK_OUT: ${{ github.workspace }}/.artifacts/soak
         run: ./scripts/soak.sh
+
+      - name: Preserve raw soak evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: soak-${{ github.sha }}-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: .artifacts/soak/
+          retention-days: 90
+          if-no-files-found: error

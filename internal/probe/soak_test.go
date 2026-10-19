@@ -29,6 +29,7 @@ func TestSoakRepeatedRecoveryCyclesReleaseState(t *testing.T) {
 	requireProbeSoak(t)
 
 	var calls atomic.Int64
+	var failedCalls atomic.Int64
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		n := calls.Add(1)
 		w.Header().Set("Content-Type", "application/json")
@@ -39,6 +40,7 @@ func TestSoakRepeatedRecoveryCyclesReleaseState(t *testing.T) {
 		// by construction. One failure per cycle still exercises the
 		// recovery failure/progress accounting.
 		if n%3 == 0 {
+			failedCalls.Add(1)
 			w.WriteHeader(http.StatusBadGateway)
 			_, _ = io.WriteString(w, `{"error":"temporary"}`)
 			return
@@ -72,7 +74,8 @@ func TestSoakRepeatedRecoveryCyclesReleaseState(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 	baseline := runtime.NumGoroutine()
 
-	for cycle := 0; cycle < 50; cycle++ {
+	const cycles = 50
+	for cycle := 0; cycle < cycles; cycle++ {
 		hm.Quarantine("p/m", "soak", time.Millisecond)
 		e.Recover("p/m")
 		deadline := time.Now().Add(2 * time.Second)
@@ -90,6 +93,15 @@ func TestSoakRepeatedRecoveryCyclesReleaseState(t *testing.T) {
 			cancel()
 			t.Fatalf("cycle %d left recovery marker behind", cycle)
 		}
+	}
+
+	if failedCalls.Load() == 0 {
+		cancel()
+		t.Fatal("recovery soak never exercised a failed probe")
+	}
+	if successes := calls.Load() - failedCalls.Load(); successes < cycles*3 {
+		cancel()
+		t.Fatalf("recovery soak observed only %d successful probes; the re-admission threshold requires at least %d", successes, cycles*3)
 	}
 
 	cancel()

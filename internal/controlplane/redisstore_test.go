@@ -303,14 +303,14 @@ func TestRedisStoreCancellationAndBackendFailures(t *testing.T) {
 	fake.mu.Lock()
 	fake.err = errors.New("connection refused")
 	fake.mu.Unlock()
-	if _, err := store.Get(context.Background(), "cancel"); err == nil {
-		t.Fatal("backend Get error lost")
+	if _, err := store.Get(context.Background(), "cancel"); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("backend Get error mapping: %v, want ErrUnavailable", err)
 	}
-	if _, err := store.Put(context.Background(), "cancel", 0, []byte("x")); err == nil {
-		t.Fatal("backend Put error lost")
+	if _, err := store.Put(context.Background(), "cancel", 0, []byte("x")); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("backend Put error mapping: %v, want ErrUnavailable", err)
 	}
-	if err := store.Delete(context.Background(), "cancel", 1); err == nil {
-		t.Fatal("backend Delete error lost")
+	if err := store.Delete(context.Background(), "cancel", 1); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("backend Delete error mapping: %v, want ErrUnavailable", err)
 	}
 }
 

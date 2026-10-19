@@ -54,7 +54,7 @@ func (s *RedisStore) Get(ctx context.Context, namespace string) (Snapshot, error
 	}
 	fields, err := s.client.HGetAll(ctx, s.key(namespace))
 	if err != nil {
-		return Snapshot{}, fmt.Errorf("get control snapshot: %w", err)
+		return Snapshot{}, wrapStoreError("get control snapshot", err)
 	}
 	if len(fields) == 0 {
 		return Snapshot{}, ErrNotFound
@@ -185,7 +185,7 @@ func (s *RedisStore) Put(ctx context.Context, namespace string, expectedRevision
 		string(payload),
 		now.Format(time.RFC3339Nano))
 	if err != nil {
-		return Snapshot{}, fmt.Errorf("write control snapshot: %w", err)
+		return Snapshot{}, wrapStoreError("write control snapshot", err)
 	}
 	if status, ok := res.(int64); ok {
 		switch status {
@@ -254,7 +254,7 @@ func (s *RedisStore) Delete(ctx context.Context, namespace string, expectedRevis
 	}
 	res, err := s.client.Eval(ctx, redisDeleteScript, []string{s.key(namespace)}, strconv.FormatUint(expectedRevision, 10))
 	if err != nil {
-		return fmt.Errorf("delete control snapshot: %w", err)
+		return wrapStoreError("delete control snapshot", err)
 	}
 	deleted, ok := res.(int64)
 	if !ok {
