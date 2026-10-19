@@ -37,19 +37,14 @@ jobs:
         env:
           COMMENT_BODY: ${{ github.event.comment.body }}
         run: |
-          # Owner policy: only DeepSeek V4.1 Flash Free may perform implementation work.
-          # A missing alias defaults to DeepSeek; all other model aliases fail closed.
+          # Owner policy: every requested model alias resolves to DeepSeek V4.1 Flash Free.
+          # The user's model= value is intentionally ignored; this workflow has one implementation model.
           first_line=$(printf '%s' "$COMMENT_BODY" | head -n1)
-          alias=$(printf '%s' "$first_line" | grep -oE 'model=[a-z0-9.-]+' | head -n1 | cut -d= -f2 || true)
-          case "$alias" in
-            ""|deepseek41|deepseek-v4.1-flash-free)
-              model="opencode/deepseek-v4.1-flash-free"
-              ;;
-            *)
-              echo "Blocked model alias '$alias': only opencode/deepseek-v4.1-flash-free is permitted." >&2
-              exit 1
-              ;;
-          esac
+          requested_alias=$(printf '%s' "$first_line" | grep -oE 'model=[a-z0-9.-]+' | head -n1 | cut -d= -f2 || true)
+          if [ -n "$requested_alias" ] && [ "$requested_alias" != "deepseek41" ] && [ "$requested_alias" != "deepseek-v4.1-flash-free" ]; then
+            echo "Model alias '$requested_alias' overridden by owner policy; forcing DeepSeek V4.1 Flash Free." >&2
+          fi
+          model="opencode/deepseek-v4.1-flash-free"
           echo "Using model: $model"
           echo "model=$model" >> "$GITHUB_OUTPUT"
 
