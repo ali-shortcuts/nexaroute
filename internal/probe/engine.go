@@ -745,7 +745,10 @@ func (e *Engine) runOnce(ctx context.Context, force bool) Result {
 	sweepNow := time.Now()
 	result := Result{}
 	if !force && !cfg.Probe.Enabled {
-		result.DurationMS = time.Since(start).Milliseconds()
+		// A disabled sweep performs no work: return the zero Result. Do not
+		// stamp DurationMS from wall-clock here — under CPU load the mutex
+		// acquisition and config reads above can exceed 1ms, which would make
+		// the "empty result" contract nondeterministic (load-flaky).
 		return result
 	}
 

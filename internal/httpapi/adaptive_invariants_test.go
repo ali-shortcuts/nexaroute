@@ -21,8 +21,18 @@ import (
 // evidence).
 func TestHedgingAmplificationCapAndLoserHealth(t *testing.T) {
 	var primaryCalls, hedgeCalls, thirdCalls atomic.Int64
+	// The fast hedge waits until the primary has reached its upstream
+	// handler before it returns. Without this rendezvous, a saturated Go
+	// scheduler can delay the primary goroutine beyond the 20ms hedge timer;
+	// the fast result then cancels the not-yet-dispatched primary, producing
+	// 0/1 even though this test intends to exercise a real losing primary.
+	primaryArrived := make(chan struct{}, 1)
 	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		primaryCalls.Add(1)
+		select {
+		case primaryArrived <- struct{}{}:
+		default:
+		}
 		time.Sleep(400 * time.Millisecond)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, `{"id":"slow","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"slow-answer"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
@@ -30,6 +40,12 @@ func TestHedgingAmplificationCapAndLoserHealth(t *testing.T) {
 	defer slow.Close()
 	fast := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hedgeCalls.Add(1)
+		select {
+		case <-primaryArrived:
+		case <-time.After(2 * time.Second):
+			http.Error(w, "primary attempt did not reach upstream before hedge response", http.StatusGatewayTimeout)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, `{"id":"fast","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"fast-answer"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
 	}))
