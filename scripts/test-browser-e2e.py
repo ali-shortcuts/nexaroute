@@ -14,7 +14,9 @@ import shutil
 import socket
 import subprocess
 import tempfile
+import threading
 import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import urllib.request
 
 from playwright.sync_api import expect, sync_playwright
@@ -50,6 +52,56 @@ def admin_json(base: str, path: str, method: str, body: dict | None = None) -> d
     with urllib.request.urlopen(req, timeout=10) as response:
         raw = response.read()
         return json.loads(raw) if raw else {}
+
+def start_fake_upstream(kind: str) -> ThreadingHTTPServer:
+    """Test-only local upstream for the #502 fallback scenario.
+
+    kind="fail" deterministically answers HTTP 500; kind="ok" answers a
+    valid OpenAI chat completion (SSE when the request asks to stream).
+    Runs on loopback inside the test process; never a paid provider.
+    """
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args):  # keep the suite output readable
+            pass
+
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length) if length else b""
+            if kind == "fail":
+                body = json.dumps({"error": {"message": "e2e deterministic upstream failure", "type": "server_error"}}).encode()
+                self.send_response(500)
+            else:
+                try:
+                    req = json.loads(raw or b"{}")
+                except Exception:
+                    req = {}
+                if req.get("stream"):
+                    chunks = [
+                        {"id": "chatcmpl-e2e-fb", "object": "chat.completion.chunk", "choices": [{"index": 0, "delta": {"role": "assistant", "content": "fallback "}, "finish_reason": None}]},
+                        {"id": "chatcmpl-e2e-fb", "object": "chat.completion.chunk", "choices": [{"index": 0, "delta": {"content": "answer from B"}, "finish_reason": None}]},
+                        {"id": "chatcmpl-e2e-fb", "object": "chat.completion.chunk", "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8}},
+                    ]
+                    payload = "".join("data: " + json.dumps(c) + "\n\n" for c in chunks) + "data: [DONE]\n\n"
+                    body = payload.encode()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/event-stream")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
+                body = json.dumps({"id": "chatcmpl-e2e-fb", "object": "chat.completion", "choices": [{"index": 0, "message": {"role": "assistant", "content": "fallback answer from B"}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8}}).encode()
+                self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        do_GET = do_POST
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
 
 def main() -> None:
     chromium = shutil.which("chromium") or shutil.which("google-chrome")
@@ -113,6 +165,21 @@ def main() -> None:
                 errors = [m for m in console_msgs if m[0] == "error"]
                 assert not errors, f"Console errors: {errors}"
                 
+                # --- #502: first-run empty state (named scenario) ---
+                # The gateway booted with zero providers/routes, so the
+                # first-run surfaces must say so honestly before anything
+                # is created in this suite.
+                expect(page.locator("#content")).to_contain_text("Add and test your first")
+                page.locator('[data-page="providers"]').click()
+                page.wait_for_load_state("domcontentloaded")
+                expect(page.locator(".empty-state")).to_contain_text("Connect your first provider")
+                assert page.locator(".provider-tile").count() == 0, "first run must show no provider tiles"
+                page.locator('[data-page="routing"]').click()
+                page.wait_for_load_state("domcontentloaded")
+                expect(page.locator(".empty-state")).to_contain_text("Create your first public route")
+                errors = [m for m in console_msgs if m[0] == "error"]
+                assert not errors, f"Console errors after first-run empty state: {errors}"
+
                 # --- PRIVACY P3 TESTS ---
                 # Go to providers page
                 page.locator('[data-page="providers"]').click()
@@ -208,6 +275,34 @@ def main() -> None:
                 errors = [m for m in console_msgs if m[0] == "error"]
                 assert not errors, f"Console errors after provider ops: {errors}"
                 
+                # --- #502: discover + manual-add model + bounded test ---
+                # Discovery is mocked at the browser boundary (deterministic,
+                # no paid upstream); the per-model bounded test persists its
+                # state onto the provider card via test_state (#394/#567).
+                page.locator('[data-page="providers"]').click()
+                page.wait_for_load_state("domcontentloaded")
+                page.locator('[data-action="add-provider"]').first.click()
+                expect(page.locator("#modal-title")).to_have_text("Add provider")
+                page.locator("#p-name").fill("E2E Onboarding")
+                page.locator("#p-base").fill("http://127.0.0.1:9/v1")
+                page.locator('[data-action="detect-models"]').click()
+                expect(page.locator("#model-list")).to_contain_text("model-alpha")
+                expect(page.locator("#model-list")).to_contain_text("model-beta")
+                page.locator("#p-manual").fill("model-manual")
+                page.locator('[data-action="add-manual-model"]').click()
+                expect(page.locator("#model-list")).to_contain_text("model-manual")
+                page.locator('[data-action="test-model"][data-model="model-alpha"]').click()
+                expect(page.locator("#notice")).to_contain_text("model-alpha passed")
+                page.locator('[data-action="save-modal"]').click()
+                onboarding_tile = page.locator(".provider-tile", has_text="E2E Onboarding")
+                expect(onboarding_tile).to_contain_text("1 Test passed")
+                onboarding_tile.locator('[data-action="edit-provider"]').click()
+                expect(page.locator("#model-list")).to_contain_text("model-alpha")
+                expect(page.locator("#model-list")).to_contain_text("model-manual")
+                page.locator('[data-action="close-modal"]').first.click()
+                errors = [m for m in console_msgs if m[0] == "error"]
+                assert not errors, f"Console errors after onboarding scenario: {errors}"
+
                 # --- Routing page: privacy setting ---
                 page.locator('[data-page="routing"]').click()
                 page.wait_for_load_state("domcontentloaded")
@@ -227,6 +322,35 @@ def main() -> None:
                 errors = [m for m in console_msgs if m[0] == "error"]
                 assert not errors, f"Console errors after routing: {errors}"
                 
+                # --- #502: route + fallback chain, inspect compiled route ---
+                # Two test-only local upstreams: A deterministically fails,
+                # B answers. Providers and the ordered route are created
+                # through the real admin API; the routing page must render
+                # the backend-compiled fallback chain in order (the dry-run
+                # inspection surface) before any traffic is sent.
+                fail_upstream = start_fake_upstream("fail")
+                ok_upstream = start_fake_upstream("ok")
+                fail_port = fail_upstream.server_address[1]
+                ok_port = ok_upstream.server_address[1]
+                for pid, port in (("e2e-prov-a", fail_port), ("e2e-prov-b", ok_port)):
+                    admin_json(base, "/admin/api/providers", "POST", {"provider": {
+                        "id": pid, "name": pid, "type": "openai_compatible",
+                        "base_url": f"http://127.0.0.1:{port}/v1",
+                        "api_key": "e2e-fake-key", "auth_mode": "bearer", "enabled": True,
+                        "models": [{"id": "m", "model": "m", "enabled": True}],
+                    }})
+                admin_json(base, "/admin/api/simple-routes", "POST", {
+                    "id": "e2e-fb-route", "name": "E2E Fallback", "public_model": "e2e-fb",
+                    "mode": "ordered", "deployments": ["e2e-prov-a/m", "e2e-prov-b/m"], "enabled": True,
+                })
+                page.locator('[data-page="routing"]').click()
+                page.wait_for_load_state("domcontentloaded")
+                fb_tile = page.locator(".route-tile", has_text="e2e-fb")
+                expect(fb_tile).to_contain_text("Ordered fallback")
+                expect(fb_tile).to_contain_text("e2e-fb-route-stage-1 \u2192 e2e-fb-route-stage-2")
+                errors = [m for m in console_msgs if m[0] == "error"]
+                assert not errors, f"Console errors after route/fallback inspection: {errors}"
+
                 # --- Activity page ---
                 page.locator('[data-page="activity"]').click()
                 page.wait_for_load_state("domcontentloaded")
@@ -708,6 +832,27 @@ def main() -> None:
                 page.unroute("**/v1/chat/completions", mock_chat)
                 errors = [m for m in console_msgs if m[0] == "error"]
                 assert not errors, f"Console errors after WebChat E2E: {errors}"
+
+                # --- #502: deterministic upstream failure -> fallback ---
+                # No browser-boundary mock here: the request flows through
+                # the real gateway. e2e-prov-a's upstream always answers
+                # HTTP 500, so the ordered fallback chain must land on
+                # e2e-prov-b, and the WebChat badge must show the attempts
+                # trail in order (UI state matching the backend trace).
+                page.locator('[data-page="playground"]').click()
+                page.wait_for_load_state("domcontentloaded")
+                page.locator("#pg-model").select_option("e2e-fb")
+                page.locator("#pg-prompt").fill("prove the fallback")
+                page.locator("#pg-send").click()
+                fb_msg = page.locator(".pg-msg.assistant").last
+                expect(fb_msg).to_contain_text("fallback answer from B")
+                expect(fb_msg.locator(".pg-badge")).to_contain_text("e2e-prov-a/m \u2192 e2e-prov-b/m")
+                expect(fb_msg.locator(".pg-badge")).to_contain_text("e2e-prov-b")
+                page.locator('[data-page="activity"]').click()
+                page.wait_for_load_state("domcontentloaded")
+                expect(page.locator("#content")).to_contain_text("e2e-prov-b")
+                errors = [m for m in console_msgs if m[0] == "error"]
+                assert not errors, f"Console errors after fallback scenario: {errors}"
 
                 # Evidence: Providers with video disabled (dark, both sizes).
                 video_dir = ROOT / "docs/browser-evidence/video-disabled"
