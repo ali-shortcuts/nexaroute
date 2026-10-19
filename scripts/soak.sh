@@ -24,7 +24,9 @@ summary="$out/summary.md"
 timing_bin="$(command -v /usr/bin/time || true)"
 started_at="$(date -u +%FT%TZ)"
 start_epoch="$(date +%s)"
-branch="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME:-$(git rev-parse --abbrev-ref HEAD 2>/dev/null || printf 'unknown')}}"
+git_branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || printf 'unknown')"
+workflow_ref="${GITHUB_REF_NAME:-}"
+workflow_head_ref="${GITHUB_HEAD_REF:-}"
 dirty="$(git status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
 stage_results=()
 stage_number=0
@@ -89,7 +91,9 @@ write_summary() {
   {
     printf '# Soak qualification evidence\n\n'
     printf -- '- commit: `%s`\n' "$sha"
-    printf -- '- branch: `%s`\n' "$branch"
+    printf -- '- git branch: `%s`\n' "$git_branch"
+    printf -- '- workflow ref: `%s`\n' "${workflow_ref:-n/a}"
+    printf -- '- workflow head ref: `%s`\n' "${workflow_head_ref:-n/a}"
     printf -- '- worktree entries (porcelain): %s\n' "$dirty"
     printf -- '- started: %s\n' "$started_at"
     printf -- '- finished: %s\n' "$finished_at"
