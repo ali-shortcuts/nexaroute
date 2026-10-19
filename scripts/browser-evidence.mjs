@@ -99,9 +99,20 @@ try {
       manifest.shots.push({ file: path.relative(outDir, file), page: p, theme, lang, viewport: vp.name, sha256: sha256(buf) });
       if (vp.name === 'desktop' && lang === 'en') {
         await page.evaluate(axeSource);
-        const res = await page.evaluate(() => axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } }).then(r => r.violations.map(v => ({ id: v.id, impact: v.impact, nodes: v.nodes.length }))));
+        const violations = await page.evaluate(() => axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag22aa'] } }).then(r => r.violations.map(v => ({
+          id: v.id,
+          impact: v.impact,
+          nodes: v.nodes.map(n => ({ target: n.target, failureSummary: n.failureSummary })),
+        }))));
+        // Keep selectors and axe explanations in the artifact so failures can
+        // be fixed from CI evidence rather than guessed from screenshot pixels.
+        const res = violations.map(v => ({ id: v.id, impact: v.impact, nodes: v.nodes.length, details: v.nodes }));
         manifest.axe[`${theme}/${p}`] = res;
-        if (res.some(v => v.impact === 'serious' || v.impact === 'critical')) exitCode = 1;
+        const blocking = violations.filter(v => v.impact === 'serious' || v.impact === 'critical');
+        if (blocking.length) {
+          console.error(`AXE blocking violations ${theme}/${p}: ${JSON.stringify(blocking)}`);
+          exitCode = 1;
+        }
       }
     }
     await context.close();
