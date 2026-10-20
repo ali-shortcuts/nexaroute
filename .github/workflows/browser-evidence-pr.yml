@@ -112,9 +112,7 @@ jobs:
           git push origin "$branch"
           gh pr create --base main --head "$branch" \
             --title "docs(evidence): add browser screenshot fixtures (run ${RUN_ID})" \
-            --body "Closes #489
-
-          This PR was generated only from a successful Browser evidence workflow run on main.
+            --body "This PR was generated only from a successful Browser evidence workflow run on main.
           - Source SHA: ${SOURCE_SHA}
           - Run: https://github.com/$GITHUB_REPOSITORY/actions/runs/${RUN_ID}
           - 112 PNG screenshots and manifest are taken directly from the workflow artifact, not fabricated.
