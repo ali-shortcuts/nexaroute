@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
-version="${1:-v0.22.0}"
-[[ "$version" =~ ^v[0-9][a-zA-Z0-9._-]*$ ]] || { echo 'Usage: scripts/build-release.sh vVERSION' >&2; exit 1; }
+version="${1:-}"
+[[ -n "$version" && "$version" =~ ^v[0-9][a-zA-Z0-9._-]*$ ]] || { echo 'Usage: scripts/build-release.sh vVERSION (version is required)' >&2; exit 2; }
 rm -rf dist
 mkdir -p dist
 for arch in amd64 arm64; do
