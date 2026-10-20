@@ -574,6 +574,14 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 		writeRawUpstreamError(w, lastStatus, lastContentType, lastBody)
 		return
 	}
+	if attempts == 0 && lastStatus == 0 {
+		// No candidate was actually attempted (every selected candidate
+		// was skipped by a per-attempt re-check): this is a gateway-side
+		// rejection, not an upstream failure, so it must not be reported
+		// as a 502 claiming deployments failed.
+		errorJSON(w, http.StatusServiceUnavailable, "no compatible healthy deployment")
+		return
+	}
 	if lastErr == "" {
 		lastErr = "no usable deployment"
 	}

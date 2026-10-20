@@ -831,11 +831,21 @@ func (r *Router) Eligible(id string, req Requirement) (Scored, bool) {
 	r.mu.RLock()
 	cfg := r.cfg
 	d, ok := r.byID[id]
+	known := req.Model == "" || req.Model == "auto" || req.Model == "claude-auto"
+	if ok && !known {
+		_, known = r.byModel[req.Model]
+	}
 	r.mu.RUnlock()
 	if !ok {
 		return Scored{}, false
 	}
-	return r.eligibleDeployment(d, req, cfg, false, req.Scopes())
+	// Mirror Candidates: when the requested model is unknown and
+	// fallback-on-unknown-model is enabled, Candidates selects fallback
+	// deployments with the model-match check relaxed. The per-attempt
+	// re-check must apply the same rule, or every fallback candidate is
+	// silently dropped here and the request dies without any attempt.
+	ignoreModel := !known && cfg.Routing.FallbackOnUnknownModel
+	return r.eligibleDeployment(d, req, cfg, ignoreModel, req.Scopes())
 }
 func (r *Router) Deployment(id string) (Deployment, bool) {
 	r.mu.RLock()
