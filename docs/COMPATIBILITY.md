@@ -36,6 +36,101 @@ regenerate this table from `RenderConformanceTable`. Live
 canaries stay opt-in, cost/rate bounded and secret-safe; they
 are never required in public CI.
 
+## Opt-in live canary (#436)
+
+The live canary is implemented in
+`internal/providers/livecanary` and exposed as
+`nexaroute conformance canary`. It is **manual only**: it sends
+real provider requests, spends real quota, and requires
+`--acknowledge-cost`. It never runs during gateway startup, public
+CI, or an ordinary `go test`, and it never edits the manifest or
+promotes a claim to `LIVE-VERIFIED` by itself.
+
+Preset mode needs no config file. Credentials come from
+environment variables; the default names are
+`NEXAROUTE_CANARY_API_KEY` (API key or AWS access key id),
+`NEXAROUTE_CANARY_SECRET_KEY` (AWS secret access key), and
+`NEXAROUTE_CANARY_SESSION_TOKEN` (optional AWS session token).
+Secret values are redacted from scenario errors, the JSON report,
+and the console summary. Use the protected `conformance-live`
+GitHub environment and the manual
+`.github/workflows/conformance-live-canary.yml` workflow (create the
+environment, add those secrets, and restrict who may approve it),
+or run locally:
+
+```bash
+export NEXAROUTE_CANARY_API_KEY=...   # never commit this value
+go run ./cmd/gateway conformance canary \
+  --acknowledge-cost --preset openai --model gpt-live-deployment \
+  --scenarios core --max-calls 5 --max-output-tokens 512 \
+  --max-cost-usd 1.00 --out .artifacts/conformance/live-canary.json
+```
+
+Config mode uses a configured provider and model (credentials may
+already be wired through the config's `api_key_env`):
+
+```bash
+go run ./cmd/gateway conformance canary \
+  --acknowledge-cost --config ~/.config/nexaroute/config.json \
+  --provider my-provider --model my-model --scenarios extended \
+  --max-calls 9 --out .artifacts/conformance/my-provider.json
+```
+
+Scenarios and the manifest dimensions they can support on a
+successful run:
+
+| Scenario | Dimensions exercised | Applies to |
+|---|---|---|
+| `text` | addressing, auth, non_stream (+ usage_cache_tokens or finish_reasons only when the response reports them) | all dialects |
+| `stream` | addressing, auth, streaming_sse | all dialects |
+| `tools` | addressing, auth, tool_calls | all dialects |
+| `tool_result` | addressing, auth, tool_results | all dialects |
+| `structured_output` | addressing, auth, structured_output | OpenAI Chat/Responses, Azure, Gemini, Vertex |
+| `images` | addressing, auth, images_multimodal | all dialects |
+| `parallel_tools` | addressing, auth, parallel_tools | OpenAI Chat/Responses, Azure, Anthropic |
+| `reasoning` | addressing, auth, reasoning | all except Bedrock |
+| `error_envelope` | error_envelopes | all dialects |
+
+`--scenarios core` runs text, stream, tools, tool_result, and
+error_envelope (5 calls). `extended`/`all` adds structured output,
+images, parallel tools, and reasoning (9 calls), so raise
+`--max-calls` accordingly. A scenario is skipped when the
+manifest records any of its dimensions as `UNSUPPORTED` for that
+dialect or when the scenario is not applicable to the dialect.
+The CLI rejects a run whose call count or preflight cost estimate
+exceeds `--max-calls`/`--max-cost-usd`; the runner also enforces
+per-call and overall timeouts and per-request input/output token
+ceilings.
+
+Report semantics (honesty rules):
+
+- `PASS` means every selected applicable scenario passed.
+  `PARTIAL` preserves the scenarios that passed and names the failed
+  dimensions next to the successes; it also covers a run stopped by
+  an observed cost/call budget before the selected set finished.
+  `FAIL` means no scenario passed. `NO-EVIDENCE` means everything
+  was skipped. `CANCELED` records an operator (Ctrl-C/SIGTERM) or
+  timeout cancellation; the report is still written.
+- `verified_dimensions` are scoped to this provider, deployment,
+  model, dialect, scenario, and evidence date. They are **not** a
+  manifest update and **not** an automatic claim about any other
+  provider using the same dialect.
+- `retry_after`, `idempotency`, prompt-cache behavior, and
+  provider-side cancellation are not fully scoped by this canary
+  and are listed in `not_covered_dimensions`; do not upgrade them
+  on the strength of a canary pass. Cache and finish-reason
+  dimensions are only claimed when the live response actually
+  reports the native signal.
+- A canary report is an input to review. Retain it under
+  `.artifacts/conformance/` (gitignored) or summarize it in the
+  issue; only a reviewed, dated evidence entry may change the
+  manifest, and a canary run older than 180 days computes to
+  `STALE` like any other evidence.
+- No live credentials are assumed to be configured in this
+  repository. Fixture evidence remains the default and the table
+  above stays `FIXTURE-VERIFIED`/`PARTIAL` until an actual live
+  run is reviewed and recorded.
+
 <!-- BEGIN GENERATED CONFORMANCE MANIFEST -->
 | Dialect | Status | Evidence date | addressing | auth | non_stream | streaming_sse | tool_calls | tool_results | parallel_tools | reasoning | structured_output | images_multimodal | usage_cache_tokens | finish_reasons | error_envelopes | retry_after | cancellation | idempotency |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|

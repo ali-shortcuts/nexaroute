@@ -1,0 +1,132 @@
+name: Conformance live canary
+
+# Manual only: this workflow spends real provider quota and needs operator
+# secrets from the protected `conformance-live` environment. It must never run
+# on push, pull_request, or a schedule, and it never edits the conformance
+# manifest or promotes a dimension to LIVE-VERIFIED.
+on:
+  workflow_dispatch:
+    inputs:
+      preset:
+        description: "Provider preset id (see docs/COMPATIBILITY.md)"
+        required: true
+        default: "openai"
+      model:
+        description: "Deployment/model id to record in evidence"
+        required: true
+      model_name:
+        description: "Upstream model name (defaults to model id)"
+        required: false
+        default: ""
+      base_url:
+        description: "Override base URL (Azure/Vertex/custom deployments)"
+        required: false
+        default: ""
+      auth_mode:
+        description: "Override auth mode (bearer, x-api-key, x-goog-api-key, api-key, none)"
+        required: false
+        default: ""
+      scenarios:
+        description: "core, extended, all, or comma-separated scenario ids"
+        required: true
+        default: "core"
+      max_calls:
+        description: "Hard upstream call ceiling"
+        required: true
+        default: "5"
+      max_output_tokens:
+        description: "Per-request output token ceiling"
+        required: true
+        default: "512"
+      max_cost_usd:
+        description: "Preflight cost estimate ceiling in USD"
+        required: true
+        default: "1.00"
+      out:
+        description: "Evidence path inside the checkout"
+        required: true
+        default: ".artifacts/conformance/live-canary.json"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: conformance-live-canary
+  cancel-in-progress: false
+
+jobs:
+  canary:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: conformance-live
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.27.x"
+          cache: false
+
+      - name: Build canary binary
+        run: go build -o ./bin/nexaroute ./cmd/gateway
+
+      - name: Check required inputs
+        env:
+          PRESET: ${{ inputs.preset }}
+          MODEL: ${{ inputs.model }}
+          OUT: ${{ inputs.out }}
+        run: |
+          set -euo pipefail
+          for name in PRESET MODEL OUT; do
+            if [ -z "${!name}" ]; then
+              echo "::error title=conformance-input::$name is required"
+              exit 2
+            fi
+          done
+          case "$OUT" in
+            .artifacts/conformance/*) ;;
+            *) echo "::error title=conformance-output::evidence must stay under .artifacts/conformance/"; exit 2 ;;
+          esac
+          case "$OUT" in
+            *..*) echo "::error title=conformance-output::evidence path must not contain .."; exit 2 ;;
+          esac
+
+      - name: Run live canary
+        env:
+          NEXAROUTE_CANARY_API_KEY: ${{ secrets.NEXAROUTE_CANARY_API_KEY }}
+          NEXAROUTE_CANARY_SECRET_KEY: ${{ secrets.NEXAROUTE_CANARY_SECRET_KEY }}
+          NEXAROUTE_CANARY_SESSION_TOKEN: ${{ secrets.NEXAROUTE_CANARY_SESSION_TOKEN }}
+          PRESET: ${{ inputs.preset }}
+          MODEL: ${{ inputs.model }}
+          MODEL_NAME: ${{ inputs.model_name }}
+          BASE_URL: ${{ inputs.base_url }}
+          AUTH_MODE: ${{ inputs.auth_mode }}
+          SCENARIOS: ${{ inputs.scenarios }}
+          MAX_CALLS: ${{ inputs.max_calls }}
+          MAX_OUTPUT_TOKENS: ${{ inputs.max_output_tokens }}
+          MAX_COST_USD: ${{ inputs.max_cost_usd }}
+          OUT: ${{ inputs.out }}
+        run: |
+          set -euo pipefail
+          args=(conformance canary --acknowledge-cost
+            --preset "$PRESET" --model "$MODEL"
+            --scenarios "$SCENARIOS"
+            --max-calls "$MAX_CALLS"
+            --max-output-tokens "$MAX_OUTPUT_TOKENS"
+            --max-cost-usd "$MAX_COST_USD"
+            --out "$OUT")
+          if [ -n "$MODEL_NAME" ]; then args+=(--model-name "$MODEL_NAME"); fi
+          if [ -n "$BASE_URL" ]; then args+=(--base-url "$BASE_URL"); fi
+          if [ -n "$AUTH_MODE" ]; then args+=(--auth-mode "$AUTH_MODE"); fi
+          ./bin/nexaroute "${args[@]}"
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: conformance-live-canary-${{ github.run_id }}
+          path: .artifacts/conformance/
+          if-no-files-found: warn
+          retention-days: 30
