@@ -3,7 +3,6 @@ package httpapi
 import (
 	"context"
 	"crypto/subtle"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -1060,7 +1059,7 @@ func providerSummary(p config.ProviderConfig) map[string]any {
 		// capabilities, context window, costs, enabled) that the legacy
 		// models []string form cannot express. No secret field rides along.
 		"models_meta":  providerModelsMeta(p),
-		"discoverable": strings.TrimSpace(p.ModelsPath) != "",
+		"discoverable": providers.SupportsDiscovery(p),
 	}
 }
 
@@ -1320,108 +1319,16 @@ func uniqueStrings(in []string) []string {
 	return out
 }
 
+// discoverModels delegates to the shared providers helper so the Admin API
+// and the operator acceptance command use one bounded implementation.
 func discoverModels(ctx context.Context, p config.ProviderConfig) ([]string, int, error) {
-	p.ApplyDefaults()
-	a, err := providers.NewAdapter(p, 8*time.Second)
-	if err != nil {
-		return nil, 0, err
-	}
-	defer providers.CloseIdleConnections(a)
-	paths := []string{p.ModelsPath}
-	if p.ModelsPath == "/v1/models" {
-		paths = append(paths, "/models")
-	}
-	var lastErr error
-	lastStatus := 0
-	for _, path := range uniqueStrings(paths) {
-		resp, err := a.DoPath(ctx, http.MethodGet, path, nil, false, nil)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		lastStatus = resp.StatusCode
-		b, readErr := io.ReadAll(io.LimitReader(resp.Body, (4<<20)+1))
-		resp.Body.Close()
-		if readErr != nil {
-			lastErr = fmt.Errorf("model discovery read: %w", readErr)
-			continue
-		}
-		if len(b) > 4<<20 {
-			lastErr = fmt.Errorf("model discovery response exceeds 4194304 bytes")
-			continue
-		}
-		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			b = redactProviderBody(p, b)
-			const maxDiscoveryErrorBytes = 2048
-			if len(b) > maxDiscoveryErrorBytes {
-				b = append(append([]byte(nil), b[:maxDiscoveryErrorBytes]...), []byte("…")...)
-			}
-			lastErr = fmt.Errorf("model discovery HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
-			continue
-		}
-		models := parseModelList(b)
-		if len(models) == 0 {
-			lastErr = fmt.Errorf("model endpoint returned no model ids")
-			continue
-		}
-		return models, resp.StatusCode, nil
-	}
-	if lastErr == nil {
-		lastErr = fmt.Errorf("model discovery failed")
-	}
-	return nil, lastStatus, lastErr
+	return providers.DiscoverModels(ctx, p)
 }
 
+// parseModelList is kept as a thin package-local alias for existing handler
+// tests; the canonical parser lives in internal/providers.
 func parseModelList(b []byte) []string {
-	const maxModels = 10000
-	const maxModelIDBytes = 1024
-	var root any
-	if json.Unmarshal(b, &root) != nil {
-		return nil
-	}
-	out := []string{}
-	add := func(v any) {
-		if len(out) >= maxModels {
-			return
-		}
-		switch x := v.(type) {
-		case string:
-			x = strings.TrimSpace(x)
-			if strings.HasPrefix(x, "models/") {
-				x = strings.TrimPrefix(x, "models/")
-			}
-			if len(x) <= maxModelIDBytes {
-				out = append(out, x)
-			}
-		case map[string]any:
-			for _, key := range []string{"id", "model", "name"} {
-				if id, _ := x[key].(string); strings.TrimSpace(id) != "" {
-					if strings.HasPrefix(id, "models/") {
-						id = strings.TrimPrefix(id, "models/")
-					}
-					if len(id) <= maxModelIDBytes {
-						out = append(out, id)
-					}
-					return
-				}
-			}
-		}
-	}
-	switch obj := root.(type) {
-	case []any:
-		for _, item := range obj {
-			add(item)
-		}
-	case map[string]any:
-		for _, key := range []string{"data", "models", "items"} {
-			if arr, ok := obj[key].([]any); ok {
-				for _, item := range arr {
-					add(item)
-				}
-			}
-		}
-	}
-	return uniqueStrings(out)
+	return providers.ParseModelList(b)
 }
 
 func applyProviderHeaders(req *http.Request, p config.ProviderConfig) {

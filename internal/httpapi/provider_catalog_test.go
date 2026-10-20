@@ -313,3 +313,39 @@ func TestDiscoverModelsIsCancellable(t *testing.T) {
 		t.Fatalf("canceled discovery took %v; not cancellable", d)
 	}
 }
+
+// Provider summaries must not claim discovery for protocol types that do not
+// expose a real model inventory endpoint. ApplyDefaults fills a generic
+// ModelsPath for legacy compatibility, so the summary has to consult the
+// protocol-aware supports check rather than the raw path.
+func TestAdminProviderSummaryDiscoveryClaimIsProtocolAware(t *testing.T) {
+	t.Setenv("NEXAROUTE_TEST_AWS_SECRET", "test-secret")
+	cfg := config.Default()
+	cfg.Probe.Enabled = false
+	cfg.Providers = []config.ProviderConfig{
+		{ID: "openai", Name: "OpenAI", Type: "openai_compatible", BaseURL: "https://example.invalid", Enabled: true, AuthMode: "bearer"},
+		{ID: "azure", Name: "Azure", Type: "azure_openai", BaseURL: "https://example.invalid", Enabled: true, AuthMode: "api-key"},
+		{ID: "vertex", Name: "Vertex", Type: "vertex", BaseURL: "https://example.invalid", Enabled: true, AuthMode: "bearer", VertexProject: "test-project"},
+		{ID: "bedrock", Name: "Bedrock", Type: "bedrock", BaseURL: "https://example.invalid", Enabled: true, APIKey: "test-access", SecretKeyEnv: "NEXAROUTE_TEST_AWS_SECRET"},
+	}
+	s := testGateway(t, cfg)
+	rr := adminRequest(s, http.MethodGet, "/admin/api/providers", "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET providers status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	var out struct {
+		Providers []struct {
+			ID           string `json:"id"`
+			Discoverable bool   `json:"discoverable"`
+		} `json:"providers"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]bool{"openai": true, "azure": false, "vertex": false, "bedrock": false}
+	for _, p := range out.Providers {
+		if p.Discoverable != want[p.ID] {
+			t.Errorf("%s discoverable=%v want %v", p.ID, p.Discoverable, want[p.ID])
+		}
+	}
+}

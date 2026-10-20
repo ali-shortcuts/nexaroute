@@ -521,6 +521,8 @@ Provider presets are served by the gateway itself through the Admin API so the W
 
 **Test connection** checks endpoint reachability/auth separately from **Test selected models**, which performs actual minimal model inference.
 
+For real-tenant onboarding evidence, use the bounded `nexaroute provider-accept` command described in [Provider onboarding live acceptance](PROVIDER_ACCEPTANCE.md). It never saves provider/model changes or credentials and requires `--confirm-live`; public CI runs only loopback fake upstreams.
+
 ## Routing additions, cache, client auth and model fields
 
 ### routing (additions)
