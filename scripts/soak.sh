@@ -260,7 +260,7 @@ for i in $(seq 1 "$rounds"); do
   run_stage "stress-round-$i" env NEXAROUTE_STRESS=1 go test -timeout=3m -count=1 ./internal/router ./internal/probe ./internal/events ./internal/httpapi ./internal/logging -run='^TestStress'
 done
 
-run_stage "http-hot-reload-soak" env NEXAROUTE_SOAK=1 NEXAROUTE_SOAK_DURATION="$duration" NEXAROUTE_SOAK_SAMPLE_OUT="$samples_file_abs" go test -timeout="$hot_soak_timeout" -count=1 ./internal/httpapi -run='^TestSoak'
+run_stage "http-hot-reload-soak" env NEXAROUTE_SOAK=1 NEXAROUTE_SOAK_DURATION="$duration" NEXAROUTE_SOAK_SAMPLE_OUT="$samples_file_abs" go test -timeout="$hot_soak_timeout" -count=1 -v ./internal/httpapi -run='^TestSoak'
 
 run_stage "recovery-soak" env NEXAROUTE_SOAK=1 go test -timeout=10m -count=1 ./internal/probe -run='^TestSoak'
 
