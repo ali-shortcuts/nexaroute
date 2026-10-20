@@ -585,6 +585,12 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		writeRawUpstreamError(w, lastStatus, lastContentType, lastBody)
 		return
 	}
+	if attempts == 0 && lastStatus == 0 && lastErr == "" {
+		// See the OpenAI surface: zero attempted candidates is a
+		// gateway-side rejection (503), never a fabricated 502.
+		anthropicErrorJSON(w, http.StatusServiceUnavailable, "no compatible healthy deployment")
+		return
+	}
 	if lastErr == "" {
 		lastErr = "no usable deployment"
 	}

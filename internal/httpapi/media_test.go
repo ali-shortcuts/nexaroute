@@ -54,6 +54,29 @@ func mediaGateway(t *testing.T, providerType string, handler http.HandlerFunc) (
 	return s, cap
 }
 
+// mediaGatewayNoFallback is mediaGateway with the router-wide
+// fallback_on_unknown_model control disabled.
+func mediaGatewayNoFallback(t *testing.T, providerType string, handler http.HandlerFunc) (*Server, *mediaCapture) {
+	t.Helper()
+	cap := &mediaCapture{}
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cap.record(r)
+		handler(w, r)
+	}))
+	t.Cleanup(up.Close)
+	cfg := config.Default()
+	cfg.Routing.FallbackOnUnknownModel = false
+	p := config.ProviderConfig{
+		ID: "mp", Name: "Media", Type: providerType, BaseURL: up.URL,
+		Models: []config.ModelConfig{{ID: "m", Model: "upstream-model-x", Enabled: true, Weight: 1}},
+	}
+	p.ApplyDefaults()
+	cfg.Providers = []config.ProviderConfig{p}
+	s := testGateway(t, cfg)
+	s.SyncCapabilityContracts()
+	return s, cap
+}
+
 func mediaPost(t *testing.T, s *Server, path, contentType string, body []byte) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, "http://gateway"+path, bytes.NewReader(body))
@@ -169,13 +192,30 @@ func TestMediaUnsupportedProviderTypeAndUnknownModel(t *testing.T) {
 	if rr.Code != http.StatusBadRequest || !strings.Contains(rr.Body.String(), "openai_compatible") {
 		t.Fatalf("unsupported type: status=%d body=%s", rr.Code, rr.Body.String())
 	}
-	s2, _ := mediaGateway(t, "openai_compatible", func(w http.ResponseWriter, r *http.Request) {
+	s2, cap2 := mediaGateway(t, "openai_compatible", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, `{}`)
 	})
 	rr = mediaPost(t, s2, "/v1/embeddings", "application/json",
 		[]byte(`{"model":"nope","input":"hello"}`))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("unknown model should use fallback deployment when enabled: status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	cap2.mu.Lock()
+	calls, body := cap2.calls, string(append([]byte(nil), cap2.body...))
+	cap2.mu.Unlock()
+	if calls != 1 || !strings.Contains(body, `"model":"upstream-model-x"`) {
+		t.Fatalf("unknown-model fallback did not call the fallback deployment with its configured model: calls=%d body=%s", calls, body)
+	}
+	// With fallback_on_unknown_model disabled, the same unknown-model
+	// media request is a gateway-side 503 rejection.
+	s3, _ := mediaGatewayNoFallback(t, "openai_compatible", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{}`)
+	})
+	rr = mediaPost(t, s3, "/v1/embeddings", "application/json",
+		[]byte(`{"model":"nope","input":"hello"}`))
 	if rr.Code != http.StatusServiceUnavailable {
-		t.Fatalf("unknown model: status=%d body=%s", rr.Code, rr.Body.String())
+		t.Fatalf("unknown model with fallback off: status=%d body=%s", rr.Code, rr.Body.String())
 	}
 }
 
