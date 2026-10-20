@@ -574,7 +574,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 		writeRawUpstreamError(w, lastStatus, lastContentType, lastBody)
 		return
 	}
-	if attempts == 0 && lastStatus == 0 {
+	if attempts == 0 && lastStatus == 0 && lastErr == "" {
 		// No candidate was actually attempted (every selected candidate
 		// was skipped by a per-attempt re-check): this is a gateway-side
 		// rejection, not an upstream failure, so it must not be reported
