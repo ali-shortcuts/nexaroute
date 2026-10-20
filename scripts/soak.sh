@@ -264,7 +264,12 @@ run_stage "http-hot-reload-soak" env NEXAROUTE_SOAK=1 NEXAROUTE_SOAK_DURATION="$
 
 run_stage "recovery-soak" env NEXAROUTE_SOAK=1 go test -timeout=10m -count=1 ./internal/probe -run='^TestSoak'
 
-run_stage "race-soak" env GOMAXPROCS=4 NEXAROUTE_SOAK=1 go test -race -timeout=15m -count=1 ./internal/httpapi ./internal/probe -run='^TestSoak'
+# The race stage pins its own short sustained duration: the workflow exports
+# the operator-requested NEXAROUTE_SOAK_DURATION (up to 2h+) to the whole
+# script, and TestSoakConcurrentTrafficAndHotReload would otherwise inherit
+# it and run for hours inside this stage's 15m go-test timeout (run
+# 39441382088 failed exactly that way after its 2h stage passed).
+run_stage "race-soak" env GOMAXPROCS=4 NEXAROUTE_SOAK=1 NEXAROUTE_SOAK_DURATION=2m go test -race -timeout=15m -count=1 ./internal/httpapi ./internal/probe -run='^TestSoak'
 
 run_stage "budget-leak-slope" env NEXAROUTE_SOAK=1 go test -timeout=10m -count=1 -v ./internal/httpapi -run='^TestSoakBudgetLeakSlope$'
 
