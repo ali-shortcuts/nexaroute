@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-19T18:57:35.298Z",
+  "generated_at": "2026-10-20T06:51:16.825Z",
   "base": "http://127.0.0.1:18741/",
   "shots": [
     {
@@ -72,7 +72,7 @@
       "theme": "dark",
       "lang": "en",
       "viewport": "desktop",
-      "sha256": "0b85e17a7eb477e50930fd70bfb24219ae0bdd6dd87ebdc1b6ccccfcbf80e890"
+      "sha256": "5a4469304a37e2e9ca54c403a7e1d32411053e24c98fb32bbc7b7dfac3da70d1"
     },
     {
       "file": "dark-en-desktop/audit.png",
@@ -312,7 +312,7 @@
       "theme": "dark",
       "lang": "fa",
       "viewport": "desktop",
-      "sha256": "00d130a78a3917613e4a369c7725f4df5ccebc79c182f2aa73af72d935c3b5e5"
+      "sha256": "3bed2ab8b3d3ed04ed7b84a4044dd7864682f1fdda13e2cce407cb49be9ab7c5"
     },
     {
       "file": "dark-fa-desktop/evals.png",
