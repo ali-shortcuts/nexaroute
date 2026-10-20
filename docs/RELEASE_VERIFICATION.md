@@ -30,7 +30,7 @@ expected workflow identity and issuer — an unrestricted verify is not
 a verification:
 
 ```sh
-VERSION=v0.22.0   # the release you downloaded
+VERSION=v0.23.0   # the release you downloaded
 cosign verify-blob \
   --bundle SHA256SUMS.cosign.bundle \
   --certificate-identity "https://github.com/ali-shortcuts/nexaroute/.github/workflows/release.yml@refs/tags/${VERSION}" \

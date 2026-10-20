@@ -66,7 +66,11 @@ jobs:
 
       - name: Release packaging and installer lifecycle tests
         run: |
-          ./scripts/build-release.sh v0.22.0
+          if ./scripts/build-release.sh >/dev/null 2>&1; then
+            echo 'build-release.sh must reject a missing version argument' >&2
+            exit 1
+          fi
+          ./scripts/build-release.sh v0.23.0
           ./scripts/test-install.sh
 
       - name: Docker build
