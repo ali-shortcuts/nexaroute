@@ -322,3 +322,19 @@ func TestProviderAcceptStopsAtUpstreamCallBudget(t *testing.T) {
 		t.Fatalf("missing budget diagnostic: %s", raw)
 	}
 }
+
+func TestProviderAcceptSubcommandIsDispatched(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code, handled := dispatchSubcommand([]string{
+		"provider-accept", "--confirm-live", "--provider", "tenant", "--config", filepath.Join(t.TempDir(), "missing.json"),
+	}, nil, &stdout, &stderr)
+	if !handled {
+		t.Fatal("provider-accept was not dispatched; main would start the gateway")
+	}
+	if code != 2 {
+		t.Fatalf("exit=%d want 2", code)
+	}
+	if !strings.Contains(stderr.String(), "cannot load config") {
+		t.Fatalf("unexpected stderr: %s", stderr.String())
+	}
+}
