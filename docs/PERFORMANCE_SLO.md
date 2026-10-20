@@ -95,10 +95,15 @@ mapping rather than duplicating coverage:
   recovery. A live production failover/outage drill has not been run and
   remains UNVERIFIED. See
   `docs/reports/ISSUE437_SOAK_QUALIFICATION.md`.
-- **Soak evidence**: `scripts/soak.sh` now records commit, rounds,
-  durations, peak RSS per stage, raw logs and a summary; the Soak workflow
-  publishes the summary and uploads the raw directory. The workflow is
-  bounded and is not a multi-hour soak.
+- **Soak evidence**: `scripts/soak.sh` records commit, rounds,
+  durations, peak RSS per stage, raw logs, a machine-readable
+  `summary.json` and JSON-lines goroutine/FD/heap samples from the
+  sustained workload. `NEXAROUTE_SOAK_DURATION` (up to 6h) and the Soak
+  workflow's `duration`/`timeout_minutes` inputs support an
+  operator-triggered longer run. The workflow publishes the summary and
+  uploads the raw directory; any duration is only evidence when a PASS
+  summary for that duration actually exists. See
+  `docs/reports/ISSUE437_OPERATOR_RUNBOOK.md`.
 - **Production SLOs**: latency/error budgets for a real deployment
   must be set from that deployment's traffic, not from loopback
   profiles. The bands above are regression detectors for the

@@ -1,0 +1,34 @@
+{
+  "schema": "nexaroute.soak.qualification.v1",
+  "commit": "d474a040a4cc68375a016d0f71cb0b4677eaf5e2",
+  "git_branch": "opencode/issue437-20261020021920",
+  "workflow_ref": "main",
+  "workflow_head_ref": "n/a",
+  "worktree_entries": 0,
+  "started_at": "2026-10-20T02:32:34Z",
+  "finished_at": "2026-10-20T02:37:07Z",
+  "total_duration_seconds": 273,
+  "stress_rounds": 3,
+  "requested_duration": "2m",
+  "requested_duration_seconds": 120,
+  "result": "PASS",
+  "exit_code": 0,
+  "output_directory": "benchmarks/soak/20261020T023234Z-d474a040a4cc",
+  "environment": {
+    "go": "go version go1.25.0 linux/amd64",
+    "uname": "Linux runnervm8k3b6 6.17.0-1022-azure #22-Ubuntu SMP Mon Jul 27 17:24:03 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux",
+    "nproc": "4",
+    "cpu": "AMD EPYC 7763 64-Core Processor",
+    "gomaxprocs": "auto"
+  },
+  "resource_samples": "benchmarks/soak/20261020T023234Z-d474a040a4cc/http-hot-reload-samples.jsonl",
+  "stages": [
+    {"name": "stress-round-1", "exit_code": 0, "duration_seconds": 3, "max_rss": "303788 KB", "log": "benchmarks/soak/20261020T023234Z-d474a040a4cc/01-stress-round-1.txt"},
+    {"name": "stress-round-2", "exit_code": 0, "duration_seconds": 3, "max_rss": "303808 KB", "log": "benchmarks/soak/20261020T023234Z-d474a040a4cc/02-stress-round-2.txt"},
+    {"name": "stress-round-3", "exit_code": 0, "duration_seconds": 3, "max_rss": "303836 KB", "log": "benchmarks/soak/20261020T023234Z-d474a040a4cc/03-stress-round-3.txt"},
+    {"name": "http-hot-reload-soak", "exit_code": 0, "duration_seconds": 130, "max_rss": "304440 KB", "log": "benchmarks/soak/20261020T023234Z-d474a040a4cc/04-http-hot-reload-soak.txt"},
+    {"name": "recovery-soak", "exit_code": 0, "duration_seconds": 0, "max_rss": "144264 KB", "log": "benchmarks/soak/20261020T023234Z-d474a040a4cc/05-recovery-soak.txt"},
+    {"name": "race-soak", "exit_code": 0, "duration_seconds": 132, "max_rss": "343340 KB", "log": "benchmarks/soak/20261020T023234Z-d474a040a4cc/06-race-soak.txt"},
+    {"name": "budget-leak-slope", "exit_code": 0, "duration_seconds": 2, "max_rss": "305644 KB", "log": "benchmarks/soak/20261020T023234Z-d474a040a4cc/07-budget-leak-slope.txt"}
+  ]
+}

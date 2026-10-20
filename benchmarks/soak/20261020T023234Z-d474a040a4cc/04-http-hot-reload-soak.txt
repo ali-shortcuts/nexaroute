@@ -1,0 +1,18 @@
+=== RUN   TestSoakBudgetLeakSlope
+    budget_leak_soak_test.go:164: leak-slope report (per-round slope over 22 post-warmup rounds):
+    budget_leak_soak_test.go:167:   goroutines         slope=+0.000000 limit=±0.500000
+    budget_leak_soak_test.go:167:   budget_rows        slope=+0.000000 limit=±0.050000
+    budget_leak_soak_test.go:167:   budget_open        slope=+0.000000 limit=±0.050000
+    budget_leak_soak_test.go:167:   budget_reserved    slope=+0.000000 limit=±0.000000
+    budget_leak_soak_test.go:167:   exact_cache_entries slope=+0.000000 limit=±0.500000
+    budget_leak_soak_test.go:167:   sem_cache_entries  slope=+0.000000 limit=±0.500000
+--- PASS: TestSoakBudgetLeakSlope (1.68s)
+=== RUN   TestSoakConcurrentTrafficAndHotReload
+    soak_test.go:275: soak traffic: duration=2m0s elapsed=2m0.006s requests=701414 upstream_calls=701414 reloads=9082 samples=482 goroutines=6->78 peak_goroutines=109 fds=10->59 peak_fds=60
+--- PASS: TestSoakConcurrentTrafficAndHotReload (120.01s)
+=== RUN   TestSoakFlappingUpstreamFailureSemantics
+    soak_test.go:421: recovered after 755.143386ms
+    soak_test.go:449: flapping soak: total=195543 ok=10600 err=184943 upstreamOK=10630 goroutines 73->75
+--- PASS: TestSoakFlappingUpstreamFailureSemantics (6.91s)
+PASS
+ok  	github.com/ali-shortcuts/nexaroute/internal/httpapi	128.615s

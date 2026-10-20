@@ -1,0 +1,20 @@
+# control-plane real-service outage drill
+# date: 2026-10-20T02:37:28Z
+# commit: d474a040a4cc68375a016d0f71cb0b4677eaf5e2
+# go: go version go1.25.0 linux/amd64
+# postgres: postgres:16-alpine on 127.0.0.1:15432
+# redis: redis:7-alpine on 127.0.0.1:16379
+=== RUN   TestPostgresIntegrationOutageRecoveryCancellationBackpressure
+--- PASS: TestPostgresIntegrationOutageRecoveryCancellationBackpressure (0.06s)
+=== RUN   TestRedisIntegrationOutageRecoveryCancellationBackpressure
+--- PASS: TestRedisIntegrationOutageRecoveryCancellationBackpressure (3.07s)
+=== RUN   TestPostgresIntegrationOutageRecoveryCancellationBackpressure
+--- PASS: TestPostgresIntegrationOutageRecoveryCancellationBackpressure (0.05s)
+=== RUN   TestRedisIntegrationOutageRecoveryCancellationBackpressure
+--- PASS: TestRedisIntegrationOutageRecoveryCancellationBackpressure (3.04s)
+=== RUN   TestPostgresIntegrationOutageRecoveryCancellationBackpressure
+--- PASS: TestPostgresIntegrationOutageRecoveryCancellationBackpressure (0.05s)
+=== RUN   TestRedisIntegrationOutageRecoveryCancellationBackpressure
+--- PASS: TestRedisIntegrationOutageRecoveryCancellationBackpressure (2.96s)
+PASS
+ok  	github.com/ali-shortcuts/nexaroute/internal/controlplane	9.244s
