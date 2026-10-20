@@ -26,21 +26,36 @@ func requireHTTPSoak(t *testing.T) {
 	}
 }
 
+// parseSoakDuration interprets the operator-requested sustained duration.
+// An empty or zero value keeps the original fixed-iteration soak shape (the
+// soak script documents 0s as "disables"); negative or malformed values are
+// configuration errors. Positive values only change when the soak stops and
+// are never used as latency assertions.
+func parseSoakDuration(raw string) (time.Duration, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, nil
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		return 0, fmt.Errorf("invalid NEXAROUTE_SOAK_DURATION %q: %w", raw, err)
+	}
+	if d < 0 {
+		return 0, fmt.Errorf("NEXAROUTE_SOAK_DURATION must not be negative, got %q", raw)
+	}
+	// A zero duration (0s, 0m, ...) keeps the fixed-iteration soak shape; the
+	// soak script documents "0s disables" the sustained phase.
+	return d, nil
+}
+
 // soakDuration returns the operator-requested sustained duration. An empty or
 // zero value keeps the original fixed-iteration soak shape. A positive value
 // only changes when the soak stops; it is never used as a latency assertion.
 func soakDuration(t *testing.T) time.Duration {
 	t.Helper()
-	raw := strings.TrimSpace(os.Getenv("NEXAROUTE_SOAK_DURATION"))
-	if raw == "" || raw == "0" {
-		return 0
-	}
-	d, err := time.ParseDuration(raw)
+	d, err := parseSoakDuration(os.Getenv("NEXAROUTE_SOAK_DURATION"))
 	if err != nil {
-		t.Fatalf("invalid NEXAROUTE_SOAK_DURATION %q: %v", raw, err)
-	}
-	if d <= 0 {
-		t.Fatalf("NEXAROUTE_SOAK_DURATION must be positive, got %q", raw)
+		t.Fatalf("%v", err)
 	}
 	return d
 }
