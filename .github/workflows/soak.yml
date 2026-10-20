@@ -7,6 +7,14 @@ on:
         description: Repeated stress rounds before same-process soak
         required: false
         default: "3"
+      duration:
+        description: Sustained mixed-workload duration (for example 30m or 2h; 0s disables)
+        required: false
+        default: "0s"
+      timeout_minutes:
+        description: Job timeout; must comfortably exceed duration (GitHub maximum 360)
+        required: false
+        default: "45"
   push:
     branches: ["main"]
     paths:
@@ -26,7 +34,7 @@ concurrency:
 jobs:
   soak:
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: ${{ fromJSON(github.event.inputs.timeout_minutes || '45') }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -45,7 +53,8 @@ jobs:
 
       - name: Soak (record reproducible evidence)
         env:
-          NEXAROUTE_SOAK_ROUNDS: ${{ inputs.rounds }}
+          NEXAROUTE_SOAK_ROUNDS: ${{ github.event.inputs.rounds }}
+          NEXAROUTE_SOAK_DURATION: ${{ github.event.inputs.duration }}
           NEXAROUTE_SOAK_OUT: ${{ github.workspace }}/.artifacts/soak
         run: ./scripts/soak.sh
 

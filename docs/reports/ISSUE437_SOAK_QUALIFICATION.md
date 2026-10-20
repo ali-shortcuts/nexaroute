@@ -136,3 +136,103 @@ VERIFY PASS
   run with evidence.
 
 #437 is therefore not marked complete by this slice.
+
+## Follow-up — operator-duration qualification path (2026-10-20)
+
+The earlier remainder said the dispatchable workflow was bounded to stress
+rounds only. That gap is now closed without claiming a multi-hour run:
+
+- `scripts/soak.sh` accepts `NEXAROUTE_SOAK_DURATION` in `s`, `m` or `h`
+  (maximum `6h`; `0s` keeps the fixed-iteration shape). The HTTP soak test
+  deadline is raised automatically above the requested duration.
+- The same-session mixed workload now runs until the requested duration
+  instead of a fixed operation count, while the configuration hot-reload loop
+  continues alongside it.
+- `TestSoakConcurrentTrafficAndHotReload` samples goroutines, open file
+  descriptors and heap allocation every 250 ms and fails on a
+  worker-proportional growth bound. The samples are written as JSON lines;
+  no wall-clock latency assertion was added.
+- `scripts/soak.sh` now emits a machine-readable
+  `summary.json` (schema `nexaroute.soak.qualification.v1`) alongside the
+  Markdown summary. It records the exact commit, branch, workflow refs,
+  worktree state, environment, stress rounds, requested duration, per-stage
+  exit/duration/max RSS and the resource-sample path.
+- `.github/workflows/soak.yml` exposes `duration` and `timeout_minutes`
+  `workflow_dispatch` inputs and still uploads the raw directory as an
+  artifact.
+- The precise operator path, evidence contract and live-environment boundary
+  are documented in `docs/reports/ISSUE437_OPERATOR_RUNBOOK.md`.
+
+### Actual bounded run (not a multi-hour soak)
+
+Environment: Linux, AMD EPYC 7763, 4 vCPU, Go 1.25.0 linux/amd64. Clean
+worktree at commit `d474a040a4cc` (the run started from the completed
+operator-path commit; the evidence was added afterwards).
+
+```sh
+NEXAROUTE_SOAK_ROUNDS=3 NEXAROUTE_SOAK_DURATION=2m \
+  NEXAROUTE_SOAK_OUT=benchmarks/soak ./scripts/soak.sh
+```
+
+Result: `SOAK PASS` (exit 0), total 273 s. All three stress rounds, the
+2-minute sustained mixed workload, the recovery soak, the race-enabled soak
+and the budget-leak slope passed.
+
+| Stage | Duration | Max RSS |
+|---|---|---|
+| stress rounds 1–3 | 3 s each | 303788–303836 KB |
+| sustained mixed workload (requested 2m) | 130 s | 304440 KB |
+| recovery soak | <1 s | 144264 KB |
+| race-enabled soak | 132 s | 343340 KB |
+| budget-leak slope | 2 s | 305644 KB |
+
+The sustained workload executed 701,414 requests with 701,414 upstream calls
+and 9,082 hot reloads. Across 482 samples (120.0 s):
+
+| Metric | Minimum | Peak | Last |
+|---|---|---|---|
+| goroutines | 40 | 109 | 79 |
+| open file descriptors | 57 | 60 | 59 |
+| heap allocation | 3.35 MB | 15.23 MB | 9.17 MB |
+
+The worker-proportional bounds were not exceeded, in-flight admission and
+provider capacity returned to zero, and session affinity stayed within its
+bound. Raw evidence:
+`benchmarks/soak/20261020T023234Z-d474a040a4cc/` (summary, per-stage logs,
+GNU `time -v` files, `http-hot-reload-samples.jsonl` and the full transcript in `soak.raw.txt`).
+
+### Real-service outage drills re-run
+
+The disposable PostgreSQL 16 / Redis 7 drills from the section above were
+re-run at commit `d474a040a4cc`:
+
+```sh
+NEXAROUTE_TEST_POSTGRES_DSN='postgres://nexaroute:nexaroute-ci-only@127.0.0.1:15432/nexaroute_test?sslmode=disable' \
+NEXAROUTE_TEST_REDIS_URL='redis://127.0.0.1:16379/15' \
+  go test -tags integration ./internal/controlplane/ \
+  -run 'TestPostgresIntegrationOutageRecoveryCancellationBackpressure|TestRedisIntegrationOutageRecoveryCancellationBackpressure' \
+  -count=3 -v
+```
+
+Result: 6/6 PASS, plus both drills again PASS under `-race`. Raw evidence:
+`benchmarks/soak/drills/outage-drill-20261020T023728Z.raw.txt` and
+`benchmarks/soak/drills/outage-drill-race-20261020T023742Z.raw.txt`.
+
+### Verification of this follow-up
+
+`./scripts/verify.sh` passed at commit `43d20c0` (`VERIFY PASS`, exit 0):
+shell syntax, flake-hunt harness self-checks, formatting, clean
+unit/integration suite, `go vet`, clean race suite, release/SBOM
+trust-chain checks, JavaScript syntax, short fuzz checks and the Linux
+amd64/arm64 builds. Chromium plus Python Playwright were unavailable on this
+runner, so the script used its documented browser-acceptance warning path;
+browser acceptance was not run here. Raw log:
+`benchmarks/soak/verify-43d20c0.raw.txt`.
+
+Focused reruns on the same tree:
+
+- `NEXAROUTE_SOAK=1 go test ./internal/probe/ -run '^TestSoak' -count=10 -v`
+  — 10/10 PASS.
+- `go test ./internal/httpapi -run 'TestSlowDashboardSubscribersDoNotBlockInference|TestLoadProfileMixedWorkload' -count=1 -v`
+  — slow-subscriber contract PASS; the gated load profile skipped without
+  `NEXAROUTE_LOAD=1` as designed.

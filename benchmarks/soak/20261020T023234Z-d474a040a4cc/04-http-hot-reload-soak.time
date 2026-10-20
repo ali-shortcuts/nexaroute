@@ -1,0 +1,23 @@
+	Command being timed: "env NEXAROUTE_SOAK=1 NEXAROUTE_SOAK_DURATION=2m NEXAROUTE_SOAK_SAMPLE_OUT=/home/runner/work/nexaroute/nexaroute/benchmarks/soak/20261020T023234Z-d474a040a4cc/http-hot-reload-samples.jsonl go test -timeout=420s -count=1 -v ./internal/httpapi -run=^TestSoak"
+	User time (seconds): 354.23
+	System time (seconds): 51.19
+	Percent of CPU this job got: 313%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 2:09.44
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 304440
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 105
+	Minor (reclaiming a frame) page faults: 2199256
+	Voluntary context switches: 893347
+	Involuntary context switches: 163589
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 190448
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
