@@ -217,3 +217,22 @@ NEXAROUTE_TEST_REDIS_URL='redis://127.0.0.1:16379/15' \
 Result: 6/6 PASS, plus both drills again PASS under `-race`. Raw evidence:
 `benchmarks/soak/drills/outage-drill-20261020T023728Z.raw.txt` and
 `benchmarks/soak/drills/outage-drill-race-20261020T023742Z.raw.txt`.
+
+### Verification of this follow-up
+
+`./scripts/verify.sh` passed at commit `43d20c0` (`VERIFY PASS`, exit 0):
+shell syntax, flake-hunt harness self-checks, formatting, clean
+unit/integration suite, `go vet`, clean race suite, release/SBOM
+trust-chain checks, JavaScript syntax, short fuzz checks and the Linux
+amd64/arm64 builds. Chromium plus Python Playwright were unavailable on this
+runner, so the script used its documented browser-acceptance warning path;
+browser acceptance was not run here. Raw log:
+`benchmarks/soak/verify-43d20c0.raw.txt`.
+
+Focused reruns on the same tree:
+
+- `NEXAROUTE_SOAK=1 go test ./internal/probe/ -run '^TestSoak' -count=10 -v`
+  — 10/10 PASS.
+- `go test ./internal/httpapi -run 'TestSlowDashboardSubscribersDoNotBlockInference|TestLoadProfileMixedWorkload' -count=1 -v`
+  — slow-subscriber contract PASS; the gated load profile skipped without
+  `NEXAROUTE_LOAD=1` as designed.
