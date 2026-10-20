@@ -2,11 +2,13 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -21,6 +23,52 @@ func requireHTTPSoak(t *testing.T) {
 	t.Helper()
 	if os.Getenv("NEXAROUTE_SOAK") != "1" {
 		t.Skip("set NEXAROUTE_SOAK=1 to run long-form soak checks")
+	}
+}
+
+// soakDuration returns the operator-requested sustained duration. An empty or
+// zero value keeps the original fixed-iteration soak shape. A positive value
+// only changes when the soak stops; it is never used as a latency assertion.
+func soakDuration(t *testing.T) time.Duration {
+	t.Helper()
+	raw := strings.TrimSpace(os.Getenv("NEXAROUTE_SOAK_DURATION"))
+	if raw == "" || raw == "0" {
+		return 0
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		t.Fatalf("invalid NEXAROUTE_SOAK_DURATION %q: %v", raw, err)
+	}
+	if d <= 0 {
+		t.Fatalf("NEXAROUTE_SOAK_DURATION must be positive, got %q", raw)
+	}
+	return d
+}
+
+type soakResourceSample struct {
+	ElapsedSeconds float64 `json:"elapsed_seconds"`
+	Goroutines     int     `json:"goroutines"`
+	OpenFDs        int     `json:"open_fds"`
+	HeapAllocBytes uint64  `json:"heap_alloc_bytes"`
+}
+
+// soakFDCount reads the process file-descriptor table on Linux. It returns -1
+// on platforms without /proc; callers treat that as "not sampled" rather than
+// as a failure.
+func soakFDCount() int {
+	entries, err := os.ReadDir("/proc/self/fd")
+	if err != nil {
+		return -1
+	}
+	return len(entries)
+}
+
+func soakBumpMax(dst *atomic.Int64, value int64) {
+	for {
+		old := dst.Load()
+		if value <= old || dst.CompareAndSwap(old, value) {
+			return
+		}
 	}
 }
 
@@ -57,7 +105,77 @@ func TestSoakConcurrentTrafficAndHotReload(t *testing.T) {
 
 	const workers = 24
 	const perWorker = 250
+	const hotReloads = 100
+
+	duration := soakDuration(t)
+	resourceBaseline := runtime.NumGoroutine()
+	fdBaseline := soakFDCount()
+	started := time.Now()
+	var deadline time.Time
+	if duration > 0 {
+		deadline = started.Add(duration)
+	}
+
+	// Resource sampling is reporting plus a generous unbounded-growth gate.
+	// It never asserts elapsed time. Samples are appended as JSON lines when
+	// the operator asks for a machine-readable artifact.
+	var sampleFile *os.File
+	var sampleEncoder *json.Encoder
+	if path := strings.TrimSpace(os.Getenv("NEXAROUTE_SOAK_SAMPLE_OUT")); path != "" {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("create soak sample directory for %q: %v", path, err)
+		}
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+		if err != nil {
+			t.Fatalf("open soak sample output %q: %v", path, err)
+		}
+		sampleFile = f
+		sampleEncoder = json.NewEncoder(f)
+		defer sampleFile.Close()
+	}
+
+	samplerCtx, stopSampler := context.WithCancel(context.Background())
+	var samplerWG sync.WaitGroup
+	var samples atomic.Int64
+	var peakGoroutines atomic.Int64
+	var peakFDs atomic.Int64
+	samplerWG.Add(1)
+	go func() {
+		defer samplerWG.Done()
+		ticker := time.NewTicker(250 * time.Millisecond)
+		defer ticker.Stop()
+		record := func() {
+			var mem runtime.MemStats
+			runtime.ReadMemStats(&mem)
+			sample := soakResourceSample{
+				ElapsedSeconds: time.Since(started).Seconds(),
+				Goroutines:     runtime.NumGoroutine(),
+				OpenFDs:        soakFDCount(),
+				HeapAllocBytes: mem.HeapAlloc,
+			}
+			samples.Add(1)
+			soakBumpMax(&peakGoroutines, int64(sample.Goroutines))
+			if sample.OpenFDs >= 0 {
+				soakBumpMax(&peakFDs, int64(sample.OpenFDs))
+			}
+			if sampleEncoder != nil {
+				_ = sampleEncoder.Encode(sample)
+			}
+		}
+		record()
+		for {
+			select {
+			case <-samplerCtx.Done():
+				record()
+				return
+			case <-ticker.C:
+				record()
+			}
+		}
+	}()
+
 	var failed atomic.Int64
+	var requests atomic.Int64
 	var wg sync.WaitGroup
 	start := make(chan struct{})
 	for g := 0; g < workers; g++ {
@@ -65,12 +183,20 @@ func TestSoakConcurrentTrafficAndHotReload(t *testing.T) {
 		go func(g int) {
 			defer wg.Done()
 			<-start
-			for i := 0; i < perWorker; i++ {
+			for i := 0; ; i++ {
+				if duration > 0 {
+					if i > 0 && time.Now().After(deadline) {
+						return
+					}
+				} else if i >= perWorker {
+					return
+				}
 				req := httptest.NewRequest(http.MethodPost, "http://gateway/v1/chat/completions",
 					strings.NewReader(`{"model":"coding","messages":[{"role":"user","content":"hello"}]}`))
 				req.Header.Set("x-session-id", fmt.Sprintf("soak-%d-%d", g, i%50))
 				rr := httptest.NewRecorder()
 				h.ServeHTTP(rr, req)
+				requests.Add(1)
 				if rr.Code != http.StatusOK {
 					failed.Add(1)
 					return
@@ -80,21 +206,40 @@ func TestSoakConcurrentTrafficAndHotReload(t *testing.T) {
 	}
 	close(start)
 
-	for i := 0; i < 100; i++ {
+	reloads := 0
+	for {
+		if duration > 0 {
+			if time.Now().After(deadline) {
+				break
+			}
+		} else if reloads >= hotReloads {
+			break
+		}
 		next := s.currentConfig()
-		next.Providers[0].Name = fmt.Sprintf("P-%d", i)
-		next.Routing.CapacityWeight = float64(i % 50)
+		next.Providers[0].Name = fmt.Sprintf("P-%d", reloads)
+		next.Routing.CapacityWeight = float64(reloads % 50)
 		if err := s.applyConfig(next); err != nil {
-			t.Fatalf("hot reload %d failed: %v", i, err)
+			t.Fatalf("hot reload %d failed: %v", reloads, err)
+		}
+		reloads++
+		if duration > 0 {
+			time.Sleep(10 * time.Millisecond)
 		}
 	}
 	wg.Wait()
+	stopSampler()
+	samplerWG.Wait()
+	elapsed := time.Since(started)
 
 	if failed.Load() != 0 {
 		t.Fatalf("traffic failures=%d", failed.Load())
 	}
-	if want := int64(workers * perWorker); upstreamCalls.Load() != want {
-		t.Fatalf("upstream calls=%d want %d", upstreamCalls.Load(), want)
+	if duration == 0 {
+		if want := int64(workers * perWorker); upstreamCalls.Load() != want {
+			t.Fatalf("upstream calls=%d want %d", upstreamCalls.Load(), want)
+		}
+	} else if upstreamCalls.Load() == 0 {
+		t.Fatal("sustained soak did not reach the upstream")
 	}
 	if s.inflight.Load() != 0 {
 		t.Fatalf("global inflight leaked: %d", s.inflight.Load())
@@ -106,6 +251,30 @@ func TestSoakConcurrentTrafficAndHotReload(t *testing.T) {
 	if got := s.rt.SessionCount(); got > 10000 {
 		t.Fatalf("session affinity state escaped bound: %d", got)
 	}
+
+	// Idle keep-alive handler and transport goroutines are legitimate steady
+	// state and scale with the worker pool, so the bound is worker-proportional.
+	// It is a leak gate, not a timing or scheduler assertion.
+	goroutineBound := resourceBaseline + 4*workers + 128
+	drainDeadline := time.Now().Add(10 * time.Second)
+	for runtime.NumGoroutine() > goroutineBound && time.Now().Before(drainDeadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := runtime.NumGoroutine(); got > goroutineBound {
+		t.Fatalf("goroutines after soak: %d exceeds bound %d (baseline %d) — soak leaked handlers", got, goroutineBound, resourceBaseline)
+	}
+	if peak := peakGoroutines.Load(); peak > int64(goroutineBound) {
+		t.Fatalf("peak goroutines %d exceeded bound %d (baseline %d, workers %d)", peak, goroutineBound, resourceBaseline, workers)
+	}
+	if fdBaseline >= 0 && peakFDs.Load() >= 0 {
+		if peak := peakFDs.Load(); peak > int64(fdBaseline+8*workers+256) {
+			t.Fatalf("peak open fds %d exceeded bounded soak design (baseline %d, workers %d)", peak, fdBaseline, workers)
+		}
+	}
+
+	t.Logf("soak traffic: duration=%s elapsed=%s requests=%d upstream_calls=%d reloads=%d samples=%d goroutines=%d->%d peak_goroutines=%d fds=%d->%d peak_fds=%d",
+		duration, elapsed.Round(time.Millisecond), requests.Load(), upstreamCalls.Load(), reloads, samples.Load(),
+		resourceBaseline, runtime.NumGoroutine(), peakGoroutines.Load(), fdBaseline, soakFDCount(), peakFDs.Load())
 }
 
 // TestSoakFlappingUpstreamFailureSemantics (M4-8) drives sustained
