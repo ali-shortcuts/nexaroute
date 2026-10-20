@@ -185,7 +185,12 @@ def main() -> None:
                 # 1. Named first-run state before anything exists.
                 expect(page.locator("#content")).to_contain_text("Add and test your first")
                 page.locator('[data-page="providers"]').click()
-                expect(page.locator(".empty-state")).to_contain_text("Connect your first provider")
+                # .first: the providers page renders a second .empty-state for the
+                # preset catalog section until the async /admin/api/provider-presets
+                # fetch resolves; a bare strict-mode locator throws immediately when
+                # two match, which flakes on catalog timing. The provider section
+                # always renders before the preset section, so .first is stable.
+                expect(page.locator(".empty-state").first).to_contain_text("Connect your first provider")
                 page.locator('[data-page="routing"]').click()
                 expect(page.locator(".empty-state")).to_contain_text("Create your first public route")
 
