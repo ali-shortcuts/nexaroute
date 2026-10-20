@@ -30,4 +30,10 @@ func TestChromeStringsGoThroughI18N(t *testing.T) {
 	if strings.Contains(app, "· Sign out") {
 		t.Error("app.js still hardcodes the '· Sign out' suffix instead of t('signOut')")
 	}
+	if !strings.Contains(app, "state.connectionStatus = { ok: !!ok, bad: !!bad }") {
+		t.Error("setConnection must retain its state so the labels can be refreshed after a language change")
+	}
+	if !strings.Contains(app, "setConnection(state.connectionStatus.ok, state.connectionStatus.bad)") {
+		t.Error("applyLang must refresh connection-status labels immediately when the language changes")
+	}
 }
