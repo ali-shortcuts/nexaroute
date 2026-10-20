@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-19T18:57:35.298Z",
+  "generated_at": "2026-10-20T08:27:25.278Z",
   "base": "http://127.0.0.1:18741/",
   "shots": [
     {
@@ -64,7 +64,7 @@
       "theme": "dark",
       "lang": "en",
       "viewport": "desktop",
-      "sha256": "9236a8c77a3b5ba1160216a282af7c5273b742aa6e8a6180b5bc1be8a4cf84ad"
+      "sha256": "f9deec41116daad28c7ef77c07c05ed84bbaebbf9d057852e3a36f5291273dfe"
     },
     {
       "file": "dark-en-desktop/access.png",
@@ -208,7 +208,7 @@
       "theme": "dark",
       "lang": "en",
       "viewport": "mobile",
-      "sha256": "61425c3b0b28d403449a112e608ab2d9259cde1d87c8e11a9cf0bd67c29f596b"
+      "sha256": "ad4f965491b6597afe5b0a47a4821617a81b5a22eb396736611bfc87160d7ba0"
     },
     {
       "file": "dark-en-mobile/observability.png",
@@ -520,7 +520,7 @@
       "theme": "light",
       "lang": "en",
       "viewport": "desktop",
-      "sha256": "4edb68d0728a853a414653bf0cc5e3ac6cdcf0465424e8e4b8969627a83b5a50"
+      "sha256": "53023bdbf98ac91bd3af483d71bc11ddaeafd4d41813d91097543572f70d0aa3"
     },
     {
       "file": "light-en-desktop/audit.png",
@@ -656,7 +656,7 @@
       "theme": "light",
       "lang": "en",
       "viewport": "mobile",
-      "sha256": "5f877c4ce1059ef595bd3b6fdc41aa6a24f47635e3795d7ed13dfb983508943b"
+      "sha256": "433c31e6dc0e1f572eb369d2b57a923950ba58945a0a9846ae7c1a36431368d1"
     },
     {
       "file": "light-en-mobile/observability.png",
