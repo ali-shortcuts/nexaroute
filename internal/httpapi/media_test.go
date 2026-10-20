@@ -169,13 +169,20 @@ func TestMediaUnsupportedProviderTypeAndUnknownModel(t *testing.T) {
 	if rr.Code != http.StatusBadRequest || !strings.Contains(rr.Body.String(), "openai_compatible") {
 		t.Fatalf("unsupported type: status=%d body=%s", rr.Code, rr.Body.String())
 	}
-	s2, _ := mediaGateway(t, "openai_compatible", func(w http.ResponseWriter, r *http.Request) {
+	s2, cap2 := mediaGateway(t, "openai_compatible", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, `{}`)
 	})
 	rr = mediaPost(t, s2, "/v1/embeddings", "application/json",
 		[]byte(`{"model":"nope","input":"hello"}`))
-	if rr.Code != http.StatusServiceUnavailable {
-		t.Fatalf("unknown model: status=%d body=%s", rr.Code, rr.Body.String())
+	if rr.Code != http.StatusOK {
+		t.Fatalf("unknown model should use fallback deployment when enabled: status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	cap2.mu.Lock()
+	calls, body := cap2.calls, string(append([]byte(nil), cap2.body...))
+	cap2.mu.Unlock()
+	if calls != 1 || !strings.Contains(body, `"model":"upstream-model-x"`) {
+		t.Fatalf("unknown-model fallback did not call the fallback deployment with its configured model: calls=%d body=%s", calls, body)
 	}
 }
 
