@@ -34,7 +34,7 @@ concurrency:
 jobs:
   soak:
     runs-on: ubuntu-24.04
-    timeout-minutes: ${{ fromJSON(inputs.timeout_minutes || '45') }}
+    timeout-minutes: ${{ fromJSON(github.event.inputs.timeout_minutes || '45') }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -53,8 +53,8 @@ jobs:
 
       - name: Soak (record reproducible evidence)
         env:
-          NEXAROUTE_SOAK_ROUNDS: ${{ inputs.rounds || '3' }}
-          NEXAROUTE_SOAK_DURATION: ${{ inputs.duration || '0s' }}
+          NEXAROUTE_SOAK_ROUNDS: ${{ github.event.inputs.rounds }}
+          NEXAROUTE_SOAK_DURATION: ${{ github.event.inputs.duration }}
           NEXAROUTE_SOAK_OUT: ${{ github.workspace }}/.artifacts/soak
         run: ./scripts/soak.sh
 
