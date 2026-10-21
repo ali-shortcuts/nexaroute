@@ -54,7 +54,7 @@ func TestSaveAtomicModeAndPreservesOperatorBackup(t *testing.T) {
 }
 
 func TestRoutingStrategiesValidate(t *testing.T) {
-	for _, strategy := range []string{"ready_mesh", "ready_queue", "cost_aware", "adaptive", "adaptive_round_robin", "priority", "round_robin", "least_latency"} {
+	for _, strategy := range []string{"ready_mesh", "ready_queue", "cost_aware", "adaptive_round_robin", "priority", "round_robin", "least_latency"} {
 		cfg := Default()
 		cfg.Routing.Strategy = strategy
 		if err := cfg.Validate(); err != nil {
@@ -65,6 +65,20 @@ func TestRoutingStrategiesValidate(t *testing.T) {
 	cfg.Routing.Strategy = "not-real"
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "routing.strategy") {
 		t.Fatalf("bad strategy should fail, got %v", err)
+	}
+}
+
+// TestUnimplementedAdaptiveStrategyRejected is the regression test for the
+// inert "adaptive" routing strategy (issue #610): the UI offered it, docs
+// listed it and validation accepted it, but the router implements no
+// adaptive ordering — applyStrategy falls through to the default branch.
+// The option must fail closed instead of silently behaving like the default.
+func TestUnimplementedAdaptiveStrategyRejected(t *testing.T) {
+	cfg := Default()
+	cfg.Routing.Strategy = "adaptive"
+	err := cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "routing.strategy") {
+		t.Fatalf("unimplemented strategy %q should fail validation, got %v", cfg.Routing.Strategy, err)
 	}
 }
 

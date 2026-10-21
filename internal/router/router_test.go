@@ -160,9 +160,9 @@ func TestRoundRobinNeverPromotesDegradedAheadOfHealthy(t *testing.T) {
 	}
 }
 
-func TestAdaptivePrefersConfiguredStrongHealthyDeployment(t *testing.T) {
+func TestLegacyAdaptiveStrategyFallsBackToDefaultOrdering(t *testing.T) {
 	cfg := config.Default()
-	cfg.Routing.Strategy = "adaptive"
+	cfg.Routing.Strategy = "adaptive" // unimplemented: validation rejects it; router treats it as default ordering
 	cfg.Providers = []config.ProviderConfig{{ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "https://example.invalid", Enabled: true, Models: []config.ModelConfig{
 		{ID: "strong", Model: "strong", Aliases: []string{"coding"}, Enabled: true, Priority: 0, Weight: 2},
 		{ID: "weak", Model: "weak", Aliases: []string{"coding"}, Enabled: true, Priority: 10, Weight: 1},
@@ -177,9 +177,9 @@ func TestAdaptivePrefersConfiguredStrongHealthyDeployment(t *testing.T) {
 	}
 }
 
-func TestAdaptiveNeverPromotesDegradedHighWeightAheadOfHealthy(t *testing.T) {
+func TestLegacyAdaptiveStrategyNeverPromotesDegradedHighWeightAheadOfHealthy(t *testing.T) {
 	cfg := config.Default()
-	cfg.Routing.Strategy = "adaptive"
+	cfg.Routing.Strategy = "adaptive" // unimplemented: validation rejects it; router treats it as default ordering
 	cfg.Providers = []config.ProviderConfig{{ID: "p", Name: "P", Type: "openai_compatible", BaseURL: "https://example.invalid", Enabled: true, Models: []config.ModelConfig{
 		{ID: "healthy", Model: "healthy", Aliases: []string{"coding"}, Enabled: true, Priority: 100, Weight: 1},
 		{ID: "degraded", Model: "degraded", Aliases: []string{"coding"}, Enabled: true, Priority: 0, Weight: 100},

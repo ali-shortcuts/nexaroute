@@ -335,11 +335,14 @@ ready_mesh
 cost_aware
 ready_queue
 adaptive_round_robin
-adaptive
 priority
 round_robin
 least_latency
 ```
+
+(`adaptive` was removed: it was listed but never implemented — the router
+treated it identically to the default ordering. Configs using it now fail
+validation with a clear error instead of silently degrading.)
 
 Important controls:
 
