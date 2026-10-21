@@ -283,7 +283,7 @@ func (s *Server) canonicalStreamPump(
 					streamErr = fmt.Errorf("%s", msg)
 					break
 				}
-				assembledArgs[ev.ToolIndex].WriteString(ev.ArgsDelta)
+				_, _ = assembledArgs[ev.ToolIndex].WriteString(ev.ArgsDelta)
 				deferClientEvent = true
 			case canonical.StreamToolEnd:
 				if err := validateTool(ev.ToolIndex); err != nil {
@@ -375,7 +375,7 @@ func (s *Server) handleCanonicalResponse(
 		return s.canonicalStreamPump(w, resp, kind, clientProtocol, requestedModel, requestID, toolDefs, usageHook)
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if err != nil {
 		return fmt.Errorf("upstream response read failed: %w", err)
 	}
@@ -620,7 +620,7 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 		}
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			b, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			b = bundle.a.RedactBody(b)
 			lastStatus := resp.StatusCode
 			lastCT := resp.Header.Get("Content-Type")

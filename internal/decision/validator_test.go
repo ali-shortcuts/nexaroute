@@ -203,7 +203,7 @@ func TestNormalizeResult_EmptyEligible(t *testing.T) {
 	var eligible []Candidate
 	result := DecisionResult{Action: ActionRank, RankedIDs: []string{"A"}}
 	ordered, _, reason := NormalizeResult(eligible, result)
-	if ordered != nil && len(ordered) != 0 {
+	if len(ordered) != 0 {
 		t.Fatalf("expected nil or empty for empty eligible")
 	}
 	if reason != ReasonEmptyEligible {

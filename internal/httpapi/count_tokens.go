@@ -86,7 +86,7 @@ func (s *Server) countTokens(w http.ResponseWriter, r *http.Request) {
 			}
 			const maxNativeTokenCountBytes = 2 << 20
 			b, readErr := io.ReadAll(io.LimitReader(resp.Body, maxNativeTokenCountBytes+1))
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			if readErr != nil || len(b) > maxNativeTokenCountBytes {
 				continue
 			}

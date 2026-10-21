@@ -538,7 +538,7 @@ func hashIndex(key string, salt byte, n int) int {
 	h := fnv.New64a()
 	_, _ = h.Write([]byte(key))
 	_, _ = h.Write([]byte{salt})
-	return int(h.Sum64() % uint64(n))
+	return int(h.Sum64() % uint64(n)) // #nosec G115 -- the modulo result is strictly less than n, and n is a non-negative slice/index bound.
 }
 func estimatedRequestCost(d Deployment, req Requirement) (float64, bool) {
 	// Cost-aware ordering is only trustworthy when the request supplies an
@@ -790,7 +790,7 @@ func (r *Router) applyStrategy(out []Scored, req Requirement, cfg config.Config)
 			w++
 		}
 		if w > 1 {
-			off := int((r.rr.Add(1) - 1) % uint64(w))
+			off := int((r.rr.Add(1) - 1) % uint64(w)) // #nosec G115 -- the modulo result is strictly less than w, the bounded rotation window size.
 			rot := append([]Scored(nil), out[:w]...)
 			for i := 0; i < w; i++ {
 				out[i] = rot[(i+off)%w]
@@ -810,7 +810,7 @@ func (r *Router) applyStrategy(out []Scored, req Requirement, cfg config.Config)
 			w++
 		}
 		if w > 1 {
-			off := int((r.rr.Add(1) - 1) % uint64(w))
+			off := int((r.rr.Add(1) - 1) % uint64(w)) // #nosec G115 -- the modulo result is strictly less than w, the bounded rotation window size.
 			rot := append([]Scored(nil), out[:w]...)
 			for i := 0; i < w; i++ {
 				out[i] = rot[(i+off)%w]

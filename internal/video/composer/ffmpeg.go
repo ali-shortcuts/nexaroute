@@ -97,7 +97,7 @@ func (r *Runner) Concat(ctx context.Context, inputs []string, output string) (Ma
 	for _, in := range inputs {
 		abs, _ := filepath.Abs(in)
 		if _, err = fmt.Fprintf(list, "file '%s'\n", strings.ReplaceAll(abs, "'", "'\\''")); err != nil {
-			list.Close()
+			_ = list.Close()
 			return Manifest{}, err
 		}
 	}

@@ -665,7 +665,7 @@ func (a *httpAdapter) DoPath(ctx context.Context, method, path string, payload [
 			a.cooldownCredential(idx, resp.StatusCode, resp.Header.Get("Retry-After"))
 			if a.hasAvailableCredential(attempted) {
 				body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-				resp.Body.Close()
+				_ = resp.Body.Close()
 				reservation.releaseAll()
 				a.releaseCredential(idx)
 				lastErr = fmt.Errorf("credential rejected http %d: %s", resp.StatusCode, a.safeSnippet(body))
@@ -919,8 +919,8 @@ func (a *httpAdapter) reserveCredential(excluded map[int]bool) (int, string, boo
 	}
 	chosen := available[0]
 	if len(available) > 1 {
-		aPos := int(a.rr % uint64(len(available)))
-		bPos := int((a.rr*7 + 1) % uint64(len(available)))
+		aPos := int(a.rr % uint64(len(available)))         // #nosec G115 -- the modulo result is strictly less than len(available).
+		bPos := int((a.rr*7 + 1) % uint64(len(available))) // #nosec G115 -- the modulo result is strictly less than len(available).
 		if bPos == aPos {
 			bPos = (bPos + 1) % len(available)
 		}
@@ -1084,26 +1084,27 @@ func (a *httpAdapter) Probe(ctx context.Context, model string, maxTokens int) (t
 	// The maxTokens argument is accepted for interface compatibility but
 	// deliberately ignored so that no config value, provider metadata, or
 	// future caller can ever raise the cost of a synthetic probe.
-	maxTokens = 1
+	_ = maxTokens
+	const probeTokens = 1
 	var body map[string]any
 	switch a.p.Type {
 	case "bedrock":
 		body = map[string]any{
 			"messages":        []map[string]any{{"role": "user", "content": []map[string]any{{"text": "OK"}}}},
-			"inferenceConfig": map[string]any{"maxTokens": maxTokens},
+			"inferenceConfig": map[string]any{"maxTokens": probeTokens},
 		}
 	case "gemini", "vertex":
 		body = map[string]any{
 			"contents":         []map[string]any{{"role": "user", "parts": []map[string]any{{"text": "OK"}}}},
-			"generationConfig": map[string]any{"maxOutputTokens": maxTokens},
+			"generationConfig": map[string]any{"maxOutputTokens": probeTokens},
 		}
 	case "openai_responses":
 		body = map[string]any{
 			"model": model, "input": "Reply with the single word: OK",
-			"max_output_tokens": maxTokens, "stream": false,
+			"max_output_tokens": probeTokens, "stream": false,
 		}
 	default:
-		body = map[string]any{"model": model, "max_tokens": maxTokens, "messages": []map[string]any{{"role": "user", "content": "OK"}}, "stream": false}
+		body = map[string]any{"model": model, "max_tokens": probeTokens, "messages": []map[string]any{{"role": "user", "content": "OK"}}, "stream": false}
 	}
 	b, err := json.Marshal(body)
 	if err != nil {

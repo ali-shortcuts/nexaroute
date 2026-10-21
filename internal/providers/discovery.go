@@ -74,7 +74,7 @@ func DiscoverModelsWithTimeout(ctx context.Context, p config.ProviderConfig, tim
 		}
 		lastStatus = resp.StatusCode
 		b, readErr := io.ReadAll(io.LimitReader(resp.Body, maxDiscoveryBodyBytes+1))
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		if readErr != nil {
 			lastErr = fmt.Errorf("model discovery read: %w", readErr)
 			continue
@@ -121,18 +121,14 @@ func ParseModelList(b []byte) []string {
 		switch x := v.(type) {
 		case string:
 			x = strings.TrimSpace(x)
-			if strings.HasPrefix(x, "models/") {
-				x = strings.TrimPrefix(x, "models/")
-			}
+			x = strings.TrimPrefix(x, "models/")
 			if len(x) <= maxModelIDBytes {
 				out = append(out, x)
 			}
 		case map[string]any:
 			for _, key := range []string{"id", "model", "name"} {
 				if id, _ := x[key].(string); strings.TrimSpace(id) != "" {
-					if strings.HasPrefix(id, "models/") {
-						id = strings.TrimPrefix(id, "models/")
-					}
+					id = strings.TrimPrefix(id, "models/")
 					if len(id) <= maxModelIDBytes {
 						out = append(out, id)
 					}

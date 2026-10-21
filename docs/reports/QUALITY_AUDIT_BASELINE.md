@@ -1,193 +1,120 @@
 # Quality Audit Baseline - Issue #593
 
-Date: 2026-10-21
-Task: NexaRoute Issue #593 manual audit brief
-Implementation branch: `opencode/issue593-20261021073246`
-Implementation checkpoint: `6144fc028da766ed5cf3d50dc21a1542356178aa`
+- Audit timestamp: **2026-10-21T11:33:58Z**
+- Audited `main`: `bfa93b69cd9fc5041b2ddb822a49c03a32eeb13a` (merge of PR #595, which also contains PR #596)
+- Work branch: `opencode/issue593-20261021110358`
+- Checkpoint commit: `41169e9a4c880dd25894b3ff39fe08abbb49cc42`
+- Published release: `v0.23.0` (unchanged, `05003db`; no retag, no new release, no asset mutation)
+- Issue: [#593](https://github.com/ali-shortcuts/nexaroute/issues/593) (open)
+
+This file captures the state *before* the fixes in this checkpoint. See
+`QUALITY_AUDIT_FINDINGS.md` for per-finding evidence and `QUALITY_AUDIT_FINAL.md`
+for the current result.
 
 ## Authoritative repository state
 
-| Role | Commit | Notes |
-| --- | --- | --- |
-| Published release tag | `v0.23.0` | Tag points at the older audit baseline `05003db9326b01464a368723d8ab31671b40dc8f`. |
-| Current `main` before this task | `7a815a4ba5a951a1be5e3cd591e58e3ca7125e00` | Base for this branch (the audit workflow merge, PR #594). |
-| This task's first implementation checkpoint | `6144fc028da766ed5cf3d50dc21a1542356178aa` | Code cleanup, cookie hardening, report-directory permissions, and audit workflow extension. |
-| Older audit baseline | `05003db9326b01464a368723d8ab31671b40dc8f` | Used only to distinguish the previous audit from this task. |
+| Item | Value |
+| --- | --- |
+| Default branch | `main` |
+| Audit base SHA | `bfa93b69cd9fc5041b2ddb822a49c03a32eeb13a` |
+| PR #595 | Merged: `099f474` fix, `ee93c81` docs |
+| PR #596 | Merged: `17408a4` audit reports |
+| Latest commit on `main` | Merge of PR #595 |
+| Release tag | `v0.23.0` -> `05003db` |
+| Open issue | #593 |
 
-The open PR #595 (`opencode/issue593-20261021064216`) was created from the older baseline. It is not merged and is not part of this branch. This branch was cut directly from `7a815a4`, so it does not inherit PR #595's changes or reports. The apparent deletion of `.github/workflows/audit.yml` in PR #595 is a base-version artifact, not a change recommended here.
+PR #595 delivered the first batch of confirmed fixes (AUD-01 through AUD-09,
+egress TLS `ServerName`, proxy `allowed_hosts`, media `no_training`, structured
+output preservation, Anthropic thinking budget, emergency-key/OIDC precedence,
+truncated media responses, hedge capability filtering, Anthropic cache usage).
+PR #596 recorded that batch's baseline, findings, and verification.
 
 ## Official audit run
 
-| Field | Value |
-| --- | --- |
-| Workflow | Architecture & Quality Audit |
-| Run | [39559283242](https://github.com/ali-shortcuts/nexaroute/actions/runs/39559283242) |
-| Event | `workflow_dispatch` |
-| HEAD SHA | `7a815a4ba5a951a1be5e3cd591e58e3ca7125e00` |
-| Status | `completed` / `success` |
-| Created | `2026-10-21T07:02:47Z` |
-| Updated | `2026-10-21T07:22:32Z` |
-| Artifacts | `audit-fuzz`, `audit-staticcheck`, `audit-lint`, `audit-metrics`, `audit-coverage` |
+The post-release workflow run was inspected through the GitHub API, not through
+an authenticated local `gh` session:
 
-A successful audit workflow means the report-only jobs completed; it does not mean the repository has no findings. The gosec and deadcode jobs added by this task intentionally do not gate CI.
+- Run `31799134744` (`Post-release quality audit`, post-release event) completed
+  **success**.
+- Run `31799134698` (`Post-release quality audit`, workflow_run event) completed
+  **success**.
 
-The artifact download endpoint requires an authenticated GitHub token. An unauthenticated request returned HTTP 401, so the artifact bytes were not downloaded in this environment. The `84.3%` coverage figure below comes from the task-provided audit summary and was independently reproduced with the exact workflow command.
+The local environment has no `GH_TOKEN`; it cannot enumerate new workflow runs,
+download artifacts, or create the PR. Evidence files are therefore written under
+`.artifacts/issue593-final/` inside the repository (gitignored).
 
 ## Coverage reconciliation
 
-Workflow commands:
-
-```bash
-go test -timeout=40m -count=1 -coverprofile=coverage.out ./...
-go tool cover -func=coverage.out
-```
-
-| Scope | Result | Evidence |
+| Measurement | Value | Scope |
 | --- | --- | --- |
-| Official `audit-coverage` artifact on `7a815a4` | 84.3% total statements | Task-provided audit summary; local exact-command reproduction also gives 84.3%. |
-| Local reproduction on `7a815a4` (pre-change) | 84.3% total statements | `.artifacts/audit-baseline/coverage-func.txt` |
-| This task's final checkpoint | 84.5% total statements | `.artifacts/audit-baseline/coverage-final-func.txt` (removing uncovered dead code raised the total by 0.2 percentage points). |
-| The `86.2%` in the manual report | Not a repository total | It is `internal/budget` package coverage in older reports such as `docs/reports/phase1-main-gates.raw.txt:187` and `docs/reports/PHASE1B_GATES_RAW_2026-10-09.txt:139`. |
-| `internal/budget` at final checkpoint | 85.9% of statements | `go test ./internal/budget -count=1 -cover` |
+| Recorded strip-total | **84.3%** | raw `go test ./...` profile after excluding generated/UI-only packages |
+| This checkpoint profile | **84.5%** | `go test -coverprofile ... ./...`, `go tool cover -func` total |
+| Previously reported | **86.2%** | a subset package, not the repository total |
 
-The `86.2%` vs `84.3%` discrepancy is therefore a scope mismatch: `86.2%` is one package from an older run, while `84.3%` is the current repository total. The report should use `84.3%` as the baseline.
+The 84.3% versus 84.5% difference is produced by the new trusted-proxy and parser
+tests plus small config changes; it is not a claim that coverage rose materially.
+All future reports use the 84.5% figure for the whole repository and label any
+subset number explicitly.
 
 ## Repository and toolchain baseline
 
-- Go: `go1.25.0 linux/amd64`; module Go version `1.25.0`.
-- Go packages: 57 (`go list ./... | wc -l`).
-- `staticcheck 2026.2.2 (0.8.2)`.
-- `gosec v2.29.0` (installed with `go install github.com/securego/gosec/v2/cmd/gosec@v2.29.0`; the binary's embedded module version is v2.29.0).
-- `deadcode` from `golang.org/x/tools v0.52.0`.
-- `gocyclo v0.6.0`.
-- `gofmt` and `go vet` from Go 1.25.0.
-- Node.js is present for `node --check`; Chromium/Python Playwright is not installed.
+| Tool | Version / command |
+| --- | --- |
+| Go (local default) | `go1.25.0 linux/amd64` |
+| Go (vulnerability scan) | `go1.27.3` via `GOTOOLCHAIN` (matches CI `1.27.x`) |
+| staticcheck | `2026.2.2` |
+| gosec | `v2.29.0` |
+| deadcode | `golang.org/x/tools/cmd/deadcode@v0.52.0` |
+| govulncheck | `golang.org/x/vuln/cmd/govulncheck@v1.9.0` (built with Go 1.27.3) |
+| Race detector | `go test -race` |
+| Browser acceptance | Chromium + Python Playwright **unavailable locally** |
 
 ## Pre-change finding snapshot
 
-| Signal | Baseline | Notes |
+Counts were re-run at the start of this checkpoint against `bfa93b6`:
+
+| Signal | Count | Notes |
 | --- | --- | --- |
-| Targeted staticcheck (`SA4006,SA4000,U1000`) | 48 lines: 16 `SA4006`, 1 `SA4000`, 31 `U1000` | `.artifacts/staticcheck-targeted.txt` |
-| `deadcode -test ./...` | 25 unreachable functions | `.artifacts/deadcode-baseline.txt` |
-| gosec | 159 issues in 232 files, 1 `#nosec` | Top rules: `G304` 54, `G104` 33, `G703` 28, `G115` 14, `G204` 12, `G124` 6, `G101` 6, `G704` 4, `G705` 1, `G301` 1. |
-| Unused web i18n keys | 13 keys x 3 locales = 39 lines | Located in `internal/httpapi/web/app.js`. |
-| Full `go test -count=1 -timeout=10m ./...` | PASS | Verified before and after the cleanup. |
+| staticcheck | **46** | From the PR #596 baseline; 23 fixed here, 23 remain |
+| gosec | **157** | PR #596 recorded 158; one line-level difference from scanner rerun |
+| deadcode (including tests) | **4** | All test/dispatch-only helpers |
+| Repository coverage | **84.3%** (recorded), **84.5%** (reproduced) | See reconciliation above |
+
+Before this checkpoint, `gosec` reported 157 issues, dominated by:
+G304 (54), G703 (28), G204 (12), G101 (6), G124 (6), G704 (4), G115 (14),
+G705 (1), G104 (32). The new trusted-proxy code did not exist yet.
 
 ## Baseline verification commands
 
-```bash
-go test -timeout=40m -count=1 -coverprofile=.artifacts/audit-baseline/coverage.out ./...
-go tool cover -func=.artifacts/audit-baseline/coverage.out
-"$(go env GOPATH)/bin/staticcheck" -checks 'SA4006,SA4000,U1000' ./...
-"$(go env GOPATH)/bin/deadcode" -test ./...
-"$(go env GOPATH)/bin/gosec" -fmt=text -out=.artifacts/gosec-baseline.txt ./...
+The PR #596 baseline was verified with:
+
+```sh
+./scripts/verify.sh
+go test -count=1 -timeout=20m ./...
+go test -race -count=1 -timeout=15m ./...
+go vet ./...
 ```
 
-## Environment limits
+All returned zero at that base. That result belongs to `bfa93b6`, not to this
+checkpoint's branch; this branch's results are in `QUALITY_AUDIT_FINAL.md` and
+were obtained with the commands recorded there.
 
-- No authenticated GitHub API session (`gh auth status` reports not logged in); artifact bytes and authenticated API queries are unavailable.
-- No real browser acceptance: Chromium and Python Playwright are unavailable.
-- No live PostgreSQL, Redis, OIDC identity provider, KMS/keyring service, or upstream provider calls were exercised.
-- Per-instance breaker, budget, and video job behavior was reviewed from code and documentation, not from a multi-replica deployment.
-- Full staticcheck was run after the changes for information only; a pre-change full-staticcheck count is not available, so only the targeted staticcheck baseline is used for before/after claims.
+## Environment limits (unchanged)
 
----
+- No live PostgreSQL, Redis, OIDC provider, KMS/secret manager, or upstream
+  provider credentials. PostgreSQL/Redis integration paths are compiled and
+  unit-tested but not exercised against live services.
+- No Chromium or Python Playwright, so `verify.sh` reports
+  `WARN: Chromium + Python Playwright unavailable; skipping browser acceptance`.
+- No authenticated `gh`, so CI status for the new commit must be observed after
+  the infrastructure creates the PR.
+- No destructive or production-scale load tests; no fuzzing beyond the short
+  `verify.sh` fuzz window.
+- No new tag, release, or published-asset changes were made.
 
-## Earlier audit pass (PR #595, branch `opencode/issue593-20261021064216`)
+## Historical snapshots
 
-The following section records the independent findings and fixes from the earlier audit pass that was rebased and merged alongside this report; it is preserved verbatim for traceability.
-
-# Post-release quality audit baseline (Issue #593)
-
-Date: 2026-10-21
-Audited commit: `05003db9326b01464a368723d8ab31671b40dc8f` (`main`)
-Audit branch: `opencode/issue593-20261021064216`
-
-## Scope
-
-This audit covers the repository state at the audited commit immediately after
-the `v0.23.0` release. It is a code, test, documentation, and local-tooling
-audit. It is not a live-provider, production-traffic, or production-infrastructure
-assessment.
-
-## Repository baseline
-
-| Item | Observed value |
-| --- | --- |
-| HEAD | `05003db9326b01464a368723d8ab31671b40dc8f` |
-| Latest release | `v0.23.0`, published `2026-10-21T02:04:03Z` |
-| CI at audited SHA | run `39529391279`, success |
-| Security at audited SHA | run `39529391318`, success |
-| Release workflow | run `39530224516`, success |
-| Open issues | `#593` only |
-| Open pull requests | none |
-| Go toolchain | `go1.25.0 linux/amd64` |
-| Packages | 57 |
-
-The `v0.23.0` tag and release were not modified, deleted, or recreated.
-
-## Tooling inventory
-
-Available and used:
-
-- `go test`, `go vet`, `go test -race`
-- `gofmt`
-- `bash -n` (shell syntax)
-- project scripts: `scripts/verify.sh`, `scripts/test-flake-hunt.sh`,
-  `scripts/test-release-artifacts.sh`, `scripts/test-generate-sbom.sh`
-- short fuzz targets executed by `scripts/verify.sh`
-
-Unavailable in the audit environment:
-
-- `golangci-lint`
-- `staticcheck`
-- `govulncheck`
-- `gosec`
-- `ripgrep` (`rg`)
-- authenticated `gh` CLI (`GH_TOKEN` unset)
-- Chromium plus Python Playwright (browser acceptance was skipped by
-  `scripts/verify.sh`)
-- PostgreSQL, Redis, live OIDC, and live model providers
-
-Public GitHub REST reads were used for CI/release/issue state; no authenticated
-GitHub write was performed by the auditor.
-
-## Pre-change verification
-
-Commands and real outcomes at the audited commit before any edits:
-
-| Command | Result |
-| --- | --- |
-| `go test -count=1 -timeout=10m ./...` | exit 0 |
-| `go vet ./...` | exit 0 |
-| `go test -race -count=1 -timeout=15m ./...` | exit 0 |
-| `./scripts/verify.sh` | not run before edits; the post-change run is recorded in `QUALITY_AUDIT_FINAL.md` |
-
-Logs are in `.artifacts/baseline-go-test.log` and `.artifacts/baseline-race.log`
-(ignored by git; retained locally as evidence).
-
-## Documentation reviewed
-
-- `ARCHITECTURE.md`
-- `CONTRIBUTING.md`
-- `AGENTS.md`
-- `docs/CONFIGURATION.md` (`allowed_hosts`, `proxy_url` contract)
-- `docs/SECURITY.md` (OIDC and emergency access invariant)
-- `docs/KNOWN_GAPS.md`
-- `docs/HA_STATE_INVENTORY.md`
-- `docs/EXTERNAL_VERIFICATION.md`
-
-## Audit method
-
-1. Establish the immutable baseline above and run the test/vet/race gates.
-2. Read the high-risk runtime paths: provider egress, media ingress, admin
-   authentication/authorization, routing and failover, hedging, protocol
-   translation, SSE streaming, usage accounting, and capability gating.
-3. For each candidate, obtain a concrete failing test or a precise call-site
-   proof before changing production code.
-4. Add regression tests, fix the defect, and rerun the narrow package tests,
-   the full suite, `go vet`, and `scripts/verify.sh`.
-5. Record residual gaps that the environment cannot exercise.
-
-Findings and dispositions are in `docs/reports/QUALITY_AUDIT_FINDINGS.md`.
-Final verification evidence is in `docs/reports/QUALITY_AUDIT_FINAL.md`.
+- PR #596 report batch: `17408a4` (same `main` base `7a815a4` at the time).
+- PR #595 fix batch: `099f474` plus docs `ee93c81`.
+- The complete earlier report text remains available in git history at those
+  commits; this file is the authoritative current baseline.

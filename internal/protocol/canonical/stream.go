@@ -606,7 +606,9 @@ func (e *anthropicEmitter) Emit(ev StreamEvent) error {
 		idx, ok := e.blocks[ev.ToolIndex]
 		if !ok {
 			// A delta arrived without a start (some upstreams do this).
-			e.Emit(StreamEvent{Type: StreamToolStart, ToolIndex: ev.ToolIndex, ToolName: ev.ToolName})
+			if err := e.Emit(StreamEvent{Type: StreamToolStart, ToolIndex: ev.ToolIndex, ToolName: ev.ToolName}); err != nil {
+				return err
+			}
 			idx = e.blocks[ev.ToolIndex]
 		}
 		e.frame("content_block_delta", map[string]any{"type": "content_block_delta", "index": idx, "delta": map[string]any{"type": "input_json_delta", "partial_json": ev.ArgsDelta}})

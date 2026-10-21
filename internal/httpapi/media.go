@@ -286,7 +286,7 @@ func (s *Server) serveMedia(w http.ResponseWriter, r *http.Request, kind mediaKi
 			} else {
 				body, rerr = readJSONLimited(resp.Body)
 			}
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			if rerr != nil {
 				lastErr = fmt.Sprintf("upstream media response unreadable: %v", rerr)
 				s.hm.RecordFailure(c.Deployment.ID, lastErr, latency)
@@ -313,7 +313,7 @@ func (s *Server) serveMedia(w http.ResponseWriter, r *http.Request, kind mediaKi
 		}
 
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		s.hm.RecordFailure(c.Deployment.ID, fmt.Sprintf("upstream http %d", resp.StatusCode), latency)
 		s.observeCompletedTelemetry(c.Deployment.ID, c.Deployment.ProviderID, false, 0, 0)
 		lastStatus, lastContentType, lastBody = resp.StatusCode, resp.Header.Get("Content-Type"), body
@@ -371,13 +371,13 @@ func mediaRequestModel(r *http.Request, raw []byte, kind mediaKind) (string, err
 			}
 			if part.FormName() == "model" {
 				b, _ := io.ReadAll(io.LimitReader(part, 4096))
-				part.Close()
+				_ = part.Close()
 				if m := strings.TrimSpace(string(b)); m != "" {
 					return m, nil
 				}
 				return "", fmt.Errorf("model form field is empty")
 			}
-			part.Close()
+			_ = part.Close()
 		}
 		return "", fmt.Errorf("model form field is required")
 	}
@@ -418,7 +418,7 @@ func rewriteMultipartModel(raw []byte, contentType, model string) ([]byte, strin
 				return nil, "", err
 			}
 			replaced = true
-			part.Close()
+			_ = part.Close()
 			continue
 		}
 		var dst io.Writer
@@ -433,7 +433,7 @@ func rewriteMultipartModel(raw []byte, contentType, model string) ([]byte, strin
 		if _, err := io.Copy(dst, part); err != nil {
 			return nil, "", err
 		}
-		part.Close()
+		_ = part.Close()
 	}
 	if !replaced {
 		return nil, "", fmt.Errorf("model form field is required")

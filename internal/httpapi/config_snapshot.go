@@ -1,6 +1,8 @@
 package httpapi
 
 import (
+	"net/netip"
+
 	"github.com/ali-shortcuts/nexaroute/internal/config"
 	"github.com/ali-shortcuts/nexaroute/internal/pricing"
 )
@@ -20,12 +22,17 @@ import (
 type configSnapshot struct {
 	cfg  config.Config
 	book *pricing.Book
+	// trustedProxies is parsed once per config revision. Config validation
+	// guarantees these entries are valid; a parse failure here degrades to
+	// "trust nobody" rather than trusting a caller-controlled header.
+	trustedProxies []netip.Prefix
 }
 
 // newConfigSnapshot builds the immutable snapshot for cfg. The caller must
 // not mutate cfg (or anything reachable from it) after publication.
 func newConfigSnapshot(cfg config.Config) *configSnapshot {
-	return &configSnapshot{cfg: cfg, book: pricing.FromConfig(cfg)}
+	proxies, _ := config.ParseTrustedProxyCIDRs(cfg.TLS.TrustedProxyCIDRs)
+	return &configSnapshot{cfg: cfg, book: pricing.FromConfig(cfg), trustedProxies: proxies}
 }
 
 // configSnapshot returns the current immutable config snapshot. The returned

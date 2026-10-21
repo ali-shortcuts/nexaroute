@@ -61,7 +61,7 @@ func WAVDuration(path string) (time.Duration, error) {
 				if dataSize == 0 {
 					return 0, errors.New("narration WAV has no audio data")
 				}
-				return time.Duration(dataSize) * time.Second / time.Duration(byteRate), nil
+				return time.Duration(dataSize) * time.Second / time.Duration(byteRate), nil // #nosec G115 -- dataSize comes from a uint32 RIFF field and cannot overflow time.Duration at nanosecond scale.
 			}
 			if _, err := file.Seek(int64(size), io.SeekCurrent); err != nil {
 				return 0, errors.New("could not skip narration WAV data")
@@ -77,7 +77,7 @@ func WAVDuration(path string) (time.Duration, error) {
 			}
 		}
 		if byteRate > 0 && dataSize > 0 {
-			return time.Duration(dataSize) * time.Second / time.Duration(byteRate), nil
+			return time.Duration(dataSize) * time.Second / time.Duration(byteRate), nil // #nosec G115 -- dataSize comes from a uint32 RIFF field and cannot overflow time.Duration at nanosecond scale.
 		}
 	}
 	return 0, errors.New("narration WAV is missing its format or audio data")

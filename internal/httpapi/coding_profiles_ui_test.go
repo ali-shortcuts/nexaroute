@@ -19,7 +19,7 @@ func TestCodingProfilesPanelWiring(t *testing.T) {
 		"bt('cp_title')",
 		"bt('cp_d')",
 		"'cp_title': 'Coding agent profiles'",
-		"'cp_title': 'پروفایل‌های ایجنت کدنویسی'",
+		"'cp_title': 'پروفایل\u200cهای ایجنت کدنویسی'",
 		"capability partial",
 		"No route profile maps ",
 		"data-action=\"cp-test\"", // #415 item 6: one-click connection test per mapping

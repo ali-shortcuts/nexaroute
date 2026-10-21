@@ -251,7 +251,7 @@ func setAdminSessionCookie(w http.ResponseWriter, r *http.Request, value string,
 	if maxAge < 0 {
 		maxAge = 0
 	}
-	http.SetCookie(w, &http.Cookie{
+	http.SetCookie(w, &http.Cookie{ // #nosec G124 -- Secure is computed from direct TLS or an explicitly trusted proxy.
 		Name: adminSessionCookie, Value: value, Path: "/admin/", HttpOnly: true,
 		Secure: requestIsSecure(r), SameSite: http.SameSiteLaxMode,
 		Expires: expires.UTC(), MaxAge: maxAge,
@@ -259,12 +259,12 @@ func setAdminSessionCookie(w http.ResponseWriter, r *http.Request, value string,
 }
 
 func clearAdminSessionCookie(w http.ResponseWriter, r *http.Request) {
-	http.SetCookie(w, &http.Cookie{
+	http.SetCookie(w, &http.Cookie{ // #nosec G124 -- Secure is computed from direct TLS or an explicitly trusted proxy.
 		Name: adminSessionCookie, Value: "", Path: "/admin/", HttpOnly: true,
 		Secure: requestIsSecure(r), SameSite: http.SameSiteLaxMode,
 		Expires: time.Unix(1, 0).UTC(), MaxAge: -1,
 	})
-	http.SetCookie(w, &http.Cookie{
+	http.SetCookie(w, &http.Cookie{ // #nosec G124 -- Secure is computed from direct TLS or an explicitly trusted proxy.
 		Name: adminCSRFCookie, Value: "", Path: "/admin/", HttpOnly: true,
 		Secure: requestIsSecure(r), SameSite: http.SameSiteStrictMode,
 		Expires: time.Unix(1, 0).UTC(), MaxAge: -1,
@@ -274,7 +274,7 @@ func clearAdminSessionCookie(w http.ResponseWriter, r *http.Request) {
 
 func setOIDCFlowCookie(w http.ResponseWriter, r *http.Request, value string) {
 	expires := time.Now().Add(oidcLoginLifetime).UTC()
-	http.SetCookie(w, &http.Cookie{
+	http.SetCookie(w, &http.Cookie{ // #nosec G124 -- Secure is computed from direct TLS or an explicitly trusted proxy.
 		Name: adminOIDCFlowCookie, Value: value, Path: "/admin/", HttpOnly: true,
 		Secure: requestIsSecure(r), SameSite: http.SameSiteLaxMode,
 		Expires: expires, MaxAge: int(oidcLoginLifetime.Seconds()),
@@ -282,7 +282,7 @@ func setOIDCFlowCookie(w http.ResponseWriter, r *http.Request, value string) {
 }
 
 func clearOIDCFlowCookie(w http.ResponseWriter, r *http.Request) {
-	http.SetCookie(w, &http.Cookie{
+	http.SetCookie(w, &http.Cookie{ // #nosec G124 -- Secure is computed from direct TLS or an explicitly trusted proxy.
 		Name: adminOIDCFlowCookie, Value: "", Path: "/admin/", HttpOnly: true,
 		Secure: requestIsSecure(r), SameSite: http.SameSiteLaxMode,
 		Expires: time.Unix(1, 0).UTC(), MaxAge: -1,

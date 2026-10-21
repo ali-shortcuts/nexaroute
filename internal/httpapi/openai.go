@@ -328,7 +328,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 		}
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			b, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			b = a.RedactBody(b)
 			lastStatus = resp.StatusCode
 			lastBody = b
@@ -472,7 +472,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 		default:
 			var an core.AnthResponse
 			e = decodeValidatedJSONLimited(resp.Body, &an, validateAnthropicResponseJSON)
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			if e == nil {
 				inputTokens, outputTokens = an.Usage.InputTokens, an.Usage.OutputTokens
 				s.recordUsage(r, c.Deployment.ID, int64(an.Usage.InputTokens), int64(an.Usage.OutputTokens))

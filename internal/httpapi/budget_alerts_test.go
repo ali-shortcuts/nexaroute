@@ -405,18 +405,14 @@ func TestBudgetAlertFailureDoesNotAffectRequests(t *testing.T) {
 	if committed <= 0 {
 		t.Fatal("spend was not settled when the webhook failed")
 	}
-	// Let the background delivery attempt land (or fail); the gateway
-	// must still be serving afterwards.
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		req2 := httptest.NewRequest(http.MethodPost, "http://gateway/v1/chat/completions", strings.NewReader(body))
-		req2.Header.Set("x-api-key", "budget-key")
-		rr2 := httptest.NewRecorder()
-		s.Handler().ServeHTTP(rr2, req2)
-		if rr2.Code != http.StatusOK {
-			t.Fatalf("follow-up request: %d %s", rr2.Code, rr2.Body.String())
-		}
-		break
+	// The background delivery attempt may still be running; the gateway must
+	// remain able to serve a follow-up request while it fails or lands.
+	req2 := httptest.NewRequest(http.MethodPost, "http://gateway/v1/chat/completions", strings.NewReader(body))
+	req2.Header.Set("x-api-key", "budget-key")
+	rr2 := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rr2, req2)
+	if rr2.Code != http.StatusOK {
+		t.Fatalf("follow-up request: %d %s", rr2.Code, rr2.Body.String())
 	}
 }
 

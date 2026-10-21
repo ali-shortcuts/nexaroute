@@ -311,6 +311,7 @@ func TestEngineCoverageReloadWakesProbeLimitWaiterAndRunCancellation(t *testing.
 func TestEngineCoverageRecoveryQueueHelpersAndProviderIncidentClassification(t *testing.T) {
 	cfg := config.Default()
 	e := New(cfg, nil, nil, health.New(3, time.Minute), events.New(10))
+	//lint:ignore SA1012 this test verifies that a nil context is rejected.
 	if e.enqueueRecovery(nil, recoveryTask{id: "x"}) {
 		t.Fatal("nil context accepted recovery work")
 	}

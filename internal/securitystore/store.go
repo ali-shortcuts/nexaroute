@@ -645,7 +645,7 @@ func verifyChainTx(tx *bolt.Tx) ChainReport {
 		// key's sequence must match the record's own sequence.
 		// (Legacy records carry no stored sequence; their key
 		// sequence is authoritative by definition.)
-		if keyTs := int64(binary.BigEndian.Uint64(r.key[:8])); keyTs != r.event.Timestamp.UnixNano() {
+		if keyTs := int64(binary.BigEndian.Uint64(r.key[:8])); keyTs != r.event.Timestamp.UnixNano() { // #nosec G115 -- audit keys are written from UnixNano() and must remain in the int64 range.
 			problem("audit record seq %d has a storage key timestamp that does not match its record timestamp (key corruption)", seq)
 		}
 		if r.event.Hash != "" && r.event.Seq != auditKeySeq(r.key) {
@@ -846,7 +846,10 @@ func appendAuditTx(tx *bolt.Tx, s *Store, event AuditEvent) (AuditEvent, error) 
 		}
 		keyCopy := make([]byte, 16)
 		copy(keyCopy, k)
-		infos = append(infos, keyInfo{key: keyCopy, seq: auditKeySeq(k), ts: int64(binary.BigEndian.Uint64(k[:8]))})
+		infos = append(infos, keyInfo{
+			key: keyCopy, seq: auditKeySeq(k),
+			ts: int64(binary.BigEndian.Uint64(k[:8])), // #nosec G115 -- audit keys are written from UnixNano() and must remain in the int64 range.
+		})
 	}
 	sort.Slice(infos, func(i, j int) bool { return infos[i].seq < infos[j].seq })
 	cutoff := time.Now().Add(-s.retention).UnixNano()

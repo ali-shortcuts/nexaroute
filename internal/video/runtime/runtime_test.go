@@ -224,7 +224,7 @@ func TestRuntimeComfyUIProviderEndToEndPersistsPlayableVideoAsset(t *testing.T) 
 				assetReq.Header.Set("Authorization", "Bearer "+token)
 				assetRec := httptest.NewRecorder()
 				r.Handler.ServeHTTP(assetRec, assetReq)
-				if assetRec.Code != http.StatusOK || string(assetRec.Body.Bytes()) != string(videoBytes) {
+				if assetRec.Code != http.StatusOK || assetRec.Body.String() != string(videoBytes) {
 					t.Fatalf("downloaded video content=%q status=%d", assetRec.Body.Bytes(), assetRec.Code)
 				}
 				return
