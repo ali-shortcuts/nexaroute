@@ -243,6 +243,7 @@ func runExternalAccept(args []string, stdout, stderr io.Writer) int {
 		Limitations: []string{
 			"Provider PASS means a configured endpoint answered bounded discovery/generation probes; it is not full protocol conformance.",
 			"OIDC discovery/JWKS PASS does not exercise an interactive Authorization Code + PKCE browser login.",
+			"ID token verification does not check a nonce because this harness does not initiate the browser authorization request.",
 		},
 	}
 
@@ -506,7 +507,7 @@ func runExternalOIDCCheck(ctx context.Context, issuer string, cfg config.OIDCCon
 			check.Reason = "OIDC ID token verification failed"
 		} else {
 			result.IDToken.Status = externalStatusPass
-			result.IDToken.Detail = "ID token signature, issuer, audience, expiry, and subject were accepted by the live JWKS"
+			result.IDToken.Detail = "ID token signature, issuer, audience, expiry, and subject were accepted by the live JWKS; nonce was not checked because this harness did not initiate the login"
 			if roleCount >= 0 {
 				result.IDToken.RoleCount = roleCount
 				result.RoleMappingChecked = true

@@ -140,7 +140,8 @@ latency, model ids, key counts, and redacted error text.
   redacted error summaries are recorded.
 - Tokens, subjects, group values, and role-mapping claim values are never
   written to the report. ID-token validation records only pass/fail and a
-  role count.
+  role count. ID-token verification does not check a nonce because the harness
+  did not initiate the authorization request.
 
 The operator should still review a report before attaching it to an issue.
 Hostnames, tenant ids, and model ids can themselves be sensitive metadata.
