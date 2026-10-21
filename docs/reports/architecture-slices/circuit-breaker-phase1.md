@@ -120,9 +120,41 @@ Full repository gates run for this branch are recorded below in
 
 ## Verification commands and outcomes
 
-To be filled from the final local gate run on the committed branch. No
-CI/Security claim is made from local results; exact-SHA CI and Security
-conclusions must come from the pull request runs.
+Local full gate on this branch (raw output retained in
+`docs/reports/architecture-slices/circuit-breaker-phase1-verify.txt`):
+
+```text
+$ ./scripts/verify.sh
+...
+ok  github.com/ali-shortcuts/nexaroute/internal/sharedstate
+...
+VERIFY PASS
+VERIFY_EXIT=0
+```
+
+That run includes: shell syntax, flake-hunt harness checks, gofmt check,
+`go test ./...`, `go vet ./...`, `go test -race ./...`, release artifact
+manifest checks, SBOM trust-chain checks, web UI syntax checks, short fuzz
+checks, and linux amd64/arm64 builds. Browser acceptance was skipped by the
+script because Chromium + Python Playwright are unavailable in this
+environment; that is a local limitation, not a pass claim.
+
+Real-service integration (raw output retained in
+`docs/reports/architecture-slices/circuit-breaker-phase1-integration.txt`)
+against disposable `postgres:16-alpine` and `redis:7-alpine` containers:
+
+```text
+$ go test -tags integration ./internal/sharedstate \
+    -run 'Test(Postgres|Redis)BreakerStoreIntegration' -count=1 -v
+--- PASS: TestPostgresBreakerStoreIntegration
+--- PASS: TestRedisBreakerStoreIntegration
+PASS
+ok  github.com/ali-shortcuts/nexaroute/internal/sharedstate
+```
+
+No CI/Security claim is made from local results. Exact-SHA CI and Security
+conclusions must come from the pull request runs; the PR head is the evidence
+SHA.
 
 ## Remaining blockers and risks
 

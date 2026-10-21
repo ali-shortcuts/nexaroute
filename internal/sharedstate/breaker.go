@@ -194,6 +194,9 @@ func decodeDocument(payload []byte, maxEntries, maxBytes int) (map[string]Entry,
 	return out, nil
 }
 
+// entriesEqual compares the fields that change routing semantics. ObservedAt
+// is metadata and is deliberately ignored so a repeated publish with the same
+// markers remains a no-write even as the wall clock advances.
 func entriesEqual(a, b map[string]Entry) bool {
 	if len(a) != len(b) {
 		return false
@@ -203,8 +206,7 @@ func entriesEqual(a, b map[string]Entry) bool {
 		if !ok || left.Status != right.Status ||
 			!left.CooldownUntil.Equal(right.CooldownUntil) ||
 			left.ReasonClass != right.ReasonClass ||
-			left.OriginReplica != right.OriginReplica ||
-			!left.ObservedAt.Equal(right.ObservedAt) {
+			left.OriginReplica != right.OriginReplica {
 			return false
 		}
 	}

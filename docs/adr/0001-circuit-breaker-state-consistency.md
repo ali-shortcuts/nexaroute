@@ -66,9 +66,10 @@ Implement `internal/sharedstate` as an explicit, reusable state-store slice:
   perform TTL eviction.
 - Expired cooldowns are filtered from `Load` results immediately and removed
   from the persisted document by the next successful `Publish`.
-- `retired` has no TTL and remains sticky until an explicit operator/config
-  lifecycle invalidates the deployment. Remote `retired` handling is
-  deliberately not wired in this slice (see BLOCKED below).
+- `retired` has no TTL and remains sticky. This store slice intentionally has
+  no delete/unretire operation; a future operator/config lifecycle must define
+  explicit invalidation. Remote `retired` handling is deliberately not wired
+  in this slice (see BLOCKED below).
 - Successful traffic is not published. Local recovery must not clear another
   replica's still-active cooldown.
 

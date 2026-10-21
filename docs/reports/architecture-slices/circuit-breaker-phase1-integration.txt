@@ -1,0 +1,31 @@
+$ NEXAROUTE_TEST_POSTGRES_DSN=postgres://nexaroute:...@127.0.0.1:55432/nexaroute_test?sslmode=disable NEXAROUTE_TEST_REDIS_URL=redis://127.0.0.1:56379/0 go test -tags integration ./internal/sharedstate -run 'Test(Postgres|Redis)BreakerStoreIntegration' -count=1 -v
+=== RUN   TestPostgresBreakerStoreIntegration
+=== RUN   TestPostgresBreakerStoreIntegration/publish_load_and_idempotency
+=== RUN   TestPostgresBreakerStoreIntegration/concurrent_publishes_merge_without_lost_update
+=== RUN   TestPostgresBreakerStoreIntegration/expiration_is_filtered_and_pruned
+=== RUN   TestPostgresBreakerStoreIntegration/outage_does_not_clear_existing_markers
+=== RUN   TestPostgresBreakerStoreIntegration/malformed_document_is_rejected_not_treated_as_empty
+=== RUN   TestPostgresBreakerStoreIntegration/conflict_retries_are_bounded
+--- PASS: TestPostgresBreakerStoreIntegration (0.04s)
+    --- PASS: TestPostgresBreakerStoreIntegration/publish_load_and_idempotency (0.00s)
+    --- PASS: TestPostgresBreakerStoreIntegration/concurrent_publishes_merge_without_lost_update (0.01s)
+    --- PASS: TestPostgresBreakerStoreIntegration/expiration_is_filtered_and_pruned (0.00s)
+    --- PASS: TestPostgresBreakerStoreIntegration/outage_does_not_clear_existing_markers (0.00s)
+    --- PASS: TestPostgresBreakerStoreIntegration/malformed_document_is_rejected_not_treated_as_empty (0.00s)
+    --- PASS: TestPostgresBreakerStoreIntegration/conflict_retries_are_bounded (0.00s)
+=== RUN   TestRedisBreakerStoreIntegration
+=== RUN   TestRedisBreakerStoreIntegration/publish_load_and_idempotency
+=== RUN   TestRedisBreakerStoreIntegration/concurrent_publishes_merge_without_lost_update
+=== RUN   TestRedisBreakerStoreIntegration/expiration_is_filtered_and_pruned
+=== RUN   TestRedisBreakerStoreIntegration/outage_does_not_clear_existing_markers
+=== RUN   TestRedisBreakerStoreIntegration/malformed_document_is_rejected_not_treated_as_empty
+=== RUN   TestRedisBreakerStoreIntegration/conflict_retries_are_bounded
+--- PASS: TestRedisBreakerStoreIntegration (0.01s)
+    --- PASS: TestRedisBreakerStoreIntegration/publish_load_and_idempotency (0.00s)
+    --- PASS: TestRedisBreakerStoreIntegration/concurrent_publishes_merge_without_lost_update (0.00s)
+    --- PASS: TestRedisBreakerStoreIntegration/expiration_is_filtered_and_pruned (0.00s)
+    --- PASS: TestRedisBreakerStoreIntegration/outage_does_not_clear_existing_markers (0.00s)
+    --- PASS: TestRedisBreakerStoreIntegration/malformed_document_is_rejected_not_treated_as_empty (0.00s)
+    --- PASS: TestRedisBreakerStoreIntegration/conflict_retries_are_bounded (0.00s)
+PASS
+ok  	github.com/ali-shortcuts/nexaroute/internal/sharedstate	0.050s

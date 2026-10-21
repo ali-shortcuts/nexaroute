@@ -66,6 +66,7 @@ func runBreakerStoreContract(t *testing.T, newStore func(*testing.T) Store) {
 		if !first.Entries["p/m"].ObservedAt.Equal(now) {
 			t.Fatalf("observed_at=%v want %v", first.Entries["p/m"].ObservedAt, now)
 		}
+		now = now.Add(time.Minute)
 		second, err := store.Publish(ctx, local)
 		if err != nil {
 			t.Fatal(err)
