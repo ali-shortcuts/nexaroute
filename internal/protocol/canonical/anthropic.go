@@ -159,7 +159,7 @@ func decodeAnthropicContent(raw json.RawMessage) ([]Part, error) {
 		case "image":
 			img := decodeAnthImage(m.Source)
 			if img == nil {
-				return nil, fmt.Errorf("Anthropic image block has no usable source")
+				return nil, fmt.Errorf("anthropic image block has no usable source")
 			}
 			parts = append(parts, Part{Type: PartImage, Image: img})
 		case "tool_use":

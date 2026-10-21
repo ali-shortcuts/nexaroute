@@ -79,7 +79,8 @@ func NewSSEReader(r io.Reader) *SSEReader {
 }
 
 // Next returns the next SSE event's name and data payload. done is true when
-// the stream ended cleanly. Unknown event types and comments are skipped.
+// the stream ended cleanly. Unknown event types, comments, and id:/retry:
+// fields are skipped.
 func (sr *SSEReader) Next() (name, data string, done bool, err error) {
 	for !sr.done && sr.scanner.Scan() {
 		line := sr.scanner.Text()
@@ -114,8 +115,6 @@ func (sr *SSEReader) Next() (name, data string, done bool, err error) {
 				sr.data.WriteByte('\n')
 			}
 			sr.data.WriteString(value)
-		case strings.HasPrefix(line, "id:"), strings.HasPrefix(line, "retry:"):
-			continue
 		}
 	}
 	if err := sr.scanner.Err(); err != nil {

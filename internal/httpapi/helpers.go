@@ -129,7 +129,7 @@ func validateAnthropicResponseJSON(b []byte) error {
 		return fmt.Errorf("invalid Anthropic response JSON: %w", err)
 	}
 	if raw, ok := root["error"]; ok && len(raw) > 0 && string(raw) != "null" {
-		return fmt.Errorf("Anthropic response contains an error envelope")
+		return fmt.Errorf("anthropic response contains an error envelope")
 	}
 	var typ, role string
 	if raw := root["type"]; len(raw) > 0 {

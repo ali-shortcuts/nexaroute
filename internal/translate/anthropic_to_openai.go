@@ -71,12 +71,12 @@ func AnthropicToOpenAI(in core.AnthropicRequest, model string) (core.OpenAIReque
 			case "image":
 				u := anthImageURL(b.Source)
 				if u == "" {
-					return out, nm, fmt.Errorf("Anthropic image block has no usable source")
+					return out, nm, fmt.Errorf("anthropic image block has no usable source")
 				}
 				parts = append(parts, map[string]any{"type": "image_url", "image_url": map[string]any{"url": u}})
 			case "tool_use":
 				if role != "assistant" || strings.TrimSpace(b.ID) == "" || strings.TrimSpace(b.Name) == "" {
-					return out, nm, fmt.Errorf("Anthropic tool_use requires assistant role, id, and name")
+					return out, nm, fmt.Errorf("anthropic tool_use requires assistant role, id, and name")
 				}
 				arg, err := json.Marshal(b.Input)
 				if err != nil {
@@ -89,7 +89,7 @@ func AnthropicToOpenAI(in core.AnthropicRequest, model string) (core.OpenAIReque
 				})
 			case "tool_result":
 				if role != "user" || strings.TrimSpace(b.ToolUseID) == "" {
-					return out, nm, fmt.Errorf("Anthropic tool_result requires user role and tool_use_id")
+					return out, nm, fmt.Errorf("anthropic tool_result requires user role and tool_use_id")
 				}
 				toolMsgs = append(toolMsgs, core.OpenAIMessage{
 					Role:       "tool",

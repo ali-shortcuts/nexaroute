@@ -7,6 +7,14 @@ import (
 	"testing"
 )
 
+func TestSSEReaderSkipsIDAndRetryFields(t *testing.T) {
+	payload := "id: 1\nretry: 250\nevent: notice\ndata: kept\n\n"
+	name, data, done, err := NewSSEReader(strings.NewReader(payload)).Next()
+	if err != nil || done || name != "notice" || data != "kept" {
+		t.Fatalf("SSE id/retry handling name=%q data=%q done=%t err=%v", name, data, done, err)
+	}
+}
+
 func TestSSEReaderRejectsOversizedMultilineEvent(t *testing.T) {
 	var b strings.Builder
 	chunk := strings.Repeat("x", 64<<10)

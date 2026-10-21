@@ -904,7 +904,7 @@ func rewriteAnthropicResponseModel(body []byte, model string) ([]byte, error) {
 		return nil, err
 	}
 	if envelope == nil {
-		return nil, fmt.Errorf("Anthropic response must be a JSON object")
+		return nil, fmt.Errorf("anthropic response must be a JSON object")
 	}
 	encoded, err := json.Marshal(model)
 	if err != nil {

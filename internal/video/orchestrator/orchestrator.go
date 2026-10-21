@@ -191,7 +191,7 @@ func (o *Orchestrator) Create(ctx context.Context, r video.VideoRequest) (video.
 	}
 	if strings.TrimSpace(r.NarrationText) != "" && !providerHandlesNarration {
 		if len(r.ShotPlan) < 2 {
-			return video.VideoJob{}, errors.New("Gateway narration requires a multi-shot episode with at least two shots")
+			return video.VideoJob{}, errors.New("gateway narration requires a multi-shot episode with at least two shots")
 		}
 		if o.Narrator == nil {
 			return video.VideoJob{}, errors.New("narration_text requires video.piper_enabled with a valid local Piper model")
