@@ -60,7 +60,7 @@ type CommandRunner interface{ Start(string, string) error }
 type execRunner struct{}
 
 func (execRunner) Start(name, url string) error {
-	cmd := exec.Command(name, url)
+	cmd := exec.Command(name, url) // #nosec G204 -- name is restricted to the fixed BrowserCommands allowlist by the only production caller (OpenBrowser above); url is the locally constructed dashboard URL passed as a single argv element and no shell is invoked.
 	if err := cmd.Start(); err != nil {
 		return err
 	}

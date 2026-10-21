@@ -16,7 +16,7 @@ type linuxKeyringProvider struct{}
 func newKeyringProvider() KeyProvider { return linuxKeyringProvider{} }
 
 func (linuxKeyringProvider) Load(ctx context.Context, ref string) ([]byte, error) {
-	out, err := exec.CommandContext(ctx, "secret-tool", "lookup", "service", "nexaroute", "account", ref).Output()
+	out, err := exec.CommandContext(ctx, "secret-tool", "lookup", "service", "nexaroute", "account", ref).Output() // #nosec G204 -- literal "secret-tool" executable with fixed arguments; ref is a single argv element taken from operator configuration (NEXAROUTE_KEY_PROVIDER_REF) and no shell is involved.
 	if err != nil {
 		return nil, fmt.Errorf("OS keyring lookup failed: %w", err)
 	}
@@ -31,7 +31,7 @@ func (linuxKeyringProvider) Store(ctx context.Context, ref string, key []byte) e
 	if len(key) != 32 {
 		return errors.New("keyring requires exactly 32 bytes")
 	}
-	cmd := exec.CommandContext(ctx, "secret-tool", "store", "service", "nexaroute", "account", ref)
+	cmd := exec.CommandContext(ctx, "secret-tool", "store", "service", "nexaroute", "account", ref) // #nosec G204 -- literal "secret-tool" executable with fixed arguments; ref is a single argv element from operator configuration and the key itself is passed on stdin, never in argv; no shell is involved.
 	cmd.Stdin = strings.NewReader(base64.StdEncoding.EncodeToString(key) + "\n")
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("OS keyring store failed: %w", err)

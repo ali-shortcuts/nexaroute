@@ -27,10 +27,10 @@ func (r *Runner) Preflight(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("ffmpeg executable %q not found: %w", binary, err)
 	}
-	if output, err := exec.CommandContext(ctx, path, "-version").CombinedOutput(); err != nil {
+	if output, err := exec.CommandContext(ctx, path, "-version").CombinedOutput(); err != nil { // #nosec G204 -- path is the exec.LookPath resolution of the operator-configured FFmpeg binary (default "ffmpeg"); the only argument is the fixed "-version" flag, no shell is invoked and no request data reaches argv.
 		return fmt.Errorf("ffmpeg preflight failed: %w: %s", err, strings.TrimSpace(string(output)))
 	}
-	output, err := exec.CommandContext(ctx, path, "-hide_banner", "-encoders").CombinedOutput()
+	output, err := exec.CommandContext(ctx, path, "-hide_banner", "-encoders").CombinedOutput() // #nosec G204 -- same LookPath-resolved operator FFmpeg binary as the -version probe above; fixed arguments only, no shell.
 	if err != nil {
 		return fmt.Errorf("inspect ffmpeg encoders: %w", err)
 	}
@@ -55,7 +55,7 @@ func New(binary, work string) *Runner {
 	return &Runner{Binary: binary, WorkDir: work}
 }
 func (r *Runner) run(ctx context.Context, args ...string) error {
-	cmd := exec.CommandContext(ctx, r.Binary, args...)
+	cmd := exec.CommandContext(ctx, r.Binary, args...) // #nosec G204 -- r.Binary is operator-configured (gateway config, NEXAROUTE_FFMPEG, or default "ffmpeg"); args are built only by this package's helpers from validated numeric parameters and workspace paths, and no shell is invoked.
 	if r.WorkDir != "" {
 		cmd.Dir = r.WorkDir
 	}

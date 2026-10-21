@@ -62,7 +62,7 @@ func (r *Renderer) Preflight(ctx context.Context) error {
 	if err := comp.Preflight(ctx); err != nil {
 		return err
 	}
-	out, err := exec.CommandContext(ctx, r.ffmpeg(), "-hide_banner", "-filters").CombinedOutput()
+	out, err := exec.CommandContext(ctx, r.ffmpeg(), "-hide_banner", "-filters").CombinedOutput() // #nosec G204 -- r.ffmpeg() is operator-configured (Renderer.FFmpeg, NEXAROUTE_FFMPEG, or default "ffmpeg"); the only arguments are fixed flags and no shell is invoked.
 	if err != nil {
 		return fmt.Errorf("inspect ffmpeg filters: %w", err)
 	}
@@ -205,7 +205,7 @@ func (r *Renderer) renderScene(ctx context.Context, plan video.Plan, scene video
 		"-vf", strings.Join(filters, ","),
 		"-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", "-an",
 		"-t", fnum(dur), out}
-	cmd := exec.CommandContext(ctx, r.ffmpeg(), args...)
+	cmd := exec.CommandContext(ctx, r.ffmpeg(), args...) // #nosec G204 -- operator-configured FFmpeg binary (see ffmpeg()); args are built from a validated render plan: numeric fields are formatted internally and scene text is passed to FFmpeg via text files, so no raw request data reaches argv and no shell is invoked.
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("ffmpeg scene render failed: %w: %s", err, strings.TrimSpace(string(output)))
 	}
@@ -337,7 +337,7 @@ func (r *Renderer) Probe(ctx context.Context, path string) (ProbeInfo, error) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, r.ffprobe(), "-v", "error", "-show_streams", "-show_format", "-of", "json", path).Output()
+	out, err := exec.CommandContext(ctx, r.ffprobe(), "-v", "error", "-show_streams", "-show_format", "-of", "json", path).Output() // #nosec G204 -- operator-configured ffprobe binary with fixed flags; path is a single argv element naming a workspace file that was stat-checked above, and no shell is invoked.
 	if err != nil {
 		return ProbeInfo{}, fmt.Errorf("ffprobe failed for %s: %w", path, err)
 	}
@@ -377,7 +377,7 @@ func (r *Renderer) FrameStats(ctx context.Context, path string, atSeconds float6
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	args := []string{"-v", "error", "-ss", fnum(atSeconds), "-i", path, "-frames:v", "1", "-vf", "scale=64:36,format=gray", "-f", "rawvideo", "-"}
-	out, err := exec.CommandContext(ctx, r.ffmpeg(), args...).Output()
+	out, err := exec.CommandContext(ctx, r.ffmpeg(), args...).Output() // #nosec G204 -- operator-configured FFmpeg binary (see ffmpeg()); the seek position is formatted internally by fnum and path is a single argv element, and no shell is invoked.
 	if err != nil {
 		return 0, 0, fmt.Errorf("extract frame at %.2fs: %w", atSeconds, err)
 	}

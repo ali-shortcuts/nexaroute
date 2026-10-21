@@ -108,7 +108,7 @@ func SynthesizePiper(ctx context.Context, opts PiperOptions) error {
 	}
 	defer os.Remove(tmp)
 
-	cmd := exec.CommandContext(runCtx, binary, "--model", modelPath, "--output_file", tmp)
+	cmd := exec.CommandContext(runCtx, binary, "--model", modelPath, "--output_file", tmp) // #nosec G204 -- binary is the operator-supplied Piper executable (videogen CLI flag, default "piper"); modelPath is a validated absolute regular file, tmp is a private temp file created above, and narration text is passed on stdin, never in argv; no shell is invoked.
 	cmd.Stdin = bytes.NewReader(text)
 	var diagnostics limitedBuffer
 	diagnostics.limit = maxPiperDiagnostic
