@@ -1,13 +1,18 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/ali-shortcuts/nexaroute/internal/authz"
 	"github.com/ali-shortcuts/nexaroute/internal/config"
 )
 
@@ -191,5 +196,180 @@ func TestVirtualKeyProjectReferencesFailClosed(t *testing.T) {
 				t.Fatal("misconfigured scope unexpectedly authorized request")
 			}
 		})
+	}
+}
+
+func TestAdminClientKeyRevokeContractAndIdempotency(t *testing.T) {
+	const keyHash = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+	key := config.VirtualKeyConfig{
+		ID: "vk_revoke", Name: "ci", KeyHash: keyHash, TenantID: "acme", ProjectID: "platform",
+		TeamID: "engineering", Role: "developer", AllowedModels: []string{"team-model"},
+		AllowedRoutes: []string{"/v1/chat/completions"}, ExpiresAt: "2030-01-01T00:00:00Z", RPM: 10, TPM: 20,
+	}
+	cfg := config.Default()
+	cfg.Probe.Enabled = false
+	cfg.Admin.APIKey = "admin-secret"
+	cfg.Admin.BindLocalOnly = false
+	cfg.ClientAuth.Enabled = true
+	cfg.ClientAuth.VirtualKeys = []config.VirtualKeyConfig{key}
+	s := testGateway(t, cfg)
+
+	remove := func(id string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodDelete, "http://gateway/admin/api/client-keys/"+id, nil)
+		req.Header.Set("X-Admin-Key", "admin-secret")
+		rr := httptest.NewRecorder()
+		s.Handler().ServeHTTP(rr, req)
+		return rr
+	}
+
+	for attempt := 0; attempt < 2; attempt++ {
+		rr := remove(key.ID)
+		if rr.Code != http.StatusNoContent {
+			t.Fatalf("revoke attempt %d status=%d body=%s", attempt+1, rr.Code, rr.Body.String())
+		}
+		if rr.Body.Len() != 0 {
+			t.Fatalf("revoke attempt %d returned a body: %q", attempt+1, rr.Body.String())
+		}
+		if strings.Contains(rr.Body.String(), keyHash) {
+			t.Fatal("revoke response leaked the key hash")
+		}
+		got := s.currentConfig().ClientAuth.VirtualKeys
+		if len(got) != 1 {
+			t.Fatalf("revoke attempt %d changed key count: %d", attempt+1, len(got))
+		}
+		want := key
+		want.Revoked = true
+		if !reflect.DeepEqual(got[0], want) {
+			t.Fatalf("revoke attempt %d changed metadata:\n got %+v\nwant %+v", attempt+1, got[0], want)
+		}
+	}
+
+	missing := remove("vk_missing")
+	if missing.Code != http.StatusNotFound {
+		t.Fatalf("unknown key status=%d body=%s", missing.Code, missing.Body.String())
+	}
+	if !strings.Contains(missing.Body.String(), `client key \"vk_missing\" not found`) {
+		t.Fatalf("unknown key body=%s", missing.Body.String())
+	}
+}
+
+func TestAdminClientKeyRevokeRequiresManageKeysRole(t *testing.T) {
+	const keyHash = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+	path := "/admin/api/client-keys/vk_role"
+	for _, tc := range []struct {
+		role authz.Role
+		want int
+	}{
+		{authz.RoleAdmin, http.StatusNoContent},
+		{authz.RoleOperator, http.StatusForbidden},
+		{authz.RoleViewer, http.StatusForbidden},
+	} {
+		t.Run(string(tc.role), func(t *testing.T) {
+			cfg := config.Default()
+			cfg.Probe.Enabled = false
+			cfg.ClientAuth.Enabled = true
+			cfg.ClientAuth.VirtualKeys = []config.VirtualKeyConfig{{
+				ID: "vk_role", KeyHash: keyHash, TenantID: "acme", ProjectID: "platform", TeamID: "engineering",
+				Role: "developer", AllowedModels: []string{"m"}, AllowedRoutes: []string{"/v1/chat/completions"},
+			}}
+			srv := testGateway(t, cfg)
+			session := installTestOIDCSession(t, srv, tc.role)
+
+			req := httptest.NewRequest(http.MethodDelete, "http://gateway"+path, nil)
+			req.RemoteAddr = "127.0.0.1:10101"
+			req.AddCookie(&http.Cookie{Name: adminSessionCookie, Value: session})
+			const csrf = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+			req.Header.Set("Origin", "http://gateway")
+			req.Header.Set("X-NexaRoute-CSRF", csrf)
+			req.AddCookie(&http.Cookie{Name: adminCSRFCookie, Value: csrf})
+			rr := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(rr, req)
+
+			if rr.Code != tc.want {
+				t.Fatalf("status=%d body=%s want %d", rr.Code, rr.Body.String(), tc.want)
+			}
+			revoked := srv.currentConfig().ClientAuth.VirtualKeys[0].Revoked
+			if revoked != (tc.want == http.StatusNoContent) {
+				t.Fatalf("revoked=%t after status %d", revoked, rr.Code)
+			}
+
+			events, err := srv.securityDB.AuditRecords(context.Background(), 10)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.want == http.StatusNoContent {
+				authorized, completed := -1, -1
+				for i, event := range events {
+					if event.Target != path {
+						continue
+					}
+					switch event.Action {
+					case "admin.operation.authorized":
+						authorized = i
+					case "admin.operation.completed":
+						completed = i
+						if event.Outcome != "success" || event.Status != http.StatusNoContent {
+							t.Fatalf("completion event=%+v", event)
+						}
+					}
+				}
+				if authorized == -1 || completed == -1 {
+					t.Fatalf("missing audit pair: %+v", events)
+				}
+				if completed > authorized {
+					t.Fatalf("completion must be recorded after authorization: %+v", events)
+				}
+			} else {
+				foundDenied := false
+				for _, event := range events {
+					if event.Target == path && event.Action == "admin.access.denied" && event.Status == http.StatusForbidden {
+						foundDenied = true
+					}
+					if event.Target == path && (event.Action == "admin.operation.authorized" || event.Action == "admin.operation.completed") {
+						t.Fatalf("denied role produced a mutation audit event: %+v", event)
+					}
+				}
+				if !foundDenied {
+					t.Fatalf("missing denied audit event: %+v", events)
+				}
+			}
+		})
+	}
+}
+
+func TestAdminClientKeyRevokePersistenceFailureLeavesKeyActive(t *testing.T) {
+	const keyHash = "1111111111111111111111111111111111111111111111111111111111111111"
+	cfg := config.Default()
+	cfg.Probe.Enabled = false
+	cfg.Admin.APIKey = "admin-secret"
+	cfg.Admin.BindLocalOnly = false
+	cfg.ClientAuth.Enabled = true
+	cfg.ClientAuth.VirtualKeys = []config.VirtualKeyConfig{{ID: "vk_persist", KeyHash: keyHash, Role: "developer"}}
+	s := testGateway(t, cfg)
+	readOnly := filepath.Join(t.TempDir(), "readonly")
+	if err := os.Mkdir(readOnly, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(readOnly, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(readOnly, 0o700) })
+	s.configPath = filepath.Join(readOnly, "config.json")
+
+	req := httptest.NewRequest(http.MethodDelete, "http://gateway/admin/api/client-keys/vk_persist", nil)
+	req.Header.Set("X-Admin-Key", "admin-secret")
+	rr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("persistence failure status=%d body=%s, want existing 404 mapping", rr.Code, rr.Body.String())
+	}
+	if strings.Contains(rr.Body.String(), keyHash) {
+		t.Fatal("persistence failure response leaked the key hash")
+	}
+	keys := s.currentConfig().ClientAuth.VirtualKeys
+	if len(keys) != 1 || keys[0].Revoked {
+		t.Fatalf("persistence failure changed runtime config: %+v", keys)
 	}
 }
