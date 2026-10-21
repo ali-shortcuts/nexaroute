@@ -1,0 +1,197 @@
+name: Architecture & Quality Audit
+
+# Read-only audit battery. Manual dispatch only: this workflow never runs on
+# push/PR, never modifies the repository, and publishes its findings purely as
+# downloadable artifacts plus the workflow step summary. It complements
+# scripts/verify.sh and CI (which already gate tests, race, vet, CodeQL and
+# govulncheck) with the three measurements they do not produce today:
+# lint/static analysis beyond go vet, code coverage, and extended fuzzing.
+
+on:
+  workflow_dispatch:
+    inputs:
+      fuzz_seconds:
+        description: "Seconds per fuzz target in the extended fuzz job"
+        type: number
+        default: 45
+
+permissions:
+  contents: read
+
+concurrency:
+  group: audit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: golangci-lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.x'
+      - name: golangci-lint (report only; findings never fail the audit)
+        uses: golangci/golangci-lint-action@4afd733a84b1f43292c63897423277bb7f4313a9 # v8
+        with:
+          version: v2.15.0
+          args: --timeout=20m --issues-exit-code=0 --output.text.path=golangci.txt --output.json.path=golangci.json
+      - name: Upload lint report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: audit-lint
+          path: |
+            golangci.txt
+            golangci.json
+          if-no-files-found: warn
+
+  staticcheck:
+    name: staticcheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.x'
+      - name: Install staticcheck 2026.2.2
+        run: |
+          curl -sSfL https://github.com/dominikh/go-tools/releases/download/2026.2.2/staticcheck_linux_amd64.tar.gz | tar -xz -C "$RUNNER_TEMP"
+          "$RUNNER_TEMP/staticcheck/staticcheck" -version
+      - name: Run staticcheck (report only; findings never fail the audit)
+        run: |
+          set +e
+          "$RUNNER_TEMP/staticcheck/staticcheck" -f text ./... > staticcheck.txt 2>&1
+          "$RUNNER_TEMP/staticcheck/staticcheck" -f json ./... > staticcheck.json 2>&1
+          wc -l staticcheck.txt >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+      - name: Upload staticcheck report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: audit-staticcheck
+          path: |
+            staticcheck.txt
+            staticcheck.json
+          if-no-files-found: warn
+
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.x'
+      - name: Test suite with coverage profile
+        run: go test -timeout=40m -count=1 -coverprofile=coverage.out ./...
+      - name: Coverage reports
+        if: always()
+        run: |
+          go tool cover -func=coverage.out > coverage-func.txt
+          {
+            echo '## Coverage'
+            echo ''
+            echo '```'
+            tail -1 coverage-func.txt
+            echo '```'
+            echo ''
+            echo '### Functions with 0% coverage (first 100)'
+            echo ''
+            echo '```'
+            grep '0.0%$' coverage-func.txt | head -100 || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: audit-coverage
+          path: |
+            coverage.out
+            coverage-func.txt
+          if-no-files-found: warn
+
+  fuzz-extended:
+    name: Extended fuzz
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.x'
+      - name: Run every fuzz target for the configured duration
+        env:
+          FUZZ_SECONDS: ${{ inputs.fuzz_seconds }}
+        run: |
+          set -u
+          : > fuzz-failures.txt
+          : > fuzz-log.txt
+          while IFS= read -r testfile; do
+            pkgdir=$(dirname "$testfile")
+            pkg="./$pkgdir"
+            for target in $(grep -oE 'func (Fuzz[A-Za-z0-9_]+)' "$testfile" | awk '{print $2}'); do
+              echo "=== $target in $pkg (${FUZZ_SECONDS}s) ===" | tee -a fuzz-log.txt
+              if ! GOMAXPROCS=2 go test "$pkg" -run='^$' -fuzz="^${target}$" -fuzztime="${FUZZ_SECONDS}s" -parallel=2 >> fuzz-log.txt 2>&1; then
+                echo "FUZZ FAILURE: $target in $pkg" | tee -a fuzz-failures.txt
+              fi
+            done
+          done < <(grep -rlE --include='*_test.go' 'func Fuzz' .)
+          cat fuzz-failures.txt >> "$GITHUB_STEP_SUMMARY"
+          test ! -s fuzz-failures.txt
+      - name: Upload fuzz log and any crash corpora
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: audit-fuzz
+          path: |
+            fuzz-log.txt
+            fuzz-failures.txt
+            **/testdata/fuzz/**
+          if-no-files-found: warn
+
+  metrics:
+    name: Repository metrics
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.x'
+      - name: Collect metrics
+        run: |
+          {
+            echo '## Repository metrics'
+            echo ''
+            echo "Packages: $(go list ./... | wc -l)"
+            echo "Go source LOC: $(find . -name '*.go' -not -name '*_test.go' | xargs wc -l | tail -1 | awk '{print $1}')"
+            echo "Go test LOC: $(find . -name '*_test.go' | xargs wc -l | tail -1 | awk '{print $1}')"
+            echo ''
+            echo '### Largest Go files'
+            echo ''
+            echo '```'
+            find . -name '*.go' | xargs wc -l | sort -rn | head -21
+            echo '```'
+          } | tee metrics.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload metrics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: audit-metrics
+          path: metrics.md
+          if-no-files-found: warn
