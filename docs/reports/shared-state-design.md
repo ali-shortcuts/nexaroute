@@ -1,6 +1,12 @@
 # Design: cross-replica breaker + affinity state (DESIGN ONLY)
 
-Status: design only — no code, no config changes in this run.
+Status: Phase 1 state-store slice is implemented in `internal/sharedstate`
+(contract, monotonic merge, revision-guarded publish, control-plane adapter and
+contract/integration tests — see `docs/adr/0002-circuit-breaker-state-consistency.md`
+and `docs/reports/architecture-slices/circuit-breaker-phase1.md`). Gateway
+wiring, the refresh/apply loop, remote-retired application, provider/scope
+sharing and multi-instance acceptance remain unimplemented; this document
+remains the design for those later phases.
 Scope: `docs/KNOWN_GAPS.md` ("State and HA" and "Routing boundaries") records
 that cross-replica breaker synchronization and shared/distributed affinity and
 breaker state across multiple NexaRoute processes are not implemented.

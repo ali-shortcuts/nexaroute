@@ -33,6 +33,10 @@ jobs:
         env:
           NEXAROUTE_TEST_REDIS_URL: redis://127.0.0.1:6379/0
         run: go test -race -tags integration ./internal/controlplane/ -run 'TestRedisIntegration' -count=1 -v
+      - name: Redis shared breaker state-store integration tests
+        env:
+          NEXAROUTE_TEST_REDIS_URL: redis://127.0.0.1:6379/0
+        run: go test -race -tags integration ./internal/sharedstate/ -run 'TestRedisBreakerStoreIntegration' -count=1 -v
       - name: Redis gateway runtime integration tests
         env:
           NEXAROUTE_TEST_REDIS_URL: redis://127.0.0.1:6379/0
