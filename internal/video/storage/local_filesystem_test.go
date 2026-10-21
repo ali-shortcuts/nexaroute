@@ -164,3 +164,49 @@ func TestLocalReadRejectsOutsideAndSymlinkEscape(t *testing.T) {
 		t.Fatalf("unexpected missing asset error=%v", err)
 	}
 }
+
+func TestLocalPutRejectsDotDotMetadataAndSymlinkedDirectories(t *testing.T) {
+	root := t.TempDir()
+	s, err := NewLocal(root, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := video.Asset{Filename: "clip.mp4", Metadata: map[string]string{"project_id": "p", "job_id": "j"}}
+	asset := base
+	asset.Metadata = map[string]string{"project_id": "p", "episode_id": "..", "job_id": "j"}
+	if _, err := s.Put(context.Background(), asset, []byte("x")); err == nil || !strings.Contains(err.Error(), "unsafe path segment") {
+		t.Fatalf("episode_id traversal error=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "j")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("episode_id traversal wrote outside the project directory: %v", err)
+	}
+
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(root, "linked")); err != nil {
+		t.Fatal(err)
+	}
+	asset = base
+	asset.Metadata = map[string]string{"project_id": "linked", "job_id": "j"}
+	if _, err := s.Put(context.Background(), asset, []byte("x")); err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("symlinked project directory error=%v", err)
+	}
+	if entries, err := os.ReadDir(outside); err != nil || len(entries) != 0 {
+		t.Fatalf("symlinked project directory received writes: entries=%v err=%v", entries, err)
+	}
+
+	projectDir := filepath.Join(root, "p2")
+	if err := os.MkdirAll(projectDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(projectDir, "episode")); err != nil {
+		t.Fatal(err)
+	}
+	asset = base
+	asset.Metadata = map[string]string{"project_id": "p2", "episode_id": "episode", "job_id": "j"}
+	if _, err := s.Put(context.Background(), asset, []byte("x")); err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("symlinked episode directory error=%v", err)
+	}
+	if entries, err := os.ReadDir(outside); err != nil || len(entries) != 0 {
+		t.Fatalf("symlinked episode directory received writes: entries=%v err=%v", entries, err)
+	}
+}

@@ -598,7 +598,11 @@ func sanitizeAcceptanceURL(raw string) string {
 }
 
 func writeProviderAcceptReport(path string, report providerAcceptReport) error {
-	if dir := filepath.Dir(path); dir != "" && dir != "." {
+	dir := filepath.Dir(path)
+	if dir == "" {
+		dir = "."
+	}
+	if dir != "." {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return err
 		}
@@ -608,19 +612,31 @@ func writeProviderAcceptReport(path string, report providerAcceptReport) error {
 		return err
 	}
 	b = append(b, '\n')
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	// Write a fresh private file and rename it into place. Opening an
+	// existing path with O_TRUNC would follow a symlink planted at the
+	// well-known report name and could truncate an unrelated file.
+	tmp, err := os.CreateTemp(dir, ".provider-accept-*")
 	if err != nil {
 		return err
 	}
-	if err := f.Chmod(0o600); err != nil {
-		_ = f.Close()
+	tmpName := tmp.Name()
+	defer func() { _ = os.Remove(tmpName) }()
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
 		return err
 	}
-	if _, err := f.Write(b); err != nil {
-		_ = f.Close()
+	if _, err := tmp.Write(b); err != nil {
+		_ = tmp.Close()
 		return err
 	}
-	return f.Close()
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
 }
 
 func printProviderAcceptSummary(w io.Writer, report providerAcceptReport, outPath string) {
