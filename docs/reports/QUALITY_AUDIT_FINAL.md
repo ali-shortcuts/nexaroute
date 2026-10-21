@@ -149,6 +149,7 @@ The following section records the independent findings and fixes from the earlie
 Date: 2026-10-21
 Audited commit: `05003db9326b01464a368723d8ab31671b40dc8f`
 Branch: `opencode/issue593-20261021064216`
+Fix commit: `5b954364b509`
 
 ## Outcome
 
