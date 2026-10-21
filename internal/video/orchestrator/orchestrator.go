@@ -291,6 +291,12 @@ func (o *Orchestrator) Create(ctx context.Context, r video.VideoRequest) (video.
 		j.State = video.StateDryRun
 		j.LastError = "estimate only; no provider job was submitted"
 		if err := o.Store.Create(ctx, j); err != nil {
+			if existing, conflict, resolveErr := o.existingAfterIdempotencyConflict(ctx, r.IdempotencyKey, err); conflict {
+				if resolveErr != nil {
+					return video.VideoJob{}, resolveErr
+				}
+				return existing, nil
+			}
 			return video.VideoJob{}, err
 		}
 		return j, nil
@@ -306,6 +312,12 @@ func (o *Orchestrator) Create(ctx context.Context, r video.VideoRequest) (video.
 		if reserved {
 			o.Ledger.ReleaseForJob(j.JobID)
 		}
+		if existing, conflict, resolveErr := o.existingAfterIdempotencyConflict(ctx, r.IdempotencyKey, err); conflict {
+			if resolveErr != nil {
+				return video.VideoJob{}, resolveErr
+			}
+			return existing, nil
+		}
 		return video.VideoJob{}, err
 	}
 	if err := o.Queue.Enqueue(ctx, j); err != nil {
@@ -320,6 +332,21 @@ func (o *Orchestrator) Create(ctx context.Context, r video.VideoRequest) (video.
 		return video.VideoJob{}, fmt.Errorf("queue admission failed: %w", err)
 	}
 	return j, nil
+}
+
+// existingAfterIdempotencyConflict turns an atomic Create conflict into the
+// job the winning caller already persisted. Create is the serialization
+// point, so concurrent callers with one key cannot both create a job; the
+// loser returns the winner's record instead of a duplicate work admission.
+func (o *Orchestrator) existingAfterIdempotencyConflict(ctx context.Context, key string, createErr error) (video.VideoJob, bool, error) {
+	if key == "" || !errors.Is(createErr, queue.ErrIdempotencyConflict) {
+		return video.VideoJob{}, false, nil
+	}
+	existing, err := o.Store.GetByIdempotency(ctx, key)
+	if err != nil {
+		return video.VideoJob{}, true, fmt.Errorf("resolve concurrent idempotent create: %w", err)
+	}
+	return existing, true, nil
 }
 
 func validEstimate(e video.CostEstimate) bool {
@@ -605,6 +632,19 @@ func (o *Orchestrator) enqueueWithBackpressure(ctx context.Context, job video.Vi
 	}
 }
 
+// retryAfterLease requeues the job once its stored lease can no longer block
+// a claim. Recovered jobs may still carry a live lease from a previous process
+// incarnation; without this retry the consumed queue entry would be lost.
+func (o *Orchestrator) retryAfterLease(ctx context.Context, job video.VideoJob) {
+	delay := time.Until(job.LeaseUntil)
+	if delay <= 0 {
+		delay = 10 * time.Millisecond
+	} else {
+		delay += 10 * time.Millisecond
+	}
+	o.scheduleRetry(ctx, job, delay)
+}
+
 func (o *Orchestrator) scheduleRetry(ctx context.Context, job video.VideoJob, delay time.Duration) {
 	if o.Queue == nil || ctx.Err() != nil {
 		return
@@ -653,13 +693,19 @@ func (o *Orchestrator) RunJob(ctx context.Context, queued video.VideoJob) error 
 	// orchestrators over one store, exactly one wins the job;
 	// the other skips quietly instead of double-submitting
 	// billable work.
-	j, err = o.claim(ctx, j.JobID)
+	claimed, err := o.claim(ctx, j.JobID)
 	if err != nil {
 		if errors.Is(err, ErrJobLeasedElsewhere) {
+			// The queue entry is consumed by this attempt. A live foreign
+			// lease (for example one persisted by a previous process before
+			// a restart) must not strand the job, so requeue it for when the
+			// current lease expires.
+			o.retryAfterLease(ctx, j)
 			return nil
 		}
 		return err
 	}
+	j = claimed
 	if len(j.Request.ShotPlan) > 1 {
 		return o.runEpisodeJob(ctx, j)
 	}

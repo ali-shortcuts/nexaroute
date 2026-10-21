@@ -1,0 +1,10 @@
+$ go test ./internal/video/orchestrator -run "TestRecoverRetriesJobAfterForeignLeaseExpires|TestConcurrentCreateSameIdempotencyKeyCreatesOneJob" -count=1 -v
+=== RUN   TestConcurrentCreateSameIdempotencyKeyCreatesOneJob
+    idempotency_race_test.go:83: concurrent Create failed instead of returning the existing job: idempotency key already exists
+--- FAIL: TestConcurrentCreateSameIdempotencyKeyCreatesOneJob (0.00s)
+=== RUN   TestRecoverRetriesJobAfterForeignLeaseExpires
+    recovery_lease_test.go:69: job leased at restart was never retried after the lease expired
+--- FAIL: TestRecoverRetriesJobAfterForeignLeaseExpires (4.01s)
+FAIL
+FAIL	github.com/ali-shortcuts/nexaroute/internal/video/orchestrator	4.012s
+FAIL
