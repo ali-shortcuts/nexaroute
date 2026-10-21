@@ -122,10 +122,35 @@ ok  	github.com/ali-shortcuts/nexaroute/internal/controlplane	1.209s
 ok  	github.com/ali-shortcuts/nexaroute/cmd/gateway	36.376s
 ```
 
-Full repository verification (`./scripts/verify.sh`) and exact-SHA GitHub
-Actions CI/Security results are recorded in the PR description for the pushed
-head. This report does not claim a live multi-replica PostgreSQL/Redis test for
-shared config because such a feature does not exist in this slice.
+Full repository verification on the working tree:
+
+```bash
+./scripts/verify.sh
+```
+
+Result: `VERIFY PASS`. It ran shell syntax, the HA documentation check, the
+flake-hunt harness assertions, `gofmt`, the full unit/integration suite,
+`go vet`, the full race suite, release-artifact/SBOM trust-chain checks, JS
+syntax checks, both short fuzz targets, and the linux amd64/arm64 builds. The
+browser acceptance block was skipped by the repository's existing runner guard:
+
+```text
+WARN: Chromium + Python Playwright unavailable; skipping browser acceptance
+```
+
+The touched Helm chart metadata was also checked:
+
+```bash
+helm lint deploy/helm/nexaroute
+helm template nexaroute deploy/helm/nexaroute >/dev/null
+```
+
+Result: `1 chart(s) linted, 0 chart(s) failed` / `helm lint/template PASS`.
+
+Exact-SHA GitHub Actions CI/Security results are recorded in the PR description
+for the pushed head. This report does not claim a live multi-replica
+PostgreSQL/Redis test for shared config because such a feature does not exist in
+this slice.
 
 ## Remaining blockers and next actions
 
