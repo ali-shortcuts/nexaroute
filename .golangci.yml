@@ -1,0 +1,18 @@
+version: "2"
+linters:
+  default: standard
+  exclusions:
+    rules:
+      # Test files: unchecked writes/closes in test helpers are noise, not signal.
+      - path: _test\.go$
+        linters:
+          - errcheck
+      # Deferred Close calls: the error is almost never actionable at teardown.
+      - text: 'Error return value of `[^`]*\.Close` is not checked'
+        linters:
+          - errcheck
+      # fmt.Fprint* to stderr/stdout (CLI usage errors, hash writers): unchecked
+      # error returns are idiomatic here; hash.Hash writes cannot fail.
+      - text: 'Error return value of `fmt\.F(print|println|printf)` is not checked'
+        linters:
+          - errcheck
