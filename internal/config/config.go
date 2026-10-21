@@ -391,6 +391,8 @@ type VideoConfig struct {
 	Workers                   int     `json:"workers,omitempty"`
 	AuthTokenEnv              string  `json:"auth_token_env,omitempty"`
 	MaxAssetBytes             int64   `json:"max_asset_bytes,omitempty"`
+	JobStoreBackend           string  `json:"job_store_backend,omitempty"`
+	JobStoreURL               string  `json:"job_store_url,omitempty"`
 	DevelopmentFakeProvider   bool    `json:"development_fake_provider,omitempty"`
 	ComfyUIEnabled            bool    `json:"comfyui_enabled,omitempty"`
 	ComfyUIBaseURL            string  `json:"comfyui_base_url,omitempty"`
@@ -1911,6 +1913,21 @@ func (c Config) validateVideo() error {
 				return errors.New("video.comfyui_max_duration_seconds must be between 0 and 3600")
 			}
 		}
+	}
+	switch c.Video.JobStoreBackend {
+	case "", "file":
+		if strings.TrimSpace(c.Video.JobStoreURL) != "" {
+			return errors.New("video.job_store_url must be empty for the file job store backend")
+		}
+	case "postgres":
+		if strings.TrimSpace(c.Video.JobStoreURL) == "" {
+			return errors.New("video.job_store_url is required for the postgres job store backend")
+		}
+		if len(c.Video.JobStoreURL) > 2048 || strings.ContainsAny(c.Video.JobStoreURL, "\r\n\x00") {
+			return errors.New("video.job_store_url is invalid or too long")
+		}
+	default:
+		return errors.New("video.job_store_backend must be file or postgres")
 	}
 	return nil
 }

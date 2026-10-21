@@ -284,6 +284,8 @@ func main() {
 		videoRT, err = videoRuntime.New(videoDomain.Config{
 			Enabled:                      cfg.Video.Enabled,
 			StorePath:                    cfg.Video.StorePath,
+			JobStoreBackend:              cfg.Video.JobStoreBackend,
+			JobStoreURL:                  cfg.Video.JobStoreURL,
 			StorageRoot:                  cfg.Video.StorageRoot,
 			QueueSize:                    cfg.Video.QueueSize,
 			Workers:                      cfg.Video.Workers,

@@ -44,6 +44,58 @@ type Runtime struct {
 	codeRenderRetention time.Duration
 }
 
+// openJobStore builds the configured job-store backend. The file
+// backend is the default and keeps existing single-host behavior;
+// postgres selects the shared PostgreSQL store for multi-process
+// deployments. An unreachable or misconfigured backend is a hard
+// error, never a silent fallback to another store.
+func openJobStore(cfg video.Config, baseDir string) (queue.JobStore, error) {
+	switch cfg.JobStoreBackend {
+	case "", "file":
+		storePath := cfg.StorePath
+		if storePath == "" {
+			storePath = filepath.Join(baseDir, "video-jobs.json")
+		} else if !filepath.IsAbs(storePath) {
+			storePath = filepath.Join(baseDir, storePath)
+		}
+		store, err := queue.NewFileStore(storePath)
+		if err != nil {
+			return nil, fmt.Errorf("video job store: %w", err)
+		}
+		return store, nil
+	case "postgres":
+		dsn, err := resolveJobStoreURL(cfg.JobStoreURL)
+		if err != nil {
+			return nil, err
+		}
+		store, err := queue.OpenPostgresStore(context.Background(), dsn)
+		if err != nil {
+			return nil, err
+		}
+		return store, nil
+	default:
+		return nil, fmt.Errorf("video.job_store_backend must be file or postgres, got %q", cfg.JobStoreBackend)
+	}
+}
+
+// resolveJobStoreURL resolves the env:VARIABLE_NAME indirection for the
+// PostgreSQL DSN so secrets stay out of durable config files.
+func resolveJobStoreURL(url string) (string, error) {
+	url = strings.TrimSpace(url)
+	if url == "" {
+		return "", errors.New("video.job_store_url is required for the postgres job store backend")
+	}
+	if name, ok := strings.CutPrefix(url, "env:"); ok {
+		name = strings.TrimSpace(name)
+		value := strings.TrimSpace(os.Getenv(name))
+		if value == "" {
+			return "", fmt.Errorf("video job store: environment variable %s named by job_store_url is unset or empty", name)
+		}
+		return value, nil
+	}
+	return url, nil
+}
+
 func New(cfg video.Config, baseDir string) (*Runtime, error) {
 	if !cfg.Enabled {
 		return nil, nil
@@ -61,15 +113,9 @@ func New(cfg video.Config, baseDir string) (*Runtime, error) {
 	if cfg.Workers < 1 {
 		cfg.Workers = 1
 	}
-	storePath := cfg.StorePath
-	if storePath == "" {
-		storePath = filepath.Join(baseDir, "video-jobs.json")
-	} else if !filepath.IsAbs(storePath) {
-		storePath = filepath.Join(baseDir, storePath)
-	}
-	store, err := queue.NewFileStore(storePath)
+	store, err := openJobStore(cfg, baseDir)
 	if err != nil {
-		return nil, fmt.Errorf("video job store: %w", err)
+		return nil, err
 	}
 	q := queue.New(cfg.QueueSize)
 	reg := orchestrator.Registry{}
