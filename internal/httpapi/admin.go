@@ -458,7 +458,7 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 			"keys":    len(cfgFull.ClientAuth.Keys),
 			"rpm":     cfgFull.ClientAuth.RPM,
 		},
-		"client_access": map[string]any{
+		"client_access": map[string]any{ // #nosec G101 -- response map key, not a credential.
 			"base_url":          cfgFull.ClientBaseURL,
 			"configured":        cfgFull.ClientBaseURL != "",
 			"source":            clientBaseURLSource(cfgFull.ClientBaseURL),

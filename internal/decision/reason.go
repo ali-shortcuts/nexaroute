@@ -7,7 +7,7 @@ type ReasonCode string
 
 const (
 	ReasonExistingOrderPreserved ReasonCode = "EXISTING_ORDER_PRESERVED"
-	ReasonLocalPassThrough       ReasonCode = "LOCAL_PASS_THROUGH"
+	ReasonLocalPassThrough       ReasonCode = "LOCAL_PASS_THROUGH" // #nosec G101 -- reason code, not a credential.
 	ReasonAbstained              ReasonCode = "ABSTAINED"
 	ReasonTimeout                ReasonCode = "TIMEOUT"
 	ReasonProviderError          ReasonCode = "PROVIDER_ERROR"

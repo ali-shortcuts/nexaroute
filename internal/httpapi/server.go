@@ -1552,7 +1552,7 @@ func (s *Server) adminCSRFToken(w http.ResponseWriter, r *http.Request) {
 		}
 		token = base64.RawURLEncoding.EncodeToString(raw[:])
 	}
-	http.SetCookie(w, &http.Cookie{
+	http.SetCookie(w, &http.Cookie{ // #nosec G124 -- Secure is computed from direct TLS or an explicitly trusted proxy.
 		Name: adminCSRFCookie, Value: token, Path: "/admin/",
 		HttpOnly: true, Secure: requestIsSecure(r), SameSite: http.SameSiteStrictMode,
 		Expires: time.Now().Add(12 * time.Hour), MaxAge: 12 * 60 * 60,

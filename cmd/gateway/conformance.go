@@ -303,11 +303,11 @@ func resolvePresetTarget(f canaryFlags) (config.ProviderConfig, config.ModelConf
 	}
 	apiKeyEnv := strings.TrimSpace(f.apiKeyEnv)
 	if apiKeyEnv == "" && authMode != "" && authMode != "none" {
-		apiKeyEnv = "NEXAROUTE_CANARY_API_KEY"
+		apiKeyEnv = "NEXAROUTE_CANARY_API_KEY" // #nosec G101 -- environment variable name, not a secret value.
 	}
 	secretKeyEnv := strings.TrimSpace(f.secretKeyEnv)
 	if preset.Type == "bedrock" && secretKeyEnv == "" {
-		secretKeyEnv = "NEXAROUTE_CANARY_SECRET_KEY"
+		secretKeyEnv = "NEXAROUTE_CANARY_SECRET_KEY" // #nosec G101 -- environment variable name, not a secret value.
 	}
 	sessionEnv := strings.TrimSpace(f.sessionEnv)
 	if preset.Type == "bedrock" && sessionEnv == "" {

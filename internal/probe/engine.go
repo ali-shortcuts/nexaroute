@@ -36,7 +36,7 @@ func providerIncidentProbeFailure(status int) bool {
 type probeFailureClass string
 
 const (
-	classCredentialFailure  probeFailureClass = "credential_failure"
+	classCredentialFailure  probeFailureClass = "credential_failure" // #nosec G101 -- classification name, not a credential.
 	classQuotaExhausted     probeFailureClass = "quota_exhausted"
 	classRateLimited        probeFailureClass = "rate_limit"
 	classProviderIncident   probeFailureClass = "provider_incident"

@@ -52,7 +52,11 @@ func Presets() []Preset {
 
 var presetList = []Preset{
 	{ID: "custom", Name: "Custom Provider", Category: "Custom", Type: "openai_compatible", AuthMode: "bearer", Custom: true},
-	{ID: "anthropic", Name: "Anthropic", Category: "Direct", Type: "anthropic_compatible", BaseURL: "https://api.anthropic.com", AuthMode: "x-api-key", MessagesPath: "/v1/messages", ModelsPath: "/v1/models", CountTokensPath: "/v1/messages/count_tokens"},
+	{ // #nosec G101 -- provider endpoint URL, not a credential.
+		ID: "anthropic", Name: "Anthropic", Category: "Direct", Type: "anthropic_compatible",
+		BaseURL: "https://api.anthropic.com", AuthMode: "x-api-key", MessagesPath: "/v1/messages",
+		ModelsPath: "/v1/models", CountTokensPath: "/v1/messages/count_tokens",
+	},
 	{ID: "openai", Name: "OpenAI", Category: "Direct", Type: "openai_compatible", BaseURL: "https://api.openai.com/v1", AuthMode: "bearer"},
 	{ID: "openai-responses", Name: "OpenAI Responses", Category: "Direct", Type: "openai_responses", BaseURL: "https://api.openai.com/v1", AuthMode: "bearer", ResponsesPath: "/v1/responses", ModelsPath: "/v1/models"},
 	// Bedrock's runtime hosts Converse APIs, not a plain /models listing on
