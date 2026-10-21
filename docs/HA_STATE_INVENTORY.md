@@ -17,7 +17,7 @@ Scopes: `shared` (coherent across replicas via a shared store),
 
 | State | Owner / store | Durability | Scope today | Restart | Rolling deploy / replica loss | Network partition | Ambiguous submission |
 |---|---|---|---|---|---|---|---|
-| Config snapshot (control plane) | `internal/controlplane` Store: file / PostgreSQL / Redis / memory | Durable except memory backend | shared (PG/Redis), shared-host (file+flock), per-instance (control plane disabled) | Reloaded and reconciled from the store at startup; `last_known_good` fallback per failure policy | File: writers on one host coordinate via advisory flock + revision CAS — a stale writer gets `ErrConflict`, never a silent lost update (proven by `TestTwoInstanceFileStoreCoherence`); PG/Redis: revision-aware atomic writes, real-service integration coverage | Store unreachable ⇒ backend fails closed or serves last-known-good per the configured failure mode; no split-brain writes because every write is revision-checked | N/A (writes are CAS, not submissions) |
+| Config snapshot | Local config file, read by `config.Load`/`config.LoadBase` and written atomically by `config.SaveAtomic` | Local file; durable only on the host/filesystem that holds it | **per-instance** — the control-plane store never holds config; it carries only runtime metadata and budget-alert marks | Reloaded from the local file at startup and after an admin save on that replica | Another replica keeps its own file and does not observe the edit; a lost replica loses unsaved admin edits unless its file was backed up separately | Each replica keeps its local file; no shared config write exists to split | N/A |
 | Admin security store: sessions, audit chain, client keys | `internal/securitystore`: bbolt (default) / PostgreSQL / Redis | Durable except memory test backend | shared (PG/Redis), shared-host (bbolt) | Reloaded from store | PG serializes audit-chain writes transactionally; Redis uses version-checked Lua CAS; concurrent appends from two instances have real-service coverage | Backend down ⇒ fail closed | Audit append is append-only with chain verification; a conflicted append errors instead of forking the chain |
 | Provider breaker / cooldown / health | `internal/health`, `internal/probe` (in-process) | None (rebuilt by probing) | **per-instance — cross-replica synchronization is NOT implemented** | Cooldowns reset; probes re-establish state | Replicas may disagree about a provider's cooldown during the probe window; routing stays safe (each replica probes independently) but not identical | Each replica sees only its own probe results | N/A |
 | Quota / RPM / TPM reservations and budget counters | In-process limiters + optional control-plane budget store | In-memory (reservations); budget snapshots durable only with the control plane | **per-instance for reservations** | Reservations reset | **N replicas can collectively oversubscribe a provider quota by up to N× the per-instance limit.** The deployment report and UI must label these limits per-instance, never global | Same as replica loss, per partition side | Provider-reported usage settles reservations per instance; no cross-instance settlement exists |
@@ -25,15 +25,18 @@ Scopes: `shared` (coherent across replicas via a shared store),
 | Request idempotency (client-facing) | Per-instance request handling | None | per-instance | Lost | A retried submission landing on another replica is a new request to that replica | Same | **Ambiguous provider submissions are never auto-duplicated by the gateway**; retries follow the configured policy on the owning replica only |
 | Video jobs, checkpoints, cost ledger | In-process video runtime + local store path | Local files only; **not durable across hosts, not distributed** | per-instance | Jobs on the lost replica are not resumed elsewhere | A second replica does not see the first replica's jobs or ledger | Per partition side | Jobs are leased per instance (`lease_owner`/`lease_until` on the job, atomic `TryClaim` on the store, renewed while polling): two orchestrators over one store execute a job exactly once (tested). The guarantee is cross-process only when the store's claim is atomic across processes — the in-repo stores prove the semantics in-process; sharing one store FILE across processes remains unsupported (whole-file overwrite), so multi-replica video still requires a store with an atomic conditional claim |
 | OIDC pending transactions | In-process / security store session state | Session-lifetime | per-instance (login flows complete on the replica that started them) | Pending logins invalidated | Load balancers should keep auth callbacks sticky to the starting replica | Per partition side | Callbacks with unknown state are rejected, never guessed |
-| Metrics / activity / audit views in the UI | Aggregated from the serving replica + shared stores where configured | n/a | Mixed: audit/config views are as shared as their stores; live activity and health views are **per-instance observations** | n/a | The UI of one replica does not show another replica's in-flight activity; health shown is the serving replica's own | Per partition side | n/a |
+| Metrics / activity / audit views in the UI | Aggregated from the serving replica + shared stores where configured | n/a | Mixed: audit views are as shared as their stores; config views reflect the serving replica's local file; live activity and health views are **per-instance observations** | n/a | The UI of one replica does not show another replica's config edits or in-flight activity; health shown is the serving replica's own | Per partition side | n/a |
 
 ## Rules that follow from this inventory
 
 1. Running multiple replicas is supported for stateless request
    serving with the PostgreSQL or Redis control-plane and security
-   stores. Breaker, quota-reservation, affinity and video state
-   remain per-instance, with the oversubscription consequence
-   documented above — size per-instance limits accordingly.
+   stores. Config snapshots remain per-instance local files:
+   distribute the same config to every replica through deployment
+   tooling, never by expecting control-plane propagation. Breaker,
+   quota-reservation, affinity and video state remain per-instance,
+   with the oversubscription consequence documented above — size
+   per-instance limits accordingly.
 2. The file control-plane backend coordinates processes on **one
    host** (flock + CAS). It is not a cross-host store, and a
    network filesystem is never a coordination substitute.
@@ -85,6 +88,10 @@ everything else runs in the ordinary unit suite.
   processes; no shared (PostgreSQL/Redis) job-store backend
   exists yet — building one is an owner topology decision,
   recorded on #434, and nothing in this document claims it.
+- **Config snapshot scope** — `TestConfigSnapshotReportMatchesLocalStore`
+  proves every control-plane backend (file, postgres, redis, memory)
+  reports `per-instance`, and that an admin save lands only in the local
+  config file while a second replica's file stays unchanged.
 - **Cooldown visibility** — deliberately **per-instance**:
   breaker/cooldown state is not shared, and
   `TestDeploymentReportSharedControlPlane` pins that even

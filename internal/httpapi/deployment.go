@@ -45,8 +45,8 @@ func deploymentReportForConfig(cfg config.Config) DeploymentReport {
 	r := DeploymentReport{
 		StoreTopology:        "local",
 		SecurityStoreBackend: "bbolt",
-		ConfigSnapshot:       ScopePerInstance,
-		AuditSecurityStore:   ScopeSharedHost, // bbolt file on one host
+		ConfigSnapshot:       ScopePerInstance, // local config file, never control-plane backed
+		AuditSecurityStore:   ScopeSharedHost,  // bbolt file on one host
 		BreakerCooldown:      ScopePerInstance,
 		QuotaReservations:    ScopePerInstance,
 		SessionAffinity:      ScopePerInstance,
@@ -69,21 +69,24 @@ func deploymentReportForConfig(cfg config.Config) DeploymentReport {
 		switch r.ControlPlaneBackend {
 		case "postgres", "redis":
 			r.StoreTopology = "shared"
-			r.ConfigSnapshot = ScopeShared
 		case "file":
 			r.StoreTopology = "shared-host"
-			r.ConfigSnapshot = ScopeSharedHost
 		case "memory":
 			r.StoreTopology = "test-only"
 		}
 	}
 
+	// Config snapshots are always local files. The control plane carries only
+	// runtime metadata and budget-alert marks; it never stores or reconciles
+	// config, so enabling it must not change this scope (#599).
 	// Observable partial support: warnings are part of the contract,
 	// not log noise. Anything not shared must say so where operators
 	// look, so nobody scales replicas expecting global budgets,
 	// cooldowns or video ledgers this build does not provide.
 	if !cfg.ControlPlane.Enabled {
 		r.Warnings = append(r.Warnings, "control plane disabled: config snapshots are per-instance files; replicas do not reconcile")
+	} else {
+		r.Warnings = append(r.Warnings, "config snapshots are per-instance local files: control-plane sharing does not propagate config edits across replicas")
 	}
 	if r.StoreTopology == "test-only" {
 		r.Warnings = append(r.Warnings, "control plane backend 'memory' is test-only and loses all state on restart")

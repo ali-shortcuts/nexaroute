@@ -314,6 +314,13 @@ func BenchmarkAdmissionConfigAccess(b *testing.B) {
 // newBenchServer mirrors testGateway for benchmarks (testing.TB).
 func newBenchServer(tb testing.TB, cfg config.Config) *Server {
 	tb.Helper()
+	return newBenchServerAt(tb, cfg, "")
+}
+
+// newBenchServerAt is newBenchServer with an explicit config path, for tests
+// that need the same local file wiring a real gateway uses.
+func newBenchServerAt(tb testing.TB, cfg config.Config, configPath string) *Server {
+	tb.Helper()
 	cfg.ApplyDefaults()
 	hm := health.New(cfg.Routing.FailureThreshold, cfg.Cooldown())
 	hm.ConfigureProviderIncidents(cfg.Routing.ProviderFailureThreshold, cfg.ProviderFailureWindow(), cfg.ProviderCooldown())
@@ -324,5 +331,5 @@ func newBenchServer(tb testing.TB, cfg config.Config) *Server {
 	rt := router.New(cfg, hm)
 	bus := events.New(100)
 	pe := probe.New(cfg, reg, rt, hm, bus)
-	return New(cfg, "", reg, rt, hm, bus, pe, log.New(io.Discard, "", 0))
+	return New(cfg, configPath, reg, rt, hm, bus, pe, log.New(io.Discard, "", 0))
 }

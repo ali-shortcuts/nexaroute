@@ -141,10 +141,7 @@ No commercial external video provider adapter is bundled. The opt-in local
 ComfyUI adapter supports text-to-video through a user-supplied API-format
 workflow; its HTTP contract is covered by fixtures, but actual model inference
 on a real ComfyUI installation is not part of CI. The fake provider writes a
-text placeholder, not a playable video. The asset-size cap is enforced with streaming-memory protection: the ComfyUI adapter reads downloads through `io.LimitReader` bounded at `maxOutputBytes+1`, so an oversized response cannot OOM the gateway before the cap applies. Multi-node durable coordination, provider-native idempotent recovery
-after an ambiguous submission, verified production workloads for ten-minute
-episodes, Gateway-side Piper narration and estimated same-language SRT captions
-are now supported for multi-shot jobs when configured. Provider-generated
+text placeholder, not a playable video. The asset-size cap is enforced with streaming-memory protection: the ComfyUI adapter reads downloads through `io.LimitReader` bounded at `maxOutputBytes+1`, so an oversized response cannot OOM the gateway before the cap applies. Multi-shot jobs persist per-shot checkpoints and automatically compose generated shot assets into a final silent MP4; Gateway-side Piper narration and estimated same-language SRT captions are supported for configured multi-shot jobs. The video jobs, local JSON job store, queue and cost ledger remain single-process and are not multi-node safe: multi-node durable coordination, provider-native idempotent recovery after an ambiguous submission, and verified production workloads for ten-minute episodes remain unimplemented or UNVERIFIED. Provider-generated
 dialogue/sound effects/music, translated or word-aligned subtitles, and distributed
 asset/job storage remain unimplemented; the local CLI also supports existing
 narration/music mixing and SRT subtitle burning.
@@ -175,7 +172,10 @@ Linux, cross-process safe via an advisory `.controlplane.lock` file in the
 state directory; file-backend writes fail closed on platforms without flock
 support), an
 explicit test-only memory store, PostgreSQL, or Redis and reconciles a versioned
-startup snapshot. Both database backends fail closed when unavailable; Redis
+runtime-metadata startup snapshot. Config snapshots are never part of that
+store: config is loaded from the local config file and admin saves atomically
+rewrite that same local file, so config edits do not propagate across replicas.
+Both database backends fail closed when unavailable; Redis
 uses atomic revision-aware Lua scripts and has real-service integration
 coverage. Adapter tests do not guarantee deployment-level persistence,
 replication, failover, or recovery; those remain operator-owned and must be
