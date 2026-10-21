@@ -102,7 +102,7 @@ func (s *FileStore) Create(_ context.Context, j video.VideoJob) error {
 	}
 	if j.IdempotencyKey != "" {
 		if _, ok := s.idem[j.IdempotencyKey]; ok {
-			return fmt.Errorf("idempotency key already exists")
+			return ErrIdempotencyConflict
 		}
 		s.idem[j.IdempotencyKey] = j.JobID
 	}

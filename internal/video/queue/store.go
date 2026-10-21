@@ -12,6 +12,7 @@ import (
 
 var ErrNotFound = errors.New("video job not found")
 var ErrTerminalJob = errors.New("video job is already terminal and cannot be overwritten")
+var ErrIdempotencyConflict = errors.New("video job idempotency key already exists")
 
 func checkTerminalUpdate(current, next video.VideoJob) error {
 	if !current.IsTerminal() {
@@ -56,7 +57,7 @@ func (s *MemoryStore) Create(_ context.Context, j video.VideoJob) error {
 	}
 	if j.IdempotencyKey != "" {
 		if id := s.idem[j.IdempotencyKey]; id != "" {
-			return errors.New("idempotency key already exists")
+			return ErrIdempotencyConflict
 		}
 		s.idem[j.IdempotencyKey] = j.JobID
 	}
