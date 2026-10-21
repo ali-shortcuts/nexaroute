@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ali-shortcuts/nexaroute/internal/config"
+	"github.com/ali-shortcuts/nexaroute/internal/virtualkeys"
 )
 
 type clientKeyCreateRequest struct {
@@ -170,16 +171,8 @@ func (s *Server) adminClientKeyByID(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, http.StatusMethodNotAllowed, "only DELETE or POST /rotate is supported")
 		return
 	}
-	_, err := s.mutateConfig(func(cfg *config.Config) error {
-		for i := range cfg.ClientAuth.VirtualKeys {
-			if cfg.ClientAuth.VirtualKeys[i].ID == id {
-				cfg.ClientAuth.VirtualKeys[i].Revoked = true
-				return nil
-			}
-		}
-		return fmt.Errorf("client key %q not found", id)
-	})
-	if err != nil {
+	svc := virtualkeys.NewService(s.mutateConfig)
+	if err := svc.Revoke(id); err != nil {
 		errorJSON(w, http.StatusNotFound, err.Error())
 		return
 	}
