@@ -71,7 +71,7 @@ func (s *Server) authenticateAdmin(r *http.Request) (authz.Identity, string, boo
 	if cfg.BindLocalOnly && !remoteIsLoopback(r.RemoteAddr) {
 		return authz.Identity{}, "", false, nil
 	}
-	identity, _, hasCookie, ok, err := s.sessionIdentity(r)
+	identity, _, _, ok, err := s.sessionIdentity(r)
 	if err != nil {
 		return authz.Identity{}, "oidc-session", false, err
 	}
@@ -84,9 +84,10 @@ func (s *Server) authenticateAdmin(r *http.Request) (authz.Identity, string, boo
 		if s.oidc == nil || s.oidcErr != nil {
 			return authz.Identity{}, "oidc-session", false, errors.New("OIDC authentication unavailable")
 		}
-		if hasCookie {
-			return authz.Identity{}, "oidc-session", false, nil
-		}
+		// Emergency/static-key access is unavailable while OIDC is enabled
+		// (docs/SECURITY.md), even when the provider is healthy and the
+		// request carries no session cookie.
+		return authz.Identity{}, "oidc-session", false, nil
 	}
 	if !cfg.EmergencyAccessEnabled {
 		return authz.Identity{}, "", false, nil

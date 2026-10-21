@@ -90,3 +90,104 @@ go tool cover -func=.artifacts/audit-baseline/coverage.out
 - No live PostgreSQL, Redis, OIDC identity provider, KMS/keyring service, or upstream provider calls were exercised.
 - Per-instance breaker, budget, and video job behavior was reviewed from code and documentation, not from a multi-replica deployment.
 - Full staticcheck was run after the changes for information only; a pre-change full-staticcheck count is not available, so only the targeted staticcheck baseline is used for before/after claims.
+
+---
+
+## Earlier audit pass (PR #595, branch `opencode/issue593-20261021064216`)
+
+The following section records the independent findings and fixes from the earlier audit pass that was rebased and merged alongside this report; it is preserved verbatim for traceability.
+
+# Post-release quality audit baseline (Issue #593)
+
+Date: 2026-10-21
+Audited commit: `05003db9326b01464a368723d8ab31671b40dc8f` (`main`)
+Audit branch: `opencode/issue593-20261021064216`
+
+## Scope
+
+This audit covers the repository state at the audited commit immediately after
+the `v0.23.0` release. It is a code, test, documentation, and local-tooling
+audit. It is not a live-provider, production-traffic, or production-infrastructure
+assessment.
+
+## Repository baseline
+
+| Item | Observed value |
+| --- | --- |
+| HEAD | `05003db9326b01464a368723d8ab31671b40dc8f` |
+| Latest release | `v0.23.0`, published `2026-10-21T02:04:03Z` |
+| CI at audited SHA | run `39529391279`, success |
+| Security at audited SHA | run `39529391318`, success |
+| Release workflow | run `39530224516`, success |
+| Open issues | `#593` only |
+| Open pull requests | none |
+| Go toolchain | `go1.25.0 linux/amd64` |
+| Packages | 57 |
+
+The `v0.23.0` tag and release were not modified, deleted, or recreated.
+
+## Tooling inventory
+
+Available and used:
+
+- `go test`, `go vet`, `go test -race`
+- `gofmt`
+- `bash -n` (shell syntax)
+- project scripts: `scripts/verify.sh`, `scripts/test-flake-hunt.sh`,
+  `scripts/test-release-artifacts.sh`, `scripts/test-generate-sbom.sh`
+- short fuzz targets executed by `scripts/verify.sh`
+
+Unavailable in the audit environment:
+
+- `golangci-lint`
+- `staticcheck`
+- `govulncheck`
+- `gosec`
+- `ripgrep` (`rg`)
+- authenticated `gh` CLI (`GH_TOKEN` unset)
+- Chromium plus Python Playwright (browser acceptance was skipped by
+  `scripts/verify.sh`)
+- PostgreSQL, Redis, live OIDC, and live model providers
+
+Public GitHub REST reads were used for CI/release/issue state; no authenticated
+GitHub write was performed by the auditor.
+
+## Pre-change verification
+
+Commands and real outcomes at the audited commit before any edits:
+
+| Command | Result |
+| --- | --- |
+| `go test -count=1 -timeout=10m ./...` | exit 0 |
+| `go vet ./...` | exit 0 |
+| `go test -race -count=1 -timeout=15m ./...` | exit 0 |
+| `./scripts/verify.sh` | not run before edits; the post-change run is recorded in `QUALITY_AUDIT_FINAL.md` |
+
+Logs are in `.artifacts/baseline-go-test.log` and `.artifacts/baseline-race.log`
+(ignored by git; retained locally as evidence).
+
+## Documentation reviewed
+
+- `ARCHITECTURE.md`
+- `CONTRIBUTING.md`
+- `AGENTS.md`
+- `docs/CONFIGURATION.md` (`allowed_hosts`, `proxy_url` contract)
+- `docs/SECURITY.md` (OIDC and emergency access invariant)
+- `docs/KNOWN_GAPS.md`
+- `docs/HA_STATE_INVENTORY.md`
+- `docs/EXTERNAL_VERIFICATION.md`
+
+## Audit method
+
+1. Establish the immutable baseline above and run the test/vet/race gates.
+2. Read the high-risk runtime paths: provider egress, media ingress, admin
+   authentication/authorization, routing and failover, hedging, protocol
+   translation, SSE streaming, usage accounting, and capability gating.
+3. For each candidate, obtain a concrete failing test or a precise call-site
+   proof before changing production code.
+4. Add regression tests, fix the defect, and rerun the narrow package tests,
+   the full suite, `go vet`, and `scripts/verify.sh`.
+5. Record residual gaps that the environment cannot exercise.
+
+Findings and dispositions are in `docs/reports/QUALITY_AUDIT_FINDINGS.md`.
+Final verification evidence is in `docs/reports/QUALITY_AUDIT_FINAL.md`.

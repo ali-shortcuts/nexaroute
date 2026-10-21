@@ -155,10 +155,11 @@ func (s *Server) syncCapabilityContracts(cfg config.Config) {
 // request shape into the compatibility requirement profile.
 func profileFromRequirement(req router.Requirement, canReq *canonical.Request) compat.RequirementProfile {
 	profile := compat.RequirementProfile{
-		Tools:     req.Tools,
-		Vision:    req.Vision,
-		Streaming: req.Streaming,
-		Reasoning: req.Reasoning,
+		Tools:            req.Tools,
+		Vision:           req.Vision,
+		Streaming:        req.Streaming,
+		Reasoning:        req.Reasoning,
+		StructuredOutput: req.StructuredOutput,
 	}
 	if canReq != nil {
 		r := canReq.DetectRequirements()

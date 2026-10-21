@@ -180,7 +180,8 @@ func (s *Server) serveMedia(w http.ResponseWriter, r *http.Request, kind mediaKi
 	}
 
 	req := router.Requirement{Model: model}
-	_, candidates, _, resolveErr := s.candidatesForRequirement(req, "openai")
+	req = s.applyPrivacyRequirement(req, r)
+	_, candidates, resolvedRoute, resolveErr := s.candidatesForRequirement(req, "openai")
 	if resolveErr != nil {
 		// Gateway-side rejection before any upstream attempt: release
 		// the admission budget hold (Wave C-4).
@@ -196,6 +197,10 @@ func (s *Server) serveMedia(w http.ResponseWriter, r *http.Request, kind mediaKi
 		// Gateway-side rejection before any upstream attempt: release
 		// the admission budget hold (Wave C-4).
 		s.budgetRelease(r)
+		if s.isPrivacyUnavailable(req, "openai", resolvedRoute, r.Header.Get("x-request-id")) {
+			openAIPrivacyUnavailable(w)
+			return
+		}
 		errorJSON(w, http.StatusServiceUnavailable, "no compatible healthy deployment")
 		return
 	}
@@ -268,6 +273,26 @@ func (s *Server) serveMedia(w http.ResponseWriter, r *http.Request, kind mediaKi
 		}
 
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			// Read the whole payload before committing the client status.
+			// Committing first turned truncated / oversized upstream bodies
+			// into a silent 200 with an empty or short body.
+			var body []byte
+			var rerr error
+			if kind.binaryResponse() {
+				body, rerr = io.ReadAll(io.LimitReader(resp.Body, maxMediaResponseBytes+1))
+				if rerr == nil && len(body) > maxMediaResponseBytes {
+					rerr = fmt.Errorf("upstream media response exceeds %d bytes", maxMediaResponseBytes)
+				}
+			} else {
+				body, rerr = readJSONLimited(resp.Body)
+			}
+			resp.Body.Close()
+			if rerr != nil {
+				lastErr = fmt.Sprintf("upstream media response unreadable: %v", rerr)
+				s.hm.RecordFailure(c.Deployment.ID, lastErr, latency)
+				s.observeCompletedTelemetry(c.Deployment.ID, c.Deployment.ProviderID, false, 0, 0)
+				continue
+			}
 			s.hm.RecordSuccess(c.Deployment.ID, latency)
 			s.observeCompletedTelemetry(c.Deployment.ID, c.Deployment.ProviderID, true, latency, 0)
 			w.Header().Set("X-Gateway-Deployment", c.Deployment.ID)
@@ -277,20 +302,10 @@ func (s *Server) serveMedia(w http.ResponseWriter, r *http.Request, kind mediaKi
 				w.Header().Set("Content-Type", ct)
 			}
 			w.WriteHeader(resp.StatusCode)
-			if kind.binaryResponse() {
-				// Binary payloads (audio) stream through untouched.
-				_, _ = io.Copy(w, io.LimitReader(resp.Body, maxMediaResponseBytes))
-				resp.Body.Close()
-			} else {
-				body, rerr := readJSONLimited(resp.Body)
-				resp.Body.Close()
-				if rerr == nil {
-					_, _ = w.Write(body)
-					if kind == mediaEmbeddings {
-						if in, _ := embeddingsUsage(body); in > 0 {
-							s.recordUsage(r, c.Deployment.ID, int64(in), 0)
-						}
-					}
+			_, _ = w.Write(body)
+			if kind == mediaEmbeddings {
+				if in, _ := embeddingsUsage(body); in > 0 {
+					s.recordUsage(r, c.Deployment.ID, int64(in), 0)
 				}
 			}
 			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_ok", Deployment: c.Deployment.ID, LatencyMS: latency.Milliseconds(), StatusCode: resp.StatusCode})

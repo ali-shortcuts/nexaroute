@@ -255,6 +255,9 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 		s.emitRouteAttempt(r.Header.Get("x-request-id"), "openai", in.Model, attemptIndex+1, c, attemptKind)
 		out, winner, hedgeLaunched := s.doAttemptWithHedge(routeCtx, r.Header.Get("x-request-id"), cfg, candidates, i, attempts, max, primary,
 			func(idx int) (hedgeAttemptBundle, bool) {
+				if _, ineligible := s.capabilityIneligible(r.Header.Get("x-request-id"), candidates[idx].Deployment.ID, profile); ineligible {
+					return hedgeAttemptBundle{}, false
+				}
 				return s.buildOpenAIAttempt(candidates[idx], reqEligible, raw, in)
 			},
 			in.Stream, forward)
