@@ -1862,49 +1862,7 @@ func (p *ProviderConfig) ApplyDefaults() {
 	}
 }
 
-func (c Config) Validate() error {
-	if err := c.Egress.validate(); err != nil {
-		return err
-	}
-	if err := ValidateClientBaseURL(c.ClientBaseURL); err != nil {
-		return err
-	}
-	if err := c.TLS.Validate(); err != nil {
-		return err
-	}
-	if c.Admin.SessionTTLSeconds < 300 || c.Admin.SessionTTLSeconds > 30*24*60*60 {
-		return errors.New("admin.session_ttl_seconds must be between 300 and 2592000")
-	}
-	if c.Admin.IdleTimeoutSeconds < 60 || c.Admin.IdleTimeoutSeconds > c.Admin.SessionTTLSeconds {
-		return errors.New("admin.idle_timeout_seconds must be between 60 and admin.session_ttl_seconds")
-	}
-	if c.Admin.AuditRetentionDays < 1 || c.Admin.AuditRetentionDays > 3650 {
-		return errors.New("admin.audit_retention_days must be between 1 and 3650")
-	}
-	if c.Admin.AuditMaxEvents < 100 || c.Admin.AuditMaxEvents > 1_000_000 {
-		return errors.New("admin.audit_max_events must be between 100 and 1000000")
-	}
-	if len(c.Admin.SecurityStorePath) > 4096 || strings.ContainsAny(c.Admin.SecurityStorePath, "\r\n\x00") {
-		return errors.New("admin.security_store_path is invalid or too long")
-	}
-	switch c.Admin.SecurityStoreBackend {
-	case "", "bbolt":
-		if strings.TrimSpace(c.Admin.SecurityStoreURL) != "" {
-			return errors.New("admin.security_store_url must be empty for the bbolt security store backend")
-		}
-	case "redis", "postgres":
-		if strings.TrimSpace(c.Admin.SecurityStoreURL) == "" {
-			return errors.New("admin.security_store_url is required for the redis/postgres security store backend")
-		}
-		if len(c.Admin.SecurityStoreURL) > 2048 || strings.ContainsAny(c.Admin.SecurityStoreURL, "\r\n\x00") {
-			return errors.New("admin.security_store_url is invalid or too long")
-		}
-	default:
-		return errors.New("admin.security_store_backend must be bbolt, redis or postgres")
-	}
-	if err := c.Admin.OIDC.Validate(); err != nil {
-		return err
-	}
+func (c Config) validateVideo() error {
 	if c.Video.ComfyUIEnabled && !c.Video.Enabled {
 		return errors.New("video.comfyui_enabled requires video.enabled")
 	}
@@ -1953,6 +1911,55 @@ func (c Config) Validate() error {
 				return errors.New("video.comfyui_max_duration_seconds must be between 0 and 3600")
 			}
 		}
+	}
+	return nil
+}
+
+func (c Config) Validate() error {
+	if err := c.Egress.validate(); err != nil {
+		return err
+	}
+	if err := ValidateClientBaseURL(c.ClientBaseURL); err != nil {
+		return err
+	}
+	if err := c.TLS.Validate(); err != nil {
+		return err
+	}
+	if c.Admin.SessionTTLSeconds < 300 || c.Admin.SessionTTLSeconds > 30*24*60*60 {
+		return errors.New("admin.session_ttl_seconds must be between 300 and 2592000")
+	}
+	if c.Admin.IdleTimeoutSeconds < 60 || c.Admin.IdleTimeoutSeconds > c.Admin.SessionTTLSeconds {
+		return errors.New("admin.idle_timeout_seconds must be between 60 and admin.session_ttl_seconds")
+	}
+	if c.Admin.AuditRetentionDays < 1 || c.Admin.AuditRetentionDays > 3650 {
+		return errors.New("admin.audit_retention_days must be between 1 and 3650")
+	}
+	if c.Admin.AuditMaxEvents < 100 || c.Admin.AuditMaxEvents > 1_000_000 {
+		return errors.New("admin.audit_max_events must be between 100 and 1000000")
+	}
+	if len(c.Admin.SecurityStorePath) > 4096 || strings.ContainsAny(c.Admin.SecurityStorePath, "\r\n\x00") {
+		return errors.New("admin.security_store_path is invalid or too long")
+	}
+	switch c.Admin.SecurityStoreBackend {
+	case "", "bbolt":
+		if strings.TrimSpace(c.Admin.SecurityStoreURL) != "" {
+			return errors.New("admin.security_store_url must be empty for the bbolt security store backend")
+		}
+	case "redis", "postgres":
+		if strings.TrimSpace(c.Admin.SecurityStoreURL) == "" {
+			return errors.New("admin.security_store_url is required for the redis/postgres security store backend")
+		}
+		if len(c.Admin.SecurityStoreURL) > 2048 || strings.ContainsAny(c.Admin.SecurityStoreURL, "\r\n\x00") {
+			return errors.New("admin.security_store_url is invalid or too long")
+		}
+	default:
+		return errors.New("admin.security_store_backend must be bbolt, redis or postgres")
+	}
+	if err := c.Admin.OIDC.Validate(); err != nil {
+		return err
+	}
+	if err := c.validateVideo(); err != nil {
+		return err
 	}
 	if strings.TrimSpace(c.Listen) == "" {
 		return errors.New("listen is required")
