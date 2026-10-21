@@ -109,7 +109,7 @@ var bodyCopyAllow = map[string]bool{
 	"NR": true, "LIVE": true, "NexaRoute": true,
 	"OpenAI · /v1/chat/completions": true, "Anthropic · /v1/messages": true,
 	"nexaroute audit verify": true, "nexaroute policy": true,
-	"ready_mesh": true, "ready_queue": true, "adaptive": true,
+	"ready_mesh": true, "ready_queue": true,
 	"no_training": true,
 	"Bearer":      true, "x-api-key": true, "x-goog-api-key": true, "api-key": true,
 }

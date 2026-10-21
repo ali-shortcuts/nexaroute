@@ -103,3 +103,40 @@ func TestSettingsControlsContract(t *testing.T) {
 		}
 	}
 }
+
+// TestStrategySelectOffersOnlyImplementedStrategies is the UI-side
+// regression test for issue #610: the Settings → Routing strategy select
+// offered "adaptive", which was never implemented in the router
+// (applyStrategy has no such case; it silently fell through to the
+// default ordering) while docs and validation accepted it. The select
+// must offer exactly the strategies the router implements; a legacy or
+// unknown current value is shown as a disabled, truthfully-labeled
+// option instead of silently mapping to the wrong selection.
+func TestStrategySelectOffersOnlyImplementedStrategies(t *testing.T) {
+	app, err := webFS.ReadFile("web/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	js := string(app)
+
+	start := strings.Index(js, "function settingsRoutingCards(")
+	if start < 0 {
+		t.Fatal("settingsRoutingCards not found")
+	}
+	end := strings.Index(js[start:], "function settingsSecurityCards(")
+	if end < 0 {
+		t.Fatal("settingsRoutingCards end not found")
+	}
+	fn := js[start : start+end]
+
+	if strings.Contains(fn, ">adaptive<") {
+		t.Error("settingsRoutingCards still offers a static \"adaptive\" option (unimplemented strategy, #610)")
+	}
+	want := "['ready_mesh', 'ready_queue']"
+	if !strings.Contains(fn, want) {
+		t.Errorf("settingsRoutingCards should offer exactly the implemented strategies %s", want)
+	}
+	if !strings.Contains(fn, "set_strategy_unsupported") {
+		t.Error("settingsRoutingCards should label a legacy/unknown current strategy as unsupported (#610)")
+	}
+}
