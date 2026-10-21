@@ -599,7 +599,7 @@ func sanitizeAcceptanceURL(raw string) string {
 
 func writeProviderAcceptReport(path string, report providerAcceptReport) error {
 	if dir := filepath.Dir(path); dir != "" && dir != "." {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return err
 		}
 	}

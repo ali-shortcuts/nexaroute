@@ -354,14 +354,13 @@ func TestPolicyRollbackAuditGuards(t *testing.T) {
 	// application refuses instead of writing a dangling reference.
 	ghost := filepath.Join(t.TempDir(), "ghost.jsonl")
 	rec := policyAuditRecord{Timestamp: "2026-10-16T00:00:00Z", Action: "promote", FromPolicy: "ghost-policy", ToPolicy: "latency-first"}
-	raw, _ := json.Marshal(rec)
 	// The digest check must pass: compute the current config digest.
 	sha, err := fileSHA256(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	rec.ConfigSHA256After = sha
-	raw, _ = json.Marshal(rec)
+	raw, _ := json.Marshal(rec)
 	if err := os.WriteFile(ghost, append(raw, '\n'), 0600); err != nil {
 		t.Fatal(err)
 	}

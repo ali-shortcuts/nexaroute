@@ -38,12 +38,6 @@ const maxTelemetryDeployments = 4096
 // restart.
 const telemetryFlushInterval = time.Minute
 
-type telemetrySample struct {
-	success   bool
-	latencyMS float64
-	ttftMS    float64
-}
-
 type telemetryBucket struct {
 	deploymentID string
 	providerID   string

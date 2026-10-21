@@ -187,7 +187,6 @@ func (r *Renderer) renderScene(ctx context.Context, plan video.Plan, scene video
 		}
 	}
 	if strings.TrimSpace(scene.Caption) != "" {
-		textIdx++
 		path := filepath.Join(sceneDir, "caption.txt")
 		if err := os.WriteFile(path, []byte(scene.Caption), 0o600); err != nil {
 			return err

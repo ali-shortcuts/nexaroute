@@ -3,10 +3,8 @@ package httpapi
 import (
 	"context"
 	"net/http"
-	"strings"
 	"time"
 
-	"github.com/ali-shortcuts/nexaroute/internal/config"
 	"github.com/ali-shortcuts/nexaroute/internal/pricing"
 )
 
@@ -128,29 +126,4 @@ func (s *Server) budgetRelease(r *http.Request) {
 func (s *Server) recordCost(snap *configSnapshot, deploymentID string, input, output, cacheRead, cacheWrite int64, inputIncludesCache bool) (float64, string) {
 	entry, version := snap.book.ResolveFor(snap.cfg, deploymentID, time.Now())
 	return pricing.Cost(entry, input, output, cacheRead, cacheWrite, inputIncludesCache), version
-}
-
-// budgetModelServed reports whether any enabled deployment serves
-// the model (keeps budget admission from inventing holds for
-// requests routing will reject anyway).
-func budgetModelServed(cfg config.Config, model string) bool {
-	for _, p := range cfg.Providers {
-		if !p.Enabled {
-			continue
-		}
-		for _, m := range p.Models {
-			if !m.Enabled {
-				continue
-			}
-			if m.ID == model || m.Model == model || strings.TrimSpace(model) == "" {
-				return true
-			}
-			for _, a := range m.Aliases {
-				if a == model {
-					return true
-				}
-			}
-		}
-	}
-	return false
 }

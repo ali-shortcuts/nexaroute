@@ -326,16 +326,3 @@ func TestProviderConformanceMatrix(t *testing.T) {
 		}
 	}
 }
-
-func conformanceCfg(baseURL, providerType string) config.Config {
-	cfg := config.Default()
-	p := config.ProviderConfig{
-		ID: "cf", Name: "Conformance", Type: providerType, BaseURL: baseURL,
-		APIKey: "k", Enabled: true, MaxConcurrency: 8,
-		Models: []config.ModelConfig{{ID: "m", Model: "conf-model", Enabled: true, Weight: 1,
-			Capabilities: config.Capabilities{Streaming: true, Tools: true, Vision: true}}},
-	}
-	p.ApplyDefaults()
-	cfg.Providers = []config.ProviderConfig{p}
-	return cfg
-}

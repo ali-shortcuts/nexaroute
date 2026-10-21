@@ -8,15 +8,6 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/core"
 )
 
-func mustJSON(t *testing.T, v any) []byte {
-	t.Helper()
-	b, err := json.Marshal(v)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return b
-}
-
 func decodeMessages(t *testing.T, raw json.RawMessage) []map[string]any {
 	t.Helper()
 	var blocks []map[string]any

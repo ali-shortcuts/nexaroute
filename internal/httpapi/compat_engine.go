@@ -10,7 +10,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/ali-shortcuts/nexaroute/internal/compat"
 	"github.com/ali-shortcuts/nexaroute/internal/config"
@@ -19,7 +18,6 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/protocol/canonical"
 	"github.com/ali-shortcuts/nexaroute/internal/providers"
 	"github.com/ali-shortcuts/nexaroute/internal/router"
-	"github.com/ali-shortcuts/nexaroute/internal/translate"
 )
 
 // This file wires the Universal Compatibility Engine into the data plane:
@@ -438,16 +436,6 @@ func applyRepairToCanonical(canReq *canonical.Request, plan compat.RepairPlan) {
 		}
 	}
 }
-
-// canonicalFromOpenAIRequest rebuilds the canonical request for repair
-// bookkeeping on the OpenAI ingress without re-decoding overhead.
-func canonicalFromOpenAIRequest(in core.OpenAIRequest) canonical.Request {
-	return canonical.DecodeOpenAIChatRequest(in, in.Model)
-}
-
-var _ = translate.NameMap{}
-var _ = canonical.StopEndTurn
-var _ = time.Now
 
 // maybeRepairUpstream inspects a 4xx upstream response on the legacy data
 // path; when the classifier identifies a repairable capability failure and

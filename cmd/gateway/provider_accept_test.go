@@ -14,6 +14,21 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/config"
 )
 
+func TestProviderAcceptReportDirectoryIsPrivate(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "nested", "reports")
+	path := filepath.Join(dir, "report.json")
+	if err := writeProviderAcceptReport(path, providerAcceptReport{}); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm()&0o077 != 0 {
+		t.Fatalf("report directory mode=%o, want no group/other access (0700)", info.Mode().Perm())
+	}
+}
+
 func fakeOpenAIUpstream(t *testing.T, secret string, discoveryStatus int, probeStatus int) (*httptest.Server, *atomic.Int64, *atomic.Int64) {
 	t.Helper()
 	var discoveryCalls, probeCalls atomic.Int64

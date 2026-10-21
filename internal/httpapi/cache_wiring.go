@@ -148,15 +148,8 @@ func (s *Server) proxyOpenAINativeJSON(w http.ResponseWriter, r *http.Request, r
 	return inputTokens, outputTokens, err
 }
 
-// extractOpenAIUsage pulls prompt/completion token counts from a complete
-// OpenAI Chat Completions response body.
-func extractOpenAIUsage(b []byte) (int, int, bool) {
-	p, c, _, ok := extractOpenAIUsageFull(b)
-	return p, c, ok
-}
-
-// extractOpenAIUsageFull additionally returns the cached-token
-// share of the prompt (prompt_tokens_details.cached_tokens).
+// extractOpenAIUsageFull returns prompt/completion token counts and the
+// cached-token share of the prompt (prompt_tokens_details.cached_tokens).
 func extractOpenAIUsageFull(b []byte) (int, int, int, bool) {
 	var env struct {
 		Usage *struct {
@@ -181,16 +174,9 @@ func extractOpenAIUsageFull(b []byte) (int, int, int, bool) {
 	return p, c, cached, true
 }
 
-// extractAnthropicUsage pulls input/output token counts from a complete
-// Anthropic Messages response body.
-func extractAnthropicUsage(b []byte) (int, int, bool) {
-	p, c, _, _, ok := extractAnthropicUsageFull(b)
-	return p, c, ok
-}
-
-// extractAnthropicUsageFull additionally returns the cache
-// creation/read token counts (separate from input_tokens in the
-// Anthropic convention).
+// extractAnthropicUsageFull returns input/output token counts and the cache
+// creation/read token counts (separate from input_tokens in the Anthropic
+// convention).
 func extractAnthropicUsageFull(b []byte) (int, int, int, int, bool) {
 	var env struct {
 		Usage *struct {

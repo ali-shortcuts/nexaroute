@@ -33,7 +33,6 @@ var (
 	bucketSessions = []byte("sessions-v1")
 	bucketAudit    = []byte("audit-v1")
 	bucketMeta     = []byte("meta-v1")
-	keyAuditSeq    = []byte("audit-sequence")
 	keyChainHead   = []byte("audit-chain-head")
 	keyChainAnchor = []byte("audit-chain-anchor")
 )

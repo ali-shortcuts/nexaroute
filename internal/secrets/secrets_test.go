@@ -89,7 +89,7 @@ func TestKeySourcesAndPermissions(t *testing.T) {
 	if e = os.WriteFile(path, make([]byte, 32), 0600); e != nil {
 		t.Fatal(e)
 	}
-	k, _, e = Key("unused")
+	_, _, e = Key("unused")
 	if e != nil {
 		t.Fatal(e)
 	}

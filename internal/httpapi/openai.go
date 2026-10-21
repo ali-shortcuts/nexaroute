@@ -223,7 +223,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 		if _, ineligible := s.capabilityIneligible(r.Header.Get("x-request-id"), c.Deployment.ID, profile); ineligible {
 			continue
 		}
-		fresh, a, ok := s.currentRouteCandidate(c.Deployment.ID, reqEligible)
+		fresh, _, ok := s.currentRouteCandidate(c.Deployment.ID, reqEligible)
 		if !ok {
 			// Noisy per-request skip log removed; production logs carry only
 			// lifecycle transitions (request_failover/route_changed/...).
@@ -239,6 +239,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 			}
 			continue
 		}
+		var a providers.Adapter
 		var nm *translate.NameMap
 		c, a, nm = primary.c, primary.a, primary.nm
 		payload := primary.payload
@@ -252,7 +253,6 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 		}
 		s.autopilotNoteDispatched(autopilotRequestKeyFromContext(r.Context(), r.Header.Get("x-request-id")))
 		s.emitRouteAttempt(r.Header.Get("x-request-id"), "openai", in.Model, attemptIndex+1, c, attemptKind)
-		start := time.Now()
 		out, winner, hedgeLaunched := s.doAttemptWithHedge(routeCtx, r.Header.Get("x-request-id"), cfg, candidates, i, attempts, max, primary,
 			func(idx int) (hedgeAttemptBundle, bool) {
 				return s.buildOpenAIAttempt(candidates[idx], reqEligible, raw, in)
@@ -275,7 +275,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 			toolDefs = winner.toolDefs
 		}
 		resp, e := out.resp, out.err
-		start = out.start
+		start := out.start
 		if e == nil && resp.StatusCode >= 400 && resp.StatusCode < 500 {
 			// Bounded deterministic repair on classified capability
 			// rejections; never marks the deployment unhealthy.

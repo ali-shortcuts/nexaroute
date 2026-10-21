@@ -462,7 +462,6 @@ type anthropicEmitter struct {
 	model      string
 	messageID  string
 	writeErr   error
-	started    bool
 	blocks     map[int]int // upstream tool index -> anthropic content block index
 	nextIndex  int
 	textOpen   bool

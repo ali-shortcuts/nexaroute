@@ -37,7 +37,3 @@ func (t traceContext) Traceparent() string { return "00-" + t.TraceID + "-" + t.
 func withTrace(ctx context.Context, t traceContext) context.Context {
 	return context.WithValue(ctx, traceContextKey{}, t)
 }
-func traceFromContext(ctx context.Context) (traceContext, bool) {
-	t, ok := ctx.Value(traceContextKey{}).(traceContext)
-	return t, ok
-}

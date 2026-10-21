@@ -1,7 +1,6 @@
 package httpapi
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -15,7 +14,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/ali-shortcuts/nexaroute/internal/config"
 	"github.com/ali-shortcuts/nexaroute/internal/feature"
 	"github.com/ali-shortcuts/nexaroute/internal/providers"
 	"github.com/ali-shortcuts/nexaroute/internal/router"
@@ -141,7 +139,6 @@ func policyForStatus(code int) upstreamFailurePolicy {
 func errorTypeForStatus(code int) string { return policyForStatus(code).ErrorType }
 func retryable(code int) bool            { return policyForStatus(code).Failover }
 func failoverEligible(code int) bool     { return policyForStatus(code).Failover }
-func hardCooldownStatus(code int) bool   { return policyForStatus(code).HardCooldown }
 
 func retryAfterDuration(h http.Header, max time.Duration) time.Duration {
 	fallback := 30 * time.Second
@@ -210,17 +207,6 @@ func retryAfterResponseValue(h http.Header, max time.Duration) string {
 	}
 	seconds := int64((d + time.Second - 1) / time.Second)
 	return strconv.FormatInt(seconds, 10)
-}
-
-func redactProviderBody(p config.ProviderConfig, b []byte) []byte {
-	out := append([]byte(nil), b...)
-	for _, key := range p.ResolvedCredentials() {
-		if key == "" {
-			continue
-		}
-		out = bytes.ReplaceAll(out, []byte(key), []byte("[REDACTED]"))
-	}
-	return out
 }
 
 func upstreamError(status int, b []byte) string {

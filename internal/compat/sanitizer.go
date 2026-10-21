@@ -100,9 +100,7 @@ func sanitizeMap(payload map[string]any, contract Contract, dialect DialectProfi
 		}
 	}
 	if isGeminiPayload(payload) {
-		if changed := sanitizeGeminiGenerationConfig(payload, contract, req, &res); changed {
-			// fall through to changed check below
-		}
+		sanitizeGeminiGenerationConfig(payload, contract, req, &res)
 		// Gemini token-budget alias: a Gemini-shaped payload that still
 		// carries an OpenAI-style top-level budget moves it into
 		// generationConfig.maxOutputTokens (the only Gemini knob) —

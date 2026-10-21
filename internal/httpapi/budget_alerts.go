@@ -56,10 +56,6 @@ type BudgetAlertPayload struct {
 	Timestamp        string  `json:"timestamp"`
 }
 
-// budgetAlertNamespace is the control-plane namespace used when the
-// gateway wires its durable control-plane store into the alerter.
-const budgetAlertNamespace = "budgets/alerts"
-
 const (
 	budgetAlertStateVersion = 1
 	// maxBudgetAlertFired bounds the in-memory + persisted fired-set so

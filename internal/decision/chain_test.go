@@ -623,11 +623,10 @@ func (d *deadlineConsumingProvider) Decide(ctx context.Context, req DecisionRequ
 }
 
 type deadlineInspectProvider struct {
-	id           string
-	result       DecisionResult
-	delay        time.Duration
-	deadlineCh   chan time.Duration
-	capabilities Capabilities
+	id         string
+	result     DecisionResult
+	delay      time.Duration
+	deadlineCh chan time.Duration
 }
 
 func (d *deadlineInspectProvider) ID() string { return d.id }
@@ -1014,8 +1013,7 @@ func BenchmarkChain_EightSteps(b *testing.B) {
 		abstainProvider("p5"), abstainProvider("p6"), abstainProvider("p7"), selectProvider("p8", "E"),
 	}
 	// register all
-	reg := NewRegistry()
-	reg = &Registry{providers: map[string]DecisionProvider{}}
+	reg := &Registry{providers: map[string]DecisionProvider{}}
 	for i, p := range providers {
 		id := []string{"p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8"}[i]
 		// ensure IDs match

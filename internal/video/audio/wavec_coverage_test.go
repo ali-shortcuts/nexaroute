@@ -26,16 +26,6 @@ func fakePiper(t *testing.T, name, body string) string {
 	return p
 }
 
-func writeValidWAVBytes(path string) {
-	hdr := []byte("RIFF")
-	hdr = append(hdr, 0x24, 0x00, 0x00, 0x00) // 36
-	hdr = append(hdr, []byte("WAVE")...)
-	hdr = append(hdr, make([]byte, 32)...)
-	if err := os.WriteFile(path, hdr, 0o600); err != nil {
-		panic(err)
-	}
-}
-
 func piperInputs(t *testing.T, dir string) (text, model string) {
 	t.Helper()
 	text = filepath.Join(dir, "text.txt")

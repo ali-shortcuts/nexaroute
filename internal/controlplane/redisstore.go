@@ -19,9 +19,6 @@ type RedisHashClient interface {
 // redisSnapshotPrefix namespaces every control-plane snapshot key.
 const redisSnapshotPrefix = "nexaroute:control:snapshot:"
 
-const redisMaxUint64Decimal = "18446744073709551615"
-const redisMaxInt64Decimal = "9223372036854775807"
-
 // RedisStore implements Store on Redis. Each namespace is one Redis hash
 // (revision, schema, payload, updated_at). Writes and deletes are
 // compare-and-set Lua scripts, which Redis executes atomically. Revision
