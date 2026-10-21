@@ -99,15 +99,14 @@ type Server struct {
 	autopilotConfig config.AutopilotConfig
 	autopilotLeases sync.Map // internal request key -> autopilotLeaseEntry
 	// Phase C — task classification metrics (bounded cardinality)
-	taskMu             sync.Mutex
-	taskClassCounts    map[string]uint64 // key: task_type|complexity
-	taskAnalysisTotal  atomic.Uint64
-	taskAnalysisErrors atomic.Uint64
-	videoHandler       http.Handler
-	securityDB         securitystore.Backend
-	securityErr        error
-	oidc               *oidcAuthenticator
-	oidcErr            error
+	taskMu            sync.Mutex
+	taskClassCounts   map[string]uint64 // key: task_type|complexity
+	taskAnalysisTotal atomic.Uint64
+	videoHandler      http.Handler
+	securityDB        securitystore.Backend
+	securityErr       error
+	oidc              *oidcAuthenticator
+	oidcErr           error
 }
 
 // adminBucket is a compact token bucket keyed by remote address. Capacity 90
@@ -864,20 +863,6 @@ func (s *Server) mutateConfig(fn func(*config.Config) error) (config.Config, err
 
 func (s *Server) currentConfigRevision() uint64 { return s.configRevision.Load() }
 
-// routeSnapshot returns the request-path view of the runtime config. The
-// map/slice-bearing fields (Providers) are stripped: unlike currentConfig()
-// this runs on the hot path of every data-plane request, so instead of a
-// deep copy the caller gets a value copy whose only shared state is the
-// scalar-only Routing struct. A handler that needs Providers must use
-// currentConfig().
-func (s *Server) routeSnapshot(req router.Requirement) (config.Config, []router.Scored) {
-	s.runtimeMu.RLock()
-	defer s.runtimeMu.RUnlock()
-	out := s.cfg
-	out.Providers = nil
-	return out, s.rt.Candidates(req)
-}
-
 // resolveVirtualEndpoint looks up a virtual endpoint by public model.
 // Returns resolved route, true if virtual, error if disabled.
 func (s *Server) resolveVirtualEndpoint(model string) (route.ResolvedRoute, bool, error) {
@@ -1446,7 +1431,10 @@ func isStateChanging(method string) bool {
 }
 
 func requestIsSecure(r *http.Request) bool {
-	return r.TLS != nil || strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")), "https")
+	// Derive this from the gateway's own connection state only. A forwarded
+	// header is caller-controlled and must not be able to turn off the Secure
+	// attribute on an auth cookie served over plain HTTP.
+	return r.TLS != nil
 }
 
 func sameOrigin(r *http.Request) bool {

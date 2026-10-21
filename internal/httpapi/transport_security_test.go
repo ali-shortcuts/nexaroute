@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ali-shortcuts/nexaroute/internal/config"
 )
@@ -74,6 +75,41 @@ func TestAdminCSRFTokenCookieSecureOnTLS(t *testing.T) {
 	cookies := rr.Result().Cookies()
 	if len(cookies) != 1 || !cookies[0].Secure || !cookies[0].HttpOnly || cookies[0].SameSite != http.SameSiteStrictMode {
 		t.Fatalf("TLS cookie attributes not secure: %+v", cookies)
+	}
+}
+
+// A client-supplied forwarding header must not be able to make a plain-HTTP
+// response look secure. Secure is derived from the gateway's own TLS state.
+func TestAdminCookiesIgnoreSpoofedForwardedProto(t *testing.T) {
+	cfg := config.Default()
+	cfg.Admin.APIKey = "test-admin-key"
+	s := testGateway(t, cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "http://gateway/admin/api/csrf-token", nil)
+	req.RemoteAddr = "127.0.0.1:32100"
+	req.Header.Set("x-admin-key", "test-admin-key")
+	req.Header.Set("X-Forwarded-Proto", "https")
+	rr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("csrf bootstrap status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	for _, cookie := range rr.Result().Cookies() {
+		if cookie.Secure {
+			t.Fatalf("spoofed X-Forwarded-Proto made cookie %q Secure over plain HTTP", cookie.Name)
+		}
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "http://gateway/admin/", nil)
+	request.Header.Set("X-Forwarded-Proto", "https")
+	response := httptest.NewRecorder()
+	setAdminSessionCookie(response, request, "session-token", time.Now().Add(time.Hour))
+	setOIDCFlowCookie(response, request, "binding-token")
+	clearAdminSessionCookie(response, request)
+	for _, cookie := range response.Result().Cookies() {
+		if cookie.Secure {
+			t.Fatalf("spoofed X-Forwarded-Proto made cookie %q Secure over plain HTTP", cookie.Name)
+		}
 	}
 }
 

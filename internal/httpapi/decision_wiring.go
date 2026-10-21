@@ -108,36 +108,6 @@ func poolInfoForDeployment(deploymentID string, resolved *route.ResolvedRoute) (
 			return poolID, ordinal
 		}
 	}
-	// Fallback: if deployment in AllAllowed but not in specific sets (e.g., all mode pools), assign based on OrderedPoolIDs order search
-	if resolved.OrderedPoolIDs != nil {
-		for ord := range resolved.OrderedPoolIDs {
-			// For pools not in FallbackAllowed (e.g., primary all), we already handled primary.
-			// For remaining, if pid matches primary, skip (already checked)
-			if ord == 0 {
-				continue
-			}
-			// If we have no set info, we can't determine, but we can still return ordinal if deployment is in AllAllowed
-			// To avoid mis-attribution, only return if AllAllowed contains it and we have no better info
-			if resolved.AllAllowed != nil {
-				if _, ok := resolved.AllAllowed[deploymentID]; ok {
-					// Return first matching ordinal where deployment could belong — use ordinal as fallback
-					// This is best-effort for all-mode fallback pools
-					// We will return the earliest ordinal where it could belong, but we already checked primary.
-					// For simplicity, return the pool ID if we can guess, else ordinal
-					// We don't have expanded sets here, so we return poolID with ordinal
-					// To keep deterministic, we return the poolID at ordinal
-					// But we need to know which pool actually contains it — without expanded, we approximate
-					// For correctness, we will search OrderedPoolIDs and if deployment is in AllAllowed, we return first fallback that could contain it.
-					// Since we already iterated FallbackAllowed, if not found, it might be in an all-mode fallback pool whose expanded set we don't have here.
-					// In that case, we return the first fallback ordinal where mode is all? We don't have mode info here.
-					// As fallback, return poolID at ordinal if ordinal < len(OrderedPoolIDs)
-					// Actually we should just return empty and ordinal 0 to avoid misclassifying, but for policy enforcement we need correct ordinal.
-					// For Phase E, we rely on resolver's AllFilteredCandidates preserving order, and pool ordinal is derived from OrderedPoolIDs position in filtered list?
-					// Simpler: if not found, return primary pool ID and 0 as fallback — conservative.
-				}
-			}
-		}
-	}
 	// Not found in any pool set — return primary as fallback for non-virtual? For virtual, this should not happen.
 	return resolved.PrimaryPoolID, 0
 }

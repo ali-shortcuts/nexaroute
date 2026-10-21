@@ -267,7 +267,7 @@ func ValidateRawArguments(args string, meta ValidationMeta) error {
 		}
 	}
 	// Top-level must be object
-	m, ok := generic.(map[string]any)
+	_, ok := generic.(map[string]any)
 	if !ok {
 		actual := fmt.Sprintf("%T", generic)
 		if generic == nil {
@@ -277,21 +277,6 @@ func ValidateRawArguments(args string, meta ValidationMeta) error {
 			Tool: "", Field: "", ExpectedType: "object", ActualType: actual,
 			Stage: meta.Stage, Protocol: meta.Protocol, Streaming: meta.Streaming, Provider: meta.Provider,
 			Message: "top-level arguments must be an object",
-		}
-	}
-
-	// Detect dangerous wrapper patterns that could be mistaken for string
-	// e.g. {"value":"pwd"} when schema expects string directly, or {"_raw":...}
-	// For raw validation without schema, we only flag obviously wrong shapes:
-	// - object with single key "value" where value is string but expected to be direct string field
-	// - object containing only unknown wrapper
-	if len(m) == 1 {
-		if _, hasValue := m["value"]; hasValue {
-			// This could be a mis-unwrapped string wrapper
-			// We don't fail closed here without schema, but we can log diagnostic
-			// For strictness, if the object has only "value" and no other keys,
-			// and the caller expects string fields like "command", it will be caught
-			// by schema validation later. Raw validation passes but we note.
 		}
 	}
 

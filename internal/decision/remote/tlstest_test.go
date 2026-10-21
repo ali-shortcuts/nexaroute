@@ -28,18 +28,6 @@ type testTLSServer struct {
 	sni  atomic.Value // string: last ClientHello ServerName
 }
 
-func (s *testTLSServer) port() int {
-	_, p, err := net.SplitHostPort(s.addr)
-	if err != nil {
-		return 0
-	}
-	n := 0
-	for _, c := range p {
-		n = n*10 + int(c-'0')
-	}
-	return n
-}
-
 func (s *testTLSServer) sniSeen() string {
 	v, _ := s.sni.Load().(string)
 	return v

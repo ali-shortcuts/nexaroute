@@ -95,26 +95,6 @@ type Explanation struct {
 	DecisionsTruncated        bool                `json:"decisions_truncated"`
 }
 
-func decisionFromScored(s Scored) CandidateDecision {
-	return CandidateDecision{
-		DeploymentID:     s.Deployment.ID,
-		ProviderID:       s.Deployment.ProviderID,
-		Model:            s.Deployment.Model,
-		Priority:         s.Deployment.Priority,
-		Weight:           s.Deployment.Weight,
-		TrainsOnData:     s.Deployment.TrainsOnData,
-		Capabilities:     s.Deployment.Capabilities,
-		Included:         true,
-		Score:            s.Score,
-		HealthStatus:     string(s.Health.Status),
-		EWMALatencyMS:    s.Health.EWMALatencyMS,
-		EWMAFailureRate:  s.Health.EWMAFailureRate,
-		CapacityPressure: s.CapacityPressure,
-		EstimatedCostUSD: s.EstimatedCostUSD,
-		PriceKnown:       s.PriceKnown,
-	}
-}
-
 // Explain evaluates the requirement against the current routing state and
 // returns both the ordered candidates the request handler would attempt and
 // the per-deployment exclusion reasons for everything else. It reads shared

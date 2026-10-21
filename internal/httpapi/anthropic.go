@@ -194,7 +194,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		if _, ineligible := s.capabilityIneligible(r.Header.Get("x-request-id"), c.Deployment.ID, profile); ineligible {
 			continue
 		}
-		fresh, a, ok := s.currentRouteCandidate(c.Deployment.ID, reqEligible)
+		fresh, _, ok := s.currentRouteCandidate(c.Deployment.ID, reqEligible)
 		if !ok {
 			// Noisy per-request skip log removed; production logs carry only
 			// lifecycle transitions (request_failover/route_changed/...).
@@ -210,6 +210,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 			}
 			continue
 		}
+		var a providers.Adapter
 		var nm *translate.NameMap
 		var streamOptionsInjected bool
 		var payload []byte
@@ -224,7 +225,6 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		}
 		s.autopilotNoteDispatched(autopilotRequestKeyFromContext(r.Context(), r.Header.Get("x-request-id")))
 		s.emitRouteAttempt(r.Header.Get("x-request-id"), "anthropic", in.Model, attemptIndex+1, c, attemptKind)
-		start := time.Now()
 		out, winner, hedgeLaunched := s.doAttemptWithHedge(routeCtx, r.Header.Get("x-request-id"), cfg, candidates, i, attempts, max, primary,
 			func(idx int) (hedgeAttemptBundle, bool) {
 				return s.buildAnthropicAttempt(candidates[idx], reqEligible, raw, in)
@@ -246,7 +246,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 			toolDefs = winner.toolDefs
 		}
 		resp, e := out.resp, out.err
-		start = out.start
+		start := out.start
 		if e == nil && resp.StatusCode >= 400 && resp.StatusCode < 500 {
 			// Bounded deterministic repair: a classified capability rejection
 			// (e.g. "temperature is not supported") retries once with an
@@ -651,23 +651,6 @@ func copyUpstreamResponseHeaders(w http.ResponseWriter, resp *http.Response, isS
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("X-Accel-Buffering", "no")
 	}
-}
-
-func proxyValidatedJSONResponse(w http.ResponseWriter, resp *http.Response, validate jsonEnvelopeValidator) error {
-	defer resp.Body.Close()
-	b, err := readJSONLimited(resp.Body)
-	if err != nil {
-		return err
-	}
-	if validate != nil {
-		if err := validate(b); err != nil {
-			return err
-		}
-	}
-	copyUpstreamResponseHeaders(w, resp, false)
-	w.WriteHeader(resp.StatusCode)
-	_, err = w.Write(b)
-	return err
 }
 
 type nativeSSETracker struct {

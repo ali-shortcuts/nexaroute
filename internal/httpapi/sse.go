@@ -29,7 +29,6 @@ type sseReader struct {
 	data       strings.Builder
 	eventBytes int
 	hasAny     bool
-	sawCR      bool
 }
 
 func newSSEReader(r io.Reader) *sseReader {

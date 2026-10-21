@@ -13,7 +13,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/ali-shortcuts/nexaroute/internal/config"
@@ -31,11 +30,6 @@ type clientBucket struct {
 	last       time.Time
 	capacity   float64
 	generation uint64
-}
-
-type clientAuthState struct {
-	mu      sync.Mutex
-	buckets map[string]*clientBucket
 }
 
 type clientIdentity struct {

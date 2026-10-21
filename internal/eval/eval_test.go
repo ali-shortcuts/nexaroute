@@ -81,18 +81,6 @@ func TestExpectation_Valid(t *testing.T) {
 	}
 }
 
-func codingCase(t *testing.T, id string) Case {
-	t.Helper()
-	suite, _ := LookupSuite("coding")
-	for _, c := range suite.Cases {
-		if c.ID == id {
-			return c
-		}
-	}
-	t.Fatalf("case %q not found", id)
-	return Case{}
-}
-
 func TestDeterministicEvaluators(t *testing.T) {
 	cases := []struct {
 		name    string

@@ -349,8 +349,6 @@ func (c *fakePGConn) query(_ context.Context, query string, args []driver.NamedV
 	}
 }
 
-func socioDummy() []byte { return nil }
-
 type fakePGResult struct{ n int64 }
 
 func (r fakePGResult) LastInsertId() (int64, error) {

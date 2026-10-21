@@ -275,14 +275,8 @@ func (p *Provider) Decide(ctx context.Context, req decision.DecisionRequest) (de
 		}
 	}
 	if !origPrimaryFound && len(scored) > 0 {
-		// Fallback: if original primary not in scored (should not happen), use first by OriginalRank
-		origPrimaryID = band[0].ID
-		for _, c := range band[1:] {
-			if c.OriginalRank < band[0].OriginalRank {
-				// Actually need to find min OriginalRank
-			}
-		}
-		// Find min OriginalRank
+		// Fallback: if original primary not in scored (should not happen), use
+		// the candidate with the lowest OriginalRank.
 		minRank := band[0].OriginalRank
 		origPrimaryID = band[0].ID
 		for _, c := range band[1:] {
@@ -333,13 +327,9 @@ func (p *Provider) Decide(ctx context.Context, req decision.DecisionRequest) (de
 		}, nil
 	}
 
-	// Check min_score_delta against ORIGINAL PRIMARY, not second-best
+	// Check min_score_delta against ORIGINAL PRIMARY, not second-best.
+	// Only a positive improvement over the original primary counts.
 	if pol.MinScoreDelta > 0 {
-		delta := topCandidate.WeightedScore - origPrimaryScore
-		if delta < 0 {
-			delta = -delta
-		}
-		// Actually we want best beats original by at least delta
 		improvement := topCandidate.WeightedScore - origPrimaryScore
 		if improvement < pol.MinScoreDelta {
 			rc := []decision.ReasonCode{decision.ReasonMinDeltaNotMet, decision.ReasonPolicyScored, decision.ReasonExistingOrderPreserved}

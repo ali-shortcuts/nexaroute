@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/ali-shortcuts/nexaroute/internal/eval"
 	"github.com/ali-shortcuts/nexaroute/internal/scorecards"
@@ -179,18 +178,4 @@ func (p *evaluationPlane) persistBestEffort() {
 		p.stateWritesFailed.Add(1)
 		p.setImportError("evaluation state write failed: " + err.Error())
 	}
-}
-
-// stateModTime returns the state file modification time, used by the admin
-// surface to show freshness (zero when unset or missing).
-func (p *evaluationPlane) stateModTime() time.Time {
-	path := strings.TrimSpace(p.config().StatePath)
-	if path == "" {
-		return time.Time{}
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		return time.Time{}
-	}
-	return info.ModTime().UTC()
 }

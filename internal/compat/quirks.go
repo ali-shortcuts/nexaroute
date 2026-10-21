@@ -54,8 +54,6 @@ const (
 	DialectOpenAIResponse = "openai_responses"
 )
 
-func f64(v float64) *float64 { return &v }
-
 // Dialects returns the built-in dialect registry.
 // dialectTable is the built-in dialect registry, built once at
 // package init. It is effectively immutable: no code path mutates

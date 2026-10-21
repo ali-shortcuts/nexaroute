@@ -40,14 +40,6 @@ const (
 	StateRolledBack State = "rolled_back"
 )
 
-func (s State) valid() bool {
-	switch s {
-	case StateDraft, StateShadow, StateCanary, StatePromoted, StateRolledBack:
-		return true
-	}
-	return false
-}
-
 // PolicyRef identifies a routing policy version without exposing its
 // configuration. ID is the policy id; Version is the operator label or derived
 // fingerprint (#412).

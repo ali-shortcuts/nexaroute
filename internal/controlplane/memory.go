@@ -15,12 +15,6 @@ type MemoryStore struct {
 
 func NewMemoryStore() *MemoryStore           { return &MemoryStore{items: map[string]Snapshot{}} }
 func (s *MemoryStore) SetUnavailable(v bool) { s.mu.Lock(); s.failed = v; s.mu.Unlock() }
-func (s *MemoryStore) available() error {
-	if s.failed {
-		return ErrUnavailable
-	}
-	return nil
-}
 
 func (s *MemoryStore) Get(ctx context.Context, namespace string) (Snapshot, error) {
 	if err := ctx.Err(); err != nil {

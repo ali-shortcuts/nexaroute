@@ -469,7 +469,7 @@ func (e *Engine) processRecoveryTask(ctx context.Context, task recoveryTask) {
 		e.clearRecoveryTask(task)
 		return
 	}
-	d, a, ok := e.deployment(task.id)
+	d, _, ok := e.deployment(task.id)
 	if !ok {
 		e.clearRecoveryTask(task)
 		return
@@ -512,7 +512,7 @@ func (e *Engine) processRecoveryTask(ctx context.Context, task recoveryTask) {
 
 	// Re-resolve immediately before the probe so hot reloads never keep a stale
 	// provider/model pointer in a queued recovery task.
-	d, a, ok = e.deployment(task.id)
+	d, a, ok := e.deployment(task.id)
 	if !ok {
 		e.clearRecoveryTask(task)
 		return

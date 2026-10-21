@@ -172,10 +172,6 @@ func (e *Extractor) Extract(raw []byte, opts ExtractOptions) RequestFeatures {
 				if typ, _ := x["type"].(string); strings.EqualFold(typ, "tool_result") || strings.EqualFold(typ, "tool") {
 					hasToolResult = true
 				}
-				if _, ok := x["tool_call_id"]; ok {
-					// OpenAI tool role has tool_call_id
-					// Could be tool result
-				}
 				if _, ok := x["image_url"]; ok {
 					hasImageURL = true
 				}

@@ -81,6 +81,91 @@ jobs:
             staticcheck.json
           if-no-files-found: warn
 
+  gosec:
+    name: gosec
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.x'
+      - name: Install gosec 2.29.0
+        run: go install github.com/securego/gosec/v2/cmd/gosec@v2.29.0
+      - name: Run gosec (report only; findings never fail the audit)
+        run: |
+          set +e
+          "$(go env GOPATH)/bin/gosec" -quiet -fmt=text -out=gosec.txt ./...
+          text_status=$?
+          "$(go env GOPATH)/bin/gosec" -quiet -fmt=json -out=gosec.json ./...
+          json_status=$?
+          set -e
+          issues=$(grep -E '^[[:space:]]*Issues[[:space:]]*:' gosec.txt | awk -F: '{gsub(/[[:space:]]/,"",$2); print $2}' || true)
+          {
+            echo '## gosec'
+            echo ''
+            echo 'Report-only: findings are static-analysis signals, not confirmed bugs.'
+            echo ''
+            echo "- exit status: text=${text_status}, json=${json_status} (non-zero only means findings were present)"
+            echo "- issues reported: ${issues:-unknown}"
+            echo ''
+            echo 'See the `audit-gosec` artifact for the full text and JSON reports.'
+          } | tee gosec-summary.md >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+      - name: Upload gosec report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: audit-gosec
+          path: |
+            gosec.txt
+            gosec.json
+            gosec-summary.md
+          if-no-files-found: warn
+
+  deadcode:
+    name: deadcode
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.x'
+      - name: Install deadcode (golang.org/x/tools v0.52.0)
+        run: go install golang.org/x/tools/cmd/deadcode@v0.52.0
+      - name: Run deadcode (report only; findings never fail the audit)
+        run: |
+          set +e
+          "$(go env GOPATH)/bin/deadcode" -test ./... > deadcode.txt 2>&1
+          status=$?
+          set -e
+          findings=$(grep -c 'unreachable' deadcode.txt || true)
+          {
+            echo '## deadcode'
+            echo ''
+            echo 'Report-only: unreachable code is a cleanup signal, not a confirmed defect.'
+            echo ''
+            echo "- exit status: ${status}"
+            echo "- unreachable functions reported: ${findings}"
+            echo ''
+            echo 'See the `audit-deadcode` artifact for the full report.'
+          } | tee deadcode-summary.md >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+      - name: Upload deadcode report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: audit-deadcode
+          path: |
+            deadcode.txt
+            deadcode-summary.md
+          if-no-files-found: warn
+
   coverage:
     name: Coverage
     runs-on: ubuntu-latest

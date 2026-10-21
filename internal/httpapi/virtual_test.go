@@ -97,11 +97,10 @@ func TestVirtualEndpointUnknown(t *testing.T) {
 	cfg.RouteProfiles = []config.RouteProfileConfig{{ID: "profile1", CandidatePool: "pool1"}}
 	trueVal := true
 	cfg.VirtualEndpoints = []config.VirtualEndpointConfig{{ID: "ve1", PublicModel: "nexa-code", RouteProfile: "profile1", Enabled: &trueVal}}
-	s := testGateway(t, cfg)
-	// Unknown model not virtual and not physical should trigger no healthy deployment (since fallback disabled in testGateway? default fallback true)
-	// Use fallback false
+	// Unknown model not virtual and not physical should trigger no healthy
+	// deployment. Use fallback false.
 	cfg.Routing.FallbackOnUnknownModel = false
-	s = testGateway(t, cfg)
+	s := testGateway(t, cfg)
 	req := httptest.NewRequest("POST", "http://localhost/v1/chat/completions", strings.NewReader(`{"model":"unknown-xyz","messages":[{"role":"user","content":"hi"}]}`))
 	req.RemoteAddr = "127.0.0.1:12345"
 	req.Header.Set("Content-Type", "application/json")
