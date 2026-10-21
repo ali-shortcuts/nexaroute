@@ -353,3 +353,28 @@ func TestProviderAcceptSubcommandIsDispatched(t *testing.T) {
 		t.Fatalf("unexpected stderr: %s", stderr.String())
 	}
 }
+
+func TestProviderAcceptReportReplacesSymlinkWithoutFollowingIt(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "outside.txt")
+	if err := os.WriteFile(target, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	reportPath := filepath.Join(dir, "report.json")
+	if err := os.Symlink(target, reportPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeProviderAcceptReport(reportPath, providerAcceptReport{Mode: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	if raw, err := os.ReadFile(target); err != nil || string(raw) != "keep" {
+		t.Fatalf("symlink target was modified: %q err=%v", raw, err)
+	}
+	info, err := os.Lstat(reportPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
+		t.Fatalf("report mode=%v, want a regular 0600 file", info.Mode())
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -53,8 +54,13 @@ func (s *Local) Put(_ context.Context, a video.Asset, data []byte) (video.Asset,
 	if strings.Trim(projectID, "._-") == "" || strings.Trim(jobID, "._-") == "" {
 		return video.Asset{}, fmt.Errorf("project_id and job_id metadata are required")
 	}
-	dir := filepath.Join(s.Root, projectID, episodeID, jobID)
-	if err := os.MkdirAll(dir, 0700); err != nil {
+	for _, part := range []string{projectID, episodeID, jobID} {
+		if part == "." || part == ".." {
+			return video.Asset{}, fmt.Errorf("asset metadata contains an unsafe path segment %q", part)
+		}
+	}
+	dir, err := s.assetDirectory([]string{projectID, episodeID, jobID})
+	if err != nil {
 		return video.Asset{}, err
 	}
 	sum := sha256.Sum256(data)
@@ -95,6 +101,55 @@ func (s *Local) Put(_ context.Context, a video.Asset, data []byte) (video.Asset,
 		_ = d.Close()
 	}
 	return a, nil
+}
+
+// assetDirectory creates and returns a directory below the storage root
+// without following symlinks inside the root. Asset metadata comes from API
+// requests, so a sanitized component such as ".." or a pre-existing symlink
+// under the root must not let an otherwise valid-looking asset escape it.
+func (s *Local) assetDirectory(parts []string) (string, error) {
+	dir := s.Root
+	for _, part := range parts {
+		if part == "" {
+			continue
+		}
+		dir = filepath.Join(dir, part)
+		info, err := os.Lstat(dir)
+		switch {
+		case errors.Is(err, os.ErrNotExist):
+			if err := os.Mkdir(dir, 0700); err != nil {
+				if !errors.Is(err, os.ErrExist) {
+					return "", err
+				}
+				info, err = os.Lstat(dir)
+				if err != nil {
+					return "", err
+				}
+				if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+					return "", fmt.Errorf("asset directory %s is not a real directory", dir)
+				}
+			}
+		case err != nil:
+			return "", err
+		case info.Mode()&os.ModeSymlink != 0:
+			return "", fmt.Errorf("asset directory %s escapes storage root through a symlink", dir)
+		case !info.IsDir():
+			return "", fmt.Errorf("asset directory %s is not a directory", dir)
+		}
+	}
+	resolvedRoot, err := filepath.EvalSymlinks(s.Root)
+	if err != nil {
+		return "", err
+	}
+	resolvedDir, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return "", err
+	}
+	rel, err := filepath.Rel(resolvedRoot, resolvedDir)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return "", fmt.Errorf("asset directory %s escapes storage root", dir)
+	}
+	return dir, nil
 }
 
 func writeMetadataAtomic(path string, data []byte) error {
