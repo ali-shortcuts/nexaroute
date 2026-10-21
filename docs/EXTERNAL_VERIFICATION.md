@@ -10,6 +10,18 @@ what evidence closes the boundary. Until a procedure has been run
 and its evidence captured, the corresponding claim stays
 **UNVERIFIED** — this document does not change that status by itself.
 
+## Automated opt-in acceptance harness
+
+`nexaroute external-accept` is the executable companion to this runbook. It
+checks a configured provider and/or a configured OIDC issuer (discovery, live
+JWKS, and optionally an operator-issued ID token), requires `--confirm-live`,
+uses strict timeouts, writes a redacted machine-readable report with
+`PASS`/`FAIL`/`BLOCKED`/`NOT_RUN` per check, and has no built-in production
+endpoints. Fixture tests and the exact invocations are documented in
+`docs/reports/verification-slices/live-acceptance-harness.md`. A fixture run is
+not external verification; the OIDC browser login procedure below remains
+manual.
+
 ## 1. Real OIDC identity provider
 
 Local state: full Authorization Code + PKCE flow against an

@@ -495,7 +495,7 @@ type Redactor struct {
 	userinfo *regexp.Regexp
 }
 
-var authHeaderPattern = regexp.MustCompile(`(?i)\b(bearer|x-api-key|x-goog-api-key|api-key|authorization)\b\s*[:=]?\s*[A-Za-z0-9._~+/=\-]{4,}`)
+var authHeaderPattern = regexp.MustCompile(`(?i)\b(bearer|x-api-key|x-goog-api-key|api-key|authorization)\b\s*[:=]?\s*(?:(?:bearer|basic|digest|negotiate|token)\s+)?[A-Za-z0-9._~+/=\-]{4,}`)
 var urlUserInfoPattern = regexp.MustCompile(`(?i)([a-z][a-z0-9+.-]*://)[^/@\s]+@`)
 
 // NewRedactor builds a redactor from all non-empty secret values. Secrets are

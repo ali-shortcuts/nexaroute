@@ -290,6 +290,22 @@ func TestCanaryRedactsSecretsFromErrorsAndSummary(t *testing.T) {
 	}
 }
 
+func TestSecretRedactorCoversAuthorizationSchemeTokens(t *testing.T) {
+	cases := []string{
+		"Authorization: Bearer opaque-token-1234",
+		"authorization=Basic dXNlcjpwYXNz",
+		"Proxy-Authorization: bearer another-token",
+	}
+	for _, input := range cases {
+		got := NewRedactor(nil).Redact(input)
+		for _, leaked := range []string{"opaque-token-1234", "dXNlcjpwYXNz", "another-token"} {
+			if strings.Contains(got, leaked) {
+				t.Fatalf("redactor leaked %q from %q: %q", leaked, input, got)
+			}
+		}
+	}
+}
+
 func TestSecretRedactorCoversHeaderAndProxyCredentials(t *testing.T) {
 	const headerSecret = "header-token-DO-NOT-LEAK"
 	const proxySecret = "proxy-password-DO-NOT-LEAK"
