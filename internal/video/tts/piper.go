@@ -102,7 +102,7 @@ func (p *Piper) Synthesize(ctx context.Context, text, outputPath string) error {
 		return errors.New("could not close Piper input text")
 	}
 
-	cmd := exec.CommandContext(ctx, p.Binary, "-m", p.ModelPath, "-f", outputPath, "--input-file", inputPath)
+	cmd := exec.CommandContext(ctx, p.Binary, "-m", p.ModelPath, "-f", outputPath, "--input-file", inputPath) // #nosec G204 -- p.Binary is the absolute path resolved by exec.LookPath in NewPiper from operator configuration and p.ModelPath is validated as an existing regular file there; narration text is passed via a private temp file, never in argv, and no shell is invoked.
 	stderr := &cappedBuffer{}
 	cmd.Stderr = stderr
 	cmd.Stdout = io.Discard
