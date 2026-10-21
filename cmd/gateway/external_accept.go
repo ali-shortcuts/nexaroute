@@ -322,7 +322,10 @@ func resolveAcceptanceOIDC(cfg config.Config, haveConfig, useConfig bool, issuer
 }
 
 func acceptanceRedactionValues(providers []config.ProviderConfig, oidcCfg config.OIDCConfig, oidcIDTokenEnv string) []string {
-	out := make([]string, 0, len(providers)*4+2)
+	// Capacity hint only: keep it free of multiplicative size arithmetic
+	// (CodeQL go/allocation-size-overflow); append grows the slice for the
+	// per-provider secrets and the two trailing values.
+	out := make([]string, 0, len(providers))
 	for _, p := range providers {
 		out = append(out, acceptanceSecrets(p)...)
 	}
