@@ -1,452 +1,278 @@
 # Quality Audit Findings - Issue #593
 
-Date: 2026-10-21
-Base: `7a815a4ba5a951a1be5e3cd591e58e3ca7125e00`
-Implementation checkpoint: `6144fc028da766ed5cf3d50dc21a1542356178aa`
+- Audit timestamp: **2026-10-21T11:33:58Z**
+- Audited `main`: `bfa93b69cd9fc5041b2ddb822a49c03a32eeb13a`
+- Work branch: `opencode/issue593-20261021110358`
+- Checkpoint commit: `41169e9a4c880dd25894b3ff39fe08abbb49cc42` (plus report/final lint
+  fixes in the follow-up commit on the same branch)
+- Release `v0.23.0` is unchanged.
+
+This report is authoritative for the current checkpoint. Earlier PR #595/#596
+findings are summarized under "Already merged" below; full text remains in git
+history.
 
 ## Summary counts
 
-| Category | Count | Status |
+| Class | Count | Status |
 | --- | --- | --- |
-| Confirmed cookie-security defect | 1 | Fixed with regression test |
-| Confirmed report-directory permission defect | 1 | Fixed with regression test |
-| Other confirmed runtime/data-loss bugs | 0 | None found in the reviewed scope |
-| Staticcheck `SA4006` no-op assignments removed | 16 | Fixed |
-| Staticcheck `SA4000` weak test assertion corrected | 1 | Fixed |
-| Unreachable Go functions removed | 21 | Fixed |
-| Other unused Go symbols removed | 10 | Fixed |
-| Unused web i18n lines removed | 39 (13 keys x 3 locales) | Fixed |
-| CI/tooling gap closed | 1 | Fixed (report-only gosec/deadcode jobs) |
-| Gosec false positives inspected | 12 | 6 `G124`, 6 `G101` |
-| Architecture debt requiring an owner decision | 4 | Not implemented; proposals below |
-| Gosec findings not yet individually triaged | 146 | Report-only; not confirmed bugs |
-| Full staticcheck style findings remaining | 46 | Report-only; out of this task's scope |
-| Dead code remaining | 4 protected functions | Intentionally retained |
+| Confirmed code/test defects fixed in this checkpoint | **4** | Fixed with tests or verified behavior preservation |
+| Security hardening delivered | **1** | Trusted-proxy scheme configuration |
+| CI/evidence workflow defects fixed | **1** | Browser evidence PR publication |
+| Staticcheck findings before -> after | **46 -> 23** | 22 ST1005 style, 1 proven SA4017 false positive |
+| Gosec findings before -> after | **157 -> 98** | G115/G705/G104 cleared; G101/G124 false positives annotated |
+| Confirmed false positives annotated | **21** | 14 G115, 6 G101, 6 G124, 1 SA4017 |
+| Unverified / environment-limited | **6 areas** | Live PG/Redis/OIDC, browser, CI for new SHA, load, release signing, provider live APIs |
+| Dead code (test-inclusive) | **4** | Unreachable test-only helpers; no production leak found |
+| Repository statement coverage | **84.5%** | `go test ./...` profile, whole repository |
 
-The two test-visible defects are the only confirmed defects fixed here. The dead-code and no-op changes are behavior-preserving code-quality work. No claim is made that the remaining gosec or style findings are safe; they are untriaged signals, not a clean bill of health.
+Do not read "98 gosec findings" as 98 exploitable vulnerabilities. The remaining
+rules are concentrated in operator-controlled file paths and command execution;
+their dispositions are below. No finding was closed by disabling a check or
+deleting a test.
 
-## Confirmed defects
+## Confirmed defects and fixes
 
-### SEC-01: forwarded scheme header controlled cookie `Secure`
+### SEC-01: proxy deployments could not mark cookies Secure
 
-- Severity: medium security hardening / availability.
-- Location: `internal/httpapi/server.go`, `requestIsSecure`.
-- Before: the function trusted `X-Forwarded-Proto: https`. A plain-HTTP request could therefore cause admin session/CSRF cookies to be issued with `Secure`, and `sameOrigin` could treat an `https` origin as matching a plain-HTTP listener. The header is caller-controlled.
-- Impact: the cookie security decision was not derived from the gateway's own connection state. This could lock a browser out of an HTTP admin session and weakened the origin/scheme invariant. It was not a direct credential bypass because the admin credential and CSRF token checks still applied.
-- Fix: `requestIsSecure` now returns `r.TLS != nil` only. `X-Forwarded-Proto`, `Forwarded`, and similar headers are ignored.
-- Regression test: `TestAdminCookiesIgnoreSpoofedForwardedProto` in `internal/httpapi/transport_security_test.go`.
-- Pre-fix failure:
+**Symptom.** Behind a TLS-terminating reverse proxy, `requestIsSecure` returned
+`false` because the gateway saw plain HTTP. Admin session, CSRF, and OIDC flow
+cookies therefore lost the `Secure` attribute even though the browser-facing
+connection was HTTPS. Enabling `Secure` unconditionally would have broken
+plain-HTTP deployments, and trusting `X-Forwarded-Proto` from any peer would let
+a direct client turn it on or off at will.
 
-```text
-spoofed X-Forwarded-Proto made cookie "nexaroute_admin_csrf" Secure over plain HTTP
-```
+**Fix.** A new explicit list, `tls.trusted_proxy_cidrs`, identifies proxy
+networks. `withTrustedProxyContext` marks a request only when its *peer address*
+is inside a listed network; `requestIsSecure` honors a single unambiguous
+`X-Forwarded-Proto: https` only for those requests. Direct TLS is always secure.
+Unlisted peers, `Forwarded`-only requests, duplicate/chained values, and empty
+values are rejected.
 
-- Post-fix: test passes; the existing plain-HTTP and direct-TLS cookie tests also pass.
-- Deployment note: a TLS-terminating reverse proxy in front of a plain-HTTP gateway will no longer produce `Secure` cookies. This is now documented in `docs/SECURITY.md`. A future explicit trusted-proxy configuration would be required to restore that deployment mode safely.
+**Files.** `internal/config/config.go:485`, `internal/config/config.go:505`,
+`internal/httpapi/config_snapshot.go:25`, `internal/httpapi/server.go:1438`,
+`internal/httpapi/server.go:1459`, `internal/httpapi/server.go:1472`,
+`docs/CONFIGURATION.md`, `docs/SECURITY.md`.
 
-### PERM-01: provider acceptance report directory was world-readable
+**Tests.** `internal/config/trusted_proxy_test.go` covers bare IPs, CIDRs,
+IPv4-mapped IPv6, empty lists, >64 entries, malformed values, and the two
+"trust everything" prefixes. `internal/httpapi/trusted_proxy_test.go` covers
+trusted/untrusted peers, plain HTTP, ambiguity, `Forwarded`-only, direct TLS,
+admin session/CSRF/OIDC cookies, and same-origin behavior.
 
-- Severity: low confidentiality / defense in depth.
-- Location: `cmd/gateway/provider_accept.go`, `writeProviderAcceptReport`.
-- Before: `os.MkdirAll(dir, 0o755)` created the report directory with group/other execute and read access. The report file itself was already `0600`.
-- Impact: directory traversal/listing by other local users; the redacted report can still reveal provider names, models, and acceptance results.
-- Fix: create the directory with `0o700`; retain the existing `0600` file mode and explicit `Chmod`.
-- Regression test: `TestProviderAcceptReportDirectoryIsPrivate` in `cmd/gateway/provider_accept_test.go`.
-- Pre-fix failure:
+**Residual risk.** A proxy that forwards from an address outside the configured
+list behaves as before (cookies not Secure). This is explicit and fail-closed.
+The list is configuration, so a compromised config remains inside the trust
+boundary.
 
-```text
-report directory mode=755, want no group/other access (0700)
-```
+### BUG-01: nested Anthropic tool-start error was discarded
 
-- Post-fix: test passes.
+`anthropicEmitter.Emit` recursively emitted a `StreamToolStart` when a delta
+arrived without a start, but ignored the recursive error. A write failure could
+therefore be lost while the emitter continued.
 
-## Dead code and no-op cleanup
+**Fix.** Return the recursive error. Regression surface is covered by the
+existing canonical stream tests; the full package suite passes.
 
-### DEAD-01: 21 unreachable functions removed
+**File.** `internal/protocol/canonical/stream.go:606`.
 
-Evidence: `deadcode -test ./...` reported 25 functions before and 4 protected functions after. The removed functions were private or test-only dead paths:
+### BUG-02: dead cooldown expression in admin snapshot
 
-`State.valid`, `f64`, `MemoryStore.available`, `testTLSServer.port`, `codingCase`, `applyProviderHeaders`, `proxyValidatedJSONResponse`, `budgetModelServed`, `extractOpenAIUsage`, `extractAnthropicUsage`, `canonicalFromOpenAIRequest`, `conformanceCfg`, `evaluationPlane.stateModTime`, `hardCooldownStatus`, `redactProviderBody`, `Server.routeSnapshot`, `traceFromContext`, `decisionFromScored`, `socioDummy`, `mustJSON`, `writeValidWAVBytes`.
+`internal/httpapi/admin.go` computed
+`!time.Now().Before(st.CooldownUntil) == false && ...` and then immediately
+overwrote the value with the authoritative `IsCooldown` call. The first line had
+no runtime effect and confused the real source of truth.
 
-Removal was limited to symbols proven unused by both `deadcode` and targeted staticcheck U1000. No exported public API was removed.
+**Fix.** Removed the dead expression; the authoritative assignment is unchanged.
 
-### DEAD-02: 10 other unused Go symbols removed
+**File.** `internal/httpapi/admin.go:334` (before fix).
 
-- Constants: `redisMaxUint64Decimal`, `redisMaxInt64Decimal`, `budgetAlertNamespace`.
-- Fields: `capabilities`, `taskAnalysisErrors`, `sawCR`, `anthropicEmitter.started`.
-- Types: `clientAuthState`, `telemetrySample`.
-- Variable: `keyAuditSeq`.
+### TEST-01: budget-alert regression loop never iterated
 
-### DEAD-03: 13 unused web i18n keys removed
+`TestBudgetAlertFailureDoesNotAffectRequests` wrapped its follow-up request in a
+`for` loop that always executed `break` after the first request. The test only
+ever sent one follow-up request despite claiming to wait for background delivery.
 
-Removed from `internal/httpapi/web/app.js` in all three locales (EN, FA, PS; 39 lines):
+**Fix.** Replaced the fake loop with the single follow-up request it actually
+performed. Assertions are unchanged; the test is now honest about its coverage.
 
-`pol_auto_state`, `pg_response`, `pg_idle`, `pg_response_text`, `set_no_usage`, `pr_disabled`, `pr_configured`, `pr_no_provider_error`, `el_show`, `el_hide`, `req_empty`, `req_empty_d`, `wz_add_provider`.
+**File.** `internal/httpapi/budget_alerts_test.go:405`.
 
-### Protected dead code retained
+### BUG-03: intentional probe budget looked like caller-controlled input
 
-`deadcode` still reports exactly four functions. They are intentionally retained as owner-decision candidates, not because they are proven live:
+`httpAdapter.Probe` accepted `maxTokens`, overwrote it with `1`, then used the
+variable. Staticcheck correctly flagged the overwritten assignment. The intent
+was to ignore the argument permanently.
 
-| Function | Location | Reason to retain |
+**Fix.** Added `_ = maxTokens` and a named `probeTokens = 1` constant used by
+all provider bodies. Behavior is unchanged and the invariant is explicit.
+
+**File.** `internal/providers/http_adapter.go:1084`.
+
+### CI-01: browser evidence run could fail on PR permission denial
+
+`browser-evidence-pr.yml` used `GH_TOKEN` and failed the whole workflow when
+branch push or PR creation was denied, even though the evidence itself had been
+produced successfully. It also used a runner-temp path and unpinned action
+references.
+
+**Fix.** Evidence is stored under `${{ github.workspace }}/.artifacts/...`,
+actions are pinned by full SHA, unrelated inputs are enumerated, and denied
+push/PR publication records a `blocked` status plus a manual compare URL without
+destroying the evidence run.
+
+**Files.** `.github/workflows/browser-evidence.yml`,
+`.github/workflows/browser-evidence-pr.yml`.
+
+**Verification limit.** The workflow syntax and shell paths are reviewed and the
+repository's own workflow tests pass, but GitHub-hosted execution cannot be
+observed locally. This remains unverified until the next workflow run.
+
+## Staticcheck disposition (46 -> 23)
+
+| Rule | Count remaining | Disposition |
 | --- | --- | --- |
-| `CloneForHotReload` | `internal/decision/jev/provider.go:441` | Possible future hot-reload seam; removing it would change a provider extension point. |
-| `IsUnavailable` | `internal/decision/remote/errors.go:70` | Public error-classification helper; may be used by external packages or future wiring. |
-| `NewFileBudgetAlertStore` | `internal/httpapi/budget_alerts.go:131` | Alternate budget-alert store constructor. |
-| `FeedbackTracker.Cards` | `internal/scorecards/feedback.go:186` | Public scorecard inspection helper. |
+| ST1005 | 22 | **Accepted style debt**: user-facing error strings begin with a capital letter. Changing them would alter API/error text. Deferred to an owner-approved copy change. |
+| SA4017 | 1 | **False positive**: `internal/protocol/canonical/stream.go:117`. A minimal probe under `.artifacts/scprobe` reproduced staticcheck 2026.2.2 flagging a `switch` branch whose function call does have side effects. No source workaround was added. |
 
-No further dead-code removal is recommended without an explicit owner decision.
+Fixed in this checkpoint: SA4004 (fake test loop), SA4009 (overwritten probe
+argument), SA1012 (intentional nil context in tests, justified lint ignore),
+SA4006/no-op expression, S1002/S1009/S1011/S1016/S1017/S1030/S1034/ST1018
+(style-only cleanups). The `cooldown_active` dead expression and recursive
+`Emit` error were also surfaced here and fixed as BUG-01/BUG-02.
 
-### NOOP-01: all 16 `SA4006` findings fixed
+Command: `staticcheck ./...` -> exit 1, 23 diagnostics, stored in
+`.artifacts/issue593-final/staticcheck.txt`.
 
-Files and semantics:
+## Gosec disposition (157 -> 98)
 
-- `internal/decision/policy/provider.go`: removed an empty loop, a redundant `origPrimaryID` assignment, and an unused `delta` block. Existing `TestProvider_MinScoreDeltaAgainstOriginalPrimary` and the rest of the policy package cover the behavior.
-- `internal/httpapi/decision_wiring.go`: removed a fallback loop whose body contained only comments. Existing virtual-key/fallback tests pass.
-- `internal/httpapi/openai.go`, `internal/httpapi/anthropic.go`: removed overwritten adapter/start variables; declarations now reflect the actual use.
-- `internal/probe/engine.go`: first deployment lookup ignores the unused adapter; the second keeps it.
-- `internal/compat/sanitizer.go`, `internal/feature/extractor.go`, `internal/protocol/canonical/validation.go`, `internal/video/render/render.go`: removed no-op assignments/conditions.
-- Test-only no-ops: `cmd/gateway/wavec_coverage_test.go`, `internal/decision/chain_test.go`, `internal/httpapi/virtual_test.go`, `internal/secrets/secrets_test.go`.
+Command: `gosec -quiet -fmt=json -out=.artifacts/issue593-final/gosec.json ./...`
+-> 98 issues, 232 files, 75,654 lines, 28 justified `#nosec` annotations.
 
-Evidence: targeted staticcheck `SA4006,SA4000,U1000` produced 48 lines before and zero lines after.
+| Rule | Count | Disposition |
+| --- | --- | --- |
+| G304 | 54 | **Operator-controlled paths**: config, media, video, and audit files opened from validated/allow-listed settings. Not attacker-chosen request paths. Needs path-root hardening only if config becomes untrusted. |
+| G703 | 28 | **Tainted path analysis**: same operator-configured media/video locations. The code sanitizes names for traversal; gosec cannot see the allow-list. |
+| G204 | 12 | **Configured binaries**: `ffmpeg`/`ffprobe`/TTS commands executed with argument arrays, never through a shell. Binary paths come from operator config. |
+| G704 | 4 | **CLI SSRF**: `cmd/videogen` intentionally connects to the operator-supplied CLI base URL. It is a client tool, not a server-side fetch boundary. |
 
-### TEST-01: `SA4000` tautological assertion corrected
+Cleared in this checkpoint:
 
-`internal/httpapi/helpers_test.go` previously used `if !condition || !condition`. Staticcheck flagged identical expressions; the second call could not add coverage. The test now evaluates two explicit admission assertions in sequence.
+- **G115 (14)**: all are bounded modulo results or intentional two's-complement
+  reinterpretation in the EventStream protocol, audit key timestamps, or
+  rotation indexes. Each has a line-local justification.
+- **G705 (1)**: admin CSRF response now uses `json.NewEncoder` instead of
+  `fmt.Fprintf` with a token.
+- **G104 (32)**: response body closes, health check writes, and stream buffer
+  writes now explicitly discard or check errors.
+- **G101 (6)**: provider endpoint URLs, enum/classification names, response map
+  keys, and environment-variable *names*; annotated as non-credentials.
+- **G124 (6)**: cookie `Secure` is now computed by `requestIsSecure`; gosec
+  cannot follow the helper. Annotated with the trusted-proxy invariant.
 
-## CI and audit-tooling finding
+## Architecture debt and proposals (not implemented here)
 
-### CI-01: audit workflow lacked gosec and deadcode artifacts
+These require product/owner decisions or multi-package migrations. This
+checkpoint deliberately did not start them without approval; no partial parallel
+implementation was left behind.
 
-- Fix: `.github/workflows/audit.yml` now has `gosec` and `deadcode` jobs, both report-only, with pinned tool versions and artifact upload.
-- Local pins: `gosec v2.29.0`, `deadcode` from `golang.org/x/tools v0.52.0`.
-- The jobs use the existing checkout/setup/upload action SHAs already present in the workflow.
-- YAML parses; job step lists verified.
-- No ratchet or baseline-fail mechanism was added, as required.
-- The workflow run on this branch/PR is pending creation of the PR; do not claim a green run for this checkpoint until it exists.
+### ARCH-01: `config.Config.Validate` is ~1,320 lines
 
-## False positives inspected
+**Problem.** One function validates unrelated domains (admin, TLS, routing,
+providers, video, logging), making error order and ownership hard to reason
+about. Current complexity is a maintenance and review risk.
 
-- `G124` (6): cookie `Secure` values are computed by `requestIsSecure`; gosec cannot see through the function call and treats the argument as a possible hardcoded false. These are false positives after inspection.
-- `G101` (6): flagged literals are provider URLs, reason/class strings, map keys, and environment-variable names (`NEXAROUTE_CANARY_API_KEY`, `NEXAROUTE_CANARY_SECRET_KEY`), not secret values. These are false positives after inspection.
+**Proposed safe split.** Keep `Validate` as the ordered orchestrator and extract
+`validateAdmin`, `validateRouting`, `validateProviders`, `validateVideo`, and
+`validateLogging`, preserving call order and exact error strings. Add table
+tests that assert the *first* error for a config with several invalid fields.
 
-The remaining gosec findings (`G304` 54, `G104` 33, `G703` 28, `G115` 14, `G204` 12, `G704` 4, `G705` 1) were not individually triaged in this task. They remain report-only and must not be described as confirmed vulnerabilities.
+**Status.** OPEN. Deferred because moving 1,300 lines without dedicated
+differential tests is a large behavior-preserving refactor, and the task forbids
+risky architecture changes without owner approval.
 
-## Architecture debt and proposals
+### ARCH-02: virtual-key create/rotate/revoke duplication
 
-These are design decisions, not cleanup items. No large refactor was performed.
+**Problem.** `internal/httpapi/client_keys.go` repeats key generation, lookup,
+revocation, and config mutation in three handlers. The route layer owns domain
+rules that should be reusable by future admin clients.
 
-### ARCH-01: `config.Config.Validate` is extremely complex
+**Proposed change.** Extract a small `virtualKeyService` (or package-level
+functions) with `Create`, `Rotate`, `Revoke`, and a single ID generator;
+handlers only decode, call, and render. Add tests for duplicate IDs, expired
+keys, and rollback on config validation failure.
 
-- Evidence: `gocyclo v0.6.0` reports cyclomatic complexity `644` for `internal/config/config.go:1818` (`Config.Validate`). `ApplyDefaults` is also high (105).
-- Risk: high review cost, hard-to-isolate validation regressions, and brittle error ordering.
-- Proposal: keep the public `Validate` signature, but split it into domain validators (`validateTLS`, `validateAdmin`, `validateProviders`, `validateVideo`, `validateRouting`, ...) called in a fixed order. Add table-driven tests per domain before moving code. This is a multi-PR refactor and needs owner approval.
+**Status.** OPEN. Scoped but not implemented in this checkpoint; it is safe to do
+next without changing API shapes.
 
-### ARCH-02: virtual-key HTTP create/rotate/revoke paths duplicate mutation logic
+### ARCH-03: distributed circuit breaker
 
-- Evidence: `internal/httpapi/client_keys.go` repeats key generation, config mutation, not-found handling, and response construction across create, rotate, and revoke.
-- Risk: future changes (budget fields, audit events, validation) can drift between paths.
-- Proposal: extract a single `mutateVirtualKey`/`applyVirtualKeyMutation` helper that owns lookup, mutation, error mapping, and response shaping while preserving the existing HTTP contract. Add contract tests for 201/200/204/404/405 before refactoring.
+**Problem.** Circuit-breaker state is process-local. Behind multiple replicas,
+one instance can keep routing to a failing provider while another is open.
 
-### ARCH-03: circuit-breaker and cooldown state are per instance
+**Options.** (a) Redis/PostgreSQL shared state with TTL keys; (b) accept
+per-replica state and document it; (c) leader-owned breaker with gossip.
+Option (a) adds a hard dependency to request routing and needs failure-mode
+design; option (b) is current behavior.
 
-- Evidence: `internal/httpapi/deployment.go:92` documents breaker/cooldown state as per-instance; `docs/HA_STATE_INVENTORY.md` records the same boundary.
-- Risk: multiple replicas can disagree about open circuits and cooldowns, causing uneven load and repeated probing of a failing provider.
-- Options: (a) keep per-instance semantics and document them as an availability trade-off; (b) move breaker state to Redis with atomic transitions and TTLs; (c) use a lease/owner model where one replica probes and publishes state. Option (b) adds a dependency and needs fail-open/fail-closed rules. Owner decision required.
+**Status.** BLOCKED on owner decision. No distributed state was fabricated or
+simulated.
 
-### ARCH-04: video jobs and assets are local to one process
+### ARCH-04: durable video job queue
 
-- Evidence: `docs/HA_STATE_INVENTORY.md:26` and `docs/KNOWN_GAPS.md:115-116` state that video jobs and worker shutdown are single-process/local.
-- Risk: no durable queue or shared asset store across replicas; process loss can strand jobs.
-- Options: (a) keep single-instance as an explicit deployment constraint; (b) add a PostgreSQL job table with `FOR UPDATE SKIP LOCKED` claims plus shared object storage; (c) use an external queue. Option (b) requires schema, idempotency, and lease-expiry design. Owner decision required.
+**Problem.** Video jobs are in-process. Restart loses queued work and
+multi-replica deployments cannot share progress.
+
+**Options.** (a) PostgreSQL-backed job table with `FOR UPDATE SKIP LOCKED`;
+(b) Redis streams; (c) keep in-process and document single-replica constraints.
+
+**Status.** BLOCKED on product decision (durability/HA expectations). The
+current behavior is documented, not silently claimed as durable.
+
+### ARCH-05: control-plane/HA ownership
+
+The admin control plane is still single-writer for config mutations. Splitting
+config writes from routing would require an explicit consistency model and
+revision protocol. **Status: OPEN/owner decision.**
+
+### ARCH-06: browser and live-infrastructure acceptance
+
+Browser acceptance is skipped locally because Chromium + Python Playwright are
+absent. PostgreSQL, Redis, OIDC, KMS, and live providers are not available.
+`verify.sh` release-artifact trust-chain tests do pass. **Status: PARTIAL;
+requires CI or staging evidence.**
+
+## Already merged (PR #595/#596 history)
+
+PR #595 fixed nine confirmed defects: egress TLS `ServerName` pinning, proxy
+`allowed_hosts`, media `no_training` bypass, structured-output removal,
+Anthropic thinking budget, emergency-key/OIDC precedence, truncated media
+responses, hedge capability filtering, and Anthropic cache-usage reporting.
+PR #596 recorded the baseline and verification for that batch. Those fixes are
+present in `main` at `bfa93b6` and are not re-claimed here.
+
+## Dead code
+
+`deadcode -test ./...` reports four unreachable functions:
+
+- `internal/decision/jev/provider.go:441` `CloneForHotReload`
+- `internal/decision/remote/errors.go:70` `IsUnavailable`
+- `internal/httpapi/budget_alerts.go:131` `NewFileBudgetAlertStore`
+- `internal/scorecards/feedback.go:186` `FeedbackTracker.Cards`
+
+All are test/dispatch-only or reserved API helpers. No production call was
+removed; deleting exported/package API needs an owner decision.
 
 ## Limitations and unverified areas
 
-- No live browser acceptance: Chromium/Python Playwright unavailable.
-- No live PostgreSQL, Redis, OIDC IdP, KMS/keyring, or upstream provider verification.
-- No multi-replica test of breaker, budget, session, or video state.
-- Artifact download required authentication and returned HTTP 401 unauthenticated.
-- Full staticcheck after the changes reports 46 style/other findings. The targeted `SA4006,SA4000,U1000` set is clean, but the full style set was not part of the requested cleanup.
-- The audit workflow's report-only jobs do not prove the absence of vulnerabilities.
-
----
-
-## Earlier audit pass (PR #595, branch `opencode/issue593-20261021064216`)
-
-The following section records the independent findings and fixes from the earlier audit pass that was rebased and merged alongside this report; it is preserved verbatim for traceability.
-
-# Post-release quality audit findings (Issue #593)
-
-Audited commit: `05003db9326b01464a368723d8ab31671b40dc8f`
-Audit branch: `opencode/issue593-20261021064216`
-
-## Summary
-
-| ID | Severity | Area | Defect | Status |
-| --- | --- | --- | --- | --- |
-| AUD-01 | P1 | Egress TLS | SNI and certificate verification pinned to the provider base host | Fixed |
-| AUD-02 | P1 | Egress proxy | `allowed_hosts` rejected the configured proxy hop | Fixed |
-| AUD-03 | P1 | Privacy | Media ingress ignored `no_training` route profiles | Fixed |
-| AUD-04 | P1 | Capability gating | Unsupported structured output was silently dropped and served as 200 | Fixed |
-| AUD-05 | P1 | Anthropic protocol | `max_tokens` could be less than or equal to `thinking.budget_tokens` | Fixed |
-| AUD-06 | P1 | Admin auth | Emergency API key remained valid while healthy OIDC was enabled | Fixed |
-| AUD-07 | P2 | Media response | Truncated/oversized upstream media produced a silent 200 | Fixed |
-| AUD-08 | P2 | Hedging | Hedge partner bypassed the capability-ineligible gate | Fixed |
-| AUD-09 | P2 | Usage accounting | Anthropic stream cache-token usage was dropped | Fixed |
-
-Nine defects were confirmed with failing tests or equivalent call-site proof.
-All nine were fixed and covered by regression tests in this branch.
-
-## AUD-01: egress TLS ServerName pinned to the base host
-
-- Type: security/correctness
-- Severity: P1
-- Confidence: high
-- Original location: `internal/egress/policy.go` (`NewTransport`, TLS config)
-- Fix location: `internal/egress/policy.go:314`
-- Regression test: `internal/egress/tls_servername_test.go`
-
-The provider egress transport set `TLSClientConfig.ServerName` to the hostname of
-the provider's base URL. Absolute-URL endpoint overrides to another host in
-`allowed_hosts` are a supported operator feature, and the dialer correctly
-resolved and policy-checked the override host, but TLS still sent SNI for and
-verified the certificate of the base host.
-
-Failure evidence before the fix:
-
-```text
-request to allow-listed HTTPS host failed TLS verification:
-Get "https://localhost:41665": tls: failed to verify certificate:
-x509: certificate is valid for localhost, not base.invalid
-```
-
-Impact: allow-listed HTTPS overrides to a different host failed closed in the
-common case. The check also verified the wrong identity, so the transport was
-not actually validating the certificate of the host it connected to.
-
-Fix: leave `ServerName` empty and let `net/http` derive SNI and certificate
-verification from the request URL host, matching the decision transport. The
-regression test uses a CA-signed `localhost` certificate and asserts both the
-handshake and the server-observed SNI.
-
-## AUD-02: proxy host rejected by `allowed_hosts`
-
-- Type: functional/security configuration
-- Severity: P1
-- Confidence: high
-- Original location: `internal/egress/policy.go` (dial-time allow-list)
-- Fix location: `internal/egress/policy.go:263`
-- Regression test: `internal/egress/policy_test.go`
-  (`TestNewTransportAllowsProxyHostOutsideAllowedHosts`)
-
-`docs/CONFIGURATION.md` states that the dial-time transport additionally permits
-the `proxy_url` host because it dials the proxy hop. The dial closure applied
-`allowed_hosts` to every address, including the proxy. Any deployment that set
-both `allowed_hosts` and `proxy_url` failed with:
-
-```text
-proxyconnect tcp: egress host "127.0.0.1" is not allow-listed
-```
-
-Fix: build a dial-scoped policy that appends the already-validated proxy host
-when `allowed_hosts` is non-empty. Request building still validates target URLs
-against the original allow-list, so the proxy host does not become a target
-host. An empty allow-list remains unrestricted.
-
-## AUD-03: media ingress bypassed `no_training`
-
-- Type: privacy
-- Severity: P1
-- Confidence: high
-- Original location: `internal/httpapi/media.go` (`serveMedia`)
-- Fix location: `internal/httpapi/media.go:183` and `:200`
-- Regression test: `internal/httpapi/privacy_p2_test.go`
-  (`TestMediaHonorsNoTrainingRouteProfile`)
-
-Embeddings, images, audio, and rerank requests built a router requirement
-without calling `applyPrivacyRequirement`. A `no_training` route profile or
-virtual-key requirement was therefore ignored and a training-enabled provider
-could receive the prompt.
-
-Failure evidence before the fix:
-
-```text
-training-enabled provider received 1 media request(s) for a no_training route
-```
-
-Fix: stamp the privacy requirement before candidate selection and map the
-empty-candidate case to the same `privacy_unavailable` 503 and privacy-safe
-event used by the chat ingresses. The regression test proves the
-training-enabled deployment receives zero requests and the compliant deployment
-serves the request.
-
-## AUD-04: structured output silently removed
-
-- Type: correctness/API contract
-- Severity: P1
-- Confidence: high
-- Original locations: `internal/httpapi/compat_engine.go`,
-  `internal/compat/capabilities.go`
-- Fix locations: `internal/httpapi/compat_engine.go:164`,
-  `internal/compat/capabilities.go:575`
-- Regression test: `internal/httpapi/structured_output_gate_test.go`
-  (`TestStructuredOutputUnsupportedFailsClosed`)
-
-Two gaps combined:
-
-1. `profileFromRequirement` did not copy `router.Requirement.StructuredOutput`
-   into the compatibility requirement profile for legacy ingress paths.
-2. `IneligibleFor` checked only `JSONObject`/`JSONSchema`, while runtime
-   learning records `CapStructuredOutput`.
-
-A deployment with a verified-unsupported structured-output capability was
-therefore eligible. The sanitizer then removed `response_format` and the client
-received a plain, unstructured 200 response despite requesting JSON.
-
-Failure evidence before the fix: the upstream was called and returned 200 with
-`response_format` removed.
-
-Fix: propagate `StructuredOutput` into the profile and treat a verified
-`StructuredOutput` or both unsupported JSON format capabilities as ineligible.
-The request now fails closed with 503 before any upstream call.
-
-## AUD-05: Anthropic `max_tokens` versus thinking budget
-
-- Type: protocol correctness
-- Severity: P1
-- Confidence: high
-- Original location: `internal/protocol/canonical/anthropic.go`
-- Fix location: `internal/protocol/canonical/anthropic.go:430`
-- Regression test: `internal/protocol/canonical/anthropic_budget_test.go`
-
-`EncodeAnthropicRequest` defaulted `max_tokens` to 4096 but independently chose
-thinking budgets of 8192 (default effort) or 16384 (high effort). Anthropic
-requires `max_tokens > budget_tokens`, so these payloads were rejected
-upstream. Codex-style `/v1/responses` reasoning requests routed to Anthropic
-were affected.
-
-Failure evidence before the fix:
-
-```text
-max_tokens=4096 <= budget_tokens=8192
-max_tokens=4096 <= budget_tokens=16384
-max_tokens=1024 <= budget_tokens=4096
-```
-
-Fix: when thinking is enabled and the ceiling is not greater than the budget,
-raise `max_tokens` to `budget + 1024`, matching the legacy translator.
-
-## AUD-06: emergency API key valid while OIDC is healthy
-
-- Type: authentication bypass
-- Severity: P1
-- Confidence: high
-- Original location: `internal/httpapi/admin_auth.go`
-- Fix location: `internal/httpapi/admin_auth.go:87`
-- Regression test: `internal/httpapi/oidc_test.go`
-  (`TestOIDCHealthyRejectsEmergencyAPIKey`)
-
-`docs/SECURITY.md` states that emergency API-key access is unavailable while
-OIDC is enabled. `authenticateAdmin` blocked emergency access only when OIDC was
-enabled and unavailable. With a healthy OIDC provider, a request carrying the
-static emergency key fell through to `legacyAdminAuthorized` and received the
-owner identity.
-
-Failure evidence before the fix: `GET /admin/api/snapshot` with the emergency
-key returned `200` and the full admin snapshot while healthy OIDC was enabled.
-
-Fix: once OIDC is enabled and discovery is healthy, an absent session never
-falls back to emergency credentials. OIDC outage behavior remains 503 and OIDC
-disabled behavior remains unchanged.
-
-## AUD-07: truncated media response became a silent 200
-
-- Type: response integrity
-- Severity: P2
-- Confidence: high
-- Original location: `internal/httpapi/media.go` (2xx response path)
-- Fix location: `internal/httpapi/media.go:276`
-- Regression tests: `internal/httpapi/media_test.go`
-  (`TestMediaEmbeddingsTruncatedUpstreamIsNotSilent200`,
-  `TestMediaSpeechTruncatedUpstreamIsNotSilent200`)
-
-The handler wrote the upstream status before reading the body. For non-binary
-responses, a failed body read left a committed `200` with an empty body and had
-already recorded deployment success. Binary responses were truncated at
-`maxMediaResponseBytes` (64 MiB) without any signal to the client.
-
-Failure evidence before the fix: a hijacked upstream that advertised a longer
-body and closed early produced `200` with an empty body; truncated audio also
-returned `200`.
-
-Fix: read the full payload (bounded by the existing limits) before committing
-headers. Read failures and oversized payloads are recorded as failures, allow
-failover, and return 502 if no candidate succeeds. The success health/telemetry
-record now happens only after the payload is usable.
-
-## AUD-08: hedge partner ignored capability ineligibility
-
-- Type: routing
-- Severity: P2
-- Confidence: high
-- Original locations: `internal/httpapi/openai.go`,
-  `internal/httpapi/anthropic.go` (hedge builder closures)
-- Fix locations: `internal/httpapi/openai.go:258`,
-  `internal/httpapi/anthropic.go:230`
-- Regression test: `internal/httpapi/hedging_test.go`
-  (`TestHedgeSkipsCapabilityIneligiblePartner`)
-
-The normal attempt loop calls `capabilityIneligible` before dispatch. The
-hedging path built and launched the next candidate directly, so a deployment
-with a verified-unsupported required capability could receive a hedged request
-and win the race.
-
-Failure evidence before the fix:
-
-```text
-capability-ineligible hedge partner received 1 request(s)
-```
-
-Fix: apply the same capability check in the hedge builder closure. If the
-partner is ineligible, hedging does not launch and the primary attempt proceeds
-normally.
-
-## AUD-09: Anthropic stream cache usage dropped
-
-- Type: usage/cost accounting
-- Severity: P2
-- Confidence: high
-- Original location: `internal/protocol/canonical/stream.go`
-- Fix locations: `internal/protocol/canonical/stream.go` (Anthropic stream
-  decoder and emitter)
-- Regression test: `internal/protocol/canonical/stream_cache_usage_test.go`
-
-The Anthropic SSE decoder read only `input_tokens` and `output_tokens`. It
-ignored `cache_read_input_tokens` and `cache_creation_input_tokens` in
-`message_start` and `message_delta`. The Anthropic emitter also forwarded only
-input/output tokens, so canonical traffic lost cache reads and writes used for
-usage accounting and client-visible usage.
-
-Failure evidence before the fix: a `message_start` with cache read 40 and cache
-creation 7 decoded to zero cache tokens; the emitted `message_delta` reported
-zero cache tokens.
-
-Fix: decode both cache fields, propagate them through canonical `Usage`, retain
-them in the Anthropic emitter, and include them in the final `message_delta`
-usage when non-zero.
-
-## Areas reviewed without a confirmed defect
-
-- Router candidate filtering, virtual endpoint/pool/fallback resolution, and
-  unknown-model fallback.
-- Provider protocol fallback after commitment and attempt accounting.
-- Admin route/method authorization matrix, session rotation/expiry, CSRF
-  double-submit, mTLS gate, and temp-file permissions.
-- Egress deny lists, loopback rules, embedded IPv4 (NAT64/6to4), DNS pinning,
-  and proxy credential stripping outside the two proxy/TLS defects above.
-- Canonical request/response translation outside the Anthropic budget and cache
-  usage defects above.
-- Video cost ledger transitions and provider aggregation.
-- Config defaults and bounds.
-
-No additional defect from these areas survived a failing-test or precise
-call-site check during this audit.
+1. No authenticated `gh`; cannot observe CI for the new commit or download
+   artifacts. CI status must be checked after PR creation.
+2. Chromium + Python Playwright unavailable; browser acceptance is a real skip,
+   not a pass.
+3. No live PostgreSQL, Redis, OIDC, KMS, or provider credentials; integration
+   paths are compile/unit-tested only.
+4. No load/soak test, no multi-replica failure injection, no destructive
+   restart test.
+5. Release signatures/assets were not re-verified against the published
+   release; `verify.sh` only proves the local trust-chain tests.
+6. Gosec G304/G703/G204/G704 remain plausible risks if operator config is ever
+   attacker-controlled. They are classified, not proven harmless.
