@@ -24,7 +24,7 @@ func TestCostBudgetStateWiring(t *testing.T) {
 		"bt('cb_remaining')",
 		"bt('cb_scope')",
 		"'cb_remaining': 'remaining'",
-		"'cb_remaining': 'باقی‌مانده'",
+		"'cb_remaining': 'باقی\u200cمانده'",
 	} {
 		if !strings.Contains(appJS, want) {
 			t.Errorf("app.js missing budget-state wiring %q", want)

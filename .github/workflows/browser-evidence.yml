@@ -52,7 +52,7 @@ jobs:
 
       - name: Prepare isolated capture directory
         env:
-          EVIDENCE_OUT: ${{ runner.temp }}/nexaroute-browser-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          EVIDENCE_OUT: ${{ github.workspace }}/.artifacts/browser-evidence/${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           rm -rf "$EVIDENCE_OUT"
           mkdir -p "$EVIDENCE_OUT"
@@ -70,6 +70,6 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: browser-evidence-m2-14-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/nexaroute-browser-evidence-${{ github.run_id }}-${{ github.run_attempt }}/
+          path: ${{ github.workspace }}/.artifacts/browser-evidence/${{ github.run_id }}-${{ github.run_attempt }}/
           retention-days: 90
           if-no-files-found: error

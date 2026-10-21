@@ -221,7 +221,7 @@ func (s *RedisStore) loadChain(ctx context.Context) (chainState, string, error) 
 		if err := json.Unmarshal([]byte(bySeq[n]), &event); err != nil {
 			return st, "", errors.New("security store contains a malformed audit record")
 		}
-		if event.Seq != uint64(n) {
+		if event.Seq != uint64(n) { // #nosec G115 -- n is a non-negative sequence number parsed from a list index.
 			return st, "", errors.New("security store contains an audit record whose sequence does not match its key")
 		}
 		st.Records = append(st.Records, event)

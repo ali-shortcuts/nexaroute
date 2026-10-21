@@ -152,15 +152,15 @@ func writeRotateFile(path string, b []byte) error {
 	n := f.Name()
 	defer os.Remove(n)
 	if e = f.Chmod(0600); e != nil {
-		f.Close()
+		_ = f.Close()
 		return e
 	}
 	if _, e = f.Write(b); e != nil {
-		f.Close()
+		_ = f.Close()
 		return e
 	}
 	if e = f.Sync(); e != nil {
-		f.Close()
+		_ = f.Close()
 		return e
 	}
 	if e = f.Close(); e != nil {

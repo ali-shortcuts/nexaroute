@@ -94,7 +94,7 @@ func OpenAIToAnthropic(in core.OpenAIRequest, model string) (core.AnthropicReque
 				}
 			}
 			if sysText.Len() > 0 {
-				if out.System != nil && len(out.System) > 0 {
+				if len(out.System) > 0 {
 					var prev string
 					_ = json.Unmarshal(out.System, &prev)
 					out.System, _ = json.Marshal(strings.TrimSpace(prev + "\n" + sysText.String()))
@@ -206,7 +206,7 @@ func OpenAIToAnthropic(in core.OpenAIRequest, model string) (core.AnthropicReque
 	applyOpenAIToolChoiceToAnthropic(&out, in.ToolChoice, nm)
 	applyOpenAIStopToAnthropic(&out, in.Stop)
 	if strings.TrimSpace(in.User) != "" {
-		if out.Metadata == nil || len(out.Metadata) == 0 {
+		if len(out.Metadata) == 0 {
 			out.Metadata, _ = json.Marshal(map[string]any{"user_id": strings.TrimSpace(in.User)})
 		}
 	}
@@ -380,9 +380,7 @@ func openAIContentToAnthBlocks(content any) []map[string]any {
 		}
 	case []map[string]any:
 		for _, m := range v {
-			for _, b := range openAIContentToAnthBlocks([]any{m}) {
-				out = append(out, b)
-			}
+			out = append(out, openAIContentToAnthBlocks([]any{m})...)
 		}
 	case nil:
 	default:

@@ -334,8 +334,6 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 					item["state"] = st.Status
 					if !st.CooldownUntil.IsZero() {
 						item["cooldown_until"] = st.CooldownUntil.Format(time.RFC3339)
-						item["cooldown_active"] = !time.Now().Before(st.CooldownUntil) == false && s.decisionOrchestrator.ProviderState().IsCooldown(step.Provider)
-						// Use IsCooldown check
 						item["cooldown_active"] = s.decisionOrchestrator.ProviderState().IsCooldown(step.Provider)
 					} else {
 						item["cooldown_active"] = false

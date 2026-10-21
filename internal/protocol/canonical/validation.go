@@ -165,14 +165,14 @@ func jsonTypeOf(v any) string {
 	if v == nil {
 		return "null"
 	}
-	switch v.(type) {
+	switch v := v.(type) {
 	case string:
 		return "string"
 	case bool:
 		return "boolean"
 	case float64:
 		// JSON numbers decode as float64; check if integer
-		f := v.(float64)
+		f := v
 		if f == float64(int64(f)) {
 			return "integer"
 		}

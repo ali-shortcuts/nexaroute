@@ -11,6 +11,10 @@ permissions:
   contents: write
   pull-requests: write
 
+concurrency:
+  group: browser-evidence-fixture-pr
+  cancel-in-progress: false
+
 jobs:
   propose-fixture-pr:
     # Only consume artifacts from a successful evidence run on the protected main branch.
@@ -18,7 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out source revision
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
           fetch-depth: 0
@@ -39,10 +43,10 @@ jobs:
 
       - name: Download successful run artifact
         if: steps.source.outputs.skip != 'true'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: browser-evidence-m2-14-${{ github.event.workflow_run.head_sha }}-${{ github.event.workflow_run.id }}-${{ github.event.workflow_run.run_attempt }}
-          path: ${{ runner.temp }}/nexaroute-browser-evidence
+          path: ${{ github.workspace }}/.artifacts/downloaded-browser-evidence
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           repository: ${{ github.repository }}
@@ -53,7 +57,7 @@ jobs:
           SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
           RUN_ID: ${{ github.event.workflow_run.id }}
           RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
-          EVIDENCE_DIR: ${{ runner.temp }}/nexaroute-browser-evidence
+          EVIDENCE_DIR: ${{ github.workspace }}/.artifacts/downloaded-browser-evidence
           SERVER_URL: ${{ github.server_url }}
           REPOSITORY: ${{ github.repository }}
         run: |
@@ -98,8 +102,9 @@ jobs:
           RUN_ID: ${{ github.event.workflow_run.id }}
           SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
-          set -euo pipefail
+          set -uo pipefail
           branch="bot/browser-evidence-${RUN_ID}"
+          compare_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/compare/main...${branch}?expand=1"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git switch -c "$branch"
@@ -109,8 +114,20 @@ jobs:
             exit 0
           fi
           git commit -m "docs(evidence): add browser screenshots from run ${RUN_ID}"
-          git push origin "$branch"
-          gh pr create --base main --head "$branch" \
+          if ! git push origin "$branch"; then
+            {
+              echo "## Browser evidence fixture publication"
+              echo ""
+              echo "The browser acceptance run succeeded and produced a validated 112-shot artifact, but pushing the fixture branch was **BLOCKED** by repository/workflow permissions."
+              echo "This is a publication-permission outcome, not an application or browser-test failure."
+              echo ""
+              echo "- Evidence run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}"
+              echo "- Source SHA: \`${SOURCE_SHA}\`"
+              echo "- Local commit: \`$(git rev-parse HEAD)\`"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if gh pr create --base main --head "$branch" \
             --title "docs(evidence): add browser screenshot fixtures (run ${RUN_ID})" \
             --body "This PR was generated only from a successful Browser evidence workflow run on main.
           - Source SHA: ${SOURCE_SHA}
@@ -119,4 +136,23 @@ jobs:
           - The manifest was checked for completeness and absence of serious/critical axe violations.
           - The workflow only opens a reviewable PR; it does not write to main.
 
-          Please review the fixture contents and run provenance before merging."
+          Please review the fixture contents and run provenance before merging." > pr-url.txt 2> pr-error.txt; then
+            echo "Opened PR: $(cat pr-url.txt)"
+            { echo "## Browser evidence fixture PR"; echo ""; echo "Automated PR created: $(cat pr-url.txt)"; } >> "$GITHUB_STEP_SUMMARY"
+          else
+            {
+              echo "## Browser evidence fixture publication"
+              echo ""
+              echo "Browser acceptance succeeded and the 112-shot artifact was validated, but automated PR creation was **BLOCKED**."
+              echo "This usually means the repository disables pull-request creation by GitHub Actions; it is a publication-permission outcome, not a test failure."
+              echo ""
+              echo "- Branch pushed: \`${branch}\`"
+              echo "- Manual PR URL: ${compare_url}"
+              echo "- Evidence run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}"
+              echo "- Source SHA: \`${SOURCE_SHA}\`"
+              echo ""
+              echo '```text'
+              cat pr-error.txt
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi

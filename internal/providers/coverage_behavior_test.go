@@ -88,6 +88,7 @@ func TestStreamingCloseWrappersReleaseAndCancelExactlyOnce(t *testing.T) {
 }
 
 func TestQuotaEstimateAndAdapterIdentityContracts(t *testing.T) {
+	//lint:ignore SA1012 this test verifies quota estimation from a context-less caller.
 	if got := WithQuotaEstimate(nil, 5, 7).Value(quotaEstimateContextKey{}); got != int64(12) {
 		t.Fatalf("quota estimate=%v", got)
 	}

@@ -619,7 +619,7 @@ func RunAgentLoopSimulation(ctx context.Context, t ProbeTransport, deploymentID,
 		return report
 	}
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 256<<10))
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	latency1 := time.Since(start).Milliseconds()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		cls := ClassifyUpstreamError(resp.StatusCode, body)

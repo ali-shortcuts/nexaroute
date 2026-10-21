@@ -477,12 +477,15 @@ TLS is off by default. When enabled, NexaRoute serves HTTPS on the configured `l
     "key_file": "tls/server.key",
     "client_ca_file": "tls/client-ca.crt",
     "require_client_cert_admin": true,
-    "require_client_cert_data_plane": false
+    "require_client_cert_data_plane": false,
+    "trusted_proxy_cidrs": ["127.0.0.1/32"]
   }
 }
 ```
 
 `client_ca_file` is required when either client-certificate flag is enabled. Client certificates are verified against that CA during the TLS handshake; NexaRoute then requires a verified certificate for `/admin/api/*` and/or `/v1/*` according to the corresponding flag. Use a CA and certificates dedicated to the intended clients. mTLS is an additional peer check and does not replace OIDC role authorization or the explicitly configured emergency-access policy. Keep certificate/key files readable by the gateway process and protect the private key with restrictive filesystem permissions.
+
+`trusted_proxy_cidrs` is optional and empty by default. It is only for a TLS-terminating reverse proxy that reaches NexaRoute over plain HTTP. When the TCP peer address matches one of these IP/CIDR entries, a single unambiguous `X-Forwarded-Proto: http|https` value may describe the original client scheme. That scheme then controls the `Secure` attribute on Admin session/CSRF/OIDC cookies and the same-origin `http`/`https` comparison. Direct clients, peers outside the list, chained values such as `https, http`, duplicated header lines, and the `Forwarded` header are always ignored. List only proxy addresses you control (for example a loopback or private load-balancer network); `0.0.0.0/0` and `::/0` are rejected. The gateway never trusts a forwarding header for authentication or authorization. When NexaRoute terminates TLS itself, this setting is unnecessary.
 
 ### Read-only configuration commands
 

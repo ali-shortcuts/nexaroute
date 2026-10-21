@@ -107,25 +107,25 @@ func parseEventStreamHeaders(b []byte) (map[string]string, error) {
 			if len(b) < 1 {
 				return nil, fmt.Errorf("eventstream: truncated int8 header")
 			}
-			value = fmt.Sprintf("%d", int8(b[0]))
+			value = fmt.Sprintf("%d", int8(b[0])) // #nosec G115 -- int8 is the protocol's signed 8-bit value; two's-complement reinterpretation is intended.
 			b = b[1:]
 		case 3: // int16
 			if len(b) < 2 {
 				return nil, fmt.Errorf("eventstream: truncated int16 header")
 			}
-			value = fmt.Sprintf("%d", int16(binary.BigEndian.Uint16(b)))
+			value = fmt.Sprintf("%d", int16(binary.BigEndian.Uint16(b))) // #nosec G115 -- int16 is the protocol's signed 16-bit value; two's-complement reinterpretation is intended.
 			b = b[2:]
 		case 4: // int32
 			if len(b) < 4 {
 				return nil, fmt.Errorf("eventstream: truncated int32 header")
 			}
-			value = fmt.Sprintf("%d", int32(binary.BigEndian.Uint32(b)))
+			value = fmt.Sprintf("%d", int32(binary.BigEndian.Uint32(b))) // #nosec G115 -- int32 is the protocol's signed 32-bit value; two's-complement reinterpretation is intended.
 			b = b[4:]
 		case 5, 8: // int64 / timestamp
 			if len(b) < 8 {
 				return nil, fmt.Errorf("eventstream: truncated int64 header")
 			}
-			value = fmt.Sprintf("%d", int64(binary.BigEndian.Uint64(b)))
+			value = fmt.Sprintf("%d", int64(binary.BigEndian.Uint64(b))) // #nosec G115 -- int64 is the protocol's signed 64-bit value; two's-complement reinterpretation is intended.
 			b = b[8:]
 		case 6, 7: // byte array / string: uint16 length-prefixed
 			if len(b) < 2 {

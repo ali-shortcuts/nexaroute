@@ -83,7 +83,7 @@ func jitteredRetryBackoff(base time.Duration, attempt int, requestID string) tim
 	_, _ = h.Write([]byte{byte(attempt)})
 	// Full jitter in [0,max], deterministic for a request+attempt so tests and
 	// incident replay remain reproducible while concurrent clients desynchronize.
-	return time.Duration(h.Sum64() % uint64(max+1))
+	return time.Duration(h.Sum64() % uint64(max+1)) // #nosec G115 -- max is a non-negative capped duration in milliseconds.
 }
 
 func patchJSONModel(raw []byte, model string) ([]byte, error) {

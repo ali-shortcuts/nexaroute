@@ -262,7 +262,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		}
 		if e == nil && streamOptionsInjected && resp.StatusCode == http.StatusBadRequest {
 			probe, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			if bytes.Contains(bytes.ToLower(probe), []byte("stream_options")) {
 				if stripped, ok := stripStreamOptions(payload); ok {
 					payload = stripped
@@ -315,7 +315,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		}
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			b, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			b = a.RedactBody(b)
 			lastStatus = resp.StatusCode
 			lastBody = b
@@ -452,7 +452,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 			} else {
 				var b []byte
 				b, e = readJSONLimited(resp.Body)
-				resp.Body.Close()
+				_ = resp.Body.Close()
 				if e == nil {
 					e = validateAnthropicResponseJSON(b)
 				}
@@ -479,7 +479,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		default:
 			var o core.OpenAIResponse
 			e = decodeValidatedJSONLimited(resp.Body, &o, validateOpenAIResponseJSON)
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			if e == nil {
 				inputTokens, outputTokens = o.Usage.PromptTokens, o.Usage.CompletionTokens
 				s.recordUsage(r, c.Deployment.ID, int64(o.Usage.PromptTokens), int64(o.Usage.CompletionTokens))

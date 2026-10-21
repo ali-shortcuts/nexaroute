@@ -371,7 +371,7 @@ func (s *Server) doUpstreamWithRepair(
 			return resp, payload, out, nil
 		}
 		body, readErr := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		if readErr != nil {
 			resp.Body = io.NopCloser(bytes.NewReader(body))
 			return resp, payload, out, nil
@@ -471,7 +471,7 @@ func (s *Server) maybeRepairUpstream(
 	}
 	for {
 		body, readErr := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		if readErr != nil {
 			resp.Body = io.NopCloser(bytes.NewReader(body))
 			return resp, payload, out

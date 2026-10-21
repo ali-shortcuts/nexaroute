@@ -8,12 +8,14 @@ import (
 	"embed"
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"io"
 	"io/fs"
 	"log"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"reflect"
@@ -250,7 +252,7 @@ func New(cfg config.Config, configPath string, reg *providers.Registry, rt *rout
 		l.Printf("admin_security_store_unavailable=true; protected admin requests will fail closed")
 	}
 	if cfg.Admin.OIDC.Enabled {
-		s.oidc, s.oidcErr = newOIDCAuthenticator(nil, cfg.Admin.OIDC)
+		s.oidc, s.oidcErr = newOIDCAuthenticator(context.Background(), cfg.Admin.OIDC)
 		if s.oidcErr != nil && l != nil {
 			l.Printf("admin_oidc_unavailable=true; protected admin requests will fail closed")
 		}
@@ -1044,7 +1046,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/version", s.hello)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"ok":true}`))
+		_, _ = w.Write([]byte(`{"ok":true}`))
 	})
 	mux.HandleFunc("/readyz", s.ready)
 	mux.HandleFunc("/metrics", s.metrics)
@@ -1221,6 +1223,7 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 		}
 		trace := newTraceContext(r.Header.Get("traceparent"))
 		r = r.WithContext(withTrace(r.Context(), trace))
+		r = s.withTrustedProxyContext(r)
 		// The external x-request-id is caller-controlled and may repeat. Use a
 		// gateway-generated key for autopilot leases and signal attribution.
 		autopilotKey := fmt.Sprintf("autopilot-%x", requestNumber)
@@ -1430,11 +1433,54 @@ func isStateChanging(method string) bool {
 	}
 }
 
+type trustedProxyContextKey struct{}
+
+// withTrustedProxyContext marks a request as arriving from an explicitly
+// configured proxy network. The mark is derived from the connection's peer
+// address, never from a request header, so a direct client cannot claim it.
+func (s *Server) withTrustedProxyContext(r *http.Request) *http.Request {
+	snap := s.configSnapshot()
+	if len(snap.trustedProxies) == 0 {
+		return r
+	}
+	addr, err := netip.ParseAddr(adminRemoteIP(r))
+	if err != nil {
+		return r
+	}
+	addr = addr.Unmap()
+	for _, prefix := range snap.trustedProxies {
+		if prefix.Contains(addr) {
+			return r.WithContext(context.WithValue(r.Context(), trustedProxyContextKey{}, true))
+		}
+	}
+	return r
+}
+
+// forwardedProtoHTTPS accepts only a single, unambiguous scheme token. A
+// chained or duplicated header is treated as untrusted rather than guessed.
+func forwardedProtoHTTPS(values []string) bool {
+	if len(values) != 1 {
+		return false
+	}
+	value := strings.TrimSpace(values[0])
+	if value == "" || strings.Contains(value, ",") {
+		return false
+	}
+	return strings.EqualFold(value, "https")
+}
+
 func requestIsSecure(r *http.Request) bool {
-	// Derive this from the gateway's own connection state only. A forwarded
-	// header is caller-controlled and must not be able to turn off the Secure
-	// attribute on an auth cookie served over plain HTTP.
-	return r.TLS != nil
+	// A direct TLS connection is authoritative. Forwarding headers only count
+	// when the peer address was explicitly listed in tls.trusted_proxy_cidrs
+	// and the header carries one unambiguous scheme token.
+	if r.TLS != nil {
+		return true
+	}
+	trusted, _ := r.Context().Value(trustedProxyContextKey{}).(bool)
+	if !trusted {
+		return false
+	}
+	return forwardedProtoHTTPS(r.Header.Values("X-Forwarded-Proto"))
 }
 
 func sameOrigin(r *http.Request) bool {
@@ -1513,5 +1559,5 @@ func (s *Server) adminCSRFToken(w http.ResponseWriter, r *http.Request) {
 	})
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "application/json")
-	fmt.Fprintf(w, `{"token":%q}`, token)
+	_ = json.NewEncoder(w).Encode(map[string]string{"token": token})
 }

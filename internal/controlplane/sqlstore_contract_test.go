@@ -56,14 +56,14 @@ func openScriptedDB(t *testing.T, state *scriptedSQL) *sql.DB {
 	return db
 }
 
-func (d scriptedDriver) Open(string) (driver.Conn, error) { return scriptedConn{state: d.state}, nil }
+func (d scriptedDriver) Open(string) (driver.Conn, error) { return scriptedConn(d), nil }
 func (c scriptedConn) Prepare(string) (driver.Stmt, error) {
 	return nil, errors.New("Prepare is not used")
 }
 func (c scriptedConn) Close() error              { return nil }
-func (c scriptedConn) Begin() (driver.Tx, error) { return scriptedTx{state: c.state}, nil }
+func (c scriptedConn) Begin() (driver.Tx, error) { return scriptedTx(c), nil }
 func (c scriptedConn) BeginTx(context.Context, driver.TxOptions) (driver.Tx, error) {
-	return scriptedTx{state: c.state}, nil
+	return scriptedTx(c), nil
 }
 func (c scriptedConn) QueryContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
 	c.state.mu.Lock()

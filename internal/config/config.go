@@ -478,6 +478,11 @@ type TLSConfig struct {
 	ClientCAFile               string `json:"client_ca_file,omitempty"`
 	RequireClientCertAdmin     bool   `json:"require_client_cert_admin,omitempty"`
 	RequireClientCertDataPlane bool   `json:"require_client_cert_data_plane,omitempty"`
+	// TrustedProxyCIDRs lists the reverse proxies whose X-Forwarded-Proto
+	// header may describe the original client scheme for Admin cookie and
+	// same-origin decisions. It is empty by default: forwarding headers from
+	// every peer are ignored unless the peer address is explicitly listed.
+	TrustedProxyCIDRs []string `json:"trusted_proxy_cidrs,omitempty"`
 }
 
 func (c TLSConfig) Validate() error {
@@ -491,7 +496,49 @@ func (c TLSConfig) Validate() error {
 	if (c.RequireClientCertAdmin || c.RequireClientCertDataPlane) && strings.TrimSpace(c.ClientCAFile) == "" {
 		return errors.New("tls.client_ca_file is required when client certificates are required")
 	}
+	if _, err := ParseTrustedProxyCIDRs(c.TrustedProxyCIDRs); err != nil {
+		return err
+	}
 	return nil
+}
+
+// ParseTrustedProxyCIDRs validates and normalizes an explicit trusted-proxy
+// list. A bare IP is accepted as a single-address prefix. The all-addresses
+// prefixes are rejected: listing every peer as trusted would make the
+// caller-controlled forwarding header authoritative again.
+func ParseTrustedProxyCIDRs(values []string) ([]netip.Prefix, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+	if len(values) > 64 {
+		return nil, errors.New("tls.trusted_proxy_cidrs exceeds the safe limit of 64 entries")
+	}
+	out := make([]netip.Prefix, 0, len(values))
+	seen := make(map[netip.Prefix]struct{}, len(values))
+	for _, raw := range values {
+		value := strings.TrimSpace(raw)
+		if value == "" {
+			return nil, errors.New("tls.trusted_proxy_cidrs entries must not be empty")
+		}
+		prefix, err := netip.ParsePrefix(value)
+		if err != nil {
+			addr, addrErr := netip.ParseAddr(value)
+			if addrErr != nil {
+				return nil, fmt.Errorf("tls.trusted_proxy_cidrs entry %q is not an IP address or CIDR", value)
+			}
+			prefix = netip.PrefixFrom(addr, addr.BitLen())
+		}
+		if prefix.Bits() == 0 {
+			return nil, fmt.Errorf("tls.trusted_proxy_cidrs entry %q trusts every address; list the proxy networks explicitly", value)
+		}
+		prefix = prefix.Masked()
+		if _, ok := seen[prefix]; ok {
+			continue
+		}
+		seen[prefix] = struct{}{}
+		out = append(out, prefix)
+	}
+	return out, nil
 }
 
 type RoutingConfig struct {

@@ -23,7 +23,7 @@ func TestConformancePanelWiring(t *testing.T) {
 		"native passthrough",    // native vs translation honesty
 		"bt('cf_title')",
 		"'cf_title': 'Provider conformance'",
-		"'cf_title': 'انطباق ارائه‌دهنده'",
+		"'cf_title': 'انطباق ارائه\u200cدهنده'",
 	} {
 		if !strings.Contains(appJS, want) {
 			t.Errorf("app.js missing conformance panel wiring %q", want)

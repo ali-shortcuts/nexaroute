@@ -287,7 +287,7 @@ func TestCappedBufferTruncates(t *testing.T) {
 	if _, _ = b.Write([]byte("x")); b.Len() != maxPiperStderr {
 		t.Fatal("grew past cap")
 	}
-	if !bytes.HasPrefix([]byte(b.String()), []byte{0}) && len(b.String()) != maxPiperStderr {
+	if !bytes.HasPrefix(b.Bytes(), []byte{0}) && len(b.String()) != maxPiperStderr {
 		t.Fatal("truncation")
 	}
 }
