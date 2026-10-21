@@ -1,12 +1,15 @@
 # Deployment
 
 NexaRoute is a single static Go binary; every deployment form below runs
-the same artifact and the same configuration model. State lives next to
-the config file (the auto-managed master key, the session/audit store,
-and — for the file backend — control-plane state), so whatever form you
-choose, **one directory is the installation** and the M4-3
+the same artifact and the same configuration model. Local state lives next
+to the config file (the auto-managed master key, the bbolt session/audit
+store, and — for the file backend — control-plane state). When the optional
+PostgreSQL or Redis backends are selected, their state lives in those
+services instead. In every case the config itself is a per-replica local
+file, so the M4-3
 `nexaroute backup` / `nexaroute restore` / `nexaroute doctor` commands
-work unchanged against it.
+work against that local installation and an application backup never
+substitutes for backing up external services.
 
 ## Container image
 
@@ -74,21 +77,26 @@ helm install nexaroute deploy/helm/nexaroute \
   `config.existingSecret` (preferred), or let the chart render one from
   `config.configJSON` — values files are not a secret store, and the
   rendered Secret is only base64-encoded.
-- **Persistence**: all state is on one PVC mounted at `/config`
+- **Persistence**: local state is on one PVC mounted at `/config`
   (default 1Gi RWO; `persistence.existingClaim` to reuse one). The
   config Secret is overlaid as the single file `/config/config.json`;
-  the master-key file and stores are written beside it on the PVC.
+  the master-key file, bbolt security store and file-backend
+  control-plane state are written beside it on the PVC. External
+  PostgreSQL/Redis state is not on this volume.
 - **Database control plane**: set `controlPlane.postgresDSN.secretName`
   / `controlPlane.redisURL.secretName` to reference operator Secrets;
   the chart injects them as `NEXAROUTE_CONTROL_PLANE_PG_DSN` /
   `NEXAROUTE_CONTROL_PLANE_REDIS_URL` environment variables — point the
   config's `postgres_dsn_env` / `redis_url_env` at those names. No
   connection value ever appears in values or rendered manifests.
-- **Scaling truth**: `replicaCount` defaults to 1. More replicas share
-  control-plane state only with the Postgres/Redis backends, and the
-  session/audit store remains a per-replica bbolt file until the M4-2
-  adapters land — the chart does not provide full HA before then, and
-  the upgrade strategy is `Recreate` so two pods never share one claim.
+- **Scaling truth**: `replicaCount` defaults to 1. More replicas can share
+  control-plane state with the Postgres/Redis backends and can share the
+  session/audit store by selecting the PostgreSQL or Redis security-store
+  backend. They do **not** share configuration: the config file remains
+  local to each replica, and admin or CLI edits do not propagate. Distribute
+  the same config to every replica through deployment tooling. The chart does
+  not provide full HA, and the upgrade strategy is `Recreate` so two pods never
+  share one PVC claim.
 
 Chart correctness is evidenced by `helm lint` + `helm template` with
 rendered-output assertions in CI; **a live cluster install is not yet

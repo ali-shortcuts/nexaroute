@@ -1,11 +1,12 @@
 # NexaRoute Helm values.
 #
-# Scaling note: the default single replica keeps ALL state (master-key
-# file, session/audit store, file control-plane state) on one PVC.
-# replicaCount > 1 additionally requires the Postgres or Redis
-# control-plane backend (see controlPlane below) and still leaves the
-# session/audit store per-replica (bbolt) until the M4-2 adapters land;
-# the chart does not claim full HA before then.
+# Scaling note: the default single replica keeps local state (config,
+# master-key file, bbolt session/audit store, file control-plane state)
+# on one PVC. replicaCount > 1 can use the Postgres or Redis control-plane
+# backend (see controlPlane below) and can share sessions/audit by
+# selecting a PostgreSQL/Redis security-store backend, but the config file
+# remains per-replica and admin/CLI edits do not propagate. Distribute the
+# config through deployment tooling; the chart does not claim full HA.
 replicaCount: 1
 
 image:

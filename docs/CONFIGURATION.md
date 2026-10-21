@@ -53,9 +53,17 @@ for backup, restore, and interruption procedures.
 
 ## Optional shared control plane
 
-The shared control plane is disabled by default. When enabled, connection
-strings are read only from environment variables named by the durable config;
-the connection strings themselves are never written to JSON:
+The shared control plane is disabled by default. It carries runtime metadata
+and budget-alert marks, not configuration: the control-plane store never stores
+or reconciles the config file. Config remains per-instance even when the
+control plane is enabled, and neither admin saves nor CLI edits propagate to
+another replica. Distribute the config to every replica through deployment
+tooling. The decision record and the unimplemented options are in
+[ADR 0001](adr/0001-shared-config-snapshot.md).
+
+When enabled, connection strings are read only from environment variables
+named by the durable config; the connection strings themselves are never
+written to JSON:
 
 ```json
 {

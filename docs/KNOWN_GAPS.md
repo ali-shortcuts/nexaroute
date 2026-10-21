@@ -175,6 +175,9 @@ explicit test-only memory store, PostgreSQL, or Redis and reconciles a versioned
 runtime-metadata startup snapshot. Config snapshots are never part of that
 store: config is loaded from the local config file and admin saves atomically
 rewrite that same local file, so config edits do not propagate across replicas.
+[ADR 0001](adr/0001-shared-config-snapshot.md) records the shared-config
+options, secret-custody constraints and the owner decisions required before
+any implementation; none of those options is implemented or enabled.
 Both database backends fail closed when unavailable; Redis
 uses atomic revision-aware Lua scripts and has real-service integration
 coverage. Adapter tests do not guarantee deployment-level persistence,

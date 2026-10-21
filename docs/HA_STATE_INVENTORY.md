@@ -36,7 +36,9 @@ Scopes: `shared` (coherent across replicas via a shared store),
    tooling, never by expecting control-plane propagation. Breaker,
    quota-reservation, affinity and video state remain per-instance,
    with the oversubscription consequence documented above — size
-   per-instance limits accordingly.
+   per-instance limits accordingly. [ADR 0001](adr/0001-shared-config-snapshot.md)
+   records why shared configuration is not implemented and the owner
+   decisions required before it can be.
 2. The file control-plane backend coordinates processes on **one
    host** (flock + CAS). It is not a cross-host store, and a
    network filesystem is never a coordination substitute.
