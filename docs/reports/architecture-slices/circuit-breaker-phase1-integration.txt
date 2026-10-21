@@ -28,4 +28,4 @@ $ NEXAROUTE_TEST_POSTGRES_DSN=postgres://nexaroute:...@127.0.0.1:55432/nexaroute
     --- PASS: TestRedisBreakerStoreIntegration/malformed_document_is_rejected_not_treated_as_empty (0.00s)
     --- PASS: TestRedisBreakerStoreIntegration/conflict_retries_are_bounded (0.00s)
 PASS
-ok  	github.com/ali-shortcuts/nexaroute/internal/sharedstate	0.050s
+ok  	github.com/ali-shortcuts/nexaroute/internal/sharedstate	0.048s
