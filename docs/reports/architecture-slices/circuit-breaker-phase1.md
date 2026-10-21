@@ -74,7 +74,7 @@ These are intentionally not claimed as done:
 
 ## Contract summary
 
-The ADR (`docs/adr/0001-circuit-breaker-state-consistency.md`) is authoritative.
+The ADR (`docs/adr/0002-circuit-breaker-state-consistency.md`) is authoritative.
 In short:
 
 - atomic unit = one versioned document; writers use compare-and-swap;

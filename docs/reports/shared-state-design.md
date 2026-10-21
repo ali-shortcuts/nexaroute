@@ -2,7 +2,7 @@
 
 Status: Phase 1 state-store slice is implemented in `internal/sharedstate`
 (contract, monotonic merge, revision-guarded publish, control-plane adapter and
-contract/integration tests — see `docs/adr/0001-circuit-breaker-state-consistency.md`
+contract/integration tests — see `docs/adr/0002-circuit-breaker-state-consistency.md`
 and `docs/reports/architecture-slices/circuit-breaker-phase1.md`). Gateway
 wiring, the refresh/apply loop, remote-retired application, provider/scope
 sharing and multi-instance acceptance remain unimplemented; this document

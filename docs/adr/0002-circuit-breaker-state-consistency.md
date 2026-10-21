@@ -1,4 +1,4 @@
-# ADR 0001: Shared circuit-breaker state consistency contract
+# ADR 0002: Shared circuit-breaker state consistency contract
 
 - Status: Accepted for the state-store slice; production wiring remains BLOCKED on owner decisions.
 - Date: 2026-10-21
