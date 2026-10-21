@@ -142,7 +142,7 @@ func (c *apiClient) DownloadAsset(ctx context.Context, jobID, assetID, outPath s
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("Video Gateway asset download failed: %w", err)
+		return fmt.Errorf("video gateway asset download failed: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -151,12 +151,12 @@ func (c *apiClient) DownloadAsset(ctx context.Context, jobID, assetID, outPath s
 			var apiErr apiError
 			if json.Unmarshal(data, &apiErr) == nil && strings.TrimSpace(apiErr.Message) != "" {
 				if apiErr.Code != "" {
-					return fmt.Errorf("Video Gateway HTTP %d (%s): %s", resp.StatusCode, apiErr.Code, apiErr.Message)
+					return fmt.Errorf("video gateway HTTP %d (%s): %s", resp.StatusCode, apiErr.Code, apiErr.Message)
 				}
-				return fmt.Errorf("Video Gateway HTTP %d: %s", resp.StatusCode, apiErr.Message)
+				return fmt.Errorf("video gateway HTTP %d: %s", resp.StatusCode, apiErr.Message)
 			}
 		}
-		return fmt.Errorf("Video Gateway HTTP %d while downloading asset", resp.StatusCode)
+		return fmt.Errorf("video gateway HTTP %d while downloading asset", resp.StatusCode)
 	}
 	tmp, err := os.CreateTemp(directory, ".nexaroute-download-*")
 	if err != nil {
@@ -230,7 +230,7 @@ func (c *apiClient) request(ctx context.Context, method, path string, body, out 
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("Video Gateway request failed: %w", err)
+		return fmt.Errorf("video gateway request failed: %w", err)
 	}
 	defer resp.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxAPIResponseBytes+1))
@@ -238,17 +238,17 @@ func (c *apiClient) request(ctx context.Context, method, path string, body, out 
 		return fmt.Errorf("read Video Gateway response: %w", err)
 	}
 	if len(data) > maxAPIResponseBytes {
-		return errors.New("Video Gateway response exceeds 2 MiB limit")
+		return errors.New("video gateway response exceeds 2 MiB limit")
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		var apiErr apiError
 		if json.Unmarshal(data, &apiErr) == nil && strings.TrimSpace(apiErr.Message) != "" {
 			if apiErr.Code != "" {
-				return fmt.Errorf("Video Gateway HTTP %d (%s): %s", resp.StatusCode, apiErr.Code, apiErr.Message)
+				return fmt.Errorf("video gateway HTTP %d (%s): %s", resp.StatusCode, apiErr.Code, apiErr.Message)
 			}
-			return fmt.Errorf("Video Gateway HTTP %d: %s", resp.StatusCode, apiErr.Message)
+			return fmt.Errorf("video gateway HTTP %d: %s", resp.StatusCode, apiErr.Message)
 		}
-		return fmt.Errorf("Video Gateway HTTP %d", resp.StatusCode)
+		return fmt.Errorf("video gateway HTTP %d", resp.StatusCode)
 	}
 	if out == nil || len(data) == 0 {
 		return nil

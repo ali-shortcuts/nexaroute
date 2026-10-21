@@ -115,16 +115,16 @@ func SynthesizePiper(ctx context.Context, opts PiperOptions) error {
 	cmd.Stderr = &diagnostics
 	if err := cmd.Run(); err != nil {
 		if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
-			return fmt.Errorf("Piper synthesis exceeded timeout %s", timeout)
+			return fmt.Errorf("piper synthesis exceeded timeout %s", timeout)
 		}
 		if runCtx.Err() != nil {
 			return runCtx.Err()
 		}
 		detail := strings.TrimSpace(diagnostics.String())
 		if detail != "" {
-			return fmt.Errorf("Piper synthesis failed: %w: %s", err, detail)
+			return fmt.Errorf("piper synthesis failed: %w: %s", err, detail)
 		}
-		return fmt.Errorf("Piper synthesis failed: %w", err)
+		return fmt.Errorf("piper synthesis failed: %w", err)
 	}
 	if err := runCtx.Err(); err != nil {
 		return err
@@ -170,7 +170,7 @@ func samePath(a, b string) bool {
 func validateWAV(path string) error {
 	f, err := os.Open(path)
 	if err != nil {
-		return fmt.Errorf("Piper did not create narration output: %w", err)
+		return fmt.Errorf("piper did not create narration output: %w", err)
 	}
 	defer f.Close()
 	info, err := f.Stat()
@@ -178,14 +178,14 @@ func validateWAV(path string) error {
 		return fmt.Errorf("stat Piper output: %w", err)
 	}
 	if !info.Mode().IsRegular() || info.Size() < 12 {
-		return errors.New("Piper output is not a non-empty WAV file")
+		return errors.New("piper output is not a non-empty WAV file")
 	}
 	var header [12]byte
 	if _, err := io.ReadFull(f, header[:]); err != nil {
 		return fmt.Errorf("read Piper WAV header: %w", err)
 	}
 	if string(header[0:4]) != "RIFF" || string(header[8:12]) != "WAVE" {
-		return errors.New("Piper output does not have a RIFF/WAVE header")
+		return errors.New("piper output does not have a RIFF/WAVE header")
 	}
 	return nil
 }
