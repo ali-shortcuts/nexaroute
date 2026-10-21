@@ -64,6 +64,51 @@ func TestValidateVideoDomainCharacterization(t *testing.T) {
 			},
 		},
 		{
+			name: "file job store backend is valid",
+			mutate: func(cfg *Config) {
+				cfg.Video.Enabled = true
+				cfg.Video.AuthTokenEnv = "NEXAROUTE_TEST_VIDEO_TOKEN"
+				cfg.Video.JobStoreBackend = "file"
+			},
+		},
+		{
+			name: "unknown job store backend is rejected",
+			mutate: func(cfg *Config) {
+				cfg.Video.Enabled = true
+				cfg.Video.AuthTokenEnv = "NEXAROUTE_TEST_VIDEO_TOKEN"
+				cfg.Video.JobStoreBackend = "s3"
+			},
+			wantErr: "video.job_store_backend must be file or postgres",
+		},
+		{
+			name: "postgres job store requires a url",
+			mutate: func(cfg *Config) {
+				cfg.Video.Enabled = true
+				cfg.Video.AuthTokenEnv = "NEXAROUTE_TEST_VIDEO_TOKEN"
+				cfg.Video.JobStoreBackend = "postgres"
+			},
+			wantErr: "video.job_store_url is required for the postgres job store backend",
+		},
+		{
+			name: "postgres job store accepts a url",
+			mutate: func(cfg *Config) {
+				cfg.Video.Enabled = true
+				cfg.Video.AuthTokenEnv = "NEXAROUTE_TEST_VIDEO_TOKEN"
+				cfg.Video.JobStoreBackend = "postgres"
+				cfg.Video.JobStoreURL = "env:NEXAROUTE_TEST_PG_DSN"
+			},
+		},
+		{
+			name: "file job store rejects a url",
+			mutate: func(cfg *Config) {
+				cfg.Video.Enabled = true
+				cfg.Video.AuthTokenEnv = "NEXAROUTE_TEST_VIDEO_TOKEN"
+				cfg.Video.JobStoreBackend = "file"
+				cfg.Video.JobStoreURL = "postgres://localhost/db"
+			},
+			wantErr: "video.job_store_url must be empty for the file job store backend",
+		},
+		{
 			name: "comfyui requires the video gateway",
 			mutate: func(cfg *Config) {
 				cfg.Video.ComfyUIEnabled = true

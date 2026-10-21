@@ -8,6 +8,12 @@ type Config struct {
 	Workers       int    `json:"workers,omitempty"`
 	AuthTokenEnv  string `json:"auth_token_env,omitempty"`
 	MaxAssetBytes int64  `json:"max_asset_bytes,omitempty"`
+	// JobStoreBackend selects the job-store implementation: "" or
+	// "file" (default, single-host JSON file) or "postgres" (shared
+	// PostgreSQL for multi-process deployments). JobStoreURL carries
+	// the PostgreSQL DSN, literally or as env:VARIABLE_NAME.
+	JobStoreBackend string `json:"job_store_backend,omitempty"`
+	JobStoreURL     string `json:"job_store_url,omitempty"`
 	// JobRetentionDays bounds how long terminal video jobs stay
 	// in the job store (#420 item 5): terminal jobs whose
 	// completion is older than this are pruned by the runtime.

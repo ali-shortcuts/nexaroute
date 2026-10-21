@@ -160,13 +160,16 @@ func viewJob(j video.VideoJob) jobView {
 // storeDurability names what the configured job store actually
 // guarantees, so the Studio never implies distributed durability
 // for local state (#414 item 8): "file" survives a restart on
-// this host only; "process" is lost on restart.
+// this host only; "process" is lost on restart; "postgres" is a
+// shared durable store (job metadata only — not asset storage).
 func storeDurability(s queue.JobStore) string {
 	switch s.(type) {
 	case *queue.FileStore:
 		return "file"
 	case *queue.MemoryStore:
 		return "process"
+	case *queue.PostgresStore:
+		return "postgres"
 	default:
 		return "store"
 	}

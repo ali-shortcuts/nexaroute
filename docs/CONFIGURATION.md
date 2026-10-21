@@ -924,6 +924,16 @@ manual action instead of automatic resubmission. The fake provider is for tests
 and local development only, writes a text placeholder, and is not a real video
 provider. See [Video Gateway](VIDEO_GATEWAY.md) and [Known Gaps](KNOWN_GAPS.md).
 
+`job_store_backend` selects the video job-store backend: `file` (the default;
+single-host JSON file at `store_path`) or `postgres` (shared PostgreSQL for
+multi-process deployments — job metadata only, not asset storage). Selecting
+`postgres` requires `job_store_url`, which may be a literal connection string
+or `env:VARIABLE_NAME` to read it from the environment (recommended, so the
+credential stays out of durable config). A configured PostgreSQL backend that
+cannot be reached **fails closed at startup**: the gateway never silently
+falls back to the file store. The cost ledger stays process-local; only job
+records are shared.
+
 ## MCP gateway (`mcp`, M6-1)
 
 When `mcp.enabled` is true, the gateway brokers registered Model
