@@ -280,15 +280,21 @@ func DecodeAnthropicStreamEvent(eventName, data string) ([]StreamEvent, error) {
 		var m struct {
 			Message struct {
 				Usage struct {
-					InputTokens  int `json:"input_tokens"`
-					OutputTokens int `json:"output_tokens"`
+					InputTokens         int `json:"input_tokens"`
+					OutputTokens        int `json:"output_tokens"`
+					CacheReadTokens     int `json:"cache_read_input_tokens"`
+					CacheCreationTokens int `json:"cache_creation_input_tokens"`
 				} `json:"usage"`
 			} `json:"message"`
 		}
 		_ = json.Unmarshal([]byte(d), &m)
 		ev := StreamEvent{Type: StreamStart}
-		if m.Message.Usage.InputTokens > 0 {
-			ev.Usage = &Usage{InputTokens: m.Message.Usage.InputTokens}
+		if m.Message.Usage.InputTokens > 0 || m.Message.Usage.CacheReadTokens > 0 || m.Message.Usage.CacheCreationTokens > 0 {
+			ev.Usage = &Usage{
+				InputTokens:      m.Message.Usage.InputTokens,
+				CacheReadTokens:  m.Message.Usage.CacheReadTokens,
+				CacheWriteTokens: m.Message.Usage.CacheCreationTokens,
+			}
 		}
 		return []StreamEvent{ev}, nil
 	case "content_block_start":
@@ -358,17 +364,20 @@ func DecodeAnthropicStreamEvent(eventName, data string) ([]StreamEvent, error) {
 				StopReason string `json:"stop_reason"`
 			} `json:"delta"`
 			Usage struct {
-				InputTokens  int `json:"input_tokens"`
-				OutputTokens int `json:"output_tokens"`
+				InputTokens         int `json:"input_tokens"`
+				OutputTokens        int `json:"output_tokens"`
+				CacheReadTokens     int `json:"cache_read_input_tokens"`
+				CacheCreationTokens int `json:"cache_creation_input_tokens"`
 			} `json:"usage"`
 		}
 		if err := json.Unmarshal([]byte(d), &md); err != nil {
 			return nil, fmt.Errorf("invalid Anthropic message_delta: %w", err)
 		}
 		var events []StreamEvent
-		if md.Usage.OutputTokens > 0 || md.Usage.InputTokens > 0 {
+		if md.Usage.OutputTokens > 0 || md.Usage.InputTokens > 0 || md.Usage.CacheReadTokens > 0 || md.Usage.CacheCreationTokens > 0 {
 			events = append(events, StreamEvent{Type: StreamUsage, Usage: &Usage{
 				InputTokens: md.Usage.InputTokens, OutputTokens: md.Usage.OutputTokens,
+				CacheReadTokens: md.Usage.CacheReadTokens, CacheWriteTokens: md.Usage.CacheCreationTokens,
 			}})
 		}
 		if md.Delta.StopReason != "" {
@@ -535,9 +544,17 @@ func (e *anthropicEmitter) Emit(ev StreamEvent) error {
 	}
 	switch ev.Type {
 	case StreamStart:
-		if ev.Usage != nil && ev.Usage.InputTokens > 0 {
-			e.usage.InputTokens = ev.Usage.InputTokens
-			e.usageSeen = true
+		if ev.Usage != nil {
+			if ev.Usage.InputTokens > 0 {
+				e.usage.InputTokens = ev.Usage.InputTokens
+			}
+			if ev.Usage.CacheReadTokens > 0 {
+				e.usage.CacheReadTokens = ev.Usage.CacheReadTokens
+			}
+			if ev.Usage.CacheWriteTokens > 0 {
+				e.usage.CacheWriteTokens = ev.Usage.CacheWriteTokens
+			}
+			e.usageSeen = e.usageSeen || ev.Usage.InputTokens > 0 || ev.Usage.CacheReadTokens > 0 || ev.Usage.CacheWriteTokens > 0
 		}
 	case StreamText:
 		if !e.textOpen {
@@ -605,6 +622,12 @@ func (e *anthropicEmitter) Emit(ev StreamEvent) error {
 			if ev.Usage.OutputTokens > 0 {
 				e.usage.OutputTokens = ev.Usage.OutputTokens
 			}
+			if ev.Usage.CacheReadTokens > 0 {
+				e.usage.CacheReadTokens = ev.Usage.CacheReadTokens
+			}
+			if ev.Usage.CacheWriteTokens > 0 {
+				e.usage.CacheWriteTokens = ev.Usage.CacheWriteTokens
+			}
 			e.usageSeen = true
 		}
 	case StreamEnd:
@@ -644,6 +667,12 @@ func (e *anthropicEmitter) Finish() error {
 	usage := map[string]int{"output_tokens": e.usage.OutputTokens}
 	if e.usageSeen || e.usage.InputTokens > 0 {
 		usage["input_tokens"] = e.usage.InputTokens
+	}
+	if e.usage.CacheReadTokens > 0 {
+		usage["cache_read_input_tokens"] = e.usage.CacheReadTokens
+	}
+	if e.usage.CacheWriteTokens > 0 {
+		usage["cache_creation_input_tokens"] = e.usage.CacheWriteTokens
 	}
 	e.frame("message_delta", map[string]any{"type": "message_delta", "delta": map[string]any{"stop_reason": stop, "stop_sequence": nil}, "usage": usage})
 	e.frame("message_stop", map[string]any{"type": "message_stop"})

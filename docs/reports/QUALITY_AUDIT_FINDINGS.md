@@ -167,3 +167,286 @@ These are design decisions, not cleanup items. No large refactor was performed.
 - Artifact download required authentication and returned HTTP 401 unauthenticated.
 - Full staticcheck after the changes reports 46 style/other findings. The targeted `SA4006,SA4000,U1000` set is clean, but the full style set was not part of the requested cleanup.
 - The audit workflow's report-only jobs do not prove the absence of vulnerabilities.
+
+---
+
+## Earlier audit pass (PR #595, branch `opencode/issue593-20261021064216`)
+
+The following section records the independent findings and fixes from the earlier audit pass that was rebased and merged alongside this report; it is preserved verbatim for traceability.
+
+# Post-release quality audit findings (Issue #593)
+
+Audited commit: `05003db9326b01464a368723d8ab31671b40dc8f`
+Audit branch: `opencode/issue593-20261021064216`
+
+## Summary
+
+| ID | Severity | Area | Defect | Status |
+| --- | --- | --- | --- | --- |
+| AUD-01 | P1 | Egress TLS | SNI and certificate verification pinned to the provider base host | Fixed |
+| AUD-02 | P1 | Egress proxy | `allowed_hosts` rejected the configured proxy hop | Fixed |
+| AUD-03 | P1 | Privacy | Media ingress ignored `no_training` route profiles | Fixed |
+| AUD-04 | P1 | Capability gating | Unsupported structured output was silently dropped and served as 200 | Fixed |
+| AUD-05 | P1 | Anthropic protocol | `max_tokens` could be less than or equal to `thinking.budget_tokens` | Fixed |
+| AUD-06 | P1 | Admin auth | Emergency API key remained valid while healthy OIDC was enabled | Fixed |
+| AUD-07 | P2 | Media response | Truncated/oversized upstream media produced a silent 200 | Fixed |
+| AUD-08 | P2 | Hedging | Hedge partner bypassed the capability-ineligible gate | Fixed |
+| AUD-09 | P2 | Usage accounting | Anthropic stream cache-token usage was dropped | Fixed |
+
+Nine defects were confirmed with failing tests or equivalent call-site proof.
+All nine were fixed and covered by regression tests in this branch.
+
+## AUD-01: egress TLS ServerName pinned to the base host
+
+- Type: security/correctness
+- Severity: P1
+- Confidence: high
+- Original location: `internal/egress/policy.go` (`NewTransport`, TLS config)
+- Fix location: `internal/egress/policy.go:314`
+- Regression test: `internal/egress/tls_servername_test.go`
+
+The provider egress transport set `TLSClientConfig.ServerName` to the hostname of
+the provider's base URL. Absolute-URL endpoint overrides to another host in
+`allowed_hosts` are a supported operator feature, and the dialer correctly
+resolved and policy-checked the override host, but TLS still sent SNI for and
+verified the certificate of the base host.
+
+Failure evidence before the fix:
+
+```text
+request to allow-listed HTTPS host failed TLS verification:
+Get "https://localhost:41665": tls: failed to verify certificate:
+x509: certificate is valid for localhost, not base.invalid
+```
+
+Impact: allow-listed HTTPS overrides to a different host failed closed in the
+common case. The check also verified the wrong identity, so the transport was
+not actually validating the certificate of the host it connected to.
+
+Fix: leave `ServerName` empty and let `net/http` derive SNI and certificate
+verification from the request URL host, matching the decision transport. The
+regression test uses a CA-signed `localhost` certificate and asserts both the
+handshake and the server-observed SNI.
+
+## AUD-02: proxy host rejected by `allowed_hosts`
+
+- Type: functional/security configuration
+- Severity: P1
+- Confidence: high
+- Original location: `internal/egress/policy.go` (dial-time allow-list)
+- Fix location: `internal/egress/policy.go:263`
+- Regression test: `internal/egress/policy_test.go`
+  (`TestNewTransportAllowsProxyHostOutsideAllowedHosts`)
+
+`docs/CONFIGURATION.md` states that the dial-time transport additionally permits
+the `proxy_url` host because it dials the proxy hop. The dial closure applied
+`allowed_hosts` to every address, including the proxy. Any deployment that set
+both `allowed_hosts` and `proxy_url` failed with:
+
+```text
+proxyconnect tcp: egress host "127.0.0.1" is not allow-listed
+```
+
+Fix: build a dial-scoped policy that appends the already-validated proxy host
+when `allowed_hosts` is non-empty. Request building still validates target URLs
+against the original allow-list, so the proxy host does not become a target
+host. An empty allow-list remains unrestricted.
+
+## AUD-03: media ingress bypassed `no_training`
+
+- Type: privacy
+- Severity: P1
+- Confidence: high
+- Original location: `internal/httpapi/media.go` (`serveMedia`)
+- Fix location: `internal/httpapi/media.go:183` and `:200`
+- Regression test: `internal/httpapi/privacy_p2_test.go`
+  (`TestMediaHonorsNoTrainingRouteProfile`)
+
+Embeddings, images, audio, and rerank requests built a router requirement
+without calling `applyPrivacyRequirement`. A `no_training` route profile or
+virtual-key requirement was therefore ignored and a training-enabled provider
+could receive the prompt.
+
+Failure evidence before the fix:
+
+```text
+training-enabled provider received 1 media request(s) for a no_training route
+```
+
+Fix: stamp the privacy requirement before candidate selection and map the
+empty-candidate case to the same `privacy_unavailable` 503 and privacy-safe
+event used by the chat ingresses. The regression test proves the
+training-enabled deployment receives zero requests and the compliant deployment
+serves the request.
+
+## AUD-04: structured output silently removed
+
+- Type: correctness/API contract
+- Severity: P1
+- Confidence: high
+- Original locations: `internal/httpapi/compat_engine.go`,
+  `internal/compat/capabilities.go`
+- Fix locations: `internal/httpapi/compat_engine.go:164`,
+  `internal/compat/capabilities.go:575`
+- Regression test: `internal/httpapi/structured_output_gate_test.go`
+  (`TestStructuredOutputUnsupportedFailsClosed`)
+
+Two gaps combined:
+
+1. `profileFromRequirement` did not copy `router.Requirement.StructuredOutput`
+   into the compatibility requirement profile for legacy ingress paths.
+2. `IneligibleFor` checked only `JSONObject`/`JSONSchema`, while runtime
+   learning records `CapStructuredOutput`.
+
+A deployment with a verified-unsupported structured-output capability was
+therefore eligible. The sanitizer then removed `response_format` and the client
+received a plain, unstructured 200 response despite requesting JSON.
+
+Failure evidence before the fix: the upstream was called and returned 200 with
+`response_format` removed.
+
+Fix: propagate `StructuredOutput` into the profile and treat a verified
+`StructuredOutput` or both unsupported JSON format capabilities as ineligible.
+The request now fails closed with 503 before any upstream call.
+
+## AUD-05: Anthropic `max_tokens` versus thinking budget
+
+- Type: protocol correctness
+- Severity: P1
+- Confidence: high
+- Original location: `internal/protocol/canonical/anthropic.go`
+- Fix location: `internal/protocol/canonical/anthropic.go:430`
+- Regression test: `internal/protocol/canonical/anthropic_budget_test.go`
+
+`EncodeAnthropicRequest` defaulted `max_tokens` to 4096 but independently chose
+thinking budgets of 8192 (default effort) or 16384 (high effort). Anthropic
+requires `max_tokens > budget_tokens`, so these payloads were rejected
+upstream. Codex-style `/v1/responses` reasoning requests routed to Anthropic
+were affected.
+
+Failure evidence before the fix:
+
+```text
+max_tokens=4096 <= budget_tokens=8192
+max_tokens=4096 <= budget_tokens=16384
+max_tokens=1024 <= budget_tokens=4096
+```
+
+Fix: when thinking is enabled and the ceiling is not greater than the budget,
+raise `max_tokens` to `budget + 1024`, matching the legacy translator.
+
+## AUD-06: emergency API key valid while OIDC is healthy
+
+- Type: authentication bypass
+- Severity: P1
+- Confidence: high
+- Original location: `internal/httpapi/admin_auth.go`
+- Fix location: `internal/httpapi/admin_auth.go:87`
+- Regression test: `internal/httpapi/oidc_test.go`
+  (`TestOIDCHealthyRejectsEmergencyAPIKey`)
+
+`docs/SECURITY.md` states that emergency API-key access is unavailable while
+OIDC is enabled. `authenticateAdmin` blocked emergency access only when OIDC was
+enabled and unavailable. With a healthy OIDC provider, a request carrying the
+static emergency key fell through to `legacyAdminAuthorized` and received the
+owner identity.
+
+Failure evidence before the fix: `GET /admin/api/snapshot` with the emergency
+key returned `200` and the full admin snapshot while healthy OIDC was enabled.
+
+Fix: once OIDC is enabled and discovery is healthy, an absent session never
+falls back to emergency credentials. OIDC outage behavior remains 503 and OIDC
+disabled behavior remains unchanged.
+
+## AUD-07: truncated media response became a silent 200
+
+- Type: response integrity
+- Severity: P2
+- Confidence: high
+- Original location: `internal/httpapi/media.go` (2xx response path)
+- Fix location: `internal/httpapi/media.go:276`
+- Regression tests: `internal/httpapi/media_test.go`
+  (`TestMediaEmbeddingsTruncatedUpstreamIsNotSilent200`,
+  `TestMediaSpeechTruncatedUpstreamIsNotSilent200`)
+
+The handler wrote the upstream status before reading the body. For non-binary
+responses, a failed body read left a committed `200` with an empty body and had
+already recorded deployment success. Binary responses were truncated at
+`maxMediaResponseBytes` (64 MiB) without any signal to the client.
+
+Failure evidence before the fix: a hijacked upstream that advertised a longer
+body and closed early produced `200` with an empty body; truncated audio also
+returned `200`.
+
+Fix: read the full payload (bounded by the existing limits) before committing
+headers. Read failures and oversized payloads are recorded as failures, allow
+failover, and return 502 if no candidate succeeds. The success health/telemetry
+record now happens only after the payload is usable.
+
+## AUD-08: hedge partner ignored capability ineligibility
+
+- Type: routing
+- Severity: P2
+- Confidence: high
+- Original locations: `internal/httpapi/openai.go`,
+  `internal/httpapi/anthropic.go` (hedge builder closures)
+- Fix locations: `internal/httpapi/openai.go:258`,
+  `internal/httpapi/anthropic.go:230`
+- Regression test: `internal/httpapi/hedging_test.go`
+  (`TestHedgeSkipsCapabilityIneligiblePartner`)
+
+The normal attempt loop calls `capabilityIneligible` before dispatch. The
+hedging path built and launched the next candidate directly, so a deployment
+with a verified-unsupported required capability could receive a hedged request
+and win the race.
+
+Failure evidence before the fix:
+
+```text
+capability-ineligible hedge partner received 1 request(s)
+```
+
+Fix: apply the same capability check in the hedge builder closure. If the
+partner is ineligible, hedging does not launch and the primary attempt proceeds
+normally.
+
+## AUD-09: Anthropic stream cache usage dropped
+
+- Type: usage/cost accounting
+- Severity: P2
+- Confidence: high
+- Original location: `internal/protocol/canonical/stream.go`
+- Fix locations: `internal/protocol/canonical/stream.go` (Anthropic stream
+  decoder and emitter)
+- Regression test: `internal/protocol/canonical/stream_cache_usage_test.go`
+
+The Anthropic SSE decoder read only `input_tokens` and `output_tokens`. It
+ignored `cache_read_input_tokens` and `cache_creation_input_tokens` in
+`message_start` and `message_delta`. The Anthropic emitter also forwarded only
+input/output tokens, so canonical traffic lost cache reads and writes used for
+usage accounting and client-visible usage.
+
+Failure evidence before the fix: a `message_start` with cache read 40 and cache
+creation 7 decoded to zero cache tokens; the emitted `message_delta` reported
+zero cache tokens.
+
+Fix: decode both cache fields, propagate them through canonical `Usage`, retain
+them in the Anthropic emitter, and include them in the final `message_delta`
+usage when non-zero.
+
+## Areas reviewed without a confirmed defect
+
+- Router candidate filtering, virtual endpoint/pool/fallback resolution, and
+  unknown-model fallback.
+- Provider protocol fallback after commitment and attempt accounting.
+- Admin route/method authorization matrix, session rotation/expiry, CSRF
+  double-submit, mTLS gate, and temp-file permissions.
+- Egress deny lists, loopback rules, embedded IPv4 (NAT64/6to4), DNS pinning,
+  and proxy credential stripping outside the two proxy/TLS defects above.
+- Canonical request/response translation outside the Anthropic budget and cache
+  usage defects above.
+- Video cost ledger transitions and provider aggregation.
+- Config defaults and bounds.
+
+No additional defect from these areas survived a failing-test or precise
+call-site check during this audit.

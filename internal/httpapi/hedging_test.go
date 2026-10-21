@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ali-shortcuts/nexaroute/internal/compat"
 	"github.com/ali-shortcuts/nexaroute/internal/config"
 	"github.com/ali-shortcuts/nexaroute/internal/events"
 )
@@ -245,5 +246,52 @@ func TestLaunchedHedgeCountsAgainstMaxAttemptsEvenWhenPrimaryWins(t *testing.T) 
 	}
 	if rr.Code == http.StatusOK {
 		t.Fatalf("third provider appears to have been used despite exhausted attempt budget: %s", rr.Body.String())
+	}
+}
+
+// Regression: hedging selected the next candidate directly, bypassing the
+// capabilityIneligible gate the normal attempt loop applies. A deployment with
+// a verified-unsupported required capability could receive hedged traffic.
+func TestHedgeSkipsCapabilityIneligiblePartner(t *testing.T) {
+	var firstCalls, secondCalls atomic.Int64
+	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		firstCalls.Add(1)
+		time.Sleep(60 * time.Millisecond)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"ok","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"primary"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
+	}))
+	defer first.Close()
+	second := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		secondCalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"ok","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"hedge"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
+	}))
+	defer second.Close()
+
+	cfg := config.Default()
+	cfg.Probe.Enabled = false
+	cfg.Routing.Strategy = "priority"
+	cfg.Routing.MaxAttempts = 2
+	cfg.Routing.HedgingEnabled = true
+	cfg.Routing.HedgingDelayMS = 10
+	firstProvider := hedgeBudgetProvider("first", first.URL, 0)
+	secondProvider := hedgeBudgetProvider("second", second.URL, 1)
+	firstProvider.Models[0].Capabilities.Tools = true
+	secondProvider.Models[0].Capabilities.Tools = true
+	cfg.Providers = []config.ProviderConfig{firstProvider, secondProvider}
+	srv := testGateway(t, cfg)
+	srv.SyncCapabilityContracts()
+	srv.CapabilityStore().LearnUnsupported("second/m", compat.CapTools, compat.SourceProbe, "test verdict", "")
+
+	req := httptest.NewRequest(http.MethodPost, "http://gateway/v1/chat/completions",
+		strings.NewReader(`{"model":"client","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"lookup","parameters":{"type":"object"}}}]}`))
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	if secondCalls.Load() != 0 {
+		t.Fatalf("capability-ineligible hedge partner received %d request(s)", secondCalls.Load())
 	}
 }

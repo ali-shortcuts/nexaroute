@@ -137,3 +137,123 @@ Final total: `84.5%` of statements. Baseline at `7a815a4`: `84.3%`. The increase
 ## Recommendation
 
 Ready for review as a scoped cleanup and hardening PR after the PR is opened and CI/Security plus a fresh audit run are observed on the checkpoint SHA. Do not treat this as a production certification. The architecture items and the trusted-proxy decision should be handled separately.
+
+---
+
+## Earlier audit pass (PR #595, branch `opencode/issue593-20261021064216`)
+
+The following section records the independent findings and fixes from the earlier audit pass that was rebased and merged alongside this report; it is preserved verbatim for traceability.
+
+# Post-release quality audit final report (Issue #593)
+
+Date: 2026-10-21
+Audited commit: `05003db9326b01464a368723d8ab31671b40dc8f`
+Branch: `opencode/issue593-20261021064216`
+
+## Outcome
+
+Nine confirmed defects were fixed with regression coverage. The complete local
+verification gate passes. No release, tag, or published artifact was modified.
+
+| Metric | Result |
+| --- | --- |
+| Confirmed defects | 9 |
+| Fixed with regression tests | 9 |
+| P1 findings | 6 (`AUD-01` through `AUD-06`) |
+| P2 findings | 3 (`AUD-07` through `AUD-09`) |
+| Remaining confirmed defects in audited scope | 0 |
+| Local verification | `VERIFY PASS` |
+
+Finding details are in `docs/reports/QUALITY_AUDIT_FINDINGS.md`.
+
+## Code changes
+
+| File | Change |
+| --- | --- |
+| `internal/egress/policy.go` | Stop pinning TLS `ServerName`; permit the validated proxy hop at dial time |
+| `internal/egress/policy_test.go` | Proxy/allow-list regression test |
+| `internal/egress/tls_servername_test.go` | Real TLS handshake/SNI regression test |
+| `internal/httpapi/media.go` | Apply privacy requirement; read payload before committing status |
+| `internal/httpapi/media_test.go` | Truncated JSON and audio response regression tests |
+| `internal/httpapi/privacy_p2_test.go` | Media `no_training` regression test |
+| `internal/httpapi/admin_auth.go` | Reject emergency credentials whenever OIDC is enabled and healthy |
+| `internal/httpapi/oidc_test.go` | Healthy-OIDC emergency-key regression test |
+| `internal/httpapi/compat_engine.go` | Propagate structured-output requirement into the capability profile |
+| `internal/compat/capabilities.go` | Treat verified `StructuredOutput` unsupported as ineligible |
+| `internal/httpapi/structured_output_gate_test.go` | Fail-closed structured-output regression test |
+| `internal/httpapi/openai.go`, `internal/httpapi/anthropic.go` | Apply capability gate to hedge partners |
+| `internal/httpapi/hedging_test.go` | Ineligible hedge-partner regression test |
+| `internal/protocol/canonical/anthropic.go` | Raise `max_tokens` above the thinking budget |
+| `internal/protocol/canonical/anthropic_budget_test.go` | Thinking-budget regression test |
+| `internal/protocol/canonical/stream.go` | Preserve and emit Anthropic cache-token usage |
+| `internal/protocol/canonical/stream_cache_usage_test.go` | Cache-token decoding/emission regression tests |
+
+## Verification evidence
+
+All commands below were run in the repository checkout on the audit branch after
+the fixes. Outcomes are actual command results, not inferred.
+
+| Command | Result |
+| --- | --- |
+| `go test ./internal/egress -count=1` | pass |
+| `go test ./internal/httpapi -run 'TestMedia' -count=1` | pass |
+| `go test ./internal/httpapi -run 'TestOIDC|TestAdmin|TestSession|TestEmergency' -count=1` | pass |
+| `go test ./internal/httpapi -run TestHedgeSkipsCapabilityIneligiblePartner -count=1` | pass |
+| `go test ./internal/httpapi -run TestStructuredOutputUnsupportedFailsClosed -count=1` | pass |
+| `go test ./internal/protocol/... ./internal/compat ./internal/egress -count=1` | pass |
+| `go test -count=1 -timeout=10m ./...` | exit 0 |
+| `go vet ./...` | exit 0 |
+| `go test -race -count=1 -timeout=15m ./...` | exit 0 |
+| `./scripts/verify.sh` | exit 0, `VERIFY PASS` |
+
+`scripts/verify.sh` also passed shell syntax checks, the flake-hunt harness
+checks, gofmt, release artifact manifest checks, SBOM trust-chain checks, the
+web UI JavaScript syntax checks, short fuzz checks, and linux/amd64 plus
+linux/arm64 builds.
+
+Regression-test evidence before each fix is recorded in
+`docs/reports/QUALITY_AUDIT_FINDINGS.md` and in `.artifacts/*-prefix.log`
+(git-ignored local logs).
+
+## CI and external verification
+
+- The audited SHA had green CI (`39529391279`) and Security (`39529391318`)
+  runs.
+- Post-change GitHub Actions CI/Security were not observed in this environment;
+  they are expected to run on the pull request.
+- `gh` is not authenticated, so the auditor could not create or merge the pull
+  request directly. The branch and commits are the handoff artifact.
+- Browser acceptance (`scripts/test-browser-e2e.py` and related scripts) was
+  skipped because Chromium and Python Playwright are unavailable.
+- No live OIDC provider, PostgreSQL, Redis, or external model provider was
+  exercised.
+- `golangci-lint`, `staticcheck`, `govulncheck`, and `gosec` are not installed;
+  their checks are UNVERIFIED, not passed.
+- `v0.23.0` was not modified, deleted, or re-tagged. No release was created.
+
+## Residual risks and follow-ups
+
+1. **Media buffering:** successful media payloads are now read into memory
+   before the response is committed. The existing 32 MiB JSON and 64 MiB binary
+   caps bound each request, but operators with very high concurrent audio
+   traffic should monitor memory.
+2. **Live provider behavior:** all protocol fixes are validated against
+   dialect-faithful fixtures and local test servers, not live Anthropic/OpenAI
+   endpoints. The `max_tokens` and cache-usage changes should still be confirmed
+   against a live Anthropic-compatible provider during rollout.
+3. **Proxy scope:** the dial-scoped allow-list deliberately permits only the
+   configured proxy host. Combined proxy plus `allowed_hosts` deployments
+   should be exercised once in staging to confirm the expected network path.
+4. **Unavailable static analysis:** run `golangci-lint`/`staticcheck`/
+   `govulncheck`/`gosec` in CI or a developer environment before merge if they
+   are part of the release policy.
+
+## Recommended next actions
+
+1. Open the pull request from `opencode/issue593-20261021064216` to `main` and
+   confirm post-change CI and Security runs are green.
+2. Exercise the media, proxy, and Anthropic-thinking paths against staging
+   infrastructure with a real upstream and a live OIDC provider.
+3. Add the unavailable static analyzers and browser acceptance to the
+   environment used for release qualification so those gates are no longer
+   environment-dependent.

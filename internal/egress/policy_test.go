@@ -2,9 +2,13 @@ package egress
 
 import (
 	"context"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"net/netip"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestPolicyRejectsPrivateAndAllowListMismatch(t *testing.T) {
@@ -78,5 +82,33 @@ func TestPolicyTransportIsHTTPTransport(t *testing.T) {
 	cancel()
 	if _, err := tr.DialContext(ctx, "tcp", "api.example.com:443"); err == nil {
 		t.Fatal("cancelled dial unexpectedly succeeded")
+	}
+}
+
+// Regression: docs promise that a configured proxy_url host is permitted at
+// dial time in addition to allowed_hosts. The allow-list check used to run on
+// every dial, including the proxy hop, so enabling allowed_hosts silently
+// broke provider proxy_url.
+func TestNewTransportAllowsProxyHostOutsideAllowedHosts(t *testing.T) {
+	var proxied atomic.Int32
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		proxied.Add(1)
+		_, _ = io.WriteString(w, "proxied")
+	}))
+	defer proxy.Close()
+
+	p := Policy{AllowedHosts: []string{"localhost"}, AllowLoopback: true}
+	tr, err := p.NewTransport("http://localhost:1", proxy.URL)
+	if err != nil {
+		t.Fatalf("build transport: %v", err)
+	}
+	client := &http.Client{Transport: tr, Timeout: 5 * time.Second}
+	resp, err := client.Get("http://localhost:1/")
+	if err != nil {
+		t.Fatalf("request through configured proxy failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || proxied.Load() != 1 {
+		t.Fatalf("status=%d proxied=%d, want 200/1", resp.StatusCode, proxied.Load())
 	}
 }

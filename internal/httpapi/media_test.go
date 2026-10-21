@@ -260,3 +260,54 @@ func TestMediaFailoverToSecondDeployment(t *testing.T) {
 		t.Fatalf("expected one attempt per deployment, calls=%v", calls)
 	}
 }
+
+// Regression: a non-binary media response was committed with the upstream
+// status before its body was read. If the body read failed (truncated
+// connection, oversized response), the handler returned a silent 200 with an
+// empty body after already recording the deployment as healthy. Read the body
+// before committing the client response and fail over / return an error.
+func TestMediaEmbeddingsTruncatedUpstreamIsNotSilent200(t *testing.T) {
+	s, _ := mediaGateway(t, "openai_compatible", func(w http.ResponseWriter, r *http.Request) {
+		hj, ok := w.(http.Hijacker)
+		if !ok {
+			t.Fatal("test server does not support hijacking")
+		}
+		conn, _, err := hj.Hijack()
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = conn.Write([]byte("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 1000\r\n\r\n{\"object\":"))
+		_ = conn.Close()
+	})
+	rr := mediaPost(t, s, "/v1/embeddings", "application/json",
+		[]byte(`{"model":"m","input":"hello"}`))
+	if rr.Code == http.StatusOK {
+		t.Fatalf("truncated upstream body returned silent 200 (body=%q); want a gateway error before headers commit", rr.Body.String())
+	}
+	if rr.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502; body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestMediaSpeechTruncatedUpstreamIsNotSilent200(t *testing.T) {
+	s, _ := mediaGateway(t, "openai_compatible", func(w http.ResponseWriter, r *http.Request) {
+		hj, ok := w.(http.Hijacker)
+		if !ok {
+			t.Fatal("test server does not support hijacking")
+		}
+		conn, _, err := hj.Hijack()
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = conn.Write([]byte("HTTP/1.1 200 OK\r\nContent-Type: audio/mpeg\r\nContent-Length: 4096\r\n\r\n\xff\xfb"))
+		_ = conn.Close()
+	})
+	rr := mediaPost(t, s, "/v1/audio/speech", "application/json",
+		[]byte(`{"model":"m","input":"hello","voice":"alloy"}`))
+	if rr.Code == http.StatusOK {
+		t.Fatalf("truncated audio returned silent 200 with %d bytes", rr.Body.Len())
+	}
+	if rr.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502; body=%s", rr.Code, rr.Body.String())
+	}
+}

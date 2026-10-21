@@ -219,11 +219,11 @@ func (p Policy) validateURL(raw string) (*url.URL, error) {
 // intentionally ignored; proxy egress must be an independently controlled
 // gateway rather than an implicit process setting.
 func (p Policy) NewTransport(target string, proxyURL string) (*http.Transport, error) {
-	u, err := p.validateURL(target)
-	if err != nil {
+	if _, err := p.validateURL(target); err != nil {
 		return nil, err
 	}
 	var proxy func(*http.Request) (*url.URL, error)
+	var proxyHost string
 	if proxyURL != "" {
 		proxyTarget, parseErr := url.Parse(proxyURL)
 		if parseErr != nil || proxyTarget.Hostname() == "" || (proxyTarget.Scheme != "http" && proxyTarget.Scheme != "https") {
@@ -242,7 +242,7 @@ func (p Policy) NewTransport(target string, proxyURL string) (*http.Transport, e
 		// which sees the resolved addresses. (No allow-list check here:
 		// the proxy is itself an operator-chosen gateway and the provider
 		// adapter allow-lists its hostname explicitly.)
-		proxyHost := proxyTarget.Hostname()
+		proxyHost = proxyTarget.Hostname()
 		if p.deniedHost(proxyHost) {
 			return nil, fmt.Errorf("provider proxy_url host %q is denied by operator policy", proxyHost)
 		}
@@ -256,6 +256,14 @@ func (p Policy) NewTransport(target string, proxyURL string) (*http.Transport, e
 		}
 		proxy = http.ProxyURL(proxyTarget)
 	}
+	// The proxy hop is not a provider endpoint, so it need not appear in
+	// allowed_hosts (docs/CONFIGURATION.md). Permit exactly the configured
+	// proxy host at dial time without widening the request-building
+	// allow-list. Keep an empty allow-list empty: it means "no restriction".
+	dialPolicy := p
+	if proxyURL != "" && len(p.AllowedHosts) > 0 {
+		dialPolicy.AllowedHosts = append(append([]string(nil), p.AllowedHosts...), proxyHost)
+	}
 	resolver := net.DefaultResolver
 	dialer := &net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}
 	dial := func(ctx context.Context, network, addr string) (net.Conn, error) {
@@ -266,7 +274,7 @@ func (p Policy) NewTransport(target string, proxyURL string) (*http.Transport, e
 		if p.deniedHost(host) {
 			return nil, fmt.Errorf("egress host %q is denied by operator policy", host)
 		}
-		if !p.allowsHost(host) {
+		if !dialPolicy.allowsHost(host) {
 			return nil, fmt.Errorf("egress host %q is not allow-listed", host)
 		}
 		// Loopback is reachable only when the host is spelled as loopback
@@ -291,7 +299,7 @@ func (p Policy) NewTransport(target string, proxyURL string) (*http.Transport, e
 			ip, _ := netip.AddrFromSlice(candidate.IP)
 			addrs = append(addrs, ip)
 		}
-		if err := p.checkDialAnswers(host, addrs, allowLoopback); err != nil {
+		if err := dialPolicy.checkDialAnswers(host, addrs, allowLoopback); err != nil {
 			return nil, err
 		}
 		var last error
@@ -306,5 +314,10 @@ func (p Policy) NewTransport(target string, proxyURL string) (*http.Transport, e
 		}
 		return nil, last
 	}
-	return &http.Transport{Proxy: proxy, DialContext: dial, ForceAttemptHTTP2: true, MaxIdleConns: 64, IdleConnTimeout: 90 * time.Second, TLSHandshakeTimeout: 15 * time.Second, ResponseHeaderTimeout: 60 * time.Second, ExpectContinueTimeout: time.Second, TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, ServerName: u.Hostname()}}, nil
+	// Do not pin TLSClientConfig.ServerName to the provider's base host.
+	// Absolute allow-listed endpoints may target a different HTTPS host;
+	// net/http must derive SNI and certificate verification from the host
+	// actually being contacted, not from the base URL. Pinning the base name
+	// verified the wrong certificate identity (and sent the wrong SNI).
+	return &http.Transport{Proxy: proxy, DialContext: dial, ForceAttemptHTTP2: true, MaxIdleConns: 64, IdleConnTimeout: 90 * time.Second, TLSHandshakeTimeout: 15 * time.Second, ResponseHeaderTimeout: 60 * time.Second, ExpectContinueTimeout: time.Second, TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}}, nil
 }

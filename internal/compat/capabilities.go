@@ -572,7 +572,7 @@ func (s *Store) IneligibleFor(deploymentID string, req RequirementProfile) (capa
 		return CapStreaming, true
 	case req.Reasoning && c.Reasoning == Unsupported:
 		return CapReasoning, true
-	case req.StructuredOutput && (c.JSONObject == Unsupported && c.JSONSchema == Unsupported):
+	case req.StructuredOutput && (c.StructuredOutput == Unsupported || (c.JSONObject == Unsupported && c.JSONSchema == Unsupported)):
 		return CapStructuredOutput, true
 	default:
 		return "", false

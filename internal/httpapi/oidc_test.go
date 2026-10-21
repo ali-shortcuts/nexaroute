@@ -702,3 +702,26 @@ func TestOIDCJWKSKeyRotation(t *testing.T) {
 		t.Fatalf("retired-key token must not log in: status=%d session=%v", rr.Code, hasSession(rr))
 	}
 }
+
+// Regression: docs/SECURITY.md says emergency API-key access is unavailable
+// while OIDC is enabled. A healthy OIDC provider still fell through to the
+// emergency path, accepting the static key without OIDC/MFA.
+func TestOIDCHealthyRejectsEmergencyAPIKey(t *testing.T) {
+	provider := newInProcessOIDCProvider(t)
+	t.Setenv("NEXAROUTE_TEST_OIDC_SECRET", testOIDCSecret)
+	cfg := oidcTestConfig(provider)
+	cfg.Admin.APIKey = "emergency-key-must-not-work"
+	cfg.Admin.EmergencyAccessEnabled = true
+	srv := testGateway(t, cfg)
+	if srv.oidc == nil || srv.oidcErr != nil {
+		t.Fatalf("OIDC not healthy: oidc=%v err=%v", srv.oidc != nil, srv.oidcErr)
+	}
+	request := httptest.NewRequest(http.MethodGet, "http://localhost/admin/api/snapshot", nil)
+	request.RemoteAddr = "127.0.0.1:10009"
+	request.Header.Set("X-Admin-Key", cfg.Admin.APIKey)
+	response := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("emergency key accepted while OIDC healthy: status=%d body=%s", response.Code, response.Body.String())
+	}
+}

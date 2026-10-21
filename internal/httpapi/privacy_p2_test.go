@@ -383,3 +383,20 @@ func TestPrivacyP2EveryIngressAndProviderProtocolExcludesTrainingProvider(t *tes
 		}
 	}
 }
+
+// Regression: media ingresses built router.Requirement without calling
+// applyPrivacyRequirement, so a no_training route profile could still send
+// embeddings/image/audio prompts to a training-enabled provider.
+func TestMediaHonorsNoTrainingRouteProfile(t *testing.T) {
+	f := newPrivacyLeakGateway(t, "no_training", "", "")
+	rr := f.doRequest(t, "/v1/embeddings", `{"model":"nexa-private","input":"sensitive prompt"}`, "", "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	if got := f.hitsA.Load(); got != 0 {
+		t.Fatalf("training-enabled provider received %d media request(s) for a no_training route", got)
+	}
+	if got := f.hitsB.Load(); got != 1 {
+		t.Fatalf("privacy-compliant provider received %d media request(s), want 1", got)
+	}
+}

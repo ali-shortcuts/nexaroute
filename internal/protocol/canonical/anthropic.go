@@ -423,6 +423,12 @@ func EncodeAnthropicRequest(in Request, upstreamModel string) (core.AnthropicReq
 			}
 		}
 		if budget >= 1024 {
+			// Anthropic requires max_tokens > thinking.budget_tokens.
+			// The legacy translator raises the ceiling the same way; without
+			// this the API rejects default and high-effort thinking requests.
+			if out.MaxTokens <= budget {
+				out.MaxTokens = budget + 1024
+			}
 			out.Thinking = json.RawMessage(mustJSON(map[string]any{"type": "enabled", "budget_tokens": budget}))
 		}
 	}
