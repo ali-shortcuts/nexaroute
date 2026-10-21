@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/ali-shortcuts/nexaroute/internal/video"
@@ -209,5 +210,89 @@ func TestAPIClientDownloadAssetReportsGatewayErrorsAndValidatesPaths(t *testing.
 	}
 	if err := client.DownloadAsset(context.Background(), "job", "asset", " "); err == nil {
 		t.Fatal("empty output path accepted")
+	}
+}
+
+func TestAPIClientRefusesCrossOriginRedirects(t *testing.T) {
+	var destinationHits atomic.Int32
+	destination := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		destinationHits.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"providers":[]}`))
+	}))
+	defer destination.Close()
+
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, destination.URL+r.URL.Path, http.StatusFound)
+	}))
+	defer source.Close()
+
+	client, err := newAPIClient(source.URL, "secret-token", source.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Providers(context.Background()); err == nil || !strings.Contains(err.Error(), "cross-origin") {
+		t.Fatalf("providers redirect error=%v, want cross-origin refusal", err)
+	}
+	if hits := destinationHits.Load(); hits != 0 {
+		t.Fatalf("cross-origin redirect reached destination %d time(s)", hits)
+	}
+
+	out := filepath.Join(t.TempDir(), "asset.mp4")
+	if err := client.DownloadAsset(context.Background(), "job-123", "asset-1", out); err == nil || !strings.Contains(err.Error(), "cross-origin") {
+		t.Fatalf("asset redirect error=%v, want cross-origin refusal", err)
+	}
+	if hits := destinationHits.Load(); hits != 0 {
+		t.Fatalf("asset redirect reached destination %d time(s)", hits)
+	}
+	if _, err := os.Stat(out); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("refused download left an output file, stat error=%v", err)
+	}
+}
+
+func TestAPIClientFollowsSameOriginRedirects(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/video/providers" {
+			http.Redirect(w, r, "/providers-final", http.StatusFound)
+			return
+		}
+		if r.URL.Path != "/providers-final" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"providers":[{"id":"fake"}]}`))
+	}))
+	defer server.Close()
+
+	client, err := newAPIClient(server.URL, "secret-token", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	providers, err := client.Providers(context.Background())
+	if err != nil {
+		t.Fatalf("same-origin redirect was refused: %v", err)
+	}
+	if len(providers.Providers) != 1 || providers.Providers[0].ID != "fake" {
+		t.Fatalf("providers=%+v", providers)
+	}
+}
+
+func TestAPIClientPreservesCallerRedirectPolicy(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/elsewhere", http.StatusFound)
+	}))
+	defer server.Close()
+
+	httpClient := server.Client()
+	httpClient.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		return errors.New("caller policy stopped redirect")
+	}
+	client, err := newAPIClient(server.URL, "secret-token", httpClient)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Providers(context.Background()); err == nil || !strings.Contains(err.Error(), "caller policy stopped redirect") {
+		t.Fatalf("caller redirect policy was not preserved: %v", err)
 	}
 }

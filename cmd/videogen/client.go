@@ -15,10 +15,31 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ali-shortcuts/nexaroute/internal/egress"
 	"github.com/ali-shortcuts/nexaroute/internal/video"
 )
 
 const maxAPIResponseBytes = 2 << 20
+
+// applyRedirectGuard clones client and refuses redirects that leave the
+// original scheme/host before following any of them. The Video Gateway
+// carries a bearer token and downloads upstream-controlled assets, so a
+// gateway or intermediary redirect must not turn the CLI into an egress
+// primitive to an internal address or a plaintext token destination.
+func applyRedirectGuard(client *http.Client, service string) *http.Client {
+	existing := client.CheckRedirect
+	guard := egress.RefuseCrossOriginRedirects(10, service)
+	clone := *client
+	clone.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if existing != nil {
+			if err := existing(req, via); err != nil {
+				return err
+			}
+		}
+		return guard(req, via)
+	}
+	return &clone
+}
 
 type apiClient struct {
 	baseURL      string
@@ -68,6 +89,8 @@ func newAPIClient(baseURL, token string, client *http.Client) (*apiClient, error
 		// The request context still allows callers to cancel an in-progress transfer.
 		downloadClient = &http.Client{}
 	}
+	client = applyRedirectGuard(client, "video gateway")
+	downloadClient = applyRedirectGuard(downloadClient, "video gateway asset download")
 	return &apiClient{baseURL: baseURL, token: token, http: client, downloadHTTP: downloadClient}, nil
 }
 
