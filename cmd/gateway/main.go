@@ -79,6 +79,8 @@ func dispatchSubcommand(args []string, stdin io.Reader, stdout, stderr io.Writer
 		return runDoctor(rest, stdout, stderr), true
 	case "provider-accept":
 		return runProviderAccept(rest, stdout, stderr), true
+	case "external-accept":
+		return runExternalAccept(rest, stdout, stderr), true
 	case "backup":
 		return runBackup(rest, stdout, stderr), true
 	case "restore":

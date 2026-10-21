@@ -7,6 +7,11 @@ onboarding: running best-effort discovery and bounded generation probes against
 Public CI never runs this command with paid credentials. The hermetic test suite
 uses loopback fake upstreams only.
 
+For a combined provider + OIDC report with `PASS`/`FAIL`/`BLOCKED`/`NOT_RUN`
+statuses, use `nexaroute external-accept` (see
+`docs/reports/verification-slices/live-acceptance-harness.md`). This
+`provider-accept` command remains the narrower provider-only tool.
+
 ## What the command does
 
 ```bash
