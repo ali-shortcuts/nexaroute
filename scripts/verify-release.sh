@@ -133,6 +133,16 @@ packages = {p.get("name"): p.get("versionInfo") for p in doc.get("packages", [])
 # package-manager ecosystems in a valid SPDX document remain unaffected.
 from urllib.parse import unquote
 
+def normalize_toolchain_version(version):
+    # Syft spells the Go toolchain version two ways in one document:
+    # the SPDX versionInfo keeps the toolchain's own "go" prefix
+    # (go1.27.3) while the PURL carries the bare version (1.27.3).
+    # Strip one leading "go" when a digit follows so both spellings of
+    # the same version compare equal; anything else is compared as-is.
+    if version.startswith("go") and len(version) > 2 and version[2].isdigit():
+        return version[2:]
+    return version
+
 def go_module_path_variants(path):
     # PURL paths may percent-encode characters and Go module paths escape
     # uppercase letters as ! followed by the lowercase letter.
@@ -167,7 +177,7 @@ for package in doc.get("packages", []):
                 f"SBOM package name {package_name!r}"
             )
         if purl_version and package_version and package_version not in ("NOASSERTION", "UNKNOWN"):
-            if purl_version != package_version:
+            if normalize_toolchain_version(purl_version) != normalize_toolchain_version(package_version):
                 sys.exit(
                     f"verify-release: Go module PURL version {purl_version!r} does not match "
                     f"SBOM package version {package_version!r} for {package_name!r}"

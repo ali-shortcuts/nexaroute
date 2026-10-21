@@ -214,4 +214,50 @@ PYEOF
 ./scripts/verify-release.sh "$t" v9.9.9 >/dev/null
 echo "test-release-artifacts: main module and stdlib purls are accepted"
 
+# Real Syft output for the Go toolchain package spells its version two
+# ways in one document: the SPDX versionInfo keeps the toolchain's own
+# "go" prefix (go1.27.3) while the PURL carries the bare version
+# (pkg:golang/stdlib@1.27.3). Both denote the same toolchain; the
+# v0.23.0 release run failed this exact comparison.
+t="$work/stdlib-go-prefix"; make_fixture "$t"
+python3 - "$t" <<'PYEOF'
+import glob, json, sys
+p = glob.glob(sys.argv[1] + "/*-sbom.spdx.json")[0]
+doc = json.load(open(p))
+doc["packages"].append({
+    "name": "stdlib",
+    "versionInfo": "go1.27.3",
+    "externalRefs": [{
+        "referenceCategory": "PACKAGE-MANAGER",
+        "referenceType": "purl",
+        "referenceLocator": "pkg:golang/stdlib@1.27.3",
+    }],
+})
+json.dump(doc, open(p, "w"), indent=2)
+PYEOF
+./scripts/write-checksums.sh "$t" >/dev/null
+./scripts/verify-release.sh "$t" v9.9.9 >/dev/null
+echo "test-release-artifacts: stdlib go-prefixed versionInfo matches bare PURL version"
+
+# The prefix normalization must not weaken the check: a genuinely
+# different toolchain version in the PURL still fails.
+t="$work/stdlib-version-mismatch"; make_fixture "$t"
+python3 - "$t" <<'PYEOF'
+import glob, json, sys
+p = glob.glob(sys.argv[1] + "/*-sbom.spdx.json")[0]
+doc = json.load(open(p))
+doc["packages"].append({
+    "name": "stdlib",
+    "versionInfo": "go1.27.3",
+    "externalRefs": [{
+        "referenceCategory": "PACKAGE-MANAGER",
+        "referenceType": "purl",
+        "referenceLocator": "pkg:golang/stdlib@1.27.4",
+    }],
+})
+json.dump(doc, open(p, "w"), indent=2)
+PYEOF
+./scripts/write-checksums.sh "$t" >/dev/null
+expect_fail "stdlib PURL version genuinely differs from versionInfo" ./scripts/verify-release.sh "$t" v9.9.9
+
 echo "test-release-artifacts: PASS"
