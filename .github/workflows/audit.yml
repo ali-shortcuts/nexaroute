@@ -1,11 +1,15 @@
 name: Architecture & Quality Audit
 
-# Read-only audit battery. Manual dispatch only: this workflow never runs on
-# push/PR, never modifies the repository, and publishes its findings purely as
-# downloadable artifacts plus the workflow step summary. It complements
-# scripts/verify.sh and CI (which already gate tests, race, vet, CodeQL and
-# govulncheck) with the three measurements they do not produce today:
-# lint/static analysis beyond go vet, code coverage, and extended fuzzing.
+# Audit battery. Manual dispatch only: this workflow never runs on push/PR
+# and never modifies the repository. Since ADR 0006 (Option A, accepted
+# 2026-10-22) the measurement jobs are ratchet gates, not just reports:
+# golangci-lint, staticcheck and deadcode fail on any finding (their
+# baseline is zero), gosec fails on any finding outside the checked-in
+# accepted baseline (docs/reports/gosec-baseline.txt) or whenever its
+# analysis was incomplete, and coverage fails below 85%. Extended fuzz
+# already failed on any fuzz failure; repository metrics stay a pure
+# report. Findings are still published as downloadable artifacts plus
+# the workflow step summary for triage.
 
 on:
   workflow_dispatch:
@@ -34,11 +38,11 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.27.x'
-      - name: golangci-lint (report only; findings never fail the audit)
+      - name: golangci-lint (gating per ADR 0006; any finding fails, baseline is zero)
         uses: golangci/golangci-lint-action@4afd733a84b1f43292c63897423277bb7f4313a9 # v8
         with:
           version: v2.15.0
-          args: --timeout=20m --issues-exit-code=0 --output.text.path=golangci.txt --output.json.path=golangci.json
+          args: --timeout=20m --output.text.path=golangci.txt --output.json.path=golangci.json
       - name: Upload lint report
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -64,13 +68,19 @@ jobs:
         run: |
           curl -sSfL https://github.com/dominikh/go-tools/releases/download/2026.2.2/staticcheck_linux_amd64.tar.gz | tar -xz -C "$RUNNER_TEMP"
           "$RUNNER_TEMP/staticcheck/staticcheck" -version
-      - name: Run staticcheck (report only; findings never fail the audit)
+      - name: Run staticcheck (gating per ADR 0006; any finding fails, baseline is zero)
         run: |
           set +e
           "$RUNNER_TEMP/staticcheck/staticcheck" -f text ./... > staticcheck.txt 2>&1
+          text_status=$?
           "$RUNNER_TEMP/staticcheck/staticcheck" -f json ./... > staticcheck.json 2>&1
+          set -e
           wc -l staticcheck.txt >> "$GITHUB_STEP_SUMMARY"
-          exit 0
+          if [ "$text_status" -ne 0 ]; then
+            echo "::error::staticcheck reported findings (gating per ADR 0006; baseline is zero)"
+            cat staticcheck.txt
+            exit "$text_status"
+          fi
       - name: Upload staticcheck report
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -88,13 +98,22 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Set up Go
+      # This job pins Go 1.27.0 on purpose (every other job tracks
+      # 1.27.x): gosec v2.29.0's bundled x/tools cannot decode the
+      # export data produced by Go 1.27.3+, which makes its SSA/taint
+      # rules (G701-G704) silently produce nothing -- until 2026-10-22
+      # the CI gosec artifact therefore showed only the 53 AST-rule
+      # G304 findings while a working analysis finds 87. The baseline
+      # check below also fails loudly whenever a report carries
+      # package-loading errors, so this failure mode cannot return
+      # silently. See ADR 0006.
+      - name: Set up Go (pinned 1.27.0 for gosec export-data compatibility)
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.27.x'
+          go-version: '1.27.0'
       - name: Install gosec 2.29.0
         run: go install github.com/securego/gosec/v2/cmd/gosec@v2.29.0
-      - name: Run gosec (report only; findings never fail the audit)
+      - name: Run gosec (gating per ADR 0006; baseline diff in the next step)
         run: |
           set +e
           "$(go env GOPATH)/bin/gosec" -quiet -fmt=text -out=gosec.txt ./...
@@ -106,14 +125,17 @@ jobs:
           {
             echo '## gosec'
             echo ''
-            echo 'Report-only: findings are static-analysis signals, not confirmed bugs.'
+            echo 'Gating per ADR 0006: findings are static-analysis signals, not confirmed bugs;'
+            echo 'the next step fails the job on any finding outside the accepted baseline'
+            echo '(docs/reports/gosec-baseline.txt) or on an incomplete analysis.'
             echo ''
             echo "- exit status: text=${text_status}, json=${json_status} (non-zero only means findings were present)"
             echo "- issues reported: ${issues:-unknown}"
             echo ''
             echo 'See the `audit-gosec` artifact for the full text and JSON reports.'
           } | tee gosec-summary.md >> "$GITHUB_STEP_SUMMARY"
-          exit 0
+      - name: Check gosec findings against the accepted baseline
+        run: python3 scripts/gosec-baseline.py check gosec.json docs/reports/gosec-baseline.txt
       - name: Upload gosec report
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -138,24 +160,34 @@ jobs:
           go-version: '1.27.x'
       - name: Install deadcode (golang.org/x/tools v0.52.0)
         run: go install golang.org/x/tools/cmd/deadcode@v0.52.0
-      - name: Run deadcode (report only; findings never fail the audit)
+      - name: Run deadcode (gating per ADR 0006; any finding fails, baseline is zero)
         run: |
           set +e
-          "$(go env GOPATH)/bin/deadcode" -test ./... > deadcode.txt 2>&1
+          "$(go env GOPATH)/bin/deadcode" -test ./... > deadcode.txt 2> deadcode.err
           status=$?
           set -e
           findings=$(grep -c 'unreachable' deadcode.txt || true)
           {
             echo '## deadcode'
             echo ''
-            echo 'Report-only: unreachable code is a cleanup signal, not a confirmed defect.'
+            echo 'Gating per ADR 0006: unreachable code is a cleanup signal, not a confirmed'
+            echo 'defect, but any finding fails this job (baseline is zero).'
             echo ''
             echo "- exit status: ${status}"
             echo "- unreachable functions reported: ${findings}"
             echo ''
             echo 'See the `audit-deadcode` artifact for the full report.'
           } | tee deadcode-summary.md >> "$GITHUB_STEP_SUMMARY"
-          exit 0
+          if [ "$status" -ge 2 ]; then
+            echo "::error::deadcode itself failed to run (exit ${status})"
+            cat deadcode.err
+            exit "$status"
+          fi
+          if [ -s deadcode.txt ]; then
+            echo "::error::deadcode reported unreachable functions (gating per ADR 0006; baseline is zero)"
+            cat deadcode.txt
+            exit 1
+          fi
       - name: Upload deadcode report
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -163,6 +195,7 @@ jobs:
           name: audit-deadcode
           path: |
             deadcode.txt
+            deadcode.err
             deadcode-summary.md
           if-no-files-found: warn
 
@@ -201,6 +234,11 @@ jobs:
             grep '0.0%$' coverage-func.txt | head -100 || true
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+      - name: Coverage gate (ADR 0006; total must stay at or above 85%)
+        run: |
+          total=$(go tool cover -func=coverage.out | tail -1 | awk '{gsub(/%/,"",$NF); print $NF}')
+          echo "total coverage: ${total}% (gate: >= 85%)" >> "$GITHUB_STEP_SUMMARY"
+          awk -v t="$total" 'BEGIN { if (t + 0 < 85.0) { printf "::error::coverage %s%% is below the 85%% gate (ADR 0006)\n", t; exit 1 } }'
       - name: Upload coverage report
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
