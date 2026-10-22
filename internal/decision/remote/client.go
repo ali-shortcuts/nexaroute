@@ -48,7 +48,7 @@ func validateRedirectURL(u *url.URL, allowHTTPAndPrivate bool) error {
 	if u.User != nil {
 		return fmt.Errorf("%w: userinfo in redirect", ErrInvalidConfig)
 	}
-	if u.Scheme != "https" && !(allowHTTPAndPrivate && u.Scheme == "http") {
+	if u.Scheme != "https" && (!allowHTTPAndPrivate || u.Scheme != "http") {
 		return fmt.Errorf("%w: redirect scheme must be https", ErrInvalidConfig)
 	}
 	if u.Host == "" {

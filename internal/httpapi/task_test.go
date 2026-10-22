@@ -483,9 +483,8 @@ func TestTaskClassification_ProviderNeutrality(t *testing.T) {
 			t.Fatalf("provider/model neutrality violation: model %s gave %s vs %s for same content", model, profile.Type, firstType)
 		}
 		// Also ensure secondary flags don't depend on model
-		if feat.ModelRequested != model && feat.ModelRequested != "" {
-			// ModelRequested is bounded but should equal model
-		}
+		// ModelRequested is bounded but should equal the requested model;
+		// the neutrality assertions above are the binding checks.
 	}
 }
 

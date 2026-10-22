@@ -2879,7 +2879,8 @@ func (c Config) Validate() error {
 	// Decision mode/provider cross-validation
 	mode := strings.ToLower(strings.TrimSpace(c.Decision.Mode))
 	provider := strings.ToLower(strings.TrimSpace(c.Decision.Provider))
-	if mode == "assisted" {
+	switch mode {
+	case "assisted":
 		if provider == "" {
 			return fmt.Errorf("decision.provider is required when decision.mode=assisted")
 		}
@@ -2895,7 +2896,7 @@ func (c Config) Validate() error {
 				return fmt.Errorf("decision.provider %q is disabled", provider)
 			}
 		}
-	} else if mode == "local" {
+	case "local":
 		if provider != "" && provider != "local" && provider != "policy" {
 			// If provider is external ID but mode is local, reject
 			if _, ok := seenDecisionProviderIDs[provider]; ok {
@@ -2907,9 +2908,9 @@ func (c Config) Validate() error {
 				return fmt.Errorf("decision.provider must be local or policy when mode=local (got %q)", provider)
 			}
 		}
-	} else if mode == "off" || mode == "" {
+	case "off", "":
 		// off mode: provider can be anything but no external calls will happen; still validate if it references external that is disabled? Allow
-	} else if mode == "hybrid" {
+	case "hybrid":
 		if c.Decision.Chain == "" {
 			return errors.New("decision.chain is required when decision.mode=hybrid")
 		}
@@ -3429,7 +3430,7 @@ func (c Config) proxyEgressViolation(p ProviderConfig) string {
 			return fmt.Sprintf("%q is denied by egress policy", host)
 		}
 	}
-	if egress.BlockedIP(ip) && !(localProvider && ip.IsLoopback()) {
+	if egress.BlockedIP(ip) && (!localProvider || !ip.IsLoopback()) {
 		return fmt.Sprintf("%q is blocked by the built-in egress blocklist", host)
 	}
 	return ""

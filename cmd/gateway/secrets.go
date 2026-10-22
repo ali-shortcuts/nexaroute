@@ -150,7 +150,7 @@ func writeRotateFile(path string, b []byte) error {
 		return e
 	}
 	n := f.Name()
-	defer os.Remove(n)
+	defer func() { _ = os.Remove(n) }()
 	if e = f.Chmod(0600); e != nil {
 		_ = f.Close()
 		return e

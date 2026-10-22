@@ -16,7 +16,7 @@ type Migration struct {
 
 func (m Migration) Checksum() string {
 	h := sha256.New()
-	h.Write([]byte(fmt.Sprintf("%d\x00%s\x00%s\x00%s", m.Version, m.Name, m.Up, m.Down)))
+	fmt.Fprintf(h, "%d\x00%s\x00%s\x00%s", m.Version, m.Name, m.Up, m.Down)
 	return hex.EncodeToString(h.Sum(nil))
 }
 

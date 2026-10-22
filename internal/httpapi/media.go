@@ -240,7 +240,7 @@ func (s *Server) serveMedia(w http.ResponseWriter, r *http.Request, kind mediaKi
 		}
 		sawSupported = true
 
-		payload := raw
+		var payload []byte
 		forward := http.Header{}
 		if kind.multipart() {
 			rewritten, ct, rerr := rewriteMultipartModel(raw, r.Header.Get("Content-Type"), c.Deployment.Model)

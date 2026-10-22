@@ -395,11 +395,9 @@ func (e *ChainExecutor) Execute(
 				stepTrace.Action = ActionAbstain
 			}
 			stepTrace.ReasonCodes = []ReasonCode{ReasonProviderError, ReasonChainStepFailed}
-			// Preserve some code from result if present
-			if len(decideResult.ReasonCodes) > 0 {
-				// Keep first canonical if available, but don't leak arbitrary error strings
-				// Use generic failed
-			}
+			// Preserve some code from result if present: keep the first
+			// canonical code if available, but don't leak arbitrary error
+			// strings; the generic failed codes above stand.
 			trace.Steps = append(trace.Steps, stepTrace)
 			if e.metrics != nil {
 				e.metrics.RecordChainStep(stepTrace.ProviderType, "error")
@@ -486,11 +484,9 @@ func (e *ChainExecutor) Execute(
 			}
 			if isExternal && e.state != nil {
 				e.state.RecordSuccess(provider.ID())
-			} else if e.state != nil {
-				// For local/policy, also record success but they are not cooldown-gated; still update for observability
-				// We choose not to record for policy/local to keep them always healthy (see spec 30)
-				// But we can still record success for metrics if needed — not needed
 			}
+			// For local/policy steps we deliberately do not record success:
+			// they are not cooldown-gated and stay always healthy (see spec 30).
 			// Normalize and return
 			normalized, _, _ := NormalizeResult(req.Candidates, decideResult)
 			// Ensure reason codes include chain selected

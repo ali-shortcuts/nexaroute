@@ -74,27 +74,30 @@ func runInit(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 
 	if !o.provided["base-url"] {
 		def := "https://api.openai.com"
-		if o.typ == "anthropic_compatible" {
+		switch o.typ {
+		case "anthropic_compatible":
 			def = "https://api.anthropic.com"
-		} else if o.typ == "gemini" {
+		case "gemini":
 			def = "https://generativelanguage.googleapis.com"
 		}
 		o.baseURL = ask("base-url", "Provider base URL", def, o.baseURL)
 	}
 	if !o.provided["api-key-env"] {
 		def := "OPENAI_API_KEY"
-		if o.typ == "anthropic_compatible" {
+		switch o.typ {
+		case "anthropic_compatible":
 			def = "ANTHROPIC_API_KEY"
-		} else if o.typ == "gemini" {
+		case "gemini":
 			def = "GEMINI_API_KEY"
 		}
 		o.apiKeyEnv = ask("api-key-env", "Env var NAME holding the API key (blank = none)", def, o.apiKeyEnv)
 	}
 	if !o.provided["model"] {
 		def := "gpt-4o-mini"
-		if o.typ == "anthropic_compatible" {
+		switch o.typ {
+		case "anthropic_compatible":
 			def = "claude-sonnet-4-5"
-		} else if o.typ == "gemini" {
+		case "gemini":
 			def = "gemini-2.5-flash"
 		}
 		o.model = ask("model", "Model to enable", def, o.model)

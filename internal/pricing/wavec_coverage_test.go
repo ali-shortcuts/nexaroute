@@ -90,10 +90,9 @@ func TestResolveVersionShadowing(t *testing.T) {
 	v2 := Version{Name: "v2", EffectiveFrom: t0.Add(24 * time.Hour), Prices: map[string]Entry{
 		"p/other": {InputPerMTok: 9.0, OutputPerMTok: 9.0},
 	}}
-	b := &Book{}
 	// Build via FromConfig to exercise the constructor path too.
 	cfg := config.Config{}
-	b = FromConfig(cfg)
+	b := FromConfig(cfg)
 	if _, _, ok := b.Resolve("p/m", t0); ok {
 		t.Fatal("empty book resolved")
 	}

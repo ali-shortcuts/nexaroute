@@ -156,7 +156,7 @@ func TestProportionalRouting_LatencyErrorPressure(t *testing.T) {
 				names[i], proportionalSampleSize, counts)
 		}
 	}
-	if !(counts[0] > counts[1] && counts[1] > counts[2]) {
+	if counts[0] <= counts[1] || counts[1] <= counts[2] {
 		t.Fatalf("worse candidates must receive proportionally fewer selections: counts fast=%d mid=%d slow=%d (N=%d seed=%d)",
 			counts[0], counts[1], counts[2], proportionalSampleSize, proportionalSeed)
 	}

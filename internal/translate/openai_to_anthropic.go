@@ -90,7 +90,7 @@ func OpenAIToAnthropic(in core.OpenAIRequest, model string) (core.AnthropicReque
 					if sysText.Len() > 0 {
 						sysText.WriteByte('\n')
 					}
-					sysText.WriteString(fmt.Sprint(b["text"]))
+					fmt.Fprint(&sysText, b["text"])
 				}
 			}
 			if sysText.Len() > 0 {

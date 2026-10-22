@@ -163,7 +163,7 @@ func FuzzSemanticProvenance(f *testing.F) {
 			if time.Since(e.CreatedAt) > fuzzCacheTTL+10*time.Second {
 				t.Fatalf("expired semantic entry served (scope %q)", scope)
 			}
-			if requireNoTraining && !(e.NoTraining && e.TrainsOnData == "no") {
+			if requireNoTraining && (!e.NoTraining || e.TrainsOnData != "no") {
 				t.Fatalf("provenance gate bypass: NoTraining=%v TrainsOnData=%q served with requireNoTraining",
 					e.NoTraining, e.TrainsOnData)
 			}
@@ -190,7 +190,7 @@ func FuzzCacheKey(f *testing.F) {
 			t.Fatalf("Key length = %d, want 64 hex chars", len(k1))
 		}
 		for _, c := range k1 {
-			if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+			if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
 				t.Fatalf("Key is not lowercase hex: %q", k1)
 			}
 		}

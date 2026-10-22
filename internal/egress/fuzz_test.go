@@ -216,7 +216,7 @@ func FuzzEgressURL(f *testing.F) {
 			// Accepted targets must be https, or http to an explicit
 			// loopback host when allowed.
 			if u.Scheme != "https" {
-				if !(u.Scheme == "http" && p.AllowLoopback && isLoopbackHost(u.Hostname())) {
+				if u.Scheme != "http" || !p.AllowLoopback || !isLoopbackHost(u.Hostname()) {
 					t.Fatalf("validateURL(%q) accepted scheme %q", raw, u.Scheme)
 				}
 			}

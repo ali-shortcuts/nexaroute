@@ -308,11 +308,12 @@ func (s *Server) adminSnapshot(w http.ResponseWriter, r *http.Request) {
 		for _, step := range ch.Steps {
 			// Determine type for display
 			pType := "jev"
-			if step.Provider == "local" {
+			switch step.Provider {
+			case "local":
 				pType = "local"
-			} else if step.Provider == "policy" {
+			case "policy":
 				pType = "policy"
-			} else {
+			default:
 				// lookup external type
 				for _, ext := range cfgFull.DecisionProviders {
 					if ext.ID == step.Provider {

@@ -128,9 +128,10 @@ func WorkflowSteps(j VideoJob) []WorkflowStep {
 	}
 	// Composition.
 	if composeApplies {
-		if j.State == StateCompleted || j.State == StateUploading {
+		switch j.State {
+		case StateCompleted, StateUploading:
 			set("compose", "done")
-		} else if j.State == StateComposing {
+		case StateComposing:
 			set("compose", "active")
 		}
 	}
@@ -143,7 +144,8 @@ func WorkflowSteps(j VideoJob) []WorkflowStep {
 		}
 	}
 	// Delivery of final assets.
-	if j.State == StateCompleted {
+	switch j.State {
+	case StateCompleted:
 		if len(j.OutputAssets) > 0 {
 			set("deliver", "done")
 		} else {
@@ -153,7 +155,7 @@ func WorkflowSteps(j VideoJob) []WorkflowStep {
 			set("deliver", "attention")
 			detail("deliver", "completed without a recorded output asset")
 		}
-	} else if j.State == StateUploading {
+	case StateUploading:
 		set("deliver", "active")
 	}
 

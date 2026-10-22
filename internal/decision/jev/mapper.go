@@ -102,7 +102,7 @@ func contextHeadroomBucket(window, required int) string {
 func BuildTaskSummary(req decision.DecisionRequest) string {
 	var sb strings.Builder
 	// Use only derived metadata
-	sb.WriteString(fmt.Sprintf("task_type=%s;", strings.ToLower(string(req.TaskProfile.Type))))
+	fmt.Fprintf(&sb, "task_type=%s;", strings.ToLower(string(req.TaskProfile.Type)))
 	// Complexity from task profile (string type)
 	complexity := strings.ToLower(string(req.TaskProfile.Complexity))
 	if complexity == "" {
@@ -118,14 +118,14 @@ func BuildTaskSummary(req decision.DecisionRequest) string {
 			complexity = "low"
 		}
 	}
-	sb.WriteString(fmt.Sprintf("complexity=%s;", complexity))
-	sb.WriteString(fmt.Sprintf("tools=%t;", req.Features.HasTools))
-	sb.WriteString(fmt.Sprintf("vision=%t;", req.Features.HasVision))
-	sb.WriteString(fmt.Sprintf("reasoning=%t;", req.Features.HasReasoning))
-	sb.WriteString(fmt.Sprintf("structured_output=%t;", req.Features.StructuredOutput))
-	sb.WriteString(fmt.Sprintf("estimated_context_tokens=%d;", req.EstimatedInputTokens+req.MaxOutputTokens))
-	sb.WriteString(fmt.Sprintf("min_context_window=%d;", req.MinContextWindow))
-	sb.WriteString(fmt.Sprintf("candidate_count=%d;", len(req.Candidates)))
+	fmt.Fprintf(&sb, "complexity=%s;", complexity)
+	fmt.Fprintf(&sb, "tools=%t;", req.Features.HasTools)
+	fmt.Fprintf(&sb, "vision=%t;", req.Features.HasVision)
+	fmt.Fprintf(&sb, "reasoning=%t;", req.Features.HasReasoning)
+	fmt.Fprintf(&sb, "structured_output=%t;", req.Features.StructuredOutput)
+	fmt.Fprintf(&sb, "estimated_context_tokens=%d;", req.EstimatedInputTokens+req.MaxOutputTokens)
+	fmt.Fprintf(&sb, "min_context_window=%d;", req.MinContextWindow)
+	fmt.Fprintf(&sb, "candidate_count=%d;", len(req.Candidates))
 	// No raw prompt, no system prompt, no transcript, no source code, no files, no tool results, no headers
 
 	out := sb.String()

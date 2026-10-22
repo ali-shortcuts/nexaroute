@@ -174,7 +174,7 @@ func (f *fileBudgetAlertStore) Save(fired map[string]int64, _ uint64) (uint64, e
 		return 0, err
 	}
 	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
+	defer func() { _ = os.Remove(tmpName) }()
 	if err := tmp.Chmod(0o600); err != nil {
 		_ = tmp.Close()
 		return 0, err
@@ -592,7 +592,7 @@ func deliverBudgetAlert(ctx context.Context, payload BudgetAlertPayload, webhook
 			if perr != nil || u.Hostname() == "" {
 				return fmt.Errorf("budget webhook: redirect target is malformed")
 			}
-			if u.Scheme != "https" && !(u.Scheme == "http" && isBudgetWebhookRedirectLoopback(u.Hostname())) {
+			if u.Scheme != "https" && (u.Scheme != "http" || !isBudgetWebhookRedirectLoopback(u.Hostname())) {
 				return fmt.Errorf("budget webhook: redirect target must use https (http only for loopback hosts)")
 			}
 			return nil

@@ -180,9 +180,8 @@ func TestDecide_MinEvidencePreventsFlapping(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Decide: %v", err)
 	}
-	if res.Action != decision.ActionAbstain || res.Abstained {
-		// only ActionAbstain with Abstained true is a valid preserve
-	}
+	// Note: only ActionAbstain with Abstained=true is a valid preserve;
+	// the assertions below pin the required outcome.
 	if res.Action != decision.ActionAbstain {
 		t.Fatalf("gate on: got action=%s selected=%q, want ABSTAIN preserving order", res.Action, res.SelectedID)
 	}

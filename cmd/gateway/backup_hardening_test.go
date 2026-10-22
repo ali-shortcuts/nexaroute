@@ -644,9 +644,7 @@ func TestRestorePreservesJournalOnIncompleteRollback(t *testing.T) {
 		if err == nil && bytes.Equal(data, preDB) {
 			foundDB = true
 		}
-		if err == nil && bytes.Equal(data, preConfig) {
-			// present as well; fine either way
-		}
+		// The pre-restore config bytes may also be present; fine either way.
 	}
 	if !foundDB {
 		t.Fatal("journal must preserve the pre-restore security store bytes")

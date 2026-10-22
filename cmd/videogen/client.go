@@ -163,7 +163,7 @@ func (c *apiClient) DownloadAsset(ctx context.Context, jobID, assetID, outPath s
 		return fmt.Errorf("create temporary download file: %w", err)
 	}
 	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
+	defer func() { _ = os.Remove(tmpName) }()
 	if err := tmp.Chmod(0600); err != nil {
 		_ = tmp.Close()
 		return fmt.Errorf("secure temporary download file: %w", err)

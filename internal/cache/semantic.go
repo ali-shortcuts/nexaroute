@@ -138,7 +138,7 @@ func (c *SemanticCache) Lookup(scope string, vector []float32, requireNoTraining
 		if now.Sub(e.CreatedAt) > c.ttl {
 			continue
 		}
-		if requireNoTraining && !(e.NoTraining && e.TrainsOnData == "no") {
+		if requireNoTraining && (!e.NoTraining || e.TrainsOnData != "no") {
 			continue
 		}
 		score := CosineSimilarity(vector, e.Vector)

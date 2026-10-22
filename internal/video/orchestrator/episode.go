@@ -591,7 +591,7 @@ func (o *Orchestrator) composeEpisode(ctx context.Context, j *video.VideoJob) er
 	if err != nil {
 		return o.fail(ctx, *j, "could not create episode composition workspace")
 	}
-	defer os.RemoveAll(tempDir)
+	defer func() { _ = os.RemoveAll(tempDir) }()
 	outputPath := filepath.Join(tempDir, "episode.mp4")
 	narrationPath, err := o.ensureNarrationAsset(ctx, j, filepath.Join(tempDir, "narration.wav"))
 	if err != nil {

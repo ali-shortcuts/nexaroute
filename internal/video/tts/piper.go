@@ -85,7 +85,7 @@ func (p *Piper) Synthesize(ctx context.Context, text, outputPath string) error {
 		return errors.New("could not create private Piper input file")
 	}
 	inputPath := input.Name()
-	defer os.Remove(inputPath)
+	defer func() { _ = os.Remove(inputPath) }()
 	if err := input.Chmod(0600); err != nil {
 		_ = input.Close()
 		return errors.New("could not secure Piper input file")

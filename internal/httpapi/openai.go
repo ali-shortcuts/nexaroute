@@ -348,7 +348,8 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 				policy.HardCooldown = false
 				policy.SignalProvider = false
 			}
-			if cls.Class == compat.ClassModelRetired {
+			switch cls.Class {
+			case compat.ClassModelRetired:
 				// Permanent model lifecycle failure: remove this deployment from
 				// eligibility until its identity/config changes. Never waste
 				// supervised recovery probes on an EOL model.
@@ -359,7 +360,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 				policy.SignalProvider = false
 				s.hm.Retire(c.Deployment.ID, "upstream model retired", string(cls.Class))
 				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "model_retired", Deployment: c.Deployment.ID, Message: "deployment retired by upstream model lifecycle", ErrorType: string(cls.Class), StatusCode: resp.StatusCode})
-			} else if cls.Class == compat.ClassModelTemporarilyUnavailable {
+			case compat.ClassModelTemporarilyUnavailable:
 				// Temporary model unavailability is a deployment condition, not a
 				// malformed Claude/OpenAI request. Keep the provider-wide circuit
 				// untouched and fail over immediately.

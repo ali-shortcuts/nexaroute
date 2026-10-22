@@ -73,7 +73,7 @@ func (s *Local) Put(_ context.Context, a video.Asset, data []byte) (video.Asset,
 		return video.Asset{}, err
 	}
 	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
+	defer func() { _ = os.Remove(tmpName) }()
 	if err = tmp.Chmod(0600); err == nil {
 		_, err = tmp.Write(data)
 	}
@@ -159,7 +159,7 @@ func writeMetadataAtomic(path string, data []byte) error {
 		return err
 	}
 	name := tmp.Name()
-	defer os.Remove(name)
+	defer func() { _ = os.Remove(name) }()
 	if err = tmp.Chmod(0600); err == nil {
 		_, err = tmp.Write(data)
 	}

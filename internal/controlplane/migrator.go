@@ -27,7 +27,11 @@ func ApplyMigrations(ctx context.Context, db *sql.DB, registry MigrationRegistry
 	if _, err := conn.ExecContext(ctx, `SELECT pg_advisory_lock(hashtext('nexaroute:migrations'))`); err != nil {
 		return fmt.Errorf("acquire migration lock: %w", err)
 	}
-	defer conn.ExecContext(context.Background(), `SELECT pg_advisory_unlock(hashtext('nexaroute:migrations'))`)
+	// Best-effort unlock: the connection is closed immediately after, which
+	// releases the advisory lock server-side either way.
+	defer func() {
+		_, _ = conn.ExecContext(context.Background(), `SELECT pg_advisory_unlock(hashtext('nexaroute:migrations'))`)
+	}()
 	for _, migration := range registry.All() {
 		var checksum string
 		err := conn.QueryRowContext(ctx, `SELECT checksum FROM `+migrationTable+` WHERE version=$1`, migration.Version).Scan(&checksum)

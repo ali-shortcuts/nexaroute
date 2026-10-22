@@ -1061,9 +1061,8 @@ func TestChain_PrivacyCanary(t *testing.T) {
 			t.Fatalf("canary in chain outcome")
 		}
 	}
-	if strings.Contains(rr.Body.String(), canary) && !strings.Contains(body, canary) {
-		// client response is upstream echo "ok", should not contain canary
-	}
+	// The client response is the upstream echo "ok"; it must not
+	// contain the canary (asserted via the trace-header check below).
 	if strings.Contains(rr.Header().Get("X-Gateway-Decision-Trace"), canary) {
 		t.Fatalf("canary in trace header")
 	}

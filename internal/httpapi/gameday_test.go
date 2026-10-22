@@ -448,9 +448,9 @@ func writeGameDayScorecard(t *testing.T, results []gameDayResult) {
 			res = "PASS"
 			passed++
 		}
-		b.WriteString(fmt.Sprintf("| `%s` | %s | %s |\n", r.Name, r.Invariant, res))
+		fmt.Fprintf(&b, "| `%s` | %s | %s |\n", r.Name, r.Invariant, res)
 	}
-	b.WriteString(fmt.Sprintf("\n**%d/%d scenarios passed.**\n", passed, len(results)))
+	fmt.Fprintf(&b, "\n**%d/%d scenarios passed.**\n", passed, len(results))
 	b.WriteString("\nAll scenarios run against hermetic fake providers; no external services are contacted.\n")
 	path := filepath.Join(dir, "GAMEDAY_SCORECARD.md")
 	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
