@@ -217,3 +217,23 @@ func TestDeploymentReportBreakerSyncScopes(t *testing.T) {
 		t.Fatalf("postgres without sync: breaker scope = %q, want per-instance", r.BreakerCooldown)
 	}
 }
+
+// With the PostgreSQL job-store backend, video jobs and the cost
+// ledger are durable and shared; assets stay per-instance and the
+// warning must say exactly that.
+func TestDeploymentReportVideoPostgresScope(t *testing.T) {
+	cfg := config.Config{}
+	cfg.Video.JobStoreBackend = "postgres"
+	cfg.ApplyDefaults()
+	r := deploymentReportForConfig(cfg)
+	if r.VideoJobsLedger != ScopeShared {
+		t.Fatalf("video scope with postgres backend = %q, want shared", r.VideoJobsLedger)
+	}
+	joined := strings.Join(r.Warnings, " ")
+	if !strings.Contains(joined, "assets remain on per-instance local storage") {
+		t.Fatalf("warnings must keep the asset caveat: %v", r.Warnings)
+	}
+	if strings.Contains(joined, "video jobs and the cost ledger are per-instance") {
+		t.Fatalf("stale per-instance video warning with postgres backend: %v", r.Warnings)
+	}
+}

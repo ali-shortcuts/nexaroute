@@ -210,3 +210,49 @@ func TestLocalPutRejectsDotDotMetadataAndSymlinkedDirectories(t *testing.T) {
 		t.Fatalf("symlinked episode directory received writes: entries=%v err=%v", entries, err)
 	}
 }
+
+func TestLocalReadVerifiesChecksumAndSize(t *testing.T) {
+	s, err := NewLocal(t.TempDir(), 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := s.Put(context.Background(), video.Asset{
+		Filename: "clip.mp4",
+		Metadata: map[string]string{"project_id": "p1", "job_id": "j1"},
+	}, []byte("integrity matters"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.SHA256 == "" {
+		t.Fatal("Put did not record a checksum")
+	}
+	got, err := s.Read(stored)
+	if err != nil {
+		t.Fatalf("intact asset failed verification: %v", err)
+	}
+	if string(got) != "integrity matters" {
+		t.Fatalf("read = %q", got)
+	}
+	// Corrupt the stored object in place, keeping its length so only
+	// the checksum can catch it.
+	if err := os.WriteFile(stored.URI, []byte("integrity tamper!"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Read(stored); err == nil || !strings.Contains(err.Error(), "checksum mismatch") {
+		t.Fatalf("corrupted asset read error = %v, want checksum mismatch", err)
+	}
+	// Truncate: the size check must catch it even with a stale record.
+	if err := os.WriteFile(stored.URI, []byte("short"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Read(stored); err == nil {
+		t.Fatal("truncated asset read succeeded")
+	}
+	// A record without integrity fields still reads (legacy assets).
+	legacy := stored
+	legacy.SHA256 = ""
+	legacy.SizeBytes = 0
+	if _, err := s.Read(legacy); err != nil {
+		t.Fatalf("legacy asset without checksum must read: %v", err)
+	}
+}
