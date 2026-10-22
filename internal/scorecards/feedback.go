@@ -3,7 +3,6 @@ package scorecards
 import (
 	"fmt"
 	"math"
-	"sort"
 	"sync"
 	"time"
 )
@@ -178,25 +177,4 @@ func (t *FeedbackTracker) Card(taskType, deploymentID string, at time.Time) (Sco
 		return Scorecard{}, false
 	}
 	return t.cardLocked(a, at)
-}
-
-// Cards builds every current feedback scorecard as of `at`,
-// deterministically ordered — suitable for publishing into a
-// Registry.
-func (t *FeedbackTracker) Cards(at time.Time) []Scorecard {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	out := make([]Scorecard, 0, len(t.agg))
-	for _, a := range t.agg {
-		if sc, ok := t.cardLocked(a, at); ok {
-			out = append(out, sc)
-		}
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].DeploymentID != out[j].DeploymentID {
-			return out[i].DeploymentID < out[j].DeploymentID
-		}
-		return out[i].TaskType < out[j].TaskType
-	})
-	return out
 }
