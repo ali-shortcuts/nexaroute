@@ -70,7 +70,7 @@ jobs:
             echo 'build-release.sh must reject a missing version argument' >&2
             exit 1
           fi
-          ./scripts/build-release.sh v0.23.0
+          ./scripts/build-release.sh v0.24.0
           ./scripts/test-install.sh
 
       - name: Docker build
