@@ -1,7 +1,10 @@
 # ADR 0003: Circuit-breaker production wiring (opt-in breaker sync)
 
-- Status: Implemented behind an opt-in flag (default off); policy questions
-  listed at the end remain open for the owner.
+- Status: **Accepted.** Implemented behind an opt-in flag (default off);
+  the three policy questions at the end were decided 2026-10-22 by the
+  supervising engineer under the owner's explicit delegation of the
+  remaining decisions ("fix the remaining sections yourself",
+  2026-10-22) — see "Decisions on the open questions" below.
 - Date: 2026-10-22
 - Parent audit: #593; builds on ADR 0002 (state-store contract, #608/#618)
 - Scope: wiring `internal/sharedstate` into the gateway runtime
@@ -76,14 +79,23 @@ Implement `internal/breakersync` and wire it in `cmd/gateway`:
 - A shared-store outage degrades the fleet to exactly today's
   per-instance behavior; it can never open circuits.
 
-## Open questions for the owner (not settled by this ADR)
+## Decisions on the open questions (2026-10-22)
 
-1. Should a remote `retired` marker ever be honored as a full local
-   retirement (with an un-retire path), instead of the bounded-cooldown
-   demotion implemented here?
-2. Should breaker sync become default-on when a shared control-plane
-   backend (PostgreSQL/Redis) is configured, remain opt-in forever, or
-   become default-on only for specific deployment profiles?
-3. Is the 10s default cadence the right production default, or should
-   the fleet guidance standardize on a different interval (with its
-   write-amplification trade-off)?
+Decided by the supervising engineer under the owner's explicit
+delegation of the remaining decisions ("fix the remaining sections
+yourself", 2026-10-22):
+
+1. **Remote `retired` is never honored as a full local retirement.**
+   The bounded-cooldown demotion implemented here is the settled
+   behavior: a peer can keep a deployment cooled down for at most the
+   store cap per round, and only the local operator/config lifecycle
+   can retire or un-retire a local deployment. A compromised or buggy
+   peer must never be able to permanently remove a local deployment.
+2. **Breaker sync remains opt-in.** It does not become default-on for
+   shared control-plane backends or for any deployment profile:
+   enabling cross-replica state flow is an explicit operator decision,
+   and the standalone behavior stays the default exactly as shipped.
+3. **The 10s default cadence stands.** It is the settled production
+   default; operators with larger fleets can raise it within the
+   validated 5..3600 range and accept the slower convergence as the
+   documented write-amplification trade-off.

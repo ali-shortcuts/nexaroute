@@ -1,6 +1,11 @@
 # ADR 0002: Shared circuit-breaker state consistency contract
 
-- Status: Accepted for the state-store slice; production wiring remains BLOCKED on owner decisions.
+- Status: Accepted for the state-store slice. **Superseded in part
+  (2026-10-22):** the "production wiring remains BLOCKED" clause no
+  longer applies — the wiring decisions were taken and implemented
+  under ADR 0003 (opt-in breaker sync, default off), and ADR 0003's
+  open policy questions were decided the same day. The state-store
+  contract in this ADR is unchanged and remains the foundation.
 - Date: 2026-10-21
 - Issue: #608 (parent audit #593)
 - Scope: the first safe shared circuit-breaker state slice only
