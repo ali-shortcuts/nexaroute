@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -42,6 +43,9 @@ type Runtime struct {
 	// retention window, pruned by the same hourly sweeper as jobs.
 	codeRender          *providers.CodeRender
 	codeRenderRetention time.Duration
+	// ledgerCloser releases the durable cost ledger's connections
+	// (PostgreSQL backend only; nil for the in-memory ledger).
+	ledgerCloser io.Closer
 }
 
 // openJobStore builds the configured job-store backend. The file
@@ -75,6 +79,32 @@ func openJobStore(cfg video.Config, baseDir string) (queue.JobStore, error) {
 		return store, nil
 	default:
 		return nil, fmt.Errorf("video.job_store_backend must be file or postgres, got %q", cfg.JobStoreBackend)
+	}
+}
+
+// openCostLedger selects the cost-ledger implementation matching the
+// job-store backend: the durable PostgreSQL ledger (same database as
+// the job store) for the postgres backend, the in-memory ledger
+// otherwise. A postgres configuration or connectivity failure is a
+// hard startup error — cost accounting never silently falls back to
+// volatile in-memory state once durable accounting is configured. The
+// returned closer is non-nil only for the PostgreSQL ledger.
+func openCostLedger(cfg video.Config) (orchestrator.CostLedger, io.Closer, error) {
+	switch cfg.JobStoreBackend {
+	case "", "file":
+		return &cost.Ledger{}, nil, nil
+	case "postgres":
+		dsn, err := resolveJobStoreURL(cfg.JobStoreURL)
+		if err != nil {
+			return nil, nil, err
+		}
+		ledger, err := cost.OpenPostgresLedger(context.Background(), dsn)
+		if err != nil {
+			return nil, nil, fmt.Errorf("video cost ledger: %w", err)
+		}
+		return ledger, ledger, nil
+	default:
+		return nil, nil, fmt.Errorf("video.job_store_backend must be file or postgres, got %q", cfg.JobStoreBackend)
 	}
 }
 
@@ -238,7 +268,10 @@ func New(cfg video.Config, baseDir string) (*Runtime, error) {
 	if len(reg) == 0 {
 		return nil, errors.New("video gateway is enabled but no provider is configured; configure the local ComfyUI workflow, enable the code-render provider, or enable development_fake_provider only for tests")
 	}
-	ledger := &cost.Ledger{}
+	ledger, ledgerCloser, err := openCostLedger(cfg)
+	if err != nil {
+		return nil, err
+	}
 	ffmpegBinary := strings.TrimSpace(os.Getenv("NEXAROUTE_FFMPEG"))
 	if ffmpegBinary == "" {
 		ffmpegBinary = "ffmpeg"
@@ -250,7 +283,7 @@ func New(cfg video.Config, baseDir string) (*Runtime, error) {
 	}
 	pool := queue.NewWorkerPool(q, cfg.Workers, orch.RunJob)
 	h := &api.Handler{Orch: orch, Store: store, Providers: reg, Assets: assetSink, RequireAuth: true, BearerToken: token, Universal: universalAgent, UniversalMaxDuration: codeRenderMaxDuration}
-	return &Runtime{Handler: h, Queue: q, Workers: pool, Store: store, Orchestrator: orch, jobRetention: time.Duration(cfg.JobRetentionDays) * 24 * time.Hour, codeRender: codeRender, codeRenderRetention: codeRenderRetention}, nil
+	return &Runtime{Handler: h, Queue: q, Workers: pool, Store: store, Orchestrator: orch, jobRetention: time.Duration(cfg.JobRetentionDays) * 24 * time.Hour, codeRender: codeRender, codeRenderRetention: codeRenderRetention, ledgerCloser: ledgerCloser}, nil
 }
 
 // instanceID names this process as a video job lease owner:
@@ -357,5 +390,8 @@ func (r *Runtime) Close() {
 	}
 	if pruneDone != nil {
 		<-pruneDone
+	}
+	if r.ledgerCloser != nil {
+		_ = r.ledgerCloser.Close()
 	}
 }

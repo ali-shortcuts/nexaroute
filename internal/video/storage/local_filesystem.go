@@ -231,13 +231,33 @@ func (s *Local) Open(a video.Asset) (*os.File, error) {
 	return file, nil
 }
 
+// Read returns the asset's bytes after the same path, type and size
+// validation as Open, plus integrity verification: when the asset
+// record carries the SHA-256 that Put computed (or a size), the bytes
+// on disk must match it. A mismatch means the stored object is corrupt
+// or was replaced under the root, and the read fails instead of
+// silently serving damaged media. Assets recorded without a checksum
+// (written before integrity records existed) read as before.
 func (s *Local) Read(a video.Asset) ([]byte, error) {
 	file, err := s.Open(a)
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
-	return io.ReadAll(file)
+	defer func() { _ = file.Close() }()
+	data, err := io.ReadAll(file)
+	if err != nil {
+		return nil, err
+	}
+	if a.SizeBytes > 0 && int64(len(data)) != a.SizeBytes {
+		return nil, fmt.Errorf("asset size mismatch: record %d bytes, disk %d bytes", a.SizeBytes, len(data))
+	}
+	if a.SHA256 != "" {
+		sum := sha256.Sum256(data)
+		if hex.EncodeToString(sum[:]) != a.SHA256 {
+			return nil, fmt.Errorf("asset checksum mismatch: stored object is corrupt or was replaced")
+		}
+	}
+	return data, nil
 }
 
 var _ video.AssetSink = (*Local)(nil)

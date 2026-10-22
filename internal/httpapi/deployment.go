@@ -122,7 +122,19 @@ func deploymentReportForConfig(cfg config.Config) DeploymentReport {
 	}
 	r.Warnings = append(r.Warnings,
 		"quota/RPM/TPM reservations are per-instance in-memory state and must never be read as global limits",
-		"video jobs and the cost ledger are per-instance and not durable or distributed",
 	)
+	// Video durability follows the job-store backend: with PostgreSQL,
+	// jobs and the cost ledger are durable and shared (assets are not —
+	// they stay on per-instance local storage).
+	if strings.EqualFold(strings.TrimSpace(cfg.Video.JobStoreBackend), "postgres") {
+		r.VideoJobsLedger = ScopeShared
+		r.Warnings = append(r.Warnings,
+			"video jobs and the cost ledger are durable and shared via the PostgreSQL job-store backend; video assets remain on per-instance local storage and are not replicated",
+		)
+	} else {
+		r.Warnings = append(r.Warnings,
+			"video jobs and the cost ledger are per-instance and not durable or distributed",
+		)
+	}
 	return r
 }
