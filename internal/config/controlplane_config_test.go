@@ -49,3 +49,35 @@ func TestControlPlaneRejectsInvalidModes(t *testing.T) {
 		t.Fatal("invalid failure mode accepted")
 	}
 }
+
+func TestControlPlaneBreakerSyncValidation(t *testing.T) {
+	cfg := Default()
+	cfg.ControlPlane.BreakerSync = true
+	cfg.ApplyDefaults()
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("breaker_sync without control_plane.enabled accepted")
+	}
+	cfg.ControlPlane.Enabled = true
+	cfg.ApplyDefaults()
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("breaker_sync with file control plane rejected: %v", err)
+	}
+	if got := cfg.BreakerSyncInterval(); got != 10_000_000_000 {
+		t.Fatalf("default breaker sync interval = %v, want 10s", got)
+	}
+	cfg.ControlPlane.BreakerSyncIntervalSeconds = 3
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("breaker_sync interval below the floor accepted")
+	}
+	cfg.ControlPlane.BreakerSyncIntervalSeconds = 30
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("valid breaker_sync interval rejected: %v", err)
+	}
+	if got := cfg.BreakerSyncInterval(); got != 30_000_000_000 {
+		t.Fatalf("configured breaker sync interval = %v, want 30s", got)
+	}
+	cfg.ControlPlane.BreakerSyncReplicaID = string(make([]byte, 129))
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("oversized breaker_sync replica ID accepted")
+	}
+}

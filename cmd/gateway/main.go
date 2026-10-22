@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ali-shortcuts/nexaroute/internal/breakersync"
 	"github.com/ali-shortcuts/nexaroute/internal/config"
 	"github.com/ali-shortcuts/nexaroute/internal/desktop"
 	"github.com/ali-shortcuts/nexaroute/internal/events"
@@ -349,6 +350,34 @@ func main() {
 			bootstrap.Fatalf("cannot recover video jobs: %v", err)
 		}
 		defer videoRT.Close()
+	}
+	// Opt-in cross-replica circuit-breaker synchronization (ADR 0003).
+	// Default off; when enabled it reuses the already-open control-plane
+	// store and runs entirely off the request path. A store outage is
+	// logged per round and local breaker state continues untouched.
+	if cfg.ControlPlane.BreakerSync && cpRuntime != nil {
+		replicaID := cfg.ControlPlane.BreakerSyncReplicaID
+		if replicaID == "" {
+			host, herr := os.Hostname()
+			if herr != nil || host == "" {
+				host = "unknown-host"
+			}
+			replicaID = fmt.Sprintf("%s-%d", host, os.Getpid())
+		}
+		breakerStore, berr := cpRuntime.BreakerStore(replicaID)
+		if berr != nil {
+			bootstrap.Fatalf("cannot initialize breaker sync: %v", berr)
+		}
+		syncer, serr := breakersync.New(breakerStore, hm, breakersync.Options{
+			ReplicaID: replicaID,
+			Interval:  cfg.BreakerSyncInterval(),
+			Logf:      logger.Printf,
+		})
+		if serr != nil {
+			bootstrap.Fatalf("cannot initialize breaker sync: %v", serr)
+		}
+		go syncer.Run(ctx)
+		logger.Printf("breaker_sync enabled replica=%s interval=%s backend=%s", replicaID, cfg.BreakerSyncInterval(), cfg.ControlPlane.Backend)
 	}
 	listener, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {

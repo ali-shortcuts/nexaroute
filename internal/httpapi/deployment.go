@@ -76,6 +76,21 @@ func deploymentReportForConfig(cfg config.Config) DeploymentReport {
 		}
 	}
 
+	// Breaker sync (ADR 0003) is opt-in: only when the operator enabled
+	// it does the breaker scope follow the control-plane topology, and
+	// the warning below is replaced with the sync-accurate one.
+	breakerSyncShared := false
+	if cfg.ControlPlane.BreakerSync {
+		switch r.StoreTopology {
+		case "shared":
+			r.BreakerCooldown = ScopeShared
+			breakerSyncShared = true
+		case "shared-host":
+			r.BreakerCooldown = ScopeSharedHost
+			breakerSyncShared = true
+		}
+	}
+
 	// Config snapshots are always local files. The control plane carries only
 	// runtime metadata and budget-alert marks; it never stores or reconciles
 	// config, so enabling it must not change this scope (#599).
@@ -91,8 +106,21 @@ func deploymentReportForConfig(cfg config.Config) DeploymentReport {
 	if r.StoreTopology == "test-only" {
 		r.Warnings = append(r.Warnings, "control plane backend 'memory' is test-only and loses all state on restart")
 	}
+	if breakerSyncShared {
+		r.Warnings = append(r.Warnings,
+			"breaker/cooldown state synchronizes across replicas via the opt-in breaker sync (control_plane.breaker_sync); remote retired markers apply only as bounded cooldowns",
+		)
+	} else {
+		r.Warnings = append(r.Warnings,
+			"breaker/cooldown state is per-instance: cross-replica breaker synchronization is not enabled",
+		)
+		if cfg.ControlPlane.BreakerSync {
+			r.Warnings = append(r.Warnings,
+				"control_plane.breaker_sync is enabled with a memory control-plane backend, which cannot share state across processes: breaker state remains per-instance",
+			)
+		}
+	}
 	r.Warnings = append(r.Warnings,
-		"breaker/cooldown state is per-instance: cross-replica breaker synchronization is not implemented",
 		"quota/RPM/TPM reservations are per-instance in-memory state and must never be read as global limits",
 		"video jobs and the cost ledger are per-instance and not durable or distributed",
 	)

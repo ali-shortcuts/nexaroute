@@ -706,6 +706,43 @@ func (m *Manager) Retire(id, reason, errorClass string) {
 	m.states[id] = s
 }
 
+// ApplySharedCooldown applies a cooldown learned from a peer replica via
+// the shared breaker store (opt-in breaker sync). It is deliberately
+// conservative:
+//
+//   - a locally retired deployment is never modified;
+//   - an existing local cooldown is only ever extended, never shortened;
+//   - an already-expired deadline is ignored;
+//   - failure counters, EWMA and recovery bookkeeping are untouched — a
+//     shared marker is routing evidence, not a local failure.
+//
+// It reports whether the local state changed.
+func (m *Manager) ApplySharedCooldown(id string, until time.Time, reason string) bool {
+	if id == "" || until.IsZero() {
+		return false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := m.now()
+	if !until.After(now) {
+		return false
+	}
+	s := m.states[id]
+	if s.Status == Retired {
+		return false
+	}
+	if s.Status == Cooldown && !until.After(s.CooldownUntil) {
+		return false
+	}
+	s.Deployment = id
+	s.Status = Cooldown
+	s.LastChecked = now
+	s.LastError = reason
+	s.CooldownUntil = until
+	m.states[id] = s
+	return true
+}
+
 func (m *Manager) RecordScopeSuccess(id string, scopes []string) {
 	if len(scopes) == 0 {
 		return

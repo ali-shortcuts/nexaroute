@@ -180,3 +180,40 @@ func TestHelloExposesDeploymentReport(t *testing.T) {
 		t.Fatalf("hello deployment report wrong: %+v", body.Deployment)
 	}
 }
+
+// Breaker sync is opt-in (ADR 0003): only when the operator enables it
+// does the breaker scope follow the control-plane topology, and the
+// warning must describe the sync that actually runs.
+func TestDeploymentReportBreakerSyncScopes(t *testing.T) {
+	mk := func(backend string, sync bool) config.Config {
+		cfg := config.Config{}
+		cfg.ControlPlane.Enabled = true
+		cfg.ControlPlane.Backend = backend
+		cfg.ControlPlane.BreakerSync = sync
+		cfg.ApplyDefaults()
+		return cfg
+	}
+	r := deploymentReportForConfig(mk("postgres", true))
+	if r.BreakerCooldown != ScopeShared {
+		t.Fatalf("postgres+sync: breaker scope = %q, want shared", r.BreakerCooldown)
+	}
+	joined := strings.Join(r.Warnings, " ")
+	if !strings.Contains(joined, "breaker sync") || strings.Contains(joined, "not enabled") {
+		t.Fatalf("postgres+sync: warnings must describe active sync: %v", r.Warnings)
+	}
+	r = deploymentReportForConfig(mk("file", true))
+	if r.BreakerCooldown != ScopeSharedHost {
+		t.Fatalf("file+sync: breaker scope = %q, want shared-host", r.BreakerCooldown)
+	}
+	r = deploymentReportForConfig(mk("memory", true))
+	if r.BreakerCooldown != ScopePerInstance {
+		t.Fatalf("memory+sync: breaker scope = %q, want per-instance", r.BreakerCooldown)
+	}
+	if !strings.Contains(strings.Join(r.Warnings, " "), "memory control-plane backend") {
+		t.Fatalf("memory+sync: warnings must call out the memory backend: %v", r.Warnings)
+	}
+	r = deploymentReportForConfig(mk("postgres", false))
+	if r.BreakerCooldown != ScopePerInstance {
+		t.Fatalf("postgres without sync: breaker scope = %q, want per-instance", r.BreakerCooldown)
+	}
+}
