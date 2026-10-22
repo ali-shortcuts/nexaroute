@@ -295,6 +295,12 @@ need drift detection. It must not be described as shared config or HA.
 
 ## Owner decisions required
 
+**Answered 2026-10-22** (decision recorded at the top of this ADR):
+decision 1 — **No**, cross-replica propagation is not required;
+Option 1 is accepted. Decisions 2–9 are moot unless an owner decision
+reopens propagation; they are preserved below as the required agenda
+for any such reopening.
+
 1. **Product need:** Is cross-replica configuration propagation required, or is
    local-plus-deployment-tooling acceptable indefinitely? If not required, close
    the shared-config thread and keep Option 1.

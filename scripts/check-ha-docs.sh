@@ -31,7 +31,12 @@ require docs/KNOWN_GAPS.md "config edits do not propagate across replicas"
 require docs/KNOWN_GAPS.md "[ADR 0001](adr/0001-shared-config-snapshot.md)"
 require docs/CONFIGURATION.md "control-plane store never stores"
 require docs/DEPLOYMENT.md "They do **not** share configuration"
-require docs/adr/0001-shared-config-snapshot.md "- Status: Proposed"
+# ADR 0001 was accepted as Option 1 on 2026-10-22 (local config stays
+# authoritative; propagation is not a product requirement). The check
+# now pins the settled status instead of the former Proposed marker;
+# the contract's purpose is unchanged -- every HA document must keep
+# saying config is local and per-instance.
+require docs/adr/0001-shared-config-snapshot.md "- Status: **Accepted — Option 1 (local configuration stays authoritative)"
 require docs/adr/0001-shared-config-snapshot.md "## Owner decisions required"
 
 forbid docs/DEPLOYMENT.md "until the M4-2"
