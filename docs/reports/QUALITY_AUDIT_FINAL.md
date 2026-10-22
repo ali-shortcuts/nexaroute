@@ -165,3 +165,79 @@ order:
 
 The repository is materially cleaner and better tested than `bfa93b6`, but this
 audit does **not** certify production readiness or zero vulnerabilities.
+
+---
+
+## Addendum — 2026-10-22 remaining-work mission outcome
+
+- Mission date: **2026-10-22**
+- Final `main`: `6ca8ac5f5d6949c1c7a5832df6472dbce375e784`
+- Merged PRs: #624 (golangci triage), #625 (deadcode), #626 (breaker
+  sync, section A), #627 (video cost ledger + asset integrity,
+  section B), #628 (ADRs 0004–0006, sections C/D), #629 (coverage)
+- Release: `v0.23.0` unchanged; no tag, release, or asset mutation.
+  Issue #593 remains open — closure is the owner's decision.
+
+### Verdict
+
+Every completable item in the mission scope is complete and verified on
+the final tree. The repository now measures **85.1%** coverage (target
+≥85% met), **0** golangci-lint / staticcheck / deadcode findings, and
+**53** gosec findings (all G304, all triaged). The two architecture
+proposals this report previously left open as owner decisions 2 and 3
+were resolved by implementation where the evidence supported it:
+durable video jobs (already landed via #609/#623) plus a durable
+exactly-once cost ledger (#627), and distributed breaker state as an
+opt-in, default-off synchronization (#626, ADR 0003) rather than a
+silent behavior change. Owner decision 4 (config write ownership) is
+recorded in ADR 0001 as Proposed with a recommendation to keep local
+config authoritative; three further reserved decisions are recorded in
+ADRs 0004–0006 (multi-node video, autopilot, lint ratchet gating).
+None of the four was settled by default.
+
+### What is genuinely verified (this mission, new since the checkpoint)
+
+- Breaker synchronization against **real PostgreSQL and real Redis**
+  in CI: two-instance propagation, partition, heal, restart — pass,
+  verified from job logs (not fixtures).
+- Video cost-ledger exactly-once semantics against **real PostgreSQL**
+  in CI: concurrent duplicates, conflicting settlement, restart
+  recovery, invalid amounts, store failure — pass.
+- External acceptance harness against **real public IdPs**: Google
+  discovery + JWKS PASS; the GitHub Actions issuer correctly rejected
+  (its discovery document has no authorization/token endpoints).
+- Key-custody exercises with the shipped binary: master-key rotate /
+  verify / decrypt round-trip, wrong-key fail-closed, keyring absence
+  fail-closed (no fallback), Vault KV helper fail-closed, command
+  key-provider protocol round-trip.
+- Backup/restore drill on disposable state: backup, `doctor`
+  preflight (10 pass / 4 accurate warnings / 0 fail), `restore
+  --verify` PASS set, corrupted bundle and wrong key both FAIL with
+  exit 1, real restore into a disposable directory verifies.
+- Browser acceptance and axe accessibility scans green in CI on every
+  mission PR head; SSE error propagation, no-mid-stream-failover,
+  reasoning mapping and estimate labeling verified at source (F/H).
+
+### What is still not verified (unchanged boundaries, stated plainly)
+
+- Live tenant OIDC login (Authorization Code + PKCE with a real
+  tenant), ID-token verification with an operator-issued token: NOT_RUN
+  (no tenant credentials exist in this environment).
+- A real Vault server round-trip and a real OS keyring round-trip:
+  BLOCKED here (no Vault, no `secret-tool`/keyring daemon on this
+  host); fail-closed behavior is verified, the happy path is not.
+- Live LLM provider probes / paid calls: NOT_RUN (no provider
+  credentials; zero calls made by design).
+- Live Kubernetes install, real OTLP collector ingestion, live
+  Azure/Vertex/Bedrock tenants, production multi-hour soak: UNVERIFIED.
+- Vault Transit envelope mode: not implemented (documented limitation
+  in `docs/EXTERNAL_VERIFICATION.md`); the provider contract loads raw
+  key material into the gateway process.
+
+### Remaining owner decisions
+
+1. The four reserved consistency decisions (ADRs 0001, 0004, 0005, 0006).
+2. Whether Activity needs a durable cross-process log (noted in
+   `docs/HA_STATE_INVENTORY.md`).
+3. Closure of issue #593 itself.
+4. Any new release. This mission made no release change, per directive.
