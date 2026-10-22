@@ -99,7 +99,7 @@ func codingProfilesSnapshot(cfg config.Config) map[string]any {
 					satisfied++
 				}
 			}
-			verdict := "unmet"
+			var verdict string
 			switch {
 			case class.requirement == "none":
 				verdict = "met"

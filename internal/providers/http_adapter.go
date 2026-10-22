@@ -1112,15 +1112,16 @@ func (a *httpAdapter) Probe(ctx context.Context, model string, maxTokens int) (t
 	}
 	start := time.Now()
 	var resp *http.Response
-	if a.p.Type == "bedrock" {
+	switch a.p.Type {
+	case "bedrock":
 		resp, err = a.DoPath(ctx, http.MethodPost, bedrockModelPath(model, false), b, false, nil)
-	} else if a.p.Type == "gemini" {
+	case "gemini":
 		resp, err = a.DoPath(ctx, http.MethodPost, a.geminiModelPath(model, false), b, false, nil)
-	} else if a.p.Type == "vertex" {
+	case "vertex":
 		resp, err = a.DoPath(ctx, http.MethodPost, a.vertexModelPath(model, false), b, false, nil)
-	} else if a.p.Type == "openai_responses" {
+	case "openai_responses":
 		resp, err = a.DoPath(ctx, http.MethodPost, a.p.ResponsesPath, b, false, nil)
-	} else {
+	default:
 		resp, err = a.Do(ctx, b, false, nil)
 	}
 	lat := time.Since(start)

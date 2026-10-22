@@ -497,10 +497,11 @@ func finalizeAcceptanceReport(report *providerAcceptReport) {
 			report.Totals.DiscoveryUnsupported++
 		}
 		for _, m := range p.Models {
-			if m.Result == "passed" {
+			switch m.Result {
+			case "passed":
 				report.Totals.ModelsTested++
 				report.Totals.ModelsPassed++
-			} else if m.Result == "failed" {
+			case "failed":
 				report.Totals.ModelsTested++
 				report.Totals.ModelsFailed++
 			}

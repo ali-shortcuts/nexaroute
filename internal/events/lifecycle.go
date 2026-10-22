@@ -299,8 +299,8 @@ func (lc *RequestLifecycle) merge(e Event) {
 		}
 	}
 
-	switch {
-	case e.Phase == PhaseAttempt:
+	switch e.Phase {
+	case PhaseAttempt:
 		lc.Attempts = append(lc.Attempts, LifecycleAttempt{
 			Index:      len(lc.Attempts),
 			Attempt:    e.Attempt,

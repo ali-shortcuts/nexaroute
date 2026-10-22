@@ -69,7 +69,7 @@ func (r *Runner) ComposeEpisode(ctx context.Context, spec EpisodeSpec) (Manifest
 	if err != nil {
 		return Manifest{}, err
 	}
-	defer os.RemoveAll(work)
+	defer func() { _ = os.RemoveAll(work) }()
 
 	shotPaths := make([]string, 0, len(spec.Shots))
 	manifest := Manifest{Commands: make([][]string, 0, len(spec.Shots)+2)}
@@ -167,7 +167,7 @@ func (r *Runner) ComposeEpisode(ctx context.Context, spec EpisodeSpec) (Manifest
 	if err != nil {
 		return Manifest{}, err
 	}
-	defer os.Remove(tmpOutput)
+	defer func() { _ = os.Remove(tmpOutput) }()
 	args := []string{"-y", "-i", joined}
 	audioInputs := 0
 	narrationIndex, musicIndex := -1, -1

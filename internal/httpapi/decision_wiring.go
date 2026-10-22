@@ -9,11 +9,9 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/config"
 	"github.com/ali-shortcuts/nexaroute/internal/decision"
 	"github.com/ali-shortcuts/nexaroute/internal/events"
-	"github.com/ali-shortcuts/nexaroute/internal/feature"
 	"github.com/ali-shortcuts/nexaroute/internal/route"
 	"github.com/ali-shortcuts/nexaroute/internal/router"
 	"github.com/ali-shortcuts/nexaroute/internal/scorecards"
-	"github.com/ali-shortcuts/nexaroute/internal/taskprofile"
 )
 
 func jsonMarshalBounded(v interface{}, maxLen int) (string, error) {
@@ -426,8 +424,8 @@ func (s *Server) applyDecisionPlane(
 	}
 
 	// Use task intelligence; ensure types align
-	var fp feature.RequestFeatures = ti.Features
-	var tp taskprofile.TaskProfile = ti.Profile
+	var fp = ti.Features
+	var tp = ti.Profile
 
 	// Phase E: resolve pinned deployment ID (privacy-safe, no raw session key)
 	pinnedID := ""

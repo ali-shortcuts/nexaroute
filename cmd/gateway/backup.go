@@ -975,7 +975,7 @@ func validateJournal(journalDir string, m *restoreJournalManifest) error {
 		return fmt.Errorf("journal transaction ID %q has an invalid length", m.ID)
 	}
 	for _, r := range m.ID {
-		if !(r >= '0' && r <= '9' || r >= 'a' && r <= 'f') {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
 			return fmt.Errorf("journal transaction ID %q is not hexadecimal", m.ID)
 		}
 	}

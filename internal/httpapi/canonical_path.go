@@ -626,7 +626,8 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 			lastCT := resp.Header.Get("Content-Type")
 			cls, policy := classifyFailure(resp.StatusCode, b)
 			safeMessage := cls.Message
-			if cls.Class == compat.ClassModelRetired {
+			switch cls.Class {
+			case compat.ClassModelRetired:
 				safeMessage = string(cls.Class)
 				policy.Failover = true
 				policy.QuarantineDeployment = false
@@ -634,7 +635,7 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 				policy.SignalProvider = false
 				s.hm.Retire(deployment.ID, "upstream model retired", string(cls.Class))
 				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "model_retired", Deployment: deployment.ID, Message: "deployment retired by upstream model lifecycle", ErrorType: string(cls.Class), StatusCode: resp.StatusCode})
-			} else if cls.Class == compat.ClassModelTemporarilyUnavailable {
+			case compat.ClassModelTemporarilyUnavailable:
 				safeMessage = string(cls.Class)
 				policy.Failover = true
 				policy.SignalProvider = false

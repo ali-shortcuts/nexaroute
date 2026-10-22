@@ -335,9 +335,8 @@ func TestVirtualEndpointBackwardCompatibility(t *testing.T) {
 	cfg.Probe.Enabled = false
 	s := testGateway(t, cfg)
 	// auto should still work (no deployments, but it would match all if there were)
-	if len(s.rt.Candidates(router.Requirement{Model: "auto"})) != 0 {
-		// With no providers, candidates empty, but auto logic should not crash
-	}
+	// With no providers, candidates are empty, but auto logic must not crash.
+	_ = s.rt.Candidates(router.Requirement{Model: "auto"})
 	// Direct model routing preserved when no VE
 	cfg.Providers = []config.ProviderConfig{{
 		ID: "p1", Type: "openai_compatible", BaseURL: "https://example.com", Enabled: true,

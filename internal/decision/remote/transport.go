@@ -68,7 +68,7 @@ func isNumericLookalike(host string) bool {
 	onlyDigitsDots := true
 	for i := 0; i < len(host); i++ {
 		c := host[i]
-		if !(c >= '0' && c <= '9' || c == '.') {
+		if (c < '0' || c > '9') && c != '.' {
 			onlyDigitsDots = false
 			break
 		}
@@ -314,7 +314,7 @@ func ValidateBaseURL(raw string, allowHTTPForTest bool) error {
 	if u.User != nil {
 		return fmt.Errorf("%w: userinfo not allowed", ErrInvalidConfig)
 	}
-	if u.Scheme != "https" && !(allowHTTPForTest && u.Scheme == "http") {
+	if u.Scheme != "https" && (!allowHTTPForTest || u.Scheme != "http") {
 		return fmt.Errorf("%w: scheme must be https", ErrInvalidConfig)
 	}
 	if u.Host == "" {

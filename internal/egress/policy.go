@@ -195,7 +195,7 @@ func (p Policy) validateURL(raw string) (*url.URL, error) {
 	if err != nil || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		return nil, fmt.Errorf("egress target is malformed or contains credentials/query")
 	}
-	if u.Scheme != "https" && !(u.Scheme == "http" && p.AllowLoopback && isLoopbackHost(u.Hostname())) {
+	if u.Scheme != "https" && (u.Scheme != "http" || !p.AllowLoopback || !isLoopbackHost(u.Hostname())) {
 		return nil, fmt.Errorf("egress target must use https (http is only allowed for explicit loopback hosts)")
 	}
 	if p.deniedHost(u.Hostname()) {

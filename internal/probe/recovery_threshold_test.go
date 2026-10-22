@@ -415,10 +415,8 @@ func TestRecoveryHotReloadAdoptsThreshold(t *testing.T) {
 	}
 	// Wait until at least one recovery probe succeeded under strict 5-of-5.
 	deadline := time.Now().Add(3 * time.Second)
-	for {
-		if hm.Get("p/m").RecoverySuccesses >= 1 {
-			break
-		}
+	for hm.Get("p/m").RecoverySuccesses < 1 {
+
 		if time.Now().After(deadline) {
 			t.Fatalf("no partial recovery progress observed: %+v", hm.Get("p/m"))
 		}

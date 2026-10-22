@@ -182,7 +182,7 @@ func TestDecision_CrossProtocolLocalPreservesOrder(t *testing.T) {
 	// With local provider preserving order, all three should use same first candidate (p1/m1) because priority ordering identical
 	if openAIDeployment != anthropicDeployment || (responsesDeployment != "" && anthropicDeployment != responsesDeployment) {
 		t.Logf("deployments: openai=%s anthropic=%s responses=%s", openAIDeployment, anthropicDeployment, responsesDeployment)
-		if !(openAIDeployment == "p1/m1" && anthropicDeployment == "p1/m1" && (responsesDeployment == "p1/m1" || responsesDeployment == "")) {
+		if openAIDeployment != "p1/m1" || anthropicDeployment != "p1/m1" || (responsesDeployment != "p1/m1" && responsesDeployment != "") {
 			t.Fatalf("cross-protocol ordering diverged: openai=%s anthropic=%s responses=%s", openAIDeployment, anthropicDeployment, responsesDeployment)
 		}
 	}
@@ -537,10 +537,10 @@ func TestDecision_PrivacyCanaryCompletePath(t *testing.T) {
 	var hits atomic.Int64
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hits.Add(1)
-		body, _ := io.ReadAll(r.Body)
-		if strings.Contains(string(body), canary) {
-			// Upstream may contain canary if raw prompt forwarded — that's expected, but decision artifacts must not
-		}
+		_, _ = io.ReadAll(r.Body)
+		// The upstream body may legitimately contain the canary when the
+		// raw prompt is forwarded; decision artifacts must not (checked by
+		// the caller-side assertions).
 		w.Header().Set("Content-Type", "application/json")
 		io.WriteString(w, `{"id":"x","choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
 	}))

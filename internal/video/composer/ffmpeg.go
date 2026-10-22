@@ -76,7 +76,7 @@ func (r *Runner) Normalize(ctx context.Context, input, output string, width, hei
 	if err != nil {
 		return err
 	}
-	defer os.Remove(tmp)
+	defer func() { _ = os.Remove(tmp) }()
 	if err := r.run(ctx, "-y", "-i", input, "-vf", fmt.Sprintf("scale=%d:%d:force_original_aspect_ratio=decrease,pad=%d:%d:(ow-iw)/2:(oh-ih)/2,fps=%d", width, height, width, height, fps), "-pix_fmt", "yuv420p", "-c:v", "libx264", "-an", tmp); err != nil {
 		return err
 	}
@@ -93,7 +93,7 @@ func (r *Runner) Concat(ctx context.Context, inputs []string, output string) (Ma
 	if err != nil {
 		return Manifest{}, err
 	}
-	defer os.Remove(list.Name())
+	defer func() { _ = os.Remove(list.Name()) }()
 	for _, in := range inputs {
 		abs, _ := filepath.Abs(in)
 		if _, err = fmt.Fprintf(list, "file '%s'\n", strings.ReplaceAll(abs, "'", "'\\''")); err != nil {
@@ -108,7 +108,7 @@ func (r *Runner) Concat(ctx context.Context, inputs []string, output string) (Ma
 	if err != nil {
 		return Manifest{}, err
 	}
-	defer os.Remove(tmp)
+	defer func() { _ = os.Remove(tmp) }()
 	args := []string{"-y", "-f", "concat", "-safe", "0", "-i", list.Name(), "-c", "copy", tmp}
 	m := Manifest{Commands: [][]string{{r.Binary}, args}}
 	if err = r.run(ctx, args...); err != nil {

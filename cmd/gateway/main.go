@@ -183,7 +183,7 @@ func main() {
 	if cfg.Logging.ConsoleMaxLinesPerMinute > 0 {
 		logWriters = append(logWriters, logging.NewRateLimitedWriter(os.Stderr, cfg.Logging.ConsoleMaxLinesPerMinute, time.Minute))
 	}
-	var logOutput io.Writer = io.Discard
+	var logOutput = io.Discard
 	if len(logWriters) == 0 {
 		fmt.Fprintf(os.Stderr, "nexaroute: warning: all logging is disabled (logging.file=off and console_max_lines_per_minute=0)\n")
 	}
@@ -233,7 +233,11 @@ func main() {
 			logger.Printf("telemetry_otlp_export enabled service=%s", cfg.Telemetry.ServiceName)
 		}
 	}
-	defer api.CloseSecurityStore()
+	defer func() {
+		if err := api.CloseSecurityStore(); err != nil {
+			logger.Printf("security_store_close_error=%v", err)
+		}
+	}()
 	var videoRT *videoRuntime.Runtime
 	if cfg.Video.Enabled {
 		// Universal video planner defaults: point the code-render planner
@@ -353,7 +357,7 @@ func main() {
 	defer listener.Close()
 	secureListener := cfg.TLS.Enabled
 	serverErr := make(chan error, 1)
-	var serveListener net.Listener = listener
+	var serveListener = listener
 	if cfg.TLS.Enabled {
 		tlsConfig, tlsErr := transport.ServerTLSConfig(cfg.TLS, filepath.Dir(*configPath))
 		if tlsErr != nil {

@@ -171,12 +171,13 @@ func TestOIDCRolePermissionsReachActualAdminHandlers(t *testing.T) {
 			t.Fatalf("%s reached privileged config mutation: %d %s", role, configWrite.Code, configWrite.Body.String())
 		}
 
-		if role == authz.RoleViewer {
+		switch role {
+		case authz.RoleViewer:
 			routingWrite := request(http.MethodPost, "/admin/api/virtual-endpoints", `{}`)
 			if routingWrite.Code != http.StatusForbidden {
 				t.Fatalf("viewer reached routing mutation handler: %d %s", routingWrite.Code, routingWrite.Body.String())
 			}
-		} else if role == authz.RoleOperator {
+		case authz.RoleOperator:
 			routingWrite := request(http.MethodPost, "/admin/api/virtual-endpoints", `{"id":"wp4-test-endpoint","public_model":"wp4-test-model","route_profile":"default","protocols":["anthropic"]}`)
 			if routingWrite.Code != http.StatusCreated {
 				t.Fatalf("operator could not create an authorized virtual endpoint: %d %s", routingWrite.Code, routingWrite.Body.String())

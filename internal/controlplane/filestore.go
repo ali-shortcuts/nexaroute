@@ -192,7 +192,7 @@ func writeFileAtomic(dir, pattern, target string, data []byte) error {
 		return fmt.Errorf("create control-plane temp: %w", err)
 	}
 	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
+	defer func() { _ = os.Remove(tmpName) }()
 	if err = tmp.Chmod(0600); err == nil {
 		_, err = tmp.Write(data)
 	}

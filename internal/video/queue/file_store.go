@@ -71,7 +71,7 @@ func (s *FileStore) persist() error {
 		return err
 	}
 	name := tmp.Name()
-	defer os.Remove(name)
+	defer func() { _ = os.Remove(name) }()
 	if err = tmp.Chmod(0600); err == nil {
 		_, err = tmp.Write(data)
 	}

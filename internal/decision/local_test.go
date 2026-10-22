@@ -37,10 +37,11 @@ func TestLocalProvider_ContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	req := DecisionRequest{Candidates: candidates}
-	res, err := p.Decide(ctx, req)
-	if err == nil {
-		// Local provider checks context and returns error, but orchestrator will handle
-	}
+	res, _ := p.Decide(ctx, req)
+	// The Decide error is deliberately not asserted here: the local
+	// provider checks the context and returns an error, but the
+	// orchestrator handles it; the abstain assertion below is the
+	// binding expectation.
 	if res.Action != ActionAbstain {
 		t.Fatalf("expected abstain on cancelled context")
 	}

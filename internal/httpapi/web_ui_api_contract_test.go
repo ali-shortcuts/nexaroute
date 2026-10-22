@@ -139,7 +139,7 @@ func scanJS(s string, fn func(i int, c byte, depth int) bool) int {
 // findTopLevel returns the index of the first target byte at depth 0.
 func findTopLevel(s string, target byte) int {
 	return scanJS(s, func(i int, c byte, depth int) bool {
-		return !(c == target && depth == 0)
+		return c != target || depth != 0
 	})
 }
 

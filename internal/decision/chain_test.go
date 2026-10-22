@@ -909,14 +909,15 @@ func FuzzChain_ResultHandling(f *testing.F) {
 		}
 		ranked := []string{}
 		selected := ""
-		if act == ActionRank {
+		switch act {
+		case ActionRank:
 			// random ids split
 			if ids != "" {
 				ranked = []string{ids[:1]}
 			} else {
 				ranked = []string{"A"}
 			}
-		} else if act == ActionSelect {
+		case ActionSelect:
 			if ids != "" {
 				selected = string(ids[0] % 3)
 				switch ids[0] % 3 {
@@ -938,9 +939,10 @@ func FuzzChain_ResultHandling(f *testing.F) {
 		rc := rcs[rcIdx%len(rcs)]
 		p := newCountingProvider("jev-main")
 		p.result = DecisionResult{Action: act, SelectedID: selected, RankedIDs: ranked, Confidence: conf, ReasonCodes: []ReasonCode{rc}, ProviderID: "jev-main"}
-		if act == ActionRank {
+		switch act {
+		case ActionRank:
 			p.capabilities = Capabilities{CanRank: true}
-		} else if act == ActionSelect {
+		case ActionSelect:
 			p.capabilities = Capabilities{CanSelect: true}
 		}
 		reg := chainRegistry(p)

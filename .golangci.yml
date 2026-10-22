@@ -16,3 +16,11 @@ linters:
       - text: 'Error return value of `fmt\.F(print|println|printf)` is not checked'
         linters:
           - errcheck
+      # Two tests deliberately pass a nil Context to verify it is rejected /
+      # handled (internal/probe recovery queue, internal/providers quota
+      # estimate). They already carry staticcheck-native //lint:ignore SA1012
+      # notes, which golangci-lint does not honour.
+      - path: _test\.go$
+        text: SA1012
+        linters:
+          - staticcheck
