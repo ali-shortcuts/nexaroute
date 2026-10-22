@@ -156,7 +156,7 @@ generates `install.sh` and `SHA256SUMS`, verifies the checksums, and publishes
 the GitHub Release with the four assets above. To rehearse without publishing:
 
 ```bash
-./scripts/build-release.sh v0.23.0
+./scripts/build-release.sh v0.24.0
 ./scripts/test-install.sh
 (cd dist && sha256sum -c SHA256SUMS)
 ```
