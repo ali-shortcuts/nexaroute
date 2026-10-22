@@ -1,8 +1,17 @@
 # ADR 0005: Autopilot — keep and test, or remove
 
-- Status: **Proposed — decision required from the repository owner.**
-  The placeholder until the decision is Option C (keep, frozen); no
-  investment and no removal happens on a default.
+- Status: **Accepted — Option A (keep and close the proof gap).**
+  Decided 2026-10-22 by the supervising engineer under the owner's
+  explicit delegation of the remaining decisions ("fix the remaining
+  sections yourself", 2026-10-22), on this ADR's own recommendation
+  that Option A is the right outcome if the canary capability is
+  wanted at all: the code is written, wired and e2e-tested, so the
+  marginal cost of making it trustworthy is small. Implemented in the
+  same change: direct unit tests for the five previously uncovered
+  `Controller` methods (all five now at 100% in the package profile;
+  package coverage 80.4% → 88.0%) and a supported-feature section in
+  `docs/CONFIGURATION.md`. Option C was only ever the placeholder and
+  is superseded by this decision.
 - Date: 2026-10-22
 - Parent audit: #593 (architecture & quality audit finding)
 
