@@ -1,10 +1,34 @@
 # ADR 0006: Static-analysis CI — report-only or ratchet gating
 
-- Status: **Proposed — decision required from the repository owner.**
-  The placeholder until the decision is today's behavior (report-only).
+- Status: **Accepted — Option A (ratchet gating).** Decided 2026-10-22
+  by the supervising engineer under the owner's explicit delegation of
+  the remaining decisions ("fix the remaining sections yourself",
+  2026-10-22), and implemented in the same change:
+  - golangci-lint, staticcheck and deadcode jobs in `audit.yml` now
+    fail on any finding (zero baseline, no exception file).
+  - gosec gates against the checked-in baseline
+    `docs/reports/gosec-baseline.txt` via
+    `scripts/gosec-baseline.py`: any finding outside the baseline
+    fails, and so does any report whose analysis was incomplete.
+  - Coverage gates at the documented ≥85% target, which the context
+    below said had to be reached first; it has been (85.1% on final
+    main, audit run 39717951099).
+  - One correction to the context below, found while implementing:
+    the "gosec: 53 findings, all G304" figure was the CI artifact's
+    count, and the CI analysis was silently incomplete — gosec
+    v2.29.0's bundled x/tools cannot decode Go 1.27.3 export data,
+    so its SSA/taint rules (G701–G704) produced nothing in CI (the
+    artifact's "Golang errors" named the decode failure on 158
+    files). A working analysis finds **87** findings (53 G304 +
+    30 G703 + 4 G704), every one re-triaged at source on 2026-10-22
+    as an operator-controlled boundary operation — the same class
+    the pre-CI local audits had already classified. The baseline
+    encodes the full 87. The gosec job therefore pins Go 1.27.0
+    (export-data compatible), and the baseline checker fails loudly
+    on any future incomplete analysis.
 - Date: 2026-10-22
-- Parent audit: #593; related: the audit workflow's seven report-only
-  jobs (landed under the #593 program)
+- Parent audit: #593; related: the audit workflow's seven jobs
+  (landed as report-only under the #593 program, gating since this ADR)
 
 ## Context
 

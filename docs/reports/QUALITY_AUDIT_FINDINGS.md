@@ -386,6 +386,21 @@ force are named in each ADR; none was decided by default.
 - staticcheck: **0** (was 46 at #593 open, 23 at the checkpoint).
 - gosec: **53**, all G304, all previously triaged as bounded
   operator-path opens (`docs/reports/audit-slices/G304.md`).
+  **Corrected 2026-10-22 (ADR 0006 implementation):** 53 was the CI
+  artifact's count, produced while the CI gosec analysis was silently
+  incomplete — gosec v2.29.0's bundled x/tools cannot decode Go
+  1.27.3 export data, so the SSA/taint rules (G701–G704) reported
+  nothing (the artifact's own "Golang errors" section named the
+  decode failure on 158 files). A working analysis finds **87**
+  findings (53 G304 + 30 G703 + 4 G704); all 87 were re-triaged at
+  source on 2026-10-22 as operator-controlled boundary operations
+  (CLI flags, env vars, config values, constant bundle entry names,
+  the operator-run videogen client) — zero confirmed defects, the
+  same classification the pre-CI local audits had recorded. The
+  full 87 are now the checked-in baseline
+  (`docs/reports/gosec-baseline.txt`), the gosec job pins Go 1.27.0
+  so its analysis is complete, and the baseline checker fails on
+  any incomplete analysis or any finding outside the baseline.
 - golangci-lint (pinned, uncapped): **0**.
 - deadcode: **0**.
 - coverage: **85.1%** repository-wide.
