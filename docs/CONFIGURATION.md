@@ -373,6 +373,41 @@ With `routing.strategy = "ready_mesh"` (recommended/default):
 - a temporary all-key `429` cooldown is a wait state and does not spend the five recovery attempts;
 - the explicit **Probe all models** action remains available when an operator intentionally wants a full retest.
 
+### Autopilot policy canary (`autopilot`, opt-in)
+
+The autopilot is a supported, opt-in lifecycle for changing one routing
+policy: a candidate policy version is staged, served a bounded share of
+real traffic, and judged against a gate built from observed signals
+(error rates, failover rate, no-eligible rate, budget anomalies, latency
+and TTFT) compared with the incumbent over the same window. Missing or
+thin evidence always means *hold* — a candidate is never promoted on
+assumption. A gate violation rolls back to the incumbent atomically and
+records a visible incident; a lease already issued is never switched, so
+an in-flight request finishes under the policy it started with.
+
+- `enabled` — turns the controller on. With it unset, no autopilot state
+  exists and routing is exactly the configured policies.
+- `policy_id` — the decision policy under change (defaults to
+  `decision.policy` when empty). Must reference an existing policy.
+- `candidate_policy_id` — the `decision_policies[]` entry staged as the
+  candidate at boot. Empty means the operator starts the canary
+  explicitly through the admin API (`/admin/api/autopilot`).
+- `canary_percent` (0–100) and `canary_max_requests` (0 = unbounded by
+  count) bound the candidate's traffic share.
+- Gate thresholds: `min_samples` (no verdict other than hold below
+  this), `min_promote_samples`, `max_error_rate`,
+  `max_error_rate_delta` (candidate-minus-incumbent regression margin),
+  `max_failover_rate`, `max_no_eligible_rate`, `max_budget_anomalies`,
+  and the optional latency ceilings `max_latency_p95_ms` /
+  `max_ttft_p95_ms` (0 disables). Promotion additionally requires
+  complete signal coverage: a request whose no-eligible or
+  budget-anomaly observation is missing counts as *unobserved*, never
+  as a pass.
+
+The whole surface is validated at config load; an unknown policy
+reference or an out-of-bounds value fails startup rather than degrading
+silently.
+
 ## Probe settings
 
 Supervised ready-strategy recovery adds:
