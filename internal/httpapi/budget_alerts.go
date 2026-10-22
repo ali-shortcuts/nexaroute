@@ -127,11 +127,6 @@ type fileBudgetAlertStore struct {
 	path string
 }
 
-// NewFileBudgetAlertStore returns a file-backed fired-mark store.
-func NewFileBudgetAlertStore(path string) BudgetAlertStore {
-	return &fileBudgetAlertStore{path: path}
-}
-
 func (f *fileBudgetAlertStore) Load() (map[string]int64, uint64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

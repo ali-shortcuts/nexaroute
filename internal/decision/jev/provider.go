@@ -437,19 +437,6 @@ func (p *Provider) testBuildRequest(req decision.DecisionRequest) (*JevRequest, 
 // Ensure interface compliance
 var _ decision.DecisionProvider = (*Provider)(nil)
 
-// CloneForHotReload creates a new immutable provider for hot reload
-func CloneForHotReload(id, apiKey, baseURL, privacyMode string, enabled bool, httpClient *http.Client) (*Provider, error) {
-	return NewProvider(ProviderConfig{
-		ID:          id,
-		Type:        "jev",
-		Enabled:     enabled,
-		APIKey:      apiKey,
-		PrivacyMode: privacyMode,
-		BaseURL:     baseURL,
-		HTTPClient:  httpClient,
-	})
-}
-
 // UpdateFromConfig updates provider fields atomically with new immutable client (for hot reload coherence)
 func (p *Provider) UpdateFromConfig(apiKey, baseURL string, enabled bool) error {
 	p.mu.Lock()

@@ -67,6 +67,3 @@ func IsUnknownCandidate(err error) bool {
 func IsTimeout(err error) bool {
 	return errors.Is(err, ErrTimeout)
 }
-func IsUnavailable(err error) bool {
-	return errors.Is(err, ErrUnavailable)
-}
