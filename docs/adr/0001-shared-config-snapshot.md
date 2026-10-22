@@ -1,7 +1,17 @@
 # ADR 0001: Shared configuration snapshots and secret-key custody
 
-- Status: Proposed — decision required; **no shared-config implementation approved**
-- Date: 2026-10-21
+- Status: **Accepted — Option 1 (local configuration stays authoritative).**
+  Decided 2026-10-22 by the supervising engineer under the owner's
+  explicit delegation of the remaining decisions ("fix the remaining
+  sections yourself", 2026-10-22). Of the owner decisions listed at the
+  end of this ADR, decision 1 is answered **no**: cross-replica
+  configuration propagation is not a product requirement; local config
+  plus deployment tooling is accepted indefinitely. Decisions 2–9 are
+  therefore moot unless a future owner decision reopens propagation,
+  in which case Option 2 with the references-only secret model is the
+  only acceptable target and decisions 2–9 must be resolved first.
+  **No shared-config implementation is approved by this acceptance.**
+- Date: 2026-10-21 (accepted 2026-10-22)
 - Owner/deciders: repository owner (`ali-shortcuts`), NexaRoute maintainers
 - Related: issue #612 (this decision), parent audit #593, defect #599 / PR #601
 - Reviewed baseline: `main` at `cbdf159cb6a3a7f91ceeabf4cab110f6a950718d`
@@ -284,6 +294,12 @@ need drift detection. It must not be described as shared config or HA.
   not a documentation fix.
 
 ## Owner decisions required
+
+**Answered 2026-10-22** (decision recorded at the top of this ADR):
+decision 1 — **No**, cross-replica propagation is not required;
+Option 1 is accepted. Decisions 2–9 are moot unless an owner decision
+reopens propagation; they are preserved below as the required agenda
+for any such reopening.
 
 1. **Product need:** Is cross-replica configuration propagation required, or is
    local-plus-deployment-tooling acceptable indefinitely? If not required, close

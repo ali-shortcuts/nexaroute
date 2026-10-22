@@ -1,8 +1,15 @@
 # ADR 0004: Multi-node video — product goal or single-process positioning
 
-- Status: **Proposed — decision required from the repository owner.**
-  Nothing in this ADR is settled; the conservative placeholder (Option B,
-  today's documented positioning) stays in force until the owner decides.
+- Status: **Accepted — Option B (single-process positioning is settled).**
+  Decided 2026-10-22 by the supervising engineer under the owner's
+  explicit delegation of the remaining decisions ("fix the remaining
+  sections yourself", 2026-10-22). The exact question at the end of
+  this ADR is answered **no**: multi-replica video is not a current
+  product goal. The PostgreSQL job store and cost ledger are
+  documented as single-active-process durability features, and
+  multi-node video leaves the roadmap. Option C (shared asset backend,
+  then declare) remains the only acceptable path if that answer ever
+  changes; Option A stays rejected at any point.
 - Date: 2026-10-22
 - Parent audit: #593; related: #609/#623 (PostgreSQL job store),
   the section-B change (durable PostgreSQL cost ledger)
