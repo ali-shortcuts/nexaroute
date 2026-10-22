@@ -276,3 +276,117 @@ removed; deleting exported/package API needs an owner decision.
    release; `verify.sh` only proves the local trust-chain tests.
 6. Gosec G304/G703/G204/G704 remain plausible risks if operator config is ever
    attacker-controlled. They are classified, not proven harmless.
+
+---
+
+## Addendum — 2026-10-22 remaining-work mission (PRs #624–#629)
+
+This addendum records the follow-on mission executed on 2026-10-22 under
+issue #593. Audited `main` at mission start: `4bb6b2e5`; final `main`:
+`6ca8ac5f5d6949c1c7a5832df6472dbce375e784`. Fresh scanner/coverage numbers
+were measured by audit workflow run `39717951099` on the final `main`
+(and identically on the coverage branch run `39716902380`).
+
+### LINT-01 (P3, confirmed process defect): capped lint reporting hid real findings
+
+The audit workflow's golangci-lint artifact reported 45 findings because
+the tool's default display caps suppress repeated findings
+(`max-same-issues`). An uncapped, clean-cache run with the pinned
+golangci-lint v2.15.0 on `main` found **69** real findings. PR #624
+resolved all 69 to **0** — unused parameters, shadowing, an inefficient
+string comparison, staticcheck style classes — with no behavior change
+and no rule disabled (one scoped, justified test-only SA1012 exclusion).
+Lesson recorded in `AGENTS.md`-equivalent mission notes: always triage
+with `--max-issues-per-linter=0 --max-same-issues=0` and a clean cache.
+
+### DEAD-01 (P3): the four remaining deadcode functions (resolved in this addendum's disposition)
+
+The baseline listed four unreachable functions. Each was verified to have
+zero callers repository-wide and removed in PR #625:
+`CloneForHotReload` (decision/jev), `IsUnavailable` (decision/remote;
+the `ErrUnavailable` sentinel stays, still returned by live code),
+`NewFileBudgetAlertStore` (httpapi; the store type stays, constructed
+directly at its call site), `FeedbackTracker.Cards` (scorecards).
+`deadcode -test ./...` now reports **0**. This supersedes the earlier
+note in this file that deletion "needs an owner decision": the removals
+were executed under the owner's standing decision delegation, each with
+caller evidence.
+
+### ARCH-03 (distributed circuit breaker): implemented, opt-in (PR #626)
+
+Status change: from "proposal, not implemented" to **implemented with
+safe defaults**. Cross-replica breaker synchronization ships opt-in
+(`control_plane.breaker_sync`, default off = previous behavior exactly),
+per ADR 0003: a background syncer exchanges cooldown/retired state over
+the existing control-plane store contract (revision CAS); remote
+retired markers apply only as bounded cooldowns, never full local
+retirements; a store outage aborts the round with local state untouched.
+Acceptance evidence is real-service: CI runs two-instance propagation /
+partition / heal / restart scenarios against real PostgreSQL and real
+Redis (`TestBreakerSyncPostgresTwoInstances`,
+`TestBreakerSyncRedisTwoInstances`, verified from job logs). Three
+policy questions remain the owner's and are recorded as open in
+ADR 0003 (honor remote retired as full retirement? default-on for
+shared backends? production cadence).
+
+### VID-LEDGER-01 (P2, confirmed defect): video cost ledger was volatile even with a durable job store
+
+With `video.job_store_backend=postgres`, jobs were durable but the cost
+ledger was still the in-memory `Ledger`: a restart silently zeroed
+spent/reserved accounting and replicas sharing the job store kept
+divergent books. Fixed in PR #627 by `internal/video/cost.PostgresLedger`,
+which mirrors the in-memory contract exactly (same validation errors and
+state machine) persisted per job row: every mutation is a transaction
+locking the job row, aggregates are computed from rows on every read,
+duplicate settlements charge exactly once, a conflicting actual cost is
+an error, and wiring fails hard at startup rather than falling back to
+volatile accounting. Real-PostgreSQL CI tests cover concurrent duplicate
+reserves, duplicate/conflicting settlement, estimate→actual upgrade,
+restart recovery, invalid amounts and store failure.
+
+### VID-ASSET-01 (P3, confirmed defect): stored video assets were served without integrity verification
+
+`storage.Local.Read` validated paths and sizes but never content: a
+corrupted or replaced object under the storage root was served
+silently. PR #627 makes `Read` verify the recorded size and the SHA-256
+that `Put` computed; a mismatch fails the read. Regression test covers
+intact, same-length-corrupted and truncated objects; legacy records
+without a checksum read as before.
+
+### COV-01 (P3): coverage target met, and the metric itself was understated
+
+Repository coverage rose from **84.1%** (2026-10-22 baseline) to
+**85.1%** (final-main audit run), meeting the documented ≥85% target,
+via behavioral tests in PR #629 (livecanary extended conformance set,
+video/api ForceFail + universal-plan + durability labels, video/render
+filter-graph contracts, video/queue file-store lifecycle). The same PR
+fixed a measurement defect: the audit coverage job lacked ffmpeg, so the
+render suite skipped by design and reported 3.5%; with the toolchain
+installed it measures ~87%. Part of the "gap" was the ruler, not the code.
+
+### Reserved decisions (recorded, NOT settled by this mission)
+
+- Shared configuration: ADR 0001 (Proposed) — recommends keeping local
+  config authoritative.
+- Multi-node video positioning: ADR 0004 (Proposed) — jobs and ledger
+  are now multi-process safe on PostgreSQL; assets are not, so
+  declaring multi-node video before a shared asset backend exists is
+  not recommended.
+- Autopilot keep-and-test vs remove: ADR 0005 (Proposed) — live and
+  e2e-tested, but five public `Controller` methods have 0.0% direct
+  package coverage.
+- Lint ratchet gating: ADR 0006 (Proposed) — golangci/staticcheck/
+  deadcode are at zero and could gate today; gosec needs a checked-in
+  baseline and coverage needed its target met (now true) first.
+All four were merged as Proposed records in PR #628. The placeholders in
+force are named in each ADR; none was decided by default.
+
+### Fresh dispositions on final main (audit run 39717951099)
+
+- staticcheck: **0** (was 46 at #593 open, 23 at the checkpoint).
+- gosec: **53**, all G304, all previously triaged as bounded
+  operator-path opens (`docs/reports/audit-slices/G304.md`).
+- golangci-lint (pinned, uncapped): **0**.
+- deadcode: **0**.
+- coverage: **85.1%** repository-wide.
+- govulncheck: PASS on every mission PR (Security workflow).

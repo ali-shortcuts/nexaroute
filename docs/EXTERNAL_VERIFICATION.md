@@ -117,3 +117,63 @@ prompt-driven unlock flows (the gateway is non-interactive; a locked
 keyring that requires a prompt is expected to fail closed — confirm
 rather than assume), and non-Linux keyrings (the provider is
 unavailable there by build).
+
+## Executed evidence — 2026-10-22 (gateway binary built from `main` `6ca8ac5f`)
+
+The procedures above were exercised as far as this environment allows.
+Statuses use the harness vocabulary; nothing below upgrades a claim the
+evidence does not cover.
+
+### OIDC (harness, live network)
+
+- **Google (`https://accounts.google.com`)**: discovery **PASS** (issuer
+  and endpoint metadata matched), JWKS **PASS** (document fetched, at
+  least one signing key). One earlier attempt reported JWKS **FAIL** on
+  a 15s fetch timeout; the harness reported the failure rather than
+  masking it, and a retry at a 30s timeout passed — recorded here so
+  the flaky attempt is not hidden. ID token: **NOT_RUN** (no operator
+  token). Authorization Code + PKCE login: **NOT_RUN** (interactive;
+  still requires a real tenant per the procedure above). The full
+  login claim therefore remains **UNVERIFIED**.
+- **GitHub Actions issuer (`https://token.actions.githubusercontent.com`)**:
+  discovery **FAIL — correctly**. Its discovery document contains no
+  `authorization_endpoint` or `token_endpoint` (it is a CI token
+  issuer, not a login provider), and the harness's endpoint validation
+  rejected it. A true negative against real-world metadata.
+
+### Vault KV helper
+
+- Helper against an unreachable `VAULT_ADDR`: exit 1, no key material
+  on stdout — **fail-closed PASS**. Missing `VAULT_ADDR`/`VAULT_TOKEN`:
+  exit 1 — **PASS**. A round-trip against a **real Vault server** was
+  **BLOCKED** in this environment (no Vault available) and remains
+  **UNVERIFIED**.
+
+### OS keyring
+
+- With an encrypted config present and `secret-tool` absent from the
+  host, `nexaroute secrets verify` with `NEXAROUTE_KEY_PROVIDER=keyring`
+  fails with the keyring lookup error and does **not** fall back to the
+  key file beside the config — the documented absence contract,
+  **fail-closed PASS**. A real keyring round-trip is **BLOCKED** here
+  (no `secret-tool`, no keyring daemon) and remains **UNVERIFIED**.
+
+### Key-provider command protocol + master-key lifecycle (local custody)
+
+Exercised end-to-end with the shipped binary on disposable state:
+`secrets rotate` encrypted a plaintext `api_key` in place (`nxs1`
+envelope, key file + recovery copy written); `secrets verify` **PASS**
+under the current key; `secrets decrypt` returned the original value; a
+wrong key fails closed with "invalid ciphertext or master key". The
+command key-provider protocol (the same protocol the Vault helper
+implements) verified a config under a test-double command and failed
+closed under a wrong-key command — protocol path **PASS** locally;
+production KMS/Vault custody remains **UNVERIFIED**.
+
+### LLM providers
+
+**NOT_RUN**: no provider credentials are available in this environment
+and no paid calls were made (by design). Live provider interoperability
+remains **UNVERIFIED**; the fixture-based conformance suite
+(`internal/providers/livecanary`, now including the extended scenario
+set) is the local evidence, and it is not a substitute.

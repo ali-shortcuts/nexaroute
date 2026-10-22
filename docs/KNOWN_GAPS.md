@@ -112,7 +112,14 @@ Discovery parses several common result shapes, but model-list APIs are not stand
 
 The video gateway is opt-in. When enabled, runtime startup fails closed if the
 configured bearer-token environment variable is missing or empty. The local
-JSON job store, queue, and cost ledger remain single-process. Restart recovery
+JSON job store and queue remain single-process, and the cost ledger follows the
+job-store backend: in-memory with the file backend, or — with
+`video.job_store_backend=postgres` — a durable PostgreSQL ledger shared by
+every process on the same database, with exactly-once settlement (per-job
+row, row-locked transitions; see the section-B change). Assets remain on
+per-instance local storage in both backends, so multi-node video as a
+product topology is not declared; that positioning decision is recorded in
+ADR 0004 (Proposed). Restart recovery
 re-enqueues queued jobs and resumes known provider job IDs; ambiguous
 submissions without a provider job ID move to `needs_manual_action` to avoid
 an unsafe duplicate billable submission. Output assets are written through the
@@ -141,7 +148,7 @@ No commercial external video provider adapter is bundled. The opt-in local
 ComfyUI adapter supports text-to-video through a user-supplied API-format
 workflow; its HTTP contract is covered by fixtures, but actual model inference
 on a real ComfyUI installation is not part of CI. The fake provider writes a
-text placeholder, not a playable video. The asset-size cap is enforced with streaming-memory protection: the ComfyUI adapter reads downloads through `io.LimitReader` bounded at `maxOutputBytes+1`, so an oversized response cannot OOM the gateway before the cap applies. Multi-shot jobs persist per-shot checkpoints and automatically compose generated shot assets into a final silent MP4; Gateway-side Piper narration and estimated same-language SRT captions are supported for configured multi-shot jobs. The video jobs, local JSON job store, queue and cost ledger remain single-process and are not multi-node safe: multi-node durable coordination, provider-native idempotent recovery after an ambiguous submission, and verified production workloads for ten-minute episodes remain unimplemented or UNVERIFIED. Provider-generated
+text placeholder, not a playable video. The asset-size cap is enforced with streaming-memory protection: the ComfyUI adapter reads downloads through `io.LimitReader` bounded at `maxOutputBytes+1`, so an oversized response cannot OOM the gateway before the cap applies. Multi-shot jobs persist per-shot checkpoints and automatically compose generated shot assets into a final silent MP4; Gateway-side Piper narration and estimated same-language SRT captions are supported for configured multi-shot jobs. With the default file backend the video jobs, local JSON job store, queue and cost ledger remain single-process; with `video.job_store_backend=postgres` the job store and cost ledger are durable and shared with exactly-once settlement, while assets stay per-instance local — so end-to-end multi-node video is still not a declared topology (ADR 0004, Proposed): provider-native idempotent recovery after an ambiguous submission, and verified production workloads for ten-minute episodes remain unimplemented or UNVERIFIED. Provider-generated
 dialogue/sound effects/music, translated or word-aligned subtitles, and distributed
 asset/job storage remain unimplemented; the local CLI also supports existing
 narration/music mixing and SRT subtitle burning.
@@ -222,8 +229,8 @@ Admin API route/method and denies unknown combinations. OIDC session roles are
 derived only from verified issuer claims using the explicit config allowlist.
 The web UI's visibility is a convenience only; the server middleware is
 authoritative. The local bbolt store is single-host. The project-wide 85%
-coverage target is a separate WP3 acceptance target and must be measured again
-after WP4b–WP7. PR #224 is merged; live external-IdP interoperability remains
+coverage target was re-measured on 2026-10-22 at **85.1%** repository-wide
+(audit workflow run on final `main`; target met — see the coverage item below). PR #224 is merged; live external-IdP interoperability remains
 unverified.
 
 
@@ -393,9 +400,12 @@ non-critical nodes no longer abort unrelated sections.
 
 ### Package coverage gaps and targets — `open`
 
-Coverage measured **84.2% repository-wide** on current `main`
-(`go test -count=1 -coverprofile=.artifacts/cover.out ./...`, 2026-10-15),
-below the 85% policy target. The three packages tracked by this coverage
+Coverage measured **85.1% repository-wide** on current `main`
+(audit workflow coverage job, 2026-10-22), meeting the 85% policy target.
+The earlier 84.2% measurement (2026-10-15) is superseded; the 2026-10-22
+push also fixed the ruler — the audit coverage job now installs ffmpeg, so
+the render suite (which skips by design without the media toolchain) is
+measured as designed (~87%) instead of at 3.5%. The three packages tracked by this coverage
 pass now meet the per-package bar:
 
 - `cmd/videogen`: 94.7% (`run` 100.0%; `main` entrypoint 0.0% by design —

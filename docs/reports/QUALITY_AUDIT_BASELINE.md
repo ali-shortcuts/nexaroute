@@ -118,3 +118,19 @@ were obtained with the commands recorded there.
 - PR #595 fix batch: `099f474` plus docs `ee93c81`.
 - The complete earlier report text remains available in git history at those
   commits; this file is the authoritative current baseline.
+
+---
+
+## Addendum — superseded by the 2026-10-22 remaining-work mission
+
+This baseline captured `main` at `bfa93b69` before the #593 fix batch.
+The repository has since moved through the audit-tail program (#602–#612),
+v0.23.0's post-release work, and the 2026-10-22 remaining-work mission
+(PRs #624–#629). Current authoritative state: `main`
+`6ca8ac5f5d6949c1c7a5832df6472dbce375e784`, measured by audit workflow
+run `39717951099`: coverage **85.1%**, staticcheck **0**, gosec **53**
+(all G304, triaged), deadcode **0**, golangci-lint **0** (pinned,
+uncapped). Per-finding dispositions for the mission are in
+`QUALITY_AUDIT_FINDINGS.md` (2026-10-22 addendum); the mission verdict is
+in `QUALITY_AUDIT_FINAL.md` (2026-10-22 addendum). The numbers in the
+body of this file are historical and must not be quoted as current.
