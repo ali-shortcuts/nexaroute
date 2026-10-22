@@ -207,7 +207,10 @@ survive arbitrary infrastructure loss: the bundle never snapshots an external
 PostgreSQL, Redis, or video assets/jobs, and `restore --verify` reports those as
 `BLOCKED` when the config depends on them. Deployment persistence, replication,
 failover, retention and measured RPO/RTO still require operator configuration and
-recovery drilling. Cross-replica breaker synchronization is not implemented.
+recovery drilling. Cross-replica breaker synchronization exists as opt-in
+breaker sync (ADR 0003): it is disabled by default, synchronizes only
+cooldown/retired markers over the control-plane store, and applies a remote
+retired marker only as a bounded cooldown.
 The full per-subsystem state inventory, scopes and failure-mode
 behavior live in `docs/HA_STATE_INVENTORY.md` (#434), and the same
 scopes are served machine-readably in the `/api/hello` deployment
@@ -243,7 +246,7 @@ Not implemented yet:
 
 - proactive quota headroom pressure and in-flight local reservations are implemented when provider quota evidence exists, but reservations are deliberately advisory: NexaRoute does not yet persist rolling-window quota debt after a completed response without fresh headers, hard-throttle traffic from inferred quota, or coordinate reservations across multiple gateway processes. Quota evidence is scoped to the window it was observed in — a window rollover reported without a fresh remaining value, or a reset that has since passed, degrades that resource's evidence to unknown instead of letting a closed window's value drive routing pressure or stats;
 - `cost_aware` routing uses configured base input/output prices and a bounded request estimate, but it is not invoice-perfect billing optimization (cache discounts, credits, batch pricing, taxes, and provider-specific billing rules remain outside the router);
-- shared/distributed affinity and breaker state across multiple NexaRoute processes;
+- shared/distributed session affinity across multiple NexaRoute processes (breaker state is covered separately by opt-in breaker sync, ADR 0003);
 - an online learned semantic router that sends every prompt through another model/encoder.
 
 The last item is deliberate for the current data plane: a learned router would add latency, cost and a new failure mode. Model/task specialization should currently be expressed with aliases plus explicit capability metadata until a separately evaluated routing model can prove a measurable benefit.

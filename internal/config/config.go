@@ -731,6 +731,17 @@ type ControlPlaneConfig struct {
 	IdentityFailure  string `json:"identity_failure,omitempty"`
 	BudgetFailure    string `json:"budget_failure,omitempty"`
 	RateLimitFailure string `json:"rate_limit_failure,omitempty"`
+	// BreakerSync opts in to cross-replica circuit-breaker state
+	// synchronization over the control-plane store (ADR 0003). Default
+	// off: breaker state stays strictly per-instance, exactly as before.
+	BreakerSync bool `json:"breaker_sync,omitempty"`
+	// BreakerSyncIntervalSeconds is the publish/apply cadence; 0 selects
+	// the default (10s). Valid range when set: 5..3600.
+	BreakerSyncIntervalSeconds int `json:"breaker_sync_interval_seconds,omitempty"`
+	// BreakerSyncReplicaID identifies this replica in shared markers.
+	// Empty selects a generated ID (hostname + pid) at startup; set it
+	// explicitly in fleets where stable replica identity matters.
+	BreakerSyncReplicaID string `json:"breaker_sync_replica_id,omitempty"`
 }
 
 // TelemetryConfig enables the optional OTLP/HTTP span exporter (M4-6).
@@ -2190,6 +2201,16 @@ func (c Config) Validate() error {
 	if len(c.Telemetry.ServiceName) > 128 {
 		return errors.New("telemetry.service_name must be at most 128 characters")
 	}
+	if c.ControlPlane.BreakerSync && !c.ControlPlane.Enabled {
+		return errors.New("control_plane.breaker_sync requires control_plane.enabled")
+	}
+	if c.ControlPlane.BreakerSyncIntervalSeconds != 0 &&
+		(c.ControlPlane.BreakerSyncIntervalSeconds < 5 || c.ControlPlane.BreakerSyncIntervalSeconds > 3600) {
+		return errors.New("control_plane.breaker_sync_interval_seconds must be 0 (default) or between 5 and 3600")
+	}
+	if len(c.ControlPlane.BreakerSyncReplicaID) > 128 || strings.ContainsAny(c.ControlPlane.BreakerSyncReplicaID, "\r\n\x00") {
+		return errors.New("control_plane.breaker_sync_replica_id is invalid or too long")
+	}
 	if c.ControlPlane.Enabled {
 		switch c.ControlPlane.Backend {
 		case "file", "memory":
@@ -3511,6 +3532,15 @@ func (c Config) RequestTimeout() time.Duration {
 }
 func (c Config) Cooldown() time.Duration {
 	return time.Duration(c.Routing.CooldownSeconds) * time.Second
+}
+
+// BreakerSyncInterval is the effective breaker-sync cadence: the
+// configured interval, or the 10s default when unset.
+func (c Config) BreakerSyncInterval() time.Duration {
+	if c.ControlPlane.BreakerSyncIntervalSeconds > 0 {
+		return time.Duration(c.ControlPlane.BreakerSyncIntervalSeconds) * time.Second
+	}
+	return 10 * time.Second
 }
 func (c Config) ProviderFailureWindow() time.Duration {
 	return time.Duration(c.Routing.ProviderFailureWindowSeconds) * time.Second

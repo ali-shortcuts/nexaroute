@@ -17,6 +17,7 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/config"
 	"github.com/ali-shortcuts/nexaroute/internal/controlplane"
 	"github.com/ali-shortcuts/nexaroute/internal/httpapi"
+	"github.com/ali-shortcuts/nexaroute/internal/sharedstate"
 )
 
 const controlPlaneNamespace = "gateway/runtime"
@@ -39,7 +40,8 @@ const (
 
 type controlPlaneRuntime struct {
 	manager *controlplane.Manager
-	closer  io.Closer // non-nil for the postgres/redis backends
+	store   controlplane.Store // raw store, retained for namespace consumers (breaker sync)
+	closer  io.Closer          // non-nil for the postgres/redis backends
 }
 
 // Close releases backend resources (the PostgreSQL pool or the Redis
@@ -106,7 +108,7 @@ func openControlPlaneRuntime(cfg config.ControlPlaneConfig, configPath string) (
 		}
 		return nil, err
 	}
-	rt := &controlPlaneRuntime{manager: manager, closer: closer}
+	rt := &controlPlaneRuntime{manager: manager, store: store, closer: closer}
 	if cfg.MigrationDryRun {
 		return rt, nil
 	}
@@ -129,6 +131,18 @@ func openControlPlaneRuntime(cfg config.ControlPlaneConfig, configPath string) (
 		return nil, fmt.Errorf("load control-plane snapshot: %w", err)
 	}
 	return rt, nil
+}
+
+// BreakerStore builds the shared circuit-breaker state store over the
+// same control-plane backend this runtime already opened — no second
+// connection, credential, or migration. Used only when the operator
+// opts in via control_plane.breaker_sync (ADR 0003).
+func (r *controlPlaneRuntime) BreakerStore(replicaID string) (*sharedstate.BreakerStore, error) {
+	adapter, err := sharedstate.NewControlPlaneStore(r.store)
+	if err != nil {
+		return nil, err
+	}
+	return sharedstate.NewBreakerStore(adapter, sharedstate.Options{ReplicaID: replicaID})
 }
 
 // controlPlaneBudgetAlertIO adapts the durable control-plane manager
