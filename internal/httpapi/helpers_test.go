@@ -230,14 +230,6 @@ func TestDataPlaneAdmissionOnlyCoversExpensivePostEndpoints(t *testing.T) {
 	}
 }
 
-func TestProviderEditorSupportsAllBackendProtocolTypesAndResponsesPath(t *testing.T) {
-	t.Skip("legacy visual contract replaced by v0.14.0 greenfield control plane")
-}
-
-func TestReadyMeshSettingsControlsAreWiredInEmbeddedUI(t *testing.T) {
-	t.Skip("legacy visual contract replaced by v0.14.0 greenfield control plane")
-}
-
 type readerFromResponseWriter struct {
 	header http.Header
 	body   bytes.Buffer
@@ -1017,30 +1009,6 @@ func TestQuotaRemainingPressureStartsBelowQuarterBudget(t *testing.T) {
 	}
 }
 
-func TestProviderEditorStreamIdleRangeMatchesBackend(t *testing.T) {
-	t.Skip("legacy visual contract replaced by v0.14.0 greenfield control plane")
-}
-
-func TestProviderEditorPreservesDialectOverride(t *testing.T) {
-	t.Skip("legacy visual contract replaced by v0.14.0 greenfield control plane")
-}
-
-func TestProviderEditorSerializesModelContextAndPricing(t *testing.T) {
-	t.Skip("legacy visual contract replaced by v0.14.0 greenfield control plane")
-}
-
-func TestHealthDonutUsesDistinctHalfOpenSegment(t *testing.T) {
-	t.Skip("legacy visual contract replaced by v0.14.0 greenfield control plane")
-}
-
-func TestProviderEditButtonsUseCollectionSelector(t *testing.T) {
-	t.Skip("legacy visual contract replaced by v0.14.0 greenfield control plane")
-}
-
-func TestEmbeddedUIExposesCostAwareStrategy(t *testing.T) {
-	t.Skip("legacy visual contract replaced by v0.14.0 greenfield control plane")
-}
-
 func TestProviderLoadUsesEffectiveReservedQuotaHeadroom(t *testing.T) {
 	now := time.Now().Unix()
 	st := providers.ProviderStats{
@@ -1072,10 +1040,6 @@ func TestProviderLoadUsesEffectiveReservedQuotaHeadroom(t *testing.T) {
 	if !load.QuotaExhausted || load.QuotaPressure != 4 {
 		t.Fatalf("effective zero headroom must surface as exhausted pressure: %+v", load)
 	}
-}
-
-func TestQuotaReservationMetricsAndUIWiring(t *testing.T) {
-	t.Skip("legacy visual contract replaced by v0.14.0 greenfield control plane")
 }
 
 func TestResponsesInspectionUsesInputAndInstructionsOnly(t *testing.T) {

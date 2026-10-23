@@ -1953,6 +1953,32 @@ func (c Config) Validate() error {
 	if err := c.TLS.Validate(); err != nil {
 		return err
 	}
+	if err := c.validateAdminPlane(); err != nil {
+		return err
+	}
+	if err := c.validateRuntimeRouting(); err != nil {
+		return err
+	}
+	if err := c.validateAccessPlanes(); err != nil {
+		return err
+	}
+	if err := c.validatePlatformPlanes(); err != nil {
+		return err
+	}
+	if err := c.validateProviders(); err != nil {
+		return err
+	}
+	if err := c.validateEvaluation(); err != nil {
+		return err
+	}
+	policyIDs, err := c.validateDecisionPlane()
+	if err != nil {
+		return err
+	}
+	return c.validateCrossReferences(policyIDs)
+}
+
+func (c Config) validateAdminPlane() error {
 	if c.Admin.SessionTTLSeconds < 300 || c.Admin.SessionTTLSeconds > 30*24*60*60 {
 		return errors.New("admin.session_ttl_seconds must be between 300 and 2592000")
 	}
@@ -1989,6 +2015,10 @@ func (c Config) Validate() error {
 	if err := c.validateVideo(); err != nil {
 		return err
 	}
+	return nil
+}
+
+func (c Config) validateRuntimeRouting() error {
 	if strings.TrimSpace(c.Listen) == "" {
 		return errors.New("listen is required")
 	}
@@ -2125,6 +2155,10 @@ func (c Config) Validate() error {
 			return errors.New("cache.semantic.ttl_seconds must be >= 0")
 		}
 	}
+	return nil
+}
+
+func (c Config) validateAccessPlanes() error {
 	if c.MCP.Enabled {
 		if len(c.MCP.Servers) == 0 {
 			return errors.New("mcp.enabled requires at least one server in mcp.servers")
@@ -2195,6 +2229,10 @@ func (c Config) Validate() error {
 			return errors.New("client_auth.tpm must be between 0 and 1000000000")
 		}
 	}
+	return nil
+}
+
+func (c Config) validatePlatformPlanes() error {
 	if c.Telemetry.OTLPEndpointEnv != "" && !validEnvName(c.Telemetry.OTLPEndpointEnv) {
 		return errors.New("telemetry.otlp_endpoint_env must be a valid environment variable name")
 	}
@@ -2399,6 +2437,10 @@ func (c Config) Validate() error {
 	if c.Probe.RecoveryRetryMS < 0 || c.Probe.RecoveryRetryMS > 60000 {
 		return errors.New("probe.recovery_retry_ms must be between 0 and 60000")
 	}
+	return nil
+}
+
+func (c Config) validateProviders() error {
 	// Legacy public_model validation (PR #13 compatibility)
 	if c.Routing.PublicModel != "" {
 		if len(c.Routing.PublicModel) > maxPublicModelBytes || strings.ContainsAny(c.Routing.PublicModel, " \t\r\n\"'`$\\") {
@@ -2552,6 +2594,10 @@ func (c Config) Validate() error {
 			}
 		}
 	}
+	return nil
+}
+
+func (c Config) validateEvaluation() error {
 	// Phase H: evaluation plane
 	if c.Evaluation.MaxRuns < 1 || c.Evaluation.MaxRuns > maxEvaluationRuns {
 		return fmt.Errorf("evaluation.max_runs must be between 1 and %d", maxEvaluationRuns)
@@ -2585,17 +2631,31 @@ func (c Config) Validate() error {
 			return fmt.Errorf("%s must be finite and between 0 and %d", name, maxEvaluationLatencyMS)
 		}
 	}
+	return nil
+}
 
+func (c Config) validateDecisionPlane() (map[string]struct{}, error) {
+	policyIDs, err := c.validateDecisionCore()
+	if err != nil {
+		return nil, err
+	}
+	if err := c.validateDecisionProvidersAndChains(); err != nil {
+		return nil, err
+	}
+	return policyIDs, nil
+}
+
+func (c Config) validateDecisionCore() (map[string]struct{}, error) {
 	// Phase D/E/F/G: Decision
 	switch strings.ToLower(strings.TrimSpace(c.Decision.Mode)) {
 	case "", "off", "local", "assisted", "hybrid":
 	default:
-		return errors.New("decision.mode must be off, local, assisted, or hybrid")
+		return nil, errors.New("decision.mode must be off, local, assisted, or hybrid")
 	}
 	// Shadow mode computes a decision for observation only; it needs an active
 	// decision plane to observe, so it is meaningless while mode=off.
 	if c.Decision.Shadow && strings.ToLower(strings.TrimSpace(c.Decision.Mode)) == "off" {
-		return errors.New("decision.shadow requires decision.mode to be local, assisted, or hybrid")
+		return nil, errors.New("decision.shadow requires decision.mode to be local, assisted, or hybrid")
 	}
 	// Provider can be local, policy, or external ID (validated later against decision_providers)
 	// For local mode, provider must be local or policy (external not allowed)
@@ -2603,48 +2663,48 @@ func (c Config) Validate() error {
 	// We do basic format check here, detailed check after collecting IDs
 	if c.Decision.Provider != "" {
 		if len(c.Decision.Provider) > maxPolicyIDBytes {
-			return errors.New("decision.provider is too long")
+			return nil, errors.New("decision.provider is too long")
 		}
 		if !validLocalID(c.Decision.Provider) {
-			return fmt.Errorf("decision provider id %q invalid", c.Decision.Provider)
+			return nil, fmt.Errorf("decision provider id %q invalid", c.Decision.Provider)
 		}
 		// No collision with built-ins is checked later, but we allow local/policy here for basic
 	}
 	if c.Decision.TimeoutMS < 1 || c.Decision.TimeoutMS > 5000 {
-		return errors.New("decision.timeout_ms must be between 1 and 5000")
+		return nil, errors.New("decision.timeout_ms must be between 1 and 5000")
 	}
 	if c.Decision.Chain != "" {
 		if len(c.Decision.Chain) > maxDecisionChainIDBytes {
-			return errors.New("decision.chain is too long")
+			return nil, errors.New("decision.chain is too long")
 		}
 		if !validLocalID(c.Decision.Chain) {
-			return fmt.Errorf("decision chain id %q invalid", c.Decision.Chain)
+			return nil, fmt.Errorf("decision chain id %q invalid", c.Decision.Chain)
 		}
 	}
 	if c.Decision.MaxProviderCalls < 0 || c.Decision.MaxProviderCalls > maxDecisionChainSteps {
-		return fmt.Errorf("decision.max_provider_calls must be between 0 and %d", maxDecisionChainSteps)
+		return nil, fmt.Errorf("decision.max_provider_calls must be between 0 and %d", maxDecisionChainSteps)
 	}
 	if len(c.Decision.Chain) > 0 && strings.ToLower(strings.TrimSpace(c.Decision.Mode)) != "hybrid" {
-		return errors.New("decision.chain is only valid when decision.mode=hybrid")
+		return nil, errors.New("decision.chain is only valid when decision.mode=hybrid")
 	}
 	// Validate DecisionProviderHealth
 	if c.DecisionProviderHealth.FailureThreshold < 1 || c.DecisionProviderHealth.FailureThreshold > 100 {
-		return errors.New("decision_provider_health.failure_threshold must be between 1 and 100")
+		return nil, errors.New("decision_provider_health.failure_threshold must be between 1 and 100")
 	}
 	if c.DecisionProviderHealth.FailureWindowSeconds < 1 || c.DecisionProviderHealth.FailureWindowSeconds > 3600 {
-		return errors.New("decision_provider_health.failure_window_seconds must be between 1 and 3600")
+		return nil, errors.New("decision_provider_health.failure_window_seconds must be between 1 and 3600")
 	}
 	if c.DecisionProviderHealth.CooldownSeconds < 1 || c.DecisionProviderHealth.CooldownSeconds > 86400 {
-		return errors.New("decision_provider_health.cooldown_seconds must be between 1 and 86400")
+		return nil, errors.New("decision_provider_health.cooldown_seconds must be between 1 and 86400")
 	}
 	if len(c.Decision.Policy) > maxPolicyIDBytes {
-		return errors.New("decision.policy is too long")
+		return nil, errors.New("decision.policy is too long")
 	}
 	if c.Decision.Policy != "" && !validLocalID(c.Decision.Policy) {
-		return fmt.Errorf("decision policy id %q invalid", c.Decision.Policy)
+		return nil, fmt.Errorf("decision policy id %q invalid", c.Decision.Policy)
 	}
 	if len(c.DecisionPolicies) > maxDecisionPolicies {
-		return fmt.Errorf("decision_policies exceeds safe limit %d", maxDecisionPolicies)
+		return nil, fmt.Errorf("decision_policies exceeds safe limit %d", maxDecisionPolicies)
 	}
 	// Canonical task types for override validation (Phase C vocabulary)
 	canonicalTasks := map[string]struct{}{
@@ -2656,72 +2716,72 @@ func (c Config) Validate() error {
 	seenPolicyIDs := map[string]struct{}{}
 	for i, dp := range c.DecisionPolicies {
 		if dp.ID == "" {
-			return fmt.Errorf("decision_policies[%d].id is required", i)
+			return nil, fmt.Errorf("decision_policies[%d].id is required", i)
 		}
 		if len(dp.ID) > maxPolicyIDBytes || !validLocalID(dp.ID) {
-			return fmt.Errorf("decision policy id %q invalid", dp.ID)
+			return nil, fmt.Errorf("decision policy id %q invalid", dp.ID)
 		}
 		if _, dup := seenPolicyIDs[dp.ID]; dup {
-			return fmt.Errorf("duplicate decision policy id %q", dp.ID)
+			return nil, fmt.Errorf("duplicate decision policy id %q", dp.ID)
 		}
 		seenPolicyIDs[dp.ID] = struct{}{}
 		if len(dp.Name) > maxDecisionPolicyName {
-			return fmt.Errorf("decision policy %q name too long", dp.ID)
+			return nil, fmt.Errorf("decision policy %q name too long", dp.ID)
 		}
 		if len(dp.Version) > maxDecisionPolicyVersion || !validPolicyVersion(dp.Version) {
-			return fmt.Errorf("decision policy %q version %q invalid", dp.ID, dp.Version)
+			return nil, fmt.Errorf("decision policy %q version %q invalid", dp.ID, dp.Version)
 		}
 		if dp.SelectionMode != "" && dp.SelectionMode != "select_first" {
-			return fmt.Errorf("decision policy %q selection_mode must be select_first", dp.ID)
+			return nil, fmt.Errorf("decision policy %q selection_mode must be select_first", dp.ID)
 		}
 		if math.IsNaN(dp.MinScoreDelta) || math.IsInf(dp.MinScoreDelta, 0) || dp.MinScoreDelta < 0 || dp.MinScoreDelta > 1 {
-			return fmt.Errorf("decision policy %q min_score_delta must be finite and between 0 and 1", dp.ID)
+			return nil, fmt.Errorf("decision policy %q min_score_delta must be finite and between 0 and 1", dp.ID)
 		}
 		if dp.MinObservations < 0 || dp.MinObservations > maxPolicyMinObservations {
-			return fmt.Errorf("decision policy %q min_observations must be between 0 and %d", dp.ID, maxPolicyMinObservations)
+			return nil, fmt.Errorf("decision policy %q min_observations must be between 0 and %d", dp.ID, maxPolicyMinObservations)
 		}
 		// Validate weights
 		if err := validateDecisionPolicyWeights(dp.Weights, fmt.Sprintf("decision policy %q weights", dp.ID)); err != nil {
-			return err
+			return nil, err
 		}
 		// At least one positive weight
 		if !hasPositiveWeight(dp.Weights) {
-			return fmt.Errorf("decision policy %q must have at least one positive weight", dp.ID)
+			return nil, fmt.Errorf("decision policy %q must have at least one positive weight", dp.ID)
 		}
 		if len(dp.TaskOverrides) > maxTaskOverrides {
-			return fmt.Errorf("decision policy %q task_overrides exceeds limit %d", dp.ID, maxTaskOverrides)
+			return nil, fmt.Errorf("decision policy %q task_overrides exceeds limit %d", dp.ID, maxTaskOverrides)
 		}
 		for tk, w := range dp.TaskOverrides {
 			if tk == "" {
-				return fmt.Errorf("decision policy %q has empty task override key", dp.ID)
+				return nil, fmt.Errorf("decision policy %q has empty task override key", dp.ID)
 			}
 			if len(tk) > maxPolicyIDBytes {
-				return fmt.Errorf("decision policy %q task override %q too long", dp.ID, tk)
+				return nil, fmt.Errorf("decision policy %q task override %q too long", dp.ID, tk)
 			}
 			if _, ok := canonicalTasks[tk]; !ok {
-				return fmt.Errorf("decision policy %q task override %q is not a canonical task type", dp.ID, tk)
+				return nil, fmt.Errorf("decision policy %q task override %q is not a canonical task type", dp.ID, tk)
 			}
 			if err := validateDecisionPolicyWeights(w, fmt.Sprintf("decision policy %q task_overrides[%q]", dp.ID, tk)); err != nil {
-				return err
+				return nil, err
 			}
 			if !hasPositiveWeight(w) {
-				return fmt.Errorf("decision policy %q task_overrides[%q] must have at least one positive weight", dp.ID, tk)
+				return nil, fmt.Errorf("decision policy %q task_overrides[%q] must have at least one positive weight", dp.ID, tk)
 			}
 		}
 	}
 	// References must point to existing policies
 	if c.Decision.Policy != "" {
 		if _, ok := seenPolicyIDs[c.Decision.Policy]; !ok {
-			return fmt.Errorf("decision.policy %q references unknown decision policy", c.Decision.Policy)
+			return nil, fmt.Errorf("decision.policy %q references unknown decision policy", c.Decision.Policy)
 		}
 	}
 	// Explicit config required when provider=policy: must have deterministic usable global policy
 	if strings.ToLower(strings.TrimSpace(c.Decision.Mode)) == "local" && strings.ToLower(strings.TrimSpace(c.Decision.Provider)) == "policy" {
 		if c.Decision.Policy == "" {
-			return fmt.Errorf("decision.policy is required when decision.mode=local and decision.provider=policy")
+			return nil, fmt.Errorf("decision.policy is required when decision.mode=local and decision.provider=policy")
 		}
 		if len(c.DecisionPolicies) == 0 {
-			return fmt.Errorf("decision_policies must contain at least one policy when provider=policy")
+			return nil, fmt.Errorf("decision_policies must contain at least one policy when provider=policy")
 		}
 	}
 	// Phase 18: routing-policy canary autopilot. It only orchestrates existing
@@ -2732,36 +2792,36 @@ func (c Config) Validate() error {
 			target = c.Decision.Policy
 		}
 		if target == "" {
-			return fmt.Errorf("autopilot.policy_id is required (or set decision.policy)")
+			return nil, fmt.Errorf("autopilot.policy_id is required (or set decision.policy)")
 		}
 		if len(target) > maxPolicyIDBytes || !validLocalID(target) {
-			return fmt.Errorf("autopilot policy id %q invalid", target)
+			return nil, fmt.Errorf("autopilot policy id %q invalid", target)
 		}
 		if _, ok := seenPolicyIDs[target]; !ok {
-			return fmt.Errorf("autopilot.policy_id %q references unknown decision policy", target)
+			return nil, fmt.Errorf("autopilot.policy_id %q references unknown decision policy", target)
 		}
 		if c.Autopilot.CandidatePolicyID != "" {
 			if len(c.Autopilot.CandidatePolicyID) > maxPolicyIDBytes || !validLocalID(c.Autopilot.CandidatePolicyID) {
-				return fmt.Errorf("autopilot candidate policy id %q invalid", c.Autopilot.CandidatePolicyID)
+				return nil, fmt.Errorf("autopilot candidate policy id %q invalid", c.Autopilot.CandidatePolicyID)
 			}
 			if _, ok := seenPolicyIDs[c.Autopilot.CandidatePolicyID]; !ok {
-				return fmt.Errorf("autopilot.candidate_policy_id %q references unknown decision policy", c.Autopilot.CandidatePolicyID)
+				return nil, fmt.Errorf("autopilot.candidate_policy_id %q references unknown decision policy", c.Autopilot.CandidatePolicyID)
 			}
 			if c.Autopilot.CandidatePolicyID == target {
-				return fmt.Errorf("autopilot.candidate_policy_id must differ from the target policy")
+				return nil, fmt.Errorf("autopilot.candidate_policy_id must differ from the target policy")
 			}
 		}
 		if math.IsNaN(c.Autopilot.CanaryPercent) || math.IsInf(c.Autopilot.CanaryPercent, 0) || c.Autopilot.CanaryPercent < 0 || c.Autopilot.CanaryPercent > 100 {
-			return fmt.Errorf("autopilot.canary_percent must be finite and between 0 and 100")
+			return nil, fmt.Errorf("autopilot.canary_percent must be finite and between 0 and 100")
 		}
 		if c.Autopilot.CanaryMaxRequests < 0 {
-			return fmt.Errorf("autopilot.canary_max_requests must not be negative")
+			return nil, fmt.Errorf("autopilot.canary_max_requests must not be negative")
 		}
 		if c.Autopilot.MinSamples < 0 || c.Autopilot.MinSamples > maxAutopilotSamples {
-			return fmt.Errorf("autopilot.min_samples must be between 0 and %d", maxAutopilotSamples)
+			return nil, fmt.Errorf("autopilot.min_samples must be between 0 and %d", maxAutopilotSamples)
 		}
 		if c.Autopilot.MinPromoteSamples < 0 || c.Autopilot.MinPromoteSamples > maxAutopilotSamples {
-			return fmt.Errorf("autopilot.min_promote_samples must be between 0 and %d", maxAutopilotSamples)
+			return nil, fmt.Errorf("autopilot.min_promote_samples must be between 0 and %d", maxAutopilotSamples)
 		}
 		for name, v := range map[string]float64{
 			"autopilot.max_error_rate":       c.Autopilot.MaxErrorRate,
@@ -2770,17 +2830,21 @@ func (c Config) Validate() error {
 			"autopilot.max_no_eligible_rate": c.Autopilot.MaxNoEligibleRate,
 		} {
 			if math.IsNaN(v) || math.IsInf(v, 0) || v < 0 || v > 1 {
-				return fmt.Errorf("%s must be finite and between 0 and 1", name)
+				return nil, fmt.Errorf("%s must be finite and between 0 and 1", name)
 			}
 		}
 		if c.Autopilot.MaxLatencyP95MS < 0 || c.Autopilot.MaxTTFTP95MS < 0 {
-			return fmt.Errorf("autopilot latency ceilings must not be negative")
+			return nil, fmt.Errorf("autopilot latency ceilings must not be negative")
 		}
 		if c.Autopilot.MaxBudgetAnomalies < 0 {
-			return fmt.Errorf("autopilot.max_budget_anomalies must not be negative")
+			return nil, fmt.Errorf("autopilot.max_budget_anomalies must not be negative")
 		}
 	}
 
+	return seenPolicyIDs, nil
+}
+
+func (c Config) validateDecisionProvidersAndChains() error {
 	// Phase F: Decision Providers (external)
 	if len(c.DecisionProviders) > maxDecisionProviders {
 		return fmt.Errorf("decision_providers exceeds safe limit %d", maxDecisionProviders)
@@ -2968,6 +3032,10 @@ func (c Config) Validate() error {
 	if len(c.FallbackChains) > maxFallbackChains {
 		return fmt.Errorf("fallback_chains exceeds safe limit %d", maxFallbackChains)
 	}
+	return nil
+}
+
+func (c Config) validateCrossReferences(seenPolicyIDs map[string]struct{}) error {
 	// Collect physical model identifiers for collision detection
 	physicalIDs := map[string]struct{}{}
 	for _, p := range c.Providers {
