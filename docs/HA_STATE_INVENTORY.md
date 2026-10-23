@@ -19,7 +19,7 @@ Scopes: `shared` (coherent across replicas via a shared store),
 |---|---|---|---|---|---|---|---|
 | Config snapshot | Local config file, read by `config.Load`/`config.LoadBase` and written atomically by `config.SaveAtomic` | Local file; durable only on the host/filesystem that holds it | **per-instance** — the control-plane store never holds config; it carries only runtime metadata and budget-alert marks | Reloaded from the local file at startup and after an admin save on that replica | Another replica keeps its own file and does not observe the edit; a lost replica loses unsaved admin edits unless its file was backed up separately | Each replica keeps its local file; no shared config write exists to split | N/A |
 | Admin security store: sessions, audit chain, client keys | `internal/securitystore`: bbolt (default) / PostgreSQL / Redis | Durable except memory test backend | shared (PG/Redis), shared-host (bbolt) | Reloaded from store | PG serializes audit-chain writes transactionally; Redis uses version-checked Lua CAS; concurrent appends from two instances have real-service coverage | Backend down ⇒ fail closed | Audit append is append-only with chain verification; a conflicted append errors instead of forking the chain |
-| Provider breaker / cooldown / health | `internal/health`, `internal/probe` (in-process); optional `internal/breakersync` over the control-plane store | None locally (rebuilt by probing); shared markers durable with the control-plane backend | **per-instance by default; shared (PostgreSQL/Redis) or shared-host (file) when `control_plane.breaker_sync` is enabled** — cooldown/retired markers only; a remote retired marker applies only as a bounded cooldown, never a local retirement (ADR 0003) | Local cooldowns reset and probes re-establish state; with sync enabled, a restarted replica re-applies unexpired shared markers on its first sync round | With sync disabled, replicas may disagree about a provider's cooldown during the probe window; routing stays safe (each replica probes independently) but not identical. With sync enabled, replicas converge within one sync interval | Each replica keeps its local state; a store outage never clears local circuits and sync resumes on heal | N/A |
+| Provider breaker / cooldown / health | `internal/health`, `internal/probe` (in-process); optional `internal/breakersync` over the control-plane store | None locally (rebuilt by probing); shared markers durable with the control-plane backend | **per-instance by default; shared (PostgreSQL/Redis) or shared-host (file) when `control_plane.breaker_sync` is enabled** — cooldown/retired markers only; a remote retired marker applies only as a bounded cooldown, never a local retirement (ADR 0003) | Local cooldowns reset and probes re-establish state; with sync enabled, a restarted replica re-applies unexpired shared markers on its first sync round | With sync disabled, replicas may disagree about a provider's cooldown during the probe window; routing stays safe (each replica probes independently) but not identical. With sync enabled, replicas converge within two sync intervals plus store latency (up to one interval for a change to be published, up to one more for a peer to observe it) | Each replica keeps its local state; a store outage never clears local circuits and sync resumes on heal | N/A |
 | Quota / RPM / TPM reservations and budget counters | In-process limiters + optional control-plane budget store | In-memory (reservations); budget snapshots durable only with the control plane | **per-instance for reservations** | Reservations reset | **N replicas can collectively oversubscribe a provider quota by up to N× the per-instance limit.** The deployment report and UI must label these limits per-instance, never global | Same as replica loss, per partition side | Provider-reported usage settles reservations per instance; no cross-instance settlement exists |
 | Session affinity / routing stickiness | Router in-process state | None | per-instance | Lost | A load balancer may land a session on a replica without its affinity state; routing remains correct, affinity is best-effort | Per partition side | N/A |
 | Request idempotency (client-facing) | Per-instance request handling | None | per-instance | Lost | A retried submission landing on another replica is a new request to that replica | Same | **Ambiguous provider submissions are never auto-duplicated by the gateway**; retries follow the configured policy on the owning replica only |
@@ -33,12 +33,16 @@ Scopes: `shared` (coherent across replicas via a shared store),
    serving with the PostgreSQL or Redis control-plane and security
    stores. Config snapshots remain per-instance local files:
    distribute the same config to every replica through deployment
-   tooling, never by expecting control-plane propagation. Breaker,
-   quota-reservation, affinity and video state remain per-instance,
-   with the oversubscription consequence documented above — size
-   per-instance limits accordingly. [ADR 0001](adr/0001-shared-config-snapshot.md)
-   records why shared configuration is not implemented and the owner
-   decisions required before it can be.
+   tooling, never by expecting control-plane propagation.
+   Quota-reservation and affinity state remain per-instance, with the
+   oversubscription consequence documented above — size per-instance
+   limits accordingly. Breaker state is per-instance by default and
+   shared only when opt-in breaker sync is enabled (ADR 0003); video
+   job and cost-ledger state is shared on the PostgreSQL job-store
+   backend, while video assets remain per-instance.
+   [ADR 0001](adr/0001-shared-config-snapshot.md) records why shared
+   configuration is not implemented: it was accepted on 2026-10-22 as
+   Option 1 — local configuration stays authoritative indefinitely.
 2. The file control-plane backend coordinates processes on **one
    host** (flock + CAS). It is not a cross-host store, and a
    network filesystem is never a coordination substitute.
@@ -87,19 +91,26 @@ everything else runs in the ordinary unit suite.
   `TestTwoInstancesNeverExecuteSameJob` (two orchestrators,
   one store, exactly one provider submission). The lease is
   cross-process only where the store's claim is atomic across
-  processes; no shared (PostgreSQL/Redis) job-store backend
-  exists yet — building one is an owner topology decision,
-  recorded on #434, and nothing in this document claims it.
+  processes. A shared PostgreSQL job-store backend exists
+  (`internal/video/queue/pg_store.go`, atomic `TryClaim`) and is
+  exercised by the PostgreSQL integration suite; assets remain
+  per-instance local storage in both backends, so end-to-end
+  multi-node video is not a declared topology (ADR 0004,
+  Accepted — Option B).
 - **Config snapshot scope** — `TestConfigSnapshotReportMatchesLocalStore`
   proves every control-plane backend (file, postgres, redis, memory)
   reports `per-instance`, and that an admin save lands only in the local
   config file while a second replica's file stays unchanged.
-- **Cooldown visibility** — deliberately **per-instance**:
-  breaker/cooldown state is not shared, and
+- **Cooldown visibility** — **per-instance by default**:
+  breaker/cooldown state is not shared unless opt-in breaker sync
+  is enabled (ADR 0003), and
   `TestDeploymentReportSharedControlPlane` pins that even
   with a shared control-plane backend the report keeps
   breaker/cooldown (and quota reservations) labeled
-  per-instance; `TestDeploymentReportDefaultIsPerInstance`
+  per-instance while sync is disabled; with sync enabled the
+  report upgrades the breaker/cooldown scope to shared or
+  shared-host according to the backend.
+  `TestDeploymentReportDefaultIsPerInstance`
   pins the default topology's labels and warnings.
 - **Reservation semantics** — deliberately **per-instance**:
   `TestBudgetLedgerConcurrentInvariants`,

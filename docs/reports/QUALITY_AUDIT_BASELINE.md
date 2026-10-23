@@ -1,11 +1,18 @@
 # Quality Audit Baseline - Issue #593
 
+> **Historical document.** This baseline records the repository state at
+> the 2026-10-21 audit checkpoint. Issue #593 was **closed on
+> 2026-10-22**; the latest release is **v0.24.0** (2026-10-22); the
+> current state is recorded in the final addendum at the end of
+> `QUALITY_AUDIT_FINAL.md`. Figures in the body below are
+> checkpoint-era and are not current measurements.
+
 - Audit timestamp: **2026-10-21T11:33:58Z**
 - Audited `main`: `bfa93b69cd9fc5041b2ddb822a49c03a32eeb13a` (merge of PR #595, which also contains PR #596)
 - Work branch: `opencode/issue593-20261021110358`
 - Checkpoint commit: `41169e9a4c880dd25894b3ff39fe08abbb49cc42`
-- Published release: `v0.23.0` (unchanged, `05003db`; no retag, no new release, no asset mutation)
-- Issue: [#593](https://github.com/ali-shortcuts/nexaroute/issues/593) (open)
+- Published release at audit time: `v0.23.0` (unchanged, `05003db`; no retag, no new release, no asset mutation)
+- Issue: [#593](https://github.com/ali-shortcuts/nexaroute/issues/593) (open at audit time; closed 2026-10-22)
 
 This file captures the state *before* the fixes in this checkpoint. See
 `QUALITY_AUDIT_FINDINGS.md` for per-finding evidence and `QUALITY_AUDIT_FINAL.md`
@@ -117,7 +124,9 @@ were obtained with the commands recorded there.
 - PR #596 report batch: `17408a4` (same `main` base `7a815a4` at the time).
 - PR #595 fix batch: `099f474` plus docs `ee93c81`.
 - The complete earlier report text remains available in git history at those
-  commits; this file is the authoritative current baseline.
+  commits; this file is the baseline of record for the 2026-10-21
+  checkpoint only (superseded as a description of current state — see the
+  banner at the top of this file).
 
 ---
 
@@ -126,11 +135,14 @@ were obtained with the commands recorded there.
 This baseline captured `main` at `bfa93b69` before the #593 fix batch.
 The repository has since moved through the audit-tail program (#602–#612),
 v0.23.0's post-release work, and the 2026-10-22 remaining-work mission
-(PRs #624–#629). Current authoritative state: `main`
+(PRs #624–#629). State at the end of that mission (2026-10-22 snapshot,
+since superseded): `main`
 `6ca8ac5f5d6949c1c7a5832df6472dbce375e784`, measured by audit workflow
-run `39717951099`: coverage **85.1%**, staticcheck **0**, gosec **53**
-(all G304, triaged), deadcode **0**, golangci-lint **0** (pinned,
-uncapped). Per-finding dispositions for the mission are in
+run `39717951099`: coverage **85.1%**, staticcheck **0**, gosec **87**
+(53 G304 + 30 G703 + 4 G704, all triaged into the checked-in baseline —
+the "53, all G304" figure quoted in that run's summary was the
+taint-blind count later retracted in QUALITY_AUDIT_FINDINGS.md),
+deadcode **0**, golangci-lint **0** (pinned, uncapped). Per-finding dispositions for the mission are in
 `QUALITY_AUDIT_FINDINGS.md` (2026-10-22 addendum); the mission verdict is
 in `QUALITY_AUDIT_FINAL.md` (2026-10-22 addendum). The numbers in the
 body of this file are historical and must not be quoted as current.

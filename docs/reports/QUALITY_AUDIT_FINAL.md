@@ -1,5 +1,15 @@
 # Quality Audit Final Report - Issue #593
 
+> **Historical document — superseded.** The body of this report is the
+> 2026-10-21 checkpoint result, written before the work merged. Since
+> then: the audit-tail program and the 2026-10-22 remaining-work
+> mission merged (PRs #624–#634), ADRs 0001–0006 were **accepted**,
+> issue #593 was **closed on 2026-10-22**, and **v0.24.0 was released**
+> on 2026-10-22. Statements below such as "#593 remains open", "the
+> branch is not merged", or "ADR … Proposed" describe the checkpoint
+> moment only. The current state is recorded in the final addendum at
+> the end of this file.
+
 - Audit timestamp: **2026-10-21T11:33:58Z**
 - Audited `main`: `bfa93b69cd9fc5041b2ddb822a49c03a32eeb13a`
 - Work branch: `opencode/issue593-20261021110358`
@@ -241,3 +251,79 @@ None of the four was settled by default.
    `docs/HA_STATE_INVENTORY.md`).
 3. Closure of issue #593 itself.
 4. Any new release. This mission made no release change, per directive.
+
+---
+
+## Closure correction — 2026-10-22 (same day, after the addendum above)
+
+The addendum above was written before the owner's delegation later that
+day. For the record, its open items were then resolved:
+
+- "Final `main` `6ca8ac5f…`" was the final commit of the remaining-work
+  mission only; PRs #631–#634 followed the same day.
+- "Release: `v0.23.0` unchanged" — superseded: **v0.24.0 was released
+  2026-10-22T13:33:57Z** under the owner's explicit instruction, with
+  download-side verification (checksums, SBOM, Sigstore) complete.
+- "Issue #593 remains open" — superseded: **#593 was closed on
+  2026-10-22** with a full evidence comment.
+- "**53** gosec findings (all G304)" — retracted: the complete analysis
+  (see the correction in `QUALITY_AUDIT_FINDINGS.md`) finds **87**
+  (53 G304 + 30 G703 + 4 G704), all triaged into the checked-in
+  baseline `docs/reports/gosec-baseline.txt`; the audit job is pinned
+  to Go 1.27.0 and fails loudly on incomplete analysis.
+- "Remaining owner decisions" items 1, 3, 4 — resolved: ADRs 0001,
+  0004, 0005, 0006 were **accepted** on 2026-10-22 under the owner's
+  delegation (PRs #631–#633); #593 closed; v0.24.0 released. Item 2
+  (durable cross-process Activity log) remains open as a documented
+  per-instance limitation in `docs/HA_STATE_INVENTORY.md`; it is a
+  known boundary, not a defect found by this audit.
+
+---
+
+## Final completion addendum — 2026-10-23
+
+The owner ordered a fresh zero-to-hundred completion pass on
+2026-10-23 ("complete anything that is not complete"). The mission
+re-established state from live sources rather than trusting prior
+reports, re-audited the tree in five lanes (breaker sync / docs /
+security / video durability / routing-runtime), fixed every confirmed
+defect test-first, and reconciled the documentation.
+
+- Final `main`: `79df87d5` (after PRs #638, #639, #640, #641 on top
+  of `8fcd2499`). Open PRs: 0. Open issues: 0. CodeQL open alerts: 0.
+  Dependabot open alerts: 0.
+- Work completed: PR #635 (CodeQL cookie fix, earlier the same day),
+  PR #636 (config `Validate` refactor with golden-corpus equivalence),
+  PR #637 (`evaluation.live_enabled` coherence), PR #638 (video bearer
+  fail-closed hardening), PR #639 (video durability: download checksum,
+  PG terminal-replay guard, loud ledger reads), PR #640 (protocol
+  fail-closed: D1–D3, S2–S4), PR #641 (blank-system round-trip fix,
+  F-11, found by the extended-fuzz job) — see
+  `QUALITY_AUDIT_FINDINGS.md`, 2026-10-23 addendum, for the full
+  register.
+- Verification on the final tree: CI + Security workflows green on
+  the exact merge heads; Architecture & Quality Audit workflow run
+  `39945085701` on `79df87d5`: all seven jobs SUCCESS — golangci-lint
+  0, staticcheck 0, deadcode 0, gosec at the checked-in baseline of
+  87 (0 new / 0 resolved), coverage `85.3%` (gate ≥ 85%), extended
+  fuzz SUCCESS, metrics SUCCESS. (The earlier audit run `39941279599`
+  on `1ba6ea32` failed only in the extended-fuzz job; that failure is
+  finding F-11, fixed by PR #641.) Local `scripts/verify.sh` on the
+  final tree `79df87d5`: full PASS, including the mandatory race
+  pass. (On more heavily loaded runs of this VM the local race pass
+  can stop at the 3-minute cap in `internal/httpapi` with zero
+  assertion failures — the capacity artifact A/B-proven against
+  pristine main during PR #636; post-merge CI on `79df87d5` is
+  SUCCESS and corroborates the race pass.)
+- Acceptance detail: `docs/reports/ACCEPTANCE_MATRIX_2026-10-23.md`.
+- Standing UNVERIFIED boundaries are unchanged and are recorded in
+  `docs/EXTERNAL_VERIFICATION.md`: live tenant OIDC login, real
+  Vault/OS-keyring round-trips, live commercial provider probes
+  (zero paid calls), live Bedrock/Vertex/Azure tenants, live K8s
+  install, real OTLP ingestion, production soak, multi-host HA.
+  Milestone closeouts M3-5 / M4-3 / M4-4 still require the owner's
+  explicit approval each.
+- Verdict of the 2026-10-23 mission: **IMPLEMENTATION COMPLETE,
+  EXTERNAL ACCEPTANCE BLOCKED** — implementation is complete within
+  the declared scope; the external-acceptance items above remain
+  blocked on credentials/infrastructure the mission did not have.
