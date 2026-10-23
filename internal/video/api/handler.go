@@ -40,6 +40,13 @@ func (h *Handler) authorized(r *http.Request) bool {
 	if !h.RequireAuth {
 		return true
 	}
+	if h.BearerToken == "" {
+		// Fail closed by construction: with authentication required but
+		// no token configured, nothing is authorized. (An empty
+		// presented token would otherwise satisfy the constant-time
+		// comparison against the empty configured token.)
+		return false
+	}
 	raw := strings.TrimSpace(r.Header.Get("Authorization"))
 	const prefix = "Bearer "
 	if !strings.HasPrefix(raw, prefix) {
