@@ -6,6 +6,8 @@ admin-store-backend-bogus	admin.security_store_backend must be bbolt, redis or p
 admin-store-path-newline	admin.security_store_path is invalid or too long
 admin-store-url-missing	admin.security_store_url is required for the redis/postgres security store backend
 admin-store-url-on-bbolt	admin.security_store_url must be empty for the bbolt security store backend
+autopilot-bad-candidate	autopilot.policy_id is required (or set decision.policy)
+autopilot-canary-pct	autopilot.policy_id is required (or set decision.policy)
 budget-webhook-bad	budget_alerts.webhook_url must use http or https
 cache-body-too-small	cache.max_body_bytes must be between 1024 and 67108864
 cache-max-entries	cache.max_entries must be between 1 and 65536
@@ -14,6 +16,15 @@ cache-semantic-no-dep	cache.semantic.embedding_deployment is required when the s
 cache-ttl	cache.ttl_seconds must be between 1 and 2592000
 controlplane-backend	control_plane.backend must be file, memory, postgres, or redis
 controlplane-sync-alone	control_plane.breaker_sync requires control_plane.enabled
+decision-chain-no-hybrid	decision.chain is only valid when decision.mode=hybrid
+decision-chain-unknown-step	decision chain "ch1" step[0] references unknown provider "ghost"
+decision-local-ext-provider	decision.provider must be local or policy when mode=local (got "ext-9")
+decision-mode-bogus	decision.mode must be off, local, assisted, or hybrid
+decision-policy-unknown	decision.policy "ghost-policy" references unknown decision policy
+decision-provider-bad-type	decision provider "dp1" has unsupported type "openai" (only jev in Phase F)
+decision-shadow-while-off	decision.shadow requires decision.mode to be local, assisted, or hybrid
+decision-timeout-low	decision.timeout_ms must be between 1 and 5000
+evaluation-live-no-plane	evaluation.live_enabled requires evaluation.enabled
 guardrails-body	guardrails.max_body_bytes must be between 1024 and 67108864
 guardrails-mode	guardrails.mode must be off, audit, or block
 listen-bad-port	listen port "99999" must be numeric between 1 and 65535
@@ -28,6 +39,7 @@ mcp-rpm-negative	mcp.rpm must be between 0 and 1000000
 prec-admin-over-budget	admin.audit_retention_days must be between 1 and 3650
 prec-admin-over-listen	admin.session_ttl_seconds must be between 300 and 2592000
 prec-cache-over-mcp	cache.ttl_seconds must be between 1 and 2592000
+prec-decision-over-xref	decision.mode must be off, local, assisted, or hybrid
 prec-guardrails-over-telemetry	guardrails.mode must be off, audit, or block
 prec-listen-over-routing	listen is required
 prec-mcp-over-guardrails	mcp.enabled requires at least one server in mcp.servers
@@ -42,3 +54,4 @@ routing-timeout-low	routing.request_timeout_ms must be between 100 and 1800000
 telemetry-otlp-env	telemetry.otlp_endpoint_env must be a valid environment variable name
 telemetry-service-long	telemetry.service_name must be at most 128 characters
 valid-default	<nil>
+virtual-endpoint-unknown-model	virtual endpoint "ve1" references unknown route profile "ghost"

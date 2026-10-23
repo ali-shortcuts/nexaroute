@@ -2599,6 +2599,11 @@ func (c Config) validateProviders() error {
 
 func (c Config) validateEvaluation() error {
 	// Phase H: evaluation plane
+	// Live evaluation sends real prompts to physical deployments; it is
+	// meaningless (and would surprise the operator) while the plane is off.
+	if c.Evaluation.LiveEnabled && !c.Evaluation.Enabled {
+		return errors.New("evaluation.live_enabled requires evaluation.enabled")
+	}
 	if c.Evaluation.MaxRuns < 1 || c.Evaluation.MaxRuns > maxEvaluationRuns {
 		return fmt.Errorf("evaluation.max_runs must be between 1 and %d", maxEvaluationRuns)
 	}
