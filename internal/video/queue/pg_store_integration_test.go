@@ -360,3 +360,48 @@ func TestPostgresVideoStoreDSNReachable(t *testing.T) {
 		t.Fatalf("ping: %v", err)
 	}
 }
+
+// Terminal replay after a lease claim: TryClaim mutates only the lease
+// columns, while the stored payload keeps its original lease fields. A
+// later Update replaying the authoritative record (read via Get, which
+// overlays the columns) must not be rejected by the terminal guard —
+// the guard has to compare against the column-overlaid current record.
+// Before the fix, Update decoded current from the payload alone and
+// the replay failed with a spurious ErrTerminalJob.
+func TestPostgresVideoStoreTerminalReplayAfterClaim(t *testing.T) {
+	ctx := context.Background()
+	s := openVideoPGStore(t)
+	resetVideoJobsTable(t, s)
+
+	job := pgTestJob("j1", "")
+	if err := s.Create(ctx, job); err != nil {
+		t.Fatal(err)
+	}
+	done := job
+	done.State = video.StateCompleted
+	if err := s.Update(ctx, done); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	// A duplicate delivery claims the (already terminal) job: only the
+	// lease columns change.
+	if _, claimed, err := s.TryClaim(ctx, "j1", "worker-b", time.Minute, time.Now()); err != nil || !claimed {
+		t.Fatalf("claim terminal job: claimed=%v err=%v", claimed, err)
+	}
+	// Replaying the authoritative record must be accepted.
+	got, err := s.Get(ctx, "j1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.LeaseOwner != "worker-b" {
+		t.Fatalf("authoritative record lease owner = %q, want worker-b", got.LeaseOwner)
+	}
+	if err := s.Update(ctx, got); err != nil {
+		t.Fatalf("terminal replay after claim should be allowed: %v", err)
+	}
+	// And a genuinely different overwrite is still blocked.
+	changed := got
+	changed.State = video.StateProcessing
+	if err := s.Update(ctx, changed); err != ErrTerminalJob {
+		t.Fatalf("terminal overwrite err = %v, want ErrTerminalJob", err)
+	}
+}

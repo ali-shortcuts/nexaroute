@@ -69,9 +69,21 @@ func DecodeResponsesRequest(in ResponsesRequest) (Request, error) {
 	}
 	if len(in.Instructions) > 0 && string(in.Instructions) != "null" {
 		var text string
-		if err := json.Unmarshal(in.Instructions, &text); err == nil && text != "" {
+		// A whitespace-only instructions string is no system prompt:
+		// every system encoder gates on the trimmed joined text, so
+		// admitting it would lose it on encode and break
+		// decode/encode round-trip stability (FuzzRequestRoundTrip
+		// crasher ed14165b405e353c, extended fuzz 2026-10-23).
+		if err := json.Unmarshal(in.Instructions, &text); err == nil && strings.TrimSpace(text) != "" {
 			out.System = append(out.System, Part{Type: PartText, Text: text})
 		}
+	}
+	if strings.TrimSpace(in.PreviousResponseID) != "" {
+		// Stateful chaining cannot work through the gateway: `store` is
+		// deliberately not forwarded, so the referenced response is not
+		// retained upstream. Fail closed instead of silently severing
+		// the conversation and answering without its context.
+		return out, fmt.Errorf("previous_response_id is not supported: the gateway does not retain upstream responses")
 	}
 	parts, messages, err := decodeResponsesInput(in.Input)
 	if err != nil {
@@ -82,16 +94,21 @@ func DecodeResponsesRequest(in ResponsesRequest) (Request, error) {
 	}
 	out.Messages = append(out.Messages, messages...)
 	for _, t := range in.Tools {
-		if t.Type == "function" || t.Type == "" {
-			schema := t.Parameters
-			if schema == nil {
-				schema = map[string]any{"type": "object"}
-			}
-			b, _ := json.Marshal(schema)
-			out.Tools = append(out.Tools, ToolDef{Name: t.Name, Description: t.Description, Parameters: b})
+		if t.Type != "function" && t.Type != "" {
+			// Built-in tools (web_search, computer_use, ...) have no
+			// canonical equivalent. Fail closed rather than silently
+			// dropping the tool and answering as if it had run.
+			return out, fmt.Errorf("unsupported Responses tool type %q: only function tools are supported", t.Type)
 		}
-		// Built-in tools (web_search, computer_use, ...) carry no canonical
-		// equivalent; they are dropped rather than failing the request.
+		schema := t.Parameters
+		if schema == nil {
+			schema = map[string]any{"type": "object"}
+		}
+		b, _ := json.Marshal(schema)
+		out.Tools = append(out.Tools, ToolDef{Name: t.Name, Description: t.Description, Parameters: b})
+	}
+	if err := validateResponsesToolChoice(in.ToolChoice); err != nil {
+		return out, err
 	}
 	out.ToolChoice = decodeOpenAIToolChoice(in.ToolChoice)
 	out.ParallelToolCalls = in.ParallelToolCalls
@@ -119,6 +136,23 @@ func DecodeResponsesRequest(in ResponsesRequest) (Request, error) {
 		out.Metadata = in.Metadata
 	}
 	return out, nil
+}
+
+// validateResponsesToolChoice rejects a tool_choice that names a built-in
+// tool: decodeOpenAIToolChoice has no canonical representation for it and
+// would silently drop the constraint.
+func validateResponsesToolChoice(v any) error {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return nil
+	}
+	typ, _ := m["type"].(string)
+	switch typ {
+	case "", "function", "tool":
+		return nil
+	default:
+		return fmt.Errorf("unsupported Responses tool_choice type %q: only function tool choices are supported", typ)
+	}
 }
 
 func decodeResponsesFormat(raw json.RawMessage) *ResponseFormat {
@@ -188,7 +222,10 @@ func decodeResponsesInput(raw json.RawMessage) ([]Part, []Message, error) {
 			if role == "" {
 				role = RoleUser
 			}
-			parts := responsesContentToParts(item.Content)
+			parts, err := responsesContentToParts(item.Content)
+			if err != nil {
+				return nil, nil, err
+			}
 			if len(parts) > 0 {
 				messages = append(messages, Message{Role: role, Parts: parts})
 			}
@@ -229,23 +266,23 @@ func decodeResponsesInput(raw json.RawMessage) ([]Part, []Message, error) {
 	return standalone, messages, nil
 }
 
-func responsesContentToParts(content json.RawMessage) []Part {
+func responsesContentToParts(content json.RawMessage) ([]Part, error) {
 	// The Responses API allows message content as a plain string or as an
 	// array of content objects; the gateway's own encoder emits the compact
 	// string form, so the decoder must accept both (round-trip stability).
 	if len(content) == 0 || string(content) == "null" {
-		return nil
+		return nil, nil
 	}
 	var text string
 	if err := json.Unmarshal(content, &text); err == nil {
 		if text == "" {
-			return nil
+			return nil, nil
 		}
-		return []Part{{Type: PartText, Text: text}}
+		return []Part{{Type: PartText, Text: text}}, nil
 	}
 	var arr []map[string]any
 	if err := json.Unmarshal(content, &arr); err != nil {
-		return nil
+		return nil, nil
 	}
 	parts := make([]Part, 0, len(arr))
 	for _, c := range arr {
@@ -261,9 +298,15 @@ func responsesContentToParts(content json.RawMessage) []Part {
 			if img != nil {
 				parts = append(parts, Part{Type: PartImage, Image: img})
 			}
+		default:
+			// Fail closed rather than silently losing client content
+			// (input_audio, input_file, ...) that has no canonical
+			// representation — the same rule the Anthropic decoder
+			// applies to unsupported content blocks.
+			return nil, fmt.Errorf("unsupported Responses content part %q: no canonical representation", typ)
 		}
 	}
-	return parts
+	return parts, nil
 }
 
 // EncodeResponsesRequest builds an OpenAI Responses payload from the IR.
@@ -474,6 +517,27 @@ func DecodeResponsesResponse(b []byte) (Response, error) {
 	var in ResponsesResponse
 	if err := json.Unmarshal(b, &in); err != nil {
 		return Response{}, fmt.Errorf("invalid Responses body: %w", err)
+	}
+	if in.Status == "failed" {
+		// A failed generation is an upstream failure, not a successful
+		// empty completion: surface it the way the streaming path
+		// surfaces response.failed, so pre-commit failover and error
+		// reporting apply. (This previously decoded to end_turn and was
+		// re-encoded to the client as status "completed".)
+		msg := "upstream Responses request failed"
+		code := ""
+		if in.Error != nil {
+			if m, ok := in.Error["message"].(string); ok && m != "" {
+				msg = m
+			}
+			if c, ok := in.Error["code"].(string); ok {
+				code = c
+			}
+		}
+		if code != "" {
+			return Response{}, fmt.Errorf("upstream Responses request failed (%s): %s", code, msg)
+		}
+		return Response{}, fmt.Errorf("upstream Responses request failed: %s", msg)
 	}
 	out := Response{ID: in.ID, Model: in.Model, StopReason: StopEndTurn, Raw: append(json.RawMessage(nil), b...)}
 	sawToolCall := false

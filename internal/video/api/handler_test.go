@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
@@ -327,5 +328,78 @@ func TestPublicJobSanitizesNarrationAndSubtitleAssetURIs(t *testing.T) {
 	}
 	if strings.Contains(got.NarrationAsset.URI, "/private/") || strings.Contains(got.SubtitleAsset.URI, "/private/") {
 		t.Fatal("public job leaked private asset filesystem paths")
+	}
+}
+
+// TestHandlerDownloadVerifiesRecordedChecksum pins the integrity
+// contract for the asset download path: when the stored asset record
+// carries a SHA-256, a same-size on-disk replacement must be rejected
+// with asset_integrity_error instead of being served. Before the fix
+// the download handler checked only existence and size, while every
+// other read path (storage Local.Read) verified the checksum.
+func TestHandlerDownloadVerifiesRecordedChecksum(t *testing.T) {
+	h := newTestHandler(true)
+	local, err := storage.NewLocal(t.TempDir(), 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.Assets = local
+	ctx := context.Background()
+	asset, err := local.Put(ctx, video.Asset{
+		ID: "episode-output", Kind: "video", Filename: "episode.mp4", ContentType: "video/mp4",
+		Metadata: map[string]string{"project_id": "project-1", "episode_id": "episode-1", "job_id": "job-integrity"},
+	}, []byte("video bytes"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if asset.SHA256 == "" {
+		t.Fatal("stored asset carries no SHA256 to verify against")
+	}
+	job := video.NewJob("job-integrity", validAPIRequest())
+	job.State = video.StateCompleted
+	job.OutputAssets = []video.Asset{asset}
+	if err := h.Store.Create(ctx, job); err != nil {
+		t.Fatal(err)
+	}
+
+	// Tamper with the file in place, preserving its exact size.
+	f, err := local.Open(asset)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := f.Name()
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("VIDEO BYTES"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	w := performJSON(h, http.MethodGet, "/v1/video/jobs/job-integrity/assets/episode-output", nil, "Bearer "+"test-token")
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("tampered download status=%d body=%s, want 500 asset_integrity_error", w.Code, w.Body.String())
+	}
+	body := errorBody(t, w)
+	if body["code"] != "asset_integrity_error" {
+		t.Fatalf("tampered download error code=%v, want asset_integrity_error", body["code"])
+	}
+}
+
+// TestHandlerEmptyBearerTokenRejectsEverything pins the fail-closed
+// contract: when RequireAuth is true but no bearer token is configured,
+// every request must be rejected. The comparison itself would satisfy an
+// empty presented token against the empty configured token
+// (ConstantTimeCompare("","")==1); rejection must not depend on header
+// trimming side effects, so authorized() now refuses the empty-token
+// configuration explicitly.
+func TestHandlerEmptyBearerTokenRejectsEverything(t *testing.T) {
+	h := newTestHandler(true)
+	h.BearerToken = ""
+
+	for _, auth := range []string{"", "Bearer ", "Bearer", "Bearer anything", "Token "} {
+		w := performJSON(h, http.MethodGet, "/v1/video/providers", nil, auth)
+		if w.Code != http.StatusUnauthorized {
+			t.Errorf("authorization %q: status=%d, want %d", auth, w.Code, http.StatusUnauthorized)
+		}
 	}
 }

@@ -841,7 +841,8 @@ func decodeFuzzRequest(codec int, raw []byte) (Request, bool) {
 		if err := json.Unmarshal(raw, &in); err != nil {
 			return Request{}, false
 		}
-		return DecodeOpenAIChatRequest(in, "m"), true
+		req, err := DecodeOpenAIChatRequest(in, "m")
+		return req, err == nil
 	case 2:
 		var in ResponsesRequest
 		if err := json.Unmarshal(raw, &in); err != nil {
