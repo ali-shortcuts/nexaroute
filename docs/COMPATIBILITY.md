@@ -178,6 +178,9 @@ same-protocol pairs). Per upstream encoder:
 | prompt-cache markers | native only | **not expressed cross-protocol** | **not expressed** | **not expressed** (see M5-5) | expressed as Converse `cachePoint` (system + message text/tool blocks, TTL `1h` carried; max 4/request, excess markers dropped, content kept) |
 | seed / frequency & presence penalties | parsed into IR metadata by the OpenAI decoder; **not re-emitted as knobs** by the other encoders | same | same | same | same |
 | provider-native unknown fields | preserved on native passthrough | preserved on native passthrough | — | **dropped** on translation | **dropped** on translation |
+| built-in tools (e.g. `web_search`, `computer_use`) | **rejected at ingress** — no canonical representation; the request fails with an explicit error rather than silently dropping the tool | **rejected at ingress** | **rejected at ingress** (function tools only) | **rejected at ingress** | **rejected at ingress** |
+| `previous_response_id` | — | — | **rejected at ingress** — the gateway does not retain upstream responses (`store` is not forwarded), so a chained id could never resolve; it is refused instead of silently discarded | — | — |
+| audio / file content parts (`input_audio`, `input_file`) | **rejected at ingress** — no canonical representation; never dropped or forwarded as raw-JSON text | **rejected at ingress** | **rejected at ingress** | **rejected at ingress** | **rejected at ingress** |
 
 Two IR shapes exist for tool results and both are supported by
 every encoder (regression-pinned): dedicated `tool` messages

@@ -15,7 +15,7 @@ func timeNow() int64 { return time.Now().Unix() }
 // ---------- OpenAI Chat Completions <-> Canonical ----------
 
 // DecodeOpenAIChatRequest converts an OpenAI Chat Completions request into the IR.
-func DecodeOpenAIChatRequest(in core.OpenAIRequest, clientModel string) Request {
+func DecodeOpenAIChatRequest(in core.OpenAIRequest, clientModel string) (Request, error) {
 	out := Request{
 		Model:          clientModel,
 		Stream:         in.Stream,
@@ -50,10 +50,18 @@ func DecodeOpenAIChatRequest(in core.OpenAIRequest, clientModel string) Request 
 	for _, m := range in.Messages {
 		switch m.Role {
 		case "system", "developer":
-			out.System = append(out.System, openAIContentToParts(m.Content, true)...)
+			parts, err := openAIContentToParts(m.Content, true)
+			if err != nil {
+				return out, err
+			}
+			out.System = append(out.System, parts...)
 		case "assistant":
 			msg := Message{Role: RoleAssistant}
-			msg.Parts = append(msg.Parts, openAIContentToParts(m.Content, false)...)
+			parts, err := openAIContentToParts(m.Content, false)
+			if err != nil {
+				return out, err
+			}
+			msg.Parts = append(msg.Parts, parts...)
 			if strings.TrimSpace(m.ReasoningContent) != "" {
 				msg.Parts = append(msg.Parts, Part{Type: PartThinking, Thinking: &Thinking{Text: m.ReasoningContent}})
 			}
@@ -76,7 +84,11 @@ func DecodeOpenAIChatRequest(in core.OpenAIRequest, clientModel string) Request 
 				ToolResult: &ToolResult{ToolUseID: m.ToolCallID, Content: openAIContentToText(m.Content)},
 			}}})
 		default:
-			out.Messages = append(out.Messages, Message{Role: RoleUser, Parts: openAIContentToParts(m.Content, false)})
+			parts, err := openAIContentToParts(m.Content, false)
+			if err != nil {
+				return out, err
+			}
+			out.Messages = append(out.Messages, Message{Role: RoleUser, Parts: parts})
 		}
 	}
 	for _, t := range in.Tools {
@@ -92,7 +104,7 @@ func DecodeOpenAIChatRequest(in core.OpenAIRequest, clientModel string) Request 
 	} else if len(in.Reasoning) > 0 && string(in.Reasoning) != "null" {
 		out.Reasoning = &Reasoning{Effort: "medium"}
 	}
-	return out
+	return out, nil
 }
 
 func openAIContentToText(v any) string {
@@ -101,30 +113,47 @@ func openAIContentToText(v any) string {
 		return c
 	case nil:
 		return ""
-	default:
-		parts := openAIContentToParts(v, false)
+	case []any:
+		// Tool-result content is data, not typed message content:
+		// extract its text parts. (Message content decoding is strict
+		// — see openAIContentToParts — but a tool result must flatten
+		// to text on a best-effort basis.)
 		var sb strings.Builder
-		for _, p := range parts {
-			if p.Type == PartText && p.Text != "" {
+		for _, raw := range c {
+			m, ok := raw.(map[string]any)
+			if !ok {
+				continue
+			}
+			typ, _ := m["type"].(string)
+			if typ != "text" && typ != "input_text" {
+				continue
+			}
+			if txt, _ := m["text"].(string); txt != "" {
 				if sb.Len() > 0 {
 					sb.WriteByte('\n')
 				}
-				sb.WriteString(p.Text)
+				sb.WriteString(txt)
 			}
 		}
-		return sb.String()
+		if sb.Len() > 0 {
+			return sb.String()
+		}
 	}
+	if b, err := json.Marshal(v); err == nil {
+		return string(b)
+	}
+	return ""
 }
 
-func openAIContentToParts(v any, system bool) []Part {
+func openAIContentToParts(v any, system bool) ([]Part, error) {
 	switch c := v.(type) {
 	case nil:
-		return nil
+		return nil, nil
 	case string:
 		if c == "" {
-			return nil
+			return nil, nil
 		}
-		return []Part{{Type: PartText, Text: c}}
+		return []Part{{Type: PartText, Text: c}}, nil
 	case []any:
 		parts := make([]Part, 0, len(c))
 		for _, raw := range c {
@@ -154,17 +183,25 @@ func openAIContentToParts(v any, system bool) []Part {
 					parts = append(parts, Part{Type: PartImage, Image: img})
 				}
 			default:
-				if b, err := json.Marshal(m); err == nil && !system {
-					parts = append(parts, Part{Type: PartText, Text: string(b)})
+				if system {
+					// System content is text-only by contract in every
+					// encoder here; unrepresentable system parts are
+					// dropped by design (see the image case above).
+					continue
 				}
+				// Fail closed rather than forwarding the part to a
+				// translated upstream as a text blob of raw JSON —
+				// the same rule the Anthropic decoder applies to
+				// unsupported content blocks.
+				return nil, fmt.Errorf("unsupported OpenAI content part %q: no canonical representation", typ)
 			}
 		}
-		return parts
+		return parts, nil
 	default:
 		if b, err := json.Marshal(v); err == nil {
-			return []Part{{Type: PartText, Text: string(b)}}
+			return []Part{{Type: PartText, Text: string(b)}}, nil
 		}
-		return nil
+		return nil, nil
 	}
 }
 
@@ -214,6 +251,13 @@ func decodeOpenAIToolChoice(v any) *ToolChoice {
 				if name, _ := fn["name"].(string); name != "" {
 					return &ToolChoice{Mode: "tool", Name: name}
 				}
+			}
+			// The Responses wire shape carries the name at the top
+			// level ({"type":"function","name":...}) — the shape this
+			// gateway's own Responses encoder emits. It was previously
+			// dropped here, silently losing the constraint.
+			if name, _ := c["name"].(string); name != "" {
+				return &ToolChoice{Mode: "tool", Name: name}
 			}
 		}
 		if typ == "tool" {
@@ -492,6 +536,26 @@ func DecodeOpenAIChatResponse(b []byte) (Response, error) {
 	var in core.OpenAIResponse
 	if err := json.Unmarshal(b, &in); err != nil {
 		return Response{}, fmt.Errorf("invalid OpenAI response: %w", err)
+	}
+	// Some OpenAI-family upstreams answer HTTP 200 with an error
+	// envelope. core.OpenAIResponse has no error field, so the envelope
+	// would otherwise decode into an empty successful response; the
+	// legacy paths reject the same bodies via validateOpenAIResponseJSON.
+	var envelope struct {
+		Error *struct {
+			Message string `json:"message"`
+			Code    string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(b, &envelope); err == nil && envelope.Error != nil {
+		msg := envelope.Error.Message
+		if msg == "" {
+			msg = "upstream OpenAI request failed"
+		}
+		if envelope.Error.Code != "" {
+			return Response{}, fmt.Errorf("upstream OpenAI error envelope (%s): %s", envelope.Error.Code, msg)
+		}
+		return Response{}, fmt.Errorf("upstream OpenAI error envelope: %s", msg)
 	}
 	out := Response{ID: in.ID, Model: in.Model, StopReason: StopEndTurn, Raw: append(json.RawMessage(nil), b...)}
 	if len(in.Choices) > 0 {

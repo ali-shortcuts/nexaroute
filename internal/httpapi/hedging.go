@@ -304,7 +304,11 @@ func (s *Server) buildOpenAIAttempt(cand router.Scored, req router.Requirement, 
 	var err error
 	switch fresh.Deployment.ProviderType {
 	case "gemini", "vertex", "openai_responses", "azure_openai", "bedrock":
-		canReq := canonical.DecodeOpenAIChatRequest(in, in.Model)
+		canReq, derr := canonical.DecodeOpenAIChatRequest(in, in.Model)
+		if derr != nil {
+			bundle.buildErr = boundedProtocolMappingError(derr)
+			return bundle, false
+		}
 		bundle, ok = s.finishCanonicalAttempt(bundle, canReq)
 		if !ok {
 			return hedgeAttemptBundle{}, false

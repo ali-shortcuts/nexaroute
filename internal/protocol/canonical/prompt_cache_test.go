@@ -96,7 +96,10 @@ func TestPromptCacheKeyMapping(t *testing.T) {
 	if err := json.Unmarshal([]byte(`{"model":"m","prompt_cache_key":"k2","messages":[{"role":"user","content":"hi"}]}`), &chatReq); err != nil {
 		t.Fatal(err)
 	}
-	ir2 := DecodeOpenAIChatRequest(chatReq, "m")
+	ir2, err := DecodeOpenAIChatRequest(chatReq, "m")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if ir2.PromptCacheKey != "k2" {
 		t.Fatalf("chat decode lost the key: %+v", ir2)
 	}
