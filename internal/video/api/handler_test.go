@@ -384,3 +384,22 @@ func TestHandlerDownloadVerifiesRecordedChecksum(t *testing.T) {
 		t.Fatalf("tampered download error code=%v, want asset_integrity_error", body["code"])
 	}
 }
+
+// TestHandlerEmptyBearerTokenRejectsEverything pins the fail-closed
+// contract: when RequireAuth is true but no bearer token is configured,
+// every request must be rejected. The comparison itself would satisfy an
+// empty presented token against the empty configured token
+// (ConstantTimeCompare("","")==1); rejection must not depend on header
+// trimming side effects, so authorized() now refuses the empty-token
+// configuration explicitly.
+func TestHandlerEmptyBearerTokenRejectsEverything(t *testing.T) {
+	h := newTestHandler(true)
+	h.BearerToken = ""
+
+	for _, auth := range []string{"", "Bearer ", "Bearer", "Bearer anything", "Token "} {
+		w := performJSON(h, http.MethodGet, "/v1/video/providers", nil, auth)
+		if w.Code != http.StatusUnauthorized {
+			t.Errorf("authorization %q: status=%d, want %d", auth, w.Code, http.StatusUnauthorized)
+		}
+	}
+}
