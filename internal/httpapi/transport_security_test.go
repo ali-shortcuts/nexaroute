@@ -45,7 +45,7 @@ func TestAdminCSRFTokenCookieAndMutationGate(t *testing.T) {
 		t.Fatalf("expected one csrf cookie, got %d", len(cookies))
 	}
 	cookie := cookies[0]
-	if cookie.Name != adminCSRFCookie || !cookie.HttpOnly || cookie.SameSite != http.SameSiteStrictMode || cookie.Secure {
+	if cookie.Name != adminCSRFCookie || !cookie.HttpOnly || cookie.SameSite != http.SameSiteStrictMode || !cookie.Secure {
 		t.Fatalf("unexpected HTTP csrf cookie properties: %+v", cookie)
 	}
 
@@ -78,9 +78,11 @@ func TestAdminCSRFTokenCookieSecureOnTLS(t *testing.T) {
 	}
 }
 
-// A client-supplied forwarding header must not be able to make a plain-HTTP
-// response look secure. Secure is derived from the gateway's own TLS state.
-func TestAdminCookiesIgnoreSpoofedForwardedProto(t *testing.T) {
+// Admin cookies always carry Secure, whatever the transport or any header
+// claims. A client-supplied forwarding header still cannot upgrade the
+// scheme decision: over plain HTTP an https Origin must not satisfy the
+// same-origin check.
+func TestAdminCookiesAlwaysSecureAndForwardedProtoCannotUpgradeScheme(t *testing.T) {
 	cfg := config.Default()
 	cfg.Admin.APIKey = "test-admin-key"
 	s := testGateway(t, cfg)
@@ -94,10 +96,9 @@ func TestAdminCookiesIgnoreSpoofedForwardedProto(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("csrf bootstrap status=%d body=%s", rr.Code, rr.Body.String())
 	}
-	for _, cookie := range rr.Result().Cookies() {
-		if cookie.Secure {
-			t.Fatalf("spoofed X-Forwarded-Proto made cookie %q Secure over plain HTTP", cookie.Name)
-		}
+	cookies := rr.Result().Cookies()
+	if len(cookies) != 1 || !cookies[0].Secure {
+		t.Fatalf("csrf cookie over plain HTTP is not Secure: %+v", cookies)
 	}
 
 	request := httptest.NewRequest(http.MethodGet, "http://gateway/admin/", nil)
@@ -107,9 +108,22 @@ func TestAdminCookiesIgnoreSpoofedForwardedProto(t *testing.T) {
 	setOIDCFlowCookie(response, request, "binding-token")
 	clearAdminSessionCookie(response, request)
 	for _, cookie := range response.Result().Cookies() {
-		if cookie.Secure {
-			t.Fatalf("spoofed X-Forwarded-Proto made cookie %q Secure over plain HTTP", cookie.Name)
+		if !cookie.Secure {
+			t.Fatalf("cookie %q over plain HTTP is not Secure", cookie.Name)
 		}
+	}
+
+	drain := httptest.NewRequest(http.MethodPost, "http://gateway/admin/api/drain", strings.NewReader(`{"draining":true}`))
+	drain.RemoteAddr = "127.0.0.1:32100"
+	drain.Header.Set("x-admin-key", "test-admin-key")
+	drain.Header.Set("X-Forwarded-Proto", "https")
+	drain.Header.Set("Origin", "https://gateway")
+	drain.Header.Set("X-NexaRoute-CSRF", cookies[0].Value)
+	drain.AddCookie(cookies[0])
+	drainRecorder := httptest.NewRecorder()
+	s.Handler().ServeHTTP(drainRecorder, drain)
+	if drainRecorder.Code != http.StatusForbidden {
+		t.Fatalf("spoofed X-Forwarded-Proto upgraded the scheme decision: drain status=%d body=%s", drainRecorder.Code, drainRecorder.Body.String())
 	}
 }
 
