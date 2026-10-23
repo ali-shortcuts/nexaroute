@@ -66,6 +66,37 @@ func TestValidateGoldenCorpus(t *testing.T) {
 		},
 		// Budget alerts.
 		"budget-webhook-bad": func(c *Config) { c.BudgetAlerts.WebhookURL = "ftp://example.invalid/hook" },
+		// Decision plane, evaluation, and cross-references.
+		"decision-mode-bogus":         func(c *Config) { c.Decision.Mode = "warp" },
+		"decision-shadow-while-off":   func(c *Config) { c.Decision.Shadow = true },
+		"decision-local-ext-provider": func(c *Config) { c.Decision.Mode = "local"; c.Decision.Provider = "ext-9" },
+		"decision-timeout-low":        func(c *Config) { c.Decision.TimeoutMS = 0 },
+		"decision-chain-no-hybrid":    func(c *Config) { c.Decision.Chain = "ch1" },
+		"decision-provider-bad-type": func(c *Config) {
+			c.Decision.Mode = "assisted"
+			c.DecisionProviders = []DecisionProviderConfig{{ID: "dp1", Type: "openai"}}
+		},
+		"decision-chain-unknown-step": func(c *Config) {
+			c.Decision.Mode = "hybrid"
+			c.DecisionChains = []DecisionChainConfig{{ID: "ch1", Steps: []DecisionChainStep{{Provider: "ghost"}}}}
+		},
+		"decision-policy-unknown": func(c *Config) { c.Decision.Mode = "local"; c.Decision.Policy = "ghost-policy" },
+		"autopilot-bad-candidate": func(c *Config) {
+			c.Autopilot.Enabled = true
+			c.Autopilot.CandidatePolicyID = "ghost"
+		},
+		"autopilot-canary-pct": func(c *Config) {
+			c.Autopilot.Enabled = true
+			c.Autopilot.CanaryPercent = 101
+		},
+		"evaluation-live-no-plane": func(c *Config) { c.Evaluation.LiveEnabled = true },
+		"virtual-endpoint-unknown-model": func(c *Config) {
+			c.VirtualEndpoints = []VirtualEndpointConfig{{ID: "ve1", PublicModel: "ghost-model", RouteProfile: "ghost"}}
+		},
+		"prec-decision-over-xref": func(c *Config) {
+			c.Decision.Mode = "warp"
+			c.VirtualEndpoints = []VirtualEndpointConfig{{ID: "ve1", PublicModel: "ghost-model", RouteProfile: "ghost"}}
+		},
 		// Cross-section precedence: the earlier section's error must win.
 		"prec-admin-over-listen": func(c *Config) { c.Admin.SessionTTLSeconds = 1; c.Listen = "" },
 		"prec-listen-over-routing": func(c *Config) {
