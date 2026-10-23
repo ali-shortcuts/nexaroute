@@ -1,0 +1,44 @@
+admin-audit-max-events	admin.audit_max_events must be between 100 and 1000000
+admin-audit-retention	admin.audit_retention_days must be between 1 and 3650
+admin-idle-exceeds-ttl	admin.idle_timeout_seconds must be between 60 and admin.session_ttl_seconds
+admin-session-ttl-low	admin.session_ttl_seconds must be between 300 and 2592000
+admin-store-backend-bogus	admin.security_store_backend must be bbolt, redis or postgres
+admin-store-path-newline	admin.security_store_path is invalid or too long
+admin-store-url-missing	admin.security_store_url is required for the redis/postgres security store backend
+admin-store-url-on-bbolt	admin.security_store_url must be empty for the bbolt security store backend
+budget-webhook-bad	budget_alerts.webhook_url must use http or https
+cache-body-too-small	cache.max_body_bytes must be between 1024 and 67108864
+cache-max-entries	cache.max_entries must be between 1 and 65536
+cache-semantic-bad-form	cache.semantic.embedding_deployment "noslash" must be in provider/model form
+cache-semantic-no-dep	cache.semantic.embedding_deployment is required when the semantic cache is enabled
+cache-ttl	cache.ttl_seconds must be between 1 and 2592000
+controlplane-backend	control_plane.backend must be file, memory, postgres, or redis
+controlplane-sync-alone	control_plane.breaker_sync requires control_plane.enabled
+guardrails-body	guardrails.max_body_bytes must be between 1024 and 67108864
+guardrails-mode	guardrails.mode must be off, audit, or block
+listen-bad-port	listen port "99999" must be numeric between 1 and 65535
+listen-empty	listen is required
+listen-no-port	listen must be host:port: address localhost: missing port in address
+logging-access-mode	logging.access_mode must be off, errors, sampled, or all
+logging-max-backups	logging.max_backups must be between 0 and 20
+logging-max-size	logging.max_size_mb must be between 1 and 1024
+logging-sample	logging.success_sample_every must be between 1 and 1000000
+mcp-enabled-no-servers	mcp.enabled requires at least one server in mcp.servers
+mcp-rpm-negative	mcp.rpm must be between 0 and 1000000
+prec-admin-over-budget	admin.audit_retention_days must be between 1 and 3650
+prec-admin-over-listen	admin.session_ttl_seconds must be between 300 and 2592000
+prec-cache-over-mcp	cache.ttl_seconds must be between 1 and 2592000
+prec-guardrails-over-telemetry	guardrails.mode must be off, audit, or block
+prec-listen-over-routing	listen is required
+prec-mcp-over-guardrails	mcp.enabled requires at least one server in mcp.servers
+prec-routing-over-mcp	routing.strategy must be ready_mesh, ready_queue, cost_aware, adaptive_round_robin, priority, round_robin, or least_latency
+prec-valid-plus-late-defect	budget_alerts.webhook_url must use http or https
+routing-failure-thresh	routing.failure_threshold must be between 1 and 1000
+routing-hedging-low	routing.hedging_delay_ms must be between 50 and 600000
+routing-inflight	routing.max_inflight_requests must be between 1 and 10000
+routing-max-attempts	routing.max_attempts must be between 1 and 64
+routing-strategy	routing.strategy must be ready_mesh, ready_queue, cost_aware, adaptive_round_robin, priority, round_robin, or least_latency
+routing-timeout-low	routing.request_timeout_ms must be between 100 and 1800000
+telemetry-otlp-env	telemetry.otlp_endpoint_env must be a valid environment variable name
+telemetry-service-long	telemetry.service_name must be at most 128 characters
+valid-default	<nil>
