@@ -42,16 +42,19 @@ func TestCoveragePrimaryCodecs(t *testing.T) {
 	}
 
 	seed := int64(7)
-	decodedOpenAI := DecodeOpenAIChatRequest(core.OpenAIRequest{
+	decodedOpenAI, err := DecodeOpenAIChatRequest(core.OpenAIRequest{
 		MaxTokens: 16, MaxCompletionTokens: 32, Stream: true, Temperature: &temperature, TopP: &topP, Stop: []string{"END", "STOP"}, Seed: &seed, FrequencyPenalty: &temperature, PresencePenalty: &topP,
 		Messages: []core.OpenAIMessage{
 			{Role: "system", Content: []any{map[string]any{"type": "text", "text": "sys"}, map[string]any{"type": "input_image", "image_url": "data:image/jpeg;base64,BBBB"}}},
-			{Role: "user", Content: []any{map[string]any{"type": "input_text", "text": "hello"}, map[string]any{"type": "image_url", "image_url": map[string]any{"url": "https://example.test/a.png"}}, map[string]any{"type": "custom", "x": "preserved"}}},
+			{Role: "user", Content: []any{map[string]any{"type": "input_text", "text": "hello"}, map[string]any{"type": "image_url", "image_url": map[string]any{"url": "https://example.test/a.png"}}}},
 			{Role: "assistant", Content: "answer", ReasoningContent: "think", ToolCalls: []core.OpenAIToolCall{{ID: "call_2", Function: core.OpenAIFunctionCall{Name: "WriteFile", Arguments: `{"path":"x"}`}}}},
 			{Role: "tool", ToolCallID: "call_2", Content: []any{map[string]any{"type": "text", "text": "tool output"}}},
 		},
 		Tools: []core.OpenAITool{{Type: "function", Function: core.OpenAIFunction{Name: "WriteFile", Parameters: map[string]any{"type": "object"}}}}, ToolChoice: map[string]any{"type": "function", "function": map[string]any{"name": "WriteFile"}}, ParallelToolCalls: &parallel, ReasoningEffort: "low",
 	}, "client-openai")
+	if err != nil {
+		t.Fatalf("DecodeOpenAIChatRequest err=%v", err)
+	}
 	// System length is 1, not 2: the fixture's system input_image is
 	// dropped at decode by design — system content is text-only in every
 	// request encoder here, so an unencodable system image must not enter
@@ -212,8 +215,8 @@ func TestCoverageAdditionalCanonicalBranches(t *testing.T) {
 	if got := openAIContentToText(map[string]any{"x": "y"}); !strings.Contains(got, `"x":"y"`) {
 		t.Fatalf("object content text=%q", got)
 	}
-	if got := openAIContentToParts([]any{"skip", map[string]any{"type": "unknown", "x": 1}}, true); len(got) != 0 {
-		t.Fatalf("system unknown parts=%+v", got)
+	if got, err := openAIContentToParts([]any{"skip", map[string]any{"type": "unknown", "x": 1}}, true); err != nil || len(got) != 0 {
+		t.Fatalf("system unknown parts=%+v err=%v", got, err)
 	}
 
 	for _, mode := range []string{"auto", "none", "required"} {

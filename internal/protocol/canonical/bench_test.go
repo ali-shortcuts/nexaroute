@@ -45,7 +45,10 @@ func BenchmarkOpenAIChatRoundTrip(b *testing.B) {
 		if err := json.Unmarshal(openAIWire, &in); err != nil {
 			b.Fatal(err)
 		}
-		ir := DecodeOpenAIChatRequest(in, "m")
+		ir, err := DecodeOpenAIChatRequest(in, "m")
+		if err != nil {
+			b.Fatal(err)
+		}
 		out, err := EncodeOpenAIChatRequest(ir, "m", true)
 		if err != nil {
 			b.Fatal(err)

@@ -504,6 +504,13 @@ func TestProtocolMatrixRejectsUnsupportedCrossProtocolContent(t *testing.T) {
 			name: "openai_audio_part_to_anthropic", ingress: "openai", upstream: "anthropic_compatible", path: "/v1/chat/completions",
 			body: `{"model":"client-model","messages":[{"role":"user","content":[{"type":"input_audio","input_audio":{"data":"AAAA","format":"wav"}}]}]}`,
 		},
+		{
+			// The canonical decode path (Gemini and the other translated
+			// upstreams) must fail closed on the same part instead of
+			// forwarding it as a text blob of raw JSON.
+			name: "openai_audio_part_to_gemini", ingress: "openai", upstream: "gemini", path: "/v1/chat/completions",
+			body: `{"model":"client-model","messages":[{"role":"user","content":[{"type":"input_audio","input_audio":{"data":"AAAA","format":"wav"}}]}]}`,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

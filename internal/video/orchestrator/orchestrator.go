@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log"
 	"math"
 	"sort"
 	"strconv"
@@ -806,7 +807,13 @@ func (o *Orchestrator) RunJob(ctx context.Context, queued video.VideoJob) error 
 			return err
 		}
 		if o.Ledger != nil {
-			_ = o.Ledger.SettleEstimate(j.JobID, j.EstimatedCostUSD)
+			if err := o.Ledger.SettleEstimate(j.JobID, j.EstimatedCostUSD); err != nil {
+				// The job is already terminal and persisted; failing
+				// the cancel over a settle error would be wrong, but
+				// the failure must never be silent — with the durable
+				// ledger it can strand the reservation.
+				log.Printf("video orchestrator: settle estimate for cancelled job %s failed: %v", j.JobID, err)
+			}
 		}
 		return nil
 	}
@@ -1078,7 +1085,13 @@ func (o *Orchestrator) fail(ctx context.Context, j video.VideoJob, msg string) e
 		return fmt.Errorf("persist failed video job: %w", err)
 	}
 	if o.Ledger != nil {
-		_ = o.Ledger.SettleEstimate(j.JobID, j.EstimatedCostUSD)
+		if err := o.Ledger.SettleEstimate(j.JobID, j.EstimatedCostUSD); err != nil {
+			// The job is already terminal and persisted; the failure
+			// must not mask the job's own error, but it must never be
+			// silent — with the durable ledger it can strand the
+			// reservation.
+			log.Printf("video orchestrator: settle estimate for failed job %s failed: %v", j.JobID, err)
+		}
 	}
 	return errors.New(msg)
 }
@@ -1117,8 +1130,11 @@ func (o *Orchestrator) Cancel(ctx context.Context, id string) error {
 	if o.Ledger != nil {
 		if j.ProviderJobID == "" {
 			o.Ledger.ReleaseForJob(j.JobID)
-		} else {
-			_ = o.Ledger.SettleEstimate(j.JobID, j.EstimatedCostUSD)
+		} else if err := o.Ledger.SettleEstimate(j.JobID, j.EstimatedCostUSD); err != nil {
+			// The job is already terminal and persisted; the settle
+			// failure must never be silent — with the durable ledger
+			// it can strand the reservation.
+			log.Printf("video orchestrator: settle estimate for job %s failed: %v", j.JobID, err)
 		}
 	}
 	return nil
