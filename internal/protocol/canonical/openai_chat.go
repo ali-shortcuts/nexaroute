@@ -145,6 +145,18 @@ func openAIContentToText(v any) string {
 	return ""
 }
 
+// foldBlankSystem drops a whitespace-only system prompt: every system
+// encoder gates on the trimmed joined text, so a blank system part
+// admitted at decode would vanish on encode and break decode/encode
+// round-trip stability (the Responses-instructions form of this was
+// FuzzRequestRoundTrip crasher ed14165b405e353c).
+func foldBlankSystem(parts []Part, system bool) []Part {
+	if system && strings.TrimSpace(partsToText(parts)) == "" {
+		return nil
+	}
+	return parts
+}
+
 func openAIContentToParts(v any, system bool) ([]Part, error) {
 	switch c := v.(type) {
 	case nil:
@@ -153,7 +165,7 @@ func openAIContentToParts(v any, system bool) ([]Part, error) {
 		if c == "" {
 			return nil, nil
 		}
-		return []Part{{Type: PartText, Text: c}}, nil
+		return foldBlankSystem([]Part{{Type: PartText, Text: c}}, system), nil
 	case []any:
 		parts := make([]Part, 0, len(c))
 		for _, raw := range c {
@@ -196,7 +208,7 @@ func openAIContentToParts(v any, system bool) ([]Part, error) {
 				return nil, fmt.Errorf("unsupported OpenAI content part %q: no canonical representation", typ)
 			}
 		}
-		return parts, nil
+		return foldBlankSystem(parts, system), nil
 	default:
 		if b, err := json.Marshal(v); err == nil {
 			return []Part{{Type: PartText, Text: string(b)}}, nil

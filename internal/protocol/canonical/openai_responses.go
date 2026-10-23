@@ -69,7 +69,12 @@ func DecodeResponsesRequest(in ResponsesRequest) (Request, error) {
 	}
 	if len(in.Instructions) > 0 && string(in.Instructions) != "null" {
 		var text string
-		if err := json.Unmarshal(in.Instructions, &text); err == nil && text != "" {
+		// A whitespace-only instructions string is no system prompt:
+		// every system encoder gates on the trimmed joined text, so
+		// admitting it would lose it on encode and break
+		// decode/encode round-trip stability (FuzzRequestRoundTrip
+		// crasher ed14165b405e353c, extended fuzz 2026-10-23).
+		if err := json.Unmarshal(in.Instructions, &text); err == nil && strings.TrimSpace(text) != "" {
 			out.System = append(out.System, Part{Type: PartText, Text: text})
 		}
 	}
