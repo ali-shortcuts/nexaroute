@@ -119,7 +119,7 @@ every process on the same database, with exactly-once settlement (per-job
 row, row-locked transitions; see the section-B change). Assets remain on
 per-instance local storage in both backends, so multi-node video as a
 product topology is not declared; that positioning decision is recorded in
-ADR 0004 (Proposed). Restart recovery
+ADR 0004 (Accepted — Option B). Restart recovery
 re-enqueues queued jobs and resumes known provider job IDs; ambiguous
 submissions without a provider job ID move to `needs_manual_action` to avoid
 an unsafe duplicate billable submission. Output assets are written through the
@@ -148,7 +148,7 @@ No commercial external video provider adapter is bundled. The opt-in local
 ComfyUI adapter supports text-to-video through a user-supplied API-format
 workflow; its HTTP contract is covered by fixtures, but actual model inference
 on a real ComfyUI installation is not part of CI. The fake provider writes a
-text placeholder, not a playable video. The asset-size cap is enforced with streaming-memory protection: the ComfyUI adapter reads downloads through `io.LimitReader` bounded at `maxOutputBytes+1`, so an oversized response cannot OOM the gateway before the cap applies. Multi-shot jobs persist per-shot checkpoints and automatically compose generated shot assets into a final silent MP4; Gateway-side Piper narration and estimated same-language SRT captions are supported for configured multi-shot jobs. With the default file backend the video jobs, local JSON job store, queue and cost ledger remain single-process; with `video.job_store_backend=postgres` the job store and cost ledger are durable and shared with exactly-once settlement, while assets stay per-instance local — so end-to-end multi-node video is still not a declared topology (ADR 0004, Proposed): provider-native idempotent recovery after an ambiguous submission, and verified production workloads for ten-minute episodes remain unimplemented or UNVERIFIED. Provider-generated
+text placeholder, not a playable video. The asset-size cap is enforced with streaming-memory protection: the ComfyUI adapter reads downloads through `io.LimitReader` bounded at `maxOutputBytes+1`, so an oversized response cannot OOM the gateway before the cap applies. Multi-shot jobs persist per-shot checkpoints and automatically compose generated shot assets into a final silent MP4; Gateway-side Piper narration and estimated same-language SRT captions are supported for configured multi-shot jobs. With the default file backend the video jobs, local JSON job store, queue and cost ledger remain single-process; with `video.job_store_backend=postgres` the job store and cost ledger are durable and shared with exactly-once settlement, while assets stay per-instance local — so end-to-end multi-node video is still not a declared topology (ADR 0004, Accepted — Option B): provider-native idempotent recovery after an ambiguous submission, and verified production workloads for ten-minute episodes remain unimplemented or UNVERIFIED. Provider-generated
 dialogue/sound effects/music, translated or word-aligned subtitles, and distributed
 asset/job storage remain unimplemented; the local CLI also supports existing
 narration/music mixing and SRT subtitle burning.
@@ -166,11 +166,13 @@ actuals only when every shot reports a valid actual. Completion is
 idempotent by job ID and terminal state (replayed completions and restart
 recovery never double-settle), and the fake provider reports a deterministic
 actual when its `ActualCostUSD` hook is set (nil by default). Live
-external-provider billing behavior stays UNVERIFIED, and the in-process
-ledger remains non-durable/non-distributed. The Gateway now persists per-shot checkpoints and
+external-provider billing behavior stays UNVERIFIED. With the default file
+backend the in-process ledger remains non-durable/non-distributed; with
+`video.job_store_backend=postgres` the ledger is the durable, shared
+PostgreSQL ledger described above. The Gateway now persists per-shot checkpoints and
 automatically composes generated shot assets into a final silent MP4; the local
 `videogen compose` command can additionally mix existing narration/music and
-burn in SRT subtitles. Video Studio now accepts multi-shot plans, shows progress, and downloads persisted outputs. Manual audio/music/subtitle composition remains CLI-only, and the current in-process ledger is not durable or distributed.
+burn in SRT subtitles. Video Studio now accepts multi-shot plans, shows progress, and downloads persisted outputs. Manual audio/music/subtitle composition remains CLI-only, and — with the default file backend — the in-process ledger is not durable or distributed (the PostgreSQL-backend ledger is both).
 
 ## State and HA
 
@@ -183,8 +185,10 @@ runtime-metadata startup snapshot. Config snapshots are never part of that
 store: config is loaded from the local config file and admin saves atomically
 rewrite that same local file, so config edits do not propagate across replicas.
 [ADR 0001](adr/0001-shared-config-snapshot.md) records the shared-config
-options, secret-custody constraints and the owner decisions required before
-any implementation; none of those options is implemented or enabled.
+options and secret-custody constraints; it was accepted on 2026-10-22 as
+Option 1 — local configuration stays authoritative indefinitely — so none
+of the propagation options is implemented or enabled, by decision rather
+than by omission.
 Both database backends fail closed when unavailable; Redis
 uses atomic revision-aware Lua scripts and has real-service integration
 coverage. Adapter tests do not guarantee deployment-level persistence,
@@ -294,9 +298,16 @@ Implemented but bounded by design:
 The evaluation plane is an admin-only observation surface and is
 explicitly bounded:
 
-- evaluation is **offline replay**: the admin endpoint accepts recorded
-  artifacts and never prompts a model, calls an upstream or spends provider
-  quota. Live, in-band quality measurement is not implemented;
+- evaluation has two modes. The default is **offline replay**: the admin
+  endpoint scores recorded artifacts and never prompts a model, calls an
+  upstream or spends provider quota. **Live evaluation is implemented**
+  as an opt-in: with `evaluation.live_enabled` set (which requires
+  `evaluation.enabled`; the combination is rejected fail-closed at config
+  validation), an admin run sends the suite prompts to a physically
+  selected deployment through an upstream adapter and scores the real
+  responses. Live runs spend real provider quota, and live behavior
+  against real external providers stays UNVERIFIED — tests and CI make no
+  paid calls;
 - no judge implementation ships. Deterministic evaluators decide every case; the
   judge path exists and is proven never to override a deterministic verdict, but
   the HTTP surface cannot enable it;
@@ -398,10 +409,14 @@ non-critical nodes no longer abort unrelated sections.
 
 - Evidence: `go test ./...` plus `node --test internal/httpapi/web/dom_isolation.test.mjs`.
 
-### Package coverage gaps and targets — `open`
+### Package coverage gaps and targets — target met
 
-Coverage measured **85.1% repository-wide** on current `main`
-(audit workflow coverage job, 2026-10-22), meeting the 85% policy target.
+Coverage measured **85.1% repository-wide** on `main` as of 2026-10-22
+(audit workflow coverage job), meeting the 85% policy target; the
+measurement is re-taken on every audit-workflow run, and the latest
+figure is recorded in the final addendum of
+`docs/reports/QUALITY_AUDIT_FINAL.md`. Per-package figures below are
+the 2026-10-22 measurements.
 The earlier 84.2% measurement (2026-10-15) is superseded; the 2026-10-22
 push also fixed the ruler — the audit coverage job now installs ffmpeg, so
 the render suite (which skips by design without the media toolchain) is

@@ -74,8 +74,11 @@ Implement `internal/breakersync` and wire it in `cmd/gateway`:
   goroutine starts, no store traffic exists, and the deployment report
   keeps reporting per-instance breaker state.
 - Enabling sync makes replicas converge on provider incidents within
-  one interval plus propagation, at the cost of a small periodic
-  read/write per replica against the control-plane store.
+  two intervals plus store latency (up to one interval for a change to
+  be published, up to one more for a peer to observe it), at the cost
+  of a small periodic read/write per replica against the control-plane
+  store. (Wording corrected 2026-10-23: the original "one interval
+  plus propagation" understated the tick-driven worst case.)
 - A shared-store outage degrades the fleet to exactly today's
   per-instance behavior; it can never open circuits.
 

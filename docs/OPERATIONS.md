@@ -326,8 +326,10 @@ stop the gateway, restore the validated file backup to the configured state
 path with mode `0600`, set `control_plane.backend` to `file`, run
 `config validate`, and restart. A partial temp file is not a committed state;
 never delete the last valid backup until the replacement has been verified. The
-Redis-backed admin security-store adapter and cross-replica breaker
-synchronization remain outside this control-plane implementation.
+Redis-backed admin security-store adapter is a separate subsystem with its
+own configuration, and cross-replica breaker synchronization is an opt-in
+layer that runs over this control-plane store (`control_plane.breaker_sync`,
+ADR 0003); neither changes the store's own state format.
 
 ## 5. Admin surface, events, and logs
 

@@ -22,6 +22,26 @@ endpoints. Fixture tests and the exact invocations are documented in
 not external verification; the OIDC browser login procedure below remains
 manual.
 
+## Status register — every external dependency
+
+One row per external dependency the gateway integrates with. A dependency
+with no executed real-system evidence is **UNVERIFIED**, whether or not a
+runbook procedure exists for it.
+
+| Dependency | Real-system status | Evidence / procedure |
+|---|---|---|
+| OIDC identity provider (browser login) | UNVERIFIED — discovery/JWKS checks PASS against public issuers; full login NOT_RUN | §1 below; executed evidence 2026-10-22 |
+| HashiCorp Vault (KV helper) | UNVERIFIED — real round-trip BLOCKED (no Vault available) | §2 below |
+| HashiCorp Vault Transit envelope mode | NOT IMPLEMENTED — the helper loads a raw 32-byte master key into the gateway process; key material is never claimed to stay inside Vault | §2 below |
+| OS keyring (secret-tool) | UNVERIFIED — real round-trip BLOCKED (no Secret Service in the verification environment) | §3 below |
+| LLM providers (OpenAI/Anthropic/Gemini-compatible upstreams) | UNVERIFIED — NOT_RUN; zero paid calls by policy | Executed evidence §"LLM providers" |
+| AWS Bedrock | UNVERIFIED — NOT_RUN (no AWS tenant/credentials) | Adapter covered by fixture/contract tests only |
+| Google Vertex AI | UNVERIFIED — NOT_RUN (no GCP tenant/credentials) | Adapter covered by fixture/contract tests only |
+| Azure OpenAI | UNVERIFIED — NOT_RUN (no Azure tenant/credentials) | Adapter covered by fixture/contract tests only |
+| OpenTelemetry collector (OTLP ingestion) | UNVERIFIED — NOT_RUN (no real collector) | Exporter covered by local tests only |
+| Kubernetes installation (Helm/manifests) | UNVERIFIED — NOT_RUN (no live cluster) | Helm lint/render checks only |
+| ComfyUI inference | UNVERIFIED — HTTP contract fixture-tested; real model inference not part of CI | See KNOWN_GAPS (video section) |
+
 ## 1. Real OIDC identity provider
 
 Local state: full Authorization Code + PKCE flow against an

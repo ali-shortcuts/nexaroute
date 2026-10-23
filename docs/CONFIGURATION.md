@@ -96,6 +96,41 @@ optimistic-revision `ErrConflict` instead of silently losing updates.
 like the store itself. On platforms without `flock` support, file-backend
 writes fail closed with an explicit error while reads stay available.
 
+### Cross-replica breaker synchronization (opt-in)
+
+With the control plane enabled, breaker/cooldown markers can optionally be
+shared across replicas (ADR 0003). Three keys under `control_plane` control
+it:
+
+```json
+{
+  "control_plane": {
+    "breaker_sync": false,
+    "breaker_sync_interval_seconds": 10,
+    "breaker_sync_replica_id": ""
+  }
+}
+```
+
+- `breaker_sync` (bool, default `false`) — the opt-in. Setting it without
+  `control_plane.enabled` is a validation error, so the request is never
+  silently ignored. With it unset, no sync goroutine starts and no store
+  traffic exists; breaker state stays per-instance.
+- `breaker_sync_interval_seconds` (int, default `10`; `0` selects the
+  default; validated to 5..3600 when set) — the publish/consume cadence.
+  Replicas converge on a provider incident within two intervals plus store
+  latency.
+- `breaker_sync_replica_id` (string, optional) — this replica's identity in
+  the shared marker document; defaults to a generated `hostname-pid`
+  identity at startup.
+
+Only markers are shared — active cooldowns and retirements — never failure
+counters or probe state. A remote `retired` marker is applied locally only
+as a bounded cooldown (at most 30 minutes, re-extended while the origin
+keeps publishing); it never retires a local deployment. A store outage
+never clears local breaker state: sync pauses and resumes on heal, and the
+fleet degrades to ordinary per-instance behavior.
+
 ## Optional OTLP span export
 
 Span export is disabled by default. When `telemetry.otlp_endpoint_env`
@@ -969,8 +1004,12 @@ multi-process deployments — job metadata only, not asset storage). Selecting
 or `env:VARIABLE_NAME` to read it from the environment (recommended, so the
 credential stays out of durable config). A configured PostgreSQL backend that
 cannot be reached **fails closed at startup**: the gateway never silently
-falls back to the file store. The cost ledger stays process-local; only job
-records are shared.
+falls back to the file store. The cost ledger follows the job-store
+backend: with `postgres` it is a durable PostgreSQL ledger in the same
+database — shared by every process on that database, with exactly-once
+settlement; with `file` it stays process-local and in-memory. Only job
+records and ledger entries are shared; assets remain per-instance local
+storage in both backends.
 
 ## MCP gateway (`mcp`, M6-1)
 

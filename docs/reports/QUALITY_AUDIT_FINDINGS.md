@@ -13,6 +13,13 @@ history.
 
 ## Summary counts
 
+> **Checkpoint-era numbers (2026-10-21).** This table records the state
+> at the #593 audit checkpoint. It is superseded by the 2026-10-22
+> addendum at the end of this file (final: golangci-lint 0, staticcheck
+> 0, deadcode 0, gosec baseline 87, coverage 85.1%) and by the
+> 2026-10-23 final-completion addendum. Individual findings below carry
+> inline supersession notes where later work changed their status.
+
 | Class | Count | Status |
 | --- | --- | --- |
 | Confirmed code/test defects fixed in this checkpoint | **4** | Fixed with tests or verified behavior preservation |
@@ -61,6 +68,12 @@ admin session/CSRF/OIDC cookies, and same-origin behavior.
 
 **Residual risk.** A proxy that forwards from an address outside the configured
 list behaves as before (cookies not Secure). This is explicit and fail-closed.
+**Superseded 2026-10-23 (PR #635, owner order):** the residual behavior
+above no longer exists. All six admin cookies now carry `Secure: true`
+unconditionally; the browser admin dashboard therefore requires HTTPS
+(direct TLS or a TLS-terminating trusted proxy) or a loopback
+secure-context origin to hold a session. `tls.trusted_proxy_cidrs` now
+governs only the same-origin scheme comparison. See `docs/SECURITY.md`.
 The list is configuration, so a compromised config remains inside the trust
 boundary.
 
@@ -168,6 +181,10 @@ Cleared in this checkpoint:
   keys, and environment-variable *names*; annotated as non-credentials.
 - **G124 (6)**: cookie `Secure` is now computed by `requestIsSecure`; gosec
   cannot follow the helper. Annotated with the trusted-proxy invariant.
+  **Superseded 2026-10-23 (PR #635):** all six admin cookie sites now set
+  `Secure: true` unconditionally; `requestIsSecure` governs only the
+  same-origin scheme comparison. The CodeQL `go/cookie-secure-not-set`
+  alerts (22–27) closed as *fixed* by that change.
 
 ## Architecture debt and proposals (not implemented here)
 
@@ -189,6 +206,15 @@ tests that assert the *first* error for a config with several invalid fields.
 **Status.** OPEN. Deferred because moving 1,300 lines without dedicated
 differential tests is a large behavior-preserving refactor, and the task forbids
 risky architecture changes without owner approval.
+**Resolved 2026-10-23 (PR #636):** the split was executed exactly as
+proposed — `Validate` is now a thin orchestrator over per-section
+validators (`validateAdminPlane`, `validateRuntimeRouting`,
+`validateAccessPlanes`, `validatePlatformPlanes`, `validateProviders`,
+`validateEvaluation`, `validateDecisionCore`,
+`validateDecisionProvidersAndChains`, `validateCrossReferences`), with
+equivalence proven by the golden-corpus differential test
+`internal/config/validate_golden_test.go` (corpus generated from the
+pre-refactor code; error strings and precedence unchanged).
 
 ### ARCH-02: virtual-key create/rotate/revoke duplication
 
@@ -215,7 +241,8 @@ Option (a) adds a hard dependency to request routing and needs failure-mode
 design; option (b) is current behavior.
 
 **Status.** BLOCKED on owner decision. No distributed state was fabricated or
-simulated.
+simulated. **Superseded — see the 2026-10-22 addendum (ARCH-03):
+implemented as opt-in breaker sync in PR #626 under ADR 0003.**
 
 ### ARCH-04: durable video job queue
 
@@ -227,12 +254,18 @@ multi-replica deployments cannot share progress.
 
 **Status.** BLOCKED on product decision (durability/HA expectations). The
 current behavior is documented, not silently claimed as durable.
+**Superseded — see the 2026-10-22 addendum (VID-LEDGER-01) and ADR 0004
+(Accepted — Option B): durable PostgreSQL job store and cost ledger
+shipped; multi-node video remains undeclared by decision.**
 
 ### ARCH-05: control-plane/HA ownership
 
 The admin control plane is still single-writer for config mutations. Splitting
 config writes from routing would require an explicit consistency model and
 revision protocol. **Status: OPEN/owner decision.**
+**Resolved by ADR 0001 (Accepted 2026-10-22, Option 1):** local config
+stays authoritative; no split or shared-config implementation is
+planned.
 
 ### ARCH-06: browser and live-infrastructure acceptance
 
@@ -269,7 +302,11 @@ removed; deleting exported/package API needs an owner decision.
 2. Chromium + Python Playwright unavailable; browser acceptance is a real skip,
    not a pass.
 3. No live PostgreSQL, Redis, OIDC, KMS, or provider credentials; integration
-   paths are compile/unit-tested only.
+   paths are compile/unit-tested only. *(Checkpoint scope note: this was
+   written before the CI integration suites for breaker sync and the
+   video cost ledger landed — those paths now have real-PostgreSQL and
+   real-Redis CI evidence; the credential-gated live boundaries listed
+   elsewhere in this report are unchanged.)*
 4. No load/soak test, no multi-replica failure injection, no destructive
    restart test.
 5. Release signatures/assets were not re-verified against the published
@@ -366,18 +403,25 @@ installed it measures ~87%. Part of the "gap" was the ruler, not the code.
 
 ### Reserved decisions (recorded, NOT settled by this mission)
 
+> **Update 2026-10-22:** all four decisions below were settled the same
+> day under the owner's delegation (PRs #631–#633). The "(Proposed)"
+> statuses in this section are the state at the time of writing.
+
 - Shared configuration: ADR 0001 (Proposed) — recommends keeping local
-  config authoritative.
+  config authoritative. **Accepted 2026-10-22 — Option 1.**
 - Multi-node video positioning: ADR 0004 (Proposed) — jobs and ledger
   are now multi-process safe on PostgreSQL; assets are not, so
   declaring multi-node video before a shared asset backend exists is
-  not recommended.
+  not recommended. **Accepted 2026-10-22 — Option B (not a product
+  goal).**
 - Autopilot keep-and-test vs remove: ADR 0005 (Proposed) — live and
   e2e-tested, but five public `Controller` methods have 0.0% direct
-  package coverage.
+  package coverage. **Accepted 2026-10-22 — Option A (keep, with
+  direct tests added in PR #631).**
 - Lint ratchet gating: ADR 0006 (Proposed) — golangci/staticcheck/
   deadcode are at zero and could gate today; gosec needs a checked-in
   baseline and coverage needed its target met (now true) first.
+  **Accepted 2026-10-22 — Option A (ratchet gating, PR #632).**
 All four were merged as Proposed records in PR #628. The placeholders in
 force are named in each ADR; none was decided by default.
 
@@ -405,3 +449,108 @@ force are named in each ADR; none was decided by default.
 - deadcode: **0**.
 - coverage: **85.1%** repository-wide.
 - govulncheck: PASS on every mission PR (Security workflow).
+
+
+## Addendum — 2026-10-23 final completion pass (findings register)
+
+A fresh five-lane audit (breaker sync / docs / security / video
+durability / routing-runtime) was run against `8fcd2499` and every
+finding below was re-verified at source by the reviewing agent before
+any fix. Dispositions:
+
+**Documentation findings — all reconciled in the docs PR of
+2026-10-23:**
+- F-01: `docs/CONFIGURATION.md` never documented the `breaker_sync*`
+  keys — section added (defaults, 5..3600 s validation, bounded
+  remote-`retired` semantics).
+- F-02: convergence wording "within one sync interval" understated
+  the tick-driven worst case — corrected in ADR 0003 and
+  `docs/HA_STATE_INVENTORY.md` (≈2 intervals + store latency).
+- F-03: `docs/KNOWN_GAPS.md` claimed live evaluation was "not
+  implemented" — false since the evaluation plane shipped; rewritten
+  as the two-mode contract (offline default; live is opt-in via
+  `evaluation.live_enabled`, spends real quota, external behavior
+  UNVERIFIED).
+- F-04: `HA_STATE_INVENTORY.md` self-contradictions (denied the
+  Postgres job store exists; absolute per-instance claims vs. opt-in
+  breaker sync) — corrected; `check-ha-docs.sh` green.
+- F-06: `docs/CONFIGURATION.md` claimed the video cost ledger "stays
+  process-local" — false under the Postgres backend; corrected
+  (ledger follows the backend; assets remain per-instance).
+
+**Code findings — fixed test-first:**
+- F-05 (latent, unreachable): video `Handler.authorized` compared an
+  empty presented token equal to an empty configured token when
+  `RequireAuth=true` and no token was configured. Not exploitable
+  (header trimming + production wiring refuses empty tokens —
+  disclosed on the PR), hardened anyway in PR #638 (merged
+  `37fa779e`): explicit empty-token rejection, contract pinned.
+- F-07 (Low): video asset **download** handler never verified the
+  recorded SHA-256 (every other read path does) — same-size tampering
+  was served silently. Fixed in PR #639: hash-before-serve,
+  `asset_integrity_error` on mismatch. Red proven in CI (tests-only
+  head) and locally.
+- F-08 (Low, reporting): Postgres ledger aggregate/entry reads
+  silently degraded to 0/nil on store error. Fixed in PR #639:
+  failures are logged at the degradation point; contract (mutations
+  fail-closed, reporting degrades) pinned by test.
+- F-09 (Low): `PostgresStore.Update` decoded its terminal-guard
+  baseline from the JSONB payload without overlaying the authoritative
+  lease columns, so replaying the current record after a claim failed
+  with a spurious `ErrTerminalJob`. Fixed in PR #639 (full-column
+  select + `overlayColumns` before the guard; guard can only
+  over-block). Red/green proven in CI `integration-postgres`.
+- F-10 (Very Low): `PostgresStore.Create` mapped a failed
+  conflict-probe to `ErrIdempotencyConflict`. Fixed in PR #639:
+  the wrapped probe error is returned instead.
+- D1 (Medium): Responses built-in tools (and tool_choices naming
+  one) were silently dropped, even on Responses→Responses routes.
+  Fixed in PR #640: explicit unsupported-type error at decode. The
+  same work fixed `decodeOpenAIToolChoice` dropping the standard
+  Responses function tool_choice shape (`{"type":"function","name":…}`,
+  the shape this gateway's own encoder emits).
+- D2 (Medium): a non-stream Responses body with `status:"failed"`
+  decoded to a successful `end_turn` and was re-encoded to the client
+  as `completed`. Fixed in PR #640: decode error carrying the upstream
+  message/code, mirroring the streaming `response.failed` path.
+- D3 (Medium): audio content parts were silently dropped (Responses
+  ingress) or forwarded as raw-JSON text (Chat ingress → translated
+  upstreams). Fixed in PR #640: explicit unsupported-content errors in
+  both decoders; `DecodeOpenAIChatRequest` returns an error; the
+  hedging builder maps it to the bounded protocol-mapping error
+  (e2e-pinned: 502, zero upstream calls). System content keeps its
+  documented text-only contract.
+- S2: `previous_response_id` was parsed and silently discarded.
+  Fixed in PR #640: rejected at decode — the gateway does not forward
+  `store`, so chaining could never resolve.
+- S3: a Chat error envelope inside an HTTP 200 body decoded to an
+  empty success on the canonical path (legacy paths reject it via
+  `validateOpenAIResponseJSON`). Confirmed by probe; fixed in
+  PR #640 inside `DecodeOpenAIChatResponse`.
+- S4 (Low): three orchestrator terminal paths discarded
+  `SettleEstimate` errors. Fixed in PR #640: logged at each site
+  (job outcome unchanged).
+- S1 (accepted behavior, doc corrected): half-open recovery under
+  non-ready strategies admits concurrent trial requests (bounded by
+  admission control and the provider semaphore); there is no
+  single-flight trial lease. `docs/FAILURE_SEMANTICS.md` previously
+  implied a single trial request; wording corrected 2026-10-23.
+- F-11 (Medium-Low): a whitespace-only system prompt was not
+  round-trip stable — the decoders admitted blank system text, but
+  every system encoder gates emission on trimmed text, so decode →
+  encode → decode lost the system part (`FuzzRequestRoundTrip`
+  instability, found by the extended-fuzz job of audit run
+  `39941279599` on `1ba6ea32`; A/B-verified pre-existing on
+  `8fcd2499`, not a regression of PR #640). Fixed in PR #641:
+  decode-side rejection of whitespace-only system values (Responses
+  `instructions` must be non-blank; blank Chat system values fold
+  away), matching the rule "decode only what encoders can
+  represent". The crasher seed is committed to the fuzz corpus;
+  `blank_system_test.go` pins both forms plus real-prompt controls.
+
+**Security lane result:** no new confirmed exploitable defects
+(7 scopes re-audited: admin gate, OIDC, client keys, secret reveal,
+SSRF, body caps, cookies). **Program state after this pass:** merged
+in PRs #638 (`37fa779e`), #639 (`c32ce0b5`), #640 (`1ba6ea32`),
+#641 (final code tree `79df87d5`); standing UNVERIFIED boundaries
+unchanged (see `docs/EXTERNAL_VERIFICATION.md`).
