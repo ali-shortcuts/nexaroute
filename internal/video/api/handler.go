@@ -2,9 +2,12 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"mime"
 	"net/http"
 	"net/url"
@@ -301,6 +304,20 @@ func (h *Handler) getAsset(w http.ResponseWriter, r *http.Request, jobID, assetI
 	if err != nil || !info.Mode().IsRegular() || asset.SizeBytes <= 0 || info.Size() != asset.SizeBytes {
 		writeError(w, http.StatusInternalServerError, "asset_integrity_error", "stored asset metadata does not match the file", false)
 		return
+	}
+	if recorded := strings.TrimSpace(asset.SHA256); recorded != "" {
+		// Verify the recorded checksum before serving, like every other
+		// asset read path (storage Local.Read): a same-size replacement
+		// under the asset root must not be served silently.
+		sum := sha256.New()
+		if _, err := io.Copy(sum, file); err != nil || !strings.EqualFold(hex.EncodeToString(sum.Sum(nil)), recorded) {
+			writeError(w, http.StatusInternalServerError, "asset_integrity_error", "stored asset content does not match its recorded checksum", false)
+			return
+		}
+		if _, err := file.Seek(0, io.SeekStart); err != nil {
+			writeError(w, http.StatusInternalServerError, "asset_integrity_error", "stored asset could not be rewound after integrity check", false)
+			return
+		}
 	}
 	contentType := "application/octet-stream"
 	if parsed, _, parseErr := mime.ParseMediaType(strings.TrimSpace(asset.ContentType)); parseErr == nil {
