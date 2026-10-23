@@ -171,7 +171,13 @@ func (s *PostgresStore) Create(ctx context.Context, j video.VideoJob) error {
 			// when both constraints fire.
 			var exists bool
 			if qerr := s.db.QueryRowContext(ctx,
-				`SELECT EXISTS(SELECT 1 FROM `+videoJobsTable+` WHERE job_id = $1)`, j.JobID).Scan(&exists); qerr == nil && exists {
+				`SELECT EXISTS(SELECT 1 FROM `+videoJobsTable+` WHERE job_id = $1)`, j.JobID).Scan(&exists); qerr != nil {
+				// The probe itself failed (e.g. the store dropped
+				// mid-create): surface that failure instead of
+				// misclassifying the create as an idempotency
+				// conflict.
+				return fmt.Errorf("video job store: create conflict probe: %w", qerr)
+			} else if exists {
 				return errors.New("job already exists")
 			}
 			return ErrIdempotencyConflict
@@ -222,8 +228,10 @@ func (s *PostgresStore) Update(ctx context.Context, j video.VideoJob) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 	var raw []byte
+	var idem, owner string
+	var until sql.NullTime
 	if err := tx.QueryRowContext(ctx,
-		`SELECT payload FROM `+videoJobsTable+` WHERE job_id = $1 FOR UPDATE`, j.JobID).Scan(&raw); err != nil {
+		`SELECT `+videoJobColumns+` FROM `+videoJobsTable+` WHERE job_id = $1 FOR UPDATE`, j.JobID).Scan(&raw, &idem, &owner, &until); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrNotFound
 		}
@@ -233,6 +241,11 @@ func (s *PostgresStore) Update(ctx context.Context, j video.VideoJob) error {
 	if err := json.Unmarshal(raw, &current); err != nil {
 		return fmt.Errorf("video job store: decode current job: %w", err)
 	}
+	// The lease columns are authoritative (TryClaim mutates only the
+	// columns); overlay them before the terminal guard compares, or a
+	// replay of the authoritative record after a claim is rejected
+	// with a spurious ErrTerminalJob.
+	overlayColumns(&current, idem, owner, until)
 	if err := checkTerminalUpdate(current, j); err != nil {
 		return err
 	}

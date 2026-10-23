@@ -34,6 +34,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log"
 	"math"
 	"time"
 
@@ -301,7 +302,10 @@ func (l *PostgresLedger) sumWhere(state reservationState, column string) float64
 	err := l.db.QueryRowContext(ctx, `SELECT COALESCE(SUM(`+column+`), 0) FROM `+videoCostTable+` WHERE state = $1`, string(state)).Scan(&total)
 	if err != nil {
 		// Reporting degrades to zero on a store error; mutations remain
-		// fail-closed. The durable rows are unaffected.
+		// fail-closed and the durable rows are unaffected. The failure
+		// is logged, never silent: a clean zero during an outage would
+		// otherwise be indistinguishable from "nothing spent".
+		log.Printf("video cost ledger: aggregate read (state=%s) failed, reporting 0: %v", state, err)
 		return 0
 	}
 	return total
@@ -364,6 +368,7 @@ func (l *PostgresLedger) Entries() []video.CostEstimate {
 	rows, err := l.db.QueryContext(ctx, `SELECT `+costRowColumns+` FROM `+videoCostTable+
 		` WHERE entry_listed ORDER BY created_at, job_id`)
 	if err != nil {
+		log.Printf("video cost ledger: entries read failed, reporting none: %v", err)
 		return nil
 	}
 	defer func() { _ = rows.Close() }()
