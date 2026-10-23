@@ -246,27 +246,35 @@ func (s *Server) denyAdminRequest(w http.ResponseWriter, r *http.Request, identi
 	errorJSON(w, status, message)
 }
 
+// Admin cookies always carry Secure: a browser only returns them over HTTPS
+// (or a secure context such as loopback), so an admin session can never be
+// replayed onto a plaintext hop or a downgraded scheme, whatever the
+// transport or any forwarding header claims. requestIsSecure still governs
+// the same-origin scheme comparison; it no longer weakens the cookies
+// themselves. A consequence: the browser Admin UI needs HTTPS (direct TLS
+// or a TLS-terminating trusted proxy) or a loopback origin to hold a
+// session; non-browser clients use credentials, not cookies.
 func setAdminSessionCookie(w http.ResponseWriter, r *http.Request, value string, expires time.Time) {
 	maxAge := int(time.Until(expires).Seconds())
 	if maxAge < 0 {
 		maxAge = 0
 	}
-	http.SetCookie(w, &http.Cookie{ // #nosec G124 -- Secure is computed from direct TLS or an explicitly trusted proxy.
+	http.SetCookie(w, &http.Cookie{
 		Name: adminSessionCookie, Value: value, Path: "/admin/", HttpOnly: true,
-		Secure: requestIsSecure(r), SameSite: http.SameSiteLaxMode,
+		Secure: true, SameSite: http.SameSiteLaxMode,
 		Expires: expires.UTC(), MaxAge: maxAge,
 	})
 }
 
 func clearAdminSessionCookie(w http.ResponseWriter, r *http.Request) {
-	http.SetCookie(w, &http.Cookie{ // #nosec G124 -- Secure is computed from direct TLS or an explicitly trusted proxy.
+	http.SetCookie(w, &http.Cookie{
 		Name: adminSessionCookie, Value: "", Path: "/admin/", HttpOnly: true,
-		Secure: requestIsSecure(r), SameSite: http.SameSiteLaxMode,
+		Secure: true, SameSite: http.SameSiteLaxMode,
 		Expires: time.Unix(1, 0).UTC(), MaxAge: -1,
 	})
-	http.SetCookie(w, &http.Cookie{ // #nosec G124 -- Secure is computed from direct TLS or an explicitly trusted proxy.
+	http.SetCookie(w, &http.Cookie{
 		Name: adminCSRFCookie, Value: "", Path: "/admin/", HttpOnly: true,
-		Secure: requestIsSecure(r), SameSite: http.SameSiteStrictMode,
+		Secure: true, SameSite: http.SameSiteStrictMode,
 		Expires: time.Unix(1, 0).UTC(), MaxAge: -1,
 	})
 	clearOIDCFlowCookie(w, r)
@@ -274,17 +282,17 @@ func clearAdminSessionCookie(w http.ResponseWriter, r *http.Request) {
 
 func setOIDCFlowCookie(w http.ResponseWriter, r *http.Request, value string) {
 	expires := time.Now().Add(oidcLoginLifetime).UTC()
-	http.SetCookie(w, &http.Cookie{ // #nosec G124 -- Secure is computed from direct TLS or an explicitly trusted proxy.
+	http.SetCookie(w, &http.Cookie{
 		Name: adminOIDCFlowCookie, Value: value, Path: "/admin/", HttpOnly: true,
-		Secure: requestIsSecure(r), SameSite: http.SameSiteLaxMode,
+		Secure: true, SameSite: http.SameSiteLaxMode,
 		Expires: expires, MaxAge: int(oidcLoginLifetime.Seconds()),
 	})
 }
 
 func clearOIDCFlowCookie(w http.ResponseWriter, r *http.Request) {
-	http.SetCookie(w, &http.Cookie{ // #nosec G124 -- Secure is computed from direct TLS or an explicitly trusted proxy.
+	http.SetCookie(w, &http.Cookie{
 		Name: adminOIDCFlowCookie, Value: "", Path: "/admin/", HttpOnly: true,
-		Secure: requestIsSecure(r), SameSite: http.SameSiteLaxMode,
+		Secure: true, SameSite: http.SameSiteLaxMode,
 		Expires: time.Unix(1, 0).UTC(), MaxAge: -1,
 	})
 }

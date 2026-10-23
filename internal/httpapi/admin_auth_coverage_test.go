@@ -155,17 +155,16 @@ func TestCoverageAdminAuthContextAuditAndCookieClearInvariants(t *testing.T) {
 	}
 
 	for _, tc := range []struct {
-		name   string
-		url    string
-		secure bool
-	}{{"tls", "https://gateway/admin", true}, {"plain", "http://gateway/admin", false}} {
+		name string
+		url  string
+	}{{"tls", "https://gateway/admin"}, {"plain", "http://gateway/admin"}} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := httptest.NewRequest(http.MethodGet, tc.url, nil)
 			w := httptest.NewRecorder()
 			setAdminSessionCookie(w, r, "coverage-token", time.Now().Add(time.Hour))
 			setOIDCFlowCookie(w, r, "binding-token")
 			cookies := w.Result().Cookies()
-			if len(cookies) != 2 || cookies[0].Secure != tc.secure || cookies[1].Secure != tc.secure || !cookies[0].HttpOnly || cookies[0].Path != "/admin/" {
+			if len(cookies) != 2 || !cookies[0].Secure || !cookies[1].Secure || !cookies[0].HttpOnly || cookies[0].Path != "/admin/" {
 				t.Fatalf("set cookies = %#v", cookies)
 			}
 			w = httptest.NewRecorder()
@@ -175,7 +174,7 @@ func TestCoverageAdminAuthContextAuditAndCookieClearInvariants(t *testing.T) {
 				t.Fatalf("cleared cookie count = %d", len(cookies))
 			}
 			for _, cookie := range cookies {
-				if cookie.Value != "" || cookie.MaxAge >= 0 || cookie.Secure != tc.secure {
+				if cookie.Value != "" || cookie.MaxAge >= 0 || !cookie.Secure {
 					t.Errorf("cookie not cleared safely: %#v", cookie)
 				}
 			}

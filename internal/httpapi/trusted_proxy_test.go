@@ -51,21 +51,24 @@ func TestTrustedProxySuppliesSecureScheme(t *testing.T) {
 	}
 }
 
-func TestTrustedProxyPlainForwardedSchemeStaysInsecure(t *testing.T) {
+func TestTrustedProxyPlainForwardedSchemeCookieStillSecure(t *testing.T) {
 	s := trustedProxyConfig(t, "127.0.0.1/32")
 	rr := httptest.NewRecorder()
 	s.Handler().ServeHTTP(rr, csrfBootstrapRequest("127.0.0.1:32100", "http"))
-	if csrfCookieSecure(t, rr) {
-		t.Fatal("trusted proxy reporting http must not produce a Secure cookie")
+	if !csrfCookieSecure(t, rr) {
+		t.Fatal("admin cookies must be Secure even when the forwarded scheme is http")
 	}
 }
 
 func TestUntrustedPeerCannotSupplySecureScheme(t *testing.T) {
 	s := trustedProxyConfig(t, "10.0.0.0/8")
-	rr := httptest.NewRecorder()
-	s.Handler().ServeHTTP(rr, csrfBootstrapRequest("127.0.0.1:32100", "https"))
-	if csrfCookieSecure(t, rr) {
-		t.Fatal("untrusted peer must not control the cookie Secure attribute")
+	req := httptest.NewRequest(http.MethodPost, "http://gateway/admin/api/drain", nil)
+	req.RemoteAddr = "127.0.0.1:32100"
+	req.Header.Set("Origin", "https://gateway")
+	req.Header.Set("X-Forwarded-Proto", "https")
+	req = s.withTrustedProxyContext(req)
+	if sameOrigin(req) {
+		t.Fatal("untrusted peer must not make an https origin match a plain-HTTP listener")
 	}
 }
 
@@ -82,13 +85,14 @@ func TestTrustedProxyRejectsAmbiguousForwardedScheme(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			s := trustedProxyConfig(t, "127.0.0.1/32")
-			req := csrfBootstrapRequest("127.0.0.1:32100", "")
+			req := httptest.NewRequest(http.MethodPost, "http://gateway/admin/api/drain", nil)
+			req.RemoteAddr = "127.0.0.1:32100"
+			req.Header.Set("Origin", "https://gateway")
 			for _, value := range tt.values {
 				req.Header.Add("X-Forwarded-Proto", value)
 			}
-			rr := httptest.NewRecorder()
-			s.Handler().ServeHTTP(rr, req)
-			if csrfCookieSecure(t, rr) {
+			req = s.withTrustedProxyContext(req)
+			if sameOrigin(req) {
 				t.Fatalf("ambiguous forwarding header %q was trusted", tt.values)
 			}
 		})
@@ -97,12 +101,13 @@ func TestTrustedProxyRejectsAmbiguousForwardedScheme(t *testing.T) {
 
 func TestForwardedHeaderAloneIsIgnored(t *testing.T) {
 	s := trustedProxyConfig(t, "127.0.0.1/32")
-	req := csrfBootstrapRequest("127.0.0.1:32100", "")
+	req := httptest.NewRequest(http.MethodPost, "http://gateway/admin/api/drain", nil)
+	req.RemoteAddr = "127.0.0.1:32100"
+	req.Header.Set("Origin", "https://gateway")
 	req.Header.Set("Forwarded", "proto=https")
-	rr := httptest.NewRecorder()
-	s.Handler().ServeHTTP(rr, req)
-	if csrfCookieSecure(t, rr) {
-		t.Fatal("the Forwarded header must not control cookie security")
+	req = s.withTrustedProxyContext(req)
+	if sameOrigin(req) {
+		t.Fatal("the Forwarded header must not control the scheme decision")
 	}
 }
 
