@@ -121,7 +121,7 @@ func openControlPlaneRuntime(cfg config.ControlPlaneConfig, configPath string) (
 		_ = rt.Close()
 		return nil, err
 	}
-	if err := ensureControlPlaneSnapshot(context.Background(), manager, payload); err != nil {
+	if err := ensureControlPlaneSnapshot(context.Background(), manager, controlPlaneNamespace, payload); err != nil {
 		_ = rt.Close()
 		return nil, err
 	}
@@ -133,21 +133,21 @@ func openControlPlaneRuntime(cfg config.ControlPlaneConfig, configPath string) (
 // wins the revision-0 compare-and-swap, the loser re-reads and accepts only
 // the exact same bootstrap marker. Conflicts against any other value remain
 // fail-closed rather than being mistaken for a successful initialization.
-func ensureControlPlaneSnapshot(ctx context.Context, manager *controlplane.Manager, payload []byte) error {
-	_, err := manager.Load(ctx, controlPlaneNamespace)
+func ensureControlPlaneSnapshot(ctx context.Context, manager *controlplane.Manager, namespace string, payload []byte) error {
+	_, err := manager.Load(ctx, namespace)
 	if err == nil {
 		return nil
 	}
 	if !errors.Is(err, controlplane.ErrNotFound) {
 		return fmt.Errorf("load control-plane snapshot: %w", err)
 	}
-	if _, err := manager.Save(ctx, controlPlaneNamespace, 0, payload); err == nil {
+	if _, err := manager.Save(ctx, namespace, 0, payload); err == nil {
 		return nil
 	} else if !errors.Is(err, controlplane.ErrConflict) {
 		return fmt.Errorf("initialize control-plane snapshot: %w", err)
 	}
 
-	current, reloadErr := manager.Load(ctx, controlPlaneNamespace)
+	current, reloadErr := manager.Load(ctx, namespace)
 	if reloadErr != nil {
 		return fmt.Errorf("initialize control-plane snapshot: revision conflict and reload failed: %w", reloadErr)
 	}
