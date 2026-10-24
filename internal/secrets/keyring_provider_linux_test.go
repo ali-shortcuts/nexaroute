@@ -33,7 +33,7 @@ esac
 	if err := os.WriteFile(fakeSecretTool, []byte(script), 0700); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PATH", dir)
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("KEYRING_ARGS_FILE", argsPath)
 	t.Setenv("KEYRING_VALUE_FILE", valuePath)
 
