@@ -121,3 +121,76 @@ func TestControlPlaneRuntimeConcurrentWritesUseOptimisticRevision(t *testing.T) 
 		t.Fatalf("concurrent writes: successes=%d conflicts=%d", successes, conflicts)
 	}
 }
+
+type bootstrapRaceStore struct {
+	inner         *controlplane.MemoryStore
+	winnerPayload []byte
+	injectRace    bool
+	mu            sync.Mutex
+}
+
+func (s *bootstrapRaceStore) Get(ctx context.Context, namespace string) (controlplane.Snapshot, error) {
+	return s.inner.Get(ctx, namespace)
+}
+
+func (s *bootstrapRaceStore) Put(ctx context.Context, namespace string, expectedRevision uint64, payload []byte) (controlplane.Snapshot, error) {
+	s.mu.Lock()
+	if s.injectRace && expectedRevision == 0 {
+		s.injectRace = false
+		winner := append([]byte(nil), s.winnerPayload...)
+		s.mu.Unlock()
+		if _, err := s.inner.Put(ctx, namespace, 0, winner); err != nil {
+			return controlplane.Snapshot{}, err
+		}
+		return controlplane.Snapshot{}, controlplane.ErrConflict
+	}
+	s.mu.Unlock()
+	return s.inner.Put(ctx, namespace, expectedRevision, payload)
+}
+
+func (s *bootstrapRaceStore) Delete(ctx context.Context, namespace string, expectedRevision uint64) error {
+	return s.inner.Delete(ctx, namespace, expectedRevision)
+}
+
+func TestEnsureControlPlaneSnapshotAcceptsConcurrentIdenticalInitializer(t *testing.T) {
+	ctx := context.Background()
+	payload := []byte(`{"schema":1,"backend":"postgres"}`)
+	store := &bootstrapRaceStore{
+		inner:         controlplane.NewMemoryStore(),
+		winnerPayload: append([]byte(nil), payload...),
+		injectRace:    true,
+	}
+	manager, err := controlplane.NewManager(store, controlplane.FailClosed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureControlPlaneSnapshot(ctx, manager, controlPlaneNamespace, payload); err != nil {
+		t.Fatalf("identical concurrent initializer should converge: %v", err)
+	}
+	got, err := manager.Load(ctx, controlPlaneNamespace)
+	if err != nil || string(got.Payload) != string(payload) {
+		t.Fatalf("winning bootstrap marker not preserved: got=%q err=%v", got.Payload, err)
+	}
+}
+
+func TestEnsureControlPlaneSnapshotRejectsDifferentConcurrentInitializer(t *testing.T) {
+	ctx := context.Background()
+	payload := []byte(`{"schema":1,"backend":"postgres"}`)
+	winner := []byte(`{"schema":1,"backend":"redis"}`)
+	store := &bootstrapRaceStore{
+		inner:         controlplane.NewMemoryStore(),
+		winnerPayload: winner,
+		injectRace:    true,
+	}
+	manager, err := controlplane.NewManager(store, controlplane.FailClosed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureControlPlaneSnapshot(ctx, manager, controlPlaneNamespace, payload); err == nil {
+		t.Fatal("accepted a concurrent initializer with a different bootstrap marker")
+	}
+	got, loadErr := manager.Load(ctx, controlPlaneNamespace)
+	if loadErr != nil || string(got.Payload) != string(winner) {
+		t.Fatalf("conflicting bootstrap marker was not preserved: got=%q err=%v", got.Payload, loadErr)
+	}
+}

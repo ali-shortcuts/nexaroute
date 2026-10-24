@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -120,17 +121,40 @@ func openControlPlaneRuntime(cfg config.ControlPlaneConfig, configPath string) (
 		_ = rt.Close()
 		return nil, err
 	}
-	_, err = manager.Load(context.Background(), controlPlaneNamespace)
-	if errors.Is(err, controlplane.ErrNotFound) {
-		if _, err = manager.Save(context.Background(), controlPlaneNamespace, 0, payload); err != nil {
-			_ = rt.Close()
-			return nil, fmt.Errorf("initialize control-plane snapshot: %w", err)
-		}
-	} else if err != nil {
+	if err := ensureControlPlaneSnapshot(context.Background(), manager, controlPlaneNamespace, payload); err != nil {
 		_ = rt.Close()
-		return nil, fmt.Errorf("load control-plane snapshot: %w", err)
+		return nil, err
 	}
 	return rt, nil
+}
+
+// ensureControlPlaneSnapshot initializes the reserved runtime marker once.
+// Two replicas can both observe ErrNotFound on an empty shared store; if one
+// wins the revision-0 compare-and-swap, the loser re-reads and accepts only
+// the exact same bootstrap marker. Conflicts against any other value remain
+// fail-closed rather than being mistaken for a successful initialization.
+func ensureControlPlaneSnapshot(ctx context.Context, manager *controlplane.Manager, namespace string, payload []byte) error {
+	_, err := manager.Load(ctx, namespace)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, controlplane.ErrNotFound) {
+		return fmt.Errorf("load control-plane snapshot: %w", err)
+	}
+	if _, err := manager.Save(ctx, namespace, 0, payload); err == nil {
+		return nil
+	} else if !errors.Is(err, controlplane.ErrConflict) {
+		return fmt.Errorf("initialize control-plane snapshot: %w", err)
+	}
+
+	current, reloadErr := manager.Load(ctx, namespace)
+	if reloadErr != nil {
+		return fmt.Errorf("initialize control-plane snapshot: revision conflict and reload failed: %w", reloadErr)
+	}
+	if !bytes.Equal(current.Payload, payload) {
+		return errors.New("initialize control-plane snapshot: competing initializer committed an unexpected bootstrap marker")
+	}
+	return nil
 }
 
 // BreakerStore builds the shared circuit-breaker state store over the
