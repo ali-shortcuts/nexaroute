@@ -75,6 +75,14 @@ the store's CAS semantics rejected the loser. Starting the first
 replica, letting it initialize, then starting the second works.
 Operators should sequence first-time initialization the same way.
 
+**Follow-up in PR #644:** startup now handles the expected revision-0
+race by re-reading the reserved snapshot after a conflict and accepting
+the winner only when its payload exactly matches the expected bootstrap
+marker. Unit tests cover both an identical winning marker and a conflicting
+marker (which must remain fail-closed). A fresh two-process PostgreSQL
+first-boot run against the patched binary is still required before claiming
+that exact real-service sequence has been re-verified.
+
 ## 3. OIDC login — full flow executed (local conforming IdP)
 
 Gateway instance with `admin.oidc` enabled against the local IdP:
@@ -153,6 +161,15 @@ invocation omits `--label`, which the current `secret-tool`
 not model that requirement. `Store` currently has no production
 caller (the runtime only Loads; provisioning is operator-side), so
 this is recorded as an observation, not a production defect.
+
+**Follow-up in PR #644:** `Store` now supplies the required
+`--label "NexaRoute master key"` argument. A Linux regression test checks
+the exact argument sequence, verifies the key is sent only on stdin,
+and exercises store/lookup round-trip behavior through a fixture matching
+the CLI contract. The acceptance run above used the real keyring for
+provisioning and gateway `Load`; it did not exercise the old `Store`
+method against the real binary. A post-fix real-service `Store` run is
+not claimed by this report.
 
 ## 7. What this pass did NOT execute
 
