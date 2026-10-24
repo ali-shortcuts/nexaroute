@@ -122,7 +122,6 @@ func TestControlPlaneRuntimeConcurrentWritesUseOptimisticRevision(t *testing.T) 
 	}
 }
 
-
 type bootstrapRaceStore struct {
 	inner         *controlplane.MemoryStore
 	winnerPayload []byte
