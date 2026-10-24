@@ -164,7 +164,7 @@ func TestEnsureControlPlaneSnapshotAcceptsConcurrentIdenticalInitializer(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := ensureControlPlaneSnapshot(ctx, manager, payload); err != nil {
+	if err := ensureControlPlaneSnapshot(ctx, manager, controlPlaneNamespace, payload); err != nil {
 		t.Fatalf("identical concurrent initializer should converge: %v", err)
 	}
 	got, err := manager.Load(ctx, controlPlaneNamespace)
@@ -186,7 +186,7 @@ func TestEnsureControlPlaneSnapshotRejectsDifferentConcurrentInitializer(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := ensureControlPlaneSnapshot(ctx, manager, payload); err == nil {
+	if err := ensureControlPlaneSnapshot(ctx, manager, controlPlaneNamespace, payload); err == nil {
 		t.Fatal("accepted a concurrent initializer with a different bootstrap marker")
 	}
 	got, loadErr := manager.Load(ctx, controlPlaneNamespace)
