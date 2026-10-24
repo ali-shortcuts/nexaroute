@@ -12,10 +12,19 @@ Result vocabulary: **PASS** (executed evidence), **FAIL**,
 **BLOCKED** (infrastructure/access unavailable), **NOT_RUN**,
 **UNVERIFIED** (code-reviewed, no executed live evidence).
 
+**Addendum 2026-10-24 (local acceptance execution):** rows 2, 12 and
+19 were partially upgraded by executed runs against real systems
+stood up locally (real PostgreSQL/Redis, two gateway processes, a
+conforming local OIDC provider, the real OpenTelemetry Collector,
+real Vault in dev mode, a real Secret Service) on a binary built
+from `main` at `bc5f0d4d`. Full record:
+`docs/reports/LOCAL_ACCEPTANCE_2026-10-24.md`. "Executed locally"
+never claims a live external tenant or a production cluster.
+
 | # | Feature / contract | Implementation | Verification evidence | Result |
 |---|---|---|---|---|
 | 1 | Admin API authentication gate (fail-closed, incl. security-store outage → 503) and admin cookie security (`Secure` on all session/CSRF/OIDC cookies) | `internal/httpapi` admin plane; fix in PR #635 | Repo suite; CodeQL alerts 22–27 transitioned to `fixed` on the post-#635 scan; security-lane re-audit 2026-10-23 | PASS |
-| 2 | OIDC login flow (PKCE, state, nonce, JWKS freshness, session rotation) | `internal/httpapi` OIDC handlers | Code-level audit 2026-10-23 (all checks present); live tenant login never executed | UNVERIFIED (live) |
+| 2 | OIDC login flow (PKCE, state, nonce, JWKS freshness, session rotation) | `internal/httpapi` OIDC handlers | Code-level audit 2026-10-23 (all checks present); **2026-10-24: full flow executed** against a conforming local IdP — discovery, PKCE S256, code exchange, JWKS verify, groups→admin role mapping, session, admin audit API 200 with session / 401 without, forged code 401 (`LOCAL_ACCEPTANCE_2026-10-24.md` §3) | PASS (executed locally) / UNVERIFIED (live tenant) |
 | 3 | Client API keys (digest-only storage, constant-time compare) | `internal/httpapi` client auth | Security-lane audit 2026-10-23 | PASS |
 | 4 | Config validation coherence (per-section validators; golden corpus; `evaluation.live_enabled` requires `evaluation.enabled`) | `internal/config` (PRs #636, #637) | `internal/config/validate_golden_test.go` — 57 cases incl. cross-section precedence; CI verify on both merge heads | PASS |
 | 5 | Unknown-model fallback contract (fallback only for unknown models when enabled; known-but-unavailable never escapes) | `internal/router` (PR #589) | `internal/router` suite + `internal/httpapi/fallback_unknown_model_test.go`, re-run by the routing lane 2026-10-23 | PASS |
@@ -25,14 +34,14 @@ Result vocabulary: **PASS** (executed evidence), **FAIL**,
 | 9 | Circuit-breaker sync across replicas (opt-in; remote `retired` = bounded 30 min cooldown demotion only; store outage never clears local truth; 10 s cadence) | `internal/breakersync`, ADR 0003 | Unit suite incl. `TestSyncOutageLeavesLocalStateUntouched`; PG/Redis two-instance integration suites run in CI | PASS (CI integration) |
 | 10 | Config authority: local file is authoritative; control plane never holds config (ADR 0001) | `internal/config`, `cmd/gateway` | `check-ha-docs.sh`; `/api/hello` reports `ConfigSnapshot=ScopePerInstance` unconditionally | PASS |
 | 11 | Video job durability — file backend (idempotency, lease recovery, terminal guards) | `internal/video/queue` file store, orchestrator | `internal/video/...` suite incl. deterministic idempotency race test | PASS |
-| 12 | Video job durability — Postgres backend (atomic claim with DB clock, expired-lease recovery, terminal-replay guard) | `internal/video/queue/pg_store.go` (guard fix in PR #639) | CI `integration-postgres` job on PR #639 head `b0b5df4` (run 39939662334): SUCCESS; red on the tests-only head (run 39938301294): FAILED on `TestPostgresVideoStoreTerminalReplayAfterClaim`. Locally NOT_RUN — no PostgreSQL in the dev sandbox | PASS (CI) / NOT_RUN (local) |
+| 12 | Video job durability — Postgres backend (atomic claim with DB clock, expired-lease recovery, terminal-replay guard) | `internal/video/queue/pg_store.go` (guard fix in PR #639) | CI `integration-postgres` job on PR #639 head `b0b5df4` (run 39939662334): SUCCESS; red on the tests-only head (run 39938301294): FAILED on `TestPostgresVideoStoreTerminalReplayAfterClaim`. **2026-10-24: also executed locally** — the DSN-gated suites were run against a local PostgreSQL 16 (all PASS, zero skips) and a two-process run shared one PostgreSQL job store (job claimed once, completed, read back from the second process) (`LOCAL_ACCEPTANCE_2026-10-24.md` §1–2) | PASS (CI + local) |
 | 13 | Video cost ledger exactly-once (reserve/settle state machine, restart-durable aggregates on Postgres; loud read-degradation) | `internal/video/cost` (F-08 logging in PR #639) | Unit suite + CI integration; degradation contract pinned by `TestPostgresLedgerAggregateReadsDegradeToZeroOnStoreError` | PASS |
 | 14 | Video asset download integrity (recorded SHA-256 verified before serving) | `internal/video/api` (PR #639) | `TestHandlerDownloadVerifiesRecordedChecksum` — red (tampered file served, tests-only head) → green (fix head) in CI runs above | PASS |
 | 15 | Video API bearer auth fails closed when auth is required but no token is configured | `internal/video/api` (PR #638) | `TestHandlerEmptyBearerTokenRejectsEverything`; merged as `37fa779e` with all checks green | PASS |
 | 16 | SSRF defenses (dial-time IP validation, cross-origin redirect refusal) and request body caps | `internal/providers`, `internal/httpapi` | Security-lane audit 2026-10-23 (all scopes confirmed) | PASS |
 | 17 | HA / state documentation coherence | `docs/HA_STATE_INVENTORY.md`, `docs/KNOWN_GAPS.md`, ADRs | `scripts/check-ha-docs.sh` green on the reconciled tree | PASS |
 | 18 | Live external providers (OpenAI/Anthropic/Gemini tenants) | — | Zero paid calls by mission rule; loopback stubs only | NOT_RUN / UNVERIFIED |
-| 19 | Live Bedrock / Vertex / Azure tenants; real OTLP collector; live K8s install; Vault / OS keyring round-trips; production soak | — | No credentials or clusters available; see `docs/EXTERNAL_VERIFICATION.md` status register | UNVERIFIED / BLOCKED |
+| 19 | Live Bedrock / Vertex / Azure tenants; real OTLP collector; live K8s install; Vault / OS keyring round-trips; production soak | — | **2026-10-24 partial upgrade:** real OTLP collector ingestion EXECUTED (otelcol v0.163.2 decoded a gateway span); Vault KV round-trip + gateway custody EXECUTED LOCALLY (real Vault v2.2.1 dev mode); OS keyring round-trip EXECUTED LOCALLY (real Secret Service) — see `LOCAL_ACCEPTANCE_2026-10-24.md` §4–6. Remaining: Bedrock / Vertex / Azure tenants, live K8s install, production soak, production Vault cluster | PARTIAL — local items executed; live items UNVERIFIED / BLOCKED |
 | 20 | In-browser acceptance (axe, FCP, RTL screenshots) | `web/` | Sandbox Chromium cannot reach the loopback gateway (standing boundary); repo browser-evidence CI is the executed route | BLOCKED (local) |
 
 ## Notes

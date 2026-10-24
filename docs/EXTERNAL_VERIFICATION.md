@@ -30,15 +30,17 @@ runbook procedure exists for it.
 
 | Dependency | Real-system status | Evidence / procedure |
 |---|---|---|
-| OIDC identity provider (browser login) | UNVERIFIED — discovery/JWKS checks PASS against public issuers; full login NOT_RUN | §1 below; executed evidence 2026-10-22 |
-| HashiCorp Vault (KV helper) | UNVERIFIED — real round-trip BLOCKED (no Vault available) | §2 below |
+| OIDC identity provider (browser login) | EXECUTED LOCALLY 2026-10-24 — full login flow PASS against a conforming local IdP (discovery, PKCE S256, JWKS verify, role mapping, session, fail-closed negatives); a live organizational tenant remains UNVERIFIED | §1 below; `docs/reports/LOCAL_ACCEPTANCE_2026-10-24.md` §3 |
+| HashiCorp Vault (KV helper) | EXECUTED LOCALLY 2026-10-24 — real Vault v2.2.1 (dev mode) round-trip via the shipped helper PASS; gateway key custody + decrypt verify PASS; wrong token fails closed; a production Vault cluster remains UNVERIFIED | §2 below; `docs/reports/LOCAL_ACCEPTANCE_2026-10-24.md` §5 |
 | HashiCorp Vault Transit envelope mode | NOT IMPLEMENTED — the helper loads a raw 32-byte master key into the gateway process; key material is never claimed to stay inside Vault | §2 below |
-| OS keyring (secret-tool) | UNVERIFIED — real round-trip BLOCKED (no Secret Service in the verification environment) | §3 below |
+| OS keyring (secret-tool) | EXECUTED LOCALLY 2026-10-24 — real Secret Service (gnome-keyring) store/lookup PASS; gateway decrypt verify via the keyring provider PASS; a production desktop keyring remains operator-verified | §3 below; `docs/reports/LOCAL_ACCEPTANCE_2026-10-24.md` §6 |
 | LLM providers (OpenAI/Anthropic/Gemini-compatible upstreams) | UNVERIFIED — NOT_RUN; zero paid calls by policy | Executed evidence §"LLM providers" |
 | AWS Bedrock | UNVERIFIED — NOT_RUN (no AWS tenant/credentials) | Adapter covered by fixture/contract tests only |
 | Google Vertex AI | UNVERIFIED — NOT_RUN (no GCP tenant/credentials) | Adapter covered by fixture/contract tests only |
 | Azure OpenAI | UNVERIFIED — NOT_RUN (no Azure tenant/credentials) | Adapter covered by fixture/contract tests only |
-| OpenTelemetry collector (OTLP ingestion) | UNVERIFIED — NOT_RUN (no real collector) | Exporter covered by local tests only |
+| PostgreSQL (control-plane, security, video stores) | EXECUTED — DSN-gated integration suites PASS in CI and locally 2026-10-24; two real gateway processes sharing one PostgreSQL executed locally (breaker-marker convergence; one video job claimed once and completed); production multi-host deployment remains UNVERIFIED | `docs/reports/LOCAL_ACCEPTANCE_2026-10-24.md` §1–2 |
+| Redis (control-plane, breaker store) | EXECUTED — integration suites PASS in CI and locally 2026-10-24 (with `-race`, incl. outage/recovery); a production deployment remains UNVERIFIED | `docs/reports/LOCAL_ACCEPTANCE_2026-10-24.md` §1 |
+| OpenTelemetry collector (OTLP ingestion) | EXECUTED 2026-10-24 — the real OpenTelemetry Collector v0.163.2 received and decoded a gateway span with the documented GenAI attributes; managed backends (Jaeger/Tempo/vendor APM) remain UNVERIFIED | `docs/reports/LOCAL_ACCEPTANCE_2026-10-24.md` §4 |
 | Kubernetes installation (Helm/manifests) | UNVERIFIED — NOT_RUN (no live cluster) | Helm lint/render checks only |
 | ComfyUI inference | UNVERIFIED — HTTP contract fixture-tested; real model inference not part of CI | See KNOWN_GAPS (video section) |
 
