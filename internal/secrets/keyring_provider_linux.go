@@ -34,7 +34,10 @@ func (linuxKeyringProvider) Store(ctx context.Context, ref string, key []byte) e
 	// secret-tool's store command requires a label on current libsecret-tools
 	// versions. Keep it before the attribute pairs; the key itself is sent
 	// only on stdin and never exposed in argv.
-	cmd := exec.CommandContext(ctx, "secret-tool", "store", "--label", "NexaRoute master key", "service", "nexaroute", "account", ref) // #nosec G204 -- literal "secret-tool" executable with fixed arguments; ref is a single argv element from operator configuration and the key itself is passed on stdin, never in argv; no shell is involved.
+	// #nosec G204 -- literal executable and fixed arguments; ref is one argv
+	// element from operator configuration, and the key is passed via stdin.
+	cmd := exec.CommandContext(ctx, "secret-tool", "store", "--label",
+		"NexaRoute master key", "service", "nexaroute", "account", ref)
 	cmd.Stdin = strings.NewReader(base64.StdEncoding.EncodeToString(key) + "\n")
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("OS keyring store failed: %w", err)
