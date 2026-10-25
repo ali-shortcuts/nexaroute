@@ -1,0 +1,63 @@
+name: Real-system acceptance
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: real-acceptance-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  postgres-two-gateway-processes:
+    name: Two real Gateway processes against PostgreSQL
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: nexaroute
+          POSTGRES_PASSWORD: nexaroute-ci-only
+          POSTGRES_DB: nexaroute_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U nexaroute -d nexaroute_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.x'
+          cache: false
+      - name: Run full two-process first-bootstrap acceptance
+        env:
+          NEXAROUTE_TEST_POSTGRES_DSN: "postgres://nexaroute:nexaroute-ci-only@127.0.0.1:5432/nexaroute_test?sslmode=disable"
+        run: go test -tags integration ./cmd/gateway/ -run 'TestConcurrentPostgresGatewayProcessesBootstrap' -count=1 -v
+
+  real-linux-keyring:
+    name: Real Secret Service Store/Load
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.x'
+          cache: false
+      - name: Install Secret Service tools
+        run: sudo apt-get update && sudo apt-get install -y dbus-x11 gnome-keyring libsecret-tools
+      - name: Run real keyring acceptance in a disposable D-Bus session
+        env:
+          NEXAROUTE_TEST_REAL_KEYRING: "1"
+        run: dbus-run-session -- bash .github/scripts/test-real-keyring.sh
