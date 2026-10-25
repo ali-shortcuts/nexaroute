@@ -180,12 +180,17 @@ func TestConcurrentPostgresGatewayProcessesBootstrap(t *testing.T) {
 		}(i, spec)
 	}
 	close(start)
+	var launchFailures []string
 	for range specs {
 		result := <-started
 		if result.err != nil {
-			t.Fatalf("replica %d launch failed: %v", result.index+1, result.err)
+			launchFailures = append(launchFailures, fmt.Sprintf("replica %d launch failed: %v", result.index+1, result.err))
+			continue
 		}
 		processes[result.index] = result.proc
+	}
+	if len(launchFailures) > 0 {
+		t.Fatalf("%s", strings.Join(launchFailures, "; "))
 	}
 
 	for i, proc := range processes {
