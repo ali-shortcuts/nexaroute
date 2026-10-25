@@ -30,7 +30,7 @@ func TestRealLinuxKeyringStoreRoundTrips(t *testing.T) {
 	defer cancel()
 
 	ref := fmt.Sprintf("nexaroute/acceptance-%d-%d", os.Getpid(), time.Now().UnixNano())
-	key := []byte("nexaroute-real-keyring-acceptance-32")
+	key := []byte("01234567890123456789012345678901")
 	// Ensure this test does not leave its uniquely scoped test item behind.
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 3*time.Second)
