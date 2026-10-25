@@ -24,32 +24,32 @@ func TestAcceptanceCredentialSourceCoversConfiguredSources(t *testing.T) {
 	}{
 		{
 			name: "bedrock secret key from environment",
-			p: config.ProviderConfig{Type: "bedrock", SecretKeyEnv: "NEXA_TEST_AWS_SECRET"},
+			p:    config.ProviderConfig{Type: "bedrock", SecretKeyEnv: "NEXA_TEST_AWS_SECRET"},
 			want: "aws-env",
 		},
 		{
 			name: "credential pool",
-			p: config.ProviderConfig{Credentials: []config.CredentialConfig{{Name: "primary", APIKey: "pooled-key", Enabled: true}}},
+			p:    config.ProviderConfig{Credentials: []config.CredentialConfig{{Name: "primary", APIKey: "pooled-key", Enabled: true}}},
 			want: "pool",
 		},
 		{
 			name: "API key environment variable",
-			p: config.ProviderConfig{APIKeyEnv: "NEXA_TEST_PROVIDER_KEY"},
+			p:    config.ProviderConfig{APIKeyEnv: "NEXA_TEST_PROVIDER_KEY"},
 			want: "env",
 		},
 		{
 			name: "literal API key",
-			p: config.ProviderConfig{APIKey: "inline-key"},
+			p:    config.ProviderConfig{APIKey: "inline-key"},
 			want: "literal",
 		},
 		{
 			name: "explicit no-auth mode",
-			p: config.ProviderConfig{AuthMode: "none"},
+			p:    config.ProviderConfig{AuthMode: "none"},
 			want: "none",
 		},
 		{
 			name: "unconfigured credentials",
-			p: config.ProviderConfig{},
+			p:    config.ProviderConfig{},
 			want: "none",
 		},
 	}
