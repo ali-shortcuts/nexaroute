@@ -127,9 +127,9 @@ func TestConcurrentPostgresGatewayProcessesBootstrap(t *testing.T) {
 		}
 		specs[i] = launchSpec{
 			configPath: configPath,
-			home: home,
-			logPath: filepath.Join(dir, "gateway.log"),
-			port: port,
+			home:       home,
+			logPath:    filepath.Join(dir, "gateway.log"),
+			port:       port,
 		}
 	}
 
