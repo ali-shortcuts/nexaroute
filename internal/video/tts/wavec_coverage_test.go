@@ -84,6 +84,15 @@ func TestWAVDurationAdversarial(t *testing.T) {
 	truncatedData = append(truncatedData, []byte{1, 2, 3, 4}...)
 	cases["truncated data payload"] = truncatedData
 
+	// Validate malformed data chunks even when they appear before the format
+	// chunk, because seeking past EOF itself does not guarantee an error.
+	truncatedBeforeFormat := wavFile()
+	truncatedBeforeFormat = append(truncatedBeforeFormat, []byte("data")...)
+	binary.LittleEndian.PutUint32(dataSize, 100)
+	truncatedBeforeFormat = append(truncatedBeforeFormat, dataSize...)
+	truncatedBeforeFormat = append(truncatedBeforeFormat, []byte{1, 2, 3, 4}...)
+	cases["truncated data before format"] = truncatedBeforeFormat
+
 	// RIFF chunks with odd payload lengths require a pad byte after the data.
 	missingPad := wavFile(fmtChunk(8000, nil))
 	missingPad = append(missingPad, []byte("data")...)
