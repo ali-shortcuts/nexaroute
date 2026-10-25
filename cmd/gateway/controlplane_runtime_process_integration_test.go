@@ -86,7 +86,9 @@ func TestConcurrentPostgresGatewayProcessesBootstrap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open PostgreSQL for process acceptance: %v", err)
 	}
-	defer db.Close()
+	// Keep the database pool alive until test cleanup has stopped the
+	// gateway children and removed the reserved bootstrap marker.
+	t.Cleanup(func() { _ = db.Close() })
 
 	// The service container may retain tables created by migration, but the
 	// gateway/runtime row itself must be absent to reproduce first bootstrap.
