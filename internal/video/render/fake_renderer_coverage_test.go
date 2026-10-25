@@ -1,10 +1,13 @@
 package render_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -14,46 +17,133 @@ import (
 
 const validFakeProbeJSON = "{\"streams\":[{\"codec_type\":\"video\",\"codec_name\":\"h264\",\"width\":320,\"height\":240}],\"format\":{\"duration\":\"3.0\"}}"
 
+var (
+	fakeToolDir   string
+	fakeFFmpegPath string
+	fakeFFprobePath string
+)
+
+// init turns a copy of the Go test executable into a deterministic FFmpeg or
+// ffprobe test double. Using a native helper keeps these tests portable and
+// avoids requiring system multimedia packages in ordinary unit-test runners.
+func init() {
+	name := strings.TrimSuffix(filepath.Base(os.Args[0]), filepath.Ext(os.Args[0]))
+	switch name {
+	case "nexaroute-fake-ffmpeg":
+		os.Exit(runFakeFFmpeg(os.Args[1:]))
+	case "nexaroute-fake-ffprobe":
+		os.Exit(runFakeFFprobe())
+	}
+}
+
+func TestMain(m *testing.M) {
+	executable, err := os.Executable()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "locate test executable:", err)
+		os.Exit(2)
+	}
+	binary, err := os.ReadFile(executable)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "read test executable:", err)
+		os.Exit(2)
+	}
+	fakeToolDir, err = os.MkdirTemp("", "nexaroute-render-tools-")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "create fake-tool directory:", err)
+		os.Exit(2)
+	}
+	ext := ""
+	if runtime.GOOS == "windows" {
+		ext = ".exe"
+	}
+	fakeFFmpegPath = filepath.Join(fakeToolDir, "nexaroute-fake-ffmpeg"+ext)
+	fakeFFprobePath = filepath.Join(fakeToolDir, "nexaroute-fake-ffprobe"+ext)
+	if err := os.WriteFile(fakeFFmpegPath, binary, 0700); err != nil {
+		fmt.Fprintln(os.Stderr, "write fake ffmpeg:", err)
+		_ = os.RemoveAll(fakeToolDir)
+		os.Exit(2)
+	}
+	if err := os.WriteFile(fakeFFprobePath, binary, 0700); err != nil {
+		fmt.Fprintln(os.Stderr, "write fake ffprobe:", err)
+		_ = os.RemoveAll(fakeToolDir)
+		os.Exit(2)
+	}
+	code := m.Run()
+	_ = os.RemoveAll(fakeToolDir)
+	os.Exit(code)
+}
+
+func runFakeFFmpeg(args []string) int {
+	if len(args) > 0 && args[0] == "-version" {
+		fmt.Println("ffmpeg fake version")
+		return 0
+	}
+	for _, arg := range args {
+		switch arg {
+		case "-encoders":
+			if os.Getenv("NEXAROUTE_FAKE_NO_X264") == "1" {
+				fmt.Println("no H.264 encoder")
+			} else {
+				fmt.Println(" V..... libx264 H.264 / AVC / MPEG-4 AVC")
+			}
+			return 0
+		case "-filters":
+			for _, filter := range []string{"drawtext", "drawbox", "gradients", "zoompan"} {
+				if os.Getenv("NEXAROUTE_FAKE_OMIT_FILTER") != filter {
+					fmt.Printf(" T.C %s filter description\n", filter)
+				}
+			}
+			return 0
+		}
+	}
+	mode := os.Getenv("NEXAROUTE_FAKE_FFMPEG_MODE")
+	if mode == "" {
+		mode = "file"
+	}
+	if mode == "fail" {
+		fmt.Fprintln(os.Stderr, "intentional test ffmpeg failure")
+		return 17
+	}
+	if mode == "missing" {
+		return 0
+	}
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "fake ffmpeg received no arguments")
+		return 2
+	}
+	last := args[len(args)-1]
+	if last == "-" {
+		switch mode {
+		case "frames":
+			_, _ = os.Stdout.Write(bytes.Repeat([]byte{0, 255}, 1152))
+			return 0
+		case "blank":
+			_, _ = os.Stdout.Write(make([]byte, 2304))
+			return 0
+		case "empty-frame":
+			return 0
+		}
+	}
+	returnCode := 0
+	if err := os.WriteFile(last, []byte("fake-media-output"), 0600); err != nil {
+		fmt.Fprintln(os.Stderr, "write fake media output:", err)
+		returnCode = 3
+	}
+	return returnCode
+}
+
+func runFakeFFprobe() int {
+	if os.Getenv("NEXAROUTE_FAKE_FFPROBE_MODE") == "fail" {
+		fmt.Fprintln(os.Stderr, "intentional test ffprobe failure")
+		return 19
+	}
+	fmt.Fprintln(os.Stdout, os.Getenv("NEXAROUTE_FAKE_FFPROBE_JSON"))
+	return 0
+}
+
 func fakeRenderer(t *testing.T) (*render.Renderer, string, string) {
 	t.Helper()
-	dir := t.TempDir()
-	ffmpegPath := filepath.Join(dir, "fake-ffmpeg")
-	ffprobePath := filepath.Join(dir, "fake-ffprobe")
-	fontPath := filepath.Join(dir, "test-font.ttf")
-	ffmpeg := "#!/bin/sh\n" +
-		"set -e\n" +
-		"if [ \"$1\" = \"-version\" ]; then echo 'ffmpeg fake version'; exit 0; fi\n" +
-		"for arg in \"$@\"; do\n" +
-		"  case \"$arg\" in\n" +
-		"    -encoders)\n" +
-		"      if [ \"$NEXAROUTE_FAKE_NO_X264\" = \"1\" ]; then echo 'no h264 encoder'; else echo ' V..... libx264 H.264 / AVC / MPEG-4 AVC'; fi\n" +
-		"      exit 0 ;;\n" +
-		"    -filters)\n" +
-		"      for f in drawtext drawbox gradients zoompan; do\n" +
-		"        if [ \"$NEXAROUTE_FAKE_OMIT_FILTER\" != \"$f\" ]; then printf ' T.C %s filter description\\n' \"$f\"; fi\n" +
-		"      done\n" +
-		"      exit 0 ;;\n" +
-		"  esac\n" +
-		"done\n" +
-		"last=''\n" +
-		"for arg in \"$@\"; do last=\"$arg\"; done\n" +
-		"case \"$NEXAROUTE_FAKE_FFMPEG_MODE:$last\" in\n" +
-		"  fail:*) echo 'intentional test ffmpeg failure' >&2; exit 17 ;;\n" +
-		"  missing:*) exit 0 ;;\n" +
-		"  frames:-) python3 -c 'import sys; sys.stdout.buffer.write(bytes([0, 255]) * 1152)'; exit 0 ;;\n" +
-		"  blank:-) dd if=/dev/zero bs=2304 count=1 2>/dev/null; exit 0 ;;\n" +
-		"  empty-frame:-) exit 0 ;;\n" +
-		"  *) printf 'fake-media-output' > \"$last\" ;;\n" +
-		"esac\n"
-	ffprobe := "#!/bin/sh\n" +
-		"if [ \"$NEXAROUTE_FAKE_FFPROBE_MODE\" = \"fail\" ]; then echo 'intentional test ffprobe failure' >&2; exit 19; fi\n" +
-		"printf '%s\\n' \"$NEXAROUTE_FAKE_FFPROBE_JSON\"\n"
-	if err := os.WriteFile(ffmpegPath, []byte(ffmpeg), 0700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(ffprobePath, []byte(ffprobe), 0700); err != nil {
-		t.Fatal(err)
-	}
+	fontPath := filepath.Join(t.TempDir(), "test-font.ttf")
 	if err := os.WriteFile(fontPath, []byte("fake-font"), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +152,7 @@ func fakeRenderer(t *testing.T) (*render.Renderer, string, string) {
 	t.Setenv("NEXAROUTE_FAKE_OMIT_FILTER", "")
 	t.Setenv("NEXAROUTE_FAKE_FFPROBE_MODE", "")
 	t.Setenv("NEXAROUTE_FAKE_FFPROBE_JSON", validFakeProbeJSON)
-	return &render.Renderer{FFmpeg: ffmpegPath, FFprobe: ffprobePath, FontFile: fontPath}, ffmpegPath, ffprobePath
+	return &render.Renderer{FFmpeg: fakeFFmpegPath, FFprobe: fakeFFprobePath, FontFile: fontPath}, fakeFFmpegPath, fakeFFprobePath
 }
 
 func smallValidPlan() video.Plan {
