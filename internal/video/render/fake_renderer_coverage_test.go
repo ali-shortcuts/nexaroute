@@ -18,8 +18,8 @@ import (
 const validFakeProbeJSON = "{\"streams\":[{\"codec_type\":\"video\",\"codec_name\":\"h264\",\"width\":320,\"height\":240}],\"format\":{\"duration\":\"3.0\"}}"
 
 var (
-	fakeToolDir   string
-	fakeFFmpegPath string
+	fakeToolDir     string
+	fakeFFmpegPath  string
 	fakeFFprobePath string
 )
 
@@ -378,27 +378,27 @@ func TestValidateOutputEnforcesCodecDimensionsDurationAndVisibleFrame(t *testing
 	}{
 		{
 			name: "valid H264 media",
-			doc: map[string]any{"streams": []any{map[string]any{"codec_type": "video","codec_name": "h264","width": 320,"height": 240}}, "format": map[string]any{"duration": "3.0"}},
+			doc: map[string]any{"streams": []any{map[string]any{"codec_type": "video", "codec_name": "h264", "width": 320, "height": 240}}, "format": map[string]any{"duration": "3.0"}},
 			mode: "frames",
 		},
 		{
 			name: "wrong codec",
-			doc: map[string]any{"streams": []any{map[string]any{"codec_type": "video","codec_name": "vp9","width": 320,"height": 240}}, "format": map[string]any{"duration": "3.0"}},
+			doc: map[string]any{"streams": []any{map[string]any{"codec_type": "video", "codec_name": "vp9", "width": 320, "height": 240}}, "format": map[string]any{"duration": "3.0"}},
 			mode: "frames", want: "want h264",
 		},
 		{
 			name: "wrong dimensions",
-			doc: map[string]any{"streams": []any{map[string]any{"codec_type": "video","codec_name": "h264","width": 640,"height": 480}}, "format": map[string]any{"duration": "3.0"}},
+			doc: map[string]any{"streams": []any{map[string]any{"codec_type": "video", "codec_name": "h264", "width": 640, "height": 480}}, "format": map[string]any{"duration": "3.0"}},
 			mode: "frames", want: "do not match plan",
 		},
 		{
 			name: "wrong duration",
-			doc: map[string]any{"streams": []any{map[string]any{"codec_type": "video","codec_name": "h264","width": 320,"height": 240}}, "format": map[string]any{"duration": "30.0"}},
+			doc: map[string]any{"streams": []any{map[string]any{"codec_type": "video", "codec_name": "h264", "width": 320, "height": 240}}, "format": map[string]any{"duration": "30.0"}},
 			mode: "frames", want: "does not match plan total",
 		},
 		{
 			name: "blank scene frame",
-			doc: map[string]any{"streams": []any{map[string]any{"codec_type": "video","codec_name": "h264","width": 320,"height": 240}}, "format": map[string]any{"duration": "3.0"}},
+			doc: map[string]any{"streams": []any{map[string]any{"codec_type": "video", "codec_name": "h264", "width": 320, "height": 240}}, "format": map[string]any{"duration": "3.0"}},
 			mode: "blank", want: "is blank",
 		},
 	}
