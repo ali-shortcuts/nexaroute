@@ -51,7 +51,7 @@ jobs:
           # Canonical measurement from docs/reports/M1-1_COVERAGE.md.
           go test -count=1 -coverprofile=.artifacts/coverage/coverage.out ./... 2>&1 \
             | tee .artifacts/coverage/packages.raw.txt
-          grep -E 'coverage:|\\[no test files\\]' .artifacts/coverage/packages.raw.txt \
+          grep -E 'coverage:|\[no test files\]' .artifacts/coverage/packages.raw.txt \
             | tee .artifacts/coverage/packages.txt
           go tool cover -func=.artifacts/coverage/coverage.out \
             | tee .artifacts/coverage/functions.txt
