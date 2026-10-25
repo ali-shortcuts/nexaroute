@@ -40,6 +40,24 @@ func WAVDuration(path string) (time.Duration, error) {
 			return 0, errors.New("could not read narration WAV chunks")
 		}
 		size := binary.LittleEndian.Uint32(chunk[4:8])
+		// Seeking beyond EOF is permitted for regular files, so validate each
+		// chunk's declared payload and word-alignment padding before any branch
+		// seeks over it. This also covers data chunks that precede the fmt chunk.
+		chunkOffset, err := file.Seek(0, io.SeekCurrent)
+		if err != nil {
+			return 0, errors.New("could not inspect narration WAV chunk offset")
+		}
+		info, err := file.Stat()
+		if err != nil {
+			return 0, errors.New("could not inspect narration WAV size")
+		}
+		required := int64(size)
+		if size%2 == 1 {
+			required++
+		}
+		if chunkOffset > info.Size() || required > info.Size()-chunkOffset {
+			return 0, errors.New("narration WAV chunk is incomplete")
+		}
 		switch string(chunk[0:4]) {
 		case "fmt ":
 			if size < 16 {

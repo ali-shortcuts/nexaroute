@@ -62,7 +62,6 @@ func TestWAVDurationAdversarial(t *testing.T) {
 		"truncated header":   []byte("RIFF"),
 		"bad magic":          []byte("NOPE\x00\x00\x00\x00XXXX"),
 		"fmt too small":      wavFile(wavChunk("fmt ", make([]byte, 8))),
-		"fmt incomplete":     wavFile(append([]byte("RIFF"), []byte("fmt ")...)), // no, see below
 		"data without audio": wavFile(fmtChunk(16000, nil), wavChunk("data", nil)),
 		"no chunks at all":   []byte("RIFF\x00\x00\x00\x00WAVE"),
 	}
@@ -74,6 +73,33 @@ func TestWAVDurationAdversarial(t *testing.T) {
 	h = append(h, size...)
 	h = append(h, []byte{1, 0, 1, 0}...)
 	cases["fmt incomplete"] = h
+
+	// A plausible format chunk must not make a truncated data payload look
+	// valid: seeking over an absent payload can succeed on regular files.
+	truncatedData := wavFile(fmtChunk(16000, nil))
+	truncatedData = append(truncatedData, []byte("data")...)
+	dataSize := make([]byte, 4)
+	binary.LittleEndian.PutUint32(dataSize, 32000)
+	truncatedData = append(truncatedData, dataSize...)
+	truncatedData = append(truncatedData, []byte{1, 2, 3, 4}...)
+	cases["truncated data payload"] = truncatedData
+
+	// Validate malformed data chunks even when they appear before the format
+	// chunk, because seeking past EOF itself does not guarantee an error.
+	truncatedBeforeFormat := wavFile()
+	truncatedBeforeFormat = append(truncatedBeforeFormat, []byte("data")...)
+	binary.LittleEndian.PutUint32(dataSize, 100)
+	truncatedBeforeFormat = append(truncatedBeforeFormat, dataSize...)
+	truncatedBeforeFormat = append(truncatedBeforeFormat, []byte{1, 2, 3, 4}...)
+	cases["truncated data before format"] = truncatedBeforeFormat
+
+	// RIFF chunks with odd payload lengths require a pad byte after the data.
+	missingPad := wavFile(fmtChunk(8000, nil))
+	missingPad = append(missingPad, []byte("data")...)
+	binary.LittleEndian.PutUint32(dataSize, 1)
+	missingPad = append(missingPad, dataSize...)
+	missingPad = append(missingPad, byte(0x7f))
+	cases["missing data padding"] = missingPad
 
 	for name, data := range cases {
 		p := writeWAV(t, name+".wav", data)
@@ -125,9 +151,6 @@ func TestBuildSRTShapes(t *testing.T) {
 	}
 	// Persian punctuation ends sentences too.
 	got = BuildSRT("سلام؟ خداحافظ۔", time.Second)
-	if n := strings.Count(s, "\n\n"); n != 0 {
-		_ = n
-	}
 	if strings.Count(string(got), "\n\n") != 2 {
 		t.Fatalf("persian sentence split: %q", got)
 	}
