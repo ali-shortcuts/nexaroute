@@ -40,6 +40,24 @@ func WAVDuration(path string) (time.Duration, error) {
 			return 0, errors.New("could not read narration WAV chunks")
 		}
 		size := binary.LittleEndian.Uint32(chunk[4:8])
+		// Seeking beyond EOF is permitted for regular files, so validate each
+		// chunk's declared payload and word-alignment padding before any branch
+		// seeks over it. This also covers data chunks that precede the fmt chunk.
+		chunkOffset, err := file.Seek(0, io.SeekCurrent)
+		if err != nil {
+			return 0, errors.New("could not inspect narration WAV chunk offset")
+		}
+		info, err := file.Stat()
+		if err != nil {
+			return 0, errors.New("could not inspect narration WAV size")
+		}
+		required := int64(size)
+		if size%2 == 1 {
+			required++
+		}
+		if chunkOffset > info.Size() || required > info.Size()-chunkOffset {
+			return 0, errors.New("narration WAV chunk is incomplete")
+		}
 		switch string(chunk[0:4]) {
 		case "fmt ":
 			if size < 16 {
@@ -60,24 +78,6 @@ func WAVDuration(path string) (time.Duration, error) {
 			if byteRate > 0 {
 				if dataSize == 0 {
 					return 0, errors.New("narration WAV has no audio data")
-				}
-				// Seek does not fail when it moves beyond EOF. Check the declared
-				// payload (and RIFF's required odd-byte padding) against the opened
-				// file size before treating metadata as proof of a complete WAV.
-				dataOffset, err := file.Seek(0, io.SeekCurrent)
-				if err != nil {
-					return 0, errors.New("could not inspect narration WAV data offset")
-				}
-				info, err := file.Stat()
-				if err != nil {
-					return 0, errors.New("could not inspect narration WAV size")
-				}
-				required := int64(size)
-				if size%2 == 1 {
-					required++
-				}
-				if dataOffset > info.Size() || required > info.Size()-dataOffset {
-					return 0, errors.New("narration WAV data chunk is incomplete")
 				}
 				return time.Duration(dataSize) * time.Second / time.Duration(byteRate), nil // #nosec G115 -- dataSize comes from a uint32 RIFF field and cannot overflow time.Duration at nanosecond scale.
 			}
