@@ -61,6 +61,24 @@ func WAVDuration(path string) (time.Duration, error) {
 				if dataSize == 0 {
 					return 0, errors.New("narration WAV has no audio data")
 				}
+				// Seek does not fail when it moves beyond EOF. Check the declared
+				// payload (and RIFF's required odd-byte padding) against the opened
+				// file size before treating metadata as proof of a complete WAV.
+				dataOffset, err := file.Seek(0, io.SeekCurrent)
+				if err != nil {
+					return 0, errors.New("could not inspect narration WAV data offset")
+				}
+				info, err := file.Stat()
+				if err != nil {
+					return 0, errors.New("could not inspect narration WAV size")
+				}
+				required := int64(size)
+				if size%2 == 1 {
+					required++
+				}
+				if dataOffset > info.Size() || required > info.Size()-dataOffset {
+					return 0, errors.New("narration WAV data chunk is incomplete")
+				}
 				return time.Duration(dataSize) * time.Second / time.Duration(byteRate), nil // #nosec G115 -- dataSize comes from a uint32 RIFF field and cannot overflow time.Duration at nanosecond scale.
 			}
 			if _, err := file.Seek(int64(size), io.SeekCurrent); err != nil {
