@@ -6,6 +6,8 @@ echo '== go version =='
 go version
 echo '== shell syntax =='
 bash -n scripts/*.sh
+echo '== final release gate regression tests =='
+bash .github/scripts/test-final-release-gate.sh
 echo '== HA documentation consistency =='
 ./scripts/check-ha-docs.sh
 echo '== flake-hunt harness regression checks =='
