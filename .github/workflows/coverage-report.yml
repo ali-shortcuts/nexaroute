@@ -1,0 +1,81 @@
+name: Coverage report
+
+# Lightweight, uncached statement-coverage measurement. This complements the
+# intentionally manual Architecture & Quality Audit; it does not lower or
+# replace that audit's 85% acceptance gate.
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    paths:
+      - "**/*.go"
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/coverage-report.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: coverage-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  coverage:
+    name: Fresh Go coverage
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.x'
+          cache: false
+
+      - name: Measure package and repository coverage
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .artifacts/coverage
+          {
+            echo "commit: ${GITHUB_SHA}"
+            echo "ref: ${GITHUB_REF}"
+            go version
+            uname -a
+          } | tee .artifacts/coverage/environment.txt
+
+          # Canonical measurement from docs/reports/M1-1_COVERAGE.md.
+          go test -count=1 -coverprofile=.artifacts/coverage/coverage.out ./... 2>&1 \
+            | tee .artifacts/coverage/packages.raw.txt
+          grep -E 'coverage:|\[no test files\]' .artifacts/coverage/packages.raw.txt \
+            | tee .artifacts/coverage/packages.txt
+          go tool cover -func=.artifacts/coverage/coverage.out \
+            | tee .artifacts/coverage/functions.txt
+          total_line="$(tail -n 1 .artifacts/coverage/functions.txt)"
+          {
+            echo "## Fresh Go coverage"
+            echo
+            echo "- Commit: `$GITHUB_SHA`"
+            echo "- Toolchain: `$(go version)`"
+            echo "- Total: **$total_line**"
+            echo "- Measurement: `go test -count=1 -coverprofile=.artifacts/coverage/coverage.out ./...`"
+            echo
+            echo "### Package coverage"
+            echo
+            echo ' ```text'
+            cat .artifacts/coverage/packages.txt
+            echo ' ```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload reproducible coverage evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: coverage-${{ github.sha }}-${{ github.run_id }}
+          path: .artifacts/coverage/
+          retention-days: 90
+          if-no-files-found: error
