@@ -63,43 +63,7 @@ jobs:
         if: github.event_name == 'push' && github.ref_type == 'tag'
         env:
           GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          # These blockers represent product-wide claims that a stable release
-          # must not imply unless their evidence-backed acceptance is complete.
-          # Requiring state_reason=completed prevents "not planned" closures
-          # from silently authorizing a final release.
-          check_completed() {
-            local issue="$1"
-            local payload state reason
-            if ! payload="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${issue}")"; then
-              echo "::error::Could not inspect release blocker #${issue}."
-              return 1
-            fi
-            state="$(jq -r '.state // "unknown"' <<< "$payload")"
-            reason="$(jq -r '.state_reason // "none"' <<< "$payload")"
-            if [[ "$state" != "closed" || "$reason" != "completed" ]]; then
-              echo "::error::Release blocked: issue #${issue} is ${state} (state_reason=${reason}); attach acceptance evidence and close it as completed."
-              return 1
-            fi
-            echo "Release acceptance complete: #${issue}"
-          }
-
-          failed=0
-          for issue in 646 647 648 649 650 651 652 653; do
-            check_completed "$issue" || failed=1
-          done
-          # The umbrella is closed last, only after all evidence and the final
-          # release decision have been reviewed.
-          check_completed 654 || failed=1
-
-          if (( failed != 0 )); then
-            echo "::error::Refusing to publish. Resolve every product acceptance blocker and complete issue #654 first."
-            exit 1
-          fi
-          echo "Final release completion gate passed."
+        run: bash .github/scripts/check-final-release-gate.sh
 
       - name: Repository cleanliness
         shell: bash
@@ -249,6 +213,7 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: write
+      issues: read
       # Only this job may mint an OIDC token, for Sigstore keyless signing.
       id-token: write
     steps:
@@ -265,6 +230,11 @@ jobs:
             echo "Releases are published only from tested main commits." >&2
             exit 1
           fi
+
+      - name: Recheck acceptance blockers immediately before publishing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/check-final-release-gate.sh
 
       - name: Download verified assets
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
