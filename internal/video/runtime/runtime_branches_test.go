@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -44,6 +45,12 @@ func TestOpenJobStoreBackendSelectionAndFailurePaths(t *testing.T) {
 		if err != nil || store == nil {
 			t.Fatalf("openJobStore(default) = %v, %v", store, err)
 		}
+		// The file store creates its file lazily on the first
+		// mutating operation (NewFileStore tolerates a missing file),
+		// so persist one job before asserting the resolved path.
+		if err := store.Create(context.Background(), video.VideoJob{JobID: "branch-test-job"}); err != nil {
+			t.Fatalf("store.Create(default) = %v", err)
+		}
 		if _, err := os.Stat(filepath.Join(root, "video-jobs.json")); err != nil {
 			t.Fatalf("default store file was not created: %v", err)
 		}
@@ -53,6 +60,11 @@ func TestOpenJobStoreBackendSelectionAndFailurePaths(t *testing.T) {
 		store, err := openJobStore(video.Config{JobStoreBackend: "file", StorePath: "nested/jobs.json"}, root)
 		if err != nil || store == nil {
 			t.Fatalf("openJobStore(file) = %v, %v", store, err)
+		}
+		// Same lazy-creation behavior as the default backend: the
+		// nested directory is created by persist, not by open.
+		if err := store.Create(context.Background(), video.VideoJob{JobID: "branch-test-job"}); err != nil {
+			t.Fatalf("store.Create(file) = %v", err)
 		}
 		if _, err := os.Stat(filepath.Join(root, "nested", "jobs.json")); err != nil {
 			t.Fatalf("relative store path not resolved under base directory: %v", err)
