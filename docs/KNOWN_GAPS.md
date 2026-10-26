@@ -436,6 +436,12 @@ Current package coverage from the same artifact:
 - `cmd/videogen`: 94.9%
 - `internal/taskprofile`: 99.6%
 
+Historical audit-record note (2026-10-15, superseded — not current
+measurements): the earlier thin-package list recorded `internal/compat`
+86.6% and `internal/core` 100.0%, among others. These figures are
+retained only so the F15 audit record stays complete; the current
+measurements above supersede them and must be used for any sign-off.
+
 The low coverage in `internal/video/cost` and `internal/video/queue`
 is chiefly concentrated in the PostgreSQL adapter code, whose real
 database integration tests are build-tagged and are not included in the
