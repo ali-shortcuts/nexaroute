@@ -42,7 +42,6 @@ func TestPostgresLedgerAggregateReadsDegradeToZeroOnStoreError(t *testing.T) {
 	}
 }
 
-
 // TestOpenPostgresLedgerRejectsInvalidConfiguration exercises fail-closed
 // constructor validation without requiring a running PostgreSQL service.
 func TestOpenPostgresLedgerRejectsInvalidConfiguration(t *testing.T) {
@@ -66,11 +65,11 @@ func TestPostgresLedgerRejectsInvalidMutationsBeforeStoreAccess(t *testing.T) {
 	e := knownEstimate(1)
 
 	reserveCases := []struct {
-		name string
-		job string
+		name     string
+		job      string
 		estimate video.CostEstimate
-		max float64
-		want error
+		max      float64
+		want     error
 	}{
 		{name: "empty job id", job: "", estimate: e, want: errors.New("job ID is required")},
 		{name: "unknown price", job: "unknown", estimate: video.CostEstimate{}, want: ErrUnknownPrice},
@@ -97,8 +96,8 @@ func TestPostgresLedgerRejectsInvalidMutationsBeforeStoreAccess(t *testing.T) {
 	}
 
 	actualCases := []struct {
-		name string
-		job string
+		name             string
+		job              string
 		actual, fallback float64
 	}{
 		{name: "empty job id", job: "", actual: 1, fallback: 1},
@@ -118,8 +117,8 @@ func TestPostgresLedgerRejectsInvalidMutationsBeforeStoreAccess(t *testing.T) {
 	}
 
 	for _, tc := range []struct {
-		name string
-		job string
+		name   string
+		job    string
 		amount float64
 	}{
 		{name: "empty job id", job: "", amount: 1},
