@@ -232,10 +232,12 @@ PR #224 wires the permission matrix in `internal/authz` to every registered
 Admin API route/method and denies unknown combinations. OIDC session roles are
 derived only from verified issuer claims using the explicit config allowlist.
 The web UI's visibility is a convenience only; the server middleware is
-authoritative. The local bbolt store is single-host. The project-wide 85%
-coverage target was re-measured on 2026-10-22 at **85.1%** repository-wide
-(audit workflow run on final `main`; target met — see the coverage item below). PR #224 is merged; live external-IdP interoperability remains
-unverified.
+authoritative. The local bbolt store is single-host. The **85% repository-wide coverage
+target is not currently met**: the fresh uncached coverage artifact for
+`main` commit `c7867355c6d5f9773dd185e19c3ab5e689aa6577` measured
+**84.9%** on 2026-10-25 (Go 1.27.3). The earlier 85.1% result from
+2026-10-22 is historical and is superseded by this newer measurement.
+PR #224 is merged; live external-IdP interoperability remains unverified.
 
 
 ## Response cache boundaries
@@ -409,53 +411,58 @@ non-critical nodes no longer abort unrelated sections.
 
 - Evidence: `go test ./...` plus `node --test internal/httpapi/web/dom_isolation.test.mjs`.
 
-### Package coverage gaps and targets — target met
+### Package coverage gaps and targets — current target NOT MET
 
-Coverage measured **85.1% repository-wide** on `main` as of 2026-10-22
-(audit workflow coverage job), meeting the 85% policy target; the
-measurement is re-taken on every audit-workflow run, and the latest
-figure is recorded in the final addendum of
-`docs/reports/QUALITY_AUDIT_FINAL.md`. Per-package figures below are
-the 2026-10-22 measurements.
-The earlier 84.2% measurement (2026-10-15) is superseded; the 2026-10-22
-push also fixed the ruler — the audit coverage job now installs ffmpeg, so
-the render suite (which skips by design without the media toolchain) is
-measured as designed (~87%) instead of at 3.5%. The three packages tracked by this coverage
-pass now meet the per-package bar:
+The canonical uncached measurement from `coverage-report.yml` on
+`main` commit `c7867355c6d5f9773dd185e19c3ab5e689aa6577` completed
+on 2026-10-25 with Go 1.27.3. Its retained artifact reports **84.9%
+repository statement coverage**, below the 85% policy target. The
+workflow succeeded in producing the measurement; that is not evidence
+that the coverage threshold passed. This result supersedes the older
+85.1% measurement from 2026-10-22.
 
-- `cmd/videogen`: 94.7% (`run` 100.0%; `main` entrypoint 0.0% by design —
-  unit tests exercise `run` directly; remaining `DownloadAsset` blocks are
-  `filepath.Abs` failure, non-`Exists`/`NotExist` stat errors, `Chmod`,
-  TOCTOU recheck/rename races, and response-body read errors)
-- `internal/taskprofile`: 100.0% (all functions 100%)
-- `internal/video/orchestrator`: 85.4% (`validateShotPlanRequest` 97.9%,
-  `buildShotRequest`/`shotPrompt`/`findEpisodeSourceAsset`/
-  `removeEpisodeSourceAsset`/`checkNarrationDuration`/`maxAssetBytes`/
-  `episodeDimensions`/`pollInterval`/`retryEpisodeComposition` 100%,
-  `composeEpisode` 68.6%, `ensureNarrationAsset` 78.2%,
-  `ensureSubtitleAsset` 69.8%, `runEpisodeJob` 75.3% remain the thinnest
-  functions; covered branches assert state transitions, persisted
-  checkpoints, error fencing, and emitted artifacts)
+Current package coverage from the same artifact:
 
-The 2026-10-13 baseline for the same command was 85.3% repository-wide
-with `cmd/videogen` 78.6%, `internal/taskprofile` 69.5%, and
-`internal/video/orchestrator` 78.1%; re-measured on current `main` before
-this pass the three packages stood at 63.8%, 84.6%, and 72.5%.
+- `cmd/gateway`: 81.0%
+- `internal/video/cost`: 47.3%
+- `internal/video/queue`: 61.5%
+- `internal/video/runtime`: 63.8%
+- `internal/video/providers`: 67.6%
+- `internal/providers`: 83.6%
+- `internal/video/render`: 92.1% (the deterministic renderer tests in
+  PR #659 materially improved this package)
+- `internal/video/tts`: 86.9%
+- `internal/video/orchestrator`: 85.2%
+- `cmd/videogen`: 94.9%
+- `internal/taskprofile`: 99.6%
 
-Previously thin packages re-measured 2026-10-15: `internal/config` 89.9%,
-`internal/compat` 86.6%, `internal/decision` 87.7%, `internal/feature` 94.0%,
-`internal/probe` 89.5%, `internal/core` 100.0%, `internal/router` 90.2%,
-`internal/video` 95.6%, `internal/secrets` 85.6%. Since 2026-10-13,
-`cmd/gateway` moved to 73.3% and `internal/video/tts` to 76.9%; both are
-below the bar and remain open follow-ups outside this pass.
+Historical audit-record note (2026-10-15, superseded — not current
+measurements): the earlier thin-package list recorded `internal/compat`
+86.6% and `internal/core` 100.0%, among others. These figures are
+retained only so the F15 audit record stays complete; the current
+measurements above supersede them and must be used for any sign-off.
 
-The remaining work is meaningful behavior coverage only; no assertion-free
-padding is acceptable. The task-profile and video-orchestrator branches
-targeted by the next planned pass are covered by this change; the remaining
-thin functions listed above stay open.
+The low coverage in `internal/video/cost` and `internal/video/queue`
+is chiefly concentrated in the PostgreSQL adapter code, whose real
+database integration tests are build-tagged and are not included in the
+canonical plain `go test -count=1 -coverprofile=... ./...` measurement.
+The durable adapter behavior has separate PostgreSQL integration
+coverage, but that does not make the canonical coverage number higher.
+Coverage must be raised with meaningful behavior tests or a reviewed,
+clearly defined measurement-policy change; assertion-free padding or
+excluding production code to make the percentage pass is not acceptable.
 
-- Impact: thinner regression protection in the listed packages.
-- Mitigation/workaround: run the full coverage command above and inspect the
-  per-file function report before adding behavior tests.
+The 2026-10-25 artifact is retained by GitHub Actions:
+`coverage-c7867355c6d5f9773dd185e19c3ab5e689aa6577-40196054365`.
+The canonical measurement command is:
+`go test -count=1 -coverprofile=.artifacts/coverage/coverage.out ./...`.
+
+Remaining acceptance work is tracked in [issue #653](https://github.com/ali-shortcuts/nexaroute/issues/653),
+including meaningful behavior coverage and a fresh long-form stress/soak
+run. The older package measurements later in this historical audit
+record are not current and must not be used for release sign-off.
+
+- Impact: insufficient regression evidence in the listed low-coverage packages.
+- Mitigation/workaround: inspect the retained per-function artifact and add behavior assertions for meaningful untested outcomes.
 - Owner: Phase 1 coverage follow-up; audit finding **F7** and follow-up set
   #169–#177 remain the historical tracking reference.
