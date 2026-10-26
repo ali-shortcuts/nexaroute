@@ -10,6 +10,8 @@ import (
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
+
+	"github.com/ali-shortcuts/nexaroute/internal/video"
 )
 
 // TestPostgresLedgerAggregateReadsDegradeToZeroOnStoreError pins the
