@@ -342,7 +342,8 @@ func vaultAcceptEvidenceClass(u *url.URL) string {
 	if u == nil {
 		return "none"
 	}
-	if loopbackHTTPURL(u.String()) {
+	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
+	if host == "localhost" || host == "::1" || strings.HasPrefix(host, "127.") {
 		return "loopback"
 	}
 	return "external"
