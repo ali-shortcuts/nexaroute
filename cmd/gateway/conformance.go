@@ -63,7 +63,8 @@ Options:
   --secret-key-env ENV       env var holding the AWS secret access key
   --session-token-env ENV    env var holding the AWS session token
   --aws-region REGION        Bedrock region (default: us-east-1)
-  --scenarios LIST           core | extended | all | comma-separated ids (default core)
+  --scenarios LIST           core | acceptance | extended | all | comma-separated ids (default core)
+                             acceptance = core + stream_usage + auth_failure (issue #646 set)
   --max-calls N              hard call ceiling (default 5)
   --max-output-tokens N      per-request output ceiling (default 512)
   --max-input-tokens N       input-token assumption for the cost estimate (default 4096)
@@ -119,7 +120,7 @@ func runConformanceCanary(args []string, stdout, stderr io.Writer) int {
 	fs.StringVar(&f.secretKeyEnv, "secret-key-env", "", "env var holding the AWS secret access key")
 	fs.StringVar(&f.sessionEnv, "session-token-env", "", "env var holding the AWS session token")
 	fs.StringVar(&f.awsRegion, "aws-region", "", "Bedrock region")
-	fs.StringVar(&f.scenarios, "scenarios", "core", "core, extended, all, or comma-separated scenario ids")
+	fs.StringVar(&f.scenarios, "scenarios", "core", "core, acceptance, extended, all, or comma-separated scenario ids")
 	fs.IntVar(&f.maxCalls, "max-calls", 5, "hard ceiling on upstream calls")
 	fs.IntVar(&f.maxOutput, "max-output-tokens", 512, "per-request output token ceiling")
 	fs.IntVar(&f.maxInput, "max-input-tokens", 4096, "per-request input token ceiling")
