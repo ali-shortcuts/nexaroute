@@ -26,6 +26,12 @@ type scriptedSQL struct {
 	execs       []string
 	commits     int
 	rollbacks   int
+	// execFailSubstring, when set, makes only Exec calls whose query
+	// contains it fail with execErr; other Exec calls succeed. This
+	// lets a test fail a later statement (for example the migration
+	// table creation) while earlier statements (for example the
+	// advisory lock) still succeed.
+	execFailSubstring string
 }
 
 type scriptedDriver struct{ state *scriptedSQL }
@@ -91,7 +97,7 @@ func (c scriptedConn) ExecContext(_ context.Context, query string, _ []driver.Na
 	c.state.mu.Lock()
 	defer c.state.mu.Unlock()
 	c.state.execs = append(c.state.execs, query)
-	if c.state.execErr != nil {
+	if c.state.execErr != nil && (c.state.execFailSubstring == "" || strings.Contains(query, c.state.execFailSubstring)) {
 		return nil, c.state.execErr
 	}
 	return scriptedResult{affected: c.state.affected, err: c.state.affectedErr}, nil
@@ -234,12 +240,24 @@ func TestApplyMigrationsRunsNewVersionAndPropagatesDDLFailure(t *testing.T) {
 			t.Errorf("migration execution missing %q in %s", statement, joined)
 		}
 	}
+	// The advisory lock must precede the migration-table creation:
+	// that ordering is what serializes cold-database starts (see
+	// the migrator comment). The old order (create first, lock
+	// second) let two concurrent cold starts collide in the
+	// type catalog.
+	if lockAt, createAt := strings.Index(joined, "pg_advisory_lock"), strings.Index(joined, "CREATE TABLE IF NOT EXISTS "+migrationTable); lockAt < 0 || createAt < 0 || lockAt > createAt {
+		t.Errorf("migration lock must precede migration table creation in %s", joined)
+	}
 	if state.commits != 1 {
 		t.Fatalf("migration tx commits=%d", state.commits)
 	}
 
-	failed := &scriptedSQL{execErr: errors.New("permission denied")}
+	failed := &scriptedSQL{execErr: errors.New("permission denied"), execFailSubstring: "CREATE TABLE IF NOT EXISTS " + migrationTable}
 	if err = ApplyMigrations(context.Background(), openScriptedDB(t, failed), registry); err == nil || !strings.Contains(err.Error(), "create migration table") {
 		t.Fatalf("DDL failure was not wrapped: %v", err)
+	}
+	failedLock := &scriptedSQL{execErr: errors.New("permission denied")}
+	if err = ApplyMigrations(context.Background(), openScriptedDB(t, failedLock), registry); err == nil || !strings.Contains(err.Error(), "acquire migration lock") {
+		t.Fatalf("lock failure was not wrapped: %v", err)
 	}
 }

@@ -130,3 +130,14 @@ everything else runs in the ordinary unit suite.
   deploys) remains **UNVERIFIED** in this tree; the integration
   suites are the strongest available evidence and are gated on
   operator-provided services.
+- Same-VM staging run 2026-10-27
+  (`docs/reports/HA_ACCEPTANCE_2026-10-27.md`, procedure in
+  `docs/HA_ACCEPTANCE_PROCEDURE.md`): two gateway processes
+  on one host against shared PostgreSQL — replica kill and
+  restart, PostgreSQL outage and recovery, shared video
+  job/ledger read-back, and `pg_dump` restore were observed
+  live, with two defects fixed by that PR (concurrent cold
+  start migration race; video job reads returning 404
+  during a backend outage). That run is explicitly NOT
+  multi-host evidence: physical multi-host acceptance
+  stays BLOCKED on staging prerequisites.
