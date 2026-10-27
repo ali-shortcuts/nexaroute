@@ -1195,21 +1195,21 @@ func LoadBase(path string) (Config, error) {
 	if len(b) > maxConfigBytes {
 		return cfg, fmt.Errorf("config exceeds safe limit %d bytes", maxConfigBytes)
 	}
-	if strings.Contains(string(b), secrets.Prefix) || hasSecretValues(b) {
-		key, _, keyErr := secrets.Key(path)
+	if secrets.HasEnvelopes(b) || hasSecretValues(b) {
+		cipher, keyErr := secrets.LoadCipher(path)
 		if keyErr != nil {
 			return cfg, keyErr
 		}
-		plain, _, transformErr := secrets.TransformConfig(b, key, false)
+		plain, _, transformErr := secrets.TransformConfigWith(cipher, b, false)
 		if transformErr != nil {
 			return cfg, transformErr
 		}
-		enc, migrated, encErr := secrets.TransformConfig(b, key, true)
+		enc, migrated, encErr := secrets.TransformConfigWith(cipher, b, true)
 		if encErr != nil {
 			return cfg, errors.New("cannot encrypt legacy configuration secrets")
 		}
 		if migrated > 0 { // Legacy plaintext: migrate atomically and retain only an encrypted backup.
-			backup, e := secrets.EncryptedBackup(key, b)
+			backup, e := secrets.EncryptedBackupWith(cipher, b)
 			if e != nil {
 				return cfg, errors.New("cannot create encrypted migration backup")
 			}
@@ -3707,11 +3707,11 @@ func SaveAtomic(path string, c Config) error {
 		return err
 	}
 	if hasSecretValues(b) {
-		key, _, keyErr := secrets.Key(path)
+		cipher, keyErr := secrets.LoadCipher(path)
 		if keyErr != nil {
 			return keyErr
 		}
-		b, _, err = secrets.TransformConfig(b, key, true)
+		b, _, err = secrets.TransformConfigWith(cipher, b, true)
 		if err != nil {
 			return errors.New("cannot encrypt configuration secrets")
 		}

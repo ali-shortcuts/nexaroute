@@ -204,7 +204,7 @@ func verifyConfigDecryption(stage string, payloads map[string][]byte, configPath
 	if err := os.WriteFile(stagedConfig, payloads[backupEntryConfig], 0o600); err != nil {
 		return config.Config{}, statusFail, "cannot stage bundled config for verification"
 	}
-	hasEnvelopes := strings.Contains(string(payloads[backupEntryConfig]), "nxs1:")
+	hasEnvelopes := strings.Contains(string(payloads[backupEntryConfig]), "nxs1:") || strings.Contains(string(payloads[backupEntryConfig]), "nxs2:")
 	keyAvailable := false
 	if key, ok := payloads[backupEntryKey]; ok {
 		if err := os.WriteFile(stagedConfig+".key", key, 0o600); err != nil {

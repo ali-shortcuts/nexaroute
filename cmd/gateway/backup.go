@@ -1552,7 +1552,7 @@ func validateBundledConfig(stage string, payloads map[string][]byte) (config.Con
 // available (bundled or environment), this function returns false and
 // any failure is fatal.
 func keylessRestoreJustified(payloads map[string][]byte) bool {
-	if !bytes.Contains(payloads[backupEntryConfig], []byte(secrets.Prefix)) {
+	if !secrets.HasEnvelopes(payloads[backupEntryConfig]) {
 		return false // plaintext config: the loader failure is not a missing key
 	}
 	if _, ok := payloads[backupEntryKey]; ok {

@@ -95,7 +95,7 @@ func (d *doctor) checkConfig(configPath string) {
 	if len(cfg.Warnings) > 0 {
 		d.report("WARN", "config_warnings", fmt.Sprintf("%d advisory warning(s) from defaulted settings", len(cfg.Warnings)))
 	}
-	if envelopes := bytes.Count(raw, []byte("nxs1:")); envelopes > 0 {
+	if envelopes := bytes.Count(raw, []byte("nxs1:")) + bytes.Count(raw, []byte("nxs2:")); envelopes > 0 {
 		// LoadBase resolves the master key to decrypt in memory; reaching
 		// this point means the key paired with the stored envelopes works.
 		d.report("PASS", "master_key", fmt.Sprintf("resolvable for %d encrypted value(s)", envelopes))

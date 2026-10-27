@@ -15,12 +15,12 @@
 #   VAULT_TOKEN  Vault token with read/write on the ref path (required)
 #   <ref>        a KV v2 data path, e.g. secret/data/nexaroute/master-key
 #
-# The key lives in the KV entry's "key_b64" field. NOTE: this is the
-# supported Vault pattern for NexaRoute — the provider contract loads
-# raw key material into the gateway process. Vault Transit envelope
-# mode (key material never leaves Vault) would require a different
-# provider contract and is NOT what this helper implements; see
-# docs/EXTERNAL_VERIFICATION.md.
+# The key lives in the KV entry's "key_b64" field. NOTE: this helper
+# implements the raw-key nxs1 custody pattern; the provider contract
+# loads raw key material into the gateway process. Vault Transit
+# envelope mode (nxs2, key material never leaves Vault) is a separate
+# opt-in implemented by the gateway itself with
+# NEXAROUTE_KEY_PROVIDER=vault-transit; see docs/EXTERNAL_VERIFICATION.md.
 set -eu
 
 if [ -z "${VAULT_ADDR:-}" ] || [ -z "${VAULT_TOKEN:-}" ]; then

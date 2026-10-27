@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"flag"
 	"fmt"
@@ -15,13 +17,15 @@ import (
 
 func runSecrets(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: nexaroute secrets status|verify|rotate|decrypt")
+		return errors.New("usage: nexaroute secrets status|verify|rotate|decrypt|migrate-envelope|rewrap")
 	}
 	cmd := args[0]
 	fs := flag.NewFlagSet("secrets "+cmd, flag.ContinueOnError)
 	path := fs.String("config", defaultConfigPath(), "path to JSON config")
 	toStdout := fs.Bool("to-stdout", false, "write decrypted config to stdout")
 	allow := fs.Bool("allow-plaintext", false, "explicitly permit plaintext output")
+	legacyKeyFile := fs.String("legacy-key-file", "", "path to the legacy nxs1 32-byte master key (migrate-envelope)")
+	legacyKeyB64 := fs.String("legacy-key", "", "base64 legacy nxs1 32-byte master key (migrate-envelope)")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -34,7 +38,7 @@ func runSecrets(args []string) error {
 		if e != nil {
 			return e
 		}
-		count := strings.Count(string(b), secrets.Prefix)
+		count := strings.Count(string(b), secrets.Prefix) + strings.Count(string(b), secrets.EnvelopePrefix)
 		fmt.Printf("encrypted_fields=%d\n", count)
 		if count == 0 {
 			fmt.Println("plaintext_fields_may_exist=true")
@@ -84,11 +88,11 @@ func runSecrets(args []string) error {
 		if e != nil {
 			return e
 		}
-		k, _, e := secrets.Key(*path)
+		cipher, e := secrets.LoadCipher(*path)
 		if e != nil {
 			return e
 		}
-		plain, _, e := secrets.TransformConfig(b, k, false)
+		plain, _, e := secrets.TransformConfigWith(cipher, b, false)
 		if e != nil {
 			return e
 		}
@@ -139,9 +143,72 @@ func runSecrets(args []string) error {
 		syncRotateDirectory(filepath.Dir(kp))
 		fmt.Println("master key rotated; recovery copy retained at " + filepath.Base(oldCopy))
 		return nil
+	case "migrate-envelope":
+		env, enabled, e := secrets.ConfiguredEnvelope()
+		if e != nil {
+			return e
+		}
+		if !enabled {
+			return errors.New("migrate-envelope requires NEXAROUTE_KEY_PROVIDER=vault-transit")
+		}
+		legacy, e := loadLegacyKey(*legacyKeyFile, *legacyKeyB64)
+		if e != nil {
+			return e
+		}
+		n, e := secrets.MigrateToEnvelopeFile(context.Background(), *path, legacy, env)
+		if e != nil {
+			return e
+		}
+		fmt.Printf("migrated_fields=%d\n", n)
+		return nil
+	case "rewrap":
+		env, enabled, e := secrets.ConfiguredEnvelope()
+		if e != nil {
+			return e
+		}
+		if !enabled {
+			return errors.New("rewrap requires NEXAROUTE_KEY_PROVIDER=vault-transit")
+		}
+		n, e := secrets.RewrapConfigFile(context.Background(), *path, env)
+		if e != nil {
+			return e
+		}
+		fmt.Printf("rewrapped_fields=%d\n", n)
+		return nil
 	default:
-		return errors.New("unknown secrets command; use status, verify, rotate, or decrypt")
+		return errors.New("unknown secrets command; use status, verify, rotate, decrypt, migrate-envelope, or rewrap")
 	}
+}
+
+func loadLegacyKey(file, encoded string) ([]byte, error) {
+	if file == "" {
+		file = strings.TrimSpace(os.Getenv("NEXAROUTE_LEGACY_MASTER_KEY_FILE"))
+	}
+	if encoded == "" {
+		encoded = strings.TrimSpace(os.Getenv("NEXAROUTE_LEGACY_MASTER_KEY"))
+	}
+	if file != "" && encoded != "" {
+		return nil, errors.New("set only one legacy nxs1 key source")
+	}
+	if encoded != "" {
+		b, err := base64.StdEncoding.DecodeString(encoded)
+		if err != nil || len(b) != 32 {
+			return nil, errors.New("legacy nxs1 key must be base64 of exactly 32 bytes")
+		}
+		return b, nil
+	}
+	if file == "" {
+		return nil, errors.New("migrate-envelope requires --legacy-key-file or --legacy-key for nxs1 envelopes")
+	}
+	b, err := os.ReadFile(file)
+	if err != nil {
+		return nil, errors.New("cannot read legacy nxs1 key file")
+	}
+	st, err := os.Stat(file)
+	if err != nil || st.Mode().Perm() != 0600 || len(b) != 32 {
+		return nil, errors.New("legacy nxs1 key file must contain exactly 32 bytes with mode 0600")
+	}
+	return b, nil
 }
 func writeRotateFile(path string, b []byte) error {
 	d := filepath.Dir(path)

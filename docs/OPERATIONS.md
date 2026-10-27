@@ -155,6 +155,38 @@ Rotation retains the previous key as `<config-path>.key.previous`, stages the re
 
 If the process stops during rotation, preserve the config, `.key`, `.key.next`, and `.key.previous`; do not delete or overwrite any of them. Restart or run `nexaroute secrets verify --config "$CONFIG"` with the same config path: when the config authenticates with the staged key, NexaRoute promotes `.key.next` to `.key`. If verification does not succeed, restore a known-good encrypted config and its matching key from backup. Do not start an older gateway with an encrypted config unless it supports the same `nxs1` envelope format.
 
+### Vault Transit migration and rewrap
+
+Vault Transit `nxs2` mode is selected with `NEXAROUTE_KEY_PROVIDER=vault-transit`
+and the `NEXAROUTE_TRANSIT_*` variables documented in
+[CONFIGURATION.md](CONFIGURATION.md). The Transit KEK stays in Vault and there
+is no fallback to a local key. A config that still contains `nxs1` envelopes is
+rejected until it is explicitly migrated with the exact legacy key:
+
+```bash
+nexaroute secrets migrate-envelope --config "$CONFIG" --legacy-key-file /secure/old.key
+nexaroute secrets verify --config "$CONFIG"
+```
+
+Migration writes an authenticated encrypted backup, records a non-secret
+journal, and atomically replaces the config. If the process stops, preserve the
+config, the `.enc.bak` backup, and the `.nxs2-migration` journal, then rerun the
+same command: it resumes before replacement or verifies and cleans up after a
+committed replacement. If the journal matches neither the old nor the new
+config, stop and restore from backup rather than deleting it.
+
+After a Vault Transit key rotation, move wrapped DEKs to the latest version:
+
+```bash
+nexaroute secrets rewrap --config "$CONFIG"
+nexaroute secrets verify --config "$CONFIG"
+```
+
+`rewrap` writes an authenticated backup and replaces the config atomically. Do
+not disable an old Transit key version until rewrap and verification succeed.
+Transit mode is fake-API tested but has no real Vault Transit acceptance
+evidence yet; see [EXTERNAL_VERIFICATION.md](EXTERNAL_VERIFICATION.md).
+
 ## 3. Secrets CLI and plaintext handling
 
 - `nexaroute secrets status --config PATH` reports encrypted-field counts only.
