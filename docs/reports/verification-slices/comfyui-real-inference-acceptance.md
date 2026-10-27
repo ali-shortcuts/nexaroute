@@ -93,6 +93,16 @@ parsing, output-size limits, malformed history, and safe cancellation. These
 tests prove the adapter and harness contract; they do **not** prove real model
 inference.
 
+## Local verification (2026-10-27)
+
+- `go test ./... -count=1 -timeout=540s` — PASS.
+- `go test -race ./cmd/gateway ./internal/video/providers -count=1 -timeout=360s` — PASS.
+- `./scripts/verify.sh` — `VERIFY PASS` (the browser acceptance step was
+  skipped because Chromium and Python Playwright are unavailable in this
+  environment; this is unrelated to ComfyUI inference).
+- Actual ComfyUI model inference was not run. These commands verify only the
+  adapter contract and the opt-in harness, not live model interoperability.
+
 ## Limitations
 
 - The command cannot distinguish a real ComfyUI instance from a fixture served
