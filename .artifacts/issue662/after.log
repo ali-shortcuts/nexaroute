@@ -1,0 +1,3 @@
+ok  	github.com/ali-shortcuts/nexaroute/internal/video/runtime	0.418s	coverage: 91.4% of statements
+ok  	github.com/ali-shortcuts/nexaroute/internal/video/providers	0.074s	coverage: 86.4% of statements
+ok  	github.com/ali-shortcuts/nexaroute/cmd/gateway	34.801s	coverage: 82.2% of statements
