@@ -875,8 +875,17 @@ func TestMission95ComposeEpisodeDirectBranches(t *testing.T) {
 		comp.dirOut = true
 		mission95Stored(t, store, job)
 		o := &Orchestrator{Store: store, Assets: sink, Composer: comp, MaxAssetBytes: 1 << 20}
-		if err := o.composeEpisode(ctx, &job); err == nil || !strings.Contains(err.Error(), "could not read composed episode output") {
+		// A directory output is rejected fail-closed. Which check fires
+		// first is filesystem-dependent: filesystems that report a fresh
+		// directory size of 0 trip the empty-output check, while others
+		// reach the ReadFile check. Either rejection plus a Failed job
+		// is the asserted behavior.
+		err := o.composeEpisode(ctx, &job)
+		if err == nil || (!strings.Contains(err.Error(), "could not read composed episode output") && !strings.Contains(err.Error(), "empty or exceeds")) {
 			t.Fatalf("compose dir error=%v", err)
+		}
+		if got := mission95Get(t, store, "ce-dir"); got.State != video.StateFailed {
+			t.Fatalf("compose dir state=%s, want failed", got.State)
 		}
 	})
 	t.Run("final put error", func(t *testing.T) {
