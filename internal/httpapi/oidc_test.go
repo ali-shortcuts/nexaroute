@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/big"
 	"net/http"
@@ -19,6 +20,7 @@ import (
 	"time"
 
 	"github.com/ali-shortcuts/nexaroute/internal/config"
+	"github.com/ali-shortcuts/nexaroute/internal/securitystore"
 	jose "github.com/go-jose/go-jose/v4"
 )
 
@@ -226,6 +228,12 @@ func (p *inProcessOIDCProvider) signedIDToken(flow oidcTestFlow) (string, error)
 		"iss": issuer, "sub": "oidc-user-123", "aud": audience, "azp": testOIDCClientID,
 		"iat": now.Unix(), "exp": expiry, "nonce": nonce, "groups": flow.groups,
 	}
+	switch flow.mode {
+	case "missing-role-claim":
+		delete(claims, "groups")
+	case "malformed-role-claim":
+		claims["groups"] = map[string]any{"role": "nr-admins"}
+	}
 	payload, err := json.Marshal(claims)
 	if err != nil {
 		return "", err
@@ -348,6 +356,46 @@ func requestWithAdminCookies(handler http.Handler, method, target string, cookie
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
 	return rr
+}
+
+func completeOIDCTestLogin(t *testing.T, handler http.Handler, provider *inProcessOIDCProvider, groups []string) *http.Cookie {
+	t.Helper()
+	state, nonce, location, loginResponse := beginOIDCTestLogin(t, handler, nil)
+	bindingCookie := oidcFlowCookie(t, loginResponse)
+	provider.setFlow(oidcTestFlow{
+		mode: "valid", nonce: nonce, challenge: location.Query().Get("code_challenge"), groups: groups,
+	})
+	callback := finishOIDCTestLogin(t, handler, state, "accepted-code", nil, bindingCookie)
+	if callback.Code != http.StatusSeeOther {
+		t.Fatalf("valid login callback status=%d body=%s", callback.Code, callback.Body.String())
+	}
+	for _, cookie := range callback.Result().Cookies() {
+		if cookie.Name == adminSessionCookie && cookie.Value != "" {
+			return cookie
+		}
+	}
+	t.Fatal("valid login did not issue an admin session cookie")
+	return nil
+}
+
+type oidcWriteFailureBackend struct {
+	securitystore.Backend
+	rotateErr error
+	revokeErr error
+}
+
+func (b oidcWriteFailureBackend) RotateSession(ctx context.Context, oldHash, hash string, value securitystore.Session, event securitystore.AuditEvent) error {
+	if b.rotateErr != nil {
+		return b.rotateErr
+	}
+	return b.Backend.RotateSession(ctx, oldHash, hash, value, event)
+}
+
+func (b oidcWriteFailureBackend) RevokeSession(ctx context.Context, hash string, event securitystore.AuditEvent) error {
+	if b.revokeErr != nil {
+		return b.revokeErr
+	}
+	return b.Backend.RevokeSession(ctx, hash, event)
 }
 
 func TestOIDCAuthorizationCodePKCEAndSessionLifecycle(t *testing.T) {
@@ -557,6 +605,188 @@ func TestOIDCRejectsInvalidTokensAndTamperedResponses(t *testing.T) {
 	}
 }
 
+func TestOIDCUnmappedAmbiguousAndMalformedRolesDenied(t *testing.T) {
+	provider := newInProcessOIDCProvider(t)
+	srv := oidcTestGateway(t, provider)
+	handler := srv.Handler()
+	cases := []struct {
+		name   string
+		mode   string
+		groups []string
+	}{
+		{name: "unmapped group", mode: "valid", groups: []string{"unrecognized-group"}},
+		{name: "missing role claim", mode: "missing-role-claim"},
+		{name: "conflicting mapped roles", mode: "valid", groups: []string{"nr-viewers", "nr-admins"}},
+		{name: "malformed role claim", mode: "malformed-role-claim", groups: []string{"nr-admins"}},
+	}
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			state, nonce, location, loginResponse := beginOIDCTestLogin(t, handler, nil)
+			bindingCookie := oidcFlowCookie(t, loginResponse)
+			provider.setFlow(oidcTestFlow{mode: tc.mode, nonce: nonce, challenge: location.Query().Get("code_challenge"), groups: tc.groups})
+			callback := finishOIDCTestLogin(t, handler, state, fmt.Sprintf("denied-code-%d", i), nil, bindingCookie)
+			if callback.Code != http.StatusUnauthorized {
+				t.Fatalf("unmapped/ambiguous identity accepted: status=%d body=%s", callback.Code, callback.Body.String())
+			}
+			for _, cookie := range callback.Result().Cookies() {
+				if cookie.Name == adminSessionCookie && cookie.Value != "" {
+					t.Fatalf("denied identity received an admin session: %#v", cookie)
+				}
+			}
+		})
+	}
+	events, err := srv.securityDB.AuditRecords(context.Background(), 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failures := 0
+	for _, event := range events {
+		if event.Action == "auth.login.failed" {
+			failures++
+		}
+	}
+	if failures != len(cases) {
+		t.Fatalf("denied logins produced %d auth.login.failed records, want %d", failures, len(cases))
+	}
+}
+
+func TestOIDCLoginTransactionsIssueUniqueStateNonceAndPKCE(t *testing.T) {
+	provider := newInProcessOIDCProvider(t)
+	srv := oidcTestGateway(t, provider)
+	binding := base64.RawURLEncoding.EncodeToString([]byte(strings.Repeat("u", 32)))
+	states := make(map[string]bool)
+	nonces := make(map[string]bool)
+	verifiers := make(map[string]bool)
+	for i := 0; i < 64; i++ {
+		authorizationURL, state, err := srv.oidc.Begin("127.0.0.1", "", binding)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if state == "" || states[state] {
+			t.Fatalf("state %q is empty or reused", state)
+		}
+		states[state] = true
+		transaction, ok := srv.oidc.takeState(state, binding)
+		if !ok {
+			t.Fatalf("issued state %q was not accepted with its binding", state)
+		}
+		if transaction.nonce == "" || nonces[transaction.nonce] {
+			t.Fatalf("nonce %q is empty or reused", transaction.nonce)
+		}
+		nonces[transaction.nonce] = true
+		if transaction.verifier == "" || verifiers[transaction.verifier] {
+			t.Fatalf("PKCE verifier %q is empty or reused", transaction.verifier)
+		}
+		verifiers[transaction.verifier] = true
+		parsed, err := url.Parse(authorizationURL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		query := parsed.Query()
+		digest := sha256.Sum256([]byte(transaction.verifier))
+		wantChallenge := base64.RawURLEncoding.EncodeToString(digest[:])
+		if query.Get("state") != state || query.Get("nonce") != transaction.nonce {
+			t.Fatalf("authorization URL does not carry the issued state/nonce: %s", parsed.Redacted())
+		}
+		if query.Get("code_challenge") != wantChallenge || query.Get("code_challenge_method") != "S256" {
+			t.Fatalf("authorization URL PKCE challenge does not match its verifier: %s", parsed.Redacted())
+		}
+	}
+}
+
+func TestOIDCSuccessfulLoginPersistenceFailureIssuesNoSession(t *testing.T) {
+	provider := newInProcessOIDCProvider(t)
+	srv := oidcTestGateway(t, provider)
+	handler := srv.Handler()
+	state, nonce, location, loginResponse := beginOIDCTestLogin(t, handler, nil)
+	bindingCookie := oidcFlowCookie(t, loginResponse)
+	provider.setFlow(oidcTestFlow{mode: "valid", nonce: nonce, challenge: location.Query().Get("code_challenge"), groups: []string{"nr-admins"}})
+	original := srv.securityDB
+	srv.securityDB = oidcWriteFailureBackend{Backend: original, rotateErr: errors.New("injected session/audit write failure")}
+	defer func() { srv.securityDB = original }()
+	callback := finishOIDCTestLogin(t, handler, state, "persistence-failure-code", nil, bindingCookie)
+	if callback.Code != http.StatusServiceUnavailable {
+		t.Fatalf("callback continued after session/audit persistence failure: status=%d body=%s", callback.Code, callback.Body.String())
+	}
+	for _, cookie := range callback.Result().Cookies() {
+		if cookie.Name == adminSessionCookie && cookie.Value != "" {
+			t.Fatalf("session cookie issued without a persisted session: %#v", cookie)
+		}
+	}
+	srv.securityDB = original
+	events, err := srv.securityDB.AuditRecords(context.Background(), 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range events {
+		if event.Action == "auth.login.succeeded" {
+			t.Fatalf("failed persistence still recorded a successful login: %#v", event)
+		}
+	}
+}
+
+func TestOIDCLogoutRevocationFailureKeepsSessionActive(t *testing.T) {
+	provider := newInProcessOIDCProvider(t)
+	srv := oidcTestGateway(t, provider)
+	handler := srv.Handler()
+	sessionCookie := completeOIDCTestLogin(t, handler, provider, []string{"nr-admins"})
+
+	csrfResponse := requestWithAdminCookies(handler, http.MethodGet, "/admin/api/csrf-token", sessionCookie)
+	if csrfResponse.Code != http.StatusOK {
+		t.Fatalf("CSRF token status=%d body=%s", csrfResponse.Code, csrfResponse.Body.String())
+	}
+	var csrfBody struct {
+		Token string `json:"token"`
+	}
+	if err := json.Unmarshal(csrfResponse.Body.Bytes(), &csrfBody); err != nil || csrfBody.Token == "" {
+		t.Fatalf("invalid CSRF response: body=%s err=%v", csrfResponse.Body.String(), err)
+	}
+	var csrfCookie *http.Cookie
+	for _, cookie := range csrfResponse.Result().Cookies() {
+		if cookie.Name == adminCSRFCookie {
+			csrfCookie = cookie
+		}
+	}
+	if csrfCookie == nil {
+		t.Fatal("CSRF response did not set the double-submit cookie")
+	}
+
+	original := srv.securityDB
+	srv.securityDB = oidcWriteFailureBackend{Backend: original, revokeErr: errors.New("injected revocation/audit write failure")}
+	defer func() { srv.securityDB = original }()
+	logoutReq := httptest.NewRequest(http.MethodPost, "http://localhost/admin/auth/logout", nil)
+	logoutReq.RemoteAddr = "127.0.0.1:12345"
+	logoutReq.Header.Set("Origin", "http://localhost")
+	logoutReq.Header.Set("X-NexaRoute-CSRF", csrfBody.Token)
+	logoutReq.AddCookie(sessionCookie)
+	logoutReq.AddCookie(csrfCookie)
+	logout := httptest.NewRecorder()
+	handler.ServeHTTP(logout, logoutReq)
+	if logout.Code != http.StatusServiceUnavailable {
+		t.Fatalf("logout reported success without durable revocation/audit: status=%d body=%s", logout.Code, logout.Body.String())
+	}
+	for _, cookie := range logout.Result().Cookies() {
+		if cookie.Name == adminSessionCookie && cookie.MaxAge < 0 {
+			t.Fatalf("logout cleared the browser session despite failed revocation: %#v", cookie)
+		}
+	}
+
+	srv.securityDB = original
+	status := requestWithAdminCookies(handler, http.MethodGet, "/admin/api/snapshot", sessionCookie)
+	if status.Code != http.StatusOK {
+		t.Fatalf("session was revoked despite failed logout persistence: status=%d body=%s", status.Code, status.Body.String())
+	}
+	events, err := srv.securityDB.AuditRecords(context.Background(), 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range events {
+		if event.Action == "auth.logout" {
+			t.Fatalf("failed logout still recorded a logout event: %#v", event)
+		}
+	}
+}
+
 func TestOIDCProviderDiscoveryUsesFixedTrustedIssuerAndNoOpenRedirect(t *testing.T) {
 	provider := newInProcessOIDCProvider(t)
 	srv := oidcTestGateway(t, provider)
@@ -685,6 +915,10 @@ func TestOIDCJWKSKeyRotation(t *testing.T) {
 
 	if rr := login("original"); rr.Code != http.StatusSeeOther || !hasSession(rr) {
 		t.Fatalf("pre-rotation login: status=%d session=%v", rr.Code, hasSession(rr))
+	}
+	provider.setRotation(false, true, true)
+	if rr := login("overlap-old-key"); rr.Code != http.StatusSeeOther || !hasSession(rr) {
+		t.Fatalf("overlap login (old kid while both published): status=%d session=%v", rr.Code, hasSession(rr))
 	}
 	// Rollover: sign with the new key, publish both keys.
 	provider.setRotation(true, true, true)

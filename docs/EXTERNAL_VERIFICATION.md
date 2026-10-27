@@ -30,7 +30,7 @@ runbook procedure exists for it.
 
 | Dependency | Real-system status | Evidence / procedure |
 |---|---|---|
-| OIDC identity provider (browser login) | EXECUTED LOCALLY 2026-10-24 — full login flow PASS against a conforming local IdP (discovery, PKCE S256, JWKS verify, role mapping, session, fail-closed negatives); a live organizational tenant remains UNVERIFIED | §1 below; `docs/reports/LOCAL_ACCEPTANCE_2026-10-24.md` §3 |
+| OIDC identity provider (browser login) | EXECUTED LOCALLY 2026-10-24; deterministic local coverage expanded 2026-10-27 (issuer pinning, JWKS overlap/rotation, unique state/nonce/PKCE, unmapped/ambiguous roles, logout revocation failure, audit/persistence failure) — live organizational tenant remains **BLOCKED/UNVERIFIED** because no operator-owned credentials/config were supplied | §1 below; `docs/reports/LOCAL_ACCEPTANCE_2026-10-24.md` §3; `docs/reports/OIDC_LIVE_TENANT_ACCEPTANCE_647.md` |
 | HashiCorp Vault (KV helper) | EXECUTED LOCALLY 2026-10-24 — real Vault v2.2.1 (dev mode) round-trip via the shipped helper PASS; gateway key custody + decrypt verify PASS; wrong token fails closed; a production Vault cluster remains UNVERIFIED | §2 below; `docs/reports/LOCAL_ACCEPTANCE_2026-10-24.md` §5 |
 | HashiCorp Vault Transit envelope mode | NOT IMPLEMENTED — the helper loads a raw 32-byte master key into the gateway process; key material is never claimed to stay inside Vault | §2 below |
 | OS keyring (secret-tool) | EXECUTED LOCALLY 2026-10-24 — real Secret Service (gnome-keyring) store/lookup PASS; gateway decrypt verify via the keyring provider PASS; a production desktop keyring remains operator-verified | §3 below; `docs/reports/LOCAL_ACCEPTANCE_2026-10-24.md` §6 |
@@ -51,7 +51,17 @@ in-process IdP, including discovery pinning, JWKS outage, tampered
 tokens, claim-to-role mapping, and — since M4-7 — JWKS key rotation:
 rollover logins work and tokens signed by a retired key are rejected
 (the gateway fetches the current JWKS on every callback rather than
-trusting a process-lifetime cache).
+trusting a process-lifetime cache). The deterministic suite also covers
+old-key logins during the overlap window, unique state/nonce/PKCE per
+transaction, unmapped/missing/conflicting/malformed role claims, failed
+logout revocation, and session/audit persistence failures. These are
+local protocol tests, not live-tenant evidence.
+
+The exact live-tenant checklist is **BLOCKED** until an operator supplies
+a real tenant and credentials:
+[`OIDC_LIVE_TENANT_ACCEPTANCE_647.md`](reports/OIDC_LIVE_TENANT_ACCEPTANCE_647.md).
+No credentials or configuration were available for this pass, so nothing
+below may be marked live-verified from the local suite alone.
 
 Procedure (any conformant provider — Keycloak, Auth0, Entra ID,
 Okta, Google):
