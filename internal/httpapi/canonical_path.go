@@ -605,6 +605,10 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			s.emitProductionEvent(r.Header.Get("x-request-id"), ProductionEventModelFailed, deployment.ID, lastErr, events.Event{ErrorType: policy.ErrorType, LatencyMS: time.Since(start).Milliseconds()})
+			// A transport failure after dispatch is an ambiguous
+			// outcome whether or not a replay follows; pre-dispatch
+			// refusals are filtered out by the helper itself.
+			s.emitAmbiguousOutcome(r.Header.Get("x-request-id"), deployment.ID, derr, time.Since(start))
 			if gatewayDeadlineExceeded(routeCtx, r.Context()) {
 				canonicalErrorJSON(w, "openai_responses", http.StatusGatewayTimeout, "timeout", "gateway request timeout")
 				return

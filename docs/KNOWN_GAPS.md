@@ -264,6 +264,26 @@ Not implemented yet:
 
 The last item is deliberate for the current data plane: a learned router would add latency, cost and a new failure mode. Model/task specialization should currently be expressed with aliases plus explicit capability metadata until a separately evaluated routing model can prove a measurable benefit.
 
+## Retry safety boundaries
+
+Retry decisions are classified by sent state, execution state,
+stream commitment, and verified idempotency support, with the
+full policy, bounds, and evidence in `docs/RETRY_SAFETY.md`.
+Boundaries that remain, by design: no dialect has a verified
+provider idempotency mechanism (manifest `idempotency` =
+`UNTESTED` for all dialects), so exactly-once provider execution
+is never claimed; a pre-commit failover after an ambiguous
+transport/timeout failure may duplicate provider-side work or
+cost, and is recorded as such rather than hidden; cancellation
+ends the gateway's wait and prevents failover but cannot recall
+provider-side execution, and provider-side cancellation of
+in-flight work is unverified; the gateway's sent-state reading
+for transport errors is a conservative heuristic (dial/DNS/
+credential-exhaustion failures are proven not-sent, everything
+else dispatched without a response is unknown), because the Go
+HTTP client does not expose whether request bytes left the
+process.
+
 ## Compatibility engine boundaries
 
 Implemented but bounded by design:
