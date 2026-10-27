@@ -1,0 +1,339 @@
+{
+  "format": "quality-gate-input/v1",
+  "provenance": {
+    "gateway_commit": "e6c3cdf3",
+    "model": "model-1",
+    "deployment_id": "dep-1",
+    "provider_id": "prov-1",
+    "mode": "replay",
+    "generated_at": "2026-10-27T12:00:00Z"
+  },
+  "runs": [
+    {
+      "run_id": "tool_calling-run",
+      "suite_id": "tool_calling",
+      "suite_version": "1",
+      "deployment_id": "dep-1",
+      "provider_id": "prov-1",
+      "model": "model-1",
+      "started_at": "2026-10-27T12:00:00Z",
+      "finished_at": "2026-10-27T12:00:01Z",
+      "duration_ms": 1000,
+      "cases": [
+        {
+          "case_id": "tool_calling-case-0",
+          "verdict": "pass",
+          "resolution": "deterministic",
+          "weight": 1,
+          "latency_ms": 100,
+          "ttft_ms": 20
+        },
+        {
+          "case_id": "tool_calling-case-1",
+          "verdict": "fail",
+          "resolution": "deterministic",
+          "weight": 1,
+          "latency_ms": 100,
+          "ttft_ms": 20
+        },
+        {
+          "case_id": "tool_calling-case-2",
+          "verdict": "fail",
+          "resolution": "deterministic",
+          "weight": 1,
+          "latency_ms": 110,
+          "ttft_ms": 25
+        },
+        {
+          "case_id": "tool_calling-case-3",
+          "verdict": "fail",
+          "resolution": "deterministic",
+          "weight": 1,
+          "latency_ms": 120,
+          "ttft_ms": 30
+        }
+      ],
+      "counts": {
+        "pass": 1,
+        "fail": 3
+      },
+      "score": 0.25,
+      "samples": 4,
+      "scoreable": true,
+      "evaluators": [
+        "exact_match"
+      ]
+    },
+    {
+      "run_id": "structured_output-run",
+      "suite_id": "structured_output",
+      "suite_version": "1",
+      "deployment_id": "dep-1",
+      "provider_id": "prov-1",
+      "model": "model-1",
+      "started_at": "2026-10-27T12:00:00Z",
+      "finished_at": "2026-10-27T12:00:01Z",
+      "duration_ms": 1000,
+      "cases": [
+        {
+          "case_id": "structured_output-case-0",
+          "verdict": "pass",
+          "resolution": "deterministic",
+          "weight": 1,
+          "latency_ms": 100,
+          "ttft_ms": 20
+        },
+        {
+          "case_id": "structured_output-case-1",
+          "verdict": "pass",
+          "resolution": "deterministic",
+          "weight": 1,
+          "latency_ms": 110,
+          "ttft_ms": 25
+        },
+        {
+          "case_id": "structured_output-case-2",
+          "verdict": "pass",
+          "resolution": "deterministic",
+          "weight": 1,
+          "latency_ms": 120,
+          "ttft_ms": 30
+        },
+        {
+          "case_id": "structured_output-case-3",
+          "verdict": "pass",
+          "resolution": "deterministic",
+          "weight": 1,
+          "latency_ms": 130,
+          "ttft_ms": 35
+        }
+      ],
+      "counts": {
+        "pass": 4
+      },
+      "score": 1.0,
+      "samples": 4,
+      "scoreable": true,
+      "evaluators": [
+        "exact_match"
+      ]
+    },
+    {
+      "run_id": "protocol_compat-run",
+      "suite_id": "protocol_compat",
+      "suite_version": "1",
+      "deployment_id": "dep-1",
+      "provider_id": "prov-1",
+      "model": "model-1",
+      "started_at": "2026-10-27T12:00:00Z",
+      "finished_at": "2026-10-27T12:00:01Z",
+      "duration_ms": 1000,
+      "cases": [
+        {
+          "case_id": "protocol_compat-case-0",
+          "verdict": "pass",
+          "resolution": "deterministic",
+          "weight": 1,
+          "latency_ms": 100,
+          "ttft_ms": 20
+        },
+        {
+          "case_id": "protocol_compat-case-1",
+          "verdict": "pass",
+          "resolution": "deterministic",
+          "weight": 1,
+          "latency_ms": 110,
+          "ttft_ms": 25
+        },
+        {
+          "case_id": "protocol_compat-case-2",
+          "verdict": "pass",
+          "resolution": "deterministic",
+          "weight": 1,
+          "latency_ms": 120,
+          "ttft_ms": 30
+        },
+        {
+          "case_id": "protocol_compat-case-3",
+          "verdict": "pass",
+          "resolution": "deterministic",
+          "weight": 1,
+          "latency_ms": 130,
+          "ttft_ms": 35
+        }
+      ],
+      "counts": {
+        "pass": 4
+      },
+      "score": 1.0,
+      "samples": 4,
+      "scoreable": true,
+      "evaluators": [
+        "exact_match"
+      ]
+    },
+    {
+      "run_id": "multi_turn-run",
+      "suite_id": "multi_turn",
+      "suite_version": "1",
+      "deployment_id": "dep-1",
+      "provider_id": "prov-1",
+      "model": "model-1",
+      "started_at": "2026-10-27T12:00:00Z",
+      "finished_at": "2026-10-27T12:00:01Z",
+      "duration_ms": 1000,
+      "cases": [
+        {
+          "case_id": "multi_turn-case-0",
+          "verdict": "pass",
+          "resolution": "deterministic",
+          "weight": 1,
+          "latency_ms": 100,
+          "ttft_ms": 20
+        },
+        {
+          "case_id": "multi_turn-case-1",
+          "verdict": "pass",
+          "resolution": "deterministic",
+          "weight": 1,
+          "latency_ms": 110,
+          "ttft_ms": 25
+        },
+        {
+          "case_id": "multi_turn-case-2",
+          "verdict": "pass",
+          "resolution": "deterministic",
+          "weight": 1,
+          "latency_ms": 120,
+          "ttft_ms": 30
+        },
+        {
+          "case_id": "multi_turn-case-3",
+          "verdict": "pass",
+          "resolution": "deterministic",
+          "weight": 1,
+          "latency_ms": 130,
+          "ttft_ms": 35
+        }
+      ],
+      "counts": {
+        "pass": 4
+      },
+      "score": 1.0,
+      "samples": 4,
+      "scoreable": true,
+      "evaluators": [
+        "exact_match"
+      ]
+    },
+    {
+      "run_id": "streaming-run",
+      "suite_id": "streaming",
+      "suite_version": "1",
+      "deployment_id": "dep-1",
+      "provider_id": "prov-1",
+      "model": "model-1",
+      "started_at": "2026-10-27T12:00:00Z",
+      "finished_at": "2026-10-27T12:00:01Z",
+      "duration_ms": 1000,
+      "cases": [
+        {
+          "case_id": "streaming-case-0",
+          "verdict": "pass",
+          "resolution": "deterministic",
+          "weight": 1,
+          "latency_ms": 100,
+          "ttft_ms": 20
+        },
+        {
+          "case_id": "streaming-case-1",
+          "verdict": "pass",
+          "resolution": "deterministic",
+          "weight": 1,
+          "latency_ms": 110,
+          "ttft_ms": 25
+        },
+        {
+          "case_id": "streaming-case-2",
+          "verdict": "pass",
+          "resolution": "deterministic",
+          "weight": 1,
+          "latency_ms": 120,
+          "ttft_ms": 30
+        },
+        {
+          "case_id": "streaming-case-3",
+          "verdict": "pass",
+          "resolution": "deterministic",
+          "weight": 1,
+          "latency_ms": 130,
+          "ttft_ms": 35
+        }
+      ],
+      "counts": {
+        "pass": 4
+      },
+      "score": 1.0,
+      "samples": 4,
+      "scoreable": true,
+      "evaluators": [
+        "exact_match"
+      ]
+    },
+    {
+      "run_id": "cancellation-run",
+      "suite_id": "cancellation",
+      "suite_version": "1",
+      "deployment_id": "dep-1",
+      "provider_id": "prov-1",
+      "model": "model-1",
+      "started_at": "2026-10-27T12:00:00Z",
+      "finished_at": "2026-10-27T12:00:01Z",
+      "duration_ms": 1000,
+      "cases": [
+        {
+          "case_id": "cancellation-case-0",
+          "verdict": "pass",
+          "resolution": "deterministic",
+          "weight": 1,
+          "latency_ms": 100,
+          "ttft_ms": 20
+        },
+        {
+          "case_id": "cancellation-case-1",
+          "verdict": "pass",
+          "resolution": "deterministic",
+          "weight": 1,
+          "latency_ms": 110,
+          "ttft_ms": 25
+        },
+        {
+          "case_id": "cancellation-case-2",
+          "verdict": "pass",
+          "resolution": "deterministic",
+          "weight": 1,
+          "latency_ms": 120,
+          "ttft_ms": 30
+        },
+        {
+          "case_id": "cancellation-case-3",
+          "verdict": "pass",
+          "resolution": "deterministic",
+          "weight": 1,
+          "latency_ms": 130,
+          "ttft_ms": 35
+        }
+      ],
+      "counts": {
+        "pass": 4
+      },
+      "score": 1.0,
+      "samples": 4,
+      "scoreable": true,
+      "evaluators": [
+        "exact_match"
+      ]
+    }
+  ],
+  "observed_cost_usd": 1.0
+}

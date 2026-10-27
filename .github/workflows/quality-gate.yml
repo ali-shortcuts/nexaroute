@@ -1,0 +1,43 @@
+name: Quality Gate
+
+# Offline-only model-quality regression check. It compares recorded
+# replay evidence from docs/quality-gate/examples/; it makes no
+# upstream call, spends no provider quota, and never changes routing.
+# Live evaluation stays opt-in and manual (admin live-evaluation path
+# with evaluation.live_enabled), and is never run by this workflow.
+on:
+  pull_request:
+    paths:
+      - 'internal/eval/**'
+      - 'internal/qualitygate/**'
+      - 'cmd/gateway/qualitygate*.go'
+      - 'docs/quality-gate/**'
+      - 'scripts/test-quality-gate.sh'
+      - '.github/workflows/quality-gate.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'internal/eval/**'
+      - 'internal/qualitygate/**'
+      - 'cmd/gateway/qualitygate*.go'
+      - 'docs/quality-gate/**'
+      - 'scripts/test-quality-gate.sh'
+      - '.github/workflows/quality-gate.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  quality-gate:
+    name: Offline quality-gate check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.x'
+          cache: true
+      - name: Quality-gate check (unit tests + offline example comparisons)
+        run: bash scripts/test-quality-gate.sh
