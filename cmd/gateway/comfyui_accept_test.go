@@ -332,6 +332,123 @@ func TestComfyUIAcceptCompletedWithoutMP4FailsClosed(t *testing.T) {
 	}
 }
 
+func TestComfyUIAcceptFailedInferenceFailsClosedWithoutResubmit(t *testing.T) {
+	var promptCalls atomic.Int64
+	var deleted atomic.Value
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/system_stats":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"system":{"comfyui_version":"test"},"devices":[]}`))
+		case r.URL.Path == "/prompt" && r.Method == http.MethodPost:
+			promptCalls.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"prompt_id":"prompt-fail"}`))
+		case r.URL.Path == "/history/prompt-fail":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"prompt-fail":{"outputs":{},"status":{"status_str":"error","completed":false}}}`))
+		case r.URL.Path == "/queue" && r.Method == http.MethodGet:
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"queue_running":[],"queue_pending":[[1,"prompt-fail"]]}`))
+		case r.URL.Path == "/queue" && r.Method == http.MethodPost:
+			var body struct {
+				Delete []string `json:"delete"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if len(body.Delete) > 0 {
+				deleted.Store(body.Delete[0])
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	configPath := comfyAcceptConfig(t, comfyAcceptWorkflow(t), server.URL)
+	code, report, _, stdout, stderr := runComfyAcceptTest(t,
+		"--config", configPath, "--confirm-live", "--ffprobe", comfyAcceptProbe(t),
+		"--timeout", "5s", "--poll-interval", "10ms")
+	if code != 1 {
+		t.Fatalf("exit=%d want 1\nstdout=%s\nstderr=%s", code, stdout, stderr)
+	}
+	if report.Outcome != externalStatusFail || !report.InferenceExecuted {
+		t.Fatalf("report outcome=%s inference=%t", report.Outcome, report.InferenceExecuted)
+	}
+	if report.Job == nil || report.Job.State != "failed" {
+		t.Fatalf("job=%+v, want state failed", report.Job)
+	}
+	if status, _ := comfyAcceptCheckStatus(report, "comfyui:model_inference"); status != externalStatusFail {
+		t.Fatalf("inference status=%q, want FAIL (a failed job must never read as complete)", status)
+	}
+	if len(report.Assets) != 0 {
+		t.Fatalf("failed job reported assets: %+v", report.Assets)
+	}
+	if promptCalls.Load() != 1 {
+		t.Fatalf("prompt submissions=%d, want exactly 1 (polling must never resubmit)", promptCalls.Load())
+	}
+	if got, _ := deleted.Load().(string); got != "prompt-fail" {
+		t.Fatalf("remote prompt deleted=%q", got)
+	}
+	if report.Cleanup == nil || report.Cleanup.LocalStatus != externalStatusPass {
+		t.Fatalf("cleanup=%+v", report.Cleanup)
+	}
+	if _, err := os.Stat(report.Target.AssetDirectory); !os.IsNotExist(err) {
+		t.Fatalf("partial asset workspace survived failed inference: %v", err)
+	}
+}
+
+func TestComfyUIAcceptTransientPollErrorDoesNotResubmit(t *testing.T) {
+	var promptCalls atomic.Int64
+	var historyCalls atomic.Int64
+	videoBytes := comfyAcceptMP4()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/system_stats":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"system":{"comfyui_version":"test"},"devices":[]}`))
+		case r.URL.Path == "/prompt" && r.Method == http.MethodPost:
+			promptCalls.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"prompt_id":"prompt-transient"}`))
+		case r.URL.Path == "/history/prompt-transient":
+			if historyCalls.Add(1) == 1 {
+				// First poll observation fails transiently. The harness
+				// must fall back to the queue, not submit a second prompt.
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"prompt-transient":{"outputs":{"10":{"videos":[{"filename":"accept.mp4","subfolder":"","type":"output"}]}},"status":{"status_str":"success","completed":true}}}`))
+		case r.URL.Path == "/queue":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"queue_running":[[1,"prompt-transient"]],"queue_pending":[]}`))
+		case r.URL.Path == "/view":
+			w.Header().Set("Content-Type", "video/mp4")
+			_, _ = w.Write(videoBytes)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	configPath := comfyAcceptConfig(t, comfyAcceptWorkflow(t), server.URL)
+	code, report, _, stdout, stderr := runComfyAcceptTest(t,
+		"--config", configPath, "--confirm-live", "--ffprobe", comfyAcceptProbe(t),
+		"--timeout", "5s", "--poll-interval", "10ms")
+	if code != 0 {
+		t.Fatalf("exit=%d want 0\nstdout=%s\nstderr=%s", code, stdout, stderr)
+	}
+	if promptCalls.Load() != 1 {
+		t.Fatalf("prompt submissions=%d, want exactly 1 despite the transient poll error", promptCalls.Load())
+	}
+	if historyCalls.Load() < 2 {
+		t.Fatalf("history polls=%d, want at least 2", historyCalls.Load())
+	}
+	if len(report.Assets) != 1 {
+		t.Fatalf("assets=%+v", report.Assets)
+	}
+}
+
 func TestComfyUIAcceptSuccessPersistsVerifiedAsset(t *testing.T) {
 	videoBytes := comfyAcceptMP4()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -384,6 +501,22 @@ func TestComfyUIAcceptSuccessPersistsVerifiedAsset(t *testing.T) {
 	}
 	if asset.Probe == nil || asset.Probe.Codec != "h264" || asset.Probe.Width != 1280 || asset.Probe.Height != 720 {
 		t.Fatalf("probe=%+v", asset.Probe)
+	}
+	if status, _ := comfyAcceptCheckStatus(report, "comfyui:asset_path"); status != externalStatusPass {
+		t.Fatalf("asset_path status=%q, want PASS", status)
+	}
+	if !strings.HasPrefix(asset.URI, report.Target.AssetDirectory+string(filepath.Separator)) {
+		t.Fatalf("asset URI %q is outside the acceptance asset root %q", asset.URI, report.Target.AssetDirectory)
+	}
+	if info, err := os.Stat(asset.URI); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("retained asset mode=%v err=%v, want owner-only 0600", info.Mode().Perm(), err)
+	}
+	reportRaw, err := os.ReadFile(reportPath)
+	if err != nil {
+		t.Fatalf("read report: %v", err)
+	}
+	if strings.Contains(string(reportRaw), "red cube") {
+		t.Fatal("report leaks prompt text; only its length and SHA-256 may be recorded")
 	}
 	raw, err := os.ReadFile(asset.URI)
 	if err != nil {

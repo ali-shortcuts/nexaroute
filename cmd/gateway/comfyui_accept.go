@@ -431,6 +431,18 @@ func runComfyUIAcceptChecks(report *comfyAcceptReport, cfg config.Config, config
 		}
 		report.Assets = append(report.Assets, verified)
 	}
+	accessStart := time.Now()
+	for _, asset := range assets {
+		if accessErr := verifyComfyAcceptAssetAccess(runDir, asset); accessErr != nil {
+			addComfyAcceptCheck(report, "comfyui:asset_path", externalStatusFail, accessErr.Error(), accessStart)
+			addComfyAcceptCheck(report, "comfyui:model_inference", externalStatusFail,
+				"workflow output failed the acceptance asset-path/access check", time.Time{})
+			comfyAcceptFailClosed(report, runDir, provider)
+			return 1
+		}
+	}
+	addComfyAcceptCheck(report, "comfyui:asset_path", externalStatusPass,
+		"every persisted asset resolves inside the acceptance asset root as a regular owner-only (0600) file", accessStart)
 	addComfyAcceptCheck(report, "comfyui:asset_integrity", externalStatusPass,
 		"read back every persisted asset, verified non-zero size, video metadata, and matching SHA-256", verifyStart)
 	addComfyAcceptCheck(report, "comfyui:playability", externalStatusPass,
@@ -597,6 +609,51 @@ func verifyComfyAcceptAsset(ctx context.Context, sink *storage.Local, probe *ren
 		Codec: info.Codec, Width: info.Width, Height: info.Height, Seconds: info.Seconds, Size: info.Size,
 	}
 	return verified, nil
+}
+
+// verifyComfyAcceptAssetAccess proves item 6 of the acceptance task for the
+// acceptance run itself: the persisted file must resolve inside the
+// acceptance asset root (no symlink escape) and must be a regular file with
+// owner-only permissions. The local store already writes 0600 files under
+// 0700 directories; this check turns that implementation property into an
+// explicit acceptance check instead of trusting it silently. It does not
+// prove gateway HTTP serving or its auth-token check, which the direct
+// provider harness never exercises; that limitation is recorded in the
+// runbook.
+func verifyComfyAcceptAssetAccess(runDir string, asset video.Asset) error {
+	root, err := filepath.Abs(runDir)
+	if err != nil {
+		return fmt.Errorf("resolve acceptance asset root: %w", err)
+	}
+	path, err := filepath.Abs(filepath.Clean(asset.URI))
+	if err != nil {
+		return fmt.Errorf("resolve asset path: %w", err)
+	}
+	if rel, err := filepath.Rel(root, path); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return errors.New("persisted asset escapes the acceptance asset root")
+	}
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return fmt.Errorf("resolve acceptance asset root: %w", err)
+	}
+	resolvedPath, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return fmt.Errorf("resolve persisted asset: %w", err)
+	}
+	if rel, err := filepath.Rel(resolvedRoot, resolvedPath); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return errors.New("persisted asset escapes the acceptance asset root through a symlink")
+	}
+	info, err := os.Stat(resolvedPath)
+	if err != nil {
+		return fmt.Errorf("stat persisted asset: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return errors.New("persisted asset is not a regular file")
+	}
+	if info.Mode().Perm() != 0o600 {
+		return fmt.Errorf("persisted asset has mode %04o, want owner-only 0600", info.Mode().Perm())
+	}
+	return nil
 }
 
 func comfyAcceptFailClosed(report *comfyAcceptReport, runDir string, provider *providers.ComfyUI) {

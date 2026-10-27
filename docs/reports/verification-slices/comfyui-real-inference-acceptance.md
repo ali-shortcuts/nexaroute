@@ -49,11 +49,20 @@ The command:
   prompt text), server versions/resources, job state, asset facts, and cleanup
   status.
 
-Exit codes: `0` PASS, `1` FAIL, `2` usage/config error, `3` BLOCKED, `4`
-NOT_RUN. A successful real run keeps the verified output under the configured
-`--asset-dir` (default `.artifacts/comfyui-acceptance/`) for operator review.
-Do not commit large media outputs; commit only the sanitized report/runbook
-evidence.
+Exit codes: `0` PASS, `1` FAIL, `2` usage/config error, `3` BLOCKED.
+`NOT_RUN` is a check status, not an exit code. A successful real run keeps the
+verified output under the configured `--asset-dir` (default
+`.artifacts/comfyui-acceptance/`) for operator review. Do not commit large
+media outputs; commit only the sanitized report/runbook evidence.
+
+`--asset-dir` is the acceptance retention root, not automatically the
+gateway's `video.storage_root`. The harness verifies the same local store
+implementation (containment inside the root, regular 0600 files under 0700
+directories) through its `comfyui:asset_path` check, but it calls the provider
+directly and never exercises the gateway HTTP asset-serving path or its
+`video.auth_token_env` check. Do not serve `--asset-dir` over unauthenticated
+HTTP; a live gateway-path serving check is a separate operator step, and the
+report must not claim it.
 
 ## What closes #651
 
@@ -83,9 +92,11 @@ If any item is absent, the issue remains open with the missing evidence named.
 | Unavailable server | exit `1`, `FAIL`, no fabricated version or asset |
 | Invalid workflow/node mapping | exit `1`, preflight `FAIL`, server never contacted |
 | Timeout | exit `1`, poll `FAIL`, pending prompt deleted, partial workspace removed |
+| Failed inference (`status_str: error`) | exit `1`, poll + inference `FAIL`, job recorded as `failed`, no asset, exactly one submission, pending prompt deleted |
+| Transient poll error | poll falls back to the queue and retries `GetJob` only; the prompt is submitted exactly once, then the run can still PASS |
 | Oversized output | exit `1`, download `FAIL`, no partial local asset retained |
 | Completed without MP4 | exit `1`, fail-closed, no asset reported |
-| Successful fixture lifecycle | exit `0`, report/PASS/checks, retained fixture asset verified for size/metadata/SHA-256 |
+| Successful fixture lifecycle | exit `0`, report/PASS/checks, retained fixture asset verified for size/metadata/SHA-256, `asset_path` PASS (inside the acceptance root, regular 0600 file), report contains no prompt text |
 
 `internal/video/providers/comfyui_test.go` additionally covers invalid node
 mapping variants, unavailable server, context deadline, `/system_stats`
@@ -103,6 +114,43 @@ inference.
 - Actual ComfyUI model inference was not run. These commands verify only the
   adapter contract and the opt-in harness, not live model interoperability.
 
+## Independent review follow-up (2026-10-27, PR #669 follow-up commit)
+
+The lane's harness was reviewed against the six items in issue #651. Three
+gaps were closed in this follow-up, without changing the live-run verdict:
+
+- Failed inference had no harness test: `status_str: error` is now covered
+  (job recorded `failed`, inference `FAIL`, no asset, exactly one submission,
+  pending prompt deleted, workspace removed).
+- Poll retries had no no-resubmit proof: a transient history failure now
+  covered — the harness falls back to the queue and retries `GetJob` only, so
+  the prompt is still submitted exactly once.
+- Item 6 had no explicit check: `comfyui:asset_path` now asserts every
+  persisted asset resolves inside the acceptance root as a regular 0600 file,
+  and the success test asserts the retained file mode, the root prefix, and
+  that the report contains no prompt text (only length + SHA-256).
+- The runbook's exit-code line wrongly listed `4 NOT_RUN`; corrected to
+  `0/1/2/3`, with `NOT_RUN` as a check status only.
+
+Verification on the follow-up head (worktree at PR #669 head `8b89bac` plus
+this commit):
+
+- `go test -race ./cmd/gateway/ -run TestComfyUIAccept -count=1` — PASS
+  (including the two new tests and the extended success test).
+- `go test ./cmd/gateway/ -count=1` (full package) — PASS.
+- `go test ./internal/video/providers/ -run TestComfyUI -count=1` — PASS.
+- Red proof for the new check: with the old `comfyui_accept.go`, the extended
+  success test FAILs with `asset_path status="", want PASS`; with the new
+  code it PASSes. The failed-inference and transient-poll tests are regression
+  coverage for behaviour the adapter already had, not bug fixes.
+- `gofmt` clean, `go vet` clean on the two touched packages.
+- NOT verified locally on this head: full `go test ./...` (a dispatch-timeout
+  interrupted that run; its outcome is unknown, not a pass) and a fresh
+  `./scripts/verify.sh` run. Those gates are left to CI on the new head.
+- Actual ComfyUI model inference remains NOT_RUN/BLOCKED: no provisioned
+  server, model, or workflow was available, no model was downloaded, and no
+  paid or public inference endpoint was called.
+
 ## Limitations
 
 - The command cannot distinguish a real ComfyUI instance from a fixture served
@@ -112,5 +160,9 @@ inference.
   that the requested prompt was rendered correctly.
 - A running ComfyUI prompt cannot be cancelled without the global interrupt;
   the harness reports that cleanup as `BLOCKED` instead of claiming success.
+- ComfyUI supplies no idempotency key for a submission: the harness submits
+  exactly once per run, but a manual retry after an ambiguous submission
+  failure (network drop after the server accepted the prompt) may create a
+  second prompt. Check the ComfyUI queue before re-running.
 - Workflow/model licenses, model files, and resource allocation remain the
   operator's responsibility.
