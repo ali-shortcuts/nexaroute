@@ -31,7 +31,7 @@ runbook procedure exists for it.
 | Dependency | Real-system status | Evidence / procedure |
 |---|---|---|
 | OIDC identity provider (browser login) | EXECUTED LOCALLY 2026-10-24 — full login flow PASS against a conforming local IdP (discovery, PKCE S256, JWKS verify, role mapping, session, fail-closed negatives); a live organizational tenant remains UNVERIFIED | §1 below; `docs/reports/LOCAL_ACCEPTANCE_2026-10-24.md` §3 |
-| HashiCorp Vault (KV helper) | EXECUTED LOCALLY 2026-10-24 — real Vault v2.2.1 (dev mode) round-trip via the shipped helper PASS; gateway key custody + decrypt verify PASS; wrong token fails closed; a production Vault cluster remains UNVERIFIED | §2 below; `docs/reports/LOCAL_ACCEPTANCE_2026-10-24.md` §5 |
+| HashiCorp Vault (KV helper) | EXECUTED LOCALLY 2026-10-24 — real Vault v2.2.1 (dev mode) round-trip via the shipped helper PASS; gateway key custody + decrypt verify PASS; wrong token fails closed; a production Vault cluster remains UNVERIFIED. 2026-10-27: opt-in `vault-accept` automation added and fixture-tested; a real staging run and HA/failover remain BLOCKED/NOT_RUN | §2 below; `docs/reports/LOCAL_ACCEPTANCE_2026-10-24.md` §5; `docs/reports/verification-slices/vault-kv-acceptance.md` |
 | HashiCorp Vault Transit envelope mode | NOT IMPLEMENTED — the helper loads a raw 32-byte master key into the gateway process; key material is never claimed to stay inside Vault | §2 below |
 | OS keyring (secret-tool) | EXECUTED LOCALLY 2026-10-24 — real Secret Service (gnome-keyring) store/lookup PASS; gateway decrypt verify via the keyring provider PASS; a production desktop keyring remains operator-verified | §3 below; `docs/reports/LOCAL_ACCEPTANCE_2026-10-24.md` §6 |
 | LLM providers (OpenAI/Anthropic/Gemini-compatible upstreams) | UNVERIFIED — NOT_RUN; zero paid calls by policy | Executed evidence §"LLM providers" |
@@ -84,6 +84,17 @@ protocol, and this repository ships a reference helper for Vault
 **KV v2** (`scripts/key-provider-vault-kv.sh`), tested against a
 fake Vault HTTP API for request shape, token handling and
 fail-closed behavior.
+
+`nexaroute vault-accept` is the opt-in automation for the procedure
+below. It requires `--confirm-live` and an explicit empty KV v2
+`--ref`, refuses dev mode unless `--allow-dev` (and then labels the
+report non-production), never revokes the operator's primary token,
+rotates only a disposable acceptance entry, tests fail-closed wrong/
+revoked-token and unreachable-outage behavior, and writes a redacted
+JSON report (mode `0600`) with Vault version, topology,
+policy names, and per-check PASS/FAIL/BLOCKED/NOT_RUN. Exact
+invocations and the remaining BLOCKED/NOT_RUN items are in
+`docs/reports/verification-slices/vault-kv-acceptance.md`.
 
 **Transit boundary (exact):** Vault Transit envelope mode — where
 key material never leaves Vault — is **not implemented** and cannot

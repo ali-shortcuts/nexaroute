@@ -82,6 +82,8 @@ func dispatchSubcommand(args []string, stdin io.Reader, stdout, stderr io.Writer
 		return runProviderAccept(rest, stdout, stderr), true
 	case "external-accept":
 		return runExternalAccept(rest, stdout, stderr), true
+	case "vault-accept":
+		return runVaultAccept(rest, stdout, stderr), true
 	case "backup":
 		return runBackup(rest, stdout, stderr), true
 	case "restore":

@@ -1,0 +1,69 @@
+{
+  "schema": "nexaroute.vault-acceptance.v1",
+  "gateway_version": "dev",
+  "generated_at": "2026-10-27T15:04:50Z",
+  "mode": "live",
+  "evidence_class": "none",
+  "outcome": "BLOCKED",
+  "target": {
+    "addr": "",
+    "ref": "secret/data/nexaroute/acceptance/master-key",
+    "auth_method": "static token from environment (helper contract); token acquisition is operator-owned",
+    "token_env": "VAULT_TOKEN",
+    "helper_configured": true
+  },
+  "vault": {
+    "ha_enabled": false,
+    "ha_known": false,
+    "sealed": false,
+    "standby": false,
+    "dev_mode": false,
+    "token_metadata_known": false,
+    "baseline_observed": false
+  },
+  "bounds": {
+    "call_timeout_seconds": 10,
+    "overall_timeout_seconds": 120
+  },
+  "checks": [
+    {
+      "id": "vault.ha_failover",
+      "kind": "not-run",
+      "selected": false,
+      "status": "NOT_RUN",
+      "reason": "requires an operator-controlled Vault HA cluster and a failover event; not automated by this harness"
+    },
+    {
+      "id": "vault.transit",
+      "kind": "not-run",
+      "selected": false,
+      "status": "NOT_RUN",
+      "reason": "Vault Transit envelope mode is NOT implemented; this run does not claim Transit support"
+    },
+    {
+      "id": "vault.config",
+      "kind": "config",
+      "selected": true,
+      "status": "BLOCKED",
+      "reason": "environment variable VAULT_ADDR is not set; no Vault request or write was attempted"
+    }
+  ],
+  "totals": {
+    "checks": 3,
+    "passed": 0,
+    "failed": 0,
+    "blocked": 1,
+    "not_run": 2
+  },
+  "limitations": [
+    "This harness verifies Vault KV v2 custody only. Vault Transit envelope mode is NOT implemented and is not tested.",
+    "Real Vault HA failover, long-running token renewal, and auth methods other than a static token are NOT exercised by this run.",
+    "This harness does not start a full gateway process; it verifies helper key load and the nxs1 decrypt path with that key.",
+    "Dev-mode Vault is never production evidence; evidence_class=dev is reported for explicit --allow-dev runs.",
+    "Reports contain no token values or key bytes; they record only statuses, redacted endpoints, policy names, and topology metadata.",
+    "One or more selected checks were BLOCKED by missing infrastructure, credentials, or permissions."
+  ],
+  "warnings": [
+    "No Vault endpoint/token was supplied; this report is BLOCKED, not acceptance evidence."
+  ]
+}
