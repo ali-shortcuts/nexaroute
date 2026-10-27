@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // The Vault KV reference helper (scripts/key-provider-vault-kv.sh)
@@ -121,6 +122,33 @@ func TestVaultKVHelperRoundTripThroughCommandProvider(t *testing.T) {
 	}
 	if get.method != http.MethodGet || get.path != post.path {
 		t.Errorf("GET request wrong: %+v", get)
+	}
+}
+
+// A Vault that accepts the connection but never responds must not hang the
+// helper: curl has no total timeout by default, and the gateway loads its
+// master key with context.Background, so the helper itself must bound the
+// request. VAULT_HELPER_TIMEOUT=1 keeps this test fast; the handler sleeps
+// 5s, so a pass here proves the bound fires well before the server answers.
+func TestVaultKVHelperSlowServerTimesOut(t *testing.T) {
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(5 * time.Second)
+		fmt.Fprint(w, `{"data":{"data":{"key_b64":"AAAA"},"metadata":{"version":1}}}`)
+	}))
+	defer slow.Close()
+	t.Setenv("VAULT_ADDR", slow.URL)
+	t.Setenv("VAULT_TOKEN", "test-token")
+	t.Setenv("VAULT_HELPER_TIMEOUT", "1")
+
+	provider := CommandProvider{Command: vaultHelperPath(t)}
+	start := time.Now()
+	_, err := provider.Load(context.Background(), "secret/data/nexaroute/master-key")
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("load from a never-responding Vault must fail")
+	}
+	if elapsed >= 4*time.Second {
+		t.Fatalf("slow-server load took %v, want under 4s with VAULT_HELPER_TIMEOUT=1", elapsed)
 	}
 }
 

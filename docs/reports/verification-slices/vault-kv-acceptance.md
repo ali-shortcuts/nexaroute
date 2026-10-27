@@ -138,11 +138,73 @@ Outcome `BLOCKED`, `evidence_class=none`, `vault.config` BLOCKED because
 `VAULT_ADDR` was not set; `vault.ha_failover` and `vault.transit` are
 `NOT_RUN`. No request was attempted and no key was written.
 
+## Live execution evidence (2026-10-27, non-dev loopback — supersedes the
+BLOCKED note above for single-node KV custody only)
+
+A disposable, single-host Vault was stood up for this run and destroyed
+afterwards; it was **not** an operator staging cluster and **not** an HA
+cluster, so this section upgrades only the single-node KV evidence below
+and changes nothing about HA, external staging, or Transit.
+
+- Vault: real binary v2.2.1, `storage_type=file`, TLS on loopback
+  (`https://127.0.0.1:18201`, self-signed cert with SAN IP 127.0.0.1),
+  `operator init` 3 shares / threshold 2, unsealed, KV v2 mount.
+  `vault-accept` report: `outcome=PASS`, `evidence_class=loopback`,
+  10 passed / 0 failed / 0 blocked / 2 not-run,
+  `ha_enabled=false`, `ha_known=true`, `dev_mode=false`,
+  policies `default, nexaroute-accept`, token TTL 1h, renewable.
+- `vault-accept` (with the bounded helper below) — PASS for
+  `vault.health`, `vault.token_metadata`, `vault.ref_preflight`,
+  `vault.kv_put_get`, `vault.gateway_decrypt`, `vault.kv_rotation`,
+  `vault.wrong_token`, `vault.revoked_token`,
+  `vault.outage_fail_closed`, `vault.cleanup`; `vault.ha_failover` and
+  `vault.transit` remain `NOT_RUN`.
+- Report: `docs/reports/verification-slices/vault-kv-acceptance-live-2026-10-27.json`
+  (sanitized: no token values or key bytes; verified programmatically
+  against the run's token files before committing).
+- Extra live checks that `vault-accept` does not cover, all on the same
+  disposable Vault:
+  - Full gateway boot with Vault-held key: config `api_key` encrypted
+    in place (`nxs1`), encrypted backup written, no local `.key` file,
+    `/api/hello` 200, `secrets verify` `OK provider:stub.api_key`
+    (`verified_fields=1`).
+  - Wrong token: `secrets verify` fails closed, exit 1
+    (`key provider command failed`).
+  - Expired token: a 10s gateway-policy token read the existing key
+    before expiry (exit 0) and failed closed after expiry (exit 1,
+    empty stdout).
+  - Least-privilege denial: the acceptance token got HTTP 403 on the
+    gateway path and on an unrelated path; post-run acceptance data
+    and metadata reads returned 404 (cleanup verified independently).
+  - Vault outage: gateway boot with Vault stopped failed closed,
+    exit 1, in under a second (connection refused, no fallback).
+  - Vault restart recovery: after a process restart the Vault was
+    sealed, unsealed with 2 shares, and the gateway booted again
+    (`/api/hello` 200, `secrets verify` OK).
+  - Key rotation recovery (external providers are not rotated by
+    `secrets rotate` by design): decrypt config under the old Vault
+    key, replace the KV entry, prove the old envelope fails closed
+    under the new key (exit 1), then boot on the plaintext copy so
+    it re-encrypts under the new key (`/api/hello` 200,
+    `secrets verify` OK).
+- Bounded-helper fix found by this run: the shipped helper's `curl`
+  calls had no `--max-time`/`--connect-timeout`, and the gateway loads
+  its master key with `context.Background`, so a never-responding Vault
+  hung the helper until an external timeout killed it (pre-fix probe:
+  exit 124 at 15s). The helper now bounds every request with
+  `--connect-timeout 10 --max-time VAULT_HELPER_TIMEOUT` (default 30s;
+  `VAULT_HELPER_TIMEOUT` must be a positive integer). Regression test:
+  `TestVaultKVHelperSlowServerTimesOut` (slow server sleeps 5s,
+  timeout 1s, load fails in under 4s). The live `vault-accept` run
+  above was re-run with the fixed helper and still PASSes 10/12.
+
 ## What remains BLOCKED / NOT_RUN
 
-- Real disposable/staging Vault put/get, rotation, wrong/revoked token, and
-  outage behavior: **BLOCKED** (no Vault service or credentials in this
-  environment).
+- Real operator-provided disposable/staging Vault (non-loopback,
+  `evidence_class=external`) put/get, rotation, wrong/revoked token,
+  and outage behavior: **BLOCKED** (no staging service or credentials
+  were supplied for this run; the loopback run above does not replace
+  it).
 - Real Vault HA cluster, failover mid-run, and long-running token
   renewal/lease behavior: **NOT_RUN** (no HA infrastructure; the harness does
   not simulate a real failover).
