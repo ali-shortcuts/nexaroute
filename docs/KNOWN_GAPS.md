@@ -147,7 +147,12 @@ with an operator's configured model (CI uses a scripted planner).
 No commercial external video provider adapter is bundled. The opt-in local
 ComfyUI adapter supports text-to-video through a user-supplied API-format
 workflow; its HTTP contract is covered by fixtures, but actual model inference
-on a real ComfyUI installation is not part of CI. The fake provider writes a
+on a real ComfyUI installation is not part of CI. The opt-in
+`nexaroute comfyui-accept --confirm-live` command automates the real check
+(server stats, one minimal job, read-back SHA-256/size/metadata, `ffprobe`
+playability, bounded cleanup), but its current status is NOT_RUN/BLOCKED until
+an operator supplies a provisioned installation and records the sanitized
+report; loopback fixtures are not real inference. The fake provider writes a
 text placeholder, not a playable video. The asset-size cap is enforced with streaming-memory protection: the ComfyUI adapter reads downloads through `io.LimitReader` bounded at `maxOutputBytes+1`, so an oversized response cannot OOM the gateway before the cap applies. Multi-shot jobs persist per-shot checkpoints and automatically compose generated shot assets into a final silent MP4; Gateway-side Piper narration and estimated same-language SRT captions are supported for configured multi-shot jobs. With the default file backend the video jobs, local JSON job store, queue and cost ledger remain single-process; with `video.job_store_backend=postgres` the job store and cost ledger are durable and shared with exactly-once settlement, while assets stay per-instance local — so end-to-end multi-node video is still not a declared topology (ADR 0004, Accepted — Option B): provider-native idempotent recovery after an ambiguous submission, and verified production workloads for ten-minute episodes remain unimplemented or UNVERIFIED. Provider-generated
 dialogue/sound effects/music, translated or word-aligned subtitles, and distributed
 asset/job storage remain unimplemented; the local CLI also supports existing

@@ -22,6 +22,14 @@ endpoints. Fixture tests and the exact invocations are documented in
 not external verification; the OIDC browser login procedure below remains
 manual.
 
+ComfyUI real-inference acceptance is a separate opt-in command,
+`nexaroute comfyui-accept --confirm-live`. It requires a provisioned ComfyUI
+server, a real compatible workflow/model, and `ffprobe`; it never downloads
+models. The command and its deterministic loopback negative-path tests are
+implemented, but **actual model inference remains NOT_RUN/BLOCKED** until an
+operator supplies a real installation and records the sanitized report. See
+`docs/reports/verification-slices/comfyui-real-inference-acceptance.md`.
+
 ## Status register — every external dependency
 
 One row per external dependency the gateway integrates with. A dependency
@@ -42,7 +50,7 @@ runbook procedure exists for it.
 | Redis (control-plane, breaker store) | EXECUTED — integration suites PASS in CI and locally 2026-10-24 (with `-race`, incl. outage/recovery); a production deployment remains UNVERIFIED | `docs/reports/LOCAL_ACCEPTANCE_2026-10-24.md` §1 |
 | OpenTelemetry collector (OTLP ingestion) | EXECUTED 2026-10-24 — the real OpenTelemetry Collector v0.163.2 received and decoded a gateway span with the documented GenAI attributes; managed backends (Jaeger/Tempo/vendor APM) remain UNVERIFIED | `docs/reports/LOCAL_ACCEPTANCE_2026-10-24.md` §4 |
 | Kubernetes installation (Helm/manifests) | UNVERIFIED — NOT_RUN (no live cluster) | Helm lint/render checks only |
-| ComfyUI inference | UNVERIFIED — HTTP contract fixture-tested; real model inference not part of CI | See KNOWN_GAPS (video section) |
+| ComfyUI inference | UNVERIFIED — HTTP contract fixture-tested; opt-in `comfyui-accept` automation exists, but real model inference remains NOT_RUN/BLOCKED and is not part of CI; fixtures are not real inference | `docs/reports/verification-slices/comfyui-real-inference-acceptance.md`; See KNOWN_GAPS (video section) |
 
 ## 1. Real OIDC identity provider
 
