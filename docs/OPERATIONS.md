@@ -331,6 +331,76 @@ own configuration, and cross-replica breaker synchronization is an opt-in
 layer that runs over this control-plane store (`control_plane.breaker_sync`,
 ADR 0003); neither changes the store's own state format.
 
+## 4a. Diagnostic bundles (secret-safe, operator-invoked)
+
+When an incident needs investigation, an operator can produce a single
+shareable file instead of copying configuration or log excerpts by hand:
+
+```bash
+nexaroute diagnostics bundle --config /path/to/config.json --output /path/to/incident-bundle.json
+```
+
+The command is explicit and offline: it never starts the gateway, never
+sends anything to any external service, and never prints the bundle to
+stdout. It reuses the `doctor` checks and the `config validate` path
+(including the TLS preflight), and it builds a new JSON document
+(`nexaroute-diagnostics/v1`) from an allowlist of fields only:
+
+- Gateway version, VCS commit where the build recorded one, Go version,
+  OS/architecture, and CPU count. No hostname is included.
+- Config validation summary: valid/invalid, provider/model/route-profile
+  counts, sanitized config warnings, TLS, control-plane backend, video
+  enabled, and logging mode (`auto`/`off`/`custom` — never a path).
+- Provider readiness summaries: id, name, type, auth mode, enabled,
+  base URL reduced to scheme://host, model counts, credential presence
+  as a boolean, credential source as an env-var name or `configured`,
+  and custom header names only. These are configuration-derived
+  readiness facts, not live health: live deployment health and live
+  counters come from `/admin/api/health` and `/metrics` on a running
+  gateway, which this offline bundle deliberately does not contain.
+- Doctor checks (config, master-key permissions, security store, control
+  plane, restore journals, and optionally a backup-bundle preflight with
+  `--bundle`/`--max-age`), each as status/name/sanitized detail.
+- Sanitized recent errors: at most 50 lines from a bounded tail (256 KiB,
+  last 200 lines) of the gateway log file, each truncated, with lines
+  that still look secret or payload-shaped dropped and counted.
+  Pass `--no-log-errors` to exclude this section.
+- Bounded counts: check pass/warn/fail totals, audit-chain record count
+  when the doctor check established it, and provider/model/error totals.
+
+Never included: credentials, master keys, tokens, cookies, authorization
+headers, prompt text, model responses, raw configuration, URL user info,
+URL query strings or fragments, and full filesystem paths (doctor
+details are reduced to file basenames). Sanitization runs before
+serialization, and the serialized bytes are scanned a second time; any
+scan failure aborts the write and leaves no file behind. A field that
+cannot be proven safe is dropped or withheld, never copied verbatim —
+including validation errors, which are reduced to a sanitized class
+string, and malformed configuration, which still yields a bundle with
+`config.valid=false` rather than a crash or a raw dump.
+
+The file is written atomically (temp file in the destination directory,
+mode `0600`, fsync, rename) and an existing file is never overwritten
+unless `--overwrite` is given. Exit codes: 0 = bundle written, 1 =
+bundle could not be produced safely or written, 2 = usage error. A
+failing doctor check is data inside the bundle, not a command failure.
+
+Before sharing, read the file yourself: the command prints what it
+contains and what it excluded, but it cannot judge context. The bundle
+still contains operational metadata that may be sensitive in context —
+provider hostnames, model names, file basenames, check statuses, and
+counts — so share it only with a party you trust with operational
+detail, over a channel with equivalent protection, and never commit it
+to a repository or store it alongside backups.
+
+Retention and deletion: a bundle is an incident artifact, not a backup
+and not evidence to keep indefinitely. Delete it when the incident is
+closed (for example `shred -u` or your host's accepted sanitization
+policy for the storage medium), and delete any copies forwarded to a
+support channel once the case is resolved. If a bundle is ever suspected
+of containing secret material, treat it as a credential exposure: rotate
+the affected credentials, then delete every copy.
+
 ## 5. Admin surface, events, and logs
 
 Admin API access is privileged. Keep it loopback-only unless OIDC, TLS, and external network controls are configured. Provider keys, pooled credentials, custom header values, and proxy URLs are write-only and redacted on Admin reads and exports. The event feed uses Server-Sent Events; clients can reconnect with `Last-Event-ID`, and should refresh the snapshot after an epoch change or sequence gap.
