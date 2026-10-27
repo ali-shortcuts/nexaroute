@@ -12,6 +12,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import sys
 import socket
 import subprocess
 import tempfile
@@ -33,7 +34,10 @@ def free_port() -> int:
 
 
 def wait_ready(base: str, proc: subprocess.Popen[str]) -> None:
-    deadline = time.time() + 60
+    # Startup tolerance for a loaded machine: `go run` compiles
+    # the gateway before it can answer /healthz. This bounds only
+    # startup, never an acceptance assertion.
+    deadline = time.time() + 120
     while time.time() < deadline:
         if proc.poll() is not None:
             raise AssertionError(f"gateway exited with {proc.returncode}")
@@ -128,9 +132,12 @@ def start_fake_upstream(kind: str) -> ThreadingHTTPServer:
 
 
 def main() -> None:
-    chromium = shutil.which("chromium") or shutil.which("google-chrome")
+    # See test-browser-e2e.py: the runner may point this at Playwright's
+    # bundled Chromium, and exit 2 + SKIPPED is the skip contract.
+    chromium = os.environ.get("NEXAROUTE_CHROMIUM_BIN") or shutil.which("chromium") or shutil.which("google-chrome")
     if not chromium:
-        raise SystemExit("SKIP: Chromium is not installed")
+        print("BROWSER SUITE: SKIPPED: Chromium is not installed", file=sys.stderr)
+        raise SystemExit(2)
 
     with tempfile.TemporaryDirectory(prefix="nexaroute-browser-502-") as tmp:
         tmp_path = Path(tmp)

@@ -7,10 +7,12 @@ this suite is deterministic and does not contact a paid upstream provider.
 """
 from __future__ import annotations
 
+import http.client
 import json
 import os
 from pathlib import Path
 import shutil
+import sys
 import socket
 import subprocess
 import tempfile
@@ -30,7 +32,10 @@ def free_port() -> int:
         return s.getsockname()[1]
 
 def wait_ready(base: str, proc: subprocess.Popen[str]) -> None:
-    deadline = time.time() + 60
+    # Startup tolerance for a loaded machine: `go run` compiles
+    # the gateway before it can answer /healthz. This bounds only
+    # startup, never an acceptance assertion.
+    deadline = time.time() + 120
     while time.time() < deadline:
         if proc.poll() is not None:
             raise AssertionError(f"gateway exited with {proc.returncode}")
@@ -73,9 +78,15 @@ def admin_json(base: str, path: str, method: str, body: dict | None = None) -> d
     raise AssertionError("unreachable: bounded admin 429 retry loop exhausted")
 
 def main() -> None:
-    chromium = shutil.which("chromium") or shutil.which("google-chrome")
+    # NEXAROUTE_CHROMIUM_BIN lets the acceptance runner point the suite
+    # at Playwright's bundled Chromium, which `playwright install` does
+    # not put on PATH. Exit code 2 + the SKIPPED marker is the runner's
+    # contract: a skip must never look like a pass (and, unlike the old
+    # bare SystemExit string, it is distinguishable from a failure).
+    chromium = os.environ.get("NEXAROUTE_CHROMIUM_BIN") or shutil.which("chromium") or shutil.which("google-chrome")
     if not chromium:
-        raise SystemExit("SKIP: Chromium is not installed")
+        print("BROWSER SUITE: SKIPPED: Chromium is not installed", file=sys.stderr)
+        raise SystemExit(2)
     evidence_setting = os.environ.get("NEXAROUTE_BROWSER_EVIDENCE_DIR")
     evidence_root = Path(evidence_setting) if evidence_setting else None
     if evidence_root and not evidence_root.is_absolute():
@@ -117,10 +128,13 @@ def main() -> None:
                 console_msgs = []
                 expected_disabled_404 = {"active": False}
                 expected_issue393_validation = {"active": False}
+                expected_snapshot_500 = {"active": False}
                 def record_console(msg):
                     if msg.type == "error" and expected_disabled_404["active"] and "404 (Not Found)" in msg.text:
                         return
                     if msg.type == "error" and expected_issue393_validation["active"] and "400 (Bad Request)" in msg.text:
+                        return
+                    if msg.type == "error" and expected_snapshot_500["active"] and "500 (Internal Server Error)" in msg.text:
                         return
                     console_msgs.append((msg.type, msg.text))
                 page.on("console", record_console)
@@ -548,8 +562,13 @@ def main() -> None:
                 # (c) after a browser restart (reload) a created job is
                 # recovered from server history with NO resubmission.
                 # One dispatcher stays routed for the whole section so no
-                # background poll ever reaches the real (video-disabled)
-                # gateway and leaves a 404 console error behind.
+                # background poll ever reaches the real gateway and leaves
+                # a 404 console error behind. It needs BOTH jobs patterns:
+                # Playwright's trailing "**" does not cross "/", so
+                # "**/v1/video/jobs**" matches the list URL but NOT
+                # "/v1/video/jobs/<id>" — tracked-job fetches would
+                # otherwise hit the real gateway (which has no such job)
+                # and 404, surfacing at the next console assertion.
                 fail_job = {
                     "job_id": "ui-fail-1", "state": "failed", "progress": 0,
                     "provider": "fake", "created_at": "2026-10-12T00:00:00Z",
@@ -595,6 +614,7 @@ def main() -> None:
                     route.fulfill(status=200, content_type="application/json", body=json.dumps({"jobs": jobs, "durability": "file"}))
                 page.route("**/v1/video/providers", mock_providers_ok)
                 page.route("**/v1/video/jobs**", mock_jobs_dispatch)
+                page.route("**/v1/video/jobs/**", mock_jobs_dispatch)
                 page.locator('[data-page="video"]').click()
                 page.locator('[data-action="refresh-video"]').click()
                 fail_card = page.locator(".video-job-card", has_text="ui-fail-1")
@@ -634,6 +654,7 @@ def main() -> None:
                 assert recover_posts["n"] == 1, f"job resubmitted after reload: posts={recover_posts['n']}"
                 page.unroute("**/v1/video/providers", mock_providers_ok)
                 page.unroute("**/v1/video/jobs**", mock_jobs_dispatch)
+                page.unroute("**/v1/video/jobs/**", mock_jobs_dispatch)
 
                 # --- ISSUE #246: disabled video gateway must not raise a global banner ---
                 # Isolate the disabled-state assertions from the fake provider enabled for M2-1 above.
@@ -641,6 +662,26 @@ def main() -> None:
                     route.fulfill(status=404, content_type="application/json", body=json.dumps({"code": "not_found", "message": "Video gateway is not enabled"}))
                 expected_disabled_404["active"] = True
                 page.route("**/v1/video/providers", disabled_video_providers)
+                # The multi-shot section's tracked job (ui-episode-1) is
+                # still fetched by background refreshes after its
+                # dispatcher was removed; without a jobs dispatcher those
+                # fetches hit the real gateway, 404, and fail the console
+                # assertion below. Keep a stub dispatcher routed for this
+                # section, as the #414 section does for its own. Both
+                # patterns are required: Playwright's trailing "**" does
+                # not cross "/", so the list pattern alone never matches
+                # "/v1/video/jobs/<id>".
+                def disabled_video_jobs(route):
+                    if "/jobs/" in route.request.url:
+                        route.fulfill(status=200, content_type="application/json", body=json.dumps({
+                            "job_id": "ui-episode-1", "state": "completed", "progress": 1,
+                            "provider": "fake", "created_at": "2026-10-12T00:00:00Z",
+                            "request": {}, "output_assets": [],
+                        }))
+                    else:
+                        route.fulfill(status=200, content_type="application/json", body=json.dumps({"jobs": [], "durability": "file"}))
+                page.route("**/v1/video/jobs**", disabled_video_jobs)
+                page.route("**/v1/video/jobs/**", disabled_video_jobs)
                 page.set_viewport_size({"width": 1440, "height": 900})
                 page.evaluate("() => { document.documentElement.dataset.theme = 'dark'; localStorage.setItem('nexaroute_theme', 'dark'); }")
                 for dest in ["overview", "providers", "routing", "activity", "settings"]:
@@ -667,6 +708,8 @@ def main() -> None:
                 errors = [m for m in console_msgs if m[0] == "error"]
                 assert not errors, f"Console errors after video checks: {errors}"
                 page.unroute("**/v1/video/providers", disabled_video_providers)
+                page.unroute("**/v1/video/jobs**", disabled_video_jobs)
+                page.unroute("**/v1/video/jobs/**", disabled_video_jobs)
                 expected_disabled_404["active"] = False
 
                 # ---- #417 item 8: WebChat browser E2E. One
@@ -749,7 +792,9 @@ def main() -> None:
                 assert not errors, f"Console errors after WebChat E2E: {errors}"
 
                 # Evidence: Providers with video disabled (dark, both sizes).
-                video_dir = ROOT / "docs/browser-evidence/video-disabled"
+                # Under the acceptance runner this stays inside the run's
+                # diagnostics directory instead of dirtying the checkout.
+                video_dir = (evidence_root / "video-disabled") if evidence_root else ROOT / "docs/browser-evidence/video-disabled"
                 video_dir.mkdir(parents=True, exist_ok=True)
                 page.set_viewport_size({"width": 1440, "height": 900})
                 page.evaluate("() => { document.documentElement.dataset.theme = 'dark'; localStorage.setItem('nexaroute_theme', 'dark'); }")
@@ -831,7 +876,10 @@ def main() -> None:
                 expect(page.locator("#dialog-root")).to_contain_text("literal-pool")
                 expect(page.locator("#dialog-root")).to_contain_text("env-pool")
                 for secret in browser_secrets:
-                    assert secret not in page.locator("#dialog-root").inner_text(), f"secret shown in edit UI: {secret}"
+                    # The message deliberately does NOT interpolate the
+                    # value: a failing assertion used to print the canary
+                    # itself into the CI log. See the runner's redaction.
+                    assert secret not in page.locator("#dialog-root").inner_text(), "secret shown in edit UI (value redacted)"
 
                 # Cancel must discard the edit draft; reopening rehydrates from
                 # the backend without loading any stored credential value.
@@ -864,7 +912,7 @@ def main() -> None:
                 assert safe_provider["models"][0]["priority"] == 4 and safe_provider["models"][0]["weight"] == 2.5
                 read_text = json.dumps(saved)
                 for secret in browser_secrets:
-                    assert secret not in read_text, f"read API leaked secret: {secret}"
+                    assert secret not in read_text, "read API leaked a secret value (value redacted)"
 
                 # Explicit replacement is distinct from omission and returns
                 # only safe status metadata. The input is a test-only canary.
@@ -887,10 +935,10 @@ def main() -> None:
                 assert cleared["credential_configured"] is False and cleared["has_secret"] is False
                 all_responses = "\n".join(browser_responses)
                 for secret in browser_secrets + [replacement]:
-                    assert secret not in all_responses, f"browser response leaked secret: {secret}"
+                    assert secret not in all_responses, "browser response leaked a secret value (value redacted)"
                 preserve_requests = "\n".join(browser_requests)
                 for secret in browser_secrets:
-                    assert secret not in preserve_requests, f"browser request unexpectedly contained stored secret: {secret}"
+                    assert secret not in preserve_requests, "browser request unexpectedly contained a stored secret value (value redacted)"
                 assert sum(replacement in request for request in browser_requests) == 1, "replacement should be sent only in the explicit replace request"
 
                 # Phase 7 remainder (#399): the unified model inventory renders
@@ -915,6 +963,107 @@ def main() -> None:
                 expect(page.locator("#dialog-root .modal")).to_have_count(0)
 
                 admin_json(base, "/admin/api/providers/issue393-roundtrip", "DELETE")
+
+                # --- Browser acceptance reliability ---
+                # Flows the suite previously reached only indirectly: the
+                # real theme-toggle and language-switch controls (earlier
+                # sections set dataset/localStorage by hand), settings-tab
+                # navigation, the configured admin mode, failed-request /
+                # page-error capture, and snapshot failure + recovery.
+                # 1. Real theme toggle: reload first so state, dataset and
+                # localStorage agree (init copies localStorage into state),
+                # then two real clicks must flip and restore the theme.
+                page.reload(wait_until="domcontentloaded")
+                expect(page.locator("#connection-text")).to_have_text("Connected")
+                theme_before = page.evaluate("() => document.documentElement.dataset.theme")
+                assert theme_before in ("dark", "light")
+                assert page.evaluate("() => localStorage.getItem('nexaroute_theme')") == theme_before
+                expect(page.locator("#theme-toggle")).to_have_text("Light mode" if theme_before == "dark" else "Dark mode")
+                page.locator("#theme-toggle").click()
+                theme_after = page.evaluate("() => document.documentElement.dataset.theme")
+                assert theme_after != theme_before, f"theme toggle did not flip: {theme_before} -> {theme_after}"
+                assert page.evaluate("() => localStorage.getItem('nexaroute_theme')") == theme_after
+                expect(page.locator("#theme-toggle")).to_have_text("Light mode" if theme_after == "dark" else "Dark mode")
+                page.locator("#theme-toggle").click()
+                assert page.evaluate("() => document.documentElement.dataset.theme") == theme_before
+                # 2. Failed-request / page-error capture for the sections
+                # below. Collecting starts after the reload above so a
+                # navigation-aborted stream cannot pollute the record, and
+                # stops before the failure/recovery reloads below.
+                failed_requests: list[str] = []
+                page_errors: list[str] = []
+                collecting = {"active": True}
+                def record_failed_request(request):
+                    if collecting["active"]:
+                        failed_requests.append(f"{request.method} {request.url}")
+                def record_page_error(error):
+                    if collecting["active"]:
+                        page_errors.append(str(error))
+                page.on("requestfailed", record_failed_request)
+                page.on("pageerror", record_page_error)
+                # 3. Real language switch: fa must render RTL, en must
+                # restore LTR, and the theme must survive the switch.
+                page.locator("#lang-switch").select_option("fa")
+                assert page.evaluate("() => document.documentElement.dir") == "rtl"
+                assert page.evaluate("() => document.documentElement.lang") == "fa"
+                assert page.locator("#lang-switch").input_value() == "fa"
+                expect(page.locator("#brand-sub")).to_have_text("صفحه کنترل")
+                page.locator("#lang-switch").select_option("en")
+                assert page.evaluate("() => document.documentElement.dir") == "ltr"
+                assert page.evaluate("() => document.documentElement.lang") == "en"
+                expect(page.locator("#brand-sub")).to_have_text("Control plane")
+                assert page.evaluate("() => document.documentElement.dataset.theme") == theme_before
+                # 4. Settings tabs: every tab must become the selected,
+                # visible panel; the save control must be present. Tab
+                # clicks are read-only, nothing is saved here.
+                page.locator('[data-page="settings"]').click()
+                page.wait_for_load_state("domcontentloaded")
+                expect(page.locator('[data-action="save-settings"]')).to_be_visible()
+                expect(page.locator("#setting-client-base-url")).to_be_visible()
+                for tab in ("gateway", "routing", "security", "data", "expert"):
+                    page.locator(f"#settings-tab-{tab}").click()
+                    assert page.locator(f"#settings-tab-{tab}").get_attribute("aria-selected") == "true"
+                    expect(page.locator(f"#settings-panel-{tab}")).to_be_visible()
+                # 5. Configured admin mode: this suite boots keyless
+                # emergency loopback mode (no admin key, OIDC off). The
+                # status endpoint must say so, the browser sign-in
+                # control must stay hidden, and a DNS-rebinding Host
+                # must be denied even though loopback itself is trusted.
+                status = admin_json(base, "/admin/auth/status", "GET")
+                assert status["oidc_enabled"] is False
+                assert status["emergency_access_enabled"] is True
+                assert status["api_key_configured"] is False
+                expect(page.locator("#auth-control")).to_be_hidden()
+                from urllib.parse import urlparse
+                parsed = urlparse(base)
+                conn = http.client.HTTPConnection(parsed.hostname, parsed.port, timeout=10)
+                try:
+                    conn.putrequest("GET", "/admin/api/providers", skip_host=True)
+                    conn.putheader("Host", "evil.example.com")
+                    conn.endheaders()
+                    rebinding = conn.getresponse()
+                    rebinding.read()
+                    assert rebinding.status == 401, f"DNS-rebinding admin read must be denied, got {rebinding.status}"
+                finally:
+                    conn.close()
+                assert not failed_requests, f"failed browser requests: {failed_requests}"
+                assert not page_errors, f"browser page errors: {page_errors}"
+                collecting["active"] = False
+                # 6. Snapshot failure + recovery: a 500 snapshot must
+                # surface as Unavailable/Offline, and removing the fault
+                # must restore Connected/Live without a restart.
+                def snapshot_failure(route):
+                    route.fulfill(status=500, content_type="application/json", body=json.dumps({"error": "deterministic snapshot failure"}))
+                expected_snapshot_500["active"] = True
+                page.route("**/admin/api/snapshot**", snapshot_failure)
+                page.reload(wait_until="domcontentloaded")
+                expect(page.locator("#connection-text")).to_have_text("Unavailable")
+                expect(page.locator("#live-status")).to_have_text("Offline")
+                page.unroute("**/admin/api/snapshot**", snapshot_failure)
+                page.reload(wait_until="domcontentloaded")
+                expect(page.locator("#connection-text")).to_have_text("Connected")
+                expect(page.locator("#live-status")).to_have_text("Live")
+                expected_snapshot_500["active"] = False
 
                 errors = [m for m in console_msgs if m[0] == "error"]
                 assert not errors, f"Console errors after Issue #393 browser flow: {errors}"
