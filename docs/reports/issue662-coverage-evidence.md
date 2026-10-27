@@ -35,16 +35,10 @@ go test -count=1 ./internal/video/runtime ./internal/video/providers ./cmd/gatew
 | `cmd/gateway` | 82.2% | 2665/3243 | +1.2 pts |
 | scoped total | 83.5% | 3627/4344 | +6.1 pts |
 
-Raw artifacts (generated locally; the large `.out` profiles are not committed):
-
-- `.artifacts/issue662/baseline.out`
-- `.artifacts/issue662/after.out`
-
-Committed summaries:
-
-- `.artifacts/issue662/after.log`
-- `.artifacts/issue662/after-functions.txt`
-- `.artifacts/issue662/verify.log`
+Raw artifacts (the `.out` profiles and the local `after.log`,
+`after-functions.txt`, and `verify.log` summaries) were generated locally
+and are not committed; the tables in this document are the committed
+evidence.
 
 ## Representative function coverage
 
