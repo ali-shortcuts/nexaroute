@@ -192,6 +192,16 @@ invocations are in
 [`verification-slices/live-acceptance-harness.md`](verification-slices/live-acceptance-harness.md).
 A harness `PASS` alone does not close this checklist.
 
+## Repository verification (2026-10-27)
+
+- `go test ./internal/httpapi -run 'OIDC|AdminAuth|Session' -count=1` — PASS.
+- `go test ./internal/httpapi ./internal/config ./internal/authz ./internal/securitystore -count=1` — PASS.
+- `./scripts/verify.sh` — PASS (`VERIFY PASS`). The script's browser
+  acceptance step was skipped because Chromium and Python Playwright are
+  unavailable in this runner; the script reported that warning explicitly.
+  This does not affect the local OIDC protocol tests or the live-tenant
+  **BLOCKED** status.
+
 ## Unblock condition
 
 This report may move from **BLOCKED** only when an operator supplies the
