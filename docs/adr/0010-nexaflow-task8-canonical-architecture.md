@@ -200,3 +200,61 @@ nodes must not declare mappings.
   repointed when they land).
 - Synchronous run execution is V1 behaviour: a `wait` node can block
   the run-creation handler.
+
+## Task 6 verification record (2026-10-28, #693 as-is)
+
+Status remains Proposed; this branch awaits owner review and
+must NOT be merged without his word. Task 6 verified #693
+without porting any sibling line (owner serialization,
+stand-downs 11:55/11:56 +0430): Task 3 control flow, Task 4 API,
+Task 5 integrations, and Task 7 security are NOT in this
+record's code, and the interim permission mapping
+(`config.read`/`config.write`/`audit.read`) is unchanged.
+
+Corrections to the limitations above, proven by Task 6 tests
+in `internal/nexaflow/task6_final_test.go` on a disposable
+PostgreSQL database:
+
+- The PG scheduler-slot claim subcase is no longer NOT_RUN:
+  two separate processes claiming the same Postgres delivery
+  key and the same scheduler slot concurrently elect exactly
+  one winner (`TestTask6PGCrossProcessDelivery`,
+  `TestTask6PGCrossProcessSchedulerSlot`), and a SIGKILLed
+  lease holder's claim recovers after its TTL without
+  duplicating the node attempt
+  (`TestTask6PGCrossProcessLeaseRecovery`).
+- PG migration safety is proven for re-runs, concurrent
+  re-opens, and a genuine permission-denied failure with
+  transactional rollback (zero workflow tables left behind)
+  plus recovery after granting CREATE
+  (`TestTask6PostgresMigrationRerun`,
+  `TestTask6PostgresMigrationFailureRollback`). The migration
+  itself remains versionless (`CREATE TABLE IF NOT EXISTS`
+  under one advisory-lock transaction); a versioned
+  checksummed registry exists only on the sibling
+  final-integration line and is a landing reconciliation item.
+- Gosec: the 12 baseline-new findings are resolved — 6 by code
+  (unchecked-error handling x4, negative-revision fail-closed
+  x2) and 6 by documented baseline acceptance (1 SQL
+  concatenation with a digits-only placeholder index, 5 file
+  inclusions on operator-controlled or hash-constrained
+  paths). Baseline 87 -> 93 via the sanctioned script; the
+  write diff is exactly those 6 fingerprints.
+- A pre-existing test-isolation defect was fixed, not a
+  behaviour change: `TestTask8PostgresSchedulerSlot` used a
+  fixed definition id with an hour-bucketed slot key and no
+  cleanup, so re-runs within the same hour against a shared
+  database failed despite correct scheduler behaviour. It now
+  uses a unique definition id per run plus cleanup.
+
+Still NOT implemented (unchanged by Task 6, landing branches
+in `docs/nexaflow-task8-guide.md`): subworkflows, run-level
+fallback routing, any-join, durable waits, complete tenant
+isolation, shared hard-budget settlement, fuller API /
+`workflow.*` permissions, template instantiation, and
+gateway-process scheduling (this branch wires no NexaFlow
+into `cmd/gateway`). ADR 0009 (sibling integration line) was
+NOT renumbered or reconciled by Task 6; that decision remains
+with the owner at merge time, as does the landing order
+between this branch, `supervisor/nexaflow-final-integration`,
+and `supervisor/nexaflow-task2-durable-control-flow`.

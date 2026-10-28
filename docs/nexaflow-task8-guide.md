@@ -278,3 +278,237 @@ Evidence: `internal/nexaflow/task8_acceptance_test.go`,
   merged as-is. Where task4's API shape differs from this
   branch's (202 vs synchronous runs, resume endpoint, extra
   routes), the owner must choose one shape at reconciliation.
+
+## Task 6 verification addendum (2026-10-28, #693 as-is)
+
+Task 6 (final acceptance) verified this branch WITHOUT porting any
+sibling line, per the owner serialization decision (stand-downs
+11:55/11:56 +0430): Task 3 control flow, Task 4 API, Task 5
+integrations, and Task 7 security are NOT implemented here and are
+NOT claimed below. They land onto this branch when ready; the
+landing-dependencies table at the end names each source. The interim
+permission mapping (`config.read`/`config.write`/`audit.read`)
+is unchanged by Task 6. All Task 6 commits are local-only on
+`supervisor/nexaflow-task8-integration`; nothing was merged,
+pushed, tagged, or released by Task 6.
+
+### Gosec triage (12 baseline-new findings from Task 8, resolved)
+
+Local gosec (Go 1.27.0, the CI pin) reproduced exactly the 12
+findings, with an empty "Golang errors" set (analysis complete).
+Code fixes (7 sites, 6 findings cleared):
+
+- G104 x4 — unchecked errors on discard/dominated paths, made
+  explicit with `_ =` plus a comment each: `file_store.go`
+  `releaseFileLock` on Open error paths and `tmp.Close()` on
+  write/sync error paths (the final Close stays checked),
+  `filelock_unix.go` `f.Close()` after a failed flock,
+  `postgres_store.go` `db.Close()` on ping/migrate failure.
+- G115 x2 — `uint64(lastRev)` / `uint64(rev)` in
+  `postgres_store.go`: both sites now reject a negative stored
+  revision with a "corrupt negative revision" error instead of
+  wrapping it. Regression tests insert a negative revision row
+  and require both `Publish` and `ListRevisions` to fail closed
+  (`TestTask6PostgresNegativeRevisionFailsClosed`).
+- G202 x1 — `ListRuns` LIMIT placeholder: `fmt.Sprintf` replaced
+  with `strconv.Itoa` concatenation (placeholder math unchanged
+  and correct: the argument is appended first, so `$len(args)`
+  is its index). The finding persists because gosec flags any
+  SQL string concatenation; it is baseline-accepted below as
+  demonstrably safe (see below).
+
+Baseline additions (6, via the sanctioned
+`scripts/gosec-baseline.py write`, baseline 87 -> 93, check
+passes with 0 resolved):
+
+- G202 `postgres_store.go` LIMIT line — the only interpolated
+  value is a digits-only placeholder index from `strconv.Itoa`;
+  every user value is a bound parameter, never interpolated.
+- G304 `file_store.go` `os.Open(dir)` / `os.ReadFile(path)` —
+  single-file store; the path is operator configuration, and no
+  request data (definition ids are map keys, never path
+  components) reaches it.
+- G304 `filelock_unix.go` `os.OpenFile(path, ...)` — the path is
+  the operator store path plus `.lock`.
+- G304 `task8_delivery.go` `os.OpenFile(path, ...)` — the
+  filename is `hex(sha256(key)) + ".claimed"`, which cannot
+  contain a separator; the directory is operator configuration.
+- G304 `task8_migrate.go` `os.ReadFile(path)` — the operator-run
+  migration walk of an operator-supplied directory (no
+  request-driven callers in the tree); migrated definitions are
+  validated before use.
+
+No finding was hidden by regenerating the baseline blindly: the
+write diff is exactly these 6 fingerprints, and every other
+finding was fixed in code first.
+
+### PostgreSQL cross-process acceptance (new, Task 6)
+
+Disposable database `nexaflow_task6_test` (never another line's
+database, never production data), socket peer auth as root.
+New tests in `internal/nexaflow/task6_final_test.go`, all using
+unique keys/ids per run plus cleanup:
+
+- `TestTask6PGCrossProcessDelivery` — two SEPARATE test-binary
+  processes, run concurrently, claim the same Postgres delivery
+  key: exactly one wins.
+- `TestTask6PGCrossProcessSchedulerSlot` — two separate
+  processes, run concurrently, tick the same scheduler slot
+  through one Postgres ledger: exactly one starts.
+- `TestTask6PGCrossProcessLeaseRecovery` — a child process
+  claims a node lease and is SIGKILLed; a claim while the lease
+  is live fails, a claim after the 5 s TTL succeeds, and the
+  recovery leases the same attempt (attempt count stays 1, no
+  duplicate attempt).
+- Scenario 4 of the matrix above is therefore upgraded for the
+  Task 6 tree: PG cross-process (two OS processes, one PG
+  ledger) is now PROVEN for delivery + scheduler claims, not
+  NOT_RUN. What is still NOT proven is gateway-process
+  scheduling: this branch wires no NexaFlow into
+  `cmd/gateway` (no `nexaflow` references in `main.go`) and has
+  no scheduler HTTP endpoint, so two gateway processes cannot
+  exercise scheduling on this branch. That wiring arrives with
+  the Task 4 landing; it is not faked here.
+
+### Migration safety (new, Task 6)
+
+- `TestTask6PostgresMigrationRerun` — sequential and 4-way
+  concurrent re-opens of the Postgres store succeed and
+  preserve a saved draft and run (the migration is
+  `CREATE TABLE IF NOT EXISTS` inside one advisory-lock
+  transaction). Note honestly: this migration is versionless —
+  there is no migration version/registry table on this branch;
+  a versioned checksummed registry is reported on the sibling
+  final-integration line and is a landing reconciliation item,
+  not a claim made here.
+- `TestTask6PostgresMigrationFailureRollback` — in an isolated
+  fresh database, a login role that can connect but cannot
+  CREATE fails migration with a permission error and leaves
+  zero `nexaroute_workflow_*` tables behind (transactional
+  rollback); after granting CREATE in that database, the same
+  open succeeds and saves a draft.
+- `TestTask6FileStoreCorruptFailsClosed` — opening a corrupt
+  file store errors, leaves the file byte-identical, and a
+  repaired file opens afterwards.
+- Pre-existing test-isolation fix (Task 6, not a behaviour
+  change): `TestTask8PostgresSchedulerSlot` used a fixed
+  definition id with an hour-bucketed slot key and no cleanup,
+  so any second run within the same hour against a shared
+  database failed even though the scheduler was correct (the
+  same incident shape the sibling Task 2 line reported). It now
+  uses a unique definition id per run plus cleanup, with the
+  same exactly-one-start assertion; the full nexaflow package
+  passes on consecutive runs after the fix.
+
+### Mandatory 12-scenario verdicts against #693 as-is
+
+Mapping to the 15-scenario matrix above; PASS means proven by a
+named test on this branch, PARTIAL means the feature is absent
+and the named sibling line supplies it on landing.
+
+1. Authoring (create/edit/validate/save/reload/publish/inspect)
+   — PASS (`TestTask8Scenario1_DraftPublishExecute`,
+   `TestTask8HTTPDefinitionRunLifecycle`).
+2. Template instantiation with valid nodes/connections —
+   PARTIAL: templates are listed but inert (`Published: false`,
+   never execute) on this branch. Instantiation arrives with
+   Task 5 (`supervisor/nexaflow-task5-integrations`,
+   `52b40a7`, 7 instantiable templates) and the studio
+   Use-template flow (`nexaflow/task6-studio`, `2a1ef04`).
+3. Manual trigger, signed webhook, durable schedule — PASS
+   (`TestTask8Scenario2_Idempotency`,
+   `TestTask8Scenario3_Webhook`,
+   `TestTask8Scenario4_SchedulerSingleProcess` plus the new
+   Task 6 PG cross-process tests above).
+4. LLM, provider-health, MCP, evaluation, video adapters —
+   PASS through test doubles/fakes only
+   (`TestTask8Scenario5_LLMNode`, `TestTask8Scenario6_MCP`,
+   `TestTask8Scenario10_Video`, provider/eval node tests);
+   live providers BLOCKED (no credentials, no paid calls).
+5. Branches, parallel, loops, merges, subworkflows, retries,
+   fallback, cancellation — PARTIAL: branches, parallel,
+   loops (plan), merges, retries, `error_handler` fallback
+   mapping, timeout, cancel PASS; subworkflows, run-level
+   fallback routing, any-join, durable waits NOT implemented
+   (fail-closed tests kept) — Task 3
+   (`nexaflow/task3-control-flow`, `84cf62c`).
+6. Approval pause, restart, separate approver, safe resume —
+   PASS (`TestTask8Scenario8_ApprovalRestart`,
+   `TestTask8Scenario8_ApprovalRejected`,
+   `TestTask8HTTPApprovalSeparationAndCancel`).
+7. Crash recovery without blindly repeating ambiguous effects
+   — PASS at lease level (`TestTask8Scenario9_CrashAmbiguity`,
+   `TestTask8Scenario14_RecoveryMatrix`, plus the new Task 6
+   SIGKILL lease-recovery test).
+8. Cross-tenant prevention, unauthorized tool prevention —
+   PARTIAL: ownership ceiling + `tool_forbidden` with zero
+   backend calls PASS (`TestTask8Scenario11_Boundaries`);
+   complete tenant isolation NOT implemented — Task 7
+   (`nexaflow/task7-security`, `ee539bf`). Live OIDC
+   tenant-claim wiring BLOCKED (needs a real tenant + OIDC
+   issuer; deterministic local tests only).
+9. Shared hard-budget reservations under concurrency —
+   NOT IMPLEMENTED on this branch: the guard is admission
+   reserve only and `budget_check` is report-only (see ADR
+   0010). A PostgreSQL-atomic shared settlement must be
+   reconciled at landing from Task 7's opt-in enforcer
+   (single-process) and Task 5's ledger-backed budget nodes;
+   report-only checks are never presented as enforcement.
+10. Run history + node timelines in the actual UI — PASS via
+    served-asset test (`TestTask8HTTPWorkflowsPagePresent`:
+    Workflows page + `workflowsView` + per-node inspection
+    from the canonical API). In-browser proof is NOT_RUN
+    unless the browser gate below covers it; the repo browser
+    suite does not target the Workflows page specifically.
+11. Data preserved through migrations; invalid/interrupted
+    migrations handled safely — PASS for the #691 directory
+    migration (`TestTask8Scenario13_Migration`) plus the new
+    Task 6 PG migration tests above. PG migration is
+    versionless (see above).
+12. NexaFlow disabled preserves existing behaviour — PASS
+    (`TestTask8Scenario15_ServiceFailsClosed`,
+    `TestTask8HTTPDisabledPreservesGateway`, plus the full
+    gateway behaviour suites in `scripts/verify.sh`).
+
+Task 6 therefore does NOT declare NexaFlow complete: the
+essential authoring/publication/execution/history/approval/
+cancellation/recovery/authorization/supported-node behaviours
+work, but scenario 2 (instantiation), 5 (subworkflows/
+any-join/durable waits/run-level fallback), 8 (tenant
+isolation), and 9 (shared hard-budget settlement) are
+incomplete by the directive's own bar, and the fuller API/
+permissions surface (scenario: Task 4 API shape, `workflow.*`
+permissions) is pending. Each names its landing branch below.
+
+### Landing dependencies (Task 6 changes nothing here)
+
+| Landing item | Source branch (committed, tree-clean) | What it supplies |
+|---|---|---|
+| Control flow | `nexaflow/task3-control-flow` @ `84cf62c` (merging in `~/workspace/nexaflow-task2`; merged result `supervisor/nexaflow-task2-durable-control-flow` @ `6a83c5e`, local only) | Subworkflows, any-join, durable waits, run-level fallback, loops, retries, resume/OnError |
+| Fuller API/scheduler/webhooks | `supervisor/nexaflow-task4-api-scheduler-webhooks` @ `6410036` | 202 executions, resume endpoint, diagnostics, daily schedules, webhook rate limiting, `ClaimSchedule`/`ClaimWebhook`/audit store extensions |
+| Integrations | `supervisor/nexaflow-task5-integrations` @ `52b40a7` | CompositeBackend, ledger-backed budget nodes, 7 instantiable templates |
+| Security | `nexaflow/task7-security` @ `ee539bf` | `workflow.*` permissions, tenant scoping, stored-run redaction, opt-in hard budget, hash-chained audit |
+| Studio canvas | `nexaflow/task6-studio` @ `2a1ef04` (PR #692, on #690) | Template gallery + Use-template, canvas (repoint to canonical API at landing; NOT ported by Task 6) |
+
+Two further integration lines exist and their landing order
+versus #693 is an owner decision Task 6 does not resolve:
+`supervisor/nexaflow-final-integration` (master-task line:
+Task 1 plan + Task 2 ports, including any-join and a versioned
+PG migration registry) and
+`supervisor/nexaflow-task2-durable-control-flow` (Task 3 merged
+onto Phase 2). Task 6 updates #693 only and touches no sibling
+tree or branch.
+
+### Conflict note (for the owner, not resolved by Task 6)
+
+The original Task 6 directive instructed implementing the
+missing features (subworkflows, any-join, durable waits,
+tenant isolation, budget settlement, fuller API) inside Task 6.
+The owner serialization (master-task record 11:51 +0430 plus
+stand-downs 11:55/11:56 +0430) assigns those features to the
+sibling lines above, to land onto this branch when ready,
+never reimplemented in parallel. Task 6 followed the
+serialization: the missing features are reported PARTIAL with
+their landing branches, not implemented here. If the owner
+wants Task 6 to override serialization and port anyway, that
+is a new explicit redirect, not assumed.
