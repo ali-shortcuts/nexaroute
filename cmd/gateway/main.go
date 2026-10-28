@@ -407,6 +407,9 @@ func main() {
 		}
 	}()
 	url := uiURLWithScheme(listener.Addr(), secureListener)
+	// NexaFlow self-calls (chat, MCP) go to this same gateway; set
+	// before serving so the lazily built workflow backend picks it up.
+	api.SetNexaflowSelfBaseURL(strings.TrimSuffix(url, "/"))
 	fmt.Fprintf(os.Stderr, "NexaRoute UI: %s\nConfig: %s\nPress Ctrl+C to stop.\n", url, *configPath)
 	go func() {
 		readyCtx, readyCancel := context.WithTimeout(ctx, 10*time.Second)

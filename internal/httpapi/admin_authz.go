@@ -91,6 +91,11 @@ func adminPermissionForRequest(r *http.Request) (authz.Permission, bool) {
 		return readOnly(authz.ReadRouting)
 	case path == "/admin/api/evaluation/run":
 		return writeOnly(authz.RunEvaluation)
+	case strings.HasPrefix(path, "/admin/api/nexaflow/"):
+		// Workflows are routing-plane definitions: reads ride
+		// routing.read, mutations ride routing.write. Node-level
+		// permissions are re-checked by Registry.Execute at run time.
+		return readWrite(authz.ReadRouting, authz.WriteRouting)
 	case path == "/admin/api/endpoint":
 		if r.Method == http.MethodGet {
 			return authz.ReadConfig, true

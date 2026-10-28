@@ -24,8 +24,8 @@
     ps: { brand: 'د کنټرول سطحه', skip: 'اصلي منځپانګې ته لاړ شئ', signInSSO: 'په SSO ننوتل', emergency: 'بیړنی لاسرسی', signOut: 'وتل', signedIn: 'ننوتلی', lightMode: 'روښانه حالت', darkMode: 'تیاره حالت', connecting: 'نښلول کېږي', connected: 'نښلول شوی', unavailable: 'شته نه دی', live: 'ژوندی', offline: 'آفلاین', navOperate: 'چلول', navUse: 'کارول', navGovern: 'حکومت' },
   };
   const META_I18N = {
-    fa: { overview: ['نمای کلی', 'سیستم مسیریابی شما در یک نگاه.'], providers: ['ارائه‌دهندگان', 'مدیریت اتصال‌های بالادستی، مدل‌ها و قابلیت‌ها.'], routing: ['مسیریابی', 'تبدیل مدل‌های عمومی پایدار به مسیرهای اجرایی قابل اعتماد.'], models: ['فهرست مدل‌ها', 'هر مدل با شناسهٔ ارائه‌دهنده، قابلیت‌ها، منبع کشف و سلامت تأییدشده.'], video: ['استودیو ویدیو', 'ساخت، پایش و بهره‌برداری ایمن از کارهای ویدیویی ناهمگام.'], activity: ['فعالیت', 'ردیابی درخواست‌های واقعی، رویدادها و تاریخچه مسیریابی.'], policies: ['سیاست‌ها', 'سیاست‌های تصمیم، گاردریل‌ها و حریم خصوصی پروفایل‌های مسیریابی.'], evals: ['ارزیابی‌ها', 'کارت‌های امتیاز مدل و اجراهای ارزیابی.'], observability: ['مشاهده‌پذیری', 'سیگنال‌های سلامت استقرار و پیوندهای متریک.'], settings: ['تنظیمات', 'تعیین قصد اپراتور، دسترسی و سیاست اجرایی.'], playground: ['محیط آزمایش', 'یک درخواست را از گذرگاه خودتان بفرستید و رد آن را بخوانید.'], access: ['دسترسی', 'کلیدهای مجازی، تیم‌ها و پروژه‌ها را مدیریت کنید.'], audit: ['حسابرسی', 'زنجیره حسابرسی مدیریتی ضد دست‌کاری را جستجو کنید.'], cost: ['بودجه‌ها و هزینه', 'هزینه زنده، هزینه هر استقرار و خروجی‌ها.'] },
-    ps: { overview: ['کتنه', 'ستاسو د روټینګ سیسټم په یو نظر کې.'], providers: ['برابرونکي', 'پورته اړیکې، ماډلونه او وړتیاوې سمبال کړئ.'], routing: ['روټینګ', 'باثباته عامه ماډلونه په باوري اجرااتي لارو واړوئ.'], models: ['د ماډلونو لړلیک', 'هر ماډل د برابرونکي په نښه، وړتیاوو، د موندنې سرچینې او تایید شوې روغتیا سره.'], video: ['ویډیو سټوډیو', 'غیر هم مهاله ویډیو کارونه جوړ، وڅارئ او په خوندي ډول چل کړئ.'], activity: ['فعالیت', 'اصلي غوښتنې، پېښې او د روټینګ تاریخ تعقیب کړئ.'], policies: ['پالیسي', 'د پرېکړې پالیسي، ګارډرېلونه او د روټ پروفایل محرمیت.'], evals: ['ارزونې', 'د ماډل سکور کارډونه او د ارزونې چلول.'], observability: ['څارنه', 'د ځای پرځای کولو روغتیا نښې او د میټریک لینکونه.'], settings: ['تنظیمات', 'د چلوونکي موخه، لاسرسی او د چلولو پالیسي وټاکئ.'], playground: ['د ازموینې چاپېریال', 'ستاسو د خپل ګېټوې له لارې یوه غوښتنه ولېږئ او د هغې تعقیب ولولئ.'], access: ['لاسرسی', 'مجازي کیلي‌ډانې، ډلې او پروژې سمبال کړئ.'], audit: ['پلټنه', 'د لاسوهنې ضد اداري پلټنې زنځیر وپلټئ.'], cost: ['بودیژې او لګښت', 'ژوندی لګښت، د هر ځای‌پرځای کولو لګښت او صادرونې.'] },
+    fa: { overview: ['نمای کلی', 'سیستم مسیریابی شما در یک نگاه.'], providers: ['ارائه‌دهندگان', 'مدیریت اتصال‌های بالادستی، مدل‌ها و قابلیت‌ها.'], routing: ['مسیریابی', 'تبدیل مدل‌های عمومی پایدار به مسیرهای اجرایی قابل اعتماد.'], models: ['فهرست مدل‌ها', 'هر مدل با شناسهٔ ارائه‌دهنده، قابلیت‌ها، منبع کشف و سلامت تأییدشده.'], video: ['استودیو ویدیو', 'ساخت، پایش و بهره‌برداری ایمن از کارهای ویدیویی ناهمگام.'], workflows: ['گردش‌کارها', 'طراحی، اعتبارسنجی، انتشار و اجرای گردش‌کارهای تصویری.'], activity: ['فعالیت', 'ردیابی درخواست‌های واقعی، رویدادها و تاریخچه مسیریابی.'], policies: ['سیاست‌ها', 'سیاست‌های تصمیم، گاردریل‌ها و حریم خصوصی پروفایل‌های مسیریابی.'], evals: ['ارزیابی‌ها', 'کارت‌های امتیاز مدل و اجراهای ارزیابی.'], observability: ['مشاهده‌پذیری', 'سیگنال‌های سلامت استقرار و پیوندهای متریک.'], settings: ['تنظیمات', 'تعیین قصد اپراتور، دسترسی و سیاست اجرایی.'], playground: ['محیط آزمایش', 'یک درخواست را از گذرگاه خودتان بفرستید و رد آن را بخوانید.'], access: ['دسترسی', 'کلیدهای مجازی، تیم‌ها و پروژه‌ها را مدیریت کنید.'], audit: ['حسابرسی', 'زنجیره حسابرسی مدیریتی ضد دست‌کاری را جستجو کنید.'], cost: ['بودجه‌ها و هزینه', 'هزینه زنده، هزینه هر استقرار و خروجی‌ها.'] },
+    ps: { overview: ['کتنه', 'ستاسو د روټینګ سیسټم په یو نظر کې.'], providers: ['برابرونکي', 'پورته اړیکې، ماډلونه او وړتیاوې سمبال کړئ.'], routing: ['روټینګ', 'باثباته عامه ماډلونه په باوري اجرااتي لارو واړوئ.'], models: ['د ماډلونو لړلیک', 'هر ماډل د برابرونکي په نښه، وړتیاوو، د موندنې سرچینې او تایید شوې روغتیا سره.'], video: ['ویډیو سټوډیو', 'غیر هم مهاله ویډیو کارونه جوړ، وڅارئ او په خوندي ډول چل کړئ.'], workflows: ['کاري بهیرونه', 'بصري کاري بهیرونه جوړ، تایید، خپاره او وچلوئ.'], activity: ['فعالیت', 'اصلي غوښتنې، پېښې او د روټینګ تاریخ تعقیب کړئ.'], policies: ['پالیسي', 'د پرېکړې پالیسي، ګارډرېلونه او د روټ پروفایل محرمیت.'], evals: ['ارزونې', 'د ماډل سکور کارډونه او د ارزونې چلول.'], observability: ['څارنه', 'د ځای پرځای کولو روغتیا نښې او د میټریک لینکونه.'], settings: ['تنظیمات', 'د چلوونکي موخه، لاسرسی او د چلولو پالیسي وټاکئ.'], playground: ['د ازموینې چاپېریال', 'ستاسو د خپل ګېټوې له لارې یوه غوښتنه ولېږئ او د هغې تعقیب ولولئ.'], access: ['لاسرسی', 'مجازي کیلي‌ډانې، ډلې او پروژې سمبال کړئ.'], audit: ['پلټنه', 'د لاسوهنې ضد اداري پلټنې زنځیر وپلټئ.'], cost: ['بودیژې او لګښت', 'ژوندی لګښت، د هر ځای‌پرځای کولو لګښت او صادرونې.'] },
   };
   const t = key => (I18N[state.lang] || I18N.en)[key] || I18N.en[key] || key;
   const pageMeta = page => (META_I18N[state.lang] || {})[page] || meta[page];
@@ -1763,7 +1763,7 @@
   const bt = (key, vars) => { let s = (BODY_I18N[state.lang] || BODY_I18N.en)[key] || BODY_I18N.en[key] || key; if (vars) for (const k of Object.keys(vars)) s = s.split('{' + k + '}').join(String(vars[k])); if (s.includes('{s}')) s = s.split('{s}').join(state.lang === 'en' && Number(vars?.n) !== 1 ? 's' : ''); return s; };
   const themeLabel = () => state.theme === 'dark' ? t('lightMode') : t('darkMode');
   function applyLang() { const rtl = state.lang === 'fa' || state.lang === 'ps'; document.documentElement.lang = state.lang; document.documentElement.dir = rtl ? 'rtl' : 'ltr'; const sel = $('#lang-switch'); if (sel) sel.value = state.lang; const brand = $('#brand-sub'); if (brand) brand.textContent = t('brand'); const skip = $('#skip-link'); if (skip) skip.textContent = t('skip'); $$('#primary-nav button').forEach(b => { const label = pageMeta(b.dataset.page)?.[0]; if (!label) return; const node = [...b.childNodes].find(n => n.nodeType === 3 && n.textContent.trim()); if (node) node.textContent = label; }); $$('#primary-nav [data-navgroup]').forEach(el => { const k = el.dataset.navgroup || ''; el.textContent = t('nav' + k.charAt(0).toUpperCase() + k.slice(1)); }); const tt = $('#theme-toggle'); if (tt) tt.textContent = themeLabel(); renderAuthControl(); setConnection(state.connectionStatus.ok, state.connectionStatus.bad); }
-  const meta = { overview: ['Overview', 'Your routing system at a glance.'], providers: ['Providers', 'Manage upstream connections, models and capabilities.'], routing: ['Routing', 'Shape stable public models into reliable execution paths.'], models: ['Model inventory', 'Every provider-qualified model with capabilities, discovery source and verified health.'], video: ['Video Studio', 'Create, monitor and safely operate asynchronous video jobs.'], activity: ['Activity', 'Trace real requests, incidents and routing history.'], playground: ['WebChat', 'Talk to your gateway — every reply shows the route, provider and model that answered.'], policies: ['Policies', 'Decision policies, guardrails and route-profile privacy.'], access: ['Access', 'Manage virtual keys, teams and projects.'], audit: ['Audit', 'Search the tamper-evident admin audit chain.'], cost: ['Budgets & Cost', 'Live spend, per-deployment cost and exports.'], evals: ['Evals', 'Model scorecards and evaluation runs.'], observability: ['Observability', 'Deployment health signals and metrics links.'], settings: ['Settings', 'Set operator intent, access and runtime policy.'] };  const deployments = () => state.snap.deployments || [], routes = () => state.snap.virtual_endpoints || [], healthyCount = () => (state.snap.health || []).filter(x => ['healthy', 'ready'].includes(String(x.status))).length;
+  const meta = { overview: ['Overview', 'Your routing system at a glance.'], providers: ['Providers', 'Manage upstream connections, models and capabilities.'], routing: ['Routing', 'Shape stable public models into reliable execution paths.'], models: ['Model inventory', 'Every provider-qualified model with capabilities, discovery source and verified health.'], video: ['Video Studio', 'Create, monitor and safely operate asynchronous video jobs.'], workflows: ['Workflows', 'Design, validate, publish and run visual workflows.'], activity: ['Activity', 'Trace real requests, incidents and routing history.'], playground: ['WebChat', 'Talk to your gateway — every reply shows the route, provider and model that answered.'], policies: ['Policies', 'Decision policies, guardrails and route-profile privacy.'], access: ['Access', 'Manage virtual keys, teams and projects.'], audit: ['Audit', 'Search the tamper-evident admin audit chain.'], cost: ['Budgets & Cost', 'Live spend, per-deployment cost and exports.'], evals: ['Evals', 'Model scorecards and evaluation runs.'], observability: ['Observability', 'Deployment health signals and metrics links.'], settings: ['Settings', 'Set operator intent, access and runtime policy.'] };  const deployments = () => state.snap.deployments || [], routes = () => state.snap.virtual_endpoints || [], healthyCount = () => (state.snap.health || []).filter(x => ['healthy', 'ready'].includes(String(x.status))).length;
   const providerForDeployment = d => state.providers.find(p => p.id === d.provider_id || p.id === d.provider) || {};
   const statusClass = s => ['healthy', 'ready', 'connected', 'success', 'ok'].includes(String(s).toLowerCase()) ? 'good' : ['cooldown', 'failed', 'degraded', 'error', 'offline'].includes(String(s).toLowerCase()) ? 'bad' : 'warn';
   const statusPill = (label, kind = '') => `<span class="status ${kind}">${esc(label)}</span>`;
@@ -1783,8 +1783,8 @@
     const noteHtml = note ? `<span class="dh-note" title="${esc(note)}">${esc(note)}</span>` : '';
     return `<div class="data-handling"><span class="status ${trainsKind}" title="${esc(trainsLabel)}">${esc(trainsLabel)}</span><span class="status ${retentionKind}" title="${esc(retentionLabel)}">${esc(retentionLabel)}</span>${noteHtml}</div>`;
   }
-  function render() { const [title, description] = pageMeta(state.page); $('#page-title').textContent = title; $('#page-description').textContent = description; $$('[data-page]').forEach(b => b.classList.toggle('active', b.dataset.page === state.page)); $('#content').innerHTML = views()[state.page](); if (state.page === 'policies') bindPolicies(); if (state.page === 'providers') bindProviders(); if (state.page === 'routing') bindRouting(); if (state.page === 'models') bindModels(); if (state.page === 'activity') bindActivity(); if (state.page === 'playground') bindPlayground(); if (state.page === 'access') bindAccess(); if (state.page === 'audit') { bindAudit(); ensureAudit(); } if (state.page === 'evals') ensureEvals(); if (state.page === 'observability') bindObservability(); if (state.page === 'settings') bindSettings(); if (state.page === 'video') { ensureVideoPolling(); if (!state.videoLoading) refreshVideo(); } else if (state.videoPoll) { clearInterval(state.videoPoll); state.videoPoll = null; } if (state.page !== 'activity' && state.activityPoll) { clearInterval(state.activityPoll); state.activityPoll = null; } applyLang(); window.NexaRouteVisualAgent?.render(); }
-  function views() { return { overview: overviewView, providers: providersView, routing: routingView, models: modelsView, video: videoView, activity: activityView, playground: playgroundView, policies: policiesView, access: accessView, audit: auditView, cost: costView, evals: evalsView, observability: observabilityView, settings: settingsView }; }  function deploymentPanel() { const d = state.snap.deployment_report || {}; if (!d.store_topology) return ''; const scopePill = v => v === 'shared' ? statusPill('shared', 'good') : v === 'shared-host' ? statusPill('shared-host', 'warn') : statusPill('per-instance', 'warn'); const topoPill = d.store_topology === 'shared' ? statusPill('shared store', 'good') : d.store_topology === 'test-only' ? statusPill('test-only store', 'bad') : statusPill(d.store_topology, 'warn'); const rows = [['Config snapshot', d.config_snapshot], ['Audit & security store', d.audit_security_store], ['Breaker / cooldown', d.breaker_cooldown], ['Quota reservations', d.quota_reservations], ['Session affinity', d.session_affinity], ['Video jobs & ledger', d.video_jobs_ledger], ['Request idempotency', d.request_idempotency]]; return `<section class="advanced-panel"><details><summary><span>${bt('dp_title')}</span><small>${bt('dp_d')}</small></summary><div class="event-table"><div class="event-table-head"><span>Subsystem</span><span>Scope</span><span>Topology</span><span>Warnings</span></div><article class="event-row"><span>${rows.map(r => esc(r[0])).join('<br>')}</span><span>${rows.map(r => scopePill(r[1])).join('<br>')}</span><span>${topoPill}<br><small>control plane ${d.control_plane_enabled ? 'on · ' + esc(d.control_plane_backend || '') : 'off'} · security store ${esc(d.security_store_backend || '')}</small></span><span>${(d.warnings || []).map(w => `<small>${esc(w)}</small>`).join('<br>')}</span></article></div></details></section>`; }
+  function render() { const [title, description] = pageMeta(state.page); $('#page-title').textContent = title; $('#page-description').textContent = description; $$('[data-page]').forEach(b => b.classList.toggle('active', b.dataset.page === state.page)); $('#content').innerHTML = views()[state.page](); if (state.page === 'policies') bindPolicies(); if (state.page === 'providers') bindProviders(); if (state.page === 'routing') bindRouting(); if (state.page === 'models') bindModels(); if (state.page === 'activity') bindActivity(); if (state.page === 'playground') bindPlayground(); if (state.page === 'access') bindAccess(); if (state.page === 'audit') { bindAudit(); ensureAudit(); } if (state.page === 'evals') ensureEvals(); if (state.page === 'observability') bindObservability(); if (state.page === 'settings') bindSettings(); if (state.page === 'video') { ensureVideoPolling(); if (!state.videoLoading) refreshVideo(); } else if (state.videoPoll) { clearInterval(state.videoPoll); state.videoPoll = null; } if (state.page === 'workflows') bindWorkflows(); else if (wf.poll) { clearInterval(wf.poll); wf.poll = null; } if (state.page !== 'activity' && state.activityPoll) { clearInterval(state.activityPoll); state.activityPoll = null; } applyLang(); window.NexaRouteVisualAgent?.render(); }
+  function views() { return { overview: overviewView, providers: providersView, routing: routingView, models: modelsView, video: videoView, workflows: workflowsView, activity: activityView, playground: playgroundView, policies: policiesView, access: accessView, audit: auditView, cost: costView, evals: evalsView, observability: observabilityView, settings: settingsView }; }  function deploymentPanel() { const d = state.snap.deployment_report || {}; if (!d.store_topology) return ''; const scopePill = v => v === 'shared' ? statusPill('shared', 'good') : v === 'shared-host' ? statusPill('shared-host', 'warn') : statusPill('per-instance', 'warn'); const topoPill = d.store_topology === 'shared' ? statusPill('shared store', 'good') : d.store_topology === 'test-only' ? statusPill('test-only store', 'bad') : statusPill(d.store_topology, 'warn'); const rows = [['Config snapshot', d.config_snapshot], ['Audit & security store', d.audit_security_store], ['Breaker / cooldown', d.breaker_cooldown], ['Quota reservations', d.quota_reservations], ['Session affinity', d.session_affinity], ['Video jobs & ledger', d.video_jobs_ledger], ['Request idempotency', d.request_idempotency]]; return `<section class="advanced-panel"><details><summary><span>${bt('dp_title')}</span><small>${bt('dp_d')}</small></summary><div class="event-table"><div class="event-table-head"><span>Subsystem</span><span>Scope</span><span>Topology</span><span>Warnings</span></div><article class="event-row"><span>${rows.map(r => esc(r[0])).join('<br>')}</span><span>${rows.map(r => scopePill(r[1])).join('<br>')}</span><span>${topoPill}<br><small>control plane ${d.control_plane_enabled ? 'on · ' + esc(d.control_plane_backend || '') : 'off'} · security store ${esc(d.security_store_backend || '')}</small></span><span>${(d.warnings || []).map(w => `<small>${esc(w)}</small>`).join('<br>')}</span></article></div></details></section>`; }
   function overviewView() { const h = state.snap.health || [], ev = (state.snap.events || []).slice(-8).reverse(), configured = deployments().length, healthy = healthyCount(), routeCount = routes().length, degraded = h.filter(x => ['degraded', 'failed', 'cooldown'].includes(x.status)).length, setupDone = [state.providers.length > 0, routeCount > 0, Boolean(state.snap.client_auth?.enabled)].filter(Boolean).length; return `<section class="hero-panel"><div><span class="eyebrow">${bt('ov_eyebrow')}</span><h2>${bt('ov_hero')}</h2><p>${bt('ov_hero_p')}</p><div class="hero-actions"><button class="button primary" data-action="add-provider">${bt('ov_add_provider')}</button><button class="button secondary" data-go="routing">${bt('ov_create_route')}</button><button class="button ghost" data-go="activity">${bt('ov_inspect_activity')}</button></div></div><div class="hero-orbit" aria-hidden="true"><div class="orbit-ring ring-one"></div><div class="orbit-ring ring-two"></div><div class="orbit-core">NR<span>LIVE</span></div><i></i><i></i><i></i></div></section><div class="metric-grid"><button type="button" class="metric-card accent" data-go="activity"><span class="metric-icon"><span class="dir-arrow">↗</span></span><div><small>${bt('ov_m_gateway')}</small><strong>${num(state.snap.request_total)}</strong><span class="metric-foot">${bt('ov_m_gateway_sub')}</span></div></button><button type="button" class="metric-card" data-go="observability"><span class="metric-icon">◈</span><div><small>${bt('ov_m_healthy')}</small><strong>${healthy}/${num(configured)}</strong><span class="metric-foot">${degraded ? bt('ov_need_attention', {n: degraded}) : bt('ov_no_incidents')}</span></div></button><button type="button" class="metric-card" data-go="routing"><span class="metric-icon">⇄</span><div><small>${bt('ov_m_routes')}</small><strong>${num(routeCount)}</strong><span class="metric-foot">${bt('ov_m_routes_sub')}</span></div></button><button type="button" class="metric-card" data-go="activity"><span class="metric-icon">◌</span><div><small>${bt('ov_m_events')}</small><strong>${num((state.snap.events || []).length)}</strong><span class="metric-foot">${bt('ov_m_events_sub')}</span></div></button></div><section class="setup-rail"><div class="setup-rail-head"><div><span class="eyebrow">${bt('ov_setup_eyebrow')}</span><h2>${bt('ov_setup_title')}</h2><p>${bt('ov_setup_desc', {n: setupDone})}</p></div><span class="settings-badge">${setupDone === 3 ? bt('ov_ready') : bt('ov_in_progress')}</span></div><div class="setup-steps"><button class="setup-step ${state.providers.length ? 'done' : 'current'}" data-go="providers"><span>1</span><div><b>${bt('ov_step1')}</b><small>${state.providers.length ? bt('ov_step1_done', {n: state.providers.length}) : bt('ov_step1_todo')}</small></div><strong>${state.providers.length ? '✓' : '<span class="dir-arrow">→</span>'}</strong></button><button class="setup-step ${routeCount ? 'done' : state.providers.length ? 'current' : ''}" data-go="routing"><span>2</span><div><b>${bt('ov_step2')}</b><small>${routeCount ? bt('ov_step2_done', {n: routeCount}) : bt('ov_step2_todo')}</small></div><strong>${routeCount ? '✓' : '<span class="dir-arrow">→</span>'}</strong></button><button class="setup-step ${state.snap.client_auth?.enabled ? 'done' : setupDone === 2 ? 'current' : ''}" data-go="settings"><span>3</span><div><b>${bt('ov_step3')}</b><small>${state.snap.client_auth?.enabled ? bt('ov_step3_done') : bt('ov_step3_todo')}</small></div><strong>${state.snap.client_auth?.enabled ? '✓' : '<span class="dir-arrow">→</span>'}</strong></button></div></section><div class="section-heading"><div><span class="eyebrow">${bt('ov_posture_eyebrow')}</span><h2>${bt('ov_posture_title')}</h2><p>${bt('ov_posture_desc')}</p></div><button class="button ghost small" data-go="settings">${bt('ov_open_settings')}</button></div><div class="health-grid">${healthLayer(bt('ov_hl_gw'), bt('ov_hl_gw_d'), true, bt('ov_hl_gw_l'), 'good', 'overview')} ${healthLayer(bt('ov_hl_pr'), state.providers.length ? bt('ov_hl_pr_d1') : bt('ov_hl_pr_d0'), state.providers.length > 0, state.providers.length ? bt('ov_step1_done', {n: state.providers.length}) : bt('ov_hl_pr_l0'), state.providers.length ? 'good' : 'warn', 'providers')} ${healthLayer(bt('ov_hl_rt'), routeCount ? bt('ov_hl_rt_d1') : bt('ov_hl_rt_d0'), routeCount > 0, routeCount ? bt('ov_hl_rt_l1', {n: routeCount}) : bt('ov_hl_rt_l0'), routeCount ? 'good' : 'warn', 'routing')} ${healthLayer(bt('ov_hl_ca'), state.snap.client_auth?.enabled ? bt('ov_hl_ca_d1') : bt('ov_hl_ca_d0'), Boolean(state.snap.client_auth?.enabled), state.snap.client_auth?.enabled ? bt('ov_hl_ca_l1') : bt('ov_hl_ca_l0'), state.snap.client_auth?.enabled ? 'good' : 'warn', 'settings')}</div><div class="split-grid"><section class="panel"><div class="section-heading compact"><div><span class="eyebrow">${bt('ov_map_eyebrow')}</span><h2>${bt('ov_map_title')}</h2></div>${statusPill('● ' + bt('ov_live'), 'live')}</div><div class="topology"><div class="topology-node client"><b>${bt('ov_topo_client')}</b><small>${bt('ov_topo_client_sub')}</small></div><div class="topology-line"><span></span></div><div class="topology-node router"><b>NexaRoute</b><small>${bt('ov_topo_router_sub')}</small></div><div class="topology-line"><span></span></div><div class="topology-targets">${topologyTargets()}</div></div></section><section class="panel"><div class="section-heading compact"><div><span class="eyebrow">${bt('ov_sig_eyebrow')}</span><h2>${bt('ov_sig_title')}</h2></div><button class="button ghost small" data-go="activity">${bt('ov_view_all')}</button></div>${eventList(ev.slice(0, 5))}</section></div>${deploymentPanel()}`; }
   function healthLayer(title, desc, ok, label, kind, go) { return `<button class="health-layer ${kind}" data-go="${go}"><span class="health-mark ${kind}">${ok ? '✓' : '!'}</span><span><b>${title}</b><small>${desc}</small></span><span class="health-label ${kind}">${label}</span><span class="health-chevron">→</span></button>`; }
   function topologyTargets() { const ds = deployments().slice(0, 3); if (!ds.length) return `<div class="topology-empty"><b>${bt('ov_topo_empty')}</b><small>${bt('ov_topo_empty_d')}</small></div>`; return ds.map(d => { const p = providerForDeployment(d), h = (state.snap.health || []).find(x => x.deployment === d.id) || {}; return `<div class="target-node"><span class="target-dot ${statusClass(h.status)}"></span><span><b>${esc(d.model || d.id)}</b><small>${esc(p.name || d.provider_id || bt('ov_topo_unknown'))}</small></span></div>`; }).join(''); }
@@ -2162,5 +2162,537 @@ let modelTestResults = {};
   $('#auth-control')?.addEventListener('click', async () => { if (state.auth?.authenticated && state.auth?.oidc_enabled) { try { await api('/admin/auth/logout', { method: 'POST' }); state.csrfToken = ''; window.location.reload(); } catch (e) { notice(e.message, true); } } else if (state.auth?.authenticated) { state.adminKey = ''; state.csrfToken = ''; window.location.reload(); } else if (state.auth?.oidc_enabled) { window.location.assign('/admin/auth/login'); } else openAuth(); });
   function applyDeepLink() { const m = /#activity\/([^/?#]+)/.exec(location.hash || ''); if (!m) return false; state.page = 'activity'; state.activityTab = 'live'; activityState().selected = decodeURIComponent(m[1]); return true; }
   window.addEventListener('hashchange', () => { if (applyDeepLink()) render(); });
-  document.documentElement.dataset.theme = state.theme; $('#theme-toggle').textContent = state.theme === 'dark' ? 'Light mode' : 'Dark mode'; applyDeepLink(); render(); initializeAuth().then(ok => { if (ok) refresh(); }); window.addEventListener('pagehide', () => { state.sseAbort?.abort(); if (state.sseReconnect) clearTimeout(state.sseReconnect); });
+  document.documentElement.dataset.theme = state.theme; $('#theme-toggle').textContent = state.theme === 'dark' ? 'Light mode' : 'Dark mode';   // ---- NexaFlow Studio (visual workflow editor) ----
+  // The editor consumes exactly one schema source: GET
+  // /admin/api/nexaflow/nodes (the canonical registry). It never
+  // invents node types, ports, or config fields: palette items,
+  // config panels, and edge targets are all generated from that
+  // response. Drafts are saved to the backend; published versions
+  // are immutable snapshots and runs pin a version, so canvas edits
+  // can never mutate an active run.
+  const wf = { loaded: false, loading: false, error: '', nodes: [], nodeById: {}, workflows: [], view: 'list', selectedId: null, draft: null, draftDirty: false, selectedNode: null, validation: [], validationValid: null, run: null, runs: [], poll: null, zoom: 1, panX: 0, panY: 0, pendingEdge: null, paletteDrag: null, pendingRunVersion: 0, docBound: false, search: '', paletteQuery: '', nodeSeq: 0 };
+  const wfKind = s => ({ succeeded: 'wf-good', failed: 'wf-bad', cancelled: 'wf-warn', awaiting_approval: 'wf-warn', running: 'wf-info', pending: 'wf-muted', skipped: 'wf-muted' }[s] || 'wf-muted');
+  const wfNodeSpec = type => wf.nodeById[type] || null;
+  const wfDraftNodes = () => (wf.draft && wf.draft.nodes) || [];
+  const wfDraftEdges = () => (wf.draft && wf.draft.edges) || [];
+  function wfMarkDirty() { wf.draftDirty = true; }
+  async function wfLoadAll() {
+    wf.loading = true; wf.error = '';
+    try {
+      const [nodesRes, listRes] = await Promise.all([api('/admin/api/nexaflow/nodes'), api('/admin/api/nexaflow/workflows')]);
+      wf.nodes = nodesRes.nodes || [];
+      wf.nodeById = {};
+      wf.nodes.forEach(n => { wf.nodeById[n.id] = n; });
+      wf.workflows = listRes.workflows || [];
+      wf.loaded = true;
+    } catch (e) { wf.error = e.message; }
+    wf.loading = false;
+  }
+  async function wfRefreshList() { try { const res = await api('/admin/api/nexaflow/workflows'); wf.workflows = res.workflows || []; } catch (e) { notice(e.message, true); } }
+  function wfSelectedWorkflow() { return wf.workflows.find(w => w.id === wf.selectedId) || null; }
+  function wfCanvasPoint(clientX, clientY) {
+    const c = $('#wf-canvas'); if (!c) return { x: 0, y: 0 };
+    const r = c.getBoundingClientRect();
+    return { x: (clientX - r.left) / wf.zoom - wf.panX, y: (clientY - r.top) / wf.zoom - wf.panY };
+  }
+  function wfAddNode(type, at) {
+    const spec = wfNodeSpec(type); if (!spec || !wf.draft) return;
+    wf.nodeSeq += 1;
+    const id = 'n' + Date.now().toString(36) + '_' + wf.nodeSeq;
+    // Palette adds cascade across the canvas instead of stacking every
+    // node at the exact center (stacked cards hide each other's ports).
+    // Drag-and-drop passes an explicit point and is never cascaded.
+    let pos = at;
+    if (!pos) {
+      const c = $('#wf-canvas');
+      const cx = c ? (c.getBoundingClientRect().width / 2) / wf.zoom - wf.panX : 400;
+      const cy = c ? (c.getBoundingClientRect().height / 2) / wf.zoom - wf.panY : 300;
+      const n = wf.draft.nodes.length;
+      pos = { x: cx + (n % 4) * 230, y: cy + Math.floor(n / 4) * 150 };
+    }
+    wf.draft.nodes.push({ id, type, label: spec.title, position: { x: Math.max(0, Math.min(2200, Math.round(pos.x))), y: Math.max(0, Math.min(1400, Math.round(pos.y))) }, config: {} });
+    wf.selectedNode = id; wfMarkDirty(); render();
+    setTimeout(() => { const el = document.querySelector(`[data-node-id="${id}"]`); el?.focus(); }, 0);
+  }
+  function wfDeleteNode(id) {
+    if (!wf.draft) return;
+    wf.draft.nodes = wf.draft.nodes.filter(n => n.id !== id);
+    wf.draft.edges = wf.draft.edges.filter(e => e.from !== id && e.to !== id);
+    if (wf.selectedNode === id) wf.selectedNode = null;
+    wfMarkDirty(); render();
+  }
+  function wfCompleteEdge(toNode, toPort) {
+    if (!wf.pendingEdge || !wf.draft) return;
+    const edge = wf.pendingEdge; wf.pendingEdge = null;
+    if (edge.from === toNode) return;
+    const exists = wfDraftEdges().some(x => x.from === edge.from && x.from_port === edge.from_port && x.to === toNode && x.to_port === toPort);
+    if (exists) return;
+    wf.draft.edges.push({ id: 'e' + Date.now().toString(36) + '_' + (++wf.nodeSeq), from: edge.from, from_port: edge.from_port, to: toNode, to_port: toPort });
+    wfMarkDirty(); render();
+  }
+  function wfDrawEdges() {
+    const svg = $('#wf-edges'); const canvas = $('#wf-canvas'); if (!svg || !canvas || !wf.draft) return;
+    const cr = canvas.getBoundingClientRect();
+    const portCenter = (nodeId, field, dir) => {
+      const el = document.querySelector(`[data-wf-port="${nodeId}:${field}:${dir}"]`);
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      return { x: (r.left + r.width / 2 - cr.left) / wf.zoom - wf.panX, y: (r.top + r.height / 2 - cr.top) / wf.zoom - wf.panY };
+    };
+    let paths = '';
+    wfDraftEdges().forEach(e => {
+      const a = portCenter(e.from, e.from_port, 'out'), b = portCenter(e.to, e.to_port, 'in');
+      if (!a || !b) return;
+      const dx = Math.max(40, Math.abs(b.x - a.x) / 2);
+      paths += `<path d="M ${a.x} ${a.y} C ${a.x + dx} ${a.y}, ${b.x - dx} ${b.y}, ${b.x} ${b.y}" class="wf-edge" data-edge-id="${esc(e.id)}" />`;
+    });
+    if (wf.pendingEdge) {
+      const a = portCenter(wf.pendingEdge.from, wf.pendingEdge.from_port, 'out');
+      if (a) paths += `<circle cx="${a.x}" cy="${a.y}" r="5" class="wf-edge-pending" />`;
+    }
+    svg.innerHTML = paths;
+  }
+  function wfNodeCard(n) {
+    const spec = wfNodeSpec(n.type);
+    const title = spec ? spec.title : n.type;
+    const label = n.label || title;
+    const pos = n.position || { x: 0, y: 0 };
+    const runNode = wf.run && wf.run.nodes ? wf.run.nodes.find(x => x.node_id === n.id) : null;
+    const inputs = spec ? spec.input_schema : [];
+    const outputs = spec ? spec.output_schema : [];
+    const portsIn = inputs.map(f => `<span class="wf-port-row"><button type="button" class="wf-port in" data-wf-port="${esc(n.id)}:${esc(f.name)}:in" aria-label="Input ${esc(f.name)}" title="Input: ${esc(f.name)}"></button><span>${esc(f.name)}</span></span>`).join('');
+    const portsOut = outputs.map(f => `<span class="wf-port-row"><span>${esc(f.name)}</span><button type="button" class="wf-port out" data-wf-port="${esc(n.id)}:${esc(f.name)}:out" aria-label="Output ${esc(f.name)}" title="Output: ${esc(f.name)}"></button></span>`).join('');
+    return `<article class="wf-node${wf.selectedNode === n.id ? ' selected' : ''}" data-node-id="${esc(n.id)}" tabindex="0" role="button" aria-label="Node ${esc(label)}" style="left:${pos.x}px;top:${pos.y}px">
+      <div class="wf-node-head"><strong>${esc(label)}</strong><span>${esc(n.type)}</span></div>
+      <div class="wf-node-ports"><div class="wf-ports-in">${portsIn || '<span class="wf-port-none">no inputs</span>'}</div><div class="wf-ports-out">${portsOut || '<span class="wf-port-none">no outputs</span>'}</div></div>
+      ${runNode ? `<div class="wf-node-run"><span class="wf-pill ${wfKind(runNode.status)}">${esc(runNode.status)}</span>${runNode.error ? `<span class="wf-node-err" title="${esc(runNode.error)}">error</span>` : ''}</div>` : ''}
+    </article>`;
+  }
+  function wfPaletteHTML() {
+    const q = wf.paletteQuery.trim().toLowerCase();
+    const cats = [];
+    wf.nodes.forEach(n => { if (!cats.includes(n.category)) cats.push(n.category); });
+    return cats.map(cat => {
+      const items = wf.nodes.filter(n => n.category === cat && (!q || (n.title + ' ' + n.id + ' ' + (n.description || '')).toLowerCase().includes(q)));
+      if (!items.length) return '';
+      return `<div class="wf-palette-cat"><h4>${esc(cat)}</h4>${items.map(n => `<button type="button" class="wf-palette-item" data-palette-type="${esc(n.id)}" title="${esc(n.description || '')}"><strong>${esc(n.title)}</strong><span>${esc(n.id)}</span></button>`).join('')}</div>`;
+    }).join('');
+  }
+  function wfConfigHTML() {
+    const n = wfDraftNodes().find(x => x.id === wf.selectedNode);
+    if (!n) return `<div class="empty"><strong>No node selected</strong><p>Select a node on the canvas to edit its configuration, or add one from the palette.</p></div>`;
+    const spec = wfNodeSpec(n.type);
+    if (!spec) return `<div class="state-error">Unknown node type ${esc(n.type)}.</div>`;
+    const cfg = n.config || {};
+    const fields = spec.config_schema.map(f => {
+      const val = cfg[f.name];
+      let input = '';
+      if (f.type === 'boolean') input = `<input type="checkbox" id="wf-cfg-${esc(f.name)}" data-cfg-field="${esc(f.name)}" data-cfg-type="boolean"${val ? ' checked' : ''}>`;
+      else if (f.type === 'number') input = `<input type="number" id="wf-cfg-${esc(f.name)}" data-cfg-field="${esc(f.name)}" data-cfg-type="number" value="${val ?? ''}">`;
+      else input = `<input type="text" id="wf-cfg-${esc(f.name)}" data-cfg-field="${esc(f.name)}" data-cfg-type="string" value="${esc(val ?? '')}"${f.type === 'secretRef' ? ' autocomplete="off" autocapitalize="off" spellcheck="false"' : ''}>`;
+      return `<div class="field"><label for="wf-cfg-${esc(f.name)}">${esc(f.name)}${f.required ? ' *' : ''} <small>(${esc(f.type)})</small></label>${input}<small>${esc(f.description || '')}${f.type === 'secretRef' ? ' Reference only, e.g. env:NAME. Never type a secret value here.' : ''}</small></div>`;
+    }).join('');
+    return `<div class="field"><label for="wf-node-label">Label</label><input type="text" id="wf-node-label" value="${esc(n.label || '')}"></div>
+      <p class="wf-node-desc">${esc(spec.description || '')}</p>
+      ${spec.requires_policy ? '<p class="wf-policy-note">This node needs operator policy approval at run start (tick the approval box in the Run dialog).</p>' : ''}
+      <p class="wf-meta">Timeout ${Math.round(spec.default_timeout_ms / 1000)}s · max input ${num(spec.max_input_bytes)} B · max output ${num(spec.max_output_bytes)} B · permission ${esc(spec.permission || 'authenticated user')}</p>
+      ${fields || '<p class="wf-meta">This node has no configuration fields.</p>'}
+      <div class="wf-ports-info"><div><strong>Inputs</strong><p>${spec.input_schema.map(f => esc(f.name) + (f.required ? ' *' : '')).join(', ') || 'none'}</p></div><div><strong>Outputs</strong><p>${spec.output_schema.map(f => esc(f.name)).join(', ') || 'none'}</p></div></div>
+      <div class="field-actions"><button type="button" class="button secondary" data-wf="duplicate-node">Duplicate node</button><button type="button" class="button ghost" data-wf="delete-node">Delete node</button></div>`;
+  }
+  function wfValidationHTML() {
+    if (wf.validationValid === null && !wf.validation.length) return '<p class="wf-meta">Press Validate to check this draft against the backend registry.</p>';
+    if (!wf.validation.length) return '<p class="wf-good">✓ Draft is valid.</p>';
+    return `<ul class="wf-issues">${wf.validation.map(i => `<li class="${esc(i.level)}"><strong>${esc(i.code)}</strong>${i.node_id ? ` · node ${esc(i.node_id)}` : ''} — ${esc(i.message)}</li>`).join('')}</ul>`;
+  }
+  function wfRunPanelHTML() {
+    if (!wf.run) return '<p class="wf-meta">No run selected. Start a run from a published version, or pick one from history.</p>';
+    const r = wf.run;
+    const nodes = (r.nodes || []).map(n => `<tr><td data-label="Node">${esc(n.node_id)}</td><td data-label="Type">${esc(n.type)}</td><td data-label="Status"><span class="wf-pill ${wfKind(n.status)}">${esc(n.status)}</span></td><td data-label="Attempts">${n.attempts}</td><td data-label="Duration">${n.duration_ms} ms</td><td data-label="Output preview">${n.output_preview ? `<pre class="wf-preview">${esc(n.output_preview)}</pre>${n.output_truncated ? '<small>Preview truncated at 16 KiB; secret keys redacted.</small>' : ''}` : '—'}</td><td data-label="Error">${n.error ? `<span class="wf-err">${esc(n.error_code || 'error')}: ${esc(n.error)}</span>` : '—'}</td></tr>`).join('');
+    const active = r.status === 'running' || r.status === 'awaiting_approval';
+    return `<div class="wf-run-head"><div><strong>Run ${esc(r.id)}</strong><span class="wf-pill ${wfKind(r.status)}">${esc(r.status)}</span><span class="wf-meta">version ${r.version_number} · started by ${esc(r.started_by)} · ${new Date(r.started_at).toLocaleString()}</span></div>
+      <div class="wf-run-actions">
+        ${r.status === 'awaiting_approval' ? '<button type="button" class="button primary" data-wf="approve-run">Approve</button><button type="button" class="button secondary" data-wf="reject-run">Reject (continues with approved=false)</button>' : ''}
+        ${active ? '<button type="button" class="button ghost" data-wf="cancel-run">Cancel run</button>' : ''}
+        <button type="button" class="button ghost" data-wf="refresh-run">Refresh</button>
+      </div></div>
+      ${r.status === 'awaiting_approval' ? `<p class="wf-warn-box">Waiting for approval on node ${esc(r.pending_node_id || '')}. Approving continues the run; rejecting continues with approved=false.</p>` : ''}
+      ${r.error ? `<p class="wf-err-box">${esc(r.error)}</p>` : ''}
+      ${r.input_preview ? `<details><summary>Run input preview (bounded, secret keys redacted${r.input_truncated ? ', truncated' : ''})</summary><pre class="wf-preview">${esc(r.input_preview)}</pre></details>` : ''}
+      <div class="table-wrap"><table class="table"><thead><tr><th>Node</th><th>Type</th><th>Status</th><th>Attempts</th><th>Duration</th><th>Output preview</th><th>Error</th></tr></thead><tbody>${nodes || '<tr><td colspan="7">No node records yet.</td></tr>'}</tbody></table></div>
+      <h4>Run history</h4>
+      <div class="wf-history">${(wf.runs || []).map(x => `<button type="button" class="wf-history-item${x.id === r.id ? ' active' : ''}" data-wf-run="${esc(x.id)}"><span class="wf-pill ${wfKind(x.status)}">${esc(x.status)}</span><span>${esc(x.id)}</span><small>v${x.version_number} · ${new Date(x.started_at).toLocaleString()}</small></button>`).join('') || '<p class="wf-meta">No runs yet.</p>'}</div>`;
+  }
+  function wfEditorHTML() {
+    const w = wfSelectedWorkflow();
+    if (!w) return '<div class="state-error">Workflow not found. <button type="button" class="button secondary" data-wf="back-list">Back to list</button></div>';
+    const published = w.published_version || 0;
+    return `<div class="wf-toolbar">
+      <button type="button" class="button ghost" data-wf="back-list">← Workflows</button>
+      <strong>${esc(w.name)}</strong>
+      <span class="wf-pill ${w.enabled ? 'wf-good' : 'wf-warn'}">${w.enabled ? 'enabled' : 'disabled'}</span>
+      <span class="wf-meta">published v${published}${published ? ` · hash ${esc((w.versions || []).find(v => v.number === published)?.content_hash?.slice(0, 12) || '')}` : ' · not published yet'}</span>
+      <span class="wf-spacer"></span>
+      ${wf.draftDirty ? '<span class="wf-dirty">Unsaved changes</span>' : ''}
+      <button type="button" class="button secondary" data-wf="save-draft">Save</button>
+      <button type="button" class="button secondary" data-wf="validate-draft">Validate</button>
+      <button type="button" class="button secondary" data-wf="publish-draft">Publish</button>
+      <button type="button" class="button primary" data-wf="open-run">Run…</button>
+      <button type="button" class="button ghost" data-wf="toggle-enabled">${w.enabled ? 'Disable' : 'Enable'}</button>
+      <button type="button" class="button ghost" data-wf="rename-wf">Rename</button>
+      <button type="button" class="button ghost" data-wf="duplicate-wf">Duplicate</button>
+      <button type="button" class="button ghost" data-wf="delete-wf">Delete</button>
+    </div>
+    <div class="wf-layout">
+      <aside class="wf-palette" aria-label="Node palette">
+        <div class="field"><label for="wf-palette-query">Search nodes</label><input type="search" id="wf-palette-query" value="${esc(wf.paletteQuery)}" placeholder="Search title or id…"></div>
+        <p class="wf-meta">Click a node to add it to the canvas, or drag it onto the canvas. Drag from an output dot to an input dot to connect.</p>
+        ${wfPaletteHTML()}
+      </aside>
+      <section class="wf-canvas-col">
+        <div class="wf-canvas-toolbar">
+          <button type="button" class="button ghost" data-wf="zoom-out" aria-label="Zoom out">−</button><span id="wf-zoom-label">${Math.round(wf.zoom * 100)}%</span><button type="button" class="button ghost" data-wf="zoom-in" aria-label="Zoom in">+</button><button type="button" class="button ghost" data-wf="zoom-reset">Reset view</button>
+          <span class="wf-meta">Drag nodes to move · drag the background to pan · Ctrl+scroll to zoom · arrow keys move a selected node · Delete removes it</span>
+        </div>
+        <div id="wf-canvas" class="wf-canvas" role="application" aria-label="Workflow canvas">
+          <div id="wf-layer" class="wf-layer" style="transform:translate(${wf.panX}px, ${wf.panY}px) scale(${wf.zoom});width:2400px;height:1600px">
+            <svg id="wf-edges" width="2400" height="1600" aria-hidden="true"></svg>
+            ${wfDraftNodes().map(wfNodeCard).join('')}
+          </div>
+        </div>
+        ${!wfDraftNodes().length ? '<div class="empty"><strong>Empty canvas</strong><p>Add a trigger node from the palette to start. Every workflow needs at least one trigger.</p></div>' : ''}
+        <div class="wf-run-inputs"><div class="field"><label for="wf-run-inputs">Declared run inputs (comma-separated parameter names)</label><input type="text" id="wf-run-inputs" value="${esc((wf.draft.inputs || []).join(', '))}"><small>Required node inputs without an edge must be declared here; the run dialog supplies their values. Trigger inputs and the manual payload need no declaration.</small></div></div>
+        <div class="wf-panels">
+          <section class="wf-panel"><h3>Validation</h3>${wfValidationHTML()}</section>
+          <section class="wf-panel"><h3>Versions</h3>${(w.versions || []).length ? `<ul class="wf-versions">${(w.versions || []).slice().reverse().map(v => `<li><strong>v${v.number}</strong> <span class="wf-meta">${esc(v.content_hash || '').slice(0, 12)} · by ${esc(v.published_by)} · ${new Date(v.published_at).toLocaleString()}</span> <button type="button" class="button ghost" data-wf-run-version="${v.number}">Run this version</button></li>`).join('')}</ul><p class="wf-meta">Runs pin a version: later edits and publishes never change a run.</p>` : '<p class="wf-meta">No published versions yet.</p>'}</section>
+        </div>
+        <section class="wf-panel wf-run-panel"><h3>Run execution</h3><div id="wf-run-panel">${wfRunPanelHTML()}</div></section>
+      </section>
+      <aside class="wf-config" aria-label="Node configuration">
+        <h3>Node configuration</h3>
+        <p class="wf-meta">Fields come from the backend node schema. No second schema lives in the browser.</p>
+        <div id="wf-config-body">${wfConfigHTML()}</div>
+      </aside>
+    </div>`;
+  }
+  function workflowsView() {
+    if (!wf.loaded) {
+      if (wf.loading) return '<div class="empty"><strong>Loading workflows…</strong></div>';
+      if (wf.error) return `<div class="state-error">Failed to load workflows: ${esc(wf.error)} <button type="button" class="button secondary" data-wf="retry-load">Retry</button></div>`;
+      return '<div class="empty"><strong>Loading workflows…</strong></div>';
+    }
+    if (wf.view === 'editor') return wfEditorHTML();
+    const q = wf.search.trim().toLowerCase();
+    const list = wf.workflows.filter(w => !q || w.name.toLowerCase().includes(q));
+    return `<div class="wf-toolbar">
+      <div class="field wf-search"><label for="wf-search" class="sr-only">Search workflows</label><input type="search" id="wf-search" value="${esc(wf.search)}" placeholder="Search workflows…"></div>
+      <span class="wf-spacer"></span>
+      <button type="button" class="button primary" data-wf="create-wf">Create workflow</button>
+    </div>
+    ${!wf.workflows.length ? '<div class="empty"><strong>No workflows yet</strong><p>Create your first workflow: add a trigger, connect nodes, validate, publish, and run it.</p><button type="button" class="button primary" data-wf="create-wf">Create workflow</button></div>' : ''}
+    <div class="table-wrap"><table class="table"><thead><tr><th>Name</th><th>Status</th><th>Nodes</th><th>Published</th><th>Updated</th><th>Actions</th></tr></thead><tbody>
+    ${list.map(w => `<tr><td data-label="Name"><button type="button" class="wf-link" data-wf-open="${esc(w.id)}">${esc(w.name)}</button></td><td data-label="Status"><span class="wf-pill ${w.enabled ? 'wf-good' : 'wf-warn'}">${w.enabled ? 'enabled' : 'disabled'}</span></td><td data-label="Nodes">${(w.draft.nodes || []).length}</td><td data-label="Published">${w.published_version ? 'v' + w.published_version : '—'}</td><td data-label="Updated">${new Date(w.updated_at).toLocaleString()}</td><td data-label="Actions"><div class="wf-row-actions"><button type="button" class="button ghost" data-wf-open="${esc(w.id)}">Open</button><button type="button" class="button ghost" data-wf-rename="${esc(w.id)}">Rename</button><button type="button" class="button ghost" data-wf-duplicate="${esc(w.id)}">Duplicate</button><button type="button" class="button ghost" data-wf-publish="${esc(w.id)}">Publish</button><button type="button" class="button ghost" data-wf-toggle="${esc(w.id)}">${w.enabled ? 'Disable' : 'Enable'}</button><button type="button" class="button ghost" data-wf-delete="${esc(w.id)}">Delete</button></div></td></tr>`).join('') || '<tr><td colspan="6">No workflows match this search.</td></tr>'}
+    </tbody></table></div>`;
+  }
+  async function wfOpenWorkflow(id) {
+    try {
+      const w = await api('/admin/api/nexaflow/workflows/' + encodeURIComponent(id));
+      wf.workflows = wf.workflows.map(x => x.id === id ? w : x);
+      if (!wf.workflows.find(x => x.id === id)) wf.workflows.push(w);
+      wf.selectedId = id;
+      wf.draft = JSON.parse(JSON.stringify(w.draft || { nodes: [], edges: [] }));
+      // The API normalizes empty graphs to [], but never trust a null
+      // slice here: the editor pushes onto these arrays.
+      wf.draft.nodes = wf.draft.nodes || []; wf.draft.edges = wf.draft.edges || []; wf.draft.inputs = wf.draft.inputs || [];
+      (wf.draft.nodes || []).forEach(n => { if (!n.position) n.position = { x: 0, y: 0 }; });
+      wf.draftDirty = false; wf.selectedNode = null; wf.validation = []; wf.validationValid = null; wf.view = 'editor'; wf.zoom = 1; wf.panX = 0; wf.panY = 0;
+      const runs = await api('/admin/api/nexaflow/workflows/' + encodeURIComponent(id) + '/runs?limit=50');
+      wf.runs = runs.runs || []; wf.run = wf.runs[0] || null;
+      render();
+    } catch (e) { notice(e.message, true); }
+  }
+  function wfStartRunPolling() {
+    if (wf.poll) return;
+    wf.poll = setInterval(async () => {
+      if (state.page !== 'workflows' || !wf.run) { clearInterval(wf.poll); wf.poll = null; return; }
+      if (!['running', 'awaiting_approval'].includes(wf.run.status)) { clearInterval(wf.poll); wf.poll = null; return; }
+      try {
+        const run = await api('/admin/api/nexaflow/runs/' + encodeURIComponent(wf.run.id));
+        wf.run = run;
+        const runs = await api('/admin/api/nexaflow/workflows/' + encodeURIComponent(wf.selectedId) + '/runs?limit=50');
+        wf.runs = runs.runs || [];
+        const panel = $('#wf-run-panel'); if (panel) panel.innerHTML = wfRunPanelHTML();
+        const layer = $('#wf-layer');
+        if (layer) { const cards = layer.querySelectorAll('.wf-node'); cards.forEach(card => { const node = wfDraftNodes().find(n => n.id === card.dataset.nodeId); if (!node) return; const rn = (wf.run.nodes || []).find(x => x.node_id === node.id); const slot = card.querySelector('.wf-node-run'); const html = rn ? `<div class="wf-node-run"><span class="wf-pill ${wfKind(rn.status)}">${esc(rn.status)}</span>${rn.error ? `<span class="wf-node-err" title="${esc(rn.error)}">error</span>` : ''}</div>` : ''; if (slot) slot.outerHTML = html; else if (rn) card.insertAdjacentHTML('beforeend', html); }); }
+      } catch (e) { /* polling keeps the last known state; manual Refresh surfaces errors */ }
+    }, 2000);
+  }
+  function wfOpenRunDialog() {
+    const w = wfSelectedWorkflow();
+    if (!w) return;
+    const versions = w.versions || [];
+    if (!versions.length) { notice('Publish a version before running.', true); return; }
+    const latest = versions[versions.length - 1].number;
+    const preselect = wf.pendingRunVersion || latest; wf.pendingRunVersion = 0;
+    openModal('Run workflow', `<div class="field"><label for="wf-run-version">Version (immutable snapshot)</label><select id="wf-run-version">${versions.slice().reverse().map(v => `<option value="${v.number}"${v.number === preselect ? ' selected' : ''}>v${v.number} · ${esc((v.content_hash || '').slice(0, 12))}</option>`).join('')}</select></div>
+      <div class="field"><label for="wf-run-input">Run input (JSON object)</label><textarea id="wf-run-input" rows="6">{}</textarea><small>Declared inputs: ${esc((wf.draft.inputs || []).join(', ') || 'none')}. The manual trigger receives this object as its payload when no payload field is set.</small></div>
+      <div class="field"><label><input type="checkbox" id="wf-run-policy"> I approve operator policy for billable/external nodes in this run (LLM chat, HTTP requests, video jobs).</label></div>
+      <p class="wf-meta">Runs execute the published snapshot, not the current draft. Editing the canvas afterwards never changes this run.</p>`, async () => {
+      let input = {};
+      const raw = $('#wf-run-input').value.trim();
+      if (raw) { try { input = JSON.parse(raw); } catch { throw Error('Run input must be valid JSON.'); } }
+      if (input === null || typeof input !== 'object' || Array.isArray(input)) throw Error('Run input must be a JSON object.');
+      const version = parseInt($('#wf-run-version').value, 10) || 0;
+      const policy = !!$('#wf-run-policy').checked;
+      const run = await api('/admin/api/nexaflow/workflows/' + encodeURIComponent(w.id) + '/runs', { method: 'POST', ...body({ version_number: version, input, policy_approved: policy }) });
+      closeModal(); wf.run = run;
+      const runs = await api('/admin/api/nexaflow/workflows/' + encodeURIComponent(w.id) + '/runs?limit=50');
+      wf.runs = runs.runs || [];
+      notice('Run started.');
+      render(); wfStartRunPolling();
+    }, 'Start run');
+  }
+  function bindWorkflows() {
+    if (state.page !== 'workflows') return;
+    if (!wf.loaded && !wf.loading) { wfLoadAll().then(() => { if (state.page === 'workflows') render(); }); return; }
+    if (!wf.loaded) return;
+    // Search + palette query (restore focus after re-render).
+    const search = $('#wf-search');
+    if (search) search.addEventListener('input', e => { wf.search = e.target.value; render(); const el = $('#wf-search'); if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); } });
+    const pq = $('#wf-palette-query');
+    if (pq) pq.addEventListener('input', e => { wf.paletteQuery = e.target.value; render(); const el = $('#wf-palette-query'); if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); } });
+    const ri = $('#wf-run-inputs');
+    if (ri) ri.addEventListener('change', e => { wf.draft.inputs = e.target.value.split(',').map(s => s.trim()).filter(Boolean); wfMarkDirty(); });
+    const label = $('#wf-node-label');
+    if (label) label.addEventListener('change', e => { const n = wfDraftNodes().find(x => x.id === wf.selectedNode); if (n) { n.label = e.target.value; wfMarkDirty(); render(); } });
+    $$('[data-cfg-field]').forEach(el => el.addEventListener('change', e => {
+      const n = wfDraftNodes().find(x => x.id === wf.selectedNode); if (!n) return;
+      const field = e.target.dataset.cfgField, type = e.target.dataset.cfgType;
+      if (!n.config) n.config = {};
+      if (type === 'boolean') n.config[field] = e.target.checked;
+      else if (type === 'number') { const v = e.target.value.trim(); if (v === '') delete n.config[field]; else n.config[field] = Number(v); }
+      else { const v = e.target.value; if (v === '') delete n.config[field]; else n.config[field] = v; }
+      wfMarkDirty();
+    }));
+    // List + toolbar actions.
+    const act = async (fn) => { try { await fn(); } catch (e) { notice(e.message, true); } };
+    $$('[data-wf-open]').forEach(b => b.addEventListener('click', () => wfOpenWorkflow(b.dataset.wfOpen)));
+    $$('[data-wf-run-version]').forEach(b => b.addEventListener('click', () => { wf.pendingRunVersion = parseInt(b.dataset.wfRunVersion, 10); wfOpenRunDialog(); }));
+    // Run-panel actions use delegation on the stable #content element:
+    // polling replaces the panel DOM, which would orphan direct listeners.
+    const content = $('#content');
+    if (content && !content.dataset.wfDelegated) {
+      content.dataset.wfDelegated = '1';
+      content.addEventListener('click', e => {
+        const runBtn = e.target.closest('[data-wf-run]');
+        if (runBtn) { act(async () => { const run = await api('/admin/api/nexaflow/runs/' + encodeURIComponent(runBtn.dataset.wfRun)); wf.run = run; const panel = $('#wf-run-panel'); if (panel) panel.innerHTML = wfRunPanelHTML(); wfStartRunPolling(); }); return; }
+        const ab = e.target.closest('[data-wf]');
+        if (!ab) return;
+        const name = ab.dataset.wf;
+        if (name === 'approve-run' || name === 'reject-run') act(async () => { const run = await api('/admin/api/nexaflow/runs/' + encodeURIComponent(wf.run.id) + '/approve', { method: 'POST', ...body({ decision: name === 'approve-run' ? 'approved' : 'rejected' }) }); wf.run = run; const panel = $('#wf-run-panel'); if (panel) panel.innerHTML = wfRunPanelHTML(); wfStartRunPolling(); });
+        else if (name === 'cancel-run') act(async () => { const run = await api('/admin/api/nexaflow/runs/' + encodeURIComponent(wf.run.id) + '/cancel', { method: 'POST', ...body({}) }); wf.run = run; const panel = $('#wf-run-panel'); if (panel) panel.innerHTML = wfRunPanelHTML(); });
+        else if (name === 'refresh-run') act(async () => { const run = await api('/admin/api/nexaflow/runs/' + encodeURIComponent(wf.run.id)); wf.run = run; const panel = $('#wf-run-panel'); if (panel) panel.innerHTML = wfRunPanelHTML(); wfStartRunPolling(); });
+      });
+    }
+    const wfAction = (name, fn) => { $$(`[data-wf="${name}"]`).forEach(b => b.addEventListener('click', () => act(fn))); };
+    // Sidebar navigation back to Workflows must leave the editor (the
+    // global nav handler only switches state.page, so wf.view would keep
+    // showing the editor). Same discard guard as the Back button.
+    const wfNavBtn = document.querySelector('[data-page="workflows"]');
+    if (wfNavBtn && !wfNavBtn.dataset.wfNavBound) {
+      wfNavBtn.dataset.wfNavBound = '1';
+      wfNavBtn.addEventListener('click', () => {
+        if (wf.view !== 'editor') return;
+        if (wf.draftDirty) {
+          openModal('Discard unsaved changes?', '<p>The draft has unsaved changes. Discarding returns to the list without saving.</p>', async () => { closeModal(); wf.view = 'list'; wf.selectedId = null; wf.draft = null; wf.draftDirty = false; render(); }, 'Discard changes');
+          return;
+        }
+        wf.view = 'list'; wf.selectedId = null; wf.draft = null; wf.draftDirty = false; render();
+      });
+    }
+    wfAction('retry-load', async () => { await wfLoadAll(); render(); });
+    wfAction('back-list', async () => {
+      if (wf.draftDirty) { openModal('Discard unsaved changes?', '<p>The draft has unsaved changes. Discarding returns to the list without saving.</p>', async () => { closeModal(); wf.view = 'list'; wf.selectedId = null; wf.draft = null; wf.draftDirty = false; render(); }, 'Discard changes'); return; }
+      wf.view = 'list'; wf.selectedId = null; wf.draft = null; wf.draftDirty = false; render();
+    });
+    wfAction('create-wf', async () => {
+      openModal('Create workflow', '<div class="field"><label for="wf-new-name">Name</label><input type="text" id="wf-new-name" placeholder="e.g. Daily provider health check"></div>', async () => {
+        const name = $('#wf-new-name').value.trim(); if (!name) throw Error('Name is required.');
+        const w = await api('/admin/api/nexaflow/workflows', { method: 'POST', ...body({ name }) });
+        closeModal(); notice('Workflow created.'); await wfRefreshList(); wfOpenWorkflow(w.id);
+      }, 'Create workflow');
+    });
+    // Shared by Save/Validate/Publish: the server validates and publishes
+    // the STORED draft, so Validate/Publish must first persist the canvas
+    // or they would silently judge a stale graph.
+    async function wfSaveDraft() {
+      const w = await api('/admin/api/nexaflow/workflows/' + encodeURIComponent(wf.selectedId), { method: 'PUT', ...body({ draft: wf.draft }) });
+      wf.workflows = wf.workflows.map(x => x.id === w.id ? w : x); wf.draft = JSON.parse(JSON.stringify(w.draft)); wf.draftDirty = false;
+      return w;
+    }
+    wfAction('save-draft', async () => { await wfSaveDraft(); notice('Draft saved.'); render(); });
+    wfAction('validate-draft', async () => {
+      await wfSaveDraft();
+      const res = await api('/admin/api/nexaflow/workflows/' + encodeURIComponent(wf.selectedId) + '/validate');
+      wf.validation = res.issues || []; wf.validationValid = res.valid; render();
+    });
+    wfAction('publish-draft', async () => {
+      await wfSaveDraft();
+      openModal('Publish workflow?', '<p>Publishing snapshots the current draft as a new immutable version. Runs of that version never change, even if you edit the draft afterwards.</p>', async () => {
+        try {
+          const w = await api('/admin/api/nexaflow/workflows/' + encodeURIComponent(wf.selectedId) + '/publish', { method: 'POST', ...body({}) });
+          closeModal(); wf.workflows = wf.workflows.map(x => x.id === w.id ? w : x); notice('Published version ' + w.published_version + '.'); render();
+        } catch (e) {
+          const res = await api('/admin/api/nexaflow/workflows/' + encodeURIComponent(wf.selectedId) + '/validate');
+          wf.validation = res.issues || []; wf.validationValid = res.valid; closeModal(); notice(e.message, true); render();
+        }
+      }, 'Publish');
+    });
+    wfAction('open-run', async () => wfOpenRunDialog());
+    wfAction('toggle-enabled', async () => { const w = wfSelectedWorkflow(); const res = await api('/admin/api/nexaflow/workflows/' + encodeURIComponent(wf.selectedId) + '/enabled', { method: 'POST', ...body({ enabled: !w.enabled }) }); wf.workflows = wf.workflows.map(x => x.id === res.id ? res : x); notice(res.enabled ? 'Workflow enabled.' : 'Workflow disabled. New runs are blocked; in-flight runs continue.'); render(); });
+    wfAction('rename-wf', async () => {
+      const w = wfSelectedWorkflow();
+      openModal('Rename workflow', `<div class="field"><label for="wf-rename-name">Name</label><input type="text" id="wf-rename-name" value="${esc(w.name)}"></div>`, async () => {
+        const name = $('#wf-rename-name').value.trim(); if (!name) throw Error('Name is required.');
+        const res = await api('/admin/api/nexaflow/workflows/' + encodeURIComponent(wf.selectedId) + '/rename', { method: 'POST', ...body({ name }) });
+        closeModal(); wf.workflows = wf.workflows.map(x => x.id === res.id ? res : x); notice('Workflow renamed.'); render();
+      }, 'Rename');
+    });
+    wfAction('duplicate-wf', async () => { const res = await api('/admin/api/nexaflow/workflows/' + encodeURIComponent(wf.selectedId) + '/duplicate', { method: 'POST', ...body({}) }); await wfRefreshList(); notice('Duplicated as ' + res.name + '.'); wfOpenWorkflow(res.id); });
+    wfAction('delete-wf', async () => {
+      const w = wfSelectedWorkflow();
+      openModal('Delete workflow?', `<p>Delete <strong>${esc(w.name)}</strong> and all of its versions and run history? This cannot be undone.</p>`, async () => {
+        await api('/admin/api/nexaflow/workflows/' + encodeURIComponent(wf.selectedId), { method: 'DELETE' });
+        closeModal(); wf.view = 'list'; wf.selectedId = null; wf.draft = null; wf.draftDirty = false; await wfRefreshList(); notice('Workflow deleted.'); render();
+      }, 'Delete workflow');
+    });
+    wfAction('duplicate-node', async () => {
+      const n = wfDraftNodes().find(x => x.id === wf.selectedNode); if (!n) return;
+      wf.nodeSeq += 1;
+      const id = 'n' + Date.now().toString(36) + '_' + wf.nodeSeq;
+      wf.draft.nodes.push({ id, type: n.type, label: n.label, position: { x: Math.min(2200, (n.position?.x || 0) + 40), y: Math.min(1400, (n.position?.y || 0) + 40) }, config: JSON.parse(JSON.stringify(n.config || {})) });
+      wf.selectedNode = id; wfMarkDirty(); render();
+    });
+    wfAction('delete-node', async () => { if (wf.selectedNode) wfDeleteNode(wf.selectedNode); });
+    wfAction('zoom-in', async () => { wf.zoom = Math.min(2, wf.zoom * 1.25); render(); });
+    wfAction('zoom-out', async () => { wf.zoom = Math.max(0.25, wf.zoom / 1.25); render(); });
+    wfAction('zoom-reset', async () => { wf.zoom = 1; wf.panX = 0; wf.panY = 0; render(); });
+    // List row actions.
+    $$('[data-wf-rename]').forEach(b => b.addEventListener('click', () => act(async () => {
+      const w = wf.workflows.find(x => x.id === b.dataset.wfRename);
+      openModal('Rename workflow', `<div class="field"><label for="wf-rename-name">Name</label><input type="text" id="wf-rename-name" value="${esc(w.name)}"></div>`, async () => {
+        const name = $('#wf-rename-name').value.trim(); if (!name) throw Error('Name is required.');
+        await api('/admin/api/nexaflow/workflows/' + encodeURIComponent(w.id) + '/rename', { method: 'POST', ...body({ name }) });
+        closeModal(); await wfRefreshList(); notice('Workflow renamed.'); render();
+      }, 'Rename');
+    })));
+    $$('[data-wf-duplicate]').forEach(b => b.addEventListener('click', () => act(async () => { const res = await api('/admin/api/nexaflow/workflows/' + encodeURIComponent(b.dataset.wfDuplicate) + '/duplicate', { method: 'POST', ...body({}) }); await wfRefreshList(); notice('Duplicated as ' + res.name + '.'); render(); })));
+    $$('[data-wf-publish]').forEach(b => b.addEventListener('click', () => act(async () => {
+      try { await api('/admin/api/nexaflow/workflows/' + encodeURIComponent(b.dataset.wfPublish) + '/publish', { method: 'POST', ...body({}) }); await wfRefreshList(); notice('Workflow published.'); render(); }
+      catch (e) { notice(e.message + ' Open the workflow and check Validation for details.', true); }
+    })));
+    $$('[data-wf-toggle]').forEach(b => b.addEventListener('click', () => act(async () => { const w = wf.workflows.find(x => x.id === b.dataset.wfToggle); await api('/admin/api/nexaflow/workflows/' + encodeURIComponent(w.id) + '/enabled', { method: 'POST', ...body({ enabled: !w.enabled }) }); await wfRefreshList(); render(); })));
+    $$('[data-wf-delete]').forEach(b => b.addEventListener('click', () => act(async () => {
+      const w = wf.workflows.find(x => x.id === b.dataset.wfDelete);
+      openModal('Delete workflow?', `<p>Delete <strong>${esc(w.name)}</strong> and all of its versions and run history? This cannot be undone.</p>`, async () => {
+        await api('/admin/api/nexaflow/workflows/' + encodeURIComponent(w.id), { method: 'DELETE' });
+        closeModal(); await wfRefreshList(); notice('Workflow deleted.'); render();
+      }, 'Delete workflow');
+    })));
+    // Canvas interactions: node drag, pan, ports, palette drag, keys.
+    const canvas = $('#wf-canvas');
+    if (canvas) {
+      wfDrawEdges();
+      if (!wf.docBound) {
+        wf.docBound = true;
+        document.addEventListener('pointerup', e => {
+          const curCanvas = $('#wf-canvas');
+          if (wf.paletteDrag && curCanvas && curCanvas.contains(e.target)) {
+            const p = wfCanvasPoint(e.clientX, e.clientY);
+            wfAddNode(wf.paletteDrag, p);
+          }
+          wf.paletteDrag = null;
+          const inPort = e.target.closest ? e.target.closest('[data-wf-port]') : null;
+          if (inPort) {
+            const [nodeId, field, dir] = inPort.dataset.wfPort.split(':');
+            if (dir === 'in' && wf.pendingEdge) wfCompleteEdge(nodeId, field);
+            // A pointerup on the very port that armed the edge must NOT
+            // cancel it: that is the click-to-connect arming click.
+            else if (wf.pendingEdge && !(dir === 'out' && nodeId === wf.pendingEdge.from && field === wf.pendingEdge.from_port)) wf.pendingEdge = null;
+          } else if (wf.pendingEdge) wf.pendingEdge = null; // pointerup elsewhere cancels
+          const svg = $('#wf-edges'); if (svg && state.page === 'workflows') wfDrawEdges();
+        });
+      }
+      $$('.wf-palette-item').forEach(item => item.addEventListener('click', () => {
+        wfAddNode(item.dataset.paletteType);
+      }));
+      $$('.wf-palette-item').forEach(item => item.addEventListener('pointerdown', () => { wf.paletteDrag = item.dataset.paletteType; }));
+      canvas.addEventListener('pointerdown', e => {
+        const port = e.target.closest('[data-wf-port]');
+        if (port) {
+          const [nodeId, field, dir] = port.dataset.wfPort.split(':');
+          if (dir === 'out') { wf.pendingEdge = { from: nodeId, from_port: field }; wfDrawEdges(); }
+          else if (dir === 'in' && wf.pendingEdge) wfCompleteEdge(nodeId, field);
+          e.preventDefault(); return;
+        }
+        const card = e.target.closest('.wf-node');
+        if (card) {
+          const node = wfDraftNodes().find(n => n.id === card.dataset.nodeId);
+          if (!node) return;
+          wf.selectedNode = node.id;
+          const start = wfCanvasPoint(e.clientX, e.clientY);
+          const orig = { x: node.position?.x || 0, y: node.position?.y || 0 };
+          const move = ev => {
+            const p = wfCanvasPoint(ev.clientX, ev.clientY);
+            node.position = { x: Math.max(0, Math.min(2200, Math.round(orig.x + (p.x - start.x)))), y: Math.max(0, Math.min(1400, Math.round(orig.y + (p.y - start.y)))) };
+            card.style.left = node.position.x + 'px'; card.style.top = node.position.y + 'px';
+            wfDrawEdges();
+          };
+          const up = () => { document.removeEventListener('pointermove', move); document.removeEventListener('pointerup', up); wfMarkDirty(); const cfg = $('#wf-config-body'); if (cfg) cfg.innerHTML = wfConfigHTML(); };
+          document.addEventListener('pointermove', move);
+          document.addEventListener('pointerup', up);
+          // No render() here: re-rendering mid-drag would destroy the
+          // card being dragged. Update selection + config in place.
+          $$('.wf-node').forEach(c => c.classList.toggle('selected', c.dataset.nodeId === node.id));
+          const cfg = $('#wf-config-body'); if (cfg) cfg.innerHTML = wfConfigHTML();
+          return;
+        }
+        // Background pan.
+        const startX = e.clientX, startY = e.clientY, startPanX = wf.panX, startPanY = wf.panY;
+        const move = ev => { wf.panX = startPanX + (ev.clientX - startX) / wf.zoom; wf.panY = startPanY + (ev.clientY - startY) / wf.zoom; const layer = $('#wf-layer'); if (layer) layer.style.transform = `translate(${wf.panX}px, ${wf.panY}px) scale(${wf.zoom})`; wfDrawEdges(); };
+        const up = () => { document.removeEventListener('pointermove', move); document.removeEventListener('pointerup', up); };
+        document.addEventListener('pointermove', move);
+        document.addEventListener('pointerup', up);
+      });
+      canvas.addEventListener('wheel', e => {
+        if (!e.ctrlKey) return;
+        e.preventDefault();
+        const rect = canvas.getBoundingClientRect();
+        const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
+        const before = { x: sx / wf.zoom - wf.panX, y: sy / wf.zoom - wf.panY };
+        wf.zoom = Math.max(0.25, Math.min(2, wf.zoom * (e.deltaY < 0 ? 1.1 : 0.9)));
+        wf.panX = sx / wf.zoom - before.x; wf.panY = sy / wf.zoom - before.y;
+        const layer = $('#wf-layer'); if (layer) layer.style.transform = `translate(${wf.panX}px, ${wf.panY}px) scale(${wf.zoom})`;
+        const zl = $('#wf-zoom-label'); if (zl) zl.textContent = Math.round(wf.zoom * 100) + '%';
+        wfDrawEdges();
+      }, { passive: false });
+      $$('.wf-node').forEach(card => card.addEventListener('keydown', e => {
+        const node = wfDraftNodes().find(n => n.id === card.dataset.nodeId); if (!node) return;
+        if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); wfDeleteNode(node.id); return; }
+        const step = e.shiftKey ? 20 : 10;
+        let dx = 0, dy = 0;
+        if (e.key === 'ArrowLeft') dx = -step; else if (e.key === 'ArrowRight') dx = step;
+        else if (e.key === 'ArrowUp') dy = -step; else if (e.key === 'ArrowDown') dy = step;
+        else return;
+        e.preventDefault();
+        node.position = { x: Math.max(0, Math.min(2200, (node.position?.x || 0) + dx)), y: Math.max(0, Math.min(1400, (node.position?.y || 0) + dy)) };
+        wf.selectedNode = node.id; wfMarkDirty();
+        card.style.left = node.position.x + 'px'; card.style.top = node.position.y + 'px'; wfDrawEdges();
+      }));
+      $$('.wf-node').forEach(card => card.addEventListener('click', () => { if (wf.selectedNode !== card.dataset.nodeId) { wf.selectedNode = card.dataset.nodeId; const cfg = $('#wf-config-body'); if (cfg) cfg.innerHTML = wfConfigHTML(); $$('.wf-node').forEach(c => c.classList.toggle('selected', c.dataset.nodeId === wf.selectedNode)); } }));
+    }
+    if (wf.run && ['running', 'awaiting_approval'].includes(wf.run.status)) wfStartRunPolling();
+  }
+
+  applyDeepLink(); render(); initializeAuth().then(ok => { if (ok) refresh(); }); window.addEventListener('pagehide', () => { state.sseAbort?.abort(); if (state.sseReconnect) clearTimeout(state.sseReconnect); });
 })();

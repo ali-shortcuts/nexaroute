@@ -34,6 +34,7 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/decision/policy"
 	"github.com/ali-shortcuts/nexaroute/internal/events"
 	"github.com/ali-shortcuts/nexaroute/internal/health"
+	"github.com/ali-shortcuts/nexaroute/internal/nexaflow"
 	"github.com/ali-shortcuts/nexaroute/internal/probe"
 	"github.com/ali-shortcuts/nexaroute/internal/providers"
 	"github.com/ali-shortcuts/nexaroute/internal/route"
@@ -107,8 +108,13 @@ type Server struct {
 	videoHandler      http.Handler
 	securityDB        securitystore.Backend
 	securityErr       error
-	oidc              *oidcAuthenticator
-	oidcErr           error
+	// NexaFlow Studio service, constructed lazily on first use.
+	nexaflowMu          sync.Mutex
+	nexaflowSvc         *nexaflow.Service
+	nexaflowSvcErr      error
+	nexaflowSelfBaseURL string
+	oidc                *oidcAuthenticator
+	oidcErr             error
 }
 
 // adminBucket is a compact token bucket keyed by remote address. Capacity 90
@@ -1109,6 +1115,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/admin/api/evaluation/run", s.adminEvaluationRun)
 	// Legacy endpoint (PR #13 compatibility)
 	mux.HandleFunc("/admin/api/endpoint", s.adminEndpoint)
+	// NexaFlow Studio: visual workflow editor backed by the runtime.
+	mux.HandleFunc("/admin/api/nexaflow/nodes", s.adminNexaflowNodes)
+	mux.HandleFunc("/admin/api/nexaflow/workflows", s.adminNexaflowWorkflows)
+	mux.HandleFunc("/admin/api/nexaflow/workflows/", s.adminNexaflowWorkflowByID)
+	mux.HandleFunc("/admin/api/nexaflow/runs/", s.adminNexaflowRunByID)
 
 	sub, _ := fs.Sub(webFS, "web")
 	mux.Handle("/", http.FileServer(http.FS(sub)))
