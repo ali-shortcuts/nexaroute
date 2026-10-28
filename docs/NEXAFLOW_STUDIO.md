@@ -94,16 +94,31 @@ JSON, a URL, browser storage, or console output.
   writes, mirroring the config writer), or memory-only when the server
   has no config path (tests). Corrupt store files fail closed on load.
 
-## Overlap to reconcile (do not run both engines)
+## Overlap to reconcile (do not run multiple engines)
 
 This phase ships a minimal studio engine (`internal/nexaflow/runtime.go`
-+ store + HTTP API) built against the Phase 7 registry. Sibling
-PR #688 (Phase 5 integration) ships a fuller engine on the same
-registry branch with different semantics (branch gating, subworkflows,
-loop/depth caps 10/3, resume tokens). When #688 merges, the studio's
-HTTP layer should be re-pointed at the Phase 5 engine and this
-phase's engine retired; the DTOs and UI are engine-agnostic. Until
-then, this engine is the one the studio is tested against.
++ store + HTTP API) built against the Phase 7 registry. It is one of
+several parallel engine lineages, none merged yet, and the owner must
+decide which survives:
+
+- PR #689 — Phase 2 durable engine with a PostgreSQL store (base
+  `main`; the lineage Phase 6 was originally meant to port onto).
+- PR #688 — Phase 5 integration engine, stacked on the #675 branch
+  (branch gating, subworkflows, loop/depth caps 10/3, resume tokens).
+- Phase 3 (local only, unpushed) — durable engine with AND-join DAG,
+  durable waits/approvals, subworkflows, handler chains.
+- Phase 4 (local only, unpushed) — HTTP/scheduler/webhook layer with
+  its own sequential engine and file store.
+
+When the surviving engine is chosen, the studio's HTTP layer should
+be re-pointed at it and this phase's engine retired; the DTOs and UI
+are engine-agnostic. Until then, this engine is the one the studio is
+tested against. Two cross-engine findings apply to any survivor:
+engines must project node inputs onto the node's InputSchema (the
+registry rejects unknown fields fail-closed, so a raw merge breaks
+multi-node chains), and condition→branch chains cannot run in v1
+without a registry fix (condition outputs `result`, branch requires
+`condition_result`).
 
 ## Verification
 
