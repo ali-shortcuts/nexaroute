@@ -1,14 +1,17 @@
-// Package nexaflow is an engine-agnostic adapter registry for NexaFlow.
+// Package nexaflow is an adapter registry plus a workflow runtime for
+// NexaFlow.
 //
 // HONESTY NOTICE — READ FIRST: as of main e6c3cdf there is no approved
-// NexaFlow registry, runtime, editor, HTTP API, or UI in this repository,
-// and no open NexaFlow pull request. The three earlier NexaFlow chats
-// produced briefs only. This package therefore introduces the adapter
-// registry itself as a new package, internal/nexaflow, and NOTHING ELSE.
-// It does not claim runtime execution, HTTP API wiring, or UI integration.
-// Wiring a workflow runtime, an HTTP surface, or an editor on top of this
-// registry is an explicit follow-up, and the httpapi Server fields are
-// unexported, so server-side wiring must land in package httpapi itself.
+// NexaFlow registry, runtime, editor, HTTP API, or UI in this repository.
+// This package introduces the adapter registry (Phase 4) and, in Phase 5,
+// a workflow runtime (Engine) that executes validated DAGs of registry
+// nodes, plus template instantiation into runnable workflows. It does
+// NOT claim HTTP API wiring, UI integration, a scheduler daemon, a
+// webhook listener, or durable run history: paused runs live in a
+// RunStore, and the bundled store is in-memory only. Wiring an HTTP
+// surface or an editor on top of this runtime is an explicit follow-up,
+// and the httpapi Server fields are unexported, so server-side wiring
+// must land in package httpapi itself.
 //
 // What this package does: it adapts existing, verified NexaRoute
 // capabilities behind a versioned node registry. Every node declares a
@@ -22,9 +25,12 @@
 // through the Backend port interface; they do not reimplement them.
 //
 // Explicitly NOT implemented here:
-//   - a workflow runtime (scheduling, ticking, durable pause, per-iteration
-//     execution): schedule/loop/approval nodes expose pure computations or
-//     decisions and document that execution is the runtime's job;
+//   - durable run history: paused runs are held by a RunStore; the
+//     bundled MemoryRunStore is in-memory only and tokens die with
+//     the process. A PostgreSQL store is a follow-up, not a claim;
+//   - a scheduler daemon or webhook HTTP listener: schedule nodes
+//     compute next-fire times and webhook nodes verify one delivery;
+//     ticking and listening belong to a future runtime host;
 //   - live-model evaluation: only replay of caller-supplied outcomes via
 //     eval.Runner is exposed; live scores are never fabricated;
 //   - hard-budget enforcement: budget_check only compares a snapshot

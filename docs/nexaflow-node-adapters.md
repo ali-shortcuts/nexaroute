@@ -172,3 +172,18 @@ operator policy at node execution time.
   side effect directly; the failure-notification template's HTTP step
   is flagged in its description as external and irreversible once sent,
   which is why the template requires policy approval.
+
+## Phase 5 — Integration (engine + completed adapters)
+
+Phase 5 adds the workflow runtime engine (`Engine` in
+`internal/nexaflow/engine.go`), the `CompositeBackend` that wires
+every node to the subsystem that owns it, `GatewayClient`
+selector/secret resolution, and template instantiation into runnable
+workflows (`Template.InstantiateWorkflow`). The five templates are
+now internally valid and executable end to end on fakes; the
+health-alert template gained the `condition` step its branch step
+was missing. The full node-by-node completion matrix, engine
+contract, and the explicit Unsupported list (live evaluation,
+video-job cancellation, hard-budget enforcement, PG-durable run
+history, scheduler daemon, webhook listener, UI/HTTP API wiring)
+live in `docs/nexaflow-phase5-integration.md`.
