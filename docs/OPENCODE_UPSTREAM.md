@@ -54,17 +54,57 @@ Pool entries may carry `email` (metadata only, masked everywhere).
 
 ## Go session header
 
-`ses_` + first 32 hex chars of SHA-256(session key + `|` + salt),
-salt = `opencode_session_salt` or the documented default
-`nexaroute-opencode-session-v1` (a domain separator, never a
-credential, never logged). A client-supplied value (via
-`forward_headers`) wins unchanged. With no session key, the fallback
-is deterministic over provider id + model + salt. Derived values are
+`ses_` + first 32 hex chars of SHA-256(scope + `|` + session key +
+`|` + salt), salt = `opencode_session_salt` or the documented
+default `nexaroute-opencode-session-v1` (a domain separator, never a
+credential, never logged). Scope is the caller's non-secret
+identity — the virtual-key ID for virtual-key callers, the tenant ID
+otherwise — hashed into the value, never printed in it, so two
+callers sharing a session-key string cannot collide upstream; an
+empty scope (operator tests, legacy local callers) keeps the
+unscoped derivation. A valid client-supplied value (via
+`forward_headers`, 1–256 chars, no control bytes) wins unchanged; an
+invalid client value is deleted and a derived value is used instead
+— invalid input falls through, it never travels upstream and never
+fails the request. With no session key, the fallback is
+deterministic over scope + provider id + model + salt: it passes the
+gateway gate but creates no conversation affinity, and clients that
+need stable conversations must send a session id. Derived values are
 cached in a bounded LRU keyed by the SHA-256 of the derivation input,
 never by the raw session key. Never derived from an API key, email,
 prompt text, or user id; never from the per-request id; never placed
 in static headers; never trusted for Console (Console gets no
 gateway-derived header).
+
+Gating (enforced in the adapter, after header forwarding, so it
+cleans up anything forwarding produced): the header is sent only on
+POST inference calls whose upstream path is a chat, responses, or
+messages path, and only for `opencode-go` (derived) or
+`opencode-console` (valid client value only). It is deleted on model
+discovery, embeddings, token counting, media/images, speech,
+transcriptions, and rerank calls, and it is deleted for every
+non-opencode provider even if the operator listed it in
+`forward_headers` — a generic provider pointed at a Go endpoint must
+be reconfigured as type `opencode-go`.
+
+One mechanism, not two: provider Type (`opencode-console` /
+`opencode-go`) is the sole opt-in. The earlier draft design (an
+`opencode_session` flag on any provider, a per-request UUID fallback,
+and a plaintext `<virtual-key-id>:` prefix) is NOT shipped: the flag
+would duplicate the Type opt-in, a fresh UUID per request fragments
+every session-less conversation and defeats retries on one session,
+and a plaintext prefix would leak the caller id and break the
+`ses_` shape. Unknown provider types are rejected by config
+validation (no adapter is built), and an unknown ingress kind to an
+opencode provider fails the attempt closed instead of silently
+falling back to the chat protocol. No Zen profile is shipped: the
+`zen/v1` and `zen/go/v1` bases in Docker Agent docs are that
+client's built-in alias surface, a different surface from the
+Console inference gateway this provider targets; a Zen profile
+would be a separate, separately verified decision. The documented
+Gemini path (`/google/v1beta/models/...`) is out of scope here:
+opencode providers serve the three text protocols above, and a
+Gemini ingress to them fails closed.
 
 ## 403 model-entitlement handling (opencode only)
 

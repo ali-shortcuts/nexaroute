@@ -173,6 +173,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 	routeCtx, routeCancel := routeContext(r.Context(), in.Stream, cfg.RequestTimeout())
 	routeCtx = providers.WithQuotaEstimate(routeCtx, req.EstimatedInputTokens, req.MaxOutputTokens)
 	routeCtx = providers.WithSessionKey(routeCtx, req.SessionKey)
+	routeCtx = providers.WithClientScope(routeCtx, clientScopeForSession(r))
 	defer routeCancel()
 	var lastErr string
 	var lastStatus int

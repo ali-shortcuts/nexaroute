@@ -276,7 +276,16 @@ Each pool entry may also carry `email` (metadata only — authentication never u
 `credentials` placeholder (what the UI sends when only the primary
 key changes) preserves the pool; a nil/omitted credentials list
 clears it and a non-empty list replaces it, per the tested
-whole-set replacement semantics. Clearing the pool requires an explicit `credential_pool` replace with empty entries. The admin UI renders per-credential state and a per-row Test button. A best-effort audit event is recorded per provider mutation naming the provider id and pool indices changed, never values.
+whole-set replacement semantics. Clearing the pool requires an explicit `credential_pool` replace with empty entries. Two related
+contracts, regression-tested at the admin API: (1) `secret_source`
+on the provider detail response reports the PRIMARY credential's
+source (`literal` / `env` / `pool` / `none`), not whether a
+supplementary pool exists — so a primary replacement that preserves
+a pool still reports `literal`, and a pool-only provider reports
+`pool`; (2) an explicit clear (`replace_key` with no primary
+credential at all, the UI's clear-secret checkbox) clears the
+primary AND the pool, so nothing remains configured — the
+pool-preservation placeholder never applies to a clear. The admin UI renders per-credential state and a per-row Test button. A best-effort audit event is recorded per provider mutation naming the provider id and pool indices changed, never values.
 
 Honest bounds (not claims): there is no "never hit a rate limit" or "infinite speed" guarantee — latency is bounded below by upstream plus network plus tokens. Streams are not passed through zero-copy wholesale: usage accounting, protocol translation, tool-call handling, and redaction still run on these paths. Rolling latency routing, token-aware balancing, and cross-instance credential state are not shipped (deferred/future work). Compatibility is per provider, model, protocol, and feature in `docs/COMPATIBILITY.md` — never "all models/providers".
 

@@ -805,15 +805,24 @@ func (s *Server) adminProviderByID(w http.ResponseWriter, r *http.Request) {
 				// Explicit replacement: use new values from request (already in in.Provider).
 				// G7 guard, narrowed to the UI placeholder: when the submitted
 				// provider.credentials decodes as an explicitly empty (non-nil)
-				// list, that [] is the UI's placeholder for "pool untouched
-				// while the primary key changes" (app.js sends [] when a new
-				// primary key is entered), not an instruction to clear the
-				// pool — so preserve old.Credentials. A nil list (omitted or
-				// null) keeps the tested whole-set replacement semantics and
-				// clears the pool, and a non-empty list replaces it. Explicit
-				// pool clear still goes through credential_pool
+				// list AND a new primary credential is actually supplied
+				// (api_key or api_key_env non-empty), that [] is the UI's
+				// placeholder for "pool untouched while the primary key
+				// changes" (app.js sends [] when a new primary key is
+				// entered), not an instruction to clear the pool — so
+				// preserve old.Credentials. A nil list (omitted or null)
+				// keeps the tested whole-set replacement semantics and
+				// clears the pool, and a non-empty list replaces it.
+				// Explicit pool clear still goes through credential_pool
 				// {replace:true, entries:[]}.
-				if in.Provider.Credentials != nil && len(in.Provider.Credentials) == 0 {
+				// A replace_key request with NO primary credential at all
+				// (api_key and api_key_env both empty) is the UI's explicit
+				// clear (the #p-clear-secret checkbox): it must NOT preserve
+				// the pool, or the provider would still report a configured
+				// credential after the operator cleared it. The empty list
+				// is kept in that case, so clear means clear.
+				if in.Provider.Credentials != nil && len(in.Provider.Credentials) == 0 &&
+					(in.Provider.APIKey != "" || in.Provider.APIKeyEnv != "") {
 					in.Provider.Credentials = old.Credentials
 				}
 			} else if in.Provider.APIKey == maskedPlaceholder {
@@ -1189,14 +1198,26 @@ func providerModelsMeta(p config.ProviderConfig) []map[string]any {
 }
 
 func secretSource(p config.ProviderConfig) string {
-	if len(p.Credentials) > 0 {
-		return "pool"
-	}
-	if p.APIKeyEnv != "" {
+	// Contract: secret_source reports the PRIMARY credential's source, not
+	// whether a supplementary pool exists. A provider may hold both a
+	// primary literal and a pool (after a G7-preserving primary
+	// replacement); reporting "pool" there would make a primary replacement
+	// look like it did not happen. Resolution order mirrors
+	// ProviderConfig.ResolvedAPIKey: a set environment reference wins over
+	// the literal fallback, an unset environment reference is still the
+	// configured primary source, and the pool is reported only when no
+	// primary credential is configured at all.
+	if p.APIKeyEnv != "" && os.Getenv(p.APIKeyEnv) != "" {
 		return "env"
 	}
 	if p.APIKey != "" {
 		return "literal"
+	}
+	if p.APIKeyEnv != "" {
+		return "env"
+	}
+	if len(p.Credentials) > 0 {
+		return "pool"
 	}
 	return "none"
 }

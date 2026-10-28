@@ -10,7 +10,9 @@ import (
 	"testing"
 
 	"github.com/ali-shortcuts/nexaroute/internal/config"
+	"github.com/ali-shortcuts/nexaroute/internal/protocol/canonical"
 	"github.com/ali-shortcuts/nexaroute/internal/providers"
+	"github.com/ali-shortcuts/nexaroute/internal/router"
 )
 
 // OpenCode conformance cells. The shipped matrix in conformance_test.go
@@ -574,5 +576,124 @@ func TestOpencodeConnectionTestDialects(t *testing.T) {
 	}
 	if auths[2] != "Bearer test-key-pool1" {
 		t.Fatalf("per-credential connection test used auth %q", auths[2])
+	}
+}
+
+// --- consolidated routing-matrix additions --------------------------------
+
+// Failover from an OpenCode Go candidate to an unrelated generic
+// candidate must serve the request from the generic provider WITHOUT
+// carrying the Go session header onto it. Candidates come from an
+// explicit pool + virtual endpoint (the gateway's multi-candidate
+// mechanism); the Go attempt carries the header (fake asserts it);
+// the generic attempt must not.
+func TestOpencodeFailoverToUnrelatedProviderCarriesNoSession(t *testing.T) {
+	var goSess []string
+	var genSess []string
+	var goHits, genHits int
+	var mu sync.Mutex
+	goSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		goHits++
+		goSess = append(goSess, r.Header.Get("x-opencode-session"))
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = io.WriteString(w, `{"error":{"message":"upstream overloaded"}}`)
+	}))
+	defer goSrv.Close()
+	genSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		genHits++
+		genSess = append(genSess, r.Header.Get("x-opencode-session"))
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"c1","object":"chat.completion","model":"fake","choices":[{"index":0,"message":{"role":"assistant","content":"plain-answer"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}`)
+	}))
+	defer genSrv.Close()
+	cfg := config.Default()
+	cfg.Probe.Enabled = false
+	cfg.Routing.Strategy = "priority"
+	cfg.Routing.MaxAttempts = 4
+	cfg.Routing.RetryBackoffMS = 0
+	mk := func(id, typ, base string, priority int) config.ProviderConfig {
+		p := config.ProviderConfig{ID: id, Name: id, Type: typ, BaseURL: base, APIKey: "test-key-1", AuthMode: "bearer", Enabled: true,
+			Models: []config.ModelConfig{{ID: "m", Model: "conf-model", Enabled: true, Priority: priority, Weight: 1, Capabilities: config.Capabilities{Streaming: true, Tools: true}}}}
+		p.ApplyDefaults()
+		return p
+	}
+	cfg.Providers = []config.ProviderConfig{mk("go", "opencode-go", goSrv.URL, 0), mk("gen", "openai_compatible", genSrv.URL, 1)}
+	cfg.CandidatePools = []config.CandidatePoolConfig{{ID: "pool", Mode: "explicit", Deployments: []string{"go/m", "gen/m"}}}
+	cfg.RouteProfiles = []config.RouteProfileConfig{{ID: "profile", CandidatePool: "pool"}}
+	trueVal := true
+	cfg.VirtualEndpoints = []config.VirtualEndpointConfig{{ID: "ve", PublicModel: "nexa-opencode", RouteProfile: "profile", Enabled: &trueVal, Protocols: []string{"openai"}}}
+	s := testGateway(t, cfg)
+	s.SyncCapabilityContracts()
+	rr := conformancePost(t, s, "/v1/chat/completions", `{"model":"nexa-opencode","messages":[{"role":"user","content":"hi"}]}`)
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), "plain-answer") {
+		t.Fatalf("failover: status=%d body=%s goHits=%d genHits=%d", rr.Code, rr.Body.String(), goHits, genHits)
+	}
+	if goHits == 0 || genHits == 0 {
+		t.Fatalf("failover did not try both candidates: go=%d gen=%d", goHits, genHits)
+	}
+	for _, h := range goSess {
+		if h == "" || !strings.HasPrefix(h, "ses_") {
+			t.Fatalf("go attempt missing session header: %q", h)
+		}
+	}
+	for _, h := range genSess {
+		if h != "" {
+			t.Fatalf("generic failover attempt leaked session header %q", h)
+		}
+	}
+}
+
+// Malformed upstream responses must surface as errors, never as
+// invented completions, and never with a fabricated terminal marker.
+func TestOpencodeMalformedUpstream(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(r.URL.Path, "stream") || r.URL.Query().Get("stream") != "" {
+			return
+		}
+		_, _ = io.WriteString(w, `this is not json at all {{{`)
+	}))
+	defer srv.Close()
+	cfg := config.Default()
+	p := config.ProviderConfig{ID: "go", Name: "go", Type: "opencode-go", BaseURL: srv.URL, APIKey: "test-key-1", AuthMode: "bearer", Enabled: true,
+		Models: []config.ModelConfig{{ID: "m", Model: "conf-model", Enabled: true, Weight: 1, Capabilities: config.Capabilities{Streaming: true, Tools: true}}}}
+	p.ApplyDefaults()
+	cfg.Providers = []config.ProviderConfig{p}
+	s := testGateway(t, cfg)
+	s.SyncCapabilityContracts()
+	rr := conformancePost(t, s, "/v1/chat/completions", `{"model":"m","messages":[{"role":"user","content":"hi"}]}`)
+	if rr.Code == http.StatusOK {
+		t.Fatalf("malformed upstream must not return 200, body=%s", rr.Body.String())
+	}
+	if strings.Contains(rr.Body.String(), "plain-answer") {
+		t.Fatalf("malformed upstream produced invented content: %s", rr.Body.String())
+	}
+}
+
+// Unknown ingress to an opencode provider must fail closed: no bundle,
+// no payload, and (by construction) no upstream request — never a
+// silent fallback to the chat protocol.
+func TestOpencodeUnknownIngressFailsClosed(t *testing.T) {
+	fake := &opencodeConformanceFake{inner: &conformanceFake{}}
+	s := opencodeGateway(t, "opencode-go", fake)
+	bundle := hedgeAttemptBundle{c: router.Scored{Deployment: router.Deployment{ID: "cf/m", ProviderID: "cf", ProviderType: "opencode-go", Model: "conf-model"}}}
+	req := canonical.Request{Model: "conf-model", Messages: []canonical.Message{{Role: "user", Parts: []canonical.Part{{Type: "text", Text: "hi"}}}}}
+	_, ok := s.finishCanonicalAttempt(bundle, req, "gemini")
+	if ok {
+		t.Fatal("unknown ingress must not build an opencode attempt")
+	}
+	if len(fake.seenPaths()) != 0 {
+		t.Fatalf("fail-closed attempt must not reach upstream, paths=%v", fake.seenPaths())
+	}
+	// The three known ingresses still build.
+	for _, kind := range []string{providers.IngressOpenAIChat, providers.IngressOpenAIResponses, providers.IngressAnthropic} {
+		if _, ok := s.finishCanonicalAttempt(bundle, req, kind); !ok {
+			t.Fatalf("known ingress %q must build", kind)
+		}
 	}
 }

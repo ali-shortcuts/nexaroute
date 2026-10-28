@@ -99,6 +99,54 @@ func SessionHash(sessionKey string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// Client scope (virtual-key / tenant isolation for derived sessions).
+//
+// A gateway-derived session value must never collide between callers
+// that happen to use the same session key string (e.g. two tenants
+// both sending "default"). The httpapi layer attaches the caller's
+// non-secret scope — the virtual-key ID for virtual-key callers, the
+// tenant ID otherwise — and the derivation hashes it in. The scope
+// itself never appears in the header: only its hash contribution does.
+// An empty scope keeps the pre-scope derivation (operator test paths
+// and legacy unauthenticated callers, which have no caller identity).
+type clientScopeContextKey struct{}
+
+func WithClientScope(ctx context.Context, scope string) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, clientScopeContextKey{}, scope)
+}
+
+func ClientScopeFromContext(ctx context.Context) (string, bool) {
+	if ctx == nil {
+		return "", false
+	}
+	v, ok := ctx.Value(clientScopeContextKey{}).(string)
+	if !ok || v == "" {
+		return "", false
+	}
+	return v, true
+}
+
+// ValidOpencodeSessionValue reports whether a client-supplied session
+// value may be forwarded unchanged: 1-256 chars, no control bytes
+// (CR/LF included, so header injection through a forwarded value is
+// impossible at this layer; Go's transport would reject it anyway,
+// but the gateway must fall through to a derived value instead of
+// failing the request).
+func ValidOpencodeSessionValue(v string) bool {
+	if len(v) < 1 || len(v) > 256 {
+		return false
+	}
+	for i := 0; i < len(v); i++ {
+		if v[i] < 0x20 || v[i] == 0x7F {
+			return false
+		}
+	}
+	return true
+}
+
 // ---------------------------------------------------------------------------
 // Derived x-opencode-session header (Go profile ONLY).
 //
@@ -121,10 +169,23 @@ func opencodeSessionSalt(p config.ProviderConfig) string {
 // DeriveOpencodeSessionValue computes the header value without caching.
 // DeriveOpencodeSessionValueCached is the dispatch path; it caches by the
 // SHA-256 of the derivation input, never by the raw session key.
+// The Scoped variants add the caller scope to the input; the unscoped
+// wrappers keep the pre-scope derivation for callers without an
+// identity (operator tests, legacy local callers).
 func DeriveOpencodeSessionValue(p config.ProviderConfig, sessionKey, model string) string {
+	return DeriveOpencodeSessionValueScoped(p, "", sessionKey, model)
+}
+
+func DeriveOpencodeSessionValueScoped(p config.ProviderConfig, scope, sessionKey, model string) string {
 	salt := opencodeSessionSalt(p)
 	var input string
-	if sessionKey != "" {
+	if scope != "" {
+		if sessionKey != "" {
+			input = scope + "|" + sessionKey + "|" + salt
+		} else {
+			input = scope + "|" + p.ID + "|" + model + "|" + salt
+		}
+	} else if sessionKey != "" {
 		input = sessionKey + "|" + salt
 	} else {
 		input = p.ID + "|" + model + "|" + salt
@@ -152,9 +213,19 @@ const (
 var opencodeSessionCache = &sessionValueCache{entries: map[string]sessionValueCacheEntry{}}
 
 func DeriveOpencodeSessionValueCached(p config.ProviderConfig, sessionKey, model string) string {
+	return DeriveOpencodeSessionValueCachedScoped(p, "", sessionKey, model)
+}
+
+func DeriveOpencodeSessionValueCachedScoped(p config.ProviderConfig, scope, sessionKey, model string) string {
 	salt := opencodeSessionSalt(p)
 	var input string
-	if sessionKey != "" {
+	if scope != "" {
+		if sessionKey != "" {
+			input = scope + "|" + sessionKey + "|" + salt
+		} else {
+			input = scope + "|" + p.ID + "|" + model + "|" + salt
+		}
+	} else if sessionKey != "" {
 		input = sessionKey + "|" + salt
 	} else {
 		input = p.ID + "|" + model + "|" + salt
@@ -167,7 +238,7 @@ func DeriveOpencodeSessionValueCached(p config.ProviderConfig, sessionKey, model
 	if e, ok := opencodeSessionCache.entries[key]; ok && now.Before(e.expires) {
 		return e.value
 	}
-	value := DeriveOpencodeSessionValue(p, sessionKey, model)
+	value := DeriveOpencodeSessionValueScoped(p, scope, sessionKey, model)
 	if len(opencodeSessionCache.entries) >= sessionValueCacheMax {
 		// Evict expired entries first, then the oldest insertion.
 		for k, e := range opencodeSessionCache.entries {

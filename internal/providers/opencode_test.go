@@ -600,3 +600,150 @@ func TestOpencodeDiscoveryConsoleAndGo(t *testing.T) {
 		t.Errorf("go discovery made %d network calls", hits.Load())
 	}
 }
+
+// --- consolidated session contract (canonical #694 + #695) -------------
+
+// Eligible-call gating, invalid-input fall-through, caller-scope
+// isolation, and no-leak rules for x-opencode-session. Every case runs
+// against a capturing fake upstream: the header the fake actually
+// received is the assertion, never the adapter's intent.
+func TestOpencodeSessionGatingScopeAndLeak(t *testing.T) {
+	newAdapter := func(t *testing.T, p config.ProviderConfig) (*httpAdapter, *[]http.Header, *[]string) {
+		t.Helper()
+		var headers []http.Header
+		var paths []string
+		var keys []string
+		srv := opencodeFakeServer(t, &paths, &headers, &keys)
+		t.Cleanup(srv.Close)
+		p.BaseURL = srv.URL
+		a, err := newHTTPAdapter(p, 5*time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return a, &headers, &paths
+	}
+	call := func(t *testing.T, a *httpAdapter, ctx context.Context, method, path string, fwd http.Header) {
+		t.Helper()
+		resp, err := a.DoPath(ctx, method, path, []byte(`{"model":"m1","messages":[]}`), false, fwd)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+	}
+	goCfg := func() config.ProviderConfig {
+		return config.ProviderConfig{ID: "go1", Type: "opencode-go", APIKey: "test-key-1", AuthMode: "bearer"}
+	}
+
+	t.Run("eligible inference paths get header, ineligible get none", func(t *testing.T) {
+		a, headers, _ := newAdapter(t, goCfg())
+		ctx := WithSessionKey(context.Background(), "conversation-aaa")
+		for _, path := range []string{config.OpencodeChatPath, config.OpencodeResponsesPath, config.OpencodeMessagesPath} {
+			call(t, a, ctx, http.MethodPost, path, nil)
+		}
+		for _, h := range *headers {
+			if h.Get("x-opencode-session") == "" {
+				t.Fatalf("eligible path got no session header")
+			}
+		}
+		a2, headers2, _ := newAdapter(t, goCfg())
+		calls := []struct {
+			method, path string
+		}{
+			{http.MethodGet, "/v1/models"},
+			{http.MethodPost, "/v1/embeddings"},
+			{http.MethodPost, "/v1/messages/count_tokens"},
+			{http.MethodPost, "/v1/images/generations"},
+			{http.MethodPost, "/v1/audio/speech"},
+			{http.MethodPost, "/v1/audio/transcriptions"},
+			{http.MethodPost, "/v1/rerank"},
+		}
+		for _, c := range calls {
+			call(t, a2, ctx, c.method, c.path, nil)
+		}
+		for i, h := range *headers2 {
+			if h.Get("x-opencode-session") != "" {
+				t.Fatalf("ineligible call %d (%s %s) leaked session header %q", i, calls[i].method, calls[i].path, h.Get("x-opencode-session"))
+			}
+		}
+	})
+
+	t.Run("invalid client value falls through to derived, never upstream", func(t *testing.T) {
+		p := goCfg()
+		p.ForwardHeaders = []string{"x-opencode-session"}
+		a, headers, _ := newAdapter(t, p)
+		for _, bad := range []string{"bad\r\ninjected: 1", "bad\nvalue", strings.Repeat("x", 257)} {
+			fwd := http.Header{}
+			fwd.Set("x-opencode-session", bad)
+			call(t, a, WithSessionKey(context.Background(), "conversation-aaa"), http.MethodPost, config.OpencodeChatPath, fwd)
+		}
+		for i, h := range *headers {
+			got := h.Get("x-opencode-session")
+			if got == "" || !strings.HasPrefix(got, "ses_") {
+				t.Fatalf("invalid input %d did not fall through to a derived value, got %q", i, got)
+			}
+			if strings.Contains(got, "\r") || strings.Contains(got, "\n") {
+				t.Fatalf("control bytes reached upstream in %q", got)
+			}
+		}
+	})
+
+	t.Run("caller scope isolates derived values", func(t *testing.T) {
+		a, headers, _ := newAdapter(t, goCfg())
+		ctxA := WithClientScope(WithSessionKey(context.Background(), "same-key"), "vk-alpha")
+		ctxB := WithClientScope(WithSessionKey(context.Background(), "same-key"), "vk-beta")
+		call(t, a, ctxA, http.MethodPost, config.OpencodeChatPath, nil)
+		call(t, a, ctxB, http.MethodPost, config.OpencodeChatPath, nil)
+		call(t, a, ctxA, http.MethodPost, config.OpencodeChatPath, nil)
+		hA1, hB, hA2 := (*headers)[0].Get("x-opencode-session"), (*headers)[1].Get("x-opencode-session"), (*headers)[2].Get("x-opencode-session")
+		if hA1 == "" || hA1 == hB {
+			t.Fatalf("same session key under different scopes must differ: %q vs %q", hA1, hB)
+		}
+		if hA1 != hA2 {
+			t.Fatalf("same scope+session must be stable: %q vs %q", hA1, hA2)
+		}
+		if strings.Contains(hA1, "vk-alpha") || strings.Contains(hB, "vk-beta") {
+			t.Fatalf("scope must be hashed in, never plaintext in the header: %q %q", hA1, hB)
+		}
+		// Fallback (no session key) is also scope-isolated and deterministic.
+		if DeriveOpencodeSessionValueScoped(goCfg(), "vk-alpha", "", "m1") == DeriveOpencodeSessionValueScoped(goCfg(), "vk-beta", "", "m1") {
+			t.Fatal("scoped fallback must differ per scope")
+		}
+		if DeriveOpencodeSessionValueScoped(goCfg(), "vk-alpha", "", "m1") != DeriveOpencodeSessionValueScoped(goCfg(), "vk-alpha", "", "m1") {
+			t.Fatal("scoped fallback must be deterministic")
+		}
+	})
+
+	t.Run("unrelated providers never receive the header, even when forwarded", func(t *testing.T) {
+		p := config.ProviderConfig{ID: "gen1", Type: "openai_compatible", APIKey: "test-key-1", AuthMode: "bearer", ForwardHeaders: []string{"x-opencode-session"}}
+		a, headers, _ := newAdapter(t, p)
+		fwd := http.Header{}
+		fwd.Set("x-opencode-session", "ses_client_supplied_value")
+		call(t, a, WithSessionKey(context.Background(), "conversation-aaa"), http.MethodPost, "/v1/chat/completions", fwd)
+		if got := (*headers)[0].Get("x-opencode-session"); got != "" {
+			t.Fatalf("generic provider received session header %q", got)
+		}
+	})
+
+	t.Run("console forwards valid client value on inference, never derives, none on discovery", func(t *testing.T) {
+		p := config.ProviderConfig{ID: "con1", Type: "opencode-console", APIKey: "test-key-1", AuthMode: "bearer", ForwardHeaders: []string{"x-opencode-session"}}
+		a, headers, _ := newAdapter(t, p)
+		fwd := http.Header{}
+		fwd.Set("x-opencode-session", "ses_client_supplied_value")
+		call(t, a, WithSessionKey(context.Background(), "conversation-aaa"), http.MethodPost, config.OpencodeMessagesPath, fwd)
+		if got := (*headers)[0].Get("x-opencode-session"); got != "ses_client_supplied_value" {
+			t.Fatalf("console inference must forward valid client value unchanged, got %q", got)
+		}
+		call(t, a, WithSessionKey(context.Background(), "conversation-aaa"), http.MethodGet, "/v1/models", fwd)
+		if got := (*headers)[1].Get("x-opencode-session"); got != "" {
+			t.Fatalf("console discovery leaked session header %q", got)
+		}
+		// Invalid client value to Console is deleted, never derived.
+		fwdBad := http.Header{}
+		fwdBad.Set("x-opencode-session", "bad\r\nvalue")
+		call(t, a, WithSessionKey(context.Background(), "conversation-aaa"), http.MethodPost, config.OpencodeMessagesPath, fwdBad)
+		if got := (*headers)[2].Get("x-opencode-session"); got != "" {
+			t.Fatalf("console must not forward invalid value or derive one, got %q", got)
+		}
+	})
+}

@@ -557,10 +557,12 @@ func (s *Server) finishCanonicalAttempt(bundle hedgeAttemptBundle, canReq canoni
 	if providers.IsOpencodeType(p.Type) {
 		path, ok := providers.OpencodePathForIngress(ingressKind)
 		if !ok {
-			// Unknown ingress: fail closed to the chat protocol rather
-			// than inventing a path.
-			ingressKind = providers.IngressOpenAIChat
-			path = config.OpencodeChatPath
+			// Unknown ingress: fail closed. Returning false marks
+			// this candidate unbuildable, so no request is ever sent
+			// to the opencode upstream in a protocol the caller did
+			// not ask for (a silent chat fallback would misroute a
+			// Gemini/unknown ingress and invent a path).
+			return bundle, false
 		}
 		kind := providers.OpencodeCanonicalKind(ingressKind)
 		bundle.canonicalKind = kind

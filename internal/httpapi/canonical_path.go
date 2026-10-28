@@ -551,6 +551,7 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 	routeCtx, routeCancel := routeContext(r.Context(), req.Streaming, cfg.RequestTimeout())
 	routeCtx = providers.WithQuotaEstimate(routeCtx, req.EstimatedInputTokens, req.MaxOutputTokens)
 	routeCtx = providers.WithSessionKey(routeCtx, req.SessionKey)
+	routeCtx = providers.WithClientScope(routeCtx, clientScopeForSession(r))
 	defer routeCancel()
 	forward := copySelectedRequestHeaders(r)
 	profile := profileFromRequirement(req, &canReq)
