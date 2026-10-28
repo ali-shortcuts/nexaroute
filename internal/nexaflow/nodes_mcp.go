@@ -118,6 +118,11 @@ func runMCPCall(ctx context.Context, rc *RunContext) (map[string]any, error) {
 	if !ok || len(allowlist) == 0 {
 		return nil, NewNodeError("validation_error", false, "config allowlist is required and must not be empty")
 	}
+	// Entry-count bound on top of the config byte bound: a million-entry
+	// allowlist would otherwise be linear work on every call.
+	if len(allowlist) > 1000 {
+		return nil, NewNodeError("validation_error", false, "config allowlist exceeds 1000 entries")
+	}
 	args := map[string]any{}
 	if _, present := rc.Input["arguments"]; present {
 		a, ok := getObject(rc.Input, "arguments")

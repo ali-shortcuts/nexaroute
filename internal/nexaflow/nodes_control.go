@@ -3,6 +3,7 @@ package nexaflow
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -140,7 +141,7 @@ func controlNodeSpecs() []*NodeSpec {
 		{
 			ID: "nexaroute.control.approval", Version: SupportedVersion, Category: "control",
 			Title:       "Approval gate",
-			Description: "Records an approval decision. A missing decision is an error (code approval_required, non-retryable), never a success. An approver approving their own request is rejected when both are present. Durable pausing while waiting is the runtime's job.",
+			Description: "Records an approval decision. A missing decision is an error (code approval_required, non-retryable), never a success. Approver and requester must both be identified and must differ; an anonymous or self-approval is rejected. Approver identity is caller-asserted: the runtime must bind the decision to an authenticated approval record before passing it here. Durable pausing while waiting is the runtime's job.",
 			InputSchema: []Field{
 				{Name: "decision", Type: "string", Description: "approved or rejected. Absent means not yet decided."},
 				{Name: "approver", Type: "string", Description: "Subject who decided."},
@@ -203,18 +204,23 @@ func lookupPath(obj map[string]any, path string) (any, bool) {
 func toNumber(v any) (float64, bool) {
 	switch n := v.(type) {
 	case float64:
-		return n, true
+		return n, isFinite(n)
 	case float32:
-		return float64(n), true
+		f := float64(n)
+		return f, isFinite(f)
 	case int:
 		return float64(n), true
 	case int64:
 		return float64(n), true
 	case string:
-		var f float64
-		if _, err := fmt.Sscanf(n, "%g", &f); err == nil {
-			return f, true
+		// Strict parse: fmt.Sscanf("%g") accepts trailing junk
+		// ("123abc" parses as 123), which would make a condition
+		// branch on a value the author never wrote.
+		f, err := strconv.ParseFloat(strings.TrimSpace(n), 64)
+		if err != nil || !isFinite(f) {
+			return 0, false
 		}
+		return f, true
 	}
 	return 0, false
 }
@@ -366,7 +372,7 @@ func runLoopPlan(_ context.Context, rc *RunContext) (map[string]any, error) {
 	}
 	maxIter := 100
 	if v, ok := getNumber(rc.Config, "max_iterations"); ok {
-		if v < 1 || v > 100 {
+		if !isFinite(v) || v < 1 || v > 100 {
 			return nil, NewNodeError("validation_error", false, "max_iterations must be in [1,100]")
 		}
 		maxIter = int(v)
@@ -427,7 +433,7 @@ func runWait(ctx context.Context, rc *RunContext) (map[string]any, error) {
 	if v, ok := getNumber(rc.Input, "duration_ms"); ok {
 		durMS = v
 	}
-	if durMS < 0 || time.Duration(durMS)*time.Millisecond > maxDur {
+	if !isFinite(durMS) || durMS < 0 || time.Duration(durMS)*time.Millisecond > maxDur {
 		return nil, NewNodeError("validation_error", false, "duration_ms exceeds configured maximum")
 	}
 	wait := time.Duration(durMS) * time.Millisecond
@@ -441,6 +447,14 @@ func runWait(ctx context.Context, rc *RunContext) (map[string]any, error) {
 	}
 }
 
+// Approval identity hardening (Phase 7): a decision with no identified
+// approver, or with no identified requester, is not auditable and is
+// rejected instead of recorded. Approver and requester are still
+// caller-asserted inputs — this node cannot authenticate a human — so
+// the runtime MUST bind a decision to an authenticated approval record
+// (approver identity + approval id in the audit trail) before it passes
+// the decision here, and must never let workflow-authored data alone
+// mint an approval. See the Phase 7 findings matrix.
 func runApproval(_ context.Context, rc *RunContext) (map[string]any, error) {
 	decision, present := getString(rc.Input, "decision")
 	if !present || strings.TrimSpace(decision) == "" {
@@ -451,7 +465,13 @@ func runApproval(_ context.Context, rc *RunContext) (map[string]any, error) {
 	}
 	approver, _ := getString(rc.Input, "approver")
 	requester, _ := getString(rc.Input, "requester")
-	if approver != "" && requester != "" && approver == requester {
+	if strings.TrimSpace(approver) == "" {
+		return nil, NewNodeError("validation_error", false, "approval requires an identified approver")
+	}
+	if strings.TrimSpace(requester) == "" {
+		return nil, NewNodeError("validation_error", false, "approval requires an identified requester")
+	}
+	if approver == requester {
 		return nil, NewNodeError("validation_error", false, "approver must not be the requester")
 	}
 	return map[string]any{"approved": decision == "approved", "approver": approver}, nil

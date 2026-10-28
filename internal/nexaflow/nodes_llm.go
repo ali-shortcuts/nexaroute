@@ -14,11 +14,14 @@ import (
 // port (route, alias, or deployment must exist) and then hands the call
 // to the gateway, which does the actual routing; this package never
 // reimplements routing, fallback, or provider selection.
-// Retry semantics: the node declares MaxAttempts 2 with retryable code
-// "timeout" only. A runtime that retries a billable call after an
-// ambiguous failure risks double billing; retries are therefore limited
-// to timeouts, and the gateway's own idempotency (if any) is the
-// gateway's responsibility, not something this node invents.
+// Retry semantics (Phase 7 hardening): the node is NOT retried.
+// A timeout on a billable chat call is an ambiguous outcome — the
+// gateway may already have executed and billed it — and this node sends
+// no idempotency key, so no retry can prove it is not a duplicate bill.
+// An earlier version declared MaxAttempts 2 with retryable code
+// "timeout"; that invited exactly the double-billing retry this package
+// must not invite. A runtime that needs safe LLM retries must first add
+// an idempotency key to the gateway call and re-declare the policy.
 // Cancellation: context cancellation aborts the gateway call; a response
 // already returned is not un-billed by cancellation.
 // The prompt and messages are NEVER logged, stored, or returned: output
@@ -46,7 +49,7 @@ func llmNodeSpecs() []*NodeSpec {
 			{Name: "temperature", Type: "number", Description: "Sampling temperature, 0..2, optional."},
 		},
 		Permission: authz.ReadRouting, SideEffect: SideEffectBillable,
-		Retry:          RetryPolicy{MaxAttempts: 2, RetryableCodes: []string{"timeout"}},
+		Retry:          RetryPolicy{MaxAttempts: 1},
 		DefaultTimeout: 60 * time.Second, MaxTimeout: 300 * time.Second,
 		MaxInputBytes: 1 << 20, MaxOutputBytes: 256 << 10,
 		RequiresOperatorPolicy: true,
@@ -64,14 +67,14 @@ func runLLMChat(ctx context.Context, rc *RunContext) (map[string]any, error) {
 	}
 	maxTokens := 1024
 	if v, ok := getNumber(rc.Config, "max_tokens"); ok {
-		if v < 1 || v > 8192 {
+		if !isFinite(v) || v < 1 || v > 8192 {
 			return nil, NewNodeError("validation_error", false, "max_tokens must be in [1,8192]")
 		}
 		maxTokens = int(v)
 	}
 	var temperature *float64
 	if v, ok := getNumber(rc.Config, "temperature"); ok {
-		if v < 0 || v > 2 {
+		if !isFinite(v) || v < 0 || v > 2 {
 			return nil, NewNodeError("validation_error", false, "temperature must be in [0,2]")
 		}
 		t := v

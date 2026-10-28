@@ -118,7 +118,7 @@ func runVideoSubmit(ctx context.Context, rc *RunContext) (map[string]any, error)
 	if v, ok := getNumber(rc.Input, "duration_seconds"); ok {
 		duration = v
 	}
-	if duration <= 0 || duration > 600 {
+	if !isFinite(duration) || duration <= 0 || duration > 600 {
 		return nil, NewNodeError("validation_error", false, "duration_seconds must be in (0,600]")
 	}
 	aspect := getStringOr(rc.Input, "aspect_ratio", "16:9")
