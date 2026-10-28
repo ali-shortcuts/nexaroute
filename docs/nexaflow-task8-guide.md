@@ -578,7 +578,109 @@ Workflows page specifically, so scenario 10 stays PASS via
 the served-asset test, not via this browser run. The
 remaining two browser suites in `verify.sh`
 (`test-browser-e2e-502.py`, `test-live-visual-agent.py`)
-are covered only by the full `verify.sh` run below.
+were run standalone after `verify.sh` aborted before its
+browser phase; see the full-verify and standalone results
+below.
 `verify.sh` itself gates its browser phase on
 `command -v chromium`; with the shim dir on PATH that gate
 is satisfied by the same real browser.
+
+#### Full `scripts/verify.sh` on the final tree: FAIL at the plain-test phase (local limits + one flaky test, not a NexaFlow regression)
+
+Command (final tree, commits through `0a3ebcb`):
+
+```
+PATH=$HOME/go/bin:$HOME/workspace/.tmp/bin:$PATH \
+TMPDIR=$HOME/workspace/.tmp GOTMPDIR=$HOME/workspace/.tmp \
+./scripts/verify.sh
+```
+
+Started 2026-10-28 08:09:24Z, EXIT 1 at 08:22:23Z
+(~13 min). Phases passed before the failure: Go version
+gate, shell syntax, final-release-gate tests, HA docs
+checks, flake-hunt harness (11 assertions), gofmt clean.
+The plain `go test -timeout=3m -count=1 ./...` phase
+FAILED with exactly three failing packages, and the script
+aborted there (`set -e`) before its vet, race,
+release-artifact, SBOM, web-syntax, browser, fuzz, and
+arch-build phases, which were therefore run standalone
+(see below):
+
+1. `internal/httpapi` FAIL 180.714 s: `panic: test timed
+   out after 3m0s` (package wall-clock; the same limit
+   signature as the race-phase finding above, now also in
+   the plain phase under full-suite load).
+2. `internal/router` FAIL 180.115 s: `panic: test timed
+   out after 3m0s`, running test at alarm
+   `TestProperty_RouterMonotonicity` (1 m 46 s) — a
+   CPU-heavy property test slowed by shared-VM load, not
+   a hanging test.
+3. `internal/probe` FAIL:
+   `TestRecoveryWorkersRetryAndReturnModelToHealthy`
+   (0.09 s): "recovery marker remained after success".
+   NOT a deterministic failure: the test passes 3/3 in
+   isolation on this branch and 2/2 on pristine main, and
+   the full probe package passes on this branch (7.387 s)
+   — a load-sensitive flake under the full-suite run,
+   not a Task 6 regression.
+
+NexaFlow's own package passed inside this same verify.sh
+plain phase: `internal/nexaflow` ok 5.181 s. Conclusion
+unchanged: the 3 m limit is kept; CI's green verify
+(6 m 51 s on #693) remains supporting evidence, not a
+substitute, and the local plain-phase timeouts plus the
+probe flake must be re-checked on CI when the parent
+pushes — that re-check is exactly why the push-then-CI
+step matters.
+
+#### Standalone phases verify.sh never reached (same final tree)
+
+- `go vet ./...`: clean, exit 0.
+- `node --check` on `internal/httpapi/web/app.js` and
+  `internal/httpapi/web/visual-agent.js`: OK.
+- Architecture builds (verify.sh's exact flags, output to
+  a scratch dir rather than `bin/`): linux amd64 + arm64
+  for `cmd/gateway` and `cmd/videogen` — all four build;
+  `file` confirms ELF x86-64 / ARM aarch64.
+- Fuzz spot checks (verify.sh's 2 s windows):
+  `FuzzPatchJSONModel` (httpapi) PASS 2.435 s;
+  `FuzzParseAnthContent` (core) PASS 2.792 s.
+- `scripts/test-release-artifacts.sh`: PASS.
+  `scripts/test-generate-sbom.sh`: PASS.
+- Browser 502 suite:
+  `python3 scripts/test-browser-e2e-502.py` → EXIT 0,
+  `BROWSER E2E #502 PASS`, 30 s.
+- Live-visual-agent suite: FAIL — pre-existing defect,
+  see below. The browser evidence actually obtained is
+  the main e2e suite (PASS) plus the 502 suite (PASS);
+  the live-visual-agent suite is NOT passed and is NOT
+  claimed.
+
+#### Live-visual-agent suite: pre-existing script/config drift, NOT fixed here
+
+`python3 scripts/test-live-visual-agent.py` → EXIT 1 in
+8 s: "gateway exited with 1" before any browser step.
+Root cause, reproduced directly: the script writes
+`config["routing"]["strategy"] = "adaptive"` (line 86),
+but the gateway rejects it — "routing.strategy must be
+ready_mesh, ready_queue, cost_aware,
+adaptive_round_robin, priority, round_robin, or
+least_latency" (`internal/config/config.go:2066-2067`).
+This is pre-existing, not a Task 6 or #693 regression:
+the script already sets `"adaptive"` at base `92e3762`,
+Task 6's diff touches neither the script nor the
+validation, and pristine main `e6c3cdf3` rejects
+`"adaptive"` identically. CI's green verify never
+surfaced it because verify.sh gates its browser phase on
+`command -v chromium`, which CI runners lack, so the
+phase is skipped there; locally, with the provisioned
+Chromium, the drift actually executes. Candidate fix
+(for the parent/owner to decide, NOT applied here
+because it changes a test script outside Task 6's
+revised scope and the substitute strategy's behavioral
+equivalence to the test's expectations is unverified):
+script line 86 `"adaptive"` →
+`"adaptive_round_robin"`, then re-run the suite. Until
+that lands, browser acceptance is: e2e PASS + 502 PASS +
+live-visual-agent FAIL (pre-existing, blocked on the
+script fix).
