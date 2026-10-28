@@ -392,6 +392,17 @@ func (p *ComfyUI) CreateJob(ctx context.Context, r video.VideoRequest) (video.Pr
 	if strings.TrimSpace(response.PromptID) == "" {
 		return video.ProviderJob{}, errors.New("ComfyUI did not return a prompt_id; inspect the workflow and node validation errors")
 	}
+	// A 200 that still carries node_errors is a rejected workflow, not
+	// an accepted job: ComfyUI reports node validation in node_errors,
+	// and treating a prompt_id alongside it as success would poll a
+	// job the server never intended to run. Success responses carry
+	// an empty or absent node_errors object.
+	if nodeErrors := strings.TrimSpace(string(response.NodeErrors)); nodeErrors != "" && nodeErrors != "null" && nodeErrors != "{}" {
+		// Deliberately not echoing the node_errors payload: it may
+		// embed workflow input values, and the operator can inspect
+		// them on the ComfyUI server itself.
+		return video.ProviderJob{}, errors.New("ComfyUI reported node errors for the submitted workflow; the job was not accepted")
+	}
 	return video.ProviderJob{ProviderJobID: response.PromptID, Provider: p.ID(), Model: p.model, Accepted: true}, nil
 }
 

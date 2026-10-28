@@ -151,6 +151,66 @@ this commit):
   server, model, or workflow was available, no model was downloaded, and no
   paid or public inference endpoint was called.
 
+## 2026-10-28 regression extension (PR #669 follow-up, NOT a live run)
+
+One adapter defect was found and fixed, with red/green proof:
+
+- **Defect:** `CreateJob` ignored a non-empty `node_errors` payload when the
+  server also returned a `prompt_id`, so a rejected workflow could be
+  treated as an accepted job and polled. **Fix:** a `node_errors` value
+  other than empty/`null`/`{}` now fails the submission closed. The
+  payload itself is not echoed in the error (it may embed workflow input
+  values). Red proof: `TestComfyUINodeErrorsWithPromptIDRejected` FAILed
+  on the old code (`CreateJob error=<nil>`) and PASSes with the fix.
+
+New deterministic regression coverage (fixtures only — none of this is
+real inference):
+
+- Adapter (`internal/video/providers/comfyui_regression_test.go`):
+  malformed workflow files (syntax error, top-level array/string,
+  node without an inputs object, null inputs, oversized file),
+  server-rejected jobs (HTTP 400 with `node_errors`, HTTP 500, exactly
+  one submission), unknown node class deferring to server validation
+  (the adapter has no server node registry, so it must not invent an
+  allowlist), history failure states (execution error, images-only and
+  webm-only completion), stalled jobs absent from history and queue,
+  running-prompt cancellation refusing without any delete, download
+  rejection of image content types / empty bodies / HTTP 404, the
+  exact-limit download boundary, cancelled-context status reads, and
+  malformed-history fallback to the queue.
+- Harness (`cmd/gateway/comfyui_accept_regression_test.go`):
+  polling interrupted by context cancellation (deadline and
+  pre-cancelled contexts, no completion, no resubmit), a stalled job
+  timing out at the harness deadline with exactly one submission and
+  fail-closed cleanup, and running-prompt cleanup recording BLOCKED
+  without a global interrupt.
+
+Verification on this head (Go 1.25.1, local): `go test -race
+./internal/video/providers/ -run TestComfyUI` PASS, `go test -race
+./cmd/gateway/ -run TestComfyUIAccept` PASS, `gofmt`/`go vet` clean on
+the touched packages. Full `go test ./...` and `./scripts/verify.sh`
+were not yet run on this head (see the final report); CI on the
+updated PR is the gate for those.
+
+## Live prerequisites still missing (2026-10-28, checked first-hand)
+
+Actual model inference remains NOT_RUN/BLOCKED, and #651 stays OPEN
+until it is demonstrated. Missing, exactly:
+
+- No ComfyUI server reachable (nothing on `127.0.0.1:8188`; no
+  docker/kubectl to provision one in this environment).
+- No operator-supplied compatible text-to-video model or API-format
+  workflow, and no gateway config pointing at one (`/etc/nexaroute`
+  does not exist here; no `comfyui_*` config was supplied).
+- No GPU/CPU resource allocation for a real inference run.
+- Present, so not blockers: `ffprobe`/`ffmpeg` binaries, the
+  deterministic fixture suites above, and the `comfyui-accept`
+  harness itself.
+
+No model weights were downloaded, no customer data was used, no
+production instance was touched, and no fixture output is reported
+as real inference anywhere in this update.
+
 ## Limitations
 
 - The command cannot distinguish a real ComfyUI instance from a fixture served
