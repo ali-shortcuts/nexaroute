@@ -101,9 +101,9 @@ func TestPostgresSecurityStoreIntegrationConcurrentColdOpen(t *testing.T) {
 		t.Fatalf("open after multi-process cold open: %v", err)
 	}
 	defer b.Close()
-	sess := Session{Subject: "mp-check", CreatedAt: time.Now().UTC(), LastSeen: time.Now().UTC()}
+	sess := Session{Subject: "mp-check", Issuer: "mp-test", CreatedAt: time.Now().UTC(), LastSeen: time.Now().UTC(), ExpiresAt: time.Now().UTC().Add(time.Hour)}
 	hash := strings.Repeat("cc", 32)
-	if err := b.CreateSession(ctx, hash, sess, AuditEvent{Action: "auth.login", Outcome: "success", Status: 200}); err != nil {
+	if err := b.CreateSession(ctx, hash, sess, AuditEvent{Timestamp: time.Now().UTC(), Actor: "mp-check", Action: "auth.login", Outcome: "success", Status: 200}); err != nil {
 		t.Fatalf("session create after multi-process cold open: %v", err)
 	}
 	got, ok, err := b.Session(ctx, hash)
