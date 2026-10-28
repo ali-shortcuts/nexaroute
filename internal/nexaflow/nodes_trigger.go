@@ -5,11 +5,34 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
+
+// credentialHeaders are never accepted from workflow input or config on
+// the HTTP node, and are rejected (not silently dropped) at the HTTPDo
+// choke point too. Authorization is the single exception, and only when
+// the caller is the node itself setting it from a resolved secretRef —
+// a workflow author must never be able to smuggle a credential header
+// past the secretRef path. Cookie and proxy-authorization matter as much
+// as Authorization: a session cookie IS a credential.
+var credentialHeaders = []string{
+	"authorization", "cookie", "set-cookie", "proxy-authorization",
+	"api-key", "x-api-key", "x-goog-api-key", "x-auth-token", "x-access-token",
+}
+
+func isCredentialHeader(name string) bool {
+	lower := strings.ToLower(strings.TrimSpace(name))
+	for _, h := range credentialHeaders {
+		if lower == h {
+			return true
+		}
+	}
+	return false
+}
 
 // Trigger nodes start a workflow. None of them runs a server, a clock,
 // or a dispatcher: this package has no HTTP server, no scheduler, and
@@ -275,9 +298,15 @@ func runHTTPRequest(ctx context.Context, rc *RunContext) (map[string]any, error)
 	if err := requireBackend(rc); err != nil {
 		return nil, err
 	}
-	url, ok := getString(rc.Input, "url")
-	if !ok || strings.TrimSpace(url) == "" {
+	targetURL, ok := getString(rc.Input, "url")
+	if !ok || strings.TrimSpace(targetURL) == "" {
 		return nil, NewNodeError("validation_error", false, "input url is required")
+	}
+	// Node-level URL shape check, independent of the backend's egress
+	// policy: credentials embedded in the URL (userinfo) are never
+	// accepted from workflow data, whatever the backend does with them.
+	if parsed, err := url.Parse(targetURL); err != nil || parsed.Scheme == "" || parsed.Host == "" || parsed.User != nil {
+		return nil, NewNodeError("validation_error", false, "input url is malformed or contains embedded credentials")
 	}
 	method := getStringOr(rc.Input, "method", "GET")
 	method = strings.ToUpper(method)
@@ -295,8 +324,8 @@ func runHTTPRequest(ctx context.Context, rc *RunContext) (map[string]any, error)
 			if !ok {
 				return nil, NewNodeError("validation_error", false, "header %q must be a string", k)
 			}
-			if strings.EqualFold(k, "authorization") {
-				return nil, NewNodeError("validation_error", false, "Authorization header is forbidden in input; use auth_secret_ref")
+			if isCredentialHeader(k) {
+				return nil, NewNodeError("validation_error", false, "credential header %q is forbidden in input; use auth_secret_ref", k)
 			}
 			headers[k] = s
 		}
@@ -313,7 +342,7 @@ func runHTTPRequest(ctx context.Context, rc *RunContext) (map[string]any, error)
 		headers["Authorization"] = "Bearer " + token
 	}
 	body := []byte(getStringOr(rc.Input, "body", ""))
-	resp, err := rc.Backend.HTTPDo(ctx, method, url, headers, body)
+	resp, err := rc.Backend.HTTPDo(ctx, method, targetURL, headers, body)
 	if err != nil {
 		return nil, err
 	}

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -40,7 +41,15 @@ func (c *GatewayClient) client() *http.Client {
 	if c.HTTPClient != nil {
 		return c.HTTPClient
 	}
-	return &http.Client{Timeout: 120 * time.Second}
+	// Default client, not the stdlib default: cross-origin redirects are
+	// refused (a gateway redirect must never carry the operator's
+	// Authorization token to another origin), and the whole request is
+	// bounded at 120s even when the caller passes a context without a
+	// deadline. A caller-supplied HTTPClient keeps its own policy.
+	return &http.Client{
+		Timeout:       120 * time.Second,
+		CheckRedirect: egress.RefuseCrossOriginRedirects(5, "nexaflow gateway"),
+	}
 }
 
 func (c *GatewayClient) maxBytes() int64 {
@@ -173,11 +182,16 @@ func (c *GatewayClient) rpc(ctx context.Context, method string, params any) (map
 	return decoded.Result, nil
 }
 
-// MCPList calls tools/list on the MCP gateway. It does not open an MCP
-// session itself; session and allowlist enforcement belong to the gateway,
-// and the node additionally pre-checks its own allowlist on call.
+// MCPList calls tools/list on the MCP gateway and scopes the result to
+// one server. The gateway returns namespaced tool names
+// ("<server>__<tool>"); returning them unfiltered and un-namespaced
+// broke both directions of the contract — the node compared bare names
+// against namespaced ones (so no tool was ever "listed"), and a caller
+// could see tools from servers it never asked about. With a serverID,
+// only that server's tools are returned, with the prefix stripped so
+// node-level allowlist matching (bare or server__tool) works. With an
+// empty serverID (legacy direct callers only), names pass through as-is.
 func (c *GatewayClient) MCPList(ctx context.Context, serverID string) ([]MCPTool, error) {
-	_ = serverID // server selection is a gateway concern; see docs.
 	result, err := c.rpc(ctx, "tools/list", map[string]any{})
 	if err != nil {
 		return nil, err
@@ -190,6 +204,13 @@ func (c *GatewayClient) MCPList(ctx context.Context, serverID string) ([]MCPTool
 			continue
 		}
 		name, _ := item["name"].(string)
+		if serverID != "" {
+			prefix := serverID + "__"
+			if !strings.HasPrefix(name, prefix) {
+				continue
+			}
+			name = strings.TrimPrefix(name, prefix)
+		}
 		desc, _ := item["description"].(string)
 		schema, _ := item["inputSchema"].(map[string]any)
 		tools = append(tools, MCPTool{Name: name, Description: desc, InputSchema: schema})
@@ -197,10 +218,17 @@ func (c *GatewayClient) MCPList(ctx context.Context, serverID string) ([]MCPTool
 	return tools, nil
 }
 
-// MCPCall calls tools/call on the MCP gateway.
+// MCPCall calls tools/call on the MCP gateway. The gateway requires a
+// namespaced tool name ("<server>__<tool>") and rejects bare names, so
+// the client namespaces the call itself; sending the bare name (the
+// previous behaviour) failed against a real gateway on every call, and
+// left server selection to nothing at all.
 func (c *GatewayClient) MCPCall(ctx context.Context, serverID, tool string, args map[string]any) (map[string]any, error) {
-	_ = serverID
-	return c.rpc(ctx, "tools/call", map[string]any{"name": tool, "arguments": args})
+	name := tool
+	if serverID != "" && !strings.Contains(tool, "__") {
+		name = serverID + "__" + tool
+	}
+	return c.rpc(ctx, "tools/call", map[string]any{"name": name, "arguments": args})
 }
 
 // VideoSubmit posts to /v1/video/jobs. Submitting through the HTTP API
@@ -246,10 +274,13 @@ func parseVideoJob(raw map[string]any) VideoJobInfo {
 }
 
 // VideoStatus polls GET /v1/video/jobs/{id}. Polling cadence and
-// completion waiting are the runtime's job; this is one poll.
+// completion waiting are the runtime's job; this is one poll. The id is
+// path-escaped: an unescaped id ("../../admin/...", "a?x=1") would
+// rewrite the request path or query and reach endpoints the caller
+// never named.
 func (c *GatewayClient) VideoStatus(ctx context.Context, jobID string) (VideoJobInfo, error) {
 	var decoded map[string]any
-	if _, err := c.doJSON(ctx, http.MethodGet, "/v1/video/jobs/"+jobID, nil, &decoded); err != nil {
+	if _, err := c.doJSON(ctx, http.MethodGet, "/v1/video/jobs/"+url.PathEscape(jobID), nil, &decoded); err != nil {
 		return VideoJobInfo{}, err
 	}
 	return parseVideoJob(decoded), nil
@@ -271,7 +302,14 @@ func (c *GatewayClient) VideoAsset(ctx context.Context, jobID, assetID string) (
 			break
 		}
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(c.BaseURL, "/")+"/v1/video/jobs/"+jobID+"/assets/"+assetID, nil)
+	// Fail closed when the asset is not listed on this job: downloading
+	// an unlisted asset id would let a workflow fetch bytes the job's
+	// own asset list never authorized. (The previous code downloaded
+	// anyway and only filled metadata afterwards.)
+	if meta.ID == "" {
+		return VideoAssetInfo{}, nil, NewNodeError("asset_not_found", false, "asset is not listed on this video job")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(c.BaseURL, "/")+"/v1/video/jobs/"+url.PathEscape(jobID)+"/assets/"+url.PathEscape(assetID), nil)
 	if err != nil {
 		return VideoAssetInfo{}, nil, NewNodeError("backend_error", false, "video asset request failed")
 	}
@@ -295,19 +333,31 @@ func (c *GatewayClient) VideoAsset(ctx context.Context, jobID, assetID string) (
 	if int64(len(raw)) > c.maxBytes() {
 		return VideoAssetInfo{}, nil, NewNodeError("output_too_large", false, "video asset exceeds bound")
 	}
-	if meta.ID == "" {
-		meta = VideoAssetInfo{ID: assetID, SizeBytes: int64(len(raw))}
-	}
 	return meta, raw, nil
 }
 
 // HTTPDo performs one egress-guarded HTTP request: https except loopback,
-// cross-origin redirects refused, response bounded. It reuses
-// egress.Policy.NewTransport and egress.RefuseCrossOriginRedirects; it
-// does not invent its own SSRF policy. The caller (the http node) forbids
-// Authorization headers from workflow input; credentials, when needed,
-// come only from a secretRef resolved by the backend.
+// cross-origin redirects refused, response bounded, whole request
+// bounded at 120s. It reuses egress.Policy.NewTransport and
+// egress.RefuseCrossOriginRedirects; it does not invent its own SSRF
+// policy. The caller (the http node) forbids credential headers from
+// workflow input; credentials, when needed, come only from a secretRef
+// resolved by the backend. HTTPDo is the choke point and re-checks:
+// any credential header other than Authorization (which only the node
+// itself sets from a secretRef) is rejected here too, so a future caller
+// cannot smuggle one past the node check.
 func (c *GatewayClient) HTTPDo(ctx context.Context, method, url string, headers map[string]string, body []byte) (HTTPResponse, error) {
+	if len(body) > 1<<20 {
+		return HTTPResponse{}, NewNodeError("validation_error", false, "http request body exceeds 1 MiB")
+	}
+	for k := range headers {
+		// Authorization is allowed only because the http node sets it
+		// from a resolved secretRef after its own input check; every
+		// other credential header is rejected at this choke point.
+		if isCredentialHeader(k) && !strings.EqualFold(k, "authorization") {
+			return HTTPResponse{}, NewNodeError("validation_error", false, "credential header %q is forbidden", k)
+		}
+	}
 	policy := c.Egress
 	policy.AllowLoopback = true
 	transport, err := policy.NewTransport(url, "")
@@ -317,6 +367,7 @@ func (c *GatewayClient) HTTPDo(ctx context.Context, method, url string, headers 
 	client := &http.Client{
 		Transport:     transport,
 		CheckRedirect: egress.RefuseCrossOriginRedirects(5, "nexaflow http node"),
+		Timeout:       120 * time.Second,
 	}
 	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewReader(body))
 	if err != nil {

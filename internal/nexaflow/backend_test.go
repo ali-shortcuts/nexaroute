@@ -192,7 +192,10 @@ func TestGatewayClientChatMCPVideo(t *testing.T) {
 			_ = json.NewDecoder(r.Body).Decode(&req)
 			w.Header().Set("Content-Type", "application/json")
 			if req.Method == "tools/list" {
-				fmt.Fprint(w, `{"result":{"tools":[{"name":"search_files","description":"search","inputSchema":{}}]}}`)
+				// The real gateway returns namespaced names
+				// ("<server>__<tool>"); the client strips the
+				// requested server's prefix.
+				fmt.Fprint(w, `{"result":{"tools":[{"name":"tools__search_files","description":"search","inputSchema":{}},{"name":"other__read_file","description":"other server","inputSchema":{}}]}}`)
 			} else {
 				fmt.Fprint(w, `{"result":{"content":"called"}}`)
 			}

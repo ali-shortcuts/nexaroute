@@ -47,9 +47,17 @@ type TemplateNode struct {
 }
 
 // Instantiate resolves placeholders and enforces the inertness contract:
-// every declared placeholder must be supplied, and a policy-requiring
-// template requires policyApproved. On any failure it returns an error
-// and no definition. It never executes a node.
+// every declared placeholder must be supplied, every referenced node
+// must exist in the registry, and a policy-requiring template requires
+// policyApproved. On any failure it returns an error and no definition.
+// It never executes a node.
+//
+// Substitution replaces every "{{name}}" occurrence in a config string,
+// not only whole-string matches: the previous exact-match behaviour left
+// embedded placeholders (for example a URL containing "{{notify_url}}")
+// unresolved, and the runtime would then act on the literal placeholder
+// text. Any placeholder pattern left after substitution is an error,
+// never a value to execute against.
 func (t Template) Instantiate(placeholders map[string]string, policyApproved bool) (Template, error) {
 	if t.RequiresPolicy && !policyApproved {
 		return Template{}, fmt.Errorf("nexaflow: template %q requires explicit operator policy approval", t.ID)
@@ -59,11 +67,25 @@ func (t Template) Instantiate(placeholders map[string]string, policyApproved boo
 			return Template{}, fmt.Errorf("nexaflow: template %q placeholder %q is not filled", t.ID, name)
 		}
 	}
+	reg := DefaultRegistry()
 	resolved := t
 	resolved.Nodes = make([]TemplateNode, len(t.Nodes))
 	for i, node := range t.Nodes {
-		cfg := resolveTemplateStrings(node.Config, placeholders)
-		input := resolveTemplateStrings(node.Input, placeholders)
+		if _, err := reg.Lookup(node.NodeID, node.Version); err != nil {
+			return Template{}, fmt.Errorf("nexaflow: template %q references unknown node %q: %w", t.ID, node.NodeID, err)
+		}
+		// Merged Phase 5 + Phase 7 semantics: Phase 7's embedded
+		// substitution (a whole-string-only match left embedded
+		// placeholders, e.g. in URLs, unresolved) applied to both
+		// Config and Input, with Phase 5's Input/Bindings preserved.
+		cfg, err := resolveTemplateStringsChecked(node.Config, placeholders, t.ID)
+		if err != nil {
+			return Template{}, err
+		}
+		input, err := resolveTemplateStringsChecked(node.Input, placeholders, t.ID)
+		if err != nil {
+			return Template{}, err
+		}
 		resolved.Nodes[i] = TemplateNode{NodeID: node.NodeID, Version: node.Version, Config: cfg, Input: input, Bindings: node.Bindings}
 	}
 	resolved.Published = false
@@ -71,17 +93,29 @@ func (t Template) Instantiate(placeholders map[string]string, policyApproved boo
 }
 
 func resolveTemplateStrings(values map[string]any, placeholders map[string]string) map[string]any {
+	out, _ := resolveTemplateStringsChecked(values, placeholders, "")
+	return out
+}
+
+// resolveTemplateStringsChecked substitutes every "{{name}}" occurrence
+// (not only whole-string matches) and fails on any leftover pattern,
+// so a runtime never executes literal placeholder text.
+func resolveTemplateStringsChecked(values map[string]any, placeholders map[string]string, templateID string) (map[string]any, error) {
 	out := make(map[string]any, len(values))
 	for k, v := range values {
 		if s, ok := v.(string); ok {
-			if val, isPlaceholder := placeholders[strings.TrimSuffix(strings.TrimPrefix(s, "{{"), "}}")]; isPlaceholder && strings.HasPrefix(s, "{{") && strings.HasSuffix(s, "}}") {
-				out[k] = val
-				continue
+			for name, val := range placeholders {
+				s = strings.ReplaceAll(s, "{{"+name+"}}", val)
 			}
+			if strings.Contains(s, "{{") && strings.Contains(s, "}}") {
+				return nil, fmt.Errorf("nexaflow: template %q leaves an unresolved placeholder in %q", templateID, k)
+			}
+			out[k] = s
+			continue
 		}
 		out[k] = v
 	}
-	return out
+	return out, nil
 }
 
 // DefaultTemplates returns the five starter templates. All are inert
