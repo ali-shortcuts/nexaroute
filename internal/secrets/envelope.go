@@ -589,10 +589,10 @@ func ClassifyValue(s string) EnvelopeClass {
 // ConfigClassification counts secret-bearing fields by class and names the
 // offending fields for mixed-format and unknown-envelope errors.
 type ConfigClassification struct {
-	NXS1      int
-	NXS2      int
-	Plaintext int
-	Unknown   int
+	NXS1            int
+	NXS2            int
+	Plaintext       int
+	Unknown         int
 	NXS1Fields      []string
 	NXS2Fields      []string
 	PlaintextFields []string
@@ -697,7 +697,7 @@ func TransformConfigWith(ctx context.Context, c Cipher, raw []byte, encrypt bool
 	if c.env == nil && cls.NXS2 > 0 {
 		return nil, 0, errors.New("nxs2 envelope requires the Vault Transit envelope provider; configure NEXAROUTE_KEY_PROVIDER=transit with NEXAROUTE_TRANSIT_ENABLED=true")
 	}
-	if c.env != nil && cls.Plaintext > 0 {
+	if c.env != nil && !encrypt && cls.Plaintext > 0 {
 		return nil, 0, fmt.Errorf("config contains plaintext secret field(s) %s in Vault Transit mode; seal them under nxs1 first, then run the explicit migration (plaintext is never auto-migrated into Transit)", strings.Join(cls.PlaintextFields, ", "))
 	}
 	root, err := decodeConfigRoot(raw)
