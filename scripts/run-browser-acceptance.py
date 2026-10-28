@@ -26,10 +26,14 @@ before they are written: known test canary values, bearer tokens,
 x-admin-key values, cookie headers and api_key values are replaced
 with [REDACTED]. The runner never reads browser cookies, localStorage
 or sessionStorage, and never dumps form values, so no credential can
-reach a log or an uploaded artifact through this path. The gateway
-processes themselves run in the suites' own temporary directories and
-are not preserved; the per-suite log plus the summary.json below are
-the diagnostic record.
+reach a log or an uploaded artifact through this path. The main
+suite additionally preserves its gateway log (redacted, last 256 KiB),
+the /admin/api/ responses the page observed (path and status only),
+and gateway liveness/health/exit status under the evidence directory,
+so a future startup/health failure -- for example a dashboard stuck
+at Unavailable because the shared per-IP admin bucket throttled its
+refresh with 429s -- is diagnosable from the artifact instead of
+leaving only a traceback.
 
 Chromium resolution, in order: NEXAROUTE_CHROMIUM_BIN, a system
 chromium/google-chrome on PATH, then the full Chromium binary shipped

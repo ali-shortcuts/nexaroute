@@ -77,7 +77,16 @@ passed in a report.
 ## Failure diagnostics and redaction
 
 On failure the diagnostics directory holds, per suite, the redacted
-stdout/stderr log and `summary.json`. Redaction replaces test canary
+stdout/stderr log and `summary.json`. The main suite additionally
+preserves, under the evidence directory, its redacted gateway log
+(last 256 KiB; the gateway logs every response with status >= 400, so
+throttled 429s are visible there), the `/admin/api/` responses the
+page observed (path and status only, never bodies or headers), and
+gateway liveness, `/healthz` status and exit code
+(`gateway-diagnostics.json`). That set exists because the first
+failure of this gate left only a traceback: the dashboard was stuck
+at Unavailable with no record of whether its snapshot fetch had been
+stubbed, throttled, or never answered. Redaction replaces test canary
 values, bearer tokens, `x-admin-key` values, cookie headers and
 `api_key` values with `[REDACTED]` before anything is written, and
 assertion messages in the suites never interpolate a secret value
@@ -111,6 +120,24 @@ and are fixed in this change (no production code touched):
   asserts success promptly after awaiting the response; the
   active state is still recorded in `lva-performance.json`, and
   the failover journey is asserted from snapshot event kinds.
+- Admin-bucket starvation after the DNS-rebinding probe (the CI
+  failure on this PR: `#connection-text` expected `Connected`,
+  observed `Unavailable` at the snapshot-recovery assertion). The
+  dashboard refreshes only on page load, and its seven parallel
+  admin fetches share the gateway's per-IP admin token bucket
+  (capacity 90, refill 1.5/s) with every other loopback caller.
+  The rebinding probe is an unauthenticated admin request with no
+  auth error, so the middleware charges it the full bucket
+  (the F11 anti-oracle rule); when the bucket holds >= 90 at that
+  moment it drains to ~0, and the recovery reload's refresh is
+  throttled with 429s, leaving the dashboard at Unavailable. The
+  gateway behavior is deliberate and unchanged -- no security
+  setting is weakened. The suite now reloads until Connected or
+  a 60s deadline instead of asserting once after a single 5s
+  window: each attempt is a real refresh, and a genuinely broken
+  recovery still fails at the deadline. Reproduced deterministically
+  against a loopback gateway: rebinding probe, then seven parallel
+  refresh fetches all 429; after ~6s of refill, all 200.
 
 ## Still not covered (honest boundary)
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 import http.client
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import sys
@@ -77,6 +78,56 @@ def admin_json(base: str, path: str, method: str, body: dict | None = None) -> d
             time.sleep(delay)
     raise AssertionError("unreachable: bounded admin 429 retry loop exhausted")
 
+def redact_text(text: str, extra_values) -> str:
+    # Same contract as scripts/run-browser-acceptance.py: diagnostic
+    # files must never carry a test canary or a credential shape.
+    for value in extra_values:
+        if value:
+            text = text.replace(value, "[REDACTED]")
+    for pattern, replacement in [
+        (re.compile(r"ISSUE393_BROWSER_[A-Za-z0-9_]+"), "[REDACTED-CANARY]"),
+        (re.compile(r"(?i)Bearer\s+\S+"), "Bearer [REDACTED]"),
+        (re.compile(r"(?i)(x-admin-key[\"':\s=]+)\S+"), r"\1[REDACTED]"),
+        (re.compile(r"(?i)(cookie:\s*).*"), r"\1[REDACTED]"),
+        (re.compile(r"(?i)(\"api_key\"\s*:\s*\")[^\"]+(\")"), r"\1[REDACTED]\2"),
+    ]:
+        text = pattern.sub(replacement, text)
+    return text
+
+def reload_until_connected(page, timeout: int = 60) -> None:
+    """Reload until the dashboard reports Connected, or fail honestly.
+
+    The dashboard refreshes only on page load, and its seven parallel
+    admin fetches share the gateway's per-IP admin token bucket with
+    every other loopback caller -- including this suite's own admin
+    helper and the DNS-rebinding probe, whose unauthenticated request
+    costs the full bucket (the F11 anti-oracle rule: a throttled
+    unauthenticated request must stay indistinguishable from a plain
+    401). A reload that lands while the bucket is empty is throttled
+    with 429s and the dashboard stays Unavailable until the bucket
+    refills (1.5 tokens/s). That is legitimate gateway behavior, not
+    a broken recovery, so a single 5s assertion after one reload is
+    the wrong synchronization: retry the reload -- the only way to
+    re-trigger a refresh -- until Connected or the deadline. Each
+    attempt is a real refresh, not a sleep; the 1s pace only keeps
+    retries from outrunning the refill. A genuinely broken recovery
+    (real 500s) still fails at the deadline instead of passing.
+    """
+    deadline = time.time() + timeout
+    last_error = ""
+    while True:
+        page.reload(wait_until="domcontentloaded")
+        try:
+            expect(page.locator("#connection-text")).to_have_text("Connected")
+            return
+        except AssertionError as exc:
+            last_error = (str(exc).splitlines() or [""])[0]
+        if time.time() >= deadline:
+            raise AssertionError(
+                f"dashboard did not recover to Connected within {timeout}s; last: {last_error}"
+            )
+        time.sleep(1)
+
 def main() -> None:
     # NEXAROUTE_CHROMIUM_BIN lets the acceptance runner point the suite
     # at Playwright's bundled Chromium, which `playwright install` does
@@ -117,6 +168,13 @@ def main() -> None:
         log = (tmp_path / "gateway.log").open("w")
         proc = subprocess.Popen(["go", "run", "./cmd/gateway", "-no-browser", "-config", str(config_path)], cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT, text=True)
         base = f"http://127.0.0.1:{port}"
+        # Sanitized diagnostics for startup/health failures (issue
+        # #686): every /admin/api/ response the page sees, path and
+        # status only -- never bodies or headers -- so a future
+        # Unavailable can be attributed to a stubbed 500, a gateway
+        # 429, or a missing reply. Defined here so the finally block
+        # can read it even if the page never started.
+        admin_api_responses: list = []
         try:
             wait_ready(base, proc)
             with sync_playwright() as pw:
@@ -138,7 +196,15 @@ def main() -> None:
                         return
                     console_msgs.append((msg.type, msg.text))
                 page.on("console", record_console)
-                
+                def record_admin_response(response):
+                    try:
+                        url = response.url
+                    except Exception:
+                        return
+                    if "/admin/api/" in url:
+                        admin_api_responses.append({"path": url, "status": response.status})
+                page.on("response", record_admin_response)
+
                 page.route("**/admin/api/provider-discover", lambda route: route.fulfill(status=200, content_type="application/json", body=json.dumps({"ok": True, "models": ["model-alpha", "model-beta"]})))
                 page.route("**/admin/api/provider-check", lambda route: route.fulfill(status=200, content_type="application/json", body=json.dumps({"ok": True, "status_code": 200, "latency_ms": 1})))
                 page.route("**/admin/api/provider-test", lambda route: route.fulfill(status=200, content_type="application/json", body=json.dumps({"ok": True, "passed": 1, "total": 1, "results": [{"model": "model-alpha", "ok": True, "latency_ms": 1}]})))
@@ -973,8 +1039,7 @@ def main() -> None:
                 # 1. Real theme toggle: reload first so state, dataset and
                 # localStorage agree (init copies localStorage into state),
                 # then two real clicks must flip and restore the theme.
-                page.reload(wait_until="domcontentloaded")
-                expect(page.locator("#connection-text")).to_have_text("Connected")
+                reload_until_connected(page)
                 theme_before = page.evaluate("() => document.documentElement.dataset.theme")
                 assert theme_before in ("dark", "light")
                 assert page.evaluate("() => localStorage.getItem('nexaroute_theme')") == theme_before
@@ -1060,8 +1125,7 @@ def main() -> None:
                 expect(page.locator("#connection-text")).to_have_text("Unavailable")
                 expect(page.locator("#live-status")).to_have_text("Offline")
                 page.unroute("**/admin/api/snapshot**", snapshot_failure)
-                page.reload(wait_until="domcontentloaded")
-                expect(page.locator("#connection-text")).to_have_text("Connected")
+                reload_until_connected(page)
                 expect(page.locator("#live-status")).to_have_text("Live")
                 expected_snapshot_500["active"] = False
 
@@ -1076,6 +1140,15 @@ def main() -> None:
 
                 browser.close()
         finally:
+            # Diagnostics first: is the gateway still alive, and does
+            # it still answer /healthz? Recorded before terminate so
+            # a startup/health failure stays diagnosable afterwards.
+            gateway_alive = proc.poll() is None
+            try:
+                with urllib.request.urlopen(base + "/healthz", timeout=2) as r:
+                    healthz_status = r.status
+            except Exception as exc:
+                healthz_status = f"unreachable ({type(exc).__name__})"
             proc.terminate()
             try:
                 proc.wait(timeout=8)
@@ -1083,6 +1156,38 @@ def main() -> None:
                 proc.kill()
                 proc.wait()
             log.close()
+            redact_values = [test_video_token, env.get("NEXA_ISSUE393_BROWSER_KEY"), env.get("NEXA_ISSUE393_BROWSER_POOL")]
+            summary_lines = [
+                f"gateway alive before terminate: {gateway_alive}",
+                f"gateway /healthz: {healthz_status}",
+                f"gateway exit code: {proc.returncode}",
+            ]
+            counts: dict = {}
+            for entry in admin_api_responses:
+                key = (entry["path"], entry["status"])
+                counts[key] = counts.get(key, 0) + 1
+            for (path, status), count in sorted(counts.items()):
+                summary_lines.append(f"admin api response: {status} x{count} {path}")
+            print("BROWSER DIAGNOSTICS:")
+            print("\n".join(summary_lines))
+            if evidence_root is not None:
+                try:
+                    evidence_root.mkdir(parents=True, exist_ok=True)
+                    gateway_log = (tmp_path / "gateway.log").read_text(errors="replace")
+                    # Bound the preserved log; the tail holds the
+                    # failure window (the gateway logs every >=400
+                    # status, so throttled 429s are visible there).
+                    tail = gateway_log[-256 * 1024:]
+                    (evidence_root / "gateway.log").write_text(redact_text(tail, redact_values))
+                    (evidence_root / "admin-api-responses.json").write_text(
+                        redact_text(json.dumps(admin_api_responses, indent=2) + "\n", redact_values))
+                    (evidence_root / "gateway-diagnostics.json").write_text(json.dumps({
+                        "gateway_alive_before_terminate": gateway_alive,
+                        "healthz_status": healthz_status,
+                        "gateway_exit_code": proc.returncode,
+                    }, indent=2) + "\n")
+                except Exception as exc:
+                    print(f"BROWSER DIAGNOSTICS: failed to write evidence files: {type(exc).__name__}")
     print("BROWSER E2E PASS")
 
 if __name__ == "__main__":
