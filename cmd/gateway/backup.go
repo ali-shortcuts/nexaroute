@@ -65,6 +65,13 @@ type backupManifest struct {
 	// when the key itself is not included, so a restore can warn when
 	// the target machine's key does not pair with the backup.
 	MasterKeySHA256 string `json:"master_key_sha256,omitempty"`
+	// Transit envelope fields (ADR 0007 §7.6). An nxs2 config has no
+	// raw key to fingerprint or bundle: the manifest records the
+	// envelope versions, the common Transit key-reference hash, and
+	// the distinct Transit key versions present instead.
+	EnvelopeVersions      []string `json:"envelope_versions,omitempty"`
+	TransitKeyRefSHA256   string   `json:"transit_key_ref_sha256,omitempty"`
+	TransitKeyVersions    []int    `json:"transit_key_versions,omitempty"`
 	Notes           string `json:"notes,omitempty"`
 }
 
@@ -181,6 +188,24 @@ func createBackup(configPath, outPath string, includeKey bool, allowBrokenChain 
 	defer func() { _ = os.RemoveAll(stage) }()
 
 	manifest := backupManifest{Format: backupFormat, CreatedAt: time.Now().UTC(), GatewayVersion: version}
+	// Transit envelope manifest (ADR 0007 §7.6). An nxs2 config has no
+	// raw key: --include-master-key is rejected, no .key file is
+	// fingerprinted, and the manifest records envelope facts instead.
+	configHasNXS2 := false
+	if cls, cerr := secrets.ClassifyConfig(configBytes); cerr == nil && cls.NXS2 > 0 {
+		configHasNXS2 = true
+		if includeKey {
+			return errors.New("--include-master-key is rejected for Transit (nxs2) configs: there is no raw key to bundle, and silently ignoring the flag would mislead the operator about what the bundle can restore")
+		}
+		keyRef, versions, ierr := secrets.TransitEnvelopeInfo(configBytes)
+		if ierr != nil {
+			return fmt.Errorf("Transit envelope manifest: %w", ierr)
+		}
+		manifest.EnvelopeVersions = []string{"nxs2"}
+		manifest.TransitKeyRefSHA256 = keyRef
+		manifest.TransitKeyVersions = versions
+		manifest.Notes += "Transit (nxs2) config: no raw master key; restore requires Vault Transit. "
+	}
 	// The same per-entry and aggregate limits restore enforces are
 	// applied while staging, so a backup can never produce a bundle
 	// its own restore would reject for size.
@@ -269,8 +294,12 @@ func createBackup(configPath, outPath string, includeKey bool, allowBrokenChain 
 	// Master key: fingerprint always (when file-backed); bytes only on
 	// explicit opt-in. An unreadable key file (permissions, a directory
 	// in its place) fails the backup rather than being misreported as
-	// "no master key file".
-	if keyBytes, err := readFileBounded(keyPath, "master key file"); err == nil {
+	// "no master key file". A Transit (nxs2) config has no raw key: a
+	// stale .key file next to it is not fingerprinted and never
+	// bundled (ADR 0007 §7.6).
+	if configHasNXS2 {
+		manifest.Notes += "no master key file fingerprinted (Transit config). "
+	} else if keyBytes, err := readFileBounded(keyPath, "master key file"); err == nil {
 		manifest.MasterKeySHA256 = sha256Hex(keyBytes)
 		if includeKey {
 			if err := add(backupEntryKey, keyBytes); err != nil {
@@ -1520,7 +1549,17 @@ func validateBundledConfig(stage string, payloads map[string][]byte) (config.Con
 	if err := os.WriteFile(stagedConfig, payloads[backupEntryConfig], 0o600); err != nil {
 		return config.Config{}, "", err
 	}
+	// A Transit bundle never carries a raw key (ADR 0007 §7.6), and a
+	// .key file is never staged for an nxs2 config: it cannot decrypt
+	// it, and staging it would imply otherwise.
+	configHasNXS2 := false
+	if cls, cerr := secrets.ClassifyConfig(payloads[backupEntryConfig]); cerr == nil && cls.NXS2 > 0 {
+		configHasNXS2 = true
+	}
 	if key, ok := payloads[backupEntryKey]; ok {
+		if configHasNXS2 {
+			return config.Config{}, "", errors.New("bundle carries a master.key entry alongside an nxs2 config; refusing to restore (a Transit bundle never carries a raw key)")
+		}
 		if err := os.WriteFile(stagedConfig+".key", key, 0o600); err != nil {
 			return config.Config{}, "", err
 		}
@@ -1554,6 +1593,13 @@ func validateBundledConfig(stage string, payloads map[string][]byte) (config.Con
 func keylessRestoreJustified(payloads map[string][]byte) bool {
 	if !secrets.HasEnvelopes(payloads[backupEntryConfig]) {
 		return false // plaintext config: the loader failure is not a missing key
+	}
+	if cls, cerr := secrets.ClassifyConfig(payloads[backupEntryConfig]); cerr == nil && cls.NXS2 > 0 {
+		// A Transit (nxs2) config can never be justified keyless: no
+		// bundled .key can decrypt it, and installing it without
+		// Vault verification would pretend validation happened
+		// (ADR 0007 §7.6). The restore fails closed instead.
+		return false
 	}
 	if _, ok := payloads[backupEntryKey]; ok {
 		return false // a key travelled with the bundle and was staged

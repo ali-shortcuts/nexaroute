@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/ali-shortcuts/nexaroute/internal/config"
+	"github.com/ali-shortcuts/nexaroute/internal/secrets"
 	"github.com/ali-shortcuts/nexaroute/internal/securitystore"
 )
 
@@ -205,17 +206,27 @@ func verifyConfigDecryption(stage string, payloads map[string][]byte, configPath
 		return config.Config{}, statusFail, "cannot stage bundled config for verification"
 	}
 	hasEnvelopes := strings.Contains(string(payloads[backupEntryConfig]), "nxs1:") || strings.Contains(string(payloads[backupEntryConfig]), "nxs2:")
+	// A Transit (nxs2) config is never verified with a staged .key file
+	// (ADR 0007 §7.6): the staged load uses the staged config's Transit
+	// configuration, and Vault unavailability is BLOCKED, never a pass
+	// and never a structural-parse-only install.
+	hasNXS2 := false
+	if cls, cerr := secrets.ClassifyConfig(payloads[backupEntryConfig]); cerr == nil && cls.NXS2 > 0 {
+		hasNXS2 = true
+	}
 	keyAvailable := false
-	if key, ok := payloads[backupEntryKey]; ok {
-		if err := os.WriteFile(stagedConfig+".key", key, 0o600); err != nil {
-			return config.Config{}, statusFail, "cannot stage bundled master key for verification"
+	if !hasNXS2 {
+		if key, ok := payloads[backupEntryKey]; ok {
+			if err := os.WriteFile(stagedConfig+".key", key, 0o600); err != nil {
+				return config.Config{}, statusFail, "cannot stage bundled master key for verification"
+			}
+			keyAvailable = true
+		} else if b, err := os.ReadFile(configPath + ".key"); err == nil {
+			if err := os.WriteFile(stagedConfig+".key", b, 0o600); err != nil {
+				return config.Config{}, statusFail, "cannot stage the host master key for verification"
+			}
+			keyAvailable = true
 		}
-		keyAvailable = true
-	} else if b, err := os.ReadFile(configPath + ".key"); err == nil {
-		if err := os.WriteFile(stagedConfig+".key", b, 0o600); err != nil {
-			return config.Config{}, statusFail, "cannot stage the host master key for verification"
-		}
-		keyAvailable = true
 	}
 	if !keyAvailable {
 		keyAvailable = envKeyMaterialPresent()
@@ -227,6 +238,16 @@ func verifyConfigDecryption(stage string, payloads map[string][]byte, configPath
 			return cfg, statusPass, "encrypted values decrypted and config validated"
 		}
 		return cfg, statusPass, "config parses and validates"
+	}
+	if hasNXS2 {
+		if strings.TrimSpace(os.Getenv("NEXAROUTE_KEY_PROVIDER")) != "transit" || os.Getenv("NEXAROUTE_TRANSIT_ENABLED") != "true" {
+			return config.Config{}, statusBlocked, "nxs2 config with Vault Transit not configured on this host; cannot verify decryption (restore would fail closed)"
+		}
+		var terr *secrets.TransitError
+		if errors.As(err, &terr) && terr.Class == secrets.ClassTransitUnavailable {
+			return config.Config{}, statusBlocked, "nxs2 config with Vault Transit unavailable; cannot verify decryption (restore would fail closed)"
+		}
+		return config.Config{}, statusFail, "Transit configured but the nxs2 config did not decrypt/validate; refusing to treat the backup as restorable"
 	}
 	if !keyAvailable {
 		return config.Config{}, statusBlocked, "encrypted config with no key material available on this host; cannot verify decryption (restore would fail closed)"
