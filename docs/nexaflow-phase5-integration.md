@@ -1,7 +1,8 @@
 # NexaFlow Phase 5 — Integration
 
-Base: main `e6c3cdf3` + Phase 4 registry head `f90987c` (PR #675's
-commit, as the branch base). This phase adds the workflow runtime
+Base: main `e6c3cdf3` + registry head `f90987c`, merged with the
+Phase 7 hardening head `6bb525e` on the same PR #675 branch (merge
+commit on this branch; no history rewritten). This phase adds the workflow runtime
 engine, completes the backend wiring, and makes the five templates
 instantiable into runnable workflows. It does not merge, release, or
 tag anything, and it does not claim anything listed under
@@ -43,6 +44,21 @@ tag anything, and it does not claim anything listed under
   template wires the workflow-input error into `error_handler`.
   The old `Instantiate` is unchanged in behavior (it now also
   resolves `Input` placeholders).
+
+## Merge with Phase 7 (parent verification)
+
+Merging Phase 7 (`6bb525e`) broke exactly one Phase 5 test, and the
+break was informative, not incidental: Phase 7 changed `llm.chat`
+to MaxAttempts 1 (a billable timeout without an idempotency key is
+ambiguous), so the Phase 5 retry test's premise — LLM timeout is
+retryable — was stale. The engine was honouring the new policy
+correctly (1 attempt, failed). The test was fixed, not the policy:
+retry is now proven on the read-only `cost.usage` node (timeout
+retried, non-retryable code not retried), and a third case pins the
+Phase 7 rule (LLM timeout is never retried). Template placeholder
+resolution was merged the same way: Phase 7 embedded substitution +
+registry lookup, applied to both Config and Input, with Phase 5
+Input/Bindings preserved.
 
 ## Engine semantics (the contract)
 

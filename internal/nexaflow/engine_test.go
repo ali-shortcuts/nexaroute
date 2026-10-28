@@ -320,28 +320,42 @@ func TestEngineErrorPolicies(t *testing.T) {
 }
 
 func TestEngineRetryRules(t *testing.T) {
-	// A backend whose chat fails once with a retryable timeout, then
-	// succeeds: the LLM node declares timeout retryable, so the
-	// engine retries and the run completes.
-	flaky := &flakyBackend{FakeBackend: newFakeBackend(), failCode: "timeout", failTimes: 1}
+	// A backend whose usage snapshot fails once with a retryable
+	// timeout, then succeeds: the read-only cost.usage node declares
+	// timeout retryable, so the engine retries and the run completes.
+	flaky := &flakyUsageBackend{FakeBackend: newFakeBackend(), failCode: "timeout", failTimes: 1}
 	eng := testEngine(flaky, true)
 	wf := &Workflow{ID: "w", Steps: []Step{
-		{ID: "llm", NodeID: "nexaroute.llm.chat", Config: map[string]any{"route_or_alias": "team/coding"}, Input: map[string]any{"prompt": "hi"}},
+		{ID: "usage", NodeID: "nexaroute.cost.usage"},
 	}}
 	run := mustRun(t, eng, wf, nil)
 	if run.Status != RunCompleted {
 		t.Fatalf("flaky-timeout run = %+v", run)
 	}
-	if flaky.chatAttempts != 2 {
-		t.Fatalf("chat attempts = %d, want 2 (one retry on timeout)", flaky.chatAttempts)
+	if flaky.usageAttempts != 2 {
+		t.Fatalf("usage attempts = %d, want 2 (one retry on timeout)", flaky.usageAttempts)
 	}
-	// A non-retryable backend error is not retried even for a
-	// retry-declaring node.
-	flaky2 := &flakyBackend{FakeBackend: newFakeBackend(), failCode: "backend_error", failTimes: 5}
+	// A non-retryable error code is not retried even for a
+	// retry-declaring node (cost.usage declares backend_error
+	// retryable, so the non-retryable code here is permission_denied).
+	flaky2 := &flakyUsageBackend{FakeBackend: newFakeBackend(), failCode: "permission_denied", failTimes: 5}
 	eng2 := testEngine(flaky2, true)
 	run = mustRun(t, eng2, wf, nil)
-	if run.Status != RunFailed || flaky2.chatAttempts != 1 {
-		t.Fatalf("non-retryable run = %+v, attempts = %d, want failed with 1 attempt", run, flaky2.chatAttempts)
+	if run.Status != RunFailed || flaky2.usageAttempts != 1 {
+		t.Fatalf("non-retryable run = %+v, attempts = %d, want failed with 1 attempt", run, flaky2.usageAttempts)
+	}
+	// Phase 7 interaction: llm.chat is now MaxAttempts 1 (a billable
+	// timeout is ambiguous without an idempotency key), so even a
+	// timeout is NOT retried for that node. The engine must honour
+	// the declared policy, not the error's retryable flag alone.
+	flaky3 := &flakyBackend{FakeBackend: newFakeBackend(), failCode: "timeout", failTimes: 1}
+	eng3 := testEngine(flaky3, true)
+	wf3 := &Workflow{ID: "w", Steps: []Step{
+		{ID: "llm", NodeID: "nexaroute.llm.chat", Config: map[string]any{"route_or_alias": "team/coding"}, Input: map[string]any{"prompt": "hi"}},
+	}}
+	run = mustRun(t, eng3, wf3, nil)
+	if run.Status != RunFailed || flaky3.chatAttempts != 1 {
+		t.Fatalf("llm-timeout run = %+v, attempts = %d, want failed with 1 attempt (no billable retry)", run, flaky3.chatAttempts)
 	}
 }
 
@@ -358,6 +372,22 @@ func (f *flakyBackend) Chat(ctx context.Context, req ChatRequest) (ChatResponse,
 		return ChatResponse{}, NewNodeError(f.failCode, f.failCode == "timeout", "injected %s", f.failCode)
 	}
 	return f.FakeBackend.Chat(ctx, req)
+}
+
+// flakyUsageBackend mirrors flakyBackend for the read-only usage port.
+type flakyUsageBackend struct {
+	*FakeBackend
+	failCode      string
+	failTimes     int
+	usageAttempts int
+}
+
+func (f *flakyUsageBackend) UsageSnapshot(ctx context.Context) (UsageInfo, error) {
+	f.usageAttempts++
+	if f.usageAttempts <= f.failTimes {
+		return UsageInfo{}, NewNodeError(f.failCode, f.failCode == "timeout", "injected %s", f.failCode)
+	}
+	return f.FakeBackend.UsageSnapshot(ctx)
 }
 
 func TestEngineTriggerSteps(t *testing.T) {
