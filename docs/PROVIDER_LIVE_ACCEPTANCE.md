@@ -233,6 +233,91 @@ observed. The one-token probe, the acceptance canary, and the external
 harness remain operator-only commands: they are never wired into public
 CI.
 
+## This run (2026-10-28, PR #674 head `04f2bd7`, base main `e6c3cdf3`)
+
+A second attempt to complete the live acceptance, on the exact PR head.
+The outcome is unchanged: **zero upstream calls, zero paid requests**.
+No credential value was read, printed, stored, or transmitted anywhere
+in this run; only names and availability were inspected.
+
+Credential and authorization check (names only, 2026-10-28):
+
+- Standard provider credential names checked for non-empty values in the
+  operator shell: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`,
+  `GOOGLE_API_KEY`, `AZURE_OPENAI_API_KEY`, `AWS_ACCESS_KEY_ID`,
+  `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `VERTEX_API_KEY` —
+  **0 of 9 non-empty**. No preconfigured provider credential exists in
+  this environment.
+- Repository secret list: empty (exit 0). No CI secret supplies a
+  provider credential for this run.
+- Issue #646 has no comments: no operator authorization naming providers
+  and models, no staging/production tenant confirmation, and no spend
+  approval. The GitHub token used for repository operations was never
+  used as a provider credential, and no token value appears in any
+  report, log, or file produced here.
+
+Because the credential and cost scope are not established, no live
+request was initiated for any provider, per the gate in this runbook.
+Every live case below is therefore `BLOCKED` or `NOT_RUN`, exactly as
+in the 2026-10-27 run. Nothing in this section is live evidence.
+
+| Provider | Case | Status | Reason |
+|---|---|---|---|
+| openai_compatible | all live cases | BLOCKED | No credential, tenant, or operator authorization supplied |
+| anthropic_compatible | all live cases | BLOCKED | No credential, tenant, or operator authorization supplied |
+| gemini | all live cases | BLOCKED | No credential, tenant, or operator authorization supplied |
+| azure_openai | all live cases | BLOCKED | No credential, tenant, or operator authorization supplied |
+| vertex | all live cases | BLOCKED | No credential, tenant, or operator authorization supplied |
+| bedrock | all live cases | BLOCKED | No credential, tenant, or operator authorization supplied |
+| openai_responses | all live cases | NOT_RUN | Not one of the six #646 dialects; recorded separately when tested |
+| all providers | rate limit / outage | NOT_RUN | Not induced against real tenants; recorded only if observed during an authorized run |
+| all providers | live failover | NOT_RUN | Requires two live tenants + a gateway route; not staged |
+| all providers | harness behavior (acceptance scenarios, auth discrimination, stream usage, truncated stream, quota mapping) | PASS (fixtures only) | Loopback fakes; see test evidence below. Fixture passes are **not** interoperability evidence |
+
+### Fixture and regression evidence for this run
+
+```bash
+go test ./internal/providers/livecanary/ -count=1
+go test ./internal/providers/livecanary/ -count=1 -race
+go test ./cmd/gateway/ -run 'TestExternalAccept|TestProviderAccept|TestConformance' -count=1
+go test ./internal/providers/ -run 'TestQuota|TestRateLimit|TestCooldown' -count=1
+go vet ./internal/providers/livecanary/ ./cmd/gateway/
+```
+
+Observed locally for this run (PR #674 head `04f2bd7`, loopback
+fixtures only, zero live provider calls):
+
+- `go test ./internal/providers/livecanary/ -count=1` — PASS (0.539s),
+  including the 7-scenario acceptance set (`text`, `stream`,
+  `stream_usage`, `tools`, `tool_result`, `auth_failure`,
+  `error_envelope`) and the truncated-stream / null-finish-reason /
+  stream-usage-dialect negative paths; `-race` — PASS (1.731s).
+- `go test ./cmd/gateway/ -run 'TestExternalAccept|TestProviderAccept|TestConformance' -count=1` — PASS (3.780s).
+- `go test ./internal/providers/ -run 'TestQuota|TestRateLimit|TestCooldown' -count=1` — PASS (0.090s); the
+  rate-limit cooldown mapping is hermetic, as the matrix requires.
+- `go vet` on both packages — clean; `gofmt -l` on both packages —
+  clean.
+- Binary end-to-end against a loopback fake was NOT re-run this time;
+  the same scenarios are covered by the acceptance tests above through
+  loopback fakes, and no binary behavior changed on this branch since
+  the 2026-10-27 run.
+- No capability or conformance-manifest claim was changed: with no live
+  evidence, no provider gains a live-verified dimension.
+
+### Exact prerequisites to unblock the live run
+
+1. An operator comment on issue #646 naming the exact providers and
+   test models, the staging (or explicitly approved production) tenant,
+   and the approved spend.
+2. Credentials supplied only through the environment variables named in
+   the config (`api_key_env`, credential-pool `api_key_env`, Bedrock
+   `secret_key_env` / `session_token_env`) or the operator's secret
+   store exporting those variables — never pasted, committed, or placed
+   in a URL.
+3. Re-run steps 1–3 of the operator sequence per provider, one at a time,
+   with `--confirm-live` / `--acknowledge-cost`, and attach the sanitized
+   per-provider reports. Issue #646 stays open until then.
+
 ## Limitations (carried with every report)
 
 - A `PASS` proves the selected deployment answered bounded probes on the
