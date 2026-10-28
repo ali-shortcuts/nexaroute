@@ -788,36 +788,41 @@ func (t *nativeSSETracker) processLine() error {
 func (t *nativeSSETracker) observeAnthropicUsage(typ string, env map[string]json.RawMessage) {
 	switch typ {
 	case "message_start":
+		// env["message"] IS the message object of a real message_start
+		// envelope ({"type":"message_start","message":{"usage":{...}}}), so
+		// the usage struct is decoded directly from it. An earlier shape
+		// expected a nested "message" wrapper key inside it, which made
+		// every real envelope decode to zero totals and the message_stop
+		// hook never fire.
 		var start struct {
-			Message struct {
-				Usage struct {
-					InputTokens  int `json:"input_tokens"`
-					OutputTokens int `json:"output_tokens"`
-				} `json:"usage"`
-			} `json:"message"`
-		}
-		if raw := env["message"]; len(raw) > 0 {
-			if err := json.Unmarshal(raw, &start); err == nil {
-				t.usageInput = start.Message.Usage.InputTokens
-				if start.Message.Usage.OutputTokens > t.usageOutput {
-					t.usageOutput = start.Message.Usage.OutputTokens
-				}
-			}
-		}
-	case "message_delta":
-		var delta struct {
 			Usage struct {
 				InputTokens  int `json:"input_tokens"`
 				OutputTokens int `json:"output_tokens"`
 			} `json:"usage"`
 		}
+		if raw := env["message"]; len(raw) > 0 {
+			if err := json.Unmarshal(raw, &start); err == nil {
+				t.usageInput = start.Usage.InputTokens
+				if start.Usage.OutputTokens > t.usageOutput {
+					t.usageOutput = start.Usage.OutputTokens
+				}
+			}
+		}
+	case "message_delta":
+		// env["usage"] IS the usage object of a real message_delta envelope
+		// ({"type":"message_delta","delta":{...},"usage":{...}}); decode it
+		// directly (see message_start note above).
+		var delta struct {
+			InputTokens  int `json:"input_tokens"`
+			OutputTokens int `json:"output_tokens"`
+		}
 		if raw := env["usage"]; len(raw) > 0 {
 			if err := json.Unmarshal(raw, &delta); err == nil {
-				if delta.Usage.OutputTokens > t.usageOutput {
-					t.usageOutput = delta.Usage.OutputTokens
+				if delta.OutputTokens > t.usageOutput {
+					t.usageOutput = delta.OutputTokens
 				}
-				if delta.Usage.InputTokens > t.usageInput {
-					t.usageInput = delta.Usage.InputTokens
+				if delta.InputTokens > t.usageInput {
+					t.usageInput = delta.InputTokens
 				}
 			}
 		}
