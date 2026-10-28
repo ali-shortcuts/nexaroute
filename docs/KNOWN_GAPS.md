@@ -88,7 +88,9 @@ WP4 implementation boundaries and acceptance status:
   in-process OIDC provider and negative security tests pass locally; all four
   inspected GitHub checks (`CI/verify`, vulnerability scan, CodeQL Go, and
   CodeQL) were green on the reviewed PR head. Any subsequent push requires
-  fresh checks before merge. Live external-IdP interoperability is unverified.
+  fresh checks before merge. Live external-IdP interoperability is unverified;
+  the exact operator-owned tenant checklist remains **BLOCKED** in
+  [`docs/reports/OIDC_LIVE_TENANT_ACCEPTANCE_647.md`](reports/OIDC_LIVE_TENANT_ACCEPTANCE_647.md).
 
 - per-client quotas beyond the RPM and TPM ceilings (hashed-at-rest client keys landed with M3-8: legacy plaintext keys migrate to SHA-256 digests on load/save, and TPM reservations settle to provider-reported usage);
 - SAML and enterprise identity protocols other than the configured single OIDC issuer;
