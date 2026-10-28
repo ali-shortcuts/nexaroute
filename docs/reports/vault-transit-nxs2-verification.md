@@ -1,5 +1,17 @@
 # Vault Transit `nxs2` implementation verification
 
+> SUPERSEDED IN PART (2026-10-28, Path A rework): this report describes the
+> original #670 implementation (old selection surface
+> `NEXAROUTE_KEY_PROVIDER=vault-transit` / `NEXAROUTE_TRANSIT_*`,
+> `migrate-envelope` / `rewrap` commands, authenticated encrypted backups,
+> migration journal, associated-data sent to Transit). The rework adopts
+> revised ADR 0007 verbatim: new selection surface (`transit` + gate,
+> `VAULT_*` variables), `migrate-to-transit` / `rewrap-transit` commands,
+> verbatim `.pre-transit.bak` / `.pre-rewrap.bak` backups, no journal, and no
+> associated data or context sent to Transit. The report below is preserved
+> as history; its claims about the old behaviors do not describe the current
+> branch. Real Vault Transit acceptance remains NOT RUN either way.
+
 - Date: 2026-10-27
 - Branch: `feat/vault-transit-envelope-nxs2`
 - ADR: [0007](../adr/0007-vault-transit-envelope-encryption.md)

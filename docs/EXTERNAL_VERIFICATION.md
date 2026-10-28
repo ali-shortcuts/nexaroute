@@ -89,7 +89,8 @@ fail-closed behavior.
 `nxs1` KV v2 helper loads a raw 32-byte master key into the gateway
 process. The optional `nxs2` Vault Transit path keeps the Transit KEK
 inside Vault and returns only a short-lived per-secret DEK to the
-gateway. It is an explicit opt-in (`NEXAROUTE_KEY_PROVIDER=vault-transit`)
+gateway. It is an explicit opt-in (`NEXAROUTE_KEY_PROVIDER=transit` with
+`NEXAROUTE_TRANSIT_ENABLED=true`)
 with strict timeouts, response-size limits, redirect rejection, redacted
 errors, and no local fallback. CI exercises the protocol against a fake
 Vault API only. **No real Vault Transit acceptance run has been
@@ -124,15 +125,16 @@ credentials. It is intentionally separate from CI.
 
 1. Enable a Transit mount and key (for example `transit/nexaroute`).
    Grant a policy with `encrypt`, `decrypt`, and `rewrap` on that key only.
-2. Export `NEXAROUTE_KEY_PROVIDER=vault-transit`,
-   `NEXAROUTE_TRANSIT_ADDR`, `NEXAROUTE_TRANSIT_TOKEN`,
-   `NEXAROUTE_TRANSIT_MOUNT`, and `NEXAROUTE_TRANSIT_KEY`.
+2. Export `NEXAROUTE_KEY_PROVIDER=transit`,
+   `NEXAROUTE_TRANSIT_ENABLED=true`, `VAULT_ADDR`, `VAULT_TOKEN` (or
+   `VAULT_TOKEN_FILE`), `NEXAROUTE_TRANSIT_MOUNT`, and
+   `NEXAROUTE_TRANSIT_KEY`.
 3. Start from a disposable config containing one secret. Evidence:
    the stored value is `nxs2:`, `nexaroute secrets verify` passes, and
    no `<config>.key` file is created.
 4. Deny the token's `decrypt` capability (or use a wrong token). Evidence:
    startup and `secrets verify` fail closed with no local-key fallback.
-5. Rotate the Transit key and run `nexaroute secrets rewrap`; verify the
+5. Rotate the Transit key and run `nexaroute secrets rewrap-transit`; verify the
    wrapped DEK moved to the new key version and the secret still decrypts.
    Then disable the old key version only after verification.
 6. Tamper with the stored envelope or move it to another field. Evidence:

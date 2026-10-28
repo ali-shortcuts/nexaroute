@@ -21,14 +21,14 @@ import (
 // tests use these classes and never surface the raw Vault response body,
 // the token, a DEK, or a wrapped DEK in an error string.
 const (
-	ClassTransitUnavailable            = "transit_unavailable"
-	ClassTransitForbidden              = "transit_forbidden"
-	ClassTransitKeyNotFound            = "transit_key_not_found"
-	ClassTransitInvalidCiphertext      = "transit_invalid_ciphertext"
-	ClassTransitKeyVersionUnavailable  = "transit_key_version_unavailable"
-	ClassTransitBadResponse            = "transit_bad_response"
-	ClassTransitConfigInvalid          = "transit_config_invalid"
-	ClassTransitNotEnabled             = "transit_not_enabled"
+	ClassTransitUnavailable           = "transit_unavailable"
+	ClassTransitForbidden             = "transit_forbidden"
+	ClassTransitKeyNotFound           = "transit_key_not_found"
+	ClassTransitInvalidCiphertext     = "transit_invalid_ciphertext"
+	ClassTransitKeyVersionUnavailable = "transit_key_version_unavailable"
+	ClassTransitBadResponse           = "transit_bad_response"
+	ClassTransitConfigInvalid         = "transit_config_invalid"
+	ClassTransitNotEnabled            = "transit_not_enabled"
 )
 
 // TransitError is a classified Transit failure. Class is one of the

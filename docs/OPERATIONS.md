@@ -157,32 +157,37 @@ If the process stops during rotation, preserve the config, `.key`, `.key.next`, 
 
 ### Vault Transit migration and rewrap
 
-Vault Transit `nxs2` mode is selected with `NEXAROUTE_KEY_PROVIDER=vault-transit`
-and the `NEXAROUTE_TRANSIT_*` variables documented in
+Vault Transit `nxs2` mode is selected with `NEXAROUTE_KEY_PROVIDER=transit`
+together with `NEXAROUTE_TRANSIT_ENABLED=true` and the `VAULT_*` /
+`NEXAROUTE_TRANSIT_*` variables documented in
 [CONFIGURATION.md](CONFIGURATION.md). The Transit KEK stays in Vault and there
 is no fallback to a local key. A config that still contains `nxs1` envelopes is
 rejected until it is explicitly migrated with the exact legacy key:
 
 ```bash
-nexaroute secrets migrate-envelope --config "$CONFIG" --legacy-key-file /secure/old.key
+nexaroute secrets migrate-to-transit --config "$CONFIG" --legacy-key-file /secure/old.key
 nexaroute secrets verify --config "$CONFIG"
 ```
 
-Migration writes an authenticated encrypted backup, records a non-secret
-journal, and atomically replaces the config. If the process stops, preserve the
-config, the `.enc.bak` backup, and the `.nxs2-migration` journal, then rerun the
-same command: it resumes before replacement or verifies and cleans up after a
-committed replacement. If the journal matches neither the old nor the new
-config, stop and restore from backup rather than deleting it.
+Migration proves Transit connectivity with a canary, writes a verbatim
+timestamped `.pre-transit.bak` copy of the pre-migration bytes (mode `0600`,
+SHA-256 reported), decrypt-verifies in memory, and atomically replaces the
+config; a post-write verification failure rolls back to the backup. There is
+no migration journal. If the process stops, preserve the config and the
+`.pre-transit.bak` backup, then rerun the same command: an already-migrated
+config is verified only and nothing is rewritten. Plaintext fields are never
+auto-migrated into Transit.
 
 After a Vault Transit key rotation, move wrapped DEKs to the latest version:
 
 ```bash
-nexaroute secrets rewrap --config "$CONFIG"
+nexaroute secrets rewrap-transit --config "$CONFIG"
 nexaroute secrets verify --config "$CONFIG"
 ```
 
-`rewrap` writes an authenticated backup and replaces the config atomically. Do
+`rewrap-transit` decrypt-verifies before and after, calls only the Transit
+`rewrap` endpoint, writes a verbatim `.pre-rewrap.bak`, and writes nothing
+when already at the latest version. Do
 not disable an old Transit key version until rewrap and verification succeed.
 Transit mode is fake-API tested but has no real Vault Transit acceptance
 evidence yet; see [EXTERNAL_VERIFICATION.md](EXTERNAL_VERIFICATION.md).
