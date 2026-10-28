@@ -330,6 +330,26 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '405':
           $ref: '#/components/responses/MethodNotAllowed'
+  /admin/api/security-snapshot:
+    get:
+      summary: Consistent point-in-time snapshot of the security/audit store, taken from the gateway's own open store handle (the only supported live-snapshot path for the file-backed store; a broken audit chain is refused, and backends without snapshot support answer 501)
+      x-permission: audit.read
+      responses:
+        '200':
+          description: Raw security-store snapshot bytes (a bbolt database file that reopens as a normal store)
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
   /admin/api/events/stream:
     get:
       summary: Server-sent event stream of admin events

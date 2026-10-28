@@ -12,6 +12,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -78,6 +79,19 @@ func sha256Hex(data []byte) string {
 // file-backend control-plane state into one hash-verified tar archive,
 // written atomically with mode 0600. The master key is excluded unless
 // --include-master-key is given.
+//
+// Two snapshot modes exist and are never mixed silently. Without
+// --live, the CLI opens the security store itself: that requires the
+// gateway to be stopped for the file-backed store, because a running
+// gateway holds the store's exclusive lock (a locked open fails
+// closed with an actionable error, never with a raw copy). With
+// --live, the CLI asks the RUNNING gateway's admin endpoint for a
+// snapshot taken from its own open store handle, authenticated with
+// the operator's admin credential (see liveBackupOptions). Live mode
+// requires emergency admin access (an admin API key, or loopback
+// keyless emergency access where the gateway allows it); a gateway
+// whose admin is OIDC-only cannot serve a CLI live snapshot, and
+// that gateway must be backed up stopped.
 func runBackup(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("backup", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -85,6 +99,9 @@ func runBackup(args []string, stdout, stderr io.Writer) int {
 	out := fs.String("out", "", "output bundle path (required)")
 	includeKey := fs.Bool("include-master-key", false, "include the master key file in the bundle (sensitive; default keeps it separate)")
 	allowBrokenChain := fs.Bool("allow-broken-audit-chain", false, "back up even when the audit chain fails verification (the failure and this override are recorded in the bundle manifest)")
+	live := fs.Bool("live", false, "take the security snapshot from a running gateway via its admin endpoint (requires admin access); without --live the gateway must be stopped for a file-backed security store")
+	adminURL := fs.String("admin-url", "", "with --live, the gateway admin base URL (default: derived from the config listen address)")
+	adminKey := fs.String("admin-key", "", "with --live, the admin API key (default: the config admin.api_key; empty means loopback keyless emergency access where the gateway allows it)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -92,11 +109,22 @@ func runBackup(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "nexaroute backup: --out is required")
 		return 2
 	}
-	if err := createBackup(*configPath, *out, *includeKey, *allowBrokenChain, stdout); err != nil {
+	liveOpts := liveBackupOptions{enabled: *live, adminURL: *adminURL, adminKey: *adminKey}
+	if err := createBackup(*configPath, *out, *includeKey, *allowBrokenChain, stdout, liveOpts); err != nil {
 		fmt.Fprintf(stderr, "nexaroute backup failed: %v\n", err)
 		return 1
 	}
 	return 0
+}
+
+// liveBackupOptions carries the --live mode inputs. The admin key is
+// handled like any operator credential in this process: it is sent
+// only as an x-admin-key header to the configured admin URL and is
+// never logged or written into the bundle.
+type liveBackupOptions struct {
+	enabled  bool
+	adminURL string
+	adminKey string
 }
 
 // readFileBounded reads a backup source without ever allocating more
@@ -136,7 +164,7 @@ func (w *boundedBuffer) Write(p []byte) (int, error) {
 	return w.buf.Write(p)
 }
 
-func createBackup(configPath, outPath string, includeKey bool, allowBrokenChain bool, stdout io.Writer) error {
+func createBackup(configPath, outPath string, includeKey bool, allowBrokenChain bool, stdout io.Writer, live liveBackupOptions) error {
 	configBytes, err := readFileBounded(configPath, "config")
 	if err != nil {
 		return fmt.Errorf("read config: %w", err)
@@ -144,6 +172,14 @@ func createBackup(configPath, outPath string, includeKey bool, allowBrokenChain 
 	cfg, err := config.LoadBase(configPath)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
+	}
+	if live.enabled {
+		if live.adminURL, err = resolveLiveAdminURL(live.adminURL, cfg.Listen); err != nil {
+			return err
+		}
+		if strings.TrimSpace(live.adminKey) == "" {
+			live.adminKey = cfg.Admin.APIKey
+		}
 	}
 
 	// Resolve every source path up front. The output must never alias
@@ -203,15 +239,59 @@ func createBackup(configPath, outPath string, includeKey bool, allowBrokenChain 
 		return err
 	}
 
-	// Security/audit store: consistent online snapshot when present.
+	// Security/audit store: consistent snapshot when present.
 	// Absence (ErrNotExist) is a legitimate state and is recorded in
 	// the manifest; ANY other stat error (permissions, a path component
 	// that is not a directory, I/O) fails the backup — silently
 	// omitting an unreadable audit store would produce a backup that
 	// looks complete but is not.
-	if _, statErr := os.Stat(securityPath); statErr == nil {
+	//
+	// Live mode (--live) never opens the store file itself: the
+	// snapshot comes from the running gateway's admin endpoint,
+	// taken from its own open handle, and is chain-verified here
+	// from the received bytes before bundling (the gateway verifies
+	// the chain in-process before streaming, and this second check
+	// catches transport corruption). A live fetch failure is final:
+	// there is no fallback to a stopped open (which would fail on
+	// the lock anyway) and never a raw file copy.
+	if live.enabled {
+		snapBytes, err := fetchLiveSecuritySnapshot(live.adminURL, live.adminKey)
+		if err != nil {
+			return err
+		}
+		probePath := filepath.Join(stage, "security-probe.db")
+		if err := os.WriteFile(probePath, snapBytes, 0o600); err != nil {
+			return fmt.Errorf("stage live security snapshot for verification: %w", err)
+		}
+		probe, err := securitystore.OpenReadOnly(probePath)
+		if err != nil {
+			return fmt.Errorf("open live security snapshot for verification: %w", err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		report, verr := probe.VerifyAuditChain(ctx)
+		cancel()
+		_ = probe.Close()
+		if verr != nil {
+			return fmt.Errorf("verify live security snapshot chain: %w", verr)
+		}
+		if !report.Verified {
+			first := report.Problems[0]
+			if !allowBrokenChain {
+				return fmt.Errorf("live security snapshot audit chain verification failed (%s); refusing to back up a tampered audit store — re-run with --allow-broken-audit-chain to override (note: the gateway itself refuses live snapshots of a broken chain, so this override only applies when the gateway streams one)", first)
+			}
+			fmt.Fprintf(stdout, "WARNING: live security snapshot audit chain FAILED verification (%s); backing up anyway under --allow-broken-audit-chain — this override is recorded in the bundle manifest\n", first)
+			manifest.Notes += fmt.Sprintf("live security snapshot audit chain FAILED verification at backup time (%s); backed up under --allow-broken-audit-chain override; ", first)
+		}
+		manifest.Notes += "security snapshot taken live from the running gateway via its admin endpoint; "
+		if err := add(backupEntrySecurity, snapBytes); err != nil {
+			return err
+		}
+	} else if _, statErr := os.Stat(securityPath); statErr == nil {
 		store, err := securitystore.OpenReadOnly(securityPath)
 		if err != nil {
+			if securitystore.IsLockedError(err) {
+				return fmt.Errorf("open security store for snapshot: %w; the file-backed security store is locked by another process — usually a running gateway holding the writer lock. Stop the gateway cleanly and re-run backup, or use --live for an in-process snapshot from the running gateway (requires admin access)", err)
+			}
 			return fmt.Errorf("open security store for snapshot: %w", err)
 		}
 		snap := &boundedBuffer{limit: maxBackupEntryBytes}
@@ -301,6 +381,82 @@ func createBackup(configPath, outPath string, includeKey bool, allowBrokenChain 
 	}
 	fmt.Fprintf(stdout, "backup written to %s\n", outPath)
 	return nil
+}
+
+// resolveLiveAdminURL derives the gateway admin base URL for --live
+// backups: an explicit --admin-url wins, otherwise the config listen
+// address (the admin API shares the gateway listener). A bare ":port"
+// listen binds all interfaces, so loopback is used for the client.
+// Anything that is not a host:port (a socket path, a URL with a path)
+// is refused rather than guessed at.
+func resolveLiveAdminURL(flagURL, listen string) (string, error) {
+	if strings.TrimSpace(flagURL) != "" {
+		return strings.TrimRight(strings.TrimSpace(flagURL), "/"), nil
+	}
+	listen = strings.TrimSpace(listen)
+	if listen == "" {
+		return "", fmt.Errorf("live backup requires --admin-url or a listen address in the gateway config")
+	}
+	if strings.Contains(listen, "://") {
+		return strings.TrimRight(listen, "/"), nil
+	}
+	if strings.Contains(listen, "/") {
+		return "", fmt.Errorf("live backup cannot derive an admin URL from listen address %q; pass --admin-url", listen)
+	}
+	host := listen
+	if strings.HasPrefix(host, ":") {
+		host = "127.0.0.1" + host
+	}
+	return "http://" + host, nil
+}
+
+// fetchLiveSecuritySnapshot fetches one security-store snapshot from
+// the running gateway's admin endpoint. The admin key, when present,
+// is sent only as an x-admin-key header; an empty key relies on the
+// gateway's loopback keyless emergency rule, which the SERVER
+// enforces (this client never decides that itself). Every failure is
+// final and explicit: there is no fallback to opening the store file
+// (which would fail on the lock) and no raw copy. Error bodies are
+// truncated and never contain the key (the server's error envelope
+// carries no secrets).
+func fetchLiveSecuritySnapshot(adminURL, adminKey string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, adminURL+"/admin/api/security-snapshot", nil)
+	if err != nil {
+		return nil, fmt.Errorf("build live snapshot request: %w", err)
+	}
+	if strings.TrimSpace(adminKey) != "" {
+		req.Header.Set("x-admin-key", strings.TrimSpace(adminKey))
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("cannot reach the running gateway admin API at %s for a live snapshot (is the gateway running? no fallback to a stopped snapshot was attempted): %w", adminURL, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		detail, _ := io.ReadAll(io.LimitReader(resp.Body, 300))
+		switch resp.StatusCode {
+		case http.StatusUnauthorized, http.StatusForbidden:
+			return nil, fmt.Errorf("live snapshot rejected by gateway admin authentication (HTTP %d): check --admin-key; if the gateway's admin is OIDC-only, or the gateway is too old to offer live snapshots (an old gateway denies the unmapped admin path), stop the gateway and run backup without --live: %s", resp.StatusCode, strings.TrimSpace(string(detail)))
+		case http.StatusNotFound:
+			return nil, fmt.Errorf("live snapshot endpoint not found on the gateway (HTTP 404): the running gateway is too old to offer live snapshots — stop the gateway and run backup without --live")
+		case http.StatusNotImplemented:
+			return nil, fmt.Errorf("live snapshot not supported by the gateway's security store backend (HTTP 501): use backend-native backup tooling, or stop the gateway and run backup without --live if the backend is file-backed")
+		case http.StatusServiceUnavailable:
+			return nil, fmt.Errorf("gateway refused the live snapshot (HTTP 503): %s", strings.TrimSpace(string(detail)))
+		default:
+			return nil, fmt.Errorf("live snapshot request failed (HTTP %d): %s", resp.StatusCode, strings.TrimSpace(string(detail)))
+		}
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxBackupEntryBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("read live security snapshot: %w", err)
+	}
+	if int64(len(data)) > maxBackupEntryBytes {
+		return nil, fmt.Errorf("live security snapshot exceeds the %d-byte bundle entry limit; refusing to bundle a snapshot this backup could not restore", maxBackupEntryBytes)
+	}
+	return data, nil
 }
 
 // refuseOutputCollision rejects a backup output path that aliases any
