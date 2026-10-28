@@ -3,10 +3,12 @@
 ## Honesty notice — what this is and is not
 
 There is **no approved NexaFlow registry, runtime, editor, HTTP API, or UI
-on main**, and **no open NexaFlow pull request**. Earlier NexaFlow chats
-produced briefs only. This package therefore introduces the adapter
-registry itself as a **new, engine-agnostic package**,
-`internal/nexaflow`, and nothing else. It does **not** claim:
+on main**. This package introduces the adapter registry itself as a
+**new, engine-agnostic package**, `internal/nexaflow`, on the branch
+that carries it (PR #675, unmerged at the time of writing); the Phase 1
+foundation work (the workflow definition contract, ADR 0008, and the
+architecture document) is layered on the same branch. It does **not**
+claim:
 
 - a workflow runtime (scheduling/ticking, durable pause, per-iteration
   execution, run history);
@@ -57,7 +59,7 @@ headers — replaced, messages truncated to 512 chars, redaction
 recursion depth-bounded at 100). Cancellation propagates through
 context; a cancelled run reports code `cancelled` and never a partial
 success. The package itself never retries: `Retry.MaxAttempts`
-(clamped to 1..3 at registration) and `RetryableCodes` only declare
+(values outside 1..3 are rejected at registration, not clamped) and `RetryableCodes` only declare
 what a future runtime may safely retry, and a timeout is reported
 retryable only when the node's policy both allows more than one
 attempt and lists `timeout` — a timeout on a node that does not
