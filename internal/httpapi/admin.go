@@ -47,7 +47,12 @@ type providerForm struct {
 	// reads contain metadata only; an omitted entry secret must not erase the
 	// saved secret.
 	CredentialPool *credentialPoolUpdate `json:"credential_pool,omitempty"`
-	TestModels     []string              `json:"test_models,omitempty"`
+	// CredentialIndex, when set, restricts provider-test, connection-test
+	// and discovery to a single pool entry (the reveal endpoint's
+	// convention: pool index; omitted means the primary key). Out of
+	// range is a 400 and never leaks key material.
+	CredentialIndex *int     `json:"credential_index,omitempty"`
+	TestModels      []string `json:"test_models,omitempty"`
 	// Mode selects the probe depth: quick (default, availability),
 	// full (Level B capability suite) or claude_code (agent-loop
 	// simulation). See docs/COMPATIBILITY.md.
@@ -69,6 +74,12 @@ type credentialPoolEntry struct {
 	Enabled   *bool  `json:"enabled,omitempty"`
 	APIKey    string `json:"api_key,omitempty"`
 	APIKeyEnv string `json:"api_key_env,omitempty"`
+	// Email is metadata only and is surfaced masked, never in full.
+	Email string `json:"email,omitempty"`
+	// Priority/Weight drive adapter selection (minimum tier first,
+	// then Active/Weight tournament). Nil means "unchanged" on update.
+	Priority *int     `json:"priority,omitempty"`
+	Weight   *float64 `json:"weight,omitempty"`
 }
 
 type testResult struct {
@@ -77,6 +88,10 @@ type testResult struct {
 	StatusCode int    `json:"status_code"`
 	LatencyMS  int64  `json:"latency_ms"`
 	Error      string `json:"error,omitempty"`
+	// CredentialIndex/CredentialName name the single credential the
+	// test ran with, when credential_index was requested.
+	CredentialIndex *int   `json:"credential_index,omitempty"`
+	CredentialName  string `json:"credential_name,omitempty"`
 	// CapabilityReport is present for mode=full.
 	CapabilityReport *compat.ProbeReport `json:"capability_report,omitempty"`
 	// AgentReport is present for mode=claude_code.
@@ -113,6 +128,16 @@ func (s *Server) adminProviderCheck(w http.ResponseWriter, r *http.Request) {
 	normalizeProvider(&in.Provider)
 	if in.Provider.BaseURL == "" {
 		errorJSON(w, 400, "base_url is required")
+		return
+	}
+	if in.Provider.ModelsPath == "" {
+		// opencode-go (and any provider without a models endpoint):
+		// a reachability check against a bare base URL would report a
+		// misleading auth_ok. Say so instead of inventing one.
+		writeJSON(w, 200, map[string]any{
+			"ok": false, "reachable": false, "auth_ok": false,
+			"latency_ms": 0, "error": "provider type does not expose a models endpoint; use provider-test for a generation probe",
+		})
 		return
 	}
 	a, err := providers.NewAdapter(in.Provider, 8*time.Second)
@@ -646,6 +671,7 @@ func (s *Server) adminProviders(w http.ResponseWriter, r *http.Request) {
 		}
 		s.probe.Trigger()
 		writeJSON(w, 201, map[string]any{"saved": true, "provider": providerSummary(in.Provider)})
+		s.auditProviderMutation(r, "provider.created", in.Provider.ID, nil)
 	default:
 		errorJSON(w, 405, "method not allowed")
 	}
@@ -696,6 +722,9 @@ func (s *Server) adminProviderByID(w http.ResponseWriter, r *http.Request) {
 		p.Credentials = append([]config.CredentialConfig(nil), p.Credentials...)
 		for i := range p.Credentials {
 			p.Credentials[i].APIKey = ""
+			// Email is metadata but still personal data: only the
+			// masked form ever leaves the server on this surface.
+			p.Credentials[i].Email = providers.MaskEmail(p.Credentials[i].Email)
 		}
 		// Add masked placeholder for API key if secret exists
 		apiKeyMasked := ""
@@ -719,6 +748,18 @@ func (s *Server) adminProviderByID(w http.ResponseWriter, r *http.Request) {
 			"proxy_host":            proxyHost,
 			"proxy_display":         proxyDisplay,
 			"credential_count":      len(cfg.Providers[idx].ResolvedCredentials()),
+		}
+		// Live per-credential state is available only when a live
+		// adapter exists for this provider (enabled providers in the
+		// registry). Config-only paths never fake it: the field is
+		// simply absent when no adapter is live.
+		if a, ok := s.reg.Get(id); ok {
+			if cs, ok := a.(providers.CredentialStateProvider); ok {
+				payload["credential_states"] = cs.CredentialStates()
+				if sel, ok := cs.LastCredentialSelection(); ok {
+					payload["last_credential_selection"] = sel
+				}
+			}
 		}
 		writeJSON(w, 200, payload)
 
@@ -761,8 +802,17 @@ func (s *Server) adminProviderByID(w http.ResponseWriter, r *http.Request) {
 				in.Provider.APIKeyEnv = old.APIKeyEnv
 				in.Provider.Credentials = old.Credentials
 			} else if in.ReplaceKey {
-				// Explicit replacement: use new values from request (already in in.Provider)
-				// No action needed - new values are already set
+				// Explicit replacement: use new values from request (already in in.Provider).
+				// G7 guard: replacing the PRIMARY key alone must never
+				// wipe the pool. Without a credential_pool payload the
+				// submitted provider.credentials is the UI's empty
+				// placeholder (app.js sends [] when a new primary key
+				// is entered), not an instruction to clear the pool.
+				// Clearing the pool requires an explicit
+				// credential_pool {replace:true, entries:[]} payload.
+				if in.CredentialPool == nil {
+					in.Provider.Credentials = old.Credentials
+				}
 			} else if in.Provider.APIKey == maskedPlaceholder {
 				// Masked placeholder submitted without explicit replace_key: treat as untouched
 				in.Provider.APIKey = old.APIKey
@@ -797,6 +847,8 @@ func (s *Server) adminProviderByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.probe.Trigger()
+		poolIndices := changedPoolIndices(in.CredentialPool)
+		s.auditProviderMutation(r, "provider.updated", saved.ID, poolIndices)
 		writeJSON(w, 200, map[string]any{"saved": true, "provider": providerSummary(saved)})
 
 	case http.MethodDelete:
@@ -816,9 +868,33 @@ func (s *Server) adminProviderByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, 200, map[string]any{"deleted": true, "id": id})
+		s.auditProviderMutation(r, "provider.deleted", id, nil)
 	default:
 		errorJSON(w, 405, "method not allowed")
 	}
+}
+
+// changedPoolIndices lists the pool indices a credential_pool payload
+// touched (entries by index plus removals), for audit naming only.
+func changedPoolIndices(update *credentialPoolUpdate) []int {
+	if update == nil {
+		return nil
+	}
+	seen := map[int]bool{}
+	out := []int{}
+	for _, e := range update.Entries {
+		if e.Index != nil && !seen[*e.Index] {
+			seen[*e.Index] = true
+			out = append(out, *e.Index)
+		}
+	}
+	for _, i := range update.Remove {
+		if !seen[i] {
+			seen[i] = true
+			out = append(out, i)
+		}
+	}
+	return out
 }
 
 func (s *Server) adminProviderTest(w http.ResponseWriter, r *http.Request) {
@@ -837,11 +913,16 @@ func (s *Server) adminProviderTest(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 400, "provider id and base_url are required")
 		return
 	}
-	if in.Provider.Type != "openai_compatible" && in.Provider.Type != "anthropic_compatible" && in.Provider.Type != "gemini" && in.Provider.Type != "openai_responses" && in.Provider.Type != "azure_openai" && in.Provider.Type != "vertex" && in.Provider.Type != "bedrock" {
+	if in.Provider.Type != "openai_compatible" && in.Provider.Type != "anthropic_compatible" && in.Provider.Type != "gemini" && in.Provider.Type != "openai_responses" && in.Provider.Type != "azure_openai" && in.Provider.Type != "vertex" && in.Provider.Type != "bedrock" && in.Provider.Type != "opencode-console" && in.Provider.Type != "opencode-go" {
 		errorJSON(w, 400, "unsupported provider type")
 		return
 	}
-	a, err := providers.NewAdapter(in.Provider, 10*time.Second)
+	testProvider, credName, err := singleCredentialProvider(in.Provider, in.CredentialIndex)
+	if err != nil {
+		errorJSON(w, 400, err.Error())
+		return
+	}
+	a, err := providers.NewAdapter(testProvider, 10*time.Second)
 	if err != nil {
 		errorJSON(w, 400, err.Error())
 		return
@@ -940,6 +1021,12 @@ func (s *Server) adminProviderTest(w http.ResponseWriter, r *http.Request) {
 	if parentCtx.Err() != nil {
 		return
 	}
+	if in.CredentialIndex != nil {
+		for i := range results {
+			results[i].CredentialIndex = in.CredentialIndex
+			results[i].CredentialName = credName
+		}
+	}
 	passed := 0
 	for _, x := range results {
 		if x.OK {
@@ -965,12 +1052,22 @@ func (s *Server) adminProviderDiscover(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 400, "base_url is required")
 		return
 	}
-	models, status, err := discoverModels(r.Context(), in.Provider)
+	discoverProvider, credName, err := singleCredentialProvider(in.Provider, in.CredentialIndex)
+	if err != nil {
+		errorJSON(w, 400, err.Error())
+		return
+	}
+	models, status, err := discoverModels(r.Context(), discoverProvider)
 	if err != nil {
 		writeJSON(w, 200, map[string]any{"ok": false, "status_code": status, "models": []string{}, "error": err.Error()})
 		return
 	}
-	writeJSON(w, 200, map[string]any{"ok": true, "status_code": status, "models": models})
+	resp := map[string]any{"ok": true, "status_code": status, "models": models}
+	if in.CredentialIndex != nil {
+		resp["credential_index"] = *in.CredentialIndex
+		resp["credential_name"] = credName
+	}
+	writeJSON(w, 200, resp)
 }
 
 // snapshotConfigProviders builds the minimal provider shape the admin
@@ -1197,6 +1294,17 @@ func applyCredentialPoolUpdate(old []config.CredentialConfig, update credentialP
 		}
 		if entry.Enabled != nil {
 			out.Enabled = *entry.Enabled
+		}
+		// Email is metadata only; a non-empty value updates it, an
+		// omitted value leaves the stored value unchanged.
+		if entry.Email != "" {
+			out.Email = strings.TrimSpace(entry.Email)
+		}
+		if entry.Priority != nil {
+			out.Priority = *entry.Priority
+		}
+		if entry.Weight != nil {
+			out.Weight = *entry.Weight
 		}
 		if entry.APIKey != "" {
 			out.APIKey, out.APIKeyEnv = entry.APIKey, ""
