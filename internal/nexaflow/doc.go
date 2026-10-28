@@ -21,6 +21,15 @@
 // still belong to their existing stores. Adapters call those subsystems
 // through the Backend port interface; they do not reimplement them.
 //
+// Phase 7 hardening (2026-10-28) landed in this package only: secret
+// redaction gaps, credential-header smuggling, video path injection,
+// MCP server scoping, gateway redirect handling, ambiguous billable
+// timeouts, approval identity, config bounds, malformed numbers, and
+// template placeholder substitution (which previously never resolved).
+// The full findings matrix, including guarantees that still cannot be
+// claimed without a runtime, API, or store, is in
+// docs/nexaflow-node-adapters.md ("Phase 7 security findings matrix").
+//
 // Explicitly NOT implemented here:
 //   - a workflow runtime (scheduling, ticking, durable pause, per-iteration
 //     execution): schedule/loop/approval nodes expose pure computations or

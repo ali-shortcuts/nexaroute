@@ -5,10 +5,34 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/ali-shortcuts/nexaroute/internal/authz"
 )
+
+// MaxConfigBytes bounds every node config at Execute time. Input bytes
+// were already bounded per node, but config was not: an unbounded config
+// (for example a giant MCP allowlist) is untrusted workflow data too.
+// 256 KiB is far above any legitimate node config in this registry.
+const MaxConfigBytes = 256 << 10
+
+// isFinite reports whether f is a usable number for a bound check. NaN
+// and infinities defeat every "<" / ">" comparison, so a NaN bound or
+// threshold would otherwise pass validation and then corrupt a duration
+// conversion or a JSON output (which cannot encode NaN at all).
+func isFinite(f float64) bool {
+	return !math.IsNaN(f) && !math.IsInf(f, 0)
+}
+
+func retryableCode(codes []string, code string) bool {
+	for _, c := range codes {
+		if c == code {
+			return true
+		}
+	}
+	return false
+}
 
 // SupportedVersion is the only node schema version this registry accepts.
 // Unknown versions are rejected fail-closed by Lookup and Execute.
@@ -261,10 +285,18 @@ func jsonByteLen(v any) int {
 
 // Execute runs one node with all cross-cutting guards applied, in order:
 // authentication, permission, operator policy, config/input validation,
-// input byte bound, per-node timeout, output byte bound, secret-safe
-// output and errors. Cancellation is honoured via the caller's context
-// and the per-node timeout context; a cancelled run reports code
+// config and input byte bounds, per-node timeout, output byte bound,
+// secret-safe output and errors. Cancellation is honoured via the caller's
+// context and the per-node timeout context; a cancelled run reports code
 // "cancelled" and never a partial success.
+//
+// Retryability is the node's declared policy, not the failure's shape: a
+// timeout is reported retryable only when the node's Retry policy both
+// allows more than one attempt and lists "timeout". A billable node that
+// timed out has an AMBIGUOUS outcome (the upstream call may already have
+// executed and billed), so a runtime that retried on the bare "timeout"
+// code would risk double billing; Execute never marks such a timeout
+// retryable unless the node explicitly declares it safe.
 func (r *Registry) Execute(ctx context.Context, spec *NodeSpec, principal authz.Identity, input, config map[string]any, backend Backend, policyApproved bool) (map[string]any, error) {
 	if spec == nil {
 		return nil, NewNodeError("node_not_found", false, "nil node spec")
@@ -287,6 +319,9 @@ func (r *Registry) Execute(ctx context.Context, spec *NodeSpec, principal authz.
 	if err := r.ValidateConfig(spec, config); err != nil {
 		return nil, err
 	}
+	if jsonByteLen(config) > MaxConfigBytes {
+		return nil, NewNodeError("config_too_large", false, "config exceeds %d bytes", MaxConfigBytes)
+	}
 	if err := validateAgainstSchema(input, spec.InputSchema, "input"); err != nil {
 		return nil, err
 	}
@@ -308,7 +343,8 @@ func (r *Registry) Execute(ctx context.Context, spec *NodeSpec, principal authz.
 			return nil, NewNodeError("cancelled", false, "node %q execution cancelled", spec.ID)
 		}
 		if errors.Is(runCtx.Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
-			return nil, NewNodeError("timeout", true, "node %q timed out after %s", spec.ID, timeout)
+			retryable := spec.Retry.MaxAttempts > 1 && retryableCode(spec.Retry.RetryableCodes, "timeout")
+			return nil, NewNodeError("timeout", retryable, "node %q timed out after %s", spec.ID, timeout)
 		}
 		return nil, asNodeError(err)
 	}

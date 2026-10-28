@@ -2,6 +2,7 @@ package nexaflow
 
 import (
 	"fmt"
+	"strings"
 )
 
 // Template is a starter workflow definition: an ordered list of node
@@ -38,9 +39,17 @@ type TemplateNode struct {
 }
 
 // Instantiate resolves placeholders and enforces the inertness contract:
-// every declared placeholder must be supplied, and a policy-requiring
-// template requires policyApproved. On any failure it returns an error
-// and no definition. It never executes a node.
+// every declared placeholder must be supplied, every referenced node
+// must exist in the registry, and a policy-requiring template requires
+// policyApproved. On any failure it returns an error and no definition.
+// It never executes a node.
+//
+// Substitution replaces every "{{name}}" occurrence in a config string,
+// not only whole-string matches: the previous exact-match behaviour left
+// embedded placeholders (for example a URL containing "{{notify_url}}")
+// unresolved, and the runtime would then act on the literal placeholder
+// text. Any placeholder pattern left after substitution is an error,
+// never a value to execute against.
 func (t Template) Instantiate(placeholders map[string]string, policyApproved bool) (Template, error) {
 	if t.RequiresPolicy && !policyApproved {
 		return Template{}, fmt.Errorf("nexaflow: template %q requires explicit operator policy approval", t.ID)
@@ -50,17 +59,28 @@ func (t Template) Instantiate(placeholders map[string]string, policyApproved boo
 			return Template{}, fmt.Errorf("nexaflow: template %q placeholder %q is not filled", t.ID, name)
 		}
 	}
+	reg := DefaultRegistry()
 	resolved := t
 	resolved.Nodes = make([]TemplateNode, len(t.Nodes))
 	for i, node := range t.Nodes {
+		if _, err := reg.Lookup(node.NodeID, node.Version); err != nil {
+			return Template{}, fmt.Errorf("nexaflow: template %q references unknown node %q: %w", t.ID, node.NodeID, err)
+		}
 		cfg := make(map[string]any, len(node.Config))
 		for k, v := range node.Config {
 			if s, ok := v.(string); ok {
+				// Substitution was previously computed into s and then
+				// discarded (cfg[k] = v stored the original): templates
+				// "instantiated" but no placeholder ever resolved, so a
+				// runtime would have executed literal "{{...}}" text.
 				for name, val := range placeholders {
-					if s == "{{"+name+"}}" {
-						s = val
-					}
+					s = strings.ReplaceAll(s, "{{"+name+"}}", val)
 				}
+				if strings.Contains(s, "{{") && strings.Contains(s, "}}") {
+					return Template{}, fmt.Errorf("nexaflow: template %q config %q leaves an unresolved placeholder", t.ID, k)
+				}
+				cfg[k] = s
+				continue
 			}
 			cfg[k] = v
 		}

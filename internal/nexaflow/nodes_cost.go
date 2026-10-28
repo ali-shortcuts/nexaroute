@@ -111,7 +111,7 @@ func runBudgetCheck(ctx context.Context, rc *RunContext) (map[string]any, error)
 		return nil, NewNodeError("validation_error", false, "input key is required")
 	}
 	threshold, ok := getNumber(rc.Input, "threshold_usd")
-	if !ok || threshold < 0 {
+	if !ok || !isFinite(threshold) || threshold < 0 {
 		return nil, NewNodeError("validation_error", false, "threshold_usd is required and must be >= 0")
 	}
 	info, err := rc.Backend.BudgetSnapshot(ctx, key)
