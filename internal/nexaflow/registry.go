@@ -27,8 +27,8 @@ const (
 	SideEffectIrreversible SideEffect = "irreversible"
 )
 
-// RetryPolicy bounds retries for a node. MaxAttempts is clamped to [1,3]
-// at registration; RetryableCodes names the NodeError codes that may be
+// RetryPolicy bounds retries for a node. MaxAttempts outside [1,3] is
+// rejected at registration (not clamped); RetryableCodes names the NodeError codes that may be
 // retried by a runtime. This package itself never retries: retry is the
 // runtime's job, and the policy only declares what is safe to retry.
 type RetryPolicy struct {

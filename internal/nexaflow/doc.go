@@ -1,14 +1,16 @@
 // Package nexaflow is an engine-agnostic adapter registry for NexaFlow.
 //
 // HONESTY NOTICE — READ FIRST: as of main e6c3cdf there is no approved
-// NexaFlow registry, runtime, editor, HTTP API, or UI in this repository,
-// and no open NexaFlow pull request. The three earlier NexaFlow chats
-// produced briefs only. This package therefore introduces the adapter
-// registry itself as a new package, internal/nexaflow, and NOTHING ELSE.
-// It does not claim runtime execution, HTTP API wiring, or UI integration.
-// Wiring a workflow runtime, an HTTP surface, or an editor on top of this
-// registry is an explicit follow-up, and the httpapi Server fields are
-// unexported, so server-side wiring must land in package httpapi itself.
+// NexaFlow registry, runtime, editor, HTTP API, or UI in this repository.
+// This package introduces the adapter registry itself as a new package,
+// internal/nexaflow, on the branch that carries it (PR #675, unmerged
+// at the time of writing); the Phase 1 foundation work (the workflow
+// definition contract in workflow.go, ADR 0008, and the architecture
+// document) is layered on the same branch. It does not claim runtime
+// execution, HTTP API wiring, or UI integration. Wiring a workflow
+// runtime, an HTTP surface, or an editor on top of this registry is an
+// explicit follow-up, and the httpapi Server fields are unexported, so
+// server-side wiring must land in package httpapi itself.
 //
 // What this package does: it adapts existing, verified NexaRoute
 // capabilities behind a versioned node registry. Every node declares a
