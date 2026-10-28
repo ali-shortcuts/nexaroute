@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"strings"
 	"sync"
 	"time"
@@ -62,9 +63,14 @@ type Engine struct {
 	audit   AuditSink
 	opts    EngineOptions
 
-	mu              sync.Mutex
-	inflight        map[string]context.CancelFunc
-	runLocks        map[string]*sync.Mutex
+	mu       sync.Mutex
+	inflight map[string]context.CancelFunc
+	// Striped per-run persist locks: a cached map of one mutex per run
+	// id would grow without bound over a gateway's lifetime, and
+	// deleting entries would break mutual exclusion. Striping bounds
+	// the memory; distinct runs sharing a stripe merely serialize
+	// their persists briefly.
+	locks           [64]sync.Mutex
 	sem             chan struct{}
 	owner           string
 	webhookVerifier *WebhookVerifier
@@ -110,7 +116,6 @@ func NewEngine(reg *Registry, store Store, backend Backend, audit AuditSink, opt
 	return &Engine{
 		reg: reg, store: store, backend: backend, audit: audit, opts: opts,
 		inflight:        make(map[string]context.CancelFunc),
-		runLocks:        make(map[string]*sync.Mutex),
 		sem:             make(chan struct{}, opts.MaxConcurrentRuns),
 		owner:           "engine_" + opts.ID(),
 		webhookVerifier: NewWebhookVerifier(),
@@ -120,14 +125,9 @@ func NewEngine(reg *Registry, store Store, backend Backend, audit AuditSink, opt
 func (e *Engine) now() time.Time { return e.opts.Now() }
 
 func (e *Engine) runLock(id string) *sync.Mutex {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	m, ok := e.runLocks[id]
-	if !ok {
-		m = &sync.Mutex{}
-		e.runLocks[id] = m
-	}
-	return m
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(id))
+	return &e.locks[h.Sum32()%uint32(len(e.locks))]
 }
 
 func (e *Engine) emit(actor, action, definitionID, runID string, success bool, detail string) {

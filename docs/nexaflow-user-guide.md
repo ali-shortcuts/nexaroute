@@ -230,7 +230,10 @@ first interval tick fires immediately. Schedule identity
 republishing does not reset the fire clock; renaming a trigger
 instance creates a new schedule. Runs execute as the system
 `system:nexaflow` principal; per-node permissions are still
-enforced.
+enforced. Note that a tick dispatches synchronously: a scheduled
+run with a long wait node holds its tick (and a manual tick
+request) until that run suspends or finishes. Keep scheduled
+workflows short, or drive long ones through manual runs.
 
 ## Approval and restart
 
