@@ -10,7 +10,9 @@ import (
 )
 
 // fakeMCPGateway answers JSON-RPC tools/list and tools/call the way the
-// real gateway broker does: namespaced tool names.
+// real gateway broker does: namespaced tool names. Since Phase 7,
+// GatewayClient itself strips list prefixes and namespaces calls;
+// this test pins the end-to-end behavior through the composite.
 func fakeMCPGateway(t *testing.T) (*httptest.Server, *[]map[string]any) {
 	t.Helper()
 	var calls []map[string]any

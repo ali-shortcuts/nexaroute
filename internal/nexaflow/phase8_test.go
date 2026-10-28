@@ -659,16 +659,24 @@ func TestPhase8LLMThroughFakeRouter(t *testing.T) {
 	}
 }
 
-func TestPhase8LLMTimeoutRetry(t *testing.T) {
+func TestPhase8LLMTimeoutNotRetried(t *testing.T) {
+	// Phase 7 hardening: the LLM node is never retried. A timeout on a
+	// billable chat call is an ambiguous outcome (the gateway may
+	// already have executed and billed it) and the node sends no
+	// idempotency key, so no retry can prove it is not a duplicate
+	// bill. Retry proof lives on cost.usage (TestPhase8RetryThenSuccess).
 	ctx := context.Background()
 	st := NewMemoryStore()
 	be := newCountingBackend()
 	be.chatFails = 1
 	publishDef(t, ctx, st, llmDef("wf-llm-retry", true))
 	run := startManual(t, ctx, testEngine(st, be), "wf-llm-retry", nil)
-	mustStatus(t, run, RunSucceeded)
-	if be.chatCalls != 2 {
-		t.Fatalf("chat calls = %d, want 2 (1 timeout + 1 success)", be.chatCalls)
+	mustStatus(t, run, RunFailed)
+	if be.chatCalls != 1 {
+		t.Fatalf("chat calls = %d, want exactly 1 (no LLM retry)", be.chatCalls)
+	}
+	if run.Error == nil || run.Error.Code != "timeout" {
+		t.Fatalf("run error = %v, want timeout", run.Error)
 	}
 }
 

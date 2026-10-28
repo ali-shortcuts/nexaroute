@@ -786,7 +786,9 @@ func (e *Engine) runWithRetries(ctx context.Context, run *Run, def *Definition, 
 			if ctx.Err() != nil || ne.Code == "cancelled" {
 				return batchResult{node: node, steps: steps, err: ne}
 			}
-			if ne.Retryable && retryableCode(spec, ne.Code) && attempt < maxAttempts {
+			// An empty RetryableCodes list means any retryable code
+			// (the registry helper alone would reject all of them).
+			if ne.Retryable && (len(spec.Retry.RetryableCodes) == 0 || retryableCode(spec.Retry.RetryableCodes, ne.Code)) && attempt < maxAttempts {
 				select {
 				case <-ctx.Done():
 					return batchResult{node: node, steps: steps, err: NewNodeError("cancelled", false, "run cancelled")}
@@ -802,18 +804,6 @@ func (e *Engine) runWithRetries(ctx context.Context, run *Run, def *Definition, 
 		return batchResult{node: node, steps: steps, output: out}
 	}
 	return batchResult{node: node, steps: steps, err: lastErr}
-}
-
-func retryableCode(spec *NodeSpec, code string) bool {
-	if len(spec.Retry.RetryableCodes) == 0 {
-		return true
-	}
-	for _, c := range spec.Retry.RetryableCodes {
-		if c == code {
-			return true
-		}
-	}
-	return false
 }
 
 // applyBatch appends batch steps in definition order, updates outputs, and

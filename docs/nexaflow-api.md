@@ -187,7 +187,8 @@ shapes that most often surprise authors:
 - `nexaroute.llm.chat`: config `route_or_alias` (required) +
   optional `max_tokens`, `temperature`; input `messages` or
   `prompt`. Requires operator policy approval; permission
-  `routing.read`. Retries timeouts only (2 attempts in this tree).
+  `routing.read`. Never retried (Phase 7 hardening: a timeout on a
+  billable call is ambiguous and the node sends no idempotency key).
 - `nexaroute.mcp.call`: input `server_id`, `tool`, optional
   `arguments`; config `allowlist` (required, entries are bare tool
   names or `server__tool`). The tool must be in both the allowlist

@@ -76,37 +76,23 @@ func (b *RuntimeBackend) RunEvalReplay(ctx context.Context, suiteID, deploymentI
 	return b.Eval.RunEvalReplay(ctx, suiteID, deploymentID, outcomes)
 }
 
-// MCPList translates the gateway's namespaced tool names back to the
-// bare names the node contract uses: the gateway lists every server's
-// tools as "<server>__<tool>", while the mcp.call node checks its
-// allowlist and the gateway listing against the bare tool name for the
-// requested server. Tools of other servers are dropped, never exposed.
+// MCPList and MCPCall delegate directly: since Phase 7 hardening,
+// GatewayClient itself scopes listings to the requested server
+// (filtering "<server>__<tool>" names and stripping the prefix) and
+// namespaces calls (the broker rejects bare names). Translating again
+// here would double-strip or double-namespace and break the contract.
 func (b *RuntimeBackend) MCPList(ctx context.Context, serverID string) ([]MCPTool, error) {
 	if b.Gateway == nil {
 		return nil, backendUnavailable("gateway client")
 	}
-	tools, err := b.Gateway.MCPList(ctx, serverID)
-	if err != nil {
-		return nil, err
-	}
-	prefix := serverID + "__"
-	out := make([]MCPTool, 0, len(tools))
-	for _, t := range tools {
-		if strings.HasPrefix(t.Name, prefix) {
-			t.Name = strings.TrimPrefix(t.Name, prefix)
-			out = append(out, t)
-		}
-	}
-	return out, nil
+	return b.Gateway.MCPList(ctx, serverID)
 }
 
-// MCPCall namespaces the tool name the way the gateway broker requires:
-// tools/call rejects bare names with "tool name must be namespaced".
 func (b *RuntimeBackend) MCPCall(ctx context.Context, serverID, tool string, args map[string]any) (map[string]any, error) {
 	if b.Gateway == nil {
 		return nil, backendUnavailable("gateway client")
 	}
-	return b.Gateway.MCPCall(ctx, serverID, serverID+"__"+tool, args)
+	return b.Gateway.MCPCall(ctx, serverID, tool, args)
 }
 
 func (b *RuntimeBackend) VideoSubmit(ctx context.Context, req VideoSubmitRequest) (VideoJobInfo, error) {
