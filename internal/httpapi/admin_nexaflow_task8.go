@@ -191,29 +191,60 @@ func (s *Server) adminNexaflowDefinitionByID(w http.ResponseWriter, r *http.Requ
 	}
 	id := parts[0]
 	ctx := r.Context()
+	// Known sub-resource shapes answer 405 for a wrong method (so the
+	// OpenAPI method-set contract can distinguish "route exists, wrong
+	// method" from "no such route"); only unknown shapes answer 404.
+	shape := ""
 	switch {
-	case len(parts) == 1 && r.Method == http.MethodGet:
+	case len(parts) == 1:
+		shape = "draft"
+	case len(parts) == 2 && parts[1] == "publish":
+		shape = "publish"
+	case len(parts) == 2 && parts[1] == "versions":
+		shape = "versions"
+	case len(parts) == 3 && parts[1] == "versions":
+		shape = "version"
+	case len(parts) == 2 && parts[1] == "runs":
+		shape = "runs"
+	}
+	switch shape {
+	case "":
+		errorJSON(w, http.StatusNotFound, "not found")
+		return
+	case "draft":
+		if !s.nexaflowRequireMethod(w, r, http.MethodGet) {
+			return
+		}
 		def, err := s.nexaflow.GetDraft(ctx, id)
 		if err != nil {
 			errorJSON(w, nexaflowErrStatus(err), err.Error())
 			return
 		}
 		writeJSON(w, http.StatusOK, def)
-	case len(parts) == 2 && parts[1] == "publish" && r.Method == http.MethodPost:
+	case "publish":
+		if !s.nexaflowRequireMethod(w, r, http.MethodPost) {
+			return
+		}
 		pub, err := s.nexaflow.Publish(ctx, id, identity)
 		if err != nil {
 			errorJSON(w, nexaflowErrStatus(err), err.Error())
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"definition_id": id, "revision": pub.Version.Revision, "status": pub.Version.Status})
-	case len(parts) == 2 && parts[1] == "versions" && r.Method == http.MethodGet:
+	case "versions":
+		if !s.nexaflowRequireMethod(w, r, http.MethodGet) {
+			return
+		}
 		revs, err := s.nexaflow.ListRevisions(ctx, id)
 		if err != nil {
 			errorJSON(w, nexaflowErrStatus(err), err.Error())
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"versions": revs})
-	case len(parts) == 3 && parts[1] == "versions" && r.Method == http.MethodGet:
+	case "version":
+		if !s.nexaflowRequireMethod(w, r, http.MethodGet) {
+			return
+		}
 		rev, err := strconv.ParseUint(parts[2], 10, 64)
 		if err != nil {
 			errorJSON(w, http.StatusBadRequest, "invalid revision")
@@ -225,7 +256,10 @@ func (s *Server) adminNexaflowDefinitionByID(w http.ResponseWriter, r *http.Requ
 			return
 		}
 		writeJSON(w, http.StatusOK, pub)
-	case len(parts) == 2 && parts[1] == "runs" && r.Method == http.MethodPost:
+	case "runs":
+		if !s.nexaflowRequireMethod(w, r, http.MethodPost) {
+			return
+		}
 		var body struct {
 			Revision       uint64         `json:"revision"`
 			Input          map[string]any `json:"input"`
@@ -256,8 +290,6 @@ func (s *Server) adminNexaflowDefinitionByID(w http.ResponseWriter, r *http.Requ
 			return
 		}
 		writeJSON(w, http.StatusCreated, nexaflowRunSummary(run))
-	default:
-		errorJSON(w, http.StatusNotFound, "not found")
 	}
 }
 
@@ -298,8 +330,25 @@ func (s *Server) adminNexaflowRunByID(w http.ResponseWriter, r *http.Request) {
 	}
 	id := parts[0]
 	ctx := r.Context()
+	// Same 405-vs-404 discipline as the definitions handler: known
+	// shapes with a wrong method answer 405, unknown shapes 404.
+	shape := ""
 	switch {
-	case len(parts) == 1 && r.Method == http.MethodGet:
+	case len(parts) == 1:
+		shape = "run"
+	case len(parts) == 2 && parts[1] == "approve":
+		shape = "approve"
+	case len(parts) == 2 && parts[1] == "cancel":
+		shape = "cancel"
+	}
+	switch shape {
+	case "":
+		errorJSON(w, http.StatusNotFound, "not found")
+		return
+	case "run":
+		if !s.nexaflowRequireMethod(w, r, http.MethodGet) {
+			return
+		}
 		run, execs, err := s.nexaflow.GetRun(ctx, id, identity)
 		if err != nil {
 			errorJSON(w, nexaflowErrStatus(err), err.Error())
@@ -310,7 +359,10 @@ func (s *Server) adminNexaflowRunByID(w http.ResponseWriter, r *http.Request) {
 			nodes = append(nodes, nexaflowNodeView(e))
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"run": nexaflowRunSummary(run), "nodes": nodes, "definition": run.Definition})
-	case len(parts) == 2 && parts[1] == "approve" && r.Method == http.MethodPost:
+	case "approve":
+		if !s.nexaflowRequireMethod(w, r, http.MethodPost) {
+			return
+		}
 		var body struct {
 			NodeID   string `json:"node_id"`
 			Decision string `json:"decision"`
@@ -332,15 +384,16 @@ func (s *Server) adminNexaflowRunByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusOK, nexaflowRunSummary(run))
-	case len(parts) == 2 && parts[1] == "cancel" && r.Method == http.MethodPost:
+	case "cancel":
+		if !s.nexaflowRequireMethod(w, r, http.MethodPost) {
+			return
+		}
 		run, err := s.nexaflow.CancelRun(ctx, id, identity)
 		if err != nil {
 			errorJSON(w, nexaflowErrStatus(err), err.Error())
 			return
 		}
 		writeJSON(w, http.StatusOK, nexaflowRunSummary(run))
-	default:
-		errorJSON(w, http.StatusNotFound, "not found")
 	}
 }
 

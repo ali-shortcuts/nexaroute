@@ -22,6 +22,27 @@ import (
 // service, plus the disabled-by-default behaviour (scenario 1/12/15
 // at the HTTP layer; engine-level scenarios live in internal/nexaflow).
 
+// task8AttachProbeService attaches a canonical NexaFlow service
+// (memory store, no backend) to a probe server, mirroring the video
+// precedent in probeWebAPICall: the probe proves the route exists
+// exactly as production wiring does when the feature is enabled.
+// Pure-node workflows execute without a backend; backend nodes are
+// not exercised by the contract probes.
+func task8AttachProbeService(t *testing.T, srv *Server) {
+	t.Helper()
+	store := nexaflow.NewMemoryStore()
+	reg := nexaflow.DefaultRegistry()
+	engine, err := nexaflow.NewEngine(nexaflow.EngineOptions{Store: store, Registry: reg, Backend: nil, WorkerID: "probe"})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	svc, err := nexaflow.NewService(store, engine, reg, nil)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	srv.AttachNexaflow(svc)
+}
+
 func task8HTTPServer(t *testing.T) (*Server, string) {
 	t.Helper()
 	cfg := config.Default()
