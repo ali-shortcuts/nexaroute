@@ -34,6 +34,16 @@ type oidcTestFlow struct {
 	nonce     string
 	challenge string
 	groups    []string
+	// Security-review extensions (issue #647): azp overrides the
+	// default authorized-party claim ("" keeps the test client ID);
+	// omitAzp drops azp entirely; iatOffset shifts issued-at;
+	// nbfUnix, when nonzero, adds a not-before claim; unsigned
+	// returns an alg=none token instead of a signed one.
+	azp       string
+	omitAzp   bool
+	iatOffset time.Duration
+	nbfUnix   int64
+	unsigned  bool
 }
 
 type inProcessOIDCProvider struct {
@@ -222,13 +232,27 @@ func (p *inProcessOIDCProvider) signedIDToken(flow oidcTestFlow) (string, error)
 	case "bad-signature":
 		signingKey = p.wrongKey
 	}
+	azp := testOIDCClientID
+	if flow.azp != "" {
+		azp = flow.azp
+	}
 	claims := map[string]any{
-		"iss": issuer, "sub": "oidc-user-123", "aud": audience, "azp": testOIDCClientID,
-		"iat": now.Unix(), "exp": expiry, "nonce": nonce, "groups": flow.groups,
+		"iss": issuer, "sub": "oidc-user-123", "aud": audience,
+		"iat": now.Add(flow.iatOffset).Unix(), "exp": expiry, "nonce": nonce, "groups": flow.groups,
+	}
+	if !flow.omitAzp {
+		claims["azp"] = azp
+	}
+	if flow.nbfUnix != 0 {
+		claims["nbf"] = flow.nbfUnix
 	}
 	payload, err := json.Marshal(claims)
 	if err != nil {
 		return "", err
+	}
+	if flow.unsigned {
+		header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"none","typ":"JWT"}`))
+		return header + "." + base64.RawURLEncoding.EncodeToString(payload) + ".", nil
 	}
 	options := (&jose.SignerOptions{}).WithType("JWT").WithHeader(jose.HeaderKey("kid"), kid)
 	signer, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.RS256, Key: signingKey}, options)
