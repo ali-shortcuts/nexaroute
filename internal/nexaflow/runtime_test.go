@@ -2,6 +2,7 @@ package nexaflow
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -112,27 +113,61 @@ func TestRunApprovalApproveAndReject(t *testing.T) {
 func TestRunApprovalSelfApprovalFails(t *testing.T) {
 	svc := mustService(t)
 	g := Graph{
-		Inputs: []string{"requester"},
 		Nodes: []GraphNode{
 			{ID: "t1", Type: "nexaroute.trigger.manual"},
 			{ID: "a1", Type: "nexaroute.control.approval"},
 		},
 	}
 	w := mustWorkflow(t, svc, "self-approval", g)
-	// The requester is declared by the workflow (run input); the same
-	// subject approving must be rejected by the node.
-	run, err := svc.StartRun(w.ID, 0, map[string]any{"requester": "starter"}, false, testPrincipal)
+	run, err := svc.StartRun(w.ID, 0, map[string]any{}, false, testPrincipal)
 	if err != nil {
 		t.Fatal(err)
 	}
 	waitRun(t, svc, run.ID, RunAwaitingApproval, 10*time.Second)
-	// Approver == starter ("starter") must be rejected by the node.
+	// The requester is the authenticated run starter ("starter", from
+	// testPrincipal); the same subject approving must be rejected by
+	// the node, even though no requester was declared in the graph.
 	if _, err := svc.ApproveRun(run.ID, "approved", "starter"); err != nil {
 		t.Fatal(err)
 	}
 	got := waitRun(t, svc, run.ID, RunFailed, 10*time.Second)
 	if got.Nodes["a1"].ErrorCode != "validation_error" {
 		t.Fatalf("expected validation_error, got %+v", got.Nodes["a1"])
+	}
+	if !strings.Contains(got.Nodes["a1"].Error, "must not be the requester") {
+		t.Fatalf("expected self-approval error, got %q", got.Nodes["a1"].Error)
+	}
+}
+
+// Phase 7: a decision carried by run input is workflow-authored data
+// and must never mint an approval. The run must pause, and only an
+// authenticated ApproveRun by a different subject may release it.
+func TestRunApprovalInputDecisionCannotMintApproval(t *testing.T) {
+	svc := mustService(t)
+	g := Graph{
+		Inputs: []string{"decision", "approver", "requester"},
+		Nodes: []GraphNode{
+			{ID: "t1", Type: "nexaroute.trigger.manual"},
+			{ID: "a1", Type: "nexaroute.control.approval"},
+		},
+	}
+	w := mustWorkflow(t, svc, "input-decision", g)
+	run, err := svc.StartRun(w.ID, 0, map[string]any{
+		"decision": "approved", "approver": "boss", "requester": "someone-else",
+	}, false, testPrincipal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitRun(t, svc, run.ID, RunAwaitingApproval, 10*time.Second)
+	if _, err := svc.ApproveRun(run.ID, "approved", "boss"); err != nil {
+		t.Fatal(err)
+	}
+	got := waitRun(t, svc, run.ID, RunSucceeded, 10*time.Second)
+	if got.Nodes["a1"].Output["approved"] != true {
+		t.Fatalf("approved=%v, want true", got.Nodes["a1"].Output["approved"])
+	}
+	if got.Nodes["a1"].Output["approver"] != "boss" {
+		t.Fatalf("approver=%v, want boss", got.Nodes["a1"].Output["approver"])
 	}
 }
 

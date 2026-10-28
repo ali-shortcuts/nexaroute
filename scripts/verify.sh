@@ -39,6 +39,8 @@ if command -v chromium >/dev/null 2>&1 && python3 -c 'import playwright' >/dev/n
   python3 scripts/test-browser-e2e.py
   echo '== isolated #502 browser acceptance =='
   python3 scripts/test-browser-e2e-502.py
+  echo '== NexaFlow visual studio browser acceptance =='
+  python3 scripts/test-browser-nexaflow.py
   echo '== real browser Live Visual Agent acceptance =='
   python3 scripts/test-live-visual-agent.py
 else

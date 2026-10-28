@@ -227,7 +227,12 @@ def main() -> None:
                 page.locator('[data-wf="cancel-run"]').click()
                 expect_run_status("cancelled")
 
-                # 7. Approval gate: pause, approve, succeed.
+                # 7. Approval gate: pause, then the separation-of-duties
+                # rule. This keyless browser gateway has a single admin
+                # identity, so the approver IS the run starter and Phase 7
+                # must reject the approval honestly. The positive path
+                # (distinct approver succeeds) is covered by runtime and
+                # HTTP tests, where two identities can be expressed.
                 nav_workflows()
                 create_workflow("Approval Flow")
                 add_node("nexaroute.trigger.manual")
@@ -237,7 +242,9 @@ def main() -> None:
                 start_run('{}')
                 expect_run_status("awaiting_approval")
                 page.locator('[data-wf="approve-run"]').click()
-                expect_run_status("succeeded")
+                expect_run_status("failed")
+                expect(page.locator("#wf-run-panel")).to_contain_text(
+                    "must not be the requester")
 
                 browser.close()
                 # The app ships no favicon, so Chromium's automatic

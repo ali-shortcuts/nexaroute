@@ -25,11 +25,21 @@ import (
 // restart: approving or cancelling it after restart resumes or ends it
 // from the persisted record.
 //
-// Approval semantics: an approval node with no decision pauses the run
-// (status awaiting_approval). Approving continues execution; rejecting
-// continues with approved=false (the node succeeds with that value —
-// downstream nodes decide what a rejection means). Cancelling ends the
-// run. A rejected approval is NOT a run failure.
+// Approval semantics (Phase 7 compliant): an approval node ALWAYS
+// pauses the run (status awaiting_approval). Only an authenticated
+// ApproveRun decision executes it; a decision carried by an edge or a
+// run input is workflow-authored data and must never mint an approval,
+// so input-supplied decisions are ignored. At execution the runtime
+// binds approver = the ApproveRun caller's authenticated subject and
+// requester = the run's authenticated starter (StartedBy). The node
+// itself rejects anonymous or self-approval (approver == requester):
+// in a single-identity deployment (e.g. keyless emergency mode) the
+// starter cannot approve their own run — that is the registry's
+// separation-of-duties rule, surfaced as a run failure, not bypassed.
+// Approving continues execution; rejecting continues with
+// approved=false (the node succeeds with that value — downstream nodes
+// decide what a rejection means). Cancelling ends the run. A rejected
+// approval is NOT a run failure.
 
 type approvalDecision struct {
 	decision string
@@ -688,29 +698,27 @@ func (s *Service) runLoop(ctx context.Context, run *Run, active *activeRun) {
 		}
 		active.mu.Unlock()
 
-		// Approval pause: a decision supplied by edge or run input
-		// executes immediately; otherwise the run waits for ApproveRun.
+		// Approval pause (Phase 7): the node always waits for an
+		// authenticated ApproveRun decision. Edge/run-input decisions
+		// are deliberately ignored here — see the package doc above.
 		var decision *approvalDecision
 		if node.Type == "nexaroute.control.approval" {
-			input := s.buildInput(run, node, spec, outputs)
-			if d, ok := input["decision"].(string); !ok || strings.TrimSpace(d) == "" {
-				if active.seedDecision != nil {
-					decision = active.seedDecision
-					active.seedDecision = nil
-				} else {
-					active.mu.Lock()
-					run.Status = RunAwaitingApproval
-					run.PendingNodeID = nodeID
-					nr.Status = NodeAwaitingApproval
-					active.mu.Unlock()
-					s.persistRun(active, run)
-					select {
-					case d := <-active.approve:
-						decision = &d
-					case <-ctx.Done():
-						s.cancelRun(active, run)
-						return
-					}
+			if active.seedDecision != nil {
+				decision = active.seedDecision
+				active.seedDecision = nil
+			} else {
+				active.mu.Lock()
+				run.Status = RunAwaitingApproval
+				run.PendingNodeID = nodeID
+				nr.Status = NodeAwaitingApproval
+				active.mu.Unlock()
+				s.persistRun(active, run)
+				select {
+				case d := <-active.approve:
+					decision = &d
+				case <-ctx.Done():
+					s.cancelRun(active, run)
+					return
 				}
 			}
 		}
@@ -719,11 +727,10 @@ func (s *Service) runLoop(ctx context.Context, run *Run, active *activeRun) {
 		if decision != nil {
 			input["decision"] = decision.decision
 			input["approver"] = decision.approver
-			// Deliberately NOT inferred: the approval node rejects
-			// self-approval only "when both are present". If the
-			// workflow declares a requester (edge or run input) and
-			// the same subject approves, the node fails; otherwise
-			// a single-admin deployment can approve its own runs.
+			// Authenticated requester: the run starter. Any
+			// workflow-authored requester value from edges or run
+			// inputs is overwritten, never trusted.
+			input["requester"] = run.StartedBy
 		}
 		config := node.Config
 		if config == nil {

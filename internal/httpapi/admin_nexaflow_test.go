@@ -253,11 +253,19 @@ func TestNexaflowApprovalAndCancelOverHTTP(t *testing.T) {
 	var started map[string]any
 	decodeBody(t, rr, &started)
 	nexaflowPollRun(t, do, started["id"].(string), "awaiting_approval")
+	// This test client authenticates every call as the same admin
+	// identity, so the approver IS the run starter: Phase 7's
+	// separation-of-duties rule must reject it. The positive path
+	// (distinct approver) is covered at the runtime layer, where two
+	// identities can be expressed directly.
 	rr = do(http.MethodPost, "/admin/api/nexaflow/runs/"+started["id"].(string)+"/approve", `{"decision":"approved"}`)
 	if rr.Code != 200 {
 		t.Fatalf("approve: %d %s", rr.Code, rr.Body.String())
 	}
-	nexaflowPollRun(t, do, started["id"].(string), "succeeded")
+	failed := nexaflowPollRun(t, do, started["id"].(string), "failed")
+	if !strings.Contains(failed["error"].(string), "must not be the requester") {
+		t.Fatalf("expected self-approval failure, got %v", failed["error"])
+	}
 
 	// Cancel path: a long wait run.
 	waitDraft := `{"nodes":[

@@ -2316,7 +2316,7 @@ let modelTestResults = {};
         ${active ? '<button type="button" class="button ghost" data-wf="cancel-run">Cancel run</button>' : ''}
         <button type="button" class="button ghost" data-wf="refresh-run">Refresh</button>
       </div></div>
-      ${r.status === 'awaiting_approval' ? `<p class="wf-warn-box">Waiting for approval on node ${esc(r.pending_node_id || '')}. Approving continues the run; rejecting continues with approved=false.</p>` : ''}
+      ${r.status === 'awaiting_approval' ? `<p class="wf-warn-box">Waiting for approval on node ${esc(r.pending_node_id || '')}. Approving continues the run; rejecting continues with approved=false. Separation of duties applies: the approver must differ from the run starter, so a single-admin deployment cannot approve its own runs.</p>` : ''}
       ${r.error ? `<p class="wf-err-box">${esc(r.error)}</p>` : ''}
       ${r.input_preview ? `<details><summary>Run input preview (bounded, secret keys redacted${r.input_truncated ? ', truncated' : ''})</summary><pre class="wf-preview">${esc(r.input_preview)}</pre></details>` : ''}
       <div class="table-wrap"><table class="table"><thead><tr><th>Node</th><th>Type</th><th>Status</th><th>Attempts</th><th>Duration</th><th>Output preview</th><th>Error</th></tr></thead><tbody>${nodes || '<tr><td colspan="7">No node records yet.</td></tr>'}</tbody></table></div>
