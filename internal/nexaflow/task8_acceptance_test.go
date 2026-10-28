@@ -33,35 +33,35 @@ var (
 type task8FakeBackend struct {
 	mu sync.Mutex
 
-	chatCalls      int
-	chatResp       ChatResponse
-	chatErr        error
-	resolveErr     error
-	mcpTools       []MCPTool
-	mcpCallCalls   int
-	mcpCallErr     error
-	mcpCallResult  map[string]any
-	videoSubmit    int
-	videoJobs      map[string]VideoJobInfo
-	videoAssets    map[string][]byte
-	usageCalls     int
-	usageErrs      []error
-	usageSnap      UsageInfo
-	budgetSnap     BudgetInfo
-	httpCalls      int
-	httpResp       HTTPResponse
-	secretErr      error
-	healthErr      error
+	chatCalls     int
+	chatResp      ChatResponse
+	chatErr       error
+	resolveErr    error
+	mcpTools      []MCPTool
+	mcpCallCalls  int
+	mcpCallErr    error
+	mcpCallResult map[string]any
+	videoSubmit   int
+	videoJobs     map[string]VideoJobInfo
+	videoAssets   map[string][]byte
+	usageCalls    int
+	usageErrs     []error
+	usageSnap     UsageInfo
+	budgetSnap    BudgetInfo
+	httpCalls     int
+	httpResp      HTTPResponse
+	secretErr     error
+	healthErr     error
 }
 
 func newTask8FakeBackend() *task8FakeBackend {
 	return &task8FakeBackend{
-		chatResp:  ChatResponse{Model: "test-model", Text: "hello back", PromptTokens: 3, CompletionTokens: 5, TotalTokens: 8, ResolvedRoute: "test-route"},
-		mcpTools:  []MCPTool{{Name: "allowed-tool", Description: "allowed", InputSchema: map[string]any{}}},
-		videoJobs: map[string]VideoJobInfo{},
-		usageSnap: UsageInfo{TotalPromptTokens: 10, TotalCompletionTokens: 20, TotalRequests: 2, TotalEstimatedCostUSD: 0.5, TotalCostBasis: "recorded"},
+		chatResp:   ChatResponse{Model: "test-model", Text: "hello back", PromptTokens: 3, CompletionTokens: 5, TotalTokens: 8, ResolvedRoute: "test-route"},
+		mcpTools:   []MCPTool{{Name: "allowed-tool", Description: "allowed", InputSchema: map[string]any{}}},
+		videoJobs:  map[string]VideoJobInfo{},
+		usageSnap:  UsageInfo{TotalPromptTokens: 10, TotalCompletionTokens: 20, TotalRequests: 2, TotalEstimatedCostUSD: 0.5, TotalCostBasis: "recorded"},
 		budgetSnap: BudgetInfo{Key: "k", Committed: 1.5, Reserved: 0.5},
-		httpResp:  HTTPResponse{Status: 200, Body: []byte("ok"), Headers: map[string]string{}},
+		httpResp:   HTTPResponse{Status: 200, Body: []byte("ok"), Headers: map[string]string{}},
 	}
 }
 

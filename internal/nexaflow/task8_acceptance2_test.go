@@ -96,9 +96,9 @@ func TestTask8Scenario7_FallbackLimits(t *testing.T) {
 func TestTask8Scenario7_TimeoutAndCancel(t *testing.T) {
 	reg, err := NewRegistry(append(DefaultRegistry().All(), &NodeSpec{
 		ID: "test.slow", Version: SupportedVersion, Category: "test",
-		InputSchema:  []Field{},
-		OutputSchema: []Field{},
-		Retry:        RetryPolicy{MaxAttempts: 1},
+		InputSchema:    []Field{},
+		OutputSchema:   []Field{},
+		Retry:          RetryPolicy{MaxAttempts: 1},
 		DefaultTimeout: 50 * time.Millisecond, MaxTimeout: 50 * time.Millisecond,
 		MaxInputBytes: 1024, MaxOutputBytes: 1024,
 		Run: func(ctx context.Context, rc *RunContext) (map[string]any, error) {
@@ -621,9 +621,9 @@ func TestTask8Scenario11_RedactionAndTruncation(t *testing.T) {
 	}
 	reg, err := NewRegistry(append(DefaultRegistry().All(), &NodeSpec{
 		ID: "test.leaky", Version: SupportedVersion, Category: "test",
-		InputSchema:  []Field{},
-		OutputSchema: padFields,
-		Retry:        RetryPolicy{MaxAttempts: 1},
+		InputSchema:    []Field{},
+		OutputSchema:   padFields,
+		Retry:          RetryPolicy{MaxAttempts: 1},
 		DefaultTimeout: time.Second, MaxTimeout: time.Second,
 		MaxInputBytes: 1 << 20, MaxOutputBytes: 1 << 20,
 		Run: func(_ context.Context, rc *RunContext) (map[string]any, error) {
