@@ -23,9 +23,16 @@ import (
 )
 
 type credentialState struct {
-	Key           string
-	Failures      int
-	Active        int64
+	Key       string
+	Name      string
+	PoolIndex int
+	Priority  int
+	Weight    float64
+	Failures  int
+	Active    int64
+	// CooldownUntil is the temporary exclusion deadline. It never flips
+	// operator Enabled and never deletes the entry; expiry restores the
+	// credential with no operator action.
 	CooldownUntil time.Time
 	LastStatus    int
 }
@@ -83,11 +90,34 @@ type httpAdapter struct {
 	tokenLimitSeq             uint64
 	tokenRemainSeq            uint64
 	tokenResetSeq             uint64
+	// lastSel records the most recent credential choice for the
+	// redacted explain surface (tier / affinity / least-loaded).
+	lastSelMu sync.Mutex
+	lastSel   CredentialSelection
+	lastSelOK bool
 	// evaluationOnly marks an adapter clone reserved for Phase H live
 	// evaluation. Live evaluation refuses to run against a production adapter,
 	// so this flag is what makes "isolation bypassed" a hard failure.
 	evaluationOnly bool
+	// sessionPins maps a session SHA-256 (never a raw session key) to the
+	// credential index that session last used, with a TTL. A pinned
+	// credential is used only while it stays available; otherwise
+	// selection falls back to the tournament and re-pins. This is
+	// credential-level affinity, distinct from router deployment
+	// pinning and from the x-opencode-session header value.
+	sessionMu   sync.Mutex
+	sessionPins map[string]sessionPin
 }
+
+type sessionPin struct {
+	credIdx int
+	expires time.Time
+}
+
+const (
+	sessionPinTTL = time.Hour
+	sessionPinMax = 1024
+)
 
 func newHTTPAdapter(p config.ProviderConfig, timeout time.Duration) (*httpAdapter, error) {
 	return newHTTPAdapterWithRetryCap(p, timeout, 60*time.Second)
@@ -201,8 +231,8 @@ func newHTTPAdapterWithRetryCap(p config.ProviderConfig, timeout, retryAfterCap 
 			a.forwardAllowed[h] = struct{}{}
 		}
 	}
-	for _, k := range p.ResolvedCredentials() {
-		a.creds = append(a.creds, credentialState{Key: k})
+	for _, e := range p.ResolvedCredentialEntries() {
+		a.creds = append(a.creds, credentialState{Key: e.Key, Name: e.Name, PoolIndex: e.PoolIndex, Priority: e.Priority, Weight: e.Weight})
 	}
 	if p.Type == "bedrock" {
 		// SigV4 needs the key pair. The secret comes only from the
@@ -558,12 +588,20 @@ func (a *httpAdapter) DoPath(ctx context.Context, method, path string, payload [
 	if maxCredentialAttempts == 0 {
 		maxCredentialAttempts = 1
 	}
+	// Credential-level session affinity: the session hash (never the
+	// raw session key) pins consecutive requests of one conversation to
+	// one credential while it stays healthy+eligible. Absent context
+	// means no pin, never a synthetic session.
+	sessionHash := ""
+	if sk, ok := SessionKeyFromContext(ctx); ok {
+		sessionHash = SessionHash(sk)
+	}
 	for len(attempted) < maxCredentialAttempts {
 		idx := -1
 		key := ""
 		if len(a.creds) > 0 {
 			var ok bool
-			idx, key, ok = a.reserveCredential(attempted)
+			idx, key, ok = a.reserveCredentialWithSession(attempted, sessionHash)
 			if !ok {
 				if len(attempted) == 0 {
 					release()
@@ -601,6 +639,7 @@ func (a *httpAdapter) DoPath(ctx context.Context, method, path string, payload [
 			req.Header.Set("Accept", "text/event-stream")
 		}
 		a.applyHeaders(req, forward)
+		a.applyOpencodeSession(req, reqCtx, payload)
 		if ct := forward.Get("Content-Type"); ct != "" {
 			// Media uploads (multipart/form-data) must keep the
 			// client's content type — including its boundary — or the
@@ -661,7 +700,19 @@ func (a *httpAdapter) DoPath(ctx context.Context, method, path string, payload [
 				resp.Body = &cancelOnCloseBody{ReadCloser: resp.Body, cancel: cancel}
 			}
 		}
-		if idx >= 0 && credentialRetryStatus(resp.StatusCode) {
+		if idx >= 0 && IsOpencodeType(a.p.Type) && resp.StatusCode == http.StatusForbidden {
+			// Model-entitlement denial, NOT a credential failure: the
+			// credential is not cooled, and the loop below must not
+			// rotate to another credential for the same restricted
+			// model (that would be a bypass attempt). Only the last
+			// status is recorded, so the state surface can show the
+			// denial without poisoning other models on this key. The
+			// next request re-evaluates independently. A genuinely
+			// invalid opencode key returning 403 surfaces the same
+			// diagnostic on that request; see the docs limitation.
+			a.noteOpencodeEntitlementDenial(idx)
+		}
+		if idx >= 0 && credentialRetryStatus(resp.StatusCode) && !(IsOpencodeType(a.p.Type) && resp.StatusCode == http.StatusForbidden) {
 			a.cooldownCredential(idx, resp.StatusCode, resp.Header.Get("Retry-After"))
 			if a.hasAvailableCredential(attempted) {
 				body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
@@ -843,6 +894,62 @@ func (a *httpAdapter) observeRateLimitHeaders(h http.Header, dispatchSeq uint64)
 	}
 	return obs
 }
+
+// applyOpencodeSession injects the derived x-opencode-session header
+// for the Go profile only. A value already on the request (client-
+// supplied via ForwardHeaders, or an operator static header) is
+// forwarded UNCHANGED and never overwritten. Console never receives a
+// gateway-derived header. No session value is ever logged.
+func (a *httpAdapter) applyOpencodeSession(req *http.Request, ctx context.Context, payload []byte) {
+	if a.p.Type != "opencode-go" {
+		return
+	}
+	if req.Header.Get("x-opencode-session") != "" {
+		return
+	}
+	sessionKey, _ := SessionKeyFromContext(ctx)
+	req.Header.Set("x-opencode-session", DeriveOpencodeSessionValueCached(a.p, sessionKey, modelFromPayload(payload)))
+}
+
+// noteOpencodeEntitlementDenial records a model-restricted 403 on the
+// credential's last status only: no failure count, no cooldown, so
+// other models on the same key are not poisoned.
+func (a *httpAdapter) noteOpencodeEntitlementDenial(i int) {
+	a.credMu.Lock()
+	defer a.credMu.Unlock()
+	if i >= 0 && i < len(a.creds) {
+		a.creds[i].LastStatus = http.StatusForbidden
+	}
+}
+
+// CredentialStates returns the redacted live state of every adapter
+// credential: index, pool index, name, tier, weight, last status,
+// failures, in-flight count, and cooldown state. No keys, no emails.
+func (a *httpAdapter) CredentialStates() []CredentialState {
+	a.credMu.RLock()
+	defer a.credMu.RUnlock()
+	now := time.Now()
+	out := make([]CredentialState, 0, len(a.creds))
+	for i, c := range a.creds {
+		cooling := !c.CooldownUntil.IsZero() && now.Before(c.CooldownUntil)
+		out = append(out, CredentialState{
+			Index: i, PoolIndex: c.PoolIndex, Name: c.Name, Enabled: true,
+			Priority: c.Priority, Weight: credentialEffectiveWeight(c),
+			LastStatus: c.LastStatus, Failures: c.Failures, Active: c.Active,
+			Cooling: cooling, CooldownUntil: c.CooldownUntil,
+		})
+	}
+	return out
+}
+
+// LastCredentialSelection returns the redacted explanation of the most
+// recent credential choice, if any.
+func (a *httpAdapter) LastCredentialSelection() (CredentialSelection, bool) {
+	a.lastSelMu.Lock()
+	defer a.lastSelMu.Unlock()
+	return a.lastSel, a.lastSelOK
+}
+
 func (a *httpAdapter) applyHeaders(req *http.Request, forward http.Header) {
 	for k, v := range a.p.Headers {
 		req.Header.Set(k, v)
@@ -902,6 +1009,26 @@ func (a *httpAdapter) applyAuthKey(req *http.Request, key string) {
 }
 
 func (a *httpAdapter) reserveCredential(excluded map[int]bool) (int, string, bool) {
+	return a.reserveCredentialWithSession(excluded, "")
+}
+
+// reserveCredentialWithSession is the single credential-selection
+// discipline, in Stage C order:
+//  1. eligibility: not excluded, not cooling (cooldown expiry restores
+//     the credential with no operator action; Enabled=false entries
+//     never reach the adapter at all);
+//  2. minimum Priority tier among available credentials;
+//  3. credential-level session-affinity pin, only while the pinned
+//     credential is in the winning tier and available;
+//  4. the existing two-candidate tournament within the tier, with
+//     effective load Active/Weight (Weight<=0 counts as 1), then
+//     fewer Failures, then never-failed.
+//
+// With every Priority 0 and Weight 1 this reduces exactly to the
+// pre-opencode tournament: same eligible set, same seeding, same
+// tiebreaks. The choice reason is recorded for the redacted explain
+// surface; no key material is ever recorded.
+func (a *httpAdapter) reserveCredentialWithSession(excluded map[int]bool, sessionHash string) (int, string, bool) {
 	a.credMu.Lock()
 	defer a.credMu.Unlock()
 	now := time.Now()
@@ -917,24 +1044,118 @@ func (a *httpAdapter) reserveCredential(excluded map[int]bool) (int, string, boo
 	if len(available) == 0 {
 		return 0, "", false
 	}
-	chosen := available[0]
-	if len(available) > 1 {
-		aPos := int(a.rr % uint64(len(available)))         // #nosec G115 -- the modulo result is strictly less than len(available).
-		bPos := int((a.rr*7 + 1) % uint64(len(available))) // #nosec G115 -- the modulo result is strictly less than len(available).
-		if bPos == aPos {
-			bPos = (bPos + 1) % len(available)
+	minTier := a.creds[available[0]].Priority
+	for _, i := range available {
+		if a.creds[i].Priority < minTier {
+			minTier = a.creds[i].Priority
 		}
-		first := available[aPos]
-		second := available[bPos]
-		if credentialLessLoaded(a.creds[second], a.creds[first]) {
-			chosen = second
+	}
+	tier := make([]int, 0, len(available))
+	for _, i := range available {
+		if a.creds[i].Priority == minTier {
+			tier = append(tier, i)
+		}
+	}
+	chosen := -1
+	reason := "least-loaded"
+	if sessionHash != "" {
+		if pin, ok := a.sessionPinLocked(sessionHash, now); ok {
+			for _, i := range tier {
+				if i == pin && !excluded[i] {
+					chosen = i
+					reason = "affinity"
+					break
+				}
+			}
+		}
+	}
+	if chosen < 0 {
+		if len(tier) == 1 {
+			chosen = tier[0]
+			reason = "only-available"
 		} else {
+			aPos := int(a.rr % uint64(len(tier)))         // #nosec G115 -- the modulo result is strictly less than len(tier).
+			bPos := int((a.rr*7 + 1) % uint64(len(tier))) // #nosec G115 -- the modulo result is strictly less than len(tier).
+			if bPos == aPos {
+				bPos = (bPos + 1) % len(tier)
+			}
+			first := tier[aPos]
+			second := tier[bPos]
 			chosen = first
+			if credentialLessLoadedWeighted(a.creds[second], a.creds[first]) {
+				chosen = second
+			}
 		}
 	}
 	a.rr++
 	a.creds[chosen].Active++
+	if sessionHash != "" {
+		a.setSessionPinLocked(sessionHash, chosen, now)
+	}
+	sel := CredentialSelection{Index: chosen, PoolIndex: a.creds[chosen].PoolIndex, Name: a.creds[chosen].Name, Tier: minTier, Reason: reason}
+	a.lastSelMu.Lock()
+	a.lastSel = sel
+	a.lastSelOK = true
+	a.lastSelMu.Unlock()
 	return chosen, a.creds[chosen].Key, true
+}
+
+// sessionPinLocked reads a live pin. Caller holds no pin lock; this
+// helper takes sessionMu. It is only called from selection, which
+// holds credMu, so lock order is always credMu -> sessionMu.
+func (a *httpAdapter) sessionPinLocked(sessionHash string, now time.Time) (int, bool) {
+	a.sessionMu.Lock()
+	defer a.sessionMu.Unlock()
+	if a.sessionPins == nil {
+		return 0, false
+	}
+	pin, ok := a.sessionPins[sessionHash]
+	if !ok || !now.Before(pin.expires) {
+		return 0, false
+	}
+	return pin.credIdx, true
+}
+
+func (a *httpAdapter) setSessionPinLocked(sessionHash string, credIdx int, now time.Time) {
+	a.sessionMu.Lock()
+	defer a.sessionMu.Unlock()
+	if a.sessionPins == nil {
+		a.sessionPins = map[string]sessionPin{}
+	}
+	if len(a.sessionPins) >= sessionPinMax {
+		for k, p := range a.sessionPins {
+			if !now.Before(p.expires) {
+				delete(a.sessionPins, k)
+			}
+		}
+		for k := range a.sessionPins {
+			if len(a.sessionPins) < sessionPinMax {
+				break
+			}
+			delete(a.sessionPins, k)
+			break
+		}
+	}
+	a.sessionPins[sessionHash] = sessionPin{credIdx: credIdx, expires: now.Add(sessionPinTTL)}
+}
+
+func credentialEffectiveWeight(c credentialState) float64 {
+	if c.Weight <= 0 {
+		return 1
+	}
+	return c.Weight
+}
+
+func credentialLessLoadedWeighted(a, b credentialState) bool {
+	loadA := float64(a.Active) / credentialEffectiveWeight(a)
+	loadB := float64(b.Active) / credentialEffectiveWeight(b)
+	if loadA != loadB {
+		return loadA < loadB
+	}
+	if a.Failures != b.Failures {
+		return a.Failures < b.Failures
+	}
+	return a.LastStatus == 0 && b.LastStatus != 0
 }
 
 func credentialLessLoaded(a, b credentialState) bool {
