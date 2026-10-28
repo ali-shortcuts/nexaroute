@@ -25,6 +25,20 @@ support and write it at the top of the evidence report:
   `Operation not permitted`): record the blocker exactly
   and stop at the gate for the multi-host claim. The
   same-host steps below may still run, labelled as such.
+- Network-namespace attempt, 2026-10-28 (recorded in
+  `docs/reports/HA_ACCEPTANCE_LOOPBACK_2026-10-28.md`): `unshare -n`
+  plus veth creation, veth move into the holder namespace, and
+  in-namespace IP configuration all succeed — but every non-loopback
+  TCP/ICMP connection is refused with `Operation not permitted`,
+  from the host namespace and from inside the new namespace alike
+  (a user-namespace variant fails the same way), while loopback TCP
+  works. A sandbox with a loopback-only network policy therefore
+  cannot carry gateway-to-PostgreSQL traffic across namespaces, and
+  the namespace pair is not a multi-host topology there. On a host
+  without that restriction, a namespace pair with separate IPs and a
+  shared PostgreSQL reachable over the veth network is the
+  container-like topology to try — and its isolation must still be
+  stated exactly (shared kernel and disk unless proven otherwise).
 
 Never test against production, never perform destructive
 failover, and never destroy persistent data without explicit
@@ -150,6 +164,18 @@ Record a UTC timestamp at every step boundary.
    rows before and after; committed rows present after
    recovery are the RPO observation (0 lost in the
    2026-10-27 run under a clean stop/restart).
+   Also probe health during the outage: `/healthz`,
+   `/readyz`, and one established-model chat request
+   (bracketed stub hits). In the 2026-10-28 loopback
+   run all three stayed 200 during a PostgreSQL outage
+   (routing uses the in-memory snapshot with
+   `config_failure: last_known_good`), so a 200 chat
+   during an outage does NOT imply shared state is
+   healthy — the video-store 503s and the breaker-sync
+   errors are the outage signal for shared state.
+   Scope that claim to established models only; a
+   deployment needing a fresh probe during an outage
+   was not tested.
 7. **Rolling upgrade.** With both replicas healthy on
    the old binary and sharing one database, replace
    one replica with the new binary (stop old, start
@@ -184,6 +210,17 @@ Record a UTC timestamp at every step boundary.
    is disabled in the staging configs, OIDC
    pending-transaction behaviour is NOT_RUN, not proven
    by documentation alone.
+10. **Soak (bounded, repeatable).** Run a fixed pattern and
+    record its duration and failures exactly; do not
+    relabel a short soak as a long soak. Pattern used
+    2026-10-28: 45 rounds, one round every 20s (15
+    minutes), chat alternating replicas, `/healthz` on
+    both every round, plus one video job at rounds 0,
+    15, 30; bracket the stub hit counter at start and
+    end. Report rounds, chat successes/failures, health
+    failures, video jobs completed/failed, and the
+    final row counts. A multi-hour soak on a real
+    multi-host topology is still open.
 
 ## 3. Write the evidence report
 

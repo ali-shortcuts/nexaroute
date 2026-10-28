@@ -141,3 +141,19 @@ everything else runs in the ordinary unit suite.
   during a backend outage). That run is explicitly NOT
   multi-host evidence: physical multi-host acceptance
   stays BLOCKED on staging prerequisites.
+- Same-VM loopback staging run 2026-10-28
+  (`docs/reports/HA_ACCEPTANCE_LOOPBACK_2026-10-28.md`): two
+  gateway processes on one host against shared TCP PostgreSQL —
+  concurrent cold start, replica kill with survivor serving and
+  client reconnection, restart, single-claim video job with
+  exactly-once ledger settlement, per-instance assets, PostgreSQL
+  outage and recovery without gateway restart, rolling upgrade
+  NEW→OLD→NEW, backup plus `pg_dump` restore with third-replica
+  read-back, shared admin-audit rows across replicas, a 15-minute
+  bounded soak (45/45 chats, 3/3 video jobs, zero failures), and
+  breaker-sync fail-fast with zero new stub hits. The same run
+  proved a network-namespace pair cannot carry traffic in its
+  sandbox (namespace + veth configuration succeed, but all
+  non-loopback TCP/ICMP is `Operation not permitted` — loopback
+  only), so physical multi-host acceptance stays BLOCKED. No new
+  code defect was found by this run.
