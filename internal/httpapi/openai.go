@@ -204,6 +204,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 	profile := profileFromRequirement(req, nil)
 	routeCtx, routeCancel := routeContext(r.Context(), in.Stream, cfg.RequestTimeout())
 	routeCtx = providers.WithQuotaEstimate(routeCtx, req.EstimatedInputTokens, req.MaxOutputTokens)
+	routeCtx = providers.WithOpencodeSession(routeCtx, resolveOpencodeSessionValue(r, ti.Features.BodySessionKey))
 	defer routeCancel()
 	var lastErr string
 	var lastStatus int

@@ -892,8 +892,18 @@ type ProviderConfig struct {
 	SessionTokenEnv string            `json:"session_token_env,omitempty"`
 	Headers         map[string]string `json:"headers,omitempty"`
 	ForwardHeaders  []string          `json:"forward_headers"`
-	ProxyURL        string            `json:"proxy_url,omitempty"`
-	AllowedHosts    []string          `json:"allowed_hosts,omitempty"`
+	// OpencodeSession opts a provider into the OpenCode session header.
+	// When true, inference attempts to this provider carry an
+	// x-opencode-session value synthesized by the gateway (client header,
+	// then the request's existing session identifier, then a per-request
+	// UUID, prefixed with the virtual-key ID when the caller authenticated
+	// with a virtual key). It is never sent to other providers and never
+	// on non-inference calls (models, embeddings, count_tokens). The
+	// provider is identified only by this explicit flag, never by sniffing
+	// a base URL or model name.
+	OpencodeSession bool     `json:"opencode_session,omitempty"`
+	ProxyURL        string   `json:"proxy_url,omitempty"`
+	AllowedHosts    []string `json:"allowed_hosts,omitempty"`
 	// Resolved egress policy merged from global EgressConfig during Validate().
 	// Not serialized; populated at load time.
 	resolvedEgressDenyHosts  []string

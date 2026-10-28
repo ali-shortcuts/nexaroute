@@ -601,6 +601,7 @@ func (a *httpAdapter) DoPath(ctx context.Context, method, path string, payload [
 			req.Header.Set("Accept", "text/event-stream")
 		}
 		a.applyHeaders(req, forward)
+		a.applyOpencodeSession(ctx, req)
 		if ct := forward.Get("Content-Type"); ct != "" {
 			// Media uploads (multipart/form-data) must keep the
 			// client's content type — including its boundary — or the
