@@ -306,7 +306,11 @@ func (s *Server) adminNexaflowDefinitionByID(w http.ResponseWriter, r *http.Requ
 			nexaflowError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusAccepted, map[string]any{"run_id": run.ID, "status": run.Status})
+		// Only the immutable id is read back: the dispatched run's
+		// status mutates concurrently in its execution goroutine,
+		// so polling the run record is the only sound way to observe
+		// it. "accepted" is the dispatch outcome, not a run status.
+		writeJSON(w, http.StatusAccepted, map[string]any{"run_id": run.ID, "status": "accepted"})
 	case len(parts) == 2 && parts[1] == "runs" && r.Method == http.MethodGet:
 		runs, err := s.nexaflowStore.ListRuns(ctx, nexaflow.RunFilter{DefinitionID: id, Limit: nexaflowLimit(r, 50)})
 		if err != nil {

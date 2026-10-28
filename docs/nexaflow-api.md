@@ -94,10 +94,11 @@ POST   /admin/api/nexaflow/runs/{id}/cancel
   "idempotency_key": "..."}`. `revision 0` means the currently
   published revision. A repeat call with the same definition and
   idempotency key returns the original run instead of dispatching
-  a duplicate. Returns 202 `{"run_id": "...", "status": ...}`:
-  execution continues in the background; poll the run for its
-  terminal status. Validation, idempotency, and concurrency
-  failures are returned synchronously (400/404/409).
+  a duplicate. Returns 202 `{"run_id": "...", "status":
+  "accepted"}`: `"accepted"` is the dispatch outcome, not a run
+  status — execution continues in the background, so poll the run
+  for its terminal status. Validation, idempotency, and
+  concurrency failures are returned synchronously (400/404/409).
 - `GET .../runs`: run summaries (id, definition, revision, tenant,
   trigger, actor, status, error code, timestamps). `limit` caps at
   100.

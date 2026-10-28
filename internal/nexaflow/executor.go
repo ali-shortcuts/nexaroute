@@ -272,6 +272,9 @@ func (e *Engine) StartRun(ctx context.Context, principal authz.Identity, definit
 // in the run's terminal status, and CancelRun still interrupts the run
 // through the engine's in-flight registry. Validation, idempotency, and
 // concurrency failures are returned synchronously before dispatch.
+// The returned run is the pre-execution record and aliases the
+// executing run: only its immutable fields (notably ID) may be read
+// after return. Poll the store for status.
 func (e *Engine) StartRunAsync(ctx context.Context, principal authz.Identity, definitionID string, revision uint64, triggerKind, triggerNodeID, idempotencyKey string, input map[string]any) (*Run, error) {
 	run, def, entryTriggers, execute, err := e.prepareRun(ctx, principal, definitionID, revision, triggerKind, triggerNodeID, idempotencyKey, input)
 	if err != nil || !execute {
