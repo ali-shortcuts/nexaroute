@@ -15,7 +15,7 @@ says so instead of implying coverage.
 | UI copy ↔ localization dictionary | `bt()` dictionary in app.js (en/fa/ps) | i18n contract tests (`i18n_body_copy_contract_test.go`) |
 | Design components ↔ CSS primitives | `docs/COMPONENTS.md` | `TestComponentCatalogContract`, token fence tests |
 
-## Page registry (14 pages)
+## Page registry (15 pages)
 
 | Page id | View function |
 |---|---|
@@ -24,6 +24,7 @@ says so instead of implying coverage.
 | `routing` | `routingView` |
 | `models` | `modelsView` |
 | `video` | `videoView` |
+| `workflows` | `workflowsView` |
 | `activity` | `activityView` |
 | `playground` | `playgroundView` |
 | `policies` | `policiesView` |
@@ -34,7 +35,7 @@ says so instead of implying coverage.
 | `observability` | `observabilityView` |
 | `settings` | `settingsView` |
 
-## Admin OpenAPI paths (44)
+## Admin OpenAPI paths (48)
 
 Every path documented in `docs/api/admin-openapi.yaml`. The M4-5
 contract test proves each is implemented with the documented
@@ -86,6 +87,10 @@ spec by `TestContractMatrixDrift`.
 - `/admin/api/evaluation/run`
 - `/admin/api/endpoint`
 - `/admin/api/client-keys/{id}/rotate`
+- `/admin/api/nexaflow/nodes`
+- `/admin/api/nexaflow/workflows`
+- `/admin/api/nexaflow/workflows/{id}`
+- `/admin/api/nexaflow/runs/{id}`
 
 ## Selector conventions (#502 item 2)
 

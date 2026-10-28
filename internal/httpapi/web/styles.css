@@ -320,7 +320,7 @@ html[data-theme=light] .route-banner-count { color: var(--violet-ink)!important;
 .wf-port-row{display:flex;align-items:center;gap:5px}
 .wf-ports-out .wf-port-row{justify-content:flex-end}
 .wf-port{width:14px;height:14px;border-radius:50%;border:2px solid var(--accent);background:var(--surface);cursor:crosshair;padding:0;flex:none}
-.wf-port.in{border-color:var(--info,#4aa8ff)}
+.wf-port.in{border-color:var(--info)}
 .wf-port-none{color:var(--muted);font-size:10px}
 .wf-node-run{padding:6px 10px;border-top:1px solid var(--border);display:flex;gap:6px;align-items:center}
 .wf-node-err{color:var(--bad);font-size:10px}

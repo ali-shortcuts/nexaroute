@@ -1813,3 +1813,204 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '405':
           $ref: '#/components/responses/MethodNotAllowed'
+
+  /admin/api/nexaflow/nodes:
+    get:
+      summary: |
+        List the canonical NexaFlow node registry: every node type the
+        visual studio palette may offer, with its input, output and
+        configuration schemas, permission, side-effect class, timeout
+        and byte bounds. The browser consumes these schemas directly;
+        it invents no node schema of its own. GET only.
+      x-permission: routing.read
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Node registry; see the handler and docs/NEXAFLOW_STUDIO.md.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+  /admin/api/nexaflow/workflows:
+    get:
+      summary: |
+        List NexaFlow workflows with their current drafts, published
+        version numbers and version metadata. Drafts and run outputs
+        are never exposed raw: only bounded, redacted previews leave
+        the server. GET only on this path; see workflows/{id} for
+        detail and draft replacement.
+      x-permission: routing.read
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Workflow list; see the handler and docs/NEXAFLOW_STUDIO.md.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+    post:
+      summary: |
+        Create a NexaFlow workflow with an empty draft. Returns 201
+        with the created workflow.
+      x-permission: routing.write
+      security:
+      - adminSession: []
+        csrfToken: []
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Created workflow; see the handler and docs/NEXAFLOW_STUDIO.md.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+  /admin/api/nexaflow/workflows/{id}:
+    get:
+      summary: |
+        Read one NexaFlow workflow with its current draft, versions
+        and published version number.
+      x-permission: routing.read
+      parameters:
+      - name: id
+        in: path
+        required: true
+        description: Resource identifier.
+        schema:
+          type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Workflow detail; see the handler and docs/NEXAFLOW_STUDIO.md.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Not found — unknown workflow id.
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+    put:
+      summary: |
+        Replace one workflow's draft with the supplied graph. The
+        server validates the graph shape; publishing is a separate
+        action sub-path dispatched inside this handler, as are
+        rename, duplicate, enabled, validate, versions and runs.
+        Those action sub-paths are intentionally not separate spec
+        paths: they are handler-internal dispatches, not registered
+        routes.
+      x-permission: routing.write
+      security:
+      - adminSession: []
+        csrfToken: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        description: Resource identifier.
+        schema:
+          type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Updated workflow; see the handler and docs/NEXAFLOW_STUDIO.md.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Not found — unknown workflow id.
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+    delete:
+      summary: |
+        Delete one workflow with all of its versions and run history.
+        Live runs are cancelled first.
+      x-permission: routing.write
+      security:
+      - adminSession: []
+        csrfToken: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        description: Resource identifier.
+        schema:
+          type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Deletion acknowledgement.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Not found — unknown workflow id.
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+  /admin/api/nexaflow/runs/{id}:
+    get:
+      summary: |
+        Read one NexaFlow run with its pinned version snapshot, status
+        and per-node records. Inputs and outputs appear only as
+        bounded, redacted previews. Approve and cancel are action
+        sub-paths dispatched inside this handler, not separate spec
+        paths.
+      x-permission: routing.read
+      parameters:
+      - name: id
+        in: path
+        required: true
+        description: Resource identifier.
+        schema:
+          type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Run detail; see the handler and docs/NEXAFLOW_STUDIO.md.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Not found — unknown run id.
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
