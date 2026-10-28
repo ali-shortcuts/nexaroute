@@ -512,3 +512,73 @@ serialization: the missing features are reported PARTIAL with
 their landing branches, not implemented here. If the owner
 wants Task 6 to override serialization and port anyway, that
 is a new explicit redirect, not assumed.
+
+### Task 6 gates addendum, part 2: race timeout and browser
+
+#### Race-timeout reproduction: 3m limit KEPT (evidence below)
+
+`scripts/verify.sh` runs `go test -race -timeout=3m -count=1
+./...`. The httpapi package exceeds that limit on this shared
+VM, on both trees, with the identical signature:
+
+- Task 6 branch (`supervisor/nexaflow-task8-integration` +
+  Task 6 commits): `go test -race -timeout=3m -count=1
+  ./internal/httpapi/` → FAIL 180.961 s, `panic: test timed
+  out after 3m0s`, running test at the alarm
+  `TestOIDCRejectsInvalidTokensAndTamperedResponses` (2 s).
+  The dump is dominated by background telemetry flush loops
+  (`chan receive`), not by a stuck NexaFlow test: this is a
+  package-level wall-clock timeout, not a hanging test.
+- Pristine main (`e6c3cdf3`, detached worktree, no NexaFlow
+  code at all), same command → FAIL 180.957 s, same running
+  test at the alarm. The failure is therefore NOT a #693
+  regression and NOT a NexaFlow defect.
+- Context: non-race full httpapi on this VM took 204–219 s in
+  earlier sessions (already over 3 m without race
+  instrumentation, which multiplies CPU cost); CI `verify`
+  passed in 6 m 51 s on #693, so the race httpapi package
+  fits in 3 m on CI hardware.
+
+DECISION: the 3 m timeout is KEPT unchanged. It is
+appropriate for CI, the gate's intended environment, and the
+local failure is shared-VM wall-clock, not an inappropriate
+limit. No test assertion was changed for timing. NexaFlow's
+own tests are race-clean on this VM: the nexaflow package
+passes under `-race`, and the httpapi Task 8 tests (6) plus
+the OpenAPI contract suites
+(`TestAdminOpenAPISpecMatchesRegisteredRoutes`,
+`TestAdminOpenAPISpecWithinPermissionMatrix`,
+`TestAdminOpenAPIMethodSetsMatchHandlers`,
+`TestContractMatrixDrift`) pass under `-race` in 29.249 s.
+The full `scripts/verify.sh` outcome on the final tree is
+recorded separately below once it runs (its race phase is
+expected to hit this same local limit; CI's green `verify`
+is supporting evidence, not a substitute).
+
+#### Browser acceptance: provisioned and PASS (scoped honestly)
+
+No system Chromium exists here, but the Playwright browser
+cache does (`chromium-1187` + headless shell) and Python
+Playwright imports. Task 6 provisioned a real browser in a
+safe disposable way only: a shim at
+`~/workspace/.tmp/bin/chromium` (NOT a repo file, NOT a
+system install) that execs the cached Chromium 140.0.7339.16
+with `--no-sandbox` added, because the repo harness launches
+Chromium without that flag and Chromium refuses to run as
+root without it. With that shim on PATH:
+
+- `python3 scripts/test-browser-e2e.py` → EXIT 0,
+  `BROWSER E2E PASS`, 26 screenshots (24 viewport + 2
+  full-page badge proofs), 3 m 46 s, against the real
+  gateway built from this tree (`go run ./cmd/gateway`).
+
+Scope honesty: that suite covers the control plane
+generally (it predates NexaFlow) and does not target the
+Workflows page specifically, so scenario 10 stays PASS via
+the served-asset test, not via this browser run. The
+remaining two browser suites in `verify.sh`
+(`test-browser-e2e-502.py`, `test-live-visual-agent.py`)
+are covered only by the full `verify.sh` run below.
+`verify.sh` itself gates its browser phase on
+`command -v chromium`; with the shim dir on PATH that gate
+is satisfied by the same real browser.
