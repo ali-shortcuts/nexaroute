@@ -7,23 +7,17 @@ on main**. This package introduces the adapter registry itself as a
 **new, engine-agnostic package**, `internal/nexaflow`, on the branch
 that carries it (PR #675, unmerged at the time of writing); the Phase 1
 foundation work (the workflow definition contract, ADR 0008, and the
-architecture document) is layered on the same branch. It does **not**
-claim:
+architecture document) and the Phase 8 runtime (engine, durable store,
+scheduler, webhooks, admin API, UI page) are layered on the same branch.
+This package itself still registers no HTTP routes (those live in
+`internal/httpapi`), and it does **not** claim:
 
-- a workflow runtime (scheduling/ticking, durable pause, per-iteration
-  execution, run history);
-- an HTTP API surface (no routes are registered anywhere by this package);
-- a UI/editor;
-- in-process `httpapi` wiring — the `httpapi` Server fields are
-  unexported, so server-side wiring must land in `httpapi` as a
-  follow-up and is **not** claimed here;
+- a visual canvas editor (the Phase 8 UI edits definition JSON);
+- a multi-instance store (FileStore is single-host);
 - live-model evaluation (see below);
 - hard-budget enforcement (see below);
-- new `authz` permissions (see below).
-
-Future runtime/editor wiring is an explicit follow-up. Nothing in this
-package should be presented as a working NexaFlow workflow until that
-wiring exists and is itself verified.
+- new node `authz` permissions (see below; the API added
+  `workflow.read` / `workflow.write` for routes in Phase 8).
 
 ## Design: adapters, not duplicates
 
@@ -129,8 +123,10 @@ real credential anywhere in code or tests.
 
 ## What is NOT implemented (do not claim otherwise)
 
-- **Runtime, HTTP API, UI/editor**: absent; this package is the adapter
-  registry only.
+- **Runtime, HTTP API, UI/editor**: the runtime engine, the admin API,
+  and the JSON-editor UI page exist since Phase 8 (on this branch);
+  the visual canvas editor does not. This package itself remains the
+  adapter registry plus the runtime; routes live in `internal/httpapi`.
 - **Live-model evaluation**: the admin live path
   (`httpapi` admin evaluation run-live) is not exposed as a Go API, so
   no honest live-evaluation node exists here. Replay scores must never

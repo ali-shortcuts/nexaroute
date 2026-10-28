@@ -1,16 +1,18 @@
-# NexaFlow Architecture (canonical, Phase 1)
+# NexaFlow Architecture (canonical, Phase 8)
 
-This document is the canonical architecture for NexaFlow as of Phase 1.
+This document is the canonical architecture for NexaFlow as of Phase 8.
 It is normative for the runtime, API, and editor phases: where an older
 brief or the unapproved Phase 0 proposal disagrees with this document,
 this document wins. The decision record is ADR 0008; the node table is
 `docs/nexaflow-node-adapters.md`; the implementation order is
 `docs/nexaflow-phase-checklist.md`.
 
-**Status: Phase 1.** The registry and the definition contract exist
-(branch `nexaflow/phase1-foundation`, layered on PR #675, unmerged).
-There is no runtime, no HTTP API, no UI, and no execution store yet.
-Nothing in this document should be read as "NexaFlow works".
+**Status: Phase 8.** The registry, the definition contract, the
+runtime engine, the durable single-host store, the admin API, and
+the Workflows UI page exist (branch `supervisor/nexaflow-phase8`,
+layered on PR #675 plus the Phase 1 contract, unmerged). What does
+NOT exist yet is listed in §13; nothing there should be read as
+"NexaFlow does it".
 
 ## 1. What NexaFlow is
 
@@ -29,10 +31,10 @@ parallel ones:
 | Video | Video HTTP API + `queue.JobStore` (TryClaim leases) | `video.submit` / `status` / `output` via HTTP; the claim protocol is the model for run claims |
 | Cost | `usage.Tracker`, `usage.BudgetLedger` (float64, process-local) | Read-only snapshots; `budget_check` reports, never enforces (hard-budget enforcement is a separate proposal, unapproved) |
 | Config + validation | `internal/config` (`Validate` / `ValidateStrict`) | Error-returning validation convention, followed by `ValidateDefinition` |
-| Definitions store | `internal/controlplane` CAS (`Get` / `Put` with expected revision) | Versioned definition publishing |
-| Authorization | `internal/authz` (roles, eleven permissions) | Node-level permission checks; no new permission in Phase 1 |
-| Audit | Security store append-audit | Lifecycle audit events; pre-action audit failure fails closed |
-| Scheduling | None exists (no scheduler/cron package in `internal/`) | `trigger.schedule` is pure next-fire computation in v1; durable timers are runtime work |
+| Definitions store | Workflow store (`internal/nexaflow` `Store`: FileStore / MemoryStore) | Versioned definition publishing, run history, claims, audit |
+| Authorization | `internal/authz` (roles, thirteen permissions) | Node-level permission checks; `workflow.read` / `workflow.write` added in the API phase (Phase 8) for the admin routes |
+| Audit | Workflow store audit log (plus the gateway's admin audit, which auto-records every admin operation) | Lifecycle audit events, no payloads |
+| Scheduling | Claim-based `Scheduler` over the workflow store | Slot claimed before dispatch; one run per schedule per tick; no bursting |
 
 Two ledgers exist and must not be conflated: `internal/budget`
 (int64) and `internal/usage/budget.go` (float64). NexaFlow's cost
@@ -42,11 +44,9 @@ nodes read the `usage` ledger's snapshots.
 
 | Package / area | Owns | Must NOT own |
 |---|---|---|
-| `internal/nexaflow` | Node registry, node adapters, definition contract + validation, templates, secret redaction | Runtime, HTTP routes, stores, UI |
-| Future runtime package | DAG scheduling, worker pool, claim protocol, recovery, approval/timer persistence | Node semantics (those live in the registry), HTTP routing |
-| `internal/httpapi` (future change) | Admin API routes + `adminPermissionForRequest` matrix entries | Runtime internals (Server fields are unexported; wiring lands here) |
-| `internal/controlplane` | Versioned definition blobs (CAS publish) | Run history, node executions |
-| Future `nexaroute_workflow_*` PG tables | Run history, node executions, approvals, webhook events, timers | Definition blobs (those are control-plane) |
+| `internal/nexaflow` | Node registry, node adapters, definition contract + validation, templates, secret redaction, runtime engine, durable store, scheduler, webhook handling, production backend composite | HTTP routes, UI |
+| `internal/httpapi` | Admin API routes + `adminPermissionForRequest` matrix entries + `AttachNexaflow` wiring (server-owned composite backend) | Runtime internals beyond the attach seam |
+| Future `nexaroute_workflow_*` PG tables | Multi-instance run history, node executions, approvals, webhook events, timers | Definition blobs (those live in the workflow store) |
 | Editor (Phase 2) | Canvas, layout sidecar, definition authoring UX | Execution semantics (the contract is `workflow.go`, not the canvas) |
 
 ## 3. Workflow definitions
@@ -80,9 +80,16 @@ A definition is a versioned, immutable snapshot
 
 Data flow: a node's input is the merge of its direct predecessors'
 outputs, in edge-declaration order, later keys overwriting earlier
-ones. `control.merge` overrides with an explicit policy
-(first / last / error, at most 1000 keys). Explicit per-node input
-mappings are a future extension, not v1.
+ones, filtered to the node's declared input fields (unfiltered
+merges broke strict node schemas). `control.merge` overrides with
+an explicit policy (first / last / error, at most 1000 keys).
+Phase 8 extension (backward-compatible, additive fields on the
+Phase 1 contract): an explicit per-node `input` mapping, when
+present, fully determines the input and replaces the merge. A
+`for_each` spec adds bounded iteration, and `on_error` wires the
+error handler. These three extensions are why Phase 8 definitions
+validate under `ValidateDefinitionExtended`, not bare Phase 1
+validation.
 
 ## 4. Versioning
 
@@ -93,45 +100,58 @@ mappings are a future extension, not v1.
 - Lifecycle: `draft -> published -> superseded`, superseded terminal.
   Drafts are never superseded; rollback republishes an older snapshot
   as a NEW revision. Revisions are never mutated.
-- Publishing uses the control-plane CAS pattern: publish fails
-  closed on a revision conflict (the same discipline that makes a
-  simultaneous first boot on an empty control plane fail closed
-  rather than corrupt state).
+- Publishing assigns the next revision number and supersedes the
+  previously published revision, under the store's serialization.
+  A publish that races another publish for the same definition
+  serializes (single-host store lock); there is no CAS
+  expected-revision check in this phase.
 
-## 5. Execution states (contract for the runtime)
+## 5. Execution states (as implemented in Phase 8)
 
-Run: `created -> running <-> waiting_for_approval | waiting_timer
--> succeeded | failed | cancelled | needs_manual_action`.
+Run: `pending | running | awaiting_approval | succeeded |
+failed | cancelled | parked`. Step: `pending | running |
+succeeded | failed | skipped | cancelled | waiting | ambiguous`.
 
-Node: `pending -> claimed -> running <-> waiting -> succeeded |
-failed | skipped | cancelled | needs_manual_action`.
-
-- A node runs when all predecessors succeeded (AND-join).
-- A node whose predecessor failed or was cancelled is `skipped`.
+- A node runs when all active predecessors succeeded (AND-join);
+  a failed predecessor with a fallback-substituted output counts
+  as satisfied for its downstream nodes.
+- A node whose every incoming edge is inactive (predecessor
+  skipped, or unselected branch label) is `skipped`.
 - A node downstream of an unselected branch edge is `skipped`.
-- A run with any failed node ends `failed`.
-- `needs_manual_action` is the terminal parking state for ambiguous
+- A run with an unhandled failed node ends `failed`; a run whose
+  failures were all handled (fallback) or skipped ends `succeeded`
+  with the failed steps kept in history.
+- `parked` is the Phase 1 `needs_manual_action` state under its
+  implemented name: the resumable parking state for ambiguous
   outcomes (see §7) and for recovery findings the runtime cannot
   resolve alone. It is never a silent retry and never a silent
-  success.
+  success. There is no `waiting_timer` state: durable timers are
+  schedule slots, not sleeping runs.
 
-## 6. Durable persistence (contract, not yet schema)
+## 6. Durable persistence (as implemented in Phase 8)
 
-- **Definitions**: control-plane CAS blobs (see §4).
-- **Runs**: future PostgreSQL tables `nexaroute_workflow_*`
-  (definitions are NOT stored here; runs, node executions,
-  approvals, webhook events, and timers are). The claim protocol
-  follows the video queue's proven shape: server-clock leases,
-  same-owner renewal, a row-locked terminal guard, and ambiguous
-  jobs parked as `needs_manual_action`.
-- **Execution requires PostgreSQL** and fails closed without it.
-  The event bus (volatile), the eval store (in-memory), and usage
-  (per-process) are not run history and must never be presented
-  as such.
+- **Definitions, versions, runs, claims, deliveries, schedule
+  state, audit**: the workflow `Store` interface, implemented by
+  FileStore (single-host durable authority: atomic temp-file +
+  rename + fsync writes, 0700 directories, 0600 files, `O_EXCL`
+  claim/delivery files) and MemoryStore (tests only; everything
+  lost on exit). The claim protocol follows the video queue's
+  proven shape: leases with TTL 30s, same-owner renewal, an
+  append-only step history (shrinking it is rejected), and
+  ambiguous jobs parked as `parked`.
+- **Execution does NOT require PostgreSQL in Phase 8.** The
+  supported topology is a single gateway process. A multi-instance
+  PostgreSQL store is a later phase; FileStore does not claim
+  cross-process safety. The event bus (volatile), the eval store
+  (in-memory), and usage (per-process) are not run history and
+  must never be presented as such.
+- **Format versions**: the store is versioned (current: 2).
+  `Migrate` fills derived fields (content hashes, run version
+  counters) without touching content or history; see
+  `docs/nexaflow-migration.md`.
 - **Retention**: 90 days default, 7–365 configurable (definition
-  setting, enforced at validation). Retention deletion is runtime
-  work; until it exists, old runs accumulate and the runbook must
-  say so.
+  setting). `Prune` removes terminal runs finished before the
+  cutoff, per definition or globally.
 
 ## 7. Retries, cancellation, side effects
 
@@ -194,16 +214,21 @@ park-on-ambiguity rule.
 
 - **Manual**: an operator starts a run with a payload; the payload
   passes through to the workflow.
-- **Webhook**: verification only in v1 (HMAC-SHA256 over
-  `timestamp + "." + body`, 5-minute window, constant-time
-  compare, 1 MiB bound, in-memory replay cache in the node).
-  Runtime requirements before webhooks are enabled: durable replay
-  protection, a fixed rate limit, and an HTTP endpoint in
-  `internal/httpapi`. The node verifier never receives HTTP
-  requests itself. Note the deliberate difference from the video
-  orchestrator, which MACs only the timestamp.
-- **Schedule**: pure next-fire computation in v1 (never sleeps).
-  Durable timers with a claim protocol are runtime work.
+- **Webhook**: HMAC-SHA256 over `timestamp + "." + body`,
+  5-minute window, constant-time compare, 64 KiB engine bound,
+  in-memory replay cache in the engine verifier plus a durable
+  delivery ledger in the store, and an HTTP endpoint in
+  `internal/httpapi` (`POST /nexaflow/webhooks/{definition}/
+  {trigger}`). The trigger node re-verifies the signature itself.
+  A fixed rate limit on the webhook endpoint is NOT implemented
+  in this phase; operators front it with their reverse proxy.
+  Note the deliberate difference from the video orchestrator,
+  which MACs only the timestamp.
+- **Schedule**: claim-based dispatch (`Scheduler.Tick`) over the
+  store: slots claimed before dispatch, one run per schedule per
+  tick, overdue catch-up one slot at a time. The engine never
+  sleeps inside a run for a timer; waiting is a schedule slot, not
+  a run state.
 - **System triggers** (provider-health changes, usage thresholds):
   deferred; they need an outbox, which is a Phase 3 decision.
 - Trigger collision (two triggers claiming the same event) is a
@@ -215,36 +240,43 @@ park-on-ambiguity rule.
 - `control.approval` records a decision; a missing decision is
   `approval_required` (non-retryable), never a success.
 - Approver != requester when both are present (rejected otherwise).
-- The durable pause is runtime work: a persisted approval record,
-  a deadline whose expiry fails the run as
-  `failed(approval_expired)`, and no silent resume — a decision
-  survives a restart only as its persisted record, and an expired
-  wait never resumes.
+- The durable pause is implemented: the run record, the waiting
+  step, and the decision all live in the store, so a decision
+  survives a restart and any engine over the same store can
+  approve and resume it. There is NO approval deadline in Phase 8:
+  an awaiting run waits until decided, resumed, or cancelled. A
+  deadline whose expiry fails the run remains future work, and
+  must not be claimed until it exists.
 - Approval decisions are audited (see §11).
 
 ## 11. Observability
 
-- **Audit**: lifecycle events (definition published, run
-  started/finished, node claimed/failed, approval decided) go
-  through the security store's append-audit path. A pre-action
-  audit failure fails the action closed (503); the action never
-  runs unaudited.
+- **Audit**: lifecycle events (run started / awaiting approval /
+  approved / resumed / cancelled / parked / finished) go to the
+  workflow store's audit log, which carries no payloads. The
+  gateway's admin audit additionally auto-records every admin
+  operation. A workflow store audit failure does not fail the
+  action closed in this phase (the engine's audit sink is
+  best-effort); do not claim pre-action audit gating until it
+  exists.
 - **Live feed**: the event bus carries live run events only; it is
   not history and must not be queried as such.
-- **Traces**: OTLP spans for runs and node executions.
-- **Metrics**: aggregated labels only (workflow id, node id,
-  outcome) — never per-run labels.
+- **Traces**: OTLP spans for runs and node executions are NOT
+  implemented in Phase 8.
+- **Metrics**: workflow metrics are NOT implemented in Phase 8.
+  When they land, labels must be aggregated only (workflow id,
+  node id, outcome) — never per-run labels.
 - **Redaction**: every persisted and emitted payload passes secret
   redaction; error messages are truncated and credential-keyed
   values replaced.
 
 ## 12. Rollout
 
-- NexaFlow ships behind a default-off admin flag (runtime/API
-  phase work). With the flag off, no behavior changes: no routes,
-  no timers, no runs.
-- Until the runtime phase lands, the only honest status is:
-  "registry + definition contract exist; nothing executes".
+- NexaFlow ships behind the default-off `nexaflow.enabled`
+  config flag. With the flag off, no behavior changes: no routes,
+  no timers, no runs. With it on, the admin routes, the webhook
+  endpoint, and the scheduler exist; the UI page reports the
+  feature as unavailable until it is attached.
 - The editor (Phase 2) carries layout as a sidecar, not as part
   of the execution contract: a definition's JSON has no position
   field, deliberately.
@@ -256,9 +288,13 @@ path; fail-closed on every unknown; no secret value anywhere in
 definitions, runs, outputs, or logs; no silent double-execution;
 no silent resume; published definitions immutable.
 
-Limitations: no runtime, API, UI, or store in Phase 1; no live-
-model evaluation (replay only); no hard-budget enforcement (report
-only); no video-job cancellation; no multi-instance execution; no
-tenant isolation; no webhook dispatch; no durable timers; no system
-triggers; no sub-workflows; no loop execution; no custom code node;
-content hashes comparable only within this implementation.
+Limitations (Phase 8): no multi-instance execution (single-host
+FileStore only); no live-model evaluation (replay only); no
+hard-budget enforcement (report only); no video-job cancellation;
+no tenant isolation beyond scope labels + list filters; no system
+triggers; no sub-workflows; no custom code node; no approval
+deadlines; no workflow OTLP traces or metrics; no fixed rate limit
+on the webhook endpoint; no template-to-definition conversion;
+templates are inert; content hashes comparable only within this
+implementation; run inputs persist unredacted (never put secrets
+in workflow input — use `secret_ref`).

@@ -607,6 +607,37 @@ Provider presets are served by the gateway itself through the Admin API so the W
 
 For real-tenant onboarding evidence, use the bounded `nexaroute provider-accept` command described in [Provider onboarding live acceptance](PROVIDER_ACCEPTANCE.md). It never saves provider/model changes or credentials and requires `--confirm-live`; public CI runs only loopback fake upstreams.
 
+### NexaFlow workflows (`nexaflow`, opt-in, Phase 8)
+
+NexaFlow is off by default. When `enabled` is false (the default),
+no workflow routes, timers, or runs exist and the admin API answers
+503 for workflow paths.
+
+| Field | Default | Meaning |
+|---|---|---|
+| `enabled` | `false` | Attach the workflow engine, admin API, webhook endpoint, and scheduler. |
+| `store_path` | `nexaflow/nexaflow-store` | Workflow store directory. Relative paths resolve against the config file's directory (the `admin.security_store_path` pattern). Single-host FileStore only in this phase; do not share one path between gateway processes. |
+| `gateway_base_url` | loopback from `listen` | Base URL for loopback calls (`/v1/chat/completions`, `/v1/video/jobs`, `/mcp`). `https` when TLS is enabled; self-signed certificates fail closed at node runtime. |
+| `gateway_token_ref` | (empty) | Environment variable name holding a client-auth token for loopback calls. Without it, `llm.chat` nodes fail closed at client-auth. The value is never stored in config, definitions, or logs. |
+| `tick_interval_seconds` | `0` | Background schedule tick interval. `0` disables background ticking; operators tick manually via `POST /admin/api/nexaflow/scheduler/tick`. |
+
+Example:
+
+```json
+{
+  "nexaflow": {
+    "enabled": true,
+    "store_path": "nexaflow/nexaflow-store",
+    "gateway_token_ref": "NEXAROUTE_CLIENT_KEY",
+    "tick_interval_seconds": 60
+  }
+}
+```
+
+Full operator documentation: [NexaFlow user guide](nexaflow-user-guide.md),
+[API reference](nexaflow-api.md), [security guidance](nexaflow-security.md),
+[migration notes](nexaflow-migration.md), [examples](nexaflow-examples.md).
+
 ## Routing additions, cache, client auth and model fields
 
 ### routing (additions)

@@ -111,3 +111,27 @@ as an explicit gap, not a claim.
 3. `nexaroute doctor --config <path>` and check `/readyz`.
 4. Rollback = restore the previous binary and
    `nexaroute restore --bundle <bundle> --config <path> --force`.
+
+### NexaFlow workflows (Phase 8)
+
+NexaFlow is opt-in (`nexaflow.enabled`) and single-host in this
+phase: one gateway process owns one store path. Do not run two
+gateway processes against the same store directory, and do not
+share the store over a network filesystem expecting cross-process
+safety — the FileStore's atomicity is single-host.
+
+- Back up the workflow store directory alongside the gateway
+  config. It holds definitions, versions, runs, schedule claims,
+  webhook delivery records, and audit events.
+- Upgrading with in-flight runs: `running` runs at shutdown are
+  interrupted and park on the next startup with their ambiguous
+  step named. They do not auto-resume; an operator resumes each
+  parked run explicitly. `awaiting_approval` and `parked` runs
+  survive restarts unchanged.
+- Store format upgrades run at startup (`Migrate`) and are
+  additive; see [NexaFlow migration notes](nexaflow-migration.md)
+  for the format 1 → 2 procedure and its backup-first rule.
+- Webhook deliveries should pass through the operator's reverse
+  proxy, which owns rate limiting for `/nexaflow/webhooks/*` in
+  this phase (the gateway enforces HMAC, the timestamp window,
+  and replay rejection, but no fixed rate limit).
