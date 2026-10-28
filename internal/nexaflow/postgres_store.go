@@ -196,6 +196,27 @@ func (s *PostgresStore) GetDraft(ctx context.Context, definitionID string) (Defi
 	return cloneDefinition(def), nil
 }
 
+func (s *PostgresStore) ListDrafts(ctx context.Context) ([]Definition, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT draft FROM `+wfDefsTable+` ORDER BY definition_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Definition
+	for rows.Next() {
+		var raw []byte
+		if err := rows.Scan(&raw); err != nil {
+			return nil, err
+		}
+		var def Definition
+		if err := json.Unmarshal(raw, &def); err != nil {
+			return nil, err
+		}
+		out = append(out, cloneDefinition(def))
+	}
+	return out, rows.Err()
+}
+
 func (s *PostgresStore) Publish(ctx context.Context, definitionID, publishedBy string) (PublishedDefinition, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {

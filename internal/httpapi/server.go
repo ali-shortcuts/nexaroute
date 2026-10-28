@@ -34,6 +34,7 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/decision/policy"
 	"github.com/ali-shortcuts/nexaroute/internal/events"
 	"github.com/ali-shortcuts/nexaroute/internal/health"
+	"github.com/ali-shortcuts/nexaroute/internal/nexaflow"
 	"github.com/ali-shortcuts/nexaroute/internal/probe"
 	"github.com/ali-shortcuts/nexaroute/internal/providers"
 	"github.com/ali-shortcuts/nexaroute/internal/route"
@@ -105,10 +106,16 @@ type Server struct {
 	taskClassCounts   map[string]uint64 // key: task_type|complexity
 	taskAnalysisTotal atomic.Uint64
 	videoHandler      http.Handler
-	securityDB        securitystore.Backend
-	securityErr       error
-	oidc              *oidcAuthenticator
-	oidcErr           error
+	// NexaFlow (Task 8): nil means the feature is disabled and no
+	// NexaFlow route is registered at all, so existing gateway
+	// behaviour is unchanged. Attach exactly once before serving.
+	nexaflow        *nexaflow.Service
+	nexaflowWebhook *nexaflow.WebhookService
+	nexaflowSecrets map[string]string // definition id -> webhook secret (test/gateway wiring only)
+	securityDB      securitystore.Backend
+	securityErr     error
+	oidc            *oidcAuthenticator
+	oidcErr         error
 }
 
 // adminBucket is a compact token bucket keyed by remote address. Capacity 90
@@ -1110,6 +1117,21 @@ func (s *Server) Handler() http.Handler {
 	// Legacy endpoint (PR #13 compatibility)
 	mux.HandleFunc("/admin/api/endpoint", s.adminEndpoint)
 
+	// NexaFlow (Task 8): registered only when attached; otherwise the
+	// paths fall through to the static file server and answer 404.
+	if s.nexaflow != nil {
+		mux.HandleFunc("/admin/api/nexaflow/nodes", s.adminNexaflowNodes)
+		mux.HandleFunc("/admin/api/nexaflow/templates", s.adminNexaflowTemplates)
+		mux.HandleFunc("/admin/api/nexaflow/definitions", s.adminNexaflowDefinitions)
+		mux.HandleFunc("/admin/api/nexaflow/definitions/", s.adminNexaflowDefinitionByID)
+		mux.HandleFunc("/admin/api/nexaflow/runs", s.adminNexaflowRuns)
+		mux.HandleFunc("/admin/api/nexaflow/runs/", s.adminNexaflowRunByID)
+		mux.HandleFunc("/admin/api/nexaflow/audit", s.adminNexaflowAudit)
+	}
+	if s.nexaflowWebhook != nil {
+		mux.HandleFunc("/nexaflow/webhooks/", s.nexaflowWebhookHandler)
+	}
+
 	sub, _ := fs.Sub(webFS, "web")
 	mux.Handle("/", http.FileServer(http.FS(sub)))
 	return s.middleware(mux)
@@ -1118,6 +1140,20 @@ func (s *Server) Handler() http.Handler {
 // AttachVideoHandler mounts the optional Video Gateway without changing any
 // existing LLM route. Call it once during startup before Handler is served.
 func (s *Server) AttachVideoHandler(h http.Handler) { s.videoHandler = h }
+
+// AttachNexaflow mounts the Task 8 NexaFlow service. While it is not
+// attached, no NexaFlow route exists and gateway behaviour is
+// unchanged (scenario 15). Call it once before serving.
+func (s *Server) AttachNexaflow(svc *nexaflow.Service) { s.nexaflow = svc }
+
+// AttachNexaflowWebhook mounts the public signed-webhook service with
+// its per-definition secrets. Secrets come from gateway wiring (never
+// from workflow definitions); a definition without a secret answers
+// 404, indistinguishable from an unknown definition.
+func (s *Server) AttachNexaflowWebhook(svc *nexaflow.WebhookService, secrets map[string]string) {
+	s.nexaflowWebhook = svc
+	s.nexaflowSecrets = secrets
+}
 
 func isDataPlaneRequest(r *http.Request) bool {
 	if r.Method != http.MethodPost {

@@ -161,6 +161,26 @@ func (s *Service) GetDraft(ctx context.Context, id string) (Definition, error) {
 	return s.Store.GetDraft(ctx, id)
 }
 
+// ListDrafts returns all drafts sorted by definition id.
+func (s *Service) ListDrafts(ctx context.Context) ([]Definition, error) {
+	return s.Store.ListDrafts(ctx)
+}
+
+// LatestPublished returns the currently published revision of a
+// definition, or an error when none is published.
+func (s *Service) LatestPublished(ctx context.Context, definitionID string) (PublishedDefinition, error) {
+	revs, err := s.Store.ListRevisions(ctx, definitionID)
+	if err != nil {
+		return PublishedDefinition{}, err
+	}
+	for _, rev := range revs {
+		if rev.Version.Status == DefinitionPublished {
+			return rev, nil
+		}
+	}
+	return PublishedDefinition{}, ErrNotFound
+}
+
 // Publish re-validates the draft, then publishes a new revision.
 func (s *Service) Publish(ctx context.Context, definitionID string, by authz.Identity) (PublishedDefinition, error) {
 	if !by.Authenticated() {

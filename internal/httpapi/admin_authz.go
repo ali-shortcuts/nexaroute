@@ -91,6 +91,18 @@ func adminPermissionForRequest(r *http.Request) (authz.Permission, bool) {
 		return readOnly(authz.ReadRouting)
 	case path == "/admin/api/evaluation/run":
 		return writeOnly(authz.RunEvaluation)
+	case strings.HasPrefix(path, "/admin/api/nexaflow/"):
+		// Task 8 interim mapping: workflow.* permissions do not exist
+		// in internal/authz yet (in-flight task7 work owns them), so
+		// NexaFlow admin traffic rides the existing config/audit
+		// permissions. Definitions are gateway configuration (read:
+		// config.read, state-changing: config.write); the audit
+		// endpoint rides audit.read like /admin/api/audit. When
+		// workflow.* lands, this case must be repointed at it.
+		if path == "/admin/api/nexaflow/audit" {
+			return readOnly(authz.ReadAudit)
+		}
+		return readWrite(authz.ReadConfig, authz.WriteConfig)
 	case path == "/admin/api/endpoint":
 		if r.Method == http.MethodGet {
 			return authz.ReadConfig, true

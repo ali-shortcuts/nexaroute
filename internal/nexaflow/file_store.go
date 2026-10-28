@@ -258,6 +258,12 @@ func (s *FileStore) GetDraft(_ context.Context, definitionID string) (Definition
 	return s.state.getDraft(definitionID)
 }
 
+func (s *FileStore) ListDrafts(_ context.Context) ([]Definition, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.state.listDrafts(), nil
+}
+
 func (s *FileStore) Publish(_ context.Context, definitionID, publishedBy string) (PublishedDefinition, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
