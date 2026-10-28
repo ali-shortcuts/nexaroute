@@ -18,20 +18,21 @@ import (
 // Eval replay goes through the real eval.Runner (replay is deterministic
 // and side-effect free), which is exactly what the eval node adapts.
 type FakeBackend struct {
-	Selectors map[string]RouteInfo
-	ChatText  string
-	Health    map[string]ProviderHealth
-	CompatMap map[string]CompatInfo
-	MCPTools  map[string][]MCPTool
-	MCPResult map[string]any
-	VideoJobs map[string]VideoJobInfo
-	Usage     UsageInfo
-	Budgets   map[string]BudgetInfo
-	Secrets   map[string]string
-	HTTPResp  HTTPResponse
-	HTTPErr   error
-	ChatCalls int
-	MCPCalls  []string
+	Selectors        map[string]RouteInfo
+	ChatText         string
+	Health           map[string]ProviderHealth
+	CompatMap        map[string]CompatInfo
+	MCPTools         map[string][]MCPTool
+	MCPResult        map[string]any
+	VideoJobs        map[string]VideoJobInfo
+	Usage            UsageInfo
+	Budgets          map[string]BudgetInfo
+	Secrets          map[string]string
+	HTTPResp         HTTPResponse
+	HTTPErr          error
+	ChatCalls        int
+	MCPCalls         []string
+	VideoSubmitCalls int
 }
 
 func newFakeBackend() *FakeBackend {
@@ -99,6 +100,7 @@ func (f *FakeBackend) MCPCall(_ context.Context, serverID, tool string, args map
 }
 
 func (f *FakeBackend) VideoSubmit(_ context.Context, req VideoSubmitRequest) (VideoJobInfo, error) {
+	f.VideoSubmitCalls++
 	_ = req
 	return VideoJobInfo{JobID: "job-1", State: "queued"}, nil
 }
