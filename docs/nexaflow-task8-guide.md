@@ -264,11 +264,17 @@ Evidence: `internal/nexaflow/task8_acceptance_test.go`,
   completions reported after Task 8's design freeze are relevant
   here (sibling-reported, NOT Task 8-verified): task3
   (`nexaflow/task3-control-flow`, `84cf62c`) for subworkflows /
-  any-join / durable waits, task5
+  any-join / durable waits, task4
+  (`supervisor/nexaflow-task4-api-scheduler-webhooks`,
+  `d01b718`/`d4e9790`/`6410036`) for a fuller admin API (202
+  executions, resume endpoint, diagnostics), daily schedules, and
+  webhook rate limiting, task5
   (`supervisor/nexaflow-task5-integrations`, `52b40a7`) for the
   composite backend and ledger-backed budget nodes, and task7
   (`nexaflow/task7-security`, `ee539bf`) for `workflow.*`
   permissions, tenant scoping, stored-run redaction, and an opt-in
   hard budget — all built on other lineages and all, by their own
   porting notes, must be PORTED onto the canonical engine, not
-  merged as-is.
+  merged as-is. Where task4's API shape differs from this
+  branch's (202 vs synchronous runs, resume endpoint, extra
+  routes), the owner must choose one shape at reconciliation.
