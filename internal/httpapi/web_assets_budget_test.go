@@ -28,7 +28,10 @@ var webAssetBudgets = map[string]int{
 	// remainder merge also absorbed the Phase 10 (#410) live-activity UI
 	// (refresh/polling/detail drawer + EN/FA/PS copy), landing app.js at
 	// ~269 KB; 336 KB restores the ~25% headroom convention.
-	"web/app.js":          336 << 10,
+	// Phase 6 (2026-10-28): the NexaFlow visual studio (workflow list,
+	// palette, canvas, schema config panel, validation, runs) lands
+	// app.js at ~366 KB; 460 KB restores the ~25% headroom convention.
+	"web/app.js":          460 << 10,
 	"web/styles.css":      96 << 10,
 	"web/visual-agent.js": 16 << 10,
 }
@@ -37,7 +40,9 @@ var webAssetBudgets = map[string]int{
 // ceiling was set before the Phase 7 remainder (#399) and Phase 10 (#410)
 // UI growth landed together; 410 KB restores the ~25% headroom convention
 // over the current 336303-byte total.
-const webAssetTotalBudget = 410 << 10
+// Phase 6 (2026-10-28): studio growth lands the total at ~452 KB;
+// 552 KB restores the ~25% headroom convention.
+const webAssetTotalBudget = 552 << 10
 
 func TestWebAssetSizeBudget(t *testing.T) {
 	total := 0

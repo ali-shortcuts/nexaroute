@@ -35,7 +35,7 @@ echo '== web ui javascript syntax =='
 node --check internal/httpapi/web/app.js
 node --check internal/httpapi/web/visual-agent.js
 echo '== real browser control-plane acceptance =='
-if command -v chromium >/dev/null 2>&1 && python3 -c 'import playwright' >/dev/null 2>&1; then
+if { command -v chromium >/dev/null 2>&1 || ls "$HOME"/.cache/ms-playwright/chromium-*/chrome-linux/chrome >/dev/null 2>&1; } && python3 -c 'import playwright' >/dev/null 2>&1; then
   python3 scripts/test-browser-e2e.py
   echo '== isolated #502 browser acceptance =='
   python3 scripts/test-browser-e2e-502.py
