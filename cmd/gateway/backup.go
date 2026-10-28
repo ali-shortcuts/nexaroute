@@ -69,10 +69,10 @@ type backupManifest struct {
 	// raw key to fingerprint or bundle: the manifest records the
 	// envelope versions, the common Transit key-reference hash, and
 	// the distinct Transit key versions present instead.
-	EnvelopeVersions      []string `json:"envelope_versions,omitempty"`
-	TransitKeyRefSHA256   string   `json:"transit_key_ref_sha256,omitempty"`
-	TransitKeyVersions    []int    `json:"transit_key_versions,omitempty"`
-	Notes           string `json:"notes,omitempty"`
+	EnvelopeVersions    []string `json:"envelope_versions,omitempty"`
+	TransitKeyRefSHA256 string   `json:"transit_key_ref_sha256,omitempty"`
+	TransitKeyVersions  []int    `json:"transit_key_versions,omitempty"`
+	Notes               string   `json:"notes,omitempty"`
 }
 
 func sha256Hex(data []byte) string {
