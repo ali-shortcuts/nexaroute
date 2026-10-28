@@ -1320,8 +1320,13 @@ func applyCredentialPoolUpdate(old []config.CredentialConfig, update credentialP
 			out.Enabled = *entry.Enabled
 		}
 		// Email is metadata only; a non-empty value updates it, an
-		// omitted value leaves the stored value unchanged.
-		if entry.Email != "" {
+		// omitted value leaves the stored value unchanged. A masked
+		// value (the form admin GET returns, containing "•") is the
+		// UI pool editor round-tripping its own display value, not a
+		// new email: it must never be persisted as the stored email,
+		// or saving any unrelated pool edit would corrupt the address
+		// to its masked form.
+		if entry.Email != "" && !strings.Contains(entry.Email, "•") {
 			out.Email = strings.TrimSpace(entry.Email)
 		}
 		if entry.Priority != nil {

@@ -79,13 +79,18 @@ gateway-derived header).
 Gating (enforced in the adapter, after header forwarding, so it
 cleans up anything forwarding produced): the header is sent only on
 POST inference calls whose upstream path is a chat, responses, or
-messages path, and only for `opencode-go` (derived) or
-`opencode-console` (valid client value only). It is deleted on model
-discovery, embeddings, token counting, media/images, speech,
-transcriptions, and rerank calls, and it is deleted for every
-non-opencode provider even if the operator listed it in
-`forward_headers` — a generic provider pointed at a Go endpoint must
-be reconfigured as type `opencode-go`.
+messages path (a configured chat/responses/messages path matches by
+suffix, so a base URL carrying a prefix or a custom operator path is
+gated the same way), and only for `opencode-go` (derived) or
+`opencode-console` (valid client value only). A client value counts
+only when the operator allowlisted `x-opencode-session` in
+`forward_headers`; a statically configured provider header never
+supplies a session value (Console deletes it, Go overwrites it with
+the derived value). It is deleted on model discovery, embeddings,
+token counting, media/images, speech, transcriptions, and rerank
+calls, and it is deleted for every non-opencode provider even if the
+operator listed it in `forward_headers` — a generic provider pointed
+at a Go endpoint must be reconfigured as type `opencode-go`.
 
 One mechanism, not two: provider Type (`opencode-console` /
 `opencode-go`) is the sole opt-in. The earlier draft design (an

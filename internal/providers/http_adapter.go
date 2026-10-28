@@ -639,7 +639,7 @@ func (a *httpAdapter) DoPath(ctx context.Context, method, path string, payload [
 			req.Header.Set("Accept", "text/event-stream")
 		}
 		a.applyHeaders(req, forward)
-		a.applyOpencodeSession(req, reqCtx, payload)
+		a.applyOpencodeSession(req, reqCtx, payload, forward)
 		if ct := forward.Get("Content-Type"); ct != "" {
 			// Media uploads (multipart/form-data) must keep the
 			// client's content type — including its boundary — or the
@@ -897,13 +897,18 @@ func (a *httpAdapter) observeRateLimitHeaders(h http.Header, dispatchSeq uint64)
 
 // isOpencodeInferencePath reports whether an upstream path is an
 // eligible inference call for the OpenCode session header: the
-// provider's configured chat/responses/messages paths, or the generic
+// provider's configured chat/responses/messages paths (matched by
+// suffix, so a base URL carrying a prefix or a custom operator path
+// is gated the same way as the documented path), or the generic
 // suffixes for those protocols. Everything else — model discovery,
 // embeddings, count_tokens, media/images, speech, transcriptions,
 // rerank — is ineligible and must never carry the header.
 func (a *httpAdapter) isOpencodeInferencePath(path string) bool {
-	if path == a.p.ChatPath || path == a.p.ResponsesPath || path == a.p.MessagesPath {
-		return true
+	for _, c := range []string{a.p.ChatPath, a.p.ResponsesPath, a.p.MessagesPath} {
+		c = strings.TrimSpace(c)
+		if c != "" && c != "/" && strings.HasSuffix(path, c) {
+			return true
+		}
 	}
 	return strings.HasSuffix(path, "/chat/completions") ||
 		strings.HasSuffix(path, "/responses") ||
@@ -912,28 +917,37 @@ func (a *httpAdapter) isOpencodeInferencePath(path string) bool {
 
 // applyOpencodeSession enforces the session-header contract at the
 // single point where upstream requests are built (it runs after
-// applyHeaders, so it also cleans up anything forwarding produced):
+// applyHeaders, so it also cleans up anything forwarding produced).
+// The forwarded header set is an explicit input: only a client value
+// that arrived via an allowlisted ForwardHeaders entry counts as a
+// client value. A statically configured provider header never supplies
+// a session value — static session headers are not a conversation
+// mechanism, and keeping one would pin every conversation to a single
+// constant value upstream.
 //
 //   - Unrelated providers: the header is always deleted. A client
 //     session header must never reach a provider that is not an
 //     OpenCode profile, even if the operator listed it in
 //     ForwardHeaders. (A generic provider pointed at a Go endpoint
 //     must be reconfigured as type opencode-go instead.)
-//   - Console: a valid client-supplied value on an eligible inference
-//     call is forwarded unchanged (Console recognizes native session
-//     headers); the gateway never derives one for Console, and the
-//     header is deleted on ineligible calls.
-//   - Go, eligible inference POST only: a valid client-supplied value
-//     wins unchanged; an invalid value (control bytes, over 256 chars)
-//     is deleted and a derived value is used instead — invalid input
-//     falls through, it never fails the request and never travels
-//     upstream. With no client value, the derived value is scoped by
-//     the caller identity (virtual-key ID / tenant ID) so two callers
-//     sharing a session-key string cannot collide upstream.
+//   - Console: a valid allowlisted client-supplied value on an
+//     eligible inference call is forwarded unchanged (Console
+//     recognizes native session headers); the gateway never derives
+//     one for Console, and the header is deleted on ineligible calls
+//     and when no allowlisted client value exists (including when a
+//     static provider header set one).
+//   - Go, eligible inference POST only: a valid allowlisted
+//     client-supplied value wins unchanged; an invalid value (control
+//     bytes, over 256 chars) is deleted and a derived value is used
+//     instead — invalid input falls through, it never fails the
+//     request and never travels upstream. With no client value, the
+//     derived value is scoped by the caller identity (virtual-key ID
+//     / tenant ID) so two callers sharing a session-key string cannot
+//     collide upstream, and it overwrites any static provider header.
 //   - Go, ineligible calls: the header is deleted.
 //
 // No session value is ever logged.
-func (a *httpAdapter) applyOpencodeSession(req *http.Request, ctx context.Context, payload []byte) {
+func (a *httpAdapter) applyOpencodeSession(req *http.Request, ctx context.Context, payload []byte, forward http.Header) {
 	if a.p.Type != "opencode-go" && a.p.Type != "opencode-console" {
 		req.Header.Del("x-opencode-session")
 		return
@@ -943,13 +957,19 @@ func (a *httpAdapter) applyOpencodeSession(req *http.Request, ctx context.Contex
 		req.Header.Del("x-opencode-session")
 		return
 	}
-	existing := req.Header.Get("x-opencode-session")
-	if existing != "" {
-		if ValidOpencodeSessionValue(existing) {
+	clientVal := ""
+	if _, ok := a.forwardAllowed["x-opencode-session"]; ok && forward != nil {
+		clientVal = forward.Get("x-opencode-session")
+	}
+	if clientVal != "" {
+		if ValidOpencodeSessionValue(clientVal) {
+			req.Header.Set("x-opencode-session", clientVal)
 			return
 		}
-		req.Header.Del("x-opencode-session")
+		// Invalid client value: fall through to deletion (Console)
+		// or derivation (Go) below; it never travels upstream.
 	}
+	req.Header.Del("x-opencode-session")
 	if a.p.Type != "opencode-go" {
 		return
 	}
