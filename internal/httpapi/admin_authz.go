@@ -74,6 +74,8 @@ func adminPermissionForRequest(r *http.Request) (authz.Permission, bool) {
 		return readWrite(authz.ReadProviders, authz.WriteProviders)
 	case path == "/admin/api/settings" || path == "/admin/api/config/history" || path == "/admin/api/drain":
 		return readWrite(authz.ReadConfig, authz.WriteConfig)
+	case strings.HasPrefix(path, "/admin/api/nexaflow"):
+		return readWrite(authz.ReadWorkflow, authz.WriteWorkflow)
 	case path == "/admin/api/client-keys" || strings.HasPrefix(path, "/admin/api/client-keys/"):
 		if r.Method == http.MethodGet || r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodDelete {
 			return authz.ManageKeys, true

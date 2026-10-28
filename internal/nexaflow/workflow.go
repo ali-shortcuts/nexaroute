@@ -123,16 +123,30 @@ type Definition struct {
 	Edges       []DefinitionEdge    `json:"edges,omitempty"`
 	Triggers    []DefinitionTrigger `json:"triggers"`
 	Settings    DefinitionSettings  `json:"settings,omitempty"`
+	// OnError is a Phase 8 extension (see extensions.go): one error
+	// handler node wired into the workflow.
+	OnError *ErrorHandlerSpec `json:"on_error,omitempty"`
 }
 
 // DefinitionNode is one instance of a registry node inside a
 // definition. Config is validated against the node's ConfigSchema;
 // secretRef fields hold references only, never secret values.
+//
+// Phase 8 extensions (see extensions.go): Input is an optional explicit
+// input mapping, and ForEach is an optional bounded-iteration declaration.
+// Both are absent in the Phase 1 contract; when Input is present it fully
+// determines the node input, replacing the Phase 1 predecessor merge.
 type DefinitionNode struct {
 	ID      string         `json:"id"`
 	NodeID  string         `json:"node_id"`
 	Version string         `json:"version"`
 	Config  map[string]any `json:"config,omitempty"`
+	// Input, when non-nil, maps node input fields to literals or to
+	// references ({"$ref": "path"} or "$.path" strings) into the run
+	// context (workflow input plus succeeded node outputs). It replaces
+	// the predecessor merge for this node.
+	Input   map[string]any `json:"input,omitempty"`
+	ForEach *ForEachSpec   `json:"for_each,omitempty"`
 }
 
 // DefinitionEdge connects two node instances. Branch is empty for an
@@ -166,6 +180,12 @@ type DefinitionSettings struct {
 	// RetentionDays bounds how long run history is kept. 0 means
 	// the default of 90 days; when set, it must be in [7, 365].
 	RetentionDays int `json:"retention_days,omitempty"`
+	// PolicyApproved is a Phase 8 extension: operator policy approval
+	// recorded at publish time for RequiresOperatorPolicy nodes (for
+	// example non-loopback HTTP nodes and billable LLM nodes). Runs of
+	// this definition inherit it; without it those nodes fail with
+	// policy_required.
+	PolicyApproved bool `json:"policy_approved,omitempty"`
 }
 
 // DefinitionVersion is the version record for one published snapshot.

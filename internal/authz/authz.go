@@ -30,6 +30,11 @@ const (
 	ReadAudit      Permission = "audit.read"
 	ManageKeys     Permission = "keys.manage"
 	ManageVideo    Permission = "video.manage"
+	// Workflow permissions (NexaFlow admin API). There is deliberately no
+	// tenant or scope field on Identity: tenant scoping for workflows is
+	// by definition scope plus store list filters, not by this permission.
+	ReadWorkflow  Permission = "workflow.read"
+	WriteWorkflow Permission = "workflow.write"
 )
 
 type Identity struct {
@@ -43,22 +48,26 @@ var rolePermissions = map[Role]map[Permission]bool{
 		ReadConfig: true, WriteConfig: true, ReadProviders: true, WriteProviders: true,
 		ReadRouting: true, WriteRouting: true, ReadUsage: true, RunEvaluation: true,
 		ReadAudit: true, ManageKeys: true, ManageVideo: true,
+		ReadWorkflow: true, WriteWorkflow: true,
 	},
 	RoleAdmin: {
 		ReadConfig: true, WriteConfig: true, ReadProviders: true, WriteProviders: true,
 		ReadRouting: true, WriteRouting: true, ReadUsage: true, RunEvaluation: true,
 		ReadAudit: true, ManageKeys: true, ManageVideo: true,
+		ReadWorkflow: true, WriteWorkflow: true,
 	},
 	RoleOperator: {
 		ReadConfig: true, ReadProviders: true, ReadRouting: true, WriteRouting: true,
 		ReadUsage: true, RunEvaluation: true, ManageVideo: true,
+		ReadWorkflow: true, WriteWorkflow: true,
 	},
 	RoleDeveloper: {
 		ReadConfig: true, ReadProviders: true, ReadRouting: true, ReadUsage: true,
-		RunEvaluation: true, ReadAudit: true,
+		RunEvaluation: true, ReadAudit: true, ReadWorkflow: true,
 	},
 	RoleViewer: {
 		ReadConfig: true, ReadProviders: true, ReadRouting: true, ReadUsage: true,
+		ReadWorkflow: true,
 	},
 }
 

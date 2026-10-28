@@ -33,17 +33,17 @@ func TestOIDCRoleMatrixIsLeastPrivilege(t *testing.T) {
 	}{
 		{
 			RoleViewer,
-			[]Permission{ReadConfig, ReadProviders, ReadRouting, ReadUsage},
-			[]Permission{WriteConfig, WriteProviders, WriteRouting, RunEvaluation, ReadAudit, ManageKeys, ManageVideo},
+			[]Permission{ReadConfig, ReadProviders, ReadRouting, ReadUsage, ReadWorkflow},
+			[]Permission{WriteConfig, WriteProviders, WriteRouting, RunEvaluation, ReadAudit, ManageKeys, ManageVideo, WriteWorkflow},
 		},
 		{
 			RoleOperator,
-			[]Permission{ReadConfig, ReadProviders, ReadRouting, ReadUsage, WriteRouting, RunEvaluation, ManageVideo},
+			[]Permission{ReadConfig, ReadProviders, ReadRouting, ReadUsage, WriteRouting, RunEvaluation, ManageVideo, ReadWorkflow, WriteWorkflow},
 			[]Permission{WriteConfig, WriteProviders, ReadAudit, ManageKeys},
 		},
 		{
 			RoleAdmin,
-			[]Permission{ReadConfig, WriteConfig, ReadProviders, WriteProviders, ReadRouting, WriteRouting, ReadUsage, RunEvaluation, ReadAudit, ManageKeys, ManageVideo},
+			[]Permission{ReadConfig, WriteConfig, ReadProviders, WriteProviders, ReadRouting, WriteRouting, ReadUsage, RunEvaluation, ReadAudit, ManageKeys, ManageVideo, ReadWorkflow, WriteWorkflow},
 			nil,
 		},
 	}

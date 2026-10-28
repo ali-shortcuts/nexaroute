@@ -303,6 +303,7 @@ type Config struct {
 	Guardrails             GuardrailConfig              `json:"guardrails,omitempty"`
 	Evaluation             EvaluationConfig             `json:"evaluation,omitempty"`
 	Video                  VideoConfig                  `json:"video,omitempty"`
+	Nexaflow               NexaflowConfig               `json:"nexaflow,omitempty"`
 	Decision               DecisionConfig               `json:"decision,omitempty"`
 	Autopilot              AutopilotConfig              `json:"autopilot,omitempty"`
 	DecisionPolicies       []DecisionPolicyConfig       `json:"decision_policies,omitempty"`
@@ -383,6 +384,27 @@ func (c *Config) ClientKeyMigrationPending() int {
 
 // VideoConfig controls the optional, isolated Video Gateway. It is disabled
 // by default and does not affect the LLM data plane when disabled.
+// NexaflowConfig enables the NexaFlow workflow engine (Phase 8). The
+// store is single-host FileStore only in this phase: a multi-instance
+// PostgreSQL store does not exist yet, so enabling NexaFlow on more than
+// one gateway process against the same path is unsupported. StorePath is
+// resolved relative to the config file's directory when relative (the
+// admin.security_store_path pattern); empty means
+// "nexaflow/nexaflow-store" under that directory. GatewayBaseURL is the
+// loopback address of this gateway for chat/video/MCP calls; empty
+// defaults to http://127.0.0.1:<listen-port>. GatewayTokenRef is the
+// environment variable name holding a client-auth token for those
+// loopback calls; without it, llm.chat nodes fail closed at client-auth.
+// TickIntervalSeconds schedules background schedule ticks; 0 disables
+// background ticking (operators tick via the admin API instead).
+type NexaflowConfig struct {
+	Enabled             bool   `json:"enabled,omitempty"`
+	StorePath           string `json:"store_path,omitempty"`
+	GatewayBaseURL      string `json:"gateway_base_url,omitempty"`
+	GatewayTokenRef     string `json:"gateway_token_ref,omitempty"`
+	TickIntervalSeconds int    `json:"tick_interval_seconds,omitempty"`
+}
+
 type VideoConfig struct {
 	Enabled                   bool    `json:"enabled,omitempty"`
 	StorePath                 string  `json:"store_path,omitempty"`

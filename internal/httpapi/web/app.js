@@ -1,6 +1,6 @@
 'use strict';
 (() => {
-  const state = { page: 'overview', snap: { deployments: [], health: [], events: [], virtual_endpoints: [], route_profiles: [], candidate_pools: [], fallback_chains: [], config: {} }, providers: [], presetCatalog: [], presetQuery: '', presetCategory: '', adminKey: '', auth: null, csrfToken: '', sseAbort: null, sseReconnect: null, eventEpoch: 0, eventSeq: 0, modal: null, noticeTimer: 0, theme: localStorage.getItem('nexaroute_theme') || 'dark', providerQuery: '', routeQuery: '', modelQuery: '', listLimits: {}, activityQuery: '', activityTab: 'all', lang: localStorage.getItem('nexaroute_lang') || 'en', connectionStatus: { ok: false, bad: false }, paletteIndex: 0, paletteItems: [], pendingAction: null, settingsTab: 'gateway', pgKey: sessionStorage.getItem('nexaroute_pg_key') || '', pgModel: '', pgMessages: [], pgBusy: false, pgAbort: null, cards: [], runs: [], evalsLoaded: false, evalsLoading: false, evalsError: '', promURL: localStorage.getItem('nexaroute_prom_url') || '', grafanaURL: localStorage.getItem('nexaroute_grafana_url') || '', accessQuery: '', audit: [], auditQuery: '', auditOutcome: 'all', auditLimit: 500, auditLoaded: false, auditLoading: false, auditError: '', keys: [], keysStatus: 'unknown', drain: { draining: false, inflight: 0 }, history: { revision: 0, available_rollbacks: 0 }, usage: [], videoToken: sessionStorage.getItem('nexaroute_video_token') || '', videoProviders: [], videoJobs: [], videoLoading: false, videoPoll: null, videoDisabled: false, videoError: '', videoQuery: '', videoStateFilter: 'all', videoDurability: '' };  const activityState = () => state.activity || (state.activity = { requests: [], counts: {}, staleAfter: 300, loading: false, error: '', selected: null, connected: false, lastAt: 0, cursor: 0, provider: '', stateFilter: 'all' });  const $ = (s, root = document) => root.querySelector(s), $$ = (s, root = document) => [...root.querySelectorAll(s)];
+  const state = { page: 'overview', snap: { deployments: [], health: [], events: [], virtual_endpoints: [], route_profiles: [], candidate_pools: [], fallback_chains: [], config: {} }, providers: [], presetCatalog: [], presetQuery: '', presetCategory: '', adminKey: '', auth: null, csrfToken: '', sseAbort: null, sseReconnect: null, eventEpoch: 0, eventSeq: 0, modal: null, noticeTimer: 0, theme: localStorage.getItem('nexaroute_theme') || 'dark', providerQuery: '', routeQuery: '', modelQuery: '', listLimits: {}, activityQuery: '', activityTab: 'all', lang: localStorage.getItem('nexaroute_lang') || 'en', connectionStatus: { ok: false, bad: false }, paletteIndex: 0, paletteItems: [], pendingAction: null, settingsTab: 'gateway', pgKey: sessionStorage.getItem('nexaroute_pg_key') || '', pgModel: '', pgMessages: [], pgBusy: false, pgAbort: null, cards: [], runs: [], evalsLoaded: false, evalsLoading: false, evalsError: '', promURL: localStorage.getItem('nexaroute_prom_url') || '', grafanaURL: localStorage.getItem('nexaroute_grafana_url') || '', accessQuery: '', audit: [], auditQuery: '', auditOutcome: 'all', auditLimit: 500, auditLoaded: false, auditLoading: false, auditError: '', keys: [], keysStatus: 'unknown', drain: { draining: false, inflight: 0 }, history: { revision: 0, available_rollbacks: 0 }, usage: [], videoToken: sessionStorage.getItem('nexaroute_video_token') || '', videoProviders: [], videoJobs: [], videoLoading: false, videoPoll: null, videoDisabled: false, videoError: '', videoQuery: '', videoStateFilter: 'all', videoDurability: '', nexaflowDefs: [], nexaflowSelected: '', nexaflowRuns: [], nexaflowRun: null, nexaflowDisabled: false, nexaflowError: '', nexaflowPoll: null, nexaflowLoading: false };  const activityState = () => state.activity || (state.activity = { requests: [], counts: {}, staleAfter: 300, loading: false, error: '', selected: null, connected: false, lastAt: 0, cursor: 0, provider: '', stateFilter: 'all' });  const $ = (s, root = document) => root.querySelector(s), $$ = (s, root = document) => [...root.querySelectorAll(s)];
   const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[c]));
   const num = v => Number(v || 0).toLocaleString();
   function isEmergencyAdmin() { return Boolean(state.auth?.emergency_access_enabled && !state.auth?.oidc_enabled && (!state.auth?.api_key_configured || Boolean(state.adminKey))); }
@@ -1763,7 +1763,7 @@
   const bt = (key, vars) => { let s = (BODY_I18N[state.lang] || BODY_I18N.en)[key] || BODY_I18N.en[key] || key; if (vars) for (const k of Object.keys(vars)) s = s.split('{' + k + '}').join(String(vars[k])); if (s.includes('{s}')) s = s.split('{s}').join(state.lang === 'en' && Number(vars?.n) !== 1 ? 's' : ''); return s; };
   const themeLabel = () => state.theme === 'dark' ? t('lightMode') : t('darkMode');
   function applyLang() { const rtl = state.lang === 'fa' || state.lang === 'ps'; document.documentElement.lang = state.lang; document.documentElement.dir = rtl ? 'rtl' : 'ltr'; const sel = $('#lang-switch'); if (sel) sel.value = state.lang; const brand = $('#brand-sub'); if (brand) brand.textContent = t('brand'); const skip = $('#skip-link'); if (skip) skip.textContent = t('skip'); $$('#primary-nav button').forEach(b => { const label = pageMeta(b.dataset.page)?.[0]; if (!label) return; const node = [...b.childNodes].find(n => n.nodeType === 3 && n.textContent.trim()); if (node) node.textContent = label; }); $$('#primary-nav [data-navgroup]').forEach(el => { const k = el.dataset.navgroup || ''; el.textContent = t('nav' + k.charAt(0).toUpperCase() + k.slice(1)); }); const tt = $('#theme-toggle'); if (tt) tt.textContent = themeLabel(); renderAuthControl(); setConnection(state.connectionStatus.ok, state.connectionStatus.bad); }
-  const meta = { overview: ['Overview', 'Your routing system at a glance.'], providers: ['Providers', 'Manage upstream connections, models and capabilities.'], routing: ['Routing', 'Shape stable public models into reliable execution paths.'], models: ['Model inventory', 'Every provider-qualified model with capabilities, discovery source and verified health.'], video: ['Video Studio', 'Create, monitor and safely operate asynchronous video jobs.'], activity: ['Activity', 'Trace real requests, incidents and routing history.'], playground: ['WebChat', 'Talk to your gateway — every reply shows the route, provider and model that answered.'], policies: ['Policies', 'Decision policies, guardrails and route-profile privacy.'], access: ['Access', 'Manage virtual keys, teams and projects.'], audit: ['Audit', 'Search the tamper-evident admin audit chain.'], cost: ['Budgets & Cost', 'Live spend, per-deployment cost and exports.'], evals: ['Evals', 'Model scorecards and evaluation runs.'], observability: ['Observability', 'Deployment health signals and metrics links.'], settings: ['Settings', 'Set operator intent, access and runtime policy.'] };  const deployments = () => state.snap.deployments || [], routes = () => state.snap.virtual_endpoints || [], healthyCount = () => (state.snap.health || []).filter(x => ['healthy', 'ready'].includes(String(x.status))).length;
+  const meta = { overview: ['Overview', 'Your routing system at a glance.'], providers: ['Providers', 'Manage upstream connections, models and capabilities.'], routing: ['Routing', 'Shape stable public models into reliable execution paths.'], models: ['Model inventory', 'Every provider-qualified model with capabilities, discovery source and verified health.'], video: ['Video Studio', 'Create, monitor and safely operate asynchronous video jobs.'], nexaflow: ['Workflows', 'Create, publish and operate durable workflows.'], activity: ['Activity', 'Trace real requests, incidents and routing history.'], playground: ['WebChat', 'Talk to your gateway — every reply shows the route, provider and model that answered.'], policies: ['Policies', 'Decision policies, guardrails and route-profile privacy.'], access: ['Access', 'Manage virtual keys, teams and projects.'], audit: ['Audit', 'Search the tamper-evident admin audit chain.'], cost: ['Budgets & Cost', 'Live spend, per-deployment cost and exports.'], evals: ['Evals', 'Model scorecards and evaluation runs.'], observability: ['Observability', 'Deployment health signals and metrics links.'], settings: ['Settings', 'Set operator intent, access and runtime policy.'] };  const deployments = () => state.snap.deployments || [], routes = () => state.snap.virtual_endpoints || [], healthyCount = () => (state.snap.health || []).filter(x => ['healthy', 'ready'].includes(String(x.status))).length;
   const providerForDeployment = d => state.providers.find(p => p.id === d.provider_id || p.id === d.provider) || {};
   const statusClass = s => ['healthy', 'ready', 'connected', 'success', 'ok'].includes(String(s).toLowerCase()) ? 'good' : ['cooldown', 'failed', 'degraded', 'error', 'offline'].includes(String(s).toLowerCase()) ? 'bad' : 'warn';
   const statusPill = (label, kind = '') => `<span class="status ${kind}">${esc(label)}</span>`;
@@ -1783,8 +1783,180 @@
     const noteHtml = note ? `<span class="dh-note" title="${esc(note)}">${esc(note)}</span>` : '';
     return `<div class="data-handling"><span class="status ${trainsKind}" title="${esc(trainsLabel)}">${esc(trainsLabel)}</span><span class="status ${retentionKind}" title="${esc(retentionLabel)}">${esc(retentionLabel)}</span>${noteHtml}</div>`;
   }
-  function render() { const [title, description] = pageMeta(state.page); $('#page-title').textContent = title; $('#page-description').textContent = description; $$('[data-page]').forEach(b => b.classList.toggle('active', b.dataset.page === state.page)); $('#content').innerHTML = views()[state.page](); if (state.page === 'policies') bindPolicies(); if (state.page === 'providers') bindProviders(); if (state.page === 'routing') bindRouting(); if (state.page === 'models') bindModels(); if (state.page === 'activity') bindActivity(); if (state.page === 'playground') bindPlayground(); if (state.page === 'access') bindAccess(); if (state.page === 'audit') { bindAudit(); ensureAudit(); } if (state.page === 'evals') ensureEvals(); if (state.page === 'observability') bindObservability(); if (state.page === 'settings') bindSettings(); if (state.page === 'video') { ensureVideoPolling(); if (!state.videoLoading) refreshVideo(); } else if (state.videoPoll) { clearInterval(state.videoPoll); state.videoPoll = null; } if (state.page !== 'activity' && state.activityPoll) { clearInterval(state.activityPoll); state.activityPoll = null; } applyLang(); window.NexaRouteVisualAgent?.render(); }
-  function views() { return { overview: overviewView, providers: providersView, routing: routingView, models: modelsView, video: videoView, activity: activityView, playground: playgroundView, policies: policiesView, access: accessView, audit: auditView, cost: costView, evals: evalsView, observability: observabilityView, settings: settingsView }; }  function deploymentPanel() { const d = state.snap.deployment_report || {}; if (!d.store_topology) return ''; const scopePill = v => v === 'shared' ? statusPill('shared', 'good') : v === 'shared-host' ? statusPill('shared-host', 'warn') : statusPill('per-instance', 'warn'); const topoPill = d.store_topology === 'shared' ? statusPill('shared store', 'good') : d.store_topology === 'test-only' ? statusPill('test-only store', 'bad') : statusPill(d.store_topology, 'warn'); const rows = [['Config snapshot', d.config_snapshot], ['Audit & security store', d.audit_security_store], ['Breaker / cooldown', d.breaker_cooldown], ['Quota reservations', d.quota_reservations], ['Session affinity', d.session_affinity], ['Video jobs & ledger', d.video_jobs_ledger], ['Request idempotency', d.request_idempotency]]; return `<section class="advanced-panel"><details><summary><span>${bt('dp_title')}</span><small>${bt('dp_d')}</small></summary><div class="event-table"><div class="event-table-head"><span>Subsystem</span><span>Scope</span><span>Topology</span><span>Warnings</span></div><article class="event-row"><span>${rows.map(r => esc(r[0])).join('<br>')}</span><span>${rows.map(r => scopePill(r[1])).join('<br>')}</span><span>${topoPill}<br><small>control plane ${d.control_plane_enabled ? 'on · ' + esc(d.control_plane_backend || '') : 'off'} · security store ${esc(d.security_store_backend || '')}</small></span><span>${(d.warnings || []).map(w => `<small>${esc(w)}</small>`).join('<br>')}</span></article></div></details></section>`; }
+  function render() { const [title, description] = pageMeta(state.page); $('#page-title').textContent = title; $('#page-description').textContent = description; $$('[data-page]').forEach(b => b.classList.toggle('active', b.dataset.page === state.page)); $('#content').innerHTML = views()[state.page](); if (state.page === 'policies') bindPolicies(); if (state.page === 'providers') bindProviders(); if (state.page === 'routing') bindRouting(); if (state.page === 'models') bindModels(); if (state.page === 'activity') bindActivity(); if (state.page === 'playground') bindPlayground(); if (state.page === 'access') bindAccess(); if (state.page === 'audit') { bindAudit(); ensureAudit(); } if (state.page === 'evals') ensureEvals(); if (state.page === 'observability') bindObservability(); if (state.page === 'settings') bindSettings(); if (state.page === 'video') { ensureVideoPolling(); if (!state.videoLoading) refreshVideo(); } else if (state.videoPoll) { clearInterval(state.videoPoll); state.videoPoll = null; } if (state.page === 'nexaflow') bindNexaflow(); if (state.page !== 'nexaflow' && state.nexaflowPoll) { clearInterval(state.nexaflowPoll); state.nexaflowPoll = null; } if (state.page !== 'activity' && state.activityPoll) { clearInterval(state.activityPoll); state.activityPoll = null; } applyLang(); window.NexaRouteVisualAgent?.render(); }
+  function nexaflowStatusKind(s) { return s === 'succeeded' ? 'good' : s === 'failed' || s === 'cancelled' ? 'bad' : s === 'running' || s === 'awaiting_approval' || s === 'parked' ? 'warn' : ''; }
+  function nexaflowIsTerminal(s) { return ['succeeded', 'failed', 'cancelled'].includes(s); }
+  function nexaflowView() {
+    return `<section class="panel"><div class="section-heading compact"><div><span class="eyebrow">NexaFlow</span><h2>Workflows</h2><p>Create, validate, publish and execute durable workflows. Runs persist in the workflow store; interrupted runs park instead of blindly repeating side effects.</p></div><button class="button secondary small" id="nf-refresh">Refresh</button></div><div id="nf-error" class="muted">${esc(state.nexaflowError || '')}</div><div class="split-grid"><section><div class="section-heading compact"><div><h2>Definitions</h2></div><button class="button ghost small" id="nf-new">New</button></div><div id="nf-def-list" class="muted">Loading…</div></section><section><div class="section-heading compact"><div><h2>Editor</h2></div></div><div class="form-grid"><div class="field full"><label for="nf-def-json">Definition JSON</label><textarea id="nf-def-json" rows="18" spellcheck="false"></textarea></div><div class="field full"><label for="nf-run-input">Run input JSON (for Execute)</label><textarea id="nf-run-input" rows="4" spellcheck="false">{}</textarea></div></div><div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px"><button class="button secondary small" id="nf-save">Save draft</button><button class="button ghost small" id="nf-validate">Validate</button><button class="button secondary small" id="nf-publish">Publish</button><button class="button primary small" id="nf-execute">Execute</button></div><p class="muted">Save validates before persisting. Publish snapshots the draft as an immutable revision; rollback is republishing an older revision. Webhook triggers are delivered to POST /nexaflow/webhooks/{definition}/{trigger} with X-NexaFlow-Timestamp and X-NexaFlow-Signature headers.</p></section></div></section><section class="panel"><div class="section-heading compact"><div><h2>Runs</h2></div></div><div id="nf-runs" class="muted">Select a definition to see its runs.</div></section><section class="panel"><div class="section-heading compact"><div><h2>Run detail</h2></div></div><div id="nf-run-detail" class="muted">Select a run to see node-by-node status, attempts, durations and errors.</div></section>`;
+  }
+  function nexaflowDefListHTML() {
+    const defs = state.nexaflowDefs || [];
+    if (!defs.length) return '<div class="muted">No definitions yet. Use New, paste a definition, and Save draft.</div>';
+    return defs.map(d => `<button type="button" class="button ghost small" data-nf-def="${esc(d.id)}" style="display:block;margin:4px 0">${esc(d.id)} <span class="muted">${esc(d.tenant_scope || '')}</span></button>`).join('');
+  }
+  function nexaflowRunsHTML() {
+    const runs = state.nexaflowRuns || [];
+    if (!runs.length) return '<div class="muted">No runs for this definition.</div>';
+    return runs.map(r => `<button type="button" class="button ghost small" data-nf-run="${esc(r.id)}" style="display:block;margin:4px 0">${esc(r.id)} ${statusPill(r.status || '', nexaflowStatusKind(r.status))} <span class="muted">${esc(r.trigger || '')} · ${esc(r.actor || '')}</span></button>`).join('');
+  }
+  function nexaflowRunDetailHTML(run) {
+    if (!run) return '<div class="muted">Select a run to see node-by-node status, attempts, durations and errors.</div>';
+    const steps = (run.steps || []).map(s => `<div style="display:flex;gap:12px;flex-wrap:wrap;padding:6px 0;border-bottom:1px solid var(--border, #222)"><b>${esc(s.node_id)}</b>${statusPill(s.status || '', nexaflowStatusKind(s.status))}<span class="muted">attempt ${esc(s.attempt)}${s.iteration >= 0 ? ' · iteration ' + esc(s.iteration) : ''} · ${esc(s.duration_ms)} ms</span>${s.error ? `<span class="muted">${esc(s.error.code || '')}: ${esc(s.error.message || '')}</span>` : ''}</div>`).join('') || '<div class="muted">No steps recorded yet.</div>';
+    const actions = run.status === 'awaiting_approval'
+      ? `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px"><select id="nf-decision"><option value="approved">approved</option><option value="rejected">rejected</option></select><button class="button primary small" id="nf-approve">Submit decision</button></div><p class="muted">The approver must differ from the run requester; self-approval is refused. A rejection records approved=false — branch on that flag in the workflow.</p>`
+      : run.status === 'parked'
+      ? `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px"><select id="nf-resume-mode"><option value="retry_ambiguous">retry_ambiguous</option><option value="skip_ambiguous">skip_ambiguous</option><option value="fail_ambiguous">fail_ambiguous</option><option value="continue">continue</option></select><button class="button primary small" id="nf-resume">Resume</button></div><p class="muted">Parked runs never blindly repeat the ambiguous step: skip it, fail it, or retry it explicitly.</p>`
+      : '';
+    const cancel = !nexaflowIsTerminal(run.status) ? `<button class="button ghost small" id="nf-cancel">Cancel run</button>` : '';
+    return `<div><b>${esc(run.id)}</b> ${statusPill(run.status || '', nexaflowStatusKind(run.status))} <span class="muted">definition ${esc(run.definition_id)} rev ${esc(run.revision)} · trigger ${esc(run.trigger || '')} · actor ${esc(run.actor || '')}</span>${run.error ? `<div class="muted">Run error: ${esc(run.error.code || '')}: ${esc(run.error.message || '')}</div>` : ''}<div style="margin-top:8px">${steps}</div><div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">${actions}${cancel}</div></div>`;
+  }
+  async function refreshNexaflowDefs() {
+    try {
+      const data = await api('/admin/api/nexaflow/definitions');
+      state.nexaflowDefs = data.definitions || [];
+      state.nexaflowDisabled = false;
+      state.nexaflowError = '';
+    } catch (e) {
+      state.nexaflowDefs = [];
+      state.nexaflowDisabled = true;
+      state.nexaflowError = e.message || String(e);
+    }
+    const el = $('#nf-def-list');
+    if (el) {
+      el.innerHTML = state.nexaflowDisabled ? `<div class="muted">NexaFlow is not enabled on this gateway. Enable it with the nexaflow config section (store_path, gateway_token_ref) and restart.</div>` : nexaflowDefListHTML();
+      el.querySelectorAll('[data-nf-def]').forEach(btn => { btn.onclick = () => selectNexaflowDef(btn.dataset.nfDef); });
+    }
+  }
+  async function selectNexaflowDef(id) {
+    state.nexaflowSelected = id;
+    try {
+      const data = await api('/admin/api/nexaflow/definitions/' + encodeURIComponent(id));
+      const ta = $('#nf-def-json');
+      if (ta) ta.value = JSON.stringify(data.definition || {}, null, 2);
+    } catch (e) { notice('Could not load definition: ' + e.message, true); }
+    await refreshNexaflowRuns();
+  }
+  async function refreshNexaflowRuns() {
+    const id = state.nexaflowSelected;
+    const el = $('#nf-runs');
+    if (!id) { if (el) el.innerHTML = '<div class="muted">Select a definition to see its runs.</div>'; return; }
+    try {
+      const data = await api('/admin/api/nexaflow/definitions/' + encodeURIComponent(id) + '/runs');
+      state.nexaflowRuns = data.runs || [];
+    } catch (e) { state.nexaflowRuns = []; }
+    if (el) {
+      el.innerHTML = nexaflowRunsHTML();
+      el.querySelectorAll('[data-nf-run]').forEach(btn => { btn.onclick = async () => {
+        try {
+          const data = await api('/admin/api/nexaflow/runs/' + encodeURIComponent(btn.dataset.nfRun));
+          state.nexaflowRun = data.run; await refreshNexaflowRunDetail();
+        } catch (e) { notice('Could not load run: ' + e.message, true); }
+      }; });
+    }
+  }
+  async function refreshNexaflowRunDetail() {
+    const run = state.nexaflowRun;
+    const el = $('#nf-run-detail');
+    if (!run) { if (el) el.innerHTML = nexaflowRunDetailHTML(null); return; }
+    try {
+      const data = await api('/admin/api/nexaflow/runs/' + encodeURIComponent(run.id));
+      state.nexaflowRun = data.run || run;
+    } catch (e) { /* keep last known detail */ }
+    if (el) el.innerHTML = nexaflowRunDetailHTML(state.nexaflowRun);
+    bindNexaflowDetailActions();
+    if (state.nexaflowRun && !nexaflowIsTerminal(state.nexaflowRun.status)) ensureNexaflowPolling(); else stopNexaflowPolling();
+  }
+  function bindNexaflowDetailActions() {
+    const approve = $('#nf-approve');
+    if (approve) approve.onclick = async () => {
+      try {
+        const decision = $('#nf-decision').value;
+        const data = await api('/admin/api/nexaflow/runs/' + encodeURIComponent(state.nexaflowRun.id) + '/approve', { method: 'POST', body: JSON.stringify({ decision }) });
+        state.nexaflowRun = data.run; notice('Decision submitted.');
+        await refreshNexaflowRunDetail();
+      } catch (e) { notice('Approve failed: ' + e.message, true); }
+    };
+    const resume = $('#nf-resume');
+    if (resume) resume.onclick = async () => {
+      try {
+        const mode = $('#nf-resume-mode').value;
+        const data = await api('/admin/api/nexaflow/runs/' + encodeURIComponent(state.nexaflowRun.id) + '/resume', { method: 'POST', body: JSON.stringify({ mode }) });
+        state.nexaflowRun = data.run; notice('Run resumed.');
+        await refreshNexaflowRunDetail();
+      } catch (e) { notice('Resume failed: ' + e.message, true); }
+    };
+    const cancel = $('#nf-cancel');
+    if (cancel) cancel.onclick = async () => {
+      try {
+        const data = await api('/admin/api/nexaflow/runs/' + encodeURIComponent(state.nexaflowRun.id) + '/cancel', { method: 'POST', body: '{}' });
+        state.nexaflowRun = data.run; notice('Run cancelled.');
+        await refreshNexaflowRunDetail();
+      } catch (e) { notice('Cancel failed: ' + e.message, true); }
+    };
+  }
+  function ensureNexaflowPolling() {
+    if (state.page !== 'nexaflow' || state.nexaflowPoll) return;
+    state.nexaflowPoll = setInterval(() => { if (state.page === 'nexaflow' && state.nexaflowRun && !nexaflowIsTerminal(state.nexaflowRun.status)) refreshNexaflowRunDetail(); }, 5000);
+  }
+  function stopNexaflowPolling() { if (state.nexaflowPoll) { clearInterval(state.nexaflowPoll); state.nexaflowPoll = null; } }
+  function bindNexaflow() {
+    if (state.nexaflowLoading) return;
+    state.nexaflowLoading = true;
+    const parseTextarea = (id, label) => {
+      const raw = $(id).value.trim();
+      if (!raw) return {};
+      try { return JSON.parse(raw); } catch (e) { throw Error(label + ' is not valid JSON: ' + e.message); }
+    };
+    const newTemplate = () => ({
+      schema_version: 'v1', id: 'wf-' + Date.now(), name: 'New workflow', tenant_scope: 'tenant-a',
+      nodes: [
+        { id: 'start', node_id: 'nexaroute.trigger.manual', version: 'v1' },
+        { id: 't', node_id: 'nexaroute.control.json_transform', version: 'v1', input: { value: { $ref: 'input.value' }, operations: [{ op: 'set_const', field: 'done', value: true }] } },
+      ],
+      edges: [{ id: 'e1', from: 'start', to: 't' }],
+      triggers: [{ name: 'start', kind: 'manual' }],
+    });
+    const wire = (id, fn) => { const el = $(id); if (el) el.onclick = fn; };
+    wire('#nf-refresh', async () => { await refreshNexaflowDefs(); await refreshNexaflowRuns(); });
+    wire('#nf-new', () => { const ta = $('#nf-def-json'); if (ta) ta.value = JSON.stringify(newTemplate(), null, 2); state.nexaflowSelected = ''; });
+    wire('#nf-save', async () => {
+      try {
+        const def = parseTextarea('#nf-def-json', 'Definition');
+        await api('/admin/api/nexaflow/definitions', { method: 'POST', body: JSON.stringify(def) });
+        state.nexaflowSelected = def.id; notice('Draft saved.'); await refreshNexaflowDefs(); await refreshNexaflowRuns();
+      } catch (e) { notice('Save failed: ' + e.message, true); }
+    });
+    wire('#nf-validate', async () => {
+      try {
+        const def = parseTextarea('#nf-def-json', 'Definition');
+        if (!def.id) throw Error('Definition needs an id to validate against its saved draft; save it first.');
+        const data = await api('/admin/api/nexaflow/definitions/' + encodeURIComponent(def.id) + '/validate', { method: 'POST', body: '{}' });
+        notice(data.valid ? 'Definition is valid.' : 'Definition is invalid: ' + (data.error || ''), !data.valid);
+      } catch (e) { notice('Validate failed: ' + e.message, true); }
+    });
+    wire('#nf-publish', async () => {
+      try {
+        const def = parseTextarea('#nf-def-json', 'Definition');
+        if (!def.id) throw Error('Definition needs an id; save it first.');
+        await api('/admin/api/nexaflow/definitions/' + encodeURIComponent(def.id) + '/publish', { method: 'POST', body: '{}' });
+        notice('Published as a new immutable revision.'); await refreshNexaflowDefs();
+      } catch (e) { notice('Publish failed: ' + e.message, true); }
+    });
+    wire('#nf-execute', async () => {
+      try {
+        const def = parseTextarea('#nf-def-json', 'Definition');
+        if (!def.id) throw Error('Definition needs an id; save and publish it first.');
+        const input = parseTextarea('#nf-run-input', 'Run input');
+        const data = await api('/admin/api/nexaflow/definitions/' + encodeURIComponent(def.id) + '/runs', { method: 'POST', body: JSON.stringify({ input }) });
+        state.nexaflowRun = { id: data.run_id, status: data.status };
+        notice('Run dispatched: ' + data.run_id);
+        await refreshNexaflowRuns(); await refreshNexaflowRunDetail();
+      } catch (e) { notice('Execute failed: ' + e.message, true); }
+    });
+    refreshNexaflowDefs().then(() => { state.nexaflowLoading = false; });
+    if (state.nexaflowRun) refreshNexaflowRunDetail();
+  }
+  function views() { return { overview: overviewView, providers: providersView, routing: routingView, models: modelsView, video: videoView, nexaflow: nexaflowView, activity: activityView, playground: playgroundView, policies: policiesView, access: accessView, audit: auditView, cost: costView, evals: evalsView, observability: observabilityView, settings: settingsView }; }  function deploymentPanel() { const d = state.snap.deployment_report || {}; if (!d.store_topology) return ''; const scopePill = v => v === 'shared' ? statusPill('shared', 'good') : v === 'shared-host' ? statusPill('shared-host', 'warn') : statusPill('per-instance', 'warn'); const topoPill = d.store_topology === 'shared' ? statusPill('shared store', 'good') : d.store_topology === 'test-only' ? statusPill('test-only store', 'bad') : statusPill(d.store_topology, 'warn'); const rows = [['Config snapshot', d.config_snapshot], ['Audit & security store', d.audit_security_store], ['Breaker / cooldown', d.breaker_cooldown], ['Quota reservations', d.quota_reservations], ['Session affinity', d.session_affinity], ['Video jobs & ledger', d.video_jobs_ledger], ['Request idempotency', d.request_idempotency]]; return `<section class="advanced-panel"><details><summary><span>${bt('dp_title')}</span><small>${bt('dp_d')}</small></summary><div class="event-table"><div class="event-table-head"><span>Subsystem</span><span>Scope</span><span>Topology</span><span>Warnings</span></div><article class="event-row"><span>${rows.map(r => esc(r[0])).join('<br>')}</span><span>${rows.map(r => scopePill(r[1])).join('<br>')}</span><span>${topoPill}<br><small>control plane ${d.control_plane_enabled ? 'on · ' + esc(d.control_plane_backend || '') : 'off'} · security store ${esc(d.security_store_backend || '')}</small></span><span>${(d.warnings || []).map(w => `<small>${esc(w)}</small>`).join('<br>')}</span></article></div></details></section>`; }
   function overviewView() { const h = state.snap.health || [], ev = (state.snap.events || []).slice(-8).reverse(), configured = deployments().length, healthy = healthyCount(), routeCount = routes().length, degraded = h.filter(x => ['degraded', 'failed', 'cooldown'].includes(x.status)).length, setupDone = [state.providers.length > 0, routeCount > 0, Boolean(state.snap.client_auth?.enabled)].filter(Boolean).length; return `<section class="hero-panel"><div><span class="eyebrow">${bt('ov_eyebrow')}</span><h2>${bt('ov_hero')}</h2><p>${bt('ov_hero_p')}</p><div class="hero-actions"><button class="button primary" data-action="add-provider">${bt('ov_add_provider')}</button><button class="button secondary" data-go="routing">${bt('ov_create_route')}</button><button class="button ghost" data-go="activity">${bt('ov_inspect_activity')}</button></div></div><div class="hero-orbit" aria-hidden="true"><div class="orbit-ring ring-one"></div><div class="orbit-ring ring-two"></div><div class="orbit-core">NR<span>LIVE</span></div><i></i><i></i><i></i></div></section><div class="metric-grid"><button type="button" class="metric-card accent" data-go="activity"><span class="metric-icon"><span class="dir-arrow">↗</span></span><div><small>${bt('ov_m_gateway')}</small><strong>${num(state.snap.request_total)}</strong><span class="metric-foot">${bt('ov_m_gateway_sub')}</span></div></button><button type="button" class="metric-card" data-go="observability"><span class="metric-icon">◈</span><div><small>${bt('ov_m_healthy')}</small><strong>${healthy}/${num(configured)}</strong><span class="metric-foot">${degraded ? bt('ov_need_attention', {n: degraded}) : bt('ov_no_incidents')}</span></div></button><button type="button" class="metric-card" data-go="routing"><span class="metric-icon">⇄</span><div><small>${bt('ov_m_routes')}</small><strong>${num(routeCount)}</strong><span class="metric-foot">${bt('ov_m_routes_sub')}</span></div></button><button type="button" class="metric-card" data-go="activity"><span class="metric-icon">◌</span><div><small>${bt('ov_m_events')}</small><strong>${num((state.snap.events || []).length)}</strong><span class="metric-foot">${bt('ov_m_events_sub')}</span></div></button></div><section class="setup-rail"><div class="setup-rail-head"><div><span class="eyebrow">${bt('ov_setup_eyebrow')}</span><h2>${bt('ov_setup_title')}</h2><p>${bt('ov_setup_desc', {n: setupDone})}</p></div><span class="settings-badge">${setupDone === 3 ? bt('ov_ready') : bt('ov_in_progress')}</span></div><div class="setup-steps"><button class="setup-step ${state.providers.length ? 'done' : 'current'}" data-go="providers"><span>1</span><div><b>${bt('ov_step1')}</b><small>${state.providers.length ? bt('ov_step1_done', {n: state.providers.length}) : bt('ov_step1_todo')}</small></div><strong>${state.providers.length ? '✓' : '<span class="dir-arrow">→</span>'}</strong></button><button class="setup-step ${routeCount ? 'done' : state.providers.length ? 'current' : ''}" data-go="routing"><span>2</span><div><b>${bt('ov_step2')}</b><small>${routeCount ? bt('ov_step2_done', {n: routeCount}) : bt('ov_step2_todo')}</small></div><strong>${routeCount ? '✓' : '<span class="dir-arrow">→</span>'}</strong></button><button class="setup-step ${state.snap.client_auth?.enabled ? 'done' : setupDone === 2 ? 'current' : ''}" data-go="settings"><span>3</span><div><b>${bt('ov_step3')}</b><small>${state.snap.client_auth?.enabled ? bt('ov_step3_done') : bt('ov_step3_todo')}</small></div><strong>${state.snap.client_auth?.enabled ? '✓' : '<span class="dir-arrow">→</span>'}</strong></button></div></section><div class="section-heading"><div><span class="eyebrow">${bt('ov_posture_eyebrow')}</span><h2>${bt('ov_posture_title')}</h2><p>${bt('ov_posture_desc')}</p></div><button class="button ghost small" data-go="settings">${bt('ov_open_settings')}</button></div><div class="health-grid">${healthLayer(bt('ov_hl_gw'), bt('ov_hl_gw_d'), true, bt('ov_hl_gw_l'), 'good', 'overview')} ${healthLayer(bt('ov_hl_pr'), state.providers.length ? bt('ov_hl_pr_d1') : bt('ov_hl_pr_d0'), state.providers.length > 0, state.providers.length ? bt('ov_step1_done', {n: state.providers.length}) : bt('ov_hl_pr_l0'), state.providers.length ? 'good' : 'warn', 'providers')} ${healthLayer(bt('ov_hl_rt'), routeCount ? bt('ov_hl_rt_d1') : bt('ov_hl_rt_d0'), routeCount > 0, routeCount ? bt('ov_hl_rt_l1', {n: routeCount}) : bt('ov_hl_rt_l0'), routeCount ? 'good' : 'warn', 'routing')} ${healthLayer(bt('ov_hl_ca'), state.snap.client_auth?.enabled ? bt('ov_hl_ca_d1') : bt('ov_hl_ca_d0'), Boolean(state.snap.client_auth?.enabled), state.snap.client_auth?.enabled ? bt('ov_hl_ca_l1') : bt('ov_hl_ca_l0'), state.snap.client_auth?.enabled ? 'good' : 'warn', 'settings')}</div><div class="split-grid"><section class="panel"><div class="section-heading compact"><div><span class="eyebrow">${bt('ov_map_eyebrow')}</span><h2>${bt('ov_map_title')}</h2></div>${statusPill('● ' + bt('ov_live'), 'live')}</div><div class="topology"><div class="topology-node client"><b>${bt('ov_topo_client')}</b><small>${bt('ov_topo_client_sub')}</small></div><div class="topology-line"><span></span></div><div class="topology-node router"><b>NexaRoute</b><small>${bt('ov_topo_router_sub')}</small></div><div class="topology-line"><span></span></div><div class="topology-targets">${topologyTargets()}</div></div></section><section class="panel"><div class="section-heading compact"><div><span class="eyebrow">${bt('ov_sig_eyebrow')}</span><h2>${bt('ov_sig_title')}</h2></div><button class="button ghost small" data-go="activity">${bt('ov_view_all')}</button></div>${eventList(ev.slice(0, 5))}</section></div>${deploymentPanel()}`; }
   function healthLayer(title, desc, ok, label, kind, go) { return `<button class="health-layer ${kind}" data-go="${go}"><span class="health-mark ${kind}">${ok ? '✓' : '!'}</span><span><b>${title}</b><small>${desc}</small></span><span class="health-label ${kind}">${label}</span><span class="health-chevron">→</span></button>`; }
   function topologyTargets() { const ds = deployments().slice(0, 3); if (!ds.length) return `<div class="topology-empty"><b>${bt('ov_topo_empty')}</b><small>${bt('ov_topo_empty_d')}</small></div>`; return ds.map(d => { const p = providerForDeployment(d), h = (state.snap.health || []).find(x => x.deployment === d.id) || {}; return `<div class="target-node"><span class="target-dot ${statusClass(h.status)}"></span><span><b>${esc(d.model || d.id)}</b><small>${esc(p.name || d.provider_id || bt('ov_topo_unknown'))}</small></span></div>`; }).join(''); }

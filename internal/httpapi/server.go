@@ -34,6 +34,7 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/decision/policy"
 	"github.com/ali-shortcuts/nexaroute/internal/events"
 	"github.com/ali-shortcuts/nexaroute/internal/health"
+	"github.com/ali-shortcuts/nexaroute/internal/nexaflow"
 	"github.com/ali-shortcuts/nexaroute/internal/probe"
 	"github.com/ali-shortcuts/nexaroute/internal/providers"
 	"github.com/ali-shortcuts/nexaroute/internal/route"
@@ -105,6 +106,11 @@ type Server struct {
 	taskClassCounts   map[string]uint64 // key: task_type|complexity
 	taskAnalysisTotal atomic.Uint64
 	videoHandler      http.Handler
+	// NexaFlow runtime, attached only when the operator enables it
+	// (see AttachNexaflow). Nil means the workflow API is unavailable.
+	nexaflowEngine    *nexaflow.Engine
+	nexaflowStore     nexaflow.Store
+	nexaflowScheduler *nexaflow.Scheduler
 	securityDB        securitystore.Backend
 	securityErr       error
 	oidc              *oidcAuthenticator
@@ -1090,6 +1096,16 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/admin/api/config/history", s.adminConfigHistory)
 	mux.HandleFunc("/admin/api/drain", s.adminDrain)
 	mux.HandleFunc("/admin/api/video/jobs/{id}/force-fail", s.adminVideoForceFail)
+	// NexaFlow workflows (engine attached only when enabled).
+	mux.HandleFunc("/admin/api/nexaflow/nodes", s.adminNexaflowNodes)
+	mux.HandleFunc("/admin/api/nexaflow/templates", s.adminNexaflowTemplates)
+	mux.HandleFunc("/admin/api/nexaflow/definitions", s.adminNexaflowDefinitions)
+	mux.HandleFunc("/admin/api/nexaflow/definitions/", s.adminNexaflowDefinitionByID)
+	mux.HandleFunc("/admin/api/nexaflow/runs/", s.adminNexaflowRunByID)
+	mux.HandleFunc("/admin/api/nexaflow/audit", s.adminNexaflowAudit)
+	mux.HandleFunc("/admin/api/nexaflow/scheduler/tick", s.adminNexaflowSchedulerTick)
+	// Signed webhook entry point: HMAC authentication, not admin auth.
+	mux.HandleFunc("/nexaflow/webhooks/", s.nexaflowWebhook)
 	// Phase B: Virtual Endpoints, Route Profiles, Candidate Pools, Fallback Chains
 	mux.HandleFunc("/admin/api/virtual-endpoints", s.adminVirtualEndpoints)
 	mux.HandleFunc("/admin/api/virtual-endpoints/", s.adminVirtualEndpointByID)

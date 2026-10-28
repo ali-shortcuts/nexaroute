@@ -23,6 +23,7 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/health"
 	"github.com/ali-shortcuts/nexaroute/internal/httpapi"
 	"github.com/ali-shortcuts/nexaroute/internal/logging"
+	"github.com/ali-shortcuts/nexaroute/internal/nexaflow"
 	"github.com/ali-shortcuts/nexaroute/internal/probe"
 	"github.com/ali-shortcuts/nexaroute/internal/providers"
 	"github.com/ali-shortcuts/nexaroute/internal/router"
@@ -333,6 +334,43 @@ func main() {
 			bootstrap.Fatalf("cannot initialize video gateway: %v", err)
 		}
 		api.AttachVideoHandler(videoRT.Handler)
+	}
+	// NexaFlow workflows (Phase 8): opt-in via the nexaflow config section.
+	// Single-host FileStore only; the scheduler ticks in the background
+	// when tick_interval_seconds > 0, and stops at process exit.
+	if cfg.Nexaflow.Enabled {
+		storePath := cfg.Nexaflow.StorePath
+		if storePath == "" {
+			storePath = "nexaflow/nexaflow-store"
+		}
+		if !filepath.IsAbs(storePath) {
+			storePath = filepath.Join(filepath.Dir(*configPath), storePath)
+		}
+		nfStore, err := nexaflow.NewFileStore(storePath)
+		if err != nil {
+			bootstrap.Fatalf("cannot initialize nexaflow store: %v", err)
+		}
+		if err := nfStore.Migrate(context.Background()); err != nil {
+			bootstrap.Fatalf("cannot migrate nexaflow store: %v", err)
+		}
+		baseURL := cfg.Nexaflow.GatewayBaseURL
+		if baseURL == "" {
+			_, port, perr := net.SplitHostPort(cfg.Listen)
+			if perr != nil {
+				bootstrap.Fatalf("cannot derive nexaflow loopback address from listen %q: %v", cfg.Listen, perr)
+			}
+			scheme := "http"
+			if cfg.TLS.Enabled {
+				scheme = "https"
+			}
+			baseURL = scheme + "://127.0.0.1:" + port
+		}
+		if err := api.AttachNexaflow(nfStore, nfStore, baseURL, cfg.Nexaflow.GatewayTokenRef); err != nil {
+			bootstrap.Fatalf("cannot attach nexaflow: %v", err)
+		}
+		stopNexaflowTick := api.StartNexaflowScheduler(time.Duration(cfg.Nexaflow.TickIntervalSeconds) * time.Second)
+		defer stopNexaflowTick()
+		logger.Printf("nexaflow enabled store=%s tick_interval=%ds", storePath, cfg.Nexaflow.TickIntervalSeconds)
 	}
 	api.SyncCapabilityContracts()
 	pe.SetCapabilityStore(api.CapabilityStore())
