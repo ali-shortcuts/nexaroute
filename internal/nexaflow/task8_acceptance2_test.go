@@ -821,7 +821,17 @@ func TestTask8PostgresSchedulerSlot(t *testing.T) {
 		t.Fatalf("scheduler2: %v", err)
 	}
 	now := time.Now().Truncate(time.Hour)
-	sched := []Schedule{{DefinitionID: "pg-sched-def", IntervalSeconds: 3600, Enabled: true}}
+	// Unique definition per run (Task 6 fix): the slot key is
+	// sched:<definition>:<hour>, so a fixed definition id makes
+	// this test fail on any second run within the same hour
+	// against a shared database, even though the scheduler is
+	// correct. The ledger test already uses this pattern.
+	defID := fmt.Sprintf("pg-sched-def-%d", time.Now().UnixNano())
+	t.Cleanup(func() {
+		_, _ = db.Exec(`DELETE FROM nexaroute_workflow_deliveries WHERE delivery_key = $1`,
+			fmt.Sprintf("sched:%s:%d", defID, now.Unix()))
+	})
+	sched := []Schedule{{DefinitionID: defID, IntervalSeconds: 3600, Enabled: true}}
 	for _, s := range []*Scheduler{s1, s2, s1} {
 		results := s.Tick(ctx, sched, now)
 		if len(results) != 1 {
