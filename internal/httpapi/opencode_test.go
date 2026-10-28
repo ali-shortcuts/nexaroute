@@ -340,6 +340,27 @@ func TestOpencodeNoRetryStormOn429(t *testing.T) {
 	}
 }
 
+// Anthropic thinking blocks survive the canonical round trip on the
+// Anthropic ingress to the Anthropic upstream protocol.
+func TestOpencodeAnthropicThinkingSurvives(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"msg_1","type":"message","role":"assistant","model":"fake","content":[{"type":"thinking","thinking":"some reasoning","signature":"sig"},{"type":"text","text":"plain-answer"}],"stop_reason":"end_turn","usage":{"input_tokens":11,"output_tokens":5}}`)
+	}))
+	defer srv.Close()
+	cfg := config.Default()
+	p := config.ProviderConfig{ID: "cf", Name: "C", Type: "opencode-console", BaseURL: srv.URL, APIKey: "test-key-1", AuthMode: "bearer", Enabled: true,
+		Models: []config.ModelConfig{{ID: "m", Model: "conf-model", Enabled: true, Weight: 1, Capabilities: config.Capabilities{Streaming: true, Tools: true, Reasoning: true}}}}
+	p.ApplyDefaults()
+	cfg.Providers = []config.ProviderConfig{p}
+	s := testGateway(t, cfg)
+	s.SyncCapabilityContracts()
+	rr := conformancePost(t, s, "/v1/messages", `{"model":"m","max_tokens":64,"messages":[{"role":"user","content":"hi"}]}`)
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), `"type":"thinking"`) || !strings.Contains(rr.Body.String(), "some reasoning") {
+		t.Fatalf("thinking block did not survive: status=%d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
 // --- admin: single-credential surfaces, G7, discovery -------------------
 
 func TestOpencodeSingleCredentialProvider(t *testing.T) {
