@@ -137,7 +137,12 @@ and are fixed in this change (no production code touched):
   window: each attempt is a real refresh, and a genuinely broken
   recovery still fails at the deadline. Reproduced deterministically
   against a loopback gateway: rebinding probe, then seven parallel
-  refresh fetches all 429; after ~6s of refill, all 200.
+  refresh fetches all 429; after ~6s of refill, all 200. The same
+  throttling also logs 429 console errors, which failed the suite's
+  final console-errors assertion even after a successful recovery,
+  so the suite filters exactly those messages inside the recovery
+  window (and the reload helper's window) and nowhere else; every
+  other console error still fails the suite.
 
 ## Still not covered (honest boundary)
 

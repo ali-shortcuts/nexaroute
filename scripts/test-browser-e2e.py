@@ -187,12 +187,22 @@ def main() -> None:
                 expected_disabled_404 = {"active": False}
                 expected_issue393_validation = {"active": False}
                 expected_snapshot_500 = {"active": False}
+                # Throttled refresh fetches log "Failed to load resource:
+                # 429" console errors. During a recovery window that
+                # throttling is the gateway's correct rate limiting,
+                # not a product defect, so those messages -- and only
+                # those, and only inside the window -- are filtered
+                # like the expected snapshot 500 above. Everything else
+                # still reaches the final console-errors assertion.
+                expected_throttled_429 = {"active": False}
                 def record_console(msg):
                     if msg.type == "error" and expected_disabled_404["active"] and "404 (Not Found)" in msg.text:
                         return
                     if msg.type == "error" and expected_issue393_validation["active"] and "400 (Bad Request)" in msg.text:
                         return
                     if msg.type == "error" and expected_snapshot_500["active"] and "500 (Internal Server Error)" in msg.text:
+                        return
+                    if msg.type == "error" and expected_throttled_429["active"] and "429 (Too Many Requests)" in msg.text:
                         return
                     console_msgs.append((msg.type, msg.text))
                 page.on("console", record_console)
@@ -1039,7 +1049,11 @@ def main() -> None:
                 # 1. Real theme toggle: reload first so state, dataset and
                 # localStorage agree (init copies localStorage into state),
                 # then two real clicks must flip and restore the theme.
-                reload_until_connected(page)
+                expected_throttled_429["active"] = True
+                try:
+                    reload_until_connected(page)
+                finally:
+                    expected_throttled_429["active"] = False
                 theme_before = page.evaluate("() => document.documentElement.dataset.theme")
                 assert theme_before in ("dark", "light")
                 assert page.evaluate("() => localStorage.getItem('nexaroute_theme')") == theme_before
@@ -1118,8 +1132,15 @@ def main() -> None:
                 # surface as Unavailable/Offline, and removing the fault
                 # must restore Connected/Live without a restart.
                 def snapshot_failure(route):
-                    route.fulfill(status=500, content_type="application/json", body=json.dumps({"error": "deterministic snapshot failure"}))
+                    route.fulfill(status=500, content_type="application/json",
+                                  body=json.dumps({"error": "deterministic snapshot failure"}))
                 expected_snapshot_500["active"] = True
+                # The failure reload's other refresh fetches, and the
+                # recovery reload's starved attempts, are throttled
+                # with 429s when the bucket is empty (see
+                # reload_until_connected). Those resource errors are
+                # expected inside this window, not console failures.
+                expected_throttled_429["active"] = True
                 page.route("**/admin/api/snapshot**", snapshot_failure)
                 page.reload(wait_until="domcontentloaded")
                 expect(page.locator("#connection-text")).to_have_text("Unavailable")
@@ -1128,6 +1149,7 @@ def main() -> None:
                 reload_until_connected(page)
                 expect(page.locator("#live-status")).to_have_text("Live")
                 expected_snapshot_500["active"] = False
+                expected_throttled_429["active"] = False
 
                 errors = [m for m in console_msgs if m[0] == "error"]
                 assert not errors, f"Console errors after Issue #393 browser flow: {errors}"
