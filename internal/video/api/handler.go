@@ -134,6 +134,13 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	}
 	j, err := h.Orch.Create(r.Context(), req)
 	if err != nil {
+		// A store/ledger outage during creation is a retryable 503
+		// with a generic message, never a 400 carrying backend detail
+		// (same class as the 2026-10-27 read-side 404 defect).
+		if errors.Is(err, orchestrator.ErrStoreUnavailable) {
+			writeError(w, http.StatusServiceUnavailable, "video_store_unavailable", "video job store is temporarily unavailable", true)
+			return
+		}
 		writeError(w, http.StatusBadRequest, "video_create_failed", err.Error(), false)
 		return
 	}
@@ -258,7 +265,14 @@ func (h *Handler) cancel(w http.ResponseWriter, r *http.Request, id string) {
 		return
 	}
 	if err := h.Orch.Cancel(r.Context(), id); err != nil {
-		writeError(w, http.StatusBadRequest, "cancel_failed", err.Error(), false)
+		switch {
+		case errors.Is(err, queue.ErrNotFound):
+			writeError(w, http.StatusNotFound, "not_found", "job not found", false)
+		case errors.Is(err, orchestrator.ErrStoreUnavailable):
+			writeError(w, http.StatusServiceUnavailable, "video_store_unavailable", "video job store is temporarily unavailable", true)
+		default:
+			writeError(w, http.StatusBadRequest, "cancel_failed", err.Error(), false)
+		}
 		return
 	}
 	h.get(w, r, id)
@@ -313,7 +327,14 @@ func (h *Handler) getAsset(w http.ResponseWriter, r *http.Request, jobID, assetI
 	}
 	file, err := opener.Open(asset)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "asset_not_found", "asset not found", false)
+		// Only a genuinely absent file is 404: a storage I/O or
+		// permission failure during an outage must not masquerade
+		// as a deleted asset.
+		if os.IsNotExist(err) {
+			writeError(w, http.StatusNotFound, "asset_not_found", "asset not found", false)
+		} else {
+			writeError(w, http.StatusServiceUnavailable, "asset_unavailable", "asset storage is temporarily unavailable", true)
+		}
 		return
 	}
 	defer file.Close()
