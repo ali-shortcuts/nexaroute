@@ -118,6 +118,13 @@ blind resubmit of a possibly-billed outcome.
   mutation, provider id + pool indices, never values); when no audit
   store is configured the mutation still succeeds and no event is
   recorded.
+- **G7 guard (narrowed after regression review)**: `replace_key`
+  with an explicitly empty `credentials` array (the UI placeholder
+  when only the primary key changes) preserves the pool; a
+  nil/omitted list clears it and a non-empty list replaces it, per
+  the pre-existing whole-set replacement tests (B5B, issue393).
+  Explicit pool clear still goes through `credential_pool`
+  `{replace:true, entries:[]}`.
 - Per-credential live state on the provider detail response appears
   only when a live adapter exists; config-only paths never fake it
   (the field is absent, reported as a gap, not filled with invented

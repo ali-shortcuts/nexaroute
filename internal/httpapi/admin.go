@@ -803,14 +803,17 @@ func (s *Server) adminProviderByID(w http.ResponseWriter, r *http.Request) {
 				in.Provider.Credentials = old.Credentials
 			} else if in.ReplaceKey {
 				// Explicit replacement: use new values from request (already in in.Provider).
-				// G7 guard: replacing the PRIMARY key alone must never
-				// wipe the pool. Without a credential_pool payload the
-				// submitted provider.credentials is the UI's empty
-				// placeholder (app.js sends [] when a new primary key
-				// is entered), not an instruction to clear the pool.
-				// Clearing the pool requires an explicit
-				// credential_pool {replace:true, entries:[]} payload.
-				if in.CredentialPool == nil {
+				// G7 guard, narrowed to the UI placeholder: when the submitted
+				// provider.credentials decodes as an explicitly empty (non-nil)
+				// list, that [] is the UI's placeholder for "pool untouched
+				// while the primary key changes" (app.js sends [] when a new
+				// primary key is entered), not an instruction to clear the
+				// pool — so preserve old.Credentials. A nil list (omitted or
+				// null) keeps the tested whole-set replacement semantics and
+				// clears the pool, and a non-empty list replaces it. Explicit
+				// pool clear still goes through credential_pool
+				// {replace:true, entries:[]}.
+				if in.Provider.Credentials != nil && len(in.Provider.Credentials) == 0 {
 					in.Provider.Credentials = old.Credentials
 				}
 			} else if in.Provider.APIKey == maskedPlaceholder {
