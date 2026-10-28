@@ -1813,3 +1813,480 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '405':
           $ref: '#/components/responses/MethodNotAllowed'
+  /admin/api/nexaflow/nodes:
+    get:
+      summary: List NexaFlow node catalog entries
+      x-permission: workflow.read
+      responses:
+        '200':
+          description: Node catalog with schemas, permissions, and bounds.
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          description: NexaFlow is not configured on this gateway.
+  /admin/api/nexaflow/templates:
+    get:
+      summary: List inert NexaFlow templates
+      x-permission: workflow.read
+      responses:
+        '200':
+          description: Templates are reference shapes, not runnable definitions.
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          description: NexaFlow is not configured on this gateway.
+  /admin/api/nexaflow/definitions:
+    get:
+      summary: List NexaFlow draft definitions
+      x-permission: workflow.read
+      parameters:
+      - name: tenant
+        in: query
+        required: false
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Draft definitions, optionally filtered by tenant scope.
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          description: NexaFlow is not configured on this gateway.
+    post:
+      summary: Save a NexaFlow draft definition (validated before persisting)
+      x-permission: workflow.write
+      security:
+      - adminSession: []
+        csrfToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: Full workflow definition; see docs/nexaflow-api.md.
+      responses:
+        '200':
+          description: Draft saved.
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          description: NexaFlow is not configured on this gateway.
+  /admin/api/nexaflow/definitions/{id}:
+    get:
+      summary: Read one NexaFlow draft definition
+      x-permission: workflow.read
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Draft definition.
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Draft definition was not found.
+        '503':
+          description: NexaFlow is not configured on this gateway.
+  /admin/api/nexaflow/definitions/{id}/validate:
+    post:
+      summary: Validate a saved NexaFlow draft without persisting anything
+      x-permission: workflow.write
+      security:
+      - adminSession: []
+        csrfToken: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Validation verdict (valid true/false plus error text).
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Draft definition was not found.
+        '503':
+          description: NexaFlow is not configured on this gateway.
+  /admin/api/nexaflow/definitions/{id}/publish:
+    post:
+      summary: Publish a NexaFlow draft as a new immutable revision
+      x-permission: workflow.write
+      security:
+      - adminSession: []
+        csrfToken: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Published definition plus its version record.
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Draft definition was not found.
+        '503':
+          description: NexaFlow is not configured on this gateway.
+  /admin/api/nexaflow/definitions/{id}/versions:
+    get:
+      summary: List NexaFlow version records for a definition
+      x-permission: workflow.read
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Version records (revision, content hash, status).
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Definition was not found.
+        '503':
+          description: NexaFlow is not configured on this gateway.
+  /admin/api/nexaflow/definitions/{id}/versions/{rev}:
+    get:
+      summary: Read one NexaFlow definition revision snapshot
+      x-permission: workflow.read
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: rev
+        in: path
+        required: true
+        schema:
+          type: integer
+      responses:
+        '200':
+          description: Definition snapshot plus its version record.
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Definition revision was not found.
+        '503':
+          description: NexaFlow is not configured on this gateway.
+  /admin/api/nexaflow/definitions/{id}/runs:
+    get:
+      summary: List NexaFlow run summaries for a definition
+      x-permission: workflow.read
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Run summaries (no step history; use the run endpoint for detail).
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          description: NexaFlow is not configured on this gateway.
+    post:
+      summary: Dispatch a NexaFlow run asynchronously (202 plus run id)
+      x-permission: workflow.write
+      security:
+      - adminSession: []
+        csrfToken: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                input:
+                  type: object
+                  description: Workflow input (at most 64 KiB encoded).
+                revision:
+                  type: integer
+                  description: Revision to run; 0 means the currently published revision.
+                idempotency_key:
+                  type: string
+                  description: Repeat calls with the same key return the original run.
+      responses:
+        '202':
+          description: Run accepted for background execution; poll the run endpoint for status.
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Definition was not found or has no published revision.
+        '409':
+          description: Definition already has its maximum active runs, or the revision is not published.
+        '503':
+          description: NexaFlow is not configured on this gateway.
+  /admin/api/nexaflow/runs/{id}:
+    get:
+      summary: Read one NexaFlow run with full step history
+      x-permission: workflow.read
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Full run record including steps, outputs, decisions, and sanitized errors.
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Run was not found.
+        '503':
+          description: NexaFlow is not configured on this gateway.
+  /admin/api/nexaflow/runs/{id}/approve:
+    post:
+      summary: Submit an approval decision for an awaiting run
+      x-permission: workflow.write
+      security:
+      - adminSession: []
+        csrfToken: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - decision
+              properties:
+                decision:
+                  type: string
+                  description: approved or rejected. The approver must differ from the run requester.
+      responses:
+        '200':
+          description: Resumed run (which may itself suspend again or finish).
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Run was not found.
+        '409':
+          description: Run is not awaiting approval.
+        '503':
+          description: NexaFlow is not configured on this gateway.
+  /admin/api/nexaflow/runs/{id}/resume:
+    post:
+      summary: Resume a parked NexaFlow run with an explicit ambiguous-step mode
+      x-permission: workflow.write
+      security:
+      - adminSession: []
+        csrfToken: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - mode
+              properties:
+                mode:
+                  type: string
+                  description: continue, retry_ambiguous, fail_ambiguous, or skip_ambiguous.
+      responses:
+        '200':
+          description: Resumed run.
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Run was not found.
+        '409':
+          description: Run is not parked, or the mode does not fit its ambiguous node.
+        '503':
+          description: NexaFlow is not configured on this gateway.
+  /admin/api/nexaflow/runs/{id}/cancel:
+    post:
+      summary: Cancel a NexaFlow run
+      x-permission: workflow.write
+      security:
+      - adminSession: []
+        csrfToken: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Cancelled run.
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Run was not found.
+        '503':
+          description: NexaFlow is not configured on this gateway.
+  /admin/api/nexaflow/audit:
+    get:
+      summary: List NexaFlow workflow audit events (most recent first)
+      x-permission: workflow.read
+      parameters:
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+      responses:
+        '200':
+          description: Audit events carrying no payloads or secret material.
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          description: NexaFlow is not configured on this gateway.
+  /admin/api/nexaflow/scheduler/tick:
+    post:
+      summary: Dispatch every due NexaFlow schedule once
+      x-permission: workflow.write
+      security:
+      - adminSession: []
+        csrfToken: []
+      responses:
+        '200':
+          description: Started run ids (at most one per schedule per tick).
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          description: NexaFlow is not configured on this gateway.

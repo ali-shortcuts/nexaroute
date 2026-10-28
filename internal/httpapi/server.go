@@ -1096,12 +1096,22 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/admin/api/config/history", s.adminConfigHistory)
 	mux.HandleFunc("/admin/api/drain", s.adminDrain)
 	mux.HandleFunc("/admin/api/video/jobs/{id}/force-fail", s.adminVideoForceFail)
-	// NexaFlow workflows (engine attached only when enabled).
+	// NexaFlow workflows (engine attached only when enabled). Explicit
+	// patterns (not prefix handlers) so the OpenAPI contract test can
+	// match every route to a spec path exactly.
 	mux.HandleFunc("/admin/api/nexaflow/nodes", s.adminNexaflowNodes)
 	mux.HandleFunc("/admin/api/nexaflow/templates", s.adminNexaflowTemplates)
 	mux.HandleFunc("/admin/api/nexaflow/definitions", s.adminNexaflowDefinitions)
-	mux.HandleFunc("/admin/api/nexaflow/definitions/", s.adminNexaflowDefinitionByID)
-	mux.HandleFunc("/admin/api/nexaflow/runs/", s.adminNexaflowRunByID)
+	mux.HandleFunc("/admin/api/nexaflow/definitions/{id}", s.adminNexaflowDefinition)
+	mux.HandleFunc("/admin/api/nexaflow/definitions/{id}/validate", s.adminNexaflowDefinitionValidate)
+	mux.HandleFunc("/admin/api/nexaflow/definitions/{id}/publish", s.adminNexaflowDefinitionPublish)
+	mux.HandleFunc("/admin/api/nexaflow/definitions/{id}/versions", s.adminNexaflowDefinitionVersions)
+	mux.HandleFunc("/admin/api/nexaflow/definitions/{id}/versions/{rev}", s.adminNexaflowDefinitionVersion)
+	mux.HandleFunc("/admin/api/nexaflow/definitions/{id}/runs", s.adminNexaflowDefinitionRuns)
+	mux.HandleFunc("/admin/api/nexaflow/runs/{id}", s.adminNexaflowRun)
+	mux.HandleFunc("/admin/api/nexaflow/runs/{id}/approve", s.adminNexaflowRunApprove)
+	mux.HandleFunc("/admin/api/nexaflow/runs/{id}/resume", s.adminNexaflowRunResume)
+	mux.HandleFunc("/admin/api/nexaflow/runs/{id}/cancel", s.adminNexaflowRunCancel)
 	mux.HandleFunc("/admin/api/nexaflow/audit", s.adminNexaflowAudit)
 	mux.HandleFunc("/admin/api/nexaflow/scheduler/tick", s.adminNexaflowSchedulerTick)
 	// Signed webhook entry point: HMAC authentication, not admin auth.

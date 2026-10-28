@@ -12,7 +12,9 @@ import (
 
 // NexaFlow admin API.
 //
-// Routes (registered in Server.Handler):
+// Routes (registered as explicit patterns in Server.Handler, one
+// handler per route, so the OpenAPI contract test matches each route
+// to exactly one spec path):
 //   GET    /admin/api/nexaflow/nodes
 //   GET    /admin/api/nexaflow/templates
 //   GET    /admin/api/nexaflow/definitions?tenant=
@@ -198,6 +200,13 @@ func (s *Server) adminNexaflowTemplates(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) adminNexaflowDefinitions(w http.ResponseWriter, r *http.Request) {
+	// Method first, readiness second: an undocumented method must
+	// answer 405 even when NexaFlow is unattached (whose 503 would
+	// otherwise read as "implemented" to contract probes).
+	if r.Method != http.MethodGet && r.Method != http.MethodPost {
+		errorJSON(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
 	if !s.nexaflowReady(w) {
 		return
 	}
@@ -229,69 +238,123 @@ func (s *Server) adminNexaflowDefinitions(w http.ResponseWriter, r *http.Request
 	}
 }
 
-func (s *Server) adminNexaflowDefinitionByID(w http.ResponseWriter, r *http.Request) {
+func nexaflowPathID(r *http.Request, name string) string {
+	return r.PathValue(name)
+}
+
+func (s *Server) adminNexaflowDefinition(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		errorJSON(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
 	if !s.nexaflowReady(w) {
 		return
 	}
-	rest := strings.TrimPrefix(r.URL.Path, "/admin/api/nexaflow/definitions/")
-	parts := strings.Split(strings.Trim(rest, "/"), "/")
-	if len(parts) == 0 || parts[0] == "" {
-		errorJSON(w, http.StatusNotFound, "definition id is required")
+	def, err := s.nexaflowStore.GetDraft(r.Context(), nexaflowPathID(r, "id"))
+	if err != nil {
+		nexaflowError(w, err)
 		return
 	}
-	id := parts[0]
-	ctx := r.Context()
-	switch {
-	case len(parts) == 1 && r.Method == http.MethodGet:
-		def, err := s.nexaflowStore.GetDraft(ctx, id)
+	writeJSON(w, http.StatusOK, map[string]any{"definition": def})
+}
+
+func (s *Server) adminNexaflowDefinitionValidate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		errorJSON(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if !s.nexaflowReady(w) {
+		return
+	}
+	def, err := s.nexaflowStore.GetDraft(r.Context(), nexaflowPathID(r, "id"))
+	if err != nil {
+		nexaflowError(w, err)
+		return
+	}
+	if err := nexaflow.ValidateDefinitionExtended(def, nexaflow.DefaultRegistry()); err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"valid": false, "error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"valid": true})
+}
+
+func (s *Server) adminNexaflowDefinitionPublish(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		errorJSON(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if !s.nexaflowReady(w) {
+		return
+	}
+	def, err := s.nexaflowStore.GetDraft(r.Context(), nexaflowPathID(r, "id"))
+	if err != nil {
+		nexaflowError(w, err)
+		return
+	}
+	ver, published, err := s.nexaflowStore.Publish(r.Context(), def, adminIdentityFromRequest(r).Subject)
+	if err != nil {
+		nexaflowError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"definition": published, "version": ver})
+}
+
+func (s *Server) adminNexaflowDefinitionVersions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		errorJSON(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if !s.nexaflowReady(w) {
+		return
+	}
+	versions, err := s.nexaflowStore.ListVersions(r.Context(), nexaflowPathID(r, "id"))
+	if err != nil {
+		nexaflowError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"versions": versions})
+}
+
+func (s *Server) adminNexaflowDefinitionVersion(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		errorJSON(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if !s.nexaflowReady(w) {
+		return
+	}
+	rev, err := strconv.ParseUint(nexaflowPathID(r, "rev"), 10, 64)
+	if err != nil {
+		errorJSON(w, http.StatusBadRequest, "revision must be a number")
+		return
+	}
+	def, ver, err := s.nexaflowStore.GetVersion(r.Context(), nexaflowPathID(r, "id"), rev)
+	if err != nil {
+		nexaflowError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"definition": def, "version": ver})
+}
+
+func (s *Server) adminNexaflowDefinitionRuns(w http.ResponseWriter, r *http.Request) {
+	// Method first, readiness second: see adminNexaflowDefinitions.
+	if r.Method != http.MethodGet && r.Method != http.MethodPost {
+		errorJSON(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if !s.nexaflowReady(w) {
+		return
+	}
+	id := nexaflowPathID(r, "id")
+	switch r.Method {
+	case http.MethodGet:
+		runs, err := s.nexaflowStore.ListRuns(r.Context(), nexaflow.RunFilter{DefinitionID: id, Limit: nexaflowLimit(r, 50)})
 		if err != nil {
 			nexaflowError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"definition": def})
-	case len(parts) == 2 && parts[1] == "validate" && r.Method == http.MethodPost:
-		def, err := s.nexaflowStore.GetDraft(ctx, id)
-		if err != nil {
-			nexaflowError(w, err)
-			return
-		}
-		if err := nexaflow.ValidateDefinitionExtended(def, nexaflow.DefaultRegistry()); err != nil {
-			writeJSON(w, http.StatusOK, map[string]any{"valid": false, "error": err.Error()})
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"valid": true})
-	case len(parts) == 2 && parts[1] == "publish" && r.Method == http.MethodPost:
-		def, err := s.nexaflowStore.GetDraft(ctx, id)
-		if err != nil {
-			nexaflowError(w, err)
-			return
-		}
-		ver, published, err := s.nexaflowStore.Publish(ctx, def, adminIdentityFromRequest(r).Subject)
-		if err != nil {
-			nexaflowError(w, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"definition": published, "version": ver})
-	case len(parts) == 2 && parts[1] == "versions" && r.Method == http.MethodGet:
-		versions, err := s.nexaflowStore.ListVersions(ctx, id)
-		if err != nil {
-			nexaflowError(w, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"versions": versions})
-	case len(parts) == 3 && parts[1] == "versions" && r.Method == http.MethodGet:
-		rev, err := strconv.ParseUint(parts[2], 10, 64)
-		if err != nil {
-			errorJSON(w, http.StatusBadRequest, "revision must be a number")
-			return
-		}
-		def, ver, err := s.nexaflowStore.GetVersion(ctx, id, rev)
-		if err != nil {
-			nexaflowError(w, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"definition": def, "version": ver})
-	case len(parts) == 2 && parts[1] == "runs" && r.Method == http.MethodPost:
+		writeJSON(w, http.StatusOK, map[string]any{"runs": nexaflowRunSummaries(runs)})
+	case http.MethodPost:
 		var in struct {
 			Input          map[string]any `json:"input"`
 			Revision       uint64         `json:"revision"`
@@ -301,7 +364,7 @@ func (s *Server) adminNexaflowDefinitionByID(w http.ResponseWriter, r *http.Requ
 			errorJSON(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 			return
 		}
-		run, err := s.nexaflowEngine.StartRunAsync(ctx, adminIdentityFromRequest(r), id, in.Revision, nexaflow.TriggerManual, "", in.IdempotencyKey, in.Input)
+		run, err := s.nexaflowEngine.StartRunAsync(r.Context(), adminIdentityFromRequest(r), id, in.Revision, nexaflow.TriggerManual, "", in.IdempotencyKey, in.Input)
 		if err != nil {
 			nexaflowError(w, err)
 			return
@@ -311,15 +374,8 @@ func (s *Server) adminNexaflowDefinitionByID(w http.ResponseWriter, r *http.Requ
 		// so polling the run record is the only sound way to observe
 		// it. "accepted" is the dispatch outcome, not a run status.
 		writeJSON(w, http.StatusAccepted, map[string]any{"run_id": run.ID, "status": "accepted"})
-	case len(parts) == 2 && parts[1] == "runs" && r.Method == http.MethodGet:
-		runs, err := s.nexaflowStore.ListRuns(ctx, nexaflow.RunFilter{DefinitionID: id, Limit: nexaflowLimit(r, 50)})
-		if err != nil {
-			nexaflowError(w, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"runs": nexaflowRunSummaries(runs)})
 	default:
-		errorJSON(w, http.StatusNotFound, "unknown nexaflow definition path")
+		errorJSON(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
 }
 
@@ -344,65 +400,82 @@ func nexaflowRunSummary(run *nexaflow.Run) map[string]any {
 	}
 }
 
-func (s *Server) adminNexaflowRunByID(w http.ResponseWriter, r *http.Request) {
+func (s *Server) adminNexaflowRun(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		errorJSON(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
 	if !s.nexaflowReady(w) {
 		return
 	}
-	rest := strings.TrimPrefix(r.URL.Path, "/admin/api/nexaflow/runs/")
-	parts := strings.Split(strings.Trim(rest, "/"), "/")
-	if len(parts) == 0 || parts[0] == "" {
-		errorJSON(w, http.StatusNotFound, "run id is required")
+	run, err := s.nexaflowStore.GetRun(r.Context(), nexaflowPathID(r, "id"))
+	if err != nil {
+		nexaflowError(w, err)
 		return
 	}
-	id := parts[0]
-	ctx := r.Context()
-	identity := adminIdentityFromRequest(r)
-	switch {
-	case len(parts) == 1 && r.Method == http.MethodGet:
-		run, err := s.nexaflowStore.GetRun(ctx, id)
-		if err != nil {
-			nexaflowError(w, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"run": run})
-	case len(parts) == 2 && parts[1] == "approve" && r.Method == http.MethodPost:
-		var in struct {
-			Decision string `json:"decision"`
-		}
-		if _, err := readJSON(r, &in); err != nil {
-			errorJSON(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
-			return
-		}
-		run, err := s.nexaflowEngine.ApproveRun(ctx, identity, id, in.Decision)
-		if err != nil {
-			nexaflowError(w, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"run": run})
-	case len(parts) == 2 && parts[1] == "resume" && r.Method == http.MethodPost:
-		var in struct {
-			Mode string `json:"mode"`
-		}
-		if _, err := readJSON(r, &in); err != nil {
-			errorJSON(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
-			return
-		}
-		run, err := s.nexaflowEngine.ResumeRun(ctx, identity, id, nexaflow.ResumeMode(in.Mode))
-		if err != nil {
-			nexaflowError(w, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"run": run})
-	case len(parts) == 2 && parts[1] == "cancel" && r.Method == http.MethodPost:
-		run, err := s.nexaflowEngine.CancelRun(ctx, identity, id)
-		if err != nil {
-			nexaflowError(w, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"run": run})
-	default:
-		errorJSON(w, http.StatusNotFound, "unknown nexaflow run path")
+	writeJSON(w, http.StatusOK, map[string]any{"run": run})
+}
+
+func (s *Server) adminNexaflowRunApprove(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		errorJSON(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
 	}
+	if !s.nexaflowReady(w) {
+		return
+	}
+	var in struct {
+		Decision string `json:"decision"`
+	}
+	if _, err := readJSON(r, &in); err != nil {
+		errorJSON(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	run, err := s.nexaflowEngine.ApproveRun(r.Context(), adminIdentityFromRequest(r), nexaflowPathID(r, "id"), in.Decision)
+	if err != nil {
+		nexaflowError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"run": run})
+}
+
+func (s *Server) adminNexaflowRunResume(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		errorJSON(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if !s.nexaflowReady(w) {
+		return
+	}
+	var in struct {
+		Mode string `json:"mode"`
+	}
+	if _, err := readJSON(r, &in); err != nil {
+		errorJSON(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	run, err := s.nexaflowEngine.ResumeRun(r.Context(), adminIdentityFromRequest(r), nexaflowPathID(r, "id"), nexaflow.ResumeMode(in.Mode))
+	if err != nil {
+		nexaflowError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"run": run})
+}
+
+func (s *Server) adminNexaflowRunCancel(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		errorJSON(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if !s.nexaflowReady(w) {
+		return
+	}
+	run, err := s.nexaflowEngine.CancelRun(r.Context(), adminIdentityFromRequest(r), nexaflowPathID(r, "id"))
+	if err != nil {
+		nexaflowError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"run": run})
 }
 
 func (s *Server) adminNexaflowAudit(w http.ResponseWriter, r *http.Request) {

@@ -24,6 +24,7 @@ says so instead of implying coverage.
 | `routing` | `routingView` |
 | `models` | `modelsView` |
 | `video` | `videoView` |
+| `nexaflow` | `nexaflowView` |
 | `activity` | `activityView` |
 | `playground` | `playgroundView` |
 | `policies` | `policiesView` |
@@ -34,7 +35,7 @@ says so instead of implying coverage.
 | `observability` | `observabilityView` |
 | `settings` | `settingsView` |
 
-## Admin OpenAPI paths (44)
+## Admin OpenAPI paths (60)
 
 Every path documented in `docs/api/admin-openapi.yaml`. The M4-5
 contract test proves each is implemented with the documented
@@ -86,6 +87,21 @@ spec by `TestContractMatrixDrift`.
 - `/admin/api/evaluation/run`
 - `/admin/api/endpoint`
 - `/admin/api/client-keys/{id}/rotate`
+- `/admin/api/nexaflow/nodes`
+- `/admin/api/nexaflow/templates`
+- `/admin/api/nexaflow/definitions`
+- `/admin/api/nexaflow/definitions/{id}`
+- `/admin/api/nexaflow/definitions/{id}/validate`
+- `/admin/api/nexaflow/definitions/{id}/publish`
+- `/admin/api/nexaflow/definitions/{id}/versions`
+- `/admin/api/nexaflow/definitions/{id}/versions/{rev}`
+- `/admin/api/nexaflow/definitions/{id}/runs`
+- `/admin/api/nexaflow/runs/{id}`
+- `/admin/api/nexaflow/runs/{id}/approve`
+- `/admin/api/nexaflow/runs/{id}/resume`
+- `/admin/api/nexaflow/runs/{id}/cancel`
+- `/admin/api/nexaflow/audit`
+- `/admin/api/nexaflow/scheduler/tick`
 
 ## Selector conventions (#502 item 2)
 
