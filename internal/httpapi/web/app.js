@@ -2170,7 +2170,7 @@ let modelTestResults = {};
   // response. Drafts are saved to the backend; published versions
   // are immutable snapshots and runs pin a version, so canvas edits
   // can never mutate an active run.
-  const wf = { loaded: false, loading: false, error: '', nodes: [], nodeById: {}, workflows: [], view: 'list', selectedId: null, draft: null, draftDirty: false, selectedNode: null, validation: [], validationValid: null, run: null, runs: [], poll: null, zoom: 1, panX: 0, panY: 0, pendingEdge: null, paletteDrag: null, pendingRunVersion: 0, docBound: false, search: '', paletteQuery: '', nodeSeq: 0 };
+  const wf = { loaded: false, loading: false, error: '', nodes: [], nodeById: {}, workflows: [], view: 'list', selectedId: null, draft: null, draftDirty: false, selectedNode: null, validation: [], validationValid: null, run: null, runs: [], poll: null, zoom: 1, panX: 0, panY: 0, pendingEdge: null, paletteDrag: null, pendingRunVersion: 0, docBound: false, search: '', paletteQuery: '', nodeSeq: 0, templates: [], templateQuery: '', templateError: '', templatesLoaded: false, inspectedVersion: null };
   const wfKind = s => ({ succeeded: 'wf-good', failed: 'wf-bad', cancelled: 'wf-warn', awaiting_approval: 'wf-warn', running: 'wf-info', pending: 'wf-muted', skipped: 'wf-muted' }[s] || 'wf-muted');
   const wfNodeSpec = type => wf.nodeById[type] || null;
   const wfDraftNodes = () => (wf.draft && wf.draft.nodes) || [];
@@ -2187,6 +2187,10 @@ let modelTestResults = {};
       wf.loaded = true;
     } catch (e) { wf.error = e.message; }
     wf.loading = false;
+    // Templates degrade gracefully: a gallery failure must never hide
+    // the workflow list or the canvas, which load from the two calls above.
+    try { const res = await api('/admin/api/nexaflow/templates'); wf.templates = res.templates || []; wf.templateError = ''; } catch (e) { wf.templates = []; wf.templateError = e.message; } finally { wf.templatesLoaded = true; }
+    if (state.page === 'workflows') render();
   }
   async function wfRefreshList() { try { const res = await api('/admin/api/nexaflow/workflows'); wf.workflows = res.workflows || []; } catch (e) { notice(e.message, true); } }
   function wfSelectedWorkflow() { return wf.workflows.find(w => w.id === wf.selectedId) || null; }
@@ -2224,11 +2228,32 @@ let modelTestResults = {};
   function wfCompleteEdge(toNode, toPort) {
     if (!wf.pendingEdge || !wf.draft) return;
     const edge = wf.pendingEdge; wf.pendingEdge = null;
-    if (edge.from === toNode) return;
+    // Immediate edge diagnostics, mirroring what backend validation
+    // would reject on Validate (self-edge becomes a cycle, a duplicate
+    // becomes duplicate_edge). Rejecting here is not a second schema:
+    // it only surfaces the backend verdict before a save round-trip.
+    if (edge.from === toNode) { notice('Cannot connect a node to itself.', true); render(); return; }
+    const fromSpec = wfNodeSpec((wfDraftNodes().find(n => n.id === edge.from) || {}).type);
+    const toSpec = wfNodeSpec((wfDraftNodes().find(n => n.id === toNode) || {}).type);
+    if (!fromSpec || !(fromSpec.output_schema || []).some(f => f.name === edge.from_port)) { notice(`Unknown output port ${edge.from_port}.`, true); render(); return; }
+    if (!toSpec || !(toSpec.input_schema || []).some(f => f.name === toPort)) { notice(`Unknown input port ${toPort}.`, true); render(); return; }
     const exists = wfDraftEdges().some(x => x.from === edge.from && x.from_port === edge.from_port && x.to === toNode && x.to_port === toPort);
-    if (exists) return;
+    if (exists) { notice('That connection already exists.', true); render(); return; }
+    // The backend permits several edges into one input and the runtime
+    // applies them in edge order (last edge wins). That is allowed, but
+    // the author should know the earlier value is shadowed.
+    if (wfDraftEdges().some(x => x.to === toNode && x.to_port === toPort)) notice(`Input ${toPort} already has a connection; the new edge wins at run time (last edge wins).`);
     wf.draft.edges.push({ id: 'e' + Date.now().toString(36) + '_' + (++wf.nodeSeq), from: edge.from, from_port: edge.from_port, to: toNode, to_port: toPort });
     wfMarkDirty(); render();
+  }
+  function wfDeleteEdge(id) {
+    if (!wf.draft) return;
+    wf.draft.edges = wfDraftEdges().filter(e => e.id !== id);
+    wfMarkDirty(); render();
+  }
+  function wfNodeLabel(id) {
+    const n = wfDraftNodes().find(x => x.id === id);
+    return n ? (n.label || n.type) : id;
   }
   function wfDrawEdges() {
     const svg = $('#wf-edges'); const canvas = $('#wf-canvas'); if (!svg || !canvas || !wf.draft) return;
@@ -2310,9 +2335,17 @@ let modelTestResults = {};
     const r = wf.run;
     const nodes = (r.nodes || []).map(n => `<tr><td data-label="Node">${esc(n.node_id)}</td><td data-label="Type">${esc(n.type)}</td><td data-label="Status"><span class="wf-pill ${wfKind(n.status)}">${esc(n.status)}</span></td><td data-label="Attempts">${n.attempts}</td><td data-label="Duration">${n.duration_ms} ms</td><td data-label="Output preview">${n.output_preview ? `<pre class="wf-preview">${esc(n.output_preview)}</pre>${n.output_truncated ? '<small>Preview truncated at 16 KiB; secret keys redacted.</small>' : ''}` : '—'}</td><td data-label="Error">${n.error ? `<span class="wf-err">${esc(n.error_code || 'error')}: ${esc(n.error)}</span>` : '—'}</td></tr>`).join('');
     const active = r.status === 'running' || r.status === 'awaiting_approval';
-    return `<div class="wf-run-head"><div><strong>Run ${esc(r.id)}</strong><span class="wf-pill ${wfKind(r.status)}">${esc(r.status)}</span><span class="wf-meta">version ${r.version_number} · started by ${esc(r.started_by)} · ${new Date(r.started_at).toLocaleString()}</span></div>
+    // Execution timeline from the server's per-node timestamps (the
+    // table above stays in snapshot order so it matches the canvas).
+    // Approving or rejecting IS the resume action in this engine:
+    // ApproveRun continues the run loop, including after a restart.
+    const runStart = Date.parse(r.started_at);
+    const timed = (r.nodes || []).filter(n => n.started_at).slice().sort((a, b) => Date.parse(a.started_at) - Date.parse(b.started_at));
+    const timeline = timed.length ? `<ol class="wf-timeline">${timed.map(n => { const off = isNaN(runStart) ? null : Date.parse(n.started_at) - runStart; return `<li><span class="wf-pill ${wfKind(n.status)}">${esc(n.status)}</span> <strong>${esc(n.node_id)}</strong><span class="wf-meta"> ${off === null ? '' : '+' + off + ' ms · '}${n.duration_ms} ms · ${n.attempts} attempt(s)</span></li>`; }).join('')}</ol>` : '<p class="wf-meta">No node timing yet.</p>';
+    const totalMs = r.finished_at && !isNaN(runStart) ? (Date.parse(r.finished_at) - runStart) : null;
+    return `<div class="wf-run-head"><div><strong>Run ${esc(r.id)}</strong><span class="wf-pill ${wfKind(r.status)}">${esc(r.status)}</span><span class="wf-meta">version ${r.version_number} · started by ${esc(r.started_by)} · ${new Date(r.started_at).toLocaleString()}${totalMs === null ? '' : ' · total ' + totalMs + ' ms'}</span></div>
       <div class="wf-run-actions">
-        ${r.status === 'awaiting_approval' ? '<button type="button" class="button primary" data-wf="approve-run">Approve</button><button type="button" class="button secondary" data-wf="reject-run">Reject (continues with approved=false)</button>' : ''}
+        ${r.status === 'awaiting_approval' ? '<button type="button" class="button primary" data-wf="approve-run">Approve and resume</button><button type="button" class="button secondary" data-wf="reject-run">Reject and resume (approved=false)</button>' : ''}
         ${active ? '<button type="button" class="button ghost" data-wf="cancel-run">Cancel run</button>' : ''}
         <button type="button" class="button ghost" data-wf="refresh-run">Refresh</button>
       </div></div>
@@ -2320,6 +2353,8 @@ let modelTestResults = {};
       ${r.error ? `<p class="wf-err-box">${esc(r.error)}</p>` : ''}
       ${r.input_preview ? `<details><summary>Run input preview (bounded, secret keys redacted${r.input_truncated ? ', truncated' : ''})</summary><pre class="wf-preview">${esc(r.input_preview)}</pre></details>` : ''}
       <div class="table-wrap"><table class="table"><thead><tr><th>Node</th><th>Type</th><th>Status</th><th>Attempts</th><th>Duration</th><th>Output preview</th><th>Error</th></tr></thead><tbody>${nodes || '<tr><td colspan="7">No node records yet.</td></tr>'}</tbody></table></div>
+      <h4>Execution timeline</h4>
+      ${timeline}
       <h4>Run history</h4>
       <div class="wf-history">${(wf.runs || []).map(x => `<button type="button" class="wf-history-item${x.id === r.id ? ' active' : ''}" data-wf-run="${esc(x.id)}"><span class="wf-pill ${wfKind(x.status)}">${esc(x.status)}</span><span>${esc(x.id)}</span><small>v${x.version_number} · ${new Date(x.started_at).toLocaleString()}</small></button>`).join('') || '<p class="wf-meta">No runs yet.</p>'}</div>`;
   }
@@ -2362,9 +2397,10 @@ let modelTestResults = {};
         </div>
         ${!wfDraftNodes().length ? '<div class="empty"><strong>Empty canvas</strong><p>Add a trigger node from the palette to start. Every workflow needs at least one trigger.</p></div>' : ''}
         <div class="wf-run-inputs"><div class="field"><label for="wf-run-inputs">Declared run inputs (comma-separated parameter names)</label><input type="text" id="wf-run-inputs" value="${esc((wf.draft.inputs || []).join(', '))}"><small>Required node inputs without an edge must be declared here; the run dialog supplies their values. Trigger inputs and the manual payload need no declaration.</small></div></div>
+        <section class="wf-panel"><h3>Connections</h3>${wfDraftEdges().length ? `<ul class="wf-connections">${wfDraftEdges().map(e => `<li><span>${esc(wfNodeLabel(e.from))}.${esc(e.from_port)} → ${esc(wfNodeLabel(e.to))}.${esc(e.to_port)}</span><button type="button" class="button ghost" data-wf-delete-edge="${esc(e.id)}" aria-label="Delete connection ${esc(wfNodeLabel(e.from))} to ${esc(wfNodeLabel(e.to))}">Delete</button></li>`).join('')}</ul>` : '<p class="wf-meta">No connections yet. Drag from an output dot to an input dot, or click an output dot and then an input dot.</p>'}</section>
         <div class="wf-panels">
           <section class="wf-panel"><h3>Validation</h3>${wfValidationHTML()}</section>
-          <section class="wf-panel"><h3>Versions</h3>${(w.versions || []).length ? `<ul class="wf-versions">${(w.versions || []).slice().reverse().map(v => `<li><strong>v${v.number}</strong> <span class="wf-meta">${esc(v.content_hash || '').slice(0, 12)} · by ${esc(v.published_by)} · ${new Date(v.published_at).toLocaleString()}</span> <button type="button" class="button ghost" data-wf-run-version="${v.number}">Run this version</button></li>`).join('')}</ul><p class="wf-meta">Runs pin a version: later edits and publishes never change a run.</p>` : '<p class="wf-meta">No published versions yet.</p>'}</section>
+          <section class="wf-panel"><h3>Versions</h3>${(w.versions || []).length ? `<ul class="wf-versions">${(w.versions || []).slice().reverse().map(v => `<li><strong>v${v.number}</strong> <span class="wf-meta">${esc(v.content_hash || '').slice(0, 12)} · by ${esc(v.published_by)} · ${new Date(v.published_at).toLocaleString()}</span> <button type="button" class="button ghost" data-wf-inspect-version="${v.number}">Inspect</button> <button type="button" class="button ghost" data-wf-run-version="${v.number}">Run this version</button></li>`).join('')}</ul><p class="wf-meta">Runs pin a version: later edits and publishes never change a run.</p>` : '<p class="wf-meta">No published versions yet.</p>'}${(() => { const v = (w.versions || []).find(x => x.number === wf.inspectedVersion); if (!v) return ''; const g = v.graph || { nodes: [], edges: [] }; return `<div class="wf-version-detail"><h4>Version ${v.number} (immutable)</h4><p class="wf-meta">Hash ${esc(v.content_hash || '')} · published by ${esc(v.published_by)} · ${new Date(v.published_at).toLocaleString()}</p><p><strong>Nodes (${(g.nodes || []).length})</strong></p><ul>${(g.nodes || []).map(n => `<li>${esc(n.label || n.type)} <span class="wf-meta">${esc(n.type)}</span></li>`).join('') || '<li>none</li>'}</ul><p><strong>Connections (${(g.edges || []).length})</strong></p><ul>${(g.edges || []).map(e => `<li>${esc(e.from)}.${esc(e.from_port)} → ${esc(e.to)}.${esc(e.to_port)}</li>`).join('') || '<li>none</li>'}</ul><p class="wf-meta">This snapshot cannot be edited. To change it, edit the draft and publish a new version.</p></div>`; })()}</section>
         </div>
         <section class="wf-panel wf-run-panel"><h3>Run execution</h3><div id="wf-run-panel">${wfRunPanelHTML()}</div></section>
       </section>
@@ -2374,6 +2410,26 @@ let modelTestResults = {};
         <div id="wf-config-body">${wfConfigHTML()}</div>
       </aside>
     </div>`;
+  }
+  function wfTemplateHTML() {
+    if (!wf.templatesLoaded) return '<p class="wf-meta">Loading templates…</p>';
+    if (wf.templateError) return `<p class="state-error">Template gallery unavailable: ${esc(wf.templateError)}</p>`;
+    const q = wf.templateQuery.trim().toLowerCase();
+    const list = (wf.templates || []).filter(t => !q || (t.title + ' ' + t.id + ' ' + (t.description || '')).toLowerCase().includes(q));
+    return `<div class="field"><label for="wf-template-query">Search templates</label><input type="search" id="wf-template-query" value="${esc(wf.templateQuery)}" placeholder="Search templates…"></div>
+    <div class="wf-templates">${list.map(t => `<article class="wf-template-card"><h4>${esc(t.title)}</h4><p class="wf-meta">${esc(t.description || '')}</p><p class="wf-meta">Nodes: ${(t.nodes || []).map(n => esc(n.node_id)).join(', ') || 'none'}</p>${(t.placeholders || []).length ? `<p class="wf-meta">Placeholders to fill in node configuration: ${(t.placeholders || []).map(p => esc(p)).join(', ')}</p>` : ''}${t.requires_policy ? '<p class="wf-policy-note">Requires operator policy approval before running.</p>' : ''}<button type="button" class="button secondary" data-wf-use-template="${esc(t.id)}">Use template</button></article>`).join('') || '<p class="wf-meta">No templates match this search.</p>'}</div>
+    <p class="wf-meta">Templates are starting points, not runnable workflows: they define node order, not port mappings. Using one creates a draft with its nodes and no connections — connect the ports, fill any placeholders in node configuration, then validate and publish.</p>`;
+  }
+  async function wfUseTemplate(id) {
+    const t = (wf.templates || []).find(x => x.id === id); if (!t) throw Error('Template not found.');
+    for (const n of (t.nodes || [])) { if (!wfNodeSpec(n.node_id)) throw Error(`Template node ${n.node_id} is not in the backend registry.`); }
+    // Name collisions surface as an honest API error (names are unique);
+    // the operator renames or deletes the existing workflow first.
+    const w = await api('/admin/api/nexaflow/workflows', { method: 'POST', ...body({ name: t.title }) });
+    const nodes = (t.nodes || []).map((n, i) => ({ id: 'n' + Date.now().toString(36) + '_tpl' + i, type: n.node_id, label: n.node_id, position: { x: 60 + i * 230, y: 120 }, config: n.config || {} }));
+    await api('/admin/api/nexaflow/workflows/' + encodeURIComponent(w.id), { method: 'PUT', ...body({ draft: { nodes, edges: [], inputs: [] } }) });
+    await wfRefreshList(); wfOpenWorkflow(w.id);
+    notice('Template nodes added. Connect the ports, fill any placeholders in node configuration, then validate and publish.');
   }
   function workflowsView() {
     if (!wf.loaded) {
@@ -2389,10 +2445,11 @@ let modelTestResults = {};
       <span class="wf-spacer"></span>
       <button type="button" class="button primary" data-wf="create-wf">Create workflow</button>
     </div>
-    ${!wf.workflows.length ? '<div class="empty"><strong>No workflows yet</strong><p>Create your first workflow: add a trigger, connect nodes, validate, publish, and run it.</p><button type="button" class="button primary" data-wf="create-wf">Create workflow</button></div>' : ''}
+    ${!wf.workflows.length ? '<div class="empty"><strong>No workflows yet</strong><p>Create your first workflow, or start from a template below.</p><ol class="wf-onboarding"><li>Create a workflow (or use a template).</li><li>Add a trigger node from the palette.</li><li>Connect output dots to input dots; delete a connection from the Connections list.</li><li>Validate, fix the reported issues, then publish an immutable version.</li><li>Run a published version and watch node status, timeline, and bounded previews.</li></ol><button type="button" class="button primary" data-wf="create-wf">Create workflow</button></div>' : ''}
     <div class="table-wrap"><table class="table"><thead><tr><th>Name</th><th>Status</th><th>Nodes</th><th>Published</th><th>Updated</th><th>Actions</th></tr></thead><tbody>
     ${list.map(w => `<tr><td data-label="Name"><button type="button" class="wf-link" data-wf-open="${esc(w.id)}">${esc(w.name)}</button></td><td data-label="Status"><span class="wf-pill ${w.enabled ? 'wf-good' : 'wf-warn'}">${w.enabled ? 'enabled' : 'disabled'}</span></td><td data-label="Nodes">${(w.draft.nodes || []).length}</td><td data-label="Published">${w.published_version ? 'v' + w.published_version : '—'}</td><td data-label="Updated">${new Date(w.updated_at).toLocaleString()}</td><td data-label="Actions"><div class="wf-row-actions"><button type="button" class="button ghost" data-wf-open="${esc(w.id)}">Open</button><button type="button" class="button ghost" data-wf-rename="${esc(w.id)}">Rename</button><button type="button" class="button ghost" data-wf-duplicate="${esc(w.id)}">Duplicate</button><button type="button" class="button ghost" data-wf-publish="${esc(w.id)}">Publish</button><button type="button" class="button ghost" data-wf-toggle="${esc(w.id)}">${w.enabled ? 'Disable' : 'Enable'}</button><button type="button" class="button ghost" data-wf-delete="${esc(w.id)}">Delete</button></div></td></tr>`).join('') || '<tr><td colspan="6">No workflows match this search.</td></tr>'}
-    </tbody></table></div>`;
+    </tbody></table></div>
+    <section class="wf-panel" aria-label="Template gallery"><h3>Template gallery</h3>${wfTemplateHTML()}</section>`;
   }
   async function wfOpenWorkflow(id) {
     try {
@@ -2405,7 +2462,7 @@ let modelTestResults = {};
       // slice here: the editor pushes onto these arrays.
       wf.draft.nodes = wf.draft.nodes || []; wf.draft.edges = wf.draft.edges || []; wf.draft.inputs = wf.draft.inputs || [];
       (wf.draft.nodes || []).forEach(n => { if (!n.position) n.position = { x: 0, y: 0 }; });
-      wf.draftDirty = false; wf.selectedNode = null; wf.validation = []; wf.validationValid = null; wf.view = 'editor'; wf.zoom = 1; wf.panX = 0; wf.panY = 0;
+      wf.draftDirty = false; wf.selectedNode = null; wf.validation = []; wf.validationValid = null; wf.view = 'editor'; wf.zoom = 1; wf.panX = 0; wf.panY = 0; wf.inspectedVersion = null;
       const runs = await api('/admin/api/nexaflow/workflows/' + encodeURIComponent(id) + '/runs?limit=50');
       wf.runs = runs.runs || []; wf.run = wf.runs[0] || null;
       render();
@@ -2461,6 +2518,11 @@ let modelTestResults = {};
     if (search) search.addEventListener('input', e => { wf.search = e.target.value; render(); const el = $('#wf-search'); if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); } });
     const pq = $('#wf-palette-query');
     if (pq) pq.addEventListener('input', e => { wf.paletteQuery = e.target.value; render(); const el = $('#wf-palette-query'); if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); } });
+    const tq = $('#wf-template-query');
+    if (tq) tq.addEventListener('input', e => { wf.templateQuery = e.target.value; render(); const el = $('#wf-template-query'); if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); } });
+    $$('[data-wf-use-template]').forEach(b => b.addEventListener('click', () => act(async () => { await wfUseTemplate(b.dataset.wfUseTemplate); })));
+    $$('[data-wf-delete-edge]').forEach(b => b.addEventListener('click', () => wfDeleteEdge(b.dataset.wfDeleteEdge)));
+    $$('[data-wf-inspect-version]').forEach(b => b.addEventListener('click', () => { wf.inspectedVersion = parseInt(b.dataset.wfInspectVersion, 10); render(); }));
     const ri = $('#wf-run-inputs');
     if (ri) ri.addEventListener('change', e => { wf.draft.inputs = e.target.value.split(',').map(s => s.trim()).filter(Boolean); wfMarkDirty(); });
     const label = $('#wf-node-label');

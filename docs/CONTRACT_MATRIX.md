@@ -35,7 +35,7 @@ says so instead of implying coverage.
 | `observability` | `observabilityView` |
 | `settings` | `settingsView` |
 
-## Admin OpenAPI paths (48)
+## Admin OpenAPI paths (49)
 
 Every path documented in `docs/api/admin-openapi.yaml`. The M4-5
 contract test proves each is implemented with the documented
@@ -88,6 +88,7 @@ spec by `TestContractMatrixDrift`.
 - `/admin/api/endpoint`
 - `/admin/api/client-keys/{id}/rotate`
 - `/admin/api/nexaflow/nodes`
+- `/admin/api/nexaflow/templates`
 - `/admin/api/nexaflow/workflows`
 - `/admin/api/nexaflow/workflows/{id}`
 - `/admin/api/nexaflow/runs/{id}`

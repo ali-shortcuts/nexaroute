@@ -317,3 +317,60 @@ func TestNexaflowRenameDuplicateDisableDeleteOverHTTP(t *testing.T) {
 		t.Fatalf("deleted workflow: %d, want 404", rr.Code)
 	}
 }
+
+// Task 6: the template gallery is backend-driven. It must serve the
+// inert starter templates (never published, no secrets, no resolved
+// URLs), reject non-GET methods, and require authentication like the
+// node registry it sits beside.
+func TestNexaflowTemplatesEndpoint(t *testing.T) {
+	srv, _, do := nexaflowTestClient(t)
+	req := httptest.NewRequest(http.MethodGet, "http://gateway/admin/api/nexaflow/templates", nil)
+	req.RemoteAddr = "127.0.0.2:1234"
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated templates status=%d, want 401", rr.Code)
+	}
+	rr = do(http.MethodPost, "/admin/api/nexaflow/templates", "")
+	if rr.Code != 405 {
+		t.Fatalf("templates POST: %d, want 405", rr.Code)
+	}
+	rr = do(http.MethodGet, "/admin/api/nexaflow/templates", "")
+	if rr.Code != 200 {
+		t.Fatalf("templates: %d %s", rr.Code, rr.Body.String())
+	}
+	var payload struct {
+		Version   string `json:"version"`
+		Templates []struct {
+			ID    string `json:"id"`
+			Title string `json:"title"`
+			Nodes []struct {
+				NodeID string         `json:"node_id"`
+				Config map[string]any `json:"config"`
+			} `json:"nodes"`
+			Placeholders   []string `json:"placeholders"`
+			RequiresPolicy bool     `json:"requires_policy"`
+			Published      bool     `json:"published"`
+		} `json:"templates"`
+	}
+	decodeBody(t, rr, &payload)
+	if payload.Version != "v1" || len(payload.Templates) != 5 {
+		t.Fatalf("templates version=%q count=%d, want v1/5", payload.Version, len(payload.Templates))
+	}
+	for _, tmpl := range payload.Templates {
+		if tmpl.Published {
+			t.Fatalf("template %s must never be published", tmpl.ID)
+		}
+		if len(tmpl.Nodes) == 0 {
+			t.Fatalf("template %s has no nodes", tmpl.ID)
+		}
+		if tmpl.Placeholders == nil {
+			t.Fatalf("template %s placeholders must be an array, not null", tmpl.ID)
+		}
+	}
+	// No template config may carry a resolved secret-looking value:
+	// placeholders stay placeholders until the operator fills them.
+	if strings.Contains(rr.Body.String(), "Bearer ") || strings.Contains(rr.Body.String(), "sk-") {
+		t.Fatalf("templates must not expose secret values: %s", rr.Body.String())
+	}
+}

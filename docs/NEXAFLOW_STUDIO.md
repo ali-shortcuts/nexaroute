@@ -120,6 +120,66 @@ multi-node chains), and condition→branch chains cannot run in v1
 without a registry fix (condition outputs `result`, branch requires
 `condition_result`).
 
+## Task 6 completion (studio gaps closed on this lineage)
+
+- **Template gallery (backend-driven).** `GET /admin/api/nexaflow/templates`
+  serves `DefaultTemplates()` (routing.read via the existing
+  `/admin/api/nexaflow/*` middleware; OpenAPI + contract matrix updated).
+  The gallery is searchable and creates a draft with the template's
+  nodes and **no connections**: templates carry node order only, not
+  port mappings, so inventing edges would be a second schema. The
+  operator connects ports, fills placeholders in node configuration,
+  then validates. Template configs contain no secrets and no resolved
+  URLs; placeholders stay placeholders until the operator fills them.
+- **Connection deletion + immediate edge diagnostics.** The editor
+  lists every connection with a Delete button (the SVG edge layer keeps
+  `pointer-events: none` so canvas drag still works; the list is the
+  accessible deletion path). Connecting a node to itself, repeating a
+  connection, or targeting an unknown port is rejected immediately
+  with the same verdict backend validation would give on Validate;
+  feeding an already-fed input is allowed with a warning, because the
+  backend permits it and the runtime applies edges in order
+  (last edge wins, see `buildInput`).
+- **Immutable version inspection.** The versions panel gains Inspect:
+  it renders the version's full stored graph (nodes + connections +
+  full content hash + publisher + timestamp) from the already-returned
+  `versions[].graph`. The snapshot is read-only; editing the draft
+  never changes it.
+- **Execution timeline.** The run panel gains a timeline sorted by the
+  server's per-node `started_at` (offset from run start, duration,
+  attempts, status) plus total run time when finished. The node table
+  above it stays in snapshot order to match the canvas.
+- **Approve/resume honesty.** No new resume endpoint was invented:
+  in this engine ApproveRun *is* the resume (it continues the run
+  loop, including after a restart), and rejecting also resumes with
+  `approved=false`. The buttons are now labelled "Approve and resume"
+  / "Reject and resume" so the UI says what the API does. A resume
+  without an approval decision would bypass Phase 7 approval
+  semantics and is deliberately not offered. The positive-approval
+  path (distinct approver) remains covered by runtime tests, not by
+  the keyless browser suite, which can only prove the honest
+  self-approval rejection.
+- **Onboarding, loading, error recovery.** The empty list gains a
+  five-step onboarding checklist; the template gallery degrades
+  gracefully (a gallery failure shows an error but never hides the
+  workflow list or canvas); list loading/error/retry behaviour is
+  unchanged.
+- **Responsive, keyboard, RTL.** The existing breakpoints (1100px /
+  700px) already stack the studio layout and shrink the canvas; Task 6
+  adds browser coverage at a narrow viewport and with `dir=rtl`. The
+  canvas itself is a coordinate plane and is not mirrored in RTL
+  (mirroring coordinates would break port mapping); panels, palette
+  and text follow the document direction set by the app's language
+  switch. Keyboard movement (arrows, Shift for larger steps) and
+  Delete on a focused node already existed and are now browser-tested.
+- **Deliberately NOT done here.** Canonical-API repointing, `workflow.*`
+  permissions, PostgreSQL history, scheduler/webhooks, and `bt()` i18n
+  conversion of studio strings all belong to the master-mission
+  integration branch (Phase 6 there, per its canonical plan) and are
+  not claimed here; this branch stays on the #690 lineage's
+  routing.read/write API so the delta ports cleanly. Branch gating
+  (condition/branch v1 limitation above) is likewise unchanged.
+
 ## Verification
 
 - `go test ./internal/nexaflow/ ./internal/httpapi/` (incl. `-race`),

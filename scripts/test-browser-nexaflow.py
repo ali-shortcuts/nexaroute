@@ -241,10 +241,79 @@ def main() -> None:
                 publish()
                 start_run('{}')
                 expect_run_status("awaiting_approval")
+                # Task 6: approving IS the resume in this engine, and the
+                # button must say so (no separate resume endpoint exists,
+                # by design, so a decision cannot be bypassed).
+                expect(page.locator('[data-wf="approve-run"]')).to_contain_text(
+                    "Approve and resume")
                 page.locator('[data-wf="approve-run"]').click()
                 expect_run_status("failed")
                 expect(page.locator("#wf-run-panel")).to_contain_text(
                     "must not be the requester")
+
+                # 8. Template gallery (backend-driven): use a template,
+                # which creates a draft with its nodes and no connections
+                # (templates carry node order, not port mappings).
+                nav_workflows()
+                expect(page.locator("#content")).to_contain_text(
+                    "Scheduled operational report")
+                page.locator(
+                    '[data-wf-use-template="scheduled-operational-report"]'
+                ).click()
+                expect(page.locator(".wf-canvas")).to_be_visible()
+                assert page.locator(".wf-node").count() == 3
+                expect(page.locator("#content")).to_contain_text(
+                    "No connections yet.")
+                page.locator('[data-wf="back-list"]').click()
+                expect(page.locator("#content")).to_contain_text(
+                    "Scheduled operational report")
+
+                # 9. Invalid edges are rejected immediately, and a
+                # connection can be deleted from the Connections list.
+                open_workflow("Browser Flow")
+                page.locator('[data-wf-port$=":payload:out"]').first.click()
+                page.locator('[data-wf-port$=":value:in"]').first.click()
+                expect(page.locator("#notice")).to_contain_text(
+                    "already exists")
+                page.locator('[data-wf-port$=":value:out"]').first.click()
+                page.locator('[data-wf-port$=":value:in"]').first.click()
+                expect(page.locator("#notice")).to_contain_text("itself")
+                page.locator('[data-wf-delete-edge]').first.click()
+                expect(page.locator("#content")).to_contain_text(
+                    "No connections yet.")
+                page.locator('[data-wf-port$=":payload:out"]').first.click()
+                page.locator('[data-wf-port$=":value:in"]').first.click()
+                save_draft()
+
+                # 10. Immutable version inspection + execution timeline.
+                expect(page.locator("#content")).to_contain_text(
+                    "Versions")
+                page.locator('[data-wf-inspect-version="1"]').click()
+                expect(page.locator("#content")).to_contain_text(
+                    "Version 1 (immutable)")
+                expect(page.locator("#content")).to_contain_text(
+                    "nexaroute.trigger.manual")
+                expect(page.locator(".wf-timeline")).to_contain_text(
+                    "succeeded")
+
+                # 11. Keyboard movement, narrow viewport, RTL smoke.
+                left_before = page.locator(".wf-node").first.evaluate(
+                    "el => parseInt(el.style.left, 10)")
+                page.locator(".wf-node").first.focus()
+                page.keyboard.press("ArrowRight")
+                left_after = page.locator(".wf-node").first.evaluate(
+                    "el => parseInt(el.style.left, 10)")
+                assert left_after == left_before + 10, \
+                    f"keyboard move {left_before} -> {left_after}"
+                save_draft()
+                page.set_viewport_size({"width": 360, "height": 700})
+                expect(page.locator(".wf-canvas")).to_be_visible()
+                expect(page.locator(".wf-palette")).to_be_visible()
+                page.set_viewport_size({"width": 1440, "height": 900})
+                page.evaluate(
+                    "() => { document.documentElement.dir = 'rtl'; }")
+                expect(page.locator(".wf-canvas")).to_be_visible()
+                expect(page.locator(".wf-palette")).to_be_visible()
 
                 browser.close()
                 # The app ships no favicon, so Chromium's automatic
