@@ -798,6 +798,41 @@ func TestTask8PostgresLedger(t *testing.T) {
 	// the ported suite when the same DSN is set (see store_contract).
 }
 
+// Scenario 4, Postgres subcase: two schedulers sharing one Postgres
+// ledger, same slot + re-tick, start exactly once.
+func TestTask8PostgresSchedulerSlot(t *testing.T) {
+	db := task8PGDB(t)
+	ctx := context.Background()
+	ledger, err := NewPostgresDeliveryLedger(db)
+	if err != nil {
+		t.Fatalf("ledger: %v", err)
+	}
+	starts := 0
+	start := func(ctx context.Context, definitionID, slotKey string) (string, error) {
+		starts++
+		return fmt.Sprintf("pg-run-%d", starts), nil
+	}
+	s1, err := NewScheduler(ledger, start)
+	if err != nil {
+		t.Fatalf("scheduler1: %v", err)
+	}
+	s2, err := NewScheduler(ledger, start)
+	if err != nil {
+		t.Fatalf("scheduler2: %v", err)
+	}
+	now := time.Now().Truncate(time.Hour)
+	sched := []Schedule{{DefinitionID: "pg-sched-def", IntervalSeconds: 3600, Enabled: true}}
+	for _, s := range []*Scheduler{s1, s2, s1} {
+		results := s.Tick(ctx, sched, now)
+		if len(results) != 1 {
+			t.Fatalf("tick results = %d, want 1", len(results))
+		}
+	}
+	if starts != 1 {
+		t.Fatalf("starts = %d, want 1", starts)
+	}
+}
+
 // ---- Scenario 13: migration of a #691 directory store ----
 
 func task8WriteLegacyStore(t *testing.T, root string, withBlocked bool, corrupt bool) {

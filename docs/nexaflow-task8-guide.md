@@ -225,7 +225,7 @@ Evidence: `internal/nexaflow/task8_acceptance_test.go`,
 | 1 Create/validate/save/reopen/publish immutable version/execute via UI routes + API | PASS | Service + HTTP lifecycle tests; pinned rev1 executes after rev2 exists; invalid definition rejected at save. |
 | 2 Manual trigger + idempotency-key deduplication | PASS | Same key → same run id, backend called once; same key on another definition → `ErrIdempotencyConflict`. |
 | 3 Signed webhook accept; malformed/stale/replayed rejected, incl. after restart | PASS | Service + HTTP; replay after simulated restart rejected via the same file ledger. |
-| 4 Durable schedule, no duplicate dispatch across two processes | PASS (file) / NOT_RUN (PG slot claim) | Two Scheduler instances + two subprocesses, one shared file ledger → exactly one start; disabled schedules never fire. PG slot-claim subcase not run (no multi-process PG harness in this session). |
+| 4 Durable schedule, no duplicate dispatch across two processes | PASS (file cross-process; PG slot claim) / NOT_RUN (PG cross-process) | Two Scheduler instances + two subprocesses, one shared file ledger → exactly one start; two scheduler handles on one Postgres ledger, same slot + re-tick → exactly one start; disabled schedules never fire. PG cross-process (two OS processes, one PG ledger) not run — same claim SQL as the proven two-handle case, but not executed across processes. |
 | 5 LLM node through the canonical router boundary | PASS (test doubles) | `llm.chat` via the Backend port with a counting fake; policy gate parks at `waiting_for_approval` with zero backend calls; separate approver releases it. Live provider: BLOCKED (no paid calls, no credentials — by design). |
 | 6 MCP allowed-tool invoke, unauthorized-tool reject, no later side effect | PASS | Allowed tool called once; `evil-tool` fails as `tool_forbidden` before the backend (0 backend calls), downstream `skipped`. |
 | 7 Branches, parallel, loops, merges, subworkflows, retries, fallback, timeout, cancel | PARTIAL | Branches, parallel, loops, merges, retries, error_handler fallback mapping, registry timeout, mid-flight cancel: PASS. Subworkflows, run-level fallback routing, any-join: NOT implemented (fail-closed evidence kept as tests). Durable waits: NOT implemented (`waiting_timer` never emitted). |
@@ -248,9 +248,9 @@ Evidence: `internal/nexaflow/task8_acceptance_test.go`,
 - Live provider, live tenant, real cluster, real multi-host PG:
   BLOCKED/NOT_RUN — no credentials, tenant, cluster, or multi-host
   PG were supplied, and no paid call was made. Only the PG
-  scheduler-slot claim subcase (scenario 4) and live-provider
-  subcases (scenarios 5, 10) are affected; all deterministic parts
-  are proven locally.
+  cross-process subcase (scenario 4) and live-provider subcases
+  (scenarios 5, 10) are affected; all deterministic parts are
+  proven locally.
 - Browser acceptance via the repo's loopback suite: NOT_RUN if the
   sandbox Chromium loopback block applies (see final verification
   record); the UI contract is proven by served-asset tests and
@@ -264,8 +264,11 @@ Evidence: `internal/nexaflow/task8_acceptance_test.go`,
   completions reported after Task 8's design freeze are relevant
   here (sibling-reported, NOT Task 8-verified): task3
   (`nexaflow/task3-control-flow`, `84cf62c`) for subworkflows /
-  any-join / durable waits, and task7 (`nexaflow/task7-security`,
-  `ee539bf`) for `workflow.*` permissions, tenant scoping, stored-run
-  redaction, and an opt-in hard budget — both built on other
-  lineages and both, by their own porting notes, must be PORTED onto
-  the canonical engine, not merged as-is.
+  any-join / durable waits, task5
+  (`supervisor/nexaflow-task5-integrations`, `52b40a7`) for the
+  composite backend and ledger-backed budget nodes, and task7
+  (`nexaflow/task7-security`, `ee539bf`) for `workflow.*`
+  permissions, tenant scoping, stored-run redaction, and an opt-in
+  hard budget — all built on other lineages and all, by their own
+  porting notes, must be PORTED onto the canonical engine, not
+  merged as-is.
