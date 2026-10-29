@@ -91,7 +91,9 @@ spec by `TestContractMatrixDrift`.
 - `/admin/api/nexaflow/nodes`
 - `/admin/api/nexaflow/templates`
 - `/admin/api/nexaflow/templates/{id}`
+- `/admin/api/nexaflow/templates/{id}/instantiate`
 - `/admin/api/nexaflow/definitions`
+- `/admin/api/nexaflow/definitions/validate`
 - `/admin/api/nexaflow/definitions/{id}`
 - `/admin/api/nexaflow/runs`
 - `/admin/api/nexaflow/runs/{id}`
