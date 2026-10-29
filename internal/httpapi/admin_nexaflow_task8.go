@@ -183,6 +183,40 @@ func (s *Server) adminNexaflowTemplates(w http.ResponseWriter, r *http.Request) 
 // Dispatch is shape-first for unknown shapes (404) and method-checked for
 // known shapes (405 for a wrong method on a known shape), so the OpenAPI
 // method-set probe and the studio error matrix both hold.
+// adminNexaflowTemplateInstantiate serves POST
+// /admin/api/nexaflow/templates/{id}/instantiate as its own exact route
+// (see server.go): the templates/ subtree handler answers only GET on the
+// detail path, so documenting instantiate as a POST on the detail path
+// would contradict the handler (405) and fail the OpenAPI contract test.
+func (s *Server) adminNexaflowTemplateInstantiate(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.nexaflowAdmin(r); !ok {
+		errorJSON(w, http.StatusUnauthorized, "admin authentication required")
+		return
+	}
+	if !s.nexaflowRequireMethod(w, r, http.MethodPost) {
+		return
+	}
+	rest := strings.Trim(strings.TrimPrefix(r.URL.Path, "/admin/api/nexaflow/templates/"), "/")
+	parts := strings.Split(rest, "/")
+	if len(parts) != 2 || parts[1] != "instantiate" || parts[0] == "" {
+		errorJSON(w, http.StatusNotFound, "template not found")
+		return
+	}
+	var body struct {
+		Placeholders   map[string]string `json:"placeholders"`
+		PolicyApproved bool              `json:"policy_approved"`
+	}
+	if !nexaflowDecodeBody(w, r, &body) {
+		return
+	}
+	def, err := s.nexaflow.InstantiateTemplate(r.Context(), parts[0], body.Placeholders, body.PolicyApproved)
+	if err != nil {
+		errorJSON(w, nexaflowErrStatus(err), err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"id": def.ID, "definition": def})
+}
+
 func (s *Server) adminNexaflowTemplateByID(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.nexaflowAdmin(r); !ok {
 		errorJSON(w, http.StatusUnauthorized, "admin authentication required")
@@ -190,25 +224,6 @@ func (s *Server) adminNexaflowTemplateByID(w http.ResponseWriter, r *http.Reques
 	}
 	rest := strings.Trim(strings.TrimPrefix(r.URL.Path, "/admin/api/nexaflow/templates/"), "/")
 	parts := strings.Split(rest, "/")
-	if len(parts) == 2 && parts[1] == "instantiate" {
-		if !s.nexaflowRequireMethod(w, r, http.MethodPost) {
-			return
-		}
-		var body struct {
-			Placeholders   map[string]string `json:"placeholders"`
-			PolicyApproved bool              `json:"policy_approved"`
-		}
-		if !nexaflowDecodeBody(w, r, &body) {
-			return
-		}
-		def, err := s.nexaflow.InstantiateTemplate(r.Context(), parts[0], body.Placeholders, body.PolicyApproved)
-		if err != nil {
-			errorJSON(w, nexaflowErrStatus(err), err.Error())
-			return
-		}
-		writeJSON(w, http.StatusCreated, map[string]any{"id": def.ID, "definition": def})
-		return
-	}
 	if len(parts) != 1 {
 		errorJSON(w, http.StatusNotFound, "template not found")
 		return

@@ -1877,8 +1877,9 @@ paths:
     get:
       summary: Get one NexaFlow inert template with its nodes (for building a workflow draft)
       x-permission: config.read
+  /admin/api/nexaflow/templates/{id}/instantiate:
     post:
-      summary: Instantiate a NexaFlow template into a saved draft (POST to the /instantiate sub-resource under this prefix); any other shape under this prefix answers 404
+      summary: Instantiate a NexaFlow template into a saved draft
       x-permission: config.write
       security:
       - adminSession: []
