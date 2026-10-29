@@ -8,8 +8,9 @@ import (
 
 // Studio port: the draft-body validate route the standalone Visual Studio
 // page (/studio.html) needs beyond the Task 8 admin API. Template
-// instantiation lives in the templates/ subtree handler in
-// admin_nexaflow_task8.go, alongside the #732 detail route. Both ride the
+// instantiation lives in its own exact-route handler
+// (adminNexaflowTemplateInstantiate) in admin_nexaflow_task8.go, alongside
+// the #732 detail route. Both ride the
 // interim canonical permission mapping (everything under
 // /admin/api/nexaflow/ maps to config.read for GET and config.write
 // for POST in adminPermissionForRequest); no workflow.* permission is
