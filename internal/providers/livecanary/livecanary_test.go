@@ -23,10 +23,23 @@ type fakeProvider struct {
 	block         bool
 	release       chan struct{}
 	outputTokens  int
+	// Acceptance-scenario fixtures (issue #646). requireAuth rejects any
+	// bearer token other than the test credential, streamUsage appends an
+	// OpenAI usage chunk to the stream, and truncateStream ends a stream
+	// after one data event without a terminal event.
+	requireAuth    bool
+	streamUsage    bool
+	truncateStream bool
 }
 
 func (f *fakeProvider) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.hits.Add(1)
+	if f.requireAuth && r.Header.Get("Authorization") != "Bearer canary-test-secret-1234" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":{"type":"invalid_request_error","message":"invalid api key"}}`))
+		return
+	}
 	if f.block {
 		if f.release != nil {
 			select {
@@ -65,7 +78,16 @@ func (f *fakeProvider) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
 		_, _ = fmt.Fprint(w, "data: {\"id\":\"c1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"OK\"},\"finish_reason\":null}]}\n\n")
-		_, _ = fmt.Fprint(w, "data: {\"id\":\"c1\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n")
+		if f.truncateStream {
+			// No terminal event and no [DONE]: the client must report a
+			// failed, truncated stream, never a silent pass or a retry.
+			return
+		}
+		if f.streamUsage {
+			_, _ = fmt.Fprint(w, "data: {\"id\":\"c1\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":2}}\n\n")
+		} else {
+			_, _ = fmt.Fprint(w, "data: {\"id\":\"c1\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n")
+		}
 		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
 		return
 	}

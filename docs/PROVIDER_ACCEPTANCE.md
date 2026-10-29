@@ -12,6 +12,16 @@ statuses, use `nexaroute external-accept` (see
 `docs/reports/verification-slices/live-acceptance-harness.md`). This
 `provider-accept` command remains the narrower provider-only tool.
 
+For the full #646 live-acceptance process — all six provider types, the
+case matrix (auth success/failure, discovery, non-streaming, streaming,
+stream usage, tool round trips, and the observed-only / hermetic treatment
+of rate limits, timeouts, cancellation, outages, failover, and interrupted
+streams), credential rules, bounds, and the run record — see
+`docs/PROVIDER_LIVE_ACCEPTANCE.md`. That runbook sequences
+`provider-accept`, `external-accept`, and
+`nexaroute conformance canary --scenarios acceptance`; it does not add a
+fourth harness or a new report format.
+
 ## What the command does
 
 ```bash

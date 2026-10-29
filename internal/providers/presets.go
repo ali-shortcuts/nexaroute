@@ -89,4 +89,22 @@ var presetList = []Preset{
 	{ID: "ollama", Name: "Ollama", Category: "Local", Type: "openai_compatible", BaseURL: "http://127.0.0.1:11434/v1", AuthMode: "none", Local: true},
 	{ID: "lmstudio", Name: "LM Studio", Category: "Local", Type: "openai_compatible", BaseURL: "http://127.0.0.1:1234/v1", AuthMode: "none", Local: true},
 	{ID: "vllm", Name: "vLLM", Category: "Local", Type: "openai_compatible", BaseURL: "http://127.0.0.1:8000/v1", AuthMode: "none", Local: true},
+	// OpenCode upstream gateway (Console pay-as-you-go). Discovery is the
+	// documented GET /v1/models on the Console base; the three protocols
+	// are addressed by the /openai and /anthropic prefixed paths below.
+	// No Zen profile: no Zen URL appears in the documented Console/Go
+	// material, so none is shipped.
+	{ID: "opencode-console", Name: "OpenCode Console", Category: "Gateway", Type: "opencode-console",
+		BaseURL: "https://opencode.ai/inference", AuthMode: "bearer",
+		ChatPath: "/openai/v1/chat/completions", ResponsesPath: "/openai/v1/responses",
+		MessagesPath: "/anthropic/v1/messages", ModelsPath: "/v1/models"},
+	// OpenCode Go subscription gateway. Same protocols, different base.
+	// Go discovery is undocumented, so ModelsPath is empty and discovery
+	// is forced off in finalizePreset and SupportsDiscovery; models are
+	// saved manually. Go requests carry a derived x-opencode-session
+	// header (see providers.OpencodeSessionHeader).
+	{ID: "opencode-go", Name: "OpenCode Go", Category: "Gateway", Type: "opencode-go",
+		BaseURL: "https://opencode.ai/inference/go", AuthMode: "bearer",
+		ChatPath: "/openai/v1/chat/completions", ResponsesPath: "/openai/v1/responses",
+		MessagesPath: "/anthropic/v1/messages"},
 }

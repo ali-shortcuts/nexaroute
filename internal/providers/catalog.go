@@ -39,6 +39,12 @@ func capabilitiesForDialect(dialect string) []string {
 		return []string{CapabilityChat, CapabilityCountTokens, CapabilityModelsList}
 	case "openai_responses":
 		return []string{CapabilityChat, CapabilityResponses, CapabilityModelsList}
+	case "opencode-console":
+		return []string{CapabilityChat, CapabilityResponses, CapabilityModelsList}
+	case "opencode-go":
+		// Same three protocols as Console, but no models_list: Go has
+		// no documented discovery endpoint.
+		return []string{CapabilityChat, CapabilityResponses}
 	case "azure_openai", "vertex", "bedrock", "gemini":
 		return []string{CapabilityChat}
 	default:
@@ -64,7 +70,7 @@ func finalizePreset(p Preset) Preset {
 	}
 	p.SupportsDiscovery = inventory != ""
 	switch p.Type {
-	case "bedrock", "azure_openai", "vertex":
+	case "bedrock", "azure_openai", "vertex", "opencode-go":
 		p.SupportsDiscovery = false
 	}
 	// models_list is only a capability claim when the catalog entry names a

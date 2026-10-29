@@ -121,7 +121,7 @@ func (a *auditor) report() Report {
 }
 
 func isEncryptedValue(v string) bool {
-	return strings.HasPrefix(v, secrets.Prefix)
+	return secrets.IsEnvelope(v)
 }
 
 // checkProviderSecretsAndURLs flags plaintext credentials at rest and

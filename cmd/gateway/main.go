@@ -78,12 +78,16 @@ func dispatchSubcommand(args []string, stdin io.Reader, stdout, stderr io.Writer
 		return runConfig(rest, stdout, stderr), true
 	case "doctor":
 		return runDoctor(rest, stdout, stderr), true
+	case "diagnostics":
+		return runDiagnostics(rest, stdout, stderr), true
 	case "provider-accept":
 		return runProviderAccept(rest, stdout, stderr), true
 	case "external-accept":
 		return runExternalAccept(rest, stdout, stderr), true
 	case "vault-accept":
 		return runVaultAccept(rest, stdout, stderr), true
+	case "comfyui-accept":
+		return runComfyUIAccept(rest, stdout, stderr), true
 	case "backup":
 		return runBackup(rest, stdout, stderr), true
 	case "restore":

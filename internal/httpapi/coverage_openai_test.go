@@ -10,6 +10,7 @@ import (
 
 	"github.com/ali-shortcuts/nexaroute/internal/config"
 	"github.com/ali-shortcuts/nexaroute/internal/translate"
+	"github.com/ali-shortcuts/nexaroute/internal/usage"
 )
 
 func coverageOpenAIGateway(t *testing.T, protocol string, upstream http.HandlerFunc) *Server {
@@ -152,10 +153,12 @@ func TestCoverageOpenAIAnthropicStreamToolUsageAndErrorSemantics(t *testing.T) {
 	}, "\n")
 	rr := httptest.NewRecorder()
 	var usageCalls, input, output int
+	var cacheRead, cacheWrite int64
 	resp := &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(stream))}
-	err := streamAnthropicToOpenAIWithUsage(rr, resp, "client-model", translate.NewAnthropicNameMap([]string{"lookup"}), func(i, o int) {
+	err := streamAnthropicToOpenAIWithUsage(rr, resp, "client-model", translate.NewAnthropicNameMap([]string{"lookup"}), func(u usage.Counts) {
 		usageCalls++
-		input, output = i, o
+		input, output = int(u.Input), int(u.Output)
+		cacheRead, cacheWrite = u.CacheRead, u.CacheWrite
 	}, "coverage-stream")
 	if err != nil {
 		t.Fatalf("tool/usage stream: %v", err)
@@ -169,8 +172,8 @@ func TestCoverageOpenAIAnthropicStreamToolUsageAndErrorSemantics(t *testing.T) {
 	if !strings.Contains(out, `"id":"call_`) {
 		t.Errorf("missing synthesized tool-call id: %s", out)
 	}
-	if usageCalls != 1 || input != 6 || output != 3 {
-		t.Fatalf("usage hook calls=%d input=%d output=%d, want 1,6,3", usageCalls, input, output)
+	if usageCalls != 1 || input != 6 || output != 3 || cacheRead != 2 || cacheWrite != 1 {
+		t.Fatalf("usage hook calls=%d input=%d output=%d cacheRead=%d cacheWrite=%d, want 1,6,3,2,1", usageCalls, input, output, cacheRead, cacheWrite)
 	}
 
 	errorBody := "data: {\"type\":\"error\",\"error\":{\"message\":\"upstream broke\"}}\n\n"

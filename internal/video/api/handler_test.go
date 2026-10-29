@@ -222,8 +222,11 @@ func TestHandlerCancelSuccessAndFailures(t *testing.T) {
 		t.Fatalf("repeated cancel body=%v", body)
 	}
 
+	// A genuinely missing job is 404, not 400: cancelling a job that
+	// never existed is a not-found, and a backend outage must map to
+	// 503 instead (HA acceptance, issue #652).
 	missing := performJSON(h, http.MethodPost, "/v1/video/jobs/no-such-job/cancel", nil, "")
-	if missing.Code != http.StatusBadRequest || errorBody(t, missing)["code"] != "cancel_failed" {
+	if missing.Code != http.StatusNotFound || errorBody(t, missing)["code"] != "not_found" {
 		t.Fatalf("missing cancel: status=%d body=%s", missing.Code, missing.Body.String())
 	}
 

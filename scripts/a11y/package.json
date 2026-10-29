@@ -4,6 +4,6 @@
   "description": "Dev-only browser evidence tooling (not shipped). Install: npm --prefix scripts/a11y install",
   "dependencies": {
     "axe-core": "4.10.2",
-    "playwright-core": "^1.55.0"
+    "playwright-core": "1.55.0"
   }
 }
