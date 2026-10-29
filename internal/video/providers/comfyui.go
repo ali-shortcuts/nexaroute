@@ -532,6 +532,21 @@ func (p *ComfyUI) DownloadOutputs(ctx context.Context, status video.ProviderJobS
 	if len(status.Outputs) == 0 {
 		return nil, errors.New("ComfyUI completion has no video output assets")
 	}
+	// Two outputs that land on the same stored filename would silently
+	// overwrite each other in the asset store (the sink keys by
+	// sanitized basename, not by node), so the first asset's bytes
+	// would be lost while its record still claims its own SHA-256.
+	// Refuse the whole download up front instead of persisting a
+	// partial, self-inconsistent set: the caller fails closed with
+	// nothing written, and the operator can disambiguate the workflow.
+	seenNames := make(map[string]struct{}, len(status.Outputs))
+	for _, asset := range status.Outputs {
+		name := filepath.Base(asset.Filename)
+		if _, dup := seenNames[name]; dup {
+			return nil, fmt.Errorf("ComfyUI completion lists duplicate video output filename %q; refusing to overwrite a stored asset", name)
+		}
+		seenNames[name] = struct{}{}
+	}
 	result := make([]video.Asset, 0, len(status.Outputs))
 	for _, asset := range status.Outputs {
 		meta := asset.Metadata
