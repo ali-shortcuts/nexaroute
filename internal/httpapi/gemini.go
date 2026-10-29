@@ -183,7 +183,7 @@ func (s *Server) geminiGenerateContent(w http.ResponseWriter, r *http.Request) {
 	streaming := pathStream || strings.EqualFold(r.URL.Query().Get("alt"), "sse")
 	canReq.Stream = streaming
 	reqReqs := canReq.DetectRequirements()
-	hasSystem := len(in.SystemInstruction.Parts) > 0
+	hasSystem := in.SystemInstruction != nil && len(in.SystemInstruction.Parts) > 0
 	var toolChoiceRequired *bool
 	if canReq.ToolChoice != nil {
 		req := canReq.ToolChoice.Mode == "required" || canReq.ToolChoice.Mode == "tool"
