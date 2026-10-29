@@ -56,6 +56,25 @@ object). Default-toolset Codex against the gateway therefore remains a
 gap until the Responses tool policy is deliberately revisited — the
 gateway never silently drops tools.
 
+**Compatibility statement (exact):** Codex works through NexaRoute
+only with the documented reduced toolset above. The DEFAULT Codex
+toolset is NOT compatible: it is rejected fail-closed. Do not read
+"Codex works" in any matrix or report as default-toolset support.
+
+**Product choice needed for full default-toolset compatibility**
+(owner decision, not a silent engineering default): the gateway must
+either (a) keep rejecting non-function tools (current behavior), or
+(b) implement real backends for them — a configured web-search
+provider behind `web_search` and an agent-delegation backend behind
+the `namespace` tool — with canonical tool types for both. The
+middle option, translating `web_search`/`namespace` into plain
+function declarations, is explicitly NOT chosen: it would fabricate
+capabilities the upstream cannot honor (a model calling a search
+function that returns no real search results, or a delegation tool
+that delegates nothing) and would silently change request semantics.
+Until option (b) is designed and authorized, the reduced toolset is
+the supported Codex configuration.
+
 ## OpenCode
 
 `opencode.json`:
