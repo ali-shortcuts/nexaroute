@@ -57,6 +57,12 @@ label { font-size: 12px; color: var(--muted); }
 .zoom-controls .button { padding: 6px 10px; }
 #canvas-edges { position: absolute; inset: 0; width: 1600px; height: 900px; pointer-events: none; }
 #canvas { position: relative; width: 1600px; height: 900px; }
+/* The edge SVG sits beneath the cards layer, so the cards container
+   must not swallow clicks over empty canvas — otherwise the edge hit
+   lines are unreachable by real clicks. Only the cards themselves take
+   pointer events; empty canvas passes through to the SVG below. */
+#canvas { pointer-events: none; }
+#canvas .node-card { pointer-events: auto; }
 .node-card { position: absolute; width: 210px; padding: 10px 12px; border: 2px solid var(--border); border-radius: 12px; background: var(--surface); cursor: grab; font-size: 12px; }
 .node-card.selected { border-color: var(--accent); }
 .node-card.readonly { cursor: default; }

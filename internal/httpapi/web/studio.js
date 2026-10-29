@@ -41,7 +41,15 @@
           var data = {};
           try { data = t ? JSON.parse(t) : {}; } catch (e) { /* non-JSON error body */ }
           if (!r.ok) {
-            var err = new Error(data.message || data.error || ('HTTP ' + r.status));
+            // Gateway error bodies nest the message:
+            // {"error": {"message": "...", "type": "..."}}. Reading
+            // data.error directly would stringify the object as
+            // "[object Object]" and hide the real message.
+            var msg = data.message
+              || (data.error && data.error.message)
+              || (typeof data.error === 'string' ? data.error : null)
+              || ('HTTP ' + r.status);
+            var err = new Error(msg);
             err.status = r.status;
             throw err;
           }
@@ -572,24 +580,31 @@
       return Promise.resolve();
     }
     return api('/admin/api/nexaflow/definitions', { method: 'POST', body: def })
-      .then(function () { clearError(); setDirty(false); showDiagnostics([{ ok: true, msg: 'Draft saved.' }]); return refreshDefs(); })
+      // A failed list refresh must not mislabel the save itself:
+      // the banner is already shown by refreshDefs, so swallow here.
+      .then(function () { clearError(); setDirty(false); showDiagnostics([{ ok: true, msg: 'Draft saved.' }]); return refreshDefs().catch(function () {}); })
       .catch(function (e) { showError('Save failed: ' + e.message); });
   }
   function refreshDefs() {
     var q = $('#wf-search').value || '';
     return api('/admin/api/nexaflow/definitions' + (q ? '?q=' + encodeURIComponent(q) : ''))
       .then(function (r) { defs = r.definitions || []; renderWorkflows(); })
-      .catch(function (e) { showError('Load drafts failed: ' + e.message, refreshDefs); });
+      // Show the banner AND propagate: swallowing here made the
+      // connect flow report "Connected." with a wrong key, because
+      // Promise.all over these three never rejected. Callers that
+      // must not fail on a refresh (save, manual refresh) swallow
+      // explicitly at their own call site.
+      .catch(function (e) { showError('Load drafts failed: ' + e.message, refreshDefs); throw e; });
   }
   function refreshRegistry() {
     return api('/admin/api/nexaflow/nodes')
       .then(function (r) { registry = r.nodes || []; renderPalette(); })
-      .catch(function (e) { showError('Load registry failed: ' + e.message, refreshRegistry); });
+      .catch(function (e) { showError('Load registry failed: ' + e.message, refreshRegistry); throw e; });
   }
   function refreshTemplates() {
     return api('/admin/api/nexaflow/templates')
       .then(function (r) { templates = r.templates || []; renderTemplates(); })
-      .catch(function (e) { showError('Load templates failed: ' + e.message, refreshTemplates); });
+      .catch(function (e) { showError('Load templates failed: ' + e.message, refreshTemplates); throw e; });
   }
 
   // ---- versions ----
@@ -619,7 +634,7 @@
     api('/admin/api/nexaflow/definitions/' + encodeURIComponent(def.id) + '/versions/' + encodeURIComponent(rev))
       .then(function (p) {
         def = p.definition; readOnly = true; positions = {}; selected = null; setDirty(false);
-        layout(); renderCanvas();
+        layout(); renderCanvas(); renderVersions();
         showDiagnostics([{ ok: true, msg: 'Inspecting revision ' + rev + ' read-only.' }]);
       })
       .catch(function (e) { showError('Inspect revision failed: ' + e.message); });
@@ -749,7 +764,9 @@
       localStorage.setItem('nexaflow_studio_theme', e.target.value);
     });
     $('#wf-search').addEventListener('input', renderWorkflows);
-    $('#wf-refresh').addEventListener('click', refreshDefs);
+    // Manual refresh: the banner is already shown by refreshDefs,
+    // so swallow here to avoid an unhandled rejection in the console.
+    $('#wf-refresh').addEventListener('click', function () { refreshDefs().catch(function () {}); });
     $('#wf-new').addEventListener('click', newDraft);
     $('#palette-search').addEventListener('input', renderPalette);
     $('#btn-validate').addEventListener('click', function () {
