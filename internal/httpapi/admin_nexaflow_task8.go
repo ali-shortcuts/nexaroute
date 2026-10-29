@@ -124,9 +124,28 @@ func (s *Server) adminNexaflowNodes(w http.ResponseWriter, r *http.Request) {
 		out = append(out, map[string]any{
 			"id": spec.ID, "version": spec.Version, "title": spec.Title,
 			"category": spec.Category, "description": spec.Description,
+			"input_schema": nexaflowFieldViews(spec.InputSchema),
+			"output_schema": nexaflowFieldViews(spec.OutputSchema),
+			"config_schema": nexaflowFieldViews(spec.ConfigSchema),
+			"default_timeout_ms": spec.DefaultTimeout.Milliseconds(),
+			"max_input_bytes": spec.MaxInputBytes,
+			"max_output_bytes": spec.MaxOutputBytes,
+			"permission": string(spec.Permission),
+			"requires_policy": spec.RequiresOperatorPolicy,
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"nodes": out})
+}
+
+// nexaflowFieldViews renders registry schema fields in the snake_case
+// shape the studio editor consumes (name/type/required/description);
+// empty schemas render as [] rather than null.
+func nexaflowFieldViews(fields []nexaflow.Field) []map[string]any {
+	out := make([]map[string]any, 0, len(fields))
+	for _, f := range fields {
+		out = append(out, map[string]any{"name": f.Name, "type": f.Type, "required": f.Required, "description": f.Description})
+	}
+	return out
 }
 
 func (s *Server) adminNexaflowTemplates(w http.ResponseWriter, r *http.Request) {
