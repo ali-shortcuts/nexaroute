@@ -195,13 +195,14 @@ func TestMission95GetAssetBranches(t *testing.T) {
 	if w.Code != http.StatusNotImplemented || errorBody(t, w)["code"] != "asset_download_unavailable" {
 		t.Fatalf("no-opener asset status=%d body=%s", w.Code, w.Body.String())
 	}
-	// Opener failure (asset URI outside the root): not found.
+	// A storage/open failure that is not a genuinely missing file is
+	// retryable unavailable, and must not masquerade as a deleted asset.
 	outside := stored
 	outside.URI = filepath.Join(t.TempDir(), "outside.mp4")
 	outsideStore := queue.NewMemoryStore()
 	mission95JobWithAssets(t, outsideStore, "job-outside", []video.Asset{outside}, nil)
 	w = performJSON(&Handler{Store: outsideStore, Assets: local}, http.MethodGet, "/v1/video/jobs/job-outside/assets/"+stored.ID, nil, "")
-	if w.Code != http.StatusNotFound || errorBody(t, w)["code"] != "asset_not_found" {
+	if w.Code != http.StatusServiceUnavailable || errorBody(t, w)["code"] != "asset_unavailable" || errorBody(t, w)["retryable"] != true {
 		t.Fatalf("opener-failure asset status=%d body=%s", w.Code, w.Body.String())
 	}
 	// Recorded size disagrees with the file: integrity error.
