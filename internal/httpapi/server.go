@@ -1137,6 +1137,7 @@ func (s *Server) Handler() http.Handler {
 	if s.nexaflow != nil {
 		mux.HandleFunc("/admin/api/nexaflow/nodes", s.adminNexaflowNodes)
 		mux.HandleFunc("/admin/api/nexaflow/templates", s.adminNexaflowTemplates)
+		mux.HandleFunc("/admin/api/nexaflow/templates/", s.adminNexaflowTemplateByID)
 		mux.HandleFunc("/admin/api/nexaflow/definitions", s.adminNexaflowDefinitions)
 		mux.HandleFunc("/admin/api/nexaflow/definitions/", s.adminNexaflowDefinitionByID)
 		mux.HandleFunc("/admin/api/nexaflow/runs", s.adminNexaflowRuns)

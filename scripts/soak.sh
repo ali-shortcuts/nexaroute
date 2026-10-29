@@ -55,6 +55,26 @@ workflow_ref="${GITHUB_REF_NAME:-}"
 workflow_head_ref="${GITHUB_HEAD_REF:-}"
 stage_results=()
 stage_number=0
+# Planned stage names, in order. write_summary appends any planned stage
+# that never recorded a result as SKIPPED, so a run that aborts on an
+# early stage still reports the stages it did not reach instead of
+# silently omitting them (issue #664).
+planned_stages=()
+for _i in $(seq 1 "$rounds"); do
+  planned_stages+=("stress-round-$_i")
+done
+planned_stages+=("http-hot-reload-soak" "recovery-soak" "video-recovery-soak" "race-soak" "budget-leak-slope")
+
+stage_recorded() { # name -> 0 if recorded
+  local _wanted="$1" _result _name
+  for _result in "${stage_results[@]}"; do
+    IFS='|' read -r _name _rest <<< "$_result"
+    if [[ "$_name" == "$_wanted" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
 
 resource_line() {
   local file="$1"
@@ -158,15 +178,27 @@ write_json_summary() {
       printf 'null,\n'
     fi
     printf '  "stages": [\n'
-    local first=1 result name status stage_duration rss log
+    local first=1 result name status stage_duration rss log planned
     for result in "${stage_results[@]}"; do
       IFS='|' read -r name status stage_duration rss log <<< "$result"
       if (( first == 0 )); then
         printf ',\n'
       fi
       first=0
-      printf '    {"name": "%s", "exit_code": %s, "duration_seconds": %s, "max_rss": "%s", "log": "%s"}' \
-        "$(json_escape "$name")" "$status" "$stage_duration" "$(json_escape "$rss")" "$(json_escape "$log")"
+      local stage_status="FAIL"
+      (( status == 0 )) && stage_status="PASS"
+      printf '    {"name": "%s", "status": "%s", "exit_code": %s, "duration_seconds": %s, "max_rss": "%s", "log": "%s"}' \
+        "$(json_escape "$name")" "$stage_status" "$status" "$stage_duration" "$(json_escape "$rss")" "$(json_escape "$log")"
+    done
+    for planned in "${planned_stages[@]}"; do
+      if ! stage_recorded "$planned"; then
+        if (( first == 0 )); then
+          printf ',\n'
+        fi
+        first=0
+        printf '    {"name": "%s", "status": "SKIPPED", "exit_code": null, "duration_seconds": 0, "max_rss": "n/a", "log": ""}' \
+          "$(json_escape "$planned")"
+      fi
     done
     printf '\n  ]\n'
     printf '}\n'
@@ -209,10 +241,15 @@ write_summary() {
     printf '## Stages\n\n'
     printf '| Stage | Exit | Duration | Max RSS | Raw log |\n'
     printf '|---|---|---|---|---|\n'
-    local result name status stage_duration rss log
+    local result name status stage_duration rss log planned
     for result in "${stage_results[@]}"; do
       IFS='|' read -r name status stage_duration rss log <<< "$result"
       printf '| %s | %s | %ss | %s | `%s` |\n' "$name" "$status" "$stage_duration" "$rss" "$log"
+    done
+    for planned in "${planned_stages[@]}"; do
+      if ! stage_recorded "$planned"; then
+        printf '| %s | SKIPPED |  | 0s | n/a | (run ended before this stage) |\n' "$planned"
+      fi
     done
     printf '\n## Fault classes exercised\n\n'
     printf '| Class | Proving suite |\n'

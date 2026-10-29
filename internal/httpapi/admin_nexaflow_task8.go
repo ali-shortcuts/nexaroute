@@ -76,7 +76,10 @@ func nexaflowErrStatus(err error) int {
 		return http.StatusNotFound
 	case errors.Is(err, nexaflow.ErrAlreadyExists),
 		errors.Is(err, nexaflow.ErrIdempotencyConflict),
-		errors.Is(err, nexaflow.ErrApprovalConflict):
+		errors.Is(err, nexaflow.ErrApprovalConflict),
+		errors.Is(err, nexaflow.ErrRunLimit),
+		errors.Is(err, nexaflow.ErrDefinitionBusy),
+		errors.Is(err, nexaflow.ErrRunParked):
 		return http.StatusConflict
 	case errors.Is(err, nexaflow.ErrTerminalState),
 		errors.Is(err, nexaflow.ErrStateConflict),
@@ -121,9 +124,28 @@ func (s *Server) adminNexaflowNodes(w http.ResponseWriter, r *http.Request) {
 		out = append(out, map[string]any{
 			"id": spec.ID, "version": spec.Version, "title": spec.Title,
 			"category": spec.Category, "description": spec.Description,
+			"input_schema":       nexaflowFieldViews(spec.InputSchema),
+			"output_schema":      nexaflowFieldViews(spec.OutputSchema),
+			"config_schema":      nexaflowFieldViews(spec.ConfigSchema),
+			"default_timeout_ms": spec.DefaultTimeout.Milliseconds(),
+			"max_input_bytes":    spec.MaxInputBytes,
+			"max_output_bytes":   spec.MaxOutputBytes,
+			"permission":         string(spec.Permission),
+			"requires_policy":    spec.RequiresOperatorPolicy,
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"nodes": out})
+}
+
+// nexaflowFieldViews renders registry schema fields in the snake_case
+// shape the studio editor consumes (name/type/required/description);
+// empty schemas render as [] rather than null.
+func nexaflowFieldViews(fields []nexaflow.Field) []map[string]any {
+	out := make([]map[string]any, 0, len(fields))
+	for _, f := range fields {
+		out = append(out, map[string]any{"name": f.Name, "type": f.Type, "required": f.Required, "description": f.Description})
+	}
+	return out
 }
 
 func (s *Server) adminNexaflowTemplates(w http.ResponseWriter, r *http.Request) {
@@ -143,6 +165,42 @@ func (s *Server) adminNexaflowTemplates(w http.ResponseWriter, r *http.Request) 
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"templates": out})
+}
+
+// adminNexaflowTemplateByID serves /admin/api/nexaflow/templates/{id}:
+// the full inert template, including its nodes, so a studio/gallery client
+// can build a workflow draft from it. The list endpoint deliberately
+// returns metadata only.
+func (s *Server) adminNexaflowTemplateByID(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.nexaflowAdmin(r); !ok {
+		errorJSON(w, http.StatusUnauthorized, "admin authentication required")
+		return
+	}
+	if !s.nexaflowRequireMethod(w, r, http.MethodGet) {
+		return
+	}
+	id := strings.Trim(strings.TrimPrefix(r.URL.Path, "/admin/api/nexaflow/templates/"), "/")
+	if id == "" || strings.Contains(id, "/") {
+		errorJSON(w, http.StatusNotFound, "template not found")
+		return
+	}
+	for _, tpl := range nexaflow.DefaultTemplates() {
+		if tpl.ID != id {
+			continue
+		}
+		var nodes []map[string]any
+		for _, n := range tpl.Nodes {
+			nodes = append(nodes, map[string]any{"node_id": n.NodeID, "version": n.Version, "config": n.Config})
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"id": tpl.ID, "version": tpl.Version, "title": tpl.Title,
+			"description": tpl.Description, "nodes": nodes,
+			"edges": tpl.Edges, "placeholders": tpl.Placeholders,
+			"requires_policy": tpl.RequiresPolicy, "published": tpl.Published,
+		})
+		return
+	}
+	errorJSON(w, http.StatusNotFound, "template not found")
 }
 
 func (s *Server) adminNexaflowDefinitions(w http.ResponseWriter, r *http.Request) {
@@ -176,7 +234,8 @@ func (s *Server) adminNexaflowDefinitions(w http.ResponseWriter, r *http.Request
 }
 
 // adminNexaflowDefinitionByID serves /admin/api/nexaflow/definitions/{id}
-// and its sub-resources: publish, versions, versions/{rev}, runs.
+// and its sub-resources: publish, validate, versions, versions/{rev},
+// runs (GET lists, POST starts).
 func (s *Server) adminNexaflowDefinitionByID(w http.ResponseWriter, r *http.Request) {
 	identity, ok := s.nexaflowAdmin(r)
 	if !ok {
@@ -200,6 +259,8 @@ func (s *Server) adminNexaflowDefinitionByID(w http.ResponseWriter, r *http.Requ
 		shape = "draft"
 	case len(parts) == 2 && parts[1] == "publish":
 		shape = "publish"
+	case len(parts) == 2 && parts[1] == "validate":
+		shape = "validate"
 	case len(parts) == 2 && parts[1] == "versions":
 		shape = "versions"
 	case len(parts) == 3 && parts[1] == "versions":
@@ -221,6 +282,24 @@ func (s *Server) adminNexaflowDefinitionByID(w http.ResponseWriter, r *http.Requ
 			return
 		}
 		writeJSON(w, http.StatusOK, def)
+	case "validate":
+		// Ported from #691's validate endpoint: validate the stored
+		// draft without saving or publishing it. A validation
+		// outcome is 200 with valid=false (mirroring #691); only a
+		// missing draft or store error is an error status.
+		if !s.nexaflowRequireMethod(w, r, http.MethodPost) {
+			return
+		}
+		draft, err := s.nexaflow.GetDraft(ctx, id)
+		if err != nil {
+			errorJSON(w, nexaflowErrStatus(err), err.Error())
+			return
+		}
+		if err := s.nexaflow.Validate(&draft); err != nil {
+			writeJSON(w, http.StatusOK, map[string]any{"valid": false, "error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"valid": true})
 	case "publish":
 		if !s.nexaflowRequireMethod(w, r, http.MethodPost) {
 			return
@@ -257,6 +336,19 @@ func (s *Server) adminNexaflowDefinitionByID(w http.ResponseWriter, r *http.Requ
 		}
 		writeJSON(w, http.StatusOK, pub)
 	case "runs":
+		if r.Method == http.MethodGet {
+			runs, err := s.nexaflow.ListRuns(ctx, nexaflow.RunFilter{DefinitionID: id}, identity)
+			if err != nil {
+				errorJSON(w, nexaflowErrStatus(err), err.Error())
+				return
+			}
+			var out []map[string]any
+			for _, run := range runs {
+				out = append(out, nexaflowRunSummary(run))
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"runs": out})
+			return
+		}
 		if !s.nexaflowRequireMethod(w, r, http.MethodPost) {
 			return
 		}
@@ -315,7 +407,7 @@ func (s *Server) adminNexaflowRuns(w http.ResponseWriter, r *http.Request) {
 }
 
 // adminNexaflowRunByID serves /admin/api/nexaflow/runs/{id},
-// /approve, and /cancel.
+// /approve, /cancel, and /resume (re-drive after restart/recovery).
 func (s *Server) adminNexaflowRunByID(w http.ResponseWriter, r *http.Request) {
 	identity, ok := s.nexaflowAdmin(r)
 	if !ok {
@@ -340,6 +432,8 @@ func (s *Server) adminNexaflowRunByID(w http.ResponseWriter, r *http.Request) {
 		shape = "approve"
 	case len(parts) == 2 && parts[1] == "cancel":
 		shape = "cancel"
+	case len(parts) == 2 && parts[1] == "resume":
+		shape = "resume"
 	}
 	switch shape {
 	case "":
@@ -389,6 +483,16 @@ func (s *Server) adminNexaflowRunByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		run, err := s.nexaflow.CancelRun(ctx, id, identity)
+		if err != nil {
+			errorJSON(w, nexaflowErrStatus(err), err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, nexaflowRunSummary(run))
+	case "resume":
+		if !s.nexaflowRequireMethod(w, r, http.MethodPost) {
+			return
+		}
+		run, err := s.nexaflow.ResumeRun(ctx, id, identity)
 		if err != nil {
 			errorJSON(w, nexaflowErrStatus(err), err.Error())
 			return

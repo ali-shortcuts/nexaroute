@@ -1,18 +1,17 @@
 // Package nexaflow is an engine-agnostic adapter registry for NexaFlow.
 //
-// HONESTY NOTICE — READ FIRST: as of main e6c3cdf there is no approved
-// NexaFlow registry, runtime, editor, HTTP API, or UI in this repository.
-// This package introduces the adapter registry itself as a new package,
-// internal/nexaflow, on the branch that carries it (PR #675, unmerged
-// at the time of writing); the Phase 1 foundation work (the workflow
-// definition contract in workflow.go, ADR 0008, and the architecture
-// document) is layered on the same branch. Phase 2 adds the durable
-// execution engine and stores in this same package (engine.go,
-// store.go, postgres_store.go; see docs/nexaflow/RUNTIME.md). It still
-// does not claim HTTP API wiring or UI integration. Wiring an HTTP
-// surface or an editor on top of this runtime is an explicit
-// follow-up, and the httpapi Server fields are unexported, so
-// server-side wiring must land in package httpapi itself.
+// HONESTY NOTICE — READ FIRST: the registry, the durable execution
+// engine and stores, the httpapi admin surface, and the webhook service
+// are on main (merged PR #693); the Phase 1 foundation work (the
+// workflow definition contract in workflow.go, ADR 0008, and the
+// architecture document) and Phase 2 (engine.go, store.go,
+// postgres_store.go; see docs/nexaflow/RUNTIME.md) are part of that
+// line. There is still no editor/studio UI and no scheduler daemon.
+// Templates instantiate into validated Definitions via
+// Template.InstantiateDefinition (placeholder substitution into Config
+// and Input, with schema coercion); the httpapi Server fields are
+// unexported, so server-side wiring lands in package httpapi itself,
+// and cmd/gateway does not yet attach the NexaFlow service.
 //
 // What this package does: it adapts existing, verified NexaRoute
 // capabilities behind a versioned node registry. Every node declares a

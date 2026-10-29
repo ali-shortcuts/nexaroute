@@ -206,6 +206,25 @@ func (s *storeState) createRun(run Run, now time.Time) error {
 			return ErrIdempotencyConflict
 		}
 	}
+	// Durable admission cap, ported from #691's prepareRun count and
+	// hardened to this boundary: file and memory stores serialize
+	// through their store mutex, so count + insert are atomic here
+	// (Postgres does the same with a transaction + advisory lock).
+	// Only an explicitly positive cap applies; zero keeps the
+	// pre-existing behaviour (no admission cap) exactly. The
+	// engine's in-process execution semaphore is separate and
+	// unchanged: it defaults to 1 when the cap is unset.
+	if limit := run.Definition.Settings.MaxConcurrentRuns; limit > 0 {
+		active := 0
+		for _, r := range s.runs {
+			if r.DefinitionID == run.DefinitionID && !r.State.Terminal() {
+				active++
+			}
+		}
+		if active >= limit {
+			return ErrRunLimit
+		}
+	}
 	if run.State == "" {
 		run.State = RunCreated
 	}
