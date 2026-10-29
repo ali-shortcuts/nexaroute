@@ -196,13 +196,17 @@ func TestMission95GetAssetBranches(t *testing.T) {
 	if w.Code != http.StatusNotImplemented || errorBody(t, w)["code"] != "asset_download_unavailable" {
 		t.Fatalf("no-opener asset status=%d body=%s", w.Code, w.Body.String())
 	}
-	// Opener failure (asset URI outside the root): not found.
+	// Opener failure (asset URI outside the root): not found. An
+	// outside-root URI is a deterministic rejection, not a transient
+	// outage, so it maps to 404 asset_not_found (retryable=false) —
+	// the same classification as the symlink-escape case below, and
+	// as the storage package's own contract for ErrAssetOutsideRoot.
 	outside := stored
 	outside.URI = filepath.Join(t.TempDir(), "outside.mp4")
 	outsideStore := queue.NewMemoryStore()
 	mission95JobWithAssets(t, outsideStore, "job-outside", []video.Asset{outside}, nil)
 	w = performJSON(&Handler{Store: outsideStore, Assets: local}, http.MethodGet, "/v1/video/jobs/job-outside/assets/"+stored.ID, nil, "")
-	if w.Code != http.StatusNotFound || errorBody(t, w)["code"] != "asset_not_found" {
+	if w.Code != http.StatusNotFound || errorBody(t, w)["code"] != "asset_not_found" || errorBody(t, w)["retryable"] != false {
 		t.Fatalf("opener-failure asset status=%d body=%s", w.Code, w.Body.String())
 	}
 	// Symlink inside the root that resolves outside it: also a

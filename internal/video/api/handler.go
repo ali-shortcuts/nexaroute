@@ -328,12 +328,21 @@ func (h *Handler) getAsset(w http.ResponseWriter, r *http.Request, jobID, assetI
 	}
 	file, err := opener.Open(asset)
 	if err != nil {
-		// Deterministic rejections are 404, not a retryable outage: a
-		// genuinely absent file, and an asset path that escapes the
-		// storage root, can never be served by retrying. Only genuine
-		// transient storage failures map to 503 asset_unavailable.
+		// Three-way opener-error classification. Deterministic
+		// rejections are 404, not a retryable outage: a genuinely
+		// absent file, and an asset path that escapes the storage
+		// root, can never be served by retrying. A permission
+		// failure is server-side and equally deterministic (the
+		// asset exists but this process cannot read it), so it
+		// stays a 503 — it is not a missing asset — but is NOT
+		// retryable: retrying without an operator fix cannot
+		// succeed. Only genuine transient storage failures (I/O
+		// errors and anything unclassified) map to retryable 503
+		// asset_unavailable.
 		if os.IsNotExist(err) || storage.IsOutsideRoot(err) {
 			writeError(w, http.StatusNotFound, "asset_not_found", "asset not found", false)
+		} else if os.IsPermission(err) {
+			writeError(w, http.StatusServiceUnavailable, "asset_unavailable", "asset storage is temporarily unavailable", false)
 		} else {
 			writeError(w, http.StatusServiceUnavailable, "asset_unavailable", "asset storage is temporarily unavailable", true)
 		}

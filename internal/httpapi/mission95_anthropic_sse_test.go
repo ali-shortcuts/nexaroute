@@ -193,6 +193,24 @@ func TestMission95NativeSSETracker(t *testing.T) {
 	if len(aGot) != 2 {
 		t.Error("zero-total message_stop fired the hook")
 	}
+	// Cache-token accounting (the #706 usage-sink scope, landed on main
+	// via #718): cache_creation and cache_read tokens from message_start
+	// ride the same message_stop hook as input/output tokens, and a
+	// message_delta cache_read updates the accumulated total.
+	var cacheGot []nativeSSEUsage
+	cached := &nativeSSETracker{protocol: "anthropic", usageHook: func(u nativeSSEUsage) { cacheGot = append(cacheGot, u) }}
+	for _, line := range []string{
+		"data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":10,\"cache_creation_input_tokens\":4,\"cache_read_input_tokens\":6}}}\n",
+		"data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":2,\"cache_read_input_tokens\":9}}\n",
+		"data: {\"type\":\"message_stop\"}\n",
+	} {
+		if err := cached.consume([]byte(line)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(cacheGot) != 1 || cacheGot[0].Input != 10 || cacheGot[0].Output != 2 || cacheGot[0].CacheWrite != 4 || cacheGot[0].CacheRead != 9 {
+		t.Fatalf("cache-token usage hook = %v, want exactly one call (input 10, output 2, cache_write 4, cache_read 9)", cacheGot)
+	}
 	// Finish processes a buffered partial line.
 	partial := &nativeSSETracker{protocol: "openai"}
 	if err := partial.consume([]byte("data: [DONE]")); err != nil {

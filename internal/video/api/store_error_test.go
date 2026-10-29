@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/video"
 	"github.com/ali-shortcuts/nexaroute/internal/video/orchestrator"
 	"github.com/ali-shortcuts/nexaroute/internal/video/queue"
+	"github.com/ali-shortcuts/nexaroute/internal/video/storage"
 )
 
 // failingJobStore simulates a backend outage: every Get fails with a
@@ -159,5 +161,59 @@ func TestHandlerGetAssetMissingFileStill404(t *testing.T) {
 	}
 	if body := errorBody(t, w); body["code"] != "asset_not_found" {
 		t.Fatalf("asset missing file: error body=%v", body)
+	}
+}
+
+// TestHandlerGetAssetOpenErrorClassification pins the getAsset
+// opener-error contract end to end through the handler (the opener error
+// is injected via fakeAssetOpener, so no disk state is involved):
+//
+//   - deterministic not-found / outside-root -> 404 asset_not_found,
+//     retryable=false. Retrying can never serve these: a missing file
+//     does not appear, and an asset path escaping the storage root is
+//     rejected by construction (see storage.ErrAssetOutsideRoot and
+//     ErrAssetSymlinkOutsideRoot: "deterministic validation rejections,
+//     not transient storage outages").
+//   - permission failure -> 503 asset_unavailable, retryable=false. The
+//     asset exists but this process cannot read it, so it is not a
+//     404 lie — but retrying without an operator fix cannot succeed,
+//     so it must not claim retryability.
+//   - generic transient I/O failure -> 503 asset_unavailable,
+//     retryable=true, with no backend detail in the body.
+//
+// This test exists because PR #716 once flipped the outside-root case to
+// retryable 503; that mapping contradicted both the handler on main and
+// the storage package's contract, and the flip was reverted rather than
+// the handler changed to match it.
+func TestHandlerGetAssetOpenErrorClassification(t *testing.T) {
+	cases := []struct {
+		name      string
+		openErr   error
+		wantCode  int
+		wantErr   string
+		retryable bool
+	}{
+		{"not-exist", os.ErrNotExist, http.StatusNotFound, "asset_not_found", false},
+		{"outside-root", storage.ErrAssetOutsideRoot, http.StatusNotFound, "asset_not_found", false},
+		{"outside-root-wrapped", fmt.Errorf("open: %w", storage.ErrAssetOutsideRoot), http.StatusNotFound, "asset_not_found", false},
+		{"symlink-outside-root", storage.ErrAssetSymlinkOutsideRoot, http.StatusNotFound, "asset_not_found", false},
+		{"permission", os.ErrPermission, http.StatusServiceUnavailable, "asset_unavailable", false},
+		{"transient-io", errors.New("read /tmp/asset.bin: input/output error"), http.StatusServiceUnavailable, "asset_unavailable", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := assetTestHandler(tc.openErr)
+			w := performJSON(h, http.MethodGet, "/v1/video/jobs/video-1/assets/asset-1", nil, "")
+			if w.Code != tc.wantCode {
+				t.Fatalf("%s: status=%d, want %d (body=%s)", tc.name, w.Code, tc.wantCode, w.Body.String())
+			}
+			body := errorBody(t, w)
+			if body["code"] != tc.wantErr || body["retryable"] != tc.retryable {
+				t.Fatalf("%s: error body=%v, want code=%s retryable=%v", tc.name, body, tc.wantErr, tc.retryable)
+			}
+			if tc.wantCode == http.StatusServiceUnavailable && strings.Contains(w.Body.String(), "input/output") {
+				t.Fatalf("%s: backend detail leaked: %s", tc.name, w.Body.String())
+			}
+		})
 	}
 }
