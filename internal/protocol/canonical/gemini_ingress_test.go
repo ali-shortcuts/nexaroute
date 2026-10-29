@@ -68,6 +68,9 @@ func TestDecodeGeminiIngressRequestRejects(t *testing.T) {
 		{"roleless later turn", `{"contents":[{"parts":[{"text":"a"}]},{"parts":[{"text":"b"}]}]}`},
 		{"validated mode", `{"contents":[{"role":"user","parts":[{"text":"x"}]}],"toolConfig":{"functionCallingConfig":{"mode":"VALIDATED"}}}`},
 		{"non-text modality", `{"contents":[{"role":"user","parts":[{"text":"x"}]}],"generationConfig":{"responseModalities":["AUDIO"]}}`},
+		{"image modality", `{"contents":[{"role":"user","parts":[{"text":"x"}]}],"generationConfig":{"responseModalities":["IMAGE"]}}`},
+		{"empty part", `{"contents":[{"role":"user","parts":[{}]}]}`},
+		{"non-text system part", `{"systemInstruction":{"parts":[{"inlineData":{"mimeType":"image/png","data":"AAAA"}}]},"contents":[{"role":"user","parts":[{"text":"x"}]}]}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
