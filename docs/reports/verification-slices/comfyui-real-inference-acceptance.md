@@ -58,11 +58,16 @@ media outputs; commit only the sanitized report/runbook evidence.
 `--asset-dir` is the acceptance retention root, not automatically the
 gateway's `video.storage_root`. The harness verifies the same local store
 implementation (containment inside the root, regular 0600 files under 0700
-directories) through its `comfyui:asset_path` check, but it calls the provider
-directly and never exercises the gateway HTTP asset-serving path or its
-`video.auth_token_env` check. Do not serve `--asset-dir` over unauthenticated
-HTTP; a live gateway-path serving check is a separate operator step, and the
-report must not claim it.
+directories) through its `comfyui:asset_path` check, but the
+`comfyui-accept` command itself calls the provider directly and never
+exercises the gateway HTTP asset-serving path or its
+`video.auth_token_env` check. Since the 2026-10-29 extension, that
+gateway path is covered by a gateway-stack test instead
+(`TestHandlerServesComfyUIAssetThroughGateway`: authorized retrieval,
+missing/wrong token rejection, traversal rejection, tamper detection —
+see the 2026-10-29 section). Do not serve `--asset-dir` over
+unauthenticated HTTP; a live gateway-path serving check is a separate
+operator step, and the report must not claim it.
 
 ## What closes #651
 
@@ -192,6 +197,98 @@ the touched packages. Full `go test ./...` and `./scripts/verify.sh`
 were not yet run on this head (see the final report); CI on the
 updated PR is the gate for those.
 
+## 2026-10-29 harness extension (local gaps closed, NOT a live run)
+
+Gap audit against the #651 local requirements. Already covered by the
+tests cited above and NOT duplicated here: unreachable server, invalid
+workflow/node mapping, poll timeout, oversized output, failed-job states,
+poll safe-retry (no resubmit), adapter cancellation, gateway-level cancel,
+and cleanup of a partial workspace plus a pending queue entry. Four
+genuine gaps were found and closed; one of them was a production defect.
+
+- **Defect fixed — duplicate output filenames overwrote stored assets:**
+  `DownloadOutputs` passed every server-supplied filename through the
+  sink, which keys stored files by sanitized basename, not by node. Two
+  outputs sanitizing to the same basename (two nodes returning `same.mp4`,
+  or `../same.mp4` plus `same.mp4`) therefore overwrote each other while
+  the first asset's record still claimed its own SHA-256/size — a
+  self-inconsistent persisted set. **Fix:** `DownloadOutputs` now
+  rejects the whole download before any `/view` request when two outputs
+  share a `filepath.Base` filename (`duplicate video output filename`).
+  Red proof: `TestComfyUIDownloadRejectsDuplicateOutputFilenames` FAILs
+  on the pre-fix code (`DownloadOutputs error=<nil>, want duplicate
+  rejection`) and PASSes with the fix.
+- **Gateway-path retrieval (was untested):** the `comfyui-accept` command
+  still calls the provider directly and never exercises gateway HTTP
+  serving — that part is unchanged. What is new is a gateway-stack test
+  proving retrieval *through NexaRoute* for a ComfyUI-metadata asset:
+  `TestHandlerServesComfyUIAssetThroughGateway` serves a stored asset
+  (provider=comfyui, node_id, filename, subfolder, type) over
+  `GET /v1/video/jobs/{id}/assets/{assetID}` and asserts byte-identical
+  body, `video/mp4`, `nosniff`/`no-store` headers, missing token → 401,
+  wrong token → 401, path-traversal asset names (`..`, `%2e%2e`,
+  `..%2f..%2fsecret`, embedded traversal) → 404 each, unknown job → 404,
+  and same-size tampering of the stored file → 500
+  `asset_integrity_error` (recorded SHA-256 checked before serving).
+- **Download sanitization (was untested at the adapter level):**
+  `TestComfyUIDownloadKeepsTraversalFilenamesInsideStoreRoot` drives
+  server-supplied filenames `../escape.mp4`, `/tmp/abs.mp4`, and
+  `..\..\win.mp4` through `DownloadOutputs` into a real local store and
+  asserts every stored URI stays inside the root, no stored filename
+  contains a separator, and no file escapes beside the root. Sink
+  containment itself needed no fix.
+- **Submit-timeout exactly-once (was untested):**
+  `TestComfyUICreateJobSubmitTimeoutSubmitsExactlyOnce` (adapter) and
+  `TestComfyUIAcceptSubmitTimeoutSubmitsExactlyOnce` (harness) prove a
+  `/prompt` call cut off by the caller's context deadline errors instead
+  of inventing success, submits exactly once, and leaves no retained
+  asset; the harness case records FAIL with local cleanup PASS and
+  remote cleanup NOT_RUN (no prompt ID exists to cancel). The adapter
+  has no retry loop, so exactly-once holds by construction; these tests
+  pin it.
+- **Download timeout (was untested):**
+  `TestComfyUIDownloadTimeoutFailsClosed` proves a `/view` download cut
+  off by the caller's context deadline errors with nothing persisted in
+  the store.
+- **Fixture labeling pinned:** the success test now also asserts the
+  report's limitations contain an entry with both `loopback` and
+  `harness evidence only`, so a future refactor cannot silently drop
+  the marking that keeps a fixture PASS from reading as real inference.
+  No labeling defect was found; the pin guards the existing behavior.
+
+Test-fixture note: the first versions of the new timeout tests
+deadlocked in `httptest.Server.Close` because their fake handlers
+blocked on the request context alone and the client transport does not
+reliably tear the server-side connection down on a client deadline.
+That was a fixture defect, not a product defect (the product calls
+errored promptly in every run). The fixtures now release the handler
+through a test-controlled channel. The same client-disconnect cleanup
+family is independently visible in Wave3 httpapi tests; no Wave3 code
+was touched here.
+
+Verification on this head (base `bb5865f`, Go 1.27.0, loopback
+fixtures only — none of this is real inference):
+
+- New tests plain: providers 4/4 PASS (1.006s), harness 2/2 PASS
+  (0.833s), gateway API 1/1 PASS (0.181s).
+- New tests `-race`: providers ok 2.690s, gateway ok 3.567s, API ok
+  1.460s.
+- Full packages: `go test -count=1 ./cmd/gateway/` ok 207.442s;
+  `go test -count=1 ./internal/video/...` all 13 packages ok
+  (providers 35.902s, audio 32.434s, render 21.420s).
+- `gofmt` clean on all touched files; `go vet` clean on `cmd/gateway`,
+  `internal/video/providers`, `internal/video/api`,
+  `internal/video/storage`.
+- `./scripts/verify.sh` NOT run locally: it runs the whole repository
+  plus a browser step that cannot run in this sandbox, and the scoped
+  full-package runs above already took ~6 minutes under sibling
+  contention. CI on the PR is the gate for it.
+- Secrets scan of the diff: clean (fixture literals and test-token
+  assertions only; no credential values, prompts, or media).
+- Actual ComfyUI model inference remains NOT_RUN/BLOCKED (see below);
+  no model was downloaded, no paid or public inference endpoint was
+  called, no production instance was touched.
+
 ## Live prerequisites still missing (2026-10-28, checked first-hand)
 
 Actual model inference remains NOT_RUN/BLOCKED, and #651 stays OPEN
@@ -211,6 +308,15 @@ No model weights were downloaded, no customer data was used, no
 production instance was touched, and no fixture output is reported
 as real inference anywhere in this update.
 
+Re-checked 2026-10-29 (names only, no values read): nothing listening
+on `127.0.0.1:8188` or `127.0.0.1:8189`; `COMFYUI_URL`,
+`COMFYUI_BASE_URL`, and `COMFYUI_API_URL` all absent-or-empty;
+`/etc/nexaroute` does not exist; no gateway config points at a ComfyUI
+instance; no operator authorization naming an instance, model, or
+workflow exists on record. Present, so not blockers: `ffprobe` 8.1.2,
+the deterministic fixture suites, and the `comfyui-accept` harness
+itself. The verdict is unchanged: NOT_RUN/BLOCKED.
+
 ## Limitations
 
 - The command cannot distinguish a real ComfyUI instance from a fixture served
@@ -224,5 +330,8 @@ as real inference anywhere in this update.
   exactly once per run, but a manual retry after an ambiguous submission
   failure (network drop after the server accepted the prompt) may create a
   second prompt. Check the ComfyUI queue before re-running.
+- A completion listing two outputs with the same filename is refused
+  whole (nothing written) instead of letting the second output
+  overwrite the first; the operator must disambiguate the workflow.
 - Workflow/model licenses, model files, and resource allocation remain the
   operator's responsibility.
