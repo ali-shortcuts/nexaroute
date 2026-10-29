@@ -889,6 +889,41 @@ func (s *Server) resolveVirtualEndpoint(model string) (route.ResolvedRoute, bool
 	return resolved, true, nil
 }
 
+// checkVirtualEndpointProtocol enforces the Phase B protocol restriction
+// for one resolved virtual endpoint. Phase B semantics (exact, documented):
+//   - Empty protocols list → allow all ingress protocols.
+//   - "anthropic" → only /v1/messages
+//   - "openai" → only /v1/chat/completions
+//   - "openai_responses" or alias "responses" → only /v1/responses
+//
+// No hidden expansion: "openai" does NOT implicitly allow
+// "openai_responses". If operator wants both chat and responses, they
+// must list both protocols. Shared by the data plane and the
+// route-preview simulation so the two can never disagree.
+func checkVirtualEndpointProtocol(resolver *route.Resolver, resolved route.ResolvedRoute, protocol string) error {
+	if resolver == nil {
+		return nil
+	}
+	ve, ok := resolver.ResolveByID(resolved.VirtualEndpointID)
+	if !ok || len(ve.Protocols) == 0 {
+		return nil
+	}
+	normIncoming := strings.ToLower(strings.TrimSpace(protocol))
+	if normIncoming == "responses" {
+		normIncoming = "openai_responses"
+	}
+	for _, p := range ve.Protocols {
+		normP := strings.ToLower(strings.TrimSpace(p))
+		if normP == "responses" {
+			normP = "openai_responses"
+		}
+		if normP == normIncoming {
+			return nil
+		}
+	}
+	return fmt.Errorf("protocol %q not allowed for virtual endpoint %q (allowed: %s)", protocol, ve.ID, strings.Join(ve.Protocols, ", "))
+}
+
 // candidatesForRequirement returns routing config, filtered candidates, resolved route if virtual, and error if disabled.
 func (s *Server) candidatesForRequirement(req router.Requirement, protocol string) (config.Config, []router.Scored, *route.ResolvedRoute, error) {
 	// Snapshot cfg and resolver
@@ -908,35 +943,12 @@ func (s *Server) candidatesForRequirement(req router.Requirement, protocol strin
 		candidates := rt.Candidates(req)
 		return cfgCopy, candidates, nil, nil
 	}
-	// Virtual endpoint: protocol restriction check.
-	// Phase B semantics (exact, documented):
-	// - Empty protocols list → allow all ingress protocols.
-	// - "anthropic" → only /v1/messages
-	// - "openai" → only /v1/chat/completions
-	// - "openai_responses" or alias "responses" → only /v1/responses
-	// No hidden expansion: "openai" does NOT implicitly allow "openai_responses".
-	// If operator wants both chat and responses, they must list both protocols.
+	// Virtual endpoint: protocol restriction check (shared with the
+	// route-preview simulation, which must enforce the same rule
+	// without running the live candidate path).
 	if resolver != nil {
-		if ve, ok := resolver.ResolveByID(resolved.VirtualEndpointID); ok && len(ve.Protocols) > 0 {
-			allowed := false
-			// Normalize incoming protocol
-			normIncoming := strings.ToLower(strings.TrimSpace(protocol))
-			if normIncoming == "responses" {
-				normIncoming = "openai_responses"
-			}
-			for _, p := range ve.Protocols {
-				normP := strings.ToLower(strings.TrimSpace(p))
-				if normP == "responses" {
-					normP = "openai_responses"
-				}
-				if normP == normIncoming {
-					allowed = true
-					break
-				}
-			}
-			if !allowed {
-				return cfgCopy, nil, &resolved, fmt.Errorf("protocol %q not allowed for virtual endpoint %q (allowed: %s)", protocol, ve.ID, strings.Join(ve.Protocols, ", "))
-			}
+		if err := checkVirtualEndpointProtocol(resolver, resolved, protocol); err != nil {
+			return cfgCopy, nil, &resolved, err
 		}
 	}
 	// For virtual endpoints, fetch candidates without model filter (auto) to get all eligible deployments,
