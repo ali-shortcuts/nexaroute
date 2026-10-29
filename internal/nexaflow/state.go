@@ -106,6 +106,19 @@ func (s *storeState) getDraft(definitionID string) (Definition, error) {
 	return cloneDefinition(def), nil
 }
 
+func (s *storeState) listDrafts() []Definition {
+	ids := make([]string, 0, len(s.drafts))
+	for id := range s.drafts {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	out := make([]Definition, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, cloneDefinition(s.drafts[id]))
+	}
+	return out
+}
+
 func (s *storeState) publish(definitionID, publishedBy string, now time.Time) (PublishedDefinition, error) {
 	draft, ok := s.drafts[definitionID]
 	if !ok {

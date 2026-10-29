@@ -28,14 +28,15 @@ type fakeQueueRow struct {
 }
 
 type fakeQueueDB struct {
-	mu         sync.Mutex
-	rows       map[string]*fakeQueueRow
-	failBegin  bool
-	failClose  bool
-	failCommit bool
-	failExec   string
-	failQuery  string
-	failProbe  bool
+	mu           sync.Mutex
+	rows         map[string]*fakeQueueRow
+	failBegin    bool
+	failClose    bool
+	failCommit   bool
+	failExec     string
+	failQuery    string
+	failProbe    bool
+	failListRows bool
 }
 
 type fakeQueueDriver struct{ db *fakeQueueDB }
@@ -131,12 +132,16 @@ type fakeQueueRows struct {
 	columns []string
 	values  [][]driver.Value
 	index   int
+	nextErr error
 }
 
 func (r *fakeQueueRows) Columns() []string { return r.columns }
 func (r *fakeQueueRows) Close() error      { return nil }
 func (r *fakeQueueRows) Next(dest []driver.Value) error {
 	if r.index >= len(r.values) {
+		if r.nextErr != nil {
+			return r.nextErr
+		}
 		return io.EOF
 	}
 	copy(dest, r.values[r.index])
@@ -332,7 +337,11 @@ func (f *fakeQueueDB) query(query string, args []driver.NamedValue) (driver.Rows
 		for _, id := range ids {
 			values = append(values, fakeQueueValues(f.rows[id]))
 		}
-		return &fakeQueueRows{columns: fakeQueueColumns(), values: values}, nil
+		rows := &fakeQueueRows{columns: fakeQueueColumns(), values: values}
+		if f.failListRows {
+			rows.nextErr = errors.New("fake queue: injected list rows failure")
+		}
+		return rows, nil
 	default:
 		return nil, fmt.Errorf("fake queue: unsupported query %q", query)
 	}

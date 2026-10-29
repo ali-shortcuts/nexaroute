@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -59,12 +60,16 @@ func OpenPostgresStore(ctx context.Context, dsn string) (*PostgresStore, error) 
 		return nil, fmt.Errorf("nexaflow: open postgres store: %w", err)
 	}
 	if err := db.PingContext(ctx); err != nil {
-		db.Close()
+		// The pool is discarded on this error path; the ping
+		// error is the returned error.
+		_ = db.Close()
 		return nil, fmt.Errorf("nexaflow: ping postgres store: %w", err)
 	}
 	s := &PostgresStore{db: db}
 	if err := s.migrate(ctx); err != nil {
-		db.Close()
+		// As above: the migration error dominates and the pool
+		// is discarded.
+		_ = db.Close()
 		return nil, err
 	}
 	return s, nil
@@ -196,6 +201,27 @@ func (s *PostgresStore) GetDraft(ctx context.Context, definitionID string) (Defi
 	return cloneDefinition(def), nil
 }
 
+func (s *PostgresStore) ListDrafts(ctx context.Context) ([]Definition, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT draft FROM `+wfDefsTable+` ORDER BY definition_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Definition
+	for rows.Next() {
+		var raw []byte
+		if err := rows.Scan(&raw); err != nil {
+			return nil, err
+		}
+		var def Definition
+		if err := json.Unmarshal(raw, &def); err != nil {
+			return nil, err
+		}
+		out = append(out, cloneDefinition(def))
+	}
+	return out, rows.Err()
+}
+
 func (s *PostgresStore) Publish(ctx context.Context, definitionID, publishedBy string) (PublishedDefinition, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -230,6 +256,12 @@ func (s *PostgresStore) Publish(ctx context.Context, definitionID, publishedBy s
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return PublishedDefinition{}, err
 	}
+	if err == nil && lastRev < 0 {
+		// A negative stored revision is corrupt data: narrowing it
+		// to uint64 would wrap to a huge revision, so fail closed
+		// instead of publishing or returning a wrapped version.
+		return PublishedDefinition{}, fmt.Errorf("nexaflow: corrupt negative revision %d for definition %q", lastRev, definitionID)
+	}
 	if err == nil && lastStatus == string(DefinitionPublished) && lastHash == hash {
 		var def Definition
 		if err := json.Unmarshal(lastDef, &def); err != nil {
@@ -237,6 +269,14 @@ func (s *PostgresStore) Publish(ctx context.Context, definitionID, publishedBy s
 		}
 		if err := tx.Commit(); err != nil {
 			return PublishedDefinition{}, err
+		}
+		// Same guard as above, repeated at the conversion site:
+		// lastRev is provably non-negative here, so the narrowing
+		// below cannot wrap (the outer guard already returns on
+		// negative values; this keeps the invariant local to the
+		// conversion for readers and static analysis).
+		if lastRev < 0 {
+			return PublishedDefinition{}, fmt.Errorf("nexaflow: corrupt negative revision %d for definition %q", lastRev, definitionID)
 		}
 		return PublishedDefinition{
 			Version:     DefinitionVersion{DefinitionID: definitionID, Revision: uint64(lastRev), ContentHash: lastHash, Status: DefinitionPublished},
@@ -342,6 +382,11 @@ func (s *PostgresStore) ListRevisions(ctx context.Context, definitionID string) 
 		var raw []byte
 		if err := rows.Scan(&rev, &hash, &raw, &status, &by, &at); err != nil {
 			return nil, err
+		}
+		if rev < 0 {
+			// As in Publish: a negative stored revision is corrupt
+			// data and must fail closed, never wrap via uint64.
+			return nil, fmt.Errorf("nexaflow: corrupt negative revision %d for definition %q", rev, definitionID)
 		}
 		var def Definition
 		if err := json.Unmarshal(raw, &def); err != nil {
@@ -502,18 +547,21 @@ func (s *PostgresStore) UpdateRunState(ctx context.Context, runID string, expect
 func (s *PostgresStore) ListRuns(ctx context.Context, filter RunFilter) ([]Run, error) {
 	query := `SELECT ` + runColumns + ` FROM ` + wfRunsTable + ` WHERE 1=1`
 	args := []any{}
+	// Placeholder numbers are built from len(args) with strconv, never
+	// from a format string, so no formatted text ever enters the SQL:
+	// the only interpolated value is an integer placeholder index.
 	if filter.DefinitionID != "" {
 		args = append(args, filter.DefinitionID)
-		query += fmt.Sprintf(` AND definition_id = $%d`, len(args))
+		query += ` AND definition_id = $` + strconv.Itoa(len(args))
 	}
 	if filter.State != "" {
 		args = append(args, string(filter.State))
-		query += fmt.Sprintf(` AND state = $%d`, len(args))
+		query += ` AND state = $` + strconv.Itoa(len(args))
 	}
 	query += ` ORDER BY created_at, run_id`
 	if filter.Limit > 0 {
 		args = append(args, filter.Limit)
-		query += fmt.Sprintf(` LIMIT $%d`, len(args))
+		query += ` LIMIT $` + strconv.Itoa(len(args))
 	}
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {

@@ -11,6 +11,7 @@
 #   gosec -quiet -fmt=json -out=gosec.json ./...
 #   python3 scripts/gosec-baseline.py write gosec.json docs/reports/gosec-baseline.txt
 # and review the diff like code.
+G202	internal/nexaflow/postgres_store.go	query += ` LIMIT $` + strconv.Itoa(len(args))
 G304	cmd/gateway/backup.go	data, err := os.ReadFile(filepath.Join(journalDir, "manifest.json"))
 G304	cmd/gateway/backup.go	data, err := os.ReadFile(path)
 G304	cmd/gateway/backup.go	fh, err := os.Open(bundlePath)
@@ -44,6 +45,11 @@ G304	internal/eval/suites_load.go	data, err := os.ReadFile(f)
 G304	internal/eval/suites_load.go	data, err := os.ReadFile(trimmed)
 G304	internal/httpapi/evaluation_plane.go	data, err := os.ReadFile(path)
 G304	internal/httpapi/evaluation_state.go	data, err := os.ReadFile(path)
+G304	internal/nexaflow/file_store.go	d, err := os.Open(dir)
+G304	internal/nexaflow/file_store.go	raw, err := os.ReadFile(path)
+G304	internal/nexaflow/filelock_unix.go	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+G304	internal/nexaflow/task8_delivery.go	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+G304	internal/nexaflow/task8_migrate.go	raw, err := os.ReadFile(path)
 G304	internal/secrets/secrets.go	b, e := os.ReadFile(p)
 G304	internal/secrets/secrets.go	b, err := os.ReadFile(path)
 G304	internal/secrets/secrets.go	f, e := os.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
