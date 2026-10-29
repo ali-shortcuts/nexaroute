@@ -247,6 +247,25 @@ func (s *Service) ExecuteRun(ctx context.Context, runID string) (Run, error) {
 	return s.Engine.Execute(ctx, runID)
 }
 
+// ResumeRun re-drives a run the caller owns (or any run for
+// owner/admin) after a restart, a recovery re-queue, or an approval
+// decision made out of band. It is the HTTP resume endpoint's
+// backing call; unlike ExecuteRun it is ownership-checked, so a
+// non-owner cannot resume another principal's run. Parked runs
+// stay parked (ErrRunParked) until an operator cancels or
+// force-fails them; resume never revives them.
+func (s *Service) ResumeRun(ctx context.Context, runID string, principal authz.Identity) (Run, error) {
+	if err := s.checkRunAccess(ctx, runID, principal); err != nil {
+		return Run{}, err
+	}
+	run, err := s.Engine.Execute(ctx, runID)
+	if err != nil {
+		return Run{}, err
+	}
+	s.appendAudit("resumed", runID, principal.Subject, "")
+	return run, nil
+}
+
 // ApproveRun records an approval decision. The approver must be
 // authenticated and different from the run's requester; the engine
 // enforces the same separation again at the record.

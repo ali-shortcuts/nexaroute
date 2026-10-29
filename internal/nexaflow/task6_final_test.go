@@ -25,10 +25,12 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -131,6 +133,33 @@ func TestTask6CrossProcessChild(t *testing.T) {
 		// The 60s bound is a backstop only; the parent kills us
 		// within seconds, and the lease TTL (5s) bounds recovery.
 		time.Sleep(60 * time.Second)
+	case "run-limit":
+		// #691-reconciliation child: admit one run against the
+		// definition's durable admission cap, from a separate
+		// process. The parent spawns several children against one
+		// definition and requires exactly `limit` admissions.
+		store, err := NewPostgresStore(ctx, db)
+		if err != nil {
+			t.Fatalf("store: %v", err)
+		}
+		limit, err := strconv.Atoi(os.Getenv("TASK6_CHILD_LIMIT"))
+		if err != nil {
+			t.Fatalf("limit: %v", err)
+		}
+		defID := os.Getenv("TASK6_CHILD_DEF")
+		err = store.CreateRun(ctx, Run{
+			ID:           os.Getenv("TASK6_CHILD_RUN"),
+			DefinitionID: defID,
+			Definition:   Definition{ID: defID, Settings: DefinitionSettings{MaxConcurrentRuns: limit}},
+			State:        RunCreated,
+		})
+		if err == nil {
+			write("admitted")
+		} else if errors.Is(err, ErrRunLimit) {
+			write("limited")
+		} else {
+			t.Fatalf("create run: %v", err)
+		}
 	default:
 		t.Fatalf("unknown TASK6_CHILD_MODE %q", mode)
 	}

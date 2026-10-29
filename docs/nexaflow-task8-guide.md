@@ -684,3 +684,44 @@ script line 86 `"adaptive"` →
 that lands, browser acceptance is: e2e PASS + 502 PASS +
 live-visual-agent FAIL (pre-existing, blocked on the
 script fix).
+
+## Reconciliation with PR #691 (superseded)
+
+PR #691 (`supervisor/nexaflow-phase8`) is closed as superseded. Its
+executor and parallel store lineage were retired, not merged; the
+full feature-by-feature mapping is
+`docs/nexaflow-691-reconciliation.md`, and the deferred items are
+also recorded in `docs/KNOWN_GAPS.md` under "NexaFlow boundaries".
+
+What changed on the canonical line in that reconciliation:
+
+- `DefinitionSettings.MaxConcurrentRuns` is now a durable admission
+  cap enforced inside `Store.CreateRun` (file/memory under the
+  store mutex; PostgreSQL in a transaction under a per-definition
+  advisory lock). A positive cap admits at most that many
+  non-terminal runs per definition, across processes and restarts;
+  a parked run holds its slot until cancelled or force-failed.
+  Zero means no admission cap (unchanged behaviour); the
+  in-process execution semaphore (default 1) is separate.
+- Reusing an idempotency key with different input is now
+  `ErrIdempotencyConflict` (HTTP 409) instead of a silent replay,
+  and a concurrent duplicate create resolves to the original run.
+- `DecideApproval` rejects an empty approver at the engine.
+- New admin routes on the canonical handler: `POST
+  /admin/api/nexaflow/runs/{id}/resume` (ownership-checked
+  re-drive; parked runs answer 409), `POST
+  /admin/api/nexaflow/definitions/{id}/validate` (200 with
+  `valid:false` for an invalid stored draft), and `GET
+  /admin/api/nexaflow/definitions/{id}/runs` (per-definition
+  listing, ownership-filtered). `ErrRunLimit`,
+  `ErrDefinitionBusy`, and `ErrRunParked` map to HTTP 409.
+- Deliberately not carried over: re-executing an ambiguous step
+  (#691's `retry_ambiguous` mode), whole-run parking on recovery,
+  error-on-terminal cancel, and the default-1 admission cap — each
+  with its reason in the reconciliation document.
+- Still deferred (not done): production gateway wiring, daily
+  schedules / trigger discovery / scheduler tick endpoint, webhook
+  `secret_ref` resolution, async dispatch, and the Studio UI items.
+  Until gateway wiring lands, schedules, webhooks, and startup
+  recovery are service-level primitives, not running gateway
+  behaviour — do not present them as live gateway features.

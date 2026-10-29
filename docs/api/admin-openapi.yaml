@@ -1917,7 +1917,7 @@ paths:
           $ref: '#/components/responses/MethodNotAllowed'
   /admin/api/nexaflow/definitions/{id}:
     get:
-      summary: Reopen a NexaFlow workflow draft; the handler also dispatches publish, versions, and runs sub-resources under this prefix
+      summary: Reopen a NexaFlow workflow draft; the handler also dispatches publish, validate, versions, and runs sub-resources under this prefix
       x-permission: config.read
       parameters:
       - name: id
@@ -1964,7 +1964,7 @@ paths:
           $ref: '#/components/responses/MethodNotAllowed'
   /admin/api/nexaflow/runs/{id}:
     get:
-      summary: Inspect a NexaFlow run with safe per-node outputs, timing, attempts, and error codes; the handler also dispatches approve and cancel sub-resources under this prefix
+      summary: Inspect a NexaFlow run with safe per-node outputs, timing, attempts, and error codes; the handler also dispatches approve, cancel, and resume sub-resources under this prefix
       x-permission: config.read
       parameters:
       - name: id

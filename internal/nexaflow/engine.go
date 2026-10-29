@@ -206,6 +206,14 @@ func (e *Engine) CreateRun(ctx context.Context, pub PublishedDefinition, princip
 			if existing.DefinitionID != pub.Version.DefinitionID || existing.Revision != pub.Version.Revision {
 				return Run{}, ErrIdempotencyConflict
 			}
+			// Same key + different input is a conflict, not a
+			// silent replay: returning the original run would
+			// hide that a different request was never executed.
+			// (Neither #691 nor the original Task 8 code compared
+			// inputs; this closes that gap at the engine boundary.)
+			if !sameJSONValue(existing.Input, input) {
+				return Run{}, ErrIdempotencyConflict
+			}
 			return existing, nil
 		} else if !errors.Is(err, ErrNotFound) {
 			return Run{}, err
@@ -227,6 +235,17 @@ func (e *Engine) CreateRun(ctx context.Context, pub PublishedDefinition, princip
 		Input:          deepCopyMap(input),
 	}
 	if err := e.store.CreateRun(ctx, run); err != nil {
+		// Concurrent duplicate: another writer won the
+		// idempotency race between our lookup and this insert.
+		// Resolve it the same way as a replay instead of
+		// surfacing a spurious conflict for an identical request.
+		if errors.Is(err, ErrIdempotencyConflict) && idempotencyKey != "" {
+			if existing, ferr := e.store.GetRunByIdempotency(ctx, idempotencyKey); ferr == nil &&
+				existing.DefinitionID == pub.Version.DefinitionID && existing.Revision == pub.Version.Revision &&
+				sameJSONValue(existing.Input, input) {
+				return e.store.GetRun(ctx, existing.ID)
+			}
+		}
 		return Run{}, err
 	}
 	for _, nodeID := range TopologicalOrder(def) {
@@ -922,6 +941,14 @@ func (e *Engine) parkPersistFailure(ctx context.Context, run Run, exec NodeExecu
 func (e *Engine) DecideApproval(ctx context.Context, runID, nodeID, approver, decision string) (Approval, error) {
 	if decision != "approved" && decision != "rejected" {
 		return Approval{}, errors.New("nexaflow: approval decision must be approved or rejected")
+	}
+	// An empty approver must never decide: the previous check
+	// only applied separation of duties when approver was
+	// non-empty, so a subject-less caller could approve any run
+	// at the engine boundary. The service layer also requires an
+	// authenticated approver; this is the defence in depth.
+	if approver == "" {
+		return Approval{}, errors.New("nexaflow: approval requires a non-empty approver")
 	}
 	run, err := e.store.GetRun(ctx, runID)
 	if err != nil {

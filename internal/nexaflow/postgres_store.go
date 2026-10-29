@@ -448,7 +448,31 @@ func (s *PostgresStore) CreateRun(ctx context.Context, run Run) error {
 	}
 	run.Definition = cloneDefinition(run.Definition)
 	now := time.Now()
-	_, err := s.db.ExecContext(ctx,
+	// The admission cap must be atomic across processes sharing
+	// this database: a transaction-scoped advisory lock serializes
+	// count + insert per definition, so two concurrent creates
+	// cannot both pass the cap. Without a positive cap the lock
+	// is skipped and behaviour is unchanged. Terminal states are
+	// succeeded/failed/cancelled; every other state holds a slot,
+	// including needs_manual_action (see ErrRunLimit).
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if limit := run.Definition.Settings.MaxConcurrentRuns; limit > 0 {
+		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, run.DefinitionID); err != nil {
+			return err
+		}
+		var active int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM `+wfRunsTable+` WHERE definition_id = $1 AND state NOT IN ('succeeded', 'failed', 'cancelled')`, run.DefinitionID).Scan(&active); err != nil {
+			return err
+		}
+		if active >= limit {
+			return ErrRunLimit
+		}
+	}
+	_, err = tx.ExecContext(ctx,
 		`INSERT INTO `+wfRunsTable+` (`+runColumns+`) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
 		run.ID, run.DefinitionID, run.Revision, mustJSON(run.Definition), string(run.State),
 		run.IdempotencyKey, run.Principal, mustJSON(run.PrincipalRoles), mustJSON(deepCopyMap(run.Input)),
@@ -464,7 +488,7 @@ func (s *PostgresStore) CreateRun(ctx context.Context, run Run) error {
 		}
 		return err
 	}
-	return nil
+	return tx.Commit()
 }
 
 func nullTime(t time.Time) any {
