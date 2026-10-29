@@ -49,23 +49,23 @@ func TestGatewayDeadlineErrorContract(t *testing.T) {
 		return ctx
 	}
 	cases := []struct {
-		name      string
-		route     func() context.Context
-		client    func() context.Context
-		err       error
-		want504   bool
+		name    string
+		route   func() context.Context
+		client  func() context.Context
+		err     error
+		want504 bool
 	}{
 		{
-			name: "route timer expired is a deadline",
-			route: expiredRoute,
+			name:   "route timer expired is a deadline",
+			route:  expiredRoute,
 			client: func() context.Context { return context.Background() },
-			err: timeoutErr, want504: true,
+			err:    timeoutErr, want504: true,
 		},
 		{
-			name: "route timer expired with ordinary error is still a deadline",
-			route: expiredRoute,
+			name:   "route timer expired with ordinary error is still a deadline",
+			route:  expiredRoute,
 			client: func() context.Context { return context.Background() },
-			err: ordinaryErr, want504: true,
+			err:    ordinaryErr, want504: true,
 		},
 		{
 			name: "transport timeout under a bounded route is a deadline",
@@ -75,7 +75,7 @@ func TestGatewayDeadlineErrorContract(t *testing.T) {
 				return ctx
 			},
 			client: func() context.Context { return context.Background() },
-			err: timeoutErr, want504: true,
+			err:    timeoutErr, want504: true,
 		},
 		{
 			name: "wrapped transport timeout under a bounded route is a deadline",
@@ -85,7 +85,7 @@ func TestGatewayDeadlineErrorContract(t *testing.T) {
 				return ctx
 			},
 			client: func() context.Context { return context.Background() },
-			err: fmt.Errorf("post failed: %w", timeoutErr), want504: true,
+			err:    fmt.Errorf("post failed: %w", timeoutErr), want504: true,
 		},
 		{
 			name: "ordinary error under a bounded route is not a deadline",
@@ -95,7 +95,7 @@ func TestGatewayDeadlineErrorContract(t *testing.T) {
 				return ctx
 			},
 			client: func() context.Context { return context.Background() },
-			err: ordinaryErr, want504: false,
+			err:    ordinaryErr, want504: false,
 		},
 		{
 			name: "nil error is not a deadline",
@@ -105,7 +105,7 @@ func TestGatewayDeadlineErrorContract(t *testing.T) {
 				return ctx
 			},
 			client: func() context.Context { return context.Background() },
-			err: nil, want504: false,
+			err:    nil, want504: false,
 		},
 		{
 			name: "timeout error on an unbounded route is not a deadline",
@@ -115,10 +115,10 @@ func TestGatewayDeadlineErrorContract(t *testing.T) {
 				return ctx
 			},
 			client: func() context.Context { return context.Background() },
-			err: timeoutErr, want504: false,
+			err:    timeoutErr, want504: false,
 		},
 		{
-			name: "caller cancellation takes precedence over a deadline",
+			name:  "caller cancellation takes precedence over a deadline",
 			route: expiredRoute,
 			client: func() context.Context {
 				ctx, cancel := context.WithCancel(context.Background())
