@@ -23,6 +23,7 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/video/agent"
 	"github.com/ali-shortcuts/nexaroute/internal/video/orchestrator"
 	"github.com/ali-shortcuts/nexaroute/internal/video/queue"
+	"github.com/ali-shortcuts/nexaroute/internal/video/storage"
 )
 
 type Handler struct {
@@ -327,10 +328,11 @@ func (h *Handler) getAsset(w http.ResponseWriter, r *http.Request, jobID, assetI
 	}
 	file, err := opener.Open(asset)
 	if err != nil {
-		// Only a genuinely absent file is 404: a storage I/O or
-		// permission failure during an outage must not masquerade
-		// as a deleted asset.
-		if os.IsNotExist(err) {
+		// Deterministic rejections are 404, not a retryable outage: a
+		// genuinely absent file, and an asset path that escapes the
+		// storage root, can never be served by retrying. Only genuine
+		// transient storage failures map to 503 asset_unavailable.
+		if os.IsNotExist(err) || storage.IsOutsideRoot(err) {
 			writeError(w, http.StatusNotFound, "asset_not_found", "asset not found", false)
 		} else {
 			writeError(w, http.StatusServiceUnavailable, "asset_unavailable", "asset storage is temporarily unavailable", true)
