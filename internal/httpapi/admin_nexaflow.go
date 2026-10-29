@@ -369,6 +369,68 @@ func nexaflowErr(w http.ResponseWriter, err error) {
 	}
 }
 
+type nexaflowTemplateNodeDTO struct {
+	NodeID  string         `json:"node_id"`
+	Version string         `json:"version"`
+	Config  map[string]any `json:"config"`
+}
+
+type nexaflowTemplateDTO struct {
+	ID             string                    `json:"id"`
+	Version        string                    `json:"version"`
+	Title          string                    `json:"title"`
+	Description    string                    `json:"description"`
+	Nodes          []nexaflowTemplateNodeDTO `json:"nodes"`
+	Edges          [][2]string               `json:"edges"`
+	Placeholders   []string                  `json:"placeholders"`
+	RequiresPolicy bool                      `json:"requires_policy"`
+	Published      bool                      `json:"published"`
+}
+
+// adminNexaflowTemplates serves the inert starter templates from the
+// same registry package as the node palette. Templates carry node
+// order only, not port mappings, and no secrets: they declare
+// placeholders (for example "notify_url") that an operator must fill
+// in node configuration deliberately, never real URLs or credentials.
+// The gallery therefore creates a draft with the template's nodes and
+// no edges; the operator connects ports and validates before anything
+// runs.
+func (s *Server) adminNexaflowTemplates(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		errorJSON(w, 405, "method not allowed")
+		return
+	}
+	if _, err := s.nexaflowService(); err != nil {
+		errorJSON(w, 503, "nexaflow service unavailable: "+err.Error())
+		return
+	}
+	templates := make([]nexaflowTemplateDTO, 0)
+	for _, t := range nexaflow.DefaultTemplates() {
+		nodes := make([]nexaflowTemplateNodeDTO, 0, len(t.Nodes))
+		for _, n := range t.Nodes {
+			cfg := n.Config
+			if cfg == nil {
+				cfg = map[string]any{}
+			}
+			nodes = append(nodes, nexaflowTemplateNodeDTO{NodeID: n.NodeID, Version: n.Version, Config: cfg})
+		}
+		edges := t.Edges
+		if edges == nil {
+			edges = [][2]string{}
+		}
+		placeholders := t.Placeholders
+		if placeholders == nil {
+			placeholders = []string{}
+		}
+		templates = append(templates, nexaflowTemplateDTO{
+			ID: t.ID, Version: t.Version, Title: t.Title, Description: t.Description,
+			Nodes: nodes, Edges: edges, Placeholders: placeholders,
+			RequiresPolicy: t.RequiresPolicy, Published: t.Published,
+		})
+	}
+	writeJSON(w, 200, map[string]any{"version": nexaflow.SupportedVersion, "templates": templates})
+}
+
 // adminNexaflowNodes serves the canonical registry: the single source
 // of node schemas the editor consumes. No Run functions, no secrets.
 func (s *Server) adminNexaflowNodes(w http.ResponseWriter, r *http.Request) {

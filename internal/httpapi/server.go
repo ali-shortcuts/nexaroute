@@ -1117,6 +1117,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/admin/api/endpoint", s.adminEndpoint)
 	// NexaFlow Studio: visual workflow editor backed by the runtime.
 	mux.HandleFunc("/admin/api/nexaflow/nodes", s.adminNexaflowNodes)
+	mux.HandleFunc("/admin/api/nexaflow/templates", s.adminNexaflowTemplates)
 	mux.HandleFunc("/admin/api/nexaflow/workflows", s.adminNexaflowWorkflows)
 	mux.HandleFunc("/admin/api/nexaflow/workflows/", s.adminNexaflowWorkflowByID)
 	mux.HandleFunc("/admin/api/nexaflow/runs/", s.adminNexaflowRunByID)

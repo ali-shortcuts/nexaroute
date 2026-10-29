@@ -1837,6 +1837,29 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '405':
           $ref: '#/components/responses/MethodNotAllowed'
+  /admin/api/nexaflow/templates:
+    get:
+      summary: |
+        List the inert NexaFlow starter templates from the backend
+        registry package: title, description, node order, placeholders
+        and policy requirement. Templates define node order only, not
+        port mappings, and carry no secrets; the gallery creates a
+        draft with the template nodes and no connections. GET only.
+      x-permission: routing.read
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Starter templates; see the handler and docs/NEXAFLOW_STUDIO.md.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
   /admin/api/nexaflow/workflows:
     get:
       summary: |
