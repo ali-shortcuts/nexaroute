@@ -353,11 +353,19 @@ func TestContinue95HttpapiNexaflowDefinitionByIDShapes(t *testing.T) {
 		{http.MethodGet, "/admin/api/nexaflow/definitions/" + id + "/publish"},
 		{http.MethodPost, "/admin/api/nexaflow/definitions/" + id + "/versions"},
 		{http.MethodPost, "/admin/api/nexaflow/definitions/" + id + "/versions/1"},
-		{http.MethodGet, "/admin/api/nexaflow/definitions/" + id + "/runs"},
 	} {
 		if rec := Continue95HttpapiAdminDo(t, srv, key, tc.method, tc.path, nil); rec.Code != http.StatusMethodNotAllowed {
 			t.Fatalf("%s %s = %d, want 405", tc.method, tc.path, rec.Code)
 		}
+	}
+	// GET on the runs shape is NOT a wrong method: since the #727
+	// reconciliation it lists the definition's runs (200 with a runs
+	// array; empty here because no run was started yet). An earlier
+	// version of this test asserted 405 for it; that expectation is
+	// stale against the documented route (guide: "GET
+	// /admin/api/nexaflow/definitions/{id}/runs (per-definition …)").
+	if rec := Continue95HttpapiAdminDo(t, srv, key, http.MethodGet, "/admin/api/nexaflow/definitions/"+id+"/runs", nil); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"runs"`) {
+		t.Fatalf("GET %s = %d: %s, want 200 with a runs list", "/admin/api/nexaflow/definitions/"+id+"/runs", rec.Code, rec.Body.String())
 	}
 	// Invalid revision -> 400.
 	if rec := Continue95HttpapiAdminDo(t, srv, key, http.MethodGet, "/admin/api/nexaflow/definitions/"+id+"/versions/abc", nil); rec.Code != http.StatusBadRequest {
@@ -414,11 +422,22 @@ func TestContinue95HttpapiNexaflowRunsAndApprovalErrors(t *testing.T) {
 	if runResp.State != "succeeded" {
 		t.Fatalf("run state = %q, want succeeded", runResp.State)
 	}
-	// Idempotent replay: the same key returns the original run (201,
-	// same id) instead of creating a second run.
+	// Idempotent replay, current documented contract (engine +
+	// guide + main's reconciliation test): the same key with the
+	// SAME input returns the original run (201, same id) instead of
+	// creating a second run; the same key with DIFFERENT input is a
+	// conflict (409), never a silent replay — returning the original
+	// run would hide that a different request was never executed. An
+	// earlier version of this test sent different input and expected
+	// 201; that expectation contradicts the documented contract and
+	// is corrected here, not the implementation.
 	if rec := Continue95HttpapiAdminDo(t, srv, key, http.MethodPost, "/admin/api/nexaflow/definitions/continue95-branch/runs",
-		map[string]any{"input": map[string]any{"payload": map[string]any{"health": map[string]any{"status": "bad"}}}, "idempotency_key": "continue95-run-1"}); rec.Code != http.StatusCreated || !strings.Contains(rec.Body.String(), runResp.ID) {
-		t.Fatalf("idempotent replay = %d: %s, want 201 with the original run id", rec.Code, rec.Body.String())
+		map[string]any{"input": map[string]any{"payload": map[string]any{"health": map[string]any{"status": "ok"}}}, "idempotency_key": "continue95-run-1"}); rec.Code != http.StatusCreated || !strings.Contains(rec.Body.String(), runResp.ID) {
+		t.Fatalf("same-input replay = %d: %s, want 201 with the original run id", rec.Code, rec.Body.String())
+	}
+	if rec := Continue95HttpapiAdminDo(t, srv, key, http.MethodPost, "/admin/api/nexaflow/definitions/continue95-branch/runs",
+		map[string]any{"input": map[string]any{"payload": map[string]any{"health": map[string]any{"status": "bad"}}}, "idempotency_key": "continue95-run-1"}); rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "idempotency key already exists") {
+		t.Fatalf("different-input replay = %d: %s, want 409 idempotency conflict", rec.Code, rec.Body.String())
 	}
 	// Runs list: unauth 401, wrong method 405, happy path lists the run.
 	if rec := Continue95HttpapiAdminDoUnauth(t, srv, http.MethodGet, "/admin/api/nexaflow/runs", 15); rec.Code != http.StatusUnauthorized {
