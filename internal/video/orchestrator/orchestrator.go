@@ -222,7 +222,7 @@ func (o *Orchestrator) Create(ctx context.Context, r video.VideoRequest) (video.
 			return old, nil
 		case errors.Is(err, queue.ErrNotFound):
 		case err != nil:
-			return video.VideoJob{}, fmt.Errorf("lookup idempotency key: %w", err)
+			return video.VideoJob{}, fmt.Errorf("lookup idempotency key: %w", wrapStoreErr(err))
 		}
 	}
 	p, ok := o.Providers.Get(r.ProviderPreference)
@@ -294,18 +294,21 @@ func (o *Orchestrator) Create(ctx context.Context, r video.VideoRequest) (video.
 		if err := o.Store.Create(ctx, j); err != nil {
 			if existing, conflict, resolveErr := o.existingAfterIdempotencyConflict(ctx, r.IdempotencyKey, err); conflict {
 				if resolveErr != nil {
-					return video.VideoJob{}, resolveErr
+					return video.VideoJob{}, wrapStoreErr(resolveErr)
 				}
 				return existing, nil
 			}
-			return video.VideoJob{}, err
+			return video.VideoJob{}, wrapStoreErr(err)
 		}
 		return j, nil
 	}
 	reserved := false
 	if o.Ledger != nil {
 		if err := o.Ledger.ReserveForJob(j.JobID, estimate, r.MaxCostUSD); err != nil {
-			return video.VideoJob{}, err
+			if isCostBusinessErr(err) {
+				return video.VideoJob{}, err
+			}
+			return video.VideoJob{}, wrapStoreErr(err)
 		}
 		reserved = true
 	}
@@ -315,11 +318,11 @@ func (o *Orchestrator) Create(ctx context.Context, r video.VideoRequest) (video.
 		}
 		if existing, conflict, resolveErr := o.existingAfterIdempotencyConflict(ctx, r.IdempotencyKey, err); conflict {
 			if resolveErr != nil {
-				return video.VideoJob{}, resolveErr
+				return video.VideoJob{}, wrapStoreErr(resolveErr)
 			}
 			return existing, nil
 		}
-		return video.VideoJob{}, err
+		return video.VideoJob{}, wrapStoreErr(err)
 	}
 	if err := o.Queue.Enqueue(ctx, j); err != nil {
 		j.State, j.LastError = video.StateFailed, "queue admission failed"
@@ -328,7 +331,7 @@ func (o *Orchestrator) Create(ctx context.Context, r video.VideoRequest) (video.
 			o.Ledger.ReleaseForJob(j.JobID)
 		}
 		if persistErr != nil {
-			return video.VideoJob{}, fmt.Errorf("queue admission failed: %v; failure state not durable: %w", err, persistErr)
+			return video.VideoJob{}, fmt.Errorf("queue admission failed: %v; failure state not durable: %w", err, wrapStoreErr(persistErr))
 		}
 		return video.VideoJob{}, fmt.Errorf("queue admission failed: %w", err)
 	}
@@ -1110,7 +1113,13 @@ func (o *Orchestrator) fail(ctx context.Context, j video.VideoJob, msg string) e
 func (o *Orchestrator) Cancel(ctx context.Context, id string) error {
 	j, err := o.Store.Get(ctx, id)
 	if err != nil {
-		return err
+		// A genuinely missing job keeps its sentinel (HTTP 404); any
+		// other store failure is a backend outage (HTTP 503), never a
+		// "not found" and never a verbatim backend error.
+		if errors.Is(err, queue.ErrNotFound) {
+			return err
+		}
+		return wrapStoreErr(err)
 	}
 	switch j.State {
 	case video.StateCompleted, video.StateFailed, video.StateCancelled, video.StateDryRun:
@@ -1136,7 +1145,7 @@ func (o *Orchestrator) Cancel(ctx context.Context, id string) error {
 	}
 	j.LastError = ""
 	if err := o.Store.Update(ctx, j); err != nil {
-		return err
+		return wrapStoreErr(err)
 	}
 	if o.Ledger != nil {
 		if j.ProviderJobID == "" {
