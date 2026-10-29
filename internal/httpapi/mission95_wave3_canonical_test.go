@@ -796,6 +796,8 @@ func TestWave3ResponsesReadyStrategyTransport(t *testing.T) {
 
 func TestWave3ResponsesDeadline504(t *testing.T) {
 	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseUpstream := func() { releaseOnce.Do(func() { close(release) }) }
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-r.Context().Done():
@@ -803,6 +805,9 @@ func TestWave3ResponsesDeadline504(t *testing.T) {
 		}
 	}))
 	defer up.Close()
+	// Register cleanup after up.Close so a failing assertion still releases
+	// the deliberately blocked upstream before httptest waits for connections.
+	defer releaseUpstream()
 	s := wave3Gateway(t, []config.ProviderConfig{
 		wave3Provider("a", "openai_compatible", up.URL, "m", "upstream-model", []string{"cm"}),
 	}, func(cfg *config.Config) {
@@ -810,14 +815,12 @@ func TestWave3ResponsesDeadline504(t *testing.T) {
 		cfg.Routing.RequestTimeoutMS = 1000
 	})
 	rr := wave3Request(s, "POST", "/v1/responses", wave3ResponsesReq("cm"))
+	// Unblock the fake provider before asserting so failure output cannot be
+	// obscured by httptest.Server.Close waiting on the intentionally held connection.
+	releaseUpstream()
 	if rr.Code != 504 || !strings.Contains(rr.Body.String(), "gateway request timeout") {
 		t.Fatalf("responses deadline status=%d body=%s want 504 gateway request timeout", rr.Code, rr.Body.String())
 	}
-	// Same sandbox observation as TestWave3AnthropicHedgeSecondaryWins:
-	// a gateway-side cancellation (here the route timer) does not
-	// promptly unblock the upstream handler, so release it directly
-	// after the 504 assertion instead of hanging in up.Close().
-	close(release)
 }
 
 func TestWave3ResponsesClientGoneOnTransportError(t *testing.T) {
