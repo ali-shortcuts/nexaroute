@@ -179,7 +179,7 @@ func TestPhaseH_DisabledPlaneAcceptsNothingAndInventsNothing(t *testing.T) {
 	if suites["enabled"] != false {
 		t.Fatalf("suites must report enabled=false: %v", suites["enabled"])
 	}
-	if list, ok := suites["suites"].([]any); !ok || len(list) != 8 {
+	if list, ok := suites["suites"].([]any); !ok || len(list) != 11 {
 		t.Fatalf("suite catalog = %#v", suites["suites"])
 	}
 	if suites["judge_available"] != false {
