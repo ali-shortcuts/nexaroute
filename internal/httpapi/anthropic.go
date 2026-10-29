@@ -445,7 +445,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 						s.rt.ObserveSessionCache(req, c.Deployment.ID, u.InputTokens, u.CacheReadTokens)
 					})
 			} else {
-				e = s.handleCanonicalResponse(w, resp, kind, "anthropic", in.Model, r.Header.Get("x-request-id"), false, toolDefs,
+				e = s.handleCanonicalResponse(routeCtx, w, resp, kind, "anthropic", in.Model, r.Header.Get("x-request-id"), false, toolDefs,
 					func(u canonical.Usage) {
 						inputTokens, outputTokens = u.InputTokens, u.OutputTokens
 						s.recordUsageCanonical(r, c.Deployment.ID, kind, u)

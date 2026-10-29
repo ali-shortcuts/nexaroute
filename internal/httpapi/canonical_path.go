@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -364,6 +365,7 @@ func (s *Server) canonicalStreamPump(
 // handleCanonicalResponse processes a successful upstream response received
 // through the canonical path: stream pumping or non-stream decode/encode.
 func (s *Server) handleCanonicalResponse(
+	ctx context.Context,
 	w http.ResponseWriter,
 	resp *http.Response,
 	kind, clientProtocol, requestedModel, requestID string,
@@ -374,7 +376,7 @@ func (s *Server) handleCanonicalResponse(
 	if stream {
 		return s.canonicalStreamPump(w, resp, kind, clientProtocol, requestedModel, requestID, toolDefs, usageHook)
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	body, err := readResponseBody(ctx, resp.Body, 8<<20)
 	_ = resp.Body.Close()
 	if err != nil {
 		return fmt.Errorf("upstream response read failed: %w", err)
@@ -565,6 +567,7 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 	profile := profileFromRequirement(req, &canReq)
 	dialects := map[string]compat.DialectProfile{}
 	var lastErr string
+	var lastDerr error
 	attempts := 0
 	for i := 0; i < len(candidates) && attempts < max; i++ {
 		c := candidates[i]
@@ -594,6 +597,7 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 		)
 		if derr != nil {
 			lastErr = derr.Error()
+			lastDerr = derr
 			if repair.Repaired {
 				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "compat_repair", Deployment: deployment.ID, Message: repair.Description})
 			}
@@ -619,7 +623,13 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 			// outcome whether or not a replay follows; pre-dispatch
 			// refusals are filtered out by the helper itself.
 			s.emitAmbiguousOutcome(r.Header.Get("x-request-id"), deployment.ID, derr, time.Since(start))
-			if gatewayDeadlineExceeded(routeCtx, r.Context()) {
+			// Use the transport-timeout-aware check, not the narrow
+			// route-timer check: the upstream client shares the route
+			// budget, so its timeout may fire (and must map to 504)
+			// before the route timer itself is observed expired.
+			// Caller cancellation still takes precedence inside the
+			// helper and is handled above via clientRequestGone.
+			if gatewayDeadlineError(routeCtx, r.Context(), derr) {
 				canonicalErrorJSON(w, "openai_responses", http.StatusGatewayTimeout, "timeout", "gateway request timeout")
 				return
 			}
@@ -726,7 +736,7 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 					s.rt.ObserveSessionCache(req, deploy.ID, u.InputTokens, u.CacheReadTokens)
 				})
 		} else {
-			usageErr = s.handleCanonicalResponse(w, resp, bundle.canonicalKind, "openai_responses", in.Model, r.Header.Get("x-request-id"), false, bundle.toolDefs,
+			usageErr = s.handleCanonicalResponse(routeCtx, w, resp, bundle.canonicalKind, "openai_responses", in.Model, r.Header.Get("x-request-id"), false, bundle.toolDefs,
 				func(u canonical.Usage) {
 					inputTokens, outputTokens = u.InputTokens, u.OutputTokens
 					s.recordUsageCanonical(r, deploy.ID, bundle.canonicalKind, u)
@@ -746,6 +756,15 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 					s.probe.Recover(deploy.ID)
 				} else {
 					s.hm.RecordFailure(deploy.ID, lastErr, total)
+				}
+				// A body-read timeout under a bounded route is a
+				// gateway deadline (504), not a malformed response
+				// (502): the client timeout covers the whole request
+				// including the body, so a stalled body must not be
+				// reported as an invalid upstream response.
+				if gatewayDeadlineError(routeCtx, r.Context(), usageErr) {
+					canonicalErrorJSON(w, "openai_responses", http.StatusGatewayTimeout, "timeout", "gateway request timeout")
+					return
 				}
 				if attempts < max && i+1 < len(candidates) {
 					s.retryPause(routeCtx, r.Header.Get("x-request-id"), cfg, attempts-1, max)
@@ -789,7 +808,7 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	if gatewayDeadlineExceeded(routeCtx, r.Context()) {
+	if gatewayDeadlineError(routeCtx, r.Context(), lastDerr) {
 		canonicalErrorJSON(w, "openai_responses", http.StatusGatewayTimeout, "timeout", "gateway request timeout")
 		return
 	}
