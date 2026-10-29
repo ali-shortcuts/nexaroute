@@ -244,7 +244,7 @@ PR #224 wires the permission matrix in `internal/authz` to every registered
 Admin API route/method and denies unknown combinations. OIDC session roles are
 derived only from verified issuer claims using the explicit config allowlist.
 The web UI's visibility is a convenience only; the server middleware is
-authoritative. The local bbolt store is single-host. The **95% repository-wide Go statement-coverage target is not currently met**. The current-`main` measurement is **91.4% (39,584 / 43,298 statements)** on commit `c2ca13cffe4aabf49bb81a92f46e4132e179da87` (Go 1.27.3; GitHub Actions Coverage report run [40861382445](https://github.com/ali-shortcuts/nexaroute/actions/runs/40861382445), 2026-10-29, retained artifact `coverage-c2ca13cffe4aabf49bb81a92f46e4132e179da87-40861382445`). Reaching 95% on that denominator requires 41,134 covered statements, a gap of 1,550. The explicitly selected comparison baseline for issue #663 remains **91.8% (41,782 / 45,515 statements)** on commit `ba5ff2f5f0ace8953e7c4f0e4913de5105e7a13f` (Go 1.27.0; see the pre-change measurement documented in [PR #724](https://github.com/ali-shortcuts/nexaroute/pull/724)); its denominator differs from the current-`main` CI measurement, so the two percentages are not a like-for-like trend and must not be read as a regression or an improvement. The former 84.9%/85% figures are historical and superseded. Separately, the Verify job on the same commit `c2ca13c` failed (run [40861382434](https://github.com/ali-shortcuts/nexaroute/actions/runs/40861382434)) on the known flaky `internal/httpapi/TestWave3ResponsesDeadline504` (observed 502; expected 504). That failure is in the verify gate, not in the coverage workflow, whose own full test pass succeeded — but it means the verify gate on this SHA is red, and coverage success must not be presented as green gates.
+authoritative. The local bbolt store is single-host. The **95% repository-wide Go statement-coverage target is not currently met**. The current-`main` measurement is **93.0% (40,527 / 43,588 statements)** on commit `8d610869d1ea2b6a38d18b630caafe08fc269dc7` (Go 1.27.3; GitHub Actions Coverage report run [40911231328](https://github.com/ali-shortcuts/nexaroute/actions/runs/40911231328), 2026-10-29, retained artifact `coverage-8d610869d1ea2b6a38d18b630caafe08fc269dc7-40911231328`). Reaching 95% on that denominator requires 41,409 covered statements, a gap of 882. The explicitly selected comparison baseline for issue #663 remains **91.8% (41,782 / 45,515 statements)** on commit `ba5ff2f5f0ace8953e7c4f0e4913de5105e7a13f` (Go 1.27.0; see the pre-change measurement documented in [PR #724](https://github.com/ali-shortcuts/nexaroute/pull/724)); its denominator differs from the current-`main` CI measurement, so the two percentages are not a like-for-like trend and must not be read as a regression or an improvement. The former 84.9%/85% figures are historical and superseded. The previous current-`main` measurement was 91.4% (39,584 / 43,298) on `c2ca13c`; the rise to 93.0% follows the merged coverage PRs #730 (wave 1) and #745 (issue #661 remainder), not a measurement change. Separately, the CI run on `8d61086` itself completed `success` (run [40911231420](https://github.com/ali-shortcuts/nexaroute/actions/runs/40911231420)); the intervening merge commit `58591e1` (PR #730) had a CI failure on `internal/probe/TestIssue663ProvidersScheduleRecoveryQueueFullCallback` (a timer test that passed on the PR head), which is recorded as an open flake question, not as the status of `8d61086`.
 PR #224 is merged; live external-IdP interoperability remains unverified.
 
 
@@ -509,51 +509,43 @@ This comparison baseline predates PR #724 and later changes to main; it must
 not be presented as the current-main aggregate.
 
 The successful current-`main` measurement is the Coverage report workflow
-run [40861382445](https://github.com/ali-shortcuts/nexaroute/actions/runs/40861382445)
-on commit `c2ca13cffe4aabf49bb81a92f46e4132e179da87` (2026-10-29, Go 1.27.3,
-conclusion `success`, all 63 packages `ok` in the retained artifact):
-**91.4% repository statement coverage (39,584 / 43,298 statements)**, below
-the 95% target by 1,550 covered statements. Its retained artifact is
-[coverage-c2ca13cffe4aabf49bb81a92f46e4132e179da87-40861382445](https://github.com/ali-shortcuts/nexaroute/actions/runs/40861382445/artifacts/12892365275).
-This successful measurement supersedes the failed-run diagnostics below for
-current `main`. It must still be distinguished from the gates: the separate
-Verify job on the same SHA failed (run
-[40861382434](https://github.com/ali-shortcuts/nexaroute/actions/runs/40861382434))
-on `internal/httpapi/TestWave3ResponsesDeadline504` (observed 502; expected
-504, the same known flake that failed the earlier `39a7498` run), so the
-verify gate on `c2ca13c` is red even though the coverage workflow's own test
-pass succeeded. Coverage success is a measurement, not a gate pass.
+run [40911231328](https://github.com/ali-shortcuts/nexaroute/actions/runs/40911231328)
+on commit `8d610869d1ea2b6a38d18b630caafe08fc269dc7` (2026-10-29, Go 1.27.3,
+conclusion `success`, all packages `ok` in the retained artifact):
+**93.0% repository statement coverage (40,527 / 43,588 statements)**, below
+the 95% target by 882 covered statements. Its retained artifact is
+[coverage-8d610869d1ea2b6a38d18b630caafe08fc269dc7-40911231328](https://github.com/ali-shortcuts/nexaroute/actions/runs/40911231328/artifacts/12913673240).
+This successful measurement supersedes the previous current-`main`
+measurement (91.4% on `c2ca13c`) and the failed-run diagnostics below for
+current `main`. Coverage success is a measurement, not a gate pass: the
+separate CI run on the same SHA completed `success` (run
+[40911231420](https://github.com/ali-shortcuts/nexaroute/actions/runs/40911231420)),
+while the intervening `58591e1` CI run failed on the probe timer test noted
+above.
 
-Package-level figures from the successful `c2ca13c` artifact (35 of 62
+Package-level figures from the successful `8d61086` artifact (28 of 62
 statement-bearing packages below 95%; `internal/doccheck` carries no
 statements and is excluded from that count):
 
-- `internal/breakersync`: 70.9%
-- `internal/nexaflow`: 71.0%
-- `internal/secrets`: 77.3%
-- `internal/qualitygate`: 80.1%
-- `internal/telemetry`: 81.4%
-- `internal/logging`: 81.8%
+- `internal/nexaflow`: 72.8%
+- `internal/secrets`: 85.6%
 - `internal/desktop`: 85.7%
+- `internal/logging`: 85.7%
 - `internal/budget`: 85.9%
-- `internal/providers/livecanary`: 86.0%
 - `internal/evallive`: 87.0%
-- `internal/video/storage`: 87.0%
-- `internal/video/tts`: 88.9%
-- `internal/cache`: 89.3%
-- `internal/scorecards`: 89.6%
-- `internal/controlplane`: 89.8%
+- `internal/video/storage`: 87.7%
 - `cmd/gateway`: 90.1%
 - `internal/video/audio`: 90.3%
 - `internal/video/agent`: 90.4%
+- `internal/video/tts`: 90.4%
 - `internal/transport`: 90.6%
 - `internal/policysim`: 90.9%
+- `internal/scorecards`: 91.8%
 - `internal/sharedstate`: 92.0%
-- `internal/usage`: 92.0%
 - `internal/video/render`: 92.1%
-- `internal/httpapi`: 92.5%
-- `internal/securitystore`: 92.8%
-- `internal/probe`: 92.9%
+- `internal/telemetry`: 92.8%
+- `internal/controlplane`: 93.1%
+- `internal/httpapi`: 93.2%
 - `internal/router`: 93.3%
 - `internal/authz`: 93.8%
 - `internal/retrysafety`: 93.9%
@@ -566,7 +558,16 @@ statements and is excluded from that count):
 
 Packages at or above 95% on the same artifact include `internal/providers`
 (96.8%), `internal/video/cost` (96.6%), `internal/video/queue` (98.1%),
-`internal/video/providers` (95.4%), and `internal/video/runtime` (96.2%).
+`internal/video/providers` (95.4%), `internal/video/runtime` (96.2%),
+and the wave-1 gains from merged PR #730: `internal/breakersync`,
+`internal/cache`, `internal/qualitygate`, `internal/providers/livecanary`,
+`internal/protocol/canonical`, and `internal/probe`. The largest remaining
+uncovered blocks are `internal/nexaflow` (1,023), `internal/httpapi` (703),
+and `cmd/gateway` (480); open PR #746 (successor to #740, Wave3 fix plus
+wave-2 tests, CI Fresh coverage 95.6% on its head at last check, verify
+pending) is the vehicle that would close the remaining 882-statement gap
+on main, and it is not yet merged, so the 95% target is still NOT MET on
+main.
 The earlier failed run on commit
 `39a7498f5dd8e9f7ad4e06633b1c42d1a7365200` (GitHub Actions run
 [40848476783](https://github.com/ali-shortcuts/nexaroute/actions/runs/40848476783))
@@ -592,9 +593,9 @@ Historical audit-record note (2026-10-15, superseded — not current
 measurements): the earlier thin-package list recorded `internal/compat`
 86.6% and `internal/core` 100.0%, among others. These figures are retained only so the F15 audit record stays complete.
 The package-level numbers above are the current-`main` measurement from the
-successful `c2ca13c` artifact. They are valid as a measurement; they do not
+successful `8d61086` artifact. They are valid as a measurement; they do not
 satisfy the 95% target and must not be presented as release sign-off while
-the target is unmet and the verify gate on that SHA is red.
+the target is unmet.
 
 Historically, the low coverage in `internal/video/cost` and `internal/video/queue`
 was chiefly concentrated in the PostgreSQL adapter code, whose real
@@ -606,7 +607,7 @@ Coverage must be raised with meaningful behavior tests or a reviewed,
 clearly defined measurement-policy change; assertion-free padding or
 excluding production code to make the percentage pass is not acceptable.
 
-The current-`main` artifact is [coverage-c2ca13cffe4aabf49bb81a92f46e4132e179da87-40861382445](https://github.com/ali-shortcuts/nexaroute/actions/runs/40861382445/artifacts/12892365275) (successful run, 2026-10-29). The 2026-10-25 artifact is historical and retained by GitHub Actions:
+The current-`main` artifact is [coverage-8d610869d1ea2b6a38d18b630caafe08fc269dc7-40911231328](https://github.com/ali-shortcuts/nexaroute/actions/runs/40911231328/artifacts/12913673240) (successful run, 2026-10-29). The previous current-`main` artifact was [coverage-c2ca13cffe4aabf49bb81a92f46e4132e179da87-40861382445](https://github.com/ali-shortcuts/nexaroute/actions/runs/40861382445/artifacts/12892365275) (91.4%, 2026-10-29). The 2026-10-25 artifact is historical and retained by GitHub Actions:
 `coverage-c7867355c6d5f9773dd185e19c3ab5e689aa6577-40196054365`. The failed
 2026-10-29 diagnostic artifact is [coverage-39a7498f5dd8e9f7ad4e06633b1c42d1a7365200-40848476783](https://github.com/ali-shortcuts/nexaroute/actions/runs/40848476783/artifacts/12885399833); it is historical and is not a passing aggregate measurement.
 The canonical measurement command is:
