@@ -424,15 +424,27 @@ still an operator trust-boundary concern.
 The bounded stress checks (`NEXAROUTE_STRESS=1`) and long-form soak checks
 (`NEXAROUTE_SOAK=1`) in `internal/router`, `internal/events`,
 `internal/probe`, `internal/logging`, `internal/eval`, and `internal/httpapi`
-skip by default so routine `go test ./...` and CI stay within budget. Opting
-the whole suite into CI would require a workflow change and is deliberately
-out of scope here.
+skip by default so routine `go test ./...` stays within budget. The
+bounded subset is now in CI: `scripts/ci-soak-smoke.sh` (stress selectors
+identical to `scripts/stress.sh`, fixed-iteration soak tests, loopback
+outage/cancellation tests, one short race soak stage) runs as the
+`ci-soak-smoke` job in `.github/workflows/ci.yml` and records every stage
+as PASS/FAIL/SKIPPED/BLOCKED/CANCELLED in a sanitized report. The
+long-form multi-hour soak stays deliberately out of normal PR CI: it is
+opt-in via the Soak workflow (`workflow_dispatch`) on a suitable runner
+(see `docs/reports/ISSUE664_SOAK_PROCEDURE.md`).
 
-- Impact: default test runs do not exercise the stress/soak paths.
+- Evidence (actual run, 2026-10-29): `docs/reports/ISSUE664_CI_SMOKE_2026-10-29.md`
+  — CI smoke PASS, 16/16 stages, code commit `1facf65`, Go 1.27.0, 1035s
+  wall time on a shared 2-vCPU VM. Long-form multi-hour soak: NOT RUN.
+  Live items (#646–#652) and any RPO/RTO value: NOT RUN / not reported.
+- Impact: default test runs do not exercise the stress/soak paths, and
+  no short CI run proves long-duration stability.
 - Mitigation/workaround: run them explicitly, e.g.
   `NEXAROUTE_STRESS=1 go test ./...`, `NEXAROUTE_SOAK=1 go test ./...`, or via
-  `scripts/stress.sh` / `scripts/soak.sh`.
-- Owner: audit finding F11; follow-up set #169–#177.
+  `scripts/ci-soak-smoke.sh` (bounded) / `scripts/soak.sh` (long-form,
+  operator-dispatched).
+- Owner: audit finding F11; follow-up set #169–#177; issue #664.
 
 ### Dashboard missing-DOM resilience and CLI-snippet injection — `verified fixed`
 
