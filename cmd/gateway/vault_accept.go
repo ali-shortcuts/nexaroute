@@ -102,6 +102,21 @@ type vaultAcceptTotals struct {
 	NotRun  int `json:"not_run"`
 }
 
+// newVaultAcceptClient builds the Vault HTTP client. Redirects are
+// refused (http.ErrUseLastResponse, same posture as the Transit
+// provider): a redirect target must never receive the operator's
+// X-Vault-Token, and a 3xx response surfaces as a failed check
+// instead of being followed silently. Every vaultHTTP caller treats a
+// non-2xx status as failure, so refusing redirects is fail-closed.
+func newVaultAcceptClient(timeout time.Duration) *http.Client {
+	return &http.Client{
+		Timeout: timeout,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+}
+
 func runVaultAccept(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("vault-accept", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -211,7 +226,7 @@ func runVaultAccept(args []string, stdout, stderr io.Writer) int {
 
 	runCtx, cancel := context.WithTimeout(context.Background(), *overallTimeout)
 	defer cancel()
-	client := &http.Client{Timeout: *timeout}
+	client := newVaultAcceptClient(*timeout)
 
 	health := runVaultAcceptHealth(runCtx, client, addr, token)
 	report.Checks = append(report.Checks, health)
