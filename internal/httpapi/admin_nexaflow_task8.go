@@ -148,6 +148,42 @@ func (s *Server) adminNexaflowTemplates(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]any{"templates": out})
 }
 
+// adminNexaflowTemplateByID serves /admin/api/nexaflow/templates/{id}:
+// the full inert template, including its nodes, so a studio/gallery client
+// can build a workflow draft from it. The list endpoint deliberately
+// returns metadata only.
+func (s *Server) adminNexaflowTemplateByID(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.nexaflowAdmin(r); !ok {
+		errorJSON(w, http.StatusUnauthorized, "admin authentication required")
+		return
+	}
+	if !s.nexaflowRequireMethod(w, r, http.MethodGet) {
+		return
+	}
+	id := strings.Trim(strings.TrimPrefix(r.URL.Path, "/admin/api/nexaflow/templates/"), "/")
+	if id == "" || strings.Contains(id, "/") {
+		errorJSON(w, http.StatusNotFound, "template not found")
+		return
+	}
+	for _, tpl := range nexaflow.DefaultTemplates() {
+		if tpl.ID != id {
+			continue
+		}
+		var nodes []map[string]any
+		for _, n := range tpl.Nodes {
+			nodes = append(nodes, map[string]any{"node_id": n.NodeID, "version": n.Version, "config": n.Config})
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"id": tpl.ID, "version": tpl.Version, "title": tpl.Title,
+			"description": tpl.Description, "nodes": nodes,
+			"edges": tpl.Edges, "placeholders": tpl.Placeholders,
+			"requires_policy": tpl.RequiresPolicy, "published": tpl.Published,
+		})
+		return
+	}
+	errorJSON(w, http.StatusNotFound, "template not found")
+}
+
 func (s *Server) adminNexaflowDefinitions(w http.ResponseWriter, r *http.Request) {
 	identity, ok := s.nexaflowAdmin(r)
 	if !ok {
