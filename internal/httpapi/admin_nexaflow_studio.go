@@ -58,6 +58,13 @@ func (s *Server) adminNexaflowTemplateByID(w http.ResponseWriter, r *http.Reques
 // answer for a stale saved draft. The verdict is always HTTP 200; an
 // invalid definition answers valid:false with the validation error,
 // never a 4xx that the UI would conflate with a failed request.
+//
+// Prospective identity: a draft that has never been saved has no id
+// or name yet (both are assigned by the save dialog), and a new draft
+// that cannot validate before its first save is unusable. Identity is
+// not part of the validation verdict — SaveDraft still enforces
+// id/name via ValidateDefinition — so empty id/name are substituted
+// for validation only. The submitted definition is never stored here.
 func (s *Server) adminNexaflowDefinitionValidate(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.nexaflowAdmin(r); !ok {
 		errorJSON(w, http.StatusUnauthorized, "admin authentication required")
@@ -72,7 +79,14 @@ func (s *Server) adminNexaflowDefinitionValidate(w http.ResponseWriter, r *http.
 	if !nexaflowDecodeBody(w, r, &body) {
 		return
 	}
-	err := s.nexaflow.Validate(&body.Definition)
+	def := body.Definition
+	if def.ID == "" {
+		def.ID = "validate-draft"
+	}
+	if def.Name == "" {
+		def.Name = "validate-draft"
+	}
+	err := s.nexaflow.Validate(&def)
 	resp := map[string]any{
 		"valid": err == nil, "secret_refs": nexaflow.DefinitionSecretRefs(&body.Definition, s.nexaflow.Registry),
 	}
