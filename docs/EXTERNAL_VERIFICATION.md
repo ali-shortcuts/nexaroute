@@ -329,8 +329,9 @@ evidence / true external acceptance / exact missing resource):
   decision 2026-10-29; no model download, no inference on this VM.
 
 Umbrella checklist staleness (not silently rewritten): the #654 body still
-reads #649 as NOT IMPLEMENTED though its implementation merged via #670,
-and #647 as unchecked though it closed 2026-10-29. The accompanying
+reads #649 as NOT IMPLEMENTED though its implementation merged via #670.
+#647 closed 2026-10-29 and has since reopened, so its unchecked box in the
+#654 body is current again and its live acceptance remains outstanding. The accompanying
 hardening PR (branch `supervisor/gates654-acceptance-hardening`, review
 only) closes the three #648 harness gaps (KV v2 metadata probe, root-token
 refusal, helper timeout propagation), reconciles ADR 0007's status line,
