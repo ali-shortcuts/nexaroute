@@ -322,3 +322,6 @@ html[data-theme=light] .route-banner-count { color: var(--violet-ink)!important;
 /* Editor config panel (E2b-config): selected-card highlight + policy note. */
 .wf-node.selected{border-color:var(--accent);box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 45%,transparent)}
 .wf-policy-note{padding:8px;border:1px solid color-mix(in srgb,var(--warn) 35%,transparent);border-radius:8px;color:var(--warn);font-size:11px}
+/* Editor validation panel (E3a). */
+.wf-good{color:var(--good);font-weight:700}
+.wf-err{color:var(--bad);font-size:12px}
