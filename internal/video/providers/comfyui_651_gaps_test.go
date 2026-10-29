@@ -117,6 +117,42 @@ func TestComfyUIDownloadRejectsDuplicateOutputFilenames(t *testing.T) {
 	}
 }
 
+// The duplicate check must compare stored names, not raw filenames:
+// the sink sanitizes basenames (unsafe runs become "_") and renames
+// silently over an existing file, so distinct supplied names can
+// collide after sanitization. A ".." name likewise maps to asset.bin.
+func TestComfyUIDownloadRejectsSanitizedDuplicateOutputFilenames(t *testing.T) {
+	cases := map[string][2]string{
+		"sanitizedCollision": {"a b.mp4", "a_b.mp4"},
+		"dotNameCollision":   {"..", "asset.bin"},
+	}
+	for name, pair := range cases {
+		t.Run(name, func(t *testing.T) {
+			var viewCalls atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				viewCalls.Add(1)
+				w.Header().Set("Content-Type", "video/mp4")
+				_, _ = w.Write([]byte("x"))
+			}))
+			defer server.Close()
+			provider, err := NewComfyUI(comfyTestConfig(comfyWorkflowFile(t), server.URL), 1<<20)
+			if err != nil {
+				t.Fatal(err)
+			}
+			status := video.ProviderJobStatus{Outputs: []video.Asset{
+				{ID: "p-20-a", Filename: pair[0], Metadata: map[string]string{"filename": pair[0], "type": "output"}},
+				{ID: "p-21-b", Filename: pair[1], Metadata: map[string]string{"filename": pair[1], "type": "output"}},
+			}}
+			if _, err := provider.DownloadOutputs(context.Background(), status, &comfyTestSink{}); err == nil || !strings.Contains(err.Error(), "duplicate") {
+				t.Fatalf("DownloadOutputs error=%v, want duplicate rejection", err)
+			}
+			if viewCalls.Load() != 0 {
+				t.Fatalf("view calls=%d, want 0 (rejection must precede any download)", viewCalls.Load())
+			}
+		})
+	}
+}
+
 // A submission whose /prompt request never completes (client context
 // deadline) must result in exactly one POST: no retry, no second prompt,
 // and an error — never a silent success or a duplicate submission.

@@ -18,6 +18,20 @@ import (
 
 var safeName = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)
 
+// StoredName returns the filename Local.Put will persist for a
+// provider-supplied name: the sanitized basename, with empty/dot names
+// mapped to asset.bin. Providers must use it when checking for
+// collisions, because Put renames silently over an existing file with
+// the same stored name — so two distinct supplied names can collide
+// after sanitization (for example "a b.mp4" and "a_b.mp4").
+func StoredName(name string) string {
+	stored := safeName.ReplaceAllString(filepath.Base(name), "_")
+	if stored == "" || stored == "." || stored == ".." {
+		return "asset.bin"
+	}
+	return stored
+}
+
 type Local struct {
 	Root     string
 	MaxBytes int64
@@ -44,10 +58,7 @@ func (s *Local) Put(_ context.Context, a video.Asset, data []byte) (video.Asset,
 	if s.MaxBytes > 0 && int64(len(data)) > s.MaxBytes {
 		return video.Asset{}, fmt.Errorf("asset exceeds size limit")
 	}
-	name := safeName.ReplaceAllString(filepath.Base(a.Filename), "_")
-	if name == "" || name == "." || name == ".." {
-		name = "asset.bin"
-	}
+	name := StoredName(a.Filename)
 	projectID := safeName.ReplaceAllString(a.Metadata["project_id"], "_")
 	episodeID := safeName.ReplaceAllString(a.Metadata["episode_id"], "_")
 	jobID := safeName.ReplaceAllString(a.Metadata["job_id"], "_")

@@ -21,6 +21,7 @@ import (
 
 	"github.com/ali-shortcuts/nexaroute/internal/egress"
 	"github.com/ali-shortcuts/nexaroute/internal/video"
+	"github.com/ali-shortcuts/nexaroute/internal/video/storage"
 )
 
 const (
@@ -534,14 +535,18 @@ func (p *ComfyUI) DownloadOutputs(ctx context.Context, status video.ProviderJobS
 	}
 	// Two outputs that land on the same stored filename would silently
 	// overwrite each other in the asset store (the sink keys by
-	// sanitized basename, not by node), so the first asset's bytes
-	// would be lost while its record still claims its own SHA-256.
-	// Refuse the whole download up front instead of persisting a
-	// partial, self-inconsistent set: the caller fails closed with
-	// nothing written, and the operator can disambiguate the workflow.
+	// sanitized basename, not by node, and renames over an existing
+	// file), so the first asset's bytes would be lost while its
+	// record still claims its own SHA-256. Compare the stored names
+	// the sink will actually use, not the raw filenames: distinct
+	// supplied names can collide after sanitization ("a b.mp4" and
+	// "a_b.mp4", or ".." and "asset.bin"). Refuse the whole download
+	// up front instead of persisting a partial, self-inconsistent
+	// set: the caller fails closed with nothing written, and the
+	// operator can disambiguate the workflow.
 	seenNames := make(map[string]struct{}, len(status.Outputs))
 	for _, asset := range status.Outputs {
-		name := filepath.Base(asset.Filename)
+		name := storage.StoredName(asset.Filename)
 		if _, dup := seenNames[name]; dup {
 			return nil, fmt.Errorf("ComfyUI completion lists duplicate video output filename %q; refusing to overwrite a stored asset", name)
 		}
