@@ -78,6 +78,8 @@ func dispatchSubcommand(args []string, stdin io.Reader, stdout, stderr io.Writer
 		return runConfig(rest, stdout, stderr), true
 	case "doctor":
 		return runDoctor(rest, stdout, stderr), true
+	case "diagnostics":
+		return runDiagnostics(rest, stdout, stderr), true
 	case "provider-accept":
 		return runProviderAccept(rest, stdout, stderr), true
 	case "external-accept":
