@@ -347,6 +347,9 @@ func TestAdminOpenAPIMethodSetsMatchHandlers(t *testing.T) {
 			continue // covered by TestAdminOpenAPIEventStream below
 		}
 		srv := testGateway(t, config.Default())
+		if strings.HasPrefix(pattern, "/admin/api/nexaflow/") {
+			task8AttachProbeService(t, srv)
+		}
 		p := newAdminProbe(t, srv)
 		for _, m := range methods {
 			rr := p.do(m, sampleAdminPath(specPath), m != http.MethodGet)

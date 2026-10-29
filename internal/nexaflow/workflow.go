@@ -133,6 +133,15 @@ type DefinitionNode struct {
 	NodeID  string         `json:"node_id"`
 	Version string         `json:"version"`
 	Config  map[string]any `json:"config,omitempty"`
+	// Input, when non-nil, maps node input fields to literals or to
+	// references ({"$ref": "path"} or "$.path" strings) into the run
+	// context (workflow input plus succeeded node outputs). It replaces
+	// the predecessor merge for this node, so the node's input is
+	// exactly the mapped keys (projection onto the declared input).
+	// Contract adopted from the #691 definition model (same JSON
+	// shape) by Task 8 to close the condition->branch composition gap.
+	// Trigger-category nodes must not declare Input.
+	Input map[string]any `json:"input,omitempty"`
 }
 
 // DefinitionEdge connects two node instances. Branch is empty for an
@@ -260,6 +269,9 @@ func ValidateDefinition(def *Definition, reg *Registry) error {
 		}
 		nodes[n.ID] = spec
 		instanceIsTrigger[n.ID] = spec.Category == "trigger"
+	}
+	if err := validateInputMappings(def, nodes, instanceIsTrigger); err != nil {
+		return err
 	}
 
 	// Triggers: bijection with trigger-category nodes, config

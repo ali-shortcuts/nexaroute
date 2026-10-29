@@ -148,6 +148,8 @@ type Store interface {
 	// Drafts and revisions.
 	SaveDraft(ctx context.Context, def Definition) error
 	GetDraft(ctx context.Context, definitionID string) (Definition, error)
+	// ListDrafts returns all drafts sorted by definition id.
+	ListDrafts(ctx context.Context) ([]Definition, error)
 	// Publish validates nothing itself (validation is the caller's
 	// pure ValidateDefinition step): it computes the draft's content
 	// hash and appends a new published revision, unless an identical

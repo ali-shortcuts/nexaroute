@@ -430,6 +430,9 @@ func probeWebAPICall(t *testing.T, method, path string) *httptest.ResponseRecord
 	if strings.HasPrefix(path, "/v1/video/") {
 		srv.AttachVideoHandler(&videoapi.Handler{})
 	}
+	if strings.HasPrefix(path, "/admin/api/nexaflow/") {
+		task8AttachProbeService(t, srv)
+	}
 	if strings.HasPrefix(path, "/admin/") {
 		p := newAdminProbe(t, srv)
 		if path == "/admin/api/events/stream" {

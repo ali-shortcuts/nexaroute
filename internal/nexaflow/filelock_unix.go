@@ -18,7 +18,9 @@ func acquireFileLock(path string) (*os.File, error) {
 		return nil, fmt.Errorf("nexaflow: open file store lock: %w", err)
 	}
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		f.Close()
+		// The lock was not acquired, so this descriptor is
+		// discarded; the flock error is the returned error.
+		_ = f.Close()
 		return nil, fmt.Errorf("nexaflow: file store %q is already open by another process: %w", path, err)
 	}
 	return f, nil

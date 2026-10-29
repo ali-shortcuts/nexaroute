@@ -1833,3 +1833,179 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '405':
           $ref: '#/components/responses/MethodNotAllowed'
+  /admin/api/nexaflow/nodes:
+    get:
+      summary: List NexaFlow registry node specs
+      x-permission: config.read
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Operation result; see the handler and the admin snapshot model.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+  /admin/api/nexaflow/templates:
+    get:
+      summary: List NexaFlow inert templates (never executable)
+      x-permission: config.read
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Operation result; see the handler and the admin snapshot model.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+  /admin/api/nexaflow/definitions:
+    get:
+      summary: List NexaFlow workflow drafts
+      x-permission: config.read
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Operation result; see the handler and the admin snapshot model.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+    post:
+      summary: Save a NexaFlow workflow draft (validated)
+      x-permission: config.write
+      security:
+      - adminSession: []
+        csrfToken: []
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Operation result; see the handler and the admin snapshot model.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+  /admin/api/nexaflow/definitions/{id}:
+    get:
+      summary: Reopen a NexaFlow workflow draft; the handler also dispatches publish, versions, and runs sub-resources under this prefix
+      x-permission: config.read
+      parameters:
+      - name: id
+        in: path
+        required: true
+        description: Resource identifier.
+        schema:
+          type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Operation result; see the handler and the admin snapshot model.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+  /admin/api/nexaflow/runs:
+    get:
+      summary: List NexaFlow runs (ownership-filtered)
+      x-permission: config.read
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Operation result; see the handler and the admin snapshot model.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+  /admin/api/nexaflow/runs/{id}:
+    get:
+      summary: Inspect a NexaFlow run with safe per-node outputs, timing, attempts, and error codes; the handler also dispatches approve and cancel sub-resources under this prefix
+      x-permission: config.read
+      parameters:
+      - name: id
+        in: path
+        required: true
+        description: Resource identifier.
+        schema:
+          type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Operation result; see the handler and the admin snapshot model.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+  /admin/api/nexaflow/audit:
+    get:
+      summary: Read the NexaFlow service audit log
+      x-permission: audit.read
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Operation result; see the handler and the admin snapshot model.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'

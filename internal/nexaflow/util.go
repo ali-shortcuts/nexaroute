@@ -60,6 +60,9 @@ func cloneDefinition(def Definition) Definition {
 	for i, n := range def.Nodes {
 		out.Nodes[i] = n
 		out.Nodes[i].Config = deepCopyMap(n.Config)
+		if n.Input != nil {
+			out.Nodes[i].Input = deepCopyMap(n.Input)
+		}
 	}
 	out.Edges = make([]DefinitionEdge, len(def.Edges))
 	copy(out.Edges, def.Edges)
