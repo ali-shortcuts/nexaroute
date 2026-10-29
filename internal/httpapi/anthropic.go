@@ -788,36 +788,41 @@ func (t *nativeSSETracker) processLine() error {
 func (t *nativeSSETracker) observeAnthropicUsage(typ string, env map[string]json.RawMessage) {
 	switch typ {
 	case "message_start":
+		// env["message"] is already the message object itself, i.e.
+		// {"usage": {"input_tokens": N, ...}}. The previous code
+		// unmarshalled it into a struct expecting another nested
+		// "message" key, so every field stayed zero and the usage
+		// hook never fired. Parse the flat shape instead.
 		var start struct {
-			Message struct {
-				Usage struct {
-					InputTokens  int `json:"input_tokens"`
-					OutputTokens int `json:"output_tokens"`
-				} `json:"usage"`
-			} `json:"message"`
-		}
-		if raw := env["message"]; len(raw) > 0 {
-			if err := json.Unmarshal(raw, &start); err == nil {
-				t.usageInput = start.Message.Usage.InputTokens
-				if start.Message.Usage.OutputTokens > t.usageOutput {
-					t.usageOutput = start.Message.Usage.OutputTokens
-				}
-			}
-		}
-	case "message_delta":
-		var delta struct {
 			Usage struct {
 				InputTokens  int `json:"input_tokens"`
 				OutputTokens int `json:"output_tokens"`
 			} `json:"usage"`
 		}
+		if raw := env["message"]; len(raw) > 0 {
+			if err := json.Unmarshal(raw, &start); err == nil {
+				t.usageInput = start.Usage.InputTokens
+				if start.Usage.OutputTokens > t.usageOutput {
+					t.usageOutput = start.Usage.OutputTokens
+				}
+			}
+		}
+	case "message_delta":
+		// env["usage"] is already the usage object itself, i.e.
+		// {"output_tokens": N}. The previous code unmarshalled it
+		// into a struct expecting another nested "usage" key, so
+		// every field stayed zero. Parse the flat shape instead.
+		var delta struct {
+			InputTokens  int `json:"input_tokens"`
+			OutputTokens int `json:"output_tokens"`
+		}
 		if raw := env["usage"]; len(raw) > 0 {
 			if err := json.Unmarshal(raw, &delta); err == nil {
-				if delta.Usage.OutputTokens > t.usageOutput {
-					t.usageOutput = delta.Usage.OutputTokens
+				if delta.OutputTokens > t.usageOutput {
+					t.usageOutput = delta.OutputTokens
 				}
-				if delta.Usage.InputTokens > t.usageInput {
-					t.usageInput = delta.Usage.InputTokens
+				if delta.InputTokens > t.usageInput {
+					t.usageInput = delta.InputTokens
 				}
 			}
 		}
