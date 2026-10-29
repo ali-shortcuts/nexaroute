@@ -93,6 +93,71 @@ func wave3JobResult(job *codeRenderJob) (video.JobState, string) {
 	return job.state, job.err
 }
 
+// wave3StubBinaries creates a stub ffmpeg/ffprobe pair in t.TempDir() so
+// code-render tests exercise the narration, compose, QC, and asset-size
+// branches without a real ffmpeg installation (absent on CI runners).
+// The ffmpeg stub:
+//   - frame extraction (rawvideo in args): writes 64x36 gray bytes to
+//     stdout; all zeros when frameMode is "blank" (the QC
+//     luminance-variance gate sees a blank frame), a 1..255 gradient
+//     otherwise (a varied frame, so QC passes).
+//   - anything else: copies the first -i input to the final argument when
+//     that input is a real file (concat), else writes placeholder bytes
+//     to the final argument (scene render from a lavfi source). The final
+//     argument must look like a path; anything else exits 0 without
+//     writing, so stray probes cannot create files in the package dir.
+//
+// The ffprobe stub answers -show_streams/-show_format JSON for the wave3
+// plan (h264, 320x240, 1.5s) so the QC probe gate passes.
+func wave3StubBinaries(t *testing.T, frameMode string) (ffmpeg, ffprobe string) {
+	t.Helper()
+	t.Setenv("WAVE3_STUB_FRAME", frameMode)
+	dir := t.TempDir()
+	ffmpeg = filepath.Join(dir, "ffmpeg-stub")
+	ffprobe = filepath.Join(dir, "ffprobe-stub")
+	ffmpegScript := `#!/bin/sh
+PATH="/usr/bin:/bin:$PATH"
+mode="copy"
+in=""
+last=""
+prev=""
+for a in "$@"; do
+  if [ "$a" = "rawvideo" ]; then mode="frame"; fi
+  if [ "$prev" = "-i" ] && [ -z "$in" ]; then in="$a"; fi
+  prev="$a"
+  last="$a"
+done
+if [ "$mode" = "frame" ]; then
+  if [ "$WAVE3_STUB_FRAME" = "blank" ]; then
+    head -c 2304 /dev/zero
+  else
+    awk 'BEGIN{for(i=0;i<2304;i++)printf "%c", 1+(i%255)}'
+  fi
+  exit 0
+fi
+case "$last" in
+  */*) ;;
+  *) exit 0 ;;
+esac
+if [ -n "$in" ] && [ -f "$in" ]; then
+  cp "$in" "$last"
+else
+  printf 'stub-scene-bytes' > "$last"
+fi
+exit 0
+`
+	ffprobeScript := `#!/bin/sh
+printf '%s' '{"streams":[{"codec_type":"video","codec_name":"h264","width":320,"height":240}],"format":{"duration":"1.5"}}'
+`
+	if err := os.WriteFile(ffmpeg, []byte(ffmpegScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ffprobe, []byte(ffprobeScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return ffmpeg, ffprobe
+}
+
 func TestWave3CodeRenderEmptyWorkRoot(t *testing.T) {
 	p := &CodeRender{Renderer: &render.Renderer{}}
 	job, cancel := wave3RunJob(wave3Plan("#FFFFFF", "#000000"))
@@ -149,7 +214,8 @@ func TestWave3CodeRenderRenderPlanErrorCancelledContext(t *testing.T) {
 }
 
 func TestWave3CodeRenderNarrationRequiredButNoNarrator(t *testing.T) {
-	p := &CodeRender{Renderer: &render.Renderer{}, WorkRoot: t.TempDir(), Narrator: nil}
+	ffmpeg, ffprobe := wave3StubBinaries(t, "varied")
+	p := &CodeRender{Renderer: &render.Renderer{FFmpeg: ffmpeg, FFprobe: ffprobe}, WorkRoot: t.TempDir(), Narrator: nil}
 	job, cancel := wave3RunJob(wave3Plan("#FFFFFF", "#000000"))
 	defer cancel()
 	p.run(context.Background(), job, video.VideoRequest{NarrationText: "hello narration"})
@@ -162,7 +228,8 @@ func TestWave3CodeRenderNarrationRequiredButNoNarrator(t *testing.T) {
 
 func TestWave3CodeRenderSubtitlesWithoutNarrationText(t *testing.T) {
 	narrator := &wave3FakeNarrator{}
-	p := &CodeRender{Renderer: &render.Renderer{}, WorkRoot: t.TempDir(), Narrator: narrator}
+	ffmpeg, ffprobe := wave3StubBinaries(t, "varied")
+	p := &CodeRender{Renderer: &render.Renderer{FFmpeg: ffmpeg, FFprobe: ffprobe}, WorkRoot: t.TempDir(), Narrator: narrator}
 	job, cancel := wave3RunJob(wave3Plan("#FFFFFF", "#000000"))
 	defer cancel()
 	p.run(context.Background(), job, video.VideoRequest{SubtitleLanguage: "en"})
@@ -178,7 +245,8 @@ func TestWave3CodeRenderSubtitlesWithoutNarrationText(t *testing.T) {
 
 func TestWave3CodeRenderNarratorError(t *testing.T) {
 	narrator := &wave3FakeNarrator{write: func(string) error { return errWave3NarratorBoom }}
-	p := &CodeRender{Renderer: &render.Renderer{}, WorkRoot: t.TempDir(), Narrator: narrator}
+	ffmpeg, ffprobe := wave3StubBinaries(t, "varied")
+	p := &CodeRender{Renderer: &render.Renderer{FFmpeg: ffmpeg, FFprobe: ffprobe}, WorkRoot: t.TempDir(), Narrator: narrator}
 	job, cancel := wave3RunJob(wave3Plan("#FFFFFF", "#000000"))
 	defer cancel()
 	p.run(context.Background(), job, video.VideoRequest{NarrationText: "hello narration"})
@@ -193,7 +261,8 @@ func TestWave3CodeRenderNarrationAudioInvalid(t *testing.T) {
 	narrator := &wave3FakeNarrator{write: func(path string) error {
 		return os.WriteFile(path, []byte("this is not a wav file at all"), 0600)
 	}}
-	p := &CodeRender{Renderer: &render.Renderer{}, WorkRoot: t.TempDir(), Narrator: narrator}
+	ffmpeg, ffprobe := wave3StubBinaries(t, "varied")
+	p := &CodeRender{Renderer: &render.Renderer{FFmpeg: ffmpeg, FFprobe: ffprobe}, WorkRoot: t.TempDir(), Narrator: narrator}
 	job, cancel := wave3RunJob(wave3Plan("#FFFFFF", "#000000"))
 	defer cancel()
 	p.run(context.Background(), job, video.VideoRequest{NarrationText: "hello narration"})
@@ -210,7 +279,8 @@ func TestWave3CodeRenderNarrationTooLong(t *testing.T) {
 		// 1.5s plan plus the 2s grace.
 		return wave3WriteWAVFile(path, 100, 360000)
 	}}
-	p := &CodeRender{Renderer: &render.Renderer{}, WorkRoot: t.TempDir(), Narrator: narrator}
+	ffmpeg, ffprobe := wave3StubBinaries(t, "varied")
+	p := &CodeRender{Renderer: &render.Renderer{FFmpeg: ffmpeg, FFprobe: ffprobe}, WorkRoot: t.TempDir(), Narrator: narrator}
 	job, cancel := wave3RunJob(wave3Plan("#FFFFFF", "#000000"))
 	defer cancel()
 	p.run(context.Background(), job, video.VideoRequest{NarrationText: "hello narration"})
@@ -226,9 +296,10 @@ func TestWave3CodeRenderComposeFailure(t *testing.T) {
 	narrator := &wave3FakeNarrator{write: func(path string) error {
 		return wave3WriteWAVFile(path, 16000, 6400)
 	}}
-	// The renderer pins the real ffmpeg explicitly so only the
+	// The renderer pins the stub ffmpeg explicitly so only the
 	// compose step (which reads the env var) fails.
-	p := &CodeRender{Renderer: &render.Renderer{FFmpeg: "ffmpeg"}, WorkRoot: t.TempDir(), Narrator: narrator}
+	ffmpeg, ffprobe := wave3StubBinaries(t, "varied")
+	p := &CodeRender{Renderer: &render.Renderer{FFmpeg: ffmpeg, FFprobe: ffprobe}, WorkRoot: t.TempDir(), Narrator: narrator}
 	job, cancel := wave3RunJob(wave3Plan("#FFFFFF", "#000000"))
 	defer cancel()
 	p.run(context.Background(), job, video.VideoRequest{NarrationText: "hello narration", SubtitleLanguage: "en"})
@@ -242,7 +313,8 @@ func TestWave3CodeRenderComposeFailure(t *testing.T) {
 func TestWave3CodeRenderQualityCheckFailsOnBlankFrame(t *testing.T) {
 	// Text in exactly the background color renders an invisible
 	// frame: the QC luminance-variance gate must reject it.
-	p := &CodeRender{Renderer: &render.Renderer{}, WorkRoot: t.TempDir()}
+	ffmpeg, ffprobe := wave3StubBinaries(t, "blank")
+	p := &CodeRender{Renderer: &render.Renderer{FFmpeg: ffmpeg, FFprobe: ffprobe}, WorkRoot: t.TempDir()}
 	job, cancel := wave3RunJob(wave3Plan("#000000", "#000000"))
 	defer cancel()
 	p.run(context.Background(), job, video.VideoRequest{})
@@ -254,7 +326,8 @@ func TestWave3CodeRenderQualityCheckFailsOnBlankFrame(t *testing.T) {
 }
 
 func TestWave3CodeRenderAssetSizeLimit(t *testing.T) {
-	p := &CodeRender{Renderer: &render.Renderer{}, WorkRoot: t.TempDir(), MaxAssetBytes: 1}
+	ffmpeg, ffprobe := wave3StubBinaries(t, "varied")
+	p := &CodeRender{Renderer: &render.Renderer{FFmpeg: ffmpeg, FFprobe: ffprobe}, WorkRoot: t.TempDir(), MaxAssetBytes: 1}
 	job, cancel := wave3RunJob(wave3Plan("#FFFFFF", "#000000"))
 	defer cancel()
 	p.run(context.Background(), job, video.VideoRequest{})
