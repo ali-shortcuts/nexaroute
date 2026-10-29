@@ -41,6 +41,7 @@ var lifecycleKinds = map[string]bool{
 	"hedge_launch":          true,
 	"route_ok":              true,
 	"route_fail":            true,
+	"ambiguous_outcome":     true,
 	"route_timeout":         true,
 	"failover":              true,
 	"client_disconnect":     true,

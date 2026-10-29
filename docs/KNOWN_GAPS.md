@@ -9,6 +9,8 @@ Implemented runtime protocol classes are:
 - OpenAI-compatible Chat Completions
 - Anthropic-compatible Messages
 - OpenAI Responses (explicit `/v1/responses` path)
+- Gemini GenerateContent ingress (explicit `/v1beta/models` paths, for
+  Gemini CLI) through the canonical adapter
 - Gemini upstreams through the canonical adapter
 - AWS Bedrock, Google Vertex AI and Azure OpenAI provider types through
   the canonical adapter (SigV4 / ADC / api-key custody respectively)
@@ -49,12 +51,15 @@ Implemented:
 - AES-256-GCM encrypted-at-rest provider, credential-pool, decision-provider, admin, client-auth, header and proxy secrets; random per-secret data keys, master-key wrapping and field-bound AAD (`internal/secrets`, `internal/config`)
 - atomic plaintext-config migration with an authenticated encrypted timestamped backup; `nexaroute secrets status|verify|rotate|decrypt` operator commands
 - fail-closed missing/wrong-key and tamper handling; durable staged-key promotion recovers an interrupted auto-managed rotation when the staged key authenticates the config
+- optional Vault Transit `nxs2` envelope-key path (`NEXAROUTE_KEY_PROVIDER=transit` with `NEXAROUTE_TRANSIT_ENABLED=true`): the Transit KEK stays in Vault, each secret still uses a random local DEK, the canonical AAD binds owner/field/key reference/nonce at the local AES-GCM layer only (no associated data is sent to Transit), strict schema/key-version checks, 5 s per-request timeouts inside 30 s/120 s overall budgets, 64 KiB response cap, redirect rejection, and classified errors apply, and there is no local fallback; explicit `secrets migrate-to-transit` and `secrets rewrap-transit` commands write verbatim backups and atomically replace only after decrypt-verify, with rollback on post-write failure
 - secret-preserving provider edit
 - plaintext credentials are not returned by Admin read surfaces, snapshots, event/log surfaces, or metrics; see the secret-canary regression coverage and [`docs/SECURITY.md`](SECURITY.md)
 
 Boundaries:
 
 - OS keyring and external command/KMS custody adapters are implemented behind `NEXAROUTE_KEY_PROVIDER`; service interoperability and deployment-specific KMS semantics remain unverified
+- Vault Transit `nxs2` is implemented and covered by deterministic fake-API tests, but **no real Vault Transit acceptance run has been executed**. Do not claim production HSM/KMS isolation, HA failover behavior, token renewal, or real Vault compatibility until that run is recorded in `docs/EXTERNAL_VERIFICATION.md`
+- Transit mode requires Vault availability for decrypt; an outage or denied policy fails closed and there is no local-key fallback. Disabling a historical Transit key version before `secrets rewrap` and verification succeeds can make affected secrets unrecoverable
 - externally managed rotation is intentionally performed by the custody system; `nexaroute secrets rotate` refuses to rewrite an external provider and retains only the most recent `.key.previous` file for the local provider
 
 Saved provider keys are write-only, including literal, pool, and environment keys. Headers and proxy URLs are also write-only. Editing a credential field replaces the whole credential set; individual saved pool keys cannot be revealed. Do not store credentials in base URLs or other public metadata. Do not expose the admin surface to untrusted networks.
@@ -88,7 +93,9 @@ WP4 implementation boundaries and acceptance status:
   in-process OIDC provider and negative security tests pass locally; all four
   inspected GitHub checks (`CI/verify`, vulnerability scan, CodeQL Go, and
   CodeQL) were green on the reviewed PR head. Any subsequent push requires
-  fresh checks before merge. Live external-IdP interoperability is unverified.
+  fresh checks before merge. Live external-IdP interoperability is unverified;
+  the exact operator-owned tenant checklist remains **BLOCKED** in
+  [`docs/reports/OIDC_LIVE_TENANT_ACCEPTANCE_647.md`](reports/OIDC_LIVE_TENANT_ACCEPTANCE_647.md).
 
 - per-client quotas beyond the RPM and TPM ceilings (hashed-at-rest client keys landed with M3-8: legacy plaintext keys migrate to SHA-256 digests on load/save, and TPM reservations settle to provider-reported usage);
 - SAML and enterprise identity protocols other than the configured single OIDC issuer;
@@ -147,7 +154,12 @@ with an operator's configured model (CI uses a scripted planner).
 No commercial external video provider adapter is bundled. The opt-in local
 ComfyUI adapter supports text-to-video through a user-supplied API-format
 workflow; its HTTP contract is covered by fixtures, but actual model inference
-on a real ComfyUI installation is not part of CI. The fake provider writes a
+on a real ComfyUI installation is not part of CI. The opt-in
+`nexaroute comfyui-accept --confirm-live` command automates the real check
+(server stats, one minimal job, read-back SHA-256/size/metadata, `ffprobe`
+playability, bounded cleanup), but its current status is NOT_RUN/BLOCKED until
+an operator supplies a provisioned installation and records the sanitized
+report; loopback fixtures are not real inference. The fake provider writes a
 text placeholder, not a playable video. The asset-size cap is enforced with streaming-memory protection: the ComfyUI adapter reads downloads through `io.LimitReader` bounded at `maxOutputBytes+1`, so an oversized response cannot OOM the gateway before the cap applies. Multi-shot jobs persist per-shot checkpoints and automatically compose generated shot assets into a final silent MP4; Gateway-side Piper narration and estimated same-language SRT captions are supported for configured multi-shot jobs. With the default file backend the video jobs, local JSON job store, queue and cost ledger remain single-process; with `video.job_store_backend=postgres` the job store and cost ledger are durable and shared with exactly-once settlement, while assets stay per-instance local — so end-to-end multi-node video is still not a declared topology (ADR 0004, Accepted — Option B): provider-native idempotent recovery after an ambiguous submission, and verified production workloads for ten-minute episodes remain unimplemented or UNVERIFIED. Provider-generated
 dialogue/sound effects/music, translated or word-aligned subtitles, and distributed
 asset/job storage remain unimplemented; the local CLI also supports existing
@@ -263,6 +275,26 @@ Not implemented yet:
 - an online learned semantic router that sends every prompt through another model/encoder.
 
 The last item is deliberate for the current data plane: a learned router would add latency, cost and a new failure mode. Model/task specialization should currently be expressed with aliases plus explicit capability metadata until a separately evaluated routing model can prove a measurable benefit.
+
+## Retry safety boundaries
+
+Retry decisions are classified by sent state, execution state,
+stream commitment, and verified idempotency support, with the
+full policy, bounds, and evidence in `docs/RETRY_SAFETY.md`.
+Boundaries that remain, by design: no dialect has a verified
+provider idempotency mechanism (manifest `idempotency` =
+`UNTESTED` for all dialects), so exactly-once provider execution
+is never claimed; a pre-commit failover after an ambiguous
+transport/timeout failure may duplicate provider-side work or
+cost, and is recorded as such rather than hidden; cancellation
+ends the gateway's wait and prevents failover but cannot recall
+provider-side execution, and provider-side cancellation of
+in-flight work is unverified; the gateway's sent-state reading
+for transport errors is a conservative heuristic (dial/DNS/
+credential-exhaustion failures are proven not-sent, everything
+else dispatched without a response is unknown), because the Go
+HTTP client does not expose whether request bytes left the
+process.
 
 ## Compatibility engine boundaries
 

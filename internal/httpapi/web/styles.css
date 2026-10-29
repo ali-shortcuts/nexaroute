@@ -175,6 +175,8 @@ button.metric-card:hover,button.metric-card:focus-visible{border-color:var(--lin
 .eligibility-panel{margin-top:16px;border:1px solid var(--border);border-radius:13px;background:var(--surface)}
 .eligibility-panel summary{display:flex;justify-content:space-between;gap:12px;padding:16px 18px;cursor:pointer;font-weight:800}
 .eligibility-panel summary small{max-width:70%;color:var(--muted);font-weight:400;text-align:right}
+.eligibility-panel .tile-actions label{display:inline-flex;align-items:center;gap:6px}
+.eligibility-panel .tile-actions input[type=checkbox]{width:24px;height:24px;flex:0 0 auto;accent-color:var(--accent);cursor:pointer}
 .elig-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;padding:0 18px 18px}
 .elig-card{display:grid;gap:11px;padding:14px;border:1px solid var(--border);border-radius:12px;background:var(--surface-2)}
 .elig-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
@@ -190,7 +192,7 @@ button.metric-card:hover,button.metric-card:focus-visible{border-color:var(--lin
 .elig-warnings{display:grid;gap:6px;margin:0 18px 14px;padding:11px 13px;border:1px solid color-mix(in srgb,var(--warn) 35%,transparent);border-radius:10px;background:color-mix(in srgb,var(--warn) 8%,transparent)}
 .elig-warnings b{color:var(--warn);font-size:10px;text-transform:uppercase;letter-spacing:.06em}
 .elig-warnings span{color:var(--muted);font-size:11px}
-@media(max-width:700px){.elig-grid{grid-template-columns:1fr}.eligibility-panel summary{flex-direction:column}.eligibility-panel summary small{max-width:none;text-align:left}}
+@media(max-width:700px){.elig-grid{grid-template-columns:1fr}.eligibility-panel summary{flex-direction:column}.eligibility-panel summary small{max-width:none;text-align:left}.eligibility-panel .tile-actions{flex-wrap:wrap}.eligibility-panel .field{min-width:0}}
 
 /* Phase 7 remainder (issue #399): status taxonomy legend, unified model
    inventory and the per-request decision timeline. */

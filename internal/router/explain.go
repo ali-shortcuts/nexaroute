@@ -49,29 +49,69 @@ const decisionLimit = 1000
 // funnel for a single requirement: either included (scored and passed to the
 // strategy ordering) or excluded with a stable reason.
 type CandidateDecision struct {
-	DeploymentID     string              `json:"deployment_id"`
-	ProviderID       string              `json:"provider_id"`
-	Model            string              `json:"model"`
-	Priority         int                 `json:"priority"`
-	Weight           float64             `json:"weight"`
-	TrainsOnData     string              `json:"trains_on_data,omitempty"`
-	Capabilities     config.Capabilities `json:"capabilities"`
-	Included         bool                `json:"included"`
-	ExcludedReason   string              `json:"excluded_reason,omitempty"`
-	Score            float64             `json:"score,omitempty"`
-	HealthStatus     string              `json:"health_status,omitempty"`
-	EWMALatencyMS    float64             `json:"ewma_latency_ms,omitempty"`
-	EWMAFailureRate  float64             `json:"ewma_failure_rate,omitempty"`
-	CapacityPressure float64             `json:"capacity_pressure,omitempty"`
-	EstimatedCostUSD float64             `json:"estimated_cost_usd,omitempty"`
-	PriceKnown       bool                `json:"price_known,omitempty"`
+	DeploymentID   string              `json:"deployment_id"`
+	ProviderID     string              `json:"provider_id"`
+	Model          string              `json:"model"`
+	Priority       int                 `json:"priority"`
+	Weight         float64             `json:"weight"`
+	TrainsOnData   string              `json:"trains_on_data,omitempty"`
+	Capabilities   config.Capabilities `json:"capabilities"`
+	Included       bool                `json:"included"`
+	ExcludedReason string              `json:"excluded_reason,omitempty"`
+	Score          float64             `json:"score,omitempty"`
+	// Score breakdown, copied from the canonical scored() result for
+	// included candidates: base + health + weight - priority -
+	// latency - capacity - failure == Score. Excluded candidates
+	// carry no score, because the funnel rejects them before scoring.
+	ScoreBase          float64 `json:"score_base,omitempty"`
+	HealthAdjustment   float64 `json:"health_adjustment,omitempty"`
+	WeightContribution float64 `json:"weight_contribution,omitempty"`
+	PriorityPenalty    float64 `json:"priority_penalty,omitempty"`
+	LatencyPenalty     float64 `json:"latency_penalty,omitempty"`
+	CapacityPenalty    float64 `json:"capacity_penalty,omitempty"`
+	FailurePenalty     float64 `json:"failure_penalty,omitempty"`
+	HealthStatus       string  `json:"health_status,omitempty"`
+	EWMALatencyMS      float64 `json:"ewma_latency_ms,omitempty"`
+	EWMAFailureRate    float64 `json:"ewma_failure_rate,omitempty"`
+	CapacityPressure   float64 `json:"capacity_pressure,omitempty"`
+	EstimatedCostUSD   float64 `json:"estimated_cost_usd,omitempty"`
+	PriceKnown         bool    `json:"price_known,omitempty"`
 }
 
 // Explanation is the redacted explainability result for one requirement:
 // the candidate funnel verdicts plus the exact ordered candidate list the
 // data plane would attempt. The same evaluateDeployment/applyStrategy paths
 // back both, so the trace cannot drift from real routing behavior.
+// IsRotatingStrategy reports whether live selection under strategy
+// advances a counter or samples without a stable key, so a simulated
+// order cannot be read as the next live pick.
+func IsRotatingStrategy(strategy string) bool {
+	switch strategy {
+	case "round_robin", "adaptive_round_robin":
+		return true
+	default:
+		return false
+	}
+}
+
 type Explanation struct {
+	// Simulated is always true for Explain output: this decision was
+	// computed without calling a provider, reserving quota or budget,
+	// writing a session pin, or advancing any routing counter. It is
+	// not a record of a real request.
+	Simulated bool `json:"simulated"`
+	// Deterministic means repeating this exact simulation against
+	// unchanged runtime state returns the same order. It does NOT
+	// mean the simulated pick equals the next real pick.
+	Deterministic bool `json:"deterministic"`
+	// RotationPredictive is false when live selection rotates
+	// (round_robin, adaptive_round_robin, or ready_mesh P2C with no
+	// session/selection key): the simulation then shows a
+	// deterministically seeded order, not the live rotation slot.
+	// When true, the simulated lead candidate is the lead candidate
+	// live routing would pick from the same snapshot, assuming no
+	// health, config, quota or pin change in between.
+	RotationPredictive       bool   `json:"rotation_predictive"`
 	Strategy                 string `json:"strategy"`
 	Model                    string `json:"model"`
 	KnownModel               bool   `json:"known_model"`
@@ -98,10 +138,17 @@ type Explanation struct {
 // Explain evaluates the requirement against the current routing state and
 // returns both the ordered candidates the request handler would attempt and
 // the per-deployment exclusion reasons for everything else. It reads shared
-// state (config, health, session pins) but mutates nothing and performs no
-// network calls, so it is safe as a dry-run preview surface. Unlike
-// Candidates (which silently tells the caller nothing it rejected), the
-// same funnel here surfaces a reason for every deployment it did not pick.
+// state (config, health, session pins) and performs no network calls, so it
+// is safe as a dry-run preview surface. Unlike Candidates (which silently
+// tells the caller nothing it rejected), the same funnel here surfaces a
+// reason for every deployment it did not pick. Ordering uses the simulated
+// strategy path: rotating strategies are seeded from the requirement's own
+// keys instead of the live round-robin counter, so a simulation never
+// advances real traffic's rotation and never creates a session pin. The
+// only shared-state housekeeping a simulation can trigger is reaping an
+// already-expired session pin on a read, exactly as any other read does.
+// The result is therefore labelled Simulated, and RotationPredictive says
+// whether the simulated lead is also the live lead from this snapshot.
 func (r *Router) Explain(req Requirement) Explanation {
 	r.mu.RLock()
 	cfg := r.cfg
@@ -116,6 +163,9 @@ func (r *Router) Explain(req Requirement) Explanation {
 	scopes := req.Scopes()
 
 	exp := Explanation{
+		Simulated:              true,
+		Deterministic:          true,
+		RotationPredictive:     !IsRotatingStrategy(cfg.Routing.Strategy) && !(cfg.Routing.Strategy == "ready_mesh" && req.SelectionKey == "" && req.SessionKey == ""),
 		Strategy:               cfg.Routing.Strategy,
 		Model:                  req.Model,
 		KnownModel:             known,
@@ -153,6 +203,13 @@ func (r *Router) Explain(req Requirement) Explanation {
 		if reason == "" {
 			cd.Included = true
 			cd.Score = s.Score
+			cd.ScoreBase = s.ScoreBase
+			cd.HealthAdjustment = s.HealthAdjustment
+			cd.WeightContribution = s.WeightContribution
+			cd.PriorityPenalty = s.PriorityPenalty
+			cd.LatencyPenalty = s.LatencyPenalty
+			cd.CapacityPenalty = s.CapacityPenalty
+			cd.FailurePenalty = s.FailurePenalty
 			cd.HealthStatus = string(s.Health.Status)
 			cd.EWMALatencyMS = s.Health.EWMALatencyMS
 			cd.EWMAFailureRate = s.Health.EWMAFailureRate
@@ -208,7 +265,7 @@ func (r *Router) Explain(req Requirement) Explanation {
 	exp.IncludedCount = len(out)
 
 	if len(out) > 1 {
-		r.applyStrategy(out, req, cfg)
+		r.applyStrategySimulated(out, req, cfg)
 	}
 	exp.Candidates = out
 	exp.CandidateCount = len(out)

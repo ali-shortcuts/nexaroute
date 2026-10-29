@@ -264,9 +264,16 @@ func OpenReadOnly(path string) (*Store, error) {
 }
 
 // BackupTo writes a consistent snapshot of the whole database to w
-// (bbolt transaction copy). It is safe to call on a store opened
-// read-only while another process holds the writer lock, which is how
-// the backup CLI snapshots a running gateway's audit store. The
+// (bbolt transaction copy). It is safe to call ONLY on a store handle
+// that is already open in this process (a read transaction on the
+// live database), or on a store opened while no writer holds the
+// lock. It is NOT safe to reach by opening the store read-only from a
+// second process while a gateway runs: the gateway holds bbolt's
+// exclusive flock for the whole process lifetime, so that open fails
+// with a lock timeout (see IsLockedError) however long the timeout
+// is. The supported live-snapshot path is therefore the gateway's
+// own admin endpoint, which calls BackupTo on its in-process handle;
+// the CLI must never work around the lock with a raw file copy. The
 // snapshot opens as a normal store file and its audit chain verifies.
 func (s *Store) BackupTo(ctx context.Context, w io.Writer) error {
 	if s == nil || s.db == nil {
@@ -286,6 +293,16 @@ func (s *Store) Close() error {
 		return nil
 	}
 	return s.db.Close()
+}
+
+// IsLockedError reports whether err is (or wraps) a bbolt lock-acquisition
+// timeout: the file-backed store is held by another process — in
+// practice, a running gateway holding the writer flock. Callers use
+// this sentinel check, never a substring match on the error text, to
+// decide that a stopped-gateway operation must not be retried against
+// a live gateway and to tell the operator exactly that.
+func IsLockedError(err error) bool {
+	return errors.Is(err, bolt.ErrTimeout)
 }
 
 func validSessionHash(hash string) ([]byte, error) {

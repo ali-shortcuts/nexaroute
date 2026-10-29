@@ -31,7 +31,9 @@ const (
 // though ApplyDefaults fills a generic ModelsPath for legacy compatibility.
 func SupportsDiscovery(p config.ProviderConfig) bool {
 	switch p.Type {
-	case "bedrock", "azure_openai", "vertex":
+	case "bedrock", "azure_openai", "vertex", "opencode-go":
+		// opencode-go: no Go discovery endpoint is documented. Never
+		// assume /inference/go/v1/models exists.
 		return false
 	}
 	return strings.TrimSpace(p.ModelsPath) != ""

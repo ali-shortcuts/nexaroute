@@ -43,6 +43,19 @@ wire_api = "responses"
 Set `NEXAROUTE_API_KEY` to a NexaRoute client key. Codex uses
 the gateway's OpenAI Responses endpoint.
 
+Known limitation (REAL-BINARY-LOOPBACK, Codex 0.164.0-alpha.9):
+Codex's default toolset is rejected fail-closed, because it includes
+non-function Responses tools the gateway cannot represent canonically:
+a `namespace` tool (`multi_agent_v1`) and a `web_search` tool
+(`internal/protocol/canonical/openai_responses.go` rejects any tool
+type other than `function`). With both disabled client-side the
+loopback run succeeds (`web_search = "disabled"` plus
+`[features] multi_agent = false` in `config.toml`; the model must also
+advertise `reasoning` capability, since Codex always sends a reasoning
+object). Default-toolset Codex against the gateway therefore remains a
+gap until the Responses tool policy is deliberately revisited — the
+gateway never silently drops tools.
+
 ## OpenCode
 
 `opencode.json`:
@@ -64,6 +77,41 @@ the gateway's OpenAI Responses endpoint.
   "model": "nexaroute/<public-model>"
 }
 ```
+
+## Gemini CLI
+
+```sh
+export GOOGLE_GEMINI_BASE_URL="https://gateway.example/v1beta"
+export GEMINI_API_KEY="<client-key>"
+```
+
+Point Gemini CLI at the gateway's `/v1beta` base and use the route's
+public model as the model name (the SDK sends it in the URL path).
+The gateway serves `POST /v1beta/models/{model}:generateContent`,
+`POST /v1beta/models/{model}:streamGenerateContent` (`alt=sse`), and
+`GET /v1beta/models`, which lists the gateway's public models as
+`models/<public-model>`. The client key may arrive as
+`Authorization: Bearer`, `x-api-key`, `x-goog-api-key`, or the `?key=`
+query parameter (the query form is stripped before logging).
+
+Supported (FIXTURE: gateway-stack tests against loopback fake
+upstreams, `internal/httpapi/gemini_ingress_test.go`): text and system
+instruction, inline images, function declarations with
+functionCall/functionResponse round trips, generationConfig
+(temperature, topP, topK, maxOutputTokens, stopSequences, JSON
+responseMimeType/responseSchema), streaming SSE with a terminal
+finishReason frame, and usageMetadata (prompt/candidates/total tokens).
+
+Fail-closed, never silently dropped: `candidateCount` above 1,
+`safetySettings`, non-TEXT `responseModalities`, `fileData` and other
+content parts the canonical IR cannot represent, and tuned-model paths
+are rejected with a Gemini error envelope. A virtual endpoint whose
+protocol list is restricted must include `gemini`, and a client key
+with a route allow-list must include the `/v1beta/models/` path (or
+`*`); model allow-lists match the path model. Opencode upstreams fail
+closed for this ingress (no Gemini path mapping exists for them).
+Live Gemini CLI runs against real tenants are LIVE-BLOCKED (no
+operator authorization or credentials in this environment).
 
 ## OpenAI-compatible clients
 

@@ -41,6 +41,13 @@ func adminPermissionForRequest(r *http.Request) (authz.Permission, bool) {
 		return readOnly(authz.ReadConfig)
 	case path == "/admin/api/audit" || path == "/admin/api/events/stream" || path == "/admin/api/activity/requests":
 		return readOnly(authz.ReadAudit)
+	case path == "/admin/api/security-snapshot":
+		// Live snapshot of the whole security/audit store, taken from
+		// the gateway's own open handle. Read-only, audit.read —
+		// same permission as reading audit records; the snapshot
+		// contains no secrets (sessions hold metadata only, audit
+		// events are sanitized at the storage boundary).
+		return readOnly(authz.ReadAudit)
 	case path == "/admin/api/usage/identities":
 		return readOnly(authz.ReadUsage)
 	case path == "/admin/api/provider-presets":

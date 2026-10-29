@@ -336,7 +336,7 @@ func (r *Runner) Run(ctx context.Context) Report {
 				incomplete = true
 			}
 		}
-		if res.Status == StatusFail && (res.HTTPStatus == http.StatusUnauthorized || res.HTTPStatus == http.StatusForbidden) && sc.ID != "error_envelope" {
+		if res.Status == StatusFail && (res.HTTPStatus == http.StatusUnauthorized || res.HTTPStatus == http.StatusForbidden) && sc.ID != "error_envelope" && sc.ID != "auth_failure" {
 			stopRemaining = "provider rejected the credential (HTTP " + fmt.Sprint(res.HTTPStatus) + "); remaining scenarios were not run"
 		}
 		if overallCtx.Err() != nil {
@@ -432,6 +432,13 @@ func (r *Runner) finalize(report *Report, incomplete bool) {
 			"Provider pricing is not configured for this model: the hard cost guard is the call/output-token budget, not a dollar ceiling.")
 	}
 	for _, res := range report.Scenarios {
+		if res.ID == "auth_failure" {
+			report.Limitations = append(report.Limitations,
+				"auth_failure used a deliberately invalid credential, never the operator credential; for Bedrock only the access-key id was replaced (SigV4 still signs with the configured secret env, which AWS rejects for the unknown key id).")
+			break
+		}
+	}
+	for _, res := range report.Scenarios {
 		if res.Status == StatusSkip && res.Note != "" {
 			report.Limitations = append(report.Limitations, "skipped "+res.ID+": "+res.Note)
 		}
@@ -447,6 +454,10 @@ func (r *Runner) runScenario(ctx context.Context, sc scenario) ScenarioResult {
 		return r.runText(ctx, sc)
 	case "stream":
 		return r.runStream(ctx, sc)
+	case "stream_usage":
+		return r.runStreamUsage(ctx, sc)
+	case "auth_failure":
+		return r.runAuthFailure(ctx, sc)
 	case "tools":
 		return r.runTools(ctx, sc)
 	case "tool_result":

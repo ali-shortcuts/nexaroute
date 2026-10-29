@@ -19,15 +19,17 @@ type previewDecision struct {
 }
 
 type previewExplanation struct {
-	Strategy         string            `json:"strategy"`
-	Decisions        []previewDecision `json:"decisions"`
-	CandidateCount   int               `json:"candidate_count"`
-	KnownModel       bool              `json:"known_model"`
-	UsedFallback     bool              `json:"used_unknown_model_fallback"`
-	PinnedDeployment string            `json:"pinned_deployment"`
-	PinnedApplied    bool              `json:"pinned_applied"`
-	ConsideredCount  int               `json:"considered_count"`
-	SessionAffinity  bool              `json:"session_affinity_enabled"`
+	Simulated          bool              `json:"simulated"`
+	RotationPredictive bool              `json:"rotation_predictive"`
+	Strategy           string            `json:"strategy"`
+	Decisions          []previewDecision `json:"decisions"`
+	CandidateCount     int               `json:"candidate_count"`
+	KnownModel         bool              `json:"known_model"`
+	UsedFallback       bool              `json:"used_unknown_model_fallback"`
+	PinnedDeployment   string            `json:"pinned_deployment"`
+	PinnedApplied      bool              `json:"pinned_applied"`
+	ConsideredCount    int               `json:"considered_count"`
+	SessionAffinity    bool              `json:"session_affinity_enabled"`
 }
 
 // codingPreviewServer wires a stable public alias "coding" across two
@@ -62,8 +64,15 @@ func codingPreviewServer(t *testing.T) (*Server, *atomic.Int64) {
 		})
 	}
 	trueVal := true
-	cfg.CandidatePools = []config.CandidatePoolConfig{{ID: "coding-pool", Name: "Coding pool", Mode: "explicit", Deployments: deployments}}
-	cfg.RouteProfiles = []config.RouteProfileConfig{{ID: "coding-profile", CandidatePool: "coding-pool"}}
+	cfg.CandidatePools = []config.CandidatePoolConfig{
+		{ID: "coding-pool", Name: "Coding pool", Mode: "explicit", Deployments: deployments},
+		{ID: "a-only-pool", Name: "A only pool", Mode: "explicit", Deployments: []string{"pA/m"}},
+	}
+	cfg.RouteProfiles = []config.RouteProfileConfig{
+		{ID: "coding-profile", CandidatePool: "coding-pool"},
+		{ID: "a-only-profile", CandidatePool: "a-only-pool"},
+		{ID: "private-profile", CandidatePool: "coding-pool", Privacy: "no_training"},
+	}
 	cfg.VirtualEndpoints = []config.VirtualEndpointConfig{{ID: "coding", PublicModel: "coding", RouteProfile: "coding-profile", Enabled: &trueVal, Protocols: []string{"openai"}}}
 	return testGateway(t, cfg), &hits
 }

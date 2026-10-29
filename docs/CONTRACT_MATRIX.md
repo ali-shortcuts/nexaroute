@@ -49,6 +49,7 @@ spec by `TestContractMatrixDrift`.
 - `/admin/api/snapshot`
 - `/admin/api/csrf-token`
 - `/admin/api/audit`
+- `/admin/api/security-snapshot`
 - `/admin/api/events/stream`
 - `/admin/api/activity/requests`
 - `/admin/api/probe`

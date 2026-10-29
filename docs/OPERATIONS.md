@@ -53,12 +53,18 @@ To restore, stop the gateway, restore the selected config and its matching key, 
 
 ### Backup and restore commands (preferred)
 
-`nexaroute backup` bundles everything an installation needs into one hash-verified archive (format `nexaroute-backup/1`): the config exactly as stored, a consistent online snapshot of the audit/security store (safe to run against a live gateway), and the file-backend control-plane state when present. The bundle is written atomically with mode `0600`; its manifest records a SHA-256 fingerprint of the master key so pairing can be checked later.
+`nexaroute backup` bundles everything an installation needs into one hash-verified archive (format `nexaroute-backup/1`): the config exactly as stored, a consistent snapshot of the audit/security store, and the file-backend control-plane state when present. The bundle is written atomically with mode `0600`; its manifest records a SHA-256 fingerprint of the master key so pairing can be checked later.
+
+Two snapshot modes exist and are never mixed silently. Without `--live`, the CLI opens the security store itself, so for the file-backed store the gateway must be stopped first: a running gateway holds the store's exclusive lock for its whole lifetime, and a backup attempted against it fails closed with an actionable error naming the clean stop (or `--live`) — never with a raw file copy, which would read a torn bbolt database. With `--live`, the CLI asks the running gateway's `GET /admin/api/security-snapshot` endpoint for a snapshot taken inside the gateway from its own open store handle (a bbolt read transaction, consistent under concurrent writes); the gateway verifies the audit chain before streaming, and the CLI verifies the received snapshot's chain again before bundling. Live mode needs admin access through the existing admin machinery (an admin API key, or loopback keyless emergency access where the gateway allows it); a gateway whose admin is OIDC-only cannot serve a CLI live snapshot and must be backed up stopped, and a gateway too old to offer the endpoint refuses the request (in practice the old gateway's admin middleware denies the unmapped path with 403) — in both cases the CLI's error directs the operator to the stopped backup. A broken audit chain is always refused over a live snapshot (there is no `--allow-broken-audit-chain` override on the live path; that override applies only to the stopped path). Backends without snapshot support (PostgreSQL, Redis) answer 501: their state must be dumped with backend-native tooling. Either way the bundle format is `nexaroute-backup/1` and restores through the same path.
 
 ```bash
 nexaroute backup --config "$CONFIG" --out "$BACKUP_DIR/nexaroute-backup.tar"
 # Only when the key must travel with the backup (store the bundle like a secret):
 nexaroute backup --config "$CONFIG" --out "$BACKUP_DIR/nexaroute-backup-with-key.tar" --include-master-key
+# Live snapshot from a running gateway (new binary only; admin access required):
+nexaroute backup --config "$CONFIG" --out "$BACKUP_DIR/nexaroute-backup-live.tar" --live
+# With an explicit admin URL/key (defaults: the config listen address and admin.api_key):
+nexaroute backup --config "$CONFIG" --out "$BACKUP_DIR/nexaroute-backup-live.tar" --live --admin-url http://127.0.0.1:8080 --admin-key "$NEXAROUTE_ADMIN_KEY"
 ```
 
 The master key is excluded by default: keep it as an independent secret (above) unless the deployment deliberately accepts a combined bundle.
@@ -129,7 +135,7 @@ NexaRoute does not promise RPO/RTO; the numbers below are placeholders an operat
 
 ### Restore-drill runbook (repeatable)
 
-1. **Pre-upgrade backup.** `nexaroute backup --config "$CONFIG" --out "$B/pre-upgrade.tar"` (add `--include-master-key` only when key custody requires a combined bundle).
+1. **Pre-upgrade backup.** Either stop the gateway and run `nexaroute backup --config "$CONFIG" --out "$B/pre-upgrade.tar"` (the only procedure that works for every gateway, including binaries too old to offer a live snapshot), or — when the running gateway is new enough to offer `/admin/api/security-snapshot` and admin access is available — run the same command with `--live` against the running gateway. A plain backup against a running file-backed gateway fails closed on the store lock; that failure is the signal to stop the gateway or switch to `--live`, never to copy the store file by hand (add `--include-master-key` only when key custody requires a combined bundle).
 2. **Isolated verification.** `nexaroute restore --verify --bundle "$B/pre-upgrade.tar" --config "$CONFIG" --into "$DRILL" --report "$EVIDENCE/drill.json" --max-age 24h`. Require status `PASS`; investigate any `BLOCKED`/`FAIL` before proceeding.
 3. **Prepared rollback.** Keep the current config, `.key`, and security store; if a real restore is interrupted, `nexaroute restore --recover <journal-dir>` rolls the transaction back.
 4. **Key recovery.** If decryption is `BLOCKED` or `FAIL`, restore the exact paired `<config>.key` (or the matching pre-rotation `.key.previous`); never generate a replacement key for an encrypted config.
@@ -154,6 +160,43 @@ Rotation retains the previous key as `<config-path>.key.previous`, stages the re
 ### Recover an interrupted rotation
 
 If the process stops during rotation, preserve the config, `.key`, `.key.next`, and `.key.previous`; do not delete or overwrite any of them. Restart or run `nexaroute secrets verify --config "$CONFIG"` with the same config path: when the config authenticates with the staged key, NexaRoute promotes `.key.next` to `.key`. If verification does not succeed, restore a known-good encrypted config and its matching key from backup. Do not start an older gateway with an encrypted config unless it supports the same `nxs1` envelope format.
+
+### Vault Transit migration and rewrap
+
+Vault Transit `nxs2` mode is selected with `NEXAROUTE_KEY_PROVIDER=transit`
+together with `NEXAROUTE_TRANSIT_ENABLED=true` and the `VAULT_*` /
+`NEXAROUTE_TRANSIT_*` variables documented in
+[CONFIGURATION.md](CONFIGURATION.md). The Transit KEK stays in Vault and there
+is no fallback to a local key. A config that still contains `nxs1` envelopes is
+rejected until it is explicitly migrated with the exact legacy key:
+
+```bash
+nexaroute secrets migrate-to-transit --config "$CONFIG" --legacy-key-file /secure/old.key
+nexaroute secrets verify --config "$CONFIG"
+```
+
+Migration proves Transit connectivity with a canary, writes a verbatim
+timestamped `.pre-transit.bak` copy of the pre-migration bytes (mode `0600`,
+SHA-256 reported), decrypt-verifies in memory, and atomically replaces the
+config; a post-write verification failure rolls back to the backup. There is
+no migration journal. If the process stops, preserve the config and the
+`.pre-transit.bak` backup, then rerun the same command: an already-migrated
+config is verified only and nothing is rewritten. Plaintext fields are never
+auto-migrated into Transit.
+
+After a Vault Transit key rotation, move wrapped DEKs to the latest version:
+
+```bash
+nexaroute secrets rewrap-transit --config "$CONFIG"
+nexaroute secrets verify --config "$CONFIG"
+```
+
+`rewrap-transit` decrypt-verifies before and after, calls only the Transit
+`rewrap` endpoint, writes a verbatim `.pre-rewrap.bak`, and writes nothing
+when already at the latest version. Do
+not disable an old Transit key version until rewrap and verification succeed.
+Transit mode is fake-API tested but has no real Vault Transit acceptance
+evidence yet; see [EXTERNAL_VERIFICATION.md](EXTERNAL_VERIFICATION.md).
 
 ## 3. Secrets CLI and plaintext handling
 
@@ -330,6 +373,76 @@ Redis-backed admin security-store adapter is a separate subsystem with its
 own configuration, and cross-replica breaker synchronization is an opt-in
 layer that runs over this control-plane store (`control_plane.breaker_sync`,
 ADR 0003); neither changes the store's own state format.
+
+## 4a. Diagnostic bundles (secret-safe, operator-invoked)
+
+When an incident needs investigation, an operator can produce a single
+shareable file instead of copying configuration or log excerpts by hand:
+
+```bash
+nexaroute diagnostics bundle --config /path/to/config.json --output /path/to/incident-bundle.json
+```
+
+The command is explicit and offline: it never starts the gateway, never
+sends anything to any external service, and never prints the bundle to
+stdout. It reuses the `doctor` checks and the `config validate` path
+(including the TLS preflight), and it builds a new JSON document
+(`nexaroute-diagnostics/v1`) from an allowlist of fields only:
+
+- Gateway version, VCS commit where the build recorded one, Go version,
+  OS/architecture, and CPU count. No hostname is included.
+- Config validation summary: valid/invalid, provider/model/route-profile
+  counts, sanitized config warnings, TLS, control-plane backend, video
+  enabled, and logging mode (`auto`/`off`/`custom` — never a path).
+- Provider readiness summaries: id, name, type, auth mode, enabled,
+  base URL reduced to scheme://host, model counts, credential presence
+  as a boolean, credential source as an env-var name or `configured`,
+  and custom header names only. These are configuration-derived
+  readiness facts, not live health: live deployment health and live
+  counters come from `/admin/api/health` and `/metrics` on a running
+  gateway, which this offline bundle deliberately does not contain.
+- Doctor checks (config, master-key permissions, security store, control
+  plane, restore journals, and optionally a backup-bundle preflight with
+  `--bundle`/`--max-age`), each as status/name/sanitized detail.
+- Sanitized recent errors: at most 50 lines from a bounded tail (256 KiB,
+  last 200 lines) of the gateway log file, each truncated, with lines
+  that still look secret or payload-shaped dropped and counted.
+  Pass `--no-log-errors` to exclude this section.
+- Bounded counts: check pass/warn/fail totals, audit-chain record count
+  when the doctor check established it, and provider/model/error totals.
+
+Never included: credentials, master keys, tokens, cookies, authorization
+headers, prompt text, model responses, raw configuration, URL user info,
+URL query strings or fragments, and full filesystem paths (doctor
+details are reduced to file basenames). Sanitization runs before
+serialization, and the serialized bytes are scanned a second time; any
+scan failure aborts the write and leaves no file behind. A field that
+cannot be proven safe is dropped or withheld, never copied verbatim —
+including validation errors, which are reduced to a sanitized class
+string, and malformed configuration, which still yields a bundle with
+`config.valid=false` rather than a crash or a raw dump.
+
+The file is written atomically (temp file in the destination directory,
+mode `0600`, fsync, rename) and an existing file is never overwritten
+unless `--overwrite` is given. Exit codes: 0 = bundle written, 1 =
+bundle could not be produced safely or written, 2 = usage error. A
+failing doctor check is data inside the bundle, not a command failure.
+
+Before sharing, read the file yourself: the command prints what it
+contains and what it excluded, but it cannot judge context. The bundle
+still contains operational metadata that may be sensitive in context —
+provider hostnames, model names, file basenames, check statuses, and
+counts — so share it only with a party you trust with operational
+detail, over a channel with equivalent protection, and never commit it
+to a repository or store it alongside backups.
+
+Retention and deletion: a bundle is an incident artifact, not a backup
+and not evidence to keep indefinitely. Delete it when the incident is
+closed (for example `shred -u` or your host's accepted sanitization
+policy for the storage medium), and delete any copies forwarded to a
+support channel once the case is resolved. If a bundle is ever suspected
+of containing secret material, treat it as a credential exposure: rotate
+the affected credentials, then delete every copy.
 
 ## 5. Admin surface, events, and logs
 

@@ -257,19 +257,26 @@ finish() {
 trap 'finish $?' EXIT
 
 for i in $(seq 1 "$rounds"); do
-  run_stage "stress-round-$i" env NEXAROUTE_STRESS=1 go test -timeout=3m -count=1 ./internal/router ./internal/probe ./internal/events ./internal/httpapi ./internal/logging -run='^TestStress'
+  run_stage "stress-round-$i" env NEXAROUTE_STRESS=1 go test -timeout=3m -count=1 ./internal/router ./internal/probe ./internal/events ./internal/httpapi ./internal/logging ./internal/video/cost ./internal/video/queue -run='^TestStress'
 done
 
 run_stage "http-hot-reload-soak" env NEXAROUTE_SOAK=1 NEXAROUTE_SOAK_DURATION="$duration" NEXAROUTE_SOAK_SAMPLE_OUT="$samples_file_abs" go test -timeout="$hot_soak_timeout" -count=1 -v ./internal/httpapi -run='^TestSoak'
 
 run_stage "recovery-soak" env NEXAROUTE_SOAK=1 go test -timeout=10m -count=1 ./internal/probe -run='^TestSoak'
 
+# Video queue/cost recovery soak (issue #664, second wave): restart
+# rounds on the single-process file store plus sustained ledger
+# totals. Bounded rounds, not hours-long production soak; the stage
+# name says what it is. PG-backed stores are not exercised here
+# (they skip without a DSN); see the evidence report.
+run_stage "video-recovery-soak" env NEXAROUTE_SOAK=1 go test -timeout=10m -count=1 -v ./internal/video/cost ./internal/video/queue -run='^TestSoak'
+
 # The race stage pins its own short sustained duration: the workflow exports
 # the operator-requested NEXAROUTE_SOAK_DURATION (up to 2h+) to the whole
 # script, and TestSoakConcurrentTrafficAndHotReload would otherwise inherit
 # it and run for hours inside this stage's 15m go-test timeout (run
 # 39441382088 failed exactly that way after its 2h stage passed).
-run_stage "race-soak" env GOMAXPROCS=4 NEXAROUTE_SOAK=1 NEXAROUTE_SOAK_DURATION=2m go test -race -timeout=15m -count=1 ./internal/httpapi ./internal/probe -run='^TestSoak'
+run_stage "race-soak" env GOMAXPROCS=4 NEXAROUTE_SOAK=1 NEXAROUTE_SOAK_DURATION=2m go test -race -timeout=15m -count=1 ./internal/httpapi ./internal/probe ./internal/video/cost ./internal/video/queue -run='^TestSoak'
 
 run_stage "budget-leak-slope" env NEXAROUTE_SOAK=1 go test -timeout=10m -count=1 -v ./internal/httpapi -run='^TestSoakBudgetLeakSlope$'
 

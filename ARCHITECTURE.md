@@ -128,7 +128,7 @@ Pre-stream failover can occur on:
 - 429 rate limits
 - retryable server/gateway errors
 
-`Retry-After` is honored up to the configured maximum. Once client-visible stream bytes have been committed, the request remains bound to that upstream; NexaRoute does not fake mid-stream continuation on another model.
+`Retry-After` is honored up to the configured maximum. Once client-visible stream bytes have been committed, the request remains bound to that upstream; NexaRoute does not fake mid-stream continuation on another model. The full retry classification (sent / may-have-executed / committed / verified idempotency), the ambiguous-outcome record, the bounded attempt/deadline budget, and the idempotency-key policy live in `docs/RETRY_SAFETY.md` and `internal/retrysafety`; no provider dialect has a verified idempotency mechanism, so exactly-once provider execution is never claimed.
 
 ## Credential pool
 
@@ -270,10 +270,23 @@ resolution, the candidate funnel and the strategy ordering against live runtime
 state for an operator-supplied requirement (model/alias, protocol, tools, vision,
 streaming, reasoning, context bound, affinity key) without issuing any provider
 call and without mutating anything — no session pin, no probe, no admission
-counter. It reports the ordered candidate list, the selected provider/model, the
-matched virtual endpoint/pools, and per-deployment exclusion reasons. Exclusion
-reasons and the data plane share one evaluation path, so the trace cannot drift
-from real routing behavior.
+counter, and no routing rotation counter (rotating strategies are ordered
+from the requirement's own keys in the simulated path, so a preview can never
+shift the next real pick). It reports the ordered candidate list, the selected
+provider/model, the matched virtual endpoint/pools, and per-deployment exclusion
+reasons, plus a score breakdown per included candidate (base + health + weight
+− priority − latency − capacity − failure = score, computed once inside the
+canonical scorer). Every simulated selection is labelled `simulated`, and
+`rotation_predictive` says whether the simulated lead is also the live lead
+from the same snapshot (false for rotating strategies, and for `ready_mesh`
+without a stable key). With `?compare_profile=<id>` the same requirement is
+simulated against one alternative route profile's pools and privacy setting,
+reporting only what changes (selection, added/removed deployments, alternative
+explanation); canary rollout and session-pin promotion are deliberately not
+applied to the alternative. Exclusion reasons and the data plane share one
+evaluation path, so the trace cannot drift from real routing behavior. Full
+contract, access/bounds, and the explicit list of unsupported cases live in
+`docs/ROUTING_SIMULATION.md`.
 
 ## Adaptive decision policies (Phase 12)
 

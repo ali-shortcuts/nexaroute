@@ -301,7 +301,7 @@ func requestTokenEstimate(r *http.Request) int {
 	return estimate
 }
 
-func (s *Server) applyGuardrails(w http.ResponseWriter, r *http.Request, anthropicStyle bool) bool {
+func (s *Server) applyGuardrails(w http.ResponseWriter, r *http.Request, style string) bool {
 	cfg := s.configSnapshot().cfg.Guardrails
 	if cfg.Mode == "off" || r.Body == nil {
 		return true
@@ -309,11 +309,7 @@ func (s *Server) applyGuardrails(w http.ResponseWriter, r *http.Request, anthrop
 	body, err := io.ReadAll(io.LimitReader(r.Body, int64(cfg.MaxBodyBytes)+1))
 	r.Body = io.NopCloser(bytes.NewReader(body))
 	if err != nil || len(body) > cfg.MaxBodyBytes {
-		if anthropicStyle {
-			anthropicErrorJSON(w, http.StatusRequestEntityTooLarge, "request exceeds guardrail body limit")
-		} else {
-			errorJSON(w, http.StatusRequestEntityTooLarge, "request exceeds guardrail body limit")
-		}
+		authWriteError(w, style, http.StatusRequestEntityTooLarge, "request exceeds guardrail body limit")
 		return false
 	}
 	findings := guardrail.Scan(body)
@@ -331,11 +327,7 @@ func (s *Server) applyGuardrails(w http.ResponseWriter, r *http.Request, anthrop
 		s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "guardrail_audit", Message: "request matched privacy/safety guardrail kinds=" + strings.Join(guardrail.Kinds(findings), ",")})
 		return true
 	}
-	if anthropicStyle {
-		anthropicErrorJSON(w, http.StatusForbidden, "request blocked by gateway guardrail")
-	} else {
-		errorJSON(w, http.StatusForbidden, "request blocked by gateway guardrail")
-	}
+	authWriteError(w, style, http.StatusForbidden, "request blocked by gateway guardrail")
 	return false
 }
 
@@ -597,27 +589,57 @@ func (s *Server) clientTPMSettleAt(res *tpmReservation, actual int64, now time.T
 	res.charged = actual
 }
 
+// authStyle selects the error envelope for client-auth failures:
+// "anthropic", "gemini", or anything else for the generic OpenAI shape.
+func authWriteError(w http.ResponseWriter, style string, status int, msg string) {
+	switch style {
+	case "anthropic":
+		anthropicErrorJSON(w, status, msg)
+	case "gemini":
+		geminiErrorJSON(w, status, msg)
+	default:
+		errorJSON(w, status, msg)
+	}
+}
+
 func (s *Server) clientAuthAllowed(w http.ResponseWriter, r *http.Request, anthropicStyle bool) bool {
+	style := "openai"
+	if anthropicStyle {
+		style = "anthropic"
+	}
+	return s.clientAuthAllowedStyled(w, r, style, "", false)
+}
+
+// clientAuthAllowedForModel is clientAuthAllowed with an explicit model
+// for ingresses that carry the model in the URL path (Gemini), where the
+// body has no top-level "model" field for requestModel to read.
+func (s *Server) clientAuthAllowedForModel(w http.ResponseWriter, r *http.Request, anthropicStyle bool, modelOverride string, hasModelOverride bool) bool {
+	style := "openai"
+	if anthropicStyle {
+		style = "anthropic"
+	}
+	return s.clientAuthAllowedStyled(w, r, style, modelOverride, hasModelOverride)
+}
+
+// clientAuthAllowedGemini is clientAuthAllowed with Gemini envelopes and
+// an optional path-model override.
+func (s *Server) clientAuthAllowedGemini(w http.ResponseWriter, r *http.Request, modelOverride string, hasModelOverride bool) bool {
+	return s.clientAuthAllowedStyled(w, r, "gemini", modelOverride, hasModelOverride)
+}
+
+func (s *Server) clientAuthAllowedStyled(w http.ResponseWriter, r *http.Request, style string, modelOverride string, hasModelOverride bool) bool {
 	enabled, keys, globalRPM := s.clientAuthConfig()
 	if !enabled {
 		return true
 	}
 	keyText := extractClientKey(r)
 	if keyText == "" {
-		if anthropicStyle {
-			anthropicErrorJSON(w, http.StatusUnauthorized, "invalid or missing API key")
-		} else {
-			errorJSON(w, http.StatusUnauthorized, "invalid or missing API key")
-		}
+		authWriteError(w, style, http.StatusUnauthorized, "invalid or missing API key")
 		return false
 	}
 	identity, virtualKey, ok := s.findClientIdentity(keyText)
 	if !ok && !clientKeyMatches(keys, keyText) {
-		if anthropicStyle {
-			anthropicErrorJSON(w, http.StatusUnauthorized, "invalid or missing API key")
-		} else {
-			errorJSON(w, http.StatusUnauthorized, "invalid or missing API key")
-		}
+		authWriteError(w, style, http.StatusUnauthorized, "invalid or missing API key")
 		return false
 	}
 	if !ok {
@@ -625,16 +647,15 @@ func (s *Server) clientAuthAllowed(w http.ResponseWriter, r *http.Request, anthr
 	}
 	snap := s.configSnapshot()
 	cfg := snap.cfg
-	if !s.applyGuardrails(w, r, anthropicStyle) {
+	if !s.applyGuardrails(w, r, style) {
 		return false
 	}
 	model := requestModel(r)
+	if hasModelOverride {
+		model = modelOverride
+	}
 	if !identityPolicyAllows(cfg, identity, virtualKey, r.URL.Path, model) {
-		if anthropicStyle {
-			anthropicErrorJSON(w, http.StatusForbidden, "client key is not authorized for this model or route")
-		} else {
-			errorJSON(w, http.StatusForbidden, "client key is not authorized for this model or route")
-		}
+		authWriteError(w, style, http.StatusForbidden, "client key is not authorized for this model or route")
 		return false
 	}
 	r2 := r.WithContext(contextWithClientIdentity(r.Context(), identity))
@@ -645,11 +666,7 @@ func (s *Server) clientAuthAllowed(w http.ResponseWriter, r *http.Request, anthr
 	}
 	if !s.clientRPMAllow(keyText, rpm) {
 		w.Header().Set("Retry-After", "60")
-		if anthropicStyle {
-			anthropicErrorJSON(w, http.StatusTooManyRequests, "client rate limit exceeded; retry after 60 seconds")
-		} else {
-			errorJSON(w, http.StatusTooManyRequests, "client rate limit exceeded; retry after 60 seconds")
-		}
+		authWriteError(w, style, http.StatusTooManyRequests, "client rate limit exceeded; retry after 60 seconds")
 		return false
 	}
 	// Effective TPM: the virtual key's own ceiling wins; otherwise the
@@ -668,11 +685,7 @@ func (s *Server) clientAuthAllowed(w http.ResponseWriter, r *http.Request, anthr
 				w.Header().Set("Retry-After", strconv.Itoa(seconds))
 				message = "client token limit exceeded; retry after " + strconv.Itoa(seconds) + " seconds"
 			}
-			if anthropicStyle {
-				anthropicErrorJSON(w, http.StatusTooManyRequests, message)
-			} else {
-				errorJSON(w, http.StatusTooManyRequests, message)
-			}
+			authWriteError(w, style, http.StatusTooManyRequests, message)
 			return false
 		}
 		if res != nil {
@@ -688,11 +701,7 @@ func (s *Server) clientAuthAllowed(w http.ResponseWriter, r *http.Request, anthr
 		if est, ok := s.budgetEstimateFor(snap, model, inputEst, outputAllowance); ok {
 			id, allowed := s.budgets.Reserve(virtualKey.ID, virtualKey.BudgetUSD, est, time.Now())
 			if !allowed {
-				if anthropicStyle {
-					anthropicErrorJSON(w, 402, "client budget exceeded")
-				} else {
-					errorJSON(w, 402, "client budget exceeded")
-				}
+				authWriteError(w, style, 402, "client budget exceeded")
 				return false
 			}
 			if id != 0 {

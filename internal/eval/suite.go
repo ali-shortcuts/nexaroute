@@ -35,6 +35,17 @@ const (
 	ExpectUnitTests      = "unit_tests"
 	ExpectNumericTol     = "numeric_tolerance"
 	ExpectStreamTerminat = "stream_terminated"
+	// ExpectMultiTurnFinal grades only the final turn of a recorded
+	// conversation (Outcome.Turns). Earlier turns are never graded and
+	// never copied into a result, so conversation history cannot leak
+	// through the evaluation surface.
+	ExpectMultiTurnFinal = "multi_turn_final"
+	// ExpectStreamEvents grades a recorded stream: it must terminate and
+	// deliver at least MinEvents events.
+	ExpectStreamEvents = "stream_events"
+	// ExpectCancellationClean grades a recorded cancellation: the stream
+	// must record that it was cancelled, and end without an error.
+	ExpectCancellationClean = "cancellation_clean"
 )
 
 // AllExpectations is the canonical, bounded set used by validation.
@@ -47,6 +58,9 @@ var AllExpectations = []string{
 	ExpectUnitTests,
 	ExpectNumericTol,
 	ExpectStreamTerminat,
+	ExpectMultiTurnFinal,
+	ExpectStreamEvents,
+	ExpectCancellationClean,
 }
 
 // Expectation is a declarative, deterministic scoring rule for one case.
@@ -57,6 +71,8 @@ type Expectation struct {
 	ToolName  string  `json:"tool_name,omitempty"`
 	Pattern   string  `json:"pattern,omitempty"`
 	Tolerance float64 `json:"tolerance,omitempty"`
+	// MinEvents is the minimum event count for ExpectStreamEvents.
+	MinEvents int `json:"min_events,omitempty"`
 }
 
 // Valid reports whether the expectation is well formed.
@@ -78,6 +94,10 @@ func (e Expectation) Valid() bool {
 		return e.ToolName != ""
 	case ExpectRegex:
 		return e.Pattern != ""
+	case ExpectMultiTurnFinal:
+		return e.Expected != ""
+	case ExpectStreamEvents:
+		return e.MinEvents >= 1
 	}
 	return true
 }
@@ -192,6 +212,35 @@ func builtinSuites() []Suite {
 				c("protocol-stream-terminates", 1, Expectation{Kind: ExpectStreamTerminat, Expected: "done"}),
 				c("protocol-tool-result-roundtrip", 1, Expectation{Kind: ExpectJSONValid}),
 				c("protocol-usage-reported", 1, Expectation{Kind: ExpectRegex, Pattern: `"usage"\s*:`}),
+			},
+		},
+		{
+			// Quality-gate suites (v1). The three suites above are reused
+			// unchanged for tool calls, structured JSON and protocol
+			// compatibility; these three close the remaining gate areas.
+			// Cases carry expectations only, never prompts: the recorded
+			// artifact supplies the behavior, exactly as in the v1 suites.
+			ID: "multi_turn", Version: "1", Dimension: scorecards.DimInstructionFollow, MinSamples: 3, MaxCases: MaxCasesPerSuite,
+			Cases: []Case{
+				c("multi-turn-context-recall", 1, Expectation{Kind: ExpectMultiTurnFinal, Expected: "NEEDLE-A"}),
+				c("multi-turn-followup-correction", 1, Expectation{Kind: ExpectMultiTurnFinal, Expected: "corrected"}),
+				c("multi-turn-tool-result-followup", 1, Expectation{Kind: ExpectMultiTurnFinal, Expected: "done"}),
+			},
+		},
+		{
+			ID: "streaming", Version: "1", Dimension: scorecards.DimProtocolCompat, MinSamples: 3, MaxCases: MaxCasesPerSuite,
+			Cases: []Case{
+				c("stream-events-minimum", 1, Expectation{Kind: ExpectStreamEvents, MinEvents: 3}),
+				c("stream-terminates-cleanly", 1, Expectation{Kind: ExpectStreamTerminat, Expected: "done"}),
+				c("stream-events-sustained", 1, Expectation{Kind: ExpectStreamEvents, MinEvents: 10}),
+			},
+		},
+		{
+			ID: "cancellation", Version: "1", Dimension: scorecards.DimProtocolCompat, MinSamples: 3, MaxCases: MaxCasesPerSuite,
+			Cases: []Case{
+				c("cancel-mid-stream-clean", 1, Expectation{Kind: ExpectCancellationClean}),
+				c("cancel-before-first-token-clean", 1, Expectation{Kind: ExpectCancellationClean}),
+				c("cancel-after-tool-call-clean", 1, Expectation{Kind: ExpectCancellationClean}),
 			},
 		},
 	}

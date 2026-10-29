@@ -3,6 +3,7 @@ package securitystore
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -34,6 +35,22 @@ type Backend interface {
 
 // The local bbolt store is the default Backend.
 var _ Backend = (*Store)(nil)
+
+// Snapshotter is the optional live-snapshot capability of a Backend:
+// a consistent, point-in-time copy of the whole store, written to w.
+// Only the local bbolt Store implements it today (a bbolt read
+// transaction copy of the already-open database). The PostgreSQL and
+// Redis adapters do NOT implement it: their durable state lives
+// outside any file the backup CLI could copy, so a live snapshot for
+// those backends must come from a backend-native dump, never from a
+// raw file copy of something else. Callers must type-assert to this
+// interface and fail closed when it is absent — never fall back to
+// opening the store a second time (a running gateway holds the
+// writer lock, so that open times out) and never copy store files
+// directly while a writer may be active.
+type Snapshotter interface {
+	BackupTo(ctx context.Context, w io.Writer) error
+}
 
 // Supported backend names for admin.security_store_backend.
 const (

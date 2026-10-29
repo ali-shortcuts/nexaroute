@@ -175,6 +175,20 @@ func writeMetadataAtomic(path string, data []byte) error {
 	return os.Rename(name, path)
 }
 
+// ErrAssetOutsideRoot and ErrAssetSymlinkOutsideRoot report that an asset
+// path (or its symlink-resolved form) escapes the configured storage root.
+// Both are deterministic validation rejections, not transient storage
+// outages; callers map them to 404, not to a retryable 503.
+var (
+	ErrAssetOutsideRoot        = errors.New("asset path escapes storage root")
+	ErrAssetSymlinkOutsideRoot = errors.New("asset symlink escapes storage root")
+)
+
+// IsOutsideRoot reports whether err is an outside-root rejection.
+func IsOutsideRoot(err error) bool {
+	return errors.Is(err, ErrAssetOutsideRoot) || errors.Is(err, ErrAssetSymlinkOutsideRoot)
+}
+
 // Open returns a regular asset file after validating that its resolved path
 // remains inside the configured storage root. The caller must close the file.
 func (s *Local) Open(a video.Asset) (*os.File, error) {
@@ -191,7 +205,7 @@ func (s *Local) Open(a video.Asset) (*os.File, error) {
 	}
 	rel, err := filepath.Rel(root, path)
 	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
-		return nil, fmt.Errorf("asset path escapes storage root")
+		return nil, ErrAssetOutsideRoot
 	}
 	resolvedRoot, err := filepath.EvalSymlinks(root)
 	if err != nil {
@@ -203,7 +217,7 @@ func (s *Local) Open(a video.Asset) (*os.File, error) {
 	}
 	rel, err = filepath.Rel(resolvedRoot, resolvedPath)
 	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
-		return nil, fmt.Errorf("asset symlink escapes storage root")
+		return nil, ErrAssetSymlinkOutsideRoot
 	}
 	info, err := os.Stat(resolvedPath)
 	if err != nil {

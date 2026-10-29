@@ -303,13 +303,13 @@ func (s *Server) buildOpenAIAttempt(cand router.Scored, req router.Requirement, 
 	bundle := hedgeAttemptBundle{c: fresh, a: a}
 	var err error
 	switch fresh.Deployment.ProviderType {
-	case "gemini", "vertex", "openai_responses", "azure_openai", "bedrock":
+	case "gemini", "vertex", "openai_responses", "azure_openai", "bedrock", "opencode-console", "opencode-go":
 		canReq, derr := canonical.DecodeOpenAIChatRequest(in, in.Model)
 		if derr != nil {
 			bundle.buildErr = boundedProtocolMappingError(derr)
 			return bundle, false
 		}
-		bundle, ok = s.finishCanonicalAttempt(bundle, canReq)
+		bundle, ok = s.finishCanonicalAttempt(bundle, canReq, providers.IngressOpenAIChat)
 		if !ok {
 			return hedgeAttemptBundle{}, false
 		}
@@ -347,13 +347,13 @@ func (s *Server) buildAnthropicAttempt(cand router.Scored, req router.Requiremen
 	bundle := hedgeAttemptBundle{c: fresh, a: a}
 	var err error
 	switch fresh.Deployment.ProviderType {
-	case "gemini", "vertex", "openai_responses", "bedrock":
+	case "gemini", "vertex", "openai_responses", "bedrock", "opencode-console", "opencode-go":
 		canReq, derr := canonical.DecodeAnthropicRequest(in, in.Model)
 		if derr != nil {
 			bundle.buildErr = boundedProtocolMappingError(derr)
 			return bundle, false
 		}
-		bundle, ok := s.finishCanonicalAttempt(bundle, canReq)
+		bundle, ok := s.finishCanonicalAttempt(bundle, canReq, providers.IngressAnthropic)
 		if !ok {
 			return hedgeAttemptBundle{}, false
 		}

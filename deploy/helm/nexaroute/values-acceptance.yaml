@@ -1,0 +1,89 @@
+# Acceptance values for scripts/k8s-acceptance.sh (disposable clusters only).
+#
+# These values are the least-privilege shape the acceptance run proves:
+# one replica on one ReadWriteOnce claim, a config Secret supplied by the
+# operator (never configJSON with secret-bearing fields), and database
+# wiring only as references to operator-managed Secrets. No connection
+# string, password, or key value appears in this file.
+#
+# image.tag is set by the script, not here: the live run builds the image
+# from the tree under test and loads it into kind, and the upgrade run
+# builds the preceding-release image the same way. Rendering with this
+# file alone resolves the tag from Chart.appVersion; see
+# docs/reports/K8S_ACCEPTANCE_2026-10-27.md for why that default is
+# currently v0.22.0 and must be pinned explicitly for a real upgrade test.
+replicaCount: 1
+
+image:
+  repository: ghcr.io/ali-shortcuts/nexaroute
+  tag: ""
+  # kind-loaded images are never pulled; the script overrides this to
+  # Never for the live run.
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+service:
+  type: ClusterIP
+  port: 8080
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: "1"
+    memory: 512Mi
+
+terminationGracePeriodSeconds: 120
+
+persistence:
+  enabled: true
+  size: 1Gi
+  storageClass: ""
+  accessMode: ReadWriteOnce
+  existingClaim: ""
+
+config:
+  # Operator-managed Secret holding `config.json`. The live script
+  # creates it from deploy/helm/nexaroute/acceptance-config.json (the
+  # stub-provider config) or from a providers-empty derivative of it
+  # for the base-install phase. This file's configJSON is therefore
+  # never used by the live run; it only shapes the offline render.
+  existingSecret: "nexaroute-accept-config"
+  configJSON: |
+    {
+      "listen": "0.0.0.0:8080",
+      "providers": []
+    }
+
+# Dummy external-secret references used by the leak check. The live
+# script creates these Secrets with sentinel (fake) values and then
+# proves the sentinels never appear in rendered manifests, events, or
+# pod logs. They are NOT wired into the booted gateway config: booting
+# against a dummy database URL would fail closed and is not a useful
+# readiness test. A real database-backed run is the optional
+# --with-postgres phase, which points the config at a real ephemeral
+# in-cluster PostgreSQL instead.
+controlPlane:
+  postgresDSN:
+    secretName: "nexaroute-accept-pg"
+    secretKey: "dsn"
+  redisURL:
+    secretName: ""
+    secretKey: "url"
+
+# The stub provider's key comes from the dummy secret too, so the live
+# run exercises a secretKeyRef env var on the real boot path.
+extraEnv:
+  - name: STUB_API_KEY
+    valueFrom:
+      secretKeyRef:
+        name: nexaroute-accept-stub
+        key: api-key
+
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}

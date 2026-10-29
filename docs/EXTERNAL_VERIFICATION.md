@@ -22,6 +22,14 @@ endpoints. Fixture tests and the exact invocations are documented in
 not external verification; the OIDC browser login procedure below remains
 manual.
 
+ComfyUI real-inference acceptance is a separate opt-in command,
+`nexaroute comfyui-accept --confirm-live`. It requires a provisioned ComfyUI
+server, a real compatible workflow/model, and `ffprobe`; it never downloads
+models. The command and its deterministic loopback negative-path tests are
+implemented, but **actual model inference remains NOT_RUN/BLOCKED** until an
+operator supplies a real installation and records the sanitized report. See
+`docs/reports/verification-slices/comfyui-real-inference-acceptance.md`.
+
 ## Status register — every external dependency
 
 One row per external dependency the gateway integrates with. A dependency
@@ -30,9 +38,9 @@ runbook procedure exists for it.
 
 | Dependency | Real-system status | Evidence / procedure |
 |---|---|---|
-| OIDC identity provider (browser login) | EXECUTED LOCALLY 2026-10-24 — full login flow PASS against a conforming local IdP (discovery, PKCE S256, JWKS verify, role mapping, session, fail-closed negatives); a live organizational tenant remains UNVERIFIED | §1 below; `docs/reports/LOCAL_ACCEPTANCE_2026-10-24.md` §3 |
-| HashiCorp Vault (KV helper) | EXECUTED LOCALLY 2026-10-24 — real Vault v2.2.1 (dev mode) round-trip via the shipped helper PASS; gateway key custody + decrypt verify PASS; wrong token fails closed; a production Vault cluster remains UNVERIFIED | §2 below; `docs/reports/LOCAL_ACCEPTANCE_2026-10-24.md` §5 |
-| HashiCorp Vault Transit envelope mode | NOT IMPLEMENTED — the helper loads a raw 32-byte master key into the gateway process; key material is never claimed to stay inside Vault | §2 below |
+| OIDC identity provider (browser login) | EXECUTED LOCALLY 2026-10-24; deterministic local coverage expanded 2026-10-27 (issuer pinning, JWKS overlap/rotation, unique state/nonce/PKCE, unmapped/ambiguous roles, logout revocation failure, audit/persistence failure) — live organizational tenant remains **BLOCKED/UNVERIFIED** because no operator-owned credentials/config were supplied | §1 below; `docs/reports/LOCAL_ACCEPTANCE_2026-10-24.md` §3; `docs/reports/OIDC_LIVE_TENANT_ACCEPTANCE_647.md` |
+| HashiCorp Vault (KV helper) | EXECUTED LOCALLY 2026-10-24 — real Vault v2.2.1 (dev mode) round-trip via the shipped helper PASS; gateway key custody + decrypt verify PASS; wrong token fails closed; a production Vault cluster remains UNVERIFIED. 2026-10-27: opt-in `vault-accept` automation added and fixture-tested, then executed live against a disposable non-dev single-node Vault (file storage, TLS, loopback): `vault-accept` PASS 10/12 (`evidence_class=loopback`), plus gateway boot, expired-token, outage, restart, and rotation-recovery checks PASS; a real operator staging run and HA/failover remain BLOCKED/NOT_RUN | §2 below; `docs/reports/LOCAL_ACCEPTANCE_2026-10-24.md` §5; `docs/reports/verification-slices/vault-kv-acceptance.md` |
+| HashiCorp Vault Transit envelope mode | IMPLEMENTED — `nxs2` envelope path and fake Vault Transit API contract tests pass; a real Vault Transit acceptance run is **NOT_RUN**, so no production/HSM claim is made | §2 below; `docs/adr/0007-vault-transit-envelope-encryption.md` |
 | OS keyring (secret-tool) | EXECUTED LOCALLY 2026-10-24 — real Secret Service (gnome-keyring) store/lookup PASS; gateway decrypt verify via the keyring provider PASS; a production desktop keyring remains operator-verified | §3 below; `docs/reports/LOCAL_ACCEPTANCE_2026-10-24.md` §6 |
 | LLM providers (OpenAI/Anthropic/Gemini-compatible upstreams) | UNVERIFIED — NOT_RUN; zero paid calls by policy | Executed evidence §"LLM providers" |
 | AWS Bedrock | UNVERIFIED — NOT_RUN (no AWS tenant/credentials) | Adapter covered by fixture/contract tests only |
@@ -42,7 +50,7 @@ runbook procedure exists for it.
 | Redis (control-plane, breaker store) | EXECUTED — integration suites PASS in CI and locally 2026-10-24 (with `-race`, incl. outage/recovery); a production deployment remains UNVERIFIED | `docs/reports/LOCAL_ACCEPTANCE_2026-10-24.md` §1 |
 | OpenTelemetry collector (OTLP ingestion) | EXECUTED 2026-10-24 — the real OpenTelemetry Collector v0.163.2 received and decoded a gateway span with the documented GenAI attributes; managed backends (Jaeger/Tempo/vendor APM) remain UNVERIFIED | `docs/reports/LOCAL_ACCEPTANCE_2026-10-24.md` §4 |
 | Kubernetes installation (Helm/manifests) | UNVERIFIED — NOT_RUN (no live cluster) | Helm lint/render checks only |
-| ComfyUI inference | UNVERIFIED — HTTP contract fixture-tested; real model inference not part of CI | See KNOWN_GAPS (video section) |
+| ComfyUI inference | UNVERIFIED — HTTP contract fixture-tested; opt-in `comfyui-accept` automation exists, but real model inference remains NOT_RUN/BLOCKED and is not part of CI; fixtures are not real inference | `docs/reports/verification-slices/comfyui-real-inference-acceptance.md`; See KNOWN_GAPS (video section) |
 
 ## 1. Real OIDC identity provider
 
@@ -51,7 +59,17 @@ in-process IdP, including discovery pinning, JWKS outage, tampered
 tokens, claim-to-role mapping, and — since M4-7 — JWKS key rotation:
 rollover logins work and tokens signed by a retired key are rejected
 (the gateway fetches the current JWKS on every callback rather than
-trusting a process-lifetime cache).
+trusting a process-lifetime cache). The deterministic suite also covers
+old-key logins during the overlap window, unique state/nonce/PKCE per
+transaction, unmapped/missing/conflicting/malformed role claims, failed
+logout revocation, and session/audit persistence failures. These are
+local protocol tests, not live-tenant evidence.
+
+The exact live-tenant checklist is **BLOCKED** until an operator supplies
+a real tenant and credentials:
+[`OIDC_LIVE_TENANT_ACCEPTANCE_647.md`](reports/OIDC_LIVE_TENANT_ACCEPTANCE_647.md).
+No credentials or configuration were available for this pass, so nothing
+below may be marked live-verified from the local suite alone.
 
 Procedure (any conformant provider — Keycloak, Auth0, Entra ID,
 Okta, Google):
@@ -85,12 +103,28 @@ protocol, and this repository ships a reference helper for Vault
 fake Vault HTTP API for request shape, token handling and
 fail-closed behavior.
 
-**Transit boundary (exact):** Vault Transit envelope mode — where
-key material never leaves Vault — is **not implemented** and cannot
-be used with the current provider contract, which loads a raw
-32-byte master key into the gateway process at startup. Deployments
-that require key material to never leave the HSM/KMS boundary must
-not treat NexaRoute as satisfying that requirement today.
+`nexaroute vault-accept` is the opt-in automation for the procedure
+below. It requires `--confirm-live` and an explicit empty KV v2
+`--ref`, refuses dev mode unless `--allow-dev` (and then labels the
+report non-production), never revokes the operator's primary token,
+rotates only a disposable acceptance entry, tests fail-closed wrong/
+revoked-token and unreachable-outage behavior, and writes a redacted
+JSON report (mode `0600`) with Vault version, topology,
+policy names, and per-check PASS/FAIL/BLOCKED/NOT_RUN. Exact
+invocations and the remaining BLOCKED/NOT_RUN items are in
+`docs/reports/verification-slices/vault-kv-acceptance.md`.
+
+**Transit boundary (exact):** Two Vault patterns are distinct. The
+`nxs1` KV v2 helper loads a raw 32-byte master key into the gateway
+process. The optional `nxs2` Vault Transit path keeps the Transit KEK
+inside Vault and returns only a short-lived per-secret DEK to the
+gateway. It is an explicit opt-in (`NEXAROUTE_KEY_PROVIDER=transit` with
+`NEXAROUTE_TRANSIT_ENABLED=true`)
+with strict timeouts, response-size limits, redirect rejection, redacted
+errors, and no local fallback. CI exercises the protocol against a fake
+Vault API only. **No real Vault Transit acceptance run has been
+executed**; do not claim HSM/KMS isolation or production readiness until
+the procedure below is run and recorded.
 
 Procedure:
 
@@ -112,6 +146,34 @@ commands only), Vault HA failover mid-startup, and any
 AppRole/Kubernetes auth flow (the helper takes a static token from
 the environment; token acquisition is the operator's supervisor's
 job).
+
+### Vault Transit (`nxs2`) acceptance procedure — NOT_RUN
+
+Run this only in a disposable environment with operator-authorized
+credentials. It is intentionally separate from CI.
+
+1. Enable a Transit mount and key (for example `transit/nexaroute`).
+   Grant a policy with `encrypt`, `decrypt`, and `rewrap` on that key only.
+2. Export `NEXAROUTE_KEY_PROVIDER=transit`,
+   `NEXAROUTE_TRANSIT_ENABLED=true`, `VAULT_ADDR`, `VAULT_TOKEN` (or
+   `VAULT_TOKEN_FILE`), `NEXAROUTE_TRANSIT_MOUNT`, and
+   `NEXAROUTE_TRANSIT_KEY`.
+3. Start from a disposable config containing one secret. Evidence:
+   the stored value is `nxs2:`, `nexaroute secrets verify` passes, and
+   no `<config>.key` file is created.
+4. Deny the token's `decrypt` capability (or use a wrong token). Evidence:
+   startup and `secrets verify` fail closed with no local-key fallback.
+5. Rotate the Transit key and run `nexaroute secrets rewrap-transit`; verify the
+   wrapped DEK moved to the new key version and the secret still decrypts.
+   Then disable the old key version only after verification.
+6. Tamper with the stored envelope or move it to another field. Evidence:
+   authentication fails.
+7. Record Vault version, mount/key (redacted if sensitive), policy
+   capabilities, dates, command exit codes, and redacted report paths.
+
+A fake-API test is not live acceptance. Until this procedure is executed
+and its evidence is committed under a repository-owned path, the status
+remains **NOT_RUN / UNVERIFIED**.
 
 ## 3. Headless OS keyring
 
