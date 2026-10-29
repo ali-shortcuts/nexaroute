@@ -539,7 +539,13 @@ func (t adapterTransport) RedactBody(b []byte) []byte {
 // provider family (openai_chat | anthropic | gemini | openai_responses) and
 // completes the dispatch bundle, including model-in-path addressing for
 // Gemini and Responses-native upstreams.
-func (s *Server) finishCanonicalAttempt(bundle hedgeAttemptBundle, canReq canonical.Request) (hedgeAttemptBundle, bool) {
+//
+// ingressKind is the CLIENT ingress ("openai_chat", "openai_responses",
+// "anthropic"). For OpenCode providers the upstream protocol is selected
+// by ingress kind alone, and bundle.path is always the documented
+// opencode path, so a repair or hedged re-attempt can never fall back
+// to the generic chat path.
+func (s *Server) finishCanonicalAttempt(bundle hedgeAttemptBundle, canReq canonical.Request, ingressKind string) (hedgeAttemptBundle, bool) {
 	p, ok := s.providerConfigFor(bundle.c.Deployment.ProviderID)
 	if !ok {
 		return bundle, false
@@ -548,6 +554,44 @@ func (s *Server) finishCanonicalAttempt(bundle hedgeAttemptBundle, canReq canoni
 	// produced this attempt. Keep definitions with the bundle so retries and
 	// hedged winner rebinding cannot accidentally lose them.
 	bundle.toolDefs = append([]canonical.ToolDef(nil), canReq.Tools...)
+	if providers.IsOpencodeType(p.Type) {
+		path, ok := providers.OpencodePathForIngress(ingressKind)
+		if !ok {
+			// Unknown ingress: fail closed. Returning false marks
+			// this candidate unbuildable, so no request is ever sent
+			// to the opencode upstream in a protocol the caller did
+			// not ask for (a silent chat fallback would misroute a
+			// Gemini/unknown ingress and invent a path).
+			return bundle, false
+		}
+		kind := providers.OpencodeCanonicalKind(ingressKind)
+		bundle.canonicalKind = kind
+		var payload []byte
+		var err error
+		switch kind {
+		case "anthropic":
+			var an core.AnthropicRequest
+			an, err = canonical.EncodeAnthropicRequest(canReq, bundle.c.Deployment.Model)
+			if err == nil {
+				payload, err = json.Marshal(an)
+			}
+		case "openai_responses":
+			payload, err = canonical.EncodeResponsesRequest(canReq, bundle.c.Deployment.Model)
+		default:
+			var oai core.OpenAIRequest
+			oai, err = canonical.EncodeOpenAIChatRequest(canReq, bundle.c.Deployment.Model, canReq.Stream)
+			if err == nil {
+				payload, err = json.Marshal(oai)
+			}
+		}
+		if err != nil {
+			s.bus.Add(events.Event{Kind: "encode_fail", Deployment: bundle.c.Deployment.ID, Message: err.Error(), ErrorType: "canonical_encode_failed"})
+			return bundle, false
+		}
+		bundle.path = path
+		bundle.payload = payload
+		return bundle, true
+	}
 	kind := upstreamKindFor(p.Type)
 	bundle.canonicalKind = kind
 	var payload []byte

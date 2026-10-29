@@ -16,6 +16,7 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/providers"
 	"github.com/ali-shortcuts/nexaroute/internal/router"
 	"github.com/ali-shortcuts/nexaroute/internal/translate"
+	"github.com/ali-shortcuts/nexaroute/internal/usage"
 )
 
 // openAIStructuredRequested reports whether a raw OpenAI
@@ -204,6 +205,8 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 	profile := profileFromRequirement(req, nil)
 	routeCtx, routeCancel := routeContext(r.Context(), in.Stream, cfg.RequestTimeout())
 	routeCtx = providers.WithQuotaEstimate(routeCtx, req.EstimatedInputTokens, req.MaxOutputTokens)
+	routeCtx = providers.WithSessionKey(routeCtx, req.SessionKey)
+	routeCtx = providers.WithClientScope(routeCtx, clientScopeForSession(r))
 	defer routeCancel()
 	var lastErr string
 	var lastStatus int
@@ -306,6 +309,10 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 					s.hm.RecordFailure(c.Deployment.ID, lastErr, headerLatency)
 				}
 				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_timeout", Deployment: c.Deployment.ID, Message: lastErr, ErrorType: "provider_timeout", LatencyMS: headerLatency.Milliseconds()})
+				// A gateway-deadline timeout after dispatch is an
+				// ambiguous outcome even though no replay follows:
+				// the provider may have executed the request.
+				s.emitAmbiguousOutcome(r.Header.Get("x-request-id"), c.Deployment.ID, e, headerLatency)
 				break
 			}
 			s.hm.RecordProviderFailure(c.Deployment.ProviderID, c.Deployment.ID, lastErr)
@@ -317,6 +324,7 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 				s.hm.RecordFailure(c.Deployment.ID, lastErr, headerLatency)
 			}
 			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_fail", Deployment: c.Deployment.ID, Message: lastErr, ErrorType: "provider_connection_failed", FailoverClass: "transient_transport", LatencyMS: headerLatency.Milliseconds()})
+			s.emitAmbiguousOutcome(r.Header.Get("x-request-id"), c.Deployment.ID, e, headerLatency)
 			s.emitProductionEvent(r.Header.Get("x-request-id"), ProductionEventModelFailed, c.Deployment.ID, lastErr, events.Event{ErrorType: "provider_connection_failed", LatencyMS: headerLatency.Milliseconds()})
 			if attempts < max && i+1 < len(candidates) {
 				s.autopilotRecordFailover(autopilotRequestKeyFromContext(r.Context(), r.Header.Get("x-request-id")))
@@ -368,6 +376,9 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 				policy.Failover = true
 				policy.SignalProvider = false
 				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "model_unavailable", Deployment: c.Deployment.ID, Message: "upstream model temporarily unavailable", ErrorType: string(cls.Class), StatusCode: resp.StatusCode})
+			}
+			if applyOpencodeEntitlementOverride(c.Deployment.ProviderType, resp.StatusCode, &cls, &policy) {
+				lastErr = opencodeEntitlementDiagnostic
 			}
 			s.recordProviderFailure(c.Deployment.ProviderID, c.Deployment.ID, lastErr, policy, string(ti.Profile.Type))
 			cooldownEntered := false
@@ -466,9 +477,9 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 				inputTokens, outputTokens, e = s.proxyOpenAINativeJSON(w, r, resp, c.Deployment.ID, cacheKey, cacheGeneration, cacheable, semCtx)
 			}
 		case in.Stream:
-			e = streamAnthropicToOpenAIWithUsage(w, resp, in.Model, nm, func(prompt, completion int) {
-				inputTokens, outputTokens = prompt, completion
-				s.recordUsage(r, c.Deployment.ID, int64(prompt), int64(completion))
+			e = streamAnthropicToOpenAIWithUsage(w, resp, in.Model, nm, func(u usage.Counts) {
+				inputTokens, outputTokens = int(u.Input), int(u.Output)
+				s.recordUsageEx(r, c.Deployment.ID, u, false)
 			}, r.Header.Get("x-request-id"))
 		default:
 			var an core.AnthResponse
@@ -617,7 +628,7 @@ func streamAnthropicToOpenAI(w http.ResponseWriter, resp *http.Response, model s
 	return streamAnthropicToOpenAIWithUsage(w, resp, model, nm, nil, requestID...)
 }
 
-func streamAnthropicToOpenAIWithUsage(w http.ResponseWriter, resp *http.Response, model string, nm *translate.NameMap, usageSink func(prompt, completion int), requestID ...string) error {
+func streamAnthropicToOpenAIWithUsage(w http.ResponseWriter, resp *http.Response, model string, nm *translate.NameMap, usageSink func(usage.Counts), requestID ...string) error {
 	defer resp.Body.Close()
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -831,7 +842,7 @@ func streamAnthropicToOpenAIWithUsage(w http.ResponseWriter, resp *http.Response
 		fl.Flush()
 	}
 	if usageSink != nil && usageSeen {
-		usageSink(inputTokens, outputTokens)
+		usageSink(usage.Counts{Input: int64(inputTokens), Output: int64(outputTokens), CacheRead: int64(cacheReadTokens), CacheWrite: int64(cacheCreationTokens)})
 	}
 	return nil
 }

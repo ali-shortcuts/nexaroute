@@ -90,6 +90,8 @@ func configuredProvider() (KeyProvider, string, bool, error) {
 		return CommandProvider{Command: os.Getenv("NEXAROUTE_KEY_PROVIDER_COMMAND")}, ref, true, nil
 	case "keyring":
 		return newKeyringProvider(), "nexaroute/master-key", true, nil
+	case "vault-transit", "transit":
+		return nil, "", false, errors.New("Vault Transit is an envelope-key provider and cannot supply a raw master key; use LoadCipher")
 	default:
 		return nil, "", false, fmt.Errorf("unsupported NEXAROUTE_KEY_PROVIDER")
 	}

@@ -10,6 +10,7 @@ import re
 import os
 from pathlib import Path
 import shutil
+import sys
 import socket
 import subprocess
 import tempfile
@@ -20,7 +21,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from playwright.sync_api import expect, sync_playwright
 
 ROOT = Path(__file__).resolve().parent.parent
-EVIDENCE = ROOT / "specs/014-control-plane-rebuild/live-visual-agent/evidence"
+# Under the acceptance runner this points at the run's diagnostics
+# directory; direct runs keep the historical evidence path.
+EVIDENCE = Path(os.environ["NEXAROUTE_LIVE_VISUAL_EVIDENCE_DIR"]) if os.environ.get("NEXAROUTE_LIVE_VISUAL_EVIDENCE_DIR") else ROOT / "specs/014-control-plane-rebuild/live-visual-agent/evidence"
 
 
 def free_port() -> int:
@@ -53,7 +56,10 @@ class UpstreamHandler(BaseHTTPRequestHandler):
 
 
 def wait_ready(base: str, proc: subprocess.Popen[str]) -> None:
-    deadline = time.time() + 60
+    # Startup tolerance for a loaded machine: `go run` compiles
+    # the gateway before it can answer /healthz. This bounds only
+    # startup, never an acceptance assertion.
+    deadline = time.time() + 120
     while time.time() < deadline:
         if proc.poll() is not None:
             raise AssertionError(f"gateway exited with {proc.returncode}")
@@ -67,9 +73,12 @@ def wait_ready(base: str, proc: subprocess.Popen[str]) -> None:
 
 
 def main() -> None:
-    chromium = shutil.which("chromium") or shutil.which("google-chrome")
+    # See test-browser-e2e.py: the runner may point this at Playwright's
+    # bundled Chromium, and exit 2 + SKIPPED is the skip contract.
+    chromium = os.environ.get("NEXAROUTE_CHROMIUM_BIN") or shutil.which("chromium") or shutil.which("google-chrome")
     if not chromium:
-        raise SystemExit("SKIP: Chromium is not installed")
+        print("BROWSER SUITE: SKIPPED: Chromium is not installed", file=sys.stderr)
+        raise SystemExit(2)
     EVIDENCE.mkdir(parents=True, exist_ok=True)
     first = ThreadingHTTPServer(("127.0.0.1", 0), UpstreamHandler)
     second = ThreadingHTTPServer(("127.0.0.1", 0), type("HealthyHandler", (UpstreamHandler,), {"healthy": True, "delay": 0.8}))
@@ -83,7 +92,13 @@ def main() -> None:
         config["probe"]["enabled"] = False
         config["probe"]["on_start"] = False
         config["routing"]["max_attempts"] = 2
-        config["routing"]["strategy"] = "adaptive"
+        # "adaptive" was removed as a strategy by the #610 cleanup
+        # (unimplemented); adaptive_round_robin is the surviving
+        # adaptive strategy. The suite's failover drill uses an
+        # explicitly ordered route, so this only sets the gateway
+        # default; with "adaptive" the gateway exits at config
+        # validation and the suite can never run.
+        config["routing"]["strategy"] = "adaptive_round_robin"
         config["listen"] = f"127.0.0.1:{free_port()}"
         config_path = tmp_path / "config.json"
         config_path.write_text(json.dumps(config))
@@ -125,7 +140,16 @@ def main() -> None:
                 request_id = "lva-real-failover-001"
                 page.evaluate("""(requestId) => { window.liveRequest = fetch('/v1/chat/completions', { method: 'POST', headers: {'content-type':'application/json','x-request-id': requestId}, body: JSON.stringify({model:'coding',messages:[{role:'user',content:'hello'}]}) }); }""", request_id)
                 expect(page.locator(".topology")).to_have_attribute("data-execution-status", re.compile("active|failover"))
-                page.screenshot(path=str(EVIDENCE / "lva-active-failover.png"), full_page=True)
+                # No slow step (e.g. a full-page screenshot) may sit
+                # between the terminal event and the success assertion:
+                # visual-agent.js holds "success" for only
+                # TERMINAL_SETTLE_MS (4000 ms) before the execution is
+                # deleted and the topology returns to "idle". A slow
+                # screenshot here previously let that window close under
+                # load, failing the success check with status "idle"
+                # even though the failover journey had succeeded. The
+                # active state is still recorded in metrics below, and
+                # the journey itself is asserted from snapshot events.
                 metrics["active"] = page.evaluate("""() => ({ dom_nodes: document.querySelectorAll('*').length, execution_status: document.querySelector('.topology')?.dataset.executionStatus || null, heap_bytes: performance.memory?.usedJSHeapSize || null })""")
                 response_status = page.evaluate("async () => (await window.liveRequest).status")
                 if response_status != 200:

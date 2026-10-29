@@ -12,6 +12,19 @@ NEXAROUTE_LOG_FILE                override bounded log path; "off" disables the 
 NEXAROUTE_STRICT_CONFIG           true/false opt-in strict config validation (see below)
 NEXAROUTE_MASTER_KEY              base64-encoded 32-byte master key (overrides file sources)
 NEXAROUTE_MASTER_KEY_FILE         path to a raw 32-byte master key with mode 0600
+NEXAROUTE_KEY_PROVIDER            file|env|command|kms|keyring|transit
+NEXAROUTE_KEY_PROVIDER_ENV        environment variable name for the env provider
+NEXAROUTE_KEY_PROVIDER_COMMAND    helper executable for the command/kms provider
+NEXAROUTE_KEY_PROVIDER_REF        reference passed to the command/keyring provider
+NEXAROUTE_TRANSIT_ENABLED         must be exactly "true" to enable Transit mode (with NEXAROUTE_KEY_PROVIDER=transit)
+VAULT_ADDR                        Vault address for Transit (https, or http on loopback only)
+VAULT_TOKEN                       Vault token for Transit (never written to config)
+VAULT_TOKEN_FILE                  file holding the Vault token, mode exactly 0600 (xor VAULT_TOKEN)
+NEXAROUTE_TRANSIT_MOUNT           Transit mount, required, no default (multi-segment allowed)
+NEXAROUTE_TRANSIT_KEY             Transit key name, required, no default
+VAULT_NAMESPACE                   optional Vault namespace, sent as X-Vault-Namespace
+NEXAROUTE_LEGACY_MASTER_KEY       base64 legacy nxs1 key for migrate-to-transit (or _FILE)
+NEXAROUTE_LEGACY_MASTER_KEY_FILE  legacy nxs1 key file with mode 0600 for migrate-to-transit
 ```
 
 ## Encrypted secrets and master-key setup
@@ -50,6 +63,67 @@ secure offline copy of each config/key pair before rotating again; the fixed
 `.key.previous` filename is overwritten by the next rotation. Never delete or
 regenerate a key to recover a config. See [the operations runbook](OPERATIONS.md)
 for backup, restore, and interruption procedures.
+
+### Vault Transit envelope mode (`nxs2`)
+
+`NEXAROUTE_KEY_PROVIDER=transit` with `NEXAROUTE_TRANSIT_ENABLED=true` is an explicit opt-in that wraps each
+per-secret data key through Vault Transit instead of loading a raw master key
+into the gateway. The Transit KEK stays in Vault; only the short-lived DEK is
+returned to the gateway. Configure:
+
+```bash
+export NEXAROUTE_KEY_PROVIDER=transit
+export NEXAROUTE_TRANSIT_ENABLED=true
+export VAULT_ADDR=https://vault.example:8200
+export VAULT_TOKEN=...          # inject from a secret manager
+export NEXAROUTE_TRANSIT_MOUNT=transit
+export NEXAROUTE_TRANSIT_KEY=nexaroute
+```
+
+Vault policy needs `encrypt`, `decrypt`, and `rewrap` on the configured key.
+There is no fallback to `<config>.key`, `NEXAROUTE_MASTER_KEY`, or a raw-key
+provider; combining Transit mode with any raw-key source is a configuration
+error. A missing token, denied policy, timeout, wrong key reference, or
+tampered envelope fails closed. Existing `nxs1` configs are rejected in Transit
+mode and must be migrated explicitly:
+
+```bash
+# The legacy key is the exact nxs1 master key; it is never stored in the config.
+# It is demanded only when nxs1 is actually present.
+nexaroute secrets migrate-to-transit --config "$CONFIG" --legacy-key-file /secure/old.key
+nexaroute secrets verify --config "$CONFIG"
+```
+
+Migration proves Transit connectivity with a canary, writes a verbatim
+timestamped `.pre-transit.bak` copy of the pre-migration bytes (mode `0600`,
+SHA-256 reported), decrypt-verifies in memory, and atomically replaces the
+config; a post-write verification failure rolls back to the backup. An
+already-migrated config is verified only: nothing is written and no backup is
+created. Plaintext fields are never auto-migrated: they fail with an
+explicit-migration message. To move wrapped data
+keys to the latest Vault key version, run:
+
+```bash
+nexaroute secrets rewrap-transit --config "$CONFIG"
+nexaroute secrets verify --config "$CONFIG"
+```
+
+`rewrap-transit` decrypt-verifies before and after, calls only the Transit
+`rewrap` endpoint, writes a verbatim `.pre-rewrap.bak`, and writes nothing
+when already at the latest version. Both commands accept `--dry-run`.
+`secrets rotate` refuses Transit mode. `secrets status` reports `nxs1_fields`
+and `nxs2_fields` separately plus `transit_key_versions`. Saves in Transit
+mode preserve unchanged `nxs2` envelopes byte-for-byte and seal only genuinely
+new or changed plaintext fields. Backups of `nxs2` configs record
+`envelope_versions`, `transit_key_ref_sha256`, and `transit_key_versions`,
+reject `--include-master-key`, and can only be restored where Vault Transit is
+available.
+
+`rewrap` writes an authenticated backup and replaces the config atomically. Do
+not disable an old Transit key version until rewrap and verification succeed.
+Transit mode is fake-API tested in CI but has **no real Vault Transit acceptance
+evidence**; see [EXTERNAL_VERIFICATION.md](EXTERNAL_VERIFICATION.md). Do not claim
+production/HSM verification for a deployment until that run is recorded.
 
 ## Optional shared control plane
 
@@ -227,6 +301,8 @@ gemini                Google Gemini wire format, x-goog-api-key auth
 azure_openai          Azure OpenAI (M5-1a)
 vertex                Google Vertex AI (M5-1a)
 bedrock               Amazon Bedrock Converse API, SigV4 auth (M5-1b)
+opencode-console      OpenCode Console gateway, bearer <redacted>, ingress-selected /openai|/anthropic paths
+opencode-go           OpenCode Go gateway, bearer <redacted>, ingress-selected paths + derived x-opencode-session
 ```
 
 (When the M5-1a PR also lands, this list gains `azure_openai` and `vertex`.)
@@ -246,6 +322,12 @@ A provider is generic; adding another OpenAI-compatible endpoint should normally
 
 Documented limits: one credential pair per Bedrock provider (the credential-rotation pool does not apply); `tool_choice: "none"` withholds the tools because Converse has no none mode; reasoning/thinking blocks are not encoded to Converse (model-specific); document blocks are not mapped. Prompt-cache markers (`cache_control`) on system and message content (text and tool_use/tool_result blocks) are emitted as Converse `cachePoint` checkpoints (`{"type": "default"}`, plus `"ttl": "1h"` for 1h markers) on both `/converse` and `/converse-stream`; at most 4 checkpoints per request (excess markers are dropped, content never is); per-checkpoint minimum tokens are enforced server-side by Bedrock (below-threshold prefixes still return 200, just uncached); `ttl: 1h` requires a model that supports it. No per-tool-definition checkpoint is emitted (the IR carries no such marker).
 
+**OpenCode upstream** (`opencode-console`, `opencode-go`) speaks three protocols behind one gateway base, selected by the *client ingress*, never by model id: OpenAI chat ingress → `{base}/openai/v1/chat/completions`, Responses ingress → `{base}/openai/v1/responses`, Anthropic ingress → `{base}/anthropic/v1/messages`. Console base is `https://opencode.ai/inference` (pay-as-you-go); Go base is `https://opencode.ai/inference/go` (subscription). Authentication is Bearer. Console documents a models listing at `{base}/v1/models`, so Console supports discovery; Go documents no listing endpoint, so Go discovery is unsupported and models are saved manually — the gateway never assumes a Go listing URL. There is no Zen profile: no Zen URL appears in the documented Console/Go material, so none is shipped. All opencode requests run through the canonical-IR path (never legacy passthrough), so usage, tool calls, and error envelopes follow the canonical contract; see `docs/COMPATIBILITY.md` for the fixture-verified dimensions (live opencode.ai behavior is UNVERIFIED).
+
+Go requests carry a derived `x-opencode-session` header; Console requests do not get a gateway-derived header (Console operators who want client values forwarded may list the header in `forward_headers`). The Go value is `ses_` + the first 32 hex chars of SHA-256 over the gateway session key plus a salt (`opencode_session_salt`, a non-secret operator-configurable domain separator; empty means the documented default `nexaroute-opencode-session-v1`). A client-supplied `x-opencode-session` (via `forward_headers`) is forwarded unchanged and never overwritten. With no session key, the fallback is deterministic over provider id + model + salt. The header is never derived from an API key, email, prompt text, or user id, never uses the per-request id as a session, and is never logged. Separately, credential-level session affinity pins one conversation's requests to one credential (by session hash, bounded, 1h TTL) while that credential stays healthy and eligible, falling back to normal selection otherwise; it is distinct from router deployment pinning and from the header value itself.
+
+A 403 from an opencode provider is classified as a model-entitlement denial, not a credential failure: the credential is not cooled, no other credential is tried for the same restricted model in the same request, and no deployment failover or quarantine follows. The client receives a diagnostic naming the restriction and the documented next step (use a paid model or a Go subscription, or pick a model the plan includes). The classification is status-based — no distinguishing error body is documented — so a genuinely invalid opencode key returning 403 surfaces the same diagnostic on that request; the next request re-evaluates independently and other models on the same key are not poisoned. Generic providers are unaffected: their 403 still cools the credential exactly as before.
+
 ## Provider credentials
 
 A provider may use a primary key plus additional credentials:
@@ -261,6 +343,25 @@ A provider may use a primary key plus additional credentials:
 ```
 
 Usable keys rotate. Auth/quota/rate-limit failures cool an individual credential so another key can be tried.
+
+Credential selection, in order, inside the adapter: (1) eligibility — enabled, not cooling (cooldown expiry restores a credential with no operator action; cooldown never flips `enabled` and never deletes an entry); (2) the minimum `priority` tier among available credentials (`priority` is an integer, default 0); (3) the credential-level session-affinity pin, only while that credential stays healthy and eligible; (4) the least-loaded tournament with effective load `Active/weight` (`weight` defaults to 1 when 0; a lower effective load wins, then fewer failures, then never-failed). With every priority 0 and weight 1, selection is exactly the legacy tournament. Capacity comes only from the configured provider `max_concurrency` and in-flight counts — there is no per-key soft capacity constant, and spreading load does not make quotas infinite: if total demand exceeds the sum of authorized quotas, rate limits will still be hit.
+
+Each pool entry may also carry `email` (metadata only — authentication never uses it; admin surfaces show it masked, never in full, and it never appears in logs, traces, or credential-state output). Per-credential live state (index, name, tier, weight, last status, failures, in-flight count, cooling) is exposed redacted on the provider detail response when a live adapter exists, and the provider-test, discovery, and connection-test endpoints accept `credential_index` to test exactly one pool entry (out-of-range or disabled is a 400). Replacing the primary key with `replace_key` and an empty-array
+`credentials` placeholder (what the UI sends when only the primary
+key changes) preserves the pool; a nil/omitted credentials list
+clears it and a non-empty list replaces it, per the tested
+whole-set replacement semantics. Clearing the pool requires an explicit `credential_pool` replace with empty entries. Two related
+contracts, regression-tested at the admin API: (1) `secret_source`
+on the provider detail response reports the PRIMARY credential's
+source (`literal` / `env` / `pool` / `none`), not whether a
+supplementary pool exists — so a primary replacement that preserves
+a pool still reports `literal`, and a pool-only provider reports
+`pool`; (2) an explicit clear (`replace_key` with no primary
+credential at all, the UI's clear-secret checkbox) clears the
+primary AND the pool, so nothing remains configured — the
+pool-preservation placeholder never applies to a clear. The admin UI renders per-credential state and a per-row Test button. A best-effort audit event is recorded per provider mutation naming the provider id and pool indices changed, never values.
+
+Honest bounds (not claims): there is no "never hit a rate limit" or "infinite speed" guarantee — latency is bounded below by upstream plus network plus tokens. Streams are not passed through zero-copy wholesale: usage accounting, protocol translation, tool-call handling, and redaction still run on these paths. Rolling latency routing, token-aware balancing, and cross-instance credential state are not shipped (deferred/future work). Compatibility is per provider, model, protocol, and feature in `docs/COMPATIBILITY.md` — never "all models/providers".
 
 ## Global egress policy
 
@@ -986,7 +1087,7 @@ For the Universal AI-to-Video engine (`code-render` provider), set `code_render_
 
 For local narration, set `piper_enabled` to `true`, `piper_binary` to the installed Piper CLI path (or `piper` if it is on `PATH`), and `piper_model_path` to an existing `.onnx` voice model. Its matching `.onnx.json` sidecar must sit beside it. Model paths may be relative to the gateway configuration directory. Piper is optional; when disabled, requests containing narration text or subtitle intent fail before any video provider is submitted.
 
-When using the local ComfyUI adapter, set `comfyui_enabled` to `true`, point `comfyui_base_url` to the local ComfyUI API (default `http://127.0.0.1:8188`), and set `comfyui_workflow_path` to an API-format workflow JSON file readable by the gateway process. Fill the required prompt, width, height, and frame-count node IDs to match that workflow. Negative-prompt, FPS, and seed node IDs are optional; their input names default to the values shown above. The adapter currently supports text-to-video only and rejects requests asking it to synthesize narration, audio, dialogue, or subtitles. Plain HTTP ComfyUI endpoints are restricted to loopback; use HTTPS for remote endpoints.
+When using the local ComfyUI adapter, set `comfyui_enabled` to `true`, point `comfyui_base_url` to the local ComfyUI API (default `http://127.0.0.1:8188`), and set `comfyui_workflow_path` to an API-format workflow JSON file readable by the gateway process. Fill the required prompt, width, height, and frame-count node IDs to match that workflow. Negative-prompt, FPS, and seed node IDs are optional; their input names default to the values shown above. The adapter currently supports text-to-video only and rejects requests asking it to synthesize narration, audio, dialogue, or subtitles. Plain HTTP ComfyUI endpoints are restricted to loopback; use HTTPS for remote endpoints. Real model inference is not run by CI. After provisioning a real ComfyUI instance and compatible workflow, run `nexaroute comfyui-accept --config <config> --confirm-live` and keep the sanitized report; see [ComfyUI real-inference acceptance](reports/verification-slices/comfyui-real-inference-acceptance.md).
 
 `store_path` and `storage_root` may be absolute or relative to the gateway's
 runtime base directory. The JSON store, queue and cost ledger are single-process;
