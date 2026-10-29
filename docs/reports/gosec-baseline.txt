@@ -11,6 +11,12 @@
 #   gosec -quiet -fmt=json -out=gosec.json ./...
 #   python3 scripts/gosec-baseline.py write gosec.json docs/reports/gosec-baseline.txt
 # and review the diff like code.
+G104	cmd/gateway/qualitygate.go	os.Remove(tmpName)
+G104	cmd/gateway/qualitygate.go	os.Remove(tmpName)
+G104	cmd/gateway/qualitygate.go	os.Remove(tmpName)
+G104	cmd/gateway/qualitygate.go	os.Remove(tmpName)
+G104	cmd/gateway/qualitygate.go	stdout.Write(append(out, '\n'))
+G104	cmd/gateway/qualitygate.go	tmp.Close()
 G202	internal/nexaflow/postgres_store.go	query += ` LIMIT $` + strconv.Itoa(len(args))
 G304	cmd/gateway/backup.go	data, err := os.ReadFile(filepath.Join(journalDir, "manifest.json"))
 G304	cmd/gateway/backup.go	data, err := os.ReadFile(path)
@@ -21,21 +27,26 @@ G304	cmd/gateway/backup.go	fh, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|o
 G304	cmd/gateway/backup.go	if data, rerr = os.ReadFile(filepath.Join(journalDir, entry.Saved)); rerr == nil {
 G304	cmd/gateway/backup.go	if data, rerr = os.ReadFile(filepath.Join(journalDir, entry.Saved)); rerr == nil {
 G304	cmd/gateway/backup.go	if keyBytes, err := os.ReadFile(configPath + ".key"); err == nil && sha256Hex(keyBytes) != manifest.MasterKeySHA256 {
+G304	cmd/gateway/diagnostics.go	f, err := os.Open(path)
+G304	cmd/gateway/diagnostics.go	if d, err := os.Open(dir); err == nil {
 G304	cmd/gateway/doctor.go	raw, err := os.ReadFile(configPath)
 G304	cmd/gateway/doctor.go	raw, err := os.ReadFile(path)
 G304	cmd/gateway/policy.go	f, err := os.Open(path)
 G304	cmd/gateway/policy.go	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 G304	cmd/gateway/policy.go	raw, err := os.ReadFile(path)
 G304	cmd/gateway/policy.go	raw, err := os.ReadFile(path)
+G304	cmd/gateway/qualitygate.go	return os.ReadFile(path)
 G304	cmd/gateway/restore_verify.go	fh, err := os.Open(path)
 G304	cmd/gateway/restore_verify.go	got, err := os.ReadFile(target)
 G304	cmd/gateway/restore_verify.go	if b, err := os.ReadFile(configPath + ".key"); err == nil {
 G304	cmd/gateway/restore_verify.go	if b, err := os.ReadFile(f); err == nil {
 G304	cmd/gateway/restore_verify.go	} else if b, err := os.ReadFile(configPath + ".key"); err == nil {
+G304	cmd/gateway/secrets.go	b, err := os.ReadFile(file)
 G304	cmd/gateway/secrets.go	if x, err := os.Open(path); err == nil {
 G304	internal/config/config.go	f, err := os.Open(path)
 G304	internal/config/config.go	if d, err := os.Open(dir); err == nil {
 G304	internal/config/config.go	if raw, err := os.ReadFile(path); err == nil {
+G304	internal/config/config.go	if stored, rerr := os.ReadFile(path); rerr == nil {
 G304	internal/controlplane/filelock_linux.go	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600)
 G304	internal/controlplane/filestore.go	data, err := os.ReadFile(backup)
 G304	internal/controlplane/filestore.go	data, err := os.ReadFile(path)
@@ -50,13 +61,19 @@ G304	internal/nexaflow/file_store.go	raw, err := os.ReadFile(path)
 G304	internal/nexaflow/filelock_unix.go	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 G304	internal/nexaflow/task8_delivery.go	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 G304	internal/nexaflow/task8_migrate.go	raw, err := os.ReadFile(path)
+G304	internal/secrets/filelock_linux.go	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600)
+G304	internal/secrets/migration.go	raw, err := os.ReadFile(backupName)
+G304	internal/secrets/migration.go	raw, err := os.ReadFile(path)
+G304	internal/secrets/migration.go	raw, err := os.ReadFile(path)
+G304	internal/secrets/migration.go	raw, err := os.ReadFile(path)
 G304	internal/secrets/secrets.go	b, e := os.ReadFile(p)
 G304	internal/secrets/secrets.go	b, err := os.ReadFile(path)
 G304	internal/secrets/secrets.go	f, e := os.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 G304	internal/secrets/secrets.go	if d, err := os.Open(path); err == nil {
-G304	internal/secrets/secrets.go	if raw, err := os.ReadFile(configPath); err == nil && strings.Contains(string(raw), Prefix) {
+G304	internal/secrets/secrets.go	if raw, err := os.ReadFile(configPath); err == nil && HasEnvelopes(raw) {
 G304	internal/secrets/secrets.go	raw, err := os.ReadFile(configPath)
 G304	internal/secrets/secrets.go	raw, err := os.ReadFile(configPath)
+G304	internal/secrets/vault_transit.go	b, err := os.ReadFile(tokenFile)
 G304	internal/transport/tls.go	pem, err := os.ReadFile(caPath)
 G304	internal/video/audio/piper.go	f, err := os.Open(path)
 G304	internal/video/audio/piper.go	text, err := os.ReadFile(textPath)
@@ -70,16 +87,22 @@ G304	internal/video/queue/file_store.go	if d, openErr := os.Open(dir); openErr =
 G304	internal/video/queue/file_store.go	if data, err := os.ReadFile(path); err == nil {
 G304	internal/video/storage/local_filesystem.go	if d, openErr := os.Open(dir); openErr == nil {
 G304	internal/video/tts/audio.go	file, err := os.Open(path)
+G404	internal/secrets/vault_transit.go	jitter := time.Duration(rand.IntN(50)) * time.Millisecond
+G602	internal/secrets/vault_transit.go	case <-time.After(backoffs[attempt-1] + jitter):
 G703	cmd/gateway/backup.go	if err := os.WriteFile(filepath.Join(stage, name), data, 0o600); err != nil {
 G703	cmd/gateway/restore_verify.go	if b, err := os.ReadFile(f); err == nil {
 G703	cmd/gateway/restore_verify.go	if err := os.WriteFile(stagedConfig+".key", b, 0o600); err != nil {
 G703	cmd/gateway/secrets.go	b, e := os.ReadFile(*path)
 G703	cmd/gateway/secrets.go	b, e := os.ReadFile(*path)
 G703	cmd/gateway/secrets.go	b, e := os.ReadFile(*path)
+G703	cmd/gateway/secrets.go	b, err := os.ReadFile(file)
 G703	cmd/gateway/secrets.go	defer func() { _ = os.Remove(n) }()
 G703	cmd/gateway/secrets.go	if e = os.Rename(n, path); e != nil {
 G703	cmd/gateway/secrets.go	if e = os.Rename(nextPath, kp); e != nil {
 G703	cmd/gateway/secrets.go	if x, err := os.Open(path); err == nil {
+G703	cmd/gateway/secrets.go	raw, e := os.ReadFile(*path)
+G703	cmd/gateway/secrets.go	raw, e := os.ReadFile(*path)
+G703	cmd/gateway/secrets.go	st, err := os.Stat(file)
 G703	cmd/videogen/client.go	defer func() { _ = os.Remove(tmpName) }()
 G703	cmd/videogen/client.go	if _, err := os.Stat(absolutePath); err == nil {
 G703	cmd/videogen/client.go	if _, err := os.Stat(absolutePath); err == nil {
@@ -100,6 +123,8 @@ G703	internal/secrets/secrets.go	if err = os.Rename(nextPath, keyPath); err != n
 G703	internal/secrets/secrets.go	st, err := os.Stat(path)
 G703	internal/secrets/secrets.go	st, se := os.Stat(p)
 G703	internal/video/render/render.go	if info, err := os.Stat(c); err == nil && info.Mode().IsRegular() {
+G704	cmd/gateway/vault_accept.go	req, err := http.NewRequestWithContext(reqCtx, method, strings.TrimRight(addr, "/")+"/v1/"+path, reader)
+G704	cmd/gateway/vault_accept.go	resp, err := client.Do(req)
 G704	cmd/videogen/client.go	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 G704	cmd/videogen/client.go	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, payload)
 G704	cmd/videogen/client.go	resp, err := c.http.Do(req)
