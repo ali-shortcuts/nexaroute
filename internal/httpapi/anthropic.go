@@ -454,9 +454,9 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 			}
 		case c.Deployment.ProviderType == "anthropic_compatible":
 			if in.Stream {
-				e = proxyNativeSSEWithModel(w, resp, "anthropic", in.Model, func(prompt, completion int) {
-					inputTokens, outputTokens = prompt, completion
-					s.recordUsage(r, c.Deployment.ID, int64(prompt), int64(completion))
+				e = proxyNativeSSEWithModel(w, resp, "anthropic", in.Model, func(u nativeSSEUsage) {
+					inputTokens, outputTokens = u.Input, u.Output
+					s.recordUsageEx(r, c.Deployment.ID, usage.Counts{Input: int64(u.Input), Output: int64(u.Output), CacheRead: int64(u.CacheRead), CacheWrite: int64(u.CacheWrite)}, false)
 				})
 			} else {
 				var b []byte
@@ -665,16 +665,27 @@ func copyUpstreamResponseHeaders(w http.ResponseWriter, resp *http.Response, isS
 	}
 }
 
+// nativeSSEUsage carries one terminal usage observation from a native SSE
+// stream. Cache fields are zero for protocols that do not report them.
+type nativeSSEUsage struct {
+	Input      int
+	Output     int
+	CacheRead  int
+	CacheWrite int
+}
+
 type nativeSSETracker struct {
 	protocol string
 	line     []byte
 	terminal bool
 	// usage accounting (optional hook). The hook fires at most once, when
 	// the protocol's terminal usage information is complete.
-	usageHook    func(prompt, completion int)
-	usageInput   int
-	usageOutput  int
-	usageEmitted bool
+	usageHook       func(nativeSSEUsage)
+	usageInput      int
+	usageOutput     int
+	usageCacheRead  int
+	usageCacheWrite int
+	usageEmitted    bool
 }
 
 const maxNativeSSELineBytes = 8 << 20
@@ -754,7 +765,7 @@ func (t *nativeSSETracker) processLine() error {
 			if err := json.Unmarshal(raw, &u); err == nil {
 				t.usageInput, t.usageOutput = u.PromptTokens, u.CompletionTokens
 				t.usageEmitted = true
-				t.usageHook(t.usageInput, t.usageOutput)
+				t.usageHook(nativeSSEUsage{Input: t.usageInput, Output: t.usageOutput})
 			}
 		}
 	case "anthropic":
@@ -805,8 +816,10 @@ func (t *nativeSSETracker) observeAnthropicUsage(typ string, env map[string]json
 		// hook never fired. Parse the flat shape instead.
 		var start struct {
 			Usage struct {
-				InputTokens  int `json:"input_tokens"`
-				OutputTokens int `json:"output_tokens"`
+				InputTokens              int `json:"input_tokens"`
+				OutputTokens             int `json:"output_tokens"`
+				CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+				CacheReadInputTokens     int `json:"cache_read_input_tokens"`
 			} `json:"usage"`
 		}
 		if raw := env["message"]; len(raw) > 0 {
@@ -814,6 +827,12 @@ func (t *nativeSSETracker) observeAnthropicUsage(typ string, env map[string]json
 				t.usageInput = start.Usage.InputTokens
 				if start.Usage.OutputTokens > t.usageOutput {
 					t.usageOutput = start.Usage.OutputTokens
+				}
+				if start.Usage.CacheCreationInputTokens > t.usageCacheWrite {
+					t.usageCacheWrite = start.Usage.CacheCreationInputTokens
+				}
+				if start.Usage.CacheReadInputTokens > t.usageCacheRead {
+					t.usageCacheRead = start.Usage.CacheReadInputTokens
 				}
 			}
 		}
@@ -823,8 +842,10 @@ func (t *nativeSSETracker) observeAnthropicUsage(typ string, env map[string]json
 		// into a struct expecting another nested "usage" key, so
 		// every field stayed zero. Parse the flat shape instead.
 		var delta struct {
-			InputTokens  int `json:"input_tokens"`
-			OutputTokens int `json:"output_tokens"`
+			InputTokens              int `json:"input_tokens"`
+			OutputTokens             int `json:"output_tokens"`
+			CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+			CacheReadInputTokens     int `json:"cache_read_input_tokens"`
 		}
 		if raw := env["usage"]; len(raw) > 0 {
 			if err := json.Unmarshal(raw, &delta); err == nil {
@@ -834,12 +855,18 @@ func (t *nativeSSETracker) observeAnthropicUsage(typ string, env map[string]json
 				if delta.InputTokens > t.usageInput {
 					t.usageInput = delta.InputTokens
 				}
+				if delta.CacheCreationInputTokens > t.usageCacheWrite {
+					t.usageCacheWrite = delta.CacheCreationInputTokens
+				}
+				if delta.CacheReadInputTokens > t.usageCacheRead {
+					t.usageCacheRead = delta.CacheReadInputTokens
+				}
 			}
 		}
 	case "message_stop":
-		if !t.usageEmitted && (t.usageInput > 0 || t.usageOutput > 0) {
+		if !t.usageEmitted && (t.usageInput > 0 || t.usageOutput > 0 || t.usageCacheRead > 0 || t.usageCacheWrite > 0) {
 			t.usageEmitted = true
-			t.usageHook(t.usageInput, t.usageOutput)
+			t.usageHook(nativeSSEUsage{Input: t.usageInput, Output: t.usageOutput, CacheRead: t.usageCacheRead, CacheWrite: t.usageCacheWrite})
 		}
 	}
 }
@@ -857,11 +884,11 @@ func (t *nativeSSETracker) finish() error {
 	return nil
 }
 
-func proxyNativeSSE(w http.ResponseWriter, resp *http.Response, protocol string, usageHooks ...func(prompt, completion int)) error {
+func proxyNativeSSE(w http.ResponseWriter, resp *http.Response, protocol string, usageHooks ...func(nativeSSEUsage)) error {
 	return proxyNativeSSEWithModel(w, resp, protocol, "", usageHooks...)
 }
 
-func proxyNativeSSEWithModel(w http.ResponseWriter, resp *http.Response, protocol, publicModel string, usageHooks ...func(prompt, completion int)) error {
+func proxyNativeSSEWithModel(w http.ResponseWriter, resp *http.Response, protocol, publicModel string, usageHooks ...func(nativeSSEUsage)) error {
 	defer resp.Body.Close()
 	if !strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
 		return fmt.Errorf("expected text/event-stream from %s upstream", protocol)

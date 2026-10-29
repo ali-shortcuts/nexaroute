@@ -18,15 +18,15 @@ import (
 // the fixed code. Fixtures use the real Anthropic SSE event shapes.
 
 type nativeUsageCall struct {
-	prompt, completion int
+	prompt, completion, cacheRead, cacheWrite int
 }
 
 type nativeUsageHook struct {
 	calls []nativeUsageCall
 }
 
-func (h *nativeUsageHook) fn(prompt, completion int) {
-	h.calls = append(h.calls, nativeUsageCall{prompt, completion})
+func (h *nativeUsageHook) fn(u nativeSSEUsage) {
+	h.calls = append(h.calls, nativeUsageCall{prompt: u.Input, completion: u.Output, cacheRead: u.CacheRead, cacheWrite: u.CacheWrite})
 }
 
 func runAnthropicTracker(t *testing.T, chunks []string) (*nativeSSETracker, *nativeUsageHook, error) {

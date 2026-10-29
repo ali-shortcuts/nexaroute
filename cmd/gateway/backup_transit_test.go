@@ -41,11 +41,11 @@ func TestBackupRestoreTransitEndToEnd(t *testing.T) {
 	}
 
 	bundle := filepath.Join(dir, "bundle.tar")
-	if err := createBackup(configPath, bundle, false, false, io.Discard); err != nil {
+	if err := createBackup(configPath, bundle, false, false, io.Discard, liveBackupOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	// --include-master-key is rejected for Transit configs.
-	if err := createBackup(configPath, filepath.Join(dir, "bundle2.tar"), true, false, io.Discard); err == nil || !strings.Contains(err.Error(), "--include-master-key is rejected") {
+	if err := createBackup(configPath, filepath.Join(dir, "bundle2.tar"), true, false, io.Discard, liveBackupOptions{}); err == nil || !strings.Contains(err.Error(), "--include-master-key is rejected") {
 		t.Fatalf("include-master-key on nxs2 must be rejected: %v", err)
 	}
 	// Read the bundle back: manifest facts, and no master.key entry.

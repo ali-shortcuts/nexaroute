@@ -90,7 +90,7 @@ func TestMission95CopyUpstreamHeaders(t *testing.T) {
 func TestMission95NativeSSETracker(t *testing.T) {
 	// OpenAI: [DONE] terminates; finish_reason terminates; usage fires once.
 	var got []struct{ p, c int }
-	tr := &nativeSSETracker{protocol: "openai", usageHook: func(p, c int) { got = append(got, struct{ p, c int }{p, c}) }}
+	tr := &nativeSSETracker{protocol: "openai", usageHook: func(u nativeSSEUsage) { got = append(got, struct{ p, c int }{u.Input, u.Output}) }}
 	if err := tr.consume([]byte("data: {\"choices\":[{\"finish_reason\":null}]}\n\n")); err != nil || tr.terminal {
 		t.Fatalf("null finish_reason: terminal=%v err=%v", tr.terminal, err)
 	}
@@ -148,16 +148,12 @@ func TestMission95NativeSSETracker(t *testing.T) {
 		}
 	}
 	// Anthropic: message_delta stop_reason terminates; message_stop ends
-	// the stream. NOTE (observed behavior, flagged to coordinator):
-	// observeAnthropicUsage unmarshals env["message"] into a struct that
-	// expects a "message" wrapper key, and env["usage"] into a struct
-	// expecting a "usage" wrapper key, so standard Anthropic envelopes
-	// accumulate zero totals and the message_stop hook does NOT fire.
-	// The assertions below pin that current behavior; the fire branch
-	// itself is covered directly after this block. This test does not
-	// change production code (test-only scope).
+	// the stream. With the envelope unwrap fix (#712, carried into the
+	// nativeSSEUsage hook by #706), standard Anthropic envelopes
+	// accumulate real totals and the message_stop hook fires exactly
+	// once; the assertions below pin that fixed behavior.
 	var aGot []struct{ p, c int }
-	atr := &nativeSSETracker{protocol: "anthropic", usageHook: func(p, c int) { aGot = append(aGot, struct{ p, c int }{p, c}) }}
+	atr := &nativeSSETracker{protocol: "anthropic", usageHook: func(u nativeSSEUsage) { aGot = append(aGot, struct{ p, c int }{u.Input, u.Output}) }}
 	feed := []string{
 		"data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":12,\"output_tokens\":0}}}\n",
 		"data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":7}}\n",
@@ -173,28 +169,28 @@ func TestMission95NativeSSETracker(t *testing.T) {
 	if err := atr.consume([]byte("data: {\"type\":\"message_stop\"}\n")); err != nil {
 		t.Fatal(err)
 	}
-	if len(aGot) != 0 {
-		t.Fatalf("anthropic usage hook fired unexpectedly: %v", aGot)
+	if len(aGot) != 1 || aGot[0].p != 12 || aGot[0].c != 7 {
+		t.Fatalf("anthropic usage hook = %v, want exactly one call (12, 7)", aGot)
 	}
 	if err := atr.finish(); err != nil {
 		t.Errorf("anthropic finish failed: %v", err)
 	}
 	// The message_stop fire branch itself: with totals present, the hook
 	// fires exactly once and never re-fires.
-	direct := &nativeSSETracker{protocol: "anthropic", usageHook: func(p, c int) { aGot = append(aGot, struct{ p, c int }{p, c}) }}
+	direct := &nativeSSETracker{protocol: "anthropic", usageHook: func(u nativeSSEUsage) { aGot = append(aGot, struct{ p, c int }{u.Input, u.Output}) }}
 	direct.usageInput, direct.usageOutput = 12, 7
 	direct.observeAnthropicUsage("message_stop", map[string]json.RawMessage{})
-	if len(aGot) != 1 || aGot[0].p != 12 || aGot[0].c != 7 {
+	if len(aGot) != 2 || aGot[1].p != 12 || aGot[1].c != 7 {
 		t.Fatalf("direct message_stop hook = %v", aGot)
 	}
 	direct.observeAnthropicUsage("message_stop", map[string]json.RawMessage{})
-	if len(aGot) != 1 {
+	if len(aGot) != 2 {
 		t.Error("message_stop hook re-fired")
 	}
 	// With zero totals the hook stays silent even on message_stop.
-	zero := &nativeSSETracker{protocol: "anthropic", usageHook: func(p, c int) { aGot = append(aGot, struct{ p, c int }{p, c}) }}
+	zero := &nativeSSETracker{protocol: "anthropic", usageHook: func(u nativeSSEUsage) { aGot = append(aGot, struct{ p, c int }{u.Input, u.Output}) }}
 	zero.observeAnthropicUsage("message_stop", map[string]json.RawMessage{})
-	if len(aGot) != 1 {
+	if len(aGot) != 2 {
 		t.Error("zero-total message_stop fired the hook")
 	}
 	// Finish processes a buffered partial line.
@@ -268,9 +264,9 @@ func TestMission95AnthropicRewritesAndProxy(t *testing.T) {
 		t.Fatalf("indented rewrite = %q", out)
 	}
 	// proxyNativeSSE: non-SSE content type refused; SSE proxied with model
-	// rewrite. The Anthropic usage hook does not fire for standard
-	// envelopes (see the tracker note above); the OpenAI proxy path
-	// below proves the hook wiring end to end.
+	// rewrite. With the envelope unwrap fix, the Anthropic usage hook
+	// fires exactly once for standard envelopes (5 in, 3 out); the
+	// OpenAI proxy path below proves the hook wiring end to end.
 	resp := &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader("x"))}
 	if err := proxyNativeSSE(httptest.NewRecorder(), resp, "anthropic"); err == nil {
 		t.Error("non-SSE proxy accepted")
@@ -285,14 +281,14 @@ func TestMission95AnthropicRewritesAndProxy(t *testing.T) {
 		Body:       io.NopCloser(strings.NewReader(stream)),
 	}
 	rec := httptest.NewRecorder()
-	if err := proxyNativeSSEWithModel(rec, resp2, "anthropic", "pub-model", func(p, c int) { hook = append(hook, struct{ p, c int }{p, c}) }); err != nil {
+	if err := proxyNativeSSEWithModel(rec, resp2, "anthropic", "pub-model", func(u nativeSSEUsage) { hook = append(hook, struct{ p, c int }{u.Input, u.Output}) }); err != nil {
 		t.Fatalf("proxy failed: %v", err)
 	}
 	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"model":"pub-model"`) || rec.Header().Get("X-Upstream") != "u" {
 		t.Fatalf("proxy output code=%d headers=%v body=%q", rec.Code, rec.Header(), rec.Body.String())
 	}
-	if len(hook) != 0 {
-		t.Fatalf("anthropic proxy usage hook fired unexpectedly: %v", hook)
+	if len(hook) != 1 || hook[0].p != 5 || hook[0].c != 3 {
+		t.Fatalf("anthropic proxy usage hook = %v, want exactly one call (5, 3)", hook)
 	}
 	// OpenAI proxy: usage chunk fires the hook exactly once.
 	oaiStream := "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n" +
@@ -303,10 +299,10 @@ func TestMission95AnthropicRewritesAndProxy(t *testing.T) {
 		Body:       io.NopCloser(strings.NewReader(oaiStream)),
 	}
 	recOAI := httptest.NewRecorder()
-	if err := proxyNativeSSE(recOAI, respOAI, "openai", func(p, c int) { hook = append(hook, struct{ p, c int }{p, c}) }); err != nil {
+	if err := proxyNativeSSE(recOAI, respOAI, "openai", func(u nativeSSEUsage) { hook = append(hook, struct{ p, c int }{u.Input, u.Output}) }); err != nil {
 		t.Fatalf("openai proxy failed: %v", err)
 	}
-	if len(hook) != 1 || hook[0].p != 8 || hook[0].c != 2 {
+	if len(hook) != 2 || hook[1].p != 8 || hook[1].c != 2 {
 		t.Fatalf("openai proxy usage hook = %v", hook)
 	}
 	// Unterminated proxied stream errors.
