@@ -151,14 +151,14 @@ func TestGatewayDeadlineErrorContract(t *testing.T) {
 	}
 }
 
-// wave3SplitTimeoutGateway builds a gateway whose upstream adapters use
+// wave3SplitTimeoutGateway739 builds a gateway whose upstream adapters use
 // adapterTimeoutMS while request routing uses routeTimeoutMS. Production
 // builds both from the same RequestTimeoutMS; splitting them here is the
 // only deterministic way to force the transport-timeout-first outcome
 // (adapter timer fires while the route timer is still pending) that the
 // shared-budget race produces under load. It exercises the error
 // classification, not a production configuration.
-func wave3SplitTimeoutGateway(t *testing.T, providerCfgs []config.ProviderConfig, adapterTimeoutMS, routeTimeoutMS int) *Server {
+func wave3SplitTimeoutGateway739(t *testing.T, providerCfgs []config.ProviderConfig, adapterTimeoutMS, routeTimeoutMS int) *Server {
 	t.Helper()
 	routeCfg := config.Default()
 	routeCfg.Probe.Enabled = false
@@ -190,7 +190,7 @@ func wave3SplitTimeoutGateway(t *testing.T, providerCfgs []config.ProviderConfig
 	return srv
 }
 
-func TestWave3ResponsesClientTimeoutMapsTo504(t *testing.T) {
+func TestWave3ResponsesSplitTimeoutMapsTo504(t *testing.T) {
 	// Regression for the CI verify failure: the upstream transport
 	// timeout ("timeout awaiting response headers") was mapped to 502
 	// because only the narrow route-timer check was consulted. With the
@@ -208,7 +208,7 @@ func TestWave3ResponsesClientTimeoutMapsTo504(t *testing.T) {
 		}
 	}))
 	defer up.Close()
-	s := wave3SplitTimeoutGateway(t, []config.ProviderConfig{
+	s := wave3SplitTimeoutGateway739(t, []config.ProviderConfig{
 		wave3Provider("a", "openai_compatible", up.URL, "m", "upstream-model", []string{"cm"}),
 	}, 200, 60000)
 	rr := wave3Request(s, "POST", "/v1/responses", wave3ResponsesReq("cm"))
@@ -231,7 +231,7 @@ func TestWave3GeminiClientTimeoutMapsTo504(t *testing.T) {
 		}
 	}))
 	defer up.Close()
-	s := wave3SplitTimeoutGateway(t, []config.ProviderConfig{
+	s := wave3SplitTimeoutGateway739(t, []config.ProviderConfig{
 		wave3Provider("g", "openai_compatible", up.URL, "m", "upstream-model", []string{"cm"}),
 	}, 200, 60000)
 	body := `{"contents":[{"role":"user","parts":[{"text":"hi"}]}]}`
