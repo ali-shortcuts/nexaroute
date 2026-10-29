@@ -121,6 +121,8 @@ func (s *Server) adminNexaflowNodes(w http.ResponseWriter, r *http.Request) {
 	}
 	var out []map[string]any
 	for _, spec := range s.nexaflow.Registry.All() {
+		// The Visual Studio reads the canonical registry schema from
+		// this endpoint and keeps no duplicate frontend schema.
 		out = append(out, map[string]any{
 			"id": spec.ID, "version": spec.Version, "title": spec.Title,
 			"category": spec.Category, "description": spec.Description,
@@ -128,9 +130,11 @@ func (s *Server) adminNexaflowNodes(w http.ResponseWriter, r *http.Request) {
 			"output_schema":      nexaflowFieldViews(spec.OutputSchema),
 			"config_schema":      nexaflowFieldViews(spec.ConfigSchema),
 			"default_timeout_ms": spec.DefaultTimeout.Milliseconds(),
+			"max_timeout_ms":     spec.MaxTimeout.Milliseconds(),
 			"max_input_bytes":    spec.MaxInputBytes,
 			"max_output_bytes":   spec.MaxOutputBytes,
 			"permission":         string(spec.Permission),
+			"side_effect":        string(spec.SideEffect),
 			"requires_policy":    spec.RequiresOperatorPolicy,
 		})
 	}
@@ -161,7 +165,7 @@ func (s *Server) adminNexaflowTemplates(w http.ResponseWriter, r *http.Request) 
 		out = append(out, map[string]any{
 			"id": tpl.ID, "title": tpl.Title, "description": tpl.Description,
 			"published": tpl.Published, "requires_policy": tpl.RequiresPolicy,
-			"node_count": len(tpl.Nodes),
+			"node_count": len(tpl.Nodes), "placeholders": tpl.Placeholders,
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"templates": out})
@@ -394,7 +398,7 @@ func (s *Server) adminNexaflowRuns(w http.ResponseWriter, r *http.Request) {
 	if !s.nexaflowRequireMethod(w, r, http.MethodGet) {
 		return
 	}
-	runs, err := s.nexaflow.ListRuns(r.Context(), nexaflow.RunFilter{}, identity)
+	runs, err := s.nexaflow.ListRuns(r.Context(), nexaflow.RunFilter{DefinitionID: r.URL.Query().Get("definition_id")}, identity)
 	if err != nil {
 		errorJSON(w, http.StatusInternalServerError, err.Error())
 		return
