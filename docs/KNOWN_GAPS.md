@@ -480,6 +480,15 @@ opt-in via the Soak workflow (`workflow_dispatch`) on a suitable runner
   — CI smoke PASS, 16/16 stages, code commit `1facf65`, Go 1.27.0, 1035s
   wall time on a shared 2-vCPU VM. Long-form multi-hour soak: NOT RUN.
   Live items (#646–#652) and any RPO/RTO value: NOT RUN / not reported.
+- Evidence (validator + outage stages, 2026-10-29): `docs/reports/ISSUE664_SOAK_VALIDATOR_2026-10-29.md`
+  — bounded local soak PASS, 8/8 stages, code commit `808ebde`, Go 1.27.0, 952s
+  wall time (0s sustained shape, not a long soak); the Soak workflow now
+  validates its summary (commit, durations, completeness, samples,
+  `not_run`) and the long soak runs explicit loopback outage stages.
+  Long-form multi-hour soak on this head: NOT RUN. The 2h run on the
+  previous head `bb5865f` (run 40891002045) was still in_progress at
+  2026-10-29T15:50:44Z; its outcome is reported separately on #664/#653.
+  Live items (#646–#652) and any RPO/RTO value: NOT RUN / not reported.
 - Impact: default test runs do not exercise the stress/soak paths, and
   no short CI run proves long-duration stability.
 - Mitigation/workaround: run them explicitly, e.g.

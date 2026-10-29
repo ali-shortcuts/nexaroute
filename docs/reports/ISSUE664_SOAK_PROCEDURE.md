@@ -13,8 +13,8 @@ acceptance.
 | Script | `scripts/ci-soak-smoke.sh` | `scripts/soak.sh` |
 | CI wiring | `.github/workflows/ci.yml`, job `ci-soak-smoke` (runs on pull requests and pushes to main, in parallel with `verify`) | `.github/workflows/soak.yml` (workflow_dispatch for long runs; push to main on soak-file changes runs the short 0s shape only) |
 | Duration | Fixed-iteration soak shape; sustained durations above 5m are rejected by the smoke script | Operator-chosen sustained duration, script cap 6h (see the timeout rule below for the workflow-feasible maximum) |
-| Load | Stress selectors identical to `scripts/stress.sh`, loopback outage/cancellation tests, short race soak | Repeated stress rounds (`NEXAROUTE_SOAK_ROUNDS`, default 3, max 20) plus the same soak tests, a race soak stage with a pinned short sustained duration, and a budget-leak slope stage |
-| Report | Sanitized Markdown + JSON under `.artifacts/ci-soak-smoke/<label>/`, uploaded as a CI artifact (90 days) | Sanitized Markdown + JSON under `.artifacts/soak/<label>/`, uploaded as a workflow artifact (90 days) |
+| Load | Stress selectors identical to `scripts/stress.sh`, loopback outage/cancellation tests, short race soak | Repeated stress rounds (`NEXAROUTE_SOAK_ROUNDS`, default 3, max 20) plus the same soak tests, explicit loopback outage stages (`outage-provider`, `outage-gameday` — the same selectors the smoke script runs), a race soak stage with a pinned short sustained duration, and a budget-leak slope stage |
+| Report | Sanitized Markdown + JSON under `.artifacts/ci-soak-smoke/<label>/`, uploaded as a CI artifact (90 days) | Sanitized Markdown + JSON under `.artifacts/soak/<label>/`, uploaded as a workflow artifact (90 days). Every stage carries a `failure_summary` (empty for PASS stages), the JSON carries a `resource_sample_summary` (peak goroutines/FDs/heap) and an explicit `not_run` block for the live items; the Soak workflow runs `scripts/check-soak-evidence.py` against the summary (commit, durations, stage completeness, samples, `not_run`) and fails the run when the record is incomplete — see "Validating a report" below |
 | Status today | PASS locally; see `docs/reports/ISSUE664_CI_SMOKE_2026-10-29.md` | NOT RUN (multi-hour). The bounded 0s shape was exercised in `docs/reports/issue664-stress-soak-evidence.md`; that is not a long soak. |
 
 ## Running the bounded CI smoke
@@ -65,6 +65,30 @@ when configuration blocked the run).
 5. Attach the report (Markdown + JSON, plus per-stage logs) to the
    issue it evidences. Do not summarize a long soak as PASS from the
    job badge alone.
+
+## Validating a report
+
+Run the checker against any soak or smoke summary, locally or from a
+downloaded artifact (a downloaded copy's sample file is found by its
+basename next to the summary, since the recorded path is absolute on
+the producing runner):
+
+```sh
+python3 scripts/check-soak-evidence.py --summary <path>/summary.json \
+  --kind soak --expected-commit <full-40-hex-SHA>
+```
+
+For a smoke summary use `--kind ci-smoke` (the race stage may be
+passed in `--allow-skipped race-soak-short` when it was disabled with
+`NEXAROUTE_CI_SMOKE_RACE=0`; the long soak allows no skipped stage).
+The checker exits 0 only when the schema, commit, timestamps, total
+duration, requested sustained duration, stage completeness and
+exit-code consistency, resource samples, failure summaries, and the
+`not_run` block all check out. Schema gaps in older summaries (no
+`failure_summary` key, no `resource_sample_summary`, no `not_run`
+block) are reported as warnings or errors, not silently ignored — so
+an old summary that fails only on those fields is a schema gap, not
+a run failure, and must be described that way.
 
 ## What neither half does
 
