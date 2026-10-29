@@ -23,6 +23,7 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/route"
 	"github.com/ali-shortcuts/nexaroute/internal/router"
 	"github.com/ali-shortcuts/nexaroute/internal/translate"
+	"github.com/ali-shortcuts/nexaroute/internal/usage"
 )
 
 // Wave-3 coverage tests: canonical stream pump, stream translators, repair
@@ -189,7 +190,7 @@ func TestWave3StreamAnthropicToOpenAI(t *testing.T) {
 	{
 		rr := httptest.NewRecorder()
 		var gotP, gotC int
-		err := streamAnthropicToOpenAIWithUsage(rr, wave3PumpResp(wave3AnthropicSSE), "m", nm, func(p, c int) { gotP, gotC = p, c }, "wave3-tr2")
+		err := streamAnthropicToOpenAIWithUsage(rr, wave3PumpResp(wave3AnthropicSSE), "m", nm, func(u usage.Counts) { gotP, gotC = int(u.Input), int(u.Output) }, "wave3-tr2")
 		if err != nil {
 			t.Fatalf("normal translation err=%v", err)
 		}
@@ -208,7 +209,7 @@ func TestWave3StreamAnthropicToOpenAI(t *testing.T) {
 			"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":2}}\n\n" +
 			"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
 		rr := httptest.NewRecorder()
-		if err := streamAnthropicToOpenAIWithUsage(rr, wave3PumpResp(body), "m", nm, func(int, int) {}, "wave3-tr2"); err != nil {
+		if err := streamAnthropicToOpenAIWithUsage(rr, wave3PumpResp(body), "m", nm, func(usage.Counts) {}, "wave3-tr2"); err != nil {
 			t.Fatalf("tool translation err=%v", err)
 		}
 		if !strings.Contains(rr.Body.String(), "tool_calls") || !strings.Contains(rr.Body.String(), "get_weather") {
@@ -218,14 +219,14 @@ func TestWave3StreamAnthropicToOpenAI(t *testing.T) {
 	// Malformed event data.
 	{
 		rr := httptest.NewRecorder()
-		if err := streamAnthropicToOpenAIWithUsage(rr, wave3PumpResp("event: message_start\ndata: {broken\n\n"), "m", nm, func(int, int) {}, "wave3-tr2"); err == nil {
+		if err := streamAnthropicToOpenAIWithUsage(rr, wave3PumpResp("event: message_start\ndata: {broken\n\n"), "m", nm, func(usage.Counts) {}, "wave3-tr2"); err == nil {
 			t.Fatalf("malformed event: expected error, got nil")
 		}
 	}
 	// Failing writer.
 	{
 		w := newWave3FailWriter(0)
-		if err := streamAnthropicToOpenAIWithUsage(w, wave3PumpResp(wave3AnthropicSSE), "m", nm, func(int, int) {}, "wave3-tr2"); err == nil {
+		if err := streamAnthropicToOpenAIWithUsage(w, wave3PumpResp(wave3AnthropicSSE), "m", nm, func(usage.Counts) {}, "wave3-tr2"); err == nil {
 			t.Fatalf("failing writer: expected error, got nil")
 		}
 	}
@@ -233,7 +234,7 @@ func TestWave3StreamAnthropicToOpenAI(t *testing.T) {
 	{
 		resp := &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(wave3ErrorReader{err: errors.New("wave3 read boom")})}
 		rr := httptest.NewRecorder()
-		if err := streamAnthropicToOpenAIWithUsage(rr, resp, "m", nm, func(int, int) {}, "wave3-tr2"); err == nil {
+		if err := streamAnthropicToOpenAIWithUsage(rr, resp, "m", nm, func(usage.Counts) {}, "wave3-tr2"); err == nil {
 			t.Fatalf("reader error: expected error, got nil")
 		}
 	}

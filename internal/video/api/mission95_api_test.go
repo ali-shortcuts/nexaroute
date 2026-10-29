@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -203,6 +204,24 @@ func TestMission95GetAssetBranches(t *testing.T) {
 	w = performJSON(&Handler{Store: outsideStore, Assets: local}, http.MethodGet, "/v1/video/jobs/job-outside/assets/"+stored.ID, nil, "")
 	if w.Code != http.StatusNotFound || errorBody(t, w)["code"] != "asset_not_found" {
 		t.Fatalf("opener-failure asset status=%d body=%s", w.Code, w.Body.String())
+	}
+	// Symlink inside the root that resolves outside it: also a
+	// deterministic rejection, not a retryable outage.
+	outsideFile := filepath.Join(t.TempDir(), "real.mp4")
+	if err := os.WriteFile(outsideFile, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	linkPath := filepath.Join(local.Root, "link.mp4")
+	if err := os.Symlink(outsideFile, linkPath); err != nil {
+		t.Fatal(err)
+	}
+	link := stored
+	link.URI = linkPath
+	linkStore := queue.NewMemoryStore()
+	mission95JobWithAssets(t, linkStore, "job-link", []video.Asset{link}, nil)
+	w = performJSON(&Handler{Store: linkStore, Assets: local}, http.MethodGet, "/v1/video/jobs/job-link/assets/"+stored.ID, nil, "")
+	if w.Code != http.StatusNotFound || errorBody(t, w)["code"] != "asset_not_found" {
+		t.Fatalf("symlink-escape asset status=%d body=%s", w.Code, w.Body.String())
 	}
 	// Recorded size disagrees with the file: integrity error.
 	wrongSize := stored
