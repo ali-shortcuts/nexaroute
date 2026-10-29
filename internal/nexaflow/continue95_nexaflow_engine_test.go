@@ -752,15 +752,25 @@ func TestContinue95NexaflowEngineUnknownNodeAndBadInput(t *testing.T) {
 		t.Fatalf("CreateRun: %v", err)
 	}
 	// A second engine with a registry lacking json_transform drives it.
-	// OBSERVED BEHAVIOUR (reported to parent, not papered over): the
-	// sweep's node_not_found branch tries claimed->failed, which
-	// validNodeTransition rejects, so Execute surfaces ErrStateConflict
-	// instead of a failed run. The same guard shapes the bad-input
-	// case below.
+	// Canonical behaviour on current main (states.go: claimed->failed
+	// is the documented fail-without-dispatch path, and #727's durable
+	// reconciliation kept it): the sweep fails the node with
+	// node_not_found and Execute returns the failed run, not
+	// ErrStateConflict. The old base's ErrStateConflict surface was
+	// the pre-#727 guard; asserting the failed run is the stronger
+	// check here — the node is never dispatched blindly.
 	triggerOnly := testRegistry(t)
 	eng2 := mustEngine(t, store, triggerOnly)
-	if _, err := eng2.Execute(ctx, run.ID); !errors.Is(err, ErrStateConflict) {
-		t.Fatalf("Execute unknown node: want ErrStateConflict, got %v", err)
+	final, err := eng2.Execute(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("Execute unknown node: want nil error with failed run, got %v", err)
+	}
+	if final.State != RunFailed {
+		t.Fatalf("Execute unknown node: run state = %q, want %q", final.State, RunFailed)
+	}
+	states := nodeStates(t, store, run.ID)
+	if states["jt"].State != NodeFailed || states["jt"].ErrorCode != "node_not_found" {
+		t.Fatalf("unknown node = %+v, want failed/node_not_found", states["jt"])
 	}
 
 	// Unresolvable input mapping fails the node with input_resolution.
@@ -780,10 +790,19 @@ func TestContinue95NexaflowEngineUnknownNodeAndBadInput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateRun 2: %v", err)
 	}
-	// Same claimed->failed guard as the unknown-node case: the
-	// input_resolution failure surfaces as ErrStateConflict.
-	if _, err := eng3.Execute(ctx, run2.ID); !errors.Is(err, ErrStateConflict) {
-		t.Fatalf("Execute bad input: want ErrStateConflict, got %v", err)
+	// Same fail-without-dispatch path as the unknown-node case:
+	// the input_resolution failure fails the run, never with a
+	// guessed input, and Execute returns the failed run.
+	final2, err := eng3.Execute(ctx, run2.ID)
+	if err != nil {
+		t.Fatalf("Execute bad input: want nil error with failed run, got %v", err)
+	}
+	if final2.State != RunFailed {
+		t.Fatalf("Execute bad input: run state = %q, want %q", final2.State, RunFailed)
+	}
+	states2 := nodeStates(t, store2, run2.ID)
+	if states2["jt"].State != NodeFailed || states2["jt"].ErrorCode != "input_resolution" {
+		t.Fatalf("bad input node = %+v, want failed/input_resolution", states2["jt"])
 	}
 }
 

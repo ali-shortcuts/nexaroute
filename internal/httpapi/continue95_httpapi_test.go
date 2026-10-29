@@ -194,21 +194,26 @@ func TestContinue95HttpapiGeminiAuthRequestForms(t *testing.T) {
 	if got := geminiAuthRequest(req3).Header.Get("x-api-key"); got != "spaced-key" {
 		t.Fatalf("trimmed key = %q, want spaced-key", got)
 	}
-	// Existing x-api-key / Authorization forms pass through untouched.
+	// Existing x-api-key form: the header wins and is preserved, but
+	// ?key= is ALWAYS stripped from the copied URL (geminiAuthRequest
+	// doc comment: a query key left in r.URL could leak into logs).
 	req4 := httptest.NewRequest(http.MethodPost, "http://gateway/v1beta/models/m:generateContent?key=ignored", nil)
 	req4.Header.Set("x-api-key", "already-there")
-	if got := geminiAuthRequest(req4); got.Header.Get("x-api-key") != "already-there" || !strings.Contains(got.URL.String(), "key=ignored") {
-		t.Fatalf("x-api-key passthrough changed the request: header=%q url=%s", got.Header.Get("x-api-key"), got.URL.String())
+	if got := geminiAuthRequest(req4); got.Header.Get("x-api-key") != "already-there" || strings.Contains(got.URL.String(), "key=ignored") {
+		t.Fatalf("x-api-key passthrough: header=%q url=%s, want header preserved and ?key= stripped", got.Header.Get("x-api-key"), got.URL.String())
 	}
 	req5 := httptest.NewRequest(http.MethodPost, "http://gateway/v1beta/models/m:generateContent", nil)
 	req5.Header.Set("Authorization", "Bearer bearer-key")
 	if got := geminiAuthRequest(req5); got.Header.Get("x-api-key") != "" {
 		t.Fatalf("Authorization passthrough must not synthesize x-api-key, got %q", got.Header.Get("x-api-key"))
 	}
-	// No key anywhere: request returned unchanged.
+	// No key anywhere: request is functionally unchanged — same URL,
+	// no synthesized x-api-key. (Pointer identity is not asserted:
+	// the current implementation returns a clone, which is
+	// observationally identical for callers.)
 	req6 := httptest.NewRequest(http.MethodPost, "http://gateway/v1beta/models/m:generateContent", nil)
-	if got := geminiAuthRequest(req6); got != req6 {
-		t.Fatalf("keyless request must be returned as-is")
+	if got := geminiAuthRequest(req6); got.URL.String() != req6.URL.String() || got.Header.Get("x-api-key") != "" || got.Header.Get("Authorization") != "" {
+		t.Fatalf("keyless request changed: url=%s x-api-key=%q auth=%q", got.URL.String(), got.Header.Get("x-api-key"), got.Header.Get("Authorization"))
 	}
 }
 
