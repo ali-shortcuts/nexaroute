@@ -458,9 +458,9 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 			}
 		case c.Deployment.ProviderType == "openai_compatible":
 			if in.Stream {
-				e = proxyNativeSSE(w, resp, "openai", func(prompt, completion int) {
-					inputTokens, outputTokens = prompt, completion
-					s.recordUsage(r, c.Deployment.ID, int64(prompt), int64(completion))
+				e = proxyNativeSSE(w, resp, "openai", func(u nativeSSEUsage) {
+					inputTokens, outputTokens = u.Input, u.Output
+					s.recordUsage(r, c.Deployment.ID, int64(u.Input), int64(u.Output))
 				})
 			} else {
 				inputTokens, outputTokens, e = s.proxyOpenAINativeJSON(w, r, resp, c.Deployment.ID, cacheKey, cacheGeneration, cacheable, semCtx)
