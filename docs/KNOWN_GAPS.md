@@ -376,6 +376,52 @@ payload bound, not a content-safety or schema-validation policy; tool-specific
 argument validation remains the responsibility of the upstream MCP server and
 the configured server/tool authorization lists.
 
+## NexaFlow boundaries (canonical line; PR #691 reconciliation)
+
+PR #691's executor/store lineage is retired; its unique capabilities
+were reconciled onto the canonical Task 8 line in
+`docs/nexaflow-691-reconciliation.md`, which is the authoritative
+mapping. In brief:
+
+Implemented on the canonical interfaces: durable per-definition
+run-limit admission at the store boundary (PostgreSQL atomic across
+processes/hosts, file atomic on one host, memory test-only);
+idempotency with input-conflict detection and concurrent-duplicate
+resolution; engine-level empty-approver rejection; approval
+pause/resume across restarts (including the stall-then-resume rule
+for a new worker id under a live foreign lease); cancellation
+(idempotent, ownership-checked); crash recovery that re-queues only
+provably-safe attempts and parks dispatched effectful attempts as
+ambiguous, never re-executing them; signed webhooks with a durable
+delivery ledger; durable interval scheduling with slot claims; and
+the resume, validate, and per-definition runs-listing admin routes.
+
+Storage guarantees: PostgreSQL is the multi-instance authority;
+file mode is single-host only (one live store per path, ledger via
+`O_EXCL` files); memory mode is test-only and loses state on
+restart. The delivery ledger gives at-most-once execution of an
+identical delivery, not exactly-once external side effects: a
+claimed delivery whose start fails is consumed, and a parked
+ambiguous attempt is precisely an unproven external outcome.
+
+Not implemented (deferred, not done): production gateway wiring
+(no caller of `AttachNexaflow` in `cmd/gateway`, so no gateway
+process ticks schedules, serves webhooks, or runs startup recovery
+yet); scheduler daily schedules, trigger discovery, persisted
+schedule state, and the scheduler tick endpoint; webhook
+`secret_ref` resolution and published-trigger validation in the
+(wiring-owned) Start function; async dispatch (202 executions);
+subworkflows, run-level fallback execution, any-join, durable timer
+waits; `workflow.*` permissions (admin routes ride
+`config.read`/`config.write`/`audit.read` as an interim mapping);
+tenant isolation (ownership ceiling + scope label only);
+hard-budget settlement (`budget_check` is report-only; admission
+reserve only); the JSON-editor definition page and Studio canvas
+(those belong to the Studio line). #691's ambiguous-step resume
+modes (including re-executing an ambiguous node) were deliberately
+rejected, not deferred: re-execution is the double-execution hazard
+the parking rule exists to prevent.
+
 ## Audit follow-up record (top-15 audit #57, recorded via #178)
 
 Status labels used below: `open` means an unresolved defect/boundary with no

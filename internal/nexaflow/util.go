@@ -13,6 +13,34 @@ func jsonLen(v any) int {
 	return len(raw)
 }
 
+// sameJSONValue reports whether two JSON-shaped values are equal
+// after a JSON round trip, so Go scalar spellings of the same JSON
+// number (1 vs 1.0) do not count as different inputs. A value that
+// cannot be marshaled is never equal to anything (fail closed).
+func sameJSONValue(a, b any) bool {
+	na, err := normalizeJSON(a)
+	if err != nil {
+		return false
+	}
+	nb, err := normalizeJSON(b)
+	if err != nil {
+		return false
+	}
+	return string(na) == string(nb)
+}
+
+func normalizeJSON(v any) ([]byte, error) {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	var decoded any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return nil, err
+	}
+	return json.Marshal(decoded)
+}
+
 func sortedKeys(m map[string]any) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {

@@ -76,7 +76,10 @@ func nexaflowErrStatus(err error) int {
 		return http.StatusNotFound
 	case errors.Is(err, nexaflow.ErrAlreadyExists),
 		errors.Is(err, nexaflow.ErrIdempotencyConflict),
-		errors.Is(err, nexaflow.ErrApprovalConflict):
+		errors.Is(err, nexaflow.ErrApprovalConflict),
+		errors.Is(err, nexaflow.ErrRunLimit),
+		errors.Is(err, nexaflow.ErrDefinitionBusy),
+		errors.Is(err, nexaflow.ErrRunParked):
 		return http.StatusConflict
 	case errors.Is(err, nexaflow.ErrTerminalState),
 		errors.Is(err, nexaflow.ErrStateConflict),
@@ -176,7 +179,8 @@ func (s *Server) adminNexaflowDefinitions(w http.ResponseWriter, r *http.Request
 }
 
 // adminNexaflowDefinitionByID serves /admin/api/nexaflow/definitions/{id}
-// and its sub-resources: publish, versions, versions/{rev}, runs.
+// and its sub-resources: publish, validate, versions, versions/{rev},
+// runs (GET lists, POST starts).
 func (s *Server) adminNexaflowDefinitionByID(w http.ResponseWriter, r *http.Request) {
 	identity, ok := s.nexaflowAdmin(r)
 	if !ok {
@@ -200,6 +204,8 @@ func (s *Server) adminNexaflowDefinitionByID(w http.ResponseWriter, r *http.Requ
 		shape = "draft"
 	case len(parts) == 2 && parts[1] == "publish":
 		shape = "publish"
+	case len(parts) == 2 && parts[1] == "validate":
+		shape = "validate"
 	case len(parts) == 2 && parts[1] == "versions":
 		shape = "versions"
 	case len(parts) == 3 && parts[1] == "versions":
@@ -221,6 +227,24 @@ func (s *Server) adminNexaflowDefinitionByID(w http.ResponseWriter, r *http.Requ
 			return
 		}
 		writeJSON(w, http.StatusOK, def)
+	case "validate":
+		// Ported from #691's validate endpoint: validate the stored
+		// draft without saving or publishing it. A validation
+		// outcome is 200 with valid=false (mirroring #691); only a
+		// missing draft or store error is an error status.
+		if !s.nexaflowRequireMethod(w, r, http.MethodPost) {
+			return
+		}
+		draft, err := s.nexaflow.GetDraft(ctx, id)
+		if err != nil {
+			errorJSON(w, nexaflowErrStatus(err), err.Error())
+			return
+		}
+		if err := s.nexaflow.Validate(&draft); err != nil {
+			writeJSON(w, http.StatusOK, map[string]any{"valid": false, "error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"valid": true})
 	case "publish":
 		if !s.nexaflowRequireMethod(w, r, http.MethodPost) {
 			return
@@ -257,6 +281,19 @@ func (s *Server) adminNexaflowDefinitionByID(w http.ResponseWriter, r *http.Requ
 		}
 		writeJSON(w, http.StatusOK, pub)
 	case "runs":
+		if r.Method == http.MethodGet {
+			runs, err := s.nexaflow.ListRuns(ctx, nexaflow.RunFilter{DefinitionID: id}, identity)
+			if err != nil {
+				errorJSON(w, nexaflowErrStatus(err), err.Error())
+				return
+			}
+			var out []map[string]any
+			for _, run := range runs {
+				out = append(out, nexaflowRunSummary(run))
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"runs": out})
+			return
+		}
 		if !s.nexaflowRequireMethod(w, r, http.MethodPost) {
 			return
 		}
@@ -315,7 +352,7 @@ func (s *Server) adminNexaflowRuns(w http.ResponseWriter, r *http.Request) {
 }
 
 // adminNexaflowRunByID serves /admin/api/nexaflow/runs/{id},
-// /approve, and /cancel.
+// /approve, /cancel, and /resume (re-drive after restart/recovery).
 func (s *Server) adminNexaflowRunByID(w http.ResponseWriter, r *http.Request) {
 	identity, ok := s.nexaflowAdmin(r)
 	if !ok {
@@ -340,6 +377,8 @@ func (s *Server) adminNexaflowRunByID(w http.ResponseWriter, r *http.Request) {
 		shape = "approve"
 	case len(parts) == 2 && parts[1] == "cancel":
 		shape = "cancel"
+	case len(parts) == 2 && parts[1] == "resume":
+		shape = "resume"
 	}
 	switch shape {
 	case "":
@@ -389,6 +428,16 @@ func (s *Server) adminNexaflowRunByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		run, err := s.nexaflow.CancelRun(ctx, id, identity)
+		if err != nil {
+			errorJSON(w, nexaflowErrStatus(err), err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, nexaflowRunSummary(run))
+	case "resume":
+		if !s.nexaflowRequireMethod(w, r, http.MethodPost) {
+			return
+		}
+		run, err := s.nexaflow.ResumeRun(ctx, id, identity)
 		if err != nil {
 			errorJSON(w, nexaflowErrStatus(err), err.Error())
 			return
