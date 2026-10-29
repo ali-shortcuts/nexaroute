@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/ali-shortcuts/nexaroute/internal/usage"
 )
 
 func wave4RunOpenAIStream(t *testing.T, sse string, failOn int) (*wave4SSEWriter, error, int, int) {
@@ -14,8 +16,8 @@ func wave4RunOpenAIStream(t *testing.T, sse string, failOn int) (*wave4SSEWriter
 	w := wave4NewSSEWriter(failOn)
 	resp := &http.Response{Body: io.NopCloser(strings.NewReader(sse))}
 	var gotPrompt, gotCompletion int
-	err := streamAnthropicToOpenAIWithUsage(w, resp, "model-x", nil, func(prompt, completion int) {
-		gotPrompt, gotCompletion = prompt, completion
+	err := streamAnthropicToOpenAIWithUsage(w, resp, "model-x", nil, func(u usage.Counts) {
+		gotPrompt, gotCompletion = int(u.Input), int(u.Output)
 	})
 	return w, err, gotPrompt, gotCompletion
 }
