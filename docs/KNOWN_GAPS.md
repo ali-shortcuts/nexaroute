@@ -244,7 +244,7 @@ PR #224 wires the permission matrix in `internal/authz` to every registered
 Admin API route/method and denies unknown combinations. OIDC session roles are
 derived only from verified issuer claims using the explicit config allowlist.
 The web UI's visibility is a convenience only; the server middleware is
-authoritative. The local bbolt store is single-host. The **95% repository-wide Go statement-coverage target is not currently met**. The current-`main` measurement is **91.4% (39,584 / 43,298 statements)** on commit `c2ca13cffe4aabf49bb81a92f46e4132e179da87` (Go 1.27.3; GitHub Actions Coverage report run [40861382445](https://github.com/ali-shortcuts/nexaroute/actions/runs/40861382445), 2026-10-29, retained artifact `coverage-c2ca13cffe4aabf49bb81a92f46e4132e179da87-40861382445`). Reaching 95% on that denominator requires 41,134 covered statements, a gap of 1,550. The explicitly selected comparison baseline for issue #663 remains **91.8% (41,782 / 45,515 statements)** on commit `ba5ff2f5f0ace8953e7c4f0e4913de5105e7a13f` (Go 1.27.0; see the pre-change measurement documented in [PR #724](https://github.com/ali-shortcuts/nexaroute/pull/724)); its denominator differs from the current-`main` CI measurement, so the two percentages are not a like-for-like trend and must not be read as a regression or an improvement. The former 84.9%/85% figures are historical and superseded. Separately, the Verify job on the same commit `c2ca13c` failed (run [40861382434](https://github.com/ali-shortcuts/nexaroute/actions/runs/40861382434)) on the known flaky `internal/httpapi/TestWave3ResponsesDeadline504` (observed 502; expected 504). That failure is in the verify gate, not in the coverage workflow, whose own full test pass succeeded — but it means the verify gate on this SHA is red, and coverage success must not be presented as green gates.
+authoritative. The local bbolt store is single-host. The **95% repository-wide Go statement-coverage target is MET on current `main`**: the Coverage report workflow on commit `0ea90a0e2c4ab0049a35a94383a23d232a0cf2c61a0df1a5e` (PR #746, Go 1.27.3; GitHub Actions Coverage report run [40914837082](https://github.com/ali-shortcuts/nexaroute/actions/runs/40914837082)) measured **95.6%**, and main has since advanced to `806ad64` (PR #739). The merged head of this branch (main `806ad64` plus wave-2 behavior tests, minus three files dropped as duplicative of Continue95 — see the package section below) measures **95.96% (44,869 / 46,757 statements)** locally (Go 1.27.0, canonical command `go test -count=1 -coverprofile=.artifacts/coverage/coverage.out ./...`, all 63 packages `ok`, zero failures). Reaching 95% on that denominator requires 44,420 covered statements; this head holds a margin of +449. Denominators differ between local runs and the figures quoted for main heads (46,757 local vs 43,595 quoted for the #746 head), so the percentages are not a like-for-like trend and must not be read as a regression or an improvement; the PR's CI Fresh-coverage artifact supersedes the local figure for this head. The explicitly selected comparison baseline for issue #663 remains **91.8% (41,782 / 45,515 statements)** on commit `ba5ff2f5f0ace8953e7c4f0e4913de5105e7a13f` (Go 1.27.0; see the pre-change measurement documented in [PR #724](https://github.com/ali-shortcuts/nexaroute/pull/724)). The former 84.9%/85%/91.4% figures are historical and superseded. The `TestWave3ResponsesDeadline504` flake that failed verify on the old `c2ca13c` head is fixed on main via PR #746 (the 502→504 deadline mapping); coverage success must still not be presented as green gates — the verify gate is a separate gate with its own current state, including the known recurring `TestIssue663ProvidersScheduleRecoveryQueueFullCallback` probe flake (third CI occurrence on the `806ad64` post-merge run).
 PR #224 is merged; live external-IdP interoperability remains unverified.
 
 
@@ -497,7 +497,7 @@ non-critical nodes no longer abort unrelated sections.
 
 - Evidence: `go test ./...` plus `node --test internal/httpapi/web/dom_isolation.test.mjs`.
 
-### Package coverage gaps and targets — 95% target NOT MET
+### Package coverage gaps and targets — 95% target MET
 
 Issue #663 is authorized to start from current main after checking and re-scoping
 around the focused work already merged. Its explicit comparison baseline is
@@ -508,71 +508,61 @@ The measurement and its run-to-run caveat are recorded in [PR #724](https://gith
 This comparison baseline predates PR #724 and later changes to main; it must
 not be presented as the current-main aggregate.
 
-The successful current-`main` measurement is the Coverage report workflow
-run [40861382445](https://github.com/ali-shortcuts/nexaroute/actions/runs/40861382445)
-on commit `c2ca13cffe4aabf49bb81a92f46e4132e179da87` (2026-10-29, Go 1.27.3,
-conclusion `success`, all 63 packages `ok` in the retained artifact):
-**91.4% repository statement coverage (39,584 / 43,298 statements)**, below
-the 95% target by 1,550 covered statements. Its retained artifact is
-[coverage-c2ca13cffe4aabf49bb81a92f46e4132e179da87-40861382445](https://github.com/ali-shortcuts/nexaroute/actions/runs/40861382445/artifacts/12892365275).
-This successful measurement supersedes the failed-run diagnostics below for
-current `main`. It must still be distinguished from the gates: the separate
-Verify job on the same SHA failed (run
-[40861382434](https://github.com/ali-shortcuts/nexaroute/actions/runs/40861382434))
-on `internal/httpapi/TestWave3ResponsesDeadline504` (observed 502; expected
-504, the same known flake that failed the earlier `39a7498` run), so the
-verify gate on `c2ca13c` is red even though the coverage workflow's own test
-pass succeeded. Coverage success is a measurement, not a gate pass.
+The current measurement is the merged head of this branch (main `806ad64`
+plus wave-2 behavior tests, minus three files dropped as duplicative of
+Continue95), run locally with the same canonical command (Go 1.27.0, all
+63 packages `ok`, zero failures):
+**95.96% repository statement coverage (44,869 / 46,757 statements)**,
+above the 95% target by 449 covered statements. The PR's CI
+Fresh-coverage artifact supersedes this local figure for the PR head.
+Coverage success is a measurement, not a gate pass: it must still be
+distinguished from the verify gate, whose current state includes the known
+recurring `TestIssue663ProvidersScheduleRecoveryQueueFullCallback` probe
+flake (third CI occurrence on the `806ad64` post-merge run).
 
-Package-level figures from the successful `c2ca13c` artifact (35 of 62
+Package-level figures from the local merged-head measurement (19 of 62
 statement-bearing packages below 95%; `internal/doccheck` carries no
 statements and is excluded from that count):
 
-- `internal/breakersync`: 70.9%
-- `internal/nexaflow`: 71.0%
-- `internal/secrets`: 77.3%
-- `internal/qualitygate`: 80.1%
-- `internal/telemetry`: 81.4%
-- `internal/logging`: 81.8%
+- `internal/nexaflow`: 81.8%
 - `internal/desktop`: 85.7%
 - `internal/budget`: 85.9%
-- `internal/providers/livecanary`: 86.0%
-- `internal/evallive`: 87.0%
-- `internal/video/storage`: 87.0%
-- `internal/video/tts`: 88.9%
-- `internal/cache`: 89.3%
-- `internal/scorecards`: 89.6%
-- `internal/controlplane`: 89.8%
-- `cmd/gateway`: 90.1%
-- `internal/video/audio`: 90.3%
-- `internal/video/agent`: 90.4%
-- `internal/transport`: 90.6%
-- `internal/policysim`: 90.9%
+- `internal/evallive`: 87.3%
+- `internal/video/storage`: 87.7%
+- `internal/video/audio`: 90.6%
+- `internal/video/agent`: 90.7%
+- `internal/transport`: 91.2%
+- `internal/video/tts`: 91.7%
+- `internal/policysim`: 92.0%
 - `internal/sharedstate`: 92.0%
-- `internal/usage`: 92.0%
-- `internal/video/render`: 92.1%
-- `internal/httpapi`: 92.5%
-- `internal/securitystore`: 92.8%
-- `internal/probe`: 92.9%
-- `internal/router`: 93.3%
+- `internal/logging`: 93.0%
+- `internal/telemetry`: 93.3%
+- `cmd/gateway`: 93.5%
 - `internal/authz`: 93.8%
 - `internal/retrysafety`: 93.9%
-- `internal/events`: 94.0%
+- `internal/video/render`: 94.4%
 - `internal/privacyaudit`: 94.4%
-- `internal/decision/policy`: 94.8%
-- `internal/route`: 94.8%
 - `cmd/videogen`: 94.9%
-- `internal/video/composer`: 94.9%
 
-Packages at or above 95% on the same artifact include `internal/providers`
-(96.8%), `internal/video/cost` (96.6%), `internal/video/queue` (98.1%),
-`internal/video/providers` (95.4%), and `internal/video/runtime` (96.2%).
+Packages at or above 95% on the same measurement include `internal/httpapi`
+(97.6%), `internal/providers` (99.2%), `internal/video/cost` (96.6%),
+`internal/video/queue` (98.1%), `internal/video/providers` (99.3%), and
+`internal/video/runtime` (96.4%).
+`internal/nexaflow` remains the lowest package by design of this branch:
+its behavior is pending the Phase 6 owner decision, and no tests were
+added there to lock disputed behavior. Three wave-2 files were dropped
+in this branch as duplicative of the Continue95 set already on main
+(zero statements Continue95 does not already cover): the route-preview,
+evaluation-state, and quality-gate-CLI waves; the kept waves add 108
+statements Continue95 does not reach (OIDC 47, compat 13, simple 13,
+server 12, hedging 10, autopilot 8, Gemini 5).
 The earlier failed run on commit
 `39a7498f5dd8e9f7ad4e06633b1c42d1a7365200` (GitHub Actions run
 [40848476783](https://github.com/ali-shortcuts/nexaroute/actions/runs/40848476783))
-is now historical: it failed on the same `TestWave3ResponsesDeadline504`
-flake, and its package diagnostics (notably `cmd/gateway` 84.8% there versus
-90.1% on the successful run) must not be quoted as current-`main` figures.
+is now historical: it failed on the `TestWave3ResponsesDeadline504`
+flake (fixed on main via PR #746), and its package diagnostics (notably
+`cmd/gateway` 84.8% there versus 90.1% on the `c2ca13c` successful run)
+must not be quoted as current-`main` figures.
 
 This measurement covers the test suite only. It is not evidence for
 external live acceptance: live provider acceptance (issue #646) was
