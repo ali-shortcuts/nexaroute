@@ -49,7 +49,14 @@ schema.
 
 In **Providers → Add provider**:
 
-- Enter a name, ID, compatibility/endpoint type, and base URL.
+- Enter a name, ID, compatibility/endpoint type, and base URL. For
+  OpenCode, pick the **OpenCode Console** or **OpenCode Go** preset:
+  it pre-fills the base URL and the three protocol paths; Console
+  additionally offers model discovery, while Go models must be entered
+  manually (Go documents no listing endpoint). See
+  `docs/CONFIGURATION.md` ("OpenCode upstream") for the session-header,
+  403-entitlement, and credential-pool rules; live OpenCode behavior
+  is fixture-verified only in this tree (live = NOT_RUN).
 - Enter the provider API key (or an environment-variable reference).
 - Discover models or enter the provider's model IDs manually. Select the models
   you want, their capabilities, and enable the provider/models.

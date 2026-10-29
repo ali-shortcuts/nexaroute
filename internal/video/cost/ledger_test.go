@@ -310,3 +310,37 @@ func TestLedgerReconciliationInvalidSettledAmountsStayUnknown(t *testing.T) {
 		})
 	}
 }
+
+func TestLedgerSettlesOnZeroValueAndZeroEstimateReservation(t *testing.T) {
+	var actualLedger Ledger
+	if err := actualLedger.SettleActual("job", 1.5, 2); err != nil {
+		t.Fatalf("settle actual on zero ledger: %v", err)
+	}
+	if got := actualLedger.Spent(); got != 1.5 {
+		t.Fatalf("spent = %v, want 1.5", got)
+	}
+	estimate, actual, delta, reconciled, ok := actualLedger.Reconciliation("job")
+	if !ok || !reconciled || estimate != 2 || actual != 1.5 || delta != -0.5 {
+		t.Fatalf("zero-ledger reconciliation = (%v,%v,%v,%v,%v)", estimate, actual, delta, reconciled, ok)
+	}
+
+	var estimateLedger Ledger
+	if err := estimateLedger.SettleEstimate("job", 1.25); err != nil {
+		t.Fatalf("settle estimate on zero ledger: %v", err)
+	}
+	if got := estimateLedger.EstimatedSpent(); got != 1.25 {
+		t.Fatalf("estimated spent = %v, want 1.25", got)
+	}
+
+	var ledger Ledger
+	if err := ledger.ReserveForJob("zero", knownEstimate(0), 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := ledger.SettleActual("zero", 0.75, 2); err != nil {
+		t.Fatal(err)
+	}
+	estimate, actual, delta, reconciled, ok = ledger.Reconciliation("zero")
+	if !ok || !reconciled || estimate != 2 || actual != 0.75 || delta != -1.25 {
+		t.Fatalf("zero-estimate reconciliation = (%v,%v,%v,%v,%v)", estimate, actual, delta, reconciled, ok)
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -22,6 +23,7 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/video/agent"
 	"github.com/ali-shortcuts/nexaroute/internal/video/orchestrator"
 	"github.com/ali-shortcuts/nexaroute/internal/video/queue"
+	"github.com/ali-shortcuts/nexaroute/internal/video/storage"
 )
 
 type Handler struct {
@@ -133,10 +135,33 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	}
 	j, err := h.Orch.Create(r.Context(), req)
 	if err != nil {
+		// A store/ledger outage during creation is a retryable 503
+		// with a generic message, never a 400 carrying backend detail
+		// (same class as the 2026-10-27 read-side 404 defect).
+		if errors.Is(err, orchestrator.ErrStoreUnavailable) {
+			writeError(w, http.StatusServiceUnavailable, "video_store_unavailable", "video job store is temporarily unavailable", true)
+			return
+		}
 		writeError(w, http.StatusBadRequest, "video_create_failed", err.Error(), false)
 		return
 	}
 	writeJSON(w, http.StatusAccepted, viewJob(j))
+}
+
+// storeGetError maps a job-store Get failure to the honest HTTP status: a
+// genuinely missing job is 404, but any other store failure (for example a
+// PostgreSQL outage) must never masquerade as "job not found" — during the
+// 2026-10-27 HA acceptance a backend outage made existing jobs read back
+// as 404, which a client could mistake for a deleted job. Store errors are
+// reported generically (no backend detail in the response) as retryable
+// 503s, matching the list endpoint's fail-closed behaviour.
+func storeGetError(w http.ResponseWriter, err error) bool {
+	if errors.Is(err, queue.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "not_found", "job not found", false)
+		return true
+	}
+	writeError(w, http.StatusServiceUnavailable, "video_store_unavailable", "video job store is temporarily unavailable", true)
+	return true
 }
 
 func (h *Handler) get(w http.ResponseWriter, r *http.Request, id string) {
@@ -146,7 +171,7 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request, id string) {
 	}
 	j, err := h.Store.Get(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "not_found", "job not found", false)
+		storeGetError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, viewJob(j))
@@ -241,7 +266,14 @@ func (h *Handler) cancel(w http.ResponseWriter, r *http.Request, id string) {
 		return
 	}
 	if err := h.Orch.Cancel(r.Context(), id); err != nil {
-		writeError(w, http.StatusBadRequest, "cancel_failed", err.Error(), false)
+		switch {
+		case errors.Is(err, queue.ErrNotFound):
+			writeError(w, http.StatusNotFound, "not_found", "job not found", false)
+		case errors.Is(err, orchestrator.ErrStoreUnavailable):
+			writeError(w, http.StatusServiceUnavailable, "video_store_unavailable", "video job store is temporarily unavailable", true)
+		default:
+			writeError(w, http.StatusBadRequest, "cancel_failed", err.Error(), false)
+		}
 		return
 	}
 	h.get(w, r, id)
@@ -264,7 +296,7 @@ func (h *Handler) getAsset(w http.ResponseWriter, r *http.Request, jobID, assetI
 	}
 	job, err := h.Store.Get(r.Context(), jobID)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "not_found", "job not found", false)
+		storeGetError(w, err)
 		return
 	}
 	var asset video.Asset
@@ -296,7 +328,15 @@ func (h *Handler) getAsset(w http.ResponseWriter, r *http.Request, jobID, assetI
 	}
 	file, err := opener.Open(asset)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "asset_not_found", "asset not found", false)
+		// Deterministic rejections are 404, not a retryable outage: a
+		// genuinely absent file, and an asset path that escapes the
+		// storage root, can never be served by retrying. Only genuine
+		// transient storage failures map to 503 asset_unavailable.
+		if os.IsNotExist(err) || storage.IsOutsideRoot(err) {
+			writeError(w, http.StatusNotFound, "asset_not_found", "asset not found", false)
+		} else {
+			writeError(w, http.StatusServiceUnavailable, "asset_unavailable", "asset storage is temporarily unavailable", true)
+		}
 		return
 	}
 	defer file.Close()

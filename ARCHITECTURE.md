@@ -128,7 +128,7 @@ Pre-stream failover can occur on:
 - 429 rate limits
 - retryable server/gateway errors
 
-`Retry-After` is honored up to the configured maximum. Once client-visible stream bytes have been committed, the request remains bound to that upstream; NexaRoute does not fake mid-stream continuation on another model.
+`Retry-After` is honored up to the configured maximum. Once client-visible stream bytes have been committed, the request remains bound to that upstream; NexaRoute does not fake mid-stream continuation on another model. The full retry classification (sent / may-have-executed / committed / verified idempotency), the ambiguous-outcome record, the bounded attempt/deadline budget, and the idempotency-key policy live in `docs/RETRY_SAFETY.md` and `internal/retrysafety`; no provider dialect has a verified idempotency mechanism, so exactly-once provider execution is never claimed.
 
 ## Credential pool
 

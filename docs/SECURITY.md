@@ -15,6 +15,51 @@ Secret-bearing JSON values are stored as versioned `nxs1` envelopes encrypted wi
 
 The encrypted fields include provider API keys and credential-pool API keys, decision-provider keys, the Admin API key, client-auth keys, provider custom-header values, and proxy URLs. Environment-variable references remain references rather than copied secret values.
 
+### Vault Transit envelope mode (`nxs2`)
+
+The optional `nxs2` envelope path separates raw master-key custody from
+envelope-key custody. Transit mode is selected only by
+`NEXAROUTE_KEY_PROVIDER=transit` together with the gate
+`NEXAROUTE_TRANSIT_ENABLED=true` (any other gate value is a configuration
+error, and the gate with any other provider is also an error). The gateway
+still generates a fresh 256-bit DEK per secret and encrypts the value locally
+with AES-256-GCM, but the DEK is wrapped and unwrapped through Vault Transit.
+The Transit KEK never enters the gateway process; only the short-lived DEK does.
+Each `nxs2` envelope stores exactly the ADR 0007 §3.2 fields: envelope
+version 2, provider `vault-transit`, the SHA-256 of the canonical Transit
+key reference, the explicit Transit key version, the strict
+`vault:vN:<base64>` wrapped DEK, the 12-byte nonce, and the local ciphertext,
+in a base64url-encoded JSON payload with no unknown fields, no duplicate keys,
+and no trailing data. Authentication is the canonical length-prefixed AAD
+(ADR 0007 §5.1: binding version, provider, key reference, nonce, owner, and
+field) checked by the local AES-GCM open only: no associated data or context
+is sent to Transit, because the Vault Transit API has no such parameter for a
+pinned non-derived key, so no Vault-layer binding is claimed. Moving a value
+to another provider, credential slot, header, or admin field fails
+authentication. One deliberate limit remains: the AAD does not bind config
+identity, so a whole envelope transplanted between configs that share the
+Transit key, owner, and field still decrypts. The mitigation is operational
+and mandatory: use a distinct Transit key per environment and per tenant, and
+never share one key across trust boundaries.
+
+Transit requests validate configuration before sending, use a 5-second
+per-request timeout inside overall budgets (30 seconds for load/verify/save,
+120 seconds for migrate/rewrap), cap responses at 64 KiB, refuse redirects,
+send the token only in the `X-Vault-Token` header, and return redacted,
+classified errors (`transit_unavailable`, `transit_forbidden`,
+`transit_key_not_found`, `transit_invalid_ciphertext`,
+`transit_key_version_unavailable`, `transit_bad_response`,
+`transit_config_invalid`, `transit_not_enabled`). Retries are at most 2 and
+only for 429/503, inside the budget. There is no fallback to a local file,
+environment key, or raw-key provider. An unreachable or denied Vault, a
+missing token, a wrong key reference, a tampered envelope, or a revoked
+historical key version fails closed.
+
+Transit mode is an explicit opt-in and remains **not production-verified**:
+CI exercises the protocol against a fake Vault API, but no real Vault Transit
+acceptance run has been executed. Do not claim HSM/KMS isolation for a target
+deployment until that run is recorded under `docs/EXTERNAL_VERIFICATION.md`.
+
 ### Master-key selection and file permissions
 
 The source precedence is:
@@ -32,18 +77,27 @@ provider reads a base64 key from the variable named by `NEXAROUTE_KEY_PROVIDER_E
 `NEXAROUTE_KEY_PROVIDER_COMMAND`; the command path and reference are configuration, while key values
 are never placed in argv or logs. Missing, malformed, unavailable, or wrong keys fail closed. External
 providers are read-only from the `secrets rotate` command; rotate them in the custody system first and
-then run `secrets verify`. For HashiCorp Vault, the shipped pattern is a KV v2 entry plus the reference
-command helper `scripts/key-provider-vault-kv.sh`; Vault Transit envelope mode is NOT implemented — the
-provider contract loads raw key material into the gateway process (see
-`docs/EXTERNAL_VERIFICATION.md` for the exact boundary and the operator verification procedures for a
-real IdP, Vault and headless keyring). Real KMS/keyring service interoperability is deployment-dependent
-and remains unverified unless exercised in the target environment.
+then run `secrets verify`. For HashiCorp Vault, two patterns are supported. The `nxs1` pattern is a KV v2 entry plus the reference
+command helper `scripts/key-provider-vault-kv.sh`; the provider contract loads a raw 32-byte key into the
+gateway process. The `nxs2` pattern selects `NEXAROUTE_KEY_PROVIDER=transit` with
+`NEXAROUTE_TRANSIT_ENABLED=true` and uses `VAULT_ADDR`, `VAULT_TOKEN` or
+`VAULT_TOKEN_FILE` (exactly one, file mode exactly `0600`),
+`NEXAROUTE_TRANSIT_MOUNT` and `NEXAROUTE_TRANSIT_KEY` (both required, no
+defaults), and optionally `VAULT_NAMESPACE`; combining Transit mode with
+`NEXAROUTE_MASTER_KEY`, `NEXAROUTE_MASTER_KEY_FILE`,
+`NEXAROUTE_KEY_PROVIDER_ENV`, `NEXAROUTE_KEY_PROVIDER_COMMAND`, or
+`NEXAROUTE_KEY_PROVIDER_REF` is a configuration error. The Transit KEK never enters the process. Real Vault
+Transit interoperability remains unverified until an operator-authorized live acceptance run is recorded
+in `docs/EXTERNAL_VERIFICATION.md`. Real KMS/keyring service interoperability is deployment-dependent and
+remains unverified unless exercised in the target environment.
 
 ### Migration and failure behavior
 
 On load, legacy plaintext secret fields are encrypted and the config is replaced via a same-directory temporary file, file sync, atomic rename, and directory sync. Before replacing the file, NexaRoute creates a timestamped `.enc.bak` containing an authenticated encrypted backup—not a plaintext copy. Migration is idempotent.
 
 Missing or wrong keys, malformed envelopes, tampering, or AAD mismatch fail closed. NexaRoute does not generate a replacement key for a config that contains encrypted secrets and does not start with partially decrypted settings or a plaintext fallback. Restore the exact matching key or restore an encrypted config backup together with its matching key. Loss of the only matching key makes those encrypted secrets unrecoverable.
+
+Selecting Transit mode for a config that still contains `nxs1` envelopes fails closed with a migration message. The explicit `nexaroute secrets migrate-to-transit --config PATH --legacy-key-file PATH` (or `--legacy-key`/`NEXAROUTE_LEGACY_MASTER_KEY`) path requires the exact legacy key only when `nxs1` is actually present, proves Transit connectivity with a canary wrap/unwrap, writes a verbatim timestamped `.pre-transit.bak` copy of the pre-migration bytes (mode `0600`, SHA-256 reported), and atomically replaces the config only after an in-memory decrypt-verify; a post-write verification failure rolls back to the backup. Plaintext secret fields are never auto-migrated into Transit: they fail on load and on migration with an explicit-migration message. `nexaroute secrets rewrap-transit --config PATH` uses only the Transit `rewrap` endpoint to move wrapped DEKs to the latest key version (decrypt-verifies before and after, writes a verbatim `.pre-rewrap.bak`, and writes nothing at all when already at the latest version); both commands accept `--dry-run`. `nexaroute secrets rotate` refuses Transit mode: rotate the Vault key Vault-side, then rewrap. Disabling a historical Transit key version before rewrap and verification is complete can make affected secrets unrecoverable. Backups of `nxs2` configs are Transit-sealed: rolling one back requires Vault Transit availability, and `--include-master-key` is rejected for them because there is no raw key to bundle.
 
 Restore is verification-first. `nexaroute restore --verify` (and `nexaroute doctor --bundle`) record only hashes, statuses and timings — never plaintext, ciphertext, or key material — and treat an undecryptable encrypted config as a failure or blocker rather than a pass: a missing key is `BLOCKED` (nonzero), a wrong key or tampered audit chain is `FAIL`. The master-key fingerprint stored in a backup manifest is a SHA-256 hash used only to detect a wrong key; it does not weaken the key. Key custody therefore stays independent of config/backup custody: `--include-master-key` bundles must be stored like secrets.
 

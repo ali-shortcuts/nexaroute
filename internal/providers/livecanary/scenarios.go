@@ -48,10 +48,16 @@ func supportsReasoning(p config.ProviderConfig) bool {
 	return p.Type != "bedrock"
 }
 
+func appliesWhenCredentialed(p config.ProviderConfig) bool {
+	return !strings.EqualFold(strings.TrimSpace(p.AuthMode), "none")
+}
+
 func scenarioCatalog() []scenario {
 	return []scenario{
 		{ID: "text", Dimensions: []providers.ConformanceDimension{providers.DimAddressing, providers.DimAuth, providers.DimNonStream}, Calls: 1, Applies: allDialects},
 		{ID: "stream", Dimensions: []providers.ConformanceDimension{providers.DimAddressing, providers.DimAuth, providers.DimStreaming}, Calls: 1, Applies: allDialects},
+		{ID: "stream_usage", Dimensions: []providers.ConformanceDimension{providers.DimAddressing, providers.DimAuth, providers.DimStreaming}, Calls: 1, Applies: allDialects},
+		{ID: "auth_failure", Dimensions: []providers.ConformanceDimension{providers.DimAddressing, providers.DimAuth}, Calls: 1, Applies: appliesWhenCredentialed},
 		{ID: "tools", Dimensions: []providers.ConformanceDimension{providers.DimAddressing, providers.DimAuth, providers.DimToolCalls}, Calls: 1, Applies: allDialects},
 		{ID: "tool_result", Dimensions: []providers.ConformanceDimension{providers.DimAddressing, providers.DimAuth, providers.DimToolResults}, Calls: 1, Applies: allDialects},
 		{ID: "structured_output", Dimensions: []providers.ConformanceDimension{providers.DimAddressing, providers.DimAuth, providers.DimStructuredOutput}, Calls: 1, Applies: supportsStructuredOutput},
@@ -65,8 +71,18 @@ func scenarioCatalog() []scenario {
 var coreScenarioIDs = []string{"text", "stream", "tools", "tool_result", "error_envelope"}
 var extendedScenarioIDs = []string{"text", "stream", "tools", "tool_result", "structured_output", "images", "parallel_tools", "reasoning", "error_envelope"}
 
-// ResolveScenarios accepts "core", "extended", "all", or scenario ids in a
-// comma-separated list (repeated flags are also accepted by the CLI).
+// acceptanceScenarioIDs is the issue #646 live-acceptance set: the core
+// round trips plus the two cases a one-token probe cannot show — that a
+// deliberately invalid credential is rejected (auth_failure) and that a
+// stream actually reports token usage (stream_usage). It deliberately does
+// NOT include rate-limit, timeout, outage, or failover induction: those are
+// recorded only when observed, or proven against loopback fakes, and the
+// runbook (docs/PROVIDER_LIVE_ACCEPTANCE.md) says so per case.
+var acceptanceScenarioIDs = []string{"text", "stream", "stream_usage", "tools", "tool_result", "auth_failure", "error_envelope"}
+
+// ResolveScenarios accepts "core", "extended", "all", "acceptance", or
+// scenario ids in a comma-separated list (repeated flags are also accepted
+// by the CLI).
 func ResolveScenarios(names []string) ([]scenario, error) {
 	if len(names) == 0 {
 		names = []string{"core"}
@@ -81,6 +97,8 @@ func ResolveScenarios(names []string) ([]scenario, error) {
 			switch part {
 			case "core":
 				ids = append(ids, coreScenarioIDs...)
+			case "acceptance":
+				ids = append(ids, acceptanceScenarioIDs...)
 			case "extended", "all":
 				ids = append(ids, extendedScenarioIDs...)
 			default:
@@ -228,6 +246,165 @@ func (r *Runner) runStream(ctx context.Context, sc scenario) ScenarioResult {
 	res.Evidence = fmt.Sprintf("http %d; sse bytes=%d; terminal event observed", raw.status, len(raw.body))
 	res.Status = StatusPass
 	return res
+}
+
+func (r *Runner) runStreamUsage(ctx context.Context, sc scenario) ScenarioResult {
+	req := baseRequest(r.upstreamModel, "Reply with the single word OK.", r.scenarioOutputTokens(sc.ID))
+	req.Stream = true
+	raw, err := r.doCanonical(ctx, req, true)
+	res := ScenarioResult{ID: sc.ID, Dimensions: dimensionsAsStrings(sc.Dimensions), Calls: raw.calls, LatencyMS: raw.latency.Milliseconds(), HTTPStatus: raw.status}
+	if err != nil {
+		return fail(res, r.redact(err.Error()))
+	}
+	if raw.status < 200 || raw.status >= 300 {
+		return fail(res, fmt.Sprintf("http %d: %s", raw.status, r.redactSnippet(raw.body)))
+	}
+	ct := strings.ToLower(raw.header.Get("Content-Type"))
+	if !strings.Contains(ct, "text/event-stream") {
+		return fail(res, "expected text/event-stream, got "+ct)
+	}
+	body := string(raw.body)
+	if !hasSSEData(body) {
+		return fail(res, "stream contained no non-terminal data event")
+	}
+	if !streamTerminal(r.provider.Type, body) {
+		return fail(res, "stream did not contain the dialect's terminal event")
+	}
+	in, out, found := extractStreamUsage(raw.body)
+	if !found {
+		return fail(res, "stream completed but reported no input/output usage tokens; usage extraction is not demonstrated for this provider")
+	}
+	res.InputTokens = in
+	res.OutputTokens = out
+	res.Evidence = fmt.Sprintf("http %d; sse bytes=%d; stream usage input=%d output=%d", raw.status, len(raw.body), in, out)
+	res.Status = StatusPass
+	return res
+}
+
+// extractStreamUsage scans SSE data events (and Bedrock SSE envelopes) for
+// usage tokens in every dialect's shape: OpenAI usage.prompt/completion,
+// Anthropic message_start/message_delta usage, Gemini usageMetadata, and
+// Bedrock payload usage. It returns found=false unless both an input and an
+// output count were observed, so a stream that merely completes cannot pass
+// as a usage demonstration.
+func extractStreamUsage(body []byte) (input, output int, found bool) {
+	var walk func(v any)
+	walk = func(v any) {
+		switch node := v.(type) {
+		case map[string]any:
+			for key, value := range node {
+				if key == "usage" || key == "usageMetadata" {
+					if usage, ok := value.(map[string]any); ok {
+						for uk, uv := range usage {
+							n, ok := uv.(float64)
+							if !ok {
+								continue
+							}
+							switch uk {
+							case "prompt_tokens", "input_tokens", "inputTokens", "promptTokenCount":
+								input = int(n)
+							case "completion_tokens", "output_tokens", "outputTokens", "candidatesTokenCount":
+								output = int(n)
+							}
+						}
+					}
+				}
+				walk(value)
+			}
+		case []any:
+			for _, item := range node {
+				walk(item)
+			}
+		}
+	}
+	for _, line := range strings.Split(string(body), "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if data == "" || data == "[DONE]" {
+			continue
+		}
+		var decoded any
+		if err := json.Unmarshal([]byte(data), &decoded); err != nil {
+			continue
+		}
+		walk(decoded)
+	}
+	return input, output, input > 0 && output > 0
+}
+
+// bogusAuthProvider returns a copy of the provider whose credential is a
+// deliberately invalid placeholder, never the operator's real credential.
+// The credential pool and any auth-shaped custom headers are cleared so the
+// request cannot accidentally authenticate. Bedrock is the one exception to
+// full replacement: SigV4 reads the secret only from the environment variable
+// named in config at request time, so the bogus probe replaces only the
+// access-key id. The signature is an HMAC over the request; it does not
+// disclose the secret, and AWS rejects the unknown key id with 403. That
+// distinction is recorded in the runbook, not hidden.
+func bogusAuthProvider(p config.ProviderConfig) (config.ProviderConfig, error) {
+	if strings.EqualFold(strings.TrimSpace(p.AuthMode), "none") {
+		return config.ProviderConfig{}, errors.New("auth_failure does not apply to a provider with auth_mode none")
+	}
+	out := p
+	out.APIKey = "nexaroute-acceptance-invalid-credential"
+	out.APIKeyEnv = ""
+	out.Credentials = nil
+	if len(p.Headers) > 0 {
+		headers := make(map[string]string, len(p.Headers))
+		for name, value := range p.Headers {
+			lower := strings.ToLower(name)
+			if strings.Contains(lower, "key") || strings.Contains(lower, "token") ||
+				strings.Contains(lower, "auth") || strings.Contains(lower, "secret") ||
+				strings.Contains(lower, "cookie") {
+				continue
+			}
+			headers[name] = value
+		}
+		out.Headers = headers
+	}
+	return out, nil
+}
+
+// runAuthFailure expects the provider to reject a deliberately invalid
+// credential. A 200 here is a FAIL, not a pass: it would mean the endpoint
+// accepted a credential that must not authenticate. Accepted rejection
+// statuses cover the dialects: 401/403 everywhere, plus 400 for Gemini,
+// whose API-key errors surface as 400. The bogus credential value is never
+// written to the report; only the observed status is recorded.
+func (r *Runner) runAuthFailure(ctx context.Context, sc scenario) ScenarioResult {
+	res := ScenarioResult{ID: sc.ID, Dimensions: dimensionsAsStrings(sc.Dimensions)}
+	bogus, err := bogusAuthProvider(r.provider)
+	if err != nil {
+		return fail(res, err.Error())
+	}
+	adapter, err := providers.NewAdapter(bogus, r.callTimeout)
+	if err != nil {
+		return fail(res, r.redact(err.Error()))
+	}
+	defer providers.CloseIdleConnections(adapter)
+	req := baseRequest(r.upstreamModel, "Reply with the single word OK.", r.scenarioOutputTokens(sc.ID))
+	payload, path, err := encodeRequest(r.provider, req)
+	if err != nil {
+		return fail(res, r.redact(err.Error()))
+	}
+	raw, err := r.doRawWith(adapter, ctx, payload, false, path)
+	res.Calls = raw.calls
+	res.LatencyMS = raw.latency.Milliseconds()
+	res.HTTPStatus = raw.status
+	if err != nil {
+		return fail(res, r.redact(err.Error()))
+	}
+	switch raw.status {
+	case http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden:
+		res.Evidence = fmt.Sprintf("invalid credential rejected with http %d as expected", raw.status)
+		res.Status = StatusPass
+		return res
+	default:
+		return fail(res, fmt.Sprintf("invalid credential was not rejected as expected: http %d", raw.status))
+	}
 }
 
 func (r *Runner) runTools(ctx context.Context, sc scenario) ScenarioResult {
@@ -472,6 +649,10 @@ func (r *Runner) doCanonical(ctx context.Context, req canonical.Request, stream 
 }
 
 func (r *Runner) doRaw(ctx context.Context, payload []byte, stream bool, path ...string) (rawResponse, error) {
+	return r.doRawWith(r.adapter, ctx, payload, stream, path...)
+}
+
+func (r *Runner) doRawWith(adapter providers.Adapter, ctx context.Context, payload []byte, stream bool, path ...string) (rawResponse, error) {
 	before := r.calls
 	r.calls++
 	out := rawResponse{calls: r.calls - before}
@@ -483,7 +664,7 @@ func (r *Runner) doRaw(ctx context.Context, payload []byte, stream bool, path ..
 	if target == "" {
 		target = defaultPath(r.provider)
 	}
-	resp, err := r.adapter.DoPath(ctx, http.MethodPost, target, payload, stream, nil)
+	resp, err := adapter.DoPath(ctx, http.MethodPost, target, payload, stream, nil)
 	out.latency = r.now().Sub(start)
 	if out.latency < 0 {
 		out.latency = 0
@@ -671,12 +852,64 @@ func streamTerminal(dialect, body string) bool {
 	case "openai_responses":
 		return strings.Contains(body, "response.completed")
 	case "gemini", "vertex":
-		return strings.Contains(body, "finishReason")
+		return streamJSONHasNonEmptyString(body, "finishReason")
 	case "bedrock":
 		return strings.Contains(body, "messageStop")
 	default:
-		return strings.Contains(body, "[DONE]") || strings.Contains(body, `"finish_reason"`)
+		// A chunk that merely mentions finish_reason with a null value
+		// is an open stream, not a terminated one: matching the key
+		// alone reported truncated streams as PASS. Require [DONE] or a
+		// non-empty finish_reason value in a data event.
+		return strings.Contains(body, "[DONE]") || streamJSONHasNonEmptyString(body, "finish_reason")
 	}
+}
+
+// streamJSONHasNonEmptyString reports whether any SSE data event decodes to
+// JSON containing key with a non-empty string value, anywhere in the event.
+// Null, absent, and empty-string values do not count as termination.
+func streamJSONHasNonEmptyString(body, key string) bool {
+	found := false
+	var walk func(v any)
+	walk = func(v any) {
+		if found {
+			return
+		}
+		switch node := v.(type) {
+		case map[string]any:
+			for k, value := range node {
+				if k == key {
+					if s, ok := value.(string); ok && strings.TrimSpace(s) != "" {
+						found = true
+						return
+					}
+				}
+				walk(value)
+			}
+		case []any:
+			for _, item := range node {
+				walk(item)
+			}
+		}
+	}
+	for _, line := range strings.Split(body, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if data == "" || data == "[DONE]" {
+			continue
+		}
+		var decoded any
+		if err := json.Unmarshal([]byte(data), &decoded); err != nil {
+			continue
+		}
+		walk(decoded)
+		if found {
+			return true
+		}
+	}
+	return false
 }
 
 func extractJSONObject(text string) (map[string]any, bool) {

@@ -1,0 +1,118 @@
+# Disposable stub upstream for scripts/k8s-acceptance.sh --live.
+#
+# NOT part of the chart and NOT a NexaRoute component. It answers the two
+# OpenAI-compatible calls the gateway's probe engine makes (GET
+# /v1/models and POST /v1/chat/completions with max_tokens=1) so that a
+# stub deployment can become Healthy under the ready_mesh strategy and
+# /readyz can go 200 without any paid or real upstream call. It holds no
+# credentials and serves no real model.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nexaroute-stub-code
+  labels:
+    app.kubernetes.io/name: nexaroute-stub
+data:
+  stub.py: |
+    import json
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+
+    class Handler(BaseHTTPRequestHandler):
+        def _send(self, obj):
+            body = json.dumps(obj).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            if self.path in ("/v1/models", "/v1/models/"):
+                self._send({"object": "list",
+                            "data": [{"id": "stub-model", "object": "model"}]})
+            else:
+                self.send_response(404)
+                self.end_headers()
+
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length") or 0)
+            self.rfile.read(length)
+            if self.path == "/v1/chat/completions":
+                self._send({"id": "stub-chat", "object": "chat.completion",
+                            "model": "stub-model",
+                            "choices": [{"index": 0,
+                                         "message": {"role": "assistant",
+                                                     "content": "OK"},
+                                         "finish_reason": "stop"}],
+                            "usage": {"prompt_tokens": 1,
+                                      "completion_tokens": 1,
+                                      "total_tokens": 2}})
+            else:
+                self.send_response(404)
+                self.end_headers()
+
+        def log_message(self, *args):
+            pass
+
+
+    HTTPServer(("0.0.0.0", 8080), Handler).serve_forever()
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nexaroute-stub
+  labels:
+    app.kubernetes.io/name: nexaroute-stub
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: nexaroute-stub
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: nexaroute-stub
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: stub
+          image: python:3.12-alpine
+          command: ["python", "/code/stub.py"]
+          ports:
+            - containerPort: 8080
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: code
+              mountPath: /code
+              readOnly: true
+      volumes:
+        - name: code
+          configMap:
+            name: nexaroute-stub-code
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nexaroute-stub
+  labels:
+    app.kubernetes.io/name: nexaroute-stub
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: nexaroute-stub
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080

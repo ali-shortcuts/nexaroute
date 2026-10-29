@@ -59,11 +59,22 @@ jobs:
           echo "EVIDENCE_OUT=$EVIDENCE_OUT" >> "$GITHUB_ENV"
 
       - name: Capture browser evidence matrix
+        id: capture
         env:
           # The runner sources this file before building the gateway;
           # an empty file keeps `go` resolution entirely with setup-go.
           GO_ENV: /dev/null
         run: node scripts/browser-evidence.mjs --out "$EVIDENCE_OUT"
+
+      - name: Summarize browser evidence outcome
+        if: always()
+        run: |
+          {
+            echo '## Browser evidence'
+            echo "Capture step outcome: ${{ steps.capture.outcome }}"
+            echo 'Exit-code contract of scripts/browser-evidence.mjs: 0 = captured, 1 = axe serious/critical violations, 2 = environment blocked (no screenshots by design). A blocked run is not a successful evidence run, and an absent artifact under it is expected, not a second failure.'
+            echo 'This workflow is optional evidence generation, not the mandatory browser acceptance gate (that is the CI verify job running scripts/run-browser-acceptance.py).'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Preserve captured evidence
         if: always()
@@ -72,4 +83,6 @@ jobs:
           name: browser-evidence-m2-14-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ github.workspace }}/.artifacts/browser-evidence/${{ github.run_id }}-${{ github.run_attempt }}/
           retention-days: 90
-          if-no-files-found: error
+          # warn, not error: a blocked environment (exit 2) produces no
+          # screenshots by design, and the job failure is the signal.
+          if-no-files-found: warn

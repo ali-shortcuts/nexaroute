@@ -135,6 +135,27 @@ The production adapter in this repository connects to a ComfyUI API server on yo
 
 The ComfyUI adapter currently supports silent text-to-video only; it does not generate provider-side dialogue, sound effects, or music. Multi-shot jobs can optionally add local Piper narration and script-derived SRT captions after the clips are saved, then compose the final MP4 using FFmpeg. The configured `comfyui_max_duration_seconds` is a per-clip limit, not the total episode duration. Model/workflow requirements and licenses are managed by your local ComfyUI installation.
 
+### Optional real-inference acceptance
+
+The repository includes an explicit, opt-in harness for checking a provisioned
+ComfyUI installation with a real compatible text-to-video workflow:
+
+```bash
+nexaroute comfyui-accept \
+  --config /etc/nexaroute/config.json \
+  --confirm-live \
+  --out docs/reports/verification-slices/comfyui-acceptance-$(date -u +%Y%m%dT%H%M%SZ).json
+```
+
+Without `--confirm-live` it exits before loading a target or making any
+request. It does not download models. It submits one minimal workflow, records
+`/system_stats`, downloads through the provider, reads the persisted asset back
+to verify size/metadata/SHA-256, and uses `ffprobe` to prove a decodable video
+stream. Missing provisioning, configuration, or `ffprobe` is reported as
+`BLOCKED`; actual model inference is `NOT_RUN` until a real installation is
+used. Loopback fixture output is harness evidence, not real inference. See
+[ComfyUI real-inference acceptance](reports/verification-slices/comfyui-real-inference-acceptance.md).
+
 ## Local narration and burned-in subtitles
 
 The optional Piper adapter adds local speech synthesis without a paid API. Install Piper in a dedicated virtual environment and download a voice model from the official catalogue. The model and its matching `.onnx.json` sidecar are both required.

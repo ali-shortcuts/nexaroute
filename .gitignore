@@ -20,3 +20,6 @@ scripts/a11y/node_modules/
 
 # Local scratch space for browser-evidence builds
 /.artifacts/
+
+# Disposable-cluster acceptance evidence (scripts/k8s-acceptance.sh)
+/k8s-acceptance-out/

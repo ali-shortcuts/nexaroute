@@ -22,4 +22,10 @@ go test -timeout=2m -count=1 ./internal/logging -run='^TestStress'
 echo '== evaluation plane stress =='
 go test -timeout=2m -count=1 ./internal/eval -run='^TestStress'
 
+echo '== video cost ledger stress =='
+go test -timeout=2m -count=1 ./internal/video/cost -run='^TestStress'
+
+echo '== video queue claim stress =='
+go test -timeout=2m -count=1 ./internal/video/queue -run='^TestStress'
+
 echo 'STRESS PASS'
