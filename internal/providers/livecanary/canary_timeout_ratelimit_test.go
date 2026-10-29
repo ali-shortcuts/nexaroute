@@ -57,7 +57,13 @@ func TestCanaryCallTimeoutIsRecordedAndNotRetried(t *testing.T) {
 	if res.Status != StatusFail {
 		t.Fatalf("status=%q, want %q (error=%q)", res.Status, StatusFail, res.Error)
 	}
-	if !strings.Contains(strings.ToLower(res.Error), "timeout") {
+	// The two race outcomes spell the timeout differently: the
+	// adapter's error says "timeout awaiting response headers",
+	// while the canary annotation says "call timed out after ...".
+	// Accept either; asserting only one spelling made this test
+	// flake on exactly the race documented above.
+	errLower := strings.ToLower(res.Error)
+	if !strings.Contains(errLower, "timeout") && !strings.Contains(errLower, "timed out") {
 		t.Fatalf("error=%q, want it to record a timeout observation, not a silent pass", res.Error)
 	}
 	if report.Outcome != OutcomeFailed {
