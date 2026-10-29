@@ -124,14 +124,14 @@ func (s *Server) adminNexaflowNodes(w http.ResponseWriter, r *http.Request) {
 		out = append(out, map[string]any{
 			"id": spec.ID, "version": spec.Version, "title": spec.Title,
 			"category": spec.Category, "description": spec.Description,
-			"input_schema": nexaflowFieldViews(spec.InputSchema),
-			"output_schema": nexaflowFieldViews(spec.OutputSchema),
-			"config_schema": nexaflowFieldViews(spec.ConfigSchema),
+			"input_schema":       nexaflowFieldViews(spec.InputSchema),
+			"output_schema":      nexaflowFieldViews(spec.OutputSchema),
+			"config_schema":      nexaflowFieldViews(spec.ConfigSchema),
 			"default_timeout_ms": spec.DefaultTimeout.Milliseconds(),
-			"max_input_bytes": spec.MaxInputBytes,
-			"max_output_bytes": spec.MaxOutputBytes,
-			"permission": string(spec.Permission),
-			"requires_policy": spec.RequiresOperatorPolicy,
+			"max_input_bytes":    spec.MaxInputBytes,
+			"max_output_bytes":   spec.MaxOutputBytes,
+			"permission":         string(spec.Permission),
+			"requires_policy":    spec.RequiresOperatorPolicy,
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"nodes": out})

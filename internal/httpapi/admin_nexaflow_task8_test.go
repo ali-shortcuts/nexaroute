@@ -166,13 +166,13 @@ type task8NodeSchemaField struct {
 }
 
 type task8NodeSchemaView struct {
-	ID               string                `json:"id"`
+	ID               string                 `json:"id"`
 	InputSchema      []task8NodeSchemaField `json:"input_schema"`
 	OutputSchema     []task8NodeSchemaField `json:"output_schema"`
 	ConfigSchema     []task8NodeSchemaField `json:"config_schema"`
-	DefaultTimeoutMs int                   `json:"default_timeout_ms"`
-	MaxInputBytes    int                   `json:"max_input_bytes"`
-	RequiresPolicy   bool                  `json:"requires_policy"`
+	DefaultTimeoutMs int                    `json:"default_timeout_ms"`
+	MaxInputBytes    int                    `json:"max_input_bytes"`
+	RequiresPolicy   bool                   `json:"requires_policy"`
 }
 
 func TestTask8HTTPNodesSchemas(t *testing.T) {
