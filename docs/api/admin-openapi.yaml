@@ -1873,6 +1873,59 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '405':
           $ref: '#/components/responses/MethodNotAllowed'
+  /admin/api/nexaflow/templates/{id}:
+    post:
+      summary: Instantiate a NexaFlow template into a saved draft (POST to the /instantiate sub-resource under this prefix); any other shape under this prefix answers 404
+      x-permission: config.write
+      security:
+      - adminSession: []
+        csrfToken: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        description: Resource identifier.
+        schema:
+          type: string
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Operation result; see the handler and the admin snapshot model.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+  /admin/api/nexaflow/definitions/validate:
+    post:
+      summary: Validate a NexaFlow workflow definition submitted in the body (draft-body validation; the verdict is always 200, with valid:false for an invalid definition)
+      x-permission: config.write
+      security:
+      - adminSession: []
+        csrfToken: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Operation result; see the handler and the admin snapshot model.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
   /admin/api/nexaflow/definitions:
     get:
       summary: List NexaFlow workflow drafts

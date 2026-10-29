@@ -90,7 +90,9 @@ spec by `TestContractMatrixDrift`.
 - `/admin/api/client-keys/{id}/rotate`
 - `/admin/api/nexaflow/nodes`
 - `/admin/api/nexaflow/templates`
+- `/admin/api/nexaflow/templates/{id}/instantiate`
 - `/admin/api/nexaflow/definitions`
+- `/admin/api/nexaflow/definitions/validate`
 - `/admin/api/nexaflow/definitions/{id}`
 - `/admin/api/nexaflow/runs`
 - `/admin/api/nexaflow/runs/{id}`
