@@ -41,7 +41,10 @@ var webAssetBudgets = map[string]int{
 // ceiling was set before the Phase 7 remainder (#399) and Phase 10 (#410)
 // UI growth landed together; 410 KB restores the ~25% headroom convention
 // over the current 336303-byte total.
-const webAssetTotalBudget = 410 << 10
+// Supervisor 2026-10-29: raised 410->520 KB after review. The NexaFlow
+// studio gallery slice plus the read-only editor canvas land together
+// at 424952 bytes; 520 KB restores the ~25% headroom convention.
+const webAssetTotalBudget = 520 << 10
 
 func TestWebAssetSizeBudget(t *testing.T) {
 	total := 0

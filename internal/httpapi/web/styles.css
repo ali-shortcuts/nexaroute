@@ -291,3 +291,26 @@ html[data-theme=light] .notice.error { color: var(--bad-ink); }
 /* Issue #489: route-banner text must clear WCAG AA on the light theme's violet-tinted banner surface. */
 html[data-theme=light] .route-banner > div > span { color: var(--subtle); }
 html[data-theme=light] .route-banner-count { color: var(--violet-ink)!important; }
+/* NexaFlow editor, read-only canvas slice (E1). The canvas scrolls here;
+   pan/zoom replace scrolling when editing lands (E2), which also brings
+   the palette/config/run styles. Layer is relative (not the studio's
+   absolute + transform) so its size drives the scroll area. Edge anchors
+   assume 200px-wide cards with a ~40px vertical center; E2's port dots
+   will measure exact centers. */
+.wf-toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:16px}
+.wf-spacer{flex:1}
+.wf-link{background:none;border:0;color:var(--accent);cursor:pointer;font:inherit;font-weight:700;padding:0;text-align:left}
+.wf-canvas{position:relative;height:600px;overflow:auto;border:1px solid var(--border);border-radius:12px;background:var(--surface);background-image:radial-gradient(color-mix(in srgb,var(--muted) 22%,transparent) 1px,transparent 1px);background-size:24px 24px}
+.wf-layer{position:relative}
+.wf-layer svg{position:absolute;left:0;top:0;overflow:visible;pointer-events:none}
+.wf-edge{fill:none;stroke:var(--accent);stroke-width:2}
+.wf-node{position:absolute;width:200px;border:1px solid var(--border);border-radius:10px;background:var(--surface-2);box-shadow:0 4px 14px color-mix(in srgb,var(--ink-black) 25%,transparent)}
+.wf-node-head{padding:8px 10px;border-bottom:1px solid var(--border)}
+.wf-node-head strong,.wf-node-head span{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wf-node-head span{color:var(--muted);font-size:10px}
+.wf-node-meta{padding:8px 10px;display:flex;gap:6px;align-items:center}
+.wf-pill{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:700;background:var(--surface-3);color:var(--muted)}
+.wf-pill.wf-info{color:var(--accent);background:color-mix(in srgb,var(--accent) 12%,transparent)}
+.wf-meta{color:var(--muted);font-size:11px}
+.wf-connections{list-style:none;margin:0;padding:0;display:grid;gap:8px}
+.wf-connections li{display:flex;gap:8px;align-items:center;justify-content:space-between;font-size:12px}
