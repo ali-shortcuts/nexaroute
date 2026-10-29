@@ -52,7 +52,7 @@ func TestWave2RestoreVerifyIntoFile(t *testing.T) {
 func TestWave2CreateBackupMissingConfig(t *testing.T) {
 	var out bytes.Buffer
 	missing := filepath.Join(t.TempDir(), "no-config.json")
-	if err := createBackup(missing, filepath.Join(t.TempDir(), "out.bin"), false, false, &out); err == nil || !strings.Contains(err.Error(), "read config") {
+	if err := createBackup(missing, filepath.Join(t.TempDir(), "out.bin"), false, false, &out, liveBackupOptions{}); err == nil || !strings.Contains(err.Error(), "read config") {
 		t.Fatalf("err=%v want a read config failure", err)
 	}
 }
