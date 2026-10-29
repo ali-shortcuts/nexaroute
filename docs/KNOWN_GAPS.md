@@ -9,6 +9,8 @@ Implemented runtime protocol classes are:
 - OpenAI-compatible Chat Completions
 - Anthropic-compatible Messages
 - OpenAI Responses (explicit `/v1/responses` path)
+- Gemini GenerateContent ingress (explicit `/v1beta/models` paths, for
+  Gemini CLI) through the canonical adapter
 - Gemini upstreams through the canonical adapter
 - AWS Bedrock, Google Vertex AI and Azure OpenAI provider types through
   the canonical adapter (SigV4 / ADC / api-key custody respectively)
