@@ -179,20 +179,37 @@ func TestIssue663ProvidersRunPaths(t *testing.T) {
 	// fake handler can exit; otherwise the deferred server Close
 	// waits forever on the still-open handler (the adapter returns
 	// on the call deadline without closing the in-flight request).
+	// Determinism note: building the runner via New() would set the
+	// adapter's HTTP client timeout equal to the 1s call timeout, so
+	// the two timers race — a full-repo run proved the client timeout
+	// can win and surface the raw "timeout awaiting response headers"
+	// error instead of the rewritten form. To pin the rewrite itself,
+	// this subcase constructs the Runner directly with a 30s adapter
+	// timeout and a 1s call timeout, so only the call-context deadline
+	// can fire and the rewrite is the only possible outcome.
 	fake = &fakeProvider{block: true, release: make(chan struct{})}
 	srv = httptest.NewServer(fake)
 	defer srv.Close()
-	opts := testOptions(srv.URL, "NEXA_CANARY_KEY")
-	opts.Scenarios = []string{"text"}
-	opts.MaxCalls = 1
-	opts.CallTimeout = time.Second
-	opts.OverallTimeout = 10 * time.Second
-	runner, err = New(opts)
+	p := testProvider(srv.URL, "NEXA_CANARY_KEY")
+	p.ApplyDefaults()
+	adapter, err := providers.NewAdapter(p, 30*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer runner.Close()
-	report = runner.Run(context.Background())
+	defer providers.CloseIdleConnections(adapter)
+	r = &Runner{
+		provider:      p,
+		model:         config.ModelConfig{ID: "m", Model: "canary-model"},
+		upstreamModel: "canary-model",
+		adapter:       adapter,
+		scenarios:     []scenario{mustScenario(t, "text")},
+		limits:        Limits{MaxCalls: 1},
+		callTimeout:   time.Second,
+		overall:       10 * time.Second,
+		redactor:      NewRedactor(secretsForProvider(p)),
+		now:           func() time.Time { return time.Now().UTC() },
+	}
+	report = r.Run(context.Background())
 	close(fake.release)
 	if len(report.Scenarios) != 1 || report.Scenarios[0].Status != StatusFail || !strings.Contains(report.Scenarios[0].Error, "call timed out after 1s") {
 		t.Fatalf("call-timeout run = %+v, want a call-timed-out failure", report.Scenarios)
@@ -202,7 +219,7 @@ func TestIssue663ProvidersRunPaths(t *testing.T) {
 	srv = httptest.NewServer(fake)
 	defer srv.Close()
 	t.Setenv("NEXA_CANARY_KEY", "wrong-secret")
-	opts = testOptions(srv.URL, "NEXA_CANARY_KEY")
+	opts := testOptions(srv.URL, "NEXA_CANARY_KEY")
 	opts.Scenarios = []string{"text,stream"}
 	opts.MaxCalls = 2
 	runner, err = New(opts)
