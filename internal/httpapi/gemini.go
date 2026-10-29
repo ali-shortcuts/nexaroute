@@ -440,7 +440,7 @@ func (s *Server) geminiGenerateContent(w http.ResponseWriter, r *http.Request) {
 					s.rt.ObserveSessionCache(req, deploy.ID, u.InputTokens, u.CacheReadTokens)
 				})
 		} else {
-			usageErr = s.handleCanonicalResponse(w, resp, bundle.canonicalKind, "gemini", model, r.Header.Get("x-request-id"), false, bundle.toolDefs,
+			usageErr = s.handleCanonicalResponse(routeCtx, w, resp, bundle.canonicalKind, "gemini", model, r.Header.Get("x-request-id"), false, bundle.toolDefs,
 				func(u canonical.Usage) {
 					inputTokens, outputTokens = u.InputTokens, u.OutputTokens
 					s.recordUsageCanonical(r, deploy.ID, bundle.canonicalKind, u)
@@ -460,6 +460,13 @@ func (s *Server) geminiGenerateContent(w http.ResponseWriter, r *http.Request) {
 					s.probe.Recover(deploy.ID)
 				} else {
 					s.hm.RecordFailure(deploy.ID, lastErr, total)
+				}
+				// A body-read timeout under a bounded route is a
+				// gateway deadline (504), not a malformed response
+				// (502), as on the Responses path.
+				if gatewayDeadlineError(routeCtx, r.Context(), usageErr) {
+					geminiErrorJSON(w, http.StatusGatewayTimeout, "gateway request timeout")
+					return
 				}
 				if attempts < max && i+1 < len(candidates) {
 					s.retryPause(routeCtx, r.Header.Get("x-request-id"), cfg, attempts-1, max)
