@@ -277,6 +277,7 @@ func (s *Server) geminiGenerateContent(w http.ResponseWriter, r *http.Request) {
 	profile := profileFromRequirement(req, &canReq)
 	dialects := map[string]compat.DialectProfile{}
 	var lastErr string
+	var lastDerr error
 	attempts := 0
 	for i := 0; i < len(candidates) && attempts < max; i++ {
 		c := candidates[i]
@@ -306,6 +307,7 @@ func (s *Server) geminiGenerateContent(w http.ResponseWriter, r *http.Request) {
 		)
 		if derr != nil {
 			lastErr = derr.Error()
+			lastDerr = derr
 			if repair.Repaired {
 				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "compat_repair", Deployment: deployment.ID, Message: repair.Description})
 			}
@@ -328,7 +330,11 @@ func (s *Server) geminiGenerateContent(w http.ResponseWriter, r *http.Request) {
 			}
 			s.emitProductionEvent(r.Header.Get("x-request-id"), ProductionEventModelFailed, deployment.ID, lastErr, events.Event{ErrorType: policy.ErrorType, LatencyMS: time.Since(start).Milliseconds()})
 			s.emitAmbiguousOutcome(r.Header.Get("x-request-id"), deployment.ID, derr, time.Since(start))
-			if gatewayDeadlineExceeded(routeCtx, r.Context()) {
+			// Same shared-budget race as the Responses path: a transport
+			// timeout under a bounded route is a gateway deadline (504),
+			// not a generic 502, even when the route timer itself has
+			// not yet been observed expired.
+			if gatewayDeadlineError(routeCtx, r.Context(), derr) {
 				geminiErrorJSON(w, http.StatusGatewayTimeout, "gateway request timeout")
 				return
 			}
@@ -497,7 +503,7 @@ func (s *Server) geminiGenerateContent(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	if gatewayDeadlineExceeded(routeCtx, r.Context()) {
+	if gatewayDeadlineError(routeCtx, r.Context(), lastDerr) {
 		geminiErrorJSON(w, http.StatusGatewayTimeout, "gateway request timeout")
 		return
 	}

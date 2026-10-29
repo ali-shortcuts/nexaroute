@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -14,6 +16,11 @@ import (
 
 	"github.com/ali-shortcuts/nexaroute/internal/compat"
 	"github.com/ali-shortcuts/nexaroute/internal/config"
+	"github.com/ali-shortcuts/nexaroute/internal/events"
+	"github.com/ali-shortcuts/nexaroute/internal/health"
+	"github.com/ali-shortcuts/nexaroute/internal/probe"
+	"github.com/ali-shortcuts/nexaroute/internal/providers"
+	"github.com/ali-shortcuts/nexaroute/internal/router"
 )
 
 // Wave-3 coverage tests: canonical ingress handlers (anthropic, responses,
@@ -820,6 +827,76 @@ func TestWave3ResponsesDeadline504(t *testing.T) {
 	releaseUpstream()
 	if rr.Code != 504 || !strings.Contains(rr.Body.String(), "gateway request timeout") {
 		t.Fatalf("responses deadline status=%d body=%s want 504 gateway request timeout", rr.Code, rr.Body.String())
+	}
+}
+
+// wave3SplitTimeoutGateway builds a gateway whose upstream adapters use
+// adapterTimeoutMS while request routing uses routeTimeoutMS. Production
+// builds both from the same RequestTimeoutMS; splitting them here is the
+// only deterministic way to force the transport-timeout-first outcome
+// (adapter timer fires while the route timer is still pending) that the
+// shared-budget race produces under load. It exercises the error
+// classification, not a production configuration.
+func wave3SplitTimeoutGateway(t *testing.T, providerCfgs []config.ProviderConfig, adapterTimeoutMS, routeTimeoutMS int) *Server {
+	t.Helper()
+	routeCfg := config.Default()
+	routeCfg.Probe.Enabled = false
+	routeCfg.Routing.RetryBackoffMS = 0
+	routeCfg.Routing.Strategy = "priority"
+	routeCfg.Routing.RequestTimeoutMS = routeTimeoutMS
+	routeCfg.Providers = providerCfgs
+	routeCfg.ApplyDefaults()
+	adapterCfg := routeCfg
+	adapterCfg.Routing.RequestTimeoutMS = adapterTimeoutMS
+	hm := health.New(routeCfg.Routing.FailureThreshold, routeCfg.Cooldown())
+	hm.ConfigureProviderIncidents(routeCfg.Routing.ProviderFailureThreshold, routeCfg.ProviderFailureWindow(), routeCfg.ProviderCooldown())
+	reg, err := providers.NewRegistry(adapterCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt := router.New(routeCfg, hm)
+	bus := events.New(100)
+	pe := probe.New(routeCfg, reg, rt, hm, bus)
+	configDir := t.TempDir()
+	if err := os.Chmod(configDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	srv := New(routeCfg, configDir+"/config.json", reg, rt, hm, bus, pe, log.New(io.Discard, "", 0))
+	if err := srv.SecurityStoreError(); err != nil {
+		t.Fatalf("create test security store: %v", err)
+	}
+	t.Cleanup(func() { _ = srv.CloseSecurityStore() })
+	return srv
+}
+
+func TestWave3ResponsesClientTimeoutMapsTo504(t *testing.T) {
+	// Regression for the main CI Verify failure on c2ca13c: the upstream
+	// transport timeout ("timeout awaiting response headers") was mapped
+	// to 502 because only the narrow route-timer check was consulted.
+	// With the adapter budget (200ms) shorter than the route budget
+	// (60s), the transport timeout deterministically arrives while the
+	// route timer is still pending; the contract requires 504.
+	// Release channel, not bare context cancellation: a handler blocked
+	// before writing any bytes does not observe client cancellation
+	// promptly in this sandbox (see TestWave3ResponsesClientGoneOnTransportError).
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseUpstream := func() { releaseOnce.Do(func() { close(release) }) }
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+	}))
+	defer up.Close()
+	defer releaseUpstream()
+	s := wave3SplitTimeoutGateway(t, []config.ProviderConfig{
+		wave3Provider("a", "openai_compatible", up.URL, "m", "upstream-model", []string{"cm"}),
+	}, 200, 60000)
+	rr := wave3Request(s, "POST", "/v1/responses", wave3ResponsesReq("cm"))
+	releaseUpstream()
+	if rr.Code != 504 || !strings.Contains(rr.Body.String(), "gateway request timeout") {
+		t.Fatalf("responses client-timeout status=%d body=%s want 504 gateway request timeout", rr.Code, rr.Body.String())
 	}
 }
 
