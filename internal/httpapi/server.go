@@ -1061,6 +1061,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/audio/transcriptions", s.mediaTranscriptions)
 	mux.HandleFunc("/v1/rerank", s.mediaRerank)
 	mux.HandleFunc("/v1/responses", s.openAIResponses)
+	mux.HandleFunc("/v1beta/models", s.geminiModels)
+	mux.HandleFunc("/v1beta/models/", s.geminiGenerateContent)
 
 	mux.HandleFunc("/admin/auth/login", s.authLogin)
 	mux.HandleFunc("/admin/auth/oidc/callback", s.authCallback)
