@@ -53,12 +53,18 @@ To restore, stop the gateway, restore the selected config and its matching key, 
 
 ### Backup and restore commands (preferred)
 
-`nexaroute backup` bundles everything an installation needs into one hash-verified archive (format `nexaroute-backup/1`): the config exactly as stored, a consistent online snapshot of the audit/security store (safe to run against a live gateway), and the file-backend control-plane state when present. The bundle is written atomically with mode `0600`; its manifest records a SHA-256 fingerprint of the master key so pairing can be checked later.
+`nexaroute backup` bundles everything an installation needs into one hash-verified archive (format `nexaroute-backup/1`): the config exactly as stored, a consistent snapshot of the audit/security store, and the file-backend control-plane state when present. The bundle is written atomically with mode `0600`; its manifest records a SHA-256 fingerprint of the master key so pairing can be checked later.
+
+Two snapshot modes exist and are never mixed silently. Without `--live`, the CLI opens the security store itself, so for the file-backed store the gateway must be stopped first: a running gateway holds the store's exclusive lock for its whole lifetime, and a backup attempted against it fails closed with an actionable error naming the clean stop (or `--live`) — never with a raw file copy, which would read a torn bbolt database. With `--live`, the CLI asks the running gateway's `GET /admin/api/security-snapshot` endpoint for a snapshot taken inside the gateway from its own open store handle (a bbolt read transaction, consistent under concurrent writes); the gateway verifies the audit chain before streaming, and the CLI verifies the received snapshot's chain again before bundling. Live mode needs admin access through the existing admin machinery (an admin API key, or loopback keyless emergency access where the gateway allows it); a gateway whose admin is OIDC-only cannot serve a CLI live snapshot and must be backed up stopped, and a gateway too old to offer the endpoint refuses the request (in practice the old gateway's admin middleware denies the unmapped path with 403) — in both cases the CLI's error directs the operator to the stopped backup. A broken audit chain is always refused over a live snapshot (there is no `--allow-broken-audit-chain` override on the live path; that override applies only to the stopped path). Backends without snapshot support (PostgreSQL, Redis) answer 501: their state must be dumped with backend-native tooling. Either way the bundle format is `nexaroute-backup/1` and restores through the same path.
 
 ```bash
 nexaroute backup --config "$CONFIG" --out "$BACKUP_DIR/nexaroute-backup.tar"
 # Only when the key must travel with the backup (store the bundle like a secret):
 nexaroute backup --config "$CONFIG" --out "$BACKUP_DIR/nexaroute-backup-with-key.tar" --include-master-key
+# Live snapshot from a running gateway (new binary only; admin access required):
+nexaroute backup --config "$CONFIG" --out "$BACKUP_DIR/nexaroute-backup-live.tar" --live
+# With an explicit admin URL/key (defaults: the config listen address and admin.api_key):
+nexaroute backup --config "$CONFIG" --out "$BACKUP_DIR/nexaroute-backup-live.tar" --live --admin-url http://127.0.0.1:8080 --admin-key "$NEXAROUTE_ADMIN_KEY"
 ```
 
 The master key is excluded by default: keep it as an independent secret (above) unless the deployment deliberately accepts a combined bundle.
@@ -129,7 +135,7 @@ NexaRoute does not promise RPO/RTO; the numbers below are placeholders an operat
 
 ### Restore-drill runbook (repeatable)
 
-1. **Pre-upgrade backup.** `nexaroute backup --config "$CONFIG" --out "$B/pre-upgrade.tar"` (add `--include-master-key` only when key custody requires a combined bundle).
+1. **Pre-upgrade backup.** Either stop the gateway and run `nexaroute backup --config "$CONFIG" --out "$B/pre-upgrade.tar"` (the only procedure that works for every gateway, including binaries too old to offer a live snapshot), or — when the running gateway is new enough to offer `/admin/api/security-snapshot` and admin access is available — run the same command with `--live` against the running gateway. A plain backup against a running file-backed gateway fails closed on the store lock; that failure is the signal to stop the gateway or switch to `--live`, never to copy the store file by hand (add `--include-master-key` only when key custody requires a combined bundle).
 2. **Isolated verification.** `nexaroute restore --verify --bundle "$B/pre-upgrade.tar" --config "$CONFIG" --into "$DRILL" --report "$EVIDENCE/drill.json" --max-age 24h`. Require status `PASS`; investigate any `BLOCKED`/`FAIL` before proceeding.
 3. **Prepared rollback.** Keep the current config, `.key`, and security store; if a real restore is interrupted, `nexaroute restore --recover <journal-dir>` rolls the transaction back.
 4. **Key recovery.** If decryption is `BLOCKED` or `FAIL`, restore the exact paired `<config>.key` (or the matching pre-rotation `.key.previous`); never generate a replacement key for an encrypted config.
