@@ -16,6 +16,7 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/providers"
 	"github.com/ali-shortcuts/nexaroute/internal/router"
 	"github.com/ali-shortcuts/nexaroute/internal/translate"
+	"github.com/ali-shortcuts/nexaroute/internal/usage"
 )
 
 // openAIStructuredRequested reports whether a raw OpenAI
@@ -466,9 +467,9 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 				inputTokens, outputTokens, e = s.proxyOpenAINativeJSON(w, r, resp, c.Deployment.ID, cacheKey, cacheGeneration, cacheable, semCtx)
 			}
 		case in.Stream:
-			e = streamAnthropicToOpenAIWithUsage(w, resp, in.Model, nm, func(prompt, completion int) {
-				inputTokens, outputTokens = prompt, completion
-				s.recordUsage(r, c.Deployment.ID, int64(prompt), int64(completion))
+			e = streamAnthropicToOpenAIWithUsage(w, resp, in.Model, nm, func(u usage.Counts) {
+				inputTokens, outputTokens = int(u.Input), int(u.Output)
+				s.recordUsageEx(r, c.Deployment.ID, u, false)
 			}, r.Header.Get("x-request-id"))
 		default:
 			var an core.AnthResponse
@@ -617,7 +618,7 @@ func streamAnthropicToOpenAI(w http.ResponseWriter, resp *http.Response, model s
 	return streamAnthropicToOpenAIWithUsage(w, resp, model, nm, nil, requestID...)
 }
 
-func streamAnthropicToOpenAIWithUsage(w http.ResponseWriter, resp *http.Response, model string, nm *translate.NameMap, usageSink func(prompt, completion int), requestID ...string) error {
+func streamAnthropicToOpenAIWithUsage(w http.ResponseWriter, resp *http.Response, model string, nm *translate.NameMap, usageSink func(usage.Counts), requestID ...string) error {
 	defer resp.Body.Close()
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -831,7 +832,7 @@ func streamAnthropicToOpenAIWithUsage(w http.ResponseWriter, resp *http.Response
 		fl.Flush()
 	}
 	if usageSink != nil && usageSeen {
-		usageSink(inputTokens, outputTokens)
+		usageSink(usage.Counts{Input: int64(inputTokens), Output: int64(outputTokens), CacheRead: int64(cacheReadTokens), CacheWrite: int64(cacheCreationTokens)})
 	}
 	return nil
 }
