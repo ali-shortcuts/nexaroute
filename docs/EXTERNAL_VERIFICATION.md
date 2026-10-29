@@ -175,6 +175,39 @@ A fake-API test is not live acceptance. Until this procedure is executed
 and its evidence is committed under a repository-owned path, the status
 remains **NOT_RUN / UNVERIFIED**.
 
+#### BLOCKED attempt record — 2026-10-29 (main `ba5ff2f`, issue #649 still OPEN)
+
+On 2026-10-29 an acceptance attempt was made from main `ba5ff2f` (PR #670
+merged as `da727d61`; PR #672 closed as superseded by #670). Every live step
+of the procedure above — startup/decrypt, wrap/unwrap round-trip,
+unavailable Vault, forbidden Vault, invalid ciphertext, revoked/unavailable
+key versions, fail-closed with no fallback, migration/rewrap/rotation
+including rollback and recovery — is **NOT_RUN / BLOCKED** for this attempt:
+zero live Vault calls were made.
+
+Missing input (exact): an operator-authorized disposable Transit instance
+(address ownership), a dedicated Transit key name, a least-privilege policy
+(`encrypt`/`decrypt`/`rewrap` on that key only), a token-injection method (by
+name only), and written operator authorization for the run. Environment check
+by names/counts only (no values read): `VAULT_ADDR`, `VAULT_TOKEN`,
+`VAULT_TOKEN_FILE`, `NEXAROUTE_KEY_PROVIDER`, `NEXAROUTE_TRANSIT_ENABLED`,
+`NEXAROUTE_TRANSIT_MOUNT`, `NEXAROUTE_TRANSIT_KEY`, `VAULT_NAMESPACE` —
+none set (set-count 0, proven numerically; a display-layer rendering of one
+line as redacted was an artifact, not a set variable). No comment on issue
+#649 authorizes a specific instance, key, policy, or token injection. A
+local Vault dev server started by the agent would NOT count as operator
+authorization and was not used as acceptance evidence.
+
+Local health only (fake Vault API, never acceptance): `internal/secrets`
+suite PASS, `cmd/gateway` Transit migrate/rewrap/backup/restore focused
+tests PASS, `gofmt`/`go vet` clean on main `ba5ff2f`. Fake-API tests do not
+close this acceptance.
+
+No production Vault, key, or secret was touched. No token, ciphertext,
+master-key byte, DEK, wrapped DEK, envelope string, or customer secret is
+recorded here. No production/HSM claim is made or changed by this record.
+This record does NOT close issue #649.
+
 ## 3. Headless OS keyring
 
 Local state: the linux provider shells out to `secret-tool`

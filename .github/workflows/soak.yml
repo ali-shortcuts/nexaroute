@@ -8,11 +8,11 @@ on:
         required: false
         default: "3"
       duration:
-        description: Sustained mixed-workload duration (for example 30m or 2h; 0s disables)
+        description: "Sustained mixed-workload duration (for example 30m or 2h; 0s disables). Long durations are opt-in only: dispatch this workflow by hand on a suitable runner, never from a normal PR."
         required: false
         default: "0s"
       timeout_minutes:
-        description: Job timeout; must comfortably exceed duration (GitHub maximum 360)
+        description: "Job timeout; must exceed the sustained duration by at least 30 minutes (GitHub maximum 360). The guard step below fails fast if it does not."
         required: false
         default: "45"
   push:
@@ -50,6 +50,44 @@ jobs:
           set -euo pipefail
           bad_files="$(git ls-files | grep -Ei '(^|/)(backup|backups|old|legacy)(/|$)|\.bak$|\.orig$|\.rej$|~$' || true)"
           test -z "$bad_files"
+
+      - name: Fail fast if the job timeout cannot cover the soak
+        # The script's other stages need roughly 30 minutes on top of
+        # the sustained duration (see docs/reports/ISSUE664_SOAK_PROCEDURE.md).
+        # Without this guard an operator dispatch of, say, 2h with the
+        # default 45-minute timeout would be killed mid-soak and look
+        # like a soak failure. Push runs carry no inputs and skip this.
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        run: |
+          set -euo pipefail
+          duration="${{ github.event.inputs.duration }}"
+          timeout_minutes="${{ github.event.inputs.timeout_minutes }}"
+          if ! [[ "$timeout_minutes" =~ ^[0-9]+$ ]]; then
+            echo "timeout_minutes must be an integer, got '$timeout_minutes'" >&2
+            exit 2
+          fi
+          if [[ "$duration" =~ ^([0-9]+)([smh])$ ]]; then
+            value="${BASH_REMATCH[1]}"
+            unit="${BASH_REMATCH[2]}"
+            case "$unit" in
+              s) duration_minutes=$(( (value + 59) / 60 )) ;;
+              m) duration_minutes="$value" ;;
+              h) duration_minutes=$((value * 60)) ;;
+            esac
+            required=$((duration_minutes + 30))
+            if (( timeout_minutes < required )); then
+              echo "timeout_minutes ($timeout_minutes) must be at least duration ($duration = ${duration_minutes}m) + 30m = ${required}m" >&2
+              exit 2
+            fi
+            if (( timeout_minutes > 360 )); then
+              echo "timeout_minutes must be <= 360 (GitHub maximum), got '$timeout_minutes'" >&2
+              exit 2
+            fi
+          elif [[ "$duration" != "0" && "$duration" != "0s" && -n "$duration" ]]; then
+            echo "duration must be a Go-style value like 30m or 2h, got '$duration'" >&2
+            exit 2
+          fi
 
       - name: Soak (record reproducible evidence)
         env:

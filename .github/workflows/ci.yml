@@ -141,6 +141,56 @@ jobs:
             exit 1
           fi
 
+  ci-soak-smoke:
+    # Bounded CI smoke/stress + recovery evidence (issue #664). This is
+    # the PR-suitable half of the soak story: stress selectors identical
+    # to scripts/stress.sh, fixed-iteration soak tests, loopback
+    # outage/cancellation tests, and one short race soak stage, all
+    # recorded per-stage (PASS/FAIL/SKIPPED/BLOCKED) in a sanitized
+    # summary. It runs in parallel with verify, so it does not slow
+    # that job down; it never makes paid provider calls, never touches
+    # a production cluster, and never needs credentials. The long-form
+    # multi-hour soak is deliberately NOT here: it is opt-in via the
+    # Soak workflow (workflow_dispatch) on a suitable runner.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.x'
+          cache: false
+
+      - name: Bounded CI soak smoke (record reproducible evidence)
+        env:
+          NEXAROUTE_CI_SMOKE_OUT: ${{ github.workspace }}/.artifacts/ci-soak-smoke
+        run: ./scripts/ci-soak-smoke.sh
+
+      - name: Summarize CI soak smoke
+        if: always()
+        run: |
+          {
+            echo '## CI soak smoke'
+            summary="$(find "${{ github.workspace }}/.artifacts/ci-soak-smoke" -name summary.md 2>/dev/null | head -n 1 || true)"
+            if [ -n "$summary" ]; then
+              cat "$summary"
+            else
+              echo 'No summary.md: the smoke script did not reach its report writer. That is a failure of the smoke run, not a pass.'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Preserve CI soak smoke evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ci-soak-smoke-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ github.workspace }}/.artifacts/ci-soak-smoke/
+          retention-days: 90
+          if-no-files-found: warn
+
   fuzz-smoke:
     # Wave C-2 (#403): bounded deterministic fuzz smoke over the fuzzed
     # attack surface (canonical codecs + stream pump framing, egress

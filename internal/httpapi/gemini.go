@@ -96,26 +96,32 @@ func (s *Server) geminiModels(w http.ResponseWriter, r *http.Request) {
 
 // geminiAuthRequest returns a request copy whose client key is normalized
 // into the x-api-key header from the Gemini forms (x-goog-api-key header
-// or ?key= query). The query form is stripped from the copied URL so the
-// key cannot leak into logs. The key value itself is never logged here.
+// or ?key= query). The ?key= form is ALWAYS stripped from the copied URL,
+// even when a header key is present and wins authentication: a query key
+// that stays in r.URL could otherwise leak into any log that records the
+// request URL. The key value itself is never logged here.
 func geminiAuthRequest(r *http.Request) *http.Request {
-	if r.Header.Get("x-api-key") != "" || r.Header.Get("Authorization") != "" {
+	hasHeaderAuth := r.Header.Get("x-api-key") != "" || r.Header.Get("Authorization") != ""
+	query := r.URL.Query()
+	_, hasQueryKey := query["key"]
+	if hasHeaderAuth && !hasQueryKey {
 		return r
 	}
 	key := strings.TrimSpace(r.Header.Get("x-goog-api-key"))
 	if key == "" {
-		key = strings.TrimSpace(r.URL.Query().Get("key"))
-	}
-	if key == "" {
-		return r
+		key = strings.TrimSpace(query.Get("key"))
 	}
 	r2 := r.Clone(r.Context())
-	r2.Header.Set("x-api-key", key)
-	u2 := *r.URL
-	q := u2.Query()
-	q.Del("key")
-	u2.RawQuery = q.Encode()
-	r2.URL = &u2
+	if !hasHeaderAuth && key != "" {
+		r2.Header.Set("x-api-key", key)
+	}
+	if hasQueryKey {
+		u2 := *r.URL
+		q := u2.Query()
+		q.Del("key")
+		u2.RawQuery = q.Encode()
+		r2.URL = &u2
+	}
 	return r2
 }
 

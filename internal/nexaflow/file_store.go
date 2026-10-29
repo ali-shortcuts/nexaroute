@@ -154,7 +154,10 @@ func OpenFileStore(path string) (*FileStore, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		if !os.IsNotExist(err) {
-			releaseFileLock(lockFile)
+			// Best-effort unlock on the error path: the read error is
+			// the returned error, and the release attempt closes the
+			// lock file either way, so no lock is leaked.
+			_ = releaseFileLock(lockFile)
 			return nil, fmt.Errorf("nexaflow: read file store: %w", err)
 		}
 		return fs, nil
@@ -164,7 +167,9 @@ func OpenFileStore(path string) (*FileStore, error) {
 	}
 	var doc fileStateDoc
 	if err := json.Unmarshal(raw, &doc); err != nil {
-		releaseFileLock(lockFile)
+		// As above: the corruption error dominates; the release
+		// attempt closes the lock file either way.
+		_ = releaseFileLock(lockFile)
 		return nil, fmt.Errorf("nexaflow: corrupt file store %q: %w", path, err)
 	}
 	fs.state = docToState(&doc)
@@ -204,11 +209,16 @@ func (s *FileStore) persist(state *storeState) error {
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName)
 	if _, err := tmp.Write(raw); err != nil {
-		tmp.Close()
+		// The write error is returned and the deferred Remove
+		// deletes the temp file; the final Close below (on the
+		// success path) remains the checked one.
+		_ = tmp.Close()
 		return fmt.Errorf("nexaflow: write file store temp: %w", err)
 	}
 	if err := tmp.Sync(); err != nil {
-		tmp.Close()
+		// As above: the fsync error dominates and the temp file
+		// is removed by the deferred cleanup.
+		_ = tmp.Close()
 		return fmt.Errorf("nexaflow: fsync file store temp: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
@@ -256,6 +266,12 @@ func (s *FileStore) GetDraft(_ context.Context, definitionID string) (Definition
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.state.getDraft(definitionID)
+}
+
+func (s *FileStore) ListDrafts(_ context.Context) ([]Definition, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.state.listDrafts(), nil
 }
 
 func (s *FileStore) Publish(_ context.Context, definitionID, publishedBy string) (PublishedDefinition, error) {

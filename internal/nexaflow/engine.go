@@ -206,6 +206,14 @@ func (e *Engine) CreateRun(ctx context.Context, pub PublishedDefinition, princip
 			if existing.DefinitionID != pub.Version.DefinitionID || existing.Revision != pub.Version.Revision {
 				return Run{}, ErrIdempotencyConflict
 			}
+			// Same key + different input is a conflict, not a
+			// silent replay: returning the original run would
+			// hide that a different request was never executed.
+			// (Neither #691 nor the original Task 8 code compared
+			// inputs; this closes that gap at the engine boundary.)
+			if !sameJSONValue(existing.Input, input) {
+				return Run{}, ErrIdempotencyConflict
+			}
 			return existing, nil
 		} else if !errors.Is(err, ErrNotFound) {
 			return Run{}, err
@@ -227,6 +235,17 @@ func (e *Engine) CreateRun(ctx context.Context, pub PublishedDefinition, princip
 		Input:          deepCopyMap(input),
 	}
 	if err := e.store.CreateRun(ctx, run); err != nil {
+		// Concurrent duplicate: another writer won the
+		// idempotency race between our lookup and this insert.
+		// Resolve it the same way as a replay instead of
+		// surfacing a spurious conflict for an identical request.
+		if errors.Is(err, ErrIdempotencyConflict) && idempotencyKey != "" {
+			if existing, ferr := e.store.GetRunByIdempotency(ctx, idempotencyKey); ferr == nil &&
+				existing.DefinitionID == pub.Version.DefinitionID && existing.Revision == pub.Version.Revision &&
+				sameJSONValue(existing.Input, input) {
+				return e.store.GetRun(ctx, existing.ID)
+			}
+		}
 		return Run{}, err
 	}
 	for _, nodeID := range TopologicalOrder(def) {
@@ -575,7 +594,21 @@ func (e *Engine) sweep(ctx context.Context, run Run) (bool, error) {
 				progress = true
 				continue
 			}
-			input := e.nodeInput(run, node, spec, outputs, current[nodeID])
+			input, ierr := e.nodeInput(run, node, spec, outputs, current[nodeID])
+			if ierr != nil {
+				// Unresolvable mapping: fail the node without
+				// dispatching it, never with a guessed input.
+				next := claimed
+				next.State = NodeFailed
+				next.ErrorCode = "input_resolution"
+				next.Error = ierr.Error()
+				if _, err := e.store.SaveNodeExecution(ctx, next, NodeClaimed); err != nil {
+					return false, err
+				}
+				current[nodeID] = next
+				progress = true
+				continue
+			}
 			jobs = append(jobs, engineJob{node: node, spec: spec, exec: claimed, input: input})
 		}
 	}
@@ -627,17 +660,66 @@ func (e *Engine) nodeReadiness(def Definition, nodeID string, current map[string
 }
 
 // nodeInput builds one node's input: trigger nodes receive the run
-// input verbatim; other nodes receive the merge of their direct
-// predecessors' outputs in edge-declaration order, last-wins, plus any
-// approval resume input on top (the approval decision wins over a
-// stale merged value).
-func (e *Engine) nodeInput(run Run, node DefinitionNode, spec *NodeSpec, outputs map[string]map[string]any, cur NodeExecution) map[string]any {
+// input verbatim; a node with an Input mapping receives exactly its
+// mapped input (projection; see input_mapping.go); other nodes receive
+// the merge of their direct predecessors' outputs in edge-declaration
+// order, last-wins, plus any approval resume input on top (the
+// approval decision wins over a stale merged value). A mapping that
+// cannot be resolved returns an error; the caller fails the node with
+// input_resolution instead of dispatching it.
+// overlayResumeInput applies an approval decision on top of a node's
+// input, but only for keys the node's InputSchema declares. Without
+// this projection, resuming a policy-gated node (llm.chat,
+// video.submit) after approval poisoned its input with
+// decision/approver/requester keys that its schema rejects, so the
+// node failed validation on every approved resume — the policy gate
+// could park but never release. The approval node declares all three
+// keys, so its behaviour is unchanged; every other node receives only
+// what its schema allows. A nil spec overlays everything (legacy
+// fallback for specs the registry cannot describe).
+func overlayResumeInput(dst map[string]any, spec *NodeSpec, resume map[string]any) {
+	if len(resume) == 0 {
+		return
+	}
+	if spec == nil {
+		for k, v := range resume {
+			dst[k] = v
+		}
+		return
+	}
+	known := make(map[string]bool, len(spec.InputSchema))
+	for _, f := range spec.InputSchema {
+		known[f.Name] = true
+	}
+	for k, v := range resume {
+		if known[k] {
+			dst[k] = v
+		}
+	}
+}
+
+func (e *Engine) nodeInput(run Run, node DefinitionNode, spec *NodeSpec, outputs map[string]map[string]any, cur NodeExecution) (map[string]any, error) {
 	if spec != nil && spec.Category == "trigger" {
 		merged := deepCopyMap(run.Input)
-		for k, v := range cur.ResumeInput {
-			merged[k] = v
+		overlayResumeInput(merged, spec, cur.ResumeInput)
+		return merged, nil
+	}
+	if spec != nil && spec.ID == approvalNodeID && node.Input == nil {
+		// Approval decisions come only from the approval record
+		// (see input_mapping.go): never merge predecessor outputs
+		// into an approval node, where a transform literal could
+		// smuggle a decision past DecideApproval.
+		mapped := map[string]any{}
+		overlayResumeInput(mapped, spec, cur.ResumeInput)
+		return mapped, nil
+	}
+	if node.Input != nil {
+		mapped, err := mappedNodeInput(run, node, outputs)
+		if err != nil {
+			return nil, err
 		}
-		return merged
+		overlayResumeInput(mapped, spec, cur.ResumeInput)
+		return mapped, nil
 	}
 	merged := map[string]any{}
 	for _, edge := range incomingEdges(run.Definition, node.ID) {
@@ -648,10 +730,8 @@ func (e *Engine) nodeInput(run Run, node DefinitionNode, spec *NodeSpec, outputs
 			merged[k] = deepCopyValue(v)
 		}
 	}
-	for k, v := range cur.ResumeInput {
-		merged[k] = v
-	}
-	return merged
+	overlayResumeInput(merged, spec, cur.ResumeInput)
+	return merged, nil
 }
 
 // runJobs executes claimed nodes through a bounded worker pool and
@@ -740,6 +820,18 @@ func (e *Engine) recordOutcome(ctx context.Context, run Run, jb engineJob, out m
 		e.audit(AuditEvent{RunID: run.ID, NodeID: jb.node.ID, Kind: "node_finished", Attempt: saved.Attempt, State: string(saved.State), ErrorCode: saved.ErrorCode})
 	}
 	if err == nil {
+		// Canonical loop rule (Task 8): a loop_plan that dropped tail
+		// items is a failure, never a silently partial iteration.
+		if jb.spec != nil && jb.spec.ID == "nexaroute.control.loop_plan" {
+			if tr, _ := out["truncated"].(bool); tr {
+				next := exec
+				next.State = NodeFailed
+				next.ErrorCode = "loop_truncated"
+				next.Error = "loop_plan dropped tail items; iteration would be partial"
+				finish(next, exec.State)
+				return
+			}
+		}
 		cleaned, truncated := sanitizeNodeOutput(out)
 		next := exec
 		next.State = NodeSucceeded
@@ -849,6 +941,14 @@ func (e *Engine) parkPersistFailure(ctx context.Context, run Run, exec NodeExecu
 func (e *Engine) DecideApproval(ctx context.Context, runID, nodeID, approver, decision string) (Approval, error) {
 	if decision != "approved" && decision != "rejected" {
 		return Approval{}, errors.New("nexaflow: approval decision must be approved or rejected")
+	}
+	// An empty approver must never decide: the previous check
+	// only applied separation of duties when approver was
+	// non-empty, so a subject-less caller could approve any run
+	// at the engine boundary. The service layer also requires an
+	// authenticated approver; this is the defence in depth.
+	if approver == "" {
+		return Approval{}, errors.New("nexaflow: approval requires a non-empty approver")
 	}
 	run, err := e.store.GetRun(ctx, runID)
 	if err != nil {

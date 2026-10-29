@@ -18,6 +18,15 @@ var (
 	ErrIdempotencyConflict = errors.New("nexaflow: idempotency key already exists")
 	ErrApprovalConflict    = errors.New("nexaflow: approval already decided differently")
 	ErrNoApprovalRecord    = errors.New("nexaflow: no approval record")
+	// ErrRunLimit is returned by CreateRun when the definition's
+	// MaxConcurrentRuns admission cap is already reached. It is
+	// enforced at the store boundary (not only by the engine's
+	// in-process semaphore), so it holds across processes and
+	// restarts: a slot is held from CreateRun until a terminal
+	// run state, including needs_manual_action, which still owns
+	// its slot until an operator cancels or force-fails it. A
+	// zero MaxConcurrentRuns means no admission cap.
+	ErrRunLimit = errors.New("nexaflow: definition run limit reached")
 )
 
 // Bounds enforced at the run-record boundary. Definition size and
@@ -148,6 +157,8 @@ type Store interface {
 	// Drafts and revisions.
 	SaveDraft(ctx context.Context, def Definition) error
 	GetDraft(ctx context.Context, definitionID string) (Definition, error)
+	// ListDrafts returns all drafts sorted by definition id.
+	ListDrafts(ctx context.Context) ([]Definition, error)
 	// Publish validates nothing itself (validation is the caller's
 	// pure ValidateDefinition step): it computes the draft's content
 	// hash and appends a new published revision, unless an identical

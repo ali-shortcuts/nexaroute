@@ -106,6 +106,19 @@ func (s *storeState) getDraft(definitionID string) (Definition, error) {
 	return cloneDefinition(def), nil
 }
 
+func (s *storeState) listDrafts() []Definition {
+	ids := make([]string, 0, len(s.drafts))
+	for id := range s.drafts {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	out := make([]Definition, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, cloneDefinition(s.drafts[id]))
+	}
+	return out
+}
+
 func (s *storeState) publish(definitionID, publishedBy string, now time.Time) (PublishedDefinition, error) {
 	draft, ok := s.drafts[definitionID]
 	if !ok {
@@ -191,6 +204,25 @@ func (s *storeState) createRun(run Run, now time.Time) error {
 	if run.IdempotencyKey != "" {
 		if _, dup := s.runByIdem[run.IdempotencyKey]; dup {
 			return ErrIdempotencyConflict
+		}
+	}
+	// Durable admission cap, ported from #691's prepareRun count and
+	// hardened to this boundary: file and memory stores serialize
+	// through their store mutex, so count + insert are atomic here
+	// (Postgres does the same with a transaction + advisory lock).
+	// Only an explicitly positive cap applies; zero keeps the
+	// pre-existing behaviour (no admission cap) exactly. The
+	// engine's in-process execution semaphore is separate and
+	// unchanged: it defaults to 1 when the cap is unset.
+	if limit := run.Definition.Settings.MaxConcurrentRuns; limit > 0 {
+		active := 0
+		for _, r := range s.runs {
+			if r.DefinitionID == run.DefinitionID && !r.State.Terminal() {
+				active++
+			}
+		}
+		if active >= limit {
+			return ErrRunLimit
 		}
 	}
 	if run.State == "" {

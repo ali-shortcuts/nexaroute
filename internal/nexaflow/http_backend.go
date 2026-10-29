@@ -110,6 +110,53 @@ func (c *GatewayClient) doJSON(ctx context.Context, method, path string, reqBody
 	return resp.StatusCode, nil
 }
 
+// ResolveSelector validates a selector against the gateway's own model
+// list (GET /v1/models, served by the gateway's models handler: enabled
+// virtual-endpoint public models, deployment ids, model ids, and
+// aliases). A selector that appears in that list is returned as kind
+// "route"; anything else fails closed with selector_not_found and no
+// chat call is ever made for it. This does not duplicate routing: the
+// gateway still performs the actual routing when Chat is called, and a
+// selector accepted here can still be rejected by the gateway at chat
+// time. Ported from PR #688's GatewayClient selector validation; the
+// #688 in-memory engine that consumed it is retired, not ported.
+func (c *GatewayClient) ResolveSelector(ctx context.Context, selector string) (RouteInfo, error) {
+	if strings.TrimSpace(selector) == "" {
+		return RouteInfo{}, NewNodeError("validation_error", false, "selector must not be empty")
+	}
+	var decoded struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if _, err := c.doJSON(ctx, http.MethodGet, "/v1/models", nil, &decoded); err != nil {
+		return RouteInfo{}, err
+	}
+	for _, m := range decoded.Data {
+		if m.ID == selector {
+			return RouteInfo{Kind: "route", ResolvedModel: selector}, nil
+		}
+	}
+	return RouteInfo{}, NewNodeError("selector_not_found", false, "selector %q is not listed by the gateway", selector)
+}
+
+// ResolveSecretRef resolves a secret reference through the client's
+// configured resolver. With no resolver wired it fails closed; it never
+// invents a value and never logs the resolved value. Ported from PR #688.
+func (c *GatewayClient) ResolveSecretRef(ref string) (string, error) {
+	if c.SecretResolver == nil {
+		return "", NewNodeError("secret_error", false, "no secret resolver is wired")
+	}
+	if strings.TrimSpace(ref) == "" {
+		return "", NewNodeError("secret_error", false, "secret reference must not be empty")
+	}
+	value, err := c.SecretResolver(ref)
+	if err != nil {
+		return "", NewNodeError("secret_error", false, "secret resolution failed")
+	}
+	return value, nil
+}
+
 // Chat calls POST /v1/chat/completions with stream forced false. The
 // model field carries the validated selector; the gateway performs the
 // actual routing. The prompt is never logged or stored by this package.

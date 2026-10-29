@@ -171,13 +171,16 @@ func VerifyWebhook(timestamp, signature, body, secret string) error {
 	return defaultWebhookVerifier.Verify(timestamp, signature, body, secret)
 }
 
-// Verify checks timestamp window, replay, body bound, and HMAC.
+// VerifySignature checks timestamp window, body bound, and HMAC
+// WITHOUT recording the delivery. The Task 8 webhook service uses it
+// so the durable ledger (not the in-memory cache) is the replay
+// authority; the in-memory cache below remains as a second layer.
 // DELIBERATE DIFFERENCE from the video orchestrator's webhook check:
 // the video check MACs only the timestamp. This verifier MACs
 // timestamp + "." + body, so a signature cannot be replayed onto a
 // different body. The video pattern is not copied verbatim because
 // copying it would weaken the guarantee this node advertises.
-func (v *WebhookVerifier) Verify(timestamp, signature, body, secret string) error {
+func (v *WebhookVerifier) VerifySignature(timestamp, signature, body, secret string) error {
 	if len(body) > webhookMaxBody {
 		return NewNodeError("validation_error", false, "webhook body exceeds 1 MiB")
 	}
@@ -203,6 +206,21 @@ func (v *WebhookVerifier) Verify(timestamp, signature, body, secret string) erro
 	if len(sigBytes) != len(expBytes) || !hmac.Equal(sigBytes, expBytes) {
 		return NewNodeError("webhook_invalid_signature", false, "webhook signature mismatch")
 	}
+	return nil
+}
+
+// Verify checks timestamp window, replay, body bound, and HMAC.
+func (v *WebhookVerifier) Verify(timestamp, signature, body, secret string) error {
+	if err := v.VerifySignature(timestamp, signature, body, secret); err != nil {
+		return err
+	}
+	now := time.Now()
+	if v.now != nil {
+		now = v.now()
+	}
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(timestamp + "." + body))
+	expected := hex.EncodeToString(mac.Sum(nil))
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	for key, at := range v.seen {

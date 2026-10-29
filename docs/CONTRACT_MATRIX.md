@@ -33,8 +33,9 @@ says so instead of implying coverage.
 | `evals` | `evalsView` |
 | `observability` | `observabilityView` |
 | `settings` | `settingsView` |
+| `workflows` | `workflowsView` |
 
-## Admin OpenAPI paths (44)
+## Admin OpenAPI paths (52)
 
 Every path documented in `docs/api/admin-openapi.yaml`. The M4-5
 contract test proves each is implemented with the documented
@@ -87,6 +88,14 @@ spec by `TestContractMatrixDrift`.
 - `/admin/api/evaluation/run`
 - `/admin/api/endpoint`
 - `/admin/api/client-keys/{id}/rotate`
+- `/admin/api/nexaflow/nodes`
+- `/admin/api/nexaflow/templates`
+- `/admin/api/nexaflow/templates/{id}`
+- `/admin/api/nexaflow/definitions`
+- `/admin/api/nexaflow/definitions/{id}`
+- `/admin/api/nexaflow/runs`
+- `/admin/api/nexaflow/runs/{id}`
+- `/admin/api/nexaflow/audit`
 
 ## Selector conventions (#502 item 2)
 

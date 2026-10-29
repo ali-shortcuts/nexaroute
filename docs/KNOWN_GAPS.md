@@ -244,11 +244,7 @@ PR #224 wires the permission matrix in `internal/authz` to every registered
 Admin API route/method and denies unknown combinations. OIDC session roles are
 derived only from verified issuer claims using the explicit config allowlist.
 The web UI's visibility is a convenience only; the server middleware is
-authoritative. The local bbolt store is single-host. The **85% repository-wide coverage
-target is not currently met**: the fresh uncached coverage artifact for
-`main` commit `c7867355c6d5f9773dd185e19c3ab5e689aa6577` measured
-**84.9%** on 2026-10-25 (Go 1.27.3). The earlier 85.1% result from
-2026-10-22 is historical and is superseded by this newer measurement.
+authoritative. The local bbolt store is single-host. The **95% repository-wide Go statement-coverage target is not currently met**. The current-`main` measurement is **91.4% (39,584 / 43,298 statements)** on commit `c2ca13cffe4aabf49bb81a92f46e4132e179da87` (Go 1.27.3; GitHub Actions Coverage report run [40861382445](https://github.com/ali-shortcuts/nexaroute/actions/runs/40861382445), 2026-10-29, retained artifact `coverage-c2ca13cffe4aabf49bb81a92f46e4132e179da87-40861382445`). Reaching 95% on that denominator requires 41,134 covered statements, a gap of 1,550. The explicitly selected comparison baseline for issue #663 remains **91.8% (41,782 / 45,515 statements)** on commit `ba5ff2f5f0ace8953e7c4f0e4913de5105e7a13f` (Go 1.27.0; see the pre-change measurement documented in [PR #724](https://github.com/ali-shortcuts/nexaroute/pull/724)); its denominator differs from the current-`main` CI measurement, so the two percentages are not a like-for-like trend and must not be read as a regression or an improvement. The former 84.9%/85% figures are historical and superseded. Separately, the Verify job on the same commit `c2ca13c` failed (run [40861382434](https://github.com/ali-shortcuts/nexaroute/actions/runs/40861382434)) on the known flaky `internal/httpapi/TestWave3ResponsesDeadline504` (observed 502; expected 504). That failure is in the verify gate, not in the coverage workflow, whose own full test pass succeeded — but it means the verify gate on this SHA is red, and coverage success must not be presented as green gates.
 PR #224 is merged; live external-IdP interoperability remains unverified.
 
 
@@ -376,6 +372,52 @@ payload bound, not a content-safety or schema-validation policy; tool-specific
 argument validation remains the responsibility of the upstream MCP server and
 the configured server/tool authorization lists.
 
+## NexaFlow boundaries (canonical line; PR #691 reconciliation)
+
+PR #691's executor/store lineage is retired; its unique capabilities
+were reconciled onto the canonical Task 8 line in
+`docs/nexaflow-691-reconciliation.md`, which is the authoritative
+mapping. In brief:
+
+Implemented on the canonical interfaces: durable per-definition
+run-limit admission at the store boundary (PostgreSQL atomic across
+processes/hosts, file atomic on one host, memory test-only);
+idempotency with input-conflict detection and concurrent-duplicate
+resolution; engine-level empty-approver rejection; approval
+pause/resume across restarts (including the stall-then-resume rule
+for a new worker id under a live foreign lease); cancellation
+(idempotent, ownership-checked); crash recovery that re-queues only
+provably-safe attempts and parks dispatched effectful attempts as
+ambiguous, never re-executing them; signed webhooks with a durable
+delivery ledger; durable interval scheduling with slot claims; and
+the resume, validate, and per-definition runs-listing admin routes.
+
+Storage guarantees: PostgreSQL is the multi-instance authority;
+file mode is single-host only (one live store per path, ledger via
+`O_EXCL` files); memory mode is test-only and loses state on
+restart. The delivery ledger gives at-most-once execution of an
+identical delivery, not exactly-once external side effects: a
+claimed delivery whose start fails is consumed, and a parked
+ambiguous attempt is precisely an unproven external outcome.
+
+Not implemented (deferred, not done): production gateway wiring
+(no caller of `AttachNexaflow` in `cmd/gateway`, so no gateway
+process ticks schedules, serves webhooks, or runs startup recovery
+yet); scheduler daily schedules, trigger discovery, persisted
+schedule state, and the scheduler tick endpoint; webhook
+`secret_ref` resolution and published-trigger validation in the
+(wiring-owned) Start function; async dispatch (202 executions);
+subworkflows, run-level fallback execution, any-join, durable timer
+waits; `workflow.*` permissions (admin routes ride
+`config.read`/`config.write`/`audit.read` as an interim mapping);
+tenant isolation (ownership ceiling + scope label only);
+hard-budget settlement (`budget_check` is report-only; admission
+reserve only); the JSON-editor definition page and Studio canvas
+(those belong to the Studio line). #691's ambiguous-step resume
+modes (including re-executing an ambiguous node) were deliberately
+rejected, not deferred: re-execution is the double-execution hazard
+the parking rule exists to prevent.
+
 ## Audit follow-up record (top-15 audit #57, recorded via #178)
 
 Status labels used below: `open` means an unresolved defect/boundary with no
@@ -424,15 +466,27 @@ still an operator trust-boundary concern.
 The bounded stress checks (`NEXAROUTE_STRESS=1`) and long-form soak checks
 (`NEXAROUTE_SOAK=1`) in `internal/router`, `internal/events`,
 `internal/probe`, `internal/logging`, `internal/eval`, and `internal/httpapi`
-skip by default so routine `go test ./...` and CI stay within budget. Opting
-the whole suite into CI would require a workflow change and is deliberately
-out of scope here.
+skip by default so routine `go test ./...` stays within budget. The
+bounded subset is now in CI: `scripts/ci-soak-smoke.sh` (stress selectors
+identical to `scripts/stress.sh`, fixed-iteration soak tests, loopback
+outage/cancellation tests, one short race soak stage) runs as the
+`ci-soak-smoke` job in `.github/workflows/ci.yml` and records every stage
+as PASS/FAIL/SKIPPED/BLOCKED/CANCELLED in a sanitized report. The
+long-form multi-hour soak stays deliberately out of normal PR CI: it is
+opt-in via the Soak workflow (`workflow_dispatch`) on a suitable runner
+(see `docs/reports/ISSUE664_SOAK_PROCEDURE.md`).
 
-- Impact: default test runs do not exercise the stress/soak paths.
+- Evidence (actual run, 2026-10-29): `docs/reports/ISSUE664_CI_SMOKE_2026-10-29.md`
+  — CI smoke PASS, 16/16 stages, code commit `1facf65`, Go 1.27.0, 1035s
+  wall time on a shared 2-vCPU VM. Long-form multi-hour soak: NOT RUN.
+  Live items (#646–#652) and any RPO/RTO value: NOT RUN / not reported.
+- Impact: default test runs do not exercise the stress/soak paths, and
+  no short CI run proves long-duration stability.
 - Mitigation/workaround: run them explicitly, e.g.
   `NEXAROUTE_STRESS=1 go test ./...`, `NEXAROUTE_SOAK=1 go test ./...`, or via
-  `scripts/stress.sh` / `scripts/soak.sh`.
-- Owner: audit finding F11; follow-up set #169–#177.
+  `scripts/ci-soak-smoke.sh` (bounded) / `scripts/soak.sh` (long-form,
+  operator-dispatched).
+- Owner: audit finding F11; follow-up set #169–#177; issue #664.
 
 ### Dashboard missing-DOM resilience and CLI-snippet injection — `verified fixed`
 
@@ -443,39 +497,107 @@ non-critical nodes no longer abort unrelated sections.
 
 - Evidence: `go test ./...` plus `node --test internal/httpapi/web/dom_isolation.test.mjs`.
 
-### Package coverage gaps and targets — current target NOT MET
+### Package coverage gaps and targets — 95% target NOT MET
 
-The canonical uncached measurement from `coverage-report.yml` on
-`main` commit `c7867355c6d5f9773dd185e19c3ab5e689aa6577` completed
-on 2026-10-25 with Go 1.27.3. Its retained artifact reports **84.9%
-repository statement coverage**, below the 85% policy target. The
-workflow succeeded in producing the measurement; that is not evidence
-that the coverage threshold passed. This result supersedes the older
-85.1% measurement from 2026-10-22.
+Issue #663 is authorized to start from current main after checking and re-scoping
+around the focused work already merged. Its explicit comparison baseline is
+commit `ba5ff2f5f0ace8953e7c4f0e4913de5105e7a13f` (Go 1.27.0): **91.8%
+repository statement coverage (41,782 / 45,515 statements)**, measured with
+the canonical uncached command `go test -count=1 -coverprofile=.artifacts/coverage/coverage.out ./...`.
+The measurement and its run-to-run caveat are recorded in [PR #724](https://github.com/ali-shortcuts/nexaroute/pull/724).
+This comparison baseline predates PR #724 and later changes to main; it must
+not be presented as the current-main aggregate.
 
-Current package coverage from the same artifact:
+The successful current-`main` measurement is the Coverage report workflow
+run [40861382445](https://github.com/ali-shortcuts/nexaroute/actions/runs/40861382445)
+on commit `c2ca13cffe4aabf49bb81a92f46e4132e179da87` (2026-10-29, Go 1.27.3,
+conclusion `success`, all 63 packages `ok` in the retained artifact):
+**91.4% repository statement coverage (39,584 / 43,298 statements)**, below
+the 95% target by 1,550 covered statements. Its retained artifact is
+[coverage-c2ca13cffe4aabf49bb81a92f46e4132e179da87-40861382445](https://github.com/ali-shortcuts/nexaroute/actions/runs/40861382445/artifacts/12892365275).
+This successful measurement supersedes the failed-run diagnostics below for
+current `main`. It must still be distinguished from the gates: the separate
+Verify job on the same SHA failed (run
+[40861382434](https://github.com/ali-shortcuts/nexaroute/actions/runs/40861382434))
+on `internal/httpapi/TestWave3ResponsesDeadline504` (observed 502; expected
+504, the same known flake that failed the earlier `39a7498` run), so the
+verify gate on `c2ca13c` is red even though the coverage workflow's own test
+pass succeeded. Coverage success is a measurement, not a gate pass.
 
-- `cmd/gateway`: 81.0%
-- `internal/video/cost`: 47.3%
-- `internal/video/queue`: 61.5%
-- `internal/video/runtime`: 63.8%
-- `internal/video/providers`: 67.6%
-- `internal/providers`: 83.6%
-- `internal/video/render`: 92.1% (the deterministic renderer tests in
-  PR #659 materially improved this package)
-- `internal/video/tts`: 86.9%
-- `internal/video/orchestrator`: 85.2%
+Package-level figures from the successful `c2ca13c` artifact (35 of 62
+statement-bearing packages below 95%; `internal/doccheck` carries no
+statements and is excluded from that count):
+
+- `internal/breakersync`: 70.9%
+- `internal/nexaflow`: 71.0%
+- `internal/secrets`: 77.3%
+- `internal/qualitygate`: 80.1%
+- `internal/telemetry`: 81.4%
+- `internal/logging`: 81.8%
+- `internal/desktop`: 85.7%
+- `internal/budget`: 85.9%
+- `internal/providers/livecanary`: 86.0%
+- `internal/evallive`: 87.0%
+- `internal/video/storage`: 87.0%
+- `internal/video/tts`: 88.9%
+- `internal/cache`: 89.3%
+- `internal/scorecards`: 89.6%
+- `internal/controlplane`: 89.8%
+- `cmd/gateway`: 90.1%
+- `internal/video/audio`: 90.3%
+- `internal/video/agent`: 90.4%
+- `internal/transport`: 90.6%
+- `internal/policysim`: 90.9%
+- `internal/sharedstate`: 92.0%
+- `internal/usage`: 92.0%
+- `internal/video/render`: 92.1%
+- `internal/httpapi`: 92.5%
+- `internal/securitystore`: 92.8%
+- `internal/probe`: 92.9%
+- `internal/router`: 93.3%
+- `internal/authz`: 93.8%
+- `internal/retrysafety`: 93.9%
+- `internal/events`: 94.0%
+- `internal/privacyaudit`: 94.4%
+- `internal/decision/policy`: 94.8%
+- `internal/route`: 94.8%
 - `cmd/videogen`: 94.9%
-- `internal/taskprofile`: 99.6%
+- `internal/video/composer`: 94.9%
+
+Packages at or above 95% on the same artifact include `internal/providers`
+(96.8%), `internal/video/cost` (96.6%), `internal/video/queue` (98.1%),
+`internal/video/providers` (95.4%), and `internal/video/runtime` (96.2%).
+The earlier failed run on commit
+`39a7498f5dd8e9f7ad4e06633b1c42d1a7365200` (GitHub Actions run
+[40848476783](https://github.com/ali-shortcuts/nexaroute/actions/runs/40848476783))
+is now historical: it failed on the same `TestWave3ResponsesDeadline504`
+flake, and its package diagnostics (notably `cmd/gateway` 84.8% there versus
+90.1% on the successful run) must not be quoted as current-`main` figures.
+
+This measurement covers the test suite only. It is not evidence for
+external live acceptance: live provider acceptance (issue #646) was
+`BLOCKED_EXTERNAL` on 2026-10-29 for lack of operator authorization, and
+other external live items keep their own `BLOCKED`/`NOT_RUN` status in
+their records. A coverage percentage never verifies a live provider,
+tenant, or device.
+
+Focused results from merged PR #724 are meaningful but do not satisfy the
+repository-wide goal: `internal/video/cost` measured **96.6% (288/298)** and
+`internal/video/queue` **98.1% (370/377)** on that PR's verification head.
+Audit the new baseline/current-main artifact package by package, add meaningful
+behavior assertions, and do not pad coverage, exclude production packages, or
+lower the 95% target.
 
 Historical audit-record note (2026-10-15, superseded — not current
 measurements): the earlier thin-package list recorded `internal/compat`
-86.6% and `internal/core` 100.0%, among others. These figures are
-retained only so the F15 audit record stays complete; the current
-measurements above supersede them and must be used for any sign-off.
+86.6% and `internal/core` 100.0%, among others. These figures are retained only so the F15 audit record stays complete.
+The package-level numbers above are the current-`main` measurement from the
+successful `c2ca13c` artifact. They are valid as a measurement; they do not
+satisfy the 95% target and must not be presented as release sign-off while
+the target is unmet and the verify gate on that SHA is red.
 
-The low coverage in `internal/video/cost` and `internal/video/queue`
-is chiefly concentrated in the PostgreSQL adapter code, whose real
+Historically, the low coverage in `internal/video/cost` and `internal/video/queue`
+was chiefly concentrated in the PostgreSQL adapter code, whose real
 database integration tests are build-tagged and are not included in the
 canonical plain `go test -count=1 -coverprofile=... ./...` measurement.
 The durable adapter behavior has separate PostgreSQL integration
@@ -484,8 +606,9 @@ Coverage must be raised with meaningful behavior tests or a reviewed,
 clearly defined measurement-policy change; assertion-free padding or
 excluding production code to make the percentage pass is not acceptable.
 
-The 2026-10-25 artifact is retained by GitHub Actions:
-`coverage-c7867355c6d5f9773dd185e19c3ab5e689aa6577-40196054365`.
+The current-`main` artifact is [coverage-c2ca13cffe4aabf49bb81a92f46e4132e179da87-40861382445](https://github.com/ali-shortcuts/nexaroute/actions/runs/40861382445/artifacts/12892365275) (successful run, 2026-10-29). The 2026-10-25 artifact is historical and retained by GitHub Actions:
+`coverage-c7867355c6d5f9773dd185e19c3ab5e689aa6577-40196054365`. The failed
+2026-10-29 diagnostic artifact is [coverage-39a7498f5dd8e9f7ad4e06633b1c42d1a7365200-40848476783](https://github.com/ali-shortcuts/nexaroute/actions/runs/40848476783/artifacts/12885399833); it is historical and is not a passing aggregate measurement.
 The canonical measurement command is:
 `go test -count=1 -coverprofile=.artifacts/coverage/coverage.out ./...`.
 
