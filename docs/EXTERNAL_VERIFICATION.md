@@ -294,3 +294,27 @@ and no paid calls were made (by design). Live provider interoperability
 remains **UNVERIFIED**; the fixture-based conformance suite
 (`internal/providers/livecanary`, now including the extended scenario
 set) is the local evidence, and it is not a substitute.
+
+### Gate audit 2026-10-29 (pinned main c2ca13c, audit only)
+
+Audit scope: umbrella #654 + gates #646, #648, #649, #650, #651. No live
+calls were made in this audit; no credential was read or used; no model
+was downloaded; no inference was started; nothing was posted, pushed,
+merged, or closed. Evidence classes below are the verified classes —
+fixture, loopback, offline-render, and doc-reported evidence are NOT
+live evidence. All five gates remain OPEN.
+
+| Gate | Status (unchanged) | Evidence class of last verified evidence | Exact blocker |
+|---|---|---|---|
+| #646 LLM canaries | UNVERIFIED — NOT_RUN | FIXTURE/LOOPBACK (harness + refusal gates); no LIVE | Written operator comment naming exact providers + models + approved tenant + approved cost/budget, with credentials via named env vars only |
+| #648 Vault KV | BLOCKED/NOT_RUN for staging + HA | LOOPBACK (10/12 single-node non-dev Vault v2.2.1); gateway boot DOC-REPORTED | Written authorization + instance pointer (HTTPS address, KV v2 mount, empty path, least-privilege token by name, mount type/version confirmation); HA, long renewal, AppRole, K8s auth, Transit remain separately blocked; 3 harness gaps (KV-v2 path-shape only, no policy assertion, --timeout does not set VAULT_HELPER_TIMEOUT) must be stated or fixed |
+| #649 Vault Transit | NOT_RUN | FIXTURE (fake Vault API tests) + merged BLOCKED record (#721) | Complete package together: written authorization + disposable instance + dedicated key + least-privilege policy (encrypt/decrypt/rewrap on that key only) + token-injection method by name only; production/HSM/HA claims remain blocked even then |
+| #650 K8s/Helm | UNVERIFIED — NOT_RUN | OFFLINE/RENDER (38 PASS lines, Helm v3.19.0, 2026-10-27); live NONE | Authorized host/runner with docker+kind+kubectl+helm and delegated cgroups (compute, not a credential); script safe-failure gap and chart staleness (0.1.0/0.22.0 vs v0.24.0) remain separately open |
+| #651 ComfyUI | UNVERIFIED — NOT_RUN/BLOCKED | FIXTURE (harness) + prior LOOPBACK fail-closed (on ba5ff2f, UNVERIFIED on pin) | Four separate inputs: provisioned server + compatible model/workflow/config + suitable compute host (GPU preferred) + written authorization; supplying one leaves the others blocked |
+
+Umbrella #654 note: its body checklist is stale in two places — #649
+still reads "NOT IMPLEMENTED" although the nxs2 code merged via #670,
+and #647 is unchecked although live state is CLOSED/COMPLETED
+(2026-10-29T05:18:01Z; #647 itself is out of this audit's scope and its
+closure is not re-litigated here). The unchecked boxes for
+#646/#648/#649/#650/#651 still match live issue states.
