@@ -305,6 +305,9 @@ func (o *Orchestrator) Create(ctx context.Context, r video.VideoRequest) (video.
 	reserved := false
 	if o.Ledger != nil {
 		if err := o.Ledger.ReserveForJob(j.JobID, estimate, r.MaxCostUSD); err != nil {
+			if isCostBusinessErr(err) {
+				return video.VideoJob{}, err
+			}
 			return video.VideoJob{}, wrapStoreErr(err)
 		}
 		reserved = true
