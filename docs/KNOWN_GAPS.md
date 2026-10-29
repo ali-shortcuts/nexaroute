@@ -49,12 +49,15 @@ Implemented:
 - AES-256-GCM encrypted-at-rest provider, credential-pool, decision-provider, admin, client-auth, header and proxy secrets; random per-secret data keys, master-key wrapping and field-bound AAD (`internal/secrets`, `internal/config`)
 - atomic plaintext-config migration with an authenticated encrypted timestamped backup; `nexaroute secrets status|verify|rotate|decrypt` operator commands
 - fail-closed missing/wrong-key and tamper handling; durable staged-key promotion recovers an interrupted auto-managed rotation when the staged key authenticates the config
+- optional Vault Transit `nxs2` envelope-key path (`NEXAROUTE_KEY_PROVIDER=transit` with `NEXAROUTE_TRANSIT_ENABLED=true`): the Transit KEK stays in Vault, each secret still uses a random local DEK, the canonical AAD binds owner/field/key reference/nonce at the local AES-GCM layer only (no associated data is sent to Transit), strict schema/key-version checks, 5 s per-request timeouts inside 30 s/120 s overall budgets, 64 KiB response cap, redirect rejection, and classified errors apply, and there is no local fallback; explicit `secrets migrate-to-transit` and `secrets rewrap-transit` commands write verbatim backups and atomically replace only after decrypt-verify, with rollback on post-write failure
 - secret-preserving provider edit
 - plaintext credentials are not returned by Admin read surfaces, snapshots, event/log surfaces, or metrics; see the secret-canary regression coverage and [`docs/SECURITY.md`](SECURITY.md)
 
 Boundaries:
 
 - OS keyring and external command/KMS custody adapters are implemented behind `NEXAROUTE_KEY_PROVIDER`; service interoperability and deployment-specific KMS semantics remain unverified
+- Vault Transit `nxs2` is implemented and covered by deterministic fake-API tests, but **no real Vault Transit acceptance run has been executed**. Do not claim production HSM/KMS isolation, HA failover behavior, token renewal, or real Vault compatibility until that run is recorded in `docs/EXTERNAL_VERIFICATION.md`
+- Transit mode requires Vault availability for decrypt; an outage or denied policy fails closed and there is no local-key fallback. Disabling a historical Transit key version before `secrets rewrap` and verification succeeds can make affected secrets unrecoverable
 - externally managed rotation is intentionally performed by the custody system; `nexaroute secrets rotate` refuses to rewrite an external provider and retains only the most recent `.key.previous` file for the local provider
 
 Saved provider keys are write-only, including literal, pool, and environment keys. Headers and proxy URLs are also write-only. Editing a credential field replaces the whole credential set; individual saved pool keys cannot be revealed. Do not store credentials in base URLs or other public metadata. Do not expose the admin surface to untrusted networks.

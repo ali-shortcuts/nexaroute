@@ -12,6 +12,19 @@ NEXAROUTE_LOG_FILE                override bounded log path; "off" disables the 
 NEXAROUTE_STRICT_CONFIG           true/false opt-in strict config validation (see below)
 NEXAROUTE_MASTER_KEY              base64-encoded 32-byte master key (overrides file sources)
 NEXAROUTE_MASTER_KEY_FILE         path to a raw 32-byte master key with mode 0600
+NEXAROUTE_KEY_PROVIDER            file|env|command|kms|keyring|transit
+NEXAROUTE_KEY_PROVIDER_ENV        environment variable name for the env provider
+NEXAROUTE_KEY_PROVIDER_COMMAND    helper executable for the command/kms provider
+NEXAROUTE_KEY_PROVIDER_REF        reference passed to the command/keyring provider
+NEXAROUTE_TRANSIT_ENABLED         must be exactly "true" to enable Transit mode (with NEXAROUTE_KEY_PROVIDER=transit)
+VAULT_ADDR                        Vault address for Transit (https, or http on loopback only)
+VAULT_TOKEN                       Vault token for Transit (never written to config)
+VAULT_TOKEN_FILE                  file holding the Vault token, mode exactly 0600 (xor VAULT_TOKEN)
+NEXAROUTE_TRANSIT_MOUNT           Transit mount, required, no default (multi-segment allowed)
+NEXAROUTE_TRANSIT_KEY             Transit key name, required, no default
+VAULT_NAMESPACE                   optional Vault namespace, sent as X-Vault-Namespace
+NEXAROUTE_LEGACY_MASTER_KEY       base64 legacy nxs1 key for migrate-to-transit (or _FILE)
+NEXAROUTE_LEGACY_MASTER_KEY_FILE  legacy nxs1 key file with mode 0600 for migrate-to-transit
 ```
 
 ## Encrypted secrets and master-key setup
@@ -50,6 +63,67 @@ secure offline copy of each config/key pair before rotating again; the fixed
 `.key.previous` filename is overwritten by the next rotation. Never delete or
 regenerate a key to recover a config. See [the operations runbook](OPERATIONS.md)
 for backup, restore, and interruption procedures.
+
+### Vault Transit envelope mode (`nxs2`)
+
+`NEXAROUTE_KEY_PROVIDER=transit` with `NEXAROUTE_TRANSIT_ENABLED=true` is an explicit opt-in that wraps each
+per-secret data key through Vault Transit instead of loading a raw master key
+into the gateway. The Transit KEK stays in Vault; only the short-lived DEK is
+returned to the gateway. Configure:
+
+```bash
+export NEXAROUTE_KEY_PROVIDER=transit
+export NEXAROUTE_TRANSIT_ENABLED=true
+export VAULT_ADDR=https://vault.example:8200
+export VAULT_TOKEN=...          # inject from a secret manager
+export NEXAROUTE_TRANSIT_MOUNT=transit
+export NEXAROUTE_TRANSIT_KEY=nexaroute
+```
+
+Vault policy needs `encrypt`, `decrypt`, and `rewrap` on the configured key.
+There is no fallback to `<config>.key`, `NEXAROUTE_MASTER_KEY`, or a raw-key
+provider; combining Transit mode with any raw-key source is a configuration
+error. A missing token, denied policy, timeout, wrong key reference, or
+tampered envelope fails closed. Existing `nxs1` configs are rejected in Transit
+mode and must be migrated explicitly:
+
+```bash
+# The legacy key is the exact nxs1 master key; it is never stored in the config.
+# It is demanded only when nxs1 is actually present.
+nexaroute secrets migrate-to-transit --config "$CONFIG" --legacy-key-file /secure/old.key
+nexaroute secrets verify --config "$CONFIG"
+```
+
+Migration proves Transit connectivity with a canary, writes a verbatim
+timestamped `.pre-transit.bak` copy of the pre-migration bytes (mode `0600`,
+SHA-256 reported), decrypt-verifies in memory, and atomically replaces the
+config; a post-write verification failure rolls back to the backup. An
+already-migrated config is verified only: nothing is written and no backup is
+created. Plaintext fields are never auto-migrated: they fail with an
+explicit-migration message. To move wrapped data
+keys to the latest Vault key version, run:
+
+```bash
+nexaroute secrets rewrap-transit --config "$CONFIG"
+nexaroute secrets verify --config "$CONFIG"
+```
+
+`rewrap-transit` decrypt-verifies before and after, calls only the Transit
+`rewrap` endpoint, writes a verbatim `.pre-rewrap.bak`, and writes nothing
+when already at the latest version. Both commands accept `--dry-run`.
+`secrets rotate` refuses Transit mode. `secrets status` reports `nxs1_fields`
+and `nxs2_fields` separately plus `transit_key_versions`. Saves in Transit
+mode preserve unchanged `nxs2` envelopes byte-for-byte and seal only genuinely
+new or changed plaintext fields. Backups of `nxs2` configs record
+`envelope_versions`, `transit_key_ref_sha256`, and `transit_key_versions`,
+reject `--include-master-key`, and can only be restored where Vault Transit is
+available.
+
+`rewrap` writes an authenticated backup and replaces the config atomically. Do
+not disable an old Transit key version until rewrap and verification succeed.
+Transit mode is fake-API tested in CI but has **no real Vault Transit acceptance
+evidence**; see [EXTERNAL_VERIFICATION.md](EXTERNAL_VERIFICATION.md). Do not claim
+production/HSM verification for a deployment until that run is recorded.
 
 ## Optional shared control plane
 

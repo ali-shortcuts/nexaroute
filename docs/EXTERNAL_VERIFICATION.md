@@ -32,7 +32,7 @@ runbook procedure exists for it.
 |---|---|---|
 | OIDC identity provider (browser login) | EXECUTED LOCALLY 2026-10-24 — full login flow PASS against a conforming local IdP (discovery, PKCE S256, JWKS verify, role mapping, session, fail-closed negatives); a live organizational tenant remains UNVERIFIED | §1 below; `docs/reports/LOCAL_ACCEPTANCE_2026-10-24.md` §3 |
 | HashiCorp Vault (KV helper) | EXECUTED LOCALLY 2026-10-24 — real Vault v2.2.1 (dev mode) round-trip via the shipped helper PASS; gateway key custody + decrypt verify PASS; wrong token fails closed; a production Vault cluster remains UNVERIFIED | §2 below; `docs/reports/LOCAL_ACCEPTANCE_2026-10-24.md` §5 |
-| HashiCorp Vault Transit envelope mode | NOT IMPLEMENTED — the helper loads a raw 32-byte master key into the gateway process; key material is never claimed to stay inside Vault | §2 below |
+| HashiCorp Vault Transit envelope mode | IMPLEMENTED — `nxs2` envelope path and fake Vault Transit API contract tests pass; a real Vault Transit acceptance run is **NOT_RUN**, so no production/HSM claim is made | §2 below; `docs/adr/0007-vault-transit-envelope-encryption.md` |
 | OS keyring (secret-tool) | EXECUTED LOCALLY 2026-10-24 — real Secret Service (gnome-keyring) store/lookup PASS; gateway decrypt verify via the keyring provider PASS; a production desktop keyring remains operator-verified | §3 below; `docs/reports/LOCAL_ACCEPTANCE_2026-10-24.md` §6 |
 | LLM providers (OpenAI/Anthropic/Gemini-compatible upstreams) | UNVERIFIED — NOT_RUN; zero paid calls by policy | Executed evidence §"LLM providers" |
 | AWS Bedrock | UNVERIFIED — NOT_RUN (no AWS tenant/credentials) | Adapter covered by fixture/contract tests only |
@@ -85,12 +85,17 @@ protocol, and this repository ships a reference helper for Vault
 fake Vault HTTP API for request shape, token handling and
 fail-closed behavior.
 
-**Transit boundary (exact):** Vault Transit envelope mode — where
-key material never leaves Vault — is **not implemented** and cannot
-be used with the current provider contract, which loads a raw
-32-byte master key into the gateway process at startup. Deployments
-that require key material to never leave the HSM/KMS boundary must
-not treat NexaRoute as satisfying that requirement today.
+**Transit boundary (exact):** Two Vault patterns are distinct. The
+`nxs1` KV v2 helper loads a raw 32-byte master key into the gateway
+process. The optional `nxs2` Vault Transit path keeps the Transit KEK
+inside Vault and returns only a short-lived per-secret DEK to the
+gateway. It is an explicit opt-in (`NEXAROUTE_KEY_PROVIDER=transit` with
+`NEXAROUTE_TRANSIT_ENABLED=true`)
+with strict timeouts, response-size limits, redirect rejection, redacted
+errors, and no local fallback. CI exercises the protocol against a fake
+Vault API only. **No real Vault Transit acceptance run has been
+executed**; do not claim HSM/KMS isolation or production readiness until
+the procedure below is run and recorded.
 
 Procedure:
 
@@ -112,6 +117,34 @@ commands only), Vault HA failover mid-startup, and any
 AppRole/Kubernetes auth flow (the helper takes a static token from
 the environment; token acquisition is the operator's supervisor's
 job).
+
+### Vault Transit (`nxs2`) acceptance procedure — NOT_RUN
+
+Run this only in a disposable environment with operator-authorized
+credentials. It is intentionally separate from CI.
+
+1. Enable a Transit mount and key (for example `transit/nexaroute`).
+   Grant a policy with `encrypt`, `decrypt`, and `rewrap` on that key only.
+2. Export `NEXAROUTE_KEY_PROVIDER=transit`,
+   `NEXAROUTE_TRANSIT_ENABLED=true`, `VAULT_ADDR`, `VAULT_TOKEN` (or
+   `VAULT_TOKEN_FILE`), `NEXAROUTE_TRANSIT_MOUNT`, and
+   `NEXAROUTE_TRANSIT_KEY`.
+3. Start from a disposable config containing one secret. Evidence:
+   the stored value is `nxs2:`, `nexaroute secrets verify` passes, and
+   no `<config>.key` file is created.
+4. Deny the token's `decrypt` capability (or use a wrong token). Evidence:
+   startup and `secrets verify` fail closed with no local-key fallback.
+5. Rotate the Transit key and run `nexaroute secrets rewrap-transit`; verify the
+   wrapped DEK moved to the new key version and the secret still decrypts.
+   Then disable the old key version only after verification.
+6. Tamper with the stored envelope or move it to another field. Evidence:
+   authentication fails.
+7. Record Vault version, mount/key (redacted if sensitive), policy
+   capabilities, dates, command exit codes, and redacted report paths.
+
+A fake-API test is not live acceptance. Until this procedure is executed
+and its evidence is committed under a repository-owned path, the status
+remains **NOT_RUN / UNVERIFIED**.
 
 ## 3. Headless OS keyring
 

@@ -77,7 +77,7 @@ func Key(configPath string) ([]byte, string, error) {
 	} else if ok {
 		return key, keyID(key), nil
 	}
-	if raw, err := os.ReadFile(configPath); err == nil && strings.Contains(string(raw), Prefix) {
+	if raw, err := os.ReadFile(configPath); err == nil && HasEnvelopes(raw) {
 		return nil, "", errors.New("master key file is missing for encrypted configuration; restore the matching key before starting")
 	}
 	if e = os.MkdirAll(filepath.Dir(p), 0700); e != nil {
@@ -149,7 +149,7 @@ func recoverMissingRotationKey(configPath, keyPath string) ([]byte, bool, error)
 		return nil, false, errors.New("cannot inspect staged master key")
 	}
 	raw, err := os.ReadFile(configPath)
-	if err != nil || !strings.Contains(string(raw), Prefix) {
+	if err != nil || !HasEnvelopes(raw) {
 		return nil, false, nil
 	}
 	if _, _, err = TransformConfig(raw, next, false); err != nil {
@@ -260,38 +260,17 @@ func AAD(provider, field string) []byte { return []byte(provider + "\x00" + fiel
 
 // TransformConfig changes secret-bearing JSON values in-place. The caller must
 // provide a fully decrypted document before runtime use.
-func TransformConfig(raw []byte, key []byte, encrypt bool) ([]byte, int, error) {
+func decodeConfigRoot(raw []byte) (map[string]any, error) {
 	var root map[string]any
 	if e := json.Unmarshal(raw, &root); e != nil {
-		return nil, 0, e
+		return nil, e
 	}
-	n := 0
-	visit := func(owner, field string, v any) (any, error) {
-		s, ok := v.(string)
-		if !ok || s == "" {
-			return v, nil
-		}
-		if encrypt {
-			if strings.HasPrefix(s, Prefix) {
-				return s, nil
-			}
-			x, e := seal(key, AAD(owner, field), []byte(s))
-			if e != nil {
-				return nil, e
-			}
-			n++
-			return x, nil
-		}
-		if !strings.HasPrefix(s, Prefix) {
-			return s, nil
-		}
-		x, e := Open(key, AAD(owner, field), s)
-		if e != nil {
-			return nil, e
-		}
-		n++
-		return string(x), nil
-	}
+	return root, nil
+}
+
+// walkSecretFields visits every secret-bearing field in the durable config
+// using the owner/field pair that forms the envelope AAD.
+func walkSecretFields(root map[string]any, visit func(owner, field string, v any) (any, error)) error {
 	if ps, ok := root["providers"].([]any); ok {
 		for _, x := range ps {
 			p, ok := x.(map[string]any)
@@ -303,7 +282,7 @@ func TransformConfig(raw []byte, key []byte, encrypt bool) ([]byte, int, error) 
 				if v, ok := p[f]; ok {
 					z, e := visit(id, f, v)
 					if e != nil {
-						return nil, n, fmt.Errorf("provider %s field %s: %w", id, f, e)
+						return fmt.Errorf("provider %s field %s: %w", id, f, e)
 					}
 					p[f] = z
 				}
@@ -312,7 +291,7 @@ func TransformConfig(raw []byte, key []byte, encrypt bool) ([]byte, int, error) 
 				for k, v := range hs {
 					z, e := visit(id, "header:"+k, v)
 					if e != nil {
-						return nil, n, fmt.Errorf("provider %s header: %w", id, e)
+						return fmt.Errorf("provider %s header: %w", id, e)
 					}
 					hs[k] = z
 				}
@@ -326,7 +305,7 @@ func TransformConfig(raw []byte, key []byte, encrypt bool) ([]byte, int, error) 
 					f := fmt.Sprintf("credentials[%d].api_key", i)
 					z, e := visit(id, f, m["api_key"])
 					if e != nil {
-						return nil, n, fmt.Errorf("provider %s credential field: %w", id, e)
+						return fmt.Errorf("provider %s credential field: %w", id, e)
 					}
 					if _, ok := m["api_key"]; ok {
 						m["api_key"] = z
@@ -342,7 +321,7 @@ func TransformConfig(raw []byte, key []byte, encrypt bool) ([]byte, int, error) 
 				id, _ := p["id"].(string)
 				z, e := visit(id, "api_key", p["api_key"])
 				if e != nil {
-					return nil, n, fmt.Errorf("decision provider %s api_key: %w", id, e)
+					return fmt.Errorf("decision provider %s api_key: %w", id, e)
 				}
 				if _, ok := p["api_key"]; ok {
 					p["api_key"] = z
@@ -353,7 +332,7 @@ func TransformConfig(raw []byte, key []byte, encrypt bool) ([]byte, int, error) 
 	if adm, ok := root["admin"].(map[string]any); ok {
 		z, e := visit("admin", "api_key", adm["api_key"])
 		if e != nil {
-			return nil, n, fmt.Errorf("admin api_key: %w", e)
+			return fmt.Errorf("admin api_key: %w", e)
 		}
 		if _, ok := adm["api_key"]; ok {
 			adm["api_key"] = z
@@ -364,11 +343,58 @@ func TransformConfig(raw []byte, key []byte, encrypt bool) ([]byte, int, error) 
 			for i, v := range ks {
 				z, e := visit("client_auth", fmt.Sprintf("keys[%d]", i), v)
 				if e != nil {
-					return nil, n, fmt.Errorf("client_auth keys[%d]: %w", i, e)
+					return fmt.Errorf("client_auth keys[%d]: %w", i, e)
 				}
 				ks[i] = z
 			}
 		}
+	}
+	return nil
+}
+
+func TransformConfig(raw []byte, key []byte, encrypt bool) ([]byte, int, error) {
+	if len(key) != 32 {
+		return nil, 0, errors.New("invalid master key")
+	}
+	root, e := decodeConfigRoot(raw)
+	if e != nil {
+		return nil, 0, e
+	}
+	n := 0
+	visit := func(owner, field string, v any) (any, error) {
+		s, ok := v.(string)
+		if !ok || s == "" {
+			return v, nil
+		}
+		if encrypt {
+			if strings.HasPrefix(s, Prefix) {
+				return s, nil
+			}
+			if strings.HasPrefix(s, EnvelopePrefix) {
+				return nil, errors.New("nxs2 envelope requires the Vault Transit envelope provider")
+			}
+			x, e := seal(key, AAD(owner, field), []byte(s))
+			if e != nil {
+				return nil, e
+			}
+			n++
+			return x, nil
+		}
+		if !strings.HasPrefix(s, Prefix) {
+			if strings.HasPrefix(s, EnvelopePrefix) {
+				return nil, errors.New("nxs2 envelope requires the Vault Transit envelope provider")
+			}
+			return s, nil
+		}
+		x, e := Open(key, AAD(owner, field), s)
+		if e != nil {
+			return nil, e
+		}
+		n++
+		return string(x), nil
+	}
+	if err := walkSecretFields(root, visit); err != nil {
+		return nil, n, err
 	}
 	b, e := json.MarshalIndent(root, "", "  ")
 	return b, n, e

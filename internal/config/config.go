@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -1210,6 +1211,12 @@ func Default() Config {
 	}
 }
 
+// transitOperationTimeout is the overall Transit budget for load, verify,
+// and save operations (ADR 0007 §8.3: 30 s; migrate/rewrap use 120 s at
+// the CLI). It bounds the total Vault time for a multi-field operation,
+// not just one request.
+const transitOperationTimeout = 30 * time.Second
+
 // LoadBase reads only the durable file configuration. Runtime environment
 // overrides are deliberately excluded so a later Admin API save cannot
 // accidentally persist process-scoped values or injected secrets.
@@ -1227,32 +1234,48 @@ func LoadBase(path string) (Config, error) {
 	if len(b) > maxConfigBytes {
 		return cfg, fmt.Errorf("config exceeds safe limit %d bytes", maxConfigBytes)
 	}
-	if strings.Contains(string(b), secrets.Prefix) || hasSecretValues(b) {
-		key, _, keyErr := secrets.Key(path)
+	if secrets.HasEnvelopes(b) || hasSecretValues(b) {
+		cipher, keyErr := secrets.LoadCipher(path)
 		if keyErr != nil {
 			return cfg, keyErr
 		}
-		plain, _, transformErr := secrets.TransformConfig(b, key, false)
-		if transformErr != nil {
-			return cfg, transformErr
-		}
-		enc, migrated, encErr := secrets.TransformConfig(b, key, true)
-		if encErr != nil {
-			return cfg, errors.New("cannot encrypt legacy configuration secrets")
-		}
-		if migrated > 0 { // Legacy plaintext: migrate atomically and retain only an encrypted backup.
-			backup, e := secrets.EncryptedBackup(key, b)
-			if e != nil {
-				return cfg, errors.New("cannot create encrypted migration backup")
+		if cipher.EnvelopeEnabled() {
+			// Transit mode (ADR 0007 §7.5): decrypt only, under the
+			// 30 s overall operation budget. Plaintext
+			// auto-migration is disabled in Transit mode: a read
+			// path must not issue Vault encrypt calls or rewrite
+			// the file. Plaintext, nxs1, mixed, and unknown
+			// envelopes all fail closed inside the transform.
+			ctx, cancel := context.WithTimeout(context.Background(), transitOperationTimeout)
+			defer cancel()
+			plain, _, transformErr := secrets.TransformConfigWith(ctx, cipher, b, false)
+			if transformErr != nil {
+				return cfg, transformErr
 			}
-			if e = writeAtomic(secrets.BackupName(path), backup); e != nil {
-				return cfg, errors.New("cannot persist encrypted migration backup")
+			b = plain
+		} else {
+			plain, _, transformErr := secrets.TransformConfigWith(context.Background(), cipher, b, false)
+			if transformErr != nil {
+				return cfg, transformErr
 			}
-			if e = writeAtomic(path, append(enc, '\n')); e != nil {
-				return cfg, errors.New("cannot atomically migrate configuration secrets")
+			enc, migrated, encErr := secrets.TransformConfigWith(context.Background(), cipher, b, true)
+			if encErr != nil {
+				return cfg, errors.New("cannot encrypt legacy configuration secrets")
 			}
+			if migrated > 0 { // Legacy plaintext: migrate atomically and retain only an encrypted backup.
+				backup, e := secrets.EncryptedBackupWith(cipher, b)
+				if e != nil {
+					return cfg, errors.New("cannot create encrypted migration backup")
+				}
+				if e = writeAtomic(secrets.BackupName(path), backup); e != nil {
+					return cfg, errors.New("cannot persist encrypted migration backup")
+				}
+				if e = writeAtomic(path, append(enc, '\n')); e != nil {
+					return cfg, errors.New("cannot atomically migrate configuration secrets")
+				}
+			}
+			b = plain
 		}
-		b = plain
 	}
 	if err := json.Unmarshal(b, &cfg); err != nil {
 		return cfg, err
@@ -3810,11 +3833,49 @@ func SaveAtomic(path string, c Config) error {
 		return err
 	}
 	if hasSecretValues(b) {
-		key, _, keyErr := secrets.Key(path)
+		cipher, keyErr := secrets.LoadCipher(path)
 		if keyErr != nil {
 			return keyErr
 		}
-		b, _, err = secrets.TransformConfig(b, key, true)
+		opCtx := context.Background()
+		if cipher.EnvelopeEnabled() {
+			var cancel context.CancelFunc
+			opCtx, cancel = context.WithTimeout(context.Background(), transitOperationTimeout)
+			defer cancel()
+			// Transit save (ADR 0007 §7.5): preserve existing nxs2
+			// envelopes for unchanged fields byte-for-byte. The
+			// in-memory config holds plaintext, so compare
+			// against the stored file: a field whose plaintext
+			// matches the stored plaintext and whose stored value
+			// is nxs2 keeps the stored envelope (no new Vault
+			// wrap call, no wrapped-DEK churn). Changed and new
+			// fields are sealed by the transform below.
+			if stored, rerr := os.ReadFile(path); rerr == nil {
+				storedPlain, _, derr := secrets.TransformConfigWith(opCtx, cipher, stored, false)
+				if derr != nil {
+					return derr
+				}
+				storedEnvelopes, merr := secrets.SecretFieldMap(stored)
+				if merr != nil {
+					return merr
+				}
+				storedPlaintext, merr := secrets.SecretFieldMap(storedPlain)
+				if merr != nil {
+					return merr
+				}
+				b, err = secrets.SubstituteSecretFields(b, func(owner, field, current string) (string, error) {
+					name := owner + ":" + field
+					if storedEnvelopes[name] != "" && strings.HasPrefix(storedEnvelopes[name], secrets.EnvelopePrefix) && storedPlaintext[name] == current {
+						return storedEnvelopes[name], nil
+					}
+					return current, nil
+				})
+				if err != nil {
+					return err
+				}
+			}
+		}
+		b, _, err = secrets.TransformConfigWith(opCtx, cipher, b, true)
 		if err != nil {
 			return errors.New("cannot encrypt configuration secrets")
 		}
