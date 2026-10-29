@@ -1,6 +1,7 @@
 # ADR 0007: Vault Transit envelope encryption
 
-- **Status:** Proposed — not accepted; implementation and security review required
+- **Status:** Accepted (architecture decision; implementation merged via PR #670). Live acceptance remains NOT_RUN — see #649.
+- **Acceptance note (2026-10-29):** this revision is the text merged via PR #670; PR #672 (draft of this revision) was closed as superseded. "Accepted" here means the architecture decision and its implementation; it does not claim live Vault acceptance, which remains NOT_RUN under #649.
 - **Date:** 2026-10-27 (revision of the draft proposed in PR #655)
 - **Issue:** #649
 - **Supersedes:** nothing by itself. This is a revision proposal for the

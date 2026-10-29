@@ -16,9 +16,10 @@ PASS/FAIL/BLOCKED/NOT_RUN statuses.
 | Check | What PASS means |
 |---|---|
 | `vault.health` | `/sys/seal-status` and `/sys/leader` were readable; Vault is unsealed; topology metadata was recorded |
-| `vault.token_metadata` | `auth/token/lookup-self` succeeded; policy names, TTL, and renewable flag were recorded (not the token) |
+| `vault.token_metadata` | `auth/token/lookup-self` succeeded; policy names, TTL, and renewable flag were recorded (not the token). A token carrying the `root` policy FAILS this check and the run stops before any write (see below) |
 | `vault.ref_preflight` | the selected KV v2 path was empty, so the run cannot overwrite existing key material |
 | `vault.kv_put_get` | helper `put` then `get` returned a byte-identical 32-byte key (bytes never logged) |
+| `vault.kv_version` | GET on the key's KV metadata path confirmed KV v2 semantics (200). A 404 FAILS the run even though the helper round-trip alone would pass on a KV v1 mount; a 403 BLOCKS it (the token lacks metadata read) |
 | `vault.gateway_decrypt` | an `nxs1` config field encrypted and decrypted successfully with the Vault-held key |
 | `vault.kv_rotation` | a new 32-byte key replaced the entry and was read back byte-identically |
 | `vault.wrong_token` | an invalid token produced a nonzero helper exit and empty stdout |
@@ -33,6 +34,22 @@ creates a child token with a 60s TTL, verifies it can read the acceptance path,
 revokes it with `auth/token/revoke-self`, and then proves it fails closed. If
 the primary token lacks `auth/token/create`, that check is `BLOCKED` and names
 the missing capability; other checks still run.
+
+Harness hardening, 2026-10-29 (review PR; not on main yet): the check set
+grew from 12 to 13 with `vault.kv_version`, so a full pass is now 11 selected
+PASS + 2 `NOT_RUN` (the 2026-10-27 loopback result of 10/12 predates this
+check and is not restated as 11/13). Three gaps found in the 2026-10-28 audit
+are closed: (1) KV v2 is now proven behaviorally via the metadata probe,
+not by path shape; (2) a `root` token fails `vault.token_metadata` and the
+run stops before writing anything — non-root is necessary but not sufficient
+for least-privilege, and staging still needs a manual policy review; (3) an
+explicitly set `--timeout` is propagated to the helper as
+`VAULT_HELPER_TIMEOUT` (otherwise the operator's exported value is honored,
+otherwise the script default of 30s applies), and the report records the
+effective bound as `bounds.helper_timeout_seconds`. The staging policy shape
+documented below already grants `read` on the metadata path, so a
+`vault.kv_version` 403 on staging means the policy was narrowed, not that
+the mount is v2.
 
 ## Safety controls
 
@@ -50,6 +67,12 @@ the missing capability; other checks still run.
 - Reports are written atomically with mode `0600`; parent directories use
   `0700`. No token values, key bytes, or Vault response bodies are written.
 - The helper receives the token through its environment, never through argv.
+- A token with the `root` policy is refused before any write: the run exits
+  with `vault.token_metadata` FAIL and no acceptance key is created.
+- The helper's per-request bound is explicit: `--timeout` (when set) wins,
+  then `VAULT_HELPER_TIMEOUT`, then the script default of 30s. An exported
+  but invalid `VAULT_HELPER_TIMEOUT` is a usage error (exit 2) before any
+  Vault request, not a mid-run helper failure.
 - `--skip-cleanup` is available, but then the acceptance key remains at the
   selected path and the report says so.
 

@@ -11,12 +11,14 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -80,6 +82,9 @@ type vaultAcceptVault struct {
 type vaultAcceptBounds struct {
 	CallTimeoutSeconds    float64 `json:"call_timeout_seconds"`
 	OverallTimeoutSeconds float64 `json:"overall_timeout_seconds"`
+	// HelperTimeoutSeconds is the per-request bound actually handed to the
+	// helper script via VAULT_HELPER_TIMEOUT (see vaultAcceptHelperTimeout).
+	HelperTimeoutSeconds int64 `json:"helper_timeout_seconds"`
 }
 
 type vaultAcceptCheck struct {
@@ -125,7 +130,7 @@ func runVaultAccept(args []string, stdout, stderr io.Writer) int {
 	ref := fs.String("ref", "", "empty, dedicated KV v2 data path (for example secret/data/nexaroute/acceptance/master-key)")
 	helper := fs.String("helper", "scripts/key-provider-vault-kv.sh", "path to the Vault KV key-provider helper")
 	outPath := fs.String("out", "", "redacted JSON report path")
-	timeout := fs.Duration("timeout", 10*time.Second, "per-request timeout (max 60s)")
+	timeout := fs.Duration("timeout", 10*time.Second, "per-request timeout (max 60s); when explicitly set, also bounds helper requests via VAULT_HELPER_TIMEOUT")
 	overallTimeout := fs.Duration("overall-timeout", 2*time.Minute, "overall run timeout (max 5m)")
 	confirmLive := fs.Bool("confirm-live", false, "required acknowledgment that this run writes to the selected Vault path")
 	allowDev := fs.Bool("allow-dev", false, "allow in-memory (dev-mode) Vault; the report is still labelled non-production")
@@ -140,6 +145,17 @@ func runVaultAccept(args []string, stdout, stderr io.Writer) int {
 	}
 	if *overallTimeout < *timeout || *overallTimeout > vaultAcceptMaxOverall {
 		fmt.Fprintf(stderr, "nexaroute vault-accept: --overall-timeout must be between --timeout and %s\n", vaultAcceptMaxOverall)
+		return 2
+	}
+	timeoutSet := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "timeout" {
+			timeoutSet = true
+		}
+	})
+	helperTimeout, err := vaultAcceptHelperTimeout(*timeout, timeoutSet)
+	if err != nil {
+		fmt.Fprintf(stderr, "nexaroute vault-accept: %v\n", err)
 		return 2
 	}
 	if err := validateVaultAcceptRef(*ref); err != nil {
@@ -185,6 +201,7 @@ func runVaultAccept(args []string, stdout, stderr io.Writer) int {
 		Bounds: vaultAcceptBounds{
 			CallTimeoutSeconds:    timeout.Seconds(),
 			OverallTimeoutSeconds: overallTimeout.Seconds(),
+			HelperTimeoutSeconds:  helperTimeout,
 		},
 		Limitations: []string{
 			"This harness verifies Vault KV v2 custody only. Vault Transit envelope mode is NOT implemented and is not tested.",
@@ -232,6 +249,7 @@ func runVaultAccept(args []string, stdout, stderr io.Writer) int {
 	report.Checks = append(report.Checks, health)
 	if health.Status != externalStatusPass {
 		report.Checks = append(report.Checks, vaultAcceptSkipped("vault.kv_put_get", "Vault health check did not pass"),
+			vaultAcceptSkipped("vault.kv_version", "Vault health check did not pass"),
 			vaultAcceptSkipped("vault.kv_rotation", "Vault health check did not pass"),
 			vaultAcceptSkipped("vault.wrong_token", "Vault health check did not pass"),
 			vaultAcceptSkipped("vault.revoked_token", "Vault health check did not pass"),
@@ -245,6 +263,7 @@ func runVaultAccept(args []string, stdout, stderr io.Writer) int {
 			Reason: "Vault reports in-memory storage (dev mode); rerun with --allow-dev only for non-production harness checks",
 		})
 		report.Checks = append(report.Checks, vaultAcceptSkipped("vault.kv_put_get", "dev mode is not production evidence"),
+			vaultAcceptSkipped("vault.kv_version", "dev mode is not production evidence"),
 			vaultAcceptSkipped("vault.kv_rotation", "dev mode is not production evidence"),
 			vaultAcceptSkipped("vault.wrong_token", "dev mode is not production evidence"),
 			vaultAcceptSkipped("vault.revoked_token", "dev mode is not production evidence"),
@@ -259,6 +278,10 @@ func runVaultAccept(args []string, stdout, stderr io.Writer) int {
 
 	policy := runVaultAcceptTokenMetadata(runCtx, client, addr, token, &report)
 	report.Checks = append(report.Checks, policy)
+	if policy.Status == externalStatusFail {
+		// A root token must never be used to write acceptance keys.
+		return finishVaultAccept(report, *outPath, stdout, stderr)
+	}
 
 	preflight := runVaultAcceptRefPreflight(runCtx, client, addr, token, *ref)
 	report.Checks = append(report.Checks, preflight)
@@ -275,20 +298,25 @@ func runVaultAccept(args []string, stdout, stderr io.Writer) int {
 		})
 		return finishVaultAccept(report, *outPath, stdout, stderr)
 	}
-	putGet := runVaultAcceptPutGet(runCtx, helperAbs, *ref, key1, addr, token)
+	putGet := runVaultAcceptPutGet(runCtx, helperAbs, *ref, key1, addr, token, helperTimeout)
 	report.Checks = append(report.Checks, putGet)
 	if putGet.Status == externalStatusPass {
+		// The metadata probe runs only after a successful round-trip: on
+		// a failed round-trip the key is absent, and a metadata 404
+		// would falsely report a KV v1 mount.
+		report.Checks = append(report.Checks, runVaultAcceptKVVersion(runCtx, client, addr, token, *ref))
 		report.Checks = append(report.Checks, runVaultAcceptDecrypt(key1))
 	} else {
+		report.Checks = append(report.Checks, vaultAcceptSkipped("vault.kv_version", "key round-trip did not pass"))
 		report.Checks = append(report.Checks, vaultAcceptSkipped("vault.gateway_decrypt", "key round-trip did not pass"))
 	}
 
-	rotation := runVaultAcceptRotation(runCtx, helperAbs, *ref, addr, token)
+	rotation := runVaultAcceptRotation(runCtx, helperAbs, *ref, addr, token, helperTimeout)
 	report.Checks = append(report.Checks, rotation)
 
-	report.Checks = append(report.Checks, runVaultAcceptWrongToken(runCtx, helperAbs, *ref, addr))
-	report.Checks = append(report.Checks, runVaultAcceptRevokedToken(runCtx, client, helperAbs, *ref, addr, token, *timeout))
-	report.Checks = append(report.Checks, runVaultAcceptOutage(runCtx, helperAbs, *ref, outageURL.String(), token))
+	report.Checks = append(report.Checks, runVaultAcceptWrongToken(runCtx, helperAbs, *ref, addr, helperTimeout))
+	report.Checks = append(report.Checks, runVaultAcceptRevokedToken(runCtx, client, helperAbs, *ref, addr, token, *timeout, helperTimeout))
+	report.Checks = append(report.Checks, runVaultAcceptOutage(runCtx, helperAbs, *ref, outageURL.String(), token, helperTimeout))
 
 	if *skipCleanup {
 		report.Checks = append(report.Checks, vaultAcceptNotRun("vault.cleanup", "cleanup skipped by --skip-cleanup; acceptance key remains at the selected path"))
@@ -296,6 +324,33 @@ func runVaultAccept(args []string, stdout, stderr io.Writer) int {
 		report.Checks = append(report.Checks, runVaultAcceptCleanup(runCtx, client, addr, token, *ref))
 	}
 	return finishVaultAccept(report, *outPath, stdout, stderr)
+}
+
+// vaultAcceptHelperTimeout resolves the per-request bound handed to the
+// helper script via VAULT_HELPER_TIMEOUT. An explicitly set --timeout wins,
+// because that is what an operator setting --timeout expects to bound;
+// otherwise the operator's exported VAULT_HELPER_TIMEOUT is honored; otherwise
+// the script default (30s) applies. An exported but invalid value is a usage
+// error, not something the helper discovers mid-run with a confusing failure.
+func vaultAcceptHelperTimeout(timeout time.Duration, timeoutSet bool) (int64, error) {
+	if timeoutSet {
+		// Round up: a sub-second --timeout must still hand the helper a
+		// positive integer bound instead of 0, which the script rejects.
+		seconds := int64(math.Ceil(timeout.Seconds()))
+		if seconds < 1 {
+			seconds = 1
+		}
+		return seconds, nil
+	}
+	raw := strings.TrimSpace(os.Getenv("VAULT_HELPER_TIMEOUT"))
+	if raw == "" {
+		return 30, nil
+	}
+	seconds, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || seconds <= 0 {
+		return 0, fmt.Errorf("VAULT_HELPER_TIMEOUT must be a positive integer (seconds), got %q", raw)
+	}
+	return seconds, nil
 }
 
 func validateVaultAcceptRef(ref string) error {
@@ -454,8 +509,19 @@ func runVaultAcceptTokenMetadata(ctx context.Context, client *http.Client, addr,
 	report.Vault.TokenTTLSeconds = lookup.Data.TTL
 	report.Vault.TokenRenewable = lookup.Data.Renewable
 	report.Vault.TokenMetadataOK = true
-	check.Status = externalStatusPass
 	check.Detail = fmt.Sprintf("policies=%s ttl_seconds=%d renewable=%t", strings.Join(policies, ","), lookup.Data.TTL, lookup.Data.Renewable)
+	// A root token would otherwise PASS this check and then write
+	// acceptance keys with unlimited privilege. Acceptance requires a
+	// least-privilege token; non-root is necessary (not sufficient) for
+	// that claim, and staging still needs a manual policy review.
+	for _, policy := range policies {
+		if policy == "root" {
+			check.Status = externalStatusFail
+			check.Reason = "token carries the root policy; acceptance requires a least-privilege token (only policy names are recorded)"
+			return check
+		}
+	}
+	check.Status = externalStatusPass
 	return check
 }
 
@@ -484,10 +550,10 @@ func runVaultAcceptRefPreflight(ctx context.Context, client *http.Client, addr, 
 	return check
 }
 
-func runVaultAcceptPutGet(ctx context.Context, helper, ref string, key []byte, addr, token string) vaultAcceptCheck {
+func runVaultAcceptPutGet(ctx context.Context, helper, ref string, key []byte, addr, token string, helperTimeout int64) vaultAcceptCheck {
 	start := time.Now()
 	check := vaultAcceptCheck{ID: "vault.kv_put_get", Kind: "kv", Selected: true}
-	out, err := runVaultAcceptHelper(ctx, helper, "put", ref, key, addr, token)
+	out, err := runVaultAcceptHelper(ctx, helper, "put", ref, key, addr, token, helperTimeout)
 	check.DurationMS = time.Since(start).Milliseconds()
 	if err != nil {
 		check.Status = externalStatusFail
@@ -500,7 +566,7 @@ func runVaultAcceptPutGet(ctx context.Context, helper, ref string, key []byte, a
 		return check
 	}
 	start = time.Now()
-	got, err := runVaultAcceptHelperGet(ctx, helper, ref, addr, token)
+	got, err := runVaultAcceptHelperGet(ctx, helper, ref, addr, token, helperTimeout)
 	check.DurationMS += time.Since(start).Milliseconds()
 	if err != nil {
 		check.Status = externalStatusFail
@@ -559,7 +625,7 @@ func runVaultAcceptDecrypt(key []byte) vaultAcceptCheck {
 	return check
 }
 
-func runVaultAcceptRotation(ctx context.Context, helper, ref, addr, token string) vaultAcceptCheck {
+func runVaultAcceptRotation(ctx context.Context, helper, ref, addr, token string, helperTimeout int64) vaultAcceptCheck {
 	start := time.Now()
 	check := vaultAcceptCheck{ID: "vault.kv_rotation", Kind: "kv", Selected: true}
 	next := make([]byte, 32)
@@ -568,13 +634,13 @@ func runVaultAcceptRotation(ctx context.Context, helper, ref, addr, token string
 		check.Reason = "cannot generate a replacement acceptance key"
 		return check
 	}
-	if _, err := runVaultAcceptHelper(ctx, helper, "put", ref, next, addr, token); err != nil {
+	if _, err := runVaultAcceptHelper(ctx, helper, "put", ref, next, addr, token, helperTimeout); err != nil {
 		check.DurationMS = time.Since(start).Milliseconds()
 		check.Status = externalStatusFail
 		check.Reason = "helper put of the replacement key failed"
 		return check
 	}
-	got, err := runVaultAcceptHelperGet(ctx, helper, ref, addr, token)
+	got, err := runVaultAcceptHelperGet(ctx, helper, ref, addr, token, helperTimeout)
 	check.DurationMS = time.Since(start).Milliseconds()
 	if err != nil {
 		check.Status = externalStatusFail
@@ -591,11 +657,11 @@ func runVaultAcceptRotation(ctx context.Context, helper, ref, addr, token string
 	return check
 }
 
-func runVaultAcceptWrongToken(ctx context.Context, helper, ref, addr string) vaultAcceptCheck {
+func runVaultAcceptWrongToken(ctx context.Context, helper, ref, addr string, helperTimeout int64) vaultAcceptCheck {
 	start := time.Now()
 	check := vaultAcceptCheck{ID: "vault.wrong_token", Kind: "fail-closed", Selected: true}
 	wrong := []byte("nexaroute-acceptance-invalid-" + time.Now().UTC().Format("150405.000000000"))
-	out, err := runVaultAcceptHelper(ctx, helper, "get", ref, nil, addr, string(wrong))
+	out, err := runVaultAcceptHelper(ctx, helper, "get", ref, nil, addr, string(wrong), helperTimeout)
 	check.DurationMS = time.Since(start).Milliseconds()
 	if err == nil {
 		check.Status = externalStatusFail
@@ -612,7 +678,7 @@ func runVaultAcceptWrongToken(ctx context.Context, helper, ref, addr string) vau
 	return check
 }
 
-func runVaultAcceptRevokedToken(ctx context.Context, client *http.Client, helper, ref, addr, token string, timeout time.Duration) vaultAcceptCheck {
+func runVaultAcceptRevokedToken(ctx context.Context, client *http.Client, helper, ref, addr, token string, timeout time.Duration, helperTimeout int64) vaultAcceptCheck {
 	start := time.Now()
 	check := vaultAcceptCheck{ID: "vault.revoked_token", Kind: "fail-closed", Selected: true}
 	status, body, err := vaultHTTP(ctx, client, addr, token, http.MethodPost, "auth/token/create",
@@ -645,7 +711,7 @@ func runVaultAcceptRevokedToken(ctx context.Context, client *http.Client, helper
 	}
 	child := created.Auth.ClientToken
 
-	if _, err := runVaultAcceptHelperGet(ctx, helper, ref, addr, child); err != nil {
+	if _, err := runVaultAcceptHelperGet(ctx, helper, ref, addr, child, helperTimeout); err != nil {
 		check.Status = externalStatusFail
 		check.Reason = "disposable child token could not read the acceptance path; revocation behavior was not tested"
 		return check
@@ -658,7 +724,7 @@ func runVaultAcceptRevokedToken(ctx context.Context, client *http.Client, helper
 		check.Reason = "could not revoke the disposable child token; it will expire at its 60s TTL"
 		return check
 	}
-	out, err := runVaultAcceptHelper(ctx, helper, "get", ref, nil, addr, child)
+	out, err := runVaultAcceptHelper(ctx, helper, "get", ref, nil, addr, child, helperTimeout)
 	check.DurationMS = time.Since(start).Milliseconds()
 	if err == nil {
 		check.Status = externalStatusFail
@@ -675,10 +741,10 @@ func runVaultAcceptRevokedToken(ctx context.Context, client *http.Client, helper
 	return check
 }
 
-func runVaultAcceptOutage(ctx context.Context, helper, ref, outageURL, token string) vaultAcceptCheck {
+func runVaultAcceptOutage(ctx context.Context, helper, ref, outageURL, token string, helperTimeout int64) vaultAcceptCheck {
 	start := time.Now()
 	check := vaultAcceptCheck{ID: "vault.outage_fail_closed", Kind: "fail-closed", Selected: true}
-	out, err := runVaultAcceptHelper(ctx, helper, "get", ref, nil, outageURL, token)
+	out, err := runVaultAcceptHelper(ctx, helper, "get", ref, nil, outageURL, token, helperTimeout)
 	check.DurationMS = time.Since(start).Milliseconds()
 	if err == nil {
 		check.Status = externalStatusFail
@@ -719,6 +785,46 @@ func runVaultAcceptCleanup(ctx context.Context, client *http.Client, addr, token
 	default:
 		check.Status = externalStatusFail
 		check.Reason = fmt.Sprintf("cleanup returned HTTP %d; the acceptance key may remain at the selected path", status)
+	}
+	return check
+}
+
+// runVaultAcceptKVVersion proves the mount behaves as KV v2 instead of
+// trusting the ref's path shape. After a successful round-trip, the key's
+// KV v2 metadata endpoint must answer: a 200 confirms v2 semantics, a 404
+// means the metadata endpoint does not exist (KV v1 behavior) and fails the
+// run even though the helper round-trip alone would have passed, and a 403
+// blocks the check because the token lacks metadata read — the documented
+// runbook policy shape already grants that read, so a 403 means the staging
+// policy needs extending, not that the mount is v2. No metadata body is
+// recorded in the report.
+func runVaultAcceptKVVersion(ctx context.Context, client *http.Client, addr, token, ref string) vaultAcceptCheck {
+	start := time.Now()
+	check := vaultAcceptCheck{ID: "vault.kv_version", Kind: "kv", Selected: true}
+	meta := vaultMetadataPath(ref)
+	if meta == "" {
+		check.Status = externalStatusBlocked
+		check.Reason = "cannot derive the KV metadata path from the selected ref"
+		return check
+	}
+	status, _, err := vaultHTTP(ctx, client, addr, token, http.MethodGet, meta, nil)
+	check.DurationMS = time.Since(start).Milliseconds()
+	switch {
+	case err != nil:
+		check.Status = externalStatusBlocked
+		check.Reason = "cannot read the KV metadata path: " + vaultAcceptSafeError(err)
+	case status >= 200 && status < 300:
+		check.Status = externalStatusPass
+		check.Detail = "KV v2 metadata endpoint confirms the mount behaves as KV v2"
+	case status == http.StatusNotFound:
+		check.Status = externalStatusFail
+		check.Reason = "KV metadata endpoint is absent; the mount does not behave as KV v2 (check mount type/version)"
+	case status == http.StatusForbidden:
+		check.Status = externalStatusBlocked
+		check.Reason = "token lacks read on the KV metadata path; extend the policy with metadata read per the runbook, then rerun"
+	default:
+		check.Status = externalStatusBlocked
+		check.Reason = fmt.Sprintf("KV metadata probe returned HTTP %d; mount version cannot be determined", status)
 	}
 	return check
 }
@@ -791,8 +897,8 @@ func safeVaultAcceptString(value string) string {
 	return value
 }
 
-func runVaultAcceptHelperGet(ctx context.Context, helper, ref, addr, token string) ([]byte, error) {
-	out, err := runVaultAcceptHelper(ctx, helper, "get", ref, nil, addr, token)
+func runVaultAcceptHelperGet(ctx context.Context, helper, ref, addr, token string, helperTimeout int64) ([]byte, error) {
+	out, err := runVaultAcceptHelper(ctx, helper, "get", ref, nil, addr, token, helperTimeout)
 	if err != nil {
 		return nil, err
 	}
@@ -803,7 +909,7 @@ func runVaultAcceptHelperGet(ctx context.Context, helper, ref, addr, token strin
 	return decoded, nil
 }
 
-func runVaultAcceptHelper(ctx context.Context, helper, op, ref string, key []byte, addr, token string) ([]byte, error) {
+func runVaultAcceptHelper(ctx context.Context, helper, op, ref string, key []byte, addr, token string, helperTimeout int64) ([]byte, error) {
 	var input bytes.Buffer
 	fmt.Fprintf(&input, "%s %s\n", op, ref)
 	if op == "put" {
@@ -815,14 +921,14 @@ func runVaultAcceptHelper(ctx context.Context, helper, op, ref string, key []byt
 	}
 	cmd := exec.CommandContext(ctx, helper)
 	cmd.Stdin = &input
-	env := make([]string, 0, len(os.Environ())+2)
+	env := make([]string, 0, len(os.Environ())+3)
 	for _, entry := range os.Environ() {
-		if strings.HasPrefix(entry, "VAULT_ADDR=") || strings.HasPrefix(entry, "VAULT_TOKEN=") {
+		if strings.HasPrefix(entry, "VAULT_ADDR=") || strings.HasPrefix(entry, "VAULT_TOKEN=") || strings.HasPrefix(entry, "VAULT_HELPER_TIMEOUT=") {
 			continue
 		}
 		env = append(env, entry)
 	}
-	cmd.Env = append(env, "VAULT_ADDR="+addr, "VAULT_TOKEN="+token)
+	cmd.Env = append(env, "VAULT_ADDR="+addr, "VAULT_TOKEN="+token, "VAULT_HELPER_TIMEOUT="+strconv.FormatInt(helperTimeout, 10))
 	var out, errOut bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &errOut
