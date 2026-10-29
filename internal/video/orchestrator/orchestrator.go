@@ -830,6 +830,17 @@ func (o *Orchestrator) pollAndFinalize(ctx context.Context, p video.VideoProvide
 		max = 300
 	}
 	for i := 0; i < max; i++ {
+		// Observe cancellation deterministically before arming any
+		// timer: with a tiny poll interval both ctx.Done() and the
+		// timer are ready at once, and select picks randomly among
+		// ready cases, so an already-cancelled context could burn
+		// through all MaxPolls iterations and report a polling
+		// deadline instead of cancellation. This check changes no
+		// other path: for a live context ctx.Err() is nil, and
+		// mid-poll cancellation is still handled by the select below.
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		// Renew the lease every poll (#434 item 6): if another
 		// instance holds the job now, stop instead of
 		// finalizing work that is no longer ours.
