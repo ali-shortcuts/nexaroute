@@ -565,6 +565,7 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 	profile := profileFromRequirement(req, &canReq)
 	dialects := map[string]compat.DialectProfile{}
 	var lastErr string
+	var lastDerr error
 	attempts := 0
 	for i := 0; i < len(candidates) && attempts < max; i++ {
 		c := candidates[i]
@@ -594,6 +595,7 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 		)
 		if derr != nil {
 			lastErr = derr.Error()
+			lastDerr = derr
 			if repair.Repaired {
 				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "compat_repair", Deployment: deployment.ID, Message: repair.Description})
 			}
@@ -619,7 +621,11 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 			// outcome whether or not a replay follows; pre-dispatch
 			// refusals are filtered out by the helper itself.
 			s.emitAmbiguousOutcome(r.Header.Get("x-request-id"), deployment.ID, derr, time.Since(start))
-			if gatewayDeadlineExceeded(routeCtx, r.Context()) {
+			// Use the transport-timeout-aware check, not the narrow
+			// route-timer check: the upstream client shares the route
+			// budget, so its timeout may fire (and must map to 504)
+			// before the route timer itself is observed expired.
+			if gatewayDeadlineError(routeCtx, r.Context(), derr) {
 				canonicalErrorJSON(w, "openai_responses", http.StatusGatewayTimeout, "timeout", "gateway request timeout")
 				return
 			}
@@ -789,7 +795,7 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	if gatewayDeadlineExceeded(routeCtx, r.Context()) {
+	if gatewayDeadlineError(routeCtx, r.Context(), lastDerr) {
 		canonicalErrorJSON(w, "openai_responses", http.StatusGatewayTimeout, "timeout", "gateway request timeout")
 		return
 	}
