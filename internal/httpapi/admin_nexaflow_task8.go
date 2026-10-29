@@ -171,20 +171,53 @@ func (s *Server) adminNexaflowTemplates(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]any{"templates": out})
 }
 
-// adminNexaflowTemplateByID serves /admin/api/nexaflow/templates/{id}:
-// the full inert template, including its nodes, so a studio/gallery client
-// can build a workflow draft from it. The list endpoint deliberately
-// returns metadata only.
+// adminNexaflowTemplateByID serves the /admin/api/nexaflow/templates/
+// subtree:
+//   - GET /templates/{id}: the full inert template, including its nodes,
+//     so a studio/gallery client can build a workflow draft from it
+//     (PR #732 detail). The list endpoint deliberately returns metadata
+//     only.
+//   - POST /templates/{id}/instantiate: server-side template
+//     instantiation into a saved draft (studio port).
+//
+// Dispatch is shape-first for unknown shapes (404) and method-checked for
+// known shapes (405 for a wrong method on a known shape), so the OpenAPI
+// method-set probe and the studio error matrix both hold.
 func (s *Server) adminNexaflowTemplateByID(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.nexaflowAdmin(r); !ok {
 		errorJSON(w, http.StatusUnauthorized, "admin authentication required")
 		return
 	}
+	rest := strings.Trim(strings.TrimPrefix(r.URL.Path, "/admin/api/nexaflow/templates/"), "/")
+	parts := strings.Split(rest, "/")
+	if len(parts) == 2 && parts[1] == "instantiate" {
+		if !s.nexaflowRequireMethod(w, r, http.MethodPost) {
+			return
+		}
+		var body struct {
+			Placeholders   map[string]string `json:"placeholders"`
+			PolicyApproved bool              `json:"policy_approved"`
+		}
+		if !nexaflowDecodeBody(w, r, &body) {
+			return
+		}
+		def, err := s.nexaflow.InstantiateTemplate(r.Context(), parts[0], body.Placeholders, body.PolicyApproved)
+		if err != nil {
+			errorJSON(w, nexaflowErrStatus(err), err.Error())
+			return
+		}
+		writeJSON(w, http.StatusCreated, map[string]any{"id": def.ID, "definition": def})
+		return
+	}
+	if len(parts) != 1 {
+		errorJSON(w, http.StatusNotFound, "template not found")
+		return
+	}
 	if !s.nexaflowRequireMethod(w, r, http.MethodGet) {
 		return
 	}
-	id := strings.Trim(strings.TrimPrefix(r.URL.Path, "/admin/api/nexaflow/templates/"), "/")
-	if id == "" || strings.Contains(id, "/") {
+	id := parts[0]
+	if id == "" {
 		errorJSON(w, http.StatusNotFound, "template not found")
 		return
 	}

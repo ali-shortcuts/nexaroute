@@ -2,54 +2,18 @@ package httpapi
 
 import (
 	"net/http"
-	"strings"
 
 	"github.com/ali-shortcuts/nexaroute/internal/nexaflow"
 )
 
-// Studio port: the two routes the standalone Visual Studio page
-// (/studio.html) needs beyond the Task 8 admin API. Both ride the
+// Studio port: the draft-body validate route the standalone Visual Studio
+// page (/studio.html) needs beyond the Task 8 admin API. Template
+// instantiation lives in the templates/ subtree handler in
+// admin_nexaflow_task8.go, alongside the #732 detail route. Both ride the
 // interim canonical permission mapping (everything under
 // /admin/api/nexaflow/ maps to config.read for GET and config.write
 // for POST in adminPermissionForRequest); no workflow.* permission is
 // invented here and no tenant value is ever read from a request.
-
-// adminNexaflowTemplateInstantiate serves POST
-// /admin/api/nexaflow/templates/{id}/instantiate: server-side template
-// instantiation into a saved draft. Any other shape under the
-// templates/ subtree answers 404.
-func (s *Server) adminNexaflowTemplateInstantiate(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.nexaflowAdmin(r); !ok {
-		errorJSON(w, http.StatusUnauthorized, "admin authentication required")
-		return
-	}
-	rest := strings.TrimPrefix(r.URL.Path, "/admin/api/nexaflow/templates/")
-	parts := strings.Split(strings.Trim(rest, "/"), "/")
-	// Method before shape: the OpenAPI method-set contract probes
-	// this prefix with every method, and a 405 for non-POST methods
-	// is the honest answer (a shape-first 404 would read as
-	// "implemented" to that probe).
-	if !s.nexaflowRequireMethod(w, r, http.MethodPost) {
-		return
-	}
-	if len(parts) != 2 || parts[1] != "instantiate" {
-		errorJSON(w, http.StatusNotFound, "not found")
-		return
-	}
-	var body struct {
-		Placeholders   map[string]string `json:"placeholders"`
-		PolicyApproved bool              `json:"policy_approved"`
-	}
-	if !nexaflowDecodeBody(w, r, &body) {
-		return
-	}
-	def, err := s.nexaflow.InstantiateTemplate(r.Context(), parts[0], body.Placeholders, body.PolicyApproved)
-	if err != nil {
-		errorJSON(w, nexaflowErrStatus(err), err.Error())
-		return
-	}
-	writeJSON(w, http.StatusCreated, map[string]any{"id": def.ID, "definition": def})
-}
 
 // adminNexaflowDefinitionValidate serves POST
 // /admin/api/nexaflow/definitions/validate. It validates the definition
