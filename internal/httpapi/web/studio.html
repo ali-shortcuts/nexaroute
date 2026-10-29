@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NexaFlow Visual Studio</title>
+<link rel="stylesheet" href="/studio.css">
+</head>
+<body>
+<header class="topbar">
+  <div>
+    <h1>NexaFlow Visual Studio</h1>
+    <p class="muted">Workflows are edited as drafts and published as immutable revisions. The studio reads node schemas from the gateway registry; it keeps no copy of them.</p>
+  </div>
+  <div class="top-actions">
+    <label class="inline">Direction
+      <select id="dir-select" aria-label="Page direction">
+        <option value="ltr">Left to right</option>
+        <option value="rtl">Right to left</option>
+      </select>
+    </label>
+    <label class="inline">Theme
+      <select id="theme-select" aria-label="Theme">
+        <option value="dark">Dark</option>
+        <option value="light">Light</option>
+      </select>
+    </label>
+    <a class="button secondary" href="/">Back to dashboard</a>
+  </div>
+</header>
+
+<section class="panel" id="auth-panel">
+  <h2>Connect</h2>
+  <p class="muted">Enter the gateway admin key. It stays in this tab's session storage and is sent only to this gateway as <code>x-admin-key</code>. The studio never asks for, stores, or sends provider secrets; node credentials are references only.</p>
+  <label>Admin key <input id="admin-key" type="password" autocomplete="off" placeholder="admin key"></label>
+  <button class="button" id="connect-btn" type="button">Connect</button>
+  <span id="auth-status" class="muted" role="status"></span>
+</section>
+
+<div id="studio-error" class="banner" hidden role="alert"></div>
+
+<div id="onboarding" class="panel" hidden>
+  <h2>How this studio works</h2>
+  <ol>
+    <li>Pick a template from the gallery, or start from an empty draft with a trigger node.</li>
+    <li>Add nodes from the palette. Drag them on the canvas, or select one and move it with the arrow keys.</li>
+    <li>Connect nodes: select a node, then use its <b>Connect from here</b> control and pick the target node. Branch nodes ask which branch the edge takes.</li>
+    <li>Configure the selected node in the inspector. Fields come from the node's registry schema; input values may be literals or <code>$.path</code> references into the run input and earlier node outputs.</li>
+    <li>Validate, then Save as a draft. Publish creates an immutable revision; inspecting a revision is read-only.</li>
+    <li>Runs are started from a published revision. The timeline shows per-node status, attempts, duration, safe outputs, and error codes only — never raw prompts, secrets, or raw error text.</li>
+  </ol>
+  <button class="button secondary" id="onboarding-dismiss" type="button">Got it, hide this</button>
+</div>
+
+<main id="studio" hidden>
+  <section class="panel" aria-label="Workflows">
+    <h2>Workflows</h2>
+    <label>Search <input id="wf-search" type="search" placeholder="id or name"></label>
+    <button class="button secondary" id="wf-refresh" type="button">Refresh</button>
+    <button class="button" id="wf-new" type="button">New draft</button>
+    <ul id="wf-list" class="list"></ul>
+    <h3>Template gallery</h3>
+    <p class="muted">Templates create complete, valid graph drafts on the server. Fill every placeholder; policy templates need explicit approval.</p>
+    <ul id="template-list" class="list"></ul>
+  </section>
+
+  <section class="panel" aria-label="Canvas">
+    <div class="canvas-toolbar">
+      <h2 id="canvas-title">Canvas</h2>
+      <span id="scope-badge" class="badge" title="Tenant scope of the open draft, from the server. The studio never sends a tenant id.">scope: —</span>
+      <span id="dirty-badge" class="badge" hidden>unsaved changes</span>
+    </div>
+    <div class="toolbar">
+      <button class="button secondary" id="btn-validate" type="button">Validate</button>
+      <button class="button" id="btn-save" type="button">Save draft</button>
+      <button class="button secondary" id="btn-publish" type="button">Publish</button>
+      <button class="button secondary" id="btn-versions" type="button">Versions</button>
+      <span class="zoom-controls" role="group" aria-label="Canvas zoom">
+        <button class="button secondary" id="btn-zoom-out" type="button" aria-label="Zoom out">−</button>
+        <span id="zoom-label" class="muted" role="status">100%</span>
+        <button class="button secondary" id="btn-zoom-in" type="button" aria-label="Zoom in">+</button>
+        <button class="button secondary" id="btn-zoom-reset" type="button">Reset view</button>
+      </span>
+      <span class="muted">Ctrl+wheel zooms at the cursor; drag the canvas background to pan.</span>
+    </div>
+    <div id="diagnostics" class="diagnostics" role="status"></div>
+    <div class="studio-layout">
+      <aside class="palette" aria-label="Node palette">
+        <label>Palette search <input id="palette-search" type="search" placeholder="node title or id"></label>
+        <div id="palette-list"></div>
+      </aside>
+      <div class="canvas-wrap" id="canvas-wrap">
+        <div id="canvas-viewport">
+          <svg id="canvas-edges" aria-hidden="true"></svg>
+          <div id="canvas" role="application" aria-label="Workflow canvas"></div>
+        </div>
+      </div>
+      <aside class="inspector" aria-label="Node inspector">
+        <h3>Inspector</h3>
+        <div id="inspector-body"><p class="muted">Select a node or an edge.</p></div>
+      </aside>
+    </div>
+  </section>
+
+  <section class="panel" aria-label="Versions">
+    <h2>Versions</h2>
+    <p class="muted">Published revisions are immutable. Inspecting one loads it read-only.</p>
+    <ul id="version-list" class="list"></ul>
+    <div id="version-detail"></div>
+  </section>
+
+  <section class="panel" aria-label="Runs">
+    <h2>Runs</h2>
+    <label>Run input (JSON object) <textarea id="run-input" rows="3" placeholder='{"payload": {}}'></textarea></label>
+    <button class="button" id="btn-run" type="button">Start run from latest revision</button>
+    <button class="button secondary" id="runs-refresh" type="button">Refresh runs</button>
+    <ul id="run-list" class="list"></ul>
+    <div id="run-detail"></div>
+  </section>
+
+  <section class="panel" aria-label="Audit">
+    <h2>Audit</h2>
+    <button class="button secondary" id="audit-refresh" type="button">Refresh audit</button>
+    <ul id="audit-list" class="list"></ul>
+  </section>
+</main>
+
+<script src="/studio.js"></script>
+</body>
+</html>
