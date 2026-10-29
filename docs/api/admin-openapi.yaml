@@ -1873,6 +1873,35 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '405':
           $ref: '#/components/responses/MethodNotAllowed'
+  /admin/api/nexaflow/templates/{id}:
+    get:
+      summary: Get one NexaFlow inert template with its nodes (for building a workflow draft)
+      x-permission: config.read
+      parameters:
+      - name: id
+        in: path
+        required: true
+        description: Resource identifier.
+        schema:
+          type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Operation result; see the handler and the admin snapshot model.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          description: Not found
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
   /admin/api/nexaflow/definitions:
     get:
       summary: List NexaFlow workflow drafts

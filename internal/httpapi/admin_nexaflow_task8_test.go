@@ -160,6 +160,39 @@ func TestTask8HTTPNodesTemplatesAuth(t *testing.T) {
 	}
 }
 
+func TestTask8HTTPTemplateDetail(t *testing.T) {
+	srv, key := task8HTTPServer(t)
+	// Unauthenticated: 401.
+	if rec := task8Do(t, srv, "", http.MethodGet, "/admin/api/nexaflow/templates/model-health-alert", nil); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated template detail = %d, want 401", rec.Code)
+	}
+	// Unknown id: 404.
+	if rec := task8Do(t, srv, key, http.MethodGet, "/admin/api/nexaflow/templates/no-such-template", nil); rec.Code != http.StatusNotFound {
+		t.Fatalf("unknown template = %d, want 404", rec.Code)
+	}
+	// Wrong method: 405.
+	if rec := task8Do(t, srv, key, http.MethodPost, "/admin/api/nexaflow/templates/model-health-alert", nil); rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("POST template detail = %d, want 405", rec.Code)
+	}
+	// Known id: full template with nodes (the list endpoint omits them).
+	rec := task8Do(t, srv, key, http.MethodGet, "/admin/api/nexaflow/templates/model-health-alert", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("template detail = %d: %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		ID    string `json:"id"`
+		Nodes []struct {
+			NodeID string `json:"node_id"`
+		} `json:"nodes"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("template detail decode: %v", err)
+	}
+	if body.ID != "model-health-alert" || len(body.Nodes) == 0 {
+		t.Fatalf("template detail lacks nodes: %s", rec.Body.String())
+	}
+}
+
 func TestTask8HTTPDefinitionRunLifecycle(t *testing.T) {
 	srv, key := task8HTTPServer(t)
 	def := task8BranchDef()
