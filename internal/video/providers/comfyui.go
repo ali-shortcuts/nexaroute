@@ -66,6 +66,28 @@ type comfyQueue struct {
 	Pending [][]json.RawMessage `json:"queue_pending"`
 }
 
+// ComfyUISystemStats is the subset of ComfyUI's /system_stats response used
+// by the opt-in real-inference acceptance command to record the server and
+// resource environment. It is read-only metadata; the adapter's production
+// job path does not depend on it.
+type ComfyUISystemStats struct {
+	System struct {
+		OS             string `json:"os,omitempty"`
+		RAMTotal       int64  `json:"ram_total,omitempty"`
+		RAMFree        int64  `json:"ram_free,omitempty"`
+		ComfyUIVersion string `json:"comfyui_version,omitempty"`
+		PythonVersion  string `json:"python_version,omitempty"`
+		PyTorchVersion string `json:"pytorch_version,omitempty"`
+	} `json:"system"`
+	Devices []struct {
+		Name      string `json:"name,omitempty"`
+		Type      string `json:"type,omitempty"`
+		Index     int    `json:"index,omitempty"`
+		VRAMTotal int64  `json:"vram_total,omitempty"`
+		VRAMFree  int64  `json:"vram_free,omitempty"`
+	} `json:"devices"`
+}
+
 func NewComfyUI(cfg video.Config, maxOutputBytes int64) (*ComfyUI, error) {
 	base := strings.TrimRight(strings.TrimSpace(cfg.ComfyUIBaseURL), "/")
 	u, err := url.Parse(base)
@@ -218,6 +240,17 @@ func (p *ComfyUI) Capabilities(context.Context) (video.Capabilities, error) {
 	}, nil
 }
 
+// SystemStats reads ComfyUI's read-only /system_stats endpoint. It is used
+// only by acceptance tooling; a failure is returned to the caller rather
+// than being converted into a fabricated version or device list.
+func (p *ComfyUI) SystemStats(ctx context.Context) (ComfyUISystemStats, error) {
+	var stats ComfyUISystemStats
+	if err := p.doJSON(ctx, http.MethodGet, "/system_stats", nil, &stats); err != nil {
+		return ComfyUISystemStats{}, fmt.Errorf("read ComfyUI system stats: %w", err)
+	}
+	return stats, nil
+}
+
 func (p *ComfyUI) ValidateRequest(r video.VideoRequest) error {
 	r = r.Normalized()
 	if err := r.Validate(); err != nil {
@@ -358,6 +391,17 @@ func (p *ComfyUI) CreateJob(ctx context.Context, r video.VideoRequest) (video.Pr
 	}
 	if strings.TrimSpace(response.PromptID) == "" {
 		return video.ProviderJob{}, errors.New("ComfyUI did not return a prompt_id; inspect the workflow and node validation errors")
+	}
+	// A 200 that still carries node_errors is a rejected workflow, not
+	// an accepted job: ComfyUI reports node validation in node_errors,
+	// and treating a prompt_id alongside it as success would poll a
+	// job the server never intended to run. Success responses carry
+	// an empty or absent node_errors object.
+	if nodeErrors := strings.TrimSpace(string(response.NodeErrors)); nodeErrors != "" && nodeErrors != "null" && nodeErrors != "{}" {
+		// Deliberately not echoing the node_errors payload: it may
+		// embed workflow input values, and the operator can inspect
+		// them on the ComfyUI server itself.
+		return video.ProviderJob{}, errors.New("ComfyUI reported node errors for the submitted workflow; the job was not accepted")
 	}
 	return video.ProviderJob{ProviderJobID: response.PromptID, Provider: p.ID(), Model: p.model, Accepted: true}, nil
 }
