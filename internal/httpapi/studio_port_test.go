@@ -183,6 +183,38 @@ func TestStudioPortValidateDraftBody(t *testing.T) {
 	}
 }
 
+// Regression: a draft that has never been saved has no id or name
+// yet (both are assigned by the save dialog). Draft-body validation
+// must judge the graph, not the missing identity — otherwise Validate
+// before first Save can never pass.
+func TestStudioPortValidateUnsavedDraft(t *testing.T) {
+	srv, key := task8HTTPServer(t)
+	prospective := nexaflow.Definition{
+		SchemaVersion: nexaflow.DefinitionSchemaVersion,
+		Nodes: []nexaflow.DefinitionNode{
+			{ID: "start", NodeID: "nexaroute.trigger.manual", Version: nexaflow.SupportedVersion},
+			{ID: "m", NodeID: "nexaroute.cost.usage", Version: nexaflow.SupportedVersion},
+		},
+		Edges:    []nexaflow.DefinitionEdge{{ID: "e1", From: "start", To: "m"}},
+		Triggers: []nexaflow.DefinitionTrigger{{Name: "start", Kind: nexaflow.TriggerManual}},
+	}
+	rec := task8Do(t, srv, key, http.MethodPost, "/admin/api/nexaflow/definitions/validate",
+		map[string]any{"definition": prospective})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("validate unsaved = %d: %s", rec.Code, rec.Body.String())
+	}
+	var verdict struct {
+		Valid  bool     `json:"valid"`
+		Errors []string `json:"errors"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &verdict); err != nil {
+		t.Fatalf("verdict decode: %v", err)
+	}
+	if !verdict.Valid {
+		t.Fatalf("unsaved draft verdict = %+v, want valid", verdict)
+	}
+}
+
 func TestStudioPortInstantiate(t *testing.T) {
 	srv, key := task8HTTPServer(t)
 	rec := task8Do(t, srv, key, http.MethodPost, "/admin/api/nexaflow/templates/model-compat-evaluation/instantiate",
