@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/ali-shortcuts/nexaroute/internal/video"
 )
@@ -335,5 +336,117 @@ func TestComfyUIRejectsUnsupportedRequestFieldsInsteadOfIgnoringThem(t *testing.
 				t.Fatalf("unsupported request was silently accepted: %+v", request)
 			}
 		})
+	}
+}
+
+func TestComfyUIInvalidWorkflowAndNodeMappingsFailAtConstruction(t *testing.T) {
+	base := comfyTestConfig(comfyWorkflowFile(t), "http://127.0.0.1:8188")
+	cases := []struct {
+		name string
+		edit func(*video.Config)
+		want string
+	}{
+		{name: "missing prompt node", edit: func(c *video.Config) { c.ComfyUIPromptNodeID = "missing" }, want: "no configured prompt node"},
+		{name: "missing width input", edit: func(c *video.Config) { c.ComfyUIWidthInput = "missing" }, want: "no input \"missing\""},
+		{name: "missing height node", edit: func(c *video.Config) { c.ComfyUIHeightNodeID = "missing" }, want: "no configured height node"},
+		{name: "missing frames input", edit: func(c *video.Config) { c.ComfyUIFramesInput = "missing" }, want: "no input \"missing\""},
+		{name: "missing negative node", edit: func(c *video.Config) { c.ComfyUINegativeNodeID = "missing" }, want: "no configured negative prompt node"},
+		{name: "missing optional seed input", edit: func(c *video.Config) { c.ComfyUISeedNodeID = "3"; c.ComfyUISeedInput = "missing" }, want: "no input \"missing\""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := base
+			tc.edit(&cfg)
+			if _, err := NewComfyUI(cfg, 1024); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("NewComfyUI error=%v, want %q", err, tc.want)
+			}
+		})
+	}
+
+	notObject := filepath.Join(t.TempDir(), "workflow.json")
+	if err := os.WriteFile(notObject, []byte(`{"1":{"class_type":"X","inputs":[]}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := base
+	cfg.ComfyUIWorkflowPath = notObject
+	if _, err := NewComfyUI(cfg, 1024); err == nil || !strings.Contains(err.Error(), "no inputs object") {
+		t.Fatalf("non-object inputs error=%v", err)
+	}
+
+	empty := filepath.Join(t.TempDir(), "empty.json")
+	if err := os.WriteFile(empty, []byte(`{}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg.ComfyUIWorkflowPath = empty
+	if _, err := NewComfyUI(cfg, 1024); err == nil || !strings.Contains(err.Error(), "non-empty") {
+		t.Fatalf("empty workflow error=%v", err)
+	}
+}
+
+func TestComfyUIUnavailableServerFailsClosed(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	base := server.URL
+	server.Close()
+	provider, err := NewComfyUI(comfyTestConfig(comfyWorkflowFile(t), base), 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := provider.CreateJob(context.Background(), validComfyRequest()); err == nil {
+		t.Fatal("CreateJob surprisingly succeeded against an unavailable server")
+	}
+	if _, err := provider.SystemStats(context.Background()); err == nil {
+		t.Fatal("SystemStats surprisingly succeeded against an unavailable server")
+	}
+}
+
+func TestComfyUIRespectsDeadlineAndDoesNotInventSuccess(t *testing.T) {
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-release
+	}))
+	defer func() {
+		close(release)
+		server.Close()
+	}()
+	provider, err := NewComfyUI(comfyTestConfig(comfyWorkflowFile(t), server.URL), 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if _, err := provider.CreateJob(ctx, validComfyRequest()); err == nil {
+		t.Fatal("CreateJob returned success after its deadline")
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("CreateJob ignored its context deadline for %s", elapsed)
+	}
+}
+
+func TestComfyUISystemStatsRecordsServerAndResources(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/system_stats" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"system":{"os":"posix","ram_total":1024,"ram_free":512,"comfyui_version":"0.3.40","python_version":"3.11.9","pytorch_version":"2.5.1"},
+			"devices":[{"name":"cuda:0","type":"cuda","index":0,"vram_total":2048,"vram_free":1024}]
+		}`))
+	}))
+	defer server.Close()
+	provider, err := NewComfyUI(comfyTestConfig(comfyWorkflowFile(t), server.URL), 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stats, err := provider.SystemStats(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.System.ComfyUIVersion != "0.3.40" || stats.System.PythonVersion != "3.11.9" ||
+		stats.System.PyTorchVersion != "2.5.1" || stats.System.RAMTotal != 1024 || len(stats.Devices) != 1 ||
+		stats.Devices[0].Name != "cuda:0" || stats.Devices[0].VRAMTotal != 2048 {
+		t.Fatalf("stats=%+v", stats)
 	}
 }

@@ -12,6 +12,14 @@ const migrationTable = "nexaroute_control_migrations"
 // advisory transaction lock prevents two gateway replicas from migrating at
 // the same time. A checksum mismatch fails closed instead of silently running
 // a modified migration under an old version number.
+//
+// The lock must be acquired BEFORE the migration table is created: two
+// replicas starting against a cold database both ran CREATE TABLE IF NOT
+// EXISTS concurrently, and PostgreSQL can reject the loser with a
+// pg_type_typname_nsp_index duplicate-key error (observed 2026-10-27, HA
+// acceptance: one of two simultaneous cold starts failed with exactly
+// that error while the other succeeded). With the lock held first, the
+// loser waits, then sees the table already present.
 func ApplyMigrations(ctx context.Context, db *sql.DB, registry MigrationRegistry) error {
 	if db == nil {
 		return ErrUnavailable
@@ -21,11 +29,11 @@ func ApplyMigrations(ctx context.Context, db *sql.DB, registry MigrationRegistry
 		return fmt.Errorf("acquire migration connection: %w", err)
 	}
 	defer conn.Close()
-	if _, err := conn.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS `+migrationTable+` (version BIGINT PRIMARY KEY, name TEXT NOT NULL, checksum TEXT NOT NULL, applied_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)`); err != nil {
-		return fmt.Errorf("create migration table: %w", err)
-	}
 	if _, err := conn.ExecContext(ctx, `SELECT pg_advisory_lock(hashtext('nexaroute:migrations'))`); err != nil {
 		return fmt.Errorf("acquire migration lock: %w", err)
+	}
+	if _, err := conn.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS `+migrationTable+` (version BIGINT PRIMARY KEY, name TEXT NOT NULL, checksum TEXT NOT NULL, applied_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)`); err != nil {
+		return fmt.Errorf("create migration table: %w", err)
 	}
 	// Best-effort unlock: the connection is closed immediately after, which
 	// releases the advisory lock server-side either way.

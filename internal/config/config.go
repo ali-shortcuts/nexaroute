@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -853,6 +854,17 @@ type CredentialConfig struct {
 	APIKey    string `json:"api_key,omitempty"`
 	APIKeyEnv string `json:"api_key_env,omitempty"`
 	Enabled   bool   `json:"enabled"`
+	// Email is operator metadata only (which account a key belongs to).
+	// Authentication NEVER uses it, and admin surfaces expose it only in
+	// masked form. See providers.MaskEmail.
+	Email string `json:"email,omitempty"`
+	// Priority selects the minimum tier first: only credentials in the
+	// lowest Priority tier among available credentials compete. 0 is the
+	// default tier, matching legacy configs.
+	Priority int `json:"priority,omitempty"`
+	// Weight scales effective load (Active/Weight) inside the tournament.
+	// 0 normalises to 1 in ApplyDefaults, the ModelConfig convention.
+	Weight float64 `json:"weight,omitempty"`
 }
 
 func (c CredentialConfig) Resolved() string {
@@ -874,10 +886,27 @@ type DataHandlingConfig struct {
 	Note         string `json:"note,omitempty"`           // max 200 chars, no control characters
 }
 
+// OpenCode upstream wire paths (documented Console/Go gateway bases at
+// https://opencode.ai/inference and https://opencode.ai/inference/go).
+// The gateway never derives these from the generic /v1/... defaults: the
+// opencode paths carry the /openai and /anthropic prefixes the generic
+// defaults lack. There is no Zen profile: no Zen URL appears in the
+// documented Console/Go material, so none is shipped.
+const (
+	OpencodeChatPath      = "/openai/v1/chat/completions"
+	OpencodeResponsesPath = "/openai/v1/responses"
+	OpencodeMessagesPath  = "/anthropic/v1/messages"
+	OpencodeModelsPath    = "/v1/models"
+	// DefaultOpencodeSessionSalt is the domain separator for derived
+	// x-opencode-session values when no operator salt is configured. It
+	// is NOT a credential and is never logged.
+	DefaultOpencodeSessionSalt = "nexaroute-opencode-session-v1"
+)
+
 type ProviderConfig struct {
 	ID           string             `json:"id"`
 	Name         string             `json:"name"`
-	Type         string             `json:"type"`              // openai_compatible | anthropic_compatible | gemini | openai_responses | azure_openai | vertex | bedrock
+	Type         string             `json:"type"`              // openai_compatible | anthropic_compatible | gemini | openai_responses | azure_openai | vertex | bedrock | opencode-console | opencode-go
 	Dialect      string             `json:"dialect,omitempty"` // optional dialect override (see compat.Dialects)
 	BaseURL      string             `json:"base_url"`
 	DataHandling DataHandlingConfig `json:"data_handling,omitempty"`
@@ -900,6 +929,10 @@ type ProviderConfig struct {
 	resolvedEgressDenyCIDRs  []string
 	resolvedEgressAllowHosts []string
 	resolvedEgressAllowCIDRs []string
+	// OpenCode session domain separator (Go profile only). Non-secret,
+	// operator-configurable; empty means DefaultOpencodeSessionSalt.
+	// Never a credential, never logged.
+	OpencodeSessionSalt string `json:"opencode_session_salt,omitempty"`
 	// Azure OpenAI: API version query value (default 2024-10-21).
 	APIVersion string `json:"api_version,omitempty"`
 	// Vertex AI: GCP project (required for type vertex) and location
@@ -1178,6 +1211,12 @@ func Default() Config {
 	}
 }
 
+// transitOperationTimeout is the overall Transit budget for load, verify,
+// and save operations (ADR 0007 §8.3: 30 s; migrate/rewrap use 120 s at
+// the CLI). It bounds the total Vault time for a multi-field operation,
+// not just one request.
+const transitOperationTimeout = 30 * time.Second
+
 // LoadBase reads only the durable file configuration. Runtime environment
 // overrides are deliberately excluded so a later Admin API save cannot
 // accidentally persist process-scoped values or injected secrets.
@@ -1195,32 +1234,48 @@ func LoadBase(path string) (Config, error) {
 	if len(b) > maxConfigBytes {
 		return cfg, fmt.Errorf("config exceeds safe limit %d bytes", maxConfigBytes)
 	}
-	if strings.Contains(string(b), secrets.Prefix) || hasSecretValues(b) {
-		key, _, keyErr := secrets.Key(path)
+	if secrets.HasEnvelopes(b) || hasSecretValues(b) {
+		cipher, keyErr := secrets.LoadCipher(path)
 		if keyErr != nil {
 			return cfg, keyErr
 		}
-		plain, _, transformErr := secrets.TransformConfig(b, key, false)
-		if transformErr != nil {
-			return cfg, transformErr
-		}
-		enc, migrated, encErr := secrets.TransformConfig(b, key, true)
-		if encErr != nil {
-			return cfg, errors.New("cannot encrypt legacy configuration secrets")
-		}
-		if migrated > 0 { // Legacy plaintext: migrate atomically and retain only an encrypted backup.
-			backup, e := secrets.EncryptedBackup(key, b)
-			if e != nil {
-				return cfg, errors.New("cannot create encrypted migration backup")
+		if cipher.EnvelopeEnabled() {
+			// Transit mode (ADR 0007 §7.5): decrypt only, under the
+			// 30 s overall operation budget. Plaintext
+			// auto-migration is disabled in Transit mode: a read
+			// path must not issue Vault encrypt calls or rewrite
+			// the file. Plaintext, nxs1, mixed, and unknown
+			// envelopes all fail closed inside the transform.
+			ctx, cancel := context.WithTimeout(context.Background(), transitOperationTimeout)
+			defer cancel()
+			plain, _, transformErr := secrets.TransformConfigWith(ctx, cipher, b, false)
+			if transformErr != nil {
+				return cfg, transformErr
 			}
-			if e = writeAtomic(secrets.BackupName(path), backup); e != nil {
-				return cfg, errors.New("cannot persist encrypted migration backup")
+			b = plain
+		} else {
+			plain, _, transformErr := secrets.TransformConfigWith(context.Background(), cipher, b, false)
+			if transformErr != nil {
+				return cfg, transformErr
 			}
-			if e = writeAtomic(path, append(enc, '\n')); e != nil {
-				return cfg, errors.New("cannot atomically migrate configuration secrets")
+			enc, migrated, encErr := secrets.TransformConfigWith(context.Background(), cipher, b, true)
+			if encErr != nil {
+				return cfg, errors.New("cannot encrypt legacy configuration secrets")
 			}
+			if migrated > 0 { // Legacy plaintext: migrate atomically and retain only an encrypted backup.
+				backup, e := secrets.EncryptedBackupWith(cipher, b)
+				if e != nil {
+					return cfg, errors.New("cannot create encrypted migration backup")
+				}
+				if e = writeAtomic(secrets.BackupName(path), backup); e != nil {
+					return cfg, errors.New("cannot persist encrypted migration backup")
+				}
+				if e = writeAtomic(path, append(enc, '\n')); e != nil {
+					return cfg, errors.New("cannot atomically migrate configuration secrets")
+				}
+			}
+			b = plain
 		}
-		b = plain
 	}
 	if err := json.Unmarshal(b, &cfg); err != nil {
 		return cfg, err
@@ -1824,6 +1879,26 @@ func (p *ProviderConfig) ApplyDefaults() {
 	if p.Type == "vertex" && p.VertexLocation == "" {
 		p.VertexLocation = "us-central1"
 	}
+	// OpenCode profiles must never fall through to the generic /v1/...
+	// defaults: a preset-less opencode provider (or one whose paths were
+	// saved before these types existed) gets the documented opencode
+	// paths, and an explicitly configured non-default path is kept.
+	// Go has no documented discovery endpoint, so its ModelsPath is
+	// deliberately left empty (the generic fill below skips it).
+	if p.Type == "opencode-console" || p.Type == "opencode-go" {
+		if p.ChatPath == "" || p.ChatPath == "/v1/chat/completions" {
+			p.ChatPath = OpencodeChatPath
+		}
+		if p.ResponsesPath == "" || p.ResponsesPath == "/v1/responses" {
+			p.ResponsesPath = OpencodeResponsesPath
+		}
+		if p.MessagesPath == "" || p.MessagesPath == "/v1/messages" {
+			p.MessagesPath = OpencodeMessagesPath
+		}
+		if p.Type == "opencode-console" && p.ModelsPath == "" {
+			p.ModelsPath = OpencodeModelsPath
+		}
+	}
 	if p.ChatPath == "" {
 		p.ChatPath = "/v1/chat/completions"
 	}
@@ -1833,7 +1908,7 @@ func (p *ProviderConfig) ApplyDefaults() {
 	if p.MessagesPath == "" {
 		p.MessagesPath = "/v1/messages"
 	}
-	if p.ModelsPath == "" {
+	if p.ModelsPath == "" && p.Type != "opencode-go" {
 		p.ModelsPath = "/v1/models"
 	}
 	if p.CountTokensPath == "" {
@@ -1866,6 +1941,9 @@ func (p *ProviderConfig) ApplyDefaults() {
 	for i := range p.Credentials {
 		if p.Credentials[i].Name == "" {
 			p.Credentials[i].Name = fmt.Sprintf("key-%d", i+1)
+		}
+		if p.Credentials[i].Weight == 0 {
+			p.Credentials[i].Weight = 1
 		}
 	}
 	for i := range p.Models {
@@ -2468,7 +2546,7 @@ func (c Config) validateProviders() error {
 			return fmt.Errorf("duplicate provider id %q", p.ID)
 		}
 		seenP[p.ID] = true
-		if p.Type != "openai_compatible" && p.Type != "anthropic_compatible" && p.Type != "gemini" && p.Type != "openai_responses" && p.Type != "azure_openai" && p.Type != "vertex" && p.Type != "bedrock" {
+		if p.Type != "openai_compatible" && p.Type != "anthropic_compatible" && p.Type != "gemini" && p.Type != "openai_responses" && p.Type != "azure_openai" && p.Type != "vertex" && p.Type != "bedrock" && p.Type != "opencode-console" && p.Type != "opencode-go" {
 			return fmt.Errorf("provider %q has unsupported type %q", p.ID, p.Type)
 		}
 		if p.SecretKeyEnv != "" && !validEnvName(p.SecretKeyEnv) {
@@ -2528,6 +2606,14 @@ func (c Config) validateProviders() error {
 		for k, v := range p.Headers {
 			if len(k) > 256 || len(v) > 8192 || !validHeaderName(k) || !validHeaderValue(v) {
 				return fmt.Errorf("provider %q has invalid custom header", p.ID)
+			}
+			// A static idempotency key would be sent with every
+			// request, letting a provider dedupe distinct requests.
+			// No dialect has a verified provider idempotency
+			// mechanism (see docs/RETRY_SAFETY.md), so a fixed key
+			// is always a misconfiguration, never a policy.
+			if h := strings.ToLower(strings.TrimSpace(k)); h == "idempotency-key" || h == "x-idempotency-key" {
+				return fmt.Errorf("provider %q must not set a static idempotency header", p.ID)
 			}
 		}
 		for _, h := range p.ForwardHeaders {
@@ -3572,6 +3658,46 @@ func (p ProviderConfig) ResolvedCredentials() []string {
 	return out
 }
 
+// ResolvedCredential is one adapter-usable credential with the metadata
+// selection needs. PoolIndex is -1 for the primary key and the pool index
+// otherwise (the same index the Admin API uses for credential_index).
+// Exact-duplicate keys collapse to their first occurrence, matching
+// ResolvedCredentials.
+type ResolvedCredential struct {
+	Key       string
+	Name      string
+	PoolIndex int
+	Priority  int
+	Weight    float64
+}
+
+func (p ProviderConfig) ResolvedCredentialEntries() []ResolvedCredential {
+	out := []ResolvedCredential{}
+	seen := map[string]bool{}
+	if k := p.ResolvedAPIKey(); k != "" {
+		out = append(out, ResolvedCredential{Key: k, Name: "primary", PoolIndex: -1, Priority: 0, Weight: 1})
+		seen[k] = true
+	}
+	for i, c := range p.Credentials {
+		if !c.Enabled {
+			continue
+		}
+		if k := c.Resolved(); k != "" && !seen[k] {
+			name := c.Name
+			if name == "" {
+				name = fmt.Sprintf("key-%d", i+1)
+			}
+			w := c.Weight
+			if w <= 0 {
+				w = 1
+			}
+			out = append(out, ResolvedCredential{Key: k, Name: name, PoolIndex: i, Priority: c.Priority, Weight: w})
+			seen[k] = true
+		}
+	}
+	return out
+}
+
 // ValidateClientBaseURL validates the client-facing URL independently from
 // provider upstream URLs. Path prefixes are allowed, but credentials and
 // query/fragment data are never valid in a URL shown to clients.
@@ -3707,11 +3833,49 @@ func SaveAtomic(path string, c Config) error {
 		return err
 	}
 	if hasSecretValues(b) {
-		key, _, keyErr := secrets.Key(path)
+		cipher, keyErr := secrets.LoadCipher(path)
 		if keyErr != nil {
 			return keyErr
 		}
-		b, _, err = secrets.TransformConfig(b, key, true)
+		opCtx := context.Background()
+		if cipher.EnvelopeEnabled() {
+			var cancel context.CancelFunc
+			opCtx, cancel = context.WithTimeout(context.Background(), transitOperationTimeout)
+			defer cancel()
+			// Transit save (ADR 0007 §7.5): preserve existing nxs2
+			// envelopes for unchanged fields byte-for-byte. The
+			// in-memory config holds plaintext, so compare
+			// against the stored file: a field whose plaintext
+			// matches the stored plaintext and whose stored value
+			// is nxs2 keeps the stored envelope (no new Vault
+			// wrap call, no wrapped-DEK churn). Changed and new
+			// fields are sealed by the transform below.
+			if stored, rerr := os.ReadFile(path); rerr == nil {
+				storedPlain, _, derr := secrets.TransformConfigWith(opCtx, cipher, stored, false)
+				if derr != nil {
+					return derr
+				}
+				storedEnvelopes, merr := secrets.SecretFieldMap(stored)
+				if merr != nil {
+					return merr
+				}
+				storedPlaintext, merr := secrets.SecretFieldMap(storedPlain)
+				if merr != nil {
+					return merr
+				}
+				b, err = secrets.SubstituteSecretFields(b, func(owner, field, current string) (string, error) {
+					name := owner + ":" + field
+					if storedEnvelopes[name] != "" && strings.HasPrefix(storedEnvelopes[name], secrets.EnvelopePrefix) && storedPlaintext[name] == current {
+						return storedEnvelopes[name], nil
+					}
+					return current, nil
+				})
+				if err != nil {
+					return err
+				}
+			}
+		}
+		b, _, err = secrets.TransformConfigWith(opCtx, cipher, b, true)
 		if err != nil {
 			return errors.New("cannot encrypt configuration secrets")
 		}

@@ -15,6 +15,10 @@ case "${FAKE_GH_MODE:-pass}:${issue}" in
   open:646) printf '{"state":"open","state_reason":null}\n' ;;
   not-planned:649) printf '{"state":"closed","state_reason":"not_planned"}\n' ;;
   missing-reason:651) printf '{"state":"closed"}\n' ;;
+  malformed:646) printf 'not-json{{{\n' ;;
+  missing-state:647) printf '{"state_reason":"completed"}\n' ;;
+  empty-payload:648) printf '' ;;
+  null-state:652) printf '{"state":null,"state_reason":null}\n' ;;
   *) printf '{"state":"closed","state_reason":"completed"}\n' ;;
 esac
 GH
@@ -26,7 +30,7 @@ export PATH="$tmp/bin:$PATH"
 FAKE_GH_MODE=pass bash .github/scripts/check-final-release-gate.sh > "$tmp/pass.out"
 grep -q "Final release completion gate passed" "$tmp/pass.out"
 
-for mode in open not-planned api-error missing-reason; do
+for mode in open not-planned api-error missing-reason malformed missing-state empty-payload null-state; do
   if FAKE_GH_MODE="$mode" bash .github/scripts/check-final-release-gate.sh > "$tmp/$mode.out" 2>&1; then
     echo "FAIL: gate accepted failure mode $mode" >&2
     cat "$tmp/$mode.out" >&2
@@ -35,4 +39,4 @@ for mode in open not-planned api-error missing-reason; do
   grep -q "Refusing to publish" "$tmp/$mode.out"
 done
 
-echo "FINAL RELEASE GATE TEST PASS (success plus open, not_planned, API error, and missing-reason failures)"
+echo "FINAL RELEASE GATE TEST PASS (success plus open, not_planned, API error, missing-reason, malformed, missing-state, empty-payload, and null-state failures)"

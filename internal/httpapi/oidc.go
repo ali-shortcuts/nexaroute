@@ -299,6 +299,17 @@ func (a *oidcAuthenticator) Complete(ctx context.Context, transaction pendingOID
 	if err := idToken.Claims(&claims); err != nil {
 		return authz.Identity{}, "", errors.New("OIDC ID token claims are malformed")
 	}
+	// Authorized party: go-oidc checks audience membership but not
+	// azp, so a token minted for another client that merely lists
+	// this client in aud would otherwise pass. When the token
+	// carries azp it must name this client exactly; a token without
+	// azp is allowed (single-audience tokens need not carry it).
+	if rawAzp, present := claims["azp"]; present {
+		var azp string
+		if err := json.Unmarshal(rawAzp, &azp); err != nil || azp != a.oauth.ClientID {
+			return authz.Identity{}, "", errors.New("OIDC ID token authorized party is invalid")
+		}
+	}
 	values, err := claimStringValues(claims[a.roleClaim])
 	if err != nil {
 		return authz.Identity{}, "", errors.New("OIDC role claim has an invalid type")
