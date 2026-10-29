@@ -16,6 +16,12 @@ service the studio API paths fall through to the static server and
 answer 404. The skip names that blocker instead of faking a pass;
 once gateway wiring lands, the same script runs all 15 cases for real.
 
+To run all cases before gateway wiring lands, point the script at a
+pre-wired server instead of booting the production gateway:
+NEXAFLOW_STUDIO_BASE_URL=http://127.0.0.1:PORT (e.g. a test server
+built with the repo's own Server + AttachNexaflow). The script then
+skips the gateway boot and runs every case against that base.
+
 Config-field editing uses real keystrokes (click, select-all, type,
 Tab to fire the inspector's change handler), never JS value injection.
 """
@@ -87,27 +93,39 @@ def main() -> None:
 
     with tempfile.TemporaryDirectory(prefix="nexaroute-nexaflow-studio-") as tmp:
         tmp_path = Path(tmp)
-        config = json.loads((ROOT / "configs/config.example.json").read_text())
-        # Only touch keys the example config actually carries; probes off
-        # is the guard (studio cases use local nodes only, no providers).
-        config["probe"]["enabled"] = False
-        config["probe"]["on_start"] = False
-        port = free_port()
-        config["listen"] = f"127.0.0.1:{port}"
-        config_path = tmp_path / "config.json"
-        config_path.write_text(json.dumps(config))
-        env = os.environ.copy()
-        go = find_go()
-        env["PATH"] = str(Path(go).parent) + ":" + env.get("PATH", "")
-        env["NEXAROUTE_ADMIN_KEY"] = ADMIN_KEY
-        log = (tmp_path / "gateway.log").open("w")
-        proc = subprocess.Popen(["go", "run", "./cmd/gateway", "-no-browser",
-                                 "-config", str(config_path)],
-                                cwd=ROOT, env=env, stdout=log,
-                                stderr=subprocess.STDOUT, text=True)
-        base = f"http://127.0.0.1:{port}"
+        external_base = os.environ.get(
+            "NEXAFLOW_STUDIO_BASE_URL", "").rstrip("/")
+        if external_base:
+            # Pre-wired gateway or test server: run all cases against
+            # it instead of booting the production gateway.
+            base = external_base
+            proc = None
+        else:
+            config = json.loads(
+                (ROOT / "configs/config.example.json").read_text())
+            # Only touch keys the example config actually carries;
+            # probes off is the guard (studio cases use local nodes
+            # only, no providers).
+            config["probe"]["enabled"] = False
+            config["probe"]["on_start"] = False
+            port = free_port()
+            config["listen"] = f"127.0.0.1:{port}"
+            config_path = tmp_path / "config.json"
+            config_path.write_text(json.dumps(config))
+            env = os.environ.copy()
+            go = find_go()
+            env["PATH"] = str(Path(go).parent) + ":" + env.get("PATH", "")
+            env["NEXAROUTE_ADMIN_KEY"] = ADMIN_KEY
+            log = (tmp_path / "gateway.log").open("w")
+            proc = subprocess.Popen(["go", "run", "./cmd/gateway",
+                                     "-no-browser",
+                                     "-config", str(config_path)],
+                                    cwd=ROOT, env=env, stdout=log,
+                                    stderr=subprocess.STDOUT, text=True)
+            base = f"http://127.0.0.1:{port}"
         try:
-            wait_ready(base, proc)
+            if proc is not None:
+                wait_ready(base, proc)
             with sync_playwright() as pw:
                 browser = pw.chromium.launch(headless=True,
                                              executable_path=chromium)
@@ -198,11 +216,40 @@ def main() -> None:
                     expect(page.locator("#diagnostics")).to_contain_text(
                         "Draft saved.")
 
-                def open_draft(draft_id: str):
-                    page.locator(
-                        f'#wf-list [data-open="{draft_id}"]').click()
-                    expect(page.locator("#canvas-title")).to_contain_text(
-                        "Canvas")
+                def open_draft(draft_id: str, name: str = ""):
+                    # The openDraft .then resets selection (selected =
+                    # null) when the draft GET resolves, so a click
+                    # right after open_draft must wait for that .then
+                    # to have run — otherwise the click's selection is
+                    # wiped by the late response. Two waits that look
+                    # sufficient are NOT, for re-opens of the
+                    # already-open draft: the title already matches
+                    # before the new GET lands, and networkidle
+                    # returns at once when the page was already idle
+                    # before the click (it is a state, not a fresh
+                    # 500 ms timer). So capture both responses the
+                    # .then chain produces: the draft GET itself, and
+                    # the runs fetch the .then issues after resetting
+                    # selection. The block exits only once both have
+                    # arrived, which proves the .then completed.
+                    def is_draft_get(r):
+                        return (r.request.method == "GET" and
+                                r.url.endswith(
+                                    "/admin/api/nexaflow/definitions/"
+                                    + draft_id))
+                    def is_runs(r):
+                        return ("/admin/api/nexaflow/runs?definition_id="
+                                + draft_id in r.url)
+                    with page.expect_response(is_draft_get), \
+                            page.expect_response(is_runs):
+                        page.locator(
+                            f'#wf-list [data-open="{draft_id}"]').click()
+                    if name:
+                        expect(page.locator("#canvas-title")).to_contain_text(
+                            "Canvas — " + name)
+                    else:
+                        expect(page.locator("#canvas-title")).to_contain_text(
+                            "Canvas")
 
                 def publish():
                     page.locator("#btn-publish").click()
@@ -210,9 +257,22 @@ def main() -> None:
                         "Published as revision")
 
                 def start_run(input_json: str):
+                    # The detail panel keeps the previous run visible
+                    # until the new run's detail fetch renders, so a
+                    # bare h3-visible check cannot prove the NEW run
+                    # rendered — and an immediate read would race the
+                    # stale panel. Wait for the detail text to change
+                    # (run ids are unique per run, so it always does).
+                    before = run_detail()
                     page.locator("#run-input").fill(input_json)
                     page.locator("#btn-run").click()
                     expect(page.locator("#run-detail h3")).to_be_visible()
+                    for _ in range(75):
+                        if run_detail() != before:
+                            break
+                        page.wait_for_timeout(200)
+                    assert run_detail() != before, \
+                        "run detail did not refresh for the new run"
 
                 def run_detail() -> str:
                     return page.locator("#run-detail").inner_text()
@@ -237,18 +297,32 @@ def main() -> None:
                 save_draft("browser-flow", "Browser Flow")
                 page.reload(wait_until="domcontentloaded")
                 expect(page.locator("#studio")).to_be_visible()
-                open_draft("browser-flow")
+                open_draft("browser-flow", "Browser Flow")
                 assert node_count() == 2, "saved graph must survive reload"
                 assert edge_count() == 1
 
                 # 3. Publish + run to success (trigger -> wait).
+                # Canonical input rules: the manual trigger receives
+                # the run input verbatim and declares only `payload`,
+                # so a bare {"duration_ms": 50} run input fails the
+                # trigger's schema. The wait duration is therefore a
+                # literal input mapping on the wait node (set through
+                # the inspector, like case 15), and the run input is
+                # just {"payload": {}}.
                 new_draft()
                 add_node("nexaroute.trigger.manual")
                 add_node("nexaroute.control.wait")
                 connect_nodes("manual", "wait")
+                select_node("wait")
+                field = page.locator('[data-field="input.duration_ms"]')
+                field.click()
+                page.keyboard.press("ControlOrMeta+a")
+                page.keyboard.type("50")
+                page.keyboard.press("Tab")
+                expect(page.locator("#dirty-badge")).to_be_visible()
                 save_draft("wait-flow", "Wait Flow")
                 publish()
-                start_run('{"duration_ms": 50}')
+                start_run('{"payload": {}}')
                 expect(page.locator("#run-detail")).to_contain_text(
                     "succeeded")
                 assert "wait" in run_detail()
@@ -260,21 +334,75 @@ def main() -> None:
                 expect(page.locator("#diagnostics")).to_contain_text(
                     "no triggers")
 
-                # 5. Run failure displayed safely.
+                # 5a. Policy gate parks (it does not fail): the
+                # request node is policy gated and run creation
+                # carries no policy approval, so the canonical
+                # outcome is a parked run (waiting_for_approval, node
+                # error_code policy_required), cancellable from
+                # there. The URL reaches the node as an input mapping
+                # ($.input.payload.url) because the trigger takes the
+                # run input verbatim (only `payload`). A true HTTP
+                # egress failure needs run-level policy approval,
+                # which the canonical API does not offer yet; that
+                # gap is recorded, not faked here.
                 new_draft()
                 add_node("nexaroute.trigger.manual")
                 add_node("nexaroute.http.request")
                 connect_nodes("manual", "request")
+                select_node("request")
+                field = page.locator('[data-field="input.url"]')
+                field.click()
+                page.keyboard.press("ControlOrMeta+a")
+                page.keyboard.type("$.input.payload.url")
+                page.keyboard.press("Tab")
+                expect(page.locator("#dirty-badge")).to_be_visible()
                 save_draft("fail-flow", "Fail Flow")
                 publish()
-                start_run('{"url": "http://127.0.0.1:9/unreachable"}')
+                start_run('{"payload": {"url": "http://127.0.0.1:9/unreachable"}}')
+                expect(page.locator("#run-detail")).to_contain_text(
+                    "waiting_for_approval")
                 detail = run_detail()
-                assert "failed" in detail
-                assert "error" in detail
+                assert "policy_required" in detail
+                # NOTE: the manual trigger legitimately echoes its
+                # payload into its own OUTPUT (canonical wire view),
+                # so the URL may appear there as an output value —
+                # that is not an input render. The redaction boundary
+                # is raw error text and secret-shaped values, which
+                # the canonical output redactor handles.
                 assert "connection refused" not in detail.lower(), \
                     "raw error text must never render"
-                assert "127.0.0.1:9" not in detail, \
-                    "run input must never render"
+                page.locator("#run-cancel").click()
+                expect(page.locator("#run-detail")).to_contain_text(
+                    "cancelled")
+
+                # 5b. Genuine execution failure displayed safely: a
+                # transform with an allowlist-violating operation
+                # fails validation_error, and the detail must show
+                # only the code — never raw error text or run input.
+                new_draft()
+                add_node("nexaroute.trigger.manual")
+                add_node("nexaroute.control.json_transform")
+                connect_nodes("manual", "json_transform")
+                select_node("json_transform")
+                field = page.locator('[data-field="input.value"]')
+                field.click()
+                page.keyboard.press("ControlOrMeta+a")
+                page.keyboard.type('{"a": 1}')
+                page.keyboard.press("Tab")
+                field = page.locator('[data-field="input.operations"]')
+                field.click()
+                page.keyboard.press("ControlOrMeta+a")
+                page.keyboard.type('[{"op": "bogus", "field": "x"}]')
+                page.keyboard.press("Tab")
+                expect(page.locator("#dirty-badge")).to_be_visible()
+                save_draft("badop-flow", "Bad Op Flow")
+                publish()
+                start_run('{"payload": {}}')
+                detail = run_detail()
+                assert "failed" in detail
+                assert "validation_error" in detail
+                assert "bogus" not in detail, \
+                    "raw operation text must never render"
 
                 # 6. Cancellation of an approval-gated run. Canonical
                 # run creation is synchronous, so the #690 long-wait
@@ -302,8 +430,11 @@ def main() -> None:
                 start_run("{}")
                 expect(page.locator("#run-detail")).to_contain_text(
                     "waiting_for_approval")
+                # data-approve carries the node INSTANCE id
+                # ("approval", the last segment of the type id), not
+                # the registry type id.
                 page.locator(
-                    '[data-approve="nexaroute.control.approval"]'
+                    '[data-approve="approval"]'
                     '[data-decision="approved"]').click()
                 expect(page.locator("#studio-error")).to_contain_text(
                     "must not be the requester")
@@ -319,20 +450,32 @@ def main() -> None:
                 for i in range(page.locator("[data-ph]").count()):
                     page.locator("[data-ph]").nth(i).fill("test")
                 page.locator("#tpl-create").click()
-                expect(page.locator("#canvas-title")).to_contain_text(
-                    "Canvas")
-                assert node_count() == 3
-                assert edge_count() == 2
+                # Instantiate is async (POST + openDraft GET + render)
+                # and the canvas title is static ("Canvas") before it
+                # lands, so bare counts here would race like the
+                # open_draft race fixed above: poll the counts.
+                expect(page.locator("#canvas .node-card")).to_have_count(3)
+                expect(page.locator(
+                    "#canvas-edges line[data-edge]")).to_have_count(2)
 
                 # 9. Invalid edges rejected + edge delete + reconnect.
-                open_draft("browser-flow")
+                open_draft("browser-flow", "Browser Flow")
                 connect_nodes("manual", "json_transform")
                 expect(page.locator("#diagnostics")).to_contain_text(
                     "already exists")
                 assert edge_count() == 1
                 connect_nodes("json_transform", "json_transform")
                 assert edge_count() == 1, "self-edge must not be created"
-                page.locator("#canvas-edges line[data-edge]").first.click()
+                # The hit line is transparent by design (the visible
+                # line has pointer-events=none), so Playwright's
+                # visibility check refuses it — and a forced click
+                # without scrolling misses when the canvas sits below
+                # the fold. Scroll it into view first, then force the
+                # click; the handler still runs and selection follows.
+                edge_line = page.locator(
+                    "#canvas-edges line[data-edge]").first
+                edge_line.scroll_into_view_if_needed()
+                edge_line.click(force=True)
                 page.locator("#edge-delete").click()
                 assert edge_count() == 0
                 connect_nodes("manual", "json_transform")
@@ -340,7 +483,7 @@ def main() -> None:
                 save_draft("browser-flow", "Browser Flow")
 
                 # 10. Immutable revision inspection + execution timeline.
-                open_draft("wait-flow")
+                open_draft("wait-flow", "Wait Flow")
                 page.locator("#version-list [data-inspect]").first.click()
                 expect(page.locator("#canvas-title")).to_contain_text(
                     "read-only revision")
@@ -351,11 +494,14 @@ def main() -> None:
                     "succeeded")
                 assert "wait" in run_detail()
                 page.locator("#back-to-draft").click()
-                assert "read-only" not in \
-                    page.locator("#canvas-title").inner_text()
+                # Back-to-draft reloads the draft asynchronously; poll
+                # for the read-only marker to disappear instead of
+                # reading the stale title immediately.
+                expect(page.locator("#canvas-title")).not_to_contain_text(
+                    "read-only")
 
                 # 11. Keyboard move + narrow viewport + RTL.
-                open_draft("browser-flow")
+                open_draft("browser-flow", "Browser Flow")
                 card = page.locator("#canvas .node-card").first
                 card.focus()
                 left_before = card.evaluate(
@@ -407,7 +553,7 @@ def main() -> None:
                 # rule): delete the trigger without saving, then
                 # validate must report the EDITED body, not the stale
                 # saved draft.
-                open_draft("browser-flow")
+                open_draft("browser-flow", "Browser Flow")
                 select_node("manual")
                 page.locator("#node-delete").click()
                 expect(page.locator("#dirty-badge")).to_be_visible()
@@ -442,7 +588,7 @@ def main() -> None:
                 # JS-event injection): click, select-all, type, Tab
                 # to fire the inspector's change handler; the edit
                 # must survive save + reload.
-                open_draft("wait-flow")
+                open_draft("wait-flow", "Wait Flow")
                 select_node("wait")
                 field = page.locator('[data-field="input.duration_ms"]')
                 field.click()
@@ -455,7 +601,7 @@ def main() -> None:
                     "Draft saved.")
                 page.reload(wait_until="domcontentloaded")
                 expect(page.locator("#studio")).to_be_visible()
-                open_draft("wait-flow")
+                open_draft("wait-flow", "Wait Flow")
                 select_node("wait")
                 assert page.locator(
                     '[data-field="input.duration_ms"]').input_value() \
@@ -464,19 +610,37 @@ def main() -> None:
                 browser.close()
                 # The app ships no favicon, so Chromium's automatic
                 # /favicon.ico request 404s; that entry is benign, and
-                # its console location names the URL. Anything else is
-                # a real UI/JS failure.
+                # its console location names the URL. Likewise,
+                # Chromium logs "Failed to load resource" for every
+                # intentionally failed API call, and cases 7 and 14
+                # deliberately provoke three of them (SoD 400 on
+                # approve, no-trigger 400 on save, wrong-key 401 on
+                # the connect refresh) and assert the UI's handling
+                # of each — so those entries are expected, not noise
+                # to hide: any UNINTENTIONAL 4xx would already have
+                # failed its own case assertion before this point.
+                # Anything else (JS exceptions, unhandled
+                # rejections, unexpected statuses) is a real failure.
+                def benign(t, u):
+                    if u.endswith("/favicon.ico"):
+                        return True
+                    if (t.startswith("Failed to load resource") and
+                            "/admin/api/" in u and
+                            ("status of 400" in t or "status of 401" in t)):
+                        return True
+                    return False
                 real_errors = [(t, u) for (t, u) in console_errors
-                               if not u.endswith("/favicon.ico")]
+                               if not benign(t, u)]
                 assert not real_errors, \
                     f"unexpected console errors: {real_errors}"
                 print("nexaflow studio browser acceptance: PASS")
         finally:
-            proc.terminate()
-            try:
-                proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                proc.kill()
+            if proc is not None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
 
 
 if __name__ == "__main__":
