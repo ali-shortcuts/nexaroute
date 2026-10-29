@@ -178,6 +178,14 @@ bounds, and evidence map are in `docs/RETRY_SAFETY.md`.
 | OpenAI `/v1/responses` | OpenAI Chat | Yes | Yes | Yes | Yes | Yes | Yes |
 | OpenAI `/v1/responses` | Anthropic-compatible | Yes | Yes | Yes | Yes (tool_result in user turn) | Responses reasoning → thinking budget | Yes |
 | OpenAI `/v1/responses` | Gemini | Yes | Yes | Yes | Yes (functionResponse) | Budget hints only | Yes |
+| Gemini `/v1beta/models:generateContent` | OpenAI Chat | Yes (fixture) | Yes (fixture) | Yes (fixture) | Yes (fixture, functionResponse) | Hints only | Yes (fixture, inline data) |
+| Gemini `/v1beta/models:generateContent` | Gemini | Native-shaped (fixture) | Yes (fixture) | Yes (fixture) | Yes (fixture, functionResponse) | Hints only | Yes (fixture, inline data) |
+
+The Gemini ingress rows above cover only the upstreams with a Gemini
+ingress fixture (`internal/httpapi/gemini_ingress_test.go`). Other
+upstreams (Anthropic-compatible, OpenAI Responses, Bedrock, Vertex)
+traverse the same canonical path but have no Gemini-ingress fixture
+yet, so no claim is made for them here.
 
 ## Translation limits (per field, canonical paths)
 

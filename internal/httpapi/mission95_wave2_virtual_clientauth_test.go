@@ -406,19 +406,26 @@ func TestWave2ApplyGuardrailsOverLimit(t *testing.T) {
 	cfg.Guardrails.Mode = "block"
 	cfg.Guardrails.MaxBodyBytes = 4
 	s := testGateway(t, cfg)
-	for _, anthropicStyle := range []bool{false, true} {
+	for _, tc := range []struct {
+		name  string
+		style string
+	}{
+		{"openai", "openai"},
+		{"anthropic", "anthropic"},
+		{"gemini", "gemini"},
+	} {
 		req := httptest.NewRequest(http.MethodPost, "http://localhost/v1/chat/completions", strings.NewReader("12345678"))
 		rr := httptest.NewRecorder()
-		if s.applyGuardrails(rr, req, anthropicStyle) {
-			t.Fatalf("anthropicStyle=%v: over-limit body should be rejected", anthropicStyle)
+		if s.applyGuardrails(rr, req, tc.style) {
+			t.Fatalf("style=%v: over-limit body should be rejected", tc.style)
 		}
 		if rr.Code != http.StatusRequestEntityTooLarge {
-			t.Fatalf("anthropicStyle=%v: status %d want 413", anthropicStyle, rr.Code)
+			t.Fatalf("style=%v: status %d want 413", tc.style, rr.Code)
 		}
 		if !strings.Contains(rr.Body.String(), "guardrail body limit") {
-			t.Fatalf("anthropicStyle=%v: body %q should name the limit", anthropicStyle, rr.Body.String())
+			t.Fatalf("style=%v: body %q should name the limit", tc.style, rr.Body.String())
 		}
-		if anthropicStyle && !strings.Contains(rr.Body.String(), "request_too_large") {
+		if tc.style == "anthropic" && !strings.Contains(rr.Body.String(), "request_too_large") {
 			t.Fatalf("anthropic error shape should carry request_too_large, got %q", rr.Body.String())
 		}
 	}

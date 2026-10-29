@@ -416,6 +416,12 @@ func (s *Server) handleCanonicalResponse(
 	case "openai_responses":
 		r := canonical.EncodeResponsesResponse(canResp, requestedModel)
 		writeJSON(w, http.StatusOK, r)
+	case "gemini":
+		g, err := canonical.EncodeGeminiResponse(canResp)
+		if err != nil {
+			return fmt.Errorf("gemini response encode failed: %w", err)
+		}
+		writeJSON(w, http.StatusOK, g)
 	default:
 		o := canonical.EncodeOpenAIChatResponse(canResp, requestedModel)
 		writeJSON(w, http.StatusOK, o)
@@ -428,6 +434,8 @@ func canonicalErrorJSON(w http.ResponseWriter, clientProtocol string, status int
 	switch clientProtocol {
 	case "anthropic":
 		anthropicErrorJSON(w, status, message)
+	case "gemini":
+		geminiErrorJSON(w, status, message)
 	case "openai_responses":
 		writeJSON(w, status, map[string]any{
 			"error": map[string]any{"message": message, "type": errType, "code": errType},

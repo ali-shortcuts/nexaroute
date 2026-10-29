@@ -13,6 +13,14 @@ func (s *Server) models(w http.ResponseWriter, r *http.Request) {
 	if !s.clientAuthAllowed(w, r, false) {
 		return
 	}
+	writeJSON(w, 200, map[string]any{"object": "list", "data": s.clientModelEntries()})
+}
+
+// clientModelEntries lists the client-facing model identities: enabled
+// virtual endpoints' public models first, then the "auto" aliases, then
+// deployment ids/models/aliases. Shared by /v1/models and the Gemini
+// /v1beta/models listing so both ingresses advertise the same identities.
+func (s *Server) clientModelEntries() []map[string]any {
 	s.runtimeMu.RLock()
 	deployments := s.rt.All()
 	resolver := s.routeResolver
@@ -60,5 +68,5 @@ func (s *Server) models(w http.ResponseWriter, r *http.Request) {
 			data = append(data, map[string]any{"id": id, "object": "model", "created": created, "owned_by": d.ProviderID})
 		}
 	}
-	writeJSON(w, 200, map[string]any{"object": "list", "data": data})
+	return data
 }

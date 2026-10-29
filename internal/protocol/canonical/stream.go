@@ -457,6 +457,8 @@ func NewStreamEmitter(protocol string, w http.ResponseWriter, model, requestID s
 		return NewAnthropicEmitter(w, model, requestID)
 	case "openai_responses":
 		return NewResponsesEmitter(w, model)
+	case "gemini":
+		return NewGeminiEmitter(w, model)
 	default:
 		return NewOpenAIEmitter(w, model)
 	}

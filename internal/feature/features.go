@@ -7,7 +7,12 @@ const (
 	ProtocolOpenAI    Protocol = "openai"
 	ProtocolAnthropic Protocol = "anthropic"
 	ProtocolResponses Protocol = "responses"
-	ProtocolUnknown   Protocol = "unknown"
+	// ProtocolGemini is the Gemini GenerateContent ingress. The feature
+	// extractor has no Gemini-specific collector, so it falls through to
+	// the default (OpenAI) collection, which finds no Gemini fields and
+	// stays routing-neutral.
+	ProtocolGemini  Protocol = "gemini"
+	ProtocolUnknown Protocol = "unknown"
 )
 
 // RequestFeatures is the normalized, privacy-safe representation of a request.
