@@ -29,6 +29,16 @@ resources:
     cpu: "1"
     memory: 512Mi
 
+# Pod termination grace. On SIGTERM the gateway drains in-flight work for
+# max(routing.request_timeout_ms, each provider's
+# stream_idle_timeout_seconds, 10s) + 5s, then exits; the kubelet SIGKILLs
+# the pod when this grace expires. This value MUST stay above the drain
+# time of the config actually installed (the chart cannot read it back
+# out of the config Secret), or in-flight streams are cut mid-drain.
+# 120s covers the acceptance config (35s drain) with margin; raise it if
+# your config uses longer request/stream timeouts.
+terminationGracePeriodSeconds: 120
+
 # All gateway state lives under /config on the PVC: the config file is
 # overlaid from a Secret, and the master-key file, security store and
 # file-backend control-plane state are written next to it.

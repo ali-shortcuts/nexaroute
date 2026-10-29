@@ -337,16 +337,11 @@ jobs:
           version: v3.19.0
 
       - name: Lint and render the Helm chart, assert the hardened posture
-        run: |
-          helm lint deploy/helm/nexaroute
-          helm template rel deploy/helm/nexaroute > /tmp/rendered.yaml
-          grep -q "readOnlyRootFilesystem: true" /tmp/rendered.yaml
-          grep -q "allowPrivilegeEscalation: false" /tmp/rendered.yaml
-          grep -q "runAsNonRoot: true" /tmp/rendered.yaml
-          grep -q "path: /healthz" /tmp/rendered.yaml
-          grep -q "path: /readyz" /tmp/rendered.yaml
-          grep -q "automountServiceAccountToken: false" /tmp/rendered.yaml
-          if grep -qE "value: (redis|rediss|postgres)://" /tmp/rendered.yaml; then
-            echo "rendered chart contains a plaintext database URL" >&2
-            exit 1
-          fi
+        # Offline acceptance only (issue #650): lint, render with the
+        # least-privilege acceptance values and with chart defaults,
+        # posture/RBAC/probe/Recreate assertions, the secret-leak check
+        # and the termination-grace vs. gateway-drain invariant. The
+        # live kind-cluster phases are NOT run here; see
+        # scripts/k8s-acceptance.sh --live and
+        # docs/reports/K8S_ACCEPTANCE_2026-10-27.md.
+        run: bash scripts/k8s-acceptance.sh --offline-only

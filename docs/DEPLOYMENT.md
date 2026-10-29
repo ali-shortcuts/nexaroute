@@ -103,6 +103,47 @@ rendered-output assertions in CI; **a live cluster install is not yet
 verified** (no cluster in the development environment) and is tracked
 as an explicit gap, not a claim.
 
+- **Readiness semantics — read before judging an install**: `/healthz`
+  is liveness (the process answers), while `/readyz` is 503 until at
+  least one deployment is usable. An install whose config enables no
+  providers (the chart default) therefore stays un-Ready forever, by
+  design: the gateway refuses to receive traffic it cannot route. A
+  bare install that is Running but not Ready is not a broken install;
+  a Ready install needs at least one usable deployment.
+- **Graceful termination**: on SIGTERM the gateway drains in-flight
+  work for `max(request_timeout, stream idle timeouts, 10s) + 5s` and
+  then exits, so `terminationGracePeriodSeconds` (chart default 120s)
+  must stay above the drain cap of the config actually installed —
+  the chart cannot read that cap back out of the config Secret. The
+  acceptance config drains in 35s, inside the 120s default; the
+  example config's 120s request / 180s stream timeouts drain in 185s
+  and need a grace above 185s. Set the value from your config, not
+  from the default.
+- **Image tag**: an empty `image.tag` resolves to `v` + the chart's
+  `appVersion`, which is currently `0.22.0` while the latest supported
+  release is `v0.24.0`. A default `helm install` therefore does not
+  install the latest release; pin `image.tag` explicitly (the
+  acceptance script always does) until chart versioning is aligned
+  with releases by an owner decision.
+- **Rollback caveat**: `helm rollback` restores the previous chart and
+  values, but it does not touch an operator-managed config Secret.
+  Rolling back a release whose config changed means restoring the
+  previous config Secret yourself first, or the rolled-back pods boot
+  with the new config. The acceptance script exercises exactly that
+  order.
+- **Acceptance automation**: `scripts/k8s-acceptance.sh --offline-only`
+  runs the lint/render/posture/leak/drain checks (this is what CI
+  runs). `scripts/k8s-acceptance.sh --live` runs the full disposable
+  kind-cluster acceptance: preceding-release install, upgrade,
+  rollback, re-upgrade, probes, posture from the live pod spec, PVC
+  persistence across a measured graceful restart, and the sentinel
+  secret-leak check over events, logs and describe output. It creates
+  and deletes its own kind cluster, refuses to touch an existing one,
+  and uses only fake sentinel secret values. Live evidence for this
+  release is recorded in `docs/reports/K8S_ACCEPTANCE_2026-10-27.md`;
+  until a live run passes there, production-cluster support remains
+  unclaimed.
+
 ## Upgrades and rollback
 
 1. `nexaroute backup --config <path> --out <bundle>` (see OPERATIONS §2).
