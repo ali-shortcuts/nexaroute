@@ -109,7 +109,7 @@ func TestWave3StreamOpenAIToAnthropic(t *testing.T) {
 	{
 		rr := httptest.NewRecorder()
 		var gotP, gotC int
-		err := streamOpenAIToAnthropicWithUsage(rr, wave3PumpResp(wave3ChatSSE), "m", nm, func(u usage.Counts) { gotP, gotC = int(u.Input), int(u.Output) }, "wave3-tr")
+		err := streamOpenAIToAnthropicWithUsage(rr, wave3PumpResp(wave3ChatSSE), "m", nm, func(p, c int) { gotP, gotC = p, c }, "wave3-tr")
 		if err != nil {
 			t.Fatalf("normal translation err=%v", err)
 		}
@@ -190,7 +190,7 @@ func TestWave3StreamAnthropicToOpenAI(t *testing.T) {
 	{
 		rr := httptest.NewRecorder()
 		var gotP, gotC int
-		err := streamAnthropicToOpenAIWithUsage(rr, wave3PumpResp(wave3AnthropicSSE), "m", nm, func(p, c int) { gotP, gotC = p, c }, "wave3-tr2")
+		err := streamAnthropicToOpenAIWithUsage(rr, wave3PumpResp(wave3AnthropicSSE), "m", nm, func(u usage.Counts) { gotP, gotC = int(u.Input), int(u.Output) }, "wave3-tr2")
 		if err != nil {
 			t.Fatalf("normal translation err=%v", err)
 		}
