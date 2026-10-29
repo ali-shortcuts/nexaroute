@@ -73,14 +73,15 @@ type GeminiToolConfig struct {
 }
 
 type GeminiGenerationConfig struct {
-	Temperature      *float64        `json:"temperature,omitempty"`
-	TopP             *float64        `json:"topP,omitempty"`
-	TopK             *float64        `json:"topK,omitempty"`
-	MaxOutputTokens  int             `json:"maxOutputTokens,omitempty"`
-	StopSequences    []string        `json:"stopSequences,omitempty"`
-	ResponseMimeType string          `json:"responseMimeType,omitempty"`
-	ResponseSchema   json.RawMessage `json:"responseSchema,omitempty"`
-	CandidateCount   int             `json:"candidateCount,omitempty"`
+	Temperature        *float64        `json:"temperature,omitempty"`
+	TopP               *float64        `json:"topP,omitempty"`
+	TopK               *float64        `json:"topK,omitempty"`
+	MaxOutputTokens    int             `json:"maxOutputTokens,omitempty"`
+	StopSequences      []string        `json:"stopSequences,omitempty"`
+	ResponseMimeType   string          `json:"responseMimeType,omitempty"`
+	ResponseSchema     json.RawMessage `json:"responseSchema,omitempty"`
+	CandidateCount     int             `json:"candidateCount,omitempty"`
+	ResponseModalities []string        `json:"responseModalities,omitempty"`
 }
 
 // EncodeGeminiRequest builds a Gemini GenerateContent payload from the IR.
