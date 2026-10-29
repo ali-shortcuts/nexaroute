@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -139,6 +140,22 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, viewJob(j))
 }
 
+// storeGetError maps a job-store Get failure to the honest HTTP status: a
+// genuinely missing job is 404, but any other store failure (for example a
+// PostgreSQL outage) must never masquerade as "job not found" — during the
+// 2026-10-27 HA acceptance a backend outage made existing jobs read back
+// as 404, which a client could mistake for a deleted job. Store errors are
+// reported generically (no backend detail in the response) as retryable
+// 503s, matching the list endpoint's fail-closed behaviour.
+func storeGetError(w http.ResponseWriter, err error) bool {
+	if errors.Is(err, queue.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "not_found", "job not found", false)
+		return true
+	}
+	writeError(w, http.StatusServiceUnavailable, "video_store_unavailable", "video job store is temporarily unavailable", true)
+	return true
+}
+
 func (h *Handler) get(w http.ResponseWriter, r *http.Request, id string) {
 	if h.Store == nil {
 		writeError(w, http.StatusServiceUnavailable, "video_unavailable", "video job store is not configured", true)
@@ -146,7 +163,7 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request, id string) {
 	}
 	j, err := h.Store.Get(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "not_found", "job not found", false)
+		storeGetError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, viewJob(j))
@@ -264,7 +281,7 @@ func (h *Handler) getAsset(w http.ResponseWriter, r *http.Request, jobID, assetI
 	}
 	job, err := h.Store.Get(r.Context(), jobID)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "not_found", "job not found", false)
+		storeGetError(w, err)
 		return
 	}
 	var asset video.Asset
