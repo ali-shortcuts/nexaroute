@@ -93,6 +93,29 @@ func wave3JSONServer(t *testing.T, status int, body string, calls *atomic.Int32)
 	}))
 }
 
+// wave3JSONServerNotURL is wave3JSONServer with one deterministic guard:
+// the returned server never listens on bannedURL. A just-closed httptest
+// server's port can be reassigned to the next server created in the same
+// test binary; when a failover test's "dead" URL collides with its "good"
+// URL, the first attempt succeeds, no failure occurs, and no failover
+// event is emitted — the exact "failover event missing" CI symptom, with
+// every other assertion still passing. Recreating on collision removes
+// the hole without sleeps or timing assumptions: the returned server is
+// proven distinct before the gateway ever sees it. Exhaustion fails
+// loudly instead of hanging or silently passing.
+func wave3JSONServerNotURL(t *testing.T, status int, body string, calls *atomic.Int32, bannedURL string) *httptest.Server {
+	t.Helper()
+	for i := 0; i < 10; i++ {
+		s := wave3JSONServer(t, status, body, calls)
+		if s.URL != bannedURL {
+			return s
+		}
+		s.Close()
+	}
+	t.Fatalf("could not allocate a test server address distinct from %s", bannedURL)
+	return nil
+}
+
 func TestWave3AnthropicTooLarge(t *testing.T) {
 	up := wave3JSONServer(t, 200, wave3AnthropicOK, nil)
 	defer up.Close()
@@ -344,7 +367,7 @@ func TestWave3AnthropicTransportFailover(t *testing.T) {
 	deadURL := dead.URL
 	dead.Close()
 	var goodCalls atomic.Int32
-	good := wave3JSONServer(t, 200, wave3AnthropicOK, &goodCalls)
+	good := wave3JSONServerNotURL(t, 200, wave3AnthropicOK, &goodCalls, deadURL)
 	defer good.Close()
 	s := wave3Gateway(t, []config.ProviderConfig{
 		wave3Provider("a", "anthropic_compatible", deadURL, "m", "upstream-model", []string{"cm"}),
@@ -356,6 +379,12 @@ func TestWave3AnthropicTransportFailover(t *testing.T) {
 	}
 	if goodCalls.Load() != 1 {
 		t.Fatalf("good candidate calls=%d want 1", goodCalls.Load())
+	}
+	// The route_fail for a/m proves provider a was actually attempted and
+	// failed; without it, a dead/good address collision would pass every
+	// assertion above while producing no failover at all.
+	if !wave3BusHasKindDeployment(s, "route_fail", "a/m") {
+		t.Fatalf("route_fail event missing for a/m: failover was not exercised")
 	}
 	if !wave3BusHasKind(s, "failover") {
 		t.Fatalf("failover event missing")
@@ -747,7 +776,7 @@ func TestWave3ResponsesTransportFailover(t *testing.T) {
 	deadURL := dead.URL
 	dead.Close()
 	var goodCalls atomic.Int32
-	good := wave3JSONServer(t, 200, wave3ChatOK, &goodCalls)
+	good := wave3JSONServerNotURL(t, 200, wave3ChatOK, &goodCalls, deadURL)
 	defer good.Close()
 	s := wave3Gateway(t, []config.ProviderConfig{
 		wave3Provider("a", "openai_compatible", deadURL, "m", "upstream-model", []string{"cm"}),
@@ -1165,7 +1194,7 @@ func TestWave3OpenAITransportFailover(t *testing.T) {
 	deadURL := dead.URL
 	dead.Close()
 	var goodCalls atomic.Int32
-	good := wave3JSONServer(t, 200, wave3ChatOK, &goodCalls)
+	good := wave3JSONServerNotURL(t, 200, wave3ChatOK, &goodCalls, deadURL)
 	defer good.Close()
 	s := wave3Gateway(t, []config.ProviderConfig{
 		wave3Provider("a", "openai_compatible", deadURL, "m", "upstream-model", []string{"cm"}),
