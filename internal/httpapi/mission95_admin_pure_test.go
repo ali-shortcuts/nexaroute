@@ -28,15 +28,29 @@ func TestMission95AdminPureHelpers(t *testing.T) {
 	if got := clientBaseURLSource("https://api.example.com"); got != "configured" {
 		t.Errorf("custom base source = %q", got)
 	}
-	// secretSource precedence: pool > env > literal > none.
-	if got := secretSource(config.ProviderConfig{Credentials: []config.CredentialConfig{{APIKey: "x"}}, APIKeyEnv: "K", APIKey: "y"}); got != "pool" {
-		t.Errorf("pool source = %q", got)
+	// secretSource reports the PRIMARY credential's source, not whether a
+	// supplementary pool exists (contract documented on secretSource in
+	// admin.go): a set env reference wins over the literal fallback, a
+	// primary literal beats a supplementary pool — a G7-preserving primary
+	// replacement must not look like it did not happen — an unset env
+	// reference is still the configured primary source, and the pool is
+	// reported only when no primary credential is configured at all.
+	// Precedence: env-set > literal > env-configured-unset > pool > none.
+	t.Setenv("NEXAROUTE_TEST_SECRET_ENV", "s3cr3t")
+	if got := secretSource(config.ProviderConfig{APIKeyEnv: "NEXAROUTE_TEST_SECRET_ENV", APIKey: "y"}); got != "env" {
+		t.Errorf("set env source = %q", got)
 	}
-	if got := secretSource(config.ProviderConfig{APIKeyEnv: "K"}); got != "env" {
-		t.Errorf("env source = %q", got)
+	if got := secretSource(config.ProviderConfig{Credentials: []config.CredentialConfig{{APIKey: "x"}}, APIKeyEnv: "NEXAROUTE_TEST_UNSET_ENV", APIKey: "y"}); got != "literal" {
+		t.Errorf("literal+pool source = %q", got)
+	}
+	if got := secretSource(config.ProviderConfig{APIKeyEnv: "NEXAROUTE_TEST_UNSET_ENV"}); got != "env" {
+		t.Errorf("unset env source = %q", got)
 	}
 	if got := secretSource(config.ProviderConfig{APIKey: "y"}); got != "literal" {
 		t.Errorf("literal source = %q", got)
+	}
+	if got := secretSource(config.ProviderConfig{Credentials: []config.CredentialConfig{{APIKey: "x"}}}); got != "pool" {
+		t.Errorf("pool-only source = %q", got)
 	}
 	if got := secretSource(config.ProviderConfig{}); got != "none" {
 		t.Errorf("none source = %q", got)
