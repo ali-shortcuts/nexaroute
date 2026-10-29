@@ -471,6 +471,15 @@ func TestWave3AnthropicDecodeClientGone(t *testing.T) {
 		<-r.Context().Done()
 	}))
 	defer up.Close()
+	// CloseClientConnections runs first (LIFO): this stub blocks on
+	// r.Context().Done() without consuming its request body, so the server
+	// cannot observe the gateway's close on its own — the background read
+	// that detects a peer close starts only once the body hits EOF. When
+	// that notification is lost, Close() wedges forever on the still-active
+	// stub connection (CI verify run 40866996462; reproduced locally under
+	// -race with the identical goroutine signature). Force-closing the
+	// tracked connections first makes teardown independent of it.
+	defer up.CloseClientConnections()
 	s := wave3Gateway(t, []config.ProviderConfig{wave3Provider("a", "anthropic_compatible", up.URL, "m", "upstream-model", []string{"cm"})}, func(cfg *config.Config) {
 		cfg.Routing.Strategy = "priority"
 	})
@@ -491,6 +500,71 @@ func TestWave3AnthropicDecodeClientGone(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("cancelled decode handler did not return")
+	}
+}
+
+// TestWave3AnthropicDecodeClientGoneCleanup pins the lifecycle and cleanup
+// semantics behind TestWave3AnthropicDecodeClientGone: after a client-gone
+// abort the gateway still serves a fresh request through the same gateway
+// (the abort poisons nothing), and test-server teardown completes promptly
+// even though the first stub handler never observes the close on its own.
+// Teardown runs in a goroutine with a bounded wait so a hang becomes a
+// test failure instead of a wedged suite.
+func TestWave3AnthropicDecodeClientGoneCleanup(t *testing.T) {
+	var calls atomic.Int32
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(200)
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+			<-r.Context().Done()
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, wave3AnthropicOK)
+	}))
+	defer func() {
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			up.CloseClientConnections()
+			up.Close()
+		}()
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Fatal("test-server teardown did not complete")
+		}
+	}()
+	s := wave3Gateway(t, []config.ProviderConfig{wave3Provider("a", "anthropic_compatible", up.URL, "m", "upstream-model", []string{"cm"})}, func(cfg *config.Config) {
+		cfg.Routing.Strategy = "priority"
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		done <- wave3RequestCtx(s, ctx, "POST", "/v1/messages", wave3AnthropicReq("cm"))
+	}()
+	// Wait until the stub has taken the first (blocking) call, then cancel.
+	for calls.Load() == 0 {
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	select {
+	case rr := <-done:
+		if rr.Body.Len() != 0 {
+			t.Fatalf("cancelled decode body=%q want empty", rr.Body.String())
+		}
+		if !wave3BusHasKind(s, "client_disconnect") {
+			t.Fatalf("client_disconnect event missing")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("cancelled decode handler did not return")
+	}
+	rr := wave3Request(s, "POST", "/v1/messages", wave3AnthropicReq("cm"))
+	if rr.Code != 200 || !strings.Contains(rr.Body.String(), `"text":"ok"`) {
+		t.Fatalf("post-abort request status=%d body=%s want 200 with ok text", rr.Code, rr.Body.String())
 	}
 }
 
