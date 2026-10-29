@@ -1,0 +1,145 @@
+{
+  "schema": "nexaroute.vault-acceptance.v1",
+  "gateway_version": "dev",
+  "generated_at": "2026-10-27T16:46:08Z",
+  "mode": "live",
+  "evidence_class": "loopback",
+  "outcome": "PASS",
+  "target": {
+    "addr": "https://127.0.0.1:18201",
+    "ref": "secret/data/nexaroute/acceptance/master-key",
+    "auth_method": "static token from environment (helper contract); token acquisition is operator-owned",
+    "token_env": "VAULT_TOKEN",
+    "helper_configured": true
+  },
+  "vault": {
+    "version": "2.2.1",
+    "storage_type": "file",
+    "ha_enabled": false,
+    "ha_known": true,
+    "sealed": false,
+    "standby": false,
+    "dev_mode": false,
+    "policies": [
+      "default",
+      "nexaroute-accept"
+    ],
+    "token_ttl_seconds": 827,
+    "token_renewable": true,
+    "token_metadata_known": true,
+    "baseline_observed": true
+  },
+  "bounds": {
+    "call_timeout_seconds": 10,
+    "overall_timeout_seconds": 120
+  },
+  "checks": [
+    {
+      "id": "vault.ha_failover",
+      "kind": "not-run",
+      "selected": false,
+      "status": "NOT_RUN",
+      "reason": "requires an operator-controlled Vault HA cluster and a failover event; not automated by this harness"
+    },
+    {
+      "id": "vault.transit",
+      "kind": "not-run",
+      "selected": false,
+      "status": "NOT_RUN",
+      "reason": "Vault Transit envelope mode is NOT implemented; this run does not claim Transit support"
+    },
+    {
+      "id": "vault.health",
+      "kind": "health",
+      "selected": true,
+      "status": "PASS",
+      "detail": "version=2.2.1 storage_type=file dev_mode=false ha_enabled_known=true",
+      "duration_ms": 649
+    },
+    {
+      "id": "vault.token_metadata",
+      "kind": "token",
+      "selected": true,
+      "status": "PASS",
+      "detail": "policies=default,nexaroute-accept ttl_seconds=827 renewable=true",
+      "duration_ms": 103
+    },
+    {
+      "id": "vault.ref_preflight",
+      "kind": "kv",
+      "selected": true,
+      "status": "PASS",
+      "detail": "selected path is empty",
+      "duration_ms": 33
+    },
+    {
+      "id": "vault.kv_put_get",
+      "kind": "kv",
+      "selected": true,
+      "status": "PASS",
+      "detail": "helper put/get returned byte-identical 32-byte key material (bytes not logged)",
+      "duration_ms": 1252
+    },
+    {
+      "id": "vault.gateway_decrypt",
+      "kind": "kv",
+      "selected": true,
+      "status": "PASS",
+      "detail": "nxs1 envelope encrypt/decrypt succeeded with the Vault-held key and failed closed with a different key; plaintext and key bytes were not logged"
+    },
+    {
+      "id": "vault.kv_rotation",
+      "kind": "kv",
+      "selected": true,
+      "status": "PASS",
+      "detail": "KV entry was replaced with a new 32-byte key and the new key was read back (bytes not logged)",
+      "duration_ms": 1421
+    },
+    {
+      "id": "vault.wrong_token",
+      "kind": "fail-closed",
+      "selected": true,
+      "status": "PASS",
+      "detail": "invalid token produced a nonzero helper exit and empty stdout",
+      "duration_ms": 668
+    },
+    {
+      "id": "vault.revoked_token",
+      "kind": "fail-closed",
+      "selected": true,
+      "status": "PASS",
+      "detail": "disposable child token was revoked, then produced a nonzero helper exit and empty stdout",
+      "duration_ms": 1304
+    },
+    {
+      "id": "vault.outage_fail_closed",
+      "kind": "fail-closed",
+      "selected": true,
+      "status": "PASS",
+      "detail": "deliberately unreachable endpoint produced a nonzero helper exit and empty stdout; no fallback key source was used",
+      "duration_ms": 88
+    },
+    {
+      "id": "vault.cleanup",
+      "kind": "kv",
+      "selected": true,
+      "status": "PASS",
+      "detail": "acceptance key metadata was deleted from the dedicated path",
+      "duration_ms": 38
+    }
+  ],
+  "totals": {
+    "checks": 12,
+    "passed": 10,
+    "failed": 0,
+    "blocked": 0,
+    "not_run": 2
+  },
+  "limitations": [
+    "This harness verifies Vault KV v2 custody only. Vault Transit envelope mode is NOT implemented and is not tested.",
+    "Real Vault HA failover, long-running token renewal, and auth methods other than a static token are NOT exercised by this run.",
+    "This harness does not start a full gateway process; it verifies helper key load and the nxs1 decrypt path with that key.",
+    "Dev-mode Vault is never production evidence; evidence_class=dev is reported for explicit --allow-dev runs.",
+    "Reports contain no token values or key bytes; they record only statuses, redacted endpoints, policy names, and topology metadata."
+  ]
+}
