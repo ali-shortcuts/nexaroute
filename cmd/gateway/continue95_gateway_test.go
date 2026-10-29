@@ -1045,6 +1045,21 @@ func TestContinue95GatewayDispatchAndMainHelpers(t *testing.T) {
 	}
 }
 
+func TestContinue95GatewayInitNilStdinFailsClosed(t *testing.T) {
+	// Regression for the CI-only panic: runInit with a nil stdin reader
+	// panicked in bufio on the first prompt when no default config
+	// existed yet (a local run with an existing config returned early
+	// and never touched stdin, hiding it). Nil stdin must fail closed
+	// with an error, never panic and never write a config.
+	var out, errBuf bytes.Buffer
+	if code := runInit([]string{}, nil, &out, &errBuf); code != initExitError {
+		t.Fatalf("runInit nil stdin: code=%d, want %d (stderr=%q)", code, initExitError, errBuf.String())
+	}
+	if !strings.Contains(errBuf.String(), "stdin is required") {
+		t.Fatalf("runInit nil stdin stderr=%q, want stdin-required message", errBuf.String())
+	}
+}
+
 func TestContinue95GatewayMainAlreadyRunning(t *testing.T) {
 	// Hold the gateway lock, then run main(): it must take the
 	// already-running branch (dashboardURL + openExistingUI) and return

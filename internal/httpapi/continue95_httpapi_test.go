@@ -194,21 +194,28 @@ func TestContinue95HttpapiGeminiAuthRequestForms(t *testing.T) {
 	if got := geminiAuthRequest(req3).Header.Get("x-api-key"); got != "spaced-key" {
 		t.Fatalf("trimmed key = %q, want spaced-key", got)
 	}
-	// Existing x-api-key / Authorization forms pass through untouched.
-	req4 := httptest.NewRequest(http.MethodPost, "http://gateway/v1beta/models/m:generateContent?key=ignored", nil)
+	// Existing x-api-key wins authentication, but a ?key= query is
+	// still stripped: the merged security contract is that a query key
+	// must never survive into a URL that logs may record, even when a
+	// header key is present. (An earlier version of this test asserted
+	// the opposite passthrough; that expectation is stale and was
+	// corrected here, not the security behavior.)
+	req4 := httptest.NewRequest(http.MethodPost, "http://gateway/v1beta/models/m:generateContent?key=ignored&alt=sse", nil)
 	req4.Header.Set("x-api-key", "already-there")
-	if got := geminiAuthRequest(req4); got.Header.Get("x-api-key") != "already-there" || !strings.Contains(got.URL.String(), "key=ignored") {
-		t.Fatalf("x-api-key passthrough changed the request: header=%q url=%s", got.Header.Get("x-api-key"), got.URL.String())
+	if got := geminiAuthRequest(req4); got.Header.Get("x-api-key") != "already-there" || strings.Contains(got.URL.String(), "key=ignored") || got.URL.Query().Get("alt") != "sse" {
+		t.Fatalf("x-api-key + ?key=: header=%q url=%s, want header kept, ?key= stripped, other params kept", got.Header.Get("x-api-key"), got.URL.String())
 	}
 	req5 := httptest.NewRequest(http.MethodPost, "http://gateway/v1beta/models/m:generateContent", nil)
 	req5.Header.Set("Authorization", "Bearer bearer-key")
 	if got := geminiAuthRequest(req5); got.Header.Get("x-api-key") != "" {
 		t.Fatalf("Authorization passthrough must not synthesize x-api-key, got %q", got.Header.Get("x-api-key"))
 	}
-	// No key anywhere: request returned unchanged.
+	// No key anywhere: no header is synthesized and the URL is
+	// unchanged. (Pointer identity is not part of the contract: the
+	// function may return a copy with identical headers and URL.)
 	req6 := httptest.NewRequest(http.MethodPost, "http://gateway/v1beta/models/m:generateContent", nil)
-	if got := geminiAuthRequest(req6); got != req6 {
-		t.Fatalf("keyless request must be returned as-is")
+	if got := geminiAuthRequest(req6); got.Header.Get("x-api-key") != "" || got.URL.String() != req6.URL.String() {
+		t.Fatalf("keyless request changed: header=%q url=%s", got.Header.Get("x-api-key"), got.URL.String())
 	}
 }
 
