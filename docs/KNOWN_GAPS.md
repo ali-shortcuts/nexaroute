@@ -244,11 +244,7 @@ PR #224 wires the permission matrix in `internal/authz` to every registered
 Admin API route/method and denies unknown combinations. OIDC session roles are
 derived only from verified issuer claims using the explicit config allowlist.
 The web UI's visibility is a convenience only; the server middleware is
-authoritative. The local bbolt store is single-host. The **85% repository-wide coverage
-target is not currently met**: the fresh uncached coverage artifact for
-`main` commit `c7867355c6d5f9773dd185e19c3ab5e689aa6577` measured
-**84.9%** on 2026-10-25 (Go 1.27.3). The earlier 85.1% result from
-2026-10-22 is historical and is superseded by this newer measurement.
+authoritative. The local bbolt store is single-host. The **95% repository-wide Go statement-coverage target is not currently met**. The explicitly selected comparison baseline for issue #663 is **91.8% (41,782 / 45,515 statements)** on commit `ba5ff2f5f0ace8953e7c4f0e4913de5105e7a13f` (Go 1.27.0; see the pre-change measurement documented in [PR #724](https://github.com/ali-shortcuts/nexaroute/pull/724)). This is a historical comparison baseline, not a verified measurement of current `main`. The fresh uncached coverage run on current `main` commit `39a7498f5dd8e9f7ad4e06633b1c42d1a7365200` failed in `internal/httpapi/TestWave3ResponsesDeadline504` (observed 502; expected 504). Its diagnostic artifact was uploaded, but the failed run is not valid coverage sign-off. Re-run the canonical measurement after the failure is understood/fixed. The former 84.9%/85% figures are historical and superseded.
 PR #224 is merged; live external-IdP interoperability remains unverified.
 
 
@@ -443,36 +439,57 @@ non-critical nodes no longer abort unrelated sections.
 
 - Evidence: `go test ./...` plus `node --test internal/httpapi/web/dom_isolation.test.mjs`.
 
-### Package coverage gaps and targets — current target NOT MET
+### Package coverage gaps and targets — 95% target NOT MET
 
-The canonical uncached measurement from `coverage-report.yml` on
-`main` commit `c7867355c6d5f9773dd185e19c3ab5e689aa6577` completed
-on 2026-10-25 with Go 1.27.3. Its retained artifact reports **84.9%
-repository statement coverage**, below the 85% policy target. The
-workflow succeeded in producing the measurement; that is not evidence
-that the coverage threshold passed. This result supersedes the older
-85.1% measurement from 2026-10-22.
+Issue #663 is authorized to start from current main after checking and re-scoping
+around the focused work already merged. Its explicit comparison baseline is
+commit `ba5ff2f5f0ace8953e7c4f0e4913de5105e7a13f` (Go 1.27.0): **91.8%
+repository statement coverage (41,782 / 45,515 statements)**, measured with
+the canonical uncached command `go test -count=1 -coverprofile=.artifacts/coverage/coverage.out ./...`.
+The measurement and its run-to-run caveat are recorded in [PR #724](https://github.com/ali-shortcuts/nexaroute/pull/724).
+This comparison baseline predates PR #724 and later changes to main; it must
+not be presented as the current-main aggregate.
 
-Current package coverage from the same artifact:
+A fresh run on current main commit
+`39a7498f5dd8e9f7ad4e06633b1c42d1a7365200` (GitHub Actions run
+[40848476783](https://github.com/ali-shortcuts/nexaroute/actions/runs/40848476783))
+did **not** pass: `internal/httpapi/TestWave3ResponsesDeadline504` observed
+HTTP 502 where the test expected 504. GitHub uploaded a diagnostic artifact
+despite the failure. Until this test failure is understood/fixed and the
+canonical run completes successfully, the aggregate coverage for this current
+main commit is **unverified**. Do not use the failed run as acceptance evidence.
 
-- `cmd/gateway`: 81.0%
-- `internal/video/cost`: 47.3%
-- `internal/video/queue`: 61.5%
-- `internal/video/runtime`: 63.8%
-- `internal/video/providers`: 67.6%
-- `internal/providers`: 83.6%
-- `internal/video/render`: 92.1% (the deterministic renderer tests in
-  PR #659 materially improved this package)
-- `internal/video/tts`: 86.9%
-- `internal/video/orchestrator`: 85.2%
-- `cmd/videogen`: 94.9%
-- `internal/taskprofile`: 99.6%
+Package-level diagnostics from that failed run (prioritization only; not
+release/sign-off evidence):
+
+- `internal/breakersync`: 70.9%
+- `internal/nexaflow`: 71.0%
+- `internal/secrets`: 77.3%
+- `internal/qualitygate`: 80.1%
+- `internal/telemetry`: 81.4%
+- `internal/logging`: 81.8%
+- `cmd/gateway`: 84.8%
+- `internal/desktop`: 85.7%
+- `internal/budget`: 85.9%
+- `internal/providers/livecanary`: 86.0%
+- `internal/evallive`: 87.0%
+- `internal/video/storage`: 87.0%
+- `internal/video/tts`: 88.9%
+- `internal/cache`: 89.3%
+- `internal/scorecards`: 89.6%
+
+Focused results from merged PR #724 are meaningful but do not satisfy the
+repository-wide goal: `internal/video/cost` measured **96.6% (288/298)** and
+`internal/video/queue` **98.1% (370/377)** on that PR's verification head.
+Audit the new baseline/current-main artifact package by package, add meaningful
+behavior assertions, and do not pad coverage, exclude production packages, or
+lower the 95% target.
 
 Historical audit-record note (2026-10-15, superseded — not current
 measurements): the earlier thin-package list recorded `internal/compat`
-86.6% and `internal/core` 100.0%, among others. These figures are
-retained only so the F15 audit record stays complete; the current
-measurements above supersede them and must be used for any sign-off.
+86.6% and `internal/core` 100.0%, among others. These figures are retained only so the F15 audit record stays complete.
+The package-level numbers above are diagnostics from a failed run and must
+not be used for release sign-off.
 
 The low coverage in `internal/video/cost` and `internal/video/queue`
 is chiefly concentrated in the PostgreSQL adapter code, whose real
@@ -484,8 +501,9 @@ Coverage must be raised with meaningful behavior tests or a reviewed,
 clearly defined measurement-policy change; assertion-free padding or
 excluding production code to make the percentage pass is not acceptable.
 
-The 2026-10-25 artifact is retained by GitHub Actions:
-`coverage-c7867355c6d5f9773dd185e19c3ab5e689aa6577-40196054365`.
+The 2026-10-25 artifact is historical and retained by GitHub Actions:
+`coverage-c7867355c6d5f9773dd185e19c3ab5e689aa6577-40196054365`. The failed
+2026-10-29 current-main diagnostic artifact is [coverage-39a7498f5dd8e9f7ad4e06633b1c42d1a7365200-40848476783](https://github.com/ali-shortcuts/nexaroute/actions/runs/40848476783/artifacts/12885399833); it is not a passing aggregate measurement.
 The canonical measurement command is:
 `go test -count=1 -coverprofile=.artifacts/coverage/coverage.out ./...`.
 
