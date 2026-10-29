@@ -14,11 +14,11 @@ import (
 // for POST in adminPermissionForRequest); no workflow.* permission is
 // invented here and no tenant value is ever read from a request.
 
-// adminNexaflowTemplateByID serves POST
+// adminNexaflowTemplateInstantiate serves POST
 // /admin/api/nexaflow/templates/{id}/instantiate: server-side template
 // instantiation into a saved draft. Any other shape under the
 // templates/ subtree answers 404.
-func (s *Server) adminNexaflowTemplateByID(w http.ResponseWriter, r *http.Request) {
+func (s *Server) adminNexaflowTemplateInstantiate(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.nexaflowAdmin(r); !ok {
 		errorJSON(w, http.StatusUnauthorized, "admin authentication required")
 		return

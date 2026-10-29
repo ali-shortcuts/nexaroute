@@ -1144,7 +1144,7 @@ func (s *Server) Handler() http.Handler {
 		// the by-id handler.
 		mux.HandleFunc("/admin/api/nexaflow/definitions/validate", s.adminNexaflowDefinitionValidate)
 		mux.HandleFunc("/admin/api/nexaflow/definitions/", s.adminNexaflowDefinitionByID)
-		mux.HandleFunc("/admin/api/nexaflow/templates/", s.adminNexaflowTemplateByID)
+		mux.HandleFunc("/admin/api/nexaflow/templates/{id}/instantiate", s.adminNexaflowTemplateInstantiate)
 		mux.HandleFunc("/admin/api/nexaflow/runs", s.adminNexaflowRuns)
 		mux.HandleFunc("/admin/api/nexaflow/runs/", s.adminNexaflowRunByID)
 		mux.HandleFunc("/admin/api/nexaflow/audit", s.adminNexaflowAudit)
