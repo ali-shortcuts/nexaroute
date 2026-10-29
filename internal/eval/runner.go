@@ -39,6 +39,11 @@ type StreamResult struct {
 	Terminated bool   `json:"terminated"`
 	Events     int    `json:"events"`
 	Error      string `json:"error,omitempty"`
+	// Cancelled records that the stream ended because the caller cancelled
+	// it, rather than because it completed or failed. It is the only field
+	// the cancellation_clean evaluator reads, so a cancelled stream that
+	// also reports an error is not graded clean.
+	Cancelled bool `json:"cancelled,omitempty"`
 }
 
 // Outcome is one recorded model behavior. It is *evidence*, not a prompt: it is
@@ -61,7 +66,15 @@ type Outcome struct {
 	OutputTokens int             `json:"output_tokens,omitempty"`
 	PromptTokens int             `json:"prompt_tokens,omitempty"`
 	ErrorType    string          `json:"error_type,omitempty"`
+	// Turns holds a recorded multi-turn conversation in order. Only the
+	// final turn is ever graded, and turns are never copied into a
+	// CaseResult, a scorecard or a report, so conversation content
+	// cannot leak through the evaluation surface.
+	Turns []string `json:"turns,omitempty"`
 }
+
+// MaxTurnsPerOutcome bounds a recorded conversation.
+const MaxTurnsPerOutcome = 64
 
 // Validate bounds one artifact.
 func (o Outcome) Validate() error {
@@ -93,6 +106,17 @@ func (o Outcome) Validate() error {
 	}
 	if o.LatencyMS < 0 || o.TTFTMS < 0 {
 		return fmt.Errorf("artifact %q has negative timing", o.CaseID)
+	}
+	if len(o.Turns) > MaxTurnsPerOutcome {
+		return fmt.Errorf("artifact %q exceeds %d turns", o.CaseID, MaxTurnsPerOutcome)
+	}
+	for _, turn := range o.Turns {
+		if len(turn) > MaxOutputBytes {
+			return fmt.Errorf("artifact %q turn exceeds safe limit", o.CaseID)
+		}
+	}
+	if o.Stream != nil && o.Stream.Events < 0 {
+		return fmt.Errorf("artifact %q has negative stream event count", o.CaseID)
 	}
 	return nil
 }
@@ -206,6 +230,7 @@ type CaseResult struct {
 	Weight     float64         `json:"weight"`
 	Verdicts   []VerdictResult `json:"verdicts,omitempty"`
 	LatencyMS  int64           `json:"latency_ms,omitempty"`
+	TTFTMS     int64           `json:"ttft_ms,omitempty"`
 	ErrorType  string          `json:"error_type,omitempty"`
 }
 
@@ -275,7 +300,7 @@ func (r Result) Validate() error {
 		if strings.TrimSpace(cr.CaseID) == "" || len(cr.CaseID) > 256 || len(cr.ErrorType) > MaxReasonBytes || len(cr.Resolution) > 64 {
 			return errors.New("evaluation case result exceeds safe limit")
 		}
-		if !cr.Verdict.Valid() || cr.LatencyMS < 0 || math.IsNaN(cr.Weight) || math.IsInf(cr.Weight, 0) || cr.Weight < 0 {
+		if !cr.Verdict.Valid() || cr.LatencyMS < 0 || cr.TTFTMS < 0 || math.IsNaN(cr.Weight) || math.IsInf(cr.Weight, 0) || cr.Weight < 0 {
 			return errors.New("evaluation case result is invalid")
 		}
 		if len(cr.Verdicts) > MaxVerdictsPerCase {
@@ -414,6 +439,7 @@ func (r *Runner) RunWithSuite(ctx context.Context, req Request, suite Suite, exe
 	}
 
 	var latencies []float64
+	var ttfts []float64
 	statusSamples, okSamples := 0, 0
 	for _, c := range suite.Cases {
 		if err := ctx.Err(); err != nil {
@@ -463,6 +489,9 @@ func (r *Runner) RunWithSuite(ctx context.Context, req Request, suite Suite, exe
 			if outcome.LatencyMS > 0 {
 				latencies = append(latencies, float64(outcome.LatencyMS))
 			}
+			if outcome.TTFTMS > 0 {
+				ttfts = append(ttfts, float64(outcome.TTFTMS))
+			}
 			if outcome.Status != "" {
 				statusSamples++
 				if outcome.Status == OutcomeOK {
@@ -496,6 +525,7 @@ func (r *Runner) RunWithSuite(ctx context.Context, req Request, suite Suite, exe
 			cr.Resolution = resolution
 			cr.Verdicts = verdicts
 			cr.LatencyMS = outcome.LatencyMS
+			cr.TTFTMS = outcome.TTFTMS
 			cr.ErrorType = outcome.ErrorType
 			return cr
 		}()
@@ -563,6 +593,20 @@ func (r *Runner) RunWithSuite(ctx context.Context, req Request, suite Suite, exe
 				Raw:        p95,
 				Samples:    len(latencies),
 				Confidence: scorecards.ConfidenceFromSamples(len(latencies)),
+			})
+		}
+	}
+	// TTFT follows the same rule as latency: it is scored only against an
+	// operator-supplied target, and omitted when no target exists.
+	if len(ttfts) >= suite.MinSamples {
+		p95 := percentile(ttfts, 0.95)
+		if req.TTFTTargetMS > 0 {
+			res.Extra = append(res.Extra, DimensionScore{
+				Dimension:  scorecards.DimTTFTMS,
+				Score:      clamp01(1 - p95/req.TTFTTargetMS),
+				Raw:        p95,
+				Samples:    len(ttfts),
+				Confidence: scorecards.ConfidenceFromSamples(len(ttfts)),
 			})
 		}
 	}

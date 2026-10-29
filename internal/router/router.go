@@ -104,6 +104,19 @@ type Scored struct {
 	CapacityPressure float64      `json:"capacity_pressure,omitempty"`
 	EstimatedCostUSD float64      `json:"estimated_cost_usd,omitempty"`
 	PriceKnown       bool         `json:"price_known,omitempty"`
+	// ScoreBreakdown decomposes Score into the exact terms scored()
+	// adds, so an explanation can say *why* a candidate won instead of
+	// only reporting the total. Score == ScoreBase + HealthAdjustment +
+	// WeightContribution - PriorityPenalty - LatencyPenalty -
+	// CapacityPenalty - FailurePenalty. The breakdown is computed once,
+	// inside scored(), so it can never drift from the ordering.
+	ScoreBase          float64 `json:"score_base,omitempty"`
+	HealthAdjustment   float64 `json:"health_adjustment,omitempty"`
+	WeightContribution float64 `json:"weight_contribution,omitempty"`
+	PriorityPenalty    float64 `json:"priority_penalty,omitempty"`
+	LatencyPenalty     float64 `json:"latency_penalty,omitempty"`
+	CapacityPenalty    float64 `json:"capacity_penalty,omitempty"`
+	FailurePenalty     float64 `json:"failure_penalty,omitempty"`
 }
 
 type sessionPin struct {
@@ -270,26 +283,56 @@ func capacityPressure(l ProviderLoad) float64 {
 }
 
 func (r *Router) scored(d Deployment, hs health.State, req Requirement, cfg config.Config) Scored {
-	score := 100.0
+	var healthAdj float64
 	switch hs.Status {
 	case health.Healthy:
-		score += 35
+		healthAdj = 35
 	case health.Unknown:
-		score += 10
+		healthAdj = 10
 	case health.HalfOpen:
-		score -= 10
+		healthAdj = -10
 	case health.Degraded:
-		score -= 20
+		healthAdj = -20
 	}
 	load := req.ProviderLoad[d.ProviderID]
 	if req.LoadForProvider != nil {
 		load = req.LoadForProvider(d.ProviderID)
 	}
 	pressure := capacityPressure(load)
-	score += d.Weight*10 - float64(d.Priority)*3 - hs.EWMALatencyMS*cfg.Routing.LatencyWeight - pressure*cfg.Routing.CapacityWeight
-	score -= hs.EWMAFailureRate * cfg.Routing.FailureWeight
+	weightContrib := d.Weight * 10
+	priorityPenalty := float64(d.Priority) * 3
+	latencyPenalty := hs.EWMALatencyMS * cfg.Routing.LatencyWeight
+	capacityPenalty := pressure * cfg.Routing.CapacityWeight
+	failurePenalty := hs.EWMAFailureRate * cfg.Routing.FailureWeight
+	score := 100.0 + healthAdj + weightContrib - priorityPenalty - latencyPenalty - capacityPenalty - failurePenalty
 	cost, priceKnown := estimatedRequestCost(d, req)
-	return Scored{Deployment: d, Health: hs, Score: score, CapacityPressure: pressure, EstimatedCostUSD: cost, PriceKnown: priceKnown}
+	return Scored{Deployment: d, Health: hs, Score: score, CapacityPressure: pressure, EstimatedCostUSD: cost, PriceKnown: priceKnown,
+		ScoreBase: 100, HealthAdjustment: healthAdj, WeightContribution: weightContrib, PriorityPenalty: priorityPenalty,
+		LatencyPenalty: latencyPenalty, CapacityPenalty: capacityPenalty, FailurePenalty: failurePenalty}
+}
+
+// simulatedRotationOffset derives a deterministic rotation offset from
+// the requirement's own keys, never from the live round-robin counter.
+// The same keys always simulate the same pick; with neither a key nor
+// a model the offset is 0, i.e. the simulation shows the head of the
+// window rather than predicting which slot live rotation will land on
+// next.
+func simulatedRotationOffset(req Requirement, window int) int {
+	if window <= 1 {
+		return 0
+	}
+	key := req.SelectionKey
+	if key == "" {
+		key = req.SessionKey
+	}
+	if key == "" && req.Model == "" {
+		return 0
+	}
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(key))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(req.Model))
+	return int(h.Sum64() % uint64(window)) // #nosec G115 -- modulo result is strictly less than window.
 }
 
 func (r *Router) eligibleDeployment(d Deployment, req Requirement, cfg config.Config, ignoreModel bool, scopes []string) (Scored, bool) {
@@ -635,7 +678,7 @@ func (r *Router) orderCostAware(out []Scored, req Requirement, cfg config.Config
 	diversifyProviderFailover(out, 1, cfg.Routing.MaxAttempts)
 }
 
-func (r *Router) orderReadyMesh(out []Scored, req Requirement, cfg config.Config) {
+func (r *Router) orderReadyMesh(out []Scored, req Requirement, cfg config.Config, simulated bool) {
 	sort.SliceStable(out, func(i, j int) bool {
 		if out[i].Deployment.Priority != out[j].Deployment.Priority {
 			return out[i].Deployment.Priority < out[j].Deployment.Priority
@@ -679,7 +722,12 @@ func (r *Router) orderReadyMesh(out []Scored, req Requirement, cfg config.Config
 	if key == "" {
 		key = req.SessionKey
 	}
-	if key == "" {
+	if key == "" && !simulated {
+		// Live traffic rotates the P2C window on every unkeyed
+		// request. A simulation must never consume that counter:
+		// with no key it hashes the empty key instead, which is
+		// deterministic but explicitly NOT a prediction of the
+		// next live pick (see Explanation.RotationPredictive).
 		key = strconv.FormatUint(r.rr.Add(1), 10)
 	}
 	a := hashIndex(key, 'a', window)
@@ -732,9 +780,27 @@ func (r *Router) Candidates(req Requirement) []Scored {
 // (Router.Explain / admin route preview) observe exactly the ordering the data
 // plane uses — never a second, drifting copy.
 func (r *Router) applyStrategy(out []Scored, req Requirement, cfg config.Config) {
+	r.applyStrategyMode(out, req, cfg, false)
+}
+
+// applyStrategySimulated is the ordering Explain uses: identical
+// strategy code, but rotation comes from the requirement's own keys
+// instead of the live round-robin counter, so a simulation can never
+// advance real traffic's rotation.
+func (r *Router) applyStrategySimulated(out []Scored, req Requirement, cfg config.Config) {
+	r.applyStrategyMode(out, req, cfg, true)
+}
+
+func (r *Router) applyStrategyMode(out []Scored, req Requirement, cfg config.Config, simulated bool) {
+	rotation := func(window int) int {
+		if simulated {
+			return simulatedRotationOffset(req, window)
+		}
+		return int((r.rr.Add(1) - 1) % uint64(window)) // #nosec G115 -- the modulo result is strictly less than window, the bounded rotation window size.
+	}
 	switch cfg.Routing.Strategy {
 	case "ready_mesh":
-		r.orderReadyMesh(out, req, cfg)
+		r.orderReadyMesh(out, req, cfg, simulated)
 	case "cost_aware":
 		r.orderCostAware(out, req, cfg)
 	case "ready_queue":
@@ -790,7 +856,7 @@ func (r *Router) applyStrategy(out []Scored, req Requirement, cfg config.Config)
 			w++
 		}
 		if w > 1 {
-			off := int((r.rr.Add(1) - 1) % uint64(w)) // #nosec G115 -- the modulo result is strictly less than w, the bounded rotation window size.
+			off := rotation(w)
 			rot := append([]Scored(nil), out[:w]...)
 			for i := 0; i < w; i++ {
 				out[i] = rot[(i+off)%w]
@@ -810,7 +876,7 @@ func (r *Router) applyStrategy(out []Scored, req Requirement, cfg config.Config)
 			w++
 		}
 		if w > 1 {
-			off := int((r.rr.Add(1) - 1) % uint64(w)) // #nosec G115 -- the modulo result is strictly less than w, the bounded rotation window size.
+			off := rotation(w)
 			rot := append([]Scored(nil), out[:w]...)
 			for i := 0; i < w; i++ {
 				out[i] = rot[(i+off)%w]

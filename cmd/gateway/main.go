@@ -84,6 +84,8 @@ func dispatchSubcommand(args []string, stdin io.Reader, stdout, stderr io.Writer
 		return runProviderAccept(rest, stdout, stderr), true
 	case "external-accept":
 		return runExternalAccept(rest, stdout, stderr), true
+	case "vault-accept":
+		return runVaultAccept(rest, stdout, stderr), true
 	case "comfyui-accept":
 		return runComfyUIAccept(rest, stdout, stderr), true
 	case "backup":
@@ -98,6 +100,8 @@ func dispatchSubcommand(args []string, stdin io.Reader, stdout, stderr io.Writer
 		return 0, true
 	case "conformance":
 		return runConformance(rest, stdout, stderr), true
+	case "quality-gate":
+		return runQualityGate(rest, stdout, stderr), true
 	}
 	return 0, false
 }

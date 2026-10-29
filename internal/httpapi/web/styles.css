@@ -190,7 +190,7 @@ button.metric-card:hover,button.metric-card:focus-visible{border-color:var(--lin
 .elig-warnings{display:grid;gap:6px;margin:0 18px 14px;padding:11px 13px;border:1px solid color-mix(in srgb,var(--warn) 35%,transparent);border-radius:10px;background:color-mix(in srgb,var(--warn) 8%,transparent)}
 .elig-warnings b{color:var(--warn);font-size:10px;text-transform:uppercase;letter-spacing:.06em}
 .elig-warnings span{color:var(--muted);font-size:11px}
-@media(max-width:700px){.elig-grid{grid-template-columns:1fr}.eligibility-panel summary{flex-direction:column}.eligibility-panel summary small{max-width:none;text-align:left}}
+@media(max-width:700px){.elig-grid{grid-template-columns:1fr}.eligibility-panel summary{flex-direction:column}.eligibility-panel summary small{max-width:none;text-align:left}.eligibility-panel .tile-actions{flex-wrap:wrap}.eligibility-panel .field{min-width:0}}
 
 /* Phase 7 remainder (issue #399): status taxonomy legend, unified model
    inventory and the per-request decision timeline. */
