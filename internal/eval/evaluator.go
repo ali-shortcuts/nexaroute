@@ -215,7 +215,70 @@ func toolCallEvaluator() Evaluator {
 			if o.ToolCall.Name != c.Expectation.ToolName {
 				return VerdictFail, "tool call name mismatch"
 			}
+			// A recorded tool call with non-JSON arguments is not a
+			// well-formed tool invocation, even when the name matches.
+			// Empty arguments stay valid: some tools take no arguments.
+			if strings.TrimSpace(o.ToolCall.Arguments) != "" {
+				var v any
+				if err := json.Unmarshal([]byte(o.ToolCall.Arguments), &v); err != nil {
+					return VerdictFail, "tool call arguments are not valid JSON"
+				}
+			}
 			return VerdictPass, "expected tool call observed"
+		},
+	}
+}
+
+func multiTurnFinalEvaluator() Evaluator {
+	return &fnEvaluator{
+		id: "multi_turn_final", kind: KindDeterministic,
+		supports: func(k string) bool { return k == ExpectMultiTurnFinal },
+		fn: func(c Case, o Outcome) (Verdict, string) {
+			if len(o.Turns) == 0 {
+				return VerdictFail, "no conversation turns recorded"
+			}
+			if strings.TrimSpace(o.Turns[len(o.Turns)-1]) == strings.TrimSpace(c.Expectation.Expected) {
+				return VerdictPass, "final turn matches expected value"
+			}
+			return VerdictFail, "final turn does not match expected value"
+		},
+	}
+}
+
+func streamEventsEvaluator() Evaluator {
+	return &fnEvaluator{
+		id: "stream_events", kind: KindDeterministic,
+		supports: func(k string) bool { return k == ExpectStreamEvents },
+		fn: func(c Case, o Outcome) (Verdict, string) {
+			if o.Stream == nil {
+				return VerdictFail, "no stream result recorded"
+			}
+			if !o.Stream.Terminated {
+				return VerdictFail, "stream did not terminate"
+			}
+			if o.Stream.Events < c.Expectation.MinEvents {
+				return VerdictFail, "stream delivered too few events"
+			}
+			return VerdictPass, "stream delivered enough events and terminated"
+		},
+	}
+}
+
+func cancellationCleanEvaluator() Evaluator {
+	return &fnEvaluator{
+		id: "cancellation_clean", kind: KindDeterministic,
+		supports: func(k string) bool { return k == ExpectCancellationClean },
+		fn: func(_ Case, o Outcome) (Verdict, string) {
+			if o.Stream == nil {
+				return VerdictFail, "no stream result recorded"
+			}
+			if !o.Stream.Cancelled {
+				return VerdictFail, "no cancellation recorded"
+			}
+			if o.Stream.Error != "" {
+				return VerdictFail, "cancellation ended with error"
+			}
+			return VerdictPass, "cancellation recorded cleanly"
 		},
 	}
 }
@@ -365,6 +428,9 @@ func NewRegistry() *Registry {
 		unitTestsEvaluator(),
 		numericToleranceEvaluator(),
 		streamTerminatedEvaluator(),
+		multiTurnFinalEvaluator(),
+		streamEventsEvaluator(),
+		cancellationCleanEvaluator(),
 	} {
 		_ = r.Register(e)
 	}

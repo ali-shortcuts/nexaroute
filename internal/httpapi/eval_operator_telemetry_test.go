@@ -64,8 +64,8 @@ func TestOperatorSuites_LoadListAndRun(t *testing.T) {
 	s := testGateway(t, phaseHConfigWithSuites(t, pack))
 
 	ids := suiteIDs(t, s)
-	if len(ids) != 9 {
-		t.Fatalf("suite catalog = %v, want 8 built-ins + 1 operator", ids)
+	if len(ids) != 12 {
+		t.Fatalf("suite catalog = %v, want 11 built-ins + 1 operator", ids)
 	}
 	found := false
 	for _, id := range ids {
@@ -106,7 +106,7 @@ func TestOperatorSuites_MalformedRejectedAtomically(t *testing.T) {
 	}
 	cfg := phaseHConfigWithSuites(t, good)
 	s := testGateway(t, cfg)
-	if len(suiteIDs(t, s)) != 9 {
+	if len(suiteIDs(t, s)) != 12 {
 		t.Fatal("valid pack did not load")
 	}
 
@@ -124,7 +124,7 @@ func TestOperatorSuites_MalformedRejectedAtomically(t *testing.T) {
 		t.Fatal("malformed pack must surface a suites_error")
 	}
 	// Previously loaded operator suite is retained (no partial replacement).
-	if len(suiteIDs(t, s)) != 9 {
+	if len(suiteIDs(t, s)) != 12 {
 		t.Fatalf("rejected reload changed the catalog: %s", rr.Body.String())
 	}
 	// Built-ins still run after a rejected reload.

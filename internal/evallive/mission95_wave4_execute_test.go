@@ -3,6 +3,7 @@ package evallive
 import (
 	"context"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -42,7 +43,10 @@ func TestWave4ExecuteNonIsolatedAdapterIsExecutorError(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "not evaluation-isolated") {
 		t.Fatalf("err = %v, want the evaluation-isolation refusal", err)
 	}
-	if out != (eval.Outcome{}) {
+	// eval.Outcome now carries Turns []string, so a struct comparison
+	// does not compile; DeepEqual against the zero value preserves the
+	// original "zero outcome on executor failure" assertion exactly.
+	if !reflect.DeepEqual(out, eval.Outcome{}) {
 		t.Fatalf("out = %+v, want zero outcome on executor failure", out)
 	}
 	if exec.Calls() != 1 || exec.Failures() != 0 {

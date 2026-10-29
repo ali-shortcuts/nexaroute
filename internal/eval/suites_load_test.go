@@ -98,8 +98,12 @@ func TestOperatorPack_BuiltinCollisionRejected(t *testing.T) {
 
 func TestOperatorPack_BuiltinCatalogUnchanged(t *testing.T) {
 	before := Catalog()
-	if len(before) != 8 {
-		t.Fatalf("built-in catalog size changed: %d", len(before))
+	// The catalog must list exactly the built-in suites: an operator
+	// pack must never leak into it. The count follows builtinSuites
+	// itself, so adding a versioned built-in suite updates the catalog
+	// intentionally, without changing what this test guards.
+	if len(before) != len(builtinSuites()) {
+		t.Fatalf("built-in catalog size changed: %d, built-ins %d", len(before), len(builtinSuites()))
 	}
 	for _, e := range before {
 		if e.Source != "" && e.Source != "builtin" {

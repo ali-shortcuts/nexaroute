@@ -98,6 +98,8 @@ func dispatchSubcommand(args []string, stdin io.Reader, stdout, stderr io.Writer
 		return 0, true
 	case "conformance":
 		return runConformance(rest, stdout, stderr), true
+	case "quality-gate":
+		return runQualityGate(rest, stdout, stderr), true
 	}
 	return 0, false
 }
