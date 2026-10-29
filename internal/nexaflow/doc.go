@@ -1,14 +1,18 @@
 // Package nexaflow is an engine-agnostic adapter registry for NexaFlow.
 //
 // HONESTY NOTICE — READ FIRST: as of main e6c3cdf there is no approved
-// NexaFlow registry, runtime, editor, HTTP API, or UI in this repository,
-// and no open NexaFlow pull request. The three earlier NexaFlow chats
-// produced briefs only. This package therefore introduces the adapter
-// registry itself as a new package, internal/nexaflow, and NOTHING ELSE.
-// It does not claim runtime execution, HTTP API wiring, or UI integration.
-// Wiring a workflow runtime, an HTTP surface, or an editor on top of this
-// registry is an explicit follow-up, and the httpapi Server fields are
-// unexported, so server-side wiring must land in package httpapi itself.
+// NexaFlow registry, runtime, editor, HTTP API, or UI in this repository.
+// This package introduces the adapter registry itself as a new package,
+// internal/nexaflow, on the branch that carries it (PR #675, unmerged
+// at the time of writing); the Phase 1 foundation work (the workflow
+// definition contract in workflow.go, ADR 0008, and the architecture
+// document) is layered on the same branch. Phase 2 adds the durable
+// execution engine and stores in this same package (engine.go,
+// store.go, postgres_store.go; see docs/nexaflow/RUNTIME.md). It still
+// does not claim HTTP API wiring or UI integration. Wiring an HTTP
+// surface or an editor on top of this runtime is an explicit
+// follow-up, and the httpapi Server fields are unexported, so
+// server-side wiring must land in package httpapi itself.
 //
 // What this package does: it adapts existing, verified NexaRoute
 // capabilities behind a versioned node registry. Every node declares a
@@ -31,9 +35,11 @@
 // docs/nexaflow-node-adapters.md ("Phase 7 security findings matrix").
 //
 // Explicitly NOT implemented here:
-//   - a workflow runtime (scheduling, ticking, durable pause, per-iteration
-//     execution): schedule/loop/approval nodes expose pure computations or
-//     decisions and document that execution is the runtime's job;
+//   - ticking/scheduler execution and per-iteration loop driving:
+//     schedule/loop nodes expose pure computations or decisions; the
+//     Phase 2 engine executes DAGs, approvals, and recovery, but there
+//     is no scheduler daemon, no timer service, and no webhook
+//     listener yet (P1.4);
 //   - live-model evaluation: only replay of caller-supplied outcomes via
 //     eval.Runner is exposed; live scores are never fabricated;
 //   - hard-budget enforcement: budget_check only compares a snapshot
