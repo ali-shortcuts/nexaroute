@@ -227,6 +227,8 @@ gemini                Google Gemini wire format, x-goog-api-key auth
 azure_openai          Azure OpenAI (M5-1a)
 vertex                Google Vertex AI (M5-1a)
 bedrock               Amazon Bedrock Converse API, SigV4 auth (M5-1b)
+opencode-console      OpenCode Console gateway, bearer <redacted>, ingress-selected /openai|/anthropic paths
+opencode-go           OpenCode Go gateway, bearer <redacted>, ingress-selected paths + derived x-opencode-session
 ```
 
 (When the M5-1a PR also lands, this list gains `azure_openai` and `vertex`.)
@@ -246,6 +248,12 @@ A provider is generic; adding another OpenAI-compatible endpoint should normally
 
 Documented limits: one credential pair per Bedrock provider (the credential-rotation pool does not apply); `tool_choice: "none"` withholds the tools because Converse has no none mode; reasoning/thinking blocks are not encoded to Converse (model-specific); document blocks are not mapped. Prompt-cache markers (`cache_control`) on system and message content (text and tool_use/tool_result blocks) are emitted as Converse `cachePoint` checkpoints (`{"type": "default"}`, plus `"ttl": "1h"` for 1h markers) on both `/converse` and `/converse-stream`; at most 4 checkpoints per request (excess markers are dropped, content never is); per-checkpoint minimum tokens are enforced server-side by Bedrock (below-threshold prefixes still return 200, just uncached); `ttl: 1h` requires a model that supports it. No per-tool-definition checkpoint is emitted (the IR carries no such marker).
 
+**OpenCode upstream** (`opencode-console`, `opencode-go`) speaks three protocols behind one gateway base, selected by the *client ingress*, never by model id: OpenAI chat ingress → `{base}/openai/v1/chat/completions`, Responses ingress → `{base}/openai/v1/responses`, Anthropic ingress → `{base}/anthropic/v1/messages`. Console base is `https://opencode.ai/inference` (pay-as-you-go); Go base is `https://opencode.ai/inference/go` (subscription). Authentication is Bearer. Console documents a models listing at `{base}/v1/models`, so Console supports discovery; Go documents no listing endpoint, so Go discovery is unsupported and models are saved manually — the gateway never assumes a Go listing URL. There is no Zen profile: no Zen URL appears in the documented Console/Go material, so none is shipped. All opencode requests run through the canonical-IR path (never legacy passthrough), so usage, tool calls, and error envelopes follow the canonical contract; see `docs/COMPATIBILITY.md` for the fixture-verified dimensions (live opencode.ai behavior is UNVERIFIED).
+
+Go requests carry a derived `x-opencode-session` header; Console requests do not get a gateway-derived header (Console operators who want client values forwarded may list the header in `forward_headers`). The Go value is `ses_` + the first 32 hex chars of SHA-256 over the gateway session key plus a salt (`opencode_session_salt`, a non-secret operator-configurable domain separator; empty means the documented default `nexaroute-opencode-session-v1`). A client-supplied `x-opencode-session` (via `forward_headers`) is forwarded unchanged and never overwritten. With no session key, the fallback is deterministic over provider id + model + salt. The header is never derived from an API key, email, prompt text, or user id, never uses the per-request id as a session, and is never logged. Separately, credential-level session affinity pins one conversation's requests to one credential (by session hash, bounded, 1h TTL) while that credential stays healthy and eligible, falling back to normal selection otherwise; it is distinct from router deployment pinning and from the header value itself.
+
+A 403 from an opencode provider is classified as a model-entitlement denial, not a credential failure: the credential is not cooled, no other credential is tried for the same restricted model in the same request, and no deployment failover or quarantine follows. The client receives a diagnostic naming the restriction and the documented next step (use a paid model or a Go subscription, or pick a model the plan includes). The classification is status-based — no distinguishing error body is documented — so a genuinely invalid opencode key returning 403 surfaces the same diagnostic on that request; the next request re-evaluates independently and other models on the same key are not poisoned. Generic providers are unaffected: their 403 still cools the credential exactly as before.
+
 ## Provider credentials
 
 A provider may use a primary key plus additional credentials:
@@ -261,6 +269,25 @@ A provider may use a primary key plus additional credentials:
 ```
 
 Usable keys rotate. Auth/quota/rate-limit failures cool an individual credential so another key can be tried.
+
+Credential selection, in order, inside the adapter: (1) eligibility — enabled, not cooling (cooldown expiry restores a credential with no operator action; cooldown never flips `enabled` and never deletes an entry); (2) the minimum `priority` tier among available credentials (`priority` is an integer, default 0); (3) the credential-level session-affinity pin, only while that credential stays healthy and eligible; (4) the least-loaded tournament with effective load `Active/weight` (`weight` defaults to 1 when 0; a lower effective load wins, then fewer failures, then never-failed). With every priority 0 and weight 1, selection is exactly the legacy tournament. Capacity comes only from the configured provider `max_concurrency` and in-flight counts — there is no per-key soft capacity constant, and spreading load does not make quotas infinite: if total demand exceeds the sum of authorized quotas, rate limits will still be hit.
+
+Each pool entry may also carry `email` (metadata only — authentication never uses it; admin surfaces show it masked, never in full, and it never appears in logs, traces, or credential-state output). Per-credential live state (index, name, tier, weight, last status, failures, in-flight count, cooling) is exposed redacted on the provider detail response when a live adapter exists, and the provider-test, discovery, and connection-test endpoints accept `credential_index` to test exactly one pool entry (out-of-range or disabled is a 400). Replacing the primary key with `replace_key` and an empty-array
+`credentials` placeholder (what the UI sends when only the primary
+key changes) preserves the pool; a nil/omitted credentials list
+clears it and a non-empty list replaces it, per the tested
+whole-set replacement semantics. Clearing the pool requires an explicit `credential_pool` replace with empty entries. Two related
+contracts, regression-tested at the admin API: (1) `secret_source`
+on the provider detail response reports the PRIMARY credential's
+source (`literal` / `env` / `pool` / `none`), not whether a
+supplementary pool exists — so a primary replacement that preserves
+a pool still reports `literal`, and a pool-only provider reports
+`pool`; (2) an explicit clear (`replace_key` with no primary
+credential at all, the UI's clear-secret checkbox) clears the
+primary AND the pool, so nothing remains configured — the
+pool-preservation placeholder never applies to a clear. The admin UI renders per-credential state and a per-row Test button. A best-effort audit event is recorded per provider mutation naming the provider id and pool indices changed, never values.
+
+Honest bounds (not claims): there is no "never hit a rate limit" or "infinite speed" guarantee — latency is bounded below by upstream plus network plus tokens. Streams are not passed through zero-copy wholesale: usage accounting, protocol translation, tool-call handling, and redaction still run on these paths. Rolling latency routing, token-aware balancing, and cross-instance credential state are not shipped (deferred/future work). Compatibility is per provider, model, protocol, and feature in `docs/COMPATIBILITY.md` — never "all models/providers".
 
 ## Global egress policy
 

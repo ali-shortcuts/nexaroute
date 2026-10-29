@@ -44,6 +44,10 @@ type connectionTestReport struct {
 	EstimatedCost   *float64 `json:"estimated_cost_usd,omitempty"`
 	CostBasis       string   `json:"cost_basis"` // actual_usage | bound | unpriced
 	Error           string   `json:"error,omitempty"`
+	// CredentialIndex/CredentialName name the single credential the
+	// test ran with, when credential_index was requested.
+	CredentialIndex *int   `json:"credential_index,omitempty"`
+	CredentialName  string `json:"credential_name,omitempty"`
 }
 
 func (s *Server) adminConnectionTest(w http.ResponseWriter, r *http.Request) {
@@ -52,8 +56,9 @@ func (s *Server) adminConnectionTest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		DeploymentID string `json:"deployment_id"`
-		Dialect      string `json:"dialect"`
+		DeploymentID    string `json:"deployment_id"`
+		Dialect         string `json:"dialect"`
+		CredentialIndex *int   `json:"credential_index,omitempty"`
 	}
 	if _, err := readJSON(r, &in); err != nil {
 		errorJSON(w, 400, "invalid JSON: "+err.Error())
@@ -89,14 +94,32 @@ func (s *Server) adminConnectionTest(w http.ResponseWriter, r *http.Request) {
 			dialect = "openai"
 		}
 	}
-	report := runConnectionTest(r.Context(), *prov, *model, in.DeploymentID, dialect)
+	report := runConnectionTestWithCredential(r.Context(), *prov, *model, in.DeploymentID, dialect, in.CredentialIndex)
 	writeJSON(w, 200, report)
 }
 
 func runConnectionTest(ctx context.Context, prov config.ProviderConfig, model config.ModelConfig, deploymentID, dialect string) connectionTestReport {
+	return runConnectionTestWithCredential(ctx, prov, model, deploymentID, dialect, nil)
+}
+
+func runConnectionTestWithCredential(ctx context.Context, prov config.ProviderConfig, model config.ModelConfig, deploymentID, dialect string, credIdx *int) connectionTestReport {
+	// Path is selected by the REQUESTED dialect. For opencode
+	// providers the path is the documented opencode path for that
+	// protocol, never the generic /v1/... default and never the
+	// adapter's chat default (which would misroute Anthropic and
+	// Responses requests).
 	path := "/v1/chat/completions"
 	if dialect == "anthropic" {
 		path = "/v1/messages"
+	}
+	if providers.IsOpencodeType(prov.Type) {
+		kind := providers.IngressOpenAIChat
+		if dialect == "anthropic" {
+			kind = providers.IngressAnthropic
+		}
+		if p, ok := providers.OpencodePathForIngress(kind); ok {
+			path = p
+		}
 	}
 	rep := connectionTestReport{
 		DeploymentID:    deploymentID,
@@ -107,21 +130,48 @@ func runConnectionTest(ctx context.Context, prov config.ProviderConfig, model co
 		ExpectedMaxToks: connectionTestPromptEstToks + connectionTestMaxOutTokens,
 		CostBasis:       "unpriced",
 	}
-	a, err := providers.NewAdapter(prov, 15*time.Second)
+	testProv, credName, err := singleCredentialProvider(prov, credIdx)
+	if err != nil {
+		rep.Error = err.Error()
+		return rep
+	}
+	if credIdx != nil {
+		rep.CredentialIndex = credIdx
+		rep.CredentialName = credName
+	}
+	a, err := providers.NewAdapter(testProv, 15*time.Second)
 	if err != nil {
 		rep.Error = "adapter: " + err.Error()
 		return rep
 	}
 	defer providers.CloseIdleConnections(a)
-	payload, _ := json.Marshal(map[string]any{
-		"model":      model.Model,
-		"max_tokens": connectionTestMaxOutTokens,
-		"messages":   []map[string]string{{"role": "user", "content": connectionTestPrompt}},
-	})
+	// Payload shape follows the requested dialect. Previously this
+	// was always OpenAI-shaped even for dialect=anthropic, which made
+	// the Anthropic response-shape check meaningless.
+	var payload []byte
+	if dialect == "anthropic" {
+		payload, _ = json.Marshal(map[string]any{
+			"model": model.Model, "max_tokens": connectionTestMaxOutTokens,
+			"messages": []map[string]string{{"role": "user", "content": connectionTestPrompt}},
+		})
+	} else {
+		payload, _ = json.Marshal(map[string]any{
+			"model":      model.Model,
+			"max_tokens": connectionTestMaxOutTokens,
+			"messages":   []map[string]string{{"role": "user", "content": connectionTestPrompt}},
+		})
+	}
 	cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	start := time.Now()
-	resp, err := a.Do(cctx, payload, false, nil)
+	var resp *http.Response
+	if providers.IsOpencodeType(testProv.Type) {
+		// Explicit path: Do() would fall back to the provider chat
+		// path and misroute the Anthropic dialect.
+		resp, err = a.DoPath(cctx, http.MethodPost, path, payload, false, nil)
+	} else {
+		resp, err = a.Do(cctx, payload, false, nil)
+	}
 	rep.LatencyMS = time.Since(start).Milliseconds()
 	if err != nil {
 		rep.Error = err.Error()

@@ -853,6 +853,17 @@ type CredentialConfig struct {
 	APIKey    string `json:"api_key,omitempty"`
 	APIKeyEnv string `json:"api_key_env,omitempty"`
 	Enabled   bool   `json:"enabled"`
+	// Email is operator metadata only (which account a key belongs to).
+	// Authentication NEVER uses it, and admin surfaces expose it only in
+	// masked form. See providers.MaskEmail.
+	Email string `json:"email,omitempty"`
+	// Priority selects the minimum tier first: only credentials in the
+	// lowest Priority tier among available credentials compete. 0 is the
+	// default tier, matching legacy configs.
+	Priority int `json:"priority,omitempty"`
+	// Weight scales effective load (Active/Weight) inside the tournament.
+	// 0 normalises to 1 in ApplyDefaults, the ModelConfig convention.
+	Weight float64 `json:"weight,omitempty"`
 }
 
 func (c CredentialConfig) Resolved() string {
@@ -874,10 +885,27 @@ type DataHandlingConfig struct {
 	Note         string `json:"note,omitempty"`           // max 200 chars, no control characters
 }
 
+// OpenCode upstream wire paths (documented Console/Go gateway bases at
+// https://opencode.ai/inference and https://opencode.ai/inference/go).
+// The gateway never derives these from the generic /v1/... defaults: the
+// opencode paths carry the /openai and /anthropic prefixes the generic
+// defaults lack. There is no Zen profile: no Zen URL appears in the
+// documented Console/Go material, so none is shipped.
+const (
+	OpencodeChatPath      = "/openai/v1/chat/completions"
+	OpencodeResponsesPath = "/openai/v1/responses"
+	OpencodeMessagesPath  = "/anthropic/v1/messages"
+	OpencodeModelsPath    = "/v1/models"
+	// DefaultOpencodeSessionSalt is the domain separator for derived
+	// x-opencode-session values when no operator salt is configured. It
+	// is NOT a credential and is never logged.
+	DefaultOpencodeSessionSalt = "nexaroute-opencode-session-v1"
+)
+
 type ProviderConfig struct {
 	ID           string             `json:"id"`
 	Name         string             `json:"name"`
-	Type         string             `json:"type"`              // openai_compatible | anthropic_compatible | gemini | openai_responses | azure_openai | vertex | bedrock
+	Type         string             `json:"type"`              // openai_compatible | anthropic_compatible | gemini | openai_responses | azure_openai | vertex | bedrock | opencode-console | opencode-go
 	Dialect      string             `json:"dialect,omitempty"` // optional dialect override (see compat.Dialects)
 	BaseURL      string             `json:"base_url"`
 	DataHandling DataHandlingConfig `json:"data_handling,omitempty"`
@@ -900,6 +928,10 @@ type ProviderConfig struct {
 	resolvedEgressDenyCIDRs  []string
 	resolvedEgressAllowHosts []string
 	resolvedEgressAllowCIDRs []string
+	// OpenCode session domain separator (Go profile only). Non-secret,
+	// operator-configurable; empty means DefaultOpencodeSessionSalt.
+	// Never a credential, never logged.
+	OpencodeSessionSalt string `json:"opencode_session_salt,omitempty"`
 	// Azure OpenAI: API version query value (default 2024-10-21).
 	APIVersion string `json:"api_version,omitempty"`
 	// Vertex AI: GCP project (required for type vertex) and location
@@ -1824,6 +1856,26 @@ func (p *ProviderConfig) ApplyDefaults() {
 	if p.Type == "vertex" && p.VertexLocation == "" {
 		p.VertexLocation = "us-central1"
 	}
+	// OpenCode profiles must never fall through to the generic /v1/...
+	// defaults: a preset-less opencode provider (or one whose paths were
+	// saved before these types existed) gets the documented opencode
+	// paths, and an explicitly configured non-default path is kept.
+	// Go has no documented discovery endpoint, so its ModelsPath is
+	// deliberately left empty (the generic fill below skips it).
+	if p.Type == "opencode-console" || p.Type == "opencode-go" {
+		if p.ChatPath == "" || p.ChatPath == "/v1/chat/completions" {
+			p.ChatPath = OpencodeChatPath
+		}
+		if p.ResponsesPath == "" || p.ResponsesPath == "/v1/responses" {
+			p.ResponsesPath = OpencodeResponsesPath
+		}
+		if p.MessagesPath == "" || p.MessagesPath == "/v1/messages" {
+			p.MessagesPath = OpencodeMessagesPath
+		}
+		if p.Type == "opencode-console" && p.ModelsPath == "" {
+			p.ModelsPath = OpencodeModelsPath
+		}
+	}
 	if p.ChatPath == "" {
 		p.ChatPath = "/v1/chat/completions"
 	}
@@ -1833,7 +1885,7 @@ func (p *ProviderConfig) ApplyDefaults() {
 	if p.MessagesPath == "" {
 		p.MessagesPath = "/v1/messages"
 	}
-	if p.ModelsPath == "" {
+	if p.ModelsPath == "" && p.Type != "opencode-go" {
 		p.ModelsPath = "/v1/models"
 	}
 	if p.CountTokensPath == "" {
@@ -1866,6 +1918,9 @@ func (p *ProviderConfig) ApplyDefaults() {
 	for i := range p.Credentials {
 		if p.Credentials[i].Name == "" {
 			p.Credentials[i].Name = fmt.Sprintf("key-%d", i+1)
+		}
+		if p.Credentials[i].Weight == 0 {
+			p.Credentials[i].Weight = 1
 		}
 	}
 	for i := range p.Models {
@@ -2468,7 +2523,7 @@ func (c Config) validateProviders() error {
 			return fmt.Errorf("duplicate provider id %q", p.ID)
 		}
 		seenP[p.ID] = true
-		if p.Type != "openai_compatible" && p.Type != "anthropic_compatible" && p.Type != "gemini" && p.Type != "openai_responses" && p.Type != "azure_openai" && p.Type != "vertex" && p.Type != "bedrock" {
+		if p.Type != "openai_compatible" && p.Type != "anthropic_compatible" && p.Type != "gemini" && p.Type != "openai_responses" && p.Type != "azure_openai" && p.Type != "vertex" && p.Type != "bedrock" && p.Type != "opencode-console" && p.Type != "opencode-go" {
 			return fmt.Errorf("provider %q has unsupported type %q", p.ID, p.Type)
 		}
 		if p.SecretKeyEnv != "" && !validEnvName(p.SecretKeyEnv) {
@@ -3566,6 +3621,46 @@ func (p ProviderConfig) ResolvedCredentials() []string {
 		}
 		if k := c.Resolved(); k != "" && !seen[k] {
 			out = append(out, k)
+			seen[k] = true
+		}
+	}
+	return out
+}
+
+// ResolvedCredential is one adapter-usable credential with the metadata
+// selection needs. PoolIndex is -1 for the primary key and the pool index
+// otherwise (the same index the Admin API uses for credential_index).
+// Exact-duplicate keys collapse to their first occurrence, matching
+// ResolvedCredentials.
+type ResolvedCredential struct {
+	Key       string
+	Name      string
+	PoolIndex int
+	Priority  int
+	Weight    float64
+}
+
+func (p ProviderConfig) ResolvedCredentialEntries() []ResolvedCredential {
+	out := []ResolvedCredential{}
+	seen := map[string]bool{}
+	if k := p.ResolvedAPIKey(); k != "" {
+		out = append(out, ResolvedCredential{Key: k, Name: "primary", PoolIndex: -1, Priority: 0, Weight: 1})
+		seen[k] = true
+	}
+	for i, c := range p.Credentials {
+		if !c.Enabled {
+			continue
+		}
+		if k := c.Resolved(); k != "" && !seen[k] {
+			name := c.Name
+			if name == "" {
+				name = fmt.Sprintf("key-%d", i+1)
+			}
+			w := c.Weight
+			if w <= 0 {
+				w = 1
+			}
+			out = append(out, ResolvedCredential{Key: k, Name: name, PoolIndex: i, Priority: c.Priority, Weight: w})
 			seen[k] = true
 		}
 	}

@@ -44,7 +44,7 @@ func upstreamKindFor(pType string) string {
 // buildCanonicalAttempt encodes the canonical request for one candidate and
 // returns the dispatch bundle. It returns false when the candidate became
 // ineligible or the payload could not be built.
-func (s *Server) buildCanonicalAttempt(cand router.Scored, req router.Requirement, canReq canonical.Request, clientModel string, profile compat.RequirementProfile) (hedgeAttemptBundle, bool) {
+func (s *Server) buildCanonicalAttempt(cand router.Scored, req router.Requirement, canReq canonical.Request, clientModel string, profile compat.RequirementProfile, ingressKind string) (hedgeAttemptBundle, bool) {
 	fresh, a, ok := s.currentRouteCandidate(cand.Deployment.ID, req)
 	if !ok {
 		return hedgeAttemptBundle{}, false
@@ -53,7 +53,7 @@ func (s *Server) buildCanonicalAttempt(cand router.Scored, req router.Requiremen
 		return hedgeAttemptBundle{}, false
 	}
 	bundle := hedgeAttemptBundle{c: fresh, a: a}
-	return s.finishCanonicalAttempt(bundle, canReq)
+	return s.finishCanonicalAttempt(bundle, canReq, ingressKind)
 }
 
 // streamCommitWriter observes client-visible canonical emitter writes. It is
@@ -550,6 +550,8 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 	}
 	routeCtx, routeCancel := routeContext(r.Context(), req.Streaming, cfg.RequestTimeout())
 	routeCtx = providers.WithQuotaEstimate(routeCtx, req.EstimatedInputTokens, req.MaxOutputTokens)
+	routeCtx = providers.WithSessionKey(routeCtx, req.SessionKey)
+	routeCtx = providers.WithClientScope(routeCtx, clientScopeForSession(r))
 	defer routeCancel()
 	forward := copySelectedRequestHeaders(r)
 	profile := profileFromRequirement(req, &canReq)
@@ -565,7 +567,7 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 			dialect = s.dialectFor(deployment.ProviderID, deployment.ProviderType, "")
 			dialects[deployment.ProviderID] = dialect
 		}
-		bundle, ok := s.buildCanonicalAttempt(c, reqEligible, canReq, in.Model, profile)
+		bundle, ok := s.buildCanonicalAttempt(c, reqEligible, canReq, in.Model, profile, providers.IngressOpenAIResponses)
 		if !ok {
 			lastErr = "candidate could not serve this request"
 			continue
@@ -626,6 +628,9 @@ func (s *Server) openAIResponses(w http.ResponseWriter, r *http.Request) {
 			lastCT := resp.Header.Get("Content-Type")
 			cls, policy := classifyFailure(resp.StatusCode, b)
 			safeMessage := cls.Message
+			if applyOpencodeEntitlementOverride(deployment.ProviderType, resp.StatusCode, &cls, &policy) {
+				safeMessage = opencodeEntitlementDiagnostic
+			}
 			switch cls.Class {
 			case compat.ClassModelRetired:
 				safeMessage = string(cls.Class)

@@ -172,6 +172,8 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 	profile := profileFromRequirement(req, nil)
 	routeCtx, routeCancel := routeContext(r.Context(), in.Stream, cfg.RequestTimeout())
 	routeCtx = providers.WithQuotaEstimate(routeCtx, req.EstimatedInputTokens, req.MaxOutputTokens)
+	routeCtx = providers.WithSessionKey(routeCtx, req.SessionKey)
+	routeCtx = providers.WithClientScope(routeCtx, clientScopeForSession(r))
 	defer routeCancel()
 	var lastErr string
 	var lastStatus int
@@ -353,6 +355,9 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 				policy.Failover = true
 				policy.SignalProvider = false
 				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "model_unavailable", Deployment: c.Deployment.ID, Message: "upstream model temporarily unavailable", ErrorType: string(cls.Class), StatusCode: resp.StatusCode})
+			}
+			if applyOpencodeEntitlementOverride(c.Deployment.ProviderType, resp.StatusCode, &cls, &policy) {
+				lastErr = opencodeEntitlementDiagnostic
 			}
 			s.recordProviderFailure(c.Deployment.ProviderID, c.Deployment.ID, lastErr, policy, string(ti.Profile.Type))
 			cooldownEntered := false

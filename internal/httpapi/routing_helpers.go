@@ -306,6 +306,23 @@ func inspectRequestJSONFields(raw []byte, visionType string, reasoningKeys, cont
 	}
 }
 
+// clientScopeForSession returns the non-secret caller scope hashed into
+// gateway-derived OpenCode Go session values: the virtual-key ID for
+// virtual-key callers, the tenant ID otherwise. Empty when the caller
+// has no identity (legacy local callers, operator tests), in which
+// case derivation keeps its pre-scope form.
+func clientScopeForSession(r *http.Request) string {
+	if id, ok := clientIdentityFromRequest(r); ok {
+		if id.Virtual && id.ID != "" {
+			return id.ID
+		}
+		if id.TenantID != "" {
+			return id.TenantID
+		}
+	}
+	return ""
+}
+
 func sessionKeyFromRequestParts(r *http.Request, bodyKey string) string {
 	for _, header := range []string{"x-claude-code-session-id", "x-litellm-session-id", "x-litellm-trace-id", "x-session-id"} {
 		if v := boundedSessionValue(r.Header.Get(header)); v != "" {

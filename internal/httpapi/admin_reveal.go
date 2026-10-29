@@ -13,6 +13,7 @@ import (
 
 	"github.com/ali-shortcuts/nexaroute/internal/authz"
 	"github.com/ali-shortcuts/nexaroute/internal/config"
+	"github.com/ali-shortcuts/nexaroute/internal/providers"
 )
 
 // Controlled secret reveal (CCR-parity spec 2.4).
@@ -111,6 +112,8 @@ func credentialMeta(creds []config.CredentialConfig) []map[string]any {
 		out = append(out, map[string]any{
 			"index": i, "name": c.Name, "enabled": c.Enabled,
 			"source": source, "preview": preview,
+			"email_masked": providers.MaskEmail(c.Email),
+			"priority":     c.Priority, "weight": c.Weight,
 		})
 	}
 	return out
