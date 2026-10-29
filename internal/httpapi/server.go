@@ -1069,6 +1069,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/admin/api/snapshot", s.adminSnapshot)
 	mux.HandleFunc("/admin/api/csrf-token", s.adminCSRFToken)
 	mux.HandleFunc("/admin/api/audit", s.adminAuditRecords)
+	mux.HandleFunc("/admin/api/security-snapshot", s.adminSecuritySnapshot)
 	mux.HandleFunc("/admin/api/events/stream", s.adminEventStream)
 	mux.HandleFunc("/admin/api/activity/requests", s.adminActivityRequests)
 	mux.HandleFunc("/admin/api/probe", s.adminProbe)

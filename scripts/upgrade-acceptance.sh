@@ -8,11 +8,13 @@
 #   2. A pre-upgrade backup (taken after the gateway stops, the
 #      standard pre-upgrade procedure) verifies in isolation with the
 #      NEW binary (cross-version restore --verify drill,
-#      machine-readable report). A live-backup probe runs first and
-#      records its outcome without failing the script: on the
-#      file-backend store it fails closed with a read-only timeout
-#      (see the evidence report), contrary to the OPERATIONS.md
-#      "safe against a live gateway" wording.
+#      machine-readable report). A plain-backup probe against the live
+#      gateway runs first and records its outcome without failing the
+#      script: on the file-backend store it fails closed on the
+#      exclusive lock (see the evidence report). The supported live
+#      path (`nexaroute backup --live`, in-process snapshot via the
+#      new gateway's admin endpoint) is exercised separately after the
+#      post-upgrade run, where it must succeed and verify.
 #   3. The installer swaps both executables, leaves config/key bytes
 #      and modes untouched, and the new binary restarts to the same
 #      health, routes, secrets-verification count and key bytes.
@@ -269,10 +271,14 @@ pass "pre migration: nxs1 on disk, key bytes recorded, modes 0600/0700"
 
 # --- live-backup boundary probe (recorded, never a failure) -------------
 # The running gateway holds the file-backend security store's exclusive
-# bbolt flock, so a second process opening it read-only times out after
-# 2s (internal/securitystore/store.go OpenReadOnly). Probe both binaries
-# against the live gateway, record the outcome, and take the real
-# pre-upgrade backup only after the gateway stops below.
+# bbolt flock, so a second process opening it read-only fails closed.
+# Probe both binaries with a PLAIN backup against the live gateway,
+# record the outcome, and take the real pre-upgrade backup only after
+# the gateway stops below. A --live probe against the pre-upgrade
+# gateway is recorded the same way: an old (v0.24.0) gateway has no
+# snapshot endpoint, so the new CLI must fail closed there; in
+# new-only mode the running gateway IS the new binary, so that probe
+# is skipped (the live path is proven strictly after post-upgrade).
 probe_live() { # $1=label $2=binary
   if "$2" backup --config "$CFG" --out "$WORK/live-probe.tar" >"$WORK/live-probe.err" 2>&1; then
     log "LIVE_BACKUP_SUCCEEDED unexpectedly ($1); probe bundle removed"
@@ -283,6 +289,16 @@ probe_live() { # $1=label $2=binary
 }
 probe_live "pre-upgrade binary ($PRE_LABEL)" "$PRE_BIN"
 probe_live "new binary" "$NEW_BIN"
+if [[ "$OLD_OK" -eq 1 ]]; then
+  if "$NEW_BIN" backup --live --config "$CFG" --out "$WORK/live-probe-live.tar" >"$WORK/live-probe-live.err" 2>&1; then
+    log "LIVE_BACKUP_OLD_GATEWAY_SUCCEEDED unexpectedly; probe bundle removed"
+    rm -f "$WORK/live-probe-live.tar"
+  else
+    log "LIVE_BACKUP_OLD_GATEWAY_FAILED (expected, old gateway has no snapshot endpoint): $(head -n 1 "$WORK/live-probe-live.err")"
+  fi
+else
+  log "LIVE_BACKUP_OLD_GATEWAY skipped (new-only mode; live path proven after post-upgrade)"
+fi
 
 
 # --- installer upgrade ----------------------------------------------------
@@ -366,6 +382,44 @@ POST_FIELDS="$(printf '%s' "$POST_VERIFY" | grep -o 'verified_fields=[0-9]*' | c
 [[ "$(sha256sum "$CFG.key" | cut -d' ' -f1)" == "$PRE_KEY_HASH" ]] || fail "post-upgrade key bytes changed"
 grep -qF "upgrade-acceptance-provider-canary" "$CFG" && fail "post config contains a plaintext canary"
 pass "post-upgrade health + routes + secrets verify (verified_fields=$POST_FIELDS, key unchanged)"
+
+# --- live backup from the running new gateway ---------------------------
+# The supported live path: the new CLI asks the running new gateway's
+# admin endpoint for an in-process snapshot (never a second open of the
+# locked file). The fixture admin key is empty with emergency access
+# enabled, so loopback keyless emergency access applies; the CLI
+# derives the admin URL from the config listen address.
+LIVE_ERR="$WORK/live-backup.err"
+if ! "$NEW_BIN" backup --live --config "$CFG" --out "$BACKUPS/live-post-upgrade.tar" >"$LIVE_ERR" 2>&1; then
+  ERRLOG="$LIVE_ERR" fail "live backup from running new gateway (--live)"
+fi
+[[ "$(stat -c '%a' "$BACKUPS/live-post-upgrade.tar")" == "600" ]] || fail "live bundle mode"
+python3 - "$BACKUPS/live-post-upgrade.tar" "$CFG.key" <<'PY' || fail "live bundle manifest"
+import hashlib, sys, tarfile
+bundle, key_path = sys.argv[1], sys.argv[2]
+with tarfile.open(bundle) as tf:
+    manifest = tf.extractfile("manifest.json").read().decode()
+    names = tf.getnames()
+assert '"format": "nexaroute-backup/1"' in manifest, manifest
+assert "master.key" not in names, names
+assert "taken live" in manifest, "live bundle manifest must record live provenance"
+want = hashlib.sha256(open(key_path, "rb").read()).hexdigest()
+assert want in manifest, "live manifest fingerprint does not match the live key"
+print("live manifest: nexaroute-backup/1, keyless, fingerprint matches live key, live provenance recorded")
+PY
+mkdir -m 0700 "$WORK/drill-live"
+if ! "$NEW_BIN" restore --verify --bundle "$BACKUPS/live-post-upgrade.tar" --config "$CFG" \
+    --into "$WORK/drill-live" --report "$EVIDENCE/drill-live.json" --max-age 24h >/dev/null 2>&1; then
+  fail "live bundle isolated restore --verify"
+fi
+python3 - "$EVIDENCE/drill-live.json" <<'PY' || fail "live drill report contains FAIL/BLOCKED"
+import json, sys
+report = json.load(open(sys.argv[1]))
+bad = [c for c in report.get("checks", []) if c.get("status") in ("FAIL", "BLOCKED")]
+assert not bad, bad
+print("live drill checks:", [(c["name"], c["status"]) for c in report.get("checks", [])])
+PY
+pass "live backup from running new gateway (--live): bundle 0600, manifest fingerprint matches key, isolated verify PASS"
 
 # --- SIGKILL + restart ----------------------------------------------------
 kill -9 "$GATEWAY_PID" 2>/dev/null || true
