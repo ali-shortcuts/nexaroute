@@ -293,6 +293,10 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 					s.hm.RecordFailure(c.Deployment.ID, lastErr, headerLatency)
 				}
 				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_timeout", Deployment: c.Deployment.ID, Message: lastErr, ErrorType: "provider_timeout", LatencyMS: headerLatency.Milliseconds()})
+				// A gateway-deadline timeout after dispatch is an
+				// ambiguous outcome even though no replay follows:
+				// the provider may have executed the request.
+				s.emitAmbiguousOutcome(r.Header.Get("x-request-id"), c.Deployment.ID, e, headerLatency)
 				break
 			}
 			s.hm.RecordProviderFailure(c.Deployment.ProviderID, c.Deployment.ID, lastErr)
@@ -304,6 +308,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 				s.hm.RecordFailure(c.Deployment.ID, lastErr, headerLatency)
 			}
 			s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "route_fail", Deployment: c.Deployment.ID, Message: lastErr, ErrorType: "provider_connection_failed", FailoverClass: "transient_transport", LatencyMS: headerLatency.Milliseconds()})
+			s.emitAmbiguousOutcome(r.Header.Get("x-request-id"), c.Deployment.ID, e, headerLatency)
 			s.emitProductionEvent(r.Header.Get("x-request-id"), ProductionEventModelFailed, c.Deployment.ID, lastErr, events.Event{ErrorType: "provider_connection_failed", LatencyMS: headerLatency.Milliseconds()})
 			if attempts < max && i+1 < len(candidates) {
 				s.autopilotRecordFailover(autopilotRequestKeyFromContext(r.Context(), r.Header.Get("x-request-id")))

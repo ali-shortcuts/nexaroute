@@ -116,8 +116,8 @@ func Manifest() []ConformanceEntry {
 				DimFinishReasons:    {State: StateFixtureVerified},
 				DimErrorEnvelopes:   {State: StateFixtureVerified, Note: "Anthropic-style envelopes on Anthropic ingress"},
 				DimRetryAfter:       {State: StateFixtureVerified, Note: "honored with configurable cap"},
-				DimCancellation:     {State: StatePartial, Note: "context-propagated; no dedicated cancellation fixture"},
-				DimIdempotency:      {State: StateUntested},
+				DimCancellation:     {State: StatePartial, Note: "context-propagated; dedicated gateway cancellation fixture in internal/httpapi/retry_safety_test.go; provider-side cancellation of in-flight upstream work remains unverified"},
+				DimIdempotency:      {State: StateUntested, Note: "no verified provider mechanism; gateway never generates a key and by default never forwards a client key (an operator forward_headers listing is an operator assertion, not gateway evidence); gateway-side behavior fixture-covered in internal/retrysafety and internal/httpapi/retry_safety_test.go"},
 			},
 		},
 		{
@@ -140,8 +140,8 @@ func Manifest() []ConformanceEntry {
 				DimFinishReasons:    {State: StateFixtureVerified},
 				DimErrorEnvelopes:   {State: StateFixtureVerified},
 				DimRetryAfter:       {State: StateFixtureVerified, Note: "honored with configurable cap"},
-				DimCancellation:     {State: StatePartial, Note: "context-propagated; no dedicated cancellation fixture"},
-				DimIdempotency:      {State: StateUntested},
+				DimCancellation:     {State: StatePartial, Note: "context-propagated; dedicated gateway cancellation fixture in internal/httpapi/retry_safety_test.go; provider-side cancellation of in-flight upstream work remains unverified"},
+				DimIdempotency:      {State: StateUntested, Note: "no verified provider mechanism; gateway never generates a key and by default never forwards a client key (an operator forward_headers listing is an operator assertion, not gateway evidence); gateway-side behavior fixture-covered in internal/retrysafety and internal/httpapi/retry_safety_test.go"},
 			},
 		},
 		{
@@ -165,7 +165,7 @@ func Manifest() []ConformanceEntry {
 				DimErrorEnvelopes:   {State: StateFixtureVerified},
 				DimRetryAfter:       {State: StateFixtureVerified},
 				DimCancellation:     {State: StatePartial, Note: "context-propagated; no dedicated cancellation fixture"},
-				DimIdempotency:      {State: StateUntested},
+				DimIdempotency:      {State: StateUntested, Note: "no verified provider mechanism; gateway never generates a key and by default never forwards a client key (an operator forward_headers listing is an operator assertion, not gateway evidence); gateway-side behavior fixture-covered in internal/retrysafety and internal/httpapi/retry_safety_test.go"},
 			},
 		},
 		{
@@ -189,7 +189,7 @@ func Manifest() []ConformanceEntry {
 				DimErrorEnvelopes:   {State: StateFixtureVerified},
 				DimRetryAfter:       {State: StateFixtureVerified},
 				DimCancellation:     {State: StatePartial, Note: "context-propagated; no dedicated cancellation fixture"},
-				DimIdempotency:      {State: StateUntested},
+				DimIdempotency:      {State: StateUntested, Note: "no verified provider mechanism; gateway never generates a key and by default never forwards a client key (an operator forward_headers listing is an operator assertion, not gateway evidence); gateway-side behavior fixture-covered in internal/retrysafety and internal/httpapi/retry_safety_test.go"},
 			},
 		},
 		{
@@ -213,7 +213,7 @@ func Manifest() []ConformanceEntry {
 				DimErrorEnvelopes:   {State: StatePartial},
 				DimRetryAfter:       {State: StatePartial},
 				DimCancellation:     {State: StateUntested},
-				DimIdempotency:      {State: StateUntested},
+				DimIdempotency:      {State: StateUntested, Note: "no verified provider mechanism; gateway never generates a key and by default never forwards a client key (an operator forward_headers listing is an operator assertion, not gateway evidence); gateway-side behavior fixture-covered in internal/retrysafety and internal/httpapi/retry_safety_test.go"},
 			},
 		},
 		{
@@ -237,7 +237,7 @@ func Manifest() []ConformanceEntry {
 				DimErrorEnvelopes:   {State: StateUntested},
 				DimRetryAfter:       {State: StateUntested},
 				DimCancellation:     {State: StateUntested},
-				DimIdempotency:      {State: StateUntested},
+				DimIdempotency:      {State: StateUntested, Note: "no verified provider mechanism; gateway never generates a key and by default never forwards a client key (an operator forward_headers listing is an operator assertion, not gateway evidence); gateway-side behavior fixture-covered in internal/retrysafety and internal/httpapi/retry_safety_test.go"},
 			},
 		},
 		{
@@ -309,7 +309,7 @@ func Manifest() []ConformanceEntry {
 				DimErrorEnvelopes:   {State: StateUntested},
 				DimRetryAfter:       {State: StateUntested},
 				DimCancellation:     {State: StateUntested},
-				DimIdempotency:      {State: StateUntested},
+				DimIdempotency:      {State: StateUntested, Note: "no verified provider mechanism; gateway never generates a key and by default never forwards a client key (an operator forward_headers listing is an operator assertion, not gateway evidence); gateway-side behavior fixture-covered in internal/retrysafety and internal/httpapi/retry_safety_test.go"},
 			},
 		},
 	}

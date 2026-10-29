@@ -2584,6 +2584,14 @@ func (c Config) validateProviders() error {
 			if len(k) > 256 || len(v) > 8192 || !validHeaderName(k) || !validHeaderValue(v) {
 				return fmt.Errorf("provider %q has invalid custom header", p.ID)
 			}
+			// A static idempotency key would be sent with every
+			// request, letting a provider dedupe distinct requests.
+			// No dialect has a verified provider idempotency
+			// mechanism (see docs/RETRY_SAFETY.md), so a fixed key
+			// is always a misconfiguration, never a policy.
+			if h := strings.ToLower(strings.TrimSpace(k)); h == "idempotency-key" || h == "x-idempotency-key" {
+				return fmt.Errorf("provider %q must not set a static idempotency header", p.ID)
+			}
 		}
 		for _, h := range p.ForwardHeaders {
 			if len(h) > 256 || !validHeaderName(h) {

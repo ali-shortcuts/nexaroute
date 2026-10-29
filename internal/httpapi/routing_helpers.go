@@ -14,11 +14,30 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/ali-shortcuts/nexaroute/internal/events"
 	"github.com/ali-shortcuts/nexaroute/internal/feature"
 	"github.com/ali-shortcuts/nexaroute/internal/providers"
+	"github.com/ali-shortcuts/nexaroute/internal/retrysafety"
 	"github.com/ali-shortcuts/nexaroute/internal/router"
 	"github.com/ali-shortcuts/nexaroute/internal/scorecards"
 )
+
+// emitAmbiguousOutcome records a transport/timeout failure whose
+// provider-side execution is unknown, using a fixed metadata-only
+// message: it never carries a prompt, response content, credential,
+// or upstream error text. It is emitted only when the error is not
+// proven pre-dispatch (dial refused, DNS failure, credential-pool
+// exhaustion are not ambiguous: nothing reached a provider). The
+// event exists so a later replay is auditable as a replay: a
+// failover after this event may duplicate provider-side work or
+// cost, and that fact must not be reconstructable only from a
+// generic route_fail.
+func (s *Server) emitAmbiguousOutcome(requestID, deploymentID string, err error, latency time.Duration) {
+	if retrysafety.ClassifyTransportError(err) == retrysafety.SentNotSent {
+		return
+	}
+	s.bus.Add(events.Event{RequestID: requestID, Kind: "ambiguous_outcome", Deployment: deploymentID, Message: "upstream outcome unknown; a replay may duplicate provider-side work", ErrorType: "provider_connection_failed", FailoverClass: "transient_transport", LatencyMS: latency.Milliseconds()})
+}
 
 func routeContext(parent context.Context, streaming bool, timeout time.Duration) (context.Context, context.CancelFunc) {
 	if streaming || timeout <= 0 {

@@ -147,6 +147,23 @@ Report semantics (honesty rules):
 
 <!-- END GENERATED CONFORMANCE MANIFEST -->
 
+## Retry safety and idempotency (gateway policy, not a provider claim)
+
+The `idempotency` column above stays `UNTESTED` for every dialect:
+no provider mechanism has been verified by a fixture or a live
+canary, and the gateway-side tests in this change do not promote
+any dialect — they prove gateway behavior (never generating a key,
+never forwarding a client key by default, never replaying a
+committed stream, recording ambiguous outcomes), not provider
+behavior. The only manifest changes for idempotency are the
+dimension notes, which now state that policy and cite those
+fixtures; states and evidence dates are unchanged. Cancellation
+notes for `anthropic_compatible` and `openai_compatible` likewise
+cite the new dedicated gateway cancellation fixture while keeping
+the state at `PARTIAL`, because provider-side cancellation of
+in-flight upstream work remains unverified. The full policy,
+bounds, and evidence map are in `docs/RETRY_SAFETY.md`.
+
 | Client ingress | Upstream | Text | Streaming | Tools | Tool-result turns | Reasoning | Images |
 |---|---|---:|---:|---:|---:|---:|---:|
 | Anthropic `/v1/messages` | Anthropic-compatible | Native | Native | Native | Native | Native | Provider-dependent |
