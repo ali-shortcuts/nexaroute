@@ -493,6 +493,17 @@ opt-in via the Soak workflow (`workflow_dispatch`) on a suitable runner
   previous head `bb5865f` (run 40891002045) was still in_progress at
   2026-10-29T15:50:44Z; its outcome is reported separately on #664/#653.
   Live items (#646–#652) and any RPO/RTO value: NOT RUN / not reported.
+- Evidence (long-form soak PASS, 2026-10-30): `docs/reports/ISSUE664_SOAK_7DAA36D_2026-10-30.md`
+  — Soak run 41040550445, 10/10 stages PASS, code commit
+  `7daa36da962bf3031b353487f760506cd60aedb2` (main at dispatch, branch
+  `soak-run-7daa36d` identical to it), Go 1.27.3, 4-vCPU ubuntu-24.04
+  runner, total 7437s, sustained http-hot-reload-soak 7209s ≥ 7200s
+  requested, 3 stress rounds, 28802 resource samples (peak goroutines
+  120, peak open FDs 62); validator from the run's own tree exit 0
+  (VALID, result PASS). Outage stages are non-verbose in the logs and
+  are corroborated via their exact `go test` commands, exit 0, and
+  non-zero durations (see the report). Evidence binds to 7daa36d only;
+  live items (#646–#652) and any RPO/RTO value: NOT RUN / not reported.
 - Impact: default test runs do not exercise the stress/soak paths, and
   no short CI run proves long-duration stability.
 - Mitigation/workaround: run them explicitly, e.g.
