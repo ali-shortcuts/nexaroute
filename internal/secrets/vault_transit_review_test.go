@@ -479,3 +479,95 @@ func TestReviewGateOffMakesNoVaultCall(t *testing.T) {
 		t.Fatalf("gate-off/conflict paths made %d Vault calls", len(fake.requests))
 	}
 }
+
+// TestReviewMigrationRecoversAfterRollback pins the recovery half of
+// ADR 0007 §7.1/§7.2: a failed post-write verification restores the
+// original nxs1 bytes, and re-running the same migration after the
+// transient failure succeeds, decrypts under Transit, and leaves a
+// fresh verbatim backup.
+func TestReviewMigrationRecoversAfterRollback(t *testing.T) {
+	legacyKey := []byte("01234567890123456789012345678901")
+	base := newFakeEnvelope("key-a")
+	env := &countingEnvelope{EnvelopeKeyProvider: base, failOn: 3}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	raw := []byte(`{"providers":[{"id":"p","api_key":"migration-recovery"}]}`)
+	old, _, err := TransformConfig(raw, legacyKey, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := append(old, '\n')
+	if err := os.WriteFile(path, original, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := MigrateToEnvelopeFile(context.Background(), path, legacyKey, env); err == nil || !strings.Contains(err.Error(), "rolled back") {
+		t.Fatalf("first migration must fail and roll back: %v", err)
+	}
+	afterFailure, _ := os.ReadFile(path)
+	if string(afterFailure) != string(original) {
+		t.Fatal("rollback did not restore the pre-migration bytes")
+	}
+	if _, _, err := TransformConfig(afterFailure, legacyKey, false); err != nil {
+		t.Fatalf("rolled-back config no longer decrypts with the legacy key: %v", err)
+	}
+	env.failOn = 0
+	result, err := MigrateToEnvelopeFile(context.Background(), path, legacyKey, env)
+	if err != nil || result.Migrated != 1 {
+		t.Fatalf("retry after rollback must succeed: %+v %v", result, err)
+	}
+	migrated, _ := os.ReadFile(path)
+	plain, _, err := TransformConfigWith(context.Background(), Cipher{env: base}, migrated, false)
+	if err != nil || !strings.Contains(string(plain), "migration-recovery") {
+		t.Fatalf("recovered migration does not decrypt under Transit: %v", err)
+	}
+	backup, err := os.ReadFile(result.BackupPath)
+	if err != nil || string(backup) != string(original) {
+		t.Fatalf("recovered migration backup must be the original bytes: %v", err)
+	}
+}
+
+// TestReviewRewrapRecoversAfterRollback pins the recovery half of
+// ADR 0007 §7.3: a rewrap that fails post-write verification leaves the
+// old config byte-identical, and re-running after the transient failure
+// moves the wrapped DEK to the new key version and still decrypts.
+func TestReviewRewrapRecoversAfterRollback(t *testing.T) {
+	base := newFakeEnvelope("key-a")
+	env := &countingEnvelope{EnvelopeKeyProvider: base, failOn: 3}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	raw := []byte(`{"providers":[{"id":"p","api_key":"rewrap-recovery"}]}`)
+	enc, _, err := TransformConfigWith(context.Background(), Cipher{env: base}, raw, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := append(enc, '\n')
+	if err := os.WriteFile(path, original, 0600); err != nil {
+		t.Fatal(err)
+	}
+	base.rotate()
+	if _, err := RewrapConfigFile(context.Background(), path, env); err == nil || !strings.Contains(err.Error(), "rolled back") {
+		t.Fatalf("first rewrap must fail and roll back: %v", err)
+	}
+	afterFailure, _ := os.ReadFile(path)
+	if string(afterFailure) != string(original) {
+		t.Fatal("rewrap rollback did not restore the pre-rewrap bytes")
+	}
+	env.failOn = 0
+	result, err := RewrapConfigFile(context.Background(), path, env)
+	if err != nil || result.Rewrapped != 1 || result.BackupPath == "" {
+		t.Fatalf("retry after rollback must succeed: %+v %v", result, err)
+	}
+	rewrapped, _ := os.ReadFile(path)
+	plain, _, err := TransformConfigWith(context.Background(), Cipher{env: base}, rewrapped, false)
+	if err != nil || !strings.Contains(string(plain), "rewrap-recovery") {
+		t.Fatalf("recovered rewrap does not decrypt: %v", err)
+	}
+	meta, err := parseEnvelope(firstField(t, rewrapped))
+	if err != nil || meta.TransitKeyVersion != 2 {
+		t.Fatalf("recovered rewrap must move to version 2: %+v %v", meta, err)
+	}
+	backup, err := os.ReadFile(result.BackupPath)
+	if err != nil || string(backup) != string(original) {
+		t.Fatalf("recovered rewrap backup must be the original bytes: %v", err)
+	}
+}

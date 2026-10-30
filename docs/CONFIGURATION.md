@@ -119,7 +119,8 @@ new or changed plaintext fields. Backups of `nxs2` configs record
 reject `--include-master-key`, and can only be restored where Vault Transit is
 available.
 
-`rewrap` writes an authenticated backup and replaces the config atomically. Do
+`rewrap-transit` writes a verbatim `.pre-rewrap.bak` backup and replaces the
+config atomically. Do
 not disable an old Transit key version until rewrap and verification succeed.
 Transit mode is fake-API tested in CI but has **no real Vault Transit acceptance
 evidence**; see [EXTERNAL_VERIFICATION.md](EXTERNAL_VERIFICATION.md). Do not claim

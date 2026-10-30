@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -262,5 +263,35 @@ func TestConfigTransitGateOffFailsClosed(t *testing.T) {
 	}
 	if _, err := os.Stat(path + ".key"); !os.IsNotExist(err) {
 		t.Fatalf("gate-off load created a local fallback key: %v", err)
+	}
+}
+
+func TestConfigTransitForbiddenFailsClosed(t *testing.T) {
+	fake := &fakeTransit{entries: map[string]fakeTransitEntry{}, currentVersion: 1}
+	srv := httptest.NewServer(http.HandlerFunc(fake.handler))
+	enableTransit(t, srv)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	c := Default()
+	c.Providers = []ProviderConfig{{ID: "p", Type: "openai_compatible", BaseURL: "http://127.0.0.1:9", APIKey: "forbidden-canary", Enabled: false}}
+	if err := SaveAtomic(path, c); err != nil {
+		t.Fatal(err)
+	}
+	srv.Close()
+	denied := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "denied", http.StatusForbidden)
+	}))
+	defer denied.Close()
+	t.Setenv("VAULT_ADDR", denied.URL)
+	if _, err := LoadBase(path); err == nil {
+		t.Fatal("forbidden Transit accepted an nxs2 config")
+	} else {
+		var terr *secrets.TransitError
+		if !errors.As(err, &terr) || terr.Class != secrets.ClassTransitForbidden {
+			t.Fatalf("forbidden Transit must fail with transit_forbidden, got %v", err)
+		}
+	}
+	if _, err := os.Stat(path + ".key"); !os.IsNotExist(err) {
+		t.Fatalf("forbidden Transit created a local fallback key: %v", err)
 	}
 }

@@ -241,6 +241,69 @@ its Transit claim — not production-verified, no real run executed —
 remains true. This record does NOT close issue #649, and fake-API tests
 do not close this acceptance.
 
+#### Re-check record — 2026-10-30 (branch `opencode/issue649-20261030101324`, base main `7daa36d`, issue #649 still OPEN)
+
+This re-check adds deterministic coverage for concrete client-contract
+gaps and corrects stale Transit wording. It does **not** upgrade the live
+acceptance status. Live Vault Transit: **BLOCKED / NOT_RUN** (zero live
+Vault calls; no local Vault dev server was used as acceptance evidence).
+
+- **Written authorization:** not present in issue #649 or the workflow
+  input for a specific instance, key, policy, or token injection.
+- **Vault version/topology:** **NOT OBSERVED** (no authorized instance).
+- **Key/policy identifiers:** **NONE** (no key or policy was provisioned;
+  no production key was touched).
+- **Environment check (names/counts only, no values read):**
+  `VAULT_ADDR`, `VAULT_TOKEN`, `VAULT_TOKEN_FILE`,
+  `NEXAROUTE_KEY_PROVIDER`, `NEXAROUTE_TRANSIT_ENABLED`,
+  `NEXAROUTE_TRANSIT_MOUNT`, `NEXAROUTE_TRANSIT_KEY`, `VAULT_NAMESPACE`
+  — present_count 0, nonempty_count 0.
+
+| Acceptance item | Live status | Local evidence in this change |
+|---|---|---|
+| Wrap/unwrap round-trip | BLOCKED | fake Vault API contract PASS |
+| AAD binding and tamper rejection | BLOCKED | PASS (owner/field/key-ref/nonce/data/wrapped-DEK) |
+| Strict envelope parsing | BLOCKED | PASS (unknown/duplicate/trailing fields) |
+| Request limits and timeouts | BLOCKED | PASS (64 KiB response cap, 4 KiB wrapped-input pre-check, per-request and overall context budgets, no retry after budget expiry) |
+| Redirect refusal | BLOCKED | PASS (3xx rejected, target not contacted) |
+| Unavailable/forbidden Vault fail-closed | BLOCKED | PASS (`transit_unavailable`, `transit_forbidden`, no local key on config load) |
+| Invalid ciphertext | BLOCKED | PASS (`transit_invalid_ciphertext`) |
+| Key-version errors | BLOCKED | PASS (`transit_key_version_unavailable` for too-old/too-new/deleted/disabled/missing version, body never exposed) |
+| Migration rollback and recovery | BLOCKED | PASS (post-write failure restores original bytes; re-run succeeds) |
+| Rewrap rollback and recovery | BLOCKED | PASS (post-write failure restores original bytes; re-run moves to new version) |
+| Gateway startup/decrypt, `secrets verify`, wrong/revoked token, outage, rotation, post-rewrap decrypt | NOT_RUN | requires the authorized live instance |
+
+Local commands (2026-10-30, Go 1.25.0 linux/amd64):
+
+```text
+$ go test -timeout=5m -count=1 ./internal/secrets/ ./internal/config/ ./cmd/gateway/ ./internal/privacyaudit/
+ok github.com/ali-shortcuts/nexaroute/internal/secrets
+ok github.com/ali-shortcuts/nexaroute/internal/config
+ok github.com/ali-shortcuts/nexaroute/cmd/gateway
+ok github.com/ali-shortcuts/nexaroute/internal/privacyaudit
+
+$ go test -race -timeout=5m -count=1 ./internal/secrets/ ./internal/config/ ./internal/privacyaudit/
+ok (all three packages)
+
+$ go vet ./internal/secrets/ ./internal/config/ ./cmd/gateway/
+(clean)
+
+$ ./scripts/verify.sh
+...
+BROWSER ACCEPTANCE: SKIPPED locally (Chromium/Playwright unavailable; CI browser gate remains separate)
+VERIFY PASS
+```
+
+Stale wording corrected with accurate current behavior: `rewrap-transit`
+writes a verbatim `.pre-rewrap.bak` (not an authenticated backup), `nxs2`
+config backups contain `nxs2` envelopes and are verified through Transit
+(not "Transit-sealed"), and the key-version command name in
+`docs/KNOWN_GAPS.md` is `secrets rewrap-transit`. Historical records above
+are preserved.
+
+Fake-API tests do not close this acceptance. This record does NOT close
+issue #649, and no production/HSM/KMS readiness is claimed.
+
 ## 3. Headless OS keyring
 
 Local state: the linux provider shells out to `secret-tool`
