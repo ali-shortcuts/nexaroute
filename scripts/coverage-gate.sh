@@ -26,6 +26,12 @@
 # Usage: ./scripts/coverage-gate.sh [profile] [threshold]
 #   profile   coverage.out path (default: .artifacts/coverage/coverage.out)
 #   threshold minimum total percentage, inclusive (default: 95.0)
+# Optional environment (reported verbatim, never used for the verdict):
+#   COVERAGE_GATE_COMMIT     tested commit SHA (workflow passes GITHUB_SHA)
+#   COVERAGE_GATE_GO_VERSION Go toolchain version (workflow passes go version)
+# The report prints commit, Go version, covered statements, total
+# statements, percentage, and threshold, so a PASS/FAIL verdict is always
+# attributable to an exact measurement.
 set -euo pipefail
 
 profile="${1:-.artifacts/coverage/coverage.out}"
@@ -55,6 +61,26 @@ if [[ ! "$total" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
   echo "::error::coverage gate: could not parse total coverage from $profile (last line: $(printf '%s\n' "$func_out" | tail -n 1))" >&2
   exit 1
 fi
+
+# Statement counts, recomputed from the same profile (mode line skipped;
+# field 2 is the statement count, field 3 the execution count). The
+# profile already passed `go tool cover` above, so a counts failure here
+# is a gate failure, not a new trust assumption.
+counts="$(awk 'NR > 1 { s += $2; if ($3 > 0) c += $2 } END { print c + 0, s + 0 }' "$profile")"
+covered_statements="${counts%% *}"
+total_statements="${counts##* }"
+if [[ ! "$covered_statements" =~ ^[0-9]+$ ]] || [[ ! "$total_statements" =~ ^[0-9]+$ ]] || [[ "$total_statements" -eq 0 ]]; then
+  echo "::error::coverage gate: could not recompute statement counts from $profile" >&2
+  exit 1
+fi
+
+echo "coverage gate report:"
+echo "commit: ${COVERAGE_GATE_COMMIT:-unknown}"
+echo "go version: ${COVERAGE_GATE_GO_VERSION:-unknown}"
+echo "covered statements: ${covered_statements}"
+echo "total statements: ${total_statements}"
+echo "coverage: ${total}%"
+echo "threshold: ${threshold}%"
 
 if awk -v t="$total" -v th="$threshold" 'BEGIN { exit !(t + 0 >= th + 0) }'; then
   echo "coverage gate: PASS total=${total}% (threshold >= ${threshold}%) profile=$profile"

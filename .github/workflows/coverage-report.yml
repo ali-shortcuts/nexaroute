@@ -84,7 +84,10 @@ jobs:
 
       - name: "Coverage gate (issue #663; total must stay at or above 95%)"
         shell: bash
-        run: ./scripts/coverage-gate.sh .artifacts/coverage/coverage.out 95.0
+        run: |
+          COVERAGE_GATE_COMMIT="${GITHUB_SHA}" \
+          COVERAGE_GATE_GO_VERSION="$(go version)" \
+            ./scripts/coverage-gate.sh .artifacts/coverage/coverage.out 95.0
 
       - name: Upload reproducible coverage evidence
         if: always()
