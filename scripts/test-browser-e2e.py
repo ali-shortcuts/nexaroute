@@ -48,6 +48,19 @@ def wait_ready(base: str, proc: subprocess.Popen[str]) -> None:
             time.sleep(.2)
     raise AssertionError("gateway did not become ready")
 
+def wait_for_counter(counter: dict, expected: int, timeout: float = 10) -> None:
+    # The mocked jobs GET serves the completed job regardless of whether
+    # the async create POST has landed, so the DOM "completed" signal does
+    # not causally follow the POST. Poll the Python-side counter instead
+    # of reading it synchronously; the assertion after this call is
+    # unchanged, so a double submit still fails (the counter never equals
+    # the expected value) and a missing submit still times out.
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if counter["n"] == expected:
+            return
+        time.sleep(0.05)
+
 def console_errors(page):
     errors = []
     page.on("console", lambda msg: errors.append(msg.text) if msg.type == "error" else None)
@@ -723,10 +736,12 @@ def main() -> None:
                 page.get_by_role("button", name="Queue job").click()
                 recover_card = page.locator(".video-job-card", has_text="ui-recover-1")
                 expect(recover_card).to_contain_text("completed")
+                wait_for_counter(recover_posts, 1)
                 assert recover_posts["n"] == 1, f"recover submissions={recover_posts['n']}"
                 page.reload(wait_until="domcontentloaded")
                 page.locator('[data-page="video"]').click()
                 expect(page.locator(".video-job-card", has_text="ui-recover-1")).to_contain_text("completed")
+                wait_for_counter(recover_posts, 1)
                 assert recover_posts["n"] == 1, f"job resubmitted after reload: posts={recover_posts['n']}"
                 page.unroute("**/v1/video/providers", mock_providers_ok)
                 page.unroute("**/v1/video/jobs**", mock_jobs_dispatch)
