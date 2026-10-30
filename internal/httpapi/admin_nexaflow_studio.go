@@ -14,11 +14,35 @@ import (
 // for POST in adminPermissionForRequest); no workflow.* permission is
 // invented here and no tenant value is ever read from a request.
 
-// adminNexaflowTemplateByID serves POST
+// adminNexaflowTemplate dispatches /admin/api/nexaflow/templates/ by
+// method and shape. Two handlers share this prefix: the Task 8 GET
+// handler serves one inert template, and the studio POST handler serves
+// template instantiation. The two pinned contracts meet here without
+// either being weakened:
+//   - GET .../instantiate answers 405 (studio method contract) and
+//     POST .../instantiate answers 201;
+//   - POST on an unknown two-part shape answers 404 (studio shape
+//     contract: POST .../x/unknown);
+//   - POST on a bare template id answers 405 (Task 8 method contract);
+//   - GET on a template id answers 200/404, GET on a sub-path 404.
+//
+// Every branch runs its handler's own admin check first, so
+// unauthenticated requests still answer 401.
+func (s *Server) adminNexaflowTemplate(w http.ResponseWriter, r *http.Request) {
+	rest := strings.TrimPrefix(r.URL.Path, "/admin/api/nexaflow/templates/")
+	parts := strings.Split(strings.Trim(rest, "/"), "/")
+	if len(parts) == 2 && (parts[1] == "instantiate" || r.Method == http.MethodPost) {
+		s.adminNexaflowTemplateInstantiate(w, r)
+		return
+	}
+	s.adminNexaflowTemplateByID(w, r)
+}
+
+// adminNexaflowTemplateInstantiate serves POST
 // /admin/api/nexaflow/templates/{id}/instantiate: server-side template
 // instantiation into a saved draft. Any other shape under the
 // templates/ subtree answers 404.
-func (s *Server) adminNexaflowTemplateByID(w http.ResponseWriter, r *http.Request) {
+func (s *Server) adminNexaflowTemplateInstantiate(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.nexaflowAdmin(r); !ok {
 		errorJSON(w, http.StatusUnauthorized, "admin authentication required")
 		return

@@ -1137,14 +1137,13 @@ func (s *Server) Handler() http.Handler {
 	if s.nexaflow != nil {
 		mux.HandleFunc("/admin/api/nexaflow/nodes", s.adminNexaflowNodes)
 		mux.HandleFunc("/admin/api/nexaflow/templates", s.adminNexaflowTemplates)
-		mux.HandleFunc("/admin/api/nexaflow/templates/", s.adminNexaflowTemplateByID)
+		mux.HandleFunc("/admin/api/nexaflow/templates/", s.adminNexaflowTemplate)
 		mux.HandleFunc("/admin/api/nexaflow/definitions", s.adminNexaflowDefinitions)
 		// Exact pattern wins over the definitions/ subtree pattern in
 		// ServeMux (longest match), so /validate is not swallowed by
 		// the by-id handler.
 		mux.HandleFunc("/admin/api/nexaflow/definitions/validate", s.adminNexaflowDefinitionValidate)
 		mux.HandleFunc("/admin/api/nexaflow/definitions/", s.adminNexaflowDefinitionByID)
-		mux.HandleFunc("/admin/api/nexaflow/templates/", s.adminNexaflowTemplateByID)
 		mux.HandleFunc("/admin/api/nexaflow/runs", s.adminNexaflowRuns)
 		mux.HandleFunc("/admin/api/nexaflow/runs/", s.adminNexaflowRunByID)
 		mux.HandleFunc("/admin/api/nexaflow/audit", s.adminNexaflowAudit)
