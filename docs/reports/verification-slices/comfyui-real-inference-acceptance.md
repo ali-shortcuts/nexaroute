@@ -289,6 +289,97 @@ fixtures only — none of this is real inference):
   no model was downloaded, no paid or public inference endpoint was
   called, no production instance was touched.
 
+## 2026-10-30 rebase + partial-download cleanup (local only, NOT a live run)
+
+- **Rebase:** the five 2026-10-29 commits rebased cleanly onto main
+  `02a43ac` (which includes merged #752, #754, #756) with no
+  conflicts and no content change to the original fixes; the diff
+  against main is still exactly the original 7 files plus the new
+  changes below.
+- **Old verify failure, diagnosed, not duplicated:** the only failing
+  check on the old PR head was `verify`, and its only failing test
+  was `TestIssue663ProvidersScheduleRecoveryQueueFullCallback`
+  (internal/probe, CI run 40915396200, job 123594150864:
+  "queue-full timer callback did not publish a
+  recovery_queue_full event", task cleared but event not yet
+  visible). Root cause is a clear-then-publish ordering race in
+  `internal/probe/engine.go`: the timer callback calls
+  `clearRecoveryTask` and only then `bus.Add`, so a test that polls
+  task clearance and snapshots the bus immediately can observe the
+  clear before the publish under CI scheduling load. That race is
+  already fixed on main by merged PR #752 (test-only: the callback
+  test polls for the event within the same 2 s bound instead of
+  snapshotting once; assertion unchanged). No probe production code
+  was changed here and no second fix was opened: a
+  publish-before-clear production reorder was considered and
+  deliberately not taken, because it would duplicate a just-merged
+  decision and the recovery outcome itself (task cleared, event
+  follows) is unchanged either way. On the rebased tree the
+  callback test passes (see verification below).
+- **Defect fixed — partial download left orphaned assets:**
+  `DownloadOutputs` persisted each output as it arrived, so a
+  download that failed on a later asset (oversized, HTTP error,
+  timeout, non-video) returned an error but left the earlier
+  assets persisted in the store — an orphaned partial set that a
+  retry could mistake for, or overwrite under, a completed job.
+  The job itself was never marked complete (the orchestrator and
+  the harness both treat a download error as failed/resumable),
+  but the partial files leaked. **Fix:** `DownloadOutputs` now
+  wraps the existing per-asset loop; on any error it best-effort
+  deletes exactly the assets that call persisted, on a detached
+  context so a timed-out download can still clean up, and still
+  returns `nil` assets plus the original error. The sink
+  capability is optional (`assetDeleter` type assertion), so
+  existing sinks are unaffected. `storage.Local.Delete` validates
+  the URI inside the store root (lexical and symlink-resolved,
+  same as `Open`) and removes the named path itself — never
+  following a symlink — plus its `.json` sidecar.
+  Red proof: `TestComfyUIDownloadPartialFailureCleansUpAndLeavesOtherJobIntact`
+  FAILs on the pre-fix adapter (left `first.mp4` and
+  `first.mp4.json` under the failed job's directory, both cases)
+  and PASSes with the fix, for a later oversized asset and for a
+  later HTTP-500 asset; in both cases an unrelated job's asset in
+  the same store reads back byte-identical, metadata included.
+  `TestLocalDeleteRemovesAssetAndMetadata` and
+  `TestLocalDeleteRefusesOutsideRoot` pin the delete primitive:
+  file plus sidecar removed, second delete fails, an
+  outside-root URI is refused and its file untouched.
+
+Verification on this head (base `02a43ac`, Go 1.27.0, loopback
+fixtures only — none of this is real inference):
+
+- Focused plain: providers `TestComfyUI*` ok 3.917 s, storage ok
+  0.996 s, API gateway-retrieval test ok 0.127 s, gateway
+  `TestComfyUIAccept*` ok 1.989 s.
+- Focused `-race`: providers `TestComfyUI*` ok 10.275 s,
+  storage (full package) ok 4.211 s, API (full package) ok 1.967 s,
+  gateway `TestComfyUIAccept*` ok 5.752 s.
+- Probe callback test on the rebased tree (includes merged #752):
+  `TestIssue663ProvidersScheduleRecoveryQueueFullCallback`
+  `-count=20` ok 0.611 s; earlier on the pre-rebase tree it also
+  passed `-count=50` plain and `-count=20 -race` for the
+  `ScheduleRecovery*` set.
+- `gofmt` clean on all touched files; `go vet` clean on
+  `internal/video/providers`, `internal/video/storage`, and
+  `internal/probe`.
+- `./scripts/verify.sh` is not run locally (whole repository plus
+  a browser step that cannot run in this sandbox); CI on the PR
+  is the gate for it. Actual ComfyUI model inference remains
+  NOT_RUN/BLOCKED (see below); no model was downloaded, no paid
+  or public inference endpoint was called, no production
+  instance was touched.
+
+Re-checked 2026-10-30 05:58 +0430 (names only, no values read):
+nothing listening on `127.0.0.1:8188` or `127.0.0.1:8189`;
+`COMFYUI_URL`, `COMFYUI_BASE_URL`, `COMFYUI_API_URL`,
+`COMFYUI_HOST`, and `COMFYUI_MODEL` all absent-or-empty;
+`/etc/nexaroute` does not exist; no gateway config points at a
+ComfyUI instance; no operator authorization naming an instance,
+model, or workflow exists on record. Present, so not blockers:
+`ffprobe` 8.1.2, the deterministic fixture suites, and the
+`comfyui-accept` harness itself. The verdict is unchanged:
+NOT_RUN/BLOCKED, and #651 stays OPEN.
+
 ## Live prerequisites still missing (2026-10-28, checked first-hand)
 
 Actual model inference remains NOT_RUN/BLOCKED, and #651 stays OPEN

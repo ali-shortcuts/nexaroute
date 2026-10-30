@@ -526,7 +526,35 @@ func (p *ComfyUI) CancelJob(ctx context.Context, id string) error {
 	return p.doJSON(ctx, http.MethodPost, "/queue", map[string]any{"delete": []string{id}}, nil)
 }
 
+// assetDeleter is the optional sink capability DownloadOutputs uses to
+// roll back a failed multi-asset download. It is optional so existing
+// sinks keep working; a sink without it simply leaves the partial set
+// to its own lifecycle, as before.
+type assetDeleter interface {
+	Delete(context.Context, video.Asset) error
+}
+
 func (p *ComfyUI) DownloadOutputs(ctx context.Context, status video.ProviderJobStatus, sink video.AssetSink) ([]video.Asset, error) {
+	saved, err := p.downloadComfyOutputs(ctx, status, sink)
+	if err != nil {
+		// A download that fails after persisting some outputs must not
+		// leave a partial set behind: the job is not complete, and a
+		// later retry must not find stale bytes under a filename it
+		// is about to write. Best-effort only — the original error is
+		// what the caller acts on — and on a detached context, so a
+		// timed-out download can still clean up after itself.
+		if deleter, ok := sink.(assetDeleter); ok {
+			cleanupCtx := context.WithoutCancel(ctx)
+			for _, asset := range saved {
+				_ = deleter.Delete(cleanupCtx, asset)
+			}
+		}
+		return nil, err
+	}
+	return saved, nil
+}
+
+func (p *ComfyUI) downloadComfyOutputs(ctx context.Context, status video.ProviderJobStatus, sink video.AssetSink) ([]video.Asset, error) {
 	if sink == nil {
 		return nil, errors.New("video asset sink is not configured")
 	}
@@ -561,28 +589,28 @@ func (p *ComfyUI) DownloadOutputs(ctx context.Context, status video.ProviderJobS
 		query.Set("type", meta["type"])
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.baseURL+"/view?"+query.Encode(), nil)
 		if err != nil {
-			return nil, err
+			return result, err
 		}
 		resp, err := p.client.Do(req)
 		if err != nil {
-			return nil, fmt.Errorf("download ComfyUI output: %w", err)
+			return result, fmt.Errorf("download ComfyUI output: %w", err)
 		}
 		data, readErr := io.ReadAll(io.LimitReader(resp.Body, p.maxOutputBytes+1))
 		closeErr := resp.Body.Close()
 		if readErr != nil {
-			return nil, fmt.Errorf("read ComfyUI output: %w", readErr)
+			return result, fmt.Errorf("read ComfyUI output: %w", readErr)
 		}
 		if closeErr != nil {
-			return nil, fmt.Errorf("close ComfyUI output response: %w", closeErr)
+			return result, fmt.Errorf("close ComfyUI output response: %w", closeErr)
 		}
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			return nil, fmt.Errorf("ComfyUI output download returned HTTP %d", resp.StatusCode)
+			return result, fmt.Errorf("ComfyUI output download returned HTTP %d", resp.StatusCode)
 		}
 		if int64(len(data)) > p.maxOutputBytes {
-			return nil, fmt.Errorf("ComfyUI output exceeds configured asset limit of %d bytes", p.maxOutputBytes)
+			return result, fmt.Errorf("ComfyUI output exceeds configured asset limit of %d bytes", p.maxOutputBytes)
 		}
 		if len(data) == 0 {
-			return nil, errors.New("ComfyUI returned an empty video output")
+			return result, errors.New("ComfyUI returned an empty video output")
 		}
 		asset.ContentType = resp.Header.Get("Content-Type")
 		if strings.Contains(asset.ContentType, ";") {
@@ -596,11 +624,11 @@ func (p *ComfyUI) DownloadOutputs(ctx context.Context, status video.ProviderJobS
 			}
 		}
 		if !strings.HasPrefix(strings.ToLower(asset.ContentType), "video/") && asset.ContentType != "application/octet-stream" {
-			return nil, fmt.Errorf("ComfyUI output has non-video content type %q", asset.ContentType)
+			return result, fmt.Errorf("ComfyUI output has non-video content type %q", asset.ContentType)
 		}
 		saved, err := sink.Put(ctx, asset, data)
 		if err != nil {
-			return nil, fmt.Errorf("persist ComfyUI video output: %w", err)
+			return result, fmt.Errorf("persist ComfyUI video output: %w", err)
 		}
 		result = append(result, saved)
 	}

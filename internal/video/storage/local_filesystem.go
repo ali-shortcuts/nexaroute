@@ -186,6 +186,64 @@ func writeMetadataAtomic(path string, data []byte) error {
 	return os.Rename(name, path)
 }
 
+// Delete removes an asset file previously persisted by Put, together
+// with its sidecar metadata, after the same inside-root validation as
+// Open. It removes the named path itself (never following a symlink),
+// so a symlinked asset path can only delete the link, never a target
+// outside the root. Callers use it to roll back a multi-asset download
+// that failed part-way: the assets saved by that call are removed
+// instead of being left as an orphaned partial set. It never deletes
+// an asset it did not validate as inside the root.
+func (s *Local) Delete(_ context.Context, a video.Asset) error {
+	if s == nil || strings.TrimSpace(s.Root) == "" {
+		return fmt.Errorf("storage root is not configured")
+	}
+	if strings.TrimSpace(a.URI) == "" {
+		return fmt.Errorf("asset URI is required")
+	}
+	root, err := filepath.Abs(s.Root)
+	if err != nil {
+		return err
+	}
+	path, err := filepath.Abs(filepath.Clean(a.URI))
+	if err != nil {
+		return err
+	}
+	rel, err := filepath.Rel(root, path)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return ErrAssetOutsideRoot
+	}
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return err
+	}
+	resolvedPath, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return err
+	}
+	rel, err = filepath.Rel(resolvedRoot, resolvedPath)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return ErrAssetSymlinkOutsideRoot
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if info.IsDir() {
+		return fmt.Errorf("asset is not a regular file")
+	}
+	if err := os.Remove(path); err != nil {
+		return err
+	}
+	if err := os.Remove(path + ".json"); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
 // ErrAssetOutsideRoot and ErrAssetSymlinkOutsideRoot report that an asset
 // path (or its symlink-resolved form) escapes the configured storage root.
 // Both are deterministic validation rejections, not transient storage

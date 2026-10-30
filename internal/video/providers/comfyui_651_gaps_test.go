@@ -234,3 +234,115 @@ func TestComfyUIDownloadTimeoutFailsClosed(t *testing.T) {
 		t.Fatalf("store root holds %d entries after a timed-out download, want none", len(entries))
 	}
 }
+
+// A multi-output download that fails on a later asset must not leave
+// the earlier asset behind as an orphaned partial set, and must not
+// touch an unrelated job's asset in the same store. The caller gets an
+// error and nothing it can mistake for a completed job; the other
+// job's bytes and checksum record stay byte-identical. Both failure
+// shapes are pinned: a later asset over the size limit, and a later
+// asset whose /view request fails.
+func TestComfyUIDownloadPartialFailureCleansUpAndLeavesOtherJobIntact(t *testing.T) {
+	cases := map[string]func(w http.ResponseWriter){
+		"oversizedLaterAsset": func(w http.ResponseWriter) {
+			w.Header().Set("Content-Type", "video/mp4")
+			_, _ = w.Write(make([]byte, 64))
+		},
+		"failedLaterAsset": func(w http.ResponseWriter) {
+			http.Error(w, "upstream gone", http.StatusBadGateway)
+		},
+	}
+	for name, later := range cases {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			sink, err := storage.NewLocal(root, 1<<20)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// An unrelated, already-completed job's asset in the
+			// same store: it must survive this job's failed
+			// download byte-for-byte, metadata included.
+			other, err := sink.Put(context.Background(), video.Asset{
+				ID: "other-1", Kind: "video", Filename: "other.mp4", ContentType: "video/mp4",
+				Metadata: map[string]string{"project_id": "p", "job_id": "other-job"},
+			}, []byte("other-job-bytes"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			otherBefore, err := os.ReadFile(other.URI)
+			if err != nil {
+				t.Fatal(err)
+			}
+			otherMetaBefore, err := os.ReadFile(other.URI + ".json")
+			if err != nil {
+				t.Fatal(err)
+			}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/view" {
+					http.NotFound(w, r)
+					return
+				}
+				switch r.URL.Query().Get("filename") {
+				case "first.mp4":
+					w.Header().Set("Content-Type", "video/mp4")
+					_, _ = w.Write([]byte("first-bytes"))
+				case "second.mp4":
+					later(w)
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer server.Close()
+			// 16-byte cap: the first asset fits, the 64-byte
+			// oversized asset does not; the HTTP-500 asset fails
+			// on status regardless of size.
+			provider, err := NewComfyUI(comfyTestConfig(comfyWorkflowFile(t), server.URL), 16)
+			if err != nil {
+				t.Fatal(err)
+			}
+			status := video.ProviderJobStatus{Outputs: []video.Asset{
+				{ID: "p-10-first", Filename: "first.mp4", Metadata: map[string]string{"filename": "first.mp4", "type": "output", "project_id": "p", "job_id": "job-651"}},
+				{ID: "p-11-second", Filename: "second.mp4", Metadata: map[string]string{"filename": "second.mp4", "type": "output", "project_id": "p", "job_id": "job-651"}},
+			}}
+			assets, err := provider.DownloadOutputs(context.Background(), status, sink)
+			if err == nil {
+				t.Fatal("DownloadOutputs unexpectedly succeeded with a failing later asset")
+			}
+			if assets != nil {
+				t.Fatalf("DownloadOutputs returned %d assets alongside an error, want none", len(assets))
+			}
+			// No file of the failed job may remain anywhere under
+			// its store directory.
+			var leftovers []string
+			_ = filepath.Walk(root, func(path string, info os.FileInfo, walkErr error) error {
+				if walkErr != nil {
+					return walkErr
+				}
+				if !info.IsDir() && strings.Contains(path, "job-651") {
+					leftovers = append(leftovers, path)
+				}
+				return nil
+			})
+			if len(leftovers) != 0 {
+				t.Fatalf("failed download left files behind: %v", leftovers)
+			}
+			otherAfter, err := os.ReadFile(other.URI)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(otherAfter) != string(otherBefore) {
+				t.Fatalf("other job asset changed: before %q after %q", otherBefore, otherAfter)
+			}
+			otherMetaAfter, err := os.ReadFile(other.URI + ".json")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(otherMetaAfter) != string(otherMetaBefore) {
+				t.Fatal("other job asset metadata changed during a failed download")
+			}
+			if read, err := sink.Read(other); err != nil || string(read) != "other-job-bytes" {
+				t.Fatalf("other job asset no longer reads back intact: read=%q err=%v", read, err)
+			}
+		})
+	}
+}
