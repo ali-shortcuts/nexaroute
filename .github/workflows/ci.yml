@@ -390,8 +390,13 @@ jobs:
         # Offline acceptance only (issue #650): lint, render with the
         # least-privilege acceptance values and with chart defaults,
         # posture/RBAC/probe/Recreate assertions, the secret-leak check
-        # and the termination-grace vs. gateway-drain invariant. The
-        # live kind-cluster phases are NOT run here; see
+        # and the termination-grace vs. gateway-drain invariant, plus
+        # the deterministic safe-failure self-tests (missing-prerequisite
+        # NOT_RUN gates, drain invariant against oversized/malformed
+        # configs, missing-Secret reference-only render, fault-release
+        # cleanup). The live kind-cluster phases are NOT run here; see
         # scripts/k8s-acceptance.sh --live and
         # docs/reports/K8S_ACCEPTANCE_2026-10-27.md.
-        run: bash scripts/k8s-acceptance.sh --offline-only
+        run: |
+          bash scripts/k8s-acceptance.sh --offline-only
+          bash scripts/k8s-acceptance.sh --self-test

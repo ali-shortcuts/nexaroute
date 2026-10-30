@@ -10,13 +10,32 @@
 #       secret-reference-only database wiring, and the termination-grace
 #       vs. gateway-drain invariant. This is the mode CI runs.
 #
+#   scripts/k8s-acceptance.sh --self-test
+#       No cluster either. Deterministic, cluster-free tests of the
+#       failure paths that --live cannot prove without a cluster: the
+#       missing-prerequisite NOT_RUN gates (missing tools, missing
+#       preceding tag, an already-existing kind cluster — all must exit
+#       without creating a cluster), the drain invariant against an
+#       oversized and a malformed config, the missing-Secret render
+#       (reference-only wiring, never a plaintext DSN), and the
+#       fault-release cleanup helper (idempotent uninstall + secret
+#       deletion). CI runs this mode too; it is not a substitute for a
+#       live run, it is the part of safe failure that is provable
+#       without one.
+#
 #   scripts/k8s-acceptance.sh --live [--with-postgres] [--keep-cluster]
 #       Creates a DISPOSABLE kind cluster (default name
 #       nexaroute-accept), installs the chart from the preceding supported
 #       release, upgrades it to the tree under test, rolls it back, and
 #       re-upgrades it, exercising probes, non-root/read-only posture,
 #       graceful termination, pod restart with PVC persistence, and the
-#       secret-leak check. The cluster is deleted on exit unless
+#       secret-leak check. After the lifecycle phases it runs the
+#       safe-failure phases: an invalid-JSON config, an unreachable
+#       PostgreSQL control-plane backend, and a missing referenced
+#       Secret must each fail closed (a pod is created, none becomes
+#       Ready), each fault release is then uninstalled and verified
+#       absent, and a failed rollout (unpullable image) must roll back
+#       to a Ready release. The cluster is deleted on exit unless
 #       --keep-cluster is given. This mode NEVER touches an existing
 #       cluster: it refuses to run if its kind cluster already exists,
 #       and it never uses the operator's current kubectl context except
@@ -57,13 +76,14 @@ RELEASE="nexaroute"
 OUT_DIR=""
 
 usage() {
-  sed -n '1,40p' "$0"
+  sed -n '1,55p' "$0"
   exit 2
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --offline-only) MODE="offline"; shift ;;
+    --self-test) MODE="selftest"; shift ;;
     --live) MODE="live"; shift ;;
     --keep-cluster) KEEP_CLUSTER=1; shift ;;
     --with-postgres) WITH_POSTGRES=1; shift ;;
@@ -144,6 +164,24 @@ print(int(max(req, idle, 10) + 5))
 PY
 }
 
+# check_drain_grace <config.json> <grace-seconds>: 0 when the chart
+# grace strictly exceeds the gateway drain cap for that config, 1
+# otherwise — including when the config is not valid JSON, which
+# drain_seconds reports as a failure instead of aborting the script.
+# The printed line is the only output; callers turn it into PASS/FAIL.
+check_drain_grace() {
+  local drain
+  # The python traceback for a malformed config is suppressed here:
+  # the "unreadable" line below is the diagnostic, and a traceback
+  # would add noise without adding information about the failure.
+  if ! drain="$(drain_seconds "$1" 2>/dev/null)"; then
+    printf 'drain cap: unreadable (config is not valid JSON); termination grace: %ss\n' "$2"
+    return 1
+  fi
+  printf 'drain cap: %ss; termination grace: %ss\n' "$drain" "$2"
+  [[ "$2" -gt "$drain" ]]
+}
+
 # ---------------------------------------------------------------- offline
 offline_phase() {
   section "offline: helm lint, render, posture, drain invariant"
@@ -187,14 +225,12 @@ offline_phase() {
   leak_check "rendered manifests" "$OUT_DIR/rendered-acceptance.yaml" "$OUT_DIR/rendered-default.yaml"
 
   # Drain invariant for the config the live run actually boots.
-  local grace drain
+  local grace
   grace="$(grep -oE 'terminationGracePeriodSeconds: [0-9]+' "$OUT_DIR/rendered-acceptance.yaml" | head -1 | grep -oE '[0-9]+')"
-  drain="$(drain_seconds "$ACCEPT_CONFIG")"
-  printf 'acceptance config drain cap: %ss; chart termination grace: %ss\n' "$drain" "$grace"
-  if [[ "$grace" -gt "$drain" ]]; then
-    ok "termination grace ($grace s) exceeds gateway drain cap ($drain s)"
+  if check_drain_grace "$ACCEPT_CONFIG" "$grace"; then
+    ok "termination grace ($grace s) exceeds gateway drain cap for the acceptance config"
   else
-    fail "termination grace ($grace s) must exceed gateway drain cap ($drain s) or in-flight streams are SIGKILLed mid-drain"
+    fail "termination grace ($grace s) must exceed gateway drain cap for the acceptance config or in-flight streams are SIGKILLed mid-drain"
   fi
 }
 
@@ -245,6 +281,155 @@ create_dummy_secrets() {
     --from-literal="dsn=$PG_SENTINEL_DSN" >/dev/null
   kubectl_ns create secret generic nexaroute-accept-stub \
     --from-literal="api-key=$STUB_SENTINEL_KEY" >/dev/null
+}
+
+# assert_never_ready <label> <selector>: a fault-injected release must
+# have created at least one pod (otherwise the check is vacuous — a
+# release that never scheduled anything would "pass" by not existing)
+# and none of its pods may report Ready. A pod that never starts for
+# an unrelated reason (e.g. a missing image) still satisfies the
+# count, so the captured pod YAML/logs in $OUT_DIR are the evidence
+# that the failure is the injected fault, not an unrelated outage.
+assert_never_ready() {
+  local label="$1" selector="$2"
+  local count ready
+  count="$(kubectl_ns get pod -l "$selector" -o jsonpath='{.items[*].metadata.name}' 2>/dev/null | wc -w)"
+  ready="$(kubectl_ns get pod -l "$selector" -o jsonpath='{range .items[*]}{.status.conditions[?(@.type=="Ready")].status}{" "}{end}' 2>/dev/null | grep -c True || true)"
+  if [[ "$count" -eq 0 ]]; then
+    fail "$label: no pod created — phase inconclusive, inspect $OUT_DIR"
+  elif [[ "$ready" -gt 0 ]]; then
+    fail "$label: a pod became Ready (fail-open)"
+  else
+    ok "$label: $count pod(s), none Ready (fail-closed)"
+  fi
+}
+
+# cleanup_fault_release <release> <secret...>: uninstall a fault
+# release and delete only its own secrets, ignoring errors so cleanup
+# is idempotent and never masks the phase result. Callers verify
+# absence with helm status afterwards; this helper alone is not the
+# proof of cleanup.
+cleanup_fault_release() {
+  local rel="$1"; shift
+  helm uninstall "$rel" -n "$NAMESPACE" >/dev/null 2>&1 || true
+  if [[ $# -gt 0 ]]; then
+    kubectl_ns delete secret "$@" --ignore-not-found >/dev/null 2>&1 || true
+  fi
+}
+
+# assert_release_absent <release>: fail if helm still knows the
+# release after cleanup_fault_release ran.
+assert_release_absent() {
+  if helm status "$1" -n "$NAMESPACE" >/dev/null 2>&1; then
+    fail "fault release $1 still installed after cleanup"
+  else
+    ok "fault release $1 cleaned up"
+  fi
+}
+
+# ---------------------------------------------------------------- safe failure
+# safe_failure_phase: runs only after the lifecycle phases passed, so a
+# lifecycle failure is reported as itself and never hidden behind fault
+# phases. Each fault release gets its own config/Secret and its own
+# PVC (the release name is part of the chart fullname), so fault
+# releases cannot corrupt the main release's state. Each phase waits a
+# full 120s before asserting never-Ready: a negative assertion needs
+# the whole window, or a slow pod that would have become Ready could
+# pass vacuously. Every fault release is uninstalled and verified
+# absent before the next phase starts, and the main release is left
+# healthy at the end (failed rollout -> rollback -> /readyz 200).
+safe_failure_phase() {
+  section "live: safe-failure phases (fault releases must never become Ready)"
+  if [[ "$FAILURES" -gt 0 ]]; then
+    notrun "safe-failure phases skipped: lifecycle phase failed"
+    return
+  fi
+  # Context guard: fault phases must only ever talk to the kind
+  # cluster this run created. If the context is anything else, fail
+  # and touch nothing rather than installing fault releases elsewhere.
+  if [[ "$(kubectl config current-context 2>/dev/null)" != "kind-$CLUSTER" ]]; then
+    fail "safe-failure phases refused: current kubectl context is not kind-$CLUSTER"
+    return
+  fi
+
+  # 2a: misconfigured config (invalid JSON) must fail safe.
+  local bad_release="${RELEASE}-badconfig"
+  kubectl_ns create secret generic nexaroute-accept-badconfig \
+    --from-literal='config.json={this is not json' >/dev/null
+  helm install "$bad_release" "$CHART" -n "$NAMESPACE" -f "$ACCEPT_VALUES" \
+    --set config.existingSecret=nexaroute-accept-badconfig \
+    --set image.tag=accept-current --set image.pullPolicy=Never >/dev/null
+  sleep 120
+  assert_never_ready "invalid-JSON config release never Ready" "app.kubernetes.io/instance=$bad_release"
+  kubectl_ns get pod -l "app.kubernetes.io/instance=$bad_release" -o yaml >"$OUT_DIR/badconfig-pod.yaml" 2>/dev/null || true
+  kubectl_ns logs -l "app.kubernetes.io/instance=$bad_release" --tail=50 >"$OUT_DIR/badconfig-pod.log" 2>/dev/null || true
+  leak_check "invalid-config fault release logs" "$OUT_DIR/badconfig-pod.log"
+  cleanup_fault_release "$bad_release" nexaroute-accept-badconfig
+  assert_release_absent "$bad_release"
+
+  # 2b: an unreachable PostgreSQL control-plane backend must fail
+  # safe. The gateway pings the DSN at startup and fails closed when
+  # it is unreachable (see openPostgresControlPlane), so the pod must
+  # never become Ready — it must not serve traffic on a dead backend.
+  python3 - "$ACCEPT_CONFIG" "$OUT_DIR/deadpg-config.json" <<'PY'
+import json, sys
+cfg = json.load(open(sys.argv[1]))
+cfg["control_plane"]["enabled"] = True
+cfg["control_plane"]["backend"] = "postgres"
+cfg["control_plane"]["postgres_dsn_env"] = "NEXAROUTE_CONTROL_PLANE_PG_DSN"
+json.dump(cfg, open(sys.argv[2], "w"), indent=2)
+PY
+  kubectl_ns create secret generic nexaroute-accept-deadpg \
+    --from-literal="dsn=postgres://nexaroute:${SENTINEL}-DEADPG@nexaroute-accept-pg-dead:5432/nexaroute?sslmode=disable" >/dev/null
+  kubectl_ns create secret generic nexaroute-accept-config-deadpg \
+    --from-file="config.json=$OUT_DIR/deadpg-config.json" >/dev/null
+  local dead_release="${RELEASE}-deadpg"
+  helm install "$dead_release" "$CHART" -n "$NAMESPACE" -f "$ACCEPT_VALUES" \
+    --set config.existingSecret=nexaroute-accept-config-deadpg \
+    --set controlPlane.postgresDSN.secretName=nexaroute-accept-deadpg \
+    --set image.tag=accept-current --set image.pullPolicy=Never >/dev/null
+  sleep 120
+  assert_never_ready "gateway with unreachable control-plane backend never Ready" "app.kubernetes.io/instance=$dead_release"
+  kubectl_ns get pod -l "app.kubernetes.io/instance=$dead_release" -o yaml >"$OUT_DIR/deadpg-pod.yaml" 2>/dev/null || true
+  kubectl_ns logs -l "app.kubernetes.io/instance=$dead_release" --tail=50 >"$OUT_DIR/deadpg-pod.log" 2>/dev/null || true
+  leak_check "dead-backend fault release logs/describe" "$OUT_DIR/deadpg-pod.yaml" "$OUT_DIR/deadpg-pod.log"
+  cleanup_fault_release "$dead_release" nexaroute-accept-deadpg nexaroute-accept-config-deadpg
+  assert_release_absent "$dead_release"
+
+  # 2c: a missing referenced Secret must fail safe. Helm renders the
+  # secretKeyRef without checking existence, so this is a runtime
+  # failure: kubelet cannot create the container, the pod is never
+  # Ready, and no traffic is served. The config Secret here is the
+  # main release's acceptance config (it exists); only the database
+  # Secret is missing, isolating exactly one fault.
+  local missing_release="${RELEASE}-missingsecret"
+  helm install "$missing_release" "$CHART" -n "$NAMESPACE" -f "$ACCEPT_VALUES" \
+    --set controlPlane.postgresDSN.secretName=nexaroute-accept-does-not-exist \
+    --set image.tag=accept-current --set image.pullPolicy=Never >/dev/null
+  sleep 120
+  assert_never_ready "gateway with missing referenced Secret never Ready" "app.kubernetes.io/instance=$missing_release"
+  kubectl_ns get events --field-selector "involvedObject.name=$missing_release-nexaroute" -o yaml >"$OUT_DIR/missingsecret-events.yaml" 2>/dev/null || true
+  leak_check "missing-Secret fault release events" "$OUT_DIR/missingsecret-events.yaml"
+  cleanup_fault_release "$missing_release"
+  assert_release_absent "$missing_release"
+
+  # Failed rollout: upgrading the main release to an image that is
+  # not loaded into kind (pullPolicy Never) must never become Ready,
+  # and rolling back must restore the previous, healthy release.
+  # helm rollback without a revision argument rolls back to the
+  # previous revision — exactly the release the failed upgrade
+  # replaced — rather than to a revision number this script assumes.
+  helm upgrade "$RELEASE" "$CHART" -n "$NAMESPACE" -f "$ACCEPT_VALUES" \
+    --set image.tag=accept-nonexistent --set image.pullPolicy=Never >/dev/null
+  sleep 120
+  assert_never_ready "failed rollout (unpullable image) never Ready" "app.kubernetes.io/instance=$RELEASE"
+  helm rollback "$RELEASE" -n "$NAMESPACE" >/dev/null
+  if wait_pod_ready 300s; then ok "rollback after failed rollout: pod Ready"; else fail "rollback after failed rollout: pod did not become Ready"; fi
+  port_forward 18080
+  if [[ "$(http_code http://127.0.0.1:18080/readyz)" == "200" ]]; then
+    ok "rollback after failed rollout: /readyz 200 again"
+  else fail "rollback after failed rollout: /readyz not 200"; fi
+  stop_port_forward
 }
 
 # ---------------------------------------------------------------- live
@@ -428,6 +613,8 @@ PY
     --set image.tag=accept-current --set image.pullPolicy=Never >/dev/null
   if wait_pod_ready 300s; then ok "re-upgraded pod Ready"; else fail "re-upgraded pod did not become Ready"; fi
 
+  safe_failure_phase
+
   # Leak check over live evidence (never over Secret objects).
   kubectl_ns get events -o yaml >"$OUT_DIR/events.yaml" 2>/dev/null || true
   kubectl_ns logs "deploy/${RELEASE}-nexaroute" >"$OUT_DIR/pod.log" 2>/dev/null || true
@@ -525,7 +712,194 @@ PY
   ok "PostgreSQL-backed release uninstalled"
 }
 
+# ---------------------------------------------------------------- self-test
+# selftest_tool_bin <dir>: symlink a fixed set of ordinary tools into
+# a directory, deliberately excluding kind, kubectl and docker, so a
+# subprocess run with that PATH tests the missing-tools gate even on
+# a machine that has those tools installed.
+selftest_tool_bin() {
+  local tool
+  for tool in bash grep sed mkdir rm cp ln cat sleep date wc head tr chmod python3 helm git curl dirname basename seq tar; do
+    if command -v "$tool" >/dev/null 2>&1; then
+      ln -sf "$(command -v "$tool")" "$1/$tool"
+    fi
+  done
+}
+
+# selftest_phase: deterministic, cluster-free tests of the failure
+# paths. Nothing here creates a cluster, installs a release, or needs
+# credentials; the live-tool subprocesses use stub binaries that log
+# every invocation, so "no cluster created" is asserted from the log,
+# not assumed from the exit code.
+selftest_phase() {
+  section "self-test: deterministic safe-failure checks (no cluster)"
+  need helm || { fail "helm is required for self-test"; return; }
+  need python3 || { fail "python3 is required for self-test"; return; }
+
+  local tmp="$OUT_DIR/selftest-tmp"
+  rm -rf "$tmp"
+  mkdir -p "$tmp/bin" "$tmp/bin2" "$tmp/bin3" "$tmp/cleanup-bin"
+  selftest_tool_bin "$tmp/bin"
+  selftest_tool_bin "$tmp/bin2"
+  selftest_tool_bin "$tmp/bin3"
+
+  # Stub live tools for bin2/bin3. The kind stub logs every call; the
+  # bin3 variant additionally reports the acceptance cluster as
+  # already existing. kubectl/docker stubs only need to exist in PATH.
+  cat >"$tmp/bin2/kind" <<'EOF'
+#!/bin/sh
+echo "kind $@" >> "$SELFTEST_KIND_LOG"
+exit 0
+EOF
+  cat >"$tmp/bin3/kind" <<'EOF'
+#!/bin/sh
+echo "kind $@" >> "$SELFTEST_KIND_LOG"
+if [ "$1" = "get" ] && [ "$2" = "clusters" ]; then echo "nexaroute-accept"; fi
+exit 0
+EOF
+  chmod +x "$tmp/bin2/kind" "$tmp/bin3/kind"
+  for stub in kubectl docker; do
+    printf '#!/bin/sh\nexit 0\n' >"$tmp/bin2/$stub"
+    printf '#!/bin/sh\nexit 0\n' >"$tmp/bin3/$stub"
+    chmod +x "$tmp/bin2/$stub" "$tmp/bin3/$stub"
+  done
+
+  # 1. Missing live tools -> exit 3 NOT_RUN, before any cluster work.
+  local code=0
+  SELFTEST_KIND_LOG="$tmp/kind-missing.log" PATH="$tmp/bin" \
+    "$BASH" "$REPO/scripts/k8s-acceptance.sh" --live --out-dir "$tmp/missing-out" \
+    >"$tmp/missing.log" 2>&1 || code=$?
+  if [[ "$code" -eq 3 ]] && grep -q "RESULT: NOT_RUN" "$tmp/missing.log" \
+      && grep -q "missing required tool: kind" "$tmp/missing.log" \
+      && grep -q "missing required tool: kubectl" "$tmp/missing.log" \
+      && grep -q "missing required tool: docker" "$tmp/missing.log"; then
+    ok "missing live tools -> exit 3 NOT_RUN (not a pass, not a cluster)"
+  else
+    fail "missing live tools did not exit 3 NOT_RUN (code $code; see $tmp/missing.log)"
+  fi
+
+  # 2. Missing preceding tag -> exit 3 NOT_RUN, kind never asked to
+  # create a cluster (the stub log is the evidence, not the exit code).
+  code=0
+  SELFTEST_KIND_LOG="$tmp/kind-tag.log" PATH="$tmp/bin2" \
+    "$BASH" "$REPO/scripts/k8s-acceptance.sh" --live --prev-tag v9.9.9-does-not-exist \
+    --out-dir "$tmp/tag-out" >"$tmp/tag.log" 2>&1 || code=$?
+  if [[ "$code" -eq 3 ]] && grep -q "RESULT: NOT_RUN" "$tmp/tag.log" \
+      && { [[ ! -f "$tmp/kind-tag.log" ]] || ! grep -q "create cluster" "$tmp/kind-tag.log"; }; then
+    ok "missing preceding tag -> exit 3 NOT_RUN, no kind cluster creation attempted"
+  else
+    fail "missing preceding tag did not exit 3 NOT_RUN cleanly (code $code; see $tmp/tag.log)"
+  fi
+
+  # 3. Already-existing kind cluster -> refusal (exit 1), again with
+  # no create-cluster call. The preceding "tag" here is the current
+  # HEAD SHA, which rev-parse accepts, so the tag gate cannot mask
+  # the cluster-exists gate.
+  local head_sha
+  head_sha="$(git rev-parse HEAD 2>/dev/null || true)"
+  if [[ -z "$head_sha" ]]; then
+    notrun "existing-cluster refusal (no HEAD SHA available)"
+  else
+    code=0
+    SELFTEST_KIND_LOG="$tmp/kind-exists.log" PATH="$tmp/bin3" \
+      "$BASH" "$REPO/scripts/k8s-acceptance.sh" --live --prev-tag "$head_sha" \
+      --out-dir "$tmp/exists-out" >"$tmp/exists.log" 2>&1 || code=$?
+    if [[ "$code" -eq 1 ]] && grep -q "refusing to touch an existing kind cluster" "$tmp/exists.log" \
+        && { [[ ! -f "$tmp/kind-exists.log" ]] || ! grep -q "create cluster" "$tmp/kind-exists.log"; }; then
+      ok "existing kind cluster -> refused, no kind cluster creation attempted"
+    else
+      fail "existing kind cluster was not refused cleanly (code $code; see $tmp/exists.log)"
+    fi
+  fi
+
+  # 4. Drain invariant: acceptance config passes, an oversized config
+  # and a too-small grace fail, and a malformed config fails without
+  # crashing the script (check_drain_grace, not a bare drain_seconds).
+  helm template "$RELEASE" "$CHART" -f "$ACCEPT_VALUES" >"$tmp/rendered-acceptance.yaml"
+  local grace
+  grace="$(grep -oE 'terminationGracePeriodSeconds: [0-9]+' "$tmp/rendered-acceptance.yaml" | head -1 | grep -oE '[0-9]+')"
+  if check_drain_grace "$ACCEPT_CONFIG" "$grace"; then
+    ok "self-test: acceptance config drain cap below chart grace"
+  else
+    fail "self-test: acceptance config should pass the drain invariant"
+  fi
+  python3 - "$ACCEPT_CONFIG" "$tmp/big-config.json" <<'PY'
+import json, sys
+cfg = json.load(open(sys.argv[1]))
+cfg["routing"]["request_timeout_ms"] = 300000
+json.dump(cfg, open(sys.argv[2], "w"), indent=2)
+PY
+  if check_drain_grace "$tmp/big-config.json" "$grace"; then
+    fail "self-test: oversized config drain cap should exceed the chart grace"
+  else
+    ok "self-test: oversized config correctly fails the drain invariant"
+  fi
+  if check_drain_grace "$ACCEPT_CONFIG" 10; then
+    fail "self-test: a 10s grace should fail against the acceptance config drain cap"
+  else
+    ok "self-test: too-small termination grace correctly fails the drain invariant"
+  fi
+  printf '{this is not json' >"$tmp/bad-config.json"
+  if check_drain_grace "$tmp/bad-config.json" "$grace"; then
+    fail "self-test: malformed config should fail the drain check"
+  else
+    ok "self-test: malformed config fails the drain check without crashing"
+  fi
+
+  # 5. Missing referenced Secret renders as a reference only: helm
+  # does not check existence, so the live never-Ready phase is the
+  # runtime proof, and the render must never contain a plaintext DSN.
+  helm template "$RELEASE" "$CHART" -f "$ACCEPT_VALUES" \
+    --set controlPlane.postgresDSN.secretName=nexaroute-accept-does-not-exist \
+    >"$tmp/rendered-missingsecret.yaml"
+  if grep -q "name: nexaroute-accept-does-not-exist" "$tmp/rendered-missingsecret.yaml" \
+      && grep -q "secretKeyRef:" "$tmp/rendered-missingsecret.yaml"; then
+    ok "self-test: missing Secret renders as a secretKeyRef only"
+  else
+    fail "self-test: missing Secret did not render as a secretKeyRef"
+  fi
+  if grep -qE 'value: (postgres|rediss?)://' "$tmp/rendered-missingsecret.yaml"; then
+    fail "self-test: missing-Secret render must not contain a plaintext DSN"
+  else
+    ok "self-test: missing-Secret render contains no plaintext DSN"
+  fi
+
+  # 6. Fault-release cleanup helper: uninstall + secret deletion are
+  # invoked, and a second call still succeeds (idempotent).
+  cat >"$tmp/cleanup-bin/helm" <<'EOF'
+#!/bin/sh
+echo "helm $@" >> "$SELFTEST_CLEANUP_LOG"
+exit 0
+EOF
+  cat >"$tmp/cleanup-bin/kubectl" <<'EOF'
+#!/bin/sh
+echo "kubectl $@" >> "$SELFTEST_CLEANUP_LOG"
+exit 0
+EOF
+  chmod +x "$tmp/cleanup-bin/helm" "$tmp/cleanup-bin/kubectl"
+  local saved_path="$PATH"
+  PATH="$tmp/cleanup-bin:/bin:/usr/bin" SELFTEST_CLEANUP_LOG="$tmp/cleanup.log" \
+    cleanup_fault_release "nexaroute-fault-test" nexaroute-accept-fault-secret
+  PATH="$tmp/cleanup-bin:/bin:/usr/bin" SELFTEST_CLEANUP_LOG="$tmp/cleanup2.log" \
+    cleanup_fault_release "nexaroute-fault-test" nexaroute-accept-fault-secret
+  PATH="$saved_path"
+  if grep -q "helm uninstall nexaroute-fault-test" "$tmp/cleanup.log" \
+      && grep -q "delete secret nexaroute-accept-fault-secret" "$tmp/cleanup.log" \
+      && grep -q "helm uninstall nexaroute-fault-test" "$tmp/cleanup2.log"; then
+    ok "self-test: fault-release cleanup is invoked and idempotent"
+  else
+    fail "self-test: fault-release cleanup helper did not invoke uninstall + secret deletion twice"
+  fi
+}
+
 section "NexaRoute Kubernetes acceptance ($MODE)"
+if [[ "$MODE" == "selftest" ]]; then
+  selftest_phase
+  printf '\nRESULT: failures=%s not_run=%s\n' "$FAILURES" "$NOTRUNS"
+  printf 'evidence dir: %s\n' "$OUT_DIR"
+  if [[ "$FAILURES" -gt 0 ]]; then exit 1; fi
+  exit 0
+fi
 offline_phase
 if [[ "$MODE" == "live" ]]; then
   live_code=0

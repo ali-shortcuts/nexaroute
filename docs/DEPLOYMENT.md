@@ -133,16 +133,30 @@ as an explicit gap, not a claim.
   order.
 - **Acceptance automation**: `scripts/k8s-acceptance.sh --offline-only`
   runs the lint/render/posture/leak/drain checks (this is what CI
-  runs). `scripts/k8s-acceptance.sh --live` runs the full disposable
-  kind-cluster acceptance: preceding-release install, upgrade,
-  rollback, re-upgrade, probes, posture from the live pod spec, PVC
-  persistence across a measured graceful restart, and the sentinel
-  secret-leak check over events, logs and describe output. It creates
-  and deletes its own kind cluster, refuses to touch an existing one,
-  and uses only fake sentinel secret values. Live evidence for this
-  release is recorded in `docs/reports/K8S_ACCEPTANCE_2026-10-27.md`;
-  until a live run passes there, production-cluster support remains
-  unclaimed.
+  runs, together with `--self-test`). `scripts/k8s-acceptance.sh
+  --self-test` runs the deterministic, cluster-free safe-failure
+  checks: the missing-prerequisite NOT_RUN gates (missing tools,
+  missing preceding tag, already-existing kind cluster — all exit
+  without creating a cluster), the drain invariant against oversized
+  and malformed configs, the missing-Secret reference-only render,
+  and the fault-release cleanup helper. `scripts/k8s-acceptance.sh
+  --live` runs the full disposable kind-cluster acceptance:
+  preceding-release install, upgrade, rollback, re-upgrade, probes,
+  posture from the live pod spec, PVC persistence across a measured
+  graceful restart, the sentinel secret-leak check over events, logs
+  and describe output, and then the safe-failure phases: an
+  invalid-JSON config, an unreachable PostgreSQL control-plane
+  backend, and a missing referenced Secret must each fail closed
+  (a pod is created, none becomes Ready) and each fault release is
+  uninstalled and verified absent, and a failed rollout (unpullable
+  image) must roll back to a Ready release. It creates and deletes
+  its own kind cluster, refuses to touch an existing one, and uses
+  only fake sentinel secret values. Live evidence for this release
+  is recorded in `docs/reports/K8S_ACCEPTANCE_2026-10-27.md`; until a
+  live run passes there, production-cluster support remains
+  unclaimed. The safe-failure extension itself is recorded in
+  `docs/reports/K8S_ACCEPTANCE_2026-10-30.md`, where the live run
+  is still NOT_RUN for the same missing-cluster reason.
 
 ## Upgrades and rollback
 
