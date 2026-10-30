@@ -194,13 +194,16 @@ for done:
 
 - **Production gateway wiring.** #691 wired the engine into
   `cmd/gateway` (config section, attach, scheduler ticker loop,
-  synchronous `Recover` at startup). Canonical has zero callers of
-  `AttachNexaflow` in `cmd/gateway`: the scheduler, webhook
-  service, and recovery primitives exist and are tested at the
-  service level, but no gateway process ticks them yet. Wiring
-  needs the composite backend (task5) and the owner's API-shape
-  decision; it cannot be transplanted from #691's
-  `RuntimeBackend`/loopback composition without that backend.
+  synchronous `Recover` at startup). The canonical line now has an
+  opt-in gateway caller: `cmd/gateway` calls
+  `httpapi.Server.AttachNexaflow` when the `nexaflow` config section is
+  enabled, opens the single-host file store, wires the canonical
+  service, and runs `Recover` before the listener serves (proven by
+  `cmd/gateway/nexaflow_e2e_test.go`). Still deferred from #691's
+  wiring: the background scheduler ticker (canonical schedules are
+  caller-supplied, so there is no persisted schedule list to tick yet)
+  and signed-webhook attachment (it needs an operator-owned secret
+  source for `secret_ref` resolution).
 - **Scheduler daily schedules, trigger discovery, persisted
   schedule state, and the scheduler tick HTTP endpoint.**
   Canonical schedules are caller-supplied interval schedules;

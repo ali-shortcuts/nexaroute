@@ -400,13 +400,20 @@ identical delivery, not exactly-once external side effects: a
 claimed delivery whose start fails is consumed, and a parked
 ambiguous attempt is precisely an unproven external outcome.
 
-Not implemented (deferred, not done): production gateway wiring
-(no caller of `AttachNexaflow` in `cmd/gateway`, so no gateway
-process ticks schedules, serves webhooks, or runs startup recovery
-yet); scheduler daily schedules, trigger discovery, persisted
+Production gateway attachment is implemented as an opt-in feature:
+`cmd/gateway` calls `httpapi.Server.AttachNexaflow` when the `nexaflow`
+config section is enabled, opening the single-host file store, wiring the
+canonical service, and running startup recovery before the listener
+serves. The route surface is proven end to end by
+`cmd/gateway/nexaflow_e2e_test.go`. Still deferred (not done): the
+background scheduler tick loop and signed-webhook attachment (canonical
+schedules are caller-supplied and webhook secrets need an operator-owned
+source); scheduler daily schedules, trigger discovery, persisted
 schedule state, and the scheduler tick endpoint; webhook
 `secret_ref` resolution and published-trigger validation in the
-(wiring-owned) Start function; async dispatch (202 executions);
+(wiring-owned) Start function; compat/cost/eval backend ports in the
+production composite (those nodes fail closed with `backend_unavailable`
+until exposed); async dispatch (202 executions);
 subworkflows, run-level fallback execution, any-join, durable timer
 waits; `workflow.*` permissions (admin routes ride
 `config.read`/`config.write`/`audit.read` as an interim mapping);

@@ -1032,6 +1032,30 @@ run that produced too little evidence to meet the suite's minimum sample count
 stores the run but writes **no** scorecard (`scorecard_written: false`). Model
 outputs never appear in events, metrics or the admin snapshot.
 
+## Optional NexaFlow workflow service
+
+NexaFlow is disabled by default. When `nexaflow.enabled` is true, the gateway
+opens the single-host file store, attaches the canonical workflow service
+(`/admin/api/nexaflow/*`), and runs startup recovery before the listener
+serves. `store_path` is resolved relative to the config file's directory;
+empty means `nexaflow/nexaflow-store` there. The file store must not be shared
+between hosts or processes. `gateway_base_url` overrides the loopback address
+used by workflow nodes to call this gateway (empty derives it from `listen`),
+and `gateway_token_ref` names the environment variable holding a client-auth
+token for those loopback calls. `worker_id` labels this process's run claims
+(empty derives `gateway-<pid>`). Signed webhooks and the background scheduler
+tick are not attached in this opt-in wiring.
+
+```json
+"nexaflow": {
+  "enabled": false,
+  "store_path": "nexaflow/nexaflow-store",
+  "gateway_base_url": "",
+  "gateway_token_ref": "",
+  "worker_id": ""
+}
+```
+
 ## Optional asynchronous video gateway
 
 The video gateway is disabled by default. When enabled, `auth_token_env` must

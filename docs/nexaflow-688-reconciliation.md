@@ -166,8 +166,11 @@ dispatched, so no side effect has happened. This also fixes the
   `config.read`/`config.write`/`audit.read`), tenant isolation beyond
   the ownership ceiling + scope label, durable timer waits (sync wait
   ≤ 5m in-process; `waiting_timer` is never emitted), subworkflows,
-  studio UI, and production gateway wiring (`httpapi.Server.AttachNexaflow`
-  exists; no caller in `cmd/gateway` on main).
+  and the background scheduler/webhook wiring. The Studio UI landed via
+  PR #764, and production service attachment now has a caller:
+  `cmd/gateway` calls `httpapi.Server.AttachNexaflow` behind the opt-in
+  `nexaflow` config section (startup recovery included; scheduler and
+  webhook attachment remain deferred).
 
 ## Verification (this PR head, rebased onto main `39a7498`)
 

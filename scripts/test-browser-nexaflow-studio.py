@@ -10,14 +10,14 @@ fails closed without leaving the machine.
 Skips cleanly (exit 0) when Chromium or Python Playwright is
 unavailable, matching the verify.sh browser gate. It ALSO skips
 cleanly when the booted gateway does not attach the NexaFlow service:
-the production gateway has no AttachNexaflow caller (gateway wiring
-is a separate, deferred product decision), so without an attached
-service the studio API paths fall through to the static server and
-answer 404. The skip names that blocker instead of faking a pass;
-once gateway wiring lands, the same script runs all 15 cases for real.
+the production gateway now attaches it only when the opt-in `nexaflow`
+config section is enabled, so without enablement the studio API paths
+fall through to the static server and answer 404. The skip names that
+blocker instead of faking a pass; the production boot below enables
+the section, so the default run exercises the real wiring.
 
-To run all cases before gateway wiring lands, point the script at a
-pre-wired server instead of booting the production gateway:
+To run all cases against a server that is already serving the workflow
+service, point the script at it:
 NEXAFLOW_STUDIO_BASE_URL=http://127.0.0.1:PORT (e.g. a test server
 built with the repo's own Server + AttachNexaflow). The script then
 skips the gateway boot and runs every case against that base.
@@ -108,6 +108,11 @@ def main() -> None:
             # only, no providers).
             config["probe"]["enabled"] = False
             config["probe"]["on_start"] = False
+            # Enable the opt-in workflow service so this run exercises the
+            # production AttachNexaflow caller instead of the 404 fallthrough.
+            nexaflow = config.setdefault("nexaflow", {})
+            nexaflow["enabled"] = True
+            nexaflow["store_path"] = "nexaflow/nexaflow-store"
             port = free_port()
             config["listen"] = f"127.0.0.1:{port}"
             config_path = tmp_path / "config.json"
@@ -158,11 +163,10 @@ def main() -> None:
                                 f"nodes probe: unexpected status {r.status}")
                 except urllib.error.HTTPError as e:
                     if e.code == 404:
-                        print("SKIP: production gateway does not attach "
-                              "the NexaFlow service (no AttachNexaflow "
-                              "caller in cmd/gateway); studio API cases "
-                              "need gateway wiring, which is a separate "
-                              "deferred decision")
+                        print("SKIP: booted gateway did not attach the "
+                              "NexaFlow service (nexaflow.enabled is "
+                              "false or startup failed); studio API "
+                              "cases need the opt-in service enabled")
                         browser.close()
                         return
                     raise

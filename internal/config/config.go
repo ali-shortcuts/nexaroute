@@ -304,6 +304,7 @@ type Config struct {
 	Guardrails             GuardrailConfig              `json:"guardrails,omitempty"`
 	Evaluation             EvaluationConfig             `json:"evaluation,omitempty"`
 	Video                  VideoConfig                  `json:"video,omitempty"`
+	Nexaflow               NexaflowConfig               `json:"nexaflow,omitempty"`
 	Decision               DecisionConfig               `json:"decision,omitempty"`
 	Autopilot              AutopilotConfig              `json:"autopilot,omitempty"`
 	DecisionPolicies       []DecisionPolicyConfig       `json:"decision_policies,omitempty"`
@@ -380,6 +381,26 @@ func (c *Config) MigrateClientKeysToHashes() int {
 // converted in memory and still need a persisted migration.
 func (c *Config) ClientKeyMigrationPending() int {
 	return c.clientKeyMigrationPending
+}
+
+// NexaflowConfig enables the canonical NexaFlow workflow service. It is
+// disabled by default: while disabled, no NexaFlow store is opened and no
+// NexaFlow route exists, so gateway behaviour is unchanged. StorePath is
+// resolved relative to the config file's directory when relative (the
+// admin.security_store_path pattern); empty means
+// "nexaflow/nexaflow-store" under that directory. The store is the
+// single-host file store; it must not be shared between hosts or
+// processes. GatewayBaseURL is the loopback address of this gateway for
+// chat/video/MCP node calls; empty defaults to the configured listener on
+// 127.0.0.1. GatewayTokenRef names the environment variable holding a
+// client-auth token for those loopback calls; without it, llm.chat nodes
+// fail closed at client authentication.
+type NexaflowConfig struct {
+	Enabled         bool   `json:"enabled,omitempty"`
+	StorePath       string `json:"store_path,omitempty"`
+	GatewayBaseURL  string `json:"gateway_base_url,omitempty"`
+	GatewayTokenRef string `json:"gateway_token_ref,omitempty"`
+	WorkerID        string `json:"worker_id,omitempty"`
 }
 
 // VideoConfig controls the optional, isolated Video Gateway. It is disabled
@@ -2092,6 +2113,34 @@ func (c Config) validateAdminPlane() error {
 	}
 	if err := c.validateVideo(); err != nil {
 		return err
+	}
+	if err := c.validateNexaflow(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c Config) validateNexaflow() error {
+	if !c.Nexaflow.Enabled {
+		return nil
+	}
+	if len(c.Nexaflow.StorePath) > 4096 || strings.ContainsAny(c.Nexaflow.StorePath, "\r\n\x00") {
+		return errors.New("nexaflow.store_path is invalid or too long")
+	}
+	if len(c.Nexaflow.WorkerID) > 256 || strings.ContainsAny(c.Nexaflow.WorkerID, "\r\n\x00") {
+		return errors.New("nexaflow.worker_id is invalid or too long")
+	}
+	if len(c.Nexaflow.GatewayBaseURL) > 2048 || strings.ContainsAny(c.Nexaflow.GatewayBaseURL, "\r\n\x00") {
+		return errors.New("nexaflow.gateway_base_url is invalid or too long")
+	}
+	if base := strings.TrimSpace(c.Nexaflow.GatewayBaseURL); base != "" {
+		parsed, err := url.Parse(base)
+		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+			return errors.New("nexaflow.gateway_base_url must be an http(s) URL")
+		}
+	}
+	if ref := c.Nexaflow.GatewayTokenRef; ref != "" && !validEnvName(ref) {
+		return errors.New("nexaflow.gateway_token_ref must be a valid environment variable name")
 	}
 	return nil
 }

@@ -363,12 +363,13 @@ unique keys/ids per run plus cleanup:
 - Scenario 4 of the matrix above is therefore upgraded for the
   Task 6 tree: PG cross-process (two OS processes, one PG
   ledger) is now PROVEN for delivery + scheduler claims, not
-  NOT_RUN. What is still NOT proven is gateway-process
-  scheduling: this branch wires no NexaFlow into
-  `cmd/gateway` (no `nexaflow` references in `main.go`) and has
-  no scheduler HTTP endpoint, so two gateway processes cannot
-  exercise scheduling on this branch. That wiring arrives with
-  the Task 4 landing; it is not faked here.
+  NOT_RUN. Gateway-process scheduling remains NOT proven: the
+  background scheduler tick loop is still deferred (canonical
+  schedules are caller-supplied, so there is no persisted
+  schedule list). Production service attachment itself has since
+  landed: `cmd/gateway` calls `AttachNexaflow` when the opt-in
+  `nexaflow` config section is enabled and runs startup recovery
+  before serving (`cmd/gateway/nexaflow_e2e_test.go`).
 
 ### Migration safety (new, Task 6)
 
@@ -719,9 +720,11 @@ What changed on the canonical line in that reconciliation:
   (#691's `retry_ambiguous` mode), whole-run parking on recovery,
   error-on-terminal cancel, and the default-1 admission cap — each
   with its reason in the reconciliation document.
-- Still deferred (not done): production gateway wiring, daily
-  schedules / trigger discovery / scheduler tick endpoint, webhook
-  `secret_ref` resolution, async dispatch, and the Studio UI items.
-  Until gateway wiring lands, schedules, webhooks, and startup
-  recovery are service-level primitives, not running gateway
-  behaviour — do not present them as live gateway features.
+- Still deferred (not done): the background scheduler tick loop,
+  daily schedules / trigger discovery / scheduler tick endpoint,
+  signed-webhook attachment and `secret_ref` resolution, async
+  dispatch, and the Studio UI items. Production service attachment
+  and startup recovery are now wired behind the opt-in `nexaflow`
+  config section; schedules and webhooks remain service-level
+  primitives, not running gateway behaviour — do not present them as
+  live gateway features.

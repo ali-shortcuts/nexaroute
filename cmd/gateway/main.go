@@ -342,6 +342,15 @@ func main() {
 		}
 		api.AttachVideoHandler(videoRT.Handler)
 	}
+	// NexaFlow workflows: opt-in via the nexaflow config section. The
+	// canonical service is attached here (the production caller of
+	// AttachNexaflow); a disabled gateway opens no workflow store and
+	// mounts no workflow route.
+	if cleanupNexaflow, err := attachNexaflow(cfg, filepath.Dir(*configPath), api, hm, logger); err != nil {
+		bootstrap.Fatalf("cannot attach nexaflow: %v", err)
+	} else {
+		defer cleanupNexaflow()
+	}
 	api.SyncCapabilityContracts()
 	pe.SetCapabilityStore(api.CapabilityStore())
 	srv := &http.Server{

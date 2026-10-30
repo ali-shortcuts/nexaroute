@@ -2,6 +2,9 @@ package nexaflow
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/ali-shortcuts/nexaroute/internal/eval"
@@ -157,6 +160,23 @@ type HTTPResponse struct {
 // SecretResolver resolves a secretRef to its value. Implementations must
 // fail closed (error) when no resolver is configured.
 type SecretResolver func(ref string) (string, error)
+
+// EnvSecretResolver resolves a secretRef as the exact name of a process
+// environment variable. Config carries the reference (the variable name),
+// never the secret itself. An empty reference, an unset variable, or an
+// empty value fails closed. The resolved value is returned to the caller
+// for the single port call and is never logged here.
+func EnvSecretResolver(ref string) (string, error) {
+	name := strings.TrimSpace(ref)
+	if name == "" {
+		return "", fmt.Errorf("nexaflow: secret reference is empty")
+	}
+	value, ok := os.LookupEnv(name)
+	if !ok || value == "" {
+		return "", fmt.Errorf("nexaflow: secret reference %q is not set", name)
+	}
+	return value, nil
+}
 
 // ReplayEvalBackend adapts the existing evaluation plane directly: it
 // runs eval.Runner.Run, which builds a ReplayExecutor from the
