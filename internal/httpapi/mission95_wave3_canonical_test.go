@@ -10,12 +10,12 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"syscall"
 	"net/http/httptest"
 	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
