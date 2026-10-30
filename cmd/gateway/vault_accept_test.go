@@ -9,9 +9,11 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 type fakeVaultAccept struct {
@@ -25,7 +27,14 @@ type fakeVaultAccept struct {
 	createDenied bool
 	deleteDenied bool
 	lookupDenied bool
-	requests     []vaultAcceptRequest
+	// policies, when non-nil, replaces the default lookup-self policy set.
+	policies []string
+	// metadataDenied makes GET on a KV metadata path return 403.
+	metadataDenied bool
+	// metadataMissing makes GET on a KV metadata path return 404 even when
+	// a key exists, simulating a KV v1 mount (no metadata endpoint).
+	metadataMissing bool
+	requests        []vaultAcceptRequest
 }
 
 type vaultAcceptRequest struct {
@@ -53,6 +62,8 @@ func (f *fakeVaultAccept) handler(w http.ResponseWriter, r *http.Request) {
 	createDenied := f.createDenied
 	deleteDenied := f.deleteDenied
 	lookupDenied := f.lookupDenied
+	metadataDenied := f.metadataDenied
+	metadataMissing := f.metadataMissing
 	f.mu.Unlock()
 
 	switch r.URL.Path {
@@ -77,8 +88,12 @@ func (f *fakeVaultAccept) handler(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusForbidden)
 			return
 		}
+		policies := f.policies
+		if policies == nil {
+			policies = []string{"nexaroute-acceptance", "default"}
+		}
 		writeVaultAcceptJSON(w, map[string]any{"data": map[string]any{
-			"policies": []string{"nexaroute-acceptance", "default"}, "ttl": 3600, "renewable": false,
+			"policies": policies, "ttl": 3600, "renewable": false,
 		}})
 		return
 	case "/v1/auth/token/create":
@@ -116,6 +131,23 @@ func (f *fakeVaultAccept) handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if strings.HasPrefix(r.URL.Path, "/v1/secret/metadata/") {
+		if r.Method == http.MethodGet {
+			if metadataDenied {
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
+			f.mu.Lock()
+			key := f.keyB64
+			f.mu.Unlock()
+			if metadataMissing || key == "" {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			writeVaultAcceptJSON(w, map[string]any{"data": map[string]any{
+				"current_version": 1, "versions": map[string]any{"1": map[string]any{}},
+			}})
+			return
+		}
 		if r.Method != http.MethodDelete {
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
@@ -204,6 +236,11 @@ func vaultAcceptStatus(report vaultAcceptReport, id string) string {
 
 func runVaultAcceptFixture(t *testing.T, fake *fakeVaultAccept, extra ...string) (int, vaultAcceptReport, string, string, string) {
 	t.Helper()
+	return runVaultAcceptFixtureWithHelper(t, fake, vaultAcceptHelperPath(t), extra...)
+}
+
+func runVaultAcceptFixtureWithHelper(t *testing.T, fake *fakeVaultAccept, helper string, extra ...string) (int, vaultAcceptReport, string, string, string) {
+	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(fake.handler))
 	t.Cleanup(server.Close)
 	t.Setenv("VAULT_ADDR", server.URL)
@@ -211,7 +248,7 @@ func runVaultAcceptFixture(t *testing.T, fake *fakeVaultAccept, extra ...string)
 	outPath := filepath.Join(t.TempDir(), "vault-acceptance.json")
 	args := append([]string{
 		"--ref", "secret/data/nexaroute/acceptance/master-key",
-		"--helper", vaultAcceptHelperPath(t),
+		"--helper", helper,
 		"--confirm-live",
 		"--out", outPath,
 	}, extra...)
@@ -244,6 +281,7 @@ func TestVaultAcceptFullRunPassesAndRedacts(t *testing.T) {
 		"vault.token_metadata":     externalStatusPass,
 		"vault.ref_preflight":      externalStatusPass,
 		"vault.kv_put_get":         externalStatusPass,
+		"vault.kv_version":         externalStatusPass,
 		"vault.gateway_decrypt":    externalStatusPass,
 		"vault.kv_rotation":        externalStatusPass,
 		"vault.wrong_token":        externalStatusPass,
@@ -463,4 +501,144 @@ func TestVaultAcceptSubcommandIsDispatched(t *testing.T) {
 	if !strings.Contains(stderr.String(), "--ref is required") {
 		t.Fatalf("unexpected stderr: %s", stderr.String())
 	}
+}
+
+func TestVaultAcceptRootTokenFailsBeforeWriting(t *testing.T) {
+	fake := newFakeVaultAccept()
+	fake.policies = []string{"root", "default"}
+	code, report, _, _, _ := runVaultAcceptFixture(t, fake)
+	if code != 1 || report.Outcome != externalStatusFail {
+		t.Fatalf("exit=%d outcome=%q want 1/fail", code, report.Outcome)
+	}
+	if got := vaultAcceptStatus(report, "vault.token_metadata"); got != externalStatusFail {
+		t.Fatalf("token_metadata=%q want fail", got)
+	}
+	if got := vaultAcceptStatus(report, "vault.kv_put_get"); got != "" {
+		t.Fatalf("kv_put_get=%q want absent (no write with a root token)", got)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if len(fake.writtenKeys) != 0 {
+		t.Fatalf("wrote %d keys with a root token", len(fake.writtenKeys))
+	}
+}
+
+func TestVaultAcceptKVVersionFailsOnV1Mount(t *testing.T) {
+	fake := newFakeVaultAccept()
+	fake.metadataMissing = true
+	code, report, _, _, _ := runVaultAcceptFixture(t, fake)
+	if code != 1 || report.Outcome != externalStatusFail {
+		t.Fatalf("exit=%d outcome=%q want 1/fail", code, report.Outcome)
+	}
+	// The point of the check: the helper round-trip alone would have
+	// passed on this mount, so kv_put_get PASS with kv_version FAIL is
+	// the regression this test guards.
+	if got := vaultAcceptStatus(report, "vault.kv_put_get"); got != externalStatusPass {
+		t.Fatalf("kv_put_get=%q want pass", got)
+	}
+	if got := vaultAcceptStatus(report, "vault.kv_version"); got != externalStatusFail {
+		t.Fatalf("kv_version=%q want fail", got)
+	}
+}
+
+func TestVaultAcceptKVVersionBlockedWithoutMetadataRead(t *testing.T) {
+	fake := newFakeVaultAccept()
+	fake.metadataDenied = true
+	code, report, _, _, _ := runVaultAcceptFixture(t, fake)
+	if code != 3 || report.Outcome != externalStatusBlocked {
+		t.Fatalf("exit=%d outcome=%q want 3/blocked", code, report.Outcome)
+	}
+	if got := vaultAcceptStatus(report, "vault.kv_version"); got != externalStatusBlocked {
+		t.Fatalf("kv_version=%q want blocked", got)
+	}
+}
+
+func TestVaultAcceptHelperTimeoutResolution(t *testing.T) {
+	t.Setenv("VAULT_HELPER_TIMEOUT", "")
+	if got, err := vaultAcceptHelperTimeout(10*time.Second, true); err != nil || got != 10 {
+		t.Fatalf("explicit timeout: got=%d err=%v want 10", got, err)
+	}
+	if got, err := vaultAcceptHelperTimeout(500*time.Millisecond, true); err != nil || got != 1 {
+		t.Fatalf("sub-second timeout: got=%d err=%v want 1", got, err)
+	}
+	if got, err := vaultAcceptHelperTimeout(10*time.Second, false); err != nil || got != 30 {
+		t.Fatalf("unset env: got=%d err=%v want 30", got, err)
+	}
+	t.Setenv("VAULT_HELPER_TIMEOUT", "42")
+	if got, err := vaultAcceptHelperTimeout(10*time.Second, false); err != nil || got != 42 {
+		t.Fatalf("operator env: got=%d err=%v want 42", got, err)
+	}
+	for _, bad := range []string{"abc", "0", "-5", "7.5"} {
+		t.Setenv("VAULT_HELPER_TIMEOUT", bad)
+		if _, err := vaultAcceptHelperTimeout(10*time.Second, false); err == nil {
+			t.Fatalf("env %q was accepted, want an error", bad)
+		}
+	}
+}
+
+func TestVaultAcceptHelperTimeoutPropagation(t *testing.T) {
+	// The stub records the timeout the harness hands the helper, then
+	// execs the real helper so the full run still exercises real semantics.
+	stub := func(t *testing.T, record string) string {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "recording-helper.sh")
+		script := "#!/bin/sh\n" +
+			"echo \"$VAULT_HELPER_TIMEOUT\" >> \"$VAULT_ACCEPT_TIMEOUT_RECORD\"\n" +
+			"exec '" + vaultAcceptHelperPath(t) + "' \"$@\"\n"
+		if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	cases := []struct {
+		name  string
+		env   string
+		extra []string
+		want  string
+	}{
+		{"explicit --timeout wins", "", []string{"--timeout", "7s"}, "7"},
+		{"operator env honored", "42", nil, "42"},
+		{"script default otherwise", "", nil, "30"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			record := filepath.Join(t.TempDir(), "record")
+			t.Setenv("VAULT_ACCEPT_TIMEOUT_RECORD", record)
+			if tc.env != "" {
+				t.Setenv("VAULT_HELPER_TIMEOUT", tc.env)
+			} else {
+				t.Setenv("VAULT_HELPER_TIMEOUT", "")
+			}
+			fake := newFakeVaultAccept()
+			code, report, _, _, _ := runVaultAcceptFixtureWithHelper(t, fake, stub(t, record), tc.extra...)
+			if code != 0 || report.Outcome != externalStatusPass {
+				t.Fatalf("exit=%d outcome=%q want 0/pass", code, report.Outcome)
+			}
+			raw, err := os.ReadFile(record)
+			if err != nil {
+				t.Fatal(err)
+			}
+			lines := strings.Fields(string(raw))
+			if len(lines) == 0 {
+				t.Fatal("helper was never invoked")
+			}
+			for _, line := range lines {
+				if line != tc.want {
+					t.Fatalf("recorded timeouts=%v want all %q", lines, tc.want)
+				}
+			}
+			if got := report.Bounds.HelperTimeoutSeconds; got != int64(atoi(t, tc.want)) {
+				t.Fatalf("bounds helper_timeout_seconds=%d want %s", got, tc.want)
+			}
+		})
+	}
+}
+
+func atoi(t *testing.T, s string) int {
+	t.Helper()
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n
 }

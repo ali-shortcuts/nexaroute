@@ -698,13 +698,13 @@ func TestGap2VaultAcceptSafeError(t *testing.T) {
 
 func TestGap2VaultAcceptHelperErrors(t *testing.T) {
 	ctx := context.Background()
-	if _, err := runVaultAcceptHelper(ctx, filepath.Join(t.TempDir(), "no-such-helper"), "get", "secret/data/x", nil, "http://127.0.0.1:9", "tok"); err == nil {
+	if _, err := runVaultAcceptHelper(ctx, filepath.Join(t.TempDir(), "no-such-helper"), "get", "secret/data/x", nil, "http://127.0.0.1:9", "tok", 30); err == nil {
 		t.Fatal("missing helper must error")
 	}
-	if _, err := runVaultAcceptHelper(ctx, vaultAcceptHelperPath(t), "put", "secret/data/x", make([]byte, 16), "http://127.0.0.1:9", "tok"); err == nil || !strings.Contains(err.Error(), "not 32 bytes") {
+	if _, err := runVaultAcceptHelper(ctx, vaultAcceptHelperPath(t), "put", "secret/data/x", make([]byte, 16), "http://127.0.0.1:9", "tok", 30); err == nil || !strings.Contains(err.Error(), "not 32 bytes") {
 		t.Fatalf("short-key put error = %v, want 32-byte complaint", err)
 	}
-	if _, err := runVaultAcceptHelperGet(ctx, filepath.Join(t.TempDir(), "no-such-helper"), "secret/data/x", "http://127.0.0.1:9", "tok"); err == nil {
+	if _, err := runVaultAcceptHelperGet(ctx, filepath.Join(t.TempDir(), "no-such-helper"), "secret/data/x", "http://127.0.0.1:9", "tok", 30); err == nil {
 		t.Fatal("helper get through a missing helper must error")
 	}
 }
@@ -740,19 +740,19 @@ func TestGap2VaultAcceptPutGetFailures(t *testing.T) {
 		key[i] = byte(i + 1)
 	}
 	t.Run("helper put failure fails the round-trip", func(t *testing.T) {
-		check := runVaultAcceptPutGet(ctx, gap2VaultHelper(t, "fail"), "secret/data/x", key, "http://127.0.0.1:9", "tok")
+		check := runVaultAcceptPutGet(ctx, gap2VaultHelper(t, "fail"), "secret/data/x", key, "http://127.0.0.1:9", "tok", 30)
 		if check.Status != externalStatusFail || !strings.Contains(check.Reason, "helper put failed") {
 			t.Fatalf("put-fail check = %+v", check)
 		}
 	})
 	t.Run("helper get failure after put fails the round-trip", func(t *testing.T) {
-		check := runVaultAcceptPutGet(ctx, gap2VaultHelper(t, "get-fail"), "secret/data/x", key, "http://127.0.0.1:9", "tok")
+		check := runVaultAcceptPutGet(ctx, gap2VaultHelper(t, "get-fail"), "secret/data/x", key, "http://127.0.0.1:9", "tok", 30)
 		if check.Status != externalStatusFail || !strings.Contains(check.Reason, "helper get failed after a successful put") {
 			t.Fatalf("get-fail check = %+v", check)
 		}
 	})
 	t.Run("mismatched key material fails the round-trip", func(t *testing.T) {
-		check := runVaultAcceptPutGet(ctx, gap2VaultHelper(t, "get-mismatch"), "secret/data/x", key, "http://127.0.0.1:9", "tok")
+		check := runVaultAcceptPutGet(ctx, gap2VaultHelper(t, "get-mismatch"), "secret/data/x", key, "http://127.0.0.1:9", "tok", 30)
 		if check.Status != externalStatusFail || !strings.Contains(check.Reason, "did not return the same 32-byte key") {
 			t.Fatalf("mismatch check = %+v", check)
 		}
@@ -764,13 +764,13 @@ func TestGap2VaultAcceptPutGetFailures(t *testing.T) {
 		}
 	})
 	t.Run("helper put failure fails rotation", func(t *testing.T) {
-		check := runVaultAcceptRotation(ctx, gap2VaultHelper(t, "fail"), "secret/data/x", "http://127.0.0.1:9", "tok")
+		check := runVaultAcceptRotation(ctx, gap2VaultHelper(t, "fail"), "secret/data/x", "http://127.0.0.1:9", "tok", 30)
 		if check.Status != externalStatusFail || !strings.Contains(check.Reason, "helper put of the replacement key failed") {
 			t.Fatalf("rotation-fail check = %+v", check)
 		}
 	})
 	t.Run("helper that accepts an invalid token fails the wrong-token check", func(t *testing.T) {
-		check := runVaultAcceptWrongToken(ctx, gap2VaultHelper(t, "always-ok"), "secret/data/x", "http://127.0.0.1:9")
+		check := runVaultAcceptWrongToken(ctx, gap2VaultHelper(t, "always-ok"), "secret/data/x", "http://127.0.0.1:9", 30)
 		if check.Status != externalStatusFail || !strings.Contains(check.Reason, "helper accepted an invalid token") {
 			t.Fatalf("wrong-token check = %+v", check)
 		}
@@ -957,7 +957,7 @@ func TestGap2VaultAcceptRevokedTokenStillWorksFails(t *testing.T) {
 	defer srv.Close()
 	check := runVaultAcceptRevokedToken(ctx, &http.Client{Timeout: 5 * time.Second},
 		vaultAcceptHelperPath(t), "secret/data/nexaroute/acceptance/master-key",
-		srv.URL, fake.primaryToken, 5*time.Second)
+		srv.URL, fake.primaryToken, 5*time.Second, 30)
 	if check.Status != externalStatusFail || !strings.Contains(check.Reason, "helper accepted a revoked child token") {
 		t.Fatalf("revoked-token check = %+v", check)
 	}
@@ -970,7 +970,7 @@ func TestGap2VaultAcceptOutageAndCleanupFailures(t *testing.T) {
 		fake.keyB64 = base64.StdEncoding.EncodeToString(make([]byte, 32))
 		srv := httptest.NewServer(http.HandlerFunc(fake.handler))
 		defer srv.Close()
-		check := runVaultAcceptOutage(ctx, vaultAcceptHelperPath(t), "secret/data/nexaroute/acceptance/master-key", srv.URL, fake.primaryToken)
+		check := runVaultAcceptOutage(ctx, vaultAcceptHelperPath(t), "secret/data/nexaroute/acceptance/master-key", srv.URL, fake.primaryToken, 30)
 		if check.Status != externalStatusFail || !strings.Contains(check.Reason, "succeeded against the deliberately unreachable outage endpoint") {
 			t.Fatalf("outage check = %+v", check)
 		}
@@ -1773,19 +1773,19 @@ func TestGap2VaultAcceptNoisyHelperBranches(t *testing.T) {
 		key[i] = byte(i + 1)
 	}
 	t.Run("put writing to stdout fails the round-trip", func(t *testing.T) {
-		check := runVaultAcceptPutGet(ctx, gap2VaultHelper2(t, "put-noisy"), "secret/data/x", key, "http://127.0.0.1:9", "tok")
+		check := runVaultAcceptPutGet(ctx, gap2VaultHelper2(t, "put-noisy"), "secret/data/x", key, "http://127.0.0.1:9", "tok", 30)
 		if check.Status != externalStatusFail || !strings.Contains(check.Reason, "unexpectedly wrote to stdout") {
 			t.Fatalf("put-noisy check = %+v", check)
 		}
 	})
 	t.Run("rotation get failure fails rotation", func(t *testing.T) {
-		check := runVaultAcceptRotation(ctx, gap2VaultHelper(t, "get-fail"), "secret/data/x", "http://127.0.0.1:9", "tok")
+		check := runVaultAcceptRotation(ctx, gap2VaultHelper(t, "get-fail"), "secret/data/x", "http://127.0.0.1:9", "tok", 30)
 		if check.Status != externalStatusFail || !strings.Contains(check.Reason, "helper get after replacement failed") {
 			t.Fatalf("rotation get-fail check = %+v", check)
 		}
 	})
 	t.Run("rotation mismatch fails rotation", func(t *testing.T) {
-		check := runVaultAcceptRotation(ctx, gap2VaultHelper(t, "get-mismatch"), "secret/data/x", "http://127.0.0.1:9", "tok")
+		check := runVaultAcceptRotation(ctx, gap2VaultHelper(t, "get-mismatch"), "secret/data/x", "http://127.0.0.1:9", "tok", 30)
 		if check.Status != externalStatusFail || !strings.Contains(check.Reason, "not read back byte-identically") {
 			t.Fatalf("rotation mismatch check = %+v", check)
 		}
@@ -1797,7 +1797,7 @@ func TestGap2VaultAcceptNoisyHelperBranches(t *testing.T) {
 	// branches are defensive-only; the failing-helper behavior itself
 	// is covered by the put/get/rotation tests above.
 	t.Run("invalid helper key material fails helper get", func(t *testing.T) {
-		if _, err := runVaultAcceptHelperGet(ctx, gap2VaultHelper2(t, "get-garbage"), "secret/data/x", "http://127.0.0.1:9", "tok"); err == nil || !strings.Contains(err.Error(), "invalid key material") {
+		if _, err := runVaultAcceptHelperGet(ctx, gap2VaultHelper2(t, "get-garbage"), "secret/data/x", "http://127.0.0.1:9", "tok", 30); err == nil || !strings.Contains(err.Error(), "invalid key material") {
 			t.Fatalf("helper get garbage error = %v, want invalid-material complaint", err)
 		}
 	})
@@ -1854,7 +1854,7 @@ func TestGap2VaultAcceptRevokedTokenBranches(t *testing.T) {
 	ctx := context.Background()
 	client := &http.Client{Timeout: 5 * time.Second}
 	t.Run("create request error blocks the check", func(t *testing.T) {
-		check := runVaultAcceptRevokedToken(ctx, client, vaultAcceptHelperPath(t), "secret/data/x", "http://127.0.0.1:9", "tok", 5*time.Second)
+		check := runVaultAcceptRevokedToken(ctx, client, vaultAcceptHelperPath(t), "secret/data/x", "http://127.0.0.1:9", "tok", 5*time.Second, 30)
 		if check.Status != externalStatusBlocked || !strings.Contains(check.Reason, "cannot create a disposable child token") {
 			t.Fatalf("revoked create-error check = %+v", check)
 		}
@@ -1862,7 +1862,7 @@ func TestGap2VaultAcceptRevokedTokenBranches(t *testing.T) {
 	t.Run("create HTTP 500 blocks the check", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc((&gap2RevokedVariations{createCode: 500, revokeCode: 204}).handler))
 		defer srv.Close()
-		check := runVaultAcceptRevokedToken(ctx, client, vaultAcceptHelperPath(t), "secret/data/x", srv.URL, "primary-token-7f31c9", 5*time.Second)
+		check := runVaultAcceptRevokedToken(ctx, client, vaultAcceptHelperPath(t), "secret/data/x", srv.URL, "primary-token-7f31c9", 5*time.Second, 30)
 		if check.Status != externalStatusBlocked || !strings.Contains(check.Reason, "HTTP 500") {
 			t.Fatalf("revoked create-500 check = %+v", check)
 		}
@@ -1870,7 +1870,7 @@ func TestGap2VaultAcceptRevokedTokenBranches(t *testing.T) {
 	t.Run("create without a token fails the check", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc((&gap2RevokedVariations{createBody: `{}`, revokeCode: 204}).handler))
 		defer srv.Close()
-		check := runVaultAcceptRevokedToken(ctx, client, vaultAcceptHelperPath(t), "secret/data/x", srv.URL, "primary-token-7f31c9", 5*time.Second)
+		check := runVaultAcceptRevokedToken(ctx, client, vaultAcceptHelperPath(t), "secret/data/x", srv.URL, "primary-token-7f31c9", 5*time.Second, 30)
 		if check.Status != externalStatusFail || !strings.Contains(check.Reason, "did not contain a client token") {
 			t.Fatalf("revoked no-token check = %+v", check)
 		}
@@ -1878,7 +1878,7 @@ func TestGap2VaultAcceptRevokedTokenBranches(t *testing.T) {
 	t.Run("revoke failure fails the check", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc((&gap2RevokedVariations{createCode: 200, revokeCode: 500}).handler))
 		defer srv.Close()
-		check := runVaultAcceptRevokedToken(ctx, client, vaultAcceptHelperPath(t), "secret/data/x", srv.URL, "primary-token-7f31c9", 5*time.Second)
+		check := runVaultAcceptRevokedToken(ctx, client, vaultAcceptHelperPath(t), "secret/data/x", srv.URL, "primary-token-7f31c9", 5*time.Second, 30)
 		if check.Status != externalStatusFail || !strings.Contains(check.Reason, "could not revoke") {
 			t.Fatalf("revoke-fail check = %+v", check)
 		}
