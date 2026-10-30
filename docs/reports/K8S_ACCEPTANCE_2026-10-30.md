@@ -5,9 +5,13 @@ to the acceptance harness only; it is not a live-deployment pass.
 
 ## What changed
 
-Branch `supervisor/issue650-safe-failure`, commit `75fd133`, rebased
-onto main `4b830cd` (merge of #755). Diff vs main: exactly 3 files,
-+414/−21, no Go code, no chart change, no production change:
+Implementation commit `75fd133` (safe-failure harness, CI, and
+deployment-documentation changes), based on main `4b830cd` (merge of
+#755). The evidence record itself was added in commit `6408a4f`.
+PR #762 contains four files: the existing acceptance script, CI
+workflow, deployment documentation, and this report. No Go code,
+Helm chart, or production application code changed. GitHub's live PR
+metadata is authoritative for aggregate diff totals:
 
 - `scripts/k8s-acceptance.sh` — the existing harness, extended in
   place. No second harness was created; the 2026-10-29 external
@@ -154,8 +158,10 @@ under `~/workspace/.tmp` per the /tmp tmpfs lesson).
 - `bash -n scripts/k8s-acceptance.sh`: clean.
   `scripts/check-ha-docs.sh`: OK. `git diff --check`: clean.
 - A test-created untracked directory
-  (`cmd/gateway/synthetic-stage/`) was removed before commit;
-  the committed tree contains only the 3 intended files.
+  (`cmd/gateway/synthetic-stage/`) was removed before the
+  implementation commit. That implementation commit contains the
+  three files described above; the subsequent evidence-record
+  commit adds the fourth file in PR #762.
 
 ## Secrets
 
