@@ -765,8 +765,13 @@ func TestContinue95NexaflowEngineUnknownNodeAndBadInput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute unknown node: want nil error with failed run, got %v", err)
 	}
-	if final.State != RunFailed {
-		t.Fatalf("Execute unknown node: run state = %q, want %q", final.State, RunFailed)
+	// The run itself must carry the failing node's code, not just a
+	// failed state: recomputeRunState settles a failed run with the
+	// first failed node's ErrorCode. This is the one assertion from
+	// #740's final alignment (8c92873) that #746's port did not carry
+	// over; the node-level code below was already on main.
+	if final.State != RunFailed || final.ErrorCode != "node_not_found" {
+		t.Fatalf("Execute unknown node: run = %q/%q, want failed/node_not_found", final.State, final.ErrorCode)
 	}
 	states := nodeStates(t, store, run.ID)
 	if states["jt"].State != NodeFailed || states["jt"].ErrorCode != "node_not_found" {
@@ -797,8 +802,10 @@ func TestContinue95NexaflowEngineUnknownNodeAndBadInput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute bad input: want nil error with failed run, got %v", err)
 	}
-	if final2.State != RunFailed {
-		t.Fatalf("Execute bad input: run state = %q, want %q", final2.State, RunFailed)
+	// Same run-level propagation as above, for the input_resolution
+	// failure: the run's ErrorCode must be the failing node's code.
+	if final2.State != RunFailed || final2.ErrorCode != "input_resolution" {
+		t.Fatalf("Execute bad input: run = %q/%q, want failed/input_resolution", final2.State, final2.ErrorCode)
 	}
 	states2 := nodeStates(t, store2, run2.ID)
 	if states2["jt"].State != NodeFailed || states2["jt"].ErrorCode != "input_resolution" {
