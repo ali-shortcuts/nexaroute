@@ -3,6 +3,16 @@ name: Coverage report
 # Lightweight, uncached statement-coverage measurement. This complements the
 # intentionally manual Architecture & Quality Audit; it does not lower or
 # replace that audit's 85% acceptance gate.
+#
+# Since issue #663, this job also ENFORCES the 95% repository-wide target:
+# the gate step below fails the run when the total from the same canonical
+# profile drops below 95.0%. The gate excludes nothing (no package, file,
+# or statement is filtered from the profile) and the threshold is
+# inclusive. The audit workflow's manual 85% ratchet (ADR 0006) remains a
+# separate, lower floor. The Go toolchain is pinned because statement
+# counts (the denominator) differ between Go releases: the authoritative
+# 2c5f583 measurement used go1.27.3, and local Go 1.27.0 totals are not
+# comparable to CI totals.
 on:
   push:
     branches: ["main"]
@@ -33,7 +43,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.27.x'
+          # Pinned: the coverage denominator is toolchain-dependent.
+          go-version: '1.27.3'
           cache: false
 
       - name: Measure package and repository coverage
@@ -70,6 +81,10 @@ jobs:
             cat .artifacts/coverage/packages.txt
             echo ' ```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: "Coverage gate (issue #663; total must stay at or above 95%)"
+        shell: bash
+        run: ./scripts/coverage-gate.sh .artifacts/coverage/coverage.out 95.0
 
       - name: Upload reproducible coverage evidence
         if: always()
