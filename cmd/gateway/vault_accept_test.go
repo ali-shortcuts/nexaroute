@@ -157,6 +157,12 @@ func (f *fakeVaultAccept) handler(w http.ResponseWriter, r *http.Request) {
 		}
 		f.mu.Lock()
 		f.childToken = "child-token-5c19ab"
+		// A fresh child is never revoked: without this reset, a
+		// failed expired-token poll (whose best-effort cleanup
+		// revokes the still-valid child) would poison the next
+		// child creation, and the revoked-token check would fail
+		// on a child that was never usable.
+		f.childRevoked = false
 		if f.childTTL > 0 {
 			f.childExpiresAt = time.Now().Add(f.childTTL)
 		} else {
@@ -391,6 +397,69 @@ func TestVaultAcceptFullRunPassesAndRedacts(t *testing.T) {
 	}
 	if info, err := os.Stat(outPath); err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("report mode=%v err=%v, want 0600", info.Mode().Perm(), err)
+	}
+}
+
+// A child created after a revocation must be usable: token/create hands
+// out a fresh token, so the fake must not carry the previous child's
+// revoked flag into it. Regression for the skip-cleanup fixture, where a
+// failed expired-token poll revoked its child and the revoked-token check
+// then failed on a "new" child that was never usable.
+func TestFakeVaultAcceptCreateResetsRevocation(t *testing.T) {
+	fake := newFakeVaultAccept()
+	srv := httptest.NewServer(http.HandlerFunc(fake.handler))
+	defer srv.Close()
+	client := &http.Client{}
+	call := func(method, path, token string) int {
+		req, err := http.NewRequest(method, srv.URL+"/v1/"+path, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("X-Vault-Token", token)
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		return resp.StatusCode
+	}
+	createChild := func() string {
+		req, err := http.NewRequest(http.MethodPost, srv.URL+"/v1/auth/token/create", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("X-Vault-Token", fake.primaryToken)
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var created struct {
+			Auth struct {
+				ClientToken string `json:"client_token"`
+			} `json:"auth"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&created); err != nil || created.Auth.ClientToken == "" {
+			t.Fatalf("create did not return a client token (status %d)", resp.StatusCode)
+		}
+		return created.Auth.ClientToken
+	}
+	lookup := func(token string) int {
+		return call(http.MethodGet, "auth/token/lookup-self", token)
+	}
+	child := createChild()
+	if got := lookup(child); got != http.StatusOK {
+		t.Fatalf("fresh child lookup=%d, want 200", got)
+	}
+	if got := call(http.MethodPost, "auth/token/revoke-self", child); got != http.StatusNoContent {
+		t.Fatalf("revoke-self status=%d, want 204", got)
+	}
+	if got := lookup(child); got != http.StatusForbidden {
+		t.Fatalf("revoked child lookup=%d, want 403", got)
+	}
+	recreated := createChild()
+	if got := lookup(recreated); got != http.StatusOK {
+		t.Fatalf("re-created child lookup=%d, want 200 (revocation must not survive create)", got)
 	}
 }
 
