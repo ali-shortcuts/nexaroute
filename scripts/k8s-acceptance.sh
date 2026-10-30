@@ -46,16 +46,14 @@
 # missing, or no preceding-release tag is available). Exit 3 is not a
 # pass: it means the live evidence was not produced.
 #
-# Coverage limits (documented, not hidden): --live does not yet exercise
-# safe-failure phases — a misconfigured gateway config, an unavailable
-# PostgreSQL/Redis dependency, or a missing Secret — because the script
-# always creates all Secrets before install, the PG phase only tests a
-# healthy database, and Redis has no live phase. When those phases are
-# added, each must assert fail-closed behavior: the gateway does not serve
-# traffic with a broken config, a missing Secret, or an unavailable
-# dependency it requires, and no secret material appears in logs or
-# events. Until then, a --live PASS covers install, upgrade, rollback,
-# probes, posture, termination, persistence, and the leak check only.
+# Coverage limits (documented, not hidden): --live exercises safe-failure
+# phases — an invalid-JSON config, an unreachable PostgreSQL backend, and a
+# missing referenced Secret must each fail closed (a pod is created, none
+# becomes Ready) with the fault release then uninstalled and verified absent,
+# and a failed rollout (unpullable image) must roll back to a Ready release.
+# Redis has no live failure phase. A --live PASS covers install, upgrade,
+# rollback, probes, posture, termination, persistence, the leak check, and
+# the safe-failure phases.
 #
 # Secrets discipline: the only secret values this script ever creates are
 # SENTINEL values (fake, recognisable, grep-able). Real credentials must
@@ -76,7 +74,7 @@ RELEASE="nexaroute"
 OUT_DIR=""
 
 usage() {
-  sed -n '1,55p' "$0"
+  sed -n '1,/^set -euo pipefail$/p' "$0" | head -n -1
   exit 2
 }
 

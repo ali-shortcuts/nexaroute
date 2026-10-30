@@ -174,3 +174,9 @@ never the matching line. The script never dumps Secret objects.
 3. Issue #650 stays OPEN until (1) passes or an explicit
    owner-approved exclusion is recorded. No merge and no close
    are claimed by this change.
+
+Rebase note (2026-10-30): branch rebased onto main `197c57b` (merge of
+#758); the verification above was performed on head `6408a4f` (base
+`4b830cd`). This rebase also fixes the `--help` header truncation (D1)
+and the stale coverage-limits paragraph (D2); both are help-text only.
+Fresh CI on the new head is authoritative for the rebased branch.
