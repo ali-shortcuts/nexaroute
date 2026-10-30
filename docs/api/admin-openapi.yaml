@@ -1902,8 +1902,9 @@ paths:
           description: Not found
         '405':
           $ref: '#/components/responses/MethodNotAllowed'
+  /admin/api/nexaflow/templates/{id}/instantiate:
     post:
-      summary: Instantiate a NexaFlow template into a saved draft (POST to the /instantiate sub-resource under this prefix); any other shape under this prefix answers 404
+      summary: Instantiate a NexaFlow template into a saved draft
       x-permission: config.write
       security:
       - adminSession: []
