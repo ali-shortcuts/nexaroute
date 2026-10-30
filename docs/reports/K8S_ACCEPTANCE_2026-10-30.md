@@ -191,3 +191,69 @@ Rebase note (2026-10-30): branch rebased onto main `48db094` (merge of
 #748); prior verification was performed on head `6408a4f` (base
 `4b830cd`) and the `197c57b`/`410ce2a`/`28aed30` rebases. Fresh CI on
 the new head is authoritative for the rebased branch.
+
+## Live re-check — 2026-10-30 evening (main `7a2623a9`, issue #650 still OPEN)
+
+On 2026-10-30 the live acceptance was re-attempted from current main
+`7a2623a9` (merge of PR #778; PR #762's harness already merged). The
+merged script was re-read in full before anything was run: the live
+phase gates on `kind`, `kubectl`, `docker`, `helm`, `curl`, `python3`,
+`git` and returns NOT_RUN before any mutation when a tool is missing;
+it refuses to touch an already-existing kind cluster named
+`nexaroute-accept`; `assert_kind_context` runs immediately after
+`kind create` and again at the start of the safe-failure phases, so a
+stale or operator-supplied kubectl context can never redirect a
+mutation at an existing cluster; fault releases are each uninstalled
+and verified absent, and the main release is left healthy
+(failed rollout -> rollback -> `/readyz` 200). The safe-failure phases
+as merged cover exactly the four cases in the task: invalid-JSON
+config, unreachable PostgreSQL control-plane backend, missing
+referenced Secret, and failed image rollout with rollback. No harness
+defect was found in this re-read, so no script change is made here.
+
+Live result: **NOT_RUN / BLOCKED — exit code 3, nothing created.**
+`bash scripts/k8s-acceptance.sh --live` (clean PATH, helm v3.19.0
+only) reports `missing required tool: kind`, `kubectl`, `docker` and
+`NOT_RUN: live acceptance: required tools missing`. A direct
+`kind create cluster` with the workspace kind v0.27.0 binary fails
+before any mutation: `docker executable file not found in $PATH`.
+Environment, first-hand: no `docker`/`podman`/`containerd`/`dockerd`
+binary, no Docker socket, no `~/.kube`, `KUBECONFIG` unset,
+`/sys/fs/cgroup/cgroup.controllers` is 0 bytes (the same root cause
+as the 2026-10-24 k3s failure: no cgroup controllers are delegated to
+this container, so no kubelet can run here even if a runtime were
+installed). Workspace binaries exist but do not make this a
+kind-capable runner: kind v0.27.0, kubectl v1.34.0, helm v4.3.1 — all
+unusable for a live cluster without a container runtime, and this VM
+is not an authorized kind runner. No production or shared-operator
+cluster was touched; zero live calls; no fault injection was run
+anywhere.
+
+Offline health on this head (never live acceptance): `bash
+scripts/k8s-acceptance.sh --offline-only` PASS (`failures=0
+not_run=0`, 38 checks incl. lint, render, posture, leak, drain
+invariant) and `--self-test` PASS (`failures=0 not_run=0`, 10
+deterministic checks) with helm v3.19.0. The `k8s-acceptance-out`
+evidence directory from these runs was removed after recording the
+results; it contained only renders and self-test fixtures, no
+secrets.
+
+Chart version decision, re-confirmed deliberately (not a blind bump):
+`deploy/helm/nexaroute` remains version 0.1.0, `appVersion` 0.22.0,
+while the latest supported release is v0.24.0 and the script's
+`PREV_TAG` is already v0.24.0. The bump is still NOT made here, for
+the reason stated in `docs/DEPLOYMENT.md` and re-verified on this
+head: no workflow in this repository publishes container images —
+CI's container job builds with `push: false` (smoke load only) — and
+a v0.24.0 image on `ghcr.io` remains unverifiable from here
+(anonymous registry tags request returns UNAUTHORIZED, which proves
+nothing about existence versus visibility). Moving the default
+install to an unverified tag would be the blind bump the task
+forbids; the bump belongs with a verified publish pipeline, with
+`appVersion` and chart `version` moving together, by owner decision.
+
+What unblocks the live run: an authorized runner with Docker (or
+another kind-supported runtime) plus cgroup delegation, or an
+authorized disposable-cluster kubeconfig — with the script's own
+context guard as the backstop. Until then, issue #650 stays OPEN and
+this record does not close it.
