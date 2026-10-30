@@ -127,11 +127,13 @@ of `KeyProvider.Load`.
   configuration retains the same mount/key reference across version
   rotations so old ciphertext can decrypt. Rewrap is an explicit
   command using Transit `rewrap` (§7.3), never unwrap-plus-wrap.
-- Until Transit-aware backup/restore and migration are implemented
-  and tested (§7, §10), the provider is feature-gated and
-  unavailable for production use (§10.1). The feature remains
-  marked **NOT IMPLEMENTED** in SECURITY.md, `docs/SECURITY.md`,
-  and `docs/EXTERNAL_VERIFICATION.md` until code, CI, and at least
+- Transit-aware backup/restore and migration are implemented and
+  tested (§7, §10); the provider remains feature-gated and
+  unavailable for production use until at least one real Vault
+  Transit acceptance run passes (§10.1, §11). The feature is
+  marked implemented but **not production-verified** in
+  `docs/SECURITY.md` and as live acceptance **NOT_RUN** in
+  `docs/EXTERNAL_VERIFICATION.md` until code, CI, and at least
   one real Vault Transit acceptance run pass (§11).
 
 ## 3. The `nxs2` envelope (normative)
@@ -999,8 +1001,9 @@ a docs-only PR is not a security review):
 7. **Documentation in the same PR that ungates Transit** (not a
    follow-up): SECURITY.md, `docs/SECURITY.md`,
    `docs/EXTERNAL_VERIFICATION.md`, CONFIGURATION.md,
-   OPERATIONS.md, and KNOWN_GAPS.md, keeping the NOT IMPLEMENTED /
-   UNVERIFIED wording until gate 8 passes.
+   OPERATIONS.md, and KNOWN_GAPS.md, keeping the
+   implemented-but-not-production-verified / UNVERIFIED wording
+   for the live/production claim until gate 8 passes.
 8. **Real Vault Transit acceptance, separately authorised, staging
    only.** Disposable staging Vault, disposable key and token,
    report recording: Vault version, mount/key type and parameters
@@ -1035,9 +1038,9 @@ a docs-only PR is not a security review):
 - Plaintext secret values and DEKs must never appear in logs,
   metrics, argv, reports, or committed fixtures. Tests use canary
   values and verify their absence at each surface (§5.4, gate 5).
-- The feature must remain marked **NOT IMPLEMENTED** until all
-  code, CI, and at least one real Vault Transit acceptance run pass
-  (gate 8).
+- The feature must remain marked implemented but not
+  production-verified until all code, CI, and at least one real
+  Vault Transit acceptance run pass (gate 8).
 
 ## 14. Owner decisions required
 
