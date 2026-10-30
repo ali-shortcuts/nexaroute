@@ -295,26 +295,47 @@ remains **UNVERIFIED**; the fixture-based conformance suite
 (`internal/providers/livecanary`, now including the extended scenario
 set) is the local evidence, and it is not a substitute.
 
-### Gate audit 2026-10-29 (pinned main c2ca13c, audit only)
+### Gate audit 2026-10-29 (pinned main c2ca13c, audit only; re-checked 2026-10-30 on main 2c5f583)
 
-Audit scope: umbrella #654 + gates #646, #648, #649, #650, #651. No live
-calls were made in this audit; no credential was read or used; no model
-was downloaded; no inference was started; nothing was posted, pushed,
-merged, or closed. Evidence classes below are the verified classes —
+Audit scope: umbrella #654 + gates #646–#652. No live calls were made
+in this audit or in the 2026-10-30 recheck; no credential was read or
+used; no model was downloaded; no inference was started. Evidence
+classes below are as recorded in the 2026-10-29 audit record —
 fixture, loopback, offline-render, and doc-reported evidence are NOT
-live evidence. All five gates remain OPEN.
+live evidence. The recheck verified issue states, blockers, and the
+chart version on current main; it did not re-run the underlying
+loopback runs. All seven gates remain OPEN, and this section changes
+no gate status to verified. A fixture, a local mock, or an ordinary
+green CI job is not evidence of live provider compatibility,
+organizational OIDC, staging/HA Vault, a real Kubernetes install,
+ComfyUI model inference, or multi-host HA/RPO/RTO.
 
-| Gate | Status (unchanged) | Evidence class of last verified evidence | Exact blocker |
+| Gate | Status (re-checked 2026-10-30) | Evidence class of last verified evidence | Exact blocker |
 |---|---|---|---|
-| #646 LLM canaries | UNVERIFIED — NOT_RUN | FIXTURE/LOOPBACK (harness + refusal gates); no LIVE | Written operator comment naming exact providers + models + approved tenant + approved cost/budget, with credentials via named env vars only |
-| #648 Vault KV | BLOCKED/NOT_RUN for staging + HA | LOOPBACK (10/12 single-node non-dev Vault v2.2.1); gateway boot DOC-REPORTED | Written authorization + instance pointer (HTTPS address, KV v2 mount, empty path, least-privilege token by name, mount type/version confirmation); HA, long renewal, AppRole, K8s auth, Transit remain separately blocked; 3 harness gaps (KV-v2 path-shape only, no policy assertion, --timeout does not set VAULT_HELPER_TIMEOUT) must be stated or fixed |
-| #649 Vault Transit | NOT_RUN | FIXTURE (fake Vault API tests) + merged BLOCKED record (#721) | Complete package together: written authorization + disposable instance + dedicated key + least-privilege policy (encrypt/decrypt/rewrap on that key only) + token-injection method by name only; production/HSM/HA claims remain blocked even then |
-| #650 K8s/Helm | UNVERIFIED — NOT_RUN | OFFLINE/RENDER (38 PASS lines, Helm v3.19.0, 2026-10-27); live NONE | Authorized host/runner with docker+kind+kubectl+helm and delegated cgroups (compute, not a credential); script safe-failure gap and chart staleness (0.1.0/0.22.0 vs v0.24.0) remain separately open |
-| #651 ComfyUI | UNVERIFIED — NOT_RUN/BLOCKED | FIXTURE (harness) + prior LOOPBACK fail-closed (on ba5ff2f, UNVERIFIED on pin) | Four separate inputs: provisioned server + compatible model/workflow/config + suitable compute host (GPU preferred) + written authorization; supplying one leaves the others blocked |
+| #646 LLM canaries | UNVERIFIED — NOT_RUN | FIXTURE/LOOPBACK (harness + refusal gates in main); no LIVE | Written operator comment naming exact providers + models + approved tenant + approved cost/budget, with credentials via named env vars only |
+| #647 Organizational OIDC | UNVERIFIED — NOT_RUN (live tenant) | LOCAL IdP ONLY (PKCE browser login + security-negative flow against a local conforming IdP); code controls are not tenant acceptance | Operator-owned tenant (Keycloak, Entra ID, Okta, Auth0, or Google) + written authorization; a local-IdP pass does not upgrade this gate |
+| #648 Vault KV | BLOCKED/NOT_RUN for staging + HA | LOOPBACK (10/12 single-node non-dev Vault v2.2.1, as recorded in the audit); gateway boot DOC-REPORTED | Written authorization + instance pointer (HTTPS address, KV v2 mount, empty path, least-privilege token by name, mount type/version confirmation); HA, long renewal, AppRole, K8s auth, Transit remain separately blocked; 3 harness gaps (KV-v2 path-shape only, no policy assertion, --timeout does not set VAULT_HELPER_TIMEOUT) must be stated or fixed |
+| #649 Vault Transit | NOT_RUN (live acceptance) | FIXTURE (fake Vault API tests); nxs2 code is present on main (merged via #670) but code presence is not acceptance | Complete package together: written authorization + disposable instance + dedicated key + least-privilege policy (encrypt/decrypt/rewrap on that key only) + token-injection method by name only; production/HSM/HA claims remain blocked even then |
+| #650 K8s/Helm | UNVERIFIED — NOT_RUN | OFFLINE/RENDER (38 PASS lines, Helm v3.19.0, 2026-10-27); live NONE | Authorized host/runner with docker+kind+kubectl+helm and delegated cgroups (compute, not a credential); script safe-failure gap and chart staleness (chart 0.1.0 / appVersion 0.22.0 in deploy/helm/nexaroute/Chart.yaml on current main, vs the v0.24.0 release line) remain separately open |
+| #651 ComfyUI | UNVERIFIED — NOT_RUN/BLOCKED | FIXTURE (harness) + prior LOOPBACK fail-closed (on ba5ff2f, UNVERIFIED on the audit pin) | Four separate inputs: provisioned server + compatible model/workflow/config + suitable compute host (GPU preferred) + written authorization; supplying one leaves the others blocked |
+| #652 Multi-host HA | NOT_RUN (multi-host); no RPO/RTO values exist | SAME-HOST ONLY (multi-process PostgreSQL/Redis integration); same-VM figures, if any, are not multi-host values | Disposable two-host staging topology + operator authorization; a two-host run, a failover drill, a backup-restore drill, and measured multi-host RPO/RTO |
 
-Umbrella #654 note: its body checklist is stale in two places — #649
-still reads "NOT IMPLEMENTED" although the nxs2 code merged via #670,
-and #647 is unchecked although live state is CLOSED/COMPLETED
-(2026-10-29T05:18:01Z; #647 itself is out of this audit's scope and its
-closure is not re-litigated here). The unchecked boxes for
-#646/#648/#649/#650/#651 still match live issue states.
+Umbrella #654 note (re-checked 2026-10-30): its body checklist still
+shows #646–#653 unchecked, and all of those issues are still OPEN, so
+the checklist now matches live states. One stale line remains: #649
+still reads "NOT IMPLEMENTED" although the nxs2 code merged via #670;
+the correct statement is code present, live acceptance NOT_RUN. The
+original draft of this section also claimed #647 was CLOSED/COMPLETED;
+that claim is superseded — #647 was REOPENED and its live-tenant
+acceptance is UNVERIFIED, and #652 was likewise REOPENED after an
+audit found its closure unsupported. Neither reopening is re-litigated
+here; both gates are recorded above in their reopened state.
+
+Out of this section's scope, unchanged by this audit: #653 (coverage
+and soak tracker, still OPEN — this audit makes no coverage claim, and
+a coverage percentage never verifies a live provider, tenant, or
+device; read any coverage figure from its own current record and CI
+artifact, not from this section) and #664 (bounded CI soak smoke
+recorded as PASS in docs/reports/ISSUE664_CI_SMOKE_2026-10-29.md;
+long-form multi-hour soak NOT_RUN, live items NOT_RUN, no RPO/RTO
+reported). Neither #653 nor #664 is closed by this audit.
