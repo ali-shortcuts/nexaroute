@@ -59,10 +59,13 @@ jobs:
         # like a soak failure. Push runs carry no inputs and skip this.
         if: github.event_name == 'workflow_dispatch'
         shell: bash
+        env:
+          SOAK_DURATION: ${{ github.event.inputs.duration }}
+          SOAK_TIMEOUT_MINUTES: ${{ github.event.inputs.timeout_minutes }}
         run: |
           set -euo pipefail
-          duration="${{ github.event.inputs.duration }}"
-          timeout_minutes="${{ github.event.inputs.timeout_minutes }}"
+          duration="${SOAK_DURATION}"
+          timeout_minutes="${SOAK_TIMEOUT_MINUTES}"
           if ! [[ "$timeout_minutes" =~ ^[0-9]+$ ]]; then
             echo "timeout_minutes must be an integer, got '$timeout_minutes'" >&2
             exit 2
@@ -106,6 +109,8 @@ jobs:
         # It runs even when the soak step failed, because soak.sh
         # writes its summary from an EXIT trap in that case too.
         if: always()
+        env:
+          SOAK_DURATION: ${{ github.event.inputs.duration }}
         run: |
           set -euo pipefail
           summary="$(find "${{ github.workspace }}/.artifacts/soak" -name summary.json 2>/dev/null | sort | tail -n 1 || true)"
@@ -120,8 +125,8 @@ jobs:
           # Push runs carry no inputs, so the flag is omitted there
           # and the validator checks the summary's own request.
           duration_args=()
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            duration="${{ github.event.inputs.duration }}"
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            duration="${SOAK_DURATION}"
             if [[ "$duration" =~ ^([0-9]+)([smh])$ ]]; then
               value="${BASH_REMATCH[1]}"
               case "${BASH_REMATCH[2]}" in
