@@ -99,6 +99,9 @@ If any item is absent, the issue remains open with the missing evidence named.
 | Timeout | exit `1`, poll `FAIL`, pending prompt deleted, partial workspace removed |
 | Failed inference (`status_str: error`) | exit `1`, poll + inference `FAIL`, job recorded as `failed`, no asset, exactly one submission, pending prompt deleted |
 | Transient poll error | poll falls back to the queue and retries `GetJob` only; the prompt is submitted exactly once, then the run can still PASS |
+| Ambiguous submission (connection drops after `/prompt`) | exit `1`, exactly one POST, no resubmit, warning that the prompt may still be queued, remote cleanup `NOT_RUN` |
+| Duplicate output filenames (harness) | exit `1`, download `FAIL` before any `/view`, no asset retained, workspace removed |
+| Remote cleanup queue read fails | remote cleanup `FAIL`, local workspace still removed |
 | Oversized output | exit `1`, download `FAIL`, no partial local asset retained |
 | Completed without MP4 | exit `1`, fail-closed, no asset reported |
 | Successful fixture lifecycle | exit `0`, report/PASS/checks, retained fixture asset verified for size/metadata/SHA-256, `asset_path` PASS (inside the acceptance root, regular 0600 file), report contains no prompt text |
@@ -410,6 +413,103 @@ instance; no operator authorization naming an instance, model, or
 workflow exists on record. Present, so not blockers: `ffprobe` 8.1.2,
 the deterministic fixture suites, and the `comfyui-accept` harness
 itself. The verdict is unchanged: NOT_RUN/BLOCKED.
+
+## 2026-10-30 ambiguity/collision hardening + live re-check (NOT a live run)
+
+This cycle re-checked the live prerequisites and closed the remaining
+deterministic gaps named by the reopened issue. **Actual model inference
+remains NOT_RUN/BLOCKED, and #651 must stay open.** No model was
+downloaded, no paid compute was used, and no external or production
+ComfyUI service was contacted.
+
+Environment re-check (first-hand, 2026-10-30 ~10:19 UTC, names only —
+no secret values were read or printed):
+
+- `COMFYUI_URL`, `COMFYUI_BASE_URL`, `COMFYUI_API_URL`, `COMFYUI_HOST`,
+  `COMFYUI_MODEL`, `COMFYUI_WORKFLOW`, and `NEXAROUTE_COMFYUI_URL`: all
+  `UNSET`.
+- `/etc/nexaroute`: does not exist.
+- Nothing answered on `127.0.0.1:8188`; no ComfyUI listener was found.
+- `ffprobe`: absent in this environment, so playability could not have
+  been verified even if a server had existed.
+- No owner authorization naming an instance, model, workflow,
+  compute/budget limit, or secret-injection method exists on record.
+- No ComfyUI/model/workflow versions can be recorded because no server
+  or workflow was supplied.
+
+Committed sanitized harness report:
+`docs/reports/verification-slices/comfyui-acceptance-2026-10-30.json`.
+It records `outcome: BLOCKED`, `inference_executed: false`, preflight
+`BLOCKED`, and model inference `NOT_RUN`, with the fixture/dry-run
+limitations attached. It is **not** acceptance evidence for real video
+inference.
+
+Code and test changes in this cycle (loopback fixtures only):
+
+- **Ambiguous submission disclosed:** a submission that fails without
+  a prompt ID may still have been queued server-side (transport drop,
+  deadline, or 5xx). The harness now adds a warning that ComfyUI has no
+  idempotency key and the queue must be checked before retrying, and
+  the remote-cleanup reason says the same. A definite 4xx or
+  `node_errors` rejection is not labelled ambiguous.
+  `TestComfyUIAcceptAmbiguousSubmissionFailsClosedWithoutResubmit`
+  proves exactly one POST, no resubmit, `FAIL`, no job/asset recorded,
+  local cleanup `PASS`, remote cleanup `NOT_RUN`, and the warning.
+- **Harness-level output collision:**
+  `TestComfyUIAcceptDuplicateOutputFilenamesFailsClosed` proves a
+  completion listing the same stored filename twice fails closed
+  before any `/view` download, retains no asset, and removes the
+  per-run workspace.
+- **Cross-subfolder collision:** the adapter already keyed collisions
+  by stored basename; `TestComfyUIDownloadRejectsSameFilenameAcrossSubfolders`
+  now pins that two outputs named `same.mp4` under different
+  subfolders are refused before any download.
+- **Cleanup when the remote cancel itself fails:**
+  `TestComfyUIAcceptCleanupRemoteErrorStillRemovesLocal` proves a
+  failed queue read records remote cleanup `FAIL` but still removes
+  the local partial workspace.
+- **Defect fixed — failed `Put` could orphan video bytes:** the local
+  store renamed the video file into place and then wrote its metadata
+  sidecar. If that metadata write failed, `Put` returned an error
+  without an asset, so `DownloadOutputs` rollback could not identify
+  the file and left it orphaned under the failed job. `Local.Put` now
+  removes the renamed video file when metadata serialization or
+  writing fails, keeping `Put` atomic from the caller's perspective.
+  New tests: `TestLocalPutRollsBackVideoWhenMetadataWriteFails` and
+  `TestComfyUIDownloadRollsBackWhenLaterPersistenceFails`.
+  Red proof on the pre-fix head (`7daa36d`, run in an in-repo
+  worktree): the storage test failed with "failed Put left orphaned
+  video bytes behind", and the provider test failed with
+  `second.mp4` left behind; both PASS on the fixed head.
+
+Verification on the fixed head (Go 1.25.0, loopback fixtures only —
+none of this is real inference):
+
+- `go test ./cmd/gateway/ -count=1 -timeout=600s` — PASS (60.416 s).
+- `go test ./internal/video/providers/ ./internal/video/storage/ ./internal/video/api/ -count=1 -timeout=300s` — PASS.
+- `go test -race ./internal/video/providers/ ./internal/video/storage/ ./internal/video/api/ -count=1 -timeout=360s` — PASS.
+- `go test -race ./cmd/gateway/ -run 'TestComfyUIAccept' -count=1 -timeout=360s` — PASS.
+- `go vet ./cmd/gateway ./internal/video/providers ./internal/video/storage ./internal/video/api` — PASS.
+- `gofmt` clean on all touched files.
+- Full `./scripts/verify.sh` is left to CI on the PR; it includes
+  repository-wide and browser gates that this environment cannot
+  provision.
+
+Still missing for #651 (owner inputs required before any live run):
+
+- A provisioned ComfyUI instance URL (HTTPS for non-loopback) with its
+  exact ComfyUI version.
+- A real compatible text-to-video model name/version and license, plus
+  an API-format workflow whose prompt/width/height/frames node mapping
+  is named explicitly.
+- Written owner authorization naming the instance, model, workflow,
+  compute/budget limit, and secret-injection method.
+- A working `ffprobe`, and a decision on where the sanitized evidence
+  report and any retained playable asset should be stored.
+
+Until those exist, the live-inference criterion is `BLOCKED/NOT_RUN`;
+fixtures, loopback tests, and harness code do not satisfy it and must
+not be reported as real video inference.
 
 ## Limitations
 
