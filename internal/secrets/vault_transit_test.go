@@ -755,3 +755,83 @@ func TestVaultTransitOperationContextBudgetAndRetries(t *testing.T) {
 		}
 	})
 }
+
+// TestVaultTransitPerRequestTimeoutAndCancel pins ADR 0007 §8.3 for the
+// Transit provider itself: a Vault that never answers must fail closed
+// within the per-request timeout instead of hanging the gateway, and a
+// caller cancel must abort a hanging request. No earlier test exercised
+// the Transit provider against a hanging server: the fake's slow field
+// was never set, and the only slow-server test covers the KV helper, a
+// different path. Timeouts are not retried (doOnce marks client errors
+// non-retryable), so exactly one attempt is expected.
+func TestVaultTransitPerRequestTimeoutAndCancel(t *testing.T) {
+	dek := []byte("01234567890123456789012345678901")
+	hang := func(attempts *atomic.Int32) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if attempts != nil {
+				attempts.Add(1)
+			}
+			// Hang well beyond every client-side bound below
+			// (200 ms timeout, 100 ms cancel): the client side must
+			// fail closed long before this returns. Teardown waits
+			// for the handler because a POST handler that never
+			// reads or writes never observes the disconnect, so the
+			// hang is kept short (2 s) to bound total test time.
+			select {
+			case <-r.Context().Done():
+			case <-time.After(2 * time.Second):
+			}
+		}))
+	}
+	checkUnavailable := func(t *testing.T, err error) {
+		t.Helper()
+		var terr *TransitError
+		if !errors.As(err, &terr) || terr.Class != ClassTransitUnavailable {
+			t.Fatalf("hanging Vault must be transit_unavailable, got %v", err)
+		}
+		if strings.Contains(err.Error(), "test-token") {
+			t.Fatalf("error leaked the token: %v", err)
+		}
+	}
+
+	t.Run("per-request timeout fails closed without retry", func(t *testing.T) {
+		var attempts atomic.Int32
+		srv := hang(&attempts)
+		defer srv.Close()
+		p, err := NewVaultTransitProvider(srv.URL, "test-token", "", "transit", "nexaroute", 200*time.Millisecond)
+		if err != nil {
+			t.Fatal(err)
+		}
+		start := time.Now()
+		_, _, err = p.WrapDEK(context.Background(), dek)
+		elapsed := time.Since(start)
+		checkUnavailable(t, err)
+		if attempts.Load() != 1 {
+			t.Fatalf("timeout must not be retried, got %d attempts", attempts.Load())
+		}
+		if elapsed > 5*time.Second {
+			t.Fatalf("per-request timeout took too long: %v", elapsed)
+		}
+	})
+
+	t.Run("caller cancel aborts hanging request", func(t *testing.T) {
+		srv := hang(nil)
+		defer srv.Close()
+		p, err := NewVaultTransitProvider(srv.URL, "test-token", "", "transit", "nexaroute", 5*time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		go func() {
+			time.Sleep(100 * time.Millisecond)
+			cancel()
+		}()
+		start := time.Now()
+		_, _, err = p.WrapDEK(ctx, dek)
+		elapsed := time.Since(start)
+		checkUnavailable(t, err)
+		if elapsed > 5*time.Second {
+			t.Fatalf("cancelled request took too long: %v", elapsed)
+		}
+	})
+}
