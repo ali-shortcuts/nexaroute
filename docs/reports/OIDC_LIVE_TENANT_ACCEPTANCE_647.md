@@ -97,6 +97,7 @@ Local verification for this re-audit (all PASS unless stated):
 - `go vet ./internal/httpapi` — PASS.
 - `go test -race ./internal/httpapi -run 'TestOIDCDiscoveryRejectsIssuerThatDiffersOnlyByTrailingSlash|TestOIDCNonceIsBoundToItsTransaction|TestOIDCTokenExchangeUsesConfiguredClientRedirectAndGrant|TestOIDCRoleMappingAcceptsDuplicateAndMixedMappedValues' -count=1` — PASS (3.170s).
 - `bash scripts/test-oidc-live-preflight.sh` — PASS (loopback fixtures only; not live acceptance evidence).
+- `./scripts/verify.sh` — PASS (`VERIFY PASS`); the browser step was SKIPPED locally because Python Playwright is not installed in this runner, and the script reports that explicitly. This does not affect the OIDC local tests or the live-tenant **BLOCKED** status.
 - The four new tests verbose-PASS individually; this is local evidence, never a live `PASS`.
 
 The live checklist below applies unchanged to an operator-owned
