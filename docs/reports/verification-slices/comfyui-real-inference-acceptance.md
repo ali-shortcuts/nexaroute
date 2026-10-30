@@ -609,3 +609,59 @@ head is authoritative for the rebased branch.
   `go vet` clean on all four touched packages; `gofmt` clean on
   all five touched files. Full `./scripts/verify.sh` NOT run
   locally (whole-repo + browser step; CI is the gate).
+
+## 2026-10-30 evening re-verification on merged main (local only, NOT a live run)
+
+- **State reconciliation (no action taken, already correct):** #651 is
+  OPEN (closedAt null, updated 2026-10-30T13:49:00Z). It was closed
+  2026-10-30T05:10:17Z, one second after PR #748 merged, and reopened
+  2026-10-30T10:11:49Z with an owner comment calling the closure
+  premature, confirmed by the owner-order reopen comment
+  2026-10-30T13:49:00Z. No owner-approved exclusion exists on the
+  record, so no reopen comment was posted here and none was needed.
+  PR #748 is MERGED (2026-10-30T05:10:16Z); PR #778 (case-insensitive
+  duplicate filenames) is MERGED as main `7a2623a`.
+- **Negative-suite re-verification on main `7a2623a` (Go 1.27.3,
+  loopback fixtures only, first-hand test-name audit):** all nine
+  required negative categories are present and passing — unavailable
+  server (`TestComfyUIAcceptUnavailableServerFailsClosed`); invalid
+  workflow/node mapping (`InvalidNodeMappingNeverContactsServer`,
+  `MalformedWorkflowFilesRejected`, `NodeErrorsWithPromptIDRejected`);
+  submit timeout with exactly-once submission (`SubmitTimeoutSubmitsExactlyOnce`
+  at adapter and harness level, `AmbiguousSubmissionFailsClosedWithoutResubmit`,
+  `StalledJobTimesOutWithoutResubmit`); duplicate output filenames
+  (exact, sanitized, case-insensitive, same-name-across-subfolders);
+  oversized output (`OversizedOutputLeavesNoPartialAsset`,
+  `DownloadAtExactLimitPasses`); partial-download rollback
+  (`DownloadPartialFailureCleansUpAndLeavesOtherJobIntact`,
+  `DownloadRollsBackWhenLaterPersistenceFails`); cleanup
+  (`CleanupRemoteErrorStillRemovesLocal`,
+  `TimeoutCleansUpPendingPrompt`); cancellation
+  (`PollInterruptedByCancellation`, `GetJobRespectsCancellation`,
+  cancel-absent/cancel-running refusals); fail-closed terminal states
+  (`HistoryFailureStatesAreFailClosed`, `RejectedJobFailsClosed`,
+  `FailedInferenceFailsClosedWithoutResubmit`,
+  `CompletedWithoutMP4FailsClosed`); plus gateway retrieval
+  (`TestHandlerServesComfyUIAssetThroughGateway`, missing-file 404).
+  No new negative test was added here because no genuine gap was
+  found; duplicating the merged suite would be churn, not evidence.
+- **Local results on `7a2623a`:** providers ComfyUI plain 1.884s
+  exit 0; api handler 0.099s exit 0; gateway accept 2.938s exit 0;
+  storage 1.071s exit 0; race subset (download / submit-timeout /
+  ambiguous) providers 1.981s + gateway 2.004s exit 0. Full
+  `./scripts/verify.sh` NOT run locally (whole-repo + browser step;
+  CI is the gate).
+- **Live verdict unchanged (re-checked 2026-10-30 evening, names
+  only):** nothing listening on `127.0.0.1:8188`/`8189`;
+  `COMFYUI_URL`, `COMFYUI_BASE_URL`, `COMFYUI_API_URL`,
+  `COMFYUI_HOST`, `COMFYUI_MODEL` all absent-or-empty;
+  `/etc/nexaroute` does not exist; no operator authorization naming
+  an instance, model, workflow, or compute/budget limit exists on
+  record. Zero live calls, zero model downloads, zero paid compute.
+  Actual model inference remains NOT_RUN/BLOCKED and #651 stays
+  OPEN. What would unblock it, exactly as before: written owner
+  authorization naming a provisioned ComfyUI instance (URL), a
+  compatible text-to-video model, an API-format workflow, and a
+  compute/budget limit — then the smallest real inference via
+  `nexaroute comfyui-accept --confirm-live` with the sanitized PASS
+  report attached to #651.
