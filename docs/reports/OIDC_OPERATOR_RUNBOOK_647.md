@@ -41,6 +41,19 @@ token-exchange client/redirect/grant, duplicate/mixed role values).
 Every live step in §5–§7 remains **BLOCKED/NOT_RUN**; the exact
 operator inputs are listed in `OIDC_LIVE_TENANT_ACCEPTANCE_647.md`.
 
+2026-10-30 follow-up re-audit (main `7a2623a`): still no
+operator-owned tenant, credentials, test users, or run authorization,
+and zero live IdP calls. The local suite gained five further negatives
+(nested-claim denial, short-state denial with transaction preserved,
+session-read-failure fail-closed, cross-host HTTPS discovery accepted,
+login-audit subject attribution); see
+`OIDC_LIVE_TENANT_ACCEPTANCE_647.md` §"2026-10-30 follow-up re-audit"
+and `OIDC_647_FOLLOWUP_2026-10-30.md`. Every live step in §5–§7
+remains **BLOCKED/NOT_RUN**. Note the top-level-claim requirement
+recorded in the checklist §9: a tenant whose roles are nested-only
+must map them to a top-level claim on the tenant side, or the
+mapped-role cases cannot pass — by gateway design, not by defect.
+
 ## 0. What blocks this run, and the rules that do not bend
 
 No operator-owned tenant, client, test user, or signing-key access

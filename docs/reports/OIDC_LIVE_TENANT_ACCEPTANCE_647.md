@@ -109,6 +109,40 @@ shape, never the assumed one. Every live item remains
 a real tenant with item-by-item evidence, or an owner-approved exclusion
 is reviewed.
 
+## 2026-10-30 follow-up re-audit of main (local only; live gate BLOCKED)
+
+Inspected main `7a2623a`. The #772 callback-binding negatives (no /
+malformed flow cookie, wrong-method callback, provider-error state
+consumption, login-start audit failure) are already on main and were not
+duplicated. Five further deterministic negatives were added, with no
+production-code change (one test-fixture mode only):
+
+| Gap | New deterministic test |
+|---|---|
+| Nested role claims had no test; the top-level-only rule was documented but unpinned | `TestOIDC647NestedRoleClaimDenied` (Keycloak-style `realm_access.roles` with no top-level claim denied, no session) |
+| `takeState`'s short-state floor had no callback-level test | `TestOIDC647ShortStateDeniedAndTransactionPreserved` (short state denied; the real transaction still completes) |
+| Session-store failure was covered on the write path only, not the read path | `TestOIDC647SessionStoreReadFailureFailsClosed` (TouchSession outage → protected requests 503, no data; session survives recovery) |
+| Discovery pinning did not state whether endpoint hosts must match the issuer host | `TestOIDC647DiscoveryCrossHostHTTPSEndpointsAccepted` (cross-host HTTPS endpoints accepted by design — Google-compatible; only the issuer string and the HTTPS scheme are pinned) |
+| Audit coverage asserted action presence, not attribution | `TestOIDC647LoginSuccessAuditCarriesSubject` (login-success event carries the subject as actor, outcome success, status 303) |
+
+Covered and deliberately not re-tested: PKCE challenge mismatch
+(`TestOIDCRejectsInvalidTokensAndTamperedResponses`, "PKCE challenge
+mismatch" case — the exchange rejects and the callback is denied);
+JWKS overlap/rotation/outage; logout success and revocation failure;
+write-path persistence/audit failures; policy-mismatch revocation;
+duplicate/mixed and unmapped/ambiguous/malformed top-level role claims.
+A same-host endpoint rule was considered and rejected: it would break
+real providers (Google's token endpoint lives on a different host from
+its issuer), so no such rule was added.
+
+Environment check for this follow-up (variable **names** only, counted
+not listed; values were never read): the tenant/secret name set checked
+in the 2026-10-30 re-audit above — still no operator-owned tenant, test
+users, or run authorization in any #647 comment, and no repository
+config contains an `admin.oidc` tenant block outside docs/tests.
+**Zero live IdP calls were made.** Local verification results are
+recorded in `docs/reports/OIDC_647_FOLLOWUP_2026-10-30.md`.
+
 ## Live-tenant checklist (all items BLOCKED)
 
 Mark an item `PASS` only from a live observation on the operator-owned
@@ -219,6 +253,15 @@ access are missing. Do not infer a live `PASS` from the local tests.
 - Record how the tenant represents groups/roles (for example nested
   `realm_access.roles`, `groups`, or app roles) and whether the configured
   `role_claim` reaches it.
+- Top-level claim requirement (pinned locally by
+  `TestOIDC647NestedRoleClaimDenied`): the gateway reads exactly one
+  top-level claim name (`admin.oidc.role_claim`), string or array of
+  strings. If the tenant emits roles only nested (Keycloak
+  `realm_access.roles` with no top-level claim), the operator MUST map
+  them to a top-level claim on the tenant side (Keycloak protocol
+  mapper, Entra app role / optional claim, Okta group claim) before the
+  mapped-role cases can pass. A nested-only token is denied by design;
+  do not record that denial as a gateway defect.
 - Confirm behavior when the ID token is near expiry and when the
   provider's clock differs from the gateway host. Record the observed
   tolerance; do not assume a provider-specific skew policy.
