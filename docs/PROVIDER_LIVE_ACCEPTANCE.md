@@ -172,6 +172,30 @@ command (without secrets), the report path, the per-case status, and any
 sanitized error. Then fill the run record below; do not copy a status from
 one provider's row into another's.
 
+## Validating a report
+
+Before attaching any report to issue #646, run the report validator
+(`scripts/check-acceptance-report.py`, stdlib only). It checks the
+report's own schema, dates, scenario/check statuses, outcome and
+totals arithmetic against the rules the writing code enforces, plus
+the contract rules a report must not violate (a `stream_usage` PASS
+needs input and output tokens, an `auth_failure` PASS needs HTTP
+400/401/403, an `error_envelope` PASS needs a 4xx status, observed
+cost must not exceed the cost ceiling), and it fails the report if
+it contains credential-shaped material. A valid report is still not
+live evidence by itself: a loopback fixture produces a canary report
+with the same schema as a live run, and none of the three report
+schemas carries a commit SHA. Use `--require-live` to reject
+loopback-class reports outright, and check the SHA in the signed run
+record against the report's `generated_at` date before quoting any
+status.
+
+```sh
+python3 scripts/check-acceptance-report.py --report canary-<provider-id>-<ts>.json
+python3 scripts/check-acceptance-report.py --report canary-<provider-id>-<ts>.json --require-live
+python3 scripts/check-acceptance-report.py --report external-acceptance-<ts>.json --require-live
+```
+
 ## Run record template
 
 | Provider | Model | Case | Status | Evidence (report path, HTTP status, tokens) |
