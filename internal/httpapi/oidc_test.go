@@ -301,6 +301,13 @@ func (p *inProcessOIDCProvider) signedIDToken(flow oidcTestFlow) (string, error)
 		delete(claims, "groups")
 	case "malformed-role-claim":
 		claims["groups"] = map[string]any{"role": "nr-admins"}
+	case "nested-role-claim":
+		// Keycloak-style nesting: roles live only under realm_access,
+		// with no top-level claim. The gateway reads one top-level
+		// claim name only; this fixture pins that fail-closed behavior
+		// (see TestOIDC647NestedRoleClaimDenied).
+		delete(claims, "groups")
+		claims["realm_access"] = map[string]any{"roles": flow.groups}
 	}
 	payload, err := json.Marshal(claims)
 	if err != nil {
