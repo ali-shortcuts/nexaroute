@@ -1,11 +1,16 @@
 package httpapi
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
+	"syscall"
 	"net/http/httptest"
 	"os"
 	"strings"
@@ -565,6 +570,105 @@ func TestWave3AnthropicDecodeClientGoneCleanup(t *testing.T) {
 	rr := wave3Request(s, "POST", "/v1/messages", wave3AnthropicReq("cm"))
 	if rr.Code != 200 || !strings.Contains(rr.Body.String(), `"text":"ok"`) {
 		t.Fatalf("post-abort request status=%d body=%s want 200 with ok text", rr.Code, rr.Body.String())
+	}
+}
+
+// TestWave3AnthropicDecodeClientGoneUpstreamConnClosed proves at the TCP
+// level, without any httptest teardown helper, that a client cancel ends
+// the gateway's upstream leg: the upstream is a raw TCP listener, not an
+// httptest server, so no CloseClientConnections call exists here to hide
+// a leak. The listener answers 200 headers with no body and then holds
+// the connection open; after the client cancels and the gateway handler
+// returns (empty body, client_disconnect event), a server-side read must
+// observe the gateway closing its side within a bounded wait. Go's
+// transport aborts a cancelled request with a reset (not a graceful
+// FIN) when the response body was never fully read, so both io.EOF and
+// connection-reset-by-peer count as closure; only a read timeout — the
+// connection still open — counts as a leak and fails.
+func TestWave3AnthropicDecodeClientGoneUpstreamConnClosed(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	entered := make(chan struct{})
+	eof := make(chan error, 1)
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			eof <- err
+			return
+		}
+		defer conn.Close()
+		br := bufio.NewReader(conn)
+		// Read request line + headers, then the declared body, so the
+		// gateway's request is fully consumed before we answer.
+		var contentLength int
+		for {
+			line, err := br.ReadString('\n')
+			if err != nil {
+				eof <- err
+				return
+			}
+			line = strings.TrimRight(line, "\r\n")
+			if line == "" {
+				break
+			}
+			if strings.HasPrefix(strings.ToLower(line), "content-length:") {
+				fmt.Sscanf(line, "Content-Length: %d", &contentLength)
+			}
+		}
+		if contentLength > 0 {
+			if _, err := io.CopyN(io.Discard, br, int64(contentLength)); err != nil {
+				eof <- err
+				return
+			}
+		}
+		if _, err := conn.Write([]byte("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n")); err != nil {
+			eof <- err
+			return
+		}
+		close(entered)
+		// Hold the connection open: the gateway must close it itself
+		// when the client cancels. A read past this point returns
+		// io.EOF only once the gateway's side is gone.
+		_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+		one := make([]byte, 1)
+		_, err = conn.Read(one)
+		eof <- err
+	}()
+	s := wave3Gateway(t, []config.ProviderConfig{wave3Provider("a", "anthropic_compatible", "http://"+ln.Addr().String(), "m", "upstream-model", []string{"cm"})}, func(cfg *config.Config) {
+		cfg.Routing.Strategy = "priority"
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		done <- wave3RequestCtx(s, ctx, "POST", "/v1/messages", wave3AnthropicReq("cm"))
+	}()
+	select {
+	case <-entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("upstream did not take the request")
+	}
+	cancel()
+	select {
+	case rr := <-done:
+		if rr.Body.Len() != 0 {
+			t.Fatalf("cancelled decode body=%q want empty", rr.Body.String())
+		}
+		if !wave3BusHasKind(s, "client_disconnect") {
+			t.Fatal("client_disconnect event missing")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("cancelled decode handler did not return")
+	}
+	select {
+	case err := <-eof:
+		if err != io.EOF && !errors.Is(err, syscall.ECONNRESET) {
+			t.Fatalf("upstream read err=%v want io.EOF or connection reset (gateway closed its connection)", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("gateway did not close the upstream connection after client cancel")
 	}
 }
 
@@ -1175,6 +1279,16 @@ func TestWave3ResponsesUsageErrorClientGone(t *testing.T) {
 		<-r.Context().Done()
 	}))
 	defer up.Close()
+	// Same stdlib teardown hazard as TestWave3AnthropicDecodeClientGone:
+	// this stub never reads its request body, so the server cannot
+	// observe the gateway's close on its own and Close() can wedge on
+	// the still-active stub connection. Force-closing tracked
+	// connections first (LIFO, before Close) keeps teardown bounded;
+	// it hides no production leak — the handler-return assertion below
+	// and TestWave3AnthropicDecodeClientGoneUpstreamConnClosed prove
+	// the gateway itself ends the request and releases its upstream
+	// connection on client cancel.
+	defer up.CloseClientConnections()
 	s := wave3Gateway(t, []config.ProviderConfig{
 		wave3Provider("a", "openai_compatible", up.URL, "m", "upstream-model", []string{"cm"}),
 	}, func(cfg *config.Config) { cfg.Routing.Strategy = "priority" })
