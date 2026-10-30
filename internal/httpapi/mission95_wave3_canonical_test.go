@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -14,6 +16,11 @@ import (
 
 	"github.com/ali-shortcuts/nexaroute/internal/compat"
 	"github.com/ali-shortcuts/nexaroute/internal/config"
+	"github.com/ali-shortcuts/nexaroute/internal/events"
+	"github.com/ali-shortcuts/nexaroute/internal/health"
+	"github.com/ali-shortcuts/nexaroute/internal/probe"
+	"github.com/ali-shortcuts/nexaroute/internal/providers"
+	"github.com/ali-shortcuts/nexaroute/internal/router"
 )
 
 // Wave-3 coverage tests: canonical ingress handlers (anthropic, responses,
@@ -91,6 +98,29 @@ func wave3JSONServer(t *testing.T, status int, body string, calls *atomic.Int32)
 		w.WriteHeader(status)
 		_, _ = io.WriteString(w, body)
 	}))
+}
+
+// wave3JSONServerNotURL is wave3JSONServer with one deterministic guard:
+// the returned server never listens on bannedURL. A just-closed httptest
+// server's port can be reassigned to the next server created in the same
+// test binary; when a failover test's "dead" URL collides with its "good"
+// URL, the first attempt succeeds, no failure occurs, and no failover
+// event is emitted — the exact "failover event missing" CI symptom, with
+// every other assertion still passing. Recreating on collision removes
+// the hole without sleeps or timing assumptions: the returned server is
+// proven distinct before the gateway ever sees it. Exhaustion fails
+// loudly instead of hanging or silently passing.
+func wave3JSONServerNotURL(t *testing.T, status int, body string, calls *atomic.Int32, bannedURL string) *httptest.Server {
+	t.Helper()
+	for i := 0; i < 10; i++ {
+		s := wave3JSONServer(t, status, body, calls)
+		if s.URL != bannedURL {
+			return s
+		}
+		s.Close()
+	}
+	t.Fatalf("could not allocate a test server address distinct from %s", bannedURL)
+	return nil
 }
 
 func TestWave3AnthropicTooLarge(t *testing.T) {
@@ -344,7 +374,7 @@ func TestWave3AnthropicTransportFailover(t *testing.T) {
 	deadURL := dead.URL
 	dead.Close()
 	var goodCalls atomic.Int32
-	good := wave3JSONServer(t, 200, wave3AnthropicOK, &goodCalls)
+	good := wave3JSONServerNotURL(t, 200, wave3AnthropicOK, &goodCalls, deadURL)
 	defer good.Close()
 	s := wave3Gateway(t, []config.ProviderConfig{
 		wave3Provider("a", "anthropic_compatible", deadURL, "m", "upstream-model", []string{"cm"}),
@@ -356,6 +386,12 @@ func TestWave3AnthropicTransportFailover(t *testing.T) {
 	}
 	if goodCalls.Load() != 1 {
 		t.Fatalf("good candidate calls=%d want 1", goodCalls.Load())
+	}
+	// The route_fail for a/m proves provider a was actually attempted and
+	// failed; without it, a dead/good address collision would pass every
+	// assertion above while producing no failover at all.
+	if !wave3BusHasKindDeployment(s, "route_fail", "a/m") {
+		t.Fatalf("route_fail event missing for a/m: failover was not exercised")
 	}
 	if !wave3BusHasKind(s, "failover") {
 		t.Fatalf("failover event missing")
@@ -747,7 +783,7 @@ func TestWave3ResponsesTransportFailover(t *testing.T) {
 	deadURL := dead.URL
 	dead.Close()
 	var goodCalls atomic.Int32
-	good := wave3JSONServer(t, 200, wave3ChatOK, &goodCalls)
+	good := wave3JSONServerNotURL(t, 200, wave3ChatOK, &goodCalls, deadURL)
 	defer good.Close()
 	s := wave3Gateway(t, []config.ProviderConfig{
 		wave3Provider("a", "openai_compatible", deadURL, "m", "upstream-model", []string{"cm"}),
@@ -820,6 +856,76 @@ func TestWave3ResponsesDeadline504(t *testing.T) {
 	releaseUpstream()
 	if rr.Code != 504 || !strings.Contains(rr.Body.String(), "gateway request timeout") {
 		t.Fatalf("responses deadline status=%d body=%s want 504 gateway request timeout", rr.Code, rr.Body.String())
+	}
+}
+
+// wave3SplitTimeoutGateway builds a gateway whose upstream adapters use
+// adapterTimeoutMS while request routing uses routeTimeoutMS. Production
+// builds both from the same RequestTimeoutMS; splitting them here is the
+// only deterministic way to force the transport-timeout-first outcome
+// (adapter timer fires while the route timer is still pending) that the
+// shared-budget race produces under load. It exercises the error
+// classification, not a production configuration.
+func wave3SplitTimeoutGateway(t *testing.T, providerCfgs []config.ProviderConfig, adapterTimeoutMS, routeTimeoutMS int) *Server {
+	t.Helper()
+	routeCfg := config.Default()
+	routeCfg.Probe.Enabled = false
+	routeCfg.Routing.RetryBackoffMS = 0
+	routeCfg.Routing.Strategy = "priority"
+	routeCfg.Routing.RequestTimeoutMS = routeTimeoutMS
+	routeCfg.Providers = providerCfgs
+	routeCfg.ApplyDefaults()
+	adapterCfg := routeCfg
+	adapterCfg.Routing.RequestTimeoutMS = adapterTimeoutMS
+	hm := health.New(routeCfg.Routing.FailureThreshold, routeCfg.Cooldown())
+	hm.ConfigureProviderIncidents(routeCfg.Routing.ProviderFailureThreshold, routeCfg.ProviderFailureWindow(), routeCfg.ProviderCooldown())
+	reg, err := providers.NewRegistry(adapterCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt := router.New(routeCfg, hm)
+	bus := events.New(100)
+	pe := probe.New(routeCfg, reg, rt, hm, bus)
+	configDir := t.TempDir()
+	if err := os.Chmod(configDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	srv := New(routeCfg, configDir+"/config.json", reg, rt, hm, bus, pe, log.New(io.Discard, "", 0))
+	if err := srv.SecurityStoreError(); err != nil {
+		t.Fatalf("create test security store: %v", err)
+	}
+	t.Cleanup(func() { _ = srv.CloseSecurityStore() })
+	return srv
+}
+
+func TestWave3ResponsesClientTimeoutMapsTo504(t *testing.T) {
+	// Regression for the main CI Verify failure on c2ca13c: the upstream
+	// transport timeout ("timeout awaiting response headers") was mapped
+	// to 502 because only the narrow route-timer check was consulted.
+	// With the adapter budget (200ms) shorter than the route budget
+	// (60s), the transport timeout deterministically arrives while the
+	// route timer is still pending; the contract requires 504.
+	// Release channel, not bare context cancellation: a handler blocked
+	// before writing any bytes does not observe client cancellation
+	// promptly in this sandbox (see TestWave3ResponsesClientGoneOnTransportError).
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseUpstream := func() { releaseOnce.Do(func() { close(release) }) }
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+	}))
+	defer up.Close()
+	defer releaseUpstream()
+	s := wave3SplitTimeoutGateway(t, []config.ProviderConfig{
+		wave3Provider("a", "openai_compatible", up.URL, "m", "upstream-model", []string{"cm"}),
+	}, 200, 60000)
+	rr := wave3Request(s, "POST", "/v1/responses", wave3ResponsesReq("cm"))
+	releaseUpstream()
+	if rr.Code != 504 || !strings.Contains(rr.Body.String(), "gateway request timeout") {
+		t.Fatalf("responses client-timeout status=%d body=%s want 504 gateway request timeout", rr.Code, rr.Body.String())
 	}
 }
 
@@ -1165,7 +1271,7 @@ func TestWave3OpenAITransportFailover(t *testing.T) {
 	deadURL := dead.URL
 	dead.Close()
 	var goodCalls atomic.Int32
-	good := wave3JSONServer(t, 200, wave3ChatOK, &goodCalls)
+	good := wave3JSONServerNotURL(t, 200, wave3ChatOK, &goodCalls, deadURL)
 	defer good.Close()
 	s := wave3Gateway(t, []config.ProviderConfig{
 		wave3Provider("a", "openai_compatible", deadURL, "m", "upstream-model", []string{"cm"}),

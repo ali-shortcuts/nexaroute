@@ -72,6 +72,36 @@ func clientRequestGone(clientCtx context.Context) bool {
 	return clientCtx.Err() != nil
 }
 
+// readResponseBody reads an upstream response body bounded by limit, but
+// aborts promptly when ctx is done (client disconnect or gateway deadline)
+// instead of relying only on transport cancellation timing: on ctx done it
+// closes the body, which unblocks the in-flight read and releases the
+// upstream connection, so neither the handler nor the upstream server can
+// be left waiting on a client that is already gone. The reader goroutine
+// always completes (its send lands in the buffered channel) and the caller
+// still closes the body on the success path, as before.
+func readResponseBody(ctx context.Context, rc io.ReadCloser, limit int64) ([]byte, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	type result struct {
+		body []byte
+		err  error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		b, err := io.ReadAll(io.LimitReader(rc, limit))
+		ch <- result{body: b, err: err}
+	}()
+	select {
+	case res := <-ch:
+		return res.body, res.err
+	case <-ctx.Done():
+		_ = rc.Close()
+		return nil, ctx.Err()
+	}
+}
+
 func jitteredRetryBackoff(base time.Duration, attempt int, requestID string) time.Duration {
 	if base <= 0 {
 		return 0

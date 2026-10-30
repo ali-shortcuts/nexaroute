@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"mime/multipart"
@@ -189,7 +190,7 @@ func TestWave2CanonicalNonStreamReadError(t *testing.T) {
 		Body:       io.NopCloser(&wave2ErrorReader{done: true, err: errors.New("wave2 read failure")}),
 	}
 	rr := httptest.NewRecorder()
-	err := (&Server{}).handleCanonicalResponse(rr, resp, "openai", "openai_chat", "m", "req-nonstream", false, nil, nil)
+	err := (&Server{}).handleCanonicalResponse(context.Background(), rr, resp, "openai", "openai_chat", "m", "req-nonstream", false, nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "upstream response read failed") {
 		t.Fatalf("err=%v want the upstream read failure", err)
 	}
