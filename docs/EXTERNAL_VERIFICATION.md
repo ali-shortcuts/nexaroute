@@ -294,3 +294,46 @@ and no paid calls were made (by design). Live provider interoperability
 remains **UNVERIFIED**; the fixture-based conformance suite
 (`internal/providers/livecanary`, now including the extended scenario
 set) is the local evidence, and it is not a substitute.
+
+## Gate audit 2026-10-29 (umbrella #654) — statuses unchanged
+
+Re-verified 2026-10-29 evening against main `bb5865f`: issues #654, #646,
+#648, #649, #650, #651 all still OPEN. The audit itself produced no live
+acceptance evidence (no provider calls, no staging Vault, no cluster, no
+model inference). Per-issue matrix (implementation readiness / fixture
+evidence / true external acceptance / exact missing resource):
+
+- #646 (LLM canaries): harness + runbook on main; fixture/loopback PASS
+  only; live BLOCKED on one written operator comment naming providers +
+  models + approved tenant + approved spend, credentials via named env
+  vars only.
+- #648 (Vault KV): loopback PASS 10/12 on the pre-hardening check set
+  (disposable Vault v2.2.1, 2026-10-27); staging BLOCKED on written
+  authorization + staging address + KV v2 mount + dedicated empty path +
+  least-privilege token by name; HA / long renewal / AppRole / K8s auth /
+  Transit NOT_RUN.
+- #649 (Vault Transit): implementation on main via #670; live NOT_RUN;
+  unblock package = written authorization + disposable instance + dedicated
+  key + least-privilege policy (encrypt/decrypt/rewrap on that key) + token
+  injection by name only.
+- #650 (K8s/Helm): offline/render PASS; live NOT_RUN — needs an authorized
+  host with docker + kind + kubectl + helm + delegated cgroups (the script
+  creates its own disposable kind cluster; no operator cluster grant is
+  needed). Safe-failure phases (misconfigured config / down dependency /
+  missing Secret) are specified but not implemented; chart versions
+  (0.1.0/0.22.0) are deliberately untouched (owner release-policy
+  decision).
+- #651 (ComfyUI): harness on main; live NOT_RUN — needs a provisioned
+  server + compatible model/workflow with passing node mapping + suitable
+  (GPU-preferred) compute + written authorization. Setup-only per owner
+  decision 2026-10-29; no model download, no inference on this VM.
+
+Umbrella checklist staleness (not silently rewritten): the #654 body still
+reads #649 as NOT IMPLEMENTED though its implementation merged via #670.
+#647 closed 2026-10-29 and has since reopened, so its unchecked box in the
+#654 body is current again and its live acceptance remains outstanding. The accompanying
+hardening PR (branch `supervisor/gates654-acceptance-hardening`, review
+only) closes the three #648 harness gaps (KV v2 metadata probe, root-token
+refusal, helper timeout propagation), reconciles ADR 0007's status line,
+and documents the #650 safe-failure gap; it merges nothing and closes no
+issue.

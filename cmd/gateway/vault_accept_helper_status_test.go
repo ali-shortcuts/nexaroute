@@ -67,7 +67,7 @@ func TestVaultHelperRedirectAndSizeBounds(t *testing.T) {
 			http.Redirect(w, r, "http://127.0.0.1:9/v1/secret/data/x", http.StatusTemporaryRedirect)
 		}))
 		defer srv.Close()
-		if _, err := runVaultAcceptHelper(ctx, script, "put", "secret/data/x", key, srv.URL, "tok"); err == nil {
+		if _, err := runVaultAcceptHelper(ctx, script, "put", "secret/data/x", key, srv.URL, "tok", 30); err == nil {
 			t.Fatal("helper put to a 307 server must fail, but it reported success")
 		}
 	})
@@ -77,7 +77,7 @@ func TestVaultHelperRedirectAndSizeBounds(t *testing.T) {
 			http.Redirect(w, r, "http://127.0.0.1:9/v1/secret/data/x", http.StatusTemporaryRedirect)
 		}))
 		defer srv.Close()
-		if _, err := runVaultAcceptHelperGet(ctx, script, "secret/data/x", srv.URL, "tok"); err == nil {
+		if _, err := runVaultAcceptHelperGet(ctx, script, "secret/data/x", srv.URL, "tok", 30); err == nil {
 			t.Fatal("helper get from a 307 server must fail, but it reported success")
 		}
 	})
@@ -90,7 +90,7 @@ func TestVaultHelperRedirectAndSizeBounds(t *testing.T) {
 			w.WriteHeader(http.StatusNoContent)
 		}))
 		defer srv.Close()
-		if _, err := runVaultAcceptHelper(ctx, script, "put", "secret/data/x", key, srv.URL, "tok"); err != nil {
+		if _, err := runVaultAcceptHelper(ctx, script, "put", "secret/data/x", key, srv.URL, "tok", 30); err != nil {
 			t.Fatalf("helper put to a 204 server error = %v, want success", err)
 		}
 	})
@@ -102,7 +102,7 @@ func TestVaultHelperRedirectAndSizeBounds(t *testing.T) {
 			fmt.Fprint(w, body)
 		}))
 		defer srv.Close()
-		if _, err := runVaultAcceptHelperGet(ctx, script, "secret/data/x", srv.URL, "tok"); err == nil {
+		if _, err := runVaultAcceptHelperGet(ctx, script, "secret/data/x", srv.URL, "tok", 30); err == nil {
 			t.Fatal("helper get with a >1MiB response must fail, but it returned a key")
 		}
 	})

@@ -27,6 +27,17 @@
 # missing, or no preceding-release tag is available). Exit 3 is not a
 # pass: it means the live evidence was not produced.
 #
+# Coverage limits (documented, not hidden): --live does not yet exercise
+# safe-failure phases — a misconfigured gateway config, an unavailable
+# PostgreSQL/Redis dependency, or a missing Secret — because the script
+# always creates all Secrets before install, the PG phase only tests a
+# healthy database, and Redis has no live phase. When those phases are
+# added, each must assert fail-closed behavior: the gateway does not serve
+# traffic with a broken config, a missing Secret, or an unavailable
+# dependency it requires, and no secret material appears in logs or
+# events. Until then, a --live PASS covers install, upgrade, rollback,
+# probes, posture, termination, persistence, and the leak check only.
+#
 # Secrets discipline: the only secret values this script ever creates are
 # SENTINEL values (fake, recognisable, grep-able). Real credentials must
 # never be passed through this script. The leak check greps rendered
