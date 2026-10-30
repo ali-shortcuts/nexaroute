@@ -304,6 +304,7 @@ type Config struct {
 	Guardrails             GuardrailConfig              `json:"guardrails,omitempty"`
 	Evaluation             EvaluationConfig             `json:"evaluation,omitempty"`
 	Video                  VideoConfig                  `json:"video,omitempty"`
+	Nexaflow               NexaflowConfig               `json:"nexaflow,omitempty"`
 	Decision               DecisionConfig               `json:"decision,omitempty"`
 	Autopilot              AutopilotConfig              `json:"autopilot,omitempty"`
 	DecisionPolicies       []DecisionPolicyConfig       `json:"decision_policies,omitempty"`
@@ -380,6 +381,29 @@ func (c *Config) MigrateClientKeysToHashes() int {
 // converted in memory and still need a persisted migration.
 func (c *Config) ClientKeyMigrationPending() int {
 	return c.clientKeyMigrationPending
+}
+
+// NexaflowConfig controls the optional production NexaFlow wiring
+// (issue #765). It is disabled by default: with Enabled false the
+// gateway never opens a NexaFlow store, never builds the engine, and
+// never mounts a NexaFlow route, so gateway behaviour is byte-identical
+// to a gateway without this section. With Enabled true the gateway
+// mounts the Task 8 NexaFlow service (studio routes, template
+// instantiation, draft validation, run listing) behind the existing
+// admin authentication. Store selects the store backend: "memory"
+// (default; state is lost on restart) or "file" (durable single-host
+// JSON store; StorePath required). The PostgreSQL store is deliberately
+// NOT offered here: live-PostgreSQL history is preserved-unsupported
+// for NexaFlow, and the webhook listener is never attached by this
+// wiring (scheduler daemon, webhook listener, tenant isolation,
+// subworkflows, any-join, workflow.* permissions, live eval,
+// hard-budget enforcement, video cancellation and resume support stay
+// unsupported; backend nodes fail closed with backend_unavailable
+// because no provider Backend is wired).
+type NexaflowConfig struct {
+	Enabled   bool   `json:"enabled,omitempty"`
+	Store     string `json:"store,omitempty"`
+	StorePath string `json:"store_path,omitempty"`
 }
 
 // VideoConfig controls the optional, isolated Video Gateway. It is disabled
@@ -2092,6 +2116,33 @@ func (c Config) validateAdminPlane() error {
 	}
 	if err := c.validateVideo(); err != nil {
 		return err
+	}
+	if err := c.validateNexaflow(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateNexaflow checks the opt-in NexaFlow wiring section. When the
+// feature is disabled the section is inert and its store fields are
+// ignored, so an existing config never fails validation on a stray
+// nexaflow block and the gateway never opens a store it was not asked
+// to open. When enabled, only the memory and file stores are offered.
+func (c Config) validateNexaflow() error {
+	if !c.Nexaflow.Enabled {
+		return nil
+	}
+	switch strings.TrimSpace(c.Nexaflow.Store) {
+	case "", "memory":
+	case "file":
+		if strings.TrimSpace(c.Nexaflow.StorePath) == "" {
+			return errors.New("nexaflow.store_path is required when nexaflow.store is file")
+		}
+		if len(c.Nexaflow.StorePath) > 4096 || strings.ContainsAny(c.Nexaflow.StorePath, "\r\n\x00") {
+			return errors.New("nexaflow.store_path is invalid or too long")
+		}
+	default:
+		return errors.New("nexaflow.store must be memory or file")
 	}
 	return nil
 }

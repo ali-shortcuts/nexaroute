@@ -218,6 +218,16 @@ func main() {
 	if err := api.SecurityStoreError(); err != nil {
 		bootstrap.Fatalf("cannot initialize admin security store: %v", err)
 	}
+	// Optional NexaFlow production wiring (issue #765): default off, so
+	// this is a no-op for every existing operator. A construction error
+	// fails startup rather than serving a half-wired service.
+	nexaflowClose, err := attachNexaflow(cfg, api, logger)
+	if err != nil {
+		bootstrap.Fatalf("cannot initialize nexaflow: %v", err)
+	}
+	if nexaflowClose != nil {
+		defer func() { _ = nexaflowClose() }()
+	}
 	// Budget webhook alerts deduplicate across restarts on the durable
 	// control-plane store when one is configured (file, postgres,
 	// redis); otherwise the alerter falls back to budget_alerts

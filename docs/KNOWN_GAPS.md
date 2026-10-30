@@ -400,8 +400,13 @@ identical delivery, not exactly-once external side effects: a
 claimed delivery whose start fails is consumed, and a parked
 ambiguous attempt is precisely an unproven external outcome.
 
-Not implemented (deferred, not done): production gateway wiring
-(no caller of `AttachNexaflow` in `cmd/gateway`, so no gateway
+Production gateway wiring LANDED behind an opt-in flag (issue #765;
+see docs/nexaflow-production-wiring.md): with `nexaflow.enabled` the
+gateway calls `AttachNexaflow` and mounts the Task 8 service (studio
+routes, template instantiation, draft validation, run listing) on a
+memory or file store; default off means no routes, no store, and no
+behaviour change. Still not implemented (deferred, not done):
+scheduler ticks, webhook serving, and startup recovery (no gateway
 process ticks schedules, serves webhooks, or runs startup recovery
 yet); scheduler daily schedules, trigger discovery, persisted
 schedule state, and the scheduler tick endpoint; webhook
