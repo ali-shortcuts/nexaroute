@@ -16,18 +16,21 @@ PASS/FAIL/BLOCKED/NOT_RUN statuses.
 | Check | What PASS means |
 |---|---|
 | `vault.health` | `/sys/seal-status` and `/sys/leader` were readable; Vault is unsealed; topology metadata was recorded |
-| `vault.token_metadata` | `auth/token/lookup-self` succeeded; policy names, TTL, and renewable flag were recorded (not the token). A token carrying the `root` policy FAILS this check and the run stops before any write (see below) |
+| `vault.token_metadata` | `auth/token/lookup-self` succeeded; policy names, TTL, and renewable flag were recorded (not the token). A token carrying the `root` policy FAILS this check and the run stops before any write (see below). Since 2026-10-30 a BLOCKED metadata result also stops the run before any write: previously it fell through to preflight and put, writing keys under an unasserted token |
+| `vault.policy_assertion` | only with `--expect-policy`: every named policy is present on the token and `root` is absent. A missing expected policy FAILS the run before preflight and before any write. Without the flag no assertion runs and the report records that manual policy review is required for staging |
 | `vault.ref_preflight` | the selected KV v2 path was empty, so the run cannot overwrite existing key material |
+| `vault.mount_version` | GET on `sys/mounts/<mount>` (mount = everything before `/data/` in the ref, so nested mounts work) confirmed type `kv` version `2` **before any write**. A wrong type/version or an absent mount FAILS the run; a 403 BLOCKS it (the token lacks sys/mounts read) and the run stops without writing. This closes the hole the post-round-trip metadata probe left: on a KV v1 mount the helper round-trip alone would have passed and a key would already have been written before the metadata probe failed |
 | `vault.kv_put_get` | helper `put` then `get` returned a byte-identical 32-byte key (bytes never logged) |
 | `vault.kv_version` | GET on the key's KV metadata path confirmed KV v2 semantics (200). A 404 FAILS the run even though the helper round-trip alone would pass on a KV v1 mount; a 403 BLOCKS it (the token lacks metadata read) |
 | `vault.gateway_decrypt` | an `nxs1` config field encrypted and decrypted successfully with the Vault-held key |
 | `vault.kv_rotation` | a new 32-byte key replaced the entry and was read back byte-identically |
 | `vault.wrong_token` | an invalid token produced a nonzero helper exit and empty stdout |
+| `vault.expired_token` | a disposable 2s child token was polled until the helper get failed with empty stdout. A create failure is BLOCKED (permission gap); only a child token still accepted past a 10s deadline is a FAIL |
 | `vault.revoked_token` | a disposable 60s child token read the path, was revoked via `revoke-self`, then failed closed with empty stdout |
 | `vault.outage_fail_closed` | a deliberately unreachable endpoint produced a nonzero helper exit and empty stdout (no fallback source) |
 | `vault.cleanup` | the acceptance key's KV metadata was deleted from the dedicated path |
 | `vault.ha_failover` | always `NOT_RUN`: needs an operator-controlled HA cluster and a real failover event |
-| `vault.transit` | always `NOT_RUN`: Vault Transit envelope mode is **not implemented** |
+| `vault.transit` | always `NOT_RUN`: Vault Transit envelope mode is a separate provider path and is **not tested by this harness**; a KV pass proves nothing about Transit (see #649) |
 
 The harness does not revoke the operator's primary token. The revocation check
 creates a child token with a 60s TTL, verifies it can read the acceptance path,
@@ -35,7 +38,7 @@ revokes it with `auth/token/revoke-self`, and then proves it fails closed. If
 the primary token lacks `auth/token/create`, that check is `BLOCKED` and names
 the missing capability; other checks still run.
 
-Harness hardening, 2026-10-29 (review PR; not on main yet): the check set
+Harness hardening, 2026-10-29 (landed on main via #741 and #750): the check set
 grew from 12 to 13 with `vault.kv_version`, so a full pass is now 11 selected
 PASS + 2 `NOT_RUN` (the 2026-10-27 loopback result of 10/12 predates this
 check and is not restated as 11/13). Three gaps found in the 2026-10-28 audit
@@ -50,6 +53,29 @@ effective bound as `bounds.helper_timeout_seconds`. The staging policy shape
 documented below already grants `read` on the metadata path, so a
 `vault.kv_version` 403 on staging means the policy was narrowed, not that
 the mount is v2.
+
+Harness hardening, 2026-10-30 (this change; the 2026-10-28 follow-up branch
+`supervisor/issue648-vault-followup` was never pushed, so its two checks are
+ported here onto current main rather than merged from that branch): the check
+set grows to 16 selected checks (`vault.mount_version`,
+`vault.policy_assertion`, `vault.expired_token` added; a full pass is 16
+selected PASS + 2 `NOT_RUN`). (1) `vault.mount_version` proves KV v2 from
+`sys/mounts/<mount>` before any write — the post-round-trip metadata probe
+alone would only fail after a key had been written to a non-v2 mount, and
+the helper round-trip passes on a KV v1 mount. The mount is everything
+before `/data/` in the ref (the follow-up's first-segment derivation would
+have been wrong for nested mounts). (2) `--expect-policy` asserts the
+token's policy set before preflight and before any write; without the flag
+the report records that manual policy review is required. (3) A BLOCKED
+`vault.token_metadata` result now stops the run before any write (recorded
+as a follow-up in the #741 merge comment: previously it fell through to
+preflight and put). (4) `vault.expired_token` polls a disposable 2s child
+token to expiry. (5) The helper script itself now rejects any ref that is
+not a plain KV v2 data path (no `/data/`, traversal, whitespace, query, or
+fragment) before any Vault request — a `?version=` query in a ref would
+otherwise have pinned a version silently. The staging policy below now
+includes `sys/mounts/<mount>` read: without it `vault.mount_version` is
+BLOCKED and the run stops before writing, by design.
 
 ## Safety controls
 
@@ -126,12 +152,18 @@ path "auth/token/revoke-self" {
 path "auth/token/lookup-self" {
   capabilities = ["read"]
 }
+path "sys/mounts/secret" {
+  capabilities = ["read"]
+}
 ```
 
 `sys/seal-status` and `sys/leader` are normally readable without an explicit
 policy. No `root` policy and no access to production key paths are required.
 The policy above is illustrative; the report records the actual policy names
-returned by `lookup-self`, never the token.
+returned by `lookup-self`, never the token. The `sys/mounts/<mount>` read is
+required for `vault.mount_version` to PASS: without it that check is BLOCKED
+and the run stops before writing (the mount claim is then unverified, not
+passed).
 
 ## Local execution evidence (2026-10-27)
 
@@ -238,3 +270,43 @@ and changes nothing about HA, external staging, or Transit.
 - A loopback fixture PASS is harness evidence only. Only a real staging run
   can produce `evidence_class=external`, and it still does not by itself prove
   HA behavior.
+
+## Local execution evidence (2026-10-30, non-dev loopback — harness validation only)
+
+A disposable, single-host Vault was stood up for this run and destroyed
+afterwards; it was **not** an operator staging cluster and **not** an HA
+cluster, so this section validates the new harness checks only and changes
+nothing about external staging, HA, or Transit. Full per-check record:
+`docs/reports/verification-slices/vault-kv-acceptance-2026-10-30.md`.
+
+- Vault: real binary v2.2.1, `storage_type=file`, TLS on loopback
+  (`https://127.0.0.1:18973`, fresh 1-day CA, SAN IP 127.0.0.1),
+  `operator init` 3 shares / threshold 2, unsealed, KV v2 mount `secret`
+  verified out-of-band before the run, KV v1 mount `kv1` as a negative
+  control only. Auth method: static tokens (operator-owned); policies
+  `nexaroute-accept`, `nexaroute-gateway`, `nexaroute-provision`,
+  `nexaroute-kv1probe` (names only; no token values recorded).
+- `vault-accept` with `--expect-policy nexaroute-accept --timeout 10s`:
+  `outcome=PASS`, `evidence_class=loopback`, all 16 selected checks PASS
+  including the three new ones (`vault.mount_version`,
+  `vault.policy_assertion`, `vault.expired_token`), plus
+  `vault.ha_failover` and `vault.transit` `NOT_RUN`. Post-run acceptance
+  path read returned 404 (cleanup verified).
+- Negative controls, both with zero writes (path read 404 afterwards):
+  KV v1 mount run exited 1 with `vault.mount_version` FAIL; policy-mismatch
+  run (`--expect-policy nexaroute-accept,nexaroute-missing`) exited 1 with
+  `vault.policy_assertion` FAIL.
+- Gateway path on the same disposable Vault (actual gateway binary, not
+  only the helper): provision-put/gateway-get byte-identical round-trip;
+  boot with a Vault-held key (`/healthz` 200, config migrated in place to
+  `nxs1_fields=1`, `secrets verify` `verified_fields=1`); wrong-token boot
+  failed closed in 0.1s; Vault-down boot failed closed in 0.1s; rotation
+  (old config fails verify, re-encrypted config verifies and boots);
+  Vault restart + unseal + byte-identical key re-read + boot.
+- Hygiene: all tokens including root revoked, instance directory destroyed,
+  port dead, no Vault process left, harness reports leak-scanned (no token
+  values, no `key_b64` fields). Driver: local evidence copy only, not
+  committed (it holds no secrets but references the destroyed instance).
+- Staging verdict unchanged: **BLOCKED** — no operator authorization, instance
+  pointer, mount/path, policy, or token injection was supplied for a
+  non-loopback Vault. #648 stays OPEN.

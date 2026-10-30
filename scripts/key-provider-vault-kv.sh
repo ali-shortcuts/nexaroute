@@ -56,6 +56,24 @@ if [ "$vault_timeout" -le 0 ]; then
 fi
 
 read -r op ref || { echo "key-provider-vault-kv: missing operation" >&2; exit 1; }
+# The ref is interpolated into the Vault URL, so it must be a plain KV v2
+# data path: a ref without /data/ would silently read/write a KV v1 logical
+# path (or a version-pinned path via a "?" query), and traversal or
+# whitespace would change which entry the request addresses. Reject it
+# before any Vault request, with the same shape vault-accept enforces.
+case "$ref" in
+  ''|/*|*/|*..*|*//*|*' '*|*'?'*|*'#'*)
+    echo "key-provider-vault-kv: ref must be a relative KV v2 data path without traversal, whitespace, query, or fragment characters" >&2
+    exit 1
+    ;;
+esac
+case "$ref" in
+  */data/*) ;;
+  *)
+    echo "key-provider-vault-kv: ref must be a KV v2 data path containing /data/ (for example secret/data/nexaroute/master-key)" >&2
+    exit 1
+    ;;
+esac
 url="${VAULT_ADDR%/}/v1/${ref}"
 
 case "$op" in

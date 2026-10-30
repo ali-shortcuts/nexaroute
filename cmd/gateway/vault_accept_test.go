@@ -34,7 +34,21 @@ type fakeVaultAccept struct {
 	// metadataMissing makes GET on a KV metadata path return 404 even when
 	// a key exists, simulating a KV v1 mount (no metadata endpoint).
 	metadataMissing bool
-	requests        []vaultAcceptRequest
+	// mountType/mountVersion, when non-empty, replace the default kv/2
+	// answer for GET on sys/mounts/secret. mountDenied makes it 403 and
+	// mountMissing makes it 404.
+	mountType    string
+	mountVersion string
+	mountDenied  bool
+	mountMissing bool
+	// childTTL, when positive, makes a disposable child token expire
+	// that long after creation, so the expired-token poll can observe
+	// a real expiry window. Fixtures that run the full harness must
+	// set it, or the expired-token check polls to its 10s deadline and
+	// fails on a child token that never expires.
+	childTTL       time.Duration
+	childExpiresAt time.Time
+	requests       []vaultAcceptRequest
 }
 
 type vaultAcceptRequest struct {
@@ -50,7 +64,13 @@ func (f *fakeVaultAccept) authorized(token string) bool {
 	if token == f.primaryToken {
 		return true
 	}
-	return f.childToken != "" && token == f.childToken && !f.childRevoked
+	if f.childToken == "" || token != f.childToken || f.childRevoked {
+		return false
+	}
+	if !f.childExpiresAt.IsZero() && time.Now().After(f.childExpiresAt) {
+		return false
+	}
+	return true
 }
 
 func (f *fakeVaultAccept) handler(w http.ResponseWriter, r *http.Request) {
@@ -64,7 +84,37 @@ func (f *fakeVaultAccept) handler(w http.ResponseWriter, r *http.Request) {
 	lookupDenied := f.lookupDenied
 	metadataDenied := f.metadataDenied
 	metadataMissing := f.metadataMissing
+	mountType := f.mountType
+	mountVersion := f.mountVersion
+	mountDenied := f.mountDenied
+	mountMissing := f.mountMissing
 	f.mu.Unlock()
+
+	if strings.HasPrefix(r.URL.Path, "/v1/sys/mounts/") {
+		if !f.authorized(token) {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		mount := strings.TrimPrefix(r.URL.Path, "/v1/sys/mounts/")
+		if mount != "secret" || mountMissing {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if mountDenied {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		if mountType == "" {
+			mountType = "kv"
+		}
+		if mountVersion == "" {
+			mountVersion = "2"
+		}
+		writeVaultAcceptJSON(w, map[string]any{"data": map[string]any{
+			"type": mountType, "options": map[string]any{"version": mountVersion},
+		}})
+		return
+	}
 
 	switch r.URL.Path {
 	case "/v1/sys/seal-status":
@@ -107,6 +157,11 @@ func (f *fakeVaultAccept) handler(w http.ResponseWriter, r *http.Request) {
 		}
 		f.mu.Lock()
 		f.childToken = "child-token-5c19ab"
+		if f.childTTL > 0 {
+			f.childExpiresAt = time.Now().Add(f.childTTL)
+		} else {
+			f.childExpiresAt = time.Time{}
+		}
 		child := f.childToken
 		f.mu.Unlock()
 		writeVaultAcceptJSON(w, map[string]any{"auth": map[string]any{"client_token": child}})
@@ -260,6 +315,9 @@ func runVaultAcceptFixtureWithHelper(t *testing.T, fake *fakeVaultAccept, helper
 
 func TestVaultAcceptFullRunPassesAndRedacts(t *testing.T) {
 	fake := newFakeVaultAccept()
+	// The expired-token check polls a 2s-TTL child token; the fixture
+	// child expires after 1s so the poll observes a real expiry window.
+	fake.childTTL = time.Second
 	code, report, outPath, stdout, stderr := runVaultAcceptFixture(t, fake)
 	if code != 0 {
 		t.Fatalf("exit=%d want 0\nstdout=%s\nstderr=%s", code, stdout, stderr)
@@ -280,11 +338,13 @@ func TestVaultAcceptFullRunPassesAndRedacts(t *testing.T) {
 		"vault.health":             externalStatusPass,
 		"vault.token_metadata":     externalStatusPass,
 		"vault.ref_preflight":      externalStatusPass,
+		"vault.mount_version":      externalStatusPass,
 		"vault.kv_put_get":         externalStatusPass,
 		"vault.kv_version":         externalStatusPass,
 		"vault.gateway_decrypt":    externalStatusPass,
 		"vault.kv_rotation":        externalStatusPass,
 		"vault.wrong_token":        externalStatusPass,
+		"vault.expired_token":      externalStatusPass,
 		"vault.revoked_token":      externalStatusPass,
 		"vault.outage_fail_closed": externalStatusPass,
 		"vault.cleanup":            externalStatusPass,
@@ -363,6 +423,7 @@ func TestVaultAcceptRejectsDevModeByDefault(t *testing.T) {
 func TestVaultAcceptAllowDevLabelsEvidence(t *testing.T) {
 	fake := newFakeVaultAccept()
 	fake.devMode = true
+	fake.childTTL = time.Second
 	code, report, _, stdout, stderr := runVaultAcceptFixture(t, fake, "--allow-dev")
 	if code != 0 {
 		t.Fatalf("exit=%d want 0\nstdout=%s\nstderr=%s", code, stdout, stderr)
@@ -526,6 +587,7 @@ func TestVaultAcceptRootTokenFailsBeforeWriting(t *testing.T) {
 func TestVaultAcceptKVVersionFailsOnV1Mount(t *testing.T) {
 	fake := newFakeVaultAccept()
 	fake.metadataMissing = true
+	fake.childTTL = time.Second
 	code, report, _, _, _ := runVaultAcceptFixture(t, fake)
 	if code != 1 || report.Outcome != externalStatusFail {
 		t.Fatalf("exit=%d outcome=%q want 1/fail", code, report.Outcome)
@@ -544,6 +606,7 @@ func TestVaultAcceptKVVersionFailsOnV1Mount(t *testing.T) {
 func TestVaultAcceptKVVersionBlockedWithoutMetadataRead(t *testing.T) {
 	fake := newFakeVaultAccept()
 	fake.metadataDenied = true
+	fake.childTTL = time.Second
 	code, report, _, _, _ := runVaultAcceptFixture(t, fake)
 	if code != 3 || report.Outcome != externalStatusBlocked {
 		t.Fatalf("exit=%d outcome=%q want 3/blocked", code, report.Outcome)
@@ -610,6 +673,7 @@ func TestVaultAcceptHelperTimeoutPropagation(t *testing.T) {
 				t.Setenv("VAULT_HELPER_TIMEOUT", "")
 			}
 			fake := newFakeVaultAccept()
+			fake.childTTL = time.Second
 			code, report, _, _, _ := runVaultAcceptFixtureWithHelper(t, fake, stub(t, record), tc.extra...)
 			if code != 0 || report.Outcome != externalStatusPass {
 				t.Fatalf("exit=%d outcome=%q want 0/pass", code, report.Outcome)
@@ -641,4 +705,146 @@ func atoi(t *testing.T, s string) int {
 		t.Fatal(err)
 	}
 	return n
+}
+
+func TestVaultAcceptPolicyAssertion(t *testing.T) {
+	t.Run("matching policy passes", func(t *testing.T) {
+		fake := newFakeVaultAccept()
+		fake.childTTL = time.Second
+		code, report, _, _, _ := runVaultAcceptFixture(t, fake, "--expect-policy", "nexaroute-acceptance")
+		if code != 0 || report.Outcome != externalStatusPass {
+			t.Fatalf("exit=%d outcome=%q want 0/pass", code, report.Outcome)
+		}
+		if got := vaultAcceptStatus(report, "vault.policy_assertion"); got != externalStatusPass {
+			t.Fatalf("policy_assertion=%q want pass", got)
+		}
+	})
+	t.Run("missing policy fails before writing", func(t *testing.T) {
+		fake := newFakeVaultAccept()
+		code, report, _, _, _ := runVaultAcceptFixture(t, fake, "--expect-policy", "nexaroute-acceptance,nexaroute-missing")
+		if code != 1 || report.Outcome != externalStatusFail {
+			t.Fatalf("exit=%d outcome=%q want 1/fail", code, report.Outcome)
+		}
+		if got := vaultAcceptStatus(report, "vault.policy_assertion"); got != externalStatusFail {
+			t.Fatalf("policy_assertion=%q want fail", got)
+		}
+		if got := vaultAcceptStatus(report, "vault.kv_put_get"); got != "" {
+			t.Fatalf("kv_put_get=%q want absent (no write with a rejected policy)", got)
+		}
+		fake.mu.Lock()
+		defer fake.mu.Unlock()
+		if len(fake.writtenKeys) != 0 {
+			t.Fatalf("wrote %d keys with a rejected policy", len(fake.writtenKeys))
+		}
+	})
+	t.Run("absent flag records manual-review limitation", func(t *testing.T) {
+		fake := newFakeVaultAccept()
+		fake.childTTL = time.Second
+		_, report, _, _, _ := runVaultAcceptFixture(t, fake)
+		found := false
+		for _, limitation := range report.Limitations {
+			if strings.Contains(limitation, "manual policy review") {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("manual-review limitation missing: %+v", report.Limitations)
+		}
+	})
+}
+
+func TestVaultAcceptTokenMetadataBlockedStopsBeforeWriting(t *testing.T) {
+	fake := newFakeVaultAccept()
+	fake.lookupDenied = true
+	code, report, _, _, _ := runVaultAcceptFixture(t, fake)
+	if code != 3 || report.Outcome != externalStatusBlocked {
+		t.Fatalf("exit=%d outcome=%q want 3/blocked", code, report.Outcome)
+	}
+	if got := vaultAcceptStatus(report, "vault.token_metadata"); got != externalStatusBlocked {
+		t.Fatalf("token_metadata=%q want blocked", got)
+	}
+	if got := vaultAcceptStatus(report, "vault.kv_put_get"); got != "" {
+		t.Fatalf("kv_put_get=%q want absent (no write with unrecorded token metadata)", got)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if len(fake.writtenKeys) != 0 {
+		t.Fatalf("wrote %d keys with BLOCKED token metadata", len(fake.writtenKeys))
+	}
+}
+
+func TestVaultAcceptMountVersion(t *testing.T) {
+	t.Run("v1 mount fails before writing", func(t *testing.T) {
+		fake := newFakeVaultAccept()
+		fake.mountType = "kv"
+		fake.mountVersion = "1"
+		code, report, _, _, _ := runVaultAcceptFixture(t, fake)
+		if code != 1 || report.Outcome != externalStatusFail {
+			t.Fatalf("exit=%d outcome=%q want 1/fail", code, report.Outcome)
+		}
+		if got := vaultAcceptStatus(report, "vault.mount_version"); got != externalStatusFail {
+			t.Fatalf("mount_version=%q want fail", got)
+		}
+		if got := vaultAcceptStatus(report, "vault.kv_put_get"); got != "" {
+			t.Fatalf("kv_put_get=%q want absent (no write to a v1 mount)", got)
+		}
+		fake.mu.Lock()
+		defer fake.mu.Unlock()
+		if len(fake.writtenKeys) != 0 {
+			t.Fatalf("wrote %d keys to a v1 mount", len(fake.writtenKeys))
+		}
+	})
+	t.Run("unreadable mount blocks before writing", func(t *testing.T) {
+		fake := newFakeVaultAccept()
+		fake.mountDenied = true
+		code, report, _, _, _ := runVaultAcceptFixture(t, fake)
+		if code != 3 || report.Outcome != externalStatusBlocked {
+			t.Fatalf("exit=%d outcome=%q want 3/blocked", code, report.Outcome)
+		}
+		if got := vaultAcceptStatus(report, "vault.mount_version"); got != externalStatusBlocked {
+			t.Fatalf("mount_version=%q want blocked", got)
+		}
+		fake.mu.Lock()
+		defer fake.mu.Unlock()
+		if len(fake.writtenKeys) != 0 {
+			t.Fatalf("wrote %d keys with an unverified mount", len(fake.writtenKeys))
+		}
+	})
+	t.Run("absent mount fails before writing", func(t *testing.T) {
+		fake := newFakeVaultAccept()
+		fake.mountMissing = true
+		code, report, _, _, _ := runVaultAcceptFixture(t, fake)
+		if code != 1 || report.Outcome != externalStatusFail {
+			t.Fatalf("exit=%d outcome=%q want 1/fail", code, report.Outcome)
+		}
+		if got := vaultAcceptStatus(report, "vault.mount_version"); got != externalStatusFail {
+			t.Fatalf("mount_version=%q want fail", got)
+		}
+	})
+}
+
+func TestVaultMountFromRef(t *testing.T) {
+	cases := map[string]string{
+		"secret/data/nexaroute/acceptance/master-key": "secret",
+		"team/secret/data/nexaroute/key":              "team/secret",
+		"secret/data/data/x":                          "secret",
+		"secret/nexaroute/key":                        "",
+	}
+	for ref, want := range cases {
+		if got := vaultMountFromRef(ref); got != want {
+			t.Errorf("vaultMountFromRef(%q)=%q want %q", ref, got, want)
+		}
+	}
+}
+
+func TestVaultAcceptExpiredTokenPasses(t *testing.T) {
+	fake := newFakeVaultAccept()
+	fake.childTTL = time.Second
+	code, report, _, _, _ := runVaultAcceptFixture(t, fake)
+	if code != 0 || report.Outcome != externalStatusPass {
+		t.Fatalf("exit=%d outcome=%q want 0/pass", code, report.Outcome)
+	}
+	if got := vaultAcceptStatus(report, "vault.expired_token"); got != externalStatusPass {
+		t.Fatalf("expired_token=%q want pass", got)
+	}
 }
