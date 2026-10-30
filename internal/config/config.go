@@ -304,6 +304,7 @@ type Config struct {
 	Guardrails             GuardrailConfig              `json:"guardrails,omitempty"`
 	Evaluation             EvaluationConfig             `json:"evaluation,omitempty"`
 	Video                  VideoConfig                  `json:"video,omitempty"`
+	Nexaflow               NexaflowConfig               `json:"nexaflow,omitempty"`
 	Decision               DecisionConfig               `json:"decision,omitempty"`
 	Autopilot              AutopilotConfig              `json:"autopilot,omitempty"`
 	DecisionPolicies       []DecisionPolicyConfig       `json:"decision_policies,omitempty"`
@@ -380,6 +381,21 @@ func (c *Config) MigrateClientKeysToHashes() int {
 // converted in memory and still need a persisted migration.
 func (c *Config) ClientKeyMigrationPending() int {
 	return c.clientKeyMigrationPending
+}
+
+// NexaflowConfig controls the optional NexaFlow workflow service mounted
+// on the production gateway. It is disabled by default and, when disabled,
+// mounts no routes and opens no store, so gateway behaviour is unchanged.
+// When enabled, the gateway attaches the canonical Task 8 service
+// (Studio routes, template instantiation, draft validation, run listing)
+// with a file-backed store (durable, single-process) or an explicitly
+// chosen memory store (volatile). No scheduler daemon, webhook listener,
+// loopback gateway backend, PostgreSQL store, workflow.* permission, or
+// tenant dimension is wired by this section; see docs/CONFIGURATION.md.
+type NexaflowConfig struct {
+	Enabled      bool   `json:"enabled,omitempty"`
+	StoreBackend string `json:"store_backend,omitempty"`
+	StorePath    string `json:"store_path,omitempty"`
 }
 
 // VideoConfig controls the optional, isolated Video Gateway. It is disabled
@@ -2049,6 +2065,9 @@ func (c Config) Validate() error {
 	if err := c.validateEvaluation(); err != nil {
 		return err
 	}
+	if err := c.validateNexaflow(); err != nil {
+		return err
+	}
 	policyIDs, err := c.validateDecisionPlane()
 	if err != nil {
 		return err
@@ -2679,6 +2698,32 @@ func (c Config) validateProviders() error {
 				return fmt.Errorf("deployment %q model is required", key)
 			}
 		}
+	}
+	return nil
+}
+
+// validateNexaflow gates the opt-in NexaFlow wiring. Disabled means
+// untouched: backend and path are ignored, never defaulted into an
+// attachment. Enabled fails closed on an unknown backend and on a
+// missing file-store path; there is no silent fallback to memory, and
+// a corrupt or locked file store fails later at open time, also
+// fail-closed, before the gateway serves traffic.
+func (c Config) validateNexaflow() error {
+	if !c.Nexaflow.Enabled {
+		return nil
+	}
+	switch strings.TrimSpace(c.Nexaflow.StoreBackend) {
+	case "", "file":
+		if strings.TrimSpace(c.Nexaflow.StorePath) == "" {
+			return errors.New("nexaflow.store_path is required when nexaflow.enabled is true and store_backend is file")
+		}
+	case "memory":
+		// Volatile by design; documented as ephemeral-only.
+	default:
+		return fmt.Errorf("nexaflow.store_backend must be file or memory, got %q", c.Nexaflow.StoreBackend)
+	}
+	if len(c.Nexaflow.StorePath) > 4096 || strings.ContainsAny(c.Nexaflow.StorePath, "\r\n\x00") {
+		return errors.New("nexaflow.store_path is invalid or too long")
 	}
 	return nil
 }

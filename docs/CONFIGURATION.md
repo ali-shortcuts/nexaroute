@@ -1113,6 +1113,61 @@ settlement; with `file` it stays process-local and in-memory. Only job
 records and ledger entries are shared; assets remain per-instance local
 storage in both backends.
 
+## Optional NexaFlow workflow service (`nexaflow`, issue #765)
+
+The NexaFlow service is disabled by default. When disabled, the gateway
+mounts no NexaFlow routes (they fall through to the static server as 404),
+opens no store, and behaves exactly as a gateway without this section.
+When enabled, the gateway attaches the canonical Task 8 service: the
+Studio page (`/studio.html`), template instantiation, draft-body
+validation, definitions, runs, approvals, cancellation, resume, and the
+audit endpoint under `/admin/api/nexaflow/`.
+
+```json
+"nexaflow": {
+  "enabled": true,
+  "store_backend": "file",
+  "store_path": "nexaflow.json"
+}
+```
+
+| Field | Default | Meaning |
+|---|---|---|
+| `nexaflow.enabled` | `false` | Master switch; routes are mounted only while on. |
+| `nexaflow.store_backend` | `file` | `file` (durable, single-process JSON store) or `memory` (volatile; test/ephemeral use only — drafts and runs are lost on restart). |
+| `nexaflow.store_path` | — | Required when the backend is `file`. May be absolute or relative to the gateway's runtime base directory. |
+
+Fail-closed rules: an unknown backend, an enabled file backend without a
+path, a corrupt store file, or a store path already locked by another
+process all fail gateway startup; there is no silent fallback to memory.
+At startup the wiring runs one recovery pass over the store (provably-safe
+attempts return to Pending, dispatched effectful attempts are parked as
+ambiguous and never re-executed, live leases are honored); recovery never
+auto-executes a run. On shutdown the store lock is released after the HTTP
+graceful drain; data is never deleted by shutdown.
+
+Authz and identity: admin routes ride the interim mapping
+(`config.read` for GET, `config.write` for POST, `audit.read` for the audit
+endpoint); no `workflow.*` permission exists yet. Admin authentication is
+the gateway's existing admin auth. Runs are filtered by creating
+principal (owner/admin see all); this is an ownership ceiling, **not**
+tenant isolation — there is no tenant dimension in the store, and no
+tenant value is read from any request. Approval separation of duties
+applies: the approver must be an authenticated principal different from
+the run requester, so a run created with the single emergency admin key
+cannot be approved with that same key; approval release needs a distinct
+authenticated principal. Templates marked `requires_policy` fail closed at
+instantiation unless the request carries `policy_approved: true`.
+
+Explicitly unsupported by this wiring (not claimed, not stubbed as
+success): scheduler daemon (schedules are not driven), webhook listener,
+loopback gateway backend (LLM/MCP/video/gateway-HTTP nodes answer
+`backend_unavailable` per node, never a fake result), PostgreSQL store,
+`workflow.*` permissions, tenant isolation, subworkflows, any-join,
+durable timer waits, hard-budget enforcement (`budget_check` is
+report-only; run admission has no reserve), and live evaluation. See
+[Known Gaps](KNOWN_GAPS.md) for the full NexaFlow boundary list.
+
 ## MCP gateway (`mcp`, M6-1)
 
 When `mcp.enabled` is true, the gateway brokers registered Model

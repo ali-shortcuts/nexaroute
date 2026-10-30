@@ -247,6 +247,20 @@ func main() {
 			logger.Printf("security_store_close_error=%v", err)
 		}
 	}()
+	// Opt-in NexaFlow wiring (issue #765). Disabled by default: no
+	// routes, no store, no behaviour change. Must run before
+	// api.Handler() is captured below, because the mux mounts
+	// NexaFlow routes only while a service is attached. The store
+	// closer runs deferred after the HTTP graceful shutdown below.
+	if nexaflowCloser, err := maybeAttachNexaflow(api, cfg.Nexaflow, logger); err != nil {
+		bootstrap.Fatalf("cannot initialize nexaflow service: %v", err)
+	} else if nexaflowCloser != nil {
+		defer func() {
+			if err := nexaflowCloser.Close(); err != nil {
+				logger.Printf("nexaflow_store_close_error=%v", err)
+			}
+		}()
+	}
 	var videoRT *videoRuntime.Runtime
 	if cfg.Video.Enabled {
 		// Universal video planner defaults: point the code-render planner

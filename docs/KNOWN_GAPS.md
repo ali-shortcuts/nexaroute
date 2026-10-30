@@ -400,10 +400,14 @@ identical delivery, not exactly-once external side effects: a
 claimed delivery whose start fails is consumed, and a parked
 ambiguous attempt is precisely an unproven external outcome.
 
-Not implemented (deferred, not done): production gateway wiring
-(no caller of `AttachNexaflow` in `cmd/gateway`, so no gateway
-process ticks schedules, serves webhooks, or runs startup recovery
-yet); scheduler daily schedules, trigger discovery, persisted
+Production gateway wiring landed (issue #765, opt-in
+`nexaflow.enabled`, default off): `cmd/gateway` calls
+`AttachNexaflow` when enabled, with a file-backed store (or explicit
+memory store) and one startup recovery pass; the Studio page and
+admin routes are served by the production gateway under that flag.
+Not implemented (deferred, not done): no gateway process ticks
+schedules or serves webhooks yet (no scheduler daemon, no webhook
+listener); scheduler daily schedules, trigger discovery, persisted
 schedule state, and the scheduler tick endpoint; webhook
 `secret_ref` resolution and published-trigger validation in the
 (wiring-owned) Start function; async dispatch (202 executions);
@@ -412,8 +416,9 @@ waits; `workflow.*` permissions (admin routes ride
 `config.read`/`config.write`/`audit.read` as an interim mapping);
 tenant isolation (ownership ceiling + scope label only);
 hard-budget settlement (`budget_check` is report-only; admission
-reserve only); the JSON-editor definition page and Studio canvas
-(those belong to the Studio line). #691's ambiguous-step resume
+reserve only); the JSON-editor definition page (the standalone
+Studio canvas itself shipped with PR #764 and is served by the
+production gateway under the `nexaflow.enabled` flag). #691's ambiguous-step resume
 modes (including re-executing an ambiguous node) were deliberately
 rejected, not deferred: re-execution is the double-execution hazard
 the parking rule exists to prevent.

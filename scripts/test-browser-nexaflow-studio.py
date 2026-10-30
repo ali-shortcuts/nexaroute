@@ -7,20 +7,25 @@ local nodes (manual trigger, wait, JSON transform, approval, HTTP
 request) plus one HTTP request to an unroutable loopback port, which
 fails closed without leaving the machine.
 
+Two test classes, kept separate:
+- Production class (default): boots the real production gateway
+  binary path (go run ./cmd/gateway) with the opt-in
+  nexaflow.enabled flag on and a file store in a temp dir, then runs
+  all 15 cases against it. This is the production-gateway evidence
+  for issue #765.
+- Pre-wired class: point the script at a pre-wired server with
+  NEXAFLOW_STUDIO_BASE_URL=http://127.0.0.1:PORT (e.g. a test server
+  built with the repo's own Server + AttachNexaflow). The script then
+  skips the gateway boot and runs every case against that base.
+  This is the in-process evidence from PR #764, not production
+  evidence.
+
 Skips cleanly (exit 0) when Chromium or Python Playwright is
 unavailable, matching the verify.sh browser gate. It ALSO skips
-cleanly when the booted gateway does not attach the NexaFlow service:
-the production gateway has no AttachNexaflow caller (gateway wiring
-is a separate, deferred product decision), so without an attached
+cleanly when the booted gateway does not attach the NexaFlow service
+(the flag off or an unconfigured gateway): without an attached
 service the studio API paths fall through to the static server and
-answer 404. The skip names that blocker instead of faking a pass;
-once gateway wiring lands, the same script runs all 15 cases for real.
-
-To run all cases before gateway wiring lands, point the script at a
-pre-wired server instead of booting the production gateway:
-NEXAFLOW_STUDIO_BASE_URL=http://127.0.0.1:PORT (e.g. a test server
-built with the repo's own Server + AttachNexaflow). The script then
-skips the gateway boot and runs every case against that base.
+answer 404. The skip names that blocker instead of faking a pass.
 
 Config-field editing uses real keystrokes (click, select-all, type,
 Tab to fire the inspector's change handler), never JS value injection.
@@ -108,6 +113,19 @@ def main() -> None:
             # only, no providers).
             config["probe"]["enabled"] = False
             config["probe"]["on_start"] = False
+            # Production wiring (issue #765): the booted gateway is a
+            # real production gateway, so the opt-in flag must be on
+            # for the API cases to run. The store lives in the same
+            # temp dir as the config and is deleted with it. Without
+            # this section the script still skips with the exact
+            # wiring-gap reason (see the nodes probe below); the
+            # NEXAFLOW_STUDIO_BASE_URL path remains the separate
+            # pre-wired/in-process test class.
+            config["nexaflow"] = {
+                "enabled": True,
+                "store_backend": "file",
+                "store_path": str(tmp_path / "nexaflow.json"),
+            }
             port = free_port()
             config["listen"] = f"127.0.0.1:{port}"
             config_path = tmp_path / "config.json"
