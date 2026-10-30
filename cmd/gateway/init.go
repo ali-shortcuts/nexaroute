@@ -36,6 +36,17 @@ type initOptions struct {
 }
 
 func runInit(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	// A nil stdin reader must fail closed, never panic: bufio.NewReader
+	// over a nil reader panics on the first prompt read (proven on a
+	// fresh runner, where no default config exists yet and the wizard
+	// reaches its prompts; a local run with an existing config returns
+	// early and never touches stdin, which hid the defect). Interactive
+	// init requires a real stdin; programmatic callers must pass one
+	// explicitly (even an empty reader) instead of nil.
+	if stdin == nil {
+		fmt.Fprintf(stderr, "init: stdin is required for prompts (got nil reader)\n")
+		return initExitError
+	}
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var o initOptions

@@ -21,6 +21,14 @@
 # gateway loads its master key with context.Background, so no caller
 # deadline protects this path). Every Vault request here is therefore
 # bounded by --connect-timeout 10 and --max-time VAULT_HELPER_TIMEOUT.
+# Redirects are deliberately NOT followed (no --location): curl -sf
+# returns success for 3xx, so a standby Vault answering a PUT with 307
+# used to make this helper report success without writing anything, and
+# following the redirect would forward X-Vault-Token to the redirect
+# target. Every response status is therefore checked explicitly and only
+# 2xx counts as success; a 307 is an explicit failure, and the helper
+# must point at the active Vault node (or a balancer that routes to it).
+# GET responses are additionally capped at 1 MiB (--max-filesize).
 #
 # The key lives in the KV entry's "key_b64" field. NOTE: this helper
 # implements the raw-key nxs1 custody pattern; the provider contract
@@ -52,11 +60,20 @@ url="${VAULT_ADDR%/}/v1/${ref}"
 
 case "$op" in
   get)
-    response=$(curl -sf --connect-timeout 10 --max-time "$vault_timeout" -H "X-Vault-Token: ${VAULT_TOKEN}" "$url") || {
+    response=$(curl -sf --connect-timeout 10 --max-time "$vault_timeout" --max-filesize 1048576 -H "X-Vault-Token: ${VAULT_TOKEN}" -w '\n%{http_code}' "$url") || {
       echo "key-provider-vault-kv: vault read failed for ref $ref" >&2
       exit 1
     }
-    key=$(printf '%s' "$response" | grep -o '"key_b64": *"[^"]*"' | head -n 1 | sed 's/.*: *"//; s/"$//')
+    code=$(printf '%s' "$response" | tail -n 1)
+    case "$code" in
+      2*) ;;
+      *)
+        echo "key-provider-vault-kv: vault read returned unexpected HTTP status $code for ref $ref" >&2
+        exit 1
+        ;;
+    esac
+    body=$(printf '%s' "$response" | sed '$d')
+    key=$(printf '%s' "$body" | grep -o '"key_b64": *"[^"]*"' | head -n 1 | sed 's/.*: *"//; s/"$//')
     if [ -z "$key" ]; then
       echo "key-provider-vault-kv: vault entry at $ref has no key_b64 field" >&2
       exit 1
@@ -66,11 +83,18 @@ case "$op" in
   put)
     read -r keyb64 || { echo "key-provider-vault-kv: missing key line" >&2; exit 1; }
     payload="{\"data\":{\"key_b64\":\"$keyb64\"}}"
-    curl -sf --connect-timeout 10 --max-time "$vault_timeout" -X POST -H "X-Vault-Token: ${VAULT_TOKEN}" -H "Content-Type: application/json" \
-      --data "$payload" "$url" > /dev/null || {
+    code=$(curl -sf --connect-timeout 10 --max-time "$vault_timeout" --max-filesize 1048576 -X POST -H "X-Vault-Token: ${VAULT_TOKEN}" -H "Content-Type: application/json" \
+      --data "$payload" -o /dev/null -w '%{http_code}' "$url") || {
       echo "key-provider-vault-kv: vault write failed for ref $ref" >&2
       exit 1
     }
+    case "$code" in
+      2*) ;;
+      *)
+        echo "key-provider-vault-kv: vault write returned unexpected HTTP status $code for ref $ref" >&2
+        exit 1
+        ;;
+    esac
     ;;
   *)
     echo "key-provider-vault-kv: unknown operation '$op'" >&2
