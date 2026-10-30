@@ -2,7 +2,8 @@
 
 **Status: BLOCKED — not executed.**
 
-Date opened: 2026-10-27
+Date opened: 2026-10-27. Last re-audited: 2026-10-30 on main
+`7daa36d` (see §"2026-10-30 re-audit").
 Issue: [#647](https://github.com/ali-shortcuts/nexaroute/issues/647)
 
 No operator-owned Keycloak, Entra ID, Okta, Auth0, or Google tenant,
@@ -45,11 +46,11 @@ also passed.
 
 | Area | Local coverage |
 |---|---|
-| Discovery issuer pinning | `TestOIDCDiscoveryIssuerMismatchFailsClosed`, `TestOIDCProviderDiscoveryUsesFixedTrustedIssuerAndNoOpenRedirect`, wrong-issuer case in `TestOIDCRejectsInvalidTokensAndTamperedResponses` |
-| Callback URL | authorization request must carry the configured `redirect_uri`; callback state is bound to the initiating browser cookie |
-| State / nonce / PKCE | `TestOIDCAuthorizationCodePKCEAndSessionLifecycle`, `TestOIDCRejectsInvalidTokensAndTamperedResponses`, `TestOIDCLoginTransactionsIssueUniqueStateNonceAndPKCE` |
+| Discovery issuer pinning | `TestOIDCDiscoveryIssuerMismatchFailsClosed`, `TestOIDCProviderDiscoveryUsesFixedTrustedIssuerAndNoOpenRedirect`, wrong-issuer case in `TestOIDCRejectsInvalidTokensAndTamperedResponses`, `TestOIDCDiscoveryRejectsIssuerThatDiffersOnlyByTrailingSlash` |
+| Callback URL | authorization request must carry the configured `redirect_uri`; `TestOIDCTokenExchangeUsesConfiguredClientRedirectAndGrant` pins the configured client authentication, callback, and `authorization_code` grant on the token exchange; callback state is bound to the initiating browser cookie |
+| State / nonce / PKCE | `TestOIDCAuthorizationCodePKCEAndSessionLifecycle`, `TestOIDCRejectsInvalidTokensAndTamperedResponses`, `TestOIDCLoginTransactionsIssueUniqueStateNonceAndPKCE`, `TestOIDCNonceIsBoundToItsTransaction` (a valid nonce from another pending login is denied) |
 | JWKS signature and rotation | `TestOIDCJWKSKeyRotation` (old key during overlap, new key rollover, retired key rejected), `TestOIDCJWKSOutageRejectsCallback` |
-| Explicit role mapping | lifecycle role matrix plus `TestOIDCRolePermissionsReachActualAdminHandlers` |
+| Explicit role mapping | lifecycle role matrix plus `TestOIDCRolePermissionsReachActualAdminHandlers`; `TestOIDCRoleMappingAcceptsDuplicateAndMixedMappedValues` pins that duplicate copies of one mapped value collapse and unmapped/empty siblings are ignored |
 | Denied unmapped / ambiguous roles | `TestOIDCUnmappedAmbiguousAndMalformedRolesDenied` (unmapped, missing claim, conflicting mapped roles, malformed claim) |
 | Logout / session revocation | `TestOIDCAuthorizationCodePKCEAndSessionLifecycle`, `TestOIDCLogoutRevocationFailureKeepsSessionActive`, `TestSessionPolicyChangeRevokesExistingSession`, `TestSessionExpiryAndIdleTimeoutAreEnforcedByMiddleware` |
 | Audit failure behavior | `TestOIDCLoginFailureAuditStoreUnavailableFailsClosed`, `TestCoverageAdminAuthLoginAuditFailureFailsClosed`, `TestOIDCSuccessfulLoginPersistenceFailureIssuesNoSession`, `TestOIDCLogoutRevocationFailureKeepsSessionActive` |
@@ -58,6 +59,55 @@ These tests use an in-process `httptest` IdP with real discovery, JWKS,
 token, and RSA-signed ID-token behavior. They are deterministic and
 repeatable in CI, but they are not a real organizational tenant and do
 not exercise provider-specific claim shapes or clock-skew policy.
+
+## 2026-10-30 re-audit of main (local only; live gate BLOCKED)
+
+Inspected main `7daa36d` and the merged #647 work (PR #699, merge
+`63c75d4`). The merged suite already covers the listed acceptance
+areas; this re-audit did not duplicate them. Four local gaps were
+closed in this PR, with no production-code change:
+
+| Gap | New deterministic test |
+|---|---|
+| Issuer equality was only tested against an obviously hostile issuer | `TestOIDCDiscoveryRejectsIssuerThatDiffersOnlyByTrailingSlash` |
+| Nonce was only tested against an arbitrary wrong value | `TestOIDCNonceIsBoundToItsTransaction` (valid nonce from another pending login denied) |
+| Only the authorization request's `redirect_uri` was checked | `TestOIDCTokenExchangeUsesConfiguredClientRedirectAndGrant` (token exchange sends configured client auth, callback, and `authorization_code` grant) |
+| Declared duplicate/mixed role behavior had no test | `TestOIDCRoleMappingAcceptsDuplicateAndMixedMappedValues` |
+
+The in-process IdP fixture now records the token-endpoint `client_id`
+(including HTTP Basic client authentication), `redirect_uri`, and
+`grant_type`, so those assertions exercise the real exchange path. This
+remains local protocol evidence, not live-tenant acceptance.
+
+Environment check for this re-audit (variable **names** only; values
+were never read): `NEXAROUTE_OIDC_CLIENT_SECRET`, `OIDC_CLIENT_SECRET`,
+`KEYCLOAK_URL`, `KEYCLOAK_REALM`, `OKTA_DOMAIN`, `OKTA_ISSUER`,
+`AUTH0_DOMAIN`, `AUTH0_ISSUER`, `AZURE_TENANT_ID`, `ENTRA_TENANT_ID`,
+`GOOGLE_CLIENT_ID`, `OIDC_ISSUER`, `NEXAROUTE_ADMIN_OIDC_ISSUER` — all
+unset. `OIDC_BASE_URL` exists only as an empty value in
+`.github/workflows/opencode.yml`, not as a tenant. No repository config
+contains an `admin.oidc` tenant block outside docs/tests, and no comment
+on #647 supplies an operator-owned tenant, test users, or authorization.
+**Zero live IdP calls were made.**
+
+Local verification for this re-audit (all PASS unless stated):
+
+- `go test ./internal/httpapi -run 'TestOIDC|TestCoverageAdminAuth|TestSession|TestAdminSession' -count=1` — PASS (6.543s).
+- `go test ./internal/httpapi ./internal/config ./internal/authz ./internal/securitystore -count=1` — PASS (`internal/httpapi` 91.519s; config/authz/securitystore PASS).
+- `go vet ./internal/httpapi` — PASS.
+- `go test -race ./internal/httpapi -run 'TestOIDCDiscoveryRejectsIssuerThatDiffersOnlyByTrailingSlash|TestOIDCNonceIsBoundToItsTransaction|TestOIDCTokenExchangeUsesConfiguredClientRedirectAndGrant|TestOIDCRoleMappingAcceptsDuplicateAndMixedMappedValues' -count=1` — PASS (3.170s).
+- `bash scripts/test-oidc-live-preflight.sh` — PASS (loopback fixtures only; not live acceptance evidence).
+- `./scripts/verify.sh` — PASS (`VERIFY PASS`); the browser step was SKIPPED locally because Python Playwright is not installed in this runner, and the script reports that explicitly. This does not affect the OIDC local tests or the live-tenant **BLOCKED** status.
+- The four new tests verbose-PASS individually; this is local evidence, never a live `PASS`.
+
+The live checklist below applies unchanged to an operator-owned
+Keycloak, Entra ID, Okta, Auth0, or Google tenant. Provider-specific
+registration and starting claim shapes are in
+`OIDC_OPERATOR_RUNBOOK_647.md` §2; record the tenant's actual claim
+shape, never the assumed one. Every live item remains
+**BLOCKED/NOT_RUN**. #647 stays open until this checklist is executed on
+a real tenant with item-by-item evidence, or an owner-approved exclusion
+is reviewed.
 
 ## Live-tenant checklist (all items BLOCKED)
 
@@ -85,6 +135,11 @@ access are missing. Do not infer a live `PASS` from the local tests.
   returns to that exact path.
 - Confirm a mismatched callback registration is rejected by the
   provider and does not create a gateway session.
+- If the operator can inspect the token request (provider log, approved
+  proxy, or disposable test client), confirm it carries the configured
+  `redirect_uri`, the expected client authentication, and
+  `grant_type=authorization_code`. If that request cannot be observed,
+  keep this sub-item **UNVERIFIED**; do not infer it from the local test.
 
 ### 3. State, nonce, and PKCE — BLOCKED
 

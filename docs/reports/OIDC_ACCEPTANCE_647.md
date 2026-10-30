@@ -12,6 +12,16 @@ documented acceptance process), and the #647 security review
 close #647, #666, or #671, and must not be merged without the
 owner's word. A local fixture pass is never live-tenant evidence.
 
+**Post-merge status (2026-10-30):** this consolidation merged as PR
+#699 (`63c75d4`); #647 was closed without live evidence and then
+reopened on 2026-10-29. The local coverage below still stands, but the
+live organizational-tenant gate remains **BLOCKED/NOT_RUN**. The
+2026-10-30 re-audit added four local gap tests (exact-issuer
+trailing-slash, cross-transaction nonce, token-exchange
+client/redirect/grant, duplicate/mixed role values) with no production
+change. See `OIDC_LIVE_TENANT_ACCEPTANCE_647.md` for the dated,
+per-item live checklist.
+
 ## 1. Coverage map (code + test evidence)
 
 Legend: COVERED = check in code + negative test in this tree.
