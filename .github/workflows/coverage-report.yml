@@ -16,12 +16,14 @@ name: Coverage report
 on:
   push:
     branches: ["main"]
+  # Unfiltered pull_request trigger (deliberate, 2026-10-30): the
+  # "Fresh Go coverage" job carries the fail-closed 95.0% gate, and
+  # that job is a required status check on main. A path filter here
+  # would leave the check unreported on non-Go PRs, and a required
+  # check that never reports blocks those merges forever. Running
+  # the gate on every PR costs a few minutes of CI and removes that
+  # deadlock; it also gates PRs that touch only workflow files.
   pull_request:
-    paths:
-      - "**/*.go"
-      - "go.mod"
-      - "go.sum"
-      - ".github/workflows/coverage-report.yml"
   workflow_dispatch:
 
 permissions:
