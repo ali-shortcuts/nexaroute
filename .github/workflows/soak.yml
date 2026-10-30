@@ -114,7 +114,30 @@ jobs:
             exit 1
           fi
           echo "Validating $summary against commit ${{ github.sha }}"
-          python3 scripts/check-soak-evidence.py --summary "$summary" --kind soak --expected-commit "${{ github.sha }}"
+          # Pin the summary to the dispatched duration instead of
+          # trusting its own requested value: without this, a summary
+          # that ran short but recorded a short request would pass.
+          # Push runs carry no inputs, so the flag is omitted there
+          # and the validator checks the summary's own request.
+          duration_args=()
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            duration="${{ github.event.inputs.duration }}"
+            if [[ "$duration" =~ ^([0-9]+)([smh])$ ]]; then
+              value="${BASH_REMATCH[1]}"
+              case "${BASH_REMATCH[2]}" in
+                s) expected_seconds="$value" ;;
+                m) expected_seconds=$((value * 60)) ;;
+                h) expected_seconds=$((value * 3600)) ;;
+              esac
+              duration_args=(--expected-duration-seconds "$expected_seconds")
+            elif [[ "$duration" == "0" ]]; then
+              duration_args=(--expected-duration-seconds 0)
+            elif [[ -n "$duration" ]]; then
+              echo "duration must be a Go-style value like 30m or 2h, got '$duration'" >&2
+              exit 2
+            fi
+          fi
+          python3 scripts/check-soak-evidence.py --summary "$summary" --kind soak --expected-commit "${{ github.sha }}" "${duration_args[@]}"
 
       - name: Preserve raw soak evidence
         if: always()
