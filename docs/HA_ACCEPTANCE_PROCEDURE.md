@@ -222,7 +222,39 @@ Record a UTC timestamp at every step boundary.
     final row counts. A multi-hour soak on a real
     multi-host topology is still open.
 
-## 3. Write the evidence report
+## 3. Executable harness
+
+`scripts/ha-two-host-acceptance.py` packages the checks above so a run is
+repeatable and its evidence is machine-readable. It never calls production.
+
+- `--self-test` is infrastructure-free and exercises authorization parsing,
+  redaction, RPO/RTO aggregation, config diffing, evidence validation, and the
+  refusal to label a container run as multi-host.
+- `--containers` builds a static gateway, starts two gateway containers plus
+  disposable PostgreSQL and Redis on one Docker host, and runs S1–S8. Each
+  replica gets a loopback stub because the egress policy intentionally rejects
+  plain HTTP to a non-loopback host. This is
+  `container-isolated-single-host` evidence: it cannot satisfy the multi-host
+  gate, and its report always records `two_independent_hosts: NOT_MEASURED`.
+- `--two-host` runs the same drill over SSH with a shared PostgreSQL supplied
+  by the owner. It requires `--authorization`, `--host-a`, `--host-b`, the
+  `NEXAROUTE_HA_PG_DSN` and `NEXAROUTE_HA_RESTORE_DSN` environment variables,
+  and the owner-provided `NEXAROUTE_HA_PG_STOP_CMD` /
+  `NEXAROUTE_HA_PG_START_CMD` commands. Missing inputs are reported as exit 3,
+  not converted into a partial pass.
+- Evidence is written under the requested in-repo directory as
+  `evidence.json` (schema `nexaroute-ha-acceptance/1`) and `report.md`. The
+  authorization document must name issue #652, the host list, the disposable
+  staging scope, an expiry, a cost ceiling, and `production_access: false`.
+  The harness rejects wrong-issue, expired, production, and out-of-scope
+  authorizations.
+
+The container mode is appropriate for local regression checks. Only
+`--two-host` can support the multi-host claim in section 0, and even then the
+report must state exactly which host, load-balancer, and failure scenarios
+were exercised.
+
+## 4. Write the evidence report
 
 The report must contain, at minimum: exact commit and
 versions, topology with the multi-host gate outcome,
