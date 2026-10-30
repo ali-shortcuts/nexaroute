@@ -1,9 +1,10 @@
 # HA acceptance — container-isolated single host — 2026-10-30
 
 - Issue: #652 (remains OPEN)
-- Gateway source under test: `7daa36da962bf3031b353487f760506cd60aedb2`
-- Harness: `scripts/ha-two-host-acceptance.py` (new in this change; the
-  build tree was dirty because the harness was uncommitted at build time)
+- Gateway source: `7daa36da962bf3031b353487f760506cd60aedb2` (unchanged)
+- Tested commit: `e3aa3b30168715856764b7b9ad07d6a6c2eb93a9` (harness and
+  report commit; worktree clean at build and run time)
+- Harness: `scripts/ha-two-host-acceptance.py` (new in this change)
 - Runtime: Go 1.25.0, static `CGO_ENABLED=0` gateway binary
 - Shared services: PostgreSQL 16.15 (`postgres:16-alpine`), Redis 7.4.12
   (`redis:7-alpine`)
@@ -30,13 +31,13 @@ remains a same-host evidence class.
 
 | Measurement | Value |
 | --- | --- |
-| Concurrent cold start to both ready | 1.102 s |
-| Survivor first success after replica SIGKILL (3 runs) | 0.139 / 0.145 / 0.137 s |
-| Restarted replica ready after SIGKILL (3 runs) | 0.404 / 0.404 / 0.404 s |
-| PostgreSQL accepting to first successful shared read | 0.018 s |
-| Application backup duration | 0.084 s |
-| Database dump to restored replica ready | 1.721 s |
-| Bounded soak duration | 60.35 s |
+| Concurrent cold start to both ready | 0.894 s |
+| Survivor first success after replica SIGKILL (3 runs) | 0.131 / 0.135 / 0.137 s |
+| Restarted replica ready after SIGKILL (3 runs) | 0.404 / 0.404 / 0.403 s |
+| PostgreSQL accepting to first successful shared read | 0.017 s |
+| Application backup duration | 0.082 s |
+| Database dump to restored replica ready | 1.671 s |
+| Bounded soak duration | 60.34 s |
 | RPO (records lost in the completed kill/outage drills) | 0 |
 
 These are container/process-observation timings, not multi-host RPO/RTO
@@ -71,7 +72,7 @@ values. No load balancer was in the path.
    A video asset produced on replica A returned 200 on A and 404 on B,
    confirming the documented per-instance asset boundary rather than a shared
    asset backend.
-8. **S8 — bounded soak (PASS, 60 s).** Twelve rounds alternating replicas:
+8. **S8 — bounded soak (PASS, 60.34 s).** Twelve rounds alternating replicas:
    12/12 chat successes, 0 health failures, 4/4 video job creations, no
    failures. Final counts were 10 jobs, 10 reservations, 10 settled. This is a
    short bounded soak, not a multi-hour soak.
