@@ -38,7 +38,7 @@ runbook procedure exists for it.
 
 | Dependency | Real-system status | Evidence / procedure |
 |---|---|---|
-| OIDC identity provider (browser login) | EXECUTED LOCALLY 2026-10-24; deterministic local coverage expanded 2026-10-27 (issuer pinning, JWKS overlap/rotation, unique state/nonce/PKCE, unmapped/ambiguous roles, logout revocation failure, audit/persistence failure) — live organizational tenant remains **BLOCKED/UNVERIFIED** because no operator-owned credentials/config were supplied | §1 below; `docs/reports/LOCAL_ACCEPTANCE_2026-10-24.md` §3; `docs/reports/OIDC_LIVE_TENANT_ACCEPTANCE_647.md` |
+| OIDC identity provider (browser login) | EXECUTED LOCALLY 2026-10-24; deterministic local coverage expanded 2026-10-27 (issuer pinning, JWKS overlap/rotation, unique state/nonce/PKCE, unmapped/ambiguous roles, logout revocation failure, audit/persistence failure); 2026-10-30 re-audit added exact-issuer trailing-slash, cross-transaction nonce, token-exchange client/redirect/grant, and duplicate/mixed role tests. Live organizational tenant remains **BLOCKED/UNVERIFIED** (NOT_RUN) because no operator-owned tenant, credentials, or authorization were supplied | §1 below; `docs/reports/LOCAL_ACCEPTANCE_2026-10-24.md` §3; `docs/reports/OIDC_LIVE_TENANT_ACCEPTANCE_647.md` |
 | HashiCorp Vault (KV helper) | EXECUTED LOCALLY 2026-10-24 — real Vault v2.2.1 (dev mode) round-trip via the shipped helper PASS; gateway key custody + decrypt verify PASS; wrong token fails closed; a production Vault cluster remains UNVERIFIED. 2026-10-27: opt-in `vault-accept` automation added and fixture-tested, then executed live against a disposable non-dev single-node Vault (file storage, TLS, loopback): `vault-accept` PASS 10/12 (`evidence_class=loopback`), plus gateway boot, expired-token, outage, restart, and rotation-recovery checks PASS; a real operator staging run and HA/failover remain BLOCKED/NOT_RUN | §2 below; `docs/reports/LOCAL_ACCEPTANCE_2026-10-24.md` §5; `docs/reports/verification-slices/vault-kv-acceptance.md` |
 | HashiCorp Vault Transit envelope mode | IMPLEMENTED — `nxs2` envelope path and fake Vault Transit API contract tests pass; a real Vault Transit acceptance run is **NOT_RUN**, so no production/HSM claim is made | §2 below; `docs/adr/0007-vault-transit-envelope-encryption.md` |
 | OS keyring (secret-tool) | EXECUTED LOCALLY 2026-10-24 — real Secret Service (gnome-keyring) store/lookup PASS; gateway decrypt verify via the keyring provider PASS; a production desktop keyring remains operator-verified | §3 below; `docs/reports/LOCAL_ACCEPTANCE_2026-10-24.md` §6 |
@@ -62,14 +62,18 @@ rollover logins work and tokens signed by a retired key are rejected
 trusting a process-lifetime cache). The deterministic suite also covers
 old-key logins during the overlap window, unique state/nonce/PKCE per
 transaction, unmapped/missing/conflicting/malformed role claims, failed
-logout revocation, and session/audit persistence failures. These are
-local protocol tests, not live-tenant evidence.
+logout revocation, and session/audit persistence failures. The
+2026-10-30 re-audit added exact-issuer equality beyond an obviously
+hostile issuer, cross-transaction nonce binding, token-exchange
+client/redirect/grant assertions, and duplicate/mixed role-value
+handling. These are local protocol tests, not live-tenant evidence.
 
-The exact live-tenant checklist is **BLOCKED** until an operator supplies
-a real tenant and credentials:
+The exact live-tenant checklist is **BLOCKED/NOT_RUN** until an
+operator supplies a real tenant and credentials:
 [`OIDC_LIVE_TENANT_ACCEPTANCE_647.md`](reports/OIDC_LIVE_TENANT_ACCEPTANCE_647.md).
-No credentials or configuration were available for this pass, so nothing
-below may be marked live-verified from the local suite alone.
+No credentials, tenant, or run authorization were available for the
+2026-10-30 re-audit, so nothing below may be marked live-verified from
+the local suite alone.
 
 Procedure (any conformant provider — Keycloak, Auth0, Entra ID,
 Okta, Google):
@@ -240,6 +244,69 @@ claimed green. `docs/SECURITY.md` is unchanged by this re-check because
 its Transit claim — not production-verified, no real run executed —
 remains true. This record does NOT close issue #649, and fake-API tests
 do not close this acceptance.
+
+#### Re-check record — 2026-10-30 (branch `opencode/issue649-20261030101324`, base main `7daa36d`, issue #649 still OPEN)
+
+This re-check adds deterministic coverage for concrete client-contract
+gaps and corrects stale Transit wording. It does **not** upgrade the live
+acceptance status. Live Vault Transit: **BLOCKED / NOT_RUN** (zero live
+Vault calls; no local Vault dev server was used as acceptance evidence).
+
+- **Written authorization:** not present in issue #649 or the workflow
+  input for a specific instance, key, policy, or token injection.
+- **Vault version/topology:** **NOT OBSERVED** (no authorized instance).
+- **Key/policy identifiers:** **NONE** (no key or policy was provisioned;
+  no production key was touched).
+- **Environment check (names/counts only, no values read):**
+  `VAULT_ADDR`, `VAULT_TOKEN`, `VAULT_TOKEN_FILE`,
+  `NEXAROUTE_KEY_PROVIDER`, `NEXAROUTE_TRANSIT_ENABLED`,
+  `NEXAROUTE_TRANSIT_MOUNT`, `NEXAROUTE_TRANSIT_KEY`, `VAULT_NAMESPACE`
+  — present_count 0, nonempty_count 0.
+
+| Acceptance item | Live status | Local evidence in this change |
+|---|---|---|
+| Wrap/unwrap round-trip | BLOCKED | fake Vault API contract PASS |
+| AAD binding and tamper rejection | BLOCKED | PASS (owner/field/key-ref/nonce/data/wrapped-DEK) |
+| Strict envelope parsing | BLOCKED | PASS (unknown/duplicate/trailing fields) |
+| Request limits and timeouts | BLOCKED | PASS (64 KiB response cap, 4 KiB wrapped-input pre-check, per-request and overall context budgets, no retry after budget expiry) |
+| Redirect refusal | BLOCKED | PASS (3xx rejected, target not contacted) |
+| Unavailable/forbidden Vault fail-closed | BLOCKED | PASS (`transit_unavailable`, `transit_forbidden`, no local key on config load) |
+| Invalid ciphertext | BLOCKED | PASS (`transit_invalid_ciphertext`) |
+| Key-version errors | BLOCKED | PASS (`transit_key_version_unavailable` for too-old/too-new/deleted/disabled/missing version, body never exposed) |
+| Migration rollback and recovery | BLOCKED | PASS (post-write failure restores original bytes; re-run succeeds) |
+| Rewrap rollback and recovery | BLOCKED | PASS (post-write failure restores original bytes; re-run moves to new version) |
+| Gateway startup/decrypt, `secrets verify`, wrong/revoked token, outage, rotation, post-rewrap decrypt | NOT_RUN | requires the authorized live instance |
+
+Local commands (2026-10-30, Go 1.25.0 linux/amd64):
+
+```text
+$ go test -timeout=5m -count=1 ./internal/secrets/ ./internal/config/ ./cmd/gateway/ ./internal/privacyaudit/
+ok github.com/ali-shortcuts/nexaroute/internal/secrets
+ok github.com/ali-shortcuts/nexaroute/internal/config
+ok github.com/ali-shortcuts/nexaroute/cmd/gateway
+ok github.com/ali-shortcuts/nexaroute/internal/privacyaudit
+
+$ go test -race -timeout=5m -count=1 ./internal/secrets/ ./internal/config/ ./internal/privacyaudit/
+ok (all three packages)
+
+$ go vet ./internal/secrets/ ./internal/config/ ./cmd/gateway/
+(clean)
+
+$ ./scripts/verify.sh
+...
+BROWSER ACCEPTANCE: SKIPPED locally (Chromium/Playwright unavailable; CI browser gate remains separate)
+VERIFY PASS
+```
+
+Stale wording corrected with accurate current behavior: `rewrap-transit`
+writes a verbatim `.pre-rewrap.bak` (not an authenticated backup), `nxs2`
+config backups contain `nxs2` envelopes and are verified through Transit
+(not "Transit-sealed"), and the key-version command name in
+`docs/KNOWN_GAPS.md` is `secrets rewrap-transit`. Historical records above
+are preserved.
+
+Fake-API tests do not close this acceptance. This record does NOT close
+issue #649, and no production/HSM/KMS readiness is claimed.
 
 ## 3. Headless OS keyring
 

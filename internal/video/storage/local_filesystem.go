@@ -102,9 +102,19 @@ func (s *Local) Put(_ context.Context, a video.Asset, data []byte) (video.Asset,
 	}
 	meta, err := json.MarshalIndent(a, "", "  ")
 	if err != nil {
+		// The bytes are already in place, but Put did not return an
+		// asset, so a provider rollback (which only deletes the assets
+		// Put returned) cannot reach it. Remove them rather than leave
+		// an orphan the caller can neither identify nor trust.
+		_ = os.Remove(a.URI)
 		return video.Asset{}, err
 	}
 	if err = writeMetadataAtomic(a.URI+".json", meta); err != nil {
+		// Same rule as above: an asset file without its metadata
+		// sidecar has no recorded size/checksum and would survive a
+		// failed multi-asset download as an orphan. Keep Put atomic
+		// from the caller's perspective.
+		_ = os.Remove(a.URI)
 		return video.Asset{}, err
 	}
 	if d, openErr := os.Open(dir); openErr == nil {

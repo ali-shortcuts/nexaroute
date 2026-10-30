@@ -59,7 +59,7 @@ Boundaries:
 
 - OS keyring and external command/KMS custody adapters are implemented behind `NEXAROUTE_KEY_PROVIDER`; service interoperability and deployment-specific KMS semantics remain unverified
 - Vault Transit `nxs2` is implemented and covered by deterministic fake-API tests, but **no real Vault Transit acceptance run has been executed**. Do not claim production HSM/KMS isolation, HA failover behavior, token renewal, or real Vault compatibility until that run is recorded in `docs/EXTERNAL_VERIFICATION.md`
-- Transit mode requires Vault availability for decrypt; an outage or denied policy fails closed and there is no local-key fallback. Disabling a historical Transit key version before `secrets rewrap` and verification succeeds can make affected secrets unrecoverable
+- Transit mode requires Vault availability for decrypt; an outage or denied policy fails closed and there is no local-key fallback. Disabling a historical Transit key version before `secrets rewrap-transit` and verification succeeds can make affected secrets unrecoverable
 - externally managed rotation is intentionally performed by the custody system; `nexaroute secrets rotate` refuses to rewrite an external provider and retains only the most recent `.key.previous` file for the local provider
 
 Saved provider keys are write-only, including literal, pool, and environment keys. Headers and proxy URLs are also write-only. Editing a credential field replaces the whole credential set; individual saved pool keys cannot be revealed. Do not store credentials in base URLs or other public metadata. Do not expose the admin surface to untrusted networks.
