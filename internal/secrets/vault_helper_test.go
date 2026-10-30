@@ -1,6 +1,7 @@
 package secrets
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -168,5 +169,41 @@ func TestVaultKVHelperFailuresAreClosed(t *testing.T) {
 	os.Unsetenv("VAULT_TOKEN")
 	if _, err := provider.Load(ctx, "secret/data/nexaroute/master-key"); err == nil {
 		t.Fatal("load without VAULT_TOKEN must fail")
+	}
+}
+
+// A ref is interpolated into the Vault URL, so the helper must reject
+// anything that is not a plain KV v2 data path before any request: a ref
+// without /data/ would address a KV v1 logical path, a "?" query would
+// pin a version or add parameters, and traversal would address a
+// different entry. All of these fail with zero requests to Vault.
+func TestVaultKVHelperRejectsUnsafeRef(t *testing.T) {
+	vault := &fakeVault{}
+	ts := httptest.NewServer(http.HandlerFunc(vault.handler))
+	defer ts.Close()
+	t.Setenv("VAULT_ADDR", ts.URL)
+	t.Setenv("VAULT_TOKEN", "test-token")
+
+	provider := CommandProvider{Command: vaultHelperPath(t)}
+	ctx := context.Background()
+	for _, ref := range []string{
+		"secret/nexaroute/master-key",
+		"secret/data/../nexaroute/master-key",
+		"secret/data/nexaroute/master-key?version=1",
+		"secret/data/nexaroute/master key",
+		"/secret/data/nexaroute/master-key",
+		"secret/data/nexaroute/master-key/",
+	} {
+		if _, err := provider.Load(ctx, ref); err == nil {
+			t.Fatalf("load with ref %q must fail", ref)
+		}
+		if err := provider.Store(ctx, ref, bytes.Repeat([]byte{9}, 32)); err == nil {
+			t.Fatalf("store with ref %q must fail", ref)
+		}
+	}
+	vault.mu.Lock()
+	defer vault.mu.Unlock()
+	if len(vault.requests) != 0 {
+		t.Fatalf("unsafe refs made %d Vault requests, want 0", len(vault.requests))
 	}
 }

@@ -131,6 +131,7 @@ func runVaultAccept(args []string, stdout, stderr io.Writer) int {
 	helper := fs.String("helper", "scripts/key-provider-vault-kv.sh", "path to the Vault KV key-provider helper")
 	outPath := fs.String("out", "", "redacted JSON report path")
 	timeout := fs.Duration("timeout", 10*time.Second, "per-request timeout (max 60s); when explicitly set, also bounds helper requests via VAULT_HELPER_TIMEOUT")
+	expectPolicy := fs.String("expect-policy", "", "comma-separated Vault policies the token must carry (plus never root); when empty, no policy assertion runs and the report records that manual policy review is required for staging")
 	overallTimeout := fs.Duration("overall-timeout", 2*time.Minute, "overall run timeout (max 5m)")
 	confirmLive := fs.Bool("confirm-live", false, "required acknowledgment that this run writes to the selected Vault path")
 	allowDev := fs.Bool("allow-dev", false, "allow in-memory (dev-mode) Vault; the report is still labelled non-production")
@@ -211,6 +212,10 @@ func runVaultAccept(args []string, stdout, stderr io.Writer) int {
 			"Reports contain no token values or key bytes; they record only statuses, redacted endpoints, policy names, and topology metadata.",
 		},
 	}
+	expectedPolicies := parseVaultAcceptPolicies(*expectPolicy)
+	if len(expectedPolicies) == 0 {
+		report.Limitations = append(report.Limitations, "No --expect-policy assertion was supplied; token policy names were recorded but not asserted. Staging acceptance requires either --expect-policy or a recorded manual policy review.")
+	}
 	report.Checks = append(report.Checks, vaultAcceptNotRun("vault.ha_failover",
 		"requires an operator-controlled Vault HA cluster and a failover event; not automated by this harness"))
 	report.Checks = append(report.Checks, vaultAcceptNotRun("vault.transit",
@@ -278,9 +283,23 @@ func runVaultAccept(args []string, stdout, stderr io.Writer) int {
 
 	policy := runVaultAcceptTokenMetadata(runCtx, client, addr, token, &report)
 	report.Checks = append(report.Checks, policy)
-	if policy.Status == externalStatusFail {
-		// A root token must never be used to write acceptance keys.
+	if policy.Status != externalStatusPass {
+		// A root token must never be used to write acceptance keys, and
+		// a token whose policies cannot be recorded must not write either:
+		// previously a BLOCKED metadata result fell through to preflight
+		// and put, so acceptance keys were written under an unasserted
+		// token (the run outcome stayed BLOCKED, never PASS, but the
+		// writes still happened). Staging policy grants lookup-self, so
+		// stopping here is the fail-closed posture for acceptance.
 		return finishVaultAccept(report, *outPath, stdout, stderr)
+	}
+	if len(expectedPolicies) > 0 {
+		assertion := runVaultAcceptPolicyAssertion(expectedPolicies, &report)
+		report.Checks = append(report.Checks, assertion)
+		// A rejected token must not write: fail before preflight/put.
+		if assertion.Status != externalStatusPass {
+			return finishVaultAccept(report, *outPath, stdout, stderr)
+		}
 	}
 
 	preflight := runVaultAcceptRefPreflight(runCtx, client, addr, token, *ref)
@@ -289,6 +308,17 @@ func runVaultAccept(args []string, stdout, stderr io.Writer) int {
 		return finishVaultAccept(report, *outPath, stdout, stderr)
 	}
 	report.Vault.BaselineObserved = true
+
+	// The mount check runs before any write: path shape alone cannot
+	// prove KV v2, and the post-round-trip metadata probe alone would
+	// only fail the run after a key had already been written to a
+	// non-v2 mount. A BLOCKED mount result (no sys/mounts read) also
+	// stops the run without writing.
+	mount := runVaultAcceptMountVersion(runCtx, client, addr, token, *ref)
+	report.Checks = append(report.Checks, mount)
+	if mount.Status != externalStatusPass {
+		return finishVaultAccept(report, *outPath, stdout, stderr)
+	}
 
 	key1 := make([]byte, 32)
 	if _, err := rand.Read(key1); err != nil {
@@ -315,6 +345,7 @@ func runVaultAccept(args []string, stdout, stderr io.Writer) int {
 	report.Checks = append(report.Checks, rotation)
 
 	report.Checks = append(report.Checks, runVaultAcceptWrongToken(runCtx, helperAbs, *ref, addr, helperTimeout))
+	report.Checks = append(report.Checks, runVaultAcceptExpiredToken(runCtx, client, helperAbs, *ref, addr, token, helperTimeout))
 	report.Checks = append(report.Checks, runVaultAcceptRevokedToken(runCtx, client, helperAbs, *ref, addr, token, *timeout, helperTimeout))
 	report.Checks = append(report.Checks, runVaultAcceptOutage(runCtx, helperAbs, *ref, outageURL.String(), token, helperTimeout))
 
@@ -826,6 +857,211 @@ func runVaultAcceptKVVersion(ctx context.Context, client *http.Client, addr, tok
 		check.Status = externalStatusBlocked
 		check.Reason = fmt.Sprintf("KV metadata probe returned HTTP %d; mount version cannot be determined", status)
 	}
+	return check
+}
+
+// parseVaultAcceptPolicies splits a comma-separated --expect-policy value,
+// dropping blanks and duplicates while preserving order.
+func parseVaultAcceptPolicies(raw string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, name := range strings.Split(raw, ",") {
+		name = strings.TrimSpace(name)
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		out = append(out, name)
+	}
+	return out
+}
+
+// runVaultAcceptPolicyAssertion checks an --expect-policy claim against the
+// policies recorded by runVaultAcceptTokenMetadata. It runs only after a
+// PASSing metadata check, so report.Vault.Policies is the token's actual
+// policy set; root is already a FAIL at the metadata step, and a missing
+// expected policy fails here, before preflight and before any write.
+func runVaultAcceptPolicyAssertion(expected []string, report *vaultAcceptReport) vaultAcceptCheck {
+	check := vaultAcceptCheck{ID: "vault.policy_assertion", Kind: "policy", Selected: true}
+	have := map[string]bool{}
+	for _, name := range report.Vault.Policies {
+		have[name] = true
+	}
+	if have["root"] {
+		check.Status = externalStatusFail
+		check.Reason = "token carries the root policy; acceptance must run under a least-privilege token"
+		return check
+	}
+	var missing []string
+	for _, name := range expected {
+		if !have[name] {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) > 0 {
+		check.Status = externalStatusFail
+		check.Reason = "token is missing expected policies: " + strings.Join(missing, ",")
+		return check
+	}
+	check.Status = externalStatusPass
+	check.Detail = fmt.Sprintf("policies=%s expected=%s", strings.Join(report.Vault.Policies, ","), strings.Join(expected, ","))
+	return check
+}
+
+// vaultMountFromRef returns the mount owning a KV v2 data ref: everything
+// before the first "/data/" segment. Using the first path segment alone
+// would be wrong for nested mounts (for example "team/secret/data/..."
+// is mounted at "team/secret", not at "team").
+func vaultMountFromRef(ref string) string {
+	i := strings.Index(ref, "/data/")
+	if i < 0 {
+		return ""
+	}
+	return ref[:i]
+}
+
+// runVaultAcceptMountVersion proves the selected ref lives on a KV v2 mount
+// instead of trusting the /data/ path shape. Path shape alone cannot prove
+// KV v2: the helper round-trips on a KV v1 mount too (it would store under
+// the v1 logical path), so without this pre-write check the run would only
+// fail at the post-round-trip metadata probe, after a key had already been
+// written to a non-v2 mount. When the token cannot read sys/mounts the
+// check is BLOCKED, not failed: the run reports the KV v2 claim as
+// unverified rather than failing a least-privilege token for a permission
+// gap, and the operator must either grant sys/mounts read or record an
+// out-of-band mount verification. A mounted-but-wrong type or version, or
+// an absent mount, is a FAIL.
+func runVaultAcceptMountVersion(ctx context.Context, client *http.Client, addr, token, ref string) vaultAcceptCheck {
+	start := time.Now()
+	check := vaultAcceptCheck{ID: "vault.mount_version", Kind: "kv", Selected: true}
+	mount := vaultMountFromRef(ref)
+	if mount == "" {
+		check.Status = externalStatusFail
+		check.Reason = "cannot derive the Vault mount from the selected ref"
+		return check
+	}
+	status, body, err := vaultHTTP(ctx, client, addr, token, http.MethodGet, "sys/mounts/"+mount, nil)
+	check.DurationMS = time.Since(start).Milliseconds()
+	switch {
+	case err != nil:
+		check.Status = externalStatusFail
+		check.Reason = "cannot read the Vault mount: " + vaultAcceptSafeError(err)
+	case status == http.StatusForbidden:
+		check.Status = externalStatusBlocked
+		check.Reason = "token cannot read sys/mounts/" + mount + "; mount type/version unverified (KV v2 assumed from path shape only)"
+	case status == http.StatusNotFound:
+		check.Status = externalStatusFail
+		check.Reason = "mount " + mount + " is not mounted"
+	case status < 200 || status >= 300:
+		check.Status = externalStatusFail
+		check.Reason = fmt.Sprintf("mount lookup returned HTTP %d", status)
+	default:
+		var outer struct {
+			Data *struct {
+				Type    string `json:"type"`
+				Options *struct {
+					Version string `json:"version"`
+				} `json:"options"`
+			} `json:"data"`
+			Type    string `json:"type"`
+			Options *struct {
+				Version string `json:"version"`
+			} `json:"options"`
+		}
+		if err := json.Unmarshal(body, &outer); err != nil || (outer.Data == nil && outer.Type == "") {
+			check.Status = externalStatusFail
+			check.Reason = "mount lookup response is not valid mount JSON"
+			return check
+		}
+		mountType, mountVersion := outer.Type, ""
+		if outer.Options != nil {
+			mountVersion = outer.Options.Version
+		}
+		if outer.Data != nil {
+			mountType = outer.Data.Type
+			if outer.Data.Options != nil {
+				mountVersion = outer.Data.Options.Version
+			}
+		}
+		if mountType != "kv" || mountVersion != "2" {
+			check.Status = externalStatusFail
+			check.Reason = fmt.Sprintf("mount %s is type=%s version=%s, not KV v2", mount, safeVaultAcceptString(mountType), safeVaultAcceptString(mountVersion))
+			return check
+		}
+		check.Status = externalStatusPass
+		check.Detail = fmt.Sprintf("mount=%s type=kv version=2", mount)
+	}
+	return check
+}
+
+// runVaultAcceptExpiredToken proves a short-lived token stops working after
+// its TTL, distinct from the revoked-token check (which revokes an otherwise
+// valid token). It creates a disposable 2s child token, then polls the
+// helper get until it fails with empty stdout. A create failure is BLOCKED
+// (permission gap, same posture as the revoked check); only a child token
+// that is still accepted past a 10s deadline is a FAIL. The child token is
+// left to expire on its own 2s TTL, so no cleanup write is needed; if the
+// deadline is exceeded, a best-effort revoke-self is attempted before
+// reporting the failure.
+func runVaultAcceptExpiredToken(ctx context.Context, client *http.Client, helper, ref, addr, token string, helperTimeout int64) vaultAcceptCheck {
+	start := time.Now()
+	check := vaultAcceptCheck{ID: "vault.expired_token", Kind: "fail-closed", Selected: true}
+	status, body, err := vaultHTTP(ctx, client, addr, token, http.MethodPost, "auth/token/create",
+		map[string]any{"ttl": "2s", "renewable": false, "type": "service"})
+	check.DurationMS = time.Since(start).Milliseconds()
+	if err != nil {
+		check.Status = externalStatusBlocked
+		check.Reason = "cannot create a disposable short-lived child token: " + vaultAcceptSafeError(err)
+		return check
+	}
+	if status == http.StatusForbidden {
+		check.Status = externalStatusBlocked
+		check.Reason = "token lacks auth/token/create; expired-token check did not run (token value was not logged)"
+		return check
+	}
+	if status < 200 || status >= 300 {
+		check.Status = externalStatusBlocked
+		check.Reason = fmt.Sprintf("disposable short-lived child token creation returned HTTP %d", status)
+		return check
+	}
+	var created struct {
+		Auth struct {
+			ClientToken string `json:"client_token"`
+		} `json:"auth"`
+	}
+	if err := json.Unmarshal(body, &created); err != nil || strings.TrimSpace(created.Auth.ClientToken) == "" {
+		check.Status = externalStatusFail
+		check.Reason = "Vault child-token response did not contain a client token"
+		return check
+	}
+	child := created.Auth.ClientToken
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		out, err := runVaultAcceptHelper(ctx, helper, "get", ref, nil, addr, child, helperTimeout)
+		if err != nil && len(out) == 0 {
+			check.DurationMS = time.Since(start).Milliseconds()
+			check.Status = externalStatusPass
+			check.Detail = "short-lived child token expired, then produced a nonzero helper exit and empty stdout"
+			return check
+		}
+		if time.Now().After(deadline) {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			check.Status = externalStatusBlocked
+			check.Reason = "expired-token check aborted by the overall run timeout"
+			return check
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+	// Best-effort cleanup: revoke the still-valid child token.
+	rctx, cancel := context.WithTimeout(ctx, client.Timeout)
+	defer cancel()
+	_, _, _ = vaultHTTP(rctx, client, addr, child, http.MethodPost, "auth/token/revoke-self", nil)
+	check.DurationMS = time.Since(start).Milliseconds()
+	check.Status = externalStatusFail
+	check.Reason = "short-lived child token was still accepted after the expiry deadline"
 	return check
 }
 

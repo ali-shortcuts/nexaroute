@@ -1021,7 +1021,13 @@ func TestGap2VaultAcceptPutFailureSkipsDecryptAndSkipCleanup(t *testing.T) {
 	if vaultAcceptStatus(report, "vault.gateway_decrypt") != externalStatusBlocked {
 		t.Fatalf("put-fail run decrypt = %q, want blocked-skipped", vaultAcceptStatus(report, "vault.gateway_decrypt"))
 	}
-	code, report2, _, _, _ := runVaultAcceptFixture(t, newFakeVaultAccept(), "--skip-cleanup")
+	// The full harness now includes the expired-token check (added by
+	// the vault-accept gaps work): the fixture child token must really
+	// expire, or the check polls to its 10s deadline and fails. Every
+	// other full-harness fixture sets childTTL for exactly this reason.
+	skipCleanupFake := newFakeVaultAccept()
+	skipCleanupFake.childTTL = time.Second
+	code, report2, _, _, _ := runVaultAcceptFixture(t, skipCleanupFake, "--skip-cleanup")
 	if code != 0 {
 		t.Fatalf("skip-cleanup fixture exit=%d, want 0", code)
 	}
