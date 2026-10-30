@@ -537,3 +537,75 @@ Rebase note (2026-10-30): branch rebased onto main `28aed30` (merge of
 #759); prior verification was performed on head `97e3872` (base
 `6ca0c68`) and the `197c57b`/`410ce2a` rebases. Fresh CI on the new
 head is authoritative for the rebased branch.
+
+## 2026-10-30 follow-up: state reconciliation + residual negative gaps (local only, NOT a live run)
+
+- **State reconciliation (no action taken, already correct):** #651 was
+  closed 2026-10-30T05:10:17Z, one second after PR #748 merged, as a
+  manual close (no commit id; #748's body said "do NOT close #651"
+  and used "Related to", not a close keyword). It was reopened
+  2026-10-30T10:11:49Z with an owner comment stating the closure was
+  premature and that fixtures, loopback tests, and harness code do
+  not close the issue. No owner-approved exclusion exists on the
+  record, so no reopen action was needed and none was taken.
+- **Gap audit against the nine required negative categories:** all
+  nine are already covered by merged work and were NOT duplicated
+  here — unavailable server, invalid workflow/node mapping, submit
+  timeout with exactly-once submission, duplicate output filenames
+  (exact and sanitized), oversized output (including the exact-limit
+  boundary), partial-download rollback, cleanup (workspace +
+  pending queue entry), cancellation (pending-only delete, running
+  refusal, context cancellation), and fail-closed terminal job
+  states (rejected, error, completed-without-MP4, stalled).
+- **Defect fixed — case-insensitive duplicate output filenames:**
+  the duplicate check compared stored names exactly, so two outputs
+  differing only by case (`Clip.mp4` vs `clip.mp4`) passed the
+  check. On Linux they are distinct files, but on
+  case-insensitive filesystems (default macOS APFS, Windows) the
+  sink's rename would silently overwrite the first asset while its
+  record still claimed its own SHA-256 — the same
+  self-inconsistency the exact-match check was built to prevent.
+  **Fix:** `DownloadOutputs` now folds case for the duplicate
+  comparison only; stored names themselves are unchanged, and the
+  error still reports the supplied stored name. Red proof:
+  `TestComfyUIDownloadRejectsCaseInsensitiveDuplicateOutputFilenames`
+  FAILs on the pre-fix code (`DownloadOutputs error=<nil>, want
+  duplicate rejection`) and PASSes with the fix, with zero `/view`
+  requests and an empty store root. The exact-match and
+  sanitized-collision tests still pass unchanged.
+- **Pinning tests (pass on current code, no behavior change):**
+  `TestComfyUICancelAbsentPromptRefusesWithoutDelete` (a prompt in
+  neither queue is refused with no delete call — the harness
+  cleanup path records this as BLOCKED, never a global interrupt);
+  `TestComfyUIAcceptDownloadDeadlineFailsClosedWithCleanup` (a
+  `/view` that never answers fails the harness run at its deadline:
+  exit 1, download FAIL, exactly one submission, no retained asset,
+  local cleanup PASS, remote cleanup BLOCKED because the prompt
+  already completed and has no pending entry); and
+  `TestHandlerComfyUIAssetMissingFileReturnsNotFound` (a stored
+  record whose file is gone answers 404 `asset_not_found`, not a
+  retryable 503).
+- **Deliberately unchanged boundary:** the adapter trusts the
+  provider's `video/mp4` content type and does not sniff media
+  magic bytes. A server labeling non-media as `video/mp4` would be
+  stored; playability is proven by the harness `ffprobe` check on
+  the acceptance path, and the gateway serves SHA-256/size-verified
+  bytes. This trust is the same for every provider, not a
+  ComfyUI-specific defect, and sniffing would risk rejecting valid
+  outputs — so no sniffing was added and no claim about it is made.
+- **Live verdict unchanged (re-checked 2026-10-30, names only):**
+  nothing on `127.0.0.1:8188`/`8189`; `COMFYUI_URL`,
+  `COMFYUI_BASE_URL`, `COMFYUI_API_URL`, `COMFYUI_HOST`, and
+  `COMFYUI_MODEL` all absent-or-empty; `/etc/nexaroute` does not
+  exist; no operator authorization naming an instance, model, or
+  workflow exists on record. Present, so not blockers: `ffprobe`,
+  the deterministic fixture suites, and the `comfyui-accept`
+  harness itself. Actual model inference remains NOT_RUN/BLOCKED,
+  zero live calls, zero downloads, and #651 stays OPEN.
+- **Verification on this head (base main `7daa36d`, Go 1.27.0,
+  loopback fixtures only):** full packages — providers ok 107.6s,
+  api ok 0.7s, storage ok 1.3s, gateway ok 289.7s; new tests
+  `-race` — providers ok 1.5s, gateway ok 4.1s, api ok 1.3s;
+  `go vet` clean on all four touched packages; `gofmt` clean on
+  all five touched files. Full `./scripts/verify.sh` NOT run
+  locally (whole-repo + browser step; CI is the gate).
