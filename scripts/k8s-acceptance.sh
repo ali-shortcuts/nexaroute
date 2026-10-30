@@ -15,8 +15,10 @@
 #       failure paths that --live cannot prove without a cluster: the
 #       missing-prerequisite NOT_RUN gates (missing tools, missing
 #       preceding tag, an already-existing kind cluster — all must exit
-#       without creating a cluster), the drain invariant against an
-#       oversized and a malformed config, the missing-Secret render
+#       without creating a cluster), the live context guard (a foreign
+#       kubectl context must refuse before any namespace or Secret is
+#       created), the drain invariant against an oversized and a
+#       malformed config, the missing-Secret render
 #       (reference-only wiring, never a plaintext DSN), and the
 #       fault-release cleanup helper (idempotent uninstall + secret
 #       deletion). CI runs this mode too; it is not a substitute for a
@@ -325,7 +327,19 @@ assert_release_absent() {
   fi
 }
 
-# ---------------------------------------------------------------- safe failure
+# assert_kind_context: fail closed unless kubectl is talking to the
+# kind cluster this run created. Used by live_phase right after
+# kind create (before ANY namespace, Secret, or release is created)
+# and by safe_failure_phase before any fault release is installed,
+# so a stale or operator-supplied context can never redirect a
+# mutation at an existing cluster. A kubectl failure (empty context)
+# refuses just as a foreign context does.
+assert_kind_context() {
+  if [[ "$(kubectl config current-context 2>/dev/null)" != "kind-$CLUSTER" ]]; then
+    fail "refused: current kubectl context is not kind-$CLUSTER"
+    return 1
+  fi
+}
 # safe_failure_phase: runs only after the lifecycle phases passed, so a
 # lifecycle failure is reported as itself and never hidden behind fault
 # phases. Each fault release gets its own config/Secret and its own
@@ -345,10 +359,7 @@ safe_failure_phase() {
   # Context guard: fault phases must only ever talk to the kind
   # cluster this run created. If the context is anything else, fail
   # and touch nothing rather than installing fault releases elsewhere.
-  if [[ "$(kubectl config current-context 2>/dev/null)" != "kind-$CLUSTER" ]]; then
-    fail "safe-failure phases refused: current kubectl context is not kind-$CLUSTER"
-    return
-  fi
+  assert_kind_context || return
 
   # 2a: misconfigured config (invalid JSON) must fail safe.
   local bad_release="${RELEASE}-badconfig"
@@ -457,6 +468,13 @@ live_phase() {
   else
     printf 'keeping cluster %s as requested (--keep-cluster)\n' "$CLUSTER"
   fi
+  # Context guard BEFORE any mutation: kind create is expected to
+  # switch the current context to kind-$CLUSTER, but a KUBECONFIG
+  # pointing elsewhere (or a kind that did not switch) must never let
+  # the namespace, Secret, or release steps below land on an existing
+  # operator cluster. The EXIT trap above still deletes the kind
+  # cluster this run just created.
+  assert_kind_context || return 1
   kubectl create namespace "$NAMESPACE" >/dev/null
   kubectl_ns apply -f "$STUB_MANIFEST" >/dev/null
   kubectl_ns wait --for=condition=available "deploy/nexaroute-stub" --timeout=300s >/dev/null
@@ -810,7 +828,45 @@ EOF
     fi
   fi
 
-  # 4. Drain invariant: acceptance config passes, an oversized config
+  # 4. Foreign kubectl context -> live refuses BEFORE any mutation.
+  # The kind stub "creates" a cluster; the kubectl stub reports a
+  # foreign current-context. The guard in live_phase must fire right
+  # after kind create, so the kubectl log must show the context query
+  # and no namespace, Secret, or release creation at all.
+  mkdir -p "$tmp/bin4"
+  selftest_tool_bin "$tmp/bin4"
+  rm -f "$tmp/bin4/kind" "$tmp/bin4/kubectl" "$tmp/bin4/docker"
+  cat >"$tmp/bin4/kind" <<'EOF'
+#!/bin/sh
+echo "kind $@" >> "$SELFTEST_KIND_LOG"
+exit 0
+EOF
+  cat >"$tmp/bin4/kubectl" <<'EOF'
+#!/bin/sh
+echo "kubectl $@" >> "$SELFTEST_KUBECTL_LOG"
+if [ "$1" = "config" ] && [ "$2" = "current-context" ]; then echo "foreign-context"; fi
+exit 0
+EOF
+  printf '#!/bin/sh\nexit 0\n' >"$tmp/bin4/docker"
+  chmod +x "$tmp/bin4/kind" "$tmp/bin4/kubectl" "$tmp/bin4/docker"
+  code=0
+  if [[ -z "$head_sha" ]]; then
+    notrun "foreign-context refusal (no HEAD SHA available)"
+  else
+  SELFTEST_KIND_LOG="$tmp/kind-ctx.log" SELFTEST_KUBECTL_LOG="$tmp/kubectl-ctx.log" PATH="$tmp/bin4" \
+    "$BASH" "$REPO/scripts/k8s-acceptance.sh" --live --prev-tag "$head_sha" \
+    --out-dir "$tmp/ctx-out" >"$tmp/ctx.log" 2>&1 || code=$?
+  if [[ "$code" -eq 1 ]] && grep -q "refused: current kubectl context is not kind-nexaroute-accept" "$tmp/ctx.log" \
+      && grep -q "create cluster" "$tmp/kind-ctx.log" \
+      && ! grep -q "create namespace" "$tmp/kubectl-ctx.log" \
+      && ! grep -q "create secret" "$tmp/kubectl-ctx.log"; then
+    ok "foreign kubectl context -> live refused before any namespace/Secret mutation"
+  else
+    fail "foreign kubectl context was not refused before mutation (code $code; see $tmp/ctx.log)"
+  fi
+  fi
+
+  # 5. Drain invariant: acceptance config passes, an oversized config
   # and a too-small grace fail, and a malformed config fails without
   # crashing the script (check_drain_grace, not a bare drain_seconds).
   helm template "$RELEASE" "$CHART" -f "$ACCEPT_VALUES" >"$tmp/rendered-acceptance.yaml"
@@ -844,7 +900,7 @@ PY
     ok "self-test: malformed config fails the drain check without crashing"
   fi
 
-  # 5. Missing referenced Secret renders as a reference only: helm
+  # 6. Missing referenced Secret renders as a reference only: helm
   # does not check existence, so the live never-Ready phase is the
   # runtime proof, and the render must never contain a plaintext DSN.
   helm template "$RELEASE" "$CHART" -f "$ACCEPT_VALUES" \
@@ -862,7 +918,7 @@ PY
     ok "self-test: missing-Secret render contains no plaintext DSN"
   fi
 
-  # 6. Fault-release cleanup helper: uninstall + secret deletion are
+  # 7. Fault-release cleanup helper: uninstall + secret deletion are
   # invoked, and a second call still succeeds (idempotent).
   cat >"$tmp/cleanup-bin/helm" <<'EOF'
 #!/bin/sh
