@@ -1138,7 +1138,17 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc("/admin/api/nexaflow/nodes", s.adminNexaflowNodes)
 		mux.HandleFunc("/admin/api/nexaflow/templates", s.adminNexaflowTemplates)
 		mux.HandleFunc("/admin/api/nexaflow/templates/", s.adminNexaflowTemplateByID)
+		// Exact pattern wins over the templates/ subtree pattern in
+		// ServeMux (longest match), so /instantiate is not swallowed by
+		// the by-id handler and the OpenAPI contract tests can probe it
+		// as its own route instead of as a POST on the detail path
+		// (which the detail handler answers 405).
+		mux.HandleFunc("/admin/api/nexaflow/templates/{id}/instantiate", s.adminNexaflowTemplateInstantiate)
 		mux.HandleFunc("/admin/api/nexaflow/definitions", s.adminNexaflowDefinitions)
+		// Exact pattern wins over the definitions/ subtree pattern in
+		// ServeMux (longest match), so /validate is not swallowed by
+		// the by-id handler.
+		mux.HandleFunc("/admin/api/nexaflow/definitions/validate", s.adminNexaflowDefinitionValidate)
 		mux.HandleFunc("/admin/api/nexaflow/definitions/", s.adminNexaflowDefinitionByID)
 		mux.HandleFunc("/admin/api/nexaflow/runs", s.adminNexaflowRuns)
 		mux.HandleFunc("/admin/api/nexaflow/runs/", s.adminNexaflowRunByID)
