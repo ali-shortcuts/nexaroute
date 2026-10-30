@@ -126,15 +126,30 @@ func (s *Server) adminNexaflowNodes(w http.ResponseWriter, r *http.Request) {
 		out = append(out, map[string]any{
 			"id": spec.ID, "version": spec.Version, "title": spec.Title,
 			"category": spec.Category, "description": spec.Description,
-			"input_schema": spec.InputSchema, "output_schema": spec.OutputSchema,
-			"config_schema": spec.ConfigSchema, "permission": spec.Permission,
-			"side_effect": spec.SideEffect, "requires_policy": spec.RequiresOperatorPolicy,
+			"input_schema":       nexaflowFieldViews(spec.InputSchema),
+			"output_schema":      nexaflowFieldViews(spec.OutputSchema),
+			"config_schema":      nexaflowFieldViews(spec.ConfigSchema),
+			"permission":         string(spec.Permission),
+			"side_effect":        string(spec.SideEffect),
+			"requires_policy":    spec.RequiresOperatorPolicy,
 			"default_timeout_ms": spec.DefaultTimeout.Milliseconds(),
 			"max_timeout_ms":     spec.MaxTimeout.Milliseconds(),
-			"max_input_bytes":    spec.MaxInputBytes, "max_output_bytes": spec.MaxOutputBytes,
+			"max_input_bytes":    spec.MaxInputBytes,
+			"max_output_bytes":   spec.MaxOutputBytes,
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"nodes": out})
+}
+
+// nexaflowFieldViews renders registry schema fields in the snake_case
+// shape the studio editor consumes (name/type/required/description);
+// empty schemas render as [] rather than null.
+func nexaflowFieldViews(fields []nexaflow.Field) []map[string]any {
+	out := make([]map[string]any, 0, len(fields))
+	for _, f := range fields {
+		out = append(out, map[string]any{"name": f.Name, "type": f.Type, "required": f.Required, "description": f.Description})
+	}
+	return out
 }
 
 func (s *Server) adminNexaflowTemplates(w http.ResponseWriter, r *http.Request) {
@@ -154,6 +169,42 @@ func (s *Server) adminNexaflowTemplates(w http.ResponseWriter, r *http.Request) 
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"templates": out})
+}
+
+// adminNexaflowTemplateByID serves /admin/api/nexaflow/templates/{id}:
+// the full inert template, including its nodes, so a studio/gallery client
+// can build a workflow draft from it. The list endpoint deliberately
+// returns metadata only.
+func (s *Server) adminNexaflowTemplateByID(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.nexaflowAdmin(r); !ok {
+		errorJSON(w, http.StatusUnauthorized, "admin authentication required")
+		return
+	}
+	if !s.nexaflowRequireMethod(w, r, http.MethodGet) {
+		return
+	}
+	id := strings.Trim(strings.TrimPrefix(r.URL.Path, "/admin/api/nexaflow/templates/"), "/")
+	if id == "" || strings.Contains(id, "/") {
+		errorJSON(w, http.StatusNotFound, "template not found")
+		return
+	}
+	for _, tpl := range nexaflow.DefaultTemplates() {
+		if tpl.ID != id {
+			continue
+		}
+		var nodes []map[string]any
+		for _, n := range tpl.Nodes {
+			nodes = append(nodes, map[string]any{"node_id": n.NodeID, "version": n.Version, "config": n.Config})
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"id": tpl.ID, "version": tpl.Version, "title": tpl.Title,
+			"description": tpl.Description, "nodes": nodes,
+			"edges": tpl.Edges, "placeholders": tpl.Placeholders,
+			"requires_policy": tpl.RequiresPolicy, "published": tpl.Published,
+		})
+		return
+	}
+	errorJSON(w, http.StatusNotFound, "template not found")
 }
 
 func (s *Server) adminNexaflowDefinitions(w http.ResponseWriter, r *http.Request) {

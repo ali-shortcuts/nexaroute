@@ -325,6 +325,35 @@ func TestGeminiModelsList(t *testing.T) {
 	}
 }
 
+func TestGeminiClientTimeoutMapsTo504(t *testing.T) {
+	// Same shared-budget classification as the Responses regression
+	// (TestWave3ResponsesClientTimeoutMapsTo504): a transport timeout
+	// under a bounded route is a gateway deadline, even when the route
+	// timer itself has not yet been observed expired.
+	// Release channel, not bare context cancellation: a handler blocked
+	// before writing any bytes does not observe client cancellation
+	// promptly in this sandbox (see TestWave3ResponsesClientGoneOnTransportError).
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseUpstream := func() { releaseOnce.Do(func() { close(release) }) }
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+	}))
+	defer up.Close()
+	defer releaseUpstream()
+	s := wave3SplitTimeoutGateway(t, []config.ProviderConfig{
+		wave3Provider("a", "openai_compatible", up.URL, "m", "upstream-model", nil),
+	}, 200, 60000)
+	rr := geminiPost(t, s, "http://gateway/v1beta/models/m:generateContent", `{"contents":[{"role":"user","parts":[{"text":"hi"}]}]}`, "", "")
+	releaseUpstream()
+	if rr.Code != 504 || !strings.Contains(rr.Body.String(), "gateway request timeout") {
+		t.Fatalf("gemini client-timeout status=%d body=%s want 504 gateway request timeout", rr.Code, rr.Body.String())
+	}
+}
+
 func TestGeminiGenerateContentOverGeminiUpstream(t *testing.T) {
 	s, _ := geminiTestGateway(t, "gemini", "gemini", false)
 	body := `{"contents":[{"role":"user","parts":[{"text":"hi"}]}]}`

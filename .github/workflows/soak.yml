@@ -96,6 +96,26 @@ jobs:
           NEXAROUTE_SOAK_OUT: ${{ github.workspace }}/.artifacts/soak
         run: ./scripts/soak.sh
 
+      - name: Validate soak evidence completeness
+        # The summary is the evidence; a job badge alone is not. This
+        # gate fails the run when the summary is missing, names the
+        # wrong commit, skips a planned stage, reports a sustained
+        # duration shorter than requested, lacks resource samples for
+        # a passed hot-reload stage, or omits the NOT_RUN block for
+        # the live items (see scripts/check-soak-evidence.py).
+        # It runs even when the soak step failed, because soak.sh
+        # writes its summary from an EXIT trap in that case too.
+        if: always()
+        run: |
+          set -euo pipefail
+          summary="$(find "${{ github.workspace }}/.artifacts/soak" -name summary.json 2>/dev/null | sort | tail -n 1 || true)"
+          if [ -z "$summary" ]; then
+            echo 'No summary.json under .artifacts/soak: the soak script did not reach its report writer. That is a failure of the soak run, not a pass.' >&2
+            exit 1
+          fi
+          echo "Validating $summary against commit ${{ github.sha }}"
+          python3 scripts/check-soak-evidence.py --summary "$summary" --kind soak --expected-commit "${{ github.sha }}"
+
       - name: Preserve raw soak evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

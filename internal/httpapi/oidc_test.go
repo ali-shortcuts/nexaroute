@@ -190,6 +190,14 @@ func (p *inProcessOIDCProvider) token(w http.ResponseWriter, r *http.Request) {
 		writeTestJSONStatus(w, http.StatusBadRequest, map[string]any{"error": "invalid_grant"})
 		return
 	}
+	// Wave 2 (issue #663): a token response without an ID token pins
+	// Complete's missing-id_token branch; the exchange itself succeeds.
+	if flow.mode == "no-id-token" {
+		writeTestJSON(w, map[string]any{
+			"access_token": "test-access-token", "token_type": "Bearer", "expires_in": 3600,
+		})
+		return
+	}
 	verifier := r.Form.Get("code_verifier")
 	digest := sha256.Sum256([]byte(verifier))
 	challenge := base64.RawURLEncoding.EncodeToString(digest[:])
@@ -216,6 +224,7 @@ func (p *inProcessOIDCProvider) signedIDToken(flow oidcTestFlow) (string, error)
 	}
 	nonce := flow.nonce
 	expiry := now.Add(5 * time.Minute).Unix()
+	subject := "oidc-user-123"
 	signingKey := p.privateKey
 	kid := "test-key"
 	p.mu.Lock()
@@ -239,13 +248,17 @@ func (p *inProcessOIDCProvider) signedIDToken(flow oidcTestFlow) (string, error)
 		nonce = ""
 	case "bad-signature":
 		signingKey = p.wrongKey
+	case "empty-sub":
+		// Wave 2 (issue #663): a verifiable token with an empty
+		// subject pins Complete's identity-claims branch.
+		subject = ""
 	}
 	azp := testOIDCClientID
 	if flow.azp != "" {
 		azp = flow.azp
 	}
 	claims := map[string]any{
-		"iss": issuer, "sub": "oidc-user-123", "aud": audience,
+		"iss": issuer, "sub": subject, "aud": audience,
 		"iat": now.Add(flow.iatOffset).Unix(), "exp": expiry, "nonce": nonce, "groups": flow.groups,
 	}
 	if !flow.omitAzp {

@@ -121,8 +121,12 @@ func validNodeTransition(from, to NodeState) bool {
 	case NodePending:
 		return to == NodeClaimed || to == NodeSkipped || to == NodeCancelled
 	case NodeClaimed:
+		// Claimed -> Failed is the fail-without-dispatch path: sweep
+		// fails a claimed node it cannot run (unknown node, or an
+		// input mapping that cannot be resolved) without ever
+		// dispatching it, so no side effect has happened.
 		return to == NodeRunning || to == NodeCancelled || to == NodeNeedsManualAction ||
-			to == NodeWaiting || to == NodePending
+			to == NodeWaiting || to == NodePending || to == NodeFailed
 	case NodeRunning:
 		// Running -> pending is the recovery-only requeue: a lease
 		// expired after dispatch on a side-effect-free node (or before

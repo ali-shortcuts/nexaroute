@@ -96,26 +96,32 @@ func (s *Server) geminiModels(w http.ResponseWriter, r *http.Request) {
 
 // geminiAuthRequest returns a request copy whose client key is normalized
 // into the x-api-key header from the Gemini forms (x-goog-api-key header
-// or ?key= query). The query form is stripped from the copied URL so the
-// key cannot leak into logs. The key value itself is never logged here.
+// or ?key= query). The ?key= form is ALWAYS stripped from the copied URL,
+// even when a header key is present and wins authentication: a query key
+// that stays in r.URL could otherwise leak into any log that records the
+// request URL. The key value itself is never logged here.
 func geminiAuthRequest(r *http.Request) *http.Request {
-	if r.Header.Get("x-api-key") != "" || r.Header.Get("Authorization") != "" {
+	hasHeaderAuth := r.Header.Get("x-api-key") != "" || r.Header.Get("Authorization") != ""
+	query := r.URL.Query()
+	_, hasQueryKey := query["key"]
+	if hasHeaderAuth && !hasQueryKey {
 		return r
 	}
 	key := strings.TrimSpace(r.Header.Get("x-goog-api-key"))
 	if key == "" {
-		key = strings.TrimSpace(r.URL.Query().Get("key"))
-	}
-	if key == "" {
-		return r
+		key = strings.TrimSpace(query.Get("key"))
 	}
 	r2 := r.Clone(r.Context())
-	r2.Header.Set("x-api-key", key)
-	u2 := *r.URL
-	q := u2.Query()
-	q.Del("key")
-	u2.RawQuery = q.Encode()
-	r2.URL = &u2
+	if !hasHeaderAuth && key != "" {
+		r2.Header.Set("x-api-key", key)
+	}
+	if hasQueryKey {
+		u2 := *r.URL
+		q := u2.Query()
+		q.Del("key")
+		u2.RawQuery = q.Encode()
+		r2.URL = &u2
+	}
 	return r2
 }
 
@@ -271,6 +277,7 @@ func (s *Server) geminiGenerateContent(w http.ResponseWriter, r *http.Request) {
 	profile := profileFromRequirement(req, &canReq)
 	dialects := map[string]compat.DialectProfile{}
 	var lastErr string
+	var lastDerr error
 	attempts := 0
 	for i := 0; i < len(candidates) && attempts < max; i++ {
 		c := candidates[i]
@@ -300,6 +307,7 @@ func (s *Server) geminiGenerateContent(w http.ResponseWriter, r *http.Request) {
 		)
 		if derr != nil {
 			lastErr = derr.Error()
+			lastDerr = derr
 			if repair.Repaired {
 				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "compat_repair", Deployment: deployment.ID, Message: repair.Description})
 			}
@@ -322,7 +330,11 @@ func (s *Server) geminiGenerateContent(w http.ResponseWriter, r *http.Request) {
 			}
 			s.emitProductionEvent(r.Header.Get("x-request-id"), ProductionEventModelFailed, deployment.ID, lastErr, events.Event{ErrorType: policy.ErrorType, LatencyMS: time.Since(start).Milliseconds()})
 			s.emitAmbiguousOutcome(r.Header.Get("x-request-id"), deployment.ID, derr, time.Since(start))
-			if gatewayDeadlineExceeded(routeCtx, r.Context()) {
+			// Same shared-budget race as the Responses path: a transport
+			// timeout under a bounded route is a gateway deadline (504),
+			// not a generic 502, even when the route timer itself has
+			// not yet been observed expired.
+			if gatewayDeadlineError(routeCtx, r.Context(), derr) {
 				geminiErrorJSON(w, http.StatusGatewayTimeout, "gateway request timeout")
 				return
 			}
@@ -428,7 +440,7 @@ func (s *Server) geminiGenerateContent(w http.ResponseWriter, r *http.Request) {
 					s.rt.ObserveSessionCache(req, deploy.ID, u.InputTokens, u.CacheReadTokens)
 				})
 		} else {
-			usageErr = s.handleCanonicalResponse(w, resp, bundle.canonicalKind, "gemini", model, r.Header.Get("x-request-id"), false, bundle.toolDefs,
+			usageErr = s.handleCanonicalResponse(routeCtx, w, resp, bundle.canonicalKind, "gemini", model, r.Header.Get("x-request-id"), false, bundle.toolDefs,
 				func(u canonical.Usage) {
 					inputTokens, outputTokens = u.InputTokens, u.OutputTokens
 					s.recordUsageCanonical(r, deploy.ID, bundle.canonicalKind, u)
@@ -448,6 +460,13 @@ func (s *Server) geminiGenerateContent(w http.ResponseWriter, r *http.Request) {
 					s.probe.Recover(deploy.ID)
 				} else {
 					s.hm.RecordFailure(deploy.ID, lastErr, total)
+				}
+				// A body-read timeout under a bounded route is a
+				// gateway deadline (504), not a malformed response
+				// (502), as on the Responses path.
+				if gatewayDeadlineError(routeCtx, r.Context(), usageErr) {
+					geminiErrorJSON(w, http.StatusGatewayTimeout, "gateway request timeout")
+					return
 				}
 				if attempts < max && i+1 < len(candidates) {
 					s.retryPause(routeCtx, r.Header.Get("x-request-id"), cfg, attempts-1, max)
@@ -491,7 +510,7 @@ func (s *Server) geminiGenerateContent(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	if gatewayDeadlineExceeded(routeCtx, r.Context()) {
+	if gatewayDeadlineError(routeCtx, r.Context(), lastDerr) {
 		geminiErrorJSON(w, http.StatusGatewayTimeout, "gateway request timeout")
 		return
 	}

@@ -102,6 +102,21 @@ type vaultAcceptTotals struct {
 	NotRun  int `json:"not_run"`
 }
 
+// newVaultAcceptClient builds the Vault HTTP client. Redirects are
+// refused (http.ErrUseLastResponse, same posture as the Transit
+// provider): a redirect target must never receive the operator's
+// X-Vault-Token, and a 3xx response surfaces as a failed check
+// instead of being followed silently. Every vaultHTTP caller treats a
+// non-2xx status as failure, so refusing redirects is fail-closed.
+func newVaultAcceptClient(timeout time.Duration) *http.Client {
+	return &http.Client{
+		Timeout: timeout,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+}
+
 func runVaultAccept(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("vault-accept", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -172,7 +187,7 @@ func runVaultAccept(args []string, stdout, stderr io.Writer) int {
 			OverallTimeoutSeconds: overallTimeout.Seconds(),
 		},
 		Limitations: []string{
-			"This harness verifies Vault KV v2 custody only. Vault Transit envelope mode is NOT implemented and is not tested.",
+			"This harness verifies Vault KV v2 custody only. Vault Transit envelope mode is a separate provider path and is not tested by this harness.",
 			"Real Vault HA failover, long-running token renewal, and auth methods other than a static token are NOT exercised by this run.",
 			"This harness does not start a full gateway process; it verifies helper key load and the nxs1 decrypt path with that key.",
 			"Dev-mode Vault is never production evidence; evidence_class=dev is reported for explicit --allow-dev runs.",
@@ -182,7 +197,7 @@ func runVaultAccept(args []string, stdout, stderr io.Writer) int {
 	report.Checks = append(report.Checks, vaultAcceptNotRun("vault.ha_failover",
 		"requires an operator-controlled Vault HA cluster and a failover event; not automated by this harness"))
 	report.Checks = append(report.Checks, vaultAcceptNotRun("vault.transit",
-		"Vault Transit envelope mode is NOT implemented; this run does not claim Transit support"))
+		"Vault Transit envelope mode is a separate provider path and is not tested by this harness; this run does not claim Transit support"))
 
 	if addr == "" || token == "" {
 		missing := *addrEnv
@@ -211,7 +226,7 @@ func runVaultAccept(args []string, stdout, stderr io.Writer) int {
 
 	runCtx, cancel := context.WithTimeout(context.Background(), *overallTimeout)
 	defer cancel()
-	client := &http.Client{Timeout: *timeout}
+	client := newVaultAcceptClient(*timeout)
 
 	health := runVaultAcceptHealth(runCtx, client, addr, token)
 	report.Checks = append(report.Checks, health)

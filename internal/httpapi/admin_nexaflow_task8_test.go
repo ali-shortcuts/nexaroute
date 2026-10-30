@@ -160,6 +160,114 @@ func TestTask8HTTPNodesTemplatesAuth(t *testing.T) {
 	}
 }
 
+type task8NodeSchemaField struct {
+	Name     string `json:"name"`
+	Required bool   `json:"required"`
+}
+
+type task8NodeSchemaView struct {
+	ID               string                 `json:"id"`
+	InputSchema      []task8NodeSchemaField `json:"input_schema"`
+	OutputSchema     []task8NodeSchemaField `json:"output_schema"`
+	ConfigSchema     []task8NodeSchemaField `json:"config_schema"`
+	DefaultTimeoutMs int                    `json:"default_timeout_ms"`
+	MaxInputBytes    int                    `json:"max_input_bytes"`
+	RequiresPolicy   bool                   `json:"requires_policy"`
+}
+
+func TestTask8HTTPNodesSchemas(t *testing.T) {
+	srv, key := task8HTTPServer(t)
+	rec := task8Do(t, srv, key, http.MethodGet, "/admin/api/nexaflow/nodes", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("nodes = %d: %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Nodes []task8NodeSchemaView `json:"nodes"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("nodes decode: %v", err)
+	}
+	var branch *task8NodeSchemaView
+	anyPolicy := false
+	for i := range body.Nodes {
+		n := &body.Nodes[i]
+		if n.ID == "nexaroute.control.branch" {
+			branch = n
+		}
+		if n.RequiresPolicy {
+			anyPolicy = true
+		}
+	}
+	if branch == nil {
+		t.Fatalf("branch node missing from /nodes")
+	}
+	has := func(fields []task8NodeSchemaField, name string, required bool) bool {
+		for _, f := range fields {
+			if f.Name == name && f.Required == required {
+				return true
+			}
+		}
+		return false
+	}
+	if !has(branch.InputSchema, "condition_result", true) {
+		t.Fatalf("branch input_schema = %+v, want required condition_result", branch.InputSchema)
+	}
+	foundOut := false
+	for _, f := range branch.OutputSchema {
+		if f.Name == "selected_branch" {
+			foundOut = true
+		}
+	}
+	if !foundOut {
+		t.Fatalf("branch output_schema = %+v, want selected_branch", branch.OutputSchema)
+	}
+	if !has(branch.ConfigSchema, "true_branch", true) || !has(branch.ConfigSchema, "false_branch", true) {
+		t.Fatalf("branch config_schema = %+v, want required true_branch and false_branch", branch.ConfigSchema)
+	}
+	if branch.DefaultTimeoutMs != 5000 || branch.MaxInputBytes != 4096 {
+		t.Fatalf("branch timeout/bytes = %d/%d, want 5000/4096", branch.DefaultTimeoutMs, branch.MaxInputBytes)
+	}
+	if branch.RequiresPolicy {
+		t.Fatalf("branch requires_policy = true, want false")
+	}
+	if !anyPolicy {
+		t.Fatalf("no node reports requires_policy=true, want at least one billable/external node")
+	}
+}
+
+func TestTask8HTTPTemplateDetail(t *testing.T) {
+	srv, key := task8HTTPServer(t)
+	// Unauthenticated: 401.
+	if rec := task8Do(t, srv, "", http.MethodGet, "/admin/api/nexaflow/templates/model-health-alert", nil); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated template detail = %d, want 401", rec.Code)
+	}
+	// Unknown id: 404.
+	if rec := task8Do(t, srv, key, http.MethodGet, "/admin/api/nexaflow/templates/no-such-template", nil); rec.Code != http.StatusNotFound {
+		t.Fatalf("unknown template = %d, want 404", rec.Code)
+	}
+	// Wrong method: 405.
+	if rec := task8Do(t, srv, key, http.MethodPost, "/admin/api/nexaflow/templates/model-health-alert", nil); rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("POST template detail = %d, want 405", rec.Code)
+	}
+	// Known id: full template with nodes (the list endpoint omits them).
+	rec := task8Do(t, srv, key, http.MethodGet, "/admin/api/nexaflow/templates/model-health-alert", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("template detail = %d: %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		ID    string `json:"id"`
+		Nodes []struct {
+			NodeID string `json:"node_id"`
+		} `json:"nodes"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("template detail decode: %v", err)
+	}
+	if body.ID != "model-health-alert" || len(body.Nodes) == 0 {
+		t.Fatalf("template detail lacks nodes: %s", rec.Body.String())
+	}
+}
+
 func TestTask8HTTPDefinitionRunLifecycle(t *testing.T) {
 	srv, key := task8HTTPServer(t)
 	def := task8BranchDef()
