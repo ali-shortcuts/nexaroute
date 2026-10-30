@@ -612,3 +612,146 @@ func TestConfiguredEnvelopeSelection(t *testing.T) {
 		}
 	})
 }
+
+func TestVaultTransitKeyVersionErrorsAreClassified(t *testing.T) {
+	dek := []byte("01234567890123456789012345678901")
+	versionBodies := []string{
+		`{"errors":["ciphertext or signature version is disallowed by policy (too old)"]}`,
+		`{"errors":["invalid ciphertext: version is too new"]}`,
+		`{"errors":["no such key version"]}`,
+		`{"errors":["encryption key version 2 is not available for decryption"]}`,
+		`{"errors":["key version 2 has been deleted"]}`,
+		`{"errors":["key has been deleted"]}`,
+		`{"errors":["key is disabled"]}`,
+	}
+	for _, body := range versionBodies {
+		for _, op := range []string{"decrypt", "rewrap"} {
+			t.Run(op+"/"+body, func(t *testing.T) {
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.WriteHeader(http.StatusBadRequest)
+					_, _ = w.Write([]byte(body))
+				}))
+				defer srv.Close()
+				p, err := NewVaultTransitProvider(srv.URL, "TOKEN-CANARY", "", "transit", "nexaroute", time.Second)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if op == "decrypt" {
+					_, _, err = p.UnwrapDEK(context.Background(), "vault:v1:AAAA")
+				} else {
+					_, _, err = p.RewrapDEK(context.Background(), "vault:v1:AAAA")
+				}
+				var terr *TransitError
+				if !errors.As(err, &terr) || terr.Class != ClassTransitKeyVersionUnavailable {
+					t.Fatalf("version failure must be transit_key_version_unavailable, got %v", err)
+				}
+				if strings.Contains(err.Error(), "disallowed") || strings.Contains(err.Error(), "too new") ||
+					strings.Contains(err.Error(), "has been deleted") || strings.Contains(err.Error(), "is disabled") ||
+					strings.Contains(err.Error(), "TOKEN-CANARY") {
+					t.Fatalf("error leaked the Vault body or token: %v", err)
+				}
+			})
+		}
+	}
+	// A tampered/invalid ciphertext is not a key-version case.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"errors":["ciphertext or signature is not valid"]}`))
+	}))
+	defer srv.Close()
+	p, err := NewVaultTransitProvider(srv.URL, "tok", "", "transit", "nexaroute", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := p.UnwrapDEK(context.Background(), "vault:v1:AAAA"); err == nil {
+		t.Fatal("tampered ciphertext accepted")
+	} else {
+		var terr *TransitError
+		if !errors.As(err, &terr) || terr.Class != ClassTransitInvalidCiphertext {
+			t.Fatalf("tampered ciphertext must stay transit_invalid_ciphertext, got %v", err)
+		}
+	}
+	// Encrypt 400s are never key-version decrypt cases.
+	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"errors":["key version is too new"]}`))
+	}))
+	defer srv2.Close()
+	p2, err := NewVaultTransitProvider(srv2.URL, "tok", "", "transit", "nexaroute", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := p2.WrapDEK(context.Background(), dek); err == nil {
+		t.Fatal("encrypt 400 accepted")
+	} else {
+		var terr *TransitError
+		if !errors.As(err, &terr) || terr.Class != ClassTransitInvalidCiphertext {
+			t.Fatalf("encrypt 400 must stay transit_invalid_ciphertext, got %v", err)
+		}
+	}
+}
+
+func TestVaultTransitRejectsOversizedWrappedInputBeforeRequest(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		http.Error(w, "must not be called", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+	p := newTransitTestProvider(t, srv)
+	oversized := "vault:v1:" + strings.Repeat("A", 4097)
+	if _, _, err := p.UnwrapDEK(context.Background(), oversized); err == nil {
+		t.Fatal("oversized wrapped DEK accepted for decrypt")
+	}
+	if _, _, err := p.RewrapDEK(context.Background(), oversized); err == nil {
+		t.Fatal("oversized wrapped DEK accepted for rewrap")
+	}
+	if calls.Load() != 0 {
+		t.Fatalf("oversized wrapped input reached Vault (%d calls)", calls.Load())
+	}
+}
+
+func TestVaultTransitOperationContextBudgetAndRetries(t *testing.T) {
+	dek := []byte("01234567890123456789012345678901")
+	t.Run("overall context timeout", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			time.Sleep(300 * time.Millisecond)
+		}))
+		defer srv.Close()
+		p, err := NewVaultTransitProvider(srv.URL, "tok", "", "transit", "nexaroute", 2*time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+		defer cancel()
+		start := time.Now()
+		_, _, err = p.WrapDEK(ctx, dek)
+		var terr *TransitError
+		if !errors.As(err, &terr) || terr.Class != ClassTransitUnavailable {
+			t.Fatalf("context timeout must be transit_unavailable, got %v", err)
+		}
+		if elapsed := time.Since(start); elapsed > time.Second {
+			t.Fatalf("overall context budget not enforced: %s", elapsed)
+		}
+	})
+	t.Run("retry wait respects context", func(t *testing.T) {
+		var calls atomic.Int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls.Add(1)
+			http.Error(w, "retry later", http.StatusServiceUnavailable)
+		}))
+		defer srv.Close()
+		p, err := NewVaultTransitProvider(srv.URL, "tok", "", "transit", "nexaroute", time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+		defer cancel()
+		if _, _, err := p.WrapDEK(ctx, dek); err == nil {
+			t.Fatal("exhausted budget accepted")
+		}
+		if calls.Load() != 1 {
+			t.Fatalf("retry ran after the overall budget expired: %d calls", calls.Load())
+		}
+	})
+}
