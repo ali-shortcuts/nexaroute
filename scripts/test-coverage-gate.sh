@@ -94,5 +94,18 @@ if ! grep -q "PASS total=95.0%" "$tmp/pass.out"; then
   exit 1
 fi
 echo "ok: passing gate output reports PASS total=95.0%"
+# The "at" fixture has 20 statements, 19 covered: the report must carry
+# the exact counts, not just the percentage.
+if ! grep -q "covered statements: 19" "$tmp/pass.out"; then
+  echo "FAIL: gate report does not carry covered statements: 19" >&2
+  cat "$tmp/pass.out" >&2
+  exit 1
+fi
+if ! grep -q "total statements: 20" "$tmp/pass.out"; then
+  echo "FAIL: gate report does not carry total statements: 20" >&2
+  cat "$tmp/pass.out" >&2
+  exit 1
+fi
+echo "ok: gate report carries covered/total statement counts"
 
 echo "coverage gate tests: PASS"
