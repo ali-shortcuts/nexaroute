@@ -1021,22 +1021,23 @@ class SSHRuntime(Runtime):
         args = ["psql", dsn, "-tAc", sql]
         return subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
 
-    def query_value(self, sql, db=None):
-        proc = self._psql(sql, db=db)
+    def query_value(self, sql, db=None, dsn=None):
+        proc = self._psql(sql, dsn=dsn, db=db)
         if proc.returncode != 0:
             raise RuntimeError("query failed")
         return (proc.stdout or b"").decode().strip()
 
-    def query_counts(self, db=None):
+    def query_counts(self, db=None, dsn=None):
         out = {}
         for key, table in TABLES.items():
             try:
-                out[key] = int(self.query_value(f"SELECT count(*) FROM {table}", db=db) or 0)
+                out[key] = int(self.query_value(f"SELECT count(*) FROM {table}", db=db, dsn=dsn) or 0)
             except Exception:
                 out[key] = 0
         try:
             out["video_settled"] = int(self.query_value(
-                f"SELECT count(*) FROM {TABLES['video_reservations']} WHERE state LIKE '%settled'", db=db) or 0)
+                f"SELECT count(*) FROM {TABLES['video_reservations']} WHERE state LIKE '%settled'",
+                db=db, dsn=dsn) or 0)
         except Exception:
             out["video_settled"] = 0
         return out
@@ -1049,15 +1050,16 @@ class SSHRuntime(Runtime):
             raise RuntimeError("pg_dump failed")
         return ts
 
-    def restore_db(self, path, target_db):
+    def restore_db(self, path, target_db=None):
         ts = utcnow()
-        admin = replace_db(self.pg_dsn, "postgres")
-        subprocess.run(["psql", admin, "-c", f'DROP DATABASE IF EXISTS "{target_db}"'], check=True,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        subprocess.run(["psql", admin, "-c", f'CREATE DATABASE "{target_db}"'], check=True,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # The owner supplies a separate disposable restore database. Reset
+        # its schema rather than creating databases, which needs privileges
+        # the acceptance role may not have.
+        subprocess.run(["psql", self.restore_dsn, "-v", "ON_ERROR_STOP=1", "-c",
+                        "DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public"],
+                       check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         with open(path, "rb") as fh:
-            proc = subprocess.run(["psql", replace_db(self.pg_dsn, target_db), "-v", "ON_ERROR_STOP=1"],
+            proc = subprocess.run(["psql", self.restore_dsn, "-v", "ON_ERROR_STOP=1"],
                                   stdin=fh, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         if proc.returncode != 0:
             raise RuntimeError("psql restore failed")
@@ -1330,13 +1332,14 @@ class Drill:
         dump_path = self.evidence / "shared.sql"
         dump_ts = self.rt.dump_db(dump_path)
         source_counts = self.rt.query_counts()
-        restore_ts = self.rt.restore_db(dump_path, "nexaroute_ha652_restored")
         if isinstance(self.rt, SSHRuntime):
+            restore_ts = self.rt.restore_db(dump_path)
             restored_ready = self.rt.start_replica("c", db_dsn=self.rt.restore_dsn)
-            restored_counts = self.rt.query_counts(db="nexaroute_ha652_restored")
+            restored_counts = self.rt.query_counts(dsn=self.rt.restore_dsn)
         else:
+            restore_ts = self.rt.restore_db(dump_path, self.rt.restore_db_name)
             restored_ready = self.rt.start_replica("c", restored=True)
-            restored_counts = self.rt.query_counts(db="nexaroute_ha652_restored")
+            restored_counts = self.rt.query_counts(db=self.rt.restore_db_name)
         self.require(restored_counts["video_jobs"] == source_counts["video_jobs"], sid,
                      f"restored job count {restored_counts['video_jobs']} != {source_counts['video_jobs']}")
         job_id = getattr(self, "_video_for_later", None)
