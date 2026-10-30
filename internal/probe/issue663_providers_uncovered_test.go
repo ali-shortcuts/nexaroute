@@ -281,10 +281,23 @@ func TestIssue663ProvidersScheduleRecoveryQueueFullCallback(t *testing.T) {
 	if e.isCurrentRecovery(task) {
 		t.Fatal("queue-full timer callback did not clear the recovery task")
 	}
+	// The timer callback clears the task and then publishes the event on
+	// its own goroutine, so a snapshot taken the moment the clear becomes
+	// visible can race the publish under CI scheduling load (3 CI failures
+	// with the task cleared but the event not yet visible). Poll for the
+	// event within the same bound instead of snapshotting once; the
+	// assertion is unchanged — the event must still be published.
+	eventDeadline := time.Now().Add(2 * time.Second)
 	found := false
-	for _, ev := range bus.Snapshot() {
-		if ev.Kind == "recovery_queue_full" && ev.Deployment == "p/m" {
-			found = true
+	for time.Now().Before(eventDeadline) && !found {
+		for _, ev := range bus.Snapshot() {
+			if ev.Kind == "recovery_queue_full" && ev.Deployment == "p/m" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			time.Sleep(5 * time.Millisecond)
 		}
 	}
 	if !found {

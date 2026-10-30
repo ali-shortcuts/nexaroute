@@ -1485,7 +1485,7 @@ func TestContinue95GatewayVaultAcceptHelpers(t *testing.T) {
 	for i := range key {
 		key[i] = byte(i + 2)
 	}
-	if check := runVaultAcceptPutGet(ctx, failHelper, "secret/data/x", key, addr, "synthetic-token"); check.Status != externalStatusFail {
+	if check := runVaultAcceptPutGet(ctx, failHelper, "secret/data/x", key, addr, "synthetic-token", 30); check.Status != externalStatusFail {
 		t.Fatalf("put/get failing helper check=%+v", check)
 	}
 	// Helper that succeeds silently on put but returns a different 32-byte
@@ -1495,7 +1495,7 @@ func TestContinue95GatewayVaultAcceptHelpers(t *testing.T) {
 		mismatchKey[i] = byte(i + 11)
 	}
 	diffHelper := Continue95GatewayHelperScript(t, `read op ref; if [ "$op" = "put" ]; then exit 0; fi; printf 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA='`)
-	if check := runVaultAcceptPutGet(ctx, diffHelper, "secret/data/x", mismatchKey, addr, "synthetic-token"); check.Status != externalStatusFail || !strings.Contains(check.Reason, "same 32-byte key") {
+	if check := runVaultAcceptPutGet(ctx, diffHelper, "secret/data/x", mismatchKey, addr, "synthetic-token", 30); check.Status != externalStatusFail || !strings.Contains(check.Reason, "same 32-byte key") {
 		t.Fatalf("put/get mismatch check=%+v", check)
 	}
 	// Decrypt check: valid key passes; short key fails at encrypt.
@@ -1510,14 +1510,14 @@ func TestContinue95GatewayVaultAcceptHelpers(t *testing.T) {
 	// bytes on error, so the stdout-after-failure branches in these two
 	// checks are unreachable by construction; see the report).
 	noisyFail := Continue95GatewayHelperScript(t, "echo synthetic-noise; exit 3")
-	if check := runVaultAcceptWrongToken(ctx, noisyFail, "secret/data/x", addr); check.Status != externalStatusPass {
+	if check := runVaultAcceptWrongToken(ctx, noisyFail, "secret/data/x", addr, 30); check.Status != externalStatusPass {
 		t.Fatalf("wrong-token failing-helper check=%+v", check)
 	}
-	if check := runVaultAcceptOutage(ctx, noisyFail, "secret/data/x", "http://127.0.0.1:1", "synthetic-token"); check.Status != externalStatusPass {
+	if check := runVaultAcceptOutage(ctx, noisyFail, "secret/data/x", "http://127.0.0.1:1", "synthetic-token", 30); check.Status != externalStatusPass {
 		t.Fatalf("outage failing-helper check=%+v", check)
 	}
 	// A helper that succeeds against the outage endpoint must FAIL.
-	if check := runVaultAcceptOutage(ctx, execHelper, "secret/data/x", "http://127.0.0.1:1", "synthetic-token"); check.Status != externalStatusFail {
+	if check := runVaultAcceptOutage(ctx, execHelper, "secret/data/x", "http://127.0.0.1:1", "synthetic-token", 30); check.Status != externalStatusFail {
 		t.Fatalf("outage succeeding-helper check=%+v", check)
 	}
 	// Revoked-token: child creation failure blocks; child creation with
@@ -1525,13 +1525,13 @@ func TestContinue95GatewayVaultAcceptHelpers(t *testing.T) {
 	revokeFailAddr, _ := Continue95GatewayVaultServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
 	})
-	if check := runVaultAcceptRevokedToken(ctx, client, execHelper, "secret/data/x", revokeFailAddr, "synthetic-token", time.Second); check.Status != externalStatusBlocked {
+	if check := runVaultAcceptRevokedToken(ctx, client, execHelper, "secret/data/x", revokeFailAddr, "synthetic-token", time.Second, 30); check.Status != externalStatusBlocked {
 		t.Fatalf("revoked blocked check=%+v", check)
 	}
 	emptyTokenAddr, _ := Continue95GatewayVaultServer(t, func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"auth":{}}`))
 	})
-	if check := runVaultAcceptRevokedToken(ctx, client, execHelper, "secret/data/x", emptyTokenAddr, "synthetic-token", time.Second); check.Status != externalStatusFail {
+	if check := runVaultAcceptRevokedToken(ctx, client, execHelper, "secret/data/x", emptyTokenAddr, "synthetic-token", time.Second, 30); check.Status != externalStatusFail {
 		t.Fatalf("revoked empty-token check=%+v", check)
 	}
 	// Cleanup: metadata path derivation is covered above; cleanup with a

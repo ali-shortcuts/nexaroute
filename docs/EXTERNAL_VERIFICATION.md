@@ -208,6 +208,39 @@ master-key byte, DEK, wrapped DEK, envelope string, or customer secret is
 recorded here. No production/HSM claim is made or changed by this record.
 This record does NOT close issue #649.
 
+#### Re-check record — 2026-10-30 (main `8ac484e`, issue #649 still OPEN)
+
+On 2026-10-30 the acceptance was re-attempted from current main
+`8ac484e` (merge of PR #750; the `nxs2` Transit code and docs inspected
+on `2c5f583` are byte-identical on `8ac484e` for
+`internal/secrets/vault_transit.go`, `internal/secrets/envelope.go`,
+`internal/secrets/migration.go`, `cmd/gateway/secrets.go`,
+`docs/EXTERNAL_VERIFICATION.md`, and `docs/SECURITY.md`). Every live step
+of the procedure above remains **NOT_RUN / BLOCKED**: zero live Vault
+calls were made, no local Vault dev server was used as acceptance
+evidence, and no second implementation was created. The missing input is
+unchanged from 2026-10-29: an operator-authorized disposable Transit
+instance (address ownership), a dedicated Transit key name, a
+least-privilege policy (`encrypt`/`decrypt`/`rewrap` on that key only), a
+token-injection method (by name only), and written operator authorization.
+Environment check by names/counts only (no values read):
+`VAULT_ADDR`, `VAULT_TOKEN`, `VAULT_TOKEN_FILE`,
+`NEXAROUTE_KEY_PROVIDER`, `NEXAROUTE_TRANSIT_ENABLED`,
+`NEXAROUTE_TRANSIT_MOUNT`, `NEXAROUTE_TRANSIT_KEY`, `VAULT_NAMESPACE` —
+none set (present_count 0, nonempty_count 0, proven numerically).
+
+Local health only (fake Vault API, never acceptance; Go 1.27.0):
+`internal/secrets` suite PASS plain and with `-race`, `cmd/gateway`
+focused Transit tests PASS plain and with `-race` (migrate/rewrap
+commands, Secrets Transit CLI, restore-verify Transit, backup Transit
+manifest error), `gofmt`/`go vet` clean on both packages. Full
+`verify.sh` was not run locally (known VM per-package timeout artifact);
+CI on this change is the gate and is pending at the time of writing, not
+claimed green. `docs/SECURITY.md` is unchanged by this re-check because
+its Transit claim — not production-verified, no real run executed —
+remains true. This record does NOT close issue #649, and fake-API tests
+do not close this acceptance.
+
 ## 3. Headless OS keyring
 
 Local state: the linux provider shells out to `secret-tool`
@@ -339,3 +372,46 @@ artifact, not from this section) and #664 (bounded CI soak smoke
 recorded as PASS in docs/reports/ISSUE664_CI_SMOKE_2026-10-29.md;
 long-form multi-hour soak NOT_RUN, live items NOT_RUN, no RPO/RTO
 reported). Neither #653 nor #664 is closed by this audit.
+
+## Gate audit 2026-10-29 (umbrella #654) — statuses unchanged
+
+Re-verified 2026-10-29 evening against main `bb5865f`: issues #654, #646,
+#648, #649, #650, #651 all still OPEN. The audit itself produced no live
+acceptance evidence (no provider calls, no staging Vault, no cluster, no
+model inference). Per-issue matrix (implementation readiness / fixture
+evidence / true external acceptance / exact missing resource):
+
+- #646 (LLM canaries): harness + runbook on main; fixture/loopback PASS
+  only; live BLOCKED on one written operator comment naming providers +
+  models + approved tenant + approved spend, credentials via named env
+  vars only.
+- #648 (Vault KV): loopback PASS 10/12 on the pre-hardening check set
+  (disposable Vault v2.2.1, 2026-10-27); staging BLOCKED on written
+  authorization + staging address + KV v2 mount + dedicated empty path +
+  least-privilege token by name; HA / long renewal / AppRole / K8s auth /
+  Transit NOT_RUN.
+- #649 (Vault Transit): implementation on main via #670; live NOT_RUN;
+  unblock package = written authorization + disposable instance + dedicated
+  key + least-privilege policy (encrypt/decrypt/rewrap on that key) + token
+  injection by name only.
+- #650 (K8s/Helm): offline/render PASS; live NOT_RUN — needs an authorized
+  host with docker + kind + kubectl + helm + delegated cgroups (the script
+  creates its own disposable kind cluster; no operator cluster grant is
+  needed). Safe-failure phases (misconfigured config / down dependency /
+  missing Secret) are specified but not implemented; chart versions
+  (0.1.0/0.22.0) are deliberately untouched (owner release-policy
+  decision).
+- #651 (ComfyUI): harness on main; live NOT_RUN — needs a provisioned
+  server + compatible model/workflow with passing node mapping + suitable
+  (GPU-preferred) compute + written authorization. Setup-only per owner
+  decision 2026-10-29; no model download, no inference on this VM.
+
+Umbrella checklist staleness (not silently rewritten): the #654 body still
+reads #649 as NOT IMPLEMENTED though its implementation merged via #670.
+#647 closed 2026-10-29 and has since reopened, so its unchecked box in the
+#654 body is current again and its live acceptance remains outstanding. The accompanying
+hardening PR (branch `supervisor/gates654-acceptance-hardening`, review
+only) closes the three #648 harness gaps (KV v2 metadata probe, root-token
+refusal, helper timeout propagation), reconciles ADR 0007's status line,
+and documents the #650 safe-failure gap; it merges nothing and closes no
+issue.

@@ -42,7 +42,16 @@ func TestGatewayDeadlineErrorContract(t *testing.T) {
 	expiredRoute := func() context.Context {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
 		t.Cleanup(cancel)
-		time.Sleep(5 * time.Millisecond)
+		// Wait for the timer to actually fire instead of sleeping a fixed
+		// interval: under load the timer goroutine can run later than a
+		// fixed sleep, which made this setup flake. The assertion is
+		// unchanged: the context must expire, and the bound only caps
+		// how long the test waits for that fact.
+		select {
+		case <-ctx.Done():
+		case <-time.After(5 * time.Second):
+			t.Fatal("test setup: route context did not expire")
+		}
 		if ctx.Err() != context.DeadlineExceeded {
 			t.Fatal("test setup: route context did not expire")
 		}
