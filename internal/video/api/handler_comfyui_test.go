@@ -113,3 +113,45 @@ func TestHandlerServesComfyUIAssetThroughGateway(t *testing.T) {
 		t.Fatalf("tampered asset body=%s, want asset_integrity_error", afterTamper.Body.String())
 	}
 }
+
+// A stored asset record whose file is gone must not be served and
+// must not read as a transient outage: the file can never come back
+// by retrying, so the gateway answers 404, not 503. Fixture only.
+func TestHandlerComfyUIAssetMissingFileReturnsNotFound(t *testing.T) {
+	h := newTestHandler(true)
+	root := t.TempDir()
+	local, err := storage.NewLocal(root, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.Assets = local
+	ctx := context.Background()
+	asset, err := local.Put(ctx, video.Asset{
+		ID: "prompt-ok-10-gone.mp4", Kind: "video", Filename: "gone.mp4",
+		ContentType: "video/mp4",
+		Metadata: map[string]string{
+			"project_id": "comfyui-acceptance", "job_id": "job-comfyui",
+			"provider": "comfyui", "node_id": "10", "filename": "gone.mp4",
+			"subfolder": "renders", "type": "output",
+		},
+	}, []byte("comfyui video bytes"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := video.NewJob("job-comfyui", validAPIRequest())
+	job.State = video.StateCompleted
+	job.OutputAssets = []video.Asset{asset}
+	if err := h.Store.Create(ctx, job); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(asset.URI); err != nil {
+		t.Fatal(err)
+	}
+	got := performJSON(h, http.MethodGet, "/v1/video/jobs/job-comfyui/assets/prompt-ok-10-gone.mp4", nil, "Bearer test-token")
+	if got.Code != http.StatusNotFound {
+		t.Fatalf("missing-file asset status=%d, want 404", got.Code)
+	}
+	if !strings.Contains(got.Body.String(), "asset_not_found") {
+		t.Fatalf("missing-file asset body=%s, want asset_not_found", got.Body.String())
+	}
+}

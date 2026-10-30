@@ -568,17 +568,23 @@ func (p *ComfyUI) downloadComfyOutputs(ctx context.Context, status video.Provide
 	// record still claims its own SHA-256. Compare the stored names
 	// the sink will actually use, not the raw filenames: distinct
 	// supplied names can collide after sanitization ("a b.mp4" and
-	// "a_b.mp4", or ".." and "asset.bin"). Refuse the whole download
+	// "a_b.mp4", or ".." and "asset.bin"). Fold case as well: on
+	// Linux the two names are distinct files, but on
+	// case-insensitive filesystems (default macOS APFS, Windows)
+	// the sink's rename would still overwrite the first asset, so
+	// a case-variant pair is the same self-inconsistency and is
+	// refused on every platform. Refuse the whole download
 	// up front instead of persisting a partial, self-inconsistent
 	// set: the caller fails closed with nothing written, and the
 	// operator can disambiguate the workflow.
 	seenNames := make(map[string]struct{}, len(status.Outputs))
 	for _, asset := range status.Outputs {
 		name := storage.StoredName(asset.Filename)
-		if _, dup := seenNames[name]; dup {
+		folded := strings.ToLower(name)
+		if _, dup := seenNames[folded]; dup {
 			return nil, fmt.Errorf("ComfyUI completion lists duplicate video output filename %q; refusing to overwrite a stored asset", name)
 		}
-		seenNames[name] = struct{}{}
+		seenNames[folded] = struct{}{}
 	}
 	result := make([]video.Asset, 0, len(status.Outputs))
 	for _, asset := range status.Outputs {
