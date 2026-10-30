@@ -186,3 +186,8 @@ Rebase note (2026-10-30): branch rebased onto main `197c57b` (merge of
 `4b830cd`). This rebase also fixes the `--help` header truncation (D1)
 and the stale coverage-limits paragraph (D2); both are help-text only.
 Fresh CI on the new head is authoritative for the rebased branch.
+
+Rebase note (2026-10-30): branch rebased onto main `48db094` (merge of
+#748); prior verification was performed on head `6408a4f` (base
+`4b830cd`) and the `197c57b`/`410ce2a`/`28aed30` rebases. Fresh CI on
+the new head is authoritative for the rebased branch.
