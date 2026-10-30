@@ -208,6 +208,39 @@ master-key byte, DEK, wrapped DEK, envelope string, or customer secret is
 recorded here. No production/HSM claim is made or changed by this record.
 This record does NOT close issue #649.
 
+#### Re-check record — 2026-10-30 (main `8ac484e`, issue #649 still OPEN)
+
+On 2026-10-30 the acceptance was re-attempted from current main
+`8ac484e` (merge of PR #750; the `nxs2` Transit code and docs inspected
+on `2c5f583` are byte-identical on `8ac484e` for
+`internal/secrets/vault_transit.go`, `internal/secrets/envelope.go`,
+`internal/secrets/migration.go`, `cmd/gateway/secrets.go`,
+`docs/EXTERNAL_VERIFICATION.md`, and `docs/SECURITY.md`). Every live step
+of the procedure above remains **NOT_RUN / BLOCKED**: zero live Vault
+calls were made, no local Vault dev server was used as acceptance
+evidence, and no second implementation was created. The missing input is
+unchanged from 2026-10-29: an operator-authorized disposable Transit
+instance (address ownership), a dedicated Transit key name, a
+least-privilege policy (`encrypt`/`decrypt`/`rewrap` on that key only), a
+token-injection method (by name only), and written operator authorization.
+Environment check by names/counts only (no values read):
+`VAULT_ADDR`, `VAULT_TOKEN`, `VAULT_TOKEN_FILE`,
+`NEXAROUTE_KEY_PROVIDER`, `NEXAROUTE_TRANSIT_ENABLED`,
+`NEXAROUTE_TRANSIT_MOUNT`, `NEXAROUTE_TRANSIT_KEY`, `VAULT_NAMESPACE` —
+none set (present_count 0, nonempty_count 0, proven numerically).
+
+Local health only (fake Vault API, never acceptance; Go 1.27.0):
+`internal/secrets` suite PASS plain and with `-race`, `cmd/gateway`
+focused Transit tests PASS plain and with `-race` (migrate/rewrap
+commands, Secrets Transit CLI, restore-verify Transit, backup Transit
+manifest error), `gofmt`/`go vet` clean on both packages. Full
+`verify.sh` was not run locally (known VM per-package timeout artifact);
+CI on this change is the gate and is pending at the time of writing, not
+claimed green. `docs/SECURITY.md` is unchanged by this re-check because
+its Transit claim — not production-verified, no real run executed —
+remains true. This record does NOT close issue #649, and fake-API tests
+do not close this acceptance.
+
 ## 3. Headless OS keyring
 
 Local state: the linux provider shells out to `secret-tool`
