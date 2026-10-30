@@ -124,7 +124,17 @@ as an explicit gap, not a claim.
   release is `v0.24.0`. A default `helm install` therefore does not
   install the latest release; pin `image.tag` explicitly (the
   acceptance script always does) until chart versioning is aligned
-  with releases by an owner decision.
+  with releases by an owner decision. That decision is deliberately
+  still open: no workflow in this repository publishes container
+  images to `ghcr.io` (zero `ghcr` references outside the chart
+  values), and the existence of a `v0.24.0` image there is
+  unverifiable from the development environment (the Packages API
+  returns 404 for both the user and the organization path, which
+  proves nothing about visibility versus existence). Bumping
+  `appVersion` to `0.24.0` before publication is established would
+  move the default install to an unverified tag, so it is not done
+  here; the bump belongs with a verified publish pipeline, and
+  then `appVersion` and the chart `version` move together.
 - **Rollback caveat**: `helm rollback` restores the previous chart and
   values, but it does not touch an operator-managed config Secret.
   Rolling back a release whose config changed means restoring the
