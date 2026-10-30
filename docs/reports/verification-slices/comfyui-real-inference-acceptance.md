@@ -491,9 +491,12 @@ none of this is real inference):
 - `go test -race ./cmd/gateway/ -run 'TestComfyUIAccept' -count=1 -timeout=360s` — PASS.
 - `go vet ./cmd/gateway ./internal/video/providers ./internal/video/storage ./internal/video/api` — PASS.
 - `gofmt` clean on all touched files.
-- Full `./scripts/verify.sh` is left to CI on the PR; it includes
-  repository-wide and browser gates that this environment cannot
-  provision.
+- `./scripts/verify.sh` — `VERIFY PASS` on this head. It ran the
+  repository-wide unit/integration and race suites, vet, fuzz, release
+  artifact/SBOM/coverage-gate checks, JS syntax checks, and both
+  builds. The browser acceptance step was `SKIPPED` because Python
+  `playwright` is not installed in this sandbox; the script reports
+  that as a local skip, and CI's mandatory browser gate is separate.
 
 Still missing for #651 (owner inputs required before any live run):
 
