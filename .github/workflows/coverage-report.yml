@@ -1,17 +1,19 @@
 name: Coverage report
 
-# Lightweight, uncached statement-coverage measurement. This complements the
+# Uncached statement-coverage measurement PLUS a fail-closed 95% gate
+# (scripts/check-coverage-threshold.py). This complements the
 # intentionally manual Architecture & Quality Audit; it does not lower or
-# replace that audit's 85% acceptance gate.
+# replace that audit's 85% acceptance gate. The gate runs on every pull
+# request (no paths filter): a required status check must be satisfiable
+# on every PR, including docs-only ones, or it blocks them forever.
+# The Go toolchain is pinned to 1.27.3, the version of the authoritative
+# CI measurement; go.mod only requires go >= 1.25.0, so 1.27.3 is
+# compatible, and pinning removes the 1.27.x toolchain drift that made
+# identical files count differently under Go 1.27.0 vs 1.27.3.
 on:
   push:
     branches: ["main"]
   pull_request:
-    paths:
-      - "**/*.go"
-      - "go.mod"
-      - "go.sum"
-      - ".github/workflows/coverage-report.yml"
   workflow_dispatch:
 
 permissions:
@@ -33,7 +35,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.27.x'
+          go-version: '1.27.3'
           cache: false
 
       - name: Measure package and repository coverage
@@ -69,6 +71,36 @@ jobs:
             echo ' ```text'
             cat .artifacts/coverage/packages.txt
             echo ' ```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Test the coverage gate itself
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/check-coverage-threshold_test.py
+
+      - name: Enforce 95% coverage gate (fail-closed)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The profile is recomputed by the gate script itself; a
+          # missing, empty, malformed, or summary-mismatched artifact
+          # fails here (exit 2), and sub-95% coverage fails (exit 1).
+          # Either failure fails this job, so the check cannot pass
+          # without evidence.
+          total_line="$(tail -n 1 .artifacts/coverage/functions.txt)"
+          python3 scripts/check-coverage-threshold.py \
+            --profile .artifacts/coverage/coverage.out \
+            --total-line "$total_line" \
+            --threshold 95.0 \
+            --commit "${GITHUB_SHA}" \
+            --go-version "$(go version)"
+          {
+            echo "## Coverage gate"
+            echo
+            echo "- Gate: **PASS at 95.0% threshold** (see job log for the full report)"
+            echo "- Commit: `$GITHUB_SHA`"
+            echo "- Toolchain: `$(go version)`"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload reproducible coverage evidence
