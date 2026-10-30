@@ -429,3 +429,8 @@ itself. The verdict is unchanged: NOT_RUN/BLOCKED.
   overwrite the first; the operator must disambiguate the workflow.
 - Workflow/model licenses, model files, and resource allocation remain the
   operator's responsibility.
+
+Rebase note (2026-10-30): branch rebased onto main `28aed30` (merge of
+#759); prior verification was performed on head `97e3872` (base
+`6ca0c68`) and the `197c57b`/`410ce2a` rebases. Fresh CI on the new
+head is authoritative for the rebased branch.
