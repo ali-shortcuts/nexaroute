@@ -63,7 +63,7 @@ planned_stages=()
 for _i in $(seq 1 "$rounds"); do
   planned_stages+=("stress-round-$_i")
 done
-planned_stages+=("http-hot-reload-soak" "recovery-soak" "video-recovery-soak" "outage-provider" "outage-gameday" "race-soak" "budget-leak-slope")
+planned_stages+=("http-hot-reload-soak" "recovery-soak" "video-recovery-soak" "outage-provider" "outage-gameday" "cancellation" "race-soak" "budget-leak-slope")
 
 stage_recorded() { # name -> 0 if recorded
   local _wanted="$1" _result _name
@@ -336,7 +336,8 @@ write_summary() {
     printf '| Outage storm | `internal/httpapi/gameday_test.go` (also the explicit `outage-gameday` stage) |\n'
     printf '| Flapping upstream recovery + hot config reload | `TestSoakFlappingUpstreamFailureSemantics`, `TestSoakConcurrentTrafficAndHotReload` |\n'
     printf '| Sustained mixed workload / resource sampling | `TestSoakConcurrentTrafficAndHotReload` with `NEXAROUTE_SOAK_DURATION` |\n'
-    printf '| Budget leak / disconnect / cancellation | `TestSoakBudgetLeakSlope` and the budget leak disconnect matrix |\n'
+    printf '| Client/context cancellation, retry-safety cancellation | `TestContextCancellationWhileProviderConcurrencyBlocked`, `TestClientCancellationDoesNotQuarantineHealthyReadyModel`, `TestRetrySafetyCancellationStopsFailover` (also the explicit `cancellation` stage) |\n'
+    printf '| Budget leak / disconnect | `TestSoakBudgetLeakSlope` and the budget leak disconnect matrix |\n'
     printf '| Recovery probe flood + repeated recovery cycles | `TestStressRecoveryFloodFiveThousandDeploymentsStaysBounded`, `TestSoakRepeatedRecoveryCyclesReleaseState` |\n'
     printf '| Event flood / slow subscribers / overload admission | `TestStressConcurrentEventAndSnapshotFlood`, `TestStressGlobalAdmissionKeepsControlPlaneResponsive` |\n'
     printf '| 10k-deployment routing | `TestStressTenThousandDeploymentsConcurrentIndexedRouting` |\n\n'
@@ -386,13 +387,17 @@ run_stage "recovery-soak" env NEXAROUTE_SOAK=1 go test -timeout=10m -count=1 ./i
 # (they skip without a DSN); see the evidence report.
 run_stage "video-recovery-soak" env NEXAROUTE_SOAK=1 go test -timeout=10m -count=1 -v ./internal/video/cost ./internal/video/queue -run='^TestSoak'
 
-# Explicit loopback outage/recovery stages (issue #664): the same
-# selectors the bounded smoke script runs, so the long soak's fault
-# coverage does not rest only on the flapping-upstream behavior
-# inside the sustained stage. Loopback httptest upstreams only;
-# no paid call, no production cluster, no credentials.
-run_stage "outage-provider" go test -timeout=5m -count=1 ./internal/httpapi -run='^TestFailureInjection'
-run_stage "outage-gameday" go test -timeout=5m -count=1 ./internal/httpapi -run='^TestResilienceGameDay$'
+# Explicit loopback outage/recovery and cancellation stages (issue
+# #664): the same selectors the bounded smoke script runs, so the
+# long soak's fault coverage does not rest only on the
+# flapping-upstream behavior inside the sustained stage. Loopback
+# httptest upstreams only; no paid call, no production cluster, no
+# credentials. -v makes the executed test names part of the stage
+# log, so "the stage ran" can be checked from the artifact instead
+# of inferred from an `ok` line.
+run_stage "outage-provider" go test -v -timeout=5m -count=1 ./internal/httpapi -run='^TestFailureInjection'
+run_stage "outage-gameday" go test -v -timeout=5m -count=1 ./internal/httpapi -run='^TestResilienceGameDay$'
+run_stage "cancellation" go test -v -timeout=5m -count=1 ./internal/httpapi -run='^TestContextCancellationWhileProviderConcurrencyBlocked$|^TestClientCancellationDoesNotQuarantineHealthyReadyModel$|^TestRetrySafetyCancellationStopsFailover$'
 
 # The race stage pins its own short sustained duration: the workflow exports
 # the operator-requested NEXAROUTE_SOAK_DURATION (up to 2h+) to the whole

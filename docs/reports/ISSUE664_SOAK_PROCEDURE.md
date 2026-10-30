@@ -13,7 +13,7 @@ acceptance.
 | Script | `scripts/ci-soak-smoke.sh` | `scripts/soak.sh` |
 | CI wiring | `.github/workflows/ci.yml`, job `ci-soak-smoke` (runs on pull requests and pushes to main, in parallel with `verify`) | `.github/workflows/soak.yml` (workflow_dispatch for long runs; push to main on soak-file changes runs the short 0s shape only) |
 | Duration | Fixed-iteration soak shape; sustained durations above 5m are rejected by the smoke script | Operator-chosen sustained duration, script cap 6h (see the timeout rule below for the workflow-feasible maximum) |
-| Load | Stress selectors identical to `scripts/stress.sh`, loopback outage/cancellation tests, short race soak | Repeated stress rounds (`NEXAROUTE_SOAK_ROUNDS`, default 3, max 20) plus the same soak tests, explicit loopback outage stages (`outage-provider`, `outage-gameday` — the same selectors the smoke script runs), a race soak stage with a pinned short sustained duration, and a budget-leak slope stage |
+| Load | Stress selectors identical to `scripts/stress.sh`, loopback outage/cancellation tests, short race soak | Repeated stress rounds (`NEXAROUTE_SOAK_ROUNDS`, default 3, max 20) plus the same soak tests, explicit loopback outage stages (`outage-provider`, `outage-gameday`), an explicit loopback cancellation stage (`cancellation` — the same selectors the smoke script runs), a race soak stage with a pinned short sustained duration, and a budget-leak slope stage. The outage and cancellation stages run with `-v`, so the executed test names are in the stage log |
 | Report | Sanitized Markdown + JSON under `.artifacts/ci-soak-smoke/<label>/`, uploaded as a CI artifact (90 days) | Sanitized Markdown + JSON under `.artifacts/soak/<label>/`, uploaded as a workflow artifact (90 days). Every stage carries a `failure_summary` (empty for PASS stages), the JSON carries a `resource_sample_summary` (peak goroutines/FDs/heap) and an explicit `not_run` block for the live items; the Soak workflow runs `scripts/check-soak-evidence.py` against the summary (commit, durations, stage completeness, samples, `not_run`) and fails the run when the record is incomplete — see "Validating a report" below |
 | Status today | PASS locally; see `docs/reports/ISSUE664_CI_SMOKE_2026-10-29.md` | NOT RUN (multi-hour). The bounded 0s shape was exercised in `docs/reports/issue664-stress-soak-evidence.md`; that is not a long soak. |
 
@@ -62,7 +62,14 @@ when configuration blocked the run).
    duration, and peak RSS; stages the run never reached are listed as
    SKIPPED. A run that reports SKIPPED stages is an incomplete run,
    even if the stages that did run passed.
-5. Attach the report (Markdown + JSON, plus per-stage logs) to the
+5. Check the sustained stage's measured duration, not just the
+   requested input. `http-hot-reload-soak` must record at least the
+   requested number of seconds; a job that says `duration=2h` but
+   stopped early is not 2h evidence.
+6. Check the outage and cancellation stage logs for the executed test
+   names. Their recorded command is not proof by itself; the `-v` log
+   lines are.
+7. Attach the report (Markdown + JSON, plus per-stage logs) to the
    issue it evidences. Do not summarize a long soak as PASS from the
    job badge alone.
 

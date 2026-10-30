@@ -25,7 +25,8 @@ OTHER_SHA = "abcdef1234567890abcdef1234567890abcdef12"
 SOAK_STAGES = [
     "stress-round-1", "stress-round-2", "stress-round-3",
     "http-hot-reload-soak", "recovery-soak", "video-recovery-soak",
-    "outage-provider", "outage-gameday", "race-soak", "budget-leak-slope",
+    "outage-provider", "outage-gameday", "cancellation", "race-soak",
+    "budget-leak-slope",
 ]
 
 SMOKE_STAGES = [
@@ -58,14 +59,15 @@ def soak_doc(**overrides):
               stage("video-recovery-soak", duration=1),
               stage("outage-provider", duration=30),
               stage("outage-gameday", duration=19),
+              stage("cancellation", duration=21),
               stage("race-soak", duration=183),
               stage("budget-leak-slope", duration=2)]
     doc = {
         "schema": "nexaroute.soak.qualification.v1",
         "commit": SHA,
         "started_at": "2026-10-29T14:23:53Z",
-        "finished_at": "2026-10-29T16:28:49Z",
-        "total_duration_seconds": 7496,
+        "finished_at": "2026-10-29T16:29:10Z",
+        "total_duration_seconds": 7517,
         "stress_rounds": 3,
         "requested_duration": "2h",
         "requested_duration_seconds": 7200,
@@ -174,8 +176,8 @@ class ValidatorTest(unittest.TestCase):
         doc["stages"][3]["failure_summary"] = "test timed out after 2h5m"
         doc["result"] = "FAIL(timeout)"
         doc["exit_code"] = 124
-        doc["total_duration_seconds"] = 7800
-        doc["finished_at"] = "2026-10-29T16:33:53Z"
+        doc["total_duration_seconds"] = 7808
+        doc["finished_at"] = "2026-10-29T16:34:01Z"
         self.assert_valid(doc)
 
     def test_valid_smoke_with_allowed_skipped_race(self):
@@ -190,7 +192,7 @@ class ValidatorTest(unittest.TestCase):
         doc = soak_doc()
         doc["stages"][7] = stage("outage-gameday", status="CANCELLED",
                                   exit_code=None, duration=19)
-        for i in (8, 9):
+        for i in (9, 10):
             doc["stages"][i] = stage(doc["stages"][i]["name"],
                                      status="SKIPPED", exit_code=None,
                                      duration=0)
@@ -204,7 +206,7 @@ class ValidatorTest(unittest.TestCase):
         doc = soak_doc()
         doc["stages"][7] = stage("outage-gameday", status="CANCELLED",
                                   exit_code=None, duration=19)
-        for i in (8, 9):
+        for i in (9, 10):
             doc["stages"][i] = stage(doc["stages"][i]["name"],
                                      status="SKIPPED", exit_code=None,
                                      duration=0)
@@ -216,6 +218,12 @@ class ValidatorTest(unittest.TestCase):
         doc = soak_doc()
         doc["stages"] = [s for s in doc["stages"]
                          if s["name"] != "outage-gameday"]
+        self.assert_invalid(doc, needle="missing stages")
+
+    def test_missing_cancellation_stage_rejected(self):
+        doc = soak_doc()
+        doc["stages"] = [s for s in doc["stages"]
+                         if s["name"] != "cancellation"]
         self.assert_invalid(doc, needle="missing stages")
 
     def test_missing_stress_round_rejected(self):
@@ -299,7 +307,7 @@ class ValidatorTest(unittest.TestCase):
         # Inflate a non-sustained stage so the sum exceeds the total
         # without breaking the wall-clock check (timestamps unchanged
         # would also break it, so move finished_at to match the total).
-        doc["stages"][8] = stage("race-soak", duration=1000)
+        doc["stages"][9] = stage("race-soak", duration=1000)
         self.assert_invalid(doc, needle="sum to")
 
     # Exit status -------------------------------------------------------

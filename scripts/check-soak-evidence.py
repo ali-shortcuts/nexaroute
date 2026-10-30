@@ -83,7 +83,7 @@ SUSTAINED_STAGE = {
 EXPECTED_FIXED_STAGES = {
     "soak": [
         "http-hot-reload-soak", "recovery-soak", "video-recovery-soak",
-        "outage-provider", "outage-gameday", "race-soak",
+        "outage-provider", "outage-gameday", "cancellation", "race-soak",
         "budget-leak-slope",
     ],
     "ci-smoke": [
