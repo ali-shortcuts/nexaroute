@@ -292,7 +292,7 @@ fixtures only — none of this is real inference):
 ## 2026-10-30 rebase + partial-download cleanup (local only, NOT a live run)
 
 - **Rebase:** the five 2026-10-29 commits rebased cleanly onto main
-  `02a43ac` (which includes merged #752, #754, #756) with no
+  `6ca0c68` (which includes merged #752, #754, #756, #741) with no
   conflicts and no content change to the original fixes; the diff
   against main is still exactly the original 7 files plus the new
   changes below.
@@ -345,12 +345,15 @@ fixtures only — none of this is real inference):
   file plus sidecar removed, second delete fails, an
   outside-root URI is refused and its file untouched.
 
-Verification on this head (base `02a43ac`, Go 1.27.0, loopback
+Verification on this head (base `6ca0c68`, Go 1.27.0, loopback
 fixtures only — none of this is real inference):
 
-- Focused plain: providers `TestComfyUI*` ok 3.917 s, storage ok
-  0.996 s, API gateway-retrieval test ok 0.127 s, gateway
-  `TestComfyUIAccept*` ok 1.989 s.
+- Focused plain on the final head: providers `TestComfyUI*` ok
+  2.791 s, storage ok 1.139 s, API ok 0.607 s, gateway
+  `TestComfyUIAccept*` ok 2.311 s. (Earlier, on the 02a43ac-based
+  head: providers 3.917 s, storage 0.996 s, API retrieval 0.127 s,
+  gateway accept 1.989 s; full `./internal/video/...` 13 packages
+  ok on that head.)
 - Focused `-race`: providers `TestComfyUI*` ok 10.275 s,
   storage (full package) ok 4.211 s, API (full package) ok 1.967 s,
   gateway `TestComfyUIAccept*` ok 5.752 s.
