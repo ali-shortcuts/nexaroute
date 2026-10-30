@@ -1888,4 +1888,3 @@ func TestWave3AnthropicDecodeClientGoneUpstreamConnClosed(t *testing.T) {
 		t.Fatal("gateway did not close the upstream connection after client cancel")
 	}
 }
-
