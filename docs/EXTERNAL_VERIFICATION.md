@@ -308,6 +308,86 @@ are preserved.
 Fake-API tests do not close this acceptance. This record does NOT close
 issue #649, and no production/HSM/KMS readiness is claimed.
 
+#### Re-check record — 2026-10-30 (main `7daa36d`, issue #649 still OPEN)
+
+On 2026-10-30 the acceptance was re-attempted from current main
+`7daa36d` (merge of PR #764). The `nxs2` Transit code inspected on
+`8ac484e` is unchanged on `7daa36d` for
+`internal/secrets/vault_transit.go`, `internal/secrets/envelope.go`,
+`internal/secrets/migration.go`, and `cmd/gateway/secrets.go` (diff
+`8ac484e..7daa36d` for those files is empty; only
+`docs/EXTERNAL_VERIFICATION.md` and `docs/adr/0007-vault-transit-envelope-encryption.md`
+moved, by the merged BLOCKED records and an ADR header note). Every live
+step of the procedure above remains **NOT_RUN / BLOCKED**: zero live
+Vault calls were made, no local Vault dev server was used as acceptance
+evidence, and no second implementation was created. The missing input is
+unchanged: an operator-authorized disposable Transit instance (address
+ownership), a dedicated Transit key name, a least-privilege policy
+(`encrypt`/`decrypt`/`rewrap` on that key only), a token-injection
+method (by name only), and written operator authorization naming that
+instance and scope. Environment check by names/counts only (no values
+read): `VAULT_ADDR`, `VAULT_TOKEN`, `VAULT_TOKEN_FILE`,
+`NEXAROUTE_KEY_PROVIDER`, `NEXAROUTE_TRANSIT_ENABLED`,
+`NEXAROUTE_TRANSIT_MOUNT`, `NEXAROUTE_TRANSIT_KEY`, `VAULT_NAMESPACE` —
+none set (8 names checked, 0 present). No message in this turn names an
+instance, key, policy, or injection method, so the directive's step 3
+cannot be executed against a real Vault without that input.
+
+Code work in this re-check (test-only, no production change): one
+demonstrated fake-API gap was closed —
+`TestVaultTransitPerRequestTimeoutAndCancel` in
+`internal/secrets/vault_transit_test.go` pins ADR 0007 §8.3 for the
+Transit provider itself (a hanging Vault fails closed as
+`transit_unavailable` within the per-request timeout with no retry, and
+a caller cancel aborts a hanging request). No earlier test exercised
+the Transit provider against a hanging server: the fake's `slow` field
+was never set, and the only slow-server test covers the KV helper, a
+different path. All other areas named in the task were re-verified as
+already covered by deterministic fake-API tests on this head:
+wrap/unwrap protocol, strict envelope/ciphertext parsing, 64 KiB
+response bound, redacted errors (Vault bodies discarded, token never in
+an error string), redirect refusal, 429/503-only retries, unavailable
+(5xx) / forbidden (401/403) / not-found (404) / invalid-ciphertext
+(400) classes, revoked-version decrypt/rewrap failing closed, no
+local/env fallback (conflict-is-error selection, gate-off makes zero
+Vault calls, existing `.key` ignored), migration rollback restoring the
+original bytes, rewrap failure leaving the file byte-identical, and
+already-latest rewrap writing nothing.
+
+DEK/KEK boundary as implemented (code read, not live-proven): only the
+Transit `encrypt`/`decrypt`/`rewrap` endpoints are called, the token
+travels header-only, the KEK never enters the gateway process, DEKs are
+fresh per secret and the wrapped DEK plus key version are deliberately
+excluded from the local canonical AAD so rewrap does not invalidate
+data. No HSM/KMS isolation is claimed: that would depend on the
+selected Vault topology and key backend, which no live run has proven.
+
+Open drift for the owner's decision (not changed unilaterally): ADR
+0007 §8.4 says version cases (wrong/disabled/destroyed version,
+`min_decryption_version` exceeded) use class
+`transit_key_version_unavailable`, but the code never emits that class
+— every HTTP 400, including a revoked-version decrypt, maps to
+`transit_invalid_ciphertext` (the 400 message does carry the §7.3
+key-version checklist). Fail-closed behavior is preserved either way;
+distinguishing the cases would require classifying Vault's error body,
+which the redaction design deliberately discards, and Vault's exact
+error strings were not available to verify against. Either implement
+body-sniffing classification against a real Vault's observed strings or
+amend the ADR table; until then the class label, not the outcome, is
+the open item.
+
+Local health only (fake Vault API, never acceptance; Go 1.27.0):
+`internal/secrets` suite PASS plain (9.574 s) and with `-race`
+(16.621 s), `cmd/gateway` focused Transit tests PASS plain (1.194 s),
+new timeout/cancel test PASS plain (4.091 s) and with `-race`,
+`gofmt`/`go vet` clean. Full `verify.sh` was not run locally (known VM
+per-package timeout artifact); CI on this change is the gate. No
+production Vault, key, or secret was touched. No token, ciphertext,
+master-key byte, DEK, wrapped DEK, envelope string, or customer secret
+is recorded here. No production/HSM claim is made or changed by this
+record. This record does NOT close issue #649, and fake-API tests do
+not close this acceptance.
+
 ## 3. Headless OS keyring
 
 Local state: the linux provider shells out to `secret-tool`
