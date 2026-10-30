@@ -63,7 +63,7 @@ planned_stages=()
 for _i in $(seq 1 "$rounds"); do
   planned_stages+=("stress-round-$_i")
 done
-planned_stages+=("http-hot-reload-soak" "recovery-soak" "video-recovery-soak" "race-soak" "budget-leak-slope")
+planned_stages+=("http-hot-reload-soak" "recovery-soak" "video-recovery-soak" "outage-provider" "outage-gameday" "race-soak" "budget-leak-slope")
 
 stage_recorded() { # name -> 0 if recorded
   local _wanted="$1" _result _name
@@ -136,6 +136,55 @@ json_escape() {
   printf '%s' "$value"
 }
 
+# First FAIL/panic/race/timeout lines of a stage log, so a failed
+# stage can be triaged from the summary alone (mirrors the smoke
+# script). PASS stages get an empty summary, not a missing key:
+# scripts/check-soak-evidence.py requires the key on every stage.
+failure_summary() { # log
+  local log="$1"
+  if [[ ! -s "$log" ]]; then
+    printf 'no log output\n'
+    return
+  fi
+  local hits
+  hits="$(grep -aE 'FAIL|panic:|DATA RACE|test timed out' "$log" 2>/dev/null | head -n 20 || true)"
+  if [[ -n "$hits" ]]; then
+    printf '%s\n' "$hits"
+  else
+    printf 'see stage log (no FAIL/panic line matched)\n'
+  fi
+}
+
+# Peak goroutines/FDs/heap over the hot-reload JSONL samples, or a
+# plain statement when the stage produced none. Mirrors the smoke
+# script's summarizer; the raw samples file stays authoritative.
+sample_summary() {
+  if [[ ! -s "$samples_file" ]]; then
+    printf 'none (hot-reload stage did not produce samples)\n'
+    return
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$samples_file" <<'PY' 2>/dev/null || printf 'samples present but could not be summarized\n'
+import json, sys
+count = 0
+peak_g = peak_fd = peak_heap = 0
+with open(sys.argv[1]) as f:
+    for line in f:
+        try:
+            s = json.loads(line)
+        except Exception:
+            continue
+        count += 1
+        peak_g = max(peak_g, s.get("goroutines", 0))
+        peak_fd = max(peak_fd, s.get("open_fds", 0))
+        peak_heap = max(peak_heap, s.get("heap_alloc_bytes", 0))
+print("samples=%d peak_goroutines=%d peak_open_fds=%d peak_heap_alloc_bytes=%d" % (count, peak_g, peak_fd, peak_heap))
+PY
+  else
+    printf 'samples present at %s (python3 unavailable for summary)\n' "$samples_file"
+  fi
+}
+
 write_json_summary() {
   local rc="$1"
   local finished_at="$2"
@@ -177,8 +226,9 @@ write_json_summary() {
     else
       printf 'null,\n'
     fi
+    printf '  "resource_sample_summary": "%s",\n' "$(json_escape "$(sample_summary | tr '\n' ' ')")"
     printf '  "stages": [\n'
-    local first=1 result name status stage_duration rss log planned
+    local first=1 result name status stage_duration rss log planned fail_text
     for result in "${stage_results[@]}"; do
       IFS='|' read -r name status stage_duration rss log <<< "$result"
       if (( first == 0 )); then
@@ -187,8 +237,12 @@ write_json_summary() {
       first=0
       local stage_status="FAIL"
       (( status == 0 )) && stage_status="PASS"
-      printf '    {"name": "%s", "status": "%s", "exit_code": %s, "duration_seconds": %s, "max_rss": "%s", "log": "%s"}' \
-        "$(json_escape "$name")" "$stage_status" "$status" "$stage_duration" "$(json_escape "$rss")" "$(json_escape "$log")"
+      fail_text=""
+      if (( status != 0 )); then
+        fail_text="$(failure_summary "$log")"
+      fi
+      printf '    {"name": "%s", "status": "%s", "exit_code": %s, "duration_seconds": %s, "max_rss": "%s", "log": "%s", "failure_summary": "%s"}' \
+        "$(json_escape "$name")" "$stage_status" "$status" "$stage_duration" "$(json_escape "$rss")" "$(json_escape "$log")" "$(json_escape "$fail_text")"
     done
     for planned in "${planned_stages[@]}"; do
       if ! stage_recorded "$planned"; then
@@ -196,11 +250,18 @@ write_json_summary() {
           printf ',\n'
         fi
         first=0
-        printf '    {"name": "%s", "status": "SKIPPED", "exit_code": null, "duration_seconds": 0, "max_rss": "n/a", "log": ""}' \
+        printf '    {"name": "%s", "status": "SKIPPED", "exit_code": null, "duration_seconds": 0, "max_rss": "n/a", "log": "", "failure_summary": ""}' \
           "$(json_escape "$planned")"
       fi
     done
-    printf '\n  ]\n'
+    printf '\n  ],\n'
+    printf '  "not_run": [\n'
+    printf '    {"item": "live provider canaries (#646)", "status": "BLOCKED", "reason": "needs explicit operator authorization and approved credentials"},\n'
+    printf '    {"item": "live OIDC / Vault / Kubernetes / ComfyUI / multi-host HA + RPO/RTO (#647-#652)", "status": "BLOCKED", "reason": "needs explicit operator authorization and their own runbooks; no RPO/RTO reported"},\n'
+    printf '    {"item": "production PostgreSQL/Redis failover drill", "status": "NOT_RUN", "reason": "CI drills use disposable service containers; production failover remains UNVERIFIED"},\n'
+    printf '    {"item": "production-traffic SLOs", "status": "NOT_RUN", "reason": "local regression bands in docs/PERFORMANCE_SLO.md are not production SLOs"},\n'
+    printf '    {"item": "live operator/game-day exercise", "status": "NOT_RUN", "reason": "remains UNVERIFIED unless separately run with evidence"}\n'
+    printf '  ]\n'
     printf '}\n'
   } > "$out/summary.json"
 }
@@ -230,6 +291,7 @@ write_summary() {
     if [[ -s "$samples_file" ]]; then
       printf -- '- resource samples: `%s`\n' "$samples_file"
     fi
+    printf -- '- resource sample summary: %s\n' "$(sample_summary | tr '\n' ' ')"
     printf '\n'
     printf '## Environment\n\n```\n'
     go version
@@ -251,11 +313,27 @@ write_summary() {
         printf '| %s | SKIPPED |  | 0s | n/a | (run ended before this stage) |\n' "$planned"
       fi
     done
+    printf '\n## Failure summaries\n\n'
+    local any_fail=0
+    for result in "${stage_results[@]}"; do
+      IFS='|' read -r name status stage_duration rss log <<< "$result"
+      if (( status != 0 )); then
+        any_fail=1
+        printf '### %s (exit %s)\n\n```\n' "$name" "$status"
+        failure_summary "$log"
+        printf '```\n\n'
+      fi
+    done
+    (( any_fail == 0 )) && printf 'None: every stage that ran passed.\n\n'
+    printf '## NOT RUN / BLOCKED (explicit, not claimed)\n\n'
+    printf -- '- Live provider canaries (#646), live OIDC (#647), Vault KV/Transit (#648/#649), live Kubernetes (#650), real ComfyUI (#651), multi-host HA + RPO/RTO drill (#652): BLOCKED/NOT RUN. They need explicit operator authorization and their own runbooks. No RPO/RTO value is reported here.\n'
+    printf -- '- Production PostgreSQL/Redis failover drill: NOT RUN here (CI drills use disposable service containers; production failover remains UNVERIFIED).\n'
+    printf -- '- Production-traffic SLOs and live operator/game-day exercise: NOT RUN (see Scope / UNVERIFIED below).\n'
     printf '\n## Fault classes exercised\n\n'
     printf '| Class | Proving suite |\n'
     printf '|---|---|\n'
-    printf '| Provider refused / hang / mid-stream cut / half-open trial | `internal/httpapi/failure_injection_test.go` |\n'
-    printf '| Outage storm | `internal/httpapi/gameday_test.go` |\n'
+    printf '| Provider refused / hang / mid-stream cut / half-open trial | `internal/httpapi/failure_injection_test.go` (also the explicit `outage-provider` stage) |\n'
+    printf '| Outage storm | `internal/httpapi/gameday_test.go` (also the explicit `outage-gameday` stage) |\n'
     printf '| Flapping upstream recovery + hot config reload | `TestSoakFlappingUpstreamFailureSemantics`, `TestSoakConcurrentTrafficAndHotReload` |\n'
     printf '| Sustained mixed workload / resource sampling | `TestSoakConcurrentTrafficAndHotReload` with `NEXAROUTE_SOAK_DURATION` |\n'
     printf '| Budget leak / disconnect / cancellation | `TestSoakBudgetLeakSlope` and the budget leak disconnect matrix |\n'
@@ -307,6 +385,14 @@ run_stage "recovery-soak" env NEXAROUTE_SOAK=1 go test -timeout=10m -count=1 ./i
 # name says what it is. PG-backed stores are not exercised here
 # (they skip without a DSN); see the evidence report.
 run_stage "video-recovery-soak" env NEXAROUTE_SOAK=1 go test -timeout=10m -count=1 -v ./internal/video/cost ./internal/video/queue -run='^TestSoak'
+
+# Explicit loopback outage/recovery stages (issue #664): the same
+# selectors the bounded smoke script runs, so the long soak's fault
+# coverage does not rest only on the flapping-upstream behavior
+# inside the sustained stage. Loopback httptest upstreams only;
+# no paid call, no production cluster, no credentials.
+run_stage "outage-provider" go test -timeout=5m -count=1 ./internal/httpapi -run='^TestFailureInjection'
+run_stage "outage-gameday" go test -timeout=5m -count=1 ./internal/httpapi -run='^TestResilienceGameDay$'
 
 # The race stage pins its own short sustained duration: the workflow exports
 # the operator-requested NEXAROUTE_SOAK_DURATION (up to 2h+) to the whole
