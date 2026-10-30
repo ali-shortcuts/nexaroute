@@ -485,6 +485,20 @@ func TestComfyUIAcceptSuccessPersistsVerifiedAsset(t *testing.T) {
 		!report.InferenceExecuted || report.EvidenceClass != "loopback" {
 		t.Fatalf("report=%+v", report)
 	}
+	// Fixture labeling pin: a loopback success must carry, in the
+	// report itself, the limitation that its output is harness
+	// evidence only and not real model inference. Without this, a
+	// PASS + inference_executed=true report could be misread as a
+	// live acceptance result.
+	pinned := false
+	for _, lim := range report.Limitations {
+		if strings.Contains(lim, "loopback") && strings.Contains(lim, "harness evidence only") {
+			pinned = true
+		}
+	}
+	if !pinned {
+		t.Fatalf("fixture success report lacks the loopback-not-real-inference limitation: %v", report.Limitations)
+	}
 	if report.Server == nil || report.Server.ComfyUIVersion != "0.3.40" || len(report.Server.Devices) != 1 {
 		t.Fatalf("server metadata=%+v", report.Server)
 	}

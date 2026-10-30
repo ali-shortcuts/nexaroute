@@ -18,6 +18,20 @@ import (
 
 var safeName = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)
 
+// StoredName returns the filename Local.Put will persist for a
+// provider-supplied name: the sanitized basename, with empty/dot names
+// mapped to asset.bin. Providers must use it when checking for
+// collisions, because Put renames silently over an existing file with
+// the same stored name — so two distinct supplied names can collide
+// after sanitization (for example "a b.mp4" and "a_b.mp4").
+func StoredName(name string) string {
+	stored := safeName.ReplaceAllString(filepath.Base(name), "_")
+	if stored == "" || stored == "." || stored == ".." {
+		return "asset.bin"
+	}
+	return stored
+}
+
 type Local struct {
 	Root     string
 	MaxBytes int64
@@ -44,10 +58,7 @@ func (s *Local) Put(_ context.Context, a video.Asset, data []byte) (video.Asset,
 	if s.MaxBytes > 0 && int64(len(data)) > s.MaxBytes {
 		return video.Asset{}, fmt.Errorf("asset exceeds size limit")
 	}
-	name := safeName.ReplaceAllString(filepath.Base(a.Filename), "_")
-	if name == "" || name == "." || name == ".." {
-		name = "asset.bin"
-	}
+	name := StoredName(a.Filename)
 	projectID := safeName.ReplaceAllString(a.Metadata["project_id"], "_")
 	episodeID := safeName.ReplaceAllString(a.Metadata["episode_id"], "_")
 	jobID := safeName.ReplaceAllString(a.Metadata["job_id"], "_")
@@ -173,6 +184,64 @@ func writeMetadataAtomic(path string, data []byte) error {
 		return err
 	}
 	return os.Rename(name, path)
+}
+
+// Delete removes an asset file previously persisted by Put, together
+// with its sidecar metadata, after the same inside-root validation as
+// Open. It removes the named path itself (never following a symlink),
+// so a symlinked asset path can only delete the link, never a target
+// outside the root. Callers use it to roll back a multi-asset download
+// that failed part-way: the assets saved by that call are removed
+// instead of being left as an orphaned partial set. It never deletes
+// an asset it did not validate as inside the root.
+func (s *Local) Delete(_ context.Context, a video.Asset) error {
+	if s == nil || strings.TrimSpace(s.Root) == "" {
+		return fmt.Errorf("storage root is not configured")
+	}
+	if strings.TrimSpace(a.URI) == "" {
+		return fmt.Errorf("asset URI is required")
+	}
+	root, err := filepath.Abs(s.Root)
+	if err != nil {
+		return err
+	}
+	path, err := filepath.Abs(filepath.Clean(a.URI))
+	if err != nil {
+		return err
+	}
+	rel, err := filepath.Rel(root, path)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return ErrAssetOutsideRoot
+	}
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return err
+	}
+	resolvedPath, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return err
+	}
+	rel, err = filepath.Rel(resolvedRoot, resolvedPath)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return ErrAssetSymlinkOutsideRoot
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if info.IsDir() {
+		return fmt.Errorf("asset is not a regular file")
+	}
+	if err := os.Remove(path); err != nil {
+		return err
+	}
+	if err := os.Remove(path + ".json"); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
 }
 
 // ErrAssetOutsideRoot and ErrAssetSymlinkOutsideRoot report that an asset
