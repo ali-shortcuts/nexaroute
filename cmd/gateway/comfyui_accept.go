@@ -343,6 +343,15 @@ func runComfyUIAcceptChecks(report *comfyAcceptReport, cfg config.Config, config
 	if err != nil {
 		addComfyAcceptCheck(report, "comfyui:submit", externalStatusFail,
 			"workflow submission failed: "+err.Error(), submitStart)
+		// ComfyUI has no idempotency key. A transport error, deadline,
+		// or 5xx after the server read /prompt may still have queued
+		// the workflow even though the client never saw a prompt ID.
+		// Say so instead of implying the submission definitely did
+		// not happen; a definite 4xx/node rejection is not ambiguous.
+		if comfySubmitMayHaveBeenAccepted(err) {
+			report.Warnings = append(report.Warnings,
+				"Submission failed without a ComfyUI prompt ID and may have been accepted server-side before the connection failed. ComfyUI provides no idempotency key, so inspect the ComfyUI queue before retrying to avoid a duplicate prompt.")
+		}
 		comfyAcceptFailClosed(report, runDir, nil)
 		return 1
 	}
@@ -656,6 +665,29 @@ func verifyComfyAcceptAssetAccess(runDir string, asset video.Asset) error {
 	return nil
 }
 
+// comfySubmitMayHaveBeenAccepted reports whether a failed submission can
+// still have queued a remote workflow. A 4xx response or an explicit
+// node-error rejection means ComfyUI refused the prompt. Transport
+// failures, deadlines, oversized/broken responses, and 5xx responses
+// happen after the request may have been read, and ComfyUI has no
+// idempotency key, so those cases are ambiguous.
+func comfySubmitMayHaveBeenAccepted(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	for _, definite := range []string{
+		"reported node errors",
+		"did not return a prompt_id",
+		"returned HTTP 4",
+	} {
+		if strings.Contains(msg, definite) {
+			return false
+		}
+	}
+	return true
+}
+
 func comfyAcceptFailClosed(report *comfyAcceptReport, runDir string, provider *providers.ComfyUI) {
 	cleanup := &comfyAcceptCleanup{RemoteStatus: externalStatusNotRun}
 	if provider != nil && report.Job != nil && strings.TrimSpace(report.Job.PromptID) != "" {
@@ -678,7 +710,7 @@ func comfyAcceptFailClosed(report *comfyAcceptReport, runDir string, provider *p
 			cleanup.RemoteReason = err.Error()
 		}
 	} else {
-		cleanup.RemoteReason = "no ComfyUI prompt ID was returned; there is no remote entry to target for cleanup"
+		cleanup.RemoteReason = "no ComfyUI prompt ID was returned, so no queue entry can be targeted; check the server queue before retrying because an ambiguous submission may still have been accepted"
 	}
 	if runDir != "" {
 		if err := os.RemoveAll(runDir); err != nil {

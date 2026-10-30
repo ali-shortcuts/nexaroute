@@ -118,6 +118,36 @@ func TestComfyUIAcceptStalledJobTimesOutWithoutResubmit(t *testing.T) {
 	}
 }
 
+// If the remote queue check itself fails, cleanup must record FAIL but
+// still remove the local partial workspace: a remote cleanup failure
+// must never retain unverified local output or read as success.
+func TestComfyUIAcceptCleanupRemoteErrorStillRemovesLocal(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/queue" {
+			http.Error(w, "queue unavailable", http.StatusInternalServerError)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+	provider := comfyRegressionProvider(t, server.URL)
+	runDir := filepath.Join(t.TempDir(), "run")
+	if err := os.MkdirAll(runDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	report := &comfyAcceptReport{Job: &comfyAcceptJob{PromptID: "cleanup-1"}}
+	comfyAcceptFailClosed(report, runDir, provider)
+	if report.Cleanup == nil || !report.Cleanup.RemoteAttempted || report.Cleanup.RemoteStatus != externalStatusFail {
+		t.Fatalf("cleanup=%+v, want remote attempted + FAIL", report.Cleanup)
+	}
+	if report.Cleanup.LocalStatus != externalStatusPass {
+		t.Fatalf("cleanup local=%q, want PASS despite the remote error", report.Cleanup.LocalStatus)
+	}
+	if _, err := os.Stat(runDir); !os.IsNotExist(err) {
+		t.Fatalf("partial workspace survived remote cleanup failure: %v", err)
+	}
+}
+
 // Cleanup of a running prompt must record BLOCKED, never send a global
 // interrupt, and still remove the local partial workspace.
 func TestComfyUIAcceptRunningPromptCleanupIsBlockedNotInterrupt(t *testing.T) {
