@@ -1,10 +1,12 @@
 package secrets
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -43,9 +45,28 @@ func runProviderCommand(ctx context.Context, command, op, ref string, key []byte
 	}
 	cmd := exec.CommandContext(ctx, command)
 	cmd.Stdin = strings.NewReader(input)
-	out, err := cmd.Output()
+	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, fmt.Errorf("key provider command failed: %w", err)
+	}
+	stderr := &cappedBuffer{limit: 64 << 10}
+	cmd.Stderr = stderr
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("key provider command failed: %w", err)
+	}
+	out, readErr := io.ReadAll(io.LimitReader(stdout, providerCommandMaxOutput+1))
+	if readErr == nil && len(out) > providerCommandMaxOutput {
+		// Stop reading: the helper is flooding stdout. Kill it instead
+		// of waiting on a pipe nobody drains, then fail closed.
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return nil, errors.New("key provider output exceeds the 1 MiB size bound")
+	}
+	if waitErr := cmd.Wait(); waitErr != nil {
+		return nil, fmt.Errorf("key provider command failed: %w", waitErr)
+	}
+	if readErr != nil {
+		return nil, fmt.Errorf("key provider command failed: %w", readErr)
 	}
 	if op == "put" {
 		return nil, nil
@@ -55,6 +76,33 @@ func runProviderCommand(ctx context.Context, command, op, ref string, key []byte
 		return nil, errors.New("key provider returned an invalid 32-byte key")
 	}
 	return decoded, nil
+}
+
+// providerCommandMaxOutput bounds what runProviderCommand reads from a
+// helper's stdout. The shipped Vault helper already caps its Vault
+// response at 1 MiB, and vault-accept caps its Vault responses at the
+// same bound; without a gateway-side bound, an arbitrary command
+// provider could make the gateway buffer unbounded output before the
+// 32-byte key check rejects it. The bound applies to both get and put:
+// a put helper is expected to print nothing.
+const providerCommandMaxOutput = 1 << 20
+
+// cappedBuffer keeps at most limit bytes, discarding the rest, so a
+// chatty helper cannot grow process memory through stderr. Stderr
+// content is never included in returned errors.
+type cappedBuffer struct {
+	buf   bytes.Buffer
+	limit int
+}
+
+func (b *cappedBuffer) Write(p []byte) (int, error) {
+	if b.buf.Len() >= b.limit {
+		return len(p), nil
+	}
+	if n := b.limit - b.buf.Len(); n < len(p) {
+		p = p[:n]
+	}
+	return b.buf.Write(p)
 }
 
 // EnvProvider is useful when a secret injector exposes a base64-encoded key.
