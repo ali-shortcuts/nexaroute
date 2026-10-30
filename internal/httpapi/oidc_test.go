@@ -58,6 +58,9 @@ type inProcessOIDCProvider struct {
 	mu                            sync.Mutex
 	flow                          oidcTestFlow
 	lastVerifier                  string
+	lastClientID                  string
+	lastRedirectURI               string
+	lastGrantType                 string
 	issuerOverride                string
 	authorizationEndpointOverride string
 	tokenEndpointOverride         string
@@ -164,6 +167,9 @@ func (p *inProcessOIDCProvider) setFlow(flow oidcTestFlow) {
 	p.mu.Lock()
 	p.flow = flow
 	p.lastVerifier = ""
+	p.lastClientID = ""
+	p.lastRedirectURI = ""
+	p.lastGrantType = ""
 	p.mu.Unlock()
 }
 
@@ -171,6 +177,16 @@ func (p *inProcessOIDCProvider) verifier() string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.lastVerifier
+}
+
+// tokenRequest returns the parameters the gateway sent to the token
+// endpoint on the last exchange. The fixture records them so tests can
+// prove the configured client ID, callback, and grant type are used,
+// not silently substituted.
+func (p *inProcessOIDCProvider) tokenRequest() (clientID, redirectURI, grantType string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.lastClientID, p.lastRedirectURI, p.lastGrantType
 }
 
 func (p *inProcessOIDCProvider) token(w http.ResponseWriter, r *http.Request) {
@@ -182,9 +198,18 @@ func (p *inProcessOIDCProvider) token(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad form", http.StatusBadRequest)
 		return
 	}
+	clientID := r.Form.Get("client_id")
+	if clientID == "" {
+		if basicUser, _, ok := r.BasicAuth(); ok {
+			clientID = basicUser
+		}
+	}
 	p.mu.Lock()
 	flow := p.flow
 	p.lastVerifier = r.Form.Get("code_verifier")
+	p.lastClientID = clientID
+	p.lastRedirectURI = r.Form.Get("redirect_uri")
+	p.lastGrantType = r.Form.Get("grant_type")
 	p.mu.Unlock()
 	if flow.mode == "token-error" {
 		writeTestJSONStatus(w, http.StatusBadRequest, map[string]any{"error": "invalid_grant"})

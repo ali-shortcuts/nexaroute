@@ -38,7 +38,7 @@ runbook procedure exists for it.
 
 | Dependency | Real-system status | Evidence / procedure |
 |---|---|---|
-| OIDC identity provider (browser login) | EXECUTED LOCALLY 2026-10-24; deterministic local coverage expanded 2026-10-27 (issuer pinning, JWKS overlap/rotation, unique state/nonce/PKCE, unmapped/ambiguous roles, logout revocation failure, audit/persistence failure) — live organizational tenant remains **BLOCKED/UNVERIFIED** because no operator-owned credentials/config were supplied | §1 below; `docs/reports/LOCAL_ACCEPTANCE_2026-10-24.md` §3; `docs/reports/OIDC_LIVE_TENANT_ACCEPTANCE_647.md` |
+| OIDC identity provider (browser login) | EXECUTED LOCALLY 2026-10-24; deterministic local coverage expanded 2026-10-27 (issuer pinning, JWKS overlap/rotation, unique state/nonce/PKCE, unmapped/ambiguous roles, logout revocation failure, audit/persistence failure); 2026-10-30 re-audit added exact-issuer trailing-slash, cross-transaction nonce, token-exchange client/redirect/grant, and duplicate/mixed role tests. Live organizational tenant remains **BLOCKED/UNVERIFIED** (NOT_RUN) because no operator-owned tenant, credentials, or authorization were supplied | §1 below; `docs/reports/LOCAL_ACCEPTANCE_2026-10-24.md` §3; `docs/reports/OIDC_LIVE_TENANT_ACCEPTANCE_647.md` |
 | HashiCorp Vault (KV helper) | EXECUTED LOCALLY 2026-10-24 — real Vault v2.2.1 (dev mode) round-trip via the shipped helper PASS; gateway key custody + decrypt verify PASS; wrong token fails closed; a production Vault cluster remains UNVERIFIED. 2026-10-27: opt-in `vault-accept` automation added and fixture-tested, then executed live against a disposable non-dev single-node Vault (file storage, TLS, loopback): `vault-accept` PASS 10/12 (`evidence_class=loopback`), plus gateway boot, expired-token, outage, restart, and rotation-recovery checks PASS; a real operator staging run and HA/failover remain BLOCKED/NOT_RUN | §2 below; `docs/reports/LOCAL_ACCEPTANCE_2026-10-24.md` §5; `docs/reports/verification-slices/vault-kv-acceptance.md` |
 | HashiCorp Vault Transit envelope mode | IMPLEMENTED — `nxs2` envelope path and fake Vault Transit API contract tests pass; a real Vault Transit acceptance run is **NOT_RUN**, so no production/HSM claim is made | §2 below; `docs/adr/0007-vault-transit-envelope-encryption.md` |
 | OS keyring (secret-tool) | EXECUTED LOCALLY 2026-10-24 — real Secret Service (gnome-keyring) store/lookup PASS; gateway decrypt verify via the keyring provider PASS; a production desktop keyring remains operator-verified | §3 below; `docs/reports/LOCAL_ACCEPTANCE_2026-10-24.md` §6 |
@@ -62,14 +62,18 @@ rollover logins work and tokens signed by a retired key are rejected
 trusting a process-lifetime cache). The deterministic suite also covers
 old-key logins during the overlap window, unique state/nonce/PKCE per
 transaction, unmapped/missing/conflicting/malformed role claims, failed
-logout revocation, and session/audit persistence failures. These are
-local protocol tests, not live-tenant evidence.
+logout revocation, and session/audit persistence failures. The
+2026-10-30 re-audit added exact-issuer equality beyond an obviously
+hostile issuer, cross-transaction nonce binding, token-exchange
+client/redirect/grant assertions, and duplicate/mixed role-value
+handling. These are local protocol tests, not live-tenant evidence.
 
-The exact live-tenant checklist is **BLOCKED** until an operator supplies
-a real tenant and credentials:
+The exact live-tenant checklist is **BLOCKED/NOT_RUN** until an
+operator supplies a real tenant and credentials:
 [`OIDC_LIVE_TENANT_ACCEPTANCE_647.md`](reports/OIDC_LIVE_TENANT_ACCEPTANCE_647.md).
-No credentials or configuration were available for this pass, so nothing
-below may be marked live-verified from the local suite alone.
+No credentials, tenant, or run authorization were available for the
+2026-10-30 re-audit, so nothing below may be marked live-verified from
+the local suite alone.
 
 Procedure (any conformant provider — Keycloak, Auth0, Entra ID,
 Okta, Google):
