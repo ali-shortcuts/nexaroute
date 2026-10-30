@@ -257,6 +257,35 @@ func (p *VaultTransitProvider) RewrapDEK(ctx context.Context, wrapped string) (s
 	return out.Data.Ciphertext, version, nil
 }
 
+// transitVersionUnavailable inspects a bounded Vault error body only to
+// choose between the two §8.4 classes for HTTP 400. The body is never
+// included in an error, logged, or retained; the recognized phrases are
+// Vault's documented key-version failure messages (too old/new, deleted,
+// destroyed, disabled, or missing). Tampered ciphertext stays
+// transit_invalid_ciphertext.
+func transitVersionUnavailable(op string, body []byte) bool {
+	if op != "decrypt" && op != "rewrap" {
+		return false
+	}
+	s := strings.ToLower(string(body))
+	if strings.Contains(s, "key has been deleted") || strings.Contains(s, "key is disabled") {
+		return true
+	}
+	if !strings.Contains(s, "version") {
+		return false
+	}
+	for _, marker := range []string{
+		"not available", "unavailable", "deleted", "destroyed",
+		"too old", "too new", "disallowed", "does not exist",
+		"no such key version", "min_decryption_version",
+	} {
+		if strings.Contains(s, marker) {
+			return true
+		}
+	}
+	return false
+}
+
 // do performs one Transit operation with §8.3 retries: at most 2 retries,
 // only for HTTP 429 and 503, backoff 100 ms then 300 ms plus jitter, and
 // only within the caller's overall context budget. Timeouts and all other
@@ -336,6 +365,9 @@ func (p *VaultTransitProvider) doOnce(ctx context.Context, op string, body []byt
 	case resp.StatusCode == http.StatusNotFound:
 		return resp.StatusCode, false, transitErrorf(ClassTransitKeyNotFound, op, "Vault Transit %s key not found (HTTP 404); check the mount/key/namespace configuration", op)
 	case resp.StatusCode == http.StatusBadRequest:
+		if transitVersionUnavailable(op, data) {
+			return resp.StatusCode, false, transitErrorf(ClassTransitKeyVersionUnavailable, op, "Vault Transit %s rejected a key version (HTTP 400); check the key-version checklist: rewrap status and min_decryption_version before disabling or destroying an old version", op)
+		}
 		return resp.StatusCode, false, transitErrorf(ClassTransitInvalidCiphertext, op, "Vault Transit %s rejected the request (HTTP 400); if this is a decrypt, check the key-version checklist: rewrap status and min_decryption_version", op)
 	case resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable:
 		return resp.StatusCode, true, transitErrorf(ClassTransitUnavailable, op, "Vault Transit %s temporarily unavailable (HTTP %d)", op, resp.StatusCode)

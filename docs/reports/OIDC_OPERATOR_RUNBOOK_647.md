@@ -33,6 +33,14 @@ the operator records the observed offset, never a tolerance the
 gateway does not have). No second runbook is created by this
 consolidation.
 
+2026-10-30 re-audit (main `7daa36d`): no operator-owned tenant,
+credentials, test users, or run authorization were supplied, and no
+live IdP calls were made. The local suite gained four gap tests
+(exact trailing-slash issuer rejection, cross-transaction nonce,
+token-exchange client/redirect/grant, duplicate/mixed role values).
+Every live step in §5–§7 remains **BLOCKED/NOT_RUN**; the exact
+operator inputs are listed in `OIDC_LIVE_TENANT_ACCEPTANCE_647.md`.
+
 ## 0. What blocks this run, and the rules that do not bend
 
 No operator-owned tenant, client, test user, or signing-key access

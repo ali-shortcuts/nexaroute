@@ -1,0 +1,41 @@
+{
+  "schema": "nexaroute.comfyui-acceptance.v1",
+  "generated_at": "2026-10-30T10:19:25Z",
+  "mode": "live",
+  "evidence_class": "",
+  "outcome": "BLOCKED",
+  "inference_executed": false,
+  "bounds": {
+    "job_timeout_seconds": 600,
+    "poll_interval_ms": 2000
+  },
+  "target": {
+    "asset_directory": ".artifacts/comfyui-acceptance",
+    "ffprobe": "ffprobe"
+  },
+  "request": {
+    "duration_seconds": 1,
+    "fps": 24,
+    "prompt_bytes": 78,
+    "prompt_sha256": "7a995505bdd42c0103ea7fbf13a19c58f88021f46bc228628e4179085fd029d3"
+  },
+  "checks": [
+    {
+      "id": "comfyui:preflight",
+      "status": "BLOCKED",
+      "reason": "video.enabled and video.comfyui_enabled must both be true; no ComfyUI target was contacted"
+    },
+    {
+      "id": "comfyui:model_inference",
+      "status": "NOT_RUN",
+      "reason": "actual model inference was not run because no ComfyUI target is provisioned"
+    }
+  ],
+  "limitations": [
+    "Actual model inference is NOT_RUN/BLOCKED unless a provisioned ComfyUI server with a real compatible text-to-video workflow is supplied by the operator.",
+    "A fixture or loopback stub can prove this harness and the adapter contract, but its output is not real model inference and must not be reported as such.",
+    "Playability means ffprobe found a decodable video stream; human visual acceptance is still required for content quality.",
+    "Actual ComfyUI model inference was BLOCKED by missing provisioning, configuration, or verification tooling.",
+    "Actual ComfyUI model inference was NOT_RUN. No fixture output in this report may be described as real video inference."
+  ]
+}

@@ -22,6 +22,15 @@ real organization's IdP.
 | PR #671 — OIDC operator runbook + secret-free live preflight (`supervisor/issue647-oidc-operator-runbook`, head `a455b8ce`) | OPEN, MERGEABLE, all listed CI checks pass (incl. `verify`) |
 | Real organizational tenant (Entra ID, Okta, Auth0, Google, operator Keycloak) | **BLOCKED_EXTERNAL** — no tenant, client, test user, or authorization was supplied for this review; zero live calls were made |
 
+**Post-merge update (2026-10-30, main `7daa36d`):** #666 and #671 were
+superseded by PR #699 (merge `63c75d4`), which also carried the `azp`
+change below; #647 was closed then reopened because no live evidence
+exists. The 2026-10-30 re-audit added four local gap tests (exact
+issuer trailing-slash, cross-transaction nonce, token-exchange
+client/redirect/grant, duplicate/mixed role values). No production
+change and no live accepted tenant. The real tenant remains
+**BLOCKED/UNVERIFIED**.
+
 ## Verification matrix
 
 Each row was checked first-hand in code and, where a test is

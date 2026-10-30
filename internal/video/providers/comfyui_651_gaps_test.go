@@ -153,6 +153,94 @@ func TestComfyUIDownloadRejectsSanitizedDuplicateOutputFilenames(t *testing.T) {
 	}
 }
 
+// The same filename under two different ComfyUI subfolders still maps to
+// one stored basename: the sink keys assets by name inside the job
+// directory, so accepting both would overwrite one set of bytes. The
+// whole download must be refused before any /view request.
+func TestComfyUIDownloadRejectsSameFilenameAcrossSubfolders(t *testing.T) {
+	var viewCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		viewCalls.Add(1)
+		w.Header().Set("Content-Type", "video/mp4")
+		_, _ = w.Write([]byte("x"))
+	}))
+	defer server.Close()
+	provider, err := NewComfyUI(comfyTestConfig(comfyWorkflowFile(t), server.URL), 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := video.ProviderJobStatus{Outputs: []video.Asset{
+		{ID: "p-30-a", Filename: "same.mp4", Metadata: map[string]string{"filename": "same.mp4", "subfolder": "a", "type": "output"}},
+		{ID: "p-31-b", Filename: "same.mp4", Metadata: map[string]string{"filename": "same.mp4", "subfolder": "b", "type": "output"}},
+	}}
+	if _, err := provider.DownloadOutputs(context.Background(), status, &comfyTestSink{}); err == nil || !strings.Contains(err.Error(), "duplicate") {
+		t.Fatalf("DownloadOutputs error=%v, want duplicate rejection", err)
+	}
+	if viewCalls.Load() != 0 {
+		t.Fatalf("view calls=%d, want 0 (rejection must precede any download)", viewCalls.Load())
+	}
+}
+
+// A later asset that fails while being persisted after its bytes were
+// renamed into place must not survive the rollback. The first asset is
+// deleted by DownloadOutputs and the failing asset is removed by the
+// sink itself, so the failed job's directory holds no orphaned file.
+func TestComfyUIDownloadRollsBackWhenLaterPersistenceFails(t *testing.T) {
+	root := t.TempDir()
+	sink, err := storage.NewLocal(root, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobDir := filepath.Join(root, "p", "job-651")
+	if err := os.MkdirAll(jobDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// Make the second asset's metadata sidecar path a directory so the
+	// sink's atomic metadata rename fails after the video bytes land.
+	if err := os.Mkdir(filepath.Join(jobDir, "second.mp4.json"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/view" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "video/mp4")
+		_, _ = w.Write([]byte("bytes-for-" + r.URL.Query().Get("filename")))
+	}))
+	defer server.Close()
+	provider, err := NewComfyUI(comfyTestConfig(comfyWorkflowFile(t), server.URL), 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := video.ProviderJobStatus{Outputs: []video.Asset{
+		{ID: "p-40-first", Filename: "first.mp4", Metadata: map[string]string{"filename": "first.mp4", "type": "output", "project_id": "p", "job_id": "job-651"}},
+		{ID: "p-41-second", Filename: "second.mp4", Metadata: map[string]string{"filename": "second.mp4", "type": "output", "project_id": "p", "job_id": "job-651"}},
+	}}
+	assets, err := provider.DownloadOutputs(context.Background(), status, sink)
+	if err == nil {
+		t.Fatal("DownloadOutputs unexpectedly succeeded although persistence failed")
+	}
+	if assets != nil {
+		t.Fatalf("DownloadOutputs returned %d assets alongside an error, want none", len(assets))
+	}
+	var files []string
+	if err := filepath.Walk(jobDir, func(path string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if !info.IsDir() {
+			files = append(files, path)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 0 {
+		t.Fatalf("failed persistence left files behind: %v", files)
+	}
+}
+
 // A submission whose /prompt request never completes (client context
 // deadline) must result in exactly one POST: no retry, no second prompt,
 // and an error — never a silent success or a duplicate submission.
