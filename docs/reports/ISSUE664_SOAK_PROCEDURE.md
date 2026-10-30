@@ -82,13 +82,32 @@ For a smoke summary use `--kind ci-smoke` (the race stage may be
 passed in `--allow-skipped race-soak-short` when it was disabled with
 `NEXAROUTE_CI_SMOKE_RACE=0`; the long soak allows no skipped stage).
 The checker exits 0 only when the schema, commit, timestamps, total
-duration, requested sustained duration, stage completeness and
-exit-code consistency, resource samples, failure summaries, and the
-`not_run` block all check out. Schema gaps in older summaries (no
-`failure_summary` key, no `resource_sample_summary`, no `not_run`
-block) are reported as warnings or errors, not silently ignored — so
+duration, requested sustained duration, runtime identity (`go version`
+string, host identity, numeric CPU count), planned-stage presence
+(every planned stage exactly once; the producers list unreached stages
+as SKIPPED, so an absent stage is a hole), stage exit-code consistency
+(including the top-level exit code, null exit code and zero duration
+for SKIPPED stages, and no PASS overall with a failed, blocked,
+cancelled, or unallowed-skipped stage), sequential stage durations
+that do not outlast the total, resource samples, failure summaries,
+and the `not_run` block all check out. A report that is internally
+consistent but records a failure, a timeout, or a cancellation is
+VALID evidence of that outcome; a cancelled run leaves its unreached
+stages SKIPPED, so it needs `--allow-skipped` for those stages to
+validate as a complete record of the cancellation. Deterministic
+tests for the checker (valid, failed, incomplete, timed-out, and
+cancelled evidence) live in `scripts/test-check-soak-evidence.py`
+and run with `python3 scripts/test-check-soak-evidence.py`.
+Schema gaps in older summaries (no `failure_summary` key, no
+`resource_sample_summary`, no `not_run` block, no explicit outage
+stages) are reported as warnings or errors, not silently ignored — so
 an old summary that fails only on those fields is a schema gap, not
-a run failure, and must be described that way.
+a run failure, and must be described that way. In particular the 2h
+run on `bb5865f` (run 40891002045) predates the explicit outage
+stages and the `not_run` block: under the hardened checker it flags
+exactly those two gaps, which does not change its sustained-duration
+record (7209s covered of 7200s requested, all 8 stages PASS, total
+7447s) and must not be re-described as a run on any newer head.
 
 ## What neither half does
 

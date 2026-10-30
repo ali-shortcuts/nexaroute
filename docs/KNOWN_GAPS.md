@@ -483,8 +483,12 @@ opt-in via the Soak workflow (`workflow_dispatch`) on a suitable runner
 - Evidence (validator + outage stages, 2026-10-29): `docs/reports/ISSUE664_SOAK_VALIDATOR_2026-10-29.md`
   — bounded local soak PASS, 8/8 stages, code commit `808ebde`, Go 1.27.0, 952s
   wall time (0s sustained shape, not a long soak); the Soak workflow now
-  validates its summary (commit, durations, completeness, samples,
-  `not_run`) and the long soak runs explicit loopback outage stages.
+  validates its summary (commit, durations, runtime identity,
+  planned-stage presence, exit-code consistency, samples, `not_run`)
+  and the
+  long soak runs explicit loopback outage stages. The checker itself
+  has deterministic tests (`scripts/test-check-soak-evidence.py`) for
+  valid, failed, incomplete, timed-out, and cancelled evidence.
   Long-form multi-hour soak on this head: NOT RUN. The 2h run on the
   previous head `bb5865f` (run 40891002045) was still in_progress at
   2026-10-29T15:50:44Z; its outcome is reported separately on #664/#653.
