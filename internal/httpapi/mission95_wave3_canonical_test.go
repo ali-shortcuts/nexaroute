@@ -460,7 +460,10 @@ func TestWave3AnthropicNativeStreamingUsage(t *testing.T) {
 
 func TestWave3AnthropicDecodeClientGone(t *testing.T) {
 	entered := make(chan struct{})
+	release := make(chan struct{})
 	var once sync.Once
+	var releaseOnce sync.Once
+	releaseUpstream := func() { releaseOnce.Do(func() { close(release) }) }
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		once.Do(func() { close(entered) })
 		w.Header().Set("Content-Type", "application/json")
@@ -468,9 +471,15 @@ func TestWave3AnthropicDecodeClientGone(t *testing.T) {
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
 		}
-		<-r.Context().Done()
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
 	}))
 	defer up.Close()
+	// Register cleanup after up.Close so a failing assertion still releases
+	// the deliberately blocked upstream before httptest waits for connections.
+	defer releaseUpstream()
 	s := wave3Gateway(t, []config.ProviderConfig{wave3Provider("a", "anthropic_compatible", up.URL, "m", "upstream-model", []string{"cm"})}, func(cfg *config.Config) {
 		cfg.Routing.Strategy = "priority"
 	})
@@ -1090,7 +1099,10 @@ func TestWave3ResponsesMalformedFailover(t *testing.T) {
 
 func TestWave3ResponsesUsageErrorClientGone(t *testing.T) {
 	entered := make(chan struct{})
+	release := make(chan struct{})
 	var once sync.Once
+	var releaseOnce sync.Once
+	releaseUpstream := func() { releaseOnce.Do(func() { close(release) }) }
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		once.Do(func() { close(entered) })
 		w.Header().Set("Content-Type", "application/json")
@@ -1098,9 +1110,15 @@ func TestWave3ResponsesUsageErrorClientGone(t *testing.T) {
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
 		}
-		<-r.Context().Done()
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
 	}))
 	defer up.Close()
+	// Register cleanup after up.Close so a failing assertion still releases
+	// the deliberately blocked upstream before httptest waits for connections.
+	defer releaseUpstream()
 	s := wave3Gateway(t, []config.ProviderConfig{
 		wave3Provider("a", "openai_compatible", up.URL, "m", "upstream-model", []string{"cm"}),
 	}, func(cfg *config.Config) { cfg.Routing.Strategy = "priority" })
