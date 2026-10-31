@@ -151,7 +151,7 @@ succeeds on it.
 
 1. Push this branch, open the PR (review-ready, unmerged), and
    let CI/Security/Coverage run on its exact head.
-2. If CI is green, run `scripts/release-gate-status.sh <head>`
+2. If CI is green, run `bash scripts/release-gate-status.sh <head>`
    and record the run links/artifacts in the PR; do not merge
    on script output alone without review.
 3. For a release candidate: dispatch Audit (lint/staticcheck/
