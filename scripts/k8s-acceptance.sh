@@ -247,12 +247,41 @@ pf_pid=""
 kubectl_ns() { kubectl -n "$NAMESPACE" "$@"; }
 
 # port_forward <local-port>: start a port-forward to the release Service
-# in the background; call stop_port_forward when done.
+# in the background; call stop_port_forward when done. The retry loop
+# also checks the background process is still alive: in run 41216200624
+# the rollback port-forward died with "lost connection to pod" when
+# its target pod was terminated, and curl then failed for the full
+# 60s against a dead forwarder. A dead forwarder is now a failure
+# with the forwarder log preserved, not a silent 60s timeout.
 port_forward() {
   kubectl_ns port-forward "svc/${RELEASE}-${CHART##*/}" "$1:8080" >"$OUT_DIR/port-forward.log" 2>&1 &
   pf_pid=$!
   for _ in $(seq 1 30); do
+    if ! kill -0 "$pf_pid" 2>/dev/null; then
+      printf 'port-forward process died (see port-forward.log)\n' >&2
+      return 1
+    fi
     curl -fsS "http://127.0.0.1:$1/healthz" >/dev/null 2>&1 && return 0
+    sleep 2
+  done
+  printf 'port-forward did not become ready\n' >&2
+  return 1
+}
+# port_forward_pod <pod-name> <local-port>: same, but to one named pod.
+# Used for rollback: the rolled-back pod intentionally returns
+# /readyz 503 (no enabled deployments), so it is never Ready, and a
+# Service port-forward may have no Ready endpoint to attach to. A
+# pod port-forward contacts exactly the intended rolled-back pod,
+# never a stale Service endpoint or a terminating predecessor.
+port_forward_pod() {
+  kubectl_ns port-forward "pod/$1" "$2:8080" >"$OUT_DIR/port-forward.log" 2>&1 &
+  pf_pid=$!
+  for _ in $(seq 1 30); do
+    if ! kill -0 "$pf_pid" 2>/dev/null; then
+      printf 'port-forward process died (see port-forward.log)\n' >&2
+      return 1
+    fi
+    curl -fsS "http://127.0.0.1:$2/healthz" >/dev/null 2>&1 && return 0
     sleep 2
   done
   printf 'port-forward did not become ready\n' >&2
@@ -262,36 +291,120 @@ stop_port_forward() {
   if [[ -n "$pf_pid" ]]; then kill "$pf_pid" 2>/dev/null || true; pf_pid=""; fi
 }
 
-http_code() { curl -s -o "$OUT_DIR/last-body.txt" -w '%{http_code}' "$1" || echo "curl-failed"; }
-
-# wait_pod_ready <timeout>: wait for a Running pod whose Ready condition
-# is true; the selector is the chart's instance label.
-#
-# Polling, not `kubectl wait` on the selector: during an upgrade or
-# rollback, the selector matches both the terminating old pod (Ready
-# goes False, then the pod disappears) and the new pod. `kubectl wait`
-# on a selector fails or times out when a selected pod is deleted
-# during the wait, even when the replacement pod becomes Ready in
-# seconds — observed in run 41216200624 on dccd254, where the upgraded
-# pod was Ready at 15:54:05 and /healthz, /readyz and /v1/models all
-# served 200, yet the selector wait still reported failure. Polling
-# for ANY currently-Running Ready pod with the selector is the
-# correct readiness assertion for a Recreate deployment.
-wait_pod_ready() {
-  local timeout_s="${1%s}"
-  local deadline=$(( $(date +%s) + timeout_s ))
-  while [[ $(date +%s) -lt $deadline ]]; do
-    if kubectl_ns get pod -l "app.kubernetes.io/instance=$RELEASE" -o json 2>/dev/null | python3 -c '
+# ready_pod_matches <pod-json-file> <expected-hash-or-empty>: exit 0
+# iff the JSON lists a pod that is Running, Ready, not terminating
+# (no deletionTimestamp), and, when a hash is given, carries that
+# pod-template-hash label. This is the deterministic, testable core
+# of the readiness wait: an old terminating pod (deletionTimestamp
+# set, or an old hash) must never satisfy it, and a Ready pod from
+# the wrong revision must never satisfy it either.
+ready_pod_matches() {
+  python3 - "$1" "$2" <<'PYEOF'
 import json, sys
-pods = json.load(sys.stdin)["items"]
+pods = json.load(open(sys.argv[1]))["items"]
+want = sys.argv[2]
 for pod in pods:
-    if pod.get("status", {}).get("phase") != "Running":
+    meta, status = pod.get("metadata", {}), pod.get("status", {})
+    if status.get("phase") != "Running":
         continue
-    for cond in pod.get("status", {}).get("conditions", []):
+    if meta.get("deletionTimestamp"):
+        continue
+    if want and meta.get("labels", {}).get("pod-template-hash") != want:
+        continue
+    for cond in status.get("conditions", []):
         if cond.get("type") == "Ready" and cond.get("status") == "True":
             sys.exit(0)
 sys.exit(1)
-'; then
+PYEOF
+}
+# running_pod_matches <pod-json-file> <expected-hash>: like
+# ready_pod_matches but without the Ready condition, for the
+# rollback phase where /readyz 503 by design means never Ready.
+running_pod_matches() {
+  python3 - "$1" "$2" <<'PYEOF'
+import json, sys
+pods = json.load(open(sys.argv[1]))["items"]
+want = sys.argv[2]
+for pod in pods:
+    meta, status = pod.get("metadata", {}), pod.get("status", {})
+    if status.get("phase") != "Running":
+        continue
+    if meta.get("deletionTimestamp"):
+        continue
+    if want and meta.get("labels", {}).get("pod-template-hash") != want:
+        continue
+    sys.exit(0)
+sys.exit(1)
+PYEOF
+}
+# deployment_pod_hash: the pod-template-hash of the current
+# Deployment revision, i.e. the pod revision a wait must match.
+deployment_pod_hash() {
+  kubectl_ns get deploy "${RELEASE}-nexaroute" -o jsonpath='{.spec.template.metadata.labels.pod-template-hash}' 2>/dev/null
+}
+# current_pod_name_for_hash <hash>: newest non-terminating pod name
+# for a revision, for targeted port-forwarding and diagnostics.
+current_pod_name_for_hash() {
+  kubectl_ns get pod -l "app.kubernetes.io/instance=$RELEASE" -o json 2>/dev/null | python3 -c '
+import json, sys
+want = sys.argv[1]
+best = None
+for pod in json.load(sys.stdin)["items"]:
+    meta = pod.get("metadata", {})
+    if meta.get("deletionTimestamp"):
+        continue
+    if meta.get("labels", {}).get("pod-template-hash") != want:
+        continue
+    created = meta.get("creationTimestamp", "")
+    if best is None or created > best[0]:
+        best = (created, meta["name"])
+print(best[1] if best else "")
+' "$1"
+}
+# capture_failure_evidence <name>: snapshot pod, events, Deployment,
+# ReplicaSets and container logs immediately at a failure point, so
+# later phases cannot overwrite the failing pod evidence. The
+# end-of-run capture still runs; this is the per-failure copy.
+capture_failure_evidence() {
+  local name="$1"
+  kubectl_ns get pod -l "app.kubernetes.io/instance=$RELEASE" -o yaml >"$OUT_DIR/${name}-pod.yaml" 2>/dev/null || true
+  kubectl_ns get events -o yaml >"$OUT_DIR/${name}-events.yaml" 2>/dev/null || true
+  kubectl_ns describe "deploy/${RELEASE}-nexaroute" >"$OUT_DIR/${name}-deploy.txt" 2>/dev/null || true
+  kubectl_ns get rs -l "app.kubernetes.io/instance=$RELEASE" -o yaml >"$OUT_DIR/${name}-replicasets.yaml" 2>/dev/null || true
+  kubectl_ns logs -l "app.kubernetes.io/instance=$RELEASE" --tail=200 >"$OUT_DIR/${name}-pod.log" 2>/dev/null || true
+}
+
+http_code() { curl -s -o "$OUT_DIR/last-body.txt" -w '%{http_code}' "$1" || echo "curl-failed"; }
+
+# wait_pod_ready <timeout> [hash]: poll for a Running, Ready,
+# non-terminating pod, optionally for one revision hash. Polling,
+# not `kubectl wait` on the selector: during a Recreate
+# upgrade/rollback the selector matches both the terminating old
+# pod and the new pod, and `kubectl wait` fails when a selected
+# pod is deleted during the wait — observed in run 41216200624 on
+# dccd254, where the upgraded pod was Ready at 15:54:05 and
+# /healthz, /readyz and /v1/models all served 200, yet the
+# selector wait still reported failure.
+wait_pod_ready() {
+  local timeout_s="${1%s}" want="${2:-}"
+  local deadline=$(( $(date +%s) + timeout_s ))
+  while [[ $(date +%s) -lt $deadline ]]; do
+    if kubectl_ns get pod -l "app.kubernetes.io/instance=$RELEASE" -o json >"$OUT_DIR/wait-pod.json" 2>/dev/null \
+        && ready_pod_matches "$OUT_DIR/wait-pod.json" "$want"; then
+      return 0
+    fi
+    sleep 5
+  done
+  return 1
+}
+# wait_pod_running <timeout> <hash>: same, without Ready, for
+# rollback (see running_pod_matches).
+wait_pod_running() {
+  local timeout_s="${1%s}" want="$2"
+  local deadline=$(( $(date +%s) + timeout_s ))
+  while [[ $(date +%s) -lt $deadline ]]; do
+    if kubectl_ns get pod -l "app.kubernetes.io/instance=$RELEASE" -o json >"$OUT_DIR/wait-pod.json" 2>/dev/null \
+        && running_pod_matches "$OUT_DIR/wait-pod.json" "$want"; then
       return 0
     fi
     sleep 5
@@ -504,7 +617,9 @@ PY
   sleep 120
   assert_never_ready "failed rollout (unpullable image) never Ready" "app.kubernetes.io/instance=$RELEASE"
   helm rollback "$RELEASE" -n "$NAMESPACE" >/dev/null
-  if wait_pod_ready 300s; then ok "rollback after failed rollout: pod Ready"; else fail "rollback after failed rollout: pod did not become Ready"; fi
+  local sf_hash
+  sf_hash="$(deployment_pod_hash)"
+  if wait_pod_ready 300s "$sf_hash"; then ok "rollback after failed rollout: pod Ready (revision $sf_hash)"; else fail "rollback after failed rollout: pod did not become Ready (revision $sf_hash)"; capture_failure_evidence "safe-failure-rollback-failure"; fi
   port_forward 18080
   if [[ "$(http_code http://127.0.0.1:18080/readyz)" == "200" ]]; then
     ok "rollback after failed rollout: /readyz 200 again"
@@ -595,7 +710,9 @@ PY
   helm upgrade "$RELEASE" "$CHART" -n "$NAMESPACE" \
     -f "$ACCEPT_VALUES" \
     --set image.tag=accept-current --set image.pullPolicy=Never >/dev/null
-  if wait_pod_ready 300s; then ok "upgraded pod Ready"; else fail "upgraded pod did not become Ready"; fi
+  local upgraded_hash
+  upgraded_hash="$(deployment_pod_hash)"
+  if wait_pod_ready 300s "$upgraded_hash"; then ok "upgraded pod Ready (revision $upgraded_hash)"; else fail "upgraded pod did not become Ready (revision $upgraded_hash)"; capture_failure_evidence "upgrade-failure"; fi
   port_forward 18080
   if [[ "$(http_code http://127.0.0.1:18080/healthz)" == "200" ]]; then
     ok "upgraded /healthz 200"
@@ -670,12 +787,24 @@ PY
   end_ms="$(date +%s%3N)"
   elapsed_ms=$(( end_ms - start_ms ))
   printf 'pod termination took %sms (grace 120s)\n' "$elapsed_ms"
-  # A pod SIGKILLed exactly at its grace is still inside the grace
-  # period; with whole-second timing, 121s was reported for a 120s
-  # grace (run 41216200624), a 1s measurement artifact, not a
-  # termination failure. Allow 5s of kubectl/client overhead.
-  if [[ "$elapsed_ms" -le 125000 ]]; then ok "pod terminated inside its grace period"; else fail "pod termination exceeded its grace period"; fi
-  if wait_pod_ready 300s; then ok "replacement pod Ready after restart"; else fail "replacement pod did not become Ready"; fi
+  # Millisecond timing separates the two cases whole-second timing
+  # conflated in run 41216200624 (121s reported for a 120s grace):
+  # a pod that exits at 119999ms is inside its grace, a pod that
+  # needs a SIGKILL at 120000ms is not. The grace is therefore NOT
+  # widened to 125s to absorb client overhead: kubectl delete
+  # returns when the pod object disappears, so its overhead is
+  # already inside the measured interval, and the timestamps
+  # above are the evidence. A termination above 60s is also
+  # logged as a warning, because the gateway drain cap is 35s:
+  # a near-grace termination is suspicious even when it passes,
+  # and must not be silently absorbed into a PASS.
+  if [[ "$elapsed_ms" -gt 60000 && "$elapsed_ms" -le 120000 ]]; then
+    printf 'WARNING: termination took %sms, near the 120s grace (drain cap 35s); investigate if recurring\n' "$elapsed_ms"
+  fi
+  if [[ "$elapsed_ms" -le 120000 ]]; then ok "pod terminated inside its grace period"; else fail "pod termination exceeded its grace period"; capture_failure_evidence "termination-failure"; fi
+  local restart_hash
+  restart_hash="$(deployment_pod_hash)"
+  if wait_pod_ready 300s "$restart_hash"; then ok "replacement pod Ready after restart (revision $restart_hash)"; else fail "replacement pod did not become Ready (revision $restart_hash)"; capture_failure_evidence "restart-failure"; fi
   if [[ "$(kubectl_ns get pvc -l "app.kubernetes.io/instance=$RELEASE" -o jsonpath='{.items[0].metadata.uid}')" == "$pvc_uid" ]]; then
     ok "same PVC retained across pod restart"
   else fail "PVC changed across pod restart"; fi
@@ -687,22 +816,48 @@ PY
   # rollback does not touch it), then roll back to revision 1.
   replace_config_secret "$OUT_DIR/base-config.json"
   helm rollback "$RELEASE" 1 -n "$NAMESPACE" >/dev/null
-  if ! kubectl_ns wait --for=jsonpath='{.status.phase}'=Running "pod" \
-    -l "app.kubernetes.io/instance=$RELEASE" --timeout=300s >/dev/null 2>&1; then
-    printf 'rollback pod did not reach Running within 300s\n' >&2
+  # Rollback diagnosis (run 41216200624): the old script waited for
+  # phase=Running on the selector, which the still-terminating
+  # predecessor already satisfies, then port-forwarded to the
+  # Service, whose endpoints may exclude a pod that is never Ready.
+  # The rolled-back pod returns /readyz 503 by design (no enabled
+  # deployments), so it is never Ready by construction. Wait
+  # instead for a Running, non-terminating pod of the rolled-back
+  # revision, then port-forward to THAT pod by name, and check
+  # /healthz (must be 200) and /readyz (must be 503) separately.
+  # A missing Running rollback pod is a hard failure with
+  # evidence captured here, not a warning followed by a
+  # port-forward that can only fail.
+  local rollback_hash rollback_pod
+  rollback_hash="$(deployment_pod_hash)"
+  if wait_pod_running 300s "$rollback_hash"; then
+    ok "rolled back pod Running (revision $rollback_hash)"
+  else
+    fail "rolled back pod did not reach Running (revision $rollback_hash)"; capture_failure_evidence "rollback-failure"
   fi
-  port_forward 18080
-  if [[ "$(http_code http://127.0.0.1:18080/readyz)" == "503" ]]; then
-    ok "rolled back: /readyz 503 again (preceding chart + base config)"
-  else fail "rolled back /readyz expected 503"; fi
-  stop_port_forward
+  rollback_pod="$(current_pod_name_for_hash "$rollback_hash")"
+  if [[ -z "$rollback_pod" ]]; then
+    fail "rolled back pod name could not be determined (revision $rollback_hash)"; capture_failure_evidence "rollback-failure"
+  elif ! port_forward_pod "$rollback_pod" 18080; then
+    fail "rolled back port-forward did not become ready (pod $rollback_pod)"; capture_failure_evidence "rollback-failure"
+  else
+    if [[ "$(http_code http://127.0.0.1:18080/healthz)" == "200" ]]; then
+      ok "rolled back: /healthz 200"
+    else fail "rolled back /healthz expected 200"; capture_failure_evidence "rollback-failure"; fi
+    if [[ "$(http_code http://127.0.0.1:18080/readyz)" == "503" ]]; then
+      ok "rolled back: /readyz 503 again (preceding chart + base config)"
+    else fail "rolled back /readyz expected 503"; capture_failure_evidence "rollback-failure"; fi
+    stop_port_forward
+  fi
 
   # Forward again so the cluster is left on the current chart.
   replace_config_secret "$ACCEPT_CONFIG"
   helm upgrade "$RELEASE" "$CHART" -n "$NAMESPACE" \
     -f "$ACCEPT_VALUES" \
     --set image.tag=accept-current --set image.pullPolicy=Never >/dev/null
-  if wait_pod_ready 300s; then ok "re-upgraded pod Ready"; else fail "re-upgraded pod did not become Ready"; fi
+  local reupgraded_hash
+  reupgraded_hash="$(deployment_pod_hash)"
+  if wait_pod_ready 300s "$reupgraded_hash"; then ok "re-upgraded pod Ready (revision $reupgraded_hash)"; else fail "re-upgraded pod did not become Ready (revision $reupgraded_hash)"; capture_failure_evidence "reupgrade-failure"; fi
 
   safe_failure_phase
 
@@ -1066,6 +1221,46 @@ EOF
     ok "self-test: docker tags and kind load names match rendered Deployment images (accept-prev, accept-current)"
   else
     fail "self-test: docker/kind image references do not match the rendered Deployment (expected $expect_prev and $expect_cur; see $image_log)"
+  fi
+
+  # 9. Readiness polling regression (run 41216200624): a Ready pod
+  # from the wrong revision, or a terminating pod of the right
+  # revision, must NOT satisfy readiness; only a Running, Ready,
+  # non-terminating pod of the intended revision does. The
+  # rollback variant must accept a Running non-terminating pod
+  # even when it is never Ready (/readyz 503 by design).
+  mkdir -p "$tmp/pods"
+  SELFTEST_PODS="$tmp/pods" python3 - <<'PYEOF'
+import json, os
+base = os.environ["SELFTEST_PODS"]
+def pod(name, phase, ready, hashv, terminating=False):
+    m = {"name": name, "labels": {"pod-template-hash": hashv}, "creationTimestamp": "2026-10-31T15:54:05Z"}
+    if terminating:
+        m["deletionTimestamp"] = "2026-10-31T15:54:00Z"
+    return {"metadata": m, "status": {"phase": phase, "conditions": [{"type": "Ready", "status": "True" if ready else "False"}]}}
+cases = {
+    "wrong-revision-ready": [pod("old", "Running", True, "oldhash")],
+    "terminating-right-revision": [pod("dying", "Running", True, "newhash", True)],
+    "pending-right-revision": [pod("pend", "Pending", False, "newhash")],
+    "right-revision-ready": [pod("new", "Running", True, "newhash")],
+    "mixed-old-terminating-plus-new-ready": [pod("dying", "Running", True, "oldhash", True), pod("new", "Running", True, "newhash")],
+    "rollback-running-not-ready": [pod("rb", "Running", False, "rbhash")],
+}
+for name, items in cases.items():
+    json.dump({"items": items}, open(os.path.join(base, name + ".json"), "w"))
+PYEOF
+  local ready_ok=1
+  ready_pod_matches "$tmp/pods/wrong-revision-ready.json" "newhash" && ready_ok=0
+  ready_pod_matches "$tmp/pods/terminating-right-revision.json" "newhash" && ready_ok=0
+  ready_pod_matches "$tmp/pods/pending-right-revision.json" "newhash" && ready_ok=0
+  ready_pod_matches "$tmp/pods/right-revision-ready.json" "newhash" || ready_ok=0
+  ready_pod_matches "$tmp/pods/mixed-old-terminating-plus-new-ready.json" "newhash" || ready_ok=0
+  running_pod_matches "$tmp/pods/rollback-running-not-ready.json" "rbhash" || ready_ok=0
+  running_pod_matches "$tmp/pods/pending-right-revision.json" "newhash" && ready_ok=0
+  if [[ "$ready_ok" -eq 1 ]]; then
+    ok "self-test: readiness polling distinguishes wrong revision, terminating, and pending pods; rollback accepts Running-not-Ready"
+  else
+    fail "self-test: readiness polling regression cases failed"
   fi
 }
 
