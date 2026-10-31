@@ -685,7 +685,7 @@ if grep -q "key_b64" "$OUT_DIR"/* 2>/dev/null; then
 fi
 pass "hygiene.leak_scan"
 
-write_summary PASS 0 || fail "summary.write" "could not write $OUT_DIR/vault-runner-summary.json"
-
 log "DONE: reports in $OUT_DIR (vault-kv-acceptance.json, vault-runner-summary.json)"
 log "Evidence class is runner-loopback only. Do NOT cite this run as staging, HA, production, HSM, or tenant acceptance."
+
+write_summary PASS 0 || fail "summary.write" "could not write $OUT_DIR/vault-runner-summary.json"
