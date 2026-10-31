@@ -156,3 +156,60 @@ From the live inventory (10 open issues, main `9d2ce2f`):
 4. Confirm or decline closing issue 765 after the main
    recheck, and confirm the deletion of the abandoned
    first-attempt branch from the previous cycle.
+
+## Amendment 2026-10-31 (final workflow correction, before any main install)
+
+The workflow patch was re-audited end to end and corrected; the
+patch file in this PR is the corrected version. Changes:
+
+1. CodeQL: `init` now uses the security workflow's own CodeQL pin
+   `b1bff81932f5cdfc8695c7752dcee935dcd061c8` (v4.33.0), the same
+   pin as `analyze`. The previous patch wrongly reused the
+   `actions/setup-go` SHA for `init`.
+2. Upload-artifact: all uploads now use the pin CI itself uses for
+   v7.0.2, `cf430e030ddbb5b0abf93d22962f4752f3646cd9`. The previous
+   patch carried a different SHA with the same prefix, which did
+   not match any pin in the repository.
+3. All remaining action pins were re-checked against the repo's own
+   workflows: checkout, setup-go, govulncheck, CodeQL — all match.
+   actionlint 1.7.7 reports no findings on the corrected workflow.
+4. Gate script (`scripts/release-gate-status.sh`): latest-run
+   selection now uses `(created_at, id)` instead of
+   `(started_at, id)`, because a queued run has a `created_at`
+   but no `started_at` yet; the old key would have let an old
+   success hide a pending re-run. Queued/in_progress/waiting or
+   missing status now reports RUNNING, and a completed run with a
+   missing or non-success conclusion reports FAIL (fail closed).
+   Tests added: queued re-run without `started_at`, incomplete
+   API record (name+id only), created_at tie broken by id, and
+   duplicate check names (integration-redis in both workflows)
+   decided by latest run only, in either list order. All gate
+   tests pass locally (bash + fake `gh`, no network, no Go).
+5. Integration job: services are probed (TCP connect to
+   5432/6379) and the CI service variables are verified
+   non-empty before any test runs; a per-test report
+   (`integration-report.txt`) counts PASS/FAIL/SKIP per test,
+   and the job fails if any of the 12 required tests (the ones
+   CI's own integration jobs run) is SKIP or absent, or if zero
+   tests actually ran.
+6. Build job: videogen is now built for arm64 too, and all four
+   binaries are verified executable with the expected
+   architecture (`file` output: x86-64 / aarch64), with
+   `sha256sum` and the build SHA recorded.
+7. Soak job: a guard rejects any `full_soak` duration below
+   7200 seconds (and any duration that cannot fit the 180m job
+   timeout with a 30m reporting buffer); evidence is validated
+   with `--expected-duration-seconds 7200` and again with the
+   requested duration, bound to the exact dispatched SHA, and
+   any skipped or failed stage fails the job.
+8. Uploads of logs/reports are `if: always()` where they matter
+   (versions/binaries, integration, gateway, fuzz, browser,
+   coverage, stress, soak), so a failure still leaves evidence.
+   No real secret appears in the workflow; the only credentials
+   are the disposable CI-only values CI already uses.
+
+Real execution of this workflow is still NOT_RUN: it is not on
+main, and it must not be pushed to main directly. It goes through
+a separate reviewable PR (see the delivery note in the final
+report for this cycle), and only after the owner's merge may it
+be dispatched on the exact new main SHA.
