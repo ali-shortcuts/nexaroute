@@ -157,3 +157,20 @@ everything else runs in the ordinary unit suite.
   non-loopback TCP/ICMP is `Operation not permitted` — loopback
   only), so physical multi-host acceptance stays BLOCKED. No new
   code defect was found by this run.
+- Container-isolated run 2026-10-30
+  (`docs/reports/HA_ACCEPTANCE_CONTAINER_2026-10-30.md`,
+  harness `scripts/ha-two-host-acceptance.py`): two gateway
+  containers on ONE Docker host (separate network namespaces,
+  configs, data directories) against shared PostgreSQL —
+  concurrent cold start, replica SIGKILL/restart (3 repetitions),
+  concurrent video claiming with exactly-once ledger settlement,
+  PostgreSQL outage/recovery, `pg_dump` restore with third-replica
+  read-back, per-instance asset/config boundaries, and a 60 s
+  bounded soak. This is container-isolated single-host evidence,
+  explicitly NOT two independent hosts: two-host, load-balancer
+  failover, and multi-host RPO/RTO remain NOT_MEASURED, and
+  breaker-sync convergence was not exercised in that run. Redis
+  was present as a container but no backend pointed at it, so no
+  Redis behaviour was proven. The harness has since gained an S9
+  breaker-sync scenario and a same-host rejection in its
+  authorization gate; neither was executed in the container run.

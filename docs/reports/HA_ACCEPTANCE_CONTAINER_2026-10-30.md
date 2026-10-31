@@ -6,8 +6,13 @@
   worktree clean at build and run time)
 - Harness: `scripts/ha-two-host-acceptance.py` (new in this change)
 - Runtime: Go 1.25.0, static `CGO_ENABLED=0` gateway binary
-- Shared services: PostgreSQL 16.15 (`postgres:16-alpine`), Redis 7.4.12
-  (`redis:7-alpine`)
+- Shared services: PostgreSQL 16.15 (`postgres:16-alpine`). A Redis 7.4.12
+  (`redis:7-alpine`) container was also started, but no drill config
+  pointed any backend at it (control plane, security store, and video
+  job store all use PostgreSQL; the cache is disabled), so it was
+  present but not a configured backend. The original wording of this
+  report ("sharing PostgreSQL and Redis") overstated its role and is
+  corrected here: Redis was not shared state in this run.
 - Gateway container image: `python:3.12-alpine` (static gateway binary plus a
   per-replica loopback stub)
 - Evidence: `.artifacts/ha-two-host/container-20261030/`
@@ -83,9 +88,14 @@ values. No load balancer was in the path.
 - Load-balancer failover and its detection interval.
 - Breaker-sync convergence across replicas (procedure step 3) in this run;
   prior same-host multi-process evidence remains the only evidence for that
-  behaviour.
+  behaviour. The harness gained an S9 breaker-sync scenario after this run;
+  S9 was not executed here and its future result does not retroactively
+  cover this run.
 - Rolling upgrade between two binaries.
-- Redis outage/failover; Redis was configured but was not stopped.
+- Redis outage/failover; no gateway backend pointed at Redis in this
+  run, so stopping it would have proved nothing. A Redis-backed
+  topology needs its own drill variant with Redis backends configured
+  and is NOT covered by this report.
 - OIDC pending-transaction behaviour; OIDC was disabled.
 - Multi-hour soak.
 - Host death, network partition, disk loss, and production-like traffic.

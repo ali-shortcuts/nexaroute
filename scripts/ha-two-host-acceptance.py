@@ -60,6 +60,7 @@ a pass).
 from __future__ import annotations
 
 import argparse
+import base64
 import concurrent.futures
 import copy
 import datetime as _dt
@@ -137,6 +138,11 @@ def redact_obj(value):
     return value
 
 
+def _canon_target(target: str) -> str:
+    """Host part of an SSH target: 'user@host' and 'host' are the same host."""
+    return str(target or "").rsplit("@", 1)[-1].strip().lower()
+
+
 def load_authorization(path: str, host_a: str, host_b: str, now: _dt.datetime | None = None) -> dict:
     """Validate a written owner authorization for disposable staging.
 
@@ -170,6 +176,11 @@ def load_authorization(path: str, host_a: str, host_b: str, now: _dt.datetime | 
         for target in (host_a, host_b):
             if target and target not in allowed:
                 errors.append(f"authorization does not cover host {target!r}")
+    # Two SSH targets that resolve to the same host are not two hosts.
+    # Without this check, --two-host run against one host twice would
+    # produce a "two-independent-hosts" verdict from a same-host run.
+    if host_a and host_b and _canon_target(host_a) == _canon_target(host_b):
+        errors.append("authorization targets must be two distinct hosts")
     if doc.get("cost_ceiling_usd") is None:
         errors.append("authorization.cost_ceiling_usd is required (0 for no-cost local staging)")
     if errors:
@@ -560,6 +571,14 @@ class Runtime:
     def stub_stats(self):
         raise NotImplementedError
 
+    def stub_mode(self, replica: str, mode: str) -> None:
+        """Set the disposable stub's mode ('ok' or 'fail') on one replica."""
+        raise NotImplementedError
+
+    def stub_reset(self, replica: str) -> None:
+        """Reset one replica's stub to mode ok and zero hits."""
+        raise NotImplementedError
+
     def logs_tail(self, replica: str, lines: int = 80) -> str:
         raise NotImplementedError
 
@@ -841,6 +860,24 @@ class ContainerRuntime(Runtime):
         except Exception:
             return None
 
+    def _stub_post(self, replica: str, path: str, payload: dict) -> None:
+        # Base64 keeps the generated code free of double quotes, so the SSH
+        # transport (python3 -c "...") cannot break on shell quoting.
+        body = base64.b64encode(json.dumps(payload).encode()).decode()
+        code = ("import base64,urllib.request;"
+                f"req=urllib.request.Request('http://127.0.0.1:{self.stub_port}{path}',"
+                f"data=base64.b64decode('{body}'),headers={{'Content-Type':'application/json'}});"
+                "print(urllib.request.urlopen(req,timeout=2).read().decode())")
+        proc = self.docker("exec", self.gateway_containers[replica], "python3", "-c", code, check=False)
+        if proc.returncode != 0:
+            raise RuntimeError(f"stub POST {path} failed on replica {replica}")
+
+    def stub_mode(self, replica: str, mode: str) -> None:
+        self._stub_post(replica, "/__stub/mode", {"mode": mode})
+
+    def stub_reset(self, replica: str) -> None:
+        self._stub_post(replica, "/__stub/reset", {})
+
     def logs_tail(self, replica: str, lines: int = 80) -> str:
         proc = self.docker("logs", "--tail", str(lines), self.gateway_containers[replica], check=False)
         return ((proc.stdout or b"") + (proc.stderr or b"")).decode("utf-8", "replace")
@@ -1099,6 +1136,24 @@ class SSHRuntime(Runtime):
         except Exception:
             return None
 
+    def _stub_post(self, replica: str, path: str, payload: dict) -> None:
+        # Base64 keeps the generated code free of double quotes, so the SSH
+        # transport (python3 -c "...") cannot break on shell quoting.
+        body = base64.b64encode(json.dumps(payload).encode()).decode()
+        code = ("import base64,urllib.request;"
+                f"req=urllib.request.Request('http://127.0.0.1:{self.stub_port}{path}',"
+                f"data=base64.b64decode('{body}'),headers={{'Content-Type':'application/json'}});"
+                "print(urllib.request.urlopen(req,timeout=2).read().decode())")
+        proc = self._ssh(self.replicas[replica], f"python3 -c \"{code}\"", check=False)
+        if proc.returncode != 0:
+            raise RuntimeError(f"stub POST {path} failed on replica {replica}")
+
+    def stub_mode(self, replica: str, mode: str) -> None:
+        self._stub_post(replica, "/__stub/mode", {"mode": mode})
+
+    def stub_reset(self, replica: str) -> None:
+        self._stub_post(replica, "/__stub/reset", {})
+
     def logs_tail(self, replica, lines=80):
         data = f"{self.run_root}/data-{replica}"
         proc = self._ssh(self.replicas[replica], f"tail -n {lines} {data}/gateway.log", check=False)
@@ -1109,6 +1164,10 @@ class SSHRuntime(Runtime):
             data = f"{self.run_root}/data-{replica}"
             self._ssh(host, f"test -f {data}/gateway.pid && kill -TERM $(cat {data}/gateway.pid) || true; "
                             f"test -f {data}/stub.pid && kill -TERM $(cat {data}/stub.pid) || true", check=False)
+            # Remove the staging DSN/token file. Gateway logs stay on the
+            # host for post-drill debugging; the run root itself is left
+            # for the operator to delete once logs are no longer needed.
+            self._ssh(host, f"rm -f {data}/.env", check=False)
 
 
 def replace_db(dsn: str, db: str) -> str:
@@ -1150,6 +1209,9 @@ class Drill:
         self.s6_backup_restore()
         self.s7_local_boundaries()
         self.s8_bounded_soak()
+        # Last: tripping A leaves a shared cooldown on B, so no chat
+        # scenario may run after this one.
+        self.s9_breaker_sync_convergence()
 
     def s1_cold_start(self):
         sid = "S1"
@@ -1460,6 +1522,83 @@ class Drill:
                        "stub_hits_before": hits_before, "stub_hits_after": hits_after,
                        "final_counts": counts})
 
+    def s9_breaker_sync_convergence(self):
+        sid = "S9"
+        # Procedure step 3, previously manual-only: trip replica A through
+        # its own failing stub, then watch replica B converge via the
+        # shared breaker-sync markers. The drill configs enable breaker
+        # sync with a 5 s interval, so the documented convergence bound
+        # is two intervals plus store latency; this scenario MEASURES the
+        # wait by polling B once a second instead of assuming it.
+        # It runs last: a converged B stays in shared cooldown, so no
+        # chat scenario may follow it.
+        self.rt.stub_mode("a", "fail")
+        trip_started = utcnow()
+        trip_chats = 0
+        zero_delta = 0
+        tripped = False
+        try:
+            for _ in range(30):
+                before = (self.rt.stub_stats("a") or {}).get("hits")
+                status, _ = self.rt.chat("a")
+                after = (self.rt.stub_stats("a") or {}).get("hits")
+                trip_chats += 1
+                # A trip is two consecutive 503 fail-fast chats that add
+                # no new stub hit: the breaker opened and the request
+                # never reached the upstream. Pre-trip failing chats
+                # return 500 with new hits; a dead gateway returns no
+                # HTTP status at all, so neither can fake a trip. One
+                # zero-delta chat alone could be a transient error
+                # before the stub was reached, so a single observation
+                # is never enough. A probe hit inside the bracket only
+                # resets the streak, never fakes a trip.
+                if (before is not None and after is not None and after == before
+                        and status == 503):
+                    zero_delta += 1
+                    if zero_delta >= 2:
+                        tripped = True
+                        break
+                else:
+                    zero_delta = 0
+            self.require(tripped, sid,
+                         f"replica A breaker did not trip in {trip_chats} failing chats")
+            trip_ts = utcnow()
+            polls = []
+            converged = None
+            deadline = time.monotonic() + 20
+            while time.monotonic() < deadline:
+                before = (self.rt.stub_stats("b") or {}).get("hits")
+                status, _ = self.rt.chat("b")
+                after = (self.rt.stub_stats("b") or {}).get("hits")
+                polls.append({"status": status, "hits_before": before, "hits_after": after})
+                if status == 503 and before is not None and after == before:
+                    converged = utcnow()
+                    break
+                time.sleep(1)
+            self.require(converged is not None, sid,
+                         f"replica B did not converge to fail-fast in 20 s: {polls[-3:]}")
+            ev = {"trip_started_utc": iso(trip_started),
+                  "tripped_utc": iso(trip_ts),
+                  "trip_chats": trip_chats,
+                  "sync_interval_seconds": 5,
+                  "converged_utc": iso(converged),
+                  "convergence_seconds": seconds_between(trip_ts, converged),
+                  "convergence_poll_seconds": 1,
+                  "converging_poll": polls[-1],
+                  "poll_count": len(polls)}
+            self.measurements["breaker_sync_convergence_seconds"] = ev["convergence_seconds"]
+            self.scenario(sid, "breaker-sync convergence: tripped A, B fails fast without upstream call",
+                          "PASS", ev)
+        finally:
+            # Leave both stubs healthy. The shared cooldown is left to
+            # expire on its own; the drill ends here, so nothing after
+            # this scenario can observe it.
+            for replica in ("a", "b"):
+                try:
+                    self.rt.stub_reset(replica)
+                except Exception:
+                    pass
+
     def document(self, runtime, commit, versions, authorization=None):
         verdict = {
             "container_isolated_single_host": "NOT_RUN",
@@ -1481,10 +1620,20 @@ class Drill:
                 "class": runtime.class_name,
                 "replicas": 2,
                 "shared_postgres": True,
-                "shared_redis": "configured" if isinstance(runtime, ContainerRuntime) else "provided",
+                # The drill configs point every backend (control plane,
+                # security store, video job store) at PostgreSQL and
+                # disable the cache; no gateway connects to Redis. A
+                # Redis container may be present in --containers mode,
+                # but it is not a configured backend, so stopping it
+                # would prove nothing. Labelling it "configured" (as
+                # the first container report did) overstates the run.
+                "shared_redis": ("present_but_not_a_configured_backend"
+                                 if isinstance(runtime, ContainerRuntime)
+                                 else "not_configured_by_drill"),
                 "load_balancer": None,
                 "notes": ("two gateway containers, separate network namespaces/configs/data dirs, "
-                          "one Docker host; NOT two independent hosts"
+                          "one Docker host; NOT two independent hosts; Redis container present "
+                          "but no backend points at it"
                           if isinstance(runtime, ContainerRuntime) else
                           "two SSH targets, one gateway process each, shared PostgreSQL supplied by the owner"),
             },
@@ -1650,6 +1799,23 @@ def run_self_test() -> int:
         except ValueError:
             check(f"authorization rejects {name}", True)
 
+    # Two-host mode must refuse a single host named twice: without this
+    # check a same-host run would earn a two-independent-hosts verdict.
+    try:
+        load_authorization(str(good), "staging-a", "staging-a", now)
+        check("authorization rejects same host twice", False)
+    except ValueError as exc:
+        check("authorization rejects same host twice", "distinct" in str(exc))
+    alias_auth = dict(base_auth)
+    alias_auth["hosts"] = ["operator@staging-a", "staging-a"]
+    alias_path = tmp / "auth-alias.json"
+    alias_path.write_text(json.dumps(alias_auth))
+    try:
+        load_authorization(str(alias_path), "operator@staging-a", "staging-a", now)
+        check("authorization rejects user@host alias of same host", False)
+    except ValueError as exc:
+        check("authorization rejects user@host alias of same host", "distinct" in str(exc))
+
     check("redacts URI password", "***" in redact("postgres://user:secret@db:5432/x") and "secret" not in redact("postgres://user:secret@db:5432/x"))
     check("redacts token query", "token=***" in redact("http://h/x?token=abc"))
     check("rpo counts lost rows", rpo_from_counts({"a": 5, "b": 0}, {"a": 4, "b": 1}) == {"a": 1, "b": -1})
@@ -1687,6 +1853,56 @@ def run_self_test() -> int:
 
     stub = stub_document(19091, "127.0.0.1")
     check("stub script contains stats endpoint", "/__stub/stats" in stub and "/v1/chat/completions" in stub)
+
+    # Exercise the real stub primitives S9 depends on (mode switch, hit
+    # counting, reset) against a loopback stub process. No docker, no SSH.
+    stub_proc = None
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind(("127.0.0.1", 0))
+            stub_port = sock.getsockname()[1]
+        stub_path = tmp / "stub.py"
+        stub_path.write_text(stub_document(stub_port, "127.0.0.1"))
+        stub_proc = subprocess.Popen([sys.executable, str(stub_path), str(stub_port), "127.0.0.1"],
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        base = f"http://127.0.0.1:{stub_port}"
+        ok = False
+        for _ in range(50):
+            # http_json returns (None, error bytes) instead of raising
+            # while the stub is still starting, so retry on status, not
+            # only on exception.
+            try:
+                status, body = http_json(base + "/__stub/stats", timeout=2.0)
+            except Exception:
+                status, body = None, b""
+            if status == 200:
+                ok = json.loads(body).get("hits") == 0
+                break
+            time.sleep(0.1)
+        check("stub serves stats from loopback", ok)
+        if ok:
+            http_json(base + "/__stub/mode", method="POST", payload={"mode": "fail"}, timeout=2.0)
+            status, _ = http_json(base + "/v1/chat/completions", method="POST",
+                                  payload={"model": "stub-model", "messages": []}, timeout=2.0)
+            _, stats = http_json(base + "/__stub/stats", timeout=2.0)
+            check("stub fail mode returns 500 and counts the hit",
+                  status == 500 and json.loads(stats).get("hits") == 1)
+            http_json(base + "/__stub/reset", method="POST", payload={}, timeout=2.0)
+            status, body = http_json(base + "/v1/chat/completions", method="POST",
+                                     payload={"model": "stub-model", "messages": []}, timeout=2.0)
+            check("stub reset restores ok mode",
+                  status == 200 and b"stub-ok" in body)
+    finally:
+        if stub_proc is not None:
+            stub_proc.terminate()
+            try:
+                stub_proc.wait(timeout=5)
+            except Exception:
+                stub_proc.kill()
+
+    redis_doc = json.loads(json.dumps(base_doc))
+    redis_doc["topology"]["shared_redis"] = "present_but_not_a_configured_backend"
+    check("corrected Redis label still validates", validate_evidence(redis_doc) == [])
 
     if failures:
         print(f"\n{len(failures)} self-test failure(s)")

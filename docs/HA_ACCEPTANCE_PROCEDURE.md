@@ -229,19 +229,27 @@ repeatable and its evidence is machine-readable. It never calls production.
 
 - `--self-test` is infrastructure-free and exercises authorization parsing,
   redaction, RPO/RTO aggregation, config diffing, evidence validation, and the
-  refusal to label a container run as multi-host.
+  refusal to label a container run as multi-host. It also exercises the
+  disposable stub's mode switch, hit counting, and reset against a loopback
+  stub process, and rejects authorizations naming the same host twice
+  (including a `user@host` alias of one host).
 - `--containers` builds a static gateway, starts two gateway containers plus
-  disposable PostgreSQL and Redis on one Docker host, and runs S1–S8. Each
+  disposable PostgreSQL and Redis on one Docker host, and runs S1–S9. Each
   replica gets a loopback stub because the egress policy intentionally rejects
   plain HTTP to a non-loopback host. This is
   `container-isolated-single-host` evidence: it cannot satisfy the multi-host
   gate, and its report always records `two_independent_hosts: NOT_MEASURED`.
+  The Redis container is present but no backend points at it (see the
+  evidence document's `shared_redis` field); a Redis-backed topology needs
+  its own drill variant.
 - `--two-host` runs the same drill over SSH with a shared PostgreSQL supplied
   by the owner. It requires `--authorization`, `--host-a`, `--host-b`, the
   `NEXAROUTE_HA_PG_DSN` and `NEXAROUTE_HA_RESTORE_DSN` environment variables,
   and the owner-provided `NEXAROUTE_HA_PG_STOP_CMD` /
   `NEXAROUTE_HA_PG_START_CMD` commands. Missing inputs are reported as exit 3,
-  not converted into a partial pass.
+  not converted into a partial pass. S9 (breaker-sync convergence) runs last
+  in both modes; the authorization gate refuses two targets that resolve to
+  the same host.
 - Evidence is written under the requested in-repo directory as
   `evidence.json` (schema `nexaroute-ha-acceptance/1`) and `report.md`. The
   authorization document must name issue #652, the host list, the disposable
