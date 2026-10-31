@@ -127,3 +127,60 @@ The script now:
 This is harness work, not acceptance evidence. A successful rerun on the
 new SHA is runner-loopback evidence only; #648 and #649 stay OPEN pending
 operator staging/non-loopback evidence.
+
+## Update 2026-10-31: second live dispatch — root-revoke cascade fix
+
+The second live dispatch (run 41206938283 on main `2f638da`, after the
+first harness fixes merged as #802) reached Transit key creation and
+readback, then failed at `kv.vault_accept`. `vault-accept` reported
+`vault.token_metadata` as BLOCKED: the acceptance token could no longer
+read `auth/token/lookup-self`.
+
+Root cause: the script revoked the root token (`POST
+auth/token/revoke-self`) before running `vault-accept`, and the service
+tokens it had created were children of that root token. Revoking the
+parent cascades to children, so the KV token was already invalid.
+Reproduced locally on `2f638da` with a disposable Vault 1.18.5
+container: identical `PASS vault.root_revoke` followed by
+`BLOCKED vault.token_metadata`.
+
+Fix: `create_token` now sets `"no_parent":true`, making the three
+acceptance tokens orphans that survive the root revoke. A new
+deterministic self-test check (`selftest.acceptance_tokens_orphan`)
+pins it; `scripts/test-vault-runner-acceptance.sh` now runs 4 checks.
+
+This is still harness work, not acceptance evidence. The next live
+runner dispatch must be treated as a fresh run; a PASS remains
+runner-loopback only, and #648/#649 stay OPEN pending operator
+staging/non-loopback evidence.
+
+## Update 2026-10-31: full local loopback PASS after three more harness fixes
+
+After the orphan-token fix, a local disposable Vault 1.18.5 run on the
+same checkout still exposed three deterministic harness defects, all
+fixed before any claim:
+
+1. `secrets migrate-to-transit --dry-run` was invoked without the
+   legacy key source, although a dry run still decrypts each nxs1
+   envelope. It now passes `--legacy-key-file "$WORK/legacy.key"`.
+2. `VAULT_ADDR` was a shell variable, not exported, so the Go secrets
+   CLI saw an empty address and failed with
+   `transit_config_invalid: Vault Transit requires VAULT_ADDR`. It is
+   now exported (the unavailable-Vault check still overrides it inline).
+3. Vault 1.18.5 returns HTTP 200 for `POST
+   transit/keys/nexaroute/rotate` (not 204). The script now expects 200
+   and verifies `data.latest_version=2` via readback; the rotate policy
+   gained read on `transit/keys/nexaroute` for that readback only.
+
+Local run (not a GitHub runner, not staging): disposable
+`hashicorp/vault:1.18.5` on loopback, custom ports, checkout at the
+branch head. Result: **exit 0, 43/43 checks PASS, 0 FAIL**, plus
+`vault-accept` 16/16 PASS (`vault.ha_failover` and `vault.transit` are
+NOT_RUN by design in that KV harness). Report:
+`.artifacts/vault-fixed5/vault-runner-summary.json` (local, not
+committed).
+
+This proves the harness is now capable of a complete runner-loopback
+run. It is **not** acceptance evidence for #648/#649: no operator
+staging Vault, no HA/failover, no production/HSM was involved, and the
+GitHub Actions dispatch still must be re-run on the new main SHA.

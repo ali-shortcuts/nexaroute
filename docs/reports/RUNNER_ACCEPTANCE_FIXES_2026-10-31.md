@@ -95,3 +95,32 @@ only. It is **not** live acceptance evidence and closes no issue.
   runner-loopback evidence only. Both issues stay OPEN pending
   staging/non-loopback evidence or an owner-approved exclusion (the
   owner has prohibited exclusions for this release).
+
+## Follow-up 2026-10-31: second runner dispatch exposed three more harness defects
+
+Runner dispatch 41206938283 on main `2f638da` (after #802) passed the
+Transit key creation/readback but failed at `kv.vault_accept`: the
+acceptance token was invalid because `auth/token/revoke-self` on the
+root cascades to child tokens. Fixed by creating orphan tokens
+(`"no_parent":true`).
+
+A full local loopback run then exposed two further deterministic
+defects, both fixed before claiming anything:
+
+- `migrate-to-transit --dry-run` needs the legacy key source (it
+  decrypts to prove migratability); the script now passes
+  `--legacy-key-file`.
+- `VAULT_ADDR` must be exported for the Go secrets CLI; an unexported
+  shell variable produced `transit_config_invalid`.
+- Vault 1.18.5 returns HTTP 200 (not 204) for `POST
+  transit/keys/nexaroute/rotate`; the script now expects 200 and
+  verifies `latest_version=2` by readback, with read added to the
+  rotate policy for that check.
+
+`scripts/test-vault-runner-acceptance.sh` now runs 5 deterministic
+self-test checks (`success_summary`, `failure_summary`,
+`transit_key_contract`, `acceptance_tokens_orphan`,
+`vault_addr_exported`). Full local loopback run on the branch:
+exit 0, **43/43 checks PASS**, 0 FAIL (`vault-accept` 16/16 PASS).
+This is local loopback evidence only; a new GitHub runner dispatch on
+the new main SHA is still required, and #648/#649 stay OPEN.

@@ -62,6 +62,10 @@ while [ $# -gt 0 ]; do
 done
 
 VAULT_ADDR="http://127.0.0.1:${VAULT_PORT}"
+# The secrets CLI subcommands read VAULT_ADDR from the environment (the
+# KV helper invocations below also pass it inline). Without the export,
+# migrate-to-transit/rewrap-transit fail with transit_config_invalid.
+export VAULT_ADDR
 KV_REF="secret/data/nexaroute/gateway/master-key"
 ACCEPT_REF="secret/data/nexaroute/acceptance/master-key"
 HELPER="scripts/key-provider-vault-kv.sh"
@@ -262,6 +266,22 @@ PYEOF
   else
     fail "selftest.transit_key_contract" "transit key creation must expect HTTP 200 and verify a readback"
   fi
+
+  # Root revoke-self cascades to child tokens. The acceptance tokens must
+  # be orphans (no_parent=true) or every later authenticated check 403s.
+  if grep -q '"no_parent":true' "$script_path"; then
+    pass "selftest.acceptance_tokens_orphan"
+  else
+    fail "selftest.acceptance_tokens_orphan" "acceptance tokens must set no_parent=true to survive the root revoke"
+  fi
+
+  # The secrets CLI reads VAULT_ADDR from the environment for the
+  # Transit subcommands; an unexported shell variable is invisible.
+  if grep -q '^export VAULT_ADDR$' "$script_path"; then
+    pass "selftest.vault_addr_exported"
+  else
+    fail "selftest.vault_addr_exported" "VAULT_ADDR must be exported for migrate-to-transit/rewrap-transit"
+  fi
 }
 
 # Internal self-test child modes: exercise the real summary writer and
@@ -363,6 +383,7 @@ path "transit/rewrap/nexaroute" { capabilities = ["update"] }
 EOF
 cat > "$WORK/policy-rotate.hcl" <<'EOF'
 path "transit/keys/nexaroute/rotate" { capabilities = ["update"] }
+path "transit/keys/nexaroute" { capabilities = ["read"] }
 EOF
 for policy in accept transit rotate; do
   jq -Rs '{policy: .}' "$WORK/policy-$policy.hcl" > "$WORK/policy-$policy.json"
@@ -390,7 +411,12 @@ pass "vault.transit_key_readback"
 
 create_token() { # create_token <policies-csv> <out-token-file>
   local policies="$1" out="$2"
-  printf '{"policies":%s,"ttl":"1h","renewable":false,"type":"service"}' \
+  # no_parent=true makes these orphan tokens. Without it they are
+  # children of the root token, so the later root revoke-self cascades
+  # and invalidates them; vault-accept then sees a 403 on
+  # auth/token/lookup-self and reports BLOCKED (observed live run
+  # 41206938283). The acceptance tokens must outlive the root revoke.
+  printf '{"policies":%s,"ttl":"1h","renewable":false,"type":"service","no_parent":true}' \
     "$(printf '%s' "$policies" | jq -R 'split(",")')" > "$WORK/token-body.json"
   local code
   code="$(vault_api_status "$WORK/root.token" POST auth/token/create "$WORK/token-body.json" "$WORK/token.json")"
@@ -585,8 +611,10 @@ grep -q "nxs1_fields=1" "$WORK/status-nxs1.txt" || fail "transit.status_nxs1" "c
 grep -q "nxs2_fields=0" "$WORK/status-nxs1.txt" || fail "transit.status_nxs1" "config already contains nxs2 fields before migration"
 pass "transit.status_nxs1"
 
-"$WORK/nexaroute" secrets migrate-to-transit --config "$WORK/config.json" --dry-run > "$WORK/migrate-dry.txt" 2>&1 \
-  || fail "transit.migrate_dry_run" "migrate-to-transit --dry-run failed"
+# A dry run still decrypts each nxs1 envelope to prove it can be
+# migrated, so it needs the same legacy key source as the real run.
+"$WORK/nexaroute" secrets migrate-to-transit --config "$WORK/config.json" --legacy-key-file "$WORK/legacy.key" --dry-run > "$WORK/migrate-dry.txt" 2>&1 \
+  || fail "transit.migrate_dry_run" "migrate-to-transit --dry-run failed: $(tail -c 400 "$WORK/migrate-dry.txt" | tr '\n' ' ')"
 grep -q "would_migrate_fields=1" "$WORK/migrate-dry.txt" || fail "transit.migrate_dry_run" "dry run did not report would_migrate_fields=1"
 pass "transit.migrate_dry_run"
 
@@ -633,10 +661,17 @@ fi
 pass "transit.wrong_token"
 
 # Vault-side rotation + rewrap-transit, then rollback to the backup.
+# Vault 1.18.5 returns HTTP 200 for rotate (same family as key create);
+# verify the new version by readback instead of trusting the status.
 printf '{}' > "$WORK/rotate-body.json"
 code="$(vault_api_status "$WORK/rotate.token" POST transit/keys/nexaroute/rotate "$WORK/rotate-body.json")"
-require_status "transit.key_rotate" 204 "$code" "transit/keys/nexaroute/rotate"
+require_status "transit.key_rotate" 200 "$code" "transit/keys/nexaroute/rotate"
 pass "transit.key_rotate"
+code="$(vault_api_status "$WORK/rotate.token" GET transit/keys/nexaroute "" "$WORK/rotate-readback.json")"
+require_status "transit.key_rotate_readback" 200 "$code" "transit/keys/nexaroute read after rotate"
+[ "$(json_field "$WORK/rotate-readback.json" '.data.latest_version')" = "2" ] \
+  || fail "transit.key_rotate_readback" "latest_version is not 2 after rotate"
+pass "transit.key_rotate_readback"
 "$WORK/nexaroute" secrets rewrap-transit --config "$WORK/config.json" --dry-run > "$WORK/rewrap-dry.txt" 2>&1 \
   || fail "transit.rewrap_dry_run" "rewrap-transit --dry-run failed"
 grep -q "transit_key_versions=1" "$WORK/rewrap-dry.txt" || fail "transit.rewrap_dry_run" "dry run did not report the pre-rewrap version 1"
