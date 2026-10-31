@@ -11,18 +11,29 @@ the SHA is NOT_RUN, never PASS.
 # From any machine with `gh` authenticated; no Go, Docker, or test
 # dependencies are installed on the operator's machine. CI runs the
 # tests; this script only reads their recorded check runs.
-scripts/release-gate-status.sh <full-40-hex-sha>
+bash scripts/release-gate-status.sh <full-40-hex-sha>
 # Release-candidate verdict (also requires the manual-only gates):
-scripts/release-gate-status.sh <sha> --rc
+bash scripts/release-gate-status.sh <sha> --rc
 ```
 
 The script exits non-zero unless every required gate is PASS, and
 prints `Release Gate Passed` only in that case. A gate that is
 queued or running prints RUNNING and fails the gate until it
 finishes; an unreadable Checks API response prints BLOCKED. Its own
-regression tests (`scripts/test-release-gate-status.sh`) run offline
-against a fake `gh` and cover pass, one-failed, missing (= NOT_RUN),
-running, API-error (= BLOCKED), and non-SHA refusal.
+regression tests (`bash scripts/test-release-gate-status.sh`) run
+offline against a fake `gh` and cover pass, one-failed, missing
+(= NOT_RUN), running, API-error (= BLOCKED), non-SHA refusal, the
+latest-run rule (old success must not hide a newer failure, old
+failure must not hide a newer success or a newer running run, ties
+broken by check-run id), and `--rc` given without a repo argument.
+
+Note on invocation: the release-gate scripts are invoked with
+`bash` throughout this document because their Git executable bit
+is not guaranteed on every push path (a snapshot-style push lands
+them at mode 644); `bash scripts/...` works regardless of that
+bit, while a bare `scripts/...` invocation does not. Only
+`scripts/verify.sh` is executed directly by CI, so its mode
+100755 must be preserved on every push.
 
 ## PR-required gates
 
