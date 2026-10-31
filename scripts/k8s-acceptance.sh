@@ -337,14 +337,70 @@ for pod in pods:
 sys.exit(1)
 PYEOF
 }
+# deployment_hash_from_rs_json <replicaset-json-file>: print the
+# pod-template-hash of the Deployment's CURRENT ReplicaSet, i.e.
+# the ReplicaSet owned by ${RELEASE}-nexaroute with the highest
+# deployment.kubernetes.io/revision annotation. This is the only
+# trustworthy source for the hash: the Deployment template itself
+# does NOT carry a pod-template-hash label (that label is assigned
+# by the Deployment controller to the ReplicaSet and its pods), so
+# reading it from the Deployment template silently returns empty
+# and disables revision matching. Exit 1 and print nothing when
+# no current ReplicaSet or no hash can be determined; callers
+# must fail closed on that, never continue with an empty hash.
+deployment_hash_from_rs_json() {
+  python3 - "$1" "${RELEASE}-nexaroute" <<'PYEOF'
+import json, sys
+try:
+    items = json.load(open(sys.argv[1]))["items"]
+except Exception:
+    sys.exit(1)
+deploy = sys.argv[2]
+best = None
+for rs in items:
+    meta = rs.get("metadata", {})
+    owners = meta.get("ownerReferences", [])
+    if not any(o.get("controller") and o.get("kind") == "Deployment" and o.get("name") == deploy for o in owners):
+        continue
+    try:
+        rev = int(meta.get("annotations", {}).get("deployment.kubernetes.io/revision", "0"))
+    except ValueError:
+        continue
+    h = meta.get("labels", {}).get("pod-template-hash", "")
+    if not h:
+        continue
+    if best is None or rev > best[0]:
+        best = (rev, h)
+if best is None:
+    sys.exit(1)
+print(best[1])
+PYEOF
+}
 # deployment_pod_hash: the pod-template-hash of the current
-# Deployment revision, i.e. the pod revision a wait must match.
+# Deployment revision, resolved through its ReplicaSets (see
+# deployment_hash_from_rs_json). Prints nothing on failure;
+# every caller checks for empty and fails closed.
 deployment_pod_hash() {
-  kubectl_ns get deploy "${RELEASE}-nexaroute" -o jsonpath='{.spec.template.metadata.labels.pod-template-hash}' 2>/dev/null
+  kubectl_ns get rs -l "app.kubernetes.io/instance=$RELEASE" -o json >"$OUT_DIR/current-rs.json" 2>/dev/null || return 1
+  deployment_hash_from_rs_json "$OUT_DIR/current-rs.json"
+}
+# require_hash <phase> <hash>: fail closed when a revision hash
+# could not be determined. Returns 0 when the hash is non-empty.
+require_hash() {
+  if [[ -z "$2" ]]; then
+    # Caller records the single failure for this phase; this
+    # helper only captures evidence and reports the missing hash.
+    capture_failure_evidence "$(printf '%s' "$1" | tr ' ' '-')-hash-failure"
+    return 1
+  fi
+  return 0
 }
 # current_pod_name_for_hash <hash>: newest non-terminating pod name
 # for a revision, for targeted port-forwarding and diagnostics.
 current_pod_name_for_hash() {
+  if [[ -z "$1" ]]; then
+    return 0
+  fi
   kubectl_ns get pod -l "app.kubernetes.io/instance=$RELEASE" -o json 2>/dev/null | python3 -c '
 import json, sys
 want = sys.argv[1]
@@ -619,7 +675,9 @@ PY
   helm rollback "$RELEASE" -n "$NAMESPACE" >/dev/null
   local sf_hash
   sf_hash="$(deployment_pod_hash)"
-  if wait_pod_ready 300s "$sf_hash"; then ok "rollback after failed rollout: pod Ready (revision $sf_hash)"; else fail "rollback after failed rollout: pod did not become Ready (revision $sf_hash)"; capture_failure_evidence "safe-failure-rollback-failure"; fi
+  if ! require_hash "rollback after failed rollout" "$sf_hash"; then
+    fail "rollback after failed rollout: pod did not become Ready (revision unknown)"
+  elif wait_pod_ready 300s "$sf_hash"; then ok "rollback after failed rollout: pod Ready (revision $sf_hash)"; else fail "rollback after failed rollout: pod did not become Ready (revision $sf_hash)"; capture_failure_evidence "safe-failure-rollback-failure"; fi
   port_forward 18080
   if [[ "$(http_code http://127.0.0.1:18080/readyz)" == "200" ]]; then
     ok "rollback after failed rollout: /readyz 200 again"
@@ -712,7 +770,9 @@ PY
     --set image.tag=accept-current --set image.pullPolicy=Never >/dev/null
   local upgraded_hash
   upgraded_hash="$(deployment_pod_hash)"
-  if wait_pod_ready 300s "$upgraded_hash"; then ok "upgraded pod Ready (revision $upgraded_hash)"; else fail "upgraded pod did not become Ready (revision $upgraded_hash)"; capture_failure_evidence "upgrade-failure"; fi
+  if ! require_hash "upgraded pod" "$upgraded_hash"; then
+    fail "upgraded pod did not become Ready (revision unknown)"
+  elif wait_pod_ready 300s "$upgraded_hash"; then ok "upgraded pod Ready (revision $upgraded_hash)"; else fail "upgraded pod did not become Ready (revision $upgraded_hash)"; capture_failure_evidence "upgrade-failure"; fi
   port_forward 18080
   if [[ "$(http_code http://127.0.0.1:18080/healthz)" == "200" ]]; then
     ok "upgraded /healthz 200"
@@ -804,7 +864,9 @@ PY
   if [[ "$elapsed_ms" -le 120000 ]]; then ok "pod terminated inside its grace period"; else fail "pod termination exceeded its grace period"; capture_failure_evidence "termination-failure"; fi
   local restart_hash
   restart_hash="$(deployment_pod_hash)"
-  if wait_pod_ready 300s "$restart_hash"; then ok "replacement pod Ready after restart (revision $restart_hash)"; else fail "replacement pod did not become Ready (revision $restart_hash)"; capture_failure_evidence "restart-failure"; fi
+  if ! require_hash "replacement pod" "$restart_hash"; then
+    fail "replacement pod did not become Ready (revision unknown)"
+  elif wait_pod_ready 300s "$restart_hash"; then ok "replacement pod Ready after restart (revision $restart_hash)"; else fail "replacement pod did not become Ready (revision $restart_hash)"; capture_failure_evidence "restart-failure"; fi
   if [[ "$(kubectl_ns get pvc -l "app.kubernetes.io/instance=$RELEASE" -o jsonpath='{.items[0].metadata.uid}')" == "$pvc_uid" ]]; then
     ok "same PVC retained across pod restart"
   else fail "PVC changed across pod restart"; fi
@@ -830,12 +892,17 @@ PY
   # port-forward that can only fail.
   local rollback_hash rollback_pod
   rollback_hash="$(deployment_pod_hash)"
-  if wait_pod_running 300s "$rollback_hash"; then
+  if ! require_hash "rolled back pod" "$rollback_hash"; then
+    fail "rolled back pod did not reach Running (revision unknown)"
+  elif wait_pod_running 300s "$rollback_hash"; then
     ok "rolled back pod Running (revision $rollback_hash)"
   else
     fail "rolled back pod did not reach Running (revision $rollback_hash)"; capture_failure_evidence "rollback-failure"
   fi
-  rollback_pod="$(current_pod_name_for_hash "$rollback_hash")"
+  rollback_pod=""
+  if [[ -n "$rollback_hash" ]]; then
+    rollback_pod="$(current_pod_name_for_hash "$rollback_hash")"
+  fi
   if [[ -z "$rollback_pod" ]]; then
     fail "rolled back pod name could not be determined (revision $rollback_hash)"; capture_failure_evidence "rollback-failure"
   elif ! port_forward_pod "$rollback_pod" 18080; then
@@ -857,7 +924,9 @@ PY
     --set image.tag=accept-current --set image.pullPolicy=Never >/dev/null
   local reupgraded_hash
   reupgraded_hash="$(deployment_pod_hash)"
-  if wait_pod_ready 300s "$reupgraded_hash"; then ok "re-upgraded pod Ready (revision $reupgraded_hash)"; else fail "re-upgraded pod did not become Ready (revision $reupgraded_hash)"; capture_failure_evidence "reupgrade-failure"; fi
+  if ! require_hash "re-upgraded pod" "$reupgraded_hash"; then
+    fail "re-upgraded pod did not become Ready (revision unknown)"
+  elif wait_pod_ready 300s "$reupgraded_hash"; then ok "re-upgraded pod Ready (revision $reupgraded_hash)"; else fail "re-upgraded pod did not become Ready (revision $reupgraded_hash)"; capture_failure_evidence "reupgrade-failure"; fi
 
   safe_failure_phase
 
@@ -1261,6 +1330,48 @@ PYEOF
     ok "self-test: readiness polling distinguishes wrong revision, terminating, and pending pods; rollback accepts Running-not-Ready"
   else
     fail "self-test: readiness polling regression cases failed"
+  fi
+
+  # 10. Revision-hash resolution regression (PR 812 defect): the
+  # Deployment template does NOT carry pod-template-hash, so the
+  # hash must come from the current ReplicaSet (highest revision
+  # owned by the release Deployment). An RS from another release,
+  # an RS without a hash, and a lower revision must never win;
+  # no RS at all, or no hash at all, must fail closed (exit 1,
+  # empty output), never silently return an empty hash.
+  mkdir -p "$tmp/rs"
+  RELEASE="nexaroute" SELFTEST_RS="$tmp/rs" python3 - <<'PYEOF'
+import json, os
+base = os.environ["SELFTEST_RS"]
+def rs(name, rev, hashv, owner="nexaroute-nexaroute", controller=True):
+    meta = {"name": name, "labels": {}, "annotations": {}}
+    if hashv:
+        meta["labels"]["pod-template-hash"] = hashv
+    if rev is not None:
+        meta["annotations"]["deployment.kubernetes.io/revision"] = str(rev)
+    if owner:
+        meta["ownerReferences"] = [{"controller": controller, "kind": "Deployment", "name": owner}]
+    return {"metadata": meta}
+cases = {
+    "current-wins": [rs("old", 2, "oldhash"), rs("new", 3, "newhash"), rs("other-release", 9, "wronghash", owner="other-nexaroute")],
+    "hashless-current-ignored": [rs("old", 2, "oldhash"), rs("new-nohash", 3, "")],
+    "no-rs": [],
+    "no-hash": [rs("a", 1, ""), rs("b", 2, "")],
+    "non-controller-owner-ignored": [rs("x", 5, "wronghash", controller=False)],
+}
+for name, items in cases.items():
+    json.dump({"items": items}, open(os.path.join(base, name + ".json"), "w"))
+PYEOF
+  local rs_ok=1
+  [[ "$(RELEASE="nexaroute" deployment_hash_from_rs_json "$tmp/rs/current-wins.json")" == "newhash" ]] || rs_ok=0
+  [[ "$(RELEASE="nexaroute" deployment_hash_from_rs_json "$tmp/rs/hashless-current-ignored.json")" == "oldhash" ]] || rs_ok=0
+  if RELEASE="nexaroute" deployment_hash_from_rs_json "$tmp/rs/no-rs.json" >/dev/null 2>&1; then rs_ok=0; fi
+  if RELEASE="nexaroute" deployment_hash_from_rs_json "$tmp/rs/no-hash.json" >/dev/null 2>&1; then rs_ok=0; fi
+  if RELEASE="nexaroute" deployment_hash_from_rs_json "$tmp/rs/non-controller-owner-ignored.json" >/dev/null 2>&1; then rs_ok=0; fi
+  if [[ "$rs_ok" -eq 1 ]]; then
+    ok "self-test: revision hash resolves from the current ReplicaSet and fails closed when undeterminable"
+  else
+    fail "self-test: revision hash resolution regression cases failed"
   fi
 }
 
