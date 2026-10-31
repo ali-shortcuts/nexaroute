@@ -33,6 +33,8 @@ echo '== SBOM generator trust-chain checks =='
 ./scripts/test-generate-sbom.sh
 echo '== coverage gate regression checks =='
 ./scripts/test-coverage-gate.sh
+echo '== vault runner acceptance regression checks =='
+bash scripts/test-vault-runner-acceptance.sh
 echo '== web ui javascript syntax =='
 node --check internal/httpapi/web/app.js
 node --check internal/httpapi/web/visual-agent.js

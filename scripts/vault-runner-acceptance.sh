@@ -42,6 +42,8 @@ VAULT_IMAGE="hashicorp/vault:1.18.5"
 VAULT_PORT="18200"
 GATEWAY_PORT="18080"
 CONTAINER_NAME="nexaroute-vault-acceptance"
+SELFTEST=0
+SELFTEST_CHILD=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -49,6 +51,12 @@ while [ $# -gt 0 ]; do
     --vault-image) VAULT_IMAGE="$2"; shift 2 ;;
     --vault-port) VAULT_PORT="$2"; shift 2 ;;
     --gateway-port) GATEWAY_PORT="$2"; shift 2 ;;
+    --self-test) SELFTEST=1; shift ;;
+    # Internal child modes used by --self-test to prove the real EXIT
+    # trap writes a summary and preserves the exit code. Not for normal
+    # runs and not documented as acceptance evidence.
+    --self-test-child-success) SELFTEST_CHILD="success"; shift ;;
+    --self-test-child-failure) SELFTEST_CHILD="failure"; shift ;;
     *) echo "vault-runner-acceptance: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -66,20 +74,88 @@ CHECKS_FILE="$WORK/checks.tsv"
 VAULT_VERSION="unknown"
 VAULT_STORAGE="unknown"
 VAULT_HA_ENABLED="false"
+SUMMARY_WRITTEN=0
+
+log() { echo "vault-runner-acceptance: $*"; }
+pass() { printf '%s\tPASS\n' "$1" >> "$CHECKS_FILE"; log "PASS $1"; }
+fail() { printf '%s\tFAIL\t%s\n' "$1" "$2" >> "$CHECKS_FILE"; log "FAIL $1: $2"; exit 1; }
+
+# write_summary <fallback-outcome> <exit-code>: write the sanitized
+# summary from the check list. Only check IDs/statuses and safe
+# environment metadata are included; failure details and HTTP bodies
+# are never copied. A fallback of PASS can still become FAIL if any
+# recorded check failed or nothing passed.
+write_summary() {
+  local fallback="$1" exit_code="$2"
+  local out="$OUT_DIR/vault-runner-summary.json"
+  if [ ! -f "$CHECKS_FILE" ]; then
+    return 1
+  fi
+  if python3 - "$CHECKS_FILE" "$out" "$VAULT_VERSION" "$VAULT_STORAGE" \
+      "$VAULT_HA_ENABLED" "$VAULT_IMAGE" "$fallback" "$exit_code" <<'PYEOF'
+import json, sys
+checks_path, out_path, version, storage, ha, image, fallback, exit_code = sys.argv[1:9]
+checks = []
+for line in open(checks_path):
+    parts = line.rstrip("\n").split("\t")
+    if len(parts) < 2:
+        continue
+    checks.append({"id": parts[0], "status": parts[1]})
+passed = sum(1 for c in checks if c["status"] == "PASS")
+failed = sum(1 for c in checks if c["status"] == "FAIL")
+outcome = "PASS" if fallback == "PASS" and failed == 0 and passed > 0 else "FAIL"
+summary = {
+    "schema": "nexaroute.vault-runner-acceptance.v1",
+    "evidence_class": "runner-loopback",
+    "outcome": outcome,
+    "exit_code": int(exit_code),
+    "vault": {"version": version, "storage_type": storage, "ha_enabled": ha == "true",
+              "topology": "single-node container on the same GitHub Actions runner",
+              "image": image, "address": "http://127.0.0.1 (loopback, http allowed for loopback only)"},
+    "issues": ["648", "649"],
+    "totals": {"checks": len(checks), "passed": passed, "failed": failed},
+    "checks": checks,
+    "limitations": [
+        "This run used a disposable Vault container on the same runner, over loopback HTTP. It is NOT a staging Vault.",
+        "HA failover was NOT tested: the Vault was single-node, and the restart test is a container stop/start + unseal, not an HA failover event.",
+        "Long-running token renewal, AppRole/Kubernetes auth, HSM/KMS backing, and multi-host topology were NOT tested.",
+        "The KV gateway boot and the Transit migration used a dummy provider key (acceptance-plaintext), never a real provider credential.",
+        "No token, key, ciphertext, or wrapped DEK is included in any report.",
+    ],
+}
+with open(out_path, "w") as f:
+    json.dump(summary, f, indent=2)
+    f.write("\n")
+print(f"vault-runner-acceptance: {passed}/{len(checks)} checks PASS")
+PYEOF
+  then
+    chmod 600 "$out" 2>/dev/null || true
+    SUMMARY_WRITTEN=1
+    return 0
+  fi
+  # Even if python3 is unavailable, leave a valid minimal summary so
+  # the artifact upload cannot fail for "no files found".
+  printf '{"schema":"nexaroute.vault-runner-acceptance.v1","evidence_class":"runner-loopback","outcome":"FAIL","exit_code":%s,"checks":[],"limitations":["summary writer failed; see the step log"]}\n' \
+    "$exit_code" > "$out" 2>/dev/null || true
+  if [ -f "$out" ]; then SUMMARY_WRITTEN=1; fi
+  return 0
+}
 
 cleanup() {
+  local code=$?
+  trap - EXIT
+  if [ "$SUMMARY_WRITTEN" -eq 0 ] && [ -f "$CHECKS_FILE" ]; then
+    write_summary FAIL "$code" >/dev/null 2>&1 || true
+  fi
   if [ -n "${GATEWAY_PID:-}" ] && kill -0 "$GATEWAY_PID" 2>/dev/null; then
     kill "$GATEWAY_PID" 2>/dev/null || true
     wait "$GATEWAY_PID" 2>/dev/null || true
   fi
   docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
   rm -rf "$WORK"
+  exit "$code"
 }
 trap cleanup EXIT
-
-log() { echo "vault-runner-acceptance: $*"; }
-pass() { printf '%s\tPASS\n' "$1" >> "$CHECKS_FILE"; log "PASS $1"; }
-fail() { printf '%s\tFAIL\t%s\n' "$1" "$2" >> "$CHECKS_FILE"; log "FAIL $1: $2"; exit 1; }
 
 # mask <value>: register a secret with the Actions runner only. Outside
 # Actions this prints nothing, so the value never reaches a log.
@@ -127,6 +203,85 @@ require_status() {
 json_field() { # json_field <file> <jq-filter>
   jq -r "$2" "$1" 2>/dev/null || echo ""
 }
+
+# selftest_phase: deterministic, Docker-free checks of the summary
+# writer (success and early-failure paths) and the observed Vault
+# 1.18.5 Transit-key API contract. The failure path runs as a child
+# process so the real EXIT trap writes the summary and preserves the
+# nonzero exit code; this is not a live Vault run and proves no
+# acceptance claim.
+selftest_phase() {
+  local tmp="$OUT_DIR/selftest"
+  rm -rf "$tmp"
+  mkdir -p "$tmp"
+  local script_path
+  script_path="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+
+  local code=0
+  bash "$script_path" --self-test-child-success --out-dir "$tmp/success" \
+    >"$tmp/success.log" 2>&1 || code=$?
+  if [ "$code" -eq 0 ] && python3 - "$tmp/success/vault-runner-summary.json" <<'PYEOF'
+import json, sys
+s = json.load(open(sys.argv[1]))
+assert s["outcome"] == "PASS", s
+assert s["exit_code"] == 0
+assert len(s["checks"]) == 2
+assert all(set(c) == {"id", "status"} for c in s["checks"])
+assert "detail" not in json.dumps(s)
+PYEOF
+  then
+    pass "selftest.success_summary"
+  else
+    fail "selftest.success_summary" "success path did not produce a PASS summary with exit 0 (code $code)"
+  fi
+
+  code=0
+  bash "$script_path" --self-test-child-failure --out-dir "$tmp/failure" \
+    >"$tmp/failure.log" 2>&1 || code=$?
+  if [ "$code" -eq 1 ] && python3 - "$tmp/failure/vault-runner-summary.json" <<'PYEOF'
+import json, sys
+s = json.load(open(sys.argv[1]))
+assert s["outcome"] == "FAIL", s
+assert s["exit_code"] == 1
+ids = [c["id"] for c in s["checks"]]
+assert "selftest.child.forced" in ids
+assert "SENTINEL-NOT-A-SECRET" not in json.dumps(s)
+assert all(set(c) == {"id", "status"} for c in s["checks"])
+PYEOF
+  then
+    pass "selftest.failure_summary"
+  else
+    fail "selftest.failure_summary" "failure path did not preserve exit 1 with a sanitized FAIL summary (code $code)"
+  fi
+
+  # Observed Vault 1.18.5 contract (run 41194842427): key creation is
+  # HTTP 200, not 204, and the key is verified by readback.
+  if grep -q 'require_status "vault.transit_key" 200 "$code"' "$script_path" \
+      && grep -q 'require_status "vault.transit_key_readback" 200 "$code"' "$script_path"; then
+    pass "selftest.transit_key_contract"
+  else
+    fail "selftest.transit_key_contract" "transit key creation must expect HTTP 200 and verify a readback"
+  fi
+}
+
+# Internal self-test child modes: exercise the real summary writer and
+# EXIT trap without Docker, Vault, Go, or network access.
+if [ "$SELFTEST_CHILD" = "success" ]; then
+  pass "selftest.child.pass_a"
+  pass "selftest.child.pass_b"
+  write_summary PASS 0 || exit 1
+  exit 0
+fi
+if [ "$SELFTEST_CHILD" = "failure" ]; then
+  pass "selftest.child.before_failure"
+  fail "selftest.child.forced" "forced failure token=SENTINEL-NOT-A-SECRET"
+fi
+if [ "$SELFTEST" -eq 1 ]; then
+  selftest_phase
+  write_summary PASS 0 || true
+  log "self-test: summary writer and Transit contract checks passed (no live Vault)"
+  exit 0
+fi
 
 for tool in docker curl jq python3 go; do
   command -v "$tool" >/dev/null 2>&1 || fail "prereq" "required tool $tool is missing"
@@ -217,10 +372,21 @@ for policy in accept transit rotate; do
 done
 
 # Transit key: the pinned non-derived aes256-gcm96 type (ADR 0007).
+# Vault 1.18.5 returns HTTP 200 for key creation (observed in live run
+# 41194842427), not the 204 some older docs show. Pin the observed
+# status and prove the key exists by readback, rather than trusting a
+# success status alone.
 printf '{"type":"aes256-gcm96"}' > "$WORK/transit-key.json"
 code="$(vault_api_status "$WORK/root.token" POST transit/keys/nexaroute "$WORK/transit-key.json")"
-require_status "vault.transit_key" 204 "$code" "transit/keys/nexaroute"
+require_status "vault.transit_key" 200 "$code" "transit/keys/nexaroute"
+code="$(vault_api_status "$WORK/root.token" GET transit/keys/nexaroute "" "$WORK/transit-key-readback.json")"
+require_status "vault.transit_key_readback" 200 "$code" "transit/keys/nexaroute read"
+[ "$(json_field "$WORK/transit-key-readback.json" '.data.name')" = "nexaroute" ] \
+  || fail "vault.transit_key_readback" "readback key name is not nexaroute"
+[ "$(json_field "$WORK/transit-key-readback.json" '.data.type')" = "aes256-gcm96" ] \
+  || fail "vault.transit_key_readback" "readback key type is not aes256-gcm96"
 pass "vault.transit_key"
+pass "vault.transit_key_readback"
 
 create_token() { # create_token <policies-csv> <out-token-file>
   local policies="$1" out="$2"
@@ -505,42 +671,10 @@ if VAULT_ADDR="http://127.0.0.1:1" "$WORK/nexaroute" secrets verify --config "$W
 fi
 pass "transit.unavailable_fails"
 
-# ------------------------------------------------------- summary + leak scan
-python3 - "$CHECKS_FILE" "$OUT_DIR/vault-runner-summary.json" "$VAULT_VERSION" "$VAULT_STORAGE" "$VAULT_HA_ENABLED" "$VAULT_IMAGE" <<'PYEOF'
-import json, sys
-checks_path, out_path, version, storage, ha, image = sys.argv[1:7]
-checks = []
-for line in open(checks_path):
-    parts = line.rstrip("\n").split("\t")
-    checks.append({"id": parts[0], "status": parts[1], "detail": parts[2] if len(parts) > 2 else ""})
-passed = sum(1 for c in checks if c["status"] == "PASS")
-failed = sum(1 for c in checks if c["status"] == "FAIL")
-summary = {
-    "schema": "nexaroute.vault-runner-acceptance.v1",
-    "evidence_class": "runner-loopback",
-    "outcome": "PASS" if failed == 0 and passed > 0 else "FAIL",
-    "vault": {"version": version, "storage_type": storage, "ha_enabled": ha == "true",
-              "topology": "single-node container on the same GitHub Actions runner",
-              "image": image, "address": "http://127.0.0.1 (loopback, http allowed for loopback only)"},
-    "issues": ["648", "649"],
-    "totals": {"checks": len(checks), "passed": passed, "failed": failed},
-    "checks": checks,
-    "limitations": [
-        "This run used a disposable Vault container on the same runner, over loopback HTTP. It is NOT a staging Vault.",
-        "HA failover was NOT tested: the Vault was single-node, and the restart test is a container stop/start + unseal, not an HA failover event.",
-        "Long-running token renewal, AppRole/Kubernetes auth, HSM/KMS backing, and multi-host topology were NOT tested.",
-        "The KV gateway boot and the Transit migration used a dummy provider key (acceptance-plaintext), never a real provider credential.",
-        "No token, key, ciphertext, or wrapped DEK is included in any report.",
-    ],
-}
-with open(out_path, "w") as f:
-    json.dump(summary, f, indent=2)
-    f.write("\n")
-print(f"vault-runner-acceptance: {passed}/{len(checks)} checks PASS")
-PYEOF
-chmod 600 "$OUT_DIR/vault-runner-summary.json" 2>/dev/null || true
-
-# Leak scan: no created token, key, or wrapped value may appear in a report.
+# ------------------------------------------------------- leak scan + summary
+# Leak scan first: the summary must only be written once every check,
+# including this one, has been recorded. If it fails, fail() exits and
+# the EXIT trap writes the FAIL summary (check id/status only).
 for secret_file in "$WORK/kv.token" "$WORK/transit.token" "$WORK/rotate.token" "$WORK/legacy-key.b64"; do
   if [ -f "$secret_file" ] && grep -F -q "$(cat "$secret_file")" "$OUT_DIR"/* 2>/dev/null; then
     fail "hygiene.leak_scan" "a secret value was found in an output report"
@@ -553,3 +687,5 @@ pass "hygiene.leak_scan"
 
 log "DONE: reports in $OUT_DIR (vault-kv-acceptance.json, vault-runner-summary.json)"
 log "Evidence class is runner-loopback only. Do NOT cite this run as staging, HA, production, HSM, or tenant acceptance."
+
+write_summary PASS 0 || fail "summary.write" "could not write $OUT_DIR/vault-runner-summary.json"
