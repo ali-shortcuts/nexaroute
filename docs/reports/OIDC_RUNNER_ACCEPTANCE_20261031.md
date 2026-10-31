@@ -114,9 +114,10 @@ No real secret is used. Every password and the client secret
 are generated inside the run, kept only in a temporary
 directory with mode 0700 (files 0600), and destroyed with
 the container when the script exits. The summary contains
-test usernames and group names only, plus status codes; never
-a password, a client secret, a code, a token, or a session
-value. The working directory (config, security database,
+test usernames and group names only, plus status codes and
+callback endpoint paths (query strings are dropped); never a
+password, a client secret, an authorization code, a token, or
+a session value. The working directory (config, security database,
 gateway log) is deliberately NOT uploaded. The workflow reads
 no repository secret.
 

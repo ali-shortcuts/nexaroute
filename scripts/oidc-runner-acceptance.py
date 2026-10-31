@@ -84,6 +84,17 @@ def redact(text: str) -> str:
     return text
 
 
+def redact_url(url: str) -> str:
+    """Keep only scheme, host, and path; drop query and fragment.
+
+    Flow URLs carry one-time state, session codes, and tab ids. They are
+    not credentials, but the summary is published as evidence, so it
+    records only the endpoint path.
+    """
+    parts = urllib.parse.urlsplit(url or "")
+    return urllib.parse.urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
+
+
 def login_error(body: bytes) -> str:
     """Extract a short, non-secret Keycloak form error for diagnostics."""
     text = body.decode("utf-8", "replace")
@@ -290,6 +301,8 @@ def selftest() -> int:
         errors.append("Keycloak Admin API request is not sent as JSON")
     if "urllib.request.build_opener(_NoRedirect)" not in source:
         errors.append("HTTP redirects are followed automatically, hiding flow cookies")
+    if redact_url("http://127.0.0.1:1/admin/auth/oidc/callback?state=x&code=y") != "http://127.0.0.1:1/admin/auth/oidc/callback":
+        errors.append("summary URLs would leak flow query parameters")
     for field in ('"firstName"', '"lastName"', '"emailVerified": True'):
         if field not in source:
             errors.append(f"Keycloak test user is missing required profile field {field}")
@@ -565,7 +578,7 @@ def main(argv=None) -> int:
         sess_admin, status, _, url_admin, err_admin = do_login("oidc-admin-user")
         admin_session = "nexaroute_admin_session" in sess_admin.cookies and sess_admin.cookies["nexaroute_admin_session"] != ""
         check("oidc.login_admin", "Mapped admin user completes PKCE login and holds a session cookie",
-              status in (200, 303) and admin_session, f"final_status={status} session={'present' if admin_session else 'absent'} err={err_admin} url={redact(url_admin)}")
+              status in (200, 303) and admin_session, f"final_status={status} session={'present' if admin_session else 'absent'} err={err_admin} url={redact_url(url_admin)}")
         if admin_session:
             st, _, _ = api(sess_admin, "/admin/api/audit?limit=1")
             check("oidc.admin_audit", "Admin user can read the audit API", st == 200, f"status={st}")
@@ -579,7 +592,7 @@ def main(argv=None) -> int:
         sess_viewer, status, _, url_viewer, err_viewer = do_login("oidc-viewer-user")
         viewer_session = "nexaroute_admin_session" in sess_viewer.cookies and sess_viewer.cookies["nexaroute_admin_session"] != ""
         check("oidc.login_viewer", "Mapped viewer user completes PKCE login and holds a session cookie",
-              status in (200, 303) and viewer_session, f"final_status={status} session={'present' if viewer_session else 'absent'} err={err_viewer} url={redact(url_viewer)}")
+              status in (200, 303) and viewer_session, f"final_status={status} session={'present' if viewer_session else 'absent'} err={err_viewer} url={redact_url(url_viewer)}")
         if viewer_session:
             st, _, _ = api(sess_viewer, "/admin/api/snapshot")
             check("oidc.viewer_snapshot", "Viewer user can read the snapshot API", st == 200, f"status={st}")
@@ -594,7 +607,7 @@ def main(argv=None) -> int:
         unmapped_session = "nexaroute_admin_session" in sess_unmapped.cookies and sess_unmapped.cookies["nexaroute_admin_session"] != ""
         check("oidc.unmapped_denied", "Unmapped user is denied at the callback (401, no session cookie)",
               status == 401 and not unmapped_session,
-              f"final_status={status} session={'present' if unmapped_session else 'absent'} err={err_unmapped} url={redact(url_unmapped)}")
+              f"final_status={status} session={'present' if unmapped_session else 'absent'} err={err_unmapped} url={redact_url(url_unmapped)}")
 
         # --- logout (fresh admin login) ---
         sess_logout, status, _, _, _err_logout = do_login("oidc-admin-user")
