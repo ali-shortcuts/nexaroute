@@ -114,8 +114,51 @@ No real secret is used. Every password and the client secret
 are generated inside the run, kept only in a temporary
 directory with mode 0700 (files 0600), and destroyed with
 the container when the script exits. The summary contains
-test usernames and group names only, plus status codes; never
-a password, a client secret, a code, a token, or a session
-value. The working directory (config, security database,
+test usernames and group names only, plus status codes and
+callback endpoint paths (query strings are dropped); never a
+password, a client secret, an authorization code, a token, or
+a session value. The working directory (config, security database,
 gateway log) is deliberately NOT uploaded. The workflow reads
 no repository secret.
+
+## Update 2026-10-31: first runner dispatch failed; harness defects fixed
+
+The first dispatch (run
+[41207000118](https://github.com/ali-shortcuts/nexaroute/actions/runs/41207000118)
+on main `2f638da`) failed with `run.aborted` and no script summary. The
+workflow trap wrote a minimal FAIL summary. Investigating the harness
+found four deterministic defects, all fixed here:
+
+1. **Workspace deletion bug.** `work = pathlib.Path(os.environ.get(
+   "OIDC_RUNNER_WORKDIR", "")) or None` treated `Path(".")` as truthy,
+   so with the variable unset the script used the repository root as its
+   work directory and removed it in `finally` — deleting the summary the
+   workflow then tried to upload. It now falls back to a fresh temp dir,
+   refuses to remove the cwd, and has a self-test for both.
+2. **Wrong readiness port.** Keycloak 25+ serves `/health/*` on its
+   management port (9000 in the container), not on 8080. The script now
+   publishes and polls 9000; a run that would otherwise time out now
+   reaches Keycloak 26.0.8.
+3. **Admin API sent as form data.** `kc_admin` passed a dict to a helper
+   that form-encodes dicts, so Keycloak answered `415 Unsupported Media
+   Type`. Admin requests are now JSON.
+4. **Automatic redirects hid the flow.** `urllib` followed redirects
+   internally, so the form POST jumped straight to the gateway callback
+   without capturing intermediate cookies, and mapped users got 401.
+   The client now uses a no-redirect opener and drives every hop
+   explicitly. Also: test users now carry the profile fields Keycloak 26
+   requires (`email`, `firstName`, `lastName`, `emailVerified`), which
+   otherwise stop the flow at `VERIFY_PROFILE`.
+
+Local validation (not a GitHub runner, not an organizational tenant):
+disposable Keycloak 26.0.8 and the real gateway on loopback, checkout at
+the branch head. Result: **exit 0, 15/15 checks PASS**, including admin
+login/audit/snapshot, viewer login/snapshot/audit-403, unmapped-user
+401, and logout revocation. `python3 scripts/oidc-runner-acceptance.py
+--self-test` passes and is wired into `scripts/verify.sh`.
+
+This proves the harness now completes the Authorization Code + PKCE
+flow. It is **not** #647 acceptance: the evidence class remains
+`runner-keycloak`, not a real organizational IdP tenant, and a fresh
+GitHub Actions dispatch on the new main SHA is required. #647 stays
+OPEN.
