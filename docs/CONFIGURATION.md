@@ -1128,7 +1128,7 @@ gateway behaviour is unchanged.
 | `enabled` | Opt-in flag. Default `false`. |
 | `store_backend` | `"file"` (default when empty) or `"memory"`. `"memory"` is volatile and test/ephemeral-only. No other backend is offered; `"postgres"` is rejected. |
 | `store_path` | Required for the file backend. There is no implicit default path. A second process on the same path fails at open time on the file lock; a corrupt file fails at open time. Neither falls back silently. |
-| `gateway_base_url` | Loopback address backend nodes call. Empty (default) derives `http(s)://127.0.0.1:<listen-port>` from the configured listener (https when TLS is enabled). Must be an `http(s)` URL when set. |
+| `gateway_base_url` | Loopback address backend nodes call. Empty (default) derives `http(s)://127.0.0.1:<listen-port>` from the configured listener (https when TLS is enabled). When set, it must be a loopback `http(s)` URL only: host `127.0.0.1`, `::1`, or `localhost`, with an optional port. Public IPs, external hostnames, embedded credentials, and any path (other than a single trailing slash), query, or fragment are rejected, so the configured Bearer token can never be sent to an external destination. |
 | `gateway_token_ref` | Name of the environment variable holding a client-auth token for loopback calls. The reference, never the secret, lives in config. Empty (default) means `llm.chat` nodes fail closed at client authentication. |
 | `worker_id` | Lease identity. Empty (default) means the fixed worker `"gateway"`, stable across restarts so leases stay attributable. A configured value overrides it. The fixed default is correct only for the single-process file/memory stores wired here; a future multi-process store must require explicit distinct worker ids. |
 

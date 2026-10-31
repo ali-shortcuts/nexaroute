@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -52,6 +54,51 @@ func (c *GatewayClient) client() *http.Client {
 	}
 }
 
+// validateLoopbackBaseURL is the GatewayClient's defense-in-depth gate
+// for the same rule config.ValidateLoopbackGatewayBaseURL enforces at
+// configuration time: a GatewayClient base URL must be a loopback
+// http(s) URL (127.0.0.1, ::1, or localhost, optional port 1..65535,
+// no userinfo, no path other than "" or "/", no query, no fragment).
+// It runs before any token is resolved or any request is made, so a
+// directly constructed client can never send a Bearer token to an
+// external host, even if configuration validation was bypassed.
+func validateLoopbackBaseURL(raw string) error {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return fmt.Errorf("gateway base URL must not be empty")
+	}
+	u, err := url.Parse(trimmed)
+	if err != nil || u.Host == "" || u.Hostname() == "" {
+		return fmt.Errorf("gateway base URL must be a loopback http(s) URL")
+	}
+	if !strings.EqualFold(u.Scheme, "http") && !strings.EqualFold(u.Scheme, "https") {
+		return fmt.Errorf("gateway base URL must be a loopback http(s) URL")
+	}
+	if u.Opaque != "" || u.User != nil {
+		return fmt.Errorf("gateway base URL must not contain embedded credentials")
+	}
+	if u.Path != "" && u.Path != "/" {
+		return fmt.Errorf("gateway base URL must not contain a path")
+	}
+	if u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.RawFragment != "" {
+		return fmt.Errorf("gateway base URL must not contain a query or fragment")
+	}
+	if port := u.Port(); port != "" {
+		pn, perr := strconv.Atoi(port)
+		if perr != nil || pn < 1 || pn > 65535 {
+			return fmt.Errorf("gateway base URL port must be between 1 and 65535")
+		}
+	}
+	host := u.Hostname()
+	if strings.EqualFold(host, "localhost") {
+		return nil
+	}
+	if ip := net.ParseIP(host); ip != nil && (ip.String() == "127.0.0.1" || ip.String() == "::1") {
+		return nil
+	}
+	return fmt.Errorf("gateway base URL must be a loopback address (127.0.0.1, ::1, or localhost)")
+}
+
 func (c *GatewayClient) maxBytes() int64 {
 	if c.MaxResponseBytes > 0 {
 		return c.MaxResponseBytes
@@ -67,6 +114,11 @@ func (c *GatewayClient) authToken() (string, error) {
 }
 
 func (c *GatewayClient) doJSON(ctx context.Context, method, path string, reqBody any, respBody any) (int, error) {
+	// Fail closed before resolving the auth token or dialling: a
+	// non-loopback base URL must never receive a Bearer token.
+	if err := validateLoopbackBaseURL(c.BaseURL); err != nil {
+		return 0, NewNodeError("backend_error", false, "gateway request failed: %s", RedactError(err))
+	}
 	var body io.Reader
 	if reqBody != nil {
 		raw, err := json.Marshal(reqBody)
@@ -355,6 +407,9 @@ func (c *GatewayClient) VideoAsset(ctx context.Context, jobID, assetID string) (
 	// anyway and only filled metadata afterwards.)
 	if meta.ID == "" {
 		return VideoAssetInfo{}, nil, NewNodeError("asset_not_found", false, "asset is not listed on this video job")
+	}
+	if err := validateLoopbackBaseURL(c.BaseURL); err != nil {
+		return VideoAssetInfo{}, nil, NewNodeError("backend_error", false, "video asset request failed: %s", RedactError(err))
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(c.BaseURL, "/")+"/v1/video/jobs/"+url.PathEscape(jobID)+"/assets/"+url.PathEscape(assetID), nil)
 	if err != nil {

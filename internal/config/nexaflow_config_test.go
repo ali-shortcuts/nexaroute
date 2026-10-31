@@ -65,6 +65,22 @@ func TestValidateNexaflowGatewayFields(t *testing.T) {
 		wantErr bool
 	}{
 		{"valid https base URL", func(c *Config) { c.Nexaflow.GatewayBaseURL = "https://127.0.0.1:8443" }, false},
+		{"valid IPv4 loopback base URL", func(c *Config) { c.Nexaflow.GatewayBaseURL = "http://127.0.0.1:8080" }, false},
+		{"valid IPv6 loopback base URL", func(c *Config) { c.Nexaflow.GatewayBaseURL = "http://[::1]:8080" }, false},
+		{"valid localhost base URL", func(c *Config) { c.Nexaflow.GatewayBaseURL = "https://localhost:8443" }, false},
+		{"valid loopback base URL with trailing slash", func(c *Config) { c.Nexaflow.GatewayBaseURL = "https://127.0.0.1:8443/" }, false},
+		{"external hostname rejected", func(c *Config) { c.Nexaflow.GatewayBaseURL = "https://example.com" }, true},
+		{"non-loopback IP rejected", func(c *Config) { c.Nexaflow.GatewayBaseURL = "http://8.8.8.8:8080" }, true},
+		{"private IP rejected", func(c *Config) { c.Nexaflow.GatewayBaseURL = "http://10.0.0.5:8080" }, true},
+		{"other loopback spelling rejected", func(c *Config) { c.Nexaflow.GatewayBaseURL = "http://127.0.0.2:8080" }, true},
+		{"loopback-like external hostname rejected", func(c *Config) { c.Nexaflow.GatewayBaseURL = "http://127.0.0.1.evil.com:8080" }, true},
+		{"localhost subdomain rejected", func(c *Config) { c.Nexaflow.GatewayBaseURL = "http://sub.localhost:8080" }, true},
+		{"embedded credentials rejected", func(c *Config) { c.Nexaflow.GatewayBaseURL = "http://user:secret@127.0.0.1:8080" }, true},
+		{"path rejected", func(c *Config) { c.Nexaflow.GatewayBaseURL = "http://127.0.0.1:8080/v1" }, true},
+		{"query rejected", func(c *Config) { c.Nexaflow.GatewayBaseURL = "http://127.0.0.1:8080?token=x" }, true},
+		{"bare query rejected", func(c *Config) { c.Nexaflow.GatewayBaseURL = "http://127.0.0.1:8080?" }, true},
+		{"fragment rejected", func(c *Config) { c.Nexaflow.GatewayBaseURL = "http://127.0.0.1:8080#section" }, true},
+		{"port out of range rejected", func(c *Config) { c.Nexaflow.GatewayBaseURL = "http://127.0.0.1:99999" }, true},
 		{"non-http base URL rejected", func(c *Config) { c.Nexaflow.GatewayBaseURL = "ftp://example.com" }, true},
 		{"hostless base URL rejected", func(c *Config) { c.Nexaflow.GatewayBaseURL = "http://" }, true},
 		{"valid token ref", func(c *Config) { c.Nexaflow.GatewayTokenRef = "NEXAFLOW_TOKEN" }, false},
@@ -91,5 +107,52 @@ func TestValidateNexaflowGatewayFields(t *testing.T) {
 	cfg.Nexaflow.GatewayTokenRef = "bad name!"
 	if err := cfg.validateNexaflow(); err != nil {
 		t.Fatalf("disabled nexaflow section rejected: %v", err)
+	}
+}
+
+// TestValidateLoopbackGatewayBaseURL is the regression table for the
+// loopback-only rule itself: the three approved spellings pass, and
+// every external, credential-bearing, or component-bearing form fails.
+// This is the table a security reviewer can read without following
+// the full config validation path.
+func TestValidateLoopbackGatewayBaseURL(t *testing.T) {
+	cases := []struct {
+		name    string
+		raw     string
+		wantErr bool
+	}{
+		{"valid IPv4 loopback", "http://127.0.0.1:8080", false},
+		{"valid IPv4 loopback https", "https://127.0.0.1:8443", false},
+		{"valid IPv6 loopback", "http://[::1]:8080", false},
+		{"valid IPv6 loopback https", "https://[::1]:8443/", false},
+		{"valid localhost", "https://localhost:8443", false},
+		{"valid localhost case-insensitive", "http://LOCALHOST:8080", false},
+		{"valid loopback without port", "http://127.0.0.1", false},
+		{"reject https://example.com", "https://example.com", true},
+		{"reject external hostname with port", "https://gateway.example:8443", true},
+		{"reject a non-loopback IP", "http://8.8.8.8:8080", true},
+		{"reject private IP", "http://192.168.1.10:8080", true},
+		{"reject link-local IP", "http://169.254.169.254", true},
+		{"reject URLs with embedded credentials", "http://user:secret@127.0.0.1:8080", true},
+		{"reject credentials on external host", "https://user@127.0.0.1:8080@evil.com/", true},
+		{"reject unsupported path", "http://127.0.0.1:8080/v1", true},
+		{"reject unsupported query", "http://127.0.0.1:8080?x=1", true},
+		{"reject unsupported fragment", "http://127.0.0.1:8080#x", true},
+		{"reject non-http scheme", "ftp://127.0.0.1:8080", true},
+		{"reject empty", "", true},
+		{"reject hostless", "http://", true},
+		{"reject mapped loopback", "http://[::ffff:127.0.0.1]:8080", true},
+		{"reject zero address", "http://0.0.0.0:8080", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ValidateLoopbackGatewayBaseURL(tc.raw)
+			if tc.wantErr && err == nil {
+				t.Fatalf("ValidateLoopbackGatewayBaseURL(%q) accepted, want rejection", tc.raw)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("ValidateLoopbackGatewayBaseURL(%q) rejected: %v", tc.raw, err)
+			}
+		})
 	}
 }
