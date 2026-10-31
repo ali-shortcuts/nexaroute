@@ -573,23 +573,28 @@ func TestContinue95FileStoreMoreBranches(t *testing.T) {
 	// Persist write failure: seed a store, then make its directory
 	// read-only so CreateTemp fails inside persist (lock + load still
 	// succeed because both files already exist).
-	roDir := filepath.Join(dir, "ro")
-	if err := os.MkdirAll(roDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	roStore, _ := NewFileStore(filepath.Join(roDir, "store.json"))
-	if _, err := roStore.Put(ctx, "ns", 0, []byte("v1")); err != nil {
-		t.Fatalf("seed ro store: %v", err)
-	}
-	if err := os.Chmod(roDir, 0o555); err != nil {
-		t.Fatal(err)
-	}
-	_, roErr := roStore.Put(ctx, "ns", 1, []byte("v2"))
-	if err := os.Chmod(roDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if roErr == nil {
-		t.Error("Put into a read-only directory should fail at persist")
+	// Permission-failure branch requires a non-root user: root bypasses
+	// directory permissions, so this section is skipped under root.
+	// CI runners are non-root and still exercise it.
+	if os.Geteuid() != 0 {
+		roDir := filepath.Join(dir, "ro")
+		if err := os.MkdirAll(roDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		roStore, _ := NewFileStore(filepath.Join(roDir, "store.json"))
+		if _, err := roStore.Put(ctx, "ns", 0, []byte("v1")); err != nil {
+			t.Fatalf("seed ro store: %v", err)
+		}
+		if err := os.Chmod(roDir, 0o555); err != nil {
+			t.Fatal(err)
+		}
+		_, roErr := roStore.Put(ctx, "ns", 1, []byte("v2"))
+		if err := os.Chmod(roDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if roErr == nil {
+			t.Error("Put into a read-only directory should fail at persist")
+		}
 	}
 	// Restore onto an existing directory: rename of the temp file onto
 	// a directory fails at the commit step.

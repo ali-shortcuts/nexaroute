@@ -127,21 +127,26 @@ func TestContinue95RunWorkRootBranches(t *testing.T) {
 	}
 	// Read-only work root: first MkdirTemp fails, MkdirAll succeeds
 	// (the directory already exists), second MkdirTemp fails.
-	roDir := filepath.Join(dir, "ro")
-	if err := os.MkdirAll(roDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(roDir, 0o555); err != nil {
-		t.Fatal(err)
-	}
-	p = NewCodeRender(nil, r, nil, roDir, nil, 120)
-	job = Continue95Job(plan)
-	p.run(context.Background(), job, req)
-	if err := os.Chmod(roDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if job.state != video.StateFailed || !strings.Contains(job.err, "job directory") {
-		t.Errorf("read-only work root: state=%s err=%q", job.state, job.err)
+	// Permission-failure branch requires a non-root user: root bypasses
+	// directory permissions, so this section is skipped under root.
+	// CI runners are non-root and still exercise it.
+	if os.Geteuid() != 0 {
+		roDir := filepath.Join(dir, "ro")
+		if err := os.MkdirAll(roDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(roDir, 0o555); err != nil {
+			t.Fatal(err)
+		}
+		p = NewCodeRender(nil, r, nil, roDir, nil, 120)
+		job = Continue95Job(plan)
+		p.run(context.Background(), job, req)
+		if err := os.Chmod(roDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if job.state != video.StateFailed || !strings.Contains(job.err, "job directory") {
+			t.Errorf("read-only work root: state=%s err=%q", job.state, job.err)
+		}
 	}
 }
 
@@ -193,6 +198,12 @@ func Continue95WriteWAV(path string, seconds int) error {
 }
 
 func TestContinue95RunSubtitleWriteFailure(t *testing.T) {
+	// Permission-failure branch requires a non-root user: root bypasses
+	// directory permissions, so the locked-dir write never fails
+	// under root. CI runners are non-root and still exercise it.
+	if os.Geteuid() == 0 {
+		t.Skip("locked-dir write-failure branch requires a non-root user")
+	}
 	r := Continue95Renderer(t)
 	plan := Continue95ParsePlan(t)
 	p := NewCodeRender(nil, r, Continue95WAVNarrator{lockDir: true}, t.TempDir(), nil, 120)
