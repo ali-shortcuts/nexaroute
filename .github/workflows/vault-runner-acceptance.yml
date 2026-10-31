@@ -1,0 +1,75 @@
+name: Vault runner acceptance
+
+# Runner-only Vault acceptance for issues #648 (KV) and #649 (Transit).
+#
+# This workflow is deliberately NOT a pull_request gate and NOT a
+# staging/HA verdict. It runs only on manual dispatch, on a
+# GitHub-hosted runner, because this repository's own environment
+# has no private Vault and no external server access. The runner
+# starts a disposable, single-node, NON-DEV Vault container
+# (file storage, init 3 shares / threshold 2, unsealed with 2
+# shares), runs the acceptance script against it over loopback
+# HTTP, and uploads the redacted reports as artifacts.
+#
+# Evidence class of every report this workflow produces:
+#   runner-loopback
+# That means: single-node container on the same runner, loopback
+# only, dummy provider key only. It is NOT staging, NOT HA, NOT
+# production, NOT HSM/KMS, NOT a tenant, and NOT multi-host.
+# Do not cite a PASS here for any of those claims. The remaining
+# staging/HA/tenant steps in #648 and #649 stay BLOCKED until an
+# operator runs them on a real staging instance and records them.
+#
+# No real secret is used anywhere in this workflow. The Vault
+# tokens are created inside the run, used only from 0600 files
+# in a temporary directory, masked in logs, and destroyed with
+# the container when the job ends. The uploaded artifacts are
+# the redacted vault-accept report and the runner summary only;
+# never the config, the key files, or the temporary directory.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vault-runner-acceptance-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  vault-runner-acceptance:
+    name: Vault KV + Transit on a runner container
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.x'
+          cache: false
+      - name: Run Vault runner acceptance (#648 KV, #649 Transit)
+        # Invoked with bash, not ./scripts/..., so the run does not
+        # depend on the script's executable bit surviving a push.
+        run: |
+          set -euo pipefail
+          bash scripts/vault-runner-acceptance.sh --out-dir vault-runner-reports
+      - name: Show redacted summary
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ -f vault-runner-reports/vault-runner-summary.json ]; then
+            cat vault-runner-reports/vault-runner-summary.json
+          else
+            echo "vault-runner-acceptance: no summary was produced; the run failed before the summary step (see the step log for the FAIL line)."
+          fi
+      - name: Upload redacted Vault runner reports
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: vault-runner-reports-${{ github.sha }}
+          path: vault-runner-reports/
+          if-no-files-found: error
+          retention-days: 90
