@@ -446,14 +446,19 @@ func TestCoveragePassDownloadAssetErrorBranches(t *testing.T) {
 	}
 	// Temporary file creation failure: make the destination directory read-only
 	// after it passes the existence check.
-	roDir := t.TempDir()
-	roOut := filepath.Join(roDir, "out.mp4")
-	if err := os.Chmod(roDir, 0500); err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = os.Chmod(roDir, 0700) }()
-	if err := client.DownloadAsset(ctx, "job-123", "asset-1", roOut); err == nil || !strings.Contains(err.Error(), "create temporary download file") {
-		t.Fatalf("tmp create error=%v", err)
+	// Permission-failure branch requires a non-root user: root bypasses
+	// directory permissions, so this section is skipped under root.
+	// CI runners are non-root and still exercise it.
+	if os.Geteuid() != 0 {
+		roDir := t.TempDir()
+		roOut := filepath.Join(roDir, "out.mp4")
+		if err := os.Chmod(roDir, 0500); err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = os.Chmod(roDir, 0700) }()
+		if err := client.DownloadAsset(ctx, "job-123", "asset-1", roOut); err == nil || !strings.Contains(err.Error(), "create temporary download file") {
+			t.Fatalf("tmp create error=%v", err)
+		}
 	}
 }
 

@@ -339,6 +339,12 @@ func TestAdminClientKeyRevokeRequiresManageKeysRole(t *testing.T) {
 }
 
 func TestAdminClientKeyRevokePersistenceFailureLeavesKeyActive(t *testing.T) {
+	// Permission-failure branch requires a non-root user: root bypasses
+	// directory permissions, so the persistence failure never occurs
+	// under root. CI runners are non-root and still exercise it.
+	if os.Geteuid() == 0 {
+		t.Skip("persistence-failure branch requires a non-root user")
+	}
 	const keyHash = "1111111111111111111111111111111111111111111111111111111111111111"
 	cfg := config.Default()
 	cfg.Probe.Enabled = false

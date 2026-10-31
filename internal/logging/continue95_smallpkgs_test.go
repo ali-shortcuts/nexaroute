@@ -53,22 +53,27 @@ func TestContinue95RotatingWriterConstructorErrors(t *testing.T) {
 	}
 	// Cleanup error at startup: a stale backup beyond retention in a
 	// directory that no longer permits removal.
-	roDir := filepath.Join(dir, "ro")
-	if err := os.MkdirAll(roDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(roDir, "app.log.9"), []byte("old"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(roDir, 0o555); err != nil {
-		t.Fatal(err)
-	}
-	_, roErr := NewRotatingWriter(filepath.Join(roDir, "app.log"), 2048, 2)
-	if err := os.Chmod(roDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if roErr == nil {
-		t.Error("startup cleanup in a read-only directory should fail")
+	// Permission-failure branch requires a non-root user: root bypasses
+	// directory permissions, so this section is skipped under root.
+	// CI runners are non-root and still exercise it.
+	if os.Geteuid() != 0 {
+		roDir := filepath.Join(dir, "ro")
+		if err := os.MkdirAll(roDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(roDir, "app.log.9"), []byte("old"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(roDir, 0o555); err != nil {
+			t.Fatal(err)
+		}
+		_, roErr := NewRotatingWriter(filepath.Join(roDir, "app.log"), 2048, 2)
+		if err := os.Chmod(roDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if roErr == nil {
+			t.Error("startup cleanup in a read-only directory should fail")
+		}
 	}
 	// Direct method error paths: cleanup ReadDir failure and open failure.
 	w := &RotatingWriter{path: filepath.Join(dir, "missing-dir-xyz", "app.log"), backups: 2}
@@ -179,6 +184,11 @@ func TestContinue95RotatingWriterWriteBranches(t *testing.T) {
 }
 
 func TestContinue95RotatingWriterZeroBackupRemoveError(t *testing.T) {
+	// Permission-failure branch requires a non-root user: root bypasses
+	// directory permissions. CI runners are non-root and still exercise it.
+	if os.Geteuid() == 0 {
+		t.Skip("removal-failure branch requires a non-root user")
+	}
 	dir := t.TempDir()
 	roDir := filepath.Join(dir, "ro0")
 	if err := os.MkdirAll(roDir, 0o755); err != nil {
@@ -270,6 +280,11 @@ func TestContinue95FanoutWriterMixedOutcomes(t *testing.T) {
 }
 
 func TestContinue95RotateLockedRenameErrors(t *testing.T) {
+	// Permission-failure branch requires a non-root user: root bypasses
+	// directory permissions. CI runners are non-root and still exercise it.
+	if os.Geteuid() == 0 {
+		t.Skip("rename-failure branch requires a non-root user")
+	}
 	// Direct rotateLocked calls in a read-only directory, where each
 	// rename/remove step fails at a different point. The file handle
 	// is opened before the directory is locked down, so Sync/Close
