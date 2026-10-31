@@ -1,0 +1,175 @@
+name: OIDC runner acceptance
+
+# Runner-only OIDC acceptance, issue 647 in the tracker.
+#
+# This workflow is deliberately NOT a pull_request gate and NOT
+# a tenant verdict. It runs only on manual dispatch, on a
+# GitHub-hosted runner, because this repository's own
+# environment has no organizational identity provider. The
+# runner starts a disposable Keycloak container on loopback,
+# creates a realm, a confidential client, two groups, and three
+# disposable test users inside the run, starts the real gateway
+# binary with admin.oidc pointing at that Keycloak issuer, and
+# drives the real Authorization Code + PKCE login flow over
+# plain HTTP (no browser): gateway login -> Keycloak login
+# form -> POST credentials -> gateway callback -> session.
+#
+# Evidence class of every report this workflow produces:
+#   runner-keycloak
+# That means: Keycloak container on the same runner, loopback
+# HTTP, disposable test users only, Keycloak start-dev only.
+# It is NOT a real organizational tenant, NOT Entra ID / Okta
+# / Auth0 / Google, NOT production, and NOT a claim about
+# provider-specific claim shapes or clock-skew policy beyond
+# what the run actually exercised.
+#
+# No real secret is used anywhere in this workflow. The
+# script generates every password and the client secret inside
+# the run, keeps them only in a temporary directory with mode
+# 0700 (files 0600), and destroys them with the container when
+# it exits. The uploaded summary contains test usernames and
+# group names only, plus status codes; never a password, a
+# client secret, a code, a token, or a session value. The
+# working directory (config, security database, gateway log)
+# is deliberately NOT uploaded.
+#
+# Observability, because raw logs and artifacts are not
+# readable by every consumer of a run (only run metadata,
+# per-step conclusions, and annotations are):
+#   * The run step has an EXIT trap: if the script wrote no
+#     summary, the trap writes a minimal summary in the same
+#     schema and emits one ::error annotation naming the
+#     failing check (run.aborted). The script itself also
+#     writes its summary on every handled failure, so the
+#     trap covers only a crash before that point.
+#   * A final step (if: always()) emits one ::error annotation
+#     for every FAIL check (check id and name only, never a
+#     password, secret, code, token, cookie, or session
+#     value), and exactly one ::notice annotation with the
+#     compact PASS/FAIL/NOT_RUN list, using %0A for line
+#     breaks (one multi-line notice, because annotations are
+#     capped per step).
+#   * Readiness waits are bounded: Keycloak health/ready is
+#     polled for at most 180 seconds (start-dev usually takes
+#     30-60 seconds), gateway health for at most 60 seconds.
+#     A timeout names the failing check in the summary.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oidc-runner-acceptance-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  oidc-runner-acceptance:
+    name: OIDC login against a runner Keycloak container
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.x'
+          cache: false
+      - name: Build gateway binary
+        id: build
+        run: |
+          set -euo pipefail
+          CGO_ENABLED=0 go build -trimpath -o oidc-runner-gateway ./cmd/gateway
+      - name: Run OIDC runner acceptance
+        id: oidc-run
+        run: |
+          set -euo pipefail
+          trap 'if [ ! -f oidc-runner-reports/oidc-runner-summary.json ]; then mkdir -p oidc-runner-reports; printf "%s\n" "{\"schema\":\"nexaroute.oidc-runner-acceptance.v1\",\"issue\":647,\"evidence_class\":\"runner-keycloak\",\"result\":\"FAIL\",\"keycloak_version_recorded\":\"NOT_RECORDED\",\"checks\":[{\"id\":\"run.aborted\",\"name\":\"Run completed without an infrastructure error\",\"status\":\"FAIL\"}]}" > oidc-runner-reports/oidc-runner-summary.json; echo "::error title=OIDC runner acceptance::FAIL run.aborted: no summary produced"; fi' EXIT
+          python3 scripts/oidc-runner-acceptance.py --out-dir oidc-runner-reports --gateway-binary "$PWD/oidc-runner-gateway"
+      - name: Validate runner summary
+        id: validation
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          doc = json.load(open("oidc-runner-reports/oidc-runner-summary.json"))
+          assert doc["schema"] == "nexaroute.oidc-runner-acceptance.v1", doc.get("schema")
+          assert doc["evidence_class"] == "runner-keycloak", doc["evidence_class"]
+          assert doc["result"] == "PASS", doc["result"]
+          assert doc["keycloak_version_recorded"] not in ("NOT_RECORDED", "UNKNOWN"), doc["keycloak_version_recorded"]
+          bad = [c for c in doc["checks"] if c["status"] != "PASS"]
+          assert not bad, bad
+          print("OIDC runner summary validated: checks=%d, all PASS, keycloak=%s" % (len(doc["checks"]), doc["keycloak_version_recorded"]))
+          PY
+      - name: Show redacted OIDC summary
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ -f oidc-runner-reports/oidc-runner-summary.json ]; then
+            cat oidc-runner-reports/oidc-runner-summary.json
+          else
+            echo "oidc-runner-acceptance: no summary was produced; see the run step log for the FAIL line."
+          fi
+      - name: Emit annotations and guarantee a summary file
+        if: always()
+        env:
+          BUILD_OUTCOME: ${{ steps.build.outcome }}
+          RUN_OUTCOME: ${{ steps.oidc-run.outcome }}
+          VALIDATION_OUTCOME: ${{ steps.validation.outcome }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os
+          def outcome_status(outcome):
+              if outcome == "success":
+                  return "PASS"
+              if outcome in ("skipped", "cancelled"):
+                  return "NOT_RUN"
+              return "FAIL"
+          try:
+              doc = json.load(open("oidc-runner-reports/oidc-runner-summary.json"))
+          except Exception:
+              doc = None
+          entries = []
+          if doc is not None:
+              for check in doc.get("checks", []):
+                  cid = check.get("id", "unknown")
+                  status = check.get("status", "NOT_RUN")
+                  entries.append(f"{cid} {status}")
+                  if status == "FAIL":
+                      # Check id and name only; the summary detail
+                      # field is redacted by the script, but it is
+                      # still not copied into an annotation.
+                      print(f"::error title=OIDC runner acceptance::FAIL {cid}: check did not pass")
+              entries.append(f"result {doc.get('result', 'NOT_RUN')}")
+          else:
+              entries.append("run.aborted FAIL")
+              print("::error title=OIDC runner acceptance::FAIL run.aborted: no summary produced")
+              os.makedirs("oidc-runner-reports", exist_ok=True)
+              with open("oidc-runner-reports/oidc-runner-summary.json", "w", encoding="utf-8") as fh:
+                  json.dump({"schema": "nexaroute.oidc-runner-acceptance.v1", "issue": 647,
+                             "evidence_class": "runner-keycloak", "result": "FAIL",
+                             "keycloak_version_recorded": "NOT_RECORDED",
+                             "checks": [{"id": "run.aborted", "status": "FAIL"}]}, fh, indent=2)
+          for check_id, outcome in (("build", os.environ.get("BUILD_OUTCOME", "")),
+                                    ("validation", os.environ.get("VALIDATION_OUTCOME", ""))):
+              status = outcome_status(outcome)
+              entries.append(f"{check_id} {status}")
+              if status == "FAIL":
+                  print(f"::error title=OIDC runner acceptance::FAIL {check_id}: step did not pass")
+          # Exactly one multi-line notice; %0A is the line break
+          # in a workflow command. Entries carry ids, names, and
+          # outcomes only, never a secret, code, token, cookie,
+          # or session value.
+          print("::notice title=OIDC runner acceptance::" + "%0A".join(entries))
+          PY
+      - name: Upload redacted OIDC runner report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: oidc-runner-reports-${{ github.sha }}
+          path: oidc-runner-reports/oidc-runner-summary.json
+          if-no-files-found: error
+          retention-days: 90
