@@ -90,6 +90,10 @@ jobs:
           python3 scripts/oidc-runner-acceptance.py --out-dir oidc-runner-reports --gateway-binary "$PWD/oidc-runner-gateway"
       - name: Validate runner summary
         id: validation
+        # Without if: always(), a failed run step skips validation and
+        # its outcome is reported as NOT_RUN, hiding the failure. With
+        # it, validation runs and correctly FAILs on a FAIL summary.
+        if: always()
         run: |
           set -euo pipefail
           python3 - <<'PY'
