@@ -650,3 +650,59 @@ and does not make a release claim.
   resources for #646, #647 tenant, #648/#649 staging Vault,
   #651 ComfyUI, and #652 separate hosts; (5) a separate
   explicit release approval after all of the above.
+
+
+## Release-readiness refresh — 2026-10-31, main `d54c36b6`
+
+This refresh records the exact evidence observed after PR #812 reached main. It supersedes earlier status summaries only for the current SHA and run IDs listed here. Historical results remain tied to their original commits. It does not certify product-wide completion, change issue states, or authorize a release.
+
+### Main CI, security, and coverage
+
+- Main SHA: `d54c36b6eb14c1105ba2f7331f25c772b0a7714a`.
+- CI: PASS — [run 41224560136](https://github.com/ali-shortcuts/nexaroute/actions/runs/41224560136).
+- Security: PASS — [run 41224560158](https://github.com/ali-shortcuts/nexaroute/actions/runs/41224560158).
+- Fresh coverage: PASS — [run 41225255224](https://github.com/ali-shortcuts/nexaroute/actions/runs/41225255224), artifact `13051338685`.
+- The retained `coverage.out` was independently recomputed from that artifact: **42,173 covered / 44,195 total Go statements = 95.4248218%**. The inclusive 95% gate requires at least 41,986 covered statements, so this artifact is 187 statements above the minimum. Go version: 1.27.3. This measurement binds only to `d54c36b6`.
+
+### Runner acceptance — PASS within the explicitly limited topology
+
+These jobs passed on `d54c36b6`, but their artifacts and workflow definitions expressly limit their evidence class. They do not satisfy live organizational, staging, HA, or multi-host acceptance.
+
+- Vault runner: [run 41224688649](https://github.com/ali-shortcuts/nexaroute/actions/runs/41224688649), artifact `13051646611`: runner-loopback PASS (44/44 checks) against a disposable single-node Vault 1.18.5 container. The report states HA failover, long-running token renewal, and HSM/KMS backing were not tested; it is not staging Vault evidence.
+- OIDC runner: [run 41224739927](https://github.com/ali-shortcuts/nexaroute/actions/runs/41224739927), artifact `13051372278`: runner-Keycloak PASS. The tenant was a disposable Keycloak container on the same runner, not an operator-owned organizational IdP. The report also excludes provider-specific claims and clock-skew coverage from this live run.
+- HA runner: [run 41224779612](https://github.com/ali-shortcuts/nexaroute/actions/runs/41224779612), artifact `13051392453`: container-isolated single-host PASS. The report explicitly records two independent hosts and load-balancer failover as NOT_MEASURED. The observed RPO/RTO figures apply only to this single-host container drill and must not be represented as multi-host values.
+
+### Kubernetes live acceptance — FAIL
+
+- [Kubernetes live acceptance run 41224660001](https://github.com/ali-shortcuts/nexaroute/actions/runs/41224660001), artifact `13052096015`, on main `d54c36b6`: **FAIL**, with two failures and two mandatory safe-failure phases marked NOT_RUN.
+- The upgrade log shows the new Pod Ready on ReplicaSet `7f6b6cd5bc`, while the harness waited for the old hash `6c848db5c`. Application checks subsequently returned the expected successful responses, but this does not erase the readiness failure.
+- The old termination measurement reported 120659ms for the blocking `kubectl delete` client operation. That duration includes API/controller finalization and does not directly establish when the containers exited.
+- PR [#813](https://github.com/ali-shortcuts/nexaroute/pull/813) contains a revision-transition wait and revised, fail-closed timing based on Kubernetes deletion-grace metadata and every regular container's `finishedAt`. The 120000ms threshold is unchanged. Latest recorded PR head at this refresh: `a3d0ee960722936a186bce45da4378b0c102f48b`. Its required CI is still running, and no fresh live kind run on that PR head has been recorded. The issue remains open.
+
+### Full soak and independent environment
+
+- Full soak: [run 41225317366](https://github.com/ali-shortcuts/nexaroute/actions/runs/41225317366), main SHA `d54c36b6`, was IN_PROGRESS at the time of this refresh. No PASS is claimed until the 7,200-second sustained phase, all required stages, artifact, and exact commit binding are independently validated.
+- Independent environment: [run 41225370775](https://github.com/ali-shortcuts/nexaroute/actions/runs/41225370775), main SHA `d54c36b6`, was IN_PROGRESS at the time of this refresh. Its terminal job results and artifacts still need validation.
+- Any older soak or independent-environment result from `dccd254` or an earlier SHA is historical evidence only and is not transferred to `d54c36b6`.
+
+### Mandatory external acceptance status
+
+The owner has recorded that all seven external acceptance gates are mandatory for the first stable release; no gate is to be waived or downgraded. The latest issue-state recheck found #646–#654 all OPEN.
+
+| Issue | Current result | Missing evidence / input |
+|---|---|---|
+| #646 — live LLM providers | BLOCKED / NOT_RUN | Written selection of each provider, exact model and tenant/account, endpoints, secret names only, maximum calls/tokens, and approved spend ceiling. No paid upstream call is inferred from fixtures. |
+| #647 — organizational OIDC | BLOCKED / NOT_RUN | An operator-owned organizational IdP tenant, client/configuration, approved secret injection, and a live browser acceptance report. Runner Keycloak is not tenant acceptance. |
+| #648 — staging Vault KV | BLOCKED / NOT_RUN | Authorized non-loopback staging Vault endpoint, KV v2 mount and dedicated empty path, least-privilege policy, and approved token injection by secret name. Runner-loopback evidence is not staging. |
+| #649 — live Vault Transit | BLOCKED / NOT_RUN | Authorized non-loopback Transit instance, dedicated key, least-privilege encrypt/decrypt/rewrap policy, approved token injection, and actual API/rotation/recovery evidence. Runner-loopback Transit checks do not prove staging, HA, HSM, or KMS readiness. |
+| #650 — Kubernetes/Helm | FAIL on `d54c36b6`; PR validation pending | Review and validate PR #813, then run the complete disposable-kind lifecycle on the reviewed merged candidate. The previous run's mandatory safe-failure phases remain NOT_RUN. |
+| #651 — real ComfyUI inference | BLOCKED / NOT_RUN | Provisioned ComfyUI service, exact compatible model/workflow and node mapping, suitable authorized compute, and written usage/budget authorization. No fixture is a real media inference. |
+| #652 — multi-host HA | NOT_RUN / NOT_MEASURED | Two genuinely independent authorized hosts, shared disposable PostgreSQL/Redis topology, backup/restore inputs, and measured multi-host RPO/RTO. Same-host container metrics are not multi-host evidence. |
+| #653 — coverage and soak | Coverage MET on `d54c36b6`; soak and independent workflow IN_PROGRESS | Validate the current-main soak and independent run on their exact SHA; the external dependencies #646–#652 remain mandatory. |
+| #654 — umbrella | OPEN | Remains the final tracker. The release gate requires #646–#653 to be closed with `state_reason=completed`, then #654 completed last. No manual state change substitutes for evidence. |
+
+### Release decision
+
+The latest published stable release remains [v0.24.0](https://github.com/ali-shortcuts/nexaroute/releases/tag/v0.24.0), published 2026-10-22. No newer stable tag or release was found. **Release status: BLOCKED.** Main CI, security, and coverage success are necessary but insufficient while Kubernetes is failing, soak/independent validation is pending, and mandatory live external acceptance remains unmet.
+
+Never place credential values, tokens, master-key bytes, private prompts, or customer data in issues, commits, artifacts, or reports. Record secret variable names only.
