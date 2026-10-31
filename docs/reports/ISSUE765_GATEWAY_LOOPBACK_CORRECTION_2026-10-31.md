@@ -3,9 +3,41 @@
 **Issue:** #765 (NexaFlow combined production gateway wiring)
 **PR #793 head corrected:** `b8aa54b8b2260f58b2e592f4370af1e7ce2151ff`
 **Correction branch:** `fix/nexaflow-loopback-gateway-base-url`
-**Correction code commit:** `c55a5e3ae2cf2d19366e6f663e9a3a76682c4eae`
 **Date:** 2026-10-31
-**Status:** Final local evidence report — see §7 for the conditional verdict.
+**Status:** Final local evidence report — see §7 for the conditional verdict, and §8 for the SHA reconciliation that fixes the discrepancy in the first version of this report.
+
+## 0. SHA reconciliation — discrepancy fixed in this revision
+
+The first version of this report named a local-only commit as
+the "correction code commit". That was a discrepancy, because that
+commit was never published to GitHub. The authoritative published
+history is:
+
+- Main at review time: `3347608516a066ecfd193320735671d8c9f13ad5`
+  (merge of PR #793; its tree is identical to the PR #793 head
+  `b8aa54b8b2260f58b2e592f4370af1e7ce2151ff`).
+- First published snapshot commit on the correction branch:
+  `48a5ab282054bc6d9386283fdd35e9dec5d9fd61`
+  (branch `fix/nexaflow-loopback-gateway-base-url`, parent = main
+  `3347608…`, verified with `git ls-remote` and `git fetch`).
+- Local-only commits that produced the same tree and were **not**
+  published as GitHub commits: code commit
+  `c55a5e3ae2cf2d19366e6f663e9a3a76682c4eae` and report commit
+  `5066f72c66505547cf1caedba6a9ca23c12ce21f`.
+  Verified: `git diff 5066f72 origin/fix/nexaflow-loopback-gateway-base-url`
+  is empty — the published snapshot tree is identical to the local
+  tree, only the commit SHA and parent differ (snapshot parent =
+  main, local parent chain = PR #793 head → code → report).
+
+Therefore, for every later step in this supervisor cycle, the
+authoritative head is **the PR head at the time CI runs**, not any
+SHA printed inside this report, and not the local-only SHAs above.
+This revision does not invent a future SHA: the correction to this
+report itself is published as a new snapshot commit on the same
+branch, and that new head — not this file's text — is what the
+dedicated PR and its CI checks bind to. The final status report
+for this cycle states that new head exactly, with its PR link and
+workflow runs.
 
 ## 1. Defect
 
@@ -177,15 +209,19 @@ not hide that:
 
 ## 7. GO / NO-GO — evidence-based verdict for owner review
 
-### Correction commit
+### Correction commit — corrected, see §0
 
-- Code commit: `c55a5e3ae2cf2d19366e6f663e9a3a76682c4eae`
-  (branch `fix/nexaflow-loopback-gateway-base-url`, parent
-  `b8aa54b8b2260f58b2e592f4370af1e7ce2151ff`, the PR #793 head)
-- This report was added in a follow-up commit on the same branch;
-  the branch head at publication is the published SHA in the
-  delivery message, and its tree contains the code commit above
-  unchanged.
+- Published branch head at first publication:
+  `48a5ab282054bc6d9386283fdd35e9dec5d9fd61`
+  (branch `fix/nexaflow-loopback-gateway-base-url`, parent = main
+  `3347608516a066ecfd193320735671d8c9f13ad5`).
+- The local-only code commit `c55a5e3…` named in the first version
+  of this report is **not** a GitHub commit and must not be quoted
+  as the branch head. Its tree is identical to the published
+  snapshot tree (verified, §0).
+- The head that CI must bind to is the dedicated PR's head after
+  this §0/§7 correction is pushed — stated exactly in the
+  supervisor-cycle status report, not pre-printed here.
 
 ### Additional evidence completed after §5
 
@@ -237,11 +273,13 @@ suites), and coverage (95.5% local) evidence above is real.
 **Owner actions:**
 - Review this branch and this report.
 - Let CI run `verify.sh`, CodeQL (Go), and the coverage gate on
-  the correction PR.
-- If CI is green, merge the **correction branch**, not PR #793
-  as it stood, and only then decide on closing issue #765 and
-  the three candidate PRs (#781, #779, #771) — none of those
-  were closed by this work, as instructed.
+  the dedicated correction PR (not on the local-only SHAs).
+- If CI is green, merge the **correction PR**, not PR #793
+  as it stood, and only then decide on closing issue #765 —
+  issue #765 is not closed by this report, and the three
+  candidate PRs (#781, #779, #771) were already closed
+  (not merged) in GitHub before this cycle and were not closed
+  by this work.
 
 **What this work did not do, by instruction:**
 - Did not merge PR #793.
