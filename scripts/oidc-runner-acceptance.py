@@ -84,8 +84,50 @@ def redact(text: str) -> str:
     return text
 
 
+def redact_url(url: str) -> str:
+    """Keep only scheme, host, and path; drop query and fragment.
+
+    Flow URLs carry one-time state, session codes, and tab ids. They are
+    not credentials, but the summary is published as evidence, so it
+    records only the endpoint path.
+    """
+    parts = urllib.parse.urlsplit(url or "")
+    return urllib.parse.urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
+
+
+def login_error(body: bytes) -> str:
+    """Extract a short, non-secret Keycloak form error for diagnostics."""
+    text = body.decode("utf-8", "replace")
+    for pattern in (
+        r'id="input-error"[^>]*>([^<]{0,160})',
+        r'id="kc-error-message"[^>]*>.*?<p[^>]*>([^<]{0,160})',
+        r'class="pf-c-alert__title"[^>]*>[^<]*<span[^>]*>([^<]{0,160})',
+        r'<title>([^<]{0,120})</title>',
+    ):
+        m = re.search(pattern, text, re.S)
+        if m and m.group(1).strip():
+            return re.sub(r"\s+", " ", m.group(1)).strip()
+    return ""
+
+
 class Fail(Exception):
     pass
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Return every 3xx to the caller instead of following it.
+
+    The login flow must be driven step by step: automatic redirects hide
+    the intermediate Set-Cookie headers and turn the form POST straight
+    into the gateway callback, which is why the flow needs manual
+    handling here.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect)
 
 
 def http(method: str, url: str, data=None, headers=None, timeout: float = 30.0):
@@ -102,7 +144,7 @@ def http(method: str, url: str, data=None, headers=None, timeout: float = 30.0):
             hdrs.setdefault("Content-Type", "application/json")
     req = urllib.request.Request(url, data=body, headers=hdrs, method=method)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with _OPENER.open(req, timeout=timeout) as resp:
             return resp.status, resp.headers, resp.read()
     except urllib.error.HTTPError as exc:
         return exc.code, exc.headers, exc.read()
@@ -179,10 +221,17 @@ def wait_for(url: str, timeout: float, want: int = 200) -> None:
 
 
 def kc_admin(api: str, token: str, method: str, path: str, payload=None):
-    status, headers, body = http(method, f"{api}/admin{path}",
-                                 data=payload,
-                                 headers={"Authorization": f"Bearer {token}"})
-    return status, headers, body
+    # The Keycloak Admin API expects JSON. Passing a dict straight to
+    # http() form-encodes it and Keycloak answers 415 Unsupported Media
+    # Type (observed in the first local run of this harness).
+    headers = {"Authorization": f"Bearer {token}"}
+    data = None
+    if payload is not None:
+        data = json.dumps(payload).encode()
+        headers["Content-Type"] = "application/json"
+    status, resp_headers, body = http(method, f"{api}/admin{path}",
+                                      data=data, headers=headers)
+    return status, resp_headers, body
 
 
 def kc_location(headers) -> str:
@@ -190,27 +239,110 @@ def kc_location(headers) -> str:
     return loc.rstrip("/").split("/")[-1] if loc else ""
 
 
+def resolve_work_dir() -> pathlib.Path:
+    """Return a private work directory, never the checkout.
+
+    An unset OIDC_RUNNER_WORKDIR must fall back to a fresh temp dir.
+    The older `Path(os.environ.get(..., "")) or None` treated Path(".")
+    as truthy, so the script used and later removed the whole cwd.
+    """
+    work_env = os.environ.get("OIDC_RUNNER_WORKDIR", "").strip()
+    if work_env:
+        work = pathlib.Path(work_env).resolve()
+        work.mkdir(parents=True, exist_ok=True)
+    else:
+        import tempfile
+        work = pathlib.Path(tempfile.mkdtemp(prefix="oidc-runner-"))
+    os.chmod(work, 0o700)
+    return work
+
+
+def selftest() -> int:
+    """Deterministic checks for the two runner harness regressions.
+
+    No Docker, Keycloak, gateway, or network is used. This proves the
+    work-directory resolution and the management-port readiness wiring
+    only; it is not OIDC acceptance evidence.
+    """
+    import tempfile
+
+    errors = []
+    source = pathlib.Path(__file__).read_text(encoding="utf-8")
+    saved = os.environ.pop("OIDC_RUNNER_WORKDIR", None)
+    try:
+        work = resolve_work_dir()
+        if work.resolve() == pathlib.Path.cwd().resolve():
+            errors.append("default work directory resolved to the checkout cwd")
+        if not str(work).startswith(tempfile.gettempdir()):
+            errors.append("default work directory is not under the temp directory")
+        work.rmdir()
+        os.environ["OIDC_RUNNER_WORKDIR"] = "   "
+        blank = resolve_work_dir()
+        if blank.resolve() == pathlib.Path.cwd().resolve():
+            errors.append("blank OIDC_RUNNER_WORKDIR resolved to the checkout cwd")
+        blank.rmdir()
+    finally:
+        os.environ.pop("OIDC_RUNNER_WORKDIR", None)
+        if saved is not None:
+            os.environ["OIDC_RUNNER_WORKDIR"] = saved
+
+    # Split the needle so this checker does not match its own source.
+    bad_workdir = ('pathlib.Path(os.environ.get("OIDC_RUNNER_' +
+                   'WORKDIR", "")) or None')
+    if bad_workdir in source:
+        errors.append("blank-env Path('') bug reintroduced")
+    if '"-p", f"127.0.0.1:{kc_mgmt_port}:9000"' not in source:
+        errors.append("Keycloak management port 9000 is not published")
+    if 'wait_for(f"{kc_mgmt_base}/health/ready"' not in source:
+        errors.append("readiness is not polled on the Keycloak management port")
+    if "if work.resolve() != pathlib.Path.cwd().resolve():" not in source:
+        errors.append("cleanup guard against deleting the checkout is missing")
+    if 'headers["Content-Type"] = "application/json"' not in source:
+        errors.append("Keycloak Admin API request is not sent as JSON")
+    if "urllib.request.build_opener(_NoRedirect)" not in source:
+        errors.append("HTTP redirects are followed automatically, hiding flow cookies")
+    if redact_url("http://127.0.0.1:1/admin/auth/oidc/callback?state=x&code=y") != "http://127.0.0.1:1/admin/auth/oidc/callback":
+        errors.append("summary URLs would leak flow query parameters")
+    for field in ('"firstName"', '"lastName"', '"emailVerified": True'):
+        if field not in source:
+            errors.append(f"Keycloak test user is missing required profile field {field}")
+
+    if errors:
+        for err in errors:
+            print(f"FAIL: oidc-runner-selftest: {err}")
+        return 1
+    print("PASS: oidc-runner-selftest: workdir resolution and management-port readiness")
+    return 0
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Runner-only OIDC acceptance, issue 647")
     parser.add_argument("--out-dir", default="oidc-runner-reports")
-    parser.add_argument("--gateway-binary", required=True)
+    parser.add_argument("--gateway-binary", default="")
     parser.add_argument("--keycloak-image", default="quay.io/keycloak/keycloak:26.0")
     parser.add_argument("--keycloak-port", type=int, default=18081)
+    # Keycloak 25+ exposes /health/* on its management port (9000 in the
+    # container), not on the main HTTP port. Publish it separately and
+    # poll readiness there; polling 8080/health/ready always times out.
+    parser.add_argument("--keycloak-management-port", type=int, default=18082)
     parser.add_argument("--gateway-port", type=int, default=18080)
+    parser.add_argument("--self-test", action="store_true",
+                        help="deterministic harness checks only; no Docker or network")
     args = parser.parse_args(argv)
+    if args.self_test:
+        return selftest()
+    if not args.gateway_binary:
+        parser.error("--gateway-binary is required unless --self-test is used")
 
     out_dir = pathlib.Path(args.out_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
-    work = pathlib.Path(os.environ.get("OIDC_RUNNER_WORKDIR", "")) or None
-    if work is None:
-        import tempfile
-        work = pathlib.Path(tempfile.mkdtemp(prefix="oidc-runner-"))
-    work.mkdir(parents=True, exist_ok=True)
-    os.chmod(work, 0o700)
+    work = resolve_work_dir()
 
     kc_port = args.keycloak_port
+    kc_mgmt_port = args.keycloak_management_port
     gw_port = args.gateway_port
     kc_base = f"http://127.0.0.1:{kc_port}"
+    kc_mgmt_base = f"http://127.0.0.1:{kc_mgmt_port}"
     gw_base = f"http://127.0.0.1:{gw_port}"
     issuer = f"{kc_base}/realms/{REALM}"
     redirect_url = f"{gw_base}/admin/auth/oidc/callback"
@@ -264,6 +396,7 @@ def main(argv=None) -> int:
         # --- Keycloak container ---
         proc = subprocess.run(["docker", "run", "-d", "--name", container,
                                "-p", f"127.0.0.1:{kc_port}:8080",
+                               "-p", f"127.0.0.1:{kc_mgmt_port}:9000",
                                "-e", f"KC_BOOTSTRAP_ADMIN_USERNAME={kc_admin_user}",
                                "-e", f"KC_BOOTSTRAP_ADMIN_PASSWORD={kc_admin_pw}",
                                "-e", "KC_HEALTH_ENABLED=true",
@@ -271,7 +404,7 @@ def main(argv=None) -> int:
                               capture_output=True, text=True)
         if proc.returncode != 0:
             raise Fail(f"docker run keycloak failed: {redact(proc.stderr[-500:])}")
-        wait_for(f"{kc_base}/health/ready", 180.0)
+        wait_for(f"{kc_mgmt_base}/health/ready", 180.0)
         check("keycloak.started", "Keycloak container ready on loopback", True)
 
         status, _, body = http("POST", f"{kc_base}/realms/master/protocol/openid-connect/token",
@@ -338,9 +471,14 @@ def main(argv=None) -> int:
 
         user_ids = {}
         for username in passwords:
+            # Keycloak 26's default user profile requires email,
+            # firstName, and lastName; without them the login flow stops
+            # at a VERIFY_PROFILE required action instead of the callback.
             status, headers, _ = kc_admin(kc_base, admin_token, "POST",
                                           f"/realms/{REALM}/users",
-                                          {"username": username, "enabled": True, "emailVerified": False,
+                                          {"username": username, "enabled": True, "emailVerified": True,
+                                           "email": f"{username}@example.invalid",
+                                           "firstName": "OIDC", "lastName": username,
                                            "credentials": [{"type": "password", "value": passwords[username],
                                                             "temporary": False}]})
             if status == 201:
@@ -431,16 +569,16 @@ def main(argv=None) -> int:
                     action = nxt
                     continue
                 break
-            return sess, status, body
+            return sess, status, body, action, login_error(body)
 
         def api(sess: Session, path: str, method: str = "GET", extra_headers=None):
             return sess.request(method, f"{gw_base}{path}", headers=extra_headers or {})
 
         # --- admin user ---
-        sess_admin, status, _ = do_login("oidc-admin-user")
+        sess_admin, status, _, url_admin, err_admin = do_login("oidc-admin-user")
         admin_session = "nexaroute_admin_session" in sess_admin.cookies and sess_admin.cookies["nexaroute_admin_session"] != ""
         check("oidc.login_admin", "Mapped admin user completes PKCE login and holds a session cookie",
-              status in (200, 303) and admin_session, f"final_status={status} session={'present' if admin_session else 'absent'}")
+              status in (200, 303) and admin_session, f"final_status={status} session={'present' if admin_session else 'absent'} err={err_admin} url={redact_url(url_admin)}")
         if admin_session:
             st, _, _ = api(sess_admin, "/admin/api/audit?limit=1")
             check("oidc.admin_audit", "Admin user can read the audit API", st == 200, f"status={st}")
@@ -451,10 +589,10 @@ def main(argv=None) -> int:
             check("oidc.admin_snapshot", "Admin user can read the snapshot API", False, "no session")
 
         # --- viewer user ---
-        sess_viewer, status, _ = do_login("oidc-viewer-user")
+        sess_viewer, status, _, url_viewer, err_viewer = do_login("oidc-viewer-user")
         viewer_session = "nexaroute_admin_session" in sess_viewer.cookies and sess_viewer.cookies["nexaroute_admin_session"] != ""
         check("oidc.login_viewer", "Mapped viewer user completes PKCE login and holds a session cookie",
-              status in (200, 303) and viewer_session, f"final_status={status} session={'present' if viewer_session else 'absent'}")
+              status in (200, 303) and viewer_session, f"final_status={status} session={'present' if viewer_session else 'absent'} err={err_viewer} url={redact_url(url_viewer)}")
         if viewer_session:
             st, _, _ = api(sess_viewer, "/admin/api/snapshot")
             check("oidc.viewer_snapshot", "Viewer user can read the snapshot API", st == 200, f"status={st}")
@@ -465,14 +603,14 @@ def main(argv=None) -> int:
             check("oidc.viewer_audit_denied", "Viewer user is denied the audit API (admin only)", False, "no session")
 
         # --- unmapped user ---
-        sess_unmapped, status, _ = do_login("oidc-unmapped-user")
+        sess_unmapped, status, _, url_unmapped, err_unmapped = do_login("oidc-unmapped-user")
         unmapped_session = "nexaroute_admin_session" in sess_unmapped.cookies and sess_unmapped.cookies["nexaroute_admin_session"] != ""
         check("oidc.unmapped_denied", "Unmapped user is denied at the callback (401, no session cookie)",
               status == 401 and not unmapped_session,
-              f"final_status={status} session={'present' if unmapped_session else 'absent'}")
+              f"final_status={status} session={'present' if unmapped_session else 'absent'} err={err_unmapped} url={redact_url(url_unmapped)}")
 
         # --- logout (fresh admin login) ---
-        sess_logout, status, _ = do_login("oidc-admin-user")
+        sess_logout, status, _, _, _err_logout = do_login("oidc-admin-user")
         logout_ok = False
         after_status = None
         if "nexaroute_admin_session" in sess_logout.cookies:
@@ -522,10 +660,15 @@ def main(argv=None) -> int:
                     pass
         subprocess.run(["docker", "rm", "-f", container], capture_output=True)
         # Work directory (config, security DB, logs, generated secrets)
-        # is deliberately NOT in the out dir, and is removed here.
+        # is deliberately NOT in the out dir, and is removed here. Never
+        # delete the checkout if OIDC_RUNNER_WORKDIR points at it: the
+        # earlier `Path("") or None` bug made an unset/blank value resolve
+        # to "." and rmtree removed the whole workspace, including the
+        # summary the workflow then tried to upload.
         try:
             import shutil
-            shutil.rmtree(work, ignore_errors=True)
+            if work.resolve() != pathlib.Path.cwd().resolve():
+                shutil.rmtree(work, ignore_errors=True)
         except Exception:
             pass
 

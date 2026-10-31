@@ -35,6 +35,8 @@ echo '== coverage gate regression checks =='
 ./scripts/test-coverage-gate.sh
 echo '== vault runner acceptance regression checks =='
 bash scripts/test-vault-runner-acceptance.sh
+echo '== oidc runner acceptance harness self-test =='
+python3 scripts/oidc-runner-acceptance.py --self-test
 echo '== web ui javascript syntax =='
 node --check internal/httpapi/web/app.js
 node --check internal/httpapi/web/visual-agent.js
