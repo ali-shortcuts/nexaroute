@@ -428,7 +428,7 @@ try:
     meta = pod.get("metadata", {})
     deletion = meta.get("deletionTimestamp")
     grace = meta.get("deletionGracePeriodSeconds")
-    if not deletion or not isinstance(grace, int) or isinstance(grace, bool) or grace < 0:
+    if not deletion or not isinstance(grace, int) or isinstance(grace, bool) or grace != 120:
         sys.exit(1)
     deletion_deadline = datetime.datetime.fromisoformat(deletion.replace("Z", "+00:00"))
     start = deletion_deadline - datetime.timedelta(seconds=grace)
@@ -1523,6 +1523,8 @@ json.dump(no_delete, open(os.path.join(base, "no-deletion.json"), "w"))
 no_grace = pod("2026-01-01T00:00:35Z", "2026-01-01T00:00:36Z")
 no_grace["metadata"].pop("deletionGracePeriodSeconds")
 json.dump(no_grace, open(os.path.join(base, "no-grace.json"), "w"))
+wrong_grace = pod("2026-01-01T00:00:35Z", "2026-01-01T00:00:36Z", grace=119)
+json.dump(wrong_grace, open(os.path.join(base, "wrong-grace.json"), "w"))
 PYEOF
   within_ms="$(pod_termination_elapsed_ms "$tmp/termination/within.json" 2>/dev/null || true)"
   over_ms="$(pod_termination_elapsed_ms "$tmp/termination/over.json" 2>/dev/null || true)"
@@ -1531,6 +1533,7 @@ PYEOF
   if pod_termination_elapsed_ms "$tmp/termination/incomplete.json" >/dev/null 2>&1; then term_ok=0; fi
   if pod_termination_elapsed_ms "$tmp/termination/no-deletion.json" >/dev/null 2>&1; then term_ok=0; fi
   if pod_termination_elapsed_ms "$tmp/termination/no-grace.json" >/dev/null 2>&1; then term_ok=0; fi
+  if pod_termination_elapsed_ms "$tmp/termination/wrong-grace.json" >/dev/null 2>&1; then term_ok=0; fi
   if [[ "$term_ok" -eq 1 ]]; then
     ok "self-test: termination time uses deletion grace metadata and all containers' finishedAt, failing closed on incomplete evidence"
   else
