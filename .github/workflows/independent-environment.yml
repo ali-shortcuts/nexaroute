@@ -1,0 +1,604 @@
+name: Independent environment
+
+# Standalone clean-room verification: one manual dispatch runs the
+# whole project from a fresh checkout on a GitHub-hosted runner,
+# with no install on any operator machine and no real provider,
+# production, or operator credential anywhere in the run.
+#
+# This workflow is deliberately NOT a pull_request gate: the PR gates
+# (CI, Security, Coverage, real-system acceptance) already cover the
+# same ground per-PR, and duplicating them on every PR would double
+# CI time for no new evidence. Dispatch it by hand when a full
+# independent-environment verdict is needed (release candidate,
+# post-merge re-verification, or a suspicious main).
+#
+# What it does NOT do, by design (see the real-services job, which
+# reports these as BLOCKED instead of faking them):
+# - no live-provider calls, no paid quota, no production access
+# - no real Vault (KV or Transit), OIDC IdP, ComfyUI model run,
+#   Kubernetes cluster, or multi-host HA drill: those need operator
+#   tenant/environment decisions and are tracked in issues 646-652
+#   and 649, not silently replaced by mocks here
+# - no 2h soak unless full_soak is true (GitHub job limit is 360m;
+#   a 2h soak runs with timeout 180m)
+#
+# Disposable CI-only credentials below (nexaroute-ci-only) are the
+# same values the existing CI workflows already use for their
+# throwaway service containers. They are not real secrets.
+
+on:
+  workflow_dispatch:
+    inputs:
+      fuzz_seconds:
+        description: "Seconds per fuzz target in the fuzz job"
+        type: number
+        default: 10
+      full_soak:
+        description: "Run the full sustained soak (2h) instead of only the bounded smoke"
+        type: boolean
+        default: false
+      soak_duration:
+        description: "Sustained soak duration when full_soak is true (Go-style, e.g. 2h)"
+        type: string
+        default: "2h"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: independent-environment-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  versions-and-build:
+    name: Tool versions and binary build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.x'
+          cache: false
+      - name: Record tool versions
+        run: |
+          set -euo pipefail
+          {
+            echo "sha=${{ github.sha }}"
+            echo "go:"; go version
+            echo "git:"; git --version
+            echo "docker:"; docker --version
+            echo "python:"; python3 --version
+            echo "node:"; node --version
+            echo "go.mod:"; head -3 go.mod
+          } | tee versions.txt
+      - name: Formatting and vet
+        run: |
+          set -euo pipefail
+          if out=$(gofmt -l .); then
+            if [ -n "$out" ]; then echo "gofmt failures:"; echo "$out"; exit 1; fi
+          fi
+          go vet ./...
+      - name: Build all binaries
+        run: |
+          set -euo pipefail
+          mkdir -p bin
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags='-s -w' -o bin/nexaroute-linux-amd64 ./cmd/gateway
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags='-s -w' -o bin/nexaroute-videogen-linux-amd64 ./cmd/videogen
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags='-s -w' -o bin/nexaroute-linux-arm64 ./cmd/gateway
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags='-s -w' -o bin/nexaroute-videogen-linux-arm64 ./cmd/videogen
+          ls -la bin/
+      - name: Verify every binary exists, is executable, and matches its architecture
+        run: |
+          set -euo pipefail
+          check_binary() { # path, expected file(1) arch string
+            if [ ! -x "$1" ]; then echo "binary missing or not executable: $1" >&2; exit 1; fi
+            if ! file "$1" | grep -Fq "$2"; then echo "binary $1 is not $2:" >&2; file "$1" >&2; exit 1; fi
+            echo "ok: $1 ($2)"
+          }
+          check_binary bin/nexaroute-linux-amd64 "x86-64"
+          check_binary bin/nexaroute-videogen-linux-amd64 "x86-64"
+          check_binary bin/nexaroute-linux-arm64 "aarch64"
+          check_binary bin/nexaroute-videogen-linux-arm64 "aarch64"
+          {
+            echo "build_sha=${{ github.sha }}"
+            echo "build_git_head=$(git rev-parse HEAD)"
+            sha256sum bin/nexaroute-linux-amd64 bin/nexaroute-videogen-linux-amd64 bin/nexaroute-linux-arm64 bin/nexaroute-videogen-linux-arm64
+          } | tee -a versions.txt
+      - name: Upload versions and binaries
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: independent-environment-versions-${{ github.sha }}-${{ github.run_id }}
+          path: |
+            versions.txt
+            bin/
+          retention-days: 90
+
+  unit-and-race:
+    name: Unit tests and race tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.x'
+          cache: false
+      - name: Unit tests
+        run: go test -timeout=3m -count=1 ./... 2>&1 | tee unit-test.log
+      - name: Race tests
+        run: go test -race -timeout=3m -count=1 ./... 2>&1 | tee race-test.log
+      - name: Upload test logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: independent-environment-unit-race-${{ github.sha }}-${{ github.run_id }}
+          path: |
+            unit-test.log
+            race-test.log
+          retention-days: 90
+
+  integration-services:
+    name: PostgreSQL and Redis integration
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: nexaroute
+          POSTGRES_PASSWORD: nexaroute-ci-only
+          POSTGRES_DB: nexaroute_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U nexaroute -d nexaroute_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.x'
+          cache: false
+      - name: Prove both services are reachable before testing
+        env:
+          NEXAROUTE_TEST_POSTGRES_DSN: "postgres://nexaroute:nexaroute-ci-only@127.0.0.1:5432/nexaroute_test?sslmode=disable"
+          NEXAROUTE_TEST_REDIS_URL: "redis://127.0.0.1:6379/15"
+        run: |
+          set -euo pipefail
+          # The variables below are exactly the ones CI's own
+          # integration jobs use; if they are empty, the Go tests
+          # would SKIP instead of testing anything, so fail here
+          # rather than letting a skip masquerade as a pass.
+          if [ -z "${NEXAROUTE_TEST_POSTGRES_DSN:-}" ] || [ -z "${NEXAROUTE_TEST_REDIS_URL:-}" ]; then
+            echo "integration service variables must not be empty" >&2; exit 1
+          fi
+          python3 - <<'PY'
+          import socket, sys, time
+          for host, port, name in (("127.0.0.1", 5432, "postgres"), ("127.0.0.1", 6379, "redis")):
+              for attempt in range(20):
+                  try:
+                      with socket.create_connection((host, port), timeout=2):
+                          print(f"{name} reachable on {host}:{port}")
+                          break
+                  except OSError:
+                      if attempt == 19:
+                          print(f"{name} NOT reachable on {host}:{port} after retries", file=sys.stderr)
+                          sys.exit(1)
+                      time.sleep(1)
+          PY
+      - name: Integration tests (both services)
+        env:
+          NEXAROUTE_TEST_POSTGRES_DSN: "postgres://nexaroute:nexaroute-ci-only@127.0.0.1:5432/nexaroute_test?sslmode=disable"
+          NEXAROUTE_TEST_REDIS_URL: "redis://127.0.0.1:6379/15"
+        run: |
+          set -euo pipefail
+          go test -tags integration -count=1 -v ./internal/controlplane/ ./internal/securitystore/ ./internal/sharedstate/ ./internal/video/queue/ ./internal/video/cost/ ./internal/breakersync/ ./cmd/gateway/ 2>&1 | tee integration-test.log
+      - name: Count per-test results; a required skip or zero real tests fails the job
+        if: always()
+        run: |
+          set -euo pipefail
+          python3 - integration-test.log integration-report.txt <<'PY'
+          import re, sys
+          log_path, report_path = sys.argv[1], sys.argv[2]
+          # Required tests, taken from CI's own integration jobs.
+          # Each must PASS or FAIL (i.e. actually run); a SKIP or an
+          # absence is a job failure, never a pass.
+          required = [
+              "TestPostgresIntegration",
+              "TestPostgresSecurityStoreIntegration",
+              "TestPostgresBreakerStoreIntegration",
+              "TestPostgresVideoStore",
+              "TestPostgresLedger",
+              "TestBreakerSyncPostgresTwoInstances",
+              "TestConcurrentPostgresControlPlaneBootstrapConverges",
+              "TestRedisIntegration",
+              "TestRedisSecurityStoreIntegration",
+              "TestRedisBreakerStoreIntegration",
+              "TestBreakerSyncRedisTwoInstances",
+              "TestControlPlaneRedisIntegration",
+          ]
+          results = {}
+          passed = failed = skipped = 0
+          with open(log_path, errors="replace") as fh:
+              for line in fh:
+                  m = re.match(r"^--- (PASS|FAIL|SKIP): ([A-Za-z0-9_]+)(?:/| )", line)
+                  if not m:
+                      continue
+                  verdict, name = m.group(1), m.group(2)
+                  # A test name appears once as a top-level result and
+                  # again for subtests; keep only the first (top-level)
+                  # verdict per name so subtests do not inflate counts.
+                  if name in results:
+                      continue
+                  results[name] = verdict
+                  if verdict == "PASS":
+                      passed += 1
+                  elif verdict == "FAIL":
+                      failed += 1
+                  else:
+                      skipped += 1
+          executed = passed + failed
+          violations = []
+          for name in required:
+              if results.get(name) not in ("PASS", "FAIL"):
+                  violations.append(f"required test {name} did not run (result: {results.get(name, 'absent')})")
+          if executed == 0:
+              violations.append("no integration test actually ran (PASS+FAIL == 0)")
+          if failed:
+              violations.append(f"{failed} integration test(s) failed")
+          with open(report_path, "w") as out:
+              out.write(f"integration PASS={passed} FAIL={failed} SKIP={skipped} executed={executed}\n")
+              for name in sorted(results):
+                  out.write(f"{results[name]:<5} {name}\n")
+              for v in violations:
+                  out.write(f"VIOLATION: {v}\n")
+          print(open(report_path).read())
+          if violations:
+              sys.exit(1)
+          PY
+      - name: Upload integration log and report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: independent-environment-integration-${{ github.sha }}-${{ github.run_id }}
+          path: |
+            integration-test.log
+            integration-report.txt
+          retention-days: 90
+
+  gateway-runtime:
+    name: Real gateway run, restart, container smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.x'
+          cache: false
+      - name: Build and run the local smoke script
+        run: |
+          set -euo pipefail
+          mkdir -p bin
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags='-s -w' -o bin/nexaroute-linux-amd64 ./cmd/gateway
+          ./scripts/smoke-local.sh 2>&1 | tee gateway-smoke.log
+      - name: Restart and secret-non-exposure check
+        run: |
+          set -euo pipefail
+          python3 - configs/config.example.json /tmp/restart-config.json 127.0.0.1:18082 <<'PY'
+          import json, sys
+          src, dst, addr = sys.argv[1:]
+          with open(src, encoding='utf-8') as f:
+              cfg = json.load(f)
+          cfg['listen'] = addr
+          cfg.setdefault('probe', {})['enabled'] = False
+          cfg['probe']['on_start'] = False
+          cfg['providers'] = []
+          with open(dst, 'w', encoding='utf-8') as f:
+              json.dump(cfg, f, indent=2)
+          PY
+          chmod 600 /tmp/restart-config.json
+          # The admin key is a real (disposable, CI-only) value passed
+          # via the environment, so the log check below is a genuine
+          # non-exposure test, not a vacuous grep for a string that
+          # was never introduced into the process.
+          export NEXAROUTE_ADMIN_KEY=ci-only-test-key
+          ./bin/nexaroute-linux-amd64 -no-browser -config /tmp/restart-config.json > /tmp/gateway-restart.log 2>&1 &
+          pid=$!
+          trap 'kill $pid 2>/dev/null || true' EXIT
+          for _ in $(seq 1 80); do curl -fsS http://127.0.0.1:18082/healthz >/dev/null 2>&1 && break; sleep 0.1; done
+          curl -fsS http://127.0.0.1:18082/healthz
+          kill $pid; wait $pid 2>/dev/null || true; trap - EXIT
+          ./bin/nexaroute-linux-amd64 -no-browser -config /tmp/restart-config.json > /tmp/gateway-restart2.log 2>&1 &
+          pid=$!
+          trap 'kill $pid 2>/dev/null || true' EXIT
+          for _ in $(seq 1 80); do curl -fsS http://127.0.0.1:18082/healthz >/dev/null 2>&1 && break; sleep 0.1; done
+          curl -fsS http://127.0.0.1:18082/healthz
+          kill $pid; wait $pid 2>/dev/null || true
+          cat /tmp/gateway-restart.log /tmp/gateway-restart2.log > gateway-restart.log
+          if grep -Fq "ci-only-test-key" gateway-restart.log; then echo "secret leaked into gateway log" >&2; exit 1; fi
+          echo "restart-and-persistence: healthz passed on both starts; no test secret in logs"
+      - name: Container build and smoke
+        run: |
+          set -euo pipefail
+          docker build --tag nexaroute-independent:current . 2>&1 | tee container-build.log
+          cid="$(docker run -d -p 18081:8080 -e NEXAROUTE_ADMIN_KEY=ci-admin nexaroute-independent:current)"
+          trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
+          for _ in $(seq 1 80); do curl -fsS http://127.0.0.1:18081/healthz >/dev/null 2>&1 && break; sleep 0.1; done
+          curl -fsS http://127.0.0.1:18081/healthz
+      - name: Upload gateway logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: independent-environment-gateway-${{ github.sha }}-${{ github.run_id }}
+          path: |
+            gateway-smoke.log
+            gateway-restart.log
+            container-build.log
+          retention-days: 90
+          if-no-files-found: warn
+
+  fuzz-short:
+    name: Fuzz (all targets, short)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.x'
+          cache: false
+      - name: Run every fuzz target
+        env:
+          FUZZ_SECONDS: ${{ inputs.fuzz_seconds }}
+        run: |
+          # set -u only, on purpose: a fuzz failure in one target
+          # must not abort the remaining targets, but the final
+          # `test ! -s fuzz-failures.txt` fails the job if any
+          # target failed, so failures are aggregated, never hidden.
+          set -u
+          : > fuzz-failures.txt
+          : > fuzz-log.txt
+          while IFS= read -r testfile; do
+            pkgdir=$(dirname "$testfile")
+            pkg="./$pkgdir"
+            for target in $(grep -oE 'func (Fuzz[A-Za-z0-9_]+)' "$testfile" | awk '{print $2}'); do
+              echo "=== $target in $pkg (${FUZZ_SECONDS}s) ===" | tee -a fuzz-log.txt
+              if ! GOMAXPROCS=2 go test "$pkg" -run='^$' -fuzz="^${target}$" -fuzztime="${FUZZ_SECONDS}s" -parallel=2 >> fuzz-log.txt 2>&1; then
+                echo "FUZZ FAILURE: $target in $pkg" | tee -a fuzz-failures.txt
+              fi
+            done
+          done < <(grep -rlE --include='*_test.go' 'func Fuzz' .)
+          test ! -s fuzz-failures.txt
+      - name: Upload fuzz log and corpora
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: independent-environment-fuzz-${{ github.sha }}-${{ github.run_id }}
+          path: |
+            fuzz-log.txt
+            fuzz-failures.txt
+            **/testdata/fuzz/**
+          retention-days: 90
+          if-no-files-found: warn
+
+  browser:
+    name: Browser acceptance
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.x'
+          cache: false
+      - name: Install Playwright and Chromium
+        run: |
+          set -euo pipefail
+          python3 -m pip install --user "playwright==1.55.0"
+          python3 -m playwright install --with-deps chromium
+      - name: Browser acceptance (a skip fails this job)
+        run: python3 scripts/run-browser-acceptance.py --diagnostics-dir "${{ github.workspace }}/.artifacts/browser-acceptance"
+      - name: Upload browser diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: independent-environment-browser-${{ github.sha }}-${{ github.run_id }}
+          path: ${{ github.workspace }}/.artifacts/browser-acceptance/
+          retention-days: 90
+          if-no-files-found: warn
+
+  security:
+    name: Security scans
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.x'
+          cache: false
+      - name: govulncheck
+        uses: golang/govulncheck-action@032d45514ae346b1db93c04b0c90b841c370344f # v1.1.0
+        with:
+          go-version-input: '1.27.x'
+          go-package: ./...
+          cache: false
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@b1bff81932f5cdfc8695c7752dcee935dcd061c8 # v4.33.0
+        with:
+          languages: go
+          build-mode: manual
+      - name: Build Go packages for analysis
+        run: go build ./...
+      - name: Upload CodeQL results
+        uses: github/codeql-action/analyze@b1bff81932f5cdfc8695c7752dcee935dcd061c8 # v4.33.0
+
+  coverage:
+    name: Coverage 95 percent gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.x'
+          cache: false
+      - name: Measure coverage and enforce the gate
+        run: |
+          set -euo pipefail
+          mkdir -p .artifacts/coverage
+          go test -count=1 -coverprofile=.artifacts/coverage/coverage.out ./...
+          bash scripts/coverage-gate.sh .artifacts/coverage/coverage.out 95.0
+          go tool cover -func=.artifacts/coverage/coverage.out | tail -5
+      - name: Upload coverage profile
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: independent-environment-coverage-${{ github.sha }}-${{ github.run_id }}
+          path: .artifacts/coverage/
+          retention-days: 90
+
+  stress:
+    name: Stress and soak smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.x'
+          cache: false
+      - name: Bounded stress
+        run: ./scripts/stress.sh 2>&1 | tee stress.log
+      - name: Bounded soak smoke
+        env:
+          NEXAROUTE_CI_SMOKE_OUT: ${{ github.workspace }}/.artifacts/ci-soak-smoke
+        run: ./scripts/ci-soak-smoke.sh 2>&1 | tee ci-soak-smoke.log
+      - name: Upload stress logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: independent-environment-stress-${{ github.sha }}-${{ github.run_id }}
+          path: |
+            stress.log
+            ci-soak-smoke.log
+            ${{ github.workspace }}/.artifacts/ci-soak-smoke/
+          retention-days: 90
+          if-no-files-found: warn
+
+  soak-full:
+    name: Full sustained soak (opt-in only)
+    if: ${{ inputs.full_soak }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.x'
+          cache: false
+      - name: Guard the sustained duration (at least 7200 seconds)
+        run: |
+          set -euo pipefail
+          duration="${{ inputs.soak_duration }}"
+          if [[ "$duration" =~ ^([0-9]+)([smh])$ ]]; then
+            value="${BASH_REMATCH[1]}"; unit="${BASH_REMATCH[2]}"
+            case "$unit" in
+              s) seconds="$value" ;;
+              m) seconds=$((value * 60)) ;;
+              h) seconds=$((value * 3600)) ;;
+            esac
+          else
+            echo "soak_duration must be a Go-style value like 30m or 2h, got '$duration'" >&2; exit 2
+          fi
+          echo "requested_soak_seconds=$seconds" >> "$GITHUB_ENV"
+          if [ "$seconds" -lt 7200 ]; then
+            echo "full soak requires at least 7200 seconds, got $seconds ($duration)" >&2; exit 1
+          fi
+          if [ $((seconds + 1800)) -gt 10800 ]; then
+            echo "full soak of $seconds seconds plus the 30m reporting buffer exceeds this job's 180m timeout; use the dedicated Soak workflow for longer durations" >&2; exit 1
+          fi
+      - name: Sustained soak
+        env:
+          NEXAROUTE_SOAK_ROUNDS: 3
+          NEXAROUTE_SOAK_DURATION: ${{ inputs.soak_duration }}
+          NEXAROUTE_SOAK_OUT: ${{ github.workspace }}/.artifacts/soak
+        run: ./scripts/soak.sh
+      - name: Validate soak evidence for this SHA
+        # if: always() lets the validator report a missing or bad
+        # summary, but it never rescues the job: if the soak step
+        # itself failed, or the validator fails, the job fails.
+        # check-soak-evidence.py fails on a skipped planned stage,
+        # a failed stage, a wrong commit, or a sustained duration
+        # shorter than requested, so no skipped/failed stage can
+        # produce a PASS here.
+        if: always()
+        run: |
+          set -euo pipefail
+          summary="$(find "${{ github.workspace }}/.artifacts/soak" -name summary.json 2>/dev/null | sort | tail -n 1 || true)"
+          if [ -z "$summary" ]; then echo 'No summary.json: the soak did not reach its report writer.' >&2; exit 1; fi
+          python3 scripts/check-soak-evidence.py --summary "$summary" --kind soak --expected-commit "${{ github.sha }}" --expected-duration-seconds 7200
+          python3 scripts/check-soak-evidence.py --summary "$summary" --kind soak --expected-commit "${{ github.sha }}" --expected-duration-seconds "${{ env.requested_soak_seconds }}"
+      - name: Upload soak evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: independent-environment-soak-${{ github.sha }}-${{ github.run_id }}
+          path: .artifacts/soak/
+          retention-days: 90
+          if-no-files-found: error
+
+  real-services-report:
+    name: Real services that this workflow does NOT fake
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Report BLOCKED real-service acceptance
+        run: |
+          cat <<'EOF'
+          The following acceptance items are BLOCKED in this workflow, not passed:
+          - Live LLM providers (issue 646): needs operator-chosen providers, paid-quota approval, and environment secrets. CI deliberately makes no paid calls.
+          - OIDC against a real IdP tenant (issue 647): needs an operator tenant (Keycloak/Entra/Okta/Auth0/Google). A local mock IdP is not a substitute.
+          - Vault KV against a staging Vault (issue 648) and Vault Transit acceptance (issue 649): need a disposable staging Vault with least-privilege policy; dev-mode is not enough.
+          - Kubernetes with Helm (issue 650): needs a disposable cluster and an authorized runner; lint/render is not deployment.
+          - ComfyUI end-to-end inference (issue 651): needs a real ComfyUI instance and model/workflow; fixture video output is not inference.
+          - Multi-host HA failover with RPO/RTO (issue 652): needs two replicas on separate hosts/containers with shared Postgres/Redis; a single-host test is not HA.
+          A row above turns from BLOCKED to PASS only when the operator-authorized run happens and its evidence is recorded in the issue itself.
+          EOF
