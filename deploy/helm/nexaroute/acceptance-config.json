@@ -136,7 +136,7 @@
       "id": "stub",
       "name": "Stub upstream (acceptance only)",
       "type": "openai_compatible",
-      "base_url": "http://nexaroute-stub:8080/v1",
+      "base_url": "http://127.0.0.1:18081/v1",
       "data_handling": {
         "trains_on_data": "no",
         "retention": "none"

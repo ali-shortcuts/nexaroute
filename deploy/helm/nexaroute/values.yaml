@@ -79,6 +79,20 @@ controlPlane:
 # EnvVar objects (valueFrom supported, e.g. secretKeyRef).
 extraEnv: []
 
+# Acceptance-only stub sidecar. The gateway egress policy permits HTTP
+# only to loopback hosts (127.0.0.1, ::1, localhost), so a cluster-
+# internal HTTP stub reached as a Service name (http://nexaroute-stub)
+# is rejected at startup and the pod CrashLoopBackOffs (observed in
+# K8s run 41206916203 on 2f638da: 6 failures, upgraded pod never Ready).
+# The stub must therefore run in the same pod, on loopback, when it is
+# used at all. This is disabled by default and must never be enabled
+# in a production install: it serves a fake model on loopback only.
+acceptanceStubSidecar:
+  enabled: false
+  image: "python:3.12-alpine"
+  port: 18081
+  configMapName: "nexaroute-stub-code"
+
 podAnnotations: {}
 podLabels: {}
 

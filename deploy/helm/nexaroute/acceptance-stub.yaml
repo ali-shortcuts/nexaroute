@@ -15,6 +15,7 @@ metadata:
 data:
   stub.py: |
     import json
+    import os
     from http.server import BaseHTTPRequestHandler, HTTPServer
 
 
@@ -56,7 +57,7 @@ data:
             pass
 
 
-    HTTPServer(("0.0.0.0", 8080), Handler).serve_forever()
+    HTTPServer(("0.0.0.0", int(os.environ.get("STUB_PORT", "8080"))), Handler).serve_forever()
 ---
 apiVersion: apps/v1
 kind: Deployment

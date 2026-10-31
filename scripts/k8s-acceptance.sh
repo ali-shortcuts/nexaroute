@@ -219,6 +219,12 @@ offline_phase() {
     fi
   done
 
+  # Acceptance stub sidecar: present only in the acceptance render
+  # (loopback stub, see values.yaml), never in the default render.
+  assert_rendered "$OUT_DIR/rendered-acceptance.yaml" 'name: acceptance-stub' "acceptance stub sidecar rendered (acceptance only)"
+  assert_rendered_absent "$OUT_DIR/rendered-default.yaml" 'name: acceptance-stub' "no acceptance stub sidecar in default render"
+  assert_rendered_absent "$OUT_DIR/rendered-default.yaml" 'acceptance-stub-code' "no acceptance stub volume in default render"
+
   # Secret-reference wiring on the acceptance render.
   assert_rendered "$OUT_DIR/rendered-acceptance.yaml" 'secretKeyRef:' "control-plane / stub credentials arrive via secretKeyRef only"
   assert_rendered "$OUT_DIR/rendered-acceptance.yaml" 'name: nexaroute-accept-pg' "acceptance PG secret reference rendered"
