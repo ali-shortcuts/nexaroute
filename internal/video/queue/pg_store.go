@@ -178,7 +178,7 @@ func (s *PostgresStore) Create(ctx context.Context, j video.VideoJob) error {
 				// conflict.
 				return fmt.Errorf("video job store: create conflict probe: %w", qerr)
 			} else if exists {
-				return errors.New("job already exists")
+				return ErrJobAlreadyExists
 			}
 			return ErrIdempotencyConflict
 		}
