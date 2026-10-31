@@ -8,9 +8,11 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/ali-shortcuts/nexaroute/internal/video"
@@ -67,6 +69,25 @@ func (o *Orchestrator) owner() string {
 		o.InstanceID = fmt.Sprintf("orch-%d", time.Now().UnixNano())
 	}
 	return o.InstanceID
+}
+
+// newVideoJobID returns a collision-resistant job ID. The previous
+// timestamp-only ID (time.Now().UnixNano()) could collide when two
+// concurrent creates ran in the same nanosecond, and the store then
+// reported a plain "job already exists" instead of an idempotency
+// conflict, so the loser failed instead of returning the winner.
+// Crypto-random IDs make that collision negligible across hosts;
+// the timestamp + process counter fallback only runs if crypto/rand
+// itself fails, and still mixes in a monotonic counter.
+var videoJobIDCounter uint64
+
+func newVideoJobID() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err == nil {
+		return "video-" + hex.EncodeToString(b[:])
+	}
+	n := atomic.AddUint64(&videoJobIDCounter, 1)
+	return fmt.Sprintf("video-%d-%d-%d", time.Now().UnixNano(), os.Getpid(), n)
 }
 
 func (o *Orchestrator) leaseTTL() time.Duration {
@@ -275,7 +296,7 @@ func (o *Orchestrator) Create(ctx context.Context, r video.VideoRequest) (video.
 		return video.VideoJob{}, errors.New("max_cost_usd requires an enabled cost ledger")
 	}
 
-	j := video.NewJob(fmt.Sprintf("video-%d", time.Now().UnixNano()), r)
+	j := video.NewJob(newVideoJobID(), r)
 	j.Provider, j.Model = p.ID(), r.ModelPreference
 	// Selection evidence (#420 item 6): why this adapter runs
 	// this job — the request's preference, the brief's
@@ -342,12 +363,33 @@ func (o *Orchestrator) Create(ctx context.Context, r video.VideoRequest) (video.
 // job the winning caller already persisted. Create is the serialization
 // point, so concurrent callers with one key cannot both create a job; the
 // loser returns the winner's record instead of a duplicate work admission.
+//
+// Both conflict shapes resolve the same way, but only when the key
+// actually resolves to a persisted job:
+//   - ErrIdempotencyConflict: the key was already claimed.
+//   - ErrJobAlreadyExists: the job ID collided (or, in the Postgres
+//     store, both the job_id and idempotency constraints fired and the
+//     store reports job_id first). If GetByIdempotency then finds the
+//     winner for this key, that winner is the correct return value;
+//     if it finds nothing, the duplicate ID belongs to an unrelated
+//     job and the original error must stand, never be silently
+//     treated as an idempotent request.
 func (o *Orchestrator) existingAfterIdempotencyConflict(ctx context.Context, key string, createErr error) (video.VideoJob, bool, error) {
-	if key == "" || !errors.Is(createErr, queue.ErrIdempotencyConflict) {
+	if key == "" {
+		return video.VideoJob{}, false, nil
+	}
+	isConflict := errors.Is(createErr, queue.ErrIdempotencyConflict)
+	isDuplicateID := errors.Is(createErr, queue.ErrJobAlreadyExists)
+	if !isConflict && !isDuplicateID {
 		return video.VideoJob{}, false, nil
 	}
 	existing, err := o.Store.GetByIdempotency(ctx, key)
 	if err != nil {
+		if isDuplicateID && errors.Is(err, queue.ErrNotFound) {
+			// Unrelated duplicate job ID, no idempotency winner:
+			// keep the original failure visible to the caller.
+			return video.VideoJob{}, false, nil
+		}
 		return video.VideoJob{}, true, fmt.Errorf("resolve concurrent idempotent create: %w", err)
 	}
 	return existing, true, nil

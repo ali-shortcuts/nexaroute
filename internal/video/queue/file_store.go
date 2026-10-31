@@ -98,7 +98,7 @@ func (s *FileStore) Create(_ context.Context, j video.VideoJob) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.jobs[j.JobID]; ok {
-		return fmt.Errorf("job already exists")
+		return ErrJobAlreadyExists
 	}
 	if j.IdempotencyKey != "" {
 		if _, ok := s.idem[j.IdempotencyKey]; ok {
