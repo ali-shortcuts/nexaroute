@@ -38,6 +38,17 @@ func TestGatewayClientLoopbackOnly(t *testing.T) {
 		"http://127.0.0.1:8080#section",
 		"ftp://127.0.0.1:8080",
 		"http://[::ffff:127.0.0.1]:8080",
+		// Same-address spellings: exact spelling only, never numeric
+		// equivalence (see config table; PR #794 CI failure on Go 1.27).
+		"http://[::ffff:7f00:1]:8080",
+		"http://[0:0:0:0:0:ffff:127.0.0.1]:8080",
+		"http://[::ffff:7f00:0001]:8080",
+		"http://[0:0:0:0:0:0:0:1]:8080",
+		"http://[::0001]:8080",
+		"http://127.000.0.1:8080",
+		"http://0x7f.0.0.1:8080",
+		"http://2130706433:8080",
+		"http://localhost.:8080",
 		"http://0.0.0.0:8080",
 		"://bad",
 		"",

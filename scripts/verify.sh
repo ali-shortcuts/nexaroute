@@ -53,6 +53,7 @@ fi
 echo '== short fuzz checks =='
 GOMAXPROCS=2 go test ./internal/httpapi -run='^$' -fuzz=FuzzPatchJSONModel -fuzztime=2s -parallel=2
 GOMAXPROCS=2 go test ./internal/core -run='^$' -fuzz=FuzzParseAnthContent -fuzztime=2s -parallel=2
+GOMAXPROCS=2 go test ./internal/config -run='^$' -fuzz=FuzzValidateLoopbackGatewayBaseURL -fuzztime=2s -parallel=2
 echo '== linux amd64 build =='
 mkdir -p bin
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags='-s -w' -o bin/nexaroute-linux-amd64 ./cmd/gateway
