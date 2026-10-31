@@ -1113,6 +1113,35 @@ settlement; with `file` it stays process-local and in-memory. Only job
 records and ledger entries are shared; assets remain per-instance local
 storage in both backends.
 
+## Optional NexaFlow workflow service (`nexaflow`, issue #765)
+
+Disabled by default. When `enabled` is true, the production gateway
+attaches the canonical Task 8 workflow service (Studio routes,
+template instantiation, draft validation, run listing) and runs
+startup recovery once before serving; a recovery failure fails the
+attach, so the gateway never serves with unrecovered workflow state.
+When disabled, no routes are mounted and no store is opened, so
+gateway behaviour is unchanged.
+
+| Field | Meaning |
+|---|---|
+| `enabled` | Opt-in flag. Default `false`. |
+| `store_backend` | `"file"` (default when empty) or `"memory"`. `"memory"` is volatile and test/ephemeral-only. No other backend is offered; `"postgres"` is rejected. |
+| `store_path` | Required for the file backend. There is no implicit default path. A second process on the same path fails at open time on the file lock; a corrupt file fails at open time. Neither falls back silently. |
+| `gateway_base_url` | Loopback address backend nodes call. Empty (default) derives `http(s)://127.0.0.1:<listen-port>` from the configured listener (https when TLS is enabled). Must be an `http(s)` URL when set. |
+| `gateway_token_ref` | Name of the environment variable holding a client-auth token for loopback calls. The reference, never the secret, lives in config. Empty (default) means `llm.chat` nodes fail closed at client authentication. |
+| `worker_id` | Lease identity. Empty (default) means the fixed worker `"gateway"`, stable across restarts so leases stay attributable. A configured value overrides it. The fixed default is correct only for the single-process file/memory stores wired here; a future multi-process store must require explicit distinct worker ids. |
+
+Backend nodes (chat, video, MCP, HTTP) execute for real through the
+loopback gateway client; health/compat ports use a direct backend.
+Still not wired by this section: scheduler daemon (no tick loop),
+webhook listener (no secret source configured), the PostgreSQL
+store, `workflow.*` permissions (admin routes keep the interim
+`config.read`/`config.write` mapping), any tenant dimension
+(single-tenant admin deployment; runs are filtered by principal
+subject only), and any BudgetGuard (`budget_check` stays
+report-only).
+
 ## MCP gateway (`mcp`, M6-1)
 
 When `mcp.enabled` is true, the gateway brokers registered Model

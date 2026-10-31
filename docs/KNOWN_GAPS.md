@@ -400,11 +400,12 @@ identical delivery, not exactly-once external side effects: a
 claimed delivery whose start fails is consumed, and a parked
 ambiguous attempt is precisely an unproven external outcome.
 
-Not implemented (deferred, not done): production gateway wiring
-(no caller of `AttachNexaflow` in `cmd/gateway`, so no gateway
-process ticks schedules, serves webhooks, or runs startup recovery
-yet); scheduler daily schedules, trigger discovery, persisted
-schedule state, and the scheduler tick endpoint; webhook
+Not implemented (deferred, not done): production gateway wiring for
+the scheduler and webhook planes (the opt-in `nexaflow` section
+attaches the Task 8 service, file/memory store, loopback backend,
+and startup recovery, but no gateway process ticks schedules or
+serves webhooks yet); scheduler daily schedules, trigger discovery,
+persisted schedule state, and the scheduler tick endpoint; webhook
 `secret_ref` resolution and published-trigger validation in the
 (wiring-owned) Start function; async dispatch (202 executions);
 subworkflows, run-level fallback execution, any-join, durable timer

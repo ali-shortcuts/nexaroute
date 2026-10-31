@@ -304,6 +304,7 @@ type Config struct {
 	Guardrails             GuardrailConfig              `json:"guardrails,omitempty"`
 	Evaluation             EvaluationConfig             `json:"evaluation,omitempty"`
 	Video                  VideoConfig                  `json:"video,omitempty"`
+	Nexaflow               NexaflowConfig               `json:"nexaflow,omitempty"`
 	Decision               DecisionConfig               `json:"decision,omitempty"`
 	Autopilot              AutopilotConfig              `json:"autopilot,omitempty"`
 	DecisionPolicies       []DecisionPolicyConfig       `json:"decision_policies,omitempty"`
@@ -380,6 +381,35 @@ func (c *Config) MigrateClientKeysToHashes() int {
 // converted in memory and still need a persisted migration.
 func (c *Config) ClientKeyMigrationPending() int {
 	return c.clientKeyMigrationPending
+}
+
+// NexaflowConfig controls the optional NexaFlow workflow service mounted
+// on the production gateway (issue #765, combined wiring). It is disabled
+// by default and, when disabled, mounts no routes and opens no store, so
+// gateway behaviour is unchanged. When enabled, the gateway attaches the
+// canonical Task 8 service (Studio routes, template instantiation, draft
+// validation, run listing) with a durable single-process file store or an
+// explicitly chosen memory store (volatile), a loopback gateway backend
+// for backend nodes (chat/video/MCP/HTTP via this gateway itself), and
+// startup recovery that runs once before serving and fails the attach
+// when recovery fails. StoreBackend "" means file. StorePath is required
+// for the file backend; there is no implicit default path and no silent
+// fallback to memory. GatewayBaseURL "" derives the loopback address
+// from the configured listener on 127.0.0.1; GatewayTokenRef names the
+// environment variable holding a client-auth token for loopback calls,
+// and without it llm.chat nodes fail closed at client authentication.
+// WorkerID "" means the fixed worker "gateway" (stable across restarts,
+// so leases stay attributable); a configured value overrides it. No
+// scheduler daemon, webhook listener, PostgreSQL store, workflow.*
+// permission, or tenant dimension is wired by this section; see
+// docs/CONFIGURATION.md.
+type NexaflowConfig struct {
+	Enabled         bool   `json:"enabled,omitempty"`
+	StoreBackend    string `json:"store_backend,omitempty"`
+	StorePath       string `json:"store_path,omitempty"`
+	GatewayBaseURL  string `json:"gateway_base_url,omitempty"`
+	GatewayTokenRef string `json:"gateway_token_ref,omitempty"`
+	WorkerID        string `json:"worker_id,omitempty"`
 }
 
 // VideoConfig controls the optional, isolated Video Gateway. It is disabled
@@ -2092,6 +2122,53 @@ func (c Config) validateAdminPlane() error {
 	}
 	if err := c.validateVideo(); err != nil {
 		return err
+	}
+	if err := c.validateNexaflow(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateNexaflow gates the opt-in NexaFlow wiring. Disabled means
+// untouched: backend, path, and gateway fields are ignored, never
+// defaulted into an attachment. Enabled fails closed on an unknown
+// backend and on a missing file-store path; there is no silent fallback
+// to memory, and a corrupt or locked file store fails later at open
+// time, also fail-closed, before the gateway serves traffic. Gateway
+// fields are shape-checked only; an unset base URL derives from the
+// listener at attach time, and an unset token reference means llm.chat
+// nodes fail closed at client authentication.
+func (c Config) validateNexaflow() error {
+	if !c.Nexaflow.Enabled {
+		return nil
+	}
+	switch strings.TrimSpace(c.Nexaflow.StoreBackend) {
+	case "", "file":
+		if strings.TrimSpace(c.Nexaflow.StorePath) == "" {
+			return errors.New("nexaflow.store_path is required when nexaflow.enabled is true and store_backend is file")
+		}
+	case "memory":
+		// Volatile by design; documented as ephemeral-only.
+	default:
+		return fmt.Errorf("nexaflow.store_backend must be file or memory, got %q", c.Nexaflow.StoreBackend)
+	}
+	if len(c.Nexaflow.StorePath) > 4096 || strings.ContainsAny(c.Nexaflow.StorePath, "\r\n\x00") {
+		return errors.New("nexaflow.store_path is invalid or too long")
+	}
+	if len(c.Nexaflow.WorkerID) > 256 || strings.ContainsAny(c.Nexaflow.WorkerID, "\r\n\x00") {
+		return errors.New("nexaflow.worker_id is invalid or too long")
+	}
+	if len(c.Nexaflow.GatewayBaseURL) > 2048 || strings.ContainsAny(c.Nexaflow.GatewayBaseURL, "\r\n\x00") {
+		return errors.New("nexaflow.gateway_base_url is invalid or too long")
+	}
+	if base := strings.TrimSpace(c.Nexaflow.GatewayBaseURL); base != "" {
+		parsed, err := url.Parse(base)
+		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+			return errors.New("nexaflow.gateway_base_url must be an http(s) URL")
+		}
+	}
+	if ref := c.Nexaflow.GatewayTokenRef; ref != "" && !validEnvName(ref) {
+		return errors.New("nexaflow.gateway_token_ref must be a valid environment variable name")
 	}
 	return nil
 }

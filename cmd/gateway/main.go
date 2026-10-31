@@ -342,6 +342,20 @@ func main() {
 		}
 		api.AttachVideoHandler(videoRT.Handler)
 	}
+	// Opt-in NexaFlow wiring (issue #765, combined wiring). Disabled by
+	// default: no routes, no store, no behaviour change. Must run before
+	// api.Handler() is captured below, because the mux mounts NexaFlow
+	// routes only while a service is attached. The store closer runs
+	// deferred after the HTTP graceful shutdown below.
+	if nexaflowCloser, err := maybeAttachNexaflow(api, cfg, hm, logger); err != nil {
+		bootstrap.Fatalf("cannot initialize nexaflow service: %v", err)
+	} else if nexaflowCloser != nil {
+		defer func() {
+			if err := nexaflowCloser.Close(); err != nil {
+				logger.Printf("nexaflow_store_close_error=%v", err)
+			}
+		}()
+	}
 	api.SyncCapabilityContracts()
 	pe.SetCapabilityStore(api.CapabilityStore())
 	srv := &http.Server{
