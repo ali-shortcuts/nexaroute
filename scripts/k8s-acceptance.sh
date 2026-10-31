@@ -384,6 +384,94 @@ deployment_pod_hash() {
   kubectl_ns get rs -l "app.kubernetes.io/instance=$RELEASE" -o json >"$OUT_DIR/current-rs.json" 2>/dev/null || return 1
   deployment_hash_from_rs_json "$OUT_DIR/current-rs.json"
 }
+# revision_observed <previous> <current>: exit 0 only when current
+# is a non-empty pod-template-hash and, if previous is non-empty,
+# it names a different revision. An upgrade or rollback must not be
+# treated as observed while the Deployment controller is still
+# advertising the previous ReplicaSet: helm returns as soon as the
+# Deployment object is written, which is before the new ReplicaSet
+# exists, and the highest revision at that instant is the old one.
+revision_observed() {
+  [[ -n "${2:-}" ]] || return 1
+  [[ -z "${1:-}" || "$1" != "$2" ]]
+}
+# wait_revision_hash <timeout-seconds> [previous-hash]
+# Poll the current ReplicaSet hash. Prints it and returns 0 once
+# revision_observed accepts it. Prints nothing and returns 1 on
+# timeout. A single empty kubectl read is retried, not fatal, so
+# set -e cannot abort the live run before the fail-closed message.
+wait_revision_hash() {
+  local timeout_s="$1" prev="${2:-}"
+  local deadline=$(( $(date +%s) + timeout_s )) hash=""
+  while [[ $(date +%s) -lt $deadline ]]; do
+    hash="$(deployment_pod_hash 2>/dev/null || true)"
+    if revision_observed "$prev" "$hash"; then
+      printf '%s\n' "$hash"
+      return 0
+    fi
+    sleep 2
+  done
+  return 1
+}
+# pod_termination_elapsed_ms <pod-json-file>: print the measured time from
+# the start of graceful termination to the latest container finishedAt.
+# Kubernetes deletionTimestamp is the scheduled object-deletion time
+# (after the grace period), not the time termination starts. Reconstruct
+# the start as deletionTimestamp - deletionGracePeriodSeconds.
+# Every regular container must have a terminal finishedAt; incomplete or
+# ambiguous evidence returns 1 and can never be reported as PASS.
+pod_termination_elapsed_ms() {
+  python3 - "$1" <<'PYEOF'
+import datetime, json, sys
+try:
+    pod = json.load(open(sys.argv[1]))
+    meta = pod.get("metadata", {})
+    deletion = meta.get("deletionTimestamp")
+    grace = meta.get("deletionGracePeriodSeconds")
+    if not deletion or not isinstance(grace, int) or isinstance(grace, bool) or grace != 120:
+        sys.exit(1)
+    deletion_deadline = datetime.datetime.fromisoformat(deletion.replace("Z", "+00:00"))
+    start = deletion_deadline - datetime.timedelta(seconds=grace)
+    names = {c["name"] for c in pod.get("spec", {}).get("containers", [])}
+    statuses = {s.get("name"): s for s in pod.get("status", {}).get("containerStatuses", [])}
+    if not names or not names.issubset(statuses):
+        sys.exit(1)
+    finishes = []
+    for name in names:
+        terminated = statuses[name].get("state", {}).get("terminated")
+        if not terminated or not terminated.get("finishedAt"):
+            sys.exit(1)
+        finishes.append(datetime.datetime.fromisoformat(terminated["finishedAt"].replace("Z", "+00:00")))
+    elapsed = (max(finishes) - start).total_seconds() * 1000
+    if elapsed < 0:
+        sys.exit(1)
+    print(int(round(elapsed)))
+except Exception:
+    sys.exit(1)
+PYEOF
+}
+# wait_for_pod_termination <pod-name> <timeout-seconds>: observe a Pod
+# deletion and wait until Kubernetes reports finishedAt for every regular
+# container. Poll while the terminating Pod object still exists. If the
+# object disappears before a complete terminal snapshot is observed, fail
+# closed rather than substituting client-side kubectl latency for evidence.
+wait_for_pod_termination() {
+  local pod_name="$1" timeout_s="$2" deadline=$(( $(date +%s) + timeout_s ))
+  local snapshot="$OUT_DIR/termination-${pod_name}.json" measured=""
+  while [[ $(date +%s) -lt $deadline ]]; do
+    if ! kubectl_ns get pod "$pod_name" -o json >"$snapshot" 2>/dev/null; then
+      return 1
+    fi
+    measured="$(pod_termination_elapsed_ms "$snapshot" 2>/dev/null || true)"
+    if [[ -n "$measured" ]]; then
+      printf '%s\n' "$measured"
+      return 0
+    fi
+    sleep 0.2
+  done
+  return 1
+}
+
 # require_hash <phase> <hash>: fail closed when a revision hash
 # could not be determined. Returns 0 when the hash is non-empty.
 require_hash() {
@@ -672,11 +760,15 @@ PY
     --set image.tag=accept-nonexistent --set image.pullPolicy=Never >/dev/null
   sleep 120
   assert_never_ready "failed rollout (unpullable image) never Ready" "app.kubernetes.io/instance=$RELEASE"
+  local failed_hash
+  failed_hash="$(deployment_pod_hash 2>/dev/null || true)"
   helm rollback "$RELEASE" -n "$NAMESPACE" >/dev/null
-  local sf_hash
-  sf_hash="$(deployment_pod_hash)"
+  local sf_hash=""
+  if [[ -n "$failed_hash" ]]; then
+    sf_hash="$(wait_revision_hash 90 "$failed_hash" || true)"
+  fi
   if ! require_hash "rollback after failed rollout" "$sf_hash"; then
-    fail "rollback after failed rollout: pod did not become Ready (revision unknown)"
+    fail "rollback after failed rollout: pod did not become Ready (revision unknown or unchanged from $failed_hash)"
   elif wait_pod_ready 300s "$sf_hash"; then ok "rollback after failed rollout: pod Ready (revision $sf_hash)"; else fail "rollback after failed rollout: pod did not become Ready (revision $sf_hash)"; capture_failure_evidence "safe-failure-rollback-failure"; fi
   port_forward 18080
   if [[ "$(http_code http://127.0.0.1:18080/readyz)" == "200" ]]; then
@@ -749,6 +841,13 @@ PY
   kubectl_ns wait --for=jsonpath='{.status.phase}'=Running "pod" \
     -l "app.kubernetes.io/instance=$RELEASE" --timeout=300s >/dev/null
   ok "base release ($PREV_TAG chart) installed, pod Running"
+  local base_hash
+  base_hash="$(deployment_pod_hash 2>/dev/null || true)"
+  if [[ -z "$base_hash" ]]; then
+    fail "base revision hash could not be determined"
+  else
+    ok "base revision hash $base_hash"
+  fi
 
   # Readiness semantics on the empty-provider install: /healthz is 200
   # (the process is alive) while /readyz is 503 by design -- there is
@@ -768,10 +867,12 @@ PY
   helm upgrade "$RELEASE" "$CHART" -n "$NAMESPACE" \
     -f "$ACCEPT_VALUES" \
     --set image.tag=accept-current --set image.pullPolicy=Never >/dev/null
-  local upgraded_hash
-  upgraded_hash="$(deployment_pod_hash)"
+  local upgraded_hash=""
+  if [[ -n "$base_hash" ]]; then
+    upgraded_hash="$(wait_revision_hash 90 "$base_hash" || true)"
+  fi
   if ! require_hash "upgraded pod" "$upgraded_hash"; then
-    fail "upgraded pod did not become Ready (revision unknown)"
+    fail "upgraded pod did not become Ready (revision unknown or unchanged from $base_hash)"
   elif wait_pod_ready 300s "$upgraded_hash"; then ok "upgraded pod Ready (revision $upgraded_hash)"; else fail "upgraded pod did not become Ready (revision $upgraded_hash)"; capture_failure_evidence "upgrade-failure"; fi
   port_forward 18080
   if [[ "$(http_code http://127.0.0.1:18080/healthz)" == "200" ]]; then
@@ -839,31 +940,30 @@ PY
   kubectl_ns exec "deploy/${RELEASE}-nexaroute" -- /nexaroute backup \
     --config /config/config.json --out /config/backup-accept.tar >"$OUT_DIR/backup.log" 2>&1
   ok "backup to PVC succeeded before restart"
-  local pvc_uid pod_name start_ms end_ms elapsed_ms
+  local pvc_uid pod_name termination_ms restart_hash
   pvc_uid="$(kubectl_ns get pvc -l "app.kubernetes.io/instance=$RELEASE" -o jsonpath='{.items[0].metadata.uid}')"
   pod_name="$(kubectl_ns get pod -l "app.kubernetes.io/instance=$RELEASE" -o jsonpath='{.items[0].metadata.name}')"
-  start_ms="$(date +%s%3N)"
-  kubectl_ns delete pod "$pod_name" --grace-period=120 --timeout=180s >/dev/null
-  end_ms="$(date +%s%3N)"
-  elapsed_ms=$(( end_ms - start_ms ))
-  printf 'pod termination took %sms (grace 120s)\n' "$elapsed_ms"
-  # Millisecond timing separates the two cases whole-second timing
-  # conflated in run 41216200624 (121s reported for a 120s grace):
-  # a pod that exits at 119999ms is inside its grace, a pod that
-  # needs a SIGKILL at 120000ms is not. The grace is therefore NOT
-  # widened to 125s to absorb client overhead: kubectl delete
-  # returns when the pod object disappears, so its overhead is
-  # already inside the measured interval, and the timestamps
-  # above are the evidence. A termination above 60s is also
-  # logged as a warning, because the gateway drain cap is 35s:
-  # a near-grace termination is suspicious even when it passes,
-  # and must not be silently absorbed into a PASS.
-  if [[ "$elapsed_ms" -gt 60000 && "$elapsed_ms" -le 120000 ]]; then
-    printf 'WARNING: termination took %sms, near the 120s grace (drain cap 35s); investigate if recurring\n' "$elapsed_ms"
+  # Same ReplicaSet across a pod delete. Capture the hash BEFORE
+  # the delete: this is a pod restart, not a Deployment rollout.
+  restart_hash="$(deployment_pod_hash 2>/dev/null || true)"
+  # Do not time the kubectl client's blocking wait: API/controller
+  # finalization can finish after the container has already exited.
+  # Instead request deletion without waiting and measure the latest
+  # container finishedAt minus the Pod deletionTimestamp.
+  kubectl_ns delete pod "$pod_name" --grace-period=120 --wait=false >/dev/null
+  if termination_ms="$(wait_for_pod_termination "$pod_name" 180)"; then
+    printf 'pod container termination took %sms from deletionTimestamp to final finishedAt (grace 120000ms)\n' "$termination_ms"
+    if [[ "$termination_ms" -gt 60000 && "$termination_ms" -le 120000 ]]; then
+      printf 'WARNING: container termination took %sms, near the 120s grace (gateway drain cap 35s); investigate if recurring\n' "$termination_ms"
+    fi
+    if [[ "$termination_ms" -le 120000 ]]; then
+      ok "all pod containers terminated inside their 120s grace period"
+    else
+      fail "pod container termination exceeded its 120s grace period"; capture_failure_evidence "termination-failure"
+    fi
+  else
+    fail "could not observe deletionTimestamp and finishedAt for every pod container before deletion/timeout"; capture_failure_evidence "termination-failure"
   fi
-  if [[ "$elapsed_ms" -le 120000 ]]; then ok "pod terminated inside its grace period"; else fail "pod termination exceeded its grace period"; capture_failure_evidence "termination-failure"; fi
-  local restart_hash
-  restart_hash="$(deployment_pod_hash)"
   if ! require_hash "replacement pod" "$restart_hash"; then
     fail "replacement pod did not become Ready (revision unknown)"
   elif wait_pod_ready 300s "$restart_hash"; then ok "replacement pod Ready after restart (revision $restart_hash)"; else fail "replacement pod did not become Ready (revision $restart_hash)"; capture_failure_evidence "restart-failure"; fi
@@ -877,6 +977,8 @@ PY
   # Rollback: swap the operator-managed config back FIRST (helm
   # rollback does not touch it), then roll back to revision 1.
   replace_config_secret "$OUT_DIR/base-config.json"
+  local pre_rollback_hash
+  pre_rollback_hash="$(deployment_pod_hash 2>/dev/null || true)"
   helm rollback "$RELEASE" 1 -n "$NAMESPACE" >/dev/null
   # Rollback diagnosis (run 41216200624): the old script waited for
   # phase=Running on the selector, which the still-terminating
@@ -890,10 +992,12 @@ PY
   # A missing Running rollback pod is a hard failure with
   # evidence captured here, not a warning followed by a
   # port-forward that can only fail.
-  local rollback_hash rollback_pod
-  rollback_hash="$(deployment_pod_hash)"
+  local rollback_hash="" rollback_pod
+  if [[ -n "$pre_rollback_hash" ]]; then
+    rollback_hash="$(wait_revision_hash 90 "$pre_rollback_hash" || true)"
+  fi
   if ! require_hash "rolled back pod" "$rollback_hash"; then
-    fail "rolled back pod did not reach Running (revision unknown)"
+    fail "rolled back pod did not reach Running (revision unknown or unchanged from $pre_rollback_hash)"
   elif wait_pod_running 300s "$rollback_hash"; then
     ok "rolled back pod Running (revision $rollback_hash)"
   else
@@ -922,10 +1026,12 @@ PY
   helm upgrade "$RELEASE" "$CHART" -n "$NAMESPACE" \
     -f "$ACCEPT_VALUES" \
     --set image.tag=accept-current --set image.pullPolicy=Never >/dev/null
-  local reupgraded_hash
-  reupgraded_hash="$(deployment_pod_hash)"
+  local reupgraded_hash=""
+  if [[ -n "$rollback_hash" ]]; then
+    reupgraded_hash="$(wait_revision_hash 90 "$rollback_hash" || true)"
+  fi
   if ! require_hash "re-upgraded pod" "$reupgraded_hash"; then
-    fail "re-upgraded pod did not become Ready (revision unknown)"
+    fail "re-upgraded pod did not become Ready (revision unknown or unchanged from $rollback_hash)"
   elif wait_pod_ready 300s "$reupgraded_hash"; then ok "re-upgraded pod Ready (revision $reupgraded_hash)"; else fail "re-upgraded pod did not become Ready (revision $reupgraded_hash)"; capture_failure_evidence "reupgrade-failure"; fi
 
   safe_failure_phase
@@ -1372,6 +1478,66 @@ PYEOF
     ok "self-test: revision hash resolves from the current ReplicaSet and fails closed when undeterminable"
   else
     fail "self-test: revision hash resolution regression cases failed"
+  fi
+
+  # 11. A revision counts as observed only when its hash is non-empty
+  # and, when the previous hash is known, different. This is what
+  # stops an upgrade/rollback from accepting the ReplicaSet helm
+  # has not replaced yet.
+  local adv_ok=1
+  revision_observed "" "abc123" || adv_ok=0
+  revision_observed "oldhash" "newhash" || adv_ok=0
+  if revision_observed "samehash" "samehash"; then adv_ok=0; fi
+  if revision_observed "oldhash" ""; then adv_ok=0; fi
+  if [[ "$adv_ok" -eq 1 ]]; then
+    ok "self-test: revision observation requires a non-empty hash that differs from the known previous revision"
+  else
+    fail "self-test: revision observation rule failed"
+  fi
+
+  # 12. Grace timing reconstructs termination start as
+  # deletionTimestamp - deletionGracePeriodSeconds, then compares it
+  # with the latest regular-container finishedAt.
+  local term_ok=1 within_ms over_ms
+  mkdir -p "$tmp/termination"
+  python3 - "$tmp/termination" <<'PYEOF'
+import json, os, sys
+base = sys.argv[1]
+def pod(gateway_finish, sidecar_finish, deletion="2026-01-01T00:02:00Z", grace=120):
+    return {
+        "metadata": {"deletionTimestamp": deletion, "deletionGracePeriodSeconds": grace},
+        "spec": {"containers": [{"name": "gateway"}, {"name": "acceptance-stub"}]},
+        "status": {"containerStatuses": [
+            {"name": "gateway", "state": {"terminated": {"finishedAt": gateway_finish}}},
+            {"name": "acceptance-stub", "state": {"terminated": {"finishedAt": sidecar_finish}}},
+        ]},
+    }
+json.dump(pod("2026-01-01T00:00:35Z", "2026-01-01T00:00:36Z"), open(os.path.join(base, "within.json"), "w"))
+json.dump(pod("2026-01-01T00:02:00.001Z", "2026-01-01T00:01:59Z"), open(os.path.join(base, "over.json"), "w"))
+missing = pod("2026-01-01T00:00:35Z", "2026-01-01T00:00:36Z")
+missing["status"]["containerStatuses"] = missing["status"]["containerStatuses"][:1]
+json.dump(missing, open(os.path.join(base, "incomplete.json"), "w"))
+no_delete = pod("2026-01-01T00:00:35Z", "2026-01-01T00:00:36Z")
+no_delete["metadata"].pop("deletionTimestamp")
+json.dump(no_delete, open(os.path.join(base, "no-deletion.json"), "w"))
+no_grace = pod("2026-01-01T00:00:35Z", "2026-01-01T00:00:36Z")
+no_grace["metadata"].pop("deletionGracePeriodSeconds")
+json.dump(no_grace, open(os.path.join(base, "no-grace.json"), "w"))
+wrong_grace = pod("2026-01-01T00:00:35Z", "2026-01-01T00:00:36Z", grace=119)
+json.dump(wrong_grace, open(os.path.join(base, "wrong-grace.json"), "w"))
+PYEOF
+  within_ms="$(pod_termination_elapsed_ms "$tmp/termination/within.json" 2>/dev/null || true)"
+  over_ms="$(pod_termination_elapsed_ms "$tmp/termination/over.json" 2>/dev/null || true)"
+  [[ "$within_ms" == "36000" ]] || term_ok=0
+  [[ "$over_ms" == "120001" ]] || term_ok=0
+  if pod_termination_elapsed_ms "$tmp/termination/incomplete.json" >/dev/null 2>&1; then term_ok=0; fi
+  if pod_termination_elapsed_ms "$tmp/termination/no-deletion.json" >/dev/null 2>&1; then term_ok=0; fi
+  if pod_termination_elapsed_ms "$tmp/termination/no-grace.json" >/dev/null 2>&1; then term_ok=0; fi
+  if pod_termination_elapsed_ms "$tmp/termination/wrong-grace.json" >/dev/null 2>&1; then term_ok=0; fi
+  if [[ "$term_ok" -eq 1 ]]; then
+    ok "self-test: termination time uses deletion grace metadata and all containers' finishedAt, failing closed on incomplete evidence"
+  else
+    fail "self-test: pod termination timing regression cases failed"
   fi
 }
 
