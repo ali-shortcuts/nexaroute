@@ -566,3 +566,87 @@ only) closes the three #648 harness gaps (KV v2 metadata probe, root-token
 refusal, helper timeout propagation), reconciles ADR 0007's status line,
 and documents the #650 safe-failure gap; it merges nothing and closes no
 issue.
+
+## Release preparation record — 2026-10-31, main `2f638da`
+
+This section records only what was actually dispatched and observed in
+the 2026-10-31 release-preparation run. It does not close any issue
+and does not make a release claim.
+
+- Current main at the start of the run:
+  `2f638da5ff127e1a3a46a5a687c682357523604a` (merge of PR #802,
+  head `c93279b`). PR #802's body was scrubbed before that merge:
+  the live body reads "Related to #654; umbrella stays open" and
+  contains zero close/fix/resolve + issue-number adjacencies, and
+  issue #654 remained OPEN after the merge. The merge itself was
+  performed by another actor, not by this run.
+- PR #803 (independent-environment fail-closed fixes, branch
+  `ci/independent-environment-fixes-20261031b`, head `442eed6`)
+  is OPEN and NOT merged. The workflow on main `2f638da` still
+  contains the known defects (unit/race steps pipe to `tee`
+  without `pipefail`; integration required list contains the
+  non-existent `TestControlPlaneRedisIntegration`; fuzz job has
+  no zero-target FAIL), so a run of the main independent workflow
+  cannot be quoted as a final independent verdict until #803 (or
+  an equivalent fix) merges and the corrected workflow runs on
+  the then-current main SHA.
+- Workflows dispatched on main `2f638da` on 2026-10-31
+  (manual, workflow_dispatch; no dispatch result is claimed
+  beyond the run page state at check time):
+  - Kubernetes live acceptance: run 41206916203
+  - Vault runner acceptance: run 41206938283 — page state
+    Failure, 56 s, 1 artifact
+    (`vault-runner-reports-2f638da5ff127e1a3a46a5a687c682357523604a`)
+  - HA runner acceptance: run 41206954815
+  - OIDC runner acceptance: run 41207000118
+  - Coverage report: run 41207035904
+  - Soak (rounds=3, duration=2h, timeout 180m): run 41207083700
+    — In progress at check time; a 2 h soak cannot be judged
+    before it finishes and its summary is validated against
+    commit `2f638da` and 7200 s sustained.
+  - Independent environment (full_soak=true, 2h): run 41207125741
+    — dispatched on the flawed main workflow; see #803 note above.
+- Acceptance matrix on `2f638da` (runner evidence only, never
+  real tenant / staging / multi-host / production evidence):
+  - #646 LLM provider canaries: BLOCKED — no operator-selected
+    providers, credentials, endpoints, model configuration, or
+    spending ceiling were supplied; no paid calls were made.
+  - #647 Organizational OIDC: BLOCKED for the real tenant;
+    runner Keycloak evidence only, and only if run 41207000118
+    finishes with a validated summary. It is not tenant evidence.
+  - #648 Vault KV (staging): BLOCKED — runner Vault evidence
+    only, and run 41206938283 already shows Failure; staging
+    Vault, least-privilege policy, and operator authorization
+    were not supplied.
+  - #649 Vault Transit: BLOCKED — same runner-only scope as
+    #648, plus the same failed run; no staging Transit service
+    was supplied.
+  - #650 Kubernetes/Helm: NOT YET JUDGED — run 41206916203
+    dispatched; a disposable kind result, if it passes, is
+    ephemeral-cluster evidence only, not production-cluster
+    acceptance.
+  - #651 ComfyUI real inference: BLOCKED — no reachable
+    authorized ComfyUI service, real model/workflow, or
+    compute/quota authorization was supplied; no inference ran.
+  - #652 Multi-host HA: BLOCKED for multi-host — runner
+    containers are single-host evidence only, even if run
+    41206954815 passes; two independent hosts, shared
+    PostgreSQL/Redis, and measured RPO/RTO were not supplied.
+  - #653 Coverage + soak: NOT YET JUDGED — coverage run
+    41207035904 and soak run 41207083700 were dispatched on
+    `2f638da`; neither result was validated at the time of
+    this record, and no earlier SHA's coverage or soak is
+    carried over to `2f638da`.
+- Final release verdict on `2f638da`: BLOCKED. No tag and no
+  release were created. The release-gate script
+  (`scripts/release-gate-status.sh`) could not be run to a
+  PASS in this environment (it needs an authenticated `gh`
+  Checks API read, which the available connector does not
+  expose), and the external gates above are in any case not
+  met. Remaining owner inputs: (1) Vault run failure detail
+  and a fix/re-run; (2) approval + CI-green for PR #803, then
+  a corrected independent run; (3) terminal results for the
+  K8s/HA/OIDC/coverage/soak runs on `2f638da`; (4) operator
+  resources for #646, #647 tenant, #648/#649 staging Vault,
+  #651 ComfyUI, and #652 separate hosts; (5) a separate
+  explicit release approval after all of the above.
