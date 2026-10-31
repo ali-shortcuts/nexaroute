@@ -53,6 +53,10 @@ fi
 echo '== short fuzz checks =='
 GOMAXPROCS=2 go test ./internal/httpapi -run='^$' -fuzz=FuzzPatchJSONModel -fuzztime=2s -parallel=2
 GOMAXPROCS=2 go test ./internal/core -run='^$' -fuzz=FuzzParseAnthContent -fuzztime=2s -parallel=2
+echo '== loopback validator fuzz (short) =='
+GOMAXPROCS=2 go test ./internal/config -run='^$' -fuzz=FuzzValidateLoopbackGatewayBaseURL -fuzztime=10s -parallel=2
+echo '== release gate script regression tests =='
+bash scripts/test-release-gate-status.sh
 echo '== linux amd64 build =='
 mkdir -p bin
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags='-s -w' -o bin/nexaroute-linux-amd64 ./cmd/gateway
