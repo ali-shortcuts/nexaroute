@@ -73,6 +73,14 @@ controlPlane:
     secretName: ""
     secretKey: "url"
 
+# Acceptance stub sidecar: see values.yaml. Enabled only for the
+# disposable kind acceptance run, never for production.
+acceptanceStubSidecar:
+  enabled: true
+  image: "python:3.12-alpine"
+  port: 18081
+  configMapName: "nexaroute-stub-code"
+
 # The stub provider's key comes from the dummy secret too, so the live
 # run exercises a secretKeyRef env var on the real boot path.
 extraEnv:

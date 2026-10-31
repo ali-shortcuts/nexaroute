@@ -104,7 +104,37 @@ spec:
               readOnly: true
             - name: tmp
               mountPath: /tmp
+        {{- if .Values.acceptanceStubSidecar.enabled }}
+        - name: acceptance-stub
+          image: {{ .Values.acceptanceStubSidecar.image | quote }}
+          imagePullPolicy: IfNotPresent
+          command: ["python", "/code/stub.py"]
+          env:
+            - name: STUB_PORT
+              value: {{ .Values.acceptanceStubSidecar.port | quote }}
+          ports:
+            - name: stub
+              containerPort: {{ .Values.acceptanceStubSidecar.port }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: acceptance-stub-code
+              mountPath: /code
+              readOnly: true
+        {{- end }}
       volumes:
+        {{- if .Values.acceptanceStubSidecar.enabled }}
+        - name: acceptance-stub-code
+          configMap:
+            name: {{ .Values.acceptanceStubSidecar.configMapName }}
+        {{- end }}
         - name: state
           {{- if or .Values.persistence.enabled .Values.persistence.existingClaim }}
           persistentVolumeClaim:
