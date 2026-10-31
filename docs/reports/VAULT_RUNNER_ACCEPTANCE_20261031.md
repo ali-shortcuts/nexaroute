@@ -100,3 +100,30 @@ later checks are not run and must not be quoted. Fix the script or the
 workflow in a follow-up commit on the same branch, re-dispatch, and
 record both runs — the failed run is evidence too, not something to
 hide by re-running.
+
+## Update 2026-10-31: first live dispatch and harness fixes
+
+The first live dispatch (run 41194842427 on main `67ecfaf`) reached Vault
+boot, init, unseal, KV mount, Transit mount, mount readback and policies,
+then failed at `vault.transit_key` because the script expected HTTP 204
+while the pinned Vault 1.18.5 returned HTTP 200 for
+`POST /v1/transit/keys/nexaroute`. It exited before the summary writer,
+so the artifact upload also failed with `No files were found`.
+
+The script now:
+
+- expects HTTP 200 for Transit key creation and verifies the key with a
+  readback (`data.name=nexaroute`, `data.type=aes256-gcm96`);
+- writes a sanitized `vault-runner-summary.json` from the EXIT trap on
+  any exit after `OUT_DIR`/`CHECKS_FILE` exist, preserving the real exit
+  code, so a failed run still uploads check IDs/statuses and safe
+  environment metadata (never tokens, key bytes, ciphertext, DEKs, or
+  HTTP bodies);
+- runs its leak scan before the success summary;
+- has a deterministic `--self-test` (also run by `scripts/verify.sh`)
+  covering the success and early-failure summary paths and the Transit
+  contract.
+
+This is harness work, not acceptance evidence. A successful rerun on the
+new SHA is runner-loopback evidence only; #648 and #649 stay OPEN pending
+operator staging/non-loopback evidence.

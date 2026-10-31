@@ -327,6 +327,43 @@ assert_release_absent() {
   fi
 }
 
+# rendered_image_ref <chart-dir> <tag>: the exact image reference the
+# chart renders for that tag under the acceptance values. The live run
+# must tag and kind-load THIS string. Deriving it from the render
+# (rather than hard-coding a local name) is what keeps the Docker tag,
+# the kind-load name, and the Deployment's image.repository in sync —
+# a mismatch with pullPolicy=Never is ErrImageNeverPull, not a pull.
+rendered_image_ref() {
+  local chart="$1" tag="$2" rendered
+  rendered="$(helm template "$RELEASE" "$chart" -f "$ACCEPT_VALUES" \
+    --set image.tag="$tag" 2>/dev/null)" || return 1
+  printf '%s\n' "$rendered" \
+    | grep -oE 'image: "[^"]+"' | head -n1 \
+    | sed -e 's/^image: "//' -e 's/"$//'
+}
+
+# build_and_load_images <prev-tree> <cluster>: build both images from
+# trees and load them into kind under the exact rendered references.
+# With pullPolicy=Never the loaded name must equal the Deployment's
+# image string byte-for-byte, including the chart's fully qualified
+# repository (ghcr.io/...), or kubelet reports ErrImageNeverPull.
+build_and_load_images() {
+  local prev_tree="$1" cluster="$2" prev_image cur_image
+  prev_image="$(rendered_image_ref "$prev_tree/$CHART" accept-prev)" || {
+    fail "could not render the preceding chart image reference"; return 1; }
+  cur_image="$(rendered_image_ref "$CHART" accept-current)" || {
+    fail "could not render the current chart image reference"; return 1; }
+  if [[ -z "$prev_image" || -z "$cur_image" ]]; then
+    fail "rendered image reference is empty (prev='$prev_image' current='$cur_image')"
+    return 1
+  fi
+  docker build -q -t "$prev_image" --build-arg "VERSION=$PREV_TAG" "$prev_tree" >/dev/null
+  docker build -q -t "$cur_image" --build-arg VERSION=accept-current "$REPO" >/dev/null
+  kind load docker-image "$prev_image" --name "$cluster" >/dev/null
+  kind load docker-image "$cur_image" --name "$cluster" >/dev/null
+  ok "preceding ($PREV_TAG) and current images built and kind-loaded as rendered: $prev_image, $cur_image"
+}
+
 # assert_kind_context: fail closed unless kubectl is talking to the
 # kind cluster this run created. Used by live_phase right after
 # kind create (before ANY namespace, Secret, or release is created)
@@ -483,16 +520,13 @@ live_phase() {
   create_dummy_secrets
   ok "dummy external secrets created (sentinel values only)"
 
-  # Build both images from trees, load them into kind (never pulled).
+  # Build both images from trees, load them into kind (never pulled)
+  # under the exact image references the chart renders.
   local prev_tree="$OUT_DIR/prev-tree"
   rm -rf "$prev_tree"
   mkdir -p "$prev_tree"
   git archive "$PREV_TAG" | tar -x -C "$prev_tree"
-  docker build -q -t nexaroute:accept-prev --build-arg "VERSION=$PREV_TAG" "$prev_tree" >/dev/null
-  docker build -q -t nexaroute:accept-current --build-arg VERSION=accept-current "$REPO" >/dev/null
-  kind load docker-image nexaroute:accept-prev --name "$CLUSTER" >/dev/null
-  kind load docker-image nexaroute:accept-current --name "$CLUSTER" >/dev/null
-  ok "preceding ($PREV_TAG) and current images built and kind-loaded"
+  build_and_load_images "$prev_tree" "$CLUSTER" || return 1
 
   # Base install: preceding chart, empty-provider config.
   python3 - "$ACCEPT_CONFIG" "$OUT_DIR/base-config.json" <<'PY'
@@ -943,6 +977,54 @@ EOF
     ok "self-test: fault-release cleanup is invoked and idempotent"
   else
     fail "self-test: fault-release cleanup helper did not invoke uninstall + secret deletion twice"
+  fi
+
+  # 8. Image-reference parity (regression for the 2026-10-31 live
+  # failure): docker tags and kind load names must be exactly the image
+  # the rendered Deployment requests. The failure was building
+  # `nexaroute:accept-current` while the chart requested
+  # `ghcr.io/ali-shortcuts/nexaroute:accept-current` with pullPolicy
+  # Never -> ErrImageNeverPull. Stub docker/kind log their real argv;
+  # the expected references come from an independent helm template.
+  mkdir -p "$tmp/image-bin"
+  selftest_tool_bin "$tmp/image-bin"
+  rm -f "$tmp/image-bin/docker" "$tmp/image-bin/kind"
+  cat >"$tmp/image-bin/docker" <<'EOF'
+#!/bin/sh
+echo "docker $@" >> "$SELFTEST_IMAGE_LOG"
+exit 0
+EOF
+  cat >"$tmp/image-bin/kind" <<'EOF'
+#!/bin/sh
+echo "kind $@" >> "$SELFTEST_IMAGE_LOG"
+exit 0
+EOF
+  chmod +x "$tmp/image-bin/docker" "$tmp/image-bin/kind"
+  local image_log="$tmp/image.log"
+  : >"$image_log"
+  saved_path="$PATH"
+  local image_rc=0
+  PATH="$tmp/image-bin:/bin:/usr/bin" SELFTEST_IMAGE_LOG="$image_log" \
+    build_and_load_images "$REPO" "$CLUSTER" || image_rc=$?
+  PATH="$saved_path"
+  local expect_prev expect_cur
+  expect_prev="$(helm template "$RELEASE" "$CHART" -f "$ACCEPT_VALUES" \
+    --set image.tag=accept-prev | grep -oE 'image: "[^"]+"' | head -n1 \
+    | sed -e 's/^image: "//' -e 's/"$//')"
+  expect_cur="$(helm template "$RELEASE" "$CHART" -f "$ACCEPT_VALUES" \
+    --set image.tag=accept-current | grep -oE 'image: "[^"]+"' | head -n1 \
+    | sed -e 's/^image: "//' -e 's/"$//')"
+  if [[ "$image_rc" -ne 0 ]]; then
+    fail "self-test: build_and_load_images failed (rc $image_rc; see $image_log)"
+  elif [[ -z "$expect_prev" || -z "$expect_cur" ]]; then
+    fail "self-test: could not render expected image references"
+  elif grep -qF -- "-t $expect_prev " "$image_log" \
+      && grep -qF -- "load docker-image $expect_prev " "$image_log" \
+      && grep -qF -- "-t $expect_cur " "$image_log" \
+      && grep -qF -- "load docker-image $expect_cur " "$image_log"; then
+    ok "self-test: docker tags and kind load names match rendered Deployment images (accept-prev, accept-current)"
+  else
+    fail "self-test: docker/kind image references do not match the rendered Deployment (expected $expect_prev and $expect_cur; see $image_log)"
   fi
 }
 
