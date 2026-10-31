@@ -405,15 +405,30 @@ func TestNexaflowWiringEnabledMountsRoutes(t *testing.T) {
 }
 
 // TestNexaflowWiringLoopbackDerivation covers the loopback address
-// resolution backend nodes call: explicit base URL wins, otherwise the
-// listener port on 127.0.0.1 (https when TLS is enabled), and a
-// listener without a port fails instead of producing a bad address.
+// resolution backend nodes call: an explicit loopback base URL wins,
+// otherwise the listener port on 127.0.0.1 (https when TLS is
+// enabled), and a listener without a port fails instead of producing
+// a bad address. An explicit external base URL is rejected here too,
+// not only at config validation, so the Bearer token can never be
+// handed to an external destination by the wiring path.
 func TestNexaflowWiringLoopbackDerivation(t *testing.T) {
 	cfg := config.Default()
 	cfg.Listen = "127.0.0.1:8080"
-	cfg.Nexaflow.GatewayBaseURL = "https://gateway.example:8443"
-	if got, err := loopbackBaseURL(cfg); err != nil || got != "https://gateway.example:8443" {
+	cfg.Nexaflow.GatewayBaseURL = "https://127.0.0.1:8443"
+	if got, err := loopbackBaseURL(cfg); err != nil || got != "https://127.0.0.1:8443" {
 		t.Fatalf("explicit base = %q, err = %v", got, err)
+	}
+	cfg.Nexaflow.GatewayBaseURL = "https://gateway.example:8443"
+	if got, err := loopbackBaseURL(cfg); err == nil {
+		t.Fatalf("external explicit base accepted = %q, want rejection", got)
+	}
+	cfg.Nexaflow.GatewayBaseURL = "http://user:secret@127.0.0.1:8443"
+	if got, err := loopbackBaseURL(cfg); err == nil {
+		t.Fatalf("credential explicit base accepted = %q, want rejection", got)
+	}
+	cfg.Nexaflow.GatewayBaseURL = "http://127.0.0.1:8443/v1"
+	if got, err := loopbackBaseURL(cfg); err == nil {
+		t.Fatalf("path explicit base accepted = %q, want rejection", got)
 	}
 	cfg.Nexaflow.GatewayBaseURL = ""
 	if got, err := loopbackBaseURL(cfg); err != nil || got != "http://127.0.0.1:8080" {
@@ -461,6 +476,16 @@ func TestNexaflowWiringGatewayFieldsValidation(t *testing.T) {
 	cfg.Nexaflow.GatewayBaseURL = "http://"
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("hostless base URL: want validation error")
+	}
+	cfg = base()
+	cfg.Nexaflow.GatewayBaseURL = "https://example.com"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("external base URL: want validation error")
+	}
+	cfg = base()
+	cfg.Nexaflow.GatewayBaseURL = "http://user:secret@127.0.0.1:8443"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("credential base URL: want validation error")
 	}
 	cfg = base()
 	cfg.Nexaflow.GatewayTokenRef = "not a name!"

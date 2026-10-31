@@ -100,8 +100,14 @@ func maybeAttachNexaflow(api *httpapi.Server, cfg config.Config, hm *health.Mana
 // explicit gateway_base_url when configured, else the configured
 // listener's port on 127.0.0.1 (https when TLS is enabled). A listener
 // without a port fails the attach instead of producing a bad address.
+// An explicit base URL is re-validated here as loopback-only, so a
+// configuration that bypassed Validate() can never hand GatewayClient
+// a Bearer token for an external destination.
 func loopbackBaseURL(cfg config.Config) (string, error) {
 	if base := strings.TrimSpace(cfg.Nexaflow.GatewayBaseURL); base != "" {
+		if err := config.ValidateLoopbackGatewayBaseURL(base); err != nil {
+			return "", err
+		}
 		return base, nil
 	}
 	_, port, err := net.SplitHostPort(cfg.Listen)

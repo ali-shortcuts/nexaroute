@@ -2138,6 +2138,81 @@ func (c Config) validateAdminPlane() error {
 // fields are shape-checked only; an unset base URL derives from the
 // listener at attach time, and an unset token reference means llm.chat
 // nodes fail closed at client authentication.
+// ValidateLoopbackGatewayBaseURL is the single loopback-only gate for
+// nexaflow.gateway_base_url. It is exported so production wiring
+// (cmd/gateway) can re-check an explicit base URL at attach time, not
+// only at config validation time.
+//
+// Allowed, and nothing else:
+//   - scheme http or https
+//   - host 127.0.0.1, ::1, or localhost (case-insensitive), with an
+//     optional port in 1..65535
+//   - empty path, or a single trailing slash
+//
+// Rejected, even when the host itself is loopback:
+//   - public IPs, arbitrary external hostnames, and any other loopback
+//     spelling (for example 127.0.0.2, *.localhost, or a mapped
+//     ::ffff:127.0.0.1), so only the approved spellings can carry a
+//     Bearer token
+//   - URL userinfo (embedded credentials)
+//   - any path other than "" or "/", any query (including a bare "?"),
+//     and any fragment
+//   - opaque URLs and a missing host
+//
+// An empty string is an error here; callers that allow derivation
+// (validateNexaflow, loopbackBaseURL) only call this when a base URL
+// is explicitly configured, and an empty value means "derive from the
+// listener" instead.
+func ValidateLoopbackGatewayBaseURL(raw string) error {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return errors.New("nexaflow.gateway_base_url must not be empty")
+	}
+	u, err := url.Parse(trimmed)
+	if err != nil || u.Host == "" || u.Hostname() == "" {
+		return errors.New("nexaflow.gateway_base_url must be a loopback http(s) URL")
+	}
+	if !strings.EqualFold(u.Scheme, "http") && !strings.EqualFold(u.Scheme, "https") {
+		return errors.New("nexaflow.gateway_base_url must be a loopback http(s) URL")
+	}
+	if u.Opaque != "" {
+		return errors.New("nexaflow.gateway_base_url must not be an opaque URL")
+	}
+	if u.User != nil {
+		return errors.New("nexaflow.gateway_base_url must not contain embedded credentials")
+	}
+	if u.Path != "" && u.Path != "/" {
+		return errors.New("nexaflow.gateway_base_url must not contain a path")
+	}
+	if u.RawQuery != "" || u.ForceQuery {
+		return errors.New("nexaflow.gateway_base_url must not contain a query")
+	}
+	if u.Fragment != "" || u.RawFragment != "" {
+		return errors.New("nexaflow.gateway_base_url must not contain a fragment")
+	}
+	if port := u.Port(); port != "" {
+		pn, perr := strconv.Atoi(port)
+		if perr != nil || pn < 1 || pn > 65535 {
+			return errors.New("nexaflow.gateway_base_url port must be between 1 and 65535")
+		}
+	}
+	// Exact-spelling check only — do NOT normalize through net.ParseIP.
+	// ParseIP normalizes IPv4-mapped IPv6 ("::ffff:127.0.0.1") to
+	// "127.0.0.1", and url.Parse accepts that spelling in Go 1.27
+	// (it rejected it as an invalid IPv6 host in Go 1.25), so a
+	// ParseIP-based check accepted the mapped form in CI while the
+	// local test passed only via the parse error. Only the three
+	// approved spellings, exactly as written, may carry a token.
+	host := u.Hostname()
+	if strings.EqualFold(host, "localhost") {
+		return nil
+	}
+	if host == "127.0.0.1" || host == "::1" {
+		return nil
+	}
+	return errors.New("nexaflow.gateway_base_url must be a loopback address (127.0.0.1, ::1, or localhost)")
+}
+
 func (c Config) validateNexaflow() error {
 	if !c.Nexaflow.Enabled {
 		return nil
@@ -2162,9 +2237,8 @@ func (c Config) validateNexaflow() error {
 		return errors.New("nexaflow.gateway_base_url is invalid or too long")
 	}
 	if base := strings.TrimSpace(c.Nexaflow.GatewayBaseURL); base != "" {
-		parsed, err := url.Parse(base)
-		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
-			return errors.New("nexaflow.gateway_base_url must be an http(s) URL")
+		if err := ValidateLoopbackGatewayBaseURL(base); err != nil {
+			return err
 		}
 	}
 	if ref := c.Nexaflow.GatewayTokenRef; ref != "" && !validEnvName(ref) {
