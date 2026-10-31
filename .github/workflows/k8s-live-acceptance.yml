@@ -1,0 +1,86 @@
+name: Kubernetes live acceptance
+
+# Manual, opt-in runner for issue #650. It executes
+# `scripts/k8s-acceptance.sh --live` on a GitHub-hosted runner, which has a
+# working container runtime. The script creates and deletes its OWN disposable
+# kind cluster; it never touches an existing cluster and uses only sentinel
+# (fake) secret values. No repository secret is read or needed.
+#
+# A green run of this workflow is the live evidence for #650 only if the
+# uploaded raw log shows `RESULT:` without failures and not NOT_RUN. The
+# workflow reports the script's exit code verbatim: 0 = PASS, 1 = FAIL,
+# 3 = NOT_RUN (a prerequisite was missing; this is NOT a pass).
+
+on:
+  workflow_dispatch:
+    inputs:
+      prev_tag:
+        description: "Preceding supported release tag used as the upgrade base"
+        required: false
+        default: "v0.24.0"
+      with_postgres:
+        description: "Also run the PostgreSQL-backed control-plane phases (true/false)"
+        required: false
+        default: "false"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: k8s-live-acceptance-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  k8s-live:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout (full history and tags for the upgrade base)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Set up Helm
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
+        with:
+          version: v3.19.0
+
+      - name: Record tool versions
+        run: |
+          set -euo pipefail
+          for t in docker kind kubectl helm git; do
+            command -v "$t" >/dev/null || { echo "missing tool: $t"; exit 3; }
+          done
+          docker version --format 'docker server {{.Server.Version}}'
+          kind version
+          kubectl version --client
+          helm version --short
+          git rev-parse HEAD
+
+      - name: Run live acceptance
+        id: live
+        env:
+          PREV_TAG: ${{ inputs.prev_tag }}
+          WITH_POSTGRES: ${{ inputs.with_postgres }}
+        run: |
+          set -uo pipefail
+          args=(--live --prev-tag "$PREV_TAG" --out-dir "$GITHUB_WORKSPACE/k8s-acceptance-out")
+          if [ "$WITH_POSTGRES" = "true" ]; then args+=(--with-postgres); fi
+          mkdir -p k8s-acceptance-out
+          set +e
+          bash scripts/k8s-acceptance.sh "${args[@]}" 2>&1 | tee k8s-acceptance-out/live-run.log
+          code="${PIPESTATUS[0]}"
+          set -e
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          echo "script exit code: $code (0=PASS, 1=FAIL, 3=NOT_RUN)"
+          exit "$code"
+
+      - name: Upload raw evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: k8s-live-acceptance-${{ github.sha }}
+          path: k8s-acceptance-out/
+          if-no-files-found: warn
+          retention-days: 30
