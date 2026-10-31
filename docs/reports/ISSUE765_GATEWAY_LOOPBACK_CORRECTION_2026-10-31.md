@@ -286,3 +286,36 @@ suites), and coverage (95.5% local) evidence above is real.
 - Did not close issue #765.
 - Did not close PRs #781, #779, or #771.
 - Did not weaken any existing security check or test.
+
+## 8. PR #794 CI failure and fix (Go 1.27 mapped-loopback bug)
+
+PR #794 head `3a48592ecc3d50884025dfde9b5672bd7d5189b0` failed CI
+and Coverage in GitHub Actions, on the same two tests, for
+`http://[::ffff:127.0.0.1]:8080`:
+
+- CI run 41172171898, job `verify`, step `Full verification`:
+  `TestValidateLoopbackGatewayBaseURL/reject_mapped_loopback`
+  (accepted, want rejection) and
+  `TestGatewayClientLoopbackOnly/http://[::ffff:127.0.0.1]:8080`
+  (auth token resolver was called).
+- Coverage run 41172171858, job `Fresh Go coverage`, step
+  `Measure package and repository coverage`: same two failures;
+  the coverage gate step did not run, so no coverage total is
+  claimed from that run.
+
+Root cause: both validators used `net.ParseIP(host).String()`.
+In Go 1.25.3, `url.Parse` rejects the mapped spelling as an
+invalid IPv6 host, so the local test passed via the parse error.
+In CI Go 1.27.3, `url.Parse` accepts it and `ParseIP` normalizes
+it to `127.0.0.1`, so the validator accepted it and the client
+resolved the token — the exact disclosure path this correction
+closes.
+
+Fix in this revision: both validators now use an exact-spelling
+check only (`127.0.0.1`, `::1`, or `localhost`, exactly as
+written), with no `ParseIP` normalization. This is a
+strengthening, not a weakening: the mapped form is now rejected
+on every toolchain, not only where `url.Parse` happens to reject
+it. Focused local tests pass after the fix; CI must go green on
+the new PR head before any merge, and that new head — not any SHA
+printed here — is the authoritative head for the next CI run.

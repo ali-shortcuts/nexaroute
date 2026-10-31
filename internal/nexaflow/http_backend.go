@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -89,11 +88,18 @@ func validateLoopbackBaseURL(raw string) error {
 			return fmt.Errorf("gateway base URL port must be between 1 and 65535")
 		}
 	}
+	// Exact-spelling check only — do NOT normalize through net.ParseIP.
+	// ParseIP normalizes IPv4-mapped IPv6 ("::ffff:127.0.0.1") to
+	// "127.0.0.1", and url.Parse accepts that spelling in Go 1.27
+	// (it rejected it as an invalid IPv6 host in Go 1.25), so a
+	// ParseIP-based check accepted the mapped form in CI while the
+	// local test passed only via the parse error. Only the three
+	// approved spellings, exactly as written, may carry a token.
 	host := u.Hostname()
 	if strings.EqualFold(host, "localhost") {
 		return nil
 	}
-	if ip := net.ParseIP(host); ip != nil && (ip.String() == "127.0.0.1" || ip.String() == "::1") {
+	if host == "127.0.0.1" || host == "::1" {
 		return nil
 	}
 	return fmt.Errorf("gateway base URL must be a loopback address (127.0.0.1, ::1, or localhost)")
