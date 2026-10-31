@@ -43,3 +43,28 @@ if ! grep -q 'require_status "vault.transit_key_readback" 200 "$code"' scripts/v
 fi
 
 echo "vault-runner-acceptance self-test: PASS"
+
+# --- Least-privilege policy audit (run 41206938283 follow-up) ---
+# policy-accept may grant exactly these auth/token paths, and nothing
+# broader: create (to mint acceptance tokens is done by root, not by
+# this token), lookup-self (read, for vault-accept metadata), and
+# revoke-self (update). No sudo, no wildcard, no token lookup/renew/
+# revoke of other tokens.
+python3 - <<'PY'
+import re
+hcl = open("scripts/vault-runner-acceptance.sh").read()
+m = re.search(r'cat > "\$WORK/policy-accept\.hcl" <<\'EOF\'\n(.*?)\nEOF', hcl, re.S)
+assert m, "policy-accept.hcl block not found"
+body = m.group(1)
+token_paths = sorted(re.findall(r'path "auth/token/([^"]+)"', body))
+assert token_paths == ["create", "lookup-self", "revoke-self"], token_paths
+assert "sudo" not in body, body
+assert 'path "*"' not in body, body
+assert "auth/token/renew" not in body, body
+print("policy-accept least-privilege audit: PASS", token_paths)
+PY
+if ! grep -q 'vault.token_survives_root_revoke" 200' scripts/vault-runner-acceptance.sh; then
+  echo "vault-runner-acceptance self-test: FAIL no post-revocation lookup-self survival check" >&2
+  exit 1
+fi
+echo "vault-runner-acceptance survival/policy regression: PASS"
