@@ -16,9 +16,10 @@ import (
 // constructing anything: no store is opened, no engine is built, and no
 // route is mounted, so gateway behaviour is byte-identical to a gateway
 // without this wiring. With the flag on it builds exactly the service
-// the Task 8 HTTP tests exercise (memory or file store, canonical
-// registry, no provider Backend), so backend nodes fail closed with
-// backend_unavailable instead of reporting stubbed success.
+// the Task 8 HTTP tests exercise (file store by default, memory only
+// when explicitly set, canonical registry, no provider Backend), so
+// backend nodes fail closed with backend_unavailable instead of
+// reporting stubbed success.
 //
 // Deliberately NOT wired here, per the preserved-unsupported list: the
 // webhook listener (AttachNexaflowWebhook is never called), the
@@ -39,7 +40,7 @@ func attachNexaflow(cfg config.Config, api *httpapi.Server, logger *log.Logger) 
 	}
 	storeKind := strings.TrimSpace(cfg.Nexaflow.Store)
 	if storeKind == "" {
-		storeKind = "memory"
+		storeKind = "file"
 	}
 	var (
 		store   nexaflow.Store

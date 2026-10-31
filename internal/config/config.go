@@ -390,9 +390,10 @@ func (c *Config) ClientKeyMigrationPending() int {
 // to a gateway without this section. With Enabled true the gateway
 // mounts the Task 8 NexaFlow service (studio routes, template
 // instantiation, draft validation, run listing) behind the existing
-// admin authentication. Store selects the store backend: "memory"
-// (default; state is lost on restart) or "file" (durable single-host
-// JSON store; StorePath required). The PostgreSQL store is deliberately
+// admin authentication. Store selects the store backend: "file"
+// (default when empty; durable single-host JSON store; StorePath
+// required) or "memory" (only when explicitly set; ephemeral, state
+// is lost on restart). The PostgreSQL store is deliberately
 // NOT offered here: live-PostgreSQL history is preserved-unsupported
 // for NexaFlow, and the webhook listener is never attached by this
 // wiring (scheduler daemon, webhook listener, tenant isolation,
@@ -2127,14 +2128,17 @@ func (c Config) validateAdminPlane() error {
 // feature is disabled the section is inert and its store fields are
 // ignored, so an existing config never fails validation on a stray
 // nexaflow block and the gateway never opens a store it was not asked
-// to open. When enabled, only the memory and file stores are offered.
+// to open. When enabled, only the memory and file stores are offered,
+// and an empty store means the file store (durable default), so
+// StorePath is required for empty and file alike; memory is ephemeral
+// and must be chosen explicitly, never silently defaulted to.
 func (c Config) validateNexaflow() error {
 	if !c.Nexaflow.Enabled {
 		return nil
 	}
 	switch strings.TrimSpace(c.Nexaflow.Store) {
-	case "", "memory":
-	case "file":
+	case "memory":
+	case "", "file":
 		if strings.TrimSpace(c.Nexaflow.StorePath) == "" {
 			return errors.New("nexaflow.store_path is required when nexaflow.store is file")
 		}

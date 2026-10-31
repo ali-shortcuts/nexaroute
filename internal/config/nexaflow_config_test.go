@@ -18,7 +18,8 @@ func TestValidateNexaflow(t *testing.T) {
 		cfg     Config
 		wantErr bool
 	}{
-		{"empty store means memory default", enabled("", ""), false},
+		{"empty store means file default, path required", enabled("", ""), true},
+		{"empty store with path means file default", enabled("", "nexaflow.json"), false},
 		{"memory store", enabled("memory", ""), false},
 		{"file store with path", enabled("file", "nexaflow.json"), false},
 		{"file store without path", enabled("file", ""), true},

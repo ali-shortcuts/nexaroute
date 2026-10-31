@@ -8,19 +8,14 @@ request) plus one HTTP request to an unroutable loopback port, which
 fails closed without leaving the machine.
 
 Skips cleanly (exit 0) when Chromium or Python Playwright is
-unavailable, matching the verify.sh browser gate. It ALSO skips
-cleanly when the booted gateway does not attach the NexaFlow service:
-the production gateway has no AttachNexaflow caller (gateway wiring
-is a separate, deferred product decision), so without an attached
-service the studio API paths fall through to the static server and
-answer 404. The skip names that blocker instead of faking a pass;
-once gateway wiring lands, the same script runs all 15 cases for real.
-
-To run all cases before gateway wiring lands, point the script at a
-pre-wired server instead of booting the production gateway:
-NEXAFLOW_STUDIO_BASE_URL=http://127.0.0.1:PORT (e.g. a test server
-built with the repo's own Server + AttachNexaflow). The script then
-skips the gateway boot and runs every case against that base.
+unavailable, matching the verify.sh browser gate. The self-boot path
+enables the NexaFlow wiring itself (nexaflow.enabled with a durable
+file store under the temporary directory), so a 404 on the studio API
+probe from a self-booted gateway is a FAIL: the wiring was requested
+and is broken. The script still skips cleanly when pointed at an
+external base (NEXAFLOW_STUDIO_BASE_URL) whose gateway does not
+attach the service: there the 404 names that blocker instead of
+faking a pass.
 
 Config-field editing uses real keystrokes (click, select-all, type,
 Tab to fire the inspector's change handler), never JS value injection.
@@ -108,6 +103,15 @@ def main() -> None:
             # only, no providers).
             config["probe"]["enabled"] = False
             config["probe"]["on_start"] = False
+            # Self-boot enables the wiring under test: without the
+            # flag the studio API paths 404 and the probe below must
+            # fail, not skip. File is the durable default; the path
+            # is required, so it lives under the temporary directory.
+            config["nexaflow"] = {
+                "enabled": True,
+                "store": "file",
+                "store_path": str(tmp_path / "nexaflow-store.json"),
+            }
             port = free_port()
             config["listen"] = f"127.0.0.1:{port}"
             config_path = tmp_path / "config.json"
@@ -144,10 +148,11 @@ def main() -> None:
                           wait_until="domcontentloaded")
                 expect(page).to_have_title("NexaFlow Visual Studio")
                 # Attach gate: without a service the API paths fall
-                # through to the static server (404). That is a
-                # wiring gap, not a studio failure, so skip with the
-                # exact reason. Static serving above is verified
-                # even on the skip path.
+                # through to the static server (404). On an external
+                # base that is a wiring gap, so skip with the exact
+                # reason; on a self-booted gateway the flag was on,
+                # so a 404 fails below. Static serving above is
+                # verified even on the skip path.
                 req = urllib.request.Request(
                     base + "/admin/api/nexaflow/nodes",
                     headers={"x-admin-key": ADMIN_KEY})
@@ -157,12 +162,13 @@ def main() -> None:
                             raise AssertionError(
                                 f"nodes probe: unexpected status {r.status}")
                 except urllib.error.HTTPError as e:
-                    if e.code == 404:
-                        print("SKIP: production gateway does not attach "
-                              "the NexaFlow service (no AttachNexaflow "
-                              "caller in cmd/gateway); studio API cases "
-                              "need gateway wiring, which is a separate "
-                              "deferred decision")
+                    if e.code == 404 and proc is None:
+                        # External base only: its gateway may genuinely
+                        # lack the wiring. A self-booted gateway had the
+                        # flag on, so its 404 is a failure, not a skip.
+                        print("SKIP: external gateway does not attach "
+                              "the NexaFlow service; studio API cases "
+                              "need gateway wiring")
                         browser.close()
                         return
                     raise

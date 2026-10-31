@@ -12,8 +12,8 @@ Config section `nexaflow` (see `internal/config`):
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `nexaflow.enabled` | `false` | Opt-in master switch. Only when `true` does `cmd/gateway` call `AttachNexaflow`. |
-| `nexaflow.store` | `"memory"` | Store backend: `"memory"` or `"file"`. The PostgreSQL store is deliberately NOT offered here. |
-| `nexaflow.store_path` | (empty) | Required when `store` is `"file"`: path of the durable single-host JSON store file. |
+| `nexaflow.store` | `"file"` (empty = file) | Store backend: `"file"` (default when empty; durable) or `"memory"` (explicit only; ephemeral). The PostgreSQL store is deliberately NOT offered here. |
+| `nexaflow.store_path` | (empty) | Required when `store` is `"file"` or empty (empty means file): path of the durable single-host JSON store file. |
 
 Example (opt-in with the durable single-host store):
 
@@ -31,6 +31,7 @@ Validation (fail-closed at config load, before any route mounts):
 
 - `store` must be `memory` or `file` when enabled; anything else
   (including `postgres`) is rejected.
+- `store` empty means `file` and therefore also requires `store_path`.
 - `store=file` without `store_path` is rejected.
 - When disabled, the whole section is inert: a stray `nexaflow`
   block never fails validation and never opens a store.
@@ -94,8 +95,8 @@ requester) and nothing more.
 
 - Unit/acceptance tests through the real gateway server object live
   in `cmd/gateway/nexaflow_wiring_test.go` (default-off, opt-in
-  memory, instantiate + draft validation, file-store reopen,
-  invalid-store fail-closed) and
+  explicit memory, empty-store file default, instantiate + draft
+  validation, file-store reopen, invalid-store fail-closed) and
   `internal/config/nexaflow_config_test.go` (section validation).
 - The browser acceptance script
   (`scripts/test-browser-nexaflow-studio.py`) runs its 15 cases

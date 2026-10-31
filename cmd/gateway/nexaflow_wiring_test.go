@@ -122,9 +122,10 @@ func TestNexaflowWiringDefaultOff(t *testing.T) {
 	}
 }
 
-func TestNexaflowWiringOptInMemory(t *testing.T) {
+func TestNexaflowWiringOptInExplicitMemory(t *testing.T) {
 	cfg := wiringTestConfig(t)
-	cfg.Nexaflow.Enabled = true // Store empty: memory default.
+	cfg.Nexaflow.Enabled = true
+	cfg.Nexaflow.Store = "memory" // Explicit only: memory is never the silent default.
 	srv := wiringTestServer(t, cfg)
 	closer, err := attachNexaflow(cfg, srv, nil)
 	if err != nil {
@@ -156,9 +157,41 @@ func TestNexaflowWiringOptInMemory(t *testing.T) {
 	}
 }
 
+func TestNexaflowWiringEmptyStoreDefaultsToFile(t *testing.T) {
+	cfg := wiringTestConfig(t)
+	cfg.Nexaflow.Enabled = true // Store empty: the durable file default.
+	storePath := filepath.Join(t.TempDir(), "nexaflow.json")
+	cfg.Nexaflow.StorePath = storePath
+	srv := wiringTestServer(t, cfg)
+	closer, err := attachNexaflow(cfg, srv, nil)
+	if err != nil {
+		t.Fatalf("attachNexaflow empty store: %v", err)
+	}
+	if closer == nil {
+		t.Fatalf("empty-store attach returned nil closer, want the file closer")
+	}
+	t.Cleanup(func() { _ = closer() })
+	// The file store creates its file lazily on first write, not on
+	// open: instantiate once, then the durable file must exist. A
+	// memory store would never create it, so this proves the default.
+	rec := wiringDo(t, srv, cfg.Admin.APIKey, http.MethodPost, "/admin/api/nexaflow/templates/model-health-alert/instantiate",
+		map[string]any{"placeholders": map[string]string{"deployment_id": "probe-deployment"}, "policy_approved": true})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("instantiate = %d: %s", rec.Code, rec.Body.String())
+	}
+	if _, err := os.Stat(storePath); err != nil {
+		t.Fatalf("empty-store attach created no store file: %v", err)
+	}
+	rec = wiringDo(t, srv, cfg.Admin.APIKey, http.MethodGet, "/admin/api/nexaflow/nodes", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("nodes = %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestNexaflowWiringInstantiateAndDraftValidate(t *testing.T) {
 	cfg := wiringTestConfig(t)
 	cfg.Nexaflow.Enabled = true
+	cfg.Nexaflow.Store = "memory" // Explicit: this test covers instantiate/draft-validate, not the default.
 	srv := wiringTestServer(t, cfg)
 	if _, err := attachNexaflow(cfg, srv, nil); err != nil {
 		t.Fatalf("attachNexaflow: %v", err)
@@ -285,6 +318,11 @@ func TestNexaflowWiringInvalidStoreFailsClosed(t *testing.T) {
 	cfg.Nexaflow.StorePath = ""
 	if _, err := attachNexaflow(cfg, srv, nil); err == nil {
 		t.Fatalf("file store without path attached, want failure")
+	}
+	cfg.Nexaflow.Store = "" // Empty means the file default: no path, no attach.
+	cfg.Nexaflow.StorePath = ""
+	if _, err := attachNexaflow(cfg, srv, nil); err == nil {
+		t.Fatalf("empty store without path attached, want failure")
 	}
 	if rec := wiringDo(t, srv, cfg.Admin.APIKey, http.MethodGet, "/admin/api/nexaflow/nodes", nil); rec.Code != http.StatusNotFound {
 		t.Fatalf("nodes after failed attach = %d, want 404", rec.Code)
