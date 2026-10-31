@@ -414,20 +414,24 @@ wait_revision_hash() {
   return 1
 }
 # pod_termination_elapsed_ms <pod-json-file>: print the measured time from
-# the API server's deletionTimestamp to the latest container finishedAt.
-# This measures actual container termination, not kubectl's wait for the
-# API object to disappear (which can include controller/API finalization).
-# Every regular container in the Pod must have a terminal finishedAt; an
-# incomplete snapshot is NOT evidence and returns 1.
+# the start of graceful termination to the latest container finishedAt.
+# Kubernetes deletionTimestamp is the scheduled object-deletion time
+# (after the grace period), not the time termination starts. Reconstruct
+# the start as deletionTimestamp - deletionGracePeriodSeconds.
+# Every regular container must have a terminal finishedAt; incomplete or
+# ambiguous evidence returns 1 and can never be reported as PASS.
 pod_termination_elapsed_ms() {
   python3 - "$1" <<'PYEOF'
 import datetime, json, sys
 try:
     pod = json.load(open(sys.argv[1]))
-    deletion = pod.get("metadata", {}).get("deletionTimestamp")
-    if not deletion:
+    meta = pod.get("metadata", {})
+    deletion = meta.get("deletionTimestamp")
+    grace = meta.get("deletionGracePeriodSeconds")
+    if not deletion or not isinstance(grace, int) or isinstance(grace, bool) or grace < 0:
         sys.exit(1)
-    start = datetime.datetime.fromisoformat(deletion.replace("Z", "+00:00"))
+    deletion_deadline = datetime.datetime.fromisoformat(deletion.replace("Z", "+00:00"))
+    start = deletion_deadline - datetime.timedelta(seconds=grace)
     names = {c["name"] for c in pod.get("spec", {}).get("containers", [])}
     statuses = {s.get("name"): s for s in pod.get("status", {}).get("containerStatuses", [])}
     if not names or not names.issubset(statuses):
@@ -1491,16 +1495,17 @@ PYEOF
     fail "self-test: revision observation rule failed"
   fi
 
-  # 12. Grace timing must use deletionTimestamp -> latest container
-  # finishedAt, not the time kubectl waits for Pod API finalization.
+  # 12. Grace timing reconstructs termination start as
+  # deletionTimestamp - deletionGracePeriodSeconds, then compares it
+  # with the latest regular-container finishedAt.
   local term_ok=1 within_ms over_ms
   mkdir -p "$tmp/termination"
   python3 - "$tmp/termination" <<'PYEOF'
 import json, os, sys
 base = sys.argv[1]
-def pod(gateway_finish, sidecar_finish, deletion="2026-01-01T00:00:00Z"):
+def pod(gateway_finish, sidecar_finish, deletion="2026-01-01T00:02:00Z", grace=120):
     return {
-        "metadata": {"deletionTimestamp": deletion},
+        "metadata": {"deletionTimestamp": deletion, "deletionGracePeriodSeconds": grace},
         "spec": {"containers": [{"name": "gateway"}, {"name": "acceptance-stub"}]},
         "status": {"containerStatuses": [
             {"name": "gateway", "state": {"terminated": {"finishedAt": gateway_finish}}},
@@ -1515,6 +1520,9 @@ json.dump(missing, open(os.path.join(base, "incomplete.json"), "w"))
 no_delete = pod("2026-01-01T00:00:35Z", "2026-01-01T00:00:36Z")
 no_delete["metadata"].pop("deletionTimestamp")
 json.dump(no_delete, open(os.path.join(base, "no-deletion.json"), "w"))
+no_grace = pod("2026-01-01T00:00:35Z", "2026-01-01T00:00:36Z")
+no_grace["metadata"].pop("deletionGracePeriodSeconds")
+json.dump(no_grace, open(os.path.join(base, "no-grace.json"), "w"))
 PYEOF
   within_ms="$(pod_termination_elapsed_ms "$tmp/termination/within.json" 2>/dev/null || true)"
   over_ms="$(pod_termination_elapsed_ms "$tmp/termination/over.json" 2>/dev/null || true)"
@@ -1522,8 +1530,9 @@ PYEOF
   [[ "$over_ms" == "120001" ]] || term_ok=0
   if pod_termination_elapsed_ms "$tmp/termination/incomplete.json" >/dev/null 2>&1; then term_ok=0; fi
   if pod_termination_elapsed_ms "$tmp/termination/no-deletion.json" >/dev/null 2>&1; then term_ok=0; fi
+  if pod_termination_elapsed_ms "$tmp/termination/no-grace.json" >/dev/null 2>&1; then term_ok=0; fi
   if [[ "$term_ok" -eq 1 ]]; then
-    ok "self-test: termination timing uses all containers' finishedAt and fails closed on incomplete evidence"
+    ok "self-test: termination time uses deletion grace metadata and all containers' finishedAt, failing closed on incomplete evidence"
   else
     fail "self-test: pod termination timing regression cases failed"
   fi
