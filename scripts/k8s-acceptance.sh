@@ -338,7 +338,7 @@ rendered_image_ref() {
   rendered="$(helm template "$RELEASE" "$chart" -f "$ACCEPT_VALUES" \
     --set image.tag="$tag" 2>/dev/null)" || return 1
   printf '%s\n' "$rendered" \
-    | grep -oE 'image: "[^"]+"' | head -n1 \
+    | grep -m1 -oE 'image: "[^"]+"' \
     | sed -e 's/^image: "//' -e 's/"$//'
 }
 
@@ -1009,10 +1009,10 @@ EOF
   PATH="$saved_path"
   local expect_prev expect_cur
   expect_prev="$(helm template "$RELEASE" "$CHART" -f "$ACCEPT_VALUES" \
-    --set image.tag=accept-prev | grep -oE 'image: "[^"]+"' | head -n1 \
+    --set image.tag=accept-prev | grep -m1 -oE 'image: "[^"]+"' \
     | sed -e 's/^image: "//' -e 's/"$//')"
   expect_cur="$(helm template "$RELEASE" "$CHART" -f "$ACCEPT_VALUES" \
-    --set image.tag=accept-current | grep -oE 'image: "[^"]+"' | head -n1 \
+    --set image.tag=accept-current | grep -m1 -oE 'image: "[^"]+"' \
     | sed -e 's/^image: "//' -e 's/"$//')"
   if [[ "$image_rc" -ne 0 ]]; then
     fail "self-test: build_and_load_images failed (rc $image_rc; see $image_log)"
