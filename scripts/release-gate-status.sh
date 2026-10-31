@@ -70,24 +70,34 @@ if total > len(runs):
     sys.exit(2)
 
 # name -> status of the LATEST run only. The latest run is the one
-# with the greatest (started_at, id): started_at orders runs in
-# time, and the monotonically increasing check-run id breaks ties
-# (including runs with a missing started_at, which sort first).
+# with the greatest (created_at, id). created_at, not started_at,
+# is the ordering field on purpose: a queued or waiting run has a
+# created_at but no started_at yet, so a started_at key would sort
+# that pending re-run before an old success and wrongly report
+# PASS while new work is still pending. The monotonically
+# increasing check-run id breaks created_at ties. A run with a
+# missing created_at sorts first (it cannot be proven newest);
+# such an incomplete record can still decide a row only when it
+# is the sole run for that name, and then only as RUNNING unless
+# it is completed with a success conclusion.
 # An old success must never hide a newer failure, and an old
 # failure must never hide a newer success or a newer run still
-# in progress.
+# in progress. Two runs with the same name (for example
+# integration-redis, which exists in both the CI workflow and
+# the standalone Redis workflow) are decided by this latest rule
+# alone, never by any-success-wins.
 def latest_run(name):
     found = [r for r in runs if r.get("name") == name]
     if not found:
         return None
 
     def run_key(r):
-        started = r.get("started_at") or ""
+        created = r.get("created_at") or ""
         try:
             run_id = int(r.get("id") or 0)
         except (TypeError, ValueError):
             run_id = 0
-        return (started, run_id)
+        return (created, run_id)
 
     return max(found, key=run_key)
 
@@ -96,8 +106,17 @@ def row_status(name):
     run = latest_run(name)
     if run is None:
         return "NOT_RUN"
-    if run.get("status") != "completed":
+    status = run.get("status")
+    # Anything that is not a completed run is still in flight for
+    # gate purposes: queued, in_progress, waiting, requested, or a
+    # missing/unknown status from an incomplete API record. None
+    # of these may report PASS, and none may be hidden by an older
+    # completed run (latest_run already selected this run).
+    if status != "completed":
         return "RUNNING"
+    # Fail closed: only an explicit success conclusion passes. A
+    # completed run with any other conclusion, or with a missing
+    # conclusion from an incomplete API record, is FAIL.
     return "PASS" if run.get("conclusion") == "success" else "FAIL"
 
 pr_gates = [
