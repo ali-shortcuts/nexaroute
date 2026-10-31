@@ -2,6 +2,7 @@
 # release-gate-status.sh -- SHA-bound release gate report.
 #
 # Usage: scripts/release-gate-status.sh <sha> [repo] [--rc]
+# (--rc may also be given without a repo: <sha> --rc.)
 #
 # Queries the GitHub Checks API for check runs on exactly <sha> and
 # reports one row per gate. A gate with no check run on that SHA is
@@ -22,13 +23,18 @@
 set -euo pipefail
 
 sha="${1:-}"
-repo="${2:-${GITHUB_REPOSITORY:-ali-shortcuts/nexaroute}}"
+repo=""
 rc=0
-for arg in "$@"; do
+# Positional parsing that tolerates `--rc` without a repo argument:
+# `script <sha> --rc` must not make `--rc` the repo.
+for arg in "${@:2}"; do
 	if [ "$arg" = "--rc" ]; then
 		rc=1
+	elif [ -z "$repo" ]; then
+		repo="$arg"
 	fi
 done
+repo="${repo:-${GITHUB_REPOSITORY:-ali-shortcuts/nexaroute}}"
 if [ -z "$sha" ]; then
 	echo "usage: $0 <sha> [repo] [--rc]" >&2
 	exit 2
@@ -63,22 +69,36 @@ if total > len(runs):
           "pagination not implemented, so the gate cannot be verified")
     sys.exit(2)
 
-# name -> best status. completed+success wins over running; any
-# completed failure beats running (a re-run that later passes will
-# add a success run and flip the row to PASS on the next invocation).
-def row_status(name):
+# name -> status of the LATEST run only. The latest run is the one
+# with the greatest (started_at, id): started_at orders runs in
+# time, and the monotonically increasing check-run id breaks ties
+# (including runs with a missing started_at, which sort first).
+# An old success must never hide a newer failure, and an old
+# failure must never hide a newer success or a newer run still
+# in progress.
+def latest_run(name):
     found = [r for r in runs if r.get("name") == name]
     if not found:
+        return None
+
+    def run_key(r):
+        started = r.get("started_at") or ""
+        try:
+            run_id = int(r.get("id") or 0)
+        except (TypeError, ValueError):
+            run_id = 0
+        return (started, run_id)
+
+    return max(found, key=run_key)
+
+
+def row_status(name):
+    run = latest_run(name)
+    if run is None:
         return "NOT_RUN"
-    conclusions = {r.get("conclusion") for r in found}
-    statuses = {r.get("status") for r in found}
-    if "success" in conclusions:
-        return "PASS"
-    if conclusions - {"success", None}:
-        return "FAIL"
-    if statuses - {"completed"}:
+    if run.get("status") != "completed":
         return "RUNNING"
-    return "FAIL"
+    return "PASS" if run.get("conclusion") == "success" else "FAIL"
 
 pr_gates = [
     ("verify", "CI: verify.sh + stress + browser + container"),
