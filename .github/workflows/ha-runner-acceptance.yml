@@ -1,0 +1,212 @@
+name: HA runner acceptance
+
+# Runner-only HA acceptance, issue 652 in the tracker.
+#
+# This workflow is deliberately NOT a pull_request gate and NOT a
+# multi-host verdict. It runs only on manual dispatch, on a
+# GitHub-hosted runner, because this repository's own environment
+# has no second host. The runner runs the shipped harness
+# scripts/ha-two-host-acceptance.py in --containers mode: two
+# independent gateway containers (separate configs, data dirs and
+# asset roots) on ONE Docker host against a shared PostgreSQL
+# container, plus a separate single-process Redis backend smoke
+# test against a disposable Redis service container.
+#
+# Evidence class of every report this workflow produces:
+#   container-isolated-single-host
+# That means: two gateway containers, one Docker host, loopback
+# only, disposable stub upstream only, dummy provider keys only.
+# It is NOT two independent hosts, NOT a load balancer, NOT
+# production, and NOT a multi-host claim. The harness itself
+# enforces this: a container run can never set the
+# two_independent_hosts verdict to PASS, and its evidence says
+# two_independent_hosts is NOT_MEASURED with an explicit blocker.
+#
+# Redis, stated exactly: the harness starts a Redis container,
+# but no gateway backend in the drill points at Redis, so the
+# drill does NOT test a Redis outage or Redis failover. The
+# separate Redis step in this workflow tests only that a single
+# gateway process can use a real Redis control-plane backend
+# (the existing integration test, unchanged). A Redis backend
+# outage in a multi-replica topology is NOT tested here.
+#
+# PostgreSQL outage IS tested by the harness (scenario S5):
+# shared PostgreSQL stopped and restarted, gateway processes
+# NOT restarted, existing job reads return 503 during the
+# outage, no backend detail leaks, and row counts are unchanged
+# after recovery (RPO measured from before/after counts).
+#
+# No real secret is used anywhere in this workflow. The harness
+# generates disposable admin/video tokens inside the run and
+# writes them into per-replica config files under its evidence
+# directory. That directory is therefore NEVER uploaded whole:
+# only evidence.json and report.md (both redacted by the
+# harness) are uploaded. Do not change the upload paths to the
+# whole directory.
+#
+# Observability, because raw logs and artifacts are not
+# readable by every consumer of a run (only run metadata,
+# per-step conclusions, and annotations are):
+#   * The drill step has an EXIT trap: if the harness wrote
+#     no evidence.json, the trap writes a minimal
+#     workflow-summary.json and emits one ::error annotation
+#     naming the failing check (run.aborted).
+#   * A final step (if: always()) emits one ::error annotation
+#     for every FAIL check (scenario id or step id, outcome
+#     only, never a token, key, cookie, or credential), and
+#     exactly one ::notice annotation with the compact
+#     PASS/FAIL/NOT_RUN list, using %0A for line breaks (one
+#     multi-line notice, because annotations are capped per
+#     step). That final step also writes workflow-summary.json
+#     if neither evidence.json nor workflow-summary.json
+#     exists, so a summary file exists even on failure.
+#   * Readiness waits are bounded by the harness (replica
+#     ready waits of 90 seconds, PostgreSQL ready waits of
+#     90 seconds); a timeout names the check that timed out
+#     in the harness failure record, and the final step
+#     reports it as drill FAIL.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ha-runner-acceptance-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  ha-runner-acceptance:
+    name: HA containers on one runner host
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    services:
+      redis:
+        image: redis:7.4.2-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.x'
+          cache: false
+      - name: Harness self-test (deterministic only, not HA evidence)
+        run: python3 scripts/ha-two-host-acceptance.py --self-test
+      - name: Run HA container drill (S1-S9)
+        id: drill
+        # The harness builds the gateway binary itself, starts two
+        # gateway containers plus shared PostgreSQL and Redis
+        # containers, and writes redacted evidence.json/report.md
+        # plus a working directory that must NOT be uploaded.
+        # The harness writes evidence.json in a finally block,
+        # so it exists on most failures; the EXIT trap covers
+        # the remaining case (build failure before the drill,
+        # or a crash before the finally block).
+        run: |
+          set -euo pipefail
+          trap 'if [ ! -f ha-runner-reports/evidence.json ]; then mkdir -p ha-runner-reports; printf "%s\n" "{\"schema\":\"nexaroute.ha-runner-observability.v1\",\"result\":\"FAIL\",\"checks\":[{\"id\":\"run.aborted\",\"status\":\"FAIL\"}]}" > ha-runner-reports/workflow-summary.json; echo "::error title=HA runner acceptance::FAIL run.aborted: no evidence produced"; fi' EXIT
+          python3 scripts/ha-two-host-acceptance.py --containers --evidence-dir ha-runner-reports --repetitions 3
+      - name: Validate runner evidence
+        id: validation
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, sys
+          doc = json.load(open("ha-runner-reports/evidence.json"))
+          assert doc["schema"] == "nexaroute-ha-acceptance/1", doc.get("schema")
+          assert doc["topology"]["class"] == "container-isolated-single-host", doc["topology"]
+          assert doc["verdict"]["container_isolated_single_host"] == "PASS", doc["verdict"]
+          assert doc["verdict"]["two_independent_hosts"] == "NOT_MEASURED", doc["verdict"]
+          assert doc["topology"]["shared_redis"] == "present_but_not_a_configured_backend", doc["topology"]
+          bad = [s for s in doc["scenarios"] if s["status"] != "PASS"]
+          assert not bad, bad
+          assert doc["failures"] == [], doc["failures"]
+          print("HA runner evidence validated: topology=container-isolated-single-host, scenarios=%d, all PASS" % len(doc["scenarios"]))
+          PY
+      - name: Redis control-plane backend smoke (single process only)
+        id: redis-smoke
+        env:
+          NEXAROUTE_TEST_REDIS_URL: redis://127.0.0.1:6379/0
+        run: go test -race -tags integration ./cmd/gateway/ -run 'TestControlPlaneRedisIntegration' -count=1 -v
+      - name: Show redacted HA report
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ -f ha-runner-reports/report.md ]; then
+            cat ha-runner-reports/report.md
+          else
+            echo "ha-runner-acceptance: no report was produced; see the drill step log for the FAIL line."
+          fi
+      - name: Emit annotations and guarantee a summary file
+        if: always()
+        env:
+          DRILL_OUTCOME: ${{ steps.drill.outcome }}
+          VALIDATION_OUTCOME: ${{ steps.validation.outcome }}
+          REDIS_OUTCOME: ${{ steps.redis-smoke.outcome }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os
+          entries = []
+          def outcome_status(outcome):
+              if outcome == "success":
+                  return "PASS"
+              if outcome in ("skipped", "cancelled"):
+                  return "NOT_RUN"
+              return "FAIL"
+          try:
+              doc = json.load(open("ha-runner-reports/evidence.json"))
+          except Exception:
+              doc = None
+          if doc is not None:
+              for scenario in doc.get("scenarios", []):
+                  sid = scenario.get("id", "unknown")
+                  status = scenario.get("status", "NOT_RUN")
+                  entries.append(f"{sid} {status}")
+                  if status == "FAIL":
+                      print(f"::error title=HA runner acceptance::FAIL {sid}: scenario did not pass")
+              verdict = doc.get("verdict", {})
+              entries.append(f"two_independent_hosts {verdict.get('two_independent_hosts', 'NOT_MEASURED')}")
+              if doc.get("failures"):
+                  print("::error title=HA runner acceptance::FAIL drill: harness recorded failures")
+          else:
+              drill = outcome_status(os.environ.get("DRILL_OUTCOME", ""))
+              entries.append(f"drill {drill}")
+              if drill == "FAIL":
+                  print("::error title=HA runner acceptance::FAIL drill: no evidence produced")
+              if not os.path.exists("ha-runner-reports/workflow-summary.json"):
+                  os.makedirs("ha-runner-reports", exist_ok=True)
+                  with open("ha-runner-reports/workflow-summary.json", "w", encoding="utf-8") as fh:
+                      json.dump({"schema": "nexaroute.ha-runner-observability.v1", "result": "FAIL",
+                                 "checks": [{"id": "run.aborted", "status": "FAIL"}]}, fh, indent=2)
+          for check_id, outcome in (("validation", os.environ.get("VALIDATION_OUTCOME", "")),
+                                    ("redis-smoke", os.environ.get("REDIS_OUTCOME", ""))):
+              status = outcome_status(outcome)
+              entries.append(f"{check_id} {status}")
+              if status == "FAIL":
+                  print(f"::error title=HA runner acceptance::FAIL {check_id}: step did not pass")
+          # Exactly one multi-line notice; %0A is the line break
+          # in a workflow command. Entries carry ids and outcomes
+          # only, never a token, key, cookie, or credential.
+          print("::notice title=HA runner acceptance::" + "%0A".join(entries))
+          PY
+      - name: Upload redacted HA runner reports only
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ha-runner-reports-${{ github.sha }}
+          path: |
+            ha-runner-reports/evidence.json
+            ha-runner-reports/report.md
+            ha-runner-reports/workflow-summary.json
+          if-no-files-found: error
+          retention-days: 90
