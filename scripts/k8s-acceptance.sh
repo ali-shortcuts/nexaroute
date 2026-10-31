@@ -460,7 +460,7 @@ wait_for_pod_termination() {
     fi
     measured="$(pod_termination_elapsed_ms "$snapshot" 2>/dev/null || true)"
     if [[ -n "$measured" ]]; then
-      printf '%s\\n' "$measured"
+      printf '%s\n' "$measured"
       return 0
     fi
     sleep 0.2
@@ -948,9 +948,9 @@ PY
   # container finishedAt minus the Pod deletionTimestamp.
   kubectl_ns delete pod "$pod_name" --grace-period=120 --wait=false >/dev/null
   if termination_ms="$(wait_for_pod_termination "$pod_name" 180)"; then
-    printf 'pod container termination took %sms from deletionTimestamp to final finishedAt (grace 120000ms)\\n' "$termination_ms"
+    printf 'pod container termination took %sms from deletionTimestamp to final finishedAt (grace 120000ms)\n' "$termination_ms"
     if [[ "$termination_ms" -gt 60000 && "$termination_ms" -le 120000 ]]; then
-      printf 'WARNING: container termination took %sms, near the 120s grace (gateway drain cap 35s); investigate if recurring\\n' "$termination_ms"
+      printf 'WARNING: container termination took %sms, near the 120s grace (gateway drain cap 35s); investigate if recurring\n' "$termination_ms"
     fi
     if [[ "$termination_ms" -le 120000 ]]; then
       ok "all pod containers terminated inside their 120s grace period"
