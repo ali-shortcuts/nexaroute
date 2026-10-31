@@ -142,6 +142,19 @@ func TestValidateLoopbackGatewayBaseURL(t *testing.T) {
 		{"reject empty", "", true},
 		{"reject hostless", "http://", true},
 		{"reject mapped loopback", "http://[::ffff:127.0.0.1]:8080", true},
+		// Every other spelling that denotes the same loopback address
+		// must also be rejected: the rule is exact spelling, not
+		// numeric equivalence. ParseIP-based checks normalized all
+		// of these to 127.0.0.1 (PR #794 CI failure on Go 1.27).
+		{"reject mapped loopback hex", "http://[::ffff:7f00:1]:8080", true},
+		{"reject mapped loopback expanded", "http://[0:0:0:0:0:ffff:127.0.0.1]:8080", true},
+		{"reject mapped loopback padded hex", "http://[::ffff:7f00:0001]:8080", true},
+		{"reject expanded IPv6 loopback", "http://[0:0:0:0:0:0:0:1]:8080", true},
+		{"reject padded IPv6 loopback", "http://[::0001]:8080", true},
+		{"reject padded IPv4 loopback", "http://127.000.0.1:8080", true},
+		{"reject hex IPv4 loopback", "http://0x7f.0.0.1:8080", true},
+		{"reject decimal IPv4 loopback", "http://2130706433:8080", true},
+		{"reject localhost trailing dot", "http://localhost.:8080", true},
 		{"reject zero address", "http://0.0.0.0:8080", true},
 	}
 	for _, tc := range cases {
