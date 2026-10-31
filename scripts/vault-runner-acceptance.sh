@@ -439,6 +439,14 @@ require_status "vault.root_revoke" 204 "$code" "revoke root token"
 rm -f "$WORK/root.token"
 pass "vault.root_revoke"
 
+# Prove the orphan tokens survived root revocation, before vault-accept,
+# with the exact capability vault-accept needs (GET auth/token/lookup-self).
+# This is the run-41206938283 symptom check: without orphans, this
+# lookup returns 403 for a dead token.
+code="$(vault_api_status "$WORK/kv.token" GET auth/token/lookup-self "" "$WORK/kv-token-survival.json")"
+require_status "vault.token_survives_root_revoke" 200 "$code" "kv.token lookup-self after root revocation"
+pass "vault.token_survives_root_revoke"
+
 # ------------------------------------------------------- #648: vault-accept
 log "running nexaroute vault-accept (KV harness)"
 VAULT_ADDR="$VAULT_ADDR" VAULT_TOKEN="$(token_from_file "$WORK/kv.token")" \

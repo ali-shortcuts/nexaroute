@@ -217,6 +217,7 @@ def main(argv=None) -> int:
     container = f"nexaroute-oidc-acceptance-{secrets.token_hex(4)}"
 
     checks = []
+    summary_written = [False]
 
     def check(check_id: str, name: str, ok: bool, detail: str = ""):
         checks.append({"id": check_id, "name": name, "status": "PASS" if ok else "FAIL",
@@ -249,6 +250,7 @@ def main(argv=None) -> int:
             doc.update(extra)
         (out_dir / "oidc-runner-summary.json").write_text(
             json.dumps(doc, indent=2, sort_keys=True), encoding="utf-8")
+        summary_written[0] = True
         return doc
 
     gateway_proc = None
@@ -511,6 +513,20 @@ def main(argv=None) -> int:
             pass
         return 1
     finally:
+        if not summary_written[0]:
+            # BaseException paths (KeyboardInterrupt, SystemExit, a
+            # signal handler) bypass the Fail/Exception handlers above,
+            # which is how run 41207000118 ended with no script summary
+            # at all and only the workflow EXIT-trap minimal summary.
+            # This finally runs for every exit except SIGKILL, so an
+            # aborted run still leaves a diagnostic summary naming
+            # run.aborted instead of silence.
+            try:
+                check("run.aborted", "Run completed without an infrastructure error", False,
+                      "script ended without writing a summary")
+                write_summary(keycloak_version, {"result": "FAIL", "error": "run.aborted"})
+            except Exception:
+                pass
         if gateway_proc is not None:
             try:
                 gateway_proc.terminate()
