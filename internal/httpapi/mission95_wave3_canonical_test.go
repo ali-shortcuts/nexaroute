@@ -9,6 +9,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -92,6 +93,21 @@ func wave3ResponsesReq(model string) string {
 	return `{"model":"` + model + `","input":"hi"}`
 }
 
+// Marked request builders embed a per-test marker in the prompt so a failover
+// fixture can attribute an upstream request to this exact request. See
+// fixture_upstream_attribution_test.go for why the attribution matters.
+func wave3AnthropicMarkedReq(model, marker string) string {
+	return `{"model":"` + model + `","max_tokens":32,"messages":[{"role":"user","content":` + strconv.Quote(marker) + `}]}`
+}
+
+func wave3ChatMarkedReq(model, marker string) string {
+	return `{"model":"` + model + `","messages":[{"role":"user","content":` + strconv.Quote(marker) + `}]}`
+}
+
+func wave3ResponsesMarkedReq(model, marker string) string {
+	return `{"model":"` + model + `","input":` + strconv.Quote(marker) + `}`
+}
+
 // wave3JSONServer serves body with the given status and counts calls.
 func wave3JSONServer(t *testing.T, status int, body string, calls *atomic.Int32) *httptest.Server {
 	t.Helper()
@@ -103,29 +119,6 @@ func wave3JSONServer(t *testing.T, status int, body string, calls *atomic.Int32)
 		w.WriteHeader(status)
 		_, _ = io.WriteString(w, body)
 	}))
-}
-
-// wave3JSONServerNotURL is wave3JSONServer with one deterministic guard:
-// the returned server never listens on bannedURL. A just-closed httptest
-// server's port can be reassigned to the next server created in the same
-// test binary; when a failover test's "dead" URL collides with its "good"
-// URL, the first attempt succeeds, no failure occurs, and no failover
-// event is emitted — the exact "failover event missing" CI symptom, with
-// every other assertion still passing. Recreating on collision removes
-// the hole without sleeps or timing assumptions: the returned server is
-// proven distinct before the gateway ever sees it. Exhaustion fails
-// loudly instead of hanging or silently passing.
-func wave3JSONServerNotURL(t *testing.T, status int, body string, calls *atomic.Int32, bannedURL string) *httptest.Server {
-	t.Helper()
-	for i := 0; i < 10; i++ {
-		s := wave3JSONServer(t, status, body, calls)
-		if s.URL != bannedURL {
-			return s
-		}
-		s.Close()
-	}
-	t.Fatalf("could not allocate a test server address distinct from %s", bannedURL)
-	return nil
 }
 
 func TestWave3AnthropicTooLarge(t *testing.T) {
@@ -379,19 +372,28 @@ func TestWave3AnthropicTransportFailover(t *testing.T) {
 	deadURL := dead.URL
 	dead.Close()
 	var goodCalls atomic.Int32
-	good := wave3JSONServerNotURL(t, 200, wave3AnthropicOK, &goodCalls, deadURL)
+	foreign := &upstreamAttribution{}
+	marker := fixtureMarker("anthropic-transport-failover")
+	good := markerCountingServer(t, http.StatusOK, wave3AnthropicOK, marker, &goodCalls, foreign, deadURL)
 	defer good.Close()
 	s := wave3Gateway(t, []config.ProviderConfig{
 		wave3Provider("a", "anthropic_compatible", deadURL, "m", "upstream-model", []string{"cm"}),
 		wave3Provider("b", "anthropic_compatible", good.URL, "m", "upstream-model", []string{"cm"}),
 	}, func(cfg *config.Config) { cfg.Routing.Strategy = "priority" })
-	rr := wave3Request(s, "POST", "/v1/messages", wave3AnthropicReq("cm"))
+	rr := wave3Request(s, "POST", "/v1/messages", wave3AnthropicMarkedReq("cm", marker))
 	if rr.Code != 200 || !strings.Contains(rr.Body.String(), `"text":"ok"`) {
 		t.Fatalf("transport failover status=%d body=%s want 200 ok", rr.Code, rr.Body.String())
 	}
 	if goodCalls.Load() != 1 {
+		foreign.logForeign(t)
 		t.Fatalf("good candidate calls=%d want 1", goodCalls.Load())
 	}
+	// Dispatch-level assertion from the gateway's own ledger: independent of
+	// anything that reaches the loopback port.
+	if got := busEventCount(s, "route_attempt", "b/m"); got != 1 {
+		t.Fatalf("route_attempt events for b/m=%d want 1", got)
+	}
+	foreign.logForeign(t)
 	// The route_fail for a/m proves provider a was actually attempted and
 	// failed; without it, a dead/good address collision would pass every
 	// assertion above while producing no failover at all.
@@ -797,22 +799,29 @@ func TestWave3ResponsesTransportFailover(t *testing.T) {
 	deadURL := dead.URL
 	dead.Close()
 	var goodCalls atomic.Int32
-	good := wave3JSONServerNotURL(t, 200, wave3ChatOK, &goodCalls, deadURL)
+	foreign := &upstreamAttribution{}
+	marker := fixtureMarker("responses-transport-failover")
+	good := markerCountingServer(t, http.StatusOK, wave3ChatOK, marker, &goodCalls, foreign, deadURL)
 	defer good.Close()
 	s := wave3Gateway(t, []config.ProviderConfig{
 		wave3Provider("a", "openai_compatible", deadURL, "m", "upstream-model", []string{"cm"}),
 		wave3Provider("b", "openai_compatible", good.URL, "m", "upstream-model", []string{"cm"}),
 	}, func(cfg *config.Config) { cfg.Routing.Strategy = "priority" })
-	rr := wave3Request(s, "POST", "/v1/responses", wave3ResponsesReq("cm"))
+	rr := wave3Request(s, "POST", "/v1/responses", wave3ResponsesMarkedReq("cm", marker))
 	if rr.Code != 200 || !strings.Contains(rr.Body.String(), "ok") {
 		t.Fatalf("responses transport failover status=%d body=%s want 200 ok", rr.Code, rr.Body.String())
 	}
 	if goodCalls.Load() != 1 {
+		foreign.logForeign(t)
 		t.Fatalf("good candidate calls=%d want 1", goodCalls.Load())
+	}
+	if got := busEventCount(s, "route_attempt", "b/m"); got != 1 {
+		t.Fatalf("route_attempt events for b/m=%d want 1", got)
 	}
 	if !wave3BusHasKindDeployment(s, "route_changed", "b/m") {
 		t.Fatalf("route_changed event missing for b/m")
 	}
+	foreign.logForeign(t)
 }
 
 func TestWave3ResponsesTransportError502(t *testing.T) {
@@ -1294,19 +1303,26 @@ func TestWave3OpenAITransportFailover(t *testing.T) {
 	deadURL := dead.URL
 	dead.Close()
 	var goodCalls atomic.Int32
-	good := wave3JSONServerNotURL(t, 200, wave3ChatOK, &goodCalls, deadURL)
+	foreign := &upstreamAttribution{}
+	marker := fixtureMarker("chat-transport-failover")
+	good := markerCountingServer(t, http.StatusOK, wave3ChatOK, marker, &goodCalls, foreign, deadURL)
 	defer good.Close()
 	s := wave3Gateway(t, []config.ProviderConfig{
 		wave3Provider("a", "openai_compatible", deadURL, "m", "upstream-model", []string{"cm"}),
 		wave3Provider("b", "openai_compatible", good.URL, "m", "upstream-model", []string{"cm"}),
 	}, func(cfg *config.Config) { cfg.Routing.Strategy = "priority" })
-	rr := wave3Request(s, "POST", "/v1/chat/completions", wave3ChatReq("cm"))
+	rr := wave3Request(s, "POST", "/v1/chat/completions", wave3ChatMarkedReq("cm", marker))
 	if rr.Code != 200 || !strings.Contains(rr.Body.String(), "ok") {
 		t.Fatalf("chat transport failover status=%d body=%s want 200 ok", rr.Code, rr.Body.String())
 	}
 	if goodCalls.Load() != 1 {
+		foreign.logForeign(t)
 		t.Fatalf("good candidate calls=%d want 1", goodCalls.Load())
 	}
+	if got := busEventCount(s, "route_attempt", "b/m"); got != 1 {
+		t.Fatalf("route_attempt events for b/m=%d want 1", got)
+	}
+	foreign.logForeign(t)
 }
 
 func TestWave3OpenAITemporarilyUnavailable(t *testing.T) {

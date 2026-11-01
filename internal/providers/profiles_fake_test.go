@@ -137,3 +137,73 @@ func TestFakeUpstreamOrcaRouterMessages(t *testing.T) {
 		t.Errorf("orcarouter-messages request = %s apiKey=%q, want /v1/messages with x-api-key", cap.path, cap.apiKey)
 	}
 }
+
+// AgentRouter ships two documented surfaces with different bases and different
+// auth headers. These two tests pin that separation: the Chat profile sends
+// /v1/chat/completions with a Bearer token, the Messages profile sends
+// /v1/messages with a Bearer token (the vendor documents the token as
+// ANTHROPIC_AUTH_TOKEN, not x-api-key). Neither test calls the real service.
+func TestFakeUpstreamAgentRouterChat(t *testing.T) {
+	cap := runFakeProfile(t, "agentrouter-chat",
+		`{"model":"glm-5.3","messages":[{"role":"user","content":"hi"}]}`,
+		`{"id":"chatcmpl-ar","choices":[{"message":{"role":"assistant","content":"hello"}}],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}`)
+	if cap.method != http.MethodPost || cap.path != "/v1/chat/completions" {
+		t.Errorf("agentrouter-chat request = %s %s, want POST /v1/chat/completions", cap.method, cap.path)
+	}
+	if cap.auth != "Bearer fake-test-key" {
+		t.Errorf("agentrouter-chat auth = %q, want Bearer fake-test-key", cap.auth)
+	}
+	if cap.apiKey != "" {
+		t.Errorf("agentrouter-chat must not send x-api-key, got %q", cap.apiKey)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(cap.body, &body); err != nil || body["model"] != "glm-5.3" {
+		t.Errorf("agentrouter-chat body = %s", cap.body)
+	}
+}
+
+func TestFakeUpstreamAgentRouterMessages(t *testing.T) {
+	cap := runFakeProfile(t, "agentrouter-messages",
+		`{"model":"claude-opus-5","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`,
+		`{"id":"msg-ar","type":"message","content":[{"type":"text","text":"hello"}],"usage":{"input_tokens":3,"output_tokens":2}}`)
+	if cap.method != http.MethodPost || cap.path != "/v1/messages" {
+		t.Errorf("agentrouter-messages request = %s %s, want POST /v1/messages", cap.method, cap.path)
+	}
+	if cap.auth != "Bearer fake-test-key" {
+		t.Errorf("agentrouter-messages auth = %q, want Bearer fake-test-key (documented token style)", cap.auth)
+	}
+	if cap.apiKey != "" {
+		t.Errorf("agentrouter-messages must not send x-api-key on this route, got %q", cap.apiKey)
+	}
+	if cap.ver != "2023-06-01" {
+		t.Errorf("agentrouter-messages anthropic-version = %q, want the adapter default 2023-06-01", cap.ver)
+	}
+}
+
+// The two AgentRouter profiles must stay distinct: different protocols,
+// dialects, bases and auth modes, and neither may be presented as the other.
+func TestAgentRouterProfilesStayDistinct(t *testing.T) {
+	chat, ok := ProfileByID("agentrouter-chat")
+	if !ok {
+		t.Fatal("agentrouter-chat profile missing")
+	}
+	messages, ok := ProfileByID("agentrouter-messages")
+	if !ok {
+		t.Fatal("agentrouter-messages profile missing")
+	}
+	if chat.Protocol == messages.Protocol {
+		t.Errorf("both AgentRouter profiles claim protocol %q", chat.Protocol)
+	}
+	if chat.Dialect != "openai_compatible" || messages.Dialect != "anthropic_compatible" {
+		t.Errorf("dialects = %q/%q, want openai_compatible/anthropic_compatible", chat.Dialect, messages.Dialect)
+	}
+	if chat.BaseURL == messages.BaseURL {
+		t.Errorf("both profiles share base URL %q; the vendor documents distinct bases", chat.BaseURL)
+	}
+	if _, ok := ProfileByID("agentrouter-responses"); ok {
+		t.Error("no Responses route is documented for AgentRouter; a responses profile must not be invented")
+	}
+	if got := ProfilesForProvider("agentrouter"); len(got) != 2 {
+		t.Errorf("agentrouter profiles = %d, want exactly 2 (messages, chat)", len(got))
+	}
+}

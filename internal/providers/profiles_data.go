@@ -57,6 +57,30 @@ var profileList = []Profile{
 		Capabilities: []string{ProfileCapAuth, ProfileCapNonStreaming},
 		Limitations:  []string{"anyrouter.top is a different service; this profile is anyrouter.dev only", "Responses statefulness is not documented in the reviewed material"}},
 
+	// AgentRouter (agentrouter.org only — not TheAgentRouter / Envoy AI
+	// Gateway, a different project). Its onboarding pages document two
+	// separate surfaces, and the vendor states they run "in parallel" and
+	// must not be mixed: an Anthropic-compatible base of
+	// https://agentrouter.org with no /v1 suffix (Claude Code sets
+	// ANTHROPIC_BASE_URL this way and sends the token as
+	// ANTHROPIC_AUTH_TOKEN -> Bearer), and an OpenAI-compatible base of
+	// https://agentrouter.org/v1 (Codex CLI, and "other general models").
+	// They are therefore TWO profiles with different bases and auth modes;
+	// a Claude model served through the OpenAI-compatible base is still a
+	// chat row, not native Anthropic Messages.
+	{ID: "agentrouter-chat", ProviderID: "agentrouter", ProviderName: "AgentRouter", Category: "Gateway",
+		Protocol: ProfileProtocolChat, Dialect: "openai_compatible",
+		BaseURL: "https://agentrouter.org/v1", ChatPath: "/v1/chat/completions",
+		AuthMode: "bearer", DocsURL: "https://agentrouter.org/docs/codex.html", Evidence: EvidenceDocumented, ReviewedDate: "2026-11-01",
+		Capabilities: []string{ProfileCapAuth, ProfileCapNonStreaming},
+		Limitations:  []string{"documented model ids on 2026-11-01 are gpt-5.6-sol and gpt-6-astra, plus claude-opus-5, claude-opus-4-8, glm-5.3 and deepseek-v4-flash which the vendor documents for both protocols; the vendor states the list changes with capacity and its console/pricing pages are authoritative", "the vendor documents this base as the OpenAI-compatible one (base URL plus /v1); other general models are served here rather than through the Messages base", "streaming, tool-call and usage shapes are not documented for this route in the reviewed material", "a misspelled or delisted model id returns 503 with no available channel", "the landing page also lists /v1/responses and /v1beta/models, but no Responses or native-Gemini profile is shipped here; those routes are unverified for this repository"}},
+	{ID: "agentrouter-messages", ProviderID: "agentrouter", ProviderName: "AgentRouter", Category: "Gateway",
+		Protocol: ProfileProtocolMessages, Dialect: "anthropic_compatible",
+		BaseURL: "https://agentrouter.org", MessagesPath: "/v1/messages",
+		AuthMode: "bearer", DocsURL: "https://agentrouter.org/docs/claude-code.html", Evidence: EvidenceDocumented, ReviewedDate: "2026-11-01",
+		Capabilities: []string{ProfileCapAuth, ProfileCapNonStreaming},
+		Limitations:  []string{"the documented base is https://agentrouter.org with NO /v1 suffix (Claude Code ANTHROPIC_BASE_URL); the /v1 base belongs to the separate OpenAI-compatible profile and the vendor states the two must not be mixed", "only the token-style credential is documented for this base (ANTHROPIC_AUTH_TOKEN, sent as a Bearer token); an x-api-key credential is not documented for this route", "Claude Opus models are documented as preferring this Anthropic surface; claude-opus-5, claude-opus-4-8, glm-5.3 and deepseek-v4-flash are documented for both protocols", "streaming, tool round-trips and usage are not documented for Messages in the reviewed material", "a misspelled or delisted model id returns 503 with no available channel"}},
+
 	// NaraRouter — router.bynara.id/docs. Images live on a different host
 	// (api-images.bynara.id) and are a separate capability family, not
 	// part of these chat profiles.
