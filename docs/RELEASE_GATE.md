@@ -13,13 +13,24 @@ the SHA is NOT_RUN, never PASS.
 # tests; this script only reads their recorded check runs.
 bash scripts/release-gate-status.sh <full-40-hex-sha>
 # Release-candidate verdict (also requires the manual-only gates):
-bash scripts/release-gate-status.sh <sha> --rc
+bash scripts/release-gate-status.sh <sha> --rc --soak-summary /path/to/downloaded/summary.json
 ```
 
 The script exits non-zero unless every required gate is PASS, and
 prints `Release Gate Passed` only in that case. A gate that is
 queued or running prints RUNNING and fails the gate until it
-finishes; an unreadable Checks API response prints BLOCKED. Its own
+finishes; an unreadable Checks API response prints BLOCKED. In `--rc` mode a
+successful check also needs a completed successful Actions run for the same
+head SHA triggered by push or manual dispatch. PR checks may be attached to a
+head while testing a synthetic merge commit, so they are UNVERIFIED for that
+head, not release evidence. Unknown or unreadable run provenance is likewise
+UNVERIFIED. A passing soak check is not enough: `--soak-summary` must name a
+complete PASS report for that SHA with at least 7,200 seconds requested and
+sustained. Keep the report's resource-samples file alongside it. The operator
+must independently verify that the supplied report and samples came from the
+matching successful Actions run; local files alone are not authenticated.
+The script does not verify owner approval, external acceptance, the provenance
+of arbitrary workflow code, or the artifact-to-run binding. Its own
 regression tests (`bash scripts/test-release-gate-status.sh`) run
 offline against a fake `gh` and cover pass, one-failed, missing
 (= NOT_RUN), running, API-error (= BLOCKED), non-SHA refusal, the

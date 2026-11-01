@@ -76,8 +76,10 @@ termination wait), #818 (preserve pod termination status) — are merged but hav
 
 ## 3. What each dispatch produces
 
-Every workflow writes a sanitized artifact. The release gate never reads a
-"green badge" — it reads the artifact.
+The operator must inspect each sanitized acceptance artifact. The status script
+reads GitHub check runs and Actions run metadata; for `--rc` soak it also
+validates a locally supplied summary. It does not authenticate the supplied
+file against the artifact: the operator must independently verify provenance.
 
 | Workflow | Inputs | Artifact must contain |
 |---|---|---|
@@ -117,7 +119,7 @@ gh workflow run conformance-live-canary.yml --ref main -f preset=openai -f model
 Then re-read the gate for the exact SHA:
 
 ```sh
-bash scripts/release-gate-status.sh "$(git rev-parse v0.25.0)" --rc
+bash scripts/release-gate-status.sh "$CANDIDATE_SHA" --rc --soak-summary /path/to/downloaded/summary.json
 ```
 
 ## 5. The two legitimate ways to ship

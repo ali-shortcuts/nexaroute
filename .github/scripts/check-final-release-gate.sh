@@ -78,7 +78,10 @@ validate_manifest() {
   fi
 
   local declared
-  declared="$(jq -r '.release // ""' "$exclusions_file")"
+  if ! declared="$(jq -r '.release // ""' "$exclusions_file")"; then
+    echo "::error::${exclusions_file}: could not read the release version." >&2
+    return 1
+  fi
   if [[ "$declared" != "$version" ]]; then
     echo "::error::${exclusions_file} declares release '${declared}' but the release being tagged is '${version}'. Exclusions are version-scoped and are never carried forward." >&2
     return 1
@@ -121,7 +124,10 @@ validate_manifest() {
   fi
 
   local duplicates
-  duplicates="$(jq -r '[.exclusions[].issue] | group_by(.) | map(select(length > 1) | .[0]) | .[]' "$exclusions_file")"
+  if ! duplicates="$(jq -r '[.exclusions[].issue] | group_by(.) | map(select(length > 1) | .[0]) | .[]' "$exclusions_file")"; then
+    echo "::error::${exclusions_file}: could not validate exclusion duplicates." >&2
+    return 1
+  fi
   if [[ -n "$duplicates" ]]; then
     while IFS= read -r issue; do
       echo "::error::${exclusions_file} lists issue #${issue} more than once." >&2
@@ -160,8 +166,13 @@ for issue in "${required_issues[@]}"; do
     printf '%s\n' "unknown none" > "$state_dir/$issue"
     continue
   fi
-  state="$(jq -r '.state // "unknown"' <<<"$payload" 2>/dev/null || true)"
-  reason="$(jq -r '.state_reason // "none"' <<<"$payload" 2>/dev/null || true)"
+  if ! state="$(jq -r '.state // "unknown"' <<<"$payload" 2>/dev/null)" ||
+     ! reason="$(jq -r '.state_reason // "none"' <<<"$payload" 2>/dev/null)"; then
+    echo "::error::Could not parse release blocker #${issue}." >&2
+    failed=1
+    printf '%s\n' "unknown none" > "$state_dir/$issue"
+    continue
+  fi
   [[ -n "$state" ]] || state="unknown"
   [[ -n "$reason" ]] || reason="none"
   printf '%s %s\n' "$state" "$reason" > "$state_dir/$issue"

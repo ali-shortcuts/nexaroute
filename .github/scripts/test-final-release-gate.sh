@@ -163,6 +163,50 @@ refuse_manifest "duplicate" \
 refuse_manifest "not-json" '{"release":"v9.9.9","exclusions":[' "is not valid JSON"
 refuse_manifest "no-exclusions-array" '{"release":"v9.9.9"}'
 
+# The duplicate-check jq command must itself be fail-closed. Bash suppresses
+# errexit inside validate_manifest because the caller invokes it under !.
+real_jq="$(command -v jq)"
+cat > "$tmp/bin/jq" <<'JQ'
+#!/usr/bin/env bash
+for arg in "$@"; do
+  if [[ "${FAKE_JQ_FAIL_DUPLICATES:-}" == 1 && "$arg" == *'group_by(.)'* ]]; then
+    echo "simulated duplicate-check parser failure" >&2
+    exit 42
+  fi
+  if [[ "${FAKE_JQ_FAIL_RELEASE:-}" == 1 && "$arg" == '.release // ""' ]]; then
+    echo v9.9.9
+    exit 42
+  fi
+  if [[ "${FAKE_JQ_FAIL_STATE:-}" == 1 && "$arg" == '.state // "unknown"' ]]; then
+    echo closed
+    exit 42
+  fi
+  if [[ "${FAKE_JQ_FAIL_REASON:-}" == 1 && "$arg" == '.state_reason // "none"' ]]; then
+    echo completed
+    exit 42
+  fi
+done
+exec "$REAL_JQ" "$@"
+JQ
+chmod +x "$tmp/bin/jq"
+export REAL_JQ="$real_jq"
+printf '%s\n' '{"release":"v9.9.9","exclusions":[{"issue":649,"reason":"r","approved_by":"owner","approved_at":"2026-11-01"}]}' > "$work/docs/releases/v9.9.9-exclusions.json"
+if FAKE_JQ_FAIL_DUPLICATES=1 run_gate --version v9.9.9 > "$tmp/jq-duplicates.out" 2>&1; then
+  fails "gate accepted a failed duplicate validation query"
+fi
+grep -q "could not validate exclusion duplicates" "$tmp/jq-duplicates.out" ||
+  fails "duplicate parser failure message missing"
+
+if FAKE_JQ_FAIL_RELEASE=1 run_gate --version v9.9.9 > "$tmp/jq-release.out" 2>&1; then
+  fails "gate accepted release query output from a failing parser"
+fi
+if (unset FAKE_GH_CLOSED; FAKE_JQ_FAIL_STATE=1 run_gate) > "$tmp/jq-state.out" 2>&1; then
+  fails "gate accepted issue state output from a failing parser"
+fi
+if (unset FAKE_GH_CLOSED; FAKE_JQ_FAIL_REASON=1 run_gate) > "$tmp/jq-reason.out" 2>&1; then
+  fails "gate accepted issue reason output from a failing parser"
+fi
+
 # Valid leap days remain accepted.
 printf '%s\n' '{"release":"v9.9.9","exclusions":[{"issue":649,"reason":"r","approved_by":"owner","approved_at":"2024-02-29"}]}' > "$work/docs/releases/v9.9.9-exclusions.json"
 if ! run_gate --version v9.9.9 > "$tmp/leap-date.out" 2>&1; then

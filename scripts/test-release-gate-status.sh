@@ -18,6 +18,17 @@ set -euo pipefail
 case "${2:-}" in
   *repos/--rc/*) echo "simulated repo=--rc API failure" >&2; exit 1 ;;
 esac
+if [[ "${2:-}" == */actions/runs/1 ]]; then
+  case "${FAKE_GH_MODE:-pass}" in
+    rc-api-error) exit 1 ;;
+    rc-pr) event=pull_request ;;
+    *) event=workflow_dispatch ;;
+  esac
+  head=0123456789abcdef0123456789abcdef01234567
+  [[ "${FAKE_GH_MODE:-}" != rc-wrong-sha ]] || head=abcdef0123456789abcdef0123456789abcdef01
+  printf '{"event":"%s","head_sha":"%s","status":"completed","conclusion":"success"}\n' "$event" "$head"
+  exit 0
+fi
 case "${FAKE_GH_MODE:-pass}" in
   api-error) echo "simulated API failure" >&2; exit 1 ;;
   pass) python3 -c '
@@ -179,7 +190,7 @@ runs.append({"name": "integration-redis", "status": "completed", "conclusion": "
 runs.append({"name": "integration-redis", "status": "completed", "conclusion": "success",
   "created_at": "2026-01-02T00:00:00Z", "id": 20})
 print(json.dumps({"total_count": len(runs), "check_runs": runs}))' ;;
-  pass-rc) python3 -c '
+  pass-rc|rc-pr|rc-api-error|rc-wrong-sha) python3 -c '
 import json
 names = ["verify","fuzz-smoke","ci-soak-smoke","integration-postgres",
  "integration-redis","container","Go vulnerability scan","CodeQL (Go)",
@@ -187,12 +198,14 @@ names = ["verify","fuzz-smoke","ci-soak-smoke","integration-postgres",
  "Real Secret Service Store/Load",
  "golangci-lint","staticcheck","gosec","deadcode","soak"]
 print(json.dumps({"total_count": len(names),
-  "check_runs": [{"name": n, "status": "completed", "conclusion": "success"} for n in names]}))' ;;
+  "check_runs": [{"name": n, "status": "completed", "conclusion": "success",
+                  "details_url":"https://github.com/example/repo/actions/runs/1/job/2"} for n in names]}))' ;;
   *) exit 90 ;;
 esac
 GH
 chmod +x "$tmp/bin/gh"
 export PATH="$tmp/bin:$PATH"
+export GITHUB_REPOSITORY=example/repo
 sha="0123456789abcdef0123456789abcdef01234567"
 
 FAKE_GH_MODE=pass bash scripts/release-gate-status.sh "$sha" example/repo > "$tmp/pass.out"
@@ -232,10 +245,42 @@ for mode in latest-tie-pass latest-no-started; do
 	grep -q "Release Gate Passed" "$tmp/$mode.out" || { cat "$tmp/$mode.out"; exit 1; }
 done
 
-# --rc without a repo argument must not turn `--rc` into the repo.
-FAKE_GH_MODE=pass-rc bash scripts/release-gate-status.sh "$sha" --rc > "$tmp/rc-arg.out" || { cat "$tmp/rc-arg.out"; exit 1; }
+# A successful PR check badge is not exact-head execution evidence, and a
+# successful short soak is not two-hour evidence. Both must fail closed for RC.
+if FAKE_GH_MODE=pass-rc bash scripts/release-gate-status.sh "$sha" --rc > "$tmp/rc-no-evidence.out" 2>&1; then
+  echo "FAIL: RC accepted check badges without provenance and soak evidence" >&2; exit 1
+fi
+# Build a synthetic complete two-hour report solely for this offline test.
+python3 - "$tmp" "$sha" <<'PYFIXTURE'
+import importlib.util, json, pathlib, sys
+spec = importlib.util.spec_from_file_location("soak_test", "scripts/test-check-soak-evidence.py")
+mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+doc = mod.soak_doc(commit=sys.argv[2])
+path = pathlib.Path(sys.argv[1]); (path / "summary.json").write_text(json.dumps(doc))
+(path / "samples.jsonl").write_text('{"goroutines":10}\n')
+short = dict(doc, requested_duration_seconds=0)
+(path / "short.json").write_text(json.dumps(short))
+failed = mod.soak_doc(commit=sys.argv[2], result="FAIL", exit_code=1)
+failed["stages"][0] = mod.stage("stress-round-1", status="FAIL", exit_code=1, duration=44)
+(path / "failed.json").write_text(json.dumps(failed))
+PYFIXTURE
+# --rc without a repo argument must not turn --rc into the repo.
+FAKE_GH_MODE=pass-rc bash scripts/release-gate-status.sh "$sha" --rc --soak-summary "$tmp/summary.json" > "$tmp/rc-arg.out" || { cat "$tmp/rc-arg.out"; exit 1; }
 grep -q "Release Gate Passed" "$tmp/rc-arg.out" || { cat "$tmp/rc-arg.out"; exit 1; }
-grep -q "BLOCKED" "$tmp/rc-arg.out" && { cat "$tmp/rc-arg.out"; exit 1; }
+for mode in rc-pr rc-api-error rc-wrong-sha; do
+  if FAKE_GH_MODE="$mode" bash scripts/release-gate-status.sh "$sha" --rc --soak-summary "$tmp/summary.json" > "$tmp/$mode.out" 2>&1; then
+    echo "FAIL: RC accepted $mode provenance" >&2; exit 1
+  fi
+  grep -q "UNVERIFIED" "$tmp/$mode.out" || { cat "$tmp/$mode.out"; exit 1; }
+done
+if FAKE_GH_MODE=pass-rc bash scripts/release-gate-status.sh "$sha" --rc --soak-summary "$tmp/short.json" > "$tmp/short.out" 2>&1; then
+  echo "FAIL: RC accepted short soak" >&2; exit 1
+fi
+grep -qE '^soak[[:space:]]+UNVERIFIED' "$tmp/short.out" || { cat "$tmp/short.out"; exit 1; }
+if FAKE_GH_MODE=pass-rc bash scripts/release-gate-status.sh "$sha" --rc --soak-summary "$tmp/failed.json" > "$tmp/failed-soak.out" 2>&1; then
+  echo "FAIL: RC accepted valid evidence of a failed soak" >&2; exit 1
+fi
+grep -qE '^soak[[:space:]]+UNVERIFIED' "$tmp/failed-soak.out" || { cat "$tmp/failed-soak.out"; exit 1; }
 
 if FAKE_GH_MODE=api-error bash scripts/release-gate-status.sh "$sha" example/repo > "$tmp/api.out" 2>&1; then
 	echo "FAIL: gate passed on API error" >&2; exit 1
