@@ -111,6 +111,8 @@ PG_SENTINEL_DSN="postgres://accept-user:${SENTINEL}-PW@nexaroute-accept-pg:5432/
 STUB_SENTINEL_KEY="${SENTINEL}-KEY"
 FAILURES=0
 NOTRUNS=0
+TERMINATION_OBSERVER_FINALIZER="nexaroute.acceptance/termination-observer"
+TERMINATION_FINALIZER_POD=""
 
 section() { printf '\n== %s ==\n' "$1"; }
 ok() { printf 'PASS: %s\n' "$1"; }
@@ -473,6 +475,57 @@ wait_for_pod_termination() {
   return 1
 }
 
+# set_pod_termination_finalizer <pod> <add|remove>: preserve every
+# existing finalizer while adding/removing the acceptance-only observer.
+# Holding the Pod object after container exit prevents the API server from
+# deleting the terminal status before the acceptance runner has read every
+# container's finishedAt value.
+set_pod_termination_finalizer() {
+  local pod_name="$1" action="$2"
+  local snapshot="$OUT_DIR/termination-finalizer-${pod_name}.json"
+  local patch="$OUT_DIR/termination-finalizer-${pod_name}.patch.json"
+  if ! kubectl_ns get pod "$pod_name" -o json >"$snapshot" 2>/dev/null; then
+    [[ "$action" == "remove" ]] && return 0
+    return 1
+  fi
+  python3 - "$snapshot" "$TERMINATION_OBSERVER_FINALIZER" "$action" >"$patch" <<'PYEOF'
+import json, sys
+pod = json.load(open(sys.argv[1]))
+marker, action = sys.argv[2], sys.argv[3]
+finalizers = list(pod.get("metadata", {}).get("finalizers") or [])
+if action == "add":
+    if marker not in finalizers:
+        finalizers.append(marker)
+elif action == "remove":
+    finalizers = [item for item in finalizers if item != marker]
+else:
+    sys.exit(2)
+json.dump({"metadata": {"finalizers": finalizers}}, sys.stdout)
+PYEOF
+  kubectl_ns patch pod "$pod_name" --type=merge --patch-file="$patch" >/dev/null 2>&1
+}
+
+# release_termination_observer is safe both after a successful measurement
+# and from the EXIT trap. The trap also runs with --keep-cluster, so an
+# interrupted diagnostic run does not leave the temporary finalizer behind.
+release_termination_observer() {
+  [[ -n "$TERMINATION_FINALIZER_POD" ]] || return 0
+  if set_pod_termination_finalizer "$TERMINATION_FINALIZER_POD" remove; then
+    TERMINATION_FINALIZER_POD=""
+    return 0
+  fi
+  return 1
+}
+
+cleanup_live_cluster() {
+  if ! release_termination_observer; then
+    printf 'WARNING: could not remove acceptance termination finalizer from pod %s\n' "$TERMINATION_FINALIZER_POD" >&2
+  fi
+  if [[ "${KEEP_CLUSTER:-0}" -eq 0 ]]; then
+    kind delete cluster --name "$CLUSTER" >/dev/null 2>&1 || true
+  fi
+}
+
 # require_hash <phase> <hash>: fail closed when a revision hash
 # could not be determined. Returns 0 when the hash is non-empty.
 require_hash() {
@@ -800,11 +853,10 @@ live_phase() {
 
   kind create cluster --name "$CLUSTER" --wait 180s >/dev/null
   ok "kind cluster $CLUSTER created (disposable)"
-  if [[ "$KEEP_CLUSTER" -eq 0 ]]; then
-    trap 'kind delete cluster --name "$CLUSTER" >/dev/null 2>&1 || true' EXIT
-  else
+  if [[ "$KEEP_CLUSTER" -eq 1 ]]; then
     printf 'keeping cluster %s as requested (--keep-cluster)\n' "$CLUSTER"
   fi
+  trap 'cleanup_live_cluster' EXIT
   # Context guard BEFORE any mutation: kind create is expected to
   # switch the current context to kind-$CLUSTER, but a KUBECONFIG
   # pointing elsewhere (or a kind that did not switch) must never let
@@ -949,21 +1001,38 @@ PY
   restart_hash="$(deployment_pod_hash 2>/dev/null || true)"
   # Do not time the kubectl client's blocking wait: API/controller
   # finalization can finish after the container has already exited.
-  # Instead request deletion without waiting and measure the latest
-  # container finishedAt minus the Pod deletionTimestamp.
+  # Add an acceptance-only finalizer before deletion so Kubernetes retains
+  # the Pod object after container exit until this runner reads every
+  # finishedAt value. The finalizer is removed immediately after measurement
+  # and is also released by the live-cluster EXIT trap.
+  if set_pod_termination_finalizer "$pod_name" add; then
+    TERMINATION_FINALIZER_POD="$pod_name"
+    ok "temporary termination-observation finalizer installed"
+  else
+    fail "could not preserve the Pod object for termination observation"
+  fi
   kubectl_ns delete pod "$pod_name" --grace-period=120 --wait=false >/dev/null
-  if termination_ms="$(wait_for_pod_termination "$pod_name" 180)"; then
-    printf 'pod container termination took %sms from deletionTimestamp to final finishedAt (grace 120000ms)\n' "$termination_ms"
-    if [[ "$termination_ms" -gt 60000 && "$termination_ms" -le 120000 ]]; then
-      printf 'WARNING: container termination took %sms, near the 120s grace (gateway drain cap 35s); investigate if recurring\n' "$termination_ms"
-    fi
-    if [[ "$termination_ms" -le 120000 ]]; then
-      ok "all pod containers terminated inside their 120s grace period"
+  if [[ -n "$TERMINATION_FINALIZER_POD" ]]; then
+    if termination_ms="$(wait_for_pod_termination "$pod_name" 180)"; then
+      printf 'pod container termination took %sms from deletionTimestamp to final finishedAt (grace 120000ms)\n' "$termination_ms"
+      if [[ "$termination_ms" -gt 60000 && "$termination_ms" -le 120000 ]]; then
+        printf 'WARNING: container termination took %sms, near the 120s grace (gateway drain cap 35s); investigate if recurring\n' "$termination_ms"
+      fi
+      if [[ "$termination_ms" -le 120000 ]]; then
+        ok "all pod containers terminated inside their 120s grace period"
+      else
+        fail "pod container termination exceeded its 120s grace period"; capture_failure_evidence "termination-failure"
+      fi
     else
-      fail "pod container termination exceeded its 120s grace period"; capture_failure_evidence "termination-failure"
+      fail "could not observe deletionTimestamp and finishedAt for every pod container before deletion/timeout"; capture_failure_evidence "termination-failure"
+    fi
+    if ! release_termination_observer; then
+      fail "could not remove the temporary termination-observation finalizer"; capture_failure_evidence "termination-finalizer-cleanup-failure"
+    else
+      ok "temporary termination-observation finalizer removed"
     fi
   else
-    fail "could not observe deletionTimestamp and finishedAt for every pod container before deletion/timeout"; capture_failure_evidence "termination-failure"
+    capture_failure_evidence "termination-finalizer-install-failure"
   fi
   if ! require_hash "replacement pod" "$restart_hash"; then
     fail "replacement pod did not become Ready (revision unknown)"
@@ -1560,6 +1629,81 @@ SH
     ok "self-test: pod termination wait honors its timeout under set -u"
   else
     fail "self-test: pod termination wait failed with an explicit timeout (see $tmp/termination-wait.stderr)"
+  fi
+
+  # 14. The acceptance-only observer finalizer must preserve unrelated
+  # finalizers, and its removal must leave those unrelated entries intact.
+  mkdir -p "$tmp/finalizer-bin" "$tmp/finalizer-output"
+  cat >"$tmp/finalizer-bin/kubectl" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$1" == "-n" ]]; then shift 2; fi
+printf '%s\n' "$*" >>"$SELFTEST_FINALIZER_LOG"
+case "$1 $2" in
+  "get pod")
+    cat "$SELFTEST_POD_STATE"
+    ;;
+  "patch pod")
+    patch_file=""
+    for arg in "$@"; do
+      case "$arg" in --patch-file=*) patch_file="${arg#--patch-file=}";; esac
+    done
+    [[ -n "$patch_file" ]]
+    python3 - "$SELFTEST_POD_STATE" "$patch_file" <<'PYEOF'
+import json, sys
+state_path, patch_path = sys.argv[1:]
+pod = json.load(open(state_path))
+patch = json.load(open(patch_path))
+pod.setdefault("metadata", {})["finalizers"] = patch["metadata"]["finalizers"]
+json.dump(pod, open(state_path, "w"))
+PYEOF
+    ;;
+  *)
+    echo "unexpected kubectl command" >&2
+    exit 2
+    ;;
+esac
+SH
+  chmod +x "$tmp/finalizer-bin/kubectl"
+  python3 - "$tmp/finalizer-pod.json" <<'PYEOF'
+import json, sys
+json.dump({"metadata": {"finalizers": ["example.com/operator-finalizer"]}},
+          open(sys.argv[1], "w"))
+PYEOF
+  local finalizer_test_ok=1 finalizer_values
+  if ! PATH="$tmp/finalizer-bin:/bin:/usr/bin" \
+      SELFTEST_POD_STATE="$tmp/finalizer-pod.json" \
+      SELFTEST_FINALIZER_LOG="$tmp/finalizer.log" \
+      OUT_DIR="$tmp/finalizer-output" NAMESPACE="nexaroute-accept" \
+      set_pod_termination_finalizer "selftest" add; then
+    finalizer_test_ok=0
+  fi
+  if ! python3 - "$tmp/finalizer-pod.json" "$TERMINATION_OBSERVER_FINALIZER" <<'PYEOF'
+import json, sys
+items = json.load(open(sys.argv[1]))["metadata"]["finalizers"]
+if items != ["example.com/operator-finalizer", sys.argv[2]]:
+    sys.exit(1)
+PYEOF
+  then
+    finalizer_test_ok=0
+  fi
+  if ! PATH="$tmp/finalizer-bin:/bin:/usr/bin" \
+      SELFTEST_POD_STATE="$tmp/finalizer-pod.json" \
+      SELFTEST_FINALIZER_LOG="$tmp/finalizer.log" \
+      OUT_DIR="$tmp/finalizer-output" NAMESPACE="nexaroute-accept" \
+      set_pod_termination_finalizer "selftest" remove; then
+    finalizer_test_ok=0
+  fi
+  finalizer_values="$(python3 - "$tmp/finalizer-pod.json" <<'PYEOF'
+import json, sys
+print(",".join(json.load(open(sys.argv[1]))["metadata"]["finalizers"]))
+PYEOF
+)"
+  if [[ "$finalizer_test_ok" -eq 1 && "$finalizer_values" == "example.com/operator-finalizer" ]] \
+      && [[ "$(grep -c '^patch pod selftest ' "$tmp/finalizer.log")" -eq 2 ]]; then
+    ok "self-test: termination observer finalizer preserves existing finalizers and is removed after measurement"
+  else
+    fail "self-test: termination observer finalizer changed unrelated finalizers or cleanup did not run"
   fi
 }
 
