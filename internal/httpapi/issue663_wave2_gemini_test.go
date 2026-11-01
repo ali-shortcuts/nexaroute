@@ -10,12 +10,15 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/ali-shortcuts/nexaroute/internal/compat"
 	"github.com/ali-shortcuts/nexaroute/internal/config"
@@ -65,6 +68,101 @@ func wave2GeminiChatOKServer(t *testing.T, calls *atomic.Int32) *httptest.Server
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, wave3ChatOK)
 	}))
+}
+
+// wave2ForeignTraffic collects requests that reach a failover fake upstream
+// but cannot belong to the request under test. Linux reuses ephemeral ports,
+// and this package leaves slow goroutines and keep-alive connections behind
+// (the suite already logs "httptest.Server blocked in Close ... connection in
+// state active"), so a stray client can deliver a request to a port a later
+// test has just bound. A bare counter would report that as the gateway
+// dispatching twice -- which is exactly how PR #814's run 41301006743 failed
+// with "good candidate calls=2 want 1" while the same request's attempt
+// ledger showed a single a/m then b/m dispatch.
+type wave2ForeignTraffic struct {
+	mu   sync.Mutex
+	hits []string
+}
+
+func (f *wave2ForeignTraffic) record(r *http.Request, body []byte) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.hits = append(f.hits, fmt.Sprintf("%s %s bytes=%d remote=%s", r.Method, r.URL.Path, len(body), r.RemoteAddr))
+}
+
+func (f *wave2ForeignTraffic) log(t *testing.T) {
+	t.Helper()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, hit := range f.hits {
+		t.Logf("ignored unrelated request on the failover upstream's loopback port (not this request): %s", hit)
+	}
+}
+
+// wave2GeminiMarkedBody returns a Gemini request whose prompt carries a unique
+// marker, so the translated chat payload that reaches the failover upstream can
+// be attributed to this exact request.
+func wave2GeminiMarkedBody(name string) (string, string) {
+	marker := fmt.Sprintf("hi-%s-%d", name, time.Now().UnixNano())
+	return fmt.Sprintf(`{"contents":[{"role":"user","parts":[{"text":%q}]}]}`, marker), marker
+}
+
+// wave2GeminiMarkedChatOKServer is the failover-correctness fake upstream.
+//
+// It counts only dispatches that belong to the request under test: the gateway
+// forwards the prompt text upstream, so a payload containing this test's marker
+// can only come from this request. A genuine duplicate dispatch of this request
+// still carries the marker and is still counted, so the "exactly one upstream
+// call" assertion keeps its full strength; only unrelated traffic on the same
+// loopback port is excluded, and it is reported through wave2ForeignTraffic
+// instead of being folded silently into the count.
+func wave2GeminiMarkedChatOKServer(t *testing.T, marker string, calls *atomic.Int32, foreign *wave2ForeignTraffic, bannedURL ...string) *httptest.Server {
+	t.Helper()
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+		if !strings.Contains(string(body), marker) {
+			if foreign != nil {
+				foreign.record(r, body)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, wave3ChatOK)
+			return
+		}
+		if calls != nil {
+			calls.Add(1)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, wave3ChatOK)
+	})
+	for i := 0; i < 10; i++ {
+		srv := httptest.NewServer(handler)
+		banned := false
+		for _, b := range bannedURL {
+			if b != "" && srv.URL == b {
+				banned = true
+				break
+			}
+		}
+		if !banned {
+			return srv
+		}
+		srv.Close()
+	}
+	t.Fatalf("could not allocate a test server address distinct from %v", bannedURL)
+	return nil
+}
+
+// wave2GeminiBusCount counts events of one kind for one deployment: the
+// gateway's own attempt ledger, used as a dispatch assertion that no loopback
+// port reuse can perturb.
+func wave2GeminiBusCount(s *Server, kind, deployment string) int {
+	n := 0
+	for _, e := range s.bus.Snapshot() {
+		if e.Kind == kind && (deployment == "" || e.Deployment == deployment) {
+			n++
+		}
+	}
+	return n
 }
 
 func wave2GeminiBody() string {
@@ -303,15 +401,21 @@ func TestWave2GeminiVirtualEndpointSuccess(t *testing.T) {
 func TestWave2GeminiTransportFailover(t *testing.T) {
 	deadCfg, deadURL := wave2GeminiDeadProvider(t, "a")
 	var goodCalls atomic.Int32
-	good := wave3JSONServerNotURL(t, 200, wave3ChatOK, &goodCalls, deadURL)
+	foreign := &wave2ForeignTraffic{}
+	body, marker := wave2GeminiMarkedBody("transport-failover")
+	good := wave2GeminiMarkedChatOKServer(t, marker, &goodCalls, foreign, deadURL)
 	defer good.Close()
 	s := wave2GeminiServer(t, []config.ProviderConfig{deadCfg, wave2GeminiProvider("b", "openai_compatible", good.URL)}, nil)
-	rr := geminiPost(t, s, "http://gateway/v1beta/models/m:generateContent", wave2GeminiBody(), "", "")
+	rr := geminiPost(t, s, "http://gateway/v1beta/models/m:generateContent", body, "", "")
 	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), "ok") {
 		t.Fatalf("status=%d body=%s want 200 ok", rr.Code, rr.Body.String())
 	}
 	if goodCalls.Load() != 1 {
+		foreign.log(t)
 		t.Fatalf("good candidate calls=%d want 1", goodCalls.Load())
+	}
+	if got := wave2GeminiBusCount(s, "route_attempt", "b/m"); got != 1 {
+		t.Fatalf("route_attempt events for b/m=%d want 1", got)
 	}
 	if !wave2GeminiBusHas(t, s, "failover", "a/m") {
 		t.Fatal("failover event missing for a/m")
@@ -319,6 +423,7 @@ func TestWave2GeminiTransportFailover(t *testing.T) {
 	if !wave2GeminiBusHas(t, s, "route_ok", "b/m") {
 		t.Fatal("route_ok event missing for b/m")
 	}
+	foreign.log(t)
 }
 
 func TestWave2GeminiTransportTerminal502(t *testing.T) {
@@ -529,18 +634,27 @@ func TestWave2GeminiHTTPFailover(t *testing.T) {
 	}))
 	defer upA.Close()
 	var goodCalls atomic.Int32
-	upB := wave2GeminiChatOKServer(t, &goodCalls)
+	foreign := &wave2ForeignTraffic{}
+	body, marker := wave2GeminiMarkedBody("http-failover")
+	upB := wave2GeminiMarkedChatOKServer(t, marker, &goodCalls, foreign)
 	defer upB.Close()
 	s := wave2GeminiServer(t, []config.ProviderConfig{
 		wave2GeminiProvider("a", "openai_compatible", upA.URL),
 		wave2GeminiProvider("b", "openai_compatible", upB.URL),
 	}, nil)
-	rr := geminiPost(t, s, "http://gateway/v1beta/models/m:generateContent", wave2GeminiBody(), "", "")
+	rr := geminiPost(t, s, "http://gateway/v1beta/models/m:generateContent", body, "", "")
 	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), "ok") {
 		t.Fatalf("status=%d body=%s want 200 ok", rr.Code, rr.Body.String())
 	}
 	if goodCalls.Load() != 1 {
+		foreign.log(t)
 		t.Fatalf("good candidate calls=%d want 1", goodCalls.Load())
+	}
+	// Dispatch-level assertion: the gateway's own ledger must record exactly one
+	// attempt against b/m, independent of anything that reaches the loopback
+	// port. A duplicated dispatch would add a second route_attempt event.
+	if got := wave2GeminiBusCount(s, "route_attempt", "b/m"); got != 1 {
+		t.Fatalf("route_attempt events for b/m=%d want 1", got)
 	}
 	if !wave2GeminiBusHas(t, s, "failover", "a/m") {
 		t.Fatal("failover event missing for a/m")
@@ -548,6 +662,7 @@ func TestWave2GeminiHTTPFailover(t *testing.T) {
 	if !wave2GeminiBusHas(t, s, "route_ok", "b/m") {
 		t.Fatal("route_ok event missing for b/m")
 	}
+	foreign.log(t)
 }
 
 func TestWave2GeminiNativeRawError(t *testing.T) {
@@ -605,22 +720,29 @@ func TestWave2GeminiUsageErrorFailover(t *testing.T) {
 	}))
 	defer upA.Close()
 	var goodCalls atomic.Int32
-	upB := wave2GeminiChatOKServer(t, &goodCalls)
+	foreign := &wave2ForeignTraffic{}
+	body, marker := wave2GeminiMarkedBody("usage-error-failover")
+	upB := wave2GeminiMarkedChatOKServer(t, marker, &goodCalls, foreign)
 	defer upB.Close()
 	s := wave2GeminiServer(t, []config.ProviderConfig{
 		wave2GeminiProvider("a", "openai_compatible", upA.URL),
 		wave2GeminiProvider("b", "openai_compatible", upB.URL),
 	}, nil)
-	rr := geminiPost(t, s, "http://gateway/v1beta/models/m:generateContent", wave2GeminiBody(), "", "")
+	rr := geminiPost(t, s, "http://gateway/v1beta/models/m:generateContent", body, "", "")
 	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), "ok") {
 		t.Fatalf("status=%d body=%s want 200 ok after malformed-first failover", rr.Code, rr.Body.String())
 	}
 	if goodCalls.Load() != 1 {
+		foreign.log(t)
 		t.Fatalf("good candidate calls=%d want 1", goodCalls.Load())
+	}
+	if got := wave2GeminiBusCount(s, "route_attempt", "b/m"); got != 1 {
+		t.Fatalf("route_attempt events for b/m=%d want 1", got)
 	}
 	if !wave2GeminiBusHas(t, s, "route_ok", "b/m") {
 		t.Fatal("route_ok event missing for b/m")
 	}
+	foreign.log(t)
 }
 
 func TestWave2GeminiDeadline504(t *testing.T) {
