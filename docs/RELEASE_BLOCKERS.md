@@ -4,11 +4,15 @@ This page exists so nobody has to rediscover the answer. It states the current
 blocking state, classifies every blocker by what kind of action can clear it,
 and gives the literal command that produces the missing evidence.
 
-Last updated: 2026-11-01, against `main` `b1eebc105340a85b39d051510320bd06390737ce`.
+Last updated: 2026-11-01 (audit pass), against `main` `436c4e98618eed0c41e59059eae7eca5f05dd190`.
 
 ## 1. What is *not* the problem
 
-The code is complete and green. Re-checked first-hand on `b1eebc1`:
+The code is complete and green. Re-checked first-hand on `436c4e9`
+(CI [41317289767](https://github.com/ali-shortcuts/nexaroute/actions/runs/41317289767),
+Coverage [41317289862](https://github.com/ali-shortcuts/nexaroute/actions/runs/41317289862),
+Security [41317289831](https://github.com/ali-shortcuts/nexaroute/actions/runs/41317289831) —
+all success; these bind to `436c4e9` and to no other SHA):
 
 | Check (required by ruleset `main-required-checks`, 9 contexts) | Result |
 |---|---|
