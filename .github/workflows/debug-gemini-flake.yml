@@ -1,0 +1,67 @@
+name: Debug gemini failover flake probe
+
+# TEMPORARY diagnostic workflow — remove before the real fix lands.
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - arena/0064fc54-nexaroute
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.x'
+          cache: false
+
+      - name: Instrumented reproducer
+        shell: bash
+        run: |
+          set -o pipefail
+          NEXAROUTE_DEBUG_ITERS=120 go test ./internal/httpapi -run 'TestDebugGeminiFailoverFlakeProbe' -count=1 -v 2>&1 | tee /tmp/probe.log || true
+
+      - name: Existing failover tests, repeated
+        shell: bash
+        run: |
+          set -o pipefail
+          go test ./internal/httpapi -run 'TestWave2GeminiHTTPFailover|TestWave2GeminiTransportFailover|TestWave2GeminiUsageErrorFailover' -count=40 2>&1 | tee /tmp/repeat.log || true
+
+      - name: Emit probe digest
+        if: always()
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import os
+
+          def digest(path):
+              if not os.path.exists(path):
+                  return "missing:" + path
+              with open(path, encoding="utf-8", errors="replace") as fh:
+                  lines = fh.read().splitlines()
+              keep = [ln for ln in lines
+                      if "iter=" in ln or "anomal" in ln or "no anomalies" in ln
+                      or ln.startswith("--- FAIL") or ln.startswith("FAIL")
+                      or ln.startswith("ok ") or "cannot use" in ln or "undefined:" in ln
+                      or ln.startswith("panic")]
+              if not keep:
+                  keep = lines[-40:]
+              return "\n".join(keep[-40:])
+
+          probe = digest("/tmp/probe.log")
+          repeat = digest("/tmp/repeat.log")
+          bad = ("--- FAIL" in probe or "panic" in probe or "--- FAIL" in repeat
+                 or "undefined:" in probe or "cannot use" in probe)
+          msg = "PROBE|" + probe + "||REPEAT|" + repeat
+          msg = msg.replace("%", "%25").replace("\r", "").replace("\n", "%0A")[:20000]
+          print(f"::{'error' if bad else 'notice'} title=debug-digest::{msg}")
+          PY
