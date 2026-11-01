@@ -121,29 +121,6 @@ func wave3JSONServer(t *testing.T, status int, body string, calls *atomic.Int32)
 	}))
 }
 
-// wave3JSONServerNotURL is wave3JSONServer with one deterministic guard:
-// the returned server never listens on bannedURL. A just-closed httptest
-// server's port can be reassigned to the next server created in the same
-// test binary; when a failover test's "dead" URL collides with its "good"
-// URL, the first attempt succeeds, no failure occurs, and no failover
-// event is emitted — the exact "failover event missing" CI symptom, with
-// every other assertion still passing. Recreating on collision removes
-// the hole without sleeps or timing assumptions: the returned server is
-// proven distinct before the gateway ever sees it. Exhaustion fails
-// loudly instead of hanging or silently passing.
-func wave3JSONServerNotURL(t *testing.T, status int, body string, calls *atomic.Int32, bannedURL string) *httptest.Server {
-	t.Helper()
-	for i := 0; i < 10; i++ {
-		s := wave3JSONServer(t, status, body, calls)
-		if s.URL != bannedURL {
-			return s
-		}
-		s.Close()
-	}
-	t.Fatalf("could not allocate a test server address distinct from %s", bannedURL)
-	return nil
-}
-
 func TestWave3AnthropicTooLarge(t *testing.T) {
 	up := wave3JSONServer(t, 200, wave3AnthropicOK, nil)
 	defer up.Close()

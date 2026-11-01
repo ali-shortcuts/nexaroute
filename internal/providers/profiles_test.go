@@ -32,6 +32,8 @@ var profileJoinedURLs = map[string]string{
 	"anyrouter-chat":                "https://anyrouter.dev/api/v1/chat/completions",
 	"anyrouter-messages":            "https://anyrouter.dev/api/v1/messages",
 	"anyrouter-responses":           "https://anyrouter.dev/api/v1/responses",
+	"agentrouter-chat":              "https://agentrouter.org/v1/chat/completions",
+	"agentrouter-messages":          "https://agentrouter.org/v1/messages",
 	"nararouter-chat":               "https://router.bynara.id/v1/chat/completions",
 	"nararouter-messages":           "https://router.bynara.id/v1/messages",
 	"nararouter-responses":          "https://router.bynara.id/v1/responses",
@@ -137,6 +139,9 @@ func TestProfilesSchemaUniquenessAndEvidence(t *testing.T) {
 		}
 	}
 	// Every multi-protocol provider shares one ProviderID across profiles.
+	// AgentRouter is deliberately absent: it ships exactly two documented
+	// surfaces (Messages and Chat) and no Responses profile, because no
+	// Responses route is documented for this repository to rely on.
 	for _, provider := range []string{"ashna", "anyrouter", "nararouter", "opencode-zen", "orcarouter"} {
 		if got := ProfilesForProvider(provider); len(got) < 3 {
 			t.Errorf("provider %q should have >=3 profiles, got %d", provider, len(got))

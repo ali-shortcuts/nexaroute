@@ -62,6 +62,8 @@ every profile.
 | anyrouter-chat | chat | https://anyrouter.dev/api/v1 | /v1/chat/completions | Bearer | documented | auth, non_streaming |
 | anyrouter-messages | messages | https://anyrouter.dev/api/v1 | /v1/messages | x-api-key | documented | auth, non_streaming |
 | anyrouter-responses | responses | https://anyrouter.dev/api/v1 | /v1/responses | Bearer | documented | auth, non_streaming |
+| agentrouter-chat | chat | https://agentrouter.org/v1 | /v1/chat/completions | Bearer | documented | auth, non_streaming |
+| agentrouter-messages | messages | https://agentrouter.org | /v1/messages | Bearer | documented | auth, non_streaming |
 | nararouter-chat | chat | https://router.bynara.id/v1 | /v1/chat/completions | Bearer | documented | auth, model_discovery, non_streaming |
 | nararouter-messages | messages | https://router.bynara.id/v1 | /v1/messages | x-api-key | documented | auth, model_discovery, non_streaming |
 | nararouter-responses | responses | https://router.bynara.id/v1 | /v1/responses | Bearer | documented | auth, model_discovery, non_streaming |
@@ -105,6 +107,29 @@ are repeated here so a reader of this document alone is not misled):
   with it. Model ids use `provider/model` form. The Anthropic surface is
   documented as base `https://anyrouter.dev/api` plus `/v1/messages`,
   which is the same final URL as the stored profile.
+- **AgentRouter (`agentrouter.org` only — not `TheAgentRouter` / Envoy
+  AI Gateway, a different project):** the vendor's own onboarding pages
+  document **two separate surfaces that must not be mixed** — an
+  Anthropic-compatible base of `https://agentrouter.org` with **no
+  `/v1` suffix** (Claude Code `ANTHROPIC_BASE_URL`, credential as
+  `ANTHROPIC_AUTH_TOKEN` → `Bearer`), and an OpenAI-compatible base of
+  `https://agentrouter.org/v1` (Codex CLI `base_url`, "other general
+  models"). They are shipped as two profiles, `agentrouter-messages`
+  and `agentrouter-chat`, with different bases and separate paths; a
+  Claude model served through the `/v1` base is still a **chat** row.
+  Documented model identifiers on 2026-11-01: `gpt-5.6-sol`,
+  `gpt-6-astra` (OpenAI surface), and `claude-opus-5`,
+  `claude-opus-4-8`, `glm-5.3`, `deepseek-v4-flash` (documented for
+  both surfaces). The vendor states the list changes with capacity and
+  that its console/pricing pages are authoritative; a misspelled or
+  delisted id returns 503 with no available channel. Only `auth` and
+  `non_streaming` are claimed: streaming, tool-call, usage and error
+  shapes are not documented for these routes, so they are **not**
+  claimed. The landing page also lists `/v1/responses`,
+  `/v1beta/models`, embeddings, rerank and media routes; **no**
+  Responses or native-Gemini profile is shipped, because the
+  documentation reviewed does not establish those routes for this
+  repository. Nothing here is live-verified.
 - **NaraRouter:** image generation/edits live on a different host,
   `https://api-images.bynara.id/v1`, and are a separate capability
   family, not part of these chat profiles. Responses is documented as
@@ -235,7 +260,9 @@ and the response envelope. Sampled: `ashna-chat` (POST
 `groq-responses` (POST `/v1/responses`, Bearer),
 `cloudflare-compat-chat` (template substituted, then POST
 `/chat/completions`, Bearer), `orcarouter-messages` (POST
-`/v1/messages`, `x-api-key`). These tests verify NexaRoute's wire
+`/v1/messages`, `x-api-key`), `agentrouter-chat` (POST
+`/v1/chat/completions`, Bearer, no `x-api-key`), `agentrouter-messages`
+(POST `/v1/messages`, Bearer rather than `x-api-key`). These tests verify NexaRoute's wire
 shape for the profile. They are **not** provider verification and must
 never be quoted as such.
 
