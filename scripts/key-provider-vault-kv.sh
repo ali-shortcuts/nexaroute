@@ -28,7 +28,15 @@
 # target. Every response status is therefore checked explicitly and only
 # 2xx counts as success; a 307 is an explicit failure, and the helper
 # must point at the active Vault node (or a balancer that routes to it).
-# GET responses are additionally capped at 1 MiB (--max-filesize).
+# GET responses are additionally capped at 1 MiB. --max-filesize alone
+# is NOT a reliable enforcement of that cap: it aborts up front only
+# when the response size is known (Content-Length), and only newer curl
+# versions abort once an unknown-size (chunked) body grows past the
+# limit — older curl reads a chunked body of any size to completion and
+# reports success. The get path therefore also counts the received
+# bytes itself and fails closed above 1048576 bytes, which is
+# curl-version-independent; --max-filesize is kept as the early-abort
+# first line on curl versions that support it.
 #
 # The key lives in the KV entry's "key_b64" field. NOTE: this helper
 # implements the raw-key nxs1 custody pattern; the provider contract
@@ -37,6 +45,10 @@
 # opt-in implemented by the gateway itself with
 # NEXAROUTE_KEY_PROVIDER=vault-transit; see docs/EXTERNAL_VERIFICATION.md.
 set -eu
+# Byte-exact length checks below (${#var} counts bytes only in the C
+# locale).
+LC_ALL=C
+export LC_ALL=C
 
 if [ -z "${VAULT_ADDR:-}" ] || [ -z "${VAULT_TOKEN:-}" ]; then
   echo "key-provider-vault-kv: VAULT_ADDR and VAULT_TOKEN must be set" >&2
@@ -78,10 +90,13 @@ url="${VAULT_ADDR%/}/v1/${ref}"
 
 case "$op" in
   get)
-    response=$(curl -sf --connect-timeout 10 --max-time "$vault_timeout" --max-filesize 1048576 -H "X-Vault-Token: ${VAULT_TOKEN}" -w '\n%{http_code}' "$url") || {
+    # The trailing sentinel keeps command substitution from stripping
+    # trailing newlines, so the byte count below is exact.
+    response=$(curl -sf --connect-timeout 10 --max-time "$vault_timeout" --max-filesize 1048576 -H "X-Vault-Token: ${VAULT_TOKEN}" -w '\n%{http_code}' "$url" && printf .) || {
       echo "key-provider-vault-kv: vault read failed for ref $ref" >&2
       exit 1
     }
+    response=${response%.}
     code=$(printf '%s' "$response" | tail -n 1)
     case "$code" in
       2*) ;;
@@ -91,6 +106,12 @@ case "$op" in
         ;;
     esac
     body=$(printf '%s' "$response" | sed '$d')
+    # Enforce the 1 MiB cap regardless of curl version (see the header):
+    # LC_ALL=C makes ${#body} a byte count.
+    if [ "${#body}" -gt 1048576 ]; then
+      echo "key-provider-vault-kv: vault read for ref $ref exceeds the 1 MiB response cap" >&2
+      exit 1
+    fi
     key=$(printf '%s' "$body" | grep -o '"key_b64": *"[^"]*"' | head -n 1 | sed 's/.*: *"//; s/"$//')
     if [ -z "$key" ]; then
       echo "key-provider-vault-kv: vault entry at $ref has no key_b64 field" >&2
