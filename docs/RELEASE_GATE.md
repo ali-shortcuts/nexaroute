@@ -79,33 +79,39 @@ candidate (`--rc`):
 | Soak, 2 h sustained mixed workload | Soak workflow, `workflow_dispatch` with `duration: 2h` and a timeout above 2 h 30 m (see `docs/reports/ISSUE664_SOAK_PROCEDURE.md`); the soak report must name the same SHA |
 | Browser evidence on main | Browser evidence workflow, `workflow_dispatch` / main push |
 
-## Completion gate and version-scoped exclusions
+## Completion gate — every required issue must be completed
 
-`.github/scripts/check-final-release-gate.sh` is the last step before
-publication. It requires issues #646–#653 **and** #654 to be closed.
+`.github/scripts/check-final-release-gate.sh` is the final issue-completion
+gate before publication. It requires **all nine issues #646–#654** to be:
 
-- Closed with `state_reason=completed`: accepted, no further action.
-- Closed any other way (`not_planned`, no reason): accepted **only** when
-  `docs/releases/<version>-exclusions.json` names that exact issue, for that
-  exact version, with a non-blank `reason` and `approved_by`, and a valid calendar `approved_at` date in YYYY-MM-DD format. The manifest is a record, not proof of owner identity: reviewers must independently verify the approval.
-- **Open**: always refused. An exclusion can never cover an open blocker.
+- `state=closed`
+- `state_reason=completed`
 
-The manifest is version-scoped and fails closed: an entry with any field
-missing refuses the release, an entry for an issue outside #646–#654 refuses
-the release, an issue identifier must be an integer (not a numeric string), a duplicate entry refuses the release, a manifest whose
-`release` does not match the tag refuses the release, and a manifest is never
-carried forward to a later version. When a blocker needs no exclusion, an
-unused or stale manifest is ignored rather than allowed to fail a clean
-release.
+There are no exclusions, waivers, or `not_planned` bypasses.
 
-The policy this implements is the one stated for #654: a stable release must
-wait for each remaining scope to be *completed* or *explicitly excluded with
-reviewed, truthful release notes*. The mechanism makes the exclusion
-reviewable and machine-checkable; it does not make it silent. Every exclusion
-is printed as a `::warning::` at release time.
+- **Open, reopened, or otherwise non-closed:** refused.
+- **Closed with `state_reason=not_planned`:** refused.
+- **Closed with a missing, null, or unknown reason:** refused.
+- **Unreadable GitHub response, wrong issue number, malformed JSON, or API
+  failure:** refused.
+- **Any `docs/releases/*-exclusions.json` file:** refused. Exclusion manifests
+  are no longer supported.
 
-See `docs/RELEASE_BLOCKERS.md` for the current per-issue blockers and the
-exact dispatch command that clears each one.
+The gate checks the GitHub issue identity, state, and state reason for every
+required issue. It does not prove that acceptance evidence is genuine merely
+from the state fields. Before closing an issue as `completed`, the responsible
+reviewer must inspect the issue's acceptance criteria and attach the actual
+sanitized evidence: workflow/run links, exact tested SHA, artifacts, measured
+results, and any required external-system report.
+
+Close #646–#653 only after their individual acceptance criteria pass. Close
+#654 last, after the complete readiness review. A green PR check, fixture test,
+runner-local self-test, or code merge alone is not sufficient to close a live
+acceptance issue.
+
+The exclusion path introduced by PR #822 is intentionally removed by this
+follow-up. Historical reports may mention that earlier mechanism; those
+references describe repository history and are not current release policy.
 
 ## Gaps this gate does not hide
 

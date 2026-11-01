@@ -1382,3 +1382,24 @@ Nothing here is live, staging, multi-host or paid-provider acceptance. The
 release gate is **NOT satisfied**: #646–#653 and #654 stay open, no acceptance
 workflow has executed on `436c4e9` (or on any SHA after `89b608dd`'s failed
 live run), and no tag or release exists.
+
+
+## Release policy correction — strict completion only (PR #824 follow-up)
+
+This follow-up removes the version-scoped exclusion mechanism that PR #822
+introduced into the v0.25.0 release gate. The historical entries above that
+describe the old exclusion policy remain historical records; they do not
+describe the intended policy after this follow-up is merged.
+
+The updated candidate requires every issue #646–#654 to be
+`state=closed` with `state_reason=completed`. `not_planned`, missing or
+unknown state reasons, and any `docs/releases/*-exclusions.json` manifest
+are rejected. The v0.25.0 exclusion manifest is deleted in this follow-up.
+Issue closure still requires genuine acceptance evidence reviewed against
+the issue's criteria; the gate's state check alone does not authenticate
+that evidence.
+
+**Activation boundary:** this policy change is on the #824 working branch.
+It does not change `main` until PR #824 (or a successor containing this
+change) is reviewed and merged. Do not claim this stricter policy is active
+on `main` before that merge.

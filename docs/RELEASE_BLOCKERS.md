@@ -122,44 +122,42 @@ Then re-read the gate for the exact SHA:
 bash scripts/release-gate-status.sh "$CANDIDATE_SHA" --rc --soak-summary /path/to/downloaded/summary.json
 ```
 
-## 5. The two legitimate ways to ship
+## 5. The only supported release path: complete every blocker
 
-The repository's policy is explicit: *a new stable release must wait for each
-remaining scope to be completed **or explicitly excluded with reviewed,
-truthful release notes***. Both paths are supported by
-`.github/scripts/check-final-release-gate.sh`.
+There is exactly one supported path to a stable release: **complete every
+required acceptance scope**.
 
-### Path 1 — complete the scopes (preferred)
+1. Finish the repository-local implementation and tests for each blocker.
+2. Run its authorized acceptance workflow against the required real system.
+3. Attach sanitized evidence to the corresponding issue. Include the exact
+   tested SHA, workflow/run URL, artifact identifiers, acceptance results,
+   and measured values where applicable.
+4. Have a reviewer verify that the evidence satisfies the issue's complete
+   acceptance criteria.
+5. Close the issue with `state_reason=completed` only after that review.
+6. Repeat for every required issue #646–#653.
+7. Close umbrella issue #654 last, after the full readiness review.
+8. Run the full release-candidate gate on the exact candidate SHA. Publish only
+   after every mandatory check and external acceptance requirement passes and
+   the repository owner authorizes publication.
 
-Run the workflows in §4 against a real environment, attach each sanitized
-report to its issue, close it as `completed`, then close #654. The gate then
-passes with no exclusions and the manifest file is ignored entirely.
+Closing an issue as `not_planned`, `duplicate`, with a missing reason, or by
+any other non-completed state is **not** a release completion. It will fail the
+gate even if the issue has extensive comments or a previously approved
+exclusion entry.
 
-### Path 2 — documented, owner-approved exclusions
-
-1. Review `docs/releases/v0.25.0.md` § *Scope exclusions* and confirm every
-   statement is true.
-2. In `docs/releases/v0.25.0-exclusions.json`, set `approved_by` (the owner
-   login) and `approved_at` (`YYYY-MM-DD`) on **every** entry. The gate fails
-   closed while any entry is unsigned — that is deliberate.
-3. Close each blocker as `not_planned`, linking the exclusion reason. **An
-   open issue can never be excluded** — the gate checks that first.
-4. Merge the manifest and the notes to `main`, then tag:
-
-   ```sh
-   git tag -a v0.25.0 -m "NexaRoute v0.25.0"
-   git push origin v0.25.0
-   ```
-
-The release workflow then re-runs `check-final-release-gate.sh` on the tag
-commit, prints one `::warning::` per exclusion, and publishes. The published
-notes must keep the exclusion list intact.
+The release workflow re-runs `check-final-release-gate.sh` on the tag commit.
+Only after the gate and all other release checks pass should the owner create
+and push the release tag and publish the release.
 
 ## 6. What this gate will never do
 
-- It will not accept an open blocker, with or without an exclusion.
-- It will not read an exclusion written for a different version.
-- It will not accept an exclusion with no reason, no approver, or no date.
-- It will not accept an exclusion for an issue that is not a release blocker
-  (typo guard), so the manifest can never quietly widen the scope.
-- It will not let an unused or stale manifest fail an otherwise clean release.
+- It will never accept an open, reopened, or not-planned required issue.
+- It will never accept a missing, null, or unknown issue state reason.
+- It will never accept a version-scoped exclusion, waiver, or owner-approved
+  manifest as a substitute for actual completion.
+- It will reject any `docs/releases/*-exclusions.json` file.
+- It will never convert fixture, runner-local, or simulated evidence into
+  external acceptance.
+- It will never close issues, approve policy exceptions, or publish a release
+  automatically.

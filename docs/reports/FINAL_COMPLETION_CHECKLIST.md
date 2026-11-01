@@ -1,5 +1,19 @@
 # v0.25.0 completion checklist — blocked, not a release approval
 
+## Release policy correction — strict completion only
+
+The #824 follow-up removes the version-scoped exclusion path introduced by
+#822. The candidate release gate requires every issue #646–#654 to be
+`closed` with `state_reason=completed`. There is no `not_planned` waiver,
+scope exclusion, or versioned exclusion manifest. The old
+`docs/releases/v0.25.0-exclusions.json` file is removed.
+
+This policy becomes active on `main` only after the #824 follow-up is reviewed
+and merged. Historical evidence elsewhere in this checklist is not transferred
+to a newer SHA. Each issue still requires genuine acceptance evidence reviewed
+against its own criteria before it is closed.
+
+
 Rechecked 2026-11-01. This is a status and operator handoff, not an approval,
 a signed exclusion, a complete audit, or evidence for a later SHA. Determine
 current main and both PR heads again before relying on any historical result.
@@ -99,7 +113,7 @@ new candidate. Never record secrets or private data in artifacts or issues.
    manual workflows (HTTP 403). Download the matching soak report **and sample
    file**, verify origin against its run, and use `--soak-summary` as described
    in [RELEASE_GATE.md](../RELEASE_GATE.md). Read the actual coverage artifact.
-4. Review unresolved issues, any policy/exclusion decision, UI and security
-   findings. Exclusions are unsigned; manifest text alone proves no approval.
-   Do not close issues, sign exclusions, tag, release or call this ready while
-   mandatory conditions remain unsatisfied.
+4. Review every issue's actual acceptance evidence, plus remaining UI and
+   security findings. Close only issues whose criteria genuinely pass, using
+   state_reason=completed. Do not use not_planned or any exclusion mechanism.
+   Do not tag, release or call this ready while mandatory conditions remain.
