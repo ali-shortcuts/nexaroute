@@ -47,8 +47,8 @@ for issue in "${required_issues[@]}"; do
     if type != "object" then error("issue response is not an object")
     elif ((.number | type) != "number") or (.number != $expected) then error("issue number mismatch")
     elif ((.state | type) != "string") then error("missing or invalid state")
-    elif ((.state_reason | type) != "string") then error("missing or invalid state_reason")
-    else [.state, .state_reason] | @tsv
+    elif (.state == "closed") and ((.state_reason | type) != "string") then error("missing or invalid state_reason for a closed issue")
+    else [.state, (if (.state_reason | type) == "string" then .state_reason else "none" end)] | @tsv
     end
   ' <<<"${payload}" 2>/dev/null)"; then
     echo "::error::Could not validate GitHub response for issue #${issue}; refusing to publish." >&2
