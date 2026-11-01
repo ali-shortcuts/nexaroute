@@ -1135,3 +1135,37 @@ altered, and no issue was closed or reopened.
 
 Never place credentials, access tokens or key bytes in issues, commits,
 artifacts or reports. Record secret variable names only.
+
+## Post-merge state — 2026-11-01, main `b1eebc10` (latest known)
+
+This appendix records what changed after the `5c3b5c4a` section above. It does
+not re-bind any acceptance evidence: nothing in it is live, staging or
+multi-host acceptance, and no issue state was changed.
+
+- Current `main`: **`b1eebc105340a85b39d051510320bd06390737ce`** — merge commit
+  of PR #820 (verified with `git ls-remote origin refs/heads/main`). The tree
+  now contains the three commits that PR carried: the remaining failover
+  call-count attribution work, the AgentRouter profiles, and the
+  current-main documentation section above.
+- **PR #814 is CLOSED** (closed 2026-11-01T14:00:03Z, by the repository owner;
+  not merged, not closed by the agent). Its three historical refresh sections
+  were carried into `main` verbatim by PR #820, so that audit evidence is
+  preserved rather than lost with the branch.
+- Post-merge checks on `b1eebc10`:
+
+| Workflow | Run | Result |
+|---|---|---|
+| Security | [41313911924](https://github.com/ali-shortcuts/nexaroute/actions/runs/41313911924) | **PASS** — `CodeQL (Go)`, `Go vulnerability scan` |
+| Browser evidence | [41313911926](https://github.com/ali-shortcuts/nexaroute/actions/runs/41313911926) | **PASS** |
+| Propose browser evidence fixtures | [41314088417](https://github.com/ali-shortcuts/nexaroute/actions/runs/41314088417) | PASS |
+| CI | [41313911860](https://github.com/ali-shortcuts/nexaroute/actions/runs/41313911860) | in progress at the time of this record — no conclusion is claimed |
+| Coverage report | [41313911888](https://github.com/ali-shortcuts/nexaroute/actions/runs/41313911888) | in progress at the time of this record — no conclusion is claimed |
+
+- Open PR: #821 — the owner-review follow-up to #820 §5, keeping the shared
+  upstream fixture's exhaustion path off the worker goroutine
+  (`t.Errorf` + `nil` from the constructor, `mustMarkerCountingServer` for
+  same-goroutine callers). Test-only.
+- Acceptance status is unchanged from the `5c3b5c4a` section: #646–#653 and
+  #654 are OPEN, coverage remains the only #653 sub-gate bound to a
+  post-#819 SHA, every external gate is BLOCKED or NOT_RUN, and no tag or
+  release exists. The release gate is **NOT satisfied**.
