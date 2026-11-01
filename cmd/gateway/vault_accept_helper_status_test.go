@@ -48,9 +48,9 @@ func TestVaultAcceptHTTPDoesNotFollowRedirect(t *testing.T) {
 
 // The real helper script must verify the HTTP status of every Vault
 // request. curl -sf fails on 4xx/5xx but returns success for 3xx, so a
-// redirecting Vault answering a PUT with 307 used to make the helper
+// redirecting Vault answering a PUT with 307 used to make this helper
 // report success even though nothing was written. GET responses are
-// additionally capped at 1 MiB.
+// additionally capped at 1 MiB during receipt, including chunked bodies.
 func TestVaultHelperRedirectAndSizeBounds(t *testing.T) {
 	script := filepath.Join("..", "..", "scripts", "key-provider-vault-kv.sh")
 	if _, err := os.Stat(script); err != nil {
@@ -104,6 +104,52 @@ func TestVaultHelperRedirectAndSizeBounds(t *testing.T) {
 		defer srv.Close()
 		if _, err := runVaultAcceptHelperGet(ctx, script, "secret/data/x", srv.URL, "tok", 30); err == nil {
 			t.Fatal("helper get with a >1MiB response must fail, but it returned a key")
+		}
+	})
+
+	t.Run("chunked oversized response is stopped during receipt", func(t *testing.T) {
+		var sent atomic.Int64
+		const paddingBytes = 32 << 20
+		chunk := []byte(strings.Repeat("x", 32<<10))
+		prefix := []byte(`{"data":{"data":{"key_b64":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=","padding":"`)
+		suffix := []byte(`"}}}`)
+		srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			flusher, ok := w.(http.Flusher)
+			if !ok {
+				t.Error("response writer does not support chunked flushing")
+				return
+			}
+			write := func(p []byte) bool {
+				n, err := w.Write(p)
+				sent.Add(int64(n))
+				flusher.Flush()
+				return err == nil
+			}
+			if !write(prefix) {
+				return
+			}
+			for remaining := paddingBytes; remaining > 0; {
+				n := len(chunk)
+				if n > remaining {
+					n = remaining
+				}
+				if !write(chunk[:n]) {
+					return
+				}
+				remaining -= n
+			}
+			_ = write(suffix)
+		}))
+		srv.Config.WriteTimeout = 5 * time.Second
+		srv.Start()
+		defer srv.Close()
+
+		if _, err := runVaultAcceptHelperGet(ctx, script, "secret/data/x", srv.URL, "tok", 30); err == nil {
+			t.Fatal("helper get with a 32MiB chunked response must fail")
+		}
+		if got := sent.Load(); got >= paddingBytes {
+			t.Fatalf("Vault server sent the complete oversized chunked body (%d bytes); expected client-side receive cap to stop it", got)
 		}
 	})
 }
