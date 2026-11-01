@@ -1,0 +1,344 @@
+--- a/internal/httpapi/web/app.js
++++ b/internal/httpapi/web/app.js
+@@ -49,0 +50,4 @@
++      'tr_active': 'Active',
++      'tr_stale': 'Stale',
++      'tr_cancelled': 'Cancelled',
++      'tr_other': 'Other / unknown',
+@@ -52 +56 @@
+-      'tr_aria': 'Request starts per time bucket, split into succeeded and failed',
++      'tr_aria': 'Request starts per time bucket by lifecycle state',
+@@ -645,0 +650,4 @@
++      'tr_active': 'فعال',
++      'tr_stale': 'مانده',
++      'tr_cancelled': 'لغوشده',
++      'tr_other': 'سایر / نامشخص',
+@@ -648 +656 @@
+-      'tr_aria': 'شروع درخواست‌ها در هر بازهٔ زمانی، تفکیک‌شده به موفق و ناموفق',
++      'tr_aria': 'شروع درخواست‌ها در هر بازهٔ زمانی بر پایه وضعیت چرخهٔ عمر',
+@@ -1241,0 +1250,4 @@
++      'tr_active': 'فعاله',
++      'tr_stale': 'ځنډېدلې',
++      'tr_cancelled': 'لغوه شوې',
++      'tr_other': 'نور / نامعلوم',
+@@ -1244 +1256 @@
+-      'tr_aria': 'د هرې زمانې په برخه کې د غوښتنو پیل، بریالۍ او ناکامه',
++      'tr_aria': 'د هرې زمانې په برخه کې د غوښتنو پیل د ژوند دورې د حالت له مخې',
+@@ -1865 +1877 @@
+-    const windowEnd = Math.floor((Number.isFinite(now) ? now : 0) / bucketMs) * bucketMs + bucketMs;
++    const windowEnd = Number.isFinite(now) ? now : 0;
+@@ -1868 +1880 @@
+-    for (let i = 0; i < bucketCount; i++) buckets.push({ start: windowStart + i * bucketMs, count: 0, ok: 0, failed: 0 });
++    for (let i = 0; i < bucketCount; i++) buckets.push({ start: windowStart + i * bucketMs, count: 0, ok: 0, failed: 0, active: 0, stale: 0, cancelled: 0, other: 0 });
+@@ -1879,0 +1892,4 @@
++      else if (state === 'active') bucket.active++;
++      else if (state === 'stale') bucket.stale++;
++      else if (state === 'cancelled') bucket.cancelled++;
++      else bucket.other++;
+@@ -1890,3 +1906,2 @@
+-      const failedHeight = b.count ? (b.failed / b.count) * height : 0;
+-      const okHeight = Math.max(0, height - failedHeight);
+-      return { x: i * width, width, height, okHeight, failedHeight, count: b.count, start: b.start };
++      const segments = ['ok', 'failed', 'active', 'stale', 'cancelled', 'other'].map(kind => ({ kind, height: b.count ? (b[kind] / b.count) * height : 0 }));
++      return { x: i * width, width, height, segments, count: b.count, start: b.start };
+@@ -1901,2 +1916,6 @@
+-      if (bar.okHeight) parts.push('<rect class="trend-bar ok" x="' + x + '" y="' + (32 - bar.okHeight - bar.failedHeight).toFixed(2) + '" width="' + w + '" height="' + bar.okHeight.toFixed(2) + '"></rect>');
+-      if (bar.failedHeight) parts.push('<rect class="trend-bar bad" x="' + x + '" y="' + (32 - bar.failedHeight).toFixed(2) + '" width="' + w + '" height="' + bar.failedHeight.toFixed(2) + '"></rect>');
++      let y = 32 - bar.height;
++      for (const segment of bar.segments) {
++        if (!segment.height) continue;
++        parts.push('<rect class="trend-bar ' + segment.kind + '" x="' + x + '" y="' + y.toFixed(2) + '" width="' + w + '" height="' + segment.height.toFixed(2) + '"></rect>');
++        y += segment.height;
++      }
+@@ -1920 +1939 @@
+-      if (model.empty) bodyHtml = `<div class="empty-state compact-empty"><div class="empty-icon">≡</div><h3>${bt('tr_empty')}</h3><p>${bt('tr_empty_d', { n: num(model.retained), w: Math.round(model.bucketMs / 1000) })}</p></div>`;
++      if (model.empty) bodyHtml = `<div class="empty-state compact-empty"><div class="empty-icon">≡</div><h3>${bt('tr_empty')}</h3><p>${bt('tr_empty_d', { n: num(model.retained), w: Math.round((model.windowEnd - model.windowStart) / 1000) })}</p></div>`;
+@@ -1922,2 +1941,3 @@
+-        const ok = model.buckets.reduce((sum, b) => sum + b.ok, 0), failed = model.buckets.reduce((sum, b) => sum + b.failed, 0);
+-        bodyHtml = `<div class="trend-legend"><span><i class="trend-swatch ok" aria-hidden="true"></i>${bt('tr_ok')} ${num(ok)}</span><span><i class="trend-swatch bad" aria-hidden="true"></i>${bt('tr_failed')} ${num(failed)}</span><span>${bt('tr_total')} ${num(model.total)}</span><span class="muted">${bt('tr_peak')} ${num(model.max)}</span></div>${activityChartSvg(model, bt('tr_aria'))}<p class="muted">${bt('tr_caption', { b: Math.round(model.bucketMs / 1000), w: Math.round((model.bucketCount * model.bucketMs) / 60000), n: num(model.retained), s: num(model.skipped) })}</p>`;
++        const kinds = ['ok', 'failed', 'active', 'stale', 'cancelled', 'other'];
++        const counts = Object.fromEntries(kinds.map(kind => [kind, model.buckets.reduce((sum, b) => sum + b[kind], 0)]));
++        bodyHtml = `<div class="trend-legend">${kinds.map(kind => `<span><i class="trend-swatch ${kind}" aria-hidden="true"></i>${bt('tr_' + kind)} ${num(counts[kind])}</span>`).join('')}<span>${bt('tr_total')} ${num(model.total)}</span><span class="muted">${bt('tr_peak')} ${num(model.max)}</span></div>${activityChartSvg(model, bt('tr_aria') + ': ' + kinds.map(kind => bt('tr_' + kind) + ' ' + num(counts[kind])).join(', '))}<p class="muted">${bt('tr_caption', { b: Math.round(model.bucketMs / 1000), w: Math.round((model.bucketCount * model.bucketMs) / 60000), n: num(model.retained), s: num(model.skipped) })}</p>`;
+--- a/internal/httpapi/web/styles.css
++++ b/internal/httpapi/web/styles.css
+@@ -339 +339,5 @@
+-.trend-swatch.bad{background:var(--bad)}
++.trend-swatch.failed{background:var(--bad)}
++.trend-swatch.active{background:var(--info)}
++.trend-swatch.stale{background:var(--warn)}
++.trend-swatch.cancelled{background:var(--muted)}
++.trend-swatch.other{background:var(--violet)}
+@@ -344 +348,5 @@
+-.trend-bar.bad{fill:var(--bad);opacity:.9}
++.trend-bar.failed{fill:var(--bad);opacity:.9}
++.trend-bar.active{fill:var(--info)}
++.trend-bar.stale{fill:var(--warn)}
++.trend-bar.cancelled{fill:var(--muted)}
++.trend-bar.other{fill:var(--violet)}
+--- a/internal/httpapi/activity_chart_test.go
++++ b/internal/httpapi/activity_chart_test.go
+@@ -67 +67 @@
+-ok(m.windowStart <= now && now < m.windowEnd, 'the window contains now');
++ok(m.windowStart <= now && now === m.windowEnd, 'the window contains now');
+@@ -84,2 +84,2 @@
+-eq(m.buckets[8].count, 2, 'both starts land in the bucket they belong to');
+-eq(activityChartBars(m)[8].count, 2, 'geometry agrees with the model');
++eq(m.buckets[9].count, 2, 'both starts land in the bucket they belong to');
++eq(activityChartBars(m)[9].count, 2, 'geometry agrees with the model');
+@@ -87 +87 @@
+-eq(activityChartBars(m)[8].height, 30, 'the peak bucket fills the geometry');
++eq(activityChartBars(m)[9].height, 30, 'the peak bucket fills the geometry');
+@@ -90,0 +91,14 @@
++
++// Every lifecycle state is accounted for, including cancelled and unknown.
++const lifecycle = activityChartModel(['succeeded', 'failed', 'active', 'stale', 'cancelled', 'unknown'].map(state => ({started_at: new Date(now - 1).toISOString(), state})), now, opts);
++const last = lifecycle.buckets[9];
++eq([last.ok,last.failed,last.active,last.stale,last.cancelled,last.other], [1,1,1,1,1,1], 'states retain their identity');
++eq(last.ok+last.failed+last.active+last.stale+last.cancelled+last.other, last.count, 'status counts reconcile');
++const lifeBar = activityChartBars(lifecycle)[9];
++for (const segment of lifeBar.segments) eq(segment.height, 5, 'each of six equal statuses receives exactly one sixth');
++const lifeSvg = activityChartSvg(lifecycle, 'states');
++for (const kind of ['ok','failed','active','stale','cancelled','other']) ok(lifeSvg.includes('class="trend-bar '+kind+'"'), 'renders '+kind);
++const offBoundary = activityChartModel([], now + 12345, opts);
++eq(offBoundary.windowEnd, now + 12345, 'window ends at observation time inside bucket');
++eq(offBoundary.windowStart, now + 12345 - 300000, 'window has 300 seconds of history');
++eq(m.windowEnd, now, 'window ends at exact boundary');
+@@ -96,0 +111,2 @@
++  { started_at: new Date(m.windowEnd).toISOString(), state: 'active' },
++  { started_at: new Date(m.windowEnd + 1).toISOString(), state: 'failed' },
+@@ -100 +116 @@
+-eq(edges.skipped, 1, 'a record one millisecond before the window is skipped');
++eq(edges.skipped, 3, 'before-start, end and future records are skipped');
+@@ -112 +128 @@
+-ok(/class="trend-bar ok"/.test(svg) && /class="trend-bar bad"/.test(svg), 'succeeded and failed portions are visually distinct');
++ok(/class="trend-bar ok"/.test(svg) && /class="trend-bar failed"/.test(svg), 'succeeded and failed portions are visually distinct');
+@@ -150,0 +167 @@
++		"w: Math.round((model.windowEnd - model.windowStart) / 1000)",
+--- a/internal/httpapi/request_body_bounds_test.go
++++ b/internal/httpapi/request_body_bounds_test.go
+@@ -3,0 +4,4 @@
++	"fmt"
++	"go/ast"
++	"go/parser"
++	"go/token"
+@@ -6 +9,0 @@
+-	"regexp"
+@@ -11,15 +14,108 @@
+-// TestAdminRequestBodyReadsAreBounded is a static contract on the handler
+-// package: every read of an inbound request body must be bounded. An unbounded
+-// read lets a client decide how much memory a handler allocates, and this
+-// package already bounds ~15 call sites at 4 KiB–1 MiB — a single unbounded
+-// outlier is invisible in review, which is exactly how one regressed (the
+-// autopilot action handler decoded r.Body with no limit).
+-//
+-// Two bounded forms are accepted:
+-//
+-//  1. an inline bound on the same line — http.MaxBytesReader(w, r.Body, n) or
+-//     io.LimitReader(r.Body, n);
+-//  2. a bound assigned to r.Body shortly before the read, as
+-//     admin_nexaflow_task8.go does (r.Body = http.MaxBytesReader(...)).
+-//
+-// Any other read of r.Body that decodes or copies it fails the test.
++// bodyReadFindings checks direct json.NewDecoder and io.ReadAll uses of
++// r.Body. It accepts a bound wrapped around that body, or an unconditional
++// top-level body assignment earlier in the same function with no intervening
++// reassignment. This is deliberately conservative, not general taint analysis:
++// aliases, other APIs and interprocedural flows still require review.
++func bodyReadFindings(name string, src []byte) (int, []string, error) {
++	fset := token.NewFileSet()
++	f, err := parser.ParseFile(fset, name, src, 0)
++	if err != nil {
++		return 0, nil, err
++	}
++	isBody := func(e ast.Expr) bool {
++		s, ok := e.(*ast.SelectorExpr)
++		if !ok || s.Sel.Name != "Body" {
++			return false
++		}
++		id, ok := s.X.(*ast.Ident)
++		return ok && id.Name == "r"
++	}
++	isBound := func(e ast.Expr) bool {
++		c, ok := e.(*ast.CallExpr)
++		if !ok {
++			return false
++		}
++		s, ok := c.Fun.(*ast.SelectorExpr)
++		if !ok {
++			return false
++		}
++		id, ok := s.X.(*ast.Ident)
++		if !ok {
++			return false
++		}
++		return (id.Name == "http" && s.Sel.Name == "MaxBytesReader" && len(c.Args) == 3 && isBody(c.Args[1])) ||
++			(id.Name == "io" && s.Sel.Name == "LimitReader" && len(c.Args) == 2 && isBody(c.Args[0]))
++	}
++	checked := 0
++	var findings []string
++	for _, decl := range f.Decls {
++		fn, ok := decl.(*ast.FuncDecl)
++		if !ok || fn.Body == nil {
++			continue
++		}
++		// Only an assignment that is a direct statement of the function body
++		// is definitely reached on every path to a later top-level statement.
++		var topBounds []token.Pos
++		for _, stmt := range fn.Body.List {
++			a, ok := stmt.(*ast.AssignStmt)
++			if !ok || len(a.Lhs) != 1 || len(a.Rhs) != 1 {
++				continue
++			}
++			if isBody(a.Lhs[0]) && isBound(a.Rhs[0]) {
++				topBounds = append(topBounds, a.End())
++			}
++		}
++		var writes []token.Pos
++		ast.Inspect(fn.Body, func(n ast.Node) bool {
++			a, ok := n.(*ast.AssignStmt)
++			if ok {
++				for _, e := range a.Lhs {
++					if isBody(e) {
++						writes = append(writes, a.Pos())
++					}
++				}
++			}
++			return true
++		})
++		ast.Inspect(fn.Body, func(n ast.Node) bool {
++			c, ok := n.(*ast.CallExpr)
++			if !ok || len(c.Args) == 0 {
++				return true
++			}
++			s, ok := c.Fun.(*ast.SelectorExpr)
++			if !ok {
++				return true
++			}
++			id, ok := s.X.(*ast.Ident)
++			if !ok || !((id.Name == "json" && s.Sel.Name == "NewDecoder") || (id.Name == "io" && s.Sel.Name == "ReadAll")) {
++				return true
++			}
++			arg := c.Args[0]
++			if isBound(arg) {
++				checked++
++				return true
++			}
++			if !isBody(arg) {
++				return true
++			}
++			checked++
++			bound := token.NoPos
++			for _, p := range topBounds {
++				if p < c.Pos() && p > bound {
++					bound = p
++				}
++			}
++			for _, p := range writes {
++				if p > bound && p < c.Pos() {
++					bound = token.NoPos
++				}
++			}
++			if bound == token.NoPos {
++				findings = append(findings, fmt.Sprintf("%s: unbounded r.Body read", fset.Position(c.Pos())))
++			}
++			return true
++		})
++	}
++	return checked, findings, nil
++}
++
+@@ -27,4 +122,0 @@
+-	readRe := regexp.MustCompile(`(Decode|ReadAll)\([^)]*r\.Body`)
+-	inlineRe := regexp.MustCompile(`MaxBytesReader|LimitReader`)
+-	assignRe := regexp.MustCompile(`r\.Body\s*=\s*.+(MaxBytesReader|LimitReader)`)
+-
+@@ -35 +127 @@
+-	checked, bounded := 0, 0
++	checked := 0
+@@ -42 +134 @@
+-			t.Fatalf("read %s: %v", name, err)
++			t.Fatal(err)
+@@ -44,30 +136,7 @@
+-		lines := strings.Split(string(src), "\n")
+-		for i, line := range lines {
+-			if strings.HasPrefix(strings.TrimSpace(line), "//") {
+-				continue
+-			}
+-			if !readRe.MatchString(line) {
+-				continue
+-			}
+-			checked++
+-			if inlineRe.MatchString(line) {
+-				bounded++
+-				continue
+-			}
+-			// Look back for a bound assigned to r.Body directly before this
+-			// read (same function, at most 8 lines up).
+-			ok := false
+-			for j := i - 1; j >= 0 && j >= i-8; j-- {
+-				if assignRe.MatchString(lines[j]) {
+-					ok = true
+-					break
+-				}
+-				if strings.Contains(lines[j], "func ") {
+-					break
+-				}
+-			}
+-			if ok {
+-				bounded++
+-				continue
+-			}
+-			t.Errorf("%s:%d reads r.Body without a bound: %s", name, i+1, strings.TrimSpace(line))
++		n, findings, err := bodyReadFindings(name, src)
++		if err != nil {
++			t.Fatal(err)
++		}
++		checked += n
++		for _, finding := range findings {
++			t.Error(finding)
+@@ -76,4 +145,4 @@
+-	// Sanity floor: the package has nine bounded read sites today. A much
+-	// lower number means the pattern drifted and the scan is checking nothing.
+-	if checked < 5 {
+-		t.Fatalf("only %d r.Body reads found — the scan is broken, not the code", checked)
++	// The package currently has at least 14 direct bounded reads; a smaller
++	// count means the scanner or source inventory changed and needs review.
++	if checked < 14 {
++		t.Fatalf("only %d direct body reads found; expected at least 14", checked)
+@@ -81,2 +150,15 @@
+-	if bounded != checked {
+-		t.Fatalf("bounded reads %d of %d — every body read must be bounded", bounded, checked)
++	t.Logf("checked %d direct body reads", checked)
++}
++
++func TestBodyReadFindingsRedGreen(t *testing.T) {
++	cases := []struct {
++		name, code string
++		want       int
++	}{
++		{"bare-chain", `json.NewDecoder(r.Body).Decode(&x)`, 1},
++		{"bare-decoder", `dec := json.NewDecoder(r.Body); _ = dec`, 1},
++		{"bare-readall", `io.ReadAll(r.Body)`, 1},
++		{"inline", `json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&x)`, 0},
++		{"bounded-assignment", `r.Body = http.MaxBytesReader(w, r.Body, 4096); io.ReadAll(r.Body)`, 0},
++		{"conditional-assignment", `if ok { r.Body = http.MaxBytesReader(w, r.Body, 4096) }; io.ReadAll(r.Body)`, 1},
++		{"reassignment", `r.Body = http.MaxBytesReader(w, r.Body, 4096); r.Body = other; io.ReadAll(r.Body)`, 1},
+@@ -84 +166,12 @@
+-	t.Logf("bounded request-body reads: %d", bounded)
++	for _, tc := range cases {
++		t.Run(tc.name, func(t *testing.T) {
++			src := []byte("package p\nfunc f() { " + tc.code + " }")
++			n, found, err := bodyReadFindings(tc.name, src)
++			if err != nil {
++				t.Fatal(err)
++			}
++			if n != 1 || len(found) != tc.want {
++				t.Fatalf("checked=%d findings=%v, want 1 and %d", n, found, tc.want)
++			}
++		})
++	}
+--- a/docs/COMPONENTS.md
++++ b/docs/COMPONENTS.md
+@@ -25 +25 @@
+-| Throughput chart | `.trend-panel`, `.trend-svg`, `.trend-bar` (`.ok` / `.bad`), `.trend-legend`, `.trend-swatch`, `.trend-skeleton` | loading skeleton · empty · permission-denied · error + retry · populated | The Overview throughput panel. Bars are counts of real lifecycle records in a 0..100 x 0..32 viewBox, coloured only by tokens; succeeded and failed segments stack in one bar. Built by `activityChartModel`/`activityChartSvg` (pure, node-executed by `activity_chart_test.go`) — no simulated or smoothed series exists. |
++| Throughput chart | `.trend-panel`, `.trend-svg`, `.trend-bar` (lifecycle-state classes), `.trend-legend`, `.trend-swatch`, `.trend-skeleton` | loading skeleton · empty · permission-denied · error + retry · populated | The Overview throughput panel. Bars are counts of real lifecycle records in a 0..100 x 0..32 viewBox, coloured only by tokens; succeeded, failed, active, stale, cancelled and other segments stack in one bar. Built by `activityChartModel`/`activityChartSvg` (pure, node-executed by `activity_chart_test.go`) — no simulated or smoothed series exists. |
