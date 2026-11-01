@@ -39,8 +39,8 @@ HTTP 403: Resource not accessible by integration
 ```
 
 All seven acceptance workflows are `workflow_dispatch`-only, and the GitHub App
-acting on this repository has read-only Actions permission. **Every issue that
-only needs a rerun is stuck behind this one permission.**
+acting on this repository has read-only Actions permission. This blocks agent-initiated workflow dispatch; real systems, credentials and
+independent review are separate requirements.
 
 The permission is also why `.github/workflows/*` cannot be edited (a push that
 touches a workflow file is refused without the `workflows` permission), so no
@@ -122,42 +122,28 @@ Then re-read the gate for the exact SHA:
 bash scripts/release-gate-status.sh "$CANDIDATE_SHA" --rc --soak-summary /path/to/downloaded/summary.json
 ```
 
-## 5. The only supported release path: complete every blocker
+## 5. v0.25.0: completion only
 
-There is exactly one supported path to a stable release: **complete every
-required acceptance scope**.
+The owner selected **complete every required scope** for v0.25.0. No signed or
+unsigned exclusion may waive an open, `not_planned` or otherwise incomplete
+blocker. The generic version-scoped exclusion mechanism from #822 remains in
+place for other releases; it is not authorization to use exclusions here.
+The historical v0.25.0 manifest remains unsigned and non-empty, so the strict
+gate rejects it. An owner-reviewed release preparation must remove it or make
+its `exclusions` array empty; that alone never supplies acceptance evidence.
 
-1. Finish the repository-local implementation and tests for each blocker.
-2. Run its authorized acceptance workflow against the required real system.
-3. Attach sanitized evidence to the corresponding issue. Include the exact
-   tested SHA, workflow/run URL, artifact identifiers, acceptance results,
-   and measured values where applicable.
-4. Have a reviewer verify that the evidence satisfies the issue's complete
-   acceptance criteria.
-5. Close the issue with `state_reason=completed` only after that review.
-6. Repeat for every required issue #646–#653.
-7. Close umbrella issue #654 last, after the full readiness review.
-8. Run the full release-candidate gate on the exact candidate SHA. Publish only
-   after every mandatory check and external acceptance requirement passes and
-   the repository owner authorizes publication.
-
-Closing an issue as `not_planned`, `duplicate`, with a missing reason, or by
-any other non-completed state is **not** a release completion. It will fail the
-gate even if the issue has extensive comments or a previously approved
-exclusion entry.
-
-The release workflow re-runs `check-final-release-gate.sh` on the tag commit.
-Only after the gate and all other release checks pass should the owner create
-and push the release tag and publish the release.
+Run each real authorized acceptance and attach sanitized evidence, then close
+#646–#653 as completed only after independent review; close #654 last. Record
+exact-SHA metadata as described in [RELEASE_GATE.md](RELEASE_GATE.md). Review
+actual artifact contents and topology independently. The gate checks metadata,
+not the truth or completeness of external acceptance.
 
 ## 6. What this gate will never do
 
-- It will never accept an open, reopened, or not-planned required issue.
-- It will never accept a missing, null, or unknown issue state reason.
-- It will never accept a version-scoped exclusion, waiver, or owner-approved
-  manifest as a substitute for actual completion.
-- It will reject any `docs/releases/*-exclusions.json` file.
-- It will never convert fixture, runner-local, or simulated evidence into
-  external acceptance.
-- It will never close issues, approve policy exceptions, or publish a release
-  automatically.
+- It will not accept an open blocker, with or without an exclusion.
+- It will not read an exclusion written for a different version.
+- It will not accept an exclusion with no reason, no approver, or no date.
+- It will not accept an exclusion for an issue that is not a release blocker
+  (typo guard), so the manifest can never quietly widen the scope.
+- For other versions, an unused manifest does not fail an otherwise clean release.
+  For v0.25.0 any nonempty or malformed manifest fails, even when all issues are closed.

@@ -1383,23 +1383,13 @@ release gate is **NOT satisfied**: #646–#653 and #654 stay open, no acceptance
 workflow has executed on `436c4e9` (or on any SHA after `89b608dd`'s failed
 live run), and no tag or release exists.
 
+## v0.25.0 policy decision — 2026-11-01
 
-## Release policy correction — strict completion only (PR #824 follow-up)
-
-This follow-up removes the version-scoped exclusion mechanism that PR #822
-introduced into the v0.25.0 release gate. The historical entries above that
-describe the old exclusion policy remain historical records; they do not
-describe the intended policy after this follow-up is merged.
-
-The updated candidate requires every issue #646–#654 to be
-`state=closed` with `state_reason=completed`. `not_planned`, missing or
-unknown state reasons, and any `docs/releases/*-exclusions.json` manifest
-are rejected. The v0.25.0 exclusion manifest is deleted in this follow-up.
-Issue closure still requires genuine acceptance evidence reviewed against
-the issue's criteria; the gate's state check alone does not authenticate
-that evidence.
-
-**Activation boundary:** this policy change is on the #824 working branch.
-It does not change `main` until PR #824 (or a successor containing this
-change) is reviewed and merged. Do not claim this stricter policy is active
-on `main` before that merge.
+The owner selected completion-only for v0.25.0: no exclusion waives any
+#646–#654 acceptance. The #822 version-scoped mechanism is retained for other
+versions. The historical unsigned v0.25.0 manifest is not approval and blocks
+the strict gate until empty or removed in reviewed release preparation.
+Candidate evidence metadata is checked as described in RELEASE_GATE.md, but
+its provenance metadata cannot establish that the report contents genuinely
+satisfy acceptance; independent review remains required. This policy is on
+the working branch and is not active on main until an authorized merge.
