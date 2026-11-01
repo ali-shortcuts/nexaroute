@@ -1158,8 +1158,13 @@ multi-host acceptance, and no issue state was changed.
 | Security | [41313911924](https://github.com/ali-shortcuts/nexaroute/actions/runs/41313911924) | **PASS** — `CodeQL (Go)`, `Go vulnerability scan` |
 | Browser evidence | [41313911926](https://github.com/ali-shortcuts/nexaroute/actions/runs/41313911926) | **PASS** |
 | Propose browser evidence fixtures | [41314088417](https://github.com/ali-shortcuts/nexaroute/actions/runs/41314088417) | PASS |
-| CI | [41313911860](https://github.com/ali-shortcuts/nexaroute/actions/runs/41313911860) | in progress at the time of this record — no conclusion is claimed |
-| Coverage report | [41313911888](https://github.com/ali-shortcuts/nexaroute/actions/runs/41313911888) | in progress at the time of this record — no conclusion is claimed |
+| CI | [41313911860](https://github.com/ali-shortcuts/nexaroute/actions/runs/41313911860) | **PASS** — jobs `verify`, `container`, `fuzz-smoke`, `integration-postgres`, `integration-redis`, `ci-soak-smoke` all success |
+| Coverage report | [41313911888](https://github.com/ali-shortcuts/nexaroute/actions/runs/41313911888) | **PASS** — `Fresh Go coverage`, 95.0 % fail-closed gate; artifact `coverage-b1eebc10…-41313911888` (266,242 B, id 13086805469) |
+
+The covered/total statement counts in that artifact are not readable from this
+environment, so only the gate verdict is recorded for `b1eebc10`; the exact
+counts must be read from artifact id 13086805469 before any release note quotes
+them.
 
 - Open PR: #821 — the owner-review follow-up to #820 §5, keeping the shared
   upstream fixture's exhaustion path off the worker goroutine
