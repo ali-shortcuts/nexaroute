@@ -12,10 +12,10 @@ work="$tmp/work"
 cat > "$tmp/bin/gh" <<'GH'
 #!/usr/bin/env bash
 set -euo pipefail
-[[ "\${1:-}" == "api" && -n "\${2:-}" ]] || exit 90
-issue="\${2##*/}"
-mode="\${FAKE_GH_MODE:-pass}"
-case "\${mode}:\${issue}" in
+[[ "${1:-}" == "api" && -n "${2:-}" ]] || exit 90
+issue="${2##*/}"
+mode="${FAKE_GH_MODE:-pass}"
+case "${mode}:${issue}" in
   api-error:650)
     echo "simulated GitHub API failure" >&2
     exit 1
@@ -60,7 +60,7 @@ fi
 cat > "$tmp/bin/jq" <<'JQ'
 #!/usr/bin/env bash
 set -euo pipefail
-if [[ "\${FAKE_JQ_MODE:-}" == "partial-output-then-fail" ]]; then
+if [[ "${FAKE_JQ_MODE:-}" == "partial-output-then-fail" ]]; then
   printf 'closed\tcompleted\n'
   exit 42
 fi
