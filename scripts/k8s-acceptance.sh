@@ -456,7 +456,8 @@ PYEOF
 # object disappears before a complete terminal snapshot is observed, fail
 # closed rather than substituting client-side kubectl latency for evidence.
 wait_for_pod_termination() {
-  local pod_name="$1" timeout_s="$2" deadline=$(( $(date +%s) + timeout_s ))
+  local pod_name="$1" timeout_s="$2"
+  local deadline=$(( $(date +%s) + timeout_s ))
   local snapshot="$OUT_DIR/termination-${pod_name}.json" measured=""
   while [[ $(date +%s) -lt $deadline ]]; do
     if ! kubectl_ns get pod "$pod_name" -o json >"$snapshot" 2>/dev/null; then
@@ -1538,6 +1539,27 @@ PYEOF
     ok "self-test: termination time uses deletion grace metadata and all containers' finishedAt, failing closed on incomplete evidence"
   else
     fail "self-test: pod termination timing regression cases failed"
+  fi
+
+  # 13. The wait helper must initialize its timeout before computing its deadline.
+  # Exercise the real function with a deterministic kubectl response under set -u.
+  local wait_timeout_ms=""
+  mkdir -p "$tmp/termination-bin" "$tmp/termination-output"
+  cat > "$tmp/termination-bin/kubectl" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+cat "$SELFTEST_POD_JSON"
+SH
+  chmod +x "$tmp/termination-bin/kubectl"
+  if wait_timeout_ms="$(PATH="$tmp/termination-bin:/bin:/usr/bin" \
+      SELFTEST_POD_JSON="$tmp/termination/within.json" \
+      OUT_DIR="$tmp/termination-output" \
+      NAMESPACE="nexaroute-accept" \
+      wait_for_pod_termination "selftest" 5 2>"$tmp/termination-wait.stderr")" \
+      && [[ "$wait_timeout_ms" == "36000" ]]; then
+    ok "self-test: pod termination wait honors its timeout under set -u"
+  else
+    fail "self-test: pod termination wait failed with an explicit timeout (see $tmp/termination-wait.stderr)"
   fi
 }
 
