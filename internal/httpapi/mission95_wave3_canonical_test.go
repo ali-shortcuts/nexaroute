@@ -374,7 +374,7 @@ func TestWave3AnthropicTransportFailover(t *testing.T) {
 	var goodCalls atomic.Int32
 	foreign := &upstreamAttribution{}
 	marker := fixtureMarker("anthropic-transport-failover")
-	good := markerCountingServer(t, http.StatusOK, wave3AnthropicOK, marker, &goodCalls, foreign, deadURL)
+	good := mustMarkerCountingServer(t, http.StatusOK, wave3AnthropicOK, marker, &goodCalls, foreign, deadURL)
 	defer good.Close()
 	s := wave3Gateway(t, []config.ProviderConfig{
 		wave3Provider("a", "anthropic_compatible", deadURL, "m", "upstream-model", []string{"cm"}),
@@ -801,7 +801,7 @@ func TestWave3ResponsesTransportFailover(t *testing.T) {
 	var goodCalls atomic.Int32
 	foreign := &upstreamAttribution{}
 	marker := fixtureMarker("responses-transport-failover")
-	good := markerCountingServer(t, http.StatusOK, wave3ChatOK, marker, &goodCalls, foreign, deadURL)
+	good := mustMarkerCountingServer(t, http.StatusOK, wave3ChatOK, marker, &goodCalls, foreign, deadURL)
 	defer good.Close()
 	s := wave3Gateway(t, []config.ProviderConfig{
 		wave3Provider("a", "openai_compatible", deadURL, "m", "upstream-model", []string{"cm"}),
@@ -1305,7 +1305,7 @@ func TestWave3OpenAITransportFailover(t *testing.T) {
 	var goodCalls atomic.Int32
 	foreign := &upstreamAttribution{}
 	marker := fixtureMarker("chat-transport-failover")
-	good := markerCountingServer(t, http.StatusOK, wave3ChatOK, marker, &goodCalls, foreign, deadURL)
+	good := mustMarkerCountingServer(t, http.StatusOK, wave3ChatOK, marker, &goodCalls, foreign, deadURL)
 	defer good.Close()
 	s := wave3Gateway(t, []config.ProviderConfig{
 		wave3Provider("a", "openai_compatible", deadURL, "m", "upstream-model", []string{"cm"}),

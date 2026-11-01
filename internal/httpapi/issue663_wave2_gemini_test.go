@@ -315,7 +315,7 @@ func TestWave2GeminiTransportFailover(t *testing.T) {
 	var goodCalls atomic.Int32
 	foreign := &upstreamAttribution{}
 	body, marker := wave2GeminiMarkedBody("transport-failover")
-	good := markerCountingServer(t, http.StatusOK, wave3ChatOK, marker, &goodCalls, foreign, deadURL)
+	good := mustMarkerCountingServer(t, http.StatusOK, wave3ChatOK, marker, &goodCalls, foreign, deadURL)
 	defer good.Close()
 	s := wave2GeminiServer(t, []config.ProviderConfig{deadCfg, wave2GeminiProvider("b", "openai_compatible", good.URL)}, nil)
 	rr := geminiPost(t, s, "http://gateway/v1beta/models/m:generateContent", body, "", "")
@@ -548,7 +548,7 @@ func TestWave2GeminiHTTPFailover(t *testing.T) {
 	var goodCalls atomic.Int32
 	foreign := &upstreamAttribution{}
 	body, marker := wave2GeminiMarkedBody("http-failover")
-	upB := markerCountingServer(t, http.StatusOK, wave3ChatOK, marker, &goodCalls, foreign)
+	upB := mustMarkerCountingServer(t, http.StatusOK, wave3ChatOK, marker, &goodCalls, foreign)
 	defer upB.Close()
 	s := wave2GeminiServer(t, []config.ProviderConfig{
 		wave2GeminiProvider("a", "openai_compatible", upA.URL),
@@ -634,7 +634,7 @@ func TestWave2GeminiUsageErrorFailover(t *testing.T) {
 	var goodCalls atomic.Int32
 	foreign := &upstreamAttribution{}
 	body, marker := wave2GeminiMarkedBody("usage-error-failover")
-	upB := markerCountingServer(t, http.StatusOK, wave3ChatOK, marker, &goodCalls, foreign)
+	upB := mustMarkerCountingServer(t, http.StatusOK, wave3ChatOK, marker, &goodCalls, foreign)
 	defer upB.Close()
 	s := wave2GeminiServer(t, []config.ProviderConfig{
 		wave2GeminiProvider("a", "openai_compatible", upA.URL),
