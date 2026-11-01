@@ -1876,7 +1876,12 @@
       const i = (state.wf.defs || []).findIndex(x => (x.id || x.ID) === e.def.id);
       if (i >= 0) state.wf.defs[i] = JSON.parse(snapshot);
       notice(e.dirty ? 'Draft saved; newer edits are still unsaved.' : 'Draft saved.');
-      if (state.page === 'workflows' && state.wf.editor === e) { $('#content').innerHTML = workflowsView(); bindWorkflows(); }
+      if (state.page === 'workflows' && state.wf.editor === e) {
+        // A response may arrive while an input has uncommitted keystrokes.
+        // Keep the DOM and focus intact; a redraw here would discard them.
+        const badge = document.getElementById('wf-dirty'); if (badge) badge.hidden = !e.dirty;
+        const validation = document.getElementById('wf-validation'); if (validation) validation.innerHTML = wfEditorValidationHTML();
+      }
     } catch (err) { notice(err.message, true); }
     finally { e.saving = false; }
   }

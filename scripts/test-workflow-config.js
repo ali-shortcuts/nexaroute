@@ -56,7 +56,9 @@ vm.runInContext(extract('async function wfEditorPublish(', 'function wfEditorRun
   const saving = context.wfEditorSave(); assert.equal(calls.length, 1);
   await context.wfEditorPublish(); assert.equal(calls.length, 1, 'in-flight save cannot publish');
   context.wfEditorSetConfig('name', 'string', { value: 'newer' });
+  content.innerHTML = 'in-progress input';
   release({}); await saving;
+  assert.equal(content.innerHTML, 'in-progress input', 'save completion must not replace the editor DOM');
   assert.equal(editor.dirty, true, 'edits during save remain dirty');
   assert.equal(state.wf.defs[0].nodes[0].config.name, 'example', 'list tracks submitted snapshot');
   const second = context.wfEditorSave(); release({}); await second; assert.equal(editor.dirty, false);
