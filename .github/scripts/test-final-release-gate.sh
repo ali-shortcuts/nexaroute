@@ -189,9 +189,21 @@ fi
 grep -q "the manifest is not used" "$tmp/unused.out" ||
   fails "unused-manifest note missing"
 
+# 3j. An OPEN blocker plus a present manifest must fail AND must not print the
+# "manifest is not used / every blocker closed with acceptance evidence" note,
+# which would contradict the ::error:: lines in the same log.
+if (cd "$work" && FAKE_GH_MODE=open bash "$gate" --version v9.9.9) > "$tmp/open-with-manifest.out" 2>&1; then
+  fails "gate accepted an OPEN blocker while a manifest was present"
+fi
+if grep -q "every blocker closed with acceptance evidence" "$tmp/open-with-manifest.out"; then
+  fails "open-blocker log claims every blocker closed with acceptance evidence"
+fi
+grep -q "Refusing to publish" "$tmp/open-with-manifest.out" ||
+  fails "open-blocker-with-manifest refusal line missing"
+
 if ((failures != 0)); then
   echo "FINAL RELEASE GATE TEST FAILED (${failures} case(s))" >&2
   exit 1
 fi
 
-echo "FINAL RELEASE GATE TEST PASS (success plus open, not_planned, API error, missing-reason, malformed, missing-state, empty-payload, null-state, 15 version-scoped exclusion-manifest cases, and the unused-manifest case)"
+echo "FINAL RELEASE GATE TEST PASS (success plus open, not_planned, API error, missing-reason, malformed, missing-state, empty-payload, null-state, 15 version-scoped exclusion-manifest cases, the unused-manifest case, and the open-blocker-with-manifest log)"
