@@ -107,8 +107,14 @@ func (s *Server) adminProviderPresets(w http.ResponseWriter, r *http.Request) {
 	// presets collection when no filters are supplied.
 	all := providers.Presets()
 	filtered := providers.FilterPresets(all, r.URL.Query().Get("q"), r.URL.Query().Get("category"))
+	// Profiles are the protocol-specific view of the same catalog
+	// (internal/providers/profiles.go): one provider brand may expose
+	// several profiles (chat, messages, responses) with different paths
+	// and evidence states. They are additive to the presets response so
+	// existing callers keep receiving exactly what they received before.
 	writeJSON(w, 200, map[string]any{
 		"presets":    filtered,
+		"profiles":   providers.Profiles(),
 		"categories": providers.PresetCategories(all),
 		"total":      len(all),
 	})
