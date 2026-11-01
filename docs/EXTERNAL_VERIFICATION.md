@@ -1133,6 +1133,85 @@ BLOCKED or NOT_RUN. The gate is therefore **NOT satisfied**: no tag was
 created, no release was published, no release gate or required check was
 altered, and no issue was closed or reopened.
 
+## Release-readiness recheck — 2026-11-01, main `b1eebc1` (current)
+
+This is the latest snapshot in this document. It supersedes every earlier
+statement that names an older commit as current main. It waives no gate,
+closes no issue, approves no release and transfers no result from an older
+SHA.
+
+### Repository state
+
+- Current main: `b1eebc105340a85b39d051510320bd06390737ce`, the merge commit of
+  PR #820 (test-only failover-attribution work plus the provider-profile and
+  documentation refresh that preceded it).
+- Open pull requests: **none** as of this recheck. PR #820 merged at
+  2026-11-01T13:59:30Z after all thirteen recorded checks passed on its head
+  `5eccfd0af44b02354036098428946bdc72d02526`. PR #814 was closed as superseded:
+  it carried no merge base with `main` and its entire content was already on
+  `main` verbatim.
+- Open issues: #646–#654 (nine). None was closed, reopened or relabelled by
+  this recheck.
+
+### Required checks on the exact SHA `b1eebc1`
+
+Read from the Checks API for that commit, not inferred from a run list:
+
+| Context | Conclusion |
+|---|---|
+| `verify` | success |
+| `container` | success |
+| `fuzz-smoke` | success |
+| `ci-soak-smoke` | success |
+| `integration-postgres` | success |
+| `integration-redis` | success |
+| `Go vulnerability scan` | success |
+| `CodeQL (Go)` | success |
+| `Fresh Go coverage` (95.0% inclusive gate) | success |
+| Real-system acceptance (`Two real Gateway processes against PostgreSQL`, `Real Secret Service Store/Load`) | success |
+
+These are the nine contexts enforced by ruleset `26200123`
+(`main-required-checks`) plus the real-system acceptance workflows. The
+covered/total statement counts inside the coverage artifact are not readable
+from this environment (`actions/*/logs` and artifact downloads redirect to
+hosts unreachable here), so this recheck records that the fail-closed 95.0%
+gate passed on `b1eebc1` and quotes no percentage.
+
+### Why no live acceptance could be dispatched from this environment
+
+`gh workflow run` against this repository returns `HTTP 403: Resource not
+accessible by integration`. The GitHub App operating this session has
+read-only Actions permission on the repository. Every acceptance workflow is
+`workflow_dispatch`-only (`k8s-live-acceptance`, `vault-runner-acceptance`,
+`oidc-runner-acceptance`, `ha-runner-acceptance`, `independent-environment`,
+`soak`, `conformance-live-canary`), so none of them can be started from here.
+Editing a workflow file to add a `push` trigger is also impossible: a push that
+touches `.github/workflows/*` is refused without the `workflows` permission.
+This is a tooling limitation of the session identity, not a property of the
+repository.
+
+The previous accepted batch (2026-11-01, 01:00Z–01:04Z) exists on `89b608dd`:
+`vault-runner-acceptance`, `oidc-runner-acceptance`, `ha-runner-acceptance`,
+`independent-environment` and `soak` all succeeded, and
+`k8s-live-acceptance` **failed** at `Run live acceptance`. None of those
+results binds to `b1eebc1`. The compare `89b608dd...b1eebc1` is 19 commits
+across 14 files and does contain production Go changes
+(`internal/providers/{presets,profiles,profiles_data}.go`,
+`internal/httpapi/admin.go`) plus the `scripts/k8s-acceptance.sh` and
+`scripts/key-provider-vault-kv.sh` changes, so the strict rule applies: the
+older PASS results are NOT transferred, and the older FAIL is not evidence
+about the current script.
+
+### Position of the release gate on `b1eebc1`
+
+`.github/scripts/check-final-release-gate.sh` still refuses: all nine blockers
+are open. A version-scoped exclusion path now exists
+(`docs/releases/v0.25.0-exclusions.json`, see `docs/RELEASE_GATE.md` and
+`docs/RELEASE_BLOCKERS.md`), but it is **unsigned and unused** in this
+recheck: no issue was closed, no exclusion was approved, no tag was created
+and no release was published. An open blocker cannot be excluded by design, so
+the gate's verdict on `b1eebc1` is unchanged: **NOT satisfied**.
+
 Never place credentials, access tokens or key bytes in issues, commits,
 artifacts or reports. Record secret variable names only.
 
