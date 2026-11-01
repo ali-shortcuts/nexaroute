@@ -39,3 +39,14 @@ Local checks in an extracted copy of that head:
 The overlapping release-gate tests and release documentation in #823 and #824
 still need manual reconciliation after the owner chooses an approved merge
 order. This patch neither performs that reconciliation nor authorizes a merge.
+
+## Integration on the separate #824 branch
+
+The #823 diff and this follow-up were applied and conflicts reconciled on the
+separate #824 working branch, not on #823. The chart tests were run locally
+against the integrated source using a temporary standalone Go test harness:
+PASS, and failed against the original #823 JavaScript. The standalone scanner
+tests also passed. A refresh error retry-loop fix and regression test were added
+to #824 after the patch was prepared, so they are not in the patch above.
+These local checks do not replace full CI, browser acceptance or owner review.
+The owner must coordinate any merge order; #823 remains held and unchanged.

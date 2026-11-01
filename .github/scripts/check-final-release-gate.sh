@@ -201,7 +201,11 @@ if ((${#needs_exclusion[@]} > 0)); then
       excluded_issues+=("#${issue}")
     done
   fi
-elif [[ -n "$exclusions_file" && -f "$exclusions_file" ]]; then
+elif ((failed == 0)) && [[ -n "$exclusions_file" && -f "$exclusions_file" ]]; then
+  # Only true when nothing failed: with an open blocker (or an unreadable API)
+  # the manifest is irrelevant, and claiming "every blocker closed with
+  # acceptance evidence" beside the ::error:: lines above would misreport the
+  # release state in the one log an operator is most likely to skim.
   echo "Note: ${exclusions_file} exists but every blocker closed with acceptance evidence; the manifest is not used."
 fi
 

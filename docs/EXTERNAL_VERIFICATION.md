@@ -979,10 +979,10 @@ The latest issue search still returns all nine issues #646–#654 as OPEN. The d
 
 Never place credentials, access tokens, master-key bytes, private prompts, or customer data in issues, commits, artifacts, or reports. Record secret variable names only.
 
-## Release-readiness recheck — 2026-11-01, main `5c3b5c4a` (current)
+## Release-readiness recheck — 2026-11-01, main `5c3b5c4a` (superseded by `436c4e9`)
 
-This is the current snapshot of this document. It supersedes every earlier
-statement in this file that identifies an older commit (`26ecd267`, `310000bc`,
+At that historical recheck, this snapshot superseded earlier
+statements in this file that identified an older commit (`26ecd267`, `310000bc`,
 `244df238`, `89b608dd`, `d54c36b6`, `2f638da`) as current main. Historical
 sections above are deliberately preserved with their original SHAs: evidence
 stays bound to the commit it was produced on and is never transferred forward.
@@ -1266,3 +1266,119 @@ percentage was not independently measured in this environment. The RC gate
 reports the real-system jobs, manual audit jobs, and long soak NOT_RUN on
 that SHA. No previous-SHA evidence is transferred. External acceptance remains
 blocked or not run; no exclusion has been approved or issue closed.
+
+## Historical repository audit and release-readiness recheck — 2026-11-01, main `436c4e9`
+
+At that recheck `main` was **`436c4e98618eed0c41e59059eae7eca5f05dd190`**, the merge commit
+of PR #822 (verified with `git ls-remote origin refs/heads/main`). The sections
+above record superseded SHAs and are kept unedited as history; no result below
+is transferred from any of them.
+
+### What changed since `b1eebc10`
+
+- PR #821 merged as part of `436c4e9`'s history (test-only: the shared upstream
+  fixture no longer calls `t.Fatalf` from worker goroutines).
+- PR #822 merged (release-readiness package: the version-scoped exclusion path in
+  `.github/scripts/check-final-release-gate.sh`, `docs/RELEASE_BLOCKERS.md`,
+  `docs/RELEASE_GATE.md`, `docs/releases/v0.25.0.md` and an unsigned exclusion
+  manifest).
+- **At that recheck no open pull requests remained.** #820, #821 and #822 were merged; #814 is
+  closed unmerged (its historical refresh sections live in this file).
+- Issues **#646–#653 and the umbrella #654 are all still OPEN** (9 open issues,
+  no others).
+
+### Post-merge gates on `436c4e9`
+
+| Workflow | Run | Result |
+|---|---|---|
+| CI | [41317289767](https://github.com/ali-shortcuts/nexaroute/actions/runs/41317289767) | **PASS** |
+| Coverage report | [41317289862](https://github.com/ali-shortcuts/nexaroute/actions/runs/41317289862) | **PASS** — `Fresh Go coverage`, 95.0 % inclusive fail-closed gate; artifact `coverage-436c4e9…-41317289862` (266,222 B, id **13088460086**) |
+| Security | [41317289831](https://github.com/ali-shortcuts/nexaroute/actions/runs/41317289831) | **PASS** |
+
+The coverage artifact's covered/total statement counts are **not readable from
+this environment** (the artifact body redirects to a storage host that is not
+reachable here). Artifact id 13088460086 is the authoritative record; the
+percentage must be read from it, or from the CI job log, before any release note
+quotes a number. No percentage is claimed in this section.
+
+### External acceptance — re-attempted, still BLOCKED
+
+Every opt-in workflow was dispatched again on 2026-11-01 against `436c4e9`. All
+of them failed identically, before any run was created:
+
+```
+could not create workflow dispatch event: HTTP 403: Resource not accessible by integration
+(https://api.github.com/repos/ali-shortcuts/nexaroute/actions/workflows/<id>/dispatches)
+```
+
+| Workflow | Dispatch result |
+|---|---|
+| `k8s-live-acceptance.yml` (#650) | **BLOCKED** — HTTP 403 |
+| `vault-runner-acceptance.yml` (#648/#649) | **BLOCKED** — HTTP 403 |
+| `oidc-runner-acceptance.yml` (#647) | **BLOCKED** — HTTP 403 |
+| `ha-runner-acceptance.yml` (#652) | **BLOCKED** — HTTP 403 |
+| `independent-environment.yml` (#653/#654) | **BLOCKED** — HTTP 403 |
+| `soak.yml` (#653) | **BLOCKED** — HTTP 403 |
+| `coverage-report.yml` (#653) | **BLOCKED** — HTTP 403 |
+| `conformance-live-canary.yml` (#646) | **BLOCKED** — HTTP 403 |
+| `real-system-acceptance.yml` | **BLOCKED** — HTTP 403 |
+| `quality-gate.yml`, `flake-hunt-acceptance.yml` | **BLOCKED** — HTTP 403 |
+
+`gh api …/actions/secrets` and `…/actions/variables` also return 403, so secret
+**names** cannot even be enumerated from this identity; the owner must confirm
+which references exist. Run logs and artifact bodies are unreachable, so no job
+log was inspected for these runs.
+
+### Runner-local harness results in this environment (evidence class: `runner-local`)
+
+| Command | Result |
+|---|---|
+| `python3 scripts/oidc-runner-acceptance.py --self-test` | **PASS** — workdir resolution + management-port readiness |
+| `bash scripts/test-vault-runner-acceptance.sh` | **PASS** — 5/5 incl. least-privilege policy audit (`create`, `lookup-self`, `revoke-self`) |
+| `python3 scripts/ha-two-host-acceptance.py --self-test` | **PASS** — `two_independent_hosts=NOT_MEASURED` |
+| `python3 scripts/test-check-soak-evidence.py` | **PASS** |
+| `bash .github/scripts/test-final-release-gate.sh` | **PASS** — success plus open, `not_planned`, API error, missing-reason, malformed, missing-state cases |
+| `bash scripts/test-release-gate-status.sh` | **PASS** — pass / one-failed / missing=NOT_RUN / running / api-error=BLOCKED / non-SHA refused |
+| `bash scripts/test-flake-hunt.sh` | **PASS** — 11 assertions |
+| `python3 scripts/test-check-integration-report.py` | **PASS** — 8 cases |
+| `bash scripts/test-generate-sbom.sh` | **PASS** (Syft tarball skipped: no network/cache) |
+| `bash scripts/check-ha-docs.sh` | **PASS** — HA documentation consistency |
+
+Environment limitations, stated so they are never mistaken for passes:
+
+- **No Go toolchain**: `scripts/test-coverage-gate.sh` fails locally at
+  `go tool cover` (`go: command not found`), so local coverage is NOT_MEASURED;
+  the CI gate above is the only coverage evidence.
+- **No helm/kubectl/kind/docker**: `scripts/k8s-acceptance.sh --self-test` and
+  `--offline-only` fail closed with `helm is required` (1 failure, 0 not_run).
+  That is a *local self-test failure*, never a live-cluster result.
+- **No browser / Playwright binding**: `scripts/test-browser-e2e.py`,
+  `test-browser-e2e-502.py` and `test-live-visual-agent.py` stop at
+  `ModuleNotFoundError: No module named 'playwright'`;
+  `test-browser-nexaflow-studio.py` self-skips. Browser evidence is **NOT_RUN**
+  here and must come from the `browser-evidence` workflow on the PR head.
+
+### Control-plane UI work proposed in that audit branch
+
+- The Overview page gained a **throughput panel** (`trendPanel()` in `web/app.js`)
+  drawn from the real `/admin/api/activity/requests` feed: one bar per time
+  bucket, lifecycle portions coloured by tokens, with loading, empty,
+  permission-denied and error states, plus a caption that names the source and
+  says the data is a bounded in-memory bus rather than a historical metrics
+  store. Nothing is simulated, smoothed or back-filled.
+- The model builder and SVG renderer are a dependency-free block executed
+  verbatim under node by `internal/httpapi/activity_chart_test.go`, which pins
+  window inclusivity, out-of-window skipping, unparsable timestamps, bucket
+  clamping, determinism, escaped accessible labels and the no-raw-colour rule.
+- Audit checks performed on the same pass (static, `runner-local`): every
+  `data-action` in `app.js`/`studio.js` resolves to a handler literal (0 dead
+  controls); every `/admin/api/...` path used by the UI resolves to a registered
+  route or a registered prefix; `node --check` passes on all three JS bundles;
+  and the body-copy dictionaries are at exact EN/FA/PS parity (594 keys each).
+
+### Verdict
+
+Nothing here is live, staging, multi-host or paid-provider acceptance. The
+release gate is **NOT satisfied**: #646–#653 and #654 stay open, no acceptance
+workflow has executed on `436c4e9` (or on any SHA after `89b608dd`'s failed
+live run), and no tag or release exists.
