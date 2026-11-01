@@ -22,6 +22,7 @@ global `prefers-reduced-motion` rule neutralizes animations.
 | Modal | `.modal`, `.modal-head`, `.modal-foot` | open / closed | **Decision:** the product's overlay pattern is the modal. No drawer component exists and none is planned; this catalog records that choice so it is not re-litigated per screen. |
 | Advanced section | `.advanced` | collapsed / expanded | Progressive disclosure for expert settings (#411 pattern). |
 | Empty state | `.empty-state` | — | Dashed border, centered, calm. Pairs with `.state-error` geometry. |
+| Throughput chart | `.trend-panel`, `.trend-svg`, `.trend-bar` (`.ok` / `.bad`), `.trend-legend`, `.trend-swatch`, `.trend-skeleton` | loading skeleton · empty · permission-denied · error + retry · populated | The Overview throughput panel. Bars are counts of real lifecycle records in a 0..100 x 0..32 viewBox, coloured only by tokens; succeeded and failed segments stack in one bar. Built by `activityChartModel`/`activityChartSvg` (pure, node-executed by `activity_chart_test.go`) — no simulated or smoothed series exists. |
 | Loading state | `.state-loading` | pulsing skeleton block | Token-colored (`--muted` wash), `state-pulse` keyframes; the global reduced-motion rule reduces it to a static block. |
 | Error state | `.state-error` | — | Same geometry as `.empty-state`, `--bad` dashed border + wash; for panel-level load failures, not form validation. |
 

@@ -325,3 +325,27 @@ html[data-theme=light] .route-banner-count { color: var(--violet-ink)!important;
 /* Editor validation panel (E3a). */
 .wf-good{color:var(--good);font-weight:700}
 .wf-err{color:var(--bad);font-size:12px}
+
+/* Overview throughput panel (#646-adjacent UI slice). The only chart in the
+   control plane: bars are a 1:1 count of lifecycle records the backend
+   reported. Geometry is drawn by app.js in a 0..100 x 0..32 viewBox, so every
+   measure here is in viewBox units; colours come from the token layer only
+   (contract-tested in design_system_tokens_test.go). */
+.trend-panel{display:grid;gap:14px}
+.trend-legend{display:flex;gap:16px;flex-wrap:wrap;align-items:center;color:var(--muted);font-size:12px}
+.trend-legend span{display:inline-flex;align-items:center;gap:7px}
+.trend-swatch{width:9px;height:9px;border-radius:3px;display:inline-block;background:var(--muted)}
+.trend-swatch.ok{background:var(--good)}
+.trend-swatch.bad{background:var(--bad)}
+.trend-svg{display:block;width:100%;height:120px;overflow:visible}
+.trend-axis{stroke:var(--border);stroke-width:1;vector-effect:non-scaling-stroke}
+.trend-bar{shape-rendering:geometricPrecision;transition:opacity var(--dur-fast) var(--ease-out)}
+.trend-bar.ok{fill:var(--good);opacity:.85}
+.trend-bar.bad{fill:var(--bad);opacity:.9}
+.trend-panel:hover .trend-bar.ok{opacity:1}
+.trend-skeleton{display:grid;grid-auto-flow:column;gap:6px;align-items:end;height:120px;padding-bottom:1px}
+.trend-skeleton i{display:block;border-radius:4px 4px 0 0;background:var(--surface-3);height:38%}
+.trend-skeleton i:nth-child(3n){height:62%}
+.trend-skeleton i:nth-child(3n+2){height:24%}
+.trend-skeleton i:nth-child(4n){height:78%}
+@media(max-width:700px){.trend-svg,.trend-skeleton{height:96px}}
