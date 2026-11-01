@@ -1940,7 +1940,8 @@
       else {
         const kinds = ['ok', 'failed', 'active', 'stale', 'cancelled', 'other'];
         const counts = Object.fromEntries(kinds.map(kind => [kind, model.buckets.reduce((sum, b) => sum + b[kind], 0)]));
-        bodyHtml = `<div class="trend-legend">${kinds.map(kind => `<span><i class="trend-swatch ${kind}" aria-hidden="true"></i>${bt('tr_' + kind)} ${num(counts[kind])}</span>`).join('')}<span>${bt('tr_total')} ${num(model.total)}</span><span class="muted">${bt('tr_peak')} ${num(model.max)}</span></div>${activityChartSvg(model, bt('tr_aria') + ': ' + kinds.map(kind => bt('tr_' + kind) + ' ' + num(counts[kind])).join(', '))}<p class="muted">${bt('tr_caption', { b: Math.round(model.bucketMs / 1000), w: Math.round((model.bucketCount * model.bucketMs) / 60000), n: num(model.retained), s: num(model.skipped) })}</p>`;
+        const labels = { ok: bt('tr_ok'), failed: bt('tr_failed'), active: bt('tr_active'), stale: bt('tr_stale'), cancelled: bt('tr_cancelled'), other: bt('tr_other') };
+        bodyHtml = `<div class="trend-legend">${kinds.map(kind => `<span><i class="trend-swatch ${kind}" aria-hidden="true"></i>${labels[kind]} ${num(counts[kind])}</span>`).join('')}<span>${bt('tr_total')} ${num(model.total)}</span><span class="muted">${bt('tr_peak')} ${num(model.max)}</span></div>${activityChartSvg(model, bt('tr_aria') + ': ' + kinds.map(kind => labels[kind] + ' ' + num(counts[kind])).join(', '))}<p class="muted">${bt('tr_caption', { b: Math.round(model.bucketMs / 1000), w: Math.round((model.bucketCount * model.bucketMs) / 60000), n: num(model.retained), s: num(model.skipped) })}</p>`;
       }
     }
     return `<section class="panel trend-panel">${head}${bodyHtml}</section>`;
