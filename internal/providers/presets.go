@@ -92,8 +92,9 @@ var presetList = []Preset{
 	// OpenCode upstream gateway (Console pay-as-you-go). Discovery is the
 	// documented GET /v1/models on the Console base; the three protocols
 	// are addressed by the /openai and /anthropic prefixed paths below.
-	// No Zen profile: no Zen URL appears in the documented Console/Go
-	// material, so none is shipped.
+	// OpenCode Zen is NOT a preset here: it lives in the Profile
+	// registry (profiles_data.go, base https://opencode.ai/zen/v1) as
+	// three protocol profiles, separate from Console and Go.
 	{ID: "opencode-console", Name: "OpenCode Console", Category: "Gateway", Type: "opencode-console",
 		BaseURL: "https://opencode.ai/inference", AuthMode: "bearer",
 		ChatPath: "/openai/v1/chat/completions", ResponsesPath: "/openai/v1/responses",
