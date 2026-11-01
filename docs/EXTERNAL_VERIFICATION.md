@@ -650,3 +650,172 @@ and does not make a release claim.
   resources for #646, #647 tenant, #648/#649 staging Vault,
   #651 ComfyUI, and #652 separate hosts; (5) a separate
   explicit release approval after all of the above.
+
+## Release-readiness recheck — 2026-11-01, main `26ecd267`
+
+Scope: this section records only what was revalidated on the exact current
+main tip and what could be executed from the agent environment. It closes no
+issue, produces no live-tenant, staging, multi-host or production evidence,
+and creates no tag or release.
+
+### Repository state at revalidation
+
+- Exact current `main` tip:
+  `26ecd267107a29d303a6834f5c35df9e0f47d063` (2026-11-01T11:21:12Z).
+  Verified against `git ls-remote` and the branches API — the previously
+  quoted merge commit was confirmed to still be the tip, not assumed.
+- PR #818 ("fix: preserve pod termination status during Kubernetes
+  acceptance", head `299c1464`, branch `fix/k8s-termination-finalizer-20261101`)
+  is MERGED: its merge commit is `26ecd267`. It adds the acceptance-only Pod
+  finalizer helper (`set_pod_termination_finalizer`,
+  `release_termination_observer`, `cleanup_live_cluster`) to
+  `scripts/k8s-acceptance.sh` so a Pod's terminal `finishedAt` cannot be
+  deleted before the runner reads it (+157/−13).
+- Open PRs at revalidation: #814 (docs refresh, head `c17bfb68`, red) and
+  #819 (the Gemini failover test-correction described below).
+- Issues #646–#653 are all OPEN (`state_reason=reopened`); umbrella #654 is
+  OPEN. No acceptance issue was closed or reopened by this run.
+
+### Workflow runs bound to the exact main SHA `26ecd267`
+
+| Workflow | Run | Conclusion | Readable evidence |
+|---|---|---|---|
+| CI | [41301515228](https://github.com/ali-shortcuts/nexaroute/actions/runs/41301515228) | success | jobs `verify`, `container`, `fuzz-smoke`, `integration-postgres`, `integration-redis`, `ci-soak-smoke` all success; artifacts `browser-acceptance-26ecd267…-41301515228-1` (5,707,135 B, id 13081752839), `ci-soak-smoke-26ecd267…-41301515228-1` (12,958 B, id 13081632227), two `dockerbuild` artifacts |
+| Coverage report | [41301515295](https://github.com/ali-shortcuts/nexaroute/actions/runs/41301515295) | success | job `Fresh Go coverage` success — the 95.0 % fail-closed gate (`scripts/coverage-gate.sh`) passed on this SHA; artifact `coverage-26ecd267107a29d303a6834f5c35df9e0f47d063-41301515295` (266,247 B, id 13081627549) |
+| Security | [41301515283](https://github.com/ali-shortcuts/nexaroute/actions/runs/41301515283) | success | jobs `CodeQL (Go)`, `Go vulnerability scan` success |
+
+**No acceptance workflow has run on the exact current main SHA.** The newest
+run of every opt-in acceptance workflow binds to `89b608dd` (merge of PR #813,
+2026-11-01T01:00Z), i.e. one merge-pair behind `26ecd267`:
+
+| Workflow | Latest run | SHA | Conclusion |
+|---|---|---|---|
+| Kubernetes live acceptance | [41259193878](https://github.com/ali-shortcuts/nexaroute/actions/runs/41259193878) | `89b608dd` | **FAILURE** (step `Run live acceptance`; artifact `k8s-live-acceptance-89b608dd…`, 35,406,057 B, id 13065160585) |
+| Vault runner acceptance | [41259249411](https://github.com/ali-shortcuts/nexaroute/actions/runs/41259249411) | `89b608dd` | success (artifact `vault-runner-reports-89b608dd…`, 2,852 B, id 13064312333) |
+| OIDC runner acceptance | [41259304417](https://github.com/ali-shortcuts/nexaroute/actions/runs/41259304417) | `89b608dd` | success (artifact `oidc-runner-reports-89b608dd…`, 1,291 B, id 13064865956) |
+| HA runner acceptance | [41259343096](https://github.com/ali-shortcuts/nexaroute/actions/runs/41259343096) | `89b608dd` | success (artifact `ha-runner-reports-89b608dd…`, 5,433 B, id 13064577122) |
+| Independent environment | [41259476813](https://github.com/ali-shortcuts/nexaroute/actions/runs/41259476813) | `89b608dd` | success, 11 jobs (artifact set 9 artifacts) |
+| Soak | [41259436004](https://github.com/ali-shortcuts/nexaroute/actions/runs/41259436004) | `89b608dd` | success, 2 h 04 m wall clock (artifact `soak-89b608dd…-41259436004-attempt-1`, 385,830 B, id 13068177643) |
+
+Evidence from those runs is **not** transferable to `26ecd267`: PRs #817 and
+#818 changed `scripts/k8s-acceptance.sh` after them, and #818 in particular
+changed the termination measurement those runs exercised.
+
+### Why no fresh acceptance run could be dispatched from this environment (BLOCKED — tooling)
+
+1. Workflow dispatch is not permitted to the installed GitHub App:
+   `gh workflow run "<name>" --ref main` returns
+   `HTTP 403: Resource not accessible by integration`
+   (`/repos/{owner}/{repo}/actions/workflows/{id}/dispatches`). This blocks
+   every opt-in workflow named in the task: Kubernetes live acceptance,
+   Vault runner acceptance, OIDC runner acceptance, HA runner acceptance,
+   Independent environment, Soak, and Coverage report.
+2. Adding a workflow file to run them another way is refused at push time:
+   `refusing to allow a GitHub App to create or update workflow
+   .github/workflows/… without workflows permission`.
+3. Run logs and artifact *contents* are not retrievable here: the
+   `actions/jobs/{id}/logs` and artifact download endpoints redirect to
+   `results-receiver.actions.githubusercontent.com`,
+   `*.blob.core.windows.net` and `objects.githubusercontent.com`, all of which
+   are unreachable from this sandbox. Readable evidence is therefore limited to
+   run/job conclusions, job step-level conclusions, artifact names/sizes, and
+   check-run annotations. Any check that requires reading log bodies or artifact
+   files is reported as **BLOCKED (evidence not readable)**, not as PASS.
+4. The environment has no Go toolchain and cannot obtain one (`go.dev`,
+   `dl.google.com`, `proxy.golang.org`, `storage.googleapis.com`,
+   `objects.githubusercontent.com` all unreachable; `apt` has no toolchain
+   policy), and no `docker`, `kind`, `kubectl` or `helm`. Local suite
+   execution, kind-cluster acceptance and a 2 h soak are impossible here; Go
+   changes were validated through PR CI on the exact PR head instead.
+
+### Acceptance matrix on `26ecd267` (no new live evidence produced)
+
+| Issue | Class of the newest available evidence | Verdict on `26ecd267` | Exact remaining prerequisite |
+|---|---|---|---|
+| #646 LLM provider canaries | fixture/loopback only | **BLOCKED** | Operator comment naming provider + endpoint + model/account + the env-var secret names that are already configured + an explicit per-provider spend ceiling. Zero paid calls were made; no provider is authorized. |
+| #647 Organizational OIDC | runner-local Keycloak (`89b608dd`) | **BLOCKED** for the real tenant; runner-local PASS is real but classed `runner-keycloak` | A disposable/staging organizational tenant: issuer URL, client ID/secret secret names, group→role mapping, and authorization to register the redirect URI |
+| #648 Vault KV (staging) | runner-local disposable Vault (`89b608dd`) | **BLOCKED** for staging | Staging Vault HTTPS address, KV v2 mount, a dedicated empty path, a least-privilege token injected by name (`VAULT_TOKEN`/`VAULT_TOKEN_FILE`), plus that instance's mount type/version confirmation |
+| #649 Vault Transit | runner-local + fake-API contract tests | **BLOCKED** for live Transit | Written authorization, an operator-owned disposable Transit instance, a dedicated key name, a policy granting exactly `encrypt`/`decrypt`/`rewrap` on it, and token injection by name |
+| #650 Kubernetes/Helm | last live run FAILED on `89b608dd`; `26ecd267` contains the #817+#818 script fixes, unvalidated live | **NOT_RUN** on `26ecd267` (dispatch blocked). No `RESULT:` line — zero mandatory failures and zero mandatory `NOT_RUN` checks are *not* established for the current tree | A dispatch of `k8s-live-acceptance.yml` (inputs `prev_tag=v0.24.0`) on `26ecd267`, with the artifact inspected for `RESULT:` = no failures and no NOT_RUN checks |
+| #651 ComfyUI real inference | fixtures + fail-closed loopback | **BLOCKED** | A reachable authorized ComfyUI server, a compatible real model + API workflow + node mapping, compute authorization, and an explicit no-download policy confirmation |
+| #652 Multi-host HA | runner containers on ONE host (`89b608dd`); the run's own notice reports `two_independent_hosts NOT_MEASURED` | **BLOCKED** for multi-host. Nine scenarios (S1–S9), `validation`, `redis-smoke` PASS on a single Docker host; this is `container-isolated-single-host` evidence and is **never** multi-host acceptance | Two independent hosts, shared PostgreSQL + Redis reachable from both, a load-balancer/VIP path, and measured failover RPO/RTO |
+| #653 Coverage + soak | coverage PASS on `26ecd267`; soak PASS only on `89b608dd` | Coverage **PASS** (95.0 % gate, exact SHA). Soak **NOT_RUN** on `26ecd267` | Dispatch `soak.yml` with `rounds=3`, `duration=2h`, `timeout_minutes>=150` on `26ecd267`, then confirm `check-soak-evidence.py` passed and read `summary.json` (exact SHA, `sustained_seconds>=7200`, all 7 fixed stages + 3 stress rounds, resource samples, NOT_RUN block). Soak badge alone is not evidence; the completeness gate is what makes it evidence |
+
+Coverage detail, stated exactly: run 41301515295 enforces
+`./scripts/coverage-gate.sh .artifacts/coverage/coverage.out 95.0` on a
+pinned Go `1.27.3` toolchain and concluded success on `26ecd267`, so the
+repository-wide total was ≥ 95.0 % inclusive. The exact
+covered/total statement counts and percentage in that artifact
+(`coverage-26ecd267…-41301515295`, id 13081627549) are **not readable from
+this environment**; they must not be quoted from an earlier SHA or from a
+local toolchain, because statement counts are toolchain-dependent.
+
+Soak detail, stated exactly: run 41259436004 ran the workflow's
+`Validate soak evidence completeness` step to success, which fails closed
+unless `summary.json` names the run's commit, contains every planned stage,
+reports `sustained_seconds` at least the requested duration, and carries the
+NOT_RUN block for live items. That gate passed for `89b608dd` with a
+2 h 04 m job wall clock; it proves nothing about `26ecd267`.
+
+### PR #814 — intermittent Gemini failover failure, diagnosis and correction
+
+PR #814 (docs-only, head `c17bfb68`) failed CI run
+[41301006743](https://github.com/ali-shortcuts/nexaroute/actions/runs/41301006743)
+with `TestWave2GeminiHTTPFailover: good candidate calls=2 want 1`
+(`internal/httpapi/issue663_wave2_gemini_test.go`).
+
+Diagnosis (from the code and from instrumented CI runs, not from the failing
+log alone, which is not readable here):
+
+- The Gemini ingress loop in `internal/httpapi/gemini.go` dispatches at most
+  one attempt per candidate (`for i := 0; i < len(candidates) && attempts < max; i++`),
+  there is no hedging on that path (`doAttemptWithHedge` is only used by the
+  Anthropic and OpenAI/Responses paths), no shadow/mirror dispatch, and
+  `doUpstreamWithRepair` returns immediately on a 2xx, so one request cannot
+  deterministically dispatch the same candidate twice.
+- The failing assertion passed the preceding 200/`ok` body check, and the
+  gateway's own attempt ledger for the request (`X-NexaRoute-Attempts`) reads
+  `a/m>b/m` — i.e. exactly one dispatch to the good candidate.
+- A temporary instrumented rebuild of the same scenario (recording method,
+  path, body digest and remote port of every request the "good" upstream
+  received) ran the scenario **156 times** (60 sequential + 96 concurrent
+  rounds) and observed `hits=1` with `attempts="a/m>b/m"` in every round; the
+  same suite also logs `httptest.Server blocked in Close ... connection in
+  state active`, i.e. lingering connections exist in this package.
+- Conclusion: this is **not a product routing defect and not an incorrect
+  expectation**. The bare call counter attributed *any* HTTP request delivered
+  to the loopback port to the request under test, so a stray request from a
+  lingering connection/goroutine reusing that ephemeral port broke the
+  assertion.
+
+Correction (PR #819, `internal/httpapi/issue663_wave2_gemini_test.go`): the
+three Gemini failover tests now use an upstream that counts only payloads
+carrying that request's unique prompt marker (a genuine double dispatch
+carries the marker and still fails), report unrelated arrivals through
+`t.Logf` instead of folding them into the count, and additionally assert the
+deterministic invariant `route_attempt events for b/m == 1` from the
+gateway's own event ledger, which no loopback-port reuse can perturb. The
+same latent exposure remains in `internal/httpapi/mission95_wave3_canonical_test.go`
+(three equivalent call-count assertions); it is recorded here as a follow-up,
+not silently changed.
+
+Validation of the correction: full CI, Security, Coverage and Real-system
+acceptance all green on PR #819 head `802f207` (CI run 41303283821: `verify`
+9 m 52 s, `container`, `fuzz-smoke`, `integration-postgres`,
+`integration-redis`, `ci-soak-smoke`; Coverage run 41303283719 `Fresh Go
+coverage`; Security run 41303283740 `CodeQL (Go)` + `Go vulnerability scan`;
+Real-system acceptance run 41303283770 two PostgreSQL-backed gateway
+processes + Secret Service Store/Load).
+
+PR #814 itself was not modified by this run: the branch
+(`docs/release-readiness-audit-20261031`) belongs to a different workflow and
+this environment is restricted to the session branch. It needs a rebase onto
+main after the test correction lands.
+
+### Release gate verdict on `26ecd267`
+
+`.github/scripts/check-final-release-gate.sh` still requires issues
+#646–#653 **and** #654 to be `closed` with `state_reason=completed`. All nine
+are open, and every external gate above is BLOCKED or NOT_RUN, so the gate is
+**not satisfied**. No tag was created, no release was published, no release
+gate or required check was altered, and no issue was closed.
