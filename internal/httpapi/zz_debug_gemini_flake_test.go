@@ -34,8 +34,8 @@ type debugUpstreamHit struct {
 }
 
 type debugHitLog struct {
-	mu   sync.Mutex
 	base time.Time
+	mu   sync.Mutex
 	hits []debugUpstreamHit
 }
 
@@ -89,9 +89,8 @@ func debugGeminiFailoverScenario(t *testing.T) (code int, events []string, hits 
 	}, nil)
 
 	rr := geminiPost(t, s, "http://gateway/v1beta/models/m:generateContent", wave2GeminiBody(), "", "")
-	// Let any still-running goroutine finish so a late request is captured,
-	// but keep the observation window tiny.
-	deadline := time.Now().Add(250 * time.Millisecond)
+	// Capture anything a lingering goroutine adds within a short window.
+	deadline := time.Now().Add(150 * time.Millisecond)
 	for time.Now().Before(deadline) && goodCalls.Load() < 2 {
 		time.Sleep(2 * time.Millisecond)
 	}
@@ -99,6 +98,22 @@ func debugGeminiFailoverScenario(t *testing.T) (code int, events []string, hits 
 		events = append(events, fmt.Sprintf("%s@%s", e.Kind, e.Deployment))
 	}
 	return rr.Code, events, log.snapshot(), rr.Header().Get("X-NexaRoute-Attempts")
+}
+
+func debugAnomalyLine(t *testing.T, label string, code int, events []string, hits []debugUpstreamHit, attempts string) string {
+	t.Helper()
+	parts := make([]string, 0, len(hits))
+	for i, h := range hits {
+		same := "first"
+		if i > 0 && h.Digest == hits[0].Digest {
+			same = "sameBody"
+		} else if i > 0 {
+			same = "otherBody"
+		}
+		parts = append(parts, fmt.Sprintf("{t=%dms %s %s sha=%s %s remote=%s}", h.At.Milliseconds(), h.Method, h.Path, h.Digest, same, h.Remote))
+	}
+	return fmt.Sprintf("%s code=%d hits=%d attempts=%q up=%s events=%s",
+		label, code, len(hits), attempts, strings.Join(parts, ","), strings.Join(events, ","))
 }
 
 func TestDebugGeminiFailoverFlakeProbe(t *testing.T) {
@@ -111,18 +126,49 @@ func TestDebugGeminiFailoverFlakeProbe(t *testing.T) {
 	var anomalies []string
 	for i := 0; i < iters; i++ {
 		code, events, hits, attempts := debugGeminiFailoverScenario(t)
-		if code == http.StatusOK && len(hits) == 1 {
+		if code == http.StatusOK && len(hits) == 1 && attempts == "2" {
 			continue
 		}
-		parts := make([]string, 0, len(hits))
-		for _, h := range hits {
-			parts = append(parts, fmt.Sprintf("{t=%dms %s %s sha=%s remote=%s body=%v}", h.At.Milliseconds(), h.Method, h.Path, h.Digest, h.Remote, h.HasBody))
+		anomalies = append(anomalies, debugAnomalyLine(t, fmt.Sprintf("iter=%d", i), code, events, hits, attempts))
+		if len(anomalies) >= 6 {
+			break
 		}
-		anomalies = append(anomalies, fmt.Sprintf("iter=%d code=%d hits=%d attempts=%q up=%s events=%s",
-			i, code, len(hits), attempts, strings.Join(parts, ","), strings.Join(events, ",")))
 	}
 	if len(anomalies) > 0 {
-		t.Fatalf("gemini failover anomalies in %d/%d iterations:\n%s", len(anomalies), iters, strings.Join(anomalies[:min(len(anomalies), 12)], "\n"))
+		t.Fatalf("failover anomalies in %d/%d iterations:\n%s", len(anomalies), iters, strings.Join(anomalies, "\n"))
 	}
 	t.Logf("no anomalies in %d iterations", iters)
+}
+
+// TestDebugGeminiFailoverConcurrentStress runs the same scenario from several
+// goroutines at once: several gateways and fake upstreams alive together, which
+// is the closest in-package analogue of the surrounding suite's goroutines.
+func TestDebugGeminiFailoverConcurrentStress(t *testing.T) {
+	const workers, rounds = 8, 12
+	var mu sync.Mutex
+	var anomalies []string
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func(w int) {
+			defer wg.Done()
+			for r := 0; r < rounds; r++ {
+				code, events, hits, attempts := debugGeminiFailoverScenario(t)
+				if code == http.StatusOK && len(hits) == 1 && attempts == "2" {
+					continue
+				}
+				line := debugAnomalyLine(t, fmt.Sprintf("w=%d r=%d", w, r), code, events, hits, attempts)
+				mu.Lock()
+				if len(anomalies) < 6 {
+					anomalies = append(anomalies, line)
+				}
+				mu.Unlock()
+			}
+		}(w)
+	}
+	wg.Wait()
+	if len(anomalies) > 0 {
+		t.Fatalf("concurrent failover anomalies in %d rounds:\n%s", workers*rounds, strings.Join(anomalies, "\n"))
+	}
+	t.Logf("no anomalies in %d concurrent rounds", workers*rounds)
 }
