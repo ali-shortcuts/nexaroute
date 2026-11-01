@@ -146,6 +146,14 @@ refuse_manifest "whitespace-approved-by" \
   '{"release":"v9.9.9","exclusions":[{"issue":649,"reason":"r","approved_by":"   ","approved_at":"2026-11-01"}]}'
 refuse_manifest "bad-date" \
   '{"release":"v9.9.9","exclusions":[{"issue":649,"reason":"r","approved_by":"owner","approved_at":"01/11/2026"}]}'
+refuse_manifest "impossible-date" \
+  '{"release":"v9.9.9","exclusions":[{"issue":649,"reason":"r","approved_by":"owner","approved_at":"2026-02-30"}]}'
+refuse_manifest "numeric-date" \
+  '{"release":"v9.9.9","exclusions":[{"issue":649,"reason":"r","approved_by":"owner","approved_at":123}]}'
+refuse_manifest "numeric-reason" \
+  '{"release":"v9.9.9","exclusions":[{"issue":649,"reason":123,"approved_by":"owner","approved_at":"2026-11-01"}]}'
+refuse_manifest "numeric-approver" \
+  '{"release":"v9.9.9","exclusions":[{"issue":649,"reason":"r","approved_by":123,"approved_at":"2026-11-01"}]}'
 refuse_manifest "not-a-blocker" \
   '{"release":"v9.9.9","exclusions":[{"issue":123,"reason":"r","approved_by":"owner","approved_at":"2026-11-01"}]}' \
   "which is not a release blocker"
@@ -154,6 +162,12 @@ refuse_manifest "duplicate" \
   "more than once"
 refuse_manifest "not-json" '{"release":"v9.9.9","exclusions":[' "is not valid JSON"
 refuse_manifest "no-exclusions-array" '{"release":"v9.9.9"}'
+
+# Valid leap days remain accepted.
+printf '%s\n' '{"release":"v9.9.9","exclusions":[{"issue":649,"reason":"r","approved_by":"owner","approved_at":"2024-02-29"}]}' > "$work/docs/releases/v9.9.9-exclusions.json"
+if ! run_gate --version v9.9.9 > "$tmp/leap-date.out" 2>&1; then
+  fails "gate rejected a valid leap date"
+fi
 
 # 3f. A manifest that omits the closed-but-not-completed issue is refused.
 printf '{"release":"v9.9.9","exclusions":[]}\n' > "$work/docs/releases/v9.9.9-exclusions.json"
@@ -198,4 +212,4 @@ if ((failures != 0)); then
   exit 1
 fi
 
-echo "FINAL RELEASE GATE TEST PASS (success plus open, not_planned, API error, missing-reason, malformed, missing-state, empty-payload, null-state, 15 version-scoped exclusion-manifest cases, and the unused-manifest case)"
+echo "FINAL RELEASE GATE TEST PASS (success plus open, not_planned, API error, missing-reason, malformed, missing-state, empty-payload, null-state, version-scoped exclusion-manifest cases including invalid types and calendar dates, and the unused-manifest case)"

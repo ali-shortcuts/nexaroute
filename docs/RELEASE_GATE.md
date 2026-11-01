@@ -76,7 +76,7 @@ publication. It requires issues #646–#653 **and** #654 to be closed.
 - Closed with `state_reason=completed`: accepted, no further action.
 - Closed any other way (`not_planned`, no reason): accepted **only** when
   `docs/releases/<version>-exclusions.json` names that exact issue, for that
-  exact version, with a non-blank `reason` and `approved_by`, and an `approved_at` date. The manifest is a record, not proof of owner identity: reviewers must independently verify the approval.
+  exact version, with a non-blank `reason` and `approved_by`, and a valid calendar `approved_at` date in YYYY-MM-DD format. The manifest is a record, not proof of owner identity: reviewers must independently verify the approval.
 - **Open**: always refused. An exclusion can never cover an open blocker.
 
 The manifest is version-scoped and fails closed: an entry with any field

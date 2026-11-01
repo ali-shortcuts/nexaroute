@@ -94,7 +94,7 @@ validate_manifest() {
 
   # Every entry must be complete, reference a required issue, and be unique.
   local problems
-  problems="$(jq -r --arg allowed "$allowed" '
+  if ! problems="$(jq -r --arg allowed "$allowed" '
     .exclusions
     | to_entries[]
     | .key as $i
@@ -105,10 +105,13 @@ validate_manifest() {
         (if ($allowed | contains(" " + (($e.issue // "") | tostring) + " ")) | not then "entry \($i) names issue #\($e.issue), which is not a release blocker" else empty end),
         (if (($e.reason // "") | type) != "string" or (($e.reason // "") | test("[^[:space:]]") | not) then "entry \($i) has an empty reason" else empty end),
         (if (($e.approved_by // "") | type) != "string" or (($e.approved_by // "") | test("[^[:space:]]") | not) then "entry \($i) has an empty approved_by" else empty end),
-        (if (($e.approved_at // "") | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}$")) | not then "entry \($i) needs approved_at as YYYY-MM-DD" else empty end)
+        (if (try (($e.approved_at | type) == "string" and ($e.approved_at | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}$")) and (($e.approved_at + "T00:00:00Z" | fromdateiso8601 | strftime("%Y-%m-%d")) == $e.approved_at)) catch false) | not then "entry \($i) needs a valid approved_at date as YYYY-MM-DD" else empty end)
       ]
     | .[]
-  ' "$exclusions_file")"
+  ' "$exclusions_file")"; then
+    echo "::error::${exclusions_file}: could not validate exclusion entries." >&2
+    return 1
+  fi
 
   if [[ -n "$problems" ]]; then
     while IFS= read -r line; do

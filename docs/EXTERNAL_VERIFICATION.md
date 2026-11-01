@@ -1135,7 +1135,7 @@ altered, and no issue was closed or reopened.
 
 ## Release-readiness recheck — 2026-11-01, main `b1eebc1` (historical)
 
-This is the latest snapshot in this document. It supersedes every earlier
+This was a historical snapshot at the time. It superseded earlier
 statement that names an older commit as current main. It waives no gate,
 closes no issue, approves no release and transfers no result from an older
 SHA.
@@ -1259,7 +1259,7 @@ them.
 At this recheck `origin/main` is `436c4e98618eed0c41e59059eae7eca5f05dd190`.
 PR #821 merged as `5a49eb998de540e0d540a70be08e229567d90962` and #822
 merged as `436c4e98618eed0c41e59059eae7eca5f05dd190`; #814 was closed
-without merging. There are no open PRs, and #646–#654 remain open.
+without merging. At the time of that recheck there were no open PRs, and #646–#654 remained open.
 CI run 41317289767, Security run 41317289831 and Coverage run 41317289862
 passed on that exact main SHA. The coverage artifact is 13088460086; its
 percentage was not independently measured in this environment. The RC gate
