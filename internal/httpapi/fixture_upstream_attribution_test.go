@@ -118,8 +118,22 @@ func markerCountingServer(t *testing.T, status int, responseBody, marker string,
 		}
 		srv.Close()
 	}
-	t.Fatalf("could not allocate a test server address distinct from %v", bannedURL)
+	// Report, never Fatal: this constructor is also called from worker
+	// goroutines, where testing.T.Fatalf (FailNow) is not allowed.
+	t.Errorf("could not allocate a test server address distinct from %v", bannedURL)
 	return nil
+}
+
+// mustMarkerCountingServer is the test-goroutine wrapper: a nil server from the
+// constructor is fatal there, so every same-goroutine caller keeps failing
+// immediately with a clear message.
+func mustMarkerCountingServer(t *testing.T, status int, responseBody, marker string, calls *atomic.Int32, foreign *upstreamAttribution, bannedURL ...string) *httptest.Server {
+	t.Helper()
+	srv := markerCountingServer(t, status, responseBody, marker, calls, foreign, bannedURL...)
+	if srv == nil {
+		t.Fatalf("could not allocate a test server address distinct from %v", bannedURL)
+	}
+	return srv
 }
 
 // busEventCount counts gateway events of one kind for one deployment: the
@@ -143,7 +157,7 @@ func TestFixtureMarkerCountingServerSeparatesUnrelatedRequests(t *testing.T) {
 	var calls atomic.Int32
 	foreign := &upstreamAttribution{}
 	marker := fixtureMarker("attribution-unit")
-	srv := markerCountingServer(t, http.StatusOK, wave3ChatOK, marker, &calls, foreign)
+	srv := mustMarkerCountingServer(t, http.StatusOK, wave3ChatOK, marker, &calls, foreign)
 	defer srv.Close()
 
 	post := func(body string) *http.Response {
@@ -201,6 +215,10 @@ func TestWave3ChatTransportFailoverRepeatedUnderConcurrency(t *testing.T) {
 				foreign := &upstreamAttribution{}
 				marker := fixtureMarker(fmt.Sprintf("chat-failover-w%d-r%d", w, r))
 				good := markerCountingServer(t, http.StatusOK, wave3ChatOK, marker, &goodCalls, foreign, deadURL)
+				if good == nil {
+					failures <- fmt.Sprintf("w=%d r=%d could not allocate a fixture server", w, r)
+					continue
+				}
 
 				s := wave3Gateway(t, []config.ProviderConfig{
 					wave3Provider("a", "openai_compatible", deadURL, "m", "upstream-model", []string{"cm"}),
