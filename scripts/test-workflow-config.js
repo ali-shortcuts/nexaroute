@@ -26,6 +26,7 @@ vm.runInContext(extract('function wfEditorConfigHTML(', 'function wfEditorSelect
 vm.runInContext(extract('function wfEditorSetConfig(', 'function wfEditorValidationHTML('), context);
 vm.runInContext(extract('async function wfEditorSave(', 'function wfEditorStartEdge('), context);
 vm.runInContext(extract('async function wfEditorPublish(', 'function wfEditorRunDialog('), context);
+vm.runInContext(extract('async function wfEditorValidate(', 'function wfEditorRunHTML('), context);
 (async () => {
   const cfg = editor.def.nodes[0].config;
   editor.def.nodes[0].node_id = 'node';
@@ -63,5 +64,16 @@ vm.runInContext(extract('async function wfEditorPublish(', 'function wfEditorRun
   assert.equal(state.wf.defs[0].nodes[0].config.name, 'example', 'list tracks submitted snapshot');
   const second = context.wfEditorSave(); release({}); await second; assert.equal(editor.dirty, false);
   const publishing = context.wfEditorPublish(); assert.equal(calls.length, 3); release({ revision: 1, status: 'published' }); await publishing;
+  const validating = context.wfEditorValidate();
+  assert.equal(calls.length, 4);
+  context.wfEditorSetConfig('name', 'string', { value: 'after-validation-started' });
+  content.innerHTML = 'uncommitted validation-time input';
+  release({ valid: true }); await validating;
+  assert.equal(content.innerHTML, 'uncommitted validation-time input', 'validation completion must not replace the editor DOM');
+  assert.equal(editor.validation, null, 'validation for an older draft must not be applied to newer edits');
+  assert.equal(editor.dirty, true);
+  editor.dirty = false; editor.saving = true;
+  await context.wfEditorValidate(); assert.equal(calls.length, 4, 'validation cannot race an in-flight save');
+  editor.saving = false;
   console.log('workflow configuration and save regression PASS');
 })().catch(e => { console.error(e); process.exitCode = 1; });

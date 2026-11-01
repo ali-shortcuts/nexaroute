@@ -223,6 +223,17 @@ func (s *PostgresStore) ListDrafts(ctx context.Context) ([]Definition, error) {
 }
 
 func (s *PostgresStore) Publish(ctx context.Context, definitionID, publishedBy string) (PublishedDefinition, error) {
+	return s.publish(ctx, definitionID, publishedBy, "")
+}
+
+func (s *PostgresStore) PublishIfUnchanged(ctx context.Context, definitionID, publishedBy, expectedHash string) (PublishedDefinition, error) {
+	if expectedHash == "" {
+		return PublishedDefinition{}, ErrStateConflict
+	}
+	return s.publish(ctx, definitionID, publishedBy, expectedHash)
+}
+
+func (s *PostgresStore) publish(ctx context.Context, definitionID, publishedBy, expectedHash string) (PublishedDefinition, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return PublishedDefinition{}, err
@@ -244,6 +255,9 @@ func (s *PostgresStore) Publish(ctx context.Context, definitionID, publishedBy s
 	hash, err := ContentHash(&draft)
 	if err != nil {
 		return PublishedDefinition{}, err
+	}
+	if expectedHash != "" && hash != expectedHash {
+		return PublishedDefinition{}, ErrStateConflict
 	}
 	var lastHash, lastStatus string
 	var lastRev int64

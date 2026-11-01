@@ -120,6 +120,10 @@ func (s *storeState) listDrafts() []Definition {
 }
 
 func (s *storeState) publish(definitionID, publishedBy string, now time.Time) (PublishedDefinition, error) {
+	return s.publishIfUnchanged(definitionID, publishedBy, "", now)
+}
+
+func (s *storeState) publishIfUnchanged(definitionID, publishedBy, expectedHash string, now time.Time) (PublishedDefinition, error) {
 	draft, ok := s.drafts[definitionID]
 	if !ok {
 		return PublishedDefinition{}, ErrNotFound
@@ -127,6 +131,9 @@ func (s *storeState) publish(definitionID, publishedBy string, now time.Time) (P
 	hash, err := ContentHash(&draft)
 	if err != nil {
 		return PublishedDefinition{}, err
+	}
+	if expectedHash != "" && hash != expectedHash {
+		return PublishedDefinition{}, ErrStateConflict
 	}
 	existing := s.revisions[definitionID]
 	if len(existing) > 0 {

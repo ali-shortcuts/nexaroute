@@ -104,7 +104,7 @@ validate_manifest() {
     | .value as $e
     | [
         (if ($e | type) != "object" then "entry \($i) is not an object" else empty end),
-        (if (($e.issue // "") | tostring | test("^[0-9]+$")) | not then "entry \($i) has no numeric issue" else empty end),
+        (if (($e.issue | type) != "number") or ((($e.issue // "") | tostring | test("^[0-9]+$")) | not) then "entry \($i) has no integer issue" else empty end),
         (if ($allowed | contains(" " + (($e.issue // "") | tostring) + " ")) | not then "entry \($i) names issue #\($e.issue), which is not a release blocker" else empty end),
         (if (($e.reason // "") | type) != "string" or (($e.reason // "") | test("[^[:space:]]") | not) then "entry \($i) has an empty reason" else empty end),
         (if (($e.approved_by // "") | type) != "string" or (($e.approved_by // "") | test("[^[:space:]]") | not) then "entry \($i) has an empty approved_by" else empty end),

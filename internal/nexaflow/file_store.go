@@ -289,6 +289,24 @@ func (s *FileStore) Publish(_ context.Context, definitionID, publishedBy string)
 	return out, err
 }
 
+func (s *FileStore) PublishIfUnchanged(_ context.Context, definitionID, publishedBy, expectedHash string) (PublishedDefinition, error) {
+	if expectedHash == "" {
+		return PublishedDefinition{}, ErrStateConflict
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out PublishedDefinition
+	err := s.mutate(func(st *storeState) error {
+		rev, err := st.publishIfUnchanged(definitionID, publishedBy, expectedHash, s.now())
+		if err != nil {
+			return err
+		}
+		out = rev
+		return nil
+	})
+	return out, err
+}
+
 func (s *FileStore) SupersedeRevision(_ context.Context, definitionID string, revision uint64) (PublishedDefinition, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

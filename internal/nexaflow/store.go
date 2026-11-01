@@ -153,6 +153,14 @@ type RunFilter struct {
 // same contract for tests and single-process use; they must never be
 // presented as production run history. The production store is
 // PostgresStore.
+// ConditionalPublisher provides atomic compare-and-publish for the service.
+// The store must compare the complete draft hash and publish under the same
+// lock or database transaction. External Store implementations must implement
+// it before they can publish through Service; an unchecked fallback is unsafe.
+type ConditionalPublisher interface {
+	PublishIfUnchanged(ctx context.Context, definitionID, publishedBy, expectedHash string) (PublishedDefinition, error)
+}
+
 type Store interface {
 	// Drafts and revisions.
 	SaveDraft(ctx context.Context, def Definition) error

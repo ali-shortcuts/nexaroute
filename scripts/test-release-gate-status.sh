@@ -263,6 +263,10 @@ short = dict(doc, requested_duration_seconds=0)
 failed = mod.soak_doc(commit=sys.argv[2], result="FAIL", exit_code=1)
 failed["stages"][0] = mod.stage("stress-round-1", status="FAIL", exit_code=1, duration=44)
 (path / "failed.json").write_text(json.dumps(failed))
+wrong = dict(doc, commit="abcdef0123456789abcdef0123456789abcdef01")
+(path / "wrong-sha.json").write_text(json.dumps(wrong))
+incomplete = dict(doc, stages=doc["stages"][:-1])
+(path / "incomplete.json").write_text(json.dumps(incomplete))
 PYFIXTURE
 # --rc without a repo argument must not turn --rc into the repo.
 FAKE_GH_MODE=pass-rc bash scripts/release-gate-status.sh "$sha" --rc --soak-summary "$tmp/summary.json" > "$tmp/rc-arg.out" || { cat "$tmp/rc-arg.out"; exit 1; }
@@ -281,6 +285,12 @@ if FAKE_GH_MODE=pass-rc bash scripts/release-gate-status.sh "$sha" --rc --soak-s
   echo "FAIL: RC accepted valid evidence of a failed soak" >&2; exit 1
 fi
 grep -qE '^soak[[:space:]]+UNVERIFIED' "$tmp/failed-soak.out" || { cat "$tmp/failed-soak.out"; exit 1; }
+for summary in wrong-sha incomplete; do
+  if FAKE_GH_MODE=pass-rc bash scripts/release-gate-status.sh "$sha" --rc --soak-summary "$tmp/$summary.json" > "$tmp/$summary.out" 2>&1; then
+    echo "FAIL: RC accepted $summary soak evidence" >&2; exit 1
+  fi
+  grep -qE '^soak[[:space:]]+UNVERIFIED' "$tmp/$summary.out" || { cat "$tmp/$summary.out"; exit 1; }
+done
 
 if FAKE_GH_MODE=api-error bash scripts/release-gate-status.sh "$sha" example/repo > "$tmp/api.out" 2>&1; then
 	echo "FAIL: gate passed on API error" >&2; exit 1

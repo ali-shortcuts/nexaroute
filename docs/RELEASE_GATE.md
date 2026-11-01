@@ -92,7 +92,7 @@ publication. It requires issues #646–#653 **and** #654 to be closed.
 
 The manifest is version-scoped and fails closed: an entry with any field
 missing refuses the release, an entry for an issue outside #646–#654 refuses
-the release, a duplicate entry refuses the release, a manifest whose
+the release, an issue identifier must be an integer (not a numeric string), a duplicate entry refuses the release, a manifest whose
 `release` does not match the tag refuses the release, and a manifest is never
 carried forward to a later version. When a blocker needs no exclusion, an
 unused or stale manifest is ignored rather than allowed to fail a clean

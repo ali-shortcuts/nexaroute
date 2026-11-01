@@ -35,7 +35,8 @@ def main():
               const api = (path, opt) => { calls.push({path,opt}); return new Promise(resolve => { finishSave = resolve; }); };
             """ + extract("function wfEditorSetConfig(", "function wfEditorValidationHTML(")
                 + extract("async function wfEditorPublish(", "function wfEditorRunDialog(")
-                + extract("async function wfEditorSave(", "function wfEditorStartEdge(") + """
+                + extract("async function wfEditorSave(", "function wfEditorStartEdge(")
+                + extract("async function wfEditorValidate(", "function wfEditorRunHTML(") + """
               document.querySelector('#number').addEventListener('change', e => wfEditorSetConfig('count','number',e.target));
               document.querySelector('#text').addEventListener('change', e => wfEditorSetConfig('name','string',e.target));
               document.querySelector('#checkbox').addEventListener('change', e => wfEditorSetConfig('enabled','boolean',e.target));
@@ -71,6 +72,20 @@ def main():
             assert page.locator("#text").input_value() == "typing while saving"
             page.locator("#text").press("Tab")
             assert page.evaluate("state.wf.editor.def.nodes[0].config.name") == "typing while saving"
+            assert page.evaluate("state.wf.editor.dirty") is True
+            # Save first, then let validation resolve while an input is focused
+            # with keystrokes that have not fired the change event yet.
+            page.evaluate("void wfEditorSave()")
+            page.evaluate("finishSave({})")
+            page.wait_for_function("!state.wf.editor.saving")
+            page.evaluate("void wfEditorValidate()")
+            page.locator("#text").fill("typing during validation")
+            page.evaluate("finishSave({valid:true})")
+            page.wait_for_function("state.wf.editor.validation !== null")
+            assert page.evaluate("document.activeElement.id") == "text"
+            assert page.locator("#text").input_value() == "typing during validation"
+            page.locator("#text").press("Tab")
+            assert page.evaluate("state.wf.editor.def.nodes[0].config.name") == "typing during validation"
             assert page.evaluate("state.wf.editor.dirty") is True
             assert not errors, errors
         finally:

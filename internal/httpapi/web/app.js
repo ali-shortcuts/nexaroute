@@ -2028,6 +2028,7 @@
       await api('/admin/api/nexaflow/definitions', { method: 'POST', ...body(JSON.parse(snapshot)) });
       e.dirty = JSON.stringify(e.def) !== snapshot;
       e.validation = null;
+      e.validationSeq = (e.validationSeq || 0) + 1;
       const i = (state.wf.defs || []).findIndex(x => (x.id || x.ID) === e.def.id);
       if (i >= 0) state.wf.defs[i] = JSON.parse(snapshot);
       notice(e.dirty ? 'Draft saved; newer edits are still unsaved.' : 'Draft saved.');
@@ -2076,7 +2077,20 @@
     const validation = document.getElementById('wf-validation'); if (validation) validation.innerHTML = wfEditorValidationHTML();
   }
   function wfEditorValidationHTML() { const e = state.wf.editor; if (!e || !e.validation) return '<p class="wf-meta">Press Validate to check the stored draft against the backend registry.</p>'; const stale = e.dirty ? '<p class="wf-meta">Validation below applies to the last saved draft; the canvas has unsaved changes.</p>' : ''; return stale + (e.validation.valid ? '<p class="wf-good">✓ Draft is valid.</p>' : `<p class="wf-err">Invalid: ${esc(e.validation.error || 'validation failed')}</p>`); }
-  async function wfEditorValidate() { const e = state.wf.editor; if (!e) return; if (e.dirty) { notice('Save the draft before validating (validation runs on the stored draft).', true); return; } try { const res = await api('/admin/api/nexaflow/definitions/' + encodeURIComponent(e.def.id) + '/validate', { method: 'POST' }); e.validation = { valid: !!res.valid, error: res.error || '' }; if (state.page === 'workflows') { $('#content').innerHTML = workflowsView(); bindWorkflows(); } } catch (err) { notice(err.message, true); } }
+  async function wfEditorValidate() {
+    const e = state.wf.editor; if (!e) return;
+    if (e.dirty || e.saving) { notice('Save the draft before validating (validation runs on the stored draft).', true); return; }
+    const snapshot = JSON.stringify(e.def);
+    const seq = e.validationSeq = (e.validationSeq || 0) + 1;
+    try {
+      const res = await api('/admin/api/nexaflow/definitions/' + encodeURIComponent(e.def.id) + '/validate', { method: 'POST' });
+      if (state.wf.editor !== e || e.validationSeq !== seq) return;
+      e.validation = !e.dirty && !e.saving && JSON.stringify(e.def) === snapshot ? { valid: !!res.valid, error: res.error || '' } : null;
+      // Never rebuild the editor on an asynchronous response: uncommitted
+      // input may exist even when its change handler has not yet run.
+      if (state.page === 'workflows') { const panel = document.getElementById('wf-validation'); if (panel) panel.innerHTML = wfEditorValidationHTML(); }
+    } catch (err) { notice(err.message, true); }
+  }
   function wfEditorRunHTML() { const e = state.wf.editor; if (!e || !e.runDetail) return '<p class="wf-meta">Publish a revision, then run it. Runs execute the latest published revision unless a revision number is given.</p>'; const r = e.runDetail.run || {}; const nodes = (e.runDetail.nodes || []).map(n => `<li><span>${esc(n.node_id)} — ${esc(n.state)} (attempt ${esc(n.attempt)})${n.error_code ? ` · ${esc(n.error_code)}` : ''}</span></li>`).join(''); return `<p class="wf-meta">Run ${esc(r.id)} · revision ${esc(r.revision)} · ${statusPill(r.state, r.state === 'succeeded' ? 'good' : r.state === 'failed' || r.state === 'needs_manual_action' ? 'bad' : 'warn')}${r.error_code ? ` · ${esc(r.error_code)}` : ''}</p>${nodes ? `<ul class="wf-connections">${nodes}</ul>` : '<p class="wf-meta">No node executions yet.</p>'}<div class="field"><label for="wf-run-approve-node">Approval node ID</label><input id="wf-run-approve-node" type="text" autocomplete="off" placeholder="node id awaiting approval"></div><div class="field-actions"><button type="button" class="button secondary" data-wf-run-decision="approved">Approve</button><button type="button" class="button secondary" data-wf-run-decision="rejected">Reject</button><button type="button" class="button ghost" data-wf-run-cancel>Cancel run</button><button type="button" class="button ghost" data-wf-run-resume>Resume run</button><button type="button" class="button ghost" data-wf-run-refresh>Refresh</button></div>`; }
   async function wfEditorPublish() { const e = state.wf.editor; if (!e) return; if (e.dirty || e.saving) { notice('Save the draft before publishing.', true); return; } try { const res = await api('/admin/api/nexaflow/definitions/' + encodeURIComponent(e.def.id) + '/publish', { method: 'POST' }); notice(`Published revision ${res.revision} (${res.status}).`); } catch (err) { notice(err.message, true); } }
   function wfEditorRunDialog() { const e = state.wf.editor; if (!e) return; openModal('Run definition', '<div class="field"><label for="wf-run-revision">Revision (empty = latest published)</label><input id="wf-run-revision" type="number" min="0"></div><div class="field"><label for="wf-run-input">Input JSON (optional)</label><textarea id="wf-run-input" rows="4" spellcheck="false" placeholder="{}"></textarea></div><p class="wf-meta">Policy approval, when a node requires it, happens in the run panel after the run reaches awaiting approval.</p>', async () => { let input = {}; const raw = $('#wf-run-input').value.trim(); if (raw) { try { input = JSON.parse(raw); } catch (_) { notice('Input JSON is not valid JSON.', true); return; } } const rev = Number($('#wf-run-revision').value || 0); try { const res = await api('/admin/api/nexaflow/definitions/' + encodeURIComponent(e.def.id) + '/runs', { method: 'POST', ...body({ revision: rev, input, idempotency_key: 'ui-' + Date.now().toString(36) }) }); closeModal(); e.run = { id: res.id }; notice(`Run started: ${res.id} (${res.state}).`); await wfEditorRefreshRun(); } catch (err) { notice(err.message, true); } }, 'Run'); }

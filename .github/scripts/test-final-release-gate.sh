@@ -154,6 +154,10 @@ refuse_manifest "numeric-reason" \
   '{"release":"v9.9.9","exclusions":[{"issue":649,"reason":123,"approved_by":"owner","approved_at":"2026-11-01"}]}'
 refuse_manifest "numeric-approver" \
   '{"release":"v9.9.9","exclusions":[{"issue":649,"reason":"r","approved_by":123,"approved_at":"2026-11-01"}]}'
+# The issue identifier must be an integer, not a numeric-looking string.
+# Otherwise 649 and "649" compare as distinct in jq's duplicate grouping.
+refuse_manifest "string-issue" \
+  '{"release":"v9.9.9","exclusions":[{"issue":649,"reason":"r","approved_by":"owner","approved_at":"2026-11-01"},{"issue":"649","reason":"r2","approved_by":"owner","approved_at":"2026-11-01"}]}'
 refuse_manifest "not-a-blocker" \
   '{"release":"v9.9.9","exclusions":[{"issue":123,"reason":"r","approved_by":"owner","approved_at":"2026-11-01"}]}' \
   "which is not a release blocker"

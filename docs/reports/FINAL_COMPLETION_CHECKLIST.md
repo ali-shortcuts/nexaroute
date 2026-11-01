@@ -24,6 +24,13 @@ current main and both PR heads again before relying on any historical result.
   it is not a complete security audit. In particular, the NexaFlow direct
   read has a top-level 1 MiB `MaxBytesReader`, and the two video JSON decoders
   use 2 MiB and 1 MiB wrappers. Other aliases and paths still need review.
+- Follow-up changes compare the validated draft's hash under the store lock or
+  PostgreSQL row transaction before publication, and refuse custom stores that
+  lack this conditional capability. Isolated local memory/file red-green and
+  race tests passed; PostgreSQL and complete-project verification must pass on
+  the latest commit. This does not compare against an editor-supplied revision
+  before the request: the API has no such precondition yet. Async validation
+  no longer redraws the editor; its real-browser regression needs current CI.
 - Full repository authentication, authorization, SSRF, secrets, concurrency,
   retry, storage, routing, recovery, container and dependency audit: **NOT
   COMPLETE**. CI CodeQL/govulncheck are useful but do not establish completion.

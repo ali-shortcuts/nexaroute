@@ -193,7 +193,15 @@ func (s *Service) Publish(ctx context.Context, definitionID string, by authz.Ide
 	if err := ValidateDefinition(&draft, s.Registry); err != nil {
 		return PublishedDefinition{}, err
 	}
-	pub, err := s.Store.Publish(ctx, definitionID, by.Subject)
+	expectedHash, err := ContentHash(&draft)
+	if err != nil {
+		return PublishedDefinition{}, err
+	}
+	publisher, ok := s.Store.(ConditionalPublisher)
+	if !ok {
+		return PublishedDefinition{}, errors.New("nexaflow: store does not support atomic draft publication")
+	}
+	pub, err := publisher.PublishIfUnchanged(ctx, definitionID, by.Subject, expectedHash)
 	if err != nil {
 		return PublishedDefinition{}, err
 	}

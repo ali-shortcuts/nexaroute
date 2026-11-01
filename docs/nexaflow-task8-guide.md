@@ -59,6 +59,17 @@ when task7 lands it).
 Error mapping: unknown → 404, idempotency/approval conflicts →
 409, state conflicts → 409, validation → 400.
 
+The service validates a fetched draft and passes its complete content hash to
+an atomic compare-and-publish operation. If the draft changes between validation
+and publication, the store returns a conflict (HTTP 409); reload and review the
+new draft before retrying. PostgreSQL compares while holding the draft row lock;
+memory and file stores compare under their mutex. Third-party `Store`
+implementations must implement `ConditionalPublisher`, or service publication
+fails closed. The low-level `Store.Publish` remains an unchecked store primitive
+for compatibility and must not be used as a substitute for service validation.
+This protects the validation-to-publication interval; the API does not yet let
+an editor supply the revision/hash it saw before issuing its publish request.
+
 ## Workflow example (branch workflow, from the tests)
 
 ```json

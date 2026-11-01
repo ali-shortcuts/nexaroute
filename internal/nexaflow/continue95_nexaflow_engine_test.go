@@ -2142,6 +2142,13 @@ func (s *Continue95NexaflowFailStore) Publish(ctx context.Context, id, by string
 	return s.Store.Publish(ctx, id, by)
 }
 
+func (s *Continue95NexaflowFailStore) PublishIfUnchanged(ctx context.Context, id, by, expectedHash string) (PublishedDefinition, error) {
+	if s.mode == "publish" {
+		return PublishedDefinition{}, s.boom()
+	}
+	return s.Store.(ConditionalPublisher).PublishIfUnchanged(ctx, id, by, expectedHash)
+}
+
 func (s *Continue95NexaflowFailStore) SupersedeRevision(ctx context.Context, id string, rev uint64) (PublishedDefinition, error) {
 	if s.mode == "supersede" {
 		return PublishedDefinition{}, s.boom()
