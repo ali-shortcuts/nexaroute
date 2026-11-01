@@ -68,6 +68,34 @@ candidate (`--rc`):
 | Soak, 2 h sustained mixed workload | Soak workflow, `workflow_dispatch` with `duration: 2h` and a timeout above 2 h 30 m (see `docs/reports/ISSUE664_SOAK_PROCEDURE.md`); the soak report must name the same SHA |
 | Browser evidence on main | Browser evidence workflow, `workflow_dispatch` / main push |
 
+## Completion gate and version-scoped exclusions
+
+`.github/scripts/check-final-release-gate.sh` is the last step before
+publication. It requires issues #646–#653 **and** #654 to be closed.
+
+- Closed with `state_reason=completed`: accepted, no further action.
+- Closed any other way (`not_planned`, no reason): accepted **only** when
+  `docs/releases/<version>-exclusions.json` names that exact issue, for that
+  exact version, with a non-empty `reason`, `approved_by` and `approved_at`.
+- **Open**: always refused. An exclusion can never cover an open blocker.
+
+The manifest is version-scoped and fails closed: an entry with any field
+missing refuses the release, an entry for an issue outside #646–#654 refuses
+the release, a duplicate entry refuses the release, a manifest whose
+`release` does not match the tag refuses the release, and a manifest is never
+carried forward to a later version. When a blocker needs no exclusion, an
+unused or stale manifest is ignored rather than allowed to fail a clean
+release.
+
+The policy this implements is the one stated for #654: a stable release must
+wait for each remaining scope to be *completed* or *explicitly excluded with
+reviewed, truthful release notes*. The mechanism makes the exclusion
+reviewable and machine-checkable; it does not make it silent. Every exclusion
+is printed as a `::warning::` at release time.
+
+See `docs/RELEASE_BLOCKERS.md` for the current per-issue blockers and the
+exact dispatch command that clears each one.
+
 ## Gaps this gate does not hide
 
 - **Mutation testing: NOT_RUN.** No mutation tooling is wired into

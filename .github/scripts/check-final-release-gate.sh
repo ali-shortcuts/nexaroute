@@ -1,35 +1,213 @@
 #!/usr/bin/env bash
+# Final release completion gate.
+#
+# Every product acceptance blocker (#646-#653) and the umbrella (#654) must be
+# CLOSED before a stable release may be published. A blocker that closed as
+# "completed" is accepted as-is. A blocker that closed any other way
+# (for example state_reason=not_planned) is accepted ONLY when the release
+# notes for the version being tagged carry an explicit, owner-approved
+# exclusion for it in docs/releases/<version>-exclusions.json.
+#
+# This is not a way to hide an open blocker:
+#   * an OPEN issue always fails the gate, excluded or not;
+#   * a closed-but-not-completed issue fails the gate unless the manifest
+#     names that exact issue for that exact version;
+#   * every manifest entry must carry a non-empty reason, the approving
+#     owner login and a YYYY-MM-DD approval date;
+#   * a manifest entry for an issue outside the required set is a hard
+#     failure (typo guard), so the manifest can never silently widen;
+#   * a manifest whose "release" does not match the tag is a hard failure,
+#     so a stale manifest cannot be reused for a later version.
 set -euo pipefail
 
 : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY must be set}"
 : "${GH_TOKEN:?GH_TOKEN must be set}"
 
-check_completed() {
-  local issue="$1"
-  local payload state reason
-  if ! payload="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${issue}")"; then
-    echo "::error::Could not inspect release blocker #${issue}." >&2
-    return 1
-  fi
-  state="$(jq -r '.state // "unknown"' <<< "$payload")"
-  reason="$(jq -r '.state_reason // "none"' <<< "$payload")"
-  if [[ "$state" != "closed" || "$reason" != "completed" ]]; then
-    echo "::error::Release blocked: issue #${issue} is ${state} (state_reason=${reason}); attach acceptance evidence and close it as completed." >&2
-    return 1
-  fi
-  echo "Release acceptance complete: #${issue}"
+required_issues=(646 647 648 649 650 651 652 653 654)
+
+usage() {
+  echo "usage: $0 [--version vX.Y.Z]" >&2
+  echo "  --version  release version used to locate docs/releases/<version>-exclusions.json" >&2
+  echo "             (defaults to \$GITHUB_REF_NAME when it looks like a tag)" >&2
 }
 
-failed=0
-for issue in 646 647 648 649 650 651 652 653; do
-  check_completed "$issue" || failed=1
+version=""
+if [[ -n "${GITHUB_REF_NAME:-}" && "${GITHUB_REF_NAME}" =~ ^v[0-9] ]]; then
+  version="${GITHUB_REF_NAME}"
+fi
+while (($#)); do
+  case "$1" in
+    --version)
+      [[ $# -ge 2 ]] || { usage; exit 2; }
+      version="$2"
+      shift 2
+      ;;
+    --version=*)
+      version="${1#*=}"
+      shift
+      ;;
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    *)
+      usage
+      exit 2
+      ;;
+  esac
 done
-# The umbrella is closed last, only after all evidence and the final release
-# decision have been reviewed.
-check_completed 654 || failed=1
 
-if (( failed != 0 )); then
-  echo "::error::Refusing to publish. Resolve every product acceptance blocker and complete issue #654 first." >&2
+if [[ -n "$version" && ! "$version" =~ ^v[0-9][a-zA-Z0-9._-]*$ ]]; then
+  echo "::error::Invalid release version '${version}'; expected vX.Y.Z." >&2
+  exit 2
+fi
+
+exclusions_file=""
+if [[ -n "$version" ]]; then
+  exclusions_file="docs/releases/${version}-exclusions.json"
+fi
+
+# validate_manifest runs every structural check on the manifest up front and
+# fails closed on the first problem. It never mutates state.
+validate_manifest() {
+  [[ -f "$exclusions_file" ]] || return 0
+
+  if ! jq -e . "$exclusions_file" >/dev/null 2>&1; then
+    echo "::error::${exclusions_file} is not valid JSON." >&2
+    return 1
+  fi
+
+  local declared
+  declared="$(jq -r '.release // ""' "$exclusions_file")"
+  if [[ "$declared" != "$version" ]]; then
+    echo "::error::${exclusions_file} declares release '${declared}' but the release being tagged is '${version}'. Exclusions are version-scoped and are never carried forward." >&2
+    return 1
+  fi
+
+  if ! jq -e '(.exclusions | type) == "array"' "$exclusions_file" >/dev/null; then
+    echo "::error::${exclusions_file} must contain an \"exclusions\" array." >&2
+    return 1
+  fi
+
+  local allowed
+  allowed=" $(printf '%s ' "${required_issues[@]}")"
+
+  # Every entry must be complete, reference a required issue, and be unique.
+  local problems
+  problems="$(jq -r --arg allowed "$allowed" '
+    .exclusions
+    | to_entries[]
+    | .key as $i
+    | .value as $e
+    | [
+        (if ($e | type) != "object" then "entry \($i) is not an object" else empty end),
+        (if (($e.issue // "") | tostring | test("^[0-9]+$")) | not then "entry \($i) has no numeric issue" else empty end),
+        (if ($allowed | contains(" " + (($e.issue // "") | tostring) + " ")) | not then "entry \($i) names issue #\($e.issue), which is not a release blocker" else empty end),
+        (if (($e.reason // "") | type) != "string" or (($e.reason // "") | length) == 0 then "entry \($i) has an empty reason" else empty end),
+        (if (($e.approved_by // "") | type) != "string" or (($e.approved_by // "") | length) == 0 then "entry \($i) has an empty approved_by" else empty end),
+        (if (($e.approved_at // "") | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}$")) | not then "entry \($i) needs approved_at as YYYY-MM-DD" else empty end)
+      ]
+    | .[]
+  ' "$exclusions_file")"
+
+  if [[ -n "$problems" ]]; then
+    while IFS= read -r line; do
+      echo "::error::${exclusions_file}: ${line}" >&2
+    done <<< "$problems"
+    return 1
+  fi
+
+  local duplicates
+  duplicates="$(jq -r '[.exclusions[].issue] | group_by(.) | map(select(length > 1) | .[0]) | .[]' "$exclusions_file")"
+  if [[ -n "$duplicates" ]]; then
+    while IFS= read -r issue; do
+      echo "::error::${exclusions_file} lists issue #${issue} more than once." >&2
+    done <<< "$duplicates"
+    return 1
+  fi
+
+  return 0
+}
+
+# exclusion_reason prints the recorded reason for one issue and fails when the
+# issue is not excluded for this version.
+exclusion_reason() {
+  local issue="$1"
+  local reason
+  if ! reason="$(jq -r --argjson n "$issue" '.exclusions[] | select(.issue == $n) | .reason' "$exclusions_file" 2>/dev/null)"; then
+    return 1
+  fi
+  [[ -n "$reason" ]] || return 1
+  printf '%s\n' "$reason"
+}
+
+# PHASE 1 — read every blocker's state. Nothing is decided here; the gate must
+# know the whole set (how many blockers need an exclusion) before it can decide
+# whether a manifest is required at all. A manifest that exists but is not
+# needed must never fail an otherwise clean release.
+state_dir="$(mktemp -d)"
+trap 'rm -rf "$state_dir"' EXIT
+
+failed=0
+needs_exclusion=()
+for issue in "${required_issues[@]}"; do
+  if ! payload="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${issue}" 2>/dev/null)"; then
+    echo "::error::Could not inspect release blocker #${issue}." >&2
+    failed=1
+    printf '%s\n' "unknown none" > "$state_dir/$issue"
+    continue
+  fi
+  state="$(jq -r '.state // "unknown"' <<<"$payload" 2>/dev/null || true)"
+  reason="$(jq -r '.state_reason // "none"' <<<"$payload" 2>/dev/null || true)"
+  [[ -n "$state" ]] || state="unknown"
+  [[ -n "$reason" ]] || reason="none"
+  printf '%s %s\n' "$state" "$reason" > "$state_dir/$issue"
+
+  if [[ "$state" != "closed" ]]; then
+    echo "::error::Release blocked: issue #${issue} is ${state} (state_reason=${reason}). An open blocker can never be excluded; attach acceptance evidence and close it, or close it as not_planned with a reviewed, owner-approved exclusion." >&2
+    failed=1
+    continue
+  fi
+  if [[ "$reason" == "completed" ]]; then
+    echo "Release acceptance complete: #${issue}"
+    continue
+  fi
+  needs_exclusion+=("$issue")
+done
+
+# PHASE 2 — resolve documented exclusions, only if a blocker actually needs one.
+excluded_issues=()
+if ((${#needs_exclusion[@]} > 0)); then
+  if [[ -z "$version" ]]; then
+    echo "::error::Release blocked: #${needs_exclusion[*]} closed without acceptance evidence and no release version was supplied, so no version-scoped exclusion can be evaluated. Pass --version vX.Y.Z or tag the release." >&2
+    failed=1
+  elif [[ ! -f "$exclusions_file" ]]; then
+    echo "::error::Release blocked: #${needs_exclusion[*]} closed without acceptance evidence and no exclusion manifest exists at ${exclusions_file}." >&2
+    failed=1
+  elif ! validate_manifest; then
+    failed=1
+  else
+    for issue in "${needs_exclusion[@]}"; do
+      reason="$(awk '{print $2}' "$state_dir/$issue")"
+      if ! recorded="$(exclusion_reason "$issue")"; then
+        echo "::error::Release blocked: issue #${issue} is closed (state_reason=${reason}) but ${exclusions_file} does not exclude it for ${version}." >&2
+        failed=1
+        continue
+      fi
+      echo "::warning::Release exclusion for #${issue} recorded in ${exclusions_file}: ${recorded}"
+      excluded_issues+=("#${issue}")
+    done
+  fi
+elif [[ -n "$exclusions_file" && -f "$exclusions_file" ]]; then
+  echo "Note: ${exclusions_file} exists but every blocker closed with acceptance evidence; the manifest is not used."
+fi
+
+if ((failed != 0)); then
+  echo "::error::Refusing to publish. Resolve every product acceptance blocker and complete issue #654 first (or record owner-approved exclusions in ${exclusions_file:-the release notes})." >&2
   exit 1
+fi
+
+if ((${#excluded_issues[@]} > 0)); then
+  echo "::warning::Final release completion gate passed WITH DOCUMENTED EXCLUSIONS for ${excluded_issues[*]}. The published release notes must state these scopes as NOT VERIFIED."
 fi
 echo "Final release completion gate passed."
