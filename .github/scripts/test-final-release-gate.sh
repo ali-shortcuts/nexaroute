@@ -140,6 +140,10 @@ refuse_manifest "empty-reason" \
   '{"release":"v9.9.9","exclusions":[{"issue":649,"reason":"","approved_by":"owner","approved_at":"2026-11-01"}]}'
 refuse_manifest "empty-approved-by" \
   '{"release":"v9.9.9","exclusions":[{"issue":649,"reason":"r","approved_by":"","approved_at":"2026-11-01"}]}'
+refuse_manifest "whitespace-reason" \
+  '{"release":"v9.9.9","exclusions":[{"issue":649,"reason":" \t","approved_by":"owner","approved_at":"2026-11-01"}]}'
+refuse_manifest "whitespace-approved-by" \
+  '{"release":"v9.9.9","exclusions":[{"issue":649,"reason":"r","approved_by":"   ","approved_at":"2026-11-01"}]}'
 refuse_manifest "bad-date" \
   '{"release":"v9.9.9","exclusions":[{"issue":649,"reason":"r","approved_by":"owner","approved_at":"01/11/2026"}]}'
 refuse_manifest "not-a-blocker" \

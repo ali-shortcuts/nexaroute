@@ -1133,7 +1133,7 @@ BLOCKED or NOT_RUN. The gate is therefore **NOT satisfied**: no tag was
 created, no release was published, no release gate or required check was
 altered, and no issue was closed or reopened.
 
-## Release-readiness recheck — 2026-11-01, main `b1eebc1` (current)
+## Release-readiness recheck — 2026-11-01, main `b1eebc1` (historical)
 
 This is the latest snapshot in this document. It supersedes every earlier
 statement that names an older commit as current main. It waives no gate,
@@ -1142,7 +1142,7 @@ SHA.
 
 ### Repository state
 
-- Current main: `b1eebc105340a85b39d051510320bd06390737ce`, the merge commit of
+- Main at this historical recheck: `b1eebc105340a85b39d051510320bd06390737ce`, the merge commit of
   PR #820 (test-only failover-attribution work plus the provider-profile and
   documentation refresh that preceded it).
 - Open pull requests: **none** as of this recheck. PR #820 merged at
@@ -1215,13 +1215,13 @@ the gate's verdict on `b1eebc1` is unchanged: **NOT satisfied**.
 Never place credentials, access tokens or key bytes in issues, commits,
 artifacts or reports. Record secret variable names only.
 
-## Post-merge state — 2026-11-01, main `b1eebc10` (latest known)
+## Post-merge state — 2026-11-01, main `b1eebc10` (historical)
 
 This appendix records what changed after the `5c3b5c4a` section above. It does
 not re-bind any acceptance evidence: nothing in it is live, staging or
 multi-host acceptance, and no issue state was changed.
 
-- Current `main`: **`b1eebc105340a85b39d051510320bd06390737ce`** — merge commit
+- Main at this historical recheck: **`b1eebc105340a85b39d051510320bd06390737ce`** — merge commit
   of PR #820 (verified with `git ls-remote origin refs/heads/main`). The tree
   now contains the three commits that PR carried: the remaining failover
   call-count attribution work, the AgentRouter profiles, and the
@@ -1253,3 +1253,16 @@ them.
   #654 are OPEN, coverage remains the only #653 sub-gate bound to a
   post-#819 SHA, every external gate is BLOCKED or NOT_RUN, and no tag or
   release exists. The release gate is **NOT satisfied**.
+
+## Main recheck — 2026-11-01
+
+At this recheck `origin/main` is `436c4e98618eed0c41e59059eae7eca5f05dd190`.
+PR #821 merged as `5a49eb998de540e0d540a70be08e229567d90962` and #822
+merged as `436c4e98618eed0c41e59059eae7eca5f05dd190`; #814 was closed
+without merging. There are no open PRs, and #646–#654 remain open.
+CI run 41317289767, Security run 41317289831 and Coverage run 41317289862
+passed on that exact main SHA. The coverage artifact is 13088460086; its
+percentage was not independently measured in this environment. The RC gate
+reports the real-system jobs, manual audit jobs, and long soak NOT_RUN on
+that SHA. No previous-SHA evidence is transferred. External acceptance remains
+blocked or not run; no exclusion has been approved or issue closed.

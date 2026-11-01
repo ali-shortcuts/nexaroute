@@ -4,11 +4,11 @@ This page exists so nobody has to rediscover the answer. It states the current
 blocking state, classifies every blocker by what kind of action can clear it,
 and gives the literal command that produces the missing evidence.
 
-Last updated: 2026-11-01, against `main` `b1eebc105340a85b39d051510320bd06390737ce`.
+Last updated: 2026-11-01, against `main` `436c4e98618eed0c41e59059eae7eca5f05dd190` (PRs #821 and #822 merged). A subsequent working branch is not covered by these main results.
 
 ## 1. What is *not* the problem
 
-The code is complete and green. Re-checked first-hand on `b1eebc1`:
+The following required checks passed on main `436c4e98618eed0c41e59059eae7eca5f05dd190` (CI run 41317289767, Security run 41317289831, Coverage run 41317289862). These checks do not establish product completeness:
 
 | Check (required by ruleset `main-required-checks`, 9 contexts) | Result |
 |---|---|
@@ -25,8 +25,7 @@ The code is complete and green. Re-checked first-hand on `b1eebc1`:
 The tree carries production Go with **no** `TODO`/`FIXME` markers, and every
 acceptance command already exists: `nexaroute provider-accept`,
 `nexaroute external-accept`, `nexaroute vault-accept`,
-`nexaroute comfyui-accept`, `nexaroute conformance`. Nothing has to be
-implemented to finish the release.
+`nexaroute comfyui-accept`, `nexaroute conformance`. The existence of these commands does not establish that their acceptance criteria have been met.
 
 ## 2. The three real blocker classes
 

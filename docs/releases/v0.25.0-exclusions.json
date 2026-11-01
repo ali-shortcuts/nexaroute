@@ -52,7 +52,7 @@
     },
     {
       "issue": 654,
-      "reason": "Umbrella blocker. It is closed with this release only because every one of its remaining scopes was completed or explicitly excluded above; the umbrella carries no verification of its own.",
+      "reason": "Umbrella blocker. Any proposed exclusion requires a separate owner decision after every remaining scope is completed or explicitly excluded; the umbrella carries no verification of its own.",
       "approved_by": "",
       "approved_at": ""
     }
